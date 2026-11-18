@@ -876,4 +876,52 @@ describe("WP2: the self-heal budget gates the merge's start (D38(3)(4)(6))", () 
     });
     expect(await run()).toEqual({ ok: true });
   });
+
+  test("D38(4): the hardened merge's network and isolated children run on the self-heal's clock (route: 15 s total, 5 s merge start)", async () => {
+    script({ nonKbDiff: 1 });
+    slowFetch(4_000);
+    let seen: { remaining: number; min: number } | null = null;
+    mergeSpy.mockImplementationOnce(async (input) => {
+      seen = { remaining: input.budget?.remaining() ?? Number.NaN, min: input.budget?.mergeStartMinMs ?? Number.NaN };
+      return { reason: "merged", remote: null };
+    });
+    expect(await run()).toEqual({ ok: true });
+    expect(seen).toEqual({ remaining: 11_000, min: 5_000 });
+  });
+
+  test("D38(4): a system caller's merge runs on its 60 s clock with the 20 s merge start", async () => {
+    script({ nonKbDiff: 1 });
+    slowFetch(4_000);
+    let seen: { remaining: number; min: number } | null = null;
+    mergeSpy.mockImplementationOnce(async (input) => {
+      seen = { remaining: input.budget?.remaining() ?? Number.NaN, min: input.budget?.mergeStartMinMs ?? Number.NaN };
+      return { reason: "merged", remote: null };
+    });
+    expect(await runSystem()).toEqual({ ok: true });
+    expect(seen).toEqual({ remaining: 56_000, min: 20_000 });
+  });
+
+  test("D38(4): the pre-call collision's count-only ls-remote is capped at the budget left, and skipped once it is spent", async () => {
+    const collide = () => {
+      script({ nonKbDiff: 1, precheck: "A\0new.txt\0" });
+      lstatSpy.mockImplementation(async (p: Buffer) => {
+        if (p.toString().endsWith("/new.txt")) return { isDirectory: () => false };
+        throw ENOENT();
+      });
+    };
+    collide();
+    slowFetch(4_000);
+    H2.readRemoteSpy.mockResolvedValueOnce(REMOTE);
+    expect(heldOf(await run())).toBe("untracked_collision");
+    expect(H2.readRemoteSpy).toHaveBeenCalledTimes(1);
+    expect(H2.readRemoteSpy.mock.calls[0]).toEqual([expect.anything(), 1, "https://github.com/acme/widget.git", { timeoutMs: 11_000 }]);
+    H2.readRemoteSpy.mockClear();
+    H2.heldWriteSpy.mockClear();
+    gitSpy.mockReset();
+    collide();
+    slowFetch(16_000);
+    expect(heldOf(await run())).toBe("untracked_collision"); // the refusal stands; only the display-only count is skipped
+    expect(H2.readRemoteSpy).not.toHaveBeenCalled();
+    expect(H2.heldWriteSpy).not.toHaveBeenCalled();
+  });
 });

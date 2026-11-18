@@ -21,7 +21,7 @@ import {
   warnSilentFallback,
 } from "@/server/observability";
 import type { KbSyncErrorClass } from "@/server/session-sync";
-import type { KbPullHeldReason, KbPullWriter } from "@/server/kb-sync-pull";
+import type { KbPullHeldReason, KbPullWriter, PullBudget } from "@/server/kb-sync-pull";
 import { runWorkspaceLocalGit, type WorkspaceLocalGitRunner } from "@/server/workspace-local-git";
 import type { Logger } from "pino";
 import { firstAppFrame } from "@/server/error-frame";
@@ -230,17 +230,21 @@ function actor(context: SyncWorkspaceContext): { userId: string } | { workspaceI
   return context.system ? { workspaceId: context.workspaceId } : { userId: context.userId };
 }
 
-/** The self-heal's clock (D38(4)): the budget left, and whether the held-commits merge may still start. */
-interface SelfHealBudget {
-  remaining(): number;
+/**
+ * The self-heal's clock (D38(4)): the budget left, and whether the held-commits merge may still start. It is also the
+ * `PullBudget` the hardened merge runs on, so its `ls-remote`, fetch and isolated children are capped at what is left
+ * (each child's timeout = min(its own cap, remaining)) and the 15 s / 60 s bound holds end to end.
+ */
+interface SelfHealBudget extends PullBudget {
   mayStartMerge(): boolean;
 }
 
 function selfHealBudget(context: SyncWorkspaceContext): SelfHealBudget {
   const kind = context.system ? "background" : "route";
   const startedAt = Date.now();
+  const mergeStartMinMs = SELF_HEAL_MERGE_START_MIN_MS[kind];
   const remaining = () => SELF_HEAL_BUDGET_MS[kind] - (Date.now() - startedAt);
-  return { remaining, mayStartMerge: () => remaining() >= SELF_HEAL_MERGE_START_MIN_MS[kind] };
+  return { remaining, mergeStartMinMs, mayStartMerge: () => remaining() >= mergeStartMinMs };
 }
 
 /** Thrown by the budget-gated writer in place of a hand-over or merge child that may no longer start (D38(3)). */
@@ -398,6 +402,7 @@ async function mergeHeldCommits(
         refName: head.refName,
         writer: budgetGatedWriter(kbPullWriter(workspacePath, { autostash: false }), budget, hit),
         precheck: true,
+        budget,
       });
       const reason: KbPullHeldReason = hit.deadline ? "pull_deadline" : r.reason;
       const pullBlocked = HELD_COUNT_WRITES[reason];
@@ -423,9 +428,16 @@ async function mergeHeldCommits(
 /**
  * D42: the self-heal's own untracked-collision refusal on the held arm (before any merge) still records the state, so a
  * cc workspace is not frozen silently: one hardened `ls-remote` for `T`, the count on HEAD, `pullBlocked =
- * untracked_collision`. Nothing is merged or handed over. Never throws (the refusal stands whatever happens here).
+ * untracked_collision`. Nothing is merged or handed over. Never throws (the refusal stands whatever happens here). The
+ * `ls-remote` runs on the self-heal's clock (D38(4)): capped at what is left, and skipped once the budget is spent.
  */
-async function recordCollisionHeld(installationId: number, workspacePath: string, context: SyncWorkspaceContext): Promise<void> {
+async function recordCollisionHeld(
+  installationId: number,
+  workspacePath: string,
+  context: SyncWorkspaceContext,
+  budget: SelfHealBudget,
+): Promise<void> {
+  if (budget.remaining() <= 0) return;
   try {
     const [{ readRemoteState, KbRemoteError }, { writeHeldFromIsolated }] = await Promise.all([
       import("@/server/kb-sync-remote"),
@@ -434,7 +446,7 @@ async function recordCollisionHeld(installationId: number, workspacePath: string
     await onIsolatedDir(workspacePath, context, {}, async ({ isolated, url, head }) => {
       let remote: Awaited<ReturnType<typeof readRemoteState>> = null;
       try {
-        remote = await readRemoteState(isolated, installationId, url);
+        remote = await readRemoteState(isolated, installationId, url, { timeoutMs: Math.max(1, budget.remaining()) });
       } catch (err) {
         if (!(err instanceof KbRemoteError)) throw err;
       }
@@ -666,7 +678,7 @@ async function selfHealNonFastForward(
         // D27: the D15 untracked precheck first (an untracked or ignored entry at an incoming path refuses as below), then
         // the hardened merge. `merged` keeps the held commits and the upstream ones: no reset, no branch-aside.
         if (await hasUntrackedCollision((argv) => runLocal(argv, gitOpts), workspacePath, target)) {
-          await recordCollisionHeld(installationId, workspacePath, context);
+          await recordCollisionHeld(installationId, workspacePath, context, budget);
           return refuseUntrackedCollision("diverged");
         }
         const diag: HeldMergeDiag = {};
