@@ -707,7 +707,7 @@ None. No architectural decision is made or changed: the remedy (c) decision and 
   marker was added with no other body change (old/new body diff is one added line), and the label is `priority/p1-high`;
   on #10538 the pointer comment exists; the leg-1 event issue exists with its determination comment dated before
   2026-11-20T17:07Z.
-- [ ] AC11: the PR body says `Ref #12742` and `Ref #10538` and contains no `Closes`, `Fixes` or `Resolves` keyword; it
+- [x] AC11: the PR body says `Ref #12742` and `Ref #10538` and contains no `Closes`, `Fixes` or `Resolves` keyword; it
   carries a `## Changelog` section; `technical-ruling-gate.sh --pr-body` passes.
 - [x] AC12: no file under the #12876 branch's scope changed (`git diff --name-only origin/main...HEAD` lists only the seven files
   above plus this feature's plan/spec artifacts), and no workflow was dispatched.

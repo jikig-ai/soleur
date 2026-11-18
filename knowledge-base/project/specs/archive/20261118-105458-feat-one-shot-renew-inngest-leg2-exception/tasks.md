@@ -36,6 +36,6 @@ Do not touch draft PR #12876 or its worktree. Never SSH. No workflow dispatch.
 - [x] 4.1 AC1 ledger diff: two lines; `jq -S` structural diff with the two fields deleted equals origin/main; `jq empty` passes.
 - [x] 4.2 AC3 lint: pass on `--today` 2026-11-17, 2026-11-21, 2026-12-10; fail on 2026-12-11 with exactly one check naming row 6.
 - [x] 4.3 AC4/AC5 greps (after 3.6), AC6/AC7 additions-only diffs, AC8 `lint-legal-registers.sh` (after `git add`), AC9 tests and markdownlint.
-- [ ] 4.4 PR body: Ref lines, `## Changelog`, `technical-ruling-gate.sh --pr-body`.
+- [x] 4.4 PR body: Ref lines, `## Changelog`, `technical-ruling-gate.sh --pr-body`.
 - [ ] 4.5 Merge day, last step before enqueueing: re-read (a)+(b); write the re-read line in the PR body; halt on any difference.
 - [ ] 4.6 Closing message tells the owner about the 16 Nov event in the CLO's plain words (owner may withdraw).
