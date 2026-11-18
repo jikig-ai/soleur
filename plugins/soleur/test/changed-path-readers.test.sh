@@ -5,7 +5,8 @@
 # PROPERTY. A reader that lists a pull request's changed paths and matches them against a gated surface must (1) see the EXACT bytes of a
 # name git would C-quote (a non-ASCII byte, tab, `"`, `\`), (2) list a rename's OLD path (a rename away from a gated surface is a change to it;
 # the one exception is an exact-file "was this document updated" check), (3) list a gitlink that configuration hides, and (4) fail toward
-# running or blocking when git fails, never read a failed diff as "nothing changed".
+# running or blocking when git fails, never read a failed diff as "nothing changed", and (5) read a `--match` no-match as exit 42 only, so a
+# shell-level rc 1 (an unbound variable under `set -u`, in the caller or the helper) is unknown, never no match.
 #
 # THREE SECTIONS, one file (selectable by argument: helper | steps | sentinel; default all).
 #   helper    plugins/soleur/scripts/changed-paths.sh against real scratch repositories.
@@ -149,6 +150,7 @@ NL=$'\n'
 CR=$'\r'
 
 fg() { local d="$1"; shift; assert_fixture_dir "$d"; git -C "$d" "$@"; }
+fgs() { fg "$@"; } # fg fed on stdin (shellcheck reads a bare `fg` as the job-control builtin)
 
 # ── the template: ONE base repository, a bare origin, copied per row (cp -a) ─────────────────────────────────────────────────
 TPL="$WORK_ROOT/tpl"
@@ -346,6 +348,379 @@ precondition_quoted() { # <label> <dir> <range> <raw path>: the PLAIN diff must 
   fi
 }
 
+# Row set 9 (#12809): the `--match` CAPTURE LINES that ship, EXECUTED. A pin certifies a handler's spelling; these rows run each real line
+# under `bash -uc` against the real helper and read the variable it leaves. The handler must say unknown for every helper outcome except a
+# real match or a real no-match (exit 42), so a shell-level rc 1 (an unbound root in the caller, an unbound variable in the helper) fires
+# the gate. Lines are read from $REPO_ROOT directly (never SKILL_ROOT, which the sentinel self-tests repoint), selected by handler shape.
+CALLER_OUT=""
+run_caller() { # <dir> <line> <shell flags: -uc|-c> <env args...>: CALLER_OUT = "[<value of the line's variable>]"
+  local d="$1" line="$2" fl="$3" v; shift 3
+  v="${line%%=*}"
+  assert_fixture_dir "$d"
+  mkdir -p "$WORK_ROOT/io"
+  CALLER_OUT="$(cd "$d" && env "$@" bash "$fl" "$line"'; printf "[%s]" "${'"$v"'}"' 2> "$WORK_ROOT/io/caller.err")"
+}
+# The (file, variable) set of every handler-shape capture the census finds. A new capture is a deliberate edit here AND in fixture B below.
+CAPTURE_SET="$(cat <<'TSV'
+plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	legal_touch
+plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	sui_plans
+plugins/soleur/skills/ship/SKILL.md	ledger_touched
+plugins/soleur/skills/ship/SKILL.md	gdpr_gate_touch
+plugins/soleur/skills/ship/SKILL.md	diff_match
+plugins/soleur/skills/ship/SKILL.md	dpf_match
+plugins/soleur/skills/ship/SKILL.md	plan_refs
+TSV
+)"
+# Fixture B: one change per capture, and the EXACT value each capture must hold on it (the ledger is ADDED: the template does not seed it).
+CALLER_FIXTURE_B="$(cat <<'TSV'
+legal_touch	docs/legal/x.md
+ledger_touched	knowledge-base/operations/expenses.md
+gdpr_gate_touch	plugins/soleur/skills/gdpr-gate/x.md
+plan_refs	knowledge-base/project/specs/fixture/x.md
+sui_plans	knowledge-base/project/specs/fixture/x.md
+diff_match	apps/x/y
+dpf_match	apps/x/y
+TSV
+)"
+caller_rows() {
+  local real="$REPO_ROOT/plugins/soleur" lines n v line rc da db got want p
+  local CALLER_FLOOR=7
+  census_match_calls "$REPO_ROOT"
+  lines="$(cut -f3- <<<"$CENSUS_CAPS" | sed -E 's/^[[:space:]]+//' | grep . || true)"
+  n="$(grep -c . <<<"$lines" || true)"
+  if [ "$n" -lt "$CALLER_FLOOR" ]; then printf '[FATAL] caller rows: the census found %s --match capture lines, want >=%s\n' "$n" "$CALLER_FLOOR" >&2; exit 1; fi
+  got="$(cut -f1,2 <<<"$CENSUS_CAPS" | grep . | LC_ALL=C sort)"; want="$(LC_ALL=C sort <<<"$CAPTURE_SET")"
+  if [ "$got" = "$want" ]; then h_ok "caller rows: the census's $n capture lines are exactly the seven named (file, variable) pairs, and each is run below"
+  else h_bad "caller rows: census captures differ from CAPTURE_SET: got [$(tr '\n' '|' <<<"$got")] want [$(tr '\n' '|' <<<"$want")]"; fi
+  # Preconditions: without them the RED rows below could pass vacuously.
+  rc=0; env -u CLAUDE_PLUGIN_ROOT bash -uc 'x=$(bash "${CLAUDE_PLUGIN_ROOT}/x") || exit $?' 2>/dev/null || rc=$?
+  if [ "$rc" -eq 1 ]; then h_ok "precondition caller: this bash exits 1 (not 127) for an unbound root inside a command substitution"
+  else h_bad "precondition caller: an unbound root under bash -u exited $rc, want 1 (R1 would not be RED-first)"; fi
+  mkdir -p "$WORK_ROOT/stubroot/scripts" "$WORK_ROOT/stub1root/scripts"
+  awk '{ print } $0 == "set -uo pipefail" { print ": \"$SOLEUR_INJECTED_UNSET\"" }' "$HELPER" > "$WORK_ROOT/stubroot/scripts/changed-paths.sh"
+  printf 'exit 1\n' > "$WORK_ROOT/stub1root/scripts/changed-paths.sh"
+  rc=0; env -u SOLEUR_INJECTED_UNSET bash "$WORK_ROOT/stubroot/scripts/changed-paths.sh" --match '^x' HEAD >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 1 ]; then h_ok "precondition caller: an unbound variable in a script exits exactly 1 (the premise of the CONTRACT)"
+  else h_bad "precondition caller: the injected-unset helper copy exited $rc, want 1 (the injection did not land)"; fi
+  # Control A: a change OUTSIDE every gated surface (a real modification, so grep runs: an empty commit takes the empty-list branch).
+  new_row || { h_bad "could not build caller row A"; return; }
+  da="$ROW_DIR"; put_in "$da" docs/other.md "edited"
+  commit_row || { h_bad "could not commit caller row A"; return; }
+  run_helper "$da" origin/main...HEAD
+  if [ "$H_RC" -eq 0 ] && [ "$H_OUT" = "docs/other.md" ]; then
+    h_ok "precondition caller: control A's list is exactly docs/other.md (non-empty, on no gated surface)"
+  else h_bad "precondition caller: control A's list want exactly docs/other.md got rc=$H_RC '$H_OUT'"; fi
+  new_row || { h_bad "could not build caller row B"; return; }
+  db="$ROW_DIR"
+  while IFS=$'\t' read -r v p; do [ -n "$v" ] && put_in "$db" "$p"; done <<<"$CALLER_FIXTURE_B"
+  commit_row || { h_bad "could not commit caller row B"; return; }
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    v="${line%%=*}"
+    run_caller "$da" "$line" -uc CLAUDE_PLUGIN_ROOT="$real" CANONICAL_REGEX='^zzz-never/' DPF_REGEX='^zzz-never/'
+    if [ "$CALLER_OUT" = "[]" ]; then h_ok "caller $v: control A (real root, no match) leaves it empty"
+    else h_bad "caller $v: control A want [] got $CALLER_OUT ($(head -c 160 "$WORK_ROOT/io/caller.err")); if this is a new capture line, extend fixture A / the runner env"; fi
+    want="$(awk -F'\t' -v k="$v" '$1 == k { print $2 }' <<<"$CALLER_FIXTURE_B")"
+    run_caller "$db" "$line" -uc CLAUDE_PLUGIN_ROOT="$real" CANONICAL_REGEX='^apps/' DPF_REGEX='^apps/'
+    if [ -n "$want" ] && [ "$CALLER_OUT" = "[$want]" ]; then h_ok "caller $v: control B (real root, a match) holds exactly $want"
+    else h_bad "caller $v: control B want [$want] got $CALLER_OUT ($(head -c 160 "$WORK_ROOT/io/caller.err")); if this is a new capture line, extend CALLER_FIXTURE_B"; fi
+    run_caller "$db" "$line" -uc -u CLAUDE_PLUGIN_ROOT CANONICAL_REGEX='^apps/' DPF_REGEX='^apps/'
+    if [ "$CALLER_OUT" = "[unknown]" ]; then h_ok "caller $v: an unbound root under bash -u is unknown, never no match"
+    else h_bad "caller $v: an unbound root under bash -u want [unknown] got $CALLER_OUT (rc 1 read as no match)"; fi
+    run_caller "$db" "$line" -uc CLAUDE_PLUGIN_ROOT="$WORK_ROOT/stub1root" CANONICAL_REGEX='^apps/' DPF_REGEX='^apps/'
+    if [ "$CALLER_OUT" = "[unknown]" ]; then h_ok "caller $v: a helper exit 1 is unknown (only 42 is no match)"
+    else h_bad "caller $v: a helper exit 1 want [unknown] got $CALLER_OUT"; fi
+    run_caller "$db" "$line" -c -u CLAUDE_PLUGIN_ROOT CANONICAL_REGEX='^apps/' DPF_REGEX='^apps/'
+    if [ "$CALLER_OUT" = "[unknown]" ]; then h_ok "caller $v: an unset root without set -u (missing helper, rc 127) is unknown"
+    else h_bad "caller $v: an unset root without set -u want [unknown] got $CALLER_OUT"; fi
+  done <<<"$lines"
+  caller_consumer_rows "$da" "$db"
+  assert_fixture_dir "$da"; rm -rf -- "$da"; assert_fixture_dir "$db"; rm -rf -- "$db"
+  census_rows
+}
+# The census itself, driven on synthetic roots through BOTH population arms (a git work tree: ls-files; a plain dir: find): each escape
+# the round-2 contract closes must be named in CENSUS_BAD, and a compliant capture must not be (#12809 verification pass).
+census_case() { # <git|find> <relpath> <printf format for the file>: CENSUS_BAD lines for that file after a census of a fresh root
+  local kind="$1" rel="$2" r="$WORK_ROOT/census-$1"
+  assert_fixture_dir "$r"; rm -rf -- "$r"; mkdir -p "$r/skills/ok" "$(dirname "$r/$rel")" || return 1
+  printf '%s\n' 'ok_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '"'^ok/'"' origin/main...HEAD) || { [ $? -eq 42 ] || ok_touch=unknown; }' > "$r/skills/ok/SKILL.md"
+  # shellcheck disable=SC2059 # the format IS the fixture (it carries the NUL byte)
+  printf "$3" > "$r/$rel"
+  if [ "$kind" = git ]; then git -C "$r" init -q && git -C "$r" add -A || return 1; fi
+  # Written after `git add`: untracked, so the git arm (ls-files) must not see it and the find arm must.
+  mkdir -p "$r/skills/untracked" && printf '%s\n' 'u=$(bash "$CP" --match x HEAD) # changed-paths' > "$r/skills/untracked/SKILL.md"
+  census_match_calls "$r"
+  CASE_BAD="$(grep -F -- "$rel:" <<<"$CENSUS_BAD" || true)"; CASE_OK_BAD="$(grep -F -- 'skills/ok/SKILL.md:' <<<"$CENSUS_BAD" || true)"
+  CASE_CAPS="$(cut -f1 <<<"$CENSUS_CAPS" | grep -c -x -F -- skills/ok/SKILL.md || true)"
+  CASE_UNTRACKED="$(grep -c -F -- 'skills/untracked/SKILL.md:' <<<"$CENSUS_BAD" || true)"
+  rm -rf -- "$r"
+}
+census_rows() {
+  local kind rel fmt lbl want
+  for kind in git find; do
+    census_case "$kind" skills/ok/README.md 'nothing here\n' || { h_bad "census $kind: could not build the control root"; continue; }
+    if [ -z "$CASE_OK_BAD" ] && [ "$CASE_CAPS" -eq 1 ]; then h_ok "census $kind: a compliant capture is censused as a capture and not reported"
+    else h_bad "census $kind: the compliant capture was reported or not censused (caps=$CASE_CAPS bad='${CASE_OK_BAD:0:100}')"; fi
+    want=1; [ "$kind" = git ] && want=0
+    if [ "$CASE_UNTRACKED" -eq "$want" ]; then h_ok "census $kind: an untracked file is $([ "$want" = 0 ] && echo 'outside the population (ls-files)' || echo 'inside it (find)')"
+    else h_bad "census $kind: the untracked file was reported $CASE_UNTRACKED times, want $want (the $kind arm is not the one that ran)"; fi
+    while IFS=$'\t' read -r lbl rel fmt; do
+      [ -n "$lbl" ] || continue
+      census_case "$kind" "$rel" "$fmt" || { h_bad "census $kind: could not build the $lbl root"; continue; }
+      if [ -n "$CASE_BAD" ]; then h_ok "census $kind: $lbl is reported"
+      else h_bad "census $kind: $lbl is NOT reported (the census cannot see it)"; fi
+    done <<'CASES'
+a helper path held in a variable	skills/v/SKILL.md	CP=scripts/changed-paths.sh; v=$(bash "$CP" --match '^v/' origin/main...HEAD) || { [ $? -eq 42 ] || v=unknown; }\n
+an -eq 1 capture in a file carrying a NUL byte	skills/n/SKILL.md	a\000b\nn=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^n/' origin/main...HEAD) || { [ $? -eq 1 ] || n=unknown; }\n
+a variable-path call under an archive directory	skills/x/archive/y.md	y=$(bash "$CP_ARCHIVED" --match '^y/' origin/main...HEAD) # changed-paths\n
+a Markdown heading naming the helper without the call form	skills/h/SKILL.md	# Call changed-paths.sh through $HELPER\n
+CASES
+  done
+}
+# Where a capture's fail-closed value LANDS (CTO R4, R5(c)): the plan_refs consumer line and the counsel trigger block, run for real.
+caller_consumer_rows() { # <fixture A dir> <fixture B dir>
+  local da="$1" db="$2" real="$REPO_ROOT/plugins/soleur" ship="$REPO_ROOT/plugins/soleur/skills/ship/SKILL.md" cap con out n
+  assert_fixture_dir "$db"
+  local counsel="$REPO_ROOT/plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md"
+  cap="$(census_entry plan_refs | sed -E 's/^[[:space:]]+//')"
+  n="$(grep -c -F -- '[[ $plan_refs == unknown ]] && echo' "$ship" || true)"
+  con="$(grep -F -- '[[ $plan_refs == unknown ]] && echo' "$ship" | head -n 1)"
+  if [ -n "$cap" ] && [ "$n" -eq 1 ]; then h_ok "precondition consumer: one plan_refs capture and one consumer line"; else h_bad "precondition consumer: plan_refs capture '${cap:0:40}', consumer lines $n (want 1)"; fi
+  out="$(cd "$db" && env -u CLAUDE_PLUGIN_ROOT bash -c "$cap"$'\n'"$con" 2>/dev/null)"
+  if [ "$out" = 'unverifiable: use Ref #N' ]; then h_ok "consumer plan_refs: an unset root prints exactly 'unverifiable: use Ref #N'"
+  else h_bad "consumer plan_refs: an unset root printed '${out:0:120}', want exactly 'unverifiable: use Ref #N' (unknown fell into the grep branch)"; fi
+  out="$(cd "$da" && env CLAUDE_PLUGIN_ROOT="$real" bash -c "$cap"$'\n'"$con" 2>/dev/null)"
+  if [ -z "$out" ]; then h_ok "consumer plan_refs: control A (real root, no plan files) prints nothing"; else h_bad "consumer plan_refs: control A printed '${out:0:120}'"; fi
+  # Positive: fixture B's plan-tree file carries a CLOSE_DEFER_RE hit, so the grep branch must print exactly that hit.
+  local pf; pf="$(awk -F'\t' '$1 == "plan_refs" { print $2 }' <<<"$CALLER_FIXTURE_B")"
+  out="$(cd "$db" && printf 'Close after the deploy is verified.\n' > "$db/$pf" && env CLAUDE_PLUGIN_ROOT="$real" CLOSE_DEFER_RE='close[sd]?.*(after|once|when)' bash -c "$cap"$'\n'"$con" 2>/dev/null)"
+  # One file: grep prints line:text with no file name.
+  if [ "$out" = "1:Close after the deploy is verified." ]; then h_ok "consumer plan_refs: a plan file with a deferred-close phrase prints exactly that hit"
+  else h_bad "consumer plan_refs: want '1:Close after the deploy is verified.' got '${out:0:160}' (the grep branch is dead or changed)"; fi
+  # A grep that fails (rc 2: here an invalid ERE) is unverifiable, never "no deferred-close phrase" (CTO C6c).
+  out="$(cd "$db" && env CLAUDE_PLUGIN_ROOT="$real" CLOSE_DEFER_RE='(' bash -c "$cap"$'\n'"$con" 2>/dev/null)"
+  if [ "$out" = 'unverifiable: use Ref #N' ]; then h_ok "consumer plan_refs: a failing grep (rc 2) prints exactly 'unverifiable: use Ref #N'"
+  else h_bad "consumer plan_refs: a failing grep printed '${out:0:120}', want exactly 'unverifiable: use Ref #N' (rc 2 read as no hit)"; fi
+  # The counsel trigger block (the first bash fence after **Trigger:**), judged by the verdict line it prints (CTO C5): the agent and
+  # this suite read the same `COUNSEL_GATE=fire|skip` line.
+  COUNSEL_BLK="$(awk '/^\*\*Trigger:\*\*/ { t = 1 } t && /^```bash$/ { b = 1; next } b && /^```$/ { exit } b { print }' "$counsel")"
+  if grep -q -F -- '**If the block prints `COUNSEL_GATE=fire`:**' "$counsel" && [ -n "$COUNSEL_BLK" ]; then
+    h_ok "precondition consumer: the counsel trigger block is extracted and the reference follows it only on COUNSEL_GATE=fire"
+  else h_bad "precondition consumer: counsel trigger block missing or its 'If the block prints COUNSEL_GATE=fire' sentence changed"; fi
+  # The fire procedure's step 0: an `unknown` field is a failed read, never grounds for DISCHARGED (#12809 verification pass).
+  n="$(grep -c -x -F -- '0. **A field reading `unknown` means a read failed, so nothing below may be decided on it yet.** For `legal=unknown` the base could not be read: run `git fetch origin main` (in a shallow clone, `git fetch --unshallow origin`) and run the block again. If a field is still `unknown`, hand the CLO agent no diff verdict: it may return BLOCKED with the failed read as the blocker, never DISCHARGED.' "$counsel" || true)"
+  if [ "$n" -eq 1 ]; then h_ok "precondition consumer: the counsel fire procedure forbids DISCHARGED on an unknown field and says how to re-read the base"
+  else h_bad "precondition consumer: the counsel step-0 'unknown field' line (the WHOLE line) appears $n times, want 1"; fi
+  # Ship's load line: the block runs on EVERY ship and only its printed verdict decides (CTO C6a), never prose read off the diff.
+  n="$(grep -c -x -F -- '**Trigger:** on every ship, read [counsel-review-clo-attestation.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/counsel-review-clo-attestation.md) and run its block; follow it only when the block prints `COUNSEL_GATE=fire`. The reviewing authority is the `soleur:legal:clo` agent, not the operator.' "$ship" || true)"
+  if [ "$n" -eq 1 ]; then h_ok "precondition consumer: ship loads the counsel reference and runs its block on every ship, following it only on COUNSEL_GATE=fire"
+  else h_bad "precondition consumer: ship's counsel load line ('on every ship, read ... follow it only when the block prints COUNSEL_GATE=fire ...', the WHOLE line) appears $n times, want 1"; fi
+  counsel_rows "$db"
+}
+# gh answers ONLY the exact argv the counsel block sends (anything else exits 64) and applies the block's own --jq to GH_JSON, the
+# open-PR list gh would return for the branch (default `[]` = no PR). gh_json <body> builds a one-PR same-repo list.
+COUNSEL_SHIMS="$WORK_ROOT/shim-counsel"
+COUNSEL_JQ='[.[] | select(.isCrossRepository | not) | .body] | join("\n")'
+gh_json() { jq -cn --arg b "$1" '[{body: $b, isCrossRepository: false}]'; }
+counsel_shims() {
+  mkdir -p "$COUNSEL_SHIMS/gh-ok" "$COUNSEL_SHIMS/gh-bad" "$COUNSEL_SHIMS/git-draft"
+  cat > "$COUNSEL_SHIMS/gh-ok/gh" <<'SHIM'
+#!/usr/bin/env bash
+want=(pr list --head "$GH_EXPECT_BRANCH" --state open --json body,isCrossRepository --jq "$GH_EXPECT_JQ")
+[ "$#" -eq "${#want[@]}" ] || { echo "gh shim: argc $#" >&2; exit 64; }
+i=0; for a in "$@"; do [ "$a" = "${want[$i]}" ] || { echo "gh shim: argv[$i]='$a'" >&2; exit 64; }; i=$((i + 1)); done
+printf '%s' "${GH_JSON:-[]}" | jq -r "$GH_EXPECT_JQ"
+SHIM
+  printf '#!/bin/sh\necho "gh: injected failure" >&2\nexit 1\n' > "$COUNSEL_SHIMS/gh-bad/gh"
+  # A git that fails only the content diff of the legal dirs (has `--`, no `-z`); the helper's own `diff -z` still runs.
+  printf '#!/usr/bin/env bash\nz=0; dd=0; for a in "$@"; do [ "$a" = -z ] && z=1; [ "$a" = -- ] && dd=1; done\n[ "$dd" = 1 ] && [ "$z" = 0 ] && { echo "shim: injected legal diff failure" >&2; exit 128; }\nexec "$REAL_GIT" "$@"\n' > "$COUNSEL_SHIMS/git-draft/git"
+  chmod +x "$COUNSEL_SHIMS/gh-ok/gh" "$COUNSEL_SHIMS/gh-bad/gh" "$COUNSEL_SHIMS/git-draft/git"
+}
+counsel_branch() { # <dir>: move off `main` and delete it, so only refs/remotes/origin/main can name the base
+  fg "$1" checkout -q -b counsel-feat && fg "$1" branch -q -D main
+}
+counsel_run() { # <dir> <subdir or .> <PATH prefix> [env...]: COUNSEL_OUT = the block's last stdout line, COUNSEL_LT = its legal_touch
+  local d="$1" sub="$2" pre="$3"; shift 3
+  : > "$WORK_ROOT/io/counsel.lt"
+  COUNSEL_OUT="$(cd "$d/$sub" && env CLAUDE_PLUGIN_ROOT="$REPO_ROOT/plugins/soleur" PATH="$pre:$PATH" GH_EXPECT_BRANCH=counsel-feat GH_EXPECT_JQ="$COUNSEL_JQ" \
+    REAL_GIT="$REAL_GIT" LT_FILE="$WORK_ROOT/io/counsel.lt" "$@" \
+    bash -c "$COUNSEL_BLK"$'\n''printf "%s" "$legal_touch" > "$LT_FILE"' 2> "$WORK_ROOT/io/counsel.err" | tail -n 1)"
+  COUNSEL_LT="$(cat "$WORK_ROOT/io/counsel.lt")"
+}
+counsel_expect() { # <label> <want verdict line, exact>
+  if [ "$COUNSEL_OUT" = "$2" ]; then h_ok "consumer counsel: $1"
+  else h_bad "consumer counsel: $1: want '$2' got '$COUNSEL_OUT' ($(head -c 160 "$WORK_ROOT/io/counsel.err"))"; fi
+}
+counsel_rows() { # <fixture B dir: a legal change plus one branch spec that is not single-user>
+  local db="$1" dc dd de ok="$COUNSEL_SHIMS/gh-ok" sui='brand_survival_threshold: single-user incident' spec P=knowledge-base/project/plans
+  assert_fixture_dir "$db"
+  local SKIP=COUNSEL_GATE=skip F='COUNSEL_GATE=fire legal=changed'
+  local FIRE_U="$F sui_threshold=unknown draft_marker=none"
+  spec="$(awk -F'\t' '$1 == "sui_plans" { print $2 }' <<<"$CALLER_FIXTURE_B")"
+  if command -v jq >/dev/null 2>&1; then h_ok "precondition counsel: jq is present (the gh shim applies the block's own --jq)"
+  else h_bad "precondition counsel: jq is missing, so the gh shim cannot answer"; return; fi
+  counsel_shims
+  counsel_branch "$db" || { h_bad "could not move counsel fixture B off main"; return; }
+  if ! fg "$db" rev-parse -q --verify refs/heads/main >/dev/null && fg "$db" rev-parse -q --verify refs/remotes/origin/main >/dev/null; then
+    h_ok "precondition counsel: no local main, refs/remotes/origin/main present (a bare main...HEAD range cannot pass)"
+  else h_bad "precondition counsel: local main still present or refs/remotes/origin/main missing"; fi
+  counsel_run "$db" . "$ok"
+  counsel_expect "control (legal change, no PR yet, branch spec not single-user) skips" "$SKIP"
+  if [ "$COUNSEL_LT" = docs/legal/x.md ]; then h_ok "consumer counsel: the control's legal_touch is exactly docs/legal/x.md"; else h_bad "consumer counsel: control legal_touch '$COUNSEL_LT'"; fi
+  counsel_run "$db" . "$COUNSEL_SHIMS/gh-bad"
+  counsel_expect "a failing PR-body read fires (unknown)" "$FIRE_U"
+  counsel_run "$db" . "$COUNSEL_SHIMS/git-draft:$ok"
+  counsel_expect "a failing DRAFT-marker diff fires and says unknown, not present" "$F sui_threshold=none draft_marker=unknown"
+  if [ "$COUNSEL_LT" = docs/legal/x.md ]; then h_ok "consumer counsel: under the diff shim legal_touch still holds the real path (the row exercises draft_marker)"; else h_bad "consumer counsel: under the diff shim legal_touch '$COUNSEL_LT'"; fi
+  fg "$db" checkout -q --detach || { h_bad "could not detach counsel fixture B"; return; }
+  # The shim answers `--head ""` here with an unrelated PR, as gh lists every open PR for an empty head: only the guard can fire.
+  counsel_run "$db" . "$ok" GH_EXPECT_BRANCH= GH_JSON="$(gh_json 'another PR, cites nothing')"
+  counsel_expect "a detached HEAD (no branch to look a PR up by) fires (unknown)" "$FIRE_U"
+  fg "$db" checkout -q counsel-feat || { h_bad "could not re-attach counsel fixture B"; return; }
+  mkdir -p "$db/$P"
+  printf -- '---\n%s\n---\n' "$sui" > "$db/$P/sui-fixture.md"
+  printf -- '---\nbrand_survival_threshold: single-user-incident\n---\n' > "$db/$P/hyphen-fixture.md"
+  printf -- '---\nbrand_survival_threshold: "single-user incident"\n---\n' > "$db/$P/quoted-fixture.md"
+  printf -- '---\nbrand_survival_threshold: none\n---\n' > "$db/$P/none-fixture.md"
+  counsel_run "$db" . "$ok" GH_JSON="$(gh_json "Plan: \`$P/sui-fixture.md\`.")"
+  counsel_expect "a cited plan with a trailing backtick and period is read (single-user fires)" "$F sui_threshold=$P/sui-fixture.md draft_marker=none"
+  counsel_run "$db" docs "$ok" GH_JSON="$(gh_json "$P/sui-fixture.md")"
+  counsel_expect "a cited plan is read from the repo root when ship runs in a subdirectory" "$F sui_threshold=$P/sui-fixture.md draft_marker=none"
+  counsel_run "$db" . "$ok" GH_JSON="$(gh_json "See $P/none-fixture.md, and \"$P/sui-fixture.md\"")"
+  counsel_expect "the second of two cited plans declaring single-user fires" "$F sui_threshold=$P/sui-fixture.md draft_marker=none"
+  counsel_run "$db" . "$ok" GH_JSON="$(jq -cn --arg p "$P/sui-fixture.md" '[{body: "cites nothing", isCrossRepository: true}, {body: $p, isCrossRepository: false}]')"
+  counsel_expect "a fork PR of the same branch name is ignored, so this repo's PR body is read" "$F sui_threshold=$P/sui-fixture.md draft_marker=none"
+  counsel_run "$db" . "$ok" GH_JSON="$(jq -cn --arg s "$P/sui-fixture.md" --arg n "$P/none-fixture.md" '[{body: $s, isCrossRepository: true}, {body: $n, isCrossRepository: false}]')"
+  counsel_expect "a fork PR's citation is not read (this repo's PR cites a plan that is not single-user: skips)" "$SKIP"
+  counsel_run "$db" . "$ok" GH_JSON="$(gh_json "$P/absent-fixture.md")"
+  counsel_expect "a cited plan that is missing with no archived copy fires (unknown)" "$FIRE_U"
+  counsel_run "$db" . "$ok" GH_JSON="$(gh_json "$P/hyphen-fixture.md")"
+  counsel_expect "the hyphenated single-user-incident spelling fires" "$F sui_threshold=$P/hyphen-fixture.md draft_marker=none"
+  counsel_run "$db" . "$ok" GH_JSON="$(gh_json "$P/quoted-fixture.md")"
+  counsel_expect "the quoted \"single-user incident\" spelling fires" "$F sui_threshold=$P/quoted-fixture.md draft_marker=none"
+  counsel_run "$db" . "$ok" GH_JSON="$(gh_json "Spec: ${spec%/*}/")"
+  counsel_expect "a cited spec directory that exists is not read as a missing file (skips)" "$SKIP"
+  printf -- '---\n%s\n---\n' "$sui" > "$db/$spec"
+  counsel_run "$db" . "$ok"
+  counsel_expect "no PR yet, and the branch's own spec declares single-user: fires" "$F sui_threshold=$spec draft_marker=none"
+  # Fixture C: a legal change and no plan at all (skip), then archived copies of cited plans and specs that are not single-user (still skip).
+  new_row || { h_bad "could not build counsel row C"; return; }
+  dc="$ROW_DIR"; put_in "$dc" docs/legal/z.md
+  commit_row && counsel_branch "$dc" || { h_bad "could not commit counsel row C"; return; }
+  counsel_run "$dc" . "$ok"
+  counsel_expect "a legal change with no PR and no plan anywhere skips" "$SKIP"
+  put_in "$dc" "$P/archive/20260101-000000-gone-fixture.md" 'brand_survival_threshold: none'
+  put_in "$dc" knowledge-base/project/specs/archive/20260101-000000-feat-gone/spec.md 'brand_survival_threshold: none'
+  fg "$dc" add -A && fg "$dc" commit -q -m archive || { h_bad "could not commit counsel row C archive"; return; }
+  counsel_run "$dc" . "$ok" GH_JSON="$(gh_json "$P/gone-fixture.md")"
+  counsel_expect "a cited plan whose archived copy is on the branch and is not single-user skips" "$SKIP"
+  counsel_run "$dc" . "$ok" GH_JSON="$(gh_json 'knowledge-base/project/specs/feat-gone/spec.md')"
+  counsel_expect "a cited spec whose whole directory was archived, not single-user, skips" "$SKIP"
+  counsel_run "$dc" . "$ok" GH_JSON="$(gh_json 'Spec dir: knowledge-base/project/specs/feat-gone/')"
+  counsel_expect "a cited spec directory that was archived, not single-user, skips" "$SKIP"
+  counsel_run "$dc" . "$ok" GH_JSON="$(gh_json 'knowledge-base/project/specs/gone/spec.md')"
+  counsel_expect "an archived dir that only ENDS in the cited name (<ts>-feat-gone for gone) is not its copy: fires (unknown)" "$F sui_threshold=unknown draft_marker=none"
+  counsel_run "$dc" . "$ok" GH_JSON="$(gh_json 'knowledge-base/project/specs/feat-gone/tasks.md')"
+  counsel_expect "a cited spec file absent from its archived directory fires (unknown)" "$F sui_threshold=unknown draft_marker=none"
+  assert_fixture_dir "$dc"; rm -rf -- "$dc"
+  # Fixture D: a DRAFT marker, found under hostile diff config (colour forced, an external diff driver and a textconv that print
+  # nothing, diff.relative) from the root and from a subdirectory; each of those configs alone empties the diff at rc 0.
+  new_row || { h_bad "could not build counsel row D"; return; }
+  dd="$ROW_DIR"; put_in "$dd" docs/legal/w.md '[DRAFT — pending CLO/counsel review per #1]'
+  commit_row && counsel_branch "$dd" && fg "$dd" config color.diff always && fg "$dd" config color.ui always \
+    && fg "$dd" config diff.external true && fg "$dd" config diff.blank.textconv true && fg "$dd" config diff.relative true \
+    && printf 'docs/legal/* diff=blank\n' > "$dd/.gitattributes" || { h_bad "could not commit counsel row D"; return; }
+  counsel_run "$dd" . "$ok"
+  counsel_expect "a DRAFT marker is found under forced colour, an external diff driver and a textconv" "$F sui_threshold=none draft_marker=present"
+  counsel_run "$dd" docs "$ok"
+  counsel_expect "a DRAFT marker is found from a subdirectory with diff.relative=true" "$F sui_threshold=none draft_marker=present"
+  printf 'docs/legal/* -diff\n' > "$dd/.git/info/attributes"
+  counsel_run "$dd" . "$ok"
+  counsel_expect "a DRAFT marker is found when an attribute marks the legal docs -diff (binary)" "$F sui_threshold=none draft_marker=present"
+  assert_fixture_dir "$dd"; rm -rf -- "$dd"
+  # Fixture E: no refs/remotes/origin/main. While ANY of the three legal dirs is tracked the gate fires with legal=unknown (each dir
+  # alone, from the root and from a subdirectory); with none tracked it skips and says why.
+  new_row || { h_bad "could not build counsel row E"; return; }
+  de="$ROW_DIR"; put_in "$de" apps/web-platform/server/keep.ts 'code only'
+  commit_row && counsel_branch "$de" && fg "$de" remote remove origin || { h_bad "could not commit counsel row E"; return; }
+  local EU='COUNSEL_GATE=fire legal=unknown sui_threshold=unknown draft_marker=unknown' arm
+  counsel_run "$de" . "$ok"
+  counsel_expect "no origin/main, legal docs tracked: fires with legal=unknown" "$EU"
+  counsel_run "$de" apps "$ok"
+  counsel_expect "no origin/main, legal docs tracked, run from a subdirectory: fires with legal=unknown" "$EU"
+  fg "$de" rm -q -r -- docs/legal knowledge-base/legal && fg "$de" commit -q -m drop-legal || { h_bad "could not drop counsel row E legal docs"; return; }
+  for arm in docs/legal plugins/soleur/docs/pages/legal knowledge-base/legal; do
+    put_in "$de" "$arm/only.md" && fg "$de" add -A && fg "$de" commit -q -m "only $arm" || { h_bad "could not track $arm alone in row E"; return; }
+    counsel_run "$de" . "$ok"
+    counsel_expect "no origin/main, only $arm/ tracked: fires with legal=unknown" "$EU"
+    fg "$de" rm -q -r -- "$arm" && fg "$de" commit -q -m "drop $arm" || { h_bad "could not drop $arm in row E"; return; }
+  done
+  counsel_run "$de" . "$ok"
+  counsel_expect "no origin/main and no legal doc tracked: skips and says why" 'COUNSEL_GATE=skip reason=no-legal-docs-tracked'
+  assert_fixture_dir "$de"; rm -rf -- "$de"
+  # Fixture F: WITH a base, a branch deleting every legal doc on a single-user plan still fires (the no-legal-docs skip is only for
+  # a base that cannot be read).
+  new_row || { h_bad "could not build counsel row F"; return; }
+  de="$ROW_DIR"; fg "$de" rm -q -r -- docs/legal knowledge-base/legal && commit_row && counsel_branch "$de" || { h_bad "could not commit counsel row F"; return; }
+  mkdir -p "$de/$P" && printf -- '---\n%s\n---\n' "$sui" > "$de/$P/sui-fixture.md"
+  counsel_run "$de" . "$ok" GH_JSON="$(gh_json "$P/sui-fixture.md")"
+  counsel_expect "deleting every legal doc on a single-user plan fires" "$F sui_threshold=$P/sui-fixture.md draft_marker=none"
+  counsel_run "$de" . "$ok" CLAUDE_PLUGIN_ROOT="$WORK_ROOT/stub1root" GH_JSON="$(gh_json "$P/sui-fixture.md")"
+  counsel_expect "a failing helper against a READABLE base is not the no-legal-docs skip: fires" "COUNSEL_GATE=fire legal=unknown sui_threshold=$P/sui-fixture.md draft_marker=none"
+  # Fixture G (CTO V4): refs/remotes/origin/main resolves but shares no merge base with HEAD, as in a shallow clone. A base tree
+  # holding the legal docs this branch deleted fires; a base tree holding none still skips.
+  local gt gc
+  gt="$(fg "$de" rev-parse 'refs/remotes/origin/main^{tree}')" && gc="$(fg "$de" commit-tree -m orphan-base "$gt")" \
+    && fg "$de" update-ref refs/remotes/origin/main "$gc" || { h_bad "could not build counsel row G"; return; }
+  if ! fg "$de" merge-base refs/remotes/origin/main HEAD >/dev/null 2>&1 && grep -q . < <(fg "$de" ls-tree -r --name-only refs/remotes/origin/main -- docs/legal/); then
+    h_ok "precondition counsel G: origin/main resolves, has no merge base with HEAD, and its tree tracks docs/legal/"
+  else h_bad "precondition counsel G: origin/main has a merge base with HEAD or tracks no legal doc"; fi
+  counsel_run "$de" . "$ok"
+  counsel_expect "no merge base, base tree holds the legal docs HEAD deleted: fires with legal=unknown" 'COUNSEL_GATE=fire legal=unknown sui_threshold=unknown draft_marker=unknown'
+  gt="$(fg "$de" rev-parse 'HEAD^{tree}')" && gc="$(fg "$de" commit-tree -m orphan-base-nolegal "$gt")" \
+    && fg "$de" update-ref refs/remotes/origin/main "$gc" || { h_bad "could not rebuild counsel row G"; return; }
+  counsel_run "$de" . "$ok"
+  counsel_expect "no merge base, neither base tree nor HEAD holds a legal doc: skips and says why" 'COUNSEL_GATE=skip reason=no-legal-docs-tracked'
+  # Each legal dir alone in the parentless base tree fires: <dir>/only.md built bottom-up with mktree.
+  local gb gp gn
+  for arm in docs/legal plugins/soleur/docs/pages/legal knowledge-base/legal; do
+    gb="$(printf 'x\n' | fgs "$de" hash-object -w --stdin)" && gt="$(printf '100644 blob %s\tonly.md\n' "$gb" | fgs "$de" mktree)" || { h_bad "could not build row G blob for $arm"; return; }
+    gp="$arm"
+    while [ -n "$gp" ]; do
+      gn="${gp##*/}"; gt="$(printf '040000 tree %s\t%s\n' "$gt" "$gn" | fgs "$de" mktree)" || { h_bad "could not build row G tree for $arm"; return; }
+      if [ "$gp" = "$gn" ]; then gp=""; else gp="${gp%/*}"; fi
+    done
+    gc="$(fg "$de" commit-tree -m "orphan-base-$gn" "$gt")" && fg "$de" update-ref refs/remotes/origin/main "$gc" || { h_bad "could not point row G base at $arm"; return; }
+    counsel_run "$de" . "$ok"
+    counsel_expect "no merge base, only $arm/ in the base tree: fires with legal=unknown" 'COUNSEL_GATE=fire legal=unknown sui_threshold=unknown draft_marker=unknown'
+  done
+  # A base commit whose tree object is missing: the ref resolves, its tree read fails, so the skip cannot be proven: fires.
+  gc="$(printf 'tree %s\nauthor x <x@x> 0 +0000\ncommitter x <x@x> 0 +0000\n\nno tree\n' 1111111111111111111111111111111111111111 \
+    | fgs "$de" hash-object -t commit -w --literally --stdin)" && fg "$de" update-ref refs/remotes/origin/main "$gc" \
+    || { h_bad "could not build row G tree-less base"; return; }
+  counsel_run "$de" . "$ok"
+  counsel_expect "no merge base, base commit's tree unreadable: fires with legal=unknown" 'COUNSEL_GATE=fire legal=unknown sui_threshold=unknown draft_marker=unknown'
+  # A READABLE base (HEAD itself) where neither tree holds a legal doc, with a failing helper: the skip is only for an unreadable
+  # base, so this fires.
+  fg "$de" update-ref refs/remotes/origin/main HEAD || { h_bad "could not point row G base at HEAD"; return; }
+  counsel_run "$de" . "$ok" CLAUDE_PLUGIN_ROOT="$WORK_ROOT/stub1root"
+  counsel_expect "a failing helper against a readable base with no legal doc on either side fires (not the skip)" 'COUNSEL_GATE=fire legal=unknown sui_threshold=unknown draft_marker=none'
+  assert_fixture_dir "$de"; rm -rf -- "$de"
+  # The plan_refs capture lists no deleted path (AMT), so archiving a plan is never `unverifiable` (CTO C6c).
+  new_row || { h_bad "could not build plan_refs archive row"; return; }
+  dd="$ROW_DIR"; put_in "$dd" knowledge-base/project/plans/2026-01-01-fixture-plan.md 'plan body'
+  commit_row && fg "$dd" update-ref refs/remotes/origin/main HEAD && mkdir -p "$dd/knowledge-base/project/plans/archive" \
+    && fg "$dd" mv knowledge-base/project/plans/2026-01-01-fixture-plan.md knowledge-base/project/plans/archive/20260102-000000-2026-01-01-fixture-plan.md \
+    && fg "$dd" commit -q -m archive || { h_bad "could not commit plan_refs archive row"; return; }
+  local out cap con
+  cap="$(census_entry plan_refs | sed -E 's/^[[:space:]]+//')"
+  con="$(grep -F -- '[[ $plan_refs == unknown ]] && echo' "$REPO_ROOT/plugins/soleur/skills/ship/SKILL.md" | head -n 1)"
+  out="$(cd "$dd" && env CLAUDE_PLUGIN_ROOT="$REPO_ROOT/plugins/soleur" CLOSE_DEFER_RE='close[sd]?.*(after|once|when)' bash -c "$cap"$'\n'"$con" 2>/dev/null)"
+  if [ -z "$out" ]; then h_ok "consumer plan_refs: archiving a plan (a deleted old path) prints nothing, not 'unverifiable'"
+  else h_bad "consumer plan_refs: archiving a plan printed '${out:0:120}' (a deleted path reached grep)"; fi
+  assert_fixture_dir "$dd"; rm -rf -- "$dd"
+}
+
 section_helper() {
   echo "── helper"
   selftest_helper_verdicts
@@ -377,7 +752,7 @@ section_helper() {
   else h_bad "--match line count: want 6 got $(grep -c . <<<"$H_OUT") ($(printf '%s' "$H_OUT" | tr '\n' '|' | cut -c1-200))"; fi
   if h_has_line "zz-outside/$NAME_E"; then h_bad "--match leaked the control path outside the surface"; else h_ok "--match excludes the control path outside the surface"; fi
   run_helper "$d" --match '^zzz-no-such-prefix/' origin/main...HEAD
-  h_expect_rc "--match with no match exits 1 (not 0)" 1
+  h_expect_rc "--match with no match exits 42 (not 0, not 1)" 42
   if [ -z "$H_OUT" ]; then h_ok "--match with no match prints nothing"; else h_bad "--match with no match printed '$H_OUT'"; fi
   run_helper "$d" --match '[' origin/main...HEAD
   h_expect_rc "--match with an invalid ERE exits 2" 2
@@ -393,7 +768,7 @@ section_helper() {
   h_expect_rc "an injected git failure on a VALID range exits non-zero" 2
   H_RC=0
   (cd "$d" && SHIM_FAIL_VERBS=diff PATH="$SHIM_FAIL_DIR:$PATH" bash "$HELPER" --match '^apps/' origin/main...HEAD) > "$WORK_ROOT/io/h.out" 2> "$WORK_ROOT/io/h.err" || H_RC=$?
-  h_expect_rc "--match: an injected git failure exits 2, not 1" 2
+  h_expect_rc "--match: an injected git failure exits 2, not 42" 2
   free_row
 
   # Row set 2: a gitlink under a committed ignore=all AND a local diff.ignoreSubmodules=all.
@@ -441,7 +816,7 @@ section_helper() {
   h_expect_rc "an empty diff exits 0" 0
   if [ -z "$H_OUT" ]; then h_ok "an empty diff prints nothing"; else h_bad "an empty diff printed '$H_OUT'"; fi
   run_helper "$d" --match '^apps/' origin/main...HEAD
-  h_expect_rc "--match on an empty diff exits 1" 1
+  h_expect_rc "--match on an empty diff exits 42" 42
   run_helper "$d"
   h_expect_rc "no arguments exits 2" 2
   if grep -qi 'usage' <<<"$H_ERR"; then h_ok "no arguments prints a usage line"; else h_bad "no arguments stderr: '$H_ERR'"; fi
@@ -501,7 +876,7 @@ section_helper() {
   assert_fixture_dir "$dchg"; rm -rf -- "$dchg"
   free_row
 
-  # Row set 8: an unwritable TMPDIR is UNKNOWN (rc 2 with a temp-file message), never "none match" (rc 1).
+  # Row set 8: an unwritable TMPDIR is UNKNOWN (rc 2 with a temp-file message), never "none match" (rc 42).
   new_row || { h_bad "could not build tmpdir row"; return; }
   d="$ROW_DIR"
   put_in "$d" "$P/tmpdir.tf"
@@ -510,7 +885,7 @@ section_helper() {
   h_expect_rc "an unwritable TMPDIR exits 2" 2
   if grep -qF 'temp file' <<<"$H_ERR" && [ -z "$H_OUT" ]; then h_ok "an unwritable TMPDIR says so on stderr and prints no list"; else h_bad "unwritable TMPDIR: out='$H_OUT' err='$H_ERR'"; fi
   run_helper_env "$d" TMPDIR=/nonexistent/changed-paths-fixture --match '^zzz-no-such-prefix/' origin/main...HEAD
-  h_expect_rc "--match with an unwritable TMPDIR exits 2, never 1 (none match)" 2
+  h_expect_rc "--match with an unwritable TMPDIR exits 2, never 42 (none match)" 2
   run_helper_env "$d" TMPDIR=/nonexistent/changed-paths-fixture --match '^apps/' origin/main...HEAD
   h_expect_rc "--match that WOULD match, with an unwritable TMPDIR, still exits 2" 2
   free_row
@@ -546,6 +921,13 @@ section_helper() {
   h_expect_rc "--match over a >64 KiB list exits 0" 0
   if [ "$(wc -c < "$WORK_ROOT/io/h.out")" -gt 65536 ]; then h_ok "precondition large: the matched output is larger than a 64 KiB pipe buffer"; else h_bad "precondition large: output only $(wc -c < "$WORK_ROOT/io/h.out") bytes"; fi
   if [ "$(grep -c . <<<"$H_OUT")" -eq 1200 ]; then h_ok "--match over a >64 KiB list prints all 1200 matches"; else h_bad "--match over a large list printed $(grep -c . <<<"$H_OUT") lines, want 1200"; fi
+  # A grep that answers 1 ("none match") WITHOUT reading: printf, still writing a list past the pipe buffer, fails (SIGPIPE or EPIPE), and
+  # that is unknown (2), never "none match" (42), whatever grep said.
+  local gdir="$WORK_ROOT/shim-grep1"
+  mkdir -p "$gdir" && printf '#!/bin/sh\nexit 1\n' > "$gdir/grep" && chmod +x "$gdir/grep"
+  H_RC=0
+  (cd "$d" && PATH="$gdir:$PATH" bash "$HELPER" --match '^apps/' origin/main...HEAD) > "$WORK_ROOT/io/h.out" 2> "$WORK_ROOT/io/h.err" || H_RC=$?
+  h_expect_rc "--match whose writer fails on a >64 KiB list exits 2, not 42 (grep said 1 without reading)" 2
   free_row
   # Row set 11: the option ALLOWLIST. Only `--cached`, `--staged`, `--merge-base`, `--diff-filter=*` and everything after `--` pass; every
   # other option is refused with rc 2 and an empty stdout, because a flag appended after the baked-in ones wins in git (`-M`, `-C`,
@@ -598,6 +980,21 @@ section_helper() {
   else
     h_bad "plain mode to a full device: /dev/full is not writable on this host, the row cannot run"
   fi
+  # A failed READ of the temp file is an empty list; in --match mode that would be 42 ("none match") on a diff that does match.
+  # shim-tr-all fails every `tr`; shim-tr-conv fails only the NUL-to-LF conversion; shim-tr-count fails only the newline count (`tr -dc`).
+  local real_tr tdir_all="$WORK_ROOT/shim-tr-all" tdir_conv="$WORK_ROOT/shim-tr-conv" tdir_count="$WORK_ROOT/shim-tr-count" tdir
+  real_tr="$(command -v tr)"
+  mkdir -p "$tdir_all" "$tdir_conv" "$tdir_count" && printf '#!/bin/sh\nexit 1\n' > "$tdir_all/tr" \
+    && printf '#!/bin/sh\n[ "$1" = -dc ] && exec "%s" "$@"\nexit 1\n' "$real_tr" > "$tdir_conv/tr" \
+    && printf '#!/bin/sh\n[ "$1" = -dc ] && exit 1\nexec "%s" "$@"\n' "$real_tr" > "$tdir_count/tr" && chmod +x "$tdir_all/tr" "$tdir_conv/tr" "$tdir_count/tr"
+  for tdir in "$tdir_all" "$tdir_conv" "$tdir_count"; do
+    H_RC=0
+    (cd "$d" && PATH="$tdir:$PATH" bash "$HELPER" --match '^apps/' origin/main...HEAD) > "$WORK_ROOT/io/h.out" 2> "$WORK_ROOT/io/h.err" || H_RC=$?
+    h_expect_rc "--match with a failed read of the list (${tdir##*/}) exits 2, not 42" 2
+    H_RC=0
+    (cd "$d" && PATH="$tdir:$PATH" bash "$HELPER" origin/main...HEAD) > "$WORK_ROOT/io/h.out" 2> "$WORK_ROOT/io/h.err" || H_RC=$?
+    h_expect_rc "plain mode with a failed read of the list (${tdir##*/}) exits 2, not an empty list at 0" 2
+  done
   run_helper "$d" origin/main...HEAD
   h_expect_final_lf "plain mode output ends with a line feed (read from the file, a capture strips it)" "$WORK_ROOT/io/h.out"
   run_helper "$d" --match '^apps/' origin/main...HEAD
@@ -612,13 +1009,14 @@ section_helper() {
   run_helper_env "$d" TMPDIR="$priv" --match '^apps/' origin/main...HEAD
   if [ -z "$(ls -A "$priv")" ]; then h_ok "--match (a match) leaves no temp file in TMPDIR"; else h_bad "--match left a temp file in TMPDIR"; rm -rf -- "$priv"; mkdir -p "$priv"; fi
   run_helper_env "$d" TMPDIR="$priv" --match '^zzz-no-such-prefix/' origin/main...HEAD
-  if [ -z "$(ls -A "$priv")" ]; then h_ok "--match (no match, rc 1) leaves no temp file in TMPDIR"; else h_bad "--match with no match left a temp file in TMPDIR"; rm -rf -- "$priv"; mkdir -p "$priv"; fi
+  if [ -z "$(ls -A "$priv")" ]; then h_ok "--match (no match, rc 42) leaves no temp file in TMPDIR"; else h_bad "--match with no match left a temp file in TMPDIR"; rm -rf -- "$priv"; mkdir -p "$priv"; fi
   run_helper_env "$d" TMPDIR="$priv" origin/no-such-ref...HEAD
   if [ -z "$(ls -A "$priv")" ]; then h_ok "a git failure (rc 2) leaves no temp file in TMPDIR"; else h_bad "a git failure left a temp file in TMPDIR"; rm -rf -- "$priv"; mkdir -p "$priv"; fi
   free_row
   mkdir -p "$WORK_ROOT/nogit"
   run_helper "$WORK_ROOT/nogit" origin/main...HEAD
   h_expect_rc "outside a git work tree exits 2" 2
+  caller_rows
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1812,7 +2210,7 @@ selftest_pinned() {
 #   spelling   every `changed-paths.sh` is the whole call form `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh"` (a bare or doubled
 #              name resolves against the wrong cwd or an unset root);
 #   range      every line naming the helper names `origin/main...HEAD` (the PR's own diff, never a default target);
-#   ship       each gdpr/DPF/canonical `--match` assignment keeps `|| { [ $? -eq 1 ] || VAR=unknown; }` (rc 1 = no match; any other rc is
+#   ship       each gdpr/DPF/canonical `--match` assignment keeps `|| { [ $? -eq 42 ] || VAR=unknown; }` (rc 42 = no match; any other rc is
 #              unknown and the gate runs);
 #   preflight  the Step 0.1 cache line keeps `|| { rm -f <cache>; echo "PREFLIGHT-CACHE-MISSING..." }`, the Cache-missing rule keeps
 #              `cache file absent => RUN`, and the SKIP predicate of Checks 1, 2, 6, 8 and 10 each says `cache file is absent, RUN`;
@@ -1852,11 +2250,11 @@ skill_ship_handler_pin() {
   local body calls good v missing=""
   if ! body="$(skill_body ship)"; then fail "skill pin: ship/SKILL.md is missing"; return; fi
   calls="$(grep -c -E -- "=\\\$\\($RX_CALL --match " <<<"$body" || true)"
-  good="$(grep -c -E -- "^([a-z_]+)=\\\$\\($RX_CALL --match .+ origin/main\\.\\.\\.HEAD\\) \\|\\| \\{ \\[ \\\$\\? -eq 1 \\] \\|\\| \\1=unknown; \\}\$" <<<"$body" || true)"
+  good="$(grep -c -E -- "^([a-z_]+)=\\\$\\($RX_CALL --match .+ origin/main\\.\\.\\.HEAD\\) \\|\\| \\{ \\[ \\\$\\? -eq 42 \\] \\|\\| \\1=unknown; \\}\$" <<<"$body" || true)"
   for v in gdpr_gate_touch diff_match dpf_match ledger_touched plan_refs; do
-    grep -q -E -- "^$v=\\\$\\($RX_CALL --match .+ origin/main\\.\\.\\.HEAD\\) \\|\\| \\{ \\[ \\\$\\? -eq 1 \\] \\|\\| $v=unknown; \\}\$" <<<"$body" || missing="$missing $v"
+    grep -q -E -- "^$v=\\\$\\($RX_CALL --match .+ origin/main\\.\\.\\.HEAD\\) \\|\\| \\{ \\[ \\\$\\? -eq 42 \\] \\|\\| $v=unknown; \\}\$" <<<"$body" || missing="$missing $v"
   done
-  if [ -z "$missing" ] && [ "$calls" -ge 5 ] && [ "$calls" -eq "$good" ]; then pass "skill pin: the $calls ship --match assignments keep the fail-closed handler (|| { [ \$? -eq 1 ] || VAR=unknown; }) and origin/main...HEAD"
+  if [ -z "$missing" ] && [ "$calls" -ge 5 ] && [ "$calls" -eq "$good" ]; then pass "skill pin: the $calls ship --match assignments keep the fail-closed handler (|| { [ \$? -eq 42 ] || VAR=unknown; }) and origin/main...HEAD"
   else fail "skill pin: ship/SKILL.md --match assignments: $calls found, $good with the fail-closed handler + origin/main...HEAD; missing or malformed:${missing:- none by name}"; fi
 }
 skill_preflight_pin() {
@@ -1881,6 +2279,9 @@ skill_review_pin() {
   if ! body="$(skill_body review)"; then fail "skill pin: review/SKILL.md is missing"; return; fi
   if grep -q -E -- "^[[:space:]]*$RX_CALL origin/main\\.\\.\\.HEAD > \"[^\"]+\" \\|\\| \\{ .*REVIEW-CLASSIFY-UNKNOWN" <<<"$body"; then pass "skill pin: the review classify call keeps its || { ... REVIEW-CLASSIFY-UNKNOWN ... } handler"
   else fail "skill pin: review/SKILL.md lost the classify form: $RX_CALL origin/main...HEAD > \"...\" || { ...REVIEW-CLASSIFY-UNKNOWN..."; fi
+  local trig; trig="$(census_entry review-gdpr || true)"
+  if grep -q -F -- 'does not exit 42 (42 = no match)' <<<"$trig"; then pass "skill pin: the review gdpr-gate trigger reads only exit 42 as no match"
+  else fail "skill pin: review/SKILL.md lost the gdpr-gate trigger arm 'does not exit 42 (42 = no match)' on its --match \"\$CANONICAL_REGEX\" line"; fi
 }
 # ship gate semantics the handler shape alone cannot say: the vendor-cost ledger match is the EXACT path (anchored, `.` escaped, AMT so a deletion is
 # not an edit) and `unknown` never exempts it; the Closes-after-verification gate tests `unknown` EXPLICITLY (else `grep ... $plan_refs` greps a file
@@ -1891,27 +2292,29 @@ skill_ship_semantics_pin() {
   grep -q -F -- "--match '^knowledge-base/operations/expenses\.md\$' --diff-filter=AMT origin/main...HEAD)" <<<"$body" || missing="$missing ledger-regex-anchored-escaped-AMT"
   grep -q -F -- 'is not exactly `knowledge-base/operations/expenses.md` (`unknown` fires the gate)' <<<"$body" || missing="$missing ledger-exact-equality-rule"
   grep -q -F -- '[[ $plan_refs == unknown ]] && echo' <<<"$body" || missing="$missing plan_refs-explicit-unknown-branch"
-  if [ -z "$missing" ]; then pass "skill pin: ship keeps the exact-path ledger match, the exact-equality exemption rule and the explicit plan_refs unknown branch"
+  local ci_line; ci_line="$(census_entry ship-ci || true)"
+  grep -q -F -- 'does not exit 42 (42 = no match)' <<<"$ci_line" || missing="$missing untrusted-ci-notice-no-match-arm"
+  if [ -z "$missing" ]; then pass "skill pin: ship keeps the exact-path ledger match, the exact-equality exemption rule, the explicit plan_refs unknown branch and the UNTRUSTED-CI exit-42 arm"
   else fail "skill pin: ship/SKILL.md lost:$missing"; fi
 }
-# one-shot: its scope check is the plain-mode list (no --match), so it has no `VAR=unknown` handler; the failure arm is prose: exit 2/127 is a breach.
+# one-shot: its scope check is the plain-mode list (no --match), so it has no `VAR=unknown` handler; the failure arm is prose: a non-zero exit is a breach.
 skill_oneshot_pin() {
   local body line
   if ! body="$(skill_body one-shot)"; then fail "skill pin: one-shot/SKILL.md is missing"; return; fi
   line="$(grep -F -- 'changed-paths.sh' <<<"$body" | head -n 1)"
-  if grep -q -F -- 'exit 2/127 = scope unverified: treat as a breach' <<<"$line" && grep -q -F -- '^knowledge-base/project/(plans|specs)/' <<<"$line"; then
-    pass "skill pin: the one-shot scope check keeps 'exit 2/127 = scope unverified: treat as a breach' and the anchored plans|specs containment regex on the helper line"
-  else fail "skill pin: one-shot/SKILL.md lost the scope-check failure arm ('exit 2/127 = scope unverified: treat as a breach') or the ^knowledge-base/project/(plans|specs)/ containment regex on the helper line"; fi
+  if grep -q -F -- 'non-zero exit = scope unverified: treat as a breach' <<<"$line" && grep -q -F -- '^knowledge-base/project/(plans|specs)/' <<<"$line"; then
+    pass "skill pin: the one-shot scope check keeps 'non-zero exit = scope unverified: treat as a breach' and the anchored plans|specs containment regex on the helper line"
+  else fail "skill pin: one-shot/SKILL.md lost the scope-check failure arm ('non-zero exit = scope unverified: treat as a breach') or the ^knowledge-base/project/(plans|specs)/ containment regex on the helper line"; fi
 }
 # Converted references and agents: ONE exact capture shape per file (every mention of the helper is that shape, a trailing `# comment` is
 # stripped first so `|| true # unknown` cannot hide), the failure-arm text is present, and the `:-` plugin-root arm is absent. risk-tier-and-fix-rounds.md
 # spells the root `<plugin-root>` (it carries no plugin-root notice and is not a Read-surface doc), so its shape accepts that spelling.
 # file<TAB>shape ERE (each mention must match it)<TAB>failure-arm fixed string<TAB>fixture line (the compliant tree)
 REF_PINS="$(cat <<'TSV'
-plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	^legal_touch=\$\(bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh" --match '[^']+' origin/main\.\.\.HEAD\) \|\| \{ \[ \$\? -eq 1 \] \|\| legal_touch=unknown; \}$	|| { [ $? -eq 1 ] || legal_touch=unknown; }	legal_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^docs/legal/' origin/main...HEAD) || { [ $? -eq 1 ] || legal_touch=unknown; }
+plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	^[a-z_]+=\$\(bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh" --match '[^']+'( --diff-filter=AMT)? refs/remotes/origin/main\.\.\.HEAD\) \|\| \{ \[ \$\? -eq 42 \] \|\| [a-z_]+=unknown; \}$	|| { [ $? -eq 42 ] || legal_touch=unknown; }	legal_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^(docs/legal/|plugins/soleur/docs/pages/legal/|knowledge-base/legal/)' refs/remotes/origin/main...HEAD) || { [ $? -eq 42 ] || legal_touch=unknown; }
 plugins/soleur/skills/ship/references/adr-ordinal-collision.md	^files=\$\(bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh" origin/main\.\.\.HEAD\) \|\| files=\$\(git ls-files\)$	|| files=$(git ls-files)	   files=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD) || files=$(git ls-files)   # list unknown: sweep every tracked file
 plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md	^files=\$\(bash (<plugin-root>|"\$\{CLAUDE_PLUGIN_ROOT\}")/scripts/changed-paths\.sh "\$PANEL_SHA"\.\.HEAD\) \|\| files=unknown$	|| files=unknown	   files=$(bash <plugin-root>/scripts/changed-paths.sh "$PANEL_SHA"..HEAD) || files=unknown   # unknown: spawn the full class panel
-plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md	`bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh" origin/main\.\.\.HEAD`	exit 2/127 = inventory unknown	Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD` and partition its list (exit 2/127 = inventory unknown: every category is in scope):
+plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md	`bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh" origin/main\.\.\.HEAD`	non-zero exit = inventory unknown	Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD` and partition its list (non-zero exit = inventory unknown: every category is in scope):
 TSV
 )"
 skill_ref_pin() { # <repo-relative file> <shape ERE> <failure-arm fixed string>
@@ -1932,8 +2335,88 @@ skill_ref_pins() {
     skill_ref_pin "$rel" "$shape" "$arm"
   done <<<"$REF_PINS"
 }
+# The repo-wide census of every call of the helper (#12809 review, CTO R2, round-2 C1). Population: every tracked file (every file of the
+# synthetic tree in a self-test) minus knowledge-base, this suite and the helper itself, read as text even with a NUL byte (`grep -a`).
+# Every line naming `changed-paths` (comments and headings included) must carry the call form `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh"`
+# or `bash <plugin-root>/scripts/changed-paths.sh`, so the helper cannot be reached through a variable path; the one exemption is the
+# path-list entry in scripts/lib/test-affected-paths.sh, by file and exact content, exactly once. A line naming it that ends in `\` fails.
+# Each line with `--match` must be EITHER a capture in the exact handler shape (leading whitespace allowed; the `unknown` arm names the
+# captured variable) OR one of the three named consumers, each exactly once. CENSUS_CAPS rows: file<TAB>variable<TAB>line; CENSUS_PROSE
+# rows: kind<TAB>file<TAB>line. RESIDUALS (not pinned): `--match` passed through a variable or array on a line that carries the call form;
+# a non-shell call split across lines without `\`; a line that carries the call form and also names the helper a second time.
+CENSUS_CAPS=""; CENSUS_PROSE=""; CENSUS_BAD=""
+census_files() { # <root>: NUL-separated root-relative paths of the population
+  if [ "$1" = "$REPO_ROOT" ] || [ "$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" = "$1" ]; then git -C "$1" ls-files -z -- . ':!knowledge-base'
+  else (cd "$1" && find . -type f ! -path './knowledge-base/*' | sed 's|^\./||' | tr '\n' '\0'); fi
+}
+census_match_calls() { # <root>
+  local root="$1" hit rel rest line kind n trimmed exempt=0
+  local form_a='bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh"' form_b='bash <plugin-root>/scripts/changed-paths.sh'
+  local cap_rx='^[[:space:]]*([a-z_]+)=\$\(bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh" --match .+\) \|\| \{ \[ \$\? -eq 42 \] \|\| ([a-z_]+)=unknown; \}[[:space:]]*$'
+  local c_ci="--match '^\\.github/(workflows|actions)/' origin/main...HEAD\`"
+  local c_gdpr='--match "$CANONICAL_REGEX" origin/main...HEAD`'
+  local c_pre="--match '(^|/)supabase/migrations/.*\\.sql\$' origin/main...HEAD > \"\$a\" && grep "
+  CENSUS_CAPS=""; CENSUS_PROSE=""; CENSUS_BAD=""; CENSUS_ROOT="$root"
+  while IFS= read -r hit; do
+    rel="${hit%%:*}"; rest="${hit#*:}"; line="${rest#*:}"
+    case "$rel" in plugins/soleur/test/changed-path-readers.test.sh|plugins/soleur/scripts/changed-paths.sh) continue ;; esac
+    if [[ "$line" =~ \\[[:space:]]*$ ]]; then CENSUS_BAD+="$rel:${rest%%:*} continues a helper call across lines"$'\n'; continue; fi
+    if [[ "$line" != *"$form_a"* && "$line" != *"$form_b"* ]]; then
+      trimmed="$(sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' <<<"$line")"
+      if [ "$rel" = scripts/lib/test-affected-paths.sh ] && [ "$trimmed" = '"plugins/soleur/scripts/changed-paths.sh"' ]; then exempt=$((exempt + 1)); continue; fi
+      CENSUS_BAD+="$rel:${rest%%:*} names the helper without the call form: ${line:0:100}"$'\n'; continue
+    fi
+    case "$line" in *--match*) : ;; *) continue ;; esac
+    if [[ "$line" =~ $cap_rx ]] && [ "${BASH_REMATCH[1]}" = "${BASH_REMATCH[2]}" ]; then
+      CENSUS_CAPS+="$rel"$'\t'"${BASH_REMATCH[1]}"$'\t'"$line"$'\n'; continue
+    fi
+    kind=""
+    case "$rel" in
+      plugins/soleur/skills/ship/SKILL.md) [[ "$line" == *"$c_ci"* ]] && kind='ship-ci' ;;
+      plugins/soleur/skills/review/SKILL.md) [[ "$line" == *"$c_gdpr"* ]] && kind='review-gdpr' ;;
+      plugins/soleur/skills/preflight/SKILL.md) [[ "$line" == *"$c_pre"* ]] && kind='preflight-verify' ;;
+    esac
+    if [ -n "$kind" ]; then CENSUS_PROSE+="$kind"$'\t'"$rel"$'\t'"$line"$'\n'
+    else CENSUS_BAD+="$rel:${rest%%:*} is neither the handler-shape capture nor a named consumer: ${line:0:100}"$'\n'; fi
+  done < <(cd "$root" && census_files "$root" | xargs -0 grep -a -n -H -F -- 'changed-paths' 2>/dev/null)
+  if [ "$root" = "$REPO_ROOT" ] && [ "$exempt" -ne 1 ]; then CENSUS_BAD+="the test-affected-paths.sh path-list exemption matched $exempt times, want exactly 1"$'\n'; fi
+  for kind in ship-ci review-gdpr preflight-verify; do
+    n="$(grep -c -- "^$kind"$'\t' <<<"$CENSUS_PROSE" || true)"
+    [ "$n" -eq 1 ] || CENSUS_BAD+="the named consumer $kind appears $n times, want exactly 1"$'\n'
+  done
+}
+census_entry() { # <variable|consumer kind>: the line of that census entry (rc 1 when there is none); re-runs the census for a new SKILL_ROOT
+  local a b c
+  [ "${CENSUS_ROOT:-}" = "$SKILL_ROOT" ] || census_match_calls "$SKILL_ROOT"
+  while IFS=$'\t' read -r a b c; do [ "$b" = "$1" ] && { printf '%s\n' "$c"; return 0; }; done <<<"$CENSUS_CAPS"
+  while IFS=$'\t' read -r a b c; do [ "$a" = "$1" ] && { printf '%s\n' "$c"; return 0; }; done <<<"$CENSUS_PROSE"
+  return 1
+}
+# The literal EREs of the gates that carry one, byte for byte (CTO R5(d)): a dropped alternation branch is a gate that never fires on it.
+CENSUS_ERES="$(cat <<'TSV'
+legal_touch	^(docs/legal/|plugins/soleur/docs/pages/legal/|knowledge-base/legal/)
+ledger_touched	^knowledge-base/operations/expenses\.md$
+gdpr_gate_touch	^plugins/soleur/skills/gdpr-gate/
+plan_refs	^knowledge-base/project/(plans|specs)/
+ship-ci	^\.github/(workflows|actions)/
+TSV
+)"
+skill_census_pin() {
+  census_match_calls "$SKILL_ROOT"
+  if [ -z "$CENSUS_BAD" ]; then pass "skill pin: census: every --match helper call is a handler-shape capture ($(grep -c . <<<"$CENSUS_CAPS" || true)) or one of the 3 named consumers, each once"
+  else fail "skill pin: census: $(printf '%s' "$CENSUS_BAD" | head -n 5 | tr '\n' '|')"; fi
+  local key want got missing=""
+  while IFS=$'\t' read -r key want; do
+    [ -n "$key" ] || continue
+    got="$(census_entry "$key" | sed -E "s/.*--match '([^']*)'.*/\\1/")"
+    [ "$got" = "$want" ] || missing="$missing $key(got '${got:0:80}')"
+  done <<<"$CENSUS_ERES"
+  if [ -z "$missing" ]; then pass "skill pin: census: the legal, ledger, gdpr-gate, plan_refs and .github EREs are byte-for-byte the pinned ones"
+  else fail "skill pin: census: an ERE drifted from the pinned table:$missing"; fi
+}
 skill_prose_pins() {
   local sk
+  skill_census_pin
   for sk in preflight ship review one-shot; do skill_spelling_pin "$sk"; done
   for sk in preflight ship review one-shot; do skill_range_pin "$sk"; done
   skill_ship_handler_pin
@@ -1953,7 +2436,8 @@ skill_fixture() { # <root>
   {
     printf '## Phase 0\n\n```bash\n'
     printf '%s origin/main...HEAD %s "$PREFLIGHT_TMP/preflight-diff-files.txt" || { rm -f "$PREFLIGHT_TMP/preflight-diff-files.txt"; echo "PREFLIGHT-CACHE-MISSING: helper failed"; }\n' "$call" '>'
-    printf '```\n\n**Cache-missing rule.** Every SKIP predicate below reads: cache file absent => RUN; `grep` rc 1 => SKIP; rc 2 => RUN.\n\n'
+    printf '```\n\nVerify via `a=$(mktemp) && %s --match %s origin/main...HEAD %s "$a" && grep -E x "$PREFLIGHT_TMP/preflight-diff-files.txt"`.\n' "$call" "'(^|/)supabase/migrations/.*\\.sql\$'" '>'
+    printf '\n**Cache-missing rule.** Every SKIP predicate below reads: cache file absent => RUN; `grep` rc 1 => SKIP; rc 2 => RUN.\n\n'
     local c
     for c in 1 2 3 6 8 10; do
       printf '### Check %s: name\n\n# a comment line\nFor Check %s the cache file is absent, RUN. Otherwise `grep` rc 1 => return **SKIP**.\n\n' "$c" "$c"
@@ -1962,23 +2446,26 @@ skill_fixture() { # <root>
   } > "$1/plugins/soleur/skills/preflight/SKILL.md"
   {
     printf '```bash\n'
-    printf 'gdpr_gate_touch=$(%s --match '"'"'^plugins/x/'"'"' origin/main...HEAD) || { [ $? -eq 1 ] || gdpr_gate_touch=unknown; }\n' "$call"
-    printf 'diff_match=$(%s --match "$CANONICAL_REGEX" origin/main...HEAD) || { [ $? -eq 1 ] || diff_match=unknown; }\n' "$call"
-    printf 'dpf_match=$(%s --match "$DPF_REGEX" origin/main...HEAD) || { [ $? -eq 1 ] || dpf_match=unknown; }\n' "$call"
-    printf 'ledger_touched=$(%s --match %s --diff-filter=AMT origin/main...HEAD) || { [ $? -eq 1 ] || ledger_touched=unknown; }\n' "$call" "'^knowledge-base/operations/expenses\.md\$'"
-    printf 'plan_refs=$(%s --match %s origin/main...HEAD) || { [ $? -eq 1 ] || plan_refs=unknown; }\n' "$call" "'^knowledge-base/project/(plans|specs)/'"
+    printf 'gdpr_gate_touch=$(%s --match '"'"'^plugins/soleur/skills/gdpr-gate/'"'"' origin/main...HEAD) || { [ $? -eq 42 ] || gdpr_gate_touch=unknown; }\n' "$call"
+    printf 'diff_match=$(%s --match "$CANONICAL_REGEX" origin/main...HEAD) || { [ $? -eq 42 ] || diff_match=unknown; }\n' "$call"
+    printf 'dpf_match=$(%s --match "$DPF_REGEX" origin/main...HEAD) || { [ $? -eq 42 ] || dpf_match=unknown; }\n' "$call"
+    printf 'ledger_touched=$(%s --match %s --diff-filter=AMT origin/main...HEAD) || { [ $? -eq 42 ] || ledger_touched=unknown; }\n' "$call" "'^knowledge-base/operations/expenses\.md\$'"
+    printf 'plan_refs=$(%s --match %s origin/main...HEAD) || { [ $? -eq 42 ] || plan_refs=unknown; }\n' "$call" "'^knowledge-base/project/(plans|specs)/'"
     printf '%s\n' "[[ \$plan_refs == unknown ]] && echo 'unverifiable: use Ref #N' || true"
     printf '%s\n' 'Rule. If a signal fires AND `ledger_touched` is not exactly `knowledge-base/operations/expenses.md` (`unknown` fires the gate), the change MUST carry a companion.'
     printf '```\n'
+    printf 'If `%s --match '"'"'^\\.github/(workflows|actions)/'"'"' origin/main...HEAD` does not exit 42 (42 = no match), tell the operator.\n' "$call"
   } > "$1/plugins/soleur/skills/ship/SKILL.md"
-  printf 'After the subagent returns, verify the scope: run `%s origin/main...HEAD` and confirm every listed path matches `^knowledge-base/project/(plans|specs)/`; exit 2/127 = scope unverified: treat as a breach and re-diff, never as in scope. Fallback `<base-sha>..HEAD`.\n' "$call" > "$1/plugins/soleur/skills/one-shot/SKILL.md"
+  printf 'After the subagent returns, verify the scope: run `%s origin/main...HEAD` and confirm every listed path matches `^knowledge-base/project/(plans|specs)/`; non-zero exit = scope unverified: treat as a breach and re-diff, never as in scope. Fallback `<base-sha>..HEAD`.\n' "$call" > "$1/plugins/soleur/skills/one-shot/SKILL.md"
   # The converted references and agents: the compliant fixture line of every REF_PINS row.
   local rrel rline
   while IFS=$'\t' read -r rrel _ _ rline; do
     [ -n "$rrel" ] || continue
     mkdir -p "$(dirname "$1/$rrel")" && printf '%s\n' "$rline" > "$1/$rrel" || return 1
   done <<<"$REF_PINS"
+  printf 'Settle, then merge.\n' > "$1/plugins/soleur/skills/ship/references/settle-then-admin-merge.md" || return 1
   printf '   %s origin/main...HEAD %s "$REVIEW_TMP/review-changed.txt" || { rc=$?; rm -f "$REVIEW_TMP/review-changed.txt"; echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"; }\n' "$call" '>' > "$1/plugins/soleur/skills/review/SKILL.md"
+  printf -- '- `%s --match "$CANONICAL_REGEX" origin/main...HEAD` does not exit 42 (42 = no match): treat as a match.\n' "$call" >> "$1/plugins/soleur/skills/review/SKILL.md"
 }
 skill_defect() { # <root> <sk> <python old> <python new>: apply ONE defect to the fixture (must apply exactly once)
   local target="$1/plugins/soleur/skills/$2/SKILL.md"
@@ -2025,13 +2512,13 @@ selftest_skill_pins() {
     selftest_skill_tree "$nm" bad "$t"
   done <<'DEFECTS'
 a bare helper name on its own line	review	echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"; }	echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"; }\nsee changed-paths.sh for the details
-the ship fail-closed handler dropped	ship	{ [ $? -eq 1 ] || dpf_match=unknown; }	{ dpf_match=unknown; }
+the ship fail-closed handler dropped	ship	{ [ $? -eq 42 ] || dpf_match=unknown; }	{ dpf_match=unknown; }
 a ship --match not on origin/main...HEAD	ship	--match "$DPF_REGEX" origin/main...HEAD)	--match "$DPF_REGEX" HEAD~1)
 preflight PREFLIGHT-CACHE-MISSING dropped	preflight	echo "PREFLIGHT-CACHE-MISSING: helper failed"	echo "helper failed"
 preflight cache rm -f dropped	preflight	{ rm -f "$PREFLIGHT_TMP/preflight-diff-files.txt"; echo	{ echo
 preflight Check 6 cache-absent wording dropped	preflight	For Check 6 the cache file is absent, RUN.	For Check 6 the cache is simply read.
 review REVIEW-CLASSIFY-UNKNOWN dropped	review	echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"	echo "helper rc=$rc"
-the ship ledger handler dropped (unknown would be read as touched)	ship	{ [ $? -eq 1 ] || ledger_touched=unknown; }	{ ledger_touched=unknown; }
+the ship ledger handler dropped (unknown would be read as touched)	ship	{ [ $? -eq 42 ] || ledger_touched=unknown; }	{ ledger_touched=unknown; }
 the ship plan_refs match not on origin/main...HEAD	ship	--match '^knowledge-base/project/(plans|specs)/' origin/main...HEAD)	--match '^knowledge-base/project/(plans|specs)/' HEAD~1)
 the ship ledger rule flipped so that unknown exempts the gate	ship	is not exactly `knowledge-base/operations/expenses.md` (`unknown` fires the gate)	is not empty (`unknown` exempts the gate)
 the ship ledger match loses its escaped dot	ship	expenses\.md$' --diff-filter=AMT	expenses.md$' --diff-filter=AMT
@@ -2039,13 +2526,25 @@ the ship plan_refs unknown branch removed	ship	[[ $plan_refs == unknown ]] && ec
 an uppercase LEDGER_TOUCHED handler (the renamed variable regrown)	ship	ledger_touched=$(bash	LEDGER_TOUCHED=$(bash
 one-shot helper call garbled (bare name)	one-shot	scripts/changed-paths.sh" origin/main...HEAD`	scripts/changed-paths.shchanged-paths.sh" origin/main...HEAD`
 one-shot helper call on a HEAD~1 range	one-shot	changed-paths.sh" origin/main...HEAD`	changed-paths.sh" HEAD~1`
-one-shot scope-check breach arm dropped	one-shot	exit 2/127 = scope unverified: treat as a breach	exit 2/127 is ignored
-a counsel-review capture without its unknown arm	plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	|| { [ $? -eq 1 ] || legal_touch=unknown; }	|| true # unknown
-a counsel-review capture whose unknown arm is hidden behind || true	plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	|| { [ $? -eq 1 ] || legal_touch=unknown; }	|| { [ $? -eq 1 ] || legal_touch=unknown; } || true
+one-shot scope-check breach arm dropped	one-shot	non-zero exit = scope unverified: treat as a breach	non-zero exit is ignored
+a counsel-review capture without its unknown arm	plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	|| { [ $? -eq 42 ] || legal_touch=unknown; }	|| true # unknown
+a counsel-review capture whose unknown arm is hidden behind || true	plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	|| { [ $? -eq 42 ] || legal_touch=unknown; }	|| { [ $? -eq 42 ] || legal_touch=unknown; } || true
 adr-ordinal-collision capture falling back to an empty list	plugins/soleur/skills/ship/references/adr-ordinal-collision.md	|| files=$(git ls-files)	|| true
 a risk-tier capture without its unknown arm	plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md	|| files=unknown	|| true
 a second helper call in a reference without the unknown arm	plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md	|| files=unknown	|| files=unknown\nmore=$(bash <plugin-root>/scripts/changed-paths.sh "$PANEL_SHA"..HEAD)
-an observability-coverage-reviewer inventory-unknown arm dropped	plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md	exit 2/127 = inventory unknown	exit 2/127 is ignored
+an observability-coverage-reviewer inventory-unknown arm dropped	plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md	non-zero exit = inventory unknown	non-zero exit is ignored
+the ship dpf handler back to rc 1 = no match (an unbound root would skip the gate)	ship	{ [ $? -eq 42 ] || dpf_match=unknown; }	{ [ $? -eq 1 ] || dpf_match=unknown; }
+the counsel-review handler back to rc 1 = no match	plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	|| { [ $? -eq 42 ] || legal_touch=unknown; }	|| { [ $? -eq 1 ] || legal_touch=unknown; }
+one-shot scope-check arm back to exit 2/127 only	one-shot	non-zero exit = scope unverified: treat as a breach	exit 2/127 = scope unverified: treat as a breach
+observability inventory arm back to exit 2/127 only	plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md	non-zero exit = inventory unknown	exit 2/127 = inventory unknown
+the ship UNTRUSTED-CI notice back to prints anything or exits 2/127	ship	does not exit 42 (42 = no match)	prints anything or exits 2/127
+the review gdpr-gate trigger back to exits 0 or 2/127	review	does not exit 42 (42 = no match)	exits 0 (a match) or 2/127
+an -eq 1 capture in a reference outside the pinned files	plugins/soleur/skills/ship/references/settle-then-admin-merge.md	Settle, then merge.	ci_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^\.github/' origin/main...HEAD) || { [ $? -eq 1 ] || ci_touch=unknown; }
+an if-form --match call (rc 1 and 127 read as no match)	ship	[[ $plan_refs == unknown ]] && echo	if bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^zz/' origin/main...HEAD; then echo FIRE; fi\n[[ $plan_refs == unknown ]] && echo
+an -eq 1 capture in review	review	treat as a match.	treat as a match.\nzz_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^zz/' origin/main...HEAD) || { [ $? -eq 1 ] || zz_touch=unknown; }
+a helper call continued across lines	ship	dpf_match=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match	dpf_match=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" \\n  --match
+a second .github prose consumer in ship	ship	tell the operator.	tell the operator.\nAlso if `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^\.github/(workflows|actions)/' origin/main...HEAD` does not exit 42 (42 = no match), say so.
+the counsel ERE drops its knowledge-base/legal/ branch	plugins/soleur/skills/ship/references/counsel-review-clo-attestation.md	|knowledge-base/legal/)' refs	)' refs
 DEFECTS
 }
 
@@ -2273,7 +2772,7 @@ if [ "$SECTION" != all ]; then
   [ "$FAIL" -eq 0 ]
   exit
 fi
-MIN_HELPER_ROWS=109
+MIN_HELPER_ROWS=219
 if [ "$HELPER_ROWS" -lt "$MIN_HELPER_ROWS" ]; then
   printf '[FATAL] helper floor: only %s helper rows ran, want >=%s\n' "$HELPER_ROWS" "$MIN_HELPER_ROWS" >&2
   exit 1
@@ -2289,14 +2788,14 @@ if [ "$CENSUS_ROWS" -lt "$MIN_CENSUS_ROWS" ]; then
   printf '[FATAL] census floor: only %s reader sites were censused, want >=%s\n' "$CENSUS_ROWS" "$MIN_CENSUS_ROWS" >&2
   exit 1
 fi
-# Exact current total (the floor is the full count, not a margin below it): helper 109 + steps 187 + sentinel 119.
-MIN_TOTAL=415
+# Exact current total (the floor is the full count, not a margin below it): helper 211 + steps 187 + sentinel 122.
+MIN_TOTAL=528
 if [ "$total" -lt "$MIN_TOTAL" ]; then
   printf '[FATAL] assertion floor: only %s assertions ran, want >=%s\n' "$total" "$MIN_TOTAL" >&2
   exit 1
 fi
 # Every positive control must have run (an inert verdict helper is caught inside selftest_moved; a skipped self-test is caught here).
-if [ "$SELFTESTS" -ne 68 ]; then printf '[FATAL] self-test count: ran %s verdict-helper self-tests, want 68\n' "$SELFTESTS" >&2; exit 1; fi
+if [ "$SELFTESTS" -ne 80 ]; then printf '[FATAL] self-test count: ran %s verdict-helper self-tests, want 80\n' "$SELFTESTS" >&2; exit 1; fi
 echo
 echo "helper rows: $HELPER_ROWS, executed steps: $STEP_ROWS"
 echo "Guard: $PASS passed, $FAIL failed"
