@@ -11,8 +11,10 @@
  *   2. a connected repo (owner + name) and a resolved installation;
  *   3. the workspace web-egress grant (`webEgressEntitled`, the grant boolean, never the forwarder handle: the push runs
  *      in the dispatch process, so a degraded forwarder is irrelevant);
- *   4. the `approval-queue` flag, read through `isApprovalQueueEnabled({userId, workspaceId})`, the SAME function and
- *      identity the gate uses; any throw, timeout or non-`true` value is OFF (this module never creates or flips the flag);
+ *   4. the `approval-queue` flag, read through `readApprovalQueueFlagDetailed({userId, workspaceId})`: the SAME snapshot and
+ *      identity as the gate's `isApprovalQueueEnabled`, so the same value. It registers exactly when that value is `true`;
+ *      a throw, a timeout or a non-`true` value is OFF (this module never creates or flips the flag). Only the reason of an
+ *      OFF splits (D40(1)): `flag-off` when Flagsmith answered off, `flag-error` when the read failed or fell back;
  *   5. the repo's default branch, looked up with a bounded request. A lookup failure means NOT registered, never a "main"
  *      fallback, so the tool can never be advertised while unable to protect the default branch.
  *
@@ -25,22 +27,30 @@
  * write tool off a support dispatch (ADR-113): for support the dispatcher also resolves no installation, so this registrar is
  * normally never reached. Do not remove the persona arm or reorder it behind the network lookup.
  *
+ * Repo, installation, entitlement and flag are decided by ONE pure function, `ccPushPreconditionVerdict`, shared with the
+ * Settings predicate below (D40(5), arch F9), so a precondition added to one cannot silently miss the other. A read the
+ * dispatcher could not complete (`degradedReads`) is not a definite "off": it never registers, and its reason is the
+ * transient `precondition-error` (D40(2)). A default-branch lookup answered 401/403/404 means the installation lost access:
+ * `installation-unauthorized` (D40(3)), whose agent line asks for GitHub to be reconnected.
+ *
  * The tool is built with `requireGrant: true` and the SAME `ExecutionGrants` object the gate writes to, so a call that
  * reaches the handler without a gate-written grant carrying the approved commit is refused (see `github-tools.ts`).
  * Entitlement, repo and installation are captured at Query construction: registration policy, not per-call authorization.
  * Every push still needs a fresh Owner approval at the gate.
  *
  * `github-tools` is imported LAZILY, only after every precondition held: the heavy GitHub graph stays out of the dark path
- * and out of every other module that imports this one (the dispatcher, the census tests). *
- * It also exports `isCcGithubPushRouteAvailable` (#12714, D29(5)), the read-only answer the Settings held-files card needs:
+ * and out of every other module that imports this one (the dispatcher, the census tests).
+ *
+ * It also exports `resolveCcGithubPushRoute` (#12714, D29(5)), the read-only answer the Settings held-files card needs:
  * would the user's next session get this tool? It checks the same conditions minus the default-branch lookup and never
  * builds or registers anything.
  */
 
-import { isApprovalQueueEnabled, type ApprovalFlagIdentity } from "./approval/flag";
+import { readApprovalQueueFlagDetailed, type ApprovalFlagIdentity, type ApprovalFlagRead } from "./approval/flag";
+import type { HeldRouteState } from "@/lib/kb-sync-held-copy";
 import type { ExecutionGrants } from "./approval/grants";
 import type { BuildGithubPushBranchToolOpts } from "./github-tools";
-import { infoSilentFallback, reportSilentFallback, warnSilentFallback } from "./observability";
+import { infoSilentFallback, mirrorWarnWithDebounce, reportSilentFallback } from "./observability";
 import {
   defaultFetchDefaultBranch,
   isSafeBranch,
@@ -90,7 +100,9 @@ export const CC_PUSH_FLAG_TIMEOUT_MS = 2_000;
 /**
  * Machine reasons: one per way the tool can be absent. The reason is returned to the caller; only `registered` emits the
  * `cc-push-registration` outcome event. Every failure reason is already reported once by its own op-tagged mirror
- * (`cc-push-flag-resolve`, `cc-push-default-branch-resolve`, `cc-push-default-branch-unsafe`), and the normal dark states are silent.
+ * (`cc-push-flag-resolve`, the flag module's debounced read failure, the dispatcher's degraded-read mirrors,
+ * `cc-push-default-branch-resolve`, `cc-push-default-branch-unsafe`), and the normal dark states are silent. Every consumer
+ * maps this union through an exhaustive `Record`, so a new reason fails the compile (pattern P3-6).
  */
 export type CcPushRegistrationReason =
   | "registered"
@@ -99,8 +111,50 @@ export type CcPushRegistrationReason =
   | "not-entitled"
   | "flag-off"
   | "flag-error"
+  | "precondition-error"
+  | "installation-unauthorized"
   | "default-branch-unresolved"
   | "default-branch-unsafe";
+
+/** One precondition read: `true` holds, `false` is a definite "off", `"unknown"` is a read that failed, timed out or fell back. */
+export type CcPushCheck = boolean | "unknown";
+
+/** The reasons the shared precondition decision can give (the persona and the default-branch lookup are the registrar's own). */
+export type CcPushPreconditionReason = Extract<
+  CcPushRegistrationReason,
+  "no-repo-or-installation" | "not-entitled" | "flag-off" | "flag-error" | "precondition-error"
+>;
+
+/**
+ * D40(5), arch F9: THE precondition decision of the push tool, used by the registrar and by the Settings predicate. Pure.
+ * A definite "off" wins over a read that could not be completed anywhere else (the off is lasting, the blip is not), in the
+ * registrar's cheapest-first order; then a failed repo, installation or entitlement read is `precondition-error`, a failed
+ * or fallen-back flag read `flag-error`. `null`: every given check holds (with `flag` absent, only the cheap ones were given;
+ * the registrar then reads the flag).
+ */
+export function ccPushPreconditionVerdict(c: {
+  readonly repo: CcPushCheck;
+  readonly installation: CcPushCheck;
+  readonly entitled: CcPushCheck;
+  readonly flag?: CcPushCheck;
+}): CcPushPreconditionReason | null {
+  if (c.repo === false || c.installation === false) return "no-repo-or-installation";
+  if (c.entitled === false) return "not-entitled";
+  if (c.flag === false) return "flag-off";
+  if (c.repo === "unknown" || c.installation === "unknown" || c.entitled === "unknown") return "precondition-error";
+  if (c.flag === "unknown") return "flag-error";
+  return null;
+}
+
+/** A seam answer that is not a well-formed `ApprovalFlagRead` is a failed read (fail closed), never a value. */
+function asFlagRead(r: unknown): ApprovalFlagRead {
+  if (r === "error") return "error";
+  if (typeof r === "object" && r !== null) {
+    const { value, fellBack } = r as { value?: unknown; fellBack?: unknown };
+    if (typeof value === "boolean" && typeof fellBack === "boolean") return { value, fellBack };
+  }
+  return "error";
+}
 
 export interface CcPushRegistration {
   registered: boolean;
@@ -124,10 +178,15 @@ export interface ResolveCcGithubPushArgs {
   workspacePath: string;
   /** The workspace web-egress GRANT boolean (not the forwarder handle). */
   webEgressEntitled: boolean;
+  /**
+   * D40(2): the precondition reads the dispatcher could not complete (an RPC fault, a timeout, a degraded repo URL), so their
+   * `false`/`null` above is not a definite "off". Absent or empty: every value above is definite.
+   */
+  degradedReads?: readonly ("repo" | "installation" | "entitlement")[];
   /** The ONE per-Query grants object, shared with the gate deps. REQUIRED: a forgotten wiring is a compile error. */
   grants: ExecutionGrants;
-  /** Test seam; defaults to the gate's own flag function. */
-  isEnabled?: (identity: ApprovalFlagIdentity) => Promise<boolean>;
+  /** Test seam; defaults to `readApprovalQueueFlagDetailed` (the gate's snapshot, plus whether Flagsmith answered). */
+  readFlag?: (identity: ApprovalFlagIdentity) => Promise<ApprovalFlagRead>;
   /** Test seam; defaults to the GitHub API `default_branch` read with the installation token. */
   lookupDefaultBranch?: (installationId: number, owner: string, repo: string, signal: AbortSignal) => Promise<unknown>;
   /** Test seam; defaults to the real `buildGithubPushBranchTool` (lazy import). */
@@ -156,13 +215,21 @@ export function ccPushPromptAddendum(defaultBranch: string): string {
   );
 }
 
-/** Run `fn` under a hard deadline; the timer is always cleared, and `onTimeout` runs when the deadline fires first. */
-async function withDeadline<T>(fn: () => Promise<T>, ms: number, what: string, onTimeout?: () => void): Promise<T> {
+/** The rejection of `withDeadline` when the deadline fires first (its own class, so a caller can tag a timeout as one). */
+export class DeadlineExceededError extends Error {
+  override name = "DeadlineExceededError";
+}
+
+/**
+ * Run `fn` under a hard deadline; the timer is always cleared, and `onTimeout` runs when the deadline fires first. The ONE
+ * deadline helper of the cc push and held-line reads (simplicity F5): the dispatcher's held-count read uses it too.
+ */
+export async function withDeadline<T>(fn: () => Promise<T>, ms: number, what: string, onTimeout?: () => void): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       onTimeout?.();
-      reject(new Error(`${what} timed out`));
+      reject(new DeadlineExceededError(`${what} timed out`));
     }, ms);
   });
   try {
@@ -193,8 +260,11 @@ function failureExtra(err: unknown): { errName?: string; status?: number } {
  */
 const OUTCOME_EVENT_REASONS: ReadonlySet<CcPushRegistrationReason> = new Set(["registered"]);
 
+/** HTTP statuses of a default-branch lookup that mean the installation lost access to the repo (reconnect, D40(3)). */
+const UNAUTHORIZED_LOOKUP_STATUSES: ReadonlySet<number> = new Set([401, 403, 404]);
+
 export async function resolveCcGithubPushRegistration(args: ResolveCcGithubPushArgs): Promise<CcPushRegistration> {
-  const isEnabled = args.isEnabled ?? isApprovalQueueEnabled;
+  const readFlag = args.readFlag ?? readApprovalQueueFlagDetailed;
   const lookup = args.lookupDefaultBranch ?? defaultFetchDefaultBranch;
   // The owner and repo are interpolated into an API path: only the safe segment charset is accepted (the dispatcher's own
   // values come from a parsed repo URL; this keeps the guard with the sink).
@@ -231,16 +301,26 @@ export async function resolveCcGithubPushRegistration(args: ResolveCcGithubPushA
 
   // Cheapest first, the flag last among the cheap checks, the network lookup last of all.
   if (args.persona === "support") return done("support-persona");
-  if (!hasRepo || !hasInstallation) return done("no-repo-or-installation");
-  if (!args.webEgressEntitled) return done("not-entitled");
+  const degraded = new Set(args.degradedReads ?? []);
+  const checkOf = (holds: boolean, read: "repo" | "installation" | "entitlement"): CcPushCheck =>
+    holds ? true : degraded.has(read) ? "unknown" : false;
+  const cheapChecks = {
+    repo: checkOf(hasRepo, "repo"),
+    installation: checkOf(hasInstallation, "installation"),
+    entitled: checkOf(args.webEgressEntitled, "entitlement"),
+  } as const;
+  const cheap = ccPushPreconditionVerdict(cheapChecks);
+  if (cheap !== null) return done(cheap);
 
+  let flagRead: ApprovalFlagRead;
   try {
-    const value: unknown = await withDeadline(
-      () => isEnabled({ userId: args.userId, workspaceId: args.workspaceId }),
-      CC_PUSH_FLAG_TIMEOUT_MS,
-      "approval-queue flag read",
+    flagRead = asFlagRead(
+      await withDeadline(
+        () => readFlag({ userId: args.userId, workspaceId: args.workspaceId }),
+        CC_PUSH_FLAG_TIMEOUT_MS,
+        "approval-queue flag read",
+      ),
     );
-    flagEnabled = value === true;
   } catch (err) {
     // Defensive net: the real seam swallows every read error and answers false. A future seam change must not turn a throw or
     // a hang into a registered tool. null first, never the Error (see `failureExtra`).
@@ -252,6 +332,11 @@ export async function resolveCcGithubPushRegistration(args: ResolveCcGithubPushA
     });
     return done("flag-error");
   }
+  // Registers exactly on the gate's value (D40(1)): a fallen-back `true` (the env mirror) still registers; only an OFF's
+  // reason looks at `fellBack`.
+  const flagCheck: CcPushCheck = flagRead === "error" ? "unknown" : flagRead.value ? true : flagRead.fellBack ? "unknown" : false;
+  flagEnabled = ccPushPreconditionVerdict({ ...cheapChecks, flag: flagCheck }) === null;
+  if (flagCheck === "unknown") return done("flag-error");
   if (!flagEnabled) return done("flag-off");
 
   let value: unknown;
@@ -265,13 +350,18 @@ export async function resolveCcGithubPushRegistration(args: ResolveCcGithubPushA
     );
   } catch (err) {
     // NEVER a "main" fallback here: a push tool advertised while unable to protect the default branch is the failure to avoid.
+    const extra = failureExtra(err);
+    const unauthorized = extra.status !== undefined && UNAUTHORIZED_LOOKUP_STATUSES.has(extra.status);
     reportSilentFallback(null, {
       feature: "cc-dispatcher",
       op: "cc-push-default-branch-resolve",
-      extra: { userId: args.userId, ...failureExtra(err) },
+      tags: { cause: unauthorized ? "unauthorized" : "unresolved" },
+      extra: { userId: args.userId, ...extra },
       message: "default branch lookup failed for the cc push tool; github_push_branch not registered",
     });
-    return done("default-branch-unresolved");
+    // D40(3): the installation no longer reaches the repo (revoked, suspended, or the repo moved out of its reach). Lasting
+    // until the GitHub connection is renewed, so not the transient "try a new session" answer.
+    return done(unauthorized ? "installation-unauthorized" : "default-branch-unresolved");
   }
   if (!isSafeBranch(value)) {
     // The lookup answered, but with a name that cannot be closed over safely (not the outage the other arm reports).
@@ -299,44 +389,62 @@ export async function resolveCcGithubPushRegistration(args: ResolveCcGithubPushA
   return done("registered", [tool], defaultBranch);
 }
 
+
 /**
- * #12714 (rulings W3, D29(5), V6(3)): the publish-route predicate for the Settings held-files card. True exactly when the runner
- * of the user's NEXT session registers `github_push_branch`:
- *   - legacy runner: always (it registers the tool whenever a repo and an installation resolve). A new session is never
- *     routed to it (`start_session` dispatches cc-soleur-go since #3270), so the next session's answer is the cc one below.
+ * #12714 (rulings W3, D29(5), V6(3)): the publish-route predicate for the Settings held-files card. Its answer is the
+ * registrar's precondition decision (`ccPushPreconditionVerdict`, D40(5)) for the runner of the user's NEXT session:
+ *   - a new session from `start_session` dispatches cc-soleur-go (D32); the legacy runner still starts for leader-routed
+ *     sessions, and it registers the tool whenever a repo and an installation resolve, so the cc answer is the stricter one.
  *   - cc: the registrar's conditions without the default-branch lookup (a network round trip per Settings render, and the
- *     lookup decides only which branch the tool protects): a non-`support` persona (the next session is a `command_center`
- *     one; support never writes), an installation, the workspace web-egress grant, and the `approval-queue` flag read through
- *     `isApprovalQueueEnabled({ userId, workspaceId })`, the SAME function and identity the registrar and the gate use. This
- *     function never creates, sets or flips the flag.
+ *     lookup decides only which branch the tool protects). The next session is a `command_center` one, so the registrar's
+ *     support-persona arm does not apply here (simplicity F2: the predicate's copy of it was constant-folded dead code).
+ *     The flag goes through `readApprovalQueueFlagDetailed({ userId, workspaceId })`, the gate's snapshot and identity; a
+ *     fallen-back value (the env mirror) is "could not be checked" here even when it is on (D40(1)). This function never
+ *     creates, sets or flips the flag.
  * `userId` is the VIEWER (the member's agent is the one that would push); `workspaceId` is the id the caller resolved once.
  *
  * Answers: `available`; `unavailable` when any condition is definitely false (a definite "off" wins over a blip elsewhere);
- * `unknown` when a read failed or missed its deadline and none was definitely false: the card shows the transient copy,
- * never the no-route sentence on a blip. Each read has its own deadline and they run in parallel, so the whole check is
- * bounded by `CC_PUSH_ROUTE_TIMEOUT_MS`. The entitlement and installation reads are the STRICT ones (a fault is not "off");
- * the flag function swallows its own read errors and answers off, exactly as the registrar sees it. Read-only.
+ * `unknown` when a read failed, missed its deadline or fell back and none was definitely false: the card shows the
+ * transient copy, never the no-route sentence on a blip. Each read has its own deadline and they run in parallel, so the
+ * whole check is bounded by `CC_PUSH_ROUTE_TIMEOUT_MS`. The entitlement and installation reads are the STRICT ones (a fault
+ * is not "off"). Read-only. Named for what it returns (pattern P3-9): a tri-state, never a truthy `is*` boolean.
  */
-export type CcGithubPushRouteAvailability = "available" | "unavailable" | "unknown";
+export type CcGithubPushRouteAvailability = HeldRouteState;
 
 /** Upper bound of each predicate read (the flag read keeps `CC_PUSH_FLAG_TIMEOUT_MS`, which is shorter). */
 export const CC_PUSH_ROUTE_TIMEOUT_MS = 2_500;
 
-/** Whether a session of this persona can have the tool at all (support never writes: ADR-113). */
-function personaMayRegister(persona: Persona): boolean {
-  return persona !== "support";
+/**
+ * The member-checked installation RPC `resolveInstallationId` reads, WITHOUT its swallow: an RPC fault throws (it is not "no
+ * installation"). True when the workspace has an installation the viewer may use. Shared by the predicate and the
+ * dispatcher's degraded-read check (D40(2)).
+ */
+export async function readCcInstallationStrict(userId: string, workspaceId: string): Promise<boolean> {
+  const { getFreshTenantClient } = await import("@/lib/supabase/tenant");
+  const tenant = await getFreshTenantClient(userId);
+  const { data, error } = await tenant.rpc("resolve_workspace_installation_id", { p_workspace_id: workspaceId });
+  if (error) throw new Error("installation read failed");
+  return typeof data === "number" || (typeof data === "string" && data !== "");
 }
 
-/** The persona of the session the Settings card describes: a new session is a `command_center` one. */
-const NEXT_SESSION_PERSONA: Persona = "command_center";
+/** The predicate's mapping of the shared decision (exhaustive: a new reason fails the compile). */
+const ROUTE_OF_PRECONDITION: Readonly<Record<CcPushPreconditionReason, CcGithubPushRouteAvailability>> = {
+  "no-repo-or-installation": "unavailable",
+  "not-entitled": "unavailable",
+  "flag-off": "unavailable",
+  "flag-error": "unknown",
+  "precondition-error": "unknown",
+};
 
-type RouteCheck = boolean | "unknown";
-
-export async function isCcGithubPushRouteAvailable(args: { userId: string; workspaceId: string }): Promise<CcGithubPushRouteAvailability> {
-  if (!personaMayRegister(NEXT_SESSION_PERSONA)) return "unavailable";
-  const { userId, workspaceId } = args;
+export async function resolveCcGithubPushRoute(args: {
+  userId: string;
+  workspaceId: string;
+  /** The caller's Sentry feature tag (the Settings page passes "settings"), so a search on the page's feature finds it. */
+  feature: string;
+}): Promise<CcGithubPushRouteAvailability> {
+  const { userId, workspaceId, feature } = args;
   const failed: string[] = [];
-  const settle = async (name: string, ms: number, read: () => Promise<boolean>): Promise<RouteCheck> => {
+  const settle = async (name: string, ms: number, read: () => Promise<boolean>): Promise<CcPushCheck> => {
     try {
       return await withDeadline(read, ms, name);
     } catch {
@@ -345,32 +453,38 @@ export async function isCcGithubPushRouteAvailable(args: { userId: string; works
     }
   };
 
-  const checks = await Promise.all([
-    settle("flag", CC_PUSH_FLAG_TIMEOUT_MS, async () => (await isApprovalQueueEnabled({ userId, workspaceId })) === true),
+  const [flag, entitled, installation] = await Promise.all([
+    settle("flag", CC_PUSH_FLAG_TIMEOUT_MS, async () => {
+      const read = asFlagRead(await readApprovalQueueFlagDetailed({ userId, workspaceId }));
+      // A failed or fallen-back read is "could not be checked", even when the mirror says on (D40(1)).
+      if (read === "error" || read.fellBack) throw new Error("flag read failed or fell back");
+      return read.value;
+    }),
     settle("entitlement", CC_PUSH_ROUTE_TIMEOUT_MS, async () => {
       const { resolveWebEgressStrict } = await import("./resolve-web-egress");
       return (await resolveWebEgressStrict(userId, workspaceId)) === true;
     }),
-    settle("installation", CC_PUSH_ROUTE_TIMEOUT_MS, async () => {
-      // The same member-checked RPC `resolveInstallationId` reads, without its swallow: an RPC fault is not "no installation".
-      const { getFreshTenantClient } = await import("@/lib/supabase/tenant");
-      const tenant = await getFreshTenantClient(userId);
-      const { data, error } = await tenant.rpc("resolve_workspace_installation_id", { p_workspace_id: workspaceId });
-      if (error) throw new Error("installation read failed");
-      return typeof data === "number" || (typeof data === "string" && data !== "");
-    }),
+    settle("installation", CC_PUSH_ROUTE_TIMEOUT_MS, () => readCcInstallationStrict(userId, workspaceId)),
   ]);
 
-  if (checks.includes(false)) return "unavailable";
-  if (checks.includes("unknown")) {
-    // One warning per Settings render with a blip: visible, and the value the user sees is the honest transient copy.
-    warnSilentFallback(null, {
-      feature: "cc-dispatcher",
-      op: "cc-push-route-check",
-      extra: { userId, workspaceId, failed },
-      message: "publish-route check could not be completed; the transient copy is shown",
-    });
-    return "unknown";
+  // The card renders only for a connected `ready` repo, so the repo check holds by the caller's gate.
+  const verdict = ccPushPreconditionVerdict({ repo: true, installation, entitled, flag });
+  const route = verdict === null ? "available" : ROUTE_OF_PRECONDITION[verdict];
+  if (route === "unknown") {
+    // One warning per window while a read keeps failing (debounced per workspace, obs F11): this runs on every Settings
+    // render. `failed` is a tag, so it can be filtered.
+    mirrorWarnWithDebounce(
+      null,
+      {
+        feature,
+        op: "cc-push-route-check",
+        tags: { failed: [...failed].sort().join(",") },
+        extra: { userId, workspaceId },
+        message: "publish-route check could not be completed; the transient copy is shown",
+      },
+      workspaceId,
+      "cc-push-route-check",
+    );
   }
-  return "available";
+  return route;
 }
