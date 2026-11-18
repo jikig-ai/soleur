@@ -13,7 +13,6 @@
 
 import { EventEmitter } from "node:events";
 import { readdirSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -61,7 +60,8 @@ function makeFakeChild(exitCode = 0) {
 async function captureArgv(opts: { flags: string[]; prompt: string; runId?: string }) {
   spawnSpy.mockClear();
   await spawnClaudeEval({
-    spawnCwd: tmpdir(),
+    loadPlugin: false,
+    spawnCwd: process.cwd(), // #12824 — not the tmp root the per-spawn HOME is created under
     installationToken: "tok-test",
     flags: opts.flags,
     prompt: opts.prompt,
@@ -111,11 +111,11 @@ describe("cron spawns pass the github preamble as a system-prompt append", () =>
     expect(argv[argv.length - 1].startsWith("/")).toBe(true);
   });
 
-  it("a real-shaped flags array (model, allowedTools, plugin-dir, max-turns) still gets the append before --print", async () => {
+  it("a real-shaped flags array (model, allowedTools, max-turns) still gets the append before --print", async () => {
     const argv = await captureArgv({
       flags: [
         "--print", "--model", "sonnet", "--allowedTools", "Bash(gh issue view:*),Read",
-        "--plugin-dir", "plugins/soleur", "--max-turns", "3", "--",
+        "--max-turns", "3", "--",
       ],
       prompt: "/soleur:fix-issue 42",
     });

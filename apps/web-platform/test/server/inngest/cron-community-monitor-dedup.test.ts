@@ -139,6 +139,7 @@ vi.mock("@/server/inngest/functions/_cron-claude-eval-substrate", () => ({
     durationMs: 0, stdoutTail: "", stderrTail: "",
   }),
   KILL_ESCALATION_MS: 5000,
+  PLUGIN_ROOT_TOKEN: "<plugin-root>",
 }));
 
 vi.mock("@/server/inngest/functions/_cron-safe-commit", () => ({
@@ -240,7 +241,7 @@ beforeEach(() => {
   listFaults = [];
   committedPaths = new Set();
   fakeRequest.mockClear();
-  setupWorkspaceSpy.mockResolvedValue({ ephemeralRoot: tmpRoot, spawnCwd: join(tmpRoot, "repo") });
+  setupWorkspaceSpy.mockResolvedValue({ ephemeralRoot: tmpRoot, spawnCwd: join(tmpRoot, "repo"), pluginRoot: "/app/shared/plugins/soleur" });
   // #7122: the spawn only returns the agent's draft; it files nothing.
   spawnClaudeEvalSpy.mockImplementation(async () => okSpawn);
   resolveOutputAwareOkSpy.mockResolvedValue(true);

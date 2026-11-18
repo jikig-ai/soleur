@@ -117,8 +117,9 @@ describe("CONTENT_GENERATOR_PROMPT — anchor strings (regression-detection)", (
 // ---------------------------------------------------------------------------
 // #4987 — skill + build-validation degradation fix.
 //   (A) CLAUDE_CODE_FLAGS must let the headless `claude --print` eval resolve
-//       AND invoke the plugin's /soleur:* skills: `--plugin-dir plugins/soleur`
-//       loads the plugin from the clone's own tracked tree (#5091) — a bare
+//       AND invoke the plugin's /soleur:* skills: the plugin must be loaded with
+//       `--plugin-dir` (since #12824 the substrate inserts the deployed read-only
+//       root for `loadPlugin: true`; before, the clone's tracked tree, #5091) — a bare
 //       plugins/ dir does NOT auto-register
 //       in headless mode — see feature-request-plugin-dir-settings.md), and the
 //       `--allowedTools` allowlist must include `Skill` (invoke skills) + `Task`
@@ -143,19 +144,10 @@ describe("CLAUDE_CODE_FLAGS — skill + plugin-dir resolution (#4987)", () => {
     );
   });
 
-  it("loads the plugin via --plugin-dir plugins/soleur (clone's own tracked tree — #5091)", () => {
-    expect(flagsBlock).toContain('"--plugin-dir"');
-    expect(flagsBlock).toContain('"plugins/soleur"');
-    expect(flagsBlock).toMatch(/"--plugin-dir",\s*\n\s*"plugins\/soleur",/);
-  });
-
-  it("--plugin-dir is positioned BEFORE the load-bearing `--` end-of-options marker", () => {
-    // `"--"` (quote-dash-dash-quote) is the standalone marker; `"--print"` etc.
-    // never contain it, so indexOf is unambiguous.
-    const endMarker = flagsBlock.indexOf('"--"');
-    expect(endMarker).toBeGreaterThan(-1);
-    expect(flagsBlock.indexOf('"--plugin-dir"')).toBeLessThan(endMarker);
-    expect(flagsBlock.indexOf('"plugins/soleur"')).toBeLessThan(endMarker);
+  it("#12824: loads the plugin through the substrate (loadPlugin: true), never a caller --plugin-dir", () => {
+    expect(flagsBlock).not.toContain('"--plugin-dir"');
+    expect(flagsBlock).not.toContain('"plugins/soleur"');
+    expect(SUT_SOURCE).toMatch(/spawnClaudeEval\(\{\s*\n\s*loadPlugin: true,/);
   });
 
   it("does NOT bump the turn budget — --max-turns 50 unchanged", () => {

@@ -135,6 +135,11 @@ bridge**, applied in the `DOCKER-USER` chain (table `ip filter`):
         and `cron-egress-firewall.test.sh` are untouched; the change strictly
         *reduces* container egress. At-source proof: the Spike A `--debug`
         zero-connect trace in PR #5700 (stronger than a vol-1–3 absence inference).
+        > **Superseded in part 2026-11-17 (#12824):** the substrate now inserts
+        > `--plugin-dir <getPluginPath()>` (the deployed read-only copy) for the plugin-loading crons
+        > instead of `plugins/soleur` from the clone, and `cron-ux-audit` passes
+        > `--mcp-config ../workspace/mcp.json` (outside the clone, so the agent cannot rewrite it). The
+        > `--strict-mcp-config` and telemetry levers above are unchanged. See ADR-033's 2026-11-17 amendment.
 5. **Fail-loud, three channels:** kernel drops — BOTH `egress-blocked:` and
    `egress-dns-exfil:` prefixes — are counted each tick and posted as a
    Sentry error event (`feature=cron-egress-firewall`, `op=egress_blocked` →
