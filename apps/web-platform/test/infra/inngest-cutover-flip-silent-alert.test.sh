@@ -26,10 +26,12 @@
 # CONTRACT. The lexer is not Terraform: it does not track `${ }` depth, so a quote or a comment opener inside
 # an interpolation (`"${"#"}"`, `"${"/*"}"`, `length("${"\""}") /*`) makes it read a heredoc body as code,
 # hide real code as a comment, or miss a comment Terraform has (rows R16-R20). Any such desync needs the line
-# Terraform reads and the decoy the guard reads to BOTH exist as text. So every pinned fact must hold in the
-# RAW text AND in the effective text, with exactly-one raw cardinality: one raw line per SQL local and one
-# replace() line, exactly 4 raw column-0 flip headers, exactly one raw line per pinned key of each flip block
-# (equal to its pin), no count/for_each/lifecycle/ignore_changes/provider/dynamic in either view, and no `${`
+# Terraform reads and the decoy the guard reads to BOTH exist as text. So each pinned key (ALERT_PINS and the
+# exploration pins) must hold in the RAW text AND in the effective text, with exactly-one raw cardinality: one
+# raw line per SQL local and one replace() line, exactly 4 raw column-0 flip headers, raw and effective blocks
+# spanning the same lines (a column-0 `}` in a comment or a heredoc cannot cut the raw block short), exactly
+# one raw line per pinned key of each flip block (equal to its pin), no
+# count/for_each/lifecycle/ignore_changes/provider/dynamic in either view, and no `${`
 # / `%{` in the raw flip text but the two runbook-URL interpolations. A lexer desync then needs a duplicate
 # line, and the raw rows refuse it.
 #
@@ -549,6 +551,17 @@ RAW_HDR_N="$(grep -cE '^resource "logtail_exploration(_alert)?" "inngest_cutover
 [ "$RAW_HDR_N" -eq 4 ] \
   && ok "the raw alerts file holds exactly 4 column-0 flip resource headers (as the effective count does)" \
   || no "the raw alerts file does not hold exactly 4 column-0 flip resource headers (got ${RAW_HDR_N}; the canary retirement PR (tracker #12878) moves it to 2) — a copy Terraform never evaluates can stand in for a real block"
+# The raw and the effective block must span the SAME lines (both views keep the line count, and both start at
+# the one column-0 header the row above admits). A column-0 `}` inside a `/* */` comment or a heredoc body ends
+# the raw block early; without this row every line below it would be graded by the effective view alone.
+SPAN_BAD=""
+for _b in ALERT EXPL CANARY_ALERT CANARY_EXPL; do
+  _r="${_b}_RAW"
+  { [ -n "${!_b}" ] && [ "$(wc -l <<< "${!_b}")" -eq "$(wc -l <<< "${!_r}")" ]; } || SPAN_BAD+=" ${_b}"
+done
+[ -z "$SPAN_BAD" ] \
+  && ok "the raw and the effective text of each of the four flip blocks span the same lines" \
+  || no "the raw and the effective text of a flip block span different lines (${SPAN_BAD# }) — a column-0 } inside a comment or a heredoc cuts the raw block short, so the lines below it escape the raw rows"
 # pin_bad TEXT KEY ERE [KEY ERE ...] -> the keys that are not EXACTLY ONE `KEY =` line (any indent) whose
 # value matches ERE, an optional trailing `#` / `//` comment allowed. Pure bash, one mapfile, no fork per key.
 pin_bad() {
@@ -575,11 +588,16 @@ pin_row() {
 }
 ALERT_PINS=(alert_type '"threshold"' operator '"higher_than"' value '0' check_period '300' query_period '900'
   confirmation_period '0' recovery_period '900' on_missing_data '"treat_as_zero"' paused 'false' email 'true'
-  push 'false' call 'false' sms 'false' critical_alert 'false')
+  push 'false' call 'false' sms 'false' critical_alert 'false'
+  policy_id 'var\.betterstack_paid_tier \? tonumber\(betteruptime_policy\.uptime\[0\]\.id\) : null'
+  team_name 'var\.betterstack_paid_tier \? null : "Your team"'
+  runbook 'local\.inngest_cutover_flip_silent_runbook_url')
 pin_row "production alert" "$ALERT_RAW" "$ALERT" "${ALERT_PINS[@]}" \
-  exploration_id 'logtail_exploration\.inngest_cutover_flip_silent\.id'
+  exploration_id 'logtail_exploration\.inngest_cutover_flip_silent\.id' \
+  name '"soleur-inngest-cutover-flip-silent-prd"'
 pin_row "canary alert" "$CANARY_ALERT_RAW" "$CANARY_ALERT" "${ALERT_PINS[@]}" \
-  exploration_id 'logtail_exploration\.inngest_cutover_flip_silent_canary\.id'
+  exploration_id 'logtail_exploration\.inngest_cutover_flip_silent_canary\.id' \
+  name '"soleur-inngest-cutover-flip-silent-canary-prd"'
 pin_row "production exploration" "$EXPL_RAW" "$EXPL" \
   sql_query 'replace\(trimspace\(local\.inngest_cutover_flip_silent_sql\), "/\\\\s\+/", " "\)' \
   values '\[local\.vector_prd_source_id\]'
@@ -685,8 +703,8 @@ fi
 # OUTER RUN ONLY. Each row copies ONE source file into $MUT_DIR, mutates the copy, and re-runs this
 # guard with MUT_SKIP=1 and the matching FLIPSILENT_GUARD_* override pointing at the copy.
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
-PRESENCE_ROWS=63
-MUT_ROWS_EXPECTED=75
+PRESENCE_ROWS=64
+MUT_ROWS_EXPECTED=76
 SELFTEST_ROWS=1
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t flipsilentalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
@@ -1176,6 +1194,19 @@ s = s[:i] + decoy + s[i:j] + "# */\n" + s[j:]'
   mutate PASS "R22 a trailing comment follows value = 0 in the production block only, as terraform fmt lays it out" TF \
     "" \
     's = blk_sub(s, "logtail_exploration_alert", "inngest_cutover_flip_silent", "  value               = 0\n", "  value               = 0 # 0 = the production host reported\n")'
+  # Verifier pass (#12726): a column-0 } inside a /* */ comment cut the raw block short, and the R16/R17 tricks
+  # below it showed the effective view value = 0 while Terraform reads value = 1 (fmt-stable; 63/63 green before).
+  mutate RED "R23 a column-0 } inside a comment cuts the raw block short above an R16/R17 value shadow, mirrored in both alerts (neither can page)" TF \
+    "the raw and the effective text of a flip block span different lines" \
+    'VAL = "  value               = 0\n"
+RBL = "  metadata = {\n    runbook = local.inngest_cutover_flip_silent_runbook_url\n  }\n"
+CUT = "  /*\n  value = 0\n}\n  */\n"
+NEW = "  metadata = {\n    runbook = local.inngest_cutover_flip_silent_runbook_url\n    note2 = join(\"${\"#\"}\", [<<-EOT\n  value               = 0\n  EOT\n    ])\n    note = \"${\"/*\"}\"\n  }\n  value = 1\n  # */\n"
+for lab in ("inngest_cutover_flip_silent", "inngest_cutover_flip_silent_canary"):
+    i, j = blk(s, "logtail_exploration_alert", lab)
+    b = s[i:j]
+    assert b.count(VAL) == 1 and b.count(RBL) == 1, lab
+    s = s[:i] + b.replace(VAL, "").replace(RBL, CUT + NEW) + s[j:]'
 fi
 
 if [ -z "${MUT_SKIP:-}" ] && [ "${MUT_ROWS_RUN:-0}" -ne "$MUT_ROWS_EXPECTED" ]; then
