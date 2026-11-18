@@ -1,5 +1,5 @@
 // #12824 — Guards 2 and 3 of the cron spawn-isolation plan
-// (knowledge-base/project/plans/2026-11-17-fix-cron-agent-editable-code-spawn-isolation-plan.md, "Guard Contract").
+// (knowledge-base/project/plans/archive/20261118-103123-2026-11-17-fix-cron-agent-editable-code-spawn-isolation-plan.md, "Guard Contract").
 //
 // Guard 2 — chokepoint argv and env. Every claude child receives a HOME no other spawn received, that
 // exists with mode 0700 while the child runs and is gone after it exits, and receives
@@ -539,7 +539,7 @@ describe("Phase 0 pin", () => {
   it("the CLI pin matches the version measurements.md was taken on (re-run the Phase 0 probe on a bump)", () => {
     const pkg = JSON.parse(readFileSync(resolve(__dirname, "../../../package.json"), "utf-8"));
     const pin = pkg.dependencies?.["@anthropic-ai/claude-code"] ?? pkg.devDependencies?.["@anthropic-ai/claude-code"];
-    // knowledge-base/project/specs/feat-one-shot-12824-cron-spawn-isolation/measurements.md
+    // knowledge-base/project/specs/archive/20261118-103123-feat-one-shot-12824-cron-spawn-isolation/measurements.md
     expect(pin).toBe("2.1.321");
   });
 });

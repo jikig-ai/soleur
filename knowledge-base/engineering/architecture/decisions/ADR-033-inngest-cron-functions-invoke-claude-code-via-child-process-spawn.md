@@ -637,5 +637,5 @@ Residuals, stated plainly:
 - `worktree-manager.sh create` refuses the bot-only global identity the pin supplies, and bug-fixer degrades to the
   SKILL's `git worktree add` fallback (Phase 0.7e).
 - Phase 0 measurements against CLI 2.1.321 are in
-  `knowledge-base/project/specs/feat-one-shot-12824-cron-spawn-isolation/measurements.md`. They ran against a scripted
+  `knowledge-base/project/specs/archive/20261118-103123-feat-one-shot-12824-cron-spawn-isolation/measurements.md`. They ran against a scripted
   local Messages-API mock (no dev API key), so they show what the CLI does, not what a model would choose.
