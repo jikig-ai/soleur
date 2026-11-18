@@ -529,7 +529,7 @@ Weekly CPO review (every Monday). Pre-product-market-fit: the landscape changes 
 - **After each beta cohort:** Update validation findings. Adjust Phase 3 scope.
 - **Quarterly:** Full roadmap revision. Cross-reference with competitive intelligence and marketing strategy.
 
-Next review: 2026-11-25 (weekly cadence; the 2026-07-13 date lapsed).
+Next review: 2026-11-23 (the next Monday; the 2026-07-13 date lapsed).
 
 ---
 
