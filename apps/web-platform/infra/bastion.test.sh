@@ -101,8 +101,8 @@ shape_row "the server type is a variable" 'server_type = "cx23"' 'server_type = 
 shape_row "the x86 precondition is removed" 'data.hcloud_server_type.bastion.architecture == "x86"' 'true'
 shape_row "firewall_ids set inline" '  ssh_keys = [hcloud_ssh_key.default.id]' '  ssh_keys     = [hcloud_ssh_key.default.id]
   firewall_ids = [hcloud_firewall.bastion.id]'
-shape_row "a web-1 literal in bastion.tf" '  bastion_host_name  = "soleur-bastion"' '  bastion_host_name  = "soleur-bastion"
-  note               = "web-1"'
+shape_row "a web-host key literal in bastion.tf" '  bastion_host_name  = "soleur-bastion"' '  bastion_host_name  = "soleur-bastion"
+  note               = "web-2"'
 # A push filter of an unexpected workflow matching a bastion file (fixture repo root).
 FAKE="$WORK/fakeroot"; mkdir -p "$FAKE/.github/workflows" "$FAKE/apps/web-platform/infra"
 cp "$TF" "$FAKE/apps/web-platform/infra/"
@@ -348,6 +348,8 @@ if ( wc() { echo 0; }; ! budget_ok "$WORK/real.yml" ); then pass "budget H1: a m
 echo
 # 53 unconditional rows, plus row 7's two where an nft checker could prove it discriminates (a leg
 # without nft skips them loudly; a CI leg WITH an undiscriminating nft fails row 7 instead).
+# NFT_RAN is re-bound here so the floor block stands alone (guard-vacuity-floor mutates only this block).
+NFT_RAN="${NFT_RAN:-0}"
 MIN_CASES=$((53 + 2 * NFT_RAN))
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf 'bastion: FAIL (only %d assertions ran; floor %d)\n' "$cases" "$MIN_CASES" >&2; exit 1

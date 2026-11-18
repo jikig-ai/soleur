@@ -280,9 +280,12 @@ def shape(infra, root):
         t = open(p).read()
         if rel.endswith("bastion.test.sh") or rel.endswith("bastion-lint.py"):
             continue  # the lint and its suite name the literals they forbid
-        for lit in ("10.0.1.10", '"web-1"'):
-            if lit in t:
-                bad.append("%s contains the literal %s" % (rel, lit))
+        # Any web-host key, not just web-1: the bastion is keyed on nothing in var.web_hosts, and a
+        # quoted web-1 key literal here would also move web-hosts-generic.test.sh's ratchet.
+        if "10.0.1.10" in t:
+            bad.append("%s contains the literal 10.0.1.10" % rel)
+        for m in sorted(set(re.findall(r'"web-[0-9]+"', t))):
+            bad.append("%s contains the web-host key literal %s" % (rel, m))
     wf_dir = os.path.join(root, ".github", "workflows")
     checked = 0
     for name in sorted(os.listdir(wf_dir)):
