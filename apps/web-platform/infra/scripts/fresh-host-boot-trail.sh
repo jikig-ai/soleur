@@ -32,6 +32,10 @@
 #   BOOT_TRAIL_STRICT    unset/0 = the web path above, unchanged; 1 = STRICT (the bastion route,
 #                   #12866); any other value is refused (verdict=skipped, exit 2)
 #   BOOT_TRAIL_HOST_NAME the exact host_name tag to read in strict mode (e.g. soleur-bastion)
+#   BOOT_TRAIL_HOST_ID   optional, strict mode only: the created server's numeric Hetzner id. When
+#                   set, an event must ALSO carry host_id == this value. The DSN is a write key
+#                   that leaves the fleet (NEXT_PUBLIC_SENTRY_DSN), so a host_name tag alone can be
+#                   forged by anyone holding it; the id of the server this run created cannot.
 #
 # Exit: 0 on a clean boot, a skipped read, or a non-success job; 1 on a proven dark boot
 # (fatal stage, or no terminal event inside the host's own boot window).
@@ -45,6 +49,12 @@
 # after the anchor, no fatal, and a successful job; everything else is not_ready (the boot was read
 # and is not good) or skipped (it could not be read). The web callers never set the switch, and
 # fresh-host-boot-trail.test.sh pins their output byte for byte.
+#
+# Two strict-only differences in the poll itself. (1) A failed Sentry read does not end the poll:
+# strict turns "could not read" into a power-off, so one 502 mid-boot must not destroy a healthy
+# birth. It is retried, and only 3 CONSECUTIVE failures (or a failure past the deadline) end on
+# skipped; any 200 resets the count. (2) The deadline is BOOT_TRAIL_STRICT_DEADLINE_S, the bastion's
+# own boot budget (no SOLEUR_FRESH_BOOT_WINDOW_SECONDS exists on it), not the web host's.
 
 set +e
 
@@ -164,6 +174,10 @@ if [[ "$BT_STRICT" == 1 ]]; then
   if [[ "$SINCE_OK" != 1 || "$BOOT_TRAIL_SINCE" == "0" ]]; then
     strict_verdict skipped "BOOT_TRAIL_SINCE='${BOOT_TRAIL_SINCE}' is not a set epoch anchor; nothing was read"
   fi
+  # Validated before it is interpolated into a jq program below: digits only.
+  if [[ -n "${BOOT_TRAIL_HOST_ID:-}" && ! "$BOOT_TRAIL_HOST_ID" =~ ^[0-9]+$ ]]; then
+    strict_verdict skipped "BOOT_TRAIL_HOST_ID='${BOOT_TRAIL_HOST_ID}' is not a numeric server id; nothing was read"
+  fi
   # Prose only: the label the summary prints. Host matching below uses BOOT_TRAIL_HOST_NAME.
   WEB_HOST_KEY="${WEB_HOST_KEY:-$BOOT_TRAIL_HOST_NAME}"
 fi
@@ -186,7 +200,11 @@ echo "${DISPATCH_LABEL} ${WEB_HOST_KEY:-?} — fresh-host Sentry pointer (job=${
   else
     echo "The job failed. If the host was created and its boot aborted, a breadcrumb/fatal below names the last-reached stage."
   fi
-  echo "_Best-effort: the host id is unknown to the runner, so this matches on message + a recent window — it may show an unrelated host or be empty._"
+  if [[ "$BT_STRICT" == 1 ]]; then
+    echo "_Strict: only events whose host_name tag equals \`${BOOT_TRAIL_HOST_NAME}\`${BOOT_TRAIL_HOST_ID:+ and whose host_id tag equals \`${BOOT_TRAIL_HOST_ID}\`}, after the run anchor, are read._"
+  else
+    echo "_Best-effort: the host id is unknown to the runner, so this matches on message + a recent window — it may show an unrelated host or be empty._"
+  fi
 } >> "$GITHUB_STEP_SUMMARY"
 if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
   # ONE sentence on BOTH channels: an annotation is reachable from `gh run view --log`, a
@@ -257,6 +275,12 @@ fi
 # once cloud_init_complete is seen, then one more iteration (30 s sleep + the 20 s curl bound).
 # Terminal states end the poll early, so a healthy boot usually returns well under the budget.
 BOOT_TRAIL_DEADLINE_S=1200
+# STRICT (the bastion, #12866): its own budget. The bastion runs the same bounded apt loops and one
+# kernel-settle reboot as a web host plus a post-settle apt pass through the loaded egress chain, and
+# has no SOLEUR_FRESH_BOOT_WINDOW_SECONDS of its own; a healthy slow boot must not be powered off at
+# the web deadline. kernel-currency.test.sh reads this literal for bastion_host_create's budget row.
+BOOT_TRAIL_STRICT_DEADLINE_S=1500
+[[ "$BT_STRICT" == 1 ]] && BOOT_TRAIL_DEADLINE_S="$BOOT_TRAIL_STRICT_DEADLINE_S"
 # The step is `if: always()`, so it also runs when the APPLY failed — and then
 # there may be no host at all. Polling the full deadline for a host that was never
 # created would turn every failed apply into a 20-minute red run for no signal.
@@ -290,7 +314,13 @@ def sincok($s): if $s <= 0 then true else ((.dateCreated // "") | if . == "" the
 if [[ "$BT_STRICT" == 1 ]]; then
   JQ_HOSTDEF="${JQ_HOSTDEF}"'
 def hostok($eh): ([ (.tags // [])[]? | select(.key=="host_name") | .value ][0]) as $hn | ($hn != null and $hn == $eh);'
+  # With the created server's id (digits only, validated above), host_id must match too.
+  if [[ -n "${BOOT_TRAIL_HOST_ID:-}" ]]; then
+    JQ_HOSTDEF="${JQ_HOSTDEF}"'
+def hostok($eh): ([ (.tags // [])[]? | select(.key=="host_name") | .value ][0]) as $hn | ([ (.tags // [])[]? | select(.key=="host_id") | .value ][0]) as $hi | ($hn != null and $hn == $eh and $hi == "'"${BOOT_TRAIL_HOST_ID}"'");'
+  fi
 fi
+STRICT_READ_FAILS=0
 TERMINAL=""
 # (#6995) `cloud_init_complete` is necessary but NOT sufficient — see the terminal block.
 # CC_SEEN records when the marker first appeared; CC_GRACE must exceed the 180s
@@ -317,11 +347,21 @@ while :; do
     < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_ACTIONS_RO_TOKEN") || echo "000")
   RESP=$(cat "${EVENTS_TMP:-/dev/null}" 2>/dev/null || echo "")
   if [[ "$HTTP" != "200" ]] || ! echo "$RESP" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    # STRICT: retry a failed read (see the header); 3 in a row, or one past the deadline, ends it.
+    if [[ "$BT_STRICT" == 1 ]]; then
+      STRICT_READ_FAILS=$((STRICT_READ_FAILS + 1))
+      if (( STRICT_READ_FAILS < 3 && SECONDS < DEADLINE )); then
+        echo "boot-trail strict: Sentry read failed (HTTP ${HTTP}), ${STRICT_READ_FAILS} in a row; retrying in 30s"
+        sleep 30
+        continue
+      fi
+    fi
     echo "::warning::fresh-host Sentry read FAILED (HTTP ${HTTP}) — the auto-read did NOT run; this is NOT a 'host emitted nothing' result."
     echo "_Sentry query FAILED (HTTP ${HTTP}) — the auto-read did NOT run; this is NOT a 'host emitted nothing' result. $(echo "$RESP" | jq -r '.detail // empty' 2>/dev/null | tr '\n' ' ' | head -c 160)_" | tee -a "$GITHUB_STEP_SUMMARY"
-    [[ "$BT_STRICT" == 1 ]] && strict_verdict skipped "the Sentry read failed (HTTP ${HTTP})"
+    [[ "$BT_STRICT" == 1 ]] && strict_verdict skipped "the Sentry read failed (HTTP ${HTTP}), ${STRICT_READ_FAILS} consecutive failure(s)"
     exit 0
   fi
+  STRICT_READ_FAILS=0
   # TRUNCATION GUARD. This is a SHARED project (web-1 traffic, app errors,
   # host_metrics), so a full page is not evidence of anything: the fresh host's
   # events may simply be past the cap. "genuinely emitted nothing" is only sayable
@@ -436,7 +476,8 @@ fi
 # (#8651) The image-origin line, OUTSIDE the 8-event slice above (a healthy boot's `app_zot` is
 # early and falls off it). Informational: it never changes the verdict — fresh_boot_ready stays
 # the sole green. Bounded by the run anchor so a predecessor's origin cannot be read as this boot's.
-if [[ -n "$EXPECT_HOST" ]]; then
+# Not in strict mode: the bastion pulls no image, so its origin is not a fact to read.
+if [[ -n "$EXPECT_HOST" && "$BT_STRICT" != 1 ]]; then
   if IO_LINE=$(origin_query "host_name:${EXPECT_HOST} ${ORIGIN_Q_STAGES}" "${BOOT_TRAIL_SINCE:-0}"); then
     echo "- image-origin (\`${EXPECT_HOST}\`, since run anchor): \`${IO_LINE}\`" | tee -a "$GITHUB_STEP_SUMMARY"
   else
@@ -503,11 +544,14 @@ case "$TERMINAL" in
       [[ "$BT_STRICT" == 1 ]] && strict_verdict not_ready "no terminal boot event and a failed job (job=${JOB_STATUS})"
       exit 0
     fi
-    echo "::error::${WEB_HOST_KEY} (${LAST_HOST:-host_name unset}) did not reach cloud_init_complete within ${BOOT_TRAIL_DEADLINE_S}s (the host's own SOLEUR_FRESH_BOOT_WINDOW_SECONDS is 1140). Last-reached stage: ${LAST_STAGE:-none observed}${LAST_DETAIL:+ — detail: ${LAST_DETAIL}}. Treat as DARK until proven otherwise — absence past the boot window is the documented dark-boot signal, not a slow boot."
+    WINDOW_NOTE=" (the host's own SOLEUR_FRESH_BOOT_WINDOW_SECONDS is 1140)"
+    [[ "$BT_STRICT" == 1 ]] && WINDOW_NOTE=" (the strict deadline BOOT_TRAIL_STRICT_DEADLINE_S)"
+    echo "::error::${WEB_HOST_KEY} (${LAST_HOST:-host_name unset}) did not reach cloud_init_complete within ${BOOT_TRAIL_DEADLINE_S}s${WINDOW_NOTE}. Last-reached stage: ${LAST_STAGE:-none observed}${LAST_DETAIL:+ — detail: ${LAST_DETAIL}}. Treat as DARK until proven otherwise — absence past the boot window is the documented dark-boot signal, not a slow boot."
     echo "_**No terminal boot event inside the host's own boot window.** Host \`${LAST_HOST:-unknown}\`, last-reached stage \`${LAST_STAGE:-none observed}\`. Treated as dark._" | tee -a "$GITHUB_STEP_SUMMARY"
     # (#8651) A slow seed pull can fail AFTER this poll ends; the fatal still reaches Sentry.
     # Read it once more (server-side, 14 d) so the cause is not lost, and name the re-read.
-    if SFL=$(origin_query "host_name:${EXPECT_HOST} message:\"soleur-hostscript-seed failed\"" "${BOOT_TRAIL_SINCE:-0}") && [[ "$SFL" != stage=none* ]]; then
+    # (Web only: the bastion bakes no host-scripts seed.)
+    if [[ "$BT_STRICT" != 1 ]] && SFL=$(origin_query "host_name:${EXPECT_HOST} message:\"soleur-hostscript-seed failed\"" "${BOOT_TRAIL_SINCE:-0}") && [[ "$SFL" != stage=none* ]]; then
       echo "::error::${WEB_HOST_KEY} late seed fatal (after the poll): ${SFL}"
     fi
     # (#12008) The unfiltered poll page can lose an early `kernel_reboot` on a busy hour (#12621), and
@@ -518,7 +562,11 @@ case "$TERMINAL" in
     else
       echo "::warning::${WEB_HOST_KEY} server-side boot-stage re-read failed: ${BSL}"
     fi
-    echo "_Re-read later without SSH: \`bash apps/web-platform/infra/scripts/fresh-host-boot-trail.sh --image-origin ${EXPECT_HOST}\` (SENTRY_ACTIONS_RO_TOKEN)._" | tee -a "$GITHUB_STEP_SUMMARY"
+    if [[ "$BT_STRICT" == 1 ]]; then
+      echo "_The newest boot stage above is the server-side re-read; the bastion's late-ready read is in knowledge-base/engineering/operations/runbooks/bastion-host.md._" | tee -a "$GITHUB_STEP_SUMMARY"
+    else
+      echo "_Re-read later without SSH: \`bash apps/web-platform/infra/scripts/fresh-host-boot-trail.sh --image-origin ${EXPECT_HOST}\` (SENTRY_ACTIONS_RO_TOKEN)._" | tee -a "$GITHUB_STEP_SUMMARY"
+    fi
     if [[ -n "$LAST_DETAIL" ]]; then
       echo "_Last detail: \`${LAST_DETAIL}\`_" | tee -a "$GITHUB_STEP_SUMMARY"
     fi

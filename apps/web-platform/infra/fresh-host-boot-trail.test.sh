@@ -92,6 +92,14 @@ cat > /dev/null
 case "$url" in
   https://de.sentry.io/api/0/organizations/*) cp "$FHBT_ORG" "$out"; printf '200' ;;
   https://de.sentry.io/api/0/projects/*)
+    # FHBT_SEQ (strict retry rows): a file of "<code> <page>" lines, one popped per read; exhausted = 500.
+    if [ -n "${FHBT_SEQ:-}" ]; then
+      line=$(head -n 1 "$FHBT_SEQ"); tail -n +2 "$FHBT_SEQ" > "$FHBT_SEQ.t"; mv "$FHBT_SEQ.t" "$FHBT_SEQ"
+      [ -n "$line" ] || line="500 -"
+      code=${line%% *}; page=${line#* }
+      if [ "$code" = 200 ]; then cp "$page" "$out"; else echo '{"detail":"stub: seq"}' > "$out"; fi
+      printf '%s' "$code"; exit 0
+    fi
     # After the poll has slept once (strict rows only), the next page is a 500: the reader then
     # ends on its read-failed arm, so a row that must NOT terminate on the first page still ends.
     if [ -n "${FHBT_SLEPT:-}" ] && [ -e "$FHBT_SLEPT" ]; then echo '{"detail":"stub: after sleep"}' > "$out"; printf '500'; exit 0; fi
@@ -109,18 +117,22 @@ exit 1
 STUB
 chmod +x "$BIN/curl" "$BIN/sleep"
 
-# ev.py <out> <spec>...: each spec is message|stage|host|level|date|detail ("-" host = untagged).
+# ev.py <out> <spec>...: each spec is message|stage|host|level|date|detail[|host_id] ("-" host = untagged).
 cat > "$WORK/ev.py" <<'PY'
 import json, sys
 out = sys.argv[1]
 evs = []
 for spec in sys.argv[2:]:
-    msg, stage, host, level, date, detail = spec.split("|")
+    parts = spec.split("|")
+    msg, stage, host, level, date, detail = parts[:6]
+    hid = parts[6] if len(parts) > 6 else ""
     tags = [{"key": "stage", "value": stage}, {"key": "level", "value": level}]
     if host != "-":
         tags.append({"key": "host_name", "value": host})
     if detail:
         tags.append({"key": "detail", "value": detail})
+    if hid:
+        tags.append({"key": "host_id", "value": hid})
     evs.append({"message": msg, "dateCreated": date, "tags": tags})
 json.dump(evs, open(out, "w"))
 PY
@@ -199,7 +211,9 @@ STRICT_ROWS=0
 run_strict() {
   local name="$1"; shift
   rm -f "$WORK/$name.slept"
-  TRAIL="${TRAIL_UNDER_TEST:-$TRAIL}" run_trail "$name" BOOT_TRAIL_STRICT=1 FHBT_SLEPT="$WORK/$name.slept" "$@"
+  local seq=()
+  if [[ -f "$WORK/$name.seqsrc" ]]; then cp "$WORK/$name.seqsrc" "$WORK/$name.seq"; seq=(FHBT_SEQ="$WORK/$name.seq"); fi
+  TRAIL="${TRAIL_UNDER_TEST:-$TRAIL}" run_trail "$name" BOOT_TRAIL_STRICT=1 FHBT_SLEPT="$WORK/$name.slept" "${seq[@]}" "$@"
   S_RC="$(sed -n '1s/^rc=//p' "$WORK/$name.got")"
   S_VERDICTS="$(grep -c '^verdict=' "$WORK/$name.got" || true)"
   S_VERDICT="$(sed -n 's/^verdict=//p' "$WORK/$name.got" | head -1)"
@@ -238,9 +252,38 @@ srow "cloud_init_complete without fresh_boot_ready is not ready" s10 "not_ready 
 cp "$WORK/s01.proj.json" "$WORK/s11.proj.json"
 srow "a malformed host name is refused" s11 "skipped 2 no" JOB_STATUS=success 'BOOT_TRAIL_HOST_NAME=soleur bastion' BOOT_TRAIL_SINCE="$ANCHOR" SENTRY_ACTIONS_RO_TOKEN=x
 cp "$WORK/s01.proj.json" "$WORK/s12.proj.json"
-srow "an unreadable Sentry page is skipped, never ready" s12 "skipped 2 no" "${SB[@]}" FHBT_PROJ_CODE=500
+# A persistently unreadable page is retried (strict) and still ends skipped, never ready.
+srow "an unreadable Sentry page is skipped, never ready" s12 "skipped 2 yes" "${SB[@]}" FHBT_PROJ_CODE=500
 mkev "$WORK/s13.proj.json" "$CI_MSG|fresh_boot_ready|soleur-web-platform|info|$D3|"
 srow "the web-1 host_name mapping is not applied in strict mode" s13 "skipped 2 yes" "${SB[@]}" WEB_HOST_KEY=web-1
+# Read-failure tolerance (strict only): one 502 mid-boot must not power off a healthy birth.
+mkev "$WORK/ready.page.json" "$CI_MSG|fresh_boot_ready|$B|info|$D3|" "$CI_MSG|cloud_init_complete|$B|info|$D2|"
+mkev "$WORK/empty.page.json"
+# seq_src <case> <line>...: the case's read sequence; run_strict copies it fresh for every run
+# (a read consumes it), so a mutation row's before/after runs see the same sequence.
+seq_src() { local n="$1"; shift; printf '%s\n' "$@" > "$WORK/$n.seqsrc"; cp "$WORK/s01.proj.json" "$WORK/$n.proj.json"; }
+seq_src s15 '500 -' "200 $WORK/ready.page.json"
+srow "one failed read, then a ready page, is ready" s15 "ready 0 yes" "${SB[@]}"
+seq_src s16 '500 -' '502 -' "200 $WORK/ready.page.json"
+srow "two failed reads in a row, then a ready page, is ready" s16 "ready 0 yes" "${SB[@]}"
+seq_src s17 '500 -' '500 -' "200 $WORK/empty.page.json" '500 -' '500 -' "200 $WORK/ready.page.json"
+srow "a good read resets the count (2 fails, a page, 2 fails, ready)" s17 "ready 0 yes" "${SB[@]}"
+seq_src s18 '500 -' '500 -' '500 -' "200 $WORK/ready.page.json"
+srow "three failed reads in a row end on skipped" s18 "skipped 2 yes" "${SB[@]}"
+cp "$WORK/s01.proj.json" "$WORK/s19.proj.json"
+srow "a failed job reads once: a failed read is skipped with no retry" s19 "skipped 2 no" JOB_STATUS=failure BOOT_TRAIL_HOST_NAME=$B BOOT_TRAIL_SINCE="$ANCHOR" SENTRY_ACTIONS_RO_TOKEN=x FHBT_PROJ_CODE=500
+# host_id binding (strict, when the caller knows the created server's id).
+mkev "$WORK/s20.proj.json" "$CI_MSG|fresh_boot_ready|$B|info|$D3||4242"
+srow "a ready event carrying the created server's host_id is ready" s20 "ready 0 no" "${SB[@]}" BOOT_TRAIL_HOST_ID=4242
+mkev "$WORK/s21.proj.json" "$CI_MSG|fresh_boot_ready|$B|info|$D3||9999"
+srow "a ready event from another host_id (a forged or stale one) does not match" s21 "skipped 2 yes" "${SB[@]}" BOOT_TRAIL_HOST_ID=4242
+cp "$WORK/s01.proj.json" "$WORK/s22.proj.json"
+srow "a non-numeric BOOT_TRAIL_HOST_ID is refused before any read" s22 "skipped 2 no" "${SB[@]}" 'BOOT_TRAIL_HOST_ID=42 or true'
+# Web-only text stays off the strict path (the web goldens hold it on the web path).
+eq "strict s01: the web 'best-effort, host id unknown' line is not printed" "$(grep -c 'Best-effort: the host id is unknown' "$WORK/s01.got" || true)" 0
+eq "strict s01: no image-origin read on the bastion route" "$(grep -c 'image-origin' "$WORK/s01.got" || true)" 0
+eq "strict deadline: its own literal, the web literal unchanged" \
+  "$(grep -cxF 'BOOT_TRAIL_STRICT_DEADLINE_S=1500' "$TRAIL") $(grep -cxF 'BOOT_TRAIL_DEADLINE_S=1200' "$TRAIL")" "1 1"
 # An invalid switch value is refused by name (a typo must never silently fall back to the lax path).
 cp "$WORK/s01.proj.json" "$WORK/s14.proj.json"
 run_trail s14 BOOT_TRAIL_STRICT=yes "${SB[@]}"
@@ -274,15 +317,19 @@ mrow "strict host match accepts an untagged event" s02 '($hn != null and $hn == 
 mrow "strict host name not used (web mapping)" s03 'EXPECT_HOST="$BOOT_TRAIL_HOST_NAME"' 'EXPECT_HOST="soleur-web-2"' "${SB[@]}"
 mrow "missing anchor accepted" s04 '|| "$BOOT_TRAIL_SINCE" == "0"' '' JOB_STATUS=success BOOT_TRAIL_HOST_NAME=$B SENTRY_ACTIONS_RO_TOKEN=x
 mrow "unbound token read as not-skipped" s06 'strict_verdict skipped "the Sentry token is not bound (unbound token)"' 'strict_verdict ready "the Sentry token is not bound (unbound token)"' JOB_STATUS=success BOOT_TRAIL_HOST_NAME=$B BOOT_TRAIL_SINCE="$ANCHOR"
+# The retry rows build their sequence file afresh per run (it is consumed by the read).
+mrow "a strict read failure ends the poll at once (no retry)" s15 '(( STRICT_READ_FAILS < 3 && SECONDS < DEADLINE ))' '(( 0 ))' "${SB[@]}"
+mrow "the consecutive-failure count never resets on a good read" s17 $'  fi\n  STRICT_READ_FAILS=0\n' $'  fi\n' "${SB[@]}"
+mrow "host_id is not compared" s21 ' and $hi == "'"'"'"${BOOT_TRAIL_HOST_ID}"'"'"'"' '' "${SB[@]}" BOOT_TRAIL_HOST_ID=4242
 
 echo
-MIN_CASES=46
+MIN_CASES=68
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf 'fresh-host-boot-trail: FAIL (only %d assertions ran; floor %d - the suite may have been truncated)\n' "$cases" "$MIN_CASES" >&2
   exit 1
 fi
-if [[ "$CHAR_ROWS" -ne 14 || "$STRICT_ROWS" -ne 13 || "$MUT_ROWS" -ne 4 ]]; then
-  printf 'fresh-host-boot-trail: FAIL (rows ran: characterization %d/14, strict %d/13, mutation %d/4)\n' "$CHAR_ROWS" "$STRICT_ROWS" "$MUT_ROWS" >&2
+if [[ "$CHAR_ROWS" -ne 14 || "$STRICT_ROWS" -ne 21 || "$MUT_ROWS" -ne 7 ]]; then
+  printf 'fresh-host-boot-trail: FAIL (rows ran: characterization %d/14, strict %d/21, mutation %d/7)\n' "$CHAR_ROWS" "$STRICT_ROWS" "$MUT_ROWS" >&2
   exit 1
 fi
 if [[ $((passes + fails)) -ne "$cases" ]]; then
