@@ -25,8 +25,10 @@ vi.mock("@/server/set-web-egress", () => ({
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn(), captureMessage: vi.fn() }));
 
 import { POST } from "../app/api/workspace/web-egress/route";
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import {
+  EgressRevokedError,
+  egressRevocationEpoch,
   hasEgressForwarder,
   isEgressForwarderLive,
   isEgressRevoked,
@@ -155,6 +157,69 @@ describe("POST /api/workspace/web-egress value=false (#12585 AC24)", () => {
     await expect(pending).rejects.toThrow(/turned off while the egress forwarder was starting/);
     expect(hasEgressForwarder("conv-a")).toBe(false);
     expect(readdirSync(tokenDir)).toEqual([]);
+    // Marked revoked even though nothing was registered yet: its denies read granted=false, not degraded.
+    expect(isEgressRevoked("conv-a")).toBe(true);
+  }, 20_000);
+
+  test("fix round: a toggle-off between the dispatcher's grant read and the spawn wins (epochAtGrant)", async () => {
+    const atGrant = egressRevocationEpoch("ws-toggle");
+    teardownEgressForwardersForWorkspace("ws-toggle"); // lands during the dispatcher's other awaits
+    await expect(spawnEgressForwarder("conv-a", "ws-toggle", atGrant)).rejects.toThrow(/turned off/);
+    expect(hasEgressForwarder("conv-a")).toBe(false);
+    expect(readdirSync(tokenDir)).toEqual([]);
+    expect(isEgressRevoked("conv-a")).toBe(true);
+  }, 20_000);
+
+  // Each R4 check pinned on its own window. A fake forwarder writes a marker when it starts and binds 600 ms later.
+  function slowForwarder(): { marker: string } {
+    const marker = join(tokenDir, "..", `fwd-started-${Math.random().toString(36).slice(2)}`);
+    const script = join(tokenDir, "..", `slow-fwd-${Math.random().toString(36).slice(2)}.mjs`);
+    writeFileSync(
+      script,
+      `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "1");
+       setTimeout(() => console.log("egress-forwarder-listening 1"), 600); setInterval(() => {}, 1000);`,
+    );
+    vi.stubEnv("EGRESS_FORWARDER_PATH", script);
+    return { marker };
+  }
+
+  test("R4 check 1 (spawn start): a stale epochAtGrant refuses before the gateway probe", async () => {
+    const atGrant = egressRevocationEpoch("ws-toggle");
+    teardownEgressForwardersForWorkspace("ws-toggle");
+    vi.stubEnv("EGRESS_GW_PORT", "1"); // a probe would fail with a different error
+    await expect(spawnEgressForwarder("conv-a", "ws-toggle", atGrant)).rejects.toBeInstanceOf(EgressRevokedError);
+  }, 20_000);
+
+  test("R4 check 2 (after the gateway probe): the forwarder process never starts", async () => {
+    const { marker } = slowForwarder();
+    const pending = spawnEgressForwarder("conv-a", "ws-toggle");
+    teardownEgressForwardersForWorkspace("ws-toggle"); // lands during the gateway probe
+    await expect(pending).rejects.toBeInstanceOf(EgressRevokedError);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(existsSync(marker)).toBe(false);
+    expect(readdirSync(tokenDir)).toEqual([]);
+  }, 20_000);
+
+  test("R4 check 3 (after the bind): a toggle-off during the bind leaves nothing live or minted", async () => {
+    const { marker } = slowForwarder();
+    const pending = spawnEgressForwarder("conv-a", "ws-toggle");
+    const deadline = Date.now() + 5_000;
+    while (!existsSync(marker) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+    expect(existsSync(marker)).toBe(true); // the child started: we are inside the bind wait
+    teardownEgressForwardersForWorkspace("ws-toggle");
+    await expect(pending).rejects.toBeInstanceOf(EgressRevokedError);
+    expect(hasEgressForwarder("conv-a")).toBe(false);
+    expect(readdirSync(tokenDir)).toEqual([]);
+    expect(isEgressRevoked("conv-a")).toBe(true);
+  }, 20_000);
+
+  test("fix round: a re-granted spawn clears an old revoked mark even when it fails, so the failure pages", async () => {
+    await spawnEgressForwarder("conv-a", "ws-toggle");
+    teardownEgressForwardersForWorkspace("ws-toggle");
+    expect(isEgressRevoked("conv-a")).toBe(true);
+    vi.stubEnv("EGRESS_GW_PORT", "1"); // gateway unreachable: the re-granted spawn fails
+    await expect(spawnEgressForwarder("conv-a", "ws-toggle", egressRevocationEpoch("ws-toggle"))).rejects.toThrow();
+    expect(isEgressRevoked("conv-a")).toBe(false);
   }, 20_000);
 
   test("K2: the registry is shared by two copies of the module (custom-server bundle vs Next route bundle)", async () => {

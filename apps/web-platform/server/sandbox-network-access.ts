@@ -168,8 +168,10 @@ export function sandboxNetworkDenyMessage(reason: SandboxNetworkReason, granted:
     case "no-proxy-match":
       return HOST_DENIED;
     default: {
+      // Compile-time exhaustiveness; at runtime an unknown reason gets the host copy, never the reason token.
       const unreachable: never = reason;
-      return unreachable;
+      void unreachable;
+      return HOST_DENIED;
     }
   }
 }

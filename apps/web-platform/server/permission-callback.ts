@@ -501,6 +501,13 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
   // #9600 — one budgeted reporter per session for the `.git` file-tool deny below.
   const reportGitCarrierDeny = createGitCarrierDenyReporter();
   const reportSandboxNetworkDeny = createSandboxNetworkDenyReporter();
+  // A throwing egress probe is mirrored once per Query per probe: a curl loop must not send one error per connection.
+  const probeErrorsReported = new Set<string>();
+  const reportProbeError = (err: unknown, op: string) => {
+    if (probeErrorsReported.has(op)) return;
+    probeErrorsReported.add(op);
+    reportSilentFallback(err, { feature: "cc-permissions", op });
+  };
   // #9556 — one injection point for the deny→handoff flag: every support deny
   // path THAT ESCALATES calls `deny(`, which stamps the dispatch-resolved
   // repo-connected state onto the escalation record. (The deliberately
@@ -634,7 +641,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           live = ctx.sandboxNetworkEgress.isLive() === true;
         } catch (err) {
           live = false; // a throwing probe counts as not-live (CTO T4)
-          reportSilentFallback(err, { feature: "cc-permissions", op: "sandbox-network-live-probe" });
+          reportProbeError(err, "sandbox-network-live-probe");
         }
         egress = { live };
       }
@@ -643,7 +650,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       try {
         revoked = ctx.webEgressRevoked?.() === true;
       } catch (err) {
-        reportSilentFallback(err, { feature: "cc-permissions", op: "sandbox-network-revoked-probe" });
+        reportProbeError(err, "sandbox-network-revoked-probe");
       }
       const granted = ctx.webEgressGranted === true && !revoked;
       reportSandboxNetworkDeny(decision.reason, decision.matchedEntry, granted, Boolean(options.agentID));

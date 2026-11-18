@@ -37,6 +37,7 @@ const {
   mockSpawnEgressForwarder,
   mockTeardownEgressForwarder,
   fakeForwarders,
+  fakeRevoked,
   mockResolveAutonomousAck,
   mockResolveIsWorkspaceOwner,
   mockWriteAskpassScriptTo,
@@ -98,6 +99,7 @@ const {
   // #12585 — a fake forwarder registry (conversationId -> {token, workspaceId}) the egress-forwarder mock reads, so the
   // SandboxNetworkAccess liveness probe and the warm re-resolve see a spawn/teardown like the real module's.
   fakeForwarders: new Map<string, { token: string; workspaceId: string }>(),
+  fakeRevoked: new Set<string>(),
   mockResolveAutonomousAck: vi.fn(),
   mockResolveIsWorkspaceOwner: vi.fn(),
   mockWriteAskpassScriptTo: vi.fn(),
@@ -229,13 +231,16 @@ vi.mock("@/server/resolve-web-egress", () => ({
 // feat-open-web-egress (#9534) — never spawn a real forwarder in
 // unit tests; the module lifecycle is covered by web-egress.test.ts.
 vi.mock("@/server/egress-forwarder", () => ({
+  markEgressRevoked: (c: string) => void fakeRevoked.add(c),
+  EgressRevokedError: class extends Error {},
+  egressRevocationEpoch: () => 0,
+  isEgressRevoked: (c: string) => fakeRevoked.has(c),
   spawnEgressForwarder: mockSpawnEgressForwarder,
   teardownEgressForwarder: mockTeardownEgressForwarder,
   reapOrphanEgressForwarders: vi.fn(),
   hasEgressForwarder: vi.fn(() => false),
   egressForwarderWorkspaceId: (c: string) => fakeForwarders.get(c)?.workspaceId,
   isEgressForwarderLive: (c: string, t: string) => fakeForwarders.get(c)?.token === t,
-  isEgressRevoked: () => false,
 }));
 
 // feat-bash-autonomous-default-on — first-run consent soft-gate inputs. Default
@@ -2974,6 +2979,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       expect(mockSpawnEgressForwarder).toHaveBeenCalledWith(
         "conv-1",
         expect.any(String),
+        expect.any(Number), // the toggle-off epoch read before the grant (CTO R4, fix round)
       );
       const opts = mockQuery.mock.calls[0][0].options;
       // WebFetch re-enabled; WebSearch stays disallowed (Phase A).
@@ -3021,6 +3027,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
         };
       beforeEach(() => {
         fakeForwarders.clear();
+        fakeRevoked.clear();
         mockSpawnEgressForwarder.mockImplementation(async (conversationId: string, workspaceId: string) => {
           fakeForwarders.set(conversationId, { token: "tok-abc", workspaceId });
           return { port: 28711, token: "tok-abc", pid: 4242 };
@@ -3029,6 +3036,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       });
       afterEach(() => {
         fakeForwarders.clear();
+        fakeRevoked.clear();
         mockSpawnEgressForwarder.mockReset();
         mockTeardownEgressForwarder.mockReset();
       });
@@ -3050,6 +3058,25 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
         await realSdkQueryFactory(makeArgs());
         expect(ctxArg().sandboxNetworkEgress).toBeUndefined();
         expect(ctxArg().webEgressGranted).toBe(true);
+      });
+
+      it("fix round: the support persona never spawns a forwarder, so it is never tagged granted (no false page)", async () => {
+        mockResolveWebEgress.mockResolvedValue(true);
+        await realSdkQueryFactory(makeArgs({ persona: "support" }));
+        expect(mockSpawnEgressForwarder).not.toHaveBeenCalled();
+        expect(ctxArg().sandboxNetworkEgress).toBeUndefined();
+        expect(ctxArg().webEgressGranted).toBe(false);
+      });
+
+      it("fix round: a spawn lost to a toggle-off is the owner's choice: pino info, no spawn-failed Sentry", async () => {
+        const { EgressRevokedError } = await import("@/server/egress-forwarder");
+        mockResolveWebEgress.mockResolvedValue(true);
+        mockSpawnEgressForwarder.mockRejectedValue(new EgressRevokedError());
+        await realSdkQueryFactory(makeArgs());
+        expect(ctxArg().sandboxNetworkEgress).toBeUndefined();
+        expect(
+          mockReportSilentFallback.mock.calls.some((c: unknown[]) => (c[1] as { op?: string }).op === "web-egress-forwarder-spawn"),
+        ).toBe(false);
       });
 
       it("grant off → no handle, granted false", async () => {
@@ -3080,7 +3107,9 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
         expect(mockResolveWebEgressStrict).toHaveBeenCalledWith("user-1", expect.any(String));
         expect(mockTeardownEgressForwarder).toHaveBeenCalledWith("conv-1");
         const after = await canUseTool("SandboxNetworkAccess", { host: "example.com" }, opts);
-        expect(after.message).toMatch(/web access isn't working in this session/); // egress-not-running, granted
+        // Fix round (R1): the re-resolve marks the conversation revoked, so the deny says web access was turned off and
+        // reports granted=false (the degraded alert does not page for the owner's own choice).
+        expect(after.message).toMatch(/^Web access was turned off for this workspace/);
       });
 
       it("a re-resolve READ FAULT leaves the forwarder live (mirrored, no teardown)", async () => {

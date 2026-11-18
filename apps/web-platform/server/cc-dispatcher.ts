@@ -199,9 +199,12 @@ import {
   resolveWebEgressStrict,
 } from "./resolve-web-egress";
 import {
+  EgressRevokedError,
   egressForwarderWorkspaceId,
+  egressRevocationEpoch,
   isEgressForwarderLive,
   isEgressRevoked,
+  markEgressRevoked,
   spawnEgressForwarder,
   teardownEgressForwarder,
 } from "./egress-forwarder";
@@ -2042,6 +2045,8 @@ export const realSdkQueryFactory: QueryFactory = async (
       });
     }
 
+    // #12585 (CTO R4) — the toggle-off epoch, read before the grant: a toggle-off after this read wins over the spawn.
+    const egressEpochAtGrant = egressRevocationEpoch(activeWorkspaceId);
     // installationId joins the existing Promise.all; all four workspace-keyed
     // consumers now receive the ONE resolved id (no second divergent resolve).
     const [
@@ -3367,6 +3372,7 @@ export const realSdkQueryFactory: QueryFactory = async (
         const fwd = await spawnEgressForwarder(
           args.conversationId,
           activeWorkspaceId,
+          egressEpochAtGrant,
         );
         webEgress = {
           workspaceId: activeWorkspaceId,
@@ -3385,7 +3391,13 @@ export const realSdkQueryFactory: QueryFactory = async (
           "cc-dispatcher: web egress forwarder bound",
         );
       } catch (err) {
-        reportSilentFallback(err, {
+        if (err instanceof EgressRevokedError) {
+          // The owner turned web access off while this spawn was starting: their choice, not a failure.
+          log.info(
+            { feature: "cc-dispatcher", op: "web-egress-forwarder-spawn-revoked", conversationId: args.conversationId, workspaceId: activeWorkspaceId },
+            "cc-dispatcher: web access turned off during forwarder spawn; session proceeds zero-egress",
+          );
+        } else reportSilentFallback(err, {
           feature: "cc-dispatcher",
           op: "web-egress-forwarder-spawn",
           extra: { userId: args.userId, workspaceId: activeWorkspaceId },
@@ -3595,7 +3607,8 @@ export const realSdkQueryFactory: QueryFactory = async (
             ? { isLive: () => isEgressForwarderLive(args.conversationId, liveEgress.token) }
             : undefined,
           // Observability only (Sentry `granted` tag, deny copy), never a decision input (CTO T13).
-          webEgressGranted: webEgressEntitled,
+          // Only a persona that spawns a forwarder (runRepoLifecycle) can be granted; support never is (fix round).
+          webEgressGranted: webEgressEntitled && mode.runRepoLifecycle,
           // CTO R1 — a toggle-off mid-session reports granted=false (copy and tag), so it neither pages nor says "isn't working".
           webEgressRevoked: () => isEgressRevoked(args.conversationId),
           deps: ccDeps,
@@ -4308,7 +4321,12 @@ export function reResolveWarmWebEgress(userId: string, conversationId: string): 
   if (!fwdWorkspaceId) return Promise.resolve();
   return resolveWebEgressStrict(userId, fwdWorkspaceId)
     .then((entitled) => {
-      if (!entitled) teardownEgressForwarder(conversationId);
+      if (!entitled) {
+        // The grant was withdrawn (possibly on the other web host): mark it revoked so this host's denies read
+        // granted=false with the turned-off copy instead of paging as degraded (fix round, R1).
+        markEgressRevoked(conversationId);
+        teardownEgressForwarder(conversationId);
+      }
     })
     .catch((err) => {
       reportSilentFallback(err, {

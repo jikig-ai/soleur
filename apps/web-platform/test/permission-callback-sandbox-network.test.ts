@@ -244,8 +244,13 @@ describe("review rulings: revocation (CTO R1), expected denies pino-only (R2), p
       webEgressGranted: true,
       webEgressRevoked: () => { throw new Error("probe"); },
     });
-    const r = await ask(ctx, { host: "example.com" });
-    expect(r).toMatchObject({ behavior: "deny" });
+    const cb = createCanUseTool(ctx);
+    for (let i = 0; i < 5; i++) {
+      expect(await cb(TOOL, { host: "example.com" }, opts() as never)).toMatchObject({ behavior: "deny" });
+    }
+    // Fail direction: a throwing revocation probe reads not-revoked, so a granted session still reads (and pages) degraded.
+    expect(mockLog.warn.mock.calls.at(-1)?.[0]).toMatchObject({ reason: "egress-not-running", granted: true });
+    // Once per probe per Query, not once per connection.
     expect(mockReportSilentFallback.mock.calls.map((c) => c[1].op).sort()).toEqual([
       "sandbox-network-live-probe",
       "sandbox-network-revoked-probe",

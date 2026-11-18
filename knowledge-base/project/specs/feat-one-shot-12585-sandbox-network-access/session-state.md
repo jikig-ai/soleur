@@ -39,7 +39,7 @@ soleur:plan, soleur:gdpr-gate, soleur:plan-review, soleur:deepen-plan; CTO, CPO,
 - Next: soleur:review -> resolve -> qa -> compound -> ship.
 
 ## Review phase (in progress, 2026-11-18)
-- PANEL_SHA=5272dd01fc1bd2ad7e5c6836268a3171c224f639. Seats are report-only; reports land in the session scratchpad as review-<seat>.md.
+- PANEL_SHA=69009ccbdf (5272dd01fc before the CLA identity rewrite)1bd2ad7e5c6836268a3171c224f639. Seats are report-only; reports land in the session scratchpad as review-<seat>.md.
 - Design pass (simplicity + architecture) done. Both found K1: toggle-off reports egress-not-running with granted=true, so the alert pages and the model gets false copy. Architecture also found K2: the globalThis registry is unpinned.
 - K1 contests D2 and the CPO copy ruling. Send it to the CTO in ONE batched spawn at synthesis (cto_spawns used: 0 of 2).
 - Panel of 11 spawned. Next: synthesis, then the coverage consult (single-user incident), CTO batch, inline fixes, the trailer, and Step 5.
@@ -49,4 +49,4 @@ soleur:plan, soleur:gdpr-gate, soleur:plan-review, soleur:deepen-plan; CTO, CPO,
 - Every fix mutant was killed. Trailer commit 0c7c35ce9e; the Review-Evidence comment is posted.
 - Rulings: CTO R1-R7 and CPO C1-C6 are in decision-challenges.md. cto_spawns=1 of 2.
 - #12907 body updated with the new gateway-unverified copy.
-- Next: Step 5 (code-review issues), the fix round from 5272dd01fc, then QA, compound, ship.
+- Next: Step 5 (code-review issues), the fix round from 69009ccbdf (5272dd01fc before the CLA identity rewrite), then QA, compound, ship.
