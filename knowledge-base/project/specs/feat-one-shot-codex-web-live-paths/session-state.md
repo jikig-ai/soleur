@@ -4455,3 +4455,13 @@
   local Docker context has an existing Supabase database container; it was
   inspected only and not used. Any later schema comparison must use separately
   created, disposable database instances with no shared credentials.
+- After that merge, the bound collector's local PostgreSQL integration passed
+  (`holder-evidence-db-runner-local.test.py`, one test). Its fixture verified a
+  uniquely labeled, network-disabled container with tmpfs-only storage and no
+  published ports; it did not connect to the existing shared Supabase
+  container. The test observed the real bundled inspection deadline returning
+  while PostgreSQL still showed the owned query active, the tracked transaction
+  promise pending, and no additional arm starting. Explicit cancellation in
+  the disposable fixture then settled the transaction and removed its backend
+  row. This validates that test scenario only; it does not prove a production
+  authority, a cross-process writer fence, or live backend shutdown.
