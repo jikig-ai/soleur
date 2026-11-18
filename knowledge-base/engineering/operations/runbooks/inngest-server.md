@@ -2719,7 +2719,7 @@ It replaced the typed confirm token of #10538 (PR #12737), so neither dispatch t
 step's "before any credential loads" property is gone by design, because a live read needs the credential. The
 preflight is not the go. A third path has no gate: a local, untargeted
 `terraform apply` (the OPERATOR_APPLIED_EXCLUSIONS break-glass) plans a replace of `hcloud_server.inngest` because its
-user_data changed; while #12742 is open, abort such an apply (or `-target` around the Inngest host) if its plan replaces it. 
+user_data changed; while #12742 is open, abort such an apply (or `-target` around the Inngest host) if its plan replaces it.
 The three risks every public-sdk_url boot carries until then: a stale non-zero registry the registry-empty
 alert cannot see, the #7228 first-sync double-fire, and a stale private-URL app row that keeps the plaintext poll alive.
 They apply to an emergency replace or birth too, not only the owner's planned window: after any such boot, read the
