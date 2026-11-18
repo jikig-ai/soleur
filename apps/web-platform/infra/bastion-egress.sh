@@ -2,8 +2,9 @@
 # bastion-egress.sh — the bastion's egress allowlist (#12866, ADR-327 step 2a; CTO ruling F2).
 #
 # Resolves the hostnames below and loads, in ONE `nft -f` transaction, the baseline ruleset
-# (/etc/nftables.conf: input and output policy drop) plus a set of the resolved IPv4 addresses that
-# the output chain may reach on tcp/443. Run by bastion-egress.service at boot and by
+# (/etc/soleur/bastion-nftables.conf: input and output policy drop) plus a set of the resolved IPv4
+# addresses that the output chain may reach on tcp/443, for root (cloud-init's _emit) and _apt (apt's
+# download sandbox) only. Run by bastion-egress.service at boot and by
 # bastion-egress.timer to follow address changes.
 #
 # TWO RULES TAKEN FROM cron-egress-resolve.sh, NOT ITS 1,024 LINES:
@@ -17,7 +18,7 @@
 set -euo pipefail
 
 ENV_FILE="${BASTION_EGRESS_ENV:-/etc/soleur/bastion-egress.env}"
-BASELINE="${BASTION_EGRESS_BASELINE:-/etc/nftables.conf}"
+BASELINE="${BASTION_EGRESS_BASELINE:-/etc/soleur/bastion-nftables.conf}"
 
 # <hostname> soleur-egress: <consumer>. @SENTRY_INGEST_HOST@ is read from $ENV_FILE (rendered from
 # var.sentry_dsn), so a DSN rotation is a replace input, not a script edit.
@@ -45,6 +46,12 @@ while read -r host cite consumer; do
   [[ -n "$got" ]] || die "lookup failed for ${host} (${consumer})"
   while read -r ip; do
     [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "lookup for ${host} returned '${ip}', not an IPv4 address"
+    # A public name that resolves into a private, loopback or link-local range would open the
+    # private network (git-data:22, the registry) or the metadata endpoint on tcp/443. Refuse.
+    case "$ip" in
+      10.*|127.*|169.254.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*|0.*)
+        die "lookup for ${host} returned ${ip}, a private, loopback or link-local address" ;;
+    esac
     ips="${ips:+$ips, }$ip"
   done <<<"$got"
 done <<<"$ALLOW"
@@ -53,7 +60,7 @@ done <<<"$ALLOW"
 BATCH="include \"${BASELINE}\"
 add set inet soleur_bastion soleur_egress_allow { type ipv4_addr; }
 add element inet soleur_bastion soleur_egress_allow { ${ips} }
-add rule inet soleur_bastion output ip daddr @soleur_egress_allow tcp dport 443 accept comment \"soleur-egress: bastion-egress.service\"
+add rule inet soleur_bastion output ip daddr @soleur_egress_allow tcp dport 443 meta skuid { root, _apt } accept comment \"soleur-egress: bastion-egress.service\"
 "
 printf '%s' "$BATCH" | nft -c -f - || die "the batch failed nft -c"
 printf '%s' "$BATCH" | nft -f - || die "nft -f failed"

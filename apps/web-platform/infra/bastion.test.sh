@@ -2,13 +2,17 @@
 # soleur-bastion user_data and Terraform suite (#12866): Guards 2-5 and SHAPE.
 #
 #   EGRESS  (Guard 2) every accept row and resolver hostname cites a consumer the render installs;
-#           input and output drop by default; inet family; no IPv6; sshd masked; the egress script
-#           never empties the set on a failed lookup.
+#           every output accept names its destination (or is the NTP/DHCP row pinned to its daemon
+#           user), none reaches a private, loopback or link-local address, no port range, negation,
+#           th or IPv6 match; input and output drop by default; inet family; no IPv6; sshd masked;
+#           the baseline is not the nftables conffile; apt sources are preserved; the egress script
+#           never empties the set on a failed lookup and never loads a private answer.
+#   EMITTER the comment-stripped rendered runcmd sends fresh_boot_ready once, after its last check.
 #   SETTLE  (Guard 3) the ADR-326 apt and kernel-settle blocks are cloud-init.yml's bytes.
 #   HOSTKEY (Guard 4) the only host key the render carries is the fixture Terraform key.
 #   BUDGET  (Guard 5) the render is non-empty and at most 32,768 bytes (Hetzner's user_data cap).
 #   SHAPE   zero-rule firewall, a unique in-subnet private IP, the cx23 literal and x86 precondition,
-#           no web-1 literals, and no other workflow's push filter matching a bastion file.
+#           and no other workflow's push trigger waking on a tracked bastion file (git ls-files).
 #
 # INSTRUMENT. bastion-cloud-init.yml is a templatefile() source, so every EGRESS/HOSTKEY/BUDGET row
 # renders it through `terraform console` (rows can arrive through template variables). Mutation rows
@@ -53,14 +57,16 @@ case "$WORK" in /*/bastion.*) : ;; *) harness "mktemp returned '$WORK'" ;; esac
 trap 'rm -rf "${WORK:?}"' EXIT
 
 # check <label> <want PASS|RED> <cmd...>: RED = the command exits 1 (a violation); 2 is a harness fault.
+# A RED row with EXPECT set also requires that text in the lint's output, so it is red for the
+# violation it names (the lint maps any crash to rc 2, so rc 1 is always a named violation).
 check() {
   local label="$1" want="$2" out rc; shift 2
   cases=$((cases + 1))
   out="$("$@" 2>&1)"; rc=$?
-  if [[ "$want" == PASS && "$rc" -eq 0 ]] || [[ "$want" == RED && "$rc" -eq 1 ]]; then
+  if [[ "$want" == PASS && "$rc" -eq 0 ]] || [[ "$want" == RED && "$rc" -eq 1 && "$out" == *"${EXPECT:-}"* ]]; then
     pass "$label"
   else
-    fail "$label (want $want, rc=$rc)" "$out"
+    fail "$label (want $want${EXPECT:+ naming '$EXPECT'}, rc=$rc)" "$out"
   fi
 }
 # mutate <src> <dst> <from> <to>: exact, single-occurrence edit; "did not land" is a FAIL row.
@@ -101,15 +107,40 @@ shape_row "the server type is a variable" 'server_type = "cx23"' 'server_type = 
 shape_row "the x86 precondition is removed" 'data.hcloud_server_type.bastion.architecture == "x86"' 'true'
 shape_row "firewall_ids set inline" '  ssh_keys = [hcloud_ssh_key.default.id]' '  ssh_keys     = [hcloud_ssh_key.default.id]
   firewall_ids = [hcloud_firewall.bastion.id]'
-shape_row "a web-host key literal in bastion.tf" '  bastion_host_name  = "soleur-bastion"' '  bastion_host_name  = "soleur-bastion"
-  note               = "web-2"'
-# A push filter of an unexpected workflow matching a bastion file (fixture repo root).
+# A push filter of an unexpected workflow matching a bastion file (fixture repo root: not a git
+# checkout, so the lint falls back to its fixed file list).
 FAKE="$WORK/fakeroot"; mkdir -p "$FAKE/.github/workflows" "$FAKE/apps/web-platform/infra"
 cp "$TF" "$FAKE/apps/web-platform/infra/"
-printf 'on:\n  push:\n    paths:\n      - "apps/web-platform/infra/bastion*"\njobs: {}\n' > "$FAKE/.github/workflows/other.yml"
-check "shape: another workflow's push filter matches a bastion file" RED python3 "$LINT" shape "$DIR" "$FAKE"
-printf 'on:\n  push:\n    paths:\n      - "apps/web-platform/infra/zot-*"\njobs: {}\n' > "$FAKE/.github/workflows/other.yml"
+fake_wf() { printf '%b' "$1" > "$FAKE/.github/workflows/other.yml"; }
+fake_wf 'on:\n  push:\n    paths:\n      - "apps/web-platform/infra/bastion*"\njobs: {}\n'
+EXPECT="push path filter" check "shape: another workflow's push filter matches a bastion file" RED python3 "$LINT" shape "$DIR" "$FAKE"
+fake_wf 'on:\n  push:\n    branches: [main]\njobs: {}\n'
+EXPECT="no path filter" check "shape: an unreviewed push trigger with no path filter wakes on every bastion file" RED python3 "$LINT" shape "$DIR" "$FAKE"
+fake_wf 'on:\n  push:\n    paths-ignore:\n      - "docs/**"\njobs: {}\n'
+EXPECT="paths-ignore" check "shape: a paths-ignore filter that does not cover the bastion files" RED python3 "$LINT" shape "$DIR" "$FAKE"
+fake_wf 'on:\n  push:\n    paths: [\n'
+EXPECT="does not parse" check "shape: an unparseable workflow is a violation, not a skip" RED python3 "$LINT" shape "$DIR" "$FAKE"
+fake_wf 'on:\n  push:\n    tags: ["v*"]\njobs: {}\n'
+check "shape: a tag-only push trigger passes (a merge does not wake it)" PASS python3 "$LINT" shape "$DIR" "$FAKE"
+fake_wf 'on:\n  push:\n    paths:\n      - "apps/web-platform/infra/zot-*"\njobs: {}\n'
 check "shape: a non-matching push filter passes" PASS python3 "$LINT" shape "$DIR" "$FAKE"
+# In a checkout the file list is `git ls-files '*bastion*'`, so a bastion file no list names (2b's
+# replace gate, say) is still covered: a filter matching ONLY that file must be RED.
+GROOT="$WORK/gitroot"; mkdir -p "$GROOT/.github/workflows" "$GROOT/scripts/lib"
+: > "$GROOT/scripts/lib/bastion-replace-gate.sh"
+printf 'on:\n  push:\n    paths:\n      - "scripts/lib/bastion-replace-*"\njobs: {}\n' > "$GROOT/.github/workflows/other.yml"
+if git -C "$GROOT" init -q 2>/dev/null && git -C "$GROOT" add -A 2>/dev/null; then
+  EXPECT="scripts/lib/bastion-replace-gate.sh" check "shape: a tracked bastion file outside the fixed list is covered (git ls-files)" RED python3 "$LINT" shape "$DIR" "$GROOT"
+else harness "git init of the shape fixture failed"; fi
+# Zero-item floors: each comparison that found nothing to compare must fail.
+ZROOT="$WORK/zeroroot"; mkdir -p "$ZROOT/.github/workflows"
+printf 'on:\n  workflow_dispatch: {}\njobs: {}\n' > "$ZROOT/.github/workflows/other.yml"
+EXPECT="no workflow push trigger was read" check "shape floor: no workflow carries a push trigger (0 checked)" RED python3 "$LINT" shape "$DIR" "$ZROOT"
+if git -C "$ZROOT" init -q 2>/dev/null && git -C "$ZROOT" add -A 2>/dev/null; then
+  EXPECT="found no *bastion* file" check "shape floor: a checkout with no tracked bastion file (0 checked)" RED python3 "$LINT" shape "$DIR" "$ZROOT"
+else harness "git init of the zero fixture failed"; fi
+ZINFRA="$WORK/zeroinfra"; mkdir -p "$ZINFRA"; cp "$TF" "$ZINFRA/"
+EXPECT="no other host private IP was found" check "shape floor: no other host's private IP to compare against (0 checked)" RED python3 "$LINT" shape "$ZINFRA" "$ROOT"
 
 # ── SETTLE (Guard 3; source files, no render) ───────────────────────────────────────────────
 echo "SETTLE"
@@ -153,7 +184,7 @@ DSN="https://pubkey123@o1.ingest.de.sentry.io/4242"
 # render <template> <egress-script> <out> [private-key] [public-key]
 render() {
   local priv="${4:-$WORK/k/key}" pub="${5:-$WORK/k/key.pub}"
-  printf 'templatefile("%s", { host_name="soleur-bastion", sentry_dsn="%s", sentry_ingest_host="o1.ingest.de.sentry.io", host_ssh_ed25519_private_key=file("%s"), host_ssh_ed25519_public_key=trimspace(file("%s")), bastion_egress_b64=base64encode(file("%s")) })\n' \
+  printf 'templatefile("%s", { host_name="soleur-bastion", sentry_dsn="%s", sentry_ingest_host="o1.ingest.de.sentry.io", private_ip="10.0.1.70", host_ssh_ed25519_private_key=file("%s"), host_ssh_ed25519_public_key=trimspace(file("%s")), bastion_egress_b64=base64encode(file("%s")) })\n' \
     "$1" "$DSN" "$priv" "$pub" "$2" | terraform -chdir="$WORK/tf" console > "$3" 2> "$3.err" \
     || harness "terraform render failed: $(head -c 400 "$3.err")"
 }
@@ -171,8 +202,8 @@ body "$WORK/real.raw" > "$WORK/real.yml"
 echo "EGRESS"
 EG_RED=()
 check "egress: the real render passes" PASS python3 "$LINT" egress "$WORK/real.raw" "$TF"
-egress_row() { # <label> <want> <tpl|sh|tf> <from> <to>
-  local label="$1" want="$2" which="$3" from="$4" to="$5" t="$TPL" s="$EGRESS_SH" tf="$TF" n=$((cases + 1))
+egress_row() { # <label> <want> <tpl|sh|tf> <from> <to> [expected-message]
+  local label="$1" want="$2" which="$3" from="$4" to="$5" msg="${6:-}" t="$TPL" s="$EGRESS_SH" tf="$TF" n=$((cases + 1))
   case "$which" in
     tpl) t="$WORK/eg$n.yml"; mutate "$TPL" "$t" "$from" "$to" >/dev/null ;;
     sh)  s="$WORK/eg$n.sh";  mutate "$EGRESS_SH" "$s" "$from" "$to" >/dev/null ;;
@@ -180,40 +211,89 @@ egress_row() { # <label> <want> <tpl|sh|tf> <from> <to>
   esac || { cases=$((cases + 1)); fail "egress: $label (mutation did not land)"; return; }
   render "$t" "$s" "$WORK/eg$n.raw"
   [[ "$want" == RED ]] && EG_RED+=("$WORK/eg$n.raw|$tf")
-  check "egress: $label" "$want" python3 "$LINT" egress "$WORK/eg$n.raw" "$tf"
+  EXPECT="$msg" check "egress: $label" "$want" python3 "$LINT" egress "$WORK/eg$n.raw" "$tf"
 }
-DNS_ROW='add rule inet soleur_bastion output udp dport 123 accept comment "soleur-egress: systemd-timesyncd"'
-egress_row "1: an accept row with no comment" RED tpl "$DNS_ROW" 'add rule inet soleur_bastion output udp dport 123 accept'
-egress_row "2: the nftables baseline removed from the render (0 rows)" RED tpl '  - path: /etc/nftables.conf' '  - path: /etc/nftables.conf.disabled'
-egress_row "3: a second uncited row after a cited first" RED tpl "$DNS_ROW" "$DNS_ROW
-      add rule inet soleur_bastion output tcp dport 22 accept"
-egress_row "4: the output chain policy is accept" RED tpl 'add chain inet soleur_bastion output { type filter hook output priority 0; policy drop; }' 'add chain inet soleur_bastion output { type filter hook output priority 0; policy accept; }'
-egress_row "5: a row cites cloudflared, which the render does not install" RED tpl '"soleur-egress: systemd-timesyncd"' '"soleur-egress: cloudflared"'
-egress_row "6: an accept-all row with a valid-looking citation" RED tpl "$DNS_ROW" "$DNS_ROW
-      add rule inet soleur_bastion output oifname \"eth0\" accept comment \"soleur-egress: cloud-init\""
-egress_row "8: the refresh timer removed while hostname rows remain" RED tpl '  - path: /etc/systemd/system/bastion-egress.timer' '  - path: /etc/systemd/system/bastion-egress.timer.off'
-egress_row "9: a resolver hostname without a citation" RED sh 'security.ubuntu.com   soleur-egress: /etc/apt/sources.list.d/ubuntu.sources' 'security.ubuntu.com'
-egress_row "9: a resolver hostname citing an uninstalled consumer" RED sh 'security.ubuntu.com   soleur-egress: /etc/apt/sources.list.d/ubuntu.sources' 'security.ubuntu.com   soleur-egress: /etc/apt/sources.list.d/extra.sources'
-egress_row "10: the input chain policy is accept" RED tpl 'add chain inet soleur_bastion input { type filter hook input priority 0; policy drop; }' 'add chain inet soleur_bastion input { type filter hook input priority 0; policy accept; }'
+NTP_ROW='add rule inet soleur_bastion output meta skuid systemd-timesync udp dport 123 accept comment "soleur-egress: systemd-timesyncd"'
+MD_DROP='      add rule inet soleur_bastion output ip daddr 169.254.169.254 drop
+'
+# add_row <cited nft row>: appends a row after the NTP row (the last baseline row).
+add_row() { printf '%s\n      %s' "$NTP_ROW" "$1"; }
+egress_row "1: an accept row with no comment" RED tpl "$NTP_ROW" 'add rule inet soleur_bastion output meta skuid systemd-timesync udp dport 123 accept' "no soleur-egress citation"
+egress_row "2: the nftables baseline removed from the render (0 rows)" RED tpl '  - path: /etc/soleur/bastion-nftables.conf' '  - path: /etc/soleur/bastion-nftables.conf.disabled' "is absent from the render"
+egress_row "3: a second uncited row after a cited first" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output tcp dport 22 accept')" "no soleur-egress citation"
+egress_row "4: the output chain policy is accept" RED tpl 'add chain inet soleur_bastion output { type filter hook output priority 0; policy drop; }' 'add chain inet soleur_bastion output { type filter hook output priority 0; policy accept; }' "policy is not drop"
+egress_row "5: a row cites cloudflared, which the render does not install" RED tpl '"soleur-egress: systemd-timesyncd"' '"soleur-egress: cloudflared"' "does not install"
+egress_row "6: an accept-all row with a valid-looking citation" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output oifname "eth0" accept comment "soleur-egress: cloud-init"')" "accept-all shape"
+egress_row "8: the refresh timer removed while hostname rows remain" RED tpl '  - path: /etc/systemd/system/bastion-egress.timer' '  - path: /etc/systemd/system/bastion-egress.timer.off' "refresh timer is not installed"
+egress_row "9: a resolver hostname without a citation" RED sh 'security.ubuntu.com   soleur-egress: /etc/apt/sources.list.d/ubuntu.sources' 'security.ubuntu.com' "without a soleur-egress citation"
+egress_row "9: a resolver hostname citing an uninstalled consumer" RED sh 'security.ubuntu.com   soleur-egress: /etc/apt/sources.list.d/ubuntu.sources' 'security.ubuntu.com   soleur-egress: /etc/apt/sources.list.d/extra.sources' "does not install"
+egress_row "10: the input chain policy is accept" RED tpl 'add chain inet soleur_bastion input { type filter hook input priority 0; policy drop; }' 'add chain inet soleur_bastion input { type filter hook input priority 0; policy accept; }' "policy is not drop"
 egress_row "10: the input chain is absent" RED tpl '      add chain inet soleur_bastion input { type filter hook input priority 0; policy drop; }
-' ''
-egress_row "11: the table family is ip, not inet" RED tpl '      add table inet soleur_bastion' '      add table ip soleur_bastion'
-egress_row "11: hcloud_server.bastion has ipv6_enabled = true" RED tf 'ipv6_enabled = false' 'ipv6_enabled = true'
-egress_row "12: ssh.service is not masked" RED tpl '  - systemctl mask --now ssh.service ssh.socket' '  - systemctl mask --now ssh.socket'
-egress_row "H2: a cited row with reordered match fields and extra spaces" PASS tpl "$DNS_ROW" 'add rule inet soleur_bastion output   udp   dport 123    accept   comment "soleur-egress: systemd-timesyncd"'
+' '' "declared 0 times"
+egress_row "11: the table family is ip, not inet" RED tpl '      add table inet soleur_bastion' '      add table ip soleur_bastion' "not inet"
+egress_row "11: hcloud_server.bastion has ipv6_enabled = true" RED tf 'ipv6_enabled = false' 'ipv6_enabled = true' "ipv6_enabled = false"
+egress_row "12: ssh.service is not masked" RED tpl '  - systemctl mask --now ssh.service ssh.socket' '  - systemctl mask --now ssh.socket' "not masked"
+# Closed shape (#12866 review): every output accept names its destination, or is one of the two
+# user-pinned daemon rows; nothing reaches the private network, the metadata endpoint or IPv6.
+egress_row "14: a cited row to git-data:22" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output ip daddr 10.0.1.20 tcp dport 22 accept comment "soleur-egress: cloud-init"')" "private, loopback or link-local destination 10.0.1.20"
+egress_row "14: a cited row to the whole private subnet on :22" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output ip daddr 10.0.1.0/24 tcp dport 22 accept comment "soleur-egress: cloud-init"')" "destination 10.0.1.0/24"
+egress_row "14: a cited row to the registry (10.0.1.30:5000)" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output ip daddr { 192.0.2.9, 10.0.1.30 } tcp dport 5000 accept comment "soleur-egress: cloud-init"')" "destination 10.0.1.30"
+egress_row "15: tcp/443 to any destination with a valid citation" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output tcp dport 443 accept comment "soleur-egress: cloud-init"')" "names no destination"
+egress_row "15: tcp/22 to any destination with a valid citation" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output tcp dport 22 accept comment "soleur-egress: nftables.service"')" "names no destination"
+egress_row "15: a root-only row with no destination (root reaches git-data:22)" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output meta skuid 0 tcp dport 22 accept comment "soleur-egress: cloud-init"')" "names no destination"
+egress_row "15: the NTP row without its user pin" RED tpl "$NTP_ROW" 'add rule inet soleur_bastion output udp dport 123 accept comment "soleur-egress: systemd-timesyncd"' "names no destination"
+egress_row "16: a full port range" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output ip daddr 192.0.2.9 tcp dport 1-65535 accept comment "soleur-egress: cloud-init"')" "a port range"
+egress_row "16: a transport-header match" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output ip daddr 192.0.2.9 th sport 0-65535 accept comment "soleur-egress: cloud-init"')" "transport-header"
+egress_row "16: a negated port" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output ip daddr 192.0.2.9 udp dport != 0 accept comment "soleur-egress: cloud-init"')" "a negation"
+egress_row "16: an IPv6 match" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output meta nfproto ipv6 tcp dport 443 accept comment "soleur-egress: cloud-init"')" "an IPv6 match"
+DHCP_OUT='      add rule inet soleur_bastion output meta skuid systemd-network udp sport 68 udp dport 67 accept comment "soleur-egress: systemd-networkd"
+'
+egress_row "17: the metadata drop removed" RED tpl "$MD_DROP" '' "no ip daddr 169.254.169.254 drop row"
+egress_row "17: an accept row moved above the metadata drop" RED tpl "$MD_DROP$DHCP_OUT" "$DHCP_OUT$MD_DROP" "wrong side of the metadata drop"
+egress_row "18: an input accept outside the DHCP reply" RED tpl 'add rule inet soleur_bastion input udp sport 67 udp dport 68 accept comment "soleur-egress: systemd-networkd"' 'add rule inet soleur_bastion input tcp dport 22 accept comment "soleur-egress: systemd-networkd"' "outside the closed set"
+egress_row "19: the render writes the nftables package conffile" RED tpl '  - path: /etc/soleur/bastion-nftables.conf' '  - path: /etc/nftables.conf' "nftables package's conffile"
+egress_row "20: ubuntu.sources written without preserve_sources_list" RED tpl 'apt:
+  preserve_sources_list: true
+' '' "preserve_sources_list"
+egress_row "22: bastion-egress.service removed while hostname rows remain" RED tpl '  - path: /etc/systemd/system/bastion-egress.service' '  - path: /etc/systemd/system/bastion-egress.service.off' "bastion-egress.service is not installed"
+egress_row "22: bastion-egress.sh carries no ALLOW list" RED sh "ALLOW='" "ALLOWED='" "carries no ALLOW list"
+egress_row "H2: a cited row with reordered match fields and extra spaces" PASS tpl "$NTP_ROW" 'add rule inet soleur_bastion output   meta skuid systemd-timesync   udp   dport 123    accept   comment "soleur-egress: systemd-timesyncd"'
 h1="$(passes=0; fails=0; for r in "${EG_RED[@]}"; do check x RED true "${r%%|*}" "${r#*|}" >/dev/null; done; printf '%s %s' "$passes" "$fails")"
 cases=$((cases + 1))
-if [[ "${#EG_RED[@]}" -eq 14 && "$h1" == "0 14" ]]; then pass "egress H1: all 14 RED rows fail against a lint replaced by true"; else fail "egress H1: rows=${#EG_RED[@]} neutered=$h1"; fi
+if [[ "${#EG_RED[@]}" -eq 32 && "$h1" == "0 32" ]]; then pass "egress H1: all 32 RED rows fail against a lint replaced by true"; else fail "egress H1: rows=${#EG_RED[@]} neutered=$h1"; fi
+# Zero-item floors: a check that examined nothing must fail, never pass vacuously.
+python3 - "$WORK/real.yml" "$WORK/zero.yml" <<'PY' || harness "could not build the zero-rule render"
+import base64, re, sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+for w in doc["write_files"]:
+    if w["path"] == "/etc/soleur/bastion-nftables.conf":
+        w["content"] = "\n".join(l for l in w["content"].splitlines() if not l.strip().startswith("add rule")) + "\n"
+    if w["path"] == "/usr/local/sbin/bastion-egress.sh":
+        sh = base64.b64decode(w["content"]).decode()
+        w["content"] = base64.b64encode("\n".join(l for l in sh.splitlines() if not l.startswith("add rule")).encode()).decode()
+open(sys.argv[2], "w").write(yaml.safe_dump(doc))
+PY
+EXPECT="0 rule rows checked" check "egress floor: a render with zero rule rows" RED python3 "$LINT" egress "$WORK/zero.yml" "$TF"
 
 # Row 7: the rendered ruleset parses (nft -c). The checker must first prove it discriminates.
 python3 - "$WORK/real.yml" "$WORK" <<'PY' || harness "could not extract the ruleset from the render"
 import base64, re, sys, yaml
 doc = yaml.safe_load(open(sys.argv[1]))
 f = {w["path"]: w for w in doc["write_files"]}
-base = f["/etc/nftables.conf"]["content"]
+base = f["/etc/soleur/bastion-nftables.conf"]["content"]
 sh = base64.b64decode(f["/usr/local/sbin/bastion-egress.sh"]["content"]).decode()
 rows = [l.replace('\\"', '"') for l in sh.splitlines() if re.match(r"^add (set|element|rule) ", l)]
 rows = [r.replace("${ips}", "192.0.2.10, 192.0.2.11") for r in rows]
+# nft resolves `meta skuid <name>` against THIS host's passwd at parse time; a user the bastion has
+# (Ubuntu's _apt) may be absent here (a non-Debian dev box), so only absent names become root.
+import pwd
+def known(u):
+    try:
+        pwd.getpwnam(u); return u
+    except KeyError:
+        return "root"
+fix = lambda t: re.sub(r"(?<![\w-])(_apt|systemd-timesync|systemd-network)(?![\w-])", lambda m: known(m.group(1)), t)
+base, rows = fix(base), [fix(r) for r in rows]
 open(sys.argv[2] + "/base.nft", "w").write(base)
 open(sys.argv[2] + "/full.nft", "w").write('include "%s/base.nft"\n' % sys.argv[2] + "\n".join(rows) + "\n")
 PY
@@ -246,6 +326,7 @@ cat > "$WORK/egbin/getent" <<'STUB'
 [ "$1" = ahostsv4 ] || exit 2
 case "$2" in
   "$EG_FAIL_HOST") exit 2 ;;
+  "$EG_PRIV_HOST") echo "10.0.1.20 STREAM $2" ;;
   archive.ubuntu.com) echo "192.0.2.1 STREAM archive.ubuntu.com" ;;
   security.ubuntu.com) echo "192.0.2.2 STREAM security.ubuntu.com" ;;
   o1.ingest.de.sentry.io) echo "192.0.2.3 STREAM o1.ingest.de.sentry.io" ;;
@@ -259,10 +340,10 @@ STUB
 chmod +x "$WORK/egbin/getent" "$WORK/egbin/nft"
 printf 'SENTRY_INGEST_HOST=o1.ingest.de.sentry.io\n' > "$WORK/eg.env"
 cp "$WORK/base.nft" "$WORK/eg-base.nft"
-run_egress() { # <script> <fail-host> -> sets EG_RC and EG_LOG
+run_egress() { # <script> <fail-host> [private-answer-host] -> sets EG_RC and EG_LOG
   : > "$WORK/nft.log"
   EG_RC=0
-  env -i PATH="$WORK/egbin:/usr/bin:/bin" EG_FAIL_HOST="$2" EG_NFT_LOG="$WORK/nft.log" \
+  env -i PATH="$WORK/egbin:/usr/bin:/bin" EG_FAIL_HOST="$2" EG_PRIV_HOST="${3:-none}" EG_NFT_LOG="$WORK/nft.log" \
     BASTION_EGRESS_ENV="$WORK/eg.env" BASTION_EGRESS_BASELINE="$WORK/eg-base.nft" \
     bash "$1" > "$WORK/eg.out" 2>&1 || EG_RC=$?
   EG_LOG="$(cat "$WORK/nft.log")"
@@ -283,6 +364,34 @@ cases=$((cases + 1))
 if [[ ! -s "$WORK/eg-mut.sh" ]]; then fail "egress 13: mutation did not land" "$(cat "$WORK/m.out")"
 elif egress13 mutant "$WORK/eg-mut.sh"; then fail "egress 13: a script that drops a failed host is NOT caught"
 else pass "egress 13: a script that drops a failed host is caught (nft ran with a short set)"; fi
+# Row 21: a public name answering with a private address never reaches the set (git-data is 10.0.1.20).
+run_egress "$EGRESS_SH" none security.ubuntu.com
+cases=$((cases + 1))
+if [[ "$EG_RC" -ne 0 && -z "$EG_LOG" && "$(cat "$WORK/eg.out")" == *"10.0.1.20, a private"* ]]; then
+  pass "egress 21: a lookup answering 10.0.1.20 exits non-zero and never runs nft"
+else fail "egress 21: a private answer (rc=$EG_RC)" "$(cat "$WORK/eg.out") $EG_LOG"; fi
+mutate "$EGRESS_SH" "$WORK/eg-priv.sh" '      10.*|127.*|169.254.*' '      127.*|169.254.*' > "$WORK/m.out"
+run_egress "$WORK/eg-priv.sh" none security.ubuntu.com
+cases=$((cases + 1))
+if [[ ! -s "$WORK/eg-priv.sh" ]]; then fail "egress 21: mutation did not land" "$(cat "$WORK/m.out")"
+elif [[ "$EG_RC" -eq 0 && "$EG_LOG" == *"10.0.1.20"* ]]; then pass "egress 21: a script without the 10/8 refusal is caught (10.0.1.20 reached the set)"
+else fail "egress 21: the mutant did not load 10.0.1.20 (rc=$EG_RC), so the row proves nothing" "$EG_LOG"; fi
+
+# ── EMITTER: the ready verdict is a live call after every check stage ──────────────────────
+echo "EMITTER"
+check "emitter: the real render sends fresh_boot_ready after its last check" PASS python3 "$LINT" emitter "$WORK/real.raw"
+READY_EMIT='    _emit "soleur-cloud-init boot stage" fresh_boot_ready info
+'
+mutate "$TPL" "$WORK/em1.yml" "$READY_EMIT" '    # _emit "soleur-cloud-init boot stage" fresh_boot_ready info (word kept in a comment)
+' > /dev/null && render "$WORK/em1.yml" "$EGRESS_SH" "$WORK/em1.raw"
+EXPECT="0 live fresh_boot_ready" check "emitter: the ready call deleted, the word left in a comment" RED python3 "$LINT" emitter "$WORK/em1.raw"
+mutate "$TPL" "$WORK/em2.yml" "    STAGE=ssh_masked
+" "$READY_EMIT    STAGE=ssh_masked
+" > /dev/null
+mutate "$WORK/em2.yml" "$WORK/em2b.yml" "    _emit \"soleur-cloud-init boot stage\" cloud_init_complete info
+$READY_EMIT" '    _emit "soleur-cloud-init boot stage" cloud_init_complete info
+' > /dev/null && render "$WORK/em2b.yml" "$EGRESS_SH" "$WORK/em2.raw"
+EXPECT="before the last STAGE=" check "emitter: the ready call moved above the ssh_masked check" RED python3 "$LINT" emitter "$WORK/em2.raw"
 
 # ── HOSTKEY (Guard 4) ───────────────────────────────────────────────────────────────────────
 echo "HOSTKEY"
@@ -308,6 +417,10 @@ hostkey_row "3: an rsa_private entry after the compliant ed25519 entry" RED "$WO
 mutate "$TPL" "$WORK/hk4.yml" 'ssh_deletekeys: true' 'ssh_deletekeys: false' > /dev/null
 render "$WORK/hk4.yml" "$EGRESS_SH" "$WORK/hk4.raw"
 hostkey_row "4: ssh_deletekeys: false" RED "$WORK/hk4.raw"
+mutate "$TPL" "$WORK/hk6.yml" 'ssh_deletekeys: true' 'ssh_deletekeys: true
+ssh_genkeytypes: [ed25519]' > /dev/null
+render "$WORK/hk6.yml" "$EGRESS_SH" "$WORK/hk6.raw"
+EXPECT="ssh_genkeytypes is set" hostkey_row "5: ssh_genkeytypes is set (sshd could mint its own keys)" RED "$WORK/hk6.raw"
 mutate "$TPL" "$WORK/hk5.yml" '  ed25519_public: ${host_ssh_ed25519_public_key}' '  ed25519_public: "${host_ssh_ed25519_public_key}"' > /dev/null
 render "$WORK/hk5.yml" "$EGRESS_SH" "$WORK/hk5.raw"
 hostkey_row "H2: the same key with different YAML quoting" PASS "$WORK/hk5.raw"
@@ -326,7 +439,7 @@ if python3 "$LINT" hostkey "$WORK/hk1.raw" "$WORK/self.pub" "$WORK/self.priv" >/
 else fail "hostkey H1: the anchor does not discriminate"; fi
 h1="$(passes=0; fails=0; for r in "${HK_RED[@]}"; do check x RED true "$r" >/dev/null; done; printf '%s %s' "$passes" "$fails")"
 cases=$((cases + 1))
-if [[ "${#HK_RED[@]}" -eq 4 && "$h1" == "0 4" ]]; then pass "hostkey H1: all 4 RED rows fail against a lint replaced by true"; else fail "hostkey H1: rows=${#HK_RED[@]} neutered=$h1"; fi
+if [[ "${#HK_RED[@]}" -eq 5 && "$h1" == "0 5" ]]; then pass "hostkey H1: all 5 RED rows fail against a lint replaced by true"; else fail "hostkey H1: rows=${#HK_RED[@]} neutered=$h1"; fi
 
 # ── BUDGET (Guard 5) ────────────────────────────────────────────────────────────────────────
 echo "BUDGET"
@@ -346,11 +459,11 @@ cases=$((cases + 1))
 if ( wc() { echo 0; }; ! budget_ok "$WORK/real.yml" ); then pass "budget H1: a measurement that returns 0 is RED, never a pass"; else fail "budget H1: a zero measurement passed"; fi
 
 echo
-# 53 unconditional rows, plus row 7's two where an nft checker could prove it discriminates (a leg
+# 85 unconditional rows, plus row 7's two where an nft checker could prove it discriminates (a leg
 # without nft skips them loudly; a CI leg WITH an undiscriminating nft fails row 7 instead).
 # NFT_RAN is re-bound here so the floor block stands alone (guard-vacuity-floor mutates only this block).
 NFT_RAN="${NFT_RAN:-0}"
-MIN_CASES=$((53 + 2 * NFT_RAN))
+MIN_CASES=$((85 + 2 * NFT_RAN))
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf 'bastion: FAIL (only %d assertions ran; floor %d)\n' "$cases" "$MIN_CASES" >&2; exit 1
 fi

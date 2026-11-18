@@ -19,16 +19,55 @@ ssh_keys:
 bootcmd:
   - systemctl mask --now ssh.service ssh.socket >/dev/null 2>&1 || true
 
+# cc_apt_configure runs AFTER write_files and, without this, regenerates ubuntu.sources from its own
+# template (http://, or a vendor mirror): the https file below would be overwritten, and the
+# post-egress apt_path check would then fail on a port or mirror the allowlist does not carry.
+apt:
+  preserve_sources_list: true
+
 write_files:
   # Hardening for step 3, in place from birth (first-match-wins, so the 01- prefix is load-bearing).
+  # A jump host forwards nothing it is not told to: step 3 adds its own PermitOpen for git-data.
   - path: /etc/ssh/sshd_config.d/01-hardening.conf
     content: |
       PasswordAuthentication no
       KbdInteractiveAuthentication no
-      PermitRootLogin prohibit-password
+      PermitRootLogin no
       MaxAuthTries 3
       LoginGraceTime 30
       HostKey /etc/ssh/ssh_host_ed25519_key
+      AllowAgentForwarding no
+      AllowStreamLocalForwarding no
+      X11Forwarding no
+      PermitTunnel no
+      GatewayPorts no
+      PermitUserEnvironment no
+    owner: root:root
+    permissions: '0644'
+  # A hot-attached private NIC is left unmanaged by networkd without this (#8539, the web hosts'
+  # file byte for byte); runcmd reloads networkd and the post-settle pass waits for 10.0.1.70.
+  - path: /etc/systemd/network/99-soleur-private-fallback.network
+    content: |
+      [Match]
+      Driver=virtio_net
+      Name=!eth0
+
+      [Link]
+      RequiredForOnline=no
+
+      [Network]
+      DHCP=ipv4
+      LinkLocalAddressing=no
+      IPv6AcceptRA=no
+
+      [DHCPv4]
+      UseMTU=yes
+      UseDNS=no
+      UseDomains=no
+      UseHostname=no
+      UseNTP=no
+      SendHostname=no
+      RouteMetric=1024
     owner: root:root
     permissions: '0644'
   # apt over https only (encryption posture: bastion -> apt mirror). Replaces the image's sources.
@@ -47,9 +86,15 @@ write_files:
       Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
     owner: root:root
     permissions: '0644'
-  # The baseline, loaded by nftables.service before network-pre.target on every boot once runcmd
-  # enables it. Closed by default; bastion-egress.sh loads it again with the allow set in one swap.
-  - path: /etc/nftables.conf
+  # The baseline. NOT written to /etc/nftables.conf: that is the nftables package's conffile, and a
+  # file already there when apt installs or upgrades the package stops dpkg at its conffile prompt
+  # ("end of file on stdin at conffile prompt", rc=100 with no tty), killing apt_install. The
+  # post-settle pass installs this copy to /etc/nftables.conf after apt is done; from then on
+  # nftables.service loads it before network-pre.target on every boot. Closed by default;
+  # bastion-egress.sh loads it again with the allow set in one swap.
+  # Every output accept is qualified by destination or by the sending user (bastion-lint.py egress).
+  # The metadata drop sits right after its root-only accept, above every other non-loopback accept.
+  - path: /etc/soleur/bastion-nftables.conf
     content: |
       #!/usr/sbin/nft -f
       flush ruleset
@@ -61,12 +106,12 @@ write_files:
       add rule inet soleur_bastion input udp sport 67 udp dport 68 accept comment "soleur-egress: systemd-networkd"
       add rule inet soleur_bastion output oif "lo" accept comment "soleur-egress: nftables.service"
       add rule inet soleur_bastion output ct state established,related accept comment "soleur-egress: nftables.service"
-      add rule inet soleur_bastion output udp sport 68 udp dport 67 accept comment "soleur-egress: systemd-networkd"
-      add rule inet soleur_bastion output ip daddr { 185.12.64.1, 185.12.64.2 } udp dport 53 accept comment "soleur-egress: systemd-resolved"
-      add rule inet soleur_bastion output ip daddr { 185.12.64.1, 185.12.64.2 } tcp dport 53 accept comment "soleur-egress: systemd-resolved"
-      add rule inet soleur_bastion output udp dport 123 accept comment "soleur-egress: systemd-timesyncd"
       add rule inet soleur_bastion output meta skuid 0 ip daddr 169.254.169.254 tcp dport 80 accept comment "soleur-egress: cloud-init"
       add rule inet soleur_bastion output ip daddr 169.254.169.254 drop
+      add rule inet soleur_bastion output meta skuid systemd-network udp sport 68 udp dport 67 accept comment "soleur-egress: systemd-networkd"
+      add rule inet soleur_bastion output ip daddr { 185.12.64.1, 185.12.64.2 } udp dport 53 accept comment "soleur-egress: systemd-resolved"
+      add rule inet soleur_bastion output ip daddr { 185.12.64.1, 185.12.64.2 } tcp dport 53 accept comment "soleur-egress: systemd-resolved"
+      add rule inet soleur_bastion output meta skuid systemd-timesync udp dport 123 accept comment "soleur-egress: systemd-timesyncd"
     owner: root:root
     permissions: '0644'
   - path: /etc/soleur/bastion-egress.env
@@ -84,13 +129,29 @@ write_files:
       [Unit]
       Description=soleur-bastion egress allowlist (#12866)
       Requires=nftables.service
+      PartOf=nftables.service
       After=nftables.service network-online.target
       Wants=network-online.target
       [Service]
       Type=oneshot
+      RemainAfterExit=yes
       ExecStart=/usr/local/sbin/bastion-egress.sh
       [Install]
       WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+  # bastion-egress.service stays active (RemainAfterExit) so PartOf= re-runs it whenever nftables.service
+  # restarts and reloads the bare baseline. An active unit cannot be started again, so the timer drives
+  # this separate unit, which runs the same script.
+  - path: /etc/systemd/system/bastion-egress-refresh.service
+    content: |
+      [Unit]
+      Description=Refresh the soleur-bastion egress allowlist (#12866)
+      Requires=nftables.service
+      After=nftables.service bastion-egress.service
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/bastion-egress.sh
     owner: root:root
     permissions: '0644'
   - path: /etc/systemd/system/bastion-egress.timer
@@ -98,6 +159,7 @@ write_files:
       [Unit]
       Description=Refresh the soleur-bastion egress allowlist
       [Timer]
+      Unit=bastion-egress-refresh.service
       OnBootSec=2min
       OnUnitActiveSec=15min
       [Install]
@@ -132,11 +194,18 @@ runcmd:
     # The not-ready verdict the strict reader reads (fatal), naming the stage that died.
     on_err() {
       trap - EXIT
+      # An egress_load death leaves the baseline loaded, and the baseline drops tcp/443, so this
+      # fatal could never reach Sentry. Flush first: boot-verify powers the host off next, and the
+      # zero-rule hcloud_firewall.bastion still drops every inbound packet.
+      if [ "$STAGE" = egress_load ]; then nft flush ruleset 2>/dev/null || :; fi
       _emit "soleur-cloud-init boot stage" "fresh_boot_not_ready_$STAGE" fatal
       exit 1
     }
     trap on_err EXIT
     _emit "soleur-cloud-init boot stage" runcmd_start info
+    # #8539: converge the hot-attached private NIC through the fallback .network above (non-fatal
+    # here; the post-settle private_ip stage is the check).
+    networkctl reload >/dev/null 2>&1 || :
   # ADR-326 bounded apt step (cloud-init.yml's bytes; the package list is this host's own).
   - |
     set -e
@@ -162,17 +231,23 @@ runcmd:
   # Post-settle pass: close the host, load the allowlist, then let each consumer prove its own path
   # through the loaded chain before the ready verdict. The egress_load breadcrumb goes out FIRST:
   # if the chain then blocks Sentry, the newest stage in the trail still names where the boot died.
+  # The set -e armed by the apt item above is still in force here (one shell): every line is a check.
   - |
-    STAGE=egress_load
+    STAGE=egress_load; D=/run/soleur-stage-detail
     _emit "soleur-cloud-init boot stage" egress_load info
+    install -m 0644 /etc/soleur/bastion-nftables.conf /etc/nftables.conf
     systemctl daemon-reload
     systemctl enable --now nftables.service
     systemctl enable bastion-egress.service
-    systemctl start bastion-egress.service
+    # The script's own reason (which lookup, or nft's refusal) goes into the fatal's detail field.
+    systemctl start bastion-egress.service || { journalctl -u bastion-egress.service -n 5 --no-pager -o cat 2>/dev/null | tr '\n' ' ' | tail -c 180 > $D; exit 1; }
     systemctl enable --now bastion-egress.timer
     nft list set inet soleur_bastion soleur_egress_allow >/dev/null
+    # --error-on=any: a plain `apt-get update` exits 0 when every fetch is blocked.
     STAGE=apt_path
-    timeout 240 apt-get update -o Acquire::Retries=3 -o DPkg::Lock::Timeout=300
+    timeout 240 apt-get update --error-on=any -o Acquire::Retries=3 -o DPkg::Lock::Timeout=300
+    STAGE=private_ip
+    i=0; until ip -4 -o addr show | grep -qwF '${private_ip}'; do i=$((i+1)); [ "$i" -lt 60 ] || { printf 'ip=absent waited=%ss' $((i*2)) > $D; exit 1; }; sleep 2; done
     STAGE=ssh_masked
     [ "$(systemctl is-enabled ssh.service 2>/dev/null || true)" = masked ]
     _emit "soleur-cloud-init boot stage" cloud_init_complete info
