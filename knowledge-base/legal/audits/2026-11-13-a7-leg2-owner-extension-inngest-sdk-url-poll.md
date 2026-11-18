@@ -31,7 +31,7 @@ merge-queue run and the queue ejected every PR.
 > HTTP on 10.0.1.0/24) until 2026-11-20, because the replacement (#10538) is not merged. The 2026-11-02 voids and
 > compensating controls still apply. I will not extend past that date.
 
-> **Superseded 2026-11-17 by the owner's own act, as to "I will not extend past that date":** the owner renewed to 2026-12-10 in session, typing "1 but let's make sure we prioritize the work to avoid extending another time" (`2026-11-17-a7-leg2-owner-renewal-inngest-sdk-url-poll.md`).
+> **Superseded 2026-11-17 (#12742) by the owner's own act, as to "I will not extend past that date":** the owner renewed to 2026-12-10 in session, typing "1 but let's make sure we prioritize the work to avoid extending another time" (`2026-11-17-a7-leg2-owner-renewal-inngest-sdk-url-poll.md`).
 
 The owner chose the date 2026-11-20 from the options 2026-11-20 and 2026-12-10, in session on 2026-11-13.
 

@@ -222,7 +222,7 @@ consistent with its source (learning `2026-10-12-a-ledger-renewal-restated-the-p
    ledger, post the finding on #12742, tell the owner in plain words, send the cure to the CTO, and open a breach-register
    assessment (CLO ruling 9). On a **halting drift**: stop and route to the CTO (CLO re-ruling 9). On `limit_filled ==
    true`: the read is invalid, not a result; raise `--limit` and re-run. On a credential or read failure: retry once, then
-   follow the CLO "cannot be done" ruling (merge by 2026-11-20T20:00Z with the not-re-measured wording; the plan-time reads
+   follow the CLO "cannot be done" ruling (keep retrying; if still impossible at 2026-11-20T20:00Z, merge with the not-re-measured wording; the plan-time reads
    stay citable with their times).
 3. **The known non-halting fact.** `legacy_8288_packets` rose 0 -> 12 between the 2026-11-16T12:04:32Z and 12:09:34Z rows
    on boot `5319e63a` and has been flat since (measured by the CTO at 17:06Z and re-run by the planner at 17:11Z: 1,330
@@ -694,13 +694,15 @@ None. No architectural decision is made or changed: the remedy (c) decision and 
   (`git diff -U0 origin/main...HEAD -- <both files> | grep -E '^-[^-]' | grep -vE '^-(addenda|re_evaluation_triggers|open_follow_ups): '`
   prints nothing: the 2026-11-13 record's `addenda:` line gains an entry, counsel-review-10479's `re_evaluation_triggers:`
   clause is replaced and its `open_follow_ups:` Q-2 item gains the bracket).
-- [ ] AC7: `inngest-server.md` and ADR-294 diffs are additions only (no `-` line); the four runbook notes sit at their four
+- [ ] AC7: `inngest-server.md` and ADR-294 diffs are additions only, except the #10538 row of "Tracked follow-ups" (an
+  in-cell append: its `-` line is a prefix of its `+` line), checked by `git diff -U0 origin/main...HEAD -- <both files> |
+  grep -E '^-[^-]' | grep -vF '| #10538 | the'` printing nothing; the four runbook notes sit at their four
   anchors and the ADR-294 note directly after the 2026-11-13 blockquote.
 - [ ] AC8: `breach-register.md` gains exactly one dated row with 9 cells and a backticked canonical-source path that
   resolves; `bash scripts/lint-legal-registers.sh` exits 0 (run after `git add` of the new record: the lint runs
   `git ls-files --error-unmatch` on each cited path).
 - [ ] AC9: `bash scripts/lint-encryption-posture.test.sh` passes; `bash scripts/markdown-lint.sh` passes on every changed
-  `.md` file (including this plan and `tasks.md`).
+  `.md` file (`knowledge-base/project/` is outside that lint's scope by `.markdownlintignore`).
 - [ ] AC10: GitHub: on #12742 the acceptance comment (with every measured value, labelled by reader and time) and the priority comment exist with the provenance line, the item-8
   marker was added with no other body change (old/new body diff is one added line), and the label is `priority/p1-high`;
   on #10538 the pointer comment exists; the leg-1 event issue exists with its determination comment dated before

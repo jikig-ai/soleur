@@ -26,4 +26,4 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan, soleur:spec-templates, dhh/
 
 - constraint: Do NOT touch the parallel in-flight work on 12742, draft PR 12876, worktree feat-one-shot-12742-public-sdk-url-poll, or the inngest host replace. This PR only renews the exception.
 - constraint: Ref 12742 and Ref 10538, never Closes.
-- constraint: Must merge before 2026-11-20T00.00Z.
+- constraint: Must merge before 2026-11-20T00:00Z (hard gate: the first merge-group run on or after 2026-11-21T00:00Z).

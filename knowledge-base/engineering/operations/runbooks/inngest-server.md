@@ -2172,13 +2172,13 @@ window.
    2026-11-12 is not missed. The 2026-12-10 extension is not recorded in the legal records (unverified) and is not decided here.
    *Ruled 2026-11-13 (CLO):* the 2026-12-10 conditional extension is dead; the owner acceptance recorded by PR #12733 runs
    to 2026-11-20 only (see [Public sdk_url poll (#10538 remedy (c))](#public-sdk_url-poll-10538-remedy-c)).
-   *Superseded 2026-11-17:* the acceptance now runs to 2026-12-10; see the note under precondition 4 of 'Public sdk_url poll (#10538 remedy (c))'.
+   *Superseded 2026-11-17 (CLO ruling, #12742):* the 2026-11-02 conditional extension stays dead; the owner renewed the acceptance in session before expiry, to 2026-12-10 (ledger date on the merge of PR #12884; `knowledge-base/legal/audits/2026-11-17-a7-leg2-owner-renewal-inngest-sdk-url-poll.md`). See the note under precondition 4 of [Public sdk_url poll (#10538 remedy (c))](#public-sdk_url-poll-10538-remedy-c). This also supersedes "The 2026-12-10 extension is not recorded in the legal records (unverified)" above.
 
 ### Tracked follow-ups (filed 2026-10-19)
 
 | Issue | What it tracks |
 |---|---|
-| #10538 | the `sdk_url` poll (leg 2). Ruled 2026-11-13 (CTO and CLO): remedy (c), the poll URL becomes the public serve URL `https://app.soleur.ai/api/inngest` (a web-side listener and poll removal were rejected); declared in `inngest-host.tf`, live at the owner's `inngest-host-replace`. The 2026-12-10 extension is dead (CLO): the owner acceptance runs to 2026-11-20. See [Public sdk_url poll (#10538 remedy (c))](#public-sdk_url-poll-10538-remedy-c) *Superseded 2026-11-17:* the acceptance now runs to 2026-12-10; see the note under precondition 4 of 'Public sdk_url poll (#10538 remedy (c))'. |
+| #10538 | the `sdk_url` poll (leg 2). Ruled 2026-11-13 (CTO and CLO): remedy (c), the poll URL becomes the public serve URL `https://app.soleur.ai/api/inngest` (a web-side listener and poll removal were rejected); declared in `inngest-host.tf`, live at the owner's `inngest-host-replace`. The 2026-12-10 extension is dead (CLO): the owner acceptance runs to 2026-11-20. See [Public sdk_url poll (#10538 remedy (c))](#public-sdk_url-poll-10538-remedy-c). *Superseded 2026-11-17 (CLO ruling, #12742):* the 2026-11-02 conditional extension stays dead; the owner renewed the acceptance in session before expiry, to 2026-12-10 (ledger date on the merge of PR #12884; `knowledge-base/legal/audits/2026-11-17-a7-leg2-owner-renewal-inngest-sdk-url-poll.md`). See the note under precondition 4 of [Public sdk_url poll (#10538 remedy (c))](#public-sdk_url-poll-10538-remedy-c). |
 | #10539 | bind `:8288` to loopback and drop the legacy accept at the next unrelated replace (also restricts the Connect ports) |
 | #10540 | the signing-key and event-key rotation apply route: `inngest-key-rotate.yml`, [ADR-307](../architecture/decisions/ADR-307-inngest-key-rotation-route.md) (closed by the PR that adds it; A5 runs under the owner's per-command go) |
 | #10541 | keep `INNGEST_TLS_KEY` out of the `inngest-server` process environment (`--only-secrets` or a split config) |
@@ -2707,7 +2707,7 @@ polling `http://10.0.1.10:3000/api/inngest` until the owner's `inngest-host-repl
 4. If the replace lands after 2026-11-20, the owner-typed record the CLO ruling requires exists first (the owner
    acceptance recorded by PR #12733 runs to 2026-11-20 only).
 
-   > **Superseded 2026-11-17 (#12742), as to precondition 4:** met by the owner's 2026-11-17 renewal before expiry (CLO ruling 2026-11-17): the owner-typed record is no longer required for a replace before 2026-12-10 (superseded, not discharged). After 2026-12-10 no record of any kind extends ledger row 6; the replace and its measurements must land before 2026-12-11T00:00Z.
+   > **Superseded 2026-11-17 (#12742), as to precondition 4:** superseded by the owner's 2026-11-17 renewal before expiry (CLO ruling 2026-11-17), not discharged: nobody typed the record, and it is no longer required for a replace before 2026-12-10. After 2026-12-10 no record of any kind extends ledger row 6; the replace, its measurements and the PR that converts ledger row 6 must land before 2026-12-11T00:00Z.
 
 **Typed-confirm gate (CTO rulings D2, 2026-11-13, and fix-round F1, 2026-11-15).** Until #12742 item 1 merges, the step
 right after checkout in the `inngest_host_replace` job of `.github/workflows/apply-web-platform-infra.yml` (before any

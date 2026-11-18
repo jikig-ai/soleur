@@ -7,6 +7,8 @@ renews: "2026-11-13-a7-leg2-owner-extension-inngest-sdk-url-poll.md"
 outer_limit: 2026-12-10
 ---
 
+> Draft as ruled by the CLO agent 2026-11-17; superseded by `knowledge-base/legal/audits/2026-11-17-a7-leg2-owner-renewal-inngest-sdk-url-poll.md`. Placeholders here are intentional.
+
 # A7 ledger: owner renewal before expiry, leg-2 Inngest `sdk_url` poll
 
 ## Provenance
