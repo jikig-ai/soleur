@@ -673,43 +673,43 @@ None. No architectural decision is made or changed: the remedy (c) decision and 
 
 ## Acceptance Criteria
 
-- [ ] AC1: `git diff origin/main...HEAD -U0 -- scripts/encryption-posture-ledger.json` shows exactly two changed lines, row 6's
+- [x] AC1: `git diff origin/main...HEAD -U0 -- scripts/encryption-posture-ledger.json` shows exactly two changed lines, row 6's
   `justification` and `expires_on`, and `jq -S 'del(.connections[6].in_transit.exception.justification, .connections[6].in_transit.exception.expires_on)'`
   is byte-equal on `origin/main` and on the branch. `jq empty` passes.
-- [ ] AC2: `jq -r '.connections[6].in_transit.exception | .expires_on, .tracking_issue' scripts/encryption-posture-ledger.json`
+- [x] AC2: `jq -r '.connections[6].in_transit.exception | .expires_on, .tracking_issue' scripts/encryption-posture-ledger.json`
   prints `2026-12-10` and `#12742`.
-- [ ] AC3: `python3 scripts/lint-encryption-posture.py --repo-sweep --today <D>` exits 0 for D = 2026-11-17, 2026-11-21 and
+- [x] AC3: `python3 scripts/lint-encryption-posture.py --repo-sweep --today <D>` exits 0 for D = 2026-11-17, 2026-11-21 and
   2026-12-10, and exits 1 for D = 2026-12-11 with exactly one failing check, naming row 6.
-- [ ] AC4: the justification contains "OWNER RENEWAL BEFORE EXPIRY, 2026-11-17", the owner's typed words verbatim, the CLO
+- [x] AC4: the justification contains "OWNER RENEWAL BEFORE EXPIRY, 2026-11-17", the owner's typed words verbatim, the CLO
   sufficiency ruling, the `ACCEPT_ID` comment ID, "no void", "legacy_8288 rose 0->12", and ends with "no renewal and
   no new acceptance, by any route."; the substring after "OWNER RENEWAL BEFORE EXPIRY, 2026-11-17" contains no
   `legacy_8288=0` (`jq -r '.connections[6].in_transit.exception.justification' scripts/encryption-posture-ledger.json | sed -n
   's/.*OWNER RENEWAL BEFORE EXPIRY, 2026-11-17//p' | grep -c 'legacy_8288=0'` prints 0), and the whole string's count of `legacy_8288=0` equals origin/main's (2, the dated 2026-11-02 and
   2026-11-13 readings, which stay as filed).
-- [ ] AC5: the new record exists, follows draft A with every `<...>` filled and no bracketed instruction left
+- [x] AC5: the new record exists, follows draft A with every `<...>` filled and no bracketed instruction left
   (`grep -nE '<[A-Za-z_][A-Za-z_ ]*>|PR #N\b|^\[|\[(If|Write) ' <record>` prints nothing; run after Phase 5.6 fills
   `ACCEPT_ID`), quotes both owner
   sentences, keeps the voids verbatim, carries the breach section and the no-further-renewal section.
-- [ ] AC6: the 2026-11-13 record and counsel-review-10479 diffs are additions only, except one frontmatter line in each
+- [x] AC6: the 2026-11-13 record and counsel-review-10479 diffs are additions only, except one frontmatter line in each
   (`git diff -U0 origin/main...HEAD -- <both files> | grep -E '^-[^-]' | grep -vE '^-(addenda|re_evaluation_triggers|open_follow_ups): '`
   prints nothing: the 2026-11-13 record's `addenda:` line gains an entry, counsel-review-10479's `re_evaluation_triggers:`
   clause is replaced and its `open_follow_ups:` Q-2 item gains the bracket).
-- [ ] AC7: `inngest-server.md` and ADR-294 diffs are additions only, except the #10538 row of "Tracked follow-ups" (an
+- [x] AC7: `inngest-server.md` and ADR-294 diffs are additions only, except the #10538 row of "Tracked follow-ups" (an
   in-cell append: its `-` line is a prefix of its `+` line), checked by `git diff -U0 origin/main...HEAD -- <both files> |
   grep -E '^-[^-]' | grep -vF '| #10538 | the'` printing nothing; the four runbook notes sit at their four
   anchors and the ADR-294 note directly after the 2026-11-13 blockquote.
-- [ ] AC8: `breach-register.md` gains exactly one dated row with 9 cells and a backticked canonical-source path that
+- [x] AC8: `breach-register.md` gains exactly one dated row with 9 cells and a backticked canonical-source path that
   resolves; `bash scripts/lint-legal-registers.sh` exits 0 (run after `git add` of the new record: the lint runs
   `git ls-files --error-unmatch` on each cited path).
-- [ ] AC9: `bash scripts/lint-encryption-posture.test.sh` passes; `bash scripts/markdown-lint.sh` passes on every changed
+- [x] AC9: `bash scripts/lint-encryption-posture.test.sh` passes; `bash scripts/markdown-lint.sh` passes on every changed
   `.md` file (`knowledge-base/project/` is outside that lint's scope by `.markdownlintignore`).
-- [ ] AC10: GitHub: on #12742 the acceptance comment (with every measured value, labelled by reader and time) and the priority comment exist with the provenance line, the item-8
+- [x] AC10: GitHub: on #12742 the acceptance comment (with every measured value, labelled by reader and time) and the priority comment exist with the provenance line, the item-8
   marker was added with no other body change (old/new body diff is one added line), and the label is `priority/p1-high`;
   on #10538 the pointer comment exists; the leg-1 event issue exists with its determination comment dated before
   2026-11-20T17:07Z.
 - [ ] AC11: the PR body says `Ref #12742` and `Ref #10538` and contains no `Closes`, `Fixes` or `Resolves` keyword; it
   carries a `## Changelog` section; `technical-ruling-gate.sh --pr-body` passes.
-- [ ] AC12: no file under the #12876 branch's scope changed (`git diff --name-only origin/main...HEAD` lists only the seven files
+- [x] AC12: no file under the #12876 branch's scope changed (`git diff --name-only origin/main...HEAD` lists only the seven files
   above plus this feature's plan/spec artifacts), and no workflow was dispatched.
 - [ ] AC13: merged to main before 2026-11-20T00:00Z (target); in any case before the first merge-group run on or after
   2026-11-21T00:00Z, or the record and ledger carry the gap wording.
