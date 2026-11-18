@@ -1,0 +1,268 @@
+# Alpha-Tester Processing Annex
+
+> **Please read this first.** This document has **not been reviewed by a lawyer**. Jikigai offers it in good faith as an honest description of how we would handle the personal data in your repository when we run Soleur on it for you. We invite you to **take your own legal advice before signing**, and you are free to ask us for changes. You may find the liability clause (§12) the most unusual part and may want advice on it in particular.
+
+**Between** Jikigai SARL, 25 rue de Ponthieu, 75008 Paris, France (RCS Paris 927 585 729) ("**Jikigai**") **and** the alpha tester identified in Schedule A ("**Customer**").
+
+## Relationship to the platform DPA
+
+Jikigai's platform data processing agreement governs the hosted Soleur Web Platform: its scope is Customer Data held on that platform, its instructions are actions taken in the platform interface, and its technical measures describe platform infrastructure. **None of that infrastructure serves Operator-Assisted Runs**, so this annex does not import those measures and asserts only the measures at §7, each of which operates in the configuration described. Two platform clauses are adopted because they transfer unchanged: the data-subject-request service levels (§6.2) and the audit structure (§9). Customer holds no platform account, so requests are routed by email (§6.1).
+
+---
+
+## Recitals
+
+**(A)** Customer operates a private software repository. Customer is the **controller** of personal data contained in that repository.
+
+**(B)** Jikigai supplies Soleur, a source-available agent toolkit. When Customer runs Soleur on Customer's own machine under Customer's own AI-provider API key with no Jikigai involvement, Jikigai processes nothing and is neither controller nor processor. **This annex does not apply to that use.**
+
+**(C)** This annex applies **only** where Jikigai's founder, named in Schedule A (the "**Operator**"), runs Soleur agents against Customer's repository content **on a Jikigai machine or under a Jikigai-held credential**, at Customer's request — for example a launch-readiness check under Schedule B, or a guided onboarding or debugging session ("**Operator-Assisted Runs**"). In that configuration Jikigai processes Customer's personal data on Customer's behalf and is a **processor** within the meaning of Article 4(8) GDPR.
+
+**(D)** Operator-Assisted Runs that took place before the effective date are addressed in a separate letter from Jikigai to Customer, dated as stated in Schedule A, and this annex does not apply to them.
+
+---
+
+## §1 Subject matter, duration and scope
+
+**1.1** Subject matter: processing of Customer's repository content by Jikigai during Operator-Assisted Runs.
+
+**1.2** Duration: from countersignature until the earlier of (a) the end of Customer's participation in the Soleur alpha programme, or (b) termination under §11.
+
+**1.3 Scope limit.** This annex governs Operator-Assisted Runs only. It does not govern, and does not imply any Jikigai role in respect of, Customer's own use of Soleur on Customer's own machine under Customer's own API key with no Jikigai involvement.
+
+**1.4 Launch-check runs.** Where an Operator-Assisted Run is a launch-readiness check using the Soleur `launch-check` skill, Schedule B describes what that processing reads, excludes, persists and files, and forms part of Customer's documented instructions for that run.
+
+## §2 Nature and purpose
+
+**2.1** Jikigai processes Customer's repository content solely to perform the software-engineering or readiness-assessment tasks Customer requests during an Operator-Assisted Run — reading, analysing, transforming and generating source code, configuration, schema, tests and documentation, and producing the report described in Schedule B.
+
+**2.2 No secondary use (Article 28(10)).** Jikigai shall not process Customer's repository content, or anything derived from it (including transcripts, summaries, excerpts, findings, embeddings and metrics), for any purpose of its own. Without limitation, that excludes: product improvement or dogfooding; measuring repository, knowledge-base or usage growth or any other product metric; building or evaluating prompts, skills, models, test sets or training data; benchmarking; marketing, case studies and digests; and capturing learnings into any Jikigai knowledge base or memory. Jikigai acknowledges that processing outside Customer's instructions for a purpose Jikigai determines would make Jikigai a controller of that processing under Article 28(10) and a party in breach of this annex.
+
+**2.3 Content-free administrative facts.** Jikigai may keep facts that contain no Customer content and no personal data of Customer's data subjects — the date and duration of a run, which Schedule applied, and whether it completed — for its Article 30(2) record and for administering the programme.
+
+**2.4 Access is for runs only.** Access that Customer grants to its repository for Operator-Assisted Runs shall not be used between runs, or for any purpose other than the instructed run, including ongoing observation of the repository.
+
+## §3 Categories
+
+**3.1 Data subjects:** natural persons whose personal data appears in Customer's repository content — including authors recorded in git commit metadata and any individual named in documentation, tests or configuration.
+
+**3.2 Personal data:** names, corporate roles, commit-author names, email addresses and timestamps, together with any other personal data Customer's repository content happens to contain.
+
+**3.3 Special categories:** none intended. Customer shall not deliberately introduce Article 9 or Article 10 data into an Operator-Assisted Run without prior written agreement.
+
+## §3A Customer's authority and responsibilities
+
+**3A.1** Customer warrants that it is the controller of the personal data in the repository content it makes available, or that it has the authority of the controller to give the instructions in this annex and to engage Jikigai and Anthropic as processor and sub-processor on the controller's behalf. If Customer is itself a processor, it shall tell Jikigai before the first run so that the parties can document the sub-processing chain.
+
+**3A.2** Customer warrants that it has a lawful basis for the processing it instructs and has given any notices to data subjects that the law requires of it.
+
+**3A.3** Customer decides which repository, scope of access and task a run covers, and whether an Operator-Assisted Run is appropriate for its content in light of §5.3 and §7.
+
+## §4 Jikigai's obligations (Article 28(3)(a)–(h))
+
+Jikigai shall:
+
+**(a)** process Customer's personal data **only on Customer's documented instructions**, including as to third-country transfers, unless required otherwise by Union or Member State law, in which case Jikigai shall inform Customer before processing unless that law prohibits it;
+
+**(b)** ensure that **every person Jikigai authorises to process** Customer personal data — which under §7.4 is the Operator alone — is bound by an appropriate duty of confidentiality;
+
+**(c)** implement the technical and organisational measures at §7;
+
+**(d)** engage sub-processors only in accordance with §5;
+
+**(e)** assist Customer, by appropriate measures, in responding to data-subject requests, on the terms at §6;
+
+**(f)** assist Customer in complying with Articles 32 to 36, taking into account the nature of the processing and the information available to Jikigai, including as set out at §4.4;
+
+**(g)** at **Customer's election**, delete or return all Customer personal data at the end of the provision of services, and delete existing copies, save where Union or Member State law requires storage — see §11.2 for the qualifications; and
+
+**(h)** make available to Customer all information necessary to demonstrate compliance with Article 28, and allow for and contribute to audits, on the terms at §9.
+
+**4.2** Jikigai shall immediately inform Customer if, in its opinion, an instruction infringes the GDPR or other Union or Member State data-protection law.
+
+**4.3 Documented instructions.** Customer's documented instructions are this annex (including Schedule B where it applies) and Customer's written request for each run (email or issue comment) naming the repository and the task. Customer may withdraw an instruction at any time by written notice.
+
+**4.4 Data protection impact assessment.** On request, Jikigai shall give Customer the information it holds that Customer reasonably needs for a data protection impact assessment under Article 35 or prior consultation under Article 36 — the nature of the processing, the persistence inventory at §7.2, the sub-processor and retention position at §5, and the measures at §7 — within 10 business days. Jikigai does not perform Customer's assessment.
+
+**4.5 Requests from data subjects received by Jikigai.** See §6.5.
+
+## §5 Sub-processors (Article 28(2) and (4))
+
+**5.1 Authorised sub-processor.** Customer authorises **Anthropic PBC**, 548 Market Street, San Francisco, CA 94104, United States, for large-language-model inference during Operator-Assisted Runs conducted under a Jikigai-held Anthropic credential. Jikigai's own Anthropic account is the default for Operator-Assisted Runs.
+
+**5.2 Transfer mechanism and condition precedent.** Transfers to Anthropic are intended to rest on **Standard Contractual Clauses Module 3** (processor to sub-processor), incorporated through the Anthropic Commercial Terms, and — **to be verified** — on Anthropic's certification under the **EU-US Data Privacy Framework**. Neither the incorporation of Module 3 nor the Data Privacy Framework certification is asserted here as confirmed; both are to be checked against Anthropic's current terms, and the result confirmed to Customer in writing, as set out below.
+
+**Condition precedent.** Before any Operator-Assisted Run under a Jikigai-held Anthropic credential, Jikigai shall verify that the account it will use is on the Anthropic **Commercial Terms** (not Consumer Terms), that the terms incorporate a data processing agreement and the clauses above, and shall confirm the result to Customer in writing. **No such run takes place until that confirmation has been given.** Any of the following credentials satisfies this condition, chosen per run: (i) an Anthropic Console API key held by Jikigai on the Commercial Terms; (ii) a Jikigai Team or Enterprise plan; (iii) Customer's own commercial key under §5.4. Jikigai shall record in the run record which credential type was used for each run. If the position turns out to differ from this §5.2 at any time, Jikigai shall notify Customer promptly.
+
+**5.3 Retention — disclosed because it is adverse.** Jikigai's Anthropic account does **not** carry a zero-retention amendment, and Jikigai does not intend to seek one. Content sent to Anthropic under a Jikigai-held credential is therefore subject to Anthropic's retention, which Jikigai understands to be: (a) a default of **thirty (30) days**; (b) for content that Anthropic's safety classifiers flag, **up to two (2) years**; and (c) for classifier scores, **up to seven (7) years**. These three figures are Jikigai's working understanding and **have not been independently verified** against Anthropic's current published terms. During those periods **Jikigai cannot compel earlier deletion**. This limits what Jikigai can deliver on an erasure request (§6.3) and on return-or-delete (§11.2). Jikigai shall notify Customer if the position changes.
+
+**5.4 Customer key — optional.** Customer may instead require that an Operator-Assisted Run use **Customer's own Anthropic API key**. Jikigai will comply without charge. For such a run Anthropic is engaged by Customer directly and is not Jikigai's sub-processor for inference; the retention terms of Customer's own account, not §5.3, apply to content sent to Anthropic; and the key shall be held only in the environment of the dedicated run user for the duration of the run, never written to a file, and shall be revoked or rotated by Customer after the run. The run still takes place on a Jikigai machine, so §7 and §11 apply in full.
+
+**5.5 New sub-processors.** Jikigai shall give Customer at least **thirty (30) days'** written notice before authorising any further sub-processor. Customer may object on reasonable data-protection grounds; absent resolution, Customer may terminate under §11 without penalty. Customer's own GitHub account is Customer's channel and Customer's own provider; it is not a Jikigai sub-processor.
+
+**5.6 Liability for sub-processors.** Jikigai remains fully liable to Customer for the performance of any sub-processor's obligations, subject to §12.
+
+**5.7 Flow-down (Article 28(4)).** Jikigai's understanding, which it has not independently verified against Anthropic's current terms, is that the data-protection obligations in this annex are imposed on Anthropic, as sub-processor, by the Anthropic Commercial Terms and the data processing agreement and Standard Contractual Clauses incorporated through them, to the extent those terms apply to Operator-Assisted Runs. On request Jikigai shall give Customer the relevant extract.
+
+## §6 Data-subject rights (Article 28(3)(e))
+
+**6.1 Routing.** Requests for Jikigai's assistance are routed to **<legal@jikigai.com>**. This annex does not route requests through the Soleur Web Platform's self-serve privacy page: Customer holds no platform account.
+
+**6.2 Service levels.** Jikigai shall acknowledge receipt within **2 business days** and provide a substantive response — data delivery, a reasoned refusal, or a status update for complex requests — within **10 business days** of acknowledgement. Article 12(3)'s one-month deadline applies as the outer envelope; the 10-business-day service level is a faster operator commitment.
+
+**6.3 Erasure — a limit stated rather than glossed.** On Customer's instruction Jikigai shall delete Customer personal data from every location in the §7.2 inventory. Jikigai **cannot** accelerate deletion of content already transmitted to Anthropic under a Jikigai-held credential within the retention periods at §5.3, and deletes local copies by unlinking, not secure erasure (§7.2). Jikigai shall say so plainly in response to any erasure request affected by either limit, rather than reporting the request as fully satisfied.
+
+**6.4 Costs.** Jikigai bears the reasonable costs of its assistance under this §6, except for requests that are manifestly unfounded or excessive within Article 12(5).
+
+**6.5 Requests received directly — forward, do not answer.** If a data subject contacts Jikigai about personal data processed under this annex, Jikigai shall not answer the request on its merits. Jikigai shall forward it to Customer within **2 business days** and may tell the data subject only that the request concerns data processed for another party and has been passed on.
+
+## §7 Technical and organisational measures (Article 32)
+
+**These are the measures that actually apply to this relationship. They are deliberately few, and no measure is listed that does not operate here.**
+
+**7.1 Credential and account separation.** Operator-Assisted Runs use Jikigai's own Anthropic credential by default (§5.1) or Customer's key if Customer so requires (§5.4). Each run uses (a) a **dedicated Claude Code configuration directory** created for that run and (b) a **per-run temporary directory (`TMPDIR`)** created for that run, so that every artefact listed at §7.2 is written inside one of those two directories or the run clone, and can be deleted wholesale at the end of the run. The Claude Code telemetry and non-essential network settings for the dedicated configuration directory, and the deny rules referred to in Schedule B, are still to be specified and tested before first use and are **not asserted here as in place**.
+
+**7.2 Confinement and local persistence.** Customer content processed during an Operator-Assisted Run resides only (i) on the run machine, in the dedicated run user's storage, in the locations listed below, and (ii) in transit to the model provider. Jikigai operates **no server-side store** of Customer repository content and writes nothing to its hosted platform. The following locations can hold Customer content during or after a run:
+
+| Location | What it can hold |
+|---|---|
+| Claude Code configuration directory: `projects` transcripts | Full conversation transcripts of the run, including file contents the agent read |
+| Claude Code configuration directory: `tool-results` | Stored outputs of tool calls, including command output and file reads |
+| Claude Code configuration directory: `subagents` | Transcripts of sub-agents spawned during the run |
+| Claude Code configuration directory: `file-history` | Prior versions of files the agent edited |
+| Claude Code configuration directory: `paste-cache` | Content pasted into the session |
+| Claude Code configuration directory: `history.jsonl` | Prompts typed during the run |
+| Claude Code configuration directory: `plans` | Plan files the agent wrote |
+| Claude Code configuration directory: `debug` | Debug logs, which can contain request content |
+| Repository clone | Customer's repository as cloned for the run, including the report file `knowledge-base/engineering/readiness/launch-check.md` when Schedule B applies |
+| `launch-check` `lc-work` directory in the per-run `TMPDIR` | A working copy of the **last commit** of the repository, extracted for the secret scan (see Schedule B §B.2) |
+| `launch-check` `lc-gate` scratch directory | Scratch copies made while the report is checked before it is written |
+| Agent work directory (the temporary directory the skill's flow creates for `facts.tsv`, `files.list` and `judged.tsv`) | File names and findings derived from Customer's repository |
+| `launch-check` `lc-issues-plan` directory | The prepared issue titles and bodies; **this directory is deliberately left in place after the plan is created** so that issue filing can read it |
+| Any disk snapshot or backup of the run machine | Whatever the above held when the snapshot was taken |
+
+**Deletion is by unlinking.** Jikigai removes these locations by deleting them (unlinking the files), **not by securely erasing or overwriting them**. On modern filesystems and storage, unlinked data can remain recoverable until its blocks are reused. This is why §7.3a (encryption at rest) matters and is disclosed below.
+
+**No reliance on automatic clean-up.** Jikigai does not rely on Claude Code's periodic automatic removal of old session files (a thirty-day sweep) to delete any of the above, and does not rely on the `launch-check` scripts' own clean-up. The scripts remove their own `lc-work` and `lc-gate` directories on normal exit and on interrupt, but cannot do so after a crash, forced kill or power loss, and leave the `lc-issues-plan` directory by design. The control is the wholesale deletion of the per-run Claude configuration directory and per-run `TMPDIR` at the end of every run (§11.2).
+
+**7.3 Encryption in transit.** TLS 1.2 or higher in transit to the model provider.
+
+**7.3a Encryption at rest — a disclosed item, to be re-verified on the run machine.** Jikigai does not warrant, in this annex, that the run machine encrypts data at rest. Jikigai's position is: a LUKS encryption layer has been observed on the Operator's current workstation; that observation has **not** been verified for the machine and volume on which Operator-Assisted Runs will take place. Before the first run Jikigai shall check that every location in the §7.2 table resides on an encrypted volume, shall use **only that encrypted volume** for runs, and shall tell Customer the result in writing. Until that check is done and reported, Customer should treat Customer repository content on the run machine as **not shown to be encrypted at rest**, and weigh that in deciding whether to instruct a run, or to use the §5.4 route with Customer's own key and Customer's own machine under Recital (B).
+
+**7.4 Access.** Access to Customer's repository content is limited to the **Operator named in Schedule A and no one else**. Jikigai shall not give any other person access — as an employee, contractor, intern or otherwise — without (i) **prior written notice** to Customer and (ii) a written amendment to Schedule A naming that person, and §4(b) then applies to that person before access begins.
+
+Repository access runs through a **dedicated Jikigai machine account** used from a **separate operating-system user** on the run machine; it does not use the Operator's personal GitHub login or personal user account. The machine account has **read access** to Customer's repository by default. It has **write access only if Customer elects issue filing** under Schedule B §B.5, and then only to the extent needed to file issues. Access is repository-scoped rather than organisation-wide. At the end of each run Jikigai **logs the machine account out and deletes the clone** (§11.2).
+
+**7.5 No republication and no secondary-use channels.** Customer content, and anything derived from it, shall not be published, quoted or reproduced in any Jikigai commit, issue, digest, case study or marketing material, and shall not be sent to or stored in any of the following Jikigai channels: (a) **learnings capture** — Jikigai's knowledge base, learnings files and Claude Code memory; (b) **telemetry and error reporting** — Sentry or any equivalent error, log or analytics service; (c) **continuous-integration and job systems** — Jikigai's CI pipelines, Inngest and any other workflow or queue service; and (d) Jikigai's own repositories, issue trackers and chat tools. The Operator shall not paste Customer content into any of them.
+
+**7.6 Records.** Jikigai maintains an Article 30(2) record of this processing.
+
+**7.7 What Jikigai does not have.** Jikigai holds **no SOC 2 report, no ISO 27001 certification, and no third-party security audit**, and this annex creates no commitment to obtain any. This is stated so Customer can weigh it.
+
+## §8 Personal-data breach (Articles 33 and 34)
+
+**8.1** Jikigai shall notify Customer **without undue delay and in any event within 24 hours** of becoming aware of a personal-data breach affecting Customer personal data. The 24 hours run from **Jikigai's awareness**. Jikigai becomes aware when the Operator or any other person acting for Jikigai has reasonable certainty that a breach has occurred, **or when Anthropic or any other sub-processor notifies Jikigai of one**, whichever is first. Jikigai shall not delay notification to complete its investigation and may provide information in phases.
+
+**8.2** The notification shall describe the nature of the breach, the categories and approximate number of data subjects and records concerned, the likely consequences, and the measures taken or proposed.
+
+**8.3** Whether and when Customer, as controller, is aware for the purposes of Article 33(1), and whether to notify a supervisory authority or data subjects, is for Customer to determine.
+
+## §9 Audit (Article 28(3)(h))
+
+**9.1** Customer may exercise an audit right once per calendar year on **30 days'** written notice to <legal@jikigai.com>, identifying the scope, and additionally after a personal-data breach affecting Customer personal data or where a supervisory authority requires it. **The right does not depend on any prior finding of non-compliance.** Customer may use an independent auditor bound by confidentiality. Customer bears the costs, except where the audit identifies material non-compliance by Jikigai, in which case Jikigai bears its own costs and reasonable third-party auditor fees.
+
+**9.2 Information first.** Jikigai may offer, as a first step, its compliance-posture summary, the relevant determinations and audits, and the Article 30(2) record for this processing. Because Soleur is developed in the open, Customer can additionally inspect the source of any Soleur component processing its data. Accepting that information does not waive the right at §9.1.
+
+**9.3** Audit of Anthropic's own systems is by the means that Anthropic's terms provide; Jikigai shall pass on to Customer the audit reports and information it is entitled to receive.
+
+## §10 International transfers
+
+**10.1** Jikigai is established in France. The only transfer outside the EEA arising under this annex is to Anthropic PBC in the United States, on the mechanisms at §5.2, and only where a Jikigai-held credential is used. Where Customer's own key is used (§5.4), the transfer to Anthropic is made under Customer's own account and not by Jikigai.
+
+## §11 Term, termination and return or deletion
+
+**11.1** Either party may terminate on written notice. This annex terminates automatically at the end of Customer's participation in the alpha programme.
+
+**11.2 End of every run, and on termination.** At the end of **each** Operator-Assisted Run, and again on termination, Jikigai shall: (a) revoke and cease using any access grant to Customer's systems, and **log out the dedicated machine account**; (b) **delete the repository clone**; (c) **delete the per-run Claude Code configuration directory and the per-run `TMPDIR` wholesale**, which together remove every location in the §7.2 inventory other than the clone and any snapshot; (d) delete any disk snapshot or backup that captured those locations; and (e) at **Customer's election**, either **return** to Customer the report and any other output of the run, or **delete** it, and delete Jikigai's own copy in either case. Deletion is by **unlinking**, as stated at §7.2. Jikigai shall **confirm completion in writing within 30 days**.
+
+The qualifications Jikigai cannot presently remove are: (i) the Anthropic retention periods at §5.3, which lapse on their own schedule and which Jikigai cannot shorten; and (ii) the recoverability of unlinked data described at §7.2.
+
+## §12 Liability
+
+**12.1 Contractual cap — EUR 0.** No fees or other money are paid by either party under this annex or in connection with Customer's participation in the Soleur alpha programme. The platform data processing agreement's floor of EUR 100 is anchored to fees paid and has no fees to attach to here. **As between the parties, each party's total aggregate liability to the other in damages under or in connection with this annex is limited to EUR 0**, subject to §12.2. The cap is reciprocal in form. It limits liability in money damages only. It does not limit, and each party retains: specific performance of each obligation in this annex; the right to suspend or stop an Operator-Assisted Run; termination under §11; the return-or-delete and written-confirmation obligations at §11.2; audit under §9; and the breach-notification duties at §8.
+
+**12.2 What the cap does not limit.** The cap at §12.1 does not apply to, and nothing in this annex limits or excludes: (a) liability for death or personal injury; (b) liability for fraud or fraudulent misrepresentation; (c) liability for gross negligence (*faute lourde*) or wilful misconduct (*faute dolosive*); (d) **wilful processing of Customer personal data outside Customer's instructions**, including any breach of §2.2; (e) **intentional breach of confidentiality**; (f) **a party's right of recourse against the other under Article 82(4) and (5) GDPR** for the part of compensation paid to a data subject that corresponds to the other's responsibility for the damage; (g) liability to the extent that applying the cap would deprive an **essential obligation** of a party under this annex of its substance; and (h) any liability that cannot be limited or excluded under mandatory law.
+
+**12.3 Article 82 GDPR.** Nothing in this annex limits or excludes a data subject's right to compensation under Article 82 GDPR or either party's liability to a data subject. The cap applies only as between the parties, and not to recourse under §12.2(f).
+
+**12.4 Single aggregate with the Terms.** The cap at §12.1 and the cap at Section 11.2 of the Terms and Conditions are **not cumulative**. A party's total aggregate liability to the other under this annex and the Terms and Conditions together shall not exceed the amount at Section 11.2 of the Terms and Conditions, and an amount paid or payable under one counts against the other. **Within that single aggregate, the amount attributable to claims arising from processing under this annex is EUR 0**: Section 11.2 of the Terms and Conditions does not raise the cap for those claims, and §12.1 does not raise the cap for claims under the Terms and Conditions.
+
+**12.5 Administrative fines are not shifted.** Neither party shall indemnify, reimburse or bear the other's administrative fine or penalty imposed by a supervisory authority or court on that other party. Each party bears any such fine imposed on it. This does not affect §12.2(f) recourse for compensation paid to data subjects, or a party's own liability to a supervisory authority.
+
+## §13 Relationship to other terms
+
+**13.1** Customer's use of Soleur remains governed by the Terms and Conditions at `https://soleur.ai/legal/terms-and-conditions`. This annex supplements them for Operator-Assisted Runs and prevails over them in the event of conflict in respect of data protection. Liability is governed by §12: for claims arising from processing under this annex, §12 (cap EUR 0, subject to §12.2) applies and Section 11.2 of the Terms and Conditions does not raise it; for all other claims, Section 11 of the Terms and Conditions applies unchanged; and §12.4 sets the single aggregate.
+
+**13.2** Nothing here alters the position for plugin-local use on Customer's own machine under Customer's own key with no Jikigai involvement, where Jikigai is neither controller nor processor.
+
+## §14 General
+
+**14.1 Governing law.** French law. **14.2 Jurisdiction.** The courts of Paris, France.
+
+---
+
+## Schedule A — Counterparty, Operator and signature
+
+All fields below are to be completed before signature. Customer's details are to be completed from Customer's own records.
+
+| Field | Value |
+|---|---|
+| Customer legal name | `[__________________________]` |
+| Customer registered address / registration number | `[__________________________]` |
+| Customer GitHub account | `[__________________________]` |
+| Repository | `[__________________________]` |
+| Operator (sole person with access, §7.4): full name | `[__________________________]` |
+| Dedicated Jikigai machine account (§7.4) | `[__________________________]` |
+| Report delivery channel (Schedule B §B.6) | `[__________________________]` |
+| Date of Jikigai's separate letter on earlier runs (Recital (D)) | `[__________________________]` |
+| Effective date (date of countersignature) | `[__________________________]` |
+
+**For Jikigai SARL** (name and title of signatory: `[______________________]`)
+
+Signature: `[______________________]`  Date: `[______________]`
+
+**For Customer** (name and capacity of signatory: `[______________________]`)
+
+Signature: `[______________________]`  Date: `[______________]`
+
+---
+
+## Schedule B — Launch-check processing schedule
+
+**B.1 What this covers, pinned.** This schedule applies when the Operator runs the Soleur `launch-check` skill against Customer's repository as an Operator-Assisted Run. It describes the skill as it stands at Soleur commit `15ce2469fa` on `main`. The files that determine what is read and what is excluded are identified by their git blob hashes:
+
+| File | Git blob hash |
+|---|---|
+| `plugins/soleur/skills/launch-check/scripts/lib/safe-walk.sh` | `cfd080d0427496b8ea3e1aeb3ad5a2d8e9fe2a57` |
+| `plugins/soleur/skills/launch-check/references/checks.tsv` | `510387806fea567c2ca4f700aea2d709dddb132b` |
+| `plugins/soleur/skills/launch-check/scripts/lib/checks.sh` | `996c951a79a2608c1d4490ade546ec9f74cf1ea7` |
+
+Jikigai shall not run the skill for Customer from a version in which any of these three hashes differs from the table without first telling Customer in writing and amending this schedule.
+
+**B.2 What is read.**
+
+- **The file walk.** The skill lists the files it may read with `git ls-files -c -o --exclude-standard`, which returns **tracked files and also untracked files that are not ignored by git**. **Untracked, non-ignored files are therefore in scope.** In a fresh clone these are only files created locally during the run; in any working copy that Customer has modified they include Customer's uncommitted files. Files that Customer's `.gitignore` excludes are not walked. Symbolic links are skipped.
+- **Excluded classes (the "never-read list").** The walker removes, matching names case-insensitively: environment files (`.env`, `.env.*`, `*.env`, `.envrc`); secrets and credentials files (`secrets.*`, `credentials.*`, and files or directories named `secrets` or `credentials`, `master.key`, `*.key`, `*.pem`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `*.ppk`); Terraform state and variables (`*.tfstate`, `*.tfstate.*`, `*.tfvars`, `*.tfvars.json`); data files (`*.sql`, `*.dump`, `*.csv`, `*.sqlite`, `*.sqlite3`, `*.db`); fixture and seed directories (`fixtures/`, `__fixtures__/`, `seeds/`); SSH keys (`id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`); tool credential files (`.npmrc`, `.netrc`, `.pypirc`, `.htpasswd`, `.git-credentials`, `.dev.vars`, `kubeconfig`, `.kube/`, `.aws/`, `*service-account*.json`); and the `.git/` directory.
+- **Deterministic checks.** Scripts search the content of the walked files for fixed patterns and record counts, or a path and line number as evidence, but not file content.
+- **The secret scan reads the whole last commit.** One check (SEC-01) extracts **every file of the last commit — including the excluded classes above —** into the `lc-work` directory and runs the `gitleaks` secret scanner over that copy, with findings redacted and reported as a count only. The excluded classes are therefore **read by the script and copied to disk**, though not offered to the model. It does not read uncommitted files or git history.
+- **Model-assisted review.** The Operator's Claude Code session reads files from the walked list, one at a time, to form a view on four items: authentication, architecture and data layer, scaling hot spots, and observability. **Content the model reads is sent to Anthropic** under §5. Tool output printed into the session is also model context.
+
+**B.3 What the model-side exclusion is, and is not.** The exclusion of the never-read classes **from the model's reading** is (i) an **instruction** in the skill that the model reads only paths on the walked list and never opens excluded classes, and (ii) **Claude Code deny rules** to be configured for the run (see B.4). It is **not a script control**: the scripts do not technically prevent the model from opening a file outside the list. Repository content is untrusted and could attempt to steer the model. Customer should rely on the deny rules and instruction as risk reduction, not as a guarantee.
+
+**B.4 Deny rules.** The deny rules are to be specified and tested before first use; their content is not set out in this document, and they are not asserted here as in place.
+
+**B.5 Issue filing — only after Customer's yes.** The skill can file an epic and severity-ranked issues in Customer's repository. Jikigai shall not file any issue unless Customer has given a **written yes** that names the repository, its visibility, whether it is a fork, and the number of issues. Customer's silence, or a general go-ahead given earlier, is a decline. Preview and creation are separate steps with Customer's yes between them. Preview makes read-only authenticated requests to Customer's own repository and writes a private plan directory (§7.2); creation needs write access, which the machine account has only if Customer elects issue filing (§7.4). On a public repository, issues publish the list of unfixed gaps. The skill's own gate asks the Operator in the session, not Customer; Customer's written yes is therefore an additional gate under this annex that the tool does not enforce.
+
+**B.6 Report.** The report file is written into the repository clone. It contains check identifiers, severities, titles and remedies and, as evidence, a path and line number or a count; it is designed not to contain file content or secret values or locations. Delivery to Customer is by the channel stated in Schedule A, after which Jikigai deletes its copy under §11.2.
+
+**B.7 What the skill documents about itself.** The skill states that its analysis writes only the report file, installs nothing, sends no data anywhere, and has no telemetry, apart from the optional issue step. That is the skill's own description, not an independent finding, and does not cover Claude Code's own network traffic or the transmission of model context to Anthropic described above.
