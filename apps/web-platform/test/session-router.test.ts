@@ -136,7 +136,7 @@ describe("production roster shape (#12910: keyed by var.web_hosts key)", () => {
   });
 
   test("loadHostRoster accepts an explicit env (hermetic callers)", () => {
-    expect(loadHostRoster({ SOLEUR_HOST_ROSTER: PROD_ROSTER } as NodeJS.ProcessEnv)).toEqual(
+    expect(loadHostRoster({ NODE_ENV: "test", SOLEUR_HOST_ROSTER: PROD_ROSTER })).toEqual(
       JSON.parse(PROD_ROSTER),
     );
   });
