@@ -41,9 +41,12 @@ export interface SandboxNetworkDecision {
 }
 
 // Characters a host may carry before any transformation: ASCII letters, digits, dot, hyphen, IPv6 brackets and colons.
-// Checked on the RAW value, before lowercasing ("K".toLowerCase() === "k"); IDN must arrive as punycode.
+// Checked on the RAW value, before lowercasing ("\u212A".toLowerCase() === "k", the Kelvin sign); IDN must arrive as punycode.
 const RAW_HOST = /^[A-Za-z0-9.\-[\]:]+$/;
-const LDH_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+// RFC 1035: 1-63 octets per label.
+const LDH_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+// RFC 1035's 253-octet name, plus a trailing dot or the two IPv6 brackets.
+const MAX_RAW_HOST_LENGTH = 253 + 2;
 // WHATWG "ends in a number": a last label of this shape makes a URL parser read the whole host as IPv4 (2130706433, 127.1).
 const NUMERIC_LABEL = /^(?:0x[0-9a-f]*|[0-9]+)$/;
 
@@ -51,13 +54,14 @@ type Normalized = { kind: "dns" | "ipv4" | "ipv6"; host: string } | null;
 
 /** Normalize a raw host, or null for anything that is not a plain DNS name or IP literal (deny `malformed-host`). */
 export function normalizeHost(raw: unknown): Normalized {
-  if (typeof raw !== "string" || raw.length === 0 || raw.length > 253 + 2 || !RAW_HOST.test(raw)) return null;
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > MAX_RAW_HOST_LENGTH || !RAW_HOST.test(raw)) return null;
   let h = raw.endsWith(".") ? raw.slice(0, -1) : raw;
   if (h.startsWith("[") || h.endsWith("]")) {
     if (!(h.startsWith("[") && h.endsWith("]"))) return null;
     h = h.slice(1, -1);
-    if (!net.isIPv6(h)) return null; // `[::1]:443` lands here: the inner value is not an IPv6 literal
+    if (!net.isIPv6(h)) return null;
   }
+  // `[::1]:443` never reaches here: it does not end in "]", so the bracket check above rejects it.
   if (h.includes(":")) {
     // Any colon outside a valid IPv6 literal (host:443) is malformed; no port is ever stripped (CTO D7).
     if (!net.isIPv6(h)) return null;

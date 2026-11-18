@@ -29,8 +29,10 @@ describe("sandbox-network-access: module contract", () => {
     const src = readFileSync(join(__dirname, "..", "server", "sandbox-network-access.ts"), "utf8");
     const specifiers = [...src.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s+["']([^"']+)["']/gm)].map((m) => m[1]);
     const dynamic = [...src.matchAll(/\b(?:import|require)\(\s*["']([^"']+)["']/g)].map((m) => m[1]);
+    const bare = [...src.matchAll(/^\s*import\s+["']([^"']+)["']/gm)].map((m) => m[1]);
     expect(specifiers).toEqual(["node:net"]);
     expect(dynamic).toEqual([]);
+    expect(bare).toEqual([]);
   });
 });
 
@@ -250,6 +252,11 @@ describe("sandboxNetworkDenyMessage (CPO ruling, keyed on reason and granted)", 
         }
       }
     }
+  });
+
+  it("RFC 1035 label limit: a 64-octet label is malformed, a 63-octet one is a name", () => {
+    expect(normalizeHost(`${"a".repeat(64)}.com`)).toBeNull();
+    expect(normalizeHost(`${"a".repeat(63)}.com`)).toEqual({ kind: "dns", host: `${"a".repeat(63)}.com` });
   });
 
   it("CPO C2: a revoked session says web access was turned off, whatever the reason", () => {

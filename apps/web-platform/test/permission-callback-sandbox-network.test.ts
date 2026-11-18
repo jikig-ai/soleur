@@ -230,6 +230,14 @@ describe("review rulings: revocation (CTO R1), expected denies pino-only (R2), p
     expect(direct[0][0].occurrences).toBeUndefined();
   });
 
+  test("first-branch placement: a platform tool or plugin MCP server of that name cannot shadow the arm", async () => {
+    const ctx = buildContext({ platformToolNames: [TOOL], pluginMcpServerNames: [TOOL], webEgressGranted: false });
+    const r = await ask(ctx, { host: "example.com" });
+    expect(r).toEqual({ behavior: "deny", message: NOT_AVAILABLE });
+    expect(layers()).toEqual(["canUseTool-sandbox-network"]);
+    expect(ctx.deps.abortableReviewGate).not.toHaveBeenCalled();
+  });
+
   test("a throwing liveness or revocation probe still denies, and is mirrored", async () => {
     const ctx = buildContext({
       sandboxNetworkEgress: { isLive: () => { throw new Error("probe"); } },

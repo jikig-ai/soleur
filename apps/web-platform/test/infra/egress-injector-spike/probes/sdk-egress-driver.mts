@@ -197,6 +197,7 @@ async function main() {
           // instead ALLOWS exactly those hosts, recorded with their production reason, because what it measures is the
           // route an allow would get (gateway or injector as the policy boundary), the evidence the follow-up allow
           // arm needs. IP literals not in NO_PROXY are allowed, so squid's deny list is what refuses them.
+          // When #12906 adds a real allow, key this predicate on the production allow, not on `gateway-unverified`.
           if (name === "SandboxNetworkAccess") {
             const rawHost = String((input as { host?: unknown })?.host ?? "");
             const d = decideSandboxNetworkAccess(input, entitled ? { live: true } : undefined, String(env.NO_PROXY ?? ""));
