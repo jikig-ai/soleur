@@ -262,11 +262,13 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
 
   it("server/agent-runner.ts reads the count through syncPull's return, else the one stored reader (task 11.3b, D41(e))", () => {
     const src = sources.get("server/agent-runner.ts") ?? "";
-    expect(src).toMatch(/const pull: SyncPullResult \| undefined = await syncPull\(userId, workspacePath, supabase\(\), activeWorkspaceId\)/);
-    expect(src).toMatch(/buildKbSyncHeldAgentLine\(\{\s*heldFiles: pull\?\.heldFiles \?\? null,\s*checkedAt: pull\?\.checkedAt \?\? null,/);
-    expect(src).toMatch(/buildKbSyncMergeBlockedAgentLine\(pull\?\.pullReason \?\? null, knownDefaultBranch\)/);
+    // simplicity F14 / quality P3-10: syncPull always resolves a SyncPullResult, so the result is not widened with `undefined`.
+    expect(src).toMatch(/const pull: SyncPullResult = await syncPull\(userId, workspacePath, supabase\(\), activeWorkspaceId\)/);
+    expect(src).not.toMatch(/SyncPullResult \| undefined|\bpull\?\./);
+    expect(src).toMatch(/buildKbSyncHeldAgentLine\(\{\s*heldFiles: pull\.heldFiles,\s*checkedAt: pull\.checkedAt,/);
+    expect(src).toMatch(/buildKbSyncMergeBlockedAgentLine\(pull\.pullReason, knownDefaultBranch\)/);
     // The fallback is keyed on the same active workspace and only when the fresh count is null.
-    expect(src).toMatch(/pull !== undefined && pull\.heldFiles == null \? await readLegacyStoredKbSyncHeld\(userId, activeWorkspaceId\)/);
+    expect(src).toMatch(/=\s*pull\.heldFiles == null \? await readLegacyStoredKbSyncHeld\(userId, activeWorkspaceId\)/);
     expect(src).toMatch(/readStoredKbSyncHeld\(tenant, \{ userId, workspaceId, runner: "legacy" \}\)/);
   });
 

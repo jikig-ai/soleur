@@ -1387,9 +1387,8 @@ async function startAgentSessionInner(
     // `workspacePath` above fixes, re-created one branch away.
     //
     // #12714 (task 11.3b, D29(4)): its result is this session's fresh held-files count and pull reason, the input of the
-    // agent lines appended below (this runner never reads the stored columns). `| undefined`: a void result (a mocked or
-    // older shape) gives no line.
-    const pull: SyncPullResult | undefined = await syncPull(userId, workspacePath, supabase(), activeWorkspaceId);
+    // agent lines appended below (the stored columns only as the D41(e) fallback when the fresh count is null).
+    const pull: SyncPullResult = await syncPull(userId, workspacePath, supabase(), activeWorkspaceId);
 
     // Create vision.md on first message if it doesn't exist (fire-and-forget).
     // Runs in startAgentSession (not sendUserMessage) to reuse the already-fetched
@@ -1850,7 +1849,7 @@ are the requirements to implement.`;
     // count failed), the stored columns are read instead, keyed on the same `activeWorkspaceId`, with their own `checked_at`.
     const route = platformToolNames.includes(GITHUB_PUSH_BRANCH_TOOL_FQN) ? "registered" : "not-registered";
     const stored: StoredKbSyncHeld | null =
-      pull !== undefined && pull.heldFiles == null ? await readLegacyStoredKbSyncHeld(userId, activeWorkspaceId) : null;
+      pull.heldFiles == null ? await readLegacyStoredKbSyncHeld(userId, activeWorkspaceId) : null;
     const heldLine = stored
       ? buildKbSyncHeldAgentLine({
           heldFiles: stored.heldFiles,
@@ -1859,23 +1858,23 @@ are the requirements to implement.`;
           runner: "legacy",
           defaultBranch: knownDefaultBranch,
         })
-      : buildKbSyncHeldAgentLine({ heldFiles: pull?.heldFiles ?? null, checkedAt: pull?.checkedAt ?? null,
+      : buildKbSyncHeldAgentLine({ heldFiles: pull.heldFiles, checkedAt: pull.checkedAt,
           route,
           runner: "legacy",
-          onRecovered: pull?.onRecovered ?? null,
+          onRecovered: pull.onRecovered,
           defaultBranch: knownDefaultBranch,
         });
     if (heldLine) systemPrompt += `\n\n${heldLine}`;
-    const mergeBlockedLine = buildKbSyncMergeBlockedAgentLine(pull?.pullReason ?? null, knownDefaultBranch);
+    const mergeBlockedLine = buildKbSyncMergeBlockedAgentLine(pull.pullReason, knownDefaultBranch);
     if (mergeBlockedLine) systemPrompt += `\n\n${mergeBlockedLine}`;
     if (heldLine || mergeBlockedLine) {
       // obs F12: which line was injected (bucket, route, reason, runner); never the count, a path or a branch.
       log.info(
         heldAgentLineLogFields({
           heldLine: heldLine !== null,
-          heldFiles: stored ? stored.heldFiles : (pull?.heldFiles ?? null),
+          heldFiles: stored ? stored.heldFiles : pull.heldFiles,
           route,
-          mergeBlocked: mergeBlockedLine ? kbSyncMergeBlockedReasonOf(pull?.pullReason ?? null) : null,
+          mergeBlocked: mergeBlockedLine ? kbSyncMergeBlockedReasonOf(pull.pullReason) : null,
           runner: "legacy",
         }),
         "kb-sync held agent line appended",

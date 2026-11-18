@@ -288,7 +288,6 @@ describe("legacy runner: held-files and merge-blocked agent lines (task 11.3b)",
     ["null", pullResult({ heldFiles: null, checkedAt: null })],
     ["0", pullResult({ heldFiles: 0, onRecovered: 0, checkedAt: CHECKED_AT })],
     ["a count without a time", pullResult({ heldFiles: 2, onRecovered: 0, checkedAt: null })],
-    ["a void syncPull (mocked or older shape)", undefined],
   ])("heldFiles %s: no held line", async (_label, result) => {
     mockSyncPull.mockResolvedValue(result);
     const prompt = await promptFor(CONNECTED);
