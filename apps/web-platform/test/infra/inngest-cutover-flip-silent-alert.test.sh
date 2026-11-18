@@ -18,26 +18,47 @@
 # read through the shared lexer tests/scripts/lib/hcl-effective-text.sh (the chokepoint
 # betterstack-alert-structure.test.sh uses; line count kept). strip_comments drops whole-line and `/* */`
 # comments and KEEPS trailing `#` / `//` comments; blank_heredocs then blanks heredoc bodies and closers.
-# Every anchor (the predicate opener, the four flip blocks, the replace() line, the runbook URL) and every
-# definition / consumer / name-literal / operator / header count reads that CODE view. The one exception is
-# the predicate's heredoc BODY, read RAW from its located opener: Terraform sends it whole (the lexer would
-# blank a `#` line inside it).
+# Every anchor (the predicate opener, the replace() line, the runbook URL) and every definition / consumer /
+# name-literal / operator / code-view header count reads that CODE view; the four flip blocks are cut from it
+# by the lib's depth-aware block_of. These read the RAW file instead: the predicate's heredoc BODY (Terraform
+# sends it whole; the lexer would blank a `#` line inside it), the subset rows S1-S5, the two-view rows
+# (RAW_P_N / RAW_C_N / RAW_R_N, RAW_HDR_N, the span row, the raw half of each pin row, the raw lifecycle
+# scan and the raw template ban) and the canary-host count CANARY_TF_N.
 #
-# CONTRACT. The lexer is not Terraform: it does not track `${ }` depth, so a quote or a comment opener inside
-# an interpolation (`"${"#"}"`, `"${"/*"}"`, `length("${"\""}") /*`) makes it read a heredoc body as code,
-# hide real code as a comment, or miss a comment Terraform has (rows R16-R20). Any such desync needs the line
-# Terraform reads and the decoy the guard reads to BOTH exist as text. So each pinned key (ALERT_PINS and the
-# exploration pins) must hold in the RAW text AND in the effective text, with exactly-one raw cardinality: one
-# raw line per SQL local and one replace() line, exactly 4 raw column-0 flip headers, raw and effective blocks
-# spanning the same lines (a column-0 `}` in a comment or a heredoc cannot cut the raw block short), exactly
-# one raw line per pinned key of each flip block (equal to its pin), no
-# count/for_each/lifecycle/ignore_changes/provider/dynamic in either view, and no `${`
-# / `%{` in the raw flip text but the two runbook-URL interpolations. A lexer desync then needs a duplicate
-# line, and the raw rows refuse it.
+# CONTRACT. The lexer is not Terraform (it does not track `${ }` depth, #12917; its heredoc marker is
+# `[A-Za-z_][A-Za-z0-9_]*` where HCL's may hold a `-`; its closer match is ASCII where Terraform trims
+# Unicode space), and three review rounds each found a construct it mis-models. So the guard does not chase
+# shapes: the alerts file must stay inside a SUBSET of HCL the lexer models exactly, file-wide, and any line
+# outside it reds (lead ruling R-subset, 2026-11-18):
+#   S1  no `/*` anywhere in the raw file, so there is no block comment for the two to disagree on;
+#   S2  every `${` / `%{` (and `$${` / `%%{`) closes on its own line, and its body holds no `"`, `#`, `/`,
+#       `<`, `{`, `}` or `\`, so an interpolation cannot move where a "string" or a comment starts;
+#   S3  every `<<` is in a whole-line `#` comment or on a canonical `key = <<-MARKER` opener line (marker
+#       `[A-Za-z_][A-Za-z0-9_]*`, nothing after it), and the four raw flip blocks hold no `<<` at all;
+#   S4  every line that starts with `resource` or `data` is the canonical `resource "type" "name" {` (no
+#       escaped, unquoted or commented label), so a header Terraform reads is one the header rows count;
+#   S5  a byte outside tab / 0x20-0x7e sits only on a whole-line `#` comment or a single-line
+#       `key = "..."` string, so no heredoc closer can be one Terraform's TrimSpace sees and the lexer does not.
+# Inside the subset strip_comments / blank_heredocs equal Terraform's reading (every comment, string and
+# heredoc boundary falls where Terraform puts it), so the two-view, cardinality and span rows grade what
+# Terraform evaluates. They stay as defense in depth: each pinned key (ALERT_PINS and the exploration pins)
+# must hold in the RAW text AND in the effective text, with exactly-one raw cardinality: one raw line per SQL
+# local and one replace() line, exactly 4 raw column-0 flip headers, raw and effective blocks spanning the same
+# lines (the raw block ends at its first column-0 `}`, the effective one at brace depth 0, so any early
+# column-0 `}` reds), exactly one raw line per pinned key of each flip block (equal to its pin), no
+# count/for_each/lifecycle/ignore_changes/provider/dynamic in either view, and no `${` / `%{` in the raw flip
+# text but the two runbook-URL interpolations.
+#
+# The other infra *.tf are not subset-checked, and need not be: HCL parses each file alone, so a comment or a
+# heredoc cannot span files and a desync in another file cannot change how the alerts file reads. What such a
+# desync could do is hide a second definition of a flip local or resource from this guard's other-file scan,
+# and Terraform refuses that ("Duplicate local value definition", "Duplicate resource ... configuration") unless
+# the file is an override file, which betterstack-alert-structure.test.sh row 12 refuses (row 13 refuses a
+# symlinked file). A desync that SHOWS the scan an extra definition or header only reds.
 #
 # RESIDUALS (not covered by this guard, each with its owner):
-#   * the shared lexer does not track `${ }` depth (#12917); the raw rows close its effect here only,
-#     not for the lexer's other consumers;
+#   * the shared lexer does not track `${ }` depth (#12917): the subset rows make that unreachable IN THIS
+#     FILE; the lexer's other consumers stay exposed (#12917);
 #   * symlinked, `*override.tf`, `*override.tf.json` and `*.tf.json` files:
 #     betterstack-alert-structure.test.sh rows 12-13 (this guard's other-file scan reads `*.tf` only,
 #     following symlinks);
@@ -158,7 +179,8 @@ for f in "$TF" "$WF" "$EM" "$RB" "$LQ" "$IV" "$BS"; do
 done
 
 # The shared HCL lexer, resolved from the REPO ROOT as its other consumers do (the lib's one home, never a copy
-# next to this suite): strip_comments drops all three HCL comment forms and keeps the line count.
+# next to this suite): strip_comments drops whole-line and `/* */` comments, keeps trailing `#` / `//` comments
+# and keeps the line count.
 HCL_LIB="$REPO/tests/scripts/lib/hcl-effective-text.sh"
 [ -f "$HCL_LIB" ] || { printf '[FATAL] shared HCL lexer not found at %s\n' "$HCL_LIB" >&2; exit 2; }
 # shellcheck source=../../../../tests/scripts/lib/hcl-effective-text.sh
@@ -166,7 +188,9 @@ HCL_LIB="$REPO/tests/scripts/lib/hcl-effective-text.sh"
 
 # The EFFECTIVE text of the alerts file (whole-line and `/* */` comments gone, trailing comments kept, line
 # count kept), and its CODE view (heredoc bodies and closers blanked too), which every anchor and every count
-# below reads.
+# below reads but the RAW ones the header lists (the predicate body, the subset rows S1-S5, RAW_P_N / RAW_C_N /
+# RAW_R_N, RAW_HDR_N, the span row, the raw halves of the pin rows, the lifecycle scan and the template ban, and
+# CANARY_TF_N).
 TF_EFF="$(strip_comments "$TF")"
 [ -n "$TF_EFF" ] || { printf '[FATAL] strip_comments produced no text for %s\n' "$TF" >&2; exit 2; }
 TF_CODE="$(blank_heredocs <<< "$TF_EFF")"
@@ -180,12 +204,16 @@ LOCAL_SQL=""
 # parenthesis pair (the resource collapses it the same way). LC_ALL=C: [[:space:]] is then ASCII only, as RE2's `\s`.
 SQL_1="$(tr '\n' ' ' <<< "$LOCAL_SQL" | LC_ALL=C sed 's/[[:space:]][[:space:]]*/ /g; s/( /(/g; s/ )/)/g; s/^ //; s/ $//')"
 # The four flip blocks in the CODE view (none of them holds a heredoc, so on the pristine tree this is the
-# effective text), each from its column-0 header to its first column-0 `}`.
-ALERT="$(awk '/^resource "logtail_exploration_alert" "inngest_cutover_flip_silent" \{/{f=1} f{print} f&&/^\}/{exit}' <<< "$TF_CODE")"
-EXPL="$(awk '/^resource "logtail_exploration" "inngest_cutover_flip_silent" \{/{f=1} f{print} f&&/^\}/{exit}' <<< "$TF_CODE")"
-CANARY_ALERT="$(awk '/^resource "logtail_exploration_alert" "inngest_cutover_flip_silent_canary" \{/{f=1} f{print} f&&/^\}/{exit}' <<< "$TF_CODE")"
-CANARY_EXPL="$(awk '/^resource "logtail_exploration" "inngest_cutover_flip_silent_canary" \{/{f=1} f{print} f&&/^\}/{exit}' <<< "$TF_CODE")"
+# effective text), each cut by BRACE DEPTH with the lib's block_of, as every other lib consumer cuts a block
+# (betterstack-alert-structure.test.sh block_text): a column-0 `}` in real code then ends nothing early here,
+# so the span row below sees the raw block stop short of it.
+eff_blk() { block_of "$TF" "$1" "$2" | blank_heredocs; }
+ALERT="$(eff_blk logtail_exploration_alert inngest_cutover_flip_silent)"
+EXPL="$(eff_blk logtail_exploration inngest_cutover_flip_silent)"
+CANARY_ALERT="$(eff_blk logtail_exploration_alert inngest_cutover_flip_silent_canary)"
+CANARY_EXPL="$(eff_blk logtail_exploration inngest_cutover_flip_silent_canary)"
 # The same four blocks and the two SQL locals in the RAW file, for the two-view rows (the header's CONTRACT).
+# raw_blk stays lexer-free on purpose: it ends at the first column-0 `}`, whatever that `}` is.
 raw_blk() { awk -v h="$1" 'index($0, h) == 1 {f=1} f{print} f&&/^\}/{exit}' "$TF"; }
 ALERT_RAW="$(raw_blk 'resource "logtail_exploration_alert" "inngest_cutover_flip_silent" {')"
 EXPL_RAW="$(raw_blk 'resource "logtail_exploration" "inngest_cutover_flip_silent" {')"
@@ -235,6 +263,38 @@ if [ -n "$LOCAL_SQL" ] && [ -z "$_nonascii" ]; then
 else
   no "a byte outside plain ASCII (tab, newline, 0x20-0x7e) sits in the flip predicate or a flip resource block (${_nonascii# }) — Terraform's RE2 \\s does not collapse it, so it would ship raw in sql_query"
 fi
+
+# ── the HCL subset (lead ruling R-subset, 2026-11-18; the header's CONTRACT) ─────────────────────────────
+# Five rows over the WHOLE raw alerts file, every byte-class match under LC_ALL=C. Inside S1-S5 the lexer's comment,
+# string and heredoc boundaries are Terraform's, so every effective-view row below grades what Terraform evaluates.
+# lines_of: stdin `N:text` (grep -n) -> "COUNT, at line(s) N N ...", at most 8 line numbers; empty when stdin is empty.
+lines_of() { awk -F: '{ n++; if (n <= 8) l = l " " $1 } END { if (n) printf "%d, at line%s%s%s", n, (n > 1 ? "s" : ""), l, (n > 8 ? " ..." : "") }'; }
+S1_BAD="$(LC_ALL=C grep -nF '/*' "$TF" | lines_of)"
+[ -z "$S1_BAD" ] \
+  && ok "subset S1: no /* anywhere in the raw alerts file (no block comment for the lexer and Terraform to disagree on)" \
+  || no "subset S1: the raw alerts file holds a /* (${S1_BAD}) — a block comment the lexer opens or misses can hide real code from Terraform or from this guard"
+# S2: strip every well-formed one-line interpolation, then any `${` / `%{` left is one that spans a line or whose body
+# holds a quote, a comment opener, a heredoc opener, a nested brace or an escape.
+S2_N="$(LC_ALL=C grep -cE '[$%]\{' "$TF")"
+S2_BAD="$(LC_ALL=C sed -E 's/[$%]\{[^"#/<{}\\]*\}//g' "$TF" | LC_ALL=C grep -nE '[$%]\{' | lines_of)"
+[ -z "$S2_BAD" ] \
+  && ok "subset S2: each of the ${S2_N} interpolation lines closes every \${ / %{ on its own line with no quote, #, /, <, brace or backslash in its body" \
+  || no "subset S2: a \${ or %{ does not close on its own line or carries a quote, #, /, <, brace or backslash in its body (${S2_BAD}) — the lexer does not track \${ } depth (#12917), so it can end a string or open a comment Terraform does not"
+S3_OPEN_RE='^[0-9]+:[[:space:]]*[a-z0-9_]+[[:space:]]*=[[:space:]]*<<-?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$'
+S3_BAD="$(LC_ALL=C grep -n '<<' "$TF" | LC_ALL=C grep -vE '^[0-9]+:[[:space:]]*#' | LC_ALL=C grep -vE "$S3_OPEN_RE" | lines_of)"
+S3_FLIP=""
+for _b in ALERT_RAW EXPL_RAW CANARY_ALERT_RAW CANARY_EXPL_RAW; do has '<<' "${!_b}" && S3_FLIP+=" ${_b}"; done
+[ -z "$S3_BAD" ] && [ -z "$S3_FLIP" ] \
+  && ok "subset S3: every << is in a whole-line # comment or on a canonical 'key = <<-MARKER' opener line, and no raw flip block holds a <<" \
+  || no "subset S3: a << is neither in a whole-line # comment nor a canonical 'key = <<-MARKER' opener line (${S3_BAD:-none}), or sits in a raw flip block (${S3_FLIP# }) — a heredoc the lexer does not see (a marker with a -, an opener after a call or a comma) is code to this guard and a string to Terraform"
+S4_BAD="$(LC_ALL=C grep -nE '^[[:space:]]*(resource|data)([^A-Za-z0-9_-]|$)' "$TF" | LC_ALL=C grep -vE '^[0-9]+:(resource|data) "[a-z0-9_]+" "[a-z0-9_]+" \{$' | lines_of)"
+[ -z "$S4_BAD" ] \
+  && ok "subset S4: every resource / data line is the canonical column-0 'resource \"type\" \"name\" {' form" \
+  || no "subset S4: a resource / data line is not the canonical column-0 'resource \"type\" \"name\" {' form (${S4_BAD}) — an escaped, unquoted or commented label is the same Terraform address but no header row counts it"
+S5_BAD="$(LC_ALL=C grep -n $'[^\t -~]' "$TF" | LC_ALL=C grep -vE '^[0-9]+:[[:space:]]*#' | LC_ALL=C grep -vE '^[0-9]+:[[:space:]]*[a-z0-9_]+[[:space:]]*=[[:space:]]*".*"[[:space:]]*$' | lines_of)"
+[ -z "$S5_BAD" ] \
+  && ok "subset S5: every byte outside tab / 0x20-0x7e sits on a whole-line # comment or a single-line key = \"...\" string" \
+  || no "subset S5: a byte outside tab / 0x20-0x7e sits on a line that is neither a whole-line # comment nor a single-line key = \"...\" string (${S5_BAD}) — Terraform trims Unicode space around a heredoc closer (bytes.TrimSpace) and the lexer does not, so a U+00A0 closer ends a heredoc for one of them only"
 
 # ── the emitter: the tag and the cadence are READ, not retyped ────────────────────────────────
 EMIT_TAG="$(sed -n 's/^readonly LOG_TAG="\([^"]*\)".*/\1/p' "$EM" | head -1)"
@@ -552,8 +612,9 @@ RAW_HDR_N="$(grep -cE '^resource "logtail_exploration(_alert)?" "inngest_cutover
   && ok "the raw alerts file holds exactly 4 column-0 flip resource headers (as the effective count does)" \
   || no "the raw alerts file does not hold exactly 4 column-0 flip resource headers (got ${RAW_HDR_N}; the canary retirement PR (tracker #12878) moves it to 2) — a copy Terraform never evaluates can stand in for a real block"
 # The raw and the effective block must span the SAME lines (both views keep the line count, and both start at
-# the one column-0 header the row above admits). A column-0 `}` inside a `/* */` comment or a heredoc body ends
-# the raw block early; without this row every line below it would be graded by the effective view alone.
+# the one column-0 header the row above admits). The raw block ends at its first column-0 `}` and the effective
+# one at brace depth 0 (block_of), so a column-0 `}` before the real closer, in a `/* */` comment, a heredoc body
+# or real code, ends the raw block early; without this row every line below it would be graded by one view alone.
 SPAN_BAD=""
 for _b in ALERT EXPL CANARY_ALERT CANARY_EXPL; do
   _r="${_b}_RAW"
@@ -561,7 +622,7 @@ for _b in ALERT EXPL CANARY_ALERT CANARY_EXPL; do
 done
 [ -z "$SPAN_BAD" ] \
   && ok "the raw and the effective text of each of the four flip blocks span the same lines" \
-  || no "the raw and the effective text of a flip block span different lines (${SPAN_BAD# }) — a column-0 } inside a comment or a heredoc cuts the raw block short, so the lines below it escape the raw rows"
+  || no "the raw and the effective text of a flip block span different lines (${SPAN_BAD# }) — a column-0 } before the real closer (in a comment, a heredoc or real code) cuts the raw block short, so the lines below it escape the raw rows"
 # pin_bad TEXT KEY ERE [KEY ERE ...] -> the keys that are not EXACTLY ONE `KEY =` line (any indent) whose
 # value matches ERE, an optional trailing `#` / `//` comment allowed. Pure bash, one mapfile, no fork per key.
 pin_bad() {
@@ -703,8 +764,8 @@ fi
 # OUTER RUN ONLY. Each row copies ONE source file into $MUT_DIR, mutates the copy, and re-runs this
 # guard with MUT_SKIP=1 and the matching FLIPSILENT_GUARD_* override pointing at the copy.
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
-PRESENCE_ROWS=64
-MUT_ROWS_EXPECTED=76
+PRESENCE_ROWS=69
+MUT_ROWS_EXPECTED=82
 SELFTEST_ROWS=1
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t flipsilentalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
@@ -764,6 +825,10 @@ def sql_span(s):
     return i, s.index("\n  SQL\n", i) + len("\n  SQL\n")
 # The canary derivation line exactly as the guard pins it (rows M6-M8b mutate it).
 CANARY_LINE = "  inngest_cutover_flip_silent_canary_sql = replace(local.inngest_cutover_flip_silent_sql, \"'soleur-inngest-prd'\", \"'soleur-inngest-canary-absent'\")"
+# The runbook line of each flip alert's metadata map plus the map's closer (rows R16, R17, R23 and R26 anchor on it).
+RBL = "    runbook = local.inngest_cutover_flip_silent_runbook_url\n  }\n"
+# The closing lines of each flip alert: the escalation_target's team_name, its closer and the resource closer.
+ESC_END = "    team_name = var.betterstack_paid_tier ? null : \"Your team\"\n  }\n}\n"
 exec(os.environ["MUT_PROG"])
 assert s != orig, "mutation produced no change"
 open(p, 'w', encoding="utf-8").write(s)
@@ -1207,6 +1272,50 @@ for lab in ("inngest_cutover_flip_silent", "inngest_cutover_flip_silent_canary")
     b = s[i:j]
     assert b.count(VAL) == 1 and b.count(RBL) == 1, lab
     s = s[:i] + b.replace(VAL, "").replace(RBL, CUT + NEW) + s[j:]'
+  # ── review round 3 (#12726, lead ruling R-subset): each of R24-R29 SURVIVED the 9f52edd540 guard (64/64 green on
+  # the mutated copy) and now reds for the subset row or the depth-aware block cut it names.
+  mutate RED "R24 a length() whose interpolation holds an escaped quote ends in /* in a locals block OUTSIDE the flip text, and a # */ after the production alert closes it: Terraform reads no production alert, the lexer reads it whole" TF \
+    "subset S1: the raw alerts file holds a /*" \
+    'H = "resource \"logtail_exploration_alert\" \"inngest_cutover_flip_silent\" {\n"
+assert s.count(H) == 1
+i = s.index(H)
+s = s[:i] + "locals {\n  zz_note = length(\"${\"\\\"\"}\") /*\n}\n\n" + s[i:]
+i, j = blk(s, "logtail_exploration_alert", "inngest_cutover_flip_silent")
+s = s[:j] + "# */\n}\n" + s[j:]'
+  mutate RED "R25 the same escaped-quote /* hides the real replace() line from Terraform while an interpolated /* hides a one-line locals { canary_sql = production local } from the lexer (the canary runs production's query)" TF \
+    "subset S2: a \${ or %{ does not close on its own line or carries a quote" \
+    'assert s.count(CANARY_LINE + "\n") == 1
+s = s.replace(CANARY_LINE + "\n", "  zz_note = length(\"${\"\\\"\"}\") /*\n" + CANARY_LINE + "\n  # */\n")
+H = "resource \"logtail_exploration\" \"inngest_cutover_flip_silent\" {\n"
+assert s.count(H) == 1
+i = s.index(H)
+s = s[:i] + "locals {\n  zz_hide = \"${\"/*\"}\"\n}\nlocals { inngest_cutover_flip_silent_canary_sql = local.inngest_cutover_flip_silent_sql }\n# */\n\n" + s[i:]'
+  mutate RED "R26 a <<-EO-T heredoc (HCL allows a - in the marker; the lexer does not) holds a decoy value = 0 and a column-0 } at the end of each alert, with the real value = 1 after it, mirrored (neither can page)" TF \
+    "subset S3: a << is neither in a whole-line # comment nor a canonical" \
+    'VAL = "  value               = 0\n"
+META = "  metadata = {\n" + RBL + "\n"
+for lab in FLIP_ALERTS:
+    i, j = blk(s, "logtail_exploration_alert", lab)
+    b = s[i:j]
+    assert b.count(VAL) == 1 and b.count(META) == 1 and b.endswith("\n}\n"), lab
+    b = b.replace(VAL, "").replace(META, "")
+    b = b[:-2] + "\n  metadata = {\n    runbook = local.inngest_cutover_flip_silent_runbook_url\n    note    = <<-EO-T\n  value               = 0\n}\nEO-T\n  }\n  value = 1\n}\n"
+    s = s[:i] + b + s[j:]'
+  mutate RED "R27 R20 (an interpolated-# heredoc shows a pristine production alert, an interpolated /* hides the real re-paused one) with the real header label escaped (silen\\u0074: the same Terraform address, no header row counts it)" TF \
+    "subset S4: a resource / data line is not the canonical column-0" \
+    'i, j = blk(s, "logtail_exploration_alert", "inngest_cutover_flip_silent")
+decoy = "locals {\n  flip_note = join(\"${\"#\"}\", [<<-EOT\n" + s[i:j] + "  EOT\n  ])\n}\n\nlocals {\n  flip_hide = {\n    note = \"${\"/*\"}\"\n  }\n}\n\n"
+s = blk_set(s, "logtail_exploration_alert", "inngest_cutover_flip_silent", "paused", "  paused = true")
+i, j = blk(s, "logtail_exploration_alert", "inngest_cutover_flip_silent")
+b = s[i:j].replace("\"inngest_cutover_flip_silent\" {", "\"inngest_cutover_flip_silen\\u0074\" {", 1)
+s = s[:i] + decoy + b + "# */\n" + s[j:]'
+  mutate RED "R28 each alert's escalation_target closes at column 0 and count = 0 follows before the real closer, mirrored (both views used to stop at that }, so neither alert would exist)" TF \
+    "a flip resource block carries count/for_each/lifecycle/ignore_changes/provider/dynamic" \
+    'for lab in FLIP_ALERTS:
+    s = blk_sub(s, "logtail_exploration_alert", lab, ESC_END, ESC_END.replace("\n  }\n}\n", "\n}\n  count = 0\n}\n"))'
+  mutate RED "R29 a U+00A0 heredoc closer (Terraform trims it, the lexer does not) hides from every code-view count a fifth flip alert that carries the canary name" TF \
+    "subset S5: a byte outside tab / 0x20-0x7e sits on a line" \
+    's = s + "\nlocals {\n  flip_doc = <<-EOT\n EOT\n}\n\nresource \"logtail_exploration_alert\" \"inngest_cutover_flip_silent_shadow\" {\n  name = \"soleur-inngest-cutover-flip-silent-canary-prd\"\n}\n\nlocals {\n  flip_doc2 = <<-ZZZ\nEOT\nZZZ\n}\n"'
 fi
 
 if [ -z "${MUT_SKIP:-}" ] && [ "${MUT_ROWS_RUN:-0}" -ne "$MUT_ROWS_EXPECTED" ]; then
