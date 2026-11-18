@@ -71,6 +71,10 @@ The host key does not rotate on a replace (ADR-327 addendum). Rotate it only for
 
 The birth gate refuses any change to the key, so rotation cannot ride this route. The rotation act belongs to the replace route (#12879), which defines it; until 2b merges, a rotation trigger is an owner escalation. From step 3 on, every dialer's pin moves in the same change as the key. Record the trigger on #12879.
 
+## Per-merge `host_creates` HALT
+
+If the per-merge apply ever HALTs on `hcloud_server.bastion`, the remediation is this page's birth route (`apply_target=bastion-host-create`, `confirm=BIRTH-bastion`, `plan_only=true` first), never a full apply. Its gate admits only the `bastion-resources.txt` addresses. If the bastion already exists and is not ready, the recovery is `bastion-host-replace` (#12879), never a second create.
+
 ## Break-glass full apply
 
 If the operator-local full apply is ever used, abort it if the plan creates, replaces or deletes any address in `bastion-resources.txt`, `tls_private_key.bastion_host_ssh` included. The per-merge `host_creates` HALT message carries the same clause.
