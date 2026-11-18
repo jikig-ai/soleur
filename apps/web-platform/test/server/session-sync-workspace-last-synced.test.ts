@@ -164,7 +164,7 @@ const ISO_DIR = { gitDir: "/tmp/iso", dispose: () => {} };
  * remote read (held exits and throws included). `hook: false` is an exit before the remote read (no dir, no tip). */
 function publishWith(outcome: { result?: unknown; throws?: unknown; hook?: boolean }) {
   return async (input: KbPublishInput) => {
-    if (outcome.hook !== false) await input.onHeldFiles?.({ isolatedDir: ISO_DIR as never, T: T_SHA, headSha: input.headSha });
+    if (outcome.hook !== false) await input.onHeldFiles?.({ isolatedDir: ISO_DIR as never, T: T_SHA, headSha: input.headSha, readAt: new Date() });
     if (outcome.throws !== undefined) throw outcome.throws;
     return outcome.result;
   };

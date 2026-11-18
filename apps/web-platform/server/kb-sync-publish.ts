@@ -365,11 +365,15 @@ export type KbPublishResult =
   /** `pushErr` is null when no push ran this turn (the `side_pending` PR re-check, D17). */
   | { readonly kind: "fallback_failed"; readonly fallbackReason: KbFallbackReason; readonly pushErr: KbSyncError | null };
 
-/** What `onHeldFiles` receives: the turn's isolated directory (still live), the remote tip and the frozen HEAD. */
+/**
+ * What `onHeldFiles` receives: the turn's isolated directory (still live), the remote tip, the frozen HEAD, and when this
+ * turn's `ls-remote` returned that tip (D39(b): the held count's `checked_at`, written even when the count is null).
+ */
 export interface KbHeldFilesProbe {
   readonly isolatedDir: IsolatedPushDirHandle;
   readonly T: string;
   readonly headSha: string;
+  readonly readAt: Date;
 }
 
 export interface KbPublishInput extends KbSyncContext {
@@ -586,7 +590,7 @@ async function runSideFallback(f: SideFallbackInput): Promise<KbPublishResult> {
 export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishResult> {
   const { headSha, installationId, writer } = input;
   let isolated: IsolatedPushDirHandle | undefined;
-  let tipRead: string | undefined;
+  let tipRead: { readonly tip: string; readonly readAt: Date } | undefined;
   try {
     const { url, owner, repo } = await resolveRepoUrl(input.userId, input.workspaceId).catch((err: unknown) => {
       throw asKbError(err);
@@ -598,7 +602,7 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
     }
     const remote = await readRemoteState(isolated, installationId, url);
     if (!remote) throw new KbHeld("remote_branch_absent");
-    tipRead = remote.tip;
+    tipRead = { tip: remote.tip, readAt: remote.readAt };
     const D = remote.defaultBranch;
     if (input.refName !== `refs/heads/${D}`) throw new KbHeld("non_default_branch");
     const T = remote.tip;
@@ -673,7 +677,7 @@ export async function publishKbOnly(input: KbPublishInput): Promise<KbPublishRes
   } finally {
     if (isolated && tipRead !== undefined && input.onHeldFiles) {
       try {
-        await input.onHeldFiles({ isolatedDir: isolated, T: tipRead, headSha });
+        await input.onHeldFiles({ isolatedDir: isolated, T: tipRead.tip, headSha, readAt: tipRead.readAt });
       } catch {
         // The hook owns its own reporting (#12714); the turn's result never changes.
       }
