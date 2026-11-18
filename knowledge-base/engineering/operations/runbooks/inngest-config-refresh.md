@@ -128,7 +128,7 @@ update the host verify identity regexp to the config-bundle workflow. There is n
 **Static-key fallback residual (Option B, ADR-135):** if the host offline `verify-blob` proves
 impractical at the cutover Phase-0 probe and the static-key fallback is adopted instead, note that
 static keys have no revocation — a leaked signing key requires an emergency host replace
-(`gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f confirm=PUBLIC-SDK-URL -f reason=<why>`; the token is the typed-confirm gate in [inngest-server.md](inngest-server.md), read #12742 first)
+(`gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason=<why>`; the job runs the strict-SSL preflight in [inngest-server.md](inngest-server.md) first, read #12742 first)
 with a freshly baked public key. That residual does not apply to the chosen keyless path.
 
 ## Failure modes → where they surface (all off-box)

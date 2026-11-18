@@ -2184,7 +2184,7 @@ window.
 | #10541 | keep `INNGEST_TLS_KEY` out of the `inngest-server` process environment (`--only-secrets` or a split config) |
 | #10542 | Stripe `invoice.payment_failed` swallows an Inngest send failure (P1; closed 2026-10-20) |
 | #10543 | the dashboard send archives the draft on a failed enqueue |
-| #10544 | `inngest-host-replace` has no id-pin input (a typed confirm, `PUBLIC-SDK-URL`, landed with #10538 in PR #12737; it is a typo-guard, not an id-pin) |
+| #10544 | `inngest-host-replace` has no id-pin input (a typed confirm landed with #10538 in PR #12737 and was replaced by #12742's strict-SSL preflight; neither is an id-pin) |
 | #10545 | the Inngest host's nft loader is not idempotent |
 | #10556 | a Sentry alert rule for `op=inngest-link` events (`https_to_http`, `scope_unverified`, `canary_failed`, `selfgate_failed`) |
 | #10557 | no no-SSH repair path for a non-empty or root-owned `/mnt/data/inngest-link` on a web host |
@@ -2709,23 +2709,30 @@ polling `http://10.0.1.10:3000/api/inngest` until the owner's `inngest-host-repl
 
    > **Superseded 2026-11-17 (#12742), as to precondition 4:** superseded by the owner's 2026-11-17 renewal before expiry (CLO ruling 2026-11-17), not discharged: nobody typed the record, and it is no longer required for a replace before 2026-12-10. After 2026-12-10 no record of any kind extends ledger row 6; the replace, its measurements and the PR that converts ledger row 6 must land before 2026-12-11T00:00Z.
 
-**Typed-confirm gate (CTO rulings D2, 2026-11-13, and fix-round F1, 2026-11-15).** Until #12742 item 1 merges, the step
-right after checkout in the `inngest_host_replace` job of `.github/workflows/apply-web-platform-infra.yml` (before any
-credential loads) fails unless the dispatch carries `-f confirm=PUBLIC-SDK-URL`. The `inngest_host` birth job (the
-"server absent" recovery row) needs `-f confirm=PUBLIC-SDK-URL-BIRTH`, because a birth boots the same public sdk_url.
-Both run `tests/scripts/lib/inngest-public-sdk-url-confirm.sh`. A third path has no gate: a local, untargeted
+**Strict-SSL preflight (#12742 item 1; CTO rulings 4, 6 and 10, 2026-11-17).** Both jobs that boot `hcloud_server.inngest`
+from the public-sdk_url user_data, `inngest_host_replace` and the `inngest_host` birth job (the "server absent" recovery
+row), run `tests/scripts/lib/inngest-public-sdk-url-preflight.sh` as the step immediately after `Load infra credentials
+(tiered)` and before `Terraform init`: unconditional and fail-closed, so no terraform step runs unless a LIVE read of the
+Cloudflare config-settings entrypoint shows the last enabled `app.soleur.ai` ssl rule as `strict` with no `off`,
+`flexible` or unknown-mode rule after it. A refusal prints `::error::[<tag>] public sdk_url boot refused (#12742)`.
+It replaced the typed confirm token of #10538 (PR #12737), so neither dispatch takes `-f confirm=` any more; the old
+step's "before any credential loads" property is gone by design, because a live read needs the credential. The
+preflight is not the go. A third path has no gate: a local, untargeted
 `terraform apply` (the OPERATOR_APPLIED_EXCLUSIONS break-glass) plans a replace of `hcloud_server.inngest` because its
-user_data changed; while #12742 is open, abort such an apply (or `-target` around the Inngest host) if its plan replaces it. The confirm is a typo-guard, not the go; its error points
-to #12742. The three risks every public-sdk_url boot carries until then: a stale non-zero registry the registry-empty
+user_data changed; while #12742 is open, abort such an apply (or `-target` around the Inngest host) if its plan replaces it. 
+The three risks every public-sdk_url boot carries until then: a stale non-zero registry the registry-empty
 alert cannot see, the #7228 first-sync double-fire, and a stale private-URL app row that keeps the plaintext poll alive.
 They apply to an emergency replace or birth too, not only the owner's planned window: after any such boot, read the
 first post-boot run of each cron function for a duplicate (two runs inside one schedule slot) before declaring recovery.
-The #12742 item-1 PR replaces the script with a fail-closed live-mode preflight (it is never deleted bare).
+Since probe_schema=10 the first risk (a stale non-zero registry hiding a failing poll) is visible as `sdk_sync=error`
+next to `registry_fns` in the same `SOLEUR_INNGEST_SERVER_PROBE` row.
 
 **Precondition re-read at dispatch time (CTO fix-round F2).** Precondition 1 is a fresh reading, not the historical one:
 within 30 minutes before the dispatch, run `plugins/soleur/scripts/cloudflare-readonly.sh config-entrypoint` and confirm
 the last rule matching `app.soleur.ai` is the adopted rule with `ssl = strict`. A dashboard break-glass to `flexible`
-leaves the repo `strict` and every guard green, so only this read can see it.
+leaves the repo `strict` and every guard green, so only this read can see it. Since #12742 item 1 the job's preflight makes the same read
+itself at dispatch time and refuses on anything but strict; this manual read stays the owner's check before requesting the
+environment approval.
 
 **Post-replace checks, read-only:**
 

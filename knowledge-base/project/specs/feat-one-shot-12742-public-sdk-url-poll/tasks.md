@@ -4,7 +4,7 @@ Plan: `knowledge-base/project/plans/2026-11-17-feat-inngest-sdk-url-sync-evidenc
 
 ## Phase 1 — probe sync evidence + F4(ii) + schema 10
 
-- [ ] T1. `apps/web-platform/infra/inngest-bootstrap.sh`:
+- [x] T1. `apps/web-platform/infra/inngest-bootstrap.sh`:
   - add `readonly SDK_SYNC_GQL_QUERY='query SdkSyncProbe { apps { url error } }'` beside
     `FUNCTIONS_GQL_QUERY` (~L650; verify exact GQL field names against the pinned Inngest version —
     a wrong name must fail to `__UNREADABLE__`, not silently).
@@ -21,7 +21,7 @@ Plan: `knowledge-base/project/plans/2026-11-17-feat-inngest-sdk-url-sync-evidenc
     (L1335) and the vector-down phone-home detail (L1366), same order.
   - refresh the stale `co-located web-platform` carrier comment (#12742 item 9 trigger; see
     decision-challenges row).
-- [ ] T2. `tests/scripts/lib/inngest-host-dark-gate.sh` L128: `_IHDG_EXPECTED_SCHEMA="9"` → `"10"`;
+- [x] T2. `tests/scripts/lib/inngest-host-dark-gate.sh` L128: `_IHDG_EXPECTED_SCHEMA="9"` → `"10"`;
   update the `stale_schema` comment if it hardcodes "9".
   - T2a. Add a `#12742` comment at the `stale_schema`→`refusal` arm in
     `scripts/inngest-gate-witness-classify.sh` (~L60) recording the deliberate choice — CTO ruled
@@ -30,28 +30,28 @@ Plan: `knowledge-base/project/plans/2026-11-17-feat-inngest-sdk-url-sync-evidenc
     alive/not-dark mapping is added (it would forgive a stuck replace past the 2026-11-20 ledger
     expiry). `cutover-inngest.sh` L1105 wants the refusal (designed-for). `infra-validation.yml`
     L205 is presence-only.
-- [ ] T3. `scripts/followthroughs/inngest-luks-field-8525.sh` (~L104-110): accept `probe_schema` 9
+- [x] T3. `scripts/followthroughs/inngest-luks-field-8525.sh` (~L104-110): accept `probe_schema` 9
   or 10 (`>=9` semantics preserved: a schema-10 row must not read TRANSIENT/not_schema9).
-- [ ] T4. `apps/web-platform/infra/inngest.test.sh` (~L1365+): `PROBE_7695_FIELDS` +=
+- [x] T4. `apps/web-platform/infra/inngest.test.sh` (~L1365+): `PROBE_7695_FIELDS` +=
   `sdk_sync sdk_app_url`; add both to `PROBE_7695_NEVER_ZERO` (no `0` is meaningful for either);
   `probe_schema=9( |$)` assert → `10`; stub the `apps` GQL response per arm — dedicated serving:
   `ok` + URL; `apps[].error` non-empty arm: `sdk_sync=error` with `registry_fns>0` (the stale-registry
   discriminator); empty array: `no_apps`; GQL down: `__UNREADABLE__`; web arm: `n/a`.
-- [ ] T5. `apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh`:
+- [x] T5. `apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh`:
   - presence row: both sanitize applications exist on the `image_ref`/`cli_version` binds in BOOT.
   - `mutate_red` BOOT row: remove one sanitize call → presence row reds.
   - rendered-line row: substitute a hostile value containing ` registry_fns=5 ` through the sanitize
     pipeline extracted from BOOT; assert `_fires` still true on `registry_fns=0` for EMIT and PH.
   - bump `PRESENCE_ROWS`/`MUT_ROWS` (L674-675) for each added row; re-render assertions pick up the
     appended fields.
-- [ ] T6. `scripts/inngest-probe-heartbeat-feeder.test.sh`: fixtures `probe_schema=9` → `10` where
+- [x] T6. `scripts/inngest-probe-heartbeat-feeder.test.sh`: fixtures `probe_schema=9` → `10` where
   they model the current emitter.
-- [ ] T7. Sweep `grep -rn 'probe_schema' apps/ scripts/ tests/ plugins/ .github/` — update only live
+- [x] T7. Sweep `grep -rn 'probe_schema' apps/ scripts/ tests/ plugins/ .github/` — update only live
   pins (asserts/expects); leave historical comments describing past schemas.
 
 ## Phase 2 — live-mode preflight replaces typed confirm
 
-- [ ] T8. Write `tests/scripts/lib/inngest-public-sdk-url-preflight.sh` (fail-closed):
+- [x] T8. Write `tests/scripts/lib/inngest-public-sdk-url-preflight.sh` (fail-closed):
   - default mode: `doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh
     config-entrypoint`, capture stdout+rc (requires `DOPPLER_TOKEN` in env; missing → refuse).
   - `--from-file <path>` test seam: read a captured projection file instead of calling doppler.
@@ -62,7 +62,7 @@ Plan: `knowledge-base/project/plans/2026-11-17-feat-inngest-sdk-url-sync-evidenc
   - refuse rc=1 with distinct `::error::` messages: no token / doppler rc / `unverified` / malformed
     JSON / no matching rule / all matches disabled / last match `ssl!=strict` / trailing rule
     `ssl ∈ {off, flexible}` / ambiguous shape. Never echo the token or the raw API body.
-- [ ] T9. `.github/workflows/apply-web-platform-infra.yml` (byte budget: 489,995 / 490,000):
+- [x] T9. `.github/workflows/apply-web-platform-infra.yml` (byte budget: 489,995 / 490,000):
   - `inngest_host` (~L1719) and `inngest_host_replace` (~L1902): delete the
     `Validate dispatch inputs … confirm token` step; insert after `Load infra credentials (tiered)`
     and before the first terraform step:
@@ -72,7 +72,7 @@ Plan: `knowledge-base/project/plans/2026-11-17-feat-inngest-sdk-url-sync-evidenc
   - remove the `hcloud_server.inngest` `PUBLIC-SDK-URL` error line.
   - do NOT touch `inputs.confirm` (L51) or its ~10 other consumers.
   - verify `wc -c` ≤ 490,000 after edits.
-- [ ] T10. `plugins/soleur/test/terraform-target-parity.test.ts` (~L5186-5305): replace the four
+- [x] T10. `plugins/soleur/test/terraform-target-parity.test.ts` (~L5186-5305): replace the four
   B10 tests —
   - per-job preflight step shape: unconditional, positioned after `Load infra credentials` and
     before first terraform step, `env.DOPPLER_TOKEN` present, `run` is the preflight script, no
@@ -85,9 +85,9 @@ Plan: `knowledge-base/project/plans/2026-11-17-feat-inngest-sdk-url-sync-evidenc
     no-match, `unverified`, malformed JSON, missing file, strict-then-trailing-flexible → 1 with the
     right `::error::` arm (the trailing-flexible arm is the CTO-strengthened predicate).
   - keep G2f and all unrelated pins; check the L113 `349 -> 353` count comment for drift.
-- [ ] T11. Delete `tests/scripts/lib/inngest-public-sdk-url-confirm.sh`; repoint
+- [x] T11. Delete `tests/scripts/lib/inngest-public-sdk-url-confirm.sh`; repoint
   `.github/CODEOWNERS` L48 to the new script.
-- [ ] T12. Remove `PUBLIC-SDK-URL`/`PUBLIC-SDK-URL-BIRTH` from every live carrier (B10 sweep + grep):
+- [x] T12. Remove `PUBLIC-SDK-URL`/`PUBLIC-SDK-URL-BIRTH` from every live carrier (B10 sweep + grep):
   `scripts/cutover-inngest.sh` (3 recovery lines),
   `scripts/followthroughs/inngest-private-nic-8539.sh`,
   `knowledge-base/engineering/operations/runbooks/inngest-config-refresh.md`,
@@ -102,7 +102,7 @@ Plan: `knowledge-base/project/plans/2026-11-17-feat-inngest-sdk-url-sync-evidenc
   `Load infra credentials (tiered)`, before `Terraform init`, unconditional, fail-closed" — the
   old "before any credential loads" wording describes a property that no longer exists (CTO row 6
   dissent).
-- [ ] T13. Final sweeps: `grep -rn 'PUBLIC-SDK-URL' --exclude-dir=node_modules` → archive/history
+- [x] T13. Final sweeps: `grep -rn 'PUBLIC-SDK-URL' --exclude-dir=node_modules` → archive/history
   only; `grep -rn 'inngest-public-sdk-url-confirm'` → archive/history only.
 
 ## Phase 3 — verification
