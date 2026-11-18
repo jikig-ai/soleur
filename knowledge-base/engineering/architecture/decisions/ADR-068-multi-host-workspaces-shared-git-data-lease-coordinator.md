@@ -1565,3 +1565,30 @@ The one-way language and the "only feeder is the serve arm" invariant lived in t
 The 2026-07-02 amendment (a) says the peer allowlist is checked "BEFORE the handshake". Until this change it was not: `session-proxy.ts` checked `req.socket.remoteAddress` inside `wss.on("connection")`, i.e. after TLS and after the WebSocket upgrade, so any private-net host could force a handshake and one Sentry report per connection. The check now runs on the raw TCP `connection` event through a prepended listener (`admitProxyPeer`) and destroys a non-allowlisted source before Node's TLS wrapper reads a byte; the in-`wss` check remains as defence in depth. Denies are reported through a bounded reporter (5 events per reason per 60 s window plus an exact counter).
 
 The proxy hello is no longer `{type, userId, workspaceId}`: it is `{type, userId, workspaceId, ts, nonce, mac}` with an HMAC-SHA256 under a dedicated key (`PROXY_HELLO_HMAC_KEY`), verified fail-closed before the AP-2 membership lookup, ±30 s skew and a replay window of about 61 s. A malformed `SOLEUR_PROXY_PORT` or an absent hello key stops only the relay (`proxy_state=error`). The mTLS option stays rejected as dominated, as in the original amendment. Decision, check order, residuals and the rolling-deploy behaviour are in ADR-323; this addendum does not restate them.
+
+## Addendum — 2026-11-18 (#12910): the lease host_id is the verified var.web_hosts key
+
+§2 made the lease's `host_id` the Hetzner instance id (`hetzner-<id>`, read from metadata by `ci-deploy.sh`). That was the wrong
+id. It changes on every host replace, and it is not the key `SOLEUR_HOST_ROSTER` is keyed by (`web-1`, `web-2`), so the router
+could not resolve a peer's lease: web-1 refused web-2's sessions as `owner-unresolved` while the serve gate passed the roster.
+
+- **The id.** `host_id` is now the host's `var.web_hosts` key. `ci-deploy.sh` `resolve_host_key` derives it from the metadata
+  hostname by inverting `server.tf`'s server-name expression and injects it as `SOLEUR_HOST_KEY` (empty on the canary).
+- **Self-verification (CTO ruling T1).** `host-identity.ts` `describeHostIdentity()` accepts the key only when the roster maps
+  it to this container's own `SOLEUR_HOST_PRIVATE_IP`. Otherwise it falls back to `SOLEUR_HOST_ID`, and boot logs
+  `host_identity source=<enum>` (Sentry `host_identity` / `resolveHostId.key-fallback` in production). Two live hosts cannot
+  share a private IP, so a wrong key can only degrade to the instance id, never to a peer's key. Migration 116's "same host"
+  carve-out therefore now means "same `var.web_hosts` slot".
+- **Generation carry across a replace.** A replaced host re-acquires its predecessor's live leases at the same generation. That
+  is safe only because the two never run at once: `hcloud_server.web` has no `create_before_destroy`, pinned by
+  `web-hosts-generic.test.sh` C8 (with the name round-trip and the one key regex).
+- **ADR-143 D5 precondition.** A volume-preserving reprovision must stop the app before the detach, so the old host's leases are
+  released (tombstoned) rather than carried by a host that is still writing.
+- **The gate.** `lb-weight-gate.sh` A.3 now checks the runtime shape: every roster key is a committed `var.web_hosts` key at its
+  committed private IP, and every rotation member is in the roster (`SOLEUR_WEB_HOSTS`, derived by
+  `lb-weight-gate-with-marker.sh` from `variables.tf`).
+- **Transition cost.** On the first rollout, and on any revert, a worktree whose live lease was taken under the other id has its
+  acquire refused for up to 240 s (`LEASE_LIVENESS_WINDOW_MS`, migration 133). A generation-bumped takeover follows.
+
+Rejected options are recorded in
+[decision-challenges.md](../../../project/specs/feat-one-shot-12910-host-roster-lease-id/decision-challenges.md).
