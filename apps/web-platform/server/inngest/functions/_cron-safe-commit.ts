@@ -1,3 +1,5 @@
+// ADR-328: this site is listed in review-evidence-exemption-ledger.yml (legacy-pre-gate).
+// Domain-surface PRs must not self-arm; leave unarmed + needs-review (see ADR-328 R4).
 // #5091 — deterministic safe-commit + PR pipeline for claude-spawn bot crons.
 //
 // Replaces the prompt-level mandatory-final-step shell blocks (destructive

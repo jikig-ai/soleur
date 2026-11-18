@@ -1,3 +1,5 @@
+# ADR-328: this site is listed in review-evidence-exemption-ledger.yml (legacy-pre-gate).
+# Domain-surface PRs must not self-arm; leave unarmed + needs-review (see ADR-328 R4).
 name: bot-pr-with-synthetic-checks
 description: >
   Commit bot-authored changes, open a PR, post synthetic check-runs to satisfy

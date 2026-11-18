@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# ADR-328: this site is listed in review-evidence-exemption-ledger.yml (legacy-pre-gate).
+# Domain-surface PRs must not self-arm; leave unarmed + needs-review (see ADR-328 R4).
 # bump-inngest-bootstrap-pin.sh — move the soleur-inngest-bootstrap cloud-init
 # pin to the semver-max vinngest-v* tag merged into main + registry-resolved digest,
 # and open (or reuse) the pin-bump PR. Invoked by the bump-cloud-init-pin job of

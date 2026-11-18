@@ -24,7 +24,7 @@
 # Stated residuals (a later shape inside one is "covered by R<n>", not a new finding):
 #   R1 a gate line or arm hidden by a construct that keeps its text intact (a heredoc, a function never called,
 #      an `if false`); R2 quote-state tricks inside a joined line (nested quotes inside a quoted substitution);
-#   R3 arm or merge sites outside SITES, LINK_ONLY and the A5 scripts (repo-wide walker: #12739);
+#   R3 arm or merge sites outside SITES, LINK_ONLY and the A5 scripts (repo-wide walker: #12739 — cleared by review-evidence-arm-walker.test.sh);
 #   R4 runtime properties the canonical check owns (what EV and H resolve to): proven by the dry runs, not here;
 #   R5 A6 prose synonyms: A6 matches the deleted design's own phrases (exempt arm/read/PRs, bot exemption) and skips
 #      a negated "no exempt arm"; other wordings are not matched, and A1 still catches any arm such prose asks for.
