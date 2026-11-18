@@ -116,6 +116,9 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/server/health-keyword-monitor-contract.test.ts",
   "test/server/inngest/claude-cli-pin-knows-models.test.ts",
   "test/server/inngest/cron-claude-eval-mcp-flags.test.ts",
+  "test/server/inngest/cron-bug-fixer.test.ts",
+  // Reads nothing outside the app; the containment guard counts its "../../../.." replace literal. Over-matching is the safe direction (it always runs) — do not move it back to the gated project to "fix" this.
+  "test/server/inngest/cron-claude-eval-substrate.test.ts",
   "test/server/inngest/cron-community-monitor-allowlist.test.ts",
   "test/server/inngest/cron-community-monitor-collector-status.test.ts",
   "test/server/inngest/cron-community-monitor-compact-parity.test.ts",
@@ -144,6 +147,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/server/inngest/cron-safe-commit.test.ts",
   "test/server/inngest/cron-spawn-git-config-pin.test.ts",
   "test/server/inngest/cron-untrusted-preamble.test.ts",
+  "test/server/inngest/cron-write-execute-census.test.ts",
   "test/server/inngest/cron-weekly-release-digest.test.ts",
   "test/server/inngest/execution-placement.test.ts",
   "test/server/inngest/filing-shape-corpus-parity.test.ts",
