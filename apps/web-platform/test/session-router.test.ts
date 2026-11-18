@@ -117,6 +117,31 @@ describe("loadHostRoster / resolveHostAddress", () => {
   });
 });
 
+describe("production roster shape (#12910: keyed by var.web_hosts key)", () => {
+  const PROD_ROSTER = JSON.stringify({ "web-1": "10.0.1.10", "web-2": "10.0.1.11" });
+
+  test("a web-2 holder seen from web-1 proxies to web-2's private IP", async () => {
+    vi.stubEnv("SOLEUR_HOST_ROSTER", PROD_ROSTER);
+    readHolderMock.mockResolvedValue(holder("web-2"));
+    const r = await resolveSessionRoute({ workspaceId: WS, userId: USER_A, myHostId: "web-1" });
+    expect(r).toEqual({ decision: "proxy", ownerHostId: "web-2", ownerAddress: "10.0.1.11" });
+  });
+
+  test("an instance-id holder is not in a key-shaped roster (owner-unresolved)", async () => {
+    vi.stubEnv("SOLEUR_HOST_ROSTER", PROD_ROSTER);
+    readHolderMock.mockResolvedValue(holder("hetzner-176328334"));
+    const r = await resolveSessionRoute({ workspaceId: WS, userId: USER_A, myHostId: "web-1" });
+    expect(r).toEqual({ decision: "owner-unresolved", ownerHostId: "hetzner-176328334" });
+  });
+
+  test("loadHostRoster accepts an explicit env (hermetic callers)", () => {
+    expect(loadHostRoster({ SOLEUR_HOST_ROSTER: PROD_ROSTER } as NodeJS.ProcessEnv)).toEqual({
+      "web-1": "10.0.1.10",
+      "web-2": "10.0.1.11",
+    });
+  });
+});
+
 describe("verifyProxiedSessionMembership (AP-2, fail-closed)", () => {
   function memberStub(result: { data: unknown; error: unknown }) {
     const chain: Record<string, unknown> = {};

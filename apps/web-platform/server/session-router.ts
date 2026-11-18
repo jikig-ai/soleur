@@ -27,6 +27,7 @@
 
 import { reportSilentFallback } from "./observability";
 import { readWorktreeLeaseHolder, resolveWorktreeId } from "./worktree-write-lease";
+import { loadHostRoster } from "./host-roster";
 
 /** Minimal structural supabase shape for the membership re-verify (mirrors
  *  workspace-resolver's SupabaseLike). */
@@ -48,27 +49,13 @@ export type SessionRouteDecision =
   | { decision: "owner-unresolved"; ownerHostId: string };
 
 /**
- * Parse the host roster `SOLEUR_HOST_ROSTER` — a JSON object mapping a stable
- * `host_id` (the lease's placement authority, = SOLEUR_HOST_ID) to that host's
- * private-net address the proxy dials. Empty/unset/invalid → `{}` (single-host:
- * a peer is never resolvable, so a stray remote holder yields `owner-unresolved`
- * rather than a wrong dial). Fail-safe: never throws.
+ * The host roster `SOLEUR_HOST_ROSTER` maps each web host's `var.web_hosts` key
+ * (`web-1`, `web-2`; the verified value `resolveHostId()` returns and the lease
+ * records as `host_id`, #12910) to that host's private-net address the proxy
+ * dials. The pure parse lives in the `./host-roster` leaf so host-identity.ts
+ * can verify a key without importing this module; re-exported here for callers.
  */
-export function loadHostRoster(): Record<string, string> {
-  const raw = process.env.SOLEUR_HOST_ROSTER?.trim();
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof v === "string" && v.length > 0) out[k] = v;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
+export { loadHostRoster };
 
 /** Resolve an owning `host_id` to its private-net address, or `null` when the
  *  host is not in the roster. */

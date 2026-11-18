@@ -9,7 +9,8 @@ import { reportSilentFallback } from "./observability";
  * reportSilentFallback on error, never throws).
  *
  * `host_id` is passed in by the caller — a host-STABLE infra identity (the
- * Hetzner server id injected at cloud-init), NEVER the per-container hostname
+ * verified `var.web_hosts` key from `resolveHostId()`, #12910; the Hetzner
+ * instance id only as a fallback), NEVER the per-container hostname
  * and NEVER an auth.uid(). Resolving that stable source + wiring acquire/touch/
  * release into the write path (SIGTERM-release, ≤50s heartbeat, fail-loud on a
  * touch-0, and the `git push --push-option=lease-gen=<N>` fence wrapper) is
