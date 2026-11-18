@@ -237,6 +237,11 @@ Follow-up: decide per function whether to set the kill switch in its `buildSpawn
 ask-as-block.
 <!-- lint-infra-ignore end -->
 
+> **Superseded in part 2026-11-17 (#12824):** the twelve functions no longer pass `--plugin-dir plugins/soleur`. Each passes
+> `loadPlugin: true` to `spawnClaudeEval`, and the substrate inserts `--plugin-dir` with the deployed read-only root
+> (ADR-033 and ADR-093 amendments 2026-11-17). The guard and its disposition are unchanged;
+> `plugin-pretooluse-hooks-web-parity.test.ts` now counts `loadPlugin: true` callers.
+
 ## Consequences
 
 - A customer running the plugin gets a human confirmation (or, for the home-directory delete, a block) before the agent runs an

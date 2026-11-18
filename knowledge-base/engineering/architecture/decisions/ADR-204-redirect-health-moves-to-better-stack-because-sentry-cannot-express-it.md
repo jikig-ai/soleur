@@ -4,7 +4,7 @@ status: accepted
 date: 2026-09-07
 tags: [observability, uptime-monitoring, sentry, better-stack, terraform, redirects, single-vendor]
 related_adrs: [ADR-194, ADR-175]
-amended_by: [ADR-222]
+amended_by: [ADR-222, ADR-328]
 related_runbooks:
   - knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
 ---
@@ -106,6 +106,9 @@ further.
 Apex reachability is deliberately second-sourced across Sentry and Better Stack,
 so a Sentry outage is survivable. **The www 301 is watched by Better Stack alone.**
 
+> **Amended by [ADR-328](./ADR-328-sentry-uptime-holds-one-slot-for-the-production-app.md) (2026-11-17, #12844):** apex reachability is no longer
+> second-sourced. Sentry keeps one uptime monitor, on the production app; marketing-site uptime is Better Stack only.
+
 This is a gain — the property went from zero working alarms to one, not from two
 to one — but a future engineer must not infer second-sourcing from the apex
 pattern. A Better Stack outage leaves this property uncovered.
@@ -151,6 +154,9 @@ the resource would have merged and never applied.
 | Assert `equals 200` on www and call it redirect-health | Passes equally when www serves its own 200 — the exact regression under guard. Vacuous |
 | A scheduled GitHub Actions probe checking in to a Sentry cron monitor | Rejected on minimality and MTTD: a workflow, a script, a cron monitor and a test battery for ~2 h detection — which would have silently widened the `dns.tf` Camp B acceptance from "one monitor interval" to two hours |
 | Delete `sentry_uptime_monitor.soleur_www` outright | Better Stack carries no www monitor today, so www would lose **all** reachability coverage — DNS, TLS and 5xx detection on a distinct CNAME surface, not merely the already-lost redirect-health |
+
+> **Amended by [ADR-328](./ADR-328-sentry-uptime-holds-one-slot-for-the-production-app.md) (2026-11-17, #12844):** the premise of the last row, "Better Stack carries no
+> www monitor today", no longer holds: `betteruptime_monitor.soleur_www_redirect` watches www, and ADR-328 deletes `soleur_www_reachability`.
 
 ## Residual gap
 

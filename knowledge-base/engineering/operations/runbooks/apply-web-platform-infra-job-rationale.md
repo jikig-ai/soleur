@@ -589,6 +589,21 @@ the two counters above). Source of truth:
 tests/scripts/lib/destroy-guard-filter-web-platform.jq.
 ```
 
+Verbatim, the comment above `set -euo pipefail` in the plan step's `run:` (relocated 2026-11-17, #12844, to keep
+the workflow under the size gate when `betteruptime_monitor.soleur_changelog_deep` joined the `-target` list):
+
+```text
+THIS COMMENT USED TO SAY "`-e` is intentionally omitted", AND THAT NEVER WORKED.
+GitHub invokes a bare `run:` as `bash -e {0}`; omitting -e from the `set` line
+cannot clear what the invocation already applied, so on a plan failure the step
+died AT the doppler line and both the `rc=$?` capture and the `::error::` branch
+below it were unreachable. The explicit `set +e` bracket is what delivers the
+property the comment claimed. The two sibling copies of the old comment (in
+apply-github-infra.yml and apply-sentry-infra.yml) were corrected under #7304,
+which also shipped scripts/lint-workflow-errexit-capture.py so the class cannot
+recur silently. The broader `set … pipefail`-without-`-e` audit remains #7098.
+```
+
 ## registry_luks_recut
 
 See also: knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md

@@ -125,3 +125,15 @@ The 2026-09-30 amendment above lists `browser-cleanup-hook.sh` among the plugin 
 > Corrected 2026-10-07 (PR review): the last clause above ("who rely on the sandbox and the review gate") is false for the default. Hosted Bash runs in the sandbox under the workspace's approval mode; `workspaces.bash_autonomous` defaults to `true` for new workspaces (migration 099), and in that mode `permission-callback.ts` auto-approves every Bash command that survived `BLOCKED_BASH_PATTERNS` after a one-time owner acknowledgement. That blocklist does not match `terraform destroy`, `rm -rf` or `git push -f`. The hosted `ask` path is unmeasured. A second consumer also loads this hook outside `AGENT_ENV_OVERRIDES`: the twelve server-side agent functions that spawn `claude --plugin-dir plugins/soleur` (`buildSpawnEnv`, not `buildAgentEnv`) run with the guard active; the 2026-09-30 amendment's note that cron spawns receive no override stands. [ADR-277](./ADR-277-plugin-destructive-command-guard.md) D8 and its "Server-side scheduled agents" section carry the detail.
 
 > **Superseded in part 2026-10-10 (#9776, [ADR-284](./ADR-284-hosted-bash-must-ask-lane-for-destroy-families.md)):** the statement that hosted Bash is not gated for these commands no longer holds for the recognised forms. Hosted `canUseTool` asks, through a must-ask lane, before a default-branch force-push or delete, `terraform|tofu destroy` and a `gh` ref or repository delete. The plugin guard stays disabled in hosted sessions (ADR-277 D8) and the lane does not recognise every spelling (ADR-284 lists the residuals).
+
+### 2026-11-17 — cron CLI spawns load the deployed plugin too, checked read-only at spawn (#12824)
+
+This ADR's decision (the plugin comes from the platform-deployed copy, never from the connected repo) now also covers
+the server-side cron spawns. Before #12824, those spawned `claude --plugin-dir plugins/soleur`, which resolved against
+the cron's own writable clone, so an agent could rewrite a hook that later ran. The substrate now inserts
+`--plugin-dir <getPluginPath()>` itself when a call passes `loadPlugin: true`. `resolveCronPluginRoot()` refuses the
+spawn unless the root passes `assertTrustedPluginPath`, carries its manifest and `.seed-complete`, and probes
+not-writable (`EROFS`/`EACCES`) at the root and at `hooks/`. The 2026-10-07 note that the twelve server-side agent
+functions spawn `--plugin-dir plugins/soleur` is superseded by this. The guard they run is unchanged; only the copy
+it is loaded from changed. Mechanism and residuals: [ADR-033](./ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn.md)
+2026-11-17 amendment.

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "plugin": "soleur",
-  "count": 68,
+  "count": 69,
   "agents": [
     {
       "id": "soleur:engineering:cto",
@@ -92,6 +92,13 @@
       "path": "agents/engineering/research/repo-research-analyst.md",
       "name": "repo-research-analyst",
       "description": "Use this agent when you need to research a repository's structure, documentation, and patterns -- architecture files, GitHub issues, contribution guidelines, and implementation patterns. Unlike soleur:engineering:research:git-history-analyzer (commit history), this agent examines repo structure, docs, issues, and templates.",
+      "model": "haiku"
+    },
+    {
+      "id": "soleur:engineering:research:session-retrospective-analyst",
+      "path": "agents/engineering/research/session-retrospective-analyst.md",
+      "name": "session-retrospective-analyst",
+      "description": "Fresh-context analyst that reads a session transcript and run-health ledger to produce improvement proposals. Use soleur:engineering:research:repo-research-analyst for repo structure research; use this agent for session forensics.",
       "model": "haiku"
     },
     {
