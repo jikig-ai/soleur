@@ -419,17 +419,8 @@ jobs:
         # before `cf-tunnel-ssh-bridge` exports TF_VAR_ci_ssh_private_key, so an
         # SSH-provisioned resource here bakes `agent = true` and dies on
         # SSH_AUTH_SOCK. Those belong in the post-bridge apply step below.
-        # This instruction already said so and did not hold: it landed 2026-05-20
-        # and `terraform_data.inngest_consumer_probe_install` was appended six
-        # lines beneath it on 2026-08-12, batched beside the other
-        # inngest-consumer resources by feature (#7539). Prose is not the
-        # enforcement -- Guard 1 in
-        # plugins/soleur/test/terraform-target-parity.test.ts is, and it fails
-        # the PR rather than the apply.
-        #
-        # `scheduled-terraform-drift.yml` is a 12h backstop for a FORGOTTEN
-        # resource; it did not surface #7539, because a MISPLACED resource is
-        # declared and targeted -- just on the stage that cannot provision it.
+        # Enforcement: Guard 1 of plugins/soleur/test/terraform-target-parity.test.ts.
+        # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §MAIN plan step: the allow-list history (#7539)
         run: |
           # We capture terraform plan's exit code in $rc so a legitimate failure surfaces
           # with the ::error:: below instead of aborting silently. Why `set +e` and not an
@@ -672,6 +663,8 @@ jobs:
               -target=logtail_exploration_alert.web_nic_guard_unpinned_url \
               -target=logtail_exploration.inngest_cutover_flip_silent \
               -target=logtail_exploration_alert.inngest_cutover_flip_silent \
+              -target=logtail_exploration.inngest_cutover_flip_silent_canary \
+              -target=logtail_exploration_alert.inngest_cutover_flip_silent_canary \
               -target=logtail_exploration.relay_listener_down \
               -target=logtail_exploration_alert.relay_listener_down \
               -target=logtail_exploration.relay_probe_silent \
