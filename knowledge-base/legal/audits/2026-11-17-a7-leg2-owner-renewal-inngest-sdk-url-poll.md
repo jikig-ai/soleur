@@ -50,7 +50,7 @@ come from the 13 Nov acceptance and carry over unchanged. The question said the 
 actually fails from 2026-11-21T00:00Z. That does not change the act.
 
 Only the quoted sentence is the owner's; the rest of this record is agent text. The answer (16:54:35Z) predates the
-first measurement of the 2026-11-16 leg-1 event below (CTO agent read, about 17:06Z), so the question did not mention
+first measurement of the 2026-11-16 leg-1 event below (CTO agent read-only reads, 17:04-17:07Z; awareness 17:07Z), so the question did not mention
 it. Per the CLO ruling of 2026-11-17 the owner is told afterwards, in plain words, without being asked again, and may
 withdraw this renewal.
 
@@ -85,6 +85,8 @@ The voids apply by their own terms. The renewal does not cover any state in whic
 
 CLO agent determination, 2026-11-17 (agent ruling, not counsel advice). The same determination is posted, dated, on #12887 as
 comment 6955805845 (2026-11-17T17:32:55Z), with the Hetzner read time (17:31:11Z) and a likely-cause note added.
+That comment's event and key-rotation wording comes before the precision added here (TCP packets of any flags,
+payload not measured; a key sniffed before the flip); the determination is unchanged.
 
 - **Event.** 12 TCP packets (any flags; payload not measured) to the Inngest host's plaintext legacy :8288 listener from the web hosts' private IPs, between
   the tls-health readings at 2026-11-16T12:04:32Z and 12:09:34Z (leg 1, ledger row 5). Cause not verified (it

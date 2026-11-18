@@ -710,7 +710,8 @@ None. No architectural decision is made or changed: the remedy (c) decision and 
 - [x] AC11: the PR body says `Ref #12742` and `Ref #10538` and contains no `Closes`, `Fixes` or `Resolves` keyword; it
   carries a `## Changelog` section; `technical-ruling-gate.sh --pr-body` passes.
 - [x] AC12: no file under the #12876 branch's scope changed (`git diff --name-only origin/main...HEAD` lists only the seven files
-  above plus this feature's plan/spec artifacts), and no workflow was dispatched.
+  above plus this feature's plan/spec artifacts and its compound outputs: the learning and the one plan-sharp-edges.md
+  bullet), and no workflow was dispatched.
 - [ ] AC13: merged to main before 2026-11-20T00:00Z (target); in any case before the first merge-group run on or after
   2026-11-21T00:00Z, or the record and ledger carry the gap wording.
 
