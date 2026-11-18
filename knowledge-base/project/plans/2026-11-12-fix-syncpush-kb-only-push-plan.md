@@ -1029,7 +1029,7 @@ data-integrity 6, 7; learnings 4, 5, 13.
 
 ### Phase 11 — Held signal, Settings card, agent line (#12714: W1, W3-W5, V1-V6, D29, D30)
 
-- **Gate:** the W7 wireframe `knowledge-base/product/design/settings/kb-sync-held-commits.pen` is committed and
+- **Prerequisite (met, 496551a4f9):** the W7 wireframe `knowledge-base/product/design/settings/kb-sync-held-commits.pen` is committed and
   linked in the PR before any component code in this phase (`wg-ui-feature-requires-pen-wireframe`).
 - `server/kb-sync-held.ts` (`computeHeldFiles` -> `{ total, onRecovered }`, `readRecoveredKbSyncTips` with the D29(1)
   read contract). Wiring: the `onHeldFiles` hook in `publishKbOnly` (before the isolated dir is disposed, held exits
