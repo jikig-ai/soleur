@@ -4465,3 +4465,7 @@
   the disposable fixture then settled the transaction and removed its backend
   row. This validates that test scenario only; it does not prove a production
   authority, a cross-process writer fence, or live backend shutdown.
+- The PR state was rechecked with `gh pr view 9051`: it remains OPEN and draft,
+  `autoMergeRequest` is null, and the pushed head remains
+  `4225c68a3eb1e9bdb917f899ae85618848b2c691`. This recovery branch has not been
+  pushed; no collection, writer-window, or ship gate was exercised.
