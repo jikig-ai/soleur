@@ -11,15 +11,38 @@
 # same silence covers a boot-time flip-file write abort and the LUKS key-continuity probe, which only
 # runs from the unit's terminal arms.
 #
-# EVERY .tf ANCHOR IS READ FROM THE EFFECTIVE TEXT (#12726 review round 1). Terraform ignores all three HCL comment
-# forms (`#`, `//`, `/* ... */`, the last one across lines), so a raw-text read can be shown a decoy that Terraform
-# never evaluates: a `/* value = 0 */` above the real `value = 1`, a pristine SQL heredoc inside `/* */` above a
-# reverted one, a commented-out replace() line. The alerts file is therefore read ONCE through the shared lexer
-# tests/scripts/lib/hcl-effective-text.sh (strip_comments, the same chokepoint betterstack-alert-structure.test.sh
-# uses; line count preserved), and the predicate local, the four resource blocks, the replace() line, the
-# definition / consumer / name-literal / operator / header counts all read that view. The ONE exception is the
-# predicate's heredoc BODY: the effective view only locates its opener, and the body is then read RAW from the
-# file, because a heredoc body is literal text that Terraform sends whole (the lexer blanks a `#` line inside it).
+# HOW THE .tf IS READ: TWO VIEWS THAT MUST AGREE (#12726 review rounds 1 and 2). Terraform ignores `#`, `//`
+# and `/* ... */` comments and sends a heredoc body as literal text, so a raw-text read alone can be shown a
+# decoy that Terraform never evaluates: a `/* value = 0 */` above the real `value = 1`, or a pristine SQL
+# heredoc inside `/* */` or inside another heredoc's body above a reverted one. The alerts file is therefore
+# read through the shared lexer tests/scripts/lib/hcl-effective-text.sh (the chokepoint
+# betterstack-alert-structure.test.sh uses; line count kept). strip_comments drops whole-line and `/* */`
+# comments and KEEPS trailing `#` / `//` comments; blank_heredocs then blanks heredoc bodies and closers.
+# Every anchor (the predicate opener, the four flip blocks, the replace() line, the runbook URL) and every
+# definition / consumer / name-literal / operator / header count reads that CODE view. The one exception is
+# the predicate's heredoc BODY, read RAW from its located opener: Terraform sends it whole (the lexer would
+# blank a `#` line inside it).
+#
+# CONTRACT. The lexer is not Terraform: it does not track `${ }` depth, so a quote or a comment opener inside
+# an interpolation (`"${"#"}"`, `"${"/*"}"`, `length("${"\""}") /*`) makes it read a heredoc body as code,
+# hide real code as a comment, or miss a comment Terraform has (rows R16-R20). Any such desync needs the line
+# Terraform reads and the decoy the guard reads to BOTH exist as text. So every pinned fact must hold in the
+# RAW text AND in the effective text, with exactly-one raw cardinality: one raw line per SQL local and one
+# replace() line, exactly 4 raw column-0 flip headers, exactly one raw line per pinned key of each flip block
+# (equal to its pin), no count/for_each/lifecycle/ignore_changes/provider/dynamic in either view, and no `${`
+# / `%{` in the raw flip text but the two runbook-URL interpolations. A lexer desync then needs a duplicate
+# line, and the raw rows refuse it.
+#
+# RESIDUALS (not covered by this guard, each with its owner):
+#   * the shared lexer does not track `${ }` depth (#12917); the raw rows close its effect here only,
+#     not for the lexer's other consumers;
+#   * symlinked, `*override.tf`, `*override.tf.json` and `*.tf.json` files:
+#     betterstack-alert-structure.test.sh rows 12-13 (this guard's other-file scan reads `*.tf` only,
+#     following symlinks);
+#   * a decoy in the apply workflow above the MAIN plan's first plan line (structural review A18,
+#     pre-existing);
+#   * the evaluator itself: that is what the canary measures;
+#   * a skipped or killed apply (structural review A19) and live drift after it (structural review A21).
 #
 # WHAT THIS FILE PROTECTS, and why each row exists:
 #   * The tag is PINNED TO THE EMITTER: `readonly LOG_TAG=` is read from inngest-cutover-flip.sh, so a
@@ -40,18 +63,18 @@
 #     `value = 0`, `on_missing_data = "treat_as_zero"`. The evaluator has read 0 on every `lower_than`
 #     silence alert measured in this account (#11869, #12180, #12726), so the inverted shape makes that
 #     zero read healthy. There is no family-wide pin; this guard pins its own alert. Operator counts read
-#     the effective text, so a comment that records the old shape stays green and a second executable
-#     operator line reds.
+#     the effective text, so a WHOLE-LINE comment that records the old shape stays green (a trailing
+#     `# was lower_than` on the operator line still reds) and a second executable operator line reds.
 #   * The window is checked against the emitter: query_period must hold at least three throttle
 #     intervals, or one late row would page.
 #   * The paging semantics (check 300, query 900, confirmation 0, recovery 900, email only,
 #     critical_alert=false, the free/paid escalation ternary) and the ARMED state (`paused = false`).
 #   * The THROWAWAY CANARY pair (`inngest_cutover_flip_silent_canary`, #12726, retired by the canary
-#     retirement PR (tracker #12878)): its SQL
-#     is the production local with only the host pin swapped to a host no machine has, by ONE `replace()`
-#     line. This guard never evaluates HCL, so the no-op hole (a `replace()` whose search text is not in
-#     its input makes the canary a copy of production that never fires) is closed by presence rows: the
-#     whole `replace()` line is pinned (in the effective text) with its search text built from the host
+#     retirement PR (tracker #12878)): its SQL is the production local with only the host pin swapped to
+#     a host no machine has, by ONE `replace()` line. This guard never evaluates HCL, so the no-op hole (a
+#     `replace()` whose search text is not in its input makes the canary a copy of production that never
+#     fires) is closed by presence rows: the whole `replace()` line is pinned (exactly once in the code
+#     view and exactly once in the raw file) with its search text built from the host
 #     inngest-bootstrap.sh renders; that host appears exactly once in the production predicate; each SQL
 #     local is DEFINED exactly once, in the alerts file, and nowhere else under apps/web-platform/infra/
 #     (locals are module-global, so a second definition in another .tf would be the one in force); the
@@ -59,13 +82,14 @@
 #     nowhere under apps/web-platform/infra/ but that line (raw text: even a comment mention reds). The
 #     canary alert block equals the production block apart from name / exploration_id / incident_cause (the
 #     `terraform fmt` padding before each `=` collapsed, so a comment that re-aligns one block is not a
-#     difference; everything else must match exactly), its cause starts at byte 0 with the plain-ASCII "CANARY, expected to stay open; do not resolve or close
-#     its mirror issue" (the incident mirror cuts the sanitised cause at 300 bytes), each name literal
-#     appears exactly twice, and the `inngest_cutover_flip_silent*` resource headers number exactly 4
-#     across every infra *.tf. The header count reads the EFFECTIVE text (changed in review round 1: it
-#     used to count a commented-out header too): a header Terraform never sees no longer counts, one
-#     behind a `/* */` on the same line still does (not anchored to line start). The canary retirement PR
-#     (tracker #12878) moves it to 2.
+#     difference; everything else must match exactly), its cause starts at byte 0 with the plain-ASCII
+#     "CANARY, expected to stay open; do not resolve or close its mirror issue" (the incident mirror cuts
+#     the sanitised cause at 300 bytes), each name literal appears exactly twice, and the
+#     `inngest_cutover_flip_silent*` resource headers number exactly 4 across every infra *.tf. That count
+#     reads the CODE view: a header in a whole-line or `/* */` comment or in a heredoc body does not count,
+#     one behind a same-line `/* */` does (not anchored to line start); the raw alerts file must also hold
+#     exactly 4 column-0 flip headers (the CONTRACT above). The canary retirement PR (tracker #12878) moves
+#     both to 2.
 #   * All four resources are in the apply workflow's MAIN plan -target= allowlist (terraform-target-parity
 #     covers terraform_data only, so this guard is the only enforcement for logtail resources).
 #   * The incident text says the alert is EXPECTED during an owner-authorized replace (no suppression
@@ -138,23 +162,36 @@ HCL_LIB="$REPO/tests/scripts/lib/hcl-effective-text.sh"
 # shellcheck source=../../../../tests/scripts/lib/hcl-effective-text.sh
 . "$HCL_LIB" || { printf '[FATAL] could not source %s\n' "$HCL_LIB" >&2; exit 2; }
 
-# The EFFECTIVE text of the alerts file (what Terraform evaluates, comments gone, line count kept), and its CODE view
-# (heredoc bodies blanked too) for the counts that must not be moved by prose or by SQL text.
+# The EFFECTIVE text of the alerts file (whole-line and `/* */` comments gone, trailing comments kept, line
+# count kept), and its CODE view (heredoc bodies and closers blanked too), which every anchor and every count
+# below reads.
 TF_EFF="$(strip_comments "$TF")"
 [ -n "$TF_EFF" ] || { printf '[FATAL] strip_comments produced no text for %s\n' "$TF" >&2; exit 2; }
 TF_CODE="$(blank_heredocs <<< "$TF_EFF")"
-# The predicate heredoc: its opener is the FIRST one in the EFFECTIVE text (a decoy inside `/* */` is not), and its
-# body is read RAW from the file from that line on, because Terraform sends a heredoc body whole.
-SQL_LN="$(awk '/^[[:space:]]*inngest_cutover_flip_silent_sql[[:space:]]*=[[:space:]]*<<-SQL[[:space:]]*$/{print NR; exit}' <<< "$TF_EFF")"
+# The predicate heredoc: its opener is the FIRST one in the CODE view (a decoy inside `/* */` or inside
+# another heredoc's body is not), and its body is read RAW from the file from that line on: Terraform sends a
+# heredoc body whole.
+SQL_LN="$(awk '/^[[:space:]]*inngest_cutover_flip_silent_sql[[:space:]]*=[[:space:]]*<<-SQL[[:space:]]*$/{print NR; exit}' <<< "$TF_CODE")"
 LOCAL_SQL=""
 [ -n "$SQL_LN" ] && LOCAL_SQL="$(awk -v s="$SQL_LN" 'NR <= s {next} /^[[:space:]]*SQL[[:space:]]*$/{exit} {print}' "$TF")"
 # Layout-independent view: every run of whitespace is one space, and no space sits inside a
 # parenthesis pair (the resource collapses it the same way). LC_ALL=C: [[:space:]] is then ASCII only, as RE2's `\s`.
 SQL_1="$(tr '\n' ' ' <<< "$LOCAL_SQL" | LC_ALL=C sed 's/[[:space:]][[:space:]]*/ /g; s/( /(/g; s/ )/)/g; s/^ //; s/ $//')"
-ALERT="$(awk '/^resource "logtail_exploration_alert" "inngest_cutover_flip_silent" \{/{f=1} f{print} f&&/^\}/{exit}' <<< "$TF_EFF")"
-EXPL="$(awk '/^resource "logtail_exploration" "inngest_cutover_flip_silent" \{/{f=1} f{print} f&&/^\}/{exit}' <<< "$TF_EFF")"
-CANARY_ALERT="$(awk '/^resource "logtail_exploration_alert" "inngest_cutover_flip_silent_canary" \{/{f=1} f{print} f&&/^\}/{exit}' <<< "$TF_EFF")"
-CANARY_EXPL="$(awk '/^resource "logtail_exploration" "inngest_cutover_flip_silent_canary" \{/{f=1} f{print} f&&/^\}/{exit}' <<< "$TF_EFF")"
+# The four flip blocks in the CODE view (none of them holds a heredoc, so on the pristine tree this is the
+# effective text), each from its column-0 header to its first column-0 `}`.
+ALERT="$(awk '/^resource "logtail_exploration_alert" "inngest_cutover_flip_silent" \{/{f=1} f{print} f&&/^\}/{exit}' <<< "$TF_CODE")"
+EXPL="$(awk '/^resource "logtail_exploration" "inngest_cutover_flip_silent" \{/{f=1} f{print} f&&/^\}/{exit}' <<< "$TF_CODE")"
+CANARY_ALERT="$(awk '/^resource "logtail_exploration_alert" "inngest_cutover_flip_silent_canary" \{/{f=1} f{print} f&&/^\}/{exit}' <<< "$TF_CODE")"
+CANARY_EXPL="$(awk '/^resource "logtail_exploration" "inngest_cutover_flip_silent_canary" \{/{f=1} f{print} f&&/^\}/{exit}' <<< "$TF_CODE")"
+# The same four blocks and the two SQL locals in the RAW file, for the two-view rows (the header's CONTRACT).
+raw_blk() { awk -v h="$1" 'index($0, h) == 1 {f=1} f{print} f&&/^\}/{exit}' "$TF"; }
+ALERT_RAW="$(raw_blk 'resource "logtail_exploration_alert" "inngest_cutover_flip_silent" {')"
+EXPL_RAW="$(raw_blk 'resource "logtail_exploration" "inngest_cutover_flip_silent" {')"
+CANARY_ALERT_RAW="$(raw_blk 'resource "logtail_exploration_alert" "inngest_cutover_flip_silent_canary" {')"
+CANARY_EXPL_RAW="$(raw_blk 'resource "logtail_exploration" "inngest_cutover_flip_silent_canary" {')"
+SQL_RAW=""
+[ -n "$SQL_LN" ] && SQL_RAW="$(awk -v s="$SQL_LN" 'NR < s {next} {print} NR > s && /^[[:space:]]*SQL[[:space:]]*$/{exit}' "$TF")"
+CANARY_SQL_RAW="$(awk '/^[[:space:]]*inngest_cutover_flip_silent_canary_sql[[:space:]]*=/' "$TF")"
 # Every OTHER infra *.tf that could define or declare a flip local or resource, in its CODE view. Terraform locals and
 # resources are module-global, so a definition or a header in another file counts as much as one in the alerts file.
 # One grep lists the candidates (the fixed name is never split by a comment: a comment ends an identifier, and inside a
@@ -332,10 +369,14 @@ if [ -n "$THROTTLE" ] && [ -n "$QP" ] && [ "$QP" -ge $((THROTTLE * 3)) ]; then
 else
   no "the query window (${QP:-<none>} s) is shorter than three of the emitter's noop intervals (${THROTTLE:-<none>} s)"
 fi
-if grep -qE '^[[:space:]]*(count|for_each|lifecycle|ignore_changes)\b' <<< "$ALERT"$'\n'"$EXPL"; then
-  no "the alert or exploration carries count/for_each/lifecycle/ignore_changes — the resource could silently not exist or never reconcile"
+# All four flip blocks, in BOTH views: a `"${"/*"}"` makes the lexer open a comment Terraform does not have,
+# so a real lifecycle block can be missing from the effective text only; a raw hit can only be a false red,
+# never a false green.
+if grep -qE '^[[:space:]]*(count|for_each|lifecycle|ignore_changes|provider|dynamic)\b' \
+     <<< "$ALERT"$'\n'"$EXPL"$'\n'"$CANARY_ALERT"$'\n'"$CANARY_EXPL"$'\n'"$ALERT_RAW"$'\n'"$EXPL_RAW"$'\n'"$CANARY_ALERT_RAW"$'\n'"$CANARY_EXPL_RAW"; then
+  no "a flip resource block carries count/for_each/lifecycle/ignore_changes/provider/dynamic in its raw or effective text — the resource could silently not exist, never reconcile or bind another provider"
 else
-  ok "no count/for_each/lifecycle/ignore_changes on the alert or exploration (the resource exists and reconciles)"
+  ok "no count/for_each/lifecycle/ignore_changes/provider/dynamic in the raw or effective text of the four flip blocks (each exists and reconciles)"
 fi
 line_in "$ALERT" 'policy_id[[:space:]]*=[[:space:]]*var\.betterstack_paid_tier \? tonumber\(betteruptime_policy\.uptime\[0\]\.id\) : null' \
   && line_in "$ALERT" 'team_name[[:space:]]*=[[:space:]]*var\.betterstack_paid_tier \? null : "Your team"' \
@@ -349,7 +390,7 @@ grep -qE '^  incident_cause[[:space:]]*=.*EXPECTED during an owner-authorized in
 RB_URL_RE='^[[:space:]]*inngest_cutover_flip_silent_runbook_url[[:space:]]*=[[:space:]]*"https://github\.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/inngest-server\.md#flip-token-split-[a-z0-9-]*"'
 grep -qE '^  incident_cause[[:space:]]*=.*[Rr]unbook: \$\{local\.inngest_cutover_flip_silent_runbook_url\}"[[:space:]]*$' <<< "$ALERT" \
   && blk_in "$ALERT" 'runbook[[:space:]]*=[[:space:]]*local\.inngest_cutover_flip_silent_runbook_url' \
-  && grep -qE "$RB_URL_RE" <<< "$TF_EFF" \
+  && grep -qE "$RB_URL_RE" <<< "$TF_CODE" \
   && ok "incident_cause and metadata.runbook carry the alert's runbook URL (the email is what a reader acts on)" \
   || no "the incident has no clickable inngest-server.md Flip-token split runbook URL"
 
@@ -373,7 +414,7 @@ grep -qE '^[[:space:]]*-target=logtail_exploration\.inngest_cutover_flip_silent 
 # ── the THROWAWAY CANARY pair (#12726; retired by the canary retirement PR, tracker #12878) ────
 # The guard never evaluates replace(): every row below closes one way the canary could silently equal production.
 REPLACE_LINE="  inngest_cutover_flip_silent_canary_sql = replace(local.inngest_cutover_flip_silent_sql, \"'${BS_HOST}'\", \"'${CANARY_HOST}'\")"
-if [ -n "$BS_HOST" ] && [ "$(grep -cFx -- "$REPLACE_LINE" <<< "$TF_EFF")" -eq 1 ] \
+if [ -n "$BS_HOST" ] && [ "$(grep -cFx -- "$REPLACE_LINE" <<< "$TF_CODE")" -eq 1 ] \
    && [ "$(grep -cE '^[[:space:]]*inngest_cutover_flip_silent_canary_sql[[:space:]]*=' <<< "$TF_CODE")" -eq 1 ]; then
   ok "the canary SQL is derived by ONE whole-line replace() of the production local, swapping only the bootstrap host '${BS_HOST}' for '${CANARY_HOST}'"
 else
@@ -471,6 +512,72 @@ grep -qE '^[[:space:]]*-target=logtail_exploration\.inngest_cutover_flip_silent_
   && ok "both canary resources are in the MAIN plan's -target= allowlist" \
   || no "a canary -target= line is missing from the MAIN plan — the canary would never apply"
 
+# ── two-view agreement (#12726 review round 2; the CONTRACT in the header) ─────────────────────────
+# Every way the lexer can disagree with Terraform needs the line Terraform reads AND the decoy the guard reads
+# to both exist as text. So each pinned fact must hold in the RAW file as well as in the effective view, with
+# exactly one raw line: whichever of the two lines the lexer shows, the raw count sees both and reds.
+RAW_P_N="$(grep -cE '^[[:space:]]*inngest_cutover_flip_silent_sql[[:space:]]*=' "$TF")"
+RAW_C_N="$(grep -cE '^[[:space:]]*inngest_cutover_flip_silent_canary_sql[[:space:]]*=' "$TF")"
+RAW_R_N="$(grep -cFx -- "$REPLACE_LINE" "$TF")"
+if [ "$RAW_P_N" -eq 1 ] && [ "$RAW_C_N" -eq 1 ] && [ "$RAW_R_N" -eq 1 ]; then
+  ok "the raw alerts file holds exactly one production SQL local line, one canary SQL local line and one replace() line"
+else
+  no "the raw alerts file does not hold exactly one production SQL local line, one canary SQL local line and one replace() line (got ${RAW_P_N}, ${RAW_C_N}, ${RAW_R_N}) — a copy Terraform never evaluates can stand in for the real one"
+fi
+RAW_HDR_N="$(grep -cE '^resource "logtail_exploration(_alert)?" "inngest_cutover_flip_silent(_canary)?" \{' "$TF")"
+[ "$RAW_HDR_N" -eq 4 ] \
+  && ok "the raw alerts file holds exactly 4 column-0 flip resource headers (as the effective count does)" \
+  || no "the raw alerts file does not hold exactly 4 column-0 flip resource headers (got ${RAW_HDR_N}; the canary retirement PR (tracker #12878) moves it to 2) — a copy Terraform never evaluates can stand in for a real block"
+# pin_bad TEXT KEY ERE [KEY ERE ...] -> the keys that are not EXACTLY ONE `KEY =` line (any indent) whose
+# value matches ERE, an optional trailing `#` / `//` comment allowed. Pure bash, one mapfile, no fork per key.
+pin_bad() {
+  local -a L; local k re r n line val bad=""
+  mapfile -t L <<< "$1"; shift
+  while [ $# -ge 2 ]; do
+    k="$1"; re="$2"; shift 2; n=0; val=""
+    r="^[[:space:]]*${k}[[:space:]]*="
+    for line in "${L[@]}"; do [[ $line =~ $r ]] && { n=$((n + 1)); val="$line"; }; done
+    r="^[[:space:]]*${k}[[:space:]]*=[[:space:]]*${re}[[:space:]]*((#|//).*)?\$"
+    if [ "$n" -ne 1 ]; then bad+=" ${k}(${n} lines)"; elif ! [[ $val =~ $r ]]; then bad+=" ${k}(not the pin)"; fi
+  done
+  printf '%s' "${bad# }"
+}
+# pin_row LABEL RAW EFFECTIVE KEY ERE ... -> one row per block over both views.
+pin_row() {
+  local label="$1" raw="$2" eff="$3" br be; shift 3
+  br="$(pin_bad "$raw" "$@")"; be="$(pin_bad "$eff" "$@")"
+  if [ -n "$raw" ] && [ -n "$eff" ] && [ -z "$br" ] && [ -z "$be" ]; then
+    ok "the ${label} block: each of its $(($# / 2)) pinned keys is exactly one line equal to its pin in both the raw and the effective text"
+  else
+    no "the ${label} block: a pinned key is not exactly one line equal to its pin in the raw or the effective text (raw: ${br:-ok}; effective: ${be:-ok}) — the guard may be reading a line Terraform never evaluates"
+  fi
+}
+ALERT_PINS=(alert_type '"threshold"' operator '"higher_than"' value '0' check_period '300' query_period '900'
+  confirmation_period '0' recovery_period '900' on_missing_data '"treat_as_zero"' paused 'false' email 'true'
+  push 'false' call 'false' sms 'false' critical_alert 'false')
+pin_row "production alert" "$ALERT_RAW" "$ALERT" "${ALERT_PINS[@]}" \
+  exploration_id 'logtail_exploration\.inngest_cutover_flip_silent\.id'
+pin_row "canary alert" "$CANARY_ALERT_RAW" "$CANARY_ALERT" "${ALERT_PINS[@]}" \
+  exploration_id 'logtail_exploration\.inngest_cutover_flip_silent_canary\.id'
+pin_row "production exploration" "$EXPL_RAW" "$EXPL" \
+  sql_query 'replace\(trimspace\(local\.inngest_cutover_flip_silent_sql\), "/\\\\s\+/", " "\)' \
+  values '\[local\.vector_prd_source_id\]'
+pin_row "canary exploration" "$CANARY_EXPL_RAW" "$CANARY_EXPL" \
+  sql_query 'replace\(trimspace\(local\.inngest_cutover_flip_silent_canary_sql\), "/\\\\s\+/", " "\)' \
+  values '\[local\.vector_prd_source_id\]'
+# No template sequence in the raw flip text but the two runbook-URL interpolations (one per incident_cause):
+# the lexer does not track `${ }` depth (#12917), so a quote or a comment opener inside one can desync it from
+# Terraform.
+RAW_FLIP="$ALERT_RAW"$'\n'"$EXPL_RAW"$'\n'"$CANARY_ALERT_RAW"$'\n'"$CANARY_EXPL_RAW"$'\n'"$SQL_RAW"$'\n'"$CANARY_SQL_RAW"
+RB_INTERP='${local.inngest_cutover_flip_silent_runbook_url}'
+RB_INTERP_N="$(cnt "$RB_INTERP" "$RAW_FLIP")"
+_tmpl_rest="${RAW_FLIP//"$RB_INTERP"/}"
+if [ -n "$SQL_RAW" ] && [ "$RB_INTERP_N" -eq 2 ] && ! has '${' "$_tmpl_rest" && ! has '%{' "$_tmpl_rest"; then
+  ok "the raw text of the four flip blocks and the two SQL locals carries no \${ or %{ but the two runbook-URL interpolations"
+else
+  no "a template sequence (\${ or %{) other than the two runbook-URL interpolations sits in the raw flip text (four blocks + two SQL locals; runbook interpolations ${RB_INTERP_N}, want 2) — an interpolation can hide a string or a comment from the lexer"
+fi
+
 # This guard only runs in CI if infra-validation.yml runs it, and re-runs on a runbook edit.
 IV_PR="$(awk '/^  pull_request:$/{p=1;next} p&&/^  [a-z_]+:/{exit} p{print}' "$IV")"
 if [ "$(grep -cxF '      - "knowledge-base/engineering/operations/runbooks/inngest-server.md"' <<< "$IV_PR")" -eq 1 ]; then
@@ -557,8 +664,8 @@ fi
 # OUTER RUN ONLY. Each row copies ONE source file into $MUT_DIR, mutates the copy, and re-runs this
 # guard with MUT_SKIP=1 and the matching FLIPSILENT_GUARD_* override pointing at the copy.
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
-PRESENCE_ROWS=56
-MUT_ROWS_EXPECTED=65
+PRESENCE_ROWS=63
+MUT_ROWS_EXPECTED=73
 SELFTEST_ROWS=1
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t flipsilentalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
@@ -994,6 +1101,54 @@ s = s[:i] + decoy + s[i:]'
   mutate RED "R12 the canary's escalation team name gains a second space inside the string (value whitespace is not normalised)" TF \
     "the canary alert block differs from the production alert block" \
     's = blk_sub(s, "logtail_exploration_alert", "inngest_cutover_flip_silent_canary", "? null : \"Your team\"", "? null : \"Your  team\"")'
+  # ── review round 2 (#12726): the effective view desynced from Terraform. Each of R13-R20 SURVIVED the
+  # round-1 guard (c5e36bc6be, green on the mutated copy); R19 and R20 are the only rows that prove the raw
+  # cardinality rows, with a decoy the lexer shows as code while it hides the real text. See the CONTRACT.
+  mutate RED "R13 a pristine copy of the predicate local sits in an unrelated <<-EOT heredoc above the real local, which reverts to count(*)" TF \
+    "the value expression is not the missing-host count" \
+    'i, j = sql_span(s)
+decoy = "  flip_silent_doc = <<-EOT\n" + s[i:j] + "  EOT\n\n"
+s = sql_replace(s, "greatest(toInt64(1) - toInt64(count(DISTINCT JSONExtractString(raw, \x27host_name\x27))), 0) AS value", "count(*) AS value")
+s = s[:i] + decoy + s[i:]'
+  mutate RED "R14 a pristine copy of the production alert block sits in a <<-EOT heredoc above the real block, which is re-paused" TF \
+    "the alert is not armed" \
+    'i, j = blk(s, "logtail_exploration_alert", "inngest_cutover_flip_silent")
+decoy = "locals {\n  flip_silent_alert_doc = <<-EOT\n" + s[i:j] + "  EOT\n}\n\n"
+s = blk_set(s, "logtail_exploration_alert", "inngest_cutover_flip_silent", "paused", "  paused = true")
+s = s[:i] + decoy + s[i:]'
+  mutate RED "R15 a <<-EOT heredoc holds the replace() line while the real canary local is production's own (the canary equals production)" TF \
+    "the canary replace() line is missing" \
+    'assert s.count(CANARY_LINE + "\n") == 1
+s = s.replace(CANARY_LINE + "\n", "  inngest_cutover_flip_silent_canary_sql = local.inngest_cutover_flip_silent_sql\n  flip_silent_canary_doc                 = <<-EOT\n" + CANARY_LINE + "\n  EOT\n")'
+  mutate RED "R16 a \${\"#\"} heredoc in metadata carries a decoy value = 0 while the real value is 1, mirrored in both alerts (neither can page)" TF \
+    "the production alert block: a pinned key is not exactly one line equal to its pin" \
+    'RBL = "    runbook = local.inngest_cutover_flip_silent_runbook_url\n  }\n"
+for label in FLIP_ALERTS:
+    s = blk_sub(s, "logtail_exploration_alert", label, "  value               = 0\n", "  value               = 1\n")
+    s = blk_sub(s, "logtail_exploration_alert", label, RBL, "    runbook = local.inngest_cutover_flip_silent_runbook_url\n    note = join(\"${\"#\"}\", [<<-EOT\n  value               = 0\n  EOT\n    ])\n  }\n")'
+  mutate RED "R17 a \"\${\"/*\"}\" note hides a real lifecycle { ignore_changes = all } from the lexer, mirrored in both alerts" TF \
+    "a flip resource block carries count/for_each/lifecycle/ignore_changes/provider/dynamic" \
+    'RBL = "    runbook = local.inngest_cutover_flip_silent_runbook_url\n  }\n"
+for label in FLIP_ALERTS:
+    s = blk_sub(s, "logtail_exploration_alert", label, RBL, "    runbook = local.inngest_cutover_flip_silent_runbook_url\n    note    = \"${\"/*\"}\"\n  }\n  lifecycle {\n    ignore_changes = all\n  }\n  # */ }\n")'
+  mutate RED "R18 value = length(\"\${\"\\\"\"}\") /* opens a comment the lexer does not see: Terraform reads 1, the guard reads value = 0, mirrored" TF \
+    "a template sequence (\${ or %{) other than the two runbook-URL interpolations sits in the raw flip text" \
+    'for label in FLIP_ALERTS:
+    s = blk_sub(s, "logtail_exploration_alert", label, "  value               = 0\n", "  value               = length(\"${\"\\\"\"}\") /*\n  value               = 0\n  */\n")'
+  mutate RED "R19 a \${\"#\"} heredoc shows the lexer a pristine predicate local while a \${\"/*\"} hides the real one, reverted to count(*)" TF \
+    "the raw alerts file does not hold exactly one production SQL local line, one canary SQL local line and one replace() line" \
+    'i, j = sql_span(s)
+decoy = "  flip_note = join(\"${\"#\"}\", [<<-EOT\n" + s[i:j] + "  EOT\n  ])\n  flip_hide = {\n    note = \"${\"/*\"}\"\n  }\n"
+s = sql_replace(s, "greatest(toInt64(1) - toInt64(count(DISTINCT JSONExtractString(raw, \x27host_name\x27))), 0) AS value", "count(*) AS value")
+i, j = sql_span(s)
+s = s[:i] + decoy + s[i:j] + "  # */\n" + s[j:]'
+  mutate RED "R20 a \${\"#\"} heredoc shows the lexer a pristine production alert block while a \${\"/*\"} hides the real one, re-paused" TF \
+    "the raw alerts file does not hold exactly 4 column-0 flip resource headers" \
+    'i, j = blk(s, "logtail_exploration_alert", "inngest_cutover_flip_silent")
+decoy = "locals {\n  flip_note = join(\"${\"#\"}\", [<<-EOT\n" + s[i:j] + "  EOT\n  ])\n}\n\nlocals {\n  flip_hide = {\n    note = \"${\"/*\"}\"\n  }\n}\n\n"
+s = blk_set(s, "logtail_exploration_alert", "inngest_cutover_flip_silent", "paused", "  paused = true")
+i, j = blk(s, "logtail_exploration_alert", "inngest_cutover_flip_silent")
+s = s[:i] + decoy + s[i:j] + "# */\n" + s[j:]'
 fi
 
 if [ -z "${MUT_SKIP:-}" ] && [ "${MUT_ROWS_RUN:-0}" -ne "$MUT_ROWS_EXPECTED" ]; then
