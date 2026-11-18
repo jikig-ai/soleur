@@ -650,8 +650,13 @@ echo "SENTRY_UPTIME uptime_verdict=unavailable unmanaged=0 live=? declared=1"
 echo "sentry_alert live fidelity: PASS (all 28 in-scope rules match the committed reference field-for-field)"
 exit 0');                                      [[ "$rc" != "0" ]] || why+=("unavailable marker went green")
   rc=$(_drive_apply "$STUB_FORGED_INDENTED");  [[ "$rc" != "0" ]] || why+=("an indented forged clean marker went green")
+  # A token that merely STARTS with clean must not read as clean (the parse is
+  # `[^ ]+` and the compare is exact; `[a-z-]+` would truncate clean2 to clean).
+  rc=$(_drive_apply '#!/usr/bin/env bash
+echo "SENTRY_UPTIME uptime_verdict=clean2 unmanaged=0 live=1 declared=1"
+exit 0');                                      [[ "$rc" != "0" ]] || why+=("uptime_verdict=clean2 went green")
   if [[ ${#why[@]} -eq 0 ]]; then
-    _report "W18 the apply job's post-apply probe greens only on a line-anchored clean uptime marker (no marker, unavailable and a forged indented marker all red)" ok
+    _report "W18 the apply job's post-apply probe greens only on a line-anchored, exact clean uptime marker (no marker, unavailable, a forged indented marker and clean2 all red)" ok
   else _report "W18 apply post-apply probe fails closed" fail "${why[*]}"; fi
 }
 t_w15_apply_probe_pins_fixture_uptime() {

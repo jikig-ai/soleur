@@ -680,7 +680,9 @@ eq_case '0' "$sentry_array_n" \
 # (ADR-328) is a property of the root, and a monitor declared in a new file bills the same
 # second slot (#12844 review). Exactly one block, and its host is app.soleur.ai.
 SENTRY_UPTIME_SCAN="$(for _tf in "$SCRIPT_DIR"/sentry/*.tf; do strip_comments "$_tf"; done | awk '
-  !inb && /^resource[[:space:]]+"sentry_uptime_monitor"[[:space:]]+"/ { inb = 1; depth = 0; blocks++ }
+  # Indented and bare-label forms are valid HCL too (verification P3-3), so the
+  # header match accepts both rather than only the fmt-canonical one.
+  !inb && /^[[:space:]]*resource[[:space:]]+"?sentry_uptime_monitor"?[[:space:]]+/ { inb = 1; depth = 0; blocks++ }
   inb {
     if ($0 ~ /^[[:space:]]*url[[:space:]]*=/) {
       h = $0; sub(/^[^=]*=[[:space:]]*/, "", h); gsub(/"/, "", h)
@@ -697,7 +699,7 @@ SENTRY_UPTIME_SCAN="$(for _tf in "$SCRIPT_DIR"/sentry/*.tf; do strip_comments "$
     d = gsub(/\}/, "}"); depth -= d
     if (depth <= 0) { inb = 0 }
   }
-  /^module[[:space:]]+"/ { bad = bad (bad == "" ? "" : ",") "module-block" }
+  /^[[:space:]]*module[[:space:]]+/ { bad = bad (bad == "" ? "" : ",") "module-block" }
   END { printf "%d %d %s", blocks + 0, app + 0, bad }
 ')"
 # A *.tf.json in the Sentry root is HCL this text scan cannot read, so it is refused.

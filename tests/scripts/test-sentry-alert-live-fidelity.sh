@@ -523,8 +523,14 @@ t_pinned_path_end_to_end() {
   local _want1 _want2
   _want1=$(printf '%s\n' "${_pre[@]}" "${_base}/detectors/?query=type:uptime_domain_failure&project=-1&per_page=100")
   _want2=$(printf '%s\n' "${_pre[@]}" "${_base}/workflows/?per_page=100")
-  [[ "$(cat "$_shim_dir/call.1.argv" 2>/dev/null)" == "$_want1" ]] || why+=("call.1 (detectors) argv is not exactly the pinned 11: $(tr '\n' ' ' < "$_shim_dir/call.1.argv" 2>/dev/null)")
-  [[ "$(cat "$_shim_dir/call.2.argv" 2>/dev/null)" == "$_want2" ]] || why+=("call.2 (workflows) argv is not exactly the pinned 11: $(tr '\n' ' ' < "$_shim_dir/call.2.argv" 2>/dev/null)")
+  # `$(…)` strips trailing newlines, so a trailing empty argument would compare
+  # equal; the line count (12 = 11 flags/values + the URL) closes that.
+  local _cn
+  for _cn in 1 2; do
+    [[ "$(wc -l < "$_shim_dir/call.${_cn}.argv" 2>/dev/null)" -eq 12 ]] || why+=("call.${_cn} argv has $(wc -l < "$_shim_dir/call.${_cn}.argv" 2>/dev/null) tokens, want exactly 12")
+  done
+  [[ "$(cat "$_shim_dir/call.1.argv" 2>/dev/null)" == "$_want1" ]] || why+=("call.1 (detectors) argv is not exactly the pinned 12: $(tr '\n' ' ' < "$_shim_dir/call.1.argv" 2>/dev/null)")
+  [[ "$(cat "$_shim_dir/call.2.argv" 2>/dev/null)" == "$_want2" ]] || why+=("call.2 (workflows) argv is not exactly the pinned 12: $(tr '\n' ' ' < "$_shim_dir/call.2.argv" 2>/dev/null)")
   grep -qx 'SENTRY_UPTIME uptime_verdict=clean unmanaged=0 live=1 declared=1' <<<"$out" || why+=("no LIVE (non-FIXTURE) clean uptime marker")
   tr '\0' '\n' < "$_shim_dir/argv.bin" | grep -cxE >/dev/null -- '-X|--request|-d|--data|--data-binary|--data-raw|--data-urlencode|-F|--form|-L|--location|-T|--upload-file' && why+=("a method/body/redirect flag is present")
   # A correct PREFIX can be re-opened by a later argument, so the transport
