@@ -90,10 +90,13 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
   });
 
   it("session-sync writes the held columns only through writeKbSyncHeldCols, never folded into the stamp (D29(1))", () => {
-    // The write lives in kb-sync-held-refresh.ts (Phase 0 move): one writeKbSyncHeldCols call, the frozen patch shape.
+    // The write lives in kb-sync-held-refresh.ts (Phase 0 move, WP3 body): ONE writeKbSyncHeldCols call, in `persist`,
+    // which every entry (writeHeldCount, writeHeldFromIsolated) goes through with the frozen patch shape.
     const refresh = sources.get("server/kb-sync-held-refresh.ts") ?? "";
     expect([...refresh.matchAll(/\bwriteKbSyncHeldCols\(/g)]).toHaveLength(1);
-    expect(refresh).toMatch(/writeKbSyncHeldCols\(\s*service,\s*workspaceId,\s*\{\s*heldFiles: held\.total,\s*checkedAt: new Date\(held\.checkedAt\)\s*\}\s*\)/);
+    expect(refresh).toMatch(/writeKbSyncHeldCols\(\s*service\(\),\s*workspaceId,\s*patch\s*\)/);
+    expect(refresh).toMatch(/persist\(\(\) => service,\s*workspaceId,\s*\{\s*heldFiles: held\.total,\s*checkedAt: new Date\(held\.checkedAt\)\s*\}\)/);
+    expect(refresh).toMatch(/persist\(getServiceClient,\s*a\.workspaceId,\s*\{\s*heldFiles: total,\s*checkedAt: a\.checkedAt,/);
     expect(refresh).not.toMatch(/writeRepoColsToWorkspace/);
     // workspace-repo-mirror.ts maps the patch to the migration-187 columns (the pull-blocked one only when given, D42),
     // in the one shared held UPDATE body (simplicity F7).

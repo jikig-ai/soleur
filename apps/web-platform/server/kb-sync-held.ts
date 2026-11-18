@@ -34,6 +34,7 @@
 import { lstatSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
+import { HELD_FILES_RENDER_MAX } from "@/lib/kb-sync-held-copy";
 import { HEX40, readSmallRegularFile, SmallFileError } from "./approval/workspace-head";
 import { runIsolatedGitLocal } from "./git-isolated-local";
 import type { IsolatedPushDir } from "./git-hardened-env";
@@ -42,8 +43,12 @@ import { createChildLogger } from "./logger";
 
 const log = createChildLogger("kb-sync-held");
 
-/** Upper bound of the stored count (migration 187's named range check); a stored value of exactly this means "or more". */
-export const HELD_FILES_MAX = 10_000;
+/**
+ * Upper bound of the stored count (migration 187's named range check), the one bound the copy also renders to (frozen
+ * name HELD_FILES_RENDER_MAX, simplicity F1). V9 / D39(e): the clamp makes a stored value of exactly this a LOWER bound,
+ * "HELD_FILES_MAX or more"; the data layer never stores more, and no column records that the clamp applied.
+ */
+export const HELD_FILES_MAX = HELD_FILES_RENDER_MAX;
 /** At most this many set-aside tips are read, across the recovered and the store-tip families together (W4, D39(d)). */
 export const RECOVERED_TIPS_MAX = 20;
 /** The total budget of one count, every child included (D38(5)). */

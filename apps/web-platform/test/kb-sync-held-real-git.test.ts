@@ -27,6 +27,7 @@ import {
   RECOVERED_TIPS_MAX,
   readRecoveredKbSyncTips,
 } from "../server/kb-sync-held";
+import { HELD_FILES_RENDER_MAX } from "../lib/kb-sync-held-copy";
 
 /** The `kb-sync.held-files` lines logged so far (one per computed or failed count). */
 const heldLines = (): Array<Record<string, unknown>> =>
@@ -190,7 +191,10 @@ describe("kb-sync-held (real git)", () => {
     git(ws, "add", "-A");
     git(ws, "commit", "-q", "-m", "many");
     expect(await computeHeldFiles({ isolated: iso(), base: T, head: head(), recovered: [] }, { cap: 3 })).toEqual({ total: 3, onRecovered: 0 });
+    // V9 / D39(e): one bound for the store, the migration's range check and the copy, so a stored value equal to it is
+    // the clamp ("10000 or more"), never an exact count the copy could print as exact.
     expect(HELD_FILES_MAX).toBe(10_000);
+    expect(HELD_FILES_MAX).toBe(HELD_FILES_RENDER_MAX);
   });
 
   describe("recovered kb-sync branches (W4)", () => {

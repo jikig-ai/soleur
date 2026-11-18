@@ -354,7 +354,7 @@ describe("held-files write (TW2)", () => {
     mockRecovered.mockReturnValue(recovered);
     mockPublish.mockImplementationOnce(publishWith({ result: { kind: "held", reason: "remote_ahead" } }));
     await syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID);
-    expect(mockRecovered).toHaveBeenCalledWith(WS_PATH);
+    expect(mockRecovered).toHaveBeenCalledWith(WS_PATH, { workspaceId: SOLO_WORKSPACE_ID }); // the workspace id is log context only
     expect(mockCompute).toHaveBeenCalledTimes(1);
     expect(mockCompute.mock.calls[0][0]).toMatchObject({ isolated: ISO_DIR, base: T_SHA, head: HEAD_SHA, recovered });
   });
