@@ -118,6 +118,31 @@ test('start receives a one-use tracking capability rather than the raw connectio
   assert.equal(result.operation, 'completed');
 });
 
+test('a tracked operation is retained and cancelled when start throws after issuing it', async () => {
+  const calls = [];
+  let settle, inspect;
+  const connection = createConnection(() => new Promise((resolve) => { settle = resolve; }));
+  const result = await observeDedicatedLifecycle(adapter({
+    connection,
+    start: (boundary) => {
+      boundary.track((db) => {
+        db.begin('read only', () => undefined);
+        return new Promise((resolve) => { inspect = resolve; });
+      });
+      throw new Error('private-start-failure');
+    },
+    cancel: async () => { calls.push('cancel'); inspect({ state: 'failed' }); settle(); },
+    verify: async (_connection, phase) => { calls.push(phase); return report(phase); },
+    close: async () => { calls.push('close'); },
+  }), { workMs: 10, cleanupMs: 80 });
+
+  assert.equal(result.operation, 'failed');
+  assert.equal(result.cancel, 'completed');
+  assert.equal(result.stop, 'observer_reported_stopped');
+  assert.deepEqual(calls, ['cancel', 'preclose', 'close', 'postclose']);
+  assert.equal(JSON.stringify(result).includes('private-start-failure'), false);
+});
+
 test('normal completion reports only adapter assertions, never raw result or clearance', async () => {
   const result = await observeDedicatedLifecycle(adapter({ start: (boundary) => boundary.track((db) => {
     db.begin('read only', () => undefined);

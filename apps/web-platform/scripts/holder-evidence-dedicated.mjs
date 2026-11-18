@@ -103,20 +103,23 @@ export async function observeDedicatedLifecycle(adapter, limits) {
   const workDeadline = performance.now() + limits.workMs;
   if (controller.signal.aborted || performance.now() >= workDeadline) return unknown('timeout');
   let operationIssued = false;
+  let issuedOperation;
   const operationBoundary = Object.freeze({
     track(inspect) {
       if (operationIssued) throw new Error('operation_unavailable');
       operationIssued = true;
-      return trackInspectionTransaction(connection, inspect);
+      issuedOperation = trackInspectionTransaction(connection, inspect);
+      return issuedOperation;
     },
   });
   let started;
+  let startFailed = false;
   try { started = adapter.start(operationBoundary, controller.signal); }
-  catch { return unknown('failed'); }
-  const operationPromises = readOperation(started, connection);
+  catch { startFailed = true; }
+  const operationPromises = readOperation(issuedOperation, connection);
   if (!operationPromises) {
     if (types.isPromise(started)) Promise.prototype.then.call(started, () => {}, () => {});
-    return unknown('unknown');
+    return unknown(startFailed ? 'failed' : 'unknown');
   }
   const task = Promise.all([
     observePromise(operationPromises.inspection),
@@ -124,11 +127,19 @@ export async function observeDedicatedLifecycle(adapter, limits) {
   ]);
   const work = await bounded(() => task, workDeadline);
   let completion = work.state === 'completed' ? settledOperation(work.value) : null;
-  let operation = completion?.operation ?? work.state;
+  let operation = startFailed || started !== issuedOperation ? 'failed' : completion?.operation ?? work.state;
   const cleanupDeadline = performance.now() + limits.cleanupMs;
   let cancel = 'not_attempted';
 
-  if (operation === 'timeout') {
+  if (startFailed || started !== issuedOperation) {
+    controller.abort();
+    const cancellation = await bounded(() => adapter.cancel(connection), cleanupDeadline);
+    cancel = cancellation.state;
+    if (cancel !== 'completed') return unknown('failed', cancel);
+    const settled = await bounded(() => task, cleanupDeadline);
+    if (settled.state !== 'completed' || !settledOperation(settled.value)) return unknown('failed', cancel);
+    completion = settledOperation(settled.value);
+  } else if (operation === 'timeout') {
     controller.abort();
     const cancellation = await bounded(() => adapter.cancel(connection), cleanupDeadline);
     cancel = cancellation.state;

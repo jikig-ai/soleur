@@ -190,3 +190,26 @@ provenance predicate but not its tracker constructor. The lifecycle correctly
 returned a sanitized failure; adding the missing named import restored the
 focused suite to 34/34. When a capability wrapper fails closed, inspect the
 sanitized start outcome and imports before weakening validation.
+
+Re-review at `692124fed3` showed the capability still cannot prevent the
+adapter's own `create()` and `start()` methods from sharing a closure over the
+raw connection. A tracked completion can coexist with a second, pending raw
+operation. The same lifecycle also used to lose a tracked operation when
+`start()` threw after requesting it. A new regression demonstrated the throw
+case (15/16 failed as expected); the lifecycle now retains the issued handle,
+attempts cancellation and awaits both inspection and transaction settlement
+before verification or close. Focused tests pass 35/35. The P1 closure escape
+and P2 same-event-loop deadline remain unresolved. A hard bound requires
+isolated execution plus independent backend-stop evidence; the current
+synthetic prototype cannot clear collection authorization. The CTO and
+independent lifecycle reviewers agreed on these limits. CLO review separately
+confirmed processing clearance remains blocked pending contract/capacity,
+bounded retention evidence, restore/deletion facts, rights-copy completion,
+and exact-head legal/schema/QA checks.
+
+The original worktree's 144 dirty paths are not all new transfer candidates:
+they exist in the isolated branch because its remote history is ahead of the
+original HEAD. Twelve file contents differ, including package manifests with
+dependency rollbacks and stale lifecycle snapshots. Compare path inventory and
+file content before any recovery overlay; preserving the original and keeping
+the newer isolated versions is safer than copying its dirty worktree wholesale.

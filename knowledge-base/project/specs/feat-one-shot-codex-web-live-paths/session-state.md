@@ -4525,3 +4525,26 @@
   have unresolved author/committer identities (`t@t`, `s@example.invalid`).
   No CLA signature or attribution rewrite was performed. The original worktree
   still has 144 dirty entries.
+- Recovery inventory confirms original HEAD `60465968d0dfe271fcfbf4c3a0c0a8e80e74ebbb`
+  is an ancestor of the isolated branch. All 144 dirty paths already exist in
+  the isolated branch; 12 contents differ, including package manifests that
+  roll dependencies back and older lifecycle versions. None were overlaid, and
+  the original remains untouched at 144 entries.
+- At `692124fed3`, independent lifecycle and CTO reviews found the capability
+  parameter does not prevent adapter code from using a raw connection retained
+  in its own closure; a synthetic probe still reports stop while that operation
+  is pending. The lifecycle also loses a tracked handle if `start()` throws
+  after issuing it. Added retention/cancel/settlement handling and a regression
+  for that throw path; focused tracker/lifecycle/adapter suite passes 35/35.
+  Independent re-review of this fix is pending. Both reviewers confirm the
+  async timer cannot bound synchronous adapter or tracker callbacks; a worker
+  process plus independent backend-stop evidence is needed before collection.
+- Independent CLO review of the plan is complete and remains blocked for
+  processing clearance, readiness, and shipment. Subject contract/capacity,
+  measured bounded cleanup/monitoring, backup/PITR/restore deletion, rights-copy
+  lifecycle, final notice/client flow, and exact-head schema/legal/QA gates are
+  not established. No legal wording or attestation changed. Exact collection
+  command preparation remains blocked on a real bounded collector and reviewed
+  authority/fencing/recovery. Writer-window commands and all authorization,
+  reconciliation, schema/RLS, rehearsal, rights, retention, qualification,
+  QA, preflight, and ship gates remain held. Firestore writes remain disabled.
