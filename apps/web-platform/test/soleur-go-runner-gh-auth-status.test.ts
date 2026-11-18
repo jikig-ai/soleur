@@ -57,6 +57,25 @@ describe("buildSoleurGoSystemPrompt — gh auth status guidance (item 2)", () =>
     );
   });
 
+  // #12704 D41(b): the baseline must not tell the agent that raw `git push` is credentialed (the KB-only sync and the
+  // Owner-approved push tool are the only publish routes) and must not model `gh pr create` (cc has no PR tool). Exactly
+  // that is removed: the fetch/pull credential sentence and the `gh issue view` example stay (the merge-blocked lines tell
+  // the agent to run `git fetch origin`).
+  it("directive routes a push through github_push_branch, never raw git push, and has no gh pr create example", () => {
+    expect(GH_AUTH_STATUS_GUIDANCE_DIRECTIVE).toContain(
+      "To push a branch, use `github_push_branch` when it is listed; never run `git push`.",
+    );
+    expect(GH_AUTH_STATUS_GUIDANCE_DIRECTIVE).not.toMatch(/\bpush\b[^.]*credentialed/i);
+    expect(GH_AUTH_STATUS_GUIDANCE_DIRECTIVE).not.toMatch(/gh pr create/);
+  });
+
+  it("D41(b) removes only push: raw git fetch and pull stay credentialed, and the gh issue view example stays", () => {
+    expect(GH_AUTH_STATUS_GUIDANCE_DIRECTIVE).toContain(
+      "Raw git fetch and pull against your connected repo are credentialed automatically in your workspace",
+    );
+    expect(GH_AUTH_STATUS_GUIDANCE_DIRECTIVE).toContain("(for example: gh issue view 123 -R owner/repo)");
+  });
+
   it("directive references the connected repository named in the agent context", () => {
     expect(GH_AUTH_STATUS_GUIDANCE_DIRECTIVE).toMatch(
       /connected repository/i,

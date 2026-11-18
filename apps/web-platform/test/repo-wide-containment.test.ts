@@ -144,6 +144,26 @@ function escapingHelpers(): Set<string> {
   return out;
 }
 
+/**
+ * Suites that import an escaping helper (see `escapingHelpers`): repo readers through the import graph. They belong in the
+ * manifest exactly like a suite that escapes on its own, so the manifest check counts them as escaping too (#12718,
+ * D24(10)/D25(5): the app-local `test/helpers/git-fixture-env.ts` re-export is the one escape of the KB sync's real-git
+ * suites, and each suite importing it is registered).
+ */
+function helperImporters(): Map<string, string> {
+  const helpers = escapingHelpers();
+  const out = new Map<string, string>();
+  for (const f of gatedCandidates) {
+    const text = readFileSync(join(APP_ROOT, f), "utf8");
+    for (const imp of relativeImports(f, text)) {
+      for (const h of helpers) {
+        if (h === imp || h === `${imp}.ts` || h === `${imp}.tsx` || h === `${imp}/index.ts`) out.set(f, h);
+      }
+    }
+  }
+  return out;
+}
+
 /** Relative import specifiers, resolved to repo-app-relative paths. */
 function relativeImports(relPath: string, text: string): string[] {
   const dir = relPath.split("/").slice(0, -1);
@@ -192,18 +212,9 @@ describe("repo-wide suite containment (#7498)", () => {
   it("no gated suite imports a helper that escapes the app", () => {
     // A suite with no `..` of its own still reads the repo if a module it
     // imports does. Per-file text scanning cannot see that; this can.
-    const helpers = escapingHelpers();
     const offenders: string[] = [];
-    for (const f of gatedCandidates) {
-      if (REPO_WIDE_SUITES.includes(f)) continue;
-      const text = readFileSync(join(APP_ROOT, f), "utf8");
-      for (const imp of relativeImports(f, text)) {
-        for (const h of helpers) {
-          if (h === imp || h === `${imp}.ts` || h === `${imp}.tsx` || h === `${imp}/index.ts`) {
-            offenders.push(`${f} -> ${h}`);
-          }
-        }
-      }
+    for (const [f, h] of helperImporters()) {
+      if (!REPO_WIDE_SUITES.includes(f)) offenders.push(`${f} -> ${h}`);
     }
     expect(
       offenders,
@@ -212,7 +223,9 @@ describe("repo-wide suite containment (#7498)", () => {
   });
 
   it("the manifest matches what actually escapes apps/web-platform", () => {
-    const actual = unitFiles.filter(escapesApp).sort();
+    // A suite escapes on its own, or through an escaping helper it imports (the rule above): both are repo readers.
+    const importers = helperImporters();
+    const actual = unitFiles.filter((f) => escapesApp(f) || importers.has(f)).sort();
     const declared = [...REPO_WIDE_SUITES].sort();
 
     const missing = actual.filter((f) => !declared.includes(f));

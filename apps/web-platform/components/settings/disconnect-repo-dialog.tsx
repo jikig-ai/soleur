@@ -4,12 +4,20 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { usePendingRouter } from "@/hooks/use-pending-router";
 import { usePendingAction } from "@/hooks/use-pending-action";
+import { disconnectHeldBody, disconnectHeldWarning, type HeldRouteState } from "@/lib/kb-sync-held-copy";
 
 interface DisconnectRepoDialogProps {
   repoName: string;
+  /** #12704 V8 — the held-files count of the card (display-only); a renderable count adds the warning paragraph. */
+  heldFiles?: number | null;
+  /** #12704 V8 — the publish route; only "available" adds the publish step (a blip or an unknown role gives none). */
+  heldRoute?: HeldRouteState;
 }
 
-export function DisconnectRepoDialog({ repoName }: DisconnectRepoDialogProps) {
+export function DisconnectRepoDialog({ repoName, heldFiles = null, heldRoute = "unknown" }: DisconnectRepoDialogProps) {
+  // V8: a caution above the dialog's own paragraph (nothing failed, so not a red error); Disconnect is never blocked.
+  const heldWarning = disconnectHeldWarning(heldFiles, heldRoute);
+  const body = disconnectHeldBody(heldFiles);
   const router = usePendingRouter();
   const [isOpen, setIsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,10 +71,19 @@ export function DisconnectRepoDialog({ repoName }: DisconnectRepoDialogProps) {
       <h3 className="mb-2 text-lg font-semibold text-soleur-text-primary">
         Disconnect repository
       </h3>
+      {heldWarning && (
+        <p
+          data-testid="disconnect-held-warning"
+          role="note"
+          className="mb-3 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-4 py-3 text-sm leading-relaxed text-soleur-text-primary"
+        >
+          {heldWarning}
+        </p>
+      )}
       <p className="mb-4 text-sm text-soleur-text-secondary">
-        This will unlink <span className="font-mono text-soleur-text-primary">{repoName}</span>{" "}
-        from your account. Your workspace files will be removed. You can reconnect
-        a repository at any time.
+        {body.before}
+        <span className="font-mono text-soleur-text-primary">{repoName}</span>
+        {body.after}
       </p>
 
       {error && (

@@ -2,8 +2,6 @@ import { existsSync } from "node:fs";
 import { rm, rename, cp, readdir, mkdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 
 import { gitWithInstallationAuth, sanitizeGitStderr } from "@/server/git-auth";
 import { reportSilentFallback } from "@/server/observability";
@@ -21,10 +19,9 @@ import { isWorkspaceBeingReaped } from "@/server/workspace-reap-guard";
 import { fetchFromGitData } from "@/server/git-data-client";
 import { resolveWorktreeId } from "@/server/worktree-write-lease";
 import { seedWorktreeConfig } from "@/server/worktree-config-seed";
-import { ALLOW_PROTOCOL_NONE, hostGitInvocation } from "@/server/host-git";
+import { runWorkspaceLocalGit } from "@/server/workspace-local-git";
 
 const log = createChildLogger("ensure-workspace-repo");
-const execFileAsync = promisify(execFile);
 
 // Sub-PR 3.D (#5274 Phase 3, ADR-068) — the clone-from-git-data overlay runs a
 // handful of LOCAL, network-free git ops (rev-parse / show-ref / merge-base --is-ancestor /
@@ -34,24 +31,16 @@ const execFileAsync = promisify(execFile);
 // cannot classify). These are deliberately NOT routed
 // through `gitWithInstallationAuth`: that helper injects the GitHub App
 // installation token via GIT_ASKPASS for the AUTHED clone, but these ops touch
-// only the local object store / refs — no network, no credentials. A plain
-// `execFile` array form (no shell → no argv/flag-smuggling) with cwd pinned to
-// the workspace is the correct, least-authority tool (mirrors the local,
-// token-free rev-parse probe in git-worktree-validity.ts).
+// only the local object store / refs — no network, no credentials. They run
+// through the shared token-free workspace runner (#12600, CTO ruling D21: the
+// twin that lived here is merged): host-git hardening + scrubbed env,
+// `GIT_ALLOW_PROTOCOL=none`, an array-form exec (no shell → no argv/flag-
+// smuggling) with cwd pinned to the workspace, a 30 s bound and SIGKILL.
 type LocalGitFn = (args: string[], cwd: string) => Promise<{ stdout: string }>;
 
-const realLocalGit: LocalGitFn = async (args, cwd) => {
-  // Host-side git in a workspace an agent session may have authored: shared hardening + scrubbed env (host-git.ts).
-  const h = hostGitInvocation(args, { cwd, allowProtocol: ALLOW_PROTOCOL_NONE });
-  const { stdout } = await execFileAsync("git", h.args, {
-    cwd,
-    env: h.env,
-    timeout: 30_000,
-    killSignal: "SIGKILL",
-    maxBuffer: 1024 * 1024,
-  });
-  return { stdout: stdout.toString() };
-};
+const realLocalGit: LocalGitFn = async (args, cwd) => ({
+  stdout: (await runWorkspaceLocalGit(args, { cwd, timeout: 30_000 })).toString(),
+});
 
 let localGitFn: LocalGitFn = realLocalGit;
 
@@ -71,8 +60,9 @@ export function __setLocalGitForTests(fn: LocalGitFn): void {
 // exit code is 128 AND the phrase is on `err.stderr` (falling back to `err.message` only
 // when stderr is absent or empty); anything else stays a level-50 silent fallback.
 // The phrase is owned by git-data-transport-wrapper.sh; a test greps that source for it.
-// `err.stderr` is always a string here: `execFile` is called without an `encoding` option, so
-// a Buffer never reaches this function (the earlier Buffer branch was dead code and is gone).
+// Only a string `err.stderr` is read. The phrase comes from the store fetch, not from the local
+// overlay verbs; those run through the shared runner, which reads git as a Buffer (#12600 D21),
+// and a Buffer stderr falls back to `err.message` (which embeds the same stderr text).
 const FIRST_SESSION_MISS_RE = /does not exist \(provision it first\)/;
 
 export function isFirstSessionStoreMiss(err: unknown): boolean {
