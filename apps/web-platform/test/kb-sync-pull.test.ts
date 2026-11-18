@@ -194,6 +194,40 @@ describe("mergeVerifiedDefault with a recording writer (TX1-e equality half, D26
   });
 });
 
+describe("R2-B (verify-coverage P3-2): the fetch stage reads the budget per child, not once", { timeout: 30_000 }, () => {
+  /** A budget on a fake clock that each have-ref write (the first isolated children of the fetch stage) advances. */
+  const clocked = (total: number, perHaveMs: number) => {
+    let spentMs = 0;
+    H.beforeIso = (args) => {
+      if (args[0] === "update-ref" && String(args[2] ?? "").startsWith("refs/heads/have-")) spentMs += perHaveMs;
+    };
+    return { remaining: () => total - spentMs, mergeStartMinMs: 0 };
+  };
+
+  test("the fetch child is capped at what is left AFTER the have-ref children ran, not at the stage's entry value", async () => {
+    const f = fixture();
+    iso = createIsolatedPushDir(f.ws);
+    const { writer } = recordingWriter(f);
+    const budget = clocked(30_000, 20_000);
+    const r = await mergeVerifiedDefault({ isolated: iso, installationId: 1, url: LITERAL_URL, headSha: f.headSha, refName: "refs/heads/main", writer, budget });
+    expect(r.reason).toBe("merged");
+    const fetchTimeout = H.timeouts.find(([verb]) => verb === "fetch")?.[1];
+    expect(fetchTimeout).toBeLessThanOrEqual(10_000);
+  });
+
+  test("a fetch stage that ran out of budget mid-way is pull_deadline (ref=default), not fetch_failed, and nothing merges", async () => {
+    const f = fixture();
+    iso = createIsolatedPushDir(f.ws);
+    const { writer, calls } = recordingWriter(f);
+    const budget = clocked(30_000, 31_000);
+    const r = await mergeVerifiedDefault({ isolated: iso, installationId: 1, url: LITERAL_URL, headSha: f.headSha, refName: "refs/heads/main", writer, budget });
+    // the fetch got the 1 ms floor (nothing left), was cut short, and that is the budget's doing: pull_deadline
+    expect(H.timeouts.find(([verb]) => verb === "fetch")?.[1]).toBe(1);
+    expect(r).toEqual(expect.objectContaining({ reason: "pull_deadline", ref: "default" }));
+    expect(calls.find((c) => c[0] === "merge")).toBeUndefined();
+  });
+});
+
 describe("R2-B (data-sec P3-1): the isolated merge-tree runs with directory-rename detection off, as the merge does", { timeout: 30_000 }, () => {
   test("the precheck's merge-tree argv carries -c merge.directoryRenames=false (the same pin as the workspace merge)", async () => {
     const f = fixture();

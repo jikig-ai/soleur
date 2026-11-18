@@ -225,6 +225,16 @@ async function mergeSafely(writer: KbPullWriter, target: string, budget: PullBud
 const localOpts = (budget: PullBudget): { timeoutMs: number } => ({ timeoutMs: cappedTimeout(ISOLATED_LOCAL_TIMEOUT_MS, finite(budget)) });
 const finite = (budget: PullBudget): number | undefined => (Number.isFinite(budget.remaining()) ? budget.remaining() : undefined);
 const spent = (budget: PullBudget): boolean => budget.remaining() <= 0;
+/**
+ * The fetch stage's timeout option, read LIVE (verify-coverage P3-2): `fetchIntoIsolated` reads `opts.timeoutMs` once per
+ * child (each have-ref write, the fetch, the post-fetch reads), so a getter caps every child at what is left when it
+ * starts, not at the stage's entry value.
+ */
+const liveTimeout = (budget: PullBudget): { readonly timeoutMs: number | undefined } => ({
+  get timeoutMs() {
+    return finite(budget);
+  },
+});
 
 /**
  * The objects reachable from `tip` and not from `nots`, bounded (D25(8)): the walk cap is checked on the walk's own output
@@ -350,9 +360,10 @@ export async function mergeVerifiedDefault(input: MergeDefaultInput): Promise<Me
       input.installationId,
       input.url,
       { branch: D, dest: "fetched", expected: T, haves: [headSha] },
-      { timeoutMs: finite(budget) },
+      liveTimeout(budget),
     );
-    if (!fetched.ok) return done(fetched.reason, "default");
+    // A child the spent budget cut short is the budget's doing, not a fetch failure.
+    if (!fetched.ok) return done(spent(budget) ? "pull_deadline" : fetched.reason, "default");
     if (input.precheck) {
       const pre = await mergeTreeCheck(isolated, headSha, T, budget);
       if (pre.kind === "conflict") return done("merge_conflict_precheck");
@@ -443,9 +454,9 @@ export async function adoptSideTip(input: AdoptSideInput): Promise<KbPullStep | 
         input.installationId,
         input.url,
         { branch: KB_SYNC_SIDE_BRANCH, dest: "fetched-side", expected: P, haves: [T, headSha] },
-        { timeoutMs: finite(budget) },
+        liveTimeout(budget),
       );
-      if (!fetched.ok) return step(fetched.reason, "side");
+      if (!fetched.ok) return step(spent(budget) ? "pull_deadline" : fetched.reason, "side");
     }
     const pV = await readVerified(isolated, P);
     if (!pV) return step("tip_mismatch", "side");
