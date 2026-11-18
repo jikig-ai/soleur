@@ -4548,3 +4548,9 @@
   authority/fencing/recovery. Writer-window commands and all authorization,
   reconciliation, schema/RLS, rehearsal, rights, retention, qualification,
   QA, preflight, and ship gates remain held. Firestore writes remain disabled.
+- Independent re-review at `72720825a3` confirms the tracked-handle-on-throw
+  fix and its cancellation/settlement regression. It still finds no production
+  collector caller; the raw connection can escape through adapter-owned
+  closure state, and synchronous create/start/tracker callbacks can exceed the
+  configured deadlines. CTO follow-up is pending. No collector clearance or
+  exact collection commands can be prepared from this prototype.

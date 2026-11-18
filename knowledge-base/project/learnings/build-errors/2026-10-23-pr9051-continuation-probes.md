@@ -213,3 +213,11 @@ original HEAD. Twelve file contents differ, including package manifests with
 dependency rollbacks and stale lifecycle snapshots. Compare path inventory and
 file content before any recovery overlay; preserving the original and keeping
 the newer isolated versions is safer than copying its dirty worktree wholesale.
+
+At pushed `72720825a3`, independent re-review confirmed the start-throws-after-
+track fix, but the adapter's shared closure can still issue a parallel raw
+operation outside tracker settlement; synchronous callbacks also remain
+outside effective wall-clock bounds. This requires a process boundary and
+independent backend observer, not another promise race. A collaboration agent
+listing call also failed because it was passed an unsupported `timeout_ms`
+field; call `list_agents` with its declared `path_prefix` field only.
