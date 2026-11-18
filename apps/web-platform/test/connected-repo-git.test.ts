@@ -298,6 +298,32 @@ describe("R2-B (data-sec P3-1): directory-rename detection is off in the merge, 
   });
 });
 
+describe("R2-B (verify-coverage P3-1): the writer's status runs skip untracked files; the collision check still sees them", { timeout: 30_000 }, () => {
+  const statusRuns = (): string[][] => H.host.filter((a) => a[0] === "status");
+
+  test("a clean merge: both status runs (before, after) are --untracked-files=no", async () => {
+    const { ws, T } = repo();
+    writeFileSync(join(ws, "scratch.txt"), "untracked\n");
+    expect(await kbPullWriter(ws).merge(T)).toBe("clean");
+    expect(statusRuns()).toEqual([
+      ["status", "--porcelain=v1", "-z", "--untracked-files=no"],
+      ["status", "--porcelain=v1", "-z", "--untracked-files=no"],
+    ]);
+  });
+
+  test("an untracked file and an ignored file at an incoming path are still collisions (the check reads the disk, not status)", async () => {
+    for (const ignored of [false, true]) {
+      const { ws, T } = repo();
+      if (ignored) writeFileSync(join(ws, ".git", "info", "exclude"), "b.txt\n");
+      writeFileSync(join(ws, "b.txt"), "LOCAL-ONLY\n");
+      H.host.length = 0;
+      expect(await kbPullWriter(ws).merge(T), `ignored=${ignored}`).toBe("collision");
+      expect(readFileSync(join(ws, "b.txt"), "utf8")).toBe("LOCAL-ONLY\n");
+      expect(statusRuns()).toEqual([["status", "--porcelain=v1", "-z", "--untracked-files=no"]]);
+    }
+  });
+});
+
 describe("the async runner and the same-host lock (D38(1)(6))", { timeout: 30_000 }, () => {
   test("a failing child rejects with git's exit status and stderr; a refused argv rejects before any child", async () => {
     const { ws } = repo();

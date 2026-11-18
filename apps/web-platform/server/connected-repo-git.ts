@@ -350,6 +350,22 @@ export async function readStatus(workspacePath: string, gate: string): Promise<P
 }
 
 /**
+ * The writer's own status run (verify-coverage P3-1): tracked entries only (`--untracked-files=no`), so a workspace with
+ * many untracked paths never overflows the runner's buffer into a refused or unverified merge. Enough for what the writer
+ * reads from it: unmerged entries are tracked by definition. Untracked and ignored entries in the merge's way are the
+ * collision check's (`hasUntrackedCollision`: lstat and its own `ls-files` reads), never this run's. Null when it could not run.
+ */
+async function readTrackedStatus(workspacePath: string): Promise<PorcelainEntry[] | null> {
+  try {
+    const out = await runConnectedRepoGitAsync(["status", "--porcelain=v1", "-z", "--untracked-files=no"], { cwd: workspacePath });
+    return parsePorcelainZ(out.toString());
+  } catch (err) {
+    mirrorGitRefusal(err, "kbPullWriter-merge");
+    return null;
+  }
+}
+
+/**
  * A refused `.git` (a gitfile, a symlink, `commondir`, a redirecting entry) stops EVERY sync for that workspace at the
  * first gate below, so it must not look like "no remote" or "nothing changed": mirror it once, with the reason only (no
  * path, no user id in the message). Returns true when `err` was a refusal.
@@ -401,7 +417,7 @@ async function readStashTip(workspacePath: string): Promise<string | null | unde
  * The pull's workspace writes (#12718, D25(2)): the push writer's three guarded verbs plus the pinned merge. Exported for the
  * self-heal (server/workspace-sync.ts imports it lazily), which passes `{ autostash: false }` (D37(2)). `merge(target)`:
  *   1. D37(1): a merge in progress (`MERGE_HEAD` / `MERGE_AUTOSTASH` by lstat, fail closed, or an unmerged entry in ONE fresh
- *      status run) is `in_progress` before any write, and the interrupted autostash is pinned (D36(c));
+ *      tracked-only status run, R2-B) is `in_progress` before any write, and the interrupted autostash is pinned (D36(c));
  *   2. D35: the untracked/ignored collision check (`hasUntrackedCollision`, shapes 1-3) against the in-memory, verified
  *      target is `collision`; a non-ff merge ignores `--no-overwrite-ignore` (measured), so this check, not the flag, guards;
  *   3. the merge child; exit 1 with `MERGE_HEAD` is a content `conflict`; anything else that fails (an unrelated history, a
@@ -419,7 +435,7 @@ export function kbPullWriter(workspacePath: string, opts: { readonly autostash?:
     setTracking: base.setTracking,
     casBranch: base.casBranch,
     merge: async (target): Promise<KbMergeOutcome> => {
-      const before = await readStatus(workspacePath, "kbPullWriter-merge");
+      const before = await readTrackedStatus(workspacePath);
       if (before === null) return "refused";
       if (mergeInProgress(workspacePath, before)) {
         await pinInterruptedAutostash(workspacePath);
@@ -445,7 +461,7 @@ export function kbPullWriter(workspacePath: string, opts: { readonly autostash?:
         await pinInterruptedAutostash(workspacePath);
         return code === 1 && mergeHeadPresent(workspacePath) ? "conflict" : "refused";
       }
-      const after = await readStatus(workspacePath, "kbPullWriter-merge");
+      const after = await readTrackedStatus(workspacePath);
       if (after === null) return "unverified";
       const stashAfter = await readStashTip(workspacePath);
       if (stashAfter === undefined) return "unverified";
