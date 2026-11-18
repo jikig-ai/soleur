@@ -765,7 +765,7 @@ fi
 # guard with MUT_SKIP=1 and the matching FLIPSILENT_GUARD_* override pointing at the copy.
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 PRESENCE_ROWS=69
-MUT_ROWS_EXPECTED=82
+MUT_ROWS_EXPECTED=85
 SELFTEST_ROWS=1
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t flipsilentalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
@@ -1157,7 +1157,7 @@ s = sql_replace(s, "AS time, greatest(", "AS time,\n          greatest(")'
     's = blk_after(s, "logtail_exploration_alert", "inngest_cutover_flip_silent", "on_missing_data", "  # The old shape was operator = \"lower_than\", value = 1 (#11869, #12726).\n")'
   # ── review round 1 (#12726): what Terraform evaluates is not the raw text. Each row below SURVIVED the raw-text
   # guard (green on the mutated copy); each now reds for the row that reads the effective text.
-  mutate RED "R1 the replace() line is wrapped in /* */ beside a planted canary local in another infra .tf (the alerts-file definition count drops to 0; the other-file half is R21)" TF \
+  mutate RED "R1 the replace() line is wrapped in /* */ beside a planted canary local in another infra .tf (the alerts-file canary count drops to 0 and the other-file canary count rises to 1; R21 proves the production local's other-file term alone)" TF \
     "a flip SQL local is defined other than exactly once in the alerts file" \
     'assert s.count(CANARY_LINE + "\n") == 1
 s = s.replace(CANARY_LINE + "\n", "  /*\n" + CANARY_LINE + "\n  */\n")' \
@@ -1260,18 +1260,17 @@ s = s[:i] + decoy + s[i:j] + "# */\n" + s[j:]'
     "" \
     's = blk_sub(s, "logtail_exploration_alert", "inngest_cutover_flip_silent", "  value               = 0\n", "  value               = 0 # 0 = the production host reported\n")'
   # Verifier pass (#12726): a column-0 } inside a /* */ comment cut the raw block short, and the R16/R17 tricks
-  # below it showed the effective view value = 0 while Terraform reads value = 1 (fmt-stable; 63/63 green before).
+  # below it showed the effective view value = 0 while Terraform reads value = 1 (fmt-stable; 63/63 green at
+  # 2fbc05a017). Since round 3 the subset rows S1-S3 red it before the span row does, so it now expects S1; the span
+  # row's own proof is R30 (no /*, no <<, no interpolation: a shape inside the subset).
   mutate RED "R23 a column-0 } inside a comment cuts the raw block short above an R16/R17 value shadow, mirrored in both alerts (neither can page)" TF \
-    "the raw and the effective text of a flip block span different lines" \
+    "subset S1: the raw alerts file holds a /*" \
     'VAL = "  value               = 0\n"
-RBL = "  metadata = {\n    runbook = local.inngest_cutover_flip_silent_runbook_url\n  }\n"
 CUT = "  /*\n  value = 0\n}\n  */\n"
-NEW = "  metadata = {\n    runbook = local.inngest_cutover_flip_silent_runbook_url\n    note2 = join(\"${\"#\"}\", [<<-EOT\n  value               = 0\n  EOT\n    ])\n    note = \"${\"/*\"}\"\n  }\n  value = 1\n  # */\n"
-for lab in ("inngest_cutover_flip_silent", "inngest_cutover_flip_silent_canary"):
-    i, j = blk(s, "logtail_exploration_alert", lab)
-    b = s[i:j]
-    assert b.count(VAL) == 1 and b.count(RBL) == 1, lab
-    s = s[:i] + b.replace(VAL, "").replace(RBL, CUT + NEW) + s[j:]'
+NOTES = "    note2 = join(\"${\"#\"}\", [<<-EOT\n  value               = 0\n  EOT\n    ])\n    note = \"${\"/*\"}\"\n"
+for lab in FLIP_ALERTS:
+    s = blk_sub(s, "logtail_exploration_alert", lab, VAL, "")
+    s = blk_sub(s, "logtail_exploration_alert", lab, "  metadata = {\n" + RBL, CUT + "  metadata = {\n" + RBL.replace("  }\n", NOTES + "  }\n") + "  value = 1\n  # */\n")'
   # ── review round 3 (#12726, lead ruling R-subset): each of R24-R29 SURVIVED the 9f52edd540 guard (64/64 green on
   # the mutated copy) and now reds for the subset row or the depth-aware block cut it names.
   mutate RED "R24 a length() whose interpolation holds an escaped quote ends in /* in a locals block OUTSIDE the flip text, and a # */ after the production alert closes it: Terraform reads no production alert, the lexer reads it whole" TF \
@@ -1315,7 +1314,25 @@ s = s[:i] + decoy + b + "# */\n" + s[j:]'
     s = blk_sub(s, "logtail_exploration_alert", lab, ESC_END, ESC_END.replace("\n  }\n}\n", "\n}\n  count = 0\n}\n"))'
   mutate RED "R29 a U+00A0 heredoc closer (Terraform trims it, the lexer does not) hides from every code-view count a fifth flip alert that carries the canary name" TF \
     "subset S5: a byte outside tab / 0x20-0x7e sits on a line" \
-    's = s + "\nlocals {\n  flip_doc = <<-EOT\n EOT\n}\n\nresource \"logtail_exploration_alert\" \"inngest_cutover_flip_silent_shadow\" {\n  name = \"soleur-inngest-cutover-flip-silent-canary-prd\"\n}\n\nlocals {\n  flip_doc2 = <<-ZZZ\nEOT\nZZZ\n}\n"'
+    's = s + "\nlocals {\n  flip_doc = <<-EOT\n\u00a0EOT\n}\n\nresource \"logtail_exploration_alert\" \"inngest_cutover_flip_silent_shadow\" {\n  name = \"soleur-inngest-cutover-flip-silent-canary-prd\"\n}\n\nlocals {\n  flip_doc2 = <<-ZZZ\nEOT\nZZZ\n}\n"'
+  # Rows whose term no battery row proved (test-design round 3, P3-2 and P3-3): each expects that term's own text.
+  mutate RED "R30 each alert's escalation_target closes at column 0 right above the real closer, mirrored (inside the subset; only the span row sees the raw block stop one line short)" TF \
+    "the raw and the effective text of a flip block span different lines" \
+    'for lab in FLIP_ALERTS:
+    s = blk_sub(s, "logtail_exploration_alert", lab, ESC_END, ESC_END.replace("\n  }\n}\n", "\n}\n}\n"))'
+  mutate RED "R31 R19 on the canary: an interpolated-# heredoc shows the lexer a pristine replace() line while an interpolated /* hides the real canary local, which is production's own (the canary would never fire)" TF \
+    "the raw alerts file does not hold exactly one production SQL local line, one canary SQL local line and one replace() line" \
+    'assert s.count(CANARY_LINE + "\n") == 1
+decoy = "  flip_note = join(\"${\"#\"}\", [<<-EOT\n" + CANARY_LINE + "\n  EOT\n  ])\n  flip_hide = {\n    note = \"${\"/*\"}\"\n  }\n"
+s = s.replace(CANARY_LINE + "\n", decoy + "  inngest_cutover_flip_silent_canary_sql = local.inngest_cutover_flip_silent_sql\n  # */\n")'
+  mutate RED "R32 a %{ if } directive whose condition holds a quoted # ends in /* in a locals block outside the flip text, and a # */ after the production alert closes it (the %{ half of S2)" TF \
+    "subset S2: a \${ or %{ does not close on its own line or carries a quote" \
+    'H = "resource \"logtail_exploration_alert\" \"inngest_cutover_flip_silent\" {\n"
+assert s.count(H) == 1
+i = s.index(H)
+s = s[:i] + "locals {\n  zz_note = length(\"%{ if \"#\" == \"\" }x%{ endif }\") /*\n}\n\n" + s[i:]
+i, j = blk(s, "logtail_exploration_alert", "inngest_cutover_flip_silent")
+s = s[:j] + "# */\n}\n" + s[j:]'
 fi
 
 if [ -z "${MUT_SKIP:-}" ] && [ "${MUT_ROWS_RUN:-0}" -ne "$MUT_ROWS_EXPECTED" ]; then
