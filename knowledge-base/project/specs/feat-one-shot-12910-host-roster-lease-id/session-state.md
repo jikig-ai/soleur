@@ -36,3 +36,7 @@ soleur:plan, soleur:deepen-plan, plan-review panel (dhh-rails-reviewer, kieran-r
 - constraint: owner-gated: any further serve/drain dispatch, Doppler writes, host replace
 - constraint: machine saturated, single test files only, scratch under /var/tmp
 - constraint: don't touch #12330, #11694, #11676, #11669, #10476
+
+## Work Phase
+- Phase 0 (2026-11-18): live SOLEUR_HOST_ROSTER keys = [web-1, web-2], both addresses match var.web_hosts; no Doppler write.
+- Phase 1 done (3086ba3244). Phase 2: ci-deploy.sh resolve_host_key + T3 sticky check (top of the web-platform branch, before any prune/pull/run); retry only on a failed curl (an empty answer is final, keeps harness deploys fast); env-file refusal dropped (T1 verification makes a Doppler-set key inert).

@@ -326,6 +326,66 @@ resolve_host_id() {
 HOST_ID="$(resolve_host_id || true)"
 readonly HOST_ID
 
+# SOLEUR_HOST_KEY (#12910) — the host's var.web_hosts key (`web-1`, `web-2`), the
+# id the worktree write-lease places this host under and the key SOLEUR_HOST_ROSTER
+# is keyed by. HOST_ID above stays as telemetry: the Hetzner instance id changes on
+# every replace, so keying the lease by it split the roster key from the lease id.
+# Derived from the metadata `hostname` (the Terraform `name`) by inverting server.tf's
+# `each.key == "web-1" ? "soleur-web-platform" : "soleur-${each.key}"` exactly:
+# soleur-web-platform -> web-1; soleur-web-1 is never web-1's name (rc 1); any other
+# soleur-<k> -> <k>; anything else rc 1. The result must match the key regex.
+# web-hosts-generic.test.sh C8 round-trips every var.web_hosts key through this body.
+# The app accepts the key only when the roster maps it to its own private IP
+# (host-identity.ts describeHostIdentity, CTO ruling T1), so a wrong key degrades
+# to HOST_ID, never to a peer's key. Tests point SOLEUR_HOST_KEY_METADATA_URL at a
+# file:// fixture and SOLEUR_HOST_KEY_RETRY_SLEEP at 0.
+resolve_host_key() {
+  local url="${SOLEUR_HOST_KEY_METADATA_URL:-http://169.254.169.254/hetzner/v1/metadata/hostname}"
+  local name="" key="" try
+  # Retry only a FAILED read (transient metadata outage); an answered empty body is final.
+  for try in 1 2 3; do
+    if name="$(curl -sf --max-time 3 "$url" 2>/dev/null)"; then break; fi
+    name=""
+    if [[ "$try" -lt 3 ]]; then sleep "${SOLEUR_HOST_KEY_RETRY_SLEEP:-1}"; fi
+  done
+  name="$(printf '%s' "$name" | tr -d '[:space:]')"
+  case "$name" in
+    soleur-web-platform) key="web-1" ;;
+    soleur-web-1) return 1 ;;
+    soleur-?*) key="${name#soleur-}" ;;
+    *) return 1 ;;
+  esac
+  [[ "$key" =~ ^[a-z][a-z0-9-]{0,30}$ ]] || return 1
+  printf '%s' "$key"
+}
+HOST_KEY="$(resolve_host_key || true)"
+readonly HOST_KEY
+
+# T3 stickiness (#12910): a host whose running prod container already carries a
+# non-empty SOLEUR_HOST_KEY must deploy under the SAME key. A metadata outage or a
+# rename would otherwise move every live lease to a new id mid-life (the incident
+# this key exists to end). The running container is the last-good record: no
+# on-host state file, nothing to go stale across a replace (a replaced host has no
+# running container, so its first deploy continues with whatever resolved).
+# Config.Env keeps both --env-file and -e entries in order; our -e comes last, so read the last.
+# rc 0 = continue, rc 1 = abort before the canary.
+host_key_sticky_check() {
+  local running=""
+  running="$(docker inspect --type container --format '{{range .Config.Env}}{{println .}}{{end}}' soleur-web-platform 2>/dev/null \
+    | grep '^SOLEUR_HOST_KEY=' | tail -n 1 || true)"
+  running="${running#SOLEUR_HOST_KEY=}"
+  if [[ -n "$running" && "$running" != "$HOST_KEY" ]]; then
+    return 1
+  fi
+  return 0
+}
+
+# One closed-grammar line per deploy: `host_key resolved=<key>`, `=fallback`, or
+# `=abort reason=key_change`. Never the raw metadata hostname.
+log_host_key() {
+  logger -t "$LOG_TAG" "host_key resolved=$1" || true
+}
+
 # Per-host owner-side relay bind (ADR-068 §(a), item 2). SOLEUR_PROXY_BIND is the
 # host's OWN private-net IP; it cannot be a fleet-wide Doppler value (two hosts
 # would bind each other's address). Resolve from the 10.0.1.0/24 interface.
@@ -5146,6 +5206,15 @@ zot_gate_and_login
 # Component-specific deploy logic
 case "$COMPONENT" in
   web-platform)
+    # #12910 T3: refuse a key change on an already-keyed host first, before any prune, pull or
+    # container. A stray fleet-wide SOLEUR_HOST_KEY in the Doppler env-file cannot move a lease:
+    # the app accepts a key only where the roster maps it to that host's own private IP.
+    if ! host_key_sticky_check; then
+      log_host_key "abort reason=key_change"
+      final_write_state 1 "host_key_change"
+      exit 1
+    fi
+    log_host_key "${HOST_KEY:-fallback}"
     echo "Pruning unused Docker images..."
     # `200>&-` closes the FD-200 advisory lock for these long-running docker
     # children (#5062). Without it, a `docker pull` blocked on a network syscall
@@ -5413,6 +5482,7 @@ case "$COMPONENT" in
       -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
       -e CRON_WORKSPACE_ROOT=/workspaces \
       -e SOLEUR_HOST_ID="$HOST_ID" \
+      -e SOLEUR_HOST_KEY= \
       -e SOLEUR_PROXY_BIND= \
       -e SOLEUR_HOST_PRIVATE_IP= \
       -e NODE_OPTIONS="$CANARY_NODE_OPTIONS" \
@@ -5799,6 +5869,7 @@ case "$COMPONENT" in
         -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
         -e CRON_WORKSPACE_ROOT=/workspaces \
         -e SOLEUR_HOST_ID="$HOST_ID" \
+        -e SOLEUR_HOST_KEY="$HOST_KEY" \
         -e SOLEUR_HOST_PRIVATE_IP="$PROXY_BIND" \
         -e SOLEUR_PROXY_BIND=0.0.0.0 \
         -e SOLEUR_PROXY_PORT=8443 \

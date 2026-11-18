@@ -121,8 +121,11 @@ RELAY_CANARY_ENV = {"SOLEUR_PROXY_BIND": {""}}
 # no 8443: the exec-forward listener never needs to be reached before the first ci-deploy re-asserts the tuple).
 EXEC_FORWARD_PORT = "8445"
 EXEC_FORWARD_PUBLISH = "${RELAY_PUBLISH_BIND:-127.0.0.1}:%s:%s" % (EXEC_FORWARD_PORT, EXEC_FORWARD_PORT)
-IDENTITY_PROD_ENV = {"SOLEUR_HOST_PRIVATE_IP": {"$PROXY_BIND"}}
-IDENTITY_CANARY_ENV = {"SOLEUR_HOST_PRIVATE_IP": {""}}
+# #12910: the lease placement key (the var.web_hosts key ci-deploy.sh resolves from the metadata hostname) travels the same
+# way: $HOST_KEY on prod, a literal EMPTY on the canary (T10: the canary must never place a lease under the prod key). The
+# first-boot tuple carries none: its container falls back to SOLEUR_HOST_ID until the first ci-deploy re-asserts the tuple.
+IDENTITY_PROD_ENV = {"SOLEUR_HOST_PRIVATE_IP": {"$PROXY_BIND"}, "SOLEUR_HOST_KEY": {"$HOST_KEY"}}
+IDENTITY_CANARY_ENV = {"SOLEUR_HOST_PRIVATE_IP": {""}, "SOLEUR_HOST_KEY": {""}}
 IDENTITY_FIRST_BOOT_ENV = {"SOLEUR_HOST_PRIVATE_IP": {"${private_ip}"}}
 _VOLS = {"/mnt/data/workspaces:/workspaces", "/mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro", INNGEST_CA_VOL}
 # Scalar options a start must CARRY (MISSING_DECLARED); their allowed VALUES are checked separately. The memory cap and
