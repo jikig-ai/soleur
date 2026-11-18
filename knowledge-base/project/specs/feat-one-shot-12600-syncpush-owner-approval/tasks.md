@@ -235,8 +235,9 @@ phase, and record that phase's RED runs with it.
   changes that aren't on your repository's main branch yet, so it was not updated. Until it is, this page may still show
   the files as they were. You don't need to try again." and remove the header's "Interim copy; the #12714 wireframe may
   refine it" sentence; the four `lead` clauses and `kbWorkspaceSyncResyncPendingNotice` stay as shipped.
-- [ ] 11.5 `e2e/settings-kb-sync-held.e2e.ts` on the dev project after the 10.4 apply (Owner and member flows, V6
+- [x] 11.5 `e2e/settings-kb-sync-held.e2e.ts` on the dev project after the 10.4 apply (Owner and member flows, V6
   strings, waits on the rendered copy); screenshots at desktop and 375 px for the PR, compared with the wireframe.
+  Evidence (2026-11-18): 16/16 green, `authenticated` project, mock dev harness, not the dev Supabase project (8 states x 2 widths, no 375 px h-scroll); `authenticated` + `chromium` 117 passed, 1 skipped.
 - [ ] 11.6 At ship: file the follow-up issues and link #12719 as not closed:
   - X3 (legacy `syncWorkspace` `pull --ff-only` / `fetch origin`, P1 security; reuses `kb-sync-remote.ts`);
   - W6 (I3, with its trigger);
