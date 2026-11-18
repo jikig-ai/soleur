@@ -1,5 +1,10 @@
 # Brainstorm: Per-tenant executor topology + cluster-scale agent/session scheduling (#9773, #5863)
 
+> **Superseded in part (2026-11-18) by [ADR-325](../../engineering/architecture/decisions/ADR-325-egress-credential-injection-is-a-property-of-the-hop.md).**
+> S3 (#9845) is widened to generic per-host credential injection with approval attachment, and S0 Arm D (#9859) is now the Cloudflare trial (Decisions 2, 5).
+> "Managed vendors: no" is now a measured contingency: self-run injection on the hop is measured first, a managed platform is the fallback, and EU-only is negotiable for a clear gain (Decisions 2, 3).
+> gVisor per session (#9842) is unchanged; #9842 must re-measure the carrier and criteria 1, 5 and 6 (Decision 1). CA scope and the ADR-311 gating follow Decisions 4 and 6.
+
 **Date:** 2026-10-08 · **[Updated 2026-10-09: adversarial challenge review + re-brainstorm of the isolation design]**
 **Issues:** #9773 (OPEN — per-tenant executor topology, deferred from #5863, tracking issue) · #5863 (OPEN — per-session mountns isolation; arm F shipped as PR #9767, merged 2026-10-09T12:11Z; soak follow-through open)
 **Epic:** #9842 (children #9843-#9854) · **Branch:** feat-tenant-executor-topology · **PR:** #9832 (draft)
