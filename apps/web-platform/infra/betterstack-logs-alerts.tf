@@ -2119,10 +2119,12 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # incident 1051496324 was born at the first evaluation after the re-arm (back-dated to 2026-11-12T23:45:00Z) and read
 # `Current value: 0` for five days, while the alert's own SQL replayed on four 900 s windows returned 3, 2, 2 and 3
 # object rows and the largest gap between consecutive object rows since 2026-11-12 17:10Z was 370 s (measured
-# 2026-11-17 with betterstack-query.sh, read only). It was the third `lower_than` silence-alert incident in this
-# account opened on healthy data (1045365287 above, egress_gw_probe_silent's 1047829421, and this one; a fourth,
-# egress 1031046761, began as a true positive and then stayed open 24 days after the rows returned;
-# egress_gw_probe_silent read 0 with no JSONType at all), so #12726 applied ADR-218's 2026-11-05 rule to it: count
+# 2026-11-17 with betterstack-query.sh, read only). It was at least the fourth `lower_than` silence-alert incident in
+# this account opened on healthy data (luks_monitor_host_timer_dark's 1023423999 under #11048, 33 nights of
+# `Current value: 0` on passing rows; 1045365287 above; egress_gw_probe_silent's 1047829421; and this one;
+# claude_cost_capture_dark's 1020832712 under #11049 was not measured). Egress 1031046761 stayed open 24 days
+# (began 2026-10-12 as a true positive; rows measured arriving 2026-11-02; resolved 2026-11-05), and
+# egress_gw_probe_silent read 0 with no JSONType at all, so #12726 applied ADR-218's 2026-11-05 rule to it: count
 # the MISSING, not the present.
 #
 # SHAPE (#12726, ADR-218 amendment 2026-11-17). The value is ADR-218's host-count canon with a roster of one,
