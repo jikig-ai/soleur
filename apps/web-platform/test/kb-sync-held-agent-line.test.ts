@@ -444,10 +444,12 @@ describe("grep row: the held line, ccPushPromptAddendum, the push tool descripti
     expect(toolDescription).toMatch(/Requires the workspace Owner's approval\./);
   });
 
-  it("route agreement: no variant contradicts the addendum's ban on `git push` (none tells the agent to run it)", () => {
+  it("route agreement: no variant and not the cc baseline contradicts the addendum's ban on `git push` (none tells the agent to run it)", () => {
     expect(addendum).toMatch(/do not run `git push` in Bash/);
-    for (const t of [...variants, ...merges]) {
-      expect(t).not.toMatch(/(?<!not )run `git push`/);
+    expect(GH_AUTH_STATUS_GUIDANCE_DIRECTIVE).toMatch(/never run `git push`/);
+    for (const t of [...variants, ...merges, GH_AUTH_STATUS_GUIDANCE_DIRECTIVE]) {
+      expect(t).not.toMatch(/(?<!(?:not|never) )run `git push`/);
+      expect(t).not.toMatch(/\bpush\b[^.]*credentialed/i);
     }
   });
 
@@ -456,6 +458,10 @@ describe("grep row: the held line, ccPushPromptAddendum, the push tool descripti
     expect(d).not.toMatch(/\bpush\b[^.]*credentialed/i);
     expect(d).not.toMatch(/gh pr create/);
     expect(d).toMatch(/to push a branch, use `github_push_branch` when it is listed; never run `git push`/i);
+    // Only push is removed (D41(b)): fetch and pull stay credentialed, which the merge-blocked lines' `git fetch origin` needs.
+    expect(d).toMatch(/Raw git fetch and pull against your connected repo are credentialed automatically/);
+    expect(merges.some((m) => m.includes("run `git fetch origin`"))).toBe(true);
+    expect(d).toContain("gh issue view 123 -R owner/repo");
     // The two grep anchors the directive's own test pins survive.
     expect(d).toContain("gh auth status");
     expect(d).toContain("-R owner/repo");
