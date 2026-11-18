@@ -196,12 +196,17 @@ CANARY_SQL_RAW="$(awk '/^[[:space:]]*inngest_cutover_flip_silent_canary_sql[[:sp
 # resources are module-global, so a definition or a header in another file counts as much as one in the alerts file.
 # One grep lists the candidates (the fixed name is never split by a comment: a comment ends an identifier, and inside a
 # "string" nothing is a comment), then only those few are lexed; .terraform/ is never walked. The alerts file itself
-# is always read through $TF, so a TF override is never double-counted.
+# is always read through $TF, so a TF override is never double-counted. `-R` follows a symlinked *.tf (Terraform loads
+# one), and a grep error (rc 2: an unreadable file) is FATAL, never read as "no other definition".
 OTHER_TF_CODE=""
+_grc=0; _cands="$(grep -RlF --include='*.tf' --exclude-dir=.terraform -- 'inngest_cutover_flip_silent' "$INFRA")" || _grc=$?
+if [ "$_grc" -ge 2 ]; then
+  printf '[FATAL] grep exited %s listing the infra *.tf that name a flip local or resource under %s\n' "$_grc" "$INFRA" >&2; exit 2
+fi
 while IFS= read -r _tf; do
   [ -n "$_tf" ] || continue
   OTHER_TF_CODE+="$(strip_comments "$_tf" | blank_heredocs)"$'\n'
-done <<< "$(grep -rlF --include='*.tf' --exclude-dir=.terraform -- 'inngest_cutover_flip_silent' "$INFRA" 2>/dev/null | grep -vxF -- "$INFRA/betterstack-logs-alerts.tf")"
+done <<< "$(grep -vxF -- "$INFRA/betterstack-logs-alerts.tf" <<< "$_cands")"
 CANARY_HOST='soleur-inngest-canary-absent'
 # Bounded at the first `rc=` line-start — the plan step's own `rc=${PIPESTATUS[0]}` capture.
 # The old `rc=$?` terminator never matched it, so the slice silently ran to EOF (#11899).
@@ -440,7 +445,11 @@ else
 fi
 # Anti-collision: no host, Vector config or script may emit the canary host, or the canary would read real rows.
 CANARY_TF_N="$(grep -oF "$CANARY_HOST" "$TF" | wc -l)"
-CANARY_ELSEWHERE="$(grep -rIlF --exclude-dir=.terraform -- "$CANARY_HOST" "$INFRA" 2>/dev/null | grep -vxF -- "$INFRA/betterstack-logs-alerts.tf" || true)"
+_crc=0; _chits="$(grep -RIlF --exclude-dir=.terraform -- "$CANARY_HOST" "$INFRA")" || _crc=$?
+if [ "$_crc" -ge 2 ]; then
+  printf '[FATAL] grep exited %s scanning %s for the canary host: an unreadable file is not evidence of no emitter\n' "$_crc" "$INFRA" >&2; exit 2
+fi
+CANARY_ELSEWHERE="$(grep -vxF -- "$INFRA/betterstack-logs-alerts.tf" <<< "$_chits" || true)"
 if [ "$CANARY_TF_N" -eq 1 ] && [ -z "$CANARY_ELSEWHERE" ]; then
   ok "'${CANARY_HOST}' appears nowhere under the infra tree but the replace() line (anti-collision: nothing can emit it)"
 else
