@@ -915,7 +915,7 @@ of `scripts/sentry-alert-live-fidelity.sh`.
       `bash tests/scripts/test-sentry-alert-drift-workflow.sh` pass; every Guard 1 row is a case;
       `SENTRY_FIXTURE_UPTIME: ""` appears in both `scheduled-sentry-alert-drift.yml` and
       `apply-sentry-infra.yml`.
-- [x] AC7: the Phase 3 step 13 grep sweep prints nothing (its one hit is the allowed `cloudflare-pages-cutover.md:212` dated note, named in the PR).
+- [x] AC7: the Phase 3 step 13 grep sweep prints only the allowed `cloudflare-pages-cutover.md:212` dated note, named in the PR.
 - [x] AC8: ADR-328 exists (ordinal checked free on every `origin/*` ref); ADR-204 carries the two
       "Amended by ADR-328" pointers; `model.c4` edits made and `model.likec4.json` regenerated;
       `c4-code-syntax`, `c4-render` and `c4-count-parity` pass.

@@ -26,7 +26,7 @@ PROJ="$REPO_ROOT/tests/scripts/lib/sentry-alert-projection.jq"
 CAPTURE="$REPO_ROOT/knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 COMMITTED_REF="$REPO_ROOT/apps/web-platform/infra/sentry/alert-reference.json"
 pass=0; fail=0
-EXPECTED_TESTS=95
+EXPECTED_TESTS=96
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
@@ -1744,19 +1744,30 @@ t_g1_unprintable_host_placeholder() {
   # displays identically to the real one, and an empty authority
   # (`https:///app.soleur.ai@evil.tld/`) is resolved past by a WHATWG parser.
   # Both print a placeholder, never a host that reads as app.soleur.ai.
-  local bad=() fx label url
-  for label in homoglyph emptyauth; do
+  # A bare `https://` has an empty remainder, so `split("/")` is `[]`: the `// ""`
+  # fallback must turn that into the placeholder, not a jq error that blinds the section.
+  local bad=() fx label url want
+  for label in homoglyph emptyauth bare; do
     case "$label" in
-      homoglyph) url=$'https://\xd0\xb0pp.soleur.ai/x' ;;
-      emptyauth) url='https:///app.soleur.ai@evil.tld/' ;;
+      homoglyph) url=$'https://\xd0\xb0pp.soleur.ai/x'; want='https://<unprintable-host>/x' ;;
+      emptyauth) url='https:///app.soleur.ai@evil.tld/'; want='https://<unprintable-host>/app.soleur.ai@evil.tld/' ;;
+      bare) url='https://'; want='https://<unprintable-host>' ;;
     esac
     fx=$(_up_fixture "g1unp.$label" "$(_up_row 9000012 3 "$url")")
     _run_up "$fx"
-    grep -qF -- 'UPTIME UNMANAGED: 9000012:3:https://<unprintable-host>/' <<<"$_out" || bad+=("$label: no <unprintable-host> finding")
+    grep -qE -- "UPTIME UNMANAGED: 9000012:3:$(sed 's/[][\\.*^$/]/\\&/g' <<<"$want")( |\$)" <<<"$_out" || bad+=("$label: want '$want'")
   done
   if [[ ${#bad[@]} -eq 0 ]]; then
-    _report "G1-18 a homoglyph host and an empty authority print <unprintable-host>, never a look-alike of the real host" ok
+    _report "G1-18 a homoglyph host, an empty authority and a bare https:// print <unprintable-host> with the path intact" ok
   else _report "G1-18 unprintable host" fail "${bad[*]}; output: $(head -c 400 <<<"$_out")"; fi
+}
+# jq 1.7 returns a BYTE offset from string index() while slicing is by codepoint;
+# jq 1.8 does not, so G1-18 alone catches a revert only on a 1.7 host. Pin the source.
+t_g1_url_shape_no_index() {
+  local def; def=$(sed -n '/^      def url_shape:$/,/^        end;$/p' "$PROBE" | sed 's/[[:space:]]*#.*$//')
+  if [[ -n "$def" ]] && grep -q 'split("/")' <<<"$def" && ! grep -qE '(^|[^a-z_])(r?index|indices)\(' <<<"$def"; then
+    _report "G1-19 url_shape cuts the authority with split/length, never index()/rindex()/indices() (jq $(jq --version))" ok
+  else _report "G1-19 url_shape index()" fail "def block $(wc -l <<<"$def") lines; $(grep -nE '(r?index|indices)\(' <<<"$def" | head -3)"; fi
 }
 t_g1_h1_clean() {
   _run_up "$UP_CLEAN"
@@ -1804,10 +1815,12 @@ _run_up_live() { # <stub-dir> [VAR=val…] — rules fixture-served, uptime LIVE
   _guard_out
 }
 t_g1_transport_failure_is_unavailable() {
-  local d; d=$(_up_live_stub g1curl22 /dev/null 22)
+  # The stub serves a VALID body: with /dev/null the empty-body check alone made it
+  # UNAVAILABLE, so the curl-rc check could be deleted with this row still green.
+  local d; d=$(_up_live_stub g1curl22 "$UP_CLEAN" 22)
   _run_up_live "$d"
   if [[ "$_rc" -eq 0 ]] && grep -q '^SENTRY_UPTIME uptime_verdict=unavailable unmanaged=0 live=? declared=' <<<"$_out" \
-     && grep -q 'live fidelity: PASS' <<<"$_out"; then
+     && grep -qF 'the detectors GET failed (curl rc=22)' <<<"$_out" && grep -q 'live fidelity: PASS' <<<"$_out"; then
     _report "G1-11 a failed detectors GET (curl rc 22) is UNAVAILABLE and does not abort the rule-side check" ok
   else _report "G1-11 transport failure" fail "rc=$_rc marker '$(_up_marker)'; output: $(head -c 400 <<<"$_out")"; fi
 }
@@ -1930,6 +1943,7 @@ t_g1_nonnumeric_id_is_unavailable
 t_g1_nonnumeric_mode_is_unavailable
 t_g1_backslash_authority_placeholder
 t_g1_unprintable_host_placeholder
+t_g1_url_shape_no_index
 
 echo "=== $pass passed, $fail failed ==="
 

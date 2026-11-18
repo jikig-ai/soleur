@@ -60,8 +60,8 @@ Derived from the post-review plan. Rulings are in `decision-challenges.md`.
 
 - [x] 4.1 Canonicalizer and mutation suites pass (AC5).
 - [x] 4.2 Fidelity and drift-workflow tests pass (AC6).
-- [ ] 4.3 C4 tests pass (AC8); discoverability test passes (AC15).
-- [x] 4.4 Grep sweep prints nothing (AC7); resource counts per AC3.
+- [x] 4.3 C4 tests pass (AC8); discoverability test passes (AC15).
+- [x] 4.4 Grep sweep prints only the allowed `cloudflare-pages-cutover.md:212` hit (AC7); resource counts per AC3.
 
 ## Phase 4b: Pre-merge (agent-run)
 

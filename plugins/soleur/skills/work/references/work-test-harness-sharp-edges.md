@@ -104,6 +104,8 @@ confirm a known-bad copy fails, before reporting clean. **Why:** #12536 — see
 `knowledge-base/project/learnings/2026-11-10-a-verify-only-key-slot-guard-anchors-on-what-every-signer-needs.md`
 session error 5.
 
+## markdownlint parses `$…$` as inline math
+
 This repo's markdownlint parses `$…$` as inline math: two unescaped dollar
 amounts on one line pair up and swallow the code-span backticks between them,
 so a well-formed span reports MD038/MD034. Escape `$` as `\$` outside code

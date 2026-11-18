@@ -31,8 +31,8 @@ duplicates. Two things went wrong:
    `removed {}` block touch the Sentry root.
 2. **Escape `$` outside code spans.** This repo's markdownlint parses `$…$` as inline math.
    Dollar amounts in one table cell paired up across the cell and swallowed the backticks
-   between them. Writing `\$29` outside the spans fixed the line. Every changed `.md` then
-   linted with rc=0.
+   between them. Writing `\$29` outside the spans fixed the line. Every changed in-scope `.md`
+   then linted with rc=0.
 
 ## Key Insight
 
