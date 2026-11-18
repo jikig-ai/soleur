@@ -100,6 +100,9 @@ describe("output-aware heartbeat wiring (always-create producers)", () => {
       expect(src).toMatch(/stderrTail: spawnResult!?\.stderrTail/);
       expect(src).toMatch(/exitCode: spawnResult!?\.exitCode/);
       expect(src).toMatch(/stdoutTail: spawnResult!?\.stdoutTail/);
+      // #12847 fix round 2 — a plugin-loading producer passes the reseed flag, so a mixed-tree run is not
+      // committed (resolveOutputAwareOk returns false on it; the argument is optional, so pin the wire).
+      if (/loadPlugin:\s*true/.test(src)) expect(src).toMatch(/pluginReseeded: spawnResult!?\.pluginReseeded/);
 
       // #4960/#4978 — the handler-level silence-hole fallback. When the
       // output-aware check found no labeled issue in the run window (mid-eval
@@ -238,17 +241,20 @@ describe("headless skill resolution parity (#4993)", () => {
   });
 
   it.each(EXPECTED_SKILL_PRODUCERS)(
-    "%s carries --plugin-dir + Skill + Task in CLAUDE_CODE_FLAGS, plugin-dir before --",
+    "%s loads the plugin through the substrate (loadPlugin: true, no caller --plugin-dir) + Skill + Task",
     (file) => {
       const src = readFileSync(resolve(FN_DIR, file), "utf-8");
       const flagsMatch = src.match(/const CLAUDE_CODE_FLAGS = \[([\s\S]*?)\];/);
       const flagsBlock = flagsMatch ? flagsMatch[1] : "";
       expect(flagsBlock.length).toBeGreaterThan(0);
 
-      // Registers the plugin (clone's tracked tree — #5091) (headless --print does not auto-discover it).
-      expect(flagsBlock).toContain('"--plugin-dir"');
-      expect(flagsBlock).toContain('"plugins/soleur"');
-      expect(flagsBlock).toMatch(/"--plugin-dir",\s*\n\s*"plugins\/soleur",/);
+      // #12824 — headless --print does not auto-discover the plugin, so a skill-invoking producer must
+      // load it; the substrate inserts `--plugin-dir <read-only root>` when the spawn passes
+      // `loadPlugin: true` (Guard 1 row 12: `false` here means the skill is silently not found). A
+      // caller-named dir resolved against the agent-writable clone and is now refused.
+      expect(flagsBlock).not.toContain('"--plugin-dir"');
+      expect(flagsBlock).not.toContain('"plugins/soleur"');
+      expect(src).toMatch(/spawnClaudeEval\(\{\s*\n\s*loadPlugin: true,/);
 
       // --allowedTools allowlist must let the eval invoke the skill (Skill) and
       // any subagent the skill fans out (Task). Both must appear in the single
@@ -258,11 +264,9 @@ describe("headless skill resolution parity (#4993)", () => {
       expect(allowList.split(",")).toContain("Skill");
       expect(allowList.split(",")).toContain("Task");
 
-      // --plugin-dir must precede the load-bearing `--` end-of-options marker.
-      const endMarker = flagsBlock.indexOf('"--"');
-      expect(endMarker).toBeGreaterThan(-1);
-      expect(flagsBlock.indexOf('"--plugin-dir"')).toBeLessThan(endMarker);
-      expect(flagsBlock.indexOf('"plugins/soleur"')).toBeLessThan(endMarker);
+      // The load-bearing `--` end-of-options marker is still present (the substrate's --plugin-dir
+      // lands before every caller flag, so before it — cron-spawn-isolation.test.ts row 7).
+      expect(flagsBlock.indexOf('"--"')).toBeGreaterThan(-1);
     },
   );
 });
