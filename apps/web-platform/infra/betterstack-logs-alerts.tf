@@ -2151,8 +2151,9 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # recovered is a finding for #12190 that blocks closing #12726, not the retirement.
 # DELETION TRAP: the removal PR deletes the two canary blocks but KEEPS their two bare `-target=` lines in
 # apply-web-platform-infra.yml (and lists both addresses in the census INTENDED_DESTROYS) for its own destroying
-# apply, because a bare target on an address with no configuration is what plans the delete; a follow-up removes them
-# after that apply. The egress canary went the same way (#12268 kept the targets, #12306 removed them).
+# apply, because a bare target on an address with no configuration is what plans the delete; the removal PR merges
+# with its standalone `[ack-destroy]` line, and after that apply a follow-up removes the lines and both
+# INTENDED_DESTROYS entries. The egress canary went the same way (#12268 kept the targets, #12306 removed them).
 #
 # FALSE-SILENCE RESIDUAL (accepted, CTO R2/R7). Under treat_as_zero an evaluator error or timeout also reads 0, which
 # this shape reads as healthy. Compensating controls, each scoped to what it sees: the canary (this predicate shape,
