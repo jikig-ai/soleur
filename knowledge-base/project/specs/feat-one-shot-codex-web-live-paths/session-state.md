@@ -4432,3 +4432,16 @@
   or ship gate is cleared. Live Firestore writes remain hard-disabled. Separate
   authorization is still required for independently reviewed exact collection
   commands, and again for the writer window after collection.
+- The schema-preflight regression test is registered in the `scripts` battery.
+  Its 7 synthetic cases passed with Python `ResourceWarning`s promoted to
+  errors; `bash -n scripts/test-all.sh` and `git diff --check` passed. The
+  affected-path selector explicitly selected it for a change to
+  `preflight-schema-vs-ledger.sh` as `edge:derived`. Shard enumeration assigned
+  it to leg 3 and the already registered Codex qualification suite to leg 7;
+  the duration rows are floor estimates, not measurements. Both manifests have
+  760 unique identical labels, and incremental regeneration reports no missing
+  or stale rows. The orphan census passed 857/857 tracked shell suites. An
+  independent reviewer found no defect in this registration/manifest change.
+  No full battery was run; editing `scripts/test-all.sh` still requires full
+  battery QA before shipment. Original dirty worktree remains at 144 entries;
+  no files there were edited.
