@@ -187,11 +187,10 @@ export const GH_AUTH_STATUS_GUIDANCE_DIRECTIVE =
   "Installation tokens cannot call GET /user, so the gh auth status command " +
   "always reports the token invalid even though it works for real repo " +
   "operations. Do NOT self-block on a failing gh auth status — it is a " +
-  "false negative for installation tokens. Raw git push, fetch, and pull " +
-  "against your connected repo are credentialed automatically in your " +
-  "workspace — you do not need gh for them. For any repo operation, pass " +
-  "-R owner/repo explicitly (for example: gh issue view 123 -R owner/repo, " +
-  "gh pr create -R owner/repo); use the connected repository named in your " +
+  "false negative for installation tokens. To push a branch, use " +
+  "`github_push_branch` when it is listed; never run `git push`. For any " +
+  "repo gh operation, pass -R owner/repo explicitly (for example: gh issue " +
+  "view 123 -R owner/repo); use the connected repository named in your " +
   "context for that owner/repo value (do not try to infer it from a git " +
   "remote or a .git directory — your workspace may not contain one). The " +
   "installation token resolves the repo server-side and gh cannot infer it " +
