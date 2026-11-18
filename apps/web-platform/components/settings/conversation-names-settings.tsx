@@ -7,21 +7,26 @@ import { validateCustomName } from "@/server/team-names-validation";
 import { Button } from "@/components/ui/button";
 import { LeaderAvatar } from "@/components/leader-avatar";
 import type { DomainLeaderId } from "@/server/domain-leaders";
-import { isWorkspaceSyncPending } from "@/lib/kb-workspace-sync-notice";
+import {
+  isWorkspaceSyncPending,
+  KB_WORKSPACE_SYNC_HELD_CLAUSE,
+  KB_WORKSPACE_SYNC_PENDING_NOTICE,
+} from "@/lib/kb-workspace-sync-notice";
 
 const MAX_ICON_SIZE = 100 * 1024; // 100KB
 const MAX_ICON_DIMENSION = 256;
 const ACCEPTED_ICON_TYPES = ["image/png", "image/webp"];
 
-// #12714 V6(6): the two non-error outcomes of a leader icon upload. Neutral, not red (D31(1)): nothing failed that the
-// user can fix, and a retry would not help. Every other failure keeps "Upload failed. Please try again.".
-const ICON_PENDING_NOTICE =
-  "Saved to GitHub. Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. The new icon appears here once it is; until then, you see the default icon. You don't need to try again.";
+// #12714 V6(6), #12704 V12: the non-error outcomes of a leader icon upload. Neutral, not red (D31(1)): nothing failed that
+// the user can fix, and a retry would not help. Every other failure keeps "Upload failed. Please try again.". The pending
+// notice composes the KB notice's shared clause (simplicity F15, pattern P3-10).
+const ICON_PENDING_NOTICE = `${KB_WORKSPACE_SYNC_PENDING_NOTICE.lead.upload} ${KB_WORKSPACE_SYNC_HELD_CLAUSE} The new icon appears here once it is; until then, you see the default icon. You don't need to try again.`;
+/** V6(6): a 409 for the path the leader already has saved (the held-pending case): the icon appears once the workspace updates. */
 const ICON_CONFLICT_NOTICE =
   "An icon with this file name is already on GitHub, so nothing was uploaded. If you just uploaded it, it appears here once your workspace is updated from GitHub.";
-
-/** The upload route's answer for a file whose name already exists on GitHub. */
-class IconAlreadyOnGitHub extends Error {}
+/** V12: a 409 for any other saved path, or none (after Reset): the "appears here" promise could never come true. */
+const ICON_CONFLICT_NOT_SAVED_NOTICE =
+  "An icon with this file name is already on GitHub, so nothing was uploaded and the icon shown here stays as it is. Replacing an icon that was uploaded before is not available yet.";
 
 export function ConversationNamesSettingsContent() {
   const { names, updateName, updateIcon, getIconPath, loading } = useTeamNames();
@@ -161,7 +166,12 @@ function LeaderRow({
           body: formData,
         });
 
-        if (res.status === 409) throw new IconAlreadyOnGitHub();
+        // A 409 is an outcome, not a failure (no exception as control flow, pattern P3-10); V12 splits it on the path the
+        // client already holds.
+        if (res.status === 409) {
+          setStatusNotice(customIconPath === `${targetDir}/${iconFilename}` ? ICON_CONFLICT_NOTICE : ICON_CONFLICT_NOT_SAVED_NOTICE);
+          return;
+        }
         if (!res.ok) {
           throw new Error(`Upload failed: ${res.status}`);
         }
@@ -172,17 +182,13 @@ function LeaderRow({
         await onIconChange(leaderId, `${targetDir}/${iconFilename}`);
         if (isWorkspaceSyncPending(body)) setStatusNotice(ICON_PENDING_NOTICE);
       } catch (err) {
-        if (err instanceof IconAlreadyOnGitHub) {
-          setStatusNotice(ICON_CONFLICT_NOTICE);
-          return;
-        }
         console.error("[conversation-names-settings] icon upload error:", err);
         setError("Upload failed. Please try again.");
       } finally {
         setUploading(false);
       }
     },
-    [leaderId, onIconChange],
+    [leaderId, onIconChange, customIconPath],
   );
 
   const handleReset = useCallback(async () => {

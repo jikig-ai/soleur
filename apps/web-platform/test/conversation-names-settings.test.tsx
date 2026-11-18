@@ -196,14 +196,17 @@ const PENDING =
   "Saved to GitHub. Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. The new icon appears here once it is; until then, you see the default icon. You don't need to try again.";
 const CONFLICT =
   "An icon with this file name is already on GitHub, so nothing was uploaded. If you just uploaded it, it appears here once your workspace is updated from GitHub.";
+const CONFLICT_NOT_SAVED =
+  "An icon with this file name is already on GitHub, so nothing was uploaded and the icon shown here stays as it is. Replacing an icon that was uploaded before is not available yet.";
 const FAILED = "Upload failed. Please try again.";
 
 describe("ConversationNamesSettingsContent — leader icon upload outcomes (#12714)", () => {
-  const teamNamesBody = { names: {}, nudgesDismissed: [], namingPromptedAt: null };
+  let teamNamesBody: { names: object; nudgesDismissed: never[]; namingPromptedAt: null; iconPaths?: Record<string, string> };
   let uploadResponse: { ok: boolean; status: number; body: unknown };
   const calls: Array<{ url: string; method: string }> = [];
 
   beforeEach(() => {
+    teamNamesBody = { names: {}, nudgesDismissed: [], namingPromptedAt: null };
     calls.length = 0;
     mockFetch.mockReset();
     mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
@@ -264,7 +267,8 @@ describe("ConversationNamesSettingsContent — leader icon upload outcomes (#127
     expect(screen.queryByText(FAILED)).not.toBeInTheDocument();
   });
 
-  it("a 409 shows the V6 409 notice (neutral, not red) instead of 'Upload failed', and saves nothing", async () => {
+  it("a 409 for the path the leader already has saved shows the V6 409 notice (neutral, not red) and saves nothing", async () => {
+    teamNamesBody.iconPaths = { cmo: "settings/team-icons/cmo.png" };
     uploadResponse = { ok: false, status: 409, body: { error: "File already exists" } };
     await uploadCmoIcon();
     const status = await screen.findByRole("status");
@@ -272,6 +276,31 @@ describe("ConversationNamesSettingsContent — leader icon upload outcomes (#127
     expect(status.className).not.toMatch(/red/);
     expect(screen.queryByText(FAILED)).not.toBeInTheDocument();
     expect(calls.some((c) => c.url === "/api/team-names" && c.method !== "GET")).toBe(false);
+  });
+
+  it.each([
+    ["no saved icon (after Reset)", undefined],
+    ["a different file type saved", { cmo: "settings/team-icons/cmo.webp" }],
+  ])("V12: a 409 with %s shows the 'stays as it is' notice, never the 'appears here' promise", async (_n, iconPaths) => {
+    if (iconPaths) teamNamesBody.iconPaths = iconPaths;
+    uploadResponse = { ok: false, status: 409, body: { error: "File already exists" } };
+    await uploadCmoIcon();
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toBe(CONFLICT_NOT_SAVED);
+    expect(status.className).not.toMatch(/red/);
+    expect(screen.queryByText(FAILED)).not.toBeInTheDocument();
+    expect(calls.some((c) => c.url === "/api/team-names" && c.method !== "GET")).toBe(false);
+  });
+
+  it("the pending notice composes the KB notice's shared clause (one source, simplicity F15)", async () => {
+    const { KB_WORKSPACE_SYNC_HELD_CLAUSE, kbWorkspaceSyncPendingNotice } = await import("@/lib/kb-workspace-sync-notice");
+    expect(PENDING).toContain(KB_WORKSPACE_SYNC_HELD_CLAUSE);
+    expect(kbWorkspaceSyncPendingNotice("upload")).toContain(KB_WORKSPACE_SYNC_HELD_CLAUSE);
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(__dirname, "..", "components", "settings", "conversation-names-settings.tsx"), "utf8");
+    expect(src).toContain("${KB_WORKSPACE_SYNC_HELD_CLAUSE}");
+    expect(src).not.toMatch(/class \w+ extends Error/);
   });
 
   it.each([400, 403, 500, 503])("any other failure (%i) keeps 'Upload failed. Please try again.' and no status row", async (status) => {

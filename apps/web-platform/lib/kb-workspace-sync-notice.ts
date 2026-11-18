@@ -13,6 +13,13 @@ export const WORKSPACE_SYNC_PENDING = "pending" as const;
 
 export type KbWriteOp = "upload" | "delete" | "rename" | "save";
 
+/**
+ * The shared "why it was not updated" clause (#12704 simplicity F15, pattern P3-10): the KB notice below and the leader-icon
+ * notice compose it, so the wording cannot drift between them.
+ */
+export const KB_WORKSPACE_SYNC_HELD_CLAUSE =
+  "Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated." as const;
+
 export const KB_WORKSPACE_SYNC_PENDING_NOTICE = {
   /** First clause, per op. */
   lead: {
@@ -22,8 +29,7 @@ export const KB_WORKSPACE_SYNC_PENDING_NOTICE = {
     save: "Saved to GitHub.",
   } satisfies Record<KbWriteOp, string>,
   /** The shared second clause. */
-  detail:
-    "Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. Until it is, this page may still show the files as they were. You don't need to try again.",
+  detail: `${KB_WORKSPACE_SYNC_HELD_CLAUSE} Until it is, this page may still show the files as they were. You don't need to try again.`,
 } as const;
 
 /** The full notice for `op`. */
