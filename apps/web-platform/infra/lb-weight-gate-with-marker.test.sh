@@ -205,6 +205,9 @@ set_marker() {
 }
 
 RC=0; OUT=""; ERR=""
+# gate_fail_is <id> — 0 iff a WHOLE line of $ERR is `gate_fail sub_condition=<id>` (#12849): the gate's SOLEUR_SOAK_EVIDENCE
+# line carries `sub_condition=<id>` too, so a substring check could pass on the evidence line alone.
+gate_fail_is() { [[ $'\n'"$ERR"$'\n' == *$'\n'"gate_fail sub_condition=$1"$'\n'* ]]; }
 # run_wb [VAR=value ...] — run the sandboxed wrapper under a CLEAN environment holding only the
 # default pooled-gate env, the token, and the extras (extras may override or add; `-VAR` removes).
 run_wb() {
@@ -248,11 +251,11 @@ scn_argv() { # the exact argv, exactly twice, from the exact config; never run/d
 }
 scn_unset_caller() { # a caller-supplied marker is discarded: Doppler says absent => the gate fails closed
   build_sb "$1" real; set_marker ABSENT; run_wb "WORKSPACES_LUKS_CUTOVER_AT=$OLD4D"
-  [ "$RC" -eq 1 ] && [[ "$ERR" == *"sub_condition=B_workspaces_luks_marker_absent"* ]]
+  [ "$RC" -eq 1 ] && gate_fail_is B_workspaces_luks_marker_absent
 }
 scn_caller_not_preferred() { # Doppler's fresh value governs even when the caller offers an old, valid one
   build_sb "$1" real; set_marker "$FRESH1D"; run_wb "WORKSPACES_LUKS_CUTOVER_AT=$OLD4D"
-  [ "$RC" -eq 1 ] && [[ "$ERR" == *"sub_condition=B_workspaces_luks_soak_not_elapsed"* ]]
+  [ "$RC" -eq 1 ] && gate_fail_is B_workspaces_luks_soak_not_elapsed
 }
 scn_names_fail() { # a transport error: rc 3 and the gate NEVER runs
   build_sb "$1" spy; set_marker "$OLD4D"; echo 1 > "$FX/names_rc"; run_wb
@@ -260,7 +263,7 @@ scn_names_fail() { # a transport error: rc 3 and the gate NEVER runs
 }
 scn_prefix() { # a prefix-colliding name is NOT the marker: absent, and `get` is never issued
   build_sb "$1" real; printf '%s_OLD\n' "$MARKER" > "$FX/names"; printf '%s' "$OLD4D" > "$FX/value"; run_wb
-  [ "$RC" -eq 1 ] && [[ "$ERR" == *"sub_condition=B_workspaces_luks_marker_absent"* ]] && ! grep -q 'secrets get' "$FX/calls"
+  [ "$RC" -eq 1 ] && gate_fail_is B_workspaces_luks_marker_absent && ! grep -q 'secrets get' "$FX/calls"
 }
 scn_exec_rc() { # the gate's own rc propagates, success included (a spy exits 42, then 0)
   build_sb "$1" spy; set_marker "$OLD4D"; run_wb
@@ -528,7 +531,7 @@ scn_proxy_bind_not_forwarded() { # SOLEUR_PROXY_BIND (no longer a gate input, CT
 }
 scn_rotation_unset_fails_closed() { # end-to-end through the REAL gate: unset stays unset, so the gate refuses
   build_sb "$1" real; set_marker "$OLD4D"; run_wb -SOLEUR_SERVING_ROTATION
-  [ "$RC" -eq 1 ] && [[ "$ERR" == *"sub_condition=TOP_serving_rotation_absent"* ]]
+  [ "$RC" -eq 1 ] && gate_fail_is TOP_serving_rotation_absent
 }
 scn_rotation_empty_standby() { # a SET-BUT-EMPTY rotation ("no rotation") reaches the real gate as empty: standby passes
   build_sb "$1" real; set_marker ABSENT; run_wb SOLEUR_WEB2_SERVING_WEIGHT=0 SOLEUR_SERVING_ROTATION=
@@ -615,12 +618,24 @@ scn_table() { build_sb "$1" real; set_marker "$OLD4D"; : > "$FX/names_table"; ru
 assert "a boxed-table name listing is read the same way" scn_table "$WRAPPER"
 
 # the wrapper judges nothing about the soak: a FUTURE value is valid in shape and the gate refuses it
-scn_future() { build_sb "$1" real; set_marker "$FUTURE"; run_wb; [ "$RC" -eq 1 ] && [[ "$ERR" == *"sub_condition=B_workspaces_luks_marker_future"* ]]; }
+scn_future() { build_sb "$1" real; set_marker "$FUTURE"; run_wb; [ "$RC" -eq 1 ] && gate_fail_is B_workspaces_luks_marker_future; }
 assert "a future-dated value passes the wrapper's shape check and the gate refuses it (the wrapper does not judge the soak)" scn_future "$WRAPPER"
 
 # the weight-0 standby path still passes with the marker absent (the wrapper changes no gate semantic)
 scn_standby() { build_sb "$1" real; set_marker ABSENT; run_wb SOLEUR_WEB2_SERVING_WEIGHT=0 SOLEUR_SERVING_ROTATION=web-1; [ "$RC" -eq 0 ] && [[ "$OUT" == *"web2_standby=true"* ]]; }
 assert "standby (weight 0, web-2 not in rotation) still exits 0 with the marker absent" scn_standby "$WRAPPER"
+
+# G6 seam (#12849): the gate's SOLEUR_SOAK_EVIDENCE lines go to its stderr and must reach the caller through the wrapper's
+# `env -i` exec untouched (the wrapper is the likeliest site of a later `2>` redirect): one pass line per kind, the
+# default soak (the run_wb env sets neither knob) reported as source=default soak_days=3.
+scn_evidence_seam() {
+  build_sb "$1" real; set_marker "$OLD4D"; run_wb
+  [ "$RC" -eq 0 ] || return 1
+  [ "$(grep -cE '^SOLEUR_SOAK_EVIDENCE kind=git_data host=web-2 soak_days=3 source=default floor_days=3 marker_at=[0-9T:Z-]+ age_s=[0-9]+ required_s=259200 verdict=pass sub_condition=none$' <<<"$ERR")" -eq 1 ] \
+    && [ "$(grep -cE '^SOLEUR_SOAK_EVIDENCE kind=workspaces_luks host=web-2 soak_days=3 source=default floor_days=3 marker_at=[0-9T:Z-]+ age_s=[0-9]+ required_s=259200 verdict=pass sub_condition=none$' <<<"$ERR")" -eq 1 ] \
+    && [ "$(grep -c '^SOLEUR_SOAK_EVIDENCE ' <<<"$ERR")" -eq 2 ]
+}
+assert "G6 seam: the happy path's stderr carries exactly two verdict=pass SOLEUR_SOAK_EVIDENCE lines (one per kind) through the env -i exec" scn_evidence_seam "$WRAPPER"
 
 # ═══ constants parity and static properties ═════════════════════════════════════════════════════
 const_of() { sed -nE "s/^$2=\"([^\"]*)\".*/\1/p" "$1" | head -1; }

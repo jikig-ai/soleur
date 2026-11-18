@@ -3145,7 +3145,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // expecting `uptime_verdict=clean`) reads the org's uptime detectors through the authenticated Sentry organization API with
   // SENTRY_IAC_AUTH_TOKEN (Doppler soleur/prd_terraform), host and org pinned to jikigai-eu.sentry.io / jikigai-eu.
   // NO SUBSTITUTE: the live uptime detector set (and each detector's mode) has no unauthenticated read surface. Genuine.
-  const BASELINE_DECLARED_PROBES = 98;
+  // 98 -> 99 on 2026-11-18 (#12849, PR #12934 serve gate soak floor + per-instance grader): measured by this test before the
+  // bump (Received 99, the new entry is `2026-11-18-fix-serve-gate-soak-floor-and-per-instance-grader-plan.md`). PLACEMENT: a
+  // correctly-indented child of its `discoverability_test:` sub-block, value on one line. TRUTH: the probe
+  // (`bash scripts/serve-soak-evidence-last.sh`, expecting `SOLEUR_SOAK_EVIDENCE`) reads cf-lb-overlay.yml run logs through
+  // `gh run list` / `gh run view --log` with the operator's GitHub repository read (gh auth). NO SUBSTITUTE: Actions run logs
+  // are served only to an authenticated reader; there is no unauthenticated endpoint for them. Genuine.
+  const BASELINE_DECLARED_PROBES = 99;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

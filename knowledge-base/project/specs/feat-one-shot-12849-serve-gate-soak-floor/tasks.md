@@ -6,30 +6,30 @@ G13 replace-path placement: it ships with #12869).
 
 ## Phase 1 — tests first (RED)
 
-- [ ] 1.1 Anchor all 7 `sub_condition=` substring checks (2 in `lb-weight-gate.test.sh`, 5 in
+- [x] 1.1 Anchor all 7 `sub_condition=` substring checks (2 in `lb-weight-gate.test.sh`, 5 in
       `lb-weight-gate-with-marker.test.sh`) on the whole `gate_fail sub_condition=<id>` line; add the census row.
-- [ ] 1.2 Source the helper for `SOAK_EV_RE` / `INSTANCE_EV_RE` / `SOAK_FLOOR_S`; add `ev_lines`, `ev_field`,
+- [x] 1.2 Source the helper for `SOAK_EV_RE` / `INSTANCE_EV_RE` / `SOAK_FLOOR_S`; add `ev_lines`, `ev_field`,
       `assert_ev`; positive and negative grammar fixtures (G4).
-- [ ] 1.3 Floor rows for both knobs (1, 2 refuse below_floor; 3, 5, 999 accept; 0, 010, 08, abc, `1 verdict=pass`,
+- [x] 1.3 Floor rows for both knobs (1, 2 refuse below_floor; 3, 5, 999 accept; 0, 010, 08, abc, `1 verdict=pass`,
       1000, 200000000000000, 18446744073709551619 refuse invalid; source default/env).
-- [ ] 1.4 Evidence rows per refusal id in B.2-B.10; pass gives two lines; standby / Condition A / B.1 give zero;
+- [x] 1.4 Evidence rows per refusal id in B.2-B.10; pass gives two lines; standby / Condition A / B.1 give zero;
       web-3 row with roster and allowlist fixture additions.
-- [ ] 1.5 Parity rows: grader `SOAK_DAYS` = gate `SOAK_FLOOR_DAYS`, helper `SOAK_FLOOR_S` = both x 86400; the four
+- [x] 1.5 Parity rows: grader `SOAK_DAYS` = gate `SOAK_FLOOR_DAYS`, helper `SOAK_FLOOR_S` = both x 86400; the four
       web-2 literal sites.
-- [ ] 1.6 Workflow wiring rows (grader step key set, order, `if:`, no tolerance, host parity, EXIT trap, helper
+- [x] 1.6 Workflow wiring rows (grader step key set, order, `if:`, no tolerance, host parity, EXIT trap, helper
       source lines, grader value, no marker-name mention, knob census) plus committed mutation rows (G5).
-- [ ] 1.7 Executed rows on `sse_instance_soak` (rc loop 0,1,2,3,78,126,127; ambient `SOLEUR_FT_EARLIEST`; G10
+- [x] 1.7 Executed rows on `sse_instance_soak` (rc loop 0,1,2,3,78,126,127; ambient `SOLEUR_FT_EARLIEST`; G10
       decoy row; web-3 row; empty-host row; G12 `NOT YET: no GREEN web-2 readiness row` row with the 90-day
       replace next-step; `$GRADE` shape filter row; EXIT/TERM trap row).
-- [ ] 1.8 Executed rows on `sse_gate_chain_check` (Guard 4 rows, G8 rows, message texts, fenced summary, rc=1
+- [x] 1.8 Executed rows on `sse_gate_chain_check` (Guard 4 rows, G8 rows, message texts, fenced summary, rc=1
       returns 1); wiring rows for the inline `gate_rc` backstop, the bare (unwrapped) helper call, the guarded
       helper load in both steps, and the step-level `SOLEUR_GATED_HOST: web-2`.
-- [ ] 1.9 Stub-`gh` rows for `scripts/serve-soak-evidence-last.sh` using the real tab-prefixed `gh run view --log`
+- [x] 1.9 Stub-`gh` rows for `scripts/serve-soak-evidence-last.sh` using the real tab-prefixed `gh run view --log`
       format; the no-match line carries neither token; `headBranch`/`headSha` printed.
-- [ ] 1.10 Seam row in `lb-weight-gate-with-marker.test.sh` (G6).
+- [x] 1.10 Seam row in `lb-weight-gate-with-marker.test.sh` (G6).
 - [ ] 1.11 Raise `MIN_CASES`; per-section executed-row counters.
-- [ ] 1.12 `BASELINE_DECLARED_PROBES` 98 -> 99 in `preflight-discoverability-test.test.ts`.
-- [ ] 1.13 Confirm the new rows are RED.
+- [x] 1.12 `BASELINE_DECLARED_PROBES` 98 -> 99 in `preflight-discoverability-test.test.ts`.
+- [x] 1.13 Confirm the new rows are RED.
 
 ## Phase 2 — the gate
 
