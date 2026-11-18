@@ -60,7 +60,12 @@ const {
   registrarOverride,
   readRegistrarOverride,
   conversationWriteOverride,
+  gitShapeOverride,
 } = vi.hoisted(() => ({
+  // #12910: per-test git-shape seam (null = the fixed dir-valid / "ready" defaults below). `probe` answers
+  // each probeGitWorktreeShape call in order (the last answer repeats); `realEvaluate` runs the REAL
+  // evaluateAgentReadiness (which probes the real fixture path, where no `.git` exists).
+  gitShapeOverride: { probe: null as null | unknown[], realEvaluate: false },
   // #12469: the same for the READ registrar (null = the real one).
   readRegistrarOverride: { fn: null as null | ((a: Record<string, unknown>) => Promise<unknown>) },
   conversationWriteOverride: { fn: null as null | (() => Promise<unknown>) },
@@ -281,10 +286,17 @@ vi.mock("@/server/git-worktree-validity", async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;
   return {
     ...actual,
-    probeGitWorktreeShape: () => ({ kind: "dir-valid" }),
+    probeGitWorktreeShape: () => {
+      const q = gitShapeOverride.probe;
+      if (!q) return { kind: "dir-valid" };
+      return q.length > 1 ? q.shift() : q[0];
+    },
     isReadyGitWorkTree: () => true,
     isValidGitWorkTree: () => true,
-    evaluateAgentReadiness: async () => "ready",
+    evaluateAgentReadiness: async (...a: unknown[]) =>
+      gitShapeOverride.realEvaluate
+        ? (actual.evaluateAgentReadiness as (...x: unknown[]) => Promise<string>)(...a)
+        : "ready",
   };
 });
 
@@ -3149,6 +3161,64 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       expect(src).toMatch(/return tapAgentAuthFailure\(\s*sdkQuery\(\{/);
       // The construction-failure fallback is visible, not silent.
       expect(src).toMatch(/\} catch \{[^}]*warnAgentAuthProbeUnavailable\(\);/);
+    });
+  });
+
+  // #12910 — the cold-dispatch self-stop fires only for a strand the post-heal gate cannot see. The
+  // pre-heal emit used to fire for ANY not-ready shape (an absent `.git` the heal then cloned included),
+  // a false `agent-readiness-self-stop gitKind=absent source=host-pre-heal` on a turn that ran, and its
+  // fingerprint masked the post-heal emit for a REAL absent strand in the same process.
+  describe("realSdkQueryFactory — #12910 self-stop narrowing (post-heal, escaping pointer only)", () => {
+    const selfStops = () =>
+      mockReportSilentFallback.mock.calls.filter(
+        (c) => (c[1] as { feature?: string } | undefined)?.feature === "agent-readiness-self-stop",
+      );
+    beforeEach(() => {
+      gitShapeOverride.probe = null;
+      gitShapeOverride.realEvaluate = false;
+      // A CONNECTED repo (the parent default is none, which skips the whole readiness path).
+      mockGetCurrentRepoUrl.mockResolvedValue("https://github.com/jikig-ai/soleur");
+      // ...with a stored install that already owns it (no entitlement promotion, no access refusal).
+      mockResolveInstallationId.mockResolvedValue(122213433);
+      mockGetInstallationAccount.mockResolvedValue({ login: "jikig-ai", id: 122213433, type: "Organization" });
+    });
+    afterEach(() => {
+      gitShapeOverride.probe = null;
+      gitShapeOverride.realEvaluate = false;
+    });
+
+    it("(a) an absent `.git` the heal fixes emits NO self-stop and reaches the SDK query", async () => {
+      gitShapeOverride.probe = [{ kind: "absent" }, { kind: "dir-valid" }];
+      mockReportSilentFallback.mockClear();
+      mockQuery.mockClear();
+      await realSdkQueryFactory(makeArgs());
+      expect(selfStops()).toHaveLength(0);
+      expect(mockQuery).toHaveBeenCalledOnce();
+    });
+
+    it("(b) after (a), a post-heal absent strand emits exactly once WITH gitRevParseValid=false (not dedupe-masked)", async () => {
+      gitShapeOverride.probe = [{ kind: "absent" }];
+      gitShapeOverride.realEvaluate = true;
+      mockReportSilentFallback.mockClear();
+      mockQuery.mockClear();
+      await expect(realSdkQueryFactory(makeArgs())).rejects.toThrow();
+      const calls = selfStops();
+      expect(calls).toHaveLength(1);
+      const opts = calls[0][1] as { tags: Record<string, string> };
+      expect(opts.tags).toMatchObject({ gitKind: "absent", gitRevParseValid: "false" });
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it("(c) a post-heal ESCAPING file-pointer emits exactly once with gitKind=file-pointer, gitdirEscapesWorkspace=true", async () => {
+      const ptr = { kind: "file-pointer", gitdirEscapesWorkspace: true };
+      gitShapeOverride.probe = [ptr];
+      mockReportSilentFallback.mockClear();
+      await realSdkQueryFactory(makeArgs());
+      const calls = selfStops();
+      expect(calls).toHaveLength(1);
+      const opts = calls[0][1] as { tags: Record<string, string>; extra: Record<string, unknown> };
+      expect(opts.tags).toMatchObject({ gitKind: "file-pointer", source: "host-pre-heal" });
+      expect(opts.extra).toMatchObject({ gitdirEscapesWorkspace: true });
     });
   });
 });

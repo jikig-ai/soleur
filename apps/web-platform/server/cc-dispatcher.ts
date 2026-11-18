@@ -2321,9 +2321,9 @@ export const realSdkQueryFactory: QueryFactory = async (
     // #5862 → constant parent deny). The prompt-driven
     // `/soleur:go` Step 0.0 then self-stops with NO server event — the dark
     // surface all three prior fixes missed. One `probeGitWorktreeShape` (sync
-    // lstat(s); a small pointer-body read only when `.git` is a FILE) drives BOTH
-    // the SYNC readiness decision and the observability emit here — no re-lstat on
-    // the sync path. The common dir-valid case pays this single cheap probe here;
+    // lstat(s); a small pointer-body read only when `.git` is a FILE) drives the
+    // SYNC readiness decision here; the observability emit re-probes once after
+    // the heal (#12910, below). The common dir-valid case pays this cheap probe;
     // the additive host `rev-parse` confirm below (#5733 deliverable A) then
     // re-probes ONLY that dir-valid slice the lstat verdict greenlights but the
     // agent can still strand on (detailed in the note immediately following).
@@ -2340,24 +2340,10 @@ export const realSdkQueryFactory: QueryFactory = async (
       gitShape.kind === "dir-valid" ||
       (gitShape.kind === "file-pointer" &&
         gitShape.gitdirEscapesWorkspace === false);
-    // #5733 Phase 1b — emit the agent-readiness self-stop for ANY connected,
-    // DB-ready workspace whose on-disk `.git` is NOT rev-parse-ready (escaping
-    // pointer / corrupt dir / absent). The agent self-stops on its in-bwrap `git
-    // rev-parse` for ALL of these, and Phase 0 could not confirm WHICH shape prod
-    // has — so the one queryable event must cover them all (`gitKind`
-    // distinguishes). Excludes a legitimately repo-less workspace (no `repoUrl`)
-    // and a cloning/error status (the honest RepoNotReadyError owns those). Fires
-    // BEFORE the heal so the strand is queryable on this very dispatch.
-    if (repoReadiness.ok && repoUrl && !gitReady) {
-      reportAgentReadinessSelfStop({
-        userId: args.userId,
-        activeWorkspaceId,
-        // lstat-validity (the FILE-pointer trap) — derived from the same probe.
-        gitValid: isLstatValidKind(gitShape.kind),
-        gitKind: gitShape.kind,
-        gitdirEscapesWorkspace: gitShape.gitdirEscapesWorkspace,
-      });
-    }
+    // (#12910: the #5733 Phase 1b self-stop emit that sat here moved AFTER the
+    // heal — see the post-heal re-probe below. Here it fired for every not-ready
+    // shape, including an absent `.git` the heal then cloned: a false self-stop on
+    // a turn that ran, whose fingerprint masked the post-heal emit of a real one.)
     // `gitReady` treats an escaping pointer / corrupt dir as NOT ready, so it
     // falls through to the self-heal. `gitDirValid` (the seam consumed by
     // resolveRepoReadinessWithSelfHeal) uses the same `isReadyGitWorkTree`
@@ -2552,6 +2538,35 @@ export const realSdkQueryFactory: QueryFactory = async (
           "Your workspace's repository couldn't be set up — the automatic clone failed. Please re-connect the repository in Settings → Repository.",
           "repo_setup_failed",
         );
+      }
+    }
+
+    // #5733 Phase 1b, narrowed by #12910 — the agent-readiness self-stop for the
+    // ONE strand the post-heal gate below cannot see: a `.git` FILE whose
+    // `gitdir:` escapes the workspace. Host `rev-parse` follows that pointer and
+    // calls it a work tree, but the agent's in-bwrap rev-parse cannot read the
+    // target (sibling workspaces are hidden by the parent-root `denyRead`), so it
+    // self-stops with no other server event. Re-probed AFTER the heal and the
+    // dispatch clone, and gated on the POST-heal `confirmDbReady`: an absent `.git`
+    // the heal fixed is not a strand (the false `gitKind=absent` stop of #12910),
+    // and an absent / corrupt `.git` that survives the heal is the post-heal gate's
+    // to emit (with `gitRevParseValid`) and block. The `source` stays
+    // `host-pre-heal`, now a legacy name: renaming it would break the existing
+    // Sentry queries. The fingerprint carries `gitKind=file-pointer`, so it never
+    // collides with the post-heal absent emit.
+    if (mode.runRepoLifecycle && confirmDbReady && repoUrl) {
+      const postHealShape = probeGitWorktreeShape(workspacePath);
+      if (
+        postHealShape.kind === "file-pointer" &&
+        postHealShape.gitdirEscapesWorkspace === true
+      ) {
+        reportAgentReadinessSelfStop({
+          userId: args.userId,
+          activeWorkspaceId,
+          gitValid: isLstatValidKind(postHealShape.kind),
+          gitKind: postHealShape.kind,
+          gitdirEscapesWorkspace: postHealShape.gitdirEscapesWorkspace,
+        });
       }
     }
 
