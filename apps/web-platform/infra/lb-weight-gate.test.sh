@@ -1270,7 +1270,7 @@ ev_field() { # <line> <name> -> the value of one field, anchored on (^| )name=([
   local re="(^| )$2=([^ ]+)( |\$)"
   if [[ "$1" =~ $re ]]; then printf '%s' "${BASH_REMATCH[2]}"; fi
 }
-p_refuses() { [[ "$GATE_RC" -eq 1 ]] && has_gate_fail "$GATE_ERR" "$1"; }
+p_refuses() { if [[ "$GATE_RC" -eq 1 ]] && has_gate_fail "$GATE_ERR" "$1"; then return 0; fi; return 1; }
 p_passes() { [[ "$GATE_RC" -eq 0 && "$GATE_OUT" == *requires_runtime_bind_probe=true* ]]; }
 p_ev() { # <kind> <field=value>... — exactly one line of that kind, it matches the grammar, every named field equals
   local kind="$1" line kv; shift
@@ -1283,7 +1283,8 @@ p_ev() { # <kind> <field=value>... — exactly one line of that kind, it matches
 p_ev_none() { [[ "$(raw_ev_n "$1")" -eq 0 ]]; }
 p_ev_age() { # <kind> <expected-seconds> — age_s within [expected, expected + 120]
   local a; a="$(ev_field "$(ev_lines "$1")" age_s)"
-  [[ "$a" =~ ^-?[0-9]+$ ]] && (( a >= $2 && a <= $2 + 120 ))
+  if [[ "$a" =~ ^-?[0-9]+$ ]] && (( a >= $2 && a <= $2 + 120 )); then return 0; fi
+  return 1
 }
 p_one_verdict() { # <kind> — the raw line of that kind carries exactly one ` verdict=` token
   local l t
@@ -1354,8 +1355,9 @@ sk_floor_static() { # SOAK_FLOOR_DAYS=3 once, plain NAME= form, never read throu
 }
 sk_check "G1: the gate assigns the floor exactly once, in plain NAME= form (SOAK_FLOOR_DAYS=3; never a := expansion)" sk_floor_static
 sk_knob_default() { # both knob reads default to the floor constant, never to a literal
-  [[ "$(grep -cF 'SOAK_DAYS="${GIT_DATA_LUKS_SOAK_DAYS:-$SOAK_FLOOR_DAYS}"' "$GATE" || true)" -eq 1 ]] \
-    && [[ "$(grep -cF 'WS_SOAK_DAYS="${WORKSPACES_LUKS_SOAK_DAYS:-$SOAK_FLOOR_DAYS}"' "$GATE" || true)" -eq 1 ]]
+  [[ "$(grep -cF 'SOAK_DAYS="${GIT_DATA_LUKS_SOAK_DAYS:-$SOAK_FLOOR_DAYS}"' "$GATE" || true)" -eq 1 ]] || return 1
+  [[ "$(grep -cF 'WS_SOAK_DAYS="${WORKSPACES_LUKS_SOAK_DAYS:-$SOAK_FLOOR_DAYS}"' "$GATE" || true)" -eq 1 ]] || return 1
+  return 0
 }
 sk_check "G1: both knob reads default to the floor (\${KNOB:-\$SOAK_FLOOR_DAYS}), never to a literal" sk_knob_default
 sec_close
@@ -1563,15 +1565,15 @@ sk_gate_ok() { # <workflow> -> 0 iff the gate chain step captures, replays, mirr
   nc="$(sk_nc "$st")"; run="$(sk_run "$st")"; runnc="$(sk_nc "$run")"
   grep -qxF '          SOLEUR_GATED_HOST: web-2' <<<"$nc" || return 1
   [[ "$(head -1 <<<"$runnc")" == "set -euo pipefail" ]] || return 1
-  a="$(grep -nxF 'gate_rc=0' <<<"$runnc" | head -1 | cut -d: -f1)"; b="$(grep -nxF ': >"${RUNNER_TEMP}/lb-gate.stderr"' <<<"$runnc" | head -1 | cut -d: -f1)"
-  c="$(grep -nxF -- "$SK_TRAP" <<<"$runnc" | head -1 | cut -d: -f1)"; d="$(grep -nE '^GATE_OUT="\$\(env DOPPLER_TOKEN=' <<<"$runnc" | head -1 | cut -d: -f1)"
+  a="$(grep -nxF 'gate_rc=0' <<<"$runnc" | head -1 | cut -d: -f1 || true)"; b="$(grep -nxF ': >"${RUNNER_TEMP}/lb-gate.stderr"' <<<"$runnc" | head -1 | cut -d: -f1 || true)"
+  c="$(grep -nxF -- "$SK_TRAP" <<<"$runnc" | head -1 | cut -d: -f1 || true)"; d="$(grep -nE '^GATE_OUT="\$\(env DOPPLER_TOKEN=' <<<"$runnc" | head -1 | cut -d: -f1 || true)"
   [[ -n "$a" && -n "$b" && -n "$c" && -n "$d" && "$a" -lt "$d" && "$b" -lt "$d" && "$c" -lt "$d" ]] || return 1
   [[ "$(grep -cF 'lb-weight-gate-with-marker.sh" 2>"${RUNNER_TEMP}/lb-gate.stderr")" || gate_rc=$?' <<<"$runnc" || true)" -eq 1 ]] || return 1
   grep -qxF '# shellcheck source=scripts/lib/serve-soak-evidence.sh' <<<"$run" || return 1
   grep -qxF -- "$SK_SSE_F" <<<"$runnc" || return 1
   [[ "$(grep -cxF -- "$SK_LOAD_GATE" <<<"$runnc" || true)" -eq 1 ]] || return 1
   [[ "$(grep -cxF -- "$SK_MIRROR" <<<"$runnc" || true)" -eq 1 && "$(grep -c 'sse_gate_chain_mirror' <<<"$runnc" || true)" -eq 2 ]] || return 1
-  m="$(grep -nxF -- "$SK_MIRROR" <<<"$runnc" | cut -d: -f1)"
+  m="$(grep -nxF -- "$SK_MIRROR" <<<"$runnc" | cut -d: -f1 || true)"
   [[ "$(sed -n "$((m + 1))p" <<<"$runnc")" == "$SK_BACKSTOP" ]] || return 1
   [[ "$(grep -cxF -- "$SK_VERIFY" <<<"$runnc" || true)" -eq 1 && "$(grep -c 'sse_gate_chain_verify' <<<"$runnc" || true)" -eq 2 ]] || return 1
   [[ "$(grep -nxF -- "$SK_VERIFY" <<<"$runnc" | cut -d: -f1)" -gt "$(grep -nF "grep -q 'requires_runtime_bind_probe=true'" <<<"$runnc" | head -1 | cut -d: -f1)" ]] || return 1
@@ -1582,7 +1584,7 @@ sk_host_parity_ok() { # <workflow> -> the five web-2 literal sites agree (the #1
   local job gs gr inner step_gate step_grader wrap rows helper
   job="$(sk_job "$1")"; gs="$(sk_nc "$(sk_step "$job" '§\(c\) gate chain')")"; gr="$(sk_nc "$(sk_step "$job" 'per-instance soak grader \(serve only\)')")"
   step_gate="$(sed -nE 's/^          SOLEUR_GATED_HOST: ([a-z0-9-]+)[[:space:]]*$/\1/p' <<<"$gs")"
-  inner="$(grep -oE 'SOLEUR_GATED_HOST="[^"]+"' <<<"$gs" | sed -E 's/^SOLEUR_GATED_HOST="(.*)"$/\1/')"
+  inner="$(grep -oE 'SOLEUR_GATED_HOST="[^"]+"' <<<"$gs" | sed -E 's/^SOLEUR_GATED_HOST="(.*)"$/\1/' || true)"
   step_grader="$(sed -nE 's/^          SOLEUR_GATED_HOST: ([a-z0-9-]+)[[:space:]]*$/\1/p' <<<"$gr")"
   wrap="$(sed -nE 's/^MARKER_HOST="([^"]+)".*/\1/p' "$WRAPPER_FILE")"
   rows="$(sed -nE 's/^W2L_HOST_NAME="soleur-([^"]+)".*/\1/p' "$ROWS_LIB_FILE")"
@@ -1661,6 +1663,7 @@ exit "\$(cat "$SKI/rc" 2>/dev/null || echo 0)"
 EOF
 chmod +x "$SKI/grader.sh"
 SKI_RC=0; SKI_OUT=""; SKI_ERR=""
+# shellcheck disable=SC2034 # read inside the eval'd row predicates
 ski_run() { # <host> <stub-rc> <stub-text> [ENV=VAL ...] [-- shell-opts] — runs the helper in a clean env, as the step does
   local host="$1" src="$2" txt="$3"; shift 3
   : > "$SKI/calls"; rm -f "$SKI/env" "$SKI/ft"; : > "$SKI/summary"
@@ -1727,19 +1730,20 @@ sk_check "G3 executed: a verdict-shaped grader line is echoed to the log as grad
 SKI_OPTS='-euxo'; ski_run web-2 0 'PASS: ok'; SKI_OPTS=''
 sk_check "G3 executed: under xtrace the helper refuses with 78 before any credential is used (grader never called)" eval '[[ "$SKI_RC" -eq 78 ]] && ski_calls 0'
 ski_term() { # TERM the helper while the grader runs: the trap still leaves exactly one verdict line
-  local pid i spid
+  local pid spid
   : > "$SKI/calls"; : > "$SKI/summary"; rm -f "$SKI/pid"; : > "$SKI/term"; printf 0 > "$SKI/rc"; : > "$SKI/text"
   env -i PATH="/usr/bin:/bin" HOME="$SKI/home" RUNNER_TEMP="$SKI/rt" GITHUB_STEP_SUMMARY="$SKI/summary" \
     BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p \
     "$BASH_BIN" -c 'set -euo pipefail; source "$1"; sse_instance_soak "$2" "$3"' _ "$SSE_LIB" web-2 "$SKI/grader.sh" >"$SKI/out" 2>"$SKI/err" &
   pid=$!
-  for i in $(seq 1 100); do [[ -s "$SKI/pid" ]] && break; sleep 0.1; done
+  for _ in $(seq 1 100); do [[ -s "$SKI/pid" ]] && break; sleep 0.1; done
   spid="$(cat "$SKI/pid" 2>/dev/null || true)"
   kill -TERM "$pid" 2>/dev/null || true
   [[ -n "$spid" ]] && kill -TERM "$spid" 2>/dev/null
   wait "$pid" 2>/dev/null && SKI_RC=0 || SKI_RC=$?
   rm -f "$SKI/term"; SKI_ERR="$(cat "$SKI/err")"
-  [[ -n "$spid" && "$SKI_RC" -ne 0 ]] && ski_line_ok "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=none verdict=CANNOT_ESTABLISH"
+  if [[ -n "$spid" && "$SKI_RC" -ne 0 ]] && ski_line_ok "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=none verdict=CANNOT_ESTABLISH"; then return 0; fi
+  return 1
 }
 sk_check "observability 3 executed: a TERM while the grader runs still leaves exactly one 'rc=none verdict=CANNOT_ESTABLISH' line (EXIT/TERM trap)" ski_term
 sec_close
@@ -1749,6 +1753,7 @@ sec_close
 # -----------------------------------------------------------------------------------------------------------------
 SKG="$SK_WORK/chain"; mkdir -p "$SKG"
 SKG_RC=0; SKG_OUT=""
+# shellcheck disable=SC2034 # read inside the eval'd row predicates
 skg_run() { # <fn> <args...> — the helper in a clean env under set -euo pipefail, as the step runs it
   : > "$SKG/summary"
   env -i PATH="/usr/bin:/bin" GITHUB_STEP_SUMMARY="$SKG/summary" "$BASH_BIN" -c 'set -euo pipefail; source "$1"; shift; "$@"' _ "$SSE_LIB" "$@" \
@@ -1828,6 +1833,7 @@ esac
 EOF
 chmod +x "$SKP/bin/gh"
 SKP_RC=0; SKP_OUT=""
+# shellcheck disable=SC2034 # read inside the eval'd row predicates
 skp_run() { : > "$SKP/argv"; SKP_OUT="$(cd "$SKP" && env -i PATH="$SKP/bin:/usr/bin:/bin" HOME="$SKP" "$BASH_BIN" "$SSE_PROBE" "$@" 2>/dev/null)" && SKP_RC=0 || SKP_RC=$?; }
 skp_log() { # <id> <lines...> — a `gh run view --log` body: <job>\t<step>\t<timestamp> <text>
   local id="$1" l; shift; : > "$SKP/log.$id"
