@@ -569,8 +569,11 @@ describe("self-heal: no token reaches a planted clean/smudge filter (D6d, real g
     expect(leak).toMatch(/RAN:none/);
     expect(leak).not.toContain(TOKEN);
     expect(leak).not.toContain("ghs_");
-    // D15(d): `symbolic-ref` is a local verb and runs token-free; only `pull` and `fetch origin` carry the token
-    expect(new Set(H.tokenVerbs)).toEqual(new Set(["pull", "fetch"]));
+    // D15(d): `symbolic-ref` is a local verb and runs token-free; only `pull` and `fetch origin` carry the token, plus
+    // (R2-B, verify-coverage #6) the recovery's hardened `ls-remote` for the held-count rewrite, run in an isolated dir
+    // after the reset (the leak above stays token-free through it)
+    expect(new Set(H.tokenVerbs)).toEqual(new Set(["pull", "fetch", "ls-remote"]));
+    expect(H.tokenVerbs.at(-1)).toBe("ls-remote");
   });
 });
 
@@ -608,6 +611,32 @@ describe("self-heal: review fix round 1, WP2 (D37, D39(a), D42, real git)", { ti
     expect(existsSync(join(r.ws, ".git", "MERGE_AUTOSTASH"))).toBe(true); // never moved or deleted (D36(c))
     expect(warnOps()).toEqual([expect.objectContaining({ op: "self-heal-aborted-held-commits", tags: expect.objectContaining({ reason: "unresolved_merge" }) })]);
     expect(H.heldWrites).toEqual([]);
+  });
+
+  test("R2-B (data-sec P3-2): a stranded MERGE_AUTOSTASH next to tracked dirt -> dirty_tracked, and the autostash is pinned (survives gc --prune=now)", async () => {
+    const r = newRow();
+    localCommit(r, (d) => write(join(d, ".github", "workflows", "x.yml"), "on: push\njobs: {}\n")); // diverged: the pull is not a fast-forward
+    upstreamCommit(r, (d) => write(join(d, "README.md"), "readme 2\n"));
+    // a killed legacy merge: its autostash commit is reachable only from MERGE_AUTOSTASH
+    const stash = git(r.ws, "commit-tree", "-m", "autostash", "-p", "HEAD", "HEAD^{tree}");
+    writeFileSync(join(r.ws, ".git", "MERGE_AUTOSTASH"), `${stash}\n`);
+    write(join(r.ws, "src", "s.ts"), "export const s = 2; // dirty, uncommitted\n");
+    const result = await heal(r);
+    expect(result).toEqual(expect.objectContaining({ ok: false, held: "dirty_tracked" }));
+    expect(git(r.ws, "rev-parse", `refs/soleur/autostash/${stash}`)).toBe(stash);
+    git(r.ws, "gc", "-q", "--prune=now");
+    expect(git(r.ws, "cat-file", "-t", stash)).toBe("commit");
+    expect(read(join(r.ws, ".git", "MERGE_AUTOSTASH")).trim()).toBe(stash); // never moved or deleted (D36(c))
+    expect(read(join(r.ws, "src", "s.ts"))).toBe("export const s = 2; // dirty, uncommitted\n");
+  });
+
+  test("R2-B (verify-coverage #6): a reset recovery (squash-merged held commit) clears the pull-blocked state with a fresh count on the new HEAD", async () => {
+    const r = newRow();
+    squashedDiverged(r, (d) => write(join(d, "README.md"), "readme 2\n"));
+    const T = git(r.remote, "rev-parse", "refs/heads/main");
+    expect(await heal(r)).toEqual({ ok: true, recovered: true });
+    expect(git(r.ws, "rev-parse", "HEAD")).toBe(T);
+    expect(H.heldWrites).toEqual([{ T, headSha: T, pullBlocked: null, count: 0 }]);
   });
 
   // needs WP1: the second pinned merge shape (D37(2), server/connected-repo-git.ts `mergeArgv` / `AUTO_MERGE_MSG_SELF_HEAL`).

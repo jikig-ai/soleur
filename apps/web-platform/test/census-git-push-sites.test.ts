@@ -98,6 +98,7 @@ const TOKEN_FREE_IMPORTS: Record<string, string[]> = {
     "./git-isolated-local ISOLATED_LOCAL_TIMEOUT_MS",
     "./git-isolated-local runIsolatedGitLocal",
     "./kb-root KB_ROOT",
+    "./kb-sync-objects DIRECTORY_RENAMES_PIN", // R2-B: the merge-tree precheck's -c merge.directoryRenames=false
     "./kb-sync-objects commitTree",
     "./kb-sync-objects handOver",
     "./kb-sync-objects isAncestor",

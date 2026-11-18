@@ -32,7 +32,9 @@ const H2 = vi.hoisted(() => ({
   /** D39(a)/D42: the self-heal's held-count write (frozen signature; WP3 owns the body). */
   heldWriteSpy: vi.fn(async () => ({ total: 0, onRecovered: 0 }) as { total: number; onRecovered: number } | null),
   /** D38(6): the same-host lock (frozen signature; WP1 owns the body). Calls fn by default. */
-  lockSpy: vi.fn(async (_p: string, fn: () => Promise<unknown>) => fn()),
+  lockSpy: vi.fn(async (_p: string, fn: () => Promise<unknown>, _opts?: { waitMs?: number }) => fn()),
+  /** R2-B (data-sec P3-2): the autostash pin the self-heal runs first. */
+  pinSpy: vi.fn(async (_p: string) => undefined),
   /** The route callers' tenant-scoped repo-URL read. */
   repoUrlSpy: vi.fn(async () => ({ url: "https://github.com/acme/widget.git", owner: "acme", repo: "widget" })),
   /** The count-only path's hardened ls-remote (D42: the pre-call untracked collision). */
@@ -74,6 +76,8 @@ vi.mock("@/server/connected-repo-git", () => ({
     return { unpack: async () => undefined, setTracking: async () => undefined, casBranch: async () => undefined, merge: H2.innerMerge };
   },
   withWorkspaceGitLock: H2.lockSpy,
+  WORKSPACE_GIT_LOCK_TIMEOUT: "lock_timeout",
+  pinInterruptedAutostash: H2.pinSpy,
 }));
 vi.mock("@/server/kb-sync-held-refresh", () => ({ writeHeldFromIsolated: H2.heldWriteSpy }));
 vi.mock("@/lib/supabase/service", () => ({
@@ -182,7 +186,7 @@ beforeEach(() => {
   lstatSpy.mockReset();
   disposeSpy.mockClear();
   mergeSpy.mockClear();
-  for (const f of [H2.writerSpy, H2.innerMerge, H2.heldWriteSpy, H2.lockSpy, H2.repoUrlSpy, H2.readRemoteSpy]) f.mockClear();
+  for (const f of [H2.writerSpy, H2.innerMerge, H2.heldWriteSpy, H2.lockSpy, H2.repoUrlSpy, H2.readRemoteSpy, H2.pinSpy]) f.mockClear();
   H2.serviceRow = { data: { repo_url: "https://github.com/acme/widget" }, error: null };
   H2.serviceCalls.length = 0;
   H2.heads.length = 0;
@@ -922,6 +926,136 @@ describe("WP2: the self-heal budget gates the merge's start (D38(3)(4)(6))", () 
     slowFetch(16_000);
     expect(heldOf(await run())).toBe("untracked_collision"); // the refusal stands; only the display-only count is skipped
     expect(H2.readRemoteSpy).not.toHaveBeenCalled();
+    expect(H2.heldWriteSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("R2-B: the workspace lock covers every self-heal git step; the pin runs first; recoveries clear pull_blocked", () => {
+  beforeEach(() => {
+    // a once-implementation a row did not consume must not leak into the next row
+    H2.lockSpy.mockReset();
+    H2.lockSpy.mockImplementation(async (_p, fn) => fn());
+    H2.readRemoteSpy.mockReset();
+    H2.readRemoteSpy.mockImplementation(async () => null);
+  });
+  /** Runs fn with `inLock` set, so a spy can assert where each git step ran. */
+  const tracking = () => {
+    const where: Record<string, boolean[]> = {};
+    let inLock = false;
+    H2.lockSpy.mockImplementationOnce(async (_p, fn) => {
+      inLock = true;
+      try {
+        return await fn();
+      } finally {
+        inLock = false;
+      }
+    });
+    const note = (verb: string) => (where[verb] ??= []).push(inLock);
+    const g = gitSpy.getMockImplementation()!;
+    gitSpy.mockImplementation(async (args) => (note(args[0]), g(args)));
+    const l = localSpy.getMockImplementation()!;
+    localSpy.mockImplementation(async (args, opts) => (note(args[0]), l(args, opts)));
+    return where;
+  };
+
+  test("verify-coverage P3-3/#4: pull --ff-only, the legacy fetch, branch-aside and reset --keep all run under the one lock", async () => {
+    script({ revList: "2\n" }); // content upstream: branch-aside + reset
+    const where = tracking();
+    expect(await run()).toEqual({ ok: true, recovered: true });
+    expect(H2.lockSpy).toHaveBeenCalledTimes(1);
+    for (const verb of ["pull", "fetch", "branch", "reset"]) expect(where[verb], verb).toEqual([true]);
+  });
+
+  test("the ff-only success path runs under the lock too", async () => {
+    script();
+    gitSpy.mockImplementation(async () => Buffer.from(""));
+    const where = tracking();
+    expect(await run()).toEqual({ ok: true });
+    expect(where.pull).toEqual([true]);
+  });
+
+  test("verify-coverage P2-1: the lock wait is bounded by the caller's budget (route 15 s, background 60 s)", async () => {
+    script();
+    await run();
+    expect(H2.lockSpy.mock.calls[0][0]).toBe(WS);
+    expect(H2.lockSpy.mock.calls[0][2]).toEqual({ waitMs: 15_000 });
+    script();
+    await runSystem();
+    expect(H2.lockSpy.mock.calls[1][2]).toEqual({ waitMs: 60_000 });
+  });
+
+  test("verify-coverage P2-1: a lock that is not free in time -> a hold (the route answers pending); no git ran; one warning", async () => {
+    script();
+    H2.lockSpy.mockImplementationOnce(async () => "lock_timeout");
+    const result = await run();
+    expect(result).toEqual(expect.objectContaining({ ok: false, held: "workspace_busy" }));
+    expect(gitSpy).not.toHaveBeenCalled();
+    expect(localSpy).not.toHaveBeenCalled();
+    expect(mirrorWarnSpy.mock.calls.map(opOf)).toEqual(["workspace-sync-lock-timeout"]);
+    expect(warnCtx()[1].extra).toEqual({ userId: "u-1" });
+    expect(reportSpy).not.toHaveBeenCalled();
+  });
+
+  test("the lock wait counts against the self-heal budget (a 12 s wait leaves the route under its 5 s merge start)", async () => {
+    let clock = 1_000_000;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    try {
+      script({ nonKbDiff: 1 });
+      H2.lockSpy.mockImplementationOnce(async (_p, fn) => {
+        clock += 12_000;
+        return fn();
+      });
+      const result = await run();
+      expect(mergeSpy).not.toHaveBeenCalled();
+      expect(heldOf(result)).toBe("held_commits");
+      expect(warnCtx()[1].tags).toEqual(expect.objectContaining({ reason: "pull_deadline" }));
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  test("data-sec P3-2: the autostash pin runs before the dirty-tracked refusal (a cc-only workspace never reaches syncPull)", async () => {
+    script({ status: " M src/s.ts\0" });
+    const result = await run();
+    expect(heldOf(result)).toBe("dirty_tracked");
+    expect(H2.pinSpy).toHaveBeenCalledTimes(1);
+    expect(H2.pinSpy).toHaveBeenCalledWith(WS);
+    const statusOrder = localSpy.mock.invocationCallOrder[localVerbs().indexOf("status")];
+    expect(H2.pinSpy.mock.invocationCallOrder[0]).toBeLessThan(statusOrder);
+  });
+
+  test("verify-coverage #6: the reset arms (phantom, recovered-diverged) rewrite the count and clear pullBlocked", async () => {
+    for (const revList of ["0\n", "2\n"]) {
+      script({ revList });
+      H2.heldWriteSpy.mockClear();
+      H2.readRemoteSpy.mockResolvedValueOnce(REMOTE);
+      expect(await run(), revList).toEqual({ ok: true, recovered: true });
+      expect(H2.heldWriteSpy, revList).toHaveBeenCalledTimes(1);
+      expect(H2.heldWriteSpy, revList).toHaveBeenCalledWith(expect.objectContaining({ T: T_TIP, checkedAt: READ_AT, pullBlocked: null }));
+    }
+  });
+
+  test("verify-coverage #6: a system fast-forward clears pullBlocked; a route fast-forward adds no remote read", async () => {
+    script();
+    gitSpy.mockImplementation(async () => Buffer.from(""));
+    H2.readRemoteSpy.mockResolvedValueOnce(REMOTE);
+    expect(await runSystem()).toEqual({ ok: true });
+    expect(H2.heldWriteSpy).toHaveBeenCalledWith(expect.objectContaining({ T: T_TIP, pullBlocked: null }));
+    H2.heldWriteSpy.mockClear();
+    H2.readRemoteSpy.mockClear();
+    script();
+    gitSpy.mockImplementation(async () => Buffer.from(""));
+    expect(await run()).toEqual({ ok: true });
+    expect(H2.readRemoteSpy).not.toHaveBeenCalled();
+    expect(H2.heldWriteSpy).not.toHaveBeenCalled();
+  });
+
+  test("a recovery off the remote's default branch (X5) or with no remote read writes nothing", async () => {
+    script({ revList: "0\n" });
+    H2.readRemoteSpy.mockResolvedValueOnce({ ...REMOTE, defaultBranch: "trunk" });
+    expect(await run()).toEqual({ ok: true, recovered: true });
+    script({ revList: "0\n" });
+    expect(await run()).toEqual({ ok: true, recovered: true }); // readRemote: null
     expect(H2.heldWriteSpy).not.toHaveBeenCalled();
   });
 });

@@ -193,12 +193,16 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
     expect(src).not.toMatch(/\bwriteKbSyncHeldCols\b/);
     expect(src).toMatch(/import \{ writeHeldFromIsolated \} from "\.\/kb-sync-held-refresh"/);
     // syncPull and syncPush (D39(a)(b)): each with its injected service client and checked_at = its own ls-remote instant;
-    // neither sets the pull-blocked column (the self-heal's alone, D42).
-    const heldCalls = [...src.matchAll(/\bwriteHeldFromIsolated\(\{([^}]*)\}\)/g)].map((m) => m[1]);
+    // neither ever SETS a pull-blocked value (the self-heal's alone, D42). R2-B (verify-coverage #6): syncPull's
+    // merged/up_to_date CLEARS it (null) and nothing else; syncPush leaves it alone.
+    const heldCalls = [...src.matchAll(/\bwriteHeldFromIsolated\(\{((?:[^{}]|\{[^{}]*\})*)\}\)/g)].map((m) => m[1]);
     expect(heldCalls).toHaveLength(2);
     expect(heldCalls[0]).toMatch(/T: merged\.remote\.tip,[\s\S]*checkedAt: merged\.remote\.readAt,\s*service,/);
+    expect(heldCalls[0]).toMatch(/\.\.\.\(clears \? \{ pullBlocked: null \} : \{\}\),\s*$/);
+    expect([...heldCalls[0].matchAll(/pullBlocked/g)]).toHaveLength(1);
+    expect(src).toMatch(/const clears = merged\.reason === "merged" \|\| merged\.reason === "up_to_date";/);
     expect(heldCalls[1]).toMatch(/T, headSha, checkedAt: readAt, service\s*$/);
-    for (const args of heldCalls) expect(args).not.toMatch(/pullBlocked/);
+    expect(heldCalls[1]).not.toMatch(/pullBlocked/);
     // The only `writeRepoColsToWorkspace(` call is the stamp, and it names no held column.
     const repoWrites = [...src.matchAll(/writeRepoColsToWorkspace\(([^)]*)\)/g)].map((m) => m[1]);
     expect(repoWrites.length).toBeGreaterThan(0);

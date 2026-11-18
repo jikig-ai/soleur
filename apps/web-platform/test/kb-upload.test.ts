@@ -105,6 +105,8 @@ vi.mock("@/server/sandbox", () => ({
 
 vi.mock("@/server/logger", () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  // R2-B: syncWorkspace now loads server/connected-repo-git (the workspace lock), whose module scope makes a child logger
+  createChildLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }));
 
 vi.mock("@sentry/nextjs", () => ({

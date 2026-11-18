@@ -38,10 +38,12 @@ const ERROR_CLASS_SYNC_FAILED: KbSyncErrorClass = "sync_failed";
 /**
  * The designed holds of the self-heal (#12600, CTO ruling D16): the workspace keeps local state that is not on GitHub
  * yet, so it was deliberately not updated. Set ONLY by the three refusals (`self-heal-aborted-held-commits`,
- * `-dirty-tracked`, `-untracked-collision`); the branch aborts and `self-heal-failed` leave it unset. A KB write route
- * that sees it answers success plus `workspace_sync: "pending"` (the write already landed on GitHub).
+ * `-dirty-tracked`, `-untracked-collision`), and by `workspace_busy` (R2-B, verify-coverage P2-1: another git writer of
+ * this workspace held the same-host lock past this caller's budget; nothing ran, the next sync retries); the branch aborts
+ * and `self-heal-failed` leave it unset. A KB write route that sees it answers success plus `workspace_sync: "pending"`
+ * (the write already landed on GitHub).
  */
-export type SyncWorkspaceHeld = "held_commits" | "dirty_tracked" | "untracked_collision";
+export type SyncWorkspaceHeld = "held_commits" | "dirty_tracked" | "untracked_collision" | "workspace_busy";
 
 export type SyncWorkspaceResult =
   | { ok: true; recovered?: boolean }
@@ -168,6 +170,42 @@ export async function syncWorkspace(
   log: Logger,
   context: SyncWorkspaceContext,
 ): Promise<SyncWorkspaceResult> {
+  const { withWorkspaceGitLock, WORKSPACE_GIT_LOCK_TIMEOUT } = await import("@/server/connected-repo-git");
+  // R2-B (verify-coverage P3-3/#4): every git step of the sync (the `pull --ff-only`, the self-heal's fetch, merge,
+  // branch-aside and `reset --keep`) runs under the same-host workspace lock (D38(6)), so none races syncPull's merge or the
+  // syncPush publish. The wait is bounded by the caller's self-heal budget (P2-1) and counts against it.
+  const waitStartedAt = Date.now();
+  const locked = await withWorkspaceGitLock(
+    workspacePath,
+    () => syncLocked(installationId, workspacePath, log, context, Date.now() - waitStartedAt),
+    { waitMs: SELF_HEAL_BUDGET_MS[context.system ? "background" : "route"] },
+  );
+  if (locked !== WORKSPACE_GIT_LOCK_TIMEOUT) return locked;
+  const who = actor(context);
+  const op = "workspace-sync-lock-timeout";
+  log.warn({ ...who, op: context.op }, `kb/${context.op}: workspace sync skipped — another git writer holds the workspace`);
+  mirrorWarnWithDebounce(
+    null,
+    { feature: "kb-route-helpers", op, extra: who, message: `kb/${context.op}: workspace sync skipped (another git writer holds the workspace)` },
+    workspacePath,
+    op,
+  );
+  return {
+    ok: false,
+    error: new Error("workspace git lock wait expired"),
+    errorClass: ERROR_CLASS_SYNC_FAILED,
+    held: "workspace_busy",
+  };
+}
+
+/** The body of `syncWorkspace`, run under the workspace lock; `waitedMs` is how long the lock wait took (D38(6)). */
+async function syncLocked(
+  installationId: number,
+  workspacePath: string,
+  log: Logger,
+  context: SyncWorkspaceContext,
+  waitedMs: number,
+): Promise<SyncWorkspaceResult> {
   const { gitWithInstallationAuth } = await import("@/server/git-auth");
   const who = actor(context);
   try {
@@ -175,6 +213,10 @@ export async function syncWorkspace(
       cwd: workspacePath,
       timeout: 30_000,
     });
+    // verify-coverage #6 (D42): a fast-forward left the workspace on GitHub's tip, so the pull-blocked state is stale.
+    // Background callers only: the webhook reconcile follows every push (a route's own write included), so a route's KB
+    // write never pays an extra `ls-remote` for a display-only clear.
+    if (context.system) await recordHeldCount(installationId, workspacePath, context, selfHealBudget(context), null);
     return { ok: true };
   } catch (syncError) {
     const errorClass = classifyGitSyncError(syncError);
@@ -207,6 +249,7 @@ export async function syncWorkspace(
         workspacePath,
         log,
         context,
+        waitedMs,
       );
     }
 
@@ -239,9 +282,10 @@ interface SelfHealBudget extends PullBudget {
   mayStartMerge(): boolean;
 }
 
-function selfHealBudget(context: SyncWorkspaceContext): SelfHealBudget {
+/** `alreadySpentMs`: what the caller already spent on this budget (the lock wait, D38(6)). */
+function selfHealBudget(context: SyncWorkspaceContext, alreadySpentMs = 0): SelfHealBudget {
   const kind = context.system ? "background" : "route";
-  const startedAt = Date.now();
+  const startedAt = Date.now() - alreadySpentMs;
   const mergeStartMinMs = SELF_HEAL_MERGE_START_MIN_MS[kind];
   const remaining = () => SELF_HEAL_BUDGET_MS[kind] - (Date.now() - startedAt);
   return { remaining, mergeStartMinMs, mayStartMerge: () => remaining() >= mergeStartMinMs };
@@ -373,8 +417,9 @@ const HELD_COUNT_WRITES: Partial<Record<KbPullHeldReason, "merge_conflict_preche
  * the second pinned shape, WITHOUT `--autostash` (D37(2)): the tree was gated clean, so a path dirtied after the gate makes
  * git refuse the merge, and git never stashes and never resets. The writer's entry check (D37(1), server/connected-repo-git.ts)
  * never starts a merge over an unfinished one. A precheck/merge parity break caused by same-uid workspace config is the
- * D26(3) residual. Runs under the same-host workspace lock (D38(6)); the lock wait and every step before the merge count
- * against the self-heal budget, and the hand-over and merge start only while it allows (D38(3)). After `merged`,
+ * D26(3) residual. Runs under the same-host workspace lock `syncWorkspace` holds for the whole sync (D38(6), R2-B); the
+ * lock wait and every step before the merge count against the self-heal budget, and the hand-over and merge start only
+ * while it allows (D38(3)). After `merged`,
  * `up_to_date`, `merge_conflict_precheck` or the writer's `untracked_collision`, the held count is rewritten on this run's
  * isolated dir and `T`, with the pull-blocked state (D39(a), D42). No stamp, no side-tip adoption; the caller reports once.
  */
@@ -385,57 +430,61 @@ async function mergeHeldCommits(
   budget: SelfHealBudget,
   diag: HeldMergeDiag,
 ): Promise<KbPullHeldReason> {
-  const [{ mergeVerifiedDefault }, { kbPullWriter, withWorkspaceGitLock }, { writeHeldFromIsolated }] = await Promise.all([
+  const [{ mergeVerifiedDefault }, { kbPullWriter }, { writeHeldFromIsolated }] = await Promise.all([
     import("@/server/kb-sync-pull"),
     import("@/server/connected-repo-git"),
     import("@/server/kb-sync-held-refresh"),
   ]);
-  return withWorkspaceGitLock(workspacePath, async () => {
-    if (!budget.mayStartMerge()) return "pull_deadline";
-    return onIsolatedDir(workspacePath, context, diag, async ({ isolated, url, head }) => {
-      const hit = { deadline: false };
-      const r = await mergeVerifiedDefault({
-        isolated,
-        installationId,
-        url,
-        headSha: head.sha,
-        refName: head.refName,
-        writer: budgetGatedWriter(kbPullWriter(workspacePath, { autostash: false }), budget, hit),
-        precheck: true,
-        budget,
-      });
-      const reason: KbPullHeldReason = hit.deadline ? "pull_deadline" : r.reason;
-      const pullBlocked = HELD_COUNT_WRITES[reason];
-      // X5: no count when HEAD is not the remote's default branch (paths that never attempted a count write nothing).
-      if (pullBlocked !== undefined && r.remote && head.refName === `refs/heads/${r.remote.defaultBranch}`) {
-        const { readWorkspaceHeadRef } = await import("@/server/approval/workspace-head");
-        await writeHeldFromIsolated({
-          isolated,
-          workspacePath,
-          workspaceId: context.workspaceId,
-          T: r.remote.tip,
-          // the merge moved HEAD: count on the HEAD it left
-          headSha: reason === "merged" ? readWorkspaceHeadRef(workspacePath).sha : head.sha,
-          checkedAt: r.remote.readAt,
-          pullBlocked,
-        });
-      }
-      return reason;
+  // Runs inside `syncWorkspace`'s workspace lock (R2-B: the lock now covers the whole sync, so it is not re-taken here).
+  if (!budget.mayStartMerge()) return "pull_deadline";
+  return onIsolatedDir(workspacePath, context, diag, async ({ isolated, url, head }) => {
+    const hit = { deadline: false };
+    const r = await mergeVerifiedDefault({
+      isolated,
+      installationId,
+      url,
+      headSha: head.sha,
+      refName: head.refName,
+      writer: budgetGatedWriter(kbPullWriter(workspacePath, { autostash: false }), budget, hit),
+      precheck: true,
+      budget,
     });
+    const reason: KbPullHeldReason = hit.deadline ? "pull_deadline" : r.reason;
+    const pullBlocked = HELD_COUNT_WRITES[reason];
+    // X5: no count when HEAD is not the remote's default branch (paths that never attempted a count write nothing).
+    if (pullBlocked !== undefined && r.remote && head.refName === `refs/heads/${r.remote.defaultBranch}`) {
+      const { readWorkspaceHeadRef } = await import("@/server/approval/workspace-head");
+      await writeHeldFromIsolated({
+        isolated,
+        workspacePath,
+        workspaceId: context.workspaceId,
+        T: r.remote.tip,
+        // the merge moved HEAD: count on the HEAD it left
+        headSha: reason === "merged" ? readWorkspaceHeadRef(workspacePath).sha : head.sha,
+        checkedAt: r.remote.readAt,
+        pullBlocked,
+      });
+    }
+    return reason;
   });
 }
 
 /**
- * D42: the self-heal's own untracked-collision refusal on the held arm (before any merge) still records the state, so a
- * cc workspace is not frozen silently: one hardened `ls-remote` for `T`, the count on HEAD, `pullBlocked =
- * untracked_collision`. Nothing is merged or handed over. Never throws (the refusal stands whatever happens here). The
- * `ls-remote` runs on the self-heal's clock (D38(4)): capped at what is left, and skipped once the budget is spent.
+ * The held count, and the D42 pull-blocked state, recorded without a merge: one hardened `ls-remote` for `T`, the count on
+ * HEAD. Nothing is merged or handed over. Never throws (the caller's outcome stands whatever happens here). The `ls-remote`
+ * runs on the self-heal's clock (D38(4)): capped at what is left, and skipped once the budget is spent. X5: nothing is
+ * written when HEAD is not on the remote's default branch. Two uses:
+ *   - `untracked_collision`: the self-heal's own collision refusal on the held arm (before any merge), so a cc workspace is
+ *     not frozen silently (D42);
+ *   - `null` (R2-B, verify-coverage #6): a recovery (the reset arms, a background fast-forward) left the workspace on
+ *     GitHub's tip, so a stale pull-blocked state is cleared with a fresh count.
  */
-async function recordCollisionHeld(
+async function recordHeldCount(
   installationId: number,
   workspacePath: string,
   context: SyncWorkspaceContext,
   budget: SelfHealBudget,
+  pullBlocked: "untracked_collision" | null,
 ): Promise<void> {
   if (budget.remaining() <= 0) return;
   try {
@@ -458,9 +507,9 @@ async function recordCollisionHeld(
         T: remote.tip,
         headSha: head.sha,
         checkedAt: remote.readAt,
-        pullBlocked: "untracked_collision",
+        pullBlocked,
       });
-      return "untracked_collision";
+      return "up_to_date"; // the skeleton's return value is unused here
     });
   } catch {
     // display-only state: the refusal itself is already decided and reported by the caller
@@ -574,8 +623,10 @@ async function selfHealNonFastForward(
   workspacePath: string,
   log: Logger,
   context: SyncWorkspaceContext,
+  /** The workspace-lock wait `syncWorkspace` already spent (D38(6): it counts against this budget). */
+  waitedMs = 0,
 ): Promise<SyncWorkspaceResult> {
-  const budget = selfHealBudget(context);
+  const budget = selfHealBudget(context, waitedMs);
   const gitOpts = { cwd: workspacePath, timeout: 30_000 };
   const who = actor(context);
   const extra = who;
@@ -601,6 +652,11 @@ async function selfHealNonFastForward(
     return refuse("non-fast-forward with an untracked or ignored file in the reset's way", "untracked_collision");
   };
   try {
+    // R2-B (data-sec P3-2): a stranded MERGE_AUTOSTASH (a killed legacy-runner merge) is pinned first, before any refusal
+    // below can return: a cc-only workspace never runs syncPull or syncPush, which otherwise pin it. lstat-only when absent.
+    const { pinInterruptedAutostash } = await import("@/server/connected-repo-git");
+    await pinInterruptedAutostash(workspacePath);
+
     const defaultBranch = await resolveDefaultBranch(runLocal, workspacePath);
     const target = remoteTrackingRef(defaultBranch);
 
@@ -678,7 +734,7 @@ async function selfHealNonFastForward(
         // D27: the D15 untracked precheck first (an untracked or ignored entry at an incoming path refuses as below), then
         // the hardened merge. `merged` keeps the held commits and the upstream ones: no reset, no branch-aside.
         if (await hasUntrackedCollision((argv) => runLocal(argv, gitOpts), workspacePath, target)) {
-          await recordCollisionHeld(installationId, workspacePath, context, budget);
+          await recordHeldCount(installationId, workspacePath, context, budget, "untracked_collision");
           return refuseUntrackedCollision("diverged");
         }
         const diag: HeldMergeDiag = {};
@@ -737,6 +793,8 @@ async function selfHealNonFastForward(
     // untracked in the way. `--keep` (D15a) is the structural backstop: it refuses rather than overwrite an untracked
     // file at a path it must write, and on a clean tracked tree it changes nothing else versus `--hard`.
     await runLocal(["reset", "--keep", target], gitOpts);
+    // verify-coverage #6 (D42): the workspace is on GitHub's tip now; a stale pull-blocked state is cleared with the count.
+    await recordHeldCount(installationId, workspacePath, context, budget, null);
 
     if (recoveryBranch) {
       log.warn(
