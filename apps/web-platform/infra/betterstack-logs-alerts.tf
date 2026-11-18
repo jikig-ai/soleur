@@ -2303,7 +2303,7 @@ resource "logtail_exploration_alert" "inngest_cutover_flip_silent_canary" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "CANARY, expected to stay open; do not resolve or close its mirror issue (closing it files a fresh P1 at the next mirror run). Throwaway positive control for soleur-inngest-cutover-flip-silent-prd (#12726), NOT an outage: it runs that alert's query against a host no machine has, so it is expected to read 1 on every evaluation. Never firing = the evaluator cannot evaluate this predicate shape: keep the production alert armed and build the poller (#12190). Removal PR opens per tracker #12878 (first of: fired at the +4 h read, absent at +25 min, apply +24 h). Runbook: ${local.inngest_cutover_flip_silent_runbook_url}"
+  incident_cause = "CANARY, expected to stay open; do not resolve or close its mirror issue (closing it files a fresh P1 at the next mirror run). Throwaway positive control for soleur-inngest-cutover-flip-silent-prd (#12726), NOT an outage: it runs that alert's query against a host no machine has, so it is expected to read 1 on every evaluation. Never firing = the evaluator cannot evaluate this predicate shape: keep the production alert armed and build the poller (#12190). Removal PR opens per tracker #12878 (first of: fired at the +4 h read, absent at +25 min after 20+ min live and unpaused, apply +24 h). Runbook: ${local.inngest_cutover_flip_silent_runbook_url}"
   metadata = {
     runbook = local.inngest_cutover_flip_silent_runbook_url
   }

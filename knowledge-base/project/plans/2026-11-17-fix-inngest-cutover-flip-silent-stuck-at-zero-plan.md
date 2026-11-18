@@ -217,7 +217,7 @@ None. (`knowledge-base/project/specs/feat-one-shot-12726-flip-silent-prd-diagnos
 3. **Census.** Run every suite that reads the alerts file; re-derive each moved count from its printed output, never by hand arithmetic.
 4. **Records.** Write the tf comment rewrite, the ADR-218 amendment, the two runbook bullets. Run the flip guard again (it reads both runbooks) and `lint-infra-no-human-steps.py --changed --base origin/main`.
 5. **Plan check.** `terraform validate` and a read-only `terraform plan` with the MAIN `-target` list, recipe from `infra-credential-tiers-8209.md` §Local Terraform invocation (prd_terraform read pair). Expect 2 to add, 2 to change, 0 to destroy. If no plan can run locally, record the CI plan from the PR instead.
-6. **Tracker.** File the tracker issue (Class R) before PR-A is marked ready (CTO split condition 1). It names the two reads and what each records, the canary decision rule (F3), the PR-C gate (F2), the canary's mirror issue as an accepted cost, and the earliest time of the +4 h read, so a later session can run it if this one ends.
+6. **Tracker.** File the tracker issue (Class R) before PR-A is marked ready (CTO split condition 1). It names the two reads and what each records, the canary decision rule (F3), the PR-C gate (F2 amended, AC20), the canary's mirror issue as an accepted cost, and the earliest time of the +4 h read, so a later session can run it if this one ends.
 
 ## Infrastructure (IaC)
 
