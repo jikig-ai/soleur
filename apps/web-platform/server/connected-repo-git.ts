@@ -489,16 +489,14 @@ const AUTOSTASH_FILE_MAX_BYTES = 64;
 
 type AutostashRead = { readonly sha: string } | { readonly cause: "unreadable" | "not_regular" | "too_large" | "malformed" } | null;
 
-/** `.git/MERGE_AUTOSTASH`: lstat-checked regular file of at most 64 B, opened O_NOFOLLOW|O_NONBLOCK, first line HEX40; null when absent. */
+/** `.git/MERGE_AUTOSTASH`: opened O_NOFOLLOW|O_NONBLOCK, fstat-checked regular file of at most 64 B, first line HEX40; null when absent. */
 function readMergeAutostash(workspacePath: string): AutostashRead {
   const path = join(workspacePath, ".git", "MERGE_AUTOSTASH");
   let fd: number | undefined;
   try {
-    const st = lstatSync(path);
-    if (!st.isFile()) return { cause: "not_regular" };
-    if (st.size > AUTOSTASH_FILE_MAX_BYTES) return { cause: "too_large" };
-    // O_NONBLOCK: the agent can swap the file for a FIFO between the lstat and the open; a blocking open of a FIFO with no
-    // writer would stall the whole event loop (every tenant on the host). The fstat below then refuses it as not_regular.
+    // No pre-open lstat (no check-then-open window): O_NOFOLLOW refuses a symlink in the kernel (ELOOP -> not_regular);
+    // O_NONBLOCK makes a FIFO the agent planted return at once instead of stalling the event loop (every tenant on the
+    // host); the fstat on the open descriptor then refuses a FIFO or directory and anything over 64 B.
     fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
     const opened = fstatSync(fd);
     if (!opened.isFile()) return { cause: "not_regular" };

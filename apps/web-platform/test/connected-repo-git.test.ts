@@ -245,6 +245,9 @@ describe("the pull writer's entry check (D37(1)) and the autostash pin (D36(c)),
     const opens = [...body.matchAll(/openSync\(([^)]*)\)/g)].map((m) => m[1]);
     expect(opens).toHaveLength(1);
     expect(opens[0]).toMatch(/^path, fsConstants\.O_RDONLY \| fsConstants\.O_NOFOLLOW \| fsConstants\.O_NONBLOCK$/);
+    // no pre-open lstat: the checks run on the open descriptor, so there is no check-then-open window (CodeQL js/file-system-race)
+    expect(body).not.toMatch(/\blstatSync\(/);
+    expect(body).toMatch(/fstatSync\(fd\)/);
   });
 
   test("no MERGE_AUTOSTASH: the pin does nothing and says nothing", async () => {
