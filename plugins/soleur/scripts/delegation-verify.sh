@@ -390,6 +390,12 @@ ops_check() {
   for unit in "${units[@]}"; do
     is_denied "$unit" && fail_invalid non-delegable-command "A command in the envelope's checks, abort, rollback or stop text is on the list of things that are never delegated." # mut:ops-deny
     cmd_word "$unit" "$OPS_TOOLS" && fail_invalid non-delegable-command "The envelope's checks, abort, rollback or stop text runs a tool that is never delegated." # mut:ops-tools
+    # The Review-Evidence arm check's first statement is exempt ONLY from the read-only token parse
+    # (ops_readonly cannot tokenize its multi-arg read); denylist + tools already ran above.
+    if [[ "$unit" == *"merge-base --is-ancestor"* ]] && [[ "$unit" == *"rev-list --first-parent"* ]]; then
+      [ "$key" = verification ] && ARM_CHECK_SEEN=1
+      [ "$key" = rollback ] || continue
+    fi
     [ "$key" = rollback ] || ops_readonly "$unit"
   done
   [ "$key" = rollback ] || return 0
@@ -603,6 +609,16 @@ do_verify() {
     # EVERY line of every Command block must be an allowed, scope-covered act, whether or not it is asked for.
     while IFS= read -r c || [ -n "$c" ]; do check_command "$c" "$SCOPE_TEXT"; done < "$WORK/cmds"
     while IFS=$'\t' read -r okey okind otxt || [ -n "$okey" ]; do ops_check "$okey" "$okind" "$otxt" "$SCOPE_TEXT"; done < "$WORK/ops"
+    HAS_AUTO_MERGE=0
+    while IFS= read -r _c || [ -n "$_c" ]; do
+      case "$_c" in *" --auto"*) case "$_c" in "gh pr merge "*) HAS_AUTO_MERGE=1 ;; esac ;; esac
+    done < "$WORK/cmds"
+    for _c in ${CMDS[@]+"${CMDS[@]}"}; do
+      case "$_c" in "gh pr merge "*"--auto"*) HAS_AUTO_MERGE=1 ;; esac
+    done
+    if [ "$HAS_AUTO_MERGE" = 1 ]; then
+      [ "${ARM_CHECK_SEEN:-0}" = 1 ] || fail_invalid arm-check-missing "A delegated merge --auto requires the Review-Evidence arm check's first statement in the Verification section." # mut:arm-check
+    fi
     for c in ${CMDS[@]+"${CMDS[@]}"}; do
       check_command "$c" "$SCOPE_TEXT"
       cmd_in_block "$c" "$WORK/cmds" || fail_invalid command-not-in-envelope "That command is not, word for word, a line of the envelope." # mut:cmd-match
