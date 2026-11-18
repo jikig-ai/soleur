@@ -616,11 +616,13 @@ function waitFor(prev: Promise<void>, waitMs: number | undefined): Promise<boole
  * own bounds; the holders bound their own starts). Without `waitMs` the wait is unbounded, as before.
  */
 export function withWorkspaceGitLock<T>(workspacePath: string, fn: () => Promise<T>): Promise<T>;
+// eslint-disable-next-line no-redeclare -- TypeScript overloads; the base rule does not model them
 export function withWorkspaceGitLock<T>(
   workspacePath: string,
   fn: () => Promise<T>,
   opts: { readonly waitMs?: number },
 ): Promise<T | WorkspaceGitLockTimeout>;
+// eslint-disable-next-line no-redeclare -- TypeScript overloads; the base rule does not model them
 export async function withWorkspaceGitLock<T>(
   workspacePath: string,
   fn: () => Promise<T>,

@@ -15,7 +15,7 @@ for haves in yes no; do C="$R/C-$haves"; ( setup "$C" >/dev/null 2>&1; W=$C/ws I
   echo "   haves=$haves rc=$rc received=$("${ISO[@]}" git count-objects -v | awk '/^(count|in-pack)/{s+=$2} END{print s}') have-lines=$(grep -c ' have ' "$C/pkt") handover-objects=$n" ); done
 echo "== push from the isolated dir: alternate-refs child?"
 C="$R/P"; ( setup "$C" >/dev/null 2>&1; W=$C/ws I=$C/iso; mkiso "$I" "$W"
-  cd "$W"; git fetch -q origin; git merge -q --no-edit origin/main 2>/dev/null; echo k > knowledge-base/k.md; git add -A; git "${ID[@]}" commit -qm k
+  cd "$W" || exit 1; git fetch -q origin; git merge -q --no-edit origin/main 2>/dev/null; echo k > knowledge-base/k.md; git add -A; git "${ID[@]}" commit -qm k
   H=$(git rev-parse HEAD); cp .git/shallow "$I/shallow"
   env -i PATH="$PATH" HOME="$I" GIT_DIR="$I" GIT_ALTERNATE_OBJECT_DIRECTORIES="$W/.git/objects" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_ALLOW_PROTOCOL=file GIT_TRACE="$C/trace" \
     git push -q "file://$C/o.git" "$H:refs/heads/main"; echo "   push rc=$? child-into-workspace=$(grep -c "git-dir=$W/.git" "$C/trace")" )

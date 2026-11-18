@@ -4,7 +4,7 @@
 set -uo pipefail
 if [ -n "${1:-}" ]; then BASE=$1; else BASE=$(mktemp -d); trap 'rm -rf "$BASE"' EXIT; fi
 R="$BASE/p7-$$"
-mkdir -p "$R"; cd "$R"
+mkdir -p "$R"; cd "$R" || exit 1
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 g() { git -c user.name=t -c user.email=t@t "$@"; }
 g init -q -b main ws; cd ws

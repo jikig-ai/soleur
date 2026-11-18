@@ -3,7 +3,7 @@
 # shallow workspace. Measures the exit code and whether the destination ref is written (server/kb-sync-remote.ts maps an
 # rc 0 with no ref, or a changed isolated `shallow` file, to `shallow_changed`).
 set -u
-R=/tmp/kbpull-probe/p8; rm -rf "$R"; mkdir -p "$R"; cd "$R"
+R=/tmp/kbpull-probe/p8; rm -rf "$R"; mkdir -p "$R"; cd "$R" || exit 1
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_ALLOW_PROTOCOL=file
 ID=(-c user.name=t -c user.email=t@example.invalid)
 echo "git: $(git --version)"

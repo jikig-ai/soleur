@@ -4,7 +4,7 @@
 # Usage: probe10.sh [scratch-root]
 set -euo pipefail
 if [ -n "${1:-}" ]; then BASE=$1; else BASE=$(mktemp -d); trap 'rm -rf "$BASE"' EXIT; fi
-R="$BASE/p10-$$"; mkdir -p "$R"; cd "$R"
+R="$BASE/p10-$$"; mkdir -p "$R"; cd "$R" || exit 1
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 g() { git -c user.name=t -c user.email=t@t "$@"; }
 # Portable KB-entry swap (no awk: mawk in the runner image has no NUL RS and no {40} intervals, which silently

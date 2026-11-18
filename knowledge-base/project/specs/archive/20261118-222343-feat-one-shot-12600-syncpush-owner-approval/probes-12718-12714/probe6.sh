@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Probe 6 (#12714 held count): commit count vs tree diff, before and after the held commit is squash-merged upstream.
 set -u
-R=/tmp/claude-1000/kbpull-probe/p6; rm -rf "$R"; mkdir -p "$R"; cd "$R"
+R=/tmp/claude-1000/kbpull-probe/p6; rm -rf "$R"; mkdir -p "$R"; cd "$R" || exit 1
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_ALLOW_PROTOCOL=file
 ID=(-c user.name=t -c user.email=t@example.invalid)
 git init -q --bare -b main o.git; git init -q -b main seed; mkdir -p seed/knowledge-base seed/src

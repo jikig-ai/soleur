@@ -27,12 +27,6 @@ const MERGE_MSG = "Soleur: merge knowledge-base sync";
 const USER = "77777777-7777-4777-8777-777777777777";
 const WS_ID = "11111111-1111-4111-8111-111111111111";
 
-interface Call {
-  args: string[];
-  hardened: boolean;
-  cwd: string | undefined;
-}
-
 const H = vi.hoisted(() => ({
   calls: [] as Array<{ args: string[]; hardened: boolean; cwd: string | undefined; timeout?: number }>,
   remoteUrl: "",
@@ -198,7 +192,7 @@ interface Row {
 
 beforeAll(() => {
   gitVersion = execFileSync("git", ["--version"], { encoding: "utf8", env: { PATH: process.env.PATH ?? "" } as unknown as NodeJS.ProcessEnv }).trim();
-  // eslint-disable-next-line no-console -- recorded once per run for the PR body (plan Phase 0)
+  // Recorded once per run for the PR body (plan Phase 0).
   console.log(`[kb-only-push battery] ${gitVersion}`);
   base = realpathSync(mkdtempSync(join(tmpdir(), "kbpush-")));
   template = join(base, "template.git");
@@ -270,7 +264,6 @@ const parents = (dir: string, sha: string): string[] => git(dir, "rev-list", "--
 const ident = (dir: string, sha: string): string => git(dir, "log", "-1", "--format=%an|%ae|%cn|%ce|%s", sha);
 const rootEntries = (dir: string, sha: string): string[] => git(dir, "ls-tree", sha).split("\n").filter(Boolean);
 const nonKb = (entries: string[]): string[] => entries.filter((e) => !e.endsWith("\tknowledge-base"));
-const kbEntry = (dir: string, sha: string): string => git(dir, "rev-parse", `${sha}:knowledge-base`);
 const localMain = (r: Row): string => git(r.ws, "rev-parse", "refs/heads/main");
 const tracking = (r: Row): string => git(r.ws, "rev-parse", "refs/remotes/origin/main");
 /** `git status --porcelain` with its leading status columns intact (only the trailing newline is dropped). */

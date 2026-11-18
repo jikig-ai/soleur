@@ -4,7 +4,7 @@
 set -uo pipefail
 if [ -n "${1:-}" ]; then BASE=$1; else BASE=$(mktemp -d); trap 'rm -rf "$BASE"' EXIT; fi
 R="$BASE/p8-$$"
-mkdir -p "$R"; cd "$R"; export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+mkdir -p "$R"; cd "$R" || exit 1; export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 g() { git -c user.name=t -c user.email=t@t "$@"; }
 g init -q -b main ws; cd ws; mkdir -p knowledge-base src; echo a > knowledge-base/a.md; echo s > src/s.ts; g add -A; g commit -qm T; T=$(git rev-parse HEAD); TT=$(git rev-parse "$T^{tree}")
 v() { local t=$1 id=$2; local h; h=$(git cat-file "$t" "$id" 2>/dev/null | git hash-object -t "$t" --stdin) ; [ "$h" = "$id" ] && echo "verify $t ok" || echo "verify $t FAIL (got '${h}')"; }

@@ -4,7 +4,7 @@ set -u
 R=/tmp/claude-1000/kbpull-probe/p5; rm -rf "$R"; mkdir -p "$R"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_ALLOW_PROTOCOL=file
 ID=(-c user.name=t -c user.email=t@example.invalid)
-for depth in none 1; do C="$R/d-$depth"; mkdir -p "$C"; cd "$C"
+for depth in none 1; do C="$R/d-$depth"; mkdir -p "$C"; cd "$C" || exit 1
   git init -q --bare -b main o.git; git init -q -b main seed; mkdir -p seed/knowledge-base seed/src
   echo a > seed/knowledge-base/a.md; echo x > seed/src/x.ts; git -C seed add -A; git -C seed "${ID[@]}" commit -qm c0
   git -C seed push -q "file://$C/o.git" main; git clone -q --depth 1 "file://$C/o.git" ws

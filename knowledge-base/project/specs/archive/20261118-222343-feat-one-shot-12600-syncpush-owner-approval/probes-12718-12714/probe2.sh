@@ -11,7 +11,7 @@ ID=(-c user.name=t -c user.email=t@example.invalid)
 echo "== A. conflict + dirty non-KB: where does the dirty edit go, and what do abort / reset --hard / a second merge do"
 for after in none abort reset second_merge; do
   C="$R/A-$after"
-  ( setup "$C" >/dev/null 2>&1; cd "$C/ws"
+  ( setup "$C" >/dev/null 2>&1; cd "$C/ws" || exit 1
     echo a-local > knowledge-base/a.md; git add knowledge-base/a.md; git "${ID[@]}" commit -qm "Auto-commit before sync pull"
     echo r-local > README
     iso_fetch_handover "$C" >/dev/null
@@ -28,7 +28,7 @@ for after in none abort reset second_merge; do
 done
 
 echo "== B. autostash-pop conflict (no MERGE_HEAD) then the push-side auto-commit would add KB markers"
-C="$R/B"; ( setup "$C" >/dev/null 2>&1; cd "$C/ws"; echo a-local > knowledge-base/a.md
+C="$R/B"; ( setup "$C" >/dev/null 2>&1; cd "$C/ws" || exit 1; echo a-local > knowledge-base/a.md
   iso_fetch_handover "$C" >/dev/null; git "${ID[@]}" merge --no-edit --autostash "$T" >/dev/null 2>&1; echo "   merge rc=$?"
   echo "   MERGE_HEAD=$([ -f .git/MERGE_HEAD ] && echo yes || echo no) porcelain-z-kb=$(git status --porcelain | grep knowledge-base | tr '\n' ';')"
   out=$(git add -- knowledge-base/a.md 2>&1; git "${ID[@]}" commit -qm auto 2>&1); echo "   add+commit rc=$? :: $(echo "$out" | tail -1)"
@@ -60,7 +60,7 @@ for arc in default 'true'; do
 done
 
 echo "== E. force-pushed (unrelated) upstream"
-C="$R/E"; ( setup "$C" >/dev/null 2>&1; cd "$C"
+C="$R/E"; ( setup "$C" >/dev/null 2>&1; cd "$C" || exit 1
   git init -q -b main other; echo z > other/z; git -C other add -A; git -C other "${ID[@]}" commit -qm z
   git -C other push -q -f "file://$C/o.git" main
   cd ws; iso_fetch_handover "$C" >/dev/null 2>&1; out=$(git "${ID[@]}" merge --no-edit --autostash "$T" 2>&1); echo "   merge rc=$? :: $(echo "$out" | tail -1)" )

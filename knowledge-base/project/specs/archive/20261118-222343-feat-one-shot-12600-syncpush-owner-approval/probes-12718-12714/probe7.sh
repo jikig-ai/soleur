@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Probe 7 (task 9.1): `merge --no-overwrite-ignore` refusal and `merge-tree --write-tree` exit codes.
 set -u
-R=/tmp/claude-1000/kbpull-probe/p7; rm -rf "$R"; mkdir -p "$R"; cd "$R"
+R=/tmp/claude-1000/kbpull-probe/p7; rm -rf "$R"; mkdir -p "$R"; cd "$R" || exit 1
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_ALLOW_PROTOCOL=file
 ID=(-c user.name=t -c user.email=t@example.invalid)
 echo "git: $(git --version)"

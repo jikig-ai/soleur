@@ -51,7 +51,7 @@ iso_fetch_handover() { # $1 case dir; prints T
 
 run_case() { # $1 name, $2 prep-function, $3 mode (pull|merge|ffonly)
   local N=$1 PREP=$2 MODE=$3 C="$R/$1-$3"
-  ( setup "$C" >/dev/null 2>&1; cd "$C/ws"; $PREP
+  ( setup "$C" >/dev/null 2>&1; cd "$C/ws" || exit 1; $PREP
     local out rc
     if [ "$MODE" = pull ]; then
       out=$(git "${ID[@]}" pull --no-rebase --autostash 2>&1); rc=$?
