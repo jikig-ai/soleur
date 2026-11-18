@@ -267,7 +267,7 @@ phase, and record that phase's RED runs with it.
   - [ ] FU-6 (D47, D45(c)): revoke anon's table-level SELECT on `workspaces`. Reason: pre-existing (the 174 grants snapshot,
     all columns); RLS is the anon barrier today and `verify/187` pins that no policy names anon/PUBLIC. Re-evaluate when:
     any migration adds a `workspaces` policy for anon/PUBLIC or edits 174's grants, or the next grants-snapshot migration.
-  - [ ] FU-7 (D47; type/security, P2, FILE NOW, no trigger): verify whether a cc sandbox raw `git push` or `gh pr create`
+  - [x] FU-7 (tracked by existing #12668, cross-referenced 2026-11-18) (D47; type/security, P2, FILE NOW, no trigger): verify whether a cc sandbox raw `git push` or `gh pr create`
     reaches GitHub outside the Owner-approval route. Reason: pre-existing; D41(b) fixes only the baseline text here.
   - [ ] FU-8 (D47, D26 residual; data P3-1): autostash flattening a partially staged file. Reason: pre-existing (legacy
     `pull --autostash`). Re-evaluate when: one user report, or #12719 work starting.

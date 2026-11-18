@@ -134,7 +134,9 @@ export function SettingsContent({
         heldFiles={heldFiles}
         heldRoute={heldRoute}
         // #12704 V10: the held notice's audience is "unknown" when the identity did not resolve or the owner check failed;
-        // `isOwner ?? true` above stays the controls' fallback (out of scope, V10), never the notice's.
+        // the controls keep their own rule (out of scope, V10): `isOwner ?? true` applies only when the identity is null; a
+        // failed owner check resolves `isOwner` false (fail closed, workspace-identity-resolver), so an Owner whose check
+        // failed sees the read-only card. Never the notice's rule.
         heldAudience={
           !workspaceIdentity || workspaceIdentity.ownerCheck === "unknown"
             ? "unknown"
