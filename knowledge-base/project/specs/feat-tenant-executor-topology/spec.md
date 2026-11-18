@@ -1,6 +1,6 @@
 ---
 title: Per-Tenant Sandboxed Executor + Cluster-Scale Session Placement
-status: draft (revised 2026-10-09 after adversarial challenge review)
+status: draft (revised 2026-10-09 after adversarial challenge review; superseded in part 2026-11-18 by ADR-325)
 owner: engineering
 lane: cross-domain
 brand_survival_threshold: single-user incident
@@ -10,15 +10,16 @@ epic: 9842
 branch: feat-tenant-executor-topology
 pr: 9832
 created: 2026-10-08
-updated: 2026-10-09
+updated: 2026-11-18
 ---
 
 # Spec: Per-Tenant Sandboxed Executor + Cluster-Scale Session Placement
 
-> **Superseded in part (2026-11-18) by [ADR-325](../../../engineering/architecture/decisions/ADR-325-egress-credential-injection-is-a-property-of-the-hop.md).**
-> S3 (#9845) is widened to generic per-host credential injection with approval attachment, and S0 Arm D (#9859) is now the Cloudflare trial (Decisions 2, 5).
-> "Managed vendors: no" is now a measured contingency: self-run injection on the hop is measured first, a managed platform is the fallback, and EU-only is negotiable for a clear gain (Decisions 2, 3).
-> gVisor per session (#9842) is unchanged; #9842 must re-measure the carrier and criteria 1, 5 and 6 (Decision 1). CA scope and the ADR-311 gating follow Decisions 4 and 6.
+> **Superseded in part (2026-11-18) by ADR-325 (adopting),** `knowledge-base/engineering/architecture/decisions/ADR-325-egress-credential-injection-is-a-property-of-the-hop.md`. The body is left as written on 2026-10-09; lines it overrides carry an inline *[ADR-325]* marker.
+> S3 (#9845) is widened to generic per-host credential injection at the egress hop with approval attachment, and S0 (#9859) Arm D, added after this doc, is now the Cloudflare Sandbox trial (ADR-325 Decisions 2, 5).
+> "Managed vendors: no" (Build vs Adopt, Orchestrator row), NG2's managed-vendor clause and the Cloudflare Sandbox rejection are now a measured contingency: self-run injection on the hop is measured first and a managed platform is the fallback (the Cloudflare trial has not yet run); EU-only is negotiable only when an ADR-325 flip fact holds, that trial has passed and the CLO gates are met (ADR-325 Decisions 2, 3).
+> gVisor per session (#9842) is unchanged (ADR-325 Decision 5); #9842 must re-measure the carrier and ADR-325's measurement criteria 1, 5 and 6 (Decision 1).
+> Sandbox-state descriptions below are as of 2026-10-09; for the current state see ADR-075 and its addenda.
 
 Evidence tags used below: **CONFIRMED** (read in code/vendor doc), **INFERRED**
 (reasoned, not measured), **UNVERIFIED** (must be proven in Stage 0).
@@ -82,7 +83,7 @@ capacity/placement.
   allowed, so Kata (Cloud Hypervisor) is a live option on KVM-capable nodes and
   is compared head-to-head with gVisor in S1a/S1b. Still out: Firecracker as a
   separate stack (Kata can wrap it), and any managed vendor (new Art. 28
-  sub-processor). Hetzner Cloud does not expose nested virt (vendor FAQ).
+  sub-processor). *[ADR-325: now a measured contingency; see the note at the top.]* Hetzner Cloud does not expose nested virt (vendor FAQ).
 - **NG3.** Nomad/k8s/managed runtime — only at a trigger recorded **in an ADR**
   (ADR-068 §8 Phase 4a, or the AX eval's sustained-concurrency trigger once
   recorded).
@@ -115,15 +116,15 @@ Anthropic's documented patterns, build only the supervisor glue.**
 | Sandbox runtime | **Adopt** gVisor `runsc` (systrap) | Only non-shared-kernel option that survives Hetzner Cloud's no-nested-virt. Anthropic's secure-deployment guide reports ~2x on simple syscalls and 10-200x on open/close-heavy I/O, and the CLI plus git is I/O-heavy, so **S1 must gate on a file-I/O benchmark**. |
 | Launch/reap | **Adopt** containerd with `io.containerd.runsc.v1`; **build** the thin reaper (reap-on-parent-death, restart reconcile, egress netns wiring) | Removes custom runc/shim code; Nomad containerd driver stale; Podman+runsc rootless has open issues (unverified). |
 | Protocol | **Adapt** the shape of Anthropic's Managed Agents self-hosted worker contract (claim, per-session secret, drain, reclaim, SIGTERM teardown; outbound-only; one environment key per trust boundary) | Do not adopt the product: its model loop runs at Anthropic, so it does not give loop-inside-sandbox and adds a vendor. ACP is editor interop only. |
-| Credential broker | **Adapt** Anthropic's documented pattern (sandbox with no network, unix-socket bridge to a host proxy that injects the credential via `ANTHROPIC_BASE_URL`); **build** a thin injector (one header, SSE pass-through, usage parse) | Node `fetch` ignores `HTTP(S)_PROXY` unless `NODE_USE_ENV_PROXY=1` on Node 24+; cover in every tool runtime. LiteLLM avoided (commercial-licensed enterprise features, DB for virtual keys). Anthropic's `sandbox-runtime` socket bridge is reusable **inside** the sandbox, not as the tenant boundary. |
+| Credential broker | **Adapt** Anthropic's documented pattern (sandbox with no network, unix-socket bridge to a host proxy that injects the credential via `ANTHROPIC_BASE_URL`); **build** a thin injector (one header, SSE pass-through, usage parse) | Node `fetch` ignores `HTTP(S)_PROXY` unless `NODE_USE_ENV_PROXY=1` on Node 24+; cover in every tool runtime. LiteLLM avoided (commercial-licensed enterprise features, DB for virtual keys). Anthropic's `sandbox-runtime` socket bridge is reusable **inside** the sandbox, not as the tenant boundary. *[ADR-325: S3 #9845 widens this to generic per-host injection at the hop.]* |
 | Egress + credential injection (**revised after discovery sweep**) | **Adopt/adapt before building**: spike NVIDIA OpenShell (Apache-2.0; Landlock+seccomp, gateway-owned policy and creds, no KVM; 0.1.x, no documented multi-tenant model), `paradigmxyz/iron-proxy` (Apache-2.0; default-deny MITM egress + DNS, swaps proxy tokens for real creds), Infisical `agent-vault` (license shows NOASSERTION on the repo; verify core vs ee terms), `coder/boundary` (MIT; netns + iptables rules, needs CAP_NET_ADMIN) | These implement what Anthropic's hosting guide says to build. Replaces most of the "thin injector" and per-sandbox egress build. Repos confirmed alive via GitHub API 2026-10-09; isolation/behaviour claims are README-level, untested. |
 | Session lifecycle (claim, warm pool, snapshot, TTL) | **Still build** (thinner), read `OpenSandbox` (Apache-2.0, 15.8k stars) pool/TTL design and `rivet-dev/agents` session API as references | No OSS project found with claim/pool/snapshot/TTL for Claude CLI sessions on a KVM-less host; OpenSandbox pause/resume depends on Firecracker or Kubernetes. |
 | Weaker-boundary comparison | Reference only: `sandlock` OCI shim (Landlock+seccomp, shared kernel, Linux 6.12+) as an A/B against runsc | Expected to be a weaker boundary; not acceptable for hostile tenants. |
 | Rejected under no-KVM | smolvm, BoxLite, k7, coop, Arrakis (AGPL, stale), Zeroboot, Docker Sandboxes (desktop), Cohere Terrarium (archived; cited CVE unverified) | |
 | Multi-tenant SDK hygiene | **Adopt** Anthropic's guidance: `settingSources: []`, per-tenant `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, per-tenant `cwd`, explicit tool allowlist | Repo-created `.claude/settings.json` hooks have been a host-escape class (cited CVE-2026-25725; unverified). |
 | Resume/transcripts | **Adopt** Agent SDK `SessionStore` adapters + its conformance-suite pattern | Mirror, not a full store. |
-| Orchestrator | **Spike** (S0): bespoke supervisor vs k3s + runsc + `agent-sandbox` (v1.0.x) | Decision rule in S0. Managed vendors: no (US vendors = new Art. 28 sub-processors, no Hetzner BYOC, exit cost). |
-| Rejected | E2B/microsandbox (need KVM; E2B self-host AWS/GCP only), Daytona (archived 2026-10-03, AGPL), Cloudflare Sandbox (hosted-only), Sysbox, Firecracker managers (need KVM) | |
+| Orchestrator | **Spike** (S0): bespoke supervisor vs k3s + runsc + `agent-sandbox` (v1.0.x) | Decision rule in S0. Managed vendors: no (US vendors = new Art. 28 sub-processors, no Hetzner BYOC, exit cost). *[ADR-325: now a measured contingency; see the note at the top.]* |
+| Rejected | E2B/microsandbox (need KVM; E2B self-host AWS/GCP only), Daytona (archived 2026-10-03, AGPL), Cloudflare Sandbox (hosted-only; *[ADR-325: now the #9859 Arm D trial]*), Sysbox, Firecracker managers (need KVM) | |
 
 Cited, unverified, to re-check in S1: a gVisor CUSE device-node escape
 (CVE-2026-96812, fix at commit `573a9e7`, no release named) - pin `runsc` past the
@@ -193,7 +194,7 @@ control plane or supervisor.
 | T4 | Network lateral movement (loopback `/internal/metrics`, abstract sockets, private `10.0.1.0/24`, metadata `169.254.169.254`, Inngest, git-data) | Own netns/netstack per sandbox; per-session egress allowlist (reuse `cron-egress-nftables.sh`); explicit metadata/private-net blocks | Allowlisted egress exfil of own data |
 | T5 | Sandbox escape / host kernel LPE | gVisor reduces host syscall surface; pinned `runsc` + checksum; patch cadence; tenancy cap per host; tripwire (iii) | Unpatched LPE window; fallback rung is shared-kernel |
 | T6 | Supervisor compromise | Host systemd unit; peer-credential authN; narrow API; no tenant data held; every launch audited | Supervisor is a privileged component — must be minimal and reviewed |
-| T7 | Credential exposure | Broker process (not web heap); Anthropic key never in sandbox where `ANTHROPIC_BASE_URL` proxy works; 600s tenant JWT; service-role tools excluded by CI gate | Tenant data readable by its own sandbox, by design |
+| T7 | Credential exposure | Broker process (not web heap); Anthropic key never in sandbox where `ANTHROPIC_BASE_URL` proxy works; 600s tenant JWT; service-role tools excluded by CI gate *[ADR-325: every tenant credential is injected at the hop, never in the sandbox]* | Tenant data readable by its own sandbox, by design |
 | T8 | Control-plane compromise → all tenants | Control plane holds routing + master secrets (service role, BYOK master key); no tenant plaintext at rest in heap | Master secrets remain in the control plane — **accepted, documented** |
 | T9 | Resource exhaustion/noisy neighbour | ADR-161 transient scopes per sandbox + `pids.max`; fleet cap | Host-level DoS |
 | T10 | Placement defect lands session in wrong tenant's workspace | Lease-keyed placement + supervisor claim check + per-launch workspace bind; negative tests | — |
@@ -222,6 +223,10 @@ control plane or supervisor.
   `jwt_refresh` that does not depend on the user being online; GitHub
   installation token scoped at launch; no `prd` Doppler env on executor hosts.
   Service-role tool families excluded from the executor bundle (CI gate).
+  *[ADR-325, S3 #9845: every tenant credential is injected at the egress hop and
+  never delivered into the sandbox; GitHub installation tokens are minted per
+  session with `repositories` set to the session allowlist, and GraphQL is
+  refused until the hook checks the target repository.]*
 - **FR5 Control-plane split.** Cut `realSdkQueryFactory` (~1,360 lines,
   CONFIRMED) into control-plane prep vs query construction without regressing the
   workspace/cwd divergence class (#4767) or lease-closure ordering.
