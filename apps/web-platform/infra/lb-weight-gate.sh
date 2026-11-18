@@ -51,14 +51,69 @@
 #     relay-evidence step (#12168), NOT this gate.
 #   Condition B (cut-over config-shape): GIT_DATA_STORE_ENABLED=="true"; GIT_DATA_LUKS_CUTOVER_AT
 #     AND WORKSPACES_LUKS_CUTOVER_AT (ADR-143 D3 coupling #2) each ISO-8601, parseable, ≥epoch, not
-#     future, now-marker ≥ <soak>_SOAK_DAYS(3)*86400. The WORKSPACES_LUKS marker is what keeps a web-2 whose
+#     future, now-marker ≥ <soak>_SOAK_DAYS*86400. The WORKSPACES_LUKS marker is what keeps a web-2 whose
 #     /workspaces is not attested LUKS-backed from being pooled: it is written only by the verify workflow's
 #     web2_marker job after a real on-host probe and a soak (#9372, ADR-263).
+#     THE SOAK FLOOR (#12849, ADR-263 2026-11-18 addendum). Both soaks are at least SOAK_FLOOR_DAYS (3) days.
+#     GIT_DATA_LUKS_SOAK_DAYS / WORKSPACES_LUKS_SOAK_DAYS are a plain integer from 1 to 999: unset or empty means
+#     the floor, 3..999 lengthens it, 1 and 2 refuse `*_soak_days_below_floor`, and anything else (0, a leading
+#     zero read as octal, text, more than 3 digits) refuses `*_soak_days_invalid`. Values may only LENGTHEN the
+#     soak: a `prd` value of 1 shortened the 3-day soak on 2026-11-18 (run 44304068922) and now refuses. The
+#     3-digit cap also closes an older bypass: an unbounded value wrapped in bash arithmetic (200000000000000 *
+#     86400 is negative), so the age check passed at once; 999 * 86400 cannot overflow.
+#
+# REFUSAL CONTRACT. `^gate_fail sub_condition=<id>$` on stderr is the only refusal contract a caller may parse.
+#   The SOLEUR_SOAK_EVIDENCE line (also stderr; one per soak kind whose evaluation started, verdict=pass|fail) is
+#   non-authoritative evidence: it self-reports the soak this run enforced (days, source, floor, marker time,
+#   age, required seconds) so a shortened soak shows in the log without arithmetic. Its grammar lives ONCE, as
+#   SOAK_EV_RE in scripts/lib/serve-soak-evidence.sh (the serve step's mirror and pass re-check read it).
 set -euo pipefail
+
+# The soak floor, days (#12849). A plain assignment, never a `:=` expansion: the value is not an input, and
+# lb-weight-gate-with-marker.test.sh derives the wrapper's allowlist from what this file reads.
+SOAK_FLOOR_DAYS=3
+
+# The soak evidence record (#12849). EV_KIND is empty outside B.2-B.10, so a refusal there (TOP, Condition A,
+# B.1) or the standby pass emits no evidence line. Initialised HERE, before any fail() can run: under `set -u` a
+# fail() that read an unassigned EV_KIND would abort before printing its gate_fail line.
+EV_KIND=
+EV_DAYS=none
+EV_SRC=none
+EV_MARKER=none
+EV_AGE=none
+EV_REQ=none
+
+# soak_ev <verdict> <sub_condition|none> — the evidence line for the kind being evaluated. Producer of the
+# grammar SOAK_EV_RE in scripts/lib/serve-soak-evidence.sh (its one copy); every field is a validated token
+# (host, an integer, an epoch-rebuilt timestamp or a fixed word), never raw environment text.
+soak_ev() {
+  printf 'SOLEUR_SOAK_EVIDENCE kind=%s host=%s soak_days=%s source=%s floor_days=%s marker_at=%s age_s=%s required_s=%s verdict=%s sub_condition=%s\n' \
+    "$EV_KIND" "$HOST" "$EV_DAYS" "$EV_SRC" "$SOAK_FLOOR_DAYS" "$EV_MARKER" "$EV_AGE" "$EV_REQ" "$1" "$2" >&2
+}
+
+# soak_ev_reset <kind> <knob value> — start a kind's record; source=env when the knob is set and non-empty.
+soak_ev_reset() {
+  EV_KIND="$1"
+  EV_DAYS=invalid
+  EV_SRC=default
+  if [[ -n "$2" ]]; then EV_SRC="env"; fi
+  EV_MARKER=none
+  EV_AGE=none
+  EV_REQ=none
+}
+
+# soak_ev_marker <epoch> — the marker as printed: rebuilt from the epoch (Z form), never the raw text.
+soak_ev_marker() {
+  EV_MARKER="$(date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" || EV_MARKER=unparseable
+  if [[ ! "$EV_MARKER" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then EV_MARKER=unparseable; fi
+  return 0
+}
 
 # --- Structured fail-closed exit ---------------------------------------------
 fail() {
-  # $1 = sub-condition id
+  # $1 = sub-condition id. Inside B.2-B.10 (EV_KIND set) the kind's evidence line (verdict=fail) comes first, so
+  # every refusal there is covered by construction; the gate_fail line stays the contract.
+  if [[ -n "$EV_KIND" ]]; then soak_ev fail "$1"; fi
   echo "gate_fail sub_condition=$1" >&2
   exit 1
 }
@@ -214,22 +269,30 @@ WEB2_ADDR=$(jq -r --arg h "$HOST" '.[$h]' <<<"$ROSTER_RAW")
 # B.1 — feature flag on.
 [[ "${GIT_DATA_STORE_ENABLED-}" == "true" ]] || fail "B_git_data_store_disabled"
 
-# B.2 — soak-window days (default 3), positive integer.
-SOAK_DAYS="${GIT_DATA_LUKS_SOAK_DAYS:-3}"
-[[ "$SOAK_DAYS" =~ ^[0-9]+$ ]] || fail "B_luks_soak_days_invalid"
-[[ "$SOAK_DAYS" -gt 0 ]] || fail "B_luks_soak_days_invalid"
+# B.2 — soak-window days: unset/empty = SOAK_FLOOR_DAYS; a plain integer 1..999 (no leading zero: `010` would be
+#       octal 8; at most 3 digits: a longer value wraps in $(( X * 86400 ))); never below the floor (values may only
+#       lengthen the soak, #12849). The regex runs first, so no raw text reaches an arithmetic context.
+soak_ev_reset git_data "${GIT_DATA_LUKS_SOAK_DAYS-}"
+SOAK_DAYS="${GIT_DATA_LUKS_SOAK_DAYS:-$SOAK_FLOOR_DAYS}"
+[[ "$SOAK_DAYS" =~ ^[1-9][0-9]{0,2}$ ]] || fail "B_luks_soak_days_invalid"
+EV_DAYS="$SOAK_DAYS"
+[[ "$SOAK_DAYS" -gt 0 ]] || fail "B_luks_soak_days_invalid" # unreachable after the regex; kept for D1
+[[ "$SOAK_DAYS" -ge "$SOAK_FLOOR_DAYS" ]] || fail "B_luks_soak_days_below_floor"
+EV_REQ=$(( SOAK_DAYS * 86400 ))
 
 # B.3 — LUKS-cutover soak marker: present, ISO-8601-shaped, parseable.
 MARKER="${GIT_DATA_LUKS_CUTOVER_AT-}"
 MARKER="${MARKER#"${MARKER%%[![:space:]]*}"}"
 MARKER="${MARKER%"${MARKER##*[![:space:]]}"}"
 [[ -n "$MARKER" ]] || fail "B_luks_cutover_marker_absent"
+EV_MARKER=unparseable
 
 ISO_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9]{2}:[0-9]{2}(:[0-9]{2})?(\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})?)?$'
 [[ "$MARKER" =~ $ISO_RE ]] || fail "B_luks_cutover_marker_unparseable"
 
 marker_epoch=$(date -u -d "$MARKER" +%s 2>/dev/null) || fail "B_luks_cutover_marker_unparseable"
 [[ "$marker_epoch" =~ ^-?[0-9]+$ ]] || fail "B_luks_cutover_marker_unparseable"
+soak_ev_marker "$marker_epoch"
 
 # Pre-1970 marker → reject: a negative epoch is nonsensical for a cut-over that post-dates the
 # git-data store, and `delta = now - negative` would make the soak trivially "elapsed".
@@ -237,6 +300,7 @@ marker_epoch=$(date -u -d "$MARKER" +%s 2>/dev/null) || fail "B_luks_cutover_mar
 
 now_epoch=$(date -u +%s)
 delta=$(( now_epoch - marker_epoch ))
+EV_AGE="$delta"
 
 # B.4 — future-dated marker → reject.
 [[ "$delta" -ge 0 ]] || fail "B_luks_cutover_marker_future"
@@ -244,6 +308,7 @@ delta=$(( now_epoch - marker_epoch ))
 # B.5 — soak elapsed?
 soak_secs=$(( SOAK_DAYS * 86400 ))
 [[ "$delta" -ge "$soak_secs" ]] || fail "B_luks_soak_not_elapsed"
+soak_ev pass none
 
 # --- B.6-B.10 — web-2 /workspaces LUKS-backed precondition (ADR-143 D3 coupling #2) -----------
 # This is the fence that keeps a web-2 whose /workspaces is not attested LUKS-backed from being pooled: this
@@ -255,9 +320,14 @@ soak_secs=$(( SOAK_DAYS * 86400 ))
 # absent/malformed/future/soak-not-elapsed = not satisfied = fail-closed). The check is SHAPE-ONLY: it
 # validates the ISO shape and soak age, not provenance (a value planted in the shared `prd` config shows
 # through the branch config; ADR-263 records that). The marker is sourced by lb-weight-gate-with-marker.sh (#9358).
-WS_SOAK_DAYS="${WORKSPACES_LUKS_SOAK_DAYS:-3}"
-[[ "$WS_SOAK_DAYS" =~ ^[0-9]+$ ]] || fail "B_workspaces_luks_soak_days_invalid"
-[[ "$WS_SOAK_DAYS" -gt 0 ]] || fail "B_workspaces_luks_soak_days_invalid"
+# The soak days follow B.2's rules exactly: default SOAK_FLOOR_DAYS, a plain integer 1..999, never below the floor.
+soak_ev_reset workspaces_luks "${WORKSPACES_LUKS_SOAK_DAYS-}"
+WS_SOAK_DAYS="${WORKSPACES_LUKS_SOAK_DAYS:-$SOAK_FLOOR_DAYS}"
+[[ "$WS_SOAK_DAYS" =~ ^[1-9][0-9]{0,2}$ ]] || fail "B_workspaces_luks_soak_days_invalid"
+EV_DAYS="$WS_SOAK_DAYS"
+[[ "$WS_SOAK_DAYS" -gt 0 ]] || fail "B_workspaces_luks_soak_days_invalid" # unreachable after the regex; kept for D1
+[[ "$WS_SOAK_DAYS" -ge "$SOAK_FLOOR_DAYS" ]] || fail "B_workspaces_luks_soak_days_below_floor"
+EV_REQ=$(( WS_SOAK_DAYS * 86400 ))
 
 WS_MARKER="${WORKSPACES_LUKS_CUTOVER_AT-}"
 WS_MARKER="${WS_MARKER#"${WS_MARKER%%[![:space:]]*}"}"
@@ -266,13 +336,18 @@ WS_MARKER="${WS_MARKER%"${WS_MARKER##*[![:space:]]}"}"
 # The marker is UNKEYED: its only writer probes one host, so it attests that host and no other. The seam
 # names that host (WORKSPACES_LUKS_MARKER_HOST); pooling any OTHER key on it is refused, never inherited.
 [[ "${WORKSPACES_LUKS_MARKER_HOST-}" == "$HOST" ]] || fail "B_workspaces_luks_marker_other_host"
+EV_MARKER=unparseable
 [[ "$WS_MARKER" =~ $ISO_RE ]] || fail "B_workspaces_luks_marker_unparseable"
 ws_epoch=$(date -u -d "$WS_MARKER" +%s 2>/dev/null) || fail "B_workspaces_luks_marker_unparseable"
 [[ "$ws_epoch" =~ ^-?[0-9]+$ ]] || fail "B_workspaces_luks_marker_unparseable"
+soak_ev_marker "$ws_epoch"
 [[ "$ws_epoch" -ge 0 ]] || fail "B_workspaces_luks_marker_pre_epoch"
 ws_delta=$(( now_epoch - ws_epoch ))
+EV_AGE="$ws_delta"
 [[ "$ws_delta" -ge 0 ]] || fail "B_workspaces_luks_marker_future"
 [[ "$ws_delta" -ge $(( WS_SOAK_DAYS * 86400 )) ]] || fail "B_workspaces_luks_soak_not_elapsed"
+soak_ev pass none
+EV_KIND=
 
 # =============================================================================
 # SUCCESS — pooling requested AND both flip-authorization conditions' shape holds. SHAPE-ONLY;

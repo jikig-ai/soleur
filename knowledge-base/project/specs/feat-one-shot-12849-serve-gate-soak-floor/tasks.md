@@ -33,7 +33,7 @@ G13 replace-path placement: it ships with #12869).
 
 ## Phase 2 — the gate
 
-- [ ] 2.1 `lb-weight-gate.sh`: `SOAK_FLOOR_DAYS=3`, `EV_KIND=` initialised above `fail()`, three-digit regex, floor checks, `EV_*` record, emission in
+- [x] 2.1 `lb-weight-gate.sh`: `SOAK_FLOOR_DAYS=3`, `EV_KIND=` initialised above `fail()`, three-digit regex, floor checks, `EV_*` record, emission in
       `fail()` and the two pass emits, header comments.
 
 ## Phase 3 — helper, probe and workflow
