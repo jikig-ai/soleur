@@ -65,6 +65,7 @@ import {
   ccPushPromptAddendum,
   resolveCcGithubPushRoute,
   resolveCcGithubPushRegistration,
+  type CcPushCheck,
   type ResolveCcGithubPushArgs,
 } from "@/server/cc-github-push";
 import { ExecutionGrants } from "@/server/approval/grants";
@@ -592,21 +593,100 @@ describe("the prompt addendum (ccPushPromptAddendum)", () => {
 });
 
 describe("ccPushPreconditionVerdict (D40(5): the ONE precondition decision of the registrar and the predicate)", () => {
-  // The literal expected table, not the production order (tests seat D45(f) shape): every combination of the four checks.
-  const vals = [true, false, "unknown"] as const;
-  const expectedOf = (repo: unknown, installation: unknown, entitled: unknown, flag: unknown): string | null => {
-    if (repo === false || installation === false) return "no-repo-or-installation";
-    if (entitled === false) return "not-entitled";
-    if (flag === false) return "flag-off";
-    if ([repo, installation, entitled].includes("unknown")) return "precondition-error";
-    if (flag === "unknown") return "flag-error";
-    return null;
+  // The literal expected table (tests seat D45(f) shape, verify P3-13): every combination of the four checks, keyed
+  // repo|installation|entitled|flag with T = holds, F = definitely off, U = unknown. Written out, never derived from a
+  // priority order, so a change to the production order reds the rows it moves.
+  const EXPECTED: Readonly<Record<string, string | null>> = {
+    "TTTT": null,
+    "TTTF": "flag-off",
+    "TTTU": "flag-error",
+    "TTFT": "not-entitled",
+    "TTFF": "not-entitled",
+    "TTFU": "not-entitled",
+    "TTUT": "precondition-error",
+    "TTUF": "flag-off",
+    "TTUU": "precondition-error",
+    "TFTT": "no-repo-or-installation",
+    "TFTF": "no-repo-or-installation",
+    "TFTU": "no-repo-or-installation",
+    "TFFT": "no-repo-or-installation",
+    "TFFF": "no-repo-or-installation",
+    "TFFU": "no-repo-or-installation",
+    "TFUT": "no-repo-or-installation",
+    "TFUF": "no-repo-or-installation",
+    "TFUU": "no-repo-or-installation",
+    "TUTT": "precondition-error",
+    "TUTF": "flag-off",
+    "TUTU": "precondition-error",
+    "TUFT": "not-entitled",
+    "TUFF": "not-entitled",
+    "TUFU": "not-entitled",
+    "TUUT": "precondition-error",
+    "TUUF": "flag-off",
+    "TUUU": "precondition-error",
+    "FTTT": "no-repo-or-installation",
+    "FTTF": "no-repo-or-installation",
+    "FTTU": "no-repo-or-installation",
+    "FTFT": "no-repo-or-installation",
+    "FTFF": "no-repo-or-installation",
+    "FTFU": "no-repo-or-installation",
+    "FTUT": "no-repo-or-installation",
+    "FTUF": "no-repo-or-installation",
+    "FTUU": "no-repo-or-installation",
+    "FFTT": "no-repo-or-installation",
+    "FFTF": "no-repo-or-installation",
+    "FFTU": "no-repo-or-installation",
+    "FFFT": "no-repo-or-installation",
+    "FFFF": "no-repo-or-installation",
+    "FFFU": "no-repo-or-installation",
+    "FFUT": "no-repo-or-installation",
+    "FFUF": "no-repo-or-installation",
+    "FFUU": "no-repo-or-installation",
+    "FUTT": "no-repo-or-installation",
+    "FUTF": "no-repo-or-installation",
+    "FUTU": "no-repo-or-installation",
+    "FUFT": "no-repo-or-installation",
+    "FUFF": "no-repo-or-installation",
+    "FUFU": "no-repo-or-installation",
+    "FUUT": "no-repo-or-installation",
+    "FUUF": "no-repo-or-installation",
+    "FUUU": "no-repo-or-installation",
+    "UTTT": "precondition-error",
+    "UTTF": "flag-off",
+    "UTTU": "precondition-error",
+    "UTFT": "not-entitled",
+    "UTFF": "not-entitled",
+    "UTFU": "not-entitled",
+    "UTUT": "precondition-error",
+    "UTUF": "flag-off",
+    "UTUU": "precondition-error",
+    "UFTT": "no-repo-or-installation",
+    "UFTF": "no-repo-or-installation",
+    "UFTU": "no-repo-or-installation",
+    "UFFT": "no-repo-or-installation",
+    "UFFF": "no-repo-or-installation",
+    "UFFU": "no-repo-or-installation",
+    "UFUT": "no-repo-or-installation",
+    "UFUF": "no-repo-or-installation",
+    "UFUU": "no-repo-or-installation",
+    "UUTT": "precondition-error",
+    "UUTF": "flag-off",
+    "UUTU": "precondition-error",
+    "UUFT": "not-entitled",
+    "UUFF": "not-entitled",
+    "UUFU": "not-entitled",
+    "UUUT": "precondition-error",
+    "UUUF": "flag-off",
+    "UUUU": "precondition-error",
   };
-  const rows = vals.flatMap((repo) =>
-    vals.flatMap((installation) => vals.flatMap((entitled) => vals.map((flag) => ({ repo, installation, entitled, flag })))),
-  );
-  it.each(rows)("repo=$repo installation=$installation entitled=$entitled flag=$flag", (c) => {
-    expect(ccPushPreconditionVerdict(c)).toBe(expectedOf(c.repo, c.installation, c.entitled, c.flag));
+  const check = (c: string): CcPushCheck => (c === "T" ? true : c === "F" ? false : "unknown");
+  it("the table is complete: 3^4 = 81 rows, each key a T/F/U quadruple", () => {
+    expect(Object.keys(EXPECTED)).toHaveLength(81);
+    for (const k of Object.keys(EXPECTED)) expect(k).toMatch(/^[TFU]{4}$/);
+  });
+  it.each(Object.entries(EXPECTED))("repo|installation|entitled|flag = %s -> %s", (key, expected) => {
+    const [repo, installation, entitled, flag] = [...key].map(check);
+    expect(ccPushPreconditionVerdict({ repo, installation, entitled, flag })).toBe(expected);
   });
   it("without a flag, only the cheap checks are decided (null = read the flag next)", () => {
     expect(ccPushPreconditionVerdict({ repo: true, installation: true, entitled: true })).toBeNull();
