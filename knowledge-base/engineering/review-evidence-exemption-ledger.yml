@@ -1,0 +1,29 @@
+# Review-evidence exemption ledger (ADR-328).
+#
+# Governance: only the CTO agent may add rows, and only in a PR citing ADR-328.
+# Rows with surface != "none" may not use synthetic-checks-only or infra-pin-bump;
+# they must use routed-to-review.
+# Reason closed set: synthetic-checks-only, infra-pin-bump, scheduled-cron,
+# legacy-pre-gate (legacy-pre-gate requires a sunset date).
+exemptions:
+  - site: ".github/scripts/bump-inngest-bootstrap-pin.sh#gh-pr-merge-auto"
+    surface: "none"
+    reason: "legacy-pre-gate"
+    sunset: "2026-12-31"
+    owner: "engineering/cto"
+    added: "2026-11-17"
+    ruling: "ADR-328"
+  - site: ".github/actions/bot-pr-with-synthetic-checks/action.yml#gh-app-pr-merge-auto"
+    surface: "none"
+    reason: "legacy-pre-gate"
+    sunset: "2026-12-31"
+    owner: "engineering/cto"
+    added: "2026-11-17"
+    ruling: "ADR-328"
+  - site: "apps/web-platform/server/inngest/functions/_cron-safe-commit.ts#enablePullRequestAutoMerge"
+    surface: "none"
+    reason: "legacy-pre-gate"
+    sunset: "2026-12-31"
+    owner: "engineering/cto"
+    added: "2026-11-17"
+    ruling: "ADR-328"

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ADR-328: re-arm text points at review-evidence-comment.md#arm-check; main/master carve-out tracked in #8791.
 # PreToolUse hook: review evidence gate + auto-sync against origin/main before gh pr merge.
 #
 # pre-merge:review-evidence-gate — blocks gh pr merge when no review evidence exists on the branch.
