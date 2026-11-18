@@ -9,7 +9,8 @@ import path from "node:path";
 // and fails on any unlisted file, so a new reader has to be classified here first. It also pins:
 //   - no tenant `.select(` string names a held column (the `authenticated` column grant excludes them, migration 187);
 //     the Settings page reads them with the SERVICE client, the cc agent line through the member-checked RPC;
-//   - `server/agent-runner.ts` names no held column (it uses `syncPull`'s fresh `{ heldFiles }` return);
+//   - `server/agent-runner.ts` names no held column (it uses `syncPull`'s fresh `{ heldFiles }` return, and, when that is
+//     null, the stored columns only through `readStoredKbSyncHeld`, #12704 D41(e));
 //   - `server/current-repo-url.ts` names no held column;
 //   - every app reader and writer of `repo_last_synced_at` (W5: only `syncPull` stamps it on the sync path).
 //
@@ -64,7 +65,11 @@ const HELD_MENTIONS: Record<string, Role> = {
     role: "type: KbSyncHeldRow (never WorkspaceRepoCols); writers: clearKbSyncHeldCols (disconnect and setup, D33(2)), writeKbSyncHeldCols (the held-count path, D29(1), D39)",
     required: true,
   },
-  "server/cc-dispatcher.ts": { role: "reader: get_workspace_kb_sync_held RPC, tenant client (cc agent line)", required: true },
+  // #12704 (D41(e), D42): the ONE reader of the stored columns moved out of the dispatcher, shared by both runners.
+  "server/kb-sync-held-agent-line.ts": {
+    role: "reader: readStoredKbSyncHeld, get_workspace_kb_sync_held RPC on the caller's tenant client (cc line; legacy fallback)",
+    required: true,
+  },
 };
 
 describe("kb-sync held columns: readers census (#12714, AC20)", () => {
@@ -163,11 +168,14 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
     }
   });
 
-  it("server/agent-runner.ts reads the count only through syncPull's return (task 11.3b, AC20)", () => {
+  it("server/agent-runner.ts reads the count through syncPull's return, else the one stored reader (task 11.3b, D41(e))", () => {
     const src = sources.get("server/agent-runner.ts") ?? "";
     expect(src).toMatch(/const pull: SyncPullResult \| undefined = await syncPull\(userId, workspacePath, supabase\(\), activeWorkspaceId\)/);
     expect(src).toMatch(/buildKbSyncHeldAgentLine\(\{\s*heldFiles: pull\?\.heldFiles \?\? null,\s*checkedAt: pull\?\.checkedAt \?\? null,/);
-    expect(src).toMatch(/buildKbSyncMergeBlockedAgentLine\(pull\?\.pullReason \?\? null\)/);
+    expect(src).toMatch(/buildKbSyncMergeBlockedAgentLine\(pull\?\.pullReason \?\? null, knownDefaultBranch\)/);
+    // The fallback is keyed on the same active workspace and only when the fresh count is null.
+    expect(src).toMatch(/pull !== undefined && pull\.heldFiles == null \? await readLegacyStoredKbSyncHeld\(userId, activeWorkspaceId\)/);
+    expect(src).toMatch(/readStoredKbSyncHeld\(tenant, \{ userId, workspaceId, runner: "legacy" \}\)/);
   });
 
   it("server/agent-runner.ts and server/current-repo-url.ts name no held column", () => {

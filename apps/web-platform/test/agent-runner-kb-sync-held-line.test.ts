@@ -22,7 +22,11 @@ const {
   mockMessagesInsert,
   mockSyncPull,
   mockGithubApiGet,
+  mockMirrorWarn,
+  mockLogInfo,
 } = vi.hoisted(() => ({
+  mockMirrorWarn: vi.fn(),
+  mockLogInfo: vi.fn(),
   mockSyncPull: vi.fn(),
   mockGithubApiGet: vi.fn(),
   mockFrom: vi.fn(),
@@ -74,7 +78,7 @@ vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 vi.mock("../server/ws-handler", () => ({ sendToClient: vi.fn() }));
 vi.mock("../server/logger", () => ({
   createChildLogger: () => ({
-    info: vi.fn(),
+    info: mockLogInfo,
     warn: vi.fn(),
     error: vi.fn(),
   }),
@@ -142,6 +146,7 @@ vi.mock("../server/service-tools", () => ({
 vi.mock("../server/observability", () => ({
   reportSilentFallback: vi.fn(),
   reportSilentFallbackWarning: vi.fn(),
+  mirrorWarnWithDebounce: mockMirrorWarn,
 }));
 
 // 2026-05-07 (#3437): the leader artifact-frame branch now resolves
@@ -197,8 +202,15 @@ const pullResult = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+// The stored-columns RPC's answer (D41(e) fallback); every other RPC keeps the shared helper's answer.
+let heldRpcAnswer: unknown = { data: [], error: null };
+
 async function promptFor(userData: Record<string, unknown>): Promise<string> {
   setupSupabaseMock(userData);
+  const base = mockRpc.getMockImplementation();
+  mockRpc.mockImplementation((fnName: string, ...rest: unknown[]) =>
+    fnName === "get_workspace_kb_sync_held" ? Promise.resolve(heldRpcAnswer) : base?.(fnName, ...rest),
+  );
   createQueryMock(mockQuery);
   await startAgentSession("user-1", "conv-1", "cpo");
   expect(mockQuery).toHaveBeenCalledTimes(1);
@@ -218,6 +230,7 @@ describe("legacy runner: held-files and merge-blocked agent lines (task 11.3b)",
     resolveLeaderDocumentContextSpy.mockResolvedValue({ artifactPath: "knowledge-base/product/roadmap.md", documentKind: "text" });
     mockGithubApiGet.mockResolvedValue({ default_branch: "main" });
     mockSyncPull.mockResolvedValue(pullResult());
+    heldRpcAnswer = { data: [], error: null };
   });
 
   test("count 2, tool registered: the registered line with the count, the time and the default branch", async () => {
@@ -227,6 +240,7 @@ describe("legacy runner: held-files and merge-blocked agent lines (task 11.3b)",
       heldFiles: 2,
       checkedAt: CHECKED_AT,
       route: "registered",
+      runner: "legacy",
       onRecovered: 0,
       defaultBranch: "main",
     });
@@ -236,6 +250,8 @@ describe("legacy runner: held-files and merge-blocked agent lines (task 11.3b)",
     expect(prompt).toContain("As of 2026-11-17 09:30 UTC");
     expect(prompt).toContain("git diff --name-only origin/main...HEAD");
     expect(prompt).toContain("`github_push_branch`");
+    // D41(g): the legacy runner can open the pull request itself.
+    expect(prompt).toContain("After the push, you can open the pull request with `create_pull_request`, which the workspace Owner approves.");
     expect(prompt).not.toContain("soleur/recovered-kb-sync-<time>");
     expect(prompt).not.toContain(MERGE_HEADING);
     // The line goes in once, and it agrees with the Settings card's words, never "not on GitHub".
@@ -254,7 +270,7 @@ describe("legacy runner: held-files and merge-blocked agent lines (task 11.3b)",
     mockSyncPull.mockResolvedValue(pullResult({ heldFiles: 2, onRecovered: 0, checkedAt: CHECKED_AT }));
     const prompt = await promptFor(CONNECTED);
     expect(prompt).toContain(
-      buildKbSyncHeldAgentLine({ heldFiles: 2, checkedAt: CHECKED_AT, route: "registered", onRecovered: 0, defaultBranch: null })!,
+      buildKbSyncHeldAgentLine({ heldFiles: 2, checkedAt: CHECKED_AT, route: "registered", runner: "legacy", onRecovered: 0, defaultBranch: null })!,
     );
     expect(prompt).toContain("git diff --name-only origin/HEAD...HEAD");
   });
@@ -263,7 +279,7 @@ describe("legacy runner: held-files and merge-blocked agent lines (task 11.3b)",
     mockSyncPull.mockResolvedValue(pullResult({ heldFiles: 2, onRecovered: 0, checkedAt: CHECKED_AT }));
     const prompt = await promptFor(UNCONNECTED);
     expect(prompt).toContain(
-      buildKbSyncHeldAgentLine({ heldFiles: 2, checkedAt: CHECKED_AT, route: "not-registered", onRecovered: 0, defaultBranch: null })!,
+      buildKbSyncHeldAgentLine({ heldFiles: 2, checkedAt: CHECKED_AT, route: "not-registered", runner: "legacy", onRecovered: 0, defaultBranch: null })!,
     );
     expect(prompt).toContain("This session has no tool to push a branch");
   });
@@ -280,10 +296,10 @@ describe("legacy runner: held-files and merge-blocked agent lines (task 11.3b)",
     expect(prompt).not.toContain(MERGE_HEADING);
   });
 
-  test.each(["merge_conflict", "unresolved_merge"] as const)("pullReason %s: the merge-blocked line", async (reason) => {
+  test.each(["merge_conflict", "unresolved_merge", "autostash_conflict", "untracked_collision"] as const)("pullReason %s: the merge-blocked line", async (reason) => {
     mockSyncPull.mockResolvedValue(pullResult({ pullReason: reason }));
     const prompt = await promptFor(CONNECTED);
-    expect(prompt).toContain(buildKbSyncMergeBlockedAgentLine(reason)!);
+    expect(prompt).toContain(buildKbSyncMergeBlockedAgentLine(reason, "main")!);
     expect(prompt).not.toContain(HELD_HEADING);
   });
 
@@ -299,5 +315,39 @@ describe("legacy runner: held-files and merge-blocked agent lines (task 11.3b)",
     await promptFor(CONNECTED);
     expect(mockSyncPull).toHaveBeenCalledTimes(1);
     expect(mockSyncPull.mock.invocationCallOrder[0]).toBeLessThan(mockQuery.mock.invocationCallOrder[0]);
+  });
+  describe("D41(e): a null fresh count falls back to the stored columns", () => {
+    test("the stored count renders with its own checked_at, through the RPC keyed on the active workspace", async () => {
+      heldRpcAnswer = { data: [{ kb_sync_held_files: 4, kb_sync_held_checked_at: "2026-11-16T08:00:00.000Z" }], error: null };
+      mockSyncPull.mockResolvedValue(pullResult({ heldFiles: null, checkedAt: CHECKED_AT }));
+      const prompt = await promptFor(CONNECTED);
+      expect(prompt).toContain("As of 2026-11-16 08:00 UTC, 4 changed code files in this workspace are not");
+      expect(mockRpc).toHaveBeenCalledWith("get_workspace_kb_sync_held", expect.objectContaining({ p_workspace_id: expect.any(String) }));
+      // The stored path knows no set-aside split: the clause is a possibility.
+      expect(prompt).toContain("may be only on a local branch");
+    });
+
+    test("a fresh count is never second-guessed by the stored one (no read)", async () => {
+      mockSyncPull.mockResolvedValue(pullResult({ heldFiles: 2, onRecovered: 0, checkedAt: CHECKED_AT }));
+      await promptFor(CONNECTED);
+      expect(mockRpc.mock.calls.filter((c) => c[0] === "get_workspace_kb_sync_held")).toHaveLength(0);
+    });
+
+    test("a failed stored read is no line and one debounced warning; the session still starts", async () => {
+      heldRpcAnswer = { data: null, error: { message: "boom", code: "XX000" } };
+      mockSyncPull.mockResolvedValue(pullResult({ heldFiles: null }));
+      const prompt = await promptFor(CONNECTED);
+      expect(prompt).not.toContain(HELD_HEADING);
+      expect(mockMirrorWarn).toHaveBeenCalledTimes(1);
+      expect(mockMirrorWarn.mock.calls[0][1]).toMatchObject({ feature: "agent-runner", op: "kb-sync-held-read", tags: { cause: "rpc_error", pg_code: "XX000" } });
+    });
+  });
+
+  test("obs F12: one info line names the bucket, route, reason and runner, never the count", async () => {
+    mockSyncPull.mockResolvedValue(pullResult({ pullReason: "merge_conflict", heldFiles: 12, onRecovered: 0, checkedAt: CHECKED_AT }));
+    await promptFor(CONNECTED);
+    const lines = mockLogInfo.mock.calls.filter((c) => (c[0] as { op?: string })?.op === "kb-sync.held-agent-line");
+    expect(lines).toHaveLength(1);
+    expect(lines[0][0]).toEqual({ op: "kb-sync.held-agent-line", bucket: "10-99", route: "registered", mergeBlocked: "merge_conflict", runner: "legacy" });
   });
 });

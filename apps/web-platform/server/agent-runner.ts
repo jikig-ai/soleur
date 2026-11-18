@@ -52,7 +52,14 @@ import type { Provider } from "@/lib/types";
 import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush, type SyncPullResult } from "./session-sync";
-import { buildKbSyncHeldAgentLine, buildKbSyncMergeBlockedAgentLine } from "./kb-sync-held-agent-line";
+import {
+  buildKbSyncHeldAgentLine,
+  buildKbSyncMergeBlockedAgentLine,
+  heldAgentLineLogFields,
+  kbSyncMergeBlockedReasonOf,
+  readStoredKbSyncHeld,
+  type StoredKbSyncHeld,
+} from "./kb-sync-held-agent-line";
 import {
   ensureWorkspaceRepoCloned,
   ensureWorkspaceDirExists,
@@ -93,7 +100,7 @@ import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool, gateStatusWriteOp } from "./permission-callback";
 import { createApprovalGateDeps } from "./approval/gate";
 import { ExecutionGrants } from "./approval/grants";
-import { reportSilentFallback, hashUserId } from "./observability";
+import { reportSilentFallback, hashUserId, mirrorWarnWithDebounce } from "./observability";
 import { persistTurnCost } from "./cost-writer";
 import { selectChapter } from "./pdf-chapter-router";
 import { extractPdfText } from "./pdf-text-extract";
@@ -135,6 +142,32 @@ import {
 } from "./workspace-permission-lock";
 
 const log = createChildLogger("agent");
+
+/**
+ * #12704 D41(e): the legacy runner's fallback read of the stored held columns, through the ONE reader
+ * (`readStoredKbSyncHeld`, which never throws). The tenant mint can throw: that is null plus one debounced warning, never a
+ * failed session start (the line is display-only).
+ */
+async function readLegacyStoredKbSyncHeld(userId: string, workspaceId: string): Promise<StoredKbSyncHeld | null> {
+  try {
+    const tenant = await getFreshTenantClient(userId);
+    return await readStoredKbSyncHeld(tenant, { userId, workspaceId, runner: "legacy" });
+  } catch (err) {
+    mirrorWarnWithDebounce(
+      null,
+      {
+        feature: "agent-runner",
+        op: "kb-sync-held-read",
+        tags: { cause: "rejected" },
+        extra: { userId, workspaceId, errName: err instanceof Error ? err.name : undefined },
+        message: "stored held-files read could not start (tenant client); no held-files line",
+      },
+      workspaceId,
+      "kb-sync-held-read",
+    );
+    return null;
+  }
+}
 
 let _supabase: ReturnType<typeof createServiceClient>;
 function supabase() { return _supabase ??= createServiceClient(); }
@@ -1811,19 +1844,43 @@ are the requirements to implement.`;
     }
 
     // #12714 (task 11.3b, D29(4), D29(6), D32): the held-files line from this session's `syncPull` count, and the
-    // merge-blocked line on `merge_conflict` / `unresolved_merge` (the agent is the only party that can finish that merge).
-    // The route is "registered" exactly when this runner registered `github_push_branch` for the session; the legacy runner
-    // registers it whenever a repo and an installation resolve. Null or 0, or no time: no held line.
-    const heldLine = buildKbSyncHeldAgentLine({
-      heldFiles: pull?.heldFiles ?? null,
-      checkedAt: pull?.checkedAt ?? null,
-      route: platformToolNames.includes(GITHUB_PUSH_BRANCH_TOOL_FQN) ? "registered" : "not-registered",
-      onRecovered: pull?.onRecovered ?? null,
-      defaultBranch: knownDefaultBranch,
-    });
+    // merge-blocked line for a state only the agent can resolve (D41(a)). The route is "registered" exactly when this runner
+    // registered `github_push_branch` for the session; the legacy runner registers it whenever a repo and an installation
+    // resolve. Null or 0, or no time: no held line. #12704 D41(e): when the fresh count is null (the pull returned early or the
+    // count failed), the stored columns are read instead, keyed on the same `activeWorkspaceId`, with their own `checked_at`.
+    const route = platformToolNames.includes(GITHUB_PUSH_BRANCH_TOOL_FQN) ? "registered" : "not-registered";
+    const stored: StoredKbSyncHeld | null =
+      pull !== undefined && pull.heldFiles == null ? await readLegacyStoredKbSyncHeld(userId, activeWorkspaceId) : null;
+    const heldLine = stored
+      ? buildKbSyncHeldAgentLine({
+          heldFiles: stored.heldFiles,
+          checkedAt: stored.checkedAt,
+          route,
+          runner: "legacy",
+          defaultBranch: knownDefaultBranch,
+        })
+      : buildKbSyncHeldAgentLine({ heldFiles: pull?.heldFiles ?? null, checkedAt: pull?.checkedAt ?? null,
+          route,
+          runner: "legacy",
+          onRecovered: pull?.onRecovered ?? null,
+          defaultBranch: knownDefaultBranch,
+        });
     if (heldLine) systemPrompt += `\n\n${heldLine}`;
-    const mergeBlockedLine = buildKbSyncMergeBlockedAgentLine(pull?.pullReason ?? null);
+    const mergeBlockedLine = buildKbSyncMergeBlockedAgentLine(pull?.pullReason ?? null, knownDefaultBranch);
     if (mergeBlockedLine) systemPrompt += `\n\n${mergeBlockedLine}`;
+    if (heldLine || mergeBlockedLine) {
+      // obs F12: which line was injected (bucket, route, reason, runner); never the count, a path or a branch.
+      log.info(
+        heldAgentLineLogFields({
+          heldLine: heldLine !== null,
+          heldFiles: stored ? stored.heldFiles : (pull?.heldFiles ?? null),
+          route,
+          mergeBlocked: mergeBlockedLine ? kbSyncMergeBlockedReasonOf(pull?.pullReason ?? null) : null,
+          runner: "legacy",
+        }),
+        "kb-sync held agent line appended",
+      );
+    }
 
     // Service tools: registered independently of GitHub installation.
     // Users with stored API keys get tools even without a connected repo.
