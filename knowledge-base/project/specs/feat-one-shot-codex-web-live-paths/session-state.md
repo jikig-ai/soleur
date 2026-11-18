@@ -4579,14 +4579,17 @@
   uncommitted entries. Collection, writer-window, and ship gates remain held;
   Firestore writes remain hard-disabled.
 - On 2026-11-19, PR head `cd9269ebd3b2f6ac9a89ffdcf5429d1f2abef995` exposed a
-  CodeQL high alert on a test path-mode-check followed by a path-based read.
-  The focused collector suite now opens the output with `O_NOFOLLOW`, checks
-  mode on that descriptor, and reads through the same descriptor; the focused
-  Vitest suite passes 26/26 and ESLint passes. Independent plan review found the
-  infra-linter ignore region was broader than its trigger, so it was narrowed
-  to the operator-authorization sentence; the changed-file linter passes.
-  These changes are local and not yet committed. They do not clear the historic
-  CLA check, shared-dev migration-ledger divergence, RLS classification and
-  permission failures, or collector/legal gates. The original worktree still
-  has 144 uncommitted entries; collection, writer-window, and ship remain held,
-  and Firestore live writes remain hard-disabled.
+  CodeQL alert on a test path-mode-check followed by a path-based read. Commit
+  `65d2b23dd85f82d5b378ceb090d2188101eabde2` fixes it by opening with
+  `O_NOFOLLOW`, checking mode on that descriptor, and reading from that same
+  descriptor. Its focused Vitest suite passes 26/26; ESLint, changed-file infra
+  lint, `git diff --check`, and redacted PR-history Gitleaks pass. Independent
+  review approved the exact four-file commit and confirmed the linter ignore
+  covers only the authorization sentence. On this head, CI's main build, Bun
+  tests, secret guards, deploy scripts, injector spike, and analysis jobs pass;
+  CodeQL is skipped, not passed. Remaining CI failures are the historic CLA
+  identities, shared-dev migration-ledger drift, RLS classification/permission
+  mismatches, and the draft aggregate's explicit full-battery hold. No shared DB,
+  legal identity, or processing authority was changed. The original worktree
+  remains at 144 uncommitted entries; collection, writer-window, and ship gates
+  remain held; Firestore live writes remain hard-disabled.
