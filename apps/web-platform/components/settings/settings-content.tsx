@@ -133,6 +133,15 @@ export function SettingsContent({
         ownerLabel={workspaceIdentity?.organizationName ?? null}
         heldFiles={heldFiles}
         heldRoute={heldRoute}
+        // #12704 V10: the held notice's audience is "unknown" when the identity did not resolve or the owner check failed;
+        // `isOwner ?? true` above stays the controls' fallback (out of scope, V10), never the notice's.
+        heldAudience={
+          !workspaceIdentity || workspaceIdentity.ownerCheck === "unknown"
+            ? "unknown"
+            : workspaceIdentity.ownerCheck === "owner"
+              ? "owner"
+              : "member"
+        }
       />
 
       {/* API Key Section */}

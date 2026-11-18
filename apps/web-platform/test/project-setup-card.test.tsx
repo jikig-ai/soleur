@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -346,5 +346,69 @@ describe("ProjectSetupCard held-files notice (#12714)", () => {
     const text = screen.getByTestId(NOTICE).textContent ?? "";
     expect(text).not.toMatch(/[\w-]+\/[\w.-]+\.(ts|tsx|js|md)\b/);
     expect(text).not.toMatch(/github_push_branch|commit/i);
+  });
+  it("V10: role unknown -> the neutral string for any route; the Owner and member steps are never shown", async () => {
+    const { ProjectSetupCard } = await import("@/components/settings/project-setup-card");
+    const copy = await import("@/lib/kb-sync-held-copy");
+    for (const route of ["available", "unavailable", "unknown"] as const) {
+      const { unmount } = render(<ProjectSetupCard {...READY} heldAudience="unknown" ownerLabel="Acme Co" heldFiles={3} heldRoute={route} />);
+      expect(screen.getByTestId(NOTICE).textContent).toBe(copy.heldRoleUnknown(3));
+      unmount();
+    }
+  });
+
+  it("V10: an explicit audience wins over isOwner (a member audience on an Owner-controls card shows the member string)", async () => {
+    const { ProjectSetupCard } = await import("@/components/settings/project-setup-card");
+    const copy = await import("@/lib/kb-sync-held-copy");
+    render(<ProjectSetupCard {...READY} heldAudience="member" ownerLabel="Acme Co" heldFiles={3} heldRoute="unavailable" />);
+    expect(screen.getByTestId(NOTICE).textContent).toBe(copy.heldMemberNoRoute(3));
+  });
+});
+
+// #12704 V8: the Disconnect dialog warns about the held count (caution, never a block).
+describe("DisconnectRepoDialog held warning (V8)", () => {
+  const READY = {
+    repoUrl: "https://github.com/acme-co/web-platform",
+    repoStatus: "ready" as const,
+    repoLastSyncedAt: "2026-11-16T12:00:00Z",
+  };
+  async function openDialog(props: Record<string, unknown>) {
+    const { ProjectSetupCard } = await import("@/components/settings/project-setup-card");
+    render(<ProjectSetupCard {...READY} {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: /^disconnect$/i }));
+  }
+  const bodyText = () => screen.getByText(/This will unlink/).textContent;
+
+  it("route available: the warning with the publish step ABOVE the unchanged paragraph; Confirm stays enabled", async () => {
+    const copy = await import("@/lib/kb-sync-held-copy");
+    await openDialog({ heldFiles: 3, heldRoute: "available" });
+    const warning = screen.getByTestId("disconnect-held-warning");
+    expect(warning.textContent).toBe(copy.disconnectHeldWarning(3, "available"));
+    expect(bodyText()).toBe("This will unlink acme-co/web-platform from your account. Your workspace files will be removed. You can reconnect a repository at any time.");
+    // Above the paragraph, a neutral note (not role=alert), and Disconnect is not blocked.
+    expect(warning.compareDocumentPosition(screen.getByText(/This will unlink/)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(warning.getAttribute("role")).toBe("note");
+    expect(warning.className).not.toMatch(/red/);
+    expect(screen.getByRole("button", { name: /confirm disconnect/i })).toBeEnabled();
+  });
+
+  it.each([["unavailable"], ["unknown"]] as const)("route %s: the warning without an instruction", async (route) => {
+    const copy = await import("@/lib/kb-sync-held-copy");
+    await openDialog({ heldFiles: 1, heldRoute: route });
+    expect(screen.getByTestId("disconnect-held-warning").textContent).toBe(copy.disconnectHeldWarning(1, "unknown"));
+  });
+
+  it("role unknown: no instruction even when the route is available (V10: the steps are not shown)", async () => {
+    const copy = await import("@/lib/kb-sync-held-copy");
+    await openDialog({ heldFiles: 2, heldRoute: "available", heldAudience: "unknown" });
+    expect(screen.getByTestId("disconnect-held-warning").textContent).toBe(copy.disconnectHeldWarning(2, "unknown"));
+  });
+
+  it.each([[null], [0], [10_001]])("count %s: no warning, and the paragraph gains the conditional clause", async (heldFiles) => {
+    await openDialog({ heldFiles, heldRoute: "available" });
+    expect(screen.queryByTestId("disconnect-held-warning")).not.toBeInTheDocument();
+    expect(bodyText()).toBe(
+      "This will unlink acme-co/web-platform from your account. Your workspace files will be removed, including any code changes your agent made that are not on your repository's main branch yet. You can reconnect a repository at any time.",
+    );
   });
 });

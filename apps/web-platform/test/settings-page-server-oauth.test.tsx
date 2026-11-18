@@ -85,7 +85,7 @@ vi.mock("@/lib/repo-status", () => ({
 // #12714: the page imports the publish-route predicate; it only runs for a ready repo with a held count, which this
 // file never seeds, so a stub keeps the module graph (and its logger) out of this test.
 vi.mock("@/server/cc-github-push", () => ({
-  isCcGithubPushRouteAvailable: vi.fn(async () => "unknown"),
+  resolveCcGithubPushRoute: vi.fn(async () => "unknown"),
 }));
 vi.mock("@/components/settings/settings-content", () => ({
   SettingsContent: () => null,

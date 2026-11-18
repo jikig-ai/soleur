@@ -6,8 +6,8 @@ import { resolveNeedsReconnect } from "@/lib/repo-status";
 import { resolveWorkspaceIdentityForSettings } from "@/server/workspace-identity-resolver";
 import { resolveActiveWorkspace } from "@/server/workspace-resolver";
 import { isCcOauthEnabled } from "@/server/cc-oauth-flag";
-import { isCcGithubPushRouteAvailable } from "@/server/cc-github-push";
-import { mirrorWithDebounce } from "@/server/observability";
+import { resolveCcGithubPushRoute } from "@/server/cc-github-push";
+import { mirrorWarnWithDebounce, mirrorWithDebounce } from "@/server/observability";
 import { isRenderableHeldCount, type HeldRouteState } from "@/lib/kb-sync-held-copy";
 
 export default async function SettingsPage() {
@@ -73,9 +73,18 @@ export default async function SettingsPage() {
 
   if (heldRes.error) {
     // Debounced, constant key (as above): this runs on every Settings render while the read keeps failing.
+    // null first, never the error object (#8629: the pino mirror captures a passed Error first and Sentry drops the tagged
+    // second capture); the Postgres code is the tag an operator filters on.
+    const pgCode = (heldRes.error as { code?: unknown }).code;
     mirrorWithDebounce(
-      heldRes.error,
-      { feature: "settings", op: "read-held-files", extra: { userId: user.id } },
+      null,
+      {
+        feature: "settings",
+        op: "read-held-files",
+        ...(typeof pgCode === "string" ? { tags: { pg_code: pgCode } } : {}),
+        extra: { userId: user.id },
+        message: "held-files select failed; no held notice",
+      },
       "settings:read-held-files",
       "settings_read_held_files",
     );
@@ -109,19 +118,26 @@ export default async function SettingsPage() {
     user.id,
   );
 
-  // #12714 (D29(3), D29(5)): the held-files notice. The count is display-only; the publish-route predicate is asked
-  // for the VIEWER (a member's agent is the one that would push) and only when a notice can render. A throw reads as
-  // "unknown" (the transient copy), never "unavailable": a blip must not say publishing is impossible (V6(3)).
+  // #12714 (D29(3), D29(5)): the held-files notice and the Disconnect warning (V8). The count is display-only; the
+  // publish-route predicate is asked for the VIEWER (a member's agent is the one that would push) and only when a notice can
+  // render. The predicate never throws (a failed read is "unknown" plus its own debounced warning, tagged with the Settings
+  // feature, obs F11); the catch is belt and braces and reads as "unknown" too, never "unavailable" (V6(3)).
   const rawHeldFiles: unknown = heldRes.error ? null : heldRes.data?.kb_sync_held_files;
   const heldFiles = isRenderableHeldCount(rawHeldFiles) ? rawHeldFiles : null;
   const heldRoutePromise: Promise<HeldRouteState> =
     active.ok && repoData?.repo_status === "ready" && heldFiles !== null
-      ? isCcGithubPushRouteAvailable({ userId: user.id, workspaceId: active.workspaceId }).catch((err: unknown) => {
-          mirrorWithDebounce(
-            err,
-            { feature: "settings", op: "held-files-route-predicate", extra: { userId: user.id } },
+      ? resolveCcGithubPushRoute({ userId: user.id, workspaceId: active.workspaceId, feature: "settings" }).catch((err: unknown) => {
+          mirrorWarnWithDebounce(
+            null,
+            {
+              feature: "settings",
+              op: "cc-push-route-check",
+              tags: { failed: "threw" },
+              extra: { userId: user.id, errName: err instanceof Error ? err.name : undefined },
+              message: "publish-route check could not be completed; the transient copy is shown",
+            },
             "settings:held-files-route-predicate",
-            "settings_held_files_route_predicate",
+            "cc-push-route-check",
           );
           return "unknown" as const;
         })

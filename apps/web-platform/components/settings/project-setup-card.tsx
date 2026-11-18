@@ -6,7 +6,7 @@ import { NavLink } from "@/components/ui/nav-link";
 import { DisconnectRepoDialog } from "./disconnect-repo-dialog";
 import { ReconnectNotice } from "@/components/repo/reconnect-notice";
 import { useReconnect, type ReconnectRepoStatus } from "@/components/repo/use-reconnect";
-import { kbSyncHeldNotice, type HeldRouteState } from "@/lib/kb-sync-held-copy";
+import { kbSyncHeldNotice, type HeldNoticeAudience, type HeldRouteState } from "@/lib/kb-sync-held-copy";
 
 // Single-sourced from use-reconnect.ts (the lower-level module) so the union
 // can't drift across the two files. Re-exported under the existing name for
@@ -42,10 +42,15 @@ interface ProjectSetupCardProps {
    */
   heldFiles?: number | null;
   /**
-   * #12714 — the publish-route predicate for the VIEWER (`isCcGithubPushRouteAvailable`). Omitted reads as "unknown":
+   * #12714 — the publish-route predicate for the VIEWER (`resolveCcGithubPushRoute`). Omitted reads as "unknown":
    * the transient copy, never the no-route sentence on a blip (V6(3)).
    */
   heldRoute?: HeldRouteState;
+  /**
+   * #12704 V10 — who reads the held notice: "unknown" when the role lookup failed, so neither the Owner nor the member
+   * steps are shown. Omitted: derived from `isOwner` (the controls' own flag, unchanged).
+   */
+  heldAudience?: HeldNoticeAudience;
 }
 
 /**
@@ -82,12 +87,14 @@ export function ProjectSetupCard({
   ownerLabel = null,
   heldFiles = null,
   heldRoute = "unknown",
+  heldAudience,
 }: ProjectSetupCardProps) {
   const router = useRouter();
+  const audience: HeldNoticeAudience = heldAudience ?? (isOwner ? "owner" : "member");
   // V6: n = 0, null or a repo that is not `ready` shows nothing; the Owner's reconnect state shows ReconnectNotice only.
   const heldText =
     repoStatus === "ready" && repoUrl
-      ? kbSyncHeldNotice({ audience: isOwner ? "owner" : "member", route: heldRoute, count: heldFiles, ownerLabel })
+      ? kbSyncHeldNotice({ audience, route: heldRoute, count: heldFiles, ownerLabel })
       : null;
 
   // ADR-044 PR-1 (FR3) — member (non-owner) read-only variant. No connect /
@@ -172,7 +179,12 @@ export function ProjectSetupCard({
               )}
             </div>
             {heldText && <HeldFilesNotice text={heldText} />}
-            <DisconnectRepoDialog repoName={extractRepoName(repoUrl)} />
+            <DisconnectRepoDialog
+              repoName={extractRepoName(repoUrl)}
+              // V8: the same count as the notice; an unknown role gets no publish instruction (V10: the steps are not shown).
+              heldFiles={heldFiles}
+              heldRoute={audience === "owner" ? heldRoute : "unknown"}
+            />
           </div>
         )}
 

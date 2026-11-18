@@ -22,6 +22,7 @@ const REPO_STATUS_SELECT = "repo_url, repo_status, repo_last_synced_at, github_i
 const wsCalls: Array<{ select: string; eq: [string, unknown] | null }> = [];
 const predicate = vi.hoisted(() => vi.fn());
 const mirror = vi.hoisted(() => vi.fn());
+const warn = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
@@ -63,7 +64,7 @@ vi.mock("@/lib/supabase/server", () => ({
   }),
 }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
-vi.mock("@/server/observability", () => ({ mirrorWithDebounce: mirror }));
+vi.mock("@/server/observability", () => ({ mirrorWithDebounce: mirror, mirrorWarnWithDebounce: warn }));
 vi.mock("@/server/workspace-resolver", () => ({
   resolveActiveWorkspace: async () => state.active,
 }));
@@ -74,7 +75,7 @@ vi.mock("@/lib/repo-status", () => ({
   resolveNeedsReconnect: async () => false,
 }));
 vi.mock("@/server/cc-oauth-flag", () => ({ isCcOauthEnabled: () => false }));
-vi.mock("@/server/cc-github-push", () => ({ isCcGithubPushRouteAvailable: predicate }));
+vi.mock("@/server/cc-github-push", () => ({ resolveCcGithubPushRoute: predicate }));
 vi.mock("@/components/settings/settings-content", () => ({
   SettingsContent: () => null,
 }));
@@ -127,7 +128,10 @@ describe("settings/page.tsx — held-files notice (#12714)", () => {
     expect(p.heldFiles).toBeNull();
     expect(predicate).not.toHaveBeenCalled();
     expect(mirror).toHaveBeenCalledTimes(1);
-    expect(mirror.mock.calls[0][1]).toMatchObject({ feature: "settings", op: "read-held-files" });
+    // null first (never the error object, #8629), the Postgres code as a tag, no error text.
+    expect(mirror.mock.calls[0][0]).toBeNull();
+    expect(mirror.mock.calls[0][1]).toMatchObject({ feature: "settings", op: "read-held-files", tags: { pg_code: "42703" } });
+    expect(JSON.stringify(mirror.mock.calls[0][1])).not.toContain("does not exist");
   });
 
   it("calls the route predicate with the VIEWER's user id and the active workspace id, and threads the result", async () => {
@@ -135,7 +139,8 @@ describe("settings/page.tsx — held-files notice (#12714)", () => {
     predicate.mockResolvedValue("available");
     const p = await pageProps();
     expect(predicate).toHaveBeenCalledTimes(1);
-    expect(predicate).toHaveBeenCalledWith({ userId: USER_ID, workspaceId: WS_ACTIVE });
+    // obs F11: the predicate's own warning carries the Settings feature.
+    expect(predicate).toHaveBeenCalledWith({ userId: USER_ID, workspaceId: WS_ACTIVE, feature: "settings" });
     expect(p.heldFiles).toBe(3);
     expect(p.heldRoute).toBe("available");
   });
@@ -152,8 +157,10 @@ describe("settings/page.tsx — held-files notice (#12714)", () => {
     const p = await pageProps();
     expect(p.heldRoute).toBe("unknown");
     expect(p.heldFiles).toBe(2);
-    expect(mirror).toHaveBeenCalledTimes(1);
-    expect(mirror.mock.calls[0][1]).toMatchObject({ feature: "settings", op: "held-files-route-predicate" });
+    expect(mirror).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toBeNull();
+    expect(warn.mock.calls[0][1]).toMatchObject({ feature: "settings", op: "cc-push-route-check", tags: { failed: "threw" } });
   });
 
   it("does not call the predicate when no notice can render (0, null, out of bounds, repo not ready)", async () => {
