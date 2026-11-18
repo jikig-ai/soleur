@@ -248,3 +248,15 @@ sites. Compose those path segments while preserving the exact URL instead of
 adding a stale waiver. Use absolute worktree paths when the shell is already
 inside a linked worktree; a repo-root-relative `.worktrees/...` probe can
 silently inspect the wrong path.
+
+During the 2026-11-18 recovery, `gh event listen` returned HTTP 403 because
+account event subscriptions were disabled; use `gh pr checks --watch` for CI
+status. A git-mode Gitleaks scan walks each introducing commit, so a current
+path/line exception does not suppress a historical finding: bind the exception
+to the introducing commit, path, rule, and line, then rerun both git-mode and
+full-tree scans. CodeQL also checks permissions on test-created directories;
+use owner-only mode when world readability is not part of the behavior under
+test. Finally, `lint-infra-no-human-steps.py` flags exact operator-authorization
+paragraphs in plans; when the paragraph records a gated Terraform command,
+annotate that bounded passage with the documented lint-ignore marker and issue
+reference, then verify the changed-file lint.

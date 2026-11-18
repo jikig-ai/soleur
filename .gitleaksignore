@@ -10,6 +10,11 @@ knowledge-base/product/design/app-ui/session-completion-inline.pen:generic-api-k
 knowledge-base/product/design/marketing/learn-nav-go-deeper-rail.pen:generic-api-key:1277
 knowledge-base/project/specs/feat-one-shot-codex-web-live-paths/codex-notice-recovery.pen:generic-api-key:467
 
+# PR #9051: this Pencil per-document ID is metadata, not a credential. The PR-diff scan
+# reads each historical commit, so bind the exception to the commit that introduced it.
+# Format for a git-mode scan: <commit>:<path>:<rule-id>:<line>
+c97c8e725c1622cb58c4053aea69c8ae29266d58:knowledge-base/project/specs/feat-one-shot-codex-web-live-paths/codex-notice-recovery.pen:generic-api-key:395
+
 # Synthetic test strings introduced earlier on the argv-bearer sweep branch (PR #9594), reworded at the tip.
 # They sit in intermediate commits that the PR-diff scan walks one commit at a time, so the tip fix alone does not clear them.
 # Format for a git-mode scan: <commit>:<path>:<rule-id>:<line>

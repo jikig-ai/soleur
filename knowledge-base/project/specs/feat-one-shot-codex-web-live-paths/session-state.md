@@ -4560,27 +4560,21 @@
   independent observer, authority, STS and real encrypted vault/restore path
   do not exist on this branch. The P1/P2 findings remain unresolved; no
   collector clearance or exact collection commands can be prepared.
-- On 2026-11-18, fetched PR #9051's actual CI evidence at remote head
-  `111951f8d843fa51d42e619a4e542c61fdfb0c43`. `cla-check` still fails for the
-  two historical identities `t@t` and `s@example.invalid`; no legal attestation
-  or author rewrite was made. `tenant-integration` reports migration-ledger
-  divergence in shared dev; no shared database or migration action was taken.
-  `rls-fuzz` reports four missing relation classifications and direct permission
-  failures on the two agent-engine attempt/recovery tables. `test-bun` reports
-  the valid new plan `credentials_required` declaration raised the baseline
-  count from 98 to 99. Other observed failures were a Pencil `fileToken` UUID
-  false positive, the reserved `.invalid` address in this learning, two STS
-  lint issues, and Firestore path strings misclassified as Supabase Management
-  API paths. In the isolated recovery worktree, the Pencil UUID was retained
-  with its line-specific gitleaks exception, the `.invalid` fixture domain was
-  allowed, the STS cleanup/lint fixes were applied, the baseline was updated,
-  and Firestore request paths retained their exact bytes while avoiding the
-  overlapping static token. Targeted tests pass 52/52 plus the baseline test
-  1/1; focused ESLint, Supabase endpoint lint, fixture-content lint, redacted
-  gitleaks full-tree scan, and `git diff --check` pass. Independent review
-  approved these eight changed files. These are local checks only; they do not
-  resolve shared-ledger/RLS failures or establish collector authority.
-  Recovery HEAD remains `2e8cc35ffe6a15463f9051955821158027ed3b8d` with those
-  local changes uncommitted. PR head has not been updated. The original PR
-  worktree remains at 144 uncommitted entries. Collection, writer-window, and
-  ship gates remain held; Firestore writes remain hard-disabled.
+- On 2026-11-18, fetched PR #9051 CI at remote head `3d5d91c5d3164a5c0d887a307ae9cb6fb117f25c`.
+  The focused code, build, dependency, quality, encryption-posture, and most
+  infrastructure checks passed. Remaining failures include historical CLA
+  identities (`t@t`, `s@example.invalid`), shared-dev migration-ledger
+  divergence, four missing RLS relation classifications plus direct permission
+  failures on agent-engine attempt/recovery tables, and the test aggregate's
+  draft-mode full-battery hold. CodeQL flagged a world-readable test fixture
+  mode, fixed locally in `17679e294009bf7faa992e18859e50f112d167a6` by using
+  owner-only permissions. The PR-diff gitleaks scan also flagged the historical
+  Pencil document ID; its exception is now bound to introducing commit
+  `c97c8e725c1622cb58c4053aea69c8ae29266d58`, and the local git-mode scan passes.
+  The plan's explicit Terraform authorization paragraph is wrapped in the
+  linter's documented ignore markers; the changed-file infra linter passes.
+  These local fixes are not yet pushed. Recovery HEAD is
+  `17679e294009bf7faa992e18859e50f112d167a6` with this state update and related
+  documentation/linter changes uncommitted. The original PR worktree remains at 144
+  uncommitted entries. Collection, writer-window, and ship gates remain held;
+  Firestore writes remain hard-disabled.

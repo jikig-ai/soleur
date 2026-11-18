@@ -332,6 +332,7 @@ filter private-network L2 traffic, so their rules cannot replace host-level
 controls ([Firewall FAQ](https://docs.hetzner.com/cloud/firewalls/faq/),
 [Networks FAQ](https://docs.hetzner.com/networking/networks/faq/)).
 
+<!-- lint-infra-ignore start: records the gated production Terraform apply and command-specific operator authorization required before provisioning; issue #11170 -->
 Before enabling or applying either host, choose an EU location and server type,
 recheck current orderable stock and monthly cost, and obtain exact operator
 authorization for the Terraform apply. The hosts must be reproducible through
@@ -354,6 +355,7 @@ termination cannot remove a prepared transaction.
 Passing these local tests
 does not establish production authority, Firestore IAM, provider coverage or
 permission to collect.
+<!-- lint-infra-ignore end -->
 
 #### Holder-evidence processing gate
 
