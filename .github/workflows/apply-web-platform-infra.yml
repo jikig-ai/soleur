@@ -44,12 +44,12 @@ on:
       # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §confirm and the gate model
       # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §plan_only
       plan_only:
-        description: "[web-host-replace, git-data-host-replace] Rehearsal: credentials, init, plan and the path's own gate, then STOP before any apply, -replace, SSH or host contact. Operator step O4b."
+        description: "[web-host-replace, git-data-host-replace, bastion-host-create] Rehearsal: credentials, init, plan and the path's own gate, then STOP before any apply, -replace, SSH or host contact. Operator step O4b."
         required: false
         default: false
         type: boolean
       confirm:
-        description: "Typo-guard for destructive/creative targets. NOT the authorization. REVIEWER-gated: web-host-create, web-host-replace, git-data-host-create, vector-redeliver (workspaces-luks-recut is RETIRED -- its first step exits 1 on every dispatch). Since #8209 every OTHER target carries environment: infra-privileged -- no reviewer, but main-only, so a branch dispatch is refused; for those the gate chain, destroy-guard and id-pin are the rest of the protection. The exact token is in that target's job header and runbook. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
+        description: "Typo-guard for destructive/creative targets. NOT the authorization. REVIEWER-gated: web-host-create, web-host-replace, git-data-host-create, bastion-host-create, vector-redeliver (workspaces-luks-recut is RETIRED -- its first step exits 1 on every dispatch). Since #8209 every OTHER target carries environment: infra-privileged -- no reviewer, but main-only, so a branch dispatch is refused; for those the gate chain, destroy-guard and id-pin are the rest of the protection. The exact token is in that target's job header and runbook. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
         required: false
         type: string
       # For apply_target=web-host-create ONLY (#6730). The var.web_hosts key of the host to
@@ -132,7 +132,7 @@ on:
         description: >-
           Which apply path? manual-rerun (default) | inngest-host | inngest-host-replace |
           registry-host-replace | registry-region-migrate | registry-luks-recut |
-          git-data-host-replace | git-data-host-rotate | git-data-host-create | workspaces-luks-cutover |
+          git-data-host-replace | git-data-host-rotate | git-data-host-create | bastion-host-create | workspaces-luks-cutover |
           workspaces-luks-recut (RETIRED: exits 1) | web-host-create | web-host-replace |
           ci-ssh-token-replace | vector-redeliver | entrypoint-audit | inngest-link-flag.
           DESTRUCTIVE targets need `confirm` and an id-pin — see the runbook for the
@@ -153,6 +153,8 @@ on:
           needs `confirm=BIRTH-GIT-DATA`. Gated by three interlocks plus the plaintext-id one (rung-2
           while the evidence hash differs, plaintext-id while git_data_volume_id is non-empty;
           job-rationale.md §git_data_host_create). Read git-data-birth.md first.
+          bastion-host-create BIRTHS the dedicated soleur-bastion (#12866); additive-only,
+          needs `confirm=BIRTH-bastion`; run plan_only=true first. Read bastion-host.md first.
         required: false
         default: manual-rerun
         type: choice
@@ -185,6 +187,8 @@ on:
           - web-host-replace
           # #6977 — git-data BIRTH path, counterpart of git-data-host-replace (full text: the job-rationale runbook, `git_data_host_create` section).
           - git-data-host-create
+          # #12866 (ADR-327 step 2a): the dedicated bastion birth; see the bastion_host_create job header.
+          - bastion-host-create
           # #6767: read-only retrospective drift audit of every declared ruleset's
           # LIVE phase entrypoint (no terraform apply; own concurrency group;
           # issues:write via the job's github.token; posts findings to #6767). See the
@@ -809,6 +813,7 @@ jobs:
             echo "::error::Remediation depends on WHICH host is being created (see the plan output above):"
             echo "::error::  • ANY hcloud_server.web[*] → dispatch '-f apply_target=web-host-create -f web_host_key=<key> -f confirm=BIRTH-<key>' (#6730, ADR-145). That job is the ONE route granted this capability: it resolves a digest pin, runs the coherence preflight, asserts SENTRY_DSN is non-empty, and grades the plan with an INVERTED guard (exactly one create, OF THE REQUESTED HOST, zero destroys/reboots/out-of-scope changes). It is environment-gated on web-platform-infra-apply, so it waits for a reviewer before any step runs. This HALT stays because it is correct for THIS path — the per-PR apply reaches the server but not its hcloud_server_network attachment, so a birth here yields a host with no private IP and, transiently, no firewall (#6416)."
             echo "::error::  • hcloud_server.inngest → dispatch '-f apply_target=inngest-host -f confirm=PUBLIC-SDK-URL-BIRTH'."
+            echo "::error::  • hcloud_server.bastion → dispatch '-f apply_target=bastion-host-create -f confirm=BIRTH-bastion', plan_only=true first (#12866, ADR-327). Its gate admits only the bastion-resources.txt addresses; read knowledge-base/engineering/operations/runbooks/bastion-host.md first. If the bastion already exists and is not ready, the recovery is bastion-host-replace (#12879), never a second create."
             echo "::error::  • hcloud_server.registry → no dispatch creates it FROM AN EMPTY ROOT, but two dispatches CAN re-create a registry host that is absent from state: 'registry-region-migrate' (a pure create in the new region) and 'registry-luks-recut' (its resume arm, admitted only by a live Hetzner probe). Both are gated by out_of_scope==0 over the registry's own 6-member allow-set, so neither can birth the fleet's other resources. If the registry host is missing ALONGSIDE out-of-scope resources, that is a from-empty root: run the operator-local full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096) BEFORE merging."
             echo "::error::  • a legitimate new WEB host (e.g. web-3 added to var.web_hosts) → dispatch web-host-create for that key, as above. Order matters: adding a key to var.web_hosts makes EVERY subsequent merge HALT here until the host is actually born, so dispatch promptly after the merge that introduces the key. For a NON-web new host, no dispatch creates it; note also that the HALT is NOT inherited — it is a separate inline copy per workflow (plus a distinct sourced gate for the luks cutover), living in the apply job whose if: guard is mutually exclusive with every dispatch job. A NEW dispatch job inherits nothing and MUST add its own guard."
             echo "::error::PINNED-IMAGE CHAIN — the BREAK-GLASS fallback only, for when the web-host-create dispatch is itself unavailable (the job automates every step below). A create bakes var.image_name into user_data; the mutable ':latest' can resolve to an image whose baked /opt/soleur/host-scripts disagree with this tree, and the new host then aborts cloud-init at STAGE=verify and never serves (ADR-080). Pin a digest and prove coherence first:"
@@ -816,7 +821,7 @@ jobs:
             echo "::error::    PINNED=\"ghcr.io/jikig-ai/soleur-web-platform@\${DIGEST}\""
             echo "::error::    PINNED=\"\$PINNED\" bash apps/web-platform/infra/scripts/host-image-coherence-preflight.sh   # docker-cp the pinned image's baked host-scripts out, recompute their combined sha256 byte-identically to the cloud-init boot check, and compare against 'terraform console local.host_scripts_content_hash'. exit 0 = coherent, non-zero = do NOT apply."
             echo "::error::    test -n \"\$(doppler secrets get SENTRY_DSN -p soleur -c prd_terraform --plain)\" || { echo 'EMPTY SENTRY_DSN — do NOT create the host'; exit 1; }   # MANDATORY (#6575, ADR-128 R1). The pre-extraction boot stages read ONLY the baked \${sentry_dsn}; doppler is not installed yet, so its fallback is dead. An empty DSN means the host boots DARK: no telemetry, no page, no signal that it died. The web-host-create job asserts this automatically — this line exists for the break-glass path, where nothing does."
-            echo "::error::    cd apps/web-platform/infra && doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -var image_name=\"\$PINNED\"   # full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096); abort if it replaces hcloud_server.inngest (#12742)"
+            echo "::error::    cd apps/web-platform/infra && doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform apply -var image_name=\"\$PINNED\"   # full apply per the OPERATOR_APPLIED_EXCLUSIONS contract (ADR-096); abort if it replaces hcloud_server.inngest (#12742), or if it creates, replaces or deletes ANY bastion address in tests/scripts/lib/bastion-resources.txt, tls_private_key.bastion_host_ssh included (#12866: the bastion is born only by bastion-host-create, and its host key never rotates)"
             echo "::error::    Do not substitute 'just run the preflight' for this chain: the preflight REFUSES a mutable tag by design, so it is only actionable once DIGEST is resolved. And do not skip it — an incoherent pin destroys nothing at plan time, it strands you with a booted host that never passes verify."
             echo "::error::    hcloud_server.web carries lifecycle ignore_changes = [user_data, ssh_keys, image, placement_group_id] (server.tf). Two consequences: the pin is honoured ONLY at create, and a later routine merge apply passing ':latest' will NOT drift it back; conversely, editing user_data or image is INERT for an already-running host, so this chain matters only on the create path."
             echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. That is the only bypass — [ack-destroy] deliberately does NOT reach this HALT. Use it to unblock merges while the correct dispatch/apply above is arranged; it skips the apply, it does not perform it."
@@ -6128,6 +6133,284 @@ jobs:
             cancelled/*) echo "::warning::apply was cancelled mid-flight — inspect Terraform state and the Hetzner project for a half-created fan-out before any re-dispatch; a re-dispatch after a landed server is refused" ;;
             failure/*) ;;
             *) echo "::warning::unrecognised outcome pair '${APPLY_OUTCOME}/${POLL_OUTCOME}' — read the step log; do not treat this run as verified" ;;
+          esac
+
+  # ── #12866 (ADR-327 step 2a): the dedicated bastion BIRTH path ─────────────────
+  # Rationale: knowledge-base/engineering/operations/runbooks/bastion-host.md. Modelled on
+  # git_data_host_create. NO job-level concurrency: it inherits the workflow's
+  # terraform-apply-web-platform-host group (a job group equal to the workflow's own is cancelled).
+  # The -target lines below equal tests/scripts/lib/bastion-resources.txt, pinned by
+  # terraform-target-parity.test.ts; the birth gate reads the same list as its allow-set.
+  bastion_host_create:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'bastion-host-create'
+    runs-on: ubuntu-24.04
+    environment: web-platform-infra-apply
+    permissions:
+      contents: read
+      issues: write  # bastion-boot-verify comments a not-ready run on #12879
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      - name: Validate dispatch inputs (confirm token)
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_RAW" != "BIRTH-bastion" ]]; then
+            echo "::error::confirm must be exactly 'BIRTH-bastion' (got '${CONFIRM_RAW}'). Typo-guard only: the authorization is the web-platform-infra-apply environment approval. Nothing was planned or created."
+            exit 1
+          fi
+          echo "dispatch validated: birthing hcloud_server.bastion"
+
+      # Fail closed BEFORE any plan: a create whose boot cannot be read would be followed by a
+      # SKIPPED verdict, and boot-verify powers a skipped host off, so the birth would be wasted.
+      - name: Birth-readiness interlock (emitter present, boot-trail token bound and well-formed)
+        env:
+          SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
+        run: |
+          set -euo pipefail
+          ci="${GITHUB_WORKSPACE}/apps/web-platform/infra/bastion-cloud-init.yml"
+          for lit in fresh_boot_ready fresh_boot_not_ready_ cloud_init_complete; do
+            if ! grep -qF "$lit" "$ci"; then
+              echo "::error::bastion-host-create is HELD: bastion-cloud-init.yml does not emit '${lit}', so the boot could not be verified. Nothing was planned or created."
+              exit 1
+            fi
+          done
+          if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
+            echo "::error::bastion-host-create is HELD: SENTRY_ACTIONS_RO_TOKEN is not bound, so the boot trail could not be read and a born bastion would be powered off as unverified. Nothing was planned or created."
+            exit 1
+          fi
+          case "$SENTRY_ACTIONS_RO_TOKEN" in
+            *[!A-Za-z0-9._~+/=-]*)
+              echo "::error::bastion-host-create is HELD: SENTRY_ACTIONS_RO_TOKEN failed the boot-trail reader's token-shape check. Nothing was planned or created."
+              exit 1 ;;
+          esac
+          echo "birth-readiness interlock PASSED (emitter literals present; boot-trail token bound and well-formed)."
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Extract R2 backend credentials + assert SENTRY_DSN present
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain)}" || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)}" || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+          # bastion.tf's precondition accepts an EMPTY dsn (so a bare validate works); this job
+          # does not, because the DSN is the bastion's only way to report its boot.
+          dsn_rc=0
+          DSN=$(doppler secrets get SENTRY_DSN --plain 2>/tmp/doppler-dsn.err) || dsn_rc=$?
+          if [[ "$dsn_rc" -ne 0 ]]; then
+            echo "::error::could not READ SENTRY_DSN from Doppler prd_terraform (rc=${dsn_rc}) — fail-closed. doppler stderr: $(tr '\n' ' ' </tmp/doppler-dsn.err | tail -c 300)"
+            exit 1
+          fi
+          if [[ -z "$DSN" ]]; then
+            echo "::error::SENTRY_DSN is empty in Doppler prd_terraform. bastion-cloud-init.yml sends its fresh_boot_ready / fresh_boot_not_ready_* events with it, and boot-verify powers off a host it cannot hear. Nothing was planned or created."
+            exit 1
+          fi
+          echo "SENTRY_DSN present and non-empty (value not printed)."
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Terraform plan (scoped bastion birth) + birth gate + stock preflight
+        id: plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set +e
+          set -uo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -target='tls_private_key.bastion_host_ssh' \
+              -target='hcloud_firewall.bastion' \
+              -target='hcloud_server.bastion' \
+              -target='hcloud_server_network.bastion' \
+              -target='hcloud_firewall_attachment.bastion' \
+              -var="ssh_key_path=${CI_SSH_PUB}" 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (bastion-host-create) failed (exit ${rc}). Nothing was created."
+            exit "$rc"
+          fi
+          set -e
+          terraform show -no-color tfplan > tfplan.txt
+          terraform show -json tfplan > tfplan.json
+          # shellcheck source=tests/scripts/lib/bastion-host-birth-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/bastion-host-birth-gate.sh"
+          if ! bastion_host_birth_gate tfplan.json; then
+            echo "::error::bastion-host-create birth gate ABORTED: the plan is not the exact scoped birth of hcloud_server.bastion. The gate's message above names WHICH arm refused. Nothing has been created. If the bastion already exists, its recovery is bastion-host-replace (#12879), not a second create."
+            grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
+            exit 1
+          fi
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN from Doppler (prd_terraform) — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability."
+            exit 1
+          fi
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan.json; then
+            stock_abort_closing bastion-host-create "Nothing was created; re-dispatch when the ::error:: lines above say the cause is cleared."
+            exit 1
+          fi
+          echo "birth gate + stock preflight PASSED. Plan summary:"
+          grep -E '^Plan:' tfplan.txt || true
+          # The outside anchor (Guard 1): the owner reads THIS list and SHA before the real birth.
+          {
+            echo "## bastion-host-create — gated plan"
+            echo ""
+            echo "**Commit:** \`${COMMIT_SHA}\`"
+            echo ""
+            echo "Planned changes (action, address), as the birth gate accepted them:"
+            echo ""
+            jq -r '.resource_changes[] | select((.change.actions | index("no-op")) == null and (.change.actions | index("read")) == null) | "- `\(.change.actions | join(","))` `\(.address)`"' tfplan.json
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Plan-only stop (rehearsal)
+        if: inputs.plan_only == true
+        run: |
+          echo "::notice title=bastion-host-create::plan_only: the plan and both gates PASSED; stopping before any apply. The run summary lists the commit and the planned addresses for the owner's review."
+
+      - name: Stamp boot-trail run anchor (bastion create)
+        if: inputs.plan_only != true
+        id: boot_anchor
+        run: |
+          set -euo pipefail
+          epoch=$(date -u +%s)
+          printf 'epoch=%s\n' "$epoch" >> "$GITHUB_OUTPUT"
+          printf 'boot-trail anchor: %s (%s)\n' "$epoch" "$(date -u -d "@$epoch" +'%Y-%m-%d %H:%M:%S UTC')"
+
+      - name: Terraform apply (bastion birth)
+        if: inputs.plan_only != true
+        id: apply
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false tfplan 2>&1 | tf_redact_random_ids; then
+            # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+            source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+            stock_recovery_report bastion-host-create tfplan.json --probe-state
+            echo "::error::terraform apply (bastion-host-create) failed. The operation is additive, so nothing existing was destroyed. If the SERVER landed, a re-dispatch plans zero server creates and the gate refuses it: the boot-verify step below powers that server off, and the recovery is bastion-host-replace (#12879)."
+            exit 1
+          fi
+          echo "birth applied. A green apply is NOT a green boot — the boot-verify step below decides whether the bastion came up."
+
+      - name: Verify the bastion boot (power off on anything but ready)
+        id: verify
+        if: ${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}
+        env:
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          BOOT_TRAIL_SINCE: ${{ steps.boot_anchor.outputs.epoch }}
+          SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          # shellcheck source=scripts/lib/bastion-boot-verify.sh
+          source "${GITHUB_WORKSPACE}/scripts/lib/bastion-boot-verify.sh" || {
+            echo "::error::could not load scripts/lib/bastion-boot-verify.sh — the boot was not read and soleur-bastion was NOT powered off (apply outcome ${APPLY_OUTCOME}). Power it off in the Hetzner console now."
+            exit 1
+          }
+          rc=0
+          bastion_boot_verify "${BOOT_TRAIL_SINCE:-}" "${APPLY_OUTCOME:-}" || rc=$?
+          exit "$rc"
+
+      - name: Record the bastion pin (host key fingerprint, private IP)
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          fp=$(doppler run --preserve-env -p soleur -c prd_terraform -- terraform output -raw bastion_ssh_host_key_fingerprint 2>/dev/null) || fp=""
+          ip=$(doppler run --preserve-env -p soleur -c prd_terraform -- terraform output -raw bastion_private_ip 2>/dev/null) || ip=""
+          if [[ ! "$fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ || ! "$ip" =~ ^10\.0\.1\.[0-9]{1,3}$ ]]; then
+            echo "::error::the bastion is READY but its pin did not read back (fingerprint='${fp}', private_ip='${ip}'). Read both with terraform output before #12880 pins them."
+            exit 1
+          fi
+          {
+            echo "- bastion host key fingerprint: \`${fp}\`"
+            echo "- bastion private IP: \`${ip}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=bastion-pin::fingerprint ${fp}, private IP ${ip}"
+
+      - name: Dispatch summary
+        if: always()
+        env:
+          REASON: ${{ inputs.reason }}
+          JOB_STATUS: ${{ job.status }}
+          PLAN_ONLY: ${{ inputs.plan_only }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+        run: |
+          {
+            echo "## bastion-host-create"
+            echo ""
+            echo "- outcome: ${JOB_STATUS} (plan_only: ${PLAN_ONLY}; apply outcome: ${APPLY_OUTCOME:-none}; boot-verify outcome: ${VERIFY_OUTCOME:-none})"
+            echo "- reason: ${REASON:-n/a}"
+            echo ""
+            echo "A green run means: the gated plan applied AND soleur-bastion reported fresh_boot_ready after this run's anchor. It does NOT mean monitoring: the bastion has no heartbeat until #12879, and nothing dials it until #12880."
+            echo "Not ready means the server was powered off (disk kept) and the run was commented on #12879; the recovery is bastion-host-replace."
+            echo ""
+            echo "Next: knowledge-base/engineering/operations/runbooks/bastion-host.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+          case "${PLAN_ONLY}/${APPLY_OUTCOME}/${VERIFY_OUTCOME}" in
+            true/*) ;;
+            false/success/success) ;;
+            false/*/failure) ;;
+            false/skipped/skipped|false//) echo "::notice::no apply ran (an earlier step failed or the run was cancelled); this is not a verdict on the host" ;;
+            false/success/*) echo "::error::apply succeeded but boot-verify did not reach a verdict (outcome '${VERIFY_OUTCOME}') — the bastion is UNVERIFIED and may be running; power it off in the Hetzner console and read the runbook"; exit 1 ;;
+            false/cancelled/*) echo "::warning::apply was cancelled mid-flight — inspect Terraform state and the Hetzner project for a half-created bastion before any re-dispatch" ;;
+            *) echo "::warning::unrecognised outcome triple '${PLAN_ONLY}/${APPLY_OUTCOME}/${VERIFY_OUTCOME}' — read the step log; do not treat this run as verified" ;;
           esac
 
   # ── #7095: re-mint the CF Access ci_ssh service token ──────────────────────

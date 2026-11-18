@@ -31,6 +31,7 @@ _qgrep() { grep "$@" >/dev/null; }
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOOT="$DIR/soleur-host-bootstrap.sh"
 CI="$DIR/cloud-init.yml"
+BASTION_CI="$DIR/bastion-cloud-init.yml"  # #12866: the bastion emits the same boot-stage message
 WF="$DIR/../../../.github/workflows/apply-web-platform-infra.yml"
 # The fresh-host boot-trail reader, EXTRACTED from web_host_create's inline `run:` block so
 # the web_host_replace path (#6969) executes the same bytes. Every assertion below that is
@@ -318,6 +319,7 @@ else
     "soleur-host-bootstrap failed:$BOOT" \
     "soleur-host-bootstrap complete:$BOOT" \
     "soleur-cloud-init boot stage:$BOOT" \
+    "soleur-cloud-init boot stage:$BASTION_CI" \
     "app image served by zot:$CI"; do
     msg="${pair%%:*}"; src="${pair##*:}"
     if grep -qF -- "$msg" "$src"; then
@@ -405,12 +407,20 @@ done
 # with the same awk extraction used for $JOB — a whole-file grep would let either job's
 # invocation satisfy the assertion about the other, which is the vacuous-pass shape the
 # $JOB extraction was written to prevent.
-for prov_job in web_host_create web_host_replace; do
+# bastion_host_create (#12866) reaches the reader through scripts/lib/bastion-boot-verify.sh, which
+# #12879's replace job shares; it counts only when the job SOURCES that library and the library
+# names the reader, so dropping either link turns the row red.
+BBV="$DIR/../../../scripts/lib/bastion-boot-verify.sh"
+for prov_job in web_host_create web_host_replace bastion_host_create; do
   PROV="$(awk -v want="^  ${prov_job}:" '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ want) } /^  #/ { cap = 0 } cap' "$WF" || true)"
   if [ -z "$PROV" ]; then
     no "AC8d: no ${prov_job} job in $(basename "$WF") — a provisioning path that does not exist cannot surface a boot trail"
   elif grep -qF 'apps/web-platform/infra/scripts/fresh-host-boot-trail.sh' <<<"$PROV"; then
     ok "AC8d: ${prov_job} wires the extracted boot-trail reader"
+  elif grep -qE '^\s*source "\$\{GITHUB_WORKSPACE\}/scripts/lib/bastion-boot-verify\.sh"' <<<"$PROV" \
+       && grep -qE '^\s*bastion_boot_verify ' <<<"$(grep -v '^\s*#' <<<"$PROV")" \
+       && grep -qF 'apps/web-platform/infra/scripts/fresh-host-boot-trail.sh' "$BBV"; then
+    ok "AC8d: ${prov_job} wires the boot-trail reader through scripts/lib/bastion-boot-verify.sh"
   else
     no "AC8d: ${prov_job} does not invoke scripts/fresh-host-boot-trail.sh — a green apply is not a green boot, and without this call the job cannot tell the two apart"
   fi
@@ -1310,11 +1320,11 @@ else
 fi
 rm -rf "$F5_D"
 
-# ADR-193 floor at the MEASURED green count (124 after #9639 F5; 113 on 2026-09-11, #7946 review): a lower bound,
+# ADR-193 floor at the MEASURED green count (138 after #12866 bastion rows; 124 after #9639 F5; 113 on 2026-09-11, #7946 review): a lower bound,
 # so adding rows never trips it, and a gutted suite (a deleted block, an extraction that
 # matched nothing and skipped every row inside its `if`) cannot report 0 failed over nothing.
 # Reported with printf + exit 1 DIRECTLY, never through ok()/no() -- the floor polices those.
-MIN_ASSERTIONS=131
+MIN_ASSERTIONS=138
 if (( pass + fail < MIN_ASSERTIONS )); then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1

@@ -1286,12 +1286,15 @@ function stripDispatchJobs(workflowText: string): string {
   // doppler_secret.inngest_link_tls, an OPERATOR_APPLIED_EXCLUSION on purpose: a merge must never flip the
   // production Inngest URL. Stripped so the dispatch job's target cannot masquerade as per-merge coverage
   // (the per-merge list is asserted below NOT to contain it).
+  // bastion_host_create (#12866, ADR-327 step 2a): the dispatch-only bastion BIRTH path. Every one
+  // of its -targets is an OPERATOR_APPLIED_EXCLUSION, so folding them in would assert per-merge
+  // coverage for a host the per-merge apply must never touch (the bastion describe block pins it).
   //
   // NOTE for whoever edits this function next: the guard above extracts EVERY
   // "[a-z0-9_]+" string literal in this body and requires each to name a real top-level
   // job. Adding any other lowercase quoted literal here — even in a helper call — makes
   // that guard treat it as a job name and go red. Comments are fine; literals are not.
-  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create"), "inngest_link_flag");
+  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create"), "inngest_link_flag"), "bastion_host_create");
 }
 
 /** Inverse of stripJob: return ONLY the named job's block (header → next job/EOF). */
@@ -11243,5 +11246,39 @@ describe("this suite itself cannot be silently narrowed", () => {
     // deleting a test on purpose should cost one deliberate edit here.
     const declared = selfText.match(/^\s*test\(/gm)?.length ?? 0;
     expect(declared).toBeGreaterThanOrEqual(TEST_FLOOR);
+  });
+});
+
+// #12866 (ADR-327 step 2a): tests/scripts/lib/bastion-resources.txt is the ONE bastion address list.
+// The birth gate reads it as its allow-set; this block pins the other two consumers to it, so 2b and
+// steps 3-4 widen one file instead of three hand-synced ones (git-data carries three).
+describe("bastion: one resource list, pinned to the birth job and the exclusions (#12866)", () => {
+  const list = readFileSync(resolve(REPO_ROOT, "tests/scripts/lib/bastion-resources.txt"), "utf8")
+    .split("\n")
+    .map((l) => l.replace(/#.*/, "").trim())
+    .filter(Boolean);
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const job = extractJobBlock(wf, "bastion_host_create");
+
+  test("the list parses, holds the server, and has no duplicates (non-vacuity)", () => {
+    expect(list.length).toBeGreaterThanOrEqual(5);
+    expect(list).toContain("hcloud_server.bastion");
+    expect(new Set(list).size).toBe(list.length);
+  });
+
+  test("the bastion_host_create job's -target lines equal the list (as a multiset)", () => {
+    expect(job.length).toBeGreaterThan(0);
+    expect([...extractTargetsWithKeys(job)].sort()).toEqual([...list].sort());
+  });
+
+  test("every list entry is an OPERATOR_APPLIED_EXCLUSION", () => {
+    expect(list.filter((a) => !OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
+  });
+
+  test("no main-root workflow -targets a bastion address outside the stripped dispatch jobs", () => {
+    for (const f of MAIN_ROOT_TF_WORKFLOWS) {
+      const t = extractAllTargets(stripDispatchJobs(readFileSync(resolve(REPO_ROOT, ".github/workflows", f), "utf8")));
+      expect([f, list.filter((a) => t.has(a))]).toEqual([f, []]);
+    }
   });
 });
