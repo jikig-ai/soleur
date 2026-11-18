@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -177,9 +177,15 @@ describe("dormant shared-dev catalog capture", () => {
     expect(statSync(f.options.outputDirectory).mode & 0o777).toBe(0o700);
     const captureFile = join(f.options.outputDirectory, "catalog.json");
     const receiptFile = join(f.options.outputDirectory, "receipt.json");
-    expect(statSync(captureFile).mode & 0o777).toBe(0o600);
+    const captureFd = openSync(captureFile, constants.O_RDONLY | constants.O_NOFOLLOW);
+    let bytes: string;
+    try {
+      expect(fstatSync(captureFd).mode & 0o777).toBe(0o600);
+      bytes = readFileSync(captureFd, "utf8");
+    } finally {
+      closeSync(captureFd);
+    }
     expect(statSync(receiptFile).mode & 0o777).toBe(0o600);
-    const bytes = readFileSync(captureFile, "utf8");
     expect(bytes).toContain("2026-10-26T12:00:00.123456Z");
     expect(bytes + JSON.stringify(result)).not.toContain(CANARY);
     expect(f.doppler.mock.calls.filter(([a]) => a.includes("prd"))).toEqual([[["secrets", "get", "NEXT_PUBLIC_SUPABASE_URL", "--plain", "-p", "soleur", "-c", "prd"]]]);

@@ -260,3 +260,13 @@ test. Finally, `lint-infra-no-human-steps.py` flags exact operator-authorization
 paragraphs in plans; when the paragraph records a gated Terraform command,
 annotate that bounded passage with the documented lint-ignore marker and issue
 reference, then verify the changed-file lint.
+
+On 2026-11-19, CodeQL flagged a path-based mode-check/read sequence in the
+collector test. Keep the permission assertion and read on the same opened file
+descriptor, opened with `O_NOFOLLOW`, using `fstatSync(fd)` and
+`readFileSync(fd)`. Two initial test commands targeted the main checkout by
+using its absolute path instead of the isolated worktree; the relative Bun
+filter also used the wrong runner for this Vitest suite. Re-run from the
+isolated worktree's app directory with `./node_modules/.bin/vitest run
+test/scripts/capture-codex-dev-catalog.test.ts` and its local ESLint binary.
+The focused suite passed 26/26 and ESLint passed after correcting the path.
