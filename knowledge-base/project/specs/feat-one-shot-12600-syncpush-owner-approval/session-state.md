@@ -62,3 +62,11 @@ None
 - 2026-11-17 implementation landed: PULL b3376cbaeb..b12f967d0d; AGENT-LINE 0784090ec1, e349fdb4b0, 16a55ad193; DB+UI f428544602..beef612052,
   c4f7cfa014, d9ccfbd87c, cad5bd5fd9; lead bb6393a7e5 (tsc rc=0). Rulings D32 (route predicate legacy arm), D33 (fail-soft held columns).
 - WIRING agent running: 11.2 sync write (onHeldFiles, syncPull count, W5) + 11.3b legacy-runner line. Then: review/fix round on the extension range, 10.4 dev apply at ready, 11.5 e2e, QA, compound, ship.
+
+## 2026-11-18: extension-range review complete
+- 14-seat panel on d46340290b..a53a42875e: P1 2, P2 34, P3 96. Rulings D34-D47 (CTO) and V7-V12 (CPO) in decision-challenges.md; work packages in review-ext-rulings.md.
+- Fix round 1 (Phase 0 + WP1-WP5) -> a9958ff670; fix round 2 (R2-A/B/C) -> 04c9fc54b4; final blockers -> ab0de52af1. 3 verification seats; all P1/P2 closed, repros re-run closed.
+- Migration 187 restored byte-identical to what dev applied; additions moved to 188 (D42 amended). CI tenant-integration applied 188 to dev (ledger-parity clean).
+- Review trailer 6017fae3b9 (supersedes f9672b592f). Review-Evidence: https://github.com/jikig-ai/soleur/pull/12704#issuecomment-6986584180
+- CODEOWNERS sign-off needed at merge: .service-role-allowlist line for server/kb-sync-held-refresh.ts.
+- Next: 10.4 (confirm dev ledger row names the PR; CI already applied 187/188), 11.5 e2e + screenshots, qa, compound (session errors in /var/tmp/soleur-review-12704/synthesis.md), ship (11.6 follow-ups incl. FU-7 security now), postmerge.
