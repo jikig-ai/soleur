@@ -296,6 +296,12 @@ phase, and record that phase's RED runs with it.
     against a mock; P3-5 a route fast-forward and the cc refresh never clear pull-blocked; quality-advisory flags three
     direct `userId` log emits in `session-sync.ts`. Trigger: any of these observed in Sentry/Better Stack, or the next
     change to the sync path.
+  - [ ] 11.5 e2e findings (2026-11-18), pre-existing or cosmetic, one issue each with its trigger: the "Connected" chip
+    (`text-green-400` on `bg-green-900/50`, `components/settings/project-setup-card.tsx`) has near-zero contrast in the
+    light theme; `RailResizeHandle` hydration mismatch (`aria-valuemax` 480 server vs 224 client) on every dashboard
+    page; at 375 px the Disconnect dialog's `p-6` inside the card's `p-4` wraps "Confirm Disconnect"; the e2e harness
+    pins `FLAG_APPROVAL_QUEUE=0`, so the route-available and transient held strings are covered by unit tests only.
+    Trigger: the next Settings design pass (the first two at the next accessibility/console sweep).
 - [x] 11.7 Settings team icon (V6(6), D24): in `components/settings/conversation-names-settings.tsx`, on
   `workspace_sync: "pending"` show "Saved to GitHub. Your workspace has local changes that aren't on your repository's
   main branch yet, so it was not updated. The new icon appears here once it is; until then, you see the default icon.
