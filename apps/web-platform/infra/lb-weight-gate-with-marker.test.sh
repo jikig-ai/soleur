@@ -829,7 +829,7 @@ if [ "$cases" -ne "$verdicts" ]; then
   printf '  FAIL CONSERVATION: %s cases ran but %s verdicts were recorded.\n' "$cases" "$verdicts" >&2
   exit 1
 fi
-CASES_FLOOR=125
+CASES_FLOOR=126
 if [ "$cases" -lt "$CASES_FLOOR" ]; then
   printf '  FAIL ANTI-VACUITY: only %s cases ran, floor is %s.\n' "$cases" "$CASES_FLOOR" >&2
   exit 1

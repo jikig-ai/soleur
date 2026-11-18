@@ -240,6 +240,12 @@ on:
       # (and reuses web2-luks-rows.sh's query); lb-weight-gate.test.sh EXECUTES the step against it, so a
       # PR editing ONLY the helper (loosening the grammar, say) must still run that suite.
       - "scripts/lib/web2-relay-rows.sh"
+      # (#12849) The serve arm's soak evidence helper, its read-only probe and the per-instance soak grader the
+      # serve arm now runs: lb-weight-gate.test.sh EXECUTES the helper and the probe, and its parity row reads the
+      # grader's SOAK_DAYS, so a PR editing ONLY one of them must still run that suite.
+      - "scripts/followthroughs/web2-luks-live-6931.sh"
+      - "scripts/lib/serve-soak-evidence.sh"
+      - "scripts/serve-soak-evidence-last.sh"
       # (#9879) The shared HCL effective-text lexer sourced by workspaces-luks.test.sh (Guard B4) and
       # inngest-luks-sole-copy.test.sh (Guard 1). It sits under tests/scripts/lib/, outside every glob
       # above, so a lexer-ONLY edit (weakening strip_comments, say) would skip both consuming suites.

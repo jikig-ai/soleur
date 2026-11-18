@@ -1862,7 +1862,7 @@ sk_check "G11 executed: an unreadable run list exits 3 (a read fault is not 'no 
 sec_close
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=330
+MIN_CASES=613 # 330 -> 613 (#12849 §SK rows, measured)
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

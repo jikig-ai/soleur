@@ -27,7 +27,7 @@ G13 replace-path placement: it ships with #12869).
 - [x] 1.9 Stub-`gh` rows for `scripts/serve-soak-evidence-last.sh` using the real tab-prefixed `gh run view --log`
       format; the no-match line carries neither token; `headBranch`/`headSha` printed.
 - [x] 1.10 Seam row in `lb-weight-gate-with-marker.test.sh` (G6).
-- [ ] 1.11 Raise `MIN_CASES`; per-section executed-row counters.
+- [x] 1.11 Raise `MIN_CASES`; per-section executed-row counters.
 - [x] 1.12 `BASELINE_DECLARED_PROBES` 98 -> 99 in `preflight-discoverability-test.test.ts`.
 - [x] 1.13 Confirm the new rows are RED.
 
@@ -38,14 +38,14 @@ G13 replace-path placement: it ships with #12869).
 
 ## Phase 3 — helper, probe and workflow
 
-- [ ] 3.1 Create `scripts/lib/serve-soak-evidence.sh` (Part 2).
-- [ ] 3.2 Create `scripts/serve-soak-evidence-last.sh` (G11).
-- [ ] 3.3 `cf-lb-overlay.yml`: gate chain capture (redirect after the wrapper path) + EXIT trap + step-level
+- [x] 3.1 Create `scripts/lib/serve-soak-evidence.sh` (Part 2).
+- [x] 3.2 Create `scripts/serve-soak-evidence-last.sh` (G11).
+- [x] 3.3 `cf-lb-overlay.yml`: gate chain capture (redirect after the wrapper path) + EXIT trap + step-level
       `SOLEUR_GATED_HOST` + guarded helper load + bare helper call + inline `gate_rc` backstop; new grader step;
       job header comment. Keep the inner `SOLEUR_GATED_HOST="web-2"` literal and the exact wrapper hand-off
       (`g3_dbin_ok`).
-- [ ] 3.4 `infra-validation.yml` `pull_request` paths (grader, helper, probe).
-- [ ] 3.5 Grader comment above `SOAK_DAYS=3` (the line itself untouched).
+- [x] 3.4 `infra-validation.yml` `pull_request` paths (grader, helper, probe).
+- [x] 3.5 Grader comment above `SOAK_DAYS=3` (the line itself untouched).
 
 ## Phase 4 — records
 

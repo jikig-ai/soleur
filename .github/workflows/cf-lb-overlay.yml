@@ -884,7 +884,12 @@ jobs:
     # weight 0, health-monitored; an explicit -var, the variable's default is 1).
     # mode=serve grades web-2 at weight 1 (the 0→1 flip, or a no-op re-proof against live)
     # and runs the §(c) gate chain (lb-weight-gate-with-marker.sh) fail-closed
-    # BEFORE plan, so an unauthorized flip never reaches a grader.
+    # BEFORE plan, so an unauthorized flip never reaches a grader. Right after it, the
+    # per-instance soak grader (scripts/followthroughs/web2-luks-live-6931.sh, via
+    # scripts/lib/serve-soak-evidence.sh) must say PASS: the gate reads Doppler marker
+    # TIMES, the grader reads THIS instance's own probe rows, so a replaced-but-unsoaked
+    # web-2 cannot serve on an old marker (#12849). Both self-report their soak evidence
+    # (SOLEUR_SOAK_EVIDENCE / SOLEUR_INSTANCE_SOAK) to the log and the step summary.
     environment: web-platform-infra-apply
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -936,6 +941,9 @@ jobs:
           # Tokens ride env assignments ONLY — argv must never carry one.
           DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
           DOPPLER_TOKEN_LUKS_MARKER: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}
+          # The gated host, for the soak evidence helper below (#12849). The inner env's
+          # SOLEUR_GATED_HOST="web-2" stays the gate's own input; a parity row pins the two equal.
+          SOLEUR_GATED_HOST: web-2
         run: |
           set -euo pipefail
           # The wrapper reads the WORKSPACES_LUKS marker from its dedicated config via
@@ -968,20 +976,57 @@ jobs:
           # `requires_runtime_bind_probe=true` is emitted on stdout ONLY by the
           # Conditions A+B pass branch — it is the non-empty pass message this
           # step must see.
+          #
+          # SOAK EVIDENCE (#12849). The wrapper's stderr (the gate's SOLEUR_SOAK_EVIDENCE
+          # lines, its gate_fail line, Doppler's own notices) is captured to a file; the
+          # EXIT trap replays it to the log on every exit path (refusal, timeout, cancel).
+          # The helper mirrors the grammar-matching lines into the step summary and names
+          # the refusing id; on a pass it re-checks one well-formed pass line per soak kind
+          # (a pass with no evidence is a code defect, not a soak wait). Its calls are bare
+          # statements: inside if/||/&& bash would switch errexit off for them. The inline
+          # gate_rc backstop fails the step on a refusal even if the helper returned 0.
           GATE_OUT=""
+          gate_rc=0
+          : >"${RUNNER_TEMP}/lb-gate.stderr"
+          trap 'cat "${RUNNER_TEMP}/lb-gate.stderr" >&2' EXIT
           GATE_OUT="$(env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler run --preserve-env -p soleur -c prd -- \
             env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \
               SOLEUR_WEB2_SERVING_WEIGHT="$WEB2_LB_WEIGHT" SOLEUR_GATED_HOST="web-2" \
               SOLEUR_SERVING_ROTATION="web-1,web-2" \
-            bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh")" || {
-            echo "::error::§(c) gate chain refused the flip — the preconditions are not met (or could not be proven). NOTHING planned, NOTHING applied."
-            exit 1
-          }
+            bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh" 2>"${RUNNER_TEMP}/lb-gate.stderr")" || gate_rc=$?
+          sse_f="${GITHUB_WORKSPACE}/scripts/lib/serve-soak-evidence.sh"
+          # shellcheck source=scripts/lib/serve-soak-evidence.sh
+          # shellcheck disable=SC2015 # A && B || C is intended: any failed load step reaches the exit
+          source "$sse_f" && declare -F sse_gate_chain_mirror >/dev/null && declare -F sse_gate_chain_verify >/dev/null || { echo "::error::serve-soak-evidence helper not loaded ($sse_f) - wiring defect, do not re-dispatch"; exit 1; }
+          sse_gate_chain_mirror "${RUNNER_TEMP}/lb-gate.stderr" "$SOLEUR_GATED_HOST" "$gate_rc"
+          [[ "$gate_rc" -eq 0 ]] || exit 1
           printf '%s\n' "$GATE_OUT"
           if ! grep -q 'requires_runtime_bind_probe=true' <<<"$GATE_OUT"; then
             echo "::error::§(c) gate chain exited 0 WITHOUT the flip-authorization marker (requires_runtime_bind_probe=true) — the standby branch passed vacuously and Conditions A/B were never evaluated; web-2 is NOT authorized to serve. NOTHING planned, NOTHING applied."
             exit 1
           fi
+          sse_gate_chain_verify "${RUNNER_TEMP}/lb-gate.stderr" "$SOLEUR_GATED_HOST"
+      - name: per-instance soak grader (serve only)
+        if: inputs.mode == 'serve'
+        env:
+          # until #12869 the grader reads only web-2's probe rows; the helper refuses any other host.
+          SOLEUR_GATED_HOST: web-2
+          # Read-only Better Stack query credentials, the same secrets the relay bind probe binds.
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # The gate above proves the soak MARKER TIMES; this proves THIS instance's soak from
+          # its own probe rows (#12849, ADR-263). Exit 0 only on PASS: NOT_YET, FAIL and
+          # CANNOT_ESTABLISH all stop the arm before any plan, each with its next step in the
+          # ::error:: line. The helper runs the grader under env -i with only the names it reads
+          # (this job's GITHUB_ENV holds Terraform and Doppler credentials).
+          sse_f="${GITHUB_WORKSPACE}/scripts/lib/serve-soak-evidence.sh"
+          # shellcheck source=scripts/lib/serve-soak-evidence.sh
+          # shellcheck disable=SC2015 # A && B || C is intended: any failed load step reaches the exit
+          source "$sse_f" && declare -F sse_instance_soak >/dev/null || { echo "::error::serve-soak-evidence helper not loaded ($sse_f) - wiring defect, do not re-dispatch"; exit 1; }
+          sse_instance_soak "$SOLEUR_GATED_HOST" "${GITHUB_WORKSPACE}/scripts/followthroughs/web2-luks-live-6931.sh"
       - name: web-2 health precondition (serve mode only)
         if: inputs.mode == 'serve'
         env:

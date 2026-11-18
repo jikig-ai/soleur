@@ -68,7 +68,7 @@ if ! source "$_w2l_lib" || ! declare -F w2l_probe_verdict >/dev/null || ! declar
   exit 3
 fi
 
-# 3 days: the same soak the traffic-weight gate defaults to (lb-weight-gate.sh WS_SOAK_DAYS).
+# 3 days: the traffic-weight gate's soak floor SOAK_FLOOR_DAYS (lb-weight-gate.sh, #12849); a parity row in lb-weight-gate.test.sh §SK pins the two equal.
 SOAK_DAYS=3
 SOAK_S=$(( SOAK_DAYS * 86400 ))
 tmp="$(mktemp -d)" || { printf 'CANNOT ESTABLISH: mktemp failed.\n'; exit 3; }
