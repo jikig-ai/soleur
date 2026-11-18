@@ -7,6 +7,7 @@ import { types } from 'node:util';
 const outcome = state => Object.freeze({ state, backend_stop: 'unknown', writer_clearance: false });
 const STATES = new Set(['complete', 'partial', 'failed']);
 const then = Promise.prototype.then;
+const trackedDatabases = new WeakMap();
 function projectInspection(value) {
   try {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return outcome('failed');
@@ -63,5 +64,11 @@ export function trackInspectionTransaction(database, inspect) {
       } catch { closeInspection(); resolve(outcome('failed')); }
     });
   });
-  return Object.freeze({ inspection, settlement });
+  const handle = Object.freeze({ inspection, settlement });
+  trackedDatabases.set(handle, database);
+  return handle;
+}
+
+export function isTrackedInspectionTransaction(value, database) {
+  return value !== null && typeof value === 'object' && trackedDatabases.get(value) === database;
 }

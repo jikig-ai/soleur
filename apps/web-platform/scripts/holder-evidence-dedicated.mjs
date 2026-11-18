@@ -2,6 +2,7 @@
 // credentials, network client, executable entry point or persistence. A mock
 // observer cannot prove ownership or that a real backend stopped.
 import { types } from 'node:util';
+import { isTrackedInspectionTransaction } from './holder-evidence-transaction-tracker.mjs';
 
 const unknown = (operation = 'not_started', cancel = 'not_attempted', close = 'not_attempted') => ({
   operation, cancel, close, stop: 'unknown', evidence: 'adapter_report_only',
@@ -43,8 +44,8 @@ function observePromise(promise) {
   });
 }
 
-function readOperation(started) {
-  if (!started || typeof started !== 'object' || Array.isArray(started)) return null;
+function readOperation(started, connection) {
+  if (!isTrackedInspectionTransaction(started, connection) || Array.isArray(started)) return null;
   try {
     const inspection = Object.getOwnPropertyDescriptor(started, 'inspection');
     const settlement = Object.getOwnPropertyDescriptor(started, 'settlement');
@@ -104,7 +105,7 @@ export async function observeDedicatedLifecycle(adapter, limits) {
   let started;
   try { started = adapter.start(connection, controller.signal); }
   catch { return unknown('failed'); }
-  const operationPromises = readOperation(started);
+  const operationPromises = readOperation(started, connection);
   if (!operationPromises) {
     if (types.isPromise(started)) Promise.prototype.then.call(started, () => {}, () => {});
     return unknown('unknown');

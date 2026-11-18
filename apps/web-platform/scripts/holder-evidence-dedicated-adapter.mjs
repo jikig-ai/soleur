@@ -1,4 +1,5 @@
 import { observeDedicatedLifecycle } from './holder-evidence-dedicated.mjs';
+import { trackInspectionTransaction } from './holder-evidence-transaction-tracker.mjs';
 
 // A closed, in-memory simulation only. It has no injected transport, database
 // driver, credentials, PID or executable entry point. Its atomic ownership
@@ -8,14 +9,15 @@ const SCENARIOS = new Set(['complete', 'cancel', 'reuse_before_cancel', 'reuse_g
 
 export function createSyntheticDedicatedAdapter(scenario) {
   if (!SCENARIOS.has(scenario)) throw new Error('synthetic_scenario');
-  const connection = Object.freeze({});
+  let finishTransaction;
+  const connection = Object.freeze({ begin: () => new Promise((resolve) => { finishTransaction = resolve; }) });
   const observer = scenario === 'observer_shared' ? connection : Object.freeze({});
   const expectedGeneration = 1;
   let current = { owner: connection, generation: expectedGeneration, state: 'ready' };
   let issued = false;
   let started = false;
   let precloseVerified = false;
-  let settle, inspect;
+  let inspect;
   let starts = 0;
   let cancellationAttempts = 0;
   let cancellations = 0;
@@ -36,16 +38,20 @@ export function createSyntheticDedicatedAdapter(scenario) {
       if (signal.aborted || started || !observerIndependent() || !ownsHeldRecord(candidate) || current.state !== 'ready') refuse();
       started = true;
       starts++;
-      const inspection = new Promise((resolve) => { inspect = resolve; });
-      const settlement = new Promise((resolve) => { settle = resolve; });
+      const operation = trackInspectionTransaction(candidate, (db) => {
+        db.begin('read only', () => undefined);
+        return new Promise((resolve) => { inspect = resolve; });
+      });
       if (scenario === 'cancel' || scenario.startsWith('reuse_')) {
         current.state = 'running';
-        return { inspection, settlement };
+        return operation;
       }
       current.state = 'stopped';
-      inspect({ state: 'complete' });
-      settle({ state: 'fulfilled' });
-      return { inspection, settlement };
+      queueMicrotask(() => {
+        inspect({ state: 'complete' });
+        finishTransaction();
+      });
+      return operation;
     },
     async cancel(candidate) {
       cancellationAttempts++;
@@ -54,11 +60,11 @@ export function createSyntheticDedicatedAdapter(scenario) {
       if (scenario === 'reuse_owner_only') current = { owner: Object.freeze({}), generation: expectedGeneration, state: 'running' };
       // Synthetic registry performs comparison and cancellation as one atomic
       // in-process operation. A pre-cancel observation alone cannot ensure this.
-      if (!observerIndependent() || !ownsHeldRecord(candidate) || current.state !== 'running' || !settle) refuse();
+      if (!observerIndependent() || !ownsHeldRecord(candidate) || current.state !== 'running' || !finishTransaction) refuse();
       cancellations++;
       current.state = 'stopped';
       inspect({ state: 'failed' });
-      settle({ state: 'fulfilled' });
+      finishTransaction();
     },
     async verify(candidate, phase) {
       if (!observerIndependent() || candidate !== connection) refuse();
