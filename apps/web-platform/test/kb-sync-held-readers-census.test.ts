@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import ts from "typescript";
+import { parseSource } from "./approval/source-scan";
+import { collapseSql, stripSqlComments } from "./helpers/sql-lex";
 
 // Readers census for the #12714 held columns and for `repo_last_synced_at` (rulings W2, W5, D29(3), D29(9); AC20).
 //
@@ -12,7 +15,11 @@ import path from "node:path";
 //   - `server/agent-runner.ts` names no held column (it uses `syncPull`'s fresh `{ heldFiles }` return, and, when that is
 //     null, the stored columns only through `readStoredKbSyncHeld`, #12704 D41(e));
 //   - `server/current-repo-url.ts` names no held column;
-//   - every app reader and writer of `repo_last_synced_at` (W5: only `syncPull` stamps it on the sync path).
+//   - every app reader and writer of `repo_last_synced_at` (W5: only `syncPull` stamps it on the sync path);
+//   - #12704 D45(e): every `.from("workspaces")` chain that selects ALL columns (`.select("*")`, `.select()`), which
+//     names no held column yet reads them, is listed in ALL_COLUMN_READERS with its role, and an unlisted one fails;
+//   - the SQL rows read comment-stripped SQL with statement-anchored patterns (pattern P3-14), so a header comment that
+//     names a token cannot stand in for the statement.
 //
 // Multi-line aware: the scan reads whole files, and `.select(` arguments are matched across line breaks.
 
@@ -20,7 +27,9 @@ const APP = path.join(__dirname, "..");
 const ROOTS = ["app", "server", "lib", "components", "hooks", "scripts", "infra"];
 // Root-level app files that run server code (a reader there would be missed by the directory walk).
 const ROOT_FILES = ["middleware.ts", "instrumentation.ts"];
-const HELD_TOKEN = /\b(kb_sync_held_files|kb_sync_held_checked_at|get_workspace_kb_sync_held)\b/;
+// #12704 D42: `kb_sync_pull_blocked` is a held column too (display-only, excluded from the tenant grant, read by the RPC).
+const HELD_TOKEN = /\b(kb_sync_held_files|kb_sync_held_checked_at|kb_sync_pull_blocked|get_workspace_kb_sync_held)\b/;
+const HELD_COLUMNS = ["kb_sync_held_files", "kb_sync_held_checked_at", "kb_sync_pull_blocked"];
 
 function walk(dir: string, out: string[]): void {
   let entries: string[];
@@ -52,7 +61,57 @@ for (const f of ROOT_FILES) {
     // absent: nothing to scan
   }
 }
-const sources = new Map(files.map((f) => [path.relative(APP, f).split(path.sep).join("/"), code(readFileSync(f, "utf8"))]));
+const raw = new Map(files.map((f) => [path.relative(APP, f).split(path.sep).join("/"), readFileSync(f, "utf8")]));
+const sources = new Map([...raw].map(([f, src]) => [f, code(src)]));
+
+/** A migration file, comments stripped and whitespace collapsed (test/helpers/sql-lex.ts), for statement-anchored rows. */
+const sql = (name: string): string => collapseSql(stripSqlComments(readFileSync(path.join(APP, "supabase/migrations", name), "utf8")));
+
+const stringArg = (n: ts.Node | undefined): string | null =>
+  n && (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) ? n.text : null;
+
+/**
+ * D45(e): the `.from("workspaces")` chains in one file that read EVERY column: a `.select()` with no argument, or one whose
+ * column list has a bare `*`, anywhere after the `.from(...)` in the same chain (an `.update(...).select()` returns whole
+ * rows too). Returns one entry per site. A non-literal column list is reported as `<computed>` (it may be `*`).
+ */
+function allColumnWorkspaceSelects(src: string, file: string): string[] {
+  if (!/["'`]workspaces["'`]/.test(src)) return [];
+  const sf = parseSource(src, file);
+  const hits: string[] = [];
+  const fromWorkspaces = (e: ts.Expression): boolean => {
+    let x: ts.Expression = e;
+    for (;;) {
+      if (ts.isParenthesizedExpression(x) || ts.isNonNullExpression(x) || ts.isAsExpression(x)) x = x.expression;
+      else if (ts.isCallExpression(x)) {
+        const c = x.expression;
+        if (ts.isPropertyAccessExpression(c) && c.name.text === "from" && stringArg(x.arguments[0]) === "workspaces") return true;
+        x = c;
+      } else if (ts.isPropertyAccessExpression(x)) x = x.expression;
+      else return false;
+    }
+  };
+  const visit = (n: ts.Node): void => {
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === "select" && fromWorkspaces(n.expression.expression)) {
+      const arg = n.arguments[0];
+      const cols = arg === undefined ? "*" : stringArg(arg);
+      if (cols === null) hits.push(`${file} <computed>`);
+      else if (cols.split(",").some((c) => c.trim() === "*")) hits.push(`${file} *`);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return hits;
+}
+
+/**
+ * D45(e): every app chain that selects all `workspaces` columns, so it carries the held columns without naming them. Each
+ * is display-only, or it must not be one of these.
+ */
+const ALL_COLUMN_READERS: Record<string, string> = {
+  "server/dsar-export.ts *":
+    "reader: the Art. 15 DSAR export of the user's own workspaces (every column, service client); a copy of the user's data, read by no gate",
+};
 
 type Role = { role: string; required: boolean };
 
@@ -84,14 +143,27 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
     for (const [f, { required }] of Object.entries(HELD_MENTIONS)) {
       if (required) expect(mentioning, f).toContain(f);
     }
+    // D42: a file that names only the pull-blocked column is a held reader too (the RPC's third column).
+    for (const col of HELD_COLUMNS) expect(HELD_TOKEN.test(`row.${col}`), col).toBe(true);
+    expect(mentioning.filter((f) => /\bkb_sync_pull_blocked\b/.test(sources.get(f) ?? ""))).toEqual([
+      "server/kb-sync-held-agent-line.ts",
+      "server/workspace-repo-mirror.ts",
+    ]);
   });
 
   it("disconnect and setup null the held columns through the separate best-effort clearKbSyncHeldCols (D33(2))", () => {
-    for (const f of ["app/api/repo/disconnect/route.ts", "app/api/repo/setup/route.ts"]) {
-      expect(sources.get(f) ?? "", f).toMatch(/\bclearKbSyncHeldCols\(\s*serviceClient,\s*activeWorkspaceId\s*\)/);
+    // One clear per arm, counted (tests F8): disconnect has one; setup has two, the cloning flip and the reaped clone.
+    const CLEARS: Record<string, number> = { "app/api/repo/disconnect/route.ts": 1, "app/api/repo/setup/route.ts": 2 };
+    for (const [f, n] of Object.entries(CLEARS)) {
+      const src = sources.get(f) ?? "";
+      expect([...src.matchAll(/\bclearKbSyncHeldCols\(\s*serviceClient,\s*activeWorkspaceId\s*\)/g)], f).toHaveLength(n);
       // Never folded into the existing repo-column write (D33(2)).
-      expect(HELD_TOKEN.test(sources.get(f) ?? ""), f).toBe(false);
+      expect(HELD_TOKEN.test(src), f).toBe(false);
     }
+    // The reaped-clone arm clears right after its not_connected write, before it returns (tests F8).
+    expect(sources.get("app/api/repo/setup/route.ts") ?? "").toMatch(
+      /err instanceof WorkspaceReapInProgressError\) \{[\s\S]*?repo_status: "not_connected",[\s\S]*?\}\);\s*await clearKbSyncHeldCols\(serviceClient, activeWorkspaceId\);\s*return;\s*\}/,
+    );
   });
 
   it("session-sync writes the held columns only through writeKbSyncHeldCols, never folded into the stamp (D29(1))", () => {
@@ -145,7 +217,7 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
     const offenders: string[] = [];
     for (const [f, src] of sources) {
       for (const m of src.matchAll(/\.select\(\s*(["'`])([\s\S]*?)\1/g)) {
-        if (/kb_sync_held_(files|checked_at)/.test(m[2]) && f !== "app/(dashboard)/dashboard/settings/page.tsx") offenders.push(f);
+        if (/kb_sync_(held_(files|checked_at)|pull_blocked)/.test(m[2]) && f !== "app/(dashboard)/dashboard/settings/page.tsx") offenders.push(f);
       }
     }
     expect(offenders).toEqual([]);
@@ -158,14 +230,34 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
     expect(page).not.toMatch(/kb_sync_held_checked_at/);
   });
 
-  it("the select strings name only columns migration 187 created", () => {
-    const mig = readFileSync(path.join(APP, "supabase/migrations/187_workspace_kb_sync_held_files.sql"), "utf8");
-    for (const col of ["kb_sync_held_files", "kb_sync_held_checked_at"]) expect(mig).toContain(`ADD COLUMN IF NOT EXISTS ${col}`);
-    for (const [, src] of sources) {
-      for (const m of src.matchAll(/\bkb_sync_held_[a-z_]+\b/g)) {
-        expect(["kb_sync_held_files", "kb_sync_held_checked_at"]).toContain(m[0]);
-      }
+  it("the select strings name only columns migration 187 created (comment-stripped, statement-anchored)", () => {
+    const mig = sql("187_workspace_kb_sync_held_files.sql");
+    const TYPES: Record<string, string> = { kb_sync_held_files: "integer", kb_sync_held_checked_at: "timestamptz", kb_sync_pull_blocked: "text" };
+    for (const col of HELD_COLUMNS) {
+      expect(mig, col).toMatch(new RegExp(`ALTER TABLE public\\.workspaces ADD COLUMN IF NOT EXISTS ${col} ${TYPES[col]}\\b`));
     }
+    for (const [, src] of sources) {
+      for (const m of src.matchAll(/\bkb_sync_(held_[a-z_]+|pull_blocked)\b/g)) expect(HELD_COLUMNS).toContain(m[0]);
+    }
+  });
+
+  it("D45(e): every .from(\"workspaces\") chain that selects all columns is listed (they carry the held columns unnamed)", () => {
+    const hits = [...raw].flatMap(([f, src]) => allColumnWorkspaceSelects(src, f)).sort();
+    expect(hits, `classify these all-column workspaces readers in ALL_COLUMN_READERS: ${hits.join(", ")}`).toEqual(Object.keys(ALL_COLUMN_READERS).sort());
+    // none of them is a gate, approval or push module (display-only, as the named readers above)
+    for (const h of hits) expect(h).not.toMatch(/^(server\/approval\/|server\/push-branch\.ts|server\/kb-sync-publish\.ts|server\/cc-github-push\.ts)/);
+  });
+
+  it("known-positive (D45(e)): an unlisted all-column select fails, in each spelling; a named column list does not", () => {
+    const f = "server/planted.ts";
+    const plant = (body: string) => allColumnWorkspaceSelects(`export async function p(service: any) {\n${body}\n}\n`, f);
+    expect(plant(`  return service\n    .from("workspaces")\n    .select("*")\n    .eq("id", "w");`)).toEqual([`${f} *`]);
+    expect(plant(`  return service.from('workspaces').select();`)).toEqual([`${f} *`]);
+    expect(plant("  return service.from(`workspaces`).eq(\"id\", 1).select(` *, members(*)`);")).toEqual([`${f} *`]);
+    expect(plant(`  return service.from("workspaces").update({ a: 1 }).eq("id", "w").select();`)).toEqual([`${f} *`]);
+    expect(plant(`  const cols = "*";\n  return service.from("workspaces").select(cols);`)).toEqual([`${f} <computed>`]);
+    expect(plant(`  return service.from("workspaces").select("repo_url, repo_status");`)).toEqual([]);
+    expect(plant(`  return service.from("users").select("*");`)).toEqual([]);
   });
 
   it("server/agent-runner.ts reads the count through syncPull's return, else the one stored reader (task 11.3b, D41(e))", () => {
@@ -219,14 +311,30 @@ describe("repo_last_synced_at: readers census (#12714, D29(9))", () => {
     expect([...src.matchAll(/\bupdateLastSynced\(/g)]).toHaveLength(2);
   });
 
+  // pattern P3-14: comment-stripped, collapsed SQL (sql-lex drops the spaces around parentheses), anchored on the UPDATE
+  // inside the function's own body (the match cannot run past its closing `$$;`), so a header comment matches nothing.
+  const SET_REPO_STATUS_STAMP =
+    /FUNCTION public\.set_repo_status\([^)]*\)(?:(?!\$\$;)[\s\S])*?UPDATE public\.workspaces SET [^;]*repo_last_synced_at = CASE WHEN p_status = 'ready' THEN now\(\)ELSE repo_last_synced_at END WHERE id = p_workspace_id;/;
+  const CLONE_LOCK_CLOCK =
+    /FUNCTION public\.claim_repo_clone_lock\(p_workspace_id uuid\)(?:(?!\$\$;)[\s\S])*?UPDATE public\.workspaces SET [^;]*WHERE id = p_workspace_id AND[^;]*repo_last_synced_at IS NULL OR repo_last_synced_at < now\(\)- interval '5 minutes'/;
+
   it("the DB-side writer set_repo_status stamps it only on ready (migration 113)", () => {
-    const m113 = readFileSync(path.join(APP, "supabase/migrations/113_set_repo_status_writes_workspace_repo_error.sql"), "utf8");
-    expect(m113).toMatch(/repo_last_synced_at\s*=\s*CASE WHEN p_status = 'ready' THEN now\(\)/);
+    expect(sql("113_set_repo_status_writes_workspace_repo_error.sql")).toMatch(SET_REPO_STATUS_STAMP);
   });
 
-  it("the DB-side reader is the clone lock (migration 108)", () => {
-    const m108 = readFileSync(path.join(APP, "supabase/migrations/108_repo_clone_self_heal_rpc.sql"), "utf8");
-    expect(m108).toMatch(/claim_repo_clone_lock/);
-    expect(m108).toMatch(/repo_last_synced_at/);
+  it("the DB-side reader is the clone lock (migration 108): its staleness clock in the claim's WHERE", () => {
+    expect(sql("108_repo_clone_self_heal_rpc.sql")).toMatch(CLONE_LOCK_CLOCK);
+  });
+
+  it("known-positive (pattern P3-14): the SQL rows do not match tokens that only a comment carries", () => {
+    const commentOnly = collapseSql(
+      stripSqlComments(
+        "-- claim_repo_clone_lock(p_workspace_id uuid) uses repo_last_synced_at IS NULL OR repo_last_synced_at < now() - interval '5 minutes'\n" +
+          "/* FUNCTION public.set_repo_status(p uuid) UPDATE public.workspaces SET repo_last_synced_at = CASE WHEN p_status = 'ready' THEN now() ELSE repo_last_synced_at END WHERE id = p_workspace_id; */\n" +
+          "CREATE OR REPLACE FUNCTION public.claim_repo_clone_lock(p_workspace_id uuid) RETURNS boolean AS $$ BEGIN RETURN true; END; $$;",
+      ),
+    );
+    expect(commentOnly).not.toMatch(CLONE_LOCK_CLOCK);
+    expect(commentOnly).not.toMatch(SET_REPO_STATUS_STAMP);
   });
 });
