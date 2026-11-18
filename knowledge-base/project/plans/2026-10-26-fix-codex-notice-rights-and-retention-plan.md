@@ -207,6 +207,64 @@ TOM 4 classification attestation does not substitute for them.
 
 ## Technical Approach
 
+### 0. Bounded holder-evidence worker (precondition for any collection command)
+
+The current in-process callback prototype is not a bounded collector: its
+adapter can retain the database connection in a closure, its event-loop timer
+cannot interrupt synchronous work, and its verifier only checks an
+adapter-reported object. Do not prepare or run exact collection commands from
+that prototype.
+
+Replace it with an opt-in, dedicated `hcloud_server.holder_collector` in the
+existing `apps/web-platform/infra` Terraform root. Keep the resource disabled
+by default and separate it from the web and Inngest hosts. The coordinator
+must never receive a database client or socket. A per-operation systemd
+`Type=oneshot` child creates and exclusively owns its database connection under
+an operation-scoped read-only principal. Pin cgroup-v2 behavior and configure
+`RuntimeMaxSec`, `TimeoutStopSec`, `KillMode=control-group`, and forced-kill
+grace so the supervisor bounds synchronous loops and descendants. The child
+returns only a bounded, sanitized result; receipt bodies, credential material,
+subject identifiers and raw provider responses never enter logs.
+
+On timeout or uncertainty, the independent authority durably revokes the
+operation generation and future credentials before the supervisor kills the
+whole cgroup. A separately authenticated narrow database observer then verifies
+that no sessions, transactions or locks remain for that operation principal.
+Child exit, connection identity, a database name, or the callback prototype's
+shape-only `verify()` is not stop evidence. Keep the fence and resources held
+when revocation, supervisor status, observation or authority availability is
+unknown. The worker identity, verifier identity and vault operator must be
+separate; the vault requires encrypted storage, durable seal/tombstone,
+retention enforcement, and tested restore/erasure behavior.
+
+Use a new private network and subnet containing only the collector and its
+dedicated egress gateway; do not join `soleur-private`, which is shared with
+production web, git-data, registry and Inngest hosts. The collector has no
+public NIC. Route its only outbound path through the dual-homed gateway's
+private proxy address. Install host nftables on both machines: the collector
+may reach only the proxy, and the proxy accepts only the collector's private
+address. The gateway has no public ingress and an explicit Hetzner outbound
+firewall (DNS to a pinned resolver and TCP 443; stateful replies only). An
+authenticated CONNECT/TCP proxy enforces exact FQDN/port ACLs for
+`firestore.googleapis.com`, `sts.mtls.googleapis.com`, and the approved
+Supabase endpoint. Pin the Supabase hostname and port from approved nonsecret
+configuration; specify proxy authentication, resolver/DNS-rebinding controls,
+and gateway routes and nftables before code. Hetzner Cloud Firewalls do not
+filter private-network L2 traffic, so their rules cannot replace host-level
+controls ([Firewall FAQ](https://docs.hetzner.com/cloud/firewalls/faq/),
+[Networks FAQ](https://docs.hetzner.com/networking/networks/faq/)).
+
+Before enabling or applying either host, choose an EU location and server type,
+recheck current orderable stock and monthly cost, and obtain exact operator
+authorization for the Terraform apply. The hosts must be reproducible through
+Terraform from empty state and immutable replacement; no SSH key or in-host
+command is a primary status or debug path. Offline qualification uses the
+exact systemd/cgroup, route, nftables and proxy configuration with disposable
+PostgreSQL and fault cases for a busy loop, descendants, pending transaction,
+stale-generation reconnect and observer outage. Passing these local tests
+does not establish production authority, Firestore IAM, provider coverage or
+permission to collect.
+
 ### 1. Request-time rights snapshot and job-bound export
 
 The accepted CLO policy requires access to retained non-secret subject metadata
@@ -436,6 +494,21 @@ rulings preserve all six asks and keep #9051 draft with auto-merge off.
 
 ## Test Scenarios
 
+- Given a holder-evidence worker that enters a synchronous busy loop or forks a
+  descendant, when the operation deadline expires, then the systemd/cgroup
+  supervisor terminates the full operation tree within the configured bound.
+- Given a worker with a pending PostgreSQL transaction, when timeout revokes
+  its operation generation and credentials, then a separate verifier observes
+  zero sessions, transactions and locks for that operation principal before
+  the fence or resource is released.
+- Given stale-generation reconnect, unavailable authority, worker crash,
+  supervisor failure or observer outage, then the operation stays fenced and
+  stop remains unknown; no new credentials or work are admitted.
+- Given a vault seal, tombstone, deletion or restore failure, then no receipt
+  body is returned to the coordinator and the retention state fails closed.
+- Given an unapproved network destination, when the isolated worker attempts
+  egress, then the host policy refuses it and emits only bounded operational
+  telemetry without subject or credential material.
 - Given a synthetic member with one retained issuance, when a DSAR request is
   admitted, then its job-bound snapshot contains only approved metadata; Article
   15 applies to retained rows, and Article 20 is added only for an eligible
@@ -518,7 +591,10 @@ rulings preserve all six asks and keep #9051 draft with auto-merge off.
 2. **Source and architecture inventory:** confirm request admission channels,
    job/retry semantics, archive and snapshot lifecycle, exact contract-subject
    eligibility source, cron role/privileges, one-minute backlog capacity,
-   independent monitoring and all privacy-document mirrors. Recheck migration
+   independent monitoring and all privacy-document mirrors. Inventory the
+   dedicated holder-worker network and egress boundary, systemd/cgroup runtime,
+   worker and observer identities, durable revocation authority, vault operator,
+   restore path and off-host telemetry. Recheck migration
    ordinals before each slice. Keep frozen migrations 165 and 175 byte-for-byte.
    The exact-hash static declarations do not grant access or replace RLS-fuzz
    parity. In the stacked forward correction, grant the DSAR worker only
@@ -535,28 +611,39 @@ rulings preserve all six asks and keep #9051 draft with auto-merge off.
    and `PUBLIC` effects on the three API roles. Default ACLs are outside this
    current-catalog assertion, and RPC/function execution stays with the RPC
    security tests. Verify unauthorized column denial before qualification.
-   The estimate is at least 25 files
-   across five roots and exceeds the split threshold.
-3. **Slice A — request-time rights snapshot:** add RED tests for atomic
+   The estimate is at least 35 files across six subsystem roots and exceeds
+   the split threshold.
+3. **Bounded holder-worker foundation:** update and review the dedicated-host
+   Terraform, systemd/cgroup worker, network and egress policy, operation-scoped
+   read-only DB identity, separate verifier and authority revocation, vault
+   fencing, restoration and no-SSH observability before code. Keep host creation
+   disabled by default. Before any apply, recheck EU stock and cost, record the
+   chosen server type and location, and obtain the exact command's explicit
+   operator authorization. Test busy loops, descendants, pending transactions,
+   stale-generation reconnect, vault restore/deletion and verifier outage using
+   only disposable infrastructure. Independent review must confirm the
+   supervisor and backend absence evidence before this phase clears. Do not
+   prepare exact collection commands while any item remains open.
+4. **Slice A — request-time rights snapshot:** add RED tests for atomic
    admission-time capture, same-request retry versus new request, completed-job
    non-reuse, job-bound worker reads, email admission, tenant scope, snapshot
    deletion/restore and no nonce/hash. Implement and QA this slice in a
    companion PR stacked on the held #9051 feature branch.
-4. **Slice B — lifetime, cleanup and renewal:** add RED tests for contract-role
+5. **Slice B — lifetime, cleanup and renewal:** add RED tests for contract-role
    refusal before issuance/provider admission, post-lock clock boundary,
    same-nonce and replacement timestamp, one-minute bounded `pg_cron`, backlog
    health, issuance refusal, rollback erasure coverage, renewal protocol/UI,
    cache expiry and exactly-one explicit resend. Commit the `.pen` before UI
    coding. Implement this dependent slice on Slice A; keep all six asks in one
    completion gate across the stack.
-5. **Offline integration and QA:** use only disposable PostgreSQL and
+6. **Offline integration and QA:** use only disposable PostgreSQL and
    synthesized fixtures, with no ambient shared DB/provider credentials. Run
    focused migration/DSAR/handler/client/UI suites, RLS fuzz, typecheck,
    screenshots, TOM4/legal cross-document checks and repository static gates.
    Verify archive and logs never contain raw nonce/hash. Run `soleur:gdpr-gate`,
    CLO review, exact-head code review, QA and preflight on both slices and the
    final integrated head.
-6. **Records and qualification:** append dated migration-conditioned
+7. **Records and qualification:** append dated migration-conditioned
    PA-2/compliance records and update the DPA, privacy and GDPR artifacts and
    their mirrors only after final CLO verification. Later runtime qualification
    still requires fresh exact-head recovery, provider permission for the exact
@@ -568,33 +655,42 @@ rulings preserve all six asks and keep #9051 draft with auto-merge off.
 
 ```yaml
 liveness_signal:
-  what: "Cleanup freshness, expired backlog count, oldest expired-row age, and oldest locked/skipped row age"
-  cadence: "pg_cron cleanup every minute; independent off-host status monitoring must detect a missed deadline before the five-minute deletion allowance"
+  what: "Planned bounded worker heartbeat and exit; generation revocation; verifier-confirmed active sessions, transactions and locks; cleanup freshness, expired backlog and oldest expired-row age"
+  cadence: "After implementation, each operation is bounded by systemd/cgroup deadlines; an independent off-host monitor checks worker and verifier freshness and must detect missed cleanup before the five-minute deletion allowance"
   alert_target: "Web Platform engineering on-call"
-  configured_in: "One database-owned pg_cron cleanup plus independent status monitoring wired to the existing Sentry cron-monitor inventory; verify the off-host polling substrate and alert delay in Phase 2"
+  configured_in: "Planned dedicated collector host and egress gateway in the existing Terraform root; systemd Type=oneshot under cgroup v2; host nftables and authenticated proxy; Vector journald and host_metrics to Sentry; independent database verifier and Sentry monitor. Verify the exact off-host signal and alert delay in Phase 2"
 error_reporting:
-  destination: "Sentry web-platform with monitor correlation and release SHA; bounded pg_cron errors and backlog/age metrics contain no subject identifiers"
-  fail_loud: "Expiry checks reject stale delivery/acknowledgment; unhealthy or stale cleanup blocks new notice issuance; job-bound DSAR snapshot failure fails export before archive publication"
+  destination: "Sentry web-platform through Vector journald/host_metrics and the existing Sentry monitor inventory, correlated to the deployed release SHA; events contain aggregate state only, never subject IDs, receipt bodies, credentials or provider payloads"
+  fail_loud: "A deadline revokes the generation before killing the full cgroup; stop is reported only after a separate verifier confirms zero operation sessions/transactions/locks. Unknown supervisor, revocation or verifier state keeps the fence held and refuses new credentials/work. Expiry rejects stale delivery/acknowledgment; unhealthy cleanup blocks issuance; a failed DSAR snapshot prevents archive publication"
 failure_modes:
+  - mode: "Collector busy-loops, forks descendants or exceeds its systemd deadline"
+    detection: "Layer 3 Vector journald ships systemd/cgroup exit and forced-kill status; Layer 4 Vector host_metrics shows a worker still consuming resources"
+    alert_route: "Web Platform engineering on-call; collector status command reports the bounded operation state"
+  - mode: "Authority revocation fails or the independent verifier still sees an operation session, transaction or lock"
+    detection: "Layer 3 Vector journald records only bounded transition codes; an independent verifier result is persisted in the control record and mirrored to the Sentry monitor"
+    alert_route: "Web Platform engineering on-call; keep the operation fence held"
+  - mode: "Collector or gateway attempts an unapproved network destination"
+    detection: "Layer 3 Vector journald ships host nftables/proxy refusal codes; Layer 4 Vector host_metrics exposes unexpected egress volume"
+    alert_route: "Web Platform engineering on-call; operation is refused"
   - mode: "Delivery repair or acknowledgment reaches the expiry boundary"
     detection: "Layer 2 Pino-to-Sentry mirror records a bounded expiry code; Layer 5 release context binds it to the served SHA"
     alert_route: "Web Platform engineering on-call"
   - mode: "Cleanup is late, errors, skips locked rows or exceeds measured backlog capacity"
-    detection: "Layer 1 independent off-host monitor plus Sentry cron monitor reads freshness, backlog count and oldest expired age; must alert before the five-minute allowance expires"
+    detection: "Sentry monitor reads independent cleanup freshness, backlog count and oldest expired age; Vector journald (Layer 3) carries bounded host status, and release context (Layer 5) binds remediation to the deployed SHA. Alert before the five-minute allowance expires"
     alert_route: "Web Platform engineering on-call"
   - mode: "DSAR admission snapshot fails or a worker reads another job/subject's snapshot"
     detection: "Layer 2 Pino-to-Sentry mirror and job's persisted failed status; no partial archive is published"
     alert_route: "Web Platform engineering on-call and the DSAR request status"
   - mode: "Database outage prevents cleanup"
-    detection: "Layer 1 independent off-host monitor reports stale cron completion and rising oldest-expired age; Layer 5 release context binds remediation to the deployed source"
+    detection: "Sentry monitor reports stale cron completion and rising oldest-expired age; Layer 5 release context binds remediation to the deployed source"
     alert_route: "Web Platform engineering on-call"
 logs:
-  where: "Sentry monitor events and bounded pg_cron status; aggregate counts/ages only"
-  retention: "Existing Sentry and database cron metadata retention; CLO must confirm the applicable retention before qualification"
+  where: "Sentry monitor events, Vector-shipped systemd/nftables/proxy status, independent verifier result and bounded pg_cron status; aggregate counts/ages only"
+  retention: "Existing Sentry and database cron metadata retention; CLO must approve retention for worker, revocation and verifier records before qualification"
 discoverability_test:
-  command: "bash apps/web-platform/scripts/codex-notice-retention-status.sh prd"
-  expected_output: "job_status=ok"
-  credentials_required: "Doppler soleur/prd read-only database credential; the last cleanup result is private database state and has no unauthenticated public probe"
+  command: "(planned) bash apps/web-platform/scripts/holder-collector-status.sh prd"
+  expected_output: "collector_health=healthy; active_sessions=0; verifier_fresh=true"
+  credentials_required: "Doppler read-only status and separately authenticated observer credentials; no database URL or secret in process arguments, logs or output"
 ```
 
 The planned status command must query only bounded aggregate health, use TLS
@@ -614,6 +710,7 @@ it must not be treated as available until added and tested.
 | 4 [issue #11170] | "Preserve unsent messages and explicit resend; expiry/acknowledgment must never dispatch a provider request." | Reachable metadata-only renewal and explicit resend; Slice B; wireframe/client/server tests | mapped |
 | 5 [issue #11170] | "Preserve all existing migration SQL bytes; use a reviewed forward correction if schema/functions must change." | Both forward migrations; stacked branch topology; Data Safety and Rollback | mapped |
 | 6 [issue #11170] | "Obtain source CPO/user-impact, GDPR and CLO reviews; retain all independent hosted-auth/provider, runtime and shipping holds." | User-Brand Impact; Legal and Operator Decisions; Phases 1, 5 and 6; final acceptance criteria | mapped |
+| 7 [PR #9051 continuation] | "Complete the bound collector, independent authority, vault, workers, fencing, restoration, technical and GDPR/CLO reviews." | Bounded holder-evidence worker prerequisite; systemd/cgroup, authority revocation, independent verifier, separate vault, isolated network and offline fault suite | mapped |
 
 ### Plan-Item Provenance
 
@@ -624,6 +721,7 @@ it must not be treated as available until added and tested.
 | Reachable renewal action, held-cache disclosure and explicit resend tests with committed `.pen` | ask 4 | asked |
 | Ownership/generation/membership/erasure checks and lifecycle integration coverage | ask 3 | asked |
 | Independent cleanup freshness/backlog/oldest-expired-age monitoring and no-SSH discoverability probe | "Cover all issuance/delivery/consume paths, expiry boundaries, ownership/generation/membership fences, erasure and failure observability." — issue asks 3 | asked |
+| Dedicated bounded holder-evidence worker, operation-scoped DB principal, durable revocation, independent session verifier, separate vault, network/egress gateway and restore tests | "Complete the bound collector, independent authority, vault, workers, fencing, restoration, technical and GDPR/CLO reviews." — PR #9051 continuation | asked |
 | TOM 4/DPA and PA-2/compliance wording updates | — | inferred — required so the processing records match the reviewed implementation and do not make an inaccurate legal commitment; CLO approval remains a prerequisite. |
 | Keep hosted-auth/provider, runtime, data and shipping holds; preserve PR #9051 draft/off state | "Obtain source CPO/user-impact, GDPR and CLO reviews; retain all independent hosted-auth/provider, runtime and shipping holds." — issue ask 6 | asked |
 | Probe only the cleanup status through a credential-safe, no-SSH command | — | inferred — required by the production observability gate; its code and credentials remain unimplemented until approval and review. |
@@ -636,6 +734,8 @@ it must not be treated as available until added and tested.
 | `server/ws-handler.ts` | asks 3 and 4 | asked |
 | `server/inngest/functions/`, `server/inngest/cron-manifest.ts`, `infra/sentry/cron-monitors.tf` | asks 2 and 3 | asked; exact files depend on Phase 2 inventory |
 | `scripts/codex-notice-retention-status.sh` | — | inferred — required by the no-SSH observability gate; see justification above |
+| `apps/web-platform/infra/holder-collector.tf`, dedicated private network/subnet, egress gateway, firewall/route resources, cloud-init, worker/gateway systemd, nftables and proxy templates, and `infra/tests/holder-collector-*` | PR #9051 continuation | asked; use the existing Terraform root and keep both servers disabled by default |
+| `apps/web-platform/scripts/holder-collector-status.sh`, offline process/cgroup/PostgreSQL fault tests, Vector/Sentry bindings and independent verifier checks | PR #9051 continuation and ask 3 | asked |
 | DSAR allowlist completeness and worker per-row tests | ask 1 | asked |
 | Focused DSAR, handler, migration, RLS and RPC-grant tests | asks 1–5 | asked |
 | TOM 4 checker and mutation suite | asks 1, 2 and 5 | asked |
@@ -644,17 +744,22 @@ it must not be treated as available until added and tested.
 
 ### Split Assessment
 
-- Minimum inventory: at least 25 files across five roots — `apps/web-platform`,
-  `scripts`, `knowledge-base`, `docs` and `plugins`. It includes two forward
+- Minimum inventory: at least 35 files across six subsystem roots —
+  `apps/web-platform`, `scripts`, `knowledge-base`, `docs`, `plugins`, and the
+  separate infrastructure root `apps/web-platform/infra`. It includes two forward
   migrations, DSAR admission and worker, email intake, WebSocket handler and
   protocol types/schemas, client/cache and chat surface, committed `.pen`,
-  off-host health monitoring, SQL/DSAR/client/UI tests, TOM4 gates, DPA/register/
+  isolated collector and egress-gateway Terraform, systemd/cgroup worker,
+  independent database verifier, vault restore path, off-host health monitoring,
+  process/SQL/DSAR/client/UI tests, TOM4 gates, DPA/register/
   compliance text, and six canonical/mirrored privacy documents with legal SHA
   pins. The earlier 23-file/700-line estimate is obsolete.
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines.
-- Recommendation: two dependent companion PR slices, both stacked on #9051's
-  held feature branch. Slice A implements atomic rights admission/snapshot and
-  job-bound export; Slice B implements expiry, bounded cleanup/health and the
+- Recommendation: three dependent slices, all held behind one completion gate
+  and stacked on #9051's draft branch. The bounded collector foundation lands
+  before any exact collection command; Slice A implements atomic rights
+  admission/snapshot and job-bound export; Slice B implements expiry, bounded
+  cleanup/health and the
   renewal UI/protocol. Integrate both before reconsidering #9051 readiness. One
   completion gate spans all six asks. Do not target `main` with either
   correction migration until prerequisite
@@ -664,6 +769,12 @@ it must not be treated as available until added and tested.
 
 ## Acceptance Criteria
 
+- [ ] No exact holder-evidence collection command is prepared until an opt-in
+      dedicated worker has an externally enforced systemd/cgroup deadline,
+      operation-scoped read-only DB identity, durable revocation fence,
+      independently authenticated backend-session verifier, and separately
+      identified encrypted vault with tested restore and erasure. Offline
+      fault tests and independent technical, GDPR and CLO reviews pass first.
 - [x] CPO and user-impact-reviewer sign off the single-user impact framing and
       priority; the advisory GDPR gate runs and records its retention finding.
 - [x] CLO proposes purpose/basis, maximum lifetime, Article 15/20 and
@@ -711,6 +822,13 @@ it must not be treated as available until added and tested.
 - DSAR snapshot/job lifecycle migrations and tests — fresh request versus retry, deletion, account erasure, encryption, PITR and restore behavior.
 - `apps/web-platform/server/ws-handler.ts`, `lib/types.ts`, `lib/ws-zod-schemas.ts`, `lib/ws-client.ts`, and chat UI — fresh nonce renewal, acknowledgment and separate explicit resend.
 - A committed Pencil `.pen` wireframe before any renewal UI implementation; served-build screenshot tests afterward.
+- `apps/web-platform/infra/holder-collector.tf`, dedicated private network/subnet,
+  egress gateway, firewall/route resources, cloud-init, systemd units, nftables
+  and authenticated proxy templates; all new hosts disabled by default.
+- `apps/web-platform/scripts/holder-collector-status.sh`, independent observer
+  adapter, Vector/Sentry monitoring bindings and offline process/cgroup/
+  PostgreSQL supervisor fault tests. These are planned artifacts, not present
+  capabilities.
 - `apps/web-platform/scripts/codex-notice-retention-status.sh` and the existing off-host monitoring/Sentry cron-monitor binding — no-SSH aggregate status probe, oldest-expired-age signal and freshness check; do not add a second cleanup scheduler.
 - `apps/web-platform/test/dsar-allowlist-completeness.test.ts`, `test/dsar-worker-per-row-where.test.ts`, focused DSAR/handler/client/UI/migration integration tests and RLS/RPC-grant tests.
 - `scripts/check-tom4-rls-posture.sh`, its mutation suite and `knowledge-base/legal/data-processing-agreement-template.md` — keep the table RPC-only and outside WORM; update the legal wording only after CLO review.
@@ -739,3 +857,7 @@ it must not be treated as available until added and tested.
 3. Which existing independent off-host monitor can read oldest-expired age and
    freshness inside the five-minute window, and what measured cleanup batch
    rate proves capacity under lock contention?
+4. Before any infrastructure apply, which EU location and currently orderable
+   server type meet the isolation and cgroup requirements at an acceptable
+   monthly cost? Recheck stock and pricing at that later authorization gate; do
+   not apply infrastructure as part of plan review.
