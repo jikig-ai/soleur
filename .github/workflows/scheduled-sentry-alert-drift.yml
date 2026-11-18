@@ -129,6 +129,11 @@ jobs:
           # whose own comment exists to stop "a false all-clear ... auto-closing a
           # live drift issue". The script's header names this reachability path.
           SENTRY_FIXTURE_RULES: ""
+          # Same for the uptime section's fixture seam (#6606). Its fixture marker
+          # reads `uptime_verdict=fixture-clean`, which the parse below maps to
+          # `unavailable`, so a fixture could not close anything; this pin keeps
+          # that state from arising at all.
+          SENTRY_FIXTURE_UPTIME: ""
           # Pinned empty (#8451): the frozen-rule pin reads the committed capture
           # unless overridden; a later $GITHUB_ENV write must not repoint it.
           SENTRY_FROZEN_CAPTURE_FILE: ""
@@ -151,6 +156,20 @@ jobs:
           set -e
           cat "${RUNNER_TEMP}/probe.txt"
           echo "exit_code=${rc}" >> "$GITHUB_OUTPUT"
+          # THE UPTIME VERDICT (#6606), written BEFORE `verdict` so a run that
+          # wrote `verdict` always wrote this too. The probe's uptime section
+          # prints one `SENTRY_UPTIME uptime_verdict=<v> …` line at column 0
+          # (findings are indented, so a live URL cannot forge it). An uptime
+          # DRIFT already reaches `verdict` through the FAILED line; this output
+          # exists for UNAVAILABLE, which does not. A missing marker, and any
+          # value outside the three (`fixture-clean` included), is unavailable:
+          # only the literal `clean` lets a closer run.
+          uptime_verdict=$(grep -m1 -oE '^SENTRY_UPTIME uptime_verdict=[^ ]+' "${RUNNER_TEMP}/probe.txt" | sed 's/^SENTRY_UPTIME uptime_verdict=//' || true)
+          case "$uptime_verdict" in
+            clean|drift|unavailable) ;;
+            *) uptime_verdict=unavailable ;;
+          esac
+          echo "uptime_verdict=${uptime_verdict}" >> "$GITHUB_OUTPUT"
           # Exit 0 here on a DRIFT verdict (rc=1) so the filer below runs; a
           # transport/parse failure is a different thing and must red the job.
           # The probe uses rc=1 for both, so the discriminator is the marker it
@@ -162,6 +181,10 @@ jobs:
           else
             echo "verdict=unavailable" >> "$GITHUB_OUTPUT"
             echo "::error::the fidelity probe could not complete, so this run establishes NOTHING about drift. Do not read a clean verdict from it."
+            exit 1
+          fi
+          if [[ "$uptime_verdict" == "unavailable" ]]; then
+            echo "::error::the Sentry uptime check could not establish a verdict (see the SENTRY_UPTIME line above), so an unmanaged uptime monitor would go unseen this run."
             exit 1
           fi
 
@@ -203,6 +226,7 @@ jobs:
             printf -- '- `FROZEN DELETED` / `FROZEN PIN EMPTY` / `FROZEN ID MISMATCH` — a Terraform-frozen rule is absent from live Sentry (for ID MISMATCH: a same-name workflow under another id stands in for it). An apply **cannot** restore it faithfully: the `.tf` block carries the trigger by type only, and a Create from it re-sends the trigger without its threshold (see the `ignore_changes = all` comment in `issue-alerts.tf`). Fix: recreate it by POST of the capture entry to `/api/0/organizations/jikigai-eu/workflows/`, GET it back and compare, then in a reviewed PR update the capture entry (new id) and point the `.tf` block'"'"'s `import{}` at the new id. Terraform state still holds the OLD id until then: the next plan'"'"'s refresh reads a 404, drops the address from state and plans a Create, which the legacy-trigger tripwire refuses — the re-import is what clears it. If the deletion is intended, remove the capture entry and the `.tf` block in a reviewed PR.\n'
             printf -- '- `UNMANAGED-FROZEN` — a live workflow with a trigger type the projection excludes, that is neither frozen in Terraform nor a registered Sentry default (capture or `apps/web-platform/infra/sentry/vendor-default-workflows.json`, matched by id AND name), so nothing checks it. An apply **cannot** manage it. If Sentry created it (GET it: `createdBy` is null), register `{id, name}` in `vendor-default-workflows.json` in a reviewed PR (#8267). A registered name under a DIFFERENT id, or a DUPLICATE, is not the default: GET both ids first. Otherwise adopt it (capture entry + frozen `sentry_alert` block, in a reviewed PR), or, once confirmed unowned, DELETE it (`DELETE /api/0/organizations/jikigai-eu/workflows/<id>/`).\n'
             printf -- '- `MANAGED RULE GAINED EXCLUDED TRIGGER` — a rule Terraform DOES manage, which live Sentry added a trigger type to that the provider cannot express (Sentry CAN add one to an existing workflow; #8267 is the adjacent case, where Seer CREATED a workflow carrying one). The rule left the comparison scope, so nothing checks it any more. FIRST, as for `UNMANAGED` below: the managed-ness here is matched by NAME against the committed reference, so `git grep -nw <name> -- apps/web-platform/infra/sentry/` and `GET` the id before writing to it — if the name is declared but this id is not the managed rule, the managed one is DELETED and Terraform still points at the old id. An apply is **not** a repair: v0.15.7 reads that trigger by type only (`legacy_trigger_conditions`) and any write re-sends it as `comparison: true` or drops it, and `scripts/sentry-issue-alert-create-tripwire.sh` refuses such a write once a refresh surfaces it. Fix the LIVE rule: `PUT /api/0/organizations/jikigai-eu/workflows/<id>/` without that trigger, then GET it back — the rule returns to scope and is compared field-for-field again. If the added trigger is intended, the rule cannot stay a native `sentry_alert`: take it out of Terraform management in a reviewed PR.\n'
+            printf -- '- `UPTIME UNMANAGED` — a live Sentry uptime monitor that Terraform does not manage: its mode is not 1 (Sentry auto-detected it), or the org has more live uptime monitors than `sentry_uptime_monitor` blocks in `apps/web-platform/infra/sentry/*.tf` (a monitor made in the UI is mode 1, so only the count shows it). The finding prints `id:mode:url name=` (scheme, host and path only). Fix: if the latest `apply-sentry-infra` run on main did not finish, re-run it first (an unfinished apply leaves monitors Terraform still holds live, and the count drops when it completes). Otherwise DELETE it through the API (an import block fails sentry-adoption-plan-assert.sh); re-running a finished apply does not fix it. Keep the monitor whose id Terraform holds (the `sentry_uptime_monitor.<name>: Refreshing state... [id=<n>]` line, or `Creation complete after ... [id=<n>]` on the run that created it, in the latest apply-sentry-infra run log; names are not unique in Sentry); `GET https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/detectors/<id>/`, then `DELETE` the same URL, then GET again expecting 404.\n'
             printf -- '- `UNMANAGED` / `DELETED or RENAMED` — FIRST `git grep -nw <name> -- apps/web-platform/infra/sentry/`. If the rule IS declared there, the committed reference is stale (a merge that bypassed `plan_pr`): regenerate `alert-reference.json` per the section below and touch NOTHING in Sentry. Only if it is not declared is `UNMANAGED` a live rule the root does not know: adopt it as a `sentry_alert` block or delete it in Sentry. If Sentry created it (`createdBy` null) with a trigger type the provider cannot express, register it instead: add the type to `def excluded` in `tests/scripts/lib/sentry-alert-projection.jq` and `{id, name}` to `vendor-default-workflows.json` (#8267).\n\n'
             printf '### If the drift is intentional\n\n'
             printf 'Edit the `sentry_alert` block in `apps/web-platform/infra/sentry/` (`issue-alerts.tf`, or `cron-monitor-alerts.tf` for `cron-monitor-failure`), regenerate the reference (`terraform show -json <plan> | jq -S --arg side tf -f tests/scripts/lib/sentry-alert-projection.jq > apps/web-platform/infra/sentry/alert-reference.json`, recipe in that directory'"'"'s README), and open a PR — the reference gate in `plan_pr` holds the committed copy equal to the plan. Re-running THIS workflow cannot repair a stale committed reference, and hand-editing the reference or the `.tf` to make the probe go quiet defeats it.\n\n'
@@ -288,12 +312,16 @@ jobs:
         # The closer two steps down is gated on the SAME pair with the polarity
         # reversed (`drift && filed == 'true'`), so filer and closer are disjoint
         # and create-then-close inside one run is unreachable.
-        if: always() && !cancelled() && (steps.probe.outputs.verdict == 'unavailable' || steps.probe.outputs.verdict == '' || (steps.probe.outputs.verdict == 'drift' && steps.file_drift.outputs.filed != 'true'))
+        # Fourth arm (#6606): `uptime_verdict == 'unavailable'` — the rule side may
+        # have reached a verdict while the uptime check could not, and the drift
+        # issue cannot carry that (an unavailable uptime check prints no finding).
+        if: always() && !cancelled() && (steps.probe.outputs.verdict == 'unavailable' || steps.probe.outputs.verdict == '' || (steps.probe.outputs.verdict == 'drift' && steps.file_drift.outputs.filed != 'true') || steps.probe.outputs.uptime_verdict == 'unavailable')
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           VERDICT: ${{ steps.probe.outputs.verdict }}
+          UPTIME_VERDICT: ${{ steps.probe.outputs.uptime_verdict }}
           DRIFT_FILED: ${{ steps.file_drift.outputs.filed }}
         run: |
           set -euo pipefail
@@ -328,6 +356,7 @@ jobs:
             printf '## The Sentry alert drift probe did not run to a verdict\n\n'
             printf 'This is NOT a report that something drifted. It is a report that **nobody checked**. While this is open, every `sentry_alert` the Sentry root declares — including `byok-art-33-breach`, which anchors the GDPR Art. 33 72-hour clock — is unwatched, and that state looks identical to healthy everywhere except this issue.\n\n'
             printf -- '- Verdict reached: `%s`\n' "$VERDICT_LINE"
+            printf -- '- Uptime verdict: `%s`\n' "${UPTIME_VERDICT:-<none>}"
             printf -- '- Detected at: %s\n' "$NOW"
             printf -- '- Run log: %s\n\n' "$RUN_URL"
             # The refusal message IS the diagnosis, and without this it reached
@@ -362,7 +391,8 @@ jobs:
             printf -- '2. **The pagination ceiling.** The probe refuses at >= 100 workflows because a rule on page 2 would read as DELETED and produce a false "every rule is gone" alarm. If the org has grown past 100, the fix is cursor-following in `scripts/sentry-alert-live-fidelity.sh`, not raising the ceiling.\n'
             printf -- '3. **A non-array payload.** A 200 carrying something other than a JSON array means schema drift or an interstitial, not an auth problem — `curl -fsS` would already have aborted on any >= 400.\n'
             printf -- '4. **An unreadable or wrong-shape reference.** The probe refuses if `apps/web-platform/infra/sentry/alert-reference.json` is unreadable, is not a name-indexed projection object, or yields zero rules, rather than reporting "no drift" having compared nothing.\n'
-            printf -- '5. **A refused destination.** The probe refuses to send the IaC token to any host or org other than the pinned literals; the section above names the class (`refusing destination host` / `refusing org`) — the repository secret `SENTRY_API_HOST` or `SENTRY_ORG` has drifted from the pin.\n\n'
+            printf -- '5. **A refused destination.** The probe refuses to send the IaC token to any host or org other than the pinned literals; the section above names the class (`refusing destination host` / `refusing org`) — the repository secret `SENTRY_API_HOST` or `SENTRY_ORG` has drifted from the pin.\n'
+            printf -- '6. **The uptime check alone** (`Uptime verdict: unavailable` above, rule verdict reached). The `ERROR: sentry uptime: UNAVAILABLE` line in the run log says why: zero `sentry_uptime_monitor` blocks parsed from `apps/web-platform/infra/sentry/*.tf`, a non-array or foreign-type detectors body, a failed detectors GET, >= 100 rows (the unpaginated ceiling), a row whose shape, id or mode cannot be read, or fewer live monitors than declared blocks. That last one usually means the latest `apply-sentry-infra` run on main did not finish: re-run it. Until it clears, an unmanaged uptime monitor goes unseen.\n\n'
             printf 'Re-run this workflow after addressing whichever refusal the section above names; it auto-closes this issue on any run that reaches a verdict.\n'
             fi
           } > "$BODY_FILE"
@@ -405,7 +435,11 @@ jobs:
         # issues list), which is why #8058 stayed open. Filer and closer are
         # now disjoint on the pair `(verdict, filed)`, so create-then-close in
         # one run is unreachable and no retry/sleep is added.
-        if: always() && (steps.probe.outputs.verdict == 'clean' || (steps.probe.outputs.verdict == 'drift' && steps.file_drift.outputs.filed == 'true'))
+        #
+        # `&& uptime_verdict == 'clean'` (#6606): the filer's fourth arm opens this
+        # issue on an uptime check that could not run, and a rule-side verdict
+        # says nothing about that, so it must not close it.
+        if: always() && (steps.probe.outputs.verdict == 'clean' || (steps.probe.outputs.verdict == 'drift' && steps.file_drift.outputs.filed == 'true')) && steps.probe.outputs.uptime_verdict == 'clean'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -431,7 +465,8 @@ jobs:
         # also why the literal is `'clean'` and not `''` or `'0'`: GitHub casts
         # across types, so an unset output from a CRASHED probe equals both of
         # those — a false all-clear that would auto-close a live drift issue.
-        if: always() && steps.probe.outputs.verdict == 'clean'
+        # `&& uptime_verdict == 'clean'` (#6606): same literal, same reason.
+        if: always() && steps.probe.outputs.verdict == 'clean' && steps.probe.outputs.uptime_verdict == 'clean'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

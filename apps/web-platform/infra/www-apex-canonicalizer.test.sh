@@ -77,7 +77,6 @@ REDIR_TF="$SCRIPT_DIR/seo-bulk-redirects.tf"
 DEPLOY_WF="$REPO_ROOT/.github/workflows/deploy-docs.yml"
 CNAME_FILE="$REPO_ROOT/plugins/soleur/docs/CNAME"
 UPTIME_TF="$SCRIPT_DIR/uptime-alerts.tf"
-SENTRY_TF="$SCRIPT_DIR/sentry/uptime-monitors.tf"
 DEPLOY_SENTRY_ARRAY_SRC="$SCRIPT_DIR/cutover-verify.sh"
 
 PASS=0
@@ -407,16 +406,17 @@ else
   # outcome; it asserted that and paged on NEITHER, because Sentry follows 3xx and grades
   # the final response, so `equals 301` was unsatisfiable on this URL.
   #
-  # And "a wash" is still not quite right, so state the asymmetry rather than repeating a
-  # clause whose head was replaced. The two outcomes are now on DIFFERENT timers:
-  #   - www serves its own 200 (the outcome Camp B chose): Better Stack only, ~23 min
-  #     (180 s cadence + 1200 s confirmation).
-  #   - a hard 522 (the outcome Camp B rejected): Better Stack AND
-  #     sentry_uptime_monitor.soleur_www_reachability, ~15 min.
-  # So the chosen failure mode is detected ~8 min SLOWER than the rejected one. The ruling
-  # still holds -- it turns on which failure is preferable to a user, not on latency, and
-  # stale content beats a 522 on an HSTS-preloaded host at either number -- but it holds
-  # for that reason, not because detection is equal.
+  # And "a wash" needed restating, so state the timers rather than repeating a clause whose
+  # head was replaced. Since ADR-328 removed the Sentry www reachability monitor, BOTH
+  # outcomes are detected by the same alarm on the same timer:
+  #   - www serves its own 200 (the outcome Camp B chose): Better Stack
+  #     betteruptime_monitor.soleur_www_redirect, ~23 min (180 s cadence + 1200 s
+  #     confirmation).
+  #   - a hard 522 (the outcome Camp B rejected): the same Better Stack monitor, which also
+  #     fails on DNS, TLS and 5xx, ~23 min. (Until ADR-328 a Sentry www reachability probe
+  #     caught this one ~8 min sooner, at ~15 min.)
+  # The ruling turns on which failure is preferable to a user, not on latency: stale content
+  # beats a 522 on an HSTS-preloaded host at any detection time.
   #
   # This arm previously accepted ONLY type A ("proxied A, black-hole behind the Bulk
   # Redirect") — residue of the recipe D1 rejected, contradicting ADR-194, D1, R6 and PF9
@@ -642,44 +642,80 @@ SIBLING_PNS="$(strip_comments "$UPTIME_TF" | awk '
   }
 ')"
 sib_n="$(printf '%s\n' "$SIBLING_PNS" | grep -c . || true)"
-# 6 = soleur_apex, app, app_health (#7884) + the three sampled seo_redirect_*
-# deep-URL probes (#8364). Exact, so a sibling losing its name fails here.
-eq_case '6' "$sib_n" \
+# 7 = soleur_apex, app, app_health (#7884) + the three sampled seo_redirect_*
+# deep-URL probes (#8364) + soleur_changelog_deep (moved from Sentry at ADR-328)
+# + soleur_legal_terms (#12844). Exact, so a sibling losing its name fails here.
+eq_case '8' "$sib_n" \
   "the sibling pronounceable_name set is non-empty (distinctness over an empty set is vacuous); found ${sib_n}"
 
 pn_rc=1
 if [[ -n "$WWW_PN" ]] && ! grep -qxF "$WWW_PN" <<<"$SIBLING_PNS"; then pn_rc=0; fi
 verdict "$pn_rc" "soleur_www_redirect has a pronounceable_name distinct from every sibling monitor; found [${WWW_PN}]"
 
-# W14 — cross-read: cutover-verify.sh's SENTRY_MONITORS array must name exactly the Sentry
-# uptime monitors that are declared. Added at #7798 REVIEW, because a comment in
-# cutover-verify.sh already claimed this guard performed this check and it did not — a
-# correctness claim resting on a gate that did not exist, which is the defect class this
-# whole PR is about. The two are magic strings in HCL and bash with no compiler between them,
-# and the #7798 rename moved one of them.
-SENTRY_NAMES="$(strip_comments "$SENTRY_TF" \
-  | awk '/^[[:space:]]*name[[:space:]]*=/ { v=$0; sub(/^[^=]*=[[:space:]]*/,"",v); gsub(/"/,"",v); sub(/[[:space:]]+$/,"",v); print v }' \
-  | sort -u | paste -sd',' -)"
-ARRAY_NAMES="$(strip_comments "$DEPLOY_SENTRY_ARRAY_SRC" \
-  | awk '/^SENTRY_MONITORS=\(/ { v=$0; sub(/^SENTRY_MONITORS=\(/,"",v); sub(/\).*$/,"",v); print v }' \
-  | tr ' ' '\n' | awk 'NF' | sort -u | paste -sd',' -)"
-# `awk 'NF'` and NOT `grep -v '^$'`: this file runs under `set -euo pipefail`, where a grep
-# that matches nothing exits 1 and takes the whole capture -- and the script -- down with it.
-# The no-match case is exactly the one this assertion exists to CATCH (SENTRY_MONITORS=(
-# renamed or gone), so the grep form made the guard die with an errexit abort instead of
-# reporting a clean FAIL: a check that cannot report the condition it was written to detect,
-# which is the same defect class as the monitor this PR is fixing. `awk 'NF'` drops the empty
-# lines and exits 0 either way, so an empty extraction flows into the eq_case below and fails
-# LOUDLY. Do not "simplify" this back to grep, and do not paper it over with `|| true` --
-# that would also swallow a genuine strip_comments/awk failure. Caught by
-# scripts/lint-shell-capture-exit on PR #7878.
-# Both operands non-empty, or the equality is the vacuous "" == "" this case exists
-# to avoid. Asserted rather than assumed: a broken extractor on BOTH sides passes.
-sentry_n="$(printf '%s' "$SENTRY_NAMES" | tr ',' '\n' | grep -c . || true)"
-eq_case '4' "$sentry_n" \
-  "the sentry_uptime_monitor name set extracted non-vacuously (found ${sentry_n})"
-eq_case "$SENTRY_NAMES" "$ARRAY_NAMES" \
-  "cutover-verify.sh SENTRY_MONITORS matches the sentry_uptime_monitor name set byte-for-byte"
+# W14 — Sentry watches NO marketing URL (ADR-328), so CUT8 must not grade Sentry rows.
+#
+# Until ADR-328 this case cross-read cutover-verify.sh's SENTRY_MONITORS array against the
+# declared sentry_uptime_monitor names byte-for-byte (added at #7798 review, because a
+# comment in cutover-verify.sh claimed the check and nothing performed it). ADR-328 moved
+# every marketing-site uptime probe to Better Stack and left Sentry one included slot, on the
+# production app. The coupling that replaces the equality has two halves, one case each:
+#
+#   (a) cutover-verify.sh declares no SENTRY_MONITORS array. CUT8 is a cutover gate for the
+#       MARKETING site; a Sentry row there would grade a monitor that does not watch it.
+#   (b) no declared sentry_uptime_monitor probes soleur.ai or www.soleur.ai. A marketing
+#       monitor re-added to Sentry bills a second slot ($1.00/mo) and silently re-opens the
+#       question ADR-328 closed. NON-VACUOUS by construction: the block count must be >= 1,
+#       because "no block probes a marketing host" is trivially true of an empty extraction.
+#
+# The url is read only INSIDE sentry_uptime_monitor blocks of the comment-stripped file —
+# the header prose names the removed URLs, and a bare-token grep would read documentation.
+# `awk` and never `grep` in the captures: under `set -euo pipefail` a no-match grep exits 1
+# and aborts the guard instead of letting the case report (scripts/lint-shell-capture-exit).
+sentry_array_n="$(count_matches '^[[:space:]]*((declare|local|readonly|typeset)[[:space:]]+(-[[:alpha:]]+[[:space:]]+)*)?SENTRY_MONITORS\+?=\(' \
+  "$(strip_comments "$DEPLOY_SENTRY_ARRAY_SRC")")"
+eq_case '0' "$sentry_array_n" \
+  "cutover-verify.sh declares no SENTRY_MONITORS array (CUT8 grades Better Stack only, ADR-328)"
+
+# Read EVERY .tf in the Sentry root, not only uptime-monitors.tf: the one-slot property
+# (ADR-328) is a property of the root, and a monitor declared in a new file bills the same
+# second slot (#12844 review). Exactly one block, and its host is app.soleur.ai.
+SENTRY_UPTIME_SCAN="$(for _tf in "$SCRIPT_DIR"/sentry/*.tf; do strip_comments "$_tf"; done | awk '
+  # Indented and bare-label forms are valid HCL too (verification P3-3), so the
+  # header match accepts both rather than only the fmt-canonical one.
+  !inb && /^[[:space:]]*resource[[:space:]]+"?sentry_uptime_monitor"?[[:space:]]+/ { inb = 1; depth = 0; blocks++ }
+  inb {
+    if ($0 ~ /^[[:space:]]*url[[:space:]]*=/) {
+      h = $0; sub(/^[^=]*=[[:space:]]*/, "", h); gsub(/"/, "", h)
+      sub(/^[[:alpha:]]+:\/\//, "", h); sub(/[\/:?#].*$/, "", h); sub(/[[:space:]]+$/, "", h)
+      h = tolower(h); sub(/\.$/, "", h)
+      if (h == "soleur.ai" || h == "www.soleur.ai") { bad = bad (bad == "" ? "" : ",") h }
+      if (h == "app.soleur.ai") app++
+    }
+    # A block that can expand bills more than one slot (#12844 review, FR-TD2):
+    # the property is SLOTS, so `count` / `for_each` inside it fails the case.
+    if ($0 ~ /^[[:space:]]*(count|for_each)[[:space:]]*=/) { bad = bad (bad == "" ? "" : ",") "count-or-for_each"
+    }
+    d = gsub(/\{/, "{"); depth += d
+    d = gsub(/\}/, "}"); depth -= d
+    if (depth <= 0) { inb = 0 }
+  }
+  /^[[:space:]]*module[[:space:]]+/ { bad = bad (bad == "" ? "" : ",") "module-block" }
+  END { printf "%d %d %s", blocks + 0, app + 0, bad }
+')"
+# A *.tf.json in the Sentry root is HCL this text scan cannot read, so it is refused.
+for _tfj in "$SCRIPT_DIR"/sentry/*.tf.json; do
+  [[ -e "$_tfj" ]] || continue
+  SENTRY_UPTIME_SCAN="${SENTRY_UPTIME_SCAN},tf-json:${_tfj##*/}"
+done
+sentry_blocks="${SENTRY_UPTIME_SCAN%% *}"
+_scan_rest="${SENTRY_UPTIME_SCAN#* }"
+sentry_app="${_scan_rest%% *}"
+sentry_marketing="${_scan_rest#* }"
+[[ "$sentry_marketing" == "$_scan_rest" ]] && sentry_marketing=""
+sentry_rc=1
+if [[ "$sentry_blocks" == "1" && "$sentry_app" == "1" && -z "$sentry_marketing" ]]; then sentry_rc=0; fi
+verdict "$sentry_rc" \
+  "the Sentry root declares exactly one sentry_uptime_monitor, on app.soleur.ai, and none probes a marketing host (soleur.ai/www.soleur.ai; ADR-328), with no count/for_each, module block or *.tf.json; found ${sentry_blocks} block(s), ${sentry_app} on app.soleur.ai, other problems [${sentry_marketing}]"
 
 # W15/W16 — the bracket must not come back, asserted on the PROPERTY rather than on the
 # deleted step's spelling. deploy-docs.yml used to PAUSE the Sentry www monitor around each

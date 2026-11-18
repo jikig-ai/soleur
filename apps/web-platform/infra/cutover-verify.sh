@@ -162,7 +162,7 @@ capture_baseline() { # <out>
 curl_auth() { # <bearer> <url...>
   local tok="$1"; shift
   printf 'header = "Authorization: Bearer %s"\n' "$tok" \
-    | curl -sS --max-time "$CURL_MAX_TIME" --config - "$@"
+    | curl --disable --noproxy '*' -sS --max-time "$CURL_MAX_TIME" --config - "$@"
 }
 
 # HOISTED at #7798. `probe_monitor_health` CALLS this, and the
@@ -177,95 +177,47 @@ curl_auth() { # <bearer> <url...>
 # ---------------------------------------------------------------------------------------
 # MONITOR HEALTH — one probe, used by CUT8 and by --capture-monitor-baseline
 # ---------------------------------------------------------------------------------------
-# `.status` ON THE MONITOR IS NOT ITS HEALTH. It is the monitor's CONFIGURATION
-# state and reads `active` for an enabled monitor whether the site is up or down
-# — measured 2026-09-03, all five read `active` while one was in an active
-# failure incident. A CUT8 written against that field cannot go RED, and it would
-# be standing in front of a decision to destroy. The health signal is
-# `checkStatus` on the per-monitor CHECKS collection, a different endpoint under
-# /projects/, and it DOES honour a monitor's custom assertion: the ACME probe
-# returns HTTP 404 and records `success`, because its `equals 404` assertion is
-# live.
+# SENTRY IS NOT GRADED HERE (ADR-328). CUT8 is the cutover gate for the
+# MARKETING site, and since ADR-328 Sentry watches no marketing URL: its one
+# included uptime slot watches the production app (sentry/uptime-monitors.tf),
+# and every soleur.ai probe is Better Stack's. Until then this function also read
+# a SENTRY_MONITORS array through Sentry's per-monitor checks endpoint, sending
+# SENTRY_AUTH_TOKEN; that array, its loops and the token read were deleted, so
+# this probe sends no Sentry credential. www-apex-canonicalizer.test.sh fails the
+# PR if a SENTRY_MONITORS array returns here, or if a Sentry uptime monitor is
+# pointed at soleur.ai / www.soleur.ai again.
 #
 # Emits one `name<TAB>healthy|unhealthy|unknown` row per monitor. `unknown` is
 # never folded into either of the other two.
-# Byte-identical to the `name` on each sentry_uptime_monitor resource in
-# sentry/uptime-monitors.tf. `soleur-ai-www` became `soleur-ai-www-reachability`
-# at #7798 when it was retargeted from an unsatisfiable `equals 301` to 2xx.
-# If this array and a resource `name` ever diverge, www-apex-canonicalizer.test.sh
-# fails at PR time -- it cross-reads sentry/uptime-monitors.tf and asserts every
-# `name` here appears there and vice versa. That assertion was ADDED at #7798
-# review; until then this comment claimed it and no such check existed anywhere,
-# which is the same defect class this file's CUT8 header describes.
 #
-# Runtime behaviour if one ever slips past: a name in this array with no live
-# monitor resolves `unknown`, which CUT8 routes to UNREACHABLE (never PASS) and
-# --capture-monitor-baseline refuses to write. Note the OTHER direction is NOT
-# fail-safe: a monitor whose baseline ROW is missing scores as a REGRESSION, not
-# as unknown -- see the CUT8 block below.
-SENTRY_MONITORS=(soleur-ai-apex soleur-ai-www-reachability soleur-ai-changelog-deep soleur-ai-acme-carveout-probe)
 # An ARRAY, not a scalar (#7798). Until then CUT8 watched the apex monitor only,
 # so when #7878 retargeted the Sentry www monitor to 2xx and moved redirect-health
 # to betteruptime_monitor.soleur_www_redirect, the redirect property left CUT8's
 # coverage entirely -- and an all-healthy baseline read as complete coverage.
 # CUTOVER_BETTERSTACK_MONITOR overrides the FIRST entry only, preserving the
 # pre-existing env seam. A monitor added here MUST also gain a baseline row in the
-# same change (a row-less monitor scores REGRESSION, not unknown -- see above);
-# --capture-monitor-baseline emits one per array member, so re-capture together.
+# same change (a row-less monitor scores REGRESSION, not unknown -- see the CUT8
+# block below); --capture-monitor-baseline emits one per array member, so
+# re-capture together. That is why the changelog deep-path monitor ADR-328 moved
+# to Better Stack is NOT listed yet: its entry and its baseline row land together
+# in the follow-up PR, once the monitor is live (the capture refuses `unknown`).
+#
+# Runtime behaviour if a name slips: a name in this array with no live monitor
+# resolves `unknown`, which CUT8 routes to UNREACHABLE (never PASS) and
+# --capture-monitor-baseline refuses to write.
+#
+# CUTOVER_SINCE no longer scopes anything in CUT8: it bounded Sentry's rolling
+# checks collection, and Better Stack's `.attributes.status` is a current-state
+# read with no history to bound. It is still printed in the run header.
 BETTERSTACK_MONITORS=(
   "${CUTOVER_BETTERSTACK_MONITOR:-soleur dot ai apex}"
   "soleur dot ai www redirect 301"
 )
 
 probe_monitor_health() {
-  local mon_json name mid proj checks total bad bs_json bs_status
-  if [[ -n "${SENTRY_AUTH_TOKEN:-}" && -n "${SENTRY_ORG:-}" ]]; then
-    mon_json="$(curl_auth "$SENTRY_AUTH_TOKEN" \
-        "https://sentry.io/api/0/organizations/${SENTRY_ORG}/uptime/" 2>/dev/null)" || mon_json=""
-    if [[ -z "$mon_json" ]] || ! printf '%s' "$mon_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
-      for name in "${SENTRY_MONITORS[@]}"; do printf '%s\tunknown\n' "$name"; done
-    else
-      for name in "${SENTRY_MONITORS[@]}"; do
-        mid="$(printf '%s' "$mon_json"  | jq -r --arg n "$name" '.[] | select(.name == $n) | .id' | head -1)"
-        proj="$(printf '%s' "$mon_json" | jq -r --arg n "$name" '.[] | select(.name == $n) | .projectSlug' | head -1)"
-        # A monitor CUT8 names but the org does not have is `unknown`, never
-        # healthy — "I could not find it" must not read as "it is green".
-        if [[ -z "$mid" || "$mid" == "null" ]]; then printf '%s\tunknown\n' "$name"; continue; fi
-        checks="$(curl_auth "$SENTRY_AUTH_TOKEN" \
-            "https://sentry.io/api/0/projects/${SENTRY_ORG}/${proj}/uptime/${mid}/checks/" 2>/dev/null)" || checks=""
-        total="$(printf '%s' "$checks" | jq -r 'if type=="array" then length else "x" end' 2>/dev/null)"
-        if [[ ! "$total" =~ ^[0-9]+$ || "$total" == "0" ]]; then printf '%s\tunknown\n' "$name"; continue; fi
-        # BOUND THE WINDOW. The endpoint returns a rolling collection with no time
-        # bound, so an unbounded `bad == 0` grades the cutover against checks that
-        # PREDATE it — including the failures the cutover's own propagation window
-        # produces. At T+20, with monitors on a 300 s interval, those are still in
-        # the collection, so every monitor reads unhealthy, every one is scored a
-        # REGRESSION, and the gate that decides whether to perform a SECOND
-        # destructive change is biased hard toward "roll back" by the very outage
-        # it is measuring.
-        #
-        # `CUTOVER_SINCE` (ISO-8601) scopes the grade to checks at or after the
-        # cutover. With no post-cutover sample yet the answer is `unknown` — which
-        # routes to UNREACHABLE ("re-run"), never to a regression.
-        if [[ -n "${CUTOVER_SINCE:-}" ]]; then
-          checks="$(printf '%s' "$checks" | jq --arg t "$CUTOVER_SINCE" \
-            '[.[] | select((.timestamp // "") >= $t)]' 2>/dev/null)" || checks=""
-          total="$(printf '%s' "$checks" | jq -r 'if type=="array" then length else "x" end' 2>/dev/null)"
-          if [[ ! "$total" =~ ^[0-9]+$ || "$total" == "0" ]]; then
-            printf '%s\tunknown\n' "$name"; continue
-          fi
-        fi
-        bad="$(printf '%s' "$checks" | jq -r '[.[] | select(.checkStatus != "success")] | length' 2>/dev/null)"
-        if [[ "$bad" =~ ^[0-9]+$ && "$bad" == "0" ]]; then printf '%s\thealthy\n' "$name"
-        else printf '%s\tunhealthy\n' "$name"; fi
-      done
-    fi
-  else
-    for name in "${SENTRY_MONITORS[@]}"; do printf '%s\tunknown\n' "$name"; done
-  fi
-
-  # These are a DIFFERENT VENDOR (BetterStack), not extra Sentry rows. One list
-  # fetch serves every member; a per-member fetch would just re-read the same page.
+  local name bs_json bs_status
+  # One list fetch serves every member; a per-member fetch would just re-read the
+  # same page.
   local bs_token="${BETTERSTACK_API_TOKEN_READONLY:-${BETTERSTACK_API_TOKEN:-}}"
   if [[ -n "$bs_token" ]]; then
     bs_json="$(curl_auth "$bs_token" \
@@ -526,7 +478,7 @@ elif [[ "$t_www_unreach" -gt 0 ]]; then row CUT7 UNREACHABLE "$t_www_unreach of 
 else row CUT7 PASS "all ${#LEGAL_PAIRS[@]} legacy legal paths 301 to their declared targets"
 fi
 
-# --- CUT8: the five monitors ------------------------------------------------------------
+# --- CUT8: the Better Stack marketing-site monitors (ADR-328) -----------------------------
 # Deliberately NOT a "check the dashboard" step (hr-no-dashboard-eyeball-pull-data-yourself).
 # Without credentials this reports UNREACHABLE — never PASS. A monitor gate that
 # degrades to "assume green" is worse than an absent one here.
@@ -542,16 +494,17 @@ fi
 # The DIAGNOSIS in that paragraph was wrong and #7798 corrected it: the declared
 # assertion WAS live on the monitor, byte-identical. `equals 301` is simply
 # unsatisfiable on a URL that redirects, because Sentry follows 3xx and grades
-# the final response. The monitor is now `soleur-ai-www-reachability` asserting
-# 2xx, so it can be green; redirect-health moved to Better Stack. The
-# baseline-comparison logic below is retained regardless — it is the right shape
-# for ANY pre-existing red, and this cutover is not the last one.
+# the final response. #7798 retargeted that Sentry monitor to 2xx and moved
+# redirect-health to Better Stack; ADR-328 then removed every Sentry marketing
+# monitor, so CUT8 now grades Better Stack monitors only (BETTERSTACK_MONITORS).
+# The baseline-comparison logic below is retained regardless — it is the right
+# shape for ANY pre-existing red, and this cutover is not the last one.
 #
 # So: a monitor already unhealthy at baseline is reported loudly and does not by
 # itself fail the cutover; one healthy at baseline and unhealthy now is a
 # REGRESSION and fails. With no baseline the check falls back to absolute, which
 # is the conservative direction.
-CUT8_TOTAL=$(( ${#SENTRY_MONITORS[@]} + ${#BETTERSTACK_MONITORS[@]} ))
+CUT8_TOTAL=${#BETTERSTACK_MONITORS[@]}
 MON_NOW="$(probe_monitor_health)"
 cut8_ok=0; cut8_fail=0; cut8_unreach=0; regressions=0; preexisting=0
 while IFS=$'\t' read -r mname mstate; do

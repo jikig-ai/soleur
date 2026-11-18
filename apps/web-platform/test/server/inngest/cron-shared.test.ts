@@ -626,6 +626,19 @@ describe("#6143 — campaign-calendar comment-bump coupling invariant", () => {
 });
 
 describe("resolveOutputAwareOk", () => {
+  it("#12847 fix round: a mid-run plugin reseed is not-ok even with the issue present (no commit of a mixed tree)", async () => {
+    const octokit = octokitReturning([{ updated_at: "2026-05-31T09:30:00.000Z" }]);
+    const ok = await resolveOutputAwareOk({
+      spawnOk: false,
+      pluginReseeded: true,
+      label: "scheduled-growth-audit",
+      runStartedAt: RUN_START,
+      cronName: "cron-growth-audit",
+      octokit,
+    });
+    expect(ok).toBe(false);
+  });
+
   it("issue present + spawn ok → ok:true, no event", async () => {
     const octokit = octokitReturning([
       { updated_at: "2026-05-31T09:30:00.000Z" },

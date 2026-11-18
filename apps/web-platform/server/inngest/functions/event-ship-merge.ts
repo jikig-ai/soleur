@@ -44,7 +44,7 @@ const TOKEN_MIN_LIFETIME_MS = 30 * 60 * 1000 + 10 * 60 * 1000;
 export const MAX_TURN_DURATION_MS = 30 * 60 * 1000;
 
 // #4993 — headless /soleur:* skill resolution (fleet fix mirroring #4987 /
-// PR #4989): `--plugin-dir plugins/soleur` registers the plugin (clone's tracked tree — #5091) under
+// PR #4989): the substrate's `--plugin-dir <read-only root>` (`loadPlugin: true`, #12824) registers the plugin under
 // `--print` (a bare plugins/ dir is NOT auto-discovered in headless mode), and
 // `Skill`+`Task` (/soleur:ship fans out review/QA subagents) in --allowedTools
 // gate skill invocation + subagent fan-out.
@@ -56,8 +56,6 @@ const CLAUDE_CODE_FLAGS = [
   "40",
   "--allowedTools",
   "Bash,Read,Write,Edit,Glob,Grep,Skill,Task",
-  "--plugin-dir",
-  "plugins/soleur",
   "--",
 ];
 
@@ -235,6 +233,7 @@ export async function eventShipMergeHandler({
       "claude-eval",
       async (): Promise<SpawnResult> => {
         return spawnClaudeEval({
+          loadPlugin: true, // #12824 — the substrate owns --plugin-dir (read-only root)
           spawnCwd: workspace.spawnCwd,
           installationToken,
           flags: CLAUDE_CODE_FLAGS,
