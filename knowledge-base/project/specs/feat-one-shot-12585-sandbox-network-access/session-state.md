@@ -31,3 +31,9 @@ soleur:plan, soleur:gdpr-gate, soleur:plan-review, soleur:deepen-plan; CTO, CPO,
 - E PASS: forwarder SIGKILLed before turn -> 502, 0 decoy, 0 gateway.
 - F FAIL (criterion "re-ask after teardown"): within one command no re-ask after teardown (f-2/f-3 502, nothing left). F2: across commands of one session, the same host is NOT re-asked; a new host is. Cached allows fail closed at the dead forwarder (no leak), but the plan pre-decides caching => deny-all.
 - CLO DPIA t4 re-screen and CPO copy for (reason, granted) spawned.
+
+## Work Phase Complete (2026-11-18)
+- Commits 76ac3b2672, cf4f439fe2 pushed; PR #12897 body set (Closes #12585).
+- Issues filed: #12906 (real allow arm), #12907 (UNVERIFIED:hosted-entitled-sandboxed-egress).
+- Local affected gate: timed out at 590 s (RC=124, NOT a pass); targeted suites green; CI is the gate.
+- Next: soleur:review -> resolve -> qa -> compound -> ship.
