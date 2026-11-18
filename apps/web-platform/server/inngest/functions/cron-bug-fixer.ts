@@ -381,6 +381,18 @@ async function runAutoMergeGate(args: {
 }): Promise<AutoMergeGateResult> {
   const { octokit, pr, sourceIssueNumber, logger } = args;
 
+  // (0) #12847 re-verification — queue only the selected issue's own `bot-fix/<issue>-*` PR. detect-pr's
+  // any-bot-fix/* fallback can return another issue's PR, or one a reseeded run opened under a wrong branch
+  // name and left eligible; such a PR goes to human review in every run. A memoized detect-pr result from
+  // before headRef existed has none, and is refused the same way (fail-safe).
+  const ownPrefix = `bot-fix/${sourceIssueNumber}-`;
+  if (!pr.headRef?.startsWith(ownPrefix)) {
+    return {
+      queued: false,
+      reason: `PR #${pr.number} branch '${pr.headRef ?? "unknown"}' is not ${ownPrefix}*; never auto-merged`,
+    };
+  }
+
   // (1) bot-identity check
   const prResp = (await octokit.request(
     "GET /repos/{owner}/{repo}/pulls/{pull_number}",
@@ -882,8 +894,9 @@ export async function cronBugFixerHandler({
     // #12847 escalation — a run whose plugin mount was reseeded mid-run read its skill from a mixed or
     // half-copied tree (decision.ok is already false). Its PR is left for human review (review-required),
     // never queued: auto-merge is this cron's persistence step, which the KB crons skip in the same case.
-    // Only this run's own `bot-fix/<selectedIssue>-*` PR is demoted: detect-pr's any-bot-fix/* fallback can
-    // return an earlier run's PR for another issue, which this run did not write — that one is left untouched.
+    // Only this run's own `bot-fix/<selectedIssue>-*` PR is demoted. Any other PR detect-pr's fallback
+    // returns (another issue's, or this run's under a wrong branch name) is left untouched: runAutoMergeGate
+    // step (0) refuses it in every run, so its eligible label cannot get it queued later.
     const gateResult: AutoMergeGateResult = spawnResult.pluginReseeded
       ? await step.run("demote-reseeded-pr", async () => {
           if (!detectedPr.headRef?.startsWith(`bot-fix/${selectedIssue}-`)) {
@@ -891,7 +904,7 @@ export async function cronBugFixerHandler({
               feature: "cron-bug-fixer",
               op: "reseeded-run-foreign-pr",
               message:
-                "A run whose plugin mount was reseeded found only another issue's bot-fix PR; left it untouched",
+                "A run whose plugin mount was reseeded found a bot-fix PR not on its own branch (another issue's, or its own under a wrong name); left it untouched, and the auto-merge gate refuses it in every run",
               extra: { fn: "cron-bug-fixer", prNumber: detectedPr.number, selectedIssue },
             });
             return {

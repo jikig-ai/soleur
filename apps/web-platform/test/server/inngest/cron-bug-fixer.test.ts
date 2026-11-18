@@ -945,6 +945,29 @@ describe("cron-bug-fixer — (d) auto-merge gate safety nets", () => {
     expect(mutationSource).toContain("SQUASH");
   });
 
+  // #12847 re-verification — the gate queues only the selected issue's own `bot-fix/<issue>-*` PR. detect-pr's
+  // any-bot-fix/* fallback can return another issue's PR, or a PR a reseeded run opened under a wrong branch
+  // name and left eligible; neither is ever queued, whichever run finds it. `7001-` pins the prefix boundary.
+  it.each([
+    [`bot-fix/${SOURCE_ISSUE}1-other-issue`],
+    ["bot-fix/fix-typo"],
+  ])("blocks auto-merge on a clean run when the PR branch %s is not the selected issue's", async (headRef) => {
+    wireOctokitForGate({ headRef });
+    wireSpawn(0);
+    const { cronBugFixerHandler } = await importHandler();
+    const step = makeStep();
+    const result = await cronBugFixerHandler({ step, logger });
+
+    expect(result.autoMergeQueued).toBe(false);
+    expect(octokitGraphqlSpy).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: `PR #${PR_NUMBER} branch '${headRef}' is not bot-fix/${SOURCE_ISSUE}-*; never auto-merged`,
+      }),
+      "Auto-merge not queued",
+    );
+  });
+
   it("blocks auto-merge when PR author is not a bot", async () => {
     wireOctokitForGate({ prAuthor: "human-contributor" });
     wireSpawn(0);
