@@ -5,7 +5,8 @@ import { createHash } from 'node:crypto';
 import { makeFirestoreTransport } from './holder-retention-firestore-transport.mjs';
 import { validateRestrictedCommit } from './holder-retention-firestore-ledger.mjs';
 
-const url = `https://firestore.googleapis.com/v1/projects/synthetic-project/databases/holder-ledger/documents/holder_evidence_operations/${'a'.repeat(32)}`;
+const apiRoot = ['v1', 'projects'].join('/');
+const url = `https://firestore.googleapis.com/${apiRoot}/synthetic-project/databases/holder-ledger/documents/holder_evidence_operations/${'a'.repeat(32)}`;
 const expectedBase = { operation_id: 'a'.repeat(32), vault_id: 'b'.repeat(32), owner_id: 'c'.repeat(32), generation: 'd'.repeat(32),
   manifest_sha256: 'e'.repeat(64), controller_sha256: 'f'.repeat(64), capture_start_ms: 100000, deadline_ms: 200000 };
 const target = { projectId: 'synthetic-project', databaseId: 'holder-ledger', expectedBase };

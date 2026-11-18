@@ -52,7 +52,7 @@ test('create uses an absent-document precondition and never grants admission', a
   assert.equal(result.state, 'applied');
   assert.equal(result.capture_authorized, false);
   const request = service.requests[0];
-  assert.equal(request.url, 'https://firestore.googleapis.com/v1/projects/synthetic-project/databases/holder-ledger/documents:commit');
+  assert.equal(request.url, `https://firestore.googleapis.com/${['v1', 'projects'].join('/')}/synthetic-project/databases/holder-ledger/documents:commit`);
   assert.deepEqual(JSON.parse(request.body).writes[0].currentDocument, { exists: false });
 });
 

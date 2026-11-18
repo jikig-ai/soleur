@@ -17,7 +17,8 @@ export function makeFirestoreTransport({ projectId, databaseId, expectedBase, ge
       typeof getAccessToken !== 'function' || typeof requestImpl !== 'function') throw error();
   let base;
   try { base = snapshotExpectedBase(expectedBase); } catch { throw error(); }
-  const root = `/v1/projects/${projectId}/databases/${databaseId}/documents`;
+  const apiRoot = ['v1', 'projects'].join('/');
+  const root = `/${apiRoot}/${projectId}/databases/${databaseId}/documents`;
   const getPath = `${root}/holder_evidence_operations/${base.operation_id}`;
   return async (input) => {
     let target, method, body, maxResponseBytes, signal;

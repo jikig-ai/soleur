@@ -50,7 +50,7 @@ export function prepareWorkerStsRequest(configJson, pinsJson) {
   } catch { return unknown(); }
 }
 
-export async function transmitWorkerSts(_binding, _prepared) {
+export async function transmitWorkerSts() {
   // No caller-provided flag, injected function or claimed pin authorizes this.
   // A future independently reviewed authority must replace this hard refusal.
   return unknown();
