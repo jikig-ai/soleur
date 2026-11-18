@@ -306,9 +306,10 @@ async function spawnEgressForwarderUnscrubbed(
   // true, so an older mark is cleared first: a failed re-granted spawn then pages as degraded (fix round).
   const epochAtStart = epochAtGrant ?? egressRevocationEpoch(workspaceId);
   const revokedSinceStart = () => egressRevocationEpoch(workspaceId) !== epochAtStart;
-  // Used only before this spawn registers or mints anything, so there is nothing of ours to tear down.
+  // Callers clean up anything this spawn registered or minted first. A newer spawn that now owns the conversation's
+  // registry entry was re-granted, so its session is not marked revoked (verification pass).
   const failRevoked = (): never => {
-    markEgressRevoked(conversationId);
+    if (!egressForwarders.has(conversationId)) markEgressRevoked(conversationId);
     throw new EgressRevokedError();
   };
   revocation.revoked.delete(conversationId);
@@ -471,9 +472,10 @@ async function spawnEgressForwarderUnscrubbed(
       proc.kill();
       rmSync(join(egressTokenDir(), token), { force: true });
     }
-    markEgressRevoked(conversationId);
-    throw new EgressRevokedError();
+    failRevoked();
   }
+  // A superseded older spawn may have marked the conversation while this one was starting; this one is live.
+  revocation.revoked.delete(conversationId);
 
   return { port: entry.port, token, pid: entry.pid };
 }

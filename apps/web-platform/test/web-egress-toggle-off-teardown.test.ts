@@ -232,3 +232,13 @@ describe("POST /api/workspace/web-egress value=false (#12585 AC24)", () => {
     expect(isEgressRevoked("conv-a")).toBe(true);
   }, 20_000);
 });
+
+describe("revocation bookkeeping (verification pass)", () => {
+  test("the revoked Set is bounded: the oldest marks are dropped past 10 000", async () => {
+    const { markEgressRevoked } = await import("@/server/egress-forwarder");
+    markEgressRevoked("bound-first");
+    for (let i = 0; i < 10_000; i++) markEgressRevoked(`bound-${i}`);
+    expect(isEgressRevoked("bound-first")).toBe(false);
+    expect(isEgressRevoked("bound-9999")).toBe(true);
+  });
+});

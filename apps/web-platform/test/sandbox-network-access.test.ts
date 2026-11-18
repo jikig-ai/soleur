@@ -259,6 +259,10 @@ describe("sandboxNetworkDenyMessage (CPO ruling, keyed on reason and granted)", 
     expect(normalizeHost(`${"a".repeat(63)}.com`)).toEqual({ kind: "dns", host: `${"a".repeat(63)}.com` });
   });
 
+  it("an unknown reason at runtime gets the host copy, never the reason token", () => {
+    expect(sandboxNetworkDenyMessage("not-a-reason" as never, true)).toBe("Commands can't connect to this host from this session.");
+  });
+
   it("CPO C2: a revoked session says web access was turned off, whatever the reason", () => {
     const revoked = "Web access was turned off for this workspace, so commands can't reach the internet. Retrying won't help.";
     expect(sandboxNetworkDenyMessage("egress-not-running", false, true)).toBe(revoked);
