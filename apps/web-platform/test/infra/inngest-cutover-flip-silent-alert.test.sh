@@ -242,11 +242,12 @@ CANARY_HOST='soleur-inngest-canary-absent'
 # The old `rc=$?` terminator never matched it, so the slice silently ran to EOF (#11899).
 MAIN_PLAN="$(awk '/^[[:space:]]*terraform plan -no-color/{f=1} f{print} f&&/^[[:space:]]*rc=/{exit}' "$WF")"
 
-# Whole-line assertions anchored at both ends; greps over captured variables read HERE-STRINGS,
+# Whole-line assertions anchored at both ends, with the lib's one trailing-comment grammar B4_TAIL (an optional
+# trailing `#` / `//` comment, as pin_bad below); greps over captured variables read HERE-STRINGS,
 # never `printf … | grep -q` (pipefail + early-match SIGPIPE fails a negated check OPEN).
-line_in() { grep -qE "^[[:space:]]*$2[[:space:]]*(#.*)?$" <<< "$1"; }
-top_in() { grep -qE "^  $2[[:space:]]*(#.*)?$" <<< "$1"; }
-blk_in() { grep -qE "^    $2[[:space:]]*(#.*)?$" <<< "$1"; }
+line_in() { grep -qE "^[[:space:]]*$2${B4_TAIL}" <<< "$1"; }
+top_in() { grep -qE "^  $2${B4_TAIL}" <<< "$1"; }
+blk_in() { grep -qE "^    $2${B4_TAIL}" <<< "$1"; }
 
 [ -n "$LOCAL_SQL" ] \
   && ok "the predicate local is a heredoc this guard can read" \
@@ -624,7 +625,8 @@ done
   && ok "the raw and the effective text of each of the four flip blocks span the same lines" \
   || no "the raw and the effective text of a flip block span different lines (${SPAN_BAD# }) — a column-0 } before the real closer (in a comment, a heredoc or real code) cuts the raw block short, so the lines below it escape the raw rows"
 # pin_bad TEXT KEY ERE [KEY ERE ...] -> the keys that are not EXACTLY ONE `KEY =` line (any indent) whose
-# value matches ERE, an optional trailing `#` / `//` comment allowed. Pure bash, one mapfile, no fork per key.
+# value matches ERE, an optional trailing `#` / `//` comment allowed (the lib's B4_TAIL, as line_in / top_in / blk_in).
+# Pure bash, one mapfile, no fork per key.
 pin_bad() {
   local -a L; local k re r n line val bad=""
   mapfile -t L <<< "$1"; shift
@@ -632,7 +634,7 @@ pin_bad() {
     k="$1"; re="$2"; shift 2; n=0; val=""
     r="^[[:space:]]*${k}[[:space:]]*="
     for line in "${L[@]}"; do [[ $line =~ $r ]] && { n=$((n + 1)); val="$line"; }; done
-    r="^[[:space:]]*${k}[[:space:]]*=[[:space:]]*${re}[[:space:]]*((#|//).*)?\$"
+    r="^[[:space:]]*${k}[[:space:]]*=[[:space:]]*${re}${B4_TAIL}"
     if [ "$n" -ne 1 ]; then bad+=" ${k}(${n} lines)"; elif ! [[ $val =~ $r ]]; then bad+=" ${k}(not the pin)"; fi
   done
   printf '%s' "${bad# }"
@@ -821,7 +823,7 @@ def blk_sub(s, rtype, label, old, new):
 FLIP_ALERTS = ("inngest_cutover_flip_silent", "inngest_cutover_flip_silent_canary")
 def sql_span(s):
     # The [start, end) span of the production predicate local, from its opening line through its closer line.
-    i = s.index("  inngest_cutover_flip_silent_sql = <<\x2dSQL\n")
+    i = s.index("  inngest_cutover_flip_silent_sql = <<-SQL\n")
     return i, s.index("\n  SQL\n", i) + len("\n  SQL\n")
 # The canary derivation line exactly as the guard pins it (rows M6-M8b mutate it).
 CANARY_LINE = "  inngest_cutover_flip_silent_canary_sql = replace(local.inngest_cutover_flip_silent_sql, \"'soleur-inngest-prd'\", \"'soleur-inngest-canary-absent'\")"
@@ -1226,14 +1228,12 @@ s = s[:i] + decoy + s[i:]'
 s = s.replace(CANARY_LINE + "\n", "  inngest_cutover_flip_silent_canary_sql = local.inngest_cutover_flip_silent_sql\n  flip_silent_canary_doc                 = <<-EOT\n" + CANARY_LINE + "\n  EOT\n")'
   mutate RED "R16 a \${\"#\"} heredoc in metadata carries a decoy value = 0 while the real value is 1, mirrored in both alerts (neither can page)" TF \
     "the production alert block: a pinned key is not exactly one line equal to its pin" \
-    'RBL = "    runbook = local.inngest_cutover_flip_silent_runbook_url\n  }\n"
-for label in FLIP_ALERTS:
+    'for label in FLIP_ALERTS:
     s = blk_sub(s, "logtail_exploration_alert", label, "  value               = 0\n", "  value               = 1\n")
     s = blk_sub(s, "logtail_exploration_alert", label, RBL, "    runbook = local.inngest_cutover_flip_silent_runbook_url\n    note = join(\"${\"#\"}\", [<<-EOT\n  value               = 0\n  EOT\n    ])\n  }\n")'
   mutate RED "R17 a \"\${\"/*\"}\" note hides a real lifecycle { ignore_changes = all } from the lexer, mirrored in both alerts" TF \
     "a flip resource block carries count/for_each/lifecycle/ignore_changes/provider/dynamic" \
-    'RBL = "    runbook = local.inngest_cutover_flip_silent_runbook_url\n  }\n"
-for label in FLIP_ALERTS:
+    'for label in FLIP_ALERTS:
     s = blk_sub(s, "logtail_exploration_alert", label, RBL, "    runbook = local.inngest_cutover_flip_silent_runbook_url\n    note    = \"${\"/*\"}\"\n  }\n  lifecycle {\n    ignore_changes = all\n  }\n  # */ }\n")'
   mutate RED "R18 value = length(\"\${\"\\\"\"}\") /* opens a comment the lexer does not see: Terraform reads 1, the guard reads value = 0, mirrored" TF \
     "a template sequence (\${ or %{) other than the two runbook-URL interpolations sits in the raw flip text" \
