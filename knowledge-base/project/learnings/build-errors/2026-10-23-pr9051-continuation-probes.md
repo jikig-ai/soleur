@@ -270,3 +270,9 @@ filter also used the wrong runner for this Vitest suite. Re-run from the
 isolated worktree's app directory with `./node_modules/.bin/vitest run
 test/scripts/capture-codex-dev-catalog.test.ts` and its local ESLint binary.
 The focused suite passed 26/26 and ESLint passed after correcting the path.
+
+After a documentation-only push, `gh pr checks --watch` can briefly return
+`no checks reported` before GitHub attaches the new runs to the PR. Confirm the
+new head's runs with `gh run list --branch <branch>`, then start the checks
+watcher once the runs exist; do not treat the initial empty response as a
+completed CI result.

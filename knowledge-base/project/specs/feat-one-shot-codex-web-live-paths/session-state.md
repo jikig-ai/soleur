@@ -4593,3 +4593,12 @@
   legal identity, or processing authority was changed. The original worktree
   remains at 144 uncommitted entries; collection, writer-window, and ship gates
   remain held; Firestore live writes remain hard-disabled.
+- On 2026-11-19, the documentation verification snapshot was pushed as
+  `b7a0e16c583a0876f4d63661adaee7f03945f6f0`. Its CI completed with CodeQL,
+  main build, Bun tests, secret guards, infrastructure validation, and deploy
+  script/injector checks passing. `cla-check` still rejects historical
+  identities; tenant integration reports shared-dev migration-ledger drift;
+  `rls-fuzz` retains relation/permission findings; and the test aggregate fails
+  because the PR remains draft and owes the full battery. No collection,
+  writer-window, or ship gate is cleared. The original worktree remains at 144
+  uncommitted entries and Firestore live writes remain hard-disabled.
