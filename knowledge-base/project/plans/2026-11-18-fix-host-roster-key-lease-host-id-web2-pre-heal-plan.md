@@ -17,6 +17,32 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-18.
+**Sections enhanced:** 9 (Decisions, Phases 1-4 and 7, Infrastructure, Guard Contract, User-Brand Impact, Risks).
+**Research agents used:**
+
+- an implementation-realism code verifier;
+- a verify-the-negative and self-audit sweep (standard tier);
+- a Hetzner metadata and institutional-learnings researcher.
+
+All halt gates (4.6 to 4.13) passed. 4.9, 4.10, 4.13 and 4.55 were not triggered: no UI surface, no new store or connection, no new scheduled task, and no change to the drain/swap mechanics.
+
+### Key Improvements
+
+1. The T9 redeploy is a **deploy**. Under `hr-menu-option-ack-not-prod-write-auth` it needs the owner's per-command go-ahead or a valid Standing Delegation, so it is not agent-autonomous. The command also needs `-f bump_type=patch`, a required input.
+2. The T3 stickiness check moves inside the `web-platform)` branch of `ci-deploy.sh`, before the canary run. At top level its `exit 1` would also abort inngest deploys. It reads the env through the existing `docker inspect` precedent and takes the LAST `SOLEUR_HOST_KEY` entry, because docker keeps both the `--env-file` and the `-e` entries.
+3. The Phase 4 emit is gated on `mode.runRepoLifecycle && confirmDbReady`. It sits after the heal and before `evaluateAgentReadiness`, which returns ready for an escaping pointer (`git-worktree-validity.ts`, `if (kind !== "dir-valid") return "ready"`).
+4. The lease window is cited correctly: migration 116 for the same-`host_id` clause, migration 133 for the live 240 s window (116 shipped 120 s).
+5. The Hetzner API docs confirm the metadata `hostname` endpoint returns "Name of the Server as set in the api", which is the Terraform `name`.
+
+### New Considerations Discovered
+
+- `touch_worktree_lease` matches only `host_id` + `lease_generation`, with no recency check. The git-data fence accepts an EQUAL generation. Once ids are keys, a still-running old process on the same key would heartbeat and push as the new one. T6 (no `create_before_destroy`), the single-replica swap and T10 (distinct canary id) are what close that, so all three are load-bearing.
+- The new key-to-IP parse of `variables.tf` in the gate wrapper must be parity-pinned against the committed file, not re-derived. Otherwise the copies diverge fail-open.
+- `docker-run-tuple.test.sh` pins `MIN_ROWS=359` exactly and keeps a named row-id list. New rows must update both.
+
 ## Overview
 
 Two defects surfaced on 2026-11-18 while web-2 was in the GA pool for the #8211 AC-P3 proof (web-2 is now back at weight 0).
@@ -47,7 +73,7 @@ IaC routing (Phase 2.8) was reviewed. The plan has no manual infrastructure step
 - `lb-weight-gate.sh` A.3 checks `has($SOLEUR_GATED_HOST)`. `SOLEUR_GATED_HOST` is a `var.web_hosts` key (regex `^[a-z][a-z0-9-]{0,30}$`, #9421/ADR-327), so the gate validates a name-keyed roster.
 - Other `SOLEUR_HOST_ID`-shaped readers are telemetry only: `cat-deploy-state.sh` (AC13 compares it to the TF-known `hcloud_server` id) and `inngest-inventory.sh` keep their own `resolve_host_id` copies, drift-guarded by token co-occurrence (`inngest-inventory.test.sh` "#6425 AC4"). `server/watchdog-dispatch-clock.ts` only checks that the value is non-empty, and `server/cron-liveness-marker.ts` reports it as a field.
 - Stability evidence: `server/host-private-ip.ts` "not SOLEUR_HOST_ID: the Hetzner instance id changes on every web-host replace"; ADR-143 D4 "De-petting changes web-1's lifecycle, not its roster identity — never a key rename"; `var.web_hosts` private IPs are committed (`infra/variables.tf`), and `hcloud_server.web` is named `each.key == "web-1" ? "soleur-web-platform" : "soleur-${each.key}"` (`infra/server.tf`). web-1 has `ignore_changes = [user_data]`, so no cloud-init change reaches it.
-- Lease semantics (`supabase/migrations/116_worktree_write_lease.sql`): re-acquiring with the same `host_id` keeps `lease_generation` (the recreate-deploy carve-out). A different `host_id` waits out the liveness window (`LEASE_LIVENESS_WINDOW_MS = 240_000`, `server/worktree-write-lease.ts`), then takes over and bumps the generation. Graceful shutdown tombstones the lease, so the next acquire need not wait.
+- Lease semantics: migration 116 (`116_worktree_write_lease.sql`, the `on conflict ... do update ... where wl.host_id = excluded.host_id or wl.heartbeat_at < now() - interval ...` clause) keeps `lease_generation` when the same `host_id` re-acquires, even a LIVE lease (the recreate-deploy carve-out). A different `host_id` is refused until the liveness window passes, then takes over and bumps the generation. 116 shipped a 120 s window; migration 133 (`133_heartbeat_threshold_backoff.sql`) raised it to the live 240 s, in lockstep with `LEASE_LIVENESS_WINDOW_MS = 240_000` (`server/worktree-write-lease.ts`). Graceful shutdown tombstones the lease, so the next acquire need not wait.
 - Test fixtures: `test/session-router.test.ts` uses abstract ids `host-1`/`host-2`, so it never pinned which key shape production uses. `infra/lb-weight-gate.test.sh` uses `{"web-1":"10.0.1.10","web-2":"10.0.1.11"}`. Gate and runtime tests each passed against a different shape, which is how the split shipped green.
 
 ### Defect 2: where the false self-stop comes from
@@ -107,12 +133,12 @@ Full rows live in `knowledge-base/project/specs/feat-one-shot-12910-host-roster-
 - **T2:** single PR. With T1, the worst case is today's behaviour.
 - **T3 (stickiness):** retry the metadata read 3 times. If the running prod container already carries a non-empty `SOLEUR_HOST_KEY` and the new result differs or is empty, abort the deploy before the canary. No on-host state file: the running container is the last-good record. On first rollout (no running key) it falls back and does not abort.
 - **T4:** no `SOLEUR_HOST_KEY_OVERRIDE`. The inverse is the exact census of `server.tf`'s name expression: `soleur-web-platform` maps to `web-1`, `soleur-web-1` gives rc 1, and anything else must be `soleur-<key>` with a key that matches the regex.
-- **R2 + T5 (gate):** keep the existing A.3 checks and add three: every roster key is a committed `var.web_hosts` key; every roster key's address equals that key's committed `private_ip`; every `SOLEUR_SERVING_ROTATION` member is a roster key. The simplicity cut was considered and rejected: `has($HOST)` alone passes a wrong address, and a pooled host with no roster entry is the incident. These checks retire when #12919 generates the roster.
+- **R2 + T5 (gate):** keep the existing A.3 checks and add three checks, which surface as four fail codes (the three plus `A_web_hosts_absent` for a missing input): every roster key is a committed `var.web_hosts` key; every roster key's address equals that key's committed `private_ip`; every `SOLEUR_SERVING_ROTATION` member is a roster key. The simplicity cut was considered and rejected: `has($HOST)` alone passes a wrong address, and a pooled host with no roster entry is the incident. These checks retire when #12919 generates the roster.
 - **T6:** pin the absence of `create_before_destroy` on `hcloud_server.web`, because generation carry across a replace is safe only while the old host is destroyed first.
 - **T7 (vocabulary):** one exported pure `describeHostIdentity()` returning `{ id, source }`, where `source` is one of `web-host-key`, `key-absent`, `key-malformed`, `key-unverified`, `dev-sentinel`. At boot, one `host_identity source=<enum>` line and one `reportSilentFallback` when in production with a non-empty private IP and a source other than `web-host-key`. No `keyState`, no `ownerHostIdShape`, no separate boot module.
 - **R3 → T8 (defect 2):** do not delete the emit; narrow it. It fires only when the **post-heal re-probe** finds a `file-pointer` whose gitdir escapes the workspace. Host `rev-parse` cannot see that strand, so this emit is its only host-side record. An absent `.git`, the false-stop case, stays silent. Keep the `host-pre-heal` source value.
 - **R4:** no Doppler prd write. Re-run the read-only check before merge.
-- **T9 (delivery):** after merge, once `apply-deploy-pipeline-fix.yml` succeeds, the agent runs `gh workflow run web-platform-release.yml` on the merge SHA and verifies the on-host `DEPLOY_SCRIPT_SHA` and the `host_key resolved=` line on both hosts. This is not in the owner-gated set (serve/drain dispatch, Doppler write, host replace): it redeploys an already-merged image, as every merge does. Rollback is a revert PR plus the same redeploy.
+- **T9 (delivery):** after merge, once `apply-deploy-pipeline-fix.yml` succeeds, a release redeploy runs on main, and the agent verifies the on-host `DEPLOY_SCRIPT_SHA` and the `host_key resolved=` line on both hosts. Rollback is a revert PR plus the same redeploy. **Deepen-plan correction:** the redeploy is a deploy, a destructive shared-prod write under `hr-menu-option-ack-not-prod-write-auth`. The agent shows the exact command and runs it only on the owner's per-command go-ahead, or under a Standing Delegation that `delegation-verify.sh` reports valid. The CTO's "outside the owner-gated set" reading of the brief does not override that rule. See the operator row in `decision-challenges.md`.
 - **T10:** pin "the canary's id differs from prod's". The canary gets `-e SOLEUR_HOST_KEY=` (empty), so it always resolves to the instance id.
 - **T11:** Guard 2 is one round-trip loop with a floor, the regex-parity line, the `soleur-web-1` row and the T6 assertion. No meta harness rows.
 - **Dissent recorded (R1):** (b1), reverse-looking-up the host's own private IP in the roster, was the alternative design. T1 adopts its check as a verifier on top of (b2) rather than as the source of the id.
@@ -127,17 +153,18 @@ Re-run the read-only roster check from Phase 5 and record the boolean output in 
 
 ### Phase 1 — One verified placement-id resolver
 
-- New leaf `server/host-roster.ts`: move the pure `loadHostRoster()` parse out of `server/session-router.ts` unchanged. It reads `SOLEUR_HOST_ROSTER` at call time and has no `server/` imports. `session-router.ts` re-exports it, so existing importers do not change.
+- New leaf `server/host-roster.ts`: move the pure `loadHostRoster()` parse out of `server/session-router.ts`, adding one optional parameter, `loadHostRoster(env: NodeJS.ProcessEnv = process.env)`, so `describeHostIdentity(env)` can test it hermetically. It reads `SOLEUR_HOST_ROSTER` at call time, never throws, and has no imports. It uses neither of `session-router.ts`'s current imports (`./observability`, `./worktree-write-lease`). `session-router.ts` re-exports it. Its only importers today are `resolveHostAddress` in the same file and `test/session-router.test.ts`.
 - `server/host-identity.ts`:
   - Add `export const HOST_KEY_RE = /^[a-z][a-z0-9-]{0,30}$/`.
   - Add a pure `export function describeHostIdentity(env = process.env): { id: string; source: "web-host-key" | "key-absent" | "key-malformed" | "key-unverified" | "dev-sentinel" }`. Rules, in order:
     1. A trimmed `SOLEUR_HOST_KEY` that is empty gives `key-absent`.
     2. One that fails `HOST_KEY_RE` gives `key-malformed`.
-    3. One where `loadHostRoster(env)[key] !== readHostPrivateIp(env.SOLEUR_HOST_PRIVATE_IP)`, or where that IP is empty, gives `key-unverified`.
+    3. Check the IP FIRST and explicitly. `readHostPrivateIp(env.SOLEUR_HOST_PRIVATE_IP)` returns `null` for unset, blank or `0.0.0.0`, and a null IP gives `key-unverified`. Otherwise, `loadHostRoster(env)[key] !== ip` (including a missing key, which is `undefined`) gives `key-unverified`.
     4. Otherwise, `{ id: key, source: "web-host-key" }`.
     5. Every non-`web-host-key` source returns `id = trimmed SOLEUR_HOST_ID`. When that is also empty, production throws the existing error unchanged, and non-production returns `{ id: "dev-local", source: "dev-sentinel" }`.
   - `resolveHostId()` returns `describeHostIdentity().id`. Its signature is unchanged, so the three consumers (`agent-runner.ts` acquire, `cc-dispatcher.ts` acquire, `ws-handler.ts` `myHostId`) need no edit.
-  - Imports are only `./host-roster` and `./host-private-ip`, both env-only leaves, so there is no cycle and no Sentry inside the leaf. (Verify with `git grep -n "^import" apps/web-platform/server/host-private-ip.ts`.)
+  - Imports are only `./host-roster` and `./host-private-ip`, both env-only leaves, so there is no cycle and no Sentry inside the leaf. Verified 2026-11-18: neither `host-private-ip.ts` nor `host-identity.ts` has any `import` line today, and `host-private-ip.ts`'s header says it "imports NOTHING from server/".
+  - Sweep every sentence that still equates the roster key with `SOLEUR_HOST_ID`: comments in `session-router.ts`, `host-private-ip.ts`, `lb-weight-gate.sh` and the ADRs (`git grep -n "= SOLEUR_HOST_ID" apps/web-platform knowledge-base/engineering`).
   - `assertHostIdNotUserId` is unchanged.
   - Rewrite the header comment:
     - The lease's `host_id` is the `var.web_hosts` key, verified against the host's own private IP. It is stable across recreate-deploys and host replaces.
@@ -153,7 +180,7 @@ Re-run the read-only roster check from Phase 5 and record the boolean output in 
     - `Web_1`, a 33-character string or a UUID gives `key-malformed`;
     - a missing key gives `key-absent`;
     - a key whose roster address differs from `SOLEUR_HOST_PRIVATE_IP` gives `key-unverified` (the T1 collision case: `web-1` claimed on `10.0.1.11`);
-    - an empty private IP (the canary) gives `key-unverified` and the instance id (T10);
+    - an empty or `0.0.0.0` private IP (the canary) gives `key-unverified` and the instance id (T10);
     - production with nothing set throws; dev with nothing set gives `dev-local`.
   - One named test pins that `HOST_KEY_RE` MATCHES `hetzner-176328334`, so the regex alone never rejects an instance-id-keyed roster.
   - `test/session-router.test.ts`: add a production-shaped case with roster `{"web-1":"10.0.1.10","web-2":"10.0.1.11"}`. A holder `web-2` seen from `myHostId: "web-1"` proxies to `10.0.1.11`. A holder `hetzner-176328334` gives `owner-unresolved`. Keep the abstract `host-1`/`host-2` cases.
@@ -161,27 +188,33 @@ Re-run the read-only roster check from Phase 5 and record the boolean output in 
 ### Phase 2 — Inject the key at deploy (`infra/ci-deploy.sh`)
 
 - Add `resolve_host_key()` next to `resolve_host_id`. Do not touch `resolve_host_id` or its two drift-guarded copies.
-  - `curl -sf --max-time 3 "${SOLEUR_HOST_KEY_METADATA_URL:-http://169.254.169.254/hetzner/v1/metadata/hostname}"`, tried up to 3 times with a 1 s pause, with whitespace stripped. The endpoint is Hetzner's server metadata service. No repo script reads `hostname` today (only `instance-id` and `private-networks`), so the implementer confirms the path against Hetzner's server-metadata docs before writing the line.
+  - `curl -sf --max-time 3 "${SOLEUR_HOST_KEY_METADATA_URL:-http://169.254.169.254/hetzner/v1/metadata/hostname}"`, tried up to 3 times with a 1 s pause, with whitespace stripped.
+    - The endpoint is documented. The Hetzner Cloud API Server Metadata section lists `hostname` (text, "Name of the Server as set in the api"), alongside `instance-id`, `public-ipv4`, `private-networks`, `availability-zone` and `region`. hcloud-go's metadata client does a plain GET of `/hostname` on the same base URL.
+    - cloud-init's `DataSourceHetzner.py` only consumes the value (`self.metadata["local-hostname"] = md["hostname"]`), so the endpoint reflects the Terraform `name`, not `/etc/hostname`.
+    - Whether a rename WITHOUT a rebuild changes the value is not documented. T3 is the safeguard if it ever happens.
   - The exact inverse of `server.tf`'s `name` expression:
     - `soleur-web-platform` maps to `web-1`;
     - `soleur-web-1` gives rc 1, because the census never names web-1 that way;
     - any other `soleur-<k>` gives `<k>`;
     - anything else gives rc 1.
   - The result must match `^[a-z][a-z0-9-]{0,30}$`, or the function returns 1.
-- T3 stickiness, right after the resolve:
-  - Read the running prod container's `SOLEUR_HOST_KEY` through `docker inspect`, env only, with the value kept in a local.
-  - If it is non-empty and the new key is empty or different, emit the abort line and `exit 1` before the canary step. The serving container is left untouched.
+- `HOST_KEY="$(resolve_host_key || true)"; readonly HOST_KEY`, set at top level after `HOST_ID`, so tests can source the function.
+- T3 stickiness and `log_host_key` go INSIDE the `case "$COMPONENT"` `web-platform)` branch, before the canary `docker run`. They do not go at top level: an `exit 1` there would also abort `inngest` deploys, and every test sourcing the script would run `docker inspect`.
+  - Read the running prod container's env with the existing precedent shape: `docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' soleur-web-platform` (as used for the canary container). The prod container name is the literal `soleur-web-platform`; there is no variable for it.
+  - Old prod is still live at this point: the canary runs while it serves, and prod is stopped only later in the swap.
+  - Take the LAST `SOLEUR_HOST_KEY=` entry. Docker keeps both the `--env-file` and the `-e` entries in `Config.Env`, and the `-e` one wins at runtime. Also assert the Doppler env snapshot carries no `SOLEUR_HOST_KEY`.
+  - If the running key is non-empty and the new key is empty or different, emit the abort line and `exit 1` before the canary. The serving container is left untouched.
   - If there is no running key (first rollout, fresh or replaced host), continue with whatever resolved, empty included.
-- `HOST_KEY="$(resolve_host_key || true)"; readonly HOST_KEY`, set after `HOST_ID`.
 - Prod `docker run`: add `-e SOLEUR_HOST_KEY="$HOST_KEY"` next to `-e SOLEUR_HOST_ID`. Canary `docker run`: add `-e SOLEUR_HOST_KEY=` (empty, T10).
 - One `log_host_key` helper with a single `logger` call emits exactly one closed-grammar line per deploy:
   - `host_key resolved=<key>`;
   - `host_key resolved=fallback`;
   - `host_key resolved=abort reason=key_change`.
   It never prints the raw hostname.
-- `infra/lib/docker-run-tuple.py`: `SOLEUR_HOST_KEY` needs a per-surface value (prod `{"$HOST_KEY"}`, canary empty), so it goes into the per-surface env sets, not `_COMMON_ENV`. The first-boot tuple is unchanged (see Non-Goals).
+- `infra/lib/docker-run-tuple.py`: `SOLEUR_HOST_KEY` needs a per-surface value, so add it to the `IDENTITY_PROD_ENV` (`{"$HOST_KEY"}`) / `IDENTITY_CANARY_ENV` (empty) pair, not `_COMMON_ENV`. The first-boot tuple (`IDENTITY_FIRST_BOOT_ENV`) is unchanged (see Non-Goals). This file is a test-time checker and is not delivered to hosts.
 - Tests:
-  - `infra/docker-run-tuple.test.sh`: kill rows mirroring K24c/K27c (prod missing `-e SOLEUR_HOST_KEY` gives `MISSING_DECLARED`), plus a canary row asserting the empty value. Bump any row-count floor the file keeps.
+  - `infra/docker-run-tuple.test.sh`: kill rows mirroring K24c/K27c (prod missing `-e SOLEUR_HOST_KEY` gives `MISSING_DECLARED`), plus a canary `m_repl` row in the K32e shape (empty value replaced by `web-2` goes RED). `MIN_ROWS=359` is pinned exactly and the named row-id list must gain the new ids.
+  - The mock docker in `ci-deploy.test.sh` must model the env-file entry too, so the last-entry read is actually exercised.
   - `infra/ci-deploy.test.sh`: unit-test `resolve_host_key` with a `file://` fixture URL under `mktemp -d` in `/var/tmp`.
     - `soleur-web-platform` gives `web-1`, and `soleur-web-2` gives `web-2`.
     - `soleur-web-1`, `inngest-host`, an empty file, `soleur-Web_2` and a dead URL each give rc 1.
@@ -191,7 +224,8 @@ Re-run the read-only roster check from Phase 5 and record the boolean output in 
 
 - New injected input `SOLEUR_WEB_HOSTS`, a JSON object mapping each `var.web_hosts` key to its `private_ip`.
   - `infra/lb-weight-gate-with-marker.sh` derives it from its own `$SELF_DIR/variables.tf`, from the `default = { ... }` block of `variable "web_hosts"`, using the one-host-per-line shape `web-hosts-generic.test.sh` already parses.
-  - It sets the value unconditionally, overriding any caller value (the `MARKER_HOST` seam pattern).
+  - It sets the value unconditionally, overriding any caller value: unset the caller's value as the `# seam:unset-caller-host` line does for the marker inputs, then set the derived value.
+  - The key-to-IP parse is new code: `web-hosts-generic.test.sh` today only counts `web-N` keys. Pin it in `lb-weight-gate-with-marker.test.sh` against the real committed `variables.tf`: same key set as the existing counter, and each IP equal to the `private_ip` in that key's line. An unparseable block is its own counted outcome (`A_web_hosts_absent`), never an empty-pass.
   - Add the name to `GATE_ENV_ALLOW`. The wrapper's test re-derives that list from the gate's expansions.
   - The gate stays pure.
 - New fail codes, evaluated after `A_web2_not_in_roster`. Each prints only the code.
@@ -207,12 +241,13 @@ Re-run the read-only roster check from Phase 5 and record the boolean output in 
 ### Phase 4 — Narrow the pre-heal self-stop (`server/cc-dispatcher.ts`)
 
 - Remove the `#5733 Phase 1b` emit from its pre-heal position.
-- After the self-heal block, re-probe once (`probeGitWorktreeShape(workspacePath)`). Emit `reportAgentReadinessSelfStop` only when `repoUrl` is set and the re-probed shape is `file-pointer` with `gitdirEscapesWorkspace === true`.
+- After the self-heal block (after `ensureWorkspaceRepoCloned`) and before the post-heal `evaluateAgentReadiness` confirm, re-probe once (`probeGitWorktreeShape(workspacePath)`; `workspacePath` is the factory's unchanged const). Emit `reportAgentReadinessSelfStop` only when `mode.runRepoLifecycle && confirmDbReady && repoUrl` holds and the re-probed shape is `file-pointer` with `gitdirEscapesWorkspace === true`. Gate on `confirmDbReady`, the post-heal readiness, not the pre-heal `repoReadiness.ok`.
   - Host `rev-parse` cannot see that strand, and the post-heal gate calls it ready.
   - An absent `.git` (the false-stop case) and a corrupt dir are left to the post-heal gate, which already emits with `gitRevParseValid` and throws `RepoNotReadyError`.
-  - Keep the `host-pre-heal` source value. The dedupe fingerprint now carries `gitKind=file-pointer`, so it no longer collides with the post-heal absent emit.
+  - Keep the `host-pre-heal` source value. It is now a legacy name, since the emit runs post-heal. Say so in the comment, because renaming would break existing Sentry queries (R3). The dedupe fingerprint now carries `gitKind=file-pointer`, so it no longer collides with the post-heal absent emit.
+  - Sweep every sentence about the old pre-heal scope: ADR-044, the AC5 comments in `test/agent-readiness-absent-git.test.ts`, and any runbook (`git grep -n "Phase 1b\|pre-heal" apps/web-platform knowledge-base/engineering`).
 - Rewrite the block comment to say this.
-- Update the "3 emit sites" comment in `test/server/agent-ready-git-worktree.test.ts` to match `git grep -c 'reportAgentReadinessSelfStop(' apps/web-platform/server` after the edit.
+- Re-check the "3 ... emit sites" comment in `test/server/agent-ready-git-worktree.test.ts`. It counts `{ gitValid }` emit sites, and narrowing moves an emit rather than removing it, so it should need no change. Confirm by reading, not by `git grep -c`, which also counts comments.
 - Tests, in the `cc-dispatcher-real-factory` harness or a new sibling `test/cc-dispatcher-cold-heal-no-self-stop.test.ts` if that harness is too heavy for a single-file run:
   - (a) A connected, DB-ready workspace with an absent `.git` and a successful heal emits zero `agent_readiness_self_stop` events and reaches the SDK query.
   - (b) In the same module instance after (a), a post-heal absent strand (the heal returns ok but `.git` stays absent) emits exactly once with `gitRevParseValid: false`. This is the dedupe-masking regression.
@@ -237,14 +272,14 @@ Amend ADR-068 (via `soleur:architecture`) with an addendum, "2026-11-18 (#12910)
 - T1 self-verification, and that "same host" in migration 116 now means "same `var.web_hosts` slot";
 - the generation carry across a replace, and its `create_before_destroy` precondition;
 - an ADR-143 D5 precondition: stop the app before detach, so its leases are tombstoned;
-- the transition cost: on first rollout and on any revert, a worktree whose live lease was taken under the other id waits out the 240 s liveness window, then a generation-bumped takeover follows;
+- the transition cost: on first rollout and on any revert, a worktree whose live lease was taken under the other id has its lease acquire refused for up to 240 s, then a generation-bumped takeover follows;
 - a link to `decision-challenges.md` for the rejected options. Do not restate them.
 
 No new ADR is needed.
 
 ### Phase 7 — Post-merge delivery and proof
 
-1. **Deliver (agent-run, T9).** Wait for the merge's `apply-deploy-pipeline-fix.yml` run to succeed, then run `gh workflow run web-platform-release.yml --ref main` on the merge SHA. Arm a watch on that run (`hr-dispatch-async-must-arm-watch`).
+1. **Deliver (T9, deploy-gated).** Wait for the merge's `apply-deploy-pipeline-fix.yml` run to succeed. Show the exact command, `gh workflow run web-platform-release.yml --ref main -f bump_type=patch` (`bump_type` is a required input with no default), and run it only on the owner's per-command go-ahead or under a Standing Delegation that `delegation-verify.sh` reports valid (`hr-menu-option-ack-not-prod-write-auth`). Arm a watch on that run (`hr-dispatch-async-must-arm-watch`). Note that a dispatch publishes a patch release.
 2. **Verify delivery (agent-run, Better Stack via `scripts/betterstack-query.sh`).**
    - On each host, `DEPLOY_SCRIPT_SHA` equals `sha256sum apps/web-platform/infra/ci-deploy.sh` at the merge SHA.
    - The deploys log `host_key resolved=web-1` and `host_key resolved=web-2`.
@@ -336,7 +371,7 @@ The merge triggers two unordered workflows:
 
 Phase 7 step 1 then sequences one release redeploy after the apply.
 
-**Does merging this alone mutate production?** Yes. The first release deploy that runs under the new script changes each prod container's placement id from `hetzner-<id>` to `web-<n>`. The authorization is the merge plus the agent-run redeploy (T9), not an owner dispatch. The blast radius: a worktree whose live lease was taken under the old id waits out the 240 s liveness window once. There are no external users today.
+**Does merging this alone mutate production?** Yes. The first release deploy that runs under the new script changes each prod container's placement id from `hetzner-<id>` to `web-<n>`. The authorization is the merge, plus the owner's go-ahead (or a valid Standing Delegation) for the T9 redeploy. The blast radius: a worktree whose live lease was taken under the old id has its lease acquire refused for up to 240 s (the liveness window), once. There are no external users today.
 
 ### Host fan-out
 
@@ -410,7 +445,7 @@ discoverability_test:
 
 A must-PASS input that is not the canonical fixture: a roster carrying `web-1`, `web-2` and `web-3` with matching addresses, `SOLEUR_WEB_HOSTS` naming all three, and `SOLEUR_GATED_HOST=web-3`.
 
-Anchor: `SOLEUR_WEB_HOSTS` comes from the committed `variables.tf`, so weakening it means editing `var.web_hosts`, which plans Terraform changes on the per-merge apply. The roster comes from Doppler, outside the commit.
+Anchor: `SOLEUR_WEB_HOSTS` comes from the committed `variables.tf`, so weakening it means editing `var.web_hosts`, which plans Terraform changes on the per-merge apply. The roster comes from Doppler, outside the commit. The serve job (`cf-lb-overlay.yml` `ga_pool_update`) checks out the dispatched ref with no `ref:` pin. It is main-only through `environment: web-platform-infra-apply`, whose deployment policy is `branch_pattern = "main"` (`web-host-birth-environment.tf`), so the `variables.tf` it reads is main's.
 
 ### Guard 2 — placement-id parity (`web-hosts-generic.test.sh` section C8)
 
@@ -432,7 +467,7 @@ Anchor: `SOLEUR_WEB_HOSTS` comes from the committed `variables.tf`, so weakening
 | 3 | Add `"web-3"` to `var.web_hosts` after the compliant web-1 and web-2 | PASS if web-3 round-trips; RED on web-3 if `resolve_host_key`'s `case` handles only `web-2` by name |
 | 4 | Change `HOST_KEY_RE` so it differs from the gate's regex | RED |
 | 5 | Delete the `soleur-web-platform` arm, or let `soleur-web-1` map to `web-1` | RED |
-| 6 | Add `create_before_destroy = true` to `hcloud_server.web`'s lifecycle | RED |
+| 6 | Add `create_before_destroy = true` to `hcloud_server.web`'s lifecycle | RED (the assertion is scoped to that resource's `lifecycle` block, not a whole-file grep: `server.tf` mentions `create_before_destroy` in a comment on another resource) |
 
 ## Architecture Decision (ADR/C4)
 
@@ -496,7 +531,7 @@ Lands in this PR.
 
 - **If this lands broken, the user experiences:** in `/dashboard/chat` on app.soleur.ai, a chat connection that lands on the host not holding their lease is closed (`ROUTING_UNAVAILABLE`, a reconnect loop) while web-2 serves. In the worst case, two hosts claim the same placement id and both write to the user's workspace under the same lease generation, losing commits in their repository. T1's self-verification exists to make that case unreachable.
 - **Even when it lands correctly, the transition deploy can:** block a user's chat for up to 240 s if their lease was live under the old id when the container swapped. The lease acquire throws `ERR_WORKTREE_LEASE_UNAVAILABLE`, not a wait. This happens once on rollout and once more on any revert.
-- **If this leaks, the user's workflow is exposed via:** a mis-resolved roster entry relaying their authenticated session to the wrong peer. Owner-side AP-2 membership re-verification and the HMAC-signed hello (ADR-323) still bound it. No secret or user id is added to any log line: the new lines carry enum words and `web-<n>` keys only.
+- **If this leaks, the user's workflow is exposed via:** a mis-resolved roster entry relaying their authenticated session to the wrong peer. Owner-side AP-2 membership re-verification and the HMAC-signed hello (ADR-323) still bound it. No secret or user id is added to any log line: the new lines carry enum words and `web-<n>` keys only. Pino's default `hostname` field and Sentry's `server_name` are the container id; they are unrelated, and the plan does not change them.
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** the change moves the write-lease identity that fences writes to one user's repository. A collision is a silent data-loss event for that user, which is above `aggregate pattern`.
 
@@ -518,7 +553,7 @@ CPO sign-off was given on 2026-11-18, with conditions (see Domain Review). `sole
 - [ ] AC10: `bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh --branch` passes.
 - [ ] AC11: the ADR-068 addendum exists, names #12910, and states the 240 s transition cost and the `create_before_destroy` precondition.
 
-### Post-merge (the agent runs the reads and the T9 redeploy; the owner authorizes the serve dispatch)
+### Post-merge (the agent runs the reads; the T9 redeploy needs the owner's go-ahead or a valid Standing Delegation; the owner authorizes the serve dispatch)
 
 - [ ] AC12: after the pipeline-fix apply and the T9 redeploy, Better Stack shows each host's `DEPLOY_SCRIPT_SHA` equal to the merged `ci-deploy.sh` sha256, `host_key resolved=web-1` from web-1, `host_key resolved=web-2` from web-2, and `host_identity source=web-host-key` from each boot.
 - [ ] AC12b (CPO condition): web-2 stays at weight 0, and the serve dispatch is not requested, until AC12 holds on BOTH hosts with no `fallback`.
@@ -589,14 +624,15 @@ Run each file alone. The full suite is not run on this saturated machine.
 
 1. Return web-2 to weight 0 first, if it is serving. That is the owner's drain dispatch.
 2. Open a revert PR (`gh pr create --fill` on a revert branch) and merge it with the same `with_lock merge-main` command.
-3. After the revert's pipeline-fix apply succeeds, run the same T9 redeploy and verify `DEPLOY_SCRIPT_SHA` again.
+3. After the revert's pipeline-fix apply succeeds, run the same T9 redeploy, under the same deploy go-ahead rule, and verify `DEPLOY_SCRIPT_SHA` again.
 
-Placement ids return to `hetzner-<id>`. Live leases taken under `web-<n>` then wait out the 240 s window once. Do not roll back the image alone: an old image under the new script ignores `SOLEUR_HOST_KEY`, which is harmless, but the T3 abort would then compare against containers carrying no key and never fire. Reverting both together keeps the record consistent.
+Placement ids return to `hetzner-<id>`. Live leases taken under `web-<n>` then refuse acquires for up to 240 s, once. Do not roll back the image alone: an old image under the new script ignores `SOLEUR_HOST_KEY`, which is harmless, but the T3 abort would then compare against containers carrying no key and never fire. Reverting both together keeps the record consistent.
 
 ## Risks
 
 - **Metadata `hostname` on web-1 is unverified.** web-1 is a pre-existing host, and the endpoint has no reader in the repo yet. Falsifier: AC12's `host_key resolved=web-1`. If it says `fallback`, web-1 keeps a unique `hetzner-*` id (T1), lease exclusivity holds, and Phase 7 stops before any serve, pending a new CTO ruling.
 - **Generation carry across a replace.** A replaced host re-acquires its predecessor's leases without a generation bump. That is safe only while `hcloud_server.web` has no `create_before_destroy` (Guard 2 row 6) and the app is stopped before detach (ADR-143 D5 precondition, recorded in the addendum).
+- **Same-key heartbeat and push.** `touch_worktree_lease` matches only `host_id` + `lease_generation`, with no recency predicate, and the git-data fence rejects only `gen < max`, so it accepts an equal generation. Two live processes on the same key would both heartbeat and push as one owner. What prevents that: the single-replica prod swap (stop, rm, assert one replica, run), T10 (the canary resolves to a distinct id), T6 (no `create_before_destroy`, so a replacement never overlaps its predecessor) and T1 (two hosts cannot share a private IP). State this in the ADR-068 addendum.
 - **Transition deploy.** A lease live under the old id blocks its user for up to 240 s. Until it expires, a peer reports `owner-unresolved` for that holder.
 - **T3 abort blocks a release.** If metadata stays down on a keyed host, every deploy to it aborts until metadata recovers. This is deliberate: a correctly keyed container keeps serving, rather than the deploy re-creating the incident.
 
