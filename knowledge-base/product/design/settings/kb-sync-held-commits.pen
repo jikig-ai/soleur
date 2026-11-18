@@ -4062,6 +4062,331 @@
           "fontWeight": "normal"
         }
       ]
+    },
+    {
+      "type": "frame",
+      "id": "pDkfJ",
+      "x": 2120,
+      "y": 2400,
+      "name": "Owner — Disconnect dialog, held, publish route (V8)",
+      "width": 560,
+      "fill": "$--bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "ludF8",
+          "name": "title",
+          "fill": "$--text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Disconnect dialog · Owner · held files (route available)",
+          "fontFamily": "$--font-primary",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "MFcpO",
+          "name": "subtitle",
+          "fill": "$--text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "kb_sync_held_files = 3, publish route available. The Owner opened Disconnect: a neutral caution paragraph sits ABOVE the dialog's own paragraph, which stays unchanged. Disconnect is not blocked.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "UaEfN",
+          "name": "state label",
+          "fill": "$--accent-gold-fill",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "OWNER · HELD · n > 1 · ROUTE AVAILABLE · DISCONNECT DIALOG OPEN",
+          "fontFamily": "$--font-primary",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 0.5
+        },
+        {
+          "type": "frame",
+          "id": "upd81",
+          "name": "Project section",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "OQEd9",
+              "name": "h2",
+              "fill": "$--text-primary",
+              "content": "Project",
+              "fontFamily": "$--font-primary",
+              "fontSize": 18,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "hO3Gn",
+              "name": "ProjectSetupCard",
+              "width": "fill_container",
+              "fill": "$--bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$--border-default",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "TKCp2",
+                  "name": "summary",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "u7T3gs",
+                      "name": "name row",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "FlwWl",
+                          "name": "repo name",
+                          "fill": "$--text-primary",
+                          "content": "acme-co/web-platform",
+                          "fontFamily": "$--font-primary",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "ldlbB",
+                          "name": "Connected chip",
+                          "fill": "$--green-chip-bg",
+                          "cornerRadius": 999,
+                          "padding": [
+                            2,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "AYovL",
+                              "name": "chip label",
+                              "fill": "$--green-chip-fg",
+                              "content": "Connected",
+                              "fontFamily": "$--font-primary",
+                              "fontSize": 12,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "s5flI",
+                      "name": "date line",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Updated from GitHub: 11/16/2026",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "D1oy4Z",
+                  "name": "held notice (role=status)",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-2",
+                  "cornerRadius": 8,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "padding": [
+                    10,
+                    12
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "y3ldv",
+                      "name": "held notice text",
+                      "fill": "$--text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "3 changed code files are not on your repository's main branch yet. The changes are kept in your workspace. To publish them, ask your agent to push them to a new branch and approve the push, then open a pull request for that branch on GitHub and merge it. If you already did, this notice should clear the next time your workspace is updated from GitHub. If it does not, ask your agent which files are still counted.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "PQF10",
+                  "name": "DisconnectRepoDialog (open)",
+                  "width": "fill_container",
+                  "fill": "$--bg-surface-1",
+                  "cornerRadius": 12,
+                  "stroke": "$--border-default",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "CmQsb",
+                      "name": "dialog title",
+                      "fill": "$--text-primary",
+                      "content": "Disconnect repository",
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "VbFFa",
+                      "name": "held warning (role=note)",
+                      "width": "fill_container",
+                      "fill": "$--bg-surface-2",
+                      "cornerRadius": 8,
+                      "stroke": "$--border-default",
+                      "strokeWidth": 1,
+                      "strokeAlignment": "inner",
+                      "layout": "vertical",
+                      "padding": [
+                        12,
+                        16
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "ymyUM",
+                          "name": "held warning text",
+                          "fill": "$--text-primary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "3 changed code files are not on your repository's main branch yet, and disconnecting deletes them with your workspace files. If they are not on a branch on GitHub yet, cancel and ask your agent to push them to a new branch, then approve the push.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "oIRpZ",
+                      "name": "dialog paragraph (unchanged)",
+                      "fill": "$--text-secondary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "This will unlink acme-co/web-platform from your account. Your workspace files will be removed. You can reconnect a repository at any time.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "h1lAxm",
+                      "name": "actions",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "d4UsGc",
+                          "name": "Confirm Disconnect button",
+                          "fill": "$--bg-surface-2",
+                          "cornerRadius": 8,
+                          "stroke": "$--border-default",
+                          "strokeWidth": 1,
+                          "strokeAlignment": "inner",
+                          "padding": [
+                            8,
+                            16
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "VKLAu",
+                              "name": "label",
+                              "fill": "$--text-primary",
+                              "content": "Confirm Disconnect",
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "YFAAd",
+                          "name": "Cancel button",
+                          "fill": "$--bg-surface-2",
+                          "cornerRadius": 8,
+                          "stroke": "$--border-default",
+                          "strokeWidth": 1,
+                          "strokeAlignment": "inner",
+                          "padding": [
+                            8,
+                            16
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "PxjN8",
+                              "name": "label",
+                              "fill": "$--text-secondary",
+                              "content": "Cancel",
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "vHg8t",
+          "name": "note",
+          "fill": "$--text-tertiary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "V8 (CPO): the warning is a caution, not a red error (nothing failed): same neutral surface as the held notice. Route unavailable or unknown, or role unknown: the warning drops its last sentence (no instruction). Count not renderable (null, 0, out of range, select failed): no warning, and the paragraph gains \"including any code changes your agent made that are not on your repository's main branch yet\". Confirm Disconnect, Cancel and the error strings are unchanged.",
+          "lineHeight": 1.5,
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
     }
   ],
   "variables": {
