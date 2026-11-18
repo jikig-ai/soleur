@@ -201,6 +201,7 @@ import {
 import {
   egressForwarderWorkspaceId,
   isEgressForwarderLive,
+  isEgressRevoked,
   spawnEgressForwarder,
   teardownEgressForwarder,
 } from "./egress-forwarder";
@@ -3595,6 +3596,8 @@ export const realSdkQueryFactory: QueryFactory = async (
             : undefined,
           // Observability only (Sentry `granted` tag, deny copy), never a decision input (CTO T13).
           webEgressGranted: webEgressEntitled,
+          // CTO R1 — a toggle-off mid-session reports granted=false (copy and tag), so it neither pages nor says "isn't working".
+          webEgressRevoked: () => isEgressRevoked(args.conversationId),
           deps: ccDeps,
         }),
         // #5772 lever 1 (ADR-070) — opt into the L3 phase-surface hint on the

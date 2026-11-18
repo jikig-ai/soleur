@@ -87,6 +87,20 @@ const egressForwarders: Map<string, RegistryEntry> = ((
   globalThis as unknown as Record<symbol, Map<string, RegistryEntry> | undefined>
 )[REGISTRY_KEY] ??= new Map<string, RegistryEntry>());
 
+/** #12585 (CTO R1/R4) — revocation state, on globalThis for the same two-bundle reason as the registry. `revoked`: the
+ *  conversations a toggle-off tore down (cleared by a later successful spawn for that conversation), read by the
+ *  SandboxNetworkAccess arm for its copy and Sentry tag only. `epoch`: bumped per workspace on every toggle-off, so a
+ *  spawn that was awaiting the gateway probe or the bind when the toggle-off ran cannot register a forwarder afterwards. */
+type Revocation = { revoked: Set<string>; epoch: Map<string, number> };
+const revocation: Revocation = ((globalThis as unknown as Record<symbol, Revocation | undefined>)[
+  Symbol.for("soleur.egressRevocation")
+] ??= { revoked: new Set<string>(), epoch: new Map<string, number>() });
+
+/** #12585 (CTO R1) — did a web-access toggle-off tear down this conversation's forwarder (and no spawn since)? */
+export function isEgressRevoked(conversationId: string): boolean {
+  return revocation.revoked.has(conversationId);
+}
+
 /** Test/QA hook: is a forwarder registered for this conversation? */
 export function hasEgressForwarder(conversationId: string): boolean {
   return egressForwarders.has(conversationId);
@@ -106,10 +120,18 @@ export function isEgressForwarderLive(conversationId: string, token: string): bo
  * off. Returns how many were torn down. The other web host's forwarders are revoked by the next-dispatch re-resolve.
  */
 export function teardownEgressForwardersForWorkspace(workspaceId: string): number {
+  revocation.epoch.set(workspaceId, (revocation.epoch.get(workspaceId) ?? 0) + 1);
   const conversations = [...egressForwarders.entries()]
     .filter(([, entry]) => entry.workspaceId === workspaceId)
     .map(([conversationId]) => conversationId);
-  for (const conversationId of conversations) teardownEgressForwarder(conversationId);
+  for (const conversationId of conversations) {
+    revocation.revoked.add(conversationId);
+    teardownEgressForwarder(conversationId);
+  }
+  log.info(
+    { feature: "egress-forwarder", op: "teardown-revoked", workspaceId, count: conversations.length, cause: "web-egress-off" },
+    "egress-forwarder: web access turned off, forwarders torn down",
+  );
   return conversations.length;
 }
 
@@ -250,6 +272,9 @@ async function spawnEgressForwarderUnscrubbed(
   // A second spawn for the same conversation (supersede / stale-resume edge)
   // must not orphan the first child and its still-valid token file.
   teardownEgressForwarder(conversationId);
+  // CTO R4 — a toggle-off that lands while this spawn awaits the gateway probe or the bind must win: re-checked below.
+  const epochAtStart = revocation.epoch.get(workspaceId) ?? 0;
+  const revokedSinceStart = () => (revocation.epoch.get(workspaceId) ?? 0) !== epochAtStart;
 
   // Dead gateway = fail fast (the caller degrades to zero-egress) instead of
   // logging "forwarder bound" for a session whose every CONNECT dies at the
@@ -297,6 +322,10 @@ async function spawnEgressForwarderUnscrubbed(
     workspaceId,
   };
   egressForwarders.set(conversationId, entry);
+  if (revokedSinceStart()) {
+    teardownEgressForwarder(conversationId); // kills the child and deletes the token file
+    throw new Error("web access was turned off while the egress forwarder was starting");
+  }
 
   // Mid-session forwarder death = live egress silently dead for the
   // entitled session. Mirror to Sentry (the session continues zero-egress —
@@ -395,6 +424,11 @@ async function spawnEgressForwarderUnscrubbed(
     rmSync(join(egressTokenDir(), token), { force: true });
     throw err;
   }
+  if (revokedSinceStart()) {
+    teardownEgressForwarder(conversationId);
+    throw new Error("web access was turned off while the egress forwarder was starting");
+  }
+  revocation.revoked.delete(conversationId);
 
   return { port: entry.port, token, pid: entry.pid };
 }

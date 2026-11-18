@@ -235,6 +235,7 @@ vi.mock("@/server/egress-forwarder", () => ({
   hasEgressForwarder: vi.fn(() => false),
   egressForwarderWorkspaceId: (c: string) => fakeForwarders.get(c)?.workspaceId,
   isEgressForwarderLive: (c: string, t: string) => fakeForwarders.get(c)?.token === t,
+  isEgressRevoked: () => false,
 }));
 
 // feat-bash-autonomous-default-on — first-run consent soft-gate inputs. Default
@@ -3072,14 +3073,14 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
         ) => Promise<{ behavior: string; message?: string }>;
         const opts = { signal: new AbortController().signal, toolUseID: "tu-1", requestId: "req-1" };
         const before = await canUseTool("SandboxNetworkAccess", { host: "example.com" }, opts);
-        expect(before.message).toMatch(/even with web access on/); // live: gateway-unverified
+        expect(before.message).toMatch(/`WebFetch` tool/); // live: gateway-unverified
 
         mockResolveWebEgressStrict.mockResolvedValue(false);
         await reResolveWarmWebEgress("user-1", "conv-1");
         expect(mockResolveWebEgressStrict).toHaveBeenCalledWith("user-1", expect.any(String));
         expect(mockTeardownEgressForwarder).toHaveBeenCalledWith("conv-1");
         const after = await canUseTool("SandboxNetworkAccess", { host: "example.com" }, opts);
-        expect(after.message).toMatch(/web access is on but isn't working/); // egress-not-running, granted
+        expect(after.message).toMatch(/web access isn't working in this session/); // egress-not-running, granted
       });
 
       it("a re-resolve READ FAULT leaves the forwarder live (mirrored, no teardown)", async () => {

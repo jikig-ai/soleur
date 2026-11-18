@@ -542,6 +542,10 @@ describe("buildAllowedTools: unit census", () => {
     test("the entry grammar the sentinel applies rejects a gated platform entry in skill frontmatter and accepts an auto-approve one", () => {
       expect(() => assertAllowedToolsPreApprovalSafe({ allowedTools: ["mcp__soleur_platform__email_send"] })).toThrow(/pre-approv/i);
       expect(() => assertAllowedToolsPreApprovalSafe({ allowedTools: ["mcp__soleur_platform__kb_share_list"] })).not.toThrow();
+      // #12585 (CTO R6) — a SandboxNetworkAccess entry would pre-approve sandboxed hosts ahead of the deny-only arm.
+      for (const entry of ["SandboxNetworkAccess", " sandboxnetworkaccess ", "SandboxNetworkAccess(example.com)"]) {
+        expect(() => assertAllowedToolsPreApprovalSafe({ allowedTools: [entry] })).toThrow(/SandboxNetworkAccess/);
+      }
     });
 
     // An entry can pre-approve a platform tool when it names the platform server or is a wildcard whose prefix covers it.

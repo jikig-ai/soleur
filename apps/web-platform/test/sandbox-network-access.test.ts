@@ -233,9 +233,28 @@ describe("sandboxNetworkDenyMessage (CPO ruling, keyed on reason and granted)", 
     expect(sandboxNetworkDenyMessage("not-entitled", false)).toBe(
       "Network access from sandboxed commands is not available in this session.",
     );
-    expect(sandboxNetworkDenyMessage("not-entitled", true)).toMatch(/web access is on but isn't working/);
+    expect(sandboxNetworkDenyMessage("not-entitled", true)).toMatch(/web access isn't working in this session/);
     expect(sandboxNetworkDenyMessage("egress-not-running", true)).toBe(sandboxNetworkDenyMessage("not-entitled", true));
-    expect(sandboxNetworkDenyMessage("gateway-unverified", true)).toMatch(/web fetch or web search tool/);
+    expect(sandboxNetworkDenyMessage("gateway-unverified", true)).toMatch(/`WebFetch` tool/);
     expect(sandboxNetworkDenyMessage("no-proxy-match", true)).toBe("Commands can't connect to this host from this session.");
+  });
+
+  it("CPO C1/C3: no string names WebSearch or claims web access is currently on; WebFetch only when granted", () => {
+    const reasons = ["not-entitled", "egress-not-running", "malformed-host", "loopback-literal", "no-proxy-match", "gateway-unverified"] as const;
+    for (const r of reasons) {
+      for (const g of [true, false]) {
+        for (const rv of [true, false]) {
+          const m = sandboxNetworkDenyMessage(r, g, rv);
+          expect(m).not.toMatch(/web search|WebSearch|web access is on|with web access on/i);
+          if (!g) expect(m).not.toMatch(/WebFetch/);
+        }
+      }
+    }
+  });
+
+  it("CPO C2: a revoked session says web access was turned off, whatever the reason", () => {
+    const revoked = "Web access was turned off for this workspace, so commands can't reach the internet. Retrying won't help.";
+    expect(sandboxNetworkDenyMessage("egress-not-running", false, true)).toBe(revoked);
+    expect(sandboxNetworkDenyMessage("gateway-unverified", true, true)).toBe(revoked);
   });
 });

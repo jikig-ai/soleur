@@ -139,21 +139,33 @@ export function decideSandboxNetworkAccess(
 }
 
 const NOT_AVAILABLE = "Network access from sandboxed commands is not available in this session.";
+const REVOKED = "Web access was turned off for this workspace, so commands can't reach the internet. Retrying won't help.";
 const DEGRADED =
-  "Commands can't reach the internet: web access is on but isn't working in this session. Retrying won't help; let the user know.";
+  "Commands can't reach the internet: web access isn't working in this session. Retrying won't help; let the user know.";
 const GATEWAY_UNVERIFIED =
-  "Commands can't reach the internet in this session, even with web access on. To read a web page, use your web fetch or web search tool instead. Retrying won't help.";
+  "Commands can't reach the internet in this session. To read a web page, use the `WebFetch` tool instead. Retrying won't help.";
 const HOST_DENIED = "Commands can't connect to this host from this session.";
 
-/** The static, host-free message returned to the model, keyed on (reason, granted) (CPO ruling, 2026-11-18). */
-export function sandboxNetworkDenyMessage(reason: SandboxNetworkReason, granted: boolean): string {
+/**
+ * The static, host-free message returned to the model, keyed on (reason, granted, revoked) (CPO rulings, 2026-11-18).
+ * `revoked` wins: it is the only state the code knows the toggle position for. `granted` is a session-start snapshot, so
+ * no string claims web access is currently on. WebFetch is named only when granted (it is disallowed otherwise).
+ */
+export function sandboxNetworkDenyMessage(reason: SandboxNetworkReason, granted: boolean, revoked = false): string {
+  if (revoked) return REVOKED;
   switch (reason) {
     case "not-entitled":
     case "egress-not-running":
       return granted ? DEGRADED : NOT_AVAILABLE;
     case "gateway-unverified":
-      return GATEWAY_UNVERIFIED;
-    default:
+      return granted ? GATEWAY_UNVERIFIED : NOT_AVAILABLE;
+    case "malformed-host":
+    case "loopback-literal":
+    case "no-proxy-match":
       return HOST_DENIED;
+    default: {
+      const unreachable: never = reason;
+      return unreachable;
+    }
   }
 }

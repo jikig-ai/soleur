@@ -25,7 +25,16 @@ vi.mock("@/server/set-web-egress", () => ({
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn(), captureMessage: vi.fn() }));
 
 import { POST } from "../app/api/workspace/web-egress/route";
-import { isEgressForwarderLive, spawnEgressForwarder, teardownEgressForwarder } from "@/server/egress-forwarder";
+import { readdirSync } from "node:fs";
+import {
+  hasEgressForwarder,
+  isEgressForwarderLive,
+  isEgressRevoked,
+  spawnEgressForwarder,
+  teardownEgressForwarder,
+  teardownEgressForwardersForWorkspace,
+} from "@/server/egress-forwarder";
+import { WebEgressOwnerDeniedError } from "@/server/set-web-egress";
 import { createCanUseTool, type CanUseToolContext } from "@/server/permission-callback";
 import { logPermissionDecision } from "@/server/permission-log";
 
@@ -110,5 +119,51 @@ describe("POST /api/workspace/web-egress value=false (#12585 AC24)", () => {
     mockSetWebEgress.mockResolvedValue(true);
     expect((await post(true)).status).toBe(200);
     expect(isEgressForwarderLive("conv-a", mine.token)).toBe(true);
+  }, 20_000);
+
+  test("CTO R1: the torn-down conversation is marked revoked, so its deny says web access was turned off", async () => {
+    const mine = await spawnEgressForwarder("conv-a", "ws-toggle");
+    const other = await spawnEgressForwarder("conv-b", "ws-other");
+    expect(isEgressRevoked("conv-a")).toBe(false);
+    mockSetWebEgress.mockResolvedValue(false);
+    expect((await post(false)).status).toBe(200);
+    expect(isEgressRevoked("conv-a")).toBe(true);
+    expect(isEgressRevoked("conv-b")).toBe(false);
+    const ctx = { ...ctxFor("conv-a", mine.token), webEgressRevoked: () => isEgressRevoked("conv-a") } as CanUseToolContext;
+    const r = await createCanUseTool(ctx)("SandboxNetworkAccess", { host: "example.com" }, sdkOpts);
+    expect((r as { message: string }).message).toMatch(/^Web access was turned off/);
+    // A later successful spawn for that conversation (web access back on) clears the mark.
+    await spawnEgressForwarder("conv-a", "ws-toggle");
+    expect(isEgressRevoked("conv-a")).toBe(false);
+    expect(isEgressForwarderLive("conv-b", other.token)).toBe(true);
+  }, 20_000);
+
+  test.each([
+    ["403 (non-owner)", () => new WebEgressOwnerDeniedError("denied"), 403],
+    ["500 (infra fault)", () => new Error("rpc down"), 500],
+  ])("a failed write tears nothing down: %s", async (_label, makeErr, status) => {
+    const mine = await spawnEgressForwarder("conv-a", "ws-toggle");
+    mockSetWebEgress.mockRejectedValue(makeErr());
+    expect((await post(false)).status).toBe(status);
+    expect(isEgressForwarderLive("conv-a", mine.token)).toBe(true);
+    expect(isEgressRevoked("conv-a")).toBe(false);
+  }, 20_000);
+
+  test("CTO R4: a toggle-off that lands while a spawn is starting wins; nothing stays registered or minted", async () => {
+    const pending = spawnEgressForwarder("conv-a", "ws-toggle");
+    teardownEgressForwardersForWorkspace("ws-toggle"); // the spawn is awaiting the gateway probe
+    await expect(pending).rejects.toThrow(/turned off while the egress forwarder was starting/);
+    expect(hasEgressForwarder("conv-a")).toBe(false);
+    expect(readdirSync(tokenDir)).toEqual([]);
+  }, 20_000);
+
+  test("K2: the registry is shared by two copies of the module (custom-server bundle vs Next route bundle)", async () => {
+    vi.resetModules();
+    const copy = await import("@/server/egress-forwarder");
+    const mine = await spawnEgressForwarder("conv-a", "ws-toggle");
+    expect(copy.isEgressForwarderLive("conv-a", mine.token)).toBe(true);
+    expect(copy.teardownEgressForwardersForWorkspace("ws-toggle")).toBe(1);
+    expect(isEgressForwarderLive("conv-a", mine.token)).toBe(false);
+    expect(isEgressRevoked("conv-a")).toBe(true);
   }, 20_000);
 });

@@ -59,7 +59,7 @@ import {
   type BashApprovalCache,
   batchGrantablePrefix,
 } from "./permission-callback-bash-batch";
-import { warnSilentFallback } from "./observability";
+import { reportSilentFallback, warnSilentFallback } from "./observability";
 import {
   decideSandboxNetworkAccess,
   SANDBOX_NETWORK_ACCESS_TOOL,
@@ -363,36 +363,47 @@ export interface CanUseToolContext {
   sandboxNetworkEgress?: { isLive: () => boolean };
   /** #12585 — the web-egress GRANT, for the Sentry `granted` tag and the deny copy only; never a decision input (CTO T13). */
   webEgressGranted?: boolean;
+  /** #12585 (CTO R1) — live probe: did a toggle-off revoke this session's grant? Revoked reports granted=false (copy and
+   *  tag only, never the decision), so turning web access off neither pages the degraded alert nor says "isn't working". */
+  webEgressRevoked?: () => boolean;
   deps: CanUseToolDeps;
 }
 
 /**
- * #12585 — every denied SandboxNetworkAccess request logs one pino warn line; the Sentry mirror is deduplicated per
- * Query (closure state of one createCanUseTool instance, CTO T20) on (reason, matchedEntry), so a command retrying one
- * host cannot flood Sentry while Better Stack still counts every occurrence (CTO D3). No field carries the requested
- * host, the tool input or the user (CLO ruling 3): `matchedEntry` is a NO_PROXY list literal.
+ * #12585 — denied SandboxNetworkAccess requests log pino warn lines; the Sentry mirror is deduplicated per Query
+ * (closure state of one createCanUseTool instance, CTO T20) on (reason, matchedEntry). Two row shapes reach Better Stack:
+ * the first per key comes from warnSilentFallback (root logger, `err: null`), repeats from this module's child logger.
+ * Pino is capped per key (CTO R3): the first SANDBOX_NETWORK_LOG_CAP rows, then one row per 100 repeats carrying an
+ * `occurrences` count (the alert threshold is `> 0`, so the cap cannot hide a page). The expected ungranted
+ * not-entitled / egress-not-running deny is pino-only, no Sentry (CTO R2). No field carries the requested host, the
+ * tool input or the user (CLO ruling 3): `matchedEntry` is a NO_PROXY list literal.
  */
 const SANDBOX_NETWORK_DENIED = {
   feature: "cc-permissions",
   op: "sandbox-network-denied",
   message: "sandboxed network request denied",
 } as const;
+const SANDBOX_NETWORK_LOG_CAP = 20;
 function createSandboxNetworkDenyReporter(): (
   reason: SandboxNetworkReason,
   matchedEntry: string | undefined,
   granted: boolean,
   subagent: boolean,
 ) => void {
-  const seen = new Set<string>();
+  const counts = new Map<string, number>();
   return (reason, matchedEntry, granted, subagent) => {
-    const extra = { reason, granted, matchedEntry, subagent };
     const key = `${reason}\u0000${matchedEntry ?? ""}`;
-    if (seen.has(key)) {
+    const n = (counts.get(key) ?? 0) + 1;
+    counts.set(key, n);
+    const extra = { reason, granted, matchedEntry, subagent };
+    const expected = !granted && (reason === "not-entitled" || reason === "egress-not-running");
+    if (n > 1 || expected) {
+      if (n > SANDBOX_NETWORK_LOG_CAP && n % 100 !== 0) return;
       const { feature, op, message } = SANDBOX_NETWORK_DENIED;
-      log.warn({ feature, op, ...extra }, message);
+      const fields = n > SANDBOX_NETWORK_LOG_CAP ? { ...extra, occurrences: n } : extra;
+      log.warn({ feature, op, ...fields }, message);
       return;
     }
-    seen.add(key);
     // warnSilentFallback writes the same pino warn line itself, then the Sentry warning.
     warnSilentFallback(null, { ...SANDBOX_NETWORK_DENIED, tags: { reason, granted: granted ? "true" : "false" }, extra });
   };
@@ -621,16 +632,23 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         let live = false;
         try {
           live = ctx.sandboxNetworkEgress.isLive() === true;
-        } catch {
+        } catch (err) {
           live = false; // a throwing probe counts as not-live (CTO T4)
+          reportSilentFallback(err, { feature: "cc-permissions", op: "sandbox-network-live-probe" });
         }
         egress = { live };
       }
       const decision = decideSandboxNetworkAccess(toolInput, egress);
-      const granted = ctx.webEgressGranted === true;
+      let revoked = false;
+      try {
+        revoked = ctx.webEgressRevoked?.() === true;
+      } catch (err) {
+        reportSilentFallback(err, { feature: "cc-permissions", op: "sandbox-network-revoked-probe" });
+      }
+      const granted = ctx.webEgressGranted === true && !revoked;
       reportSandboxNetworkDeny(decision.reason, decision.matchedEntry, granted, Boolean(options.agentID));
       logPermissionDecision("canUseTool-sandbox-network", toolName, "deny", decision.reason);
-      return { behavior: "deny" as const, message: sandboxNetworkDenyMessage(decision.reason, granted) };
+      return { behavior: "deny" as const, message: sandboxNetworkDenyMessage(decision.reason, granted, revoked) };
     }
 
     // Defense-in-depth: catch any file tool that bypasses PreToolUse hooks.

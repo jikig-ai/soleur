@@ -85,7 +85,7 @@ describe("AC1: no forwarder handle => not-entitled through the explicit arm", ()
 
   test("a granted session whose forwarder failed to spawn gets the degraded copy, tagged granted=true (CTO T13)", async () => {
     const r = await ask(buildContext({ webEgressGranted: true }), { host: "example.com" });
-    expect((r as { message: string }).message).toMatch(/web access is on but isn't working/);
+    expect((r as { message: string }).message).toMatch(/web access isn't working in this session/);
     expect(mockWarnSilentFallback.mock.calls[0][1].tags).toEqual({ reason: "not-entitled", granted: "true" });
   });
 });
@@ -96,7 +96,7 @@ describe("entitled sessions (row 6': deny-all, Phase 1a found the SDK caches per
       vi.clearAllMocks();
       const r = await ask(entitled(), { host });
       expect(r.behavior).toBe("deny");
-      expect((r as { message: string }).message).toMatch(/even with web access on/);
+      expect((r as { message: string }).message).toMatch(/`WebFetch` tool/);
       expect(mockLogPermissionDecision).toHaveBeenCalledWith("canUseTool-sandbox-network", TOOL, "deny", "gateway-unverified");
     }
   });
@@ -173,7 +173,12 @@ describe("observability: pino every deny, Sentry once per Query per (reason, mat
     expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
     const direct = mockLog.warn.mock.calls.filter((c) => c[1] === "sandboxed network request denied");
     expect(direct).toHaveLength(4);
-    expect(direct[0][0]).toMatchObject({ feature: "cc-permissions", op: "sandbox-network-denied", reason: "gateway-unverified" });
+    // The repeat row must be field-for-field the first row's extra: the alert reads `granted` as a JSON boolean.
+    const firstExtra = mockWarnSilentFallback.mock.calls[0][1].extra;
+    for (const [fields] of direct) {
+      expect(fields).toEqual({ feature: "cc-permissions", op: "sandbox-network-denied", ...firstExtra });
+      expect(typeof fields.granted).toBe("boolean");
+    }
   });
 
   test("AC11: a different reason or a different matched entry reports again", async () => {
@@ -192,6 +197,54 @@ describe("observability: pino every deny, Sentry once per Query per (reason, mat
   });
 });
 
+describe("review rulings: revocation (CTO R1), expected denies pino-only (R2), pino cap (R3), probe throws mirrored", () => {
+  test("R1: a revoked session reports granted=false and gets the turned-off copy", async () => {
+    const ctx = buildContext({
+      sandboxNetworkEgress: { isLive: () => false },
+      webEgressGranted: true,
+      webEgressRevoked: () => true,
+    });
+    const r = await ask(ctx, { host: "example.com" });
+    expect(r).toMatchObject({ behavior: "deny" });
+    expect((r as { message: string }).message).toMatch(/^Web access was turned off for this workspace/);
+    // Ungranted egress-not-running is the expected state: pino only, no Sentry, granted=false (the alert cannot page).
+    expect(mockWarnSilentFallback).not.toHaveBeenCalled();
+    expect(mockLog.warn.mock.calls[0][0]).toMatchObject({ reason: "egress-not-running", granted: false });
+  });
+
+  test("R2: ungranted not-entitled logs pino but skips Sentry; granted not-entitled still mirrors", async () => {
+    await ask(buildContext({ webEgressGranted: false }), { host: "example.com" });
+    expect(mockWarnSilentFallback).not.toHaveBeenCalled();
+    expect(mockLog.warn.mock.calls[0][0]).toMatchObject({ feature: "cc-permissions", op: "sandbox-network-denied", reason: "not-entitled", granted: false });
+    await ask(buildContext({ webEgressGranted: true }), { host: "example.com" });
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
+  });
+
+  test("R3: pino is capped at 20 rows per key, then one row per 100 repeats with an occurrences count", async () => {
+    const cb = createCanUseTool(entitled());
+    for (let i = 0; i < 250; i++) await cb(TOOL, { host: "example.com" }, opts() as never);
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
+    const direct = mockLog.warn.mock.calls.filter((c) => c[1] === "sandboxed network request denied");
+    expect(direct).toHaveLength(19 + 2); // rows 2..20, then rows 100 and 200
+    expect(direct.slice(19).map((c) => c[0].occurrences)).toEqual([100, 200]);
+    expect(direct[0][0].occurrences).toBeUndefined();
+  });
+
+  test("a throwing liveness or revocation probe still denies, and is mirrored", async () => {
+    const ctx = buildContext({
+      sandboxNetworkEgress: { isLive: () => { throw new Error("probe"); } },
+      webEgressGranted: true,
+      webEgressRevoked: () => { throw new Error("probe"); },
+    });
+    const r = await ask(ctx, { host: "example.com" });
+    expect(r).toMatchObject({ behavior: "deny" });
+    expect(mockReportSilentFallback.mock.calls.map((c) => c[1].op).sort()).toEqual([
+      "sandbox-network-live-probe",
+      "sandbox-network-revoked-probe",
+    ]);
+  });
+});
+
 describe("AC12: the requested host reaches no sink (CLO ruling 3)", () => {
   const CANARY = `leak-canary-${Math.random().toString(36).slice(2, 10)}.example`;
 
@@ -205,7 +258,7 @@ describe("AC12: the requested host reaches no sink (CLO ruling 3)", () => {
     for (const input of [{ host: CANARY }, { host: CANARY }, { host: `${CANARY}:443` }, { host: CANARY, port: 1 }]) {
       results.push(await cb(TOOL, input as never, opts() as never));
     }
-    expect(mockWarnSilentFallback).toHaveBeenCalled();
+    expect(mockWarnSilentFallback.mock.calls.length + mockLog.warn.mock.calls.length).toBeGreaterThan(0);
     // A Sentry event shaped as warnSilentFallback builds it, run through the real beforeSend scrub (second check).
     const events = mockWarnSilentFallback.mock.calls.map((c) =>
       scrubSentryEvent({ message: c[1].message, tags: { feature: c[1].feature, op: c[1].op, ...c[1].tags }, extra: c[1].extra }),

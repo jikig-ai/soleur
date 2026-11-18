@@ -51,6 +51,14 @@ feature, op = (m.group(1), m.group(2)) if m else ("<none>", "<none>")
 check(re.search(r"^\s*const extra = \{ reason, granted, matchedEntry, subagent \};$", pc, re.M) is not None,
       "emitter: the deny reporter's extra is not { reason, granted, matchedEntry, subagent }")
 check(re.search(r"^\s*granted: boolean,$", pc, re.M) is not None, "emitter: the reporter's `granted` parameter is not a boolean")
+# Repeat rows (every deny after the first per key) come from the child logger, not warnSilentFallback: pin that line
+# too, or a stringified `granted` there silently stops every repeat row matching.
+check(len(re.findall(r"^\s*log\.warn\(\{ feature, op, \.\.\.fields \}, message\);$", pc, re.M)) == 1,
+      "emitter: the repeat-row `log.warn({ feature, op, ...fields }, message);` line is not pinned exactly once")
+check(re.search(r"^\s*const fields = n > SANDBOX_NETWORK_LOG_CAP \? \{ \.\.\.extra, occurrences: n \} : extra;$", pc, re.M) is not None,
+      "emitter: repeat-row fields are not `extra` (plus occurrences past the cap)")
+check(re.search(r"^\s*warnSilentFallback\(null, \{ \.\.\.SANDBOX_NETWORK_DENIED, tags: \{ reason, granted: granted \? \"true\" : \"false\" \}, extra \}\);$", pc, re.M) is not None,
+      "emitter: the first-row warnSilentFallback call does not spread SANDBOX_NETWORK_DENIED with the same extra")
 union = re.search(r"export type SandboxNetworkReason =((?:\s*\|\s*\"[a-z-]+\")+);", sna)
 reasons = re.findall(r'"([a-z-]+)"', union.group(1)) if union else []
 check("not-entitled" in reasons and "egress-not-running" in reasons, f"reason union lacks a degraded reason: {reasons}")
@@ -124,7 +132,13 @@ check(ex != "" and al != "", "exploration or alert block missing")
 for line in ['    sql_query = replace(trimspace(local.sandbox_network_degraded_sql), "/\\\\s+/", " ")',
              "    values        = [local.vector_prd_source_id]"]:
     check(ex.count(line + "\n") + ex.endswith(line) == 1, f"exploration line not pinned exactly once: {line}")
+check(len(re.findall(r'^  name      = "soleur-sandbox-network-degraded-prd"$', ex, re.M)) == 1, "exploration name not pinned")
+check(len(re.findall(r'^  team_name = "Your team"$', ex, re.M)) == 1, "exploration team_name not pinned")
 for line in ["  exploration_id = logtail_exploration.sandbox_network_degraded.id", '  alert_type          = "threshold"',
+             '  name           = "soleur-sandbox-network-degraded-prd"', "  confirmation_period = 0",
+             "  push           = false", "  call           = false", "  sms            = false",
+             "  critical_alert = false", "    runbook = local.sandbox_network_degraded_runbook_url",
+             '    team_name = var.betterstack_paid_tier ? null : "Your team"',
              '  operator            = "higher_than"', "  value               = 0", "  check_period        = 60",
              "  query_period        = 300", "  recovery_period     = 600", '  on_missing_data     = "treat_as_zero"',
              "  paused = false", "  email          = true",
@@ -139,6 +153,8 @@ check("`logtail_exploration_alert.sandbox_network_degraded`" in rb, "runbook has
 check(re.search(r"^\s+run: bash apps/web-platform/test/infra/sandbox-network-denied-alert\.test\.sh$", iv, re.M) is not None,
       "infra-validation.yml has no step running this guard")
 
+# Floor: a refactor that silently drops checks (a loop over an empty list, a skipped block) must not read as green.
+check(passes >= 45, f"only {passes} checks ran (floor 45)")
 print(f"sandbox-network-denied-alert: {passes} passed, {len(fails)} failed")
 for f in fails:
     print(f"  FAIL: {f}")
@@ -162,10 +178,16 @@ old, new = sys.argv[3].encode().decode("unicode_escape"), sys.argv[4].encode().d
 assert s.count(old) >= 1, "anchor"
 open(sys.argv[2], "w", encoding="utf-8").write(s.replace(old, new, 1))
 PY
-  if env SND_INNER=1 "$var=$copy" bash "${BASH_SOURCE[0]}" >/dev/null 2>&1; then
+  local out
+  out="$(env SND_INNER=1 "$var=$copy" bash "${BASH_SOURCE[0]}" 2>&1)" && {
     printf 'MUTANT SURVIVED: %s\n' "$label" >&2
     exit 1
-  fi
+  }
+  # A crash (traceback, missing file) is not a kill: the guard must have run and reported a FAIL line.
+  grep -qE '^sandbox-network-denied-alert: [0-9]+ passed, [1-9][0-9]* failed$' <<<"$out" || {
+    printf 'MUTANT CRASHED THE GUARD (not a kill): %s\n%s\n' "$label" "$out" >&2
+    exit 1
+  }
   reds=$((reds + 1))
 }
 mutate "reason list drops egress-not-running" SND_TF "$TF" "IN ('not-entitled', 'egress-not-running')" "IN ('not-entitled')"
@@ -177,5 +199,7 @@ mutate "emitter granted becomes a string" SND_PC "$PC" "  granted: boolean," "  
 mutate "alert -target dropped" SND_WF "$WF" "              -target=logtail_exploration_alert.sandbox_network_degraded \\\\\n" ""
 mutate "degraded reason renamed in the union" SND_SNA "$SNA" '| "egress-not-running"' '| "forwarder-dead"'
 mutate "runbook row removed" SND_RB "$RB" '`logtail_exploration_alert.sandbox_network_degraded`' '`removed`'
-printf 'sandbox-network-denied-alert mutation battery: %d/9 mutants killed\n' "$reds"
-[[ "$reds" -eq 9 ]] || { printf 'FATAL: battery ran %d of 9 rows\n' "$reds" >&2; exit 1; }
+mutate "repeat-row granted stringified" SND_PC "$PC" "log.warn({ feature, op, ...fields }, message);" "log.warn({ feature, op, ...fields, granted: String(granted) }, message);"
+mutate "alert confirmation_period raised" SND_TF "$TF" "  confirmation_period = 0\n  recovery_period     = 600\n  on_missing_data     = \"treat_as_zero\"\n\n  paused = false\n\n  email          = true\n  push           = false\n  call           = false\n  sms            = false\n  critical_alert = false\n\n  incident_cause = \"A workspace with web access" "  confirmation_period = 600\n  recovery_period     = 600\n  on_missing_data     = \"treat_as_zero\"\n\n  paused = false\n\n  email          = true\n  push           = false\n  call           = false\n  sms            = false\n  critical_alert = false\n\n  incident_cause = \"A workspace with web access"
+printf 'sandbox-network-denied-alert mutation battery: %d/11 mutants killed\n' "$reds"
+[[ "$reds" -eq 11 ]] || { printf 'FATAL: battery ran %d of 11 rows\n' "$reds" >&2; exit 1; }

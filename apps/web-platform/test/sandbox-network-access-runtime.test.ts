@@ -244,7 +244,7 @@ describe.skipIf(!UNSHARE_OK)("PRODUCTION: the production canUseTool answers ever
     assertAsked(a);
     for (const c of net(a)) {
       expect(c.behavior).toBe("deny");
-      expect(c.message).toMatch(/even with web access on/);
+      expect(c.message).toMatch(/`WebFetch` tool/);
     }
     // example.test is asked for :443 twice, :80 and :22: a deny is never cached.
     expect(hosts(a).filter((h) => h === "example.test").length).toBe(4);
@@ -270,7 +270,7 @@ describe.skipIf(!UNSHARE_OK)("PRODUCTION: the production canUseTool answers ever
     assertNoLeak(a);
     assertAsked(a);
     expect(a.forwarderDeadBeforeTurn).toBe(true);
-    for (const c of net(a)) expect(c.message).toMatch(/web access is on but isn't working/);
+    for (const c of net(a)) expect(c.message).toMatch(/web access isn't working in this session/);
     ARMS_RUN.add("p-E");
   });
 
@@ -280,7 +280,7 @@ describe.skipIf(!UNSHARE_OK)("PRODUCTION: the production canUseTool answers ever
     assertAsked(a);
     // The subagent's Bash call carries its agentID; on 0.3.321 its SandboxNetworkAccess request does not (measured).
     expect(a.calls.some((c) => c.tool === "Bash" && c.agentID !== null)).toBe(true);
-    for (const c of net(a)) expect(c.message).toMatch(/even with web access on/);
+    for (const c of net(a)) expect(c.message).toMatch(/`WebFetch` tool/);
     expect(a.gateway).toEqual([]);
     ARMS_RUN.add("p-G");
   });

@@ -37,3 +37,9 @@ soleur:plan, soleur:gdpr-gate, soleur:plan-review, soleur:deepen-plan; CTO, CPO,
 - Issues filed: #12906 (real allow arm), #12907 (UNVERIFIED:hosted-entitled-sandboxed-egress).
 - Local affected gate: timed out at 590 s (RC=124, NOT a pass); targeted suites green; CI is the gate.
 - Next: soleur:review -> resolve -> qa -> compound -> ship.
+
+## Review phase (in progress, 2026-11-18)
+- PANEL_SHA=5272dd01fc1bd2ad7e5c6836268a3171c224f639. Seats are report-only; reports land in the session scratchpad as review-<seat>.md.
+- Design pass (simplicity + architecture) done. Both found K1: toggle-off reports egress-not-running with granted=true, so the alert pages and the model gets false copy. Architecture also found K2: the globalThis registry is unpinned.
+- K1 contests D2 and the CPO copy ruling. Send it to the CTO in ONE batched spawn at synthesis (cto_spawns used: 0 of 2).
+- Panel of 11 spawned. Next: synthesis, then the coverage consult (single-user incident), CTO batch, inline fixes, the trailer, and Step 5.
