@@ -1241,7 +1241,9 @@ describe("WP1 D38: the async writer, the pull budget and the same-host lock", { 
     write(join(r.ws, "src", "x.ts"), "export const x = 9; // dirty member edit\n"); // the autostash holds MERGE_AUTOSTASH
     upstreamCommit(r, (d) => write(join(d, "src", "big.slow"), "slow\n"));
     const [a, b] = await Promise.all([pull(r), pull(r)]);
-    expect([a.pullReason, b.pullReason]).toEqual(["merged", "up_to_date"]);
+    // Either call may take the lock first (each awaits `hasRemote` and the auth probe before it): one merges, the other
+    // then finds the remote already in HEAD. Order-free, so a loaded host cannot flip it.
+    expect([a.pullReason, b.pullReason].sort()).toEqual(["merged", "up_to_date"]);
     expect(read(join(r.ws, "src", "x.ts"))).toBe("export const x = 9; // dirty member edit\n");
   });
 
