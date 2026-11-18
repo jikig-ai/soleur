@@ -52,3 +52,30 @@ recreate.
 - The bastion (about €4–5 per month) and the private load balancer (about €5–6 per month) are new
   recurring costs. The owner approved both on 2026-11-10. They are recorded in the ledger in the PRs
   that create them.
+
+## Addendum — 2026-11-18 (#12866, step 2a)
+
+Step 2 ships as two PRs. This one (2a) births `soleur-bastion`; #12879 (2b) adds its replace route and
+heartbeat, and blocks step 3. The plan is
+`knowledge-base/project/plans/2026-11-17-feat-dedicated-bastion-host-gated-routes-plan.md`; the operator
+acts are in `knowledge-base/engineering/operations/runbooks/bastion-host.md`.
+
+- **Routes are `apply_target` jobs, not workflow files.** `bastion-host-create` is a job in
+  `apply-web-platform-infra.yml` (`confirm=BIRTH-bastion`, environment `web-platform-infra-apply`, the
+  workflow's own concurrency group). Its gate admits only the addresses in
+  `tests/scripts/lib/bastion-resources.txt`; `plan_only` runs first and prints the commit and the
+  planned addresses for the owner's go.
+- **Until 2b merges, the Consequences line "its own replace route bounds that risk" is not yet true.**
+  A birth that does not report `fresh_boot_ready` is powered off (disk kept) and commented on #12879;
+  there is no in-repo exit until 2b.
+- **git-data admits by private-network membership plus forced commands.** Residual: any member of the
+  private network reaches git-data:22. The nftables source allowlist is #12880.
+- **Hetzner firewalls filter only the public interface.** The bastion's own nftables `input` chain
+  drops private-network inbound; git-data does not yet (#12880). On first boot the baseline loads only
+  after apt installs `nftables`; sshd is masked and the zero-rule Hetzner firewall covers that window.
+- **Egress rows land with the consumer they serve.** 2a allows only the apt mirrors and Sentry ingest,
+  each cited to its on-host consumer; later steps add rows with their dialers.
+- **The bastion host key does not rotate on replace.** Residual: a leaked copy (Terraform state or
+  `user_data`) stays valid until a deliberate rotation, which the runbook defines.
+- **Cost.** The bastion is EUR 5.99 per month (cx23 plus its primary IPv4), not the EUR 4–5 above.
+  The owner's go on the real birth accepts it; the ledger rows land in this PR.
