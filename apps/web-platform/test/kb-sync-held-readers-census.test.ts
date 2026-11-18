@@ -234,11 +234,16 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
     expect(page).not.toMatch(/kb_sync_held_checked_at/);
   });
 
-  it("the select strings name only columns migration 187 created (comment-stripped, statement-anchored)", () => {
-    const mig = sql("187_workspace_kb_sync_held_files.sql");
+  it("the select strings name only columns migrations 187 and 188 created (comment-stripped, statement-anchored)", () => {
+    // 187 is frozen (dev applied it); the pull-blocked column is 188's (verify-data-sec P1-1).
+    const MIG_OF: Record<string, string> = {
+      kb_sync_held_files: "187_workspace_kb_sync_held_files.sql",
+      kb_sync_held_checked_at: "187_workspace_kb_sync_held_files.sql",
+      kb_sync_pull_blocked: "188_workspace_kb_sync_pull_blocked.sql",
+    };
     const TYPES: Record<string, string> = { kb_sync_held_files: "integer", kb_sync_held_checked_at: "timestamptz", kb_sync_pull_blocked: "text" };
     for (const col of HELD_COLUMNS) {
-      expect(mig, col).toMatch(new RegExp(`ALTER TABLE public\\.workspaces ADD COLUMN IF NOT EXISTS ${col} ${TYPES[col]}\\b`));
+      expect(sql(MIG_OF[col]), col).toMatch(new RegExp(`ALTER TABLE public\\.workspaces ADD COLUMN IF NOT EXISTS ${col} ${TYPES[col]}\\b`));
     }
     for (const [, src] of sources) {
       for (const m of src.matchAll(/\bkb_sync_(held_[a-z_]+|pull_blocked)\b/g)) expect(HELD_COLUMNS).toContain(m[0]);

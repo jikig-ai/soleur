@@ -53,7 +53,7 @@ export const ATTACK_SQL: Record<string, (c: RpcCtx) => string> = {
   get_workspace_bash_autonomous: (c) => `select get_workspace_bash_autonomous('${c.wsA}')`,
   get_workspace_debug_mode: (c) => `select get_workspace_debug_mode('${c.wsA}')`,
   get_workspace_web_egress: (c) => `select get_workspace_web_egress('${c.wsA}')`,
-  // Member-checked held-files read (mig 187, #12714): zero rows for tenant B, so the count is 0 = denied.
+  // Member-checked held-files read (mig 187, three columns since mig 188, #12714): zero rows for tenant B, so the count is 0 = denied.
   get_workspace_kb_sync_held: (c) => `select count(*) from get_workspace_kb_sync_held('${c.wsA}')`,
   // Member-only egress audit summary (mig 177, #9545 PR2): the in-body membership check raises 42501 for tenant B.
   get_egress_audit_summary: (c) => `select get_egress_audit_summary('${c.wsA}', 200, null)`,
