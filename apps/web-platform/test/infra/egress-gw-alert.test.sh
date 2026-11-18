@@ -666,7 +666,9 @@ s = s.replace(old, "greatest(toInt64(2) - toInt64(")' \
   mutate_red "silent: DISTINCT host_name regresses to count(*) (the host-mask defect)" TF \
     'old = "toInt64(count(DISTINCT JSONExtractString(raw, \x27host_name\x27)))"
 # Anchored to the egress local: #12726 gave inngest_cutover_flip_silent_sql the same value expression verbatim.
-i = s.index("  egress_gw_probe_silent_sql = <<-SQL")
+# \x3c is "<": the heredoc opener is spelled with escapes so guard-vacuity-floor.test.sh does not read it as a
+# heredoc start and blank this suite floor line.
+i = s.index("  egress_gw_probe_silent_sql = \x3c\x3c-SQL")
 j = s.index(old, i)
 assert j < s.index("\n  SQL\n", i), "anchor is not inside egress_gw_probe_silent_sql"
 s = s[:j] + "toInt64(count(*))" + s[j + len(old):]' \
