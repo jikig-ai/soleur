@@ -68,7 +68,7 @@ const {
   // per-test switch (default OFF = the dark path); the default-branch lookup and the workspace HEAD are canned.
   mockPushBranch: vi.fn(async (_o: Record<string, unknown>) => ({ branch: "feat-x", pushed: true })),
   mockApprovalFlag: vi.fn(async (): Promise<unknown> => false),
-  mockRefreshHeldCount: vi.fn(async () => undefined),
+  mockRefreshHeldCount: vi.fn(async (_a: unknown) => undefined),
   mockGithubApiGet: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ default_branch: "trunk" })),
   mockHeadSha: vi.fn(async () => "d".repeat(40)),
   mockResolveSandboxUnixDeny: vi.fn(async () => false),
@@ -454,7 +454,7 @@ vi.mock("@/server/approval/flag", async (importOriginal) => ({
   isApprovalQueueEnabled: mockApprovalFlag,
   readApprovalQueueFlagDetailed: async (identity: unknown) => {
     try {
-      return { value: (await mockApprovalFlag(identity)) === true, fellBack: false };
+      return { value: (await (mockApprovalFlag as (...a: unknown[]) => Promise<unknown>)(identity)) === true, fellBack: false };
     } catch {
       return "error";
     }
