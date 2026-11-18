@@ -551,7 +551,7 @@ fi
 # guard with MUT_SKIP=1 and the matching FLIPSILENT_GUARD_* override pointing at the copy.
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 PRESENCE_ROWS=56
-MUT_ROWS_EXPECTED=58
+MUT_ROWS_EXPECTED=63
 SELFTEST_ROWS=1
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t flipsilentalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
@@ -962,6 +962,23 @@ s = s[:i] + decoy + s[i:]'
   mutate RED "R5 a U+3000 replaces the space in = Object (a locale-aware [[:space:]] collapses it, Terraform's RE2 \\s does not)" TF \
     "a byte outside plain ASCII (tab, newline, 0x20-0x7e) sits in the flip predicate" \
     's = sql_replace(s, "= \x27Object\x27", "=　\x27Object\x27")'
+  # Rows whose check no battery row named before (test-design F2): neutering any of these checkers left the outer run
+  # green at its floor. Each row below expects THAT checker's own [FAIL] text.
+  mutate RED "R6 a second executable operator line (an interpolated lower_than) follows the real one in the production block" TF \
+    "the production alert has more than one executable operator line" \
+    's = blk_after(s, "logtail_exploration_alert", "inngest_cutover_flip_silent", "operator", "  operator            = \"lower_${\"\"}than\"\n")'
+  mutate RED "R7 a fifth flip resource header is planted in ANOTHER infra .tf (the other-file half of the header count)" INFRATF \
+    "the inngest_cutover_flip_silent* resource header count is 5" \
+    's = "resource \"logtail_exploration_alert\" \"inngest_cutover_flip_silent_decoy\" {\n}\n"'
+  mutate RED "R8 the canary exploration's source drifts to a literal source id (it would read another source)" TF \
+    "the canary exploration differs from the production exploration beyond name / sql_query" \
+    's = blk_sub(s, "logtail_exploration", "inngest_cutover_flip_silent_canary", "values        = [local.vector_prd_source_id]", "values        = [\"1234567\"]")'
+  mutate RED "R9 the production alert's escalation team drifts from the sibling ternary" TF \
+    "the escalation_target drifted from the sibling ternary" \
+    's = blk_sub(s, "logtail_exploration_alert", "inngest_cutover_flip_silent", "team_name = var.betterstack_paid_tier ? null : \"Your team\"", "team_name = var.betterstack_paid_tier ? null : \"Other team\"")'
+  mutate RED "R10 an extra consumer of the production SQL local is declared" TF \
+    "the SQL locals' consumer counts drifted" \
+    's = s + "\nlocals {\n  inngest_cutover_flip_silent_extra = local.inngest_cutover_flip_silent_sql\n}\n"'
 fi
 
 if [ -z "${MUT_SKIP:-}" ] && [ "${MUT_ROWS_RUN:-0}" -ne "$MUT_ROWS_EXPECTED" ]; then
