@@ -279,6 +279,27 @@ mkev "$WORK/s21.proj.json" "$CI_MSG|fresh_boot_ready|$B|info|$D3||9999"
 srow "a ready event from another host_id (a forged or stale one) does not match" s21 "skipped 2 yes" "${SB[@]}" BOOT_TRAIL_HOST_ID=4242
 cp "$WORK/s01.proj.json" "$WORK/s22.proj.json"
 srow "a non-numeric BOOT_TRAIL_HOST_ID is refused before any read" s22 "skipped 2 no" "${SB[@]}" 'BOOT_TRAIL_HOST_ID=42 or true'
+# Every remaining terminal arm yields exactly one verdict line, and the reason names that arm.
+# sreason <case> <reason>: the strict reason line the case printed
+sreason() { eq "strict $1: the reason names its arm" "$(grep -c "^boot-trail strict: $2" "$WORK/$1.got" || true)" 1; }
+mkev "$WORK/s23.proj.json" "$CI_MSG|fresh_boot_not_ready_egress|$B|fatal|$D3|why=apt_update"
+srow "a fatal event and a failed job is not_ready" s23 "not_ready 1 no" JOB_STATUS=failure BOOT_TRAIL_HOST_NAME=$B BOOT_TRAIL_SINCE="$ANCHOR" SENTRY_ACTIONS_RO_TOKEN=x
+sreason s23 "a fatal boot stage and a failed job"
+cp "$WORK/empty.page.json" "$WORK/s24.proj.json"
+srow "no terminal event and a failed job (read once) is not_ready" s24 "not_ready 1 no" JOB_STATUS=failure BOOT_TRAIL_HOST_NAME=$B BOOT_TRAIL_SINCE="$ANCHOR" SENTRY_ACTIONS_RO_TOKEN=x
+sreason s24 "no terminal boot event and a failed job"
+# The success-job timeout and the empty-MSG_RE arm cannot be reached through the environment (the
+# deadline and QUERY are literals), so each reads a copy of the reader with only that literal changed.
+sed 's/^BOOT_TRAIL_STRICT_DEADLINE_S=1500$/BOOT_TRAIL_STRICT_DEADLINE_S=0/' "$TRAIL" > "$WORK/trail-deadline0.sh"
+eq "the deadline-0 reader copy differs from the reader by exactly one line" "$(diff "$TRAIL" "$WORK/trail-deadline0.sh" | grep -c '^>' || true)" 1
+cp "$WORK/empty.page.json" "$WORK/s25.proj.json"
+TRAIL_UNDER_TEST="$WORK/trail-deadline0.sh" srow "no terminal event inside the strict deadline is not_ready" s25 "not_ready 1 no" "${SB[@]}"
+sreason s25 "no terminal boot event for $B inside the boot window"
+sed "s/^QUERY='message:/QUERY='msg:/; /^QUERY=/s/ OR message:/ OR msg:/g" "$TRAIL" > "$WORK/trail-noquery.sh"
+eq "the reshaped-QUERY reader copy differs from the reader by exactly one line" "$(diff "$TRAIL" "$WORK/trail-noquery.sh" | grep -c '^>' || true)" 1
+cp "$WORK/s01.proj.json" "$WORK/s26.proj.json"
+TRAIL_UNDER_TEST="$WORK/trail-noquery.sh" srow "an empty QUERY message extraction is skipped, never ready" s26 "skipped 2 no" "${SB[@]}"
+sreason s26 "the QUERY message-literal extraction was empty"
 # Web-only text stays off the strict path (the web goldens hold it on the web path).
 eq "strict s01: the web 'best-effort, host id unknown' line is not printed" "$(grep -c 'Best-effort: the host id is unknown' "$WORK/s01.got" || true)" 0
 eq "strict s01: no image-origin read on the bastion route" "$(grep -c 'image-origin' "$WORK/s01.got" || true)" 0
@@ -295,12 +316,13 @@ eq "web path: no characterization case printed a verdict= line" "$(cat "$WORK"/c
 
 # ── Mutation rows over a sandbox copy of the reader ──────────────────────────────────────────
 MUT_ROWS=0
-# mrow <name> <case> <from> <to> <args...>: the mutant must change the case's verdict away from ready-safe
+# mrow <name> <case> <from> <to> <args...>: the mutant must change the case's verdict away from ready-safe.
+# MUT_SRC=<reader copy> mutates (and runs the before-case against) that copy instead of the reader.
 mrow() {
   local name="$1" case="$2" from="$3" to="$4" before after; shift 4
   MUT_ROWS=$((MUT_ROWS + 1))
-  local m="$WORK/mutant-$MUT_ROWS.sh"
-  python3 - "$TRAIL" "$m" "$from" "$to" <<'MPY' || { cases=$((cases + 1)); fail "mutation $name did not land"; return; }
+  local m="$WORK/mutant-$MUT_ROWS.sh" src="${MUT_SRC:-$TRAIL}"
+  python3 - "$src" "$m" "$from" "$to" <<'MPY' || { cases=$((cases + 1)); fail "mutation $name did not land"; return; }
 import sys
 src, dst, a, b = sys.argv[1:]
 t = open(src).read()
@@ -308,7 +330,7 @@ if t.count(a) != 1:
     sys.exit(1)
 open(dst, "w").write(t.replace(a, b))
 MPY
-  run_strict "$case" "$@"; before="$S_VERDICT"
+  TRAIL_UNDER_TEST="$src" run_strict "$case" "$@"; before="$S_VERDICT"
   TRAIL_UNDER_TEST="$m" run_strict "$case" "$@"; after="$S_VERDICT"
   cases=$((cases + 1))
   if [[ "$before" != "$after" ]]; then pass "mutation $name is caught by $case ($before -> $after)"; else fail "mutation $name SURVIVED $case ($before)"; fi
@@ -321,15 +343,20 @@ mrow "unbound token read as not-skipped" s06 'strict_verdict skipped "the Sentry
 mrow "a strict read failure ends the poll at once (no retry)" s15 '(( STRICT_READ_FAILS < 3 && SECONDS < DEADLINE ))' '(( 0 ))' "${SB[@]}"
 mrow "the consecutive-failure count never resets on a good read" s17 $'  fi\n  STRICT_READ_FAILS=0\n' $'  fi\n' "${SB[@]}"
 mrow "host_id is not compared" s21 ' and $hi == "'"'"'"${BOOT_TRAIL_HOST_ID}"'"'"'"' '' "${SB[@]}" BOOT_TRAIL_HOST_ID=4242
+# Each remaining terminal arm's verdict line removed: the row then sees no verdict at all.
+mrow "the fatal + failed-job arm prints no verdict" s23 '[[ "$BT_STRICT" == 1 ]] && strict_verdict not_ready "a fatal boot stage and a failed job' ': && echo "a fatal boot stage and a failed job' JOB_STATUS=failure BOOT_TRAIL_HOST_NAME=$B BOOT_TRAIL_SINCE="$ANCHOR" SENTRY_ACTIONS_RO_TOKEN=x
+mrow "the timeout + failed-job arm prints no verdict" s24 '[[ "$BT_STRICT" == 1 ]] && strict_verdict not_ready "no terminal boot event and a failed job' ': && echo "no terminal boot event and a failed job' JOB_STATUS=failure BOOT_TRAIL_HOST_NAME=$B BOOT_TRAIL_SINCE="$ANCHOR" SENTRY_ACTIONS_RO_TOKEN=x
+MUT_SRC="$WORK/trail-deadline0.sh" mrow "the timeout arm prints no verdict" s25 '[[ "$BT_STRICT" == 1 ]] && strict_verdict not_ready "no terminal boot event for' ': && echo "no terminal boot event for' "${SB[@]}"
+MUT_SRC="$WORK/trail-noquery.sh" mrow "the empty-MSG_RE arm prints no verdict" s26 '[[ "$BT_STRICT" == 1 ]] && strict_verdict skipped "the QUERY message-literal extraction was empty"' ':' "${SB[@]}"
 
 echo
-MIN_CASES=68
+MIN_CASES=86
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf 'fresh-host-boot-trail: FAIL (only %d assertions ran; floor %d - the suite may have been truncated)\n' "$cases" "$MIN_CASES" >&2
   exit 1
 fi
-if [[ "$CHAR_ROWS" -ne 14 || "$STRICT_ROWS" -ne 21 || "$MUT_ROWS" -ne 7 ]]; then
-  printf 'fresh-host-boot-trail: FAIL (rows ran: characterization %d/14, strict %d/21, mutation %d/7)\n' "$CHAR_ROWS" "$STRICT_ROWS" "$MUT_ROWS" >&2
+if [[ "$CHAR_ROWS" -ne 14 || "$STRICT_ROWS" -ne 25 || "$MUT_ROWS" -ne 11 ]]; then
+  printf 'fresh-host-boot-trail: FAIL (rows ran: characterization %d/14, strict %d/25, mutation %d/11)\n' "$CHAR_ROWS" "$STRICT_ROWS" "$MUT_ROWS" >&2
   exit 1
 fi
 if [[ $((passes + fails)) -ne "$cases" ]]; then

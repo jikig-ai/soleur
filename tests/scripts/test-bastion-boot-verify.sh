@@ -150,7 +150,8 @@ echo "power-off arm"
 run noserver 'verdict=not_ready\n' 1 failure BBV_LOOKUP_BODY='{"servers":[]}'
 t "no soleur-bastion server: nothing to power off, still returns 1 and comments" "$([[ "$RC" -eq 1 && "$CURL" != *POST* && "$GH" == *"12879"* && "$OUT" == *"no soleur-bastion server"* && "$PO" == absent ]]; echo $?)"
 run twoservers 'verdict=not_ready\n' 1 success BBV_LOOKUP_BODY='{"servers":[{"id":4242,"name":"soleur-bastion"},{"id":4343,"name":"soleur-bastion"}]}'
-t "two servers named soleur-bastion: refuses to guess, powers off nothing, returns 1" "$([[ "$RC" -eq 1 && "$CURL" != *POST* && "$OUT" == *"2 servers"* && "$PO" == failed ]]; echo $?)"
+two_servers_shape() { [[ "$RC" -eq 1 && "$CURL" != *POST* && "$OUT" == *"2 servers"* && "$PO" == failed && "$GH" == *"issue comment 12879"*"power-off FAILED"* ]]; }
+t "two servers named soleur-bastion: refuses to guess, powers off nothing, returns 1, still comments the failure" "$(two_servers_shape; echo $?)"
 lookup_failed_shape() { [[ "$RC" -eq 1 && "$CURL" != *POST* && "$GH" == *"12879"* && "$OUT" == *"server lookup failed"* && "$OUT" != *"nothing to power off"* && "$PO" == failed ]]; }
 run lookup500 'verdict=not_ready\n' 1 failure BBV_LOOKUP_CODE=500
 t "an unreadable server lookup is named as failed (never 'nothing to power off'), still returns 1 and comments" "$(lookup_failed_shape; echo $?)"
@@ -159,8 +160,10 @@ run lookupnoarray 'verdict=not_ready\n' 1 failure BBV_LOOKUP_BODY='{}'
 t "a 200 lookup without a servers array is a failed lookup, not an absent server" "$(lookup_failed_shape; echo $?)"
 run poweroff500 'verdict=not_ready\n' 1 success BBV_POWEROFF_CODE=500
 t "a failed poweroff call is an error naming the manual step, returns 1" "$([[ "$RC" -eq 1 && "$OUT" == *"::error::"*"poweroff"* && "$PO" == failed ]]; echo $?)"
+poweroff_failed_comment_shape() { [[ "$GH" == *"issue comment 12879"*"the power-off FAILED, soleur-bastion may still be running"* && "$GH" != *"powered off, disk kept"* && "$SUM" == *"power-off FAILED"* ]]; }
+t "a failed poweroff: the #12879 comment and the summary say the power-off FAILED" "$(poweroff_failed_comment_shape; echo $?)"
 run notoken 'verdict=not_ready\n' 1 success HCLOUD_TOKEN=
-t "no HCLOUD_TOKEN: no API call, an error, returns 1" "$([[ "$RC" -eq 1 && -z "$CURL" && "$OUT" == *"HCLOUD_TOKEN"* && "$PO" == failed ]]; echo $?)"
+t "no HCLOUD_TOKEN: no API call, an error, returns 1, still comments" "$([[ "$RC" -eq 1 && -z "$CURL" && "$OUT" == *"HCLOUD_TOKEN"* && "$PO" == failed && "$GH" == *"issue comment 12879"* ]]; echo $?)"
 run notready 'verdict=not_ready\n' 1 success
 t "the Hetzner token rides the stdin config, never curl's argv" "$([[ "$CFG" == *"hcloudtok123"* ]] && ! grep -q hcloudtok123 "$WORK/notready/curl.log"; echo $?)"
 t "the comment carries the run URL" "$([[ "$GH" == *"https://github.com/o/r/actions/runs/1"* ]]; echo $?)"
@@ -198,9 +201,12 @@ mrow "a lookup without a servers array read as empty" "'.servers | arrays | leng
 mrow "the read not bound to the created server" 'BOOT_TRAIL_HOST_ID="$host_id" BOOT_TRAIL_SINCE="$since" \
         JOB_STATUS="$job_status" DISPATCH_LABEL="$label" bash "$reader" 2>&1 | tee "$tmp"' 'BOOT_TRAIL_HOST_ID="" BOOT_TRAIL_SINCE="$since" \
         JOB_STATUS="$job_status" DISPATCH_LABEL="$label" bash "$reader" 2>&1 | tee "$tmp"' ready_bound_shape ready 'verdict=ready\n' 0 success
+mrow "the comment claims a power-off that failed" '    *) poweroff_note="the power-off FAILED, soleur-bastion may still be running"' '    *) poweroff_note="soleur-bastion powered off, disk kept"' poweroff_failed_comment_shape poweroff500 'verdict=not_ready\n' 1 success BBV_POWEROFF_CODE=500
+mrow "the comment only on a successful power-off" 'if [[ -n "${GH_TOKEN:-}" ]]; then' 'if [[ -n "${GH_TOKEN:-}" && "$_BBV_POWEROFF" == powered_off ]]; then' two_servers_shape twoservers 'verdict=not_ready\n' 1 success 'BBV_LOOKUP_BODY={"servers":[{"id":4242,"name":"soleur-bastion"},{"id":4343,"name":"soleur-bastion"}]}'
+mrow "the lookup takes the first of two servers" '  if [[ "$n" -ne 1 ]]; then' '  if [[ "$n" -lt 1 ]]; then' two_servers_shape twoservers 'verdict=not_ready\n' 1 success 'BBV_LOOKUP_BODY={"servers":[{"id":4242,"name":"soleur-bastion"},{"id":4343,"name":"soleur-bastion"}]}'
 
 echo
-MIN_CASES=38
+MIN_CASES=42
 if [[ "$cases" -lt "$MIN_CASES" ]]; then printf 'test-bastion-boot-verify: FAIL (only %d assertions ran; floor %d)\n' "$cases" "$MIN_CASES" >&2; exit 1; fi
 if [[ $((passes + fails)) -ne "$cases" ]]; then printf 'test-bastion-boot-verify: FAIL (accounting: passes+fails=%d != cases=%d)\n' "$((passes + fails))" "$cases" >&2; exit 1; fi
 if [[ "$fails" -gt 0 ]]; then printf 'test-bastion-boot-verify: FAIL (%d of %d assertions failed)\n' "$fails" "$cases" >&2; exit 1; fi
