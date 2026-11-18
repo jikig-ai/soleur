@@ -14,9 +14,8 @@
 #
 # Orthogonal to the dev-migration-drift-probe composite action: the
 # drift probe checks ledger-vs-origin/main (filename + content_sha drift
-# class, #4241). This preflight checks ledger-vs-live-schema (the
-# #4338 drift class). Both passing is the necessary-and-sufficient
-# condition for a safe apply.
+# class, #4241). This preflight checks selected ledgered table presence
+# (#4338); neither check proves complete schema equivalence or a safe apply.
 
 set -uo pipefail
 
@@ -49,12 +48,23 @@ if [[ ! -d "$MIGRATIONS_DIR" ]]; then
 fi
 
 command -v psql >/dev/null 2>&1 || { echo "::error::psql not found on PATH"; exit 1; }
+command -v timeout >/dev/null 2>&1 || { echo "::error::timeout not found on PATH; preflight is unverified."; exit 1; }
+SQL_TIMEOUT_SECONDS="${PREFLIGHT_SQL_TIMEOUT_SECONDS:-10}"
+if [[ ! "$SQL_TIMEOUT_SECONDS" =~ ^([1-9]|[12][0-9]|30)$ ]]; then
+  echo "::error::Invalid preflight SQL timeout; expected 1 to 30 seconds."
+  exit 1
+fi
 
 run_sql() {
-  psql "$DATABASE_URL" --no-psqlrc -tAq --set ON_ERROR_STOP=1 -c "$1"
+  # Bounds the local client wait, including connection setup. It does not prove
+  # that a remote backend stopped after the client was terminated.
+  timeout --signal=TERM --kill-after=1s "${SQL_TIMEOUT_SECONDS}s" psql "$DATABASE_URL" --no-psqlrc -tAq --set ON_ERROR_STOP=1 -c "$1"
 }
 
-applied=$(run_sql "SELECT filename FROM public._schema_migrations ORDER BY filename;")
+if ! applied=$(run_sql "SELECT filename FROM public._schema_migrations ORDER BY filename;" 2>/dev/null); then
+  echo "::error::Could not read the migration ledger; schema-vs-ledger preflight is unverified."
+  exit 1
+fi
 
 missing=""
 while IFS= read -r filename; do
@@ -74,14 +84,31 @@ while IFS= read -r filename; do
   # (`Create Table`), schema-less `<name>`, or quoted identifiers
   # (`"Public"."Foo"`) bypass this check — the FK parser remains the
   # last line of defense for those shapes.
-  declared_tables=$(grep -oE 'CREATE TABLE (IF NOT EXISTS )?public\.[a-z_][a-z0-9_]*' "$path" 2>/dev/null \
-    | awk '{print $NF}' | sort -u || true)
+  if declared_matches=$(grep -oE 'CREATE TABLE (IF NOT EXISTS )?public\.[a-z_][a-z0-9_]*' "$path" 2>/dev/null); then
+    grep_rc=0
+  else
+    grep_rc=$?
+  fi
+  if [[ "$grep_rc" -gt 1 ]]; then
+    echo "::error::Could not inspect a ledgered migration; schema-vs-ledger preflight is unverified."
+    exit 1
+  fi
+  if ! declared_tables=$(printf '%s\n' "$declared_matches" | awk '{print $NF}' 2>/dev/null | sort -u 2>/dev/null); then
+    echo "::error::Could not inspect a ledgered migration; schema-vs-ledger preflight is unverified."
+    exit 1
+  fi
   while IFS= read -r tbl; do
     [[ -z "$tbl" ]] && continue
     # tbl matches public.[a-z_][a-z0-9_]* — regex-bounded; safe for SQL.
-    exists=$(run_sql "SELECT to_regclass('$tbl') IS NOT NULL;" 2>/dev/null || echo "f")
-    if [[ "$exists" != "t" ]]; then
+    if ! exists=$(run_sql "SELECT to_regclass('$tbl') IS NOT NULL;" 2>/dev/null); then
+      echo "::error::Could not verify a ledgered table; schema-vs-ledger preflight is unverified."
+      exit 1
+    fi
+    if [[ "$exists" == "f" ]]; then
       missing+="  - ledger claims $filename applied, but $tbl is missing"$'\n'
+    elif [[ "$exists" != "t" ]]; then
+      echo "::error::Unexpected ledgered table probe result; schema-vs-ledger preflight is unverified."
+      exit 1
     fi
   done <<<"$declared_tables"
 done <<<"$applied"

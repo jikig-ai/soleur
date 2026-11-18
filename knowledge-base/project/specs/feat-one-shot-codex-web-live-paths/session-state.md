@@ -4285,6 +4285,29 @@
   them to an existing main database already at 186. Compare effective schemas,
   grants and ledger in disposable databases before any shared reconciliation;
   the review did not observe a shared ledger or qualify another migration path.
+  A further source-only review found migration 165 revokes its private tables
+  from anon/authenticated but does not explicitly revoke PUBLIC or inherited
+  privileges, and main's conditional migration 174 grants on some existing
+  engine tables depend on replay order. This is not a live-grant finding:
+  effective table/column privileges, inherited roles and RLS must be measured
+  in the disposable equivalence rehearsal and later on an authorized target.
+  The normal migration runner also fetches main and invokes a PostgREST reload
+  hook, so an offline rehearsal must isolate Git/network and scrub credentials
+  as well as own its database clusters. A source review identified a separate
+  schema-preflight failure mode; a synthetic failing psql reproduced success
+  after empty and partially emitted failed ledger reads. A separate review
+  reproduced another false green on an unreadable migration. The local fix
+  refuses failed ledger reads and migration inspection errors, bounds each
+  local psql wait, and distinguishes failed table probes from missing tables.
+  Synthetic tests and independent review cover partial responses, inherited
+  `bash -e`, no-match files and timeouts. This remains only a selected-table
+  presence check: malformed or absent ledger files are skipped, empty ledgers
+  can pass, there is no overall deadline and client termination does not prove
+  backend stop. No shared database was contacted.
+- Subsequent conflict-free local merges incorporated main through
+  `e4c5828c5ac93e305c6e95c849dab146564f16a5` and then
+  `08d040db10b13ef01f45e9330c102560774029f4`. Recheck main at final review;
+  these merges do not qualify the combined head or authorize capture.
 - On that merged tree, the collector's disposable PostgreSQL fixture passed,
   as did 30 focused collector lifecycle tests and 23 focused socket-admission
   tests. The test fixture's outer subprocess timeout was raised to 90 seconds
@@ -4335,6 +4358,14 @@
   both disclosure mirrors and CLO re-review confirmed that narrow correction.
   Full access, rights, erasure, retention, rendering and final independent CLO
   clearance remain open.
+- A separate Linux Unix-socket fixture checks `SO_PEERCRED` before reading a
+  fixed, non-authorizing health request; it has no live authority or vault
+  operation. Independent security review reproduced same-UID pathname
+  substitution between bind and pathname inspection. The fixture never unlinks
+  the socket and refuses restart on the stale entry; it is explicitly named
+  as a fixture and does not establish server identity, distinct-UID access,
+  directory provenance, exclusive execution or production fencing. Its
+  synthetic socket tests and UID-check mutation pass within those limits.
 
 ### Earlier local experiments — 2026-11-06
 
