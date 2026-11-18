@@ -4469,3 +4469,11 @@
   `autoMergeRequest` is null, and the pushed head remains
   `4225c68a3eb1e9bdb917f899ae85618848b2c691`. This recovery branch has not been
   pushed; no collection, writer-window, or ship gate was exercised.
+- Reconciled migration inventory after the main merge: `origin/main` has 195
+  forward migrations through ordinal 186; this branch has 206, including the
+  11 Codex notice/lifecycle migrations absent from main. Both sets share the
+  same main files. Duplicate integer prefixes remain (including 174 and 175),
+  but the canonical runner tracks filenames; exact replay and effective
+  privilege comparison are still needed. Updated the plan's stale main ordinal
+  from 178 to 186 and recorded 187/188 as the next two correction ordinals if
+  main does not advance; remeasure before creating either migration.

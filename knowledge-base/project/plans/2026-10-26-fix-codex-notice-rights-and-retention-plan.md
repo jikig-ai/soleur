@@ -263,9 +263,10 @@ Do not edit or replay `175_codex_history_notice_issuance.sql`. Remeasure
 migration ownership and ordinals
 before each forward-only migration in dependent companion PRs stacked on #9051's
 feature branch; any correction migration must follow #9051's prerequisite on
-the stack and must be numbered after current `origin/main`'s maximum ordinal
-178. If main remains unchanged and the correction is ready after #9051 merges,
-the next two ordinals are 179 and 180; remeasure again before creating them.
+the stack and must be numbered after current `origin/main`'s maximum ordinal.
+On 2026-11-18, `origin/main` reached ordinal 186; if main remains unchanged
+and the correction is ready after #9051 merges, the next two ordinals are 187
+and 188. Remeasure before creating either migration.
 Derive expiry from
 `issued_at + interval '30 minutes'`; do not add a second stored expiry clock
 without evidence that variable policy is required. Add an index supporting
@@ -658,8 +659,8 @@ it must not be treated as available until added and tested.
   completion gate spans all six asks. Do not target `main` with either
   correction migration until prerequisite
   `175_codex_history_notice_issuance.sql` from #9051 is present
-  there. Current fetched main reaches ordinal 178, so remeasure before choosing
-  correction ordinals. Preserve the draft hold.
+  there. On 2026-11-18, fetched main reached ordinal 186, so remeasure before
+  choosing correction ordinals. Preserve the draft hold.
 
 ## Acceptance Criteria
 
