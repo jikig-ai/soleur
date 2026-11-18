@@ -23,7 +23,7 @@ import {
   COMMUNITY_ROUTER_READ_VERBS,
   CRON_BASH_ALLOWLISTS,
 } from "../../../server/inngest/functions/_cron-claude-eval-substrate";
-import { COMMUNITY_MONITOR_PROMPT as PROMPT_TEMPLATE, renderCommunityMonitorPrompt } from "../../../server/inngest/functions/cron-community-monitor";
+import { renderCommunityMonitorPrompt } from "../../../server/inngest/functions/cron-community-monitor";
 import { SOLEUR_PLUGIN_PATH_DEFAULT } from "../../../server/plugin-path";
 
 const CRON = "cron-community-monitor";

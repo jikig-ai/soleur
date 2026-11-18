@@ -22,7 +22,6 @@
 
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

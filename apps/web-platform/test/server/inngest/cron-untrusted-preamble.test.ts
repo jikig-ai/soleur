@@ -13,7 +13,6 @@
 
 import { EventEmitter } from "node:events";
 import { readdirSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
