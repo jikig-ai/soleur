@@ -1,6 +1,8 @@
 // Offline lifecycle prototype. Adapters are injected; this module has no
 // credentials, network client, executable entry point or persistence. A mock
 // observer cannot prove ownership or that a real backend stopped.
+import { types } from 'node:util';
+
 const unknown = (operation = 'not_started', cancel = 'not_attempted', close = 'not_attempted') => ({
   operation, cancel, close, stop: 'unknown', evidence: 'adapter_report_only',
   ownership: 'unverified', writer_clearance: false,
@@ -31,6 +33,55 @@ function reportedStopped(value, phase) {
     value.phase === phase && value.scope === 'owned_operation';
 }
 
+function observePromise(promise) {
+  return new Promise((resolve) => {
+    Promise.prototype.then.call(
+      promise,
+      (value) => resolve({ state: 'fulfilled', value }),
+      () => resolve({ state: 'rejected' }),
+    );
+  });
+}
+
+function readOperation(started) {
+  if (!started || typeof started !== 'object' || Array.isArray(started)) return null;
+  try {
+    const inspection = Object.getOwnPropertyDescriptor(started, 'inspection');
+    const settlement = Object.getOwnPropertyDescriptor(started, 'settlement');
+    if (!inspection || !Object.hasOwn(inspection, 'value') || !types.isPromise(inspection.value) ||
+        !settlement || !Object.hasOwn(settlement, 'value') || !types.isPromise(settlement.value) ||
+        inspection.value === settlement.value) return null;
+    return { inspection: inspection.value, settlement: settlement.value };
+  } catch { return null; }
+}
+
+function dataValue(object, key) {
+  if (!object || typeof object !== 'object') return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(object, key);
+  return descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined;
+}
+
+function settledOperation(results) {
+  if (!Array.isArray(results) || results.length !== 2) return null;
+  const [inspection, settlement] = results;
+  if (inspection?.state !== 'fulfilled' || settlement?.state !== 'fulfilled') return null;
+  const inspectionValue = inspection.value;
+  const directState = dataValue(inspectionValue, 'state');
+  const rolesState = dataValue(dataValue(inspectionValue, 'roles'), 'state');
+  const inspectionState = ['complete', 'partial', 'failed'].includes(directState)
+    ? directState
+    : rolesState;
+  const transactionState = dataValue(settlement.value, 'state');
+  if (!['complete', 'partial', 'failed'].includes(inspectionState) ||
+      !['fulfilled', 'rejected', 'not_started'].includes(transactionState)) return null;
+  return {
+    inspectionState,
+    operation: inspectionState === 'complete' && transactionState === 'fulfilled'
+      ? 'completed'
+      : inspectionState === 'partial' ? 'partial' : 'failed',
+  };
+}
+
 export async function observeDedicatedLifecycle(adapter, limits) {
   if (!adapter || !limits || !['create', 'start', 'cancel', 'close', 'verify'].every((key) => typeof adapter[key] === 'function') ||
       !Number.isSafeInteger(limits.workMs) || limits.workMs < 1 || limits.workMs > 15000 ||
@@ -49,12 +100,22 @@ export async function observeDedicatedLifecycle(adapter, limits) {
 
   const controller = new AbortController();
   const workDeadline = performance.now() + limits.workMs;
-  const task = Promise.resolve().then(() => {
-    if (controller.signal.aborted || performance.now() >= workDeadline) throw new Error('deadline');
-    return adapter.start(connection, controller.signal);
-  }).then(() => ({ state: 'completed' }), () => ({ state: 'failed' }));
+  if (controller.signal.aborted || performance.now() >= workDeadline) return unknown('timeout');
+  let started;
+  try { started = adapter.start(connection, controller.signal); }
+  catch { return unknown('failed'); }
+  const operationPromises = readOperation(started);
+  if (!operationPromises) {
+    if (types.isPromise(started)) Promise.prototype.then.call(started, () => {}, () => {});
+    return unknown('unknown');
+  }
+  const task = Promise.all([
+    observePromise(operationPromises.inspection),
+    observePromise(operationPromises.settlement),
+  ]);
   const work = await bounded(() => task, workDeadline);
-  const operation = work.state === 'completed' ? work.value.state : work.state;
+  let completion = work.state === 'completed' ? settledOperation(work.value) : null;
+  let operation = completion?.operation ?? work.state;
   const cleanupDeadline = performance.now() + limits.cleanupMs;
   let cancel = 'not_attempted';
 
@@ -67,7 +128,10 @@ export async function observeDedicatedLifecycle(adapter, limits) {
     if (cancel !== 'completed') return unknown(operation, cancel);
     const settled = await bounded(() => task, cleanupDeadline);
     if (settled.state !== 'completed') return unknown(operation, cancel);
+    completion = settledOperation(settled.value);
+    if (!completion) return unknown(operation, cancel);
   }
+  if (!completion) return unknown(operation === 'completed' ? 'failed' : operation, cancel);
 
   const preclose = await bounded(() => adapter.verify(connection, 'preclose'), cleanupDeadline);
   if (preclose.state !== 'completed' || !reportedStopped(preclose.value, 'preclose')) return unknown(operation, cancel);

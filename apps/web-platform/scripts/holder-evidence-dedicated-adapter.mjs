@@ -15,7 +15,7 @@ export function createSyntheticDedicatedAdapter(scenario) {
   let issued = false;
   let started = false;
   let precloseVerified = false;
-  let settle;
+  let settle, inspect;
   let starts = 0;
   let cancellationAttempts = 0;
   let cancellations = 0;
@@ -32,15 +32,20 @@ export function createSyntheticDedicatedAdapter(scenario) {
       issued = true;
       return connection;
     },
-    async start(candidate, signal) {
+    start(candidate, signal) {
       if (signal.aborted || started || !observerIndependent() || !ownsHeldRecord(candidate) || current.state !== 'ready') refuse();
       started = true;
       starts++;
+      const inspection = new Promise((resolve) => { inspect = resolve; });
+      const settlement = new Promise((resolve) => { settle = resolve; });
       if (scenario === 'cancel' || scenario.startsWith('reuse_')) {
         current.state = 'running';
-        return new Promise((resolve) => { settle = resolve; });
+        return { inspection, settlement };
       }
       current.state = 'stopped';
+      inspect({ state: 'complete' });
+      settle({ state: 'fulfilled' });
+      return { inspection, settlement };
     },
     async cancel(candidate) {
       cancellationAttempts++;
@@ -52,7 +57,8 @@ export function createSyntheticDedicatedAdapter(scenario) {
       if (!observerIndependent() || !ownsHeldRecord(candidate) || current.state !== 'running' || !settle) refuse();
       cancellations++;
       current.state = 'stopped';
-      settle();
+      inspect({ state: 'failed' });
+      settle({ state: 'fulfilled' });
     },
     async verify(candidate, phase) {
       if (!observerIndependent() || candidate !== connection) refuse();
