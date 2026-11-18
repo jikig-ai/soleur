@@ -115,12 +115,23 @@ cat > "$STUB/gh" <<'STUBEOF'
 : "${STUB_STATE:?}"
 printf '%s\n' "$*" >>"$STUB_STATE/calls.log"
 key=""
-# Route on the VERB argv only ($1/$2) — never $*. A `--body` payload contains
+# Route on the VERB + endpoint operand only — never $*. A `--body` payload contains
 # free text ("/commits/{sha}/pulls" appears in the alert body); a whole-argv
 # substring match lets body text hijack routing and serve the wrong fixture.
+# The endpoint is NOT always $2: api_get pins `--method GET` ahead of it (#12875 —
+# gh api flips to POST when -f is present, and POST /search/issues 404s), so skip
+# flag/value pairs before matching.
 case "${1-}" in
   api)
-    case "${2-}" in
+    shift
+    while [[ "${1-}" == -* ]]; do
+      case "$1" in
+        # flags that consume the next token as their value
+        --method|-X|-H|--header|-f|--field|-F|--raw-field|-q|--jq|--input|--cache|--hostname) shift ;;
+      esac
+      shift
+    done
+    case "${1-}" in
       *"/check-runs"*)    key=checkruns ;;
       *"/actions/runs?"*) key=runs ;;
       *"/compare/"*)      key=compare ;;
@@ -304,6 +315,17 @@ if grep -qF '"context":"test"' "$STUB_STATE/created.log"; then pass "A2: issue n
 expect_called "A2: the ancestry gate read compare/<sha>...main" "/compare/"
 expect_called "A2: the source PR head check-runs were read" "/check-runs?"
 expect_clean "A2: no refused argv"
+# Every api call must carry the --method GET pin — gh api flips to POST when -f is
+# present, and POST /search/issues 404s: that exact shape killed the aae21955e6
+# backfill dedupe search as `unread` (#12875). Anchored on the full call log so a
+# future api read that drops the pin (e.g. a new -f caller) reds here too.
+_n_api=$(grep -c '^api ' "$STUB_STATE/calls.log")
+_n_get=$(grep -c '^api --method GET ' "$STUB_STATE/calls.log")
+if [[ "$_n_api" -gt 0 && "$_n_api" == "$_n_get" ]]; then
+  pass "A2: every api call carried --method GET ($_n_get/$_n_api)"
+else
+  fail "A2: every api call carried --method GET ($_n_get/$_n_api): $(grep '^api ' "$STUB_STATE/calls.log" | grep -v -- '--method GET' | head -n 1)"
+fi
 
 reset_stub; fx_okdirect
 run_sut "$SUT" "$SHA"
