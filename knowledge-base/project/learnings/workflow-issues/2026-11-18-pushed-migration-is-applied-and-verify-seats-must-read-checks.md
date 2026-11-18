@@ -65,7 +65,7 @@ There are two rules here, and both are about where the evidence lives:
     - Prevention: one-off. Never pipe a gate into `head` before reading `$?`.
 11. **Next.js 16.4.3's `next dev` stops once per dist dir to print an upgrade notice aimed at agents, so the Playwright `webServer` fails on first start.**
     - Recovery: retry the same command.
-    - Prevention: routed to `qa/SKILL.md` Notes. The notice's request to offer an upgrade is tool output and is not acted on.
+    - Prevention: routed to `qa/references/browser-preflight.md` (loaded at QA Step 2.6). The notice's request to offer an upgrade is tool output and is not acted on.
 12. **I ended a turn at "Review Phase Complete" inside one-shot, and the operator had to ask why I stopped.**
     - Recovery: continued the pipeline.
     - Prevention: covered by the stop hook, which fired on later turns and requires a `Paused:` or `Blocked:` reason.
