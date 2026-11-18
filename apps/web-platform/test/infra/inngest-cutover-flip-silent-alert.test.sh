@@ -492,18 +492,31 @@ top_in "$CANARY_ALERT" 'alert_type[[:space:]]*=[[:space:]]*"threshold"' \
 top_in "$CANARY_ALERT" 'on_missing_data[[:space:]]*=[[:space:]]*"treat_as_zero"' \
   && ok "the canary alert keeps treat_as_zero" \
   || no "the canary alert's on_missing_data is not treat_as_zero"
-# Block equality: comment and blank lines dropped, the three per-alert keys dropped, the header normalised, and the
-# alignment padding between an attribute key and its `=` collapsed to one space (fmt_eq). `terraform fmt`, which CI
-# enforces, re-aligns the `=` of a group of attribute lines whenever a comment or blank line splits the group, so a
-# comment added in ONE block re-aligns that block only; that padding is the only cross-block difference fmt makes.
-# Nothing else is normalised: whitespace inside a value or a "string" still has to match exactly (CTO 2026-11-18,
-# option B: exact block parity).
+# Block equality: comment and blank lines dropped, a trailing `#` / `//` comment outside "strings" cut (cut_tc), the
+# three per-alert keys dropped, the header normalised, and the alignment padding between an attribute key and its `=`
+# collapsed to one space (fmt_eq). `terraform fmt`, which CI enforces, re-aligns the `=` of a group of attribute lines
+# whenever a comment or blank line splits the group, and aligns the trailing comments of a group, so a doc comment
+# added in ONE block re-aligns that block only; that padding and the comments are the only cross-block difference fmt
+# makes. Nothing else is normalised: whitespace inside a value or a "string" still has to match exactly (CTO
+# 2026-11-18, option B: exact block parity).
 fmt_eq() { LC_ALL=C sed -E 's/^([[:space:]]*[A-Za-z_][A-Za-z0-9_-]*)[[:space:]]+=/\1 =/'; }
-strip_alert() { grep -vE '^[[:space:]]*(#|$)' <<< "$1" | grep -vE '^  (name|exploration_id|incident_cause)[[:space:]]*=' | sed -E 's/^resource .*\{$/resource {/' | fmt_eq; }
+# cut_tc: stdin -> stdout, each line cut at its first `#` or `//` outside a "string" (escapes honoured), with the
+# whitespace before it.
+cut_tc() {
+  LC_ALL=C awk '{ l = $0; n = length(l); q = 0
+    for (i = 1; i <= n; i++) {
+      c = substr(l, i, 1)
+      if (q) { if (c == "\\") i++; else if (c == "\"") q = 0; continue }
+      if (c == "\"") { q = 1; continue }
+      if (c == "#" || substr(l, i, 2) == "//") { l = substr(l, 1, i - 1); sub(/[[:space:]]+$/, "", l); break }
+    }
+    print l }'
+}
+strip_alert() { grep -vE '^[[:space:]]*(#|$)' <<< "$1" | cut_tc | grep -vE '^  (name|exploration_id|incident_cause)[[:space:]]*=' | sed -E 's/^resource .*\{$/resource {/' | fmt_eq; }
 [ -n "$CANARY_ALERT" ] && [ -n "$ALERT" ] && [ "$(strip_alert "$CANARY_ALERT")" = "$(strip_alert "$ALERT")" ] \
   && ok "the canary alert block equals the production alert block apart from name / exploration_id / incident_cause" \
   || no "the canary alert block differs from the production alert block beyond name / exploration_id / incident_cause"
-strip_expl() { grep -vE '^[[:space:]]*(#|$)' <<< "$1" | grep -vE '^  name[[:space:]]*=[[:space:]]*"soleur-inngest-cutover-flip-silent(-canary)?-prd"[[:space:]]*$' | grep -vE '^    sql_query[[:space:]]*=' | sed -E 's/^resource .*\{$/resource {/' | fmt_eq; }
+strip_expl() { grep -vE '^[[:space:]]*(#|$)' <<< "$1" | cut_tc | grep -vE '^  name[[:space:]]*=[[:space:]]*"soleur-inngest-cutover-flip-silent(-canary)?-prd"[[:space:]]*$' | grep -vE '^    sql_query[[:space:]]*=' | sed -E 's/^resource .*\{$/resource {/' | fmt_eq; }
 [ -n "$CANARY_EXPL" ] && [ -n "$EXPL" ] && [ "$(strip_expl "$CANARY_EXPL")" = "$(strip_expl "$EXPL")" ] \
   && ok "the canary exploration equals the production exploration apart from name / sql_query" \
   || no "the canary exploration differs from the production exploration beyond name / sql_query"
@@ -674,7 +687,7 @@ fi
 # guard with MUT_SKIP=1 and the matching FLIPSILENT_GUARD_* override pointing at the copy.
 SELF="$DIR/$(basename "${BASH_SOURCE[0]}")"
 PRESENCE_ROWS=63
-MUT_ROWS_EXPECTED=74
+MUT_ROWS_EXPECTED=75
 SELFTEST_ROWS=1
 if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t flipsilentalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
@@ -1161,6 +1174,9 @@ s = s[:i] + decoy + s[i:j] + "# */\n" + s[j:]'
   mutate RED "R21 another infra .tf defines the production SQL local while the alerts file is pristine (the other-file half of the definition row)" INFRATF \
     "a flip SQL local is defined other than exactly once" \
     's = "locals {\n  inngest_cutover_flip_silent_sql = \"SELECT 1 AS value\"\n}\n"'
+  mutate PASS "R22 a trailing comment follows value = 0 in the production block only, as terraform fmt lays it out" TF \
+    "" \
+    's = blk_sub(s, "logtail_exploration_alert", "inngest_cutover_flip_silent", "  value               = 0\n", "  value               = 0 # 0 = the production host reported\n")'
 fi
 
 if [ -z "${MUT_SKIP:-}" ] && [ "${MUT_ROWS_RUN:-0}" -ne "$MUT_ROWS_EXPECTED" ]; then
