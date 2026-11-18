@@ -13,7 +13,7 @@ import { readFileSync } from "fs";
 export const PLUGIN_ROOT = resolve(import.meta.dir, "..");
 
 /** Load-bearing agent count for Grok inspect / Phase F CI contract tests. */
-export const EXPECTED_SOLEUR_AGENT_COUNT = 68;
+export const EXPECTED_SOLEUR_AGENT_COUNT = 69;
 
 /** Relative path from repo root to the committed agents manifest. */
 export const AGENTS_MANIFEST_PATH = "plugins/soleur/.claude-plugin/agents.manifest.json";

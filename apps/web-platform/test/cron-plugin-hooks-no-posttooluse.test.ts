@@ -1,4 +1,5 @@
-// #11076 review (CTO K4) — the cron substrate spawns `claude --plugin-dir <clone>/plugins/soleur`,
+// #11076 review (CTO K4) — the cron substrate spawns `claude --plugin-dir <plugin root>` (the clone's
+// plugins/soleur until #12824; the deployed read-only root since),
 // so the plugin's hook sources load into every cron run. `runFramingHookSelfTest` reads only the
 // spawn's `.claude/settings.json`; a PostToolUse hook registered by the plugin would run under no
 // `frameGhOutput` option and no self-test.

@@ -6,10 +6,9 @@ category: infrastructure
 tags: [uptime, redirect, www, canonical, better-stack, sentry, cloudflare, 301]
 applies_to:
   - apps/web-platform/infra/uptime-alerts.tf
-  - apps/web-platform/infra/sentry/uptime-monitors.tf
   - apps/web-platform/infra/seo-bulk-redirects.tf
   - apps/web-platform/infra/cutover-verify.sh
-related_issues: [7798]
+related_issues: [7798, 12844]
 ---
 
 # Runbook: the www→apex 301 alarm fired
@@ -21,17 +20,16 @@ go to [Diagnose](#diagnose).
 
 ## First: which alarm is this?
 
-Two monitors watch `www.soleur.ai` and they mean different things. Read the
-subject line before anything else — they are the only thing that distinguishes
-them in an inbox.
+One monitor watches `www.soleur.ai`. Since ADR-328 removed the Sentry www
+reachability monitor, www reachability pages only through this one:
 
 | Alert name | Vendor | Means | Time to page |
 |---|---|---|---|
-| `soleur dot ai www redirect 301` | Better Stack | www stopped 301-ing to the apex. The site is UP; canonicalization is broken. | ~23 min (up to 180s to observe + 1200s confirmation) |
-| `soleur-ai-www-reachability` | Sentry | www is unreachable, TLS-broken, or 5xx. | ~15 min (300s interval, 3 failures) |
+| `soleur dot ai www redirect 301` | Better Stack | www did not answer with the 301 to the apex. Either the redirect stopped firing (the site is UP, canonicalization is broken) or www is unreachable — the check also fails on DNS, TLS and 5xx. | ~23 min (up to 180s to observe + 1200s confirmation) |
 
-They are independent. Both firing at once means www is down; only the first
-firing means www is serving something, just not a redirect.
+The alert alone does not tell you which of the two it is. Step 1 of
+[Diagnose](#diagnose) does: a `200` means the redirect stopped; a `522`/`526`/timeout
+means www is down.
 
 ## What is actually being asserted
 
@@ -40,9 +38,8 @@ firing means www is serving something, just not a redirect.
 `follow_redirects = false` so the pre-redirect response is what gets graded.
 
 That last part is the whole point, and it is why this monitor is on Better Stack
-rather than beside its four siblings in Sentry. Sentry's uptime checker always
-follows 3xx and evaluates assertions against the *final* response, so on this URL
-it grades the apex's 200 — an `equals 301` assertion there is unsatisfiable. It
+and not on Sentry. Sentry's uptime checker always follows 3xx and evaluates
+assertions against the *final* response, so on this URL it grades the apex's 200 — an `equals 301` assertion there is unsatisfiable. It
 was configured exactly that way from 2026-05-29 to 2026-09-07 and failed 100% of
 its checks (#7798, ADR-204).
 
@@ -61,7 +58,7 @@ its checks (#7798, ADR-204).
    | `301` + `location: https://soleur.ai/` | Healthy. The alarm is stale or was a transient. |
    | `200` | **The Bulk Redirect stopped firing.** www is serving the site directly — duplicate content, and the canonical signal splits. |
    | `302` / `307` / `308` | Something re-created the redirect with the wrong status. Search engines treat these differently from a 301. |
-   | `522` / `526` / timeout | Not a redirect problem. This is a reachability failure; `soleur-ai-www-reachability` should be firing too. |
+   | `522` / `526` / timeout | Not a redirect problem. This is a reachability failure, and it is why the same alarm fired: anything other than the 301 fails it. |
 
 3. **Read the alarm's own state, not just the URL.** Step 1 answers "what does www
    return now"; it does not answer "is the alarm still firing, or am I chasing a
@@ -76,86 +73,6 @@ its checks (#7798, ADR-204).
    This one DOES need a credential, unlike step 1. Note the vendor exposes the
    monitor's status but not the response code the failing check observed — recover
    that by re-running step 1, not from the API.
-
-   **The Sentry half — `soleur-ai-www-reachability` — is a different vendor and a
-   different path shape.** Two details are load-bearing, and each returns `404` on
-   its own if you get it wrong — which reads exactly like "no such monitor" rather
-   than "wrong URL":
-
-   - the org slug is **`jikigai-eu`** (`doppler secrets get SENTRY_ORG -p soleur -c
-     prd_terraform --plain`), not `soleur`. A wrong slug answers
-     `404 {"detail":"Project does not exist"}`, which invites you to go looking for
-     a missing project rather than a wrong org.
-   - per-check rows live under the **project**, not the organization.
-     `organizations/<org>/uptime/<id>/checks/` is a `404`, even though
-     `organizations/<org>/uptime/` (the LIST) is the correct org-scoped call. The
-     two sit one path segment apart and only one of them is org-scoped.
-
-   The **host is not** one of them, and this is worth stating because it looks like
-   it should be: the org is EU-resident and the sibling Better Stack call is
-   region-specific. Measured 2026-09-07, `sentry.io` and `de.sentry.io` BOTH return
-   `200` for the org-scoped list and the project-scoped checks path — Sentry routes
-   the org either way. The examples below use plain `sentry.io` to match
-   `cutover-verify.sh`, which is the in-repo caller of these same two endpoints.
-   (`scripts/sentry-issue.sh` carries a comment recording that an earlier
-   "de.sentry.io 404s" claim was also false, measured 2026-09-02 — this is the
-   second time the host has been blamed for someone else's 404.)
-
-   ```bash
-   # 1. resolve the monitor id AND its project slug (this call IS org-scoped).
-   #    --fail-with-body: without it an expired token exits 0 with a JSON error
-   #    body, and jq renders that as an unhelpful blank -- indistinguishable from
-   #    "no such monitor", which is the confusion this whole section exists to end.
-   read -r MON PROJ < <(doppler run -p soleur -c prd_terraform --command '
-     curl -sS --fail-with-body --max-time 30 \
-       -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
-       "https://sentry.io/api/0/organizations/jikigai-eu/uptime/"' \
-     | jq -r '[.[] | select(.name=="soleur-ai-www-reachability")][0]
-              | "\(.id) \(.projectSlug)"')
-
-   # Fail loudly rather than building a URL with an empty id: `.../uptime//checks/`
-   # is a 404, i.e. the exact "no such monitor" false signal again.
-   [ -n "${MON:-}" ] && [ "$MON" != "null" ] || { echo "monitor not found"; return 1 2>/dev/null || exit 1; }
-
-   # 2. read the check rows (PROJECT-scoped).
-   MON="$MON" PROJ="$PROJ" doppler run -p soleur -c prd_terraform --command '
-     curl -sS --fail-with-body --max-time 30 \
-       -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
-       "https://sentry.io/api/0/projects/jikigai-eu/$PROJ/uptime/$MON/checks/"' \
-     | jq -r '.[] | "\(.timestamp[0:19])  \(.checkStatus)  http=\(.httpStatusCode)"'
-   ```
-
-   `$MON`/`$PROJ` are passed as ENVIRONMENT, not spliced into the command string —
-   that string is evaluated by a shell holding the whole `prd_terraform` secret set,
-   so a vendor-supplied value with a quote in it does not belong in it.
-
-   **There is no time-window parameter on the checks endpoint.** Measured
-   2026-09-07: no query, `?statsPeriod=24h`, `?statsPeriod=14d` and
-   `?statsPeriod=90d` all return the same 10 rows. It is a fixed rolling
-   collection, which is why `cutover-verify.sh` bounds it CLIENT-side with
-   `CUTOVER_SINCE` in jq rather than asking the API to. Do not add a
-   `statsPeriod=` and believe you are reading a window.
-
-   Unlike Better Stack, Sentry DOES expose the observed status code per check —
-   and it is the code of the **first hop**, while the assertion is graded against
-   the **terminal** response. That distinction is the whole of #7798: rows reading
-   `failure ... http=301` are not a contradiction, they are a `301` first hop whose
-   followed terminal `200` failed an `equals 301` assertion. If you ever see that
-   shape again, the assertion is wrong, not the redirect.
-
-   To LOOK UP the alarm issue by short-id (a GET; this does not close anything):
-
-   ```bash
-   doppler run -p soleur -c prd_terraform --command '
-     curl -sS --fail-with-body --max-time 30 \
-       -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
-       "https://sentry.io/api/0/organizations/jikigai-eu/shortids/WEB-PLATFORM-11/"' \
-     | jq -r '.group | "\(.shortId) status=\(.status) lastSeen=\(.lastSeen)"'
-   ```
-
-   Closing it is a different call — `PUT {"status":"resolved"}` on the issues
-   endpoint — and `scripts/sentry-issue.sh` already wraps that; prefer it over
-   hand-rolling the write.
 
 4. **A deploy in the last ~25 minutes is the most likely benign cause.** During a
    Cloudflare Pages rebuild, www transiently serves its own 200 (~15 min
@@ -239,5 +156,6 @@ marker. Reaching that state requires a change made outside Terraform. See ADR-20
 ## Related
 
 - [ADR-204](../../architecture/decisions/ADR-204-redirect-health-moves-to-better-stack-because-sentry-cannot-express-it.md)
+- [ADR-328](../../architecture/decisions/ADR-328-sentry-uptime-holds-one-slot-for-the-production-app.md) — Sentry holds one uptime slot, on the production app; marketing-site uptime is Better Stack's
 - [ADR-194](../../architecture/decisions/ADR-194-migrate-marketing-docs-site-off-github-pages-to-cloudflare-pages.md) — the Pages cutover that made www a Pages custom domain
 - Issue [#7798](https://github.com/jikig-ai/soleur/issues/7798)

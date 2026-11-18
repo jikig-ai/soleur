@@ -215,6 +215,18 @@ Sentry and BetterStack tokens are printed in full. That has already happened onc
 > pending. Retained rather than rewritten, because this is the record of what was
 > believed at cutover time.
 
+> **Amended 2026-11-17 (#12844, ADR-328).** CUT8 no longer grades Sentry monitors.
+> ADR-328 removed every Sentry uptime monitor on the marketing site; Sentry's one
+> included uptime slot now watches the production app, which CUT8 does not gate.
+> `cutover-verify.sh` reads only `BETTERSTACK_MONITORS` and sends no Sentry token.
+> `cutover-monitor-baseline.txt` still lists the old Sentry rows until it is
+> re-captured. CUT8 never reads them, because it iterates the live probe, not the
+> baseline. The re-capture, together with adding the Better Stack changelog
+> deep-path monitor to `BETTERSTACK_MONITORS`, is the follow-up PR of #12844.
+> `CUTOVER_SINCE` is now inert: it bounded Sentry's rolling check window, and Better
+> Stack reports current status only, so the `export CUTOVER_SINCE=` line above can be
+> skipped. The 2026-09-07 note above and the paragraph below are kept as written.
+
 `soleur-ai-www` is in an active failure incident *before* this cutover: it records
 its own correct `301` as a failure because the `equals 301` assertion declared in
 `sentry/uptime-monitors.tf` is not live on the monitor (#7798). Read absolutely,
