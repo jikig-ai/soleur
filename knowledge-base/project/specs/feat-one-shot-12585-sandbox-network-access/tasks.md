@@ -97,3 +97,12 @@ Rulings: `knowledge-base/project/specs/feat-one-shot-12585-sandbox-network-acces
 - 5.2 Post-merge: pull from Sentry (`op:sandbox-network-denied`) and Better Stack yourself. Run the no-host check only on a fetched event JSON. If no event exists, record `UNVERIFIED:prod-deny-event-shape` and file an issue.
 - 5.3 The hosted entitled-session check is a production write. Name it as one plain ACTION for the operator's go-ahead. Without that go-ahead, record `UNVERIFIED:hosted-entitled-sandboxed-egress` and file an issue.
 - 5.4 The PR body must contain `Closes #12585`.
+
+## Work status (2026-11-18)
+
+- Phase 1a ran: NO-GO on per-host caching (arms F, F2), so row 6' (deny-all `gateway-unverified`) shipped and AC2 is replaced by AC22. Follow-up allow arm: #12906. Hosted check: #12907 (`UNVERIFIED:hosted-entitled-sandboxed-egress`).
+- Deviation: the open-web decoy is `198.51.100.1` (TEST-NET-2), not `10.0.0.1`: the SDK sets the sandboxed command's `NO_PROXY` to loopback plus every RFC 1918 and link-local range, so a `10.0.0.1` target would bypass the proxy by the SDK's own rule and measure nothing about routing.
+- Deviation: arm F2 added (the cache spans commands). Arm E's sub-case is the allow-all MEASUREMENT run; the production run shows the arm's `egress-not-running`.
+- Deviation: the warm re-resolve was extracted unchanged into `reResolveWarmWebEgress` so AC18 can await it.
+- Finding fixed: the forwarder registry moved to `globalThis` (the Next route bundle and the custom server load separate module copies; the toggle-off teardown would otherwise see an empty registry).
+- Spike driver: calls the production decision and allows exactly the `gateway-unverified` hosts (it measures the route an allow would get).

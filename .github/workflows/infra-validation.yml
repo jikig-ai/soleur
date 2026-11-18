@@ -64,6 +64,9 @@ on:
       # and the classifier; a reworded needle must run the guard that pins the alert to them.
       - "apps/web-platform/server/cc-dispatcher.ts"
       - "apps/web-platform/server/sandbox-startup-classifier.ts"
+      # (#12585) sandbox-network-denied-alert.test.sh reads the alert's needles from the deny reporter and the reason union.
+      - "apps/web-platform/server/permission-callback.ts"
+      - "apps/web-platform/server/sandbox-network-access.ts"
       # (#8097) Suites under apps/web-platform/test/infra/ run inside deploy-script-tests-fixed
       # (the SEND_FAILED alert guard + battery); editing a suite must run the suite.
       - "apps/web-platform/test/infra/**"
@@ -998,6 +1001,12 @@ jobs:
       # resource in the .tf, and the mutation rows that each require this guard to red.
       - name: Run agent sandbox Bash denial alert drift guard (#10445)
         run: bash apps/web-platform/test/infra/sandbox-alerts.test.sh
+
+      # (#12585) The granted-but-degraded sandboxed-egress Logs alert: the feature/op needles read from the
+      # permission-callback deny reporter and the reason union, the five-conjunct predicate evaluated against
+      # production-shaped fixture rows, the paging semantics, both -target lines, the runbook row, and the mutation rows.
+      - name: Run sandbox network degraded alert drift guard (#12585)
+        run: bash apps/web-platform/test/infra/sandbox-network-denied-alert.test.sh
 
       # (#10453) The deploy-time SDK Bash smoke Logs alert: the marker, reason and op needles read from ci-deploy.sh's
       # own sandbox_canary_sentry_event format and the smoke's page call, the three-conjunct predicate EVALUATED against

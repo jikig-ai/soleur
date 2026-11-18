@@ -33,6 +33,7 @@ import { createRequire } from "node:module";
 
 import { buildAgentEnv } from "/app/server/agent-env.ts";
 import { buildAgentSandboxConfig } from "/app/server/agent-runner-sandbox-config.ts";
+import { decideSandboxNetworkAccess, normalizeHost } from "/app/server/sandbox-network-access.ts";
 import { isPathInWorkspace } from "/app/server/sandbox.ts";
 import { isFileTool, pathFieldsEscape } from "/app/server/tool-path-checker.ts";
 import { patternEscapesWorkspace } from "/app/server/tool-pattern-checker.ts";
@@ -61,17 +62,6 @@ type Spec = {
 
 const DRIVER_TOOLS = new Set(["Bash", "Read", "WebFetch"]);
 
-/** NO_PROXY semantics for a host: an exact entry, or a `*.suffix` / `.suffix` entry covering it (R34). */
-export function noProxyMatches(host: string, noProxy: string): boolean {
-  for (const raw of noProxy.split(",")) {
-    const e = raw.trim().toLowerCase();
-    if (!e) continue;
-    if (e === host) return true;
-    const suffix = e.startsWith("*.") ? e.slice(1) : e.startsWith(".") ? e : null;
-    if (suffix && host.endsWith(suffix)) return true;
-  }
-  return false;
-}
 const INJECT_HOSTS = ["github.com", "api.github.com", "uploads.github.com", "codeload.github.com"];
 const out = (o: unknown) => process.stdout.write(`SDK_EGRESS_RESULT ${JSON.stringify(o)}\n`);
 
@@ -183,7 +173,7 @@ async function main() {
   // Every permission request the SDK raised, by tool name (a network request outside the sandbox's allowlist
   // reaches canUseTool too; recording them shows which decisions came from the callback rather than the sandbox).
   const permissionCalls: string[] = [];
-  const networkDecisions: { host: string; decision: string }[] = [];
+  const networkDecisions: { host: string; normalized: string | null; decision: string; reason: string }[] = [];
   const stderrTls: string[] = [];
 
   const require = createRequire("/app/package.json");
@@ -200,15 +190,18 @@ async function main() {
         canUseTool: async (name: string, input: Record<string, unknown>) => {
           permissionCalls.push(`${name} ${redact(JSON.stringify(input)).text.slice(0, 160)}`);
           // CTO R34: the SDK raises SandboxNetworkAccess for every host outside the sandbox's allowedDomains.
-          // Production's callback has no arm for it and denies it as an unknown tool (#11637 owns the change). The
-          // driver answers as that change would have to: deny for an unentitled session; for an entitled one, deny a
-          // host the session's NO_PROXY matches (it would go direct, e.g. to the app container's loopback) and allow
-          // any other host, so the gateway or the injector is the policy boundary. IP literals not in NO_PROXY are
-          // allowed, so squid's deny list is what refuses them.
+          // #12585: the decision is PRODUCTION's (server/sandbox-network-access.ts), with this session's own NO_PROXY
+          // (arm B removes the inject hosts from it), so the spike pins the production deny order: not-entitled,
+          // malformed-host, loopback-literal, no-proxy-match. Production then denies every remaining host
+          // `gateway-unverified` (deny-all: the SDK caches per-host allows, ADR-278 addendum 2026-11-18); the spike
+          // instead ALLOWS exactly those hosts, recorded with their production reason, because what it measures is the
+          // route an allow would get (gateway or injector as the policy boundary), the evidence the follow-up allow
+          // arm needs. IP literals not in NO_PROXY are allowed, so squid's deny list is what refuses them.
           if (name === "SandboxNetworkAccess") {
-            const host = String((input as { host?: unknown })?.host ?? "").toLowerCase().replace(/\.$/, "");
-            const allow = spec.networkAllowAll === true || (entitled && !noProxyMatches(host, String(env.NO_PROXY ?? "")));
-            networkDecisions.push({ host, decision: allow ? "allow" : "deny" });
+            const rawHost = String((input as { host?: unknown })?.host ?? "");
+            const d = decideSandboxNetworkAccess(input, entitled ? { live: true } : undefined, String(env.NO_PROXY ?? ""));
+            const allow = spec.networkAllowAll === true || d.reason === "gateway-unverified";
+            networkDecisions.push({ host: rawHost, normalized: normalizeHost(rawHost)?.host ?? null, decision: allow ? "allow" : "deny", reason: d.reason });
             return allow ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: "network access denied" };
           }
           if (isFileTool(name) && (pathFieldsEscape(input, (p: string) => isPathInWorkspace(p, spec.workspace)) || patternEscapesWorkspace(name, input))) {
