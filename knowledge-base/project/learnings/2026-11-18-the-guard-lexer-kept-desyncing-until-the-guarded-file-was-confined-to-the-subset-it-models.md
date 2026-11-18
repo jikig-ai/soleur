@@ -31,7 +31,7 @@ Round 2 had already applied the 2026-11-11 learning. It stated the guard's CONTR
 
 ## Solution
 
-Lead ruling R-subset: stop growing the lexer, and confine the INPUT instead. Five file-wide rows refuse anything outside a subset the lexer models exactly:
+Ruling R-subset (the review lead's design, ratified by the CTO agent on 2026-11-18): stop growing the lexer, and confine the INPUT instead. Five file-wide rows refuse anything outside a subset the lexer models exactly:
 
 - **S1:** no `/*` anywhere.
 - **S2:** every `${`/`%{` closes on its own line, and its body holds none of `"`, `#`, `/`, `<`, `{`, `}` or `\`.

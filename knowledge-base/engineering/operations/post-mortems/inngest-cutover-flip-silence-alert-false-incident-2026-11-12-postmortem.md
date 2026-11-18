@@ -6,7 +6,7 @@ incident_window: "2026-11-12T23:45:00Z → TBD"
 recovery_at: "TBD"
 suspected_change: "PR #12709 (re-arm of the inngest_cutover_flip_silent Logs alert, applied 2026-11-13T00:01:47Z by run 43333522781)"
 brand_survival_threshold: none
-status: open
+status: ongoing
 triggers:
   []
 art_33_triggered: false
@@ -26,11 +26,11 @@ The Better Stack Logs alert `soleur-inngest-cutover-flip-silent-prd` opened inci
 
 ## Status
 
-open — one of `resolved` / `unresolved but ended` / `ongoing`. Mirrors the `status:` frontmatter above; do not introduce a second source of truth. It becomes `resolved` when the inverted alert (PR #12865) is live with rows arriving and the owner has resolved incident 1051496324 (tracked in #12878).
+ongoing — one of `resolved` / `unresolved but ended` / `ongoing`. Mirrors the `status:` frontmatter above; do not introduce a second source of truth. It becomes `resolved` when the inverted alert (PR #12865) is live with rows arriving and the owner has resolved incident 1051496324 (tracked in #12878).
 
 ## Symptom
 
-Incident 1051496324 has been open since 2026-11-12T23:45:00Z (start time as Better Stack recorded it). Its metadata reads `Current value: 0`, `Operator: lower_than`, `Threshold value: 1`. Its GitHub mirror, #12726, a P1 action-required issue, collected a "Still open" comment every 15 minutes, about 460 of them.
+Incident 1051496324 has been open since 2026-11-12T23:45:00Z (start time as Better Stack recorded it). Its metadata reads `Current value: 0`, `Operator: lower_than`, `Threshold value: 1`. Its GitHub mirror, #12726, a P1 action-required issue, collected a "Still open" comment every 15 minutes: 563 of them by 2026-11-18T16:46Z.
 
 ## Incident Timeline
 
@@ -42,10 +42,10 @@ Order of events (load-bearing: the redaction sentinel scans this table; the Acto
 
 | Actor | Time (UTC) | Action |
 |---|---|---|
+| agent | 2026-11-12T23:45:00Z | Incident 1051496324's recorded start. Better Stack back-dated it: the incident was created at the first evaluation after the 00:01:47Z un-pause below. |
 | agent | 2026-11-13T00:01:47Z | Re-arm apply (run 43333522781) modified `logtail_exploration_alert.inngest_cutover_flip_silent`; before that the alert was paused. |
-| agent | 2026-11-12T23:45:00Z | Incident 1051496324 opened at the first evaluation after the un-pause, back-dated to this time. |
+| agent | 2026-11-17T15:47:03Z | PR #12865 opened (draft): inverts the alert to the ADR-218 missing-count form (`higher_than 0`) and adds a throwaway canary. Merge waits for the owner's typed go. |
 | agent | 2026-11-17T15:50:00Z | Read-only diagnosis: object rows 11 to 12 per hour, no hour missing; largest gap 370 s against a 900 s window; the alert's own SQL replayed on four windows returned 3, 2, 2, 3. |
-| agent | 2026-11-18 | PR #12865 opened: inverts the alert to the ADR-218 missing-count form (`higher_than 0`) and adds a throwaway canary. Merge waits for the owner's typed go. |
 
 ## Participants and Systems Involved
 
@@ -117,7 +117,7 @@ Unknown / N/A
 
 ### Team Impact
 
-About 460 automated "Still open" comments on P1 issue #12726, and one diagnosis session.
+563 automated "Still open" comments (counted 2026-11-18T16:46Z) on P1 issue #12726, and one diagnosis session.
 
 ## Lessons Learned
 
