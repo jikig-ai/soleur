@@ -60,6 +60,12 @@ import {
   batchGrantablePrefix,
 } from "./permission-callback-bash-batch";
 import { warnSilentFallback } from "./observability";
+import {
+  decideSandboxNetworkAccess,
+  SANDBOX_NETWORK_ACCESS_TOOL,
+  sandboxNetworkDenyMessage,
+  type SandboxNetworkReason,
+} from "./sandbox-network-access";
 import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
 import { isSupportAllowedSkill } from "./support-directive";
 import { denySupport } from "./support-escalation";
@@ -348,7 +354,48 @@ export interface CanUseToolContext {
    * message: no card, no `waiting_for_user` write, no offline notification.
    */
   nonInteractive?: boolean;
+  /**
+   * #12585 — the session's live egress-forwarder handle, as a liveness probe (cc-dispatcher passes
+   * `isEgressForwarderLive(conversationId, token)`). Present ONLY when a forwarder was spawned for this Query: it is the
+   * same expression that feeds `buildAgentEnv`'s `egressProxy`, never the grant boolean (CTO F1). Absent => every
+   * `SandboxNetworkAccess` request is denied `not-entitled`. The legacy runner and the support persona never pass it.
+   */
+  sandboxNetworkEgress?: { isLive: () => boolean };
+  /** #12585 — the web-egress GRANT, for the Sentry `granted` tag and the deny copy only; never a decision input (CTO T13). */
+  webEgressGranted?: boolean;
   deps: CanUseToolDeps;
+}
+
+/**
+ * #12585 — every denied SandboxNetworkAccess request logs one pino warn line; the Sentry mirror is deduplicated per
+ * Query (closure state of one createCanUseTool instance, CTO T20) on (reason, matchedEntry), so a command retrying one
+ * host cannot flood Sentry while Better Stack still counts every occurrence (CTO D3). No field carries the requested
+ * host, the tool input or the user (CLO ruling 3): `matchedEntry` is a NO_PROXY list literal.
+ */
+const SANDBOX_NETWORK_DENIED = {
+  feature: "cc-permissions",
+  op: "sandbox-network-denied",
+  message: "sandboxed network request denied",
+} as const;
+function createSandboxNetworkDenyReporter(): (
+  reason: SandboxNetworkReason,
+  matchedEntry: string | undefined,
+  granted: boolean,
+  subagent: boolean,
+) => void {
+  const seen = new Set<string>();
+  return (reason, matchedEntry, granted, subagent) => {
+    const extra = { reason, granted, matchedEntry, subagent };
+    const key = `${reason}\u0000${matchedEntry ?? ""}`;
+    if (seen.has(key)) {
+      const { feature, op, message } = SANDBOX_NETWORK_DENIED;
+      log.warn({ feature, op, ...extra }, message);
+      return;
+    }
+    seen.add(key);
+    // warnSilentFallback writes the same pino warn line itself, then the Sentry warning.
+    warnSilentFallback(null, { ...SANDBOX_NETWORK_DENIED, tags: { reason, granted: granted ? "true" : "false" }, extra });
+  };
 }
 
 // Wording shared by every Bash deny the agent reads: the command did NOT run, and a retry or a respelling is the
@@ -442,6 +489,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
   const { deps } = ctx;
   // #9600 — one budgeted reporter per session for the `.git` file-tool deny below.
   const reportGitCarrierDeny = createGitCarrierDenyReporter();
+  const reportSandboxNetworkDeny = createSandboxNetworkDenyReporter();
   // #9556 — one injection point for the deny→handoff flag: every support deny
   // path THAT ESCALATES calls `deny(`, which stamps the dispatch-resolved
   // repo-connected state onto the escalation record. (The deliberately
@@ -563,6 +611,27 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
   };
   return async (toolName, toolInput, options): Promise<PermissionResult> => {
     const subagentCtx = options.agentID ? ` [subagent=${options.agentID}]` : "";
+
+    // #12585 — the SDK's host-side sandbox proxy asks for every host a sandboxed command dials. FIRST branch, exact name,
+    // every persona and subagent, never falls through (a later safe-set or MCP-prefix branch must not shadow it). Deny-all
+    // by measurement (see server/sandbox-network-access.ts); the deny names its reason instead of "Tool not permitted".
+    if (toolName === SANDBOX_NETWORK_ACCESS_TOOL) {
+      let egress: { live: boolean } | undefined;
+      if (ctx.sandboxNetworkEgress) {
+        let live = false;
+        try {
+          live = ctx.sandboxNetworkEgress.isLive() === true;
+        } catch {
+          live = false; // a throwing probe counts as not-live (CTO T4)
+        }
+        egress = { live };
+      }
+      const decision = decideSandboxNetworkAccess(toolInput, egress);
+      const granted = ctx.webEgressGranted === true;
+      reportSandboxNetworkDeny(decision.reason, decision.matchedEntry, granted, Boolean(options.agentID));
+      logPermissionDecision("canUseTool-sandbox-network", toolName, "deny", decision.reason);
+      return { behavior: "deny" as const, message: sandboxNetworkDenyMessage(decision.reason, granted) };
+    }
 
     // Defense-in-depth: catch any file tool that bypasses PreToolUse hooks.
     // Hooks are the primary enforcement (layer 1); this is layer 2. See #891.

@@ -76,12 +76,41 @@ interface RegistryEntry extends EgressForwarderHandle {
 }
 
 /** conversationId → live forwarder. One forwarder per conversation (a Query
- *  spans many turns; the entitlement is per-session, not per-dispatch). */
-const egressForwarders = new Map<string, RegistryEntry>();
+ *  spans many turns; the entitlement is per-session, not per-dispatch).
+ *  #12585 — held on globalThis under a registered symbol: the custom server
+ *  (esbuild bundle, where cc-dispatcher spawns) and the Next route bundle
+ *  (where the web-access toggle tears down) each get their own copy of this
+ *  module in one process, so a module-level Map would leave the toggle-off
+ *  route looking at an always-empty registry. */
+const REGISTRY_KEY = Symbol.for("soleur.egressForwarders");
+const egressForwarders: Map<string, RegistryEntry> = ((
+  globalThis as unknown as Record<symbol, Map<string, RegistryEntry> | undefined>
+)[REGISTRY_KEY] ??= new Map<string, RegistryEntry>());
 
 /** Test/QA hook: is a forwarder registered for this conversation? */
 export function hasEgressForwarder(conversationId: string): boolean {
   return egressForwarders.has(conversationId);
+}
+
+/**
+ * #12585 — is THIS session's forwarder still the registered one? Keyed on the token as handle identity (mirrors the exit
+ * handler's `?.proc === proc` check): after a teardown, an exit, or a re-spawn under the same conversationId with a new
+ * token, the old session's probe answers false for good. The SandboxNetworkAccess arm reads it per request.
+ */
+export function isEgressForwarderLive(conversationId: string, token: string): boolean {
+  return egressForwarders.get(conversationId)?.token === token;
+}
+
+/**
+ * #12585 (CTO D1) — tear down every forwarder THIS process holds for a workspace, right after its owner turns web access
+ * off. Returns how many were torn down. The other web host's forwarders are revoked by the next-dispatch re-resolve.
+ */
+export function teardownEgressForwardersForWorkspace(workspaceId: string): number {
+  const conversations = [...egressForwarders.entries()]
+    .filter(([, entry]) => entry.workspaceId === workspaceId)
+    .map(([conversationId]) => conversationId);
+  for (const conversationId of conversations) teardownEgressForwarder(conversationId);
+  return conversations.length;
 }
 
 /** The workspace a live forwarder was minted for (undefined when none). */

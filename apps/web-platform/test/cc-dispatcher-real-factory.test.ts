@@ -36,6 +36,7 @@ const {
   mockResolveWebEgressStrict,
   mockSpawnEgressForwarder,
   mockTeardownEgressForwarder,
+  fakeForwarders,
   mockResolveAutonomousAck,
   mockResolveIsWorkspaceOwner,
   mockWriteAskpassScriptTo,
@@ -94,6 +95,9 @@ const {
   mockResolveWebEgressStrict: vi.fn(),
   mockSpawnEgressForwarder: vi.fn(),
   mockTeardownEgressForwarder: vi.fn(),
+  // #12585 — a fake forwarder registry (conversationId -> {token, workspaceId}) the egress-forwarder mock reads, so the
+  // SandboxNetworkAccess liveness probe and the warm re-resolve see a spawn/teardown like the real module's.
+  fakeForwarders: new Map<string, { token: string; workspaceId: string }>(),
   mockResolveAutonomousAck: vi.fn(),
   mockResolveIsWorkspaceOwner: vi.fn(),
   mockWriteAskpassScriptTo: vi.fn(),
@@ -229,7 +233,8 @@ vi.mock("@/server/egress-forwarder", () => ({
   teardownEgressForwarder: mockTeardownEgressForwarder,
   reapOrphanEgressForwarders: vi.fn(),
   hasEgressForwarder: vi.fn(() => false),
-  egressForwarderWorkspaceId: vi.fn(() => undefined),
+  egressForwarderWorkspaceId: (c: string) => fakeForwarders.get(c)?.workspaceId,
+  isEgressForwarderLive: (c: string, t: string) => fakeForwarders.get(c)?.token === t,
 }));
 
 // feat-bash-autonomous-default-on — first-run consent soft-gate inputs. Default
@@ -485,6 +490,7 @@ import {
   getCcRegisteredApprovalTools,
   getCcRegisteredReadTools,
   realSdkQueryFactory,
+  reResolveWarmWebEgress,
 } from "@/server/cc-dispatcher";
 import { ccPushPromptAddendum } from "@/server/cc-github-push";
 import { RESOLVE_TIMEOUT_MS } from "@/server/resolve-protected-branches";
@@ -3003,6 +3009,86 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
         ([, o]) => o?.op === "web-egress-forwarder-spawn",
       );
       expect(calls).toHaveLength(1);
+    });
+
+    // #12585 AC17 (CTO T10) / AC18 (CTO T18): the SandboxNetworkAccess arm keys entitlement on the live forwarder handle.
+    describe("SandboxNetworkAccess wiring (#12585)", () => {
+      const ctxArg = () =>
+        (createCanUseTool as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as {
+          sandboxNetworkEgress?: { isLive: () => boolean };
+          webEgressGranted?: boolean;
+        };
+      beforeEach(() => {
+        fakeForwarders.clear();
+        mockSpawnEgressForwarder.mockImplementation(async (conversationId: string, workspaceId: string) => {
+          fakeForwarders.set(conversationId, { token: "tok-abc", workspaceId });
+          return { port: 28711, token: "tok-abc", pid: 4242 };
+        });
+        mockTeardownEgressForwarder.mockImplementation((conversationId: string) => fakeForwarders.delete(conversationId));
+      });
+      afterEach(() => {
+        fakeForwarders.clear();
+        mockSpawnEgressForwarder.mockReset();
+        mockTeardownEgressForwarder.mockReset();
+      });
+
+      it("AC17: grant on + spawn ok → sandboxNetworkEgress reaches createCanUseTool; isLive true, false after teardown", async () => {
+        mockResolveWebEgress.mockResolvedValue(true);
+        await realSdkQueryFactory(makeArgs());
+        const ctx = ctxArg();
+        expect(ctx.webEgressGranted).toBe(true);
+        expect(ctx.sandboxNetworkEgress).toBeDefined();
+        expect(ctx.sandboxNetworkEgress!.isLive()).toBe(true);
+        mockTeardownEgressForwarder("conv-1");
+        expect(ctx.sandboxNetworkEgress!.isLive()).toBe(false);
+      });
+
+      it("grant on but spawn failed → no handle (not-entitled), granted still true for the degraded signal", async () => {
+        mockResolveWebEgress.mockResolvedValue(true);
+        mockSpawnEgressForwarder.mockRejectedValue(new Error("bind boom"));
+        await realSdkQueryFactory(makeArgs());
+        expect(ctxArg().sandboxNetworkEgress).toBeUndefined();
+        expect(ctxArg().webEgressGranted).toBe(true);
+      });
+
+      it("grant off → no handle, granted false", async () => {
+        mockResolveWebEgress.mockResolvedValue(false);
+        await realSdkQueryFactory(makeArgs());
+        expect(ctxArg().sandboxNetworkEgress).toBeUndefined();
+        expect(ctxArg().webEgressGranted).toBe(false);
+      });
+
+      it("AC18: a warm re-resolve that returns a definitive false tears down; the next request is egress-not-running", async () => {
+        const actual = await vi.importActual<typeof import("@/server/permission-callback")>("@/server/permission-callback");
+        (createCanUseTool as unknown as { mockImplementationOnce(f: unknown): void }).mockImplementationOnce(
+          actual.createCanUseTool,
+        );
+        mockResolveWebEgress.mockResolvedValue(true);
+        await realSdkQueryFactory(makeArgs());
+        const canUseTool = mockQuery.mock.calls[0][0].options.canUseTool as (
+          n: string,
+          i: Record<string, unknown>,
+          o: unknown,
+        ) => Promise<{ behavior: string; message?: string }>;
+        const opts = { signal: new AbortController().signal, toolUseID: "tu-1", requestId: "req-1" };
+        const before = await canUseTool("SandboxNetworkAccess", { host: "example.com" }, opts);
+        expect(before.message).toMatch(/even with web access on/); // live: gateway-unverified
+
+        mockResolveWebEgressStrict.mockResolvedValue(false);
+        await reResolveWarmWebEgress("user-1", "conv-1");
+        expect(mockResolveWebEgressStrict).toHaveBeenCalledWith("user-1", expect.any(String));
+        expect(mockTeardownEgressForwarder).toHaveBeenCalledWith("conv-1");
+        const after = await canUseTool("SandboxNetworkAccess", { host: "example.com" }, opts);
+        expect(after.message).toMatch(/web access is on but isn't working/); // egress-not-running, granted
+      });
+
+      it("a re-resolve READ FAULT leaves the forwarder live (mirrored, no teardown)", async () => {
+        fakeForwarders.set("conv-1", { token: "tok-abc", workspaceId: "ws-1" });
+        mockResolveWebEgressStrict.mockRejectedValue(new Error("supabase blip"));
+        await reResolveWarmWebEgress("user-1", "conv-1");
+        expect(mockTeardownEgressForwarder).not.toHaveBeenCalled();
+        expect(fakeForwarders.has("conv-1")).toBe(true);
+      });
     });
 
     it("entitled but support persona → no forwarder (repo lifecycle is off)", async () => {

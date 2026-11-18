@@ -6,6 +6,9 @@ import {
   setWebEgress,
   WebEgressOwnerDeniedError,
 } from "@/server/set-web-egress";
+import { teardownEgressForwardersForWorkspace } from "@/server/egress-forwarder";
+import { getFreshTenantClient } from "@/lib/supabase/tenant";
+import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 
 // feat-open-web-egress (#9534) — per-workspace "Agent web access" toggle
 // (active-workspace). Cookie-authenticated browser route; the read/write
@@ -46,7 +49,15 @@ export async function POST(request: Request) {
     // raises (P0001) → WebEgressOwnerDeniedError → 403. A genuine infra fault
     // is NOT an authz denial → 500 (so it surfaces in 5xx alerting rather than
     // hiding behind a 403).
-    const webEgress = await setWebEgress(userId, body.value);
+    // #12585 (CTO D1) — resolve the workspace ONCE so the write and the
+    // teardown act on the same one. Turning web access off revokes this
+    // host's live forwarders for that workspace immediately: a sandboxed
+    // request is then denied egress-not-running and an allowed connection
+    // dies at the closed listener. The other web host's forwarders are
+    // revoked by the next-dispatch re-resolve (#12903).
+    const workspaceId = await resolveCurrentWorkspaceId(userId, await getFreshTenantClient(userId));
+    const webEgress = await setWebEgress(userId, body.value, workspaceId);
+    if (webEgress === false) teardownEgressForwardersForWorkspace(workspaceId);
     return NextResponse.json({ webEgress });
   } catch (err) {
     if (err instanceof WebEgressOwnerDeniedError) {

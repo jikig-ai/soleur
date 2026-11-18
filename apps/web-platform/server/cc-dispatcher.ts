@@ -200,6 +200,7 @@ import {
 } from "./resolve-web-egress";
 import {
   egressForwarderWorkspaceId,
+  isEgressForwarderLive,
   spawnEgressForwarder,
   teardownEgressForwarder,
 } from "./egress-forwarder";
@@ -3393,6 +3394,9 @@ export const realSdkQueryFactory: QueryFactory = async (
       }
     }
 
+    // #12585 — the handle the SandboxNetworkAccess liveness probe closes over (a const: no later reassignment leaks in).
+    const liveEgress = webEgress;
+
     // #4671 / ADR-287 — resolve the WebFetch injection-scan flags ONLY for sessions that
     // actually have web egress (WebFetch is otherwise disallowed), with the dispatch
     // user's real identity. Fail-open to OFF; a flag flip reaches the NEXT query only.
@@ -3584,6 +3588,13 @@ export const realSdkQueryFactory: QueryFactory = async (
           // allowlist ({kb-search}) when persona=support (defense-in-depth for a
           // model that emits a non-loaded skill despite the SDK `skills` filter).
           persona: args.persona,
+          // #12585 — the SandboxNetworkAccess arm keys entitlement on the LIVE forwarder handle (CTO F1), re-checked per
+          // request; `liveEgress` is a const so the closure cannot see a later reassignment of `webEgress`.
+          sandboxNetworkEgress: liveEgress
+            ? { isLive: () => isEgressForwarderLive(args.conversationId, liveEgress.token) }
+            : undefined,
+          // Observability only (Sentry `granted` tag, deny copy), never a decision input (CTO T13).
+          webEgressGranted: webEgressEntitled,
           deps: ccDeps,
         }),
         // #5772 lever 1 (ADR-070) — opt into the L3 phase-surface hint on the
@@ -4284,6 +4295,27 @@ export async function dispatchSoleurGo(
   }
 }
 
+/**
+ * The warm-dispatch web-egress re-resolve (rationale at its call site in dispatchSoleurGoInner): a DEFINITIVE false
+ * tears the conversation's forwarder down; a read fault leaves it be and mirrors. #12585 (CTO T18): extracted unchanged
+ * so a test can await it and then see the SandboxNetworkAccess arm deny `egress-not-running`. @internal exported for tests.
+ */
+export function reResolveWarmWebEgress(userId: string, conversationId: string): Promise<void> {
+  const fwdWorkspaceId = egressForwarderWorkspaceId(conversationId);
+  if (!fwdWorkspaceId) return Promise.resolve();
+  return resolveWebEgressStrict(userId, fwdWorkspaceId)
+    .then((entitled) => {
+      if (!entitled) teardownEgressForwarder(conversationId);
+    })
+    .catch((err) => {
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: "web-egress-re-resolve",
+        extra: { userId, conversationId, workspaceId: fwdWorkspaceId },
+      });
+    });
+}
+
 async function dispatchSoleurGoInner(
   args: DispatchSoleurGoArgs,
 ): Promise<void> {
@@ -4588,20 +4620,7 @@ async function dispatchSoleurGoInner(
   // there is no mid-session re-spawn path, so a revoked-then-recovered
   // grant would leave the CLI holding a dead proxy URL with WebFetch
   // still admitted. Only a DEFINITIVE false tears down.
-  const fwdWorkspaceId = egressForwarderWorkspaceId(conversationId);
-  if (fwdWorkspaceId) {
-    void resolveWebEgressStrict(userId, fwdWorkspaceId)
-      .then((entitled) => {
-        if (!entitled) teardownEgressForwarder(conversationId);
-      })
-      .catch((err) => {
-        reportSilentFallback(err, {
-          feature: "cc-dispatcher",
-          op: "web-egress-re-resolve",
-          extra: { userId, conversationId, workspaceId: fwdWorkspaceId },
-        });
-      });
-  }
+  void reResolveWarmWebEgress(userId, conversationId);
 
   // #5340 / #5240 design item #2 — deterministic workspace re-provision on
   // reconnect. After a sandbox/host reclaim the resolved workspace path can be a

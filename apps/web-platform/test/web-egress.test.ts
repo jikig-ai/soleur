@@ -38,7 +38,9 @@ import {
   spawnEgressForwarder,
   teardownEgressForwarder,
   hasEgressForwarder,
+  isEgressForwarderLive,
   reapOrphanEgressForwarders,
+  teardownEgressForwardersForWorkspace,
 } from "@/server/egress-forwarder";
 
 const CREDENTIAL = { value: "sk-test", scheme: "api_key" as const };
@@ -105,6 +107,14 @@ describe("buildAgentEnv — egressProxy (#9534)", () => {
     ]) {
       expect(env.NO_PROXY).toContain(host);
     }
+  });
+
+  it("NO_PROXY equals today's literal, written out (#12585 AC10, CTO T1: one source with the SandboxNetworkAccess arm)", () => {
+    const env = buildAgentEnv(CREDENTIAL, {}, { egressProxy: EGRESS });
+    const literal =
+      "localhost,127.0.0.1,::1,api.anthropic.com,mcp-proxy.anthropic.com,statsig.anthropic.com,*.sentry.io,*.datadoghq.com,*.supabase.co,*.supabase.in,api.stripe.com,github.com,*.github.com";
+    expect(env.NO_PROXY).toBe(literal);
+    expect(env.no_proxy).toBe(literal);
   });
 });
 
@@ -314,6 +324,40 @@ describe("egress-forwarder lifecycle (#9534)", () => {
     await expect(
       connectRaw(h.port, "CONNECT x:443 HTTP/1.1\r\n\r\n"),
     ).rejects.toThrow();
+  }, 15000);
+
+  it("#12585 AC7: isEgressForwarderLive is keyed on the token; a re-spawn with a new token never re-arms the old probe", async () => {
+    const first = await spawnEgressForwarder("conv-1", "ws-123");
+    expect(isEgressForwarderLive("conv-1", first.token)).toBe(true);
+    expect(isEgressForwarderLive("conv-1", "not-the-token")).toBe(false);
+    expect(isEgressForwarderLive("conv-other", first.token)).toBe(false);
+    teardownEgressForwarder("conv-1");
+    expect(isEgressForwarderLive("conv-1", first.token)).toBe(false);
+    const second = await spawnEgressForwarder("conv-1", "ws-123");
+    expect(second.token).not.toBe(first.token);
+    expect(isEgressForwarderLive("conv-1", second.token)).toBe(true);
+    expect(isEgressForwarderLive("conv-1", first.token)).toBe(false);
+  }, 15000);
+
+  it("#12585 AC7: a forwarder that exits on its own turns the probe false (the exit handler drops the entry)", async () => {
+    const h = await spawnEgressForwarder("conv-1", "ws-123");
+    process.kill(h.pid, "SIGKILL");
+    const deadline = Date.now() + 10_000;
+    while (isEgressForwarderLive("conv-1", h.token) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    expect(isEgressForwarderLive("conv-1", h.token)).toBe(false);
+  }, 15000);
+
+  it("#12585 (CTO D1): teardownEgressForwardersForWorkspace tears down only that workspace's forwarders", async () => {
+    const a = await spawnEgressForwarder("conv-1", "ws-123");
+    const b = await spawnEgressForwarder("conv-2", "ws-other");
+    try {
+      expect(teardownEgressForwardersForWorkspace("ws-123")).toBe(1);
+      expect(isEgressForwarderLive("conv-1", a.token)).toBe(false);
+      expect(isEgressForwarderLive("conv-2", b.token)).toBe(true);
+      expect(teardownEgressForwardersForWorkspace("ws-123")).toBe(0);
+    } finally {
+      teardownEgressForwarder("conv-2");
+    }
   }, 15000);
 
   it("inbound auth: no/wrong token → 407; correct token passes the auth gate", async () => {
