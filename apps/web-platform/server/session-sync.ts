@@ -36,7 +36,7 @@ import {
 } from "./connected-repo-git";
 import { HostGitRefusedError } from "./host-git";
 import { KB_ROOT } from "./kb-root";
-import { heldCountOn, writeHeldCount, type HeldCount } from "./kb-sync-held-refresh";
+import { writeHeldFromIsolated } from "./kb-sync-held-refresh";
 import { KbSyncError, publishKbOnly, reportPushHeld } from "./kb-sync-publish";
 import {
   adoptSideTip,
@@ -583,7 +583,7 @@ async function pullLocked(
 
     const head = readWorkspaceHeadRef(workspacePath);
     let result: KbPullStep;
-    let held: HeldCount | null = null;
+    let held: { total: number; onRecovered: number; checkedAt: string } | null = null;
     let repo: { url: string; owner: string; repo: string } | null = null;
     try {
       repo = await resolveRepoUrl(userId, workspaceId);
@@ -632,11 +632,21 @@ async function pullLocked(
           });
           if (side) result = side;
         }
-        // #12714 (D29(1)): after the merge and the adoption (up_to_date too), on this run's remote tip and the HEAD those
-        // steps left. No remote read: no tip, so no count (null, never 0).
+        // #12714 (D29(1), D39(a)(b), W1): after the merge and the adoption (up_to_date too), on this run's remote tip and
+        // the HEAD those steps left, through the ONE write path (server/kb-sync-held-refresh.ts) with this pull's injected
+        // service client: every attempt writes, a null count too, with checked_at = this run's ls-remote instant. No
+        // remote read: no tip, so no attempt. `pullBlocked` is the self-heal's alone (D42): left untouched here.
         if (merged.remote) {
-          held = await heldCountOn(isolated, merged.remote.tip, readWorkspaceHeadRef(workspacePath).sha, workspacePath, workspaceId);
-          if (held) await writeHeldCount(service, workspaceId, held);
+          const counted = await writeHeldFromIsolated({
+            isolated,
+            workspacePath,
+            workspaceId,
+            T: merged.remote.tip,
+            headSha: readWorkspaceHeadRef(workspacePath).sha,
+            checkedAt: merged.remote.readAt,
+            service,
+          });
+          if (counted) held = { ...counted, checkedAt: merged.remote.readAt.toISOString() };
         }
       }
     }
@@ -645,6 +655,7 @@ async function pullLocked(
       heldFiles: held?.total ?? null,
       onRecovered: held?.onRecovered ?? null,
       pullReason: result.reason,
+      // SyncPullResult contract: null exactly when heldFiles is (the stored checked_at is written regardless, D39(b))
       checkedAt: held?.checkedAt ?? null,
     };
   } catch (err) {
@@ -753,10 +764,6 @@ export async function syncPush(
 
 async function pushLocked(userId: string, workspacePath: string, service: SupabaseClient, workspaceId: string): Promise<void> {
   const ctx = { userId, workspaceId };
-  // #12714 (D29(1)): set by the publish's `onHeldFiles` hook, before its isolated dir is disposed; written from the
-  // `finally`, so held returns and the catch path write too. Null (no dir, no remote tip, no count): nothing is written.
-  // `as`: assigned inside the hook closure, so control flow must not narrow it to `null` here.
-  let held = null as HeldCount | null;
   try {
     // ONE status run feeds the unmerged scan and the auto-commit allowlist (D21).
     const status = await readStatus(workspacePath, "syncPush");
@@ -801,8 +808,10 @@ async function pushLocked(userId: string, workspacePath: string, service: Supaba
       headSha: head.sha,
       refName: head.refName,
       writer: kbWorkspaceWriter(workspacePath),
-      onHeldFiles: async ({ isolatedDir, T, headSha }) => {
-        held = await heldCountOn(isolatedDir, T, headSha, workspacePath, workspaceId);
+      // #12714 (D29(1), D39(a)(b)): the publish runs this hook from its `finally`, before its isolated dir is disposed, on
+      // every exit that read the remote tip (held exits too); the helper computes and writes (null with checked_at).
+      onHeldFiles: async ({ isolatedDir, T, headSha, readAt }) => {
+        await writeHeldFromIsolated({ isolated: isolatedDir, workspacePath, workspaceId, T, headSha, checkedAt: readAt, service });
       },
     });
 
@@ -926,7 +935,5 @@ async function pushLocked(userId: string, workspacePath: string, service: Supaba
       },
       message: "Sync push failed — next session will retry",
     });
-  } finally {
-    if (held) await writeHeldCount(service, workspaceId, held);
   }
 }

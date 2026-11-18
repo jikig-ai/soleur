@@ -30,7 +30,7 @@ const H2 = vi.hoisted(() => ({
   writerSpy: vi.fn(),
   innerMerge: vi.fn(async () => "clean"),
   /** D39(a)/D42: the self-heal's held-count write (frozen signature; WP3 owns the body). */
-  heldWriteSpy: vi.fn(async () => 0 as number | null),
+  heldWriteSpy: vi.fn(async () => ({ total: 0, onRecovered: 0 }) as { total: number; onRecovered: number } | null),
   /** D38(6): the same-host lock (frozen signature; WP1 owns the body). Calls fn by default. */
   lockSpy: vi.fn(async (_p: string, fn: () => Promise<unknown>) => fn()),
   /** The route callers' tenant-scoped repo-URL read. */

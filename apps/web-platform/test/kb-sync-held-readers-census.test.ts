@@ -91,12 +91,17 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
 
   it("session-sync writes the held columns only through writeKbSyncHeldCols, never folded into the stamp (D29(1))", () => {
     // The write lives in kb-sync-held-refresh.ts (Phase 0 move, WP3 body): ONE writeKbSyncHeldCols call, in `persist`,
-    // which every entry (writeHeldCount, writeHeldFromIsolated) goes through with the frozen patch shape.
+    // which every entry (writeHeldFromIsolated, and refreshHeldCount through it) goes through with the frozen patch shape:
+    // the caller's injected service client when given (session-sync's), else the process's.
     const refresh = sources.get("server/kb-sync-held-refresh.ts") ?? "";
     expect([...refresh.matchAll(/\bwriteKbSyncHeldCols\(/g)]).toHaveLength(1);
     expect(refresh).toMatch(/writeKbSyncHeldCols\(\s*service\(\),\s*workspaceId,\s*patch\s*\)/);
-    expect(refresh).toMatch(/persist\(\(\) => service,\s*workspaceId,\s*\{\s*heldFiles: held\.total,\s*checkedAt: new Date\(held\.checkedAt\)\s*\}\)/);
-    expect(refresh).toMatch(/persist\(getServiceClient,\s*a\.workspaceId,\s*\{\s*heldFiles: total,\s*checkedAt: a\.checkedAt,/);
+    expect([...refresh.matchAll(/\bpersist\(/g)]).toHaveLength(2); // its definition and its one call
+    expect(refresh).toMatch(
+      /persist\(service \? \(\) => service : getServiceClient,\s*a\.workspaceId,\s*\{\s*heldFiles: held === null \? null : held\.total,\s*checkedAt: a\.checkedAt,/,
+    );
+    // The pre-review entries are gone: one count-and-write entry (D39(a)).
+    expect(refresh).not.toMatch(/\b(heldCountOn|writeHeldCount)\b/);
     expect(refresh).not.toMatch(/writeRepoColsToWorkspace/);
     // workspace-repo-mirror.ts maps the patch to the migration-187 columns (the pull-blocked one only when given, D42),
     // in the one shared held UPDATE body (simplicity F7).
@@ -109,8 +114,14 @@ describe("kb-sync held columns: readers census (#12714, AC20)", () => {
     const src = sources.get("server/session-sync.ts") ?? "";
     // session-sync reaches the held write only through the moved helper, never writeKbSyncHeldCols directly.
     expect(src).not.toMatch(/\bwriteKbSyncHeldCols\b/);
-    expect(src).toMatch(/import \{[^}]*\bwriteHeldCount\b[^}]*\} from "\.\/kb-sync-held-refresh"/);
-    expect([...src.matchAll(/\bwriteHeldCount\(service, workspaceId, held\)/g)]).toHaveLength(2); // syncPull and syncPush
+    expect(src).toMatch(/import \{ writeHeldFromIsolated \} from "\.\/kb-sync-held-refresh"/);
+    // syncPull and syncPush (D39(a)(b)): each with its injected service client and checked_at = its own ls-remote instant;
+    // neither sets the pull-blocked column (the self-heal's alone, D42).
+    const heldCalls = [...src.matchAll(/\bwriteHeldFromIsolated\(\{([^}]*)\}\)/g)].map((m) => m[1]);
+    expect(heldCalls).toHaveLength(2);
+    expect(heldCalls[0]).toMatch(/T: merged\.remote\.tip,[\s\S]*checkedAt: merged\.remote\.readAt,\s*service,/);
+    expect(heldCalls[1]).toMatch(/T, headSha, checkedAt: readAt, service\s*$/);
+    for (const args of heldCalls) expect(args).not.toMatch(/pullBlocked/);
     // The only `writeRepoColsToWorkspace(` call is the stamp, and it names no held column.
     const repoWrites = [...src.matchAll(/writeRepoColsToWorkspace\(([^)]*)\)/g)].map((m) => m[1]);
     expect(repoWrites.length).toBeGreaterThan(0);

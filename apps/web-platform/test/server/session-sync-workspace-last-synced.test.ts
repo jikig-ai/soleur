@@ -157,6 +157,13 @@ const TEAM_WORKSPACE_ID = "team-ws-uuid-99";
 const SOLO_WORKSPACE_ID = USER_ID; // solo invariant: workspaces.id == users.id
 const WS_PATH = "/tmp/ws/x";
 const T_SHA = "f".repeat(40);
+/** The pull's ls-remote instant (`RemoteState.readAt`): 30 s before the TW2 clock, so a row tells it from "now" (D39(b)). */
+const READ_AT = new Date("2026-11-17T09:59:30.000Z");
+/** A service client whose held UPDATE fails, built on the writer's real chain (eq, eq, or, select). */
+function failingService(select: () => Promise<unknown>): never {
+  const chain = { eq: () => chain, or: () => chain, select };
+  return { from: () => ({ update: () => chain }) } as never;
+}
 const HEAD_SHA = "c".repeat(40);
 const ISO_DIR = { gitDir: "/tmp/iso", dispose: () => {} };
 
@@ -182,7 +189,7 @@ describe("session-sync write relocation (ADR-044 PR-B)", () => {
     mockPublish.mockResolvedValue({ kind: "pushed" });
     mockHead.mockReturnValue({ sha: "c".repeat(40), refName: "refs/heads/main" });
     mergeHead.present = false;
-    mockMerge.mockResolvedValue({ reason: "merged", remote: { defaultBranch: "main", tip: "f".repeat(40), sideTip: null } });
+    mockMerge.mockResolvedValue({ reason: "merged", remote: { defaultBranch: "main", tip: "f".repeat(40), sideTip: null, readAt: READ_AT } });
     mockAdopt.mockResolvedValue(null);
     mockWriteHeld.mockResolvedValue(undefined);
     mockCompute.mockResolvedValue(null);
@@ -304,8 +311,9 @@ describe("session-sync write relocation (ADR-044 PR-B)", () => {
   });
 });
 
-// TW2 (#12714, D29(1), D33): every sync that computed a held-files count writes it through the SEPARATE service-client
-// helper, with `kb_sync_held_checked_at` advancing; no count computed -> no write (never a guessed 0); a failed write
+// TW2 (#12714, D29(1), D33, D39(a)(b)): every sync that read the remote tip writes the held count through the ONE write
+// path (writeHeldFromIsolated -> writeKbSyncHeldCols) with the sync's injected service client, `checked_at` = that read's
+// instant; a failed count writes null (never a guessed 0) with its checked_at; no remote read -> no write; a failed write
 // sends one mirror and leaves the sync's result unchanged.
 describe("held-files write (TW2)", () => {
   beforeEach(() => {
@@ -320,7 +328,7 @@ describe("held-files write (TW2)", () => {
     mergeHead.present = false;
     mockRecovered.mockReturnValue([]);
     mockCompute.mockResolvedValue({ total: 2, onRecovered: 0 });
-    mockMerge.mockResolvedValue({ reason: "up_to_date", remote: { defaultBranch: "main", tip: T_SHA, sideTip: null } });
+    mockMerge.mockResolvedValue({ reason: "up_to_date", remote: { defaultBranch: "main", tip: T_SHA, sideTip: null, readAt: READ_AT } });
     mockAdopt.mockResolvedValue(null);
   });
   afterEach(() => vi.useRealTimers());
@@ -366,7 +374,7 @@ describe("held-files write (TW2)", () => {
     expect(mockReport.mock.calls.some(([, o]) => o?.op === "syncPush")).toBe(true);
   });
 
-  test("push: no count computed -> no write (no dir, a null count, unreadable recovered refs, a throwing count)", async () => {
+  test("push: no remote read -> no write; a null count, unreadable recovered refs or a throwing count write null with checked_at", async () => {
     mockPublish.mockImplementationOnce(publishWith({ result: { kind: "held", reason: "remote_branch_absent" }, hook: false }));
     await syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID);
     mockCompute.mockResolvedValueOnce(null);
@@ -380,7 +388,10 @@ describe("held-files write (TW2)", () => {
     await expect(syncPush(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toBeUndefined();
     expect(mockPublish).toHaveBeenCalledTimes(4);
     expect(mockCompute).toHaveBeenCalledTimes(2); // the null-recovered turn never computes
-    expect(mockWriteHeld).not.toHaveBeenCalled();
+    // D39(b), W1: every attempt writes; the turn with no isolated dir (no remote tip) is no attempt.
+    const nullWrite = [SOLO_WORKSPACE_ID, { heldFiles: null, checkedAt: new Date("2026-11-17T10:00:00.000Z") }];
+    expect(heldWrites()).toEqual([nullWrite, nullWrite, nullWrite]);
+    expect(mockWriteHeld.mock.calls.every(([svc]) => svc === SERVICE)).toBe(true);
   });
 
   test("push: a refused turn before the publish (merge in progress, detached HEAD) writes nothing", async () => {
@@ -396,11 +407,7 @@ describe("held-files write (TW2)", () => {
   test("push: a failed held write sends exactly one mirror and the sync result is unchanged", async () => {
     const real = await vi.importActual<typeof import("@/server/workspace-repo-mirror")>("@/server/workspace-repo-mirror");
     mockWriteHeld.mockImplementation(real.writeKbSyncHeldCols);
-    const failing = {
-      from: () => ({
-        update: () => ({ eq: () => ({ select: async () => ({ data: null, error: { code: "42703", message: "column missing" } }) }) }),
-      }),
-    } as never;
+    const failing = failingService(async () => ({ data: null, error: { code: "42703", message: "column missing" } }));
     mockPublish.mockImplementationOnce(publishWith({ result: { kind: "pushed" } }));
     await expect(syncPush(USER_ID, WS_PATH, failing, SOLO_WORKSPACE_ID)).resolves.toBeUndefined();
     // The held write mirrors through the debounced helper (obs F1), op `kb-sync-held.write` (pattern P3-17).
@@ -411,7 +418,7 @@ describe("held-files write (TW2)", () => {
 
   test("pull: after the merge and the adoption, the count is computed over T...the fresh HEAD and written", async () => {
     const merged = "d".repeat(40);
-    mockMerge.mockResolvedValue({ reason: "merged", remote: { defaultBranch: "main", tip: T_SHA, sideTip: "e".repeat(40) } });
+    mockMerge.mockResolvedValue({ reason: "merged", remote: { defaultBranch: "main", tip: T_SHA, sideTip: "e".repeat(40), readAt: READ_AT } });
     mockAdopt.mockImplementation(async () => {
       mockHead.mockReturnValue({ sha: merged, refName: "refs/heads/main" }); // the adoption moved HEAD
       return null;
@@ -421,11 +428,12 @@ describe("held-files write (TW2)", () => {
       heldFiles: 3,
       onRecovered: 1,
       pullReason: "merged",
-      checkedAt: "2026-11-17T10:00:00.000Z",
+      checkedAt: READ_AT.toISOString(),
     });
     expect(mockAdopt.mock.invocationCallOrder[0]).toBeLessThan(mockCompute.mock.invocationCallOrder[0]);
     expect(mockCompute.mock.calls[0][0]).toMatchObject({ isolated: expect.objectContaining({ gitDir: "/tmp/iso" }), base: T_SHA, head: merged, recovered: [] });
-    expect(heldWrites()).toEqual([[TEAM_WORKSPACE_ID, { heldFiles: 3, checkedAt: new Date("2026-11-17T10:00:00.000Z") }]]);
+    expect(heldWrites()).toEqual([[TEAM_WORKSPACE_ID, { heldFiles: 3, checkedAt: READ_AT }]]);
+    expect(mockWriteHeld.mock.calls[0][0]).toBe(SERVICE);
     // The stamp is its own write (D29(1): never folded together).
     expect(mockWriteRepoCols).toHaveBeenCalledTimes(1);
     expect(mockWriteRepoCols.mock.calls[0][2]).not.toHaveProperty("kb_sync_held_files");
@@ -437,12 +445,12 @@ describe("held-files write (TW2)", () => {
       heldFiles: 0,
       onRecovered: 0,
       pullReason: "up_to_date",
-      checkedAt: "2026-11-17T10:00:00.000Z",
+      checkedAt: READ_AT.toISOString(),
     });
-    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { heldFiles: 0, checkedAt: new Date("2026-11-17T10:00:00.000Z") }]]);
+    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { heldFiles: 0, checkedAt: READ_AT }]]);
   });
 
-  test("pull: no remote read (remote null), a null count or an unresolved merge -> no count, no write", async () => {
+  test("pull: no remote read (remote null) or an unresolved merge -> no write; a null count writes null with checked_at", async () => {
     mockMerge.mockResolvedValueOnce({ reason: "fetch_failed", remote: null });
     await expect(syncPull(USER_ID, WS_PATH, SERVICE, SOLO_WORKSPACE_ID)).resolves.toEqual({
       heldFiles: null,
@@ -458,20 +466,22 @@ describe("held-files write (TW2)", () => {
       pullReason: "unresolved_merge",
     });
     expect(mockCompute).toHaveBeenCalledTimes(1);
-    expect(mockWriteHeld).not.toHaveBeenCalled();
+    // D39(b), W1: the null count is an attempt, so it writes null with this pull's ls-remote instant; the result still
+    // reports no count (heldFiles and checkedAt null).
+    expect(heldWrites()).toEqual([[SOLO_WORKSPACE_ID, { heldFiles: null, checkedAt: READ_AT }]]);
   });
 
   test("pull: a failed held write sends one mirror; the stamp stays written and the result is unchanged", async () => {
     const real = await vi.importActual<typeof import("@/server/workspace-repo-mirror")>("@/server/workspace-repo-mirror");
     mockWriteHeld.mockImplementation(real.writeKbSyncHeldCols);
-    const failing = {
-      from: () => ({ update: () => ({ eq: () => ({ select: async () => { throw new Error("socket hang up"); } }) }) }),
-    } as never;
+    const failing = failingService(async () => {
+      throw new Error("socket hang up");
+    });
     await expect(syncPull(USER_ID, WS_PATH, failing, SOLO_WORKSPACE_ID)).resolves.toEqual({
       heldFiles: 2,
       onRecovered: 0,
       pullReason: "up_to_date",
-      checkedAt: "2026-11-17T10:00:00.000Z",
+      checkedAt: READ_AT.toISOString(),
     });
     expect(mockWriteRepoCols).toHaveBeenCalledTimes(1);
     expect(mockMirror.mock.calls.filter(([, o]) => o?.op === "kb-sync-held.write")).toHaveLength(1);

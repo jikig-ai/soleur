@@ -8,8 +8,6 @@
 //   line naming the closed `nullCause`. The self-heal also passes `pullBlocked` (D42) into the same guarded UPDATE.
 // - `refreshHeldCount`: the standalone refresh the cc runner calls after a turn (repo URL, isolated dir, hardened
 //   `ls-remote`, compute, write, dispose), single-flight per workspace per process.
-// - `heldCountOn` / `writeHeldCount`: the pre-review entries session-sync still calls (moved here in review Phase 0).
-//   They share the count and the write with the two above; they go when session-sync calls `writeHeldFromIsolated`.
 //
 // Service role: the held columns have no UPDATE policy (migration 187, RLS 053), so the write uses the service client.
 // This file is on `.service-role-allowlist` for exactly that write and the D43 system read of `repo_url`, both keyed on a
@@ -30,11 +28,6 @@ import { mirrorWarnWithDebounce } from "./observability";
 import { writeKbSyncHeldCols, type KbSyncHeldPatch, type KbSyncPullBlocked } from "./workspace-repo-mirror";
 
 const log = createChildLogger("kb-sync-held");
-
-/** A computed held-files count and when it was computed. */
-export interface HeldCount extends HeldFiles {
-  readonly checkedAt: string;
-}
 
 /**
  * The count on `isolated` over `base...head` plus the set-aside tips, or null. When the set-aside refs cannot be read
@@ -89,30 +82,12 @@ async function persist(service: () => SupabaseClient, workspaceId: string, patch
 }
 
 /**
- * #12714 (W1, W2, W4, D29(1)): the pre-review count entry session-sync calls. Null when no count was computed (the
- * cause is logged); never throws.
- */
-export async function heldCountOn(
-  isolated: IsolatedPushDirHandle,
-  base: string,
-  head: string,
-  workspacePath: string,
-  workspaceId: string,
-): Promise<HeldCount | null> {
-  const held = await countOn(isolated, base, head, workspacePath, workspaceId, undefined);
-  return held === null ? null : { total: held.total, onRecovered: held.onRecovered, checkedAt: new Date().toISOString() };
-}
-
-/** The pre-review write entry session-sync calls with its injected service client (D29(1)). Never throws. */
-export async function writeHeldCount(service: SupabaseClient, workspaceId: string, held: HeldCount): Promise<void> {
-  await persist(() => service, workspaceId, { heldFiles: held.total, checkedAt: new Date(held.checkedAt) });
-}
-
-/**
  * D39(a)/(b)/(f), D42: the held count on an isolated dir the caller already holds, over its own `T`, written with
  * `checkedAt` (the instant the caller read `T`, `RemoteState.readAt`) through the guarded UPDATE: last writer by
  * `checkedAt` wins and a row that is not `ready` is untouched. A failed count writes null. `pullBlocked` undefined leaves
- * that column as it is. Returns the stored total, or null. Never throws.
+ * that column as it is. `service` is the caller's injected service client when it has one (session-sync's, from the
+ * allowlisted agent-runner, ADR-044 PR-B); without it the process's service client is used. Returns what was computed
+ * (`total` is the stored value; `onRecovered` feeds the legacy agent line's recovered clause), or null. Never throws.
  */
 export async function writeHeldFromIsolated(a: {
   readonly isolated: IsolatedPushDirHandle;
@@ -123,15 +98,16 @@ export async function writeHeldFromIsolated(a: {
   readonly checkedAt: Date;
   readonly pullBlocked?: KbSyncPullBlocked | null;
   readonly budgetMs?: number;
-}): Promise<number | null> {
+  readonly service?: SupabaseClient;
+}): Promise<HeldFiles | null> {
   const held = await countOn(a.isolated, a.T, a.headSha, a.workspacePath, a.workspaceId, a.budgetMs);
-  const total = held === null ? null : held.total;
-  await persist(getServiceClient, a.workspaceId, {
-    heldFiles: total,
+  const service = a.service;
+  await persist(service ? () => service : getServiceClient, a.workspaceId, {
+    heldFiles: held === null ? null : held.total,
     checkedAt: a.checkedAt,
     ...(a.pullBlocked !== undefined ? { pullBlocked: a.pullBlocked } : {}),
   });
-  return total;
+  return held;
 }
 
 type RefreshArgs = {

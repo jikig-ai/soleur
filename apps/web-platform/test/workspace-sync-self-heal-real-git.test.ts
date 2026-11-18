@@ -49,16 +49,17 @@ vi.mock("@/server/github-app", () => ({ generateInstallationToken: async () => [
 // D27: the held-commits merge resolves the literal URL from the workspace row and never stamps.
 vi.mock("@/server/current-repo-url", () => ({ getCurrentRepoUrl: async () => "https://github.com/acme/widget" }));
 vi.mock("@/server/workspace-repo-mirror", () => ({ writeRepoColsToWorkspace: H.writeRepoCols, writeKbSyncHeldCols: H.writeHeldCols }));
-// The self-heal's held-count write (frozen signature): recorded with the count the REAL compute gives on its inputs, so a
-// row asserts what would be stored without depending on the write's body.
+// The self-heal's held-count write (frozen signature): the REAL helper runs (compute and write, the write landing on the
+// mocked writer above), with a stand-in service client so no process service client is built here; the row records its
+// inputs and the count it computed, so a row asserts what would be stored.
 vi.mock("@/server/kb-sync-held-refresh", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/kb-sync-held-refresh")>();
   return {
     ...actual,
     writeHeldFromIsolated: async (a: Parameters<typeof actual.writeHeldFromIsolated>[0]) => {
-      const held = await actual.heldCountOn(a.isolated, a.T, a.headSha, a.workspacePath, a.workspaceId);
+      const held = await actual.writeHeldFromIsolated({ ...a, service: {} as never });
       H.heldWrites.push({ T: a.T, headSha: a.headSha, pullBlocked: a.pullBlocked, count: held?.total ?? null });
-      return held?.total ?? null;
+      return held;
     },
   };
 });

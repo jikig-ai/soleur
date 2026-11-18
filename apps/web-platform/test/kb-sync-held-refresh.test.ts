@@ -91,9 +91,22 @@ const base = { isolated: ISO as never, workspacePath: "/ws/x", workspaceId: WS, 
 
 describe("writeHeldFromIsolated (D39(a)/(b))", () => {
   test("a computed count is written with this run's checkedAt (the instant T was read) and returned", async () => {
-    await expect(writeHeldFromIsolated(base)).resolves.toBe(2);
+    H.compute.mockResolvedValueOnce({ total: 2, onRecovered: 1 });
+    // the whole count comes back: `total` is what was stored, `onRecovered` feeds syncPull's agent line (no recompute)
+    await expect(writeHeldFromIsolated(base)).resolves.toEqual({ total: 2, onRecovered: 1 });
     expect(H.compute.mock.calls[0][0]).toMatchObject({ base: T, head: HEAD, recovered: [], workspaceId: WS });
     expect(H.write.mock.calls).toEqual([[expect.anything(), WS, { heldFiles: 2, checkedAt: READ_AT }]]);
+    expect(H.compute).toHaveBeenCalledTimes(1);
+  });
+
+  test("the caller's injected service client carries the write; without one, the process's service client does", async () => {
+    const injected = { injected: true } as never;
+    await writeHeldFromIsolated({ ...base, service: injected });
+    expect(H.service).not.toHaveBeenCalled();
+    expect(H.write.mock.calls[0][0]).toBe(injected);
+    await writeHeldFromIsolated(base);
+    expect(H.service).toHaveBeenCalledTimes(1);
+    expect(H.write.mock.calls[1][0]).toBe(H.service.mock.results[0].value);
   });
 
   test("W1 binding: a failed count writes null with its checked_at, never skips the write", async () => {
@@ -138,9 +151,9 @@ describe("writeHeldFromIsolated (D39(a)/(b))", () => {
     H.service.mockImplementationOnce(() => {
       throw new Error("no env");
     });
-    await expect(writeHeldFromIsolated(base)).resolves.toBe(2);
+    await expect(writeHeldFromIsolated(base)).resolves.toEqual({ total: 2, onRecovered: 0 });
     H.write.mockRejectedValueOnce(new Error("socket"));
-    await expect(writeHeldFromIsolated(base)).resolves.toBe(2);
+    await expect(writeHeldFromIsolated(base)).resolves.toEqual({ total: 2, onRecovered: 0 });
   });
 });
 
