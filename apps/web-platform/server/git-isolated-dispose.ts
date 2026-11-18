@@ -1,13 +1,19 @@
-// The best-effort `dispose()` of an isolated git directory, shared by the approved cc push (server/push-branch.ts) and the
-// KB sync (server/kb-sync-publish.ts, server/session-sync.ts, server/workspace-sync.ts). A leaf that imports neither
+// The best-effort `dispose()` of an isolated git directory, shared by the approved cc push (server/push-branch.ts), the
+// KB sync (server/kb-sync-publish.ts, server/session-sync.ts), the self-heal (server/workspace-sync.ts) and the held-count
+// refresh (server/kb-sync-held-refresh.ts). A leaf that imports neither
 // push-branch.ts nor kb-sync-publish.ts, so the pull modules dispose without reaching either (#12718, ruling D25(4)).
 import type { IsolatedPushDirHandle } from "./git-isolated-push-dir";
 import { reportSilentFallback } from "./observability";
 
-/** Static Sentry messages, one per owner: a Sentry group is one condition. */
+/**
+ * Static Sentry messages, one per owner: a Sentry group is one condition. Each key is the `feature` the caller's other
+ * Sentry ops already use, so a filter on that feature finds the leak next to the caller's own events.
+ */
 const DISPOSE_FAILED_MESSAGE = {
   "cc-push": "cc-push: the isolated push directory could not be removed",
   "session-sync": "KB sync: the isolated directory could not be removed",
+  "kb-route-helpers": "KB self-heal: the isolated directory could not be removed",
+  "kb-sync-held": "KB sync held count: the isolated directory could not be removed",
 } as const;
 
 /** Which caller's directory leaked (simplicity H3: a KB-sync leak no longer reads as the cc push's). */

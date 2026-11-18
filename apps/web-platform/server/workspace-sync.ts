@@ -350,7 +350,8 @@ async function onIsolatedDir(
     }
     return await body({ isolated, url, head });
   } finally {
-    disposeIsolated(isolated);
+    // simplicity H3: under the self-heal's own feature (every self-heal Sentry op is `kb-route-helpers`)
+    disposeIsolated(isolated, "kb-route-helpers");
   }
 }
 

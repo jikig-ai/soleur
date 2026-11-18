@@ -197,7 +197,7 @@ async function runRefresh(a: RefreshArgs): Promise<void> {
     });
     logRefresh(a.workspaceId, "written");
   } finally {
-    disposeIsolated(isolated);
+    disposeIsolated(isolated, "kb-sync-held"); // simplicity H3: the refresh's own feature, as its other mirrors
   }
 }
 
