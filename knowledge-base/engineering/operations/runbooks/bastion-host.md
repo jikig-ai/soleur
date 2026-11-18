@@ -8,11 +8,14 @@ this page holds only the acts.
 - **Approval:** the `web-platform-infra-apply` environment reviewer. The `confirm` token is a typo-guard only.
 - **Resource list:** `tests/scripts/lib/bastion-resources.txt`. The job `-target`s exactly this list, and the birth gate admits nothing else.
 - **Cost:** EUR 5.99 per month (cx23 plus its primary IPv4). The owner's go on the real birth accepts it.
-- **State in 2a:** born, no role. sshd is masked and nothing dials it. Egress is limited to the apt mirrors and Sentry ingest, and it has no heartbeat until #12879.
+- **State in 2a:** declared, not born. The host exists only after a `bastion-host-create` run reports ready.
+- **Once born:** no role. sshd is masked and nothing dials it. Egress is DNS to the Hetzner resolvers, NTP for `systemd-timesync` only, the metadata endpoint for root only, and tcp/443 to the apt mirrors and Sentry ingest for root and `_apt` only. It has no heartbeat until #12879.
 
 ## Birth
 
 The agent runs both dispatches below. Each needs the owner's typed go naming the exact command.
+
+**Dispatch only when the owner can approve at once.** The run holds the shared `terraform-apply-web-platform-host` group while it waits for the environment reviewer, and GitHub keeps one pending run per group: a later queued run (a merge's apply, an `cf-lb-overlay` drain, a key rotation) cancels the one waiting behind it. Approve it promptly or cancel it.
 
 1. **Rehearsal.**
    `gh workflow run apply-web-platform-infra.yml -f apply_target=bastion-host-create -f confirm=BIRTH-bastion -f plan_only=true -f reason="bastion birth rehearsal (#12866)"`.
@@ -21,7 +24,7 @@ The agent runs both dispatches below. Each needs the owner's typed go naming the
 2. **Real birth.**
    After the owner has read that list, run the same command with `-f plan_only=false`, quoting the rehearsal run ID in `reason`.
    - A green run means two things: the gated plan applied, and `soleur-bastion` reported `fresh_boot_ready` after the run's anchor.
-   - The summary prints the host key fingerprint and the private IP (10.0.1.70). #12880 pins them.
+   - The summary prints the host key fingerprint and the private IP (10.0.1.70, read from `hcloud_server_network.bastion`). #12880 pins them.
 
 **Stock failure.** If the stock gate aborts with `class=stock`, nothing was created. Do not change the server type to get past it. Wait and re-dispatch, or take the type question to the owner (ADR-143 precedent). Any other class names its own cause in the `::error::` lines.
 
@@ -45,20 +48,11 @@ In 2a there is no in-repo exit from a powered-off bastion: the recovery is #1287
 
 If boot-verify could not power the server off (its `::error::` line says so), the agent powers it off through the Hetzner API, using the same lookup by name and the same `poweroff` action as `scripts/lib/bastion-boot-verify.sh`. If no token is reachable, the owner uses the console. Either way, record it on #12879.
 
-**DNS.** The baseline output chain admits DNS only to the Hetzner resolvers (185.12.64.1 and 185.12.64.2). If the host is handed other resolvers, the egress script's lookups fail, the boot dies at `fresh_boot_not_ready_egress_load`, and boot-verify powers the host off. The fix is a `bastion-cloud-init.yml` edit, then the replace.
+**DNS.** The baseline output chain admits DNS only to the Hetzner resolvers (185.12.64.1 and 185.12.64.2). If the host is handed other resolvers, the egress script's lookups fail and the boot dies at stage `egress_load`. The error trap flushes the ruleset before it reports, so `fresh_boot_not_ready_egress_load` reaches Sentry carrying the egress script's reason, and boot-verify powers the host off. The fix is a `bastion-cloud-init.yml` edit, then the replace.
 
 ## Late ready
 
-A host can report `fresh_boot_ready` after boot-verify's window closed. Do not dispatch the create again: the gate refuses it. The agent re-reads the trail locally, read-only, without SSH:
-
-```bash
-SENTRY_ACTIONS_RO_TOKEN="$(doppler secrets get SENTRY_API_TOKEN -p soleur -c prd --plain)" \
-BOOT_TRAIL_STRICT=1 BOOT_TRAIL_HOST_NAME=soleur-bastion BOOT_TRAIL_SINCE=<the run's boot-trail anchor epoch> \
-JOB_STATUS=success DISPATCH_LABEL=bastion-host-create \
-  bash apps/web-platform/infra/scripts/fresh-host-boot-trail.sh
-```
-
-The anchor epoch is printed in the run's "Stamp boot-trail run anchor" step. A late `verdict=ready` does not undo the power-off: the host still leaves through the replace route.
+A host can report `fresh_boot_ready` after boot-verify's window closed. That changes nothing: the power-off stands, the create gate refuses a second birth, and the host leaves through the replace route (#12879). The run log's trail is the record. A fresh strict re-read needs `SENTRY_ACTIONS_RO_TOKEN`, which is a repository secret by design and is not mirrored to Doppler (ADR-031, #7946), so it runs only inside a workflow; #12879's replace job reads the trail by construction. The reader queries `statsPeriod=1h`, so an hour after the boot even a workflow re-read finds nothing.
 
 ## Lost state while Hetzner shows `soleur-bastion`
 
@@ -66,7 +60,7 @@ Never re-birth. A create against an empty state with a live `soleur-bastion` wou
 
 ## First-boot window
 
-The baseline nftables ruleset loads only after apt installs `nftables`. Until then the host has no packet filter of its own. Two things cover that window: sshd is masked from `bootcmd`, so nothing listens, and the zero-rule Hetzner firewall drops public inbound. After the settle reboot, the ruleset loads on every boot before `network-pre.target`.
+The host has no packet filter of its own until the post-settle pass enables `nftables.service`. On the kernel-update path that window covers the first boot, the settle reboot and the second boot's apt run. Two things cover it: sshd is masked from `bootcmd`, before `ssh.socket` can listen, and the zero-rule Hetzner firewall drops public inbound. From the boot after the post-settle pass, the ruleset loads before `network-pre.target`.
 
 ## Deliberate host-key rotation
 

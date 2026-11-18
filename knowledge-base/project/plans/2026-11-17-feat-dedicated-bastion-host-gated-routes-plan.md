@@ -214,14 +214,28 @@ birth from #12879, which adds the heartbeat.
 A birth that does not reach ready is powered off by the same job, so a wrong host never sits running on
 the private network while it waits for #12879.
 
-**What the merge does to production** (from every workflow whose `on.push.paths` matches the changed
-files): `apply-web-platform-infra.yml` (`apps/web-platform/infra/**`) runs the per-merge targeted
-apply, which excludes every bastion resource and halts on any server create; `infra-validation.yml` and
-`web-platform-release.yml` run checks only. `variables.tf` is not edited, so
-`registry-host-replace-dispatch.yml` does not wake. No bastion file name matches another push filter
-(`bastion.test.sh` SHAPE). `scheduled-terraform-drift.yml` plans the whole root untargeted, so from
-merge until birth its report lists the bastion's creates; the agent asks the owner for the birth go on
-merge day so that window stays short. This paragraph is the first line of the PR body.
+**What the merge does to production** (corrected at review, 2026-11-18): the merge creates, replaces
+and updates no Hetzner resource; the bastion exists only after the reviewer-approved
+`bastion-host-create` dispatch.
+
+1. `apply-web-platform-infra.yml` runs its per-merge targeted apply. No bastion address is in its
+   `-target` list, every one is in `OPERATOR_APPLIED_EXCLUSIONS`, so the plan has zero bastion changes and
+   the `host_creates` HALT cannot fire because of the bastion. It applies whatever drift is already
+   pending in its list, as on every merge. The dispatch-only `bastion_host_create` job does not run.
+2. `web-platform-release.yml` is not checks-only: `apps/web-platform/**` changed, so it bumps `web-v*`,
+   builds and pushes a new `soleur-web-platform` image (app code unchanged) and runs the normal
+   production deploy to the web hosts. User impact is that of an ordinary release.
+3. `version-bump-and-release.yml` cuts a plugin release (`plugins/soleur/**` changed) and
+   `deploy-docs.yml` redeploys the docs site.
+4. Checks only: `infra-validation.yml`, `validate-vector-config.yml` (it also wakes on the bastion shell
+   files: `bastion-egress.sh`, `bastion.test.sh`, `fresh-host-boot-trail.test.sh`,
+   `soleur-host-bootstrap-observability.test.sh`), `ci.yml` and the scanners. `variables.tf` is not
+   edited, so `registry-host-replace-dispatch.yml` does not wake.
+5. Not a push trigger: `scheduled-terraform-drift.yml` plans the whole root every 12 h, so from merge
+   until birth it reports the five bastion creates; the agent asks the owner for the birth go on merge
+   day so that window stays short.
+
+This paragraph is the first section of the PR body.
 
 ## Implementation Phases
 
@@ -407,8 +421,12 @@ trail is read.
 
 - **If this lands broken, the user experiences:** nothing directly in step 2, because no user path
   crosses the bastion until step 3. One path exists from birth: the bastion joins the private network,
-  and any member of it can open a connection to git-data:22 (#12880). The bastion's default-drop egress
-  chain has no row for git-data in step 2, and Guard 2 is the test that keeps it that way. The risk is indirect: a bastion born wrong (an open inbound port, a
+  and any member of it can open a connection to git-data:22 (#12880). Other services trust subnet
+  membership too: web-host sshd (fail2ban `ignoreip` covers 10.0.1.0/24), the registry at 10.0.1.30:5000
+  and Inngest at 10.0.1.40:8288. The bastion's default-drop output chain is their shared protection: it
+  has no row for any private address in step 2, and Guard 2 (`bastion-lint.py egress`, tightened at
+  review) refuses any output accept row with a private-range destination or with no destination or owner
+  qualifier. The risk is indirect: a bastion born wrong (an open inbound port, a
   wrong host key, egress wider than declared) becomes the management-plane jump to every user's code on
   git-data in step 3.
 - **If this leaks, the user's data is exposed via:** the bastion's SSH host private key (in Terraform
@@ -435,32 +453,35 @@ error_reporting:
   fail_loud: "fresh_boot_not_ready_<reason> fatal; the birth job's ::error:: and exit 1 on any fatal stage, on timeout, and on a skipped read"
 failure_modes:
   - mode: "Hetzner has no cx23 stock in hel1"
-    detection: "stock-preflight-gate.sh refuses the plan before apply"
+    detection: "stock-preflight-gate.sh refuses the plan before apply (layer 6: workflow run log ::error::)"
     alert_route: "red bastion-host-create run"
   - mode: "apt or the kernel settle fails or hangs"
-    detection: "STAGE=apt_install / STAGE=kernel_settle fatal, or no fresh_boot_ready before BOOT_TRAIL_DEADLINE_S"
-    alert_route: "red bastion-host-create run"
-  - mode: "egress policy blocks the readiness endpoint"
-    detection: "no fresh_boot_ready before the deadline"
+    detection: "STAGE=apt_install / STAGE=kernel_settle fatal, or no fresh_boot_ready before BOOT_TRAIL_STRICT_DEADLINE_S (layer 6: workflow run log ::error:: from fresh-host-boot-trail.sh / bastion-boot-verify.sh)"
     alert_route: "red bastion-host-create run; the host is powered off"
-  - mode: "the bastion dies after birth (accepted 2a gap)"
-    detection: "none in 2a; the heartbeat added by #12879"
+  - mode: "egress policy blocks the readiness endpoint, or the egress load fails"
+    detection: "fresh_boot_not_ready_egress_load (the trap flushes the ruleset so it reaches Sentry), else no fresh_boot_ready before the deadline (layer 6: workflow run log ::error::)"
+    alert_route: "red bastion-host-create run; the host is powered off"
+  - mode: "boot-verify cannot power a not-ready host off"
+    detection: "bastion-boot-verify.sh ::error:: and poweroff_result=failed in the run summary (layer 6)"
+    alert_route: "red bastion-host-create run; the agent powers it off through the Hetzner API (runbook)"
+  - mode: "the bastion dies after birth, or a 15-minute egress refresh fails (accepted 2a gap)"
+    detection: "none in 2a: layers 1-6 are absent on the bastion (no Vector, no heartbeat); the heartbeat, carrying egress-refresh health, is #12879"
     alert_route: "none in 2a; nothing depends on the bastion until step 3, which #12879 blocks"
   - mode: "the reader cannot authenticate to Sentry"
-    detection: "the bastion route treats the reader's unbound-token skip as not ready"
+    detection: "the birth-readiness interlock refuses before the plan; at read time the strict reader's skip is not ready (layer 6: workflow run log ::error::)"
     alert_route: "red bastion-host-create run"
 logs:
   where: "Sentry events (birth stages); journald on the host (not shipped in step 2: no Vector on the bastion)"
   retention: "Sentry project retention"
 discoverability_test:
-  command: "bash apps/web-platform/infra/bastion.test.sh"
-  expected_output: "bastion: PASS ("
+  command: "grep -cE '_emit \"soleur-cloud-init boot stage\" (fresh_boot_ready|cloud_init_complete) info' apps/web-platform/infra/bastion-cloud-init.yml"
+  expected_output: "2"
 ```
 
-The discoverability test proves the wiring offline. Like `kernel-currency.test.sh`, it prints
-`SKIP-PARTIAL` when terraform is absent locally and FAILS when terraform is absent under CI, so
-`PASS (` proves the render-based guards ran. The live state is read by the birth job's
-boot-trail step, which needs no SSH.
+The discoverability test is offline and sub-second: it proves both readiness emitters the strict reader
+needs are in the template. The full wiring proof is `bash apps/web-platform/infra/bastion.test.sh`
+(about a minute; it renders the template with terraform) in CI. The live state is read by the birth
+job's boot-trail step, which needs no SSH.
 
 ## Infrastructure (IaC)
 
