@@ -638,7 +638,7 @@ async function selfHealNonFastForward(
   };
   try {
     // R2-B (data-sec P3-2): a stranded MERGE_AUTOSTASH (a killed legacy-runner merge) is pinned first, before any refusal
-    // below can return: a cc-only workspace never runs syncPull or syncPush, which otherwise pin it. lstat-only when absent.
+    // below can return: a cc-only workspace never runs syncPull or syncPush, which otherwise pin it. When absent the pin costs one failed open (ENOENT).
     const { pinInterruptedAutostash } = await import("@/server/connected-repo-git");
     await pinInterruptedAutostash(workspacePath);
 

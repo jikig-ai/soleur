@@ -209,6 +209,8 @@ for (const c of CASES) {
 
         if (c.audience === "owner") {
           await expect(section.getByRole("button", { name: "Disconnect", exact: true })).toBeVisible();
+          // An Owner never also gets the member's read-only summary.
+          await expect(section.getByText(`managed by ${HELD_ORG_NAME}`, { exact: true })).toHaveCount(0);
         } else {
           // Member and role-unknown read the read-only summary: no connection controls (ADR-044 FR3).
           await expect(section.getByText(`managed by ${HELD_ORG_NAME}`, { exact: true })).toBeVisible();

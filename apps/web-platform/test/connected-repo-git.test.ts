@@ -235,7 +235,7 @@ describe("the pull writer's entry check (D37(1)) and the autostash pin (D36(c)),
     expect(H.mirrorWarnWithDebounce.mock.calls[0][1]).toEqual(expect.objectContaining({ op: "kb-sync.autostash-pin", tags: { cause } }));
   });
 
-  test("verify-final B3: the MERGE_AUTOSTASH open is O_NONBLOCK (a FIFO swapped in after the lstat cannot stall the loop)", () => {
+  test("verify-final B3: the MERGE_AUTOSTASH open is O_NOFOLLOW|O_NONBLOCK and every check runs on the open descriptor (a planted FIFO cannot stall the loop)", () => {
     const src = readFileSync(join(__dirname, "..", "server", "connected-repo-git.ts"), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
@@ -246,6 +246,9 @@ describe("the pull writer's entry check (D37(1)) and the autostash pin (D36(c)),
     expect(opens).toHaveLength(1);
     expect(opens[0]).toMatch(/^path, fsConstants\.O_RDONLY \| fsConstants\.O_NOFOLLOW \| fsConstants\.O_NONBLOCK$/);
     // no pre-open lstat: the checks run on the open descriptor, so there is no check-then-open window (CodeQL js/file-system-race)
+    // Closed set, not a deny of one name: a pre-open statSync/existsSync/accessSync would reopen the window as surely as lstatSync.
+    const syncCalls = [...new Set([...body.matchAll(/\b(\w+Sync)\(/g)].map((m) => m[1]))].sort();
+    expect(syncCalls).toEqual(["closeSync", "fstatSync", "openSync", "readSync"]);
     expect(body).not.toMatch(/\blstatSync\(/);
     expect(body).toMatch(/fstatSync\(fd\)/);
   });
