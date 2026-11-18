@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { verifiedUserId } from "@/server/request-auth";
-import { resolveWebEgress } from "@/server/resolve-web-egress";
+import { resolveWebEgress, webEgressReadsOff } from "@/server/resolve-web-egress";
 import {
   setWebEgress,
   WebEgressOwnerDeniedError,
@@ -66,11 +66,15 @@ export async function POST(request: Request) {
       // No write happened, and a non-owner must not tear down the owner's sessions.
       return NextResponse.json({ error: "not_authorized" }, { status: 403 });
     }
-    // A toggle-off that fails after the workspace resolved fails CLOSED: the RPC can
-    // commit and still report an error (a response lost after commit), and turning web
-    // access off withdraws consent (CTO R4). If the write did not land, the next
-    // dispatch re-reads the grant and spawns a fresh forwarder.
-    if (body.value === false && workspaceId) teardownEgressForwardersForWorkspace(workspaceId);
+    // A toggle-off whose write errored may still have committed (a response lost after
+    // commit), and turning web access off withdraws consent (CTO R4). Re-read the grant
+    // and tear down only when it reads exactly off: a caller who cannot write it (a
+    // non-owner member, or a removed one, #4307) cannot turn a transient fault into a
+    // teardown of the owner's sessions. Any doubt leaves forwarders up; the next
+    // dispatch re-reads the grant.
+    if (body.value === false && workspaceId && (await webEgressReadsOff(userId, workspaceId))) {
+      teardownEgressForwardersForWorkspace(workspaceId);
+    }
     return NextResponse.json({ error: "set_failed" }, { status: 500 });
   }
 }

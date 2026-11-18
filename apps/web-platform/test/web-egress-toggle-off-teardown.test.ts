@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-const { mockSetWebEgress } = vi.hoisted(() => ({ mockSetWebEgress: vi.fn() }));
+const { mockSetWebEgress, mockReadsOff } = vi.hoisted(() => ({ mockSetWebEgress: vi.fn(), mockReadsOff: vi.fn() }));
 
 vi.mock("@/lib/auth/validate-origin", () => ({
   validateOrigin: () => ({ valid: true, origin: "https://app.soleur.ai" }),
@@ -17,7 +17,10 @@ vi.mock("@/lib/auth/validate-origin", () => ({
 vi.mock("@/server/request-auth", () => ({ verifiedUserId: async () => "user-1" }));
 vi.mock("@/lib/supabase/tenant", () => ({ getFreshTenantClient: async () => ({}) }));
 vi.mock("@/server/workspace-resolver", () => ({ resolveCurrentWorkspaceId: async () => "ws-toggle" }));
-vi.mock("@/server/resolve-web-egress", () => ({ resolveWebEgress: vi.fn() }));
+vi.mock("@/server/resolve-web-egress", () => ({
+  resolveWebEgress: vi.fn(),
+  webEgressReadsOff: (...a: unknown[]) => mockReadsOff(...a),
+}));
 vi.mock("@/server/set-web-egress", () => ({
   setWebEgress: (...a: unknown[]) => mockSetWebEgress(...a),
   WebEgressOwnerDeniedError: class extends Error {},
@@ -143,24 +146,43 @@ describe("POST /api/workspace/web-egress value=false (#12585 AC24)", () => {
   test("a non-owner's denied toggle-off tears nothing down (403: no write happened)", async () => {
     const mine = await spawnEgressForwarder("conv-a", "ws-toggle");
     mockSetWebEgress.mockRejectedValue(new WebEgressOwnerDeniedError("denied"));
+    mockReadsOff.mockResolvedValue(true);
     expect((await post(false)).status).toBe(403);
+    expect(mockReadsOff).not.toHaveBeenCalled();
     expect(isEgressForwarderLive("conv-a", mine.token)).toBe(true);
     expect(isEgressRevoked("conv-a")).toBe(false);
   }, 20_000);
 
-  test("a toggle-off whose write errors fails CLOSED (500: the RPC may have committed)", async () => {
+  test("a toggle-off whose write errored but committed fails CLOSED (500, grant reads off)", async () => {
     const mine = await spawnEgressForwarder("conv-a", "ws-toggle");
     const other = await spawnEgressForwarder("conv-b", "ws-other");
     mockSetWebEgress.mockRejectedValue(new Error("rpc response lost after commit"));
+    mockReadsOff.mockResolvedValue(true);
+    const epochBefore = egressRevocationEpoch("ws-toggle");
     expect((await post(false)).status).toBe(500);
+    expect(mockReadsOff).toHaveBeenCalledWith("user-1", "ws-toggle");
+    expect(egressRevocationEpoch("ws-toggle")).toBe(epochBefore + 1); // CTO R4: a spawn still starting cannot register
     expect(isEgressForwarderLive("conv-a", mine.token)).toBe(false);
     expect(isEgressRevoked("conv-a")).toBe(true);
     expect(isEgressForwarderLive("conv-b", other.token)).toBe(true); // another workspace is untouched
   }, 20_000);
 
+  test("a toggle-off whose write errored and did not land tears nothing down (500, grant still on or unknown)", async () => {
+    // Also the non-owner / removed-member case (#4307): they cannot change the grant, so it never reads off.
+    const mine = await spawnEgressForwarder("conv-a", "ws-toggle");
+    mockSetWebEgress.mockRejectedValue(new Error("rpc down"));
+    mockReadsOff.mockResolvedValue(false);
+    const epochBefore = egressRevocationEpoch("ws-toggle");
+    expect((await post(false)).status).toBe(500);
+    expect(egressRevocationEpoch("ws-toggle")).toBe(epochBefore);
+    expect(isEgressForwarderLive("conv-a", mine.token)).toBe(true);
+    expect(isEgressRevoked("conv-a")).toBe(false);
+  }, 20_000);
+
   test("a toggle-ON whose write errors tears nothing down (500)", async () => {
     const mine = await spawnEgressForwarder("conv-a", "ws-toggle");
     mockSetWebEgress.mockRejectedValue(new Error("rpc down"));
+    mockReadsOff.mockResolvedValue(true);
     expect((await post(true)).status).toBe(500);
     expect(isEgressForwarderLive("conv-a", mine.token)).toBe(true);
     expect(isEgressRevoked("conv-a")).toBe(false);
