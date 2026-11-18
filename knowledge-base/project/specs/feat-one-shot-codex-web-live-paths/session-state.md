@@ -4477,3 +4477,13 @@
   privilege comparison are still needed. Updated the plan's stale main ordinal
   from 178 to 186 and recorded 187/188 as the next two correction ordinals if
   main does not advance; remeasure before creating either migration.
+- Two isolated full-migration replay attempts were stopped and cleaned up.
+  The first used TCP before the image's healthcheck; the second waited for the
+  healthcheck and applied 001–018, then failed at 019 because the pinned
+  PostgreSQL-only image does not provide the pre-existing `storage.buckets`
+  schema. The runner never reached the Codex notice migration. No existing
+  Supabase database or external Supabase endpoint was contacted; its `origin/main`
+  refresh was read-only. `supabase` CLI and
+  standard Storage/Auth service images are not available in this workspace, so
+  full Supabase schema equivalence and RLS parity remain unverified; no
+  substitute schema fixture was counted as proof.
