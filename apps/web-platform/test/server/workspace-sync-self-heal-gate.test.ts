@@ -22,7 +22,7 @@ const { gitSpy, localSpy, reportSpy, warnSpy, mirrorSpy, mirrorWarnSpy, lstatSpy
 // D27: the held-commits branch calls the hardened merge (lazily imported); its real-git rows are in
 // test/workspace-sync-self-heal-real-git.test.ts. Here it is a seam returning the pull reason a row names.
 const H2 = vi.hoisted(() => ({
-  mergeSpy: vi.fn<(input: { precheck?: boolean; url?: string; writer: { merge: (t: string) => Promise<string> } }) => Promise<{ reason: string; remote: unknown }>>(
+  mergeSpy: vi.fn<(input: { precheck?: boolean; url?: string; writer: { merge: (t: string) => Promise<string> }; budget?: { remaining(): number; mergeStartMinMs: number } }) => Promise<{ reason: string; remote: unknown }>>(
     async () => ({ reason: "merge_conflict_precheck", remote: null }),
   ),
   disposeSpy: vi.fn(),
