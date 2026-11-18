@@ -50,7 +50,7 @@ architecture-strategist, spec-flow-analyzer), a sharp-edges pass, and the CTO fo
 - A web-2 instance older than 90 days can never pass the grader (90-day readiness lookback); kept fail-closed,
   remedy is a replace (G12, #12938).
 - A replaced web-2 keeps the pool weight it found and can serve without the serve arm; recorded residual (G13,
-  #12939). Whether the fix joins this PR is an operator scope decision (plan default: ships with #12869).
+  #12939). Ruled by CTO agent, 2026-11-18: the fix ships with #12869, not here.
 - `g3_dbin_ok` in `workspaces-luks-verify-workflow.test.sh` pins the gate step's exact wrapper hand-off, so the
   stderr redirect must follow the wrapper path and no new code line may name the wrapper file or `DOPPLER_BIN`.
 - The grader's `$GRADE` text is printed only when it matches a fixed shape (workflow-command injection).
@@ -1004,8 +1004,7 @@ serve.
 - **PR #12918** rebase on the same files (Condition A, allowlist count).
 - **Residual (G13, #12939):** a replaced web-2 keeps the pool weight the replace found and can take traffic
   without the serve gate chain or the grader; only the drain-first step in `web-host-replace.md` prevents it.
-  Whether the fix joins this PR or ships with #12869 is an operator scope decision (see `decision-challenges.md`);
-  the CTO's technical recommendation is to ship it with #12869.
+  Ruled by CTO agent, 2026-11-18: the fix ships with #12869, not in this PR (see `decision-challenges.md`).
 - **Risk (G12, #12938):** a web-2 older than 90 days cannot re-serve without a replace; intended, and the
   `::error::` names the remedy.
 - **Risk:** the anti-vacuity check refuses every serve if the producer grammar drifts; mitigated by the
