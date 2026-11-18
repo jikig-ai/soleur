@@ -169,7 +169,7 @@ root. The focused suite exposed these errors; update fixtures to exercise the
 same provenance contract, queue simulated completion after tracker startup,
 and use repository-root-relative script paths. The corrected focused suite
 passed 33/33 and the local PostgreSQL timeout probe passed 1/1. An independent
-independent re-review confirmed that tracker handles are bound to the exact
+re-review confirmed that tracker handles are bound to the exact
 connection and then found a P1 escape: `adapter.start()` received the raw
 connection, so it could open an unrelated pending operation and return a
 separate completed tracked handle. The interface now passes a one-use tracking

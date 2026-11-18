@@ -291,3 +291,40 @@ purpose, recipient, access boundary, retention and deletion rule, and tested
 rights and notice handling. The source-specific contractual, transfer, Article
 30, balancing and DPIA requirements above remain open for the actual flow.
 This is preliminary assessment, not final clearance or collection authority.
+
+## Addendum — CTO collector-boundary ruling, 2026-11-18
+
+The in-process injected-adapter lifecycle is not a bounded collector. The
+adapter can retain the raw connection in shared closure state and perform
+untracked work alongside a settled tracker handle. Its `Promise.race` deadline
+also cannot preempt synchronous adapter or inspection callbacks. The current
+verifier validates only an adapter-reported object; it does not independently
+observe backend session, transaction, or lock state. No production lifecycle
+caller is wired.
+
+The selected replacement boundary is a per-operation Linux worker managed by
+an OS-level systemd/cgroup supervisor. The coordinator must never receive the
+database client or socket. The worker creates and exclusively owns a
+connection using an operation-specific read-only principal, and returns only
+a bounded sanitized projection. On timeout, durable authority revokes the
+operation generation and credentials before the supervisor kills the entire
+cgroup. A separately authenticated narrow database observer must then verify
+that no sessions, transactions, or locks remain for that operation before
+stop can be reported or resources released. Worker exit alone is not proof.
+
+Before exact collection-command preparation, the branch needs a Terraform-
+managed Linux supervisor with tested cgroup-v2 kill semantics; the scoped
+database principal and independent observer with effective grants verified;
+durable authenticated authority CAS/revocation and worker STS issuance; a
+separately identified encrypted vault with durable tombstones and restore/
+erasure proof; and an offline fault suite covering busy loops, descendants,
+pending transactions, stale-generation reconnect and observer outage. Local
+PostgreSQL mechanics do not establish Firestore/provider IAM or production
+authority. Collection and writer authorization remain held.
+
+The independent CLO review also remains blocked for processing clearance,
+readiness, and shipment. Contract-subject/controller-capacity facts, measured
+cleanup and monitoring, backup/PITR and restore deletion, rights-copy lifecycle,
+final notice/client flow, and exact-head schema/legal/QA evidence are not
+established. This review is internal and does not provide external counsel
+advice or collection authority.

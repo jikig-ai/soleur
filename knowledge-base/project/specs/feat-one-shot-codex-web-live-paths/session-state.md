@@ -4552,5 +4552,11 @@
   fix and its cancellation/settlement regression. It still finds no production
   collector caller; the raw connection can escape through adapter-owned
   closure state, and synchronous create/start/tracker callbacks can exceed the
-  configured deadlines. CTO follow-up is pending. No collector clearance or
-  exact collection commands can be prepared from this prototype.
+  configured deadlines. CTO ruled that the in-process adapter must be replaced
+  by an isolated Linux worker under systemd/cgroup control, with an
+  operation-specific read-only DB principal, durable generation/credential
+  revocation, whole-cgroup kill, and a separate DB observer proving no
+  sessions/transactions/locks remain. The supervisor, scoped principal,
+  independent observer, authority, STS and real encrypted vault/restore path
+  do not exist on this branch. The P1/P2 findings remain unresolved; no
+  collector clearance or exact collection commands can be prepared.
