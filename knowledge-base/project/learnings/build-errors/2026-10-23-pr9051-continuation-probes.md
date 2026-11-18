@@ -144,3 +144,18 @@ the synthetic bubblewrap mount target `/tmp/.git` could not be registered
 because the host quota was exhausted (error 122). The approved read-only
 rerun completed outside that sandbox. Treat this as an unexecuted inspection,
 not a source/test verdict, and retain the quota diagnostic with the handoff.
+
+During the 2026-11-18 continuation, resolve installed-plugin references from
+the skill file's directory one path segment at a time; `local/INSTRUCTIONS.md`
+was guessed instead of the actual `local/codex/INSTRUCTIONS.md`. Likewise,
+locate the feature's session state with `rg --files knowledge-base/project/specs`
+before assuming it lives directly under `project/`. The root
+`apps/web-platform/scripts/supabase-local.sh status` command is a wrapper, but
+it returns 127 when no `supabase` CLI is installed; `assert` remains a distinct
+read-only loopback check and does not prove a usable local stack. Record the
+exact returned status instead of interpreting wrapper output as stack health.
+Session-start cleanup also reported its temporary sweep skipped because
+`tmpfs-guard.sh` held the shared lock; inspect the lock owner and its worktree
+before retrying. Here the active owner was the root checkout's guard process,
+so the sweep correctly stayed skipped. The bare-config `guard-skip` marker came
+from a normal non-bare checkout and was likewise a safe no-op.

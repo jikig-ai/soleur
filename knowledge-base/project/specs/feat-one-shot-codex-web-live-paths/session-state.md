@@ -4487,3 +4487,16 @@
   standard Storage/Auth service images are not available in this workspace, so
   full Supabase schema equivalence and RLS parity remain unverified; no
   substitute schema fixture was counted as proof.
+- Refetched `origin/main` at `5d4851f7afc40d0b2e237546ef5e75789dab249f`
+  and merged it into the clean recovery branch as `c4e1a7d60b2333bfd89e07448e805bae5ba13b2e`.
+  The merge was conflict-free; the changed mainline infrastructure and tests
+  have not been qualified on this head. `supabase-local.sh assert` verified
+  one published binding is loopback-only. `supabase-local.sh status` returned
+  127 because the Supabase CLI is not on PATH; no stack start or shared
+  database action followed. Focused tracker/lifecycle tests passed 23/23, and
+  the isolated PostgreSQL timeout probe passed 1/1. These validate only the
+  synthetic transaction-settlement lifecycle: no live collector is wired to
+  the independent authority, vault fence, writer exclusion or recovery path.
+  The original worktree remains unchanged at 144 entries; this recovery branch
+  remains unpushed, and collection, writer-window, legal, review, QA, preflight
+  and ship gates remain held.
