@@ -246,8 +246,10 @@ This paragraph is the first section of the PR body.
 2. `apps/web-platform/infra/bastion.test.sh`: sections EGRESS (Guard 2), SETTLE (Guard 3), HOSTKEY
    (Guard 4), BUDGET (Guard 5: `wc -c` of the render against a pinned 32,768), and SHAPE (zero inbound
    firewall rules; `10.0.1.70` inside the subnet and distinct from every `var.web_hosts` default
-   `private_ip` and the fixed host IPs; x86 precondition; no `10.0.1.10` or `"web-1"` literal; no file
-   name that a push-path filter of another workflow matches). Renders `bastion-cloud-init.yml` through
+   `private_ip` and the fixed host IPs; x86 precondition; no file name that a push-path filter of another workflow matches, and a push
+   trigger with no path filter counts as matching every file unless it is in the reviewed
+   non-deploying `EVERY_PUSH` set; the `10.0.1.10` / `"web-1"` literal rule is
+   `web-hosts-generic.test.sh`'s, not this lint's). Renders `bastion-cloud-init.yml` through
    Terraform as `kernel-currency.test.sh` does.
 3. A row in `tests/scripts/test-destroy-guard-counter-web-platform.sh`: a fixture plan creating
    `hcloud_server.bastion` yields `host_creates == 1`.
@@ -273,7 +275,8 @@ This paragraph is the first section of the PR body.
    `hcloud_server_network.bastion`, `hcloud_firewall.bastion` (labels only, zero inbound rules) with a
    separate `hcloud_firewall_attachment.bastion` (git-data's form, not inline `firewall_ids`),
    and outputs for the key fingerprint and the private IP. The file carries the EXPOSURE note git-data
-   has (the private half is in state and in `user_data`).
+   has (the private half is in `tls_private_key` state; the locked hcloud provider stores `user_data` as
+   a hash, and the metadata endpoint serves it to root on the host).
 2. `tests/scripts/lib/bastion-resources.txt`: the one list of bastion resource addresses. The gate
    reads it as its allow-set, and `plugins/soleur/test/terraform-target-parity.test.ts` asserts the
    job's `-target` lines equal it and that every entry is in `OPERATOR_APPLIED_EXCLUSIONS` (each with
@@ -284,9 +287,10 @@ This paragraph is the first section of the PR body.
 
 `bastion-cloud-init.yml`, in this order:
 
-1. A static baseline ruleset in `/etc/nftables.conf` (input and output `policy drop`, loopback and
-   established only), loaded by `nftables.service` before `network-pre.target`, so the host is closed
-   from its first packet and on every boot, whatever later units do.
+1. A static baseline ruleset written to `/etc/soleur/bastion-nftables.conf` and installed to
+   `/etc/nftables.conf` by the post-settle pass (writing the dpkg conffile before `apt-get install
+   nftables` trips dpkg's conffile prompt; review, 2026-11-18). Input and output `policy drop`, loopback
+   and established only; from the boot after the post-settle pass it loads before `network-pre.target`.
 2. `ssh.service` and `ssh.socket` masked: nothing connects to the bastion in step 2, so sshd does not
    run at all, which also closes the public window before `hcloud_firewall_attachment.bastion` lands.
    Step 3 unmasks it with its first dialer. `ssh_keys:` still delivers the Terraform key
@@ -430,7 +434,7 @@ trail is read.
   wrong host key, egress wider than declared) becomes the management-plane jump to every user's code on
   git-data in step 3.
 - **If this leaks, the user's data is exposed via:** the bastion's SSH host private key (in Terraform
-  state and in `user_data`, served by the metadata endpoint), which would let an attacker with a network
+  state, and in `user_data` as the metadata endpoint serves it to root on the host), which would let an attacker with a network
   position impersonate the bastion to CI and to operators from step 3 on; or a widened egress or inbound
   rule on a host that will hold the jump to git-data.
 - **Brand-survival threshold:** `single-user incident`
@@ -460,6 +464,9 @@ failure_modes:
     alert_route: "red bastion-host-create run; the host is powered off"
   - mode: "egress policy blocks the readiness endpoint, or the egress load fails"
     detection: "fresh_boot_not_ready_egress_load (the trap flushes the ruleset so it reaches Sentry), else no fresh_boot_ready before the deadline (layer 6: workflow run log ::error::)"
+    alert_route: "red bastion-host-create run; the host is powered off"
+  - mode: "the private NIC never configures 10.0.1.70 (hot-attached NIC left unmanaged, #8539)"
+    detection: "STAGE=private_ip fatal (fresh_boot_not_ready_private_ip) after the networkd fallback and a bounded wait (layer 6: workflow run log ::error::)"
     alert_route: "red bastion-host-create run; the host is powered off"
   - mode: "boot-verify cannot power a not-ready host off"
     detection: "bastion-boot-verify.sh ::error:: and poweroff_result=failed in the run summary (layer 6)"
@@ -515,8 +522,8 @@ No `terraform_data` SSH provisioner is added or changed. The bastion receives no
   `bastion-egress.sh` and its units, `tls_private_key.bastion_host_ssh` and `var.sentry_dsn` (Doppler `prd_terraform`
   `SENTRY_DSN`). The bastion renders no web file, so web edits never replace it, except the ADR-326
   blocks Guard 3 pins.
-- State: the R2 backend holds the private key twice (the key resource and `user_data`), as for
-  git-data (ADR-237 residual).
+- State: the R2 backend holds the private key in the `tls_private_key` resource (the locked hcloud
+  provider stores `user_data` as a hash), as for git-data (ADR-237 residual).
 
 ### Vendor-tier reality check
 
@@ -647,7 +654,7 @@ installs.
 | 9 | A resolver allowlist hostname has no `soleur-egress:` citation | RED |
 | 10 | The `input` chain policy is `accept`, or the chain is absent | RED |
 | 11 | The table family is not `inet`, or `hcloud_server.bastion` has `ipv6_enabled = true` | RED |
-| 12 | The baseline `/etc/nftables.conf` is absent from the render, or `ssh.service` is not masked | RED |
+| 12 | The baseline `/etc/soleur/bastion-nftables.conf` is absent from the render, or `ssh.service` is not masked | RED |
 | 13 | `bastion-egress.sh` empties the allow set when one lookup fails (fixture resolver) | RED |
 
 **Harness rows:**
@@ -952,7 +959,7 @@ cutover's user-facing check (git access and workspace saves keep working).
   `nft -c` on the rendered ruleset in CI (Guard 2 row 7), the consumers' own ordered checks through
   the loaded chain before `fresh_boot_ready`, and the reader's deadline, which turns a host that cannot send its fatal event
   into a red run.
-- **Key residual.** The private key sits in state and in `user_data`; a leak stays valid until a
+- **Key residual.** The private key sits in state and is served to root by the metadata endpoint; a leak stays valid until a
   deliberate rotation (runbook).
 
 ## Sharp Edges

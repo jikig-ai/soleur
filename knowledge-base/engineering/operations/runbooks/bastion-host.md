@@ -9,7 +9,7 @@ this page holds only the acts.
 - **Resource list:** `tests/scripts/lib/bastion-resources.txt`. The job `-target`s exactly this list, and the birth gate admits nothing else.
 - **Cost:** EUR 5.99 per month (cx23 plus its primary IPv4). The owner's go on the real birth accepts it.
 - **State in 2a:** declared, not born. The host exists only after a `bastion-host-create` run reports ready.
-- **Once born:** no role. sshd is masked and nothing dials it. Egress is DNS to the Hetzner resolvers, NTP for `systemd-timesync` only, the metadata endpoint for root only, and tcp/443 to the apt mirrors and Sentry ingest for root and `_apt` only. It has no heartbeat until #12879.
+- **Once born:** no role. sshd is masked and nothing dials it. Egress is DNS to the Hetzner resolvers, DHCP requests for `systemd-network`, NTP for `systemd-timesync`, the metadata endpoint for root, and tcp/443 to the apt mirrors and Sentry ingest for root and `_apt`. Nothing else leaves the host, and no private address is reachable. The sshd drop-in (for step 3) refuses root login and every forwarding but TCP. It has no heartbeat until #12879.
 
 ## Birth
 
@@ -48,7 +48,7 @@ In 2a there is no in-repo exit from a powered-off bastion: the recovery is #1287
 
 If boot-verify could not power the server off (its `::error::` line says so), the agent powers it off through the Hetzner API, using the same lookup by name and the same `poweroff` action as `scripts/lib/bastion-boot-verify.sh`. If no token is reachable, the owner uses the console. Either way, record it on #12879.
 
-**DNS.** The baseline output chain admits DNS only to the Hetzner resolvers (185.12.64.1 and 185.12.64.2). If the host is handed other resolvers, the egress script's lookups fail and the boot dies at stage `egress_load`. The error trap flushes the ruleset before it reports, so `fresh_boot_not_ready_egress_load` reaches Sentry carrying the egress script's reason, and boot-verify powers the host off. The fix is a `bastion-cloud-init.yml` edit, then the replace.
+**DNS.** The baseline output chain admits DNS only to the Hetzner resolvers (185.12.64.1 and 185.12.64.2). If the host is handed other resolvers, the egress script's lookups fail and the boot dies at stage `egress_load`. The error trap flushes the ruleset before it reports, so `fresh_boot_not_ready_egress_load` reaches Sentry carrying the egress unit's last journal lines as its detail, and boot-verify powers the host off. A lookup that answers with a private or link-local address fails the same way. The fix is a `bastion-cloud-init.yml` edit, then the replace.
 
 ## Late ready
 
