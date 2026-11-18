@@ -327,6 +327,7 @@ in_transit:
 - the canary `incident_cause` starts with `CANARY, expected to stay open; do not resolve or close its mirror issue` (byte 0);
 - each name literal (`soleur-inngest-cutover-flip-silent-prd`, `soleur-inngest-cutover-flip-silent-canary-prd`) appears exactly twice (exploration and alert), and exactly one alert carries `exploration_id = logtail_exploration.inngest_cutover_flip_silent.id`;
 - the `inngest_cutover_flip_silent*` resource headers number exactly 4 (2 alerts, 2 explorations), counted across every `*.tf` under `apps/web-platform/infra/` in the effective HCL text (review round 1: a commented-out header no longer counts, one behind a same-line `/* */` does; not anchored to line start). PR-C moves this to 2.
+- the alerts file stays inside an HCL subset the shared lexer models exactly (review round 3, lead ruling R-subset: S1 no `/*`; S2 one-line interpolations with no quote, comment or heredoc opener; S3 canonical heredoc openers only, none in a flip block; S4 canonical resource headers; S5 non-ASCII only on comments and one-line strings), so the effective view is Terraform's; each pinned key also holds exactly once in the raw text (two-view cardinality), and the raw block and the depth-cut effective block span the same lines. The lexer's `${ }` depth gap stays open for its other consumers (#12917).
 
 **Header contract.** The guard's header text states the new canon and the pinned triple. `PRESENCE_ROWS`, `MUT_ROWS_EXPECTED` and the assertion floor are re-derived from a run of the guard after the rows below land, never by hand.
 
