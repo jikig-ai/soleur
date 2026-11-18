@@ -197,10 +197,12 @@ phase, and record that phase's RED runs with it.
   and `supabase/verify/187_workspace_kb_sync_held_files.sql` (`authenticated` has no SELECT on the new columns; the RPC
   is definer with a pinned path). State in the PR what the grants do: column-split SELECT, table-level INSERT/UPDATE
   from 174, RLS as the barrier.
-- [ ] 10.4 Deploy order (D29(2)): 187 applies before the code that writes it; rollback is the code first, then the
+- [x] 10.4 Deploy order (D29(2)): 187 applies before the code that writes it; rollback is the code first, then the
   down. Apply to dev only once the PR is ready for review, with a dev-ledger row naming this PR; QA e2e runs after the
   apply. Re-check the migration number before commit and at ship
   (`git ls-tree origin/main --name-only apps/web-platform/supabase/migrations/`).
+  Evidence (2026-11-18): CI tenant-integration applied 187 and 188 to the dev project; the dev-ledger parity check is
+  clean (`violations=0`); no manual apply. origin/main tops out at 186 at ship, so 187/188 do not collide.
 
 ## Phase 11: Held signal, Settings card, agent line (#12714; W1, W3-W5, V1-V6, D29, D30)
 
@@ -238,7 +240,9 @@ phase, and record that phase's RED runs with it.
 - [x] 11.5 `e2e/settings-kb-sync-held.e2e.ts` on the dev project after the 10.4 apply (Owner and member flows, V6
   strings, waits on the rendered copy); screenshots at desktop and 375 px for the PR, compared with the wireframe.
   Evidence (2026-11-18): 16/16 green, `authenticated` project, mock dev harness, not the dev Supabase project (8 states x 2 widths, no 375 px h-scroll); `authenticated` + `chromium` 117 passed, 1 skipped.
-- [ ] 11.6 At ship: file the follow-up issues and link #12719 as not closed:
+- [x] 11.6 At ship: file the follow-up issues and link #12719 as not closed. Filed 2026-11-18: #12945 (X3, D38(4)
+  residual, FU-5, FU-6), #12946 (W6, C8, D30, D26(3), FU-1..FU-4, FU-8, FU-9, final-verification P3s), #12947 (V12 root
+  cause, wireframe frames, 11.5 e2e findings); #12719 stays open:
   - X3 (legacy `syncWorkspace` `pull --ff-only` / `fetch origin`, P1 security; reuses `kb-sync-remote.ts`);
   - W6 (I3, with its trigger);
   - C8 (no publish route);
