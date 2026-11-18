@@ -1,8 +1,6 @@
-// AST census of the token-bearing git surface (#12600, CTO rulings D12(1), D19), over EVERY apps/web-platform/server/** source
-// file (`.ts`, `.tsx`, `.mts`, `.mjs`),
-// built on test/approval/source-scan.ts (`parseSource` = `ts.createSourceFile`, `censusSource`, `callSites`). It replaces
-// the 2-file / 1-spelling regex census: a backtick literal, a variable, a spread, a `-c` prefix, an alias import or a
-// function passed as a value are each seen by the grammar, not by a pattern.
+// AST census of two token-bearing git SPELLINGS in apps/web-platform/server/** (`.ts`, `.tsx`, `.mts`, `.mjs`), plus the
+// import boundaries of the KB sync pull (#12600, CTO rulings D12(1), D19, D25; #12704 D45(d)). What it assembles, and only
+// that (it is not the whole token-bearing git surface):
 //
 //   1. Every `gitWithInstallationAuth` reference is an import, a call or its definition (an alias is followed; a value use,
 //      namespace member, re-export or dynamic import is red). Every call is recorded as (file, first verb or `dynamic`,
@@ -17,18 +15,28 @@
 //   3. No non-test file OUTSIDE server/ can reach `gitWithInstallationAuth`: none names it, and every edge into server/git-auth
 //      is a plain named import of another export (no namespace import, re-export, dynamic import or require), pinned in
 //      OUTSIDE_SERVER_GIT_AUTH_EDGES (D19(2)).
+//   4. D25(3), D45(d): no PUSH_FREE_MODULES file reaches kb-sync-publish.ts or push-branch.ts through its RUNTIME import
+//      graph, transitively: static imports, re-exports, dynamic `import()` and `require()` are followed through every app
+//      module; a type-only import or re-export is erased by the compiler and is not an edge; a computed specifier, an
+//      unresolvable app path or a listed file that does not exist is red.
+//   5. D25(5), D45(d): the token-free KB sync modules spawn no git of their own (no child_process, no `X("git")`), call the
+//      isolated runner a known number of times, and import a CLOSED set of runtime bindings (TOKEN_FREE_IMPORTS), so a new
+//      git-capable wrapper (`runGit`, a key-auth helper, a future one) is a reviewed row, not a silent bypass.
 //
 // PUSH_TOKEN_SITES churns with HUMAN-TEXT `push` tokens too (an op slug, a message, a word list): a new row there is reviewed
 // like any other, it is not proof of a new git push. The known-positive plants its shapes through an in-memory override of
 // one file, so only that file is re-parsed (D19(3)).
 //
 // Out of the census by design: REST writes (the Contents API) are user-initiated KB UI writes, not git pushes. A
-// computed name (`"pu" + "sh"`, `R["gitWith" + "InstallationAuth"]`) is invisible to a static scan (named residual).
-import { readFileSync, readdirSync, statSync } from "node:fs";
+// computed name (`"pu" + "sh"`, `R["gitWith" + "InstallationAuth"]`) is invisible to a static scan (named residual). NOT
+// assembled here (FU-5, D45(d)): the agent sandbox's installation-token env against the workspace (by design, E1), the
+// key-auth wrapper, token-in-URL cron clones, a token env built through `buildIsolatedGitEnv` or `hostGitInvocation`
+// extraEnv, and code outside server/. test/host-git-consumers-real-git.test.ts classifies host-side git exec sites.
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import ts from "typescript";
 import { describe, expect, test } from "vitest";
-import { callSites, censusSource, parseSource } from "./approval/source-scan";
+import { callSites, censusSource, parseSource, resolveSpecifier } from "./approval/source-scan";
 
 const APP = join(__dirname, "..");
 const IDENT = "gitWithInstallationAuth";
@@ -69,19 +77,88 @@ const ISOLATED_RUNNER_SITES: Record<string, number> = {
   "server/kb-sync-held.ts": 1, // the held count's diff (#12714)
 };
 
-/** #12718 (D25(3)): modules on the pull's import graph that must never import the push. */
+/**
+ * D45(d), tests F7: every RUNTIME binding each token-free module imports, as `<specifier> <name>` (`(dynamic)` for an
+ * `import()`, with its destructured names). The closed set of what the module can call: a new import of any git-capable
+ * helper is a reviewed row here, whatever it is named. Type-only imports are erased and not listed.
+ */
+const TOKEN_FREE_IMPORTS: Record<string, string[]> = {
+  "server/kb-sync-objects.ts": [
+    "./agent-git-identity AGENT_AUTHOR_EMAIL",
+    "./agent-git-identity AGENT_AUTHOR_NAME",
+    "./approval/workspace-head HEX40",
+    "./git-isolated-local runIsolatedGitLocal",
+    "./git-isolated-local verifyObject",
+    "./kb-root KB_ROOT",
+  ],
+  "server/kb-sync-pull.ts": [
+    "./approval/workspace-head HEX40",
+    "./error-frame firstAppFrame",
+    "./git-isolated-local ISOLATED_LOCAL_TIMEOUT_MS",
+    "./git-isolated-local runIsolatedGitLocal",
+    "./kb-root KB_ROOT",
+    "./kb-sync-objects commitTree",
+    "./kb-sync-objects handOver",
+    "./kb-sync-objects isAncestor",
+    "./kb-sync-objects isCommitPresent",
+    "./kb-sync-objects isKbOnlySide",
+    "./kb-sync-objects kbOf",
+    "./kb-sync-objects mergeEffectIsKbOnly",
+    "./kb-sync-objects readVerified",
+    "./kb-sync-objects sameKb",
+    "./kb-sync-remote KB_SYNC_SIDE_BRANCH",
+    "./kb-sync-remote KbRemoteError",
+    "./kb-sync-remote cappedTimeout",
+    "./kb-sync-remote fetchIntoIsolated", // the hardened token-bearing fetch lives (and is counted) in kb-sync-remote.ts
+    "./kb-sync-remote readRemoteState", // likewise the hardened ls-remote
+    "./kb-sync-side-pr createKbSyncPr",
+    "./kb-sync-side-pr readSidePrState",
+  ],
+  "server/kb-sync-side-pr.ts": [
+    "./github-app createPullRequest (dynamic)", // REST, not git
+    "./github-app createPullRequest (dynamic)",
+    "./github-app findOpenPullRequest (dynamic)",
+    "./github-app listPullRequestsForHead (dynamic)",
+    "./kb-sync-remote KB_SYNC_SIDE_BRANCH",
+  ],
+  "server/kb-sync-held.ts": [
+    "./approval/workspace-head HEX40",
+    "./approval/workspace-head SmallFileError",
+    "./approval/workspace-head readSmallRegularFile",
+    "./git-isolated-local runIsolatedGitLocal",
+    "./kb-root KB_ROOT",
+    "./logger createChildLogger",
+    "@/lib/kb-sync-held-copy HELD_FILES_RENDER_MAX",
+    "node:fs lstatSync",
+    "node:fs readdirSync",
+    "node:fs realpathSync",
+    "node:path join",
+  ],
+};
+
+/**
+ * #12718 (D25(3)), #12704 (D45(d)): modules on the pull's and the self-heal's runtime import graph that must never reach
+ * the push, checked transitively (a module they load that loads the push is red).
+ */
 const PUSH_FREE_MODULES = [
   "server/kb-sync-objects.ts",
   "server/kb-sync-pull.ts",
   "server/kb-sync-remote.ts",
   "server/kb-sync-side-pr.ts",
-  "server/workspace-sync.ts",
+  "server/workspace-sync.ts", // the self-heal (KB routes, c4-writer, cron, webhook reconcile)
   "server/git-isolated-dispose.ts",
   "server/agent-git-identity.ts",
-  // Review Phase 0: the leaves the pull and the self-heal reach (the collision precheck, the held-count path).
+  // Review Phase 0: the leaves the pull and the self-heal reach (the collision precheck, the held-count path; the held
+  // count is also loaded by cc-dispatcher.ts's dynamic import for the D39(a) close refresh).
   "server/workspace-collision.ts",
   "server/kb-sync-held-refresh.ts",
+  // D45(d): the connected-repo writer the self-heal and the pull load. Its `import type { KbWorkspaceWriter }` from
+  // kb-sync-publish.ts is a type-only edge, erased, so it is not a push edge (pinned in the known-positive below).
+  "server/connected-repo-git.ts",
 ];
+
+/** The push modules no PUSH_FREE_MODULES file may reach at runtime. */
+const PUSH_MODULES = new Set(["server/kb-sync-publish.ts", "server/push-branch.ts"]);
 
 /** Files whose push-verb tokens in an argv position are allowed, with the reason. */
 const ARGV_ALLOWED: Record<string, string> = {
@@ -260,7 +337,143 @@ function census(overrides: ReadonlyMap<string, string> = new Map()): Census {
   return out;
 }
 
-describe("census: the token-bearing git surface of server/ (D12, D19)", () => {
+/** A module edge the emitted JS still has: a type-only import or re-export is erased by the compiler and is not one. */
+interface ModuleEdge {
+  spec: string; // "<computed>" for a non-literal dynamic import() or require()
+  kind: "static" | "reexport" | "dynamic" | "require";
+  names: string[]; // the bindings it loads ("default", "*", "<side-effect>", or "<dynamic>" when not destructured)
+}
+
+const specText = (n: ts.Node | undefined): string =>
+  n && (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) ? n.text : "<computed>";
+
+/** The names a dynamic `import()` / `require()` destructures (`const { a, b } = await import("x")`), else `<dynamic>`. */
+function destructured(call: ts.CallExpression): string[] {
+  let p: ts.Node = call.parent;
+  while (ts.isAwaitExpression(p) || ts.isParenthesizedExpression(p)) p = p.parent;
+  if (ts.isVariableDeclaration(p) && ts.isObjectBindingPattern(p.name)) {
+    return p.name.elements.map((e) => (e.propertyName ?? e.name).getText());
+  }
+  return ["<dynamic>"];
+}
+
+/** Every runtime module edge of one file (static imports, re-exports, dynamic import(), require, import = require). */
+function moduleEdges(src: string, file: string): ModuleEdge[] {
+  const sf = parseSource(src, file);
+  const out: ModuleEdge[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) {
+      const c = n.importClause;
+      const spec = n.moduleSpecifier.text;
+      if (!c) out.push({ spec, kind: "static", names: ["<side-effect>"] });
+      else if (!c.isTypeOnly) {
+        const names: string[] = [];
+        if (c.name) names.push("default");
+        const nb = c.namedBindings;
+        if (nb && ts.isNamespaceImport(nb)) names.push("*");
+        if (nb && ts.isNamedImports(nb)) for (const e of nb.elements) if (!e.isTypeOnly) names.push((e.propertyName ?? e.name).text);
+        // `import { type A } from "x"` with only type elements is erased too (isolatedModules, no verbatimModuleSyntax).
+        if (names.length > 0) out.push({ spec, kind: "static", names });
+      }
+    } else if (ts.isExportDeclaration(n) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) {
+      const ec = n.exportClause;
+      const names = n.isTypeOnly ? [] : ec && ts.isNamedExports(ec) ? ec.elements.filter((e) => !e.isTypeOnly).map((e) => (e.propertyName ?? e.name).text) : ["*"];
+      if (names.length > 0) out.push({ spec: n.moduleSpecifier.text, kind: "reexport", names });
+    } else if (ts.isImportEqualsDeclaration(n) && !n.isTypeOnly && ts.isExternalModuleReference(n.moduleReference)) {
+      out.push({ spec: specText(n.moduleReference.expression), kind: "require", names: ["*"] });
+    } else if (ts.isCallExpression(n)) {
+      if (n.expression.kind === ts.SyntaxKind.ImportKeyword) out.push({ spec: specText(n.arguments[0]), kind: "dynamic", names: destructured(n) });
+      else if (ts.isIdentifier(n.expression) && n.expression.text === "require") out.push({ spec: specText(n.arguments[0]), kind: "require", names: destructured(n) });
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+const CODE_EXT = [".ts", ".tsx", ".mts", ".mjs", ".js", "/index.ts", "/index.tsx"];
+/** An app module path (relative to apps/web-platform) for a specifier; null for a package; undefined when it resolves to nothing. */
+function resolveModule(from: string, spec: string): string | null | undefined {
+  const base = resolveSpecifier(from, spec);
+  if (base === null) return null;
+  for (const ext of CODE_EXT) {
+    const f = `${base}${ext}`;
+    if (existsSync(join(APP, f)) && statSync(join(APP, f)).isFile()) return f;
+  }
+  // a data file (`./x.json`): a leaf, nothing to follow
+  if (existsSync(join(APP, base)) && statSync(join(APP, base)).isFile()) return base;
+  return undefined;
+}
+
+const EDGE_CACHE = new Map<string, ModuleEdge[]>();
+function edgesOf(file: string, overrides: ReadonlyMap<string, string>): ModuleEdge[] {
+  const o = overrides.get(file);
+  if (o !== undefined) return moduleEdges(o, file);
+  if (!SOURCE_RE.test(file)) return [];
+  let e = EDGE_CACHE.get(file);
+  if (!e) EDGE_CACHE.set(file, (e = moduleEdges(readFileSync(join(APP, file), "utf8"), file)));
+  return e;
+}
+
+/**
+ * The runtime import closure of `root` (breadth first). `violation` is the import path to the first push module reached,
+ * or to a computed / unresolvable specifier (red: the walk cannot see past it); null when the closure is push-free.
+ */
+function runtimeClosure(root: string, overrides: ReadonlyMap<string, string> = new Map()): { reached: Set<string>; violation: string[] | null } {
+  const parent = new Map<string, string | null>([[root, null]]);
+  const trail = (f: string): string[] => {
+    const p: string[] = [];
+    for (let x: string | null = f; x !== null; x = parent.get(x) ?? null) p.unshift(x);
+    return p;
+  };
+  if (!existsSync(join(APP, root)) && !overrides.has(root)) return { reached: new Set(), violation: [`<missing ${root}>`] };
+  const queue = [root];
+  while (queue.length > 0) {
+    const f = queue.shift() as string;
+    for (const e of edgesOf(f, overrides)) {
+      if (e.spec === "<computed>") return { reached: new Set(parent.keys()), violation: [...trail(f), `<computed ${e.kind}>`] };
+      const t = resolveModule(f, e.spec);
+      if (t === null) continue; // a package: it cannot load app code
+      if (t === undefined) return { reached: new Set(parent.keys()), violation: [...trail(f), `<unresolved ${e.spec}>`] };
+      if (parent.has(t)) continue;
+      parent.set(t, f);
+      if (PUSH_MODULES.has(t)) return { reached: new Set(parent.keys()), violation: trail(t) };
+      queue.push(t);
+    }
+  }
+  return { reached: new Set(parent.keys()), violation: null };
+}
+
+/**
+ * D25(5), D45(d): what is wrong with one token-free KB sync module (empty = nothing). `src` undefined = the listed file
+ * does not exist, which fails (pattern P3-13: a rename must not turn the row vacuous).
+ */
+function tokenFreeViolations(f: string, src: string | undefined): string[] {
+  if (src === undefined) return [`${f}: listed but missing`];
+  const sf = parseSource(src, f);
+  const out: string[] = [];
+  let runnerCalls = 0;
+  const visit = (n: ts.Node): void => {
+    if (ts.isCallExpression(n)) {
+      const name = calleeName(n.expression);
+      if (name === "runIsolatedGitLocal") runnerCalls++;
+      const first = n.arguments[0];
+      if (first && literalText(first) === "git") out.push(`${f}: ${name}("git")`);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  const edges = moduleEdges(src, f);
+  for (const e of edges) if (/(^|:)child_process$/.test(e.spec)) out.push(`${f}: child_process ${e.kind} import`);
+  const imports = edges.flatMap((e) => e.names.map((n) => `${e.spec} ${n}${e.kind === "static" ? "" : ` (${e.kind})`}`)).sort();
+  const listed = [...(TOKEN_FREE_IMPORTS[f] ?? [])].sort();
+  for (const i of imports) if (!listed.includes(i)) out.push(`${f}: unlisted import ${i}`);
+  for (const i of listed) if (!imports.includes(i)) out.push(`${f}: listed import no longer present ${i}`);
+  if (runnerCalls !== ISOLATED_RUNNER_SITES[f]) out.push(`${f}: ${runnerCalls} runIsolatedGitLocal calls, table says ${ISOLATED_RUNNER_SITES[f]}`);
+  return out;
+}
+
+describe("census: gitWithInstallationAuth calls, push-verb tokens and the KB pull import boundaries in server/ (D12, D19, D25)", () => {
   const c = census();
 
   test("the walk covers .mts and .mjs server files too (D19(2))", () => {
@@ -286,64 +499,65 @@ describe("census: the token-bearing git surface of server/ (D12, D19)", () => {
     expect(c.gitAuth.filter((x) => x.startsWith("server/connected-repo-git.ts "))).toEqual([]);
   });
 
-  test("Phase 0: connected-repo-git.ts reaches the push module for a type only (no runtime edge to kb-sync-publish or push-branch)", () => {
-    const f = "server/connected-repo-git.ts";
-    expect(SERVER_FILES).toContain(f);
-    const sf = parseSource(readFileSync(join(APP, f), "utf8"), f);
-    const runtime: string[] = [];
-    const visit = (n: ts.Node): void => {
-      if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) {
-        const typeOnly = ts.isImportDeclaration(n) ? n.importClause?.isTypeOnly === true : n.isTypeOnly;
-        if (!typeOnly) runtime.push(n.moduleSpecifier.text);
-      }
-      if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword) {
-        runtime.push(n.arguments[0] ? (literalText(n.arguments[0]) ?? "<computed>") : "<computed>");
-      }
-      ts.forEachChild(n, visit);
-    };
-    visit(sf);
-    expect(runtime.filter((m) => /(^|\/)(kb-sync-publish|push-branch|session-sync)$/.test(m) || m === "<computed>")).toEqual([]);
-  });
-
-  test("D25(5): no literal git exec in the token-free KB sync modules; their isolated-runner call sites are the known counts", () => {
+  test("D25(5), D45(d): the token-free KB sync modules spawn no git, call the isolated runner a known number of times and import a closed set", () => {
+    expect(Object.keys(TOKEN_FREE_IMPORTS).sort()).toEqual([...KB_SYNC_TOKEN_FREE].sort());
     for (const f of KB_SYNC_TOKEN_FREE) {
-      if (!SERVER_FILES.includes(f)) continue; // kb-sync-held.ts lands with #12714's half of this PR
-      const sf = parseSource(readFileSync(join(APP, f), "utf8"), f);
-      const spawnsGit: string[] = [];
-      let runnerCalls = 0;
-      const visit = (n: ts.Node): void => {
-        if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier) && /child_process$/.test(n.moduleSpecifier.text)) spawnsGit.push("child_process import");
-        if (ts.isCallExpression(n)) {
-          const name = calleeName(n.expression);
-          if (name === "runIsolatedGitLocal") runnerCalls++;
-          const first = n.arguments[0];
-          if (first && literalText(first) === "git") spawnsGit.push(`${name}("git")`);
-          if (n.expression.kind === ts.SyntaxKind.ImportKeyword && first && /child_process$/.test(literalText(first) ?? "")) spawnsGit.push("child_process dynamic import");
-        }
-        ts.forEachChild(n, visit);
-      };
-      visit(sf);
-      expect(spawnsGit, f).toEqual([]);
-      expect(runnerCalls, f).toBe(ISOLATED_RUNNER_SITES[f]);
+      expect(tokenFreeViolations(f, SERVER_FILES.includes(f) ? readFileSync(join(APP, f), "utf8") : undefined), f).toEqual([]);
     }
   });
 
-  test("D25(3): the pull leaves never import the push (kb-sync-publish.ts, push-branch.ts), statically or dynamically", () => {
+  test("known-positive (D45(d)): a missing listed file, an unlisted git wrapper, a dynamic import and a child_process import each fail the token-free check", () => {
+    const f = "server/kb-sync-held.ts";
+    const src = readFileSync(join(APP, f), "utf8");
+    // pattern P3-13: renamed or moved, the row fails instead of being skipped
+    expect(tokenFreeViolations("server/kb-sync-held-count.ts", undefined)).toEqual(["server/kb-sync-held-count.ts: listed but missing"]);
+    // tests F7 M8e: an existing git wrapper under any name
+    const wrapper = `import { runGit } from "./compound-promote-create-gates";\n${src}\nexport const __planted = () => runGit("/w", ["fetch", "origin"]);\n`;
+    expect(tokenFreeViolations(f, wrapper)).toEqual([`${f}: unlisted import ./compound-promote-create-gates runGit`]);
+    const dyn = `${src}\nexport async function __planted(): Promise<void> {\n  const { gitWithPrivateKeyAuth } = await import("./git-key-auth");\n  void gitWithPrivateKeyAuth;\n}\n`;
+    expect(tokenFreeViolations(f, dyn)).toEqual([`${f}: unlisted import ./git-key-auth gitWithPrivateKeyAuth (dynamic)`]);
+    const cp = `import { execFile } from "node:child_process";\n${src}\nexport const __planted = () => execFile("git", ["fetch"]);\n`;
+    expect(tokenFreeViolations(f, cp)).toEqual([
+      `${f}: execFile("git")`,
+      `${f}: child_process static import`,
+      `${f}: unlisted import node:child_process execFile`,
+    ]);
+    // the type-only form is erased, so it is not an import of a callable
+    expect(tokenFreeViolations(f, `import type { RunGit } from "./compound-promote-create-gates";\n${src}`)).toEqual([]);
+  });
+
+  test("D25(3), D45(d): no push-free module reaches the push at runtime, transitively (static, re-export, dynamic import(), require)", () => {
     for (const f of PUSH_FREE_MODULES) {
       expect(SERVER_FILES, f).toContain(f);
-      const sf = parseSource(readFileSync(join(APP, f), "utf8"), f);
-      const specs: string[] = [];
-      const visit = (n: ts.Node): void => {
-        if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) specs.push(n.moduleSpecifier.text);
-        if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword) {
-          const t = n.arguments[0] ? literalText(n.arguments[0]) : null;
-          specs.push(t ?? "<computed>");
-        }
-        ts.forEachChild(n, visit);
-      };
-      visit(sf);
-      expect(specs.filter((m) => /(^|\/)(kb-sync-publish|push-branch)$/.test(m) || m === "<computed>"), f).toEqual([]);
+      expect(runtimeClosure(f).violation, f).toBeNull();
     }
+    // non-vacuity: the walk follows dynamic edges (the self-heal loads the writer and the held count only by import())
+    const selfHeal = runtimeClosure("server/workspace-sync.ts").reached;
+    for (const m of ["server/connected-repo-git.ts", "server/kb-sync-held-refresh.ts", "server/kb-sync-pull.ts", "server/kb-sync-remote.ts"]) {
+      expect(selfHeal, m).toContain(m);
+    }
+  });
+
+  test("known-positive (D45(d)): the pre-leaf-move shape, a value edge, a re-export, a computed or unresolvable specifier and a missing file are red; a type-only edge is not", () => {
+    const ws = "server/workspace-sync.ts";
+    const wsSrc = readFileSync(join(APP, ws), "utf8");
+    // arch F5, before the Phase 0 leaf move: the self-heal dynamic-imported session-sync, which statically imports the push
+    const preMove = runtimeClosure(ws, new Map([[ws, `${wsSrc}\nexport const __planted = () => import("@/server/session-sync");\n`]])).violation;
+    expect(preMove?.slice(0, 2)).toEqual([ws, "server/session-sync.ts"]);
+    expect(PUSH_MODULES.has(preMove?.at(-1) ?? "")).toBe(true);
+    // two hops deep through a module that is not listed: still red
+    const crg = "server/connected-repo-git.ts";
+    const crgSrc = readFileSync(join(APP, crg), "utf8");
+    const TYPE_EDGE = 'import type { KbWorkspaceWriter } from "./kb-sync-publish";';
+    expect(crgSrc).toContain(TYPE_EDGE); // Phase 0's pinned type-only edge
+    expect(runtimeClosure(crg).violation).toBeNull();
+    expect(runtimeClosure(crg, new Map([[crg, crgSrc.replace(TYPE_EDGE, 'import { type KbWorkspaceWriter } from "./kb-sync-publish";')]])).violation).toBeNull();
+    expect(runtimeClosure(crg, new Map([[crg, crgSrc.replace(TYPE_EDGE, 'import { classifyPushError } from "./kb-sync-publish";')]])).violation).toEqual([crg, "server/kb-sync-publish.ts"]);
+    expect(runtimeClosure(crg, new Map([[crg, `${crgSrc}\nexport { classifyPushError } from "./kb-sync-publish";\n`]])).violation).toEqual([crg, "server/kb-sync-publish.ts"]);
+    expect(runtimeClosure(crg, new Map([[crg, `${crgSrc}\nexport type { PushErrorClass } from "./kb-sync-publish";\n`]])).violation).toBeNull();
+    expect(runtimeClosure(crg, new Map([[crg, `${crgSrc}\nexport const __planted = (m: string) => import(m);\n`]])).violation).toEqual([crg, "<computed dynamic>"]);
+    expect(runtimeClosure(crg, new Map([[crg, `${crgSrc}\nexport const __planted = () => import("./no-such-module");\n`]])).violation).toEqual([crg, "<unresolved ./no-such-module>"]);
+    expect(runtimeClosure("server/kb-sync-gone.ts").violation).toEqual(["<missing server/kb-sync-gone.ts>"]);
   });
 
   test("push / send-pack / receive-pack tokens, in any form, equal the checked-in table", () => {
