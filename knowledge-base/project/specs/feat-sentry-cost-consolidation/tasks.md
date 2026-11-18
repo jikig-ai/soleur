@@ -34,7 +34,7 @@ Derived from the post-review plan. Rulings are in `decision-challenges.md`.
       url `https://app.soleur.ai`, 60s, thresholds 3/1, environment production, 2xx,
       description, `lifecycle { ignore_changes = [project] }`); multi-line HCL; delete the 4 marketing blocks and the `moved` block; rewrite the header.
 - [x] 3.2 Commit with `[ack-destroy]` on its own line in the BODY.
-- [ ] 3.3 Identity check of the Sentry plan (amended): `create .app`, no import row, `delete` x4,
+- [x] 3.3 Identity check of the Sentry plan (amended): `create .app`, no import row, `delete` x4,
       nothing else deleted. Paste into PR.
 - [x] 3.4 `uptime-alerts.tf`: `betteruptime_monitor.soleur_changelog_deep` (soleur_apex keys);
       header, 526-list and www-redirect comments; ROUTING pointer line.
@@ -61,7 +61,7 @@ Derived from the post-review plan. Rulings are in `decision-challenges.md`.
 - [x] 4.1 Canonicalizer and mutation suites pass (AC5).
 - [x] 4.2 Fidelity and drift-workflow tests pass (AC6).
 - [ ] 4.3 C4 tests pass (AC8); discoverability test passes (AC15).
-- [ ] 4.4 Grep sweep prints nothing (AC7); resource counts per AC3.
+- [x] 4.4 Grep sweep prints nothing (AC7); resource counts per AC3.
 
 ## Phase 4b: Pre-merge (agent-run)
 

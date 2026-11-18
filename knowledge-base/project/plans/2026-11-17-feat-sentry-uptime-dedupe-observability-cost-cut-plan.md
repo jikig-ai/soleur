@@ -899,32 +899,32 @@ of `scripts/sentry-alert-live-fidelity.sh`.
 
 ### Pre-merge (PR)
 
-- [ ] AC1 (amended 2026-11-17): `plan_pr` output, pasted in the PR, shows for uptime exactly
+- [x] AC1 (amended 2026-11-17): `plan_pr` output, pasted in the PR, shows for uptime exactly
       `create sentry_uptime_monitor.app` and `delete` of the 4 removed addresses, no import row,
       and no `delete` on any other address.
-- [ ] AC2: a commit on the branch carries `[ack-destroy]` on its own line in its BODY;
+- [x] AC2: a commit on the branch carries `[ack-destroy]` on its own line in its BODY;
       `sentry-destroy-required` is green.
-- [ ] AC3: after stripping comments, `uptime-monitors.tf` has 1 `resource "sentry_uptime_monitor"`
-      block and no `import` block (amended 2026-11-17); `uptime-alerts.tf` has 8
+- [x] AC3: after stripping comments, `uptime-monitors.tf` has 1 `resource "sentry_uptime_monitor"`
+      block and no `import` block (amended 2026-11-17); `uptime-alerts.tf` has 9 (amended at review: + `soleur_legal_terms`)
       `resource "betteruptime_monitor"` blocks; `grep -c 'betteruptime_monitor.soleur_changelog_deep' .github/workflows/apply-web-platform-infra.yml`
       prints `1`.
-- [ ] AC5: `bash apps/web-platform/infra/www-apex-canonicalizer.test.sh` and
+- [x] AC5: `bash apps/web-platform/infra/www-apex-canonicalizer.test.sh` and
       `bash apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh` pass, with
-      `EXPECTED_ROWS=29` and both new W14 rows killed.
-- [ ] AC6: `bash tests/scripts/test-sentry-alert-live-fidelity.sh` and
+      `EXPECTED_ROWS=31` (amended at review: + the W14 count and bare-label rows) and both new W14 rows killed.
+- [x] AC6: `bash tests/scripts/test-sentry-alert-live-fidelity.sh` and
       `bash tests/scripts/test-sentry-alert-drift-workflow.sh` pass; every Guard 1 row is a case;
       `SENTRY_FIXTURE_UPTIME: ""` appears in both `scheduled-sentry-alert-drift.yml` and
       `apply-sentry-infra.yml`.
-- [ ] AC7: the Phase 3 step 13 grep sweep prints nothing.
-- [ ] AC8: ADR-328 exists (ordinal checked free on every `origin/*` ref); ADR-204 carries the two
+- [x] AC7: the Phase 3 step 13 grep sweep prints nothing (its one hit is the allowed `cloudflare-pages-cutover.md:212` dated note, named in the PR).
+- [x] AC8: ADR-328 exists (ordinal checked free on every `origin/*` ref); ADR-204 carries the two
       "Amended by ADR-328" pointers; `model.c4` edits made and `model.likec4.json` regenerated;
       `c4-code-syntax`, `c4-render` and `c4-count-parity` pass.
-- [ ] AC9: `expenses.md` Sentry row Amount reads `54.06` with a `2026-11-17 (#12844)` note;
+- [x] AC9: `expenses.md` Sentry row Amount reads `54.06` with a `2026-11-17 (#12844)` note;
       Better Stack row carries a `2026-11-17 (#12844)` note; `cost-model.md` carries a
       `[2026-11-17 Review note]` and its Sentry line cites `[expenses.md@2026-11-17]`.
-- [ ] AC10: `uptime-alerts.tf` host-kernel comment carries the ROUTING pointer; #12386 and #7799
+- [x] AC10: `uptime-alerts.tf` host-kernel comment carries the ROUTING pointer; #12386 and #7799
       carry the agent-posted comments.
-- [ ] AC15: `preflight-discoverability-test.test.ts` passes with `BASELINE_DECLARED_PROBES = 98`.
+- [x] AC15: `preflight-discoverability-test.test.ts` passes with `BASELINE_DECLARED_PROBES = 98`.
 
 ### Post-merge (agent-run, Phase 7)
 
