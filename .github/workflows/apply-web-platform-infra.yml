@@ -6357,7 +6357,7 @@ jobs:
           set -uo pipefail
           # shellcheck source=scripts/lib/bastion-boot-verify.sh
           source "${GITHUB_WORKSPACE}/scripts/lib/bastion-boot-verify.sh" || {
-            echo "::error::could not load scripts/lib/bastion-boot-verify.sh — the boot was not read and soleur-bastion was NOT powered off (apply outcome ${APPLY_OUTCOME}). Power it off in the Hetzner console now."
+            echo "::error::could not load scripts/lib/bastion-boot-verify.sh — the boot was not read and soleur-bastion was NOT powered off (apply outcome ${APPLY_OUTCOME:-unknown}). Power it off in the Hetzner console now."
             exit 1
           }
           rc=0
