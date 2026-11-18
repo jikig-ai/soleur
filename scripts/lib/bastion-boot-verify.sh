@@ -23,36 +23,39 @@ _BBV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/bearer-curl.sh
 source "${_BBV_DIR}/bearer-curl.sh" || { echo "::error::bastion-boot-verify: cannot load bearer-curl.sh"; return 1 2>/dev/null || exit 1; }
 
-_bbv_poweroff() {  # power off every-but-ambiguous soleur-bastion; never guesses between two
-  local tmp code n id
+# _bbv_call <method> <url> -> prints the body, then a final line holding the HTTP code (000 on a transport
+# failure). No tempfile: curl's own -w appends the code to the body on stdout, so nothing needs a trap.
+_bbv_call() {
+  local resp
+  resp="$(bc_curl bastion-boot-verify 'Authorization:Bearer :HCLOUD_TOKEN' -- -sS --max-time 20 -X "$1" -w '\n%{http_code}' "$2" 2>/dev/null)" || true
+  [[ "$resp" == *$'\n'* ]] || resp=$'\n'"${resp:-000}"
+  printf '%s' "$resp"
+}
+
+_bbv_poweroff() {  # power off the one soleur-bastion; never guesses between two
+  local resp code body n id
   if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
     echo "::error::bastion-boot-verify: HCLOUD_TOKEN is not set, so soleur-bastion could NOT be powered off. Power it off in the Hetzner console now (Servers > soleur-bastion > Power > Power off)."
     return 1
   fi
-  tmp="$(mktemp)" || { echo "::error::bastion-boot-verify: mktemp failed; soleur-bastion was NOT powered off."; return 1; }
-  code="$(bc_curl bastion-boot-verify 'Authorization:Bearer :HCLOUD_TOKEN' -- -sS --max-time 20 -o "$tmp" -w '%{http_code}' \
-    "https://api.hetzner.cloud/v1/servers?name=soleur-bastion" 2>/dev/null)" || code="${code:-000}"
-  if [[ "$code" != 200 ]] || ! n="$(jq -e '.servers | length' "$tmp" 2>/dev/null)"; then
-    rm -f "$tmp"
+  resp="$(_bbv_call GET "https://api.hetzner.cloud/v1/servers?name=soleur-bastion")"
+  code="${resp##*$'\n'}"; body="${resp%$'\n'*}"
+  if [[ "$code" != 200 ]] || ! n="$(jq -e '.servers | length' <<<"$body" 2>/dev/null)"; then
     echo "::error::bastion-boot-verify: the Hetzner server lookup failed (HTTP ${code}), so soleur-bastion could NOT be powered off. Power it off in the Hetzner console now."
     return 1
   fi
   if [[ "$n" -eq 0 ]]; then
-    rm -f "$tmp"
     echo "bastion-boot-verify: no soleur-bastion server exists (the apply did not create it); nothing to power off."
     return 0
   fi
   if [[ "$n" -ne 1 ]]; then
-    rm -f "$tmp"
     echo "::error::bastion-boot-verify: ${n} servers are named soleur-bastion; refusing to guess which to power off. Inspect the Hetzner project now."
     return 1
   fi
-  id="$(jq -r '.servers[0].id' "$tmp")"; rm -f "$tmp"
+  id="$(jq -r '.servers[0].id' <<<"$body")"
   [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::bastion-boot-verify: the server id '${id}' is not numeric; soleur-bastion was NOT powered off."; return 1; }
-  tmp="$(mktemp)" || return 1
-  code="$(bc_curl bastion-boot-verify 'Authorization:Bearer :HCLOUD_TOKEN' -- -sS --max-time 20 -X POST -o "$tmp" -w '%{http_code}' \
-    "https://api.hetzner.cloud/v1/servers/${id}/actions/poweroff" 2>/dev/null)" || code="${code:-000}"
-  rm -f "$tmp"
+  resp="$(_bbv_call POST "https://api.hetzner.cloud/v1/servers/${id}/actions/poweroff")"
+  code="${resp##*$'\n'}"
   if [[ "$code" != 201 && "$code" != 200 ]]; then
     echo "::error::bastion-boot-verify: the poweroff call for server ${id} failed (HTTP ${code}). Power soleur-bastion off in the Hetzner console now."
     return 1

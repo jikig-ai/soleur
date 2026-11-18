@@ -62,15 +62,16 @@ done
 cfg=$(cat)
 printf '%s %s\n' "$method" "$url" >> "$BBV_LOG/curl.log"
 printf '%s\n' "$cfg" >> "$BBV_LOG/curl.cfg"
+# Like real curl: the body goes to -o when given, else to stdout, and -w's '\n%{http_code}' follows it.
+emit() { if [ -n "$out" ]; then printf '%s' "$1" > "$out"; printf '%s' "$2"; else printf '%s\n%s' "$1" "$2"; fi; }
 case "$method $url" in
   "GET https://api.hetzner.cloud/v1/servers?name=soleur-bastion")
-    [ "${BBV_LOOKUP_CODE:-200}" = 200 ] || { echo '{}' > "$out"; printf '%s' "$BBV_LOOKUP_CODE"; exit 0; }
-    if [ -n "${BBV_LOOKUP_BODY:-}" ]; then printf '%s' "$BBV_LOOKUP_BODY" > "$out"
-    else echo '{"servers":[{"id":4242,"name":"soleur-bastion"}]}' > "$out"; fi
-    printf '200' ;;
+    [ "${BBV_LOOKUP_CODE:-200}" = 200 ] || { emit '{}' "$BBV_LOOKUP_CODE"; exit 0; }
+    if [ -n "${BBV_LOOKUP_BODY:-}" ]; then emit "$BBV_LOOKUP_BODY" 200
+    else emit '{"servers":[{"id":4242,"name":"soleur-bastion"}]}' 200; fi ;;
   "POST https://api.hetzner.cloud/v1/servers/4242/actions/poweroff")
-    echo '{"action":{"id":1,"status":"running"}}' > "$out"; printf '%s' "${BBV_POWEROFF_CODE:-201}" ;;
-  *) printf '000'; exit 7 ;;
+    emit '{"action":{"id":1,"status":"running"}}' "${BBV_POWEROFF_CODE:-201}" ;;
+  *) emit '' 000; exit 7 ;;
 esac
 STUB
 cat > "$BIN/gh" <<'STUB'
