@@ -137,8 +137,8 @@ class IngressTest(unittest.TestCase):
                 self.assertTrue(entry.is_symlink() if symlink else entry.read_text() == 'keep')
                 entry.unlink()
 
-    def test_nonprivate_directory_is_refused(self):
-        os.chmod(self.path, 0o755)
+    def test_directory_without_private_mode_is_refused(self):
+        os.chmod(self.path, 0o600)
         self.start()
         self.assertNotEqual(self.child.wait(timeout=5), 0)
         self.assertFalse((self.path / 'authority.sock').exists())
