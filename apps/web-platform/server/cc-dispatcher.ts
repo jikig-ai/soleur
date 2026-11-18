@@ -3162,6 +3162,8 @@ export const realSdkQueryFactory: QueryFactory = async (
       ? { registered: false, reason: heldLineUnattemptedReason(connectedOwner !== "" && connectedRepo !== "", effectiveInstallationId, webEgressEntitled === true, heldLineDegradedReads) }
       : heldLineRegistration;
   const heldLineRoute = heldLineRouteFromRegistration(heldLineSource);
+  // simplicity F13: a registration's `defaultBranch` is already null unless it registered (`CcPushRegistration`).
+  const heldLineDefaultBranch = typeof heldLineRegistration === "object" ? heldLineRegistration.defaultBranch : null;
   const heldLine =
     heldLineEligible && kbSyncHeld
       ? buildKbSyncHeldAgentLine({
@@ -3169,7 +3171,7 @@ export const realSdkQueryFactory: QueryFactory = async (
           checkedAt: kbSyncHeld.checkedAt,
           route: heldLineRoute,
           runner: "cc",
-          defaultBranch: typeof heldLineRegistration === "object" && heldLineRegistration.registered ? heldLineRegistration.defaultBranch : null,
+          defaultBranch: heldLineDefaultBranch,
         })
       : null;
   if (heldLine) {
@@ -3179,10 +3181,7 @@ export const realSdkQueryFactory: QueryFactory = async (
     ? await readCcMergeBlockedReason(workspacePath, kbSyncMergeBlockedReasonOf(kbSyncHeld?.pullBlocked ?? null))
     : null;
   const mergeBlockedLine = mergeBlocked
-    ? buildKbSyncMergeBlockedAgentLine(
-        mergeBlocked,
-        typeof heldLineRegistration === "object" && heldLineRegistration.registered ? heldLineRegistration.defaultBranch : null,
-      )
+    ? buildKbSyncMergeBlockedAgentLine(mergeBlocked, heldLineDefaultBranch)
     : null;
   if (mergeBlockedLine) {
     effectiveSystemPrompt += `\n\n${mergeBlockedLine}`;
