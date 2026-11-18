@@ -4445,3 +4445,13 @@
   No full battery was run; editing `scripts/test-all.sh` still requires full
   battery QA before shipment. Original dirty worktree remains at 144 entries;
   no files there were edited.
+- Refetched `origin/main` at `7e1d286ebe2ee1f8a92d621b692ed91ed7925bd1`
+  after discovering it had advanced beyond the isolated branch's previous
+  reconciliation point. Merged it with the `ort` strategy into this clean
+  recovery worktree; the merge had no conflicts and `origin/main` is an
+  ancestor of the recovery HEAD. `git diff --check` reported two pre-existing
+  trailing blank lines in unrelated files added on main; the same warnings
+  reproduce in the main-only range, so neither file was changed. The shared
+  local Docker context has an existing Supabase database container; it was
+  inspected only and not used. Any later schema comparison must use separately
+  created, disposable database instances with no shared credentials.
