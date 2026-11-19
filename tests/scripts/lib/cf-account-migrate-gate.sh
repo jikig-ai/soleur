@@ -12,7 +12,7 @@
 #
 # ONE LIST PER PHASE. cf_account_migrate_phase_spec is the single source: the job generates its
 # -target and -replace args from it (cf_account_migrate_targets / _replaces), the gate grades the
-# plan against it, and scripts/cf-account-migration-complete.sh reads it for "every migrated
+# plan against it, and apps/web-platform/infra/scripts/cf-account-migration-complete.sh reads it for "every migrated
 # address is in state". Widening a phase is a reviewed diff here and nowhere else.
 #
 # Classes:
@@ -192,7 +192,10 @@ cf_account_migrate_gate() {
         ($cls == "replace" and .change.actions != ["delete","create"] and .change.actions != ["create","delete"]))
     | "REFUSE \(.address) (class \($cls)) planned with actions \(.change.actions | tostring)\(if .change.importing then " as an import" else "" end)"' "$plan_json")" || { _cfam_eval_fail; return 1; }
   # An import of a create-class address is reported by the literal check below, which names it.
-  v="$(grep -v ' (class create) .* as an import$' <<<"$v" || true)"
+  # grep -v exits 1 when every line was filtered (fine) and 2 on an error, which is a refusal:
+  # a check that cannot be evaluated is a refusal, never "no violation lines".
+  v="$(grep -v ' (class create) .* as an import$' <<<"$v")"; local gv_rc=$?
+  (( gv_rc <= 1 )) || { _cfam_eval_fail; return 1; }
   violations+="${v:+$v$'\n'}"
 
   if [[ "$_cfam_check_pure" -eq 1 ]]; then
