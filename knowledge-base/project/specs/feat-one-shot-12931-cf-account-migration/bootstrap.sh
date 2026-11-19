@@ -341,8 +341,9 @@ readonly BRANCH_TOKENS=(CF_API_TOKEN_PURGE CF_API_TOKEN_DNS_EDIT)
 # Names the inventory stage reports holders of. CF_ACCOUNT_ID is listed so each holder is decided
 # (R2 or zone/Access) before anyone writes it; event-cf-token-expiry-check.ts reads it at runtime.
 # Every migrated token name is listed so a revoke (runbook "Revoke recipe") first sees every
-# config that still holds a copy of the value it is about to kill.
-readonly WATCHED=(CF_ZONE_ID CF_ACCOUNT_ID CF_R2_ACCOUNT_ID CF_ACCESS_CLIENT_ID CF_API_TOKEN_SOLEUR_ACCT "${KEYS_0A[@]}" "${KEYS_0B[@]}")
+# config that still holds a copy of the value it is about to kill. The Access service-token pair is
+# PR2's (tunnel phase) and is not watched here.
+readonly WATCHED=(CF_ZONE_ID CF_ACCOUNT_ID CF_R2_ACCOUNT_ID CF_API_TOKEN_SOLEUR_ACCT "${KEYS_0A[@]}" "${KEYS_0B[@]}")
 readonly INVENTORY_REL="apps/web-platform/infra/doppler-config-inventory.txt"
 readonly SCOPE_REL="plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh"
 EMPTY_SHA="$(printf '' | soleur_approval_sha256)"
