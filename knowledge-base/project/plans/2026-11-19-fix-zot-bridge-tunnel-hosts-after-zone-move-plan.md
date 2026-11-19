@@ -1075,3 +1075,18 @@ path.
   - deploy arms: 44376350232, 44427961170.
 - ADRs: ADR-096, ADR-114, ADR-154, ADR-166, ADR-241, ADR-304, ADR-327.
 - Docs: Cloudflare tunnel DNS records (same-account routing); Cloudflare 1xxx errors (1000, 1033).
+
+## CTO Amendments (2026-11-19, post-deepen)
+
+Binding rulings recorded in `decision-challenges.md`; they override any conflicting text above.
+
+1. **No closing keyword for 12937.** The PR title and body carry `Ref #12937` only; no close/closes/fix
+   keyword may sit next to that number anywhere (checkboxes and code blocks included). The agent closes
+   the issue after the post-merge re-runs are green.
+2. **Registry Doppler secrets.** Besides dropping `ignore_changes = [value]`: correct the
+   "empty-on-refresh" comment in `plugins/soleur/test/terraform-target-parity.test.ts` (true only for
+   imported tokens); never adopt a `_soleur` token with `import {}`; the post-apply sha256 check against
+   Doppler covers the registry pair as well as the CI-SSH pair. Runbook: rotate via `client_secret_version`.
+3. **Policy gate.** Every new RED row in the extended deploy-policy gate carries the same `UNWEDGE`
+   message as the deploy row, and Guard 2's matrix gets a GREEN row for each of the two new policies'
+   single acknowledged create, so the first merge apply is not blocked by its own gate.
