@@ -3358,6 +3358,7 @@ const MAIN_ROOT_TF_WORKFLOWS = [
   "apply-web-platform-infra.yml",
   "apply-deploy-pipeline-fix.yml",
   "cf-lb-overlay.yml",
+  "cf-account-migrate.yml",
   "scheduled-terraform-drift.yml",
   "infra-validation.yml",
 ];
@@ -3484,10 +3485,13 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
         return plans && MAIN_ROOT_FORMS.some((re) => re.test(t));
       })
       .sort();
-    // Exact: infra-validation.yml is the one planner the census cannot see (its matrix is
-    // computed at runtime from a changed-files job), so it is listed by hand; every other
-    // entry must be found, and nothing else may be.
-    expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => f !== "infra-validation.yml").sort());
+    // Exact: two planners are invisible to this YAML census and listed by hand —
+    // infra-validation.yml (its matrix is computed at runtime from a changed-files job) and
+    // cf-account-migrate.yml (#12931: it plans through apps/web-platform/infra/scripts/
+    // cf-account-migrate-job.sh, not inline YAML). Every other entry must be found, and nothing
+    // else may be.
+    const HAND_LISTED = ["infra-validation.yml", "cf-account-migrate.yml"];
+    expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => !HAND_LISTED.includes(f)).sort());
     expect(found.length).toBe(4);
   });
 

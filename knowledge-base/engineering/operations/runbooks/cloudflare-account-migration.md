@@ -34,14 +34,17 @@ Incident: `knowledge-base/engineering/operations/post-mortems/soleur-ai-cloudfla
   Verification compares `sha256sum` of source and destination; non-secret ids print at most an 8-character prefix.
   Never put a token in argv, a shell variable on screen, a Playwright snapshot or a screenshot.
 - **Every dispatch arms a watch** (`hr-dispatch-async-must-arm-watch`): `gh run watch <run-id> --exit-status`.
-- **Before every dispatch**, refuse if a stale run is queued or in progress, because a queued run still executes:
+- **Before every dispatch**, refuse if a stale run is queued, waiting or in progress, because a queued run still
+  executes:
 
   ```bash
-  gh run list --workflow apply-web-platform-infra.yml --status queued --limit 5
-  gh run list --workflow apply-web-platform-infra.yml --status in_progress --limit 5
+  for wf in apply-web-platform-infra.yml apply-deploy-pipeline-fix.yml cf-lb-overlay.yml; do
+    for st in queued in_progress waiting; do gh run list --workflow "$wf" --status "$st" --limit 5; done
+  done
   ```
 
-  Expected: both lists empty.
+  Expected: every list empty. The migrate job repeats this check (plus `pending` and `requested`) and refuses with
+  `reason=run-in-flight`.
 
 Placeholders: `<phase>` is one of `redirects-dns`, `zone-rest`, `tunnel` (PR2); `<utc>` is `date -u +%Y%m%dT%H%M%SZ`;
 `<run-id>` is the dispatched run.
@@ -56,22 +59,27 @@ Placeholders: `<phase>` is one of `redirects-dns`, `zone-rest`, `tunnel` (PR2); 
 ### The dispatch
 
 ```bash
-gh workflow run apply-web-platform-infra.yml --ref main \
-  -f apply_target=cf-account-migrate -f migrate_phase=<phase> \
-  -f confirm=MIGRATE-CF-<phase> -f plan_only=<true|false> -f reason='#12931 <phase>'
+gh workflow run cf-account-migrate.yml --ref main -f migrate_phase=<phase> \
+  -f confirm=MIGRATE-CF-<phase> -f rehearsal=<true|false> -f reason='#12931 <phase>'
 ```
 
-`plan_only=true` is the rehearsal (environment `infra-privileged`, no reviewers): a scratch copy of the root with a
-`backend "local"` override runs the real state-forget script and a plan. It writes nothing to R2: the job asserts the
-remote state serial is unchanged and that no new object appeared under `web-platform/backups/`.
-`plan_only=false` is the apply (environment `web-platform-infra-apply`, reviewer-gated). Always rehearse first.
+The workflow is `.github/workflows/cf-account-migrate.yml` (job `cf_account_migrate`, its own file because
+`apply-web-platform-infra.yml` is at its byte cap, CTO L79). It shares the `terraform-apply-web-platform-host`
+concurrency group. The job body is `apps/web-platform/infra/scripts/cf-account-migrate-job.sh`.
+Before anything is written it checks that Doppler resolves `cf_zone_id`/`cf_account_id` to the new ids
+(`reason=zone-id-not-new` / `account-id-not-new` otherwise).
+`rehearsal=true` (the default) runs under environment `infra-privileged`, which has no reviewers. A scratch copy of
+the root with a `backend "local"` override runs the real state-forget script (`--rehearsal`, backup under
+`$RUNNER_TEMP/cf-migrate`) and a plan, and never applies. It writes nothing to R2: the job asserts the remote state
+serial is unchanged and that no new object appeared under `web-platform/backups/`.
+`rehearsal=false` is the apply (environment `web-platform-infra-apply`, reviewer-gated). Always rehearse first.
 
 ## Expected reds (do not "fix" these mid-migration)
 
 | Red | Window | Why |
 |---|---|---|
 | Every plan of this root fails on the old-id validations, including `web-host-replace` and the registry dispatcher | PR1 merge → Phase 2 flip | Doppler still holds the old ids; the validations fail closed. Keep this window short: flip in the same sitting as the merge. |
-| Every plan-capable job of `apply-web-platform-infra.yml` except `cf_account_migrate` exits non-zero with `verdict=cf-account-migration-in-progress` and an `::error::` naming this runbook | Phase 2 flip → end of the tunnel phase plus a live connector | The state-derived predicate is false. Exception: `web_host_replace` with `web_host_key=web-2` once the tunnel is in state on the new account. |
+| Every plan-capable job of `apply-web-platform-infra.yml`, `apply-deploy-pipeline-fix.yml` and `cf-lb-overlay.yml` exits non-zero with `verdict=cf-account-migration-in-progress` and an `::error::` naming this runbook | Phase 2 flip → end of the tunnel phase plus a live connector | The state-derived predicate is false. Exception: `web_host_replace` with `web_host_key=web-2` once the tunnel is in state on the new account. |
 | `scheduled-terraform-drift.yml` red | Phase 2 flip → `manual-rerun` green | Not gated; it only plans, and the plan shows the forgotten and not-yet-adopted addresses. |
 | Connector census in `scheduled-inngest-health.yml` red (no tunnel, then 0 connectors) | Phase 2 flip → web-2 replace | The census looks the tunnel up by name under the new `CF_ACCOUNT_ID`. |
 | `deploy.`/`ssh.`/`registry.` answer 530/1033 instead of Error 1000 | Tunnel apply → web-2 replace | The new tunnel exists with 0 connectors. Both states are down; nothing regresses. |
@@ -225,18 +233,19 @@ were rewritten unquoted and the comments on three records added during the incid
 `comment` diff, that record has drifted again: re-read it and fix the record or the pinned id, never widen the gate.
 
 `Operator-authorizes:` the dispatch with `migrate_phase=redirects-dns -f confirm=MIGRATE-CF-redirects-dns
--f plan_only=true`. Expected in the run log:
+-f rehearsal=true`. Expected in the run log:
 
 - `cf-state-migrate … verdict=ok removed=N skipped=M` against the local rehearsal copy, with the remote serial
   unchanged and no new object under `web-platform/backups/`;
-- `cf-account-migrate-gate verdict=PASS creates=<N> imports=<M> destroys=0`, where the gate derives N and M itself
-  (about 8 rulesets and lists created, minus any entrypoint the probe found, which becomes an import; 26 records, the
-  Pages project and 2 Pages domains imported; 1 `doppler_secret.cf_zone_id_prd` add). Compare nothing by eye.
+- `cf_account_migrate_gate: phase=redirects-dns verdict=PASS creates=<N> imports=<M> destroys=0`, where the gate
+  derives N and M itself (about 8 rulesets and lists created, minus any entrypoint the probe found, which becomes an
+  import; 26 records, the Pages project and 2 Pages domains imported; 1 `doppler_secret.cf_zone_id_prd` add). Compare
+  nothing by eye.
 
 Any `verdict=REFUSE <reason>` or `verdict=abort` stops the phase: nothing was applied. Read the reason, fix forward in a
 PR, re-rehearse.
 
-`Operator-authorizes:` the same dispatch with `plan_only=false`, then approve the `web-platform-infra-apply`
+`Operator-authorizes:` the same dispatch with `rehearsal=false`, then approve the `web-platform-infra-apply`
 environment. The real run writes the backup to `web-platform/backups/pre-cf-account-migration-<utc>.tfstate` before its
 single `state rm`. Record that object key on #12931: it is the full-revert source.
 
@@ -261,7 +270,7 @@ needs a re-mint.
 ### Step 3: `zone-rest` rehearsal and apply
 
 Probe the 0b tokens first. `Operator-authorizes:` the dispatch with `migrate_phase=zone-rest
--f confirm=MIGRATE-CF-zone-rest`, `plan_only=true`, then `plan_only=false`. Expected gate line: a
+-f confirm=MIGRATE-CF-zone-rest`, `rehearsal=true`, then `rehearsal=false`. Expected gate line: a
 `zone_settings_override` create that adopts the parity settings with no visible change, a `bot_management` create or
 update, 2 `github_actions_secret` updates (`CLOUDFLARE_API_TOKEN_PAGES`, `CLOUDFLARE_ACCOUNT_ID_PAGES`) and one
 `doppler_secret.cf_api_token_dns_edit` replace (`action_reason=replace_by_request`), destroys 0.
@@ -278,7 +287,7 @@ probe B (apex `version.txt`) equals the pushed sha.
    UUID goes into `local.deploy_service_token_ids` in PR2. Then `Operator-authorizes:` revoke `CF_API_TOKEN_ACCESS_MINT`.
 2. `Operator-authorizes:` merge PR2 with `[skip-web-platform-apply]`.
 3. **Tunnel phase.** `Operator-authorizes:` the dispatch with `migrate_phase=tunnel -f confirm=MIGRATE-CF-tunnel`,
-   `plan_only=true`, then `plan_only=false`. The apply leg first runs the pinned six-record pre-delete
+   `rehearsal=true`, then `rehearsal=false`. The apply leg first runs the pinned six-record pre-delete
    (`cf-tunnel-host-predelete.sh --apply`, never from the agent's machine): it GETs each pinned id and deletes all six
    only if every one is a proxied `A` record on `ssh.`/`registry.soleur.ai` with content in
    {`104.26.10.163`, `104.26.11.163`, `172.67.73.132`} in the new zone; one mismatch deletes none
@@ -329,7 +338,7 @@ holds. Never on a projection.
 ## Phase 5 — cleanup PR (after Phase 3 verification)
 
 - Delete the migration machinery (imports file, state-forget script, predicate and its call sites, the
-  `cf_migration_*` variables, the `cf_account_migrate` job, its input, option and gate). Keep
+  `cf_migration_*` variables, `cf-account-migrate.yml` with its job script, and the gate). Keep
   `cf-access-deploy-token-mint.sh` and the `cf-token-scope.sh` profiles.
 - `Operator-authorizes:` revoke `CF_API_TOKEN_SOLEUR_ACCT` (if not already) and any superseded old-zone token.
 - `Operator-authorizes:` delete the old tunnel `fc4509ed…` in the legacy account once web-2's replace has dropped its
