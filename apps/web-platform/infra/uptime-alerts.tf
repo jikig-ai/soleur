@@ -2,10 +2,10 @@
 # the 2026-05-18 cert outage post-mortem (PR-β). The fix half landed in PR
 # #3974 (initial codification of the ACME-aware HTTPS upgrade) and PR #3986
 # (inline of the carve-out into the seo_page_redirects ruleset). Issue #3976
-# was the operator runbook for cert recovery. The Sentry half of the alerting
-# stack lives at apps/web-platform/infra/sentry/uptime-monitors.tf — these two
-# resources are the second-source (BetterStack — independent vendor for
-# vendor-isolation) and the page-level error-rate alert (Cloudflare native).
+# was the operator runbook for cert recovery. Since ADR-328 Better Stack owns
+# ALL marketing-site uptime (soleur.ai); Sentry's one included uptime slot
+# watches the production app (apps/web-platform/infra/sentry/uptime-monitors.tf),
+# second-sourcing betteruptime_monitor.app / app_health below.
 #
 # Plan: knowledge-base/project/plans/2026-05-18-feat-soleur-ai-uptime-alerting-plan.md
 #
@@ -18,19 +18,23 @@
 
 # ── BetterStack: multi-region apex uptime monitor ───────────────────────────
 #
-# Second-source apex check — independent vendor from Sentry. If Sentry itself
-# is degraded (status.sentry.io or our specific org subdomain), this monitor
-# still pages. Same logic as the inngest heartbeat (inngest.tf:108-138) and
-# the inngest policy (inngest.tf:140-156) — paid-tier features gated on
-# var.betterstack_paid_tier (defaults false → email-only on free tier).
+# Better Stack owns marketing-site uptime (ADR-328): the apex (soleur_apex), the
+# www 301 (soleur_www_redirect), the /changelog/ deep path (soleur_changelog_deep),
+# the legal terms page (soleur_legal_terms) and the 3 sampled redirect probes
+# (seo_redirect_*). Sentry watches no marketing
+# URL; its one included uptime slot watches the production app. Paid-tier
+# features are gated on var.betterstack_paid_tier (defaults false → email-only on
+# free tier), same as the inngest heartbeat and policy (inngest.tf).
 #
-# Why apex only (not www / not the deep path / not the ACME probe):
-#   - The 4 Sentry monitors give us per-URL coverage already. BetterStack is
-#     here for VENDOR ISOLATION, not URL coverage. One probe is enough to
-#     prove "soleur.ai is reachable" when Sentry is the one that's broken.
-#   - Free-tier BetterStack object quota is finite and its cap semantics are
-#     unresolved; headroom matters. Measure it from the
-#     SOLEUR_HEARTBEAT_RECONCILE_INVENTORY marker (see the quota note below).
+# HISTORY (superseded by ADR-328): this section used to read "Why apex only ...
+# The 4 Sentry monitors give us per-URL coverage already", with Better Stack here
+# for vendor isolation, not URL coverage. ADR-328 removed those 4 Sentry
+# monitors (a second Sentry slot bills; the ACME probe was vacuous, #7799), so
+# per-URL marketing coverage is now Better Stack's alone.
+#
+# Free-tier BetterStack object quota is finite and its cap semantics are
+# unresolved; headroom matters. Measure it from the
+# SOLEUR_HEARTBEAT_RECONCILE_INVENTORY marker (see the quota note below).
 #
 # AMENDED at #7798 (ADR-204), narrowly and deliberately. "Vendor isolation, not
 # URL coverage" still governs everything above; it no longer governs a property
@@ -50,12 +54,13 @@
 # post-apply edge failure on each class pages somebody. Source completeness of
 # the full redirect set remains the guards' job, not runtime monitoring's.
 #
-# Consequence a future reader must not get wrong: redirect-health is now a
-# SINGLE-VENDOR property. Apex reachability is watched by Sentry AND Better
-# Stack, so a Sentry outage is survivable; the www 301 is watched only here. That
-# is a gain (the property went from zero working alarms to one, not from two to
-# one), but do not infer second-sourcing from the apex pattern. ADR-204 says so
-# explicitly. Runbook: knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
+# Consequence a future reader must not get wrong: redirect-health is a
+# SINGLE-VENDOR property, and since ADR-328 so is every marketing-site URL. Only
+# the production app (app.soleur.ai) is second-sourced across Sentry and Better
+# Stack (Better Stack pages; Sentry detects). For the redirect that was a gain
+# (zero working alarms to one); do not infer second-sourcing for soleur.ai from
+# the app pattern. ADR-204 and ADR-328 say so explicitly.
+# Runbook: knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
 #
 # Quota note: the free-tier cap is unresolved; read the
 # SOLEUR_HEARTBEAT_RECONCILE_INVENTORY line before adding an object (ADR-222).
@@ -64,19 +69,19 @@
 #           re-evaluate if a Cloudflare-side change ever reaches prod un-applied.
 #   #7884 — app.soleur.ai/health adopted as betteruptime_monitor.app_health (ADR-222).
 #
-# Why check_frequency = 180 (3 min) vs Sentry's 300s (5 min): denser probe
-# trades a tiny BetterStack-bill bump (free-tier sub-minute checks are paid;
-# 3-minute is free-tier-allowed per BetterStack pricing snapshot 2026-05) for
-# faster mean-time-to-detect during a real outage. Sentry stays at 5min
-# because four probes at 5min == one probe at 75s mean across the four; the
-# combined cadence is already dense.
+# Why check_frequency = 180 (3 min): denser probe trades a tiny BetterStack-bill
+# bump (free-tier sub-minute checks are paid; 3-minute is free-tier-allowed per
+# BetterStack pricing snapshot 2026-05) for faster mean-time-to-detect during a
+# real outage. (This used to justify Sentry's 5 min marketing cadence by the four
+# Sentry probes' combined density; those probes are gone since ADR-328, so the
+# 180 s here is the marketing site's only cadence.)
 #
 # follow_redirects = true. NOTE the direction, which this comment had backwards
 # until #7749: the APEX is canonical and serves 200; WWW 301s to the apex. Measured
 # 2026-09-02 — `curl -o /dev/null -w '%{http_code} %{redirect_url}'` gives
 # `200` for https://soleur.ai/ and `301 https://soleur.ai/` for www. The
 # www→apex direction is the one seo-bulk-redirects.tf implements and the one
-# sentry/uptime-monitors.tf asserts. (It has been inverted here since #4577.)
+# soleur_www_redirect below asserts. (It had been inverted here since #4577.)
 #
 # follow_redirects still earns its keep: it means this monitor succeeds only on a
 # terminal 200, so it cannot be satisfied by a redirect into a broken target.
@@ -127,6 +132,66 @@ resource "betteruptime_monitor" "soleur_apex" {
   # Literal name of the only team in the workplace — see inngest.tf:120-129
   # for the case-sensitivity quirk and the rationale for hardcoding vs
   # promoting to a variable.
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+
+  verify_ssl = true
+  paused     = false
+}
+
+# ── Deep-path monitor: https://soleur.ai/changelog/ (ADR-328) ───────────────
+#
+# MOVED FROM SENTRY at ADR-328 (it was a Sentry uptime monitor on the same URL at a
+# 600 s interval). Guards "root 200 but deep pages 404": an Eleventy half-build, or a
+# Pages deploy that publishes the index and loses the rest, leaves soleur_apex green
+# while every page below the root 404s. Same keys and order as soleur_apex, so the
+# 180 s cadence is now denser than the Sentry original.
+resource "betteruptime_monitor" "soleur_changelog_deep" {
+  monitor_type       = "status"
+  url                = "https://soleur.ai/changelog/"
+  pronounceable_name = "soleur dot ai changelog deep path"
+
+  check_frequency     = 180
+  request_timeout     = 10
+  confirmation_period = 60
+  recovery_period     = 60
+  follow_redirects    = true
+
+  email = true
+  call  = false
+  sms   = false
+  push  = false
+
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+
+  verify_ssl = true
+  paused     = false
+}
+
+# ── Legal-page monitor: https://soleur.ai/legal/terms-and-conditions/ (#12844) ─
+#
+# The signup and accept-terms screens link to /pages/legal/terms-and-conditions.html,
+# which 301s here. seo_redirect_bulk_item watches only that 301 (follow_redirects =
+# false), so before this block no monitor on either vendor checked that the page a
+# user signs actually serves 200: a build that dropped the legal pages while the apex
+# and the changelog stayed up went unnoticed. Same keys and order as soleur_apex.
+resource "betteruptime_monitor" "soleur_legal_terms" {
+  monitor_type       = "status"
+  url                = "https://soleur.ai/legal/terms-and-conditions/"
+  pronounceable_name = "soleur dot ai legal terms page"
+
+  check_frequency     = 180
+  request_timeout     = 10
+  confirmation_period = 60
+  recovery_period     = 60
+  follow_redirects    = true
+
+  email = true
+  call  = false
+  sms   = false
+  push  = false
+
   team_name = "Your team"
   policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
 
@@ -243,13 +308,14 @@ resource "betteruptime_monitor" "app_health" {
 # 3xx and evaluates assertions against the final response, so it compared
 # `equals 301` against the apex's 200. Measured 2026-09-07 — 10/10 checks
 # failing, every row httpStatusCode 301, assertionFailureData naming that
-# assertion. That monitor is now retargeted to 2xx REACHABILITY and renamed
-# sentry_uptime_monitor.soleur_www_reachability; the redirect-health half lives
+# assertion. #7798 retargeted that Sentry monitor to 2xx reachability, and ADR-328
+# removed it (Sentry watches no marketing URL). The redirect-health property lives
 # here, on the only vendor that can express it.
 #
-# Two alarms now watch www and they mean different things. In an inbox:
-#   "soleur dot ai www redirect 301"  → www stopped 301-ing to the apex
-#   "soleur-ai-www-reachability"      → www is unreachable / 5xx
+# ONE alarm watches www. "soleur dot ai www redirect 301" pages when www stops
+# 301-ing to the apex, and it ALSO fails on DNS, TLS and 5xx (any response that is
+# not the 301 fails `expected_status_codes = [301]`), so www reachability pages
+# through it too.
 #
 # Runbook: knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
 # The redirect itself is declared in seo-bulk-redirects.tf
@@ -682,13 +748,11 @@ removed {
 #   GET /accounts/{cf_account_id}/alerting/v3/available_alerts
 #
 # The post-mortem scenario this policy was meant to alert on — 526 origin
-# cert validation failures — is already covered by:
-#   - `sentry_uptime_monitor.soleur_apex` (5-min interval, 3-fail trip)
-#   - `sentry_uptime_monitor.soleur_www_reachability` (renamed at #7798; it was
-#     `soleur_www` and asserted `equals 301`, which it could never satisfy -- so
-#     read this row as covering 526 only since the 2xx retarget)
-#   - `sentry_uptime_monitor.soleur_acme_probe` (ACME-carve-out regression alarm)
-#   - `betteruptime_monitor.soleur_apex` (3-min multi-region, vendor-isolated)
+# cert validation failures — is already covered by (Better Stack only since
+# ADR-328 removed the Sentry marketing monitors):
+#   - `betteruptime_monitor.soleur_apex` (3-min multi-region)
+#   - `betteruptime_monitor.soleur_www_redirect` (a 526 is not the expected 301)
+#   - `betteruptime_monitor.soleur_changelog_deep` (3-min, deep path)
 # A 526 either fails the TLS handshake or returns a 5xx — both fire the
 # uptime monitors. The CF-native policy was belt-and-suspenders, not load-bearing.
 #
@@ -698,6 +762,7 @@ removed {
 # documented in PR #4018 before deletion.
 
 # #12007 - per-host dead-man heartbeats for the periodic SOLEUR_HOST_KERNEL marker (web-1, web-2, inngest, registry).
+# ROUTING: arming re-routes these 4 to per-host Sentry cron monitors; decision and must-dos on #12386.
 # Each is fed hourly by scripts/deadman-heartbeat-feeder.sh (targets host-kernel-<role>) ONLY while that host's own
 # valid marker row exists inside a literal 36 h window (129600 s, hot UNION archive); with none the beat is withheld, so
 # the heartbeat times out and pages. Worst case from a dead emitter to a page is about 40 h (36 h + the hourly feeder +

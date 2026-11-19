@@ -82,6 +82,7 @@ vi.mock("@/server/workspace-resolver", () => ({
 // `workspaces` row via writeRepoColsToWorkspace (was the solo-`users` mirror).
 vi.mock("@/server/workspace-repo-mirror", () => ({
   writeRepoColsToWorkspace: vi.fn(async () => {}),
+  clearKbSyncHeldCols: vi.fn(async () => {}),
 }));
 
 // ---------------------------------------------------------------------------

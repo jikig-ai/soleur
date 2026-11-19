@@ -3139,11 +3139,17 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // `discoverability_test:` sub-block, value on one line. TRUTH: the probe (`bash scripts/betterstack-query.sh --since 30d --grep
   // relay_hello_key_fp`) is a Better Stack log query that needs BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler prd_terraform).
   // NO SUBSTITUTE: a host container's warn line is reachable only through that query, which has no unauthenticated reader. Genuine.
-  // 97 -> 98 on 2026-11-18 (#12585, PR #12897 SandboxNetworkAccess arm): measured by this test before the bump (Received 98, the new
+  // 97 -> 98 on 2026-11-17 (#6606, PR #12844 Sentry uptime dedupe): the new entry is
+  // `2026-11-17-feat-sentry-uptime-dedupe-observability-cost-cut-plan.md`. PLACEMENT: a correctly-indented child of its
+  // `discoverability_test:` sub-block, value on one line. TRUTH: the probe (`bash scripts/sentry-alert-live-fidelity.sh`,
+  // expecting `uptime_verdict=clean`) reads the org's uptime detectors through the authenticated Sentry organization API with
+  // SENTRY_IAC_AUTH_TOKEN (Doppler soleur/prd_terraform), host and org pinned to jikigai-eu.sentry.io / jikigai-eu.
+  // NO SUBSTITUTE: the live uptime detector set (and each detector's mode) has no unauthenticated read surface. Genuine.
+  // 98 -> 99 on 2026-11-19 (#12585, PR #12897 SandboxNetworkAccess arm; re-derived at the merge with main, where #12844 took 98): the new
   // entry is `archive/20261118-150540-2026-11-18-fix-sandbox-network-access-canusetool-arm-plan.md`). PLACEMENT: a child of its
   // `discoverability_test:` sub-block, value on one line. TRUTH: the probe is a Sentry events count query for op:sandbox-network-denied
   // that needs SENTRY_ISSUE_RO_TOKEN (Doppler soleur/prd). NO SUBSTITUTE: Sentry event counts have no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 98;
+  const BASELINE_DECLARED_PROBES = 99;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

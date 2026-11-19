@@ -14,6 +14,7 @@ import {
   KB_UPLOAD_EXTENSIONS,
   isReservedKbUploadFilename,
 } from "@/lib/kb-constants";
+import { isWorkspaceSyncPending, kbWorkspaceSyncPendingNotice } from "@/lib/kb-workspace-sync-notice";
 
 // Derived from the shared allowlist so the picker, the client check and the
 // upload route cannot drift apart.
@@ -102,6 +103,23 @@ type RenameState =
   | { status: "renaming" }
   | { status: "error"; message: string };
 
+/**
+ * #12600 (CTO ruling D16): the write landed on GitHub but the workspace was held, so this is a non-error status, not an
+ * error banner. The copy is the shared constant in lib/kb-workspace-sync-notice.ts.
+ */
+function SyncPendingNotice({ message, paddingLeft, onDismiss }: { message: string; paddingLeft: string; onDismiss: () => void }) {
+  return (
+    <div
+      role="status"
+      className="mx-2 mt-1 flex items-center gap-1.5 rounded bg-soleur-bg-surface-2 px-2 py-1 text-xs text-soleur-text-secondary"
+      style={{ marginLeft: paddingLeft }}
+    >
+      <span className="flex-1">{message}</span>
+      <Button variant="ghost" onClick={onDismiss} className="shrink-0 hover:text-soleur-text-primary" aria-label="Dismiss notice">&times;</Button>
+    </div>
+  );
+}
+
 type TreeItemProps = {
   node: TreeNode;
   depth: number;
@@ -125,6 +143,7 @@ function TreeItem({
   const { refreshTree } = useKb();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadState, setUploadState] = useState<UploadState>({ status: "idle" });
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
 
   // Cap visual indent at 3 levels
   const indent = Math.min(depth, 3);
@@ -132,6 +151,7 @@ function TreeItem({
 
   const uploadFile = useCallback(async (file: File, targetDir: string, sha?: string) => {
     setUploadState({ status: "uploading", progress: 0 });
+    setSyncNotice(null);
 
     const formData = new FormData();
     formData.append("file", file);
@@ -170,6 +190,7 @@ function TreeItem({
       setUploadState({ status: "processing" });
       await refreshTree();
       setUploadState({ status: "idle" });
+      if (isWorkspaceSyncPending(body)) setSyncNotice(kbWorkspaceSyncPendingNotice("upload"));
     } catch {
       setUploadState({ status: "error", message: "Network error. Please try again." });
     }
@@ -281,6 +302,7 @@ function TreeItem({
           <Button variant="ghost" onClick={() => setUploadState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</Button>
         </div>
       )}
+      {syncNotice && <SyncPendingNotice message={syncNotice} paddingLeft={paddingLeft} onDismiss={() => setSyncNotice(null)} />}
       {uploadState.status === "duplicate" && (
         <div className="mx-2 mt-1 rounded bg-amber-500/10 px-2 py-1.5 text-xs text-amber-400" style={{ marginLeft: paddingLeft }}>
           <p className="mb-1.5">&ldquo;{uploadState.filename}&rdquo; already exists. Replace?</p>
@@ -339,6 +361,7 @@ function FileNode({
   const { refreshTree } = useKb();
   const [deleteState, setDeleteState] = useState<DeleteState>({ status: "idle" });
   const [renameState, setRenameState] = useState<RenameState>({ status: "idle" });
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const renameSubmittedRef = useRef(false);
 
@@ -348,6 +371,7 @@ function FileNode({
 
   const renameFile = useCallback(async (filePath: string, newName: string) => {
     setRenameState({ status: "renaming" });
+    setSyncNotice(null);
     try {
       const res = await fetch(`/api/kb/file/${filePath}`, {
         method: "PATCH",
@@ -359,7 +383,9 @@ function FileNode({
         setRenameState({ status: "error", message: body.error || "Rename failed" });
         return;
       }
+      const body: unknown = await Promise.resolve().then(() => res.json()).catch(() => null);
       setRenameState({ status: "idle" });
+      if (isWorkspaceSyncPending(body)) setSyncNotice(kbWorkspaceSyncPendingNotice("rename"));
       await refreshTree();
     } catch {
       setRenameState({ status: "error", message: "Network error. Please try again." });
@@ -368,6 +394,7 @@ function FileNode({
 
   const deleteFile = useCallback(async (filePath: string) => {
     setDeleteState({ status: "deleting" });
+    setSyncNotice(null);
     try {
       const res = await fetch(`/api/kb/file/${filePath}`, { method: "DELETE" });
       if (!res.ok) {
@@ -375,7 +402,9 @@ function FileNode({
         setDeleteState({ status: "error", message: body.error || "Delete failed" });
         return;
       }
+      const body: unknown = await Promise.resolve().then(() => res.json()).catch(() => null);
       setDeleteState({ status: "idle" });
+      if (isWorkspaceSyncPending(body)) setSyncNotice(kbWorkspaceSyncPendingNotice("delete"));
       await refreshTree();
     } catch {
       setDeleteState({ status: "error", message: "Network error. Please try again." });
@@ -548,6 +577,7 @@ function FileNode({
           <Button variant="ghost" onClick={() => setRenameState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</Button>
         </div>
       )}
+      {syncNotice && <SyncPendingNotice message={syncNotice} paddingLeft={paddingLeft} onDismiss={() => setSyncNotice(null)} />}
     </li>
   );
 }

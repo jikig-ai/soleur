@@ -6,7 +6,9 @@ import { resolveNeedsReconnect } from "@/lib/repo-status";
 import { resolveWorkspaceIdentityForSettings } from "@/server/workspace-identity-resolver";
 import { resolveActiveWorkspace } from "@/server/workspace-resolver";
 import { isCcOauthEnabled } from "@/server/cc-oauth-flag";
-import { mirrorWithDebounce } from "@/server/observability";
+import { resolveCcGithubPushRoute } from "@/server/cc-github-push";
+import { mirrorWarnWithDebounce, mirrorWithDebounce } from "@/server/observability";
+import { isRenderableHeldCount, type HeldRouteState } from "@/lib/kb-sync-held-copy";
 
 export default async function SettingsPage() {
   const supabase = await createClient();
@@ -30,7 +32,7 @@ export default async function SettingsPage() {
   const active = await resolveActiveWorkspace(user.id, service);
 
   // Parallelize all independent queries.
-  const [{ data: apiKey }, { data: oauthData, error: oauthError }, wsRes] = await Promise.all([
+  const [{ data: apiKey }, { data: oauthData, error: oauthError }, wsRes, heldRes] = await Promise.all([
     service
       .from("api_keys")
       .select("provider, is_valid, updated_at")
@@ -57,7 +59,36 @@ export default async function SettingsPage() {
           .eq("id", active.workspaceId)
           .maybeSingle()
       : Promise.resolve({ data: null }),
+    // #12714 (D29(3), D33(1)): the held count, in its OWN service-client select keyed on the membership-verified
+    // active workspace id (the `authenticated` column grant excludes it, migration 187). Separate so a missing column
+    // (an apply that lags, or a rollback) costs only the notice, never the repo card above.
+    active.ok
+      ? service
+          .from("workspaces")
+          .select("kb_sync_held_files")
+          .eq("id", active.workspaceId)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
   ]);
+
+  if (heldRes.error) {
+    // Debounced, constant key (as above): this runs on every Settings render while the read keeps failing.
+    // null first, never the error object (#8629: the pino mirror captures a passed Error first and Sentry drops the tagged
+    // second capture); the Postgres code is the tag an operator filters on.
+    const pgCode = (heldRes.error as { code?: unknown }).code;
+    mirrorWithDebounce(
+      null,
+      {
+        feature: "settings",
+        op: "kb-sync-held.read",
+        ...(typeof pgCode === "string" ? { tags: { pg_code: pgCode } } : {}),
+        extra: { userId: user.id },
+        message: "held-files select failed; no held notice",
+      },
+      "settings:read-held-files",
+      "settings_read_held_files",
+    );
+  }
 
   // A failed oauth read must not silently hide the Remove control: report it
   // and render the neutral state (no token UI) rather than guess a row.
@@ -87,12 +118,37 @@ export default async function SettingsPage() {
     user.id,
   );
 
+  // #12714 (D29(3), D29(5)): the held-files notice and the Disconnect warning (V8). The count is display-only; the
+  // publish-route predicate is asked for the VIEWER (a member's agent is the one that would push) and only when a notice can
+  // render. The predicate never throws (a failed read is "unknown" plus its own debounced warning, tagged with the Settings
+  // feature, obs F11); the catch is belt and braces and reads as "unknown" too, never "unavailable" (V6(3)).
+  const rawHeldFiles: unknown = heldRes.error ? null : heldRes.data?.kb_sync_held_files;
+  const heldFiles = isRenderableHeldCount(rawHeldFiles) ? rawHeldFiles : null;
+  const heldRoutePromise: Promise<HeldRouteState> =
+    active.ok && repoData?.repo_status === "ready" && heldFiles !== null
+      ? resolveCcGithubPushRoute({ userId: user.id, workspaceId: active.workspaceId, feature: "settings" }).catch((err: unknown) => {
+          mirrorWarnWithDebounce(
+            null,
+            {
+              feature: "settings",
+              op: "cc-push-route-check",
+              tags: { failed: "threw" },
+              extra: { userId: user.id, errName: err instanceof Error ? err.name : undefined },
+              message: "publish-route check could not be completed; the transient copy is shown",
+            },
+            "settings:held-files-route-predicate",
+            "cc-push-route-check",
+          );
+          return "unknown" as const;
+        })
+      : Promise.resolve("unknown" as const);
+
   // #4916: workspace-identity controls (logo + rename), relocated from the
   // flag-gated Team page so they are reachable for every user.
-  const workspaceIdentity = await resolveWorkspaceIdentityForSettings(
-    supabase,
-    service,
-  );
+  const [workspaceIdentity, heldRoute] = await Promise.all([
+    resolveWorkspaceIdentityForSettings(supabase, service),
+    heldRoutePromise,
+  ]);
 
   // feat-operator-cc-oauth — show the subscription-token toggle ONLY for an
   // operator/internal account (ADMIN_USER_IDS) with the kill-switch on.
@@ -119,6 +175,8 @@ export default async function SettingsPage() {
       oauthInEffect={ccOauthEnabled && oauthRow?.is_valid === true}
       oauthTokenSavedAt={oauthRow?.updated_at ?? null}
       workspaceIdentity={workspaceIdentity}
+      heldFiles={heldFiles}
+      heldRoute={heldRoute}
     />
   );
 }

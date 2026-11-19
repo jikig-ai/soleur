@@ -229,6 +229,8 @@ vi.mock("@/server/git-worktree-validity", async (orig) => {
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
+  // #12704 obs F7: the stored held-count read warns through the debounced warning mirror.
+  mirrorWarnWithDebounce: vi.fn(),
   // #5733 — reportAgentReadinessSelfStop pre-hashes the workspace id via hashUserId.
   hashUserId: (s: string) => `hash-${s}`,
   mirrorWithDebounce: mockReportSilentFallback,

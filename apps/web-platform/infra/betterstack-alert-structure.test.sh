@@ -11,7 +11,7 @@
 #
 # WHAT IT ASSERTS, over every `resource "logtail_exploration"` and `resource "logtail_exploration_alert"`
 # in EVERY *.tf of the infra root (presence rows 1-24 below, each one verdict over the whole set):
-#   1-4   census: at least 23 alerts and 23 explorations (CENSUS_FLOOR_*; the #12180 canary pair was retired by #12189; #10538 added inngest_registry_empty; #12585 added sandbox_network_degraded), every enumerated header yields a block (a header
+#   1-4   census: at least 24 alerts and 24 explorations (CENSUS_FLOOR_*; the #12180 canary pair was retired by #12189; #10538 added inngest_registry_empty; +1 = the #12726 throwaway canary; #12585 added sandbox_network_degraded), every enumerated header yields a block (a header
 #         `block_of` cannot extract would otherwise be invisible to every row after it; an UNQUOTED label
 #         is enumerated and then reds here, never skipped) AND no other code line of any root *.tf names a
 #         logtail_exploration except an enumerated header or a `logtail_exploration*.<n>.id` reference (a header
@@ -95,10 +95,11 @@ done
 # ── pins (same file, same diff as what they protect: tripwires, see the header) ────────────────────
 REQUIRED_ATTRS="alert_type call check_period confirmation_period critical_alert email exploration_id incident_cause metadata name on_missing_data operator paused push query_period recovery_period sms value"
 OPTIONAL_ATTRS=""
-# 22 = the 18 permanent alerts, the three session-relay probe alerts (#12167) and inngest_registry_empty (#10538). The throwaway egress_gw_probe_silent_canary
+# 23 = the 18 permanent alerts, the three session-relay probe alerts (#12167), inngest_registry_empty (#10538) and the throwaway
+# inngest_cutover_flip_silent_canary pair (#12726; back to 22 when it is retired). The throwaway egress_gw_probe_silent_canary
 # pair (#12180) took these floors to 19 while it lived; #12189 deleted it. The floors are -ge, so the exact pins elsewhere carry growth.
-CENSUS_FLOOR_ALERTS=23
-CENSUS_FLOOR_EXPLORATIONS=23
+CENSUS_FLOOR_ALERTS=24
+CENSUS_FLOOR_EXPLORATIONS=24
 GUARD_CENSUS_FLOOR=19
 PROVIDER_LOCK_VERSION="11.2.0"
 PROVIDER_SOURCE="BetterStackHQ/logtail"

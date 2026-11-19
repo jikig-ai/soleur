@@ -53,7 +53,7 @@ const {
   mockGetCurrentRepoUrl: vi.fn(),
   mockGetCurrentRepoStatus: vi.fn(),
   mockResolveEffectiveInstallationId: vi.fn(),
-  mockSyncPull: vi.fn(),
+  mockSyncPull: vi.fn(async () => ({ heldFiles: 0, onRecovered: 0, pullReason: null, checkedAt: null })),
   mockSendToClient: vi.fn(),
   mockCaptureException: vi.fn(),
   mockReportSilentFallback: vi.fn(),

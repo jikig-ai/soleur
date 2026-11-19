@@ -1057,8 +1057,10 @@ jobs:
       - name: Run web NIC guard unpinned ingest URL refusal alert drift guard (#9639)
         run: bash apps/web-platform/test/infra/web-nic-guard-unpinned-url-alert.test.sh
 
-      # (#11820) The cutover-flip silence alert: the JSON-object discriminator and host pin compared
-      # whole, the window against the emitter's throttle, both -target lines, the runbook and
+      # (#11820, #12726) The cutover-flip silence alert: the missing-count predicate with the JSON-object
+      # discriminator and host pin compared whole, higher_than/0/treat_as_zero on it and its canary, the
+      # canary's replace() derivation, the window against the emitter's throttle, the four -target lines
+      # (the alert, its exploration, the canary alert and the canary exploration), the runbook and
       # standing-alarms rows, this suite's own dispatch, and its mutation rows.
       - name: Run Inngest cutover-flip silence alert drift guard (#11820)
         run: bash apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh

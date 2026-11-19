@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { authenticateAndResolveKbPath } from "@/server/kb-route-helpers";
 import { writeC4Diagram } from "@/server/c4-writer";
+import { WORKSPACE_SYNC_PENDING } from "@/lib/kb-workspace-sync-notice";
 import { createClient } from "@/lib/supabase/server";
 import { resolveIdentity } from "@/lib/feature-flags/identity";
 import { getRuntimeFlag } from "@/lib/feature-flags/server";
@@ -64,6 +65,7 @@ export async function PUT(
 
   const result = await writeC4Diagram({
     userId: ctx.user.id,
+    workspaceId: ctx.workspaceId,
     installationId: ctx.userData.github_installation_id,
     owner: ctx.owner,
     repo: ctx.repo,
@@ -84,6 +86,14 @@ export async function PUT(
       rerendered: result.rerendered,
       ...(result.rerenderDiagnostic
         ? { rerenderDiagnostic: result.rerenderDiagnostic }
+        : {}),
+      // #12600 D16: the commit landed but the workspace was held; the client shows the shared non-error notice.
+      ...(result.workspaceSync === "pending"
+        ? {
+            workspace_sync: WORKSPACE_SYNC_PENDING,
+            // D22(c): which sync was held, so the UI can word a resync-only hold (the source IS in the workspace).
+            ...(result.workspaceSyncHeld ? { workspace_sync_held: result.workspaceSyncHeld } : {}),
+          }
         : {}),
     },
     { status: 200 },

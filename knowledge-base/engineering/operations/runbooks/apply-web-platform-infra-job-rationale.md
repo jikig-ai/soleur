@@ -514,6 +514,35 @@ create. After the swap web-1's password leaves the push-apply graph; its address
 - **Reach.** The pair is `-target`ed by the `apply` job and by no other job or workflow file
   (`terraform-target-parity.test.ts`); only `apply` carries the HALT.
 
+## MAIN plan step: the allow-list history (#7539)
+
+Relocated from the comment above the MAIN plan step (`Terraform plan (allow-list, non-SSH resources only)`) on 2026-11-17
+(#12726), to keep the workflow under the size gate (`workflow-file-size.test.ts`) when the flip-silence canary pair added
+two `-target` lines. The step comment keeps the GROUP BY TRANSPORT rule and the enforcement pointer. Verbatim, as it stood
+after that rule:
+
+```text
+This instruction already said so and did not hold: it landed 2026-05-20
+and `terraform_data.inngest_consumer_probe_install` was appended six
+lines beneath it on 2026-08-12, batched beside the other
+inngest-consumer resources by feature (#7539). Prose is not the
+enforcement -- Guard 1 in
+plugins/soleur/test/terraform-target-parity.test.ts is, and it fails
+the PR rather than the apply.
+
+`scheduled-terraform-drift.yml` is a 12h backstop for a FORGOTTEN
+resource; it did not surface #7539, because a MISPLACED resource is
+declared and targeted -- just on the stage that cannot provision it.
+```
+
+**The two `inngest_cutover_flip_silent_canary` `-target` lines are a throwaway (+1 pair, #12726).** They live only while
+the canary does (tracker #12878). This note sits here because the MAIN plan command is one backslash-continued line, and
+a `#` among its `-target` lines would break the command. The canary retirement PR deletes the canary blocks but keeps
+these two bare lines, and lists both addresses in the census `INTENDED_DESTROYS`, for its own destroying apply: a bare
+target on an address with no configuration is what plans the delete. The removal PR merges with its standalone
+`[ack-destroy]` line. After that apply, a follow-up removes the lines and both `INTENDED_DESTROYS` entries, as the egress
+canary's retirement did (#12268 kept its lines and added the entries, #12306 removed both).
+
 ## Comment prose relocated from the apply step
 
 The workflow file is held under the size gate (`workflow-file-size.test.ts`); prose that used to sit in the apply step's
@@ -587,6 +616,21 @@ hcloud_server.* (placement_group_id / server_type change →
 power-off reboot of the running host, 0 destroys — invisible to
 the two counters above). Source of truth:
 tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+```
+
+Verbatim, the comment above `set -euo pipefail` in the plan step's `run:` (relocated 2026-11-17, #12844, to keep
+the workflow under the size gate when `betteruptime_monitor.soleur_changelog_deep` joined the `-target` list):
+
+```text
+THIS COMMENT USED TO SAY "`-e` is intentionally omitted", AND THAT NEVER WORKED.
+GitHub invokes a bare `run:` as `bash -e {0}`; omitting -e from the `set` line
+cannot clear what the invocation already applied, so on a plan failure the step
+died AT the doppler line and both the `rc=$?` capture and the `::error::` branch
+below it were unreachable. The explicit `set +e` bracket is what delivers the
+property the comment claimed. The two sibling copies of the old comment (in
+apply-github-infra.yml and apply-sentry-infra.yml) were corrected under #7304,
+which also shipped scripts/lint-workflow-errexit-capture.py so the class cannot
+recur silently. The broader `set … pipefail`-without-`-e` audit remains #7098.
 ```
 
 ## registry_luks_recut
@@ -1445,17 +1489,3 @@ The safe resolution is to skip THAT merge's apply and let the supervised operato
 **`timeout 90` per read** keeps one stalled Doppler API call from eating the whole window — a timeout surfaces as rc=124 via doppler, counted as a non-verdict read. **`env -u` strips the reader's override seams:** `doppler run` injects EVERY key of prd_terraform into the env, and `INNGEST_STATE_QUERY` / `INNGEST_PROBE_ROW_LIB` / `INNGEST_STATE_SINCE` can substitute a fabricated row source for the real query — a green without a row. The gate's green must be exactly as trustworthy as the config it reads, so the seams cannot arrive through it.
 
 **PUBLIC-SDK-URL confirm gate (#10538, CTO rulings D2 and fix-round F1, PR #12737).** The step right after checkout, before any credential loads and with no `if:`, runs `tests/scripts/lib/inngest-public-sdk-url-confirm.sh PUBLIC-SDK-URL`, which refuses unless `confirm` is exactly that token. The `inngest_host` (birth) job runs the same script with its own token, `PUBLIC-SDK-URL-BIRTH` (distinct, so a birth token never authorizes this destroy). Since #12737 the host's `--sdk-url` is the public serve URL (`https://app.soleur.ai/api/inngest`), and that value reaches a host through this replace, a fresh birth (the disaster-recovery row "server absent" in `inngest-server.md`), or a local untargeted `terraform apply` (the OPERATOR_APPLIED_EXCLUSIONS break-glass that the HALT messages print, for example the pinned-image chain or `luks_key_touched=1`): `hcloud_server.inngest` has no `ignore_changes = [user_data]`, so a full apply plans its replace. That third path has no gate. While #12742 is open, read that apply's plan first and abort, or add `-target`s that exclude `hcloud_server.inngest`, if it replaces the Inngest host. Until #12742 item 1 lands, the replace carries three known risks: (1) the registry persists in Postgres across a replace, so a failing public poll most likely shows a stale non-zero `registry_fns` that the registry-empty alert cannot see; (2) the first sync after boot can double-fire functions (#7228); (3) the stale private-URL app row keeps being polled over plaintext. The token is a typo-guard, not the authorization: the `infra-privileged` environment and the replace gate are. It does not read the live Cloudflare mode (CTO fix-round F2): the #12742 item-1 PR must replace the script with a fail-closed live-mode preflight in the same PR, never delete it bare. Pinned by B10 in `plugins/soleur/test/terraform-target-parity.test.ts`, which also sweeps every copy-paste dispatch recipe for its token.
-
-## plan/allow-list grouping (#7539)
-
-The bridge-less `plan` step's allow-list is grouped by transport, not by feature. That instruction
-already sat in the workflow and did not hold: it landed 2026-05-20, and
-`terraform_data.inngest_consumer_probe_install` was appended six lines beneath it on 2026-08-12,
-batched beside the other inngest-consumer resources by feature (#7539). Prose is not the
-enforcement. Guard 1 in `plugins/soleur/test/terraform-target-parity.test.ts` is, and it fails the
-PR rather than the apply.
-
-`scheduled-terraform-drift.yml` is a 12h backstop for a FORGOTTEN resource. It did not surface
-#7539, because a MISPLACED resource is declared and targeted, just on the stage that cannot
-provision it. (Relocated from the workflow on 2026-11-18, #12585, to keep the file under the
-490,000-byte gate.)

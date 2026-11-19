@@ -81,6 +81,7 @@ const C4 = "engineering/architecture/diagrams/model.c4";
 function save(content: string) {
   return writeC4Diagram({
     userId: "00000000-0000-0000-0000-000000000001",
+    workspaceId: "22222222-2222-4222-8222-222222222222",
     installationId: 1,
     owner: "o",
     repo: "r",

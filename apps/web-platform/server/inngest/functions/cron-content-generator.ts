@@ -84,13 +84,13 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 //     precedent is cron-competitive-analysis / cron-legal-audit, which already
 //     allow it) must be listed or the skill cannot run at all. --max-turns
 //     stays 50.
-//   - `--plugin-dir plugins/soleur` REGISTERS the plugin. Per
+//   - `--plugin-dir` REGISTERS the plugin. Per
 //     `claude --plugin-dir <path>` ("Load a plugin from a directory or .zip"),
 //     loading a directory-based plugin in a headless `--print` run requires the
 //     flag explicitly — a bare plugins/ dir is NOT auto-discovered
 //     (the interactive marketplace/enabledPlugins trust flow does not run under
-//     --print). The path is the clone's own tracked tree at
-//     <spawnCwd>/plugins/soleur (#5091) and MUST precede the `--` marker.
+//     --print). The substrate sets it (`loadPlugin: true`) to the read-only
+//     deployed root, before every caller flag (#12824).
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model",
@@ -99,8 +99,6 @@ const CLAUDE_CODE_FLAGS = [
   "50",
   "--allowedTools",
   "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Skill,Task",
-  "--plugin-dir",
-  "plugins/soleur",
   "--",
 ];
 
@@ -380,6 +378,7 @@ export async function cronContentGeneratorHandler({
         "claude-eval",
         async (): Promise<SpawnResult> => {
           return spawnClaudeEval({
+            loadPlugin: true, // #12824 — the substrate owns --plugin-dir (read-only root)
             spawnCwd: spawnCwd,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
@@ -419,6 +418,7 @@ export async function cronContentGeneratorHandler({
       heartbeatOk = await step.run("verify-output", async () =>
         resolveOutputAwareOk({
           spawnOk: spawnResult!.ok,
+          pluginReseeded: spawnResult!.pluginReseeded,
           label: SENTRY_MONITOR_SLUG,
           runStartedAt,
           cronName: "cron-content-generator",

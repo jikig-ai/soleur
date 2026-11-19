@@ -45,6 +45,8 @@ const RETYPED_PATH = ["", "usr", "local", "share", "soleur", "agent.gitconfig"].
  * template step name keeps its substitutions as `${}` (vendor-drift's per-bundle `detect-drift-${bundle.slug}`).
  */
 const KNOWN_HOME_LITERALS: Record<string, string[]> = {
+  // #12824 — the per-spawn HOME the substrate sets AFTER the cron's buildSpawnEnv (and before the pin).
+  "functions/_cron-claude-eval-substrate.ts": ["spawnClaudeEvalUnguarded"],
   "functions/cron-agent-native-audit.ts": ["buildSpawnEnv"],
   "functions/cron-architecture-diagram-sync.ts": ["buildSpawnEnv"],
   "functions/cron-bug-fixer.ts": ["buildSpawnEnv"],
@@ -112,6 +114,16 @@ const GIT_CAPABLE_LITERAL_EXCLUSIONS: { file: string; anchor: string; reason: st
 
 /** Row 4d: post-construction writes to a GIT_CONFIG_* key, by file → "owner KEY" (exact match). */
 const GIT_CONFIG_WRITE_EXCEPTIONS: Record<string, string[]> = {
+  // #12824 (CTO S5) — CRON_GIT_HARDENING, the command-level config triple spread just before the pin.
+  "functions/_cron-claude-eval-substrate.ts": [
+    "<module> literal GIT_CONFIG_COUNT",
+    "<module> literal GIT_CONFIG_KEY_0",
+    "<module> literal GIT_CONFIG_KEY_1",
+    "<module> literal GIT_CONFIG_KEY_2",
+    "<module> literal GIT_CONFIG_VALUE_0",
+    "<module> literal GIT_CONFIG_VALUE_1",
+    "<module> literal GIT_CONFIG_VALUE_2",
+  ],
   "functions/cron-compound-promote.ts": ["spawnGitCapture GIT_CONFIG_GLOBAL", "spawnGitCapture GIT_CONFIG_NOSYSTEM"],
 };
 
@@ -771,6 +783,17 @@ describe("Guard 3 — cron spawn env git-config pin census (#12757)", () => {
     for (const k of Object.keys(actual)) actual[k].sort();
     const diffs = mapDiff(GIT_CONFIG_WRITE_EXCEPTIONS, actual);
     expect(diffs, `GIT_CONFIG_* write(s) changed: ${diffs.join("; ")}. Pin by spreading CRON_GIT_CONFIG_PIN last; never assign GIT_CONFIG_* after the literal.`).toEqual([]);
+  });
+
+  it("row 4f (#12824 AC21): GIT_CONFIG_COUNT is set in exactly one place under server/inngest — CRON_GIT_HARDENING (host-side git helpers outside the cron substrate keep their own)", () => {
+    const r = spawnSync("git", ["grep", "-l", "GIT_CONFIG_COUNT", "--", "server/inngest"], {
+      cwd: path.resolve(__dirname, "../../.."),
+      encoding: "utf-8",
+      env: gitCleanEnv() as NodeJS.ProcessEnv,
+    });
+    expect(r.status, r.stderr).toBe(0);
+    const hits = r.stdout.split("\n").filter(Boolean);
+    expect(hits).toEqual(["server/inngest/functions/_cron-claude-eval-substrate.ts"]);
   });
 
   it("row 4e: no namespace, default or whole-module handle on child_process under server/inngest (rows 4/4c track named imports only)", () => {

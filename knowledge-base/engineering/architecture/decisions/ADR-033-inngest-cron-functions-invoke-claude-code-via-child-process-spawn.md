@@ -529,9 +529,113 @@ Residuals, stated plainly:
   plugin hook loaded via `--plugin-dir`, or `~/.bashrc`, and that code runs with the spawn's secrets and can write any
   path. Under the pin a `~/.gitconfig` written that way is no longer read by cron git; the remaining reader is
   founder-workspace git (above). The agent-editable-code class is tracked in #12824 (CTO F1).
+  > **Superseded 2026-11-17 (#12824):** the class is closed for crons by the amendment below; what remains is listed
+  > in its residuals (#12854 token in the agent env, #12855 the `.next` chown, #12858 CI running agent-committed code).
 - `safe.bareRepository` and `GIT_CONFIG_COUNT`/`GIT_CONFIG_PARAMETERS` pins are out of scope for crons (CTO ruling);
   a config carried by a committed bare repo, or by `GIT_CONFIG_PARAMETERS` in a host env, is not closed here. No cron
   env or Dockerfile line sets either variable today.
+  > **Superseded 2026-11-17 (#12824):** the claude spawn now carries `GIT_CONFIG_COUNT=3` with
+  > `safe.bareRepository=explicit`, `core.hooksPath=/dev/null` and `core.fsmonitor=false` (`CRON_GIT_HARDENING`, CTO S5);
+  > `GIT_CONFIG_PARAMETERS` is still unpinned.
 - `server/compound-promote-create-gates.ts` `spawnRepoScript` (outside `server/inngest`, `HOME=/tmp`) carries no pin;
   its scripts run no git today.
 - Prod `HOME` is assumed writable per the Dockerfile and deploy flags; not checked live.
+
+## Amendment — 2026-11-17 (#12824): a cron never executes a path it can write
+
+#12757 kept git config out of the agent's reach. It left a wider class open: a cron could rewrite a file it later ran
+(a plugin hook loaded with `--plugin-dir plugins/soleur` from its own clone, an allowlisted script such as
+`worktree-manager.sh`, a test file run by `vitest`, or `~/.bashrc` in the shared container HOME), and that code ran
+with the spawn's whole env. The invariant is now: **for every cron that reaches `spawnClaudeEval`, no path it executes
+is a path it can write.** Six changes hold it.
+
+Reverses: the cron `--plugin-dir plugins/soleur` from the clone (#4989, #5098), the shared container HOME for cron
+spawns (#5243), bug-fixer's local `vitest run` baseline and `install_deps` (#5018, #9271), and the clone-relative
+allowlisted script paths (#5199). Each reversal and its reason is in PR #12847's body.
+
+1. **The substrate owns `--plugin-dir`.** `SpawnArgs.loadPlugin` is required. When it is `true`, `spawnClaudeEval`
+   resolves the deployed plugin through `resolveCronPluginRoot()` before any side effect, and `buildClaudeArgv` inserts
+   `--plugin-dir <root>` ahead of every caller flag. Only the twelve crons in `CRON_PLUGIN_LOADERS` may pass `true`
+   (census-pinned); setup resolves the root for them, so a refused root fails the run before any spawn (the heartbeat
+   goes red for every one except event-ship-merge, which posts none). The root is `getPluginPath()` (`/app/shared/plugins/soleur`, the
+   `:ro` bind ADR-093 owns). It must pass `assertTrustedPluginPath`, carry its manifest and `.seed-complete` (retried
+   once after 30 s), and probe not-writable (`EROFS`/`EACCES` only) at the root and at `hooks/`. A refusal reports op
+   `cron-plugin-root-untrusted` and throws `NonRetriableError`. A caller flag `--plugin-dir X` or `--plugin-dir=X`
+   throws.
+2. **Allowlisted scripts are named under that root.** Allowlist lines carry the `<plugin-root>` token, and
+   `buildAllowlistLines` substitutes the resolved root, refusing a leftover token or a `$`. The hook self-test runs on
+   the substituted lines.
+3. **A fresh HOME per spawn.** Every claude child gets `HOME` = `mkdtemp(<ephemeralRoot>/home-)` (a sibling of the clone
+   `repo/`, never inside it) and `TMPDIR` = `<HOME>/tmp` (mode 0700). Both are set after the cron's `buildSpawnEnv` and
+   before `CRON_GIT_CONFIG_PIN`, and the HOME is removed when the spawn ends. No state survives into a later spawn. The
+   two server-cwd spawns (`cron-daily-triage`, `cron-follow-through-monitor`) have no ephemeral root; they get
+   `<CRON_WORKSPACE_ROOT>/soleur-home-*`, which no write root admits (they run without the hook and without Write).
+   The whole `.seed-complete` line is compared at exit (every reseed writes a new `seeded <timestamp>`, so a
+   same-tag redeploy counts too); a mismatch reports `plugin-reseeded-mid-run` and marks the run not-ok
+   (`pluginReseeded`): `classifyEvalFatal` treats it as fatal for best-effort crons, and `resolveOutputAwareOk`
+   returns not-ok for output-aware ones, so their persistence step does not commit a mixed-tree run. Bug-fixer's
+   persistence step is auto-merge: on a reseed it skips the auto-merge gate and relabels the PR
+   `bot-fix/review-required`. The exception is `cron-community-monitor`, which runs plugin scripts without loading
+   the plugin: its heartbeat goes red after persistence, so its digest is still committed, as on a collector failure.
+4. **Writes are confined to the run (CTO S1).** `decide()` in `cron-bash-allowlist-hook.mjs` denies Write, Edit and
+   MultiEdit outside two roots: the run's clone, derived from the hook's own path, and the `tmp/` (TMPDIR) of a
+   `home-*` HOME that is its sibling. HOME itself is not a root: gh, curl, git and the CLI read config from it, so a
+   writable HOME would be a write-then-execute path. The check uses the realpath of the nearest existing ancestor, so
+   a dangling link fails closed, and the protected-path patterns are re-checked on that realpath. The deny reason is
+   `cron-containment: write outside run roots` and names the working directory and the literal `<HOME>/tmp` path as the places to write.
+   This is an allow-list, not a new deny pattern; the 2026-11-16 ruling against more write-protect patterns stands.
+   The off-box new-rule metric (op `cron-containment-new-rule-deny`, warning level, tags `cron` and `rule`, at most one
+   event per rule per run) gains three `rule` values: `write-outside-roots` for this deny, `body-file-secret-path`
+   for a gh body/input file (`--body-file`, `-F`, `--input`, `--recover`, any spelling) that names a Read-gate secret
+   path, and `plugin-clone-path` for a skill script called by its clone path (`bash plugins/soleur/…`) rather than
+   the plugin root, which no allowlist line admits.
+5. **Memory files cannot import secrets (CTO S3).** A nested `CLAUDE.md` the agent writes is loaded lazily, and its
+   `@`-imports reach Anthropic-bound context (Phase 0.7g), so `@../.git/config` would carry the clone's token. The
+   cron `settings.json` carries `claudeMdExcludes` (`cronClaudeMdExcludes()`): nested memory files, any import under
+   `.git/`, the pseudo-filesystems and globs that approximate the secret paths the hook's Read gate refuses
+   (`/run/secrets`, `.env*`, `.ssh`, `.aws`, `.config`, `.netrc`, `.npmrc`, `.claude.json`, `storage-state.json`, the
+   ux-audit dirs and others) are not loaded, while the clone's root `CLAUDE.md` still is. `.claude/` stays loadable
+   for the clone's own rules, although the Read gate refuses it. Only the original seven entries were measured against the CLI
+   (Phase 0.7h); the secret-path entries are checked with picomatch, the CLI's matcher. The
+   self-test refuses a spawn whose `settings.json` lacks the list. This uses the CLI's own exclusion, so no
+   `CLAUDE.md` write-deny was added.
+6. **No cron holds a code-exec verb.** Bug-fixer loses `./node_modules/.bin/vitest run` and sets
+   `SOLEUR_WORKTREE_SKIP_INSTALL=1`, which skips the dependency install. Its prompt passes `--no-local-tests`, which
+   makes fix-issue skip Phases 2 and 4 and treat the auto-merge test condition as met, so it opens fixes without a
+   local test baseline (CI runs the suite on the PR; #12858 covers CI running agent code). Ux-audit launches the
+   root-owned `/app/node_modules/.bin/playwright-mcp` instead of `npx`.
+
+**Enforcement.** `test/server/inngest/cron-write-execute-census.test.ts` (Guard 1) finds every `spawnClaudeEval` call
+with the TypeScript compiler API. It reads the executed paths from the real producers (argv, allowlist lines, hook
+commands, MCP commands) and asks the real `decide()` whether each one is writable. Its exemption map is empty, and so
+is the all-writable set (arbitrary-exec lines, judged by shape). `cron-spawn-isolation.test.ts` pins the argv, the env
+and the resolver (Guards 2 and 3). The `:ro` itself is pinned by `infra/docker-run-tuple.test.sh`.
+
+Residuals, stated plainly:
+
+- The agent env still carries `GH_TOKEN` and `ANTHROPIC_API_KEY` (#12854). A cron agent cannot run code it wrote, but
+  a context-injection route that makes the CLI print its env still exfiltrates a repo-write token.
+- `/app/.next` is chowned to the app uid, so code running below the hook could write `.next/server` (#12855). No cron
+  now holds such a route.
+- CI runs agent-committed code with secrets in scope (#12858).
+- The plugin mount is reseeded in place on deploy. That race is new for crons, which used to load the plugin from
+  their own clone. This PR detects it but does not prevent it (#12856), and a bad mount fails cron runs, not the
+  deploy (#12857).
+- Tools that ignore `TMPDIR` still write to the shared `/tmp`.
+- Reads are not confined: `Read`/`Glob`/`Grep` reach founder workspaces under `/workspaces` (#12863, pre-existing).
+- The write-root check resolves a path before the write happens, so a symlink swapped in between is a TOCTOU window;
+  no cron holds a verb that can win that race today.
+- The hook runs from the clone of `main` and the substrate from the deployed image, so the layout contract
+  (`repo/`, `home-*`) can skew between merge and deploy. Both sides fail closed on a mismatch.
+- The deployed copy holds only md/json/njk/yml/yaml/sh/txt (`.dockerignore`). The census lists each non-vendored
+  script a cron's skill names, with its disposition: a handler-side import, or a call that fails closed because no cron
+  holds an interpreter verb.
+- Claude-eval cron heartbeat monitors are not declared in Terraform, so a fail-closed run reaches Sentry but emails
+  nobody (#12859).
+- The image's Playwright browser sits in root's cache, out of reach of the uid-1001 ux-audit cron. This predates the
+  amendment (#12860).
+- `worktree-manager.sh create` refuses the bot-only global identity the pin supplies, and bug-fixer degrades to the
+  SKILL's `git worktree add` fallback (Phase 0.7e).
+- Phase 0 measurements against CLI 2.1.321 are in
+  `knowledge-base/project/specs/archive/20261118-103123-feat-one-shot-12824-cron-spawn-isolation/measurements.md`. They ran against a scripted
+  local Messages-API mock (no dev API key), so they show what the CLI does, not what a model would choose.

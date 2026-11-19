@@ -104,4 +104,12 @@ confirm a known-bad copy fails, before reporting clean. **Why:** #12536 — see
 `knowledge-base/project/learnings/2026-11-10-a-verify-only-key-slot-guard-anchors-on-what-every-signer-needs.md`
 session error 5.
 
+## markdownlint parses `$…$` as inline math
+
+This repo's markdownlint parses `$…$` as inline math: two unescaped dollar
+amounts on one line pair up and swallow the code-span backticks between them,
+so a well-formed span reports MD038/MD034. Escape `$` as `\$` outside code
+spans. **Why:** #12844 — see
+`knowledge-base/project/learnings/2026-11-18-the-adoption-gate-forbade-the-import-and-the-lint-read-my-dollar-signs-as-math.md`.
+
 - **A signal trap runs inside the redirections of the command it interrupted, when bash applied them itself** (a shell function, a builtin or a `{ }` group; an external command's redirect lives in the child, so the trap's fd 2 is untouched) — a handler that reports to fd 2 while `my_fn >/dev/null 2>&1` is in flight writes into /dev/null. Take a private dup at startup (`exec 9>&2`) and report on it (`printf '...\n' >&9`); close it for children that may daemonize (`9>&-`). **Why:** #12736 — the rotation script's partial-store report was silently lost on SIGTERM until a stub-driven signal row caught it. See `knowledge-base/project/learnings/2026-11-13-a-log-marker-gate-matched-the-echoed-workflow-source-and-a-trap-inherited-the-writes-redirect.md`.
