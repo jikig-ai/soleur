@@ -51,22 +51,9 @@ Incident: `knowledge-base/engineering/operations/post-mortems/soleur-ai-cloudfla
   gh run watch <run-id> --exit-status
   ```
 
-- **Before every dispatch**, refuse if a stale run is queued, waiting or in progress, because a queued run still
-  executes. The set is every workflow that loads `./.github/actions/infra-credentials` and is not on the completion
-  predicate's exempt list (deny by default, CTO ruling D1):
-
-  ```bash
-  mapfile -t exempt < <(bash -c 'source apps/web-platform/infra/scripts/cf-account-migration-complete.sh && printf "%s\n" "${CFAM_EXEMPT_WORKFLOWS[@]}"')
-  for f in $(grep -l './.github/actions/infra-credentials' .github/workflows/*.yml); do
-    wf="${f##*/}"; printf '%s\n' "${exempt[@]}" | grep -qxF "$wf" && continue
-    for st in queued in_progress waiting pending requested; do
-      printf '%s %s %s\n' "$wf" "$st" "$(gh run list --workflow "$wf" --status "$st" --limit 5 --json databaseId --jq length)"
-    done
-  done
-  ```
-
-  Expected: every count is `0`. The migrate job repeats this check from the same exempt list and refuses with
-  `reason=run-in-flight`.
+- **Before every dispatch**, dispatch the rehearsal first: it writes nothing, needs no reviewer, and refuses with
+  `reason=run-in-flight`, naming the workflow, while any gated workflow (CTO ruling D1) has a run queued, waiting or
+  in progress, because a queued run still executes later.
 - **Merge freeze** (CTO ruling D5). From the PR1 merge until the Phase 3 step 6 reopen, no change under
   `apps/web-platform/infra/**` merges unless it belongs to #12931. An exception is the operator's priority call,
   recorded on #12931. Its push apply would fail closed at the predicate anyway, and Phase 3 step 6 would then apply it
