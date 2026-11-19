@@ -397,10 +397,10 @@ gh workflow run cf-lb-overlay.yml --ref main -f arm=ga-pool-update -f mode=drain
 
 **Drain during a running serve.** The job holds the `terraform-apply-web-platform-host` concurrency group (`cancel-in-progress: false`), and GitHub keeps one pending run per group. To drain fast, cancel the in-flight serve first, then dispatch the drain, and dispatch nothing else to the group until the drain has run (a later dispatch replaces the queued one).
 
-**Check before dispatching (read-only, Better Stack reads only).** The grader runs locally with the environment the serve step gives it (`env -i`, a fixed `PATH`, a fresh `HOME`, only the three Better Stack read values), so the caller's `~/.jq`, `PATH` and the rest of `prd_terraform` cannot change or reach it:
+**Check before dispatching (read-only, Better Stack reads only).** The grader runs locally with the environment the serve step gives it (`env -i`, a fixed `PATH`, a fresh `HOME`, only the three Better Stack read values), so the caller's `~/.jq`, `PATH` and the rest of `prd_terraform` cannot change or reach it. The launching shell unsets the bash startup variables (as the serve step does, R4) and `--preserve-env` keeps a Doppler `PATH` or `TMPDIR` from overriding yours:
 
 ```bash
-doppler run -p soleur -c prd_terraform -- bash -c 'h="$(mktemp -d)"; env -i PATH=/usr/bin:/bin HOME="$h" TMPDIR="${TMPDIR:-/tmp}" BETTERSTACK_QUERY_HOST="$BETTERSTACK_QUERY_HOST" BETTERSTACK_QUERY_USERNAME="$BETTERSTACK_QUERY_USERNAME" BETTERSTACK_QUERY_PASSWORD="$BETTERSTACK_QUERY_PASSWORD" SOLEUR_FT_EARLIEST= W2L_REQUIRE_BOOT_JOIN=1 bash scripts/followthroughs/web2-luks-live-6931.sh; rc=$?; rm -rf "$h"; exit "$rc"'
+doppler run --preserve-env -p soleur -c prd_terraform -- env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 bash -c 'h="$(mktemp -d)"; env -i PATH=/usr/bin:/bin HOME="$h" TMPDIR="${TMPDIR:-/tmp}" BETTERSTACK_QUERY_HOST="$BETTERSTACK_QUERY_HOST" BETTERSTACK_QUERY_USERNAME="$BETTERSTACK_QUERY_USERNAME" BETTERSTACK_QUERY_PASSWORD="$BETTERSTACK_QUERY_PASSWORD" SOLEUR_FT_EARLIEST= W2L_REQUIRE_BOOT_JOIN=1 bash scripts/followthroughs/web2-luks-live-6931.sh; rc=$?; rm -rf "$h"; exit "$rc"'
 ```
 
 Its first line is the verdict the serve step would see. The gate's clock (`marker_at`) is known before dispatch only from the last evidence line.

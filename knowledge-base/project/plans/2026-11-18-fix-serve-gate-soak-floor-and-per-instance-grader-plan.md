@@ -375,7 +375,8 @@ Every way the soak decision can be shortened or skipped on the serve path, and w
     re-opens this defect; the below-floor `::error::` and the runbook now say never to restore the weight that way.
   - *Live exposure.* web-2 has served since run 44304068922 on the short marker soak, without a grader run. The
     read-only grader read on 2026-11-19 (#12820) was `NOT YET` (69 h of 72 h). It stops at the age check before reading
-    any probe row, so it proves nothing about them; the re-read after 72 h (#12820) is the drain trigger.
+    any probe row, so it proves nothing about them; the re-read after 72 h (#12820) is the drain trigger. It ran at
+    2026-11-19T15:30Z: PASS (75 h, one boot_id, no non-green row), so no drain.
   - *Point-in-time.* The grader accepts a newest probe row up to 26 h old; a LUKS mapper lost after it is not seen
     by the serve arm (residual, ADR-263 review amendment).
   - *Replace.* A replaced web-2 whose readiness row never shipped now reads `NOT_YET` in the serve arm (boot_id
@@ -928,7 +929,7 @@ grader), and the change adds no external API.
 - [x] AC11: Grader `SOAK_DAYS` equals gate `SOAK_FLOOR_DAYS`, and the helper's `SOAK_FLOOR_S` equals both times
       86400 (parity row); the grader's comment names
       `SOAK_FLOOR_DAYS`; `web2-luks-live-6931.test.sh` passes unchanged.
-- [ ] AC12: Every **committed** Guard 1-4 mutation row lands and drives its guard RED; the PR body lists every
+- [x] AC12: Every **committed** Guard 1-4 mutation row lands and drives its guard RED; the PR body lists every
       **by hand** mutation and the row it turned RED (G5).
 - [x] AC13: `infra-validation.yml`'s `pull_request` paths include `scripts/followthroughs/web2-luks-live-6931.sh`,
       `scripts/lib/serve-soak-evidence.sh` and `scripts/serve-soak-evidence-last.sh`.
@@ -936,7 +937,7 @@ grader), and the change adds no external API.
       the supersession blockquote; ADR-068 carries the floor pointer; `model.c4` edits land and
       `c4-model-freshness`, `c4-count-parity`, `c4-code-syntax` and `c4-render` are green.
 - [x] AC15: Both runbooks name the floor and the grader as serve preconditions.
-- [ ] AC16: The PR body says `Closes #12849`, `Ref #12008`, `Ref #9421`, and carries the Operator Holds below.
+- [x] AC16: The PR body says `Closes #12849`, `Ref #12008`, `Ref #9421`, and carries the Operator Holds below.
 - [x] AC17: A refusal is a red job whose `::error::` line names the reason, so the dispatcher is alerted, not
       only the log (CPO concern 1).
 - [x] AC18: `bash scripts/serve-soak-evidence-last.sh` passes shellcheck and its stub-`gh` row;

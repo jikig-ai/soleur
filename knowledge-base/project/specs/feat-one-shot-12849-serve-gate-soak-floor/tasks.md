@@ -60,4 +60,4 @@ G13 replace-path placement: it ships with #12869).
 - [x] 5.1 Three suites plus `workspaces-luks-verify-workflow.test.sh` green; `python3 scripts/lint-guard-contract.py` on the plan; C4 tests; actionlint;
       shellcheck on the gate, grader, helper and probe.
 - [x] 5.2 Run every by-hand mutation once; record each and the row it turned RED for the PR body.
-- [ ] 5.3 PR body: `Closes #12849`, `Ref #12008`, `Ref #9421`, Operator Holds.
+- [x] 5.3 PR body: `Closes #12849`, `Ref #12008`, `Ref #9421`, Operator Holds.

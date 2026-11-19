@@ -64,3 +64,11 @@ The panel's test-design seat ran its own battery against f5ce2fa8bd and found mu
 | inner env / health shell without `-u SHELLOPTS -u BASHOPTS -u PS4` | R4-class rows (two committed mutants) |
 | helper knob renamed from the grader's `W2L_REQUIRE_BOOT_JOIN` | R2 parity row |
 | probe prints two lines of one kind; first instance line shown; gate_fail-only run passed over | probe rows (per kind, last wins, gate_fail hit) |
+
+## Fix round 2 (2026-11-19, range 68ec375482..b0fbb11c31 + fixes)
+
+| Mutant (fix-round-2 seat) | Now caught by |
+|---|---|
+| `"if": always()` / `if : always()` on Terraform apply | `sk_yaml_ok` (parsed job; committed mutants) |
+| `"shell": bash -c 'exit 0' {0}` on the gate or grader step | `sk_yaml_ok` (committed mutants) |
+| a comment inside the gate step's backslash continuation | `SK_GATE_BODY` snapshot now keeps continuation comments (committed mutant) |

@@ -1631,7 +1631,9 @@ sk_gate_ok() { # <workflow> -> 0 iff the gate chain step captures, replays, mirr
   [[ "$(grep -nxF -- "$SK_VERIFY" <<<"$runnc" | cut -d: -f1)" -gt "$(grep -nF "grep -q 'requires_runtime_bind_probe=true'" <<<"$runnc" | head -1 | cut -d: -f1)" ]] || return 1
   ! grep -qE 'continue-on-error|\|\|[[:space:]]*true|set[[:space:]]+\+e' <<<"$nc" || return 1
   ! grep -qE 'set[[:space:]]+\+o|errexit|(^|[;&|[:space:]])exit[[:space:]]+0([;[:space:]]|$)' <<<"$runnc" || return 1
-  [[ "$(grep -v '^[[:space:]]*$' <<<"$runnc")" == "$SK_GATE_BODY" ]] || return 1
+  # comment lines are dropped only when they do not sit inside a backslash continuation (fix round 2, P3: a
+  # comment there ends the command early); blank lines are dropped as before
+  [[ "$(awk '/^[[:space:]]*#/ && prev !~ /\\$/ {next} /^[[:space:]]*$/ {next} {print; prev=$0}' <<<"$run")" == "$SK_GATE_BODY" ]] || return 1
   return 0
 }
 # every step from the gate chain on carries no if:, or exactly the serve condition (test-design P2: `if: always()` on
@@ -1650,6 +1652,38 @@ sk_health_env_ok() {
   [[ "$(grep -cF -- "-c prd_terraform -- env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 bash -c '" <<<"$nc" || true)" -eq 1 ]] \
     && [[ "$(grep -c 'doppler run' <<<"$nc" || true)" -eq 1 ]]
 }
+# Fix round 2 (test-design P2): the step-key checks read the PARSED job, so a quoted or spaced key (`"if":`,
+# `if :`, `"shell":`) - the same key to a YAML parser - cannot slip past a text match on `if:` / `shell:`.
+# Gate and grader steps: exactly {name, if, env, run}. Every step from the gate on: no shell, no
+# continue-on-error, and no `if` or exactly the serve condition. At least 4 steps from the gate on carry it.
+sk_yaml_ok() {
+  SK_YF="$1" python3 - <<'SKYAML' 2>/dev/null
+import os, sys, yaml
+try:
+    wf = yaml.safe_load(open(os.environ["SK_YF"]))
+    steps = wf["jobs"]["ga_pool_update"]["steps"]
+except Exception:
+    sys.exit(1)
+names = [str(st.get("name", "")) for st in steps]
+gi = [i for i, n in enumerate(names) if n.startswith("§(c) gate chain")]
+ri = [i for i, n in enumerate(names) if n.startswith("per-instance soak grader")]
+if len(gi) != 1 or len(ri) != 1 or ri[0] < gi[0]:
+    sys.exit(1)
+serve = "inputs.mode == 'serve'"
+for i in (gi[0], ri[0]):
+    if set(steps[i].keys()) != {"name", "if", "env", "run"} or steps[i]["if"] != serve:
+        sys.exit(1)
+gated = 0
+for st in steps[gi[0]:]:
+    if "shell" in st or "continue-on-error" in st:
+        sys.exit(1)
+    if "if" in st:
+        if st["if"] != serve:
+            sys.exit(1)
+        gated += 1
+sys.exit(0 if gated >= 4 else 1)
+SKYAML
+}
 sk_host_parity_ok() { # <workflow> -> the five web-2 literal sites agree (the #12869 un-keying list)
   local job gs gr inner step_gate step_grader wrap rows helper
   job="$(sk_job "$1")"; gs="$(sk_nc "$(sk_step "$job" '§\(c\) gate chain')")"; gr="$(sk_nc "$(sk_step "$job" 'per-instance soak grader \(serve only\)')")"
@@ -1667,7 +1701,7 @@ sk_no_marker_name() { ! grep -qiE 'workspaces_luks_cutover_at' "$1"; }
 sk_grader_name_ok() { # the helper's grader= value is the basename of the grader the step hands it
   [[ "${SSE_GRADER_NAME:-}" == web2-luks-live-6931 ]] && grep -qF "scripts/followthroughs/${SSE_GRADER_NAME}.sh\"" <<<"$(sk_job "$1")"
 }
-sec_open wiring 42
+sec_open wiring 48
 sk_check "G3/AC8: ga_pool_update has exactly one 'per-instance soak grader (serve only)' step: keys name/if/env/run, serve-gated, env exactly SOLEUR_GATED_HOST + the three BETTERSTACK_QUERY_* secrets, no tolerance, guarded helper load, one bare sse_instance_soak call, gate < grader < health < plan" sk_grader_ok "$WF"
 sk_check "G4: the gate chain step: step-level SOLEUR_GATED_HOST, gate_rc=0, the stderr file truncated, the EXIT replay trap, the redirect after the wrapper path with || gate_rc=\$?, a guarded helper load, the bare mirror call followed by the inline backstop, and the re-check after the flip-marker check" sk_gate_ok "$WF"
 sk_check "G3/F5: the web-2 literal agrees at all five sites (gate step env, the inner literal, grader step env, the wrapper's MARKER_HOST, the rows library's W2L_HOST_NAME, the helper's SSE_GRADED_HOST) — the #12869 un-keying list" sk_host_parity_ok "$WF"
@@ -1675,6 +1709,7 @@ sk_check "G1 row 11: no (GIT_DATA|WORKSPACES)_LUKS_SOAK_DAYS on any non-comment 
 sk_check "AC19: cf-lb-overlay.yml never names the soak marker's Doppler name, in any case, not even in a comment" sk_no_marker_name "$WF"
 sk_check "G3: the helper's grader= value (SSE_GRADER_NAME) is the basename of the grader the step hands it" sk_grader_name_ok "$WF"
 sk_check "test-design P2: every ga_pool_update step from the gate chain on has no if: or exactly inputs.mode == 'serve' (a refusal cannot reach apply)" sk_downstream_if_ok "$WF"
+sk_check "fix round 2: the PARSED job agrees - gate/grader keys {name,if,env,run}, no shell/continue-on-error and only the serve if: from the gate on" sk_yaml_ok "$WF"
 sk_check "R4 class: the health step's doppler-run shell unsets BASH_ENV, ENV, SHELLOPTS, BASHOPTS and PS4" sk_health_env_ok "$WF"
 sk_check "R2 parity: the knob the helper sets (W2L_REQUIRE_BOOT_JOIN=1) is the one the grader reads, once each, outside comments" \
   eval '[[ "$(grep -vE "^[[:space:]]*#" "$SSE_LIB" | grep -cF "W2L_REQUIRE_BOOT_JOIN=1" || true)" -eq 1 && "$(grep -vE "^[[:space:]]*#" "$REPO_ROOT/scripts/followthroughs/web2-luks-live-6931.sh" | grep -cF "\"\${W2L_REQUIRE_BOOT_JOIN:-}\" == 1" || true)" -eq 1 ]]'
@@ -1710,6 +1745,11 @@ skmut "R4 class committed mutant: the health step's shell lets SHELLOPTS/PS4 in"
 skmut "R4 committed mutant: the gate step's inner env no longer unsets BASH_ENV/ENV" sk_gate_ok '{ sub(/env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 DOPPLER_TOKEN="\$DOPPLER_TOKEN_LUKS_MARKER"/, "env DOPPLER_TOKEN=\"$DOPPLER_TOKEN_LUKS_MARKER\""); print }'
 skmut "test-design P2 committed mutant: set +o errexit + exit 0 in the grader step" sk_grader_ok "$SK_IN_GRADER"' g && /^          set -euo pipefail$/ {print; print "          set +o errexit"; next} {print} /^          sse_instance_soak "\$SOLEUR_GATED_HOST"/ {print "          exit 0"}'
 skmut "test-design P2 committed mutant: set +o errexit before the gate step's re-check" sk_gate_ok '/^          sse_gate_chain_verify / {print "          set +o errexit"} {print}'
+skmut "fix round 2 committed mutant: a quoted \"if\": always() on the apply step" sk_yaml_ok '{print} /^      - name: Terraform apply \(the graded tfplan\)/ {print "        \"if\": always()"}'
+skmut "fix round 2 committed mutant: a spaced 'if :' always() on the apply step" sk_yaml_ok '{print} /^      - name: Terraform apply \(the graded tfplan\)/ {print "        if : always()"}'
+skmut "fix round 2 committed mutant: a quoted \"shell\": on the grader step" sk_yaml_ok '{print} /^      - name: per-instance soak grader/ {print "        \"shell\": bash -c '"'"'exit 0'"'"' {0}"}'
+skmut "fix round 2 committed mutant: a quoted \"shell\": on the gate step" sk_yaml_ok '{print} /^      - name: §\(c\) gate chain/ {print "        \"shell\": bash -c '"'"'exit 0'"'"' {0}"}'
+skmut "fix round 2 committed mutant: a comment inside the gate step's backslash continuation" sk_gate_ok '{print} /^            env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 DOPPLER_TOKEN=/ {print "            # inner env hands the wrapper its token"}'
 skmut "fix-round committed mutant: '- if: always()' as the apply step's first key" sk_downstream_if_ok '/^      - name: Terraform apply \(the graded tfplan\)/ {print "      - if: always()"; sub(/^      - name:/, "        name:")} {print}'
 skmut "fix-round committed mutant: exit \"0\" right after set -euo pipefail in the gate step" sk_gate_ok "$SK_IN_GATE"' g && /^          set -euo pipefail$/ {print; print "          exit \"0\""; next} {print}'
 skmut "test-design P2 committed mutant: if: always() on the Terraform apply step" sk_downstream_if_ok '{print} /^      - name: Terraform apply \(the graded tfplan\)/ {print "        if: always()"}'
@@ -2008,7 +2048,7 @@ sk_check "R8 executed: a grade_text line that is not verdict-shaped and a malfor
 sec_close
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=652 # 330 -> 613 (#12849 §SK rows) -> 643 (#12934 review fixes R1-R10 + test-design rows) -> 652 (fix round: R4 class, gate body, if spellings, R2 parity, probe rows; measured)
+MIN_CASES=658 # 330 -> 613 (#12849 §SK rows) -> 643 (#12934 review fixes R1-R10 + test-design rows) -> 652 (fix round: R4 class, gate body, if spellings, R2 parity, probe rows) -> 658 (fix round 2: parsed-YAML key checks + 5 mutants; measured)
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
