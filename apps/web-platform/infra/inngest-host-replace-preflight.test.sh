@@ -137,7 +137,7 @@ names = [s.get("name", "") for s in steps]
 idx = next((i for i, s in enumerate(steps) if s.get("name") == name), -1)
 def runs_of(st):
     return st.get("run") if isinstance(st.get("run"), str) else ""
-first_plan = next((i for i, st in enumerate(steps) if (isinstance(st.get("name"), str) and (st["name"].startswith("Terraform plan") or st["name"].startswith("Terraform apply"))) or (i != idx and re.search(r"terraform\s+(plan|apply)|-replace", runs_of(st)))), 10**6)
+first_plan = next((i for i, st in enumerate(steps) if (isinstance(st.get("name"), str) and (st["name"].startswith("Terraform plan") or st["name"].startswith("Terraform apply"))) or (i != idx and re.search(r"terraform\s+(plan|apply)|(?<![\w-])-replace(=|\s)", runs_of(st)))), 10**6)
 pat = re.compile(r"-replace(=|[ \t]+)['\"]?[^\s'\"]*hcloud_server\.inngest")
 jb = d["jobs"][job]
 defaults_bad = "1" if (d.get("defaults") or jb.get("defaults") or any(k in (jb.get("env") or {}) for k in ("BASH_ENV", "ENV", "PATH", "SHELLOPTS"))) else "0"
@@ -376,6 +376,11 @@ PYM
   mutate "$WF_REAL" g1m21 2 -e "$RNG{" -e 's/chars, value withheld/chars, value ${FLAG}/' -e '}'; m=$MUT; need "$(rows "$m" m21)" '(value-echoed)' "G1 m21: the unexpected flag value echoed to the log -> RED"
   mutate "$WF_REAL" g1m22 2 -e "$RNG{" -e 's/timeout 30 doppler secrets --only-names/doppler secrets --only-names/' -e '}'; m=$MUT; need "$(static_viol "$m" m22)" 'VIOL:timeout-pin' "G1 m22: the timeout dropped from a doppler call -> RED"
   mutate "$WF_REAL" g1m24 2 "/- name: 'Preflight - inherited-done check/i\\      - name: Scoped replace\\n        run: terraform apply -auto-approve"; m=$MUT; need "$(static_viol "$m" m24)" 'VIOL:step-order' "G1 m24: a terraform apply step (any name) ahead of the preflight -> RED"
+  # The order predicate reads terraform's `-replace` FLAG, not the word: a step ahead of the preflight whose prose names
+  # the `inngest-host-replace` target is not a plan/apply step (PR #12876's confirm step tripped the bare `-replace`).
+  mutate "$WF_REAL" g1m40 2 "/- name: 'Preflight - inherited-done check/i\\      - name: Prose decoy\\n        run: echo 'inngest-host-replace requires a token'"; m=$MUT
+  if ! grep -qF 'VIOL:step-order' <<<"$(static_viol "$m" m40)"; then pass "G1 m40: a step whose prose names inngest-host-replace stays GREEN"; else fail "G1 m40: a step whose prose names inngest-host-replace stays GREEN" "the bare -replace word tripped step-order"; fi
+  mutate "$WF_REAL" g1m41 2 "/- name: 'Preflight - inherited-done check/i\\      - name: Innocent name\\n        run: tf -replace=hcloud_server.inngest"; m=$MUT; need "$(static_viol "$m" m41)" 'VIOL:step-order' "G1 m41: a -replace= flag in any step ahead of the preflight -> RED"
   m="$SANDBOX/mut.g1m23.yml"
   python3 - "$WF_REAL" "$m" "$JOB" <<'PYM'
 import sys, yaml
@@ -442,12 +447,12 @@ fi
 TOTAL=$((passes + fails))
 printf '\n== %d passed, %d failed (%d assertions, %d stubbed executions in the control, %d mutants)\n' "$passes" "$fails" "$TOTAL" "$CONTROL_ROWS" "$MUTANTS_RUN"
 # Anti-vacuity floors, reported with printf + exit so a neutered pass()/fail() cannot hide them.
-MIN_ASSERTIONS=48
+MIN_ASSERTIONS=50
 if [ "$passes" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FAIL: assertion floor: only %d assertions passed, floor %d\n' "$passes" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
-MIN_MUTANTS=40
+MIN_MUTANTS=42
 if [ "$fails" -eq 0 ] && [ "$MUTANTS_RUN" -lt "$MIN_MUTANTS" ]; then
   printf 'FAIL: assertion floor: only %d mutants ran, floor %d\n' "$MUTANTS_RUN" "$MIN_MUTANTS" >&2
   exit 1
