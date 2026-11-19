@@ -160,7 +160,10 @@ case "${1:-} ${2:-}" in
     if [[ -s "$D/backups.keys" ]]; then jq -Rn '{Contents: [inputs | {Key: .}]}' <"$D/backups.keys"; fi ;;
   "s3 cp")
     [[ $# -eq 7 && "$4" == s3://soleur-terraform-state/web-platform/backups/pre-cf-account-migration-*.tfstate \
-      && "$5 $6 $7" == "--endpoint-url $EP --only-show-errors" ]] || no "$@"
+      && "$5 $6 $7" == "--only-show-errors --endpoint-url $EP" ]] || no "$@"
+    # The upload is state-migrate's r2_aws: same R2 env prefix as the listing (#12931 review).
+    [[ "${AWS_DEFAULT_REGION:-}" == auto && "${AWS_REQUEST_CHECKSUM_CALCULATION:-}" == when_required \
+      && "${AWS_RESPONSE_CHECKSUM_VALIDATION:-}" == when_required ]] || no "(R2 env prefix missing)" "$@"
     k="${4#s3://}"; printf '%s\n' "${k#*/}" >>"$D/backups.keys" ;;
   *) no "$@" ;;
 esac
@@ -730,7 +733,10 @@ red "H1 R2_ENDPOINT override accepted" "$H1" chk_r2_pinned '^not-refused' setup_
 H2="$(mk_mutant budget-unchecked 's/|| refuse bad-verify-budget/|| true/')"
 red "H2 verify budget not validated (arithmetic injection runs)" "$H2" chk_budget '^(injected|not-refused)' setup_budget
 H3="$(mk_mutant imports-seam 's/^  unset CFAM_IMPORTS_FILE$/  :/')"
-red "H3 CFAM_IMPORTS_FILE honoured in production" "$H3" chk_rehearsal_clean '^(rc:1|no-pass-line)$' setup_imports_seam
+# LAYERED since the gate library ignores a non-committed CFAM_IMPORTS_FILE itself (#12931 review):
+# neutering the job's unset must leave the run clean, with the gate naming the override it dropped.
+chk_imports_ignored() { chk_rehearsal_clean "$1" || return 1; grep -q 'ignoring CFAM_IMPORTS_FILE=' "$1/err.txt" || { WHY="no-gate-ignore-line"; return 1; }; }
+green_mut "H3 CFAM_IMPORTS_FILE: the gate still ignores the override with the job's unset neutered" "$H3" chk_imports_ignored setup_imports_seam
 H4="$(mk_mutant tflog-global 's/^  unset TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_PROVIDER$/  :/')"
 red "H4 TF_LOG from the environment reaches terraform" "$H4" chk_rehearsal_clean '^tf-log-leak$' setup_tflog
 H5="$(mk_mutant tflog-doppler 's/env -u TF_LOG -u TF_LOG_PATH -u TF_LOG_CORE -u TF_LOG_PROVIDER "\$@"/"$@"/g')"
