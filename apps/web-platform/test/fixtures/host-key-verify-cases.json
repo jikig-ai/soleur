@@ -22,6 +22,7 @@
     {"name": "a leading U+FEFF is trimmed (JS trim strips it)", "env": {"SOLEUR_HOST_KEY": "\ufeffweb-2", "SOLEUR_HOST_PRIVATE_IP": "10.0.1.11", "SOLEUR_HOST_ROSTER": "{\"web-2\":\"10.0.1.11\"}"}, "verified": "web-2"},
     {"name": "a roster with a NaN value is rejected whole (JSON.parse)", "env": {"SOLEUR_HOST_KEY": "web-2", "SOLEUR_HOST_PRIVATE_IP": "10.0.1.11", "SOLEUR_HOST_ROSTER": "{\"web-2\":\"10.0.1.11\",\"x\":NaN}"}, "verified": ""},
     {"name": "a roster with a leading-zero number is rejected whole (JSON.parse)", "env": {"SOLEUR_HOST_KEY": "web-2", "SOLEUR_HOST_PRIVATE_IP": "10.0.1.11", "SOLEUR_HOST_ROSTER": "{\"web-2\":\"10.0.1.11\",\"x\":01}"}, "verified": ""},
-    {"name": "non-string values elsewhere in the roster are dropped, not fatal", "env": {"SOLEUR_HOST_KEY": "web-2", "SOLEUR_HOST_PRIVATE_IP": "10.0.1.11", "SOLEUR_HOST_ROSTER": "{\"web-2\":\"10.0.1.11\",\"x\":-0.5e3,\"y\":[true,null]}"}, "verified": "web-2"}
+    {"name": "non-string values elsewhere in the roster are dropped, not fatal", "env": {"SOLEUR_HOST_KEY": "web-2", "SOLEUR_HOST_PRIVATE_IP": "10.0.1.11", "SOLEUR_HOST_ROSTER": "{\"web-2\":\"10.0.1.11\",\"x\":-0.5e3,\"y\":[true,null]}"}, "verified": "web-2"},
+    {"name": "a roster with a trailing comma is rejected whole (JSON.parse and fromjson both refuse it)", "env": {"SOLEUR_HOST_KEY": "web-2", "SOLEUR_HOST_PRIVATE_IP": "10.0.1.11", "SOLEUR_HOST_ROSTER": "{\"web-2\":\"10.0.1.11\",}"}, "verified": ""}
   ]
 }

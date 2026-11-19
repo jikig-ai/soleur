@@ -25,7 +25,7 @@
 // The proxy transport is one-way TLS over the private net (proxy-tls.ts); the
 // owning host re-verifies membership before serving a proxied session (AP-2).
 
-import { reportSilentFallback } from "./observability";
+import { mirrorWithDebounce, reportSilentFallback } from "./observability";
 import { readWorktreeLeaseHolder, resolveWorktreeId } from "./worktree-write-lease";
 import { loadHostRoster } from "./host-roster";
 import { readHostPrivateIp } from "./host-private-ip";
@@ -104,8 +104,10 @@ export async function resolveSessionRoute(params: {
   // null-IP prod case is covered upstream instead: ci-deploy.sh refuses to
   // canary a host whose key is `key_unverifiable`, and the boot fallback Sentry
   // report (`resolveHostId.key-fallback`, server/index.ts) fires on the fallback.
+  // Debounced per workspace (MIRROR_DEBOUNCE_MS): every reconnect and control op
+  // of an affected session lands here, and the boot fallback event is the signal.
   if (ownerAddress === readHostPrivateIp()) {
-    reportSilentFallback(
+    mirrorWithDebounce(
       new Error(
         `session-router: owning host '${holder.hostId}' maps to this host's own address — ` +
           `this host's lease id changed under a live lease (owner-unresolved)`,
@@ -115,6 +117,8 @@ export async function resolveSessionRoute(params: {
         op: "resolveSessionRoute.owner-is-self",
         extra: { workspaceId, ownerHostId: holder.hostId, myHostId },
       },
+      workspaceId,
+      "owner-is-self",
     );
     return { decision: "owner-unresolved", ownerHostId: holder.hostId };
   }

@@ -1635,8 +1635,8 @@ while the serve gate passed the roster. (§2's 120 s liveness figure is supersed
 - **Generation carry across a replace.** A replaced host re-acquires its predecessor's live leases at the same generation. That
   rests on the two never running at once: Terraform's default destroy-before-create for `hcloud_server.web` (no
   `create_before_destroy`, pinned by `web-hosts-generic.test.sh` C8 with the name round-trip and the five key regexes), plus
-  Hetzner's per-project unique server names and per-network unique private IPs. A replace does not change the id; it leaves a
-  gap. The cloud-init first-boot container has no usable id: it runs with an empty `-e SOLEUR_HOST_KEY=` (round-2 CTO ruling
+  Hetzner's per-project unique server names and per-network unique private IPs. A replace does not change the placement id (when the
+  replaced host's first ci-deploy verifies its key; `SOLEUR_HOST_ID` does change); it leaves a gap. The cloud-init first-boot container has no usable id: it runs with an empty `-e SOLEUR_HOST_KEY=` (round-2 CTO ruling
   Q3, so a Doppler key cannot reach it) and no `SOLEUR_HOST_ID`. In production its first lease throws and its boot line reads
   `source=unresolved`. That lasts until the host's first ci-deploy writes `web-<n>` again.
 - **ADR-143 D5 precondition.** A volume-preserving reprovision must stop the app before the detach (stricter than D5's

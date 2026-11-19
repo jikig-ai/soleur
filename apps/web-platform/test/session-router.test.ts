@@ -20,8 +20,16 @@ vi.mock("@/server/worktree-write-lease", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/worktree-write-lease")>()),
   readWorktreeLeaseHolder: readHolderMock,
 }));
-const { reportSilentFallbackMock } = vi.hoisted(() => ({ reportSilentFallbackMock: vi.fn() }));
-vi.mock("@/server/observability", () => ({ reportSilentFallback: reportSilentFallbackMock }));
+const { reportSilentFallbackMock, mirrorWithDebounceMock } = vi.hoisted(() => {
+  const report = vi.fn();
+  // Pass-through: rows assert on the emitted event; the debounce key is asserted separately.
+  const mirror = vi.fn((err: unknown, ctx: unknown) => report(err, ctx));
+  return { reportSilentFallbackMock: report, mirrorWithDebounceMock: mirror };
+});
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: reportSilentFallbackMock,
+  mirrorWithDebounce: mirrorWithDebounceMock,
+}));
 
 import {
   resolveSessionRoute,
@@ -44,6 +52,7 @@ function holder(hostId: string) {
 beforeEach(() => {
   readHolderMock.mockReset();
   reportSilentFallbackMock.mockReset();
+  mirrorWithDebounceMock.mockClear(); // clear, not reset: keep the pass-through
   vi.unstubAllEnvs();
   vi.stubEnv("SOLEUR_HOST_ROSTER", "");
   vi.stubEnv("SOLEUR_HOST_PRIVATE_IP", "");
@@ -90,6 +99,9 @@ describe("resolveSessionRoute — user-sticky placement", () => {
     expect((reportSilentFallbackMock.mock.calls[0][1] as { op: string }).op).toBe(
       "resolveSessionRoute.owner-is-self",
     );
+    // Debounced per workspace: every reconnect of the session reaches this branch.
+    expect(mirrorWithDebounceMock).toHaveBeenCalledTimes(1);
+    expect(mirrorWithDebounceMock.mock.calls[0].slice(2)).toEqual([WS, "owner-is-self"]);
   });
 
   // Owner-is-self guard mutants (#12910 review): the guard must compare the OWNER's

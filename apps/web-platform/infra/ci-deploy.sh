@@ -389,7 +389,11 @@ readonly HOST_KEY HOST_KEY_RC
 #   adds U+0085 and drops U+FEFF.
 # - A null Env reads as no key, not as a jq error.
 # - The roster must be text JSON.parse accepts: fromjson also admits NaN, Infinity and
-#   leading zeros, which JSON.parse rejects for the whole roster.
+#   leading zeros, which JSON.parse rejects for the whole roster. A roster both reject
+#   (e.g. a trailing comma) reads as {} through the `try`, never a jq error.
+# One known difference is left: a string holding a lone-surrogate escape (\ud800) is
+# accepted by JSON.parse and refused here. It fails safe (a deploy of a verified host aborts
+# key_unverifiable) and needs a roster no one writes: the values are hand-kept IPs.
 # The key regex here is the fifth copy of the var.web_hosts key shape (web-hosts-generic.test.sh
 # C8 pins all five). test/fixtures/host-key-verify-cases.json drives both this body
 # (ci-deploy.test.sh HKV rows, graded on output AND exit status) and the TypeScript rules

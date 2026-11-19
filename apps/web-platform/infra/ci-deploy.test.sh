@@ -13568,7 +13568,7 @@ hk_row NX-9 "the synthesized key/IP tokens equal the prod run's -e lines" "1|1|1
 HKV_FIXTURE="$(dirname "$DEPLOY_SCRIPT")/../test/fixtures/host-key-verify-cases.json"
 HKV_N="$(jq '.cases | length' "$HKV_FIXTURE" 2>/dev/null || echo 0)"
 hk_row HKV-0 "the shared verification table is readable and non-trivial" "yes" \
-  "$([[ "$HKV_N" -ge 22 ]] && echo yes || echo no)"
+  "$([[ "$HKV_N" -ge 23 ]] && echo yes || echo no)"
 for ((hkv_i = 0; hkv_i < HKV_N; hkv_i++)); do
   hkv_name="$(jq -r ".cases[$hkv_i].name" "$HKV_FIXTURE")"
   hkv_want="$(jq -r ".cases[$hkv_i].verified" "$HKV_FIXTURE")"
@@ -13726,7 +13726,8 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # #12910 review round 2: raised 805 -> 832 (+27, measured): HK-24b (the key_lost cause), HK-31..34 (stdout-only parse, case-free
 # not-found, null Env, abort-token map), NX-1..9 and HK-35..38 (the CTO Q1 key_unverifiable check: unit, placement, end to end
 # with its control), HK-39 (the metadata curl flags), and HKV-15..22 (eight boundary/parity rows in the shared table).
-CI_DEPLOY_ASSERT_FLOOR=832
+# Verify pass: 832 -> 833, HKV-23 (a trailing-comma roster pins the `try` around fromjson).
+CI_DEPLOY_ASSERT_FLOOR=833
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
