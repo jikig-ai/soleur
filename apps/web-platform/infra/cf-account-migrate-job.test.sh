@@ -185,13 +185,25 @@ if [[ "$url" == https://api.cloudflare.com/client/v4/* ]]; then
   [[ "$cfg" -eq 1 ]] || { printf 'curl %s\n' "$*" >>"$D/refused.log"; exit 64; }
   tok="$(sed -n 's/^header = "Authorization: Bearer \(.*\)"$/\1/p')"
   name="${tok#tok-}"
-  printf 'cf-api %s token=%s\n' "${url#https://api.cloudflare.com/client/v4/}" "$name" >>"$D/calls.log"
+  path="${url#https://api.cloudflare.com/client/v4/}"
   if [[ "$nullout" -eq 1 ]]; then
     # D8 token preflight: -o /dev/null -w '%{http_code}'
+    printf 'cf-api-probe %s token=%s\n' "$path" "$name" >>"$D/calls.log"
     if [[ -f "$D/cfcode.$name" ]]; then cat "$D/cfcode.$name"; else printf '200'; fi
     exit 0
   fi
-  printf 'curl %s\n' "$*" >>"$D/refused.log"; exit 64
+  # The entrypoint gate (-w '\n%{http_code}'): body, newline, code. cf.<path with / -> _> overrides.
+  printf 'cf-api-gate %s token=%s\n' "$path" "$name" >>"$D/calls.log"
+  f="$D/cf.${path//\//_}"
+  if [[ -f "$f" ]]; then code="$(sed -n 1p "$f")"; body="$(sed -n '2,$p' "$f")"
+  else
+    case "$path" in
+      */rulesets) code=200; body='{"result":[]}' ;;
+      *) code=404; body='{"success":false}' ;;
+    esac
+  fi
+  printf '%s\n%s' "$body" "$code"
+  exit 0
 fi
 if [[ -f "$D/mode.verify" ]]; then
   [[ "$dump" -eq 1 ]] && printf 'HTTP/2 200\r\n\r\n' || printf '500 '
@@ -226,10 +238,17 @@ build_plan() {
   jq -n --argjson spec "$spec" --argjson lit "$lit" --arg s "$SENTINEL" --arg nz "$NZ" --arg na "$NA" '
     def ids($a): if ($a | test("^cloudflare_(list|pages_project|pages_domain)[.]")) or $a == "cloudflare_ruleset.bulk_redirects" then {account_id: $na}
                  elif ($a | startswith("cloudflare_")) then {zone_id: $nz} else {} end;
+    # Ruleset kind/phase, as the root declares them: the entrypoint gate builds its URLs from these.
+    def rs($a): {"cloudflare_ruleset.allowlist_ai_crawlers": {kind: "zone", phase: "http_request_firewall_custom"},
+                 "cloudflare_ruleset.cache_shared_binaries": {kind: "zone", phase: "http_request_cache_settings"},
+                 "cloudflare_ruleset.seo_config_settings": {kind: "zone", phase: "http_config_settings"},
+                 "cloudflare_ruleset.seo_page_redirects": {kind: "zone", phase: "http_request_dynamic_redirect"},
+                 "cloudflare_ruleset.seo_response_headers": {kind: "zone", phase: "http_response_headers_transform"},
+                 "cloudflare_ruleset.bulk_redirects": {kind: "root", phase: "http_request_redirect"}}[$a] // {};
     {format_version: "1.2", resource_changes: [
       $spec | to_entries[] | .key as $a | .value as $c
       | ({address: $a, mode: "managed", type: ($a | split(".")[0]), change: (
-            if $c == "create" then {actions: ["create"], before: null, after: ({value: $s} + ids($a))}
+            if $c == "create" then {actions: ["create"], before: null, after: ({value: $s} + ids($a) + rs($a))}
             elif $c == "import" then {actions: ["no-op"], importing: {id: $lit[$a]}, before: ids($a), after: ids($a)}
             elif $c == "mutable" then {actions: ["update"], before: {}, after: {plaintext_value: $s}}
             else {actions: ["delete", "create"], before: {id: "tok-id-1"}, after: {value: $s}} end)}
@@ -366,6 +385,17 @@ chk_token_403() { chk_preflight_refused "$1" token-not-new-zone || return 1
   grep -qx 'cf-account-migrate preflight=token name=cf_api_token_rulesets http=403' "$1/out.txt" || { WHY="no-code-line"; return 1; }
 }
 chk_r2_old() { chk_preflight_refused "$1" r2-account-not-old; }
+chk_entrypoint_refused() { # <dir>: refused by the entrypoint gate, nothing applied or written
+  if grep -q '^terraform\[[a-z]*\] apply' "$1/calls.log"; then WHY="apply-called"; return 1; fi
+  if ! refused_for "$1" entrypoint-gate-refused; then WHY="not-refused:rc=$(rc_of "$1")"; return 1; fi
+  grep -q 'CLOBBER RISK' "$1/out.txt" || { WHY="no-clobber-line"; return 1; }
+  grep -q 'import { to = cloudflare_ruleset.seo_config_settings; id = "zone/'"$NZ"'/live-cfg-1" }' "$1/out.txt" || { WHY="no-import-block"; return 1; }
+}
+chk_entrypoint_ran() { # PASS, and the gate probed the NEW zone's list with the rulesets token, no seam
+  [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
+  grep -qx "cf-api-gate zones/$NZ/rulesets token=cf_api_token_rulesets" "$1/calls.log" || { WHY="no-zone-list"; return 1; }
+  grep -qx 'cf-account-migrate entrypoint-gate verdict=PASS' "$1/out.txt" || { WHY="no-pass"; return 1; }
+}
 chk_backups_timeout() { chk_refused_late "$1" backups-timeout; }
 chk_ids_timeout() { chk_refused_late "$1" ids-timeout; }
 chk_runs_timeout() { chk_refused_early "$1" runs-timeout; }
@@ -415,6 +445,10 @@ setup_refuse_apply() {
     "$LAST_D/plan.json" >"$LAST_D/p" && mv "$LAST_D/p" "$LAST_D/plan.json"
 }
 setup_zone_rest_apply() { new_case "zrest-$1" zone-rest false; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; }
+populate_cfg() { printf '200\n{"result":{"id":"live-cfg-1","rules":[{"ref":"r1","action":"set_config"}]}}\n' >"$LAST_D/cf.zones_${NZ}_rulesets_phases_http_config_settings_entrypoint"; }
+setup_entry_apply() { new_case "entry-$1" redirects-dns false; populate_cfg; }
+setup_entry_rehearsal() { new_case "entryr-$1" redirects-dns true; populate_cfg; }
+setup_entry_seam() { new_case "entryseam-$1" redirects-dns true; printf 'PREAPPLY_ENTRYPOINT_FETCH=/bin/false\n' >"$LAST_D/env.extra"; }
 setup_token_403() { new_case "tok403-$1" redirects-dns false; printf '403' >"$LAST_D/cfcode.cf_api_token_rulesets"; }
 setup_r2_new() { new_case "r2new-$1" redirects-dns false; printf '%s\n%s\n%s\n' "$NZ" "$NA" "$NA" >"$LAST_D/ids"; }
 setup_r2_evil() { new_case "r2evil-$1" redirects-dns true; printf 'R2_ENDPOINT=https://r2.example.invalid\n' >"$LAST_D/env.extra"; }
@@ -496,7 +530,7 @@ setup_r2_new x; run_job "$LAST_D" "$PRISTINE"; WHY=""
 chk_r2_old "$LAST_D"; verdict "$?" "cf_r2_account_id = the NEW account -> reason=r2-account-not-old, no terraform call ($WHY)"
 new_case tok-paths redirects-dns true; run_job "$LAST_D" "$PRISTINE"
 r=1
-diff <(sed -n 's/^cf-api \(.*\)$/\1/p' "$LAST_D/calls.log" | sort) <(printf '%s\n' \
+diff <(sed -n 's/^cf-api-probe \(.*\)$/\1/p' "$LAST_D/calls.log" | sort) <(printf '%s\n' \
   "zones/$NZ/dns_records?per_page=1 token=cf_api_token" "zones/$NZ/rulesets token=cf_api_token_rulesets" \
   "accounts/$NA/pages/projects token=cf_api_token_pages" | sort) >/dev/null && r=0
 verdict "$r" "redirects-dns probes exactly its three tokens, each on the new zone/account"
@@ -504,7 +538,7 @@ r=1; [[ "$(cat "$LAST_D/rc")" == 0 ]] && ! grep -q 'tok-' "$LAST_D/curl-argv.log
 verdict "$r" "no token value reaches curl's argv (stdin config only)"
 new_case tok-zrest zone-rest true; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; run_job "$LAST_D" "$PRISTINE"
 r=1
-diff <(sed -n 's/^cf-api \(.*\)$/\1/p' "$LAST_D/calls.log" | sort) <(printf '%s\n' \
+diff <(sed -n 's/^cf-api-probe \(.*\)$/\1/p' "$LAST_D/calls.log" | sort) <(printf '%s\n' \
   "zones/$NZ/settings token=cf_api_token_zone_settings" "zones/$NZ/bot_management token=cf_api_token_bot_management" | sort) >/dev/null && r=0
 verdict "$r" "zone-rest probes exactly its two tokens (zone_settings, bot_management)"
 r=1; [[ "$(cf_account_migrate_phase_tokens redirects-dns | tr '\n' ' ')" == "cf_api_token cf_api_token_rulesets cf_api_token_pages " \
@@ -573,6 +607,19 @@ new_case rerun redirects-dns false; remote_state "$LAST_D/remote.tfstate" "$NZ" 
 r=1; [[ "$(rc_of "$LAST_D")" == 0 ]] && grep -q 'cf-state-migrate verdict=ok removed=0' "$LAST_D/out.txt" && ! grep -q 'state rm' "$LAST_D/calls.log" && r=0
 verdict "$r" "redirects-dns re-dispatch after migration: forget removes 0, apply proceeds"
 
+# --- Whole-list entrypoint gate (CTO D2) --------------------------------------------
+printf '\n[entrypoint] a populated live phase entrypoint blocks the create (ADR-136)\n'
+setup_entry_apply x; run_job "$LAST_D" "$PRISTINE"; WHY=""
+chk_entrypoint_refused "$LAST_D"; verdict "$?" "apply: populated http_config_settings -> reason=entrypoint-gate-refused, import block printed, apply never called ($WHY)"
+setup_entry_rehearsal x; run_job "$LAST_D" "$PRISTINE"; WHY=""
+r=1; chk_entrypoint_refused "$LAST_D" && grep -q 'serial_unchanged=true backups_unchanged=true' "$LAST_D/out.txt" && r=0
+verdict "$r" "rehearsal: the same refusal, after the no-write assertions ($WHY)"
+setup_entry_seam x; run_job "$LAST_D" "$PRISTINE"; WHY=""
+chk_entrypoint_ran "$LAST_D"; verdict "$?" "the gate runs on the NEW zone in zone-list mode with the rulesets token; its fetch seam is ignored ($WHY)"
+r=1; p_line="$(line_no "$D_AP" 'show -json tfplan')"; g_line="$(line_no "$D_AP" "cf-api-gate zones/$NZ/rulesets ")"; a_line="$(line_no "$D_AP" 'terraform\[remote\] apply')"
+[[ -n "$p_line" && -n "$g_line" && -n "$a_line" ]] && ((p_line < g_line && g_line < a_line)) && r=0
+verdict "$r" "apply order: phase gate (show tfplan) < entrypoint gate < apply"
+
 # --- Hardening ----------------------------------------------------------------------
 printf '\n[hardening] pinned endpoint, bounded calls, test seams, logging, audit line\n'
 for pair in r2_evil:chk_r2_pinned budget:chk_budget imports_seam:chk_rehearsal_clean tflog:chk_rehearsal_clean \
@@ -602,7 +649,7 @@ red "M5 scratch root without the local-backend override" "$M5" chk_rehearsal_cle
 green_mut "M5: the job's own remote-serial assertion refuses it" "$M5" chk_refuses_serial setup_rehearsal
 M5B="$(mk_mutant no-override-noassert '/backend_override\.tf"$/d' 's/|| refuse remote-serial-changed/|| true/')"
 RED_BASE="$M5" red "M5b: M5 plus the serial assertion removed" "$M5B" chk_refuses_serial '^rc:0$' setup_rehearsal
-M6="$(mk_mutant no-gate 's/plan_and_gate || refuse gate-refused/plan_and_gate || true/')"
+M6="$(mk_mutant no-gate 's/|| refuse gate-refused "the plan did not reach/|| true "the plan did not reach/')"
 red "M6 apply not conditioned on the gate" "$M6" chk_gate_blocks_apply '^apply-called$' setup_refuse_apply
 # shellcheck disable=SC2016
 M7="$(mk_mutant no-replace 's/ \${REPLACE_ARGS\[@\]+"\${REPLACE_ARGS\[@\]}"}//')"
@@ -642,6 +689,10 @@ D8A="$(mk_mutant r2-unchecked 's/|| refuse r2-account-not-old/|| true/')"
 red "D8a R2 account check removed" "$D8A" chk_r2_old '^not-refused' setup_r2_new
 D8B="$(mk_mutant token-unchecked 's/|| refuse token-not-new-zone/|| true/')"
 red "D8b token preflight verdict ignored" "$D8B" chk_token_403 '^not-refused' setup_token_403
+E1="$(mk_mutant no-entrypoint-gate 's/^  if ! entrypoint_gate; then$/  if false; then/')"
+red "E1 entrypoint gate call deleted" "$E1" chk_entrypoint_refused '^(apply-called|not-refused)' setup_entry_apply
+E2="$(mk_mutant entrypoint-seam 's/ -u PREAPPLY_ENTRYPOINT_FETCH//')"
+red "E2 the gate's fetch seam reaches production" "$E2" chk_entrypoint_ran '^rc:1$' setup_entry_seam
 M8="$(mk_mutant always-apply 's/if \[\[ "$REHEARSAL" == true \]\]; then run_rehearsal; else run_apply; fi/run_apply/')"
 red "M8 rehearsal dispatch routed to the apply path" "$M8" chk_rehearsal_clean '^(apply-called|aws-s3-cp|remote-state-rm)$' setup_rehearsal
 
@@ -659,7 +710,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=86
+EXPECTED_CASES=92
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

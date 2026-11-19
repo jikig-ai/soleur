@@ -18,9 +18,11 @@
 #
 # Order: inputs -> no run in flight on any gated workflow -> Doppler resolves the NEW ids ->
 # init. Rehearsal: a scratch copy of the root on a local backend runs the real state-forget
-# (--rehearsal) and the plan and gate, never applies, then asserts the remote state serial and the
-# web-platform/backups/ listing are unchanged. Apply: state-forget (redirects-dns only), plan with
-# the gate's -target/-replace lists, gate, apply the graded tfplan only on verdict=PASS, verify.
+# (--rehearsal) and the plan and both gates, never applies, then asserts the remote state serial
+# and the web-platform/backups/ listing are unchanged. Apply: state-forget (redirects-dns only),
+# plan with the gate's -target/-replace lists, phase gate, then the whole-list entrypoint gate
+# (ADR-136, CTO D2: a ruleset create is a whole-list PUT over the live phase entrypoint), apply
+# the graded tfplan only when both PASS, verify.
 #
 # Prints verdict lines and addresses only; terraform output goes through tf_redact_random_ids.
 # Exit: 0 ok, 1 refused or failed, 2 setup error.
@@ -243,6 +245,18 @@ build_args() {
   printf '%s targets=%d replaces=%d\n' "$P" "${#TARGET_ARGS[@]}" "${#REPLACE_ARGS[@]}"
 }
 
+# entrypoint_gate: tests/scripts/lib/preapply-entrypoint-gate.sh --gate on the graded plan, in
+# zone-list control mode (the new zone may be empty, so no phase is known-populated), bound to the
+# NEW zone constant. The rulesets token reaches the gate through the environment, never argv; the
+# gate's own test seams are stripped.
+entrypoint_gate() {
+  # shellcheck disable=SC2016 # expanded by the inner bash, inside doppler run
+  tf_env env -u PREAPPLY_ENTRYPOINT_FETCH -u PREAPPLY_INFRA_DIR -u PREAPPLY_CF_MAX_TIME -u PREAPPLY_CF_ACCOUNT_ID \
+    PREAPPLY_CONTROL=zone-list PREAPPLY_CF_ZONE_ID="$CFAM_NEW_ZONE_ID" \
+    bash -c 'export PREAPPLY_CF_TOKEN="${TF_VAR_cf_api_token_rulesets:-}"; exec bash "$1" --gate "$2"' \
+    _ "$GITHUB_WORKSPACE/tests/scripts/lib/preapply-entrypoint-gate.sh" "$W/tfplan.json" 2>&1
+}
+
 serial_of() { jq -er 'if (.serial | type) == "number" then .serial else error("no serial") end' "$1" 2>/dev/null; }
 
 # pull_remote <out-file>: the remote state, read through the real root's backend.
@@ -272,7 +286,8 @@ state_migrate() { # [--rehearsal --backup-dir <dir>]; runs in the current direct
     --new-zone "$CFAM_NEW_ZONE_ID" --new-account "$CFAM_NEW_ACCOUNT_ID" "$@"
 }
 
-# plan_and_gate: in the current directory. Writes $W/tfplan; returns 0 only on gate verdict=PASS.
+# plan_and_gate: in the current directory. Writes $W/tfplan; returns 0 only on phase-gate
+# verdict=PASS AND an entrypoint-gate PASS; 2 when the entrypoint gate refused, 1 otherwise.
 plan_and_gate() {
   local rc out
   terraform show -json >"$W/pre-plan-state.json" 2>/dev/null || { printf '::error::terraform show -json (pre-plan state) failed\n'; return 1; }
@@ -287,7 +302,13 @@ plan_and_gate() {
   out="$(cf_account_migrate_gate "$MIGRATE_PHASE" "$W/tfplan.json" "$W/pre-plan-state.json")"; rc=$?
   printf '%s\n' "$out"
   summary "$(grep -E '^cf_account_migrate_gate: phase=' <<<"$out" | tail -n1)"
-  [[ "$rc" -eq 0 ]] && grep -qE "^cf_account_migrate_gate: phase=${MIGRATE_PHASE} verdict=PASS " <<<"$out"
+  [[ "$rc" -eq 0 ]] && grep -qE "^cf_account_migrate_gate: phase=${MIGRATE_PHASE} verdict=PASS " <<<"$out" || return 1
+  if ! entrypoint_gate; then
+    printf '%s entrypoint-gate verdict=refuse\n' "$P"
+    return 2
+  fi
+  printf '%s entrypoint-gate verdict=PASS\n' "$P"
+  summary "entrypoint-gate verdict=PASS"
 }
 
 run_rehearsal() {
@@ -311,6 +332,7 @@ run_rehearsal() {
   )
   rc=$?
   # The no-write assertions run whatever the rehearsal body did.
+  # (rc 2: the entrypoint gate refused; any other non-zero: the forget or the phase gate.)
   pull_remote "$W/after.tfstate" || refuse state-pull-failed "terraform state pull (after) failed"
   after="$(serial_of "$W/after.tfstate")" || refuse state-pull-failed "post-rehearsal state has no numeric serial"
   rm -f "$W/after.tfstate"
@@ -318,6 +340,7 @@ run_rehearsal() {
   backups_or_refuse after; b_after="$BK"
   [[ "$b_after" == "$b_before" ]] || refuse backup-written "a new object appeared under $BACKUP_PREFIX during a rehearsal"
   printf '%s rehearsal remote_serial=%s serial_unchanged=true backups_unchanged=true\n' "$P" "$before"
+  [[ "$rc" -ne 2 ]] || refuse entrypoint-gate-refused "the whole-list entrypoint gate refused (a live phase entrypoint is populated, or its emptiness could not be proven); see the ::error lines above. Nothing was written."
   [[ "$rc" -eq 0 ]] || refuse rehearsal-refused "the rehearsal did not reach gate verdict=PASS (see above); nothing was written"
   printf '%s phase=%s mode=rehearsal verdict=PASS applied=false\n' "$P" "$MIGRATE_PHASE"
   summary "verdict=PASS applied=false"
@@ -356,7 +379,9 @@ run_apply() {
   if [[ "$MIGRATE_PHASE" == redirects-dns ]]; then
     state_migrate || refuse state-migrate-failed "the state forget did not finish with verdict=ok (see above)"
   fi
-  plan_and_gate || refuse gate-refused "the plan did not reach gate verdict=PASS; nothing was applied"
+  plan_and_gate; rc=$?
+  [[ "$rc" -ne 2 ]] || refuse entrypoint-gate-refused "the whole-list entrypoint gate refused (a live phase entrypoint is populated, or its emptiness could not be proven); adopt it with the printed import block first. Nothing was applied."
+  [[ "$rc" -eq 0 ]] || refuse gate-refused "the plan did not reach gate verdict=PASS; nothing was applied"
   tf_env terraform apply -no-color -input=false -auto-approve "$W/tfplan" 2>&1 | tf_redact_random_ids
   rc=${PIPESTATUS[0]}
   [[ "$rc" -eq 0 ]] || refuse apply-failed "terraform apply of the graded plan failed (exit $rc); fix forward and re-dispatch (every phase is idempotent)"
