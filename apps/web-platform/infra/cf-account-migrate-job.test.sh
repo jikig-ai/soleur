@@ -120,6 +120,11 @@ shift 9
 if [[ -f "$D/doppler.inject" ]]; then while IFS= read -r kv; do export "${kv?}"; done <"$D/doppler.inject"; fi
 export TF_VAR_cf_zone_id="${TF_VAR_cf_zone_id:-$(sed -n 1p "$D/ids")}"
 export TF_VAR_cf_account_id="${TF_VAR_cf_account_id:-$(sed -n 2p "$D/ids")}"
+export TF_VAR_cf_r2_account_id="${TF_VAR_cf_r2_account_id:-$(sed -n 3p "$D/ids")}"
+# Synthesized provider tokens: tok-<variable name>. The curl fake maps a bearer back to its name.
+for t in cf_api_token cf_api_token_rulesets cf_api_token_pages cf_api_token_zone_settings cf_api_token_bot_management; do
+  export "TF_VAR_$t=tok-$t"
+done
 exec "$@"
 STUB
 # gh accepts exactly the modeled argv: `run list --workflow <gated wf> --status <one of the five
@@ -164,14 +169,30 @@ cat >"$SBX/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 set -uo pipefail
 D="${STUB_DIR:?}"
-url=""; ua=""; dump=0; prev=""
+url=""; ua=""; dump=0; prev=""; cfg=0; nullout=0
 for a in "$@"; do
   [[ "$prev" == -A ]] && ua="$a"
   [[ "$prev" == -D ]] && dump=1
+  [[ "$prev" == --config && "$a" == - ]] && cfg=1
+  [[ "$prev" == -o && "$a" == /dev/null ]] && nullout=1
   [[ "$a" == https://* ]] && url="$a"
   prev="$a"
 done
 printf 'curl %s\n' "$url" >>"$D/calls.log"
+printf '%s\n' "$*" >>"$D/curl-argv.log"
+if [[ "$url" == https://api.cloudflare.com/client/v4/* ]]; then
+  # A Cloudflare API call carries its bearer on stdin (--config -), never in argv.
+  [[ "$cfg" -eq 1 ]] || { printf 'curl %s\n' "$*" >>"$D/refused.log"; exit 64; }
+  tok="$(sed -n 's/^header = "Authorization: Bearer \(.*\)"$/\1/p')"
+  name="${tok#tok-}"
+  printf 'cf-api %s token=%s\n' "${url#https://api.cloudflare.com/client/v4/}" "$name" >>"$D/calls.log"
+  if [[ "$nullout" -eq 1 ]]; then
+    # D8 token preflight: -o /dev/null -w '%{http_code}'
+    if [[ -f "$D/cfcode.$name" ]]; then cat "$D/cfcode.$name"; else printf '200'; fi
+    exit 0
+  fi
+  printf 'curl %s\n' "$*" >>"$D/refused.log"; exit 64
+fi
 if [[ -f "$D/mode.verify" ]]; then
   [[ "$dump" -eq 1 ]] && printf 'HTTP/2 200\r\n\r\n' || printf '500 '
   exit 0
@@ -252,7 +273,7 @@ new_case() {
   mkdir -p "$d/root/.terraform" "$d/runner" || return 1
   printf 'terraform {}\n' >"$d/root/main.tf"; : >"$d/root/.terraform/marker"
   : >"$d/calls.log"; : >"$d/backups.keys"
-  printf '%s\n%s\n' "$NZ" "$NA" >"$d/ids"
+  printf '%s\n%s\n%s\n' "$NZ" "$NA" "$OA" >"$d/ids"
   remote_state "$d/remote.tfstate" "$OZ" "$OA"
   build_plan "$2" "$d/plan.json" || return 1
   printf '%s' "$2" >"$d/phase"; printf '%s' "$3" >"$d/rehearsal"; printf 'MIGRATE-CF-%s' "$2" >"$d/confirm"
@@ -337,6 +358,14 @@ chk_reason() { # one sanitized reason line in the step summary, no workflow-comm
   if grep -qF '::' "$1/summary.md"; then WHY="double-colon"; return 1; fi
   if grep -q '^pwned2' "$1/summary.md"; then WHY="newline-injected"; return 1; fi
 }
+chk_preflight_refused() { # <dir> <reason>: refused before init, the state forget, or any plan
+  if ! refused_for "$1" "$2"; then WHY="not-refused:rc=$(rc_of "$1")"; return 1; fi
+  if grep -q '^terraform' "$1/calls.log"; then WHY="terraform-called"; return 1; fi
+}
+chk_token_403() { chk_preflight_refused "$1" token-not-new-zone || return 1
+  grep -qx 'cf-account-migrate preflight=token name=cf_api_token_rulesets http=403' "$1/out.txt" || { WHY="no-code-line"; return 1; }
+}
+chk_r2_old() { chk_preflight_refused "$1" r2-account-not-old; }
 chk_backups_timeout() { chk_refused_late "$1" backups-timeout; }
 chk_ids_timeout() { chk_refused_late "$1" ids-timeout; }
 chk_runs_timeout() { chk_refused_early "$1" runs-timeout; }
@@ -386,6 +415,8 @@ setup_refuse_apply() {
     "$LAST_D/plan.json" >"$LAST_D/p" && mv "$LAST_D/p" "$LAST_D/plan.json"
 }
 setup_zone_rest_apply() { new_case "zrest-$1" zone-rest false; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; }
+setup_token_403() { new_case "tok403-$1" redirects-dns false; printf '403' >"$LAST_D/cfcode.cf_api_token_rulesets"; }
+setup_r2_new() { new_case "r2new-$1" redirects-dns false; printf '%s\n%s\n%s\n' "$NZ" "$NA" "$NA" >"$LAST_D/ids"; }
 setup_r2_evil() { new_case "r2evil-$1" redirects-dns true; printf 'R2_ENDPOINT=https://r2.example.invalid\n' >"$LAST_D/env.extra"; }
 setup_budget() { new_case "budget-$1" redirects-dns false; printf 'CFAM_VERIFY_TRIES=P[$(touch %s/pwned)]\n' "$LAST_D" >"$LAST_D/env.extra"; }
 setup_imports_seam() { new_case "impseam-$1" redirects-dns true; printf 'CFAM_IMPORTS_FILE=%s/no-such-imports.tf\n' "$LAST_D" >"$LAST_D/env.extra"; }
@@ -457,6 +488,30 @@ verdict "$r" "old account id in Doppler -> reason=account-id-not-new before any 
 r=1; ! grep -q "$OA" "$LAST_D/out.txt" "$LAST_D/err.txt" && r=0
 verdict "$r" "the id preflight does not print the resolved ids"
 
+# --- Token / R2 preflight (CTO D8) ------------------------------------------------------
+printf '\n[preflight] R2 stays legacy; every phase token reads the NEW zone/account\n'
+setup_token_403 x; run_job "$LAST_D" "$PRISTINE"; WHY=""
+chk_token_403 "$LAST_D"; verdict "$?" "rulesets token 403 on the new zone -> reason=token-not-new-zone, only the code printed, no terraform call ($WHY)"
+setup_r2_new x; run_job "$LAST_D" "$PRISTINE"; WHY=""
+chk_r2_old "$LAST_D"; verdict "$?" "cf_r2_account_id = the NEW account -> reason=r2-account-not-old, no terraform call ($WHY)"
+new_case tok-paths redirects-dns true; run_job "$LAST_D" "$PRISTINE"
+r=1
+diff <(sed -n 's/^cf-api \(.*\)$/\1/p' "$LAST_D/calls.log" | sort) <(printf '%s\n' \
+  "zones/$NZ/dns_records?per_page=1 token=cf_api_token" "zones/$NZ/rulesets token=cf_api_token_rulesets" \
+  "accounts/$NA/pages/projects token=cf_api_token_pages" | sort) >/dev/null && r=0
+verdict "$r" "redirects-dns probes exactly its three tokens, each on the new zone/account"
+r=1; [[ "$(cat "$LAST_D/rc")" == 0 ]] && ! grep -q 'tok-' "$LAST_D/curl-argv.log" && r=0
+verdict "$r" "no token value reaches curl's argv (stdin config only)"
+new_case tok-zrest zone-rest true; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; run_job "$LAST_D" "$PRISTINE"
+r=1
+diff <(sed -n 's/^cf-api \(.*\)$/\1/p' "$LAST_D/calls.log" | sort) <(printf '%s\n' \
+  "zones/$NZ/settings token=cf_api_token_zone_settings" "zones/$NZ/bot_management token=cf_api_token_bot_management" | sort) >/dev/null && r=0
+verdict "$r" "zone-rest probes exactly its two tokens (zone_settings, bot_management)"
+r=1; [[ "$(cf_account_migrate_phase_tokens redirects-dns | tr '\n' ' ')" == "cf_api_token cf_api_token_rulesets cf_api_token_pages " \
+  && "$(cf_account_migrate_phase_tokens zone-rest | tr '\n' ' ')" == "cf_api_token_zone_settings cf_api_token_bot_management " ]] \
+  && ! cf_account_migrate_phase_tokens tunnel >/dev/null 2>&1 && r=0
+verdict "$r" "cf_account_migrate_phase_tokens: the ruled token lists per phase, unknown phase fails"
+
 # --- Rehearsal --------------------------------------------------------------------
 printf '\n[rehearsal] local-backend scratch copy, nothing written\n'
 setup_rehearsal x; run_job "$LAST_D" "$PRISTINE"; D_REH="$LAST_D"; WHY=""
@@ -506,13 +561,13 @@ new_case planfail redirects-dns false; printf '1' >"$LAST_D/mode.plan"; run_job 
 r=1; refused_for "$LAST_D" gate-refused && grep -q 'Guard 4' "$LAST_D/out.txt" && ! grep -q '\] apply' "$LAST_D/calls.log" && r=0
 verdict "$r" "plan failure (e.g. Guard 4 validation) surfaces an ::error:: naming Guard 4, no apply"
 setup_zone_rest_apply x; run_job "$LAST_D" "$PRISTINE"; WHY=""
-r=1; [[ "$(rc_of "$LAST_D")" == 0 ]] && chk_zone_rest_args "$LAST_D" && ! grep -qE 'state rm|^curl' "$LAST_D/calls.log" && r=0
+r=1; [[ "$(rc_of "$LAST_D")" == 0 ]] && chk_zone_rest_args "$LAST_D" && ! grep -qE 'state rm|^curl https://[a-z.]*soleur[.]ai' "$LAST_D/calls.log" && r=0
 verdict "$r" "zone-rest apply: no forget, no probes, -target/-replace argv equals the gate's lists, applied ($WHY)"
 new_case verify-broken redirects-dns false; : >"$LAST_D/mode.verify"; run_job "$LAST_D" "$PRISTINE"
 r=1; refused_for "$LAST_D" verify-failed && grep -q '\] apply' "$LAST_D/calls.log" && r=0
 verdict "$r" "probes failing after apply -> reason=verify-failed (the job goes red)"
 new_case applyfail redirects-dns false; printf '1' >"$LAST_D/mode.apply"; run_job "$LAST_D" "$PRISTINE"
-r=1; refused_for "$LAST_D" apply-failed && ! grep -q '^curl' "$LAST_D/calls.log" && r=0
+r=1; refused_for "$LAST_D" apply-failed && ! grep -q '^curl https://[a-z.]*soleur[.]ai' "$LAST_D/calls.log" && r=0
 verdict "$r" "terraform apply failure -> reason=apply-failed, no probes"
 new_case rerun redirects-dns false; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; run_job "$LAST_D" "$PRISTINE"
 r=1; [[ "$(rc_of "$LAST_D")" == 0 ]] && grep -q 'cf-state-migrate verdict=ok removed=0' "$LAST_D/out.txt" && ! grep -q 'state rm' "$LAST_D/calls.log" && r=0
@@ -583,6 +638,10 @@ H9="$(mk_mutant ids-timeout 's/|| refuse ids-timeout/|| true/')"
 red "H9 a Doppler timeout is not named" "$H9" chk_ids_timeout '^not-refused' setup_ids_timeout
 H10="$(mk_mutant runs-timeout 's/|| refuse runs-timeout/|| true/')"
 red "H10 a gh timeout is not named" "$H10" chk_runs_timeout '^not-refused' setup_runs_timeout
+D8A="$(mk_mutant r2-unchecked 's/|| refuse r2-account-not-old/|| true/')"
+red "D8a R2 account check removed" "$D8A" chk_r2_old '^not-refused' setup_r2_new
+D8B="$(mk_mutant token-unchecked 's/|| refuse token-not-new-zone/|| true/')"
+red "D8b token preflight verdict ignored" "$D8B" chk_token_403 '^not-refused' setup_token_403
 M8="$(mk_mutant always-apply 's/if \[\[ "$REHEARSAL" == true \]\]; then run_rehearsal; else run_apply; fi/run_apply/')"
 red "M8 rehearsal dispatch routed to the apply path" "$M8" chk_rehearsal_clean '^(apply-called|aws-s3-cp|remote-state-rm)$' setup_rehearsal
 
@@ -600,7 +659,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=78
+EXPECTED_CASES=86
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

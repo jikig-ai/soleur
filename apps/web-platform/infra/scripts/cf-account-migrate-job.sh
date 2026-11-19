@@ -169,20 +169,68 @@ refuse_inflight() {
 }
 
 # Guard 4 fails the plan on an old id, but the redirects-dns forget runs BEFORE the plan, so the
-# ids Terraform will see are checked first, exactly as `doppler run` resolves them. Not printed.
+# values Terraform will see are checked first, exactly as `doppler run` resolves them (CTO D8
+# keeps this preflight for the migrate job). Checked: the NEW zone and account ids; R2 stays on
+# the LEGACY account; and every provider token the phase uses (cf_account_migrate_phase_tokens)
+# answers 200 on one GET against the NEW zone or account. No id or token is printed: a token
+# reaches curl on its stdin config channel, and only the HTTP code comes back.
+readonly R2_ACCOUNT_OLD="4d5ba6f096b2686fbdd404167dd4e125"
+readonly CF_API="https://api.cloudflare.com/client/v4"
+# The read probe per token, inside that token's own grant (the read half of what it edits).
+token_probe_path() {
+  case "$1" in
+    cf_api_token) printf 'zones/%s/dns_records?per_page=1' "$CFAM_NEW_ZONE_ID" ;;
+    cf_api_token_rulesets) printf 'zones/%s/rulesets' "$CFAM_NEW_ZONE_ID" ;;
+    cf_api_token_pages) printf 'accounts/%s/pages/projects' "$CFAM_NEW_ACCOUNT_ID" ;;
+    cf_api_token_zone_settings) printf 'zones/%s/settings' "$CFAM_NEW_ZONE_ID" ;;
+    cf_api_token_bot_management) printf 'zones/%s/bot_management' "$CFAM_NEW_ZONE_ID" ;;
+    *) return 1 ;;
+  esac
+}
+# Runs INSIDE doppler run: prints zone, account, r2 account, then "tok <name> <http-code>" per
+# <name> <url> pair. A token of an unusable shape (a quote or newline would inject a curl config
+# directive) is never sent and reads "bad".
+# shellcheck disable=SC2016 # expanded by the inner bash
+readonly PREFLIGHT_SH='
+printf "%s\n%s\n%s\n" "${TF_VAR_cf_zone_id:-}" "${TF_VAR_cf_account_id:-}" "${TF_VAR_cf_r2_account_id:-}"
+while [ "$#" -ge 2 ]; do
+  n="$1"; u="$2"; shift 2
+  v="TF_VAR_$n"; t="${!v:-}"
+  case "$t" in ""|*[!A-Za-z0-9._~+/=-]*) printf "tok %s bad\n" "$n"; continue ;; esac
+  c="$(curl --disable --noproxy "*" -sS -o /dev/null --max-time 10 -w "%{http_code}" --config - "$u" 2>/dev/null \
+       < <(printf "header = \"Authorization: Bearer %s\"\n" "$t"))" || c="000"
+  printf "tok %s %s\n" "$n" "${c:-000}"
+done
+'
 check_ids() {
-  local out zone acct rc=0
-  # shellcheck disable=SC2016 # expanded by the inner bash, inside doppler run
-  out="$(tf_env_bounded 60 bash -c 'printf "%s\n%s\n" "${TF_VAR_cf_zone_id:-}" "${TF_VAR_cf_account_id:-}"' 2>/dev/null)" || rc=$?
-  [[ "$rc" -ne 124 ]] || refuse ids-timeout "doppler run did not resolve the ids within 60 s"
+  local out zone acct r2 rc=0 tokens n path line code bad=0
+  local -a pairs=()
+  tokens="$(cf_account_migrate_phase_tokens "$MIGRATE_PHASE")" || refuse no-tokens "the gate has no token list for $MIGRATE_PHASE"
+  [[ -n "$tokens" ]] || refuse no-tokens "the gate's token list for $MIGRATE_PHASE is empty"
+  while IFS= read -r n; do
+    path="$(token_probe_path "$n")" || refuse no-tokens "no read probe is defined for token $n"
+    pairs+=("$n" "$CF_API/$path")
+  done <<<"$tokens"
+  out="$(tf_env_bounded 60 bash -c "$PREFLIGHT_SH" _ "${pairs[@]}" 2>/dev/null)" || rc=$?
+  [[ "$rc" -ne 124 ]] || refuse ids-timeout "doppler run did not resolve the ids and token probes within 60 s"
   [[ "$rc" -eq 0 ]] || refuse ids-unreadable "doppler run could not resolve cf_zone_id / cf_account_id"
   zone="$(sed -n 1p <<<"$out" | tr 'A-F' 'a-f')"
   acct="$(sed -n 2p <<<"$out" | tr 'A-F' 'a-f')"
+  r2="$(sed -n 3p <<<"$out" | tr 'A-F' 'a-f')"
   [[ "$zone" == "$CFAM_NEW_ZONE_ID" ]] \
     || refuse zone-id-not-new "cf_zone_id does not resolve to the Soleur-account zone (Doppler still holds the OLD id, or none). Do the runbook Phase 2 flip first. Nothing was written."
   [[ "$acct" == "$CFAM_NEW_ACCOUNT_ID" ]] \
     || refuse account-id-not-new "cf_account_id does not resolve to the Soleur account (Doppler still holds the OLD id, or none). Do the runbook Phase 2 flip first. Nothing was written."
-  printf '%s preflight=ids verdict=ok\n' "$P"
+  [[ "$r2" == "$R2_ACCOUNT_OLD" ]] \
+    || refuse r2-account-not-old "cf_r2_account_id does not resolve to the legacy account that holds R2 (ADR-329: R2 never moves). Nothing was written."
+  while IFS= read -r n; do
+    line="$(awk -v n="$n" '$1 == "tok" && $2 == n {print $3; exit}' <<<"$out")"
+    code="${line:-missing}"
+    printf '%s preflight=token name=%s http=%s\n' "$P" "$n" "$code"
+    [[ "$code" == 200 ]] || bad=1
+  done <<<"$tokens"
+  [[ "$bad" -eq 0 ]] || refuse token-not-new-zone "a provider token for $MIGRATE_PHASE did not answer 200 on the NEW zone/account (see the preflight=token lines): swap or re-mint it (runbook Phase 0/2). Nothing was written."
+  printf '%s preflight=ids verdict=ok tokens=%s\n' "$P" "$(grep -c . <<<"$tokens")"
 }
 
 build_args() {

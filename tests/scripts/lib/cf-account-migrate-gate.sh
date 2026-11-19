@@ -259,3 +259,16 @@ cf_account_migrate_gate() {
   echo "cf_account_migrate_gate: phase=${phase} verdict=PASS creates=${creates} imports=${imports} destroys=${destroys}"
   return 0
 }
+
+# cf_account_migrate_phase_tokens <phase> — the provider token variables (Terraform names, no
+# TF_VAR_ prefix) that <phase>'s plan and apply authenticate with, one per line. Next to the phase
+# spec so a phase and its tokens change in one diff. The migrate job's id preflight requires each
+# to answer HTTP 200 on one GET against the NEW zone or account before anything is written
+# (CTO D8). Unknown phase: return 1.
+cf_account_migrate_phase_tokens() {
+  case "${1-}" in
+    redirects-dns) printf '%s\n' cf_api_token cf_api_token_rulesets cf_api_token_pages ;;
+    zone-rest) printf '%s\n' cf_api_token_zone_settings cf_api_token_bot_management ;;
+    *) return 1 ;;
+  esac
+}
