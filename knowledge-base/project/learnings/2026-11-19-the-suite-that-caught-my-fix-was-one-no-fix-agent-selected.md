@@ -32,9 +32,9 @@ names none of them: it reads the workflow by job and step name.
 
 ## Key Insight
 
-When a fix edits a workflow job, select suites by grepping for the **job and step names** and the
-**workflow path** (`git grep -l '<job_id>\|<target-name>' -- '*.test.*' 'tests/scripts/test-*'`),
-not by the lines changed. In this PR that grep returned 15 suites that no brief had listed. A
+When a fix edits a workflow job, select suites by grepping for the **job, target and step names**
+(`git grep -l '<job_id>\|<target-name>\|<step-name>' -- '*.test.*' 'tests/scripts/test-*'`), not by
+the lines changed. Leave the workflow path out: it matched 118 files here. In this PR that grep returned 15 suites that no brief had listed. A
 content-regex guard over a shared file is invoked by everything that file contains, including
 prose.
 
