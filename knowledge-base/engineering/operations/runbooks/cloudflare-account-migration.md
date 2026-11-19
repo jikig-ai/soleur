@@ -76,27 +76,15 @@ gh workflow run cf-account-migrate.yml --ref main -f migrate_phase=<phase> \
   -f confirm=MIGRATE-CF-<phase> -f rehearsal=<true|false> -f reason='#12931 <phase>'
 ```
 
-The workflow is `.github/workflows/cf-account-migrate.yml`, its own file because `apply-web-platform-infra.yml` is at
-its byte cap (CTO L79). It shares the `terraform-apply-web-platform-host` concurrency group. It has two jobs with
-literal bindings (CTO ruling D7): `cf_account_migrate_rehearsal` runs when `rehearsal=true` under environment
-`infra-privileged` (no reviewers) with `REHEARSAL: "true"`, and `cf_account_migrate_apply` runs when
-`rehearsal=false` under the reviewer-gated `web-platform-infra-apply` with `REHEARSAL: "false"`. Both run
-`apps/web-platform/infra/scripts/cf-account-migrate-job.sh`.
+Always rehearse first: `rehearsal=true` needs no reviewer and writes nothing; `rehearsal=false` waits for the
+`web-platform-infra-apply` approval. What the job checks, and in which order, is the header of
+`apps/web-platform/infra/scripts/cf-account-migrate-job.sh`. The refusals that need an operator action before a
+re-dispatch:
 
-Before anything is written the job checks (CTO ruling D8):
-
-- Doppler resolves `cf_zone_id`/`cf_account_id` to the new ids (`reason=zone-id-not-new` / `account-id-not-new`);
-- `cf_r2_account_id` is the legacy account (`reason=r2-account-not-old`);
-- every provider token of the phase gets a `200` from one GET on the new zone or account, printing only the HTTP code.
-
-A rehearsal copies the root to a scratch directory with a `backend "local"` override, runs the real state-forget script
-(`--rehearsal`, backup under `$RUNNER_TEMP/cf-migrate`) and a plan, and never applies. It writes nothing to R2: the job
-asserts the remote state serial is unchanged and that no new object appeared under `web-platform/backups/`.
-
-After the phase gate prints `verdict=PASS` and before any apply, in the rehearsal too, the job runs the ADR-136
-pre-apply entrypoint gate (`tests/scripts/lib/preapply-entrypoint-gate.sh --gate`) on the new zone in its zone-list
-mode (CTO ruling D2): a ruleset create is a whole-list PUT, so an entrypoint that already holds rules refuses with
-`reason=entrypoint-gate-refused` and prints the import block to commit instead. Always rehearse first.
+- `zone-id-not-new` / `account-id-not-new`: Doppler still holds an old id; do the Phase 2 flip first.
+- `token-not-new-zone`: a phase token did not answer `200` on the new zone or account (its `preflight=token` line
+  names it); swap or re-mint it.
+- `entrypoint-gate-refused`: a live phase entrypoint already holds rules; commit the printed import block first.
 
 ## Expected reds (do not "fix" these mid-migration)
 

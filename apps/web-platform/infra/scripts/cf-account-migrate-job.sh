@@ -14,13 +14,14 @@
 # Test seams of the sourced libraries (CFAM_IMPORTS_FILE) are unset before sourcing: the gate
 # compares imports against the COMMITTED file only.
 #
-# Order: inputs -> no run in flight on any gated workflow -> Doppler resolves the NEW ids ->
-# init. Rehearsal: a scratch copy of the root on a local backend runs the real state-forget
-# (--rehearsal) and the plan and both gates, never applies, then asserts the remote state serial
-# and the web-platform/backups/ listing are unchanged. Apply: state-forget (redirects-dns only),
-# plan with the gate's -target/-replace lists, phase gate, then the whole-list entrypoint gate
-# (ADR-136, CTO D2: a ruleset create is a whole-list PUT over the live phase entrypoint), apply
-# the graded tfplan only when both PASS, verify.
+# Order: inputs -> no run in flight on any gated workflow -> the id preflight (CTO D8: Doppler
+# resolves the NEW zone/account ids and the legacy R2 account, and every phase token answers 200
+# on the new zone/account) -> init. Rehearsal: a scratch copy of the root on a local backend runs
+# the real state-forget (--rehearsal) and the plan and both gates, never applies, then asserts the
+# remote state serial and the web-platform/backups/ listing are unchanged. Apply: state-forget
+# (redirects-dns only), plan with the gate's -target/-replace lists, phase gate, then the
+# whole-list entrypoint gate (ADR-136, CTO D2: a ruleset create is a whole-list PUT over the live
+# phase entrypoint), apply the graded tfplan only when both PASS, verify.
 #
 # Prints verdict lines and addresses only; terraform output goes through tf_redact_random_ids.
 # Exit: 0 ok, 1 refused or failed, 2 setup error.
