@@ -114,8 +114,9 @@ cat >"$SBX/bin/aws" <<'STUB'
 set -uo pipefail
 D="${STUB_DIR:?}"
 printf 'aws %s\n' "$*" >>"$D/calls.log"
-printf 'aws-env region=%s req=%s resp=%s\n' "${AWS_DEFAULT_REGION:-unset}" \
-  "${AWS_REQUEST_CHECKSUM_CALCULATION:-unset}" "${AWS_RESPONSE_CHECKSUM_VALIDATION:-unset}" >>"$D/calls.log"
+printf 'aws-env region=%s req=%s resp=%s imds-off=%s\n' "${AWS_DEFAULT_REGION:-unset}" \
+  "${AWS_REQUEST_CHECKSUM_CALCULATION:-unset}" "${AWS_RESPONSE_CHECKSUM_VALIDATION:-unset}" \
+  "${AWS_EC2_METADATA_DISABLED:-unset}" >>"$D/calls.log"
 [[ "${1:-} ${2:-}" == "s3 cp" ]] || exit 64
 [[ -s "${3:-}" ]] && jq -r '.serial' "$3" >"$D/aws_src_serial" 2>/dev/null
 if [[ -f "$D/mode.aws" ]]; then exit "$(cat "$D/mode.aws")"; fi
@@ -404,14 +405,15 @@ chk_backup_first() {
 }
 
 # The upload goes to the PINNED legacy-account endpoint whatever R2_ENDPOINT says (run_sut
-# sets it to https://r2.invalid), under the shared R2 env prefix and a 60 s bound.
+# sets it to https://r2.invalid), under the shared R2 env prefix and a 60 s bound: the gate
+# library's cfam_r2_aws, whose own mutation rows live in tests/scripts/test-cf-account-migrate-gate.sh.
 R2_PIN="https://${OA}.r2.cloudflarestorage.com"
 chk_r2_call_shape() {
   local d="$1"
   grep -qF -- "--endpoint-url $R2_PIN" "$d/calls.log" || { WHY="endpoint-not-pinned"; return 1; }
   if grep -q 'r2\.invalid' "$d/calls.log"; then WHY="env-endpoint-used"; return 1; fi
-  grep -qx 'aws-env region=auto req=when_required resp=when_required' "$d/calls.log" || { WHY="aws-env-prefix"; return 1; }
-  grep -qx 'timeout 60 aws' "$d/calls.log" || { WHY="no-timeout"; return 1; }
+  grep -qx 'aws-env region=auto req=when_required resp=when_required imds-off=true' "$d/calls.log" || { WHY="aws-env-prefix"; return 1; }
+  grep -qx 'timeout 60 env' "$d/calls.log" || { WHY="no-timeout"; return 1; }
 }
 
 # Rehearsal: no aws call at all, backup only under the given dir, mode 600.
@@ -582,14 +584,8 @@ printf '\n[row 5] backup precedes state rm (observed call order)\n'
 M5="$(mk_mutant reorder '/^take_backup$/d' 's/^apply_rm$/apply_rm\ntake_backup/')"
 red "row 5 mutant: state rm moved before the backup" "$M5" chk_backup_first '^rm-before-backup$' setup_mixed
 green "row 5b: the upload uses the pinned endpoint (R2_ENDPOINT ignored), the shared R2 env and a 60 s bound" chk_r2_call_shape setup_mixed
-# shellcheck disable=SC2016 # sed expressions match literal script text
-M5E="$(mk_mutant env-endpoint 's/--endpoint-url "$CFAM_R2_ENDPOINT"/--endpoint-url "${R2_ENDPOINT:-$CFAM_R2_ENDPOINT}"/')"
-red "row 5b mutant: the environment picks the endpoint" "$M5E" chk_r2_call_shape '^endpoint-not-pinned$' setup_mixed
-M5P="$(mk_mutant env-prefix 's/^  env AWS_DEFAULT_REGION=auto AWS_REQUEST_CHECKSUM_CALCULATION=when_required \\$/  env \\/')"
-red "row 5b mutant: the shared R2 env prefix dropped" "$M5P" chk_r2_call_shape '^aws-env-prefix$' setup_mixed
-# shellcheck disable=SC2016 # sed expressions match literal script text
-M5T="$(mk_mutant no-timeout 's/^    timeout "$AWS_TIMEOUT_S" aws "$@"/    aws "$@"/')"
-red "row 5b mutant: the aws call is unbounded" "$M5T" chk_r2_call_shape '^no-timeout$' setup_mixed
+M5B="$(mk_mutant r2-bypass 's/^  cfam_r2_aws s3 cp /  aws s3 cp /')"
+red "row 5b mutant: the upload bypasses the shared R2 call" "$M5B" chk_r2_call_shape '^endpoint-not-pinned$' setup_mixed
 
 # --- Row 6: idempotent re-run. -----------------------------------------------
 printf '\n[row 6] re-run after a complete migration\n'
@@ -671,7 +667,7 @@ verdict "$r" "args: non-rehearsal without R2_ENDPOINT uploads to the pinned endp
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=69
+EXPECTED_CASES=67
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

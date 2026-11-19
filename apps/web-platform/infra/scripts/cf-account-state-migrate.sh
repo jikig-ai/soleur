@@ -35,12 +35,11 @@ set -uo pipefail
 umask 077
 
 # The OLD ids, the state bucket, the backup prefix (the job's rehearsal "no backup appeared"
-# assertion lists it), the pinned R2 endpoint and cfam_serial_of come from the phase-gate library,
-# the one copy the job and the completion predicate also source.
+# assertion lists it), the R2 call (cfam_r2_aws: pinned endpoint, 60 s bound) and cfam_serial_of
+# come from the phase-gate library, the one copy the job and the completion predicate also source.
 # shellcheck source=/dev/null
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../../../tests/scripts/lib/cf-account-migrate-gate.sh" \
   || { printf 'cf-state-migrate verdict=abort reason=gate-library-unusable\n'; exit 1; }
-readonly AWS_TIMEOUT_S=60
 readonly P="cf-state-migrate"
 
 NEW_ZONE_ID=""
@@ -64,15 +63,6 @@ cleanup() {
   if [[ -n "$FALLBACK_DIR" && -d "$FALLBACK_DIR" ]]; then rm -rf "$FALLBACK_DIR"; fi
 }
 trap cleanup EXIT
-
-# r2_aws <aws-args...>: every R2 call shares one environment (region auto, checksums only
-# when required: R2 rejects the CLI's default integrity checksums on some versions, the same
-# prefix as cf-account-migration-complete.sh) and one bounded wall clock.
-r2_aws() {
-  env AWS_DEFAULT_REGION=auto AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
-    AWS_RESPONSE_CHECKSUM_VALIDATION=when_required \
-    timeout "$AWS_TIMEOUT_S" aws "$@" --endpoint-url "$CFAM_R2_ENDPOINT"
-}
 
 # abort <reason-code> <message> [exit-code]
 abort() {
@@ -141,9 +131,9 @@ take_backup() {
     return 0
   fi
   uri="s3://$CFAM_STATE_BUCKET/${CFAM_BACKUP_PREFIX}pre-cf-account-migration-$ts.tfstate"
-  r2_aws s3 cp "$BACKUP_FILE" "$uri" --only-show-errors >/dev/null 2>&1; rc=$?
+  cfam_r2_aws s3 cp "$BACKUP_FILE" "$uri" --only-show-errors >/dev/null 2>&1; rc=$?
   if [[ "$rc" -eq 124 ]]; then
-    abort backup-upload-timeout "backup upload to $uri did not finish within ${AWS_TIMEOUT_S}s; 0 removed"
+    abort backup-upload-timeout "backup upload to $uri did not finish within 60 s; 0 removed"
   elif [[ "$rc" -ne 0 ]]; then
     abort backup-upload-failed "backup upload to $uri failed (exit $rc); 0 removed"
   fi

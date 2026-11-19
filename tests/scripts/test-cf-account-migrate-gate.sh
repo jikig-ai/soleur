@@ -365,20 +365,67 @@ if [[ "$CFAM_OLD_ZONE_ID" == "$OZ" && "$CFAM_OLD_ACCOUNT_ID" == "$OA" && "$CFAM_
   pass "one source: the library holds the OLD ids, bucket, backup prefix, legacy R2 endpoint and a numeric-only serial reader"
 else fail "one source: a shared constant or cfam_serial_of is wrong" 1 ""; fi
 CONSUMER_DIR="$HERE/../../apps/web-platform/infra/scripts"
-# own_copies <file>: code lines (full-line comments dropped) that re-type a shared literal or a serial reader.
-own_copies() { grep -vE '^[[:space:]]*#' "$1" | grep -nE "${OZ}|${OA}|soleur-terraform-state|web-platform/backups/|\.serial \| type"; }
+# own_copies <file>: code lines (full-line comments dropped) that re-type a shared literal or a
+# serial reader, or run `aws s3…` outside cfam_r2_aws; "no-shared-call" when it never uses it.
+own_copies() {
+  local code; code="$(grep -vE '^[[:space:]]*#' "$1")"
+  grep -nE "${OZ}|${OA}|soleur-terraform-state|web-platform/backups/|\.serial \| type|(^|[^_[:alnum:]-])aws s3(api)? " <<<"$code"
+  grep -q 'cfam_r2_aws s3' <<<"$code" || echo "no-shared-call"
+}
 for c in cf-account-migrate-job.sh cf-account-state-migrate.sh cf-account-migration-complete.sh; do
   if grep -vE '^[[:space:]]*#' "$CONSUMER_DIR/$c" | grep -q 'cf-account-migrate-gate\.sh' && [[ -z "$(own_copies "$CONSUMER_DIR/$c")" ]]; then
-    pass "one source: $c sources this library and re-types none of its ids, bucket, prefix, endpoint or serial reader"
+    pass "one source: $c sources this library, re-types none of its ids, bucket, prefix, endpoint or serial reader, and makes every R2 call through cfam_r2_aws"
   else fail "one source: $c keeps its own copy (or does not source the library)" 1 "$(own_copies "$CONSUMER_DIR/$c")"; fi
 done
 sed "s/^set -uo pipefail\$/&\nreadonly OLD_ZONE_ID=\"$OZ\"/" "$CONSUMER_DIR/cf-account-state-migrate.sh" > "$TMP/own-copy.sh"
 if cmp -s "$TMP/own-copy.sh" "$CONSUMER_DIR/cf-account-state-migrate.sh"; then fail "M-own-copy: the mutation did not land" 1 ""
 elif [[ -n "$(own_copies "$TMP/own-copy.sh")" ]]; then pass "M-own-copy: a state forget that re-types the OLD zone id is caught (RED)"
 else fail "M-own-copy: a re-typed OLD zone id was not seen" 1 ""; fi
+sed 's/^    cfam_r2_aws s3 cp /    aws s3 cp /' "$CONSUMER_DIR/cf-account-migration-complete.sh" > "$TMP/bare-aws.sh"
+if cmp -s "$TMP/bare-aws.sh" "$CONSUMER_DIR/cf-account-migration-complete.sh"; then fail "M-bare-aws: the mutation did not land" 1 ""
+elif [[ -n "$(own_copies "$TMP/bare-aws.sh")" ]]; then pass "M-bare-aws: a predicate copy made with a bare aws call is caught (RED)"
+else fail "M-bare-aws: a bare aws call was not seen" 1 ""; fi
+
+# ── cfam_r2_aws: the one R2 call shape, under a hostile R2_ENDPOINT and IMDS setting ─────────
+mkdir -p "$TMP/r2bin"
+cat > "$TMP/r2bin/aws" <<'STUB'
+#!/usr/bin/env bash
+printf 'argv %s\n' "$*" >> "$R2_LOG"
+printf 'env region=%s req=%s resp=%s imds-off=%s\n' "${AWS_DEFAULT_REGION:-unset}" "${AWS_REQUEST_CHECKSUM_CALCULATION:-unset}" \
+  "${AWS_RESPONSE_CHECKSUM_VALIDATION:-unset}" "${AWS_EC2_METADATA_DISABLED:-unset}" >> "$R2_LOG"
+STUB
+cat > "$TMP/r2bin/timeout" <<'STUB'
+#!/usr/bin/env bash
+printf 'timeout %s\n' "$1" >> "$R2_LOG"; shift; exec "$@"
+STUB
+chmod +x "$TMP/r2bin/aws" "$TMP/r2bin/timeout"
+# r2_shape <lib>: empty when the lib's cfam_r2_aws makes the pinned call; else the first broken property.
+r2_shape() {
+  : > "$TMP/r2.log"
+  R2_LOG="$TMP/r2.log" PATH="$TMP/r2bin:$PATH" R2_ENDPOINT=https://r2.invalid AWS_EC2_METADATA_DISABLED=false \
+    bash -c 'source "$1"; source "$2"; cfam_r2_aws s3 cp a b --only-show-errors' _ "$PREAMBLE" "$1" >/dev/null 2>&1
+  grep -qxF "argv s3 cp a b --only-show-errors --endpoint-url https://$OA.r2.cloudflarestorage.com" "$TMP/r2.log" || { echo endpoint; return; }
+  grep -qx 'env region=auto req=when_required resp=when_required imds-off=true' "$TMP/r2.log" || { echo env-prefix; return; }
+  grep -qx 'timeout 60' "$TMP/r2.log" || echo unbounded
+}
+r2_got="$(r2_shape "$GATE")"
+if [[ -z "$r2_got" ]]; then pass "cfam_r2_aws: the pinned endpoint (R2_ENDPOINT ignored), the R2 env prefix with IMDS off, a 60 s bound"
+else fail "cfam_r2_aws call shape broken ($r2_got)" 1 "$(cat "$TMP/r2.log")"; fi
+r2_mut() { # <label> <sed-expr> <want>: the mutated library must break exactly <want>
+  local got
+  sed "$2" "$GATE" > "$TMP/r2-mut.sh"
+  if cmp -s "$TMP/r2-mut.sh" "$GATE"; then fail "$1: the mutation did not land" 1 ""; return; fi
+  got="$(r2_shape "$TMP/r2-mut.sh")"
+  if [[ "$got" == "$3" ]]; then pass "$1: RED ($got)"; else fail "$1: wanted RED for $3" 1 "got '$got'"; fi
+}
+# shellcheck disable=SC2016 # sed expressions match literal library text
+r2_mut "M-r2-endpoint: the endpoint taken from R2_ENDPOINT" 's|--endpoint-url "\$CFAM_R2_ENDPOINT"|--endpoint-url "${R2_ENDPOINT:-$CFAM_R2_ENDPOINT}"|' endpoint
+r2_mut "M-r2-imds: AWS_EC2_METADATA_DISABLED dropped" 's| AWS_EC2_METADATA_DISABLED=true||' env-prefix
+r2_mut "M-r2-region: AWS_DEFAULT_REGION dropped" 's|^  timeout 60 env AWS_DEFAULT_REGION=auto |  timeout 60 env |' env-prefix
+r2_mut "M-r2-bound: the 60 s bound dropped" 's|^  timeout 60 env |  env |' unbounded
 
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 75 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 75)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 81 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 81)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

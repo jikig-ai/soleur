@@ -42,8 +42,8 @@ CFAM_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly CFAM_GATE_LIB="${CFAM_SELF_DIR}/../../../../tests/scripts/lib/cf-account-migrate-gate.sh"
 readonly CFAM_RUNBOOK="knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md"
 readonly CFAM_TUNNEL_ADDR="cloudflare_zero_trust_tunnel_cloudflared.web"
-# The state object, in the gate library's bucket (CFAM_OLD_*, CFAM_STATE_BUCKET and CFAM_R2_ENDPOINT
-# are the library's: one copy, shared with the migrate job and the state forget).
+# The state object, in the gate library's bucket (CFAM_OLD_*, CFAM_STATE_BUCKET and the R2 call
+# cfam_r2_aws are the library's: one copy, shared with the migrate job and the state forget).
 readonly CFAM_STATE_KEY="web-platform/terraform.tfstate"
 readonly P="cf-account-migration-complete"
 
@@ -257,12 +257,11 @@ cfam_from_r2() {
   # shellcheck disable=SC2064 # expand $work now: the trap must remove THIS dir
   trap "rm -rf '$work'" EXIT
   rc=0
-  # Credentials via the command's environment only, never argv; aws stderr is dropped because
-  # it is never needed for the verdict and must not become a place a key fragment can surface.
-  AWS_ACCESS_KEY_ID="$CFAM_KEY_ID" AWS_SECRET_ACCESS_KEY="$CFAM_KEY_SECRET" \
-    AWS_DEFAULT_REGION=auto AWS_EC2_METADATA_DISABLED=true AWS_SESSION_TOKEN="" \
-    AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required \
-    timeout 60 aws s3 cp "$uri" "$work/state.json" --endpoint-url "$CFAM_R2_ENDPOINT" --only-show-errors \
+  # The gate library's R2 call (env prefix, 60 s bound, pinned endpoint). Credentials via the
+  # command's environment only, never argv; aws stderr is dropped because it is never needed for
+  # the verdict and must not become a place a key fragment can surface.
+  AWS_ACCESS_KEY_ID="$CFAM_KEY_ID" AWS_SECRET_ACCESS_KEY="$CFAM_KEY_SECRET" AWS_SESSION_TOKEN="" \
+    cfam_r2_aws s3 cp "$uri" "$work/state.json" --only-show-errors \
     >/dev/null 2>&1 || rc=$?
   CFAM_KEY_ID="" CFAM_KEY_SECRET=""
   if (( rc == 124 )); then

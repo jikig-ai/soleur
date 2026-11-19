@@ -334,11 +334,11 @@ if [[ "${AWS_ACCESS_KEY_ID:-}" != "${STUB_EXPECT_KEY_ID:-}" || "${AWS_SECRET_ACC
   echo "MISS: aws auth" >> "$STUB_CALLS"; exit 254
 fi
 if [[ "${AWS_DEFAULT_REGION:-}" != auto || "${AWS_REQUEST_CHECKSUM_CALCULATION:-}" != when_required \
-      || "${AWS_RESPONSE_CHECKSUM_VALIDATION:-}" != when_required ]]; then
+      || "${AWS_RESPONSE_CHECKSUM_VALIDATION:-}" != when_required || "${AWS_EC2_METADATA_DISABLED:-}" != true ]]; then
   echo "MISS: aws R2 env prefix" >> "$STUB_CALLS"; exit 64
 fi
 if [[ $# -ne 7 || "$1 $2 $3" != "s3 cp s3://soleur-terraform-state/web-platform/terraform.tfstate" \
-      || "$5 $6" != "--endpoint-url https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com" || "$7" != "--only-show-errors" ]]; then
+      || "$5" != "--only-show-errors" || "$6 $7" != "--endpoint-url https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com" ]]; then
   echo "MISS: aws $*" >> "$STUB_CALLS"; exit 64
 fi
 case "${STUB_AWS_MODE:-copy}" in
@@ -482,7 +482,7 @@ mut_row "allowlist reverted to an old-id denylist" row_third_zone_refused      '
 mut_row "empty string read as a bound id"         row_unbound_ids_pass         's/if \$v == "" then null else \$v end/$v/'
 mut_row "copy timeout not named"                  row_wrap_copy_timeout        's/if \(\( rc == 124 \)\); then/if false; then/'
 mut_row "doppler timeout not named"               row_wrap_doppler_timeout     's/if \(\( rc_id == 124 \|\| rc_sec == 124 \)\); then/if false; then/'
-mut_row "R2 env prefix dropped"                   row_wrap_tierb_complete      's/AWS_DEFAULT_REGION=auto //'
+mut_row "copy bypasses the shared R2 call"        row_wrap_tierb_complete      's/^    cfam_r2_aws s3 cp /    aws s3 cp /'
 mut_row "tunnel reasons dropped from full mode"   row_tunnel_absent_refused    's/^( *)\+ \$tun_reasons$/\1+ []/'
 mut_row "tunnel account check dropped"            row_tunnel_old_refused       's/ or \.attributes\.account_id != \$na//'
 mut_row "required-address check disarmed"         row_missing_refused          's/"missing " \+ \./empty/'

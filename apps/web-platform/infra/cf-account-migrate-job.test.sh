@@ -154,17 +154,17 @@ no() { printf 'aws %s\n' "$*" >>"$D/refused.log"; exit 64; }
 printf 'aws %s %s\n' "${1:-}" "${2:-}" >>"$D/calls.log"
 case "${1:-} ${2:-}" in
   "s3api list-objects-v2")
-    [[ $# -eq 10 && "$3 $4 $5 $6 $7 $8 $9 ${10}" == "--bucket soleur-terraform-state --prefix web-platform/backups/ --endpoint-url $EP --output json" ]] || no "$@"
+    [[ $# -eq 10 && "$3 $4 $5 $6 $7 $8 $9 ${10}" == "--bucket soleur-terraform-state --prefix web-platform/backups/ --output json --endpoint-url $EP" ]] || no "$@"
     [[ "${AWS_DEFAULT_REGION:-}" == auto && "${AWS_REQUEST_CHECKSUM_CALCULATION:-}" == when_required \
-      && "${AWS_RESPONSE_CHECKSUM_VALIDATION:-}" == when_required ]] || no "(R2 env prefix missing)" "$@"
+      && "${AWS_RESPONSE_CHECKSUM_VALIDATION:-}" == when_required && "${AWS_EC2_METADATA_DISABLED:-}" == true ]] || no "(R2 env prefix missing)" "$@"
     if [[ -f "$D/mode.aws" ]]; then exit "$(cat "$D/mode.aws")"; fi
     if [[ -s "$D/backups.keys" ]]; then jq -Rn '{Contents: [inputs | {Key: .}]}' <"$D/backups.keys"; fi ;;
   "s3 cp")
     [[ $# -eq 7 && "$4" == s3://soleur-terraform-state/web-platform/backups/pre-cf-account-migration-*.tfstate \
       && "$5 $6 $7" == "--only-show-errors --endpoint-url $EP" ]] || no "$@"
-    # The upload is state-migrate's r2_aws: same R2 env prefix as the listing (#12931 review).
+    # The upload and the listing both go through the gate library's cfam_r2_aws: one R2 env prefix.
     [[ "${AWS_DEFAULT_REGION:-}" == auto && "${AWS_REQUEST_CHECKSUM_CALCULATION:-}" == when_required \
-      && "${AWS_RESPONSE_CHECKSUM_VALIDATION:-}" == when_required ]] || no "(R2 env prefix missing)" "$@"
+      && "${AWS_RESPONSE_CHECKSUM_VALIDATION:-}" == when_required && "${AWS_EC2_METADATA_DISABLED:-}" == true ]] || no "(R2 env prefix missing)" "$@"
     k="${4#s3://}"; printf '%s\n' "${k#*/}" >>"$D/backups.keys" ;;
   *) no "$@" ;;
 esac
@@ -737,8 +737,8 @@ red "J2 doppler run reads -c prd instead of prd_terraform" "$J2" chk_rehearsal_c
 J4="$(mk_mutant live-statuses 's/pending requested)$/completed success)/')"
 red "J4 the live-status list loses pending/requested" "$J4" chk_rehearsal_clean '^stub-refused$' setup_rehearsal
 # shellcheck disable=SC2016 # sed expression matches literal script text
-H1="$(mk_mutant r2-unpinned 's/--endpoint-url "$CFAM_R2_ENDPOINT"/--endpoint-url "${R2_ENDPOINT:-$CFAM_R2_ENDPOINT}"/')"
-red "H1 the backup listing takes its endpoint from R2_ENDPOINT" "$H1" chk_r2_ignored '^stub-refused$' setup_r2_evil
+H1="$(mk_mutant r2-unpinned 's/^  cfam_r2_aws s3api list-objects-v2 /  aws --endpoint-url "$R2_ENDPOINT" s3api list-objects-v2 /')"
+red "H1 the backup listing bypasses the shared R2 call and takes R2_ENDPOINT" "$H1" chk_r2_ignored '^stub-refused$' setup_r2_evil
 H2="$(mk_mutant budget-unchecked 's/|| refuse bad-verify-budget/|| true/')"
 red "H2 verify budget not validated (arithmetic injection runs)" "$H2" chk_budget '^(injected|not-refused)' setup_budget
 H3="$(mk_mutant imports-seam 's/^  unset CFAM_IMPORTS_FILE$/  :/')"

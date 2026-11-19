@@ -58,6 +58,15 @@ CFAM_OLD_ACCOUNT_ID="4d5ba6f096b2686fbdd404167dd4e125"
   CFAM_BACKUP_PREFIX="web-platform/backups/"
   CFAM_R2_ENDPOINT="https://${CFAM_OLD_ACCOUNT_ID}.r2.cloudflarestorage.com"
 }
+# cfam_r2_aws <aws args...>: the ONE R2 call shape, for every aws call of the three scripts: region
+# auto, checksums only when required (R2 rejects the CLI's default integrity checksums on some
+# versions), no instance-metadata lookup, a 60 s bound (rc 124 on a stall), and the pinned
+# endpoint. Credentials come from the caller's environment, never argv.
+cfam_r2_aws() {
+  timeout 60 env AWS_DEFAULT_REGION=auto AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
+    AWS_RESPONSE_CHECKSUM_VALIDATION=when_required AWS_EC2_METADATA_DISABLED=true \
+    aws "$@" --endpoint-url "$CFAM_R2_ENDPOINT"
+}
 # cfam_serial_of <state-file>: the numeric serial of a raw tfstate; rc != 0 when it has none.
 cfam_serial_of() { jq -er 'if (.serial | type) == "number" then .serial else error("no serial") end' "$1" 2>/dev/null; }
 # The committed imports file is what Guard 1 compares import ids against. CFAM_IMPORTS_FILE is a

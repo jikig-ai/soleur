@@ -31,7 +31,7 @@ esac
 umask 077
 
 readonly P="cf-account-migrate"
-# The OLD ids, the state bucket, the backup prefix and the pinned R2 endpoint (CFAM_*) and
+# The OLD ids, the state bucket and the backup prefix (CFAM_*), the R2 call (cfam_r2_aws) and
 # cfam_serial_of come from the phase-gate library (load_libs), shared with the state forget.
 readonly PREDICATE_REL="apps/web-platform/infra/scripts/cf-account-migration-complete.sh"
 readonly LIVE_STATUSES=(queued in_progress waiting pending requested)
@@ -81,12 +81,6 @@ tf_env_bounded() {
   local t="$1"; shift
   timeout "$t" doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
     env -u TF_LOG -u TF_LOG_PATH -u TF_LOG_CORE -u TF_LOG_PROVIDER "$@"
-}
-
-# r2_aws <aws args...>: the ONE R2 aws prefix (region, checksum mode, no IMDS) and a 60 s bound.
-r2_aws() {
-  timeout 60 env AWS_DEFAULT_REGION=auto AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
-    AWS_RESPONSE_CHECKSUM_VALIDATION=when_required AWS_EC2_METADATA_DISABLED=true aws "$@"
 }
 
 load_libs() {
@@ -254,8 +248,8 @@ pull_remote() { (cd "$ROOT" && terraform state pull) >"$1" 2>/dev/null && [[ -s 
 # list_backups: the sorted key list under the backup prefix. rc 124 = the listing timed out.
 list_backups() {
   local rc=0
-  r2_aws s3api list-objects-v2 --bucket "$CFAM_STATE_BUCKET" --prefix "$CFAM_BACKUP_PREFIX" \
-    --endpoint-url "$CFAM_R2_ENDPOINT" --output json >"$W/backups.json" 2>/dev/null || rc=$?
+  cfam_r2_aws s3api list-objects-v2 --bucket "$CFAM_STATE_BUCKET" --prefix "$CFAM_BACKUP_PREFIX" \
+    --output json >"$W/backups.json" 2>/dev/null || rc=$?
   [[ "$rc" -eq 0 ]] || return "$rc"
   jq -sc '[.[0].Contents[]?.Key] | sort' "$W/backups.json" 2>/dev/null
 }
