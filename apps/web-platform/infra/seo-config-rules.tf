@@ -118,7 +118,7 @@
 # account-level rulesets endpoint must all return non-403. See ADR-130 for the
 # probe set and issue #6755 for the recorded results.
 #
-# ── PREREQUISITE 2: entrypoint adoption — SATISFIED ON APPLY (import block) ──
+# ── PREREQUISITE 2: entrypoint adoption — HISTORY (old zone); NOW A GUARDED CREATE ──
 #
 # A `kind = "zone"` ruleset OWNS its phase's entrypoint, which is a whole-list
 # replacement. `plan` reports "1 to add" because the resource is absent from
@@ -137,34 +137,29 @@
 # zone-level SSL mode. Outage-class, and completely invisible to `plan`, which
 # reported a clean "1 to add, 0 to change, 0 to destroy" throughout.
 #
-# Both halves of the fix are now in this file:
-#   1. the rule is represented as the FIRST rules block below (reproduced
-#      verbatim at adoption; made `strict` on app.soleur.ai only by the
-#      2026-11-13 origin-TLS cleanup, ADR-321 item 13, #10479), and
-#   2. the `import` block adopts the existing ruleset into state, so Terraform
-#      UPDATES the entrypoint rather than creating it.
-# Neither half is sufficient alone: (1) without (2) still creates and clobbers;
-# (2) without (1) still deletes the rule on the next plan.
+# In the OLD zone (until #12931) the fix had two halves: the rule was represented
+# as the FIRST rules block below (reproduced verbatim at adoption; made `strict` on
+# app.soleur.ai only by the 2026-11-13 origin-TLS cleanup, ADR-321 item 13, #10479),
+# and an `import` block adopted the existing entrypoint so Terraform UPDATED it
+# rather than creating it. The 2026-07-20 plan against live state read
+# "1 to import, 0 to add, 1 to change, 0 to destroy", the adopted rule unmarked.
 #
-# Verified plan against live state. Re-run 2026-07-20 against the SHIPPED config
-# — with the `for_each` gate and the `ref` pin both present. An earlier capture
-# predated the gate and was therefore evidence about a config that no longer
-# existed; re-running was cheaper than reasoning about whether it still applied.
-#
-#   Plan: 1 to import, 0 to add, 1 to change, 0 to destroy.
-#
-# — NOT the "1 to add" that task 3.1 originally recorded. The single change is
-# `+1 rule`. With `ref` pinned, the adopted rule now carries NO `~` markers at
-# all in the diff (its `id` and `ref` both stay
-# `dcb85b75bc3c4f4aa2a8c13a080bf854` instead of going `(known after apply)`), so
-# the plan proves the apply does not touch it. Only the new rule gets a fresh ID.
-#
-# **A plan that says "1 to add" means the import block was dropped.**
+# NO IMPORT BLOCK SINCE #12931 (ADR-329). That entrypoint lives in the old zone,
+# which moved to the Soleur account on 2026-11-18. In the new zone this resource is a
+# CREATE in the cf-account-migrate `redirects-dns` phase, and a create of a
+# `kind = "zone"` ruleset is a WHOLE-LIST PUT of the phase entrypoint: it replaces
+# whatever rules already live there, and `plan` cannot see them. The hazard above
+# therefore still applies, so the create is guarded rather than adopted: the
+# migrate job runs tests/scripts/lib/preapply-entrypoint-gate.sh --gate on the phase
+# plan before any apply (CTO ruling D2, ADR-136), bound to the new zone. A live
+# http_config_settings entrypoint that already carries rules refuses the apply and
+# prints the import block to add in a reviewed PR; an absent or empty one lets the
+# create proceed. "1 to add" for this address is now the EXPECTED plan.
 #
 # ── ROLL FORWARD, NEVER REVERT ───────────────────────────────────────────────
 #
 # Once applied, this resource is in state, so `git revert` of the PR removes the
-# resource AND the import block and Terraform plans a DESTROY of the entrypoint
+# resource and Terraform plans a DESTROY of the entrypoint
 # — deleting ALL rules (the apex `full` rule included -> the apex falls to the
 # zone default `strict`: HTTP 526 while the Pages origin cert is still invalid)
 # and dropping app.soleur.ai to the zone SSL mode (live zone setting is
@@ -199,8 +194,9 @@
 
 # NO IMPORT BLOCK SINCE #12931. The entrypoint this resource adopted (a21ac79d…) lives in
 # the OLD zone, which moved to the Soleur account on 2026-11-18. In the new zone Terraform
-# creates the entrypoint (cf-account-migrate phase redirects-dns); if a hand-made one is
-# found there first, it is imported by its NEW id in cf-account-migration-imports.tf.
+# creates the entrypoint (cf-account-migrate phase redirects-dns); if a hand-made one with
+# rules is found there first, the job's entrypoint gate refuses and prints the import block
+# to add (by its NEW id) in a reviewed PR.
 # The `zone/<zone_id>/<ruleset_id>` import id (SINGULAR `zone`) still applies on 4.52.7:
 # `zones/...` silently falls through to the account path and fails as an auth error.
 
