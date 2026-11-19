@@ -196,7 +196,7 @@ vi.mock("@/server/workspace-repo-mirror", () => ({
 // (live default-branch HEAD pull) + writes a reconcile_backfill audit row.
 type SyncResult =
   | { ok: true; recovered?: boolean }
-  | { ok: false; error: unknown; errorClass: string };
+  | { ok: false; error: unknown; errorClass: string; held?: string };
 const syncWorkspaceSpy = vi.fn(async (): Promise<SyncResult> => ({ ok: true }));
 vi.mock("@/server/workspace-sync", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/workspace-sync")>();
@@ -1051,8 +1051,12 @@ describe("cron-workspace-sync-health — arm-1 immediate re-sync after backfill 
       501,
       "/workspaces/solo-1",
       expect.anything(),
-      { userId: "solo-1", op: "manual" },
+      // #12718 D27 + review D43: a system job, so the self-heal merge reads the repo by workspace id through the service
+      // client (no tenant mint for a non-user), and no userId is passed at all
+      { system: true, op: "manual", workspaceId: "solo-1" },
     );
+    expect(syncWorkspaceSpy.mock.calls[0]).toHaveLength(4);
+    expect((syncWorkspaceSpy.mock.calls[0] as unknown[])[3]).not.toHaveProperty("userId");
     // truthful, workspace-keyed audit row (solo: workspaceId === users.id, ADR-038 N2).
     expect(appendKbSyncRowForWorkspaceSpy).toHaveBeenCalledWith(
       expect.anything(),
@@ -1143,6 +1147,35 @@ describe("cron-workspace-sync-health — arm-1 immediate re-sync after backfill 
       expect.anything(),
       "solo-2",
       expect.objectContaining({ trigger: "reconcile_backfill", ok: true }),
+    );
+  });
+
+  it("D23: a designed hold (`held` set) keeps the ok:false audit row but skips the op:reconcile-backfill-sync capture", async () => {
+    WORKSPACE_ROWS = [{ id: "solo-1", repo_url: "https://github.com/alice/repo" }];
+    USERS_ROWS = [{ id: "solo-1", github_username: "alice" }];
+    resolveReachableSpy.mockResolvedValue([501]);
+    resolveOwningDetailedSpy.mockResolvedValue({ installId: 501, allDegraded: false });
+    syncWorkspaceSpy.mockResolvedValueOnce({
+      ok: false,
+      error: new Error("non-fast-forward with tracked changes in the working tree"),
+      errorClass: "non_fast_forward",
+      held: "dirty_tracked",
+    });
+    const handler = await importHandler();
+    await handler({ step: makeStep(), logger });
+
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ op: "reconcile-backfill-sync" }),
+    );
+    expect(appendKbSyncRowForWorkspaceSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      "solo-1",
+      expect.objectContaining({
+        trigger: "reconcile_backfill",
+        ok: false,
+        error_class: "non_fast_forward",
+      }),
     );
   });
 });

@@ -26,7 +26,7 @@ You verify that every new surface is debuggable from a keyboard without SSH or `
 
 ### Step 1: Diff inventory
 
-Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD` and partition its list into (exit 2/127 = inventory unknown: treat every category below as in scope, never as an empty diff):
+Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD` and partition its list into (non-zero exit = inventory unknown: treat every category below as in scope, never as an empty diff):
 
 - **Inngest functions**: any file under `apps/web-platform/server/inngest/functions/cron-*.ts` or `*-on-*.ts`
 - **Server routes / handlers**: `app/api/**/route.ts`, `server/**/*.ts`

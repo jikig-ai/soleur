@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, it, expect } from "vitest";
+import { callSites } from "./approval/source-scan";
 
 // Cross-artifact contract test (#5426).
 //
@@ -13,9 +14,9 @@ import { describe, it, expect } from "vitest";
 // re-darking the undelivered-KB-writes incident class the rule exists to catch.
 // This test pins both filter dimensions against that drift.
 //
-// Substring match only (mirrors sentry-kb-sync-silent-failure-alert-op-contract):
-// each slug is an inline string literal at its emit site; a whole-file match
-// finds it.
+// The emit side is anchored on CALL SITES (#12600, CTO ruling D21; cq-assert-anchor-not-bare-token): an emit helper call
+// whose options object carries `feature: "session-sync"` and the op slug, so a slug surviving only in a comment or a
+// message string is red.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tf = readFileSync(join(here, "../infra/sentry/issue-alerts.tf"), "utf8");
@@ -38,6 +39,12 @@ const sessionSync = readFileSync(
 );
 
 const FEATURE_TAG = "session-sync";
+/** The (helper, op) pairs of every emit call in session-sync.ts whose options carry the feature tag. */
+const EMITS = ["reportSilentFallback", "warnSilentFallback", "mirrorWithDebounce", "mirrorWarnWithDebounce"].flatMap((helper) =>
+  callSites(sessionSync, "server/session-sync.ts", helper).flatMap((c) =>
+    c.args.filter((a) => a.props.feature === `"${FEATURE_TAG}"` && a.props.op !== undefined).map((a) => `${helper} ${a.props.op}`),
+  ),
+);
 const OP_SLUG = "kb-sync.protected-fallback-failed";
 // The warn-level success entry op must NOT be in the paging filter.
 const SUCCESS_OP_SLUG = "kb-sync.push-protected-fallback";
@@ -54,18 +61,23 @@ describe("kb-sync-protected-fallback alert op/feature contract", () => {
   });
 
   it("the feature tag appears in the emit site and the alert filter", () => {
-    expect(sessionSync).toContain(FEATURE_TAG);
+    expect(EMITS.length).toBeGreaterThan(0);
     expect(tfBlock).toContain(FEATURE_TAG);
   });
 
-  it("the failure op slug appears in both session-sync.ts and the alert's filter block", () => {
-    expect(sessionSync).toContain(OP_SLUG);
+  it("the failure op slug is emitted by a call site in session-sync.ts (both branches, debounced) and sits in the alert's filter block", () => {
+    expect(EMITS.filter((e) => e === `mirrorWithDebounce "${OP_SLUG}"`)).toHaveLength(2); // fallback_failed and persistent_other
     expect(tfBlock).toContain(OP_SLUG);
   });
 
-  it("the warn-level success op is emitted but NOT in the paging filter (would over-page)", () => {
-    expect(sessionSync).toContain(SUCCESS_OP_SLUG);
+  it("the warn-level success op is emitted by a call site but NOT in the paging filter (would over-page)", () => {
+    expect(EMITS).toContain(`warnSilentFallback "${SUCCESS_OP_SLUG}"`);
     expect(tfBlock).not.toContain(SUCCESS_OP_SLUG);
+  });
+
+  it("the transient side push warns on its own op, which is NOT in the paging filter (D21)", () => {
+    expect(EMITS).toContain('mirrorWarnWithDebounce "kb-sync.side-push-transient"');
+    expect(tfBlock).not.toContain("kb-sync.side-push-transient");
   });
 
   it("the rule's frequency is unique across all issue alerts in the file", () => {

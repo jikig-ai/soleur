@@ -2518,8 +2518,11 @@ through.
 
 web-2 is cattle — replacement legitimately changes its host key, and unlike web-1 there is no
 replace gate to wait for. Its pin is `apps/web-platform/infra/web-2-ssh-host-key.pub`, same shape
-as web-1's (header lines + exactly one `ecdsa-sha2-nistp256` line), consumed ONLY by
-`terraform_data.deploy_pipeline_fix_web2` and `local.web_2_ssh_host_key`.
+as web-1's (header lines + exactly one `ecdsa-sha2-nistp256` line). Terraform reads it through
+`local.web_2_ssh_host_key`, which every `terraform_data.*_web2` provisioner that dials web-2 uses
+as its `host_key` (`git grep -n 'host_key *= *local.web_2_ssh_host_key' apps/web-platform/infra/`);
+only `deploy_pipeline_fix_web2` also hashes the file into `triggers_replace`. CI's bastion
+forward reads it through `.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh`.
 
 1. From a machine whose egress IP is in `ADMIN_IPS`, run
    `scripts/capture-web-2-host-key.sh <web-2 public IPv4>` (web-2's public :22 — never through
@@ -2527,9 +2530,10 @@ as web-1's (header lines + exactly one `ecdsa-sha2-nistp256` line), consumed ONL
    rewrites the pin file atomically.
 2. Open a PR with the new file; the body names the capture vantage, UTC date, and fingerprint.
 3. After merge, the `web-2-ssh-host-key.pub` path entry in `apply-deploy-pipeline-fix.yml`
-   auto-fires the apply: the bastion forward + `deploy_pipeline_fix_web2` re-dial web-2 against
-   the new pin. A green run is the second observation; a host-key failure is a re-capture PR or
-   breach triage, never a loosened check (ADR-237).
+   auto-fires the apply (the `apps/web-platform/infra/**` glob also fires
+   `apply-web-platform-infra.yml`): the bastion forward + `deploy_pipeline_fix_web2` re-dial
+   web-2 against the new pin. A green run is the second observation; a host-key failure is a
+   re-capture PR or breach triage, never a loosened check (ADR-237).
 
 ## What users see
 

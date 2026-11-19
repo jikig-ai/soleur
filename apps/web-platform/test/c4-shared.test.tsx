@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, renderHook, screen, fireEvent, waitFor } from "@testing-library/react";
+import { kbWorkspaceSyncPendingNotice, kbWorkspaceSyncResyncPendingNotice } from "@/lib/kb-workspace-sync-notice";
 
 // c4-shared.tsx imports browser-only deps at module top (@likec4/diagram,
 // @likec4/core/model, CodeMirror). Stub them so the REAL C4Diagnostics /
@@ -228,6 +229,86 @@ describe("C4CodePanel — honest save copy (Layer 1)", () => {
     expect(screen.getByText(/diagram updated/i)).toBeTruthy();
     // No "re-rendering…" present-progressive lie.
     expect(screen.queryByText(/re-rendering/i)).toBeNull();
+  });
+
+  it("#12600 D16: a held workspace shows the shared pending notice, not the supersede line", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ commitSha: "x", rerendered: false, workspace_sync: "pending" }),
+      }) as unknown as typeof fetch;
+    const onSaved = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <C4CodePanel data={data} dirPath="knowledge-base/diagrams" onSaved={onSaved} />,
+    );
+    fireEvent.change(screen.getByTestId("cm"), {
+      target: { value: "model { edited }" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(false));
+    expect(screen.getByText(kbWorkspaceSyncPendingNotice("save"))).toBeTruthy();
+    expect(screen.queryByText(/a newer change was saved/i)).toBeNull();
+
+    // #12714 D31(2): the message is a full-width status row directly under the one-line header, not an inline span
+    // inside it (the header holds the file picker, the font stepper and Save).
+    const msg = screen.getByText(kbWorkspaceSyncPendingNotice("save"));
+    const header = screen.getByRole("button", { name: /^save$/i }).closest("div.border-b") as HTMLElement;
+    expect(header).toBeTruthy();
+    expect(header.contains(msg)).toBe(false);
+    expect(header.nextElementSibling).toBe(msg);
+  });
+
+  it("#12600 D22(c): a hold on only the post-render resync says the workspace may not show the save yet", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ commitSha: "x", rerendered: false, workspace_sync: "pending", workspace_sync_held: "rerender" }),
+      }) as unknown as typeof fetch;
+    const onSaved = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <C4CodePanel data={data} dirPath="knowledge-base/diagrams" onSaved={onSaved} />,
+    );
+    fireEvent.change(screen.getByTestId("cm"), {
+      target: { value: "model { edited }" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(screen.getByText(kbWorkspaceSyncResyncPendingNotice())).toBeTruthy());
+    expect(screen.queryByText(kbWorkspaceSyncPendingNotice("save"))).toBeNull();
+    expect(screen.queryByText(/a newer change was saved/i)).toBeNull();
+  });
+
+  it("#12600 D22(c): a held workspace with a render diagnostic shows the pending notice WITH the diagnostic appended", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          commitSha: "x",
+          rerendered: false,
+          rerenderDiagnostic: "unresolved reference `spec.c4`",
+          workspace_sync: "pending",
+        }),
+      }) as unknown as typeof fetch;
+    const onSaved = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <C4CodePanel data={data} dirPath="knowledge-base/diagrams" onSaved={onSaved} />,
+    );
+    fireEvent.change(screen.getByTestId("cm"), {
+      target: { value: "model { edited }" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(false, "unresolved reference `spec.c4`"));
+    expect(
+      screen.getByText(`${kbWorkspaceSyncPendingNotice("save")} — unresolved reference \`spec.c4\``),
+    ).toBeTruthy();
   });
 
   it("on a failed re-render: copy defers, onSaved(false) (Layer 2)", async () => {

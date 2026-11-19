@@ -1215,6 +1215,14 @@ Appended; no status or earlier entry is edited. D2 stays `proposed`: residual R1
 - Plan: `knowledge-base/project/plans/2026-11-04-chore-ci-infra-hygiene-batch-plan.md`.
   Ref #8780, epic #10390.
 
+### 2026-11-13 (#12158, #9927 step D2-2): the inngest write path moves to an `inngest-cutover` environment secret
+
+No status change (D1 `adopting`, D2 `proposed`). Per CTO rulings D1/D1b/D1c of 2026-11-06 (arm-token-replacement-design-12158).
+
+- **A second read/write credential arrives in conforming form.** `doppler_service_token.inngest_cutover_write` (read/write on the isolated `soleur-inngest/prd`) is delivered to `cutover-inngest.yml`'s rollback and resume ops as the `inngest-cutover` **environment secret** `DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE` — the D2 boundary (main-only deployment policy plus required-reviewer gate), not a repo secret. This removes the advisory-deviation class the repo-scoped arm secret carries for the write path; the arm secret itself stays until the step-4 revoke change. `inngest-cutover` is one of the four D2 environments, and the census gains an environment-scoped-name clause (G1k): the name may appear only in that workflow, only on rollback/resume-gated steps, and never in the shared Tier-B loader. D3 is not engaged (same reasoning as the ADR-282 addendum of 2026-11-05: the token is not a member of the privileged project).
+- **Carrier.** The Terraform GitHub App cannot write environment secrets (the 403 recorded in `inngest-arm-write-token.tf`), so a staged `soleur:operator-bootstrap` script relays the sensitive Terraform output over stdin to `gh secret set --env`; the workflow's first credential step refuses `write_token_stale` when the secret is unset or stale — a `-replace` mints a new key and strands it, so the runbook order is replace, then re-run the relay.
+- **Revisit.** The new token is a standing read/write credential on `soleur-inngest/prd` with the same per-config blast radius as the arm token (the gain is delivery, not scope); tracker #12738 and `scripts/followthroughs/inngest-write-token-revisit-12738.sh` carry its revisit coverage from 2027-01-08.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/archive/20261013-051752-2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`

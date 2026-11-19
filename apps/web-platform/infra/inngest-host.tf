@@ -59,9 +59,9 @@ locals {
   # for the nft `ip saddr { ... }` set rendered into inngest-nftables.sh.
   #
   # TWO-HOST (#6608/#6459): web-2 (10.0.1.11) RE-ADDED 2026-07-24 as a fresh cattle out-of-band
-  # standby (ADR-143) — a different host from the retired fsn1 .11 (#6538). This literal is
-  # DRIFT-GUARDED against var.web_hosts by inngest-host.test.sh §6b (the allowlist IP set must
-  # byte-equal the var.web_hosts private_ip set), so a roster change red-lines CI until this follows.
+  # standby (ADR-143) — a different host from the retired fsn1 .11 (#6538). DERIVED from var.web_hosts
+  # (#9421 Part 2a), map-key order, so it renders the same string as the literal it replaced and a roster
+  # change follows automatically; web-hosts-generic.test.sh pins every workflow copy to it.
   #
   # AC6 / SEQUENCING (ADR-143 3.3 / #6608): this config change is SAFE on the merge-apply — the
   # default push apply of apply-web-platform-infra.yml is an explicit `-target=` allow-list that does
@@ -69,7 +69,7 @@ locals {
   # ForceNew) does NOT replace the prod Inngest host at merge. The nftables allowlist reaches the
   # RUNNING inngest host only via the separate `inngest-host-replace` dispatch (#6608 maintenance
   # window), which must land BEFORE the Phase-4 web-2 soak so the soak validates a fully-integrated host.
-  web_host_private_ips = "10.0.1.10,10.0.1.11"
+  web_host_private_ips = join(",", [for k in sort(keys(var.web_hosts)) : var.web_hosts[k].private_ip])
 
   # Arch DERIVED from var.inngest_server_type (mirrors zot-registry.tf local.registry_arch):
   # `cax*` (Ampere) → arm64, anything else (`cpx*`/`cx*`) → amd64. Lets the dedicated Inngest
@@ -389,10 +389,11 @@ locals {
     # inngest-provision-rehearsal root passes its scratch `rehearsal_<runid>` config so a
     # throwaway host never resolves the real prd. Mirroring git-data's doppler_config_name.
     inngest_doppler_config = "prd"
-    # Single stable --sdk-url to the ACTIVE web backend's private interface (10.0.1.10).
-    # The degenerate no-flap case of the route-once mechanism (ADR-100 Decision 1); migrate
-    # to a private VIP when active-active-N web lands (#6459; web-2 retired #6538). Consumed by inngest-bootstrap.sh.
-    sdk_url = "http://10.0.1.10:3000/api/inngest"
+    # Single stable --sdk-url = the PUBLIC serve URL (= the route's serveOrigin + servePath), polled
+    # every 60 s through the Cloudflare edge to whichever web host the LB steers it to (ADR-100
+    # Decision 1 as amended 2026-11-13, #10538). Live only at the owner's gated inngest-host-replace
+    # (not a push-apply target). Pinned by Guard 4 of exec-placement-forward.test.ts.
+    sdk_url = "https://app.soleur.ai/api/inngest"
     # Arch DERIVED from the server type (local.inngest_arch): cax* → arm64, else amd64. The
     # bootstrap consumes INNGEST_CLI_ARCH (inngest-bootstrap.sh:37/54) and verifies the download
     # against the matching checksum — the wrong-arch SHA fails verify. The cloud-init passes this

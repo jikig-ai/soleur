@@ -332,7 +332,7 @@ queue_read_settled() {
 }
 
 # queue_wait_eval — THE ONE copy of the armed-BEHIND predicate (2026-10-09, PR 9839; shared with --step and --queue-wait,
-# #9869). Between `gh pr merge --auto` and the enqueue a PR is OPEN, BEHIND, armed and NOT in the queue, so queue_gate (which
+# #9869). Between the auto-merge arm and the enqueue a PR is OPEN, BEHIND, armed and NOT in the queue, so queue_gate (which
 # only sees an entry) lets it through, and a sync there pushes a commit that restarts every required check for nothing: on a
 # merge-queue repo the queue makes the PR current itself. Fires when the PR is OPEN, GitHub says BEHIND or UNKNOWN (UNKNOWN is
 # recompute lag; DIRTY never: a conflicting or kb-index-class PR still resolves) AND auto-merge is armed AND the PR's own base
@@ -388,13 +388,13 @@ queue_wait_eval() {  # <state_line: "<STATE> <MERGESTATE>"> <armed|disarmed|-> <
 # The refusal text shared by every caller that refuses (the standalone loop, a flagless --step): what to do instead of a resync. The
 # advice differs by the validated base (QW_BASE, always set when a `wait` verdict exists): for `main` the Phase 7 poll's expiry fallback
 # is the sanctioned sync and a disarm / hand-sync / re-arm is safe; for any other base that sync merges origin/main, which is wrong for
-# the PR, so the text says to sync by hand against that base and never to disarm and re-arm. The `main` text is byte-identical to the
-# pre-#10832 text (pinned by a golden row in the suite). The echoed base is cut to 60 characters (it is validated, but may be 255 long).
+# the PR, so the text says to sync by hand against that base and never to disarm and re-arm. The `main` text is the pre-#10832 text with the
+# re-arm clause pointed at the arm check (#12656), pinned by a golden row in the suite. The echoed base is cut to 60 characters (it is validated, but may be 255 long).
 qw_refusal() {
   local b="${QW_BASE:0:60}" poll hand
   if [[ "$QW_BASE" == main ]]; then
     poll="; with no poll running, re-arm the Phase 7 poll with CLAUDE_PLUGIN_ROOT exported — its expiry fallback after 6 idle ticks is the sanctioned sync"
-    hand="Truly need a hand sync? Disarm first (gh pr merge $PR --disable-auto), sync, then re-arm."
+    hand="Truly need a hand sync? Disarm first (gh pr merge $PR --disable-auto), sync, then re-arm through plugins/soleur/skills/review/references/review-evidence-comment.md#arm-check."
   else
     poll=""
     hand="Truly need a hand sync? This script and the Phase 7 poll's expiry fallback only merge origin/main, which is wrong for a PR based on '$b': sync by hand against that base (fetch origin <base>, merge origin/<base>, push) and do not disarm and re-arm."
@@ -567,7 +567,7 @@ queue_gate() {
         [[ -z "$marker" ]] || rm -f "$marker"
         reason="removal reason: ${rm#removal=}"
         [[ "$rm" != removal=none && "$rm" != removal=- ]] || reason="seen in the queue earlier, no removal event read"
-        tag dequeued 13 "PR #$PR was in the merge queue and is no longer (OPEN, $am, $reason): a failed merge_group run or a removal — NOT syncing. Recover (ONE re-enqueue, procedure: plugins/soleur/skills/ship/references/merge-queue-dequeue.md): (1) read why: gh run list --event merge_group --limit 100 --json databaseId,headBranch,headSha,conclusion,url --jq '.[] | select(.headBranch | startswith(\"gh-readonly-queue/main/pr-$PR-\"))' then gh run view <databaseId> --log-failed — under grouped merging (max_entries_to_merge=3) a member PR's group ref names the DEEPEST member, so if no run matches pr-$PR- list recent merge_group runs and correlate by headSha/createdAt; (2) fix on the branch, git merge origin/main, push; (3) re-arm once: gh pr merge $PR --squash --auto. A second dequeue: stop and report it."
+        tag dequeued 13 "PR #$PR was in the merge queue and is no longer (OPEN, $am, $reason): a failed merge_group run or a removal — NOT syncing. Recover (ONE re-enqueue, procedure: plugins/soleur/skills/ship/references/merge-queue-dequeue.md): (1) read why: gh run list --event merge_group --limit 100 --json databaseId,headBranch,headSha,conclusion,url --jq '.[] | select(.headBranch | startswith(\"gh-readonly-queue/main/pr-$PR-\"))' then gh run view <databaseId> --log-failed — under grouped merging (max_entries_to_merge=3) a member PR's group ref names the DEEPEST member, so if no run matches pr-$PR- list recent merge_group runs and correlate by headSha/createdAt; (2) fix on the branch, git merge origin/main, push (read --queue-state first, procedure step 2); (3) re-arm once, only when autoMergeRequest is null, through the arm check (plugins/soleur/skills/review/references/review-evidence-comment.md#arm-check; procedure step 3); a pushed fix needs soleur:review first, and a refusal is reported, never armed around. A second dequeue: stop and report it."
         exit 13
       fi
       return 0 ;;

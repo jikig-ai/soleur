@@ -33,10 +33,10 @@
 //
 // PLUGIN-LOADING — Verbatim ephemeral-workspace pattern:
 //   - repo/                          (in-handler `git clone --depth=1`)
-//   - repo/plugins/soleur            (the clone's own tracked tree — #5091)
+//   - repo/plugins/soleur            (the clone's tracked tree; never loaded — #12824)
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
 // Plugin resolution under headless `--print` requires the explicit
-// `--plugin-dir plugins/soleur` flag in CLAUDE_CODE_FLAGS below — the
+// `--plugin-dir` flag, which the substrate sets to the read-only deployed root (`loadPlugin: true`, #12824) — the
 // plugins/soleur dir is NOT auto-discovered from spawn cwd in headless mode (the
 // interactive marketplace/enabledPlugins trust flow does not run under --print).
 // See #4993 / #4987.
@@ -85,6 +85,7 @@ import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
+import { CRON_GIT_CONFIG_PIN } from "@/server/host-git";
 
 // =============================================================================
 // Constants
@@ -118,8 +119,6 @@ const CLAUDE_CODE_FLAGS = [
   "40",
   "--allowedTools",
   "Bash,Read,Write,Edit,Glob,Grep,Skill,Task",
-  "--plugin-dir",
-  "plugins/soleur",
   "--",
 ];
 
@@ -177,6 +176,7 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GH_TOKEN: installationToken,
+    ...CRON_GIT_CONFIG_PIN,
   };
 }
 
@@ -371,6 +371,7 @@ export async function cronSeoAeoAuditHandler({
         "claude-eval",
         async (): Promise<SpawnResult> => {
           return spawnClaudeEval({
+            loadPlugin: true, // #12824 — the substrate owns --plugin-dir (read-only root)
             spawnCwd: spawnCwd,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
@@ -413,6 +414,7 @@ export async function cronSeoAeoAuditHandler({
       heartbeatOk = await step.run("verify-output", async () =>
         resolveOutputAwareOk({
           spawnOk: spawnResult!.ok,
+          pluginReseeded: spawnResult!.pluginReseeded,
           label: SENTRY_MONITOR_SLUG,
           runStartedAt,
           cronName: "cron-seo-aeo-audit",

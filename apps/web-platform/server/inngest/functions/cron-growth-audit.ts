@@ -51,6 +51,7 @@ import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import { AUDIT_CLI_ARGS } from "@/server/inngest/model-tiers";
 import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
+import { CRON_GIT_CONFIG_PIN } from "@/server/host-git";
 
 // =============================================================================
 // Constants
@@ -74,7 +75,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // NOTE: claude-opus-5-5 model for deep multi-step growth audit.
 //
 // #4993 — headless /soleur:* skill resolution (fleet fix mirroring #4987 /
-// PR #4989): `--plugin-dir plugins/soleur` registers the plugin (clone's tracked tree — #5091) under
+// PR #4989): the substrate's `--plugin-dir <read-only root>` (`loadPlugin: true`, #12824) registers the plugin under
 // `--print` (a bare plugins/ dir is NOT auto-discovered in headless mode), and
 // `Skill` (+`Task` for subagent fan-out) in --allowedTools gates skill invocation.
 const CLAUDE_CODE_FLAGS = [
@@ -84,8 +85,6 @@ const CLAUDE_CODE_FLAGS = [
   "70",
   "--allowedTools",
   "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Skill,Task",
-  "--plugin-dir",
-  "plugins/soleur",
   "--",
 ];
 
@@ -162,6 +161,7 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GH_TOKEN: installationToken,
+    ...CRON_GIT_CONFIG_PIN,
   };
 }
 
@@ -335,6 +335,7 @@ export async function cronGrowthAuditHandler({
         "claude-eval",
         async (): Promise<SpawnResult> => {
           return spawnClaudeEval({
+            loadPlugin: true, // #12824 — the substrate owns --plugin-dir (read-only root)
             spawnCwd: spawnCwd,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
@@ -377,6 +378,7 @@ export async function cronGrowthAuditHandler({
       heartbeatOk = await step.run("verify-output", async () =>
         resolveOutputAwareOk({
           spawnOk: spawnResult!.ok,
+          pluginReseeded: spawnResult!.pluginReseeded,
           label: SENTRY_MONITOR_SLUG,
           runStartedAt,
           cronName: "cron-growth-audit",

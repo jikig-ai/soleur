@@ -159,7 +159,7 @@ old = '_diff_touches() {'
 assert s.count(old) == 1, f"expected exactly one '{old}', found {s.count(old)}"
 s = s.replace(old, (
     '[[ -n "${SANDBOX_DIFF_NAMES+x}" ]] && _diff_names="$SANDBOX_DIFF_NAMES"\n'
-    '[[ -n "${SANDBOX_LIVE_UNTRACKED:-}" && "${_AFF_SCOPE:-branch}" != "staged" ]] && _diff_names="${_diff_names}\n$(git ls-files --others --exclude-standard 2>/dev/null)"\n'
+    '[[ -n "${SANDBOX_LIVE_UNTRACKED:-}" && "${_AFF_SCOPE:-branch}" != "staged" ]] && _diff_names="${_diff_names}\n$(git -c core.quotePath=false ls-files --others --exclude-standard 2>/dev/null)"\n'
     '[[ -n "${SANDBOX_DETECT_OK:-}" ]] && _diff_detect_ok="$SANDBOX_DETECT_OK"\n'
     '[[ -n "${SANDBOX_HEAD_OK:-}" ]] && _diff_head_ok="$SANDBOX_HEAD_OK"\n'
     '[[ -n "${SANDBOX_PREFIXES+x}" ]] && TEST_RELEVANCE_PREFIXES=($SANDBOX_PREFIXES)\n'
@@ -1690,7 +1690,7 @@ if in_range; then
 # a new file under a declared prefix are otherwise invisible to the diff blob.
 cases=$((cases + 1))
 _untr_block="$(awk '/^if \(\( _AFFECTED == 1 \)\); then/{f=1} f&&/^fi$/{exit} f' "$RUNNER")"
-if grep -qF 'git ls-files --others --exclude-standard 2>/dev/null' <<<"$_untr_block" \
+if grep -qF 'git -c core.quotePath=false ls-files --others --exclude-standard 2>/dev/null' <<<"$_untr_block" \
   && ! grep -qE 'ls-files --others --exclude-standard --' <<<"$_untr_block"; then
   pass "w1: affected mode appends the UNSCOPED untracked list to _diff_names"
 else
@@ -2921,10 +2921,10 @@ cases=$((cases + 1))
 _f1_floor=$(sed -n 's/^_MIN_ALWAYS_ON_DECLARED=\([0-9][0-9]*\)$/\1/p' "$RUNNER")
 # shellcheck source=/dev/null
 _f1_count=$( ( source "$AFF_LIB" >/dev/null 2>&1; echo "${#ALWAYS_ON_SUITES[@]}" ) )
-if [[ "$_f1_floor" == "115" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
-  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 115 (#10664 + #9763 + #9947 + #9814 + #8875 + #10331 + #7893 + #10399 feature-map pair registrations + #10861 grep-q-pipe-guard + #11662 anti-regrow pair - #11648 eight >10s drifted labels withdrawn to edge-selection + #9826 image-cve claim-guard and verdict-consumers pair + #10448 boundary-prefix wholesale dir-glob sweep + #9659 lint-gh-dedupe-shape + #12348 advisory-id/safe-status live scan (its unit suite is edge-selected, CTO ruling E5) + #12494 allowlist-diff: 120-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
+if [[ "$_f1_floor" == "114" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
+  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 114 (#10664 + #9763 + #9947 + #9814 + #8875 + #10331 + #7893 + #10399 feature-map pair registrations + #10861 grep-q-pipe-guard + #11662 anti-regrow pair - #11648 eight >10s drifted labels withdrawn to edge-selection + #9826 image-cve claim-guard and verdict-consumers pair + #10448 boundary-prefix wholesale dir-glob sweep + #9659 lint-gh-dedupe-shape + #12348 advisory-id/safe-status live scan (its unit suite is edge-selected, CTO ruling E5) + #12494 allowlist-diff - #11556 image-cve-public-claim-guard re-priced over the 10s cap: 119-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
 else
-  fail "f1: floor='${_f1_floor}' (want 115) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
+  fail "f1: floor='${_f1_floor}' (want 114) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
 fi
 
 fi

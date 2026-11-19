@@ -177,21 +177,26 @@ export const CREDENTIALS_PROMPT_DIRECTIVE =
 // Item 2 (plan §Phase 2): the Concierge runs `gh` with a GitHub App
 // INSTALLATION token. Such tokens cannot call `GET /user`, so `gh auth status`
 // (which probes that endpoint) ALWAYS reports the token invalid — even though
-// the SAME token authenticates `gh issue view`, `gh pr create`, and
-// git-over-HTTPS. The agent was trusting that false negative and refusing to
-// proceed. This baseline directive tells it not to self-block and to scope
-// repo `gh` calls with `-R owner/repo`. Phrasing keeps the two grep anchors
-// ("gh auth status", "-R owner/repo") clear of any punctuation boundary.
+// the SAME token authenticates `gh issue view` and git fetch/pull over HTTPS.
+// The agent was trusting that false negative and refusing to proceed. This
+// baseline directive tells it not to self-block and to scope repo `gh` calls
+// with `-R owner/repo`. Phrasing keeps the two grep anchors ("gh auth status",
+// "-R owner/repo") clear of any punctuation boundary. #12704 D41(b): "push" is
+// gone from the credentialed list and the `gh pr create` example is gone (a
+// branch is published only through the Owner-approved `github_push_branch`);
+// fetch and pull stay, because the merge-blocked lines tell the agent to run
+// `git fetch origin`.
 export const GH_AUTH_STATUS_GUIDANCE_DIRECTIVE =
   "Your `gh` CLI is authenticated with a GitHub App installation token. " +
   "Installation tokens cannot call GET /user, so the gh auth status command " +
   "always reports the token invalid even though it works for real repo " +
   "operations. Do NOT self-block on a failing gh auth status — it is a " +
-  "false negative for installation tokens. Raw git push, fetch, and pull " +
-  "against your connected repo are credentialed automatically in your " +
-  "workspace — you do not need gh for them. For any repo operation, pass " +
-  "-R owner/repo explicitly (for example: gh issue view 123 -R owner/repo, " +
-  "gh pr create -R owner/repo); use the connected repository named in your " +
+  "false negative for installation tokens. Raw git fetch and pull against " +
+  "your connected repo are credentialed automatically in your workspace — " +
+  "you do not need gh for them. To push a branch, use `github_push_branch` " +
+  "when it is listed; never run `git push`. For any repo operation, pass " +
+  "-R owner/repo explicitly (for example: gh issue view 123 -R owner/repo); " +
+  "use the connected repository named in your " +
   "context for that owner/repo value (do not try to infer it from a git " +
   "remote or a .git directory — your workspace may not contain one). The " +
   "installation token resolves the repo server-side and gh cannot infer it " +

@@ -15,11 +15,19 @@ import { isTeamWorkspaceInviteEnabled, type Identity } from "@/lib/feature-flags
 // resolveCurrentWorkspaceId (claim → solo fallback), NOT a self-healing variant,
 // so the General page reads exactly the row the POST persists to.
 
+export type WorkspaceOwnerCheck = "owner" | "member" | "unknown";
+
 export interface WorkspaceIdentity {
   workspaceId: string;
   organizationId: string | null;
   organizationName: string | null;
   isOwner: boolean;
+  /**
+   * #12704 V10: the owner check as three states. `isOwner` stays the boolean the controls read (a failed check is false,
+   * fail closed); `ownerCheck` tells "not the owner" (`member`) apart from "the check failed or timed out" (`unknown`), so
+   * the held notice shows the role-unknown copy instead of the member steps to a real Owner.
+   */
+  ownerCheck: WorkspaceOwnerCheck;
   hasLogo: boolean;
   /**
    * Whether the rename control should render. The rename ROUTE
@@ -134,7 +142,9 @@ export async function resolveWorkspaceIdentityForSettings(
       p_user_id: user.id,
     }),
   );
-  const isOwner = ownerRes.data === true;
+  const ownerCheck: WorkspaceOwnerCheck =
+    ownerRes.error || typeof ownerRes.data !== "boolean" ? "unknown" : ownerRes.data ? "owner" : "member";
+  const isOwner = ownerCheck === "owner";
 
-  return { workspaceId, organizationId, organizationName, isOwner, hasLogo, canRename };
+  return { workspaceId, organizationId, organizationName, isOwner, ownerCheck, hasLogo, canRename };
 }

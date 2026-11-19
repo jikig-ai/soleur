@@ -470,7 +470,7 @@ it. The battery you start on the final tree is the only local run there will be.
 
 - **The merge gate is CI, not this run.** The required `test` context (ruleset 14145388) aggregates the same three `test-all.sh` shards on the PR head and blocks merge — CI still runs the FULL battery (bar the five ADR-262 `--pr-gated` mutation batteries, which `pull_request` declines when the diff misses their subject paths and `push` runs in full). Do not describe this local run as the merge gate — that over-claim licenses a future PR to shard it.
 - **This is the LAST LOCAL fail-fast checkpoint** — Phase 5.5 still runs code-mutating gates after it.
-- **It is the sole BLOCKING gate for `apps/web-platform/infra/`** — `no required status check runs that shard`, so nothing here stops `gh pr merge --auto`. Under `--affected` the infra runner is selected by its declared consumed edge whenever the diff touches `apps/web-platform/infra/`, so this claim survives the mode change. It is NOT the only place those suites run: `infra-validation.yml`'s `deploy-script-tests` job executes the same registered set on every PR touching `apps/*/infra/**` (it carries no `needs:`/`if:`), and `main-health-monitor` re-runs `TEST_GROUP=infra` on `main` every six hours. Both are visible, neither blocks — an infra regression can reach `main` past a red-but-non-required check, never unobserved. The real fix is promoting `infra-validate-required` into the required set (#6480).
+- **It is the sole BLOCKING gate for `apps/web-platform/infra/`** — `no required status check runs that shard`, so nothing here stops the auto-merge arm. Under `--affected` the infra runner is selected by its declared consumed edge whenever the diff touches `apps/web-platform/infra/`, so this claim survives the mode change. It is NOT the only place those suites run: `infra-validation.yml`'s `deploy-script-tests` job executes the same registered set on every PR touching `apps/*/infra/**` (it carries no `needs:`/`if:`), and `main-health-monitor` re-runs `TEST_GROUP=infra` on `main` every six hours. Both are visible, neither blocks — an infra regression can reach `main` past a red-but-non-required check, never unobserved. The real fix is promoting `infra-validate-required` into the required set (#6480).
 - **A local `--affected` run is not, and is not meant to be, the full battery.** Suites the diff does not reach decline as counted `not-affected` skips — a healthy affected run reads `N-k/N` with a `not-affected` breakdown field, not `N/N`. Affected+ratchets does not exercise suite×suite interaction; the backstop for that class is CI's sharded full battery on the PR head, so a green affected run is not a full-coverage claim. Selection fails toward coverage: an undecidable diff, a missing declarations index, or a diff touching the runner or index itself degrades the run to the full battery and prints `AFFECTED_FALLBACK reason=…`. If the declined suites must execute, that is `--full` (or legacy `SOLEUR_TEST_FORCE_ALL=1`); `SOLEUR_INCIDENT_SKIP=1` drops the infra set while leaving this pin satisfied.
 - **Push time runs a ratchet lane (#9400):** [scripts/pre-push-ratchet-lane.sh](../../../../scripts/pre-push-ratchet-lane.sh) — the diff-reachable ratchets on a scratch `origin/main` merge; supplemental only.
 
@@ -893,8 +893,8 @@ echo 'SOLEUR_RULE_APPLIED rule=wg-record-recurring-vendor-expense-before-ready n
 **Detection.** A recurring-vendor-cost signal fires when the change introduces any of: a new dependency in a `package.json` that the agent judges to be a *paid* vendor (`git diff origin/main...HEAD -- '*package.json' | grep -E '^\+'`), a new vendor credential env var (added `*_API_KEY`/`*_TOKEN`/`*_SECRET` lines in `.env.example` or Doppler-write steps), or a plan-tier string in the PR body. Capture the PR body and **strip fenced code blocks** before grepping — this gate body and the AGENTS rule quote `Pro`/`subscription`/`upgrade`, which inside ``` fences MUST NOT count. The block below is **self-contained**: it captures + strips the body itself rather than depending on the Undeferred Operator-Step Gate's `$PR_BODY_FILE` (defined later in this file — running these blocks in document order would otherwise leave it unset and the grep would silently no-op). Bash ERE has no `(?i)` — use `grep -iE`.
 
 ```bash
-# (a) Ledger edited in this change? Exact path only; `unknown` (exit 2/127) is NOT an edit.
-ledger_touched=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^knowledge-base/operations/expenses\.md$' --diff-filter=AMT origin/main...HEAD) || { [ $? -eq 1 ] || ledger_touched=unknown; }
+# (a) Ledger edited in this change? Exact path only; `unknown` is NOT an edit.
+ledger_touched=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^knowledge-base/operations/expenses\.md$' --diff-filter=AMT origin/main...HEAD) || { [ $? -eq 42 ] || ledger_touched=unknown; }
 
 # (b) Capture + fence-strip the PR body (self-contained; fail CLOSED on an
 # unbalanced ``` so an unclosed fence cannot silently drop the rest of the body).
@@ -936,7 +936,7 @@ SIGNAL=$(grep -niE "$SIGNAL_RE" "$PR_BODY_FILE" || true)
 **Detection:**
 
 ```bash
-gdpr_gate_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^plugins/soleur/skills/gdpr-gate/' origin/main...HEAD) || { [ $? -eq 1 ] || gdpr_gate_touch=unknown; }
+gdpr_gate_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^plugins/soleur/skills/gdpr-gate/' origin/main...HEAD) || { [ $? -eq 42 ] || gdpr_gate_touch=unknown; }
 sui_plan=$(gh pr view --json body --jq .body \
   | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])]+' | head -n 1 || true)
 sui_threshold=""
@@ -960,7 +960,7 @@ fi
 
 ```bash
 CANONICAL_REGEX='^(apps/web-platform/supabase/migrations/|apps/web-platform/lib/auth/|apps/web-platform/server/.*auth.*\.(ts|tsx|js)|apps/web-platform/app/api/.*\.(ts|tsx)$|.*\.sql$)'
-diff_match=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match "$CANONICAL_REGEX" origin/main...HEAD) || { [ $? -eq 1 ] || diff_match=unknown; }
+diff_match=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match "$CANONICAL_REGEX" origin/main...HEAD) || { [ $? -eq 42 ] || diff_match=unknown; }
 crit_refs=$(gh pr view --json body --jq .body | grep -oE '(Closes|Ref) #[0-9]+' | head -n 5)
 ```
 
@@ -978,7 +978,7 @@ For each `crit_ref`, check `gh issue view <N> --json labels --jq '.labels[].name
 
 ### Counsel-Review CLO-Attestation Gate
 
-**Trigger:** the diff touches `docs/legal/`, `plugins/soleur/docs/pages/legal/` or `knowledge-base/legal/`, AND the referenced plan declares `brand_survival_threshold: single-user incident` or an added line in those directories carries a `[DRAFT — pending CLO/counsel review` marker. The reviewing authority is the `soleur:legal:clo` agent, not the operator. If it triggers, read [counsel-review-clo-attestation.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/counsel-review-clo-attestation.md) now and follow it; otherwise skip silently.
+**Trigger:** on every ship, read [counsel-review-clo-attestation.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/counsel-review-clo-attestation.md) and run its block; follow it only when the block prints `COUNSEL_GATE=fire`. The reviewing authority is the `soleur:legal:clo` agent, not the operator.
 
 ### Deploy Pipeline Fix Drift Gate
 
@@ -1044,10 +1044,10 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
 )
 DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh|git-lock-chardevice-sweep\.sh|inngest-registry-probe\.sh|inngest-doublefire-probe\.sh|inngest-redis-bootstrap\.sh|inngest-cutover-flip\.sh|inngest-server-flip-guard\.sh|cat-inngest-cutover-state\.sh|soleur-doppler-token\.tmpl|10-vector-doppler-token\.conf|10-inngest-heartbeat-doppler-token\.conf|10-inngest-server-doppler-token\.conf|10-inngest-redis-doppler-token\.conf)$'
 
-dpf_match=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match "$DPF_REGEX" origin/main...HEAD) || { [ $? -eq 1 ] || dpf_match=unknown; }
+dpf_match=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match "$DPF_REGEX" origin/main...HEAD) || { [ $? -eq 42 ] || dpf_match=unknown; }
 ```
 
-If `dpf_match` is non-empty, the gate fires; `unknown` (rc 2/127) also fires it (fail closed). Trigger condition is "≥1 match" — the gate fires once for the PR, not once per matched file.
+If `dpf_match` is non-empty, the gate fires; `unknown` also fires it (fail closed). Trigger condition is "≥1 match" — the gate fires once for the PR, not once per matched file.
 
 **If triggered:**
 
@@ -1304,7 +1304,7 @@ esac
      `plugins/soleur/skills/ship/scripts/ship-pir-action-items-gate.sh`,
      `plugins/soleur/test/ship-pir-action-items-gate.test.sh`, or
      `plugins/soleur/test/fixtures/ship-pir-action-items/`.
-  2. **Every** path in `$list` is one of those, the test-all script or a `knowledge-base/project/{plans,specs,brainstorms,learnings}/` artifact: `LC_ALL=C grep -vE '^(scripts/(ship-incident-pir-gate(-mutation\.test)?|test-all)\.sh|plugins/soleur/(test/(ship-incident-pir-gate\.test\.ts|ship-pir-action-items-gate\.test\.sh|fixtures/(ship-incident-pir-gate|ship-pir-action-items)/.*)|skills/ship/scripts/ship-pir-action-items-gate\.sh)|knowledge-base/project/(plans|specs|brainstorms|learnings)/.*)$' <<<"$list"` prints nothing. Exit 2/127 from the helper = unknown = not contained: take the PIR path above. If this file is also
+  2. **Every** path in `$list` is one of those, the test-all script or a `knowledge-base/project/{plans,specs,brainstorms,learnings}/` artifact: `LC_ALL=C grep -vE '^(scripts/(ship-incident-pir-gate(-mutation\.test)?|test-all)\.sh|plugins/soleur/(test/(ship-incident-pir-gate\.test\.ts|ship-pir-action-items-gate\.test\.sh|fixtures/(ship-incident-pir-gate|ship-pir-action-items)/.*)|skills/ship/scripts/ship-pir-action-items-gate\.sh)|knowledge-base/project/(plans|specs|brainstorms|learnings)/.*)$' <<<"$list"` prints nothing. A non-zero exit from the helper = unknown = not contained: take the PIR path above. If this file is also
      changed, **every hunk** of `git diff -U0 origin/main...HEAD -- plugins/soleur/skills/ship/SKILL.md`
      must land inside this Phase 5.5 section — a section is not a path, so without that check
      conjunct 2 cannot tell a Phase 5.5 edit from a rewrite of the merge gate below it.
@@ -1605,7 +1605,7 @@ Run `echo 'SOLEUR_RULE_APPLIED rule=hr-technical-fork-is-not-an-operator-questio
 
 [skill-enforced: ship Phase 6.4 + hook ship-unpushed-commits-gate.sh]
 
-Before queueing `gh pr merge --squash --auto` (Phase 6.5's CI Status Check below), verify every local commit is on `origin/<branch>`. GitHub's auto-merge consumes the PR head ref on origin — local-only commits are silently dropped from the squash. (PR #3624 → #3627 → #3630: 2 of 5 commits never landed.)
+Before arming auto-merge (Phase 6.5's CI Status Check below), verify every local commit is on `origin/<branch>`. GitHub's auto-merge consumes the PR head ref on origin — local-only commits are silently dropped from the squash. (PR #3624 → #3627 → #3630: 2 of 5 commits never landed.)
 
 The PreToolUse hook [`.claude/hooks/ship-unpushed-commits-gate.sh`](../../../../.claude/hooks/ship-unpushed-commits-gate.sh) enforces this gate mechanically — it intercepts every `gh pr merge` (chained forms too) and denies the tool call when `git rev-list origin/<branch>..HEAD --count` returns > 0. The deny message lists the unpushed SHAs so the operator can `git push` and re-issue. Run the Phase 6 secret scan before the `git push` it asks for.
 
@@ -1624,7 +1624,7 @@ fi
 
 **Fail-open conditions** (the hook exits silently): branch is `main`/`master`, detached HEAD, no upstream tracking ref, bare-repo context, branch name fails refname validation. **Fail-closed on fetch failure** (a stale ref hides the miss). See rule `wg-ship-push-before-merge` in `AGENTS.rules.md` for the canonical contract.
 
-**PUSHED IS NOT THE SAME AS FINISHED — BATCH EVERY FORESEEABLE COMMIT BEFORE QUEUEING `--auto`.** The gate above asks whether what you have is pushed; it cannot ask whether what you have is all you will need. Any commit you can foresee wanting — a late ADR, a review fix you already know is coming, a measurement you have not yet written down — belongs in the tree BEFORE `gh pr merge --squash --auto` is queued, and the place to do that work is the review-agent wait. **Anything you land during that wait is outside the snapshot the reviewers read** (`rf-before-spawning-review-agents-push-the`: subagents analyse remote state at spawn time), so push it and re-cover it before you accept their findings. Pushing after `--auto` is queued resets the head ref and restarts the entire required-check set when the PR is one check from merging; the restarted cycle is gated by a single job that runs roughly 5-9x longer than any other (see [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) for the measured figure and its derivation). **Why:** #7896 burned ~6 CI cycles (a late ADR commit at 65 of 67 checks).
+**PUSHED IS NOT THE SAME AS FINISHED — BATCH EVERY FORESEEABLE COMMIT BEFORE QUEUEING `--auto`.** The gate above asks whether what you have is pushed; it cannot ask whether what you have is all you will need. Any commit you can foresee wanting — a late ADR, a review fix you already know is coming, a measurement you have not yet written down — belongs in the tree BEFORE auto-merge is armed, and the place to do that work is the review-agent wait. **Anything you land during that wait is outside the snapshot the reviewers read** (`rf-before-spawning-review-agents-push-the`: subagents analyse remote state at spawn time), so push it and re-cover it before you accept their findings. Pushing after `--auto` is queued resets the head ref and restarts the entire required-check set when the PR is one check from merging; the restarted cycle is gated by a single job that runs roughly 5-9x longer than any other (see [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) for the measured figure and its derivation). **Why:** #7896 burned ~6 CI cycles (a late ADR commit at 65 of 67 checks).
 
 **Hook ordering:** the gate is wired AFTER [`pre-merge-rebase.sh`](../../../../.claude/hooks/pre-merge-rebase.sh) in [`.claude/settings.json`](../../../../.claude/settings.json), so an auto-sync push has updated the tracking ref before this gate counts; `T11` in [`ship-unpushed-commits-gate.test.sh`](../../../../.claude/hooks/ship-unpushed-commits-gate.test.sh) enforces it.
 
@@ -1656,11 +1656,11 @@ If an issue number is found, store it as `ISSUE_NUMBER` for use in the PR body b
 # matches nothing (verified: `close[sd]?.*after` MATCHES, `close[sd]?\b.*\bafter\b` does NOT).
 # A \b here makes this gate catch zero lines while reading as if it works.
 CLOSE_DEFER_RE='close[sd]?.*(after|once|when)|closes-after-apply|manual close after|close manually|post-merge.*(close|verif)'
-plan_refs=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^knowledge-base/project/(plans|specs)/' origin/main...HEAD) || { [ $? -eq 1 ] || plan_refs=unknown; }
-[[ $plan_refs == unknown ]] && echo 'unverifiable: use Ref #N' || { [[ -n $plan_refs ]] && tr '\n' '\0' <<<"$plan_refs" | xargs -0 grep -inE -e "$CLOSE_DEFER_RE" -- | head -5; }
+plan_refs=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^knowledge-base/project/(plans|specs)/' --diff-filter=AMT origin/main...HEAD) || { [ $? -eq 42 ] || plan_refs=unknown; }
+[[ $plan_refs == unknown ]] && echo 'unverifiable: use Ref #N' || { [[ -n $plan_refs ]] && { IFS=$'\n' read -r -d '' -a f <<<"$plan_refs"; h=$(grep -inE -e "$CLOSE_DEFER_RE" -- "${f[@]}"); r=$?; [ $r -gt 1 ] && echo 'unverifiable: use Ref #N' || grep -m 5 . <<<"$h"; }; }
 ```
 
-Any hit or `unverifiable` (exit 2/127) ⇒ use **`Ref #N`**, not `Closes #N`, and close the issue yourself after the proof lands (`gh issue close N --comment "<live evidence>"`). Over-detection is deliberate and cheap here: a spurious hit costs one re-read of the keyword; a miss closes an issue whose work is not done.
+Any hit or `unverifiable` ⇒ use **`Ref #N`**, not `Closes #N`, and close the issue yourself after the proof lands (`gh issue close N --comment "<live evidence>"`). Over-detection is deliberate and cheap here: a spurious hit costs one re-read of the keyword; a miss closes an issue whose work is not done.
 
 Match the SHAPE (a close verb + an ordering word), not the canonical phrasing. The grep is wider than [work/SKILL.md](../work/SKILL.md)'s prose list ("Closes-after-apply", "manual close after", …) because a plan rarely uses those exact words — it writes *"close #N only **after** Phase 4.5 passes"*, where the markdown bold also defeats any regex that expects `after` to be followed by a space.
 
@@ -2168,7 +2168,7 @@ K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBE
 
 Arm through the arm check ONLY on exit 0; else report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or `api-error` needs no undo). A non-draft PR goes straight to the arm.
 
-If `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^\.github/(workflows|actions)/' origin/main...HEAD` prints anything or exits 2/127, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
+If `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^\.github/(workflows|actions)/' origin/main...HEAD` does not exit 42 (42 = no match), tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
 
 Wrap the `gh pr merge` call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
 

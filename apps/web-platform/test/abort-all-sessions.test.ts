@@ -111,7 +111,7 @@ vi.mock("../server/review-gate", () => ({
 vi.mock("../server/domain-leaders", () => ({ DOMAIN_LEADERS: [], ROUTABLE_DOMAIN_LEADERS: [] }));
 vi.mock("../server/domain-router", () => ({ routeMessage: vi.fn() }));
 vi.mock("../server/session-sync", () => ({
-  syncPull: vi.fn(),
+  syncPull: vi.fn(async () => ({ heldFiles: 0, onRecovered: 0, pullReason: null, checkedAt: null })),
   syncPush: vi.fn(),
 }));
 

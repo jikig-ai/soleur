@@ -3,7 +3,7 @@
 // AC16 5-case test matrix:
 //   (a) issue-selection cascade (p3-low → p2-medium → p1-high) with
 //       open-bot-fix-PR skip-list + label/title filters
-//   (b) ephemeral workspace scaffold + plugin symlink sentinel
+//   (b) ephemeral workspace scaffold + read-only plugin-root resolve (#12824)
 //   (c) spawn argv shape (CLAUDE_CODE_FLAGS + prompt + cwd + GH_TOKEN env)
 //   (d) auto-merge gate's 3 safety nets (bot identity, single-file diff,
 //       p3-low source) + label assertion
@@ -16,6 +16,7 @@
 // @/server/github-app (generateInstallationToken).
 
 import { EventEmitter } from "node:events";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Module mocks (hoisted by vitest) --------------------------------------
@@ -79,9 +80,13 @@ vi.mock("node:fs/promises", () => ({
 const existsSyncSpy = vi.fn();
 // readFileSync serves runHookSelfTest's settings-registration probe (#5046
 // PR-2 AC-P2.2): return a faithful spawn settings.json — the hook registered
-// under a `*` matcher — so the structural-inheritance assertion passes.
-const readFileSyncSpy = vi.fn(() =>
-  JSON.stringify({
+// under a `*` matcher — so the structural-inheritance assertion passes. #12824: when the handler WROTE
+// a settings.json at that path (writeFileSpy), serve those bytes, so the self-test's claudeMdExcludes
+// delivery cross-check reads what production would.
+const readFileSyncSpy = vi.fn((p?: unknown) => {
+  const written = [...writeFileSpy.mock.calls].reverse().find(([q]) => String(q) === String(p));
+  if (written) return String(written[1]);
+  return JSON.stringify({
     hooks: {
       PreToolUse: [
         {
@@ -96,8 +101,8 @@ const readFileSyncSpy = vi.fn(() =>
         },
       ],
     },
-  }),
-);
+  });
+});
 vi.mock("node:fs", () => ({
   existsSync: existsSyncSpy,
   readFileSync: readFileSyncSpy,
@@ -125,9 +130,32 @@ vi.mock("@/server/github-app", () => ({
   generateInstallationToken: generateInstallationTokenSpy,
 }));
 
+// #12824 — the substrate's cron plugin-root resolver reads getPluginPath() and
+// gates it through assertTrustedPluginPath(); both must be present on the mock.
+const MOCK_PLUGIN_ROOT = "/app/shared/plugins/soleur";
 vi.mock("@/server/plugin-path", () => ({
-  getPluginPath: () => "/app/shared/plugins/soleur",
-  SOLEUR_PLUGIN_PATH_DEFAULT: "/app/shared/plugins/soleur",
+  getPluginPath: () => MOCK_PLUGIN_ROOT,
+  assertTrustedPluginPath: (p: string) => p,
+  isPluginPathTestEnv: () => true,
+  SOLEUR_PLUGIN_PATH_DEFAULT: MOCK_PLUGIN_ROOT,
+}));
+
+// #12824 — the filesystem helpers behind resolveCronPluginRoot() and the
+// per-spawn HOME. Defaults model a healthy read-only, fully-seeded plugin
+// mount; createSpawnHome mirrors the real mkdtemp shape (`<parent>/<prefix>…`)
+// without touching mkdtempSpy, so mkdtempSpy.mock.calls[0] stays the workspace.
+const pathExistsSpy = vi.fn();
+const readTextOrNullSpy = vi.fn();
+const probeWritableSpy = vi.fn();
+const createSpawnHomeSpy = vi.fn();
+const removeSpawnHomeSpy = vi.fn();
+vi.mock("@/server/inngest/functions/_cron-spawn-fs", () => ({
+  pathExists: pathExistsSpy,
+  readTextOrNull: readTextOrNullSpy,
+  probeWritable: probeWritableSpy,
+  createSpawnHome: createSpawnHomeSpy,
+  removeSpawnHome: removeSpawnHomeSpy,
+  sleep: async () => {},
 }));
 
 // D6 (#5018): cron-bug-fixer is Tier-2-deferred in prod (broad bash + reads
@@ -231,6 +259,18 @@ beforeEach(() => {
     if (p.includes("soleur-cron-bug-fixer-") && p.endsWith("/repo")) return true;
     return false;
   });
+
+  pathExistsSpy.mockReset();
+  readTextOrNullSpy.mockReset();
+  probeWritableSpy.mockReset();
+  createSpawnHomeSpy.mockReset();
+  removeSpawnHomeSpy.mockReset();
+  pathExistsSpy.mockReturnValue(true);
+  readTextOrNullSpy.mockReturnValue("seeded x tag=t1\n");
+  probeWritableSpy.mockReturnValue({ writable: false, code: "EROFS" });
+  createSpawnHomeSpy.mockImplementation(
+    (parent: string, prefix: string) => `${parent}/${prefix}abc`,
+  );
 
   createProbeOctokitSpy.mockImplementation(async () => defaultOctokit());
   generateInstallationTokenSpy.mockResolvedValue("ghs_TESTTOKEN_REDACT_ME");
@@ -565,7 +605,7 @@ describe("cron-bug-fixer — (a) issue-selection cascade", () => {
 });
 
 // ===========================================================================
-// (b) Ephemeral workspace scaffold + symlink sentinel
+// (b) Ephemeral workspace scaffold + read-only plugin-root resolve (#12824)
 // ===========================================================================
 
 describe("cron-bug-fixer — (b) ephemeral workspace + sentinel", () => {
@@ -634,12 +674,39 @@ describe("cron-bug-fixer — (b) ephemeral workspace + sentinel", () => {
       .filter((l) => l.length > 0);
     expect(allowLines[0]).toBe("gh issue view");
     expect(allowLines).toContain("git push");
-    expect(allowLines).toContain("./node_modules/.bin/vitest run");
+    // #12824 — the vitest verb is gone (the clone is node_modules-free;
+    // SOLEUR_WORKTREE_SKIP_INSTALL=1), and the worktree-manager line names the
+    // resolved READ-ONLY plugin root, never the clone's editable plugins/soleur.
+    expect(allowLines).not.toContain("./node_modules/.bin/vitest run");
+    expect(allowLines).toContain(
+      `bash ${MOCK_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh`,
+    );
+    expect(allowLines.some((l) => l.includes("<plugin-root>"))).toBe(false);
+    expect(allowLines.some((l) => l.includes("bash plugins/soleur/"))).toBe(false);
     // F4a: arbitrary-method gh api must NOT be allowlisted.
     expect(allowLines).not.toContain("gh api");
+
+    // #12824 — the clone's own plugins/soleur manifest is NO LONGER checked
+    // (the old "sentinel"); the read-only plugin root is resolved instead:
+    // manifest + .seed-complete present, root and hooks/ not writable.
+    expect(
+      existsSyncSpy.mock.calls.some(
+        ([p]) => typeof p === "string" && p.includes("repo/plugins/soleur/.claude-plugin"),
+      ),
+    ).toBe(false);
+    expect(pathExistsSpy).toHaveBeenCalledWith(
+      `${MOCK_PLUGIN_ROOT}/.claude-plugin/plugin.json`,
+    );
+    expect(pathExistsSpy).toHaveBeenCalledWith(`${MOCK_PLUGIN_ROOT}/.seed-complete`);
+    expect(probeWritableSpy).toHaveBeenCalledWith(MOCK_PLUGIN_ROOT);
+    expect(probeWritableSpy).toHaveBeenCalledWith(`${MOCK_PLUGIN_ROOT}/hooks`);
+    // The resolve runs BEFORE the workspace mkdtemp/clone.
+    expect(pathExistsSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      mkdtempSpy.mock.invocationCallOrder[0]!,
+    );
   });
 
-  it("aborts run + emits Sentry status=error when plugin sentinel manifest missing", async () => {
+  it("aborts run + emits Sentry status=error when the read-only plugin root manifest is missing", async () => {
     const p3Issues = [
       {
         number: 510,
@@ -650,12 +717,10 @@ describe("cron-bug-fixer — (b) ephemeral workspace + sentinel", () => {
     ];
     wireOctokit({ p3Issues });
 
-    // Sentinel fails: plugin.json does NOT exist on disk after symlink.
-    existsSyncSpy.mockImplementation((p: string) => {
-      if (p.endsWith("/node_modules/.bin/claude")) return true;
-      if (p.includes(".claude-plugin/plugin.json")) return false; // sentinel fail
-      return false;
-    });
+    // #12824 — the plugin ROOT (not the clone) lacks its manifest.
+    pathExistsSpy.mockImplementation(
+      (p: string) => !p.endsWith(".claude-plugin/plugin.json"),
+    );
 
     wireSpawn(0);
     const { cronBugFixerHandler } = await importHandler();
@@ -664,16 +729,56 @@ describe("cron-bug-fixer — (b) ephemeral workspace + sentinel", () => {
 
     expect(result.ok).toBe(false);
     expect(reportSilentFallbackSpy).toHaveBeenCalled();
+    const rootErr = reportSilentFallbackSpy.mock.calls.find(
+      ([, ctx]) => (ctx as { op?: string }).op === "cron-plugin-root-untrusted",
+    );
+    expect(rootErr).toBeDefined();
+    expect((rootErr![1] as { tags?: Record<string, string> }).tags).toMatchObject({
+      cron: "cron-bug-fixer",
+      reason: "manifest-missing",
+    });
     const setupErr = reportSilentFallbackSpy.mock.calls.find(
       ([, ctx]) => (ctx as { op?: string }).op === "setup-ephemeral-workspace",
     );
     expect(setupErr).toBeDefined();
+    // Resolved before any workspace was created: no mkdtemp, no clone, no claude.
+    expect(mkdtempSpy).not.toHaveBeenCalled();
+    expect(spawnSpy).not.toHaveBeenCalled();
 
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     const sentryCall = fetchMock.mock.calls.find(([url]) =>
       typeof url === "string" && url.includes("/cron/scheduled-bug-fixer/"),
     );
     expect(sentryCall![0] as string).toContain("status=error");
+  });
+
+  // #12847 escalation (test-design P2) — setup resolves the root for every cronUsesPluginRoot cron, not only
+  // for those whose allowlist names `<plugin-root>`: a plugin LOADER with no such line still refuses in setup.
+  it("setupEphemeralWorkspace refuses a plugin-loading cron with no <plugin-root> allowlist line (cron-growth-audit)", async () => {
+    const { CRON_BASH_ALLOWLISTS, CRON_PLUGIN_LOADERS, PLUGIN_ROOT_TOKEN, setupEphemeralWorkspace } = await import(
+      "@/server/inngest/functions/_cron-claude-eval-substrate"
+    );
+    // Attributable to the cronUsesPluginRoot predicate: the old `allow.some(<plugin-root>)` test is false here.
+    expect(CRON_PLUGIN_LOADERS.has("cron-growth-audit")).toBe(true);
+    expect((CRON_BASH_ALLOWLISTS["cron-growth-audit"] ?? []).some((l) => l.includes(PLUGIN_ROOT_TOKEN))).toBe(false);
+
+    pathExistsSpy.mockImplementation((p: string) => !p.endsWith(".claude-plugin/plugin.json"));
+    const { NonRetriableError } = await import("inngest");
+    const err = await setupEphemeralWorkspace({ installationToken: "tok", cronName: "cron-growth-audit" }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(NonRetriableError);
+    const rootErrs = reportSilentFallbackSpy.mock.calls.filter(
+      ([, ctx]) => (ctx as { op?: string }).op === "cron-plugin-root-untrusted",
+    );
+    expect(rootErrs).toHaveLength(1);
+    expect((rootErrs[0][1] as { tags?: Record<string, string> }).tags).toEqual({
+      cron: "cron-growth-audit",
+      reason: "manifest-missing",
+    });
+    // Refused before any workspace exists: no mkdtemp, no clone.
+    expect(mkdtempSpy).not.toHaveBeenCalled();
+    expect(spawnSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -717,9 +822,47 @@ describe("cron-bug-fixer — (c) spawn argv shape", () => {
     expect(args[lastIdx - 1]).toBe("--");
     expect(args[lastIdx]).toContain("/soleur:fix-issue 600");
     expect(args[lastIdx]).toContain("--exclude-label ux-audit");
+    // #12824 — the containment denies every test command; the flag makes fix-issue skip its test phases
+    // (a denied verb otherwise burns turns or reads as a failed phase). The skill must define the flag.
+    expect(args[lastIdx]).toContain("--no-local-tests");
+    const realFs = await vi.importActual<typeof import("node:fs")>("node:fs"); // node:fs is mocked in this file
+    const skill = realFs.readFileSync(resolve(__dirname, "../../../../../plugins/soleur/skills/fix-issue/SKILL.md"), "utf-8");
+    expect(skill).toMatch(/elif tokens\[i\] == "--no-local-tests":/);
+    expect(skill).toMatch(/If `NO_LOCAL_TESTS` is set, skip this phase and Phase 4/);
+    expect(skill).toMatch(/## Phase 4: Run Tests\n\nIf `NO_LOCAL_TESTS` is set, skip this phase/);
+
+    // #12824 — the substrate inserts `--plugin-dir <read-only root>` right
+    // after the `--append-system-prompt <preamble>` pair, before the caller's
+    // flags (`--print` … `--`); the clone-relative `plugins/soleur` is gone.
+    const pluginDirIdx = args.indexOf("--plugin-dir");
+    expect(pluginDirIdx).toBeGreaterThan(-1);
+    expect(args[pluginDirIdx + 1]).toBe(MOCK_PLUGIN_ROOT);
+    expect(args.filter((a) => a === "--plugin-dir")).toHaveLength(1);
+    expect(args).not.toContain("plugins/soleur");
+    expect(args[pluginDirIdx - 2]).toBe("--append-system-prompt");
+    expect(pluginDirIdx).toBeLessThan(args.indexOf("--print"));
+    expect(pluginDirIdx).toBeLessThan(lastIdx - 1);
 
     // cwd is the cloned repo path under ephemeral root
     expect(opts.cwd).toContain("repo");
+
+    // #12824 — fresh per-spawn HOME beside repo/ (never the cron's own HOME,
+    // never inside the spawn cwd), TMPDIR under it, git hardening, and the
+    // worktree-manager install skip.
+    const expectedHome = "/tmp/soleur-cron-bug-fixer-XXXX/home-abc";
+    expect(createSpawnHomeSpy).toHaveBeenCalledWith(
+      "/tmp/soleur-cron-bug-fixer-XXXX",
+      "home-",
+    );
+    expect(opts.env?.HOME).toBe(expectedHome);
+    expect(opts.env?.HOME).not.toBe(process.env.HOME);
+    expect(opts.env?.TMPDIR).toBe(`${expectedHome}/tmp`);
+    expect(opts.env?.GIT_CONFIG_COUNT).toBe("3");
+    expect(opts.env?.GIT_CONFIG_KEY_0).toBe("core.hooksPath");
+    expect(opts.env?.GIT_CONFIG_VALUE_0).toBe("/dev/null");
+    expect(opts.env?.SOLEUR_WORKTREE_SKIP_INSTALL).toBe("1");
+    // The per-spawn HOME is removed after the child exits.
+    expect(removeSpawnHomeSpy).toHaveBeenCalledWith(expectedHome);
 
     // GH_TOKEN env is the installation token, NOT process.env.GH_TOKEN
     expect(opts.env?.GH_TOKEN).toBe("ghs_TESTTOKEN_REDACT_ME");
@@ -749,12 +892,14 @@ describe("cron-bug-fixer — (d) auto-merge gate safety nets", () => {
     prLabels?: string[];
     prFiles?: { filename: string }[];
     issuePriorityLabels?: string[];
+    headRef?: string;
   }) {
     const {
       prAuthor = "app/claude",
       prLabels = ["bot-fix/auto-merge-eligible"],
       prFiles = [{ filename: "apps/web-platform/foo.ts" }],
       issuePriorityLabels = ["priority/p3-low"],
+      headRef = `bot-fix/${SOURCE_ISSUE}-slug`,
     } = opts;
 
     wireOctokit({
@@ -770,7 +915,7 @@ describe("cron-bug-fixer — (d) auto-merge gate safety nets", () => {
         {
           number: PR_NUMBER,
           node_id: PR_NODE_ID,
-          head: { ref: `bot-fix/${SOURCE_ISSUE}-slug` },
+          head: { ref: headRef },
           created_at: "2026-05-01T02:00:00Z",
         },
       ],
@@ -798,6 +943,29 @@ describe("cron-bug-fixer — (d) auto-merge gate safety nets", () => {
     const mutationSource = gqlCall[0] as string;
     expect(mutationSource).toContain("enablePullRequestAutoMerge");
     expect(mutationSource).toContain("SQUASH");
+  });
+
+  // #12847 re-verification — the gate queues only the selected issue's own `bot-fix/<issue>-*` PR. detect-pr's
+  // any-bot-fix/* fallback can return another issue's PR, or a PR a reseeded run opened under a wrong branch
+  // name and left eligible; neither is ever queued, whichever run finds it. `7001-` pins the prefix boundary.
+  it.each([
+    [`bot-fix/${SOURCE_ISSUE}1-other-issue`],
+    ["bot-fix/fix-typo"],
+  ])("blocks auto-merge on a clean run when the PR branch %s is not the selected issue's", async (headRef) => {
+    wireOctokitForGate({ headRef });
+    wireSpawn(0);
+    const { cronBugFixerHandler } = await importHandler();
+    const step = makeStep();
+    const result = await cronBugFixerHandler({ step, logger });
+
+    expect(result.autoMergeQueued).toBe(false);
+    expect(octokitGraphqlSpy).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: `PR #${PR_NUMBER} branch '${headRef}' is not bot-fix/${SOURCE_ISSUE}-*; never auto-merged`,
+      }),
+      "Auto-merge not queued",
+    );
   });
 
   it("blocks auto-merge when PR author is not a bot", async () => {
@@ -853,6 +1021,164 @@ describe("cron-bug-fixer — (d) auto-merge gate safety nets", () => {
 
     expect(result.autoMergeQueued).toBe(false);
     expect(octokitGraphqlSpy).not.toHaveBeenCalled();
+  });
+
+  // #12847 verification V1 — the gate refuses any PR already demoted to review-required, so a demotion holds
+  // even when stripping the eligibility label failed (a later clean run's any-bot-fix/* fallback can pick it up).
+  it("blocks auto-merge when the PR carries both auto-merge-eligible and review-required", async () => {
+    wireOctokitForGate({ prLabels: ["bot-fix/auto-merge-eligible", "bot-fix/review-required"] });
+    wireSpawn(0);
+    const { cronBugFixerHandler } = await importHandler();
+    const step = makeStep();
+    const result = await cronBugFixerHandler({ step, logger });
+
+    expect(result.autoMergeQueued).toBe(false);
+    expect(octokitGraphqlSpy).not.toHaveBeenCalled();
+    expect(step.calls.map((c) => c.name)).toContain("auto-merge-gate");
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: `PR #${PR_NUMBER} carries bot-fix/review-required (demoted; never auto-merged)`,
+      }),
+      "Auto-merge not queued",
+    );
+  });
+
+  // #12847 escalation (data-integrity + user-impact P3) — a run whose plugin mount was reseeded mid-run worked
+  // from a mixed or half-copied tree: its otherwise-eligible PR is left for human review, never auto-merged.
+  // The sentinel line changes once the claude child has started (a same-tag redeploy writes a new timestamp).
+  function wireReseededSpawn(): void {
+    let claudeStarted = false;
+    readTextOrNullSpy.mockImplementation(() =>
+      claudeStarted ? "seeded 2026-11-17T09:30:00Z tag=t1\n" : "seeded x tag=t1\n",
+    );
+    const claudeChild = makeChild();
+    spawnSpy.mockImplementation((cmd: string) => {
+      if (cmd === "git") {
+        const gitChild = makeChild();
+        queueMicrotask(() => gitChild.emit("exit", 0, null));
+        return gitChild;
+      }
+      claudeStarted = true;
+      queueMicrotask(() => claudeChild.emit("exit", 0, null));
+      return claudeChild;
+    });
+  }
+
+  // Wraps the wired octokit so the eligibility-label DELETE rejects with `err`.
+  function failEligibleDelete(err: Error): void {
+    const base = octokitRequestSpy.getMockImplementation()!;
+    octokitRequestSpy.mockImplementation(async (route: string, params: Record<string, unknown>) => {
+      if (route === "DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}") throw err;
+      return base(route, params);
+    });
+  }
+
+  const labelWrites = () =>
+    octokitRequestSpy.mock.calls.filter(
+      ([route]) =>
+        route === "DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}" ||
+        route === "POST /repos/{owner}/{repo}/issues/{issue_number}/labels",
+    );
+  const relabelReports = () =>
+    reportSilentFallbackSpy.mock.calls.filter((c) => c[1]?.op === "relabel-reseeded-pr");
+
+  it("skips the auto-merge gate and relabels review-required when the plugin was reseeded mid-run", async () => {
+    wireOctokitForGate({});
+    wireReseededSpawn();
+    const { cronBugFixerHandler } = await importHandler();
+    const step = makeStep();
+    const result = await cronBugFixerHandler({ step, logger });
+
+    expect(result.autoMergeQueued).toBe(false);
+    expect(result.ok).toBe(false);
+    expect(octokitGraphqlSpy).not.toHaveBeenCalled();
+    expect(step.calls.map((c) => c.name)).not.toContain("auto-merge-gate");
+    const addReviewLabel = octokitRequestSpy.mock.calls.find(
+      ([route, params]) =>
+        route === "POST /repos/{owner}/{repo}/issues/{issue_number}/labels" &&
+        (params as { issue_number?: number }).issue_number === PR_NUMBER &&
+        Array.isArray((params as { labels?: string[] }).labels) &&
+        (params as { labels: string[] }).labels.includes("bot-fix/review-required"),
+    );
+    expect(addReviewLabel).toBeDefined();
+    const stripEligible = octokitRequestSpy.mock.calls.find(
+      ([route, params]) =>
+        route === "DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}" &&
+        (params as { name?: string }).name === "bot-fix/auto-merge-eligible",
+    );
+    expect(stripEligible).toBeDefined();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: `PR #${PR_NUMBER} came from a run whose plugin mount was reseeded mid-run`,
+      }),
+      "Auto-merge not queued",
+    );
+    expect(relabelReports()).toHaveLength(0);
+  });
+
+  // #12847 verification V1 — only a 404 (label already absent) is swallowed on the eligibility DELETE.
+  it("reports a non-404 failure to strip auto-merge-eligible from a reseeded run's PR", async () => {
+    wireOctokitForGate({});
+    failEligibleDelete(Object.assign(new Error("Server Error"), { status: 500 }));
+    wireReseededSpawn();
+    const { cronBugFixerHandler } = await importHandler();
+    const result = await cronBugFixerHandler({ step: makeStep(), logger });
+
+    expect(result.autoMergeQueued).toBe(false);
+    expect(octokitGraphqlSpy).not.toHaveBeenCalled();
+    const reports = relabelReports();
+    expect(reports).toHaveLength(1);
+    expect(reports[0][1]).toMatchObject({
+      feature: "cron-bug-fixer",
+      message: "Failed to strip auto-merge-eligible from a PR from a run whose plugin mount was reseeded",
+      extra: { fn: "cron-bug-fixer", prNumber: PR_NUMBER },
+    });
+    // The review-required add still ran, so the gate's review-required refusal holds the demotion.
+    expect(
+      labelWrites().some(([route]) => route === "POST /repos/{owner}/{repo}/issues/{issue_number}/labels"),
+    ).toBe(true);
+  });
+
+  it("swallows a 404 (label already absent) when stripping auto-merge-eligible from a reseeded run's PR", async () => {
+    wireOctokitForGate({ prLabels: [] });
+    failEligibleDelete(Object.assign(new Error("Label does not exist"), { status: 404 }));
+    wireReseededSpawn();
+    const { cronBugFixerHandler } = await importHandler();
+    const result = await cronBugFixerHandler({ step: makeStep(), logger });
+
+    expect(result.autoMergeQueued).toBe(false);
+    expect(relabelReports()).toHaveLength(0);
+    expect(
+      labelWrites().some(([route]) => route === "POST /repos/{owner}/{repo}/issues/{issue_number}/labels"),
+    ).toBe(true);
+  });
+
+  // #12847 verification V2 — detect-pr's any-bot-fix/* fallback can return an earlier run's PR for another
+  // issue. A reseeded run leaves that PR untouched and warns; it only demotes its own bot-fix/<issue>-* PR.
+  // `bot-fix/7001-…` also pins the prefix boundary: it must not pass for selected issue 700.
+  it("leaves a reseeded run's fallback PR for another issue untouched and warns", async () => {
+    wireOctokitForGate({ headRef: `bot-fix/${SOURCE_ISSUE}1-other-issue` });
+    wireReseededSpawn();
+    const { cronBugFixerHandler } = await importHandler();
+    const step = makeStep();
+    const result = await cronBugFixerHandler({ step, logger });
+
+    expect(result.autoMergeQueued).toBe(false);
+    expect(octokitGraphqlSpy).not.toHaveBeenCalled();
+    expect(step.calls.map((c) => c.name)).not.toContain("auto-merge-gate");
+    expect(labelWrites()).toHaveLength(0);
+    const warns = warnSilentFallbackSpy.mock.calls.filter((c) => c[1]?.op === "reseeded-run-foreign-pr");
+    expect(warns).toHaveLength(1);
+    expect(warns[0][1]).toMatchObject({
+      feature: "cron-bug-fixer",
+      extra: { fn: "cron-bug-fixer", prNumber: PR_NUMBER, selectedIssue: SOURCE_ISSUE },
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: `PR #${PR_NUMBER} is not this run's bot-fix/${SOURCE_ISSUE}-* PR; a reseeded run left it untouched`,
+      }),
+      "Auto-merge not queued",
+    );
   });
 });
 
