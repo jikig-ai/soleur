@@ -121,12 +121,15 @@ mechanical: the moment ≥3 slow-mode samples are in-window, p90 reads the slow
 mode while p50 (index 13) keeps reading the fast one (50s).
 
 **The discriminator — sibling checks on the same slow runs.** On the three
-tail runs, every other required check's latency (same `created_at` baseline,
-same queue) was ≤478s: `guards-ruleset` ~112s, `e2e` ~355s, `quality-guards`
-~478s, advisory/oracle/cla/secret/sentry/vendor legs ≤220s. Only
+tail runs, every *independent* required check's latency (same `created_at`
+baseline, same queue) stayed ≤~355s: `guards-ruleset` ~112s, `e2e` ~355s,
+advisory/oracle/cla/secret/sentry/vendor legs ≤220s. The umbrella
+aggregators serialize their own `needs` chains and run higher —
+`quality-guards` ~478-556s, `test` ~2228s on the 14:56Z run — within their
+own bounds (umbrella serialization documented in the TSV header). Only
 `tenant-integration` (the heavy job, `timeout-minutes: 19`,
 `.github/workflows/tenant-integration.yml:236-243`) sat at ~835-910s, and the
-aggregator's own completion follows it by ~19s in every case:
+aggregator's own completion follows it by ~19-22s in every case:
 
 | tail run | tenant suite duration | check completed vs suite `completed_at` |
 |---|---|---|
@@ -147,13 +150,18 @@ it, and is unrelated to queue wait.
 prior same-sha push batch completed before the sampled run's `created_at`, so
 the watch's association guard (:197-198) correctly declines it — they are
 exclusions, not dropouts. The fourth (11:45Z, 11-18) is genuinely interesting
-but in a different class: the heavy suite was `cancelled` at ~15.6 min —
-consistent with the workflow's documented third-arrival eviction arm
-(`.github/workflows/tenant-integration.yml:295-305` — "the eviction ARM stays:
-it resolves the mutex by cancelling the predecessor run's suite job …
-accepted, NOT greened") — and the aggregator fail-closed to `failure`
-conclusion, which the watch's status filter excludes. One eviction event in
-the 30-run window; the runbook bullet names it as observed history.
+but in a different class: the heavy suite was `cancelled` mid-flight —
+executing 12:21:11→12:36:24 (~8.6 min of real work) after a ~35-min pending
+wait in mutex group `dev-supabase-${{ github.ref }}` — and the aggregator
+fail-closed to `failure` conclusion, which the watch's status filter
+excludes. The trigger is **unattributed**: the workflow's documented
+third-arrival eviction arm cancels only the *pending* entry while
+`cancel-in-progress: false` protects the executing one
+(`tenant-integration.yml:278-279`, `:367-372`), so a manual cancel or
+another path caused this one; the workflow's accept-not-green posture for
+any cancelled suite (`:314-318`) makes it the documented accepted residual
+either way. One mid-flight cancellation in the 30-run window; the runbook
+bullet names it as observed history.
 
 ## Adjudication (the three-way decision the brief requires)
 
@@ -420,12 +428,14 @@ Append one bullet under `## Measured history` in
   Finding: bimodal latency — 23/26 samples at 11-76s vs 3 at 915-970s
   (2026-11-18T14:52/14:56/23:08Z); the tail tracks the heavy
   `tenant-integration` suite duration (~835-910s, `timeout-minutes: 19`) on
-  isolation-surface PRs, with sibling checks on the same runs ≤478s — suite
+  isolation-surface PRs, with independent sibling checks on the same runs
+  ≤~355s (umbrella aggregators higher but within their own bounds) — suite
   `needs`-chain wait, not queue congestion; check's own duration_p90=21s.
-  4 NOSAMPLE: 3 earlier-batch exclusions + 1 suite-cancelled
-  (mutex-eviction arm) gate fail-closed. Prior 2026-11-13 breach (~900s)
-  was the same mode. #12905 may shorten the suite; the bound must cover it
-  meanwhile.
+  4 NOSAMPLE: 3 earlier-batch exclusions + 1 suite-cancelled mid-flight
+  (trigger unattributed — job was executing, so not the third-arrival
+  arm; documented accepted residual) gate fail-closed. Prior 2026-11-13
+  breach (~900s) was the same mode. #12905 may shorten the suite; the
+  bound must cover it meanwhile.
 ```
 
 ### FR-3 — Commit-time re-verification
@@ -442,7 +452,11 @@ surfaces; `pull_request` p90 ≤ 960; `merge_group` p90 ≤ 180; no
 `::error::` line for this check. If the re-measured PR p90 exceeds 960
 (slow-mode drift beyond today's 915-970 band), re-seed to
 `next-minute(re-measured p90)` and update the ROW SEED comment + runbook
-bullet numbers accordingly — same method, new measurement.
+bullet numbers accordingly — same method, new measurement. **Bounded:**
+the arm applies only when the re-measured population keeps the same shape
+(duration_p90 still ~21s, no MQ-surface breach, no failed check-run
+reads); a new failure signature is the genuine-regression case — abort and
+re-triage instead of re-seeding (CTO dissent on the drift-arm ruling).
 
 ### FR-4 — PR hygiene
 
@@ -565,11 +579,16 @@ None — planning artifacts only (this plan + `specs/feat-one-shot-tenant-p90-bo
 - #12905 (OPEN): narrows the tenant test set — complementary execution-side
   work; if it lands and shortens the suite, a later re-seed DOWN is the
   same one-row mechanism (bound may loosen with recorded measurement).
-- **Observation for the record:** one suite-`cancelled` eviction event in
-  the window (11-18T11:45Z) produced a gate fail-closed — the mutex's
-  documented accepted residual, per the workflow comment at
-  `tenant-integration.yml:295-305`. Not a finding; noted so the runbook
-  history records the full picture.
+- **Observation for the record:** one suite-`cancelled` event in the
+  window (11-18T11:45Z) produced a gate fail-closed — the job was *executing*
+  when cancelled, so the trigger is unattributed (the third-arrival
+  eviction arm cancels only the pending entry; `cancel-in-progress: false`
+  protects the running one, `tenant-integration.yml:278-279`, `:367-372`).
+  The workflow's accept-not-green posture for any cancelled suite
+  (`:314-318`) makes it the documented accepted residual either way. Not a
+  finding; noted so the runbook history records the full picture. A second
+  mid-flight cancellation in a future window is the recurrence threshold
+  that would flip this to a tracked issue (CTO dissent).
 - Prior breach 2026-11-13 (~900s, n=30): same slow mode, earlier window —
   it did not "self-resolve"; the samples rolled off.
 
@@ -594,6 +613,11 @@ None — planning artifacts only (this plan + `specs/feat-one-shot-tenant-p90-bo
   commit, the FR-3 conditional arm re-seeds to next-minute(p90) — the
   contract is bound ≥ commit-time p90, not "the number written in this
   plan".
+- **Thin headroom to the suite cap:** a suite run at the `timeout-minutes: 19`
+  ceiling yields check latency ≈1200s vs breach line 960×1.3=1248 — ~50s of
+  headroom. A suite approaching its cap before #12905 lands re-fires this
+  re-seed by design (CTO dissent on Item 1); the headroom is deliberate —
+  the bound covers the *measured* mode, not the theoretical worst case.
 
 ## Deepen Pass
 
@@ -652,10 +676,12 @@ fan-out ran as inline verification passes; the parent pipeline may still run
 ### Verify-the-negative + self-audit
 
 - "No queue congestion" — supported positively, not just by absence:
-  sibling checks measured on the SAME three slow runs stayed ≤478s while
-  `tenant-integration` sat at ~835-910s and the aggregator completed ~19s
-  after it each time. A shared-queue burst inflates all checks; the tail
-  is specific to this needs-chain.
+  independent checks measured on the SAME three slow runs stayed ≤~355s
+  (umbrella aggregators `quality-guards`/`test` run higher but serialize
+  their own `needs` chains within their own bounds) while
+  `tenant-integration` sat at ~835-910s and the aggregator completed
+  ~19-22s after it each time. A shared-queue burst inflates all
+  independent checks; the tail is specific to this needs-chain.
 - "Not execution regression" — duration_p90=21s ≈ fast-mode durations
   (11-30s) across all 26 qualifying samples; no duration outlier exists.
 - "4 NOSAMPLE = exclusions, not dropouts" — 3 match the earlier-batch

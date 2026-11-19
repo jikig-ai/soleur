@@ -22,9 +22,12 @@ Disposition: (a) bound mis-seed → re-seed (bimodal latency; see plan Evidence)
   `2026-11-17 oracle-review-required bound-row seed` bullet: seed values
   (960/180), `n` per surface (26/30), the bimodal evidence (23 samples at
   11-76s vs 3 at 915-970s on 2026-11-18T14:52/14:56/23:08Z), the
-  sibling-check discriminator (same-run siblings ≤478s), duration_p90=21s,
-  the 4 NOSAMPLE classes (3 earlier-batch + 1 suite-cancelled mutex
-  eviction), and the 2026-11-13 prior breach as the same mode.
+  sibling-check discriminator (same-run independent siblings ≤~355s;
+  umbrella aggregators higher but within their own bounds),
+  duration_p90=21s, the 4 NOSAMPLE classes (3 earlier-batch + 1
+  suite-cancelled mid-flight, trigger unattributed — job was executing,
+  so not the third-arrival arm; documented accepted residual), and the
+  2026-11-13 prior breach as the same mode.
 
 ## Phase 2 — Commit-time verification (TSV-header-mandated)
 
