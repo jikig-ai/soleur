@@ -332,6 +332,8 @@ print("  boot_id        %s" % f.get("boot_id", "?"))
 print("  probe_schema   %s" % f.get("probe_schema", "?"))
 print("  server_active  %s        http_code=%s" % (f.get("server_active", "?"), f.get("http_code", "?")))
 print("  registry_fns   %s" % f.get("registry_fns", "?"))
+# probe_schema=10 (#12742): the sdk_url poll verdict and the registered app URL(s).
+print("  sdk_sync       %s        sdk_app_url=%s" % (f.get("sdk_sync", "?"), f.get("sdk_app_url", "?")))
 print("  redis_active   %s        redis_keys=%s expires=%s" % (
     f.get("redis_active", "?"), f.get("redis_keys", "?"), f.get("redis_expires", "?")))
 print("  data_mount     %s  devid=%s  bytes=%s  luks=%s" % (
@@ -380,6 +382,12 @@ if not serving and f.get("server_active") == "active" and f.get("http_code") == 
           % f.get("registry_fns", "?"))
     print("                 owns no work. That is the diagnostic-boot / unregistered signature")
     print("                 (INNGEST_DIAGNOSTIC_BOOT=1 serves nothing), not a dead process.")
+# A FAILING SDK POLL BEHIND A SERVING VERDICT (#12742). registry_fns comes from Postgres and
+# survives a broken poll, so SERVING=yes can rest on a stale registry. Gated on the value.
+if f.get("sdk_sync") == "error":
+    print("  NOTE           sdk_sync=error: the server reports a sync error for at least one app")
+    print("                 URL above. registry_fns may be a stale registry, not a working poll.")
+    print("                 See the sdk_sync section of runbooks/inngest-server.md.")
 ' 2>"$QERR")"
 state_rc=$?
 
