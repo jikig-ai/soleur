@@ -93,8 +93,9 @@ variables {
   # the REAL provider even under `terraform test`, so the #12931 import blocks
   # (cf-account-migration-imports.tf) are switched off here. Production keeps the default.
   cf_migration_imports_enabled = false
-  cf_r2_account_id             = "fedcba9876543210fedcba9876543210"
-  betterstack_api_token        = "dummy"
+  # Pinned to the legacy account by variables.tf (CTO ruling D8): any other value fails every run.
+  cf_r2_account_id      = "4d5ba6f096b2686fbdd404167dd4e125"
+  betterstack_api_token = "dummy"
   # Length-bearing, not "dummy": modules/git-data-userdata/variables.tf validates this is a
   # real ingest token, because an empty or stub value renders `BETTERSTACK_LOGS_TOKEN=` and
   # darkens eight of the nine git-data boot stages on a HASH-VALID boot (#7460).
@@ -188,7 +189,7 @@ run "reject_old_zone_id" {
   expect_failures = [var.cf_zone_id]
 }
 
-# The comparison is on lower(): an upper-case paste of the old id is still refused.
+# Upper case fails the 32-lowercase-hex shape check, so an upper-case paste of the old id is still refused.
 run "reject_old_zone_id_upper_case" {
   command = plan
   variables {
@@ -219,4 +220,65 @@ run "reject_empty_r2_account_id" {
     cf_r2_account_id = ""
   }
   expect_failures = [var.cf_r2_account_id]
+}
+
+# A padded or otherwise malformed id is refused as malformed before any provider call
+# (#12931 review, security P3: Guard 4 is only as strong as this check).
+run "reject_padded_zone_id" {
+  command = plan
+  variables {
+    cf_zone_id = " 0123456789abcdef0123456789abcdef"
+  }
+  expect_failures = [var.cf_zone_id]
+}
+
+run "reject_padded_account_id" {
+  command = plan
+  variables {
+    cf_account_id = "0123456789abcdef0123456789abcdef "
+  }
+  expect_failures = [var.cf_account_id]
+}
+
+# CTO ruling D8: R2 stays on the legacy account. The Soleur account id (or any other) is refused.
+run "reject_new_account_as_r2_account" {
+  command = plan
+  variables {
+    cf_r2_account_id = "66d4f93f7397f196544e9fe84c3557c2"
+  }
+  expect_failures = [var.cf_r2_account_id]
+}
+
+# CTO ruling D9: the plan-tier gates are locked off. A Doppler TF_VAR cannot turn one on; a
+# reviewed PR deletes the validation. One run block per gate.
+run "reject_load_balancing_enabled" {
+  command = plan
+  variables {
+    cf_load_balancing_enabled = true
+  }
+  expect_failures = [var.cf_load_balancing_enabled]
+}
+
+run "reject_zone_plan_pro" {
+  command = plan
+  variables {
+    cf_zone_plan_pro = true
+  }
+  expect_failures = [var.cf_zone_plan_pro]
+}
+
+run "reject_zone_dnssec_enabled" {
+  command = plan
+  variables {
+    cf_zone_dnssec_enabled = true
+  }
+  expect_failures = [var.cf_zone_dnssec_enabled]
+}
+
+run "reject_migration_import_app" {
+  command = plan
+  variables {
+    cf_migration_import_app = true
+  }
+  expect_failures = [var.cf_migration_import_app]
 }

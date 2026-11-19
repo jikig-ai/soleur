@@ -48,7 +48,7 @@
 # Rollback is a revert PR plus the `ga-monitor-fix` arm (http/:80, graded by cf_lb_gate_ga_monitor_update).
 # Traffic is not at risk either way: both origins serve (web-2 is weight 1) and the B1 fallback serves web-1 if every origin reads down.
 resource "cloudflare_load_balancer_monitor" "web" {
-  # Gated off since #12931: the Soleur account has no Load Balancing subscription.
+  # Gated off since #12931: the Soleur account has no Load Balancing subscription (purchase decision: #12983).
   count = var.cf_load_balancing_enabled ? 1 : 0
 
   account_id       = var.cf_account_id
@@ -92,7 +92,7 @@ locals {
 }
 
 resource "cloudflare_load_balancer_pool" "web_1" {
-  # Gated off since #12931: the Soleur account has no Load Balancing subscription.
+  # Gated off since #12931: the Soleur account has no Load Balancing subscription (purchase decision: #12983).
   count = var.cf_load_balancing_enabled ? 1 : 0
 
   account_id    = var.cf_account_id
@@ -148,7 +148,7 @@ resource "cloudflare_load_balancer_pool" "web_1" {
 # `load_balancing_health_alert` IS in the account's available_alerts (unlike the
 # http_alert_* Enterprise types documented at uptime-alerts.tf).
 resource "cloudflare_notification_policy" "web_lb_health" {
-  # Gated off since #12931: the Soleur account has no Load Balancing subscription.
+  # Gated off since #12931: the Soleur account has no Load Balancing subscription (purchase decision: #12983).
   count = var.cf_load_balancing_enabled ? 1 : 0
 
   account_id  = var.cf_account_id
@@ -177,7 +177,7 @@ resource "cloudflare_notification_policy" "web_lb_health" {
 # The Load Balancer itself, overlaid on app.soleur.ai. The retained A record
 # (cloudflare_record.app in dns.tf) stays as the automatic fallback for a disabled LB.
 resource "cloudflare_load_balancer" "app" {
-  # Gated off since #12931: the Soleur account has no Load Balancing subscription.
+  # Gated off since #12931: the Soleur account has no Load Balancing subscription (purchase decision: #12983).
   count = var.cf_load_balancing_enabled ? 1 : 0
 
   zone_id = var.cf_zone_id

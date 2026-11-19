@@ -82,7 +82,7 @@ cf_lb_gate_lb_enabled() {
       echo "cf-lb-overlay LB gate: cf_load_balancing_enabled defaults to true in ${vars_tf}; the arm may proceed."
       return 0 ;;
     false)
-      echo "::error::cf-lb-overlay LB gate: Load Balancing is gated off (cf_load_balancing_enabled defaults to false in ${vars_tf}, #12931). Every arm refuses while it is off: the GA LB addresses are count = 0 and Load Balancing is deferred on the Soleur account. To turn it on, land a reviewed PR that sets the default to true, widens CF_API_TOKEN with the Load Balancing scopes, and moves the GA allow-sets in tests/scripts/lib/cf-lb-overlay-gate.sh to the indexed [0] addresses. NOTHING planned or applied."
+      echo "::error::cf-lb-overlay LB gate: Load Balancing is gated off (cf_load_balancing_enabled defaults to false in ${vars_tf}, #12931). Every arm refuses while it is off: the GA LB addresses are count = 0 and Load Balancing is deferred on the Soleur account. To turn it on (decision #12983), land a reviewed PR that deletes the variable's lock-off validation, sets the default to true, widens CF_API_TOKEN with the Load Balancing scopes, and moves the GA allow-sets in tests/scripts/lib/cf-lb-overlay-gate.sh to the indexed [0] addresses. NOTHING planned or applied."
       return 1 ;;
     *)
       echo "::error::cf-lb-overlay LB gate: no literal true/false default for cf_load_balancing_enabled in ${vars_tf} (got '${val}'). Refusing. NOTHING planned or applied."
