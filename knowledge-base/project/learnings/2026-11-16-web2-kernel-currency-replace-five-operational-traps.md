@@ -96,6 +96,8 @@ The runbook section now says so.
 3. `WORKSPACES_LUKS_SOAK_DAYS` (3 by default in `lb-weight-gate.sh`) is measured from the marker's value, not from readiness. If the scheduled 2026-11-17T04:41Z run writes it, serve is possible from about 2026-11-20T04:41Z. Until the marker exists, the gate refuses with `B_workspaces_luks_marker_absent`. After that, it refuses with `B_workspaces_luks_soak_not_elapsed` until the soak ends.
 4. Dispatch `cf-lb-overlay.yml` from `main` with `arm=ga-pool-update mode=serve confirm=UPDATE-GA-LB-POOL`. It waits for the owner's approval on `web-platform-infra-apply`. Never SSH.
 
+> **Superseded 2026-11-19 (#12849), in part:** the serve on 2026-11-18 (run 44304068922) went out about 48 h before step 3's date, on a Doppler `WORKSPACES_LUKS_SOAK_DAYS` of 1. The gate now floors both soaks at 3 days and the serve arm also needs the #6931 grader's PASS (3 green probe days after readiness, one boot_id); the refusal table is in `cf-lb-a-record-gaplessness-verify.md`.
+
 **Key insight.** Do not run `web2_marker` until a probe row newer than readiness exists. Here the early dispatch moved serve from the day after the replace to about 4 days after it. The marker certifies the old instance and is deleted fail-closed, so never restore it by hand. Until serve, the fleet has one serving host (web-1), with no failover.
 
 ## Session Errors

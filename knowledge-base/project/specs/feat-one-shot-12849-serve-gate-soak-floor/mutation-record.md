@@ -39,3 +39,18 @@ G4-3/3b) live in `lb-weight-gate.test.sh` and run on every suite run.
 | G4-7 mirror grep unguarded | zero-line Condition A refusal row, wrapper id `none` row |
 | G4-8 summary evidence write skipped when non-empty | pass fence, refusal fence, F11 rows |
 | A1 `EV_KIND` init deleted | absent `SOLEUR_GATED_HOST` rows, TOP refusal row |
+
+## Review round (2026-11-19, PR #12934 panel)
+
+The panel's test-design seat ran its own battery against f5ce2fa8bd and found mutants that left the suites green; each is now a committed row or an executed row (all RED against its mutant, measured in `lb-weight-gate.test.sh` 643/643 on the fixed tree):
+
+| Mutant | Now caught by |
+|---|---|
+| `srow` reports PASS for `0` (with the workspaces floor deleted: 613/0 before) | `§SK instrument` row, graded outside `srow` (re-run in a sandbox: 642/1, the instrument row RED) |
+| `set +o errexit` + `exit 0` in the grader step | exact-body allowlist in `sk_grader_ok` (committed mutant) |
+| `set +o errexit` before the gate step's re-check | `sk_gate_ok` errexit-escape refusal (committed mutant) |
+| `if: always()` on Terraform apply | `sk_downstream_if_ok` (committed mutant) |
+| `trap 'exit 0' ERR` before `sse_instance_soak`; a second trap / `shell:` on the gate step | R7 rows (committed mutants) |
+| inner env without `-u BASH_ENV -u ENV` | R4 rows here and in `workspaces-luks-verify-workflow.test.sh` (committed mutants) |
+| rc 0 with empty or non-PASS text; rc 3 with a `PASS:` line | R1 executed rows |
+| `has_gate_fail` / `ski_line_ok` always true | negative rows |

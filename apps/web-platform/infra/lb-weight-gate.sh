@@ -56,7 +56,7 @@
 #     web2_marker job after a real on-host probe and a soak (#9372, ADR-263).
 #     THE SOAK FLOOR (#12849, ADR-263 2026-11-18 addendum). Both soaks are at least SOAK_FLOOR_DAYS (3) days.
 #     GIT_DATA_LUKS_SOAK_DAYS / WORKSPACES_LUKS_SOAK_DAYS are a plain integer from 1 to 999: unset or empty means
-#     the floor, 3..999 lengthens it, 1 and 2 refuse `*_soak_days_below_floor`, and anything else (0, a leading
+#     the floor (3), 4..999 lengthens it, 1 and 2 refuse `*_soak_days_below_floor`, and anything else (0, a leading
 #     zero read as octal, text, more than 3 digits) refuses `*_soak_days_invalid`. Values may only LENGTHEN the
 #     soak: a `prd` value of 1 shortened the 3-day soak on 2026-11-18 (run 44304068922) and now refuses. The
 #     3-digit cap also closes an older bypass: an unbounded value wrapped in bash arithmetic (200000000000000 *
@@ -276,7 +276,6 @@ soak_ev_reset git_data "${GIT_DATA_LUKS_SOAK_DAYS-}"
 SOAK_DAYS="${GIT_DATA_LUKS_SOAK_DAYS:-$SOAK_FLOOR_DAYS}"
 [[ "$SOAK_DAYS" =~ ^[1-9][0-9]{0,2}$ ]] || fail "B_luks_soak_days_invalid"
 EV_DAYS="$SOAK_DAYS"
-[[ "$SOAK_DAYS" -gt 0 ]] || fail "B_luks_soak_days_invalid" # unreachable after the regex; kept for D1
 [[ "$SOAK_DAYS" -ge "$SOAK_FLOOR_DAYS" ]] || fail "B_luks_soak_days_below_floor"
 EV_REQ=$(( SOAK_DAYS * 86400 ))
 
@@ -306,8 +305,7 @@ EV_AGE="$delta"
 [[ "$delta" -ge 0 ]] || fail "B_luks_cutover_marker_future"
 
 # B.5 — soak elapsed?
-soak_secs=$(( SOAK_DAYS * 86400 ))
-[[ "$delta" -ge "$soak_secs" ]] || fail "B_luks_soak_not_elapsed"
+[[ "$delta" -ge "$EV_REQ" ]] || fail "B_luks_soak_not_elapsed"
 soak_ev pass none
 
 # --- B.6-B.10 — web-2 /workspaces LUKS-backed precondition (ADR-143 D3 coupling #2) -----------
@@ -325,7 +323,6 @@ soak_ev_reset workspaces_luks "${WORKSPACES_LUKS_SOAK_DAYS-}"
 WS_SOAK_DAYS="${WORKSPACES_LUKS_SOAK_DAYS:-$SOAK_FLOOR_DAYS}"
 [[ "$WS_SOAK_DAYS" =~ ^[1-9][0-9]{0,2}$ ]] || fail "B_workspaces_luks_soak_days_invalid"
 EV_DAYS="$WS_SOAK_DAYS"
-[[ "$WS_SOAK_DAYS" -gt 0 ]] || fail "B_workspaces_luks_soak_days_invalid" # unreachable after the regex; kept for D1
 [[ "$WS_SOAK_DAYS" -ge "$SOAK_FLOOR_DAYS" ]] || fail "B_workspaces_luks_soak_days_below_floor"
 EV_REQ=$(( WS_SOAK_DAYS * 86400 ))
 
@@ -345,9 +342,8 @@ soak_ev_marker "$ws_epoch"
 ws_delta=$(( now_epoch - ws_epoch ))
 EV_AGE="$ws_delta"
 [[ "$ws_delta" -ge 0 ]] || fail "B_workspaces_luks_marker_future"
-[[ "$ws_delta" -ge $(( WS_SOAK_DAYS * 86400 )) ]] || fail "B_workspaces_luks_soak_not_elapsed"
+[[ "$ws_delta" -ge "$EV_REQ" ]] || fail "B_workspaces_luks_soak_not_elapsed"
 soak_ev pass none
-EV_KIND=
 
 # =============================================================================
 # SUCCESS — pooling requested AND both flip-authorization conditions' shape holds. SHAPE-ONLY;

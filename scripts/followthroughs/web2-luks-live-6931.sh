@@ -19,6 +19,14 @@
 #   4. the newest readiness row says the boot FORMATTED or OPENED the volume (luks_arm formatted|opened, w2l_ready_arm;
 #      `noop` does not count). No reboot is required: owner decision 2026-10-07 (ADR-263 addendum 2026-10-08), the principle being
 #      that a host is replaced, not rebooted, so the evidence is a fresh boot that brought the volume up plus the soak.
+#   5. ONLY when W2L_REQUIRE_BOOT_JOIN=1 (the serve arm sets it; the #6931 sweep does not): the readiness row and the
+#      newest probe row carry the SAME known boot_id, so a replaced or rebooted web-2 whose new readiness row never
+#      shipped cannot be graded on its predecessor's readiness row (Ruled by CTO agent, 2026-11-19, PR #12934 R2).
+#
+# PRODUCTION CALLER. Besides the sweeper, scripts/lib/serve-soak-evidence.sh (sse_instance_soak) runs this file before
+# every cf-lb-overlay.yml serve flip and refuses the flip unless it exits 0 with a `PASS:` first line. The rc meanings
+# below and the first-line shape (`PASS:|FAIL:|NOT YET:|CANNOT ESTABLISH:`) are load-bearing for that caller:
+# changing either, or deleting this file, refuses every serve (lb-weight-gate.test.sh §SK pins the pairing).
 #
 # Exit semantics (sweep-followthroughs.sh rc→word map):
 #   0 = PASS              the soak is met
@@ -139,6 +147,13 @@ if [[ "$verdict" != GREEN* ]]; then
 fi
 if (( green_days < SOAK_DAYS )); then
   unmet "${green_days} of ${SOAK_DAYS} distinct days of GREEN probe rows since the readiness row."
+fi
+if [[ "${W2L_REQUIRE_BOOT_JOIN:-}" == 1 ]]; then
+  rbid="${rverdict#GREEN boot_id=}"; rbid="${rbid%% *}"
+  pbid="${verdict#GREEN boot_id=}"; pbid="${pbid%% *}"
+  if [[ ! "$rbid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ || "$rbid" != "$pbid" ]]; then
+    unmet "the readiness row's boot_id (${rbid:-none}) and the newest probe row's (${pbid:-none}) are not one known boot: web-2 was rebooted or replaced without a readiness row of its own. Replace web-2 (web-host-replace.md) and let the new instance soak."
+  fi
 fi
 
 printf 'PASS: web-2 is live on a LUKS-backed /workspaces — %s distinct days of GREEN probe rows since the readiness row (%s h ago), no non-green row, and the newest probe row is fresh (%s). (#6931 soak-gated closure)\n' \

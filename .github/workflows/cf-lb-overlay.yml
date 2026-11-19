@@ -53,7 +53,7 @@ on:
         required: true
         type: string
       mode:
-        description: "ga-pool-update only: drain = web-2 set to weight 0 (explicit); serve = grade and apply web-2 weight 1 behind the §(c) gate chain (already 1 after the 2026-11-08 serve flip, so a re-run is a no-op re-proof)"
+        description: "ga-pool-update only: drain = web-2 set to weight 0 (explicit); serve = grade and apply web-2 weight 1 behind the §(c) gate chain and the per-instance soak grader (a refused serve changes no weight and never drains)"
         required: false
         type: choice
         options:
@@ -879,7 +879,10 @@ jobs:
   ga_pool_update:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-pool-update'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Worst case ~28 min (Ruled by CTO agent, 2026-11-19, PR #12934 R6): setup + gate ~3, per-instance grader
+    # 2 x 120 s, relay bind probe 3 x 120 s, init/plan/apply ~5, post-apply continuity 90 x (5 s curl + 1 s) = 9.
+    # The cap must not cut the continuity check off after the weight is applied.
+    timeout-minutes: 35
     # REVIEWER-GATED like ga-overlay. mode=drain lands the drained shape (web-2 at
     # weight 0, health-monitored; an explicit -var, the variable's default is 1).
     # mode=serve grades web-2 at weight 1 (the 0→1 flip, or a no-op re-proof against live)
@@ -887,8 +890,9 @@ jobs:
     # BEFORE plan, so an unauthorized flip never reaches a grader. Right after it, the
     # per-instance soak grader (scripts/followthroughs/web2-luks-live-6931.sh, via
     # scripts/lib/serve-soak-evidence.sh) must say PASS: the gate reads Doppler marker
-    # TIMES, the grader reads THIS instance's own probe rows, so a replaced-but-unsoaked
-    # web-2 cannot serve on an old marker (#12849). Both self-report their soak evidence
+    # TIMES, the grader reads web-2's readiness and probe rows and requires one boot_id across
+    # them, so this arm cannot serve a replaced-but-unsoaked web-2 on an old marker (#12849).
+    # A replace keeps the pool weight it found and is not gated here (#12939). Both self-report their soak evidence
     # (SOLEUR_SOAK_EVIDENCE / SOLEUR_INSTANCE_SOAK) to the log and the step summary.
     environment: web-platform-infra-apply
     steps:
@@ -938,7 +942,8 @@ jobs:
           #     the prd_workspaces_luks_marker WRITE token (no read-only token exists on
           #     that config — lb-weight-gate-with-marker.sh:15) and it reaches the
           #     wrapper ONLY via env DOPPLER_TOKEN.
-          # Tokens ride env assignments ONLY — argv must never carry one.
+          # Tokens ride env assignments only, never a command-line flag; `env NAME=value` does hold
+          # them in env's own argv until it execs (same-user readable for that instant, accepted).
           DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
           DOPPLER_TOKEN_LUKS_MARKER: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}
           # The gated host, for the soak evidence helper below (#12849). The inner env's
@@ -959,6 +964,9 @@ jobs:
           # it (names_rc_127, gate never ran). The inner env overrides anything `prd`
           # injected; the wrapper accepts ONLY that exact path and fails closed
           # (exit 3, bad_doppler_bin) on anything else -- it never falls back to PATH.
+          # `-u BASH_ENV -u ENV`: bash expands BASH_ENV (command substitution included) before the
+          # wrapper's first line, so a prd secret of that name would run before its own unset
+          # (Ruled by CTO agent, 2026-11-19, PR #12934 R4; the other doppler-run sites: #12970).
           #
           # TWO gate inputs are not in Doppler prd and are injected by the inner `env`
           # (after `doppler run`, so they override any ambient value):
@@ -988,9 +996,9 @@ jobs:
           GATE_OUT=""
           gate_rc=0
           : >"${RUNNER_TEMP}/lb-gate.stderr"
-          trap 'cat "${RUNNER_TEMP}/lb-gate.stderr" >&2' EXIT
+          trap 'cat "${RUNNER_TEMP}/lb-gate.stderr" >&2; rm -f "${RUNNER_TEMP}/lb-gate.stderr"' EXIT
           GATE_OUT="$(env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler run --preserve-env -p soleur -c prd -- \
-            env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \
+            env -u BASH_ENV -u ENV DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \
               SOLEUR_WEB2_SERVING_WEIGHT="$WEB2_LB_WEIGHT" SOLEUR_GATED_HOST="web-2" \
               SOLEUR_SERVING_ROTATION="web-1,web-2" \
             bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh" 2>"${RUNNER_TEMP}/lb-gate.stderr")" || gate_rc=$?
@@ -1017,8 +1025,8 @@ jobs:
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
         run: |
           set -euo pipefail
-          # The gate above proves the soak MARKER TIMES; this proves THIS instance's soak from
-          # its own probe rows (#12849, ADR-263). Exit 0 only on PASS: NOT_YET, FAIL and
+          # The gate above proves the soak MARKER TIMES; this proves the instance's soak from
+          # web-2's readiness and probe rows on one boot_id (#12849, ADR-263). Exit 0 only on PASS: NOT_YET, FAIL and
           # CANNOT_ESTABLISH all stop the arm before any plan, each with its next step in the
           # ::error:: line. The helper runs the grader under env -i with only the names it reads
           # (this job's GITHUB_ENV holds Terraform and Doppler credentials).
@@ -1042,7 +1050,8 @@ jobs:
           # MEMBERSHIP FLOOR: the pooled set is {web-1, web-2} — a read carrying ONE
           # record (or zero) is missing web-2's own record, and an absent record must
           # never grade as healthy:true. Require n>=2 AND every record healthy.
-          W2_HEALTH=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash -c '
+          # env -u BASH_ENV -u ENV: a prd_terraform secret of that name must not run before the script (R4).
+          W2_HEALTH=$(doppler run --preserve-env -p soleur -c prd_terraform -- env -u BASH_ENV -u ENV bash -c '
             POOL_ID=$(curl --disable --noproxy "*" -s --max-time 10 \
               "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/load_balancers/pools" \
               --config - < <(printf "header = \"Authorization: Bearer %s\"\n" "${CF_API_TOKEN}") \

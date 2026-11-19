@@ -366,6 +366,19 @@ Every way the soak decision can be shortened or skipped on the serve path, and w
   user to a host without proof their workspace is LUKS-backed and soaked, so the 3-day floor and the
   per-instance grader must fail closed, and a config value may only lengthen the soak.
 - `soleur:engineering:review:user-impact-reviewer` runs at review time (single-user threshold).
+- **Review additions (2026-11-19, user-impact-reviewer; fixes Ruled by CTO agent, 2026-11-19):**
+  - *Already pooled.* A refused serve changes no weight and never drains: a web-2 already at weight 1 that grades
+    `FAIL` (or a boot_id mismatch, or the 90-day `NOT_YET`) keeps serving until `mode=drain`. Both the `::error::`
+    next step and the runbook row now say "drain first", and the runbook says so in prose.
+  - *Outage pressure.* After a drain, every serve refuses until #12933; the only sanctioned route back to serving is
+    #12933 plus a PASS. A full-root apply takes the `web2_lb_weight` default of 1 outside the gate and the grader and
+    re-opens this defect; the below-floor `::error::` and the runbook now say never to restore the weight that way.
+  - *Live exposure.* web-2 has served since run 44304068922 on the short marker soak, without a grader run. The
+    read-only grader read on 2026-11-19 (#12820) was `NOT YET` (69 h of 72 h, no non-green row), so no drain.
+  - *Point-in-time.* The grader accepts a newest probe row up to 26 h old; a LUKS mapper lost after it is not seen
+    by the serve arm (residual, ADR-263 review amendment).
+  - *Replace.* A replaced web-2 whose readiness row never shipped now reads `NOT_YET` in the serve arm (boot_id
+    join, R2); the replace path itself keeps the pool weight (#12939) and the generation anchor is #12869.
 
 ## Observability
 
