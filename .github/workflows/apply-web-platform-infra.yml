@@ -1718,7 +1718,6 @@ jobs:
           doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
           doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
-      # #12742: live strict-SSL read, fail-closed, before any terraform step. Why: §inngest_host_replace rationale.
       - name: Public sdk_url strict-SSL preflight (#12742)
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -1911,7 +1910,6 @@ jobs:
           doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
           doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
-      # #12742: live strict-SSL read, fail-closed, before any terraform step. Why: §inngest_host_replace rationale.
       - name: Public sdk_url strict-SSL preflight (#12742)
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
