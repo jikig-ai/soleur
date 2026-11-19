@@ -67,7 +67,14 @@ set -euo pipefail
 path="$1"
 [[ -n "${STUB_CALLLOG:-}" ]] && printf '%s\n' "$path" >> "$STUB_CALLLOG"
 if [[ "$path" == accounts/*/rulesets && "$path" != *phases* ]]; then
-  printf '%s\n%s\n' "${STUB_ACCT_CONTROL_CODE:-200}" '{"result":[{"id":"r1"}]}'
+  def_acct='{"result":[{"id":"r1"}]}'
+  printf '%s\n%s\n' "${STUB_ACCT_CONTROL_CODE:-200}" "${STUB_ACCT_LIST_BODY:-$def_acct}"
+  exit 0
+fi
+# The zone ruleset LIST (zone-list control mode, #12931 D2).
+if [[ "$path" == zones/*/rulesets && "$path" != *phases* ]]; then
+  def_zl='{"result":[]}'
+  printf '%s\n%s\n' "${STUB_ZLIST_CODE:-200}" "${STUB_ZLIST_BODY:-$def_zl}"
   exit 0
 fi
 phase="${path##*phases/}"; phase="${phase%%/entrypoint}"
@@ -105,6 +112,25 @@ _gate() {
     STUB_TARGET_CODE="$tcode" \
     STUB_TARGET_BODY="$tbody" \
     bash "$GATE" --gate "$fixture" 2>&1
+  )" && RC=0 || RC=$?
+}
+# _gate_zl <fixture> <zlist-code> <zlist-body> <target-code> [<target-body>] [<zone>] [<acct-list-body>]:
+# PREAPPLY_CONTROL=zone-list, the control zone defaulting to the fixture's zone. Sets OUT, RC.
+_gate_zl() {
+  local empty_list='{"result":[]}'
+  : > "$CALLLOG"
+  OUT="$(
+    PREAPPLY_CONTROL=zone-list \
+    PREAPPLY_CF_TOKEN="dummy-token" \
+    PREAPPLY_CF_ZONE_ID="${6:-zone000000000000000000000000000f}" \
+    PREAPPLY_ENTRYPOINT_FETCH="$STUB" \
+    STUB_CALLLOG="$CALLLOG" \
+    STUB_ZLIST_CODE="$2" STUB_ZLIST_BODY="$3" \
+    STUB_ACCT_LIST_BODY="${7:-$empty_list}" \
+    STUB_CONTROL_CODE=404 \
+    STUB_TARGET_CODE="$4" \
+    STUB_TARGET_BODY="${5:-}" \
+    bash "$GATE" --gate "$1" 2>&1
   )" && RC=0 || RC=$?
 }
 _calls() { local n=0; [[ -s "$CALLLOG" ]] && n=$(grep -c '' <"$CALLLOG") || true; echo "$n"; }
@@ -448,6 +474,74 @@ t_control_zone_empty_fails_closed() {
     _report "G28 empty PREAPPLY_CF_ZONE_ID on a matched plan fails closed, 0 API calls" ok
   else
     _report "G28 control-zone-empty fails closed" fail "RC=$RC calls=$calls OUT=$(tr '\n' '|' <<<"$OUT")"
+  fi
+}
+
+# --- 1b. GATE zone-list control mode (#12931 CTO D2) ---------------------------
+# The migrate job runs the gate on a NEW, empty zone: no phase is known-populated, so the default
+# control (a 200 on http_request_dynamic_redirect) cannot pass. STUB_CONTROL_CODE=404 in _gate_zl
+# proves the zone-list mode never relies on it.
+t_zone_list_mode() {
+  local fx="$FIXTURES/tfplan-ruleset-create.json"
+  local other='{"result":[{"id":"a","kind":"managed","phase":"http_config_settings"},{"id":"b","kind":"zone","phase":"http_request_firewall_custom"}]}'
+  _gate_zl "$fx" 200 "$other" 404
+  if [[ "$RC" -eq 0 ]] && ! grep -q 'phases/http_request_dynamic_redirect' "$CALLLOG" && grep -qx 'zones/zone000000000000000000000000000f/rulesets' "$CALLLOG"; then
+    _report "ZL1 zone-list: list 200 without a kind=zone ruleset for the phase + target 404 PASSES (no known-populated control needed)" ok
+  else
+    _report "ZL1 zone-list pass" fail "RC=$RC calls=$(tr '\n' ' ' <"$CALLLOG") OUT=$(tr '\n' '|' <<<"$OUT")"
+  fi
+  _gate_zl "$fx" 200 '{"result":[{"id":"cfg1","kind":"zone","phase":"http_config_settings"}]}' 404
+  if [[ "$RC" -ne 0 ]] && grep -q '404 disagrees with the list' <<<"$OUT"; then
+    _report "ZL2 zone-list: list holds a kind=zone ruleset for the phase + target 404 FAILS closed" ok
+  else
+    _report "ZL2 zone-list disagreeing 404" fail "RC=$RC OUT=$(tr '\n' '|' <<<"$OUT")"
+  fi
+  local code
+  for code in 403 500 000; do
+    _gate_zl "$fx" "$code" '{"result":[]}' 404
+    if [[ "$RC" -ne 0 ]] && grep -q "zone-list control probe (zones/<zone>/rulesets) returned HTTP '${code}'" <<<"$OUT"; then
+      _report "ZL3.${code} zone-list: list HTTP ${code} fails closed (gate-environment-invalid)" ok
+    else
+      _report "ZL3.${code} zone-list list non-200" fail "RC=$RC OUT=$(tr '\n' '|' <<<"$OUT")"
+    fi
+  done
+  _gate_zl "$fx" 200 '{"result":null,"success":false}' 404
+  if [[ "$RC" -ne 0 ]] && grep -q '.result is not an array' <<<"$OUT"; then
+    _report "ZL4 zone-list: a degraded 200 list body fails closed" ok
+  else
+    _report "ZL4 zone-list degraded list" fail "RC=$RC OUT=$(tr '\n' '|' <<<"$OUT")"
+  fi
+  _gate_zl "$fx" 200 '{"result":[]}' 404 "" "zone-not-the-rows-zone"
+  if [[ "$RC" -ne 0 ]] && grep -q "row's zone_id is not PREAPPLY_CF_ZONE_ID" <<<"$OUT"; then
+    _report "ZL5 zone-list: a row on another zone cannot be corroborated -> fails closed" ok
+  else
+    _report "ZL5 zone-list foreign zone" fail "RC=$RC OUT=$(tr '\n' '|' <<<"$OUT")"
+  fi
+  _gate_zl "$fx" 200 '{"result":[]}' 200 "$POPULATED_BODY"
+  if [[ "$RC" -ne 0 ]] && grep -q 'CLOBBER RISK' <<<"$OUT" && grep -q 'import { to = cloudflare_ruleset.seo_config_settings; id = "zone/zone000000000000000000000000000f/liverulesetid' <<<"$OUT"; then
+    _report "ZL6 zone-list: a populated target 200 still refuses and prints the import block" ok
+  else
+    _report "ZL6 zone-list populated target" fail "RC=$RC OUT=$(tr '\n' '|' <<<"$OUT")"
+  fi
+  _gate_zl "$fx" 200 '{"result":[]}' 404 "" "" '{"result":[]}'
+  local rc_pass=$RC
+  : > "$CALLLOG"
+  OUT="$(PREAPPLY_CONTROL=zone-lst PREAPPLY_CF_TOKEN=dummy-token PREAPPLY_CF_ZONE_ID=zone000000000000000000000000000f PREAPPLY_ENTRYPOINT_FETCH="$STUB" STUB_CALLLOG="$CALLLOG" bash "$GATE" --gate "$fx" 2>&1)" && RC=0 || RC=$?
+  if [[ "$rc_pass" -eq 0 && "$RC" -ne 0 ]] && grep -q "PREAPPLY_CONTROL='zone-lst'" <<<"$OUT" && [[ "$(_calls)" -eq 0 ]]; then
+    _report "ZL7 an unknown PREAPPLY_CONTROL value fails closed with zero requests" ok
+  else
+    _report "ZL7 unknown PREAPPLY_CONTROL" fail "rc_pass=$rc_pass RC=$RC OUT=$(tr '\n' '|' <<<"$OUT")"
+  fi
+  # kind=root in zone-list mode: the account LIST is the witness for a 404.
+  local acct_fx="$SCRATCH_ZL/root.json"
+  jq '.resource_changes[0].change.after |= (.kind = "root" | .phase = "http_request_redirect" | .zone_id = null | .account_id = "acct00000000000000000000000000001")' "$fx" > "$acct_fx"
+  _gate_zl "$acct_fx" 200 '{"result":[]}' 404 "" "" '{"result":[{"id":"bulk1","kind":"root","phase":"http_request_redirect"}]}'
+  local rc_dis=$RC out_dis="$OUT"
+  _gate_zl "$acct_fx" 200 '{"result":[]}' 404 "" "" '{"result":[{"id":"x","kind":"custom","phase":"http_request_firewall_custom"}]}'
+  if [[ "$rc_dis" -ne 0 ]] && grep -q 'root ruleset list holds 1 kind=root' <<<"$out_dis" && [[ "$RC" -eq 0 ]]; then
+    _report "ZL8 zone-list kind=root: the account list must agree with a 404 (disagree fails, agree passes)" ok
+  else
+    _report "ZL8 zone-list kind=root" fail "rc_dis=$rc_dis RC=$RC OUT=$(tr '\n' '|' <<<"$out_dis")"
   fi
 }
 
@@ -924,6 +1018,9 @@ t_create_importing_exempt
 t_account_control_non200_fails_closed
 t_control_degraded_body_fails_closed
 t_control_zone_empty_fails_closed
+SCRATCH_ZL="$(mktemp -d)"
+t_zone_list_mode
+rm -rf "$SCRATCH_ZL"
 t_audit_static_table
 t_audit_live_stub
 t_plan_step_captures_json_once

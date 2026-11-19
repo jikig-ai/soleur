@@ -3,6 +3,7 @@
 # Job logic: apps/web-platform/infra/scripts/cf-account-migrate-job.sh.
 
 name: CF account migrate (#12931)
+run-name: "CF account migrate (#12931): ${{ inputs.migrate_phase }} rehearsal=${{ inputs.rehearsal }}"
 
 on:
   workflow_dispatch:
@@ -42,10 +43,15 @@ env:
   INFRA_DIR: apps/web-platform/infra
 
 jobs:
-  cf_account_migrate:
+  # Two jobs, each with LITERAL environment and REHEARSAL values (CTO D7): which environment
+  # approves the run and whether it applies are one fact, so no expression renders either.
+  # tests/scripts/test-cf-account-migration-scope.sh (A4) pins both pairs exactly.
+  # rehearsal=true: plan on a local-backend scratch copy, write nothing (no-reviewer environment).
+  cf_account_migrate_rehearsal:
+    if: inputs.rehearsal
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    environment: ${{ inputs.rehearsal && 'infra-privileged' || 'web-platform-infra-apply' }}
+    environment: infra-privileged
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
@@ -64,17 +70,17 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || { echo "::error::AWS_ACCESS_KEY_ID missing"; exit 1; }
-          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || { echo "::error::AWS_SECRET_ACCESS_KEY missing"; exit 1; }
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(timeout 30 doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || { echo "::error::AWS_ACCESS_KEY_ID missing"; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(timeout 30 doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || { echo "::error::AWS_SECRET_ACCESS_KEY missing"; exit 1; }
           [[ -n "$KEY_ID" && -n "$SECRET" ]] || { echo "::error::empty R2 backend creds"; exit 1; }
           printf '::add-mask::%s\n' "$KEY_ID"; printf '::add-mask::%s\n' "$SECRET"
           printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
           printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
-      - name: Migrate (rehearsal or apply)
+      - name: Migrate (rehearsal)
         env:
           MIGRATE_PHASE: ${{ inputs.migrate_phase }}
           CONFIRM: ${{ inputs.confirm }}
-          REHEARSAL: ${{ inputs.rehearsal }}
+          REHEARSAL: "true"
           REASON: ${{ inputs.reason }}
           R2_ENDPOINT: https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -88,11 +94,68 @@ jobs:
         if: failure()
         uses: ./.github/actions/notify-ops-email
         with:
-          subject: "CF account migrate (#12931): ${{ inputs.migrate_phase }} run did NOT complete"
+          subject: "CF account migrate (#12931): ${{ inputs.migrate_phase }} rehearsal run did NOT complete"
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
           body: |
-            <p>The <strong>CF account migrate</strong> run for phase
-            <code>${{ inputs.migrate_phase }}</code> (rehearsal <code>${{ inputs.rehearsal }}</code>) failed.
+            <p>The <strong>CF account migrate</strong> rehearsal run for phase
+            <code>${{ inputs.migrate_phase }}</code> failed.
+            The job's last <code>cf-account-migrate … verdict=refuse reason=…</code> line names the cause.
+            Follow knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md.</p>
+            <p>Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>
+
+  # rehearsal=false: forget, plan, gate, apply (reviewer-gated environment: the approval is the authorization).
+  cf_account_migrate_apply:
+    if: ${{ !inputs.rehearsal }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: web-platform-infra-apply
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(timeout 30 doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || { echo "::error::AWS_ACCESS_KEY_ID missing"; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(timeout 30 doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || { echo "::error::AWS_SECRET_ACCESS_KEY missing"; exit 1; }
+          [[ -n "$KEY_ID" && -n "$SECRET" ]] || { echo "::error::empty R2 backend creds"; exit 1; }
+          printf '::add-mask::%s\n' "$KEY_ID"; printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+      - name: Migrate (apply)
+        env:
+          MIGRATE_PHASE: ${{ inputs.migrate_phase }}
+          CONFIRM: ${{ inputs.confirm }}
+          REHEARSAL: "false"
+          REASON: ${{ inputs.reason }}
+          R2_ENDPOINT: https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: bash apps/web-platform/infra/scripts/cf-account-migrate-job.sh
+      - name: Remove runner copies of state and plan
+        if: always()
+        run: rm -rf "${RUNNER_TEMP}/cf-migrate"
+      - name: Email ops on failure
+        if: failure()
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: "CF account migrate (#12931): ${{ inputs.migrate_phase }} apply run did NOT complete"
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+          body: |
+            <p>The <strong>CF account migrate</strong> apply run for phase
+            <code>${{ inputs.migrate_phase }}</code> failed.
             The job's last <code>cf-account-migrate … verdict=refuse reason=…</code> line names the cause.
             Follow knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md.</p>
             <p>Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>
