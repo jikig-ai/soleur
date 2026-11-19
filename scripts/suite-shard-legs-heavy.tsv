@@ -1,9 +1,9 @@
 # suite-shard-legs-heavy.tsv — duration-aware shard assignment (ADR-240)
 # n=3
-# generated-from-run=incremental
-# generated-from-runs=incremental
-# default-weight-ms=379182
-# generated-at=2026-11-01T08:11:47Z
+# generated-from-run=local:44422317370,44367783886,44361074603,44341020337,44334556285
+# generated-from-runs=local:44422317370,44367783886,44361074603,44341020337,44334556285
+# default-weight-ms=502545
+# generated-at=2026-11-19T10:56:16Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --group heavy --incremental --write   # suite added/removed; --group heavy --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)

@@ -167,22 +167,38 @@ def gh(args, **kw):
     return p.stdout
 
 
-def green_main_runs(workflow="ci.yml", n=5):
-    """The N most recent successful main runs of WORKFLOW, newest first.
+def green_main_runs(workflow="ci.yml", n=5, event="main"):
+    """The N most recent successful runs of WORKFLOW in EVENT's population,
+    newest first. EVENT populations:
+      merge_group — merge-queue runs (`--event merge_group` only; NO --branch —
+                    queue runs carry headBranch gh-readonly-queue/..., so a
+                    --branch main filter would empty the sample while still
+                    succeeding). The full required battery runs here —
+                    the ci.yml groups must price off this population.
+      push        — push events on main (--branch main --event push). Push
+                    runs are selection-reduced (no suite-timings artifacts),
+                    so this population is for diagnosis, never repricing.
+      main        — every main-branch run (push+schedule+dispatch) — the
+                    legacy infra-validation source.
     Uses `gh run list` rather than the REST runs-list endpoint — the latter
     answers 404 for some credential shapes while run-list and the per-run
     artifacts endpoint both work."""
-    p = subprocess.run(
-        ["gh", "run", "list", "--workflow", workflow, "--branch", "main",
-         "--status", "success", "-L", str(n), "--json", "databaseId",
-         "--jq", ".[].databaseId"],
-        capture_output=True, text=True)
+    argv = ["gh", "run", "list", "--workflow", workflow,
+            "--status", "success", "-L", str(n), "--json", "databaseId",
+            "--jq", ".[].databaseId"]
+    if event == "merge_group":
+        argv += ["--event", "merge_group"]
+    elif event == "push":
+        argv += ["--branch", "main", "--event", "push"]
+    else:
+        argv += ["--branch", "main"]
+    p = subprocess.run(argv, capture_output=True, text=True)
     if p.returncode != 0:
         die(f"gh run list --workflow {workflow} failed: {p.stderr.strip()}")
     runs = [int(x) for x in p.stdout.split() if x and x != "null"]
     if not runs:
-        die(f"no successful {workflow} runs on main found; pass --run or "
-            f"--timings-dir/--durations explicitly")
+        die(f"no successful {workflow} runs in the {event} population; "
+            f"pass --run or --timings-dir/--durations explicitly")
     return runs
 
 
@@ -938,6 +954,22 @@ def main():
                          "committed suite-durations.tsv). Supplying it also "
                          "arms the gate on redirected --manifest/"
                          "--durations-out emissions — the fixture seam")
+    ap.add_argument("--event", choices=("auto", "push", "merge_group"),
+                    default="auto",
+                    help="event population --runs/--run-default sampling draws "
+                         "from (default auto: merge_group for the ci.yml test "
+                         "matrices — push runs on main carry no suite-timings "
+                         "artifacts — and every main-branch run for "
+                         "infra-validation). Refused under --incremental/"
+                         "--drift-report (no fetch); ignored with a WARN "
+                         "under --durations/--timings-dir")
+    ap.add_argument("--allow-all-floor", action="store_true",
+                    help="acknowledge a committed --write whose sample "
+                         "contains zero measured rows — an all-floor "
+                         "count-balanced table replacing committed prices. "
+                         "Refused by default: a battery-less population "
+                         "(push runs on main ship no suite-timings "
+                         "artifacts) silently zeroes the sample")
     args = ap.parse_args()
 
     if args.legs is not None and args.legs < 1:
@@ -957,6 +989,10 @@ def main():
         if args.run is not None or args.runs is not None:
             die("--drift-report reads local artifact dirs only — refusing "
                 "--run/--runs (download runs to per-run dirs first)")
+        if args.event != "auto":
+            die("--drift-report reads local artifact dirs only — refusing "
+                "--event (it selects the gh run population a fetch would "
+                "sample, and report mode fetches nothing)")
         if args.durations_out is not None:
             die("--drift-report writes nothing — refusing --durations-out "
                 "(the comparison base is --durations or the committed table)")
@@ -973,6 +1009,9 @@ def main():
         die("--incremental cannot be combined with --run/--runs/--timings-dir — "
             "incremental mode fetches no timings (incumbent rows pin verbatim; "
             "new labels price at the durations-table floor)")
+    if args.incremental and args.event != "auto":
+        die("--incremental fetches no timings — refusing --event (it selects "
+            "the gh run population a fetch would sample)")
 
     if args.group == "heavy":
         job, group, artifact_re = "test-scripts-heavy", "scripts-heavy", HEAVY_ARTIFACT
@@ -989,6 +1028,13 @@ def main():
         default_manifest = MANIFEST
         default_durations = DURATIONS
         workflow, key = CI_YML, "shard"
+    # --event resolution: the ci.yml test matrices price off merge_group runs
+    # — the full required battery; push runs on main are selection-reduced and
+    # ship no suite-timings artifacts (the zero-measured footgun the committed
+    # --write refusal below guards). infra-validation keeps its main-branch
+    # population.
+    event = args.event if args.event != "auto" else (
+        "merge_group" if args.group in ("light", "heavy") else "main")
     manifest_path = args.manifest if args.manifest else default_manifest
     if args.durations_out:
         durations_path = args.durations_out
@@ -1187,6 +1233,9 @@ def main():
 
     # Input-source precedence mirrors the file's pairing rule: whichever source
     # actually fed stamps the provenance. --durations > --timings-dir > gh.
+    if args.event != "auto" and (args.durations or args.timings_dir):
+        print("WARN: --event selects the gh run population — it has no "
+              "effect with --durations/--timings-dir", file=sys.stderr)
     floor_inputs = set()
     est_inputs = set()
     run_ids = []
@@ -1215,7 +1264,8 @@ def main():
         if args.run:
             run_ids = [args.run]
         else:
-            run_ids = green_main_runs(os.path.basename(workflow), args.runs or 5)
+            run_ids = green_main_runs(os.path.basename(workflow),
+                                      args.runs or 5, event)
         for r in run_ids:
             per_run.append((f"run:{r}",
                             fetch_timings_from_run(
@@ -1316,6 +1366,21 @@ def main():
         new_rows = {l: (timings[l], src_map[l]) for l in timings}
         committed_write = (
             os.path.abspath(durations_path) == os.path.abspath(default_durations))
+        # Zero-measured refusal BEFORE the gate and the opens: a committed
+        # write whose sample carries no measured rows replaces every committed
+        # price with an all-floor count-balanced table — the exact output a
+        # battery-less --runs population (push runs on main ship no
+        # suite-timings artifacts) or an all-floor --durations input produces.
+        # Redirected emissions stay writable (fixtures, local packs), and
+        # --allow-all-floor acknowledges an intentional floor rewrite.
+        measured_n = sum(1 for s in src_map.values() if s == "measured")
+        if committed_write and measured_n == 0 and not args.allow_all_floor:
+            die(f"refusing to write {os.path.basename(durations_path)}: the "
+                f"sample has zero measured rows — an all-floor count-balanced "
+                f"table would replace the committed prices. Feed measured "
+                f"input (--timings-dir, or --run/--runs over the merge_group "
+                f"population), or acknowledge an intentional floor rewrite "
+                f"with --allow-all-floor")
         growth_ack = drift_gate(new_rows, args, args.baseline_durations,
                                 committed_write, durations_path)
         # Provenance follows the SOURCE the timings actually came from — a

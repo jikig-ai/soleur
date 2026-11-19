@@ -1076,25 +1076,50 @@ fi
 # === Fixture Z3: default (no --group/--durations/--manifest) loops light+heavy ==
 # against the COMMITTED tables — heavy comes free from the same artifact dirs.
 FZ3="$WORK/Z3"; mkdir -p "$FZ3/run1/suite-timings-scripts-0"; assert_fixture_dir "$FZ3"
-# Time one REAL committed floor label so a DRIFT_ROW lands on the default path.
+# Time one REAL committed floor label so a DRIFT_ROW lands on the default
+# path. When the committed table is fully measured (a fresh complete reprice
+# leaves zero floor rows — a legitimate state, not a broken precondition), the
+# arm falls back to a committed measured label timed at its committed price:
+# within every bound, so the pinned shape becomes "the default loop emits no
+# row for it" plus FLOOR_UNMEASURED light 0.
 Z3_LABEL="$(awk -F'\t' '$3=="floor" {print $1; exit}' "$REPO_ROOT/scripts/suite-durations.tsv")"
-[[ -n "$Z3_LABEL" ]] || { echo "FATAL: committed durations has no floor row to fixture" >&2; exit 2; }
+Z3_KIND=floor
+if [[ -z "$Z3_LABEL" ]]; then
+  Z3_LABEL="$(awk -F'\t' '$3=="measured" {print $1; exit}' "$REPO_ROOT/scripts/suite-durations.tsv")"
+  Z3_KIND=measured
+fi
+[[ -n "$Z3_LABEL" ]] || { echo "FATAL: committed durations has no row to fixture" >&2; exit 2; }
 Z3_MS="$(awk -F'\t' -v l="$Z3_LABEL" '$1==l {print $2; exit}' "$REPO_ROOT/scripts/suite-durations.tsv")"
 [[ -n "$Z3_MS" ]] || { echo "FATAL: committed ms for $Z3_LABEL not found" >&2; exit 2; }
 Z3_FLOORS="$(awk -F'\t' '$3=="floor"' "$REPO_ROOT/scripts/suite-durations.tsv" | wc -l)"
-printf '%s\t700000\n' "$Z3_LABEL" > "$FZ3/run1/suite-timings-scripts-0/suite-timings.tsv"
+case "$Z3_KIND" in
+  floor)    Z3_TIME=700000 ;;
+  measured) Z3_TIME="$Z3_MS" ;;
+esac
+printf '%s\t%s\n' "$Z3_LABEL" "$Z3_TIME" > "$FZ3/run1/suite-timings-scripts-0/suite-timings.tsv"
 if python3 "$GEN" --drift-report --timings-dir "$FZ3/run1" \
      > "$FZ3/out.txt" 2> "$FZ3/err.txt"; then
   check pass "Z3: default drift-report exits 0 on the committed tables"
 else
   check fail "Z3: default drift-report refused: $(tail -2 "$FZ3/err.txt")"
 fi
-if grep -qxF "DRIFT_ROW light $Z3_LABEL $Z3_MS 700000 1/1" "$FZ3/out.txt"; then
-  check pass "Z3: default loop reports committed floor rows that measured"
+if [[ "$Z3_KIND" == floor ]]; then
+  if grep -qxF "DRIFT_ROW light $Z3_LABEL $Z3_MS 700000 1/1" "$FZ3/out.txt"; then
+    check pass "Z3: default loop reports committed floor rows that measured"
+  else
+    check fail "Z3: DRIFT_ROW for the committed floor label missing: $(grep DRIFT_ROW "$FZ3/out.txt")"
+  fi
+  Z3_EXPECT_UNMEASURED=$(( Z3_FLOORS - 1 ))
 else
-  check fail "Z3: DRIFT_ROW for the committed floor label missing: $(grep DRIFT_ROW "$FZ3/out.txt")"
+  if ! grep -q "DRIFT_ROW light $Z3_LABEL" "$FZ3/out.txt" \
+     && ! grep -q "PRICE_DRIFT_ROW light $Z3_LABEL" "$FZ3/out.txt"; then
+    check pass "Z3: fully-measured committed table — a within-bounds measured label emits no row"
+  else
+    check fail "Z3: a measured label timed at its committed price emitted a row: $(grep "$Z3_LABEL" "$FZ3/out.txt")"
+  fi
+  Z3_EXPECT_UNMEASURED=$Z3_FLOORS
 fi
-if grep -qxF "FLOOR_UNMEASURED light $(( Z3_FLOORS - 1 ))" "$FZ3/out.txt" \
+if grep -qxF "FLOOR_UNMEASURED light $Z3_EXPECT_UNMEASURED" "$FZ3/out.txt" \
    && grep -qxF 'FLOOR_UNMEASURED heavy 0' "$FZ3/out.txt" \
    && ! grep -q 'DRIFT_ROW heavy' "$FZ3/out.txt"; then
   check pass "Z3: group loop covers light + heavy (heavy floor set is empty by construction)"
@@ -1422,6 +1447,211 @@ if ! grep -q 'PRICE_DRIFT_ROW.*m-band-d' "$FZ8/out.txt" \
   check pass "Z8: under-bound (2.6x), under-sampled (2/5) and stable rows emit nothing"
 else
   check fail "Z8: bound/timed discrimination failed: $(grep PRICE_DRIFT_ROW "$FZ8/out.txt")"
+fi
+
+# === Fixture EV: --event selects the gh run population --runs samples ========
+# Push runs on main carry no suite-timings-* artifacts (the battery is
+# selection-reduced there) — a --runs sample drawn from the legacy
+# `--branch main` population re-prices off battery-less runs and the zero-
+# measured rows collapse to an all-floor table. The ci.yml groups therefore
+# sample merge_group by default; --event {auto,push,merge_group} exposes the
+# choice explicitly. The stub gh logs argv so the call SHAPE is asserted, not
+# just the output — a dropped --branch on the merge_group arm would filter
+# queue runs to nothing while reading as a successful sample.
+FEV="$WORK/EV"; mkdir -p "$FEV/bin"; assert_fixture_dir "$FEV"
+printf 'ev-a\nev-b\n' > "$FEV/registered.txt"
+: > "$FEV/calls.log"
+python3 - "$FEV" <<'PYEOF'
+import sys, zipfile
+zipfile.ZipFile(f"{sys.argv[1]}/art-9001.zip", "w").writestr(
+    "suite-timings.tsv", "ev-a\t100\nev-b\t200\n")
+PYEOF
+printf '{"total_count":1,"artifacts":[{"id":9001,"name":"suite-timings-scripts-0"}]}' \
+  > "$FEV/arts.json"
+cat > "$FEV/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >> "$FIXTURE_DIR/calls.log"
+# `gh run list ...` — the population query; its argv shape is the assertion.
+if [[ "$*" == 'run list'* ]]; then printf '4242\n4243\n'; exit 0; fi
+url="${2:-}"   # argv shape: gh api <url>
+case "$url" in
+  *'/artifacts?'*) cat "$FIXTURE_DIR/arts.json" ;;
+  *'/artifacts/'*'/zip') cat "$FIXTURE_DIR/art-9001.zip" ;;
+  *) echo "STUB-UNEXPECTED: $*" >> "$FIXTURE_DIR/calls.log"; exit 64 ;;
+esac
+STUB
+chmod +x "$FEV/bin/gh"
+# ev_run <tag> [args...] — run under the stub, redirected emission, log reset.
+ev_run() {
+  local tag=$1; shift
+  : > "$FEV/calls.log"
+  FIXTURE_DIR="$FEV" PATH="$FEV/bin:$PATH" python3 "$GEN" "$@" \
+    --registered-file "$FEV/registered.txt" \
+    --manifest "$FEV/$tag-manifest.tsv" --durations-out "$FEV/$tag-durations.tsv" \
+    --write > "$FEV/$tag-out.txt" 2> "$FEV/$tag-err.txt"
+}
+# A ci.yml group defaults --runs to merge_group — and must NOT pass --branch
+# (queue runs carry headBranch gh-readonly-queue/..., a --branch main filter
+# would empty the sample while still "succeeding").
+if ev_run auto --runs 2; then
+  check pass "EV: --runs against the stub exits 0"
+else
+  check fail "EV: --runs refused: $(tail -2 "$FEV/auto-err.txt")"
+fi
+if grep -q 'run list.*--event merge_group' "$FEV/calls.log" \
+   && ! grep 'run list' "$FEV/calls.log" | grep -q -- '--branch'; then
+  check pass "EV: a light group's default --runs samples merge_group (no --branch filter)"
+else
+  check fail "EV: default run-list argv did not select merge_group: $(grep 'run list' "$FEV/calls.log")"
+fi
+# --event push: main-branch push runs (the legacy population, narrowed to
+# push events only).
+ev_run push --event push --runs 2 || true
+if grep 'run list' "$FEV/calls.log" | grep -q -- '--event push' \
+   && grep 'run list' "$FEV/calls.log" | grep -q -- '--branch main'; then
+  check pass "EV: --event push scopes the sample to main-branch push runs"
+else
+  check fail "EV: --event push argv wrong or the flag is missing: $(grep 'run list' "$FEV/calls.log")"
+fi
+ev_run mq --event merge_group --runs 2 || true
+if grep 'run list' "$FEV/calls.log" | grep -q -- '--event merge_group' \
+   && ! grep 'run list' "$FEV/calls.log" | grep -q -- '--branch'; then
+  check pass "EV: --event merge_group samples queue runs without a branch filter"
+else
+  check fail "EV: --event merge_group argv wrong or the flag is missing: $(grep 'run list' "$FEV/calls.log")"
+fi
+if ev_run bogus --event bogus --runs 2; then
+  check fail "EV: an out-of-domain --event value was accepted"
+elif grep -qi 'invalid choice\|bogus' "$FEV/bogus-err.txt"; then
+  check pass "EV: --event bogus refuses at argument validation"
+else
+  check fail "EV: --event bogus refused but not by validation: $(tail -1 "$FEV/bogus-err.txt")"
+fi
+# --event is meaningless when the source is local — warn, never silently drop.
+mkdir -p "$FEV/dir/suite-timings-scripts-0"; assert_fixture_dir "$FEV/dir"
+printf 'ev-a\t100\nev-b\t200\n' > "$FEV/dir/suite-timings-scripts-0/suite-timings.tsv"
+if ev_run warn --event merge_group --timings-dir "$FEV/dir"; then
+  check pass "EV: --event + --timings-dir still emits (local source wins)"
+else
+  check fail "EV: --event + --timings-dir refused: $(tail -2 "$FEV/warn-err.txt")"
+fi
+if grep -qiE 'event.{0,60}(no effect|ignored)' "$FEV/warn-err.txt"; then
+  check pass "EV: the ignored --event under a local source is warned, not silent"
+else
+  check fail "EV: --event silently ignored with --timings-dir: $(cat "$FEV/warn-err.txt")"
+fi
+# Mode refusals: --event only shapes a gh fetch — the no-fetch modes refuse it.
+if python3 "$GEN" --incremental --event merge_group \
+     --manifest "$FEV/inc-manifest.tsv" --durations "$FEV/inc-durations.tsv" \
+     --registered-file "$FEV/registered.txt" > /dev/null 2> "$FEV/inc-err.txt"; then
+  check fail "EV: --incremental accepted --event — a fetch-population flag on a no-fetch mode"
+elif grep -qiE 'refus.{0,40}event|event.{0,40}refus' "$FEV/inc-err.txt"; then
+  check pass "EV: --incremental --event refuses and names the flag"
+else
+  check fail "EV: --incremental --event refused but did not name it: $(tail -1 "$FEV/inc-err.txt")"
+fi
+if python3 "$GEN" --drift-report --group light --manifest "$FEV/dr-manifest.tsv" \
+     --durations "$FEV/dr-durations.tsv" --timings-dir "$FEV/dir" \
+     --event push > /dev/null 2> "$FEV/dr-err.txt"; then
+  check fail "EV: --drift-report accepted --event"
+elif grep -qiE 'refus.{0,40}event|event.{0,40}refus' "$FEV/dr-err.txt"; then
+  check pass "EV: --drift-report --event refuses and names the flag"
+else
+  check fail "EV: --drift-report --event refused but did not name it: $(tail -1 "$FEV/dr-err.txt")"
+fi
+
+# === Fixture Z9: zero-measured committed --write refuses =====================
+# The footgun the --event selector closes only half of: whatever the source,
+# a committed --write whose sample contains ZERO measured rows replaces the
+# committed prices with an all-floor count-balanced table — a WARN alone is
+# invisible in an operator transcript. The committed paths resolve from the
+# script's own directory, so a fixture-repo copy of the generator exercises a
+# REAL committed write: scripts/ + .github/workflows/ci.yml under $FZ9/repo.
+FZ9="$WORK/Z9"; mkdir -p "$FZ9/repo/scripts" "$FZ9/repo/.github/workflows" \
+  "$FZ9/run/suite-timings-scripts-0" "$FZ9/run-meas/suite-timings-scripts-0"
+assert_fixture_dir "$FZ9"
+cp "$GEN" "$FZ9/repo/scripts/regenerate-shard-manifest.py"
+cat > "$FZ9/repo/.github/workflows/ci.yml" <<'YML'
+jobs:
+  test-scripts:
+    strategy:
+      matrix:
+        shard: ["1/1"]
+YML
+printf 'z9-a\t500\tmeasured\n' > "$FZ9/repo/scripts/suite-durations.tsv"
+{ printf '# fixture incumbent\n# n=1\n'; printf 'z9-a\t1\n'; } \
+  > "$FZ9/repo/scripts/suite-shard-legs.tsv"
+printf 'z9-a\n' > "$FZ9/registered.txt"
+# Foreign-only artifact dir: the only timed label is unregistered → the sample
+# contributes zero measured rows after the unregistered drop.
+printf 'z9-foreign\t800\n' > "$FZ9/run/suite-timings-scripts-0/suite-timings.tsv"
+printf 'z9-a\t500\n' > "$FZ9/run-meas/suite-timings-scripts-0/suite-timings.tsv"
+sha256sum "$FZ9/repo/scripts/suite-shard-legs.tsv" \
+  "$FZ9/repo/scripts/suite-durations.tsv" > "$FZ9/before.sha"
+if python3 "$FZ9/repo/scripts/regenerate-shard-manifest.py" \
+     --timings-dir "$FZ9/run" --registered-file "$FZ9/registered.txt" \
+     --write > "$FZ9/a-out.txt" 2> "$FZ9/a-err.txt"; then
+  check fail "Z9a: a zero-measured committed --write was accepted — an all-floor table replaced the prices"
+elif grep -qiE 'refus.{0,80}zero measured|zero measured.{0,80}refus' "$FZ9/a-err.txt"; then
+  check pass "Z9a: zero-measured committed --write refuses (exit 2, names the cause)"
+else
+  check fail "Z9a: refused but not by the zero-measured guard: $(tail -1 "$FZ9/a-err.txt")"
+fi
+if sha256sum -c "$FZ9/before.sha" > /dev/null 2>&1; then
+  check pass "Z9a: the refusal fires BEFORE the opens — both committed files untouched"
+else
+  check fail "Z9a: committed files were modified despite the refusal"
+fi
+# --allow-all-floor is the explicit acknowledgement: the same sample writes.
+printf 'z9-a\t60000\tfloor\n' > "$FZ9/baseline.tsv"
+if python3 "$FZ9/repo/scripts/regenerate-shard-manifest.py" \
+     --timings-dir "$FZ9/run" --registered-file "$FZ9/registered.txt" \
+     --baseline-durations "$FZ9/baseline.tsv" --allow-all-floor \
+     --write > "$FZ9/b-out.txt" 2> "$FZ9/b-err.txt"; then
+  check pass "Z9b: --allow-all-floor acknowledges and writes the all-floor table"
+else
+  check fail "Z9b: --allow-all-floor still refused: $(tail -2 "$FZ9/b-err.txt")"
+fi
+if grep -qF $'z9-a\t60000\tfloor' "$FZ9/repo/scripts/suite-durations.tsv"; then
+  check pass "Z9b: the acknowledged write emits src=floor rows, not phantom measurements"
+else
+  check fail "Z9b: wrote but the floor row is wrong: $(cat "$FZ9/repo/scripts/suite-durations.tsv")"
+fi
+# The refusal is measured-count-scoped, not unconditional: a sample carrying a
+# measured row still writes. Restore the measured committed table first.
+printf 'z9-a\t500\tmeasured\n' > "$FZ9/repo/scripts/suite-durations.tsv"
+printf 'z9-a\t500\tmeasured\n' > "$FZ9/baseline-meas.tsv"
+if python3 "$FZ9/repo/scripts/regenerate-shard-manifest.py" \
+     --timings-dir "$FZ9/run-meas" --registered-file "$FZ9/registered.txt" \
+     --baseline-durations "$FZ9/baseline-meas.tsv" \
+     --write > "$FZ9/c-out.txt" 2> "$FZ9/c-err.txt"; then
+  check pass "Z9c: a measured sample still writes the committed table"
+else
+  check fail "Z9c: a measured committed --write refused: $(tail -2 "$FZ9/c-err.txt")"
+fi
+# --incremental fetches no timings — the zero-measured refusal must NOT arm
+# its write path at all.
+printf 'z9-a\t500\tmeasured\n' > "$FZ9/repo/scripts/suite-durations.tsv"
+if python3 "$FZ9/repo/scripts/regenerate-shard-manifest.py" --incremental \
+     --registered-file "$FZ9/registered.txt" \
+     --baseline-durations "$FZ9/baseline-meas.tsv" \
+     --write > "$FZ9/d-out.txt" 2> "$FZ9/d-err.txt"; then
+  check pass "Z9d: --incremental --write is outside the refusal's scope"
+else
+  check fail "Z9d: --incremental --write refused: $(tail -2 "$FZ9/d-err.txt")"
+fi
+# The --durations input variant: an all-floor committed table re-fed as the
+# repricing input is also zero measured rows.
+printf 'z9-a\t60000\tfloor\n' > "$FZ9/allfloor.tsv"
+if python3 "$FZ9/repo/scripts/regenerate-shard-manifest.py" \
+     --durations "$FZ9/allfloor.tsv" --registered-file "$FZ9/registered.txt" \
+     --write > "$FZ9/e-out.txt" 2> "$FZ9/e-err.txt"; then
+  check fail "Z9e: an all-floor --durations input wrote the committed table"
+elif grep -qiE 'refus.{0,80}zero measured|zero measured.{0,80}refus' "$FZ9/e-err.txt"; then
+  check pass "Z9e: the refusal binds src=measured provenance, not row count"
+else
+  check fail "Z9e: refused but not by the zero-measured guard: $(tail -1 "$FZ9/e-err.txt")"
 fi
 
 # --- Accounting conservation (ADR-193) -----------------------------------------------------
