@@ -7,10 +7,26 @@ import { validateCustomName } from "@/server/team-names-validation";
 import { Button } from "@/components/ui/button";
 import { LeaderAvatar } from "@/components/leader-avatar";
 import type { DomainLeaderId } from "@/server/domain-leaders";
+import {
+  isWorkspaceSyncPending,
+  KB_WORKSPACE_SYNC_HELD_CLAUSE,
+  KB_WORKSPACE_SYNC_PENDING_NOTICE,
+} from "@/lib/kb-workspace-sync-notice";
 
 const MAX_ICON_SIZE = 100 * 1024; // 100KB
 const MAX_ICON_DIMENSION = 256;
 const ACCEPTED_ICON_TYPES = ["image/png", "image/webp"];
+
+// #12714 V6(6), #12704 V12: the non-error outcomes of a leader icon upload. Neutral, not red (D31(1)): nothing failed that
+// the user can fix, and a retry would not help. Every other failure keeps "Upload failed. Please try again.". The pending
+// notice composes the KB notice's shared clause (simplicity F15, pattern P3-10).
+const ICON_PENDING_NOTICE = `${KB_WORKSPACE_SYNC_PENDING_NOTICE.lead.upload} ${KB_WORKSPACE_SYNC_HELD_CLAUSE} The new icon appears here once it is; until then, you see the default icon. You don't need to try again.`;
+/** V6(6): a 409 for the path the leader already has saved (the held-pending case): the icon appears once the workspace updates. */
+const ICON_CONFLICT_NOTICE =
+  "An icon with this file name is already on GitHub, so nothing was uploaded. If you just uploaded it, it appears here once your workspace is updated from GitHub.";
+/** V12: a 409 for any other saved path, or none (after Reset): the "appears here" promise could never come true. */
+const ICON_CONFLICT_NOT_SAVED_NOTICE =
+  "An icon with this file name is already on GitHub, so nothing was uploaded and the icon shown here stays as it is. Replacing an icon that was uploaded before is not available yet.";
 
 export function ConversationNamesSettingsContent() {
   const { names, updateName, updateIcon, getIconPath, loading } = useTeamNames();
@@ -73,6 +89,7 @@ function LeaderRow({
   const [value, setValue] = useState(customName);
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [statusNotice, setStatusNotice] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -131,6 +148,7 @@ function LeaderRow({
       }
 
       setError("");
+      setStatusNotice(null);
       setUploading(true);
 
       try {
@@ -148,11 +166,21 @@ function LeaderRow({
           body: formData,
         });
 
+        // A 409 is an outcome, not a failure (no exception as control flow, pattern P3-10); V12 splits it on the path the
+        // client already holds.
+        if (res.status === 409) {
+          setStatusNotice(customIconPath === `${targetDir}/${iconFilename}` ? ICON_CONFLICT_NOTICE : ICON_CONFLICT_NOT_SAVED_NOTICE);
+          return;
+        }
         if (!res.ok) {
           throw new Error(`Upload failed: ${res.status}`);
         }
 
+        // The icon is on GitHub; when the workspace was held (`workspace_sync: "pending"`) the avatar keeps the default
+        // icon until the workspace updates, so the path is still saved and the notice says what happens next.
+        const body: unknown = await res.json().catch(() => null);
         await onIconChange(leaderId, `${targetDir}/${iconFilename}`);
+        if (isWorkspaceSyncPending(body)) setStatusNotice(ICON_PENDING_NOTICE);
       } catch (err) {
         console.error("[conversation-names-settings] icon upload error:", err);
         setError("Upload failed. Please try again.");
@@ -160,7 +188,7 @@ function LeaderRow({
         setUploading(false);
       }
     },
-    [leaderId, onIconChange],
+    [leaderId, onIconChange, customIconPath],
   );
 
   const handleReset = useCallback(async () => {
@@ -168,50 +196,62 @@ function LeaderRow({
   }, [leaderId, onIconChange]);
 
   return (
-    <div className="flex items-center gap-4 rounded-lg px-2 py-3">
-      <Button
-        variant="ghost"
-        type="button"
-        onClick={handleAvatarClick}
-        loading={uploading}
-        style={{ padding: 0 }}
-        className="shrink-0 cursor-pointer rounded-lg focus:outline-none focus:ring-2 focus:ring-soleur-border-emphasized"
-        aria-label={`${name} avatar — click to upload custom icon`}
-      >
-        <LeaderAvatar leaderId={leaderId} size="lg" customIconPath={customIconPath} />
-      </Button>
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/png,image/webp"
-        className="hidden"
-        onChange={handleFileSelect}
-      />
-      {customIconPath && (
+    <div>
+      <div className="flex items-center gap-4 rounded-lg px-2 py-3">
         <Button
           variant="ghost"
           type="button"
-          onClick={handleReset}
-          className="shrink-0 text-xs text-soleur-text-muted hover:text-soleur-text-secondary"
-          aria-label={`Reset ${name} icon to default`}
+          onClick={handleAvatarClick}
+          loading={uploading}
+          style={{ padding: 0 }}
+          className="shrink-0 cursor-pointer rounded-lg focus:outline-none focus:ring-2 focus:ring-soleur-border-emphasized"
+          aria-label={`${name} avatar — click to upload custom icon`}
         >
-          Reset
+          <LeaderAvatar leaderId={leaderId} size="lg" customIconPath={customIconPath} />
         </Button>
-      )}
-      <span className="min-w-0 flex-1 text-sm text-soleur-text-secondary">{title}</span>
-      <div className="w-full max-w-[12rem]">
         <input
-          type="text"
-          value={value}
-          onChange={handleChange}
-          placeholder="Enter a name..."
-          maxLength={30}
-          className={`w-full rounded-lg border bg-soleur-bg-surface-2/50 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted outline-none transition-colors focus:border-soleur-border-emphasized ${
-            error ? "border-red-500" : "border-soleur-border-default"
-          }`}
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/webp"
+          className="hidden"
+          onChange={handleFileSelect}
         />
-        {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
+        {customIconPath && (
+          <Button
+            variant="ghost"
+            type="button"
+            onClick={handleReset}
+            className="shrink-0 text-xs text-soleur-text-muted hover:text-soleur-text-secondary"
+            aria-label={`Reset ${name} icon to default`}
+          >
+            Reset
+          </Button>
+        )}
+        <span className="min-w-0 flex-1 text-sm text-soleur-text-secondary">{title}</span>
+        <div className="w-full max-w-[12rem]">
+          <input
+            type="text"
+            value={value}
+            onChange={handleChange}
+            placeholder="Enter a name..."
+            maxLength={30}
+            className={`w-full rounded-lg border bg-soleur-bg-surface-2/50 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted outline-none transition-colors focus:border-soleur-border-emphasized ${
+              error ? "border-red-500" : "border-soleur-border-default"
+            }`}
+          />
+          {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
+        </div>
       </div>
+      {/* D31(3): a full-width neutral status row under the leader row (the 192 px error slot would wrap these to 8-10
+          lines). Text child only. */}
+      {statusNotice && (
+        <p
+          role="status"
+          className="mx-2 mb-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-3 py-2 text-sm leading-relaxed text-soleur-text-secondary"
+        >
+          {statusNotice}
+        </p>
+      )}
     </div>
   );
 }

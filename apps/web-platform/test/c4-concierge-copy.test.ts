@@ -95,6 +95,7 @@ describe("the REGISTERED edit_c4_diagram tool carries exactly the pinned descrip
   it("buildC4ConciergeTools(...).description === C4_TOOL_DESCRIPTION", () => {
     const [t] = buildC4ConciergeTools({
       userId: "00000000-0000-0000-0000-000000000001",
+      workspaceId: "22222222-2222-4222-8222-222222222222",
       installationId: 1,
       owner: "o",
       repo: "r",

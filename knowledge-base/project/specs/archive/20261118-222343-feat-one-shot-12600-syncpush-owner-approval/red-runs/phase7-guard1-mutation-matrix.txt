@@ -1,0 +1,228 @@
+# Plan task 7.2 (#12600): Guard 1 mutation matrix, run against the committed code at 6b300e8d22
+#
+# Method: for each row, the touched files were copied aside (pristine), the mutation applied by exact-anchor replacement,
+# test/session-sync-kb-only-push-real-git.test.ts run (AC5/AC6: their own suites), the files restored from the copy and
+# checked clean with 'git diff --quiet HEAD'. Every row's expected test is among its RED rows. Row 22 (hash checks in the
+# workspace instead of the isolated dir) has no fixture that reds it under host-git hardening: defense in depth, not claimed.
+# git version 2.56.0
+
+## mutation 1: push headSha instead of S
+expected RED: H2 (matrix 1, 3, 4, 5, 11)
+vitest rc=1; Tests 15 failed | 17 passed (32)
+  RED: H1: a KB-only auto-commit over T is published as S (parent T, HEAD's tree, Soleur identity); local == tracking == S
+  RED: H1b: a KB-only local commit plus a session-start pull merge of an upstream code change publishes S on the new T
+  RED: H2 (matrix 1, 3, 4, 5, 11): foreign commit + KB edit -> remote gets only S; local is M and keeps the foreign commit
+  RED: H5 (matrix 7, 8): every token-bearing call is hardened and names exactly the literal URL; no legacy-arm call
+  RED: H6: the turn after a successful push with no new commits mints no token and writes no history row
+  RED: H7: turn 2 after H2 with another KB edit -> remote S2 (parent S), local M2
+  RED: matrix 10: a forged refs/remotes/origin/soleur/kb-sync (remote has none) is never the side parent
+  RED: matrix 12: KB-only edit + dirty code file -> single-parent side on T, PR created, local == tracking == side, dirty file kept
+  RED: matrix 13: protected + foreign commit -> local is M, keeps the foreign commit and the dirty code file
+  RED: matrix 16 positive: the side tip's KB equals T's (PR merged) -> the side commit is built
+  RED: matrix 16: a side tip holding unmerged KB content not in HEAD's history -> nothing pushed, side_ahead
+  RED: matrix 20: an unmerged side tip on an older T (ancestor of HEAD) -> side has parents (P, T); after a PR merge pull --ff-only fast-forwards
+  RED: matrix 6: a forged refs/remotes/origin/main is never the base (parent is the ls-remote tip)
+  RED: matrix 7: push.default=matching and a second local branch holding a foreign commit -> remote gains no branch
+  RED: matrix 8: remote.origin.url pointed at another bare remote -> that remote receives nothing
+  restored: pristine (git diff HEAD clean)
+## mutation 2: skip the hash check of T's root tree (cat-file bytes trusted)
+expected RED: matrix 2
+vitest rc=1; Tests 1 failed | 31 passed (32)
+  RED: matrix 2: forged bytes for T's root tree in the workspace store -> nothing pushed, hash_mismatch
+  restored: pristine (git diff HEAD clean)
+## mutation 3: build S's root from headSha's root
+expected RED: H2
+vitest rc=1; Tests 6 failed | 26 passed (32)
+  RED: H2 (matrix 1, 3, 4, 5, 11): foreign commit + KB edit -> remote gets only S; local is M and keeps the foreign commit
+  RED: H5 (matrix 7, 8): every token-bearing call is hardened and names exactly the literal URL; no legacy-arm call
+  RED: H7: turn 2 after H2 with another KB edit -> remote S2 (parent S), local M2
+  RED: matrix 10: a forged refs/remotes/origin/soleur/kb-sync (remote has none) is never the side parent
+  RED: matrix 13: protected + foreign commit -> local is M, keeps the foreign commit and the dirty code file
+  RED: matrix 6: a forged refs/remotes/origin/main is never the base (parent is the ls-remote tip)
+  restored: pristine (git diff HEAD clean)
+## mutation 4: no guard anywhere + builder copies headSha's non-KB entries
+expected RED: H2
+vitest rc=1; Tests 3 failed | 29 passed (32)
+  RED: H2 (matrix 1, 3, 4, 5, 11): foreign commit + KB edit -> remote gets only S; local is M and keeps the foreign commit
+  RED: H7: turn 2 after H2 with another KB edit -> remote S2 (parent S), local M2
+  RED: matrix 13: protected + foreign commit -> local is M, keeps the foreign commit and the dirty code file
+  restored: pristine (git diff HEAD clean)
+## mutation 5: parent S on headSha instead of T
+expected RED: H2
+vitest rc=1; Tests 7 failed | 25 passed (32)
+  RED: H1: a KB-only auto-commit over T is published as S (parent T, HEAD's tree, Soleur identity); local == tracking == S
+  RED: H1b: a KB-only local commit plus a session-start pull merge of an upstream code change publishes S on the new T
+  RED: H2 (matrix 1, 3, 4, 5, 11): foreign commit + KB edit -> remote gets only S; local is M and keeps the foreign commit
+  RED: H7: turn 2 after H2 with another KB edit -> remote S2 (parent S), local M2
+  RED: matrix 6: a forged refs/remotes/origin/main is never the base (parent is the ls-remote tip)
+  RED: matrix 7: push.default=matching and a second local branch holding a foreign commit -> remote gains no branch
+  RED: matrix 8: remote.origin.url pointed at another bare remote -> that remote receives nothing
+  restored: pristine (git diff HEAD clean)
+## mutation 6: base = the workspace refs/remotes/origin/<D>
+expected RED: matrix 6
+vitest rc=1; Tests 3 failed | 29 passed (32)
+  RED: matrix 6: a forged refs/remotes/origin/main is never the base (parent is the ls-remote tip)
+  RED: no history walk, no agent-writable base, no legacy resolver
+  RED: remote tip absent from the workspace -> nothing pushed, remote_unknown_tip
+  restored: pristine (git diff HEAD clean)
+## mutation 7: push through the legacy workspace arm (bare push, cwd = workspace)
+expected RED: matrix 7
+vitest rc=1; Tests 13 failed | 19 passed (32)
+  RED: H2 (matrix 1, 3, 4, 5, 11): foreign commit + KB edit -> remote gets only S; local is M and keeps the foreign commit
+  RED: H5 (matrix 7, 8): every token-bearing call is hardened and names exactly the literal URL; no legacy-arm call
+  RED: H7: turn 2 after H2 with another KB edit -> remote S2 (parent S), local M2
+  RED: matrix 10: a forged refs/remotes/origin/soleur/kb-sync (remote has none) is never the side parent
+  RED: matrix 12: KB-only edit + dirty code file -> single-parent side on T, PR created, local == tracking == side, dirty file kept
+  RED: matrix 13: protected + foreign commit -> local is M, keeps the foreign commit and the dirty code file
+  RED: matrix 16 positive: the side tip's KB equals T's (PR merged) -> the side commit is built
+  RED: matrix 16: a side tip holding unmerged KB content not in HEAD's history -> nothing pushed, side_ahead
+  RED: matrix 20: an unmerged side tip on an older T (ancestor of HEAD) -> side has parents (P, T); after a PR merge pull --ff-only fast-forwards
+  RED: matrix 6: a forged refs/remotes/origin/main is never the base (parent is the ls-remote tip)
+  RED: matrix 7: push.default=matching and a second local branch holding a foreign commit -> remote gains no branch
+  RED: matrix 8: remote.origin.url pointed at another bare remote -> that remote receives nothing
+  RED: the push argv appears exactly once in kb-sync-publish.ts and never in session-sync.ts
+  restored: pristine (git diff HEAD clean)
+## mutation 8: push URL from remote.origin.url
+expected RED: matrix 8
+vitest rc=1; Tests 3 failed | 29 passed (32)
+  RED: H5 (matrix 7, 8): every token-bearing call is hardened and names exactly the literal URL; no legacy-arm call
+  RED: a failing ls-remote -> the isolated dir is disposed and op syncPush carries reason ls_remote_failed, no URL
+  RED: matrix 8: remote.origin.url pointed at another bare remote -> that remote receives nothing
+  restored: pristine (git diff HEAD clean)
+## mutation 9: skip ruling I's ancestor check
+expected RED: matrix 9
+vitest rc=1; Tests 1 failed | 31 passed (32)
+  RED: matrix 9: a remote KB edit fetched but not merged plus a local KB edit -> nothing pushed, remote_ahead
+  restored: pristine (git diff HEAD clean)
+## mutation 10: side parent from the workspace refs/remotes/origin/soleur/kb-sync
+expected RED: matrix 10
+vitest rc=1; Tests 5 failed | 27 passed (32)
+  RED: matrix 10: a forged refs/remotes/origin/soleur/kb-sync (remote has none) is never the side parent
+  RED: matrix 16 positive: the side tip's KB equals T's (PR merged) -> the side commit is built
+  RED: matrix 16: a side tip holding unmerged KB content not in HEAD's history -> nothing pushed, side_ahead
+  RED: matrix 20: an unmerged side tip on an older T (ancestor of HEAD) -> side has parents (P, T); after a PR merge pull --ff-only fast-forwards
+  RED: no history walk, no agent-writable base, no legacy resolver
+  restored: pristine (git diff HEAD clean)
+## mutation 11: drop the -c user.* identity argv
+expected RED: H1 / H2 (positive state)
+vitest rc=1; Tests 16 failed | 16 passed (32)
+  RED: H1: a KB-only auto-commit over T is published as S (parent T, HEAD's tree, Soleur identity); local == tracking == S
+  RED: H1b: a KB-only local commit plus a session-start pull merge of an upstream code change publishes S on the new T
+  RED: H2 (matrix 1, 3, 4, 5, 11): foreign commit + KB edit -> remote gets only S; local is M and keeps the foreign commit
+  RED: H5 (matrix 7, 8): every token-bearing call is hardened and names exactly the literal URL; no legacy-arm call
+  RED: H6: the turn after a successful push with no new commits mints no token and writes no history row
+  RED: H7: turn 2 after H2 with another KB edit -> remote S2 (parent S), local M2
+  RED: matrix 10: a forged refs/remotes/origin/soleur/kb-sync (remote has none) is never the side parent
+  RED: matrix 12: KB-only edit + dirty code file -> single-parent side on T, PR created, local == tracking == side, dirty file kept
+  RED: matrix 13: protected + foreign commit -> local is M, keeps the foreign commit and the dirty code file
+  RED: matrix 15: HEAD moves during the ls-remote -> nothing pushed, the new commit stays, head_moved
+  RED: matrix 16 positive: the side tip's KB equals T's (PR merged) -> the side commit is built
+  RED: matrix 16: a side tip holding unmerged KB content not in HEAD's history -> nothing pushed, side_ahead
+  RED: matrix 20: an unmerged side tip on an older T (ancestor of HEAD) -> side has parents (P, T); after a PR merge pull --ff-only fast-forwards
+  RED: matrix 6: a forged refs/remotes/origin/main is never the base (parent is the ls-remote tip)
+  RED: matrix 7: push.default=matching and a second local branch holding a foreign commit -> remote gains no branch
+  RED: matrix 8: remote.origin.url pointed at another bare remote -> that remote receives nothing
+  restored: pristine (git diff HEAD clean)
+## mutation 12: fallback keeps a workspace reset --hard
+expected RED: matrix 12
+vitest rc=1; Tests 2 failed | 30 passed (32)
+  RED: matrix 12: KB-only edit + dirty code file -> single-parent side on T, PR created, local == tracking == side, dirty file kept
+  RED: matrix 13: protected + foreign commit -> local is M, keeps the foreign commit and the dirty code file
+  restored: pristine (git diff HEAD clean)
+## mutation 13: fallback CAS-moves the local branch when non-KB changes are held
+expected RED: matrix 13
+vitest rc=1; Tests 1 failed | 31 passed (32)
+  RED: matrix 13: protected + foreign commit -> local is M, keeps the foreign commit and the dirty code file
+  restored: pristine (git diff HEAD clean)
+## mutation 14: skip the pre-push local branch update
+expected RED: matrix 14
+vitest rc=1; Tests 10 failed | 22 passed (32)
+  RED: H1: a KB-only auto-commit over T is published as S (parent T, HEAD's tree, Soleur identity); local == tracking == S
+  RED: H1b: a KB-only local commit plus a session-start pull merge of an upstream code change publishes S on the new T
+  RED: H2 (matrix 1, 3, 4, 5, 11): foreign commit + KB edit -> remote gets only S; local is M and keeps the foreign commit
+  RED: H6: the turn after a successful push with no new commits mints no token and writes no history row
+  RED: H7: turn 2 after H2 with another KB edit -> remote S2 (parent S), local M2
+  RED: matrix 12: KB-only edit + dirty code file -> single-parent side on T, PR created, local == tracking == side, dirty file kept
+  RED: matrix 13: protected + foreign commit -> local is M, keeps the foreign commit and the dirty code file
+  RED: matrix 14: after H2 the real syncWorkspace (reconcile webhook shape) fast-forwards with no recovery branch
+  RED: matrix 15: HEAD moves during the ls-remote -> nothing pushed, the new commit stays, head_moved
+  RED: matrix 20: an unmerged side tip on an older T (ancestor of HEAD) -> side has parents (P, T); after a PR merge pull --ff-only fast-forwards
+  restored: pristine (git diff HEAD clean)
+## mutation 15: drop the CAS old value (guard widened to the 3-argument shape)
+expected RED: matrix 15
+vitest rc=1; Tests 1 failed | 31 passed (32)
+  RED: matrix 15: HEAD moves during the ls-remote -> nothing pushed, the new commit stays, head_moved
+  restored: pristine (git diff HEAD clean)
+## mutation 16: remove ruling I's extension to the side range
+expected RED: matrix 16
+vitest rc=1; Tests 1 failed | 31 passed (32)
+  RED: matrix 16: a side tip holding unmerged KB content not in HEAD's history -> nothing pushed, side_ahead
+  restored: pristine (git diff HEAD clean)
+## mutation 17: remove the MERGE_HEAD skip
+expected RED: matrix 17
+vitest rc=1; Tests 1 failed | 31 passed (32)
+  RED: matrix 17: MERGE_HEAD present with conflict markers in a KB file -> no auto-commit, no push, merge_in_progress
+  restored: pristine (git diff HEAD clean)
+## mutation 18: target the checked-out branch instead of D
+expected RED: matrix 18
+vitest rc=1; Tests 1 failed | 31 passed (32)
+  RED: matrix 18: a local feature branch that also exists on the remote -> remote feature unchanged, non_default_branch
+  restored: pristine (git diff HEAD clean)
+## mutation 19: drop --no-deref (guard widened)
+expected RED: matrix 19
+vitest rc=1; Tests 1 failed | 31 passed (32)
+  RED: matrix 19: refs/heads/main swapped to a symref after the HEAD read -> refs/heads/x is untouched
+  restored: pristine (git diff HEAD clean)
+## mutation 20: single parent P when P does not descend from T
+expected RED: matrix 20
+vitest rc=1; Tests 1 failed | 31 passed (32)
+  RED: matrix 20: an unmerged side tip on an older T (ancestor of HEAD) -> side has parents (P, T); after a PR merge pull --ff-only fast-forwards
+  restored: pristine (git diff HEAD clean)
+## mutation 21: remove the R18 self-heal gate
+expected RED: matrix 21
+vitest rc=1; Tests 1 failed | 31 passed (32)
+  RED: matrix 21: held foreign commit + dirty tracked code file, upstream main moves -> syncWorkspace does not reset
+  restored: pristine (git diff HEAD clean)
+## mutation H4: stub syncPush to a no-op
+expected RED: H1 and H2
+vitest rc=1; Tests 28 failed | 4 passed (32)
+  RED: H1: a KB-only auto-commit over T is published as S (parent T, HEAD's tree, Soleur identity); local == tracking == S
+  RED: H1b: a KB-only local commit plus a session-start pull merge of an upstream code change publishes S on the new T
+  RED: H2 (matrix 1, 3, 4, 5, 11): foreign commit + KB edit -> remote gets only S; local is M and keeps the foreign commit
+  RED: H3: foreign commit and no KB change -> remote unchanged, one held_foreign info line, no Sentry event
+  RED: H5 (matrix 7, 8): every token-bearing call is hardened and names exactly the literal URL; no legacy-arm call
+  RED: H6: the turn after a successful push with no new commits mints no token and writes no history row
+  RED: H7: turn 2 after H2 with another KB edit -> remote S2 (parent S), local M2
+  RED: a bare remote with no HEAD -> nothing pushed, remote_branch_absent
+  RED: a failing ls-remote -> the isolated dir is disposed and op syncPush carries reason ls_remote_failed, no URL
+  RED: detached HEAD -> nothing pushed, detached_head
+  RED: knowledge-base replaced by a file -> nothing pushed, kb_not_tree
+  RED: matrix 10: a forged refs/remotes/origin/soleur/kb-sync (remote has none) is never the side parent
+  RED: matrix 12: KB-only edit + dirty code file -> single-parent side on T, PR created, local == tracking == side, dirty file kept
+  RED: matrix 13: protected + foreign commit -> local is M, keeps the foreign commit and the dirty code file
+  RED: matrix 14: after H2 the real syncWorkspace (reconcile webhook shape) fast-forwards with no recovery branch
+  RED: matrix 15: HEAD moves during the ls-remote -> nothing pushed, the new commit stays, head_moved
+  RED: matrix 16 positive: the side tip's KB equals T's (PR merged) -> the side commit is built
+  RED: matrix 16: a side tip holding unmerged KB content not in HEAD's history -> nothing pushed, side_ahead
+  RED: matrix 17: MERGE_HEAD present with conflict markers in a KB file -> no auto-commit, no push, merge_in_progress
+  RED: matrix 18: a local feature branch that also exists on the remote -> remote feature unchanged, non_default_branch
+  RED: matrix 19: refs/heads/main swapped to a symref after the HEAD read -> refs/heads/x is untouched
+  RED: matrix 20: an unmerged side tip on an older T (ancestor of HEAD) -> side has parents (P, T); after a PR merge pull --ff-only fast-forwards
+  RED: matrix 2: forged bytes for T's root tree in the workspace store -> nothing pushed, hash_mismatch
+  RED: matrix 6: a forged refs/remotes/origin/main is never the base (parent is the ls-remote tip)
+  RED: matrix 7: push.default=matching and a second local branch holding a foreign commit -> remote gains no branch
+  RED: matrix 8: remote.origin.url pointed at another bare remote -> that remote receives nothing
+  RED: matrix 9: a remote KB edit fetched but not merged plus a local KB edit -> nothing pushed, remote_ahead
+  RED: remote tip absent from the workspace -> nothing pushed, remote_unknown_tip
+  restored: pristine (git diff HEAD clean)
+
+## mutation AC5: push-held payload drops the outcome tag
+expected RED: session-sync-sentry-mirror AC5 rows
+vitest rc=1; Tests 1 failed | 4 passed (5)
+  RED: a warning reason emits one Sentry warning: tags reason + outcome, extra carries the hashed user id only
+  restored: pristine (git diff HEAD clean)
+## mutation AC6: bookkeeping runs on a held / noop turn
+expected RED: session-sync-workspace-last-synced AC6 rows
+vitest rc=1; Tests 1 failed | 6 passed (7)
+  RED: held, nothing-to-sync (T == headSha) and failed-fallback turns do not call writeRepoColsToWorkspace
+  restored: pristine (git diff HEAD clean)

@@ -107,9 +107,11 @@ describe("#5199 — restored containment (token narrow + pinned mcp + live dry-r
     expect(SUT_SOURCE).toMatch(/repositories:\s*\[REPO_NAME\]/);
   });
 
-  it("pins @playwright/mcp to an exact version (no @latest supply-chain fetch)", () => {
+  it("runs the image's pinned @playwright/mcp binary (no @latest, no npx fetch) — #12824", () => {
     expect(SUT_SOURCE).not.toContain("@playwright/mcp@latest");
-    expect(SUT_SOURCE).toContain("@playwright/mcp@0.0.75");
+    expect(stripComments(SUT_SOURCE)).toContain('command: "/app/node_modules/.bin/playwright-mcp"');
+    const pkg = JSON.parse(readFileSync(resolve(__dirname, "../../../package.json"), "utf-8"));
+    expect(pkg.dependencies["@playwright/mcp"]).toBe("0.0.75");
   });
 
   it("wires UX_AUDIT_DRY_RUN from env (live by default) — not hardcoded true", () => {
@@ -145,13 +147,12 @@ describe("#5691 — Playwright survives --strict-mcp-config (substrate prepends 
   // and posts a zero-screenshot exit-0 GREEN run (the runtime Sentry Crons
   // monitor is liveness-only and cannot catch this — obs P1-c). This static
   // assertion is the PRIMARY pre-merge guard against that silent-degradation.
-  it("re-supplies the Playwright MCP server via --mcp-config .mcp.json, before the trailing --", () => {
+  it("re-supplies the Playwright MCP server via --mcp-config ../workspace/mcp.json, before the trailing --", () => {
     const mcpIdx = CLAUDE_CODE_FLAGS.indexOf("--mcp-config");
     expect(mcpIdx).toBeGreaterThan(-1);
-    // The relative .mcp.json resolves against spawnCwd → the per-fire overlay
-    // ux-audit writes at setup (the writeFile(join(spawnCwd, ".mcp.json"), …) in
-    // the setup-workspace step), not the repo-root dev file.
-    expect(CLAUDE_CODE_FLAGS[mcpIdx + 1]).toBe(".mcp.json");
+    // Resolves against spawnCwd (`<ephemeralRoot>/repo`) → the per-fire overlay ux-audit writes at setup in
+    // `<ephemeralRoot>/workspace/`, outside the clone the agent can Write (#12847 review), not the dev file.
+    expect(CLAUDE_CODE_FLAGS[mcpIdx + 1]).toBe("../workspace/mcp.json");
     // Must precede the trailing `--` end-of-options marker, else the CLI reads
     // `.mcp.json` as a positional prompt arg rather than a flag value.
     const lastSeparatorIdx = CLAUDE_CODE_FLAGS.lastIndexOf("--");
@@ -168,36 +169,13 @@ describe("#5691 — Playwright survives --strict-mcp-config (substrate prepends 
   });
 });
 
-describe("#5676 — npx registry-probe silenced at source (intended-drop, ADR-052 amendment)", () => {
-  // #5199 deliberately keeps registry.npmjs.org OFF the egress allowlist so
-  // @playwright/mcp resolves to the image-baked dep, not a runtime fetch. But
-  // bare `npx` still performs a registry-metadata dial on spawn, which the
-  // firewall correctly drops — generating steady, by-design `egress-blocked`
-  // noise (#5676, the dominant 104.16.x.34 Cloudflare-anycast pool = npmjs.org).
-  // Source-silence: pass npm_config_prefer_offline so npx uses the baked cache
-  // and skips the registry dial when cache-warm. prefer-offline (NOT offline) so
-  // a cache miss degrades to today's behavior rather than hard-failing the cron.
-  it("the Playwright MCP npx entry sets npm_config_prefer_offline so no registry-metadata dial fires when cache-warm", () => {
-    expect(SUT_SOURCE).toContain("npm_config_prefer_offline");
-    // prefer-offline degrades gracefully; `offline` would hard-fail on a cold
-    // _cacache (Docker layer pruning can drop it) — must NOT use the hard form.
-    // `\b` (not `\s*:`) also catches a JSON-quoted `"npm_config_offline":` form;
-    // it can't match the prefer-offline token (no `npm_config_offline` substring
-    // exists in `npm_config_prefer_offline`).
-    expect(SUT_SOURCE).not.toMatch(/npm_config_offline\b/);
-  });
-
-  it("wires the prefer-offline env on the (sole) mcpServers.playwright npx config", () => {
-    // The env must ride the MCP-server config the cron writes to .mcp.json so the
-    // spawned npx inherits it. Whitespace-tolerant so a prettier reflow (multi-line
-    // / brace spacing) doesn't false-RED a behavior-intact config; pins the key +
-    // the "true" string value (npm reads npm_config_* env vars as strings).
-    expect(SUT_SOURCE).toMatch(
-      /env:\s*\{\s*npm_config_prefer_offline:\s*["']true["']\s*\}/,
-    );
-    // Exactly one mcpServers block (sweep confirmed), so asserting the npx command
-    // is also present establishes both ride the same playwright config.
-    expect(SUT_SOURCE).toContain('command: "npx"');
+describe("#5676 / #12824 — no npx on the MCP spawn path", () => {
+  // npx performed a registry-metadata dial on spawn (dropped by the egress firewall, #5676) and ran
+  // code from a HOME cache — a write-then-execute path once the HOME is agent-writable. The image
+  // binary has neither.
+  it("the Playwright MCP server command is not npx and carries no npm_config env", () => {
+    expect(SUT_SOURCE).not.toContain('command: "npx"');
+    expect(SUT_SOURCE).not.toMatch(/npm_config_(prefer_)?offline:/);
   });
 });
 

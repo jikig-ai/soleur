@@ -15,6 +15,7 @@
 
 import { randomUUID } from "crypto";
 import { existsSync } from "node:fs";
+import { lstat } from "node:fs/promises";
 import path from "path";
 
 import { ROUTINE_AUTHORING_DIRECTIVE } from "@/server/routine-authoring-directive";
@@ -308,9 +309,26 @@ import { createApprovalGateDeps } from "./approval/gate";
 import { ExecutionGrants } from "./approval/grants";
 import {
   assertCcApprovalSetWired,
+  ccPushPreconditionVerdict,
   ccPushPromptAddendum,
+  readCcInstallationStrict,
   resolveCcGithubPushRegistration,
+  withDeadline,
+  type CcPushCheck,
+  type CcPushRegistration,
+  type CcPushRegistrationReason,
 } from "./cc-github-push";
+import {
+  buildKbSyncHeldAgentLine,
+  buildKbSyncMergeBlockedAgentLine,
+  heldAgentLineLogFields,
+  heldLineRouteFromRegistration,
+  kbSyncMergeBlockedReasonOf,
+  readStoredKbSyncHeld,
+  type KbSyncMergeBlockedReason,
+} from "./kb-sync-held-agent-line";
+import { isRenderableHeldCount } from "@/lib/kb-sync-held-copy";
+import { MERGE_STATE_FILES } from "./connected-repo-git";
 import {
   ccGithubReadPromptAddendum,
   ccGithubReadUnavailableLine,
@@ -1414,6 +1432,17 @@ function makeAckPostureKey(userId: string, conversationId: string): string {
 // at the same sites as `_ccAutonomousAckPosture` (close hook, factory throw, test reset).
 const _ccRegisteredApprovalTools = new Map<string, readonly string[]>();
 
+// #12704 D39(a): what `handleCcCloseQuery` needs to refresh the held-files count after the session, recorded by the cold build
+// only for a repo-lifecycle dispatch with a connected, `ready` repo and a resolved installation (the refresh is skipped
+// otherwise). Deleted at the start of every cold build, drained at the close hook (read first), the factory throw and the test
+// reset, like `_ccRegisteredApprovalTools`.
+interface CcHeldRefreshContext {
+  readonly workspaceId: string;
+  readonly workspacePath: string;
+  readonly installationId: number;
+}
+const _ccHeldRefreshContext = new Map<string, CcHeldRefreshContext>();
+
 /** The approval-required FQNs registered for this conversation's live Query (empty when none). Exported for the warm-path mirror and tests. */
 export function getCcRegisteredApprovalTools(userId: string, conversationId: string): readonly string[] {
   return _ccRegisteredApprovalTools.get(makeAckPostureKey(userId, conversationId)) ?? [];
@@ -1816,6 +1845,7 @@ export function cleanupCcBashGatesForConversation(
   _ccSeccompArtifact.delete(makeAckPostureKey(userId, conversationId));
   _ccRegisteredApprovalTools.delete(makeAckPostureKey(userId, conversationId));
   _ccRegisteredReadTools.delete(makeAckPostureKey(userId, conversationId));
+  _ccHeldRefreshContext.delete(makeAckPostureKey(userId, conversationId));
 }
 
 /**
@@ -1841,6 +1871,8 @@ export function handleCcCloseQuery({
   userId: string;
   reason?: CloseQueryReason;
 }): void {
+  // #12704 D39(a): read before the cleanup below drains it.
+  const heldRefresh = _ccHeldRefreshContext.get(makeAckPostureKey(userId, conversationId));
   cleanupCcBashGatesForConversation(userId, conversationId);
   // feat-open-web-egress (#9534) — kill the session's loopback forwarder and
   // delete its token file (the file is the gateway-side validity window).
@@ -1868,6 +1900,21 @@ export function handleCcCloseQuery({
       conversationId,
       "cc-resolve-workspace-path",
     );
+  }
+  // #12704 D39(a): the cc runner never runs syncPull/syncPush, so the held-files count is refreshed here, fire-and-forget after
+  // the user-visible end (`refreshHeldCount` never throws and is single-flight per workspace). The dynamic import keeps the
+  // git modules off the dispatcher's load path; a failed import is a warning, never a throw from the close hook.
+  if (heldRefresh) {
+    void import("./kb-sync-held-refresh")
+      .then((m) => m.refreshHeldCount({ ...heldRefresh, userId }))
+      .catch((err: unknown) => {
+        warnSilentFallback(null, {
+          feature: "cc-dispatcher",
+          op: "kb-sync-held.refresh",
+          extra: { userId, workspaceId: heldRefresh.workspaceId, errName: err instanceof Error ? err.name : undefined },
+          message: "held-files refresh could not start after the session",
+        });
+      });
   }
 }
 
@@ -1933,6 +1980,86 @@ export function crmLeadPermissionToolNames(crmLead: boolean): string[] {
   return buildCrmTools({ userId: "crm-lead-permission-names" }).map(
     (tool) => `mcp__soleur_platform__${tool.name}`,
   );
+}
+
+/** Upper bound of each strict re-read that classifies a degraded precondition for the held line (D40(2)). */
+const HELD_LINE_STRICT_READ_TIMEOUT_MS = 2_000;
+
+/**
+ * The reads the held line can find degraded. No `repo`: a degraded repo-URL read always has a null url, and the held line is
+ * built only for a non-null `repoUrl` (D41(d)), so a repo arm could never be seen (verify P3-12). The registrar keeps its own
+ * `degradedReads: "repo"` input for other callers.
+ */
+type HeldLineDegradedRead = "installation" | "entitlement";
+
+/**
+ * #12704 D40(2): which of the push precondition reads were DEGRADED (a blip read as "no"), so the held line says "not
+ * available right now" instead of the lasting no-route sentence. The dispatch's own reads are fail-closed wrappers that
+ * hide a blip, so a false entitlement or a null installation is re-read strictly, and only when the held line will render
+ * (lazy: no extra round trip on a dispatch without a held count). A strict read that throws, times out, or contradicts the
+ * fail-closed answer marks the read degraded. Never throws.
+ */
+async function classifyHeldLineDegradedReads(a: {
+  readonly userId: string;
+  readonly workspaceId: string;
+  readonly entitled: boolean;
+  readonly installationId: number | null;
+}): Promise<HeldLineDegradedRead[]> {
+  const strictDisagrees = async (read: () => Promise<boolean>, label: string): Promise<boolean> => {
+    try {
+      return await withDeadline(read, HELD_LINE_STRICT_READ_TIMEOUT_MS, label);
+    } catch {
+      return true;
+    }
+  };
+  const [entitlement, installation] = await Promise.all([
+    a.entitled ? false : strictDisagrees(async () => (await resolveWebEgressStrict(a.userId, a.workspaceId)) === true, "held-line-entitlement"),
+    a.installationId !== null ? false : strictDisagrees(() => readCcInstallationStrict(a.userId, a.workspaceId), "held-line-installation"),
+  ]);
+  const out: HeldLineDegradedRead[] = [];
+  if (installation) out.push("installation");
+  if (entitlement) out.push("entitlement");
+  return out;
+}
+
+/** The reason for a held line on a dispatch that attempted no push registration, through the shared verdict (D40(5)). */
+function heldLineUnattemptedReason(
+  repoPresent: boolean,
+  installationId: number | null,
+  entitled: boolean,
+  degraded: readonly HeldLineDegradedRead[],
+): CcPushRegistrationReason {
+  const check = (holds: boolean, read: HeldLineDegradedRead): CcPushCheck =>
+    holds ? true : degraded.includes(read) ? "unknown" : false;
+  return (
+    ccPushPreconditionVerdict({
+      // Definite: the held line needs a non-null repoUrl, so the repo read was not degraded (an unparseable url is no repo).
+      repo: repoPresent,
+      installation: check(installationId !== null, "installation"),
+      entitled: check(entitled, "entitlement"),
+    }) ?? "no-repo-or-installation"
+  );
+}
+
+/**
+ * #12714 (D29(4)), #12704 D42: the state only the agent can resolve, for the cc agent line. An unfinished merge first:
+ * lstat only (no git child on the agent-writable repo, no symlink follow) of connected-repo-git's `MERGE_STATE_FILES`, the
+ * files its `mergeInProgress` treats as a merge in progress. Absent (or any read error, which claims nothing) falls through to
+ * the self-heal's persisted refusal (`kb_sync_pull_blocked`, read with the held count), else null.
+ */
+async function readCcMergeBlockedReason(
+  workspacePath: string,
+  pullBlocked: KbSyncMergeBlockedReason | null,
+): Promise<KbSyncMergeBlockedReason | null> {
+  for (const name of MERGE_STATE_FILES) {
+    try {
+      await lstat(path.join(workspacePath, ".git", name));
+      return "unresolved_merge";
+    } catch {
+      // ENOENT / ENOTDIR (no merge, or no .git directory) and any other error: say nothing.
+    }
+  }
+  return pullBlocked;
 }
 
 /**
@@ -2052,6 +2179,7 @@ export const realSdkQueryFactory: QueryFactory = async (
       repoUrlResult,
       repoReadinessRow,
       webEgressEntitled,
+      kbSyncHeld,
     ] =
       await Promise.all([
         fetchUserWorkspacePath(args.userId, activeWorkspaceId),
@@ -2101,6 +2229,14 @@ export const realSdkQueryFactory: QueryFactory = async (
         // resolver blip or membership reset can never over-grant egress.
         // Keyed on the unified activeWorkspaceId (repoUrl precedent).
         resolveWebEgress(args.userId, activeWorkspaceId),
+        // #12714 (D29(3)) — the held-files count for the agent line, through
+        // the member-checked RPC (the tenant SELECT grant excludes the
+        // columns), keyed on the SAME activeWorkspaceId the push
+        // registration below gets. Never throws: a failure is no line plus
+        // one warning. Support never writes code, so it never reads it.
+        mode.runRepoLifecycle
+          ? readStoredKbSyncHeld(dispatchTenant, { userId: args.userId, workspaceId: activeWorkspaceId, runner: "cc" })
+          : Promise.resolve(null),
       ]);
 
     // #9558 — a write-closed sandbox must carry NO GitHub credential at all:
@@ -2661,6 +2797,7 @@ export const realSdkQueryFactory: QueryFactory = async (
   // #11636 — forget a stale published set from an unclean earlier build of this conversation before deciding afresh.
   _ccRegisteredApprovalTools.delete(makeAckPostureKey(args.userId, args.conversationId));
   _ccRegisteredReadTools.delete(makeAckPostureKey(args.userId, args.conversationId));
+  _ccHeldRefreshContext.delete(makeAckPostureKey(args.userId, args.conversationId));
   const c4McpServers = readCcMcpAllowlist();
   let c4ToolName: string | undefined;
   let c4PromptAddendum: string | undefined;
@@ -2668,6 +2805,26 @@ export const realSdkQueryFactory: QueryFactory = async (
   let approvalTools: readonly { name: string }[] = [];
   let approvalToolNames: readonly string[] = [];
   let pushPromptAddendum: string | undefined;
+  // #12714 — the push registration result the held-files line takes its variant from; undefined = never attempted (no repo
+  // or installation), "threw" = the registration catch below.
+  let heldLineRegistration: CcPushRegistration | "threw" | undefined;
+  // #12704 D41(d): the cc held line is built only for a connected, ready repo (the Settings card's own condition), and only with
+  // a renderable stored count; D40(2): only then are the degraded precondition reads classified (lazy, never on other dispatches).
+  const heldLineEligible =
+    mode.runRepoLifecycle &&
+    repoUrl !== null &&
+    repoReadinessRow.repoStatus === "ready" &&
+    kbSyncHeld !== null &&
+    isRenderableHeldCount(kbSyncHeld.heldFiles) &&
+    kbSyncHeld.checkedAt !== null;
+  const heldLineDegradedReads: readonly HeldLineDegradedRead[] = heldLineEligible
+    ? await classifyHeldLineDegradedReads({
+        userId: args.userId,
+        workspaceId: activeWorkspaceId,
+        entitled: webEgressEntitled === true,
+        installationId: effectiveInstallationId,
+      })
+    : [];
   // #12469 — the read-only GitHub tools (entitlement + non-support persona + connected PUBLIC repo + installation). The registrar
   // always runs (it is called OUTSIDE the repo/installation block below) so the "entitled, no tools" states are observable.
   let readTools: readonly { name: string }[] = [];
@@ -2722,6 +2879,7 @@ export const realSdkQueryFactory: QueryFactory = async (
           owner,
           repo,
           workspacePath,
+          workspaceId: activeWorkspaceId,
           // #8739 — a successful Concierge `.c4` save pushes a
           // `c4_diagram_saved` frame on the user's one live socket
           // (supersedeExistingUserSocket) so an open C4Workspace refetches
@@ -2793,6 +2951,8 @@ export const realSdkQueryFactory: QueryFactory = async (
           workspacePath,
           webEgressEntitled,
           grants: approvalGrants,
+          // D40(2): a precondition that read "no" only because the read failed gives the transient precondition-error.
+          degradedReads: heldLineDegradedReads,
         });
         // A violation throws into the catch below (empty set, reported), before anything is assigned or published.
         assertCcApprovalSetWired(pushRegistration.tools, pushRegistration.toolNames);
@@ -2804,12 +2964,15 @@ export const realSdkQueryFactory: QueryFactory = async (
           approvalToolNames = pushRegistration.toolNames;
           pushPromptAddendum = addendum;
         }
+        // #12714 (W3): the held line's variant comes from THIS result (never a second flag read).
+        heldLineRegistration = pushRegistration;
       } catch (err) {
         // Fail closed AND visible: a defect in the optional push registration (its own checks are already fail-closed) must
         // never break the Concierge's Query construction, and must never leave a half-registered tool.
         approvalTools = [];
         approvalToolNames = [];
         pushPromptAddendum = undefined;
+        heldLineRegistration = "threw";
         // null first, never the Error: the pino mirror captures a passed Error first and Sentry drops the tagged second capture
         // (#8629); the class name is what the operator needs.
         reportSilentFallback(null, {
@@ -2991,6 +3154,57 @@ export const realSdkQueryFactory: QueryFactory = async (
   // #11636: likewise for the gated push tool: advertised only when the registrar registered it.
   if (pushPromptAddendum) {
     effectiveSystemPrompt += `\n\n${pushPromptAddendum}`;
+  }
+  // #12714 (D29(3), D29(6), D29(7)): the held-files line, next to the capability addenda above. The count is the RPC read from
+  // the Promise.all (the same activeWorkspaceId as the registration); the variant is the registration result's; null, 0 or a
+  // null checked_at add nothing. Then the unfinished-merge line (D29(4)): the agent is the only party that can finish one.
+  // No registration attempted (no repo or installation in this dispatch): the route still comes from the ONE shared verdict
+  // (D40(5)), so a degraded repo or installation read is "not available right now", never the lasting no-route sentence.
+  const heldLineSource: { registered: boolean; reason: CcPushRegistrationReason } | "threw" | undefined =
+    heldLineRegistration === undefined && heldLineEligible
+      ? { registered: false, reason: heldLineUnattemptedReason(connectedOwner !== "" && connectedRepo !== "", effectiveInstallationId, webEgressEntitled === true, heldLineDegradedReads) }
+      : heldLineRegistration;
+  const heldLineRoute = heldLineRouteFromRegistration(heldLineSource);
+  // simplicity F13: a registration's `defaultBranch` is already null unless it registered (`CcPushRegistration`).
+  const heldLineDefaultBranch = typeof heldLineRegistration === "object" ? heldLineRegistration.defaultBranch : null;
+  const heldLine =
+    heldLineEligible && kbSyncHeld
+      ? buildKbSyncHeldAgentLine({
+          heldFiles: kbSyncHeld.heldFiles,
+          checkedAt: kbSyncHeld.checkedAt,
+          route: heldLineRoute,
+          runner: "cc",
+          defaultBranch: heldLineDefaultBranch,
+        })
+      : null;
+  if (heldLine) {
+    effectiveSystemPrompt += `\n\n${heldLine}`;
+  }
+  const mergeBlocked = mode.runRepoLifecycle
+    ? await readCcMergeBlockedReason(workspacePath, kbSyncMergeBlockedReasonOf(kbSyncHeld?.pullBlocked ?? null))
+    : null;
+  const mergeBlockedLine = mergeBlocked
+    ? buildKbSyncMergeBlockedAgentLine(mergeBlocked, heldLineDefaultBranch)
+    : null;
+  if (mergeBlockedLine) {
+    effectiveSystemPrompt += `\n\n${mergeBlockedLine}`;
+  }
+  if (heldLine || mergeBlockedLine) {
+    // obs F12: which line was injected (a bucket, the route, the reason, the runner), so a user report can be matched to it.
+    // pino only; never the count, a path or a branch.
+    log.info(
+      {
+        ...heldAgentLineLogFields({
+          heldLine: heldLine !== null,
+          heldFiles: kbSyncHeld?.heldFiles ?? null,
+          route: heldLineRoute,
+          mergeBlocked: mergeBlockedLine ? mergeBlocked : null,
+          runner: "cc",
+        }),
+        conversationId: args.conversationId,
+      },
+      "kb-sync held agent line appended",
+    );
   }
   // Routines "Draft a routine" tab (#5402): scope the agent to routine
   // authoring (create = propose-as-PR; run/verify existing = gated routine_run).
@@ -3266,6 +3480,14 @@ export const realSdkQueryFactory: QueryFactory = async (
     _ccRegisteredApprovalTools.set(makeAckPostureKey(args.userId, args.conversationId), approvalToolNames);
   }
   // #12469: the same for the read-only GitHub tools, published beside it so the warm path advertises exactly what was built.
+  // #12704 D39(a): the close-hook refresh, only where it can run (repo lifecycle, connected `ready` repo, installation).
+  if (mode.runRepoLifecycle && repoUrl !== null && repoReadinessRow.repoStatus === "ready" && effectiveInstallationId !== null) {
+    _ccHeldRefreshContext.set(makeAckPostureKey(args.userId, args.conversationId), {
+      workspaceId: activeWorkspaceId,
+      workspacePath,
+      installationId: effectiveInstallationId,
+    });
+  }
   if (readToolNames.length > 0) {
     _ccRegisteredReadTools.set(makeAckPostureKey(args.userId, args.conversationId), readToolNames);
   }
@@ -3627,6 +3849,7 @@ export const realSdkQueryFactory: QueryFactory = async (
     _ccSeccompArtifact.delete(makeAckPostureKey(args.userId, args.conversationId));
     // #11636 — same leak class: the published registered-approval-tool set belongs to a Query that never entered `activeQueries`.
     _ccRegisteredApprovalTools.delete(makeAckPostureKey(args.userId, args.conversationId));
+    _ccHeldRefreshContext.delete(makeAckPostureKey(args.userId, args.conversationId));
     _ccRegisteredReadTools.delete(makeAckPostureKey(args.userId, args.conversationId));
     // No askpass cleanup needed here: the helper is a fixed-name, token-free
     // file reused per workspace (written into `.git/`), so a startup throw
@@ -5715,6 +5938,7 @@ export function __resetDispatcherForTests(): void {
   _ccAutonomousAckPosture.clear();
   _ccSeccompArtifact.clear();
   _ccRegisteredApprovalTools.clear();
+  _ccHeldRefreshContext.clear();
   _ccRegisteredReadTools.clear();
   // Held worktree-lease records registered via the
   // `__registerCcWorktreeLeaseForTests` seam must not leak across tests.

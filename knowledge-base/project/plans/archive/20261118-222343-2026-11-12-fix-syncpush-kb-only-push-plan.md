@@ -1,0 +1,2000 @@
+---
+title: "fix(security): post-session syncPush publishes only knowledge-base commits, verified against the remote tip"
+type: fix
+date: 2026-11-12
+slug: fix-syncpush-kb-only-push
+branch: feat-one-shot-12600-syncpush-owner-approval
+issue: 12600
+closes: [12600, 12718, 12714]
+related_not_closed: [12719]  # CTO X4: separable; refusal guards only
+extended: 2026-11-13  # #12718 + #12714 added (operator U1, T1)
+priority: p2
+domain: engineering
+brand_survival_threshold: single-user incident
+requires_cpo_signoff: true
+lane: cross-domain
+---
+
+# fix: post-session syncPush publishes only Soleur's knowledge-base commits
+
+## Overview
+
+The post-session sync in the legacy agent runner (`syncPush` in `apps/web-platform/server/session-sync.ts`) pushes every
+local commit ahead of the upstream branch with the GitHub App installation token. Nothing checks that those commits are
+Soleur's own knowledge-base auto-commits, and no Owner approves the push, so a commit a member's agent made through Bash
+reaches the connected repository at the end of the turn. This plan makes the sync push only a commit the server builds
+itself: the remote tip's hash-verified tree with just the `knowledge-base` entry replaced, Soleur's message and
+identity. It moves the local branch before the push so no other consumer of the clone sees a divergence, stops
+self-heal from erasing uncommitted code edits, and pins the behaviour with tests.
+
+**Extension (2026-11-13, operator rulings U1, T1).** The same PR also closes #12718 and #12714. #12718: the
+session-start `syncPull` mints the token only on the hardened isolated arm (a fetch from the literal URL into the
+isolated GIT_DIR, objects handed over, then a token-free local merge in the workspace), and every isolated fetch stops
+spawning a git child against the workspace `.git`. #12714: Owners and members see on the Settings Project card how many
+changed code files the sync holds back, and the agent is told at session start. Sections marked "#12718 / #12714
+extension" carry it; the #12600 sections are unchanged.
+
+## Enhancement Summary
+
+**Deepened on:** 2026-11-13 (plan written and plan-reviewed 2026-11-12)
+**Sections enhanced:** Proposed Solution, Attack Surface, Performance, Implementation Phases, Files, User-Brand Impact,
+Observability, Guard Contract, Scope Check, Acceptance Criteria, Test Scenarios
+**Agents used:** plan review (dhh, kieran, code-simplicity, architecture-strategist, spec-flow-analyzer, cto devex, cpo);
+deepen (security-sentinel, test-design-reviewer, user-impact-reviewer, observability-coverage-reviewer,
+learnings-researcher, a verify-the-negative pass); CTO rulings R1-R20.
+
+**Extension (2026-11-13, #12718 + #12714):** planned with measured probes (M1-M11, F1-F6, T1-T8, C1-C3; scripts in
+`knowledge-base/project/specs/feat-one-shot-12600-syncpush-owner-approval/probes-12718-12714/`), CTO rulings X1-X5,
+R13b, W1-W7 and CPO rulings V1-V5 / V-M. Deepen-plan on the extension sections first HALTED at Phase 4.9 (no committed
+`.pen` wireframe: the Pencil MCP hit the pen.dev plan limit, row W7, `operator (money)`); Phase 4.10 was satisfied by
+adding `## Encryption Posture`. It was re-run on 2026-11-17 (next line).
+
+**Deepen 2026-11-17 (the #12718 / #12714 extension, after the pen.dev plan upgrade):** seats architecture,
+data-integrity, security, spec-flow, agent-native, realism and learnings; lead rulings D25-D30 and CPO copy ruling V6
+(`decision-challenges.md`). Applied in place to Proposed Solution #12718 and #12714, the Attack Surface, Phases 9-11,
+the Files lists, User-Brand Impact, Observability, Acceptance Criteria, Product/UX Gate and Test Scenarios extensions,
+each marked "Research Insights (deepen 2026-11-17)". Main changes: two leaves (`kb-sync-objects.ts`,
+`kb-sync-remote.ts`) and a pure-git `kb-sync-pull.ts` over an injected writer (D25); the merge guard runs before the
+auto-commit and the merge argv is pinned (D26); the self-heal merges through `mergeVerifiedDefault` behind a
+`merge-tree` pre-check (D27); side-tip adoption with a KB-only gate and the shared PR table (D28); the held count is
+written every sync through a separate UPDATE and read by the cc agent through a member-checked RPC, and both runners
+get the agent line (D29); the side-PR and stuck-merge states are scoped out with follow-ups (D30). Wireframe:
+`knowledge-base/product/design/settings/kb-sync-held-commits.pen`.
+
+### Key Improvements
+
+1. **Overlay-only publish (R14).** A measured probe showed `rev-list --full-history --simplify-merges` and
+   `diff-tree` read forged object bytes without a hash check. That makes the planned history-walk predicate
+   bypassable through a check-then-swap. The sync now pushes only server-built commits from three hash-verified
+   objects. This also closes `Fixes #N` and forged-author publication.
+2. **The clone never diverges (R1, R14, R17).** The local branch moves to `S`, or to a merge `M` while code commits are
+   held, by a `--no-deref` CAS before the push. The fallback side commit descends from `T`. Self-heal, the ADR-068
+   overlay and the next turn all see a fast-forward.
+3. **Self-heal gate (R18).** Held code commits become the steady state, so `selfHealNonFastForward` must no longer
+   erase dirty non-KB edits on an upstream push.
+4. **Authoritative default branch (R2, R17).** One hardened `ls-remote --symref`, an exact ref-name match, a
+   line-anchored `GH006` and no agent-chosen name in argv. `resolveDefaultBranchForFallback` is deleted.
+5. **Observability made searchable.** Per-reason error classes and tags, an unconditional Better Stack line, a static
+   `KbSyncError` (raw push errors now embed the repo URL and sha), `fallback_reason` and layer citations.
+
+### New Considerations Discovered
+
+- The reconcile webhook fires on the App's own push and reads no sender (verified).
+- `--no-deref` is needed on every ref write (CTO measurement).
+- A real `pre-receive` hook works on `file://` remotes despite `core.hooksPath=/dev/null` on the pusher.
+- Follow-ups filed: #12718 (P1, token-bearing pull on the legacy arm), #12719 (conflicted pull), #12734 (rulesets
+  `GH013`), and a residual comment on #5221.
+
+Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). (No `spec.md` exists for this branch.)
+
+## Research Insights
+
+### Premise Validation
+
+- #12600 is OPEN, closed by no PR. #12567 (the push-disclosure PR) is MERGED and is background only: it never touched
+  `syncPush`. #12597 is CLOSED (PR #12646). #12197, #12598, #12605 are OPEN.
+- `syncPush` exists on this branch at `apps/web-platform/server/session-sync.ts` (`export async function syncPush`),
+  `hasLocalCommits` (`rev-list --count @{u}..HEAD`, falling back to `rev-list --count HEAD`) and the bare push
+  `gitWithInstallationAuth(["push"], installationId, …)` are as the issue describes. Its only production caller is
+  `apps/web-platform/server/agent-runner.ts` ("Sync: push changes to the ACTIVE workspace's remote"). It runs on every
+  `result` event (every turn), not only at session end.
+- Collision pre-check: the only open PR naming #12600 is #12704, this branch's own WIP draft (no files). The foreign
+  `test-all.sh` processes belong to an unrelated worktree (`feat-kernel-patch-web-hosts-12008`).
+- ADR corpus: ADR-309 (`knowledge-base/engineering/architecture/decisions/ADR-309-durable-action-bound-approval-requests.md`)
+  names `syncPush` as "#12600's path" three times (item 8 discharge note, the 2026-11-10 #12197 addendum, and the
+  workspace-settings note). No ADR rejects a commit filter on the sync push.
+
+### Property List (Phase 0.6b)
+
+- P1. After any session (Owner or member), no commit that changes a path outside `knowledge-base/` reaches the connected
+  repository through the post-session sync.
+- P2. The set of commits the sync analyses is exactly the set the push sends: no workspace-config or ref the agent can
+  write may widen what is pushed beyond what was checked.
+- P3. A refused sync loses nothing: the member's commits and working-tree edits stay in the workspace.
+- P4. A refusal is visible to the operator without SSH (Sentry), and carries no tenant paths, shas or raw user ids.
+- P5. The workspace's knowledge-base changes keep reaching the remote in the normal case, including after a
+  session-start pull merge of upstream changes (as Soleur-built commits since R14, not the local auto-commits).
+- P6. A test pins the chosen behaviour (issue acceptance bullet 2).
+- P7. The sync never leaves the workspace's default branch diverged from what it pushed: after a successful push, the
+  remote tip is an ancestor of local HEAD, so `syncWorkspace`'s self-heal, the ADR-068 git-data overlay and the next
+  turn's tip check all see a fast-forwardable clone (plan review, spec-flow G1 / architecture 1).
+
+### Cut List (Phase 0.6b)
+
+- Copy change to `PUSH_DISCLOSURE` (option 2 of the issue) -> buys an accurate Settings claim -> the code fix makes the
+  existing sentence accurate for the agent-commit route; any remaining copy question goes to a follow-up for CPO/CLO
+  (operator constraint: no Settings or legal copy edits here).
+- Commit-message allowlist (`AUTO_COMMIT_MSG_PUSH` / `AUTO_COMMIT_MSG_PULL`) as the predicate -> buys nothing: an agent
+  can run `git commit -m "Auto-commit after session"`; P1 is a property of paths, not of messages.
+- A new Owner-approval flow for the sync push -> P1 is met by refusing; routing the sync through the approval queue would
+  touch the approval-queue flag surface, which the operator ruled out.
+
+- History-walk predicate over `<T>..<headSha>` (plan-time ruling B) -> bought P1 for pushes of agent-authored KB-only
+  commits -> cut at deepen-plan (R14): it reads forged object bytes (measured), and pushing only server-built commits
+  buys P1 without it.
+
+### Plan-time measurements (scratch real-git probe, git 2.56.0) — superseded by R14
+
+Kept as the record of why the history-walk predicate was first chosen. `probe7.sh` (Proposed Solution, Research
+Insights) then showed the walk reads forged object bytes, so R14 replaced it with the overlay-only publish; none of
+the rows below is load-bearing any more.
+
+Probe script: `/tmp/claude-1000/-data-git-repositories-jikig-ai-soleur/4fed09e4-fd93-4c8b-8997-43367c6a07a8/scratchpad/probe3.sh`
+plus inline runs. Command shape: `git rev-list --count <flags> <base>..<head> -- . ':(exclude)knowledge-base/'`.
+
+| Case | default flags | `--no-merges --full-history` | `--full-history --simplify-merges` |
+|---|---|---|---|
+| KB-only linear commits | 0 | 0 | 0 |
+| add then delete `.github/w.yml`, then upstream pull-merge | **0 (bypass)** | 2 | 3 |
+| KB-only local + pull-merge of upstream non-KB change (legit) | n/a | 0 | 0 |
+| evil merge (merge commit itself adds `src/evil`) | 1 | **0 (miss)** | 1 |
+| top-level FILE named `knowledge-base` with `:(exclude)knowledge-base` (no slash) | | 0 (miss) | |
+| same with `:(exclude)knowledge-base/` (trailing slash) | | 1 | |
+| `.git/shallow` planted inside the range | | 2 (fails closed: the commit becomes a root) | |
+| `GIT_LITERAL_PATHSPECS=1` | | counts all commits (fails closed) | |
+| KB-only root commit, no remote base | | 0 | |
+| rename `src/x` -> `knowledge-base/m/x` | | counted (the delete is a non-KB change) | |
+| symlink or gitlink inside `knowledge-base/` | | 0 (KB path; residual, see Risks) | |
+
+Conclusions: plain `rev-list` history simplification is a bypass; `--no-merges` misses an evil merge;
+`--full-history --simplify-merges` with the trailing-slash exclude is the one form that is right on every measured row.
+
+### #12718 plan-time measurements (scratch real-git probes, git 2.56.0)
+
+Scripts: `knowledge-base/project/specs/feat-one-shot-12600-syncpush-owner-approval/probes-12718-12714/probe1.sh` .. `probe6.sh`, scratch output under `/tmp/claude-1000/kbpull-probe/` (synthesized fixtures; `file://` bare origin, workspace
+`git clone --depth 1`, upstream commit `c2` changes `knowledge-base/a.md` and `src/x.ts` and adds `src/new.ts`).
+Columns: **pull** = today's `pull --no-rebase --autostash`; **iso+merge** = fetch into a server-written bare dir (copied
+`shallow`, workspace objects as `GIT_ALTERNATE_OBJECT_DIRECTORIES`), then
+`rev-list --objects <T> --not <headSha> | pack-objects --stdout | unpack-objects -q` into the workspace,
+`update-ref --no-deref refs/remotes/origin/main <T>`, `merge --no-edit --autostash <T>`; **ff-only** = the same with
+`merge --ff-only --autostash <T>`.
+
+| # | Workspace state before the pull | pull | iso+merge | ff-only |
+|---|---|---|---|---|
+| M1 | clean | rc 0, fast-forward | rc 0, fast-forward | rc 0, fast-forward |
+| M2 | KB edit auto-committed first (what `syncPull` does) | rc 0, merge commit | rc 0, merge commit (message `Merge commit '<sha>'` instead of `Merge branch 'main' of <url>`) | rc 128 `Not possible to fast-forward` (every session with a KB auto-commit would stop pulling) |
+| M3 | dirty tracked KB edit, path untouched upstream | rc 0, autostash re-applied, edit kept | same | same |
+| M4 | dirty tracked KB edit, path changed upstream | rc 0 (!), autostash pop conflicts: `UU knowledge-base/a.md` with markers, stash entry kept, no `MERGE_HEAD` | same | same |
+| M5 | dirty tracked non-KB edit, path untouched upstream | rc 0, kept | same | same |
+| M6 | dirty tracked non-KB edit, path changed upstream | rc 0, `UU src/x.ts` with markers, stash kept, no `MERGE_HEAD` | same | same |
+| M7 | untracked file colliding with incoming `src/new.ts` | rc 1 `untracked working tree files would be overwritten ... Aborting`; HEAD, file unchanged | same | same |
+| M8 | conflicting merge (committed KB `a.md` vs upstream `a.md`) | rc 1, `MERGE_HEAD`, markers, incoming files staged | same | rc 128, clean refusal |
+| M9 | M8 plus a dirty non-KB `README` | rc 1; the `README` edit leaves the tree for `.git/MERGE_AUTOSTASH` (not the stash list) | same | rc 128, edit kept |
+| M9a | M9, then `merge --abort` | — | rc 0 `Applied autostash.`, edit back, tree clean | — |
+| M9b | M9, then `reset --hard` | — | rc 0, autostash moved to the stash list (not lost) | — |
+| M9c | M9, then the next session's merge | — | rc 128 `Exiting because of an unresolved conflict` (stuck until resolved; pull is the same) | — |
+| M10 | M4, then the push-side auto-commit `add`+`commit` | — | rc 0, the committed KB blob contains `<<<<<<<` (R11's `MERGE_HEAD` guard does not see this state) | — |
+| M11 | upstream force-pushed to unrelated history | rc 128 `refusing to merge unrelated histories` | same | — |
+
+Result: the token-free local merge reproduces the merge half of today's pull exactly; `--ff-only` is not viable (M2).
+Every half-done state (M4, M6, M8-M10) exists today and is neither created nor widened by the move.
+
+| # | Isolated fetch probe | Observed |
+|---|---|---|
+| F1 | `fetch` in the isolated dir with the workspace objects as an alternate, GIT_TRACE on | spawns `git --git-dir=<ws>/.git for-each-ref --format=%(objectname)` (only `GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_DIR GIT_PREFIX` unset; every other variable, the token and askpass included, inherited); agent-planted workspace refs become `have` lines (2 with no server-written ref) |
+| F2 | same with `-c core.alternateRefsCommand=true` | 0 child runs into the workspace; rc 0; same 7 objects received and handed over |
+| F3 | F2 with a server-written have-ref at `headSha` vs none | equal on this fixture (7 objects either way) |
+| F4 | `push <sha>:refs/heads/main` from the isolated dir (the #12600 push shape), GIT_TRACE on | 0 child runs into the workspace: only fetches are affected (the new pull fetch and #12600's side-branch fetch) |
+| F5 | `shallow` after the isolated fetch (no `--depth`) | unchanged; the fetched commits connect to the copied boundary, so the workspace needs no `shallow` update |
+| F6 | upstream 3 commits ahead of a `--depth 1` workspace (`probe5.sh`): no-depth fetch vs `--depth 1` fetch | no depth: `shallow` unchanged, merge rc 0, `rev-list --objects HEAD` rc 0, `fsck --connectivity-only` rc 0. `--depth 1`: isolated `shallow` CHANGED, merge rc 0 printing `Already up to date.` with the 3 upstream commits NOT merged, fsck rc 2 (silent wrong result) |
+
+### #12718 token-destination probe (two logging HTTP servers, `http` standing in for `https` on both arms)
+
+`LIT` = the literal-URL host, `EVIL` = the rewrite target; the askpass script answers `x-access-token:TOKEN-SENTINEL`.
+Workspace `.git/config` plants `url.<EVIL>.insteadOf=<LIT>`, unscoped and `<EVIL>`-scoped `http.extraHeader=X-Evil: ...`.
+
+| # | Arm and planted scope | Requests seen | Token seen by |
+|---|---|---|---|
+| T1 | legacy (`pull`, workspace config read) + workspace `insteadOf` | EVIL x2 (`X-Evil: repo-unscoped`) | **EVIL** |
+| T2 | legacy + agent-rewritten `remote.origin.url` | EVIL x2 | **EVIL** |
+| T3 | hardened isolated `fetch <LIT>` + the same workspace config | LIT x2, no `X-Evil` | LIT only |
+| T4 | T3 + planted server-HOME `~/.gitconfig` (`insteadOf` + `extraHeader`) | LIT x2 | LIT only (`HOME` = isolated dir, `GIT_CONFIG_GLOBAL=/dev/null`) |
+| T5 | T3 + planted `~/.config/git/config` (XDG) | LIT x2 | LIT only |
+| T6 | T3 + a planted system file | LIT x2 | LIT only (`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_SYSTEM=/dev/null`) |
+| T7 | control: T4 with `GIT_CONFIG_GLOBAL=<planted file>` forced into the child | EVIL x2 | **EVIL** (the probe is sensitive; the pinned env key is the control) |
+| T8 | `config --list --show-origin` in the hardened child | `command line` (7) and the isolated `config` file (2) only | — |
+
+### #12714 held-count probe (`probe6.sh`, git 2.56.0)
+
+Workspace (`--depth 1`) with a held code commit `F1` and a KB commit `K1` over `T`.
+
+| # | State | `rev-list --count --no-merges T..HEAD -- . ':(exclude)knowledge-base/'` | `diff --name-only T HEAD -- . ':(exclude)knowledge-base/'` |
+|---|---|---|---|
+| C1 | `F1` held | 1 | 1 file |
+| C2 | upstream squash-merges `F1`'s change, then the session-start merge | 1 (stale forever) | 0 |
+| C3 | then an unrelated upstream commit and merge | 0 (pathspec history simplification drops `F1`'s side) | 0 |
+
+Result: count files, from the merge base (`T...HEAD`, CTO W1; a two-dot diff would also count upstream changes not
+yet pulled).
+
+### Relevant files — #12718 / #12714 extension
+
+- `apps/web-platform/server/session-sync.ts` `syncPull` (auto-commit, then `gitWithInstallationAuth(["pull","--no-rebase","--autostash"], id, { cwd })`, then `updateLastSynced`); `updateLastSynced` is also called at the end of `syncPush`.
+- `apps/web-platform/server/git-hardened-env.ts` `HARDENED_GIT_ARGS` (no `alternateRefsCommand`); `server/host-git.ts` `HOST_GIT_EXTRA_ARGS` sets it empty (default `for-each-ref`, still spawns) and documents the `filter.*` / `merge.*.driver` residual.
+- `apps/web-platform/server/workspace-sync.ts`: legacy `pull --ff-only` (`syncWorkspace`) and `fetch origin <default>` (self-heal) — those two call sites stay out of scope (X3); the self-heal's held-commits seam (`HELD_COMMITS_REASON_INTERIM`) is in scope and calls `mergeVerifiedDefault` (D27); the recovery-branch block that sets commits aside before `reset --keep` (W4; after D6 it sets aside only commits whose non-KB content is already upstream).
+- Settings: `app/(dashboard)/dashboard/settings/page.tsx` (service-client `workspaces` select), `components/settings/settings-content.tsx`, `components/settings/project-setup-card.tsx` ("Last synced:" for Owners; member read-only variant). `server/workspace-repo-mirror.ts` `WorkspaceRepoCols`; migration 174 grants `authenticated` a fixed `workspaces` column list; latest migration 186.
+- Agent context: `server/cc-dispatcher.ts` (`resolveCcGithubPushRegistration` -> `pushRegistration.registered` -> `ccPushPromptAddendum`); `server/cc-github-push.ts`; `server/push-branch.ts` refuses the default branch (an Owner-approved push lands on a new branch).
+
+### Relevant files
+
+- `apps/web-platform/server/session-sync.ts`: `ALLOWED_AUTOCOMMIT_PATHS` (`/^knowledge-base\//`),
+  `ALLOWED_GIT_SUBCOMMANDS` (status/add/commit/remote/rev-list), `runConnectedRepoGit`, `hasLocalCommits`,
+  `runProtectedFallback`, `syncPush`, `resolveDefaultBranchForFallback` (private).
+- `apps/web-platform/server/git-auth.ts` `gitWithInstallationAuth`: the legacy arm runs through `hostGitInvocation` with
+  the workspace's own `.git/config`, so a bare `git push` follows agent-authored `push.default`, `remote.origin.push`,
+  `branch.<b>.merge`; `@{u}` resolves to a `refs/remotes/origin/*` ref the agent can also write.
+- `apps/web-platform/server/host-git.ts` + `server/inngest/functions/_git-hardening.ts`: `--no-replace-objects`,
+  `GIT_NO_REPLACE_OBJECTS=1`, refusal of `commondir`, alternates and `info/grafts`. No literal-pathspec setting.
+- `apps/web-platform/test/host-git-consumers-real-git.test.ts`: real-git harness with `file://` remotes (the host-git mock
+  widens `allowProtocol` with `:file`); its exec-site census regex matches only literal `exec*("git"`, so new
+  `runConnectedRepoGit` / `gitWithInstallationAuth` calls need no census row. It mocks `resolveInstallationId` to `null`,
+  so it never reaches the push today.
+- `apps/web-platform/test/server/session-sync-protected-fallback.test.ts` `makeGitMock`: keys the main push on
+  `args[0] === "push" && args.length === 1` and the side-branch push on `args[0] === "push"`. An explicit-refspec main
+  push would fall through to the side-branch arm and make the protected, shallow and auth rows pass vacuously: this mock
+  must change with the push form.
+- Other syncPush harnesses (mocked git, no push-argv assertion): `test/server/session-sync-sentry-mirror.test.ts`
+  (`if (argv[0] === "push") throw`), `test/server/session-sync-workspace-last-synced.test.ts`,
+  `test/session-sync-path-allowlist.test.ts`.
+- Sentry: no op registry. `apps/web-platform/infra/sentry/issue-alerts.tf` `kb_sync_protected_fallback_failed` filters
+  `op in "kb-sync.protected-fallback-failed"`, pinned by
+  `test/sentry-kb-sync-protected-fallback-alert-op-contract.test.ts`. A new op pages nobody unless added there.
+- Workspace clones are `git clone --depth 1` (shallow, single-branch, default branch checked out, upstream set by clone)
+  (`server/workspace.ts`). `provisionWorkspace`'s "Initial workspace" commit lives only in no-remote workspaces
+  (`syncPush` returns at `hasRemote`). No Soleur-authored non-KB commit is expected to reach GitHub through `syncPush`
+  (`inflight-checkpoint` writes `refs/checkpoints/*`; `c4-writer` commits through the GitHub API).
+- git-data replication force-pushes all refs and a re-clone overlays the git-data tip
+  (`server/ensure-workspace-repo.ts`, `merge-base --is-ancestor HEAD dataRef`), so an unpushed local commit survives a
+  host move only while the GitHub tip is an ancestor of the local branch (ADR-068 (d)); P7 keeps that true.
+- `server/workspace-sync.ts` `syncWorkspace` -> `selfHealNonFastForward`: on a diverged default-branch clone it branches
+  local commits aside to `soleur/recovered-kb-sync-<ts>` and runs `reset --hard origin/<default>` (dirty edits lost).
+  Callers: `server/inngest/functions/workspace-reconcile-on-push.ts` (the GitHub push webhook; it reads no sender, so it
+  fires on the App's own sync push), `cron-workspace-sync-health.ts`, `c4-writer.ts`, and the KB routes
+  (`app/api/kb/upload`, `app/api/kb/file/[...path]`, `app/api/kb/sync`). Verified 2026-11-12.
+- `server/approval/workspace-head.ts` `readWorkspaceHeadSha`: reads HEAD with no git process (packed-refs, one symref
+  hop, refuses reftable); the plan adds a sibling export that also returns the ref name (no return-type widening of the
+  existing export, `hr-type-widening-cross-consumer-grep`).
+- `server/push-branch.ts` `checkCommitPresent`: an ad hoc token-free `execFile("git", …)` in the isolated dir (exit 1 vs
+  128 split); `AGENT_AUTHOR_NAME` / `AGENT_AUTHOR_EMAIL` are module constants there.
+- `server/git-hardened-env.ts` (home of `buildIsolatedGitEnv`) is a leaf importing only `node:path` and the
+  import-free constants of `inngest/functions/_git-hardening.ts` (no `fs`, no `child_process`);
+  `server/git-isolated-push-dir.ts` documents that it spawns no git (its unit test mocks `node:child_process`).
+- `apps/web-platform/server/permission-callback-bash-batch.ts` `NO_BATCH_GIT_VERBS`: `git push` is never batch-granted,
+  but `git commit` is an ordinary Bash command.
+
+### Institutional learnings applied
+
+- `knowledge-base/project/learnings/2026-04-27-autoloop-pr-quality-failure-modes.md` (#2905): path allowlist over
+  denylist; the auto-commit wrapper allowlists verbs and forbids flags.
+- `knowledge-base/project/learnings/2026-05-11-plan-review-caught-git-log-union-trap-and-cross-module-field-assumption.md`:
+  verify any pathspec-limited `rev-list` claim in a scratch repo before relying on it (done above).
+- `knowledge-base/project/learnings/2026-06-03-self-heal-reset-must-gate-on-actual-repo-state-not-assumed-mirror.md`:
+  gate on a computed boolean, fail safe on NaN or ambiguous counts.
+- `knowledge-base/project/learnings/2026-05-12-ship-unpushed-commits-fail-open-class.md`: verify the pushed sha, not
+  the exit code.
+- `knowledge-base/project/learnings/2026-05-04-vacuous-red-via-shared-fixture-and-toolchain-pinning.md`: pick fixture
+  inputs that reach the new guard, not a fast path.
+- Sharp edge "prefer the tool's effect on a sandbox over its reports": the pinning tests assert the bare remote's refs
+  and objects after `syncPush`, not the git argv alone.
+
+### Functional overlap
+
+`soleur:engineering:discovery:functional-discovery`: no community artifact overlaps (closest are developer-terminal
+approval gates). Nothing installed.
+
+### CLAUDE.md / AGENTS.md conventions
+
+`cq-silent-fallback-must-mirror-to-sentry`, `cq-write-failing-tests-before`, `cq-test-fixtures-synthesized-only`,
+`hr-observability-as-plan-quality-gate`, `hr-no-ssh-fallback-in-runbooks`, `hr-technical-fork-is-not-an-operator-question`.
+- Related, out of scope: #12668 (cc Bash can push with the minted token, a different runner and route), #12140 (retire
+  the legacy runner; until it lands, this path is live for every legacy-runner turn), #5426 (protected-branch fallback).
+
+## Research Reconciliation — Spec vs. Codebase
+
+| Claim (issue / brief) | Reality on this branch | Plan response |
+|---|---|---|
+| "When a legacy-runner session ends, `syncPush` pushes" | It runs on every `result` event, so after every turn | Gate every call; the debounce keys on the workspace plus the reason, not the session |
+| "`hasLocalCommits` counts all of `@{u}..HEAD`" | True, and `@{u}` itself is agent-writable (`branch.<b>.merge`, `refs/remotes/origin/*`) | Read the remote state from `ls-remote`, never `@{u}`; keep `hasLocalCommits` only as a cheap skip (a forged "no commits" can only suppress a push), kept working by setting the tracking ref after a verified push (R8) |
+| "Fix-Size: ~40 lines / 3 files (session-sync.ts commit filter, agent-runner call site, one test)" | A filter over `@{u}..HEAD` plus a bare `git push` is bypassable through agent-written config (ruling C); history walks read agent-forgeable object bytes (measured, R14); the protected fallback is a second unapproved route (ruling F); a pushed commit the clone does not contain triggers self-heal (R1) | ~850 lines over the files in `## Files to Edit` / `## Files to Create`; the agent-runner call site needs no change (the signature stays) |
+| Option "refuse or skip when `@{u}..HEAD` holds any other commit" | Refusing alone stalls KB sync forever once an agent commits code on the default branch (ruling D) | Push only a Soleur-built KB-only commit, every time (R14); the member's commits stay local |
+| Option "name the post-session sync in the Settings copy" | Copy edits are barred in this PR; the CLO agent finds the sentence accurate after the fix but incomplete | Follow-up #12713 with drafted wording |
+
+## Problem Statement
+
+`syncPush` (`apps/web-platform/server/session-sync.ts`) runs host-side with the GitHub App installation token after every
+legacy-runner turn, for Owners and members alike. It auto-commits only `knowledge-base/**` (#2905), but then runs a bare
+`git push` that publishes every local commit ahead of upstream. A member's agent can `git commit` any path through Bash
+(a `.github/workflows/*` file included) and the commit reaches the Owner's repository at the end of the turn. Since
+#12567, `github_push_branch` (the route the agent asks for) needs the Owner's approval in every approval-queue state, and
+a session whose web access is running has no credentials in its sandbox, so in exactly the state the Settings sentence
+describes this sync is the only unapproved route from an agent commit to the remote.
+
+The bare push is also config-steered: the legacy `gitWithInstallationAuth` arm reads the workspace's own `.git/config`,
+which the agent can write, so `push.default=matching`, a `remote.origin.push` refspec or a forged `refs/remotes/origin/*`
+tip can widen what is sent beyond any range the server checked. The protected-branch fallback builds on
+`refs/remotes/origin/<branch>` (agent-writable), reads its PR base from the agent-writable `refs/remotes/origin/HEAD`
+with a token on the legacy arm (`resolveDefaultBranchForFallback`), and its success path runs `checkout -f` plus
+`reset --hard origin/<default>`, which today discards dirty edits and any non-KB local commits.
+
+## Proposed Solution
+
+All CTO rulings are recorded in `knowledge-base/project/specs/feat-one-shot-12600-syncpush-owner-approval/decision-challenges.md`
+(A-P at plan time, R1-R13 after plan review, R14-R20 at deepen-plan). Notation: `D` = authoritative default branch,
+`T` = remote tip of `D`, `headSha` = frozen local HEAD, `S` = Soleur-built KB-only commit, `M` = local merge of
+`headSha` and `S`.
+
+**The core rule (R14): the sync only ever pushes a commit the server built.** `S` has parent `T`, a root tree equal to
+`T`'s hash-verified root tree with only the `knowledge-base` entry replaced by `<headSha>:knowledge-base`, the fixed
+message `KB_SYNC_SIDE_COMMIT_MSG` and the Soleur identity. No agent-authored commit object, message or author ever
+reaches the remote through the sync, and no decision rests on a history walk over agent-writable object bytes.
+
+0. **Where git runs (rulings P, R2, R6, R12, R19, R20).**
+   - Workspace reads, no git process: `headSha` and the ref name through a new `readWorkspaceHeadRef` in
+     `server/approval/workspace-head.ts` (sibling of `readWorkspaceHeadSha`); `.git/MERGE_HEAD` existence.
+   - Workspace writes, exactly two verbs added to `ALLOWED_GIT_SUBCOMMANDS`, each behind an exact-argv guard:
+     `["unpack-objects", "-q"]` (pack on stdin) and `update-ref --no-deref` in two shapes only,
+     `["update-ref", "--no-deref", "refs/heads/<D>", <40hex new>, <40hex old>]` (CAS mandatory) and
+     `["update-ref", "--no-deref", "refs/remotes/origin/<D>", <40hex>]`.
+   - Everything else runs in the server-created isolated GIT_DIR (`createIsolatedPushDir`: server-written config,
+     workspace objects as a server-fixed alternate, validated shallow): hash checks, tree builds, pack, fetch, push.
+     Local verbs run token-free through `runIsolatedGitLocal` in the new `server/git-isolated-local.ts`; only
+     `ls-remote`, `fetch` and `push` go through `gitWithInstallationAuth(…, { hardened })`.
+   - The push half lives in the new `server/kb-sync-publish.ts`; `syncPush` orchestrates (R6).
+1. **Pre-checks, in order.** `hasRemote`; `.git/MERGE_HEAD` present -> skip the auto-commit AND the push
+   (`merge_in_progress`, R11); auto-commit `knowledge-base/**` (unchanged); `hasLocalCommits` pre-token skip
+   (unchanged); installation id; `readWorkspaceHeadRef` -> refuse `detached_head`.
+2. **Authoritative remote state (rulings C, R2, R17).** URL = literal `https://github.com/<owner>/<repo>.git` from
+   `getCurrentRepoUrl(userId, workspaceId)` + `parseOwnerRepo`, never `remote.origin.url`. One hardened
+   `ls-remote --symref <url> HEAD refs/heads/soleur/kb-sync` (no agent-chosen name in argv): exactly one
+   `ref: refs/heads/<D>\tHEAD` line gives `D`, the `HEAD` line gives `T`, an exact `refs/heads/soleur/kb-sync` line gives
+   the side tip; duplicates or malformed lines throw. Refuse `non_default_branch` unless `refName === "refs/heads/" + D`
+   exactly; `remote_branch_absent` when the remote has no `HEAD` (R5). `T == headSha` -> set the tracking ref, return
+   early: no push, no history row, no `updateLastSynced` (R8). `T` not present locally -> `remote_unknown_tip`. `T` not
+   an ancestor of `headSha` (`rev-list --count <headSha>..<T>` == 0) -> `remote_ahead` (ruling I, kept as an accident
+   guard, not a security check: forging it only lets an agent revert remote KB content, which a KB edit can do anyway).
+3. **Verify, then build (R14).** In the isolated dir, hash-verify three objects by recomputing their ids
+   (`cat-file <type> <id>` | `hash-object -t <type> --stdin` == `<id>`): `T`'s commit, `T`'s root tree and `headSha`'s
+   commit. Any mismatch -> `hash_mismatch` (warning; a tamper signal). Then:
+   - `<headSha>:knowledge-base` absent or not a tree -> `kb_not_tree`.
+   - KB entry of `T`'s root equal to `headSha`'s -> nothing to sync: `held_foreign` when `headSha^{tree}` differs from
+     `T^{tree}` (info), else return.
+   - `S = buildKbOverlay(T, headSha)`: `ls-tree -z` of the verified root, `knowledge-base` entry replaced, `mktree -z`,
+     `commit-tree -p <T>` with `-c user.name=<AGENT_AUTHOR_NAME> -c user.email=<AGENT_AUTHOR_EMAIL>` (constants exported
+     from `push-branch.ts`).
+   - **Guard:** `ls-tree -z <S^{tree}>` and the verified `T` root differ in exactly the `knowledge-base` entry and
+     nothing else (compared on the parsed entry lists the server built; no walk, no git-version dependence).
+4. **Keep the clone fast-forwardable before the push (rulings R1, R14; P7).**
+   - `S^{tree} == headSha^{tree}` (no non-KB changes local, the common case): hand `S`'s new objects to the workspace
+     (`rev-list --objects <S> ^<T> ^<headSha>` | `pack-objects --stdout` | `unpack-objects -q`), then CAS
+     `update-ref --no-deref refs/heads/<D> <S> <headSha>`. Local equals what will be pushed; history stays linear; the
+     index and working tree do not change (same tree).
+   - Otherwise (non-KB changes held local): `M = commit-tree <headSha>^{tree} -p <headSha> -p <S>` with message
+     `KB_SYNC_MERGE_MSG` ("Soleur: merge knowledge-base sync") and the Soleur identity; hand over `S` and `M`; CAS
+     `update-ref --no-deref refs/heads/<D> <M> <headSha>`.
+   - CAS failure (stderr "but expected") -> `head_moved`, nothing pushed; any other `update-ref` or `unpack-objects`
+     failure -> `ref_update_failed` / `unpack_failed`, nothing pushed.
+   - Push `S` (step 5); on success set the tracking ref to `S`. A failed push leaves an unpushed `S` in local history:
+     harmless, the next turn builds a fresh `S` on `T` again. Next turn `T` (= `S`) is an ancestor of local HEAD.
+5. **One push chokepoint (R6).** `pushVerifiedKbOnly({ base, sha, ref, url, isolated, installationId })`, `ref` limited
+   to `refs/heads/<D>` or `refs/heads/soleur/kb-sync`: re-runs the root-tree guard of step 3 for `sha` against `base`,
+   then pushes `<sha>:<ref>` non-force, no lease, through the hardened arm. `classifyPushError` matches only the
+   line-anchored `/^remote: error: GH006:/m` in stderr (R2, R16; a ref name in git's status line cannot match it);
+   `GH013` (rulesets) stays `other`, pinned by a test, follow-up #12734.
+6. **Protected-branch fallback (rulings F, R3, R4, R15, R17).** On a `GH006` reject of the verified push of `S`:
+   - Side parent `P` = the side tip from step 2, or `T` when absent; fetch it into the isolated dir when not local
+     (`fetch --depth 1 --no-tags <url> refs/heads/soleur/kb-sync`). Hash-verify `P`'s commit and root tree (R15).
+   - Ruling I extended (R4): build only when the side branch is absent, `P` is an ancestor of `headSha`, or `P`'s KB
+     entry equals `T`'s (the PR merged); else `side_ahead` (warning).
+   - `side`: root tree = `T`'s verified root with the `knowledge-base` entry from `headSha`; parents `(P, T)`, or the
+     single parent `T` when the side branch is absent or `P` already descends from `T` (R17). `side` descends from `T` by
+     construction, so the clone never diverges and the PR diff against `D` shows only KB changes. Skip when the side's
+     KB entry equals `P`'s. Push through `pushVerifiedKbOnly({ base: T, sha: side, ref: "refs/heads/soleur/kb-sync" })`;
+     PR find/create unchanged, base `D`.
+   - Workspace: the step-4 handling already ran against `S`; after a successful side push, CAS local `D` from its
+     step-4 value to `side` only when `side^{tree}` equals the step-4 value's tree (KB-only case), and set the tracking
+     ref to `side` (R17: stops a token mint every turn while the PR is open; the next `fetch` overwrites it).
+     Otherwise leave the workspace as it is. A post-success workspace CAS failure is `head_moved`, never a fallback
+     failure (the alert stays for undelivered syncs).
+   - Delete `resolveDefaultBranchForFallback` and the workspace `checkout -f -B`, overlay `checkout`, `commit` and
+     `reset --hard` calls.
+7. **Self-heal gate (R18).** `selfHealNonFastForward` (`server/workspace-sync.ts`), default-branch arm: before the
+   branch-aside + reset, run `status --porcelain --untracked-files=no`; when any tracked change exists
+   (`knowledge-base/` included since D6), refuse the reset, emit op `self-heal-aborted-dirty-tracked` (warning; R18's op,
+   renamed and widened by D6/D7/D20) and return the existing `ERROR_CLASS_NON_FAST_FORWARD`.
+   As built, the reset is `reset --keep` and also refuses on held commits (`self-heal-aborted-held-commits`) and on an
+   untracked collision (`self-heal-aborted-untracked-collision`), D6/D15; ADR-309 "Self-heal" is the current shape. Held foreign commits are now the steady state, so without this every upstream push
+   to `D` would erase a member's uncommitted code edits; the stall ends at the next session-start
+   `pull --no-rebase --autostash`. #5221 keeps the broader recovery-and-lock work.
+8. **All sessions (ruling E).** No role read: Owner and member sessions take the same path.
+9. **Records (rulings G, R5).** ADR-309 addendum discharging the three "#12600's path" mentions (located by text); ADR-068
+   addendum (the sync keeps "GitHub tip is an ancestor of the local branch" by updating the local branch before the
+   push); ADR-050 consumer-list entry for `session-sync` updated if it names the legacy push. No `model.c4` edit (R5).
+   No `PUSH_DISCLOSURE` edit (#12713).
+
+### Proposed Solution — #12718 (session-start pull on the hardened arm)
+
+Rulings X1, X2, X4, X5 and D25-D28 (`decision-challenges.md`); measurements under "#12718 plan-time measurements"
+above. Notation as in the #12600 Proposed Solution (`D`, `T`, `headSha`; `P` = the `soleur/kb-sync` tip). The #12600
+steps are unchanged; this reuses their pieces.
+
+**Module shape (D25).**
+
+- Two leaves that never import `kb-sync-publish.ts` or `push-branch.ts`:
+  - `server/kb-sync-objects.ts`: the verified reads, `isAncestor`, `kbOf`, `commitTree`, `handOver`;
+  - `server/kb-sync-remote.ts`: `readRemoteState` (moved out of `kb-sync-publish.ts`, throws a neutral error rather
+    than the push-side `KbSyncError`) and a NEW hardened `fetchIntoIsolated` (step 4).
+- `server/kb-sync-pull.ts` exports two pure-git functions, `mergeVerifiedDefault` and `adoptSideTip`, over an injected
+  `KbPullWriter` (`unpack`, `setTracking`, `casBranch`, `merge`). session-sync.ts builds the writer, so
+  `runConnectedRepoGit` and its exact-argv guard stay private there. The module does no stamping, no reporting and no
+  isolated-dir lifecycle; `syncPull` orchestrates all three (create the dir, default merge, adoption, held count, one
+  report, dispose).
+- `kb-sync-publish.ts` keeps `buildKbOverlay`, `assertRootDiffersOnlyInKb`, `pushVerifiedKbOnly` and `GuardedSha`
+  private and imports the leaves; AC3's single push argv is unchanged. D21's Phase 9 items land here: `AGENT_AUTHOR_*`
+  and `disposeIsolated` move out of `push-branch.ts` into leaves, and `SideFallbackInput` collapses.
+- Every pull function returns a closed reason with a static message and never throws raw, so no URL or sha reaches a
+  Sentry exception value (D25(7)). `syncPull` returns `{ heldFiles, pullReason }` to the legacy runner (D29(4)).
+
+Steps:
+
+1. **Front half.** `hasRemote`, `authProbe`, installation id. No auto-commit yet.
+2. **Refuse a half-done merge, then auto-commit (X4 guard 1, D26(1)).** One `readStatus` (`status --porcelain=v1 -z`
+   through D21's `parsePorcelainZ`), then ONE shared `mergeInProgress(workspacePath, status)`, used by BOTH `syncPull`
+   and `syncPush`: `.git/MERGE_HEAD` or `.git/MERGE_AUTOSTASH` (lstat, no symlink follow, fail-closed on any error
+   other than ENOENT) or an unmerged entry (`DD AU UD UA DU AA UU`). True -> `unresolved_merge` with NO auto-commit,
+   no token, no fetch, no merge, no stamp (`syncPush` keeps its `merge_in_progress` hold on the same predicate). Only
+   then does the allowlisted KB auto-commit run, from the same status entries. Recovery (`merge --abort`, autostash
+   restore) stays #12719.
+3. **Remote state (X1, D26(5)).** `readWorkspaceHeadRef` -> `headSha`, `refName`; `readRemoteState` from
+   `kb-sync-remote.ts` (the one hardened `ls-remote --symref` on the literal URL) -> `D`, `T`, `P`. A `D` that starts
+   with `-` or fails `validateBranchFormat` is `remote_state` (the D23 predicate, shared). `refName` not
+   `refs/heads/<D>` -> no pull and no adoption, info line `non_default_branch` (X5). `T == headSha`, or `T` present
+   locally and an ancestor of `headSha` -> `up_to_date`: stamp, skip steps 4-6, continue to step 6b.
+4. **Hardened fetch (X1, X2, D25(1)).** In a fresh `createIsolatedPushDir` owned by `syncPull` (validated `shallow`
+   copied, workspace objects as the alternate): one server-owned have-ref = `headSha`, then `fetchIntoIsolated`:
+   `gitWithInstallationAuth(["fetch","--no-tags","--no-recurse-submodules","--no-write-fetch-head",<literal url>,"refs/heads/<D>:refs/heads/fetched"], id, { hardened })`
+   with an explicit timeout, no `+`, no glob and no `--depth` (F6). `D` appears in argv only as `refs/heads/<D>` or
+   `refs/remotes/origin/<D>`. `HARDENED_GIT_ARGS` already carries `-c core.alternateRefsCommand=true` (X2, Phase 8),
+   so no git child reads the workspace `.git` (F1, F2). The tip is read with
+   `rev-parse --verify refs/heads/fetched^{commit}` in the isolated dir; it must be HEX40, equal `T` and pass
+   `verifyObject(isolated, "commit", T)` before any hand-over, else `tip_mismatch` (a loose object planted at `T`'s id
+   in the workspace store would otherwise make the fetch skip `T`). Refuse `shallow_changed` when the isolated
+   `shallow` differs from the copy. A failed fetch is `fetch_failed`; a `createIsolatedPushDir` refusal is
+   `isolated_refused`. Fetch-stage reasons carry tag `ref=default`.
+5. **Hand-over (R12/R20 verbs, no allowlist growth for this step, D25(8)).** `rev-list --objects T --not headSha` is
+   checked against the walk cap (`walk_cap`, a named pull constant, not `OBJECT_WALK_ENTRY_CAP`, which bounds the
+   alternate-store directory walk) BEFORE `pack-objects` runs; the pack is bounded by `PULL_HANDOVER_MAX_BYTES`
+   (`handover_too_large`). `writer.unpack` (`unpack-objects -q`), then `writer.setTracking`
+   (`update-ref --no-deref refs/remotes/origin/<D> T`, the existing tracking-ref shape). Failure -> `handover_failed`.
+6. **Token-free local merge (X1, D26(2), D26(4), D26(5)).** `writer.merge(T)` runs, through `runConnectedRepoGit`
+   with `ALLOW_PROTOCOL_NONE`,
+   `-c merge.verifySignatures=false -c gpg.program=/bin/false -c gpg.ssh.program=/bin/false -c gpg.x509.program=/bin/false -c merge.renormalize=false -c merge.default=text -c rerere.enabled=false -c rerere.autoUpdate=false -c merge.stat=false -c maintenance.auto=false -c gc.auto=0 -c core.hooksPath=/dev/null`
+   then `["merge","--no-edit","--autostash","--no-overwrite-ignore","-m",AUTO_MERGE_MSG_PULL,T]`. `merge` joins
+   `ALLOWED_GIT_SUBCOMMANDS` behind an exact-argv guard that pins SHAPE only (the pins, the tokens, a HEX40 target, the
+   closed message). Equality with the in-memory `T` is checked in `kb-sync-pull.ts`: it passes to `writer.merge` only
+   the value it passed to `setTracking` (no read-back of an agent-writable ref). Outcomes:
+   - rc 0, then one `status --porcelain=v1 -z`: an unmerged entry (an autostash pop conflict, M4/M6) is the warning
+     `autostash_conflict`, never `merged`; otherwise `merged`. Both are a merge with rc 0 for the X1 stamp rule.
+   - rc 1 with `MERGE_HEAD` -> `merge_conflict` (tree left as today's pull leaves it, M8; session-start caller only).
+   - any other failure -> `merge_refused` (unrelated histories M11, untracked collision M7, an ignored file at an
+     upstream-added path refused by `--no-overwrite-ignore`).
+   - `--ff-only` is rejected (M2), `merge --abort` too (X4).
+6b. **Side-tip adoption (D5(e) as specified by D28).** Runs after a clean `T` merge (`merged`) AND after
+   `up_to_date`; skipped on `non_default_branch`, `unresolved_merge`, `autostash_conflict` and any refusal of steps
+   3-6. It acts only when `P` is in the `ls-remote` answer, `P` is not an ancestor of HEAD and `P`'s KB entry differs
+   from `T`'s.
+   1. If `P` is not local: `fetchIntoIsolated` for `refs/heads/soleur/kb-sync` with have-refs `T` and HEAD, no depth,
+      the step-4 refusals tagged `ref=side`, then `verifyObject(P)`.
+   2. KB-only gate, token-free in the isolated dir:
+      `diff --quiet --no-renames <merge-base(T,P)> <P> -- . ':(exclude)knowledge-base/'` (HEX40 arguments). A
+      non-zero exit is `side_not_kb_only` (warning): no hand-over, no merge. This closes the route by which anyone
+      with push access lands code in every workspace past branch protection.
+   3. PR check through D17's table, moved to a shared `server/kb-sync-side-pr.ts` (the push side's `recheckSidePr`
+      uses it too):
+      - open PR on `P`: adopt;
+      - no PR on `P`: create it (`side_pr_created`), then adopt;
+      - closed, unmerged PR on `P`: `side_declined`, no adoption and no new PR;
+      - the GET fails: `side_pr_unknown`, no write.
+   4. Adopt, after the hand-over of `P`'s objects (`rev-list --objects P --not T headSha`, D10) and
+      `refs/remotes/origin/soleur/kb-sync` = `P`: when `P`'s KB tree equals the KB tree of a commit on HEAD's
+      first-parent chain (D24(9)/(12)), link instead of merging: `commit-tree(HEAD^{tree}, [HEAD, P])` in the
+      isolated dir, handed over, plus a `--no-deref` CAS from HEAD; no file changes; `side_linked` (info).
+   5. Otherwise a token-free `merge-tree --write-tree HEAD P` pre-check in the isolated dir: a conflict is
+      `side_conflict` (warning, per D44 amending D28(5)) with files untouched; a clean result runs the step-6 argv with `P` as the target (the
+      guard admits the HEX40 just written to `refs/remotes/origin/soleur/kb-sync`).
+   6. Push side: the two interim `side_ahead` throws in `deliverAndLinkSide` stay the push-side hold for an absent
+      `P`; their comments now say the next session-start pull adopts it. Where the push side would build on a present
+      `P`, it runs the same KB-only check first and holds `side_not_kb_only` instead of building on `P`.
+
+   Adoption reasons never undo step 3's or step 6's stamp.
+7. **Observability (X1, D25(6), D25(7)).** Op `kb-sync.pull-held` (feature `session-sync`). `KbPullHeldReason` is a
+   separate closed union exported from `kb-sync-pull.ts` (not re-added to `KbSyncErrorReason`) with a full `Record` of
+   static messages (`null` for info-only reasons):
+   - warning: `remote_state`, `fetch_failed`, `isolated_refused`, `tip_mismatch`, `shallow_changed`, `walk_cap`,
+     `handover_failed`, `handover_too_large`, `unresolved_merge`, `merge_conflict`, `merge_refused`,
+     `autostash_conflict`, `side_not_kb_only`, `side_pr_unknown`;
+   - info: `up_to_date`, `merged`, `non_default_branch`, `side_declined`, `side_pr_created`, `side_linked`,
+     `side_conflict`;
+   - `merge_conflict_precheck` is the self-heal caller's reason only (step 8).
+
+   `syncPull` reports once per run (`tags: { reason, ref? }`, hashed user id, no URL, sha, path or branch). The outer
+   `syncPull` catch keeps op `syncPull` and sees only static-message errors.
+8. **Scope (X3, D27).** Out of scope: `syncWorkspace`'s token-bearing `pull --ff-only` and the self-heal's
+   `fetch origin <D>` stay legacy; the X3 P1 follow-up reuses `kb-sync-remote.ts`. In scope (D6(c) amended by D27): the
+   `selfHealNonFastForward` held-commits branch calls `mergeVerifiedDefault`, which does its own hardened `ls-remote`
+   and fetch. `syncWorkspace` gains `workspaceId`, and all its callers pass it. For this caller only, a token-free
+   `merge-tree --write-tree` runs first in the isolated dir; exit 1 refuses `merge_conflict_precheck` (held, workspace
+   untouched), so a background webhook never leaves `MERGE_HEAD` or conflict markers. The D15 untracked pre-check still
+   runs first, and the merge uses `--no-overwrite-ignore`. The self-heal never stamps `repo_last_synced_at`, runs no
+   adoption, and reports once (op `self-heal-aborted-held-commits`, tag `reason` = the pull reason); merge rc 0 returns
+   ok with no reset and no branch-aside. `HELD_COMMITS_REASON_INTERIM` is deleted.
+9. **Checkpoint restore (D26(7)).** A checkpoint restore after a pull merge refuses `stale-base` (TX5-b), and the stale
+   comment in `server/inflight-checkpoint.ts` ("git pull --autostash runs on every startAgentSession") is corrected.
+
+Residuals stated exactly (D26(3)): an agent-planted `filter.*` or an attribute-selected `merge.<d>.driver` (through
+`.git/info/attributes` or a committed `.gitattributes`) still executes on the host during the merge, as during today's
+pull. Removing the token from the child's environment does not contain it: an executing carrier is a same-uid
+compromise with or without a token in the env (`server/host-git.ts` header). The closure is a merge that reads no
+workspace config (an isolated `merge-tree`, follow-up). The merge commit's identity is the workspace's (as the
+auto-commit's is); it is never pushed by the sync (R14 publishes only `S`).
+
+#### Research Insights (deepen 2026-11-17)
+
+Applies D25 (module shape, reasons, never-throw, hand-over bound), D26 (guard before the auto-commit, merge pins,
+`autostash_conflict`, shape-only guard, ref-name form, checkpoint `stale-base`), D27 (self-heal caller) and D28
+(adoption). Replaced: "unmerged-entry skip in both auto-commits" (now the one `mergeInProgress` before both
+auto-commits); "`kb-sync-publish.ts` exports `readRemoteState` and `fetchIntoIsolated`" (both live in the
+`kb-sync-remote.ts` leaf; the push side never fetched, D5(d)); "`workspace-sync.ts` keeps the legacy arm" / "out of
+scope" (only the `pull --ff-only` and `fetch origin` sites are); the residual sentence that credited the token's
+removal. Seats: architecture 1-8, 11, 13; security 1-6, 9, 10; data-integrity 1-3, 11, 12, 14; realism F1, F2, F5;
+learnings 1-3, 8, 9, 14.
+
+### Proposed Solution — #12714 (Owners and members see the code changes the sync holds back)
+
+Rulings V1-V6, V-M (CPO), W1-W7 (CTO) and D29-D30 (lead) in `decision-challenges.md`. Wireframe (W7):
+`knowledge-base/product/design/settings/kb-sync-held-commits.pen`.
+
+1. **What is counted (W1, W4, D29(1)).** `held = |non-KB files|` from
+   `diff --name-only --no-renames -z <T>...<headSha> -- . ':(exclude)knowledge-base/'` (every revision a HEX40 value,
+   never a symbolic name: `HEAD` inside the isolated dir would be the isolated dir's own HEAD), unioned with the same
+   diff for each `refs/heads/soleur/recovered-kb-sync-*` tip, deduplicated, clamped to 0..10000.
+   `computeHeldFiles` returns `{ total, onRecovered }`; the column stores `total`. `readRecoveredKbSyncTips` uses
+   lstat and refuses any symlink in the path chain (`null`), reads at most 20 regular files of at most 64 B each, plus
+   `packed-refs` lines (file at most 1 MiB) matching the recovered-ref regex, HEX40-validated. After D6 a new self-heal
+   branch-aside sets aside only commits whose non-KB content is already upstream, so a new recovered tip adds 0; the
+   union exists for branches made before this PR (D7). `T` is the authoritative tip the hardened `ls-remote` returned in
+   that sync run, never `refs/remotes/origin/*`. No merge base, an unreadable ref or any git failure -> `null`. Files,
+   not commits: a commit count goes stale after a squash merge and drops to 0 under pathspec history simplification
+   while the work is still unmerged (measured, C1-C3 below).
+2. **Where it runs (W2, D29(1)).** Token-free, through `runIsolatedGitLocal`, in an isolated dir the sync already holds
+   (the recovered tips' objects are reachable through the workspace alternate). New module `server/kb-sync-held.ts`:
+   `computeHeldFiles({ isolated, base: T, head: headSha, recovered })` and `readRecoveredKbSyncTips(workspacePath)`.
+   - Push side: `publishKbOnly` takes an `onHeldFiles` hook and calls it before disposing the isolated dir, on every
+     exit past `readRemoteState`, held exits included. `kb-sync-publish.ts` never imports `kb-sync-held.ts` or
+     Supabase. `syncPush` writes the value from a `finally`, so held returns and the catch path write too.
+   - Pull side: `syncPull` computes it on the isolated dir it owns (Proposed Solution #12718), after the merge and
+     adoption, on `up_to_date` too, and writes it.
+3. **Storage (W2, D29(1), D29(2), D29(10)).** Migration `187_workspace_kb_sync_held_files.sql` (+ `.down.sql`):
+   - `workspaces.kb_sync_held_files integer null` (named check `>= 0 and <= 10000`) and
+     `workspaces.kb_sync_held_checked_at timestamptz null`, each with a `COMMENT ON COLUMN` (workspace scope,
+     display-only);
+   - the RPC `get_workspace_kb_sync_held(p_workspace_id)` (item 7): member-checked `SECURITY DEFINER`, `search_path`
+     pinned with `pg_temp` (`cq-pg-security-definer-search-path-pin-pg-temp`; precedent 158
+     `get_workspace_web_egress`), returning the two values for a member and null otherwise;
+   - no `GRANT` or `REVOKE` on `workspaces`. What the grants actually do: `authenticated` SELECT is column-split
+     (migration 174) and excludes the new columns; the table-level INSERT/UPDATE from 174 remains, and RLS is the
+     barrier. `supabase/verify/187_workspace_kb_sync_held_files.sql` checks it (run by hand like verify/186).
+
+   Both columns join `WorkspaceRepoCols`. The write uses the service client and a SEPARATE UPDATE, not folded into
+   `updateLastSynced`, so a missing column fails only the held write. It is written every time, with
+   `kb_sync_held_checked_at = now()`; there is no per-host write-on-change map. Disconnect and setup null both
+   columns (`app/api/repo/disconnect/route.ts`, `app/api/repo/setup/route.ts`). Display-only: no gate, approval or push
+   decision reads it (a readers census test pins the readers). Each computation logs one info line
+   `op: "kb-sync.held-files"` with a value bucket (`0`, `1-9`, `10+`, `null`), no paths.
+
+   Deploy order (D29(2)): 187 applies before the code that writes it; rollback is the code first, then the down
+   migration. The dev apply happens only once the PR is ready for review; the dev-ledger row names this PR, and QA e2e
+   runs after the apply. Re-check the migration number before commit and at ship
+   (`git ls-tree origin/main --name-only apps/web-platform/supabase/migrations/`).
+4. **Last-synced (V2, W5, D29(9)).** Owners' "Last synced:" becomes "Updated from GitHub: {date}". Only `syncPull`
+   stamps `repo_last_synced_at` (merge rc 0 or `up_to_date`, X1/X5); `syncPush` stops stamping (its `updateLastSynced`
+   call is removed). Delete the two push-stamp assertions in
+   `test/server/session-sync-workspace-last-synced.test.ts`; the readers census covers every reader of
+   `repo_last_synced_at`. Members still see no date.
+5. **Publish-route predicate (W3, V5, D29(5)).** `server/cc-github-push.ts` exports a read-only
+   `isCcGithubPushRouteAvailable({ userId, workspaceId })`. It is true exactly when the runner of the user's next
+   session registers `github_push_branch`:
+   - legacy runner: always (it registers the tool whenever a repo and an installation resolve);
+   - cc: flag, entitlement, installation and persona, under its own deadline, with no default-branch lookup.
+
+   It never sets or flips a flag. Settings calls it with the VIEWER's `userId` (the member's agent is the one that
+   would push). A read error or timeout is a transient result: the card shows the V6 transient strings, never the
+   no-route sentence on a blip.
+6. **Settings card (V1, V3, V6, D29(3), D29(8)).** `app/(dashboard)/dashboard/settings/page.tsx` adds
+   `kb_sync_held_files` to its service-client `workspaces` select, keyed on the id from the page's single
+   `resolveActiveWorkspace` call, and calls the predicate with that id; `SettingsContent` passes `heldFiles` and the
+   route state to `ProjectSetupCard`. Owner view: the relabelled date line, then (n > 0) a neutral informational
+   notice inside the card, no new control. Member view: the same notice with the member string under the "managed by"
+   line; a count only (no paths, messages or authors, CPO C4). n = 0, null, or a repo that is not `ready` -> nothing.
+   Owner `repoStatus === "ready" && needsReconnect`: no held notice, `ReconnectNotice` only (V6(4)). `{n}` is rendered
+   only when it is an integer in 1..10000, and every string is a React text child (no HTML). Strings live in
+   `lib/kb-sync-held-copy.ts` (pure functions, one per audience and route state, V6 verbatim); the UI never names
+   `github_push_branch` (CPO C5).
+7. **Agent context (V1, W3 amended by D29(3), D29(4), D29(6), D29(7)).** Both runners get the line.
+   - cc: `server/cc-dispatcher.ts` reads the count through the RPC `get_workspace_kb_sync_held`, called in the same
+     `Promise.all` and keyed on the same `activeWorkspaceId` passed to `resolveCcGithubPushRegistration` (never a fresh
+     `current_workspace_id` read). No tenant select gains the column (census row). A failure gives no line and one
+     warning. The line is appended in the query factory's `effectiveSystemPrompt`, next to `c4PromptAddendum` (it must
+     reach the SDK prompt through `dispatchSoleurGo`, TW3-b). The variant comes from the registration result; a
+     transient reason uses "not available right now" wording.
+   - Legacy: `server/agent-runner.ts` appends the line from `syncPull`'s `{ heldFiles, pullReason }` (this session's
+     fresh count; the prompt is built after `syncPull`), because it registers `github_push_branch` and is the only
+     `syncPull` caller.
+   - Both runners also get a line on `merge_conflict` and `unresolved_merge`, because the agent is the only party that
+     can resolve them.
+   - The agent strings say: the files stay counted until merged into the main branch; check
+     `github_list_pull_requests` before pushing again; name any recovered branches (`onRecovered > 0`), and that a
+     checkout comes first; an "as of" time from `kb_sync_held_checked_at`, and no line when it is null; a
+     `git diff --name-only` command to list the files. They agree with `ccPushPromptAddendum` and the push tool
+     description (a grep row), and never say "not on GitHub" where the card says "not on the repository's main branch
+     yet" (V6, D23). Null or 0 appends nothing.
+8. **Follow-ups (V4, W6, C8, D30).** Not built here, filed at ship (task 11.6): I3, with its trigger
+   (`kb-sync.push-held` `reason: remote_ahead` above 5% of post-turn syncs over 14 days, or one user report); the
+   no-route product gap (CPO C8); an Owner card for the side-PR states (`side_pending`, `side_declined`, a deleted
+   `soleur/kb-sync`), which are KB state, not held code, so they get no card and the agent line does not name them; an
+   Owner line for a permanently stuck merge (needs a new column; goes with #12719; the D29(4) agent line is the only
+   surface in this PR); and the stale tree row after the KB pending notice is dismissed.
+
+#### #12714 copy (V5, amended by V6 and D29)
+
+The V5 Owner and member strings are superseded by the V6 amendments below, and the V5 agent rows by the D29(6)
+content contract in item 7 above. What stands from V5:
+
+| Audience | String |
+|---|---|
+| Owner date line | "Updated from GitHub: {date}" |
+
+`{ownerLabel}` is the card's existing value, falling back to "your workspace owner". n = 0, null, unreadable: nothing on
+any surface.
+
+##### V6 amendments (CPO, 2026-11-17; row V6 in `decision-challenges.md`)
+
+These replace the V5 Owner and member rows above. The Owner date line, C4, C5, C7, the `{ownerLabel}` fallback and the
+n = 0 / null / not-`ready` rule stand. The agent rows are governed by D29(5)/(6), and they must not say "not on GitHub"
+where the card says "not on the repository's main branch yet" (D23).
+
+- **Owner, route available.**
+  - n = 1: "1 changed code file is not on your repository's main branch yet. Nothing is lost: the change stays in your workspace. To publish it, ask your agent to push it to a new branch and approve the push, then open a pull request for that branch on GitHub and merge it. If you already did, this notice clears once the merge reaches your workspace."
+  - n > 1: "{n} changed code files are not on your repository's main branch yet. Nothing is lost: the changes stay in your workspace. To publish them, ask your agent to push them to a new branch and approve the push, then open a pull request for that branch on GitHub and merge it. If you already did, this notice clears once the merge reaches your workspace."
+- **Owner, no route.**
+  - n = 1: "1 changed code file is not on your repository's main branch yet. Nothing is lost: the change stays in your workspace. Publishing code changes is not available for this workspace."
+  - n > 1: "{n} changed code files are not on your repository's main branch yet. Nothing is lost: the changes stay in your workspace. Publishing code changes is not available for this workspace."
+- **Member, route available.** The member gets an action, and the copy never says a request is waiting.
+  - n = 1: "1 changed code file is not on the repository's main branch yet. Nothing is lost: the change stays in the workspace. To publish it, ask your agent to push it to a new branch, then ask {ownerLabel} to approve the push and merge the branch on GitHub. If this was already done, this notice clears once the merge reaches the workspace."
+  - n > 1: "{n} changed code files are not on the repository's main branch yet. Nothing is lost: the changes stay in the workspace. To publish them, ask your agent to push them to a new branch, then ask {ownerLabel} to approve the push and merge the branch on GitHub. If this was already done, this notice clears once the merge reaches the workspace."
+- **Member, no route** (C7: no wait and no action).
+  - n = 1: "1 changed code file is not on the repository's main branch yet. Nothing is lost: the change stays in the workspace."
+  - n > 1: "{n} changed code files are not on the repository's main branch yet. Nothing is lost: the changes stay in the workspace."
+- **Transient predicate** (a read error or timeout, or a D29(5) transient reason). The no-route sentence is never shown on a blip.
+  - Owner, n = 1: "1 changed code file is not on your repository's main branch yet. Nothing is lost: the change stays in your workspace. Whether your agent can publish it could not be checked right now. Reload this page to check again."
+  - Owner, n > 1: "{n} changed code files are not on your repository's main branch yet. Nothing is lost: the changes stay in your workspace. Whether your agent can publish them could not be checked right now. Reload this page to check again."
+  - Member, n = 1: "1 changed code file is not on the repository's main branch yet. Nothing is lost: the change stays in the workspace. Whether your agent can publish it could not be checked right now. Reload this page to check again."
+  - Member, n > 1: "{n} changed code files are not on the repository's main branch yet. Nothing is lost: the changes stay in the workspace. Whether your agent can publish them could not be checked right now. Reload this page to check again."
+- **Reconnect needed** (Owner card, `repoStatus === "ready" && needsReconnect`): no held notice. `ReconnectNotice` is the
+  only notice, and the held notice returns after the reconnect while n > 0. The member card has no reconnect state. It
+  follows the predicate, so a broken installation gives the member the no-route string.
+- **D16 KB notice** (`lib/kb-workspace-sync-notice.ts`). The four `lead` clauses are final. `detail` becomes: "Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. Until it is, this page may still show the files as they were. You don't need to try again." "You don't need to try again" stays because it stays true: the write is already on GitHub, and a retry can only return 404 or 409. `kbWorkspaceSyncResyncPendingNotice` is final as shipped. The header sentence "Interim copy; the #12714 wireframe may refine it" is removed.
+- **Settings team icon** (task 11.7, `conversation-names-settings.tsx`).
+  - On `workspace_sync: "pending"`: "Saved to GitHub. Your workspace has local changes that aren't on your repository's main branch yet, so it was not updated. The new icon appears here once it is; until then, you see the default icon. You don't need to try again."
+  - On a 409 from the upload, instead of "Upload failed. Please try again.": "An icon with this file name is already on GitHub, so nothing was uploaded. If you just uploaded it, it appears here once your workspace is updated from GitHub."
+  - "Upload failed. Please try again." stays for every other failure. The 409 string is true whether or not a hold
+    caused it. The pre-existing same-name replacement 409 (the client never sends the returned sha) is out of this PR.
+
+##### V7-V12 amendments (CPO, 2026-11-17; rows V7-V12 in `decision-challenges.md`)
+
+These amend the V6 strings above; the exact final strings are in rows V7-V12 of `decision-challenges.md` (and
+`review-ext-rulings.md` in the spec dir), which are binding where they differ from this section.
+
+| id | what changes |
+|---|---|
+| V7 | "Nothing is lost" is dropped everywhere. Sentence 2 of every V6(1)-(3) string becomes "The change is kept in your workspace." / "The changes are kept in your workspace." (Owner) or "... in the workspace." (member). The agent held line says the change is kept in this workspace and that disconnecting the repository deletes the workspace, including it. |
+| V8 | The Disconnect dialog warns (does not block): a count-renderable paragraph above the existing one, with a push instruction only when the route is available; when the count is not renderable, the existing paragraph names "any code changes your agent made that are not on your repository's main branch yet". |
+| V9 | `{n}` = 10000 (`HELD_FILES_RENDER_MAX`) renders as "10,000 or more"; 1,000 and up use a comma separator on every locale; below 1,000 a plain integer. Every surface: notice, dialog, agent line. |
+| V10 | Role unknown (identity null, or the owner check errored or timed out) gets a seventh, neutral notice that ignores the route state and says the steps are not shown and to reload. Supersedes D46(2)'s member fallback. |
+| V11 | The route-available last sentence becomes "... this notice should clear the next time your workspace is updated from GitHub. If it does not, ask your agent which files are still counted." The agent line adds that the count can lag a merge and to list the files before pushing again. |
+| V12 | The team-icon 409 splits by the saved path: the V6(6) string stands when the saved path equals the upload's target; otherwise "An icon with this file name is already on GitHub, so nothing was uploaded and the icon shown here stays as it is. Replacing an icon that was uploaded before is not available yet." |
+
+#### Research Insights (deepen 2026-11-17)
+
+Applies D29 (count argv and return shape, recovered-ref read contract, `onHeldFiles` hook, separate UPDATE written
+every sync, deploy order, the RPC, both runners, route predicate, agent-string contract, render bound, W5 test
+deletions, AC21 grants), D30 (side-PR states and stuck-merge Owner line scoped out with follow-ups; copy to the CPO) and
+V6 (copy). Replaced: "the resolved workspace row" (the cc path has no such row and the tenant client cannot read the
+columns, so the RPC reads them); "the legacy runner gets no line" (it registers the tool and is the only `syncPull`
+caller); write-on-change (wrong with several writers and hosts); the fold into `updateLastSynced`; the V5 Owner, member
+and agent rows. Seats: agent-native 1-7, 9, 12; data-integrity 4-10; security 7, 8, 11; spec-flow 1, 7-13; learnings
+2, 4-7, 10-13, 16, 17; realism F3, F4, F6, F7.
+
+### Research Insights (deepen-plan, 2026-11-13)
+
+**Measured (scratch probes, git 2.56.0):**
+
+| Probe | Result | Consequence |
+|---|---|---|
+| `probe7.sh`: F's tree object file overwritten with T's tree bytes | `rev-list --count --full-history --simplify-merges T..F -- . ':(exclude)knowledge-base/'` = 0; `diff-tree --quiet` rc 0; same through `GIT_ALTERNATE_OBJECT_DIRECTORIES`; only `ls-tree` / `fsck` report "hash mismatch" | a history walk over workspace objects is no guard (check-then-swap TOCTOU); R14 drops it |
+| `probe8.sh`: `cat-file tree <id>` piped to `hash-object -t tree --stdin` | equals the id for genuine objects; differs for forged loose AND packed (`gc`) objects; `cat-file` itself does not refuse | the three-object hash check of step 3 is cheap and catches the forgery |
+| `probe6.sh`: S built in a separate GIT_DIR with the workspace as alternate, M merge, `pack-objects` -> `unpack-objects`, CAS `update-ref` | 3 objects handed over; CAS ok, wrong old value refused; dirty tracked file preserved; S pushed, foreign object absent on the remote; `pull --ff-only` ok; remote tip is an ancestor of HEAD; turn 2 sees `T` as an ancestor | the M arm keeps P7; the CAS-to-S arm is the same hand-off with one object fewer |
+| test-design reviewer `gh006probe` | a `file://` bare remote's `pre-receive` hook runs even when the pusher passes `-c core.hooksPath=/dev/null`; stderr carries `remote: GH006: …` | the protected-branch fixture works on `file://` |
+| CTO: `refs/heads/d` symref to `refs/heads/x` | plain `update-ref refs/heads/d B A` writes `x`; with `--no-deref` `d` becomes the sha, `x` untouched | R19: `--no-deref` on both guarded shapes |
+
+**Precedent diff (§4.4).** `server/inflight-checkpoint.ts` (`commit-tree` -> `update-ref refs/checkpoints/<id>`) and
+`server/inngest/functions/_cron-safe-commit.ts` (`commit-tree` -> `update-ref refs/heads/<branch> <sha>`) build commits
+in the workspace through `hostGitInvocation` with identity in `extraEnv` and no CAS old value. This plan differs on
+purpose: commits are built in the isolated GIT_DIR (ruling P), identity is `-c` argv (ruling L; `buildIsolatedGitEnv`
+admits no `GIT_AUTHOR_*` key), and every `refs/heads` write is a `--no-deref` CAS (R1, R19). The checkpoint precedent's
+ADR-050 residuals (`filter.*` drivers, `.git/info/attributes`) do not apply: `unpack-objects` and `update-ref` run no
+filter.
+
+**Learnings applied at deepen time:**
+`knowledge-base/project/learnings/bug-fixes/2026-06-16-diverged-clone-recovery-branch-aside-before-reset.md` (self-heal
+counts `@{u}..HEAD`: the tracking ref must equal the pushed sha, H6),
+`knowledge-base/project/learnings/best-practices/2026-06-15-git-checkpoint-clean-tree-not-sufficient-head-parity-and-symmetric-clone.md`
+(HEAD can move between check and write: the CAS old value is `headSha`),
+`knowledge-base/project/learnings/2026-09-20-the-gate-i-built-to-resolve-a-run-could-be-redirected-by-one-env-var.md`
+(audit every env key git reads in the isolated arm, not only the named ones),
+`knowledge-base/project/learnings/2026-09-21-the-fence-probe-read-the-config-the-bootstrap-writes-not-the-path-a-push-takes.md`
+(the pre-receive fixture must be a real hook, not a mock),
+`knowledge-base/project/learnings/test-failures/2026-04-07-shared-bare-remote-ordering-dependency.md` (copy the template
+remote per row; no row mutates the template),
+`knowledge-base/project/learnings/2026-11-07-a-required-shard-on-its-timeout-edge-made-the-merge-queue-a-coin-flip.md`
+(measure the battery's runtime against the shard timeout),
+`knowledge-base/project/learnings/best-practices/2026-05-29-mirror-warn-debounce-gates-both-pino-and-sentry.md` (the
+debounce also drops the pino line: log unconditionally first),
+`knowledge-base/project/learnings/test-failures/2026-06-30-vi-waitfor-floor-vs-component-rearm-race.md` (explicit
+`vi.waitFor` timeouts).
+
+## Technical Considerations
+
+### Attack Surface Enumeration
+
+Every way a commit an agent authored can reach the connected repository from the legacy runner, and what this plan does:
+
+| Route | Owner-gated today? | After this plan |
+|---|---|---|
+| `github_push_branch` (agent asks) | yes, every queue state (#12567) | unchanged |
+| Sandbox `git push` with egress off (session keeps repo credentials) | no, by design; disclosed by `PUSH_DISCLOSURE` | unchanged (disclosed) |
+| `syncPush` main push (bare `git push`) | **no** | closed: only a server-built `S` (verified root, KB entry replaced) is pushed, explicit sha refspec, hardened arm |
+| `syncPush` push steered by `push.default`, `remote.origin.push`, `branch.<b>.merge`, `remote.origin.url`, `url.*.insteadOf` | **no** | closed: literal URL and refspec from an isolated GIT_DIR that never reads workspace config |
+| Forged `refs/remotes/origin/*` / `@{u}` as a base | **no** | closed: bases come from `ls-remote` |
+| Forged object bytes (check reads a lie, push sends the truth) | n/a | closed: no history walk; the three objects the build reads are hash-verified (R14, measured) |
+| Agent-written commit message (`Fixes #N` closing Owner issues) or forged author on a pushed commit | **no** | closed: only Soleur-built commits with a fixed message and identity are pushed (R14) |
+| Push target chosen by the agent's checked-out branch | **no** | closed: target is the authoritative `D`; another branch refuses `non_default_branch` (R2) |
+| Protected fallback side push to `soleur/kb-sync` | **no** (base is an agent-writable ref) | closed: verified side parent and `T`, ruling I extended, root-tree guard, explicit refspec (R4, R15) |
+| Fallback PR base from `refs/remotes/origin/HEAD` with a legacy-arm token | **no** | closed: `D` from the hardened `ls-remote --symref` (R2) |
+| `classifyPushError` steered by a ref name in git's stderr status line | n/a | closed: line-anchored `^remote: error: GH006:` only (R16) |
+| Synthetic commit carrying an agent-chosen identity | n/a | closed: `-c user.name` / `-c user.email` argv; the isolated env admits no identity key (rulings L, P) |
+| History rewrites: replace refs, grafts, `commondir`, alternates | already closed by host-git hardening | unchanged; decisions run in the isolated GIT_DIR (ruling P) |
+| Fallback `checkout -f` + `reset --hard` destroying dirty non-KB edits and non-KB commits | pre-existing loss | closed: no checkout, no reset; `--no-deref` CAS ref moves with equal trees only (R3, R17) |
+| A pushed commit the clone lacks, then `syncWorkspace` self-heal `reset --hard` (reconcile webhook on our own push) | n/a | closed: the local branch is updated before the push (R1, R14) |
+| Upstream moves while a foreign commit sits local, then self-heal `reset --hard` loses dirty non-KB edits | pre-existing, now frequent | closed for dirty tracked edits: `self-heal-aborted-dirty-tracked` gate (R18, widened by D6/D7); recovery-and-lock work stays on #5221 |
+| Conflicted session-start pull, then auto-commit commits conflict markers | pre-existing | closed for the push: `merge_in_progress` skip (R11); pull-side abort is #12719 |
+| Session-start `syncPull` token-bearing `pull` on the legacy arm reads workspace `url.*.insteadOf` / `http.*` | pre-existing | residual, P1 issue #12718 (R9) |
+| `update-ref` following a symref swapped in after the HEAD read | n/a | closed: `--no-deref` (R19) |
+| Symlink planted in the object store or ref/log dirs between `createIsolatedPushDir`'s walk and `unpack-objects` / `update-ref` | n/a | residual, accepted (ADR-309 9b class, R12); it now runs per turn without approval, but the published bytes are server-built and verified |
+| Chained `objects/info/alternates` planted after the walk | ADR-309 9b residual, behind Owner approval | now unattended per turn; narrowed: the pushed objects are `S`, its rebuilt root and KB subtrees; a non-KB object can only be sent if referenced by a verified `T` entry, which the remote already has |
+| Symlink or gitlink inside `knowledge-base/` | not gated | residual, accepted: a KB path, already staged by the auto-commit sweep today; no effect on CI or code |
+| Owner force-push between the tip read and the push | n/a | residual, accepted (ruling J) |
+| cc runner Bash push with the minted token | separate | #12668 |
+
+### Attack Surface — #12718 / #12714 extension
+
+Supersedes the "Session-start `syncPull` token-bearing `pull`" row above (R9 -> U1).
+
+| Route | Today | After this plan |
+|---|---|---|
+| Session-start `syncPull` token sent to a host chosen by workspace `url.*.insteadOf` / `remote.origin.url` | **yes** (measured T1, T2) | closed: hardened fetch from the literal URL in the isolated dir (X1; T3) |
+| Workspace / unscoped `http.extraHeader` riding the token-bearing pull | **yes** (T1) | closed: the isolated child reads no workspace config; `-c http.extraHeader=` reset (T3) |
+| Server-HOME `~/.gitconfig`, XDG config, system config steering the pull | n/a on prd (image identity file), measured as a class | closed: `HOME` = isolated dir, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1` (T4-T6; control T7) |
+| Isolated fetch spawning `git --git-dir=<ws>/.git for-each-ref` with the token in env; agent refs as `have` lines | **yes** for #12600's side fetch as first planned (F1; that fetch was later deleted, D5(d)) | closed: `-c core.alternateRefsCommand=true` in `HARDENED_GIT_ARGS` (X2; F2), covering the default-branch fetch and the side-adoption fetch |
+| Shallow gap: a `--depth 1` fetch handing over a commit with missing parents | n/a | closed: no `--depth`, `shallow_changed` refusal (X1; F6) |
+| Agent-chosen merge target (`branch.<b>.merge`, `@{u}`, a feature branch) | **yes** (bare `pull`) | closed: merge target is the in-memory `ls-remote` tip `T` (or `P` on adoption), shape-pinned argv guard; non-default branch -> no merge (X1, X5, D26(5)) |
+| A `D` from `ls-remote` used as an argv option (`-x`, `--upload-pack=x`) | n/a | closed: `D` only as `refs/heads/<D>` / `refs/remotes/origin/<D>`; a leading `-` or a `validateBranchFormat` failure is `remote_state` (D26(5)) |
+| A loose object planted at `T`'s id in the workspace store, so the fetch skips `T` and the merge takes forged content | n/a | closed: the fetched tip is read from a server-owned ref and `verifyObject(isolated, "commit", T)` passes before any hand-over (D25(1)) |
+| Code pushed to the unprotected `soleur/kb-sync` auto-merged into every workspace at session start (side-tip adoption) | n/a | closed: KB-only gate on `merge-base(T,P)..P` before any hand-over (`side_not_kb_only`), PR check through the D17 table (D28) |
+| Conflict markers committed and published unattended (autostash-pop conflict without `MERGE_HEAD`, M4/M10; `MERGE_HEAD` with every conflict staged) | pre-existing, unattended after #12600 | closed for commit and push: one shared `mergeInProgress` (`MERGE_HEAD`, `MERGE_AUTOSTASH`, unmerged entries) runs before both auto-commits, `unresolved_merge` / `merge_in_progress` with no auto-commit; `autostash_conflict` after a merge rc 0 (D26(1), D26(4)); recovery is #12719 |
+| A background webhook leaving `MERGE_HEAD` and conflict markers no user started (self-heal merge) | n/a (the self-heal never merged) | closed: token-free `merge-tree --write-tree` pre-check, `merge_conflict_precheck` with the workspace untouched (D27) |
+| Merge-specific workspace config on the host-side merge (`merge.verifySignatures` + `gpg.*program`, `merge.renormalize`, `merge.default`, `rerere.*`, hooks, detached maintenance) | pre-existing, with the token in env | closed: the writer prepends the D26(2) `-c` pins, including `core.hooksPath=/dev/null` |
+| An ignored file at an upstream-added path overwritten by the merge | pre-existing (`git merge` defaults to `--overwrite-ignore`) | closed for both merge callers: `--no-overwrite-ignore` (`merge_refused`) (D26(2), D27) |
+| `filter.*` / attribute-selected `merge.<d>.driver` helpers on the host-side merge | pre-existing | residual (D26(3)): they still execute on the host; that is a same-uid compromise with or without a token in the env (`server/host-git.ts`); closure is an isolated `merge-tree` merge, follow-up |
+| Large upstream objects buffered by the pull hand-over every session | n/a | closed: walk cap checked before `pack-objects`, pack bounded by `PULL_HANDOVER_MAX_BYTES` (`handover_too_large`) (D25(8)) |
+| A URL or sha reaching a Sentry exception value from a pull failure | **yes** (the legacy pull's error message carries argv) | closed: every pull function returns a closed reason with a static message and never throws raw (D25(7)) |
+| Legacy `syncWorkspace` `pull --ff-only` / self-heal `fetch origin` | **yes** | residual: P1 follow-up issue filed at ship time (X3; it reuses `kb-sync-remote.ts`) |
+| A forged object or ref skewing the held-file count | n/a | accepted: display-only, the workspace's own users see a wrong number; never read by a gate (W2); recovered refs read with lstat, no symlinks, bounded (D29(1)) |
+| The held count read through a tenant client (42501, or a dispatch gate that sees every repo as not connected) | n/a | closed: the cc agent reads through the member-checked RPC `get_workspace_kb_sync_held`; no tenant select gains the column (census row, D29(3)) |
+| The held count, the route predicate and the push registration naming different workspaces | n/a | closed: one `activeWorkspaceId` for the RPC and `resolveCcGithubPushRegistration`; Settings uses `resolveActiveWorkspace`'s id (D29(3)) |
+| Held count exposing one member's work to another | n/a | closed: a count only, no paths, messages or authors (CPO C4) |
+
+#### Research Insights (deepen 2026-11-17)
+
+Applies D25(1), D25(7), D25(8), D26(1)-(5), D27, D28 and D29(1)/(3). Replaced the "unmerged-entry skip in both
+auto-commits" row text and the residual wording that credited the token's removal. Seats: security 1-6, 8, 9;
+data-integrity 1, 3, 4; architecture 5.
+
+### Performance
+
+Turns with no local commits keep today's cost (`hasLocalCommits` runs before any token mint), and stay that way after a
+push because the tracking ref is set to what was pushed (R8, R17). A turn with local commits costs one `ls-remote` round
+trip, the isolated-dir object walk (capped at `OBJECT_WALK_ENTRY_CAP`, 250 000 entries; over the cap is a refusal,
+reported), three hash checks and a handful of plumbing calls; there is no history walk. The real-git battery builds one
+template remote in `beforeAll` and copies it per row (no row mutates the template); per-test timeout 30 s; Phase 0
+measures its runtime against the webplat shard timeout (estimate 20-40 s; it runs on the normal webplat shards, not the
+mutations leg).
+
+### NFR impacts
+
+Security (integrity of the customer's repository) improves. Availability of KB sync is unchanged on the normal path.
+KB edits wait for a later turn or session on `remote_ahead`, `remote_unknown_tip`, `side_ahead`, `head_moved`,
+`merge_in_progress`; they never sync from a non-default branch (`non_default_branch`, see User-Brand Impact). The
+remote's KB history becomes one "Soleur: sync knowledge-base" commit per synced turn instead of the
+"Auto-commit after session" commits (same constant message today, `session-sync.ts` `AUTO_COMMIT_MSG_PUSH`).
+
+## Implementation Phases
+
+One commit per phase (devex review item 8), each with its RED runs recorded.
+
+### Phase 0 — Measure, then write the failing tests (`cq-write-failing-tests-before`)
+
+1. Build the `runner` stage of `apps/web-platform/Dockerfile`, rerun `probe6.sh`, `probe7.sh` and `probe8.sh` (copied
+   into the work tree as synthesized fixture scripts) inside it, and record `git --version` there and on CI
+   (`ubuntu-latest`). The design no longer depends on `--simplify-merges` (R14); a differing row in the hash-check or
+   hand-off probes is a P0 redesign.
+2. Measure on the hardened isolated arm against a `file://` bare remote (`GIT_ALLOW_PROTOCOL` widened exactly as
+   `test/push-branch-isolated-real-git.test.ts` does): `ls-remote --symref <url> HEAD refs/heads/soleur/kb-sync` and
+   `fetch --depth 1 --no-tags <url> refs/heads/soleur/kb-sync` into a shallow isolated dir. Record both for the PR body.
+3. Measure a two-parent side commit `(P, T)` on the protected fixture: `pull --ff-only` from a remote whose `D` is
+   `T` and whose `soleur/kb-sync` is `side` stays a fast-forward after the PR merges.
+4. Verify the behaviour today on a non-default branch (single-branch `--depth 1` clone, new local branch, bare
+   `git push`): record what a user on a feature branch got before this change (User-Brand Impact, non-default branch).
+5. Write `apps/web-platform/test/session-sync-kb-only-push-real-git.test.ts` (Test Scenarios below). All rows RED on
+   the unmodified `syncPush` except the must-PASS rows. Measure its runtime.
+
+### Phase 1 — Move, runner and reads
+
+- Move `runProtectedFallback` and the push call into `server/kb-sync-publish.ts` with no behaviour change (own commit).
+  Header comment states Guard 1's property.
+- `server/git-isolated-local.ts`: `runIsolatedGitLocal(isolated, args, { input? })` = lazy `child_process`
+  `execFile("git", [...HARDENED_GIT_ARGS, ...args])`, `cwd: isolated.gitDir`, `env: buildIsolatedGitEnv(isolated)`, a
+  timeout, no credentials; exit codes surfaced (1 vs 128); `verifyObject(isolated, type, id)` (the `cat-file` |
+  `hash-object --stdin` check). Rewrite `push-branch.ts` `checkCommitPresent` on it; export `disposeIsolated` from
+  `push-branch.ts` (never throws, reports op `isolated-dir-dispose-failed`) and reuse it. `CENSUS_ONLY` row in
+  `test/host-git-consumers-real-git.test.ts`.
+- `server/approval/workspace-head.ts`: new export `readWorkspaceHeadRef(workspacePath)` -> `{ sha, refName | null }`
+  sharing the existing reader's internals; `readWorkspaceHeadSha` unchanged (no return-type widening).
+- `session-sync.ts`: `ALLOWED_GIT_SUBCOMMANDS` gains `update-ref` and `unpack-objects` with the exact-argv guards of
+  step 0 (`--no-deref`, `validateBranchFormat` on `<D>`, 40-hex checks); any other argv for those verbs throws.
+  `FORBIDDEN_GIT_FLAGS` still applies.
+- Export `AGENT_AUTHOR_NAME` / `AGENT_AUTHOR_EMAIL` from `push-branch.ts` (no new module, R5).
+
+### Phase 2 — Remote state, verify, build, guard, push
+
+- `readRemoteState(url, isolated, installationId)` -> `{ defaultBranch, tip, sideTip | null }` from one hardened
+  `ls-remote --symref` (step 2 parse rules).
+- `buildKbOverlay(parent, kbSourceSha, { secondParent? })` (the ONLY commit builder) and `assertRootDiffersOnlyInKb`.
+- `pushVerifiedKbOnly(...)` per Proposed Solution step 5: the ONLY push call site for this flow.
+- `syncPush`: Proposed Solution steps 1-4. One `try/finally` around everything from `createIsolatedPushDir` on, with
+  `disposeIsolated`. `updateLastSynced` and `recordKbSyncHistory` run only after a push succeeded (CPO condition C4).
+- Every hardened-git failure is wrapped in a static-message `KbSyncError` with a closed `reason` (`ls_remote_failed`,
+  `push_rejected`, `push_transient`, `isolated_refused`, `remote_state_invalid`, `local_git_failed`, `head_unreadable`;
+  as built, server/kb-sync-publish.ts `KbSyncErrorReason`; the push side never fetches) and a stderr class only: never the raw `err.message`, which now
+  embeds the literal URL, owner, repo and sha in argv.
+
+### Phase 3 — Local branch update (P7)
+
+- Step 4: the CAS-to-`S` arm, the `M` arm (`KB_SYNC_MERGE_MSG`), the object hand-off, `head_moved` /
+  `ref_update_failed` / `unpack_failed`, the tracking ref after the push.
+
+### Phase 4 — Protected-branch fallback (rulings F, R3, R4, R15, R17)
+
+- Per Proposed Solution step 6. Delete `resolveDefaultBranchForFallback` and the workspace `checkout -f -B`,
+  `checkout <defaultHead> -- knowledge-base`, `commit` and `reset --hard` calls.
+- `kb-sync.protected-fallback-failed` / `kb-sync.push-protected-fallback` ops and their alert contract stay as they are
+  (`test/sentry-kb-sync-protected-fallback-alert-op-contract.test.ts` stays green); a closed `fallback_reason` tag
+  (`side_fetch_failed`, `side_hash_mismatch`, `side_guard_failed`, `side_push_rejected`, `pr_failed`) is added.
+
+### Phase 5 — Self-heal gate (R18)
+
+- `server/workspace-sync.ts` `selfHealNonFastForward` default-branch arm: `status --porcelain --untracked-files=no`
+  (token-free through `server/workspace-local-git.ts` since D15(d)); any tracked change, `knowledge-base/` included
+  (D6) -> op `self-heal-aborted-dirty-tracked` (warning through `mirrorWarnWithDebounce`, family `kb-route-helpers`,
+  D7), return `ERROR_CLASS_NON_FAST_FORWARD`. Tests in `test/server/workspace-sync-self-heal-gate.test.ts` (unit) and
+  `test/workspace-sync-self-heal-real-git.test.ts` (real git).
+
+### Phase 6 — Observability (R7)
+
+- Op `kb-sync.push-held` (feature `session-sync`). Closed reason union exported from `kb-sync-publish.ts`:
+  `merge_in_progress`, `detached_head`, `non_default_branch`, `remote_branch_absent`, `remote_unknown_tip`,
+  `remote_ahead`, `hash_mismatch`, `kb_not_tree`, `guard_failed`, `head_moved`, `ref_update_failed`, `unpack_failed`,
+  `side_ahead`, `held_foreign`, `synthetic_pushed`.
+- Every outcome first logs unconditionally: `log.info({ op: "kb-sync.push-held", reason, outcome })` (pino -> Better
+  Stack, per-turn counts; the debounce below would otherwise drop the pino line too).
+- Warning level, through `mirrorWarnWithDebounce` keyed on the workspace id with `errorClass`
+  `kb-sync-push-held:<reason>` and one static message per reason (distinct Sentry issues): `merge_in_progress`,
+  `detached_head`, `non_default_branch`, `remote_branch_absent`, `hash_mismatch`, `kb_not_tree`, `guard_failed`,
+  `head_moved`, `ref_update_failed`, `unpack_failed`, `side_ahead`. `tags` = `{ reason, outcome }`; `extra` =
+  `{ userId }` (`hashExtraUserId` hashes it at the emit boundary). No paths, shas, URLs or branch names.
+- Info only (the unconditional log line): `synthetic_pushed`, `held_foreign`, `remote_ahead`, `remote_unknown_tip`.
+- The outer `syncPush` catch sets `tags: { reason: err instanceof KbSyncError ? err.reason : "unclassified" }` and
+  keeps its static message.
+- Add the `session-sync` family entry to the errorClass registry comment in `server/observability.ts`.
+
+### Phase 7 — Records
+
+- ADR-309 addendum "2026-11-12 (Ref #12600): the post-session sync push publishes only Soleur-built knowledge-base
+  commits" after the 2026-11-11 addendum, plus a forward pointer at each of the three "#12600's path" mentions, located
+  by their text (the #12197 one is an inline sentence inside the 2026-11-05 #11635 addendum, not a heading).
+- ADR-068 addendum: (d)'s "GitHub tip is an ancestor of the local branch" holds after a sync push because the local
+  branch is moved to `S` (or `M`) before the push.
+- ADR-050: update the host-side git consumer entry for `session-sync` if it names the legacy push (locate by text).
+
+### Phase 8 — Isolated-fetch hardening (X2)
+
+- `HARDENED_GIT_ARGS` (`server/git-hardened-env.ts`) gains `-c core.alternateRefsCommand=true`; its doc comment names
+  the measured child (F1). `test/git-auth-hardened-env.test.ts` pins the argv; TX2 runs in the Phase 9 battery.
+
+### Phase 9 — Session-start pull on the hardened arm (#12718: X1, X4, X5, D25-D28)
+
+- **Leaves first (D25(1), D25(4)).** Create `server/kb-sync-objects.ts` (verified reads, `isAncestor`, `kbOf`,
+  `commitTree`, `handOver`) and `server/kb-sync-remote.ts` (`readRemoteState` moved out of `kb-sync-publish.ts` with a
+  neutral error; the NEW hardened `fetchIntoIsolated` of Proposed Solution #12718 step 4). Neither imports
+  `kb-sync-publish.ts` or `push-branch.ts`. Move `AGENT_AUTHOR_*` and `disposeIsolated` out of `push-branch.ts` into
+  leaves; collapse `SideFallbackInput` while `deliverAndLinkSide` is edited. AC3's single push argv is unchanged.
+- **`server/kb-sync-pull.ts` (D25(2), D25(6)-(8)).** Pure-git `mergeVerifiedDefault` and `adoptSideTip` over an
+  injected `KbPullWriter` (`unpack`, `setTracking`, `casBranch`, `merge`); `KbPullHeldReason` with a full `Record` of
+  static messages; `AUTO_MERGE_MSG_PULL`; `PULL_HANDOVER_MAX_BYTES`; the walk cap checked before `pack-objects`. No
+  stamping, no reporting, no isolated-dir lifecycle; no function throws raw.
+- **`server/kb-sync-side-pr.ts` (D28(3)).** D17's PR table moved out of `kb-sync-publish.ts`, shared by the push
+  side's `recheckSidePr` and pull-side adoption.
+- **`session-sync.ts` (D26).** `syncPull` orchestrates: one `readStatus`, the shared `mergeInProgress` (extended with
+  `MERGE_AUTOSTASH`, lstat, fail-closed) BEFORE the auto-commit in both `syncPull` and `syncPush`; then the isolated
+  dir, the default merge, step 6b adoption, the held count, one `kb-sync.pull-held` report, dispose. The writer is
+  built here: `merge` joins `ALLOWED_GIT_SUBCOMMANDS` behind a shape-only exact-argv guard (the D26(2) `-c` pins,
+  `--no-overwrite-ignore`, a HEX40 target, the closed message); equality with the in-memory `T` / `P` is checked in
+  `kb-sync-pull.ts`. `syncPull` returns `{ heldFiles, pullReason }`.
+- **Push side of adoption (`kb-sync-publish.ts`, D28(2), D28(6)).** The two interim `side_ahead` throws stay the hold
+  for an absent `P`, with comments saying the next session-start pull adopts it; a present `P` that fails the KB-only
+  check holds `side_not_kb_only`.
+- **Self-heal (`workspace-sync.ts`, D27).** The held-commits branch calls `mergeVerifiedDefault` behind the token-free
+  `merge-tree --write-tree` pre-check (`merge_conflict_precheck`), after the D15 untracked pre-check, with
+  `--no-overwrite-ignore`; no stamp, no adoption, one report; delete `HELD_COMMITS_REASON_INTERIM`. `syncWorkspace`
+  gains `workspaceId`; its callers pass it (`app/api/kb/file/[...path]/route.ts`, `app/api/kb/sync/route.ts`,
+  `app/api/kb/upload/route.ts`, `server/c4-writer.ts`, `server/kb-route-helpers.ts`,
+  `server/inngest/functions/cron-workspace-sync-health.ts`, `server/inngest/functions/workspace-reconcile-on-push.ts`).
+- **Checkpoint (D26(7)).** Correct the stale comment in `server/inflight-checkpoint.ts`; TX5-b pins `stale-base`.
+- **Census and registration (D25(3), D25(5)).** `test/census-git-push-sites.test.ts`: `GIT_AUTH_SITES` drops
+  `server/session-sync.ts pull legacy` and adds the fetch as hardened (`server/kb-sync-remote.ts`); the all-hardened
+  assertion extends to the new module; zero `gitWithInstallationAuth` sites and no literal git exec in
+  `kb-sync-held.ts`, `kb-sync-objects.ts` and `kb-sync-pull.ts`; known call-site counts per file; an import-census row
+  fails if `kb-sync-pull.ts`, `kb-sync-remote.ts`, `kb-sync-objects.ts` or `workspace-sync.ts` imports
+  `kb-sync-publish.ts` or `push-branch.ts`. New real-git suites are registered in `test/repo-wide-suites.ts`, and D24(10)'s
+  app-local `gitFixtureEnv` re-export is pulled into this PR (new suites import it, not `../../../plugins/...`).
+- **Tests first** (`cq-write-failing-tests-before`): `test/session-sync-pull-isolated-real-git.test.ts` (TX1-a..h, TX2,
+  TX4-a..d, TX5, TX5-b, TX6-a..f), the allowlist shape rows and the module equality rows (TX1-e), the
+  `kb-sync.pull-held` mirror rows, the self-heal rows in `test/workspace-sync-self-heal-real-git.test.ts`. 9.1 also
+  measures the `--no-overwrite-ignore` refusal and the `merge-tree --write-tree` exit codes in the runner image.
+
+#### Research Insights (deepen 2026-11-17)
+
+Applies D25 (all items), D26 (all items), D27 and D28. Replaced "`kb-sync-publish.ts` exports `readRemoteState` and one
+`fetchIntoIsolated` helper" and "the shared unmerged-entry skip in both auto-commits". Seats: architecture 1, 2, 4, 9,
+11, 13; security 2, 4, 5; data-integrity 1, 2, 13, 14; learnings 2, 7, 13; realism F2.
+
+### Phase 10 — Held-files column (#12714: W2, D29) — own commit (R13b)
+
+- Migration `187_workspace_kb_sync_held_files.sql` + `.down.sql` (Proposed Solution #12714 item 3): the two columns
+  with comments and the named range check, the member-checked `SECURITY DEFINER` RPC `get_workspace_kb_sync_held`
+  (`search_path` pinned with `pg_temp`, precedent 158), no `GRANT` / `REVOKE` on `workspaces`; the down drops both
+  columns and the RPC, and its header says to revert the code first.
+- `test/supabase-migrations/187-workspace-kb-sync-held-files.test.ts`: the offline shape test of AC21.
+  `supabase/verify/187_workspace_kb_sync_held_files.sql`: `has_column_privilege('authenticated', ...)` is false for
+  SELECT on both columns, and the RPC is definer with a pinned path.
+- Deploy order (D29(2)): 187 applies before the code that writes it; rollback is the code first, then the down. The
+  dev apply happens only once the PR is ready for review, through the normal migration path, with a dev-ledger row
+  naming this PR; QA e2e runs after it. No production write from this plan (`hr-dev-prd-distinct-supabase-projects`).
+  Re-check the number 187 before commit and at ship.
+
+#### Research Insights (deepen 2026-11-17)
+
+Applies D29(2), D29(3) and D29(10). Replaced AC21's "applies and reverts in CI" and "no `authenticated` grant" claims
+(migration tests here are offline text lints; 174 leaves table-level INSERT/UPDATE, RLS is the barrier). Seats:
+data-integrity 6, 7; learnings 4, 5, 13.
+
+### Phase 11 — Held signal, Settings card, agent line (#12714: W1, W3-W5, V1-V6, D29, D30)
+
+- **Prerequisite (met, 496551a4f9):** the W7 wireframe `knowledge-base/product/design/settings/kb-sync-held-commits.pen` is committed and
+  linked in the PR before any component code in this phase (`wg-ui-feature-requires-pen-wireframe`).
+- `server/kb-sync-held.ts` (`computeHeldFiles` -> `{ total, onRecovered }`, `readRecoveredKbSyncTips` with the D29(1)
+  read contract). Wiring: the `onHeldFiles` hook in `publishKbOnly` (before the isolated dir is disposed, held exits
+  included) with the write from a `finally` in `syncPush`; the computation in `syncPull` on its own isolated dir. The
+  write is a separate service-client UPDATE, every sync, with `kb_sync_held_checked_at = now()`. `WorkspaceRepoCols`
+  gains the two columns; disconnect and setup null both. `syncPush` stops stamping `repo_last_synced_at` (W5), and the
+  two push-stamp assertions in `test/server/session-sync-workspace-last-synced.test.ts` are deleted.
+- `server/cc-github-push.ts` exports `isCcGithubPushRouteAvailable` (D29(5): legacy always; cc flag, entitlement,
+  installation and persona, own deadline, no default-branch lookup; viewer's `userId`; transient result).
+- `server/cc-dispatcher.ts`: the RPC in the same `Promise.all`, keyed on the registration's `activeWorkspaceId`; the line
+  in the query factory's `effectiveSystemPrompt` next to `c4PromptAddendum`. `server/agent-runner.ts`: the line from
+  `syncPull`'s `{ heldFiles, pullReason }`. Both: the `merge_conflict` / `unresolved_merge` line. Agent strings per
+  D29(6), agreeing with `ccPushPromptAddendum` and the push tool description.
+- `lib/kb-sync-held-copy.ts` with the V6 strings verbatim; Settings page select + predicate; `SettingsContent` and
+  `ProjectSetupCard` props and rendering (reconnect: no held notice; integer 1..10000 as text children).
+- `lib/kb-workspace-sync-notice.ts` (V6(5)): the final `detail` string; remove the header's "Interim copy; the #12714
+  wireframe may refine it" sentence.
+- `components/settings/conversation-names-settings.tsx` (V6(6), task 11.7): the team-icon pending notice and the 409
+  string; "Upload failed. Please try again." stays for every other failure.
+- Tests: TW1, TW1-b, TW2, TW3, TW3-b, TW4-a/b/c, the card, page, copy, notice and team-icon unit rows, the readers
+  census, the e2e flow (Test Scenarios).
+
+#### Research Insights (deepen 2026-11-17)
+
+Applies D29 (all items), D30 and V6. The Phase 11 gate now names the committed wireframe path. Replaced write-on-change,
+the fold into `updateLastSynced`, "the resolved workspace row" and "the legacy runner gets no line". Seats:
+agent-native 1-7, 9; spec-flow 5, 6, 7, 9, 13; data-integrity 4, 5, 8, 10; learnings 6, 10, 12, 16, 17.
+
+## Files to Edit
+
+- `apps/web-platform/server/session-sync.ts` — orchestration (steps 1-2), allowlist guards, `MERGE_HEAD` skip, outer
+  catch `reason` tag; the push half moves out.
+- `apps/web-platform/server/push-branch.ts` — export the identity constants and `disposeIsolated`;
+  `checkCommitPresent` on `runIsolatedGitLocal`.
+- `apps/web-platform/server/approval/workspace-head.ts` — `readWorkspaceHeadRef` export.
+- `apps/web-platform/server/workspace-sync.ts` — `self-heal-aborted-dirty-tracked` gate (R18, widened by D6/D7).
+- `apps/web-platform/server/observability.ts` — errorClass registry comment entry only.
+- `apps/web-platform/test/server/session-sync-protected-fallback.test.ts` — trimmed to the op and alert-contract rows;
+  `makeGitMock` follows the new call shapes (the `args.length === 1` main-push key is gone); behaviour rows move to the
+  real-git battery (devex review item 6).
+- `apps/web-platform/test/server/session-sync-sentry-mirror.test.ts` — push-throw arm follows the new call site; the
+  `kb-sync.push-held` payload, the per-reason debounce, the outer-catch `reason` tag.
+- `apps/web-platform/test/server/session-sync-workspace-last-synced.test.ts` — refused, held and `T == headSha` turns do
+  not call `writeRepoColsToWorkspace`.
+- `apps/web-platform/test/session-sync-path-allowlist.test.ts` — the `update-ref --no-deref` / `unpack-objects`
+  exact-argv guards (every other argv throws) and the forbidden-flag rows.
+- `apps/web-platform/test/host-git-consumers-real-git.test.ts` — `CENSUS_ONLY` row for `git-isolated-local.ts`;
+  `syncPushDriver` keeps passing.
+- `apps/web-platform/test/push-branch-isolated-real-git.test.ts` — stays green with `checkCommitPresent` on the runner.
+- `knowledge-base/engineering/architecture/decisions/ADR-309-durable-action-bound-approval-requests.md` — addendum.
+- `knowledge-base/engineering/architecture/decisions/ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md`
+  — addendum.
+- `knowledge-base/engineering/architecture/decisions/ADR-050-likec4-runtime-rerender-via-out-of-process-cli.md` —
+  consumer-list entry, only if it names the legacy push.
+
+### Files to Edit — #12718 / #12714 extension
+
+- `apps/web-platform/server/session-sync.ts` — `syncPull` orchestration on the new modules (isolated dir, default
+  merge, adoption, held count, one report, dispose), returns `{ heldFiles, pullReason }`; one `readStatus` and the
+  shared `mergeInProgress` (with `MERGE_AUTOSTASH`) before both auto-commits; the `KbPullWriter` with the `merge`
+  shape-only guard and the D26(2) pins; the held-files write as a separate UPDATE from a `finally` in `syncPush` and in
+  `syncPull`; push-side stamp removed (W5).
+- `apps/web-platform/server/kb-sync-publish.ts` — imports the leaves (`readRemoteState` moves to `kb-sync-remote.ts`,
+  object helpers to `kb-sync-objects.ts`, the PR table to `kb-sync-side-pr.ts`); the `onHeldFiles` hook in
+  `publishKbOnly`; `side_not_kb_only` on a present `P`; the two `side_ahead` interim comments reworded; the
+  `SideFallbackInput` collapse; no import of `push-branch.ts` after the D21 moves.
+- `apps/web-platform/server/push-branch.ts` — `AGENT_AUTHOR_*` and `disposeIsolated` move out to leaves (D21, D25(4)).
+- `apps/web-platform/server/git-isolated-push-dir.ts` — receives `disposeIsolated` if that is the chosen leaf.
+- `apps/web-platform/server/workspace-sync.ts` — `selfHealNonFastForward` held-commits branch calls
+  `mergeVerifiedDefault` behind the `merge-tree` pre-check; `HELD_COMMITS_REASON_INTERIM` deleted; `syncWorkspace`
+  gains `workspaceId` (D27). The `pull --ff-only` and `fetch origin` sites stay legacy (X3).
+- The `syncWorkspace` callers, which pass `workspaceId` (D27): `apps/web-platform/app/api/kb/file/[...path]/route.ts`,
+  `apps/web-platform/app/api/kb/sync/route.ts`, `apps/web-platform/app/api/kb/upload/route.ts`,
+  `apps/web-platform/server/c4-writer.ts`, `apps/web-platform/server/kb-route-helpers.ts`,
+  `apps/web-platform/server/inngest/functions/cron-workspace-sync-health.ts`,
+  `apps/web-platform/server/inngest/functions/workspace-reconcile-on-push.ts`.
+- `apps/web-platform/server/inflight-checkpoint.ts` — the stale `git pull --autostash` comment (D26(7)).
+- `apps/web-platform/server/git-hardened-env.ts` — `core.alternateRefsCommand=true` (X2; landed in Phase 8).
+- `apps/web-platform/server/workspace-repo-mirror.ts` — `WorkspaceRepoCols` gains `kb_sync_held_files`,
+  `kb_sync_held_checked_at`.
+- `apps/web-platform/app/api/repo/disconnect/route.ts`, `apps/web-platform/app/api/repo/setup/route.ts` — null both
+  held columns (D29(1)).
+- `apps/web-platform/server/cc-github-push.ts` — `isCcGithubPushRouteAvailable` (D29(5)).
+- `apps/web-platform/server/cc-dispatcher.ts` — the RPC call in the same `Promise.all`; the held and stuck-merge lines
+  in the query factory's `effectiveSystemPrompt`, next to `c4PromptAddendum` (D29(3), D29(7)).
+- `apps/web-platform/server/agent-runner.ts` — the held and stuck-merge lines from `syncPull`'s return (D29(4)).
+- `apps/web-platform/app/(dashboard)/dashboard/settings/page.tsx` — select `kb_sync_held_files` (service client,
+  `resolveActiveWorkspace`'s id); route predicate with the viewer's `userId`.
+- `apps/web-platform/components/settings/settings-content.tsx` — pass `heldFiles` and the route state.
+- `apps/web-platform/components/settings/project-setup-card.tsx` — relabelled date line; Owner and member notices;
+  no held notice under `needsReconnect`.
+- `apps/web-platform/lib/kb-workspace-sync-notice.ts` — V6(5) final `detail`; the "Interim copy" header sentence removed.
+- `apps/web-platform/components/settings/conversation-names-settings.tsx` — V6(6) team-icon pending and 409 strings
+  (task 11.7).
+- `apps/web-platform/test/session-sync-path-allowlist.test.ts` — `merge` shape rows (TX1-e shape half).
+- `apps/web-platform/test/server/session-sync-sentry-mirror.test.ts` — `kb-sync.pull-held` rows; the never-throws row.
+- `apps/web-platform/test/server/session-sync-workspace-last-synced.test.ts` — delete the two push-stamp assertions;
+  push never stamps; pull stamps on merge rc 0 and `up_to_date` only; the held write is a separate UPDATE (TW2).
+- `apps/web-platform/test/census-git-push-sites.test.ts` — `GIT_AUTH_SITES` and the import census (D25(3), D25(5)).
+- `apps/web-platform/test/repo-wide-suites.ts` — register the new real-git suites (D25(5)).
+- `apps/web-platform/test/host-git-consumers-real-git.test.ts` — `syncPull` driver rows on the isolated arm; the new
+  modules are absent from `CENSUS_ONLY` and `IN_SCOPE` (no literal git exec).
+- `apps/web-platform/test/workspace-sync-self-heal-real-git.test.ts` — D27 rows.
+- `apps/web-platform/test/session-sync-kb-only-push-real-git.test.ts` — push-side `side_not_kb_only` row.
+- `apps/web-platform/test/git-auth-hardened-env.test.ts` — the X2 argv pin.
+- `apps/web-platform/test/cc-github-push.test.ts` — the predicate per runner, the deadline, no flag writer, no
+  default-branch lookup.
+- `apps/web-platform/test/project-setup-card.test.tsx`, `apps/web-platform/test/settings-page.test.tsx` — copy,
+  audience, reconnect and render rows; `vi.mock` for any new server import in the orphan route tests.
+- `apps/web-platform/test/conversation-names-settings.test.tsx` — team-icon rows (task 11.7).
+- `apps/web-platform/test/disconnect-route.test.ts` — held columns nulled.
+
+#### Research Insights (deepen 2026-11-17)
+
+Adds the files D25-D29 touch: the leaves' sources, the self-heal and its seven callers, the legacy runner, the
+checkpoint comment, the disconnect and setup routes, the D16 notice and the team icon (V6), the census and suite
+registry. Replaced "`kb-sync-publish.ts` (created by Phase 2) — export `readRemoteState`, `fetchIntoIsolated`" (it
+exists, and both reads live in `kb-sync-remote.ts`), "held-files write folded into `updateLastSynced`" and "push writes
+only on change".
+
+### Files to Create — #12718 / #12714 extension
+
+- `apps/web-platform/server/kb-sync-objects.ts` (D25(1))
+- `apps/web-platform/server/kb-sync-remote.ts` (D25(1): `readRemoteState`, `fetchIntoIsolated`)
+- `apps/web-platform/server/kb-sync-side-pr.ts` (D28(3))
+- a leaf for `AGENT_AUTHOR_NAME` / `AGENT_AUTHOR_EMAIL` (D25(4))
+- `apps/web-platform/server/kb-sync-pull.ts` (`mergeVerifiedDefault`, `adoptSideTip`, `KbPullWriter`,
+  `KbPullHeldReason`)
+- `apps/web-platform/server/kb-sync-held.ts`
+- `apps/web-platform/lib/kb-sync-held-copy.ts`
+- `apps/web-platform/supabase/migrations/187_workspace_kb_sync_held_files.sql` and `.down.sql` (columns and the RPC)
+- `apps/web-platform/supabase/verify/187_workspace_kb_sync_held_files.sql` (D29(10))
+- the app-local `gitFixtureEnv` re-export (D24(10), pulled in by D25(5))
+- `apps/web-platform/test/session-sync-pull-isolated-real-git.test.ts` (TX1-TX6)
+- `apps/web-platform/test/kb-sync-pull.test.ts` (module unit rows with a recording writer: TX1-e equality half)
+- `apps/web-platform/test/kb-sync-held-real-git.test.ts` (TW1, TW1-b, TW4-a/b/c)
+- `apps/web-platform/test/kb-sync-held-copy.test.ts`
+- `apps/web-platform/test/cc-dispatcher-held-line.test.ts` (TW3, TW3-b)
+- `apps/web-platform/test/kb-sync-held-readers-census.test.ts` (W2, D29(3), D29(9): the exact reader set of the two
+  columns and of `repo_last_synced_at`; no tenant select carries the new columns)
+- `apps/web-platform/test/supabase-migrations/187-workspace-kb-sync-held-files.test.ts`
+- `apps/web-platform/e2e/settings-kb-sync-held.e2e.ts`
+- `knowledge-base/product/design/settings/kb-sync-held-commits.pen` (W7; committed in parallel with this plan update)
+
+#### Research Insights (deepen 2026-11-17)
+
+Adds D25's leaves and `kb-sync-side-pr.ts`, the verify file (D29(10)) and the module unit file for the TX1-e equality
+row (D26(5)). The wireframe is no longer blocked.
+
+## Open Code-Review Overlap
+
+None. Open `code-review` issues touching `agent-runner.ts` (#3242 tool_use name field, #3454 pdf_metadata tool) concern
+other code in that file; the extension edits `agent-runner.ts` only to append the held and stuck-merge lines from
+`syncPull`'s return (D29(4)), which neither issue touches. No open code-review issue names `session-sync.ts`,
+`workspace-sync.ts`, their tests or `host-git-consumers-real-git.test.ts`.
+
+## User-Brand Impact
+
+- **If this lands broken, the user experiences:**
+  - The bug persists. An Owner's repository still receives a member's unapproved code commit at the end of a turn,
+    possibly a workflow file that then runs in the Owner's CI.
+  - Every workspace's knowledge-base stops reaching GitHub after each turn (a false refusal). The user sees only KB
+    pages missing on GitHub. Settings' "last synced" time does NOT go stale, because `syncPull` stamps it on every
+    session-start pull (C4 note below). The operator sees `kb-sync.push-held` events with `reason: guard_failed` or
+    `hash_mismatch` on untampered workspaces, and Better Stack's `synthetic_pushed` count drops to zero.
+  - The pre-push branch update breaks. After the next KB action or webhook, a member's commits move to a
+    `soleur/recovered-kb-sync-*` branch (self-heal on a diverged clone; P7, matrix 14).
+- **Who is affected by the behaviour change:** every legacy-runner user, Owners, members and solo founders alike
+  (ruling E). An agent's code commits on the default branch used to reach GitHub after every turn. They now stay in
+  the workspace until someone publishes them through `github_push_branch` (Owner approval).
+- **Degradations the user can see on the day this ships (accepted, tracked):**
+  - **Held code commits.** Nothing in the product says an agent's code commit was not published (#12714, CPO F1; its
+    milestone is "Post-MVP / Later", Taste row T1). An agent that tells the user "committed and synced" is now wrong
+    about the sync part.
+  - **Local merge commits.** (Corrected at review fix-round 2: "each KB-changing turn" was false.) While code commits
+    are held, a turn that DELIVERS a KB change adds one Soleur-authored merge commit to the local branch: `M`
+    (`KB_SYNC_MERGE_MSG`, "Soleur: merge knowledge-base sync"; HEAD and `S`) on an unprotected default branch, or `M'`
+    (HEAD's tree, parents HEAD and the side commit) on a protected one, linked right after the side push. A turn whose
+    protected-branch fallback exits before that link (no side delivery, `side_ahead` when the side tip is absent, a
+    failed hand-over) adds none: the local branch is rolled back to the turn's HEAD commit (CTO ruling D14(4)), which
+    ends the per-turn `M_n` growth the review measured. A later `github_push_branch` range therefore shows those merges
+    and the already-published `S` / side commits next to the member's work. On a protected repo a KB-only turn also takes
+    the merge arm once the side commit is in HEAD's history (D14(3)); only an unprotected KB-only clone stays linear,
+    its local branch moved to `S`. When an Owner lifts the protection, the next delivered push to `D` on that merge arm
+    moves the local branch back from `M` to `S` (same tree, D22(a)), so the clone is linear again and a later KB UI write
+    is not held as `held_commits`.
+  - **Non-default branch.** A user whose agent works on a feature branch gets `non_default_branch` on every turn, and
+    their KB edits never reach GitHub from that branch. Phase 0 step 4 records what they got before (the bare push from
+    a single-branch clone with no upstream most likely failed already; unverified until measured). They will see their
+    KB edits on GitHub only after switching back to the default branch.
+  - **Delayed KB edits.** In the hold cases the Proposed Solution names, KB edits reach GitHub on a later turn or
+    session, not the same turn.
+  - **Mid-session stall.** When an upstream push lands while code commits are held and code files are dirty, the
+    workspace stays un-synced until the next session start, instead of losing those edits (R18).
+  - **Host move after the default branch moved upstream.** If code commits are held and the upstream default branch
+    has moved, the ADR-068 overlay check fails on a host move. The held commits are then parked on its rescue branch
+    and `git-data-overlay-not-descendant` fires. They are recoverable, but no longer on the branch.
+- **Interim states until Phase 9 (#12718) lands (review fix-rounds 1 and 2, rulings D14-D17 and D22-D24; accepted,
+  tracked):**
+  - **KB UI write on a held workspace: saved, workspace pending.** An upload, delete or rename in the KB tree, and a
+    C4 diagram save, commit to GitHub through the REST API and then pull the workspace. When the self-heal refuses
+    with a designed hold (held code commits, an uncommitted tracked edit, or an untracked or ignored file in the
+    reset's way: `held_commits`, `dirty_tracked`, `untracked_collision`), the route answers its normal success
+    (upload 201, delete and rename 200) plus `workspace_sync: "pending"`, and the KB tree shows a non-error status
+    notice on that row: "Saved to GitHub." / "Deleted on GitHub." / "Renamed on GitHub." followed by "Your workspace
+    has local changes that aren't on your repository's main branch yet, so it was not updated. You don't need to try
+    again." (D23 copy; the earlier "not on GitHub yet" was false after a protected KB-only turn, whose local commit is
+    on GitHub in the open side PR; one shared
+    constant, `lib/kb-workspace-sync-notice.ts`; made final by V6(5), whose `detail` adds "Until it is, this page may
+    still show the files as they were."). The notice shows
+    only on that response and is dismissible. The KB view keeps the workspace's copy (a deleted file still appears)
+    until the hold clears: the next session-start pull for a legacy-runner user; for a cc-only user nothing clears it
+    until Phase 9's merge. The Concierge's `edit_c4_diagram` says the write is committed to GitHub, the workspace copy
+    was not updated, and "Do not retry to deliver this write". A render failure is no longer hidden by the hold
+    (D22(c)): on a pending c4 save the tool still relays `rerendered` and `rerenderDiagnostic`, and the editor's
+    notice appends the render diagnostic when there is one, so neither the user nor the model mistakes an unrendered
+    diagram for a good one. A hold on only the post-render resync says the workspace "may not show this save yet".
+    The manual Sync button still says "Workspace out of sync" (true). The team-icon upload in Settings now succeeds
+    (201) instead of failing, with no notice: the avatar keeps the old or default icon until the hold clears, because
+    it loads from the workspace, and a retry gets 409 "File already exists". A notice on that Settings row is Phase 11
+    (#12714) scope in this PR (D24; V6(6) strings, task 11.7). Before this fix the same writes returned 500 "Try refreshing", which invited a
+    duplicate commit or a "File not found" retry (D16).
+  - **KB UI write on an unprotected workspace with held code: the agent's later KB edits wait (`remote_ahead`).** The
+    UI write commits to GitHub, so `D` moves ahead of the local branch, and the self-heal holds (`held_commits`).
+    Every later post-turn sync is then `remote_ahead`, an info-only line the user never sees: one UI upload stops all
+    later agent KB delivery for that workspace. The next session-start pull clears it for a legacy-runner user; for a
+    cc-only user only Phase 9's hardened pull-merge (#12718) clears it. No product surface names it until #12714.
+  - **Self-heal holds on every upstream push.** The reconcile webhook and the sync-health cron take the same refusals
+    on a held workspace; they warn, debounced per workspace, and never page.
+  - **`side_pending` (silent).** The KB is on `soleur/kb-sync` with a PR awaiting an Owner; nothing in the product says
+    so (#12714). A turn with no new KB edit re-checks the PR with one GET: a missing PR is created then (the retry of a
+    failed PR call, D17; info `side_pr_created`), and a failed GET creates nothing (warning `side_pr_unknown`, D23).
+  - **`side_declined` (silent).** An Owner closed, without merging, the side PR for this exact content: it is not
+    reopened, and those KB edits reach GitHub only when the next KB edit opens a new PR. That new PR re-proposes the
+    declined content too, because the side commit carries HEAD's whole `knowledge-base` subtree. The Owner can refuse
+    it again; nothing reaches `D` without their merge.
+  - **Owner deletes `soleur/kb-sync` after declining (a PR reopens).** Closing the side PR and pressing GitHub's
+    "Delete branch" removes the side tip, so `side_declined` is never reached: the next turn of any kind, even with no
+    new edit, rebuilds `soleur/kb-sync` from `T` and opens a new PR for the same content. Closing without deleting
+    the branch does stick. Matching a closed, unmerged PR by KB tree before creating on an absent side branch is
+    follow-up D24(1). Nothing reaches `D` without an Owner merge.
+  - **D5e freezes.** A side tip the workspace lacks (a legacy `soleur/kb-sync` from before the cutover, a re-clone or
+    host move, a second workspace on the same repo) is `side_ahead` on every turn: the KB edits are held, warning
+    debounced, and the local branch no longer grows (D14(4)). The same freeze follows a failed link after a delivered
+    side push: when the agent commits between the side push and the link CAS (`head_moved`), or the process crashes
+    there, the side tip is present but not in HEAD's history. The next no-edit turn creates the PR (D17, possible
+    because the hand-over now runs before the push, D22(b)); an editing turn is held `side_ahead`. Phase 9's
+    pull-side adoption of the side tip closes these.
+- **If this leaks, the user's repository and workflow are exposed via:**
+  - a commit an agent authored (any path, including `.github/workflows/*`, any message including `Fixes #N`) published
+    to the connected repository with the GitHub App token and no Owner approval;
+  - a synthetic commit that reverts a remote knowledge-base edit;
+  - a member's uncommitted edit (code or knowledge-base), or an untracked or ignored file, erased by the self-heal reset
+    (closed by D6b and D15(a): the reset is `reset --keep` and runs only when it loses no tracked, committed, untracked or
+    ignored file). That guarantee is the reset's only: the legacy `pull --ff-only` before it can still overwrite an
+    ignored file at a path upstream added (pre-existing; `--no-overwrite-ignore` is follow-up D24(6)).
+- **Brand-survival threshold:** `single-user incident`
+- **Threshold decision (challengeable):** one Owner receiving one unapproved member commit is a trust breach on its own
+  (CTO ruling H); it does not need to aggregate to matter.
+
+`requires_cpo_signoff: true`. CPO agent sign-off (2026-11-12): yes, with conditions C1-C5, all addressed (rulings I,
+K, L; C4 below; C5 = #12714). Human CPO review is still owed before `soleur:work` ships, and it should look at the
+"Who is affected" and "Degradations" bullets above. `soleur:engineering:review:user-impact-reviewer` runs at review
+time.
+
+CPO condition C4: the push path never stamps `repo_last_synced_at` on a refusal, because it returns before
+`updateLastSynced`. `syncPull` still stamps it after every successful session-start pull; #12714 tracks that
+pre-existing meaning.
+
+### User-Brand Impact — #12718 / #12714 extension
+
+- **If this lands broken, the user experiences:**
+  - **Pull broken:** KB and code edits made on GitHub stop reaching the workspace at session start; the agent works on
+    a stale tree. "Updated from GitHub" stops advancing (it is stamped only on a merge rc 0 or `up_to_date`), so the
+    Owner can see it; the operator sees `kb-sync.pull-held` reasons (`fetch_failed`, `isolated_refused`,
+    `tip_mismatch`, `shallow_changed`, `walk_cap`, `handover_failed`, `handover_too_large`, `merge_refused`).
+  - **Merge guard too strict:** a workspace with a leftover `MERGE_HEAD` / `MERGE_AUTOSTASH` never pulls until resolved
+    (`unresolved_merge`, warning), and its post-turn sync holds `merge_in_progress`; today the pull fails the same way
+    (M9c), now with a named reason and no auto-commit that could conclude the merge (D26(1)).
+  - **Self-heal merge broken:** a held-code workspace stays held after an upstream push (`self-heal-aborted-held-commits`
+    with the pull reason), and KB UI writes keep answering `workspace_sync: "pending"`; the `merge-tree` pre-check means
+    it never leaves a half-done merge (D27).
+  - **Adoption broken:** a side tip from a re-clone, another host or a legacy cutover stays `side_ahead` on the push
+    side, as before Phase 9; a code-bearing side tip is refused `side_not_kb_only` and never merged (D28).
+  - **Held count wrong:** a wrong number or no notice on Settings. It cannot publish, block or approve anything (W2).
+    A failed held write fails only that write: it is a separate UPDATE, so the stamp still lands (D29(1)).
+- **If this leaks:** the installation token reaching a host the agent chose (the #12718 bug); conflict markers
+  published unattended (X4); code on `soleur/kb-sync` merged into every workspace past branch protection (closed by
+  D28(2)); one member seeing another member's file names (prevented: a count only).
+- **Who is affected:** every legacy-runner session start (Owners, members, solo founders) for #12718; every held-code
+  workspace whose self-heal now merges (both runners, D27); Owners and members of workspaces whose default branch holds
+  code changes for #12714.
+- **Degradations the user can see (accepted):**
+  - a session on a non-default branch no longer pulls at all (X5);
+  - the "Last synced" label changes to "Updated from GitHub"; no session-UI banner (V1);
+  - the no-route Owner sees that publishing is not available, with no way offered (C8 follow-up);
+  - the held count persists until the change is merged into the main branch and pulled, even after an approved push to
+    a new branch; the V6 copy says so ("this notice clears once the merge reaches your workspace");
+  - the count is refreshed only by legacy-runner session start and end; a cc-only workspace shows a stale value or
+    nothing (null), and the cc agent line carries an "as of" time (D29(6));
+  - a flag or entitlement read that fails or times out shows the V6 transient strings ("could not be checked right
+    now"), never "not available" (V6(3));
+  - while the Owner card needs a reconnect, the held notice is hidden; it returns after the reconnect (V6(4));
+  - a permanently stuck merge (`merge_conflict`, then `unresolved_merge` on every pull) is told to the agent only
+    (D29(4)); an Owner line needs a new column and goes with #12719 (D30, follow-up at 11.6);
+  - the side-PR states (`side_pending`, `side_declined`, a deleted `soleur/kb-sync`) are KB state, not held code: no
+    Owner card and no agent line in this PR (D30, follow-up at 11.6);
+  - after the KB pending notice is dismissed, the tree row still shows the workspace's copy until the hold clears
+    (D30, follow-up at 11.6).
+- **Brand-survival threshold:** `single-user incident` (unchanged; one token sent off-host is a breach on its own).
+  CPO sign-off for the extension: rows V-M (C1-C8) and V6; human CPO review owed with row M.
+
+#### Research Insights (deepen 2026-11-17)
+
+Applies D26(1), D27, D28(2), D29(1)/(4)/(6) and D30; the copy states come from V6(1)-(4). Seats: spec-flow 1-5, 7, 9;
+agent-native 6, 8, 9; data-integrity 9.
+
+## Observability
+
+```yaml
+liveness_signal:
+  what: "layer 2 (pino -> Sentry via warnSilentFallback): Sentry event op kb-sync.push-held (feature session-sync), warning level, tags reason + outcome, one per workspace per reason per 5 minutes, for the anomaly reasons (merge_in_progress, detached_head, non_default_branch, remote_branch_absent, hash_mismatch, kb_not_tree, guard_failed, head_moved, ref_update_failed, unpack_failed, side_ahead, kb_absent, side_pr_unknown); layer 2 (pino stdout -> Better Stack; layer 1 is the Inngest middleware, not this path): one info line per outcome per turn, every reason, the info-only ones (remote_ahead, remote_unknown_tip, held_foreign, side_pending, side_declined, side_pr_created, and pr_failed as the outcome line of a fallback or re-check whose PR call failed, alongside the unchanged error-level kb-sync-fallback-failed:pr_failed page) included"
+  cadence: "per legacy-runner turn that has local commits; Sentry debounced 5 min per workspace per reason, Better Stack line every turn"
+  alert_target: "Sentry issue stream for the web-platform project (warning level, no page); Better Stack web-platform source"
+  configured_in: "apps/web-platform/server/kb-sync-publish.ts and apps/web-platform/server/session-sync.ts (log.info + mirrorWarnWithDebounce calls)"
+
+error_reporting:
+  destination: "layer 2: Sentry web-platform project via reportSilentFallback (SENTRY_DSN); existing op syncPush with a closed reason tag (KbSyncError) for tip-read, fetch, push and isolation failures; existing op kb-sync.protected-fallback-failed with a fallback_reason tag (debounced per workspace and fallback reason; its persistent_other emit is debounced per workspace, class kb-sync-persistent-other, D21); op kb-sync.side-push-transient at warning, off the paging op (D21); op kb-sync.rollback at warning (D14(4)); the workspace-sync self-heal ops (feature kb-route-helpers, CTO rulings D6-D8, D15, D20): self-heal-aborted-dirty-tracked, self-heal-aborted-held-commits and self-heal-aborted-untracked-collision at warning, self-heal-aborted-dirty and self-heal-aborted-detached-head at error, all debounced per workspace path (in-process key, never emitted), and self-heal-failed at error with extra.errName and extra.frame (the first server/, app/ or lib/ code frame as file:line:column, never the message; in production a release-bundle coordinate, resolvable against the release sha, D23); op isolated-dir-dispose-failed"
+  fail_loud: "Sentry issue with tag op=syncPush, tag reason=<closed reason>, static message 'Sync push failed — next session will retry'; no URL, owner, repo or sha in the message"
+
+failure_modes:
+  - mode: "false refusal: every KB push held (builder or guard bug), KB stops reaching GitHub"
+    detection: "layer 2: kb-sync.push-held reason:guard_failed or reason:hash_mismatch on a workspace with no tampering; layer 2 (pino -> Better Stack): Better Stack count of synthetic_pushed drops to zero; CI: the battery's must-PASS rows"
+    alert_route: "Sentry issue stream; CI red on the PR"
+  - mode: "object tamper detected (forged object bytes)"
+    detection: "layer 2: kb-sync.push-held reason:hash_mismatch"
+    alert_route: "Sentry issue stream"
+  - mode: "isolated GIT_DIR cannot be prepared (object store over 250000 entries, tamper shape) or cannot be disposed"
+    detection: "layer 2: op syncPush with reason tag (isolation refusal); op isolated-dir-dispose-failed with an errno class tag"
+    alert_route: "Sentry issue stream"
+  - mode: "local branch update lost a race or failed (HEAD moved, ref lock, unpack failure)"
+    detection: "layer 2: kb-sync.push-held reason:head_moved / ref_update_failed / unpack_failed"
+    alert_route: "Sentry issue stream"
+  - mode: "protected-branch fallback fails or refuses over unmerged side content"
+    detection: "layer 2: existing op kb-sync.protected-fallback-failed with fallback_reason tag (side_hash_mismatch, side_guard_failed, side_push_rejected, pr_failed; null error, debounced per workspace and fallback reason, D8); kb-sync.push-held reason:side_ahead. A side push that fails on the network is NOT on this op (next mode)"
+    alert_route: "existing sentry_alert kb_sync_protected_fallback_failed (email to issue owners); Sentry issue stream"
+  - mode: "the side push failed on the network (side_push_transient); the next turn retries it (D21)"
+    detection: "layer 2: op kb-sync.side-push-transient (warning, mirrorWarnWithDebounce, class kb-sync-side-push-transient per workspace), tags fallback_reason and push_class; the op-contract test pins it off the paged op"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "a non-protection persistent reject on the push to D (persistent_other, e.g. shallow update not allowed)"
+    detection: "layer 2: op kb-sync.protected-fallback-failed, tag reason=persistent_other, error level, null error, debounced per workspace (class kb-sync-persistent-other, D21), so a reject the next turn hits again emits once per window, not every turn"
+    alert_route: "existing sentry_alert kb_sync_protected_fallback_failed (email to issue owners)"
+  - mode: "the best-effort rollback of the local branch after a fallback exit failed (usually head_moved: the agent committed meanwhile)"
+    detection: "layer 2: op kb-sync.rollback (warning, class kb-sync-rollback-failed per workspace, tag reason); the pino line fires before the debounce; the turn's result is unchanged (D14(4))"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "protection was lifted while a side branch existed; the M arm's default-branch push landed, but moving the local branch from M back to S (same tree) failed (D22(a))"
+    detection: "layer 2: op kb-sync.relink (warning, class kb-sync-relink-failed per workspace, debounced); the turn stays pushed"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "the side PR re-check GET failed (any cause: token mint, network, non-OK, malformed body), so whether a PR exists is unknown"
+    detection: "layer 2: kb-sync.push-held reason:side_pr_unknown (warning, debounced per workspace, registered in HELD_WARN_MESSAGES, D23); nothing is created (fail toward no duplicate PR)"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "the side PR was missing and the re-check created it (D17 create)"
+    detection: "layer 2 (pino -> Better Stack): info line kb-sync.push-held reason:side_pr_created (D23); no kb-sync.push-protected-fallback mirror and no history or last-synced write, because no push ran this turn; a failed create is kb-sync.protected-fallback-failed fallback_reason pr_failed"
+    alert_route: "Better Stack search (no alert; expected outcome)"
+  - mode: "self-heal refused because the workspace has an uncommitted tracked edit (code or knowledge-base) on a non-fast-forward clone"
+    detection: "layer 2: op self-heal-aborted-dirty-tracked (warning, debounced per workspace); the KB route answers workspace_sync pending (D16)"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "self-heal refused because local commits hold content upstream lacks (held code commits, or an unpublished KB commit)"
+    detection: "layer 2: op self-heal-aborted-held-commits (warning), tags held_kind (nonkb | kb) and reason (the pull reason from mergeVerifiedDefault, or merge_conflict_precheck; D27 deleted the interim merge_not_attempted), debounce class self-heal-aborted-held-commits:<held_kind> per workspace; the KB route answers workspace_sync pending (D16)"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "self-heal refused because an untracked or ignored file sits where the reset would write (D15a)"
+    detection: "layer 2: op self-heal-aborted-untracked-collision (warning), tag arm (phantom | diverged), no paths in tags or extra, debounced per workspace; the KB route answers workspace_sync pending (D16). A reset --keep refusal reaching the catch shows as self-heal-failed and means the precheck missed a shape"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "self-heal aborted off the default branch, on a detached HEAD, or with an un-countable local-commit count"
+    detection: "layer 2: op self-heal-aborted-dirty (tag head = non_default | uncountable; the slug is a misnomer kept for continuity) or op self-heal-aborted-detached-head (tag head=detached), error level, debounced per workspace"
+    alert_route: "Sentry issue stream"
+  - mode: "self-heal threw (a git verb failed, a reset --keep refusal, a code regression)"
+    detection: "layer 2: op self-heal-failed (error), extra.errName and extra.frame (file:line:column of the first app frame; a release-bundle coordinate in production) localise the throw without the message"
+    alert_route: "Sentry issue stream"
+  - mode: "the workspace HEAD has no knowledge-base while the remote holds one (the KB would be deleted on GitHub)"
+    detection: "layer 2: kb-sync.push-held reason:kb_absent (warning, debounced per workspace)"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "KB waits on expected holds (remote_ahead, remote_unknown_tip, held_foreign, side_pending: the side PR is open; side_declined: the Owner closed the side PR for this exact content, D17)"
+    detection: "layer 2 (pino -> Better Stack): info lines op kb-sync.push-held with the reason; a persistent cause surfaces elsewhere (op syncPull error on a failed pull, merge_in_progress warning on a conflicted pull; a side_pending turn whose PR is missing retries the PR create, and a failed create is kb-sync.protected-fallback-failed fallback_reason pr_failed)"
+    alert_route: "Better Stack search (no alert; expected outcomes)"
+  - mode: "a non-KB commit reaches the remote (the bug)"
+    detection: "CI: the real-git battery asserts the bare remote lacks the foreign commit object; no production signal can see a commit that was wrongly accepted, so the guard is pinned at CI time"
+    alert_route: "CI red on the PR"
+
+logs:
+  where: "web-platform container stdout (pino, child logger session-sync), shipped to Better Stack"
+  retention: "Better Stack plan retention for the web-platform source"
+
+discoverability_test:
+  command: "grep -o -m1 kb-sync.push-held apps/web-platform/server/kb-sync-publish.ts"
+  expected_output: "kb-sync.push-held"
+```
+
+### Observability — #12718 / #12714 extension
+
+```yaml
+liveness_signal:
+  what: "layer 2 (pino -> Sentry via reportSilentFallback, static message, null error, tags reason and ref): op kb-sync.pull-held (feature session-sync), warning level, for the anomaly reasons (remote_state, fetch_failed, isolated_refused, tip_mismatch, shallow_changed, walk_cap, handover_failed, handover_too_large, unresolved_merge, merge_conflict, merge_refused, autostash_conflict, side_not_kb_only, side_pr_unknown, and after the #12704 review side_conflict (D44), untracked_collision (D35), merge_unverified (D36(b)), pull_deadline (D38(2)), side_pr_create_failed (D45(h)), pull_unexpected (obs F3)); layer 2 (pino -> Better Stack): one info line per session-start pull with its reason, including the info-only up_to_date, merged, non_default_branch, side_declined, side_pr_created, side_linked"
+  cadence: "per legacy-runner session start with a connected repo; the self-heal caller per webhook or cron run on a held-code workspace"
+  alert_target: "Sentry issue stream for the web-platform project (no page); Better Stack web-platform source"
+  configured_in: "apps/web-platform/server/session-sync.ts (syncPull's one report per run); the op constant, reasons and messages exported from apps/web-platform/server/kb-sync-pull.ts"
+
+error_reporting:
+  destination: "layer 2: Sentry web-platform project; the outer syncPull catch keeps op syncPull and sees only static-message errors (D25(7)); the self-heal caller reports through the existing op self-heal-aborted-held-commits with tag reason = the pull reason (D27)"
+  fail_loud: "Sentry issue with tag op=kb-sync.pull-held, tag reason=<closed reason>, tag ref=default|side for fetch-stage reasons, one static message per reason; no URL, sha, path or branch"
+
+failure_modes:
+  - mode: "token steered off-host on the pull (the #12718 bug returns)"
+    detection: "CI: TX1-f (EVIL logs zero requests; legacy-arm control logs the sentinel); no production signal can see a token sent elsewhere"
+    alert_route: "CI red on the PR"
+  - mode: "pull never merges (fetch, hand-over or guard bug)"
+    detection: "layer 2: kb-sync.pull-held reason fetch_failed / isolated_refused / tip_mismatch / shallow_changed / handover_failed / handover_too_large spikes; layer 2 (pino -> Better Stack): Better Stack count of merged + up_to_date drops"
+    alert_route: "Sentry issue stream"
+  - mode: "half-done merge left by an earlier pull blocks every later pull"
+    detection: "layer 2: kb-sync.pull-held reason unresolved_merge (warning), debounced per workspace; the agent line names it (D29(4))"
+    alert_route: "Sentry issue stream; recovery is #12719"
+  - mode: "the merge exited 0 but the autostash pop conflicted (M4/M6)"
+    detection: "layer 2: kb-sync.pull-held reason autostash_conflict (warning), never reported as merged (D26(4))"
+    alert_route: "Sentry issue stream"
+  - mode: "a side tip carrying non-KB content was refused for adoption"
+    detection: "layer 2: kb-sync.pull-held reason side_not_kb_only (warning); the push side holds kb-sync.push-held reason side_not_kb_only on a present P (D28(2))"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "the side PR state could not be read during adoption"
+    detection: "layer 2: kb-sync.pull-held reason side_pr_unknown (warning); nothing is created or written"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "the self-heal merge was refused (conflict pre-check, an X1 refusal, an ignored-file collision)"
+    detection: "layer 2: op self-heal-aborted-held-commits (warning, debounced per workspace path), tag reason = merge_conflict_precheck or the pull reason; the KB route answers workspace_sync pending (D16)"
+    alert_route: "Sentry issue stream (no page)"
+  - mode: "held-files count not written or wrong"
+    detection: "layer 2 (pino -> Better Stack): Better Stack info line op kb-sync.held-files with value bucket (0, 1-9, 10+, null) and, for a null, the closed nullCause, per count attempt; layer 2 (Sentry): writeKbSyncHeldCols's own mirror on a failed separate UPDATE, feature workspace-repo-write, op kb-sync-held.write (kb-sync-held.clear for the disconnect/setup clear), a warning debounced per op and pg code, err null with tag pg_code; an UPDATE that matches no row (newer checked_at, not ready, or gone) is an info pino line with outcome no_row, never mirrored (the stamp is unaffected, D29(1); op names corrected per obs F13, unified under kb-sync-held.* per pattern P3-17)"
+    alert_route: "Better Stack search (display-only value, no alert)"
+  - mode: "the cc agent line's RPC read failed"
+    detection: "layer 2: op kb-sync-held.read (Settings: feature settings, op kb-sync-held.read), a warning debounced per workspace through mirrorWarnWithDebounce (feature cc-dispatcher on cc, agent-runner for the legacy fallback read), tag cause = timeout | rpc_error | rejected plus pg_code when present; no line is appended (D29(3); obs F7, F10)"
+    alert_route: "Sentry issue stream (no page)"
+
+logs:
+  where: "web-platform container stdout (pino, child logger session-sync), shipped to Better Stack"
+  retention: "Better Stack plan retention for the web-platform source"
+
+discoverability_test:
+  command: "grep -o -m1 kb-sync.pull-held apps/web-platform/server/kb-sync-pull.ts"
+  expected_output: "kb-sync.pull-held"
+```
+
+#### Research Insights (deepen 2026-11-17)
+
+Applies D25(6)/(7) (the separate `KbPullHeldReason` union, levels, the `ref` tag, never-throw), D26(4), D27, D28(2)
+and D29(1)/(3). `merge_conflict_precheck` is reported only under the self-heal op. `side_conflict` is a warning per D44 (D28(5)'s "info" amended; see the amendment notes in `decision-challenges.md`).
+Seats: architecture 11; security 9; data-integrity 11; realism F2.
+
+## Encryption Posture
+
+Added for the #12714 extension (migration 187). No new store and no new connection: two nullable columns on the
+existing `public.workspaces` table in the existing `supabase.prd` store, written and read over the existing server ->
+Supabase connection; values are a file count and a timestamp (no paths, content, or personal data). Entries mirror
+`scripts/encryption-posture-ledger.json` (`supabase.prd`, connection "web-platform server -> Supabase Postgres/PostgREST").
+
+```yaml
+at_rest:
+  - store: supabase.prd (public.workspaces.kb_sync_held_files, public.workspaces.kb_sync_held_checked_at)
+    mechanism: provider-managed:supabase-postgres-aes256
+    evidence: "Supabase encrypts Postgres data at rest with AES-256 (Supabase security documentation, https://supabase.com/docs/guides/security, retrieved_on 2026-07-24 per scripts/encryption-posture-ledger.json supabase.prd)"
+    defends_against: "physical-media compromise of the managed Postgres storage"
+    does_not_defend: "a leaked service-role key, an RLS bypass, or any query over a legitimate connection; the key is provider-managed"
+    disclosed_as: not-publicly-claimed
+    live_verification: "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
+in_transit:
+  - connection: "web-platform server (session-sync writer, Settings page reader, cc-dispatcher reader) -> Supabase Postgres/PostgREST"
+    enforced_at: "apps/web-platform/lib/supabase/{client,server,service,tenant}.ts"
+    tls: "https (Supabase REST) / TLS 1.2+"
+    cert_verification: on
+    does_not_defend: "a leaked anon/service key; TLS protects the channel, not the credential"
+    disclosed_as: not-publicly-claimed
+```
+
+## Architecture Decision (ADR/C4)
+
+### ADR
+
+Amend ADR-309 with an addendum (2026-11-12, Ref #12600): the post-session sync push is no longer an unapproved route for
+agent commits. It pushes only a Soleur-built commit whose root tree is the hash-verified remote tip's with the
+`knowledge-base` entry replaced, as an explicit sha refspec from the isolated GIT_DIR to the authoritative default
+branch, after moving the local branch so the clone stays fast-forwardable; every agent commit stays in the workspace.
+Forward pointers at the item 8 discharge note, the inline #12197 sentence and the workspace-settings note. Amend
+ADR-068 (d) with the pre-push local-branch invariant. No new ADR: this extends ADR-309's push boundary (and item 9b's
+isolated push) to the sync path.
+
+### C4 views
+
+Checked against `model.c4`, `views.c4`, `spec.c4` (repo-research pass, 2026-11-12): the actors, the GitHub external
+system, the `engine -> github` "Git operations and CI" edge and the workspace volume element are already modelled; the
+workspace volume description ("session-sync.ts autocommits only knowledge-base/**") stays true. No C4 edit (ruling R5):
+the ADR addenda carry the change.
+
+### Sequencing
+
+Ships with this PR; no soak.
+
+## Guard Contract
+
+### Guard 1 — KB-only publish gate
+
+**Property.** Every ref update `syncPush` sends (default branch or `soleur/kb-sync`) names a commit the server built,
+whose root tree equals the hash-verified remote base's root tree in every entry except `knowledge-base`, whose message
+and identity are Soleur's, and which never drops knowledge-base content the remote holds and the workspace never saw.
+
+**Assembly.** The chokepoint is `pushVerifiedKbOnly` in `apps/web-platform/server/kb-sync-publish.ts`: every sync push
+call site is there, and it re-runs `assertRootDiffersOnlyInKb` on the exact sha it pushes against its verified base.
+Its only inputs are commits from `buildKbOverlay`, the single builder, whose root comes from `verifyObject`-checked
+objects. A census row in the real-git battery asserts the argv-array regex `/\[\s*["']push["']/` matches exactly once
+in `kb-sync-publish.ts` (inside `pushVerifiedKbOnly`) and zero times in `session-sync.ts`. Every base is read by
+`readRemoteState` (never `@{u}` or `refs/remotes/*`). Every decision command runs in the isolated GIT_DIR through
+`runIsolatedGitLocal` (ruling P); the workspace contributes objects (alternate), the validated shallow file, `headSha`
+and the ref name only, and receives only `unpack-objects` and the `--no-deref` CAS `update-ref`.
+
+**Mutation matrix:** every row asserts the remote's expected positive state (tip sha, parent, tree shape, author) as
+well, so a mutation that fails closed reads RED, not green. Rows that are killed only by that positive state are
+marked "positive-state".
+
+| # | Mutation (to the design, before code exists) | Expected |
+|---|---|---|
+| 1 | Push `headSha` instead of `S`; fixture: a `.github/workflows/x.yml` commit plus a KB edit over `T` | RED: bare remote holds the foreign commit object |
+| 2 | Skip `verifyObject` on `T`'s root tree; fixture plants T's-root bytes that add a non-KB entry pointing at a subtree already on the remote under another ref | RED: remote `D` gains the non-KB entry |
+| 3 | Build `S`'s root from `headSha`'s root (not `T`'s); fixture: foreign commit + KB edit | RED: remote gains the non-KB change; `guard_failed` expected and absent |
+| 4 | Remove `assertRootDiffersOnlyInKb` from `pushVerifiedKbOnly` and break `buildKbOverlay` to also copy one non-KB entry from `headSha` | RED (the in-builder guard is the only remaining defense; with both removed the leak reaches the remote) |
+| 5 | Parent `S` on `headSha` instead of `T` | RED (positive-state): expected tip `S` with parent `T`; foreign object reaches the remote |
+| 6 | Use `@{u}` (or `refs/remotes/origin/<b>`) as the base; fixture forges `refs/remotes/origin/main` | RED: wrong parent (positive-state) |
+| 7 | Push through the legacy workspace arm (bare `push`, `cwd` = workspace); fixture sets `push.default=matching` and a second local branch holding a foreign commit | RED: remote gains the second branch |
+| 8 | Read the push URL from `remote.origin.url`; fixture points it at a second bare remote | RED: the second remote receives a push (recorded argv names it) |
+| 9 | Skip ruling I's ancestor check; fixture: a remote KB edit fetched into the workspace objects without merging, plus a local KB edit | RED: remote KB edit reverted |
+| 10 | Side parent from `refs/remotes/origin/soleur/kb-sync` forged to a foreign commit; remote has no `soleur/kb-sync` | RED: remote `soleur/kb-sync` descends from the foreign commit |
+| 11 | Drop the `-c user.*` argv | RED (positive-state): remote author/committer is not exactly "Soleur Agent" / `agent@soleur.ai` |
+| 12 | Fallback keeps `checkout -f` / `reset --hard`; fixture: protected default, KB-only local edit, a dirty tracked non-KB file | RED: the dirty edit is gone |
+| 13 | Fallback CAS-moves the local branch when non-KB changes are held | RED: the foreign commit is no longer on the local branch |
+| 14 | Skip the pre-push local branch update (push `S`, leave the branch at `headSha`); then the row runs the real `syncWorkspace` against the bare remote | RED: the foreign commit is moved to a recovery branch (positive control: on correct code `syncWorkspace` returns `{ ok: true }`) |
+| 15 | Drop the CAS old value; the 3-argument `refs/heads` shape is refused by the argv guard, so the row mutates the guard too; fixture's wrapper adds a local commit during `ls-remote` | RED: the new commit is no longer on the branch; `head_moved` expected |
+| 16 | Remove ruling I's extension on the side range; fixture: side tip holds a KB file not in HEAD's history and the PR is not merged | RED: the side push deletes that file |
+| 17 | Remove the `MERGE_HEAD` skip; fixture: a conflicted session-start merge with markers in a KB file | RED: remote gains a commit containing conflict markers |
+| 18 | Target the checked-out branch instead of `D`; fixture: local branch `feature` that also exists on the remote | RED: remote `feature` moves; `non_default_branch` expected |
+| 19 | Drop `--no-deref`; fixture swaps `refs/heads/<D>` to a symref to `refs/heads/x` after the HEAD read | RED: `refs/heads/x` moves |
+| 20 | Single parent `P` on the side commit when `P` does not descend from `T` | RED: after the side push and a PR-merge simulation, `pull --ff-only` fails |
+| 21 | Remove the R18 self-heal gate; fixture: held foreign commit + dirty tracked non-KB file, upstream `D` moves, real `syncWorkspace` | RED: the dirty edit is gone |
+| 22 | Run the hash checks / build in the workspace (`runConnectedRepoGit`) instead of the isolated dir | no known fixture reds it under host-git hardening: defense-in-depth (ruling P), recorded, not claimed |
+
+Unit (outside the battery): `classifyPushError` with `GH006` only in a ref name inside `err.message` / the stderr
+status line -> `other` (the former 12g, which reds on correct code in a real-git fixture); `GH013` -> `other`.
+
+**Harness rows:**
+
+| # | Suite edit or input | Expected |
+|---|---|---|
+| H1 | must-PASS: KB-only local commit plus a session-start pull merge of an upstream code change | remote tip is `S` (parent `T`, tree == `headSha`'s tree, author "Soleur Agent"); local branch == `S` by CAS; tracking ref == `S`; `git status` unchanged |
+| H2 | must-PASS: foreign commit + KB edit | remote tip is `S` (parent `T`, non-KB entries == `T`'s, KB entry == HEAD's); bare remote lacks the foreign object (`git cat-file -e` exits non-zero); local branch is `M` (parents `headSha`, `S`, message `KB_SYNC_MERGE_MSG`), still holds the foreign commit, `git status` unchanged |
+| H3 | must-PASS: foreign commit, KB unchanged | remote tip unchanged; one info line `held_foreign`; no Sentry event |
+| H4 | Suite edit: stub `syncPush` to a no-op | H1 and H2 go RED (they assert the remote tip moved) |
+| H5 | Recorded-argv check: every hardened call names exactly `https://github.com/<o>/<r>.git` before the fixture rewrite | no network is reached; a different URL in any argv fails the row |
+| H6 | must-PASS: the turn after a successful push, with no new commits | zero calls to `gitWithInstallationAuth` (no token minted), no history row |
+| H7 | must-PASS: turn 2 after H2 adds another KB edit | remote tip is `S2` with parent `S`; local branch is `M2` |
+
+**Anchor.** No stored value is compared; the guard reads the live remote state and hash-verified objects. Not
+applicable beyond that statement.
+
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "After a member's session, no commit other than Soleur's KB auto-commit reaches the remote without the Owner's approval, or the copy says it can." [issue #12600] | Proposed Solution 1-6; Phases 1-4; Guard 1 | mapped: only a Soleur-built KB commit is pushed (R14), which is stricter than the path reading considered at plan time |
+| 2 | "A test pins the chosen behaviour." [issue #12600] | `test/session-sync-kb-only-push-real-git.test.ts`; Guard 1 matrix | mapped |
+| 3 | "Technical forks (code-side refuse/skip of non-Soleur commits vs naming the sync in copy) are ruled by soleur:engineering:cto, never asked of the operator." [brief] | `decision-challenges.md` rows A-P, R1-R20 | mapped |
+| 4 | "no production writes; do not touch or flip the approval-queue feature flag; no edits under docs/ or legal documents" [brief] | Files lists (no `docs/`, no `knowledge-base/legal/`, no flag code); copy follow-up #12713 | mapped |
+| 5 | "if the CTO ruling would require Settings/legal copy changes, prefer the code-side fix and file the copy part as a follow-up" [brief] | Ruling A, G; #12713 | mapped |
+| 6 | "The session-start pull mints a token only on the hardened isolated arm." [issue #12718] | Proposed Solution #12718; Phase 9; AC13 | mapped |
+| 7 | "A real-git row: workspace `url.*.insteadOf` / `http.*.extraHeader` set by the agent does not change where the token goes." [issue #12718] | TX1-f; AC14 | mapped |
+| 8 | "An Owner-visible signal (Settings or the session UI) when the workspace's default branch holds commits the sync will not publish, naming the route to publish them" [issue #12714] | Proposed Solution #12714; Phases 10-11; AC18-AC19 (route named in words in the UI, by tool name in the agent line, CPO V3) | mapped |
+| 9 | "Decide whether `repo_last_synced_at` should distinguish "pulled" from "pushed"." [issue #12714] | Rulings V2, W5; AC17 | mapped |
+| 10 | "Optional (CTO ruling I, 2026-11-12): ... add the in-process "last synthetic commit" memory (option I3)." [issue #12714] | descoped — justification: CPO V4 and CTO W6 defer it until `remote_ahead` counts show the need; follow-up issue carries the trigger | descoped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Server-built KB-only push (`kb-sync-publish.ts`) | asks 1-2 | asked |
+| Hash verification of the objects the build reads | "no commit other than Soleur's KB auto-commit reaches the remote" (ask 1) | inferred — justification: CTO ruling R14: object bytes in the workspace are agent-forgeable (measured), so an unverified read is no guard |
+| Pre-push local branch update (CAS to `S` or merge `M`) | ask 1 | inferred — justification: CTO rulings R1, R14: without it the reconcile webhook's self-heal destroys member work (P3, P7) |
+| Protected-fallback hardening | ask 1 | inferred — justification: CTO rulings F, R3, R4, R15, R17: the fallback is a second unapproved route to the same remote |
+| Authoritative default branch, `non_default_branch` | ask 1 | inferred — justification: CTO ruling R2: the push target must not be agent-chosen |
+| Self-heal dirty-non-KB gate (`workspace-sync.ts`) | — | inferred — justification: CTO ruling R18: held foreign commits become the steady state, so without it this PR turns a rare dirty-edit loss into a per-upstream-push one |
+| `git-isolated-local.ts` runner + census row | — | inferred — justification: CTO rulings P, R6, R20: decide where no agent-written config is read, without a token per local verb |
+| `update-ref --no-deref` / `unpack-objects` allowlist guards, `readWorkspaceHeadRef` | — | inferred — justification: CTO rulings R1, R2, R12, R19 |
+| `MERGE_HEAD` skip | — | inferred — justification: CTO ruling R11: the auto-commit would push conflict markers |
+| `observability.ts` registry comment, `kb-sync.push-held` op, `KbSyncError` | — | inferred — justification: `hr-observability-as-plan-quality-gate` / `cq-silent-fallback-must-mirror-to-sentry`, R7; raw push errors now embed the repo URL and sha |
+| ADR-309 / ADR-068 / ADR-050 addenda | — | inferred — justification: `wg-architecture-decision-is-a-plan-deliverable`, CTO rulings G, R5 |
+| Edits to the existing syncPush test files, `classify-push-error.test.ts` | ask 2 | asked |
+| `test/session-sync-kb-only-push-real-git.test.ts`, `workspace-sync-self-heal-gate.test.ts` | ask 2 | asked |
+
+### Split Assessment
+
+- Subsystems touched: 2 — `apps/web-platform`, `knowledge-base`
+- Planned files: 22 | Estimated changed lines: ~850 (≈340 source, ≈450 tests, ≈60 records)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR, over the line threshold by design. CTO devex ruling R13: splitting the fallback out
+  leaves the forged-ref route open between merges, the pre-push branch update is inseparable from the synthetic
+  commit, and the self-heal gate (R18) must ship with the change that makes held commits the steady state. Review cost
+  is handled with one commit per phase.
+
+**Extension (#12718, #12714), CTO ruling R13b:** estimated +≈700 lines (#12718 ≈300 incl. the real-git battery,
+#12714 ≈400 incl. migration, copy, card, agent line, e2e), ≈42 planned files, so ≈1550 lines in all. Single PR, commits
+in the order #12600 phases 0-7, Phase 8 (X2), Phase 9 (#12718), Phase 10 (migration, own commit), Phase 11 (#12714),
+tests green at every boundary so any phase reverts alone. Deepen 2026-11-17 (D25-D30) adds four server modules
+(`kb-sync-objects.ts`, `kb-sync-remote.ts`, `kb-sync-side-pr.ts`, an identity leaf), the RPC and verify file, the
+self-heal wiring with its seven `syncWorkspace` callers, the legacy-runner line, the disconnect/setup nulling, the
+team-icon notice and the census and suite-registry rows; R13b's single-PR ruling and commit order stand, with the
+migration's dev apply ordered by D29(2).
+
+## Acceptance Criteria
+
+<!-- founder-stated check: see plan-founder-check.md -->
+
+- [ ] AC1 (issue acceptance 1): in the real-git battery, after `syncPush` on a workspace whose range over `T` holds a
+  commit touching `.github/workflows/x.yml`, the bare remote does not contain that commit object
+  (`git -C <bare> cat-file -e <sha>` exits non-zero), and its default-branch tip is either unchanged or a single commit
+  whose parent is `T`, whose root entries other than `knowledge-base` equal `T`'s, and whose author and committer are
+  "Soleur Agent" / `agent@soleur.ai`.
+- [ ] AC2: every row of the Guard 1 mutation matrix (1-21) is a test that fails when the named mutation is applied
+  locally (RED run recorded per phase commit in the PR body); rows killed only by the positive state count once with
+  H2 (rows 5, 11); H1-H3, H5-H7 pass on the final code.
+- [ ] AC3: the argv-array regex `/\[\s*["']push["']/` matches exactly once in `apps/web-platform/server/kb-sync-publish.ts`
+  (inside `pushVerifiedKbOnly`) and zero times in `apps/web-platform/server/session-sync.ts`; the census row asserting
+  this is in the battery.
+- [ ] AC4: `rg -n '@\{u\}|refs/remotes/' apps/web-platform/server/kb-sync-publish.ts` shows only the tracking-ref
+  `update-ref` target; `rg -n 'resolveDefaultBranchForFallback|checkKbOnlyRange|simplify-merges' apps/web-platform/server`
+  returns nothing.
+- [ ] AC5: the `kb-sync.push-held` payload carries tags `reason` + `outcome` and extra with the hashed user id only;
+  two different reasons inside one 5-minute window both emit; every outcome writes its info line even inside the
+  debounce window; the outer `syncPush` catch carries a closed `reason` tag and no URL or sha in its message (asserted
+  in `session-sync-sentry-mirror.test.ts`).
+- [ ] AC6: a refused, held or `T == headSha` turn does not call `writeRepoColsToWorkspace` (asserted in
+  `session-sync-workspace-last-synced.test.ts`).
+- [ ] AC7: in the real-git battery, no protected-fallback row leaves a dirty tracked non-KB file changed or a foreign
+  commit off the local branch (matrix 12, 13), the side commit descends from `T` (matrix 20), and
+  `session-sync-protected-fallback.test.ts` keeps its op and alert-contract rows green.
+- [ ] AC8: `selfHealNonFastForward` refuses the reset with op `self-heal-aborted-dirty-tracked` when any tracked file
+  is dirty, `knowledge-base/` included (D6 removed the KB exemption), and still recovers a clean clone whose local
+  commits' content is already upstream (asserted in `test/server/workspace-sync-self-heal-gate.test.ts` and
+  `test/workspace-sync-self-heal-real-git.test.ts`; matrix 21);
+  `test/server/workspace-sync-no-pre-self-heal-error-mirror.test.ts` and `test/kb-route-helpers.test.ts` stay green.
+- [ ] AC9: ADR-309 carries the 2026-11-12 addendum and three forward pointers, ADR-068 carries its addendum; no
+  `model.c4` change.
+- [ ] AC10: no file under `docs/`, `knowledge-base/legal/` or the approval-queue flag code is in the diff
+  (`git diff --name-only origin/main...HEAD`).
+- [ ] AC11: `cd apps/web-platform && npx vitest run test/session-sync-kb-only-push-real-git.test.ts test/server/session-sync-protected-fallback.test.ts test/server/session-sync-sentry-mirror.test.ts test/server/session-sync-workspace-last-synced.test.ts test/session-sync-path-allowlist.test.ts test/host-git-consumers-real-git.test.ts test/push-branch-isolated-real-git.test.ts test/server/workspace-sync-self-heal-gate.test.ts test/workspace-sync-self-heal-real-git.test.ts test/server/workspace-sync-no-pre-self-heal-error-mirror.test.ts test/kb-route-helpers.test.ts test/server/classify-push-error.test.ts test/sentry-kb-sync-protected-fallback-alert-op-contract.test.ts` passes, and `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` passes.
+- [ ] AC12: the PR body (written by `soleur:ship`) carries `Closes #12600`, links #12713, #12714, #12718, #12719 and
+  #12734, quotes the Phase 0 measurements (`git --version` in the runner image and on CI, the hash-check and hand-off
+  probes, `ls-remote --symref`, the fallback `fetch`, the non-default-branch "before" behaviour, the battery runtime),
+  and states in plain words: "agent code commits on the default branch are no longer published by the end-of-turn
+  sync; publish them through `github_push_branch` (Owner approval)" (CPO F5; a PR body is neither Settings nor legal
+  copy).
+
+### Acceptance Criteria — #12718 / #12714 extension
+
+- [ ] AC13 (#12718 acceptance 1): the argv-array regex `/\[\s*["']pull["']/` matches nothing in `apps/web-platform/server/session-sync.ts`; the only
+  token mints on the session-start path are `gitWithInstallationAuth(..., { hardened })` in `kb-sync-remote.ts`
+  (`readRemoteState`, `fetchIntoIsolated`) and the push in `kb-sync-publish.ts` (asserted by a recorded-argv row in
+  TX1-b: every token-bearing argv ran with `hardened` set and no `cwd`), and `test/census-git-push-sites.test.ts` no
+  longer lists `server/session-sync.ts pull legacy` (D25(5)).
+- [ ] AC14 (#12718 acceptance 2): TX1-f passes: with workspace `url.<EVIL>.insteadOf`, `http.extraHeader`,
+  `remote.origin.url=<EVIL>` and planted server-HOME / XDG config, `EVIL` logs zero requests and the sentinel token
+  reaches `LIT` only; the legacy-arm control row logs the sentinel at `EVIL`.
+- [ ] AC15: TX2 passes: 0 `--git-dir=<workspace>/.git` child runs in the pull's default-branch fetch and in the step-6b
+  side-adoption fetch, with `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY` and `GIT_ALTERNATE_OBJECT_DIRECTORIES`
+  set in the process env, and a planted workspace ref yields no `have` line.
+- [ ] AC16: TX1-a, TX1-h, TX4-a..d, TX5, TX5-b and TX6-a..f pass; the bare remote never receives a KB blob containing
+  `<<<<<<<`; a `MERGE_HEAD` with every conflict staged records no `commit` argv.
+- [ ] AC17: `repo_last_synced_at` is written only by `syncPull` (merge rc 0 or `up_to_date`); `syncPush` never calls
+  `updateLastSynced`, and the two push-stamp assertions in `session-sync-workspace-last-synced.test.ts` are deleted
+  (D29(9)).
+- [ ] AC18 (#12714 acceptance 1): with `kb_sync_held_files = 3` and the route available, the Owner's Settings Project
+  card shows exactly the V6 Owner, route-available n > 1 string and "Updated from GitHub: {date}"; a member of the same
+  workspace sees the V6 member, route-available n > 1 string and no date; n = 0 and null show nothing; an Owner card
+  with `needsReconnect` shows `ReconnectNotice` only (unit rows and the e2e flow).
+- [ ] AC19: with the route unavailable, the Owner and member see the V6 no-route strings; with the predicate in error or
+  timeout they see the V6 transient strings; no surface names `github_push_branch` except the agent line
+  (`rg -n github_push_branch apps/web-platform/components apps/web-platform/lib/kb-sync-held-copy.ts` returns nothing).
+- [ ] AC20: TW1-TW4 (with TW1-b, TW3-b, TW4-a/b/c) pass; the readers census finds `kb_sync_held_files` read only by the
+  Settings page (service client), the RPC `get_workspace_kb_sync_held` (cc agent line) and `agent-runner.ts` through
+  `syncPull`'s return; no tenant `.select(` string names the new columns; every reader of `repo_last_synced_at` is
+  listed.
+- [ ] AC21 (D29(10)): the offline shape test of migration 187 asserts the two nullable columns (no DEFAULT, no NOT
+  NULL), the named range check, a `COMMENT ON COLUMN` for each, the member-checked `SECURITY DEFINER` RPC with
+  `search_path` pinned to `public, pg_temp`, no `GRANT` or `REVOKE` on `workspaces`, and a down that drops both columns
+  and the RPC. What the grants do: `authenticated` SELECT is column-split and excludes the new columns; the table-level
+  INSERT/UPDATE from 174 remains and RLS is the barrier. `supabase/verify/187_workspace_kb_sync_held_files.sql` checks
+  `has_column_privilege('authenticated', 'public.workspaces', <col>, 'SELECT') = false` for both (run by hand, like
+  verify/186). The dev apply follows D29(2).
+- [ ] AC22: the PR body carries `Closes #12600`, `Closes #12718`, `Closes #12714`, links #12719 (not closed, X4), the
+  X3, W6, C8 and D30 follow-up issues, and the W7 wireframe link.
+- [ ] AC23 (D28): a side tip carrying a non-KB file with an open PR gives `side_not_kb_only`, HEAD unchanged and no
+  hand-over; adoption runs after `up_to_date`; a declined PR is neither merged nor re-created.
+- [ ] AC24 (V6(5), V6(6)): `lib/kb-workspace-sync-notice.ts` carries the V6 `detail` string and no "Interim copy"
+  header sentence; the team-icon upload on a held workspace shows the V6 pending string, a 409 shows the V6 409 string,
+  and "Upload failed. Please try again." appears only for other failures.
+
+#### Research Insights (deepen 2026-11-17)
+
+Applies D25(5), D26(1)/(6), D28, D29(3)/(9)/(10) and V6. Replaced AC15's "the side-branch fetch" (deleted by D5(d)),
+AC18/AC19's V5 strings and AC21's grant and CI claims (migration tests here are offline lints; nothing in CI applies or
+reverts 187). Added AC23 (adoption) and AC24 (V6 items 5 and 6).
+
+## Domain Review
+
+**Domains relevant:** Engineering, Product, Legal
+
+### Engineering
+
+**Status:** reviewed
+**Assessment:** CTO agent ruled A-P at plan time, R1-R13 after the 7-agent plan review and R14-R20 at deepen-plan (see
+`decision-challenges.md`). Final design: the sync pushes only a Soleur-built commit whose root is the hash-verified
+remote tip's with the `knowledge-base` entry replaced (R14, after a measured object-forgery bypass of the history
+walk); authoritative default branch and side tip from one hardened `ls-remote --symref`; everything decided and built
+in the isolated GIT_DIR; local branch moved by a `--no-deref` CAS (to `S`, or to a merge `M` when code commits are
+held) before the push; fallback side commit descending from `T`; self-heal refuses to erase dirty non-KB edits; push
+half in `kb-sync-publish.ts`; per-reason observability. Residuals filed: #12718 (P1, pull on the legacy arm), #12719
+(conflicted pull), #12734 (rulesets), #5221 comment (recovery and locking).
+
+### Legal
+
+**Status:** reviewed
+**Assessment:** CLO agent: `PUSH_DISCLOSURE` is accurate after the fix (its approval promise is scoped to an
+agent-requested push) but incomplete; drafted wording in #12713. No Art. 30 or compliance-posture change: the change
+narrows an existing flow to the customer's own repository.
+
+### Product/UX Gate
+
+**Tier:** none (no UI surface in Files to Create or Files to Edit; the mechanical UI-surface override did not fire)
+**Decision:** reviewed
+**Agents invoked:** soleur:product:cpo (plan-time sign-off and plan-review named panel), user-impact-reviewer (deepen)
+**Skipped specialists:** none
+**Pencil available:** N/A (no UI surface)
+
+#### Findings
+
+CPO agent: sign-off yes with conditions C1-C5. C1 (never undo a remote KB change) -> CTO ruling I, extended to the side
+range by R4; C2 (no empty synthetic) -> ruling K; C3 (clear message and author) -> ruling L, now on every pushed commit
+(R14); C4 (last-synced) -> User-Brand Impact note; C5 (Owner visibility of held commits) -> #12714. Plan-review F1
+(#12714 milestone and audience) recorded as Taste row T1; F2, F4, F5 applied; F3 -> R4. Deepen user-impact findings
+applied in User-Brand Impact; the self-heal regression -> R18.
+
+#### Product/UX Gate — #12714 extension
+
+**Tier:** UI surface (Settings Project card, the KB pending notice, the Settings team-icon row) —
+`wg-ui-feature-requires-pen-wireframe` applies.
+**Agents invoked:** soleur:product:cpo (V1-V6, conditions C1-C8), soleur:engineering:cto (W1-W7), lead (D29, D30),
+soleur:product:design:ux-design-lead (wireframe).
+**Pencil available:** yes (plan upgraded 2026-11-17); wireframe at `knowledge-base/product/design/settings/kb-sync-held-commits.pen`.
+Phase 11 component code waits until that file is committed and linked in the PR (row W7).
+
+##### Research Insights (deepen 2026-11-17)
+
+The W7 block is lifted by the pen.dev plan upgrade; the wireframe path above is what Phase 11's gate and the e2e
+screenshots compare against. V6 adds the transient, reconnect, D16 notice and team-icon states the wireframe covers;
+D30 keeps the side-PR states and the stuck-merge Owner line off the card in this PR.
+
+## Test Scenarios
+
+All in `apps/web-platform/test/session-sync-kb-only-push-real-git.test.ts` unless named; layer `integration` (real git,
+local bare remotes, no network). Fixtures are synthesized (`cq-test-fixtures-synthesized-only`); workspaces are
+`git clone --depth 1` of the bare remote so the shallow boundary matches production.
+
+- Given a KB-only auto-commit over `T`, then H1 holds without the pull merge.
+- Given a KB-only local commit and a session-start pull merge of an upstream code change, then H1 holds.
+- Given a foreign commit plus a KB edit, then H2 holds and one info line `synthetic_pushed` is written.
+- Given a foreign commit and no KB change, then H3 holds.
+- Given H2, when the real `syncWorkspace` runs next (reconcile webhook shape), then `pull --ff-only` succeeds, no recovery branch is created and the dirty file is intact (P7; matrix 14).
+- Given H2, when turn 2 adds another KB edit, then H7 holds; given a re-clone from the bare remote plus the git-data overlay check `merge-base --is-ancestor <remote tip> <local HEAD>`, then it exits 0 (ADR-068).
+- Given forged bytes for `T`'s root tree (or commit, or `headSha`'s commit) in the workspace store, then nothing is pushed, `reason: hash_mismatch` (matrix 2).
+- Given a remote KB edit made after the workspace's pull (fetched into objects, not merged) plus a local KB edit, then nothing is pushed and the info line says `remote_ahead` (matrix 9); given the remote tip object absent locally, then `remote_unknown_tip`.
+- Given mutation rows 1-21, each fixture as named in the matrix, then the row's expected state holds.
+- Given a detached HEAD, then nothing is pushed, `reason: detached_head`.
+- Given a bare remote with no `HEAD`, then nothing is pushed, `reason: remote_branch_absent`.
+- Given the turn after a successful push with no new commits, then H6 holds.
+- Given a protected default branch (the bare remote's real `pre-receive` hook prints `remote: error: GH006: …` for pushes to it) and a KB-only local edit, then `soleur/kb-sync` receives a single-parent `side` on `T`, the PR helpers are called (helpers mocked), the local branch moves to `side` by CAS with `git status` unchanged, and the tracking ref is `side`; with a dirty tracked non-KB file, the file is unchanged (matrix 12).
+- Given the same with an existing unmerged side tip built on an older `T` that is an ancestor of `headSha`, then `side` has parents `(P, T)` and `pull --ff-only` after a PR-merge simulation is a fast-forward (matrix 20).
+- Given the same with a foreign commit present, then the local branch is `M`, keeps the foreign commit and its dirty non-KB files (matrix 13).
+- Given a protected default and a side tip that holds unmerged KB content not in HEAD's history, then nothing is pushed, `reason: side_ahead` (matrix 16); given the PR merged (side KB entry == `T`'s), then the side commit is built.
+- Given `<headSha>:knowledge-base` is a blob (a file named `knowledge-base` replaced the directory), then nothing is pushed, `reason: kb_not_tree`.
+- Given `.git/MERGE_HEAD` present with conflict markers in a KB file, then no auto-commit and no push, `reason: merge_in_progress` (matrix 17).
+- Given a held foreign commit and a dirty tracked non-KB file, when upstream `D` moves and the real `syncWorkspace` runs, then no reset happens, op `self-heal-aborted-dirty-tracked` fires and the dirty edit is intact (matrix 21).
+- Given a `ls-remote` that throws, then the isolated dir is disposed (no directory left under its parent) and op `syncPush` fires with `reason: ls_remote_failed` and no URL in the message.
+- Unit (`test/server/session-sync-sentry-mirror.test.ts`): AC5.
+- Unit (`test/session-sync-path-allowlist.test.ts`): `update-ref --no-deref` / `unpack-objects` accept only the guarded argv shapes.
+- Unit (`test/server/classify-push-error.test.ts`): `GH006` line-anchored; `GH013` -> `other`.
+- Unit (`test/server/workspace-sync-self-heal-gate.test.ts`) and real git (`test/workspace-sync-self-heal-real-git.test.ts`): AC8.
+- Regression: `test/host-git-consumers-real-git.test.ts` carrier rows stay green; `test/push-branch-isolated-real-git.test.ts` stays green with `checkCommitPresent` on the runner.
+
+### Test Scenarios — #12718 / #12714 extension
+
+#### #12718 (real git unless named; `apps/web-platform/test/session-sync-pull-isolated-real-git.test.ts`)
+
+Fixtures as in the #12600 battery (bare `file://` remote, `git clone --depth 1` workspace, synthesized content, wrapped
+`gitWithInstallationAuth` rewriting only the literal fixture URL, widened `GIT_ALLOW_PROTOCOL`). A fresh bare remote
+per row for every row that advances or force-pushes the remote (D26(6)). New suites import the app-local
+`gitFixtureEnv` re-export and are registered in `test/repo-wide-suites.ts` (D25(5)).
+
+- TX1-a: Given upstream 3 commits ahead of a `--depth 1` workspace, when `syncPull` runs, then HEAD contains all three,
+  `rev-list --objects HEAD` and `fsck --connectivity-only` exit 0 and the workspace `shallow` is unchanged; given a
+  real shallow bare store (`receive.shallowUpdate true` plus a `--depth 1` push), not a test seam, then the pull
+  refuses `shallow_changed` and HEAD is unchanged (F6, D26(6)).
+- TX1-b: Given a KB auto-commit plus an upstream code change, then HEAD is a merge commit with message
+  `AUTO_MERGE_MSG_PULL`, its committer equals the auto-commit's, and the stamp is written once.
+- TX1-c: Given `T == headSha` (and, separately, `T` an ancestor of `headSha`), then no `fetch` and no `merge` argv is
+  recorded, the stamp is written and step 6b still runs (TX6-d).
+- TX1-d: Given an upstream force-pushed to unrelated history, then `merge_refused`, HEAD unchanged, no stamp (M11).
+- TX1-e, split (D26(5)):
+  - shape (unit, `test/session-sync-path-allowlist.test.ts`): the `merge` guard accepts only the D26(2) pins followed
+    by `["merge","--no-edit","--autostash","--no-overwrite-ignore","-m",AUTO_MERGE_MSG_PULL,<HEX40>]`; an extra flag,
+    a missing pin, a missing `-m`, a non-hex target, `--abort`, `--ff-only` and `--no-verify` throw;
+  - equality (unit, `test/kb-sync-pull.test.ts`, recording writer): `writer.merge` receives exactly the value passed
+    to `writer.setTracking`, and nothing re-reads the tracking ref.
+- TX1-f (the #12718 acceptance row, port of `probe3.sh`): two local logging HTTP servers (`LIT`, `EVIL`; `http`
+  stands in for `https` through the test's protocol widening). The workspace `.git/config` sets
+  `url.<EVIL>.insteadOf=<LIT>`, unscoped and `<EVIL>`-scoped `http.extraHeader`, and `remote.origin.url=<EVIL>`; the
+  test also plants `~/.gitconfig` and `~/.config/git/config` under the server `HOME` with the same keys. Then every
+  request the pull makes goes to `LIT`, the `Authorization` header carrying the sentinel token reaches `LIT` only,
+  `EVIL` logs zero requests and no request carries `X-Evil`. Control row (same file): the legacy arm
+  (`gitWithInstallationAuth(["pull",...], id, { cwd })`) with the same config logs the sentinel at `EVIL` (T1), so the
+  fixture is proven sensitive.
+- TX1-g: Given a conflicting merge (M8), then `merge_conflict`, no stamp, `MERGE_HEAD` present and the tree equal to
+  what today's pull leaves (no new state).
+- TX1-h (D26(6)): Given a dirty tracked non-KB file that upstream also changes, then the edit's bytes survive, in the
+  worktree or in a retained autostash; given the autostash pop conflicts after a merge rc 0 (M4/M6), then the reason is
+  `autostash_conflict`, never `merged`, the stash entry is kept and there is no `MERGE_HEAD`.
+- TX1-i (D26(2)): Given planted `merge.verifySignatures=true` plus `gpg.program=<marker script>` (and a planted
+  `post-merge` hook), then the marker file is absent after the pull; given an ignored local file at an upstream-added
+  tracked path, then `merge_refused` and the file is byte-identical.
+- TX1-j (unit, D26(5)): Given `D` = `-x`, `--upload-pack=x` or `a..b` from `ls-remote`, then `remote_state` and no
+  fetch argv.
+- TX1-k (D25(1)): Given a loose object planted at `T`'s id in the workspace store, then `verifyObject` refuses
+  (`tip_mismatch`) before any hand-over.
+- TX1-l (D25(8)): Given the hand-over cap seam lowered, then `handover_too_large`, and the walk cap is checked before
+  `pack-objects` runs (no `pack-objects` argv on a `walk_cap` refusal).
+- TX1-m (unit, D25(7)): Given each step forced to throw an error whose message holds the fixture URL and a sha, then
+  the captured Sentry exception value contains neither.
+- TX2 (D26(6)): With `GIT_TRACE` captured and `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY` and
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES` set in the process env, the pull's default-branch fetch and the step-6b
+  side-adoption fetch each show 0 child runs with `--git-dir=<workspace>/.git`, and an agent-planted workspace ref
+  (`refs/heads/planted`) produces no `have` line (`GIT_TRACE_PACKET`) (F1, F2).
+- TX4-a: Given `.git/MERGE_HEAD` (and, separately, `.git/MERGE_AUTOSTASH`, and an unmerged index entry with neither),
+  then no token is minted, no `commit` and no `merge` argv is recorded, reason `unresolved_merge`, no stamp; the same
+  fixture makes `syncPush` hold `merge_in_progress` (one predicate, both sides agree).
+- TX4-b: Given a `UU knowledge-base/a.md` with conflict markers and no `MERGE_HEAD` (M4), then neither the `syncPull`
+  nor the `syncPush` auto-commit runs and the bare remote's `knowledge-base/a.md` has no `<<<<<<<` (M10).
+- TX4-c (D26(6)): Given `MERGE_HEAD` with every conflict staged (no unmerged entry), then no `commit` argv is recorded
+  and `MERGE_HEAD` still exists afterwards.
+- TX4-d (D26(6)): Given a `MERGE_HEAD` left by a prior session, when it is resolved in the workspace and a later sync
+  runs, then that sync reaches a clean HEAD with no re-clone.
+- TX5 (X5): Given a non-default branch, and separately a detached HEAD, then no fetch, no hand-over, no merge, no stamp,
+  one info line `non_default_branch`, and no adoption.
+- TX5-b (D26(7)): Given a checkpoint at `A` and a `syncPull` merge to `B`, then the restore refuses `stale-base`, the tree
+  is unchanged and the checkpoint ref is kept.
+- TX6 (D28, step 6b):
+  - TX6-a open: an open PR on `P` and `P` absent locally -> `P` fetched, hash-verified, handed over, merged; the next
+    no-edit `syncPush` is `side_pending`.
+  - TX6-b none: no PR on `P` (a re-clone after `pr_failed`) -> the PR is created (`side_pr_created`), then `P` is
+    adopted.
+  - TX6-c declined: a closed, unmerged PR on `P` -> `side_declined`, no create, no merge, no hand-over.
+  - TX6-d not KB-only: `P` adds `src/evil.ts` with an open PR -> `side_not_kb_only`, HEAD unchanged, no hand-over,
+    `computeHeldFiles` unchanged; with `T == headSha` adoption is still attempted (kills the early-return skip).
+  - TX6-e link: the D24(12) shape (relink, a later KB edit on the same hunk, protection re-applied, open PR) -> the link
+    arm runs (`side_linked`), no `MERGE_HEAD`, HEAD's tree unchanged, `P` an ancestor of HEAD.
+  - TX6-f conflict: a `P` whose merge conflicts with HEAD -> `side_conflict`, files untouched, no `MERGE_HEAD`.
+  - Plus: a GET failure -> `side_pr_unknown`, zero creates and zero writes; the push side holds `side_not_kb_only` for a
+    present non-KB `P` (`test/session-sync-kb-only-push-real-git.test.ts`).
+- Self-heal (D27, `test/workspace-sync-self-heal-real-git.test.ts`): a held code commit plus an upstream KB push ->
+  merged, no reset, no `soleur/recovered-kb-sync-*` branch; the same with a conflicting upstream ->
+  `merge_conflict_precheck`, no `.git/MERGE_HEAD`, tree byte-identical, op `self-heal-aborted-held-commits` with that
+  reason; an ignored local file at an upstream-added path -> refused, file byte-identical; no stamp in any row.
+- Unit (`test/server/session-sync-sentry-mirror.test.ts`): each `kb-sync.pull-held` anomaly reason emits once with
+  `tags.reason` (and `tags.ref` for fetch-stage reasons) and a hashed user id; no URL or sha in the message.
+- Census (D25(3), D25(5)): `test/census-git-push-sites.test.ts` drops `server/session-sync.ts pull legacy`, adds the
+  hardened fetch site, extends the all-hardened assertion, asserts zero `gitWithInstallationAuth` sites in
+  `kb-sync-held.ts`, `kb-sync-objects.ts` and `kb-sync-pull.ts` and the known call-site counts per file, and fails if
+  `kb-sync-pull.ts`, `kb-sync-remote.ts`, `kb-sync-objects.ts` or `workspace-sync.ts` imports `kb-sync-publish.ts` or
+  `push-branch.ts`. `test/host-git-consumers-real-git.test.ts`: `syncPull` driver rows drive the isolated arm, and the
+  new modules are absent from `CENSUS_ONLY` and `IN_SCOPE` (they hold no literal git exec).
+- Regression: `test/push-branch-isolated-real-git.test.ts` stays green after the `AGENT_AUTHOR_*` and
+  `disposeIsolated` moves.
+
+#### #12714
+
+- TW1 (real git, `test/kb-sync-held-real-git.test.ts`): Given a held `F1` (code) and `K1` (KB) over `T`, then
+  `computeHeldFiles` = `{ total: 1, onRecovered: 0 }`; given the upstream squash-merges `F1`'s change and the pull
+  merges it, then 0; given an upstream code change not yet pulled, then it is not counted (three-dot base); given an
+  approved push of HEAD to `feature/x` on the bare remote, then the count is unchanged.
+- TW1-b (D29(3)): the count, the RPC read and the route predicate are keyed on the identity-bound workspace: a held
+  count on workspace B with the dispatch active on A appends no line, and Settings reads `resolveActiveWorkspace`'s id.
+- TW2 (unit): every sync writes the value through a separate service-client UPDATE with `kb_sync_held_checked_at`
+  advancing, including an unchanged value, a held `remote_ahead` turn and a thrown `hash_mismatch` turn (the `finally`
+  path); a failing held UPDATE leaves the pull's stamp written; a forged `refs/remotes/origin/<D>` changes nothing (base
+  is `T`); a forged recovered ref changes only the number; disconnect and setup write both columns null.
+- TW3 (unit, `test/cc-dispatcher-held-line.test.ts`): registered -> the registered variant with `{n}`, the "as of" time,
+  the `github_list_pull_requests` check and the `git diff --name-only` command; not registered -> the not-registered
+  variant; a transient registration reason -> the "not available right now" wording; `onRecovered > 0` -> the
+  recovered-branch clause; null, 0 or a null `checked_at` -> no line; an RPC error -> no line and one warning; the
+  legacy runner rows (tool present, tool absent, `heldFiles` null) and the `merge_conflict` / `unresolved_merge` line
+  for both runners; a grep row: the held line, `ccPushPromptAddendum` and the push tool description agree, and no agent
+  string says "not on GitHub".
+- TW3-b (D29(7)): dispatch through `dispatchSoleurGo` with a held count of 2 -> the SDK query spy records the line with
+  n = 2 in `effectiveSystemPrompt`; null or 0 records no line.
+- TW4 (real git, D29(8)):
+  - TW4-a: a planted legacy `refs/heads/soleur/recovered-kb-sync-<ts>` tip carrying a non-KB file contributes its
+    files (`onRecovered` > 0); a symlinked recovered ref -> `null`; a packed recovered ref is still counted;
+  - TW4-b: after a D6 self-heal reset, the new recovered ref contributes 0;
+  - TW4-c: after a D27 self-heal merge (held code kept on the branch), the count equals HEAD's non-KB files vs `T`.
+- Unit (`test/kb-sync-held-copy.test.ts`): every V6 string verbatim, singular and plural, each audience and route
+  state (available, no route, transient), the `{ownerLabel}` fallback.
+- Unit (`test/project-setup-card.test.tsx`): Owner and member render the right string; n = 0 / null / `repoStatus` not
+  `ready` / `needsReconnect` render no held notice; `{n}` outside 1..10000 or non-integer renders nothing; an
+  `ownerLabel` of `<img src=x onerror=alert(1)>` renders as literal text; the member notice holds no path or message
+  text.
+- Unit (`test/cc-github-push.test.ts`): the predicate per runner (legacy always; cc flag, entitlement, installation and
+  persona); a flag timeout returns the transient result within its deadline; it never calls the flag writer or the
+  default-branch lookup; it uses the viewer's `userId` (Owner flag on, member flag off -> the member's no-route
+  string).
+- Unit (KB notice and team icon, V6(5)/(6)): `lib/kb-workspace-sync-notice.ts` returns the V6 `detail`; in
+  `test/conversation-names-settings.test.tsx`, a `workspace_sync: "pending"` upload shows the V6 pending string, a 409
+  shows the V6 409 string, and any other failure shows "Upload failed. Please try again.".
+- Census (`test/kb-sync-held-readers-census.test.ts`, multi-line aware): the exact reader set of the held columns and of
+  `repo_last_synced_at`; select strings checked against migration 187's columns; `current-repo-url.ts` names no held
+  column.
+- Migration (`test/supabase-migrations/187-...test.ts`): the AC21 shape; `supabase/verify/187_...sql` for the
+  privileges and the RPC.
+
+#### QA flow (Playwright, `e2e/settings-kb-sync-held.e2e.ts`, dev project only)
+
+Seed (dev Supabase, test fixture, never production, after the D29(2) dev apply): one team workspace with a ready
+connected repo, `repo_last_synced_at` set, `kb_sync_held_files = 3`; an Owner account and a member account of that
+workspace. Each step waits for the rendered held copy, not for the request.
+
+1. Owner signs in, opens `/dashboard/settings`. The Project card shows the repo name, "Connected", "Updated from
+   GitHub: {date}" (no "Last synced"), and the notice "3 changed code files are not on your repository's main branch
+   yet. Nothing is lost: the changes stay in your workspace. To publish them, ask your agent to push them to a new
+   branch and approve the push, then open a pull request for that branch on GitHub and merge it. If you already did,
+   this notice clears once the merge reaches your workspace." when the route predicate is true for the seeded
+   workspace, else the V6 no-route Owner string. No new button; Disconnect is unchanged.
+2. Member signs in, opens `/dashboard/settings`. The read-only card shows "managed by {org}", no date, and "3 changed
+   code files are not on the repository's main branch yet. Nothing is lost: the changes stay in the workspace. To
+   publish them, ask your agent to push them to a new branch, then ask {org} to approve the push and merge the branch
+   on GitHub. If this was already done, this notice clears once the merge reaches the workspace." (or the V6 no-route
+   member string). No file names anywhere on the page.
+3. Seed `kb_sync_held_files = 1`: both see the singular strings. Seed `0`, then `null`: neither sees a notice; the
+   Owner still sees "Updated from GitHub".
+4. Screenshot each state at desktop and 375 px width for the PR (compared with the W7 wireframe at
+   `knowledge-base/product/design/settings/kb-sync-held-commits.pen`).
+
+#### Research Insights (deepen 2026-11-17)
+
+Adds TX1-h (D26(6)), TX1-i..m (D26(2), D26(5), D25(1), D25(8), D25(7)), the TX2 env set (D26(6)), TX4-c/d (D26(6)),
+TX5 (X5; referenced by Phase 9 and AC16 but not written before), TX5-b (D26(7)), TX6-a..f (D28), TW1-b (D29(3)),
+TW3-b (D29(7)) and the TW4 split (D29(8)). Replaced TX2's "the #12600 side-branch fetch" (deleted by D5(d)), TX1-a's
+test seam (a vacuous RED), TX1-e's single row, TX4-b's "skip" wording, TW2's write-on-change rows, TW4 (unreachable after
+D6) and the V5 strings in the copy rows and the QA flow (V6).

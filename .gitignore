@@ -23,6 +23,10 @@ target
 .DS_Store
 *.log
 node_modules/
+# No trailing slash: a worktree can carry node_modules as a SYMLINK to a sibling
+# worktree, and `node_modules/` matches directories only, so the link showed as
+# `??` and cleanup-merged kept a merged worktree as "uncommitted" (2026-11-18).
+node_modules
 __pycache__/
 *.pyc
 .codex/*
