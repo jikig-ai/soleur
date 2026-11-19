@@ -13,7 +13,7 @@ Disposition: (a) bound mis-seed → re-seed (bimodal latency; see plan Evidence)
 - [x] 1.2 Same file: add a `# ROW SEED` provenance comment block in the
   dated-notes header area (after the 2026-11-17 oracle seed block), field
   shape per that block: measurement timestamp, per-surface `n`, `p90`,
-  `duration_p90`, the sentinel sha of the measurement script, and the
+  `duration_p90`, the flagged-set sentinel sha (`drift=<sha1>`), and the
   one-line bimodal finding (slow mode = `tenant-integration` suite
   needs-chain wait, not queue congestion).
 - [x] 1.3 Append a dated measured-history bullet to

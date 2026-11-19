@@ -28,15 +28,17 @@
   samples at 11-76s vs 3 at 915-970s (2026-11-18T14:52/14:56/23:08Z); the
   slow mode is the heavy `tenant-integration` suite's own duration
   (~835-910s, `timeout-minutes: 19`) on isolation-surface PRs, with
-  sibling checks on the same runs ≤478s — needs-chain wait, not queue
-  congestion. duration_p90=21s. Rejects the brief's (b) transient-tail
+  independent sibling checks on the same runs ≤~355s (needs-chain
+  umbrellas higher, within their own bounds) — needs-chain wait, not
+  queue congestion. duration_p90=21s. Rejects the brief's (b) transient-tail
   and (c) systemic-regression arms; the 2026-11-13 ~900s breach was the
   same mode.
 - No `Closes #12755` — binding prior CTO ruling from the oracle slice
   (standing tracker; `Ref #12755` only).
 - 4 NOSAMPLE classes recorded: 3 earlier-batch check associations + 1
-  suite-`cancelled` mutex eviction (documented accepted residual —
-  record-only, no new issue).
+  suite-`cancelled` mid-flight, trigger unattributed (the job was
+  executing, so not the documented pending-entry eviction arm;
+  documented accepted residual — record-only, no new issue).
 - #12905 named complementary (narrows the suite's test set; may shorten
   the slow mode; does not bear on queue wait or the bound's coverage
   requirement).
