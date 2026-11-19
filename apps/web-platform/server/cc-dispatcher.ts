@@ -295,6 +295,21 @@ const log = createChildLogger("cc-dispatcher");
 // on an expired token. Mirrors the cron's TOKEN_MIN_LIFETIME_MS (~60 min).
 const GH_TOKEN_MIN_LIFETIME_MS = 60 * 60 * 1000;
 
+// #12910 (CTO ruling Q5) — `.git` open() errnos that say "this process is short
+// of descriptors / memory, or the IO blipped", not "this `.git` is a strand".
+// The post-heal self-stop skips a kind-`other` shape carrying one of these BEFORE
+// reportAgentReadinessSelfStop, so the blip neither reports a false strand nor
+// spends the per-process dedupe slot a real strand (ELOOP / EACCES / EPERM / a
+// fifo) for the same workspace needs. An unknown errno still emits.
+const TRANSIENT_GIT_OPEN_ERRNOS: ReadonlySet<string> = new Set([
+  "EMFILE",
+  "ENFILE",
+  "EIO",
+  "EAGAIN",
+  "EINTR",
+  "ENOMEM",
+]);
+
 // Non-routable internal leader id reserved for cc-soleur-go path
 // audit-log attribution. Used by `createCanUseTool` (R-AC14), the WS
 // `stream`/`tool_use` events emitted from `dispatchSoleurGo`, and the
@@ -2680,7 +2695,8 @@ export const realSdkQueryFactory: QueryFactory = async (
     // than dir-valid: a `.git` FILE whose `gitdir:` escapes the workspace or cannot
     // be read (isStrandingFilePointer; host `rev-parse` follows an escaping pointer,
     // but the agent's in-bwrap rev-parse cannot read sibling workspaces), and a
-    // `.git` of kind `other` (symlink, EACCES, fifo). Emit only, never a block. It
+    // `.git` of kind `other` (symlink, EACCES, fifo; a transient open() errno in
+    // TRANSIENT_GIT_OPEN_ERRNOS is skipped, see there). Emit only, never a block. It
     // is a re-probe AFTER the heal and the dispatch clone, so a shape the heal
     // fixed is not reported (the false `gitKind=absent` stop of #12910); an absent
     // or corrupt `.git` that survives the heal is the post-heal gate's to emit and
@@ -2691,7 +2707,14 @@ export const realSdkQueryFactory: QueryFactory = async (
     // the post-heal absent emit.
     if (mode.runRepoLifecycle && confirmDbReady && repoUrl) {
       const postHealShape = probeGitWorktreeShape(workspacePath);
-      if (isStrandingFilePointer(postHealShape) || postHealShape.kind === "other") {
+      const transientOpenError =
+        postHealShape.kind === "other" &&
+        postHealShape.errno !== undefined &&
+        TRANSIENT_GIT_OPEN_ERRNOS.has(postHealShape.errno);
+      if (
+        !transientOpenError &&
+        (isStrandingFilePointer(postHealShape) || postHealShape.kind === "other")
+      ) {
         reportAgentReadinessSelfStop({
           userId: args.userId,
           activeWorkspaceId,

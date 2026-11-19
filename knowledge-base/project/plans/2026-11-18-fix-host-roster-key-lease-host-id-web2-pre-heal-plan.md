@@ -172,7 +172,7 @@ Re-run the read-only roster check from Phase 5 and record the boolean output in 
     - A replaced host re-acquires its predecessor's leases at the same generation. That is safe only because `hcloud_server.web` has no `create_before_destroy` (pinned by Guard 2).
 - `server/index.ts`, at boot next to `startProxyListenerReporter`, adds three lines:
   - one pino `warn` line, `host_identity source=<enum>`, carrying the enum only, never the id;
-  - when `NODE_ENV=production`, the private IP is non-empty and the source is not `web-host-key`, one `reportSilentFallback` (`feature: "host_identity"`, `op: "resolveHostId.key-fallback"`, `extra: { source }`).
+  - in the prod container (`SOLEUR_PROXY_BIND=0.0.0.0`, review amendment: an empty private IP included, since a late NIC is one of the causes) when the source is not `web-host-key`, one `reportSilentFallback` (`feature: "host_identity"`, `op: "resolveHostId.key-fallback"`, `extra: { source }`).
 - `server/session-router.ts`: rewrite the roster doc comment. The roster maps the `var.web_hosts` key (= `resolveHostId()`) to the private-net address.
 - Tests (vitest, one file at a time):
   - `test/host-identity.test.ts`, covering each `source`:
@@ -209,7 +209,8 @@ Re-run the read-only roster check from Phase 5 and record the boolean output in 
 - One `log_host_key` helper with a single `logger` call emits exactly one closed-grammar line per deploy:
   - `host_key resolved=<key>`;
   - `host_key fallback reason=<metadata_unreachable|name_unmapped|name_reserved|key_malformed>`;
-  - `host_key abort reason=<key_change|key_lost|inspect_failed>[ running=<key>]` (review amendment, CTO ruling T3a; `fallback` and `abort` are verbs, never a key value).
+  - `host_key abort reason=<key_change|key_lost|inspect_failed|key_unverifiable>[ running=<key>][ new=<key>][ cause=<fallback reason>]` (review amendments, CTO rulings T3a and round-2 Q1; `fallback` and `abort` are verbs, never a key value). `new=` rides on `key_change`, `cause=` on `key_lost`.
+  - Review round 2 (CTO Q1): after the env-file is final and before the canary, the next prod container's env is checked with the same verification rule; a running verified key the next container could not verify aborts `key_unverifiable`. The shell check mirrors the verification RULE over the container env, not the running app's own decision (Q6), so an old image under the new script can abort `key_lost` once; a re-run recovers it.
   It never prints the raw hostname.
 - `infra/lib/docker-run-tuple.py`: `SOLEUR_HOST_KEY` needs a per-surface value, so add it to the `IDENTITY_PROD_ENV` (`{"$HOST_KEY"}`) / `IDENTITY_CANARY_ENV` (empty) pair, not `_COMMON_ENV`. The first-boot tuple (`IDENTITY_FIRST_BOOT_ENV`) is unchanged (see Non-Goals). This file is a test-time checker and is not delivered to hosts.
 - Tests:
@@ -218,7 +219,7 @@ Re-run the read-only roster check from Phase 5 and record the boolean output in 
   - `infra/ci-deploy.test.sh`: unit-test `resolve_host_key` with a `file://` fixture URL under `mktemp -d` in `/var/tmp`.
     - `soleur-web-platform` gives `web-1`, and `soleur-web-2` gives `web-2`.
     - `soleur-web-1`, `inngest-host`, an empty file, `soleur-Web_2` and a dead URL each give rc 1.
-    - Stickiness, with a stubbed `docker inspect`: running key `web-2` and new key `web-2` continue; running key `web-2` and new key empty abort with `reason=key_change`; no running key and new key empty continue.
+    - Stickiness, with a stubbed `docker inspect`: running key `web-2` and new key `web-2` continue; running key `web-2` and new key empty abort with `reason=key_lost`; no running key and new key empty continue.
 
 ### Phase 3 — The gate tests the runtime shape (`infra/lb-weight-gate.sh` A.3)
 
@@ -393,19 +394,19 @@ The Hetzner metadata service is free and already used by `resolve_host_id`.
 
 ```yaml
 liveness_signal:
-  what: "one `host_key resolved=<key|fallback|abort>` journald line per deploy (ci-deploy.sh log_host_key, LOG_TAG) and one `host_identity source=<enum>` pino line per container boot (server/index.ts)"
+  what: "one `host_key resolved=<key>` / `host_key fallback reason=<token>` / `host_key abort reason=<token>` journald line per deploy (ci-deploy.sh log_host_key, LOG_TAG) and one `host_identity source=<enum>` pino line per container boot (server/index.ts)"
   cadence: "per deploy and per container boot"
   alert_target: "Sentry web-platform issue on a production fallback (feature host_identity, op resolveHostId.key-fallback, extra.source); the existing control_plane_route owner-unresolved Sentry issue"
   configured_in: "apps/web-platform/infra/ci-deploy.sh (log_host_key, called once after resolve_host_key); apps/web-platform/server/index.ts (boot, next to startProxyListenerReporter)"
 error_reporting:
   destination: "Sentry web-platform via SENTRY_DSN (reportSilentFallback)"
-  fail_loud: "resolveHostId.key-fallback with extra.source key-absent/key-malformed/key-unverified; resolveSessionRoute.owner-unresolved (extra ownerHostId + myHostId, already on main); deploy exit 1 with host_key resolved=abort reason=key_change; lb-weight-gate gate_fail sub_condition=A_web_hosts_absent / A_roster_key_not_web_host / A_roster_addr_mismatch / A_rotation_member_not_in_roster"
+  fail_loud: "resolveHostId.key-fallback with extra.source key-absent/key-malformed/key-unverified; resolveSessionRoute.owner-unresolved (extra ownerHostId + myHostId, already on main); deploy exit 1 with host_key abort reason=<key_change|key_lost|inspect_failed|key_unverifiable>; lb-weight-gate gate_fail sub_condition=A_web_hosts_absent / A_roster_key_not_web_host / A_roster_addr_mismatch / A_rotation_member_not_in_roster"
 failure_modes:
   - mode: "metadata hostname unreachable or unmapped on first rollout, so the placement id stays hetzner-<id>"
     detection: "deploy line `host_key fallback reason=<token>` plus the boot Sentry event resolveHostId.key-fallback source=key-absent, both from the affected host"
     alert_route: "Sentry issue to the operator; Phase 7 step 2 stops before any serve"
   - mode: "metadata flips on a later deploy for a host already keyed"
-    detection: "deploy exits 1 before the canary with `host_key abort reason=key_change` (or `key_lost`, `inspect_failed`); web-platform-release run fails"
+    detection: "deploy exits 1 before the canary with `host_key abort reason=key_change` (or `key_lost`, `inspect_failed`, `key_unverifiable`); web-platform-release run fails"
     alert_route: "GitHub Actions run failure"
   - mode: "a key that does not verify against the host's own private IP (wrong hostname, wrong roster, mis-set env)"
     detection: "boot Sentry event resolveHostId.key-fallback source=key-unverified"
@@ -628,7 +629,7 @@ Run each file alone. The full suite is not run on this saturated machine.
 2. Open a revert PR (`gh pr create --fill` on a revert branch) and merge it with the same `with_lock merge-main` command.
 3. After the revert's pipeline-fix apply succeeds, run the same T9 redeploy, under the same deploy go-ahead rule, and verify `DEPLOY_SCRIPT_SHA` again.
 
-Placement ids return to `hetzner-<id>`. Live leases taken under `web-<n>` then refuse acquires for up to 240 s, once. Do not roll back the image alone: an old image under the new script ignores `SOLEUR_HOST_KEY`, which is harmless, but the T3 abort would then compare against containers carrying no key and never fire. Reverting both together keeps the record consistent.
+Placement ids return to `hetzner-<id>`. Live leases taken under `web-<n>` then refuse acquires for up to 240 s, once. Do not roll back the image alone: an old image under the new script ignores `SOLEUR_HOST_KEY` and places leases under `hetzner-<id>`, but its container env still carries the key, so the sticky check pins to a key the running app never used and a later metadata outage aborts `key_lost` (a re-run after recovery succeeds). Reverting both together keeps the record consistent.
 
 ## Risks
 

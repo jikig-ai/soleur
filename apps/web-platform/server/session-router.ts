@@ -95,9 +95,15 @@ export async function resolveSessionRoute(params: {
     return { decision: "owner-unresolved", ownerHostId: holder.hostId };
   }
   // The roster maps the owner to OUR OWN address: this host is the owner under an
-  // id it no longer resolves to (#12910: a fallback off its verified key, or a
-  // revert, while a lease outlived the old container's drain). Proxying would
+  // id it no longer resolves to (#12910: a fallback off its verified key while a
+  // lease taken under that key outlived the old container's drain). Proxying would
   // relay the socket to ourselves and read as a healthy route; say what it is.
+  // This guard applies only WHEN THIS HOST KNOWS ITS PRIVATE IP: with a null IP
+  // (unset / empty / `0.0.0.0`) it never matches and a self-owned lease still
+  // routes as `proxy` (pinned in session-router.test.ts, CTO ruling Q2). That
+  // null-IP prod case is covered upstream instead: ci-deploy.sh refuses to
+  // canary a host whose key is `key_unverifiable`, and the boot fallback Sentry
+  // report (`resolveHostId.key-fallback`, server/index.ts) fires on the fallback.
   if (ownerAddress === readHostPrivateIp()) {
     reportSilentFallback(
       new Error(

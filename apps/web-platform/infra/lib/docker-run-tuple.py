@@ -123,12 +123,15 @@ EXEC_FORWARD_PORT = "8445"
 EXEC_FORWARD_PUBLISH = "${RELAY_PUBLISH_BIND:-127.0.0.1}:%s:%s" % (EXEC_FORWARD_PORT, EXEC_FORWARD_PORT)
 # #12910: the lease placement key (the var.web_hosts key ci-deploy.sh resolves from the metadata hostname) travels the same
 # way: $HOST_KEY on prod, a literal EMPTY on the canary (T10: the canary must never place a lease under the prod key). The
-# first-boot tuple carries neither SOLEUR_HOST_KEY nor SOLEUR_HOST_ID (_COMMON_ENV is not on it), so in production that
-# container's resolveHostId() THROWS at the first lease (boot line `host_identity source=unresolved`, an expected state)
-# until the first ci-deploy re-asserts the tuple. Pre-existing since #5818; tracked as #12981, not changed here.
+# first-boot tuple carries a literal EMPTY SOLEUR_HOST_KEY too (#12910 round-2 CTO ruling Q3: it is the one start that
+# would otherwise read a Doppler --env-file key, which the T3a sticky check would then pin), never the templated
+# ${web_host_key} (a terraform-vs-metadata mismatch would abort every deploy key_change), and no SOLEUR_HOST_ID
+# (_COMMON_ENV is not on it), so in production that container's resolveHostId() THROWS at the first lease (boot line
+# `host_identity source=unresolved`, an expected state) until the first ci-deploy re-asserts the tuple. The missing
+# SOLEUR_HOST_ID is pre-existing since #5818; tracked as #12981.
 IDENTITY_PROD_ENV = {"SOLEUR_HOST_PRIVATE_IP": {"$PROXY_BIND"}, "SOLEUR_HOST_KEY": {"$HOST_KEY"}}
 IDENTITY_CANARY_ENV = {"SOLEUR_HOST_PRIVATE_IP": {""}, "SOLEUR_HOST_KEY": {""}}
-IDENTITY_FIRST_BOOT_ENV = {"SOLEUR_HOST_PRIVATE_IP": {"${private_ip}"}}
+IDENTITY_FIRST_BOOT_ENV = {"SOLEUR_HOST_PRIVATE_IP": {"${private_ip}"}, "SOLEUR_HOST_KEY": {""}}
 _VOLS = {"/mnt/data/workspaces:/workspaces", "/mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro", INNGEST_CA_VOL}
 # Scalar options a start must CARRY (MISSING_DECLARED); their allowed VALUES are checked separately. The memory cap and
 # --init are required on the two deploy starts only: ADR-062 scopes them to ci-deploy.sh's two blocks, and the

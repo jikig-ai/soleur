@@ -3251,6 +3251,40 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       expect((calls[0][1] as { tags: Record<string, string> }).tags).toMatchObject({ gitKind: "file-pointer" });
     });
 
+    it("(g) a post-heal CONTAINED pointer (gitdirEscapesWorkspace=false, a ready shape) emits NO self-stop", async () => {
+      gitShapeOverride.probe = [{ kind: "file-pointer", gitdirEscapesWorkspace: false }];
+      mockReportSilentFallback.mockClear();
+      mockQuery.mockClear();
+      await realSdkQueryFactory(makeArgs());
+      expect(selfStops()).toHaveLength(0);
+      expect(mockQuery).toHaveBeenCalledOnce();
+    });
+
+    // CTO ruling Q5 — a transient open() errno (EMFILE...) is a process blip, not a strand.
+    it("(h) other+EMFILE emits NO self-stop; a later other+ELOOP for the same user/workspace then emits (the blip spent no dedupe slot)", async () => {
+      gitShapeOverride.probe = [{ kind: "other", errno: "EMFILE" }];
+      mockReportSilentFallback.mockClear();
+      await realSdkQueryFactory(makeArgs());
+      expect(selfStops()).toHaveLength(0);
+
+      // Same process, same dedupe set, same makeArgs() user/workspace, same gitKind.
+      gitShapeOverride.probe = [{ kind: "other", errno: "ELOOP" }];
+      mockReportSilentFallback.mockClear();
+      await realSdkQueryFactory(makeArgs());
+      const calls = selfStops();
+      expect(calls).toHaveLength(1);
+      expect((calls[0][1] as { tags: Record<string, string> }).tags).toMatchObject({ gitKind: "other" });
+    });
+
+    it("(i) other+EACCES (a structural permission strand, not transient) emits once", async () => {
+      gitShapeOverride.probe = [{ kind: "other", errno: "EACCES" }];
+      mockReportSilentFallback.mockClear();
+      await realSdkQueryFactory(makeArgs());
+      const calls = selfStops();
+      expect(calls).toHaveLength(1);
+      expect((calls[0][1] as { tags: Record<string, string> }).tags).toMatchObject({ gitKind: "other" });
+    });
+
     it("(c) a post-heal ESCAPING file-pointer emits exactly once with gitKind=file-pointer, gitdirEscapesWorkspace=true", async () => {
       const ptr = { kind: "file-pointer", gitdirEscapesWorkspace: true };
       gitShapeOverride.probe = [ptr];

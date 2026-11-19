@@ -210,7 +210,7 @@ eq "parity: every workflow WEB_HOST_PRIVATE_IP copy is the jump host's address, 
 count_lit() { # count_lit <ERE>
   (cd "$ROOT" && git ls-files -z -- ':!knowledge-base/**' ':!*.md' ":!$SELF_REL" | xargs -0 grep -ohE "$1" 2>/dev/null | wc -l | tr -d ' ')
 }
-IP_CEIL=318  # re-baselined at the origin/main merge (f6c475f15b): +9 from main's placement-decision-forward-9137 follow-through test (+43 at 4aadbe8109), none from this PR
+IP_CEIL=317  # re-baselined at the origin/main merge (f6c475f15b): +9 from main's placement-decision-forward-9137 follow-through test (+43 at 4aadbe8109); -1 at #12910 review round 2 (measured 317)
 N_IP="$(count_lit '10\.0\.1\.10([^0-9]|$)')"
 cases=$((cases + 1))
 if [[ "$N_IP" -le "$IP_CEIL" && "$N_IP" -gt 0 ]]; then pass "ratchet: web-1 private-IP literal count $N_IP <= $IP_CEIL"; else fail "ratchet: web-1 private-IP literal count $N_IP exceeds the ceiling $IP_CEIL (or reads 0 - lower the ceiling to 0 deliberately)"; fi
@@ -247,7 +247,7 @@ eq "census C7: one committed SSH host-key pin per var.web_hosts key ($N_KEYS key
 # ── C8 (#12910): placement-id parity. The lease host_id is the var.web_hosts key ci-deploy.sh derives
 # from the metadata hostname by inverting server.tf's name expression. For EVERY committed key, the
 # name server.tf assigns must round-trip through the real resolve_host_key body back to that key (and no
-# key line may be skipped by the census grep); the four key regexes must be one regex; and hcloud_server.web must not create its replacement before
+# key line may be skipped by the census grep); the five key regexes must be one regex; and hcloud_server.web must not create its replacement before
 # destroying the old host (a replacement re-acquires its predecessor's leases at the same generation,
 # safe only because the two never run at once). ──
 SRV_WEB="$(block "$SRV" 'resource "hcloud_server" "web" {')"
@@ -286,8 +286,10 @@ RE_TS="$(grep -oE '^export const HOST_KEY_RE = /\^[^/]+\$/;$' "$ROOT/apps/web-pl
 RE_GATE="$(grep -E 'fail "TOP_gated_host_malformed"' "$DIR/lb-weight-gate.sh" | grep -oE '=~ \^[^ ]+\$ \]\]' | sed -E 's/^=~ //; s/ \]\]$//')"
 RE_DEPLOY="$(awk '/^resolve_host_key\(\) \{/,/^\}/' "$DIR/ci-deploy.sh" | grep -oE '=~ \^[^ ]+\$ \]\]' | sed -E 's/^=~ //; s/ \]\]$//')"
 RE_MARKER="$(awk '/^derive_web_hosts\(\) \{/,/^\}/' "$DIR/lb-weight-gate-with-marker.sh" | grep -oE '\\"\(\[a-z\][^)]*\)\\"' | sed -E 's/^\\"\((.*)\)\\"$/^\1$/')"
-ok "census C8: the four key regexes are one regex (host-identity.ts = lb-weight-gate.sh = ci-deploy.sh = derive_web_hosts) [$RE_TS]" \
-  "$([[ -n "$RE_TS" && "$RE_TS" == "$RE_GATE" && "$RE_TS" == "$RE_DEPLOY" && "$RE_TS" == "$RE_MARKER" ]]; echo $?)"
+# The fifth copy: the jq verifier that mirrors describeHostIdentity for the T3a sticky check.
+RE_JQ="$(awk '/^host_key_running_verified\(\) \{/,/^\}/' "$DIR/ci-deploy.sh" | grep -oE '\(\$k \| test\("\^[^"]+\$"\)\)' | sed -E 's/^\(\$k \| test\("(.*)"\)\)$/\1/')"
+ok "census C8: the five key regexes are one regex (host-identity.ts = lb-weight-gate.sh = ci-deploy.sh resolve_host_key = derive_web_hosts = the host_key_running_verified jq) [$RE_TS]" \
+  "$([[ -n "$RE_TS" && "$RE_TS" == "$RE_GATE" && "$RE_TS" == "$RE_DEPLOY" && "$RE_TS" == "$RE_MARKER" && "$RE_TS" == "$RE_JQ" ]]; echo $?)"
 C8_LC="$(python3 - "$SRV" <<'PYEOF'
 import sys
 lines = open(sys.argv[1]).read().split("\n")
@@ -307,11 +309,11 @@ PYEOF
 )"
 ok "census C8: hcloud_server.web has a lifecycle block and it carries no create_before_destroy" \
   "$([[ "$C8_LC" == LIFECYCLE_BLOCKS=1* ]] && ! grep -q 'create_before_destroy' <<<"$C8_LC"; echo $?)"
-unset C8_LC RE_TS RE_GATE RE_DEPLOY RE_MARKER C8_LINES C8_KEYS C8_N C8_BAD C8_SPECIAL C8_SPECIAL_NAME C8_PRE C8_SUF SRV_WEB NAME_EXPR NAME_RE
+unset C8_LC RE_TS RE_GATE RE_DEPLOY RE_MARKER RE_JQ C8_LINES C8_KEYS C8_N C8_BAD C8_SPECIAL C8_SPECIAL_NAME C8_PRE C8_SUF SRV_WEB NAME_EXPR NAME_RE
 ok "census: the doc names all eight rows" "$([[ "$(grep -cE '^\| C[1-8] \|' "$CENSUS")" -eq 8 ]]; echo $?)"
 
 # ── Anti-vacuity floor ────────────────────────────────────────────────────────────────────────
-MIN_CASES=58  # #12910: +8 C8 checks (name shape, extraction, key floor, every-line census, round-trip, special-key negative, four-regex parity, lifecycle); floor re-measured 42 -> 58
+MIN_CASES=58  # #12910: +16 (C8: name shape, extraction, key floor, every-line census, round-trip, special-key negative, five-regex parity, lifecycle, and their siblings); floor re-measured 42 -> 58
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf 'web-hosts-generic: FAIL (only %d assertions ran; floor %d - the suite may have been truncated)\n' "$cases" "$MIN_CASES" >&2
   exit 1

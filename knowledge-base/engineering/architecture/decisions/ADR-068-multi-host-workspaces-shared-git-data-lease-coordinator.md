@@ -1620,17 +1620,25 @@ while the serve gate passed the roster. (§2's 120 s liveness figure is supersed
   `host_identity source=<enum>`, and the prod container (not the canary or the first-boot one) sends Sentry `host_identity` /
   `resolveHostId.key-fallback` whenever it did not verify, including when a late private NIC left its IP empty. Two live hosts
   cannot share a private IP, so a wrong key can only degrade to the instance id, never to a peer's key. Migration 116's "same
-  host" carve-out therefore now means "same `var.web_hosts` slot" for hosts that verified. The router refuses to proxy a
-  session to its own address (`owner-is-self`), which a host that fell back would otherwise do for its own old-key leases.
+  host" carve-out therefore now means "same `var.web_hosts` slot" for hosts that verified. When this host knows its private
+  IP, the router refuses to proxy a session to its own address (`owner-is-self`), which a host that fell back would otherwise
+  do for its own old-key leases. With a null IP the guard is inert and such a lease is proxied to itself until it expires
+  (up to 240 s). In production that case is covered upstream: ci-deploy refuses a deploy whose next container could not
+  verify the running key (`key_unverifiable`, below), and the boot sends the `resolveHostId.key-fallback` Sentry event.
 - **Stickiness (CTO rulings T3, T3a).** A deploy aborts before the canary when the running prod container had verified a key
   and the new one differs (`key_change`) or is empty (`key_lost`), or when `docker inspect` fails (`inspect_failed`). Only a
-  verified running key pins, so a stray Doppler `SOLEUR_HOST_KEY` or a key the app rejected cannot lock deploys out.
+  verified running key pins, so a stray Doppler `SOLEUR_HOST_KEY` or a key the app rejected cannot lock deploys out. The key
+  string alone is not enough (round-2 CTO ruling Q1): after the env-file is final, ci-deploy puts the next prod container's
+  env through the same verification rule and aborts `key_unverifiable` when it would not verify the running key (a late
+  private NIC, or a Doppler roster that drifted). The shell check mirrors the verification RULE over the running env, not the
+  running app's own decision, so an old image under the new script can abort `key_lost` once; a re-run recovers it.
 - **Generation carry across a replace.** A replaced host re-acquires its predecessor's live leases at the same generation. That
   rests on the two never running at once: Terraform's default destroy-before-create for `hcloud_server.web` (no
-  `create_before_destroy`, pinned by `web-hosts-generic.test.sh` C8 with the name round-trip and the four key regexes), plus
-  Hetzner's per-project unique server names and per-network unique private IPs. A replace in practice flips the id twice: the
-  cloud-init first-boot container carries no key and no `SOLEUR_HOST_ID` (in production its first lease throws, boot line
-  `source=unresolved`) until the host's first ci-deploy, which then writes `web-<n>`.
+  `create_before_destroy`, pinned by `web-hosts-generic.test.sh` C8 with the name round-trip and the five key regexes), plus
+  Hetzner's per-project unique server names and per-network unique private IPs. A replace does not change the id; it leaves a
+  gap. The cloud-init first-boot container has no usable id: it runs with an empty `-e SOLEUR_HOST_KEY=` (round-2 CTO ruling
+  Q3, so a Doppler key cannot reach it) and no `SOLEUR_HOST_ID`. In production its first lease throws and its boot line reads
+  `source=unresolved`. That lasts until the host's first ci-deploy writes `web-<n>` again.
 - **ADR-143 D5 precondition.** A volume-preserving reprovision must stop the app before the detach (stricter than D5's
   write-quiesce), so the old host's leases are released (tombstoned) rather than carried by a host that is still writing.
 - **The gate.** `lb-weight-gate.sh` A.3 checks the roster against the committed `var.web_hosts` default whenever web-2 is being
@@ -1639,8 +1647,9 @@ while the serve gate passed the roster. (§2's 120 s liveness figure is supersed
   branch, and it checks configuration, not which key a running host actually wrote (that is the deploy and boot lines).
 - **Transition cost.** On the first rollout, a worktree whose lease outlived the old container's SIGTERM drain stays live under
   `hetzner-<id>` for up to 240 s: the router closes its socket with 4014 (`owner-unresolved`) and the acquire is refused, then a
-  generation-bumped takeover follows. On a revert the same lease, live under `web-<n>`, is refused as `owner-is-self`. Leases the
-  drain released are unaffected.
+  generation-bumped takeover follows. A revert deletes the `owner-is-self` guard along with the key, so on a revert the same
+  lease, live under `web-<n>` (a roster key at this host's own IP), is proxied to this host's own address until it expires (up
+  to 240 s). Leases the drain released are unaffected.
 
 Rejected options are recorded in
 [decision-challenges.md](../../../project/specs/feat-one-shot-12910-host-roster-lease-id/decision-challenges.md).

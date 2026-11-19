@@ -75,8 +75,9 @@ export function describeHostIdentity(
   if (id) return { id, source };
   if (env.NODE_ENV === "production") {
     throw new Error(
-      "SOLEUR_HOST_ID is unset in production — the worktree write-lease requires " +
-        "a host-stable infra id (the Hetzner server id injected at deploy). " +
+      "Neither a verified SOLEUR_HOST_KEY nor SOLEUR_HOST_ID is usable in production — " +
+        "the worktree write-lease requires a host-stable infra id (the roster-verified " +
+        "var.web_hosts key, else the hetzner-<n> id injected at deploy). " +
         "Refusing to fall back to a per-container hostname: that would self-lock " +
         "each recreate-deploy out of its own worktree for up to 240s.",
     );
@@ -152,9 +153,10 @@ export function resolveHostId(): string {
 /**
  * Guard the cross-tenant boundary at the lease call site: a host_id must NEVER
  * be a user id. Throws if `hostId` equals `userId`, or if `hostId` is UUID-shaped
- * (host ids are integer/hex, never UUIDs — a UUID means it was wrongly sourced
- * from `auth.uid()`). The DSAR exclusion (the lease table is operational state,
- * not personal data) depends on this invariant.
+ * (host ids are a `var.web_hosts` key `web-<n>`, `hetzner-<n>`, `machine-<12 hex>`
+ * or `dev-local`, never UUIDs — a UUID means it was wrongly sourced from
+ * `auth.uid()`). The DSAR exclusion (the lease table is operational state, not
+ * personal data) depends on this invariant.
  */
 export function assertHostIdNotUserId(hostId: string, userId: string): void {
   if (hostId === userId) {
@@ -165,8 +167,9 @@ export function assertHostIdNotUserId(hostId: string, userId: string): void {
   }
   if (UUID_RE.test(hostId)) {
     throw new Error(
-      `host_id is UUID-shaped ('${hostId}') — host ids are Hetzner integer / ` +
-        "machine-id hex, never a UUID; a UUID here means it was sourced from a user id.",
+      `host_id is UUID-shaped ('${hostId}') — host ids are web-<n> (var.web_hosts key), ` +
+        "hetzner-<n>, machine-<12 hex> or dev-local, never a UUID; a UUID here means it " +
+        "was sourced from a user id.",
     );
   }
 }

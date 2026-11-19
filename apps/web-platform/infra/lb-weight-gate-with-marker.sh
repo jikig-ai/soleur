@@ -118,7 +118,7 @@ unset SOLEUR_WEB_HOSTS # seam:unset-caller-web-hosts
 # blank, or a `#` comment: anything else (an unquoted key, a multi-line entry), a duplicate key or zero
 # hosts leaves the value UNSET, which the gate refuses as A_web_hosts_absent (never an empty pass, and
 # never a silently skipped host that the gate would then blame on the Doppler roster). The key regex is
-# the fourth copy of the var.web_hosts key shape; web-hosts-generic.test.sh C8 pins all four equal.
+# one of five copies of the var.web_hosts key shape; web-hosts-generic.test.sh C8 pins all five equal.
 derive_web_hosts() {
   local f="${SELF_DIR}/variables.tf" line key ip out='{}'
   [[ -r "$f" ]] || return 1

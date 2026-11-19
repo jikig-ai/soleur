@@ -92,6 +92,45 @@ describe("resolveSessionRoute — user-sticky placement", () => {
     );
   });
 
+  // Owner-is-self guard mutants (#12910 review): the guard must compare the OWNER's
+  // address to OUR address, not merely check that we know an address, nor that our
+  // address appears anywhere in the roster.
+  test("a KNOWN private IP that differs from the owner's address still proxies (kills `ip !== null` mutant)", async () => {
+    vi.stubEnv("SOLEUR_HOST_ROSTER", JSON.stringify({ [HOST_2]: "10.0.1.12" }));
+    vi.stubEnv("SOLEUR_HOST_PRIVATE_IP", "10.0.1.11");
+    readHolderMock.mockResolvedValue(holder(HOST_2));
+    const r = await resolveSessionRoute({ workspaceId: WS, userId: USER_A, myHostId: HOST_1 });
+    expect(r).toEqual({ decision: "proxy", ownerHostId: HOST_2, ownerAddress: "10.0.1.12" });
+    expect(reportSilentFallbackMock).not.toHaveBeenCalled();
+  });
+
+  test("my IP is IN the roster (as my own key) but the owner is a peer → proxy to the peer (kills `my IP ∈ roster values` mutant)", async () => {
+    vi.stubEnv("SOLEUR_HOST_ROSTER", JSON.stringify({ "web-3": "10.0.1.12", "web-2": "10.0.1.11" }));
+    vi.stubEnv("SOLEUR_HOST_PRIVATE_IP", "10.0.1.12");
+    readHolderMock.mockResolvedValue(holder("web-2"));
+    const r = await resolveSessionRoute({ workspaceId: WS, userId: USER_A, myHostId: "web-3" });
+    expect(r).toEqual({ decision: "proxy", ownerHostId: "web-2", ownerAddress: "10.0.1.11" });
+    expect(reportSilentFallbackMock).not.toHaveBeenCalled();
+  });
+
+  // CTO ruling Q2 — PINNED CURRENT BEHAVIOUR, intentional: with no private IP the
+  // owner-is-self guard cannot fire, so a lease this host took under its key
+  // (web-1) while it now resolves to its instance id (hetzner-1) routes as a proxy.
+  // That prod shape is caught upstream (ci-deploy pre-canary key_unverifiable
+  // check + the boot `resolveHostId.key-fallback` Sentry report), not here.
+  test.each(["", "0.0.0.0"])(
+    "null private IP %j: a self-owned lease under the old key still routes as proxy (pinned, CTO Q2)",
+    async (ip) => {
+      vi.stubEnv("SOLEUR_HOST_ROSTER", JSON.stringify({ "web-3": "10.0.1.12" }));
+      vi.stubEnv("SOLEUR_HOST_PRIVATE_IP", ip);
+      vi.stubEnv("SOLEUR_HOST_KEY", "web-3");
+      readHolderMock.mockResolvedValue(holder("web-3"));
+      const r = await resolveSessionRoute({ workspaceId: WS, userId: USER_A, myHostId: "hetzner-1" });
+      expect(r).toEqual({ decision: "proxy", ownerHostId: "web-3", ownerAddress: "10.0.1.12" });
+      expect(reportSilentFallbackMock).not.toHaveBeenCalled();
+    },
+  );
+
   test("keys the lease read on the PER-USER worktree id — two users → distinct keys (D0)", async () => {
     readHolderMock.mockResolvedValue(null);
     await resolveSessionRoute({ workspaceId: WS, userId: USER_A, myHostId: HOST_1 });

@@ -7,6 +7,8 @@ import {
   HOST_KEY_RE,
 } from "@/server/host-identity";
 import verifyCases from "./fixtures/host-key-verify-cases.json";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 beforeEach(() => {
   vi.stubEnv("SOLEUR_HOST_ID", "");
@@ -25,9 +27,9 @@ describe("resolveHostId (host-stable infra id, #5274 Phase 2)", () => {
     expect(resolveHostId()).toBe("12345678");
   });
 
-  it("FAILS LOUD in production when SOLEUR_HOST_ID is unset (no per-container fallback)", () => {
+  it("FAILS LOUD in production when neither a verified key nor SOLEUR_HOST_ID is set (no per-container fallback)", () => {
     vi.stubEnv("NODE_ENV", "production");
-    expect(() => resolveHostId()).toThrow(/SOLEUR_HOST_ID is unset in production/);
+    expect(() => resolveHostId()).toThrow(/Neither a verified SOLEUR_HOST_KEY nor SOLEUR_HOST_ID is usable in production/);
   });
 
   it("returns a stable non-prod sentinel when unset (dev/test), never a per-container value", () => {
@@ -141,7 +143,7 @@ describe("describeHostIdentity (#12910, verified var.web_hosts key)", () => {
   it("production with nothing set still throws the existing error", () => {
     expect(() =>
       describeHostIdentity({ NODE_ENV: "production" } as NodeJS.ProcessEnv),
-    ).toThrow(/SOLEUR_HOST_ID is unset in production/);
+    ).toThrow(/Neither a verified SOLEUR_HOST_KEY nor SOLEUR_HOST_ID is usable in production/);
   });
 
   it("an unverified key with no instance id in production throws, never returns the key", () => {
@@ -149,7 +151,7 @@ describe("describeHostIdentity (#12910, verified var.web_hosts key)", () => {
       describeHostIdentity(
         env({ SOLEUR_HOST_ID: "", SOLEUR_HOST_KEY: "web-2", SOLEUR_HOST_PRIVATE_IP: "10.0.1.12" }),
       ),
-    ).toThrow(/SOLEUR_HOST_ID is unset in production/);
+    ).toThrow(/Neither a verified SOLEUR_HOST_KEY nor SOLEUR_HOST_ID is usable in production/);
   });
 
   it("dev with nothing set gives the dev-local sentinel", () => {
@@ -228,8 +230,34 @@ describe("hostIdentityBootReport (#12910 boot line + Sentry condition)", () => {
     });
   });
 
+  it("a PROD container (proxy bind 0.0.0.0) with no verified key and no SOLEUR_HOST_ID reports unresolved", () => {
+    expect(
+      report({ SOLEUR_HOST_ID: undefined, SOLEUR_HOST_KEY: undefined, SOLEUR_HOST_PRIVATE_IP: "10.0.1.11" }),
+    ).toMatchObject({ source: "unresolved", reportFallback: true });
+  });
+
   it("outside production nothing reports", () => {
     expect(report({ NODE_ENV: "development", SOLEUR_HOST_KEY: "" }).reportFallback).toBe(false);
+  });
+});
+
+// CTO ruling Q4: hostIdentityBootReport's prod discriminator (SOLEUR_PROXY_BIND === "0.0.0.0") is
+// only sound while it is the literal the ci-deploy PROD docker-run tuple sets. Read both as text.
+describe("prod discriminator parity", () => {
+  const read = (rel: string) => readFileSync(join(__dirname, "..", rel), "utf8");
+  it("host-identity.ts's SOLEUR_PROXY_BIND literal equals docker-run-tuple.py RELAY_PROD_ENV's", () => {
+    const ts = read("server/host-identity.ts").match(
+      /env\.SOLEUR_PROXY_BIND\?\.trim\(\) === "([^"]*)"/g,
+    );
+    expect(ts).toHaveLength(1); // exactly one discriminator, so the extraction below is the one in use
+    const tsLiteral = /=== "([^"]*)"/.exec(ts![0])![1];
+    const py = /^RELAY_PROD_ENV = \{[^\n]*?"SOLEUR_PROXY_BIND": \{"([^"]*)"\}/m.exec(
+      read("infra/lib/docker-run-tuple.py"),
+    );
+    expect(py).not.toBeNull();
+    const pyLiteral = py![1];
+    expect(tsLiteral).not.toBe("");
+    expect(tsLiteral).toBe(pyLiteral);
   });
 });
 

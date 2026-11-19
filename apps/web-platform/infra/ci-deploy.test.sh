@@ -1535,6 +1535,11 @@ case "$URL" in
     if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "307"; fi
     exit 0
     ;;
+  *"/metadata/hostname"*)
+    # #12910: MOCK_METADATA_HOSTNAME answers the hostname read (resolve_host_key); unset falls through
+    # to the legacy "OK" body below, which maps to no key (name_unmapped), as every pre-#12910 row expects.
+    if [[ -n "${MOCK_METADATA_HOSTNAME:-}" ]]; then write_body "$MOCK_METADATA_HOSTNAME"; exit 0; fi
+    ;;
   *":9000/hooks/deploy-peer"*)
     # #8743: the fan-out POST target. 202 = the peer ACCEPTED the trigger (the
     # contract fan_out_to_peers reads). MOCK_CURL_DEPLOY_PEER_CODE overrides for
@@ -13415,8 +13420,9 @@ unset -f pe_deploy pe_line pe_probe_lines pe_row pe_resolve pe_js 2>/dev/null ||
 echo "--- #12910 HK: resolve_host_key / host_key_sticky_check ---"
 HK_DIR="$(mktemp -d "${TMPDIR:-/var/tmp}/hk12910.XXXXXX")"
 HK_SRC="$HK_DIR/fns.sh"
-HK_FNS='resolve_host_key|host_key_fallback_reason|host_key_running_verified|host_key_sticky_check'
-for hk_fn in resolve_host_key host_key_fallback_reason host_key_running_verified host_key_sticky_check; do
+HK_FNS='resolve_host_key|host_key_fallback_reason|host_key_running_verified|host_key_sticky_check|host_key_abort_reason|host_key_next_env_json|host_key_next_check'
+for hk_fn in resolve_host_key host_key_fallback_reason host_key_running_verified host_key_sticky_check \
+  host_key_abort_reason host_key_next_env_json host_key_next_check; do
   awk -v f="$hk_fn" '$0 ~ "^" f "\\(\\) \\{" { p = 1 } p { print } p && /^\}/ { exit }' "$DEPLOY_SCRIPT"
 done > "$HK_SRC"
 
@@ -13436,7 +13442,7 @@ hk_key() { # metadata body (printf %b) -> "<key>|rc"
     out="$(SOLEUR_HOST_KEY_METADATA_URL="file://$f" SOLEUR_HOST_KEY_RETRY_SLEEP=0 resolve_host_key)" || rc=$?
     printf '%s|%s' "$out" "$rc" )
 }
-hk_row HK-0 "all four functions extracted" "4" "$(grep -cE "^(${HK_FNS})\(\) \{" "$HK_SRC")"
+hk_row HK-0 "all seven functions extracted" "7" "$(grep -cE "^(${HK_FNS})\(\) \{" "$HK_SRC")"
 hk_row HK-1 "soleur-web-platform maps to web-1" "web-1|0" "$(hk_key 'soleur-web-platform')"
 hk_row HK-2 "soleur-web-2 maps to web-2" "web-2|0" "$(hk_key 'soleur-web-2')"
 hk_row HK-3 "surrounding whitespace is stripped" "web-2|0" "$(hk_key '  soleur-web-2\n')"
@@ -13464,10 +13470,14 @@ hk_retry_empty="$( ( set -euo pipefail; source "$HK_SRC"; n="$HK_DIR/curl.count3
   rc=0; out="$(SOLEUR_HOST_KEY_RETRY_SLEEP=0 resolve_host_key)" || rc=$?
   printf '%s|%s|%s' "$out" "$rc" "$(wc -l < "$n" | tr -d ' ')" ) )"
 hk_row HK-23 "an answered empty body is final: one attempt, rc 2" "|2|1" "$hk_retry_empty"
-hk_row HK-26 "every resolve rc maps to its closed reason token" \
-  "metadata_unreachable|name_unmapped|name_reserved|key_malformed" \
-  "$( ( source "$HK_SRC"; printf '%s|%s|%s|%s' "$(host_key_fallback_reason 1)" "$(host_key_fallback_reason 2)" \
-    "$(host_key_fallback_reason 3)" "$(host_key_fallback_reason 4)" ) )"
+hk_row HK-26 "every resolve rc maps to its closed reason token, and an unplanned rc to unknown" \
+  "metadata_unreachable|name_unmapped|name_reserved|key_malformed|unknown" \
+  "$( ( source "$HK_SRC"; printf '%s|%s|%s|%s|%s' "$(host_key_fallback_reason 1)" "$(host_key_fallback_reason 2)" \
+    "$(host_key_fallback_reason 3)" "$(host_key_fallback_reason 4)" "$(host_key_fallback_reason 9)" ) )"
+# HK-39: the metadata read keeps off any proxy env and any ~/.curlrc (exactly one curl in the function,
+# and it carries both flags; no later --proxy / -x can re-open it).
+hk_row HK-39 "resolve_host_key's one curl is --disable --noproxy '*' with no proxy re-opener" "1|1|0" \
+  "$(awk '/^resolve_host_key\(\) \{/,/^\}/' "$DEPLOY_SCRIPT" | grep -vE '^[[:space:]]*#' | grep -cE '\bcurl ')|$(awk '/^resolve_host_key\(\) \{/,/^\}/' "$DEPLOY_SCRIPT" | grep -vE '^[[:space:]]*#' | grep -cF "curl --disable --noproxy '*' -sf --max-time 3 \"\$url\"")|$(awk '/^resolve_host_key\(\) \{/,/^\}/' "$DEPLOY_SCRIPT" | grep -vE '^[[:space:]]*#' | grep -cE -- '(--proxy|[[:space:]]-x[[:space:]]|--socks)' || true)"
 
 # The sticky read. The docker stub answers ONLY the exact modeled argv; anything else is refused
 # (exit 64) and logged, so a --format change in ci-deploy.sh cannot pass against a stub that ignores it.
@@ -13482,7 +13492,9 @@ hk_sticky() { # running Config.Env as a JSON array ('' = no container, '!err' = 
         echo "docker $*" >> "$HK_REFUSED"; return 64
       fi
       [[ "$HK_ENV" != "!err" ]] || { echo "Error response from daemon: context deadline exceeded" >&2; return 1; }
+      [[ "$HK_ENV" != "!nocase" ]] || { echo "error: no such object: soleur-web-platform" >&2; return 1; }
       [[ -n "$HK_ENV" ]] || { echo "Error: No such container: soleur-web-platform" >&2; return 1; }
+      if [[ "$HK_ENV" == warn:* ]]; then echo "WARNING: Error loading config file: /root/.docker/config.json" >&2; HK_ENV="${HK_ENV#warn:}"; fi
       printf '%s\n' "$HK_ENV"
     }
     rc=0; host_key_sticky_check || rc=$?; printf '%s|%s' "$rc" "$HOST_KEY_RUNNING" )
@@ -13512,19 +13524,59 @@ hk_row HK-28 "a running key the app rejected (not in its roster) does not pin" "
 hk_row HK-29 "a docker error other than no-such-container aborts (inspect_failed), never reads as no container" "3|" \
   "$(hk_sticky '!err' web-2)"
 hk_row HK-30 "the docker stub saw only the modeled inspect argv" "0" "$(grep -c . "$HK_REFUSED" || true)"
+# HK-31..34 (round 2): only stdout is parsed, the not-found match ignores case, a null Env is no key,
+# and every sticky rc maps to its closed abort token.
+hk_row HK-31 "a docker CLI warning on stderr of a SUCCESSFUL inspect is not parsed (still continues)" "0|web-2" \
+  "$(hk_sticky "warn:$HK_V2" web-2)"
+hk_row HK-32 "a lower-case 'no such object' still reads as no container" "0|" "$(hk_sticky '!nocase' web-2)"
+hk_row HK-33 "a null Config.Env is no running key, not a jq error" "0|" "$(hk_sticky 'null' web-2)"
+hk_row HK-34 "every sticky rc maps to its closed abort token" "key_change|key_lost|inspect_failed|inspect_failed" \
+  "$( ( source "$HK_SRC"; printf '%s|%s|%s|%s' "$(host_key_abort_reason 1)" "$(host_key_abort_reason 2)" \
+    "$(host_key_abort_reason 3)" "$(host_key_abort_reason 9)" ) )"
+
+# NX (CTO round-2 Q1): host_key_next_check over the synthesized next prod env. Args: running verified key,
+# new HOST_KEY, PROXY_BIND, env-file body (printf %b). Prints "rc|<all output>" (output must stay empty:
+# the env-file holds prd secrets).
+hk_next() {
+  local f="$HK_DIR/next.env.$RANDOM"
+  printf '%b' "$4" > "$f"
+  ( set -euo pipefail; source "$HK_SRC"
+    HOST_KEY_RUNNING="$1" HOST_KEY="$2" PROXY_BIND="$3"
+    rc=0; out="$(host_key_next_check "$f" 2>&1)" || rc=$?
+    printf '%s|%s' "$rc" "$out" )
+}
+HK_NX_ENV='DOPPLER_CONFIG=prd\nNX_SECRET=nx-canary-value-7f3a\nSOLEUR_HOST_ROSTER={"web-3":"10.0.1.12","web-2":"10.0.1.11"}\n'
+hk_row NX-1 "the next env verifies the running key: continue" "0|" "$(hk_next web-2 web-2 10.0.1.11 "$HK_NX_ENV")"
+hk_row NX-2 "a late NIC (PROXY_BIND empty) aborts key_unverifiable" "1|" "$(hk_next web-2 web-2 '' "$HK_NX_ENV")"
+hk_row NX-3 "a roster that lost the key aborts" "1|" \
+  "$(hk_next web-2 web-2 10.0.1.11 'SOLEUR_HOST_ROSTER={"web-3":"10.0.1.12"}\n')"
+hk_row NX-4 "a roster JSON.parse rejects aborts" "1|" \
+  "$(hk_next web-2 web-2 10.0.1.11 'SOLEUR_HOST_ROSTER={"web-2":"10.0.1.11","x":NaN}\n')"
+hk_row NX-5 "no verified running key: never blocks (first rollout, late NIC included)" "0|" "$(hk_next '' '' '' '')"
+hk_row NX-6 "a stray env-file SOLEUR_HOST_KEY / SOLEUR_HOST_PRIVATE_IP is overridden by the prod -e values" "0|" \
+  "$(hk_next web-2 web-2 10.0.1.11 "SOLEUR_HOST_KEY=web-3\nSOLEUR_HOST_PRIVATE_IP=10.0.1.12\n$HK_NX_ENV")"
+hk_row NX-7 "comment, blank and non-assignment lines in the env-file are ignored" "0|" \
+  "$(hk_next web-2 web-2 10.0.1.11 "# a comment\n\nnot an assignment\n$HK_NX_ENV")"
+hk_row NX-8 "the synthesized env never reaches any output (prd secrets)" "0" \
+  "$(hk_next web-2 web-2 '' "$HK_NX_ENV" | grep -c 'nx-canary-value' || true)"
+# NX-9: the synthesized -e tokens are the prod run's two -e lines, and each appears once in each place.
+hk_row NX-9 "the synthesized key/IP tokens equal the prod run's -e lines" "1|1|1|1" \
+  "$(awk '/^host_key_next_env_json\(\) \{/,/^\}/' "$DEPLOY_SCRIPT" | grep -cF "printf 'SOLEUR_HOST_KEY=%s\\n' \"\$HOST_KEY\"")|$(awk '/^host_key_next_env_json\(\) \{/,/^\}/' "$DEPLOY_SCRIPT" | grep -cF "printf 'SOLEUR_HOST_PRIVATE_IP=%s\\n' \"\$PROXY_BIND\"")|$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT" | grep -cE -- '^[[:space:]]+-e SOLEUR_HOST_KEY="\$HOST_KEY" \\$')|$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT" | grep -cE -- '^[[:space:]]+-e SOLEUR_HOST_PRIVATE_IP="\$PROXY_BIND" \\$')"
 
 # HKV: host_key_running_verified over the table the app's tests also read (host-identity.test.ts), so the
 # shell copy of describeHostIdentity's rules cannot drift from the TypeScript.
 HKV_FIXTURE="$(dirname "$DEPLOY_SCRIPT")/../test/fixtures/host-key-verify-cases.json"
 HKV_N="$(jq '.cases | length' "$HKV_FIXTURE" 2>/dev/null || echo 0)"
 hk_row HKV-0 "the shared verification table is readable and non-trivial" "yes" \
-  "$([[ "$HKV_N" -ge 10 ]] && echo yes || echo no)"
+  "$([[ "$HKV_N" -ge 22 ]] && echo yes || echo no)"
 for ((hkv_i = 0; hkv_i < HKV_N; hkv_i++)); do
   hkv_name="$(jq -r ".cases[$hkv_i].name" "$HKV_FIXTURE")"
   hkv_want="$(jq -r ".cases[$hkv_i].verified" "$HKV_FIXTURE")"
-  hkv_got="$( ( source "$HK_SRC"; jq -c ".cases[$hkv_i].env | [\"PATH=/usr/bin\"] + [to_entries[] | \"\(.key)=\(.value)\"]" "$HKV_FIXTURE" \
-    | host_key_running_verified ) )"
-  hk_row "HKV-$((hkv_i + 1))" "$hkv_name" "$hkv_want" "$hkv_got"
+  # Graded on output AND exit status: a jq error (rc 5) prints nothing, which would read as "not
+  # verified" while the sticky check turns that rc into an inspect_failed abort on every deploy.
+  hkv_got="$( ( source "$HK_SRC"; rc=0; out="$(jq -c ".cases[$hkv_i].env | [\"PATH=/usr/bin\"] + [to_entries[] | \"\(.key)=\(.value)\"]" "$HKV_FIXTURE" \
+    | host_key_running_verified)" || rc=$?; printf '%s|%s' "$out" "$rc" ) )"
+  hk_row "HKV-$((hkv_i + 1))" "$hkv_name" "$hkv_want|0" "$hkv_got"
 done
 
 # Static pins over the real script (comment lines stripped first).
@@ -13541,14 +13593,42 @@ hk_row HK-21 "the sticky check runs before the canary docker run" "yes" \
   "$([[ -n "$HK_STICKY_LINE" && -n "$HK_CANARY_LINE" && "$HK_STICKY_LINE" -lt "$HK_CANARY_LINE" ]] && echo yes || echo no)"
 hk_row HK-22 "HOST_KEY is resolved once at top level and made readonly" "2" \
   "$(printf '%s\n' "$HK_CODE" | grep -cE '^(HOST_KEY="\$\(resolve_host_key\)" \|\| HOST_KEY_RC=\$\?|readonly HOST_KEY HOST_KEY_RC)$')"
+HK_SCRUB_LINE="$(printf '%s\n' "$HK_CODE" | grep -nE '^[[:space:]]+inngest_link_scrub_env_file "\$ENV_FILE" \|\| INNGEST_SCRUB_RC=\$\?$' | head -1 | cut -d: -f1)"
+HK_NEXT_LINE="$(printf '%s\n' "$HK_CODE" | grep -nE '^[[:space:]]+if ! host_key_next_check "\$ENV_FILE"; then$' | head -1 | cut -d: -f1)"
+hk_row HK-35 "the next-env check runs once, after the env-file scrub and before the canary docker run" "1|yes" \
+  "$(printf '%s\n' "$HK_CODE" | grep -cE 'host_key_next_check "\$ENV_FILE"')|$([[ -n "$HK_SCRUB_LINE" && -n "$HK_NEXT_LINE" && -n "$HK_CANARY_LINE" && "$HK_SCRUB_LINE" -lt "$HK_NEXT_LINE" && "$HK_NEXT_LINE" -lt "$HK_CANARY_LINE" ]] && echo yes || echo no)"
+hk_row HK-36 "a key_unverifiable abort logs its line and writes its state" "1|1" \
+  "$(printf '%s\n' "$HK_CODE" | grep -cE 'log_host_key "abort reason=key_unverifiable running=\$\{HOST_KEY_RUNNING\}"')|$(printf '%s\n' "$HK_CODE" | grep -cE '^[[:space:]]+final_write_state 1 host_key_unverifiable$')"
 # HK-24 end-to-end: a host whose running prod container VERIFIED web-2, deploying while the
 # metadata answers nothing (HOST_KEY empty), aborts with host_key_lost before any prune, pull or run.
 HK_STATE="$HK_DIR/e2e.state"
-HK_OUT="$(MOCK_RUNNING_HOST_KEY=web-2 CI_DEPLOY_STATE="$HK_STATE" \
+HK_LOG="$HK_DIR/e2e.log"; : > "$HK_LOG"
+HK_OUT="$(MOCK_RUNNING_HOST_KEY=web-2 CI_DEPLOY_STATE="$HK_STATE" MOCK_LOGGER_CAPTURE_FILE="$HK_LOG" \
   run_deploy_traced "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" 2>&1)" && HK_RC=0 || HK_RC=$?
 read_state_reason_and_exit "$HK_STATE" HK_REASON HK_EXIT
 hk_row HK-24 "a verified-key host deploying with no key aborts before any traced docker call" "1|host_key_lost|0" \
   "$([[ "$HK_RC" -ne 0 ]] && echo 1 || echo 0)|$HK_REASON|$(printf '%s\n' "$HK_OUT" | grep -c '^DOCKER_TRACE:' || true)"
+# HK-24b: the abort line names the resolve cause (the legacy "OK" metadata body maps to name_unmapped).
+hk_row HK-24b "the key_lost abort line carries running= and cause=" "1" \
+  "$(grep -cE 'host_key abort reason=key_lost running=web-2 cause=name_unmapped$' "$HK_LOG" || true)"
+# HK-37/38 end-to-end (CTO Q1): web-2 verified and resolved, but the Doppler env-file carries no roster entry
+# for it, so the next container could not verify web-2: abort key_unverifiable, no container is started.
+# The control adds the roster entry and the same deploy reaches the canary run.
+HK_LOG="$HK_DIR/e2e3.log"; : > "$HK_LOG"
+# apparmor-trace prints every `docker run` argv, so the rows count app starts by --name (the plugin seed run
+# that precedes the check is not one).
+HK_OUT="$(MOCK_RUNNING_HOST_KEY=web-2 MOCK_METADATA_HOSTNAME=soleur-web-2 SOLEUR_PROXY_BIND_OVERRIDE=10.0.1.11 \
+  MOCK_DOCKER_MODE=apparmor-trace CI_DEPLOY_STATE="$HK_DIR/e2e3.state" MOCK_LOGGER_CAPTURE_FILE="$HK_LOG" \
+  run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" 2>&1)" && HK_RC=0 || HK_RC=$?
+read_state_reason_and_exit "$HK_DIR/e2e3.state" HK_REASON HK_EXIT
+hk_row HK-37 "an unverifiable next env aborts key_unverifiable before the canary or prod is started" "1|host_key_unverifiable|0|1" \
+  "$([[ "$HK_RC" -ne 0 ]] && echo 1 || echo 0)|$HK_REASON|$(printf '%s\n' "$HK_OUT" | grep '^DOCKER_RUN_ARGS:' | grep -cE -- '--name soleur-web-platform(-canary)? ' || true)|$(grep -cE 'host_key abort reason=key_unverifiable running=web-2$' "$HK_LOG" || true)"
+printf 'KEY=value\nDOPPLER_PROJECT=soleur\nDOPPLER_CONFIG=prd\nDOPPLER_ENVIRONMENT=prd\nGITHUB_APP_ID=4242\nGITHUB_APP_PRIVATE_KEY=mock-prd-app-key\nSOLEUR_HOST_ROSTER={"web-3":"10.0.1.12","web-2":"10.0.1.11"}\n' > "$HK_DIR/prd.env"
+HK_OUT="$(MOCK_RUNNING_HOST_KEY=web-2 MOCK_METADATA_HOSTNAME=soleur-web-2 SOLEUR_PROXY_BIND_OVERRIDE=10.0.1.11 \
+  MOCK_DOCKER_MODE=apparmor-trace MOCK_GAK_PRD_BODY="$HK_DIR/prd.env" CI_DEPLOY_STATE="$HK_DIR/e2e4.state" \
+  run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" 2>&1)" && HK_RC=0 || HK_RC=$?
+hk_row HK-38 "control: with the roster entry the same deploy starts the canary" "yes" \
+  "$([[ "$(printf '%s\n' "$HK_OUT" | grep '^DOCKER_RUN_ARGS:' | grep -c -- '--name soleur-web-platform-canary ' || true)" -gt 0 ]] && echo yes || echo no)"
 HK_OUT="$(CI_DEPLOY_STATE="$HK_DIR/e2e2.state" \
   run_deploy_traced "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v9.9.9" 2>&1)" && HK_RC=0 || HK_RC=$?
 # The control also proves the trace is live (a zero count in HK-24 means nothing if nothing is ever traced).
@@ -13556,8 +13636,8 @@ hk_row HK-25 "control: the same deploy on an unkeyed running container proceeds,
   "$HK_RC|$([[ "$(printf '%s\n' "$HK_OUT" | grep -c '^DOCKER_TRACE:' || true)" -gt 0 ]] && echo yes || echo no)"
 rm -rf "$HK_DIR"
 unset HK_STATE HK_OUT HK_RC HK_REASON HK_EXIT hk_retry_empty HK_REFUSED HK_ROSTER HK_V2 HKV_FIXTURE HKV_N hkv_i hkv_name hkv_want hkv_got hk_fn HK_FNS
-unset HK_DIR HK_SRC HK_CODE HK_CANARY_LINE HK_STICKY_LINE hk_retry hk_retry_dead
-unset -f hk_row hk_key hk_sticky 2>/dev/null || true
+unset HK_DIR HK_SRC HK_CODE HK_CANARY_LINE HK_STICKY_LINE hk_retry hk_retry_dead HK_LOG HK_NX_ENV HK_SCRUB_LINE HK_NEXT_LINE
+unset -f hk_row hk_key hk_sticky hk_next 2>/dev/null || true
 
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
@@ -13640,10 +13720,13 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # order, the peer-probe flow / closed grammar / skips / best-effort, the node probe against local TLS fixtures, and the static pins).
 # #12910 (SOLEUR_HOST_KEY): raised 751 -> 777 with HK-0..HK-25 (26 rows: the hostname inverse table, retry-on-failure-only, T3 stickiness unit + end to end
 # with its control, the prod/canary injection pins and once-only resolution).
-# #12910 review round: raised 777 -> 805 (+28: HK-26..30 — the reason-token map, the stray env-file key and app-rejected key that
-# must not pin (T3a), inspect_failed, the strict-stub refusal log — plus HKV-0..14 over the shared host-key verification table).
-# Measured from the green run (805/805).
-CI_DEPLOY_ASSERT_FLOOR=805
+# #12910 review round: raised 777 -> 805, measured (805/805). This branch added 20 of those rows: HK-26..30 — the reason-token
+# map, the stray env-file key and app-rejected key that must not pin (T3a), inspect_failed, the strict-stub refusal log — plus
+# HKV-0..14 over the shared host-key verification table; the other 8 arrived with main.
+# #12910 review round 2: raised 805 -> 832 (+27, measured): HK-24b (the key_lost cause), HK-31..34 (stdout-only parse, case-free
+# not-found, null Env, abort-token map), NX-1..9 and HK-35..38 (the CTO Q1 key_unverifiable check: unit, placement, end to end
+# with its control), HK-39 (the metadata curl flags), and HKV-15..22 (eight boundary/parity rows in the shared table).
+CI_DEPLOY_ASSERT_FLOOR=832
 if [[ "$TOTAL" -lt "$CI_DEPLOY_ASSERT_FLOOR" || $((PASS + FAIL)) -ne "$TOTAL" ]]; then
   printf 'FAIL: assertion-count floor: TOTAL=%s (PASS+FAIL=%s), expected TOTAL >= %s and PASS+FAIL == TOTAL — the suite narrowed or a row miscounted.\n' \
     "$TOTAL" "$((PASS + FAIL))" "$CI_DEPLOY_ASSERT_FLOOR"
