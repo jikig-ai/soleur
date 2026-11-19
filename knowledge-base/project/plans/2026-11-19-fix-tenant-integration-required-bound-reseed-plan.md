@@ -132,7 +132,7 @@ aggregators serialize their own `needs` chains and run higher —
 own bounds (umbrella serialization documented in the TSV header). Only
 `tenant-integration` (the heavy job, `timeout-minutes: 19`,
 `.github/workflows/tenant-integration.yml:236-243`) sat at ~835-910s, and the
-aggregator's own completion follows it by ~19-22s in every case:
+aggregator's own completion follows it by ~19-20s in every case:
 
 | tail run | tenant suite duration | check completed vs suite `completed_at` |
 |---|---|---|
@@ -197,8 +197,9 @@ by MERGED PR #12329 — verified live 2026-11-19.)
   tabs preserved —
   `tenant-integration-required␉960␉180␉0.30`. Seed provenance lands as a
   `# ROW SEED` comment (same comment-block slot and field shape as the
-  2026-11-17 oracle seed: measured p90 → next minute per surface, sampled
-  dates, n, sentinel commit of the measurement script).
+  2026-11-17 oracle seed: measured p90 → next minute per surface, n,
+  duration_p90, plus this slice's added provenance fields — sampled
+  window, flagged-set drift sha1 `drift=<sha1>`).
 - `knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md`
   (`## Measured history`): one bullet recording the 2026-11-19 measurement
   that moved the bound — including the bimodal finding, the
@@ -408,7 +409,7 @@ Add a `# ROW SEED` comment block in the header notes area (after the oracle
 seed block), matching the 2026-11-17 shape:
 
 ```text
-# ROW SEED (tenant-integration-required): re-measured 2026-11-19T<HH:MM>Z
+# ROW SEED (2026-11-19, tenant-integration-required, #12755): re-measured 2026-11-19T<HH:MM>Z
 #   pull_request: n=<n> p90=<p90>s duration_p90=<d>s -> bound 960
 #   merge_group:  n=<n> p90=<p90>s duration_p90=<d>s -> bound 180 (unchanged)
 #   sentinel: <flagged-set drift sha1 (`drift=<sha1>`) from the probe report>
@@ -425,7 +426,7 @@ Append one bullet under `## Measured history` in
 (after the 2026-11-17 oracle bullet), shape per that bullet:
 
 ```markdown
-- **2026-11-19 `tenant-integration-required` bound-row re-seed**
+- **2026-11-19 `tenant-integration-required` PR bound re-seed**
   (issue #12755, breach measured 2026-11-19; Epic #11556): measured PR p90
   915s (n=26), merge-group p90 70s (n=30) → bounds 960/180, margin 0.30.
   Finding: bimodal latency — 23/26 samples at 11-76s vs 3 at 915-970s
@@ -683,7 +684,7 @@ fan-out ran as inline verification passes; the parent pipeline may still run
   (umbrella aggregators `quality-guards`/`test` run higher but serialize
   their own `needs` chains within their own bounds) while
   `tenant-integration` sat at ~835-910s and the aggregator completed
-  ~19-22s after it each time. A shared-queue burst inflates all
+  ~19-20s after it each time. A shared-queue burst inflates all
   independent checks; the tail is specific to this needs-chain.
 - "Not execution regression" — duration_p90=21s ≈ fast-mode durations
   (11-30s) across all 26 qualifying samples; no duration outlier exists.
