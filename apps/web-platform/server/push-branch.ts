@@ -18,13 +18,15 @@ import { COMMIT_SHA_RE } from "./approval/canonical";
 import { HEX40 } from "./approval/workspace-head";
 import { validateBranchFormat } from "./branch-validation";
 import { gitWithInstallationAuth } from "./git-auth";
-import { HARDENED_GIT_ARGS, buildIsolatedGitEnv } from "./git-hardened-env";
+import { runIsolatedGitLocal } from "./git-isolated-local";
 import {
   IsolatedPushDirRefusal,
   createIsolatedPushDir,
   type IsolatedPushDirHandle,
   type IsolatedPushDirReason,
 } from "./git-isolated-push-dir";
+import { AGENT_AUTHOR_EMAIL, AGENT_AUTHOR_NAME } from "./agent-git-identity";
+import { disposeIsolated } from "./git-isolated-dispose";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 
@@ -35,8 +37,6 @@ const log = createChildLogger("push-branch");
 // ---------------------------------------------------------------------------
 
 export const PROTECTED_BRANCHES = ["main", "master"] as const;
-const AGENT_AUTHOR_NAME = "Soleur Agent";
-const AGENT_AUTHOR_EMAIL = "agent@soleur.ai";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -95,7 +95,6 @@ const PUSH_FEATURE = "cc-push";
 /** Static, per-op Sentry messages: a Sentry group is one condition, never the shared `cc-push silent fallback` default. */
 const REFUSED_MESSAGE = "cc-push: the hardened push was refused before it ran; nothing was pushed";
 const PUSH_FAILED_MESSAGE = "cc-push: the hardened push failed after the Owner's approval was consumed";
-const DISPOSE_FAILED_MESSAGE = "cc-push: the isolated push directory could not be removed";
 
 /** Shown to the model for an infrastructure refusal (the server's state, not the workspace): static, no path, no cause. */
 const PREPARE_FAILED_TEXT = "Push could not be prepared (server-side setup problem)";
@@ -200,24 +199,6 @@ function classifyPushFailure(err: unknown, stderr: string, names: PushFailureNam
   return "other";
 }
 
-/** A failing `dispose()` never changes the push result: it is reported by errno code only (no path, no message). */
-function disposeIsolated(isolated: IsolatedPushDirHandle | undefined): void {
-  if (!isolated) return;
-  try {
-    isolated.dispose();
-  } catch (err) {
-    const code = (err as { code?: unknown } | undefined)?.code;
-    const cls = typeof code === "string" && /^E[A-Z]+$/.test(code) ? code : "unknown";
-    reportSilentFallback(null, {
-      feature: PUSH_FEATURE,
-      op: "isolated-dir-dispose-failed",
-      message: DISPOSE_FAILED_MESSAGE,
-      tags: { class: cls },
-      extra: { class: cls },
-    });
-  }
-}
-
 type CommitCheck = "present" | "absent" | "timeout" | "failed";
 
 /**
@@ -227,38 +208,18 @@ type CommitCheck = "present" | "absent" | "timeout" | "failed";
  * and is not `absent`. (`cat-file -e <sha>^{commit}` is not used: for a missing object it exits 128, the same status as every other
  * fatal error.) `^{commit}` peels an annotated tag object to the commit it points at, so a zero exit alone would accept a tag-object
  * sha; the printed sha must equal the approved one, else the commit is `absent` (the push of a non-commit sha would only be
- * rejected by the remote after the approval is spent). Everything, the import included, runs inside the `try`: the caller has a
- * directory to remove and no handle to remove it with, so this function never rejects.
+ * rejected by the remote after the approval is spent). The child runs through `runIsolatedGitLocal`, whose lazy import and spawn sit
+ * inside its own `try` and which never rejects (a spawn failure, kill or timeout is a result): the caller has a directory to remove
+ * and no handle to remove it with, so this function never rejects either.
  */
 async function checkCommitPresent(isolated: IsolatedPushDirHandle, commitSha: string): Promise<CommitCheck> {
-  try {
-    // Imported lazily, like inflight-checkpoint.ts, so that sibling test files which mock `child_process` with factories lacking
-    // `execFile` still load this module (a missing export then fails only on use, inside this try, and never at import time).
-    const { execFile } = await import("node:child_process");
-    return await new Promise<CommitCheck>((resolve) => {
-      try {
-        execFile(
-          "git",
-          [...HARDENED_GIT_ARGS, "rev-parse", "--verify", "--quiet", `${commitSha}^{commit}`],
-          {
-            cwd: isolated.gitDir,
-            env: buildIsolatedGitEnv(isolated),
-            timeout: HARDENED_COMMIT_CHECK_TIMEOUT_MS,
-          },
-          (err, stdout) => {
-            if (!err) return resolve(String(stdout).trim() === commitSha ? "present" : "absent");
-            const e = err as { code?: unknown; killed?: boolean; signal?: string };
-            if (e.killed === true || e.signal === "SIGTERM") return resolve("timeout");
-            resolve(e.code === 1 ? "absent" : "failed");
-          },
-        );
-      } catch {
-        resolve("failed");
-      }
-    });
-  } catch {
-    return "failed";
-  }
+  // The token-free isolated runner never rejects: a spawn failure, a kill or a timeout comes back as a result.
+  const r = await runIsolatedGitLocal(isolated, ["rev-parse", "--verify", "--quiet", `${commitSha}^{commit}`], {
+    timeoutMs: HARDENED_COMMIT_CHECK_TIMEOUT_MS,
+  });
+  if (r.timedOut) return "timeout";
+  if (r.code === 0) return r.stdout.toString("utf8").trim() === commitSha ? "present" : "absent";
+  return r.code === 1 ? "absent" : "failed";
 }
 
 /**

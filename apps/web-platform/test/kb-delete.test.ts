@@ -74,12 +74,20 @@ vi.mock("@/server/git-auth", () => ({
   gitWithInstallationAuth: mockGitWithAuth,
 }));
 
+// #12600 (CTO ruling D16): pass-through spy on the real syncWorkspace, so a row can script a designed hold (`held`).
+vi.mock("@/server/workspace-sync", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/workspace-sync")>();
+  return { ...actual, syncWorkspace: vi.fn(actual.syncWorkspace) };
+});
+
 vi.mock("@/server/sandbox", () => ({
   isPathInWorkspace: mockIsPathInWorkspace,
 }));
 
 vi.mock("@/server/logger", () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  // R2-B: syncWorkspace now loads server/connected-repo-git (the workspace lock), whose module scope makes a child logger
+  createChildLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }));
 
 vi.mock("@sentry/nextjs", () => ({
@@ -97,6 +105,10 @@ vi.mock("node:fs", () => ({
 
 import { DELETE } from "@/app/api/kb/file/[...path]/route";
 import { validateOrigin } from "@/lib/auth/validate-origin";
+import { syncWorkspace } from "@/server/workspace-sync";
+import * as Sentry from "@sentry/nextjs";
+const HELD = { ok: false as const, error: new Error("held"), errorClass: "non_fast_forward" as const, held: "dirty_tracked" as const };
+const NFF_ABORT = { ok: false as const, error: new Error("aborted"), errorClass: "non_fast_forward" as const };
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -429,5 +441,40 @@ describe("DELETE /api/kb/file/[...path]", () => {
       TEST_INSTALLATION_ID,
       expect.objectContaining({ cwd: TEST_WORKSPACE_PATH, timeout: 30_000 }),
     );
+  });
+});
+
+describe("DELETE /api/kb/file/[...path]: a designed workspace hold after the GitHub delete (D16)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test("held -> 200 with the normal body plus workspace_sync pending, and no route-level Sentry capture", async () => {
+    setupFullMocks();
+    vi.mocked(syncWorkspace).mockResolvedValueOnce(HELD);
+    const req = createRequest(["overview", "test.png"], "https://app.soleur.ai");
+    const res = await DELETE(req, { params: createParams(["overview", "test.png"]) });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ commitSha: "commitsha456", workspace_sync: "pending" });
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  test("a non_fast_forward abort with no hold stays 500 SYNC_FAILED, but the route does not capture it (the self-heal emitted it)", async () => {
+    setupFullMocks();
+    vi.mocked(syncWorkspace).mockResolvedValueOnce(NFF_ABORT);
+    const req = createRequest(["overview", "test.png"], "https://app.soleur.ai");
+    const res = await DELETE(req, { params: createParams(["overview", "test.png"]) });
+    expect(res.status).toBe(500);
+    expect((await res.json()).code).toBe("SYNC_FAILED");
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  test("a sync_failed is still captured at the route", async () => {
+    setupFullMocks();
+    vi.mocked(syncWorkspace).mockResolvedValueOnce({ ok: false, error: new Error("boom"), errorClass: "sync_failed" });
+    const req = createRequest(["overview", "test.png"], "https://app.soleur.ai");
+    const res = await DELETE(req, { params: createParams(["overview", "test.png"]) });
+    expect(res.status).toBe(500);
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
   });
 });

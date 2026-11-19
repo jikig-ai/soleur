@@ -6,7 +6,6 @@
 // the agent session.
 // ---------------------------------------------------------------------------
 
-import { execFileSync, type ExecFileSyncOptions } from "child_process";
 import { readdirSync } from "fs";
 import { join } from "path";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -16,347 +15,63 @@ import {
 } from "@/lib/supabase/tenant";
 import {
   hashUserId,
+  mirrorWarnWithDebounce,
+  mirrorWithDebounce,
   reportSilentFallback,
   warnSilentFallback,
 } from "@/server/observability";
-import { gitWithInstallationAuth } from "./git-auth";
-import { ALLOW_PROTOCOL_NONE, HostGitRefusedError, hostGitInvocation } from "./host-git";
+import { firstAppFrame } from "./error-frame";
+import { disposeIsolated } from "./git-isolated-dispose";
+import { createIsolatedPushDir, IsolatedPushDirRefusal, type IsolatedPushDirHandle } from "./git-isolated-push-dir";
+import {
+  kbPullWriter,
+  kbWorkspaceWriter,
+  mergeInProgress,
+  mirrorGitRefusal,
+  pinInterruptedAutostash,
+  readStatus,
+  runConnectedRepoGitAsync,
+  withWorkspaceGitLock,
+  WORKSPACE_GIT_LOCK_TIMEOUT,
+  type PorcelainEntry,
+} from "./connected-repo-git";
+import { HostGitRefusedError } from "./host-git";
+import { KB_ROOT } from "./kb-root";
+import { writeHeldFromIsolated } from "./kb-sync-held-refresh";
+import { KbSyncError, publishKbOnly, reportPushHeld, SYNC_PUSH_BUDGET_MS, type PushBudget } from "./kb-sync-publish";
+import {
+  adoptSideTip,
+  KB_PULL_HELD_MESSAGES,
+  KB_PULL_HELD_OP,
+  MERGE_START_MIN_MS,
+  mergeVerifiedDefault,
+  pullBudget,
+  SYNC_PULL_BUDGET_MS,
+  type KbPullHeldReason,
+  type KbPullLimits,
+  type KbPullRef,
+  type KbPullStep,
+  type PullBudget,
+} from "./kb-sync-pull";
+import { KbRemoteError, resolveRepoUrl } from "./kb-sync-remote";
+import { readWorkspaceHeadRef } from "./approval/workspace-head";
 import { writeRepoColsToWorkspace } from "./workspace-repo-mirror";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("session-sync");
 
 // Path-allowlist for the auto-commit sweep. Only paths under
-// `knowledge-base/` are eligible for automatic staging during syncPull/syncPush.
+// `knowledge-base/` (`KB_ROOT`) are eligible for automatic staging during syncPull/syncPush.
 // Everything else (`.claude/`, `.github/`, `apps/`, root config files, ...)
 // is left dirty in the working tree so it never lands in PRs the loop did
 // not explicitly author. See #2905 for the failure modes this prevents.
-const ALLOWED_AUTOCOMMIT_PATHS = [/^knowledge-base\//];
+const isAllowlistedPath = (path: string): boolean => path.startsWith(`${KB_ROOT}/`);
 
 // Auto-commit headlines used by syncPull / syncPush. Exported as named
 // constants so .github/scripts/check-auto-commit-density.sh can stay in
 // sync (the regex there must reference these exact strings).
 export const AUTO_COMMIT_MSG_PULL = "Auto-commit before sync pull";
 export const AUTO_COMMIT_MSG_PUSH = "Auto-commit after session";
-
-// Allowlist of git subcommands the connected-repo writer may invoke.
-// Anything destructive (rm, reset, clean, branch -D, checkout -- ...) is
-// rejected at the wrapper. See #2905 for the failure-class this prevents.
-const ALLOWED_GIT_SUBCOMMANDS = new Set([
-  "status",
-  "add",
-  "commit",
-  "remote",
-  "rev-list",
-]);
-
-// Forbidden flags — applied across ANY allowed subcommand. Reject in argv,
-// not just at the start, so `commit --amend` or `push --force` (if either
-// ever reaches this wrapper) gets blocked regardless of position.
-const FORBIDDEN_GIT_FLAGS = new Set([
-  "--force",
-  "-f",
-  "--hard",
-  "--amend",
-  "--no-verify",
-]);
-
-// #5426 — push-error classification for the protected-branch fallback.
-// `protected_branch` routes to the side-branch + PR fallback; `persistent_other`
-// is a non-protection reject that must NOT silently retry-loop (notably
-// `shallow update not allowed` — these are shallow clones); `other` keeps the
-// existing best-effort retry-next-session behaviour (auth/network/transient).
-export type PushErrorClass = "protected_branch" | "persistent_other" | "other";
-
-/**
- * Classify a failed `git push` error. Keys on GitHub's protected-branch
- * rejection signatures (`GH006`, `protected branch hook declined`) and
- * tolerates varied tails (required-review, required-status-check, "Changes
- * must be made through a pull request"). Narrow by design: auth/network
- * rejections must fall through to `other`.
- */
-export function classifyPushError(err: unknown): PushErrorClass {
-  const text =
-    err instanceof Error
-      ? `${err.message}\n${(err as { stderr?: string }).stderr ?? ""}`
-      : typeof err === "string"
-        ? err
-        : "";
-  if (
-    text.includes("GH006") ||
-    text.includes("protected branch hook declined") ||
-    text.includes("Protected branch update failed") ||
-    // GitHub always prefixes protected-branch rejects with GH006, but key on
-    // the require-PR tail too (plan §Phase 1) so a future stderr-format drift
-    // that drops the GH006 prefix still routes to the fallback rather than
-    // silently looping the divergence treadmill.
-    text.includes("Changes must be made through a pull request")
-  ) {
-    return "protected_branch";
-  }
-  if (text.includes("shallow update not allowed")) {
-    return "persistent_other";
-  }
-  return "other";
-}
-
-// #5426 — protected-branch fallback. When the user's default branch is
-// protected, the post-session KB commit can't be pushed onto it; instead we
-// accrete the latest KB tree onto a durable side branch in the user's OWN repo
-// and open/update a never-auto-merged PR into their default branch.
-const KB_SYNC_SIDE_BRANCH = "soleur/kb-sync";
-const KB_SYNC_SIDE_COMMIT_MSG = "Soleur: sync knowledge-base";
-const KB_SYNC_PR_TITLE = "Soleur: knowledge-base sync";
-
-// GitHub owner/repo charset (mirrors agent-runner.ts:1525-1538 GITHUB_NAME_RE).
-const GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/;
-
-function kbSyncPrBody(defaultBranch: string): string {
-  return [
-    "Soleur keeps your knowledge-base in sync after every session.",
-    "",
-    `Your default branch (\`${defaultBranch}\`) is protected, so these`,
-    `knowledge-base updates were routed to the \`${KB_SYNC_SIDE_BRANCH}\` branch`,
-    "instead of being pushed directly.",
-    "",
-    "Merge this PR whenever you're ready — Soleur will never auto-merge it.",
-    "Future sessions accrete onto this same branch and PR.",
-  ].join("\n");
-}
-
-/**
- * Parse `{owner, repo}` from a connected-repo URL using the same shape as
- * agent-runner.ts (URL pathname split + GITHUB_NAME_RE guard, ADR-044 canonical
- * workspace read). `getCurrentRepoUrl` already strips a trailing `.git` via
- * `normalizeRepoUrl`; the defensive strip here tolerates an un-normalized row.
- * Returns empty strings when the URL is null/malformed — the caller treats that
- * as a fallback abort (writes preserved).
- */
-function parseOwnerRepo(repoUrl: string | null): {
-  owner: string;
-  repo: string;
-} {
-  if (!repoUrl) return { owner: "", repo: "" };
-  let owner = "";
-  let repo = "";
-  try {
-    const segments = new URL(repoUrl).pathname.split("/").filter(Boolean);
-    owner = segments[0] ?? "";
-    repo = (segments[1] ?? "").replace(/\.git$/i, "");
-  } catch {
-    return { owner: "", repo: "" };
-  }
-  if (!GITHUB_NAME_RE.test(owner) || !GITHUB_NAME_RE.test(repo)) {
-    return { owner: "", repo: "" };
-  }
-  return { owner, repo };
-}
-
-/**
- * Resolve the remote default branch (mirrors `workspace-sync.ts`'s
- * `resolveDefaultBranch`: `symbolic-ref --short refs/remotes/origin/HEAD`,
- * stripping the `origin/` prefix). Falls back to `main` on any error so the
- * fallback never hard-fails on a missing origin/HEAD ref.
- */
-async function resolveDefaultBranchForFallback(
-  installationId: number,
-  workspacePath: string,
-): Promise<string> {
-  try {
-    const out = await gitWithInstallationAuth(
-      ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-      installationId,
-      { cwd: workspacePath, timeout: 30_000 },
-    );
-    const branch = out.toString().trim().replace(/^origin\//, "");
-    return branch || "main";
-  } catch {
-    return "main";
-  }
-}
-
-/**
- * Protected-branch fallback for `syncPush`. Accretes the latest KB tree onto a
- * durable `soleur/kb-sync` side branch via TREE-OVERLAY (not cherry-pick, not
- * `checkout -B` from default — both would lose the side branch's prior commits;
- * see plan R1/AC4) and opens/updates a non-draft, never-auto-merged PR into the
- * user's default branch.
- *
- * Ordering is load-bearing: the local default branch is reset to
- * `origin/<default>` ONLY AFTER the side-branch push + PR succeed. On any
- * failure the un-pushed commit stays on default (default NOT reset) and HEAD is
- * restored to the default branch, so next session retries with no data loss
- * (AC6). All git runs via `gitWithInstallationAuth` — `runConnectedRepoGit`
- * forbids checkout/branch/reset/push.
- *
- * Returns `{ ok: false }` on any failure (the caller emits the failure op);
- * never throws.
- */
-async function runProtectedFallback(
-  userId: string,
-  workspacePath: string,
-  installationId: number,
-): Promise<{ ok: boolean; prUrl?: string; commitCount?: number }> {
-  const git = (args: string[]) =>
-    gitWithInstallationAuth(args, installationId, {
-      cwd: workspacePath,
-      timeout: 60_000,
-    });
-
-  let defaultBranch = "main";
-  let restoredClean = false;
-  try {
-    defaultBranch = await resolveDefaultBranchForFallback(
-      installationId,
-      workspacePath,
-    );
-
-    const { getCurrentRepoUrl } = await import("./current-repo-url");
-    const repoUrl = await getCurrentRepoUrl(userId);
-    const { owner, repo } = parseOwnerRepo(repoUrl);
-    if (!owner || !repo) {
-      throw new Error(
-        "protected-fallback: could not resolve owner/repo from repo_url",
-      );
-    }
-
-    // Capture the stranded default tip — its KB tree is what we overlay onto
-    // the side branch. Captured BEFORE any branch switch.
-    const defaultHead = (await git(["rev-parse", "HEAD"])).toString().trim();
-
-    let commitCount = 0;
-    try {
-      commitCount =
-        parseInt(
-          (
-            await git([
-              "rev-list",
-              "--count",
-              `origin/${defaultBranch}..HEAD`,
-            ])
-          )
-            .toString()
-            .trim(),
-          10,
-        ) || 0;
-    } catch {
-      commitCount = 0;
-    }
-
-    // Bring origin/<default> and the side branch (may not exist yet) up to date.
-    await git(["fetch", "origin", defaultBranch]);
-    let sideExists = false;
-    try {
-      await git(["fetch", "origin", KB_SYNC_SIDE_BRANCH]);
-      sideExists = true;
-    } catch {
-      sideExists = false;
-    }
-    if (!sideExists) {
-      try {
-        await git([
-          "rev-parse",
-          "--verify",
-          "--quiet",
-          `refs/remotes/origin/${KB_SYNC_SIDE_BRANCH}`,
-        ]);
-        sideExists = true;
-      } catch {
-        sideExists = false;
-      }
-    }
-
-    // Tree-overlay accretion. Base the local side branch on the EXISTING side
-    // branch (preserving its prior commits) when present, else branch it from
-    // origin/<default>. Never base it on the stranded default tip.
-    //
-    // `-f`: the auto-commit allowlist (ALLOWED_AUTOCOMMIT_PATHS) deliberately
-    // leaves non-`knowledge-base/` tracked files dirty. Without -f, this
-    // branch switch aborts ("local changes would be overwritten") whenever a
-    // dirty tracked non-KB file differs in the side branch's tree — silently
-    // stranding the fallback every session. Forcing discards only those
-    // never-synced working-tree edits (they are never committed, never pushed,
-    // and the success-path `reset --hard origin/<default>` below already
-    // discards them), so -f loses nothing the fallback wouldn't drop anyway.
-    await git([
-      "checkout",
-      "-f",
-      "-B",
-      KB_SYNC_SIDE_BRANCH,
-      sideExists
-        ? `origin/${KB_SYNC_SIDE_BRANCH}`
-        : `origin/${defaultBranch}`,
-    ]);
-    // Overlay the latest KB tree from the captured default tip.
-    await git(["checkout", defaultHead, "--", "knowledge-base"]);
-
-    // Commit only when the overlay introduced changes (idempotent re-entry, AC7).
-    let hasStaged = true;
-    try {
-      await git(["diff", "--cached", "--quiet"]);
-      hasStaged = false;
-    } catch {
-      hasStaged = true;
-    }
-    if (hasStaged) {
-      await git(["commit", "-m", KB_SYNC_SIDE_COMMIT_MSG]);
-    }
-
-    // Push the side branch fast-forward (no --force). A non-fast-forward reject
-    // (concurrent co-member push, R3) throws → caught below → default NOT reset.
-    await git(["push", "origin", `HEAD:refs/heads/${KB_SYNC_SIDE_BRANCH}`]);
-
-    // Create-or-update the PR in the user's OWN repo. Dynamic import keeps
-    // github-app out of session-sync's static graph (sibling tests mock
-    // git-auth but not github-app).
-    const { createPullRequest, findOpenPullRequest } = await import(
-      "./github-app"
-    );
-    const existing = await findOpenPullRequest(
-      installationId,
-      owner,
-      repo,
-      KB_SYNC_SIDE_BRANCH,
-      defaultBranch,
-    );
-    let prUrl: string | undefined;
-    if (existing) {
-      prUrl = existing.htmlUrl;
-    } else {
-      const pr = await createPullRequest(
-        installationId,
-        owner,
-        repo,
-        KB_SYNC_SIDE_BRANCH,
-        defaultBranch,
-        KB_SYNC_PR_TITLE,
-        kbSyncPrBody(defaultBranch),
-      );
-      prUrl = pr.htmlUrl;
-    }
-
-    // SUCCESS — only now drop the orphan commit from default so it ends `==
-    // origin/<default>` (selfHeal then stays cold; AC3/R2).
-    await git(["checkout", defaultBranch]);
-    await git(["reset", "--hard", `origin/${defaultBranch}`]);
-    restoredClean = true;
-
-    return { ok: true, prUrl, commitCount };
-  } catch (err) {
-    // Failure preserves writes: do NOT reset default. Restore HEAD to the
-    // default branch (without reset) so the un-pushed commit survives there for
-    // next-session retry and the workspace isn't left parked on the side branch.
-    if (!restoredClean) {
-      try {
-        await git(["checkout", defaultBranch]);
-      } catch {
-        // best-effort
-      }
-    }
-    log.warn({ err, userId }, "Protected-branch fallback failed");
-    return { ok: false };
-  }
-}
 
 /**
  * What a failed auto-commit may carry to Sentry: the stage, the exit status and a CLOSED stderr bucket, never the
@@ -376,85 +91,12 @@ function autoCommitFailure(err: unknown, stage: "pull" | "push"): Error | null {
   return new Error(`auto-commit-${stage} failed (exit ${typeof e?.status === "number" ? e.status : "unknown"}, ${bucket})`);
 }
 
-/**
- * Connected-repo git wrapper. Runs `execFileSync("git", ...)` through the shared host-git invocation
- * (hardening arguments, scrubbed environment, `GIT_WORK_TREE=<cwd>`) with
- * an argv-shape guard that rejects:
- *   - subcommands outside the allowlist (`rm`, `reset`, `clean`, `checkout`,
- *     `branch`, `tag`, `cherry-pick`, ...) — categorically destructive or
- *     branch-switching surfaces the auto-commit sweep has no business in.
- *   - forbidden flags (`--force`, `--hard`, `--amend`, `--no-verify`) on
- *     any allowed subcommand.
- *
- * Throws a descriptive Error on rejection so the caller's try/catch logs
- * a meaningful warning rather than silently swallowing the violation.
- */
-function runConnectedRepoGit(
-  argv: string[],
-  // No `env`: the environment is the helper's (scrubbed, hardened), never a caller's.
-  opts: Omit<ExecFileSyncOptions, "env"> & { cwd: string },
-): Buffer {
-  if (argv.length === 0) {
-    throw new Error("connected-repo git: argv must include a subcommand");
-  }
-  const subcmd = argv[0];
-  if (!ALLOWED_GIT_SUBCOMMANDS.has(subcmd)) {
-    throw new Error(
-      `connected-repo git: subcommand '${subcmd}' is not allowed (allowed: ${[...ALLOWED_GIT_SUBCOMMANDS].join(", ")})`,
-    );
-  }
-  for (const arg of argv) {
-    if (FORBIDDEN_GIT_FLAGS.has(arg)) {
-      throw new Error(
-        `connected-repo git: flag '${arg}' is forbidden (subcommand: ${subcmd})`,
-      );
-    }
-  }
-  // Host-side git in a workspace an agent session may have authored: shared hardening arguments + a scrubbed env
-  // (ADR-050 amendment; see server/host-git.ts for what that does and does not close).
-  const h = hostGitInvocation(argv, { cwd: opts.cwd, allowProtocol: ALLOW_PROTOCOL_NONE });
-  return execFileSync("git", h.args, { ...opts, env: h.env }) as Buffer;
-}
+const allowlisted = (entries: readonly PorcelainEntry[] | null): string[] =>
+  (entries ?? []).filter((e) => isAllowlistedPath(e.path)).map((e) => e.path);
 
-/**
- * Parse `git status --porcelain=v1 -z` output and return the subset of
- * paths matching ALLOWED_AUTOCOMMIT_PATHS.
- *
- * The `-z` flag emits NUL-separated entries with no C-quoting, so paths
- * containing tabs, newlines, quotes, or non-ASCII characters round-trip
- * cleanly to `git add --`. For renames (R) and copies (C), git emits the
- * destination path first, then the source path as a separate NUL entry —
- * this parser skips the source.
- */
-export function getAllowlistedChanges(workspacePath: string): string[] {
-  let output: string;
-  try {
-    output = runConnectedRepoGit(
-      ["status", "--porcelain=v1", "-z"],
-      { cwd: workspacePath, stdio: "pipe" },
-    ).toString();
-  } catch (err) {
-    mirrorGitRefusal(err, "getAllowlistedChanges");
-    return [];
-  }
-
-  const paths: string[] = [];
-  const tokens = output.split("\0");
-  for (let i = 0; i < tokens.length; i++) {
-    const entry = tokens[i];
-    if (entry.length < 4) continue; // status (2 chars) + space + path
-    const status = entry.slice(0, 2);
-    const path = entry.slice(3);
-    if (ALLOWED_AUTOCOMMIT_PATHS.some((re) => re.test(path))) {
-      paths.push(path);
-    }
-    // R (rename) and C (copy) are followed by an extra NUL-separated
-    // entry containing the SOURCE path — skip it.
-    if (status[0] === "R" || status[0] === "C") {
-      i++;
-    }
-  }
-  return paths;
+/** The changed paths under `knowledge-base/`, from one status run (the auto-commit's allowlist, #2905). */
+export async function getAllowlistedChanges(workspacePath: string): Promise<string[]> {
+  return allowlisted(await readStatus(workspacePath, "getAllowlistedChanges"));
 }
 
 // PR-C §2.1 (#3244): all four `.from("users")` sites in this file migrate
@@ -513,29 +155,9 @@ async function authProbe(userId: string, op: string): Promise<boolean> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * A refused `.git` (a gitfile, a symlink, `commondir`, a redirecting entry) stops EVERY sync for that workspace at the
- * first gate below, so it must not look like "no remote" or "nothing changed": mirror it once, with the reason only (no
- * path, no user id in the message). Returns true when `err` was a refusal.
- */
-function mirrorGitRefusal(err: unknown, gate: string): boolean {
-  if (!(err instanceof HostGitRefusedError)) return false;
-  log.warn({ reason: err.reason, gate }, "Host git refused the workspace .git; sync skipped");
-  reportSilentFallback(new Error(`session-sync refused: ${err.reason}`), {
-    feature: "session-sync",
-    op: "git-refused",
-    extra: { gate },
-    message: "Host git refused the workspace .git shape",
-  });
-  return true;
-}
-
-function hasRemote(workspacePath: string): boolean {
+async function hasRemote(workspacePath: string): Promise<boolean> {
   try {
-    const result = runConnectedRepoGit(["remote", "-v"], {
-      cwd: workspacePath,
-      stdio: "pipe",
-    });
+    const result = await runConnectedRepoGitAsync(["remote", "-v"], { cwd: workspacePath });
     return result.toString().trim().length > 0;
   } catch (err) {
     mirrorGitRefusal(err, "hasRemote");
@@ -543,13 +165,10 @@ function hasRemote(workspacePath: string): boolean {
   }
 }
 
-function hasLocalCommits(workspacePath: string): boolean {
+async function hasLocalCommits(workspacePath: string): Promise<boolean> {
   try {
     // Check if there are commits ahead of the remote tracking branch
-    const result = runConnectedRepoGit(
-      ["rev-list", "--count", "@{u}..HEAD"],
-      { cwd: workspacePath, stdio: "pipe" },
-    );
+    const result = await runConnectedRepoGitAsync(["rev-list", "--count", "@{u}..HEAD"], { cwd: workspacePath });
     return parseInt(result.toString().trim(), 10) > 0;
   } catch (outer) {
     if (mirrorGitRefusal(outer, "hasLocalCommits")) return false;
@@ -557,10 +176,7 @@ function hasLocalCommits(workspacePath: string): boolean {
     // This handles the case where auto-commit created local commits but no
     // upstream tracking branch is set (first push after clone).
     try {
-      const result = runConnectedRepoGit(
-        ["rev-list", "--count", "HEAD"],
-        { cwd: workspacePath, stdio: "pipe" },
-      );
+      const result = await runConnectedRepoGitAsync(["rev-list", "--count", "HEAD"], { cwd: workspacePath });
       return parseInt(result.toString().trim(), 10) > 0;
     } catch {
       return false;
@@ -568,11 +184,12 @@ function hasLocalCommits(workspacePath: string): boolean {
   }
 }
 
-async function getInstallationId(userId: string): Promise<number | null> {
+/** D45(a): the installation of the caller's ONE resolved workspace (never a user-level guess; the #5435 divergence). */
+async function getInstallationId(userId: string, workspaceId: string): Promise<number | null> {
   const { resolveInstallationId } = await import(
     "@/server/resolve-installation-id"
   );
-  return resolveInstallationId(userId);
+  return resolveInstallationId(userId, workspaceId);
 }
 
 /**
@@ -619,7 +236,7 @@ async function recordKbSyncHistory(
 ): Promise<void> {
   // PR-C §2.1 (#3244): tenant-scoped client (authenticated role).
   const tenant = await getFreshTenantClient(userId);
-  const kbPath = join(workspacePath, "knowledge-base");
+  const kbPath = join(workspacePath, KB_ROOT);
   const fileCount = countMdFiles(kbPath);
   const today = new Date().toISOString().slice(0, 10);
 
@@ -691,10 +308,11 @@ export type KbSyncRow = {
   ok: boolean;
   error_class?: KbSyncErrorClass;
   // #self-heal (kb-sync-affordance-reconcile) — set true on an ok:true row
-  // when the clone was recovered via a gated `reset --hard origin/<default>`
-  // (a diverged clone with zero un-pushed local commits) rather than a clean
-  // `pull --ff-only`. Absent on clean syncs and all legacy rows. Keeps the
-  // forensic trail distinguishing a reset-recovery from a normal pull.
+  // when the self-heal (server/workspace-sync.ts `selfHealNonFastForward`)
+  // recovered a diverged clone (a `reset --keep` to the verified default tip,
+  // after branching any local commits aside) rather than a clean fast-forward.
+  // Absent on clean syncs and all legacy rows. Keeps the forensic trail
+  // distinguishing a recovery from a normal sync.
   recovered?: boolean;
   push_received_at?: number; // Unix ms — only set on webhook_push rows
   sync_completed_at: number; // Unix ms
@@ -841,8 +459,67 @@ async function updateLastSynced(
 // ---------------------------------------------------------------------------
 
 /**
- * Pull latest changes from remote before an agent session.
- * Best-effort: failures are logged but never throw.
+ * One `kb-sync.pull-held` line per session-start pull (D25(6)): an info pino line for every reason, plus a debounced
+ * warning mirror (per workspace and reason) for the warning reasons. Tags carry the closed reason and, for a fetch-stage
+ * reason, which fetch; no URL, sha, path or branch name.
+ */
+export function reportPullHeld(
+  reason: KbPullHeldReason,
+  ctx: { userId: string; workspaceId: string },
+  ref?: KbPullRef,
+  detail: Pick<KbPullStep, "remoteCause" | "isolatedReason" | "errName" | "frame"> = {},
+): void {
+  // Closed sub-causes ride as tags (obs F4, F8); the catch-all's class name and first app frame as extra (obs F3).
+  const tags = {
+    reason,
+    ...(ref ? { ref } : {}),
+    ...(detail.remoteCause ? { remote_cause: detail.remoteCause } : {}),
+    ...(detail.isolatedReason ? { isolated_reason: detail.isolatedReason } : {}),
+  };
+  const diag = { ...(detail.errName ? { errName: detail.errName } : {}), ...(detail.frame ? { frame: detail.frame } : {}) };
+  log.info({ op: KB_PULL_HELD_OP, ...tags, ...diag, workspaceId: ctx.workspaceId }, "KB sync pull outcome");
+  const message = KB_PULL_HELD_MESSAGES[reason];
+  if (message === null) return;
+  mirrorWarnWithDebounce(
+    null,
+    { feature: "session-sync", op: KB_PULL_HELD_OP, message, tags, extra: { userId: ctx.userId, ...diag } },
+    ctx.workspaceId,
+    `kb-sync-pull-held:${reason}`,
+  );
+}
+
+/**
+ * What `syncPull` hands its caller (D29(4)): this run's fresh held-files count and the run's reason. The legacy runner
+ * builds its agent lines from it (task 11.3b), so it never reads the stored columns.
+ * - `heldFiles`: `computeHeldFiles().total`, or null when no count was computed this run (no remote read, a refused or
+ *   unreadable state, a git failure). Null is "unknown", never 0.
+ * - `onRecovered`: `computeHeldFiles().onRecovered`, null exactly when `heldFiles` is.
+ * - `checkedAt`: when the count was computed (ISO 8601, the value written to `kb_sync_held_checked_at`), null with it.
+ */
+export interface SyncPullResult {
+  readonly heldFiles: number | null;
+  readonly onRecovered: number | null;
+  readonly pullReason: KbPullHeldReason | null;
+  readonly checkedAt: string | null;
+}
+
+/** The reasons after which the workspace is in sync with GitHub's default branch, so `repo_last_synced_at` is stamped (X1). */
+const PULL_STAMPS = new Set<KbPullHeldReason>(["up_to_date", "merged", "autostash_conflict"]);
+/** The default-branch reasons after which step 6b (side-tip adoption, D28) runs. */
+const PULL_ADOPTS = new Set<KbPullHeldReason>(["up_to_date", "merged"]);
+
+/**
+ * Pull GitHub's default branch into the workspace before an agent session (#12718, rulings X1, X4, X5, D25-D28).
+ * Best-effort: failures are logged and reported, and it never throws.
+ *
+ * Order: ONE status run; the shared `mergeInProgress` (a half-done merge refuses `unresolved_merge` BEFORE any auto-commit,
+ * with no token minted, D26(1)); the KB auto-commit from the same status; the frozen HEAD; then, in ONE isolated directory,
+ * `mergeVerifiedDefault` (server/kb-sync-pull.ts) and, after `merged` or `up_to_date`, the side-tip adoption. The token
+ * reaches only the hardened `ls-remote` and fetches against the literal URL; no workspace config, ref or hook takes part.
+ * `repo_last_synced_at` is stamped after `up_to_date`, `merged` and `autostash_conflict` (a merge that exited 0). One
+ * `kb-sync.pull-held` report per run. After the merge and the adoption, the held-files count (#12714) is computed on the
+ * same isolated directory, written through the separate `writeKbSyncHeldCols`, and returned for the legacy runner's
+ * agent line.
  */
 export async function syncPull(
   userId: string,
@@ -853,69 +530,156 @@ export async function syncPull(
   // re-resolves the workspace (forbids the #5435 dual-resolver divergence).
   service: SupabaseClient,
   workspaceId: string,
-): Promise<void> {
-  if (!hasRemote(workspacePath)) {
-    return; // Empty workspace, no remote
+  /** `budget` is a test seam (D38(2)); production passes none: `SYNC_PULL_BUDGET_MS` from this call's entry. */
+  opts: { readonly limits?: KbPullLimits; readonly budget?: PullBudget } = {},
+): Promise<SyncPullResult> {
+  // Measured from entry, so the lock wait below counts against it (D38(6)).
+  const budget = opts.budget ?? pullBudget(SYNC_PULL_BUDGET_MS, MERGE_START_MIN_MS);
+  const none: SyncPullResult = { heldFiles: null, onRecovered: null, pullReason: null, checkedAt: null };
+  if (!(await hasRemote(workspacePath))) {
+    return none; // Empty workspace, no remote
   }
 
   // PR-C §2.1 (#3244): per-entry-function RLS-baseline probe — see
   // `authProbe` doc-comment for the load-bearing rationale.
   if (!(await authProbe(userId, "syncPull"))) {
     log.warn({ userIdHash: hashUserId(userId) }, "Sync pull aborted — auth probe failed");
-    return;
+    return none;
   }
 
+  // D38(6): one workspace's git writers run one at a time on this host (a sibling pull never reads this one's in-flight
+  // MERGE_AUTOSTASH as an unfinished merge). R2-B (verify-coverage P2-1): the wait races what is left of the budget; a
+  // lock that is not free in time is `pull_deadline` and nothing runs under it.
+  const locked = await withWorkspaceGitLock(
+    workspacePath,
+    () => pullLocked(userId, workspacePath, service, workspaceId, opts.limits, budget),
+    { waitMs: budget.remaining() },
+  );
+  if (locked === WORKSPACE_GIT_LOCK_TIMEOUT) {
+    reportPullHeld("pull_deadline", { userId, workspaceId }, "default");
+    return { ...none, pullReason: "pull_deadline" };
+  }
+  return locked;
+}
+
+async function pullLocked(
+  userId: string,
+  workspacePath: string,
+  service: SupabaseClient,
+  workspaceId: string,
+  limitsOpt: KbPullLimits | undefined,
+  budget: PullBudget,
+): Promise<SyncPullResult> {
+  const none: SyncPullResult = { heldFiles: null, onRecovered: null, pullReason: null, checkedAt: null };
+  const ctx = { userId, workspaceId };
+  let isolated: IsolatedPushDirHandle | undefined;
   try {
-    const installationId = await getInstallationId(userId);
+    // D26(1): ONE status run feeds the unmerged scan and the auto-commit allowlist, and the scan runs first.
+    const status = await readStatus(workspacePath, "syncPull");
+    if (mergeInProgress(workspacePath, status)) {
+      await pinInterruptedAutostash(workspacePath); // D36(c): a stranded autostash survives gc until #12719 recovers it
+      reportPullHeld("unresolved_merge", ctx);
+      return { ...none, pullReason: "unresolved_merge" };
+    }
+
+    const installationId = await getInstallationId(userId, workspaceId);
     if (!installationId) {
       log.warn({ userId }, "No installation ID found for sync pull");
-      return;
+      return none;
     }
 
     // Auto-commit any uncommitted changes before pulling to avoid conflicts.
-    // Path-scoped to ALLOWED_AUTOCOMMIT_PATHS — see #2905.
+    // Path-scoped to `knowledge-base/` — see #2905.
+    await autoCommit(workspacePath, allowlisted(status), "pull", userId);
+
+    const head = readWorkspaceHeadRef(workspacePath);
+    let result: KbPullStep;
+    let held: { total: number; onRecovered: number; checkedAt: string } | null = null;
+    let repo: { url: string; owner: string; repo: string } | null = null;
     try {
-      const allowed = getAllowlistedChanges(workspacePath);
-      if (allowed.length === 0) {
-        log.info(
-          { userId },
-          "No allowlisted changes to commit — skipping auto-commit",
-        );
-      } else {
-        runConnectedRepoGit(["add", "--", ...allowed], {
-          cwd: workspacePath,
-          stdio: "pipe",
-        });
-        runConnectedRepoGit(["commit", "-m", AUTO_COMMIT_MSG_PULL], {
-          cwd: workspacePath,
-          stdio: "pipe",
-        });
-      }
+      repo = await resolveRepoUrl(userId, workspaceId);
     } catch (err) {
-      log.warn({ err, userId }, "Auto-commit before pull failed");
-      const failure = autoCommitFailure(err, "pull");
-      if (failure) {
-        reportSilentFallback(failure, {
-          feature: "session-sync",
-          op: "auto-commit-pull",
-          extra: { userId },
-          message: "Auto-commit before sync pull failed",
+      if (!(err instanceof KbRemoteError)) throw err;
+    }
+    if (repo === null) {
+      result = { reason: "remote_state", remoteCause: "repo_url_unresolved" };
+    } else {
+      let refusal: IsolatedPushDirRefusal | undefined;
+      try {
+        isolated = createIsolatedPushDir(workspacePath);
+      } catch (err) {
+        if (!(err instanceof IsolatedPushDirRefusal)) throw err;
+        refusal = err;
+      }
+      if (!isolated) {
+        result = { reason: "isolated_refused", ...(refusal ? { isolatedReason: refusal.reason } : {}) };
+      } else {
+        const writer = kbPullWriter(workspacePath);
+        const limits = limitsOpt ? { limits: limitsOpt } : {};
+        const merged = await mergeVerifiedDefault({
+          isolated,
+          installationId,
+          url: repo.url,
+          headSha: head.sha,
+          refName: head.refName,
+          writer,
+          budget,
+          ...limits,
         });
+        result = merged;
+        if (PULL_STAMPS.has(merged.reason)) await stampBestEffort(service, workspaceId);
+        if (PULL_ADOPTS.has(merged.reason) && merged.remote) {
+          const side = await adoptSideTip({
+            isolated,
+            installationId,
+            url: repo.url,
+            owner: repo.owner,
+            repo: repo.repo,
+            remote: merged.remote,
+            headSha: readWorkspaceHeadRef(workspacePath).sha,
+            writer,
+            budget,
+            ...limits,
+          });
+          if (side) result = side;
+        }
+        // #12714 (D29(1), D39(a)(b), W1): after the merge and the adoption (up_to_date too), on this run's remote tip and
+        // the HEAD those steps left, through the ONE write path (server/kb-sync-held-refresh.ts) with this pull's injected
+        // service client: every attempt writes, a null count too, with checked_at = this run's ls-remote instant. No
+        // remote read: no tip, so no attempt. X5 (R2-B, verify-coverage P3-6): HEAD not on the remote's default branch is no
+        // attempt either, as in the self-heal (the cc refresh does not yet apply X5: tasks.md 11.6). D42 (R2-B, verify-coverage P3-5): a default merge that
+        // `merged` or found the workspace `up_to_date` clears the pull-blocked state; any other reason leaves it as it is.
+        if (merged.remote && head.refName === `refs/heads/${merged.remote.defaultBranch}`) {
+          const clears = merged.reason === "merged" || merged.reason === "up_to_date";
+          const counted = await writeHeldFromIsolated({
+            isolated,
+            workspacePath,
+            workspaceId,
+            T: merged.remote.tip,
+            headSha: readWorkspaceHeadRef(workspacePath).sha,
+            checkedAt: merged.remote.readAt,
+            service,
+            ...(clears ? { pullBlocked: null } : {}),
+          });
+          if (counted) held = { ...counted, checkedAt: merged.remote.readAt.toISOString() };
+        }
       }
     }
-
-    // Use merge (not rebase) — shallow clones lack sufficient history for rebase
-    await gitWithInstallationAuth(
-      ["pull", "--no-rebase", "--autostash"],
-      installationId,
-      { cwd: workspacePath, timeout: 60_000 },
-    );
-
-    await updateLastSynced(service, workspaceId);
-    log.info({ userId }, "Sync pull completed");
+    reportPullHeld(result.reason, ctx, result.ref, result);
+    return {
+      heldFiles: held?.total ?? null,
+      onRecovered: held?.onRecovered ?? null,
+      pullReason: result.reason,
+      // SyncPullResult contract: null exactly when heldFiles is (the stored checked_at is written regardless, D39(b))
+      checkedAt: held?.checkedAt ?? null,
+    };
   } catch (err) {
-    log.warn({ err, userId }, "Sync pull failed — continuing with local state");
-    reportSilentFallback(err, {
+    // D25(7): no raw error reaches Sentry (git's argv names the URL and shas): the class name and the first app frame only.
+    const errName = err instanceof Error ? err.name : typeof err;
+    const frame = firstAppFrame(err);
+    const uidHash = hashUserId(userId);
+    log.warn({ userIdHash: uidHash, errName, ...(frame ? { frame } : {}) }, "Sync pull failed — continuing with local state");
+    reportSilentFallback(null, {
       feature: "session-sync",
       op: "syncPull",
       // workspacePath omitted intentionally — it embeds the raw userId
@@ -923,15 +687,76 @@ export async function syncPull(
       // hashExtraUserId boundary's top-level rename (Recital 26 +
       // ADR-029 rename-at-boundary). The pseudonymous userId carries the
       // diagnostic value; the path adds no information.
-      extra: { userId },
+      extra: { userId, errName, ...(frame ? { frame } : {}) },
       message: "Sync pull failed — continuing with local state",
+    });
+    // R2-B (obs F3, verify-coverage P3-17): a closed reason for the legacy runner's line, and this run's one pull-held line.
+    reportPullHeld("pull_unexpected", ctx, undefined, { errName, ...(frame ? { frame } : {}) });
+    return { ...none, pullReason: "pull_unexpected" };
+  } finally {
+    disposeIsolated(isolated, "session-sync");
+  }
+}
+
+/**
+ * The X1 stamp, best effort (quality P3-3): a failed write never turns a completed merge into a failed pull (the result
+ * and its `kb-sync.pull-held` line stand); it is reported on its own op.
+ */
+async function stampBestEffort(service: SupabaseClient, workspaceId: string): Promise<void> {
+  try {
+    await updateLastSynced(service, workspaceId);
+  } catch (err) {
+    const errName = err instanceof Error ? err.name : typeof err;
+    log.warn({ op: "kb-sync.pull-stamp", errName, workspaceId }, "KB sync pull: the last-synced stamp failed");
+    reportSilentFallback(null, {
+      feature: "session-sync",
+      op: "kb-sync.pull-stamp",
+      extra: { workspaceId, errName },
+      message: "KB sync pull: the last-synced stamp failed",
     });
   }
 }
 
 /**
- * Push local changes to remote after an agent session.
- * Best-effort: failures are logged but never throw.
+ * The path-scoped auto-commit (#2905) of `allowed` (the status run's `knowledge-base/` entries). Best-effort: a failure
+ * is logged and reported (stage, exit status and a closed bucket only), never thrown.
+ */
+async function autoCommit(workspacePath: string, allowed: string[], stage: "pull" | "push", userId: string): Promise<void> {
+  try {
+    if (allowed.length === 0) {
+      const uidHash = hashUserId(userId);
+      log.info({ userIdHash: uidHash }, "No allowlisted changes to commit — skipping auto-commit");
+      return;
+    }
+    await runConnectedRepoGitAsync(["add", "--", ...allowed], { cwd: workspacePath });
+    await runConnectedRepoGitAsync(["commit", "-m", stage === "pull" ? AUTO_COMMIT_MSG_PULL : AUTO_COMMIT_MSG_PUSH], { cwd: workspacePath });
+  } catch (err) {
+    // pattern P3-16, gdpr: no raw `err` in the pino line (its message is the argv, which names tenant file paths); the class
+    // name, the exit status and the first app frame only.
+    const frame = firstAppFrame(err);
+    const exit = (err as { status?: unknown } | null)?.status;
+    log.warn(
+      { userId, errName: err instanceof Error ? err.name : typeof err, ...(typeof exit === "number" ? { exit } : {}), ...(frame ? { frame } : {}) },
+      `Auto-commit before ${stage} failed`,
+    );
+    const failure = autoCommitFailure(err, stage);
+    if (failure) {
+      reportSilentFallback(failure, {
+        feature: "session-sync",
+        op: `auto-commit-${stage}`,
+        extra: { userId },
+        message: stage === "pull" ? "Auto-commit before sync pull failed" : "Auto-commit before sync push failed",
+      });
+    }
+  }
+}
+
+/**
+ * Push the session's knowledge-base changes after an agent session (#12600). Only a commit the server built reaches the
+ * remote: `S` = the remote tip's verified root with HEAD's `knowledge-base` entry, parent the remote tip, Soleur's
+ * message and identity (server/kb-sync-publish.ts). Best-effort: failures are logged but never throw. It never stamps
+ * `repo_last_synced_at` (W5: only `syncPull` does); it writes the held-files count (#12714) from its `finally` whenever the
+ * publish's `onHeldFiles` hook computed one.
  */
 export async function syncPush(
   userId: string,
@@ -940,8 +765,11 @@ export async function syncPush(
   // workspace id (see syncPull / agent-runner.ts).
   service: SupabaseClient,
   workspaceId: string,
+  /** `budget` is a test seam (R2-B); production passes none: `SYNC_PUSH_BUDGET_MS` from this call's entry. */
+  opts: { readonly budget?: PushBudget } = {},
 ): Promise<void> {
-  if (!hasRemote(workspacePath)) {
+  const budget: PushBudget = opts.budget ?? pullBudget(SYNC_PUSH_BUDGET_MS, 0);
+  if (!(await hasRemote(workspacePath))) {
     return; // Empty workspace, no remote
   }
 
@@ -952,113 +780,144 @@ export async function syncPush(
     return;
   }
 
+  // D38(6): serialized with this workspace's pull and self-heal on this host. R2-B (verify-coverage P2-1): the publish holds
+  // the lock, so it runs on a budget: the wait races it (`push_deadline` when the lock is not free in time), and inside,
+  // the remote read and each push start only while it allows, each capped at what is left. A started git child is never
+  // killed mid-way beyond its own (capped) timeout.
+  const locked = await withWorkspaceGitLock(workspacePath, () => pushLocked(userId, workspacePath, service, workspaceId, budget), {
+    waitMs: budget.remaining(),
+  });
+  if (locked === WORKSPACE_GIT_LOCK_TIMEOUT) reportPushHeld("push_deadline", "held", { userId, workspaceId });
+}
+
+async function pushLocked(
+  userId: string,
+  workspacePath: string,
+  service: SupabaseClient,
+  workspaceId: string,
+  budget: PushBudget,
+): Promise<void> {
+  const ctx = { userId, workspaceId };
   try {
-    // Auto-commit any uncommitted changes before pushing.
-    // Path-scoped to ALLOWED_AUTOCOMMIT_PATHS — see #2905.
-    try {
-      const allowed = getAllowlistedChanges(workspacePath);
-      if (allowed.length === 0) {
-        log.info(
-          { userId },
-          "No allowlisted changes to commit — skipping auto-commit",
-        );
-      } else {
-        runConnectedRepoGit(["add", "--", ...allowed], {
-          cwd: workspacePath,
-          stdio: "pipe",
-        });
-        runConnectedRepoGit(["commit", "-m", AUTO_COMMIT_MSG_PUSH], {
-          cwd: workspacePath,
-          stdio: "pipe",
-        });
-      }
-    } catch (err) {
-      log.warn({ err, userId }, "Auto-commit before push failed");
-      const failure = autoCommitFailure(err, "push");
-      if (failure) {
-        reportSilentFallback(failure, {
-          feature: "session-sync",
-          op: "auto-commit-push",
-          extra: { userId },
-          message: "Auto-commit before sync push failed",
-        });
-      }
+    // ONE status run feeds the unmerged scan and the auto-commit allowlist (D21).
+    const status = await readStatus(workspacePath, "syncPush");
+    // A conflicted session-start merge: committing would publish conflict markers (matrix 17).
+    if (mergeInProgress(workspacePath, status)) {
+      await pinInterruptedAutostash(workspacePath); // D36(c)
+      reportPushHeld("merge_in_progress", "held", ctx);
+      return;
     }
 
-    if (!hasLocalCommits(workspacePath)) {
+    // Auto-commit any uncommitted changes before pushing.
+    // Path-scoped to `knowledge-base/` — see #2905.
+    await autoCommit(workspacePath, allowlisted(status), "push", userId);
+
+    if (!(await hasLocalCommits(workspacePath))) {
       log.debug({ userId }, "No local commits to push");
       return;
     }
 
-    const installationId = await getInstallationId(userId);
+    const installationId = await getInstallationId(userId, workspaceId);
     if (!installationId) {
       log.warn({ userId }, "No installation ID found for sync push");
       return;
     }
 
+    // Frozen HEAD, read from the files (no git child): the sha every later step builds on and CASes against.
+    let head: { sha: string; refName: string | null };
     try {
-      await gitWithInstallationAuth(
-        ["push"],
-        installationId,
-        { cwd: workspacePath, timeout: 60_000 },
-      );
-    } catch (pushErr) {
-      const pushClass = classifyPushError(pushErr);
-      if (pushClass === "protected_branch") {
-        // #5426 — protected default: route writes to soleur/kb-sync + PR.
-        const fallback = await runProtectedFallback(
-          userId,
-          workspacePath,
-          installationId,
-        );
-        if (!fallback.ok) {
-          // `reason` discriminates "the fallback ran and failed" from the
-          // persistent_other branch below (which never entered the fallback)
-          // WITHOUT splitting the Sentry op — the issue-alert + its op-contract
-          // test pin the single `kb-sync.protected-fallback-failed` op.
-          reportSilentFallback(pushErr, {
-            feature: "session-sync",
-            op: "kb-sync.protected-fallback-failed",
-            extra: { userId, reason: "fallback_failed" },
-            message:
-              "KB-sync protected-branch fallback failed — writes preserved on default for retry",
-          });
-          return;
-        }
-        warnSilentFallback(null, {
+      head = readWorkspaceHeadRef(workspacePath);
+    } catch {
+      throw new KbSyncError("head_unreadable");
+    }
+    if (head.refName === null) {
+      reportPushHeld("detached_head", "held", ctx);
+      return;
+    }
+
+    const result = await publishKbOnly({
+      ...ctx,
+      workspacePath,
+      installationId,
+      headSha: head.sha,
+      refName: head.refName,
+      writer: kbWorkspaceWriter(workspacePath),
+      budget,
+      // #12714 (D29(1), D39(a)(b)): the publish runs this hook from its `finally`, before its isolated dir is disposed, on
+      // every exit that read the remote tip (held exits too); the helper computes and writes (null with checked_at).
+      onHeldFiles: async ({ isolatedDir, T, headSha, readAt }) => {
+        await writeHeldFromIsolated({ isolated: isolatedDir, workspacePath, workspaceId, T, headSha, checkedAt: readAt, service });
+      },
+    });
+
+    if (result.kind === "fallback_failed" && result.fallbackReason === "side_push_transient") {
+      // D21: the side push failed on the network; the next turn retries it. A warning OFF the paging op, debounced per workspace.
+      mirrorWarnWithDebounce(
+        null,
+        {
           feature: "session-sync",
-          op: "kb-sync.push-protected-fallback",
-          extra: {
-            userId,
-            prUrl: fallback.prUrl,
-            commitCount: fallback.commitCount,
-          },
-          message:
-            "KB-sync push rejected by branch protection — routed to soleur/kb-sync + PR",
-        });
-        // Fall through to history recording + last-synced (writes delivered).
-      } else if (pushClass === "persistent_other") {
-        // Non-protection persistent reject (e.g. shallow update not allowed) —
-        // retrying would loop forever. Emit a distinct op and stop here.
-        reportSilentFallback(pushErr, {
+          op: "kb-sync.side-push-transient",
+          extra: { userId },
+          tags: { fallback_reason: result.fallbackReason, push_class: result.pushErr?.pushClass ?? "none" },
+          message: "KB-sync side push failed transiently — retried next session",
+        },
+        workspaceId,
+        "kb-sync-side-push-transient",
+      );
+      return;
+    }
+    if (result.kind === "fallback_failed") {
+      // `reason` discriminates "the fallback ran and failed" from the
+      // persistent_other branch below (which never entered the fallback)
+      // WITHOUT splitting the Sentry op — the issue-alert + its op-contract
+      // test pin the single `kb-sync.protected-fallback-failed` op. The closed
+      // `fallback_reason` tag names the step (#12600).
+      // CTO ruling D8: a null error (an Error loses these tags to the pino-mirror capture, #8629), debounced per
+      // workspace and reason (the fallback can fail every turn, R16).
+      mirrorWithDebounce(
+        null,
+        {
           feature: "session-sync",
           op: "kb-sync.protected-fallback-failed",
-          extra: { userId, reason: "persistent_other" },
+          extra: { userId, reason: "fallback_failed" },
+          tags: {
+            reason: "fallback_failed",
+            fallback_reason: result.fallbackReason,
+            push_class: result.pushErr?.pushClass ?? "none",
+          },
           message:
-            "KB-sync push persistently rejected (non-protection) — not retried",
-        });
-        return;
-      } else {
-        // Auth/network/transient — existing best-effort retry-next-session.
-        throw pushErr;
-      }
+            "KB-sync protected-branch fallback failed — writes preserved on default for retry",
+        },
+        workspaceId,
+        `kb-sync-fallback-failed:${result.fallbackReason}`,
+      );
+      return;
+    }
+    if (result.kind === "fallback") {
+      // #5426 — protected default: writes routed to soleur/kb-sync + PR.
+      warnSilentFallback(null, {
+        feature: "session-sync",
+        op: "kb-sync.push-protected-fallback",
+        extra: {
+          userId,
+          prUrl: result.prUrl,
+          commitCount: result.commitCount,
+        },
+        message:
+          "KB-sync push rejected by branch protection — routed to soleur/kb-sync + PR",
+      });
+      // Fall through to history recording (writes delivered).
+    } else if (result.kind !== "pushed") {
+      // Held or nothing to sync: no push happened, so no bookkeeping (CPO condition C4).
+      return;
     }
 
     // Best-effort: record KB file count for analytics sparklines
     try {
       await recordKbSyncHistory(userId, workspacePath);
     } catch (err) {
-      log.warn({ err, userId }, "KB sync history recording failed");
+      const uidHash = hashUserId(userId);
+      log.warn({ userIdHash: uidHash, errName: err instanceof Error ? err.name : typeof err }, "KB sync history recording failed");
       reportSilentFallback(err, {
         feature: "session-sync",
         op: "recordKbSyncHistory",
@@ -1068,15 +927,48 @@ export async function syncPush(
       });
     }
 
-    await updateLastSynced(service, workspaceId);
+    // W5 (D29(9)): no `repo_last_synced_at` stamp here: only `syncPull` stamps it, so "Updated from GitHub" stays true.
     log.info({ userId }, "Sync push completed");
   } catch (err) {
-    log.warn({ err, userId }, "Sync push failed — next session will retry");
-    reportSilentFallback(err, {
+    if (err instanceof KbSyncError && err.pushClass === "persistent_other") {
+      // Non-protection persistent reject (e.g. shallow update not allowed): the next turn hits it again, so the emit is
+      // debounced per workspace (D21) on the same op (the issue alert keys on it).
+      // D8: null error, the cause in tags (the Error path's tags are lost to the pino-mirror capture, #8629).
+      mirrorWithDebounce(
+        null,
+        {
+          feature: "session-sync",
+          op: "kb-sync.protected-fallback-failed",
+          extra: { userId, reason: "persistent_other" },
+          tags: { reason: "persistent_other", push_class: "persistent_other" },
+          message:
+            "KB-sync push persistently rejected (non-protection) — not retried",
+        },
+        workspaceId,
+        "kb-sync-persistent-other",
+      );
+      return;
+    }
+    // D8: null error, the closed reason and push class in tags. A non-KbSyncError carries only its class name and (D20) its
+    // first app code frame as `file:line`: its message is git's argv (the URL and the refspec, R2), so it reaches neither
+    // Sentry nor the pino line (pattern P3-16, gdpr: no raw `err` key).
+    const kbErr = err instanceof KbSyncError ? err : null;
+    const frame = kbErr ? undefined : firstAppFrame(err);
+    log.warn(
+      { userId, errName: err instanceof Error ? err.name : typeof err, ...(kbErr ? { reason: kbErr.reason } : {}), ...(frame ? { frame } : {}) },
+      "Sync push failed — next session will retry",
+    );
+    reportSilentFallback(null, {
       feature: "session-sync",
       op: "syncPush",
       // workspacePath dropped — see syncPull catch for the rationale.
-      extra: { userId },
+      extra: kbErr ? { userId } : { userId, errName: err instanceof Error ? err.name : typeof err, ...(frame ? { frame } : {}) },
+      tags: {
+        reason: kbErr ? kbErr.reason : "unclassified",
+        push_class: kbErr?.pushClass ?? "none",
+        // D21: the closed refusal reason of an isolated_refused, never a path
+        ...(kbErr?.isolatedReason ? { isolated_reason: kbErr.isolatedReason } : {}),
+      },
       message: "Sync push failed — next session will retry",
     });
   }
