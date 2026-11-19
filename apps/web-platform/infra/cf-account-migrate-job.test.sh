@@ -629,6 +629,66 @@ for pair in r2_evil:chk_r2_pinned budget:chk_budget imports_seam:chk_rehearsal_c
   "${pair#*:}" "$LAST_D"; verdict "$?" "${pair%%:*}: ${pair#*:} green on the pristine script ($WHY)"
 done
 
+# --- Re-dispatch after a committed forget (CTO D10) ------------------------------------
+# The first redirects-dns apply forgot every non-R2 cloudflare_* entry and then failed before
+# writing any. Remote state now holds the R2 bucket plus non-Cloudflare entries only. Ruled
+# contract of cf-account-state-migrate.sh: such a state gives `verdict=ok removed=0` (no backup,
+# no state rm), and the job must then reach the plan. The forget is modelled by a contract stub in
+# a mirror workspace (the real script's side is pinned in cf-account-state-migrate.test.sh, owned
+# with the D10 change); everything else here is the real job, gate and libraries.
+printf '\n[re-dispatch] after a committed forget, the job reaches the plan\n'
+MIRROR="$SBX/mirror"
+mkdir -p "$MIRROR/apps/web-platform/infra/scripts" || exit 2
+ln -s "$REPO/.github" "$MIRROR/.github"; ln -s "$REPO/tests" "$MIRROR/tests"
+ln -s "$HERE/scripts/cf-account-migration-complete.sh" "$MIRROR/apps/web-platform/infra/scripts/cf-account-migration-complete.sh"
+# The gate resolves the committed imports file relative to itself, so the mirror carries it too.
+ln -s "$HERE/cf-account-migration-imports.tf" "$MIRROR/apps/web-platform/infra/cf-account-migration-imports.tf"
+cat >"$MIRROR/apps/web-platform/infra/scripts/cf-account-state-migrate.sh" <<'STUB'
+#!/usr/bin/env bash
+# Contract stub (CTO D10): zero non-R2 cloudflare_* candidates AND >=1 managed cloudflare_r2_bucket
+# -> verdict=ok removed=0; zero cloudflare_* at all -> abort zero-candidates.
+set -uo pipefail
+printf 'state-migrate-stub %s\n' "$*" >>"${STUB_DIR:?}/calls.log"
+j="$(terraform show -json)" || { echo "cf-state-migrate verdict=abort reason=show-failed"; exit 1; }
+r2="$(jq '[.values.root_module.resources[]? | select(.mode == "managed" and .type == "cloudflare_r2_bucket")] | length' <<<"$j")"
+cf="$(jq '[.values.root_module.resources[]? | select(.mode == "managed" and (.type | startswith("cloudflare_")) and .type != "cloudflare_r2_bucket")] | length' <<<"$j")"
+if [[ "$cf" -eq 0 && "$r2" -ge 1 ]]; then echo "cf-state-migrate verdict=ok removed=0 skipped=0"; exit 0; fi
+echo "cf-state-migrate verdict=abort reason=zero-candidates"; exit 1
+STUB
+chmod +x "$MIRROR/apps/web-platform/infra/scripts/cf-account-state-migrate.sh"
+forgotten_state() { # <file>: serial 8, the R2 bucket and a non-Cloudflare secret only
+  jq -n --arg oa "$OA" --arg s "$SENTINEL" '
+    def r($addr; $t; $v): {address: $addr, mode: "managed", type: $t, name: "n", values: $v};
+    {version: 4, serial: 8, lineage: "lin-1", show: {format_version: "1.0", values: {root_module: {resources: [
+      r("cloudflare_r2_bucket.luks"; "cloudflare_r2_bucket"; {account_id: $oa}),
+      r("doppler_secret.cf_api_token_dns_edit"; "doppler_secret"; {id: "tok-id-1", value: $s})
+    ]}}}}' >"$1"
+}
+chk_redispatch() { # <dir> <mode>: forget ok removed=0, no state rm, reached the plan and PASS
+  if ! grep -q '^state-migrate-stub ' "$1/calls.log"; then WHY="no-forget-call"; return 1; fi
+  if ! grep -q 'cf-state-migrate verdict=ok removed=0' "$1/out.txt"; then WHY="forget-not-ok"; return 1; fi
+  if grep -q 'state rm' "$1/calls.log"; then WHY="state-rm"; return 1; fi
+  if ! grep -q 'terraform\[[a-z]*\] plan' "$1/calls.log"; then WHY="no-plan"; return 1; fi
+  [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
+  grep -qx "cf-account-migrate phase=redirects-dns mode=$2 verdict=PASS applied=$([[ $2 == apply ]] && echo true || echo false)" "$1/out.txt" || { WHY="no-pass-line"; return 1; }
+}
+for mode in apply rehearsal; do
+  new_case "redispatch-$mode" redirects-dns "$([[ $mode == rehearsal ]] && echo true || echo false)"
+  forgotten_state "$LAST_D/remote.tfstate"
+  printf 'GITHUB_WORKSPACE=%s\n' "$MIRROR" >"$LAST_D/env.extra"
+  run_job "$LAST_D" "$PRISTINE"; WHY=""
+  chk_redispatch "$LAST_D" "$mode"; verdict "$?" "$mode re-dispatch on a forgotten state (R2 + non-Cloudflare only): forget ok removed=0, plan reached, PASS ($WHY)"
+done
+new_case redispatch-nocf redirects-dns false
+jq '.show.values.root_module.resources |= map(select(.type | startswith("cloudflare_") | not))' "$LAST_D/remote.tfstate" >"$LAST_D/s" && mv "$LAST_D/s" "$LAST_D/remote.tfstate"
+printf 'GITHUB_WORKSPACE=%s\n' "$MIRROR" >"$LAST_D/env.extra"
+run_job "$LAST_D" "$PRISTINE"
+r=1; refused_for "$LAST_D" state-migrate-failed && ! grep -q 'terraform\[remote\] plan' "$LAST_D/calls.log" && r=0
+verdict "$r" "no cloudflare_* at all: the forget aborts and the job refuses state-migrate-failed before any plan"
+new_case applyfail-msg redirects-dns false; printf '1' >"$LAST_D/mode.apply"; run_job "$LAST_D" "$PRISTINE"
+r=1; grep -q 'Fix forward.*re-dispatch the same phase: the forget then removes 0' "$LAST_D/out.txt" && ! grep -q 'every phase is idempotent' "$LAST_D/out.txt" && r=0
+verdict "$r" "apply-failed names the fix-forward / re-dispatch path (removed=0 on the re-run)"
+
 # --- Mutations ------------------------------------------------------------------------
 printf '\n[mutations] each refusal is load-bearing\n'
 M1="$(mk_mutant confirm 's/|| refuse bad-confirm/|| true/')"
@@ -693,6 +753,11 @@ E1="$(mk_mutant no-entrypoint-gate 's/^  if ! entrypoint_gate; then$/  if false;
 red "E1 entrypoint gate call deleted" "$E1" chk_entrypoint_refused '^(apply-called|not-refused)' setup_entry_apply
 E2="$(mk_mutant entrypoint-seam 's/ -u PREAPPLY_ENTRYPOINT_FETCH//')"
 red "E2 the gate's fetch seam reaches production" "$E2" chk_entrypoint_ran '^rc:1$' setup_entry_seam
+# shellcheck disable=SC2016
+R1="$(mk_mutant forget-ok-ignored 's/state_migrate || refuse state-migrate-failed/state_migrate \&\& refuse state-migrate-failed/')"
+setup_redispatch() { new_case "redispatch-mut-$1" redirects-dns false; forgotten_state "$LAST_D/remote.tfstate"; printf 'GITHUB_WORKSPACE=%s\n' "$MIRROR" >"$LAST_D/env.extra"; }
+chk_redispatch_apply() { chk_redispatch "$1" apply; }
+red "R1 a removed=0 forget treated as a failure (re-dispatch deadlock)" "$R1" chk_redispatch_apply '^(rc:1|no-plan)$' setup_redispatch
 M8="$(mk_mutant always-apply 's/if \[\[ "$REHEARSAL" == true \]\]; then run_rehearsal; else run_apply; fi/run_apply/')"
 red "M8 rehearsal dispatch routed to the apply path" "$M8" chk_rehearsal_clean '^(apply-called|aws-s3-cp|remote-state-rm)$' setup_rehearsal
 
@@ -710,7 +775,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=92
+EXPECTED_CASES=97
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

@@ -384,7 +384,7 @@ run_apply() {
   [[ "$rc" -eq 0 ]] || refuse gate-refused "the plan did not reach gate verdict=PASS; nothing was applied"
   tf_env terraform apply -no-color -input=false -auto-approve "$W/tfplan" 2>&1 | tf_redact_random_ids
   rc=${PIPESTATUS[0]}
-  [[ "$rc" -eq 0 ]] || refuse apply-failed "terraform apply of the graded plan failed (exit $rc); fix forward and re-dispatch (every phase is idempotent)"
+  [[ "$rc" -eq 0 ]] || refuse apply-failed "terraform apply of the graded plan failed (exit $rc); state may hold a partial apply. Fix forward (a reviewed PR if the cause is in code), then re-dispatch the same phase: the forget then removes 0 (cf-state-migrate verdict=ok removed=0), imports already in state plan as no-op, and only the remainder is planned and gated."
   printf '%s phase=%s mode=apply applied=true\n' "$P" "$MIGRATE_PHASE"
   if [[ "$MIGRATE_PHASE" == redirects-dns ]]; then
     verify_redirects_dns || refuse verify-failed "applied, but the redirect/noindex/crawler/app-health probes did not all pass"
