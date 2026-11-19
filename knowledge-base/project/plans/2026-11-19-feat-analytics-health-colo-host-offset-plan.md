@@ -520,7 +520,7 @@ Must-PASS inputs that are not the canonical: an hour with several valid colos ou
 
 ## Class R Checks
 
-Checked: Cloudflare analytics-health (F) #12441 (premise read for #12846): cloudflare-readonly.sh via doppler prd_terraform, ok, 199 contiguous hourly rows 2026-11-10T10Z to 2026-11-18T16Z and no rows after (the configured zone is the old zone; its traffic ends at the 2026-11-18 move), 2026-11-19T10:03:19Z
+Unverified: Cloudflare analytics-health (F) #12441 (premise read for #12846): cloudflare-readonly.sh via doppler prd_terraform, ok, 199 contiguous hourly rows 2026-11-10T10Z to 2026-11-18T16Z and no rows after (the configured zone is the old zone; its traffic ends at the 2026-11-18 move), 2026-11-19T10:03:19Z
 Unverified: whether CF_API_TOKEN_ANALYTICS_READ can read the new zone, other: not-class-r (the wrapper reads only Doppler's CF_ZONE_ID, which names the old zone), 2026-11-19T10:03Z
 
 ## Acceptance Criteria

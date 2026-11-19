@@ -448,7 +448,7 @@ CTO T6 later narrowed the offset bound to 0..527; the handoff loop below refuses
 /usr/bin/env -i /usr/bin/jq -r -f <(awk '/^<!-- health-colo-r2-recipe:start -->$/ { f = 1; next } /^<!-- health-colo-r2-recipe:end -->$/ { f = 0 } f && /^```/ { g = !g; next } f && g { print }' knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md) "$file"
 ```
 
-If the main read was split into two H=108 files (see the keep rules below), join them first, the newer file first, and run the recipe on the joined file:
+If the main read was split into two H=108 files (see the keep rules below), join them first, the newer file first, and run the recipe on the joined file. If a half was split again into two H=54 reads, pass every kept file to the same command, newest first, in place of the pair (the windows are half-open, so a correct split has no duplicate rows, and any overlap fails closed as `bad-input`):
 
 ```bash
 /usr/bin/env -i /usr/bin/jq -s '.[0] + {window_hours: (map(.window_hours) | add), rows: (map(.rows) | add), truncated: (map(.truncated) | any), series: (map(.series) | add | sort_by(.hour, .colo))}' "$newer" "$older" > "$joined"
