@@ -1435,7 +1435,7 @@ sk_check "G2: B_workspaces_luks_marker_future: age_s is the negative delta" p_ev
 # zero lines where no soak kind's evaluation started
 reset_def; DEF[SOLEUR_WEB2_SERVING_WEIGHT]='0'; DEF[SOLEUR_SERVING_ROTATION]='web-1'; run_with_def
 sk_check "G2: the weight-0 standby pass prints ZERO evidence lines" eval '[[ "$GATE_RC" -eq 0 && "$(raw_ev_n any)" -eq 0 ]]'
-reset_def; DEF[SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10"}'; run_with_def
+reset_def; DEF[SOLEUR_HOST_ROSTER]='{"web-9":"10.0.1.99"}'; run_with_def
 sk_check "G2: a Condition A refusal (A_web2_not_in_roster) prints its gate_fail line and ZERO evidence lines" eval 'p_refuses A_web2_not_in_roster && [[ "$(raw_ev_n any)" -eq 0 ]]'
 reset_def; DEF[GIT_DATA_STORE_ENABLED]='false'; run_with_def
 sk_check "G2: a B.1 refusal (B_git_data_store_disabled) prints its gate_fail line and ZERO evidence lines" eval 'p_refuses B_git_data_store_disabled && [[ "$(raw_ev_n any)" -eq 0 ]]'
