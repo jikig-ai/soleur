@@ -208,6 +208,19 @@ Live standing alarms over this source:
   `apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh` (mutation rows). It auto-resolves
   after 10 quiet minutes, which does not mean the cause was found. Runbook and no-SSH decode:
   [`canary-probe-set.md`](./canary-probe-set.md#blocking-bwrap-sandbox-probe--reading-its-self-report-8016-pr-8026).
+- **`logtail_exploration_alert.sandbox_network_degraded`** (#12585, `higher_than 0` over 300 s, evaluated every 60 s,
+  missing data counts as zero): `soleur-sandbox-network-degraded-prd`. **What it matches:** one app-container row
+  (`CONTAINER_NAME = 'soleur-web-platform'`, no `host_name` conjunct) with `message.feature = 'cc-permissions'`,
+  `message.op = 'sandbox-network-denied'`, `message.granted` the JSON boolean `true` AND `message.reason IN
+  ('not-entitled', 'egress-not-running')`: a sandboxed command in a workspace with web access ON was denied because the
+  session's egress forwarder failed to spawn or died. Every other reason is expected volume (`gateway-unverified` is every
+  sandboxed request of an entitled session while the arm is deny-all). The row carries only `reason`, `granted`,
+  `matchedEntry` (a NO_PROXY list entry) and `subagent`, never the host. **First move (no SSH):** read the count and the
+  first timestamp, then the same window's `feature=cc-dispatcher op=web-egress-forwarder-spawn` and `feature=egress-forwarder`
+  rows: `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep sandbox-network-denied`.
+  Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
+  `apps/web-platform/test/infra/sandbox-network-denied-alert.test.sh` (mutation rows). It auto-resolves after 10 quiet
+  minutes, which does not mean the cause was found.
 - **`logtail_exploration_alert.agent_sandbox_bash_denial`** (#10445, `higher_than 0` over 300 s, evaluated
   every 60 s, missing data counts as zero): `soleur-agent-sandbox-bash-denial-prd`. **What it matches:** one row
   from the app container (`CONTAINER_NAME = 'soleur-web-platform'`, no `host_name` conjunct: the name is the
