@@ -36,7 +36,10 @@ readonly SOAK_EV_RE='SOLEUR_SOAK_EVIDENCE kind=(workspaces_luks|git_data) host=[
 # shellcheck disable=SC2034 # read by the probe and the gate suite
 readonly INSTANCE_EV_RE='SOLEUR_INSTANCE_SOAK host=([a-z][a-z0-9-]{0,30}|invalid) grader=[a-z0-9-]+ rc=([0-9]+|none|interrupted) verdict=(PASS|FAIL|NOT_YET|CANNOT_ESTABLISH)'
 # The grader's first line as the log and the summary may show it: verdict-shaped, no control character, no backtick.
-readonly GRADE_TEXT_RE='^(PASS|FAIL|NOT YET|CANNOT ESTABLISH): [^[:cntrl:]`]*$'
+# An allowlist, never a [^[:cntrl:]] denylist: under LC_ALL=C a negated class passes U+2028, U+0085 and raw 0xFF
+# bytes to the operator's terminal. [:alnum:] is letters/digits in every locale; the punctuation is enumerated
+# (no backtick, no backslash, no brackets); the em dash is the one non-ASCII character the grader prints.
+readonly GRADE_TEXT_RE='^(PASS|FAIL|NOT YET|CANNOT ESTABLISH): ([[:alnum:] !"#$%&()*+,./:;<=>?@^_{|}~'"'"'=-]|—)*$'
 # The soak floor in seconds: the gate's SOAK_FLOOR_DAYS * 86400 = the grader's SOAK_DAYS * 86400 (a parity row pins all three).
 readonly SOAK_FLOOR_S=259200
 # The only host the grader can read: its rows library hardwires web-2's Better Stack host name. Until #12869.
@@ -63,7 +66,7 @@ sse_gate_chain_mirror() {
   [[ "$id" != none || -z "$wrap" ]] || id="$wrap"
   # The annotation first: a failed summary write must never cost the refusal its ::error:: line.
   if [[ "$rc" -ne 0 ]]; then
-    echo "::error::§(c) gate chain refused the flip (sub_condition=${id}) for ${host} - the preconditions are not met (or could not be proven). NOTHING planned, NOTHING applied. A refused serve never drains: if ${host} is already serving, dispatch mode=drain."
+    echo "::error::§(c) gate chain refused the flip (sub_condition=${id}) for ${host} - the preconditions are not met (or could not be proven). NOTHING planned, NOTHING applied. A refused serve never drains: if ${host} is already serving, dispatch mode=drain (exact command: cf-lb-a-record-gaplessness-verify.md, \"A refused serve changes no weight\")."
     if [[ "$id" == *_soak_days_below_floor ]]; then
       echo "::error::a configured soak value is below the ${floor_d}-day floor; delete it from Doppler prd (#12933, Operator-authorizes) - the floor cannot be shortened, values may only lengthen it. Never restore the weight by a full-root apply."
     fi
@@ -86,7 +89,7 @@ sse_gate_chain_mirror() {
 # line, for this host, verdict=pass sub_condition=none, an ISO marker_at, age_s and required_s of at most 12 digits,
 # required_s >= SOAK_FLOOR_S and age_s >= required_s. Anything else is a code defect, never a soak wait.
 sse_gate_chain_verify() {
-  local f="$1" host="$2" k l n a r m ag rq v sc re_full="^${SOAK_EV_RE}\$"
+  local f="$1" host="$2" k d l n a r m ag rq v sc re_full="^${SOAK_EV_RE}\$"
   local -A cnt=() age=() req=() good=()
   [[ -r "$f" ]] || { echo "::error::§(c) gate chain: the captured gate stderr ($f) is missing - a wiring defect, do not re-dispatch"; return 1; }
   if [[ ! "$host" =~ ^[a-z][a-z0-9-]{0,30}$ ]]; then
@@ -100,10 +103,10 @@ sse_gate_chain_verify() {
       return 1
     fi
     # copy the groups first: the next =~ below overwrites BASH_REMATCH
-    k="${BASH_REMATCH[1]}"; m="${BASH_REMATCH[4]}"; ag="${BASH_REMATCH[5]}"; rq="${BASH_REMATCH[6]}"; v="${BASH_REMATCH[7]}"; sc="${BASH_REMATCH[8]}"
+    k="${BASH_REMATCH[1]}"; d="${BASH_REMATCH[2]}"; m="${BASH_REMATCH[4]}"; ag="${BASH_REMATCH[5]}"; rq="${BASH_REMATCH[6]}"; v="${BASH_REMATCH[7]}"; sc="${BASH_REMATCH[8]}"
     cnt[$k]=$(( ${cnt[$k]:-0} + 1 ))
     good[$k]=0
-    if [[ "$l" == "SOLEUR_SOAK_EVIDENCE kind=${k} host=${host} "* && "$v" == pass && "$sc" == none && "$m" == [0-9]* \
+    if [[ "$l" == "SOLEUR_SOAK_EVIDENCE kind=${k} host=${host} "* && "$v" == pass && "$sc" == none && "$m" == [0-9]* && "$d" =~ ^[1-9][0-9]{0,2}$ \
           && "$ag" =~ ^[0-9]{1,12}$ && "$rq" =~ ^[0-9]{1,12}$ ]]; then
       good[$k]=1; age[$k]="$ag"; req[$k]="$rq"
     fi

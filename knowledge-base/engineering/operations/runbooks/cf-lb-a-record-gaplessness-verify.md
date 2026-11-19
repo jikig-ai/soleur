@@ -387,14 +387,20 @@ The step runs after the §(c) gate chain and before the plan, and refuses (exit 
 
 Two serve preconditions run before the plan, and both must pass. The §(c) gate chain enforces each LUKS soak (`git_data`, `workspaces_luks`) for at least 3 days: `SOAK_FLOOR_DAYS` in `lb-weight-gate.sh` is a floor, and a configured `GIT_DATA_LUKS_SOAK_DAYS` or `WORKSPACES_LUKS_SOAK_DAYS` may only lengthen it. The next step, `per-instance soak grader (serve only)`, runs the #6931 grader (`scripts/followthroughs/web2-luks-live-6931.sh`) for web-2 with the boot_id join on (`W2L_REQUIRE_BOOT_JOIN=1`) and refuses on any verdict other than PASS (NOTHING planned, NOTHING applied). A verdict counts only when the grader's exit code and its first line agree.
 
-**A refused serve changes no weight and never drains.** If web-2 is already serving (live weight 1) when a serve refuses, it keeps serving: dispatch `mode=drain` if the refusal says web-2 should not serve (`FAIL`, a boot_id mismatch, a replace remedy). Never restore or keep the weight by a full-root apply while a serve refuses: it takes the `web2_lb_weight` default of 1 outside both checks (see "After the serve" below). For a below-floor refusal, deleting the Doppler value (#12933) is the only sanctioned route.
+**A refused serve changes no weight and never drains.** If web-2 is already serving (live weight 1) when a serve refuses, it keeps serving: dispatch the drain if the refusal says web-2 should not serve (`FAIL`, a boot_id mismatch, a replace remedy). The drain is an Operator-authorizes dispatch; every input below is required:
+
+```bash
+gh workflow run cf-lb-overlay.yml --ref main -f arm=ga-pool-update -f mode=drain -f confirm=UPDATE-GA-LB-POOL -f reason="<why, e.g. serve refused FAIL run <id>>"
+```
+
+ Never restore or keep the weight by a full-root apply while a serve refuses: it takes the `web2_lb_weight` default of 1 outside both checks (see "After the serve" below). For a below-floor refusal, deleting the Doppler value (#12933) is the only sanctioned route.
 
 **Drain during a running serve.** The job holds the `terraform-apply-web-platform-host` concurrency group (`cancel-in-progress: false`), and GitHub keeps one pending run per group. To drain fast, cancel the in-flight serve first, then dispatch the drain, and dispatch nothing else to the group until the drain has run (a later dispatch replaces the queued one).
 
-**Check before dispatching (read-only, Better Stack only).** The grader runs locally with the same inputs the serve step gives it:
+**Check before dispatching (read-only, Better Stack reads only).** The grader runs locally with the environment the serve step gives it (`env -i`, a fixed `PATH`, a fresh `HOME`, only the three Better Stack read values), so the caller's `~/.jq`, `PATH` and the rest of `prd_terraform` cannot change or reach it:
 
 ```bash
-doppler run -p soleur -c prd_terraform -- env SOLEUR_FT_EARLIEST= W2L_REQUIRE_BOOT_JOIN=1 bash scripts/followthroughs/web2-luks-live-6931.sh
+doppler run -p soleur -c prd_terraform -- bash -c 'h="$(mktemp -d)"; env -i PATH=/usr/bin:/bin HOME="$h" TMPDIR="${TMPDIR:-/tmp}" BETTERSTACK_QUERY_HOST="$BETTERSTACK_QUERY_HOST" BETTERSTACK_QUERY_USERNAME="$BETTERSTACK_QUERY_USERNAME" BETTERSTACK_QUERY_PASSWORD="$BETTERSTACK_QUERY_PASSWORD" SOLEUR_FT_EARLIEST= W2L_REQUIRE_BOOT_JOIN=1 bash scripts/followthroughs/web2-luks-live-6931.sh; rc=$?; rm -rf "$h"; exit "$rc"'
 ```
 
 Its first line is the verdict the serve step would see. The gate's clock (`marker_at`) is known before dispatch only from the last evidence line.
@@ -420,13 +426,16 @@ Class: WAIT = retry later, no action; OPERATOR = an Operator-authorizes step; AG
 | refusing id `gate_not_run_<class>` | AGENT | The wrapper or Doppler failed before the gate ran (`marker_source_fail class=<class>`). Read the replayed stderr in the step log; a transport class (`names_rc_*`) is retried by re-dispatching; `bad_doppler_bin` is a DEFECT. |
 | refusing id `none` | DEFECT | Neither a `gate_fail` nor a `marker_source_fail` line was captured; read the replayed stderr and file the defect. |
 | `NOT_YET`, `grade_text` says "no GREEN web-2 readiness row" and web-2 is older than 90 days | OPERATOR | The readiness lookback is 90 days and the row is written once per instance: drain first if web-2 serves, replace the host (`web-host-replace.md`), wait for the 3-day soak (G12; #12938). |
-| `NOT_YET`, `grade_text` names `luks_arm=` or a RED readiness reason (`ready_*`), or "are not one known boot" | OPERATOR | Waiting cannot repair it (the readiness row is written once per boot): drain first if web-2 serves, then replace the host. |
+| `NOT_YET`, `grade_text` names `luks_arm=`, a RED readiness reason other than the two below, or "are not one known boot" | OPERATOR | Waiting cannot repair it (the readiness row is written once per instance, so a reboot never gets a new one): drain first if web-2 serves, then replace the host. |
+| `NOT_YET`, `grade_text` names `ready_body_unparseable` | AGENT | A Better Stack read fault on the readiness row: retry now. |
+| `NOT_YET`, `grade_text` names `ready_judge_error` | DEFECT | The readiness judge failed (a code defect); do not re-dispatch. |
 | `NOT_YET`, `grade_text` says "did not answer" or "could not be parsed" | AGENT | A Better Stack read fault: retry now. |
 | `NOT_YET` (a soak still running) | WAIT | Retry after 3 distinct green probe days. Still `NOT_YET` 4 days after readiness: telemetry dark; run the readiness-row and daily probe-row (`SYSLOG_IDENTIFIER = luks-monitor`, `host_name = soleur-web-2`) Better Stack queries in `web-host-replace.md` (`scripts/betterstack-query.sh`). |
 | `FAIL` | OPERATOR | The instance's soak is spoiled: drain first if web-2 serves, read the non-green probe rows with the same `web-host-replace.md` queries, then replace the host (the repair). |
 | `CANNOT_ESTABLISH` with rc 3 and a `CANNOT ESTABLISH:` grade_text | AGENT | Better Stack credentials or the shared helper are missing: check the step's three `BETTERSTACK_QUERY_*` bindings; the grade_text names the missing one. |
 | `CANNOT_ESTABLISH` with `rc=interrupted` | AGENT | The run was cancelled, timed out or aborted while the grader ran: re-dispatch once. |
-| `CANNOT_ESTABLISH` with `rc=none` | DEFECT | The grader was not run: the gated host is not web-2 (until #12869) or no scratch HOME could be made; the `::error::` says which. |
+| `CANNOT_ESTABLISH` with `rc=none`, `::error::` "no scratch HOME could be created" | AGENT | The runner's `RUNNER_TEMP` was not writable: re-dispatch once; a second refusal is a DEFECT. |
+| `CANNOT_ESTABLISH` with `rc=none`, any other `::error::` | DEFECT | The grader was not run: the gated host is not web-2 (until #12869). Do not re-dispatch. |
 | `CANNOT_ESTABLISH` with an exit code and grade_text that disagree, rc 126, 127 or another code | DEFECT | Do not re-dispatch. |
 | Anti-vacuity ("soak evidence ... missing or malformed", "malformed soak evidence line") | DEFECT | Do not re-dispatch. |
 

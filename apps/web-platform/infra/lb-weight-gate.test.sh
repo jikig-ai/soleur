@@ -1288,9 +1288,11 @@ p_ev() { # <kind> <field=value>... — exactly one line of that kind, it matches
   return 0
 }
 p_ev_none() { [[ "$(raw_ev_n "$1")" -eq 0 ]]; }
-p_ev_age() { # <kind> <expected-seconds> — age_s within [expected, expected + 120]
-  local a; a="$(ev_field "$(ev_lines "$1")" age_s)"
-  if [[ "$a" =~ ^-?[0-9]+$ ]] && (( a >= $2 && a <= $2 + 120 )); then return 0; fi
+p_ev_age() { # <kind> <expected-seconds> — age_s within [expected, expected + elapsed-since-NOW + 120]
+  # NOW is taken once at suite start and the markers are built from it, so the slack is the real time elapsed since
+  # then plus 120 s: a contended host (the suite reaching §SK minutes after NOW) is not a soak-age defect.
+  local a slack; a="$(ev_field "$(ev_lines "$1")" age_s)"; slack=$(( $(date -u +%s) - NOW + 120 ))
+  if [[ "$a" =~ ^-?[0-9]+$ ]] && (( a >= $2 && a <= $2 + slack )); then return 0; fi
   return 1
 }
 p_one_verdict() { # <kind> — the raw line of that kind carries exactly one ` verdict=` token
@@ -1544,7 +1546,7 @@ SK_MIRROR='sse_gate_chain_mirror "${RUNNER_TEMP}/lb-gate.stderr" "$SOLEUR_GATED_
 SK_BACKSTOP='[[ "$gate_rc" -eq 0 ]] || exit 1'
 SK_VERIFY='sse_gate_chain_verify "${RUNNER_TEMP}/lb-gate.stderr" "$SOLEUR_GATED_HOST"'
 SK_TRAP="trap 'cat \"\${RUNNER_TEMP}/lb-gate.stderr\" >&2; rm -f \"\${RUNNER_TEMP}/lb-gate.stderr\"' EXIT"
-SK_INNER_ENV='env -u BASH_ENV -u ENV DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \'
+SK_INNER_ENV='env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \'
 
 sk_grader_ok() { # <workflow> -> 0 iff the grader step is wired as Guard 3 requires (AC8)
   local job st nc run runnc keys envs want ga gr he pl
@@ -1579,6 +1581,31 @@ sk_grader_ok() { # <workflow> -> 0 iff the grader step is wired as Guard 3 requi
   [[ "$ga" -gt 0 && "$gr" -gt "$ga" && "$he" -gt "$gr" && "$pl" -gt "$gr" ]] || return 1
   return 0
 }
+# the gate step's whole non-comment run body, line for line (fix round, test-design P2: `exit "0"` / `exit 00` slip
+# past any errexit denylist; the flip-marker `if` line is pinned by the same snapshot)
+SK_GATE_BODY="$(cat <<'SKGATEBODY'
+set -euo pipefail
+GATE_OUT=""
+gate_rc=0
+: >"${RUNNER_TEMP}/lb-gate.stderr"
+trap 'cat "${RUNNER_TEMP}/lb-gate.stderr" >&2; rm -f "${RUNNER_TEMP}/lb-gate.stderr"' EXIT
+GATE_OUT="$(env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler run --preserve-env -p soleur -c prd -- \
+  env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \
+    SOLEUR_WEB2_SERVING_WEIGHT="$WEB2_LB_WEIGHT" SOLEUR_GATED_HOST="web-2" \
+    SOLEUR_SERVING_ROTATION="web-1,web-2" \
+  bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh" 2>"${RUNNER_TEMP}/lb-gate.stderr")" || gate_rc=$?
+sse_f="${GITHUB_WORKSPACE}/scripts/lib/serve-soak-evidence.sh"
+source "$sse_f" && declare -F sse_gate_chain_mirror >/dev/null && declare -F sse_gate_chain_verify >/dev/null || { echo "::error::serve-soak-evidence helper not loaded ($sse_f) - wiring defect, do not re-dispatch"; exit 1; }
+sse_gate_chain_mirror "${RUNNER_TEMP}/lb-gate.stderr" "$SOLEUR_GATED_HOST" "$gate_rc"
+[[ "$gate_rc" -eq 0 ]] || exit 1
+printf '%s\n' "$GATE_OUT"
+if ! grep -q 'requires_runtime_bind_probe=true' <<<"$GATE_OUT"; then
+  echo "::error::§(c) gate chain exited 0 WITHOUT the flip-authorization marker (requires_runtime_bind_probe=true) — the standby branch passed vacuously and Conditions A/B were never evaluated; web-2 is NOT authorized to serve. NOTHING planned, NOTHING applied."
+  exit 1
+fi
+sse_gate_chain_verify "${RUNNER_TEMP}/lb-gate.stderr" "$SOLEUR_GATED_HOST"
+SKGATEBODY
+)"
 sk_gate_ok() { # <workflow> -> 0 iff the gate chain step captures, replays, mirrors, backstops and re-checks (Guard 4)
   local job st nc run runnc a b c d m keys
   job="$(sk_job "$1")"; st="$(sk_step "$job" '§\(c\) gate chain')"; [[ -n "$st" ]] || return 1
@@ -1604,14 +1631,24 @@ sk_gate_ok() { # <workflow> -> 0 iff the gate chain step captures, replays, mirr
   [[ "$(grep -nxF -- "$SK_VERIFY" <<<"$runnc" | cut -d: -f1)" -gt "$(grep -nF "grep -q 'requires_runtime_bind_probe=true'" <<<"$runnc" | head -1 | cut -d: -f1)" ]] || return 1
   ! grep -qE 'continue-on-error|\|\|[[:space:]]*true|set[[:space:]]+\+e' <<<"$nc" || return 1
   ! grep -qE 'set[[:space:]]+\+o|errexit|(^|[;&|[:space:]])exit[[:space:]]+0([;[:space:]]|$)' <<<"$runnc" || return 1
+  [[ "$(grep -v '^[[:space:]]*$' <<<"$runnc")" == "$SK_GATE_BODY" ]] || return 1
   return 0
 }
 # every step from the gate chain on carries no if:, or exactly the serve condition (test-design P2: `if: always()` on
 # plan/apply would let a refused gate or grader step reach apply)
 sk_downstream_if_ok() {
   local job; job="$(sk_job "$1")"; [[ -n "$job" ]] || return 1
-  awk '/^      - name: §\(c\) gate chain/ {on=1} on && /^        if:/ {print}' <<<"$job" | grep -vxF "        if: inputs.mode == 'serve'" | grep -q . && return 1
-  [[ "$(awk '/^      - name: §\(c\) gate chain/ {on=1} on && /^        if:/' <<<"$job" | grep -c . || true)" -ge 4 ]]
+  local ifs # both YAML spellings: `        if:` after `- name:`, and `      - if:` as the step's first key (fix round)
+  ifs="$(awk '/^(      - |        )name: §\(c\) gate chain/ {on=1} on && /^(      - |        )if:/ {sub(/^      - if:/, "        if:"); print}' <<<"$job")"
+  ! grep -vxF "        if: inputs.mode == 'serve'" <<<"$ifs" | grep -q . || return 1
+  [[ "$(grep -c . <<<"$ifs" || true)" -ge 4 ]]
+}
+# R4 class (fix round): the health step's doppler-run shell unsets every bash startup variable a prd_terraform
+# secret could plant (BASH_ENV/ENV run a file; SHELLOPTS=xtrace + PS4='$(cmd)' runs a command) - exactly once
+sk_health_env_ok() {
+  local job st nc; job="$(sk_job "$1")"; st="$(sk_step "$job" 'web-2 health precondition')"; nc="$(sk_nc "$(sk_run "$st")")"
+  [[ "$(grep -cF -- "-c prd_terraform -- env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 bash -c '" <<<"$nc" || true)" -eq 1 ]] \
+    && [[ "$(grep -c 'doppler run' <<<"$nc" || true)" -eq 1 ]]
 }
 sk_host_parity_ok() { # <workflow> -> the five web-2 literal sites agree (the #12869 un-keying list)
   local job gs gr inner step_gate step_grader wrap rows helper
@@ -1630,7 +1667,7 @@ sk_no_marker_name() { ! grep -qiE 'workspaces_luks_cutover_at' "$1"; }
 sk_grader_name_ok() { # the helper's grader= value is the basename of the grader the step hands it
   [[ "${SSE_GRADER_NAME:-}" == web2-luks-live-6931 ]] && grep -qF "scripts/followthroughs/${SSE_GRADER_NAME}.sh\"" <<<"$(sk_job "$1")"
 }
-sec_open wiring 36
+sec_open wiring 42
 sk_check "G3/AC8: ga_pool_update has exactly one 'per-instance soak grader (serve only)' step: keys name/if/env/run, serve-gated, env exactly SOLEUR_GATED_HOST + the three BETTERSTACK_QUERY_* secrets, no tolerance, guarded helper load, one bare sse_instance_soak call, gate < grader < health < plan" sk_grader_ok "$WF"
 sk_check "G4: the gate chain step: step-level SOLEUR_GATED_HOST, gate_rc=0, the stderr file truncated, the EXIT replay trap, the redirect after the wrapper path with || gate_rc=\$?, a guarded helper load, the bare mirror call followed by the inline backstop, and the re-check after the flip-marker check" sk_gate_ok "$WF"
 sk_check "G3/F5: the web-2 literal agrees at all five sites (gate step env, the inner literal, grader step env, the wrapper's MARKER_HOST, the rows library's W2L_HOST_NAME, the helper's SSE_GRADED_HOST) — the #12869 un-keying list" sk_host_parity_ok "$WF"
@@ -1638,6 +1675,9 @@ sk_check "G1 row 11: no (GIT_DATA|WORKSPACES)_LUKS_SOAK_DAYS on any non-comment 
 sk_check "AC19: cf-lb-overlay.yml never names the soak marker's Doppler name, in any case, not even in a comment" sk_no_marker_name "$WF"
 sk_check "G3: the helper's grader= value (SSE_GRADER_NAME) is the basename of the grader the step hands it" sk_grader_name_ok "$WF"
 sk_check "test-design P2: every ga_pool_update step from the gate chain on has no if: or exactly inputs.mode == 'serve' (a refusal cannot reach apply)" sk_downstream_if_ok "$WF"
+sk_check "R4 class: the health step's doppler-run shell unsets BASH_ENV, ENV, SHELLOPTS, BASHOPTS and PS4" sk_health_env_ok "$WF"
+sk_check "R2 parity: the knob the helper sets (W2L_REQUIRE_BOOT_JOIN=1) is the one the grader reads, once each, outside comments" \
+  eval '[[ "$(grep -vE "^[[:space:]]*#" "$SSE_LIB" | grep -cF "W2L_REQUIRE_BOOT_JOIN=1" || true)" -eq 1 && "$(grep -vE "^[[:space:]]*#" "$REPO_ROOT/scripts/followthroughs/web2-luks-live-6931.sh" | grep -cF "\"\${W2L_REQUIRE_BOOT_JOIN:-}\" == 1" || true)" -eq 1 ]]'
 SKW="$SK_WORK/wf"; mkdir -p "$SKW"
 skmut() { # <label> <guard-fn> <awk-program> — committed mutation: it must LAND and the guard must go RED
   local f="$SKW/m.yml"
@@ -1665,9 +1705,13 @@ skmut "G4-3b committed mutant: the stderr capture moves outside the substitution
 skmut "R7 committed mutant: trap 'exit 0' ERR before the bare sse_instance_soak call" sk_grader_ok '/^          sse_instance_soak "\$SOLEUR_GATED_HOST"/ {print "          trap '"'"'exit 0'"'"' ERR"} {print}'
 skmut "R7 committed mutant: a second trap (ERR, exit 0) in the gate step" sk_gate_ok '{print} /^          trap .cat "\$\{RUNNER_TEMP\}\/lb-gate.stderr" >&2; rm -f/ {print "          trap '"'"'exit 0'"'"' ERR"}'
 skmut "R7 committed mutant: a shell: key on the gate step" sk_gate_ok "$SK_IN_GATE"' g && /^        if: / {print; print "        shell: bash"; next} {print}'
-skmut "R4 committed mutant: the gate step's inner env no longer unsets BASH_ENV/ENV" sk_gate_ok '{ sub(/env -u BASH_ENV -u ENV DOPPLER_TOKEN="\$DOPPLER_TOKEN_LUKS_MARKER"/, "env DOPPLER_TOKEN=\"$DOPPLER_TOKEN_LUKS_MARKER\""); print }'
+skmut "R4 class committed mutant: the gate step's inner env keeps BASH_ENV/ENV out but lets SHELLOPTS in" sk_gate_ok '{ sub(/ -u SHELLOPTS -u BASHOPTS -u PS4 DOPPLER_TOKEN=/, " DOPPLER_TOKEN="); print }'
+skmut "R4 class committed mutant: the health step's shell lets SHELLOPTS/PS4 in" sk_health_env_ok '{ sub(/-- env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 bash -c/, "-- env -u BASH_ENV -u ENV bash -c"); print }'
+skmut "R4 committed mutant: the gate step's inner env no longer unsets BASH_ENV/ENV" sk_gate_ok '{ sub(/env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 DOPPLER_TOKEN="\$DOPPLER_TOKEN_LUKS_MARKER"/, "env DOPPLER_TOKEN=\"$DOPPLER_TOKEN_LUKS_MARKER\""); print }'
 skmut "test-design P2 committed mutant: set +o errexit + exit 0 in the grader step" sk_grader_ok "$SK_IN_GRADER"' g && /^          set -euo pipefail$/ {print; print "          set +o errexit"; next} {print} /^          sse_instance_soak "\$SOLEUR_GATED_HOST"/ {print "          exit 0"}'
 skmut "test-design P2 committed mutant: set +o errexit before the gate step's re-check" sk_gate_ok '/^          sse_gate_chain_verify / {print "          set +o errexit"} {print}'
+skmut "fix-round committed mutant: '- if: always()' as the apply step's first key" sk_downstream_if_ok '/^      - name: Terraform apply \(the graded tfplan\)/ {print "      - if: always()"; sub(/^      - name:/, "        name:")} {print}'
+skmut "fix-round committed mutant: exit \"0\" right after set -euo pipefail in the gate step" sk_gate_ok "$SK_IN_GATE"' g && /^          set -euo pipefail$/ {print; print "          exit \"0\""; next} {print}'
 skmut "test-design P2 committed mutant: if: always() on the Terraform apply step" sk_downstream_if_ok '{print} /^      - name: Terraform apply \(the graded tfplan\)/ {print "        if: always()"}'
 skmut "G3-5 committed mutant: the grader step's host becomes web-3 while the gate step keeps web-2" sk_host_parity_ok "$SK_IN_GRADER"' g && /^          SOLEUR_GATED_HOST: web-2$/ {print "          SOLEUR_GATED_HOST: web-3"; next} {print}'
 skmut "G3-5b committed mutant: the gate step's step-level host becomes web-3 while the inner literal keeps web-2" sk_host_parity_ok "$SK_IN_GATE"' g && /^          SOLEUR_GATED_HOST: web-2$/ {print "          SOLEUR_GATED_HOST: web-3"; next} {print}'
@@ -1913,7 +1957,7 @@ rm -f "$SKP"/log.*
 skp_log 303 'Run terraform plan' 'no evidence here'
 skp_log 302 'Doppler notice' "$SKG_GP" "$SKG_WF extra=forged" "$SKG_WF" 'gate_fail sub_condition=B_workspaces_luks_soak_days_below_floor' "$SKP_I" 'grade_text=NOT YET: waiting'
 skp_log 301 "$SKG_GP" "$SKG_WP"
-sec_open probe 12
+sec_open probe 15
 skp_run
 sk_check "G11 executed: the probe prints the newest run holding evidence with its branch, sha and conclusion, then its matched lines (soak, gate_fail, instance, grade_text), prefix stripped (exit 0)" \
   eval '[[ "$SKP_RC" -eq 0 && "$SKP_OUT" == "$(printf "%s\n%s\n%s\n%s\n%s\n%s" "run=302 branch=main sha=$(printf %040d 302) conclusion=failure" "$SKG_GP" "$SKG_WF" "gate_fail sub_condition=B_workspaces_luks_soak_days_below_floor" "$SKP_I" "grade_text=NOT YET: waiting")" ]]'
@@ -1923,6 +1967,16 @@ skp_log 302 "$SKG_GP" "$SKG_GP" "$SKG_WP" "$SKG_WP" "$SKG_WF" "$SKP_I" "$SKP_I"
 skp_run
 sk_check "G11 executed: at most 2 SOLEUR_SOAK_EVIDENCE lines (one per kind) and 1 SOLEUR_INSTANCE_SOAK line are printed" \
   eval '[[ "$SKP_RC" -eq 0 && "$(grep -c "^SOLEUR_SOAK_EVIDENCE " <<<"$SKP_OUT")" -eq 2 && "$(grep -c "^SOLEUR_INSTANCE_SOAK " <<<"$SKP_OUT")" -eq 1 ]]'
+sk_check "fix round executed: the two soak lines are one per KIND (git_data and workspaces_luks once each, not the first two lines)" \
+  eval '[[ "$(grep -c "^SOLEUR_SOAK_EVIDENCE kind=git_data " <<<"$SKP_OUT")" -eq 1 && "$(grep -c "^SOLEUR_SOAK_EVIDENCE kind=workspaces_luks " <<<"$SKP_OUT")" -eq 1 ]]'
+skp_log 302 "$SKG_GP" "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=0 verdict=PASS" 'grade_text=PASS: early' "$SKP_I" 'grade_text=NOT YET: waiting'
+skp_run
+sk_check "security fix round executed: the LAST instance and grade_text lines win (an earlier well-formed line in the step is not the verdict)" \
+  eval '[[ "$SKP_RC" -eq 0 && "$SKP_OUT" == *"$SKP_I"* && "$SKP_OUT" == *"grade_text=NOT YET: waiting" && "$SKP_OUT" != *"verdict=PASS"* && "$SKP_OUT" != *"PASS: early"* ]]'
+skp_log 302 'Run gate' 'gate_fail sub_condition=B_top_not_authorized'
+skp_run
+sk_check "code-quality fix round executed: a refused run with only a gate_fail line is a hit (it answers why), not passed over" \
+  eval '[[ "$SKP_RC" -eq 0 && "$SKP_OUT" == "$(printf "%s\n%s" "run=302 branch=main sha=$(printf %040d 302) conclusion=failure" "gate_fail sub_condition=B_top_not_authorized")" ]]'
 skp_list 304:in_progress: 303:completed:success 302:completed:failure
 skp_log 304 "$SKG_GP"
 skp_run
@@ -1954,7 +2008,7 @@ sk_check "R8 executed: a grade_text line that is not verdict-shaped and a malfor
 sec_close
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=643 # 330 -> 613 (#12849 §SK rows) -> 643 (#12934 review fixes R1-R10 + test-design rows, measured)
+MIN_CASES=652 # 330 -> 613 (#12849 §SK rows) -> 643 (#12934 review fixes R1-R10 + test-design rows) -> 652 (fix round: R4 class, gate body, if spellings, R2 parity, probe rows; measured)
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

@@ -374,7 +374,8 @@ Every way the soak decision can be shortened or skipped on the serve path, and w
     #12933 plus a PASS. A full-root apply takes the `web2_lb_weight` default of 1 outside the gate and the grader and
     re-opens this defect; the below-floor `::error::` and the runbook now say never to restore the weight that way.
   - *Live exposure.* web-2 has served since run 44304068922 on the short marker soak, without a grader run. The
-    read-only grader read on 2026-11-19 (#12820) was `NOT YET` (69 h of 72 h, no non-green row), so no drain.
+    read-only grader read on 2026-11-19 (#12820) was `NOT YET` (69 h of 72 h). It stops at the age check before reading
+    any probe row, so it proves nothing about them; the re-read after 72 h (#12820) is the drain trigger.
   - *Point-in-time.* The grader accepts a newest probe row up to 26 h old; a LUKS mapper lost after it is not seen
     by the serve arm (residual, ADR-263 review amendment).
   - *Replace.* A replaced web-2 whose readiness row never shipped now reads `NOT_YET` in the serve arm (boot_id

@@ -54,3 +54,13 @@ The panel's test-design seat ran its own battery against f5ce2fa8bd and found mu
 | inner env without `-u BASH_ENV -u ENV` | R4 rows here and in `workspaces-luks-verify-workflow.test.sh` (committed mutants) |
 | rc 0 with empty or non-PASS text; rc 3 with a `PASS:` line | R1 executed rows |
 | `has_gate_fail` / `ski_line_ok` always true | negative rows |
+
+## Fix round (2026-11-19, range f5ce2fa8bd..68ec375482 + fixes)
+
+| Mutant (fix-round seat) | Now caught by |
+|---|---|
+| `exit "0"` / `exit 00` after `set -euo pipefail` in the gate step | exact-body snapshot in `sk_gate_ok` (committed mutant) |
+| `- if: always()` as the apply step's first key | `sk_downstream_if_ok` reads both spellings (committed mutant) |
+| inner env / health shell without `-u SHELLOPTS -u BASHOPTS -u PS4` | R4-class rows (two committed mutants) |
+| helper knob renamed from the grader's `W2L_REQUIRE_BOOT_JOIN` | R2 parity row |
+| probe prints two lines of one kind; first instance line shown; gate_fail-only run passed over | probe rows (per kind, last wins, gate_fail hit) |

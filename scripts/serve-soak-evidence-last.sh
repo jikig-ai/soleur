@@ -5,9 +5,9 @@
 #
 #   usage: bash scripts/serve-soak-evidence-last.sh [--limit N]     (N = 1..50 runs, default 50, newest first)
 #
-# Output on a hit (exit 0): `run=<id> branch=<branch> sha=<sha> conclusion=<conclusion>`, then at most 2
-# SOLEUR_SOAK_EVIDENCE lines (one per soak kind), the first `gate_fail sub_condition=<id>` line, at most 1
-# SOLEUR_INSTANCE_SOAK line and its `grade_text=` line. Only lines printed by job ga_pool_update's `§(c) gate chain` and
+# Output on a hit (exit 0; a hit = any soak evidence, instance or gate_fail line): `run=<id> branch=<branch>
+# sha=<sha> conclusion=<conclusion>`, then at most 2 SOLEUR_SOAK_EVIDENCE lines (one per soak kind), the first
+# `gate_fail sub_condition=<id>` line, and the LAST SOLEUR_INSTANCE_SOAK and `grade_text=` lines. Only lines printed by job ga_pool_update's `§(c) gate chain` and
 # `per-instance soak grader` steps are read, and each must match WHOLE its grammar in scripts/lib/serve-soak-evidence.sh
 # (a malformed or truncated line is never printed; a well-formed line is shape, not provenance).
 # A run still in progress, or one whose log cannot be read (cancelled with no log, expired), is skipped and counted on
@@ -19,6 +19,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/serve-soak-evidence.sh
 # shellcheck disable=SC2015 # A && B || C is intended: any failed load step reaches the exit
+# shellcheck disable=SC2090 # declare -p only tests that the names are set; their quoted values are never expanded here
 source "$here/lib/serve-soak-evidence.sh" && declare -p SOAK_EV_RE INSTANCE_EV_RE GRADE_TEXT_RE >/dev/null 2>&1 \
   || { echo "serve-soak-evidence helper not loaded" >&2; exit 3; }
 
@@ -49,18 +50,25 @@ while IFS=$'\t' read -r id branch sha status conclusion; do
   if [[ "$status" != completed ]]; then skipped=$((skipped + 1)); echo "skip run=${id} status=${status//[^a-z_]/}" >&2; continue; fi
   if ! log="$(gh run view "$id" --log 2>/dev/null)"; then skipped=$((skipped + 1)); echo "skip run=${id} log_unreadable" >&2; continue; fi
   readable=$((readable + 1))
-  out=(); ns=0; nf=0; ni=0; ng=0
+  out=(); ns=0; nf=0; inst=""; grade=""; seen_k=","
   while IFS= read -r l; do
     # `gh run view --log` prefixes each line `<job>\t<step>\t<timestamp> `.
     job="${l%%$'\t'*}"; rest="${l#*$'\t'}"; step="${rest%%$'\t'*}"
     [[ "$job" == ga_pool_update && ( "$step" == "§(c) gate chain"* || "$step" == "per-instance soak grader"* ) ]] || continue
     l="${rest#*$'\t'}"; l="${l#* }"; l="${l%$'\r'}"
-    if [[ "$ns" -lt 2 && "$l" =~ $soak_re ]]; then out+=("$l"); ns=$((ns + 1))
+    # the first well-formed line PER KIND (one git_data, one workspaces_luks), never the first two lines
+    if [[ "$l" =~ $soak_re ]]; then
+      if [[ "$seen_k" != *",${BASH_REMATCH[1]},"* ]]; then seen_k="${seen_k}${BASH_REMATCH[1]},"; out+=("$l"); ns=$((ns + 1)); fi
     elif [[ "$nf" -lt 1 && "$l" =~ $fail_re ]]; then out+=("$l"); nf=$((nf + 1))
-    elif [[ "$ni" -lt 1 && "$l" =~ $inst_re ]]; then out+=("$l"); ni=$((ni + 1))
-    elif [[ "$ng" -lt 1 && "$l" == grade_text=* && ( "${l#grade_text=}" =~ $GRADE_TEXT_RE || "$l" == grade_text=unprintable ) ]]; then out+=("$l"); ng=$((ng + 1)); fi
+    # the LAST instance / grade_text line wins: the helper prints the real pair after the grader returns, so an
+    # earlier well-formed line (the grader's own stderr, in the same step) is never shown as the verdict
+    elif [[ "$l" =~ $inst_re ]]; then inst="$l"
+    elif [[ "$l" == grade_text=* && ( "${l#grade_text=}" =~ $GRADE_TEXT_RE || "$l" == grade_text=unprintable ) ]]; then grade="$l"; fi
   done <<<"$log"
-  if [[ "$ns" -gt 0 || "$ni" -gt 0 ]]; then
+  [[ -z "$inst" ]] || out+=("$inst")
+  [[ -z "$grade" ]] || out+=("$grade")
+  # a refused serve with no evidence line (TOP, Condition A, gate_not_run_*) still answers "why was it refused"
+  if [[ "$ns" -gt 0 || -n "$inst" || "$nf" -gt 0 ]]; then
     branch="${branch//[^A-Za-z0-9._\/-]/}"
     [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || sha=invalid
     conclusion="${conclusion//[^a-z_]/}"

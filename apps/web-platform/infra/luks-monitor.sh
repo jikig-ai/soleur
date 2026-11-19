@@ -38,7 +38,9 @@ LOG_TAG="luks-monitor"
 PROFILE="${LUKS_MONITOR_PROFILE:-primary}"
 # The kernel's per-boot id, DIAGNOSTIC only: the probe row is per boot, the SOLEUR_FRESH_BOOT_READY row is
 # per INSTANCE (cloud-init runcmd), so the verify join is instance-level (probe newer than the green
-# readiness row), never boot_id equality (ADR-263). Lower-cased and charset-bound. The stderr redirect
+# readiness row), never boot_id equality (ADR-263). Exception, #12849 R2: the serve arm's grader
+# (W2L_REQUIRE_BOOT_JOIN=1) requires the newest probe row's boot_id to equal the readiness row's, so a change
+# to how BOOT_ID falls back to `unknown` refuses every serve. Lower-cased and charset-bound. The stderr redirect
 # precedes the `<` so a missing file stays silent (a redirect after the `<` is applied too late).
 BOOT_ID="$(tr 'A-F' 'a-f' 2>/dev/null < "${LUKS_MONITOR_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" | tr -cd '0-9a-f-' | head -c 36 || true)"
 [ -n "$BOOT_ID" ] || BOOT_ID=unknown

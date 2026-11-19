@@ -73,8 +73,9 @@ set -euo pipefail
 # lb-weight-gate-with-marker.test.sh derives the wrapper's allowlist from what this file reads.
 SOAK_FLOOR_DAYS=3
 
-# The soak evidence record (#12849). EV_KIND is empty outside B.2-B.10, so a refusal there (TOP, Condition A,
-# B.1) or the standby pass emits no evidence line. Initialised HERE, before any fail() can run: under `set -u` a
+# The soak evidence record (#12849). EV_KIND is empty before B.2, so a refusal there (TOP, Condition A, B.1) or
+# the standby pass emits no evidence line; after B.10 it stays `workspaces_luks` (no fail() follows it today - a
+# fail() added after B.10 would print a second workspaces_luks line, which the serve step's re-check refuses). Initialised HERE, before any fail() can run: under `set -u` a
 # fail() that read an unassigned EV_KIND would abort before printing its gate_fail line.
 EV_KIND=
 EV_DAYS=none

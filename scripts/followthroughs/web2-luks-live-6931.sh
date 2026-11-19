@@ -145,15 +145,16 @@ verdict="$(w2l_probe_verdict "$tmp/probe.jsonl")"
 if [[ "$verdict" != GREEN* ]]; then
   unmet "the newest web-2 probe row is not a fresh LUKS-backed OK row (${verdict})."
 fi
-if (( green_days < SOAK_DAYS )); then
-  unmet "${green_days} of ${SOAK_DAYS} distinct days of GREEN probe rows since the readiness row."
-fi
 if [[ "${W2L_REQUIRE_BOOT_JOIN:-}" == 1 ]]; then
   rbid="${rverdict#GREEN boot_id=}"; rbid="${rbid%% *}"
   pbid="${verdict#GREEN boot_id=}"; pbid="${pbid%% *}"
   if [[ ! "$rbid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ || "$rbid" != "$pbid" ]]; then
-    unmet "the readiness row's boot_id (${rbid:-none}) and the newest probe row's (${pbid:-none}) are not one known boot: web-2 was rebooted or replaced without a readiness row of its own. Replace web-2 (web-host-replace.md) and let the new instance soak."
+    unmet "the readiness row's boot_id (${rbid:-none}) and the newest probe row's (${pbid:-none}) are not one known boot: web-2 was rebooted (the readiness row is written once per instance, so a reboot never gets a new one) or replaced without its readiness row shipping. Replace web-2 (web-host-replace.md) and let the new instance soak."
   fi
+fi
+# The join runs before the day count, so a reboot mid-soak names its remedy (replace) instead of "wait".
+if (( green_days < SOAK_DAYS )); then
+  unmet "${green_days} of ${SOAK_DAYS} distinct days of GREEN probe rows since the readiness row."
 fi
 
 printf 'PASS: web-2 is live on a LUKS-backed /workspaces — %s distinct days of GREEN probe rows since the readiness row (%s h ago), no non-green row, and the newest probe row is fresh (%s). (#6931 soak-gated closure)\n' \
