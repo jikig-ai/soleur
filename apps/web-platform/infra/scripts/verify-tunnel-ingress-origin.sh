@@ -48,29 +48,44 @@ cd "$INFRA_DIR"
 
 DOPPLER_ARGS=(--project soleur --config prd_terraform)
 
-# --- Expected origin: canonical source, never a hardcoded 10.0.1.10 -----------------
-WEB1_IP=$(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-  terraform console <<<'var.web_hosts["web-1"].private_ip' 2>/dev/null \
-  | tr -d '"' | tr -d '[:space:]')
+# --- Expected origins: canonical sources, never a hardcoded 10.0.1.10 / 10.0.1.30 ------
+# ONE console session, two expressions, one answer per line: web-1's private IP (deploy./ssh.)
+# and the zot endpoint (registry., zot-registry.tf local.registry_endpoint).
+CONSOLE_OUT=$(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+  terraform console <<<$'var.web_hosts["web-1"].private_ip\nlocal.registry_endpoint' 2>/dev/null || true)
+WEB1_IP=$(sed -n 1p <<<"$CONSOLE_OUT" | tr -d '"' | tr -d '[:space:]')
+REGISTRY_ENDPOINT=$(sed -n 2p <<<"$CONSOLE_OUT" | tr -d '"' | tr -d '[:space:]')
 if [[ ! "$WEB1_IP" =~ ^10\.0\.1\.[0-9]{1,3}$ ]]; then
   echo "::error::could not resolve var.web_hosts[\"web-1\"].private_ip via terraform console (got '${WEB1_IP}'). Refusing to verify against an unknown origin — a blind check is worse than none."
   exit 1
 fi
-
-CF_API_TOKEN=$(doppler secrets get CF_API_TOKEN "${DOPPLER_ARGS[@]}" --plain 2>/dev/null || true)
-CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID "${DOPPLER_ARGS[@]}" --plain 2>/dev/null || true)
-[[ -n "$CF_API_TOKEN" ]] && echo "::add-mask::$CF_API_TOKEN"
-if [[ -z "$CF_API_TOKEN" || -z "$CF_ACCOUNT_ID" ]]; then
-  # Fail CLOSED. A missing credential means the check did not run; treating that as a
-  # pass is how a gate certifies silence.
-  echo "::error::doppler read failed for CF_API_TOKEN/CF_ACCOUNT_ID — the ingress verification could NOT run. This is a gate failure, not a skip."
+if [[ ! "$REGISTRY_ENDPOINT" =~ ^10\.0\.1\.[0-9]{1,3}:[0-9]{1,5}$ ]]; then
+  echo "::error::could not resolve local.registry_endpoint via terraform console (got '${REGISTRY_ENDPOINT}'). Refusing to verify the registry. route against an unknown origin."
   exit 1
 fi
 
-TUNNEL_ID=$(terraform state show cloudflare_zero_trust_tunnel_cloudflared.web 2>/dev/null \
-  | awk '/^[[:space:]]*id[[:space:]]*=/ { gsub(/"/, "", $3); print $3; exit }')
+CF_API_TOKEN=$(doppler secrets get CF_API_TOKEN "${DOPPLER_ARGS[@]}" --plain 2>/dev/null || true)
+[[ -n "$CF_API_TOKEN" ]] && echo "::add-mask::$CF_API_TOKEN"
+if [[ -z "$CF_API_TOKEN" ]]; then
+  # Fail CLOSED. A missing credential means the check did not run; treating that as a
+  # pass is how a gate certifies silence.
+  echo "::error::doppler read failed for CF_API_TOKEN — the ingress verification could NOT run. This is a gate failure, not a skip."
+  exit 1
+fi
+
+# The tunnel the `_soleur` CNAMEs point at, and ITS account (#12937). Both come from the TF outputs
+# (tunnel.tf `cf_tunnel_id` / `cf_tunnel_account_id`, the same resource dns.tf's CNAMEs reference),
+# NOT from Doppler `CF_ACCOUNT_ID` (the pre-zone-move account, which no longer owns soleur.ai) and NOT
+# from the old `…tunnel_cloudflared.web` state address — after the 2026-11-18 zone move that tunnel
+# serves no hostname, so verifying it would certify a tunnel nothing routes to.
+TUNNEL_ID=$(terraform output -raw cf_tunnel_id 2>/dev/null || true)
+TUNNEL_ACCOUNT_ID=$(terraform output -raw cf_tunnel_account_id 2>/dev/null || true)
 if [[ ! "$TUNNEL_ID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
-  echo "::error::could not resolve the tunnel id from terraform state (got '${TUNNEL_ID}')."
+  echo "::error::could not resolve the tunnel id from terraform output cf_tunnel_id (got '${TUNNEL_ID}'). This is a gate failure, not a skip."
+  exit 1
+fi
+if [[ ! "$TUNNEL_ACCOUNT_ID" =~ ^[0-9a-f]{32}$ ]]; then
+  echo "::error::could not resolve the tunnel account from terraform output cf_tunnel_account_id (got '${TUNNEL_ACCOUNT_ID}'). This is a gate failure, not a skip."
   exit 1
 fi
 
@@ -84,7 +99,7 @@ if ! _bearer_ok "$CF_API_TOKEN"; then
   exit 1
 fi
 CFG=$(curl --disable --noproxy '*' -sS --max-time 20 --config - \
-  "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/cfd_tunnel/${TUNNEL_ID}/configurations" \
+  "https://api.cloudflare.com/client/v4/accounts/${TUNNEL_ACCOUNT_ID}/cfd_tunnel/${TUNNEL_ID}/configurations" \
   < <(printf 'header = "Authorization: Bearer %s"\n' "$CF_API_TOKEN"))
 
 if [[ "$(jq -r '.success // false' <<<"$CFG")" != "true" ]]; then
@@ -107,8 +122,10 @@ if [[ -n "$BAD" ]]; then
   rc=1
 fi
 
+# Every rule whose hostname starts with the route is checked (joined), not the first match: a second
+# rule after a compliant first makes `got` differ from `want` and reds.
 n_checked=0
-for pair in "deploy|http://${WEB1_IP}:9000" "ssh|ssh://${WEB1_IP}:22"; do
+for pair in "deploy|http://${WEB1_IP}:9000" "ssh|ssh://${WEB1_IP}:22" "registry|tcp://${REGISTRY_ENDPOINT}"; do
   sub="${pair%%|*}"
   want="${pair#*|}"
   got=$(jq -r --arg h "${sub}." '[.result.config.ingress[]?
@@ -125,7 +142,7 @@ for pair in "deploy|http://${WEB1_IP}:9000" "ssh|ssh://${WEB1_IP}:22"; do
     echo "ok: live ${sub}. ingress service == ${want}"
   fi
 done
-[[ "$n_checked" -eq 2 ]] || { echo "::error::internal: checked ${n_checked} routes, expected 2"; rc=1; }
+[[ "$n_checked" -eq 3 ]] || { echo "::error::internal: checked ${n_checked} routes, expected 3"; rc=1; }
 [[ "$rc" -eq 0 ]] || exit 1
 
 # --- (b) Data plane: the pinned origin actually serves -------------------------------
@@ -163,6 +180,31 @@ for attempt in 1 2 3 4 5; do
 done
 
 if [[ "$HTTP_CODE" != "200" ]]; then
+  # SOLEUR_TUNNEL_VERIFY (#12937; Ruled by CTO agent, 2026-11-19): name the MEASURED cause before failing.
+  # The data plane cannot tell "no connector" from "dead origin" (both are an edge 5xx), the control plane
+  # can: read the tunnel's connector census (the same classifier the scheduled census uses). No pass path
+  # is added at zero connectors — a dead connector on a future apply must stay red.
+  # shellcheck source=scripts/tunnel-connector-census.sh
+  source "${INFRA_DIR}/../../../scripts/tunnel-connector-census.sh"
+  CONN_RESP=$(curl --disable --noproxy '*' -sS --max-time 20 -w '\n%{http_code}' --config - \
+    "https://api.cloudflare.com/client/v4/accounts/${TUNNEL_ACCOUNT_ID}/cfd_tunnel/${TUNNEL_ID}/connections" \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$CF_API_TOKEN") 2>/dev/null || printf '\n000')
+  read -r CENSUS CONNS <<<"$(classify_connector_census "$(tail -1 <<<"$CONN_RESP")" "$(sed '$d' <<<"$CONN_RESP")")"
+  case "$CENSUS" in
+    zero_connectors) VERIFY_CAUSE="no-connector" ;;
+    census_unavailable) VERIFY_CAUSE="connections-unreadable"; CONNS="unknown" ;;
+    *) VERIFY_CAUSE="origin-not-serving" ;;
+  esac
+  echo "SOLEUR_TUNNEL_VERIFY cause=${VERIFY_CAUSE} tunnel=${TUNNEL_ID} connections=${CONNS}"
+  [[ -n "${GITHUB_OUTPUT:-}" ]] && echo "cause=${VERIFY_CAUSE}" >> "$GITHUB_OUTPUT"
+  if [[ "$VERIFY_CAUSE" == "no-connector" ]]; then
+    echo "::error::SOLEUR_TUNNEL_VERIFY cause=no-connector: tunnel ${TUNNEL_ID} has 0 connections, so nothing serves deploy./ssh./registry. The Terraform apply itself landed."
+    if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+      cat >> "$GITHUB_STEP_SUMMARY" <<SUMMARY
+**Tunnel verify: no connector.** Tunnel \`${TUNNEL_ID}\` has 0 connections, so deploy./ssh./registry. have nothing behind them. This is EXPECTED on the apply that first creates the Soleur-account tunnel, before web-2 is re-born with its token (\`web-host-replace web-2\`, #12937). Any later apply that reports it means the connector died, which is a real outage.
+SUMMARY
+    fi
+  fi
   cat >&2 <<EOF
 ::error::deploy.${APP_DOMAIN_BASE}/hooks/deploy-status returned HTTP ${HTTP_CODE} after the ingress pin — the pinned origin ${WEB1_IP}:9000 is NOT serving. The management plane is down.
 CF's edge-generated 502 does not name the origin it failed to reach, so check, in order:

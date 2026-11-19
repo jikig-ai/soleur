@@ -1549,15 +1549,18 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // bridged with `cloudflared access tcp` (mirrors the SSH bridge). All operator-applied WITH the
   // registry host (an unattended per-PR apply must not mint a push credential + DNS for a host
   // that doesn't exist yet). The `..._config.web` ingress_rule EDIT rides the already-`-target`ed
-  // config resource (not a new resource). The two doppler_secrets carry ignore_changes=[value]
-  // (CF client_secret is write-once/empty-on-refresh, #4492) — still `doppler_secret`, not the
-  // CI-published github_actions_secret/doppler_service_token types the #5566 test forces.
+  // config resource (not a new resource).
+  // #12937 (Ruled by CTO agent, 2026-11-19): the two `doppler_secret.registry_push_access_token_{id,secret}`
+  // LEFT this list. They now read the Soleur-account `registry_push_soleur` token and are push-`-target`ed
+  // with the rest of the `_soleur` slice, which is NOT excluded either (an unattended merge apply is the
+  // route that re-homes it). Their old `ignore_changes = [value]` rested on "client_secret is
+  // empty-on-refresh" (#4492) — true ONLY for an IMPORTED token: provider 4.52.7's Read never clears
+  // client_secret for a Terraform-created one, so state survives refresh and the secrets follow their
+  // source in place. The old-account registry app/token/policy/record below stay operator-applied.
   "cloudflare_zero_trust_access_application.registry",
   "cloudflare_zero_trust_access_service_token.registry_push",
   "cloudflare_zero_trust_access_policy.registry_push_service_token",
   "cloudflare_record.registry",
-  "doppler_secret.registry_push_access_token_id",
-  "doppler_secret.registry_push_access_token_secret",
   // #6178 (ADR-100) — the dedicated Inngest singleton host. Same class as the registry/git-data
   // hosts: net-new host resources the per-PR CI `-target` path CANNOT provision (it bridges over
   // SSH to the EXISTING web host). All applied by the operator's full apply + the
@@ -8296,8 +8299,13 @@ describe("apply-web-platform-infra has a failure channel", () => {
     // 5. A RANDOM heredoc delimiter — a fixed one is forgeable by a value containing it.
     expect(body).toMatch(/delim=.*(openssl rand|RANDOM)/);
     expect(body).toMatch(/failing_step<<%s/);
-    // It must NOT try to read `apply` step outputs: that job declares no `outputs:`.
+    // It must NOT read `apply` step outputs in its run body: on the cancelled path they are unreliable.
+    // The ONE apply output (#12937, the tunnel verify cause) arrives through the step's `env:` and is
+    // consumed only by a closed `case`, never interpolated.
     expect(body).not.toContain("needs.apply.outputs");
+    expect(String((cause!.env as Record<string, string>).TUNNEL_VERIFY_CAUSE)).toBe("${{ needs.apply.outputs.tunnel_verify_cause }}");
+    expect(body).toMatch(/case "\$\{TUNNEL_VERIFY_CAUSE:-\}" in\n\s+no-connector\)/);
+    expect(body).not.toMatch(/\$\{?TUNNEL_VERIFY_CAUSE[^:]/);
   });
 
   /** The `case "$swept"` table that resolves the sweep prose, as {value: sentence}. */
@@ -10836,7 +10844,7 @@ describe("#10136 inngest link TLS: key material, merge targets, flag actuator", 
 // (rows, copies, hcl texts) so the mutation rows can feed synthetic inputs through the same code the real rows use.
 const KEY_ROTATE_WORKFLOW = resolve(REPO_ROOT, ".github/workflows/key-rotate.yml");
 const KEY_ROTATE_SCRIPT = resolve(REPO_ROOT, "scripts/key-rotate.sh");
-const KR_OUT_OF_SCOPE_RANDOM_IDS = ["tunnel_secret", "inngest_signing_key_prd", "inngest_event_key_prd"]; // tunnel: ADR-307 amendment; the _prd pair is RETIRED state-only (#11293)
+const KR_OUT_OF_SCOPE_RANDOM_IDS = ["tunnel_secret", "tunnel_secret_soleur", "inngest_signing_key_prd", "inngest_event_key_prd"]; // tunnel: ADR-307 amendment; the _prd pair is RETIRED state-only (#11293)
 
 interface KrRow { phase: string; key: string; address: string; flag: string; actions: string }
 interface KrCopy { key: string; project: string; config: string; name: string; address: string }

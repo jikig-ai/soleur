@@ -236,6 +236,59 @@ def destroyed_at($addr):
     | select(.change.actions? | index("delete")) ]
   | length;
 
+# --- deploy-policy gate: the Access policies it judges (#9294 G1; extended #12937) ---------------
+# ONE selector table for every policy the gate covers, so no counter below can select on one address
+# and miss its sibling (Guard 2's defect class: an address-equality select on only the old address).
+# The OLD deploy policy (zone-scoped, old account) keeps its original rules. The three `_soleur`
+# policies (Soleur account, the zone owner since the 2026-11-18 zone move) are judged against their
+# OWN committed token reference: the deploy one against the ids the apply step reads from tunnel.tf
+# and passes as `--argjson ids` (plan JSON carries no locals), the other two against the reference
+# expression in the plan's `configuration` section (their token id is unknown until the token exists).
+# `$ARGS.named.ids` is read with a null default so every caller that passes no ids keeps working;
+# without ids a planned `_soleur` deploy create/update is unsafe (fail-closed), which is why only the
+# apply step's deploy_policy_counts output feeds deploy_policy_gate.
+def deploy_policy_old_addr: "cloudflare_zero_trust_access_policy.deploy_service_token";
+def deploy_policy_soleur_refs: {
+  "cloudflare_zero_trust_access_policy.deploy_service_token_soleur": "local.deploy_service_token_ids_soleur",
+  "cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur": "cloudflare_zero_trust_access_service_token.ci_ssh_soleur",
+  "cloudflare_zero_trust_access_policy.registry_push_service_token_soleur": "cloudflare_zero_trust_access_service_token.registry_push_soleur"
+};
+def deploy_policy_soleur_addrs: deploy_policy_soleur_refs | keys;
+def deploy_policy_has_true: [.. | select(. == true)] | length > 0;
+
+# The planned include of a `_soleur` policy is bound to its committed reference: exactly one include
+# block in the configuration, whose service_token expression references ONLY that one name (the
+# token resource, or for the deploy policy the committed local) and is not a literal.
+def deploy_policy_soleur_ref_ok($plan; $addr):
+  deploy_policy_soleur_refs[$addr] as $ref
+  | [ $plan.configuration.root_module.resources[]? | select(.address == $addr) ] as $cfg
+  | (($cfg | length) == 1)
+    and ((($cfg[0].expressions.include? // []) | length) == 1)
+    and (($cfg[0].expressions.include[0].service_token? // {}) as $e
+         | ($e.constant_value? == null)
+           and ([ $e.references[]? ] as $r
+                | ($r | length) > 0
+                  and ($r | all(. == $ref or . == ($ref + ".id")))
+                  and (if ($ref | startswith("local.")) then true else ($r | index($ref + ".id")) != null end)));
+
+# `.` is one resource_changes entry at a `_soleur` address.
+def deploy_policy_soleur_unsafe($plan; $ids):
+  (.change.actions? // []) as $act
+  | ((.change.after // {}) | .include? // []) as $inc
+  | if ($act | type) != "array" or ($act | length) == 0 then true
+    elif ($act | any(. == "delete" or . == "forget")) then true
+    elif $act == ["no-op"] or $act == ["read"] then false
+    elif ($inc | length) != 1 then true
+    elif (($inc[0].everyone? // false) != false) or (($inc[0].any_valid_service_token? // false) != false) then true
+    elif (deploy_policy_soleur_ref_ok($plan; .address) | not) then true
+    elif .address == "cloudflare_zero_trust_access_policy.deploy_service_token_soleur" then
+      ((.change.after_unknown.include? // []) | deploy_policy_has_true)
+      or (($ids | type) != "array") or (($ids | length) == 0)
+      or (($inc[0].service_token? // null) != $ids)
+    else
+      ((($inc[0].service_token? // []) | length) != 1)
+    end;
+
 {
   # IS THIS PLAN GRADEABLE AT ALL? Every clause below reads `.resource_changes[]?`,
   # whose `?` swallows a missing or non-array value — so a structurally empty plan
@@ -651,24 +704,41 @@ def destroyed_at($addr):
   # deploy_policy_changes: the policy's plan entry is anything but exactly ["no-op"]. An ABSENT entry counts
   # as 1 (the policy is always in the -target list, so an absent entry is a changed plan shape). The only
   # acknowledgeable one: a rotation PR changes the include on purpose and carries [ack-deploy-policy].
+  #
+  # #12937: the three `_soleur` policies flow through the SAME counters (deploy_policy_soleur_refs
+  # above). A non-no-op `_soleur` entry counts as a change (its single create rides the merge apply
+  # and needs [ack-deploy-policy]); an ABSENT `_soleur` entry counts 0 — the per-merge -target
+  # coverage (terraform-target-parity.test.ts) is what keeps them in the plan.
   deploy_policy_changes: (
-    [ .resource_changes[]? | select(.address == "cloudflare_zero_trust_access_policy.deploy_service_token") ] as $p
-    | if ($p | length) == 0 then 1
-      else ($p | map(select(.change.actions != ["no-op"])) | length) end
+    ([ .resource_changes[]? | select(.address == deploy_policy_old_addr) ] as $p
+     | if ($p | length) == 0 then 1
+       else ($p | map(select(.change.actions != ["no-op"])) | length) end)
+    + ([ .resource_changes[]?
+         | select(IN(.address; deploy_policy_soleur_addrs[]))
+         | select(.change.actions != ["no-op"]) ] | length)
   ),
   # deploy_policy_unsafe: the policy would be created or deleted, or its planned include is not exactly ONE
   # block holding a non-empty service_token list, or any part of the include is unknown at plan time. Never
   # acknowledgeable: this is the lockout shape.
+  #
+  # #12937: a `_soleur` policy is unsafe when it would be deleted/forgotten/replaced, or when a planned
+  # create/update leaves its include other than ONE block bound to its own committed reference (the
+  # deploy one: the planned id list must EQUAL `--argjson ids`, the list committed in tunnel.tf),
+  # or adds `everyone` / `any_valid_service_token`. Its single acknowledged create is NOT unsafe.
   deploy_policy_unsafe: (
-    [ .resource_changes[]?
-      | select(.address == "cloudflare_zero_trust_access_policy.deploy_service_token")
-      | select(
-          ((.change.actions? // []) | any(. == "create" or . == "delete"))
-          or ((.change.after_unknown.include? // false) != false)
-          or (((.change.after // {}) | .include? // []) | length) != 1
-          or ((((.change.after // {}) | .include? // [])[0].service_token? // []) | length) == 0
-        ) ]
-    | length
+    . as $plan
+    | ($ARGS.named.ids // null) as $ids
+    | ([ .resource_changes[]?
+         | select(.address == deploy_policy_old_addr)
+         | select(
+             ((.change.actions? // []) | any(. == "create" or . == "delete"))
+             or ((.change.after_unknown.include? // false) != false)
+             or (((.change.after // {}) | .include? // []) | length) != 1
+             or ((((.change.after // {}) | .include? // [])[0].service_token? // []) | length) == 0
+           ) ] | length)
+      + ([ .resource_changes[]?
+           | select(IN(.address; deploy_policy_soleur_addrs[]))
+           | select(deploy_policy_soleur_unsafe($plan; $ids)) ] | length)
   ),
   # access_token_stray_forgets: a forget of an Access service token other than the deploy token this PR
   # forgets on purpose (the ci_ssh and registry_push tokens are other credentials). Once the forget has

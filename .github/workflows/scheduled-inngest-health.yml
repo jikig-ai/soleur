@@ -1580,9 +1580,13 @@ jobs:
       - name: Census tunnel connectors (ADR-114 I1)
         id: census
         env:
-          # prd_terraform holds CF_API_TOKEN (Tunnel scope) + CF_ACCOUNT_ID. Read via Doppler
-          # rather than duplicating them into GH Actions secrets: two copies of a credential
-          # drift, and `secrets.DOPPLER_TOKEN` is already the read-only token for this config.
+          # prd_terraform holds CF_API_TOKEN (Tunnel scope). Read via Doppler rather than
+          # duplicating it into GH Actions secrets: two copies of a credential drift, and
+          # `secrets.DOPPLER_TOKEN` is already the read-only token for this config. The ACCOUNT is
+          # NOT Doppler's CF_ACCOUNT_ID (#12937): since the 2026-11-18 soleur.ai zone move the tunnel
+          # lives in the zone-owning Soleur account, whose id is the one constant
+          # CF_TUNNEL_ACCOUNT_ID in scripts/tunnel-connector-census.sh (parity-tested against
+          # tunnel.tf local.cf_soleur_account_id). CF_ACCOUNT_ID stays the old account for #12931.
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
@@ -1593,7 +1597,7 @@ jobs:
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
 
           CF_API_TOKEN=$(doppler secrets get CF_API_TOKEN --project soleur --config prd_terraform --plain 2>/dev/null || true)
-          CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID --project soleur --config prd_terraform --plain 2>/dev/null || true)
+          CF_ACCOUNT_ID="${CF_TUNNEL_ACCOUNT_ID:-}"
           # GHA auto-masks `secrets.*` but NOT values fetched at runtime. Mask before first use
           # so the next diagnostic someone adds to this step cannot print the token.
           # (Precedent: apply-web-platform-infra.yml's mask-before-use.)
@@ -1604,7 +1608,7 @@ jobs:
             echo "verdict=census_unavailable" >> "$GITHUB_OUTPUT"
             echo "count=-1" >> "$GITHUB_OUTPUT"
             echo "version_verdict=version_unreadable" >> "$GITHUB_OUTPUT"
-            echo "detail=doppler read failed for CF_API_TOKEN/CF_ACCOUNT_ID" >> "$GITHUB_OUTPUT"
+            echo "detail=doppler read failed for CF_API_TOKEN (or CF_TUNNEL_ACCOUNT_ID is unset)" >> "$GITHUB_OUTPUT"
             echo "SOLEUR_ORIGIN_HOST_CHURN verdict=census_unavailable count=-1 version_verdict=version_unreadable reason=doppler_read_failed"
             exit 0
           fi

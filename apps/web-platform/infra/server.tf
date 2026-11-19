@@ -421,7 +421,9 @@ resource "hcloud_server" "web" {
     # fail templatefile()).
     fail2ban_sshd_local_b64   = base64encode(file("${path.module}/fail2ban-sshd.local"))
     host_scripts_content_hash = local.host_scripts_content_hash
-    tunnel_token              = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
+    # #12937: the Soleur-account tunnel (the zone-owning account). Live hosts see no diff
+    # (ignore_changes = [user_data, …]); only web-2's next birth renders the new token.
+    tunnel_token = cloudflare_zero_trust_tunnel_cloudflared.web_soleur.tunnel_token
     # #6425 — gates `cloudflared service install` (the tunnel REGISTRATION, not the apt
     # install) to the designated ingress host. ADR-114 I1/I2: Cloudflare binds ingress to a
     # TUNNEL and then selects a connector per edge colo, so with two connectors every

@@ -16,38 +16,38 @@ No `spec.md` exists for this branch (one-shot entry), so `lane: cross-domain` is
 
 ## Phase 1: Terraform tunnel slice
 
-- [ ] 1.1 `tunnel.tf`: locals, `_soleur` tunnel (name `soleur-web-platform`), config, account-scoped
+- [x] 1.1 `tunnel.tf`: locals, `_soleur` tunnel (name `soleur-web-platform`), config, account-scoped
       Access apps and policies, tokens, notification policy, outputs; drop `ignore_changes = [value]` on
       the registry Doppler secrets; fix the two stale comments.
-- [ ] 1.2 `dns.tf`: three `_soleur` CNAMEs.
-- [ ] 1.3 `server.tf`: point the cloud-init `tunnel_token` input at the new tunnel.
-- [ ] 1.4 Push-plan `-target` list gains every new address.
-- [ ] 1.5 Target-parity test: new registry addresses are push-applied.
-- [ ] 1.6 Deploy-policy gate branch for the new address, with Guard 2 rows (write the RED rows
+- [x] 1.2 `dns.tf`: three `_soleur` CNAMEs.
+- [x] 1.3 `server.tf`: point the cloud-init `tunnel_token` input at the new tunnel.
+- [x] 1.4 Push-plan `-target` list gains every new address.
+- [x] 1.5 Target-parity test: new registry addresses are push-applied.
+- [x] 1.6 Deploy-policy gate branch for the new address, with Guard 2 rows (write the RED rows
       first).
-- [ ] 1.7 Verify script reads TF outputs and checks `registry.`, with Guard 3 rows.
-- [ ] 1.8 Move the CI-SSH Doppler sync ahead of the verify step; fail on empty outputs when this run
+- [x] 1.7 Verify script reads TF outputs and checks `registry.`, with Guard 3 rows.
+- [x] 1.8 Move the CI-SSH Doppler sync ahead of the verify step; fail on empty outputs when this run
       creates `ci_ssh`.
-- [ ] 1.9 Verify script prints `SOLEUR_TUNNEL_VERIFY cause=…` and still exits non-zero.
-- [ ] 1.10 Repoint the connector census (workflow + script) and the six `ci_ssh_token_replace`
+- [x] 1.9 Verify script prints `SOLEUR_TUNNEL_VERIFY cause=…` and still exits non-zero.
+- [x] 1.10 Repoint the connector census (workflow + script) and the six `ci_ssh_token_replace`
       literals; add the Access policy-parity test.
-- [ ] 1.11 Run every guard suite listed under Files to Edit; fix any that go red.
+- [x] 1.11 Run every guard suite listed under Files to Edit; fix any that go red.
 
 ## Phase 2: Make the cause visible
 
-- [ ] 2.1 Classifier body capture plus `host-nxdomain`, `edge-error-<NNNN>` and `tunnel-down`
+- [x] 2.1 Classifier body capture plus `host-nxdomain`, `edge-error-<NNNN>` and `tunnel-down`
       (Guard 1 RED rows first).
-- [ ] 2.2 Remedies plus the `zot_bridge_marker` helper.
-- [ ] 2.3 Bridge action prints the marker in both failure branches.
-- [ ] 2.4 `reusable-release.yml` mirror failure path prints the marker and adds it to the email.
-- [ ] 2.5 Tests for 2.1-2.4.
-- [ ] 2.6 Zone-authority step in `scheduled-terraform-drift.yml` (Guard 4).
+- [x] 2.2 Remedies plus the `zot_bridge_marker` helper.
+- [x] 2.3 Bridge action prints the marker in both failure branches.
+- [x] 2.4 `reusable-release.yml` mirror failure path prints the marker and adds it to the email.
+- [x] 2.5 Tests for 2.1-2.4.
+- [x] 2.6 Zone-authority step in `scheduled-terraform-drift.yml` (Guard 4).
 
 ## Phase 2b: Docs
 
-- [ ] ADR-329 (re-check the ordinal across all `origin/*` refs before merge), ADR-304 addendum.
-- [ ] `model.c4` descriptions; run the C4 tests.
-- [ ] Runbooks, `expenses.md`, `domains.md`.
+- [x] ADR-330 (renumbered from ADR-329, which two local branches already hold; re-check the ordinal across all `origin/*` refs before merge). ADR-304 addendum dropped (decision-challenges: one record).
+- [x] `model.c4` descriptions; run the C4 tests.
+- [x] Runbooks, `expenses.md`, `domains.md`.
 
 ## Phase 3: Credentials and DNS (explicit operator go per act)
 

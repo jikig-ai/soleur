@@ -68,6 +68,38 @@ resource "cloudflare_record" "registry" {
   ttl     = 1
 }
 
+# #12937 — the three tunnel hostnames in the zone that OWNS soleur.ai since the 2026-11-18 zone move
+# (Soleur account, local.cf_soleur_zone_id in tunnel.tf). A cfargotunnel.com CNAME routes only to a
+# tunnel in the same account as the record, so these point at the `_soleur` tunnel; the three above
+# sit in the moved-away zone and are left untouched (no forget/destroy in this PR). A leftover
+# scanner A record at the same name makes the create fail loudly — that is the protection.
+resource "cloudflare_record" "deploy_soleur" {
+  zone_id = local.cf_soleur_zone_id
+  name    = "deploy"
+  content = "${cloudflare_zero_trust_tunnel_cloudflared.web_soleur.id}.cfargotunnel.com"
+  type    = "CNAME"
+  proxied = true
+  ttl     = 1
+}
+
+resource "cloudflare_record" "ssh_soleur" {
+  zone_id = local.cf_soleur_zone_id
+  name    = "ssh"
+  content = "${cloudflare_zero_trust_tunnel_cloudflared.web_soleur.id}.cfargotunnel.com"
+  type    = "CNAME"
+  proxied = true
+  ttl     = 1
+}
+
+resource "cloudflare_record" "registry_soleur" {
+  zone_id = local.cf_soleur_zone_id
+  name    = "registry"
+  content = "${cloudflare_zero_trust_tunnel_cloudflared.web_soleur.id}.cfargotunnel.com"
+  type    = "CNAME"
+  proxied = true
+  ttl     = 1
+}
+
 # Email authentication records for Resend SMTP (sends via Amazon SES, eu-west-1)
 
 resource "cloudflare_record" "dkim_resend" {
