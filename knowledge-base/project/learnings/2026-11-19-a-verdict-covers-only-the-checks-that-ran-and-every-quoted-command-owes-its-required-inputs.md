@@ -30,7 +30,7 @@ PR #12934 put a 3-day floor on the serve gate's LUKS soak. It also called the pe
    - `SK_GATE_BODY` is an exact-body snapshot.
    - The `env -u` list covers the whole bash-startup class (`BASH_ENV ENV SHELLOPTS BASHOPTS PS4`).
    - Committed mutants (`skmut`) pin each of these.
-5. The scan gate was re-run on this branch's own files only, the paths from `git log --no-merges --name-only <since>..HEAD`.
+5. The scan gate is scoped to this branch's own files: `git log --first-parent --no-merges --diff-filter=ACMR --name-only --format= <since>..HEAD`, plus the merge's own resolution paths (`git diff-tree --cc --name-only <merge>`). A first draft of this line named `git log --no-merges` alone; the fix-round review measured it at 318 files against 6, because `--no-merges` keeps every commit the merge brought in from main.
 
 ## Key Insight
 
@@ -42,7 +42,7 @@ A verdict's scope is the set of checks that **ran**, not the set its name sugges
 2. **The drain command in the operator hold had no `-f reason=`** — Recovery: corrected on #12820, in the runbook and in the PR body. — **Prevention:** before quoting a `gh workflow run` command, list the workflow's required inputs (`yq '.on.workflow_dispatch.inputs | to_entries[] | select(.value.required) | .key'`) and check that each one has an `-f`. Routed to ship/references/operator-holds.md.
 3. **Suite wall-clock rows anchored on a start-of-suite NOW failed under load** — Recovery: slack now follows elapsed time. — **Prevention:** a time window in a test is measured from the moment the assertion reads the clock, or its slack includes elapsed time. A fixed slack from a captured NOW is a load-dependent flake.
 4. **Fix rounds closed instances, not classes** — Recovery: parsed-YAML checks, an exact-body snapshot, the full `env -u` class, and committed mutants. — **Prevention:** already in review/SKILL.md ("A FIX COMMIT IS THE LEAST-AUDITED SURFACE"). Apply it to your own fix rounds before the review panel sees them.
-5. **A scan-gate range spanning a merge from main scanned main's files** — Recovery: re-ran on own files only. — **Prevention:** routed to review/SKILL.md (scan gate: a fix-round range that contains a merge commit passes `git log --no-merges --name-only` paths only).
+5. **A scan-gate range spanning a merge from main scanned main's files** — Recovery: re-ran on own files only. — **Prevention:** routed to review/SKILL.md (scan gate: a fix-round range that contains a merge commit passes the `--first-parent --no-merges --diff-filter=ACMR` path list plus `git diff-tree --cc --name-only <merge>`).
 6. **`emit-review-trailer.sh --agents-ran` was given names** — Recovery: re-ran with integer counts. — **Prevention:** one-off. The script's error message already names the contract.
 7. **Accidentally sourced a test file (63 KB of output)** — Recovery: no tree damage, discarded. — **Prevention:** one-off. Run suites with `bash <file>`, never `source`.
 8. **A hook blocked `pgrep -f`** — Recovery: read the task output file instead. — **Prevention:** one-off, already hook-enforced.
