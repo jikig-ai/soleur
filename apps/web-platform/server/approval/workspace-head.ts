@@ -145,6 +145,19 @@ function packedRefSha(body: string, name: string): string | undefined {
  * itself a symref, a `reftable` repository, an unborn HEAD or any non-regular file refuses.
  */
 export function readWorkspaceHeadSha(workspacePath: string): string {
+  return readHead(workspacePath).sha;
+}
+
+/**
+ * The same read as `readWorkspaceHeadSha`, plus the full ref name HEAD names (`refs/heads/<b>`), or `null` for a detached
+ * HEAD (#12600: the KB sync refuses a non-default or detached branch without running git). A sibling export so the
+ * existing reader's return type is not widened for its consumers.
+ */
+export function readWorkspaceHeadRef(workspacePath: string): { sha: string; refName: string | null } {
+  return readHead(workspacePath);
+}
+
+function readHead(workspacePath: string): { sha: string; refName: string | null } {
   let gitDir: string;
   try {
     const ws = realpathSync(workspacePath);
@@ -168,7 +181,7 @@ export function readWorkspaceHeadSha(workspacePath: string): string {
     throw new WorkspaceHeadUnreadable("head_unreadable");
   }
 
-  if (!head.startsWith("ref: ")) return classifyHeadBody(head);
+  if (!head.startsWith("ref: ")) return { sha: classifyHeadBody(head), refName: null };
   const name = head.slice("ref: ".length);
   if (!isSafeRefName(name)) throw new WorkspaceHeadUnreadable("ref_invalid");
 
@@ -191,7 +204,7 @@ export function readWorkspaceHeadSha(workspacePath: string): string {
       throw new WorkspaceHeadUnreadable("ref_invalid");
     }
     if (!realRef.startsWith(gitDir + sep)) throw new WorkspaceHeadUnreadable("ref_invalid");
-    return classifyBody(loose, "ref_invalid");
+    return { sha: classifyBody(loose, "ref_invalid"), refName: name };
   }
 
   let packed: string;
@@ -202,7 +215,7 @@ export function readWorkspaceHeadSha(workspacePath: string): string {
   }
   const sha = packedRefSha(packed, name);
   if (sha === undefined) throw new WorkspaceHeadUnreadable("ref_unresolvable");
-  return sha;
+  return { sha, refName: name };
 }
 
 /** A detached HEAD body: exactly 40 lowercase hex. */

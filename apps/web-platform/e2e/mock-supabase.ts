@@ -95,6 +95,85 @@ export const MOCK_FOUNDER_SESSION = {
 };
 
 /**
+ * #12714 Settings held-files card (e2e/settings-kb-sync-held.e2e.ts). Synthesized fixtures
+ * (cq-test-fixtures-synthesized-only): one user per card state, each answered ONLY for its own id, so no other spec
+ * sees these rows (MOCK_USER and MOCK_FOUNDER keep the 404 defaults). Solo users own the workspace whose id is their
+ * own; the two members belong to a team workspace through `user_session_state` + `workspace_members`.
+ * `ownerRpc` is the `is_workspace_owner` answer; "error" is the V10 role-unknown case (a 500 from the RPC).
+ */
+const HELD_ORG_ID = "00000000-0000-4000-8000-00000000c0a0";
+export const HELD_ORG_NAME = "Acme Team";
+const HELD_TEAM_WS = "00000000-0000-4000-8000-0000000012b1";
+const HELD_TEAM_WS_ZERO = "00000000-0000-4000-8000-0000000012b2";
+
+interface HeldUserFixture {
+  readonly id: string;
+  /** null: solo (the workspace id is the user id). */
+  readonly teamWorkspaceId: string | null;
+  readonly ownerRpc: boolean | "error";
+}
+
+export const HELD_E2E_USERS = {
+  ownerHeld: { id: "00000000-0000-4000-8000-0000000012a1", teamWorkspaceId: null, ownerRpc: true },
+  ownerZero: { id: "00000000-0000-4000-8000-0000000012a2", teamWorkspaceId: null, ownerRpc: true },
+  ownerNull: { id: "00000000-0000-4000-8000-0000000012a3", teamWorkspaceId: null, ownerRpc: true },
+  ownerPullBlocked: { id: "00000000-0000-4000-8000-0000000012a4", teamWorkspaceId: null, ownerRpc: true },
+  ownerCap: { id: "00000000-0000-4000-8000-0000000012a5", teamWorkspaceId: null, ownerRpc: true },
+  roleUnknown: { id: "00000000-0000-4000-8000-0000000012a6", teamWorkspaceId: null, ownerRpc: "error" },
+  memberHeld: { id: "00000000-0000-4000-8000-0000000012a7", teamWorkspaceId: HELD_TEAM_WS, ownerRpc: false },
+  memberZero: { id: "00000000-0000-4000-8000-0000000012a8", teamWorkspaceId: HELD_TEAM_WS_ZERO, ownerRpc: false },
+} as const satisfies Record<string, HeldUserFixture>;
+
+/** `workspaces` rows by id: the repo columns, the held count (migration 187) and the pull-blocked reason (188). */
+export const HELD_E2E_WORKSPACES: Readonly<Record<string, Readonly<Record<string, unknown>>>> = (() => {
+  const row = (heldFiles: number | null, pullBlocked: string | null = null) => ({
+    organization_id: HELD_ORG_ID,
+    logo_path: null,
+    repo_url: "https://github.com/acme/widgets",
+    repo_status: "ready",
+    repo_last_synced_at: "2026-11-16T09:00:00Z",
+    github_installation_id: 4242,
+    kb_sync_held_files: heldFiles,
+    kb_sync_held_checked_at: "2026-11-16T09:00:00Z",
+    kb_sync_pull_blocked: pullBlocked,
+  });
+  const u = HELD_E2E_USERS;
+  return {
+    [u.ownerHeld.id]: row(3),
+    [u.ownerZero.id]: row(0),
+    [u.ownerNull.id]: row(null),
+    [u.ownerPullBlocked.id]: row(2, "untracked_collision"),
+    [u.ownerCap.id]: row(10_000),
+    [u.roleUnknown.id]: row(3),
+    [HELD_TEAM_WS]: row(3),
+    [HELD_TEAM_WS_ZERO]: row(0),
+  };
+})();
+
+const HELD_USERS_BY_ID: ReadonlyMap<string, HeldUserFixture> = new Map(
+  Object.values(HELD_E2E_USERS).map((u) => [u.id, u]),
+);
+
+/** A signed-in session for a held-files fixture user (the spec builds its storage state from it). */
+export function heldSessionFor(userId: string) {
+  const user: MockUser = { ...MOCK_USER, id: userId, email: `held-${userId.slice(-4)}@example.com` };
+  return {
+    access_token: mintMockJwt(MOCK_NOW_SECONDS, user),
+    token_type: "bearer",
+    expires_in: 86400,
+    expires_at: MOCK_NOW_SECONDS + 86400,
+    refresh_token: `held-refresh-${userId}`,
+    user,
+  };
+}
+
+/** The `eq.` value of a PostgREST filter param, or null. */
+function eqParam(url: URL, col: string): string | null {
+  const v = url.searchParams.get(col);
+  return v?.startsWith("eq.") ? v.slice(3) : null;
+}
+
+/**
  * The `sub` claim of an unsigned bearer JWT, or null. Keyed on `sub`, never on
  * token-string equality: tokens embed Date.now() at module load, so a second
  * instance of this module (the config's import, a worker) mints other strings.
@@ -161,8 +240,17 @@ export function startMockSupabase(port: number): Promise<http.Server> {
           res.end(JSON.stringify({ error: "unauthorized", message: "No authorization header" }));
           return;
         }
+        const sub = bearerSub(auth);
         res.writeHead(200);
-        res.end(JSON.stringify(bearerSub(auth) === MOCK_FOUNDER.id ? MOCK_FOUNDER : MOCK_USER));
+        res.end(
+          JSON.stringify(
+            sub === MOCK_FOUNDER.id
+              ? MOCK_FOUNDER
+              : sub !== null && HELD_USERS_BY_ID.has(sub)
+                ? heldSessionFor(sub).user
+                : MOCK_USER,
+          ),
+        );
         return;
       }
 
@@ -191,7 +279,14 @@ export function startMockSupabase(port: number): Promise<http.Server> {
             } catch {
               refreshToken = undefined;
             }
-            const session = [MOCK_FOUNDER_SESSION, MOCK_SESSION].find((x) => x.refresh_token === refreshToken);
+            const heldId =
+              typeof refreshToken === "string" && refreshToken.startsWith("held-refresh-")
+                ? refreshToken.slice("held-refresh-".length)
+                : null;
+            const session =
+              heldId !== null && HELD_USERS_BY_ID.has(heldId)
+                ? heldSessionFor(heldId)
+                : [MOCK_FOUNDER_SESSION, MOCK_SESSION].find((x) => x.refresh_token === refreshToken);
             if (session === undefined) {
               res.writeHead(400);
               res.end(JSON.stringify({ error: "invalid_grant", error_description: "Invalid Refresh Token" }));
@@ -209,6 +304,44 @@ export function startMockSupabase(port: number): Promise<http.Server> {
       }
 
       // ---- PostgREST endpoints ----
+
+      // #12714 held-files fixtures (HELD_E2E_USERS): answered only when the filter names a fixture id, else falls
+      // through to the defaults below (which 404 these tables), so no other spec changes behaviour.
+      if (url.pathname === "/rest/v1/user_session_state") {
+        const fixture = HELD_USERS_BY_ID.get(eqParam(url, "user_id") ?? "");
+        if (fixture) {
+          sendRows(
+            fixture.teamWorkspaceId
+              ? [{ current_workspace_id: fixture.teamWorkspaceId, current_organization_id: HELD_ORG_ID }]
+              : [],
+          );
+          return;
+        }
+      }
+      if (url.pathname === "/rest/v1/workspace_members") {
+        const fixture = HELD_USERS_BY_ID.get(eqParam(url, "user_id") ?? "");
+        if (fixture) {
+          // The membership probe (workspace_id + user_id): a member row only for the fixture's own team workspace.
+          const ws = eqParam(url, "workspace_id");
+          sendRows(
+            fixture.teamWorkspaceId && ws === fixture.teamWorkspaceId
+              ? [{ user_id: fixture.id, workspace_id: ws }]
+              : [],
+          );
+          return;
+        }
+      }
+      if (url.pathname === "/rest/v1/workspaces") {
+        const row = HELD_E2E_WORKSPACES[eqParam(url, "id") ?? ""];
+        if (row) {
+          sendRows([row]);
+          return;
+        }
+      }
+      if (url.pathname === "/rest/v1/organizations" && eqParam(url, "id") === HELD_ORG_ID) {
+        sendRows([{ name: HELD_ORG_NAME, owner_user_id: null }]);
+        return;
+      }
 
       if (url.pathname === "/rest/v1/users") {
         const select = url.searchParams.get("select") ?? "";
@@ -302,6 +435,22 @@ export function startMockSupabase(port: number): Promise<http.Server> {
           ]),
         );
         return;
+      }
+
+      // #12714: the owner check the Settings identity resolver makes (supabase.rpc("is_workspace_owner")), answered
+      // only for a held-files fixture user; "error" is the V10 role-unknown case.
+      if (url.pathname === "/rest/v1/rpc/is_workspace_owner") {
+        const fixture = HELD_USERS_BY_ID.get(bearerSub(req.headers.authorization ?? "") ?? "");
+        if (fixture) {
+          if (fixture.ownerRpc === "error") {
+            res.writeHead(500);
+            res.end(JSON.stringify({ code: "XX000", message: "e2e: owner check failed" }));
+          } else {
+            res.writeHead(200);
+            res.end(JSON.stringify(fixture.ownerRpc));
+          }
+          return;
+        }
       }
 
       // ---- Realtime (WebSocket upgrade attempt — reject gracefully) ----

@@ -106,7 +106,7 @@ vi.mock("../server/domain-leaders", () => {
   return { DOMAIN_LEADERS: leaders, ROUTABLE_DOMAIN_LEADERS: leaders };
 });
 vi.mock("../server/domain-router", () => ({ routeMessage: vi.fn() }));
-vi.mock("../server/session-sync", () => ({ syncPull: vi.fn(), syncPush: vi.fn() }));
+vi.mock("../server/session-sync", () => ({ syncPull: vi.fn(async () => ({ heldFiles: 0, onRecovered: 0, pullReason: null, checkedAt: null })), syncPush: vi.fn() }));
 vi.mock("../server/github-api", () => ({
   githubApiGet: vi.fn().mockResolvedValue({ default_branch: "main" }),
   githubApiGetText: vi.fn().mockResolvedValue(""),

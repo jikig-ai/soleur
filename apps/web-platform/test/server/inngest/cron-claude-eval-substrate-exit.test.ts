@@ -70,6 +70,7 @@ const resultLine = (result: string) =>
 
 function run(extra: Record<string, unknown> = {}) {
   return spawnClaudeEval({
+    loadPlugin: false,
     spawnCwd: process.cwd(),
     installationToken: TOKEN,
     flags: ["--print"],
@@ -383,7 +384,9 @@ describe("chokepoints pin the git global config (#12757 Guard 3)", () => {
     expect(env.GIT_CONFIG_GLOBAL).toBe(PIN.GIT_CONFIG_GLOBAL);
     expect(env.GIT_CONFIG_NOSYSTEM).toBe(PIN.GIT_CONFIG_NOSYSTEM);
     expect(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe("1");
-    expect(env.HOME).toBe("/home/x");
+    // #12824 — the substrate overrides a cron's HOME with a fresh per-spawn dir (Guard 2, cron-spawn-isolation.test.ts).
+    expect(env.HOME).not.toBe("/home/x");
+    expect(basename(String(env.HOME))).toMatch(/^soleur-home-/);
   });
 
   it("row 3: spawnSimple with no env spawns the inherited process.env plus the pin", async () => {
@@ -566,6 +569,7 @@ describe("spawnClaudeEval — a real grandchild in the child's process group is 
     mkdirSync(cwd);
 
     const res = await spawnClaudeEval({
+      loadPlugin: false,
       spawnCwd: cwd,
       installationToken: TOKEN,
       flags: ["--print"],

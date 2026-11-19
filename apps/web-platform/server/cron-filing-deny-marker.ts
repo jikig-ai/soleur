@@ -175,6 +175,9 @@ export const NEW_RULE_IDS = [
   "protected-gitconfig",
   "protected-xdg-git",
   "protected-trust-root",
+  "write-outside-roots", // #12824 — counted only when the caller passes the run's write roots
+  "body-file-secret-path", // #12847 — a gh body/input file naming a Read-gate secret path
+  "plugin-clone-path", // #12847 — a skill script called by the clone path, not the vendored plugin root
 ] as const;
 export type NewRuleId = (typeof NEW_RULE_IDS)[number];
 
@@ -184,13 +187,16 @@ export type NewRuleId = (typeof NEW_RULE_IDS)[number];
  * missing/malformed array (→ `{}`); only rules with a non-zero count appear. Carries rule ids and
  * counts only, never the command or the path (both can carry tokens).
  */
-export function countNewRuleDenials(denials: unknown): Partial<Record<NewRuleId, number>> {
+export function countNewRuleDenials(
+  denials: unknown,
+  writeRoots: readonly string[] | null = null,
+): Partial<Record<NewRuleId, number>> {
   const counts: Partial<Record<NewRuleId, number>> = {};
   if (!Array.isArray(denials)) return counts;
   for (const d of denials) {
     if (!d || typeof d !== "object") continue;
     const entry = d as { tool_name?: unknown; tool_input?: unknown };
-    const rule = classifyNewRuleDeny(entry.tool_name, entry.tool_input) as string | null;
+    const rule = classifyNewRuleDeny(entry.tool_name, entry.tool_input, writeRoots) as string | null;
     // Closed vocabulary: anything else the classifier could ever return is dropped, not echoed.
     if (rule === null || !(NEW_RULE_IDS as readonly string[]).includes(rule)) continue;
     const id = rule as NewRuleId;

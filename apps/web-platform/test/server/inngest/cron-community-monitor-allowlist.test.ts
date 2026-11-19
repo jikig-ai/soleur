@@ -29,6 +29,7 @@ vi.hoisted(() => {
 
 import { gitFixtureEnv } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
 import { decide } from "../../../server/inngest/cron-bash-allowlist-hook.mjs";
+import { SOLEUR_PLUGIN_PATH_DEFAULT } from "../../../server/plugin-path";
 import { buildAuthenticatedCloneUrl } from "../../../server/inngest/functions/_cron-shared";
 import {
   buildAllowlistLines,
@@ -41,7 +42,11 @@ import {
 
 const CRON = "cron-community-monitor";
 const OTHER_CRON = "cron-seo-aeo-audit";
-const ROUTER = "bash plugins/soleur/skills/community/scripts/community-router.sh";
+// #12824 — allowlist lines carry <plugin-root>; the substrate substitutes the read-only prod root.
+const PROD_ROOT = SOLEUR_PLUGIN_PATH_DEFAULT;
+const ROUTER = `bash ${PROD_ROOT}/skills/community/scripts/community-router.sh`;
+const READ_VERBS: readonly string[] = COMMUNITY_ROUTER_READ_VERBS.map((l) => l.replaceAll("<plugin-root>", PROD_ROOT));
+const CLONE_ROUTER = "bash plugins/soleur/skills/community/scripts/community-router.sh";
 const SCRIPTS_DIR = join(__dirname, "../../../../../plugins/soleur/skills/community/scripts");
 const HANDLER_SRC = readFileSync(
   join(__dirname, "../../../server/inngest/functions/cron-community-monitor.ts"),
@@ -51,7 +56,7 @@ const HANDLER_SRC = readFileSync(
 type DecideFn = (input: unknown, lines: string[]) => { hookSpecificOutput: { permissionDecision: string } };
 
 const linesFor = (cron: string): string[] =>
-  buildAllowlistLines(cron, CRON_BASH_ALLOWLISTS[cron] ?? [], {}).lines;
+  buildAllowlistLines(cron, CRON_BASH_ALLOWLISTS[cron] ?? [], {}, PROD_ROOT).lines;
 const verdictWith = (fn: DecideFn, lines: string[], input: unknown): string =>
   fn(input, lines).hookSpecificOutput.permissionDecision;
 const bash = (command: string) => ({ tool_name: "Bash", tool_input: { command } });
@@ -103,6 +108,8 @@ const COMMUNITY_PROBES: ReadonlyArray<[string, unknown, "allow" | "deny"]> = [
   ["discord messages: a leading-zero operand", bash(`${ROUTER} discord messages 08 50`), "deny"],
   ["discord messages: a different limit", bash(`${ROUTER} discord messages 1 100`), "deny"],
   ["router platforms", bash(`${ROUTER} platforms`), "allow"],
+  // #12824 — the clone's editable copy of the router is not the allowlisted one.
+  ["clone-relative router path", bash(`${CLONE_ROUTER} platforms`), "deny"],
   ["hn mentions with the prompt's own arguments", bash(`${ROUTER} hn mentions --query soleur --limit 20`), "allow"],
   ["discord messages with the prompt's own arguments", bash(`${ROUTER} discord messages 123456789012345678 50`), "allow"],
 ];
@@ -115,7 +122,7 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
   const lines = linesFor(CRON);
 
   it("G2-1: no gh verb of any kind survives in the community allowlist (create/comment/list/label)", () => {
-    expect(COMMUNITY_ROUTER_READ_VERBS.length).toBe(13);
+    expect(READ_VERBS.length).toBe(13);
     expect(CRON_BASH_ALLOWLISTS[CRON]).toEqual([...COMMUNITY_ROUTER_READ_VERBS]);
     expect(lines.filter((l) => /^gh\b/.test(l))).toEqual([]);
     for (const verb of ["gh issue create", "gh issue comment", "gh label create", "gh label list", "gh issue list"]) {
@@ -131,14 +138,14 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
 
   it("G2-2: the bare router prefix is gone — every allow line is a full `<router> <platform> <verb> [fixed args]` literal and posting verbs are denied", () => {
     const bashLines = lines.filter((l) => l.startsWith("bash "));
-    expect(bashLines).toEqual([...COMMUNITY_ROUTER_READ_VERBS]);
+    expect(bashLines).toEqual(READ_VERBS);
     expect(bashLines).not.toContain(ROUTER);
     // allow[0] is executed verbatim by runHookSelfTest: it must be a whole command that runs.
-    expect(COMMUNITY_ROUTER_READ_VERBS[0]).toBe(`${ROUTER} platforms`);
-    expect(COMMUNITY_ROUTER_READ_VERBS[0]).not.toContain("<uint>");
+    expect(READ_VERBS[0]).toBe(`${ROUTER} platforms`);
+    expect(READ_VERBS[0]).not.toContain("<uint>");
     // The grammar of a literal: the router, a platform, a verb, then fixed arguments; `<uint>` is the only placeholder.
-    for (const l of COMMUNITY_ROUTER_READ_VERBS) {
-      expect(l).toMatch(/^bash plugins\/soleur\/skills\/community\/scripts\/community-router\.sh [a-z-]+( [a-z-]+( ([A-Za-z0-9<>-]+))*)?$/);
+    for (const l of READ_VERBS) {
+      expect(l.slice(ROUTER.length)).toMatch(/^ [a-z-]+( [a-z-]+( ([A-Za-z0-9<>-]+))*)?$/);
       expect(l.match(/<[^>]*>/g) ?? []).toEqual(l.includes("<uint>") ? ["<uint>"] : []);
     }
     expect(verdictWith(decide, lines, bash(`${ROUTER} bsky post "hello"`))).toBe("deny");
@@ -161,9 +168,9 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
   });
 
   it("G2-3: EVERY member is judged — all thirteen read literals allow (with a real number for `<uint>`) and every posting or removed verb denies (a first-member-only check is the defect)", () => {
-    expect(new Set(COMMUNITY_ROUTER_READ_VERBS).size).toBe(13);
+    expect(new Set(READ_VERBS).size).toBe(13);
     // The exact membership, as data: an added or dropped verb is a deliberate edit here.
-    expect([...COMMUNITY_ROUTER_READ_VERBS].map((l) => l.slice(ROUTER.length + 1))).toEqual([
+    expect([...READ_VERBS].map((l) => l.slice(ROUTER.length + 1))).toEqual([
       "platforms",
       "discord guild-info",
       "discord channels",
@@ -182,14 +189,14 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
     // guild-info's approximate count), `hn trending` and `linkedin fetch-activity` feed no
     // schema field.
     for (const removed of ["discord members", "hn trending", "linkedin fetch-activity"]) {
-      expect(COMMUNITY_ROUTER_READ_VERBS.some((l) => l.startsWith(`${ROUTER} ${removed}`)), removed).toBe(false);
+      expect(READ_VERBS.some((l) => l.startsWith(`${ROUTER} ${removed}`)), removed).toBe(false);
       expect(verdictWith(decide, lines, bash(`${ROUTER} ${removed}`)), removed).toBe("deny");
       expect(verdictWith(decide, lines, bash(`${ROUTER} ${removed} 100`)), `${removed} 100`).toBe("deny");
     }
     // The real hook's decide() over EVERY literal, `<uint>` replaced by a real number: a
     // line the grammar rejects (a typo in the list, a placeholder it cannot match) would
     // make the cron's own collector fail at runtime, every day.
-    for (const verb of COMMUNITY_ROUTER_READ_VERBS) {
+    for (const verb of READ_VERBS) {
       const cmd = withNumbers(verb);
       expect(verdictWith(decide, lines, bash(cmd)), cmd).toBe("allow");
       // ...and each is EXACT: one extra token, or a missing last token, denies.
@@ -209,7 +216,7 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
     const POSTING = ["bsky post x", "linkedin post-content --text x", "x post-tweet x"];
     for (const p of POSTING) expect(verdictWith(decide, lines, bash(`${ROUTER} ${p}`)), p).toBe("deny");
     // The allow list contains none of the posting subcommands as a whole token.
-    for (const l of COMMUNITY_ROUTER_READ_VERBS) expect(l).not.toMatch(/\b(post|post-tweet|post-content|create-session)\b/);
+    for (const l of READ_VERBS) expect(l).not.toMatch(/\b(post|post-tweet|post-content|create-session)\b/);
   });
 
   it("G2-4: with the no-file-tools directive every file/sub-agent tool is denied — and the directive is per-cron, not global", () => {
@@ -301,7 +308,8 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
     const prompt = HANDLER_SRC.slice(start, end);
     // Every backtick-quoted span that invokes the router. In the handler source the prompt's
     // backticks are escaped (\`), and the only placeholder the prompt carries is <channel_id>.
-    const spans = [...prompt.matchAll(/\\`(bash plugins\/soleur\/skills\/community\/scripts\/community-router\.sh[^`\\]*)\\`/g)].map((m) => m[1]);
+    // #12824 — the source carries the <plugin-root> token; the run substitutes the prod root (as the substrate does).
+    const spans = [...prompt.matchAll(/\\`(bash <plugin-root>\/skills\/community\/scripts\/community-router\.sh[^`\\]*)\\`/g)].map((m) => m[1]);
     // Non-vacuity: the prompt's collection steps name the platform probe and the three Discord, X,
     // Bluesky, LinkedIn, five GitHub and HN collectors (one span carries the five GitHub ones).
     expect(spans.length).toBeGreaterThanOrEqual(9);
@@ -311,14 +319,14 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
     for (const raw of commands) {
       expect(raw, "a prompt command with a stray quote, brace or shell metacharacter").toMatch(/^[A-Za-z0-9._:=@/+<>_ -]+$/);
       // The prompt's placeholder is a snowflake the model reads from the channels output.
-      const asRun = raw.replaceAll("<channel_id>", "123456789012345678");
+      const asRun = raw.replaceAll("<channel_id>", "123456789012345678").replaceAll("<plugin-root>", PROD_ROOT);
       expect(verdictWith(decide, lines, bash(asRun)), `the prompt tells the agent to run \`${raw}\`, which the real hook denies`).toBe("allow");
-      seen.add(raw.replaceAll("<channel_id>", "<uint>"));
+      seen.add(raw.replaceAll("<channel_id>", "<uint>").replaceAll("<plugin-root>", PROD_ROOT));
     }
     // And the whole span, as the agent would send it (a `;` chain of collectors).
-    for (const span of spans) expect(verdictWith(decide, lines, bash(span.replaceAll("<channel_id>", "123456789012345678"))), span).toBe("allow");
+    for (const span of spans) expect(verdictWith(decide, lines, bash(span.replaceAll("<channel_id>", "123456789012345678").replaceAll("<plugin-root>", PROD_ROOT))), span).toBe("allow");
     // The allowlist is not wider than the prompt: a literal the prompt never runs is dead surface.
-    expect([...seen].sort()).toEqual([...COMMUNITY_ROUTER_READ_VERBS].sort());
+    expect([...seen].sort()).toEqual([...READ_VERBS].sort());
   });
 
   it("G2-9: harness — the probe list FAILS against a hook that allows everything, and passes against the real one", () => {
@@ -344,14 +352,14 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
       `${ROUTER} github activity 1 'a b'`,
     ];
     // The pre-#7122 shape: the verb PREFIXES (no placeholder, no fixed arguments), no directive.
-    const prefixOnly = COMMUNITY_ROUTER_READ_VERBS.map((l) => l.split(" ").slice(0, 4).join(" "));
+    const prefixOnly = READ_VERBS.map((l) => l.split(" ").slice(0, 4).join(" "));
     for (const h of hostile) {
       expect(verdictWith(decide, lines, bash(h)), h).toBe("deny");
       // Control: the verb prefix alone admits it, which is the hole the grammar closes.
       expect(verdictWith(decide, prefixOnly, bash(h)), `control ${h}`).toBe("allow");
     }
     // Every one of the thirteen literals, invoked with a real number for the placeholder.
-    for (const verb of COMMUNITY_ROUTER_READ_VERBS) {
+    for (const verb of READ_VERBS) {
       expect(verdictWith(decide, lines, bash(withNumbers(verb))), verb).toBe("allow");
     }
   });

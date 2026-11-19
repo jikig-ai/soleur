@@ -47,7 +47,7 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { WorkspaceHeadUnreadable, readSmallRegularFile, readWorkspaceHeadSha } from "../../server/approval/workspace-head";
+import { WorkspaceHeadUnreadable, readSmallRegularFile, readWorkspaceHeadRef, readWorkspaceHeadSha } from "../../server/approval/workspace-head";
 
 // A spawn of a non-git program (mkfifo, openssl) reads no git configuration; it still gets an explicit, minimal env.
 const NON_GIT_ENV = { PATH: process.env.PATH ?? "" } as unknown as NodeJS.ProcessEnv;
@@ -490,5 +490,30 @@ describe("workspace-head.ts: module boundary", () => {
   test("names no child_process API and reads no environment variable", () => {
     expect(code).not.toMatch(/child_process|execFile|spawn|\bexec\(/);
     expect(code).not.toMatch(/process\.env|process\.cwd/);
+  });
+});
+
+describe("readWorkspaceHeadRef (#12600): the sha plus the ref name, same reader", () => {
+  test("symbolic HEAD to a loose ref -> refName is the full ref, no spawn", () => {
+    const { dir, head } = mkRepo();
+    const before = spawns.n;
+    expect(readWorkspaceHeadRef(dir)).toEqual({ sha: head, refName: "refs/heads/main" });
+    expect(spawns.n).toBe(before);
+  });
+  test("a packed ref -> refName from HEAD", () => {
+    const { dir, head } = mkRepo();
+    git(dir, "checkout", "-q", "-b", "feature");
+    git(dir, "pack-refs", "--all", "--prune");
+    expect(readWorkspaceHeadRef(dir)).toEqual({ sha: head, refName: "refs/heads/feature" });
+  });
+  test("detached HEAD -> refName null", () => {
+    const { dir, head } = mkRepo();
+    git(dir, "checkout", "-q", "--detach");
+    expect(readWorkspaceHeadRef(dir)).toEqual({ sha: head, refName: null });
+  });
+  test("a loose ref that is itself a symref refuses symref_chain (same as the sha reader)", () => {
+    const { dir } = mkRepo();
+    writeFileSync(join(dir, ".git", "refs", "heads", "main"), "ref: refs/heads/x\n");
+    expect(() => readWorkspaceHeadRef(dir)).toThrow(WorkspaceHeadUnreadable);
   });
 });

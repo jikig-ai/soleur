@@ -417,6 +417,55 @@ export function infoSilentFallback(
  *   `cc-github-read-visibility-unknown`.
  * - `agent-sandbox-bash-tool-result:<errorCode>` (cc-dispatcher `onToolResult` Bash denial mirror; one slot per
  *   classified code, so a code that fires does not mask another one for the same user, #10445).
+ * - `session-sync` family (#12600): `kb-sync-push-held:<reason>` (warn-level via `mirrorWarnWithDebounce`, op
+ *   `kb-sync.push-held`; dedup key is the WORKSPACE id, not a userId, so each workspace gets one slot per reason).
+ *   Reasons with a Sentry event: `merge_in_progress`, `detached_head`, `non_default_branch`, `remote_branch_absent`,
+ *   `hash_mismatch`, `kb_not_tree`, `kb_absent`, `guard_failed`, `head_moved`, `ref_update_failed`, `unpack_failed`,
+ *   `side_ahead`, `side_not_kb_only` (#12718 D28(2): a present side tip changes files outside knowledge-base/, so the push never
+ *   builds on it), `side_pr_unknown` (D23: the D17 PR re-check GET failed, any cause; nothing is created). The info-only
+ *   reasons (`synthetic_pushed`, `held_foreign`, `remote_ahead`, `remote_unknown_tip`, `side_pending` (D5b/D17: the side
+ *   branch already carries HEAD's KB and its PR is open, or merged on that tip), `side_declined` (D17: the Owner closed the PR
+ *   on that exact side tip, never reopened), `side_pr_created` (D23: the D17 re-check opened the missing PR; nothing was
+ *   pushed), `pr_failed` (D23: the per-turn line of a PR create failure, whose Sentry event is the paging
+ *   `kb-sync-fallback-failed:pr_failed` below)) never reach this map; the
+ *   `HELD_WARN_MESSAGES` Record in kb-sync-publish.ts holds an explicit `null` for each. Every reason writes its pino line
+ *   (layer 2) before the debounce (`reportPushHeld`). Also `kb-sync-tracking-ref` (warn-level via `mirrorWarnWithDebounce`,
+ *   op `kb-sync.tracking-ref`, workspace-id key): the advisory tracking-ref update failed, so the next turn mints a token
+ *   again. Also `kb-sync-rollback-failed` (warn-level via `mirrorWarnWithDebounce`, op `kb-sync.rollback`, workspace-id key,
+ *   tag `reason`; CTO ruling D14(4)): the best-effort rollback of the local branch after a fallback exit failed (usually
+ *   `head_moved`); it never changes the turn's result. Also `kb-sync-relink-failed` (warn-level via `mirrorWarnWithDebounce`,
+ *   op `kb-sync.relink`, workspace-id key, tag `reason`; D22(a)): after `S` landed on the default branch, the best-effort move
+ *   of the local branch from the merge `M` to `S` failed (usually `head_moved`); `M` loses nothing and the turn stays `pushed`.
+ *   Also `kb-sync-fallback-failed:<fallback_reason>` (ERROR-level via
+ *   `mirrorWithDebounce`, op `kb-sync.protected-fallback-failed`, workspace-id key, null err with tags `reason` /
+ *   `fallback_reason` / `push_class`; CTO ruling D8): the protected-branch fallback ran and did not deliver, which can repeat
+ *   every turn (R16), so one slot per workspace and fallback reason. Also `kb-sync-side-push-transient` (warn-level via
+ *   `mirrorWarnWithDebounce`, op `kb-sync.side-push-transient`, OFF the paging op; D21): the side push failed on the network,
+ *   retried next turn. Also `kb-sync-persistent-other` (ERROR-level via `mirrorWithDebounce`, op
+ *   `kb-sync.protected-fallback-failed`, workspace-id key, tag `reason=persistent_other`; D21): a non-protection persistent
+ *   reject (`shallow update not allowed`) that the next turn hits again.
+ *   Also `kb-sync-pull-held:<reason>` (#12718, warn-level via `mirrorWarnWithDebounce`, op `kb-sync.pull-held`, workspace-id
+ *   key, tags `reason` and, for a fetch-stage reason, `ref` = default | side; D25(6)): the session-start pull on the hardened
+ *   arm did not simply merge. Reasons with a Sentry event: `remote_state` (tag `remote_cause`, obs F8), `fetch_failed`,
+ *   `isolated_refused` (tag `isolated_reason`, obs F4), `tip_mismatch`, `shallow_changed`, `walk_cap`, `handover_failed`,
+ *   `handover_too_large`, `unresolved_merge`, `merge_conflict`, `merge_refused`, `autostash_conflict`, `side_not_kb_only`,
+ *   `side_pr_unknown`, `side_conflict` (D44, tag `ref=side`), `untracked_collision` (D35), `merge_unverified` (D36(b)),
+ *   `pull_deadline` (D38(2)(3), tag `ref`), `side_pr_create_failed` (D45(h)), `pull_unexpected` (obs F3: extra `errName`,
+ *   `frame`) (and `merge_conflict_precheck`, the self-heal's only, which reports on `self-heal-aborted-held-commits`
+ *   instead). The info-only reasons (`up_to_date`, `merged`, `non_default_branch`, `side_declined`, `side_pr_created`,
+ *   `side_linked`) never reach this map; the `KB_PULL_HELD_MESSAGES` Record in kb-sync-pull.ts holds an explicit `null`
+ *   for each. Every reason writes its pino line (layer 2) before the debounce (`reportPullHeld` in session-sync.ts), one
+ *   per run. Also `kb-sync-autostash-pin:<cause>` (warn-level via `mirrorWarnWithDebounce`, op `kb-sync.autostash-pin`,
+ *   key the workspace PATH (an in-process token, never emitted), tag `cause` = not_regular | too_large | malformed |
+ *   unreadable | pin_failed; D36(c)): an interrupted merge's `MERGE_AUTOSTASH` could not be pinned under
+ *   `refs/soleur/autostash/`, so `gc` may prune the only copy of the user's uncommitted edits.
+ * - `kb-route-helpers` self-heal family (#12600, CTO rulings D7, D15(e), D20; server/workspace-sync.ts
+ *   `selfHealNonFastForward`). The dedup key is the WORKSPACE PATH, an in-process token only, never emitted. Warn-level via
+ *   `mirrorWarnWithDebounce` (designed holds the next session-start pull resolves): `self-heal-aborted-dirty-tracked`,
+ *   `self-heal-aborted-held-commits:<held_kind>` (the class is `<op>:<held_kind>`, `held_kind` = `nonkb` or `kb`, so a KB
+ *   hold does not mask a code hold for the same workspace), `self-heal-aborted-untracked-collision` (tag `arm`). Error-level
+ *   via `mirrorWithDebounce`: `self-heal-aborted-dirty` (also the un-countable case, tag `head=uncountable`) and
+ *   `self-heal-aborted-detached-head`, which now fire per webhook.
  * - `kb-document-resolver` family: PDF text-extraction failure classes
  *   (e.g., `extract-pdf:empty-text`, `extract-pdf:oversized-buffer`).
  * - `soleur-go-runner` family: `notify-awaiting-no-active-query`.

@@ -313,6 +313,14 @@
 1	.github/scripts/test/test-rls-fuzz-ghcr-resilience.sh
 1	.github/scripts/test/test-run-all-signal-propagation.sh
 3	knowledge-base/project/specs/archive/20261013-062704-feat-5863-tenant-fs-isolation/tenant-isolation-probe.sh
+48	knowledge-base/project/specs/archive/20261118-103123-feat-one-shot-12824-cron-spawn-isolation/probes/cli-isolation-probe.sh
+1	knowledge-base/project/specs/archive/20261118-222343-feat-one-shot-12600-syncpush-owner-approval/probes-12600/probe10.sh
+1	knowledge-base/project/specs/archive/20261118-222343-feat-one-shot-12600-syncpush-owner-approval/probes-12600/probe11.sh
+3	knowledge-base/project/specs/archive/20261118-222343-feat-one-shot-12600-syncpush-owner-approval/probes-12600/probe6.sh
+2	knowledge-base/project/specs/archive/20261118-222343-feat-one-shot-12600-syncpush-owner-approval/probes-12600/probe7.sh
+1	knowledge-base/project/specs/archive/20261118-222343-feat-one-shot-12600-syncpush-owner-approval/probes-12600/probe8.sh
+4	knowledge-base/project/specs/archive/20261118-222343-feat-one-shot-12600-syncpush-owner-approval/probes-12600/probe9.sh
+5	knowledge-base/project/specs/archive/20261118-222343-feat-one-shot-12600-syncpush-owner-approval/probes-12718-12714/probe1.sh
 2	plugins/soleur/hooks/lib/log-rotation.sh
 3	plugins/soleur/hooks/memory-backstop.sh
 1	plugins/soleur/hooks/operator-stage-approval.sh
@@ -386,6 +394,7 @@
 1	plugins/soleur/skills/provision-github/scripts/provision-github.sh
 4	plugins/soleur/skills/registry-breakglass-mirror/scripts/mirror-ghcr-to-zot.sh
 1	plugins/soleur/skills/review/test/ensure-semgrep.test.sh
+1	plugins/soleur/skills/session-retrospective-compound/scripts/retrospective-redact.sh
 2	plugins/soleur/skills/ship/scripts/hold-gate-eval.sh
 4	plugins/soleur/skills/ship/scripts/pr-overlap-preflight.sh
 2	plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh

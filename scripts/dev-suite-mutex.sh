@@ -57,8 +57,8 @@
 #     required-check queue starvation that killed repo-wide concurrency
 #     (#7986/#8048). The drift probes downstream are the fail-closed layer for
 #     authoritative refs. NOTE: a full-budget wait (WAIT_S + up to ~30s of
-#     probe overshoot) after ~2-3min of pre-acquire setup leaves ~8-10min of
-#     the timeout-minutes:15 job for a section that runs 5-9min — a CONTENDED
+#     probe overshoot) after ~2-3min of pre-acquire setup leaves ~12-14min of
+#     the timeout-minutes:19 job for a section that runs 5-9min — a CONTENDED
 #     run is likely to finish but is not guaranteed to. The banner is the
 #     signal; completion is not guaranteed.
 #   - missing/unusable inputs -> DEV_SUITE_MUTEX_UNAVAILABLE + exit 0. The mutex
@@ -97,11 +97,11 @@
 #                                truncates at 63 bytes, tail-first.
 #   DEV_SUITE_MUTEX_WAIT_S       wait budget before CONTENDED (default 180 —
 #                                sized so a full-budget wait still leaves
-#                                ~8-10min of the timeout-minutes:15 job for
+#                                ~12-14min of the timeout-minutes:19 job for
 #                                a 5-9min section; raising it erodes that
 #                                margin, see the note above)
 #   DEV_SUITE_MUTEX_HOLD_S       holder's pg_sleep ceiling (default 1170 —
-#                                must EXCEED the job's timeout-minutes:15 so
+#                                must EXCEED the job's timeout-minutes:19 so
 #                                the holder outlives any in-job cancellation;
 #                                raising the job timeout past ~19.5min requires
 #                                raising this in step)
