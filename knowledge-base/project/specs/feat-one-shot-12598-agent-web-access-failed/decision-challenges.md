@@ -1,0 +1,25 @@
+# Decision Classes: feat-one-shot-12598-agent-web-access-failed
+
+Every ruling below came from a spawned domain agent on 2026-11-19, told "do NOT use AskUserQuestion"
+(technical-ruling-delegation), during planning of #12598. Plan:
+`knowledge-base/project/plans/2026-11-19-feat-tell-agent-web-access-failed-to-start-plan.md`.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| T1 Where the failed-to-start line lives and how it is gated | technical | Ruled by CTO agent, 2026-11-19: a module-level non-exported const `WEB_EGRESS_START_FAILED_PROMPT_LINE` after `WEB_EGRESS_PROMPT_ADDENDUM`; a `webEgressStartFailed` flag set only in the forwarder-spawn catch; the line appended after `githubReadPromptSuffix` - the suffix is always empty on the failure path and absent with no repo, and appending after it keeps the cc-github-read-prompt adjacency pin green |
+| T2 Truth of each clause in the line | technical | Ruled by CTO agent, 2026-11-19: replace the shell-command clause with "do not try to reach other websites from shell commands (for example with curl)" and add no GitHub claim - with a repo token the sandbox still allows GitHub and npm, and GitHub access differs between the repo-token and no-repo cases |
+| T3 Test rows | technical | Ruled by CTO agent, 2026-11-19: line present once on spawn failure with no repo and with a repo (tool registration unchanged); absent on spawn OK, unentitled, and support persona; plus a source-text pin (contains "failed to start", not "is available", not /egress[-_]?audit/i) - each row reds one named mutation |
+| T4 Observability | technical | Ruled by CTO agent, 2026-11-19: no new event - the existing web-egress-forwarder-spawn Sentry fallback fires on exactly the path that sets the flag, and the cc-github-read outcome already carries forwarderLive=false |
+| L1 Wording as a representation the agent may relay to the owner | operator (legal-risk) | Ruled by CLO agent, 2026-11-19: approved as drafted - every clause matches the code and the PUSH_DISCLOSURE copy already ruled on in #12197; the hedges ("no general web access", "may restore it") are accurate |
+| L2 Legal-record change | operator (legal-risk) | Ruled by CLO agent, 2026-11-19: none needed - a fixed prompt string with no personal data and no new processing; the degraded state is already recorded in the 2026-10-05 DPIA screening as superseded on 2026-11-10 |
+| L3 Need for #12572's CLO wording review | operator (legal-risk) | Ruled by CLO agent, 2026-11-19: not needed - the text goes to the agent, not an owner-facing surface; #12572 keeps its own wording gate |
+| L4 CLO's optional sentence "Your usual access to the connected repository is unchanged." | technical | Ruled by CTO agent, 2026-11-19: not taken - T2 forbids any GitHub claim because it is false for a session with no repo connected; the CLO marked the sentence optional and said omitting it leaves no clause inaccurate |
+| T1-r Plan-review dissent (Kieran): T1 rationale wrong about `readRegistration` | technical | Ruled by CTO agent, 2026-11-19: amended - the decision stays; `readRegistration` is set on every entitled dispatch (no-repo included), so the new rationale is that a separate append keeps the #12469 block single-purpose and independent of `readRegistration`'s lifetime; mutation row 1 becomes "put the line inside the `webEgress !== undefined` guard" |
+| T3-r1 Plan-review dissent (DHH, simplicity, Kieran): the source-text pin | technical | Ruled by CTO agent, 2026-11-19: amended - cut the source-text extraction (brittle `;\n` slicing); assert "failed to start", "`WebFetch` is unavailable" and no access-claim match on the real built prompt in row 1; the egress-audit check stays with the existing absence test |
+| T3-r2 Plan-review dissent (simplicity): duplicated degraded-case assertions | technical | Ruled by CTO agent, 2026-11-19: amended - extend the four existing `it` blocks for rows 1 to 4; keep the row 5 assertion in the #12469 suite only; the top-level beforeEach already makes the spawn-failure case the no-repo case |
+| AC8-r Plan-review dissent (CTO devex, simplicity): hand-listed suites | technical | Ruled by CTO agent, 2026-11-19: amended - run every `*.test.ts` that `grep -rln --include='*.test.ts' spawnEgressForwarder test/` finds plus the three prompt and absence suites; `--include` keeps out a shell probe that is not a vitest file |
+| W1 Drop "and you have no general web access" from the line (DHH P3) | taste |  |
+
+W1 recommendation (taste, auto-decided): keep the phrase. The CLO approved the line with this hedge (L1), and it is what keeps the line true for a session whose sandbox still reaches GitHub and npm.
