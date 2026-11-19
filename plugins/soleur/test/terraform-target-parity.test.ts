@@ -11281,7 +11281,7 @@ describe("bastion: one resource list, pinned to the birth job and the exclusions
     // Exactly the three secrets the body reads, by name; never `secrets: inherit` (the git-data
     // root-token census allows inherit only on the release callers).
     expect(c).not.toMatch(/^\s*secrets: inherit\s*$/m);
-    // Three sets, all equal: the secrets the caller passes, the ones the callee declares, and the
+    // Three sets: the secrets the caller passes, the ones the callee declares, and the
     // ones its body reads. YAML comments are `#` only (a `//` in a URL is not one), and a bracket
     // read is refused outright because the name scan cannot see it.
     const passedMap = (parseYaml(wf) as { jobs: Record<string, { secrets?: unknown }> }).jobs.bastion_host_create.secrets;
@@ -11296,7 +11296,11 @@ describe("bastion: one resource list, pinned to the birth job and the exclusions
     const read = [...new Set([...body.matchAll(/secrets\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))].sort();
     expect(read).toEqual(["DOPPLER_TOKEN", "DOPPLER_TOKEN_INFRA_PRIVILEGED", "SENTRY_ACTIONS_RO_TOKEN"]);
     expect(declared).toEqual(read);
-    expect(passed).toEqual(declared);
+    // The caller passes every declared secret EXCEPT the environment secret: its job carries no
+    // `environment:` (a reusable caller cannot), so its copy is empty, and the Tier-B census
+    // (G1b) forbids a job without `environment:` to name it. The callee's `environment:` supplies it.
+    const ENV_ONLY = ["DOPPLER_TOKEN_INFRA_PRIVILEGED"];
+    expect(passed).toEqual(declared.filter((k) => !ENV_ONLY.includes(k)));
     expect(c).toMatch(/^\s*issues: write\s*$/m);
     // The body runs inside the caller's run, which holds the workflow-level lock: a second group
     // of the same name in the callee would only risk cancelling the caller.
