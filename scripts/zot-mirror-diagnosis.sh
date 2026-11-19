@@ -137,9 +137,19 @@ except Exception:
 # Keyed by token so `zot-mirror-diagnosis.test.sh` can assert set-equality against the
 # detector's own emissions. A per-member spot-check ("does it grep <member>?") can never
 # detect a MISSING member, which is how four-of-ten survived.
+#
+# #12937 added the three EDGE causes, which name what the control probe measured instead of
+# folding it into gate-indeterminate / host-unreachable. `edge-error-<NNNN>` is a FAMILY
+# (one member per Cloudflare 1xxx code), matched by pattern; 1000 gets its own wording
+# because it is the zone-move shape.
 zot_mirror_cause_help() {
   case "${1:-unknown}" in
-    gate-indeterminate)  echo "  The host answered an uncredentialed request with no Access stamp, which characterises neither a gate nor its absence (a tunnel outage looks like this). Nothing is known about the credential. Re-run." ;;
+    host-nxdomain)       echo "  The tunnel hostname does not resolve (NXDOMAIN): the tunnel hostname's DNS record is wrong or missing in the zone that is authoritative for <base>; compare public NS with the Terraform zone (#12931). Nothing is known about the credential. Do NOT rotate." ;;
+    edge-error-1000)     echo "  Cloudflare answered with its own Error 1000 (DNS points to a prohibited IP), no Access stamp: the tunnel hostname's DNS record is wrong or missing in the zone that is authoritative for <base>; compare public NS with the Terraform zone (#12931). A tunnel CNAME only routes inside the account that owns the zone. Nothing is known about the credential. Do NOT rotate." ;;
+    edge-error-1[0-9][0-9][0-9])
+                         echo "  Cloudflare answered with its own error page (${1#edge-error-}) before Access was consulted, so the credential could not be graded. Look the code up in Cloudflare's 1xxx error reference; DNS-class codes mean the hostname's record is wrong in the zone that is authoritative for <base>. Do NOT rotate." ;;
+    tunnel-down)         echo "  Cloudflare reported the tunnel behind the host as having no healthy connector (HTTP 530 / error 1033). The connector host (web-2) is down or registered to a different tunnel. Nothing is known about the credential. Do NOT rotate; check the tunnel's connections." ;;
+    gate-indeterminate)  echo "  The host answered an uncredentialed request with no Access stamp and no Cloudflare error code, which characterises neither a gate nor its absence. Nothing is known about the credential. Re-run." ;;
     stamped-non-refusal) echo "  An Access stamp on something that is not a refusal — not evidence the credential was rejected. Investigate the Access application for the host." ;;
     unexpected-status)   echo "  No stamp and no success. LIVE requires positive evidence of admission, and this is not evidence of staleness either. Re-run and investigate the edge." ;;
     refused-unstamped)   echo "  Something other than Cloudflare Access is refusing (a WAF rule, an IP access rule, bot-fight mode), so the credential could not be graded. Investigate the rule set for the host." ;;
@@ -246,5 +256,63 @@ EOF
       return 1
       ;;
   esac
+  return 0
+}
+
+# ── SOLEUR_ZOT_BRIDGE — the one-line failure marker (#12937) ───────────────────
+#
+# zot_bridge_marker <stage> <verdict> <cause> <host> <rc>
+#
+# Prints exactly ONE line on stdout (callers send it to stderr or the log):
+#   SOLEUR_ZOT_BRIDGE stage=<s> verdict=<v> cause=<c> host=<h> rc=<n> runbook=<path>
+#
+# THE SINGLE EMITTER of the marker: the bridge action's two failure branches and the
+# reusable-release mirror failure path all call it, so they cannot print different grammars.
+# It is RENDER-ONLY — it formats what the caller's preflight already measured and probes
+# nothing itself (CTO ruling: a second probe could disagree with the first).
+#
+# Every field is validated against its own closed set or pattern, and a field that fails
+# prints `invalid`. That is what stops a CR/LF, a `::` workflow-command prefix or a U+2028
+# riding in from a step output from forging a second log line or annotation. A WELL-FORMED
+# cause outside the detector's vocabulary prints `unknown` (same token
+# zot_mirror_unverifiable_cause uses for "no cause"). The line never carries a token id, a
+# secret or a response body: no field can hold one.
+ZOT_BRIDGE_RUNBOOK="knowledge-base/engineering/operations/runbooks/zot-registry-revert.md"
+
+_zot_bridge_cause_known() {
+  case "$1" in
+    gate-indeterminate|stamped-non-refusal|unexpected-status|refused-unstamped|gate-absent|\
+    host-unreachable|control-blocked|detector-env|probe-failed|no-probe-configured|\
+    host-nxdomain|tunnel-down|edge-error-1[0-9][0-9][0-9]|unknown) return 0 ;;
+  esac
+  return 1
+}
+
+zot_bridge_marker() {
+  local LC_ALL=C
+  local stage="${1-}" verdict="${2-}" cause="${3-}" host="${4-}" rc="${5-}"
+  case "$stage" in listener|login|push) ;; *) stage=invalid ;; esac
+  case "$verdict" in live|stale|unverifiable|unmeasured) ;; *) verdict=invalid ;; esac
+  if _zot_bridge_cause_known "$cause"; then :
+  elif [[ "$cause" =~ ^[a-z0-9-]{1,64}$ ]]; then cause=unknown
+  else cause=invalid
+  fi
+  [[ "$host" =~ ^[a-z0-9.-]{1,253}$ ]] || host=invalid
+  [[ "$rc" =~ ^[0-9]{1,5}$ ]] || rc=invalid
+  printf 'SOLEUR_ZOT_BRIDGE stage=%s verdict=%s cause=%s host=%s rc=%s runbook=%s\n' \
+    "$stage" "$verdict" "$cause" "$host" "$rc" "$ZOT_BRIDGE_RUNBOOK"
+  return 0
+}
+
+# zot_bridge_marker_valid <line> — exit 0 iff <line> is exactly one marker line in the
+# grammar zot_bridge_marker prints. Used to re-validate the marker before it leaves a step as
+# an output (the notify-ops email body is built from it), so a value that did not come from
+# the helper cannot reach the email.
+zot_bridge_marker_valid() {
+  local LC_ALL=C line="${1-}"
+  local re='^SOLEUR_ZOT_BRIDGE stage=(listener|login|push|invalid) verdict=(live|stale|unverifiable|unmeasured|invalid) cause=([a-z0-9-]{1,64}) host=([a-z0-9.-]{1,253}) rc=([0-9]{1,5}|invalid) runbook=knowledge-base/engineering/operations/runbooks/zot-registry-revert\.md$'
+  [[ "$line" =~ $re ]] || return 1
+  local c="${BASH_REMATCH[3]}"
+  _zot_bridge_cause_known "$c" || [[ "$c" == invalid ]] || return 1
   return 0
 }

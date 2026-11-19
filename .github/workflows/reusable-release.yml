@@ -1228,11 +1228,36 @@ jobs:
                 ;;
             esac
           }
+          # #12937. The SOLEUR_ZOT_BRIDGE marker for a failure ON THE BRIDGE: `bridge` (the
+          # action failed; its own stage/rc ride in ZOT_BRIDGE_STAGE/_RC from $GITHUB_ENV) and
+          # `copy_*` (crane's push over a bridge that came up, stage=push). Other stages are not
+          # bridge failures and print none. Rendered by the library's single emitter from the
+          # preflight's verdict and cause — no second probe — then RE-VALIDATED against the
+          # marker grammar before it leaves this step as `bridge_marker`, the only form in which
+          # it reaches the notify-ops email. An action failure that set no stage stopped before
+          # docker login ran, so the listener never served: that is `listener`; its rc was not
+          # measured and renders `invalid`.
+          emit_bridge_marker() {
+            local reason="$1" rc="$2" stage="" mrc="" marker=""
+            case "$reason" in
+              bridge) stage="${ZOT_BRIDGE_STAGE:-listener}"; mrc="${ZOT_BRIDGE_RC:-}" ;;
+              copy_*) stage="push"; mrc="$rc" ;;
+              *) return 0 ;;
+            esac
+            declare -F zot_bridge_marker >/dev/null 2>&1 || return 0
+            marker="$(zot_bridge_marker "$stage" "${TOKEN_VERDICT:-unmeasured}" "${TOKEN_CAUSE:-unknown}" "${ZOT_BRIDGE_HOST:-invalid}" "$mrc")"
+            if zot_bridge_marker_valid "$marker"; then
+              printf '%s\n' "$marker" >&2
+              printf 'bridge_marker=%s\n' "$marker" >> "$GITHUB_OUTPUT"
+            fi
+            return 0
+          }
           degraded() {
             local reason="$1" rc="$2"
             local detail="${3:-zot did not receive this image; backfill via 'crane copy GHCR→zot && cosign sign --yes <zot>@<digest>', then re-run.}"
             echo "mirror_status=degraded" >> "$GITHUB_OUTPUT"
             echo "mirror_reason=${reason}" >> "$GITHUB_OUTPUT"
+            emit_bridge_marker "$reason" "$rc"
             # The telemetry pointer was gated behind "If disk-full:", which made it
             # unreachable for the failure it most needed to serve. SOLEUR_ZOT_DISK carries
             # `zot_restarts` — the field that settles an origin-flap — not just the disk
@@ -1332,6 +1357,14 @@ jobs:
           # borrowed from zot_bridge.
           REPO="${IMAGE#ghcr.io/}"           # e.g. jikig-ai/soleur-web-platform
           ZOT="127.0.0.1:5000/${REPO}"
+
+          # GUARDED load of the diagnosis library for EVERY failure path (#12937): the copy_*
+          # arms print the SOLEUR_ZOT_BRIDGE marker through it, not only the bridge arm below.
+          # A missing library must degrade to "no marker", never abort before degraded() runs.
+          if [[ -n "${GITHUB_WORKSPACE:-}" && -r "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh" ]]; then
+            # shellcheck source=/dev/null
+            source "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh"
+          fi
 
           # (#6416) The bridge is what makes zot reachable at 127.0.0.1:5000. If it FAILED,
           # there is nothing to mirror into — report degraded through the SAME emitter (and
@@ -1709,7 +1742,7 @@ jobs:
           # the run actually delivers instead: what was measured, and what that rules out.
           # `verdict` rides in the body so the first touchpoint is triageable without
           # opening the run at all.
-          body: '<p><strong>The ${{ inputs.component_display }} release job failed, so no release was published and no deploy ran.</strong></p><p>zot mirror stage: <code>${{ steps.zot_mirror.outputs.mirror_reason || ''n/a — the job failed before or outside the mirror step'' }}</code><br>registry-push token verdict: <code>${{ steps.token_preflight.outputs.verdict || ''unmeasured — the preflight did not run'' }}</code></p>${{ steps.docker_build.outcome == ''failure'' && format(''<p>Image step failed (class <code>{0}</code>, attempt <code>{1}</code>); see the runbook <code>web-platform-release-image-push-failed.md</code>. For <code>push_denied</code>, start at its section <code>First read, before anything else</code> (the read-only Packages budget and usage reads). <code>not_push</code> means the error was not classified as an image-push failure; if the step log shows <code>denied:</code>, follow the runbook anyway.</p>'', steps.push_failed_marker.outputs.class || ''unmeasured — the marker step did not report'', steps.push_failed_marker.outputs.attempt || ''unmeasured'') || '''' }}<p>Nothing was half-shipped: no version was consumed, no git tag was created and no release notes were sent, so re-running is safe: ''Re-run failed jobs'' on ${{ inputs.docker_image != '''' && github.event_name == ''push'' && ''this release run first, then, once it succeeds, on the deploy-arm (workflow_run) run for the same SHA'' || ''this run'' }}. A fresh ''Run workflow'' dispatch is not safe (it loses the semver label). <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> — the failing step reports what it MEASURED and what that rules in or out. Where it could not measure a cause it says so rather than naming one.</p>'
+          body: '<p><strong>The ${{ inputs.component_display }} release job failed, so no release was published and no deploy ran.</strong></p><p>zot mirror stage: <code>${{ steps.zot_mirror.outputs.mirror_reason || ''n/a — the job failed before or outside the mirror step'' }}</code><br>registry-push token verdict: <code>${{ steps.token_preflight.outputs.verdict || ''unmeasured — the preflight did not run'' }}</code></p>${{ steps.zot_mirror.outputs.bridge_marker != '''' && format(''<p>Bridge marker: <code>{0}</code></p>'', steps.zot_mirror.outputs.bridge_marker) || '''' }}${{ steps.docker_build.outcome == ''failure'' && format(''<p>Image step failed (class <code>{0}</code>, attempt <code>{1}</code>); see the runbook <code>web-platform-release-image-push-failed.md</code>. For <code>push_denied</code>, start at its section <code>First read, before anything else</code> (the read-only Packages budget and usage reads). <code>not_push</code> means the error was not classified as an image-push failure; if the step log shows <code>denied:</code>, follow the runbook anyway.</p>'', steps.push_failed_marker.outputs.class || ''unmeasured — the marker step did not report'', steps.push_failed_marker.outputs.attempt || ''unmeasured'') || '''' }}<p>Nothing was half-shipped: no version was consumed, no git tag was created and no release notes were sent, so re-running is safe: ''Re-run failed jobs'' on ${{ inputs.docker_image != '''' && github.event_name == ''push'' && ''this release run first, then, once it succeeds, on the deploy-arm (workflow_run) run for the same SHA'' || ''this run'' }}. A fresh ''Run workflow'' dispatch is not safe (it loses the semver label). <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> — the failing step reports what it MEASURED and what that rules in or out. Where it could not measure a cause it says so rather than naming one.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       # Inline step required: GITHUB_TOKEN-created releases don't fire

@@ -841,12 +841,13 @@ READ_ERR_FILE=$(mktemp) || READ_ERR_FILE=/dev/null
 
 # THE script's single EXIT trap, deliberately. `trap ... EXIT` REPLACES rather than
 # appends, so the probe-header cleanup further down used to be installed second and would
-# have silently disarmed this one. Both temp files are freed here instead; `PROBE_HDR` is
-# a global assigned much later, hence the `:-` guard.
+# have silently disarmed this one. Every temp file is freed here instead; `PROBE_HDR` and
+# `PROBE_BODY` are globals assigned much later, hence the `:-` guards.
 # shellcheck disable=SC2317  # invoked by the EXIT trap below, which shellcheck cannot see
 _tmpfile_cleanup() {
   [[ -n "${READ_ERR_FILE:-}" && "${READ_ERR_FILE:-}" != /dev/null ]] && rm -f "$READ_ERR_FILE"
   [[ -n "${PROBE_HDR:-}" ]] && rm -f "$PROBE_HDR"
+  [[ -n "${PROBE_BODY:-}" ]] && rm -f "$PROBE_BODY"
   return 0
 }
 trap _tmpfile_cleanup EXIT
@@ -1269,6 +1270,8 @@ PROBE_STAMPED=''              # 1 = response carries Cloudflare Access's own den
 PROBE_MITIGATED=''            # 1 = Cloudflare stamped it as its OWN block/challenge
 PROBE_ACCESS_REDIRECT=''      # 1 = 302 to the Access IdP login (an Access refusal too)
 PROBE_SETUP_FAILED=''         # 1 = the probe could not be SET UP; not a network fact
+PROBE_CURL_RC=''              # curl's own exit status (6 = could not resolve host), 0 on success
+PROBE_EDGE_CODE=''            # Cloudflare 1xxx error-page code read from the CONTROL body, or ''
 
 # One HTTPS GET. With no id/secret this is the CONTROL probe.
 #
@@ -1284,17 +1287,32 @@ PROBE_HDR=""
 # near the config loop (`_tmpfile_cleanup`), which frees this file too — installing a
 # second `trap ... EXIT` here would REPLACE that one rather than add to it, silently
 # disarming the read-error file's cleanup.
+#
+# PROBE_BODY (#12937) follows the same rules: ONE file, created once, truncated before every
+# probe, freed by `_tmpfile_cleanup`. It holds the CONTROL probe's body only — the
+# credentialed probe keeps `-o /dev/null`, so no response to a request carrying a secret is
+# ever written to disk. The body is NEVER printed; the only thing derived from it is a
+# Cloudflare 1xxx error-page code (`errorCode: 1000` in the edge's own page, measured on
+# registry.soleur.ai 2026-11-19), so the cause can be named instead of folded into
+# `gate-indeterminate`. Discarding it (`-o /dev/null`) is what hid the zone-move Error 1000.
+PROBE_BODY=""
 
 access_probe() {
   local host="$1" id="${2:-}" secret="${3:-}"
   local rc=0
   PROBE_SETUP_FAILED=0
+  PROBE_CURL_RC=0
+  PROBE_EDGE_CODE=''
   # A local disk failure is NOT a network fact. Funnelling it into the same 000 the caller
   # maps to "unreachable" sends the operator to investigate Cloudflare DNS when the real
   # cause is a full runner disk.
   if [[ -z "$PROBE_HDR" ]]; then
     PROBE_HDR=$(mktemp) || { PROBE_CODE=000; PROBE_STAMPED=0; PROBE_MITIGATED=0; PROBE_ACCESS_REDIRECT=0; PROBE_SETUP_FAILED=1; return 0; }
   fi
+  if [[ -z "$PROBE_BODY" ]]; then
+    PROBE_BODY=$(mktemp) || { PROBE_BODY=""; PROBE_CODE=000; PROBE_STAMPED=0; PROBE_MITIGATED=0; PROBE_ACCESS_REDIRECT=0; PROBE_SETUP_FAILED=1; return 0; }
+  fi
+  : > "$PROBE_BODY" || { PROBE_CODE=000; PROBE_STAMPED=0; PROBE_MITIGATED=0; PROBE_ACCESS_REDIRECT=0; PROBE_SETUP_FAILED=1; return 0; }
   # Truncate before every probe. This is belt-and-braces, NOT a live fix, and the
   # distinction is worth recording because the reuse above is what makes the question
   # arise: measured 2026-08-01, curl opens the -D dump in truncating mode unconditionally
@@ -1304,7 +1322,13 @@ access_probe() {
   # the file's reuse obviously safe if either of those ever changes.
   : > "$PROBE_HDR" || { PROBE_CODE=000; PROBE_STAMPED=0; PROBE_MITIGATED=0; PROBE_ACCESS_REDIRECT=0; PROBE_SETUP_FAILED=1; return 0; }
   local hdr="$PROBE_HDR"
-  local -a args=(--disable --noproxy '*' -s -o /dev/null -D "$hdr" -w '%{http_code}' --max-time 20)
+  # The control probe (no id) writes its body to PROBE_BODY, capped at 64 KiB: Access's own
+  # denial page is ~39 kB and Cloudflare's 1xxx page ~8 kB, so the cap is never the normal
+  # case. A credentialed probe's body is discarded, exactly as before.
+  local out="/dev/null"
+  local -a cap=()
+  if [[ -z "$id" ]]; then out="$PROBE_BODY"; cap=(--max-filesize 65536); fi
+  local -a args=(--disable --noproxy '*' -s -o "$out" ${cap[@]+"${cap[@]}"} -D "$hdr" -w '%{http_code}' --max-time 20)
   # The Access pair rides curl's STDIN config channel, never its argument list (argv is
   # world-readable via /proc/<pid>/cmdline). `--config -` is added ONLY for a credentialed
   # probe: the no-credential control probe must not read stdin. Each value is written inside
@@ -1335,8 +1359,23 @@ access_probe() {
   else
     PROBE_CODE=$(curl "${args[@]}" "https://${host}/" 2>/dev/null) || rc=$?
   fi
-  (( rc != 0 )) && PROBE_CODE=000
+  # The exit status is KEPT (#12937), not only collapsed to 000: curl exit 6 is "could not
+  # resolve host", i.e. NXDOMAIN, and the control ladder names it `host-nxdomain` before the
+  # generic unreachable arm. Exit 63 on the control probe is the --max-filesize cap: the
+  # headers and the status code were received, so the answer is graded on what was written
+  # rather than reported as "no answer at all".
+  PROBE_CURL_RC=$rc
+  if (( rc != 0 )) && ! [[ -z "$id" && "$rc" == 63 ]]; then PROBE_CODE=000; fi
   [[ "$PROBE_CODE" =~ ^[0-9]{3}$ ]] || PROBE_CODE=000
+  # Only DIGITS leave the body: the first Cloudflare error-page code (`errorCode: 1000` in the
+  # edge's HTML, `error code: 1000` in its plain-text variant). Nothing else is read, and the
+  # body itself is never printed. `|| true` inside the substitution: no match is the common
+  # case and must not abort a caller running under -e.
+  if [[ -z "$id" && "$PROBE_CODE" != 000 && -s "$PROBE_BODY" ]]; then
+    PROBE_EDGE_CODE="$(grep -aoiE 'error[ _]?code"?[[:space:]]*:?[[:space:]]*"?1[0-9]{3}([^0-9]|$)' "$PROBE_BODY" 2>/dev/null \
+      | head -1 | grep -oE '1[0-9]{3}' | head -1 || true)"
+    [[ "$PROBE_EDGE_CODE" =~ ^1[0-9]{3}$ ]] || PROBE_EDGE_CODE=''
+  fi
   if grep -qiE '^cf-access-(aud|domain):' "$hdr" 2>/dev/null; then PROBE_STAMPED=1; else PROBE_STAMPED=0; fi
   # Cloudflare stamps its OWN blocks and challenges with cf-mitigated. That is a positive
   # discriminator for the whole class the stamp alone is blind to — a rate-limit 429, a
@@ -1355,7 +1394,7 @@ access_probe() {
 }
 
 declare -A PAIR_VERDICT=()   # host\x1fid\x1fsecret -> LIVE | DEAD:<code> | UNVERIFIABLE:<cause>
-declare -A HOST_GATE=()      # host -> gated | ungated | blocked | indeterminate | unreachable | setup-failed
+declare -A HOST_GATE=()      # host -> gated | ungated | blocked | indeterminate | unreachable | setup-failed | nxdomain | tunnel-down | edge-error-<NNNN>
 
 # Sets REPLY. Call directly; see the PROBE_CODE comment for why not `$( )`.
 verify_access_pair() {
@@ -1384,13 +1423,31 @@ verify_access_pair() {
   # the same naming-an-unmeasured-cause defect this script exists to drain, aimed at the
   # gate instead of the credential. Only an anonymous request that actually SUCCEEDS is
   # evidence that nothing refused it.
+  #
+  # EDGE CAUSES (#12937). After the 2026-11-18 zone move the uncredentialed probe got
+  # Cloudflare's own Error 1000 page (403, no Access stamp) from registry.<base>, and
+  # NXDOMAIN from deploy.<base>; both fell to `gate-indeterminate` / `host-unreachable`, so
+  # no row could say the tunnel hostname's DNS record was wrong. The ladder now names what it
+  # measured, and the ORDER is load-bearing:
+  #   - curl exit 6 comes BEFORE the 000 arm, because 000 is what every transport failure
+  #     reads as and the unreachable arm would swallow it;
+  #   - the stamp/redirect/mitigated/2xx arms come BEFORE any body code, so an Access-stamped
+  #     403 whose body happens to carry an error code stays `gated` (the stamp wins);
+  #   - a readable 1xxx code wins over the bare status: 1033 is `tunnel-down`, any other code
+  #     is `edge-error-<code>` (a 530 carrying 1016 is an origin-DNS error, not a dead
+  #     tunnel), and an unstamped 530 with no readable code is `tunnel-down`.
+  # `gate-indeterminate` is left for an unstamped non-2xx with no code to read.
   if [[ -z "${HOST_GATE[$host]:-}" ]]; then
     access_probe "$host"
     if [[ "$PROBE_SETUP_FAILED" == 1 ]]; then HOST_GATE[$host]=setup-failed
+    elif [[ "$PROBE_CURL_RC" == 6 ]]; then HOST_GATE[$host]=nxdomain
     elif [[ "$PROBE_CODE" == 000 ]]; then HOST_GATE[$host]=unreachable
     elif [[ "$PROBE_STAMPED" == 1 || "$PROBE_ACCESS_REDIRECT" == 1 ]]; then HOST_GATE[$host]=gated
     elif [[ "$PROBE_MITIGATED" == 1 ]]; then HOST_GATE[$host]=blocked
     elif [[ "$PROBE_CODE" == 2?? ]]; then HOST_GATE[$host]=ungated
+    elif [[ ( "$PROBE_CODE" == 403 || "$PROBE_CODE" == 5?? ) && "$PROBE_EDGE_CODE" == 1033 ]]; then HOST_GATE[$host]=tunnel-down
+    elif [[ ( "$PROBE_CODE" == 403 || "$PROBE_CODE" == 5?? ) && "$PROBE_EDGE_CODE" =~ ^1[0-9]{3}$ ]]; then HOST_GATE[$host]="edge-error-${PROBE_EDGE_CODE}"
+    elif [[ "$PROBE_CODE" == 530 ]]; then HOST_GATE[$host]=tunnel-down
     else HOST_GATE[$host]=indeterminate
     fi
   fi
@@ -1403,6 +1460,14 @@ verify_access_pair() {
       PAIR_VERDICT[$cache_key]="UNVERIFIABLE:detector-env" ;;
     unreachable)
       PAIR_VERDICT[$cache_key]="UNVERIFIABLE:host-unreachable" ;;
+    nxdomain)
+      PAIR_VERDICT[$cache_key]="UNVERIFIABLE:host-nxdomain" ;;
+    tunnel-down)
+      PAIR_VERDICT[$cache_key]="UNVERIFIABLE:tunnel-down" ;;
+    edge-error-1[0-9][0-9][0-9])
+      # The code is digits only (validated in access_probe), so the cause stays inside the
+      # closed `edge-error-<NNNN>` family the consumers' remedy table is keyed by.
+      PAIR_VERDICT[$cache_key]="UNVERIFIABLE:${HOST_GATE[$host]}" ;;
     blocked)
       PAIR_VERDICT[$cache_key]="UNVERIFIABLE:control-blocked" ;;
     indeterminate)
@@ -1500,10 +1565,17 @@ for base in ${ACCESS_BASES[@]+"${ACCESS_BASES[@]}"}; do
           UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|gate-absent|${host} answered an UNCREDENTIALED request WITHOUT a Cloudflare Access denial — nothing is gating it, so this credential could not be graded and the host may be exposed. Check the Access application for ${host}. Do NOT rotate; rotating changes nothing while the gate is missing. (seen in ${cfg})") ;;
         host-unreachable)
           UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|host-unreachable|the control probe to ${host} got no answer at all (timeout / DNS / TLS), so nothing is known about the credential. Do NOT rotate on the strength of this row; re-run once ${host} is reachable. (seen in ${cfg})") ;;
+        host-nxdomain)
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|host-nxdomain|${host} does not resolve (curl exit 6: no DNS answer), so the request never reached Cloudflare and nothing is known about the credential. The tunnel hostname's DNS record is wrong or missing in the zone that is authoritative for ${APP_DOMAIN_BASE}; compare the public NS with the Terraform zone (#12931). Do NOT rotate. (seen in ${cfg})") ;;
+        tunnel-down)
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|tunnel-down|${host} answered an uncredentialed request with Cloudflare's tunnel-error shape (HTTP 530, or error code 1033) and no Access stamp: the tunnel behind the hostname has no healthy connector. Nothing is known about the credential. Do NOT rotate; check the tunnel's connectors. (seen in ${cfg})") ;;
+        edge-error-1[0-9][0-9][0-9])
+          _edge_code="${state##*-}"   # the digits after the last `-` (validated ^1[0-9]{3}$ upstream)
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|edge-error-${_edge_code}|${host} answered an uncredentialed request with Cloudflare's own error page, error code ${_edge_code}, and no Access stamp: the edge refused before Access was consulted. Error 1000 (DNS points to a prohibited IP) and its siblings mean the tunnel hostname's DNS record is wrong in the zone that is authoritative for ${APP_DOMAIN_BASE}. Nothing is known about the credential. Do NOT rotate. (seen in ${cfg})") ;;
         detector-env)
           UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|detector-env|the detector could not allocate a temp file on this runner, so NOTHING was sent to ${host}. This is a LOCAL fault (full or read-only TMPDIR), not a network or credential one. Do NOT rotate. (seen in ${cfg})") ;;
         gate-indeterminate)
-          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|gate-indeterminate|${host} answered an uncredentialed request with HTTP ${PROBE_CODE} and no Cloudflare Access stamp, which characterises neither a gate nor its absence — a tunnel outage (530) looks like this. Nothing is known about the credential. Do NOT rotate; re-run. (seen in ${cfg})") ;;
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|gate-indeterminate|${host} answered an uncredentialed request with HTTP ${PROBE_CODE} and no Cloudflare Access stamp, which characterises neither a gate nor its absence, and carried no Cloudflare error code to name the edge cause. Nothing is known about the credential. Do NOT rotate; re-run. (seen in ${cfg})") ;;
         control-blocked)
           UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|control-blocked|Cloudflare itself blocked or challenged the uncredentialed probe to ${host} (cf-mitigated), so the request never reached Access and the credential could not be graded. Check the WAF / rate-limit / bot-fight rules for ${host}. Do NOT rotate. (seen in ${cfg})") ;;
         stamped-non-refusal)
@@ -1609,6 +1681,12 @@ else
     if grep -qE '\|(host-unreachable|probe-failed)\|' <<<"$(printf '%s\n' "${UNVERIFIABLE_ROWS[@]}")"; then
       echo "  host-unreachable / probe-failed: the probe measured nothing. Re-run. Do NOT"
       echo "    rotate — an overwrite here destroys a credential no one has shown to be bad."
+    fi
+    if grep -qE '\|(host-nxdomain|tunnel-down|edge-error-1[0-9]{3})\|' <<<"$(printf '%s\n' "${UNVERIFIABLE_ROWS[@]}")"; then
+      echo "  host-nxdomain / edge-error-<code> / tunnel-down: the EDGE answered (or DNS did not),"
+      echo "    and the cause is named. host-nxdomain and edge-error-1000 mean the tunnel"
+      echo "    hostname's DNS record is wrong or missing in the authoritative zone; tunnel-down"
+      echo "    means the tunnel has no healthy connector. Do NOT rotate the credential."
     fi
     if grep -qE '\|(refused-unstamped|control-blocked)\|' <<<"$(printf '%s\n' "${UNVERIFIABLE_ROWS[@]}")"; then
       echo "  refused-unstamped / control-blocked: something in FRONT of Cloudflare Access"

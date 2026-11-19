@@ -1043,8 +1043,10 @@ fi
 echo "T33: gate-absent requires an anonymous request to actually SUCCEED"
 printf 'ssh.soleur.ai|530|0|200|0|0|0\n' > "$TMP/t33.hosts"
 MOCK_HOSTS="$TMP/t33.hosts" run_sut t33 200 "$CI_SSH_FIXTURE"
-if grep -q 'gate-indeterminate' "$OUT" && ! grep -q 'gate-absent' "$OUT"; then
-  pass "a 530 tunnel outage is not reported as a removed Access gate"
+# #12937: an unstamped 530 is now NAMED (`tunnel-down`) rather than `gate-indeterminate`; the
+# property this row pins — a 530 is never a missing gate — is unchanged.
+if grep -qF '[tunnel-down]' "$OUT" && ! grep -q 'gate-absent' "$OUT"; then
+  pass "a 530 tunnel outage is reported as tunnel-down, not as a removed Access gate"
 else
   fail "only a 2xx to an anonymous request is evidence nothing refused it; a 530/429/302 unstamped control graded gate-absent and emailed 'the host may be exposed' (rc=$RC)"
 fi
@@ -2234,6 +2236,226 @@ else
   fail "'configs' is the number the entire coverage ladder grades, so a duplicate in the enumeration inflates coverage directly: one config read would report 2, and at a floor of 2 a single-config credential would publish 'at-floor'. Deduplication is the control, not tidiness (configs=$(jget "$JM9" configs), names=$(jget "$JM9" config_names))"
 fi
 
+# ===========================================================================
+# E1-E12 — GUARD 1, THE EDGE-CAUSE CLASSIFIER (#12937).
+#
+# After the 2026-11-18 soleur.ai zone move, registry.<base> answered the uncredentialed
+# control probe with Cloudflare's own Error 1000 page (403, ~8 kB, NO cf-access-* stamp) and
+# deploy.<base> was NXDOMAIN. The control probe discarded its body (`-o /dev/null`), so the
+# first read as `gate-indeterminate` and the second folded into `host-unreachable`; no row
+# could name the broken DNS record. These rows pin the named causes, the order of the ladder
+# (curl exit 6 before the 000 arm; the Access stamp before any body code), and that the body
+# itself never reaches any output.
+#
+# MUTATION MATRIX (plan Guard 1) — run 2026-11-19 against pristine copies, every row RED:
+#   1  `-o "$out"` reverted to `-o /dev/null`        RED  E1, E3b, E3c, E7 (cause stays gate-indeterminate)
+#   2  the curl-exit-6 arm removed / moved after 000  RED  E2
+#   3  body code consulted before the stamp           RED  E4
+#   4  a ladder cause with no remedy                  RED  zot-mirror-diagnosis.test.sh set equality
+#   5  every E row skipped                            RED  the E_ROWS floor below
+# ===========================================================================
+E_ROWS=0
+# first_cause <json> — the cause of the first unverifiable row, or <none>.
+first_cause() {
+  python3 -c '
+import json, sys
+try:
+    rows = json.load(open(sys.argv[1])).get("unverifiable_keys") or []
+    print(rows[0].get("cause") or "<none>" if rows else "<none>")
+except Exception:
+    print("<unparseable>")
+' "$1" 2>/dev/null || printf '<unparseable>'
+}
+# The measured Error 1000 page carries the code in a JS literal (`errorCode: 1000`) and in
+# markup; the sentinel below must never be printed, which is the "body never leaves" pin.
+E_SENTINEL="BODYSENTINEL$((7 * 6))NEVERPRINTED"
+E_PAGE_1000="<title>DNS points to prohibited IP | ${E_SENTINEL} | Cloudflare</title> a={event:\"feedback clicked\",properties:{errorCode: 1000 },helpful:a}"
+
+echo "E1: unstamped 403 whose body carries errorCode: 1000 -> edge-error-1000 (not gate-indeterminate)"
+E_ROWS=$((E_ROWS + 1))
+JE1="$TMP/e1.json"
+MOCK_CONTROL_STAMPED=0 MOCK_CONTROL_CODE=403 MOCK_HTTP_BODY="$E_PAGE_1000" \
+  run_sut e1 200 "$ACCESS_FIXTURE" prd "--json-file $JE1"
+_e1=1
+[[ "$RC" == "1" ]] || _e1=0
+[[ "$(first_cause "$JE1")" == "edge-error-1000" ]] || _e1=0
+grep -qF '[edge-error-1000]' "$OUT" || _e1=0
+grep -qF 'gate-indeterminate' "$OUT" && _e1=0
+grep -qF 'authoritative for soleur.ai' "$OUT" || _e1=0
+grep -qF "$E_SENTINEL" "$OUT" && _e1=0
+grep -qF "$E_SENTINEL" "$JE1" && _e1=0
+[[ "$(cred_probes)" == "0" ]] || _e1=0
+if [[ "$_e1" == "1" ]]; then
+  pass "an unstamped Error 1000 page names edge-error-1000, points at the authoritative zone, sends no credential and prints none of the body"
+else
+  fail "the Error 1000 page must classify as edge-error-1000 with no body text in any output (rc=$RC, cause=$(first_cause "$JE1"))"
+fi
+
+echo "E2: curl exit 6 (could not resolve host) -> host-nxdomain, NOT host-unreachable"
+E_ROWS=$((E_ROWS + 1))
+JE2="$TMP/e2.json"
+MOCK_CURL_EXIT=6 run_sut e2 000 "$ACCESS_FIXTURE" prd "--json-file $JE2"
+_e2=1
+[[ "$RC" == "1" ]] || _e2=0
+[[ "$(first_cause "$JE2")" == "host-nxdomain" ]] || _e2=0
+grep -qF '[host-nxdomain]' "$OUT" || _e2=0
+grep -qF '[host-unreachable]' "$OUT" && _e2=0
+grep -q 'STALE' "$OUT" && _e2=0
+if [[ "$_e2" == "1" ]]; then
+  pass "NXDOMAIN is named host-nxdomain ahead of the generic unreachable arm, never STALE"
+else
+  fail "curl exit 6 must grade host-nxdomain; the 000 arm would otherwise swallow it as host-unreachable (rc=$RC, cause=$(first_cause "$JE2"))"
+fi
+
+echo "E2b: a different transport failure (curl exit 7) still grades host-unreachable"
+E_ROWS=$((E_ROWS + 1))
+JE2B="$TMP/e2b.json"
+MOCK_CURL_EXIT=7 run_sut e2b 000 "$ACCESS_FIXTURE" prd "--json-file $JE2B"
+if [[ "$(first_cause "$JE2B")" == "host-unreachable" ]]; then
+  pass "only exit 6 is NXDOMAIN; a refused connection stays host-unreachable"
+else
+  fail "widening the NXDOMAIN arm past curl exit 6 names a DNS cause nothing measured (cause=$(first_cause "$JE2B"))"
+fi
+
+echo "E3: unstamped 530 with no readable code -> tunnel-down"
+E_ROWS=$((E_ROWS + 1))
+JE3="$TMP/e3.json"
+MOCK_CONTROL_STAMPED=0 MOCK_CONTROL_CODE=530 run_sut e3 200 "$ACCESS_FIXTURE" prd "--json-file $JE3"
+if [[ "$(first_cause "$JE3")" == "tunnel-down" ]] && grep -qF '[tunnel-down]' "$OUT"; then
+  pass "an unstamped 530 names tunnel-down"
+else
+  fail "an unstamped 530 with no body code must grade tunnel-down (cause=$(first_cause "$JE3"))"
+fi
+
+echo "E3b: unstamped 403 whose body carries 'error code: 1033' -> tunnel-down"
+E_ROWS=$((E_ROWS + 1))
+JE3B="$TMP/e3b.json"
+MOCK_CONTROL_STAMPED=0 MOCK_CONTROL_CODE=403 MOCK_HTTP_BODY='error code: 1033' \
+  run_sut e3b 200 "$ACCESS_FIXTURE" prd "--json-file $JE3B"
+if [[ "$(first_cause "$JE3B")" == "tunnel-down" ]]; then
+  pass "Cloudflare error 1033 (plain-text variant) names tunnel-down"
+else
+  fail "error code 1033 is Cloudflare's tunnel error and must grade tunnel-down (cause=$(first_cause "$JE3B"))"
+fi
+
+echo "E3c: unstamped 530 whose body carries errorCode: 1016 -> edge-error-1016 (the code wins over the status)"
+E_ROWS=$((E_ROWS + 1))
+JE3C="$TMP/e3c.json"
+MOCK_CONTROL_STAMPED=0 MOCK_CONTROL_CODE=530 MOCK_HTTP_BODY='properties:{errorCode: 1016 }' \
+  run_sut e3c 200 "$ACCESS_FIXTURE" prd "--json-file $JE3C"
+if [[ "$(first_cause "$JE3C")" == "edge-error-1016" ]]; then
+  pass "a 530 carrying a non-tunnel code is named by its code, not as a dead tunnel"
+else
+  fail "a readable 1xxx code is the more specific measurement and must win over the bare 530 (cause=$(first_cause "$JE3C"))"
+fi
+
+echo "E4: a STAMPED 403 (~39 kB Access page) whose body also says errorCode: 1000 stays gated, and the pair is graded"
+E_ROWS=$((E_ROWS + 1))
+JE4="$TMP/e4.json"
+E_BIG="$(head -c 39000 /dev/zero | tr '\0' 'a') errorCode: 1000 "
+MOCK_CONTROL_STAMPED=1 MOCK_CONTROL_CODE=403 MOCK_HTTP_BODY="$E_BIG" \
+  run_sut e4 200 "$ACCESS_FIXTURE" prd "--json-file $JE4"
+_e4=1
+[[ "$RC" == "0" ]] || _e4=0
+grep -qE 'live entries: 1' "$OUT" || _e4=0
+grep -q 'edge-error' "$OUT" && _e4=0
+[[ "$(cred_probes)" == "1" ]] || _e4=0
+if [[ "$_e4" == "1" ]]; then
+  pass "the Access stamp wins over any body code: gated, credential probed, LIVE"
+else
+  fail "a stamped 403 is Access's own denial whatever its body says; grading it edge-error would refuse to grade every live credential (rc=$RC)"
+fi
+
+echo "E5: an unstamped 200 with a 0-byte body is still gate-absent (measured shape, unchanged)"
+E_ROWS=$((E_ROWS + 1))
+JE5="$TMP/e5.json"
+MOCK_CONTROL_STAMPED=0 MOCK_CONTROL_CODE=200 run_sut e5 200 "$ACCESS_FIXTURE" prd "--json-file $JE5"
+if [[ "$(first_cause "$JE5")" == "gate-absent" ]]; then
+  pass "an anonymous 2xx is gate-absent before any body code is consulted"
+else
+  fail "the body read must not move the gate-absent arm (cause=$(first_cause "$JE5"))"
+fi
+
+echo "E6: an unstamped 403 with no readable code stays gate-indeterminate"
+E_ROWS=$((E_ROWS + 1))
+JE6="$TMP/e6.json"
+MOCK_CONTROL_STAMPED=0 MOCK_CONTROL_CODE=403 MOCK_HTTP_BODY='<html>forbidden</html>' \
+  run_sut e6 200 "$ACCESS_FIXTURE" prd "--json-file $JE6"
+if [[ "$(first_cause "$JE6")" == "gate-indeterminate" ]]; then
+  pass "with no code to read, the cause is not invented"
+else
+  fail "an unstamped 403 with no Cloudflare code must stay gate-indeterminate (cause=$(first_cause "$JE6"))"
+fi
+
+echo "E6b: a code outside 1000-1999 is not a Cloudflare 1xxx code"
+E_ROWS=$((E_ROWS + 1))
+JE6B="$TMP/e6b.json"
+MOCK_CONTROL_STAMPED=0 MOCK_CONTROL_CODE=403 MOCK_HTTP_BODY='errorCode: 20001 and error code: 999' \
+  run_sut e6b 200 "$ACCESS_FIXTURE" prd "--json-file $JE6B"
+if [[ "$(first_cause "$JE6B")" == "gate-indeterminate" ]]; then
+  pass "only a 4-digit 1xxx code is read; 20001 and 999 name nothing"
+else
+  fail "the code pattern must be ^1[0-9]{3}$ exactly (cause=$(first_cause "$JE6B"))"
+fi
+
+echo "E7: curl exit 63 (--max-filesize hit) on the control probe is graded on what arrived, not as unreachable"
+E_ROWS=$((E_ROWS + 1))
+JE7="$TMP/e7.json"
+MOCK_CURL_EXIT=63 MOCK_CONTROL_STAMPED=0 MOCK_CONTROL_CODE=403 MOCK_HTTP_BODY="$E_PAGE_1000" \
+  run_sut e7 200 "$ACCESS_FIXTURE" prd "--json-file $JE7"
+if [[ "$(first_cause "$JE7")" == "edge-error-1000" ]]; then
+  pass "a truncated body is read, the status code kept"
+else
+  fail "rc 63 means the cap was hit after the headers arrived; reporting host-unreachable claims no answer came (cause=$(first_cause "$JE7"))"
+fi
+
+echo "E8: only the CONTROL probe captures a body (capped); the credentialed probe keeps -o /dev/null"
+E_ROWS=$((E_ROWS + 1))
+run_sut e8 200 "$ACCESS_FIXTURE"
+_e8=1
+_ctl_line="$(grep -vF -- '--config -' "$CURL_LOG" | head -1)"
+_cred_line="$(grep -F -- '--config -' "$CURL_LOG" | head -1)"
+[[ "$_ctl_line" == *'--max-filesize 65536'* ]] || _e8=0
+[[ "$_ctl_line" == *' -o /dev/null '* ]] && _e8=0
+[[ "$_ctl_line" == *' -o /'* ]] || _e8=0
+[[ "$_cred_line" == *' -o /dev/null '* ]] || _e8=0
+[[ "$_cred_line" == *'--max-filesize'* ]] && _e8=0
+if [[ "$_e8" == "1" ]]; then
+  pass "control: body to the single reused file under a 64 KiB cap; credentialed: body discarded"
+else
+  fail "a response to a request carrying a secret must never be written to disk, and the control body must be capped. Log:\n$(cat "$CURL_LOG")"
+fi
+
+echo "E9: the body file is freed by the single EXIT trap (no per-call mktemp, nothing left behind)"
+E_ROWS=$((E_ROWS + 1))
+_e9=1
+[[ "$(grep -c 'PROBE_BODY=$(mktemp)' "$SUT")" == "1" ]] || _e9=0
+grep -qF '[[ -n "${PROBE_BODY:-}" ]] && rm -f "$PROBE_BODY"' "$SUT" || _e9=0
+[[ "$(grep -c '^trap ' "$SUT")" == "1" ]] || _e9=0
+if [[ "$_e9" == "1" ]]; then
+  pass "one allocation site, freed by _tmpfile_cleanup under the one EXIT trap"
+else
+  fail "PROBE_BODY must be allocated once and freed by the existing EXIT trap (ADR-129)"
+fi
+
+echo "E10: the report's remedy footer names the edge causes"
+E_ROWS=$((E_ROWS + 1))
+MOCK_CONTROL_STAMPED=0 MOCK_CONTROL_CODE=403 MOCK_HTTP_BODY="$E_PAGE_1000" run_sut e10 200 "$ACCESS_FIXTURE"
+if grep -qF 'host-nxdomain / edge-error-<code> / tunnel-down' "$OUT"; then
+  pass "the grep summary carries the edge-cause remedy"
+else
+  fail "the per-cause footer must cover the new causes, or the row stands without a remedy"
+fi
+
+# Row-count floor for THIS block (Guard 1 row 5): an edit that skips the block must red even
+# if the file-wide floor below still has slack from elsewhere.
+# Enforced with echo + exit, never through `fail` (scripts/guard-vacuity-floor.test.sh: a
+# floor routed through the assertion helper goes quiet when the helper is neutered).
+if (( E_ROWS < 14 )); then
+  echo "FATAL: only ${E_ROWS} Guard 1 rows executed, expected >= 14." >&2
+  exit 1
+fi
+
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # ANTI-VACUITY FLOOR. Without it, deleting every assertion call yields
@@ -2276,8 +2498,11 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # fixture had map keys == enumeration == inventory, so the transform's direction was
 # unsampled), plus specificity assertions in M3 and non-zero-position fixtures in M4.
 # 91 is the REALIZED count on a green run.
-if [[ "$((PASS + FAIL))" -lt 91 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 91. The suite did not execute what it claims to." >&2
+#
+# Raised 91 -> 112 with E1-E10, Guard 1 of the edge-cause classifier (#12937). 112 is the
+# REALIZED count on a green run.
+if [[ "$((PASS + FAIL))" -lt 112 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 112. The suite did not execute what it claims to." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

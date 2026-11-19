@@ -186,13 +186,25 @@ echo "=== cause vocabulary: SET-EQUALITY against the detector, not a spot-check 
 # emits TEN. This derives the producer's set from its source and asserts the consumer
 # renders a specific remedy for every one — so adding a cause to the detector reddens here.
 DETECTOR="$SCRIPT_DIR/check-cloudflare-token-drift.sh"
+# `edge-error-<NNNN>` is a FAMILY the detector builds from the measured code
+# (`|edge-error-${_edge_code}|`), so no literal member exists to grep. Its presence is
+# detected from that row template and sampled as 1000 (the zone-move code) and 1016 (a
+# non-1000 member, so a remedy keyed on 1000 alone cannot satisfy the family). The
+# `UNVERIFIABLE:[a-z-]+` grep would otherwise extract the bare prefix `edge-error-`.
 mapfile -t DETECTOR_CAUSES < <(
-  { grep -oE 'UNVERIFIABLE:[a-z-]+' "$DETECTOR" | sed 's/UNVERIFIABLE://'
+  { grep -oE 'UNVERIFIABLE:[a-z-]+' "$DETECTOR" | sed 's/UNVERIFIABLE://' | grep -vxF 'edge-error-'
     grep -oE '\|(gate-absent|host-unreachable|detector-env|control-blocked|probe-failed|no-probe-configured)\|' "$DETECTOR" | tr -d '|'
+    if grep -qF '|edge-error-${_edge_code}|' "$DETECTOR"; then printf '%s\n' edge-error-1000 edge-error-1016; fi
   } | sort -u
 )
 assert_eq "the detector's cause vocabulary was extracted (non-vacuity control)" "true" \
-  "$([[ "${#DETECTOR_CAUSES[@]}" -ge 9 ]] && echo true || echo "false (${#DETECTOR_CAUSES[@]} found)")"
+  "$([[ "${#DETECTOR_CAUSES[@]}" -ge 14 ]] && echo true || echo "false (${#DETECTOR_CAUSES[@]} found)")"
+# The three #12937 edge causes are IN the extracted set — pinned by name, so a regression
+# that drops one from the detector reds here rather than shrinking the set silently.
+for _c in host-nxdomain tunnel-down edge-error-1000; do
+  assert_eq "the detector emits the edge cause ${_c}" "yes" \
+    "$(_hit=no; for _d in "${DETECTOR_CAUSES[@]}"; do [[ "$_d" == "$_c" ]] && _hit=yes; done; echo "$_hit")"
+done
 
 _unmapped=""
 for c in "${DETECTOR_CAUSES[@]}"; do
@@ -295,6 +307,86 @@ done
 UNKNOWN_TXT="$(zot_mirror_diagnosis banana "" "" "" 2>&1 || true)"
 assert_contains "an unrecognised verdict is reported, not silently rendered" "unrecognised verdict" "$UNKNOWN_TXT"
 
+echo "=== SOLEUR_ZOT_BRIDGE marker (#12937) ==="
+
+RUNBOOK_SUFFIX="runbook=knowledge-base/engineering/operations/runbooks/zot-registry-revert.md"
+
+# The acceptance line, byte for byte: field ORDER is part of the grammar (a log grep and the
+# release workflow's re-validation both anchor on it).
+assert_eq "the marker prints the exact acceptance line" \
+  "SOLEUR_ZOT_BRIDGE stage=push verdict=live cause=edge-error-1000 host=registry.soleur.ai rc=1 ${RUNBOOK_SUFFIX}" \
+  "$(zot_bridge_marker push live edge-error-1000 registry.soleur.ai 1)"
+assert_eq "field order is stage verdict cause host rc runbook" \
+  "stage= verdict= cause= host= rc= runbook=" \
+  "$(zot_bridge_marker login unverifiable host-nxdomain registry.soleur.ai 6 | grep -oE '[a-z]+=' | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "exactly one line is printed" "1" \
+  "$(zot_bridge_marker listener unmeasured unknown registry.soleur.ai 1 | wc -l | tr -d ' ')"
+
+# Every member of each closed set passes through unchanged.
+for _s in listener login push; do
+  assert_contains "stage ${_s} is printed as itself" "stage=${_s} " "$(zot_bridge_marker "$_s" live unknown h.example 1)"
+done
+for _v in live stale unverifiable unmeasured; do
+  assert_contains "verdict ${_v} is printed as itself" "verdict=${_v} " "$(zot_bridge_marker push "$_v" unknown h.example 1)"
+done
+for _c in "${DETECTOR_CAUSES[@]}" unknown; do
+  assert_contains "detector cause ${_c} is printed as itself" "cause=${_c} " "$(zot_bridge_marker push unverifiable "$_c" h.example 1)"
+done
+
+# An UNKNOWN but well-formed cause is `unknown`, never echoed (a cause the detector cannot
+# emit has no remedy and must not look like one).
+assert_contains "a well-formed cause outside the vocabulary prints cause=unknown" \
+  "cause=unknown " "$(zot_bridge_marker push unverifiable made-up-cause h.example 1)"
+assert_contains "edge-error outside 1000-1999 is not in the family" \
+  "cause=unknown " "$(zot_bridge_marker push unverifiable edge-error-2000 h.example 1)"
+
+# Forgery rows (Guard 1). Each hostile value must collapse to `invalid` AND leave the output
+# as one line containing no workflow-command prefix.
+_ls=$' '
+for _bad in $'edge-error-1000\n::error::forged' $'x\r::warning::y' "::add-mask::z" "a${_ls}b" "has space" ""; do
+  _m="$(zot_bridge_marker push unverifiable "$_bad" registry.soleur.ai 1)"
+  assert_contains "hostile cause collapses to invalid" "cause=invalid " "$_m"
+  assert_not_contains "hostile cause cannot inject a workflow command" "::" "$_m"
+  assert_eq "hostile cause still yields one line" "1" "$(printf '%s\n' "$_m" | wc -l | tr -d ' ')"
+  assert_contains "hostile stage collapses to invalid" "stage=invalid " "$(zot_bridge_marker "$_bad" live unknown h.example 1)"
+  assert_contains "hostile verdict collapses to invalid" "verdict=invalid " "$(zot_bridge_marker push "$_bad" unknown h.example 1)"
+  assert_contains "hostile host collapses to invalid" "host=invalid " "$(zot_bridge_marker push live unknown "$_bad" 1)"
+  assert_contains "hostile rc collapses to invalid" "rc=invalid " "$(zot_bridge_marker push live unknown h.example "$_bad")"
+done
+assert_contains "an upper-case host is not in ^[a-z0-9.-]+$" "host=invalid " "$(zot_bridge_marker push live unknown Registry.soleur.ai 1)"
+assert_contains "a non-numeric rc is invalid" "rc=invalid " "$(zot_bridge_marker push live unknown h.example n/a)"
+assert_contains "Stage names outside the set (setup) are invalid" "stage=invalid " "$(zot_bridge_marker setup live unknown h.example 1)"
+
+# The validator accepts exactly what the helper prints, and nothing it would not.
+_good="$(zot_bridge_marker login unverifiable edge-error-1000 registry.soleur.ai 1)"
+assert_eq "validator accepts the helper's own line" "ok" "$(zot_bridge_marker_valid "$_good" && echo ok || echo rejected)"
+assert_eq "validator accepts an all-invalid line from the helper" "ok" \
+  "$(zot_bridge_marker_valid "$(zot_bridge_marker '' '' $'\n' '' '')" && echo ok || echo rejected)"
+assert_eq "validator rejects a trailing injected line" "rejected" \
+  "$(zot_bridge_marker_valid "${_good}"$'\n::error::x' && echo ok || echo rejected)"
+assert_eq "validator rejects a cause outside the vocabulary" "rejected" \
+  "$(zot_bridge_marker_valid "${_good/edge-error-1000/made-up}" && echo ok || echo rejected)"
+assert_eq "validator rejects a different runbook" "rejected" \
+  "$(zot_bridge_marker_valid "${_good/zot-registry-revert/other}" && echo ok || echo rejected)"
+assert_eq "validator rejects an empty value" "rejected" \
+  "$(zot_bridge_marker_valid "" && echo ok || echo rejected)"
+
+# Discoverability probe from the plan's Observability block: the marker's single emitter is
+# in this library.
+assert_eq "discoverability: the marker name is in the library" "SOLEUR_ZOT_BRIDGE" \
+  "$(grep -o -m1 -e SOLEUR_ZOT_BRIDGE "$SCRIPT_DIR/zot-mirror-diagnosis.sh")"
+
+echo "=== remedies for the #12937 edge causes ==="
+for _c in host-nxdomain edge-error-1000; do
+  assert_contains "${_c} names the authoritative-zone remedy" \
+    "DNS record is wrong or missing in the zone that is authoritative for" "$(zot_mirror_cause_help "$_c")"
+  assert_contains "${_c} points at #12931" "#12931" "$(zot_mirror_cause_help "$_c")"
+done
+assert_contains "tunnel-down names the connector" "connector" "$(zot_mirror_cause_help tunnel-down)"
+assert_contains "a non-1000 edge code renders its own code" "(1016)" "$(zot_mirror_cause_help edge-error-1016)"
+assert_contains "the unverifiable arm surfaces an edge cause verbatim" "edge-error-1000" \
+  "$(zot_mirror_diagnosis unverifiable "20:23:05Z" "" "edge-error-1000")"
+
 echo "=== Results: $PASS passed, $FAIL failed ==="
 
 # ANTI-VACUITY DISPATCH FLOOR. Every assertion above is reached through assert_eq /
@@ -302,7 +394,7 @@ echo "=== Results: $PASS passed, $FAIL failed ==="
 # like ordinary cleanup — yields "0 passed, 0 failed" and exit 0, and scripts/test-all.sh
 # reads only the exit code. A floor (never equality: equality makes every new assertion a
 # spurious failure) is the only thing that notices.
-MIN_ASSERTIONS=50   # derived from a green run (54 at time of writing), with headroom
+MIN_ASSERTIONS=143  # the REALIZED count on a green run, raised from 50 with the #12937 SOLEUR_ZOT_BRIDGE rows
 if [[ $((PASS + FAIL)) -lt "$MIN_ASSERTIONS" ]]; then
   echo "FAIL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "      The suite did not execute what it claims to. Fix the dispatch, do not lower the floor." >&2
