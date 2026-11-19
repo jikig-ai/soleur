@@ -1642,7 +1642,7 @@ sk_downstream_if_ok() {
   local job; job="$(sk_job "$1")"; [[ -n "$job" ]] || return 1
   local ifs # both YAML spellings: `        if:` after `- name:`, and `      - if:` as the step's first key (fix round)
   ifs="$(awk '/^(      - |        )name: §\(c\) gate chain/ {on=1} on && /^(      - |        )if:/ {sub(/^      - if:/, "        if:"); print}' <<<"$job")"
-  ! grep -vxF "        if: inputs.mode == 'serve'" <<<"$ifs" | grep -q . || return 1
+  ! grep -q . < <(grep -vxF "        if: inputs.mode == 'serve'" <<<"$ifs") || return 1
   [[ "$(grep -c . <<<"$ifs" || true)" -ge 4 ]]
 }
 # R4 class (fix round): the health step's doppler-run shell unsets every bash startup variable a prd_terraform
