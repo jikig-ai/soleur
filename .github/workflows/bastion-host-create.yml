@@ -11,8 +11,11 @@
 #     `terraform-apply-web-platform-host` group (cancel-in-progress: false). So this file declares NO
 #     concurrency of its own; a second group of the same name would only risk cancelling the caller.
 #   - Authorization: `environment: web-platform-infra-apply` is set HERE, on the job that applies
-#     (the calling job cannot carry `environment:`). The caller passes `secrets: inherit`, and the
-#     job that sets `environment` receives that environment's secrets (DOPPLER_TOKEN_INFRA_PRIVILEGED).
+#     (the calling job cannot carry `environment:`). The caller passes the three secrets this body
+#     reads BY NAME (declared under workflow_call.secrets; never `secrets: inherit`, which the git-data
+#     root-token census allows only on the release callers). DOPPLER_TOKEN_INFRA_PRIVILEGED is an
+#     environment secret, so the caller's copy is empty and this job's `environment:` supplies it; if
+#     it did not, the Tier-B check below stops the run before any plan.
 #     The environment's required reviewer and its main-only branch policy gate this job.
 #   - Identity: the `github` context (event_name, sha, ref) is the CALLER's, so the plan summary's
 #     commit is the dispatched commit. Workflow-level `env` is NOT propagated, so it is redeclared

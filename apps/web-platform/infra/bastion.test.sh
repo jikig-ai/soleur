@@ -133,8 +133,8 @@ git_index() {
   : "${1:?git_index: empty fixture dir}"
   (
     git_fixture_env "$1" || exit 64
-    git -C "$1" init -q && git -C "$1" add -A
-  ) 2>/dev/null
+    git -C "$1" init -q 2>/dev/null && git -C "$1" add -A 2>/dev/null
+  )
 }
 # In a checkout the file list is `git ls-files '*bastion*'`, so a bastion file no list names (2b's
 # replace gate, say) is still covered: a filter matching ONLY that file must be RED.
