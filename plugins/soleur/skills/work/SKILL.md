@@ -107,7 +107,7 @@ uncommitted tree rather than by any suite. See
 
 Execute a work plan efficiently while maintaining quality and finishing features.
 
-## Introduction
+**Completion floor gate (12527):** Before advancing the work phase, run `bash plugins/soleur/scripts/completion-floor.sh --phase work`; on non-zero exit parse `missing=` and apply bounded self-healing retry (one attempt) then fail-closed halt emitting `SOLEUR_FLOOR_HALT`.
 
 This command takes a work document (plan, specification, or todo file) and executes it systematically. The focus is on **shipping complete features** by understanding requirements quickly, following existing patterns, and maintaining quality throughout.
 
