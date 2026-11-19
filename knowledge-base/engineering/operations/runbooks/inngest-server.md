@@ -1715,8 +1715,8 @@ recorded on #10205, so form (b) is the only live authority until one is.
 
 **Envelope-delegable: A4 (the `action=off` dispatch, before A5) and the A1b dispatch (its environment approval is never
 delegable, and A1b is already done: done 2026-10-20); A0 is done.** A1 and the A3 `action=flip` are in-session per-command go
-only. A1 is withheld by this runbook, not by `delegation-verify.sh` (the verifier would accept an A1 envelope line; the policy is
-the runbook's: a replace has no nameable rollback). A3 needs `-f confirm=`, which `delegation-verify.sh` denies as
+only. A1 is withheld by this runbook (a replace has no nameable rollback), and since #12742 its command also carries
+`-f confirm=REPLACE-INNGEST-HOST`, which `delegation-verify.sh` denies as `non-delegable-command`. A3 needs `-f confirm=`, which `delegation-verify.sh` denies as
 `non-delegable-command`. A2 sits under A3. Every act not listed here defaults to owner-human. A1b is the one split act: its
 dispatch may ride a Scope item that names `cutover-inngest.yml`, but its environment approval may not (below). A delegation Scope
 for a workflow dispatch matches the workflow file-name token (`cutover-inngest.yml`, `inngest-link-flip.yml`); narrowing to
@@ -1769,7 +1769,7 @@ whether a replace is half-applied is the CTO's technical call; only the producti
 | Act | Authority and due date | Preconditions (evaluate, never assume) | Mechanism | Success evidence | Rollback |
 |---|---|---|---|---|---|
 | A0: merge the PR (inert) (**done 2026-10-20**, PR #10501) | authority: see intro, form (a) a valid recorded Standing Delegation whose Scope names the merge, or form (b) an in-session per-command go; then the merge queue after the agent review pipeline and green CI | review done; `gh run list` shows no in-flight `apply-web-platform-infra.yml` or `registry-host-replace-dispatch.yml`; rebased on `origin/main` (never merge main) | single bare `gh pr merge 10501 --squash --auto`, then no sync pushes | `deploy-arm.sh find --wait <full-sha>` then `served <full-sha>` from a detached `origin/main` worktree; the merge apply created the three secrets (names only, never values); the egress assert is green on web-1 **and** web-2. No emitter reports the CA file's content or a fingerprint, so there is no pre-flip CA check to make here: with the flag absent a deploy never touches the CA, and the A3 canary (the host-side self-gate on the candidate, then the in-container checks) is the proof | revert the PR; nothing referenced the new resources |
-| A1: Inngest host replace (one disruption, bundled with #10405 unless it slips) (**done 2026-10-20**, run 39400431311) | in-session per-command go only (done 2026-10-20); withheld from delegation by this runbook, not by `delegation-verify.sh`: a replace has no revert, so no verifiable envelope exists, and no valid recorded Standing Delegation covers it (see intro); any re-dispatch is form (b) under the fresh-go rule above; was due **2026-11-05** | #10501 merged; #10405 merged **or** the 2026-10-28 checkpoint passed without it (then the replace proceeds on this PR's own `nft8443_sha256` and `nft_rules` fields); web-1 and web-2 both show the `:8443` egress rule (the egress assert; no emitter reports a CA fingerprint, the A3 canary is the proof of the CA); no in-flight `apply-web-platform-infra.yml`; `bash apps/web-platform/infra/inngest-userdata-budget.sh` green on the trial merge of both branches (cap-only on the replace dispatch; the 384 B cap-headroom floor is a PR-visible policy check in the `infra-validation` job `inngest-userdata-budget`, not a merge gate, so the owner checks that job on the dispatch SHA before the go, see "Flip-token split" below); this runbook's "Replace triggers" and "Inherited `done`" sections re-read; stock preflight and destroy-guard pass; the Stripe swallow #10542 fixed (satisfied: closed 2026-10-20 by #10656), or the window quiesced with the replay check (see "Replace duration"); a low-traffic window chosen; the `cutover-inngest.yml` quiesce op set for the window (it covers reminder arming only); the host id recorded before and after | `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason='PR 10501 inngest link TLS'` (one `reason` input; no confirm or id-pin input, tracked as #10544) | the apply job succeeds **and** the scheduler serves: a boot event with the private NIC up (no `provision-nic-ABSENT`); `bootstrap-done` for the new `iid`; `tls-health` rows with `listener=1` and `served_sha256` = `cert_sha256` = the Terraform certificate fingerprint; `nft8443_sha256` and `nft_rules` showing the `8443` accept, drop and both counters; the `routine_runs` catch-up showing one run per missed tick | nothing points at `8443` yet, so the web side needs no rollback; for a failed replace see "Abort thresholds" below |
+| A1: Inngest host replace (one disruption, bundled with #10405 unless it slips) (**done 2026-10-20**, run 39400431311) | in-session per-command go only (done 2026-10-20); withheld from delegation by this runbook: a replace has no revert, so no verifiable envelope exists, and no valid recorded Standing Delegation covers it (see intro); any re-dispatch is form (b) under the fresh-go rule above; was due **2026-11-05** | #10501 merged; #10405 merged **or** the 2026-10-28 checkpoint passed without it (then the replace proceeds on this PR's own `nft8443_sha256` and `nft_rules` fields); web-1 and web-2 both show the `:8443` egress rule (the egress assert; no emitter reports a CA fingerprint, the A3 canary is the proof of the CA); no in-flight `apply-web-platform-infra.yml`; `bash apps/web-platform/infra/inngest-userdata-budget.sh` green on the trial merge of both branches (cap-only on the replace dispatch; the 384 B cap-headroom floor is a PR-visible policy check in the `infra-validation` job `inngest-userdata-budget`, not a merge gate, so the owner checks that job on the dispatch SHA before the go, see "Flip-token split" below); this runbook's "Replace triggers" and "Inherited `done`" sections re-read; stock preflight and destroy-guard pass; the Stripe swallow #10542 fixed (satisfied: closed 2026-10-20 by #10656), or the window quiesced with the replay check (see "Replace duration"); a low-traffic window chosen; the `cutover-inngest.yml` quiesce op set for the window (it covers reminder arming only); the host id recorded before and after | `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f confirm=REPLACE-INNGEST-HOST -f reason='PR 10501 inngest link TLS'` (as dispatched on 2026-10-20 it had no `confirm`; since #12742 the replace needs the typo-guard token; no id-pin input, tracked as #10544) | the apply job succeeds **and** the scheduler serves: a boot event with the private NIC up (no `provision-nic-ABSENT`); `bootstrap-done` for the new `iid`; `tls-health` rows with `listener=1` and `served_sha256` = `cert_sha256` = the Terraform certificate fingerprint; `nft8443_sha256` and `nft_rules` showing the `8443` accept, drop and both counters; the `routine_runs` catch-up showing one run per missed tick | nothing points at `8443` yet, so the web side needs no rollback; for a failed replace see "Abort thresholds" below |
 | A1b: `cutover-inngest.yml -f op=resume` (inherited `done`, #7228) (**done 2026-10-20**, run 39445004559) | **owner-human** for the approval: the `inngest-cutover` environment approval (a GitHub `required reviewer`) is a human gate no delegation can bypass and it authorizes a production scheduler start. The dispatch itself may be delegated (a valid recorded Standing Delegation whose Scope item names `cutover-inngest.yml`; the narrowing to `op=resume` is carried by the byte-identical envelope line); the approval never is | A1 dispatched; `INNGEST_CUTOVER_FLIP=done` inherited so the new host refuses to start (journal line `BLOCK: cutover flag='done' but this host carries no done-owner marker`); `bootstrap-done` seen for the **current** `iid` | `gh workflow run cutover-inngest.yml -f op=resume` (waits in `Waiting` for the owner's approval) | the FSM returns to `noop-done`; `inngest-server` active with a stable `NRestarts`; expect a false DOUBLE-FIRE from the bucket proxy in `op=verify` and attribute it against `routine_runs`; do **not** re-fire missed ticks (each fired exactly once on the 2026-09-17 resume) | none: never re-dispatch the replace for an inherited `done` |
 | A2: handshake verification = the handshake inside A3's `flip_verify` (`scripts/inngest-link-flip.sh` runs it after the pending redeploy installs the CA, before the `1` write); a post-flip re-run of `/hooks/inngest-tls-handshake` is an optional in-session corroboration | part of the A3 authority (read-only; no separate go) | the pending redeploy of A3 has installed the CA; the optional re-run needs A3's `1` write to have landed | the `flip_verify` line in the A3 workflow run log; for the optional re-run, web-host hook `/hooks/inngest-tls-handshake` (web-1 only: the hook channel terminates there), via doppler plus curl (GET recipe below) | the `flip_verify` handshake line in the workflow run log shows `verified=200`, `unverified_rc=60` and `result=pass`: a verified request returns 200, and the same request without the CA fails with a certificate-verification error (curl exit 60). The optional re-run body is one line, `inngest-tls-handshake verified=200 verified_rc=0 unverified=fail unverified_rc=60 result=pass`; it is never part of a delegated envelope's evidence. web-2's container path is proven by its own `ci-deploy` canary at A3 | read-only, none |
 | A3: flip through `inngest-link-flip.yml` | in-session per-command go to the displayed exact command(s): the flip, and its `action=off` revert shown in the same ask. The verifier refuses `confirm=`, so no valid recorded Standing Delegation covers the flip. `action=off` stays delegable (A4). The go is **procedural** (`infra-privileged` has no required reviewer, see "How the flag is written", so no technical control enforces it), and "procedural" means no GitHub-side reviewer, not that authority is optional; the displayed sentence says "and I switch it back if the check fails" and states the A4 rollback condition (see form (b) in the intro) | A1 green; the `apply-deploy-pipeline-fix.yml` run for the merge commit that added `inngest_link_scrub_env_file` concluded success (`gh run list --workflow apply-deploy-pipeline-fix.yml`; it delivers `ci-deploy.sh` to web-1 and web-2, and both must hold the fixed script before the flip); #10542 and #10543 fixed, or the replay check run afterwards (the same window controls as A1); no in-flight release run; a low-traffic window that is also cron-quiet (see above: the script cannot detect a cron in flight); the flip date noted on the tracker | `gh workflow run inngest-link-flip.yml -f action=flip -f confirm=FLIP-INNGEST-LINK` | the canary layer passes (all five checks, including the real in-container send; one fleet redeploy, i.e. one swap on each of the two hosts, and two such redeploys if the revert fires); the script's `FLIPPED` line is printed, which proves web-1's canary and swap and only that web-2 *accepted* the trigger; each host has a `class=resolved ... scheme=https` row **and a `class=canary_ok` row since the flip's T0, with no `canary_failed` or `env_scrub_failed` row** (the per-host flip read under "Resolver events"; web-2 is not verifiable from CI, so its rows are its only evidence, and the `resolved` row alone does not prove its canary or swap); **T = the later of the two hosts' `CRON_DRAIN: waited` rows of that deploy (logged just before the host's prod stop; the `resolved` row is written at deploy start, before the canary, the cron drain and the swap, so it is a lower bound, not the swap time) plus 5 minutes**, with the baseline row read as `--since T --until T+400s` (below); post the two anchor lines on #10136; the `flip_verify` handshake line in the workflow run log (`verified=200`, `unverified_rc=60`, `result=pass`) plus the script's `FLIPPED` line is the success evidence; the post-flip re-run of the A2 handshake hook (doppler plus curl, GET recipe below) is optional in-session corroboration only | `gh workflow run inngest-link-flip.yml -f action=off` (idempotent; the workflow's own failure step is best-effort and after a cancelled run, `off` must be dispatched again; the 30-minute lease only bounds new deploys) |
@@ -1855,8 +1855,8 @@ Built and merged but NOT delivered to any host until the owner-gated A1-class `a
 
   | State after a partial failure | Plan shape | Route that passes | Who |
   |---|---|---|---|
-  | Aborted before any destroy (budget step, preflight, gate) | unchanged | Re-dispatch `inngest-host-replace` | Owner go |
-  | Attachment or network destroyed, server still present (or the server tainted in state, same plan shape) | server `-/+`, dependents `create` | Re-dispatch `inngest-host-replace` | Owner go |
+  | Aborted before any destroy (budget step, preflight, gate) | unchanged | Re-dispatch `inngest-host-replace` (with `-f confirm=REPLACE-INNGEST-HOST`) | Owner go |
+  | Attachment or network destroyed, server still present (or the server tainted in state, same plan shape) | server `-/+`, dependents `create` | Re-dispatch `inngest-host-replace` (with `-f confirm=REPLACE-INNGEST-HOST`) | Owner go |
   | Server destroyed, boot-token delete failed (Doppler error) or the apply interrupted or cancelled after the server destroy | boot token `-/+`, server `create` | Neither dispatch (`inngest-host` aborts `doppler_touched`; `inngest-host-replace` aborts `server_not_replaced`). Run the owner-run token apply, then follow the row below | Owner-run only |
   | Token(s) partly created (boot absent or flip absent), server absent | token `create`, server `create` | Dispatch `inngest-host` | Owner go |
   | Both tokens in state (`no-op`), server absent (stock, cap or Hetzner error) | server `create` | Dispatch `inngest-host` (`inngest-host-replace` refuses with `server_not_replaced`) | Owner go |
@@ -2184,7 +2184,7 @@ window.
 | #10541 | keep `INNGEST_TLS_KEY` out of the `inngest-server` process environment (`--only-secrets` or a split config) |
 | #10542 | Stripe `invoice.payment_failed` swallows an Inngest send failure (P1; closed 2026-10-20) |
 | #10543 | the dashboard send archives the draft on a failed enqueue |
-| #10544 | `inngest-host-replace` has no id-pin input (a typed confirm, `PUBLIC-SDK-URL`, landed with #10538 in PR #12737; it is a typo-guard, not an id-pin) |
+| #10544 | `inngest-host-replace` has no id-pin input (#10538's typed token (PR #12737) is retired; the replace now carries `confirm=REPLACE-INNGEST-HOST`, a typo-guard beside #12742's strict-SSL preflight, still not an id-pin) |
 | #10545 | the Inngest host's nft loader is not idempotent |
 | #10556 | a Sentry alert rule for `op=inngest-link` events (`https_to_http`, `scope_unverified`, `canary_failed`, `selfgate_failed`) |
 | #10557 | no no-SSH repair path for a non-empty or root-owned `/mnt/data/inngest-link` on a web host |
@@ -2662,16 +2662,21 @@ registry query failed), or the field missing. Leg B is the same field row on the
 **What does not fire it, by design.** A not-serving row (`http_code` other than 200, or `server_active` other than `active`)
 belongs to the probe heartbeat `betteruptime_heartbeat.inngest_server_probe` ([Arming the probe heartbeat (#9703)](#arming-the-probe-heartbeat-9703)).
 The first probe after a replace is under the uptime floor and stays quiet. `uptime_s=unknown` reads 0 and stays quiet.
-A **stale non-zero** registry is not detected: the registry persists in Postgres across a replace, so a broken poll most
-likely still shows the old count. #12742 (the sync-evidence probe field) closes that and must merge before the replace.
+A **stale non-zero** registry does not page: the registry persists in Postgres across a replace, so a broken poll most
+likely still shows the old count. Since probe_schema=10 the same probe row shows it as `sdk_sync=error`, and
+`sdk_app_url` names which poll fails (values: [Post-replace checks](#public-sdk_url-poll-10538-remedy-c)). Paging on it is
+deferred (#12742 ruling 3), so it is read during triage, not alerted.
 
 **Triage, read-only, no SSH.**
 
-1. Read the dedicated host's rows, newest first: `scripts/inngest-host-state.sh` (journal and unit state through the
-   journald to Vector to Better Stack channel, pinned to the dedicated host), and the probe row itself:
+1. Read the dedicated host's rows, newest first:
+   `doppler run -p soleur -c prd_terraform -- scripts/inngest-host-state.sh` (journal and unit state through the
+   journald to Vector to Better Stack channel, pinned to the dedicated host; it prints `sdk_sync` and `sdk_app_url` from
+   the newest probe row), and the probe row itself:
    `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_INNGEST_SERVER_PROBE`,
-   decoded with the `jq` in that script's header; keep `host_role=dedicated` rows and read `registry_fns=`, `uptime_s=`,
-   `http_code=`, `boot_id=` per row. A phone-home row (`.shipper`, `.stage` as above) carries the field row in `.detail`.
+   decoded with the `jq` in that script's header; keep `host_role=dedicated` rows and read `registry_fns=`, `sdk_sync=`,
+   `sdk_app_url=`, `uptime_s=`, `http_code=`, `boot_id=` per row. A positive `registry_fns` next to `sdk_sync=error` is the
+   stale registry above. A phone-home row (`.shipper`, `.stage` as above) carries the field row in `.detail`.
 2. Count instead of reading when the window is long. Single-quote the SQL (the script substitutes `$BS_TABLE` and
    `$BS_TABLE_S3`; double quotes expand them, empty, in your shell) and UNION the hot table with the archive, or the count
    is short:
@@ -2702,40 +2707,116 @@ polling `http://10.0.1.10:3000/api/inngest` until the owner's `inngest-host-repl
 
    > **Superseded 2026-11-17 (#12742), as to "and so is the 2026-11-20 limit in item 4":** that limit is superseded; see the marker under item 4 and `knowledge-base/legal/audits/2026-11-17-a7-leg2-owner-renewal-inngest-sdk-url-poll.md`. Items 2 and 3 are unchanged.
 
-2. #12742's sync-evidence probe field is merged (the registry-empty alert above cannot see a stale non-zero registry).
+2. #12742's sync-evidence probe field is merged AND is on the image the replace boots. The merge only changes `main`:
+   the mint cuts the next `vinngest-v*` tag, the build runs, and the automated pin-bump PR must merge before the dispatch
+   (Guard A of `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` stays red on `main` until it does). The bump
+   PR auto-merges only when the build's zot mirror reports `ok` and the image carries its revision label; otherwise it is
+   opened held for review (and an R12 `mirror_only` rerun holds it too, see the auto-mint recovery table), and someone
+   merges it with `gh pr merge <n> --squash`. Read-only check that the pin is current: the `soleur-inngest-bootstrap:vX.Y.Z`
+   pin in `apps/web-platform/infra/cloud-init-inngest.yml` (on `origin/main`) equals the newest tag (its `vinngest-` prefix dropped) from
+   `git fetch --tags && git tag -l 'vinngest-v*' --sort=-v:refname | head -1`, and
+   `gh pr list --state merged --search 'soleur/inngest-pin-' --limit 3` shows that version's bump PR merged. A replace
+   dispatched before the pin-bump merges boots the previous image and re-delivers probe_schema=9, which has no `sdk_sync`
+   (the registry-empty alert above cannot see a stale non-zero registry).
 3. Hop 1 (the Inngest server to the Cloudflare edge, certificate check) is measured against the deployed build.
 4. If the replace lands after 2026-11-20, the owner-typed record the CLO ruling requires exists first (the owner
    acceptance recorded by PR #12733 runs to 2026-11-20 only).
 
    > **Superseded 2026-11-17 (#12742), as to precondition 4:** superseded by the owner's 2026-11-17 renewal before expiry (CLO ruling 2026-11-17), not discharged: nobody typed the record, and it is no longer required for a replace before 2026-12-10. After 2026-12-10 no record of any kind extends ledger row 6; the replace, its measurements and the PR that converts ledger row 6 must land before 2026-12-11T00:00Z.
 
-**Typed-confirm gate (CTO rulings D2, 2026-11-13, and fix-round F1, 2026-11-15).** Until #12742 item 1 merges, the step
-right after checkout in the `inngest_host_replace` job of `.github/workflows/apply-web-platform-infra.yml` (before any
-credential loads) fails unless the dispatch carries `-f confirm=PUBLIC-SDK-URL`. The `inngest_host` birth job (the
-"server absent" recovery row) needs `-f confirm=PUBLIC-SDK-URL-BIRTH`, because a birth boots the same public sdk_url.
-Both run `tests/scripts/lib/inngest-public-sdk-url-confirm.sh`. A third path has no gate: a local, untargeted
-`terraform apply` (the OPERATOR_APPLIED_EXCLUSIONS break-glass) plans a replace of `hcloud_server.inngest` because its
-user_data changed; while #12742 is open, abort such an apply (or `-target` around the Inngest host) if its plan replaces it. The confirm is a typo-guard, not the go; its error points
-to #12742. The three risks every public-sdk_url boot carries until then: a stale non-zero registry the registry-empty
-alert cannot see, the #7228 first-sync double-fire, and a stale private-URL app row that keeps the plaintext poll alive.
-They apply to an emergency replace or birth too, not only the owner's planned window: after any such boot, read the
-first post-boot run of each cron function for a duplicate (two runs inside one schedule slot) before declaring recovery.
-The #12742 item-1 PR replaces the script with a fail-closed live-mode preflight (it is never deleted bare).
+**Strict-SSL preflight (#12742 item 1; CTO rulings 4, 6 and 10, 2026-11-17; review rulings R1 to R6, 2026-11-18).** Both
+jobs that boot `hcloud_server.inngest` from the public-sdk_url user_data, `inngest_host_replace` and the `inngest_host` birth
+job (the "server absent" recovery row), run `tests/scripts/lib/inngest-public-sdk-url-preflight.sh` as the step immediately
+after `Load infra credentials (tiered)` and before `Terraform init`: unconditional and fail-closed, so no terraform step runs
+unless a live read of the Cloudflare config-settings entrypoint passes. The pass predicate and its residuals are written
+once, in that script's header; read them there. The step's rationale is in
+[apply-web-platform-infra-job-rationale.md](apply-web-platform-infra-job-rationale.md). Every refusal except `[confirm]`
+prints one `::error::[<tag>] public sdk_url boot refused (#12742): <message>` line.
 
-**Precondition re-read at dispatch time (CTO fix-round F2).** Precondition 1 is a fresh reading, not the historical one:
-within 30 minutes before the dispatch, run `plugins/soleur/scripts/cloudflare-readonly.sh config-entrypoint` and confirm
-the last rule matching `app.soleur.ai` is the adopted rule with `ssl = strict`. A dashboard break-glass to `flexible`
-leaves the repo `strict` and every guard green, so only this read can see it.
+The replace takes a typed token, `-f confirm=REPLACE-INNGEST-HOST`; without it the job refuses before the preflight. It is a
+typo-guard, not authorization. The birth takes none. The `infra-privileged` environment has no reviewers
+(`apps/web-platform/infra/infra-privileged-environment.tf`), so nothing waits for an approval after the dispatch: the
+owner's go comes before it. The dispatch:
+
+```bash
+gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=inngest-host-replace -f confirm=REPLACE-INNGEST-HOST -f reason='<why>'
+```
+
+**Read it yourself first, within 30 minutes of the dispatch (CTO fix-round F2).** A dashboard break-glass to `flexible`
+leaves the repo `strict` and every terraform guard green, so only a live read sees it. The read line is the job's own read,
+argument for argument (review ruling R3), and the second line runs the job's judge on its output, so a pass here is the same
+judgement the job makes:
+
+```bash
+f="$(mktemp)"
+timeout 90 doppler run --preserve-env --only-secrets CF_ZONE_ID,CF_API_TOKEN_RULESETS,DOPPLER_PROJECT,DOPPLER_CONFIG -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh config-entrypoint > "$f"; echo "read exit $?"
+bash tests/scripts/lib/inngest-public-sdk-url-preflight.sh --from-file "$f"
+```
+
+**Run this pair once after the merge, before the first replace dispatch: that run is the owner's discharge of the CTO's two
+post-merge checks** (`knowledge-base/project/specs/archive/20261119-105944-feat-one-shot-12742-public-sdk-url-poll/decision-challenges.md`,
+"Review-round rulings"). A pass proves both: Cloudflare stores the strict rule's expression in the exact host-literal text
+the judge matches (R1/R2), and `--only-secrets` still hands the wrapper `DOPPLER_PROJECT` and `DOPPLER_CONFIG` (R3;
+measured 2026-11-19 with doppler CLI on `prd_terraform`: both arrive set, exit 0). A refusal is read in the table below.
+
+**Refusal tags.** No bypass exists: the only way past a refusal is to fix its cause and dispatch again.
+
+| Tag | What it means | What to do |
+|---|---|---|
+| `confirm` | The replace was dispatched without the exact token. | Re-dispatch with `-f confirm=REPLACE-INNGEST-HOST`. |
+| `ruleset-id`, `no-match`, `all-disabled`, `last-not-strict`, `trailing-weak` | Cloudflare's live posture fails the predicate (or the read hit the wrong zone or token). | Do not re-dispatch. Read `config-entrypoint` with the pair above, fix the posture through terraform (`apps/web-platform/infra/seo-config-rules.tf`), then dispatch again. |
+| `strict-not-host-wide` | The last strict app rule's expression is not exactly the host-literal shape, so it may not cover every request. | Do not re-dispatch. Compare the rule in `apps/web-platform/infra/seo-config-rules.tf` with the pair's output. If the `.tf` holds exactly `(http.host eq "app.soleur.ai")` (or the `in {...}` form) and the projection still shows `host_literal_only` false, Cloudflare normalised the stored text: open a fix PR to the judge (`hostlit` in `plugins/soleur/scripts/cloudflare-readonly.sh`). Otherwise fix the rule through terraform, then dispatch again. |
+| `wrapper-unverified` (`upstream-error`) | Cloudflare or the network failed the read. | Re-dispatch once. If it repeats, stop and record it. |
+| `wrapper-unverified` (any other reason) | The wrapper refused the read. | Follow the "What to do next" table in the header of `plugins/soleur/scripts/cloudflare-readonly.sh`. |
+| `wrapper-rc` | The read exited non-zero without a verdict line. | Exit 64: the wrapper's own refusal (`guard_source` / `load_credential` in `plugins/soleur/scripts/cloudflare-readonly.sh`): the Doppler project or config it sees is not `soleur` / `prd_terraform`, a token shape it cannot carry, or a `CF_ZONE_ID` that is not a 32-character hex id. Exit 1: a doppler CLI error, so read doppler's message in the job log. "the following secrets you are trying to include do not exist in your config" means a secret the `--only-secrets` list names (`CF_ZONE_ID`, `CF_API_TOKEN_RULESETS`) is absent from the config and never reached the wrapper (measured 2026-11-19): restore it in `prd_terraform`. Any other exit-1 message is auth or a wrong token: run the pair above locally to see it. A secret that exists but is empty does reach the wrapper and arrives as `wrapper-unverified` (`no-credential`), not here. Exit 124: the 90 s timeout; re-dispatch once. Any other code is a doppler CLI error: run the pair above locally to see it. |
+| `empty-read` | The read printed nothing: the doppler or wrapper call failed before printing. | Run the pair's read line alone and read its exit code (`read exit <n>`), then use the `wrapper-rc` row. |
+| `no-token` | `DOPPLER_TOKEN` is empty in the job. | `secrets.DOPPLER_TOKEN` is absent from the job: the owner restores it. Locally, use the pair above (its judge needs no token). |
+| `shape`, `malformed` | The wrapper's projection changed shape. | Projection drift: a fix PR to the wrapper or the judge, never a re-dispatch. |
+| `xtrace`, `no-tool`, `no-wrapper` | Runner or checkout defect (tracing on, `/usr/bin/jq` or doppler missing, the wrapper missing). | Fix the runner or the checkout, then dispatch again. |
+| `no-input` | Local `--from-file` only: the captured file is not readable. | Re-run the read half of the pair above. |
+
+**Residuals.** The predicate's residuals are in the script header. One belongs to the dispatch, not the script: the
+preflight is a one-time read at dispatch, so a later dashboard flip is caught only by
+`.github/workflows/scheduled-terraform-drift.yml`, and the server keeps polling every 60 s for the life of the host.
+
+<!-- lint-infra-ignore start: describes the pre-existing OPERATOR_APPLIED_EXCLUSIONS break-glass (a local untargeted apply the HALT messages print); owner-reserved recovery, not a prescribed agent step -->
+**The ungated path.** A local, untargeted `terraform apply` (the OPERATOR_APPLIED_EXCLUSIONS break-glass) plans a replace of
+`hcloud_server.inngest` because its user_data changed. Run the pair under "Read it yourself first" before it and abort on
+any refusal; if the plan replaces the Inngest host and you did not mean to, `-target` around it.
+<!-- lint-infra-ignore end -->
+
+**Every public-sdk_url boot carries three risks**: a stale non-zero registry the registry-empty alert cannot see, the #7228
+first-sync double-fire, and a stale private-URL app row that keeps the plaintext poll alive. They apply to an emergency
+replace or birth too, not only the owner's planned window: after any such boot, read the first post-boot run of each cron
+function for a duplicate (two runs inside one schedule slot) before declaring recovery. Since probe_schema=10 the first and
+third risks are readable in the `SOLEUR_INNGEST_SERVER_PROBE` row (below), once a schema-10 host serves.
 
 **Post-replace checks, read-only:**
 
-- `registry_fns` on the new host's probe rows is a positive integer once `uptime_s` passes 900 (the alert above pages
-  otherwise), and #12742's new field shows a recent sync.
+- Read the new host's probe rows:
+  `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_INNGEST_SERVER_PROBE`
+  (or `doppler run -p soleur -c prd_terraform -- scripts/inngest-host-state.sh`, which prints `sdk_sync` and
+  `sdk_app_url`). `registry_fns` is a positive integer
+  once `uptime_s` passes 900 (the alert above pages otherwise).
 - If the registry is empty, re-register with the explicit `PUT https://app.soleur.ai/api/inngest` (step 4 above).
 - The stored app `url` rows: Inngest v1.45.1 `pollSDKs` pings EVERY stored `app.Url`, not only the `--sdk-url` seed, so a
-  surviving `http://10.0.1.10:3000/api/inngest` row would keep the plaintext poll alive after the replace. **There is no
-  no-SSH read path for these rows today** (the host-local GQL is reachable only on the host); #12742 must emit them as a probe
-  field. Leg 2 counts as closed only when that field is read.
+  surviving private-URL row would keep the plaintext poll alive after the replace. Leg 2 (and item 4) passes only when the
+  row shows `sdk_sync=ok` and `sdk_app_url` is exactly one entry, `https://app.soleur.ai/api/inngest!ok`. Any other entry
+  means the private row survives. This is read, not paged (deferred, #12742). Truncation residual: `logger` cuts the row's
+  tail past 1024 B, and a row whose `redis_key_patterns` is near its 400 B cap can exceed that; a cut at an entry boundary
+  can mimic the single-entry pass. Before trusting a single-entry pass, read `redis_key_patterns` in the same row and confirm
+  it is well under 400 B.
+
+  | Field | Value | Meaning |
+  |---|---|---|
+  | `sdk_sync` | `ok` | Every registered app's last poll succeeded. |
+  | `sdk_sync` | `error` | At least one app's last poll failed; `sdk_app_url` says which. |
+  | `sdk_sync` | `no_apps` | The server lists no apps at all (measured). |
+  | both | `__UNREADABLE__` | The question applied and could not be answered (not serving, no jq, a non-200 or partial GQL answer, drift). Never a pass. |
+  | both | `n/a` | The web host's row; the question does not apply there. |
+  | `sdk_app_url` | `<url>!<ok\|error>,...` | One entry per app, the URL without userinfo, query or fragment. Capped at 160 B (the row must fit logger's 1024 B) on an entry boundary; a trailing `+<n>` counts the entries dropped. |
+  | `sdk_app_url` | `none` | Measured: zero apps (pairs with `no_apps`). |
+
 - The private-IP rejections logged by `apps/web-platform/lib/auth/resolve-origin.ts` for `10.0.1.10:3000` stop: a Better Stack
   `SELECT count()` of those rows falls to 0 after the replace.
 - Watch the #7228 double-fire probe after the replace: the sync checksum includes the URL, so the first sync is not
@@ -2745,8 +2826,8 @@ leaves the repo `strict` and every guard green, so only this read can see it.
   Bounded by the deploy window (same last-writer shape as the app's boot `PUT`); read `registry_fns` again after the deploy
   finishes, not during it.
 
-The carrier comment in `inngest-bootstrap.sh` ("polls the co-located web-platform") stays out of date until that file next
-changes for a real reason (it is an image carrier; a comment-only edit mints a no-op image release).
+The carrier comment in `inngest-bootstrap.sh` (it said the server "polls the co-located web-platform") was refreshed by
+#12742, which changes that file for a real reason (the schema-10 emitter), so no comment-only image release was minted.
 
 ## Arming the probe heartbeat (#9703)
 
@@ -3903,7 +3984,7 @@ the production scheduler host. To empty a pre-arm dark registry and re-run (all 
 2. Stop whatever dev/test backend is re-syncing functions into the dark server (typically a
    stray `--sdk-url` pointing at the dark host), so nothing re-registers after you clear it.
 3. Clear the dark registry (re-provision the dark host via the
-   `apply_target=inngest-host-replace` dispatch, which force-replaces onto the empty dark
+   `apply_target=inngest-host-replace` dispatch with `-f confirm=REPLACE-INNGEST-HOST`, which force-replaces onto the empty dark
    backend), then re-dispatch `op=execute`. The 2.0 probe must report `registry_empty:true`
    before the SEAM is reachable.
 

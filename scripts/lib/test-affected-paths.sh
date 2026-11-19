@@ -1529,6 +1529,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "tests/scripts/lib/git-data-host-birth-gate.sh"
   "tests/scripts/lib/git-data-host-replace-gate.sh"
   "tests/scripts/lib/inngest-host-shape-gate.sh"
+  "tests/scripts/lib/inngest-public-sdk-url-preflight.sh"  # plugins/soleur/test/terraform-target-parity.test.ts B10 runs it (#12742)
   "tests/scripts/lib/tf-redact-random-ids.sh"
   "tests/scripts/lib/web-host-birth-gate.sh"
   "tests/scripts/lib/web-host-replace-gate.sh"
