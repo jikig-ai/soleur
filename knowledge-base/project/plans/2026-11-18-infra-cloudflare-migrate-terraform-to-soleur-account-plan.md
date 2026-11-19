@@ -13,6 +13,7 @@ issue: 12931
 **Deepened on:** 2026-11-19 (plan written 2026-11-18, plan-reviewed the same day).
 **Sections enhanced:** 14. They are Phase 0, Phase 0c (new), Phase 1 items 7–12, Phase 2, Phase 3, Phase 5, Guard 1 and Guard 2, Architecture Decision (ADR/C4), Downtime & Cutover (new), Network-Outage Deep-Dive (new), Scope Check and Sharp Edges.
 **Research agents used:**
+
 - plan review: DHH, Kieran, code-simplicity, CTO devex;
 - deepen: learnings-researcher, terraform-architect (local experiments on TF 1.10.5 plus cloudflare 4.52.7 with no network), security-sentinel, architecture-strategist (all three `.c4` files read in full), and a negative-claim plus self-audit sweep.
 
@@ -236,19 +237,21 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
 3. **Doppler writes.** The agent runs these after a typed, command-naming go. Every write pipes the value on stdin and uses `--silent` with stdout to `/dev/null`. **Verification never prints a secret** (security review): compare `sha256sum` of source and destination (for example `doppler secrets get K --plain … | sha256sum`), and print at most an 8-character prefix for non-secret ids. Copies (`<KEY>` → `<KEY>_PREV`) are direct `get --plain | set` pipes, never via a shell variable or argv.
    - `prd_terraform` `CF_R2_ACCOUNT_ID=4d5ba6f096b2686fbdd404167dd4e125` is a new key. It must land **before PR1 merges**, because the variable has no default (ADR-065 sequencing).
    - **New token values go into staging keys, never over the live ones** (plan review). Write them as `<KEY>_NEXT` (for example `CF_API_TOKEN_RULESETS_NEXT`) in `prd_terraform`. Overwriting `CF_API_TOKEN*` while `CF_ZONE_ID`/`CF_ACCOUNT_ID` still hold the old ids would break every real-credential plan of this root and destroy the rollback values.
-   - `CF_ZONE_ID`, `CF_ACCOUNT_ID` and every `<KEY>` ← `<KEY>_NEXT` swap **in one agent-run sequence after PR1 merges, immediately before the first dispatch** (Phase 2 step 2). The old values are first copied to `<KEY>_PREV` for the revert path.
+   - `CF_ZONE_ID`, `CF_ACCOUNT_ID` and every `<KEY>` ← `<KEY>_NEXT` swap **in one agent-run sequence after PR1 merges, immediately before the first dispatch** (Phase 2 step 2). The old values are first copied to `<KEY>_PREV`, for the runbook's Halt restore, which is valid only before the first `redirects-dns` apply (CTO ruling D4, 2026-11-19). These writes are the stages of the generated `bootstrap.sh` in the #12931 spec directory (CTO ruling D11), never a hand-typed sequence.
    - **Short lifetimes (security review).** The tf-var transformer exports every `prd_terraform` key into every job of this root, so these copies are not left around:
      - `<KEY>_NEXT` is deleted right after the swap.
-     - Once the `redirects-dns` apply is verified, `Operator-authorizes:` revoke the superseded old-account non-R2 tokens and delete the token `_PREV` keys. The id `_PREV` keys may stay until cleanup; they are not secrets. After that point the full revert path needs a re-mint, which is acceptable because the flip is fix-forward.
+     - Once the `redirects-dns` apply is verified, `Operator-authorizes:` revoke the superseded old-account non-R2 tokens and delete the token `_PREV` keys. The id `_PREV` keys may stay until cleanup; they are not secrets. After that point nothing is restored: the migration halts at the last verified phase and fixes forward (CTO ruling D4). Each revoke uses the runbook's revoke recipe (token id via `/user/tokens/verify`, dashboard-session delete, read-back that the verify fails, then the key delete).
      - `CF_API_TOKEN_SOLEUR_ACCT` (the temporary token) is revoked as soon as Phase 0a is minted and probed, not in Phase 5 (COO plus security).
 
-4. **Stop the runtime from writing to the moved zone** (CTO risk). This runs at Phase 2 step 2, right after the swap, not before it. `cron-gh-pages-cert-reissue` holds the old `CF_ZONE_ID` and the old `CF_API_TOKEN_DNS_EDIT` in its frozen container env. `Operator-authorizes:` revoke the old-zone "Edit zone DNS" token in the dashboard once the new token is in Doppler. The cron then fails closed as `precondition_blocked`, by design (see the `cf-cert-reissue-token.tf` header). Revoking a user token mutates no zone.
+4. **Stop the runtime from writing to the moved zone** (CTO risk). This runs at Phase 2 step 2, right after the swap, not before it. `cron-gh-pages-cert-reissue` holds the old `CF_ZONE_ID` and the old `CF_API_TOKEN_DNS_EDIT` in its frozen container env. `Operator-authorizes:` revoke the old-zone "Edit zone DNS" token with the runbook's revoke recipe once the bootstrap's `branch-copies-tokens` stage has put the new token in every holder (runbook Phase 2 step 3). The cron then fails closed as `precondition_blocked`, by design (see the `cf-cert-reissue-token.tf` header). Revoking a user token mutates no zone.
 
 #### Phase 0c — Optional early noindex (operator decision; before PR1 merges)
 
 `app.soleur.ai` stays indexable, including `/shared/[token]` and `/invite/[token]`, until the `redirects-dns` apply, and PR1 is about 1,050 lines (security review).
+
 - Option: with the Phase 0a rulesets token, create only the `http_response_headers_transform` entrypoint in the new zone, with the same four rules `seo-rulesets.tf` declares, rendered from the code by `terraform console`, never hand-typed. The plan's existing "probe found an entrypoint, so import it" path then adopts it in `redirects-dns` as a pure import, and Guard 1 row 9 proves it matches the code.
-- This is a production mutation of the new zone. It is recorded as an `operator (production-mutating)` row with a recommended yes.
+- This is a production mutation of the new zone. It is recorded as an `operator (production-mutating)` row.
+- **Withdrawn as a recommendation (CTO ruling D2, 2026-11-19).** The migrate job now runs the ADR-136 pre-apply entrypoint gate before every apply, so a hand-made entrypoint that holds rules refuses the `redirects-dns` create (`reason=entrypoint-gate-refused`) until an import block for it lands in a PR. Option 0c now costs a code PR to save hours at most; the runbook records it as not recommended.
 
 #### Phase 1 — PR1 code (this branch)
 
@@ -257,6 +260,7 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
    - Add validations rejecting the old ids: `cf_zone_id` must not equal `5af02a2f394e9ba6e0ea23c381a26b67`, and `cf_account_id` must not equal `4d5ba6f096b2686fbdd404167dd4e125`. Each error message names #12931 and the runbook.
    - Add five bools: `cf_load_balancing_enabled` (default false), `cf_zone_plan_pro` (default false), `cf_zone_dnssec_enabled` (default false), `cf_migration_imports_enabled` (default true), and `cf_migration_import_app` (default false; flipped in PR2). The tftest sets `cf_migration_imports_enabled` to false, for the same reason it disabled the retired `adopt_seo_config_entrypoint`: the mock provider does not mock `import`.
    - Delete `adopt_seo_config_entrypoint`.
+   - **Added by CTO rulings D8 and D9 (2026-11-19):** `cf_r2_account_id` is pinned to the legacy account `4d5ba6f096b2686fbdd404167dd4e125`; the old-id validations also require the 32-hex id format; and `cf_load_balancing_enabled`, `cf_zone_plan_pro`, `cf_zone_dnssec_enabled` and `cf_migration_import_app` are locked to `false` by validation (each with a tftest `expect_failures` row). Turning one on is a reviewed PR that deletes its validation (Load Balancing #12983, DNSSEC #12982), never a tfvar override.
 2. **R2 carve-out.** Switch these to `var.cf_r2_account_id`:
    - `workspaces-luks-header.tf`: `local.r2_s3_endpoint` and `cloudflare_r2_bucket.workspaces_luks_header.account_id`;
    - `workspaces-luks-header-web.tf`: `cloudflare_r2_bucket.workspaces_luks_header_web.account_id`;
@@ -296,7 +300,7 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
 
    Per F1 everything is forgotten in the first dispatch, so no later plan can contain an old-zone destroy.
 9. **Phase gate** (new `scripts/cf-account-migrate-gate.sh`, sourced by the job and by its test). It reads `tfplan.json`; its properties are the Guard Contract below.
-10. **Dispatch target** (`apply-web-platform-infra.yml`):
+10. **Dispatch target** (`apply-web-platform-infra.yml`). *Superseded in part:* CTO L79 moved the dispatch to its own workflow, `cf-account-migrate.yml` (the infra workflow is at its byte cap), and CTO ruling D7 (2026-11-19) splits it into two jobs with literal bindings: `cf_account_migrate_rehearsal` (`infra-privileged`, `REHEARSAL: "true"`) and `cf_account_migrate_apply` (`web-platform-infra-apply`, `REHEARSAL: "false"`). The input is `rehearsal`, not `plan_only`. The text below is the original design.
     - New `apply_target` option `cf-account-migrate`, new input `migrate_phase` (`redirects-dns` | `zone-rest`; PR2 adds `tunnel`), and `confirm=MIGRATE-CF-<phase>`.
     - New job `cf_account_migrate` on `environment: infra-privileged` (main-only), in the shared `terraform-apply-web-platform-host` concurrency group. `plan_only` is honoured.
     - **Environment split (security review).** `infra-privileged` has no reviewers; it only pins the run to `main`. The rehearsal leg (`plan_only=true`) runs there. **Every apply leg runs under `web-platform-infra-apply`**, the reviewer-gated environment `web_host_create` uses (`web-host-birth-environment.tf`), so the operator's environment approval is the authorization for each production write. At work time, verify that environment can load the tier credentials the job needs, mirroring `web_host_create`'s credential steps.
@@ -310,13 +314,14 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
       6. the phase's post-apply curl verification;
       7. a step summary.
 
-      There is no id-preflight step and no per-dispatch probe step. The variable validations already fail any plan carrying an old id before refresh, and the probes run once per phase from the runbook (step 2 of Phase 0).
+      ~~There is no id-preflight step and no per-dispatch probe step.~~ **Re-ruled (CTO ruling D8, 2026-11-19), for the migrate job only:** `check_ids` runs before the state migrate and refuses unless Doppler resolves the new zone and account ids (`zone-id-not-new`, `account-id-not-new`) and `cf_r2_account_id` is the legacy account (`r2-account-not-old`). Each provider token of the phase then gets one GET on the new zone or account and must answer `200`; only the HTTP code prints, and the token goes to `curl --config -` on stdin. The tokens per phase sit next to the phase spec (`cf_account_migrate_phase_tokens`): `redirects-dns` checks `cf_api_token`, `cf_api_token_rulesets` and `cf_api_token_pages`; `zone-rest` checks `cf_api_token_zone_settings` and `cf_api_token_bot_management`. The write-scope probes still run once per phase from the runbook.
     - No SSH, no bridge, no `deploy-status` probe.
 11. **Migration-in-progress refusal** (revised after plan review). A sourced predicate `scripts/cf-account-migration-complete.sh` runs before the plan step of **every plan-capable job in `apply-web-platform-infra.yml` except `cf_account_migrate`**. That covers `apply`, `web_host_create`, `ci_ssh_token_replace`, `registry_host_replace` and the rest. `web_host_create` targets `cloudflare_record.app`, which is the tunnel chain, and `ci_ssh_token_replace` would build Access objects out of phase.
     - **Exception:** `web_host_replace` with `web_host_key=web-2` is allowed once the tunnel is in state on the new account (Phase 3 step 4).
     - While the migration is incomplete, the job fails with `verdict=cf-account-migration-in-progress` and an `::error::` naming the runbook. It exits non-zero rather than 0, so it does not mask other merged PRs' unapplied infra.
     - A workflow-grep test asserts that every job running `terraform plan` calls the predicate, except the two named exceptions.
     - `scheduled-terraform-drift.yml` is **not** gated: it only plans, and its red during the migration is an expected red listed in the runbook.
+    - **Deny by default (CTO ruling D1, 2026-11-19).** Every workflow that loads `./.github/actions/infra-credentials` is gated unless the predicate names it in its exempt-workflow list (the plan-only and migrator workflows, and the callers that plan other roots or run no Terraform). `key-rotate.yml` and `inngest-key-rotate.yml` are therefore gated. The migrate job's in-flight refusal reads the same exempt list, so a new caller is covered by both without an edit.
     - **Stronger completion definition:** every `cloudflare_*` address the root declares with count > 0 is in state, every one carries the new zone or account id (R2 excepted), the tunnel is in state on the new account, and the census reports at least 1 connector. The last condition is checked by the job's existing census step, so the routine apply does not reopen before web-2 has been replaced.
 
     Before the Doppler flip, the `cf_zone_id` validation already fails every plan loudly. The predicate covers the window between the flip and the end of the tunnel phase. The Phase 5 cleanup PR removes it.
@@ -335,7 +340,7 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
 #### Phase 2 — Redirect restore (after PR1 merges; operator-authorized dispatches)
 
 1. Merge PR1 with a merge-commit line containing exactly `[skip-web-platform-apply]`. Arm a watch on any push-triggered run anyway (`hr-dispatch-async-must-arm-watch`).
-2. `Operator-authorizes:` **one typed go covering the whole sequence** (CTO devex: fewer separate approvals while the incident is live). The agent:
+2. **Re-ruled (CTO ruling D11, 2026-11-19):** this sequence is the staged `bootstrap.sh` in the #12931 spec directory (`soleur:operator-bootstrap`, ADR-264), not one typed go. Each stage is idempotent and one prompt-approved write: `prev-0a`, `flip-ids`, `swap-0a` (staged `redirects-dns` probe, copy, digest compare, only then delete `_NEXT`), `branch-copies-zone-id`, then the `redirects-dns` dispatch; `prev-0b`, `swap-0b`, `branch-copies-tokens` (refuses while any `CF_API_TOKEN_{PURGE,DNS_EDIT}_NEXT` exists), then the `zone-rest` dispatch. The original single-go design follows. `Operator-authorizes:` ~~one typed go covering the whole sequence~~ (CTO devex: fewer separate approvals while the incident is live). The agent:
    - copies the live `CF_ZONE_ID`, `CF_ACCOUNT_ID` and Phase 0a token values to `<KEY>_PREV`;
    - flips `prd_terraform` `CF_ZONE_ID` to `951ce525552201ec6c696b24251abed7` and `CF_ACCOUNT_ID` to `66d4f93f7397f196544e9fe84c3557c2`, and swaps each `<KEY>` ← `<KEY>_NEXT`;
    - writes the branch-config copies (Phase 1 item 12);
@@ -345,7 +350,9 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
 
    **Merge-to-flip window.** From PR1's merge until this step, every plan of this root fails on the old-id validations, including `web-host-replace` and the registry dispatcher. That fails safe, but this step must follow the merge within the same sitting.
 
-   **No rollback by flip** (CTO devex). After the flip, the validations reject the old ids. A failed phase is fixed forward with a new PR. The full revert, used only if the migration is abandoned (CTO L59): `git revert` PR1, restore `<KEY>` ← `<KEY>_PREV`, take a fresh `terraform state pull` of the current state into `web-platform/backups/`, confirm its lineage matches the pre-migration backup, then run `terraform state push -force <pre-migration backup>`. A plain `state push` is refused because the backup's serial is lower than live after the forget and the imports, and `-force` overwrites unlocked state (`use_lockfile = false`), so that push is its own `Operator-authorizes:` act. The runbook spells it out.
+   **No rollback by flip** (CTO devex). After the flip, the validations reject the old ids. A failed phase is fixed forward with a new PR.
+
+   **Halt, not revert (CTO ruling D4, 2026-11-19; withdraws CTO L59's full revert).** On any failure, stop at the last verified phase and fix forward. The `_PREV` id restore is allowed only before the first `redirects-dns` apply, and it leaves the root closed (the validations reject the old ids), not reopened. Once that apply ran there is no id restore, no `git revert` of PR1 and no push of the backup over live state: each would point Terraform at the moved zone or reopen routine applies against state that no longer holds the zone's resources. The pre-migration backup is disaster-recovery evidence only, and Phase 5 deletes every `pre-cf-account-migration-*` object. The runbook's `## Halt` section is the operator text; `tests/scripts/test-cf-account-migration-runbook.sh` reds if a `terraform state push` line comes back.
 
    The dispatches in this phase and in Phase 3 can run under one standing delegation recorded on #12931 (see the operator row in `decision-challenges.md`). Otherwise each needs its own go.
 3. `Operator-authorizes:` the rehearsal:
@@ -355,7 +362,7 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
    ```
 
    Expected: the gate prints `verdict=PASS`, with counts it computes itself from the committed imports file and the Phase 0 probe output.
-   - creates: 8 rulesets/lists, minus any entrypoint the probe found already hand-made (those become imports);
+   - creates: 7 rulesets/lists, minus any entrypoint the probe found already hand-made (those become imports). `cloudflare_ruleset.cache_shared_binaries` is in no phase list (CTO ruling D3, 2026-11-19): it is created by the Phase 3 step 6 `manual-rerun` through the routine apply's existing `-target`, after the redeploy has loaded the new purge token, so no edge copy of a share exists while revokes cannot purge it;
    - imports: 26 records, 1 Pages project and 2 Pages domains, plus those entrypoints;
    - 1 `doppler_secret` add;
    - 0 destroys;
@@ -375,7 +382,7 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
    - 2 `github_actions_secret` updates (the Pages token and account id);
    - a `doppler_secret.cf_api_token_dns_edit` replace. `-replace` is in the phase target set because `ignore_changes=[value]` would otherwise keep the old token.
 
-   Then check that the next docs push publishes to the new project: probe A on `soleur-docs-40x.pages.dev` passes, and probe B (apex `version.txt`) equals the pushed sha.
+   Then dispatch a docs publish (`gh workflow run deploy-docs.yml --ref main`, watched) rather than waiting for a docs push: probe A on `soleur-docs-40x.pages.dev` passes (read its step log; it is `continue-on-error`), and probe B (apex `version.txt`) equals the deployed sha. This clears the `deploy-docs.yml` red the PR1 merge itself triggers.
 
 #### Phase 3 — PR2: tunnel, Access and deploy hosts (new branch from `main`)
 
@@ -418,7 +425,8 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
    - a CI SSH bridge round-trip succeeds;
    - a `registry.` push canary succeeds (`registry-zot-inventory.yml` or the release dual-push);
    - a `web-platform-release.yml` redeploy succeeds. It also loads the new runtime `CF_ZONE_ID`, `CF_API_TOKEN_PURGE` and `CF_API_TOKEN_DNS_EDIT` into the containers.
-6. **Re-run the routine path.** `Operator-authorizes:` `apply_target=manual-rerun`. The migration-complete predicate is now true, so the routine path runs end to end: stage-1 (a no-op or near-no-op), verify, token sync, SSH stage. Expected: green.
+   After the redeploy a share revoke answers `200` again: until then it answers `502 purge-failed`, because the frozen container env holds the old zone id and purge token (an expected red in the runbook).
+6. **Re-run the routine path.** Before the dispatch (CTO ruling D5, 2026-11-19) the agent posts on #12931: (1) `git log --oneline <PR1-merge-sha>..origin/main -- apps/web-platform/infra`, which must list only #12931 commits; (2) the latest `scheduled-terraform-drift.yml` web-platform plan summary, which must show only the migration remainder plus one `cloudflare_ruleset.cache_shared_binaries` create; (3) the owner's review comment on both. A merge freeze holds from the PR1 merge to this step: no non-#12931 change under `apps/web-platform/infra/**` merges (an exception is the operator's priority call). `Operator-authorizes:` `apply_target=manual-rerun`. The migration-complete predicate is now true, so the routine path runs end to end: stage-1 (a no-op or near-no-op), verify, token sync, SSH stage. Expected: green, with exactly one `cloudflare_ruleset.cache_shared_binaries` create (D3).
 
 #### Phase 4 — Close the incident
 
@@ -439,7 +447,7 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
 5. Re-scope the read-only tokens to the new ids (`check-cloudflare-token-drift.sh` was already repointed in PR1).
 7. `Operator-authorizes:` delete the objects the forget step left behind in the OLD account, each by name after its own go. The delete list comes from the pre-migration state backup, filtered to old-account, non-R2 entries: the LB monitor and pool (they keep health-checking origins and may still bill), the `ci_ssh` and `registry_push` service tokens (valid credentials until they expire), the Access apps and policies, the lists, the account ruleset and the notification policies. Old-ZONE objects are never touched. The zone is `moved` and read-only, and the constraint stands.
    Add two unmanaged leftovers the state-derived list misses (security review): the old deploy service token (the pre-migration `local.deploy_service_token_ids` value `d9204def…`), and the old-zone Origin CA certificate (revoke it once the Phase 3 re-mint serves).
-   Delete every object version of the state backup, not only the current one (check bucket versioning first). Track the deadline in the cleanup PR's issue.
+   Delete every `web-platform/backups/pre-cf-account-migration-*` object, every version, not only the current one (check bucket versioning first), and post an empty re-list of that prefix on #12931 (CTO ruling D4). Track the deadline in the cleanup PR's issue.
 8. Flip ADR-329 to `accepted`.
 6. Update the expense ledger (`knowledge-base/operations/expenses.md`), per the COO. Also move the deferred `infra-security.md` and `infra-credential-tiers-8209.md` literal edits here (they restore nothing):
    - soleur.ai row: "Free, new Soleur account (#12931)";
@@ -463,8 +471,8 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
 ## Non-Goals
 
 - Migrating the `apps/web-platform/infra/lb-staging/` root. It reads the same Doppler ids, but `cf-lb-overlay.yml` refuses while `cf_load_balancing_enabled` is false, so the flip cannot plan a destroy there. Tracked with the LB purchase decision.
-- DNSSEC on the new zone (count-gated off, tracked by a follow-up issue).
-- Re-enabling Load Balancing (tracked with the LB purchase decision). `cf-lb-overlay.yml` now refuses every arm through its `lb_enabled_gate` job (`cf_lb_gate_lb_enabled` in `tests/scripts/lib/cf-lb-overlay-gate.sh`, reading the committed `cf_load_balancing_enabled` default). The PR that turns it on must also move the GA allow-sets in that lib, which still name `cloudflare_load_balancer.app` and its siblings, to the indexed `[0]` plan addresses. It must also widen `CF_API_TOKEN` with the Load Balancing scopes.
+- DNSSEC on the new zone (count-gated off, tracked by #12982).
+- Re-enabling Load Balancing (tracked with the LB purchase decision, #12983). `cf-lb-overlay.yml` now refuses every arm through its `lb_enabled_gate` job (`cf_lb_gate_lb_enabled` in `tests/scripts/lib/cf-lb-overlay-gate.sh`, reading the committed `cf_load_balancing_enabled` default). The PR that turns it on must also move the GA allow-sets in that lib, which still name `cloudflare_load_balancer.app` and its siblings, to the indexed `[0]` plan addresses. It must also widen `CF_API_TOKEN` with the Load Balancing scopes.
 - The `ga-lb-pool-soak-6027` follow-through (tracker #11942, open, the sweeper has graded it FAIL daily through 2026-11-18). It was still armed at work time. PR1 retires it in code: `scripts/followthroughs/ga-lb-pool-soak-6027.sh` exits NOT YET (2) while `cf_load_balancing_enabled` is false, after its secret gates and before any network call. The tracker itself is left open. Closing it as not planned, or keeping it until Load Balancing returns, is a tracker decision for after PR1 merges.
 - An app-level `X-Robots-Tag` fallback in Next.js headers (CMO P1). That is new scope, recorded as an `operator (scope)` row in `decision-challenges.md`.
 - Adopting the DNS records Terraform never managed.
@@ -596,7 +604,7 @@ This answer is derived from every workflow whose `on.push.paths` matches a PR1 f
 - `registry-host-replace-dispatch.yml` (`variables.tf`): wakes, renders the registry user_data offline and must return `deliver=false`, because no registry render input changes. Pre-merge AC: run `apps/web-platform/infra/registry-render-delta.test.sh` (or the dispatcher's render step locally) on the PR1 diff and record `deliver=false`.
 - `infra-validation.yml` (`apps/*/infra/**`): validate and test only; no apply.
 - `validate-vector-config.yml` (`apps/web-platform/infra/*.sh`): matches the new top-level `*.test.sh` suites; validation only.
-- `deploy-docs.yml`: probe URL edit; it publishes only on docs paths, and a publish to the old project changes nothing new.
+- `deploy-docs.yml`: the merge does trigger it, because PR1 edits `deploy-docs.yml` itself and files under `plugins/soleur/skills/**`. It publishes with the old-account `CLOUDFLARE_*_PAGES` secrets to the old project, which changes nothing new, but probe A now reads the new project, so the run goes red. That red is expected until `zone-rest` and is cleared by a dispatched docs publish (Phase 2 step 6). A legal-copy docs change is held until then, or re-run after.
 
 So PR1's merge mutates no production resource. Production changes start at the Phase 2 Doppler flip.
 
@@ -607,6 +615,8 @@ So PR1's merge mutates no production resource. Production changes start at the P
 - `scheduled-inngest-health.yml` tunnel census: looks the tunnel up by name in `CF_ACCOUNT_ID`. Between the flip and the tunnel phase it finds no tunnel and reports red. The runbook lists this as an expected red.
 - `scheduled-followthrough-sweeper.yml` → `scripts/followthroughs/ga-lb-pool-soak-6027.sh` (GitHub secret `CF_ACCOUNT_ID`, LB pools): work-time check whether this followthrough is still armed. If it is, retire it with the LB gate in PR1, because it would read pools that no longer exist. Checked at work time: armed (tracker #11942). Retired in code: the probe exits NOT YET while `cf_load_balancing_enabled` is false (see Non-Goals).
 - `plugins/soleur/skills/provision-*/scripts/*.sh` and the other roots' `main.tf` backend endpoints: R2 endpoint literals on the legacy account. Correct as they are; unchanged.
+- `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md` (the Art. 17 erasure path for the object-locked CLA bucket): reads `CF_R2_ACCOUNT_ID`, fixed on this branch (a403878e6d).
+- `apps/web-platform/server/inngest/functions/event-cf-token-expiry-check.ts`: reads the runtime `prd` `CF_ACCOUNT_ID` with `CF_API_TOKEN` to list `/accounts/<id>/access/service_tokens` and watch `github-actions-deploy`. The code is account-agnostic and needs no change, but that token lives on the new account after Phase 3 step 1, so the `prd` `CF_ACCOUNT_ID` (and the token that reads it) must follow then. The bootstrap's `inventory` stage lists every `CF_ACCOUNT_ID` holder, and the runbook's Phase 3 step 1 records a per-holder decision (R2 reader stays legacy or moves to `CF_R2_ACCOUNT_ID`; zone or Access reader gets the new id).
 
 ### Distinctness / drift safeguards
 
@@ -821,6 +831,7 @@ New ADR-329 (provisional ordinal): **"Cloudflare zone-bound resources live on th
 - Alternatives: moving R2 too (rejected: 8 backends, no benefit, LUKS escrow risk); parallel variables; a plain flip.
 
 Frontmatter (architecture-strategist pass): `amends: [ADR-068, ADR-321]` and `related_adrs: [ADR-006, ADR-114, ADR-143, ADR-194, ADR-304]`.
+
 - ADR-068 gets a dated addendum. Its 2026-11 amendment records web-2 serving at weight 1 through the LB, and gating the LB off undoes that state.
 - ADR-321 gets a dated addendum. Its "adopted rule" (`a21ac79d`) is no longer imported, because Terraform creates the config rule in the new zone. The Origin CA certificate is re-minted from the new zone, and its LB health-monitor wording no longer applies.
 - ADR-006 gets a one-line cross-reference only. The backend and its endpoint stay correct.
@@ -861,14 +872,21 @@ The ADR is written in PR1 with `status: adopting`. It moves to `accepted` when P
   - search-engine indexing of `/shared/[token]` and `/invite/[token]` URLs while the noindex header is missing, a pre-existing exposure this plan closes in Phase 2;
   - the state backup object, which holds the same secrets as live state, if the backend R2 key pair leaks;
   - a newly minted deploy Access pair or tunnel token printed to a CI log.
-- **Brand-survival threshold:** `aggregate pattern`
-- **Threshold decision (challengeable):** the plan restores parity configuration and changes no user-data store. Its worst failure modes (redirects and deploys staying broken, an escrow endpoint mis-pointed) degrade every user together rather than exposing one user's data. The single-user exposure vector, indexed token URLs, is the incident's pre-existing state, which Phase 2 removes. `single-user incident` would apply if the plan touched the workspaces volume or a user-data table, and it touches neither.
+- **Brand-survival threshold:** `single-user incident`
+- **Threshold decision (CTO ruling D6, 2026-11-19; was `aggregate pattern`):** the plan changes no user-data store, but two vectors can each hurt one named user. A revoked share link could keep serving from the edge cache, and the Art. 17 erasure path for the CLA evidence bucket could address the wrong account. One such incident is a brand event, so the threshold is `single-user incident`, and each vector has a closing artifact below.
+- **Also affected (reviewer-requested):**
+  - mail and auth records: the Proton and Resend MX, SPF, DKIM and `_dmarc` records are Terraform-managed (`dns.tf`) and are among the 26 `redirects-dns` imports, each of which must plan as a pure no-op import (the gate refuses an import plus update), so no live mail record changes. The unmanaged `send.outbound` pair and `resend._domainkey.outbound` are not adopted and not touched. Sign-in and notification mail keep flowing;
+  - `/api/shared/<token>` and `/shared/<token>`: indexable until the `redirects-dns` noindex rule lands; the Phase 4 Search Console check covers all three token URL shapes;
+  - deferred: DNSSEC stays off on the new zone (#12982) and Load Balancing stays off (#12983); neither serves user traffic today.
+- **Open item:** share revokes answer `502 purge-failed` from now until the Phase 3 step 5 release redeploy, because the running containers hold the old zone id and purge token. The revoke is recorded; only the edge purge fails, and with D3 no edge copy exists to purge. The runbook lists it as an expected red.
 
 Artifact and vector pairs for `soleur:engineering:review:user-impact-reviewer`:
 
 - Redirect and noindex rulesets ↔ `seo-rulesets.tf`, `seo-bulk-redirects.tf`, `seo-config-rules.tf` (gate Guard 1).
 - LUKS header escrow endpoint ↔ `workspaces-luks-header.tf` `local.r2_s3_endpoint` (Guard 1 row 5, and the tftest).
 - Deploy pair and tunnel token secrecy ↔ `scripts/cf-access-deploy-token-mint.sh` (stdin-only test), the `tunnel_token` sensitive output.
+- Revoked share served from the edge ↔ `cloudflare_ruleset.cache_shared_binaries` in no phase list, created only at the Phase 3 step 6 `manual-rerun` after the redeploy (CTO ruling D3; gate suite mutation).
+- Art. 17 erasure on the wrong account ↔ `cla-signature-evidence-retrieval.md` reading `CF_R2_ACCOUNT_ID`, pinned by `apps/cla-evidence/infra/main.test.sh` (a403878e6d).
 
 ## Scope Check
 

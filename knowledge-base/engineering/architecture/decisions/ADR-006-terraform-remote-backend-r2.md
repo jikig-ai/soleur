@@ -74,4 +74,4 @@ The passing control is what makes this conclusive: it is not an auth, endpoint o
 
 ## Addendum — 2026-11-19 (#12931)
 
-Cross-reference only: the backend, its bucket and its endpoint stay on the legacy Cloudflare account after the 2026-11-18 zone move; ADR-329 routes every R2 surface through `var.cf_r2_account_id` so the zone/account flip cannot re-home them.
+Cross-reference only: the backend, its bucket and its endpoint stay on the legacy Cloudflare account after the 2026-11-18 zone move; the backend endpoint is a literal on the legacy account (a backend block reads no variable) and is unchanged, and ADR-329 routes every variable-driven R2 surface through `var.cf_r2_account_id`, which a validation pins to the legacy account, so the zone/account flip cannot re-home them.
