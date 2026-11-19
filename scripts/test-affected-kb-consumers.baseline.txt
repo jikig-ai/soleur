@@ -62,6 +62,7 @@
 .claude/hooks/skill-context-queries.test.sh	knowledge-base/marketing
 .claude/hooks/skill-context-queries.test.sh	knowledge-base/marketing/brand-guide.md
 apps/web-platform/infra/inngest-luks-sole-copy	knowledge-base/engineering/operations/runbooks
+apps/web-platform/infra/inngest-luks-sole-copy	knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md
 apps/web-platform/infra/inngest-luks-sole-copy	knowledge-base/engineering/operations/runbooks/git-data-birth.md
 apps/web-platform/infra/inngest-luks-sole-copy	knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md
 apps/web-platform/infra/inngest-luks-sole-copy	knowledge-base/project/specs
@@ -360,6 +361,7 @@ tests/scripts/git-data-rung2-evidence-capture	knowledge-base/project/learnings
 tests/scripts/inngest-host-dark-gate	knowledge-base/engineering/operations/runbooks/inngest-server.md
 tests/scripts/inngest-host-dark-gate	knowledge-base/project/specs/archive/20261113-090857-feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh
 tests/scripts/inngest-host-shape-gate	knowledge-base/engineering/operations/runbooks
+tests/scripts/inngest-host-shape-gate	knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md
 tests/scripts/inngest-host-shape-gate	knowledge-base/engineering/operations/runbooks/git-data-birth.md
 tests/scripts/inngest-host-shape-gate	knowledge-base/project/specs
 tests/scripts/inngest-host-shape-gate	knowledge-base/project/specs/archive
