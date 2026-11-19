@@ -6779,11 +6779,13 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(allTf).not.toMatch(/from\s*=\s*doppler_secret\.zot_heartbeat_url_prd\b/);
   });
 
-  test("bot management declares the live SBFM values and does not ignore them", () => {
+  // #12931 (ADR-329): SBFM fields are Pro-only and the Soleur-account zone is Free, so each is
+  // "allow" exactly when var.cf_zone_plan_pro and null otherwise — still declared, never ignored.
+  test("bot management declares the live SBFM values (Pro-gated) and does not ignore them", () => {
     const res = block(tf("bot-management.tf"), /^resource\s+"cloudflare_bot_management"\s+"soleur_ai"\s*\{/m);
     expect(res).toMatch(/^\s*fight_mode\s*=\s*false\s*$/m); // non-vacuity
-    expect(res).toMatch(/^\s*sbfm_definitely_automated\s*=\s*"allow"\s*$/m);
-    expect(res).toMatch(/^\s*sbfm_verified_bots\s*=\s*"allow"\s*$/m);
+    expect(res).toMatch(/^\s*sbfm_definitely_automated\s*=\s*var\.cf_zone_plan_pro\s*\?\s*"allow"\s*:\s*null\s*$/m);
+    expect(res).toMatch(/^\s*sbfm_verified_bots\s*=\s*var\.cf_zone_plan_pro\s*\?\s*"allow"\s*:\s*null\s*$/m);
     // Declared, not ignored: a dashboard flip to "block" must stay visible as drift.
     expect(res).not.toMatch(/ignore_changes/);
   });
