@@ -23,9 +23,10 @@
 #       the bare root path apps/web-platform/infra (not followed by /<subdir>). This is the only
 #       place script-wrapped Terraform is seen; composite actions and reusable callees are not.
 #   (7) the cf-account-migrate job script carries no workflow-file list (it reads the exempt list).
-#   (4) cf-account-migrate.yml shares the concurrency literal and carries no ssh bridge, ssh,
-#       upload-artifact or TF_LOG (skipped with a note until the file exists; the logic is also
-#       driven against a synthesized fixture so it is never untested).
+#   (4) cf-account-migrate.yml shares the concurrency literal, carries no ssh bridge, ssh,
+#       upload-artifact or TF_LOG, and has EXACTLY two jobs whose environment and REHEARSAL are
+#       literals in the two exact pairs (CTO D7). Absent is RED. The logic is also driven against a
+#       synthesized fixture with one mutation row per bypass shape.
 #   (5) apply-web-platform-infra.yml contains no `cf-account-migrate` token.
 #
 # The exempt workflow list, the plan-only subset and the exempt jobs are READ FROM THE SCRIPT
@@ -350,7 +351,11 @@ want_env = {
     "CFAM_DOPPLER_TOKEN_LEGACY": "${{ inputs.doppler-token-legacy }}",
 }
 run = str(last.get("run") or "")
+# Closed set: the run text must BE the reviewed command. A denylist of mask shapes is a bypass list
+# (`! bash …`, a trailing `&`, `| cat` all passed the old regex); the regex below stays as a diagnostic.
+PRED_RUN = 'bash "${GITHUB_ACTION_PATH}/../../../apps/web-platform/infra/scripts/cf-account-migration-complete.sh" --from-r2'
 probs = []
+if run.strip() != PRED_RUN: probs.append("predicate run is not exactly %r (got %r)" % (PRED_RUN, run.strip()[:160]))
 if "cf-account-migration-complete.sh" not in run or "--from-r2" not in run: probs.append("last step does not run the predicate --from-r2")
 if "if" in last: probs.append("predicate step is conditional")
 if "continue-on-error" in last: probs.append("predicate step has continue-on-error")
@@ -378,16 +383,37 @@ def check_migrate(rel):
         p.append("workflow-level concurrency is not {group: %s, cancel-in-progress: false}" % CONC)
     for tok in ("cf-tunnel-ssh-bridge", "upload-artifact", "TF_LOG"):
         if tok in text: p.append("contains %s" % tok)
-    for jid, job in ((doc.get("jobs") or {}).items()):
+    jobs = doc.get("jobs") or {}
+    for jid, job in jobs.items():
         for s in (job.get("steps") or []) if isinstance(job, dict) else []:
             if isinstance(s, dict) and re.search(r"(?:^|[;&|(!]|\$\(|\bthen\b|\bdo\b)\s*(?:sudo\s+)?(?:ssh|scp|sftp)\s", normal_text(str(s.get("run") or "")), re.M):
                 p.append("job %s runs ssh" % jid)
+    # D7: exactly two jobs; environment, if and the job step's REHEARSAL are exact literals.
+    want = {
+        "cf_account_migrate_rehearsal": ("inputs.rehearsal", "infra-privileged", "true"),
+        "cf_account_migrate_apply": ("${{ !inputs.rehearsal }}", "web-platform-infra-apply", "false"),
+    }
+    if set(jobs) != set(want):
+        p.append("jobs are %s, want exactly %s" % (sorted(jobs), sorted(want)))
+    for jid, (cond, env, reh) in want.items():
+        job = jobs.get(jid)
+        if not isinstance(job, dict): continue
+        if job.get("if") != cond: p.append("%s if: %r, want %r" % (jid, job.get("if"), cond))
+        e = job.get("environment")
+        if not isinstance(e, str) or "${{" in e or e != env: p.append("%s environment: %r, want the literal %r" % (jid, e, env))
+        runs = [st for st in (job.get("steps") or []) if isinstance(st, dict) and "cf-account-migrate-job.sh" in str(st.get("run") or "")]
+        if len(runs) != 1:
+            p.append("%s has %d steps running cf-account-migrate-job.sh, want 1" % (jid, len(runs))); continue
+        r = (runs[0].get("env") or {}).get("REHEARSAL")
+        if not isinstance(r, str) or "${{" in r or r != reh: p.append("%s REHEARSAL: %r, want the literal %r" % (jid, r, reh))
+        if "REHEARSAL" in (job.get("env") or {}) or "REHEARSAL" in (doc.get("env") or {}):
+            p.append("%s: REHEARSAL is also set at job or workflow level" % jid)
     return p
 if MIGRATE in docs:
     p = check_migrate(MIGRATE)
-    out("RED" if p else "OK", "A4-migrate", "; ".join(p) if p else "%s shares the concurrency literal; no ssh bridge, ssh, upload-artifact or TF_LOG" % MIGRATE)
+    out("RED" if p else "OK", "A4-migrate", "; ".join(p) if p else "%s shares the concurrency literal; no ssh bridge, ssh, upload-artifact or TF_LOG; two jobs with the exact literal environment/REHEARSAL pairs" % MIGRATE)
 else:
-    out("SKIP", "A4-migrate", "%s does not exist yet (written concurrently); assertion becomes real when it lands" % MIGRATE)
+    out("RED", "A4-migrate", "%s is absent from %s" % (MIGRATE, os.path.basename(wfdir)))
 
 # (5)
 t = docs.get(AWPI, (None, ""))[1]
@@ -479,7 +505,7 @@ while IFS= read -r line; do
     *) no "analyzer emitted an unexpected line: $line" ;;
   esac
 done < "$REAL_OUT"
-for id in A1-unresolvable A1-unknown-planner A1-exempt-callers A1-plan-only-subset A1-floor A2-loader-first A2-floor A2-action-step A3-exempt-jobs A5-no-token A6-exempt-no-root-planner A6-floor; do
+for id in A1-unresolvable A1-unknown-planner A1-exempt-callers A1-plan-only-subset A1-floor A2-loader-first A2-floor A2-action-step A3-exempt-jobs A4-migrate A5-no-token A6-exempt-no-root-planner A6-floor; do
   grep -q "^OK $id " "$REAL_OUT" || grep -q "^RED $id " "$REAL_OUT" || no "check $id never ran"
 done
 
@@ -570,6 +596,11 @@ mut_row "the loader step gets continue-on-error"    A2-loader-first     "$AWPI" 
 mut_row "the token lands in apply-web-platform-infra.yml" A5-no-token   "$AWPI"                '1s#^#\# see cf-account-migrate.yml\n#'
 mut_row "predicate step made conditional"           A2-action-step      "" 's#^    - name: Cloudflare account migration in-progress gate \(\#12931\)$#&\n      if: ${{ github.job != '"'"'x'"'"' }}#' action
 mut_row "predicate step exit masked"                A2-action-step      "" 's#--from-r2$#--from-r2 || true#' action
+# S1 in block form: in a plain scalar a leading `!` is a YAML tag, so the bypass is `run: |` + `! bash …`.
+mut_row "predicate exit negated (S1)"               A2-action-step      "" 's#^      run: (bash .*cf-account-migration-complete\.sh" --from-r2)$#      run: |\n        ! \1#' action
+mut_row "predicate backgrounded (S2)"               A2-action-step      "" 's#^(      run: bash .*cf-account-migration-complete\.sh" --from-r2)$#\1 \&#' action
+mut_row "predicate piped into cat (S3)"             A2-action-step      "" 's#^(      run: bash .*cf-account-migration-complete\.sh" --from-r2)$#\1 | cat#' action
+mut_row "the migrate workflow is emptied"           A4-migrate          cf-account-migrate.yml '1,$d'
 mut_row "predicate env interpolates the raw input"  A2-action-step      "" 's#CFAM_WEB_HOST_KEY: \$\{\{ github\.event\.inputs\.web_host_key \}\}#CFAM_WEB_HOST_KEY: ${{ inputs.web_host_key }}#' action
 mut_row "predicate step dropped"                    A2-action-step      "" '/^    - name: Cloudflare account migration in-progress gate/,$d' action
 
@@ -655,12 +686,23 @@ concurrency:
   group: terraform-apply-web-platform-host
   cancel-in-progress: false
 jobs:
-  cf_account_migrate:
+  cf_account_migrate_rehearsal:
+    if: inputs.rehearsal
+    runs-on: ubuntu-latest
+    environment: infra-privileged
+    steps:
+      - run: echo "no ssh here; never ssh into a host"
+      - env:
+          REHEARSAL: "true"
+        run: bash apps/web-platform/infra/scripts/cf-account-migrate-job.sh
+  cf_account_migrate_apply:
+    if: ${{ !inputs.rehearsal }}
     runs-on: ubuntu-latest
     environment: web-platform-infra-apply
     steps:
-      - run: echo "no ssh here; never ssh into a host"
-      - run: bash apps/web-platform/infra/scripts/cf-account-migrate-job.sh
+      - env:
+          REHEARSAL: "false"
+        run: bash apps/web-platform/infra/scripts/cf-account-migrate-job.sh
 YML
   cp "$WFDIR/$AWPI" "$1/"
 }
@@ -680,7 +722,15 @@ mig_mut "cancel-in-progress true"     's#cancel-in-progress: false#cancel-in-pro
 mig_mut "TF_LOG set"                  's#^(    steps:)$#    env:\n      TF_LOG: DEBUG\n\1#'
 mig_mut "upload-artifact step"        's#^(    steps:)$#\1\n      - uses: actions/upload-artifact@v4#'
 mig_mut "ssh bridge step"             's#^(    steps:)$#\1\n      - uses: ./.github/actions/cf-tunnel-ssh-bridge#'
-mig_mut "an ssh command"              's#^      - run: bash apps#      - run: ssh deploy@host true \&\& bash apps#'
+mig_mut "an ssh command"              's#^      - run: echo "no ssh#      - run: ssh deploy@host true; echo "no ssh#'
+mig_mut "apply environment literal swapped (W1)" 's#environment: web-platform-infra-apply#environment: infra-privileged#'
+mig_mut "rehearsal environment literal swapped"  's#environment: infra-privileged#environment: web-platform-infra-apply#'
+mig_mut "environment rendered from the input"    's#environment: web-platform-infra-apply#environment: ${{ inputs.rehearsal \&\& '"'"'infra-privileged'"'"' || '"'"'web-platform-infra-apply'"'"' }}#'
+mig_mut "REHEARSAL literal swapped"              's#REHEARSAL: "false"#REHEARSAL: "true"#'
+mig_mut "REHEARSAL rendered from the input"      's#REHEARSAL: "false"#REHEARSAL: ${{ inputs.rehearsal }}#'
+mig_mut "apply if inverted"                      's#if: \$\{\{ !inputs\.rehearsal \}\}#if: inputs.rehearsal#'
+mig_mut "a third job"                            's#^jobs:$#jobs:\n  extra:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"#'
+mig_mut "one job collapses both legs"            '/^  cf_account_migrate_apply:$/,$d'
 
 # ── verdict ────────────────────────────────────────────────────────────────────────────────
 printf '\ntest-cf-account-migration-scope.sh: %s passed, %s failed (%s cases)\n' "$PASS" "$FAIL" "$CASES"
@@ -688,8 +738,7 @@ if (( PASS + FAIL != CASES )); then
   printf 'CONSERVATION FAILED: PASS(%s)+FAIL(%s) != CASES(%s)\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-# A4 on the real file is a SKIP until cf-account-migrate.yml lands, so it is not counted here.
-MIN_ASSERTIONS=51
+MIN_ASSERTIONS=63
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
