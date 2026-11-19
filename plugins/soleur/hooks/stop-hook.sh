@@ -370,10 +370,16 @@ awk -v iter="$NEXT_ITERATION" -v sc="$STUCK_COUNT" -v lrh="$LAST_RESPONSE_HASH" 
 awk_rc="${awk_rc:-0}"
 if [[ "$downgrade" -eq 1 ]]; then
   front_closes=0
+  consumed_gate=1
   if [[ -f "$TEMP_FILE" ]]; then
     front_closes=$(grep -c '^---$' "$TEMP_FILE" || true)
+    consumed_gate=0
+    grep -qx 'retry_budget_consumed: 1' "$TEMP_FILE" || consumed_gate=$?
   fi
-  if [[ "$awk_rc" -ne 0 || ! -s "$TEMP_FILE" ]] || ! grep -qx 'retry_budget_consumed: 1' "$TEMP_FILE" || [[ "$front_closes" -lt 2 ]]; then
+  if [[ "$awk_rc" -ne 0 || ! -s "$TEMP_FILE" || "$consumed_gate" -ne 0 || "${front_closes:-0}" -lt 2 ]]; then
+    if [[ "$consumed_gate" -ge 2 ]]; then
+      printf 'SOLEUR_TALLY_GRANT_READ grep-rc=%s\n' "$consumed_gate" >&2
+    fi
     rm -f "$TEMP_FILE"
     exit 0
   fi
@@ -417,11 +423,17 @@ if [[ -n "$TALLY_CAPPED" ]]; then
     readback=$(awk '/^---$/{c++; if (c>=2) exit; next} c==1' "$RALPH_STATE_FILE" 2>/dev/null || true)
     grant_rc=0
     printf '%s\n' "$readback" | grep -qx 'retry_budget_grant: 0' || grant_rc=$?
+    if [[ "$grant_rc" -ge 2 ]]; then
+      printf 'SOLEUR_TALLY_GRANT_READ grep-rc=%s\n' "$grant_rc" >&2
+    fi
     if [[ "$grant_rc" -ne 0 ]]; then
       exit 0
     fi
     consumed_rc=0
     printf '%s\n' "$readback" | grep -qx 'retry_budget_consumed: 1' || consumed_rc=$?
+    if [[ "$consumed_rc" -ge 2 ]]; then
+      printf 'SOLEUR_TALLY_GRANT_READ grep-rc=%s\n' "$consumed_rc" >&2
+    fi
     if [[ "$consumed_rc" -ne 0 ]]; then
       exit 0
     fi

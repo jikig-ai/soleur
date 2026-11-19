@@ -5,6 +5,12 @@
 # only verb parser: identity, then ruling_spawn: used, then empty history,
 # then at most 64 stdin bytes.
 #
+# Residuals this file does not lock: a CR on the ledger leaf fails the leaf
+# compare before the byte scan; the parallel wait has no barrier, so a first
+# writer that finishes before the second starts passes without the in-lock
+# re-read; the flood cases do not count unread bytes. A later shape of those
+# three is covered by this note.
+#
 # Run: bash plugins/soleur/scripts/retry-budget-ruling.test.sh
 
 set -uo pipefail
@@ -28,8 +34,8 @@ BRANCH="feat-12526-retry-budget-arbitration"
 TOP="$TMP/repo"
 SPEC="$TOP/knowledge-base/project/specs/$BRANCH"
 LEDGER="$SPEC/session-state.md"
-HIST="$TMP/history.txt"
-CHILD="$TMP/child-session.md"
+HIST="$TOP/history.txt"
+CHILD="$TOP/child-session.md"
 COMMON="$TOP/.git"
 EVIDENCE="evidence-sentinel-not-written"
 STDIN_PATH=""
@@ -255,9 +261,12 @@ printf 'capped=ci_cycles\n' >"$side"
 write_stdin $'continue\n'
 id_flags
 run_case "${ID_FLAGS[@]}" --history "$HIST" --phase work
-assert_eq "0" "$RC" "continue with one trailing LF exits 0"
-assert_eq "SOLEUR_RETRY_BUDGET_RULING verb=continue reason=ok" "$OUT" "continue verdict"
-assert_spawn_section "continue" "ok" "work" yes
+assert_eq "2" "$RC" "continue with one trailing LF exits 2"
+assert_eq $'SOLEUR_RETRY_BUDGET_RULING verb=fail reason=not-run\nfail not-run' "$OUT" "continue verdict is not-run"
+assert_spawn_section "fail" "not-run" "work" yes
+assert_contains "$(cat "$LEDGER")" "spawn-line: continue" "continue records the spawn word"
+assert_contains "$(cat "$LEDGER")" "applied: not-run" "continue records applied not-run"
+assert_not_contains "$(cat "$LEDGER")" "verb: continue" "continue does not record verb continue"
 assert_eq "capped=ci_cycles" "$(cat "$side")" "continue does not clear a side capped= file"
 if [[ -f "$SUT" ]] && grep -F 'pipeline-tally.sh' "$SUT" >/dev/null 2>&1; then
   echo "  FAIL: script does not invoke pipeline-tally.sh"
@@ -391,7 +400,7 @@ fresh_ledger
 write_stdin "continue"
 id_flags
 run_case "${ID_FLAGS[@]}" --history "$HIST" --phase work
-assert_eq "0" "$RC" "first continue exits 0"
+assert_eq "2" "$RC" "first continue exits 2 as not-run"
 before=$(file_digest "$LEDGER")
 write_stdin "continue"
 run_case "${ID_FLAGS[@]}" --history "$HIST" --phase work
@@ -430,9 +439,9 @@ printf 'see ruling_spawn: used in prose\n' >>"$LEDGER"
 write_stdin "continue"
 id_flags
 run_case "${ID_FLAGS[@]}" --history "$HIST" --phase work
-assert_eq "0" "$RC" "prose mention of the spawn bit is not spent"
+assert_eq "2" "$RC" "prose mention of the spawn bit is not spent"
 assert_contains "$(cat "$LEDGER")" "see ruling_spawn: used in prose" "prose line survived the append"
-assert_spawn_section "continue" "ok" "work" yes
+assert_spawn_section "fail" "not-run" "work" yes
 STDIN_PATH=""
 
 echo "=== ledger identity tightens the one file ==="
@@ -539,8 +548,82 @@ wait "$race_pa" || true
 wait "$race_pb" || true
 race_combo="$(cat "$race_a" "$race_b")"
 assert_eq "1" "$(section_count "$LEDGER")" "parallel continues leave one ruling section"
-assert_contains "$race_combo" "verb=continue reason=ok" "one parallel call continues"
+assert_contains "$race_combo" "verb=fail reason=not-run" "one parallel call records not-run"
 assert_contains "$race_combo" "verb=fail reason=spent" "the other parallel call is spent"
+
+echo "=== phase, child path, link, and history shape ==="
+fresh_ledger
+before=$(file_digest "$LEDGER")
+write_stdin "continue"
+id_flags
+run_case "${ID_FLAGS[@]}" --history "$HIST" --phase "user@example.com"
+assert_eq "2" "$RC" "prose phase exits 2"
+assert_eq $'SOLEUR_RETRY_BUDGET_RULING verb=fail reason=identity\nfail identity' "$OUT" "prose phase is identity"
+assert_eq "$before" "$(file_digest "$LEDGER")" "prose phase writes nothing"
+STDIN_PATH=""
+
+fresh_ledger
+before=$(file_digest "$LEDGER")
+outside_child="$TMP/outside-child.md"
+printf 'child\n' >"$outside_child"
+write_stdin "continue"
+run_case --toplevel "$TOP" --branch "$BRANCH" --git-common-dir "$COMMON" --ledger "$LEDGER" --history "$HIST" --child-session "$outside_child" --phase work
+assert_eq "2" "$RC" "child outside toplevel exits 2"
+assert_eq $'SOLEUR_RETRY_BUDGET_RULING verb=fail reason=identity\nfail identity' "$OUT" "child outside toplevel is identity"
+assert_eq "$before" "$(file_digest "$LEDGER")" "child outside toplevel writes nothing"
+STDIN_PATH=""
+
+fresh_ledger
+before=$(file_digest "$LEDGER")
+id_flags
+run_case "${ID_FLAGS[@]}" --history "$HIST" --phase $'work\r'
+assert_eq "2" "$RC" "CR in phase exits 2"
+assert_eq $'SOLEUR_RETRY_BUDGET_RULING verb=fail reason=identity\nfail identity' "$OUT" "CR in phase is identity"
+assert_eq "$before" "$(file_digest "$LEDGER")" "CR in phase writes nothing"
+
+fresh_ledger
+link="$SPEC/also-session.md"
+ln "$LEDGER" "$link"
+before=$(file_digest "$link")
+write_stdin "continue"
+id_flags
+run_case "${ID_FLAGS[@]}" --history "$HIST" --phase work
+assert_eq "2" "$RC" "hard link exits 2"
+assert_eq $'SOLEUR_RETRY_BUDGET_RULING verb=fail reason=identity\nfail identity' "$OUT" "hard link is identity"
+assert_eq "$before" "$(file_digest "$link")" "hard link sibling is unchanged"
+rm -f "$link"
+STDIN_PATH=""
+
+fresh_ledger
+rm -rf "$SPEC"
+mkdir -p "$TOP/knowledge-base/project/specs/other-branch"
+printf 'secret\n' >"$TOP/knowledge-base/project/specs/other-branch/session-state.md"
+ln -s "$TOP/knowledge-base/project/specs/other-branch" "$SPEC"
+before=$(file_digest "$TOP/knowledge-base/project/specs/other-branch/session-state.md")
+write_stdin "continue"
+id_flags
+run_case "${ID_FLAGS[@]}" --history "$HIST" --phase work
+assert_eq "2" "$RC" "in-tree spec symlink exits 2"
+assert_eq "$before" "$(file_digest "$TOP/knowledge-base/project/specs/other-branch/session-state.md")" "in-tree sibling is not written"
+rm -rf "$SPEC"
+mkdir -p "$SPEC"
+STDIN_PATH=""
+
+fresh_ledger
+id_flags
+run_case "${ID_FLAGS[@]}" --not-capped --phase work
+assert_eq "2" "$RC" "not-capped without history exits 2"
+assert_eq $'SOLEUR_RETRY_BUDGET_RULING verb=fail reason=not-capped\nfail not-capped' "$OUT" "omitted history stays not-capped"
+assert_not_contains "$(cat "$LEDGER")" "empty-history" "omitted-history not-capped is not empty-history"
+
+fresh_ledger
+ln -s "$HIST" "$TMP/history-link"
+id_flags
+run_case "${ID_FLAGS[@]}" --history "$TMP/history-link" --phase work
+assert_eq "2" "$RC" "symlink history exits 2"
+assert_eq $'SOLEUR_RETRY_BUDGET_RULING verb=fail reason=empty-history\nfail empty-history' "$OUT" "symlink history is empty-history"
+assert_not_contains "$(cat "$LEDGER")" "ruling_spawn: used" "symlink history does not set the spawn bit"
+rm -f "$TMP/history-link"
 
 echo "=== reference matches the ruling ==="
 REF="$DIR/../skills/one-shot/references/retry-budget-ruling.md"
@@ -550,6 +633,9 @@ assert_contains "$(cat "$REF")" "Do not write \`retry_budget_grant: 1\`" "refere
 assert_not_contains "$(cat "$REF")" "Write the unquoted line" "reference does not instruct writing the grant line"
 assert_contains "$(cat "$REF")" "reason=not-capped" "reference names the not-capped halt"
 assert_contains "$(cat "$REF")" "phase=" "reference tells the parent to read phase="
+assert_contains "$(cat "$REF")" "applied: not-run" "reference records continue as not-run"
+assert_contains "$(cat "$REF")" "subagent_type" "reference names the blank Grok spawn"
+assert_contains "$(cat "$REF")" "Do not write the compact marker" "reference does not ask for a continue marker"
 cue_count=$(grep -c -F 'Read references/retry-budget-ruling.md.' "$SKILL" || true)
 assert_eq "2" "$cue_count" "one-shot carries the ruling cue twice"
 

@@ -129,6 +129,30 @@ case "$real_parent/" in
     exit 2
     ;;
 esac
+# An in-tree directory symlink keeps the lexical branch name and still
+# points at another spec. The resolved directory name has to be the branch.
+real_base="${real_parent##*/}"
+if [[ "$real_base" != "$branch" ]]; then
+  emit fail identity 1
+  exit 2
+fi
+if [[ -n "$child_session" ]]; then
+  if [[ -L "$child_session" ]]; then
+    emit fail identity 1
+    exit 2
+  fi
+  real_child=$(realpath -e -- "$child_session" 2>/dev/null) || {
+    emit fail identity 1
+    exit 2
+  }
+  case "$real_child/" in
+    "$real_top"/*) ;;
+    *)
+      emit fail identity 1
+      exit 2
+      ;;
+  esac
+fi
 
 line_used() {
   python3 - "$1" <<'PY'
@@ -149,16 +173,18 @@ if [[ -f "$ledger" && -s "$ledger" ]]; then
     exit 2
   fi
   if [[ "$spent_rc" -ne 1 ]]; then
-    emit fail identity 1
+    emit fail write-failed 1
     exit 2
   fi
 fi
 
 append_section() {
   local verb="$1" reason="$2" phase="$3" spawn="$4"
+  local spawn_line="${5:-}" applied="${6:-}"
   local py_rc=0
   # Exclusive lock on the ledger inode for up to 5s, then append. A replace
-  # would drop a concurrent append, including the spawn bit.
+  # would drop a concurrent append, including the spawn bit. A short write
+  # truncates back to the size from before that write.
   SOLEUR_RULING_LEDGER="$ledger" \
     SOLEUR_RULING_BRANCH="$branch" \
     SOLEUR_RULING_TOPLEVEL="$toplevel" \
@@ -168,6 +194,8 @@ append_section() {
     SOLEUR_RULING_REASON="$reason" \
     SOLEUR_RULING_CHILD="$child_session" \
     SOLEUR_RULING_SPAWN="$spawn" \
+    SOLEUR_RULING_SPAWN_LINE="$spawn_line" \
+    SOLEUR_RULING_APPLIED="$applied" \
     python3 - <<'PY' || py_rc=$?
 import os
 import sys
@@ -178,27 +206,49 @@ import fcntl
 ledger = os.environ["SOLEUR_RULING_LEDGER"]
 phase = os.environ["SOLEUR_RULING_PHASE"]
 spawn = os.environ["SOLEUR_RULING_SPAWN"] == "1"
-phase_line = "phase: " + phase if phase else "phase:"
-lines = [
-    "",
-    "## Retry budget ruling",
-    "",
-    "branch: " + os.environ["SOLEUR_RULING_BRANCH"],
-    "toplevel: " + os.environ["SOLEUR_RULING_TOPLEVEL"],
-    "git-common-dir: " + os.environ["SOLEUR_RULING_GIT_COMMON"],
-    "verb: " + os.environ["SOLEUR_RULING_VERB"],
-    phase_line,
-    "reason: " + os.environ["SOLEUR_RULING_REASON"],
-    "child-session: " + os.environ["SOLEUR_RULING_CHILD"],
-]
-if spawn:
-    lines.append("ruling_spawn: used")
-lines.append("")
-text = "\n".join(lines)
-if "ruling_grant" in text:
-    sys.exit(2)
+spawn_line = os.environ.get("SOLEUR_RULING_SPAWN_LINE", "")
+applied = os.environ.get("SOLEUR_RULING_APPLIED", "")
+
+def build(verb, reason, phase_value, with_spawn, line, applied_line):
+    phase_line = "phase: " + phase_value if phase_value else "phase:"
+    lines = [
+        "",
+        "## Retry budget ruling",
+        "",
+        "branch: " + os.environ["SOLEUR_RULING_BRANCH"],
+        "toplevel: " + os.environ["SOLEUR_RULING_TOPLEVEL"],
+        "git-common-dir: " + os.environ["SOLEUR_RULING_GIT_COMMON"],
+        "verb: " + verb,
+        phase_line,
+        "reason: " + reason,
+        "child-session: " + os.environ["SOLEUR_RULING_CHILD"],
+    ]
+    if line:
+        lines.append("spawn-line: " + line)
+    if applied_line:
+        lines.append("applied: " + applied_line)
+    if with_spawn:
+        lines.append("ruling_spawn: used")
+    lines.append("")
+    text = "\n".join(lines)
+    if "ruling_grant" in text:
+        sys.exit(2)
+    return text.encode("utf-8")
+
+def write_all(fd, payload):
+    view = payload
+    while view:
+        wrote = os.write(fd, view)
+        if wrote <= 0:
+            return False
+        view = view[wrote:]
+    return True
+
+flags = os.O_RDWR | os.O_CREAT | os.O_APPEND
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
 try:
-    fd = os.open(ledger, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o644)
+    fd = os.open(ledger, flags, 0o644)
 except OSError:
     sys.exit(2)
 deadline = time.monotonic() + 5
@@ -221,15 +271,43 @@ try:
         chunks.append(block)
     if b"ruling_spawn: used" in b"".join(chunks).splitlines():
         sys.exit(4)
-    payload = text.encode("utf-8")
-    view = payload
-    while view:
-        wrote = os.write(fd, view)
-        if wrote <= 0:
+    info = os.fstat(fd)
+    if info.st_nlink != 1:
+        sys.exit(5)
+    payload = build(
+        os.environ["SOLEUR_RULING_VERB"],
+        os.environ["SOLEUR_RULING_REASON"],
+        phase,
+        spawn,
+        spawn_line,
+        applied,
+    )
+    size_before = info.st_size
+    wrote_ok = False
+    try:
+        wrote_ok = write_all(fd, payload)
+    except OSError:
+        wrote_ok = False
+    if not wrote_ok:
+        try:
+            os.ftruncate(fd, size_before)
+        except OSError:
             sys.exit(2)
-        view = view[wrote:]
-except OSError:
-    sys.exit(2)
+        if spawn:
+            recovery = build("fail", "write-failed", phase, True, spawn_line, "")
+            recovered = False
+            try:
+                recovered = write_all(fd, recovery)
+            except OSError:
+                recovered = False
+            if not recovered:
+                try:
+                    os.ftruncate(fd, size_before)
+                except OSError:
+                    pass
+                sys.exit(2)
+            sys.exit(6)
+        sys.exit(2)
 finally:
     os.close(fd)
 PY
@@ -243,21 +321,39 @@ append_or_spent() {
     emit fail spent 0
     exit 2
   fi
-  if [[ "$rc" -ne 0 ]]; then
+  if [[ "$rc" -eq 5 ]]; then
     emit fail identity 1
+    exit 2
+  fi
+  if [[ "$rc" -ne 0 ]]; then
+    emit fail write-failed 1
     exit 2
   fi
 }
 
+phase_stored_ok() {
+  case "$phase_flag" in
+    ""|plan|work|review|qa|test-fix-loop) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 if [[ "$not_capped" -eq 1 ]]; then
+  if ! phase_stored_ok; then
+    emit fail identity 1
+    exit 2
+  fi
   append_or_spent fail not-capped "$phase_flag" 0
   emit fail not-capped 1
   exit 2
 fi
 
 hist_nonempty=0
-if [[ -n "$history" && -f "$history" && -s "$history" ]]; then
-  hist_nonempty=1
+if [[ -n "$history" && ! -L "$history" && -f "$history" && -s "$history" ]]; then
+  real_hist=$(realpath -e -- "$history" 2>/dev/null || true)
+  case "$real_hist/" in
+    "$real_top"/*) hist_nonempty=1 ;;
+  esac
 fi
 ledger_present=0
 if [[ -f "$ledger" && -s "$ledger" ]]; then
@@ -265,6 +361,10 @@ if [[ -f "$ledger" && -s "$ledger" ]]; then
 fi
 
 if [[ "$hist_nonempty" -eq 0 || "$ledger_present" -eq 0 ]]; then
+  if ! phase_stored_ok; then
+    emit fail identity 1
+    exit 2
+  fi
   append_or_spent fail empty-history "$phase_flag" 0
   emit fail empty-history 1
   exit 2
@@ -273,8 +373,12 @@ fi
 raw="$(mktemp)"
 trap 'rm -f "$raw"' EXIT
 dd_rc=0
-dd if=/dev/stdin of="$raw" bs=1 count=64 status=none || dd_rc=$?
-if [[ "$dd_rc" -ne 0 && ! -s "$raw" ]]; then
+timeout 2 dd if=/dev/stdin of="$raw" bs=1 count=64 status=none || dd_rc=$?
+if [[ "$dd_rc" -ne 0 ]]; then
+  if ! phase_stored_ok; then
+    emit fail identity 1
+    exit 2
+  fi
   append_or_spent fail unparseable "$phase_flag" 1
   emit fail unparseable 1
   exit 2
@@ -313,9 +417,13 @@ phase_tok="${parsed#*$'\t'}"
 
 case "$kind" in
   continue)
-    append_or_spent continue ok "$phase_flag" 1
-    emit continue ok 0
-    exit 0
+    if ! phase_stored_ok; then
+      emit fail identity 1
+      exit 2
+    fi
+    append_or_spent fail not-run "$phase_flag" 1 continue not-run
+    emit fail not-run 1
+    exit 2
     ;;
   goto)
     append_or_spent goto ok "$phase_tok" 1
@@ -323,16 +431,28 @@ case "$kind" in
     exit 0
     ;;
   fail)
+    if ! phase_stored_ok; then
+      emit fail identity 1
+      exit 2
+    fi
     append_or_spent fail fail "$phase_flag" 1
     emit fail fail 1
     exit 2
     ;;
   empty)
+    if ! phase_stored_ok; then
+      emit fail identity 1
+      exit 2
+    fi
     append_or_spent fail empty "$phase_flag" 1
     emit fail empty 1
     exit 2
     ;;
   *)
+    if ! phase_stored_ok; then
+      emit fail identity 1
+      exit 2
+    fi
     append_or_spent fail unparseable "$phase_flag" 1
     emit fail unparseable 1
     exit 2
