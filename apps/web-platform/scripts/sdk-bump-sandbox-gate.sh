@@ -125,6 +125,10 @@ if [[ -n "$BASE_TMP" ]]; then
       bumped_pkgs+=("$pkg")
     fi
   done
+  if [[ "${#bumped_pkgs[@]}" -gt 0 ]]; then
+    # #12906: printed once per run (not per package), whether or not the ack trailer is present. ADR-278 records why.
+    echo "sdk-bump-gate: re-measure the SandboxNetworkAccess allow cache on the new SDK before adopting it: bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh <new-version> (ADR-278, #12906)"
+  fi
   rm -f "$BASE_TMP"
 else
   echo "::warning::sdk-bump-gate: could not resolve the base package-lock.json (ref='${BASE_REF}'); skipping bump-vs-base detection. Presence is still enforced above. (In CI, ensure origin/main is fetched.)"

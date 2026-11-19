@@ -171,6 +171,24 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# T5b — #12906: a bump names the allow-cache re-measure command exactly ONCE per run (not once per bumped package),
+# with or without the ack trailer; no bump prints it zero times.
+# ---------------------------------------------------------------------------
+echo "T5b: a bump prints the re-measure command once"
+REMEASURE_HINT="bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh <new-version>"
+run_gate "0.3.200" "2.1.200" "-" "-" "0.3.197" "2.1.197" "" || true
+n="$(grep -cF "$REMEASURE_HINT" "$T/out.txt" || true)"
+if [[ "$(grep -c 'DETECTED bump' "$T/out.txt" || true)" -eq 2 && "$n" -eq 1 ]]; then pass "T5b two bumped packages, one re-measure line (no ack)"; else fail "T5b expected 2 DETECTED and 1 re-measure line, got $(grep -c 'DETECTED bump' "$T/out.txt") and $n"; fi
+run_gate "0.3.200" "2.1.197" "-" "-" "0.3.197" "2.1.197" "chore: bump
+
+sdk-bump-verified: fixture" || true
+n="$(grep -cF "$REMEASURE_HINT" "$T/out.txt" || true)"
+if [[ "$n" -eq 1 ]]; then pass "T5b one re-measure line with the ack present"; else fail "T5b with ack: expected 1 re-measure line, got $n"; fi
+run_gate "0.3.197" "2.1.197" "-" "-" "0.3.197" "2.1.197" "" || true
+n="$(grep -cF "$REMEASURE_HINT" "$T/out.txt" || true)"
+if [[ "$n" -eq 0 ]]; then pass "T5b no bump, no re-measure line"; else fail "T5b no bump: expected 0 re-measure lines, got $n"; fi
+
+# ---------------------------------------------------------------------------
 # T6 — a package absent from package-lock → exit 1 (deploy-authoritative missing).
 # ---------------------------------------------------------------------------
 echo "T6: SDK package absent from package-lock → fail"

@@ -193,4 +193,81 @@ Measurement 4 above records that `NO_PROXY` is not honored by the SDK's API path
 
 **Observability.** Denies log pino warn rows, capped per key as below (`feature=cc-permissions op=sandbox-network-denied`, extra `reason`, `granted`, `matchedEntry`, `subagent`; never the host); the Sentry mirror is deduplicated per Query on `(reason, matchedEntry)`. The ungranted `not-entitled`/`egress-not-running` deny is the normal state and is pino-only (no Sentry); pino is capped at 20 rows per key per Query, then one row per 100 repeats with an `occurrences` count. The Better Stack alert `sandbox_network_degraded` pages on `granted=true` with reason `not-entitled` or `egress-not-running`. A granted session that makes no sandboxed network call writes no row, so the alert is not a full degraded-session detector.
 
-**Re-measure trigger.** The runtime suite asserts `MEASURED_ON_SDK = "0.3.321"` against the installed SDK, and its F/F2 assertions pin the caching: an SDK bump reds the suite until the measurement arms are re-run and this addendum updated. Spike: the egress-injector spike's driver now calls the production decision and allows exactly the `gateway-unverified` hosts, to keep measuring the route an allow would get.
+**Re-measure trigger.** The runtime suite asserts `MEASURED_ON_SDK = "0.3.321"` against the installed SDK, and its F/F2 assertions pin the caching: an SDK bump reds the suite until the measurement arms are re-run and this addendum updated. Spike: the egress-injector spike's driver now calls the production decision and allows exactly the `gateway-unverified` hosts, to keep measuring the route an allow would get. *(Amended 2026-11-19, #12906, original wording kept: the re-measure is one command, `bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh <new-version>`; the verdict-to-action table is in the amendment below.)*
+
+> **Amended 2026-11-19 (#12906):** the re-measure has one command. Run `bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh <new-version>`. It installs the pinned baseline (`MEASURED_BASELINE` in `apps/web-platform/scripts/lib/sandbox-network-cache-verdict.ts`, which the runtime suite also imports) and the candidate into scratch prefixes. It runs this harness on each one, contained, and prints `REMEASURE verdict=... exit=...`. The script never moves the pin. `MEASURED_BASELINE` moves only with a CACHES verdict on the new pin and an addendum here in the same PR. `sdk-bump-sandbox-gate.sh` prints the command once on any SDK bump. Verdict-to-action:
+>
+> | Verdict | Action |
+> |---|---|
+> | CACHES | #12906 stays blocked; record the run here and on #12906 |
+> | RE-ASKS-AFTER-TEARDOWN | Record the run; it triggers #12906's build and its live-forwarder deny-flip arm; it is not proof that an allow is revocable |
+> | MIXED | Record the run; most consistent with a per-command cache; a #12906 trigger like RE-ASKS-AFTER-TEARDOWN |
+> | INCONCLUSIVE | Re-run once; then record the run and file an issue naming the reason |
+> | ERROR | Fix the cause and re-run; `app-mutated` also files a bug against the script |
+> | LEAK | Separate addendum plus a bug issue against adopting that SDK |
+> | UNVERIFIED | Record `UNVERIFIED:sdk-<v>-sandbox-network-allow-cache` and file an issue |
+> | REFUSED | No finding; wait for the ADR-191 release-age floor, or file a security issue (signatures, baseline integrity) |
+>
+> Adopting any new SDK or bundled CLI re-arms CLO gate B-2, whatever the verdict.
+
+## Addendum — 2026-11-19 (#12906): per-host allow cache re-measured on Agent SDK 0.3.325 (interim version, not 0.3.328)
+
+**Command** (exit code 0).
+
+```text
+bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.325 --out <scratchpad>/verdict.json --markdown <scratchpad>/records
+```
+
+**Result.** `REMEASURE verdict=CACHES exit=0 reason=measured next=record the run in ADR-278 and on #12906; #12906 stays blocked until the next SDK bump's run`
+
+**Versions.**
+
+| | Baseline | Candidate |
+|---|---|---|
+| Requested | 0.3.321 | 0.3.325 |
+| Observed SDK | 0.3.321 | 0.3.325 |
+| Observed CLI | 2.1.321 | 2.1.325 |
+| Reading | CACHES | CACHES |
+
+**Host.**
+
+- startedAt: 2026-11-19T15:30:27Z
+- endedAt: 2026-11-19T15:33:49Z
+- requested: 0.3.325
+- exactVersion: 0.3.325
+- linuxX64Version: 0.3.325
+- candidateIntegritySdk: sha512-MhSm2Fhk3DA/hhjdCKXDZWlnykpPWJjX42SogllAHMplY9ZKT+Ltb8QPtQxpe225Imfs4A8IKaNE4biivA+fHg==
+- candidateIntegrityLinuxX64: sha512-wXEWbDmNYiorY5EKASYjvQct8zHShUPmAS9N/IAsgPA/cx2vsOFqPQw8jRQKeaW6AmFgx7k/Wf7THalNXbMEkQ==
+- node: v26.12.0
+- npm: 11.20.0
+- kernel: 7.2.15-1-omarchy
+- bwrap: bubblewrap 0.13.1
+- os: Omarchy
+
+**Baseline per-arm outcome.**
+
+| Arm | SandboxNetworkAccess asks (in order) | Gateway lines | Decoy hits |
+|---|---|---|---|
+| control | 198.51.100.1, 127.0.0.2, 169.254.169.254 | - | 198.51.100.1:443, 198.51.100.1:80, 198.51.100.1:22, 127.0.0.2:38913, 127.0.0.2:38913, 169.254.169.254:80 |
+| B | example.test, 198.51.100.1, 169.254.169.254, metadata.test | CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT 198.51.100.1:443 HTTP/1.1; GET http://example.test/ HTTP/1.1; CONNECT example.test:22 HTTP/1.1; CONNECT 198.51.100.1:22 HTTP/1.1; CONNECT 169.254.169.254:443 HTTP/1.1; CONNECT metadata.test:443 HTTP/1.1 | - |
+| D | - | - | - |
+| E | 198.51.100.1 | - | - |
+| F | 198.51.100.1 | CONNECT 198.51.100.1:443 HTTP/1.1 | - |
+| F2 | 198.51.100.1, example.test | CONNECT 198.51.100.1:443 HTTP/1.1 | - |
+
+**Candidate per-arm outcome.**
+
+| Arm | SandboxNetworkAccess asks (in order) | Gateway lines | Decoy hits |
+|---|---|---|---|
+| control | 198.51.100.1, 127.0.0.2, 169.254.169.254 | - | 198.51.100.1:443, 198.51.100.1:80, 198.51.100.1:22, 127.0.0.2:43929, 127.0.0.2:43929, 169.254.169.254:80 |
+| B | example.test, 198.51.100.1, 169.254.169.254, metadata.test | CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT 198.51.100.1:443 HTTP/1.1; GET http://example.test/ HTTP/1.1; CONNECT example.test:22 HTTP/1.1; CONNECT 198.51.100.1:22 HTTP/1.1; CONNECT 169.254.169.254:443 HTTP/1.1; CONNECT metadata.test:443 HTTP/1.1 | - |
+| D | - | - | - |
+| E | 198.51.100.1 | - | - |
+| F | 198.51.100.1 | CONNECT 198.51.100.1:443 HTTP/1.1 | - |
+| F2 | 198.51.100.1, example.test | CONNECT 198.51.100.1:443 HTTP/1.1 | - |
+
+**What it means.** The interim candidate reads the same as the pin: within one session, F asked once for three requests to the same host, and F2 asked the allowed host once across two commands, then asked only for the new host. Both runs passed every precondition: versions, all arms present, the control arm's five decoys, teardown, the post-teardown requests and asks recorded. #12906 stays blocked. 0.3.325 is an interim version, not 0.3.328. The 0.3.328 measurement is pending the ADR-191 release-age floor, not before 2026-11-21T23:14Z, and is tracked in #12977.
+
+**Limits.** This measurement is off-production (developer host, scripted model stub, production pin unchanged at 0.3.321). It neither satisfies nor re-arms gate B-2 of the 2026-11-18 DPIA re-screen (`knowledge-base/legal/audits/2026-11-18-dpia-rescreen-egress-credential-injector.md`, PR #12900). B-2 is already unsatisfied, because the 0.3.321 pin fired the SDK-version trigger. Adopting any new Agent SDK or CLI version, 0.3.328 included, would fire the results note's SDK-version trigger, and the CLI-version trigger whenever the bundled CLI changes, and so would re-arm B-2 against the adopted versions.
+
+**Containment of this run.** Each harness ran in its own user, mount, network and pid namespace. A read-only tmpfs covered `$HOME` and `$XDG_RUNTIME_DIR`. All 120 `git worktree list` paths and the git common dir were remounted read-only, and a write probe confirmed it. Still exposed: `/tmp` outside the scratch root, and the rest of the user-writable filesystem. The app's package files and installed SDK hashed the same before and after the run.

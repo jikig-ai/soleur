@@ -19,7 +19,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import net from "node:net";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 type Tap = "allow-all" | "production";
 interface Spec {
@@ -45,6 +47,15 @@ interface DecoyHit {
 }
 
 const spec: Spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
+
+// #12906 PR-1b: NETNS_SDK_ENTRY points at another install's sdk.mjs (remeasure-sdk-sandbox-network-cache.sh installs the
+// baseline and the candidate into scratch prefixes), so the measured SDK is never the app's own node_modules copy. Unset,
+// the app's pinned SDK is measured, as the runtime suite does.
+const SDK_ENTRY = process.env.NETNS_SDK_ENTRY
+  ? realpathSync(process.env.NETNS_SDK_ENTRY)
+  : fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk"));
+let sdkModule: Promise<typeof import("@anthropic-ai/claude-agent-sdk")> | undefined;
+const loadSdk = () => (sdkModule ??= import(pathToFileURL(SDK_ENTRY).href) as Promise<typeof import("@anthropic-ai/claude-agent-sdk")>);
 const emit = (kind: "NETNS_STEP0" | "NETNS_ARM", o: unknown) => process.stdout.write(`\n${kind} ${JSON.stringify(o)}\n`);
 const sh = (cmd: string, args: string[]) => {
   const r = spawnSync(cmd, args, { encoding: "utf8", timeout: 20_000 });
@@ -96,6 +107,21 @@ async function setupNamespace(): Promise<boolean> {
     },
   );
   step0.shimBwrap = viaShim.status === 0;
+  // What is actually measured (observed, never a constant): the SDK entry and version, and the native CLI it will spawn.
+  step0.sdkEntry = SDK_ENTRY;
+  try {
+    const req = createRequire(SDK_ENTRY);
+    step0.sdkVersion = JSON.parse(readFileSync(join(dirname(SDK_ENTRY), "package.json"), "utf8")).version ?? null;
+    const cliPath = join(dirname(req.resolve("@anthropic-ai/claude-agent-sdk-linux-x64/package.json")), "claude");
+    step0.cliPath = cliPath;
+    const v = sh(cliPath, ["--version"]);
+    step0.cliVersion = v.status === 0 ? (v.out.match(/\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/)?.[1] ?? null) : null;
+  } catch (e) {
+    step0.sdkVersion ??= null;
+    step0.cliPath ??= null;
+    step0.cliVersion = null;
+    step0.sdkProbeError = String(e).slice(0, 300);
+  }
   // The child must import the production modules it measures (CTO D6).
   try {
     await import("@/server/permission-callback");
@@ -208,7 +234,7 @@ async function runArm(arm: ArmCtx, shimDir: string, gwPort: number, decoyPorts: 
   const { buildAgentEnv } = await import("@/server/agent-env");
   const { buildAgentSandboxConfig } = await import("@/server/agent-runner-sandbox-config");
   const fwd = await import("@/server/egress-forwarder");
-  const { query } = await import("@anthropic-ai/claude-agent-sdk");
+  const { query } = await loadSdk();
 
   const own = join(spec.scratch, `ws-${arm.name}`);
   mkdirSync(own, { recursive: true });
@@ -226,6 +252,7 @@ async function runArm(arm: ArmCtx, shimDir: string, gwPort: number, decoyPorts: 
   });
   let toolResult: string | null = null;
   let thrown = "";
+  let initClaudeCodeVersion: string | null = null;
   try {
     if (arm.entitled) {
       forwarder = await fwd.spawnEgressForwarder(conversationId, WORKSPACE_ID);
@@ -308,6 +335,9 @@ async function runArm(arm: ArmCtx, shimDir: string, gwPort: number, decoyPorts: 
         },
       });
       for await (const msg of q as AsyncIterable<any>) {
+        if (msg.type === "system" && msg.subtype === "init" && initClaudeCodeVersion === null) {
+          initClaudeCodeVersion = typeof msg.claude_code_version === "string" ? msg.claude_code_version : null;
+        }
         if (msg.type !== "user") continue;
         const content = msg.message?.content;
         if (!Array.isArray(content)) continue;
@@ -343,6 +373,7 @@ async function runArm(arm: ArmCtx, shimDir: string, gwPort: number, decoyPorts: 
     entitled: arm.entitled,
     wallMs: Date.now() - t0,
     thrown,
+    initClaudeCodeVersion,
     toolResult: toolResult === null ? null : String(toolResult).slice(0, 4000),
     calls: tap.map((c) => ({ tool: c.tool, input: c.tool === "SandboxNetworkAccess" ? c.input : undefined, keys: c.input && typeof c.input === "object" ? Object.keys(c.input as object).sort() : [], behavior: c.behavior, message: c.message, agentID: c.agentID ?? null })),
     gateway: gw,
