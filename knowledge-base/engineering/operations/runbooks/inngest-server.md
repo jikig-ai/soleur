@@ -2754,7 +2754,7 @@ bash tests/scripts/lib/inngest-public-sdk-url-preflight.sh --from-file "$f"
 ```
 
 **Run this pair once after the merge, before the first replace dispatch: that run is the owner's discharge of the CTO's two
-post-merge checks** (`knowledge-base/project/specs/feat-one-shot-12742-public-sdk-url-poll/decision-challenges.md`,
+post-merge checks** (`knowledge-base/project/specs/archive/20261119-105944-feat-one-shot-12742-public-sdk-url-poll/decision-challenges.md`,
 "Review-round rulings"). A pass proves both: Cloudflare stores the strict rule's expression in the exact host-literal text
 the judge matches (R1/R2), and `--only-secrets` still hands the wrapper `DOPPLER_PROJECT` and `DOPPLER_CONFIG` (R3; if it
 did not, the read exits 64). A refusal is read in the table below.
