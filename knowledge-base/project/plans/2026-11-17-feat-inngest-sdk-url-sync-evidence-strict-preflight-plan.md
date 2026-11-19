@@ -403,9 +403,14 @@ logs:
   retention:       Better Stack plan retention (existing; unchanged by this PR)
 
 discoverability_test:
-  command:         bash apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh
-  expected_output: "0 failed"
+  command:         bash scripts/inngest-host-state.test.sh
+  expected_output: "fails=0"
 ```
+
+> **Amendment (ship, 2026-11-19):** the probe was `bash apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh`
+> (`0 failed`). That suite passes (92/0) but runs ~56 s, over preflight Check 10's hard 15 s cap, so Check 10 read it as a
+> timeout. `scripts/inngest-host-state.test.sh` asserts the same new `sdk_sync`/`sdk_app_url` fields as the responder
+> sees them and runs in ~8 s inside the Check 10 sandbox. The registry-empty suite still runs in CI.
 
 **Signal discrimination.** Post-change, one `SOLEUR_INNGEST_SERVER_PROBE` row discriminates: healthy
 cutover (`registry_fns>=1 sdk_sync=ok sdk_app_url=https://app.soleur.ai…`), stale registry after a

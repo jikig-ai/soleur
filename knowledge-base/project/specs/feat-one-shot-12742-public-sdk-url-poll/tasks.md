@@ -117,6 +117,6 @@ Plan: `knowledge-base/project/plans/2026-11-17-feat-inngest-sdk-url-sync-evidenc
   (`inngest-probe-heartbeat-feeder.test.sh`, `cloud-init-inngest-bootstrap.test.sh`,
   `cutover-inngest-workflow.test.sh` as applicable).
 - [ ] T15. `bash scripts/test-all.sh` (or the repo CI subset) green.
-- [ ] T16. At ship time, post a comment on #12742 recording the deferred `sdk_sync=error` paging
+- [x] T16. At ship time, post a comment on #12742 recording the deferred `sdk_sync=error` paging
   decision (CTO row 3: "page on `sdk_sync=error` post-measurement" — deferred until the field has
   production history after the owner's replace).
