@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-11-13
+last_updated: 2026-11-19
 ---
 
 # Domains
@@ -28,6 +28,14 @@ last_updated: 2026-11-13
 | A | soleur.ai | 185.199.108.153 | Yes | GitHub Pages — the ONE surviving apex origin after #7640 PR4a |
 | CNAME | <www.soleur.ai> | jikig-ai.github.io | Yes | GitHub Pages |
 | TXT | _github-pages-challenge-jikig-ai.soleur.ai | 8fcc2ac37a5abcac6cd2c71556053f | No | Domain verification |
+| CNAME | deploy.soleur.ai | `<cloudflare_zero_trust_tunnel_cloudflared.web_soleur id>.cfargotunnel.com` | Yes | Tunnel host, `cloudflare_record.deploy_soleur`. Deploy webhook behind CF Access (#12937) |
+| CNAME | ssh.soleur.ai | `<cloudflare_zero_trust_tunnel_cloudflared.web_soleur id>.cfargotunnel.com` | Yes | Tunnel host, `cloudflare_record.ssh_soleur`. CI SSH behind CF Access (#12937) |
+| CNAME | registry.soleur.ai | `<cloudflare_zero_trust_tunnel_cloudflared.web_soleur id>.cfargotunnel.com` | Yes | Tunnel host, `cloudflare_record.registry_soleur`. CI registry push behind CF Access (#12937) |
+
+> **Added 2026-11-19 (#12937).** The three tunnel CNAMEs sit in the Soleur-account zone (`951ce525…`), addressed by
+> `local.cf_soleur_zone_id`, not `var.cf_zone_id`; the reason is
+> [ADR-330](../engineering/architecture/decisions/ADR-330-tunnel-and-access-gate-live-in-the-zone-owning-account.md).
+> The legacy `cloudflare_record.{deploy,ssh,registry}` addresses point at the legacy zone, which is `status: moved`.
 
 ## Security Configuration (soleur.ai)
 

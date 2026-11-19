@@ -12,7 +12,7 @@ The `github-actions-deploy` service token in `apps/web-platform/infra/tunnel.tf`
 
 Two layers of monitoring are in place:
 
-1. **Terraform notification policy** (`cloudflare_notification_policy.service_token_expiry`) sends an email alert 7 days before expiry. This is the primary alert.
+1. **Terraform notification policy** (`cloudflare_notification_policy.service_token_expiry`) sends an email alert 7 days before expiry. This is the primary alert. A notification policy covers only its own account's tokens, so the Soleur account has its own copy, `cloudflare_notification_policy.service_token_expiry_soleur` (#12937).
 2. **GitHub Actions workflow** (`scheduled-cf-token-expiry-check.yml`) checks the Cloudflare API and creates a GitHub issue when the token is within 30 days of expiry. This is the backup.
 
 ## Rotation Procedures
@@ -44,6 +44,35 @@ by the loader (`.github/actions/infra-credentials`). The token's id (not secret)
 Standing hazards: never `-replace` or `destroy` the token, and never re-declare it; the deleted outputs may still sit in state after the
 targeted apply (the apply job warns when they do — treat the old token as exposed and rotate it first).
 
+## Soleur-account tokens (#12937)
+
+Since #12937 the tunnel's Access gate lives in the Soleur Cloudflare account that owns the `soleur.ai` zone; the reason is
+[ADR-330](../../architecture/decisions/ADR-330-tunnel-and-access-gate-live-in-the-zone-owning-account.md). The legacy-account tokens
+stay until the teardown follow-up, but no hostname routes to them. Ref #12937.
+
+**Deploy pair (minted outside Terraform).** The procedure above still applies, with two changes. The admitted id list is
+`local.deploy_service_token_ids_soleur` in `apps/web-platform/infra/tunnel.tf`, not `local.deploy_service_token_ids`, which now only
+admits the legacy app. Step 3 writes the pair to every copy below from one in-memory value, in one script run, with the values on stdin:
+
+| Copy | Names | How it is checked |
+|---|---|---|
+| GitHub repo secrets, written with the infra GitHub App installation token (never a PAT) | `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | Cannot be read back. The deploy arm's `deploy.soleur.ai/hooks/deploy-status` call passing Access proves it |
+| Doppler `soleur-infra-privileged/prd` | `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | sha256 equal to the minted value (never printed) |
+| Doppler `soleur/prd_terraform` (the TF var source for the `server.tf` `push-infra-config.sh` local-exec) | `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | sha256 equal to the minted value (never printed) |
+
+**`registry_push_soleur` (Terraform-managed).** Rotate it by bumping `client_secret_version` on
+`cloudflare_zero_trust_access_service_token.registry_push_soleur` in a PR. The merge apply rotates the secret in place, and
+`doppler_secret.registry_push_access_token_{id,secret}` carry no `ignore_changes`, so the same apply writes the new pair to Doppler
+`soleur/prd`. After the apply, compare the Doppler value's sha256 with the state value's, then run
+`doppler run -p soleur -c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh` and expect `REGISTRY_PUSH_ACCESS_TOKEN` LIVE
+in every config. Do not rotate it through Cloudflare's `/rotate` endpoint: state keeps the old secret and the next apply writes it back to
+Doppler. Do not adopt a `_soleur` token with `import {}`: an imported token reads its secret empty, so the apply would publish an empty
+value.
+
+**`ci_ssh_soleur` (Terraform-managed).** Rotation stays the `apply_target=ci-ssh-token-replace` dispatch of
+`apply-web-platform-infra.yml`, repointed at the `_soleur` addresses by #12937. The pair reaches Doppler `soleur/prd_terraform` through
+the apply's CI-SSH sync step, which fails when this run creates the token but its outputs are empty.
+
 ## Verification
 
 After any rotation method, trigger a test deploy:
@@ -58,8 +87,8 @@ Confirm the deploy step completes with HTTP 200 (not 403).
 
 - **Token name:** `github-actions-deploy`
 - **Resource:** none (forgotten from Terraform state by #9294; the token itself lives in Cloudflare)
-- **Admitted ids:** `local.deploy_service_token_ids` in `apps/web-platform/infra/tunnel.tf`
-- **Secrets:** Doppler `soleur-infra-privileged/prd` `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` (the Tier-A and repo-secret copies are deleted in a later owner-named step)
+- **Admitted ids:** `local.deploy_service_token_ids_soleur` (Soleur account, live) and `local.deploy_service_token_ids` (legacy account, unrouted) in `apps/web-platform/infra/tunnel.tf`
+- **Secrets:** Doppler `soleur-infra-privileged/prd` `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` (the Tier-A and repo-secret copies are deleted in a later owner-named step). Corrected 2026-11-19 (#12937): those copies are still read, by the GitHub repo secrets and Doppler `soleur/prd_terraform`, so every copy is in the table under "Soleur-account tokens (#12937)"
 - **Default lifetime:** 8760h (~1 year)
 - **Created:** 2026-03-21
 - **Expected expiry:** ~2027-03-21
