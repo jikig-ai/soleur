@@ -160,3 +160,5 @@ Every action item and follow-up so this incident cannot recur (save logs, add te
 | Issue | Action | Status |
 |---|---|---|
 | #12931 | Migrate Terraform to the new Soleur account and zone: rulesets and bulk redirects, transform/config/cache/WAF rules, load balancer, tunnel and Access apps (with a host-side cloudflared redeploy), plan check (Pro vs Free), `cf_zone_id`/`cf_account_id`, Doppler `CF_ZONE_ID` and tokens, GitHub Actions Pages secrets, and revoking the temporary token | open |
+| #12982 | Re-enable DNSSEC on the new `soleur.ai` zone once the migration is complete (`cf_zone_dnssec_enabled` is locked to `false` by validation; turning it on is a reviewed PR that deletes the validation, then the DS record at the registrar) | open |
+| #12983 | Decide Load Balancing on the Soleur account (about $5/mo base) and, if bought, re-create the GA pool and the `lb-staging` root (`cf_load_balancing_enabled` is locked to `false` by validation) | open |

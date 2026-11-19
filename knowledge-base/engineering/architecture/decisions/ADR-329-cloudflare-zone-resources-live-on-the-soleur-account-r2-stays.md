@@ -56,11 +56,14 @@ Two facts shape the decision:
 
 1. **Account split.** Zone- and account-bound Cloudflare resources (DNS records, zone and account rulesets, lists,
    Pages, the tunnel, Access apps, policies and service tokens, notification policies, and the load balancer when
-   enabled) follow `var.cf_account_id` and `var.cf_zone_id`, which hold the Soleur account and zone. Every R2 surface
-   (`cloudflare_r2_bucket.*`, `local.r2_s3_endpoint`, the backend endpoints, the CLA-evidence root's
-   `TF_VAR_cf_account_id`) follows the new `var.cf_r2_account_id` (no default), which holds the legacy account.
+   enabled) follow `var.cf_account_id` and `var.cf_zone_id`, which hold the Soleur account and zone. Every
+   variable-driven R2 surface (`cloudflare_r2_bucket.*`, `local.r2_s3_endpoint`, the CLA-evidence root's
+   `TF_VAR_cf_account_id`) follows the new `var.cf_r2_account_id` (no default, pinned by validation to the legacy
+   account). The backend endpoints are literals on the legacy account (a backend
+   block cannot read a variable) and stay unchanged.
 2. **Old-id validations.** `cf_zone_id` and `cf_account_id` reject the old ids (compared on `lower()`, proven by
-   tftest `expect_failures`). Any plan carrying an old id fails before refresh.
+   tftest `expect_failures`), and all three ids must be 32-hex. Any plan carrying an old id fails before refresh.
+   `cf_r2_account_id` is pinned to the legacy account `4d5ba6f096b2686fbdd404167dd4e125`.
 3. **Migration mechanism: state-forget-then-import**, run only by the gated `cf-account-migrate` dispatch, phase by
    phase (`redirects-dns`, `zone-rest`, `tunnel`):
    - a pre-migration `terraform state pull` backup to `web-platform/backups/` in the state bucket;
@@ -69,12 +72,17 @@ Two facts shape the decision:
    - per-phase `import {}` blocks for the hand-restored objects, each required to plan as a pure `["no-op"]` import,
      plus creates for objects absent from the new zone;
    - a phase gate on `tfplan.json` (no destroys, allow-set only, new ids only, `-replace` honoured);
-   - a migration-in-progress predicate that refuses every other plan-capable job until the tunnel is in state on the
-     new account. A rehearsal (`rehearsal=true`) writes nothing to R2.
+   - a migration-in-progress predicate, the last step of `.github/actions/infra-credentials`, that is deny by
+     default: every workflow loading those credentials is refused unless the predicate names it exempt (the plan-only
+     and migrator workflows, and callers of other roots). It refuses until every phase address is in state, no
+     non-R2 entry carries an old id and the tunnel is in state on the new account; `web-host-replace web-2` is the one
+     exception once the tunnel is in state. A rehearsal (`rehearsal=true`) writes nothing to R2.
 4. **Plan-tier gates.** `cf_zone_plan_pro` (default false) nulls the Super Bot Fight Mode fields;
    `cf_load_balancing_enabled` (default false) count-gates the load balancer, pool, monitor and health-alert policy,
    and `cf-lb-overlay.yml` refuses while it is false; `cf_zone_dnssec_enabled` (default false) count-gates DNSSEC,
-   which is deferred to a follow-up rather than enabled mid-cutover.
+   which is deferred rather than enabled mid-cutover (#12982). Load Balancing on the new account is the operator
+   decision tracked by #12983. These three flags and `cf_migration_import_app` are locked to `false` by `variables.tf`
+   validations (CTO ruling D9): turning one on is a reviewed PR that deletes its validation, never a tfvar override.
 5. **The tunnel is recreated, not moved.** A tunnel token reaches a host only through create-time user_data, so the
    new tunnel is created first and `web-host-replace web-2` delivers its token (ADR-304's mechanism). web-1 is not
    touched; `app.soleur.ai` serves from its plain proxied A record throughout.
@@ -84,15 +92,23 @@ the cleanup PR.
 
 ## Consequences
 
-- One Doppler flip moves the root, and the validations make a half-flip or a revert-by-flip fail loudly. The default
-  after the flip is fix-forward; the full revert (git revert, `_PREV` restore, `state push -force` of the backup) is a
-  separate owner-authorized act documented in the runbook.
+- One Doppler flip moves the root, and the validations make a half-flip or a revert-by-flip fail loudly. There is no
+  full revert (CTO ruling D4, 2026-11-19): on any failure the migration halts at the last verified phase and fixes
+  forward. The `_PREV` id restore is allowed only before the first `redirects-dns` apply and leaves the root closed;
+  after it, restoring ids, reverting PR1 or pushing the backup over live state would aim Terraform at the moved zone.
+  The runbook's `## Halt` section is the operator text.
+- A ruleset create is a whole-list PUT of its phase entrypoint, so creating `seo_config_settings` (and every other
+  entrypoint) in the new zone would overwrite any rules a hand-made entrypoint already holds. The migrate job guards
+  that by running the ADR-136 pre-apply entrypoint gate on the new zone after the phase gate and before any apply, in
+  the rehearsal too (CTO ruling D2); a populated entrypoint refuses `entrypoint-gate-refused` and prints the import
+  block to commit instead.
 - Between PR1's merge and the flip, and again until the tunnel phase completes, routine plans of this root fail by
   design; `scheduled-terraform-drift.yml` stays red. These are listed as expected reds.
 - `cloudflare_zone_settings_override` has no importer: its create snapshots the new zone's hand-restored settings,
   and a future destroy reverts to that snapshot, not to the old Pro zone's.
 - `app.soleur.ai` loses load-balancer steering while LB is gated off: every request and every Inngest step call lands
-  on web-1 through the A record. ADR-068's web-2-at-weight-1 serving state does not hold until LB is re-enabled.
+  on web-1 through the A record. ADR-068's web-2-at-weight-1 serving state does not hold until LB is re-enabled
+  (#12983).
 - The adopted config ruleset id ADR-321 cites is no longer imported; Terraform creates the config rules in the new
   zone, and the Origin CA certificate is re-minted from the new zone before the old one can be revoked at zone
   deletion.
@@ -112,13 +128,17 @@ R2 billing is unchanged because R2 did not move. The expense ledger is updated i
 
 NFR-014 (Externalized Environment Configuration): unchanged in tier; the ids stay in Doppler `prd_terraform`, and the
 runtime `CF_ZONE_ID` becomes Terraform-managed in `prd` (branch configs are written explicitly, since they do not
-inherit). NFR-031 (Periodic Backup & Recovery): the pre-migration state backup is the recovery point for the forget;
-it holds the same secrets as live state and is deleted, every object version, in the cleanup PR.
+inherit). NFR-031 (Periodic Backup & Recovery): the pre-migration state backup is disaster-recovery evidence for the
+forget, never pushed back as state (D4); it holds the same secrets as live state, and every
+`pre-cf-account-migration-*` object is deleted, every version, in the cleanup PR.
 
 ## Principle Alignment
 
-- AP-001 (Terraform-only): Aligned. Every hand-restored object is adopted by import; the only dashboard acts are
-  token mints, which have no API path (ADR-130).
+- AP-001 (Terraform-only): Aligned, with two recorded exceptions. Every hand-restored object is adopted by import;
+  the dashboard acts are token mints and revokes, which have no API path for a Soleur token (ADR-130). The live-zone
+  edits of 2026-11-19 (six TXT records rewritten unquoted and the comments on three incident-time records cleared, so
+  every record import plans as a pure no-op) were hand edits to records Terraform then adopts unchanged. Phase 0c, a
+  hand-made noindex entrypoint, is no longer recommended (D2) and would be adopted by an import block if run.
 - AP-002 (No SSH state mutation): Aligned. The migration job uses only the Cloudflare API; the host change is an
   immutable replace.
 - AP-003 (R2 remote backend): Aligned. The backend and its endpoint are unchanged; ADR-006 stands.
