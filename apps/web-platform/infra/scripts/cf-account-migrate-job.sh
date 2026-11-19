@@ -193,17 +193,19 @@ token_probe_path() {
 # <name> <url> pair. A token of an unusable shape (a quote or newline would inject a curl config
 # directive) is never sent and reads "bad".
 # shellcheck disable=SC2016 # expanded by the inner bash
-readonly PREFLIGHT_SH='
+PREFLIGHT_SH="$(cat <<'PREFLIGHT'
 printf "%s\n%s\n%s\n" "${TF_VAR_cf_zone_id:-}" "${TF_VAR_cf_account_id:-}" "${TF_VAR_cf_r2_account_id:-}"
 while [ "$#" -ge 2 ]; do
   n="$1"; u="$2"; shift 2
   v="TF_VAR_$n"; t="${!v:-}"
   case "$t" in ""|*[!A-Za-z0-9._~+/=-]*) printf "tok %s bad\n" "$n"; continue ;; esac
-  c="$(curl --disable --noproxy "*" -sS -o /dev/null --max-time 10 -w "%{http_code}" --config - "$u" 2>/dev/null \
+  c="$(curl --disable --noproxy '*' -sS -o /dev/null --max-time 10 -w "%{http_code}" --config - "$u" 2>/dev/null \
        < <(printf "header = \"Authorization: Bearer %s\"\n" "$t"))" || c="000"
   printf "tok %s %s\n" "$n" "${c:-000}"
 done
-'
+PREFLIGHT
+)"
+readonly PREFLIGHT_SH
 check_ids() {
   local out zone acct r2 rc=0 tokens n path line code bad=0
   local -a pairs=()
