@@ -56,5 +56,16 @@
 - constraint: row format matches sibling rows (tab-separated, 4 columns)
 - constraint: only the TSV, the runbook bullet, and knowledge-base
   planning artifacts change
-- cto_spawns=0 here (no spawn tool); parent pipeline carries ONE batched
-  `soleur:engineering:cto` consult for the `pending - assumed:` rows
+- constraint: UI/product verification via Playwright MCP only
+- constraint: technical forks spawn soleur:engineering:cto, never
+  operator questions
+- constraint: post-merge/scheduled checks via committed
+  scripts/followthroughs/*.sh with GH_TOKEN
+- constraint: p90 measurement via scripts/watch-wallclock-p90-11774.sh
+  --dry-run; write output to a file and poll the file (background
+  shells time out on waits)
+- cto_spawns=1 — parent pipeline ran the ONE batched
+  `soleur:engineering:cto` consult; all 5 `pending - assumed:` rows ruled
+  2026-11-19 (all assumptions upheld; 3 substantive dissents folded into
+  the plan: sibling-check figures corrected, eviction trigger recorded as
+  unattributed, FR-3 arm bounded to same-shape re-measurement)
