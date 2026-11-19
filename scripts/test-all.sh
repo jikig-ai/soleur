@@ -6781,8 +6781,8 @@ if want_scripts; then
   run_suite "tests/scripts/cf-account-migrate-gate" bash tests/scripts/test-cf-account-migrate-gate.sh
   run_suite "tests/scripts/cf-account-migration-scope" bash tests/scripts/test-cf-account-migration-scope.sh
   # (#12931, CTO rulings D11, D3-D5) The migration's Doppler bootstrap suite (stub doppler, real
-  # approval hook; the locator finds it in the spec directory before and after archive-kb) and
-  # the runbook's text contract.
+  # approval hook; it finds bootstrap.sh in the spec directory by glob, before and after
+  # archive-kb) and the runbook's text contract.
   run_suite "tests/scripts/cf-account-migration-bootstrap" bash tests/scripts/test-cf-account-migration-bootstrap.sh
   run_suite "tests/scripts/cf-account-migration-runbook" bash tests/scripts/test-cf-account-migration-runbook.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same

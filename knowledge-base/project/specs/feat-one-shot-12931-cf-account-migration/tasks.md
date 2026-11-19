@@ -57,8 +57,8 @@ Lane note: there is no spec.md for this branch (one-shot entry), so the lane def
   - Run `scripts/regenerate-c4-model.sh`.
   - `c4-model-freshness`, `c4-code-syntax`, `c4-render` and `c4-count-parity` all green.
 - [x] 1.16 Runbook `knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md`: phases, expected reds, revoke recipe, bootstrap stages, `## Halt` (fix forward; the `_PREV` id restore only before the `redirects-dns` apply; no state push, CTO ruling D4 withdrawing L59), Phase 3 step 6 reopen checks (D5). Text contract: `tests/scripts/test-cf-account-migration-runbook.sh`.
-- [x] 1.16b `bootstrap.sh` (this directory, `soleur:operator-bootstrap`, CTO ruling D11) and `bootstrap.test.sh`.
-- [ ] 1.17 Register new suites in `run-registered-suites.sh` inputs. Full local battery green. Registered 2026-11-19: `bootstrap.test.sh` (this directory, through the glob locator `tests/scripts/test-cf-account-migration-bootstrap.sh`, so an archive-kb move breaks nothing) and `tests/scripts/test-cf-account-migration-runbook.sh`.
+- [x] 1.16b `bootstrap.sh` (this directory, `soleur:operator-bootstrap`, CTO ruling D11) and its suite `tests/scripts/test-cf-account-migration-bootstrap.sh`.
+- [ ] 1.17 Register new suites in `run-registered-suites.sh` inputs. Full local battery green. Registered 2026-11-19: `tests/scripts/test-cf-account-migration-bootstrap.sh` (the D11 bootstrap suite; it finds `bootstrap.sh` here by glob, so an archive-kb move breaks nothing) and `tests/scripts/test-cf-account-migration-runbook.sh`.
 - [x] 1.18 Registry render delta on the PR1 diff = `deliver=false`. Verified 2026-11-19: the dispatcher gate renders only when `cloud-init-registry.yml` or `zot-registry.tf` changes and otherwise compares `registry_server_type|registry_location|registry_volume_size`; PR1 touches none of them.
 - [ ] 1.19 PR body first line: "Merging this alone mutates no production resource". Use `Ref #12931`. The merge commit carries `[skip-web-platform-apply]`.
 
