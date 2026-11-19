@@ -382,6 +382,12 @@ if not serving and f.get("server_active") == "active" and f.get("http_code") == 
           % f.get("registry_fns", "?"))
     print("                 owns no work. That is the diagnostic-boot / unregistered signature")
     print("                 (INNGEST_DIAGNOSTIC_BOOT=1 serves nothing), not a dead process.")
+# A FAILING SDK POLL BEHIND A SERVING VERDICT (#12742). registry_fns comes from Postgres and
+# survives a broken poll, so SERVING=yes can rest on a stale registry. Gated on the value.
+if f.get("sdk_sync") == "error":
+    print("  NOTE           sdk_sync=error: the server reports a sync error for at least one app")
+    print("                 URL above. registry_fns may be a stale registry, not a working poll.")
+    print("                 See the sdk_sync section of runbooks/inngest-server.md.")
 ' 2>"$QERR")"
 state_rc=$?
 

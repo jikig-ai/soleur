@@ -53,3 +53,8 @@ The PR #12876 review panel raised findings that dissent from rulings 4, 9 and 10
 | R6: retry the live read | No retry; runbook refusal-tag table, `wrapper-unverified (upstream-error)` = re-dispatch once. | Re-dispatch is free; a retry adds untested gate code. |
 
 Post-merge, before the replace dispatch: one read-only `config-entrypoint` read (R1/R2 expression normalisation) and one run of R3's exact `doppler run` line. Both fail closed if wrong.
+
+> **Amendment 2026-11-19 (review fix round 2, A4):** R5's check is no longer "at the top of its preflight step". It is
+> its own step, `Validate typed confirm (inngest-host-replace)`, placed immediately before `Load infra credentials
+> (tiered)`, so a mistyped token loads no Tier-B secret. The ruling's substance (exact token, typo-guard, birth
+> token-free) is unchanged. B10 of `plugins/soleur/test/terraform-target-parity.test.ts` pins the position.

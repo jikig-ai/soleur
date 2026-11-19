@@ -1902,7 +1902,7 @@ jobs:
           CONFIRM: ${{ inputs.confirm }}
         run: |
           if [[ "$CONFIRM" != "REPLACE-INNGEST-HOST" ]]; then
-            echo "::error::[confirm] inngest-host-replace requires confirm=REPLACE-INNGEST-HOST (typo-guard). This DESTROYS and recreates hcloud_server.inngest."
+            echo "::error::[confirm] the Inngest host replace requires confirm=REPLACE-INNGEST-HOST (typo-guard). This DESTROYS and recreates hcloud_server.inngest."
             exit 1
           fi
 

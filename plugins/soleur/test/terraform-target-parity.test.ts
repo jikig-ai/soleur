@@ -5189,7 +5189,7 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
   const PREFLIGHT_LIB = "tests/scripts/lib/inngest-public-sdk-url-preflight.sh";
   const REPLACE_CONFIRM_RUN = [
     'if [[ "$CONFIRM" != "REPLACE-INNGEST-HOST" ]]; then',
-    '  echo "::error::[confirm] inngest-host-replace requires confirm=REPLACE-INNGEST-HOST (typo-guard). This DESTROYS and recreates hcloud_server.inngest."',
+    '  echo "::error::[confirm] the Inngest host replace requires confirm=REPLACE-INNGEST-HOST (typo-guard). This DESTROYS and recreates hcloud_server.inngest."',
     "  exit 1",
     "fi",
   ];
@@ -5227,12 +5227,15 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     for (const k of ["if", "continue-on-error", "shell", "working-directory", "uses", "with"]) expect(k in gate, `step key ${k}`).toBe(false);
     expect(gate.env).toEqual({ DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" });
     expect(String(gate.run).trim()).toBe(`bash ${PREFLIGHT_LIB}`);
+    // The first step that must not re-open on a failed job: the confirm step for the replace, the preflight for the birth.
+    let guardFrom = gi;
     if (job === "inngest_host_replace") {
       // R5: the exact typo-guard token, in its own unconditional step BEFORE the credential load (a typo loads no
       // Tier-B secret), with no secret in its env.
       const ci = steps.findIndex((s) => s.name === "Validate typed confirm (inngest-host-replace)");
       expect(ci, `${job} has the confirm step before the credential load`).toBeGreaterThan(0);
-      expect(ci).toBeLessThan(cred);
+      expect(ci, `${job} confirm step is immediately before the credential load`).toBe(cred - 1);
+      guardFrom = ci;
       const confirm = steps[ci];
       for (const k of ["if", "continue-on-error", "shell", "working-directory", "uses", "with"]) expect(k in confirm, `confirm step key ${k}`).toBe(false);
       expect(confirm.env).toEqual({ CONFIRM: "${{ inputs.confirm }}" });
@@ -5259,12 +5262,12 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     expect("continue-on-error" in j, `${job} job-level continue-on-error`).toBe(false);
     expect(j.defaults, `${job} job-level defaults`).toBeUndefined();
     expect(parsed.defaults, "workflow-level defaults").toBeUndefined();
-    // Nothing may run past a refused preflight: no later step re-opens on a failed job (a status function in `if:`)
+    // Nothing may run past a refused confirm or preflight: no later step re-opens on a failed job (a status function in `if:`)
     // unless it is secret-free and touches no credential, terraform or Doppler; the job carries no env; checkout takes
     // no `with` (a `ref` input would swap the script the preflight runs).
     for (const [i, st] of steps.entries()) {
-      if (i <= gi || !reopensAfterFailure(String(st.if ?? ""))) continue;
-      expect(JSON.stringify(st), `${job} step ${i} (${st.name}) runs after a refused preflight`).not.toMatch(/secrets\.|terraform|doppler|infra-credentials/i);
+      if (i <= guardFrom || !reopensAfterFailure(String(st.if ?? ""))) continue;
+      expect(JSON.stringify(st), `${job} step ${i} (${st.name}) runs after a refused confirm or preflight`).not.toMatch(/secrets\.|terraform|doppler|infra-credentials/i);
     }
     expect(j.env, `${job} job-level env`).toBeUndefined();
     expect(steps[0].with, `${job} checkout with`).toBeUndefined();

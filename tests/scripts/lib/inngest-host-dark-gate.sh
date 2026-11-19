@@ -156,8 +156,9 @@ _ihdg_field() {
   # FIRST-MATCH-WINS WAS A FAIL-OPEN, and the emitter's own field order made it reachable.
   # `logger -t inngest-server-probe "... boot_id=X image_ref=$image_ref ... redis_keys=$redis_keys
   # data_mount_src=$data_mount_src ..."` puts image_ref at field 6 and redis_keys at field 13,
-  # and image_ref is `sed`-extracted from /etc/default/soleur-inngest-image with no whitespace
-  # strip and no charset validation (inngest-bootstrap.sh). A value containing
+  # and image_ref was `sed`-extracted from /etc/default/soleur-inngest-image with no whitespace
+  # strip and no charset validation (inngest-bootstrap.sh; since #12742 it is charset-confined at
+  # bind time, and this refusal stays as the second layer). A value containing
   # ` redis_keys=0 server_active=inactive http_code=000 ...` therefore supplies every store and
   # liveness field BEFORE the real ones, and first-match-wins reads the injected copy — verdict
   # `dark`, rc 0, on a serving host with a populated store, authorizing the irreversible destroy.

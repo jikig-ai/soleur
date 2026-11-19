@@ -1072,7 +1072,7 @@ dedicated)
           elif any($apps[]; (.url | type) != "string" or .url == "") then "bad\n"
           else
             [ $apps[]
-              | (.url | sub("^(?<s>([A-Za-z][A-Za-z0-9+.-]*://)?)[^/]*@"; "\(.s)") | sub("[?#].*$"; "")
+              | (.url | sub("^(?<s>(([A-Za-z][A-Za-z0-9+.-]*:)?//)?)[^/]*@"; "\(.s)") | sub("[?#].*$"; "")
                       | gsub("[^A-Za-z0-9_:./+-]"; "_"))
                 + "!" + (if ((.error // "") | tostring) != "" then "error" else "ok" end) ]
             | map(select(startswith("https://app.soleur.ai/api/inngest!")))

@@ -125,6 +125,20 @@ if grep -qE '^  sdk_sync +ok +sdk_app_url=https://app\.soleur\.ai/api/inngest!ok
 else
   fail "summary lacks the sdk_sync/sdk_app_url line, out='$out'"
 fi
+if grep -q 'NOTE           sdk_sync' <<<"$out"; then
+  fail "an sdk_sync=ok row printed the sdk_sync NOTE, out='$out'"
+fi
+
+echo "T1c: sdk_sync=error keeps SERVING=yes and adds a NOTE naming the masked poll failure (#12742)"
+make_query; row "2026-09-17 13:00:00" soleur-inngest "${DEDICATED_MSG/sdk_sync=ok/sdk_sync=error}" > "$SANDBOX/probe.jsonl"
+res="$(run_sut --no-errors)"; CASES_RUN=$((CASES_RUN + 1))
+rc="$(sed -n 's/^__RC__=//p' <<<"$res")"; out="$(sed '/^__RC__=/d' <<<"$res")"
+if [[ "$rc" -eq 0 ]] && grep -q 'SERVING=yes' <<<"$out" && grep -qE '^  sdk_sync +error ' <<<"$out" \
+   && grep -qE '^  NOTE +sdk_sync=error: ' <<<"$out"; then
+  pass "sdk_sync=error row -> SERVING=yes unchanged, plus the sdk_sync NOTE"
+else
+  fail "expected rc 0, SERVING=yes, sdk_sync error and the NOTE, got rc=$rc out='$out'"
+fi
 
 echo "T2: web-1 rows ONLY -> exit 4, empty stdout (the wrong-machine guard)"
 make_query; row "2026-09-17 13:00:00" soleur-web-platform "$WEB1_MSG" > "$SANDBOX/probe.jsonl"
@@ -615,7 +629,8 @@ echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 # 30 with #8873's T23 (inherited emitter/marker + a lib defining nothing -> 6).
 # 34 with #12708's T24 (pin selects), T24b (hetzner- spelling), T25 (unmatched pin -> 4),
 # T25b (malformed pin -> 2). 35 with the review-P2 T25c (empty pin -> 2). 36 with #12742's T1b.
-_min_cases=36
+# 37 with #12742's T1c (sdk_sync=error NOTE).
+_min_cases=37
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s — the suite lost coverage\n' \
     "$CASES_RUN" "$_min_cases" >&2

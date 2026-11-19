@@ -2,8 +2,8 @@
 # Fail-closed live preflight for every Inngest host boot that carries the public sdk_url (#12742 item 1; CTO rulings 4, 6
 # and 10, 2026-11-17, and review-round rulings R1, R2, R3, 2026-11-18). It replaced the #10538 typed confirm token. Two jobs in
 # .github/workflows/apply-web-platform-infra.yml call it as the step immediately after `Load infra credentials (tiered)` and
-# before any terraform step: inngest_host_replace (replace; its step first checks the REPLACE-INNGEST-HOST typo-guard, R5) and
-# inngest_host (birth).
+# before any terraform step: inngest_host_replace (replace; a separate step before the credential load checks the
+# REPLACE-INNGEST-HOST typo-guard, R5) and inngest_host (birth).
 # Both boot hcloud_server.inngest from user_data whose --sdk-url is https://app.soleur.ai/api/inngest. That poll is only
 # TLS end to end while Cloudflare reaches the origin in `strict` mode for app.soleur.ai, and the 2026-11-02 void terms
 # forbid the public sdk_url while that hop is `flexible`. So the boot must not run unless a LIVE read says strict.

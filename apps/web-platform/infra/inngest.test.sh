@@ -2280,6 +2280,11 @@ assert "#12742 R4 userinfo-first strip: a ? in the password and a scheme-less us
   "grep -qE 'sdk_app_url=https://10\.0\.9\.9/api/inngest!ok,10\.0\.9\.8:3000/api/inngest!ok( |\$)' '$S10_CRED2'"
 assert "#12742 R4 ...and no credential fragment of either reaches the row" \
   "! grep -qF 'fixture-' '$S10_CRED2'"
+# A scheme-relative URL (`//user:pass@host/...`) is an authority too: its userinfo goes as well.
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"//fixture-su:fixture-sp@10.0.9.7/api/inngest","error":null}]}}'
+S10_CRED3="$(s8_run sdk-cred3)"
+assert "#12742 R4 scheme-relative userinfo stripped: the entry keeps // and loses the credential" \
+  "grep -qE 'sdk_app_url=//10\.0\.9\.7/api/inngest!ok( |\$)' '$S10_CRED3' && ! grep -qF 'fixture-' '$S10_CRED3'"
 
 # --- shape 9 (R4): the 160-byte cap, at an ENTRY boundary, with a dropped-count marker -------
 # Each fixture entry is exactly 50 bytes (a 47-byte URL + `!ok`). Three fit (3*50+2 = 152) with
@@ -3754,7 +3759,8 @@ if [[ "$DASH_SKIPPED" -ne 0 && "$DASH_SKIPPED" -ne "$DASH_ROWS" ]]; then printf 
 # live-width 1024 B row pair, the entry-shape sweep, and the health-down + no-jq sdk arms; 18 rows).
 # #12742 R4 round 2: 620 -> 627 (non-array errors, the userinfo-first strip pair, public-first under
 # the cap, the bounded 5000-app search, the exact-160 B boundary, the 1024 B row at that boundary).
-INNGEST_MIN_ASSERTIONS_FULL=627
+# Verification round: 627 -> 628 (the scheme-relative userinfo row).
+INNGEST_MIN_ASSERTIONS_FULL=628
 INNGEST_MIN_ASSERTIONS=$((INNGEST_MIN_ASSERTIONS_FULL - DASH_SKIPPED - TF_SKIPPED))
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
