@@ -121,6 +121,14 @@ if [[ "$bs_src" != *"doppler secrets get CF_R2_ACCOUNT_ID "* ]] || grep -q 'dopp
   red "FAIL: bootstrap.sh must read the R2 account id from CF_R2_ACCOUNT_ID, never CF_ACCOUNT_ID (#12931)."
   fail=1
 fi
+# Same carve-out for the Art. 17 erasure runbook (§7.1): an operator pasting its export must
+# land on the R2 account. Comment lines stripped, so the rationale cannot satisfy it.
+rb="$INFRA_DIR/../../../knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md"
+rb_src="$(grep -vE '^[[:space:]]*#' "$rb" | grep -E 'doppler secrets get [A-Z0-9_]*ACCOUNT_ID' || true)"
+if [[ "$rb_src" != *"doppler secrets get CF_R2_ACCOUNT_ID "* ]] || grep -q 'doppler secrets get CF_ACCOUNT_ID ' <<<"$rb_src"; then
+  red "FAIL: cla-signature-evidence-retrieval.md must read the R2 account id from CF_R2_ACCOUNT_ID, never CF_ACCOUNT_ID (#12931)."
+  fail=1
+fi
 
 # Cloudflare provider 5xx retry budget (#10643): the provider block must carry
 # retries/min_backoff/max_backoff set ABOVE the v4 defaults (3/1/30), so a
