@@ -213,7 +213,7 @@ cf_account_migrate_gate() {
         ($cls == "create"  and .change.importing == null and (.change.actions != ["create"] and .change.actions != ["no-op"])) or
         ($cls == "create"  and .change.importing != null) or
         ($cls == "import"  and .change.importing == null and .change.actions != ["no-op"]) or
-        ($cls == "mutable" and ([.change.actions] | inside([["update"],["no-op"],["create"]]) | not)) or
+        ($cls == "mutable" and (.change.actions as $x | any([["update"],["no-op"],["create"]][]; . == $x) | not)) or
         ($cls == "replace" and .change.actions != ["delete","create"] and .change.actions != ["create","delete"]))
     | "REFUSE \(.address) (class \($cls)) planned with actions \(.change.actions | tostring)\(if .change.importing then " as an import" else "" end)"' "$plan_json")" || { _cfam_eval_fail; return 1; }
   # An import of a create-class address is reported by the literal check below, which names it.

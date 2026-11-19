@@ -69,6 +69,8 @@ awk '
 ' "$IMPORTS" > "$imports_tsv"
 n_imports="$(wc -l < "$imports_tsv" | tr -d ' ')"
 if [[ "$n_imports" -eq 29 ]]; then pass "imports file carries 29 redirects-dns imports (26 records + project + 2 domains)"; else fail "imports file import count" "$n_imports" "want 29"; fi
+bad_lit="$(awk -F'\t' -v nz="$NZ" -v na="$NA" 'index($2, nz "/") != 1 && index($2, na "/") != 1 {print $1}' "$imports_tsv")"
+if [[ -z "$bad_lit" ]]; then pass "every committed import literal starts with the NEW zone or account id"; else fail "import literals not on the new zone/account" 1 "$bad_lit"; fi
 if grep -q 'cloudflare_record.app' "$imports_tsv"; then fail "cloudflare_record.app must not be a redirects-dns import" 1 ""; else pass "cloudflare_record.app is not in the redirects-dns import set"; fi
 
 CREATES='cloudflare_ruleset.allowlist_ai_crawlers cloudflare_ruleset.seo_config_settings cloudflare_ruleset.seo_page_redirects cloudflare_ruleset.seo_response_headers cloudflare_ruleset.bulk_redirects cloudflare_list.legal_redirects cloudflare_list.www_canonical doppler_secret.cf_zone_id_prd'
@@ -122,7 +124,7 @@ check "row 1: a delete is refused" 1 "REFUSE" redirects-dns "$TMP/r1.json"
 # Row 2: unknown phase; zero resource_changes.
 check "row 2a: unknown phase refused" 1 "unknown phase" no-such-phase "$VALID"
 mk_plan "$TMP/r2b.json" '[]'
-check "row 2b: empty plan refused" 1 "" redirects-dns "$TMP/r2b.json"
+check "row 2b: empty plan refused" 1 "zero resource_changes" redirects-dns "$TMP/r2b.json"
 
 # Row 3: a second ruleset create on the OLD zone (in-set address, wrong id).
 mutate_plan "$VALID" "$TMP/r3.json" '(.resource_changes[] | select(.address=="cloudflare_ruleset.seo_page_redirects") | .change.after.zone_id) = "'"$OZ"'"'
@@ -200,9 +202,9 @@ check "row 11b: an import with no committed literal is refused" 1 "differs from 
 
 # Degraded shapes the preamble owns.
 mutate_plan "$VALID" "$TMP/d1.json" '.resource_changes += [{address:"x.y",mode:"managed",type:"x",change:{actions:[],before:{id:1},after:null}}]'
-check "degraded: an empty actions array is refused" 1 "" redirects-dns "$TMP/d1.json"
+check "degraded: an empty actions array is refused" 1 "unclassifiable plan entry" redirects-dns "$TMP/d1.json"
 printf 'not json' > "$TMP/d2.json"
-check "degraded: an unparseable plan is refused" 1 "" redirects-dns "$TMP/d2.json"
+check "degraded: an unparseable plan is refused" 1 "an unreadable plan is not evidence" redirects-dns "$TMP/d2.json"
 
 # ── zone-rest ──────────────────────────────────────────────────────────────────────────────
 DNS_EDIT_ID="soleur.prd.CF_API_TOKEN_DNS_EDIT"
@@ -290,6 +292,8 @@ gate_mutate_layered "M-forget: the destroy arm owns a delete refusal; neutered i
 # exempts nothing but the declared replace set.
 jq -c '(.resource_changes[] | select(.address=="github_actions_secret.cloudflare_account_id_pages") | .change.actions) = ["delete","create"]' "$TMP/zr.json" > "$TMP/zrrep.json"
 check "zone-rest: a replace of a mutable secret is refused" 1 "REFUSE" zone-rest "$TMP/zrrep.json" "$TMP/zr-state.json"
+jq -c '(.resource_changes[] | select(.address=="github_actions_secret.cloudflare_account_id_pages") | .change.actions) = ["create","create"]' "$TMP/zr.json" > "$TMP/zrcc.json"
+check "zone-rest: a mutable planned [create,create] is refused (exact match, not containment)" 1 "(class mutable) planned with actions" zone-rest "$TMP/zrcc.json" "$TMP/zr-state.json"
 gate_mutate_and_check "M-id: neutering the new-id check admits row 3" \
   's|_cfam_check_ids=1|_cfam_check_ids=0|' cf_account_migrate_gate redirects-dns "$TMP/r3.json"
 # The pre-review id check defaulted an absent id to the new one; restoring that reads row 3d as a pass.
@@ -353,6 +357,6 @@ gate_mutate_and_check "M-evalfail: the jq-error refusal is load-bearing (a check
 
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 68 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 68)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 70 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 70)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]
