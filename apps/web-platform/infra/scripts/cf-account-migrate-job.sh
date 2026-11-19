@@ -71,17 +71,11 @@ cleanup() { if [[ -n "$W" && -d "$W" ]]; then rm -rf "$W"; fi; }
 
 # tf_env <cmd...>: run with the prd_terraform TF_VARs; values the loader exported win (--preserve-env).
 # TF_LOG* are stripped INSIDE doppler run, so neither the loader's $GITHUB_ENV export nor a Doppler
-# key can turn on provider/state logging (it would print secrets).
-tf_env() {
-  doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-    env -u TF_LOG -u TF_LOG_PATH -u TF_LOG_CORE -u TF_LOG_PROVIDER "$@"
-}
-# tf_env_bounded <seconds> <cmd...>: tf_env for a short read; rc 124 when Doppler stalls.
-tf_env_bounded() {
-  local t="$1"; shift
-  timeout "$t" doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-    env -u TF_LOG -u TF_LOG_PATH -u TF_LOG_CORE -u TF_LOG_PROVIDER "$@"
-}
+# key can turn on provider/state logging (it would print secrets). check_ids runs the same array
+# under `timeout` for its short read.
+readonly TF_ENV=(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var --
+  env -u TF_LOG -u TF_LOG_PATH -u TF_LOG_CORE -u TF_LOG_PROVIDER)
+tf_env() { "${TF_ENV[@]}" "$@"; }
 
 load_libs() {
   [[ -n "${GITHUB_WORKSPACE:-}" ]] || { printf '%s: GITHUB_WORKSPACE is not set\n' "$P" >&2; exit 2; }
@@ -198,7 +192,7 @@ check_ids() {
     path="$(token_probe_path "$n")" || refuse no-tokens "no read probe is defined for token $n"
     pairs+=("$n" "$CF_API/$path")
   done <<<"$tokens"
-  out="$(tf_env_bounded 60 bash -c "$PREFLIGHT_SH" _ "${pairs[@]}" 2>/dev/null)" || rc=$?
+  out="$(timeout 60 "${TF_ENV[@]}" bash -c "$PREFLIGHT_SH" _ "${pairs[@]}" 2>/dev/null)" || rc=$?
   [[ "$rc" -ne 124 ]] || refuse ids-timeout "doppler run did not resolve the ids and token probes within 60 s"
   [[ "$rc" -eq 0 ]] || refuse ids-unreadable "doppler run could not resolve cf_zone_id / cf_account_id"
   zone="$(sed -n 1p <<<"$out" | tr 'A-F' 'a-f')"
