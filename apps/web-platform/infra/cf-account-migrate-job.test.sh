@@ -311,7 +311,7 @@ run_job() { # <dir> <script>; <dir>/env.extra holds extra KEY=VALUE lines (later
     PATH="$SBX/bin:$PATH" STUB_DIR="$d" STUB_GATED="$GATED_FILE" \
     MIGRATE_PHASE="$(cat "$d/phase")" CONFIRM="$(cat "$d/confirm")" REHEARSAL="$(cat "$d/rehearsal")" \
     REASON="$(cat "$d/reason")" GITHUB_WORKSPACE="$REPO" RUNNER_TEMP="$d/runner" INFRA_DIR="$d/root" \
-    R2_ENDPOINT="https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com" GH_TOKEN=stub GH_REPO=o/r DOPPLER_TOKEN=stub \
+    GH_TOKEN=stub GH_REPO=o/r DOPPLER_TOKEN=stub \
     GITHUB_STEP_SUMMARY="$d/summary.md" CFAM_VERIFY_TRIES=2 CFAM_VERIFY_SLEEP=0 \
     ${extra[@]+"${extra[@]}"} bash "$2" >"$d/out.txt" 2>"$d/err.txt"
   printf '%s' "$?" >"$d/rc"
@@ -367,7 +367,11 @@ chk_gate_blocks_apply() {
   refused_for "$1" gate-refused || { WHY="rc:$(rc_of "$1")"; return 1; }
   grep -q 'cf_account_migrate_gate: phase=redirects-dns verdict=REFUSE' "$1/out.txt" || { WHY="no-refuse-line"; return 1; }
 }
-chk_r2_pinned() { chk_refused_early "$1" r2-endpoint-not-pinned; }
+chk_r2_ignored() { # a hostile R2_ENDPOINT changes nothing: PASS, and every aws call met the pinned-endpoint fake
+  if [[ -s "$1/refused.log" ]]; then WHY="stub-refused"; return 1; fi
+  [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
+  grep -q '^aws s3' "$1/calls.log" || { WHY="no-aws-call"; return 1; }
+}
 chk_budget() { # refused before any infra call, and the injected subscript never ran
   if [[ -e "$1/pwned" ]]; then WHY="injected"; return 1; fi
   chk_refused_early "$1" bad-verify-budget || { WHY+=":$(tail -n1 "$1/out.txt"):$(tail -n1 "$1/err.txt")"; return 1; }
@@ -455,7 +459,9 @@ setup_entry_rehearsal() { new_case "entryr-$1" redirects-dns true; populate_cfg;
 setup_entry_seam() { new_case "entryseam-$1" redirects-dns true; printf 'PREAPPLY_ENTRYPOINT_FETCH=/bin/false\n' >"$LAST_D/env.extra"; }
 setup_token_403() { new_case "tok403-$1" redirects-dns false; printf '403' >"$LAST_D/cfcode.cf_api_token_rulesets"; }
 setup_r2_new() { new_case "r2new-$1" redirects-dns false; printf '%s\n%s\n%s\n' "$NZ" "$NA" "$NA" >"$LAST_D/ids"; }
+# Nothing reads R2_ENDPOINT: the listing (rehearsal) and the forget's upload (apply) stay on the pinned endpoint.
 setup_r2_evil() { new_case "r2evil-$1" redirects-dns true; printf 'R2_ENDPOINT=https://r2.example.invalid\n' >"$LAST_D/env.extra"; }
+setup_r2_evil_apply() { new_case "r2evila-$1" redirects-dns false; printf 'R2_ENDPOINT=https://r2.example.invalid\n' >"$LAST_D/env.extra"; }
 setup_budget() { new_case "budget-$1" redirects-dns false; printf 'CFAM_VERIFY_TRIES=P[$(touch %s/pwned)]\n' "$LAST_D" >"$LAST_D/env.extra"; }
 setup_imports_seam() { new_case "impseam-$1" redirects-dns true; printf 'CFAM_IMPORTS_FILE=%s/no-such-imports.tf\n' "$LAST_D" >"$LAST_D/env.extra"; }
 setup_tflog() {
@@ -626,7 +632,7 @@ verdict "$r" "apply order: phase gate (show tfplan) < entrypoint gate < apply"
 
 # --- Hardening ----------------------------------------------------------------------
 printf '\n[hardening] pinned endpoint, bounded calls, test seams, logging, audit line\n'
-for pair in r2_evil:chk_r2_pinned budget:chk_budget imports_seam:chk_rehearsal_clean tflog:chk_rehearsal_clean \
+for pair in r2_evil:chk_r2_ignored r2_evil_apply:chk_r2_ignored budget:chk_budget imports_seam:chk_rehearsal_clean tflog:chk_rehearsal_clean \
   tflog_doppler:chk_rehearsal_clean health:chk_health reason:chk_reason backups_timeout:chk_backups_timeout \
   ids_timeout:chk_ids_timeout; do
   "setup_${pair%%:*}" x; run_job "$LAST_D" "$PRISTINE"; WHY=""
@@ -730,8 +736,9 @@ J2="$(mk_mutant doppler-config 's/-c prd_terraform --name-transformer/-c prd --n
 red "J2 doppler run reads -c prd instead of prd_terraform" "$J2" chk_rehearsal_clean '^stub-refused$' setup_rehearsal
 J4="$(mk_mutant live-statuses 's/pending requested)$/completed success)/')"
 red "J4 the live-status list loses pending/requested" "$J4" chk_rehearsal_clean '^stub-refused$' setup_rehearsal
-H1="$(mk_mutant r2-unpinned 's/^    refuse r2-endpoint-not-pinned /    : /')"
-red "H1 R2_ENDPOINT override accepted" "$H1" chk_r2_pinned '^not-refused' setup_r2_evil
+# shellcheck disable=SC2016 # sed expression matches literal script text
+H1="$(mk_mutant r2-unpinned 's/--endpoint-url "$CFAM_R2_ENDPOINT"/--endpoint-url "${R2_ENDPOINT:-$CFAM_R2_ENDPOINT}"/')"
+red "H1 the backup listing takes its endpoint from R2_ENDPOINT" "$H1" chk_r2_ignored '^stub-refused$' setup_r2_evil
 H2="$(mk_mutant budget-unchecked 's/|| refuse bad-verify-budget/|| true/')"
 red "H2 verify budget not validated (arithmetic injection runs)" "$H2" chk_budget '^(injected|not-refused)' setup_budget
 H3="$(mk_mutant imports-seam 's/^  unset CFAM_IMPORTS_FILE$/  :/')"
@@ -783,7 +790,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=97
+EXPECTED_CASES=98
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

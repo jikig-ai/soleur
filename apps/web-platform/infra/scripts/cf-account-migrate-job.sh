@@ -8,8 +8,6 @@
 #   REHEARSAL       true | false
 #   REASON          non-blank audit text
 #   GITHUB_WORKSPACE, RUNNER_TEMP, INFRA_DIR (absolute, or relative to the workspace)
-#   R2_ENDPOINT     optional; when set it must equal the pinned state endpoint (CFAM_R2_ENDPOINT),
-#                   which is what every R2 call here and the state-forget use
 #   GH_TOKEN, GH_REPO   read of in-flight runs; DOPPLER_TOKEN   prd_terraform read for `doppler run`
 #   CFAM_VERIFY_TRIES, CFAM_VERIFY_SLEEP   optional post-apply probe budget (default 12 x 10s;
 #                   integers, tries 1-60, pause 0-60 s, anything else refuses)
@@ -116,11 +114,6 @@ validate_inputs() {
   for v in RUNNER_TEMP INFRA_DIR; do
     [[ -n "${!v:-}" ]] || refuse missing-env "$v is not set"
   done
-  if [[ -n "${R2_ENDPOINT:-}" && "$R2_ENDPOINT" != "$CFAM_R2_ENDPOINT" ]]; then
-    refuse r2-endpoint-not-pinned "R2_ENDPOINT is set to something other than the pinned state endpoint; refusing to send state or credentials there"
-  fi
-  # The state-forget reads R2_ENDPOINT from the environment: hand it the pinned value only.
-  export R2_ENDPOINT="$CFAM_R2_ENDPOINT"
   # Integers only: the budget feeds bash arithmetic, where an array subscript would run a command.
   [[ "${CFAM_VERIFY_TRIES:-12}" =~ ^([1-9]|[1-5][0-9]|60)$ && "${CFAM_VERIFY_SLEEP:-10}" =~ ^([0-9]|[1-5][0-9]|60)$ ]] \
     || refuse bad-verify-budget "CFAM_VERIFY_TRIES must be 1-60 and CFAM_VERIFY_SLEEP 0-60 (integers)"

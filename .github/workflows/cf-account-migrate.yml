@@ -82,7 +82,6 @@ jobs:
           CONFIRM: ${{ inputs.confirm }}
           REHEARSAL: "true"
           REASON: ${{ inputs.reason }}
-          R2_ENDPOINT: https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -139,7 +138,6 @@ jobs:
           CONFIRM: ${{ inputs.confirm }}
           REHEARSAL: "false"
           REASON: ${{ inputs.reason }}
-          R2_ENDPOINT: https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
