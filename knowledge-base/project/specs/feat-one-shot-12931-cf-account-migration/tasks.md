@@ -20,45 +20,45 @@ Lane note: there is no spec.md for this branch (one-shot entry), so the lane def
 - [ ] 0.2b Revoke `CF_API_TOKEN_SOLEUR_ACCT` once 0a is probed. `Operator-authorizes:`.
 - [ ] 0.3 Run the non-mutating `cf-token-scope.sh` new-account profile for `redirects-dns`: invalid-body write probes (one fixed never-valid literal; any 2xx aborts with a read-back; a known-denied token first proves 403-before-400, CTO L49), deny probes on the old account and zone, a `success:true` check, and a known-present control. Record the verdicts and every pre-existing entrypoint id.
 - [ ] 0.3b Optional Phase 0c early noindex: create the `http_response_headers_transform` entrypoint, rendered from `seo-rulesets.tf` via `terraform console`. Operator row, recommended yes. `Operator-authorizes:`.
-- [ ] 0.4 Read-only dump of new-zone record ids for the 26 non-tunnel, non-`app` records plus `app`. The dump stays outside the repo; only the ids are committed.
+- [x] 0.4 Read-only dump of new-zone record ids for the 26 non-tunnel, non-`app` records plus `app`. The dump stays outside the repo; only the ids are committed.
 - [ ] 0.5 Phase 0b mints (`_ZONE_SETTINGS`, `_BOT_MANAGEMENT`, `_DNS_EDIT`, `_PURGE`) into `_NEXT` keys. These can run in parallel with Phase 2. `Operator-authorizes:`.
 
 ## Phase 1: PR1 code (this branch). Tests first.
 
-- [ ] 1.1 RED suites first:
+- [x] 1.1 RED suites first:
   - [ ] 1.1.1 state-migrate (Guard 2, every declared `cloudflare_*` type in the fixture; assert `Successfully removed N` equals the rm set and zero old ids after, mutation row 7; classify all before any write, an unknown id anywhere aborts with 0 removed, CTO L47/L72)
   - [ ] 1.1.2 phase gate (Guard 1, rows 1-11 including 9b `replace_by_request` and 9c physical-id)
   - [ ] 1.1.3 in-progress predicate (Guard 3) and the workflow-grep test over every plan-running job
   - [ ] 1.1.4 tftest `expect_failures` for the old-id validations (Guard 4)
   - [ ] 1.1.5 rehearsal shape (local backend override, backup to `$RUNNER_TEMP/cf-migrate`, no `aws s3 cp`, remote serial unchanged and no new object under `web-platform/backups/`, CTO L24/L43)
   - [ ] 1.1.6 `apps/cla-evidence/infra/main.test.sh` assertion for `CF_R2_ACCOUNT_ID`
-- [ ] 1.2 `variables.tf`:
+- [x] 1.2 `variables.tf`:
   - add `cf_r2_account_id`, the old-id validations, `cf_load_balancing_enabled`, `cf_zone_plan_pro`, `cf_zone_dnssec_enabled`, `cf_migration_imports_enabled`, `cf_migration_import_app`;
   - delete `adopt_seo_config_entrypoint`;
   - update `tests/web-hosts-eu-pin.tftest.hcl`.
-- [ ] 1.3 R2 carve-out: `workspaces-luks-header.tf`, `workspaces-luks-header-web.tf`, `infra-privileged-environment.tf` → `var.cf_r2_account_id`. Also `apps/cla-evidence/infra/bootstrap.sh` reads `CF_R2_ACCOUNT_ID`.
-- [ ] 1.4 LB count gate (`cloudflare-lb.tf`) and `[0]` refs; LB-address tests (`rg` sweep); `cf-lb-overlay.yml` refusal; retire `ga-lb-pool-soak-6027` followthrough if still armed.
-- [ ] 1.5 `bot-management.tf` `sbfm_*` ternaries; `dns.tf` DNSSEC count gate and `[0]` refs.
-- [ ] 1.6 `seo-config-rules.tf`: delete the old-id import block (the TEMPORARY `ssl=full` rule is KEPT, CTO L55 re-ruling, #7799); update `apps/web-platform/test/seo-config-rules.test.ts` and any fixture an assertion reads.
-- [ ] 1.7 `cf-account-migration-imports.tf`: 26 records, the Pages project and 2 domains, plus any probe-found entrypoints. The `app` import is gated off by `cf_migration_import_app`.
-- [ ] 1.8 `cf-runtime-zone-id.tf`: `doppler_secret.cf_zone_id_prd`; add it to the stage-1 `-target` list.
-- [ ] 1.9 `scripts/cf-account-state-migrate.sh`: backup, state-derived candidates, null-safe classification, one atomic `state rm`, serial +1 assertion.
-- [ ] 1.10 `scripts/cf-account-migrate-gate.sh`: per-phase list generating `-target`, pure-import check, derived counts, `plan-gate-preamble.sh`, `gate-suite-harness.sh` suite.
-- [ ] 1.11 `scripts/cf-account-migration-complete.sh` and its call sites in every plan-capable job except `cf_account_migrate` (with the `web_host_replace web-2` exception).
-- [ ] 1.12 `apply-web-platform-infra.yml` (rehearsal on `infra-privileged`, every apply leg on the reviewer-gated `web-platform-infra-apply`; `$RUNNER_TEMP` with `umask 077`; no `upload-artifact`, no `TF_LOG`; queued-run refusal):
+- [x] 1.3 R2 carve-out: `workspaces-luks-header.tf`, `workspaces-luks-header-web.tf`, `infra-privileged-environment.tf` → `var.cf_r2_account_id`. Also `apps/cla-evidence/infra/bootstrap.sh` reads `CF_R2_ACCOUNT_ID`.
+- [x] 1.4 LB count gate (`cloudflare-lb.tf`) and `[0]` refs; LB-address tests (`rg` sweep); `cf-lb-overlay.yml` refusal; retire `ga-lb-pool-soak-6027` followthrough if still armed.
+- [x] 1.5 `bot-management.tf` `sbfm_*` ternaries; `dns.tf` DNSSEC count gate and `[0]` refs.
+- [x] 1.6 `seo-config-rules.tf`: delete the old-id import block (the TEMPORARY `ssl=full` rule is KEPT, CTO L55 re-ruling, #7799); update `apps/web-platform/test/seo-config-rules.test.ts` and any fixture an assertion reads.
+- [x] 1.7 `cf-account-migration-imports.tf`: 26 records, the Pages project and 2 domains, plus any probe-found entrypoints. The `app` import is gated off by `cf_migration_import_app`.
+- [x] 1.8 `cf-runtime-zone-id.tf`: `doppler_secret.cf_zone_id_prd`; add it to the stage-1 `-target` list.
+- [x] 1.9 `scripts/cf-account-state-migrate.sh`: backup, state-derived candidates, null-safe classification, one atomic `state rm`, serial +1 assertion.
+- [x] 1.10 `scripts/cf-account-migrate-gate.sh`: per-phase list generating `-target`, pure-import check, derived counts, `plan-gate-preamble.sh`, `gate-suite-harness.sh` suite.
+- [x] 1.11 `scripts/cf-account-migration-complete.sh` (call site: last step of `.github/actions/infra-credentials`, CTO L79) and its call sites in every plan-capable job except `cf_account_migrate` (with the `web_host_replace web-2` exception).
+- [x] 1.12 (moved to `.github/workflows/cf-account-migrate.yml`, CTO L79) `apply-web-platform-infra.yml` (rehearsal on `infra-privileged`, every apply leg on the reviewer-gated `web-platform-infra-apply`; `$RUNNER_TEMP` with `umask 077`; no `upload-artifact`, no `TF_LOG`; queued-run refusal):
   - `apply_target=cf-account-migrate`, `migrate_phase`, `confirm`;
   - job `cf_account_migrate` (infra-privileged, shared concurrency group, no SSH, no bridge);
   - rehearsal in a scratch root with remote-serial assertion;
   - post-apply curl verification.
-- [ ] 1.13 `scripts/check-cloudflare-token-drift.sh` repoint; `cf-token-scope.sh` new-account profiles.
-- [ ] 1.14 `deploy-docs.yml` probe A URL → `soleur-docs-40x.pages.dev`.
-- [ ] 1.15 ADR-329 (`status: adopting`, via `soleur:architecture`; `amends: [ADR-068, ADR-321]`, related 006/114/143/194/304, with addenda on 068, 321 and 194).
+- [x] 1.13 `scripts/check-cloudflare-token-drift.sh` repoint; `cf-token-scope.sh` new-account profiles.
+- [x] 1.14 `deploy-docs.yml` probe A URL → `soleur-docs-40x.pages.dev`.
+- [x] 1.15 ADR-329 (`status: adopting`, via `soleur:architecture`; `amends: [ADR-068, ADR-321]`, related 006/114/143/194/304, with addenda on 068, 321 and 194).
   - `model.c4`: the 7 edits listed in the plan's C4 section.
   - Run `scripts/regenerate-c4-model.sh`.
   - `c4-model-freshness`, `c4-code-syntax`, `c4-render` and `c4-count-parity` all green.
-- [ ] 1.16 Runbook `knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md`: phases, expected reds, fix-forward, full revert (fresh state pull, lineage check, `state push -force` as its own `Operator-authorizes:` act, CTO L59), branch-config write list.
+- [x] 1.16 Runbook `knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md`: phases, expected reds, fix-forward, full revert (fresh state pull, lineage check, `state push -force` as its own `Operator-authorizes:` act, CTO L59), branch-config write list.
 - [ ] 1.17 Register new suites in `run-registered-suites.sh` inputs. Full local battery green.
-- [ ] 1.18 Registry render delta on the PR1 diff = `deliver=false`.
+- [x] 1.18 Registry render delta on the PR1 diff = `deliver=false`. Verified 2026-11-19: the dispatcher gate renders only when `cloud-init-registry.yml` or `zot-registry.tf` changes and otherwise compares `registry_server_type|registry_location|registry_volume_size`; PR1 touches none of them.
 - [ ] 1.19 PR body first line: "Merging this alone mutates no production resource". Use `Ref #12931`. The merge commit carries `[skip-web-platform-apply]`.
 
 ## Phase 2: Redirect restore (after PR1 merges)
