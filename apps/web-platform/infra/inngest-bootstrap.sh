@@ -648,6 +648,12 @@ LOG_TAG="inngest-server-probe"
 # here rather than sourced. The guard is a `grep -qF` over this file, so writing the filename even
 # in a COMMENT trips it -- which it did, on the first draft of this block.
 readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id slug triggers { type value } } }'
+# #12742 probe_schema=10: the SDK-sync probe's own query — column zero for the same reason as
+# FUNCTIONS_GQL_QUERY above (the drift pin greps `^readonly`, an indented copy is invisible).
+# `apps { url error }` reads the server's OWN pollSDKs state: `error` is refreshed by the
+# server's poll loop each interval, so the row reports the LAST sync attempt's verdict, and
+# `url` names what the server actually registered (rationale: the gather block below).
+readonly SDK_SYNC_GQL_QUERY='query SdkSyncProbe { apps { url error } }'
 
 # --- gather (never branch on the results before the emit below) ---
 # `|| true` on every capture: this probe must ALWAYS reach its logger call. A non-zero curl
@@ -678,6 +684,12 @@ boot_id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
 # is also the MORE useful value (registry + tag + digest in one field); only the name was wrong.
 image_ref="$(sed -n 's/^INNGEST_BOOTSTRAP_IMAGE=//p' /etc/default/soleur-inngest-image 2>/dev/null | head -1 || true)"
 [ -n "$image_ref" ] || image_ref=unknown
+# #12742: free-text values are row-tokenization hostile — a value carrying ` registry_fns=5 `
+# re-parses the space-separated emit as an EXTRA registry_fns field and can mask a real
+# registry_fns=0 from the alert. Confine every free-text field to the row charset, same
+# contract data_mount_devid's whitespace guard states: fix the data at bind time so EVERY
+# key=value consumer (host-state, heartbeat classifier, the alert) is protected at once.
+image_ref="$(printf '%s' "$image_ref" | tr -c 'A-Za-z0-9_:.@/+-' '_')"
 
 # --- #7228: three fields whose absence cost this incident the most time -----------------
 # WHICH HOST IS THIS. 1,459 of the 1,839 rows naming inngest-server.service in a 72h window
@@ -703,6 +715,9 @@ case "$instance_id" in '' | *[!0-9]*) instance_id=unknown ;; *) instance_id="het
 # is indistinguishable from a dead host (the #6617a failure this marker exists to close).
 cli_version="$(timeout 10 /usr/local/bin/inngest version 2>/dev/null | head -1 || true)"
 [ -n "$cli_version" ] || cli_version=unknown
+# #12742: same free-text sanitize as image_ref above — `inngest version` output is not
+# guaranteed single-token, and a space-bearing value corrupts every key=value consumer.
+cli_version="$(printf '%s' "$cli_version" | tr -c 'A-Za-z0-9_:.@/+-' '_')"
 
 # WHY THE SERVER IS NOT RUNNING, when it is not. inngest-server-flip-guard.sh refuses EVERY
 # prod-URI start on a flag outside {armed, flipping, flushed, done}, so this field is the
@@ -737,7 +752,7 @@ cutover_flag="$(printf '%s' "$cutover_flag" | tr -d '[:space:]')"
 # before the emit loses the whole row — including vector_active and the Vector-down fallback.
 # `du` on a sick block device blocks in D-state and `redis-cli` has no default deadline, so an
 # unbounded call here goes dark exactly when the disk is the thing being measured.
-probe_schema=9
+probe_schema=10
 data_mount="${PROBE_DATA_MOUNT:-/mnt/data}"
 latch_dir="${PROBE_LATCH_DIR:-${data_mount}/inngest-cutover}"
 
@@ -762,6 +777,12 @@ registry_fns=n/a
 # code path can leave it unset and silently drop a field from the row. `n/a` = the question does
 # not apply on this host (web role); `__UNREADABLE__` = it applied and could not be answered.
 data_luks=n/a
+# #12742 probe_schema=10. Same unconditional-emit contract: `n/a` = the question does not
+# apply on this host (web role); `__UNREADABLE__` = it applied and could not be answered.
+# sdk_sync is ok | error | no_apps (measured). sdk_app_url is `<url>!<ok|error>` entries joined
+# by `,` (capped, `,+<n>` = n more), or `none` = measured, the server lists zero apps.
+sdk_sync=n/a
+sdk_app_url=n/a
 
 case "$host_role" in
 dedicated)
@@ -992,6 +1013,98 @@ dedicated)
     case "$registry_fns" in
     '' | *[!0-9]*) registry_fns=__UNREADABLE__ ;;
     esac
+  fi
+
+  # ── #12742 probe_schema=10: did the server's own sdk_url poll succeed? ────────────────
+  # `registry_fns` proves the host SERVES a non-empty registry; it says nothing about whether
+  # the server's 60s pollSDKs loop can still reach the app — which is the question the
+  # post-replace measurement (item 4, #10538/#10479) has to answer. `apps[].error` is
+  # refreshed BY that poll each interval, so `ok` certifies the last attempt, and
+  # `sdk_app_url` names the registered URL so a stale private web-host row (still polling the
+  # pre-#12737 private address) is legible in the same event rather than a second query.
+  #
+  # Same failure-arm shape as registry_fns: the /health http_code gates first, jq is a host
+  # fact (guarded, never assumed), every failure arm lands on __UNREADABLE__ — a refused
+  # question must never read as a healthy sync. NO GQL error text is shipped for the same
+  # reason the registry block gives: this row's tag is allowlisted to a third-party
+  # warehouse, so an {"errors":[…]} body stays on the host.
+  if [ "$http_code" != "200" ] || ! command -v jq >/dev/null 2>&1; then
+    # Not serving at all, or no jq to parse the answer: the question could not be asked.
+    sdk_sync=__UNREADABLE__
+    sdk_app_url=__UNREADABLE__
+  else
+    _sdk_out="$(timeout 10 curl -s --max-time 10 -H 'Content-Type: application/json' \
+      --data-binary "$(jq -nc --arg q "$SDK_SYNC_GQL_QUERY" '{query:$q}' 2>/dev/null)" \
+      -w '
+%{http_code}' http://127.0.0.1:8288/v0/gql 2>/dev/null || true)"
+    _sdk_code="$(printf '%s' "$_sdk_out" | sed -n '$p')"
+    _sdk_body="$(printf '%s' "$_sdk_out" | sed '$d')"
+    if [ "$_sdk_code" != "200" ]; then
+      sdk_sync=__UNREADABLE__
+      sdk_app_url=__UNREADABLE__
+    else
+      # Two emit lines: verdict, then the entries. Drift — a non-array `apps`, a row whose
+      # `url` is not a non-empty string, or a non-empty top-level `errors` array (a PARTIAL
+      # answer: the apps listed are not the whole registry) — is `bad` -> __UNREADABLE__, never
+      # a silent healthy reading. A row's absent/null/"" `error` is the healthy shape (last
+      # sync ok), so only `url` is required.
+      #
+      # #12742 R4: one entry per app, `<url>!<ok|error>`, joined by `,`, so the row answers
+      # BOTH "does the public poll work" and "is the stale private row gone". Each URL loses
+      # its userinfo FIRST — everything up to the last `@` before the first `/` after an
+      # optional scheme, so a `?` inside a password cannot end the URL early and ship the
+      # credential's head — then its query/fragment (this row reaches a third-party warehouse),
+      # then is reduced to [A-Za-z0-9_:./+-] — no `@`, no space, so it can never re-tokenize
+      # the row. The public entry is moved to the front (stable otherwise) so the cap can never
+      # drop the one entry item 4 reads. The value is capped at 160 bytes at an ENTRY boundary
+      # (the row's other fields measure ~837 B at live width and logger truncates the tail past
+      # 1024 B; 160 B still holds the public + private pair): the first k entries that fit, then
+      # `,+<dropped>` (just `+<n>` if none fits) — an entry is never cut mid-URL, so a cut can
+      # never read as a shorter, healthier list. The aggregate counts every app, kept or not.
+      # The search starts at min(n, 41): the shortest entry is 3 B (`!ok`), so 41 entries
+      # (163 B) can never fit — a search from n re-joins up to n entries n times (40 s of jq
+      # CPU measured at 5000 apps).
+      _sdk_parsed="$(printf '%s' "$_sdk_body" | jq -r '
+        (.data.apps // null) as $apps
+        | if ((.errors // []) | if type == "array" then length > 0 else true end) then "bad\n"
+          elif ($apps | type) != "array" then "bad\n"
+          elif ($apps | length) == 0 then "no_apps\nnone"
+          elif any($apps[]; (.url | type) != "string" or .url == "") then "bad\n"
+          else
+            [ $apps[]
+              | (.url | sub("^(?<s>(([A-Za-z][A-Za-z0-9+.-]*:)?//)?)[^/]*@"; "\(.s)") | sub("[?#].*$"; "")
+                      | gsub("[^A-Za-z0-9_:./+-]"; "_"))
+                + "!" + (if ((.error // "") | tostring) != "" then "error" else "ok" end) ]
+            | map(select(startswith("https://app.soleur.ai/api/inngest!")))
+              + map(select(startswith("https://app.soleur.ai/api/inngest!") | not))
+            | . as $e
+            | ($e | length) as $n
+            | (if any($e[]; endswith("!error")) then "error" else "ok" end)
+              + "\n"
+              + first(range([$n, 41] | min; -1; -1) as $k
+                  | ($e[0:$k] | join(",")) as $j
+                  | if $k == $n then $j
+                    elif $k == 0 then "+\($n)"
+                    else $j + ",+\($n - $k)" end
+                  | select(length <= 160))
+          end
+      ' 2>/dev/null || true)"
+      sdk_sync="$(printf '%s' "$_sdk_parsed" | sed -n '1p')"
+      sdk_app_url="$(printf '%s' "$_sdk_parsed" | sed -n '2p')"
+      case "$sdk_sync" in
+      ok | error | no_apps)
+        # Defence in depth behind the jq reduction: confine to the emit charset (the URL
+        # charset plus the `,` entry separator and the `!` state separator).
+        sdk_app_url="$(printf '%s' "$sdk_app_url" | tr -c 'A-Za-z0-9_:./+,!-' '_')"
+        [ -n "$sdk_app_url" ] || { sdk_sync=__UNREADABLE__; sdk_app_url=__UNREADABLE__; }
+        ;;
+      *)
+        sdk_sync=__UNREADABLE__
+        sdk_app_url=__UNREADABLE__
+        ;;
+      esac
+    fi
+    unset _sdk_out _sdk_code _sdk_body _sdk_parsed
   fi
 
   case "$data_mount_src" in
@@ -1332,7 +1445,7 @@ dedicated)
 esac
 
 # --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
-logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes data_mount_base=$data_mount_base data_mount_devid=$data_mount_devid registry_fns=$registry_fns data_luks=$data_luks"
+logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes data_mount_base=$data_mount_base data_mount_devid=$data_mount_devid registry_fns=$registry_fns data_luks=$data_luks sdk_sync=$sdk_sync sdk_app_url=$sdk_app_url"
 
 # --- #9963: second unconditional emit, SAME invariant (no `if` may precede it) ---
 # Positive control for the SYSLOG_IDENTIFIER=systemd journald delivery path. Vector's
@@ -1363,7 +1476,7 @@ logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_ac
 # branching BEFORE the unconditional emit, not after it. Fail-open: the emitter exits 0 on any
 # error and is absent on the co-located web host, so `[ -x ]` guards it.
 if [ "$vector_active" != "active" ] && [ -x /usr/local/bin/inngest-boot-phone-home.sh ]; then
-  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes data_mount_base=$data_mount_base data_mount_devid=$data_mount_devid registry_fns=$registry_fns data_luks=$data_luks" || true
+  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes data_mount_base=$data_mount_base data_mount_devid=$data_mount_devid registry_fns=$registry_fns data_luks=$data_luks sdk_sync=$sdk_sync sdk_app_url=$sdk_app_url" || true
 fi
 exit 0
 PROBESCRIPTEOF
@@ -1382,9 +1495,10 @@ SyslogIdentifier=inngest-server-probe
 # Type=oneshot disables the start timeout by default; the probe makes bounded calls before its
 # unconditional emit, so bound the unit too — a hung probe holds the unit `activating`, and
 # OnUnitActiveSec cannot re-fire while it is, silently ending the hourly marker.
-# Budget (#8017/#8015): curl 5 + curl 3 + inngest 10 + doppler 10 + findmnt 5 + du 15 + redis-cli 5
-# + lsblk 5 + registry curl 10 = 68s worst case
-# = 53s of bounded work, so 60 no longer leaves headroom. Raised to 120 rather than trimming a bound:
+# Budget (#8017/#8015, +#12742 sdk-sync curl 10): curl 5 + curl 3 + inngest 10 + doppler 10
+# + findmnt 5 + du 15 + redis-cli 5 + lsblk 5 + registry curl 10 + sdk-sync curl 10
+# = 78s worst case
+# of bounded work, so 60 no longer leaves headroom. Raised to 120 rather than trimming a bound:
 # a bound that fires degrades ONE field, the unit timeout loses the WHOLE row.
 TimeoutStartSec=120
 # #7228: the cutover_flag field reads Doppler, which needs DOPPLER_TOKEN + DOPPLER_CONFIG_DIR
@@ -1609,12 +1723,13 @@ fi
 # 32-byte HMAC seed; the prefix is purely a SDK-side string marker.
 # Surfaced 2026-05-19 via #4017 substrate audit.
 #
-# --poll-interval 60 + --sdk-url: the server polls the co-located web-platform
-# app serve route (loopback port 3000 per Dockerfile PORT=3000; /api/inngest is
-# in PUBLIC_PATHS per the #4017 fix so the poll is not 307→/login) every 60s,
-# re-syncing AND re-planning any dropped/de-planned function within one
-# interval — without a restart. This is what lets the #4650 watchdog demote its
-# restart-on-first-tick to a guarded backstop (#4652).
+# --poll-interval 60 + --sdk-url: the server polls the PUBLIC serve URL
+# (`https://app.soleur.ai/api/inngest` — inngest-host.tf's sdk_url, ADR-100 Decision 1 as
+# amended 2026-11-13, #10538) through the Cloudflare edge every 60s, re-syncing AND
+# re-planning any dropped/de-planned function within one interval — without a restart.
+# /api/inngest is in PUBLIC_PATHS per the #4017 fix so the poll is not 307→/login.
+# This is what lets the #4650 watchdog demote its restart-on-first-tick to a guarded
+# backstop (#4652).
 # #5159: re-planning via this poll REQUIRES the SDK to register the canonical
 # PUBLIC serve URL (serveOrigin pinned in app/api/inngest/route.ts) — a
 # 127.0.0.1-host registration is accepted (HTTP 200) but its crons are never
@@ -1737,7 +1852,7 @@ Restart=on-failure
 # expenses.md). Same loop semantics at 300 s ≈ ~1k rows/day. NO StartLimitBurst is set, so the
 # unit never latches `failed` and inngest-cutover-flip.sh's bare `systemctl start` needs no
 # reset-failed. Baked-carrier: takes effect on the next image + host replace, like the
-# probe_schema=9 emit above.
+# probe_schema=10 emit above.
 RestartSec=300
 User=deploy
 Group=deploy

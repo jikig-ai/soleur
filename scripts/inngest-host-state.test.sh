@@ -71,7 +71,7 @@ print(json.dumps({"dt": dt, "raw": json.dumps({"host": host, "host_name": "soleu
 ' "$1" "$2" "$3" "${4:-inngest-server-probe}"
 }
 
-DEDICATED_MSG='SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active redis_active=active instance_id=hetzner-166317708 boot_id=abc cutover_flag=done probe_schema=9 host_role=dedicated redis_keys=442 redis_expires=431 data_mount_src=/dev/sdb data_mount_devid=scsi-0HC_Volume_106261946 data_bytes=58898716 registry_fns=7 flush_latched=true data_luks=crypto_LUKS'
+DEDICATED_MSG='SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active redis_active=active instance_id=hetzner-166317708 boot_id=abc cutover_flag=done probe_schema=10 host_role=dedicated redis_keys=442 redis_expires=431 data_mount_src=/dev/sdb data_mount_devid=scsi-0HC_Volume_106261946 data_bytes=58898716 registry_fns=7 flush_latched=true data_luks=crypto_LUKS sdk_sync=ok sdk_app_url=https://app.soleur.ai/api/inngest!ok'
 WEB1_MSG='SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=inactive redis_active=active instance_id=hetzner-123931471 probe_schema=4 host_role=web redis_keys=n/a'
 DEAD_MSG='SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=activating redis_active=active instance_id=hetzner-166317708 probe_schema=8 host_role=dedicated redis_keys=442 registry_fns=__UNREADABLE__ cutover_flag=done'
 
@@ -116,6 +116,28 @@ if [[ "$rc" -eq 0 ]] && grep -q 'hetzner-166317708' <<<"$out" && grep -q 'SERVIN
   pass "dedicated row -> exit 0, summarised, VERDICT SERVING"
 else
   fail "expected exit 0 with summary, got rc=$rc out='$out'"
+fi
+
+echo "T1b: the summary prints the probe_schema=10 sync fields (#12742) — the responder's read path"
+CASES_RUN=$((CASES_RUN + 1))
+if grep -qE '^  sdk_sync +ok +sdk_app_url=https://app\.soleur\.ai/api/inngest!ok$' <<<"$out"; then
+  pass "summary carries sdk_sync and sdk_app_url from the row"
+else
+  fail "summary lacks the sdk_sync/sdk_app_url line, out='$out'"
+fi
+if grep -q 'NOTE           sdk_sync' <<<"$out"; then
+  fail "an sdk_sync=ok row printed the sdk_sync NOTE, out='$out'"
+fi
+
+echo "T1c: sdk_sync=error keeps SERVING=yes and adds a NOTE naming the masked poll failure (#12742)"
+make_query; row "2026-09-17 13:00:00" soleur-inngest "${DEDICATED_MSG/sdk_sync=ok/sdk_sync=error}" > "$SANDBOX/probe.jsonl"
+res="$(run_sut --no-errors)"; CASES_RUN=$((CASES_RUN + 1))
+rc="$(sed -n 's/^__RC__=//p' <<<"$res")"; out="$(sed '/^__RC__=/d' <<<"$res")"
+if [[ "$rc" -eq 0 ]] && grep -q 'SERVING=yes' <<<"$out" && grep -qE '^  sdk_sync +error ' <<<"$out" \
+   && grep -qE '^  NOTE +sdk_sync=error: ' <<<"$out"; then
+  pass "sdk_sync=error row -> SERVING=yes unchanged, plus the sdk_sync NOTE"
+else
+  fail "expected rc 0, SERVING=yes, sdk_sync error and the NOTE, got rc=$rc out='$out'"
 fi
 
 echo "T2: web-1 rows ONLY -> exit 4, empty stdout (the wrong-machine guard)"
@@ -606,8 +628,9 @@ echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
 # doppler row), T21b (marker + space anchor), T22 (lib unloadable -> 6), T22b (names the path).
 # 30 with #8873's T23 (inherited emitter/marker + a lib defining nothing -> 6).
 # 34 with #12708's T24 (pin selects), T24b (hetzner- spelling), T25 (unmatched pin -> 4),
-# T25b (malformed pin -> 2). 35 with the review-P2 T25c (empty pin -> 2).
-_min_cases=35
+# T25b (malformed pin -> 2). 35 with the review-P2 T25c (empty pin -> 2). 36 with #12742's T1b.
+# 37 with #12742's T1c (sdk_sync=error NOTE).
+_min_cases=37
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s — the suite lost coverage\n' \
     "$CASES_RUN" "$_min_cases" >&2

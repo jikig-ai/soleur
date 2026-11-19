@@ -1282,7 +1282,8 @@ grp_proj() {
   t "proj[config-entrypoint]: app.soleur.ai.evil does not set mentions_app_host" jqe '.rules[2].mentions_app_host==false and .rules[2].mentions_lb_staging_host==false'
   t "proj[config-entrypoint]: disabled rule keeps enabled false" jqe '.rules[0].enabled==false and .rules[0].ssl=="strict"'
   t "proj[config-entrypoint]: only the allowed keys at the top" jqe '(keys|sort)==["enabled_ssl_rules","id","last_updated","rule_count","rules","subcommand","version"]'
-  t "proj[config-entrypoint]: only the allowed keys per rule" jqe 'all(.rules[]; (keys|sort)==["enabled","mentions_app_host","mentions_lb_staging_host","ref","ssl"])'
+  t "proj[config-entrypoint]: only the allowed keys per rule" jqe 'all(.rules[]; (keys|sort)==["enabled","host_literal_only","mentions_app_host","mentions_lb_staging_host","ref","ssl"])'
+  t "proj[config-entrypoint]: an expression with trailing text is not host_literal_only" jqe '[.rules[].host_literal_only]==[false,false,true]'
   t "proj[config-entrypoint]: no expression or description text in any output" leak_scan "$WORK/comb.txt"
   pr config-entrypoint '{"success":true,"result":{"id":"e1","rules":[]}}'
   t "proj[config-entrypoint]: version absent prints null, empty rules count 0, enabled_ssl_rules 0" jqe '.version==null and .rule_count==0 and .enabled_ssl_rules==0 and .rules==[]'
@@ -1332,6 +1333,31 @@ grp_proj() {
   t "records[B]: an enabled rule with no ssl is not counted -> enabled_ssl_rules 1" jqe '.enabled_ssl_rules==1 and .rules[1].ssl==null'
   pr config-entrypoint "$(entry_rules "$ADOPTED"',{"ref":"near","enabled":true,"action_parameters":{"ssl":"off"},"expression":"(http.host eq \"lb-staging.soleur.ai.evil\")"}')"
   t "records[B]: a lb-staging.soleur.ai.evil near-miss does not set the host figure but still counts as an ssl rule" jqe '.enabled_ssl_rules==2 and .rules[1].mentions_lb_staging_host==false and .rules[1].mentions_app_host==false'
+  # host_literal_only (#12742, CTO rulings R1/R2): true ONLY for a whole expression of exactly `(http.host eq "<h>")` or
+  # `(http.host in {"<h1>" "<h2>" ...})`, each host 1 to 253 of a-z 0-9 . - (anchored \A and \z). The three live seo-config-rules.tf
+  # expressions are the positive rows; every negative is one byte-level way to narrow or widen the match.
+  local H253 H254
+  H253=$(printf 'a%.0s' $(seq 253)); H254="${H253}a"
+  hl_body() { jq -nc '{success:true,result:{id:"e1",rules:[$ARGS.positional[] | {ref:"hl",enabled:true,action_parameters:{ssl:"strict"},expression:.}]}}' --args "$@"; }
+  pr config-entrypoint "$(hl_body '(http.host eq "app.soleur.ai")' '(http.host in {"soleur.ai" "www.soleur.ai"})' '(http.host in {"app.soleur.ai" "lb-staging.soleur.ai"})' "(http.host eq \"$H253\")")"
+  t "host_literal[B]: the live eq and in-set expressions and a 253-character host are host_literal_only" jqe '[.rules[].host_literal_only]==[true,true,true,true] and [.rules[].mentions_app_host]==[true,false,true,false]'
+  pr config-entrypoint "$(hl_body 'not (http.host eq "app.soleur.ai") EXPR_CANARY_H1' '(http.host eq "app.soleur.ai") and true' '(http.host eq "app.soleur.ai" and starts_with(http.request.uri.path, "/x"))' '(http.host eq "a" or http.host eq "b")' 'true' '(http.host in {})' '(http.host  eq "app.soleur.ai")' '(http.host eq "a\" or true or \"b")')"
+  t "host_literal[B]: a negation, a trailing clause, a path clause, an or, true, an empty set, a double space or a quote break is not host_literal_only" jqe '[.rules[].host_literal_only]==[false,false,false,false,false,false,false,false] and .rules[0].mentions_app_host==true'
+  t "host_literal[B]: no expression text is printed" leak_scan "$WORK/comb.txt"
+  pr config-entrypoint "$(hl_body $'(http.host eq "app.soleur.ai")\n')"
+  t "host_literal[B]: a trailing newline is not host_literal_only (\\z, not \$)" jqe '.rules[0].host_literal_only==false'
+  pr config-entrypoint "$(hl_body ' (http.host eq "app.soleur.ai")')"
+  t "host_literal[B]: a leading space is not host_literal_only (\\A anchor)" jqe '.rules[0].host_literal_only==false'
+  pr config-entrypoint "$(hl_body '(http.host eq "APP.soleur.ai")' "(http.host eq \"$H254\")")"
+  t "host_literal[B]: an uppercase host or a 254-character host is not host_literal_only" jqe '[.rules[].host_literal_only]==[false,false]'
+  pr config-entrypoint '{"success":true,"result":{"id":"e1","rules":[{"ref":"n1","enabled":true,"action_parameters":{"ssl":"strict"}},{"ref":"n2","enabled":true,"action_parameters":{"ssl":"strict"},"expression":7}]}}'
+  t "host_literal[B]: a missing or non-string expression is not host_literal_only" jqe '[.rules[].host_literal_only]==[false,false]'
+  pr config-entrypoint "$(hl_body '(http.host ne "app.soleur.ai")' '(http.host contains "app.soleur.ai")' '(http.host matches "app.soleur.ai")' '(http.host wildcard "app.soleur.ai")')"
+  t "host_literal[B]: an ne, contains, matches or wildcard operator is not host_literal_only (eq and in only)" jqe '[.rules[].host_literal_only]==[false,false,false,false]'
+  pr config-entrypoint "$(hl_body '(http.referer eq "app.soleur.ai")' '(http.request.uri.path eq "app.soleur.ai")')"
+  t "host_literal[B]: an http.referer or http.request.uri.path field is not host_literal_only (http.host only)" jqe '[.rules[].host_literal_only]==[false,false]'
+  pr config-entrypoint "$(hl_body '(http.host eq "*.soleur.ai")' '(http.host in {"app.soleur.ai" "*.soleur.ai"})')"
+  t "host_literal[B]: a * inside an eq or in-set host is not host_literal_only" jqe '[.rules[].host_literal_only]==[false,false]'
   pr pagerules-ssl "$(page_body '"w1"' '"active"' '"off"' '"*soleur.ai/*"')"
   t "records[C]: a wildcard *soleur.ai/* SSL page rule -> ssl_rule_count 1 although matches_app_host is false" jqe '.ssl_rule_count==1 and .ssl_rules[0].matches_app_host==false and .ssl_rules[0].ssl=="off"'
   t "records[C]: the wildcard pattern text is never printed" leak_scan "$WORK/comb.txt"
@@ -2005,7 +2031,7 @@ grp_selftest() {
   printf 'SCRATCH=%s\n' "$WORK"
   vno "selftest: deliberate failing assertion (this child MUST exit non-zero)"
 }
-PROJ_FLOOR=203
+PROJ_FLOOR=212
 for g in source wire refuse token env status xtrace proj shape tools gql selftest; do
   if [[ "$g" == selftest ]]; then
     [[ "$SELECT" == selftest ]] || continue
@@ -2315,6 +2341,18 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "W2.2 count rules with no ssl" "records[B]: an enabled rule with no ssl is not counted" proj 'select(.enabled and .ssl != null)' 'select(.enabled)'
   mutate "W2.3 count disabled rules" "records[B]: a disabled ssl rule is not counted" proj 'select(.enabled and .ssl != null)' 'select(.ssl != null)'
   mutate "W2.4 enabled_ssl_rules is just the rule count" "proj[config-entrypoint]: header fields, rule_count 3, enabled_ssl_rules 2" proj 'enabled_ssl_rules: ([$rr[] | select(.enabled and .ssl != null)] | length)' 'enabled_ssl_rules: ($rules | length)'
+  # --- host_literal_only (#12742 R1/R2): each anchor and bound of the whole-expression shape check ---
+  mutate "W2.5 hostlit without the \A anchor" "host_literal[B]: a leading space is not host_literal_only" proj 'test("\\A\\(http' 'test("\\(http'
+  mutate "W2.6 hostlit end anchor relaxed to \$" "host_literal[B]: a trailing newline is not host_literal_only" proj '\\)\\z");' '\\)$");'
+  mutate "W2.7 hostlit without the end anchor" "host_literal[B]: a negation, a trailing clause" proj '\\)\\z");' '\\)");'
+  mutate "W2.8 hostlit host length unbounded" "host_literal[B]: an uppercase host or a 254-character host" proj '"[a-z0-9.-]{1,253}"' '"[a-z0-9.-]+"'
+  mutate "W2.9 hostlit host class admits uppercase" "host_literal[B]: an uppercase host or a 254-character host" proj '"[a-z0-9.-]{1,253}"' '"[A-Za-z0-9.-]{1,253}"'
+  mutate "W2.10 host_literal_only hard-coded true" "host_literal[B]: a missing or non-string expression" proj 'host_literal_only: (.expression | hostlit)' 'host_literal_only: true'
+  mutate "W2.11 hostlit without the string guard" "host_literal[B]: a missing or non-string expression" proj 'def hostlit: type == "string" and test(' 'def hostlit: test('
+  mutate "W2.12 hostlit accepts any operator" "host_literal[B]: an ne, contains, matches or wildcard operator" proj '(eq \"" + hn' '([a-z]+ \"" + hn'
+  mutate "W2.13 hostlit accepts ne" "host_literal[B]: an ne, contains, matches or wildcard operator" proj '(eq \"" + hn' '((?:eq|ne) \"" + hn'
+  mutate "W2.14 hostlit accepts any http field" "host_literal[B]: an http.referer or http.request.uri.path field" proj 'test("\\A\\(http\\.host (' 'test("\\A\\(http\\.[a-z.]+ ('
+  mutate "W2.15 hostlit host class admits *" "host_literal[B]: a * inside an eq or in-set host" proj '"[a-z0-9.-]{1,253}"' '"[a-z0-9.*-]{1,253}"'
 
   # --- bad-response reasons, preflight, LIMIT, Z-only, hint (W3) ---
   mutate "W3.1 shape reported as a jq failure" "shape[ssl-mode]: a well-formed body of the wrong shape" shape $'    api) unverified api-error 14 ;;\n    *) bad_shape ;;' $'    api) unverified api-error 14 ;;\n    *) bad_jq 1 ;;'
@@ -2471,7 +2509,7 @@ if [[ -z "$INNER" ]] && want all; then
 
   collect
   t "mutation floor: every mutation row ran and was caught ($MUT_CAUGHT of $MUT_TOTAL)" eq "$MUT_CAUGHT" "$MUT_TOTAL"
-  t "mutation floor: at least 227 mutation rows ran (the exact current count; observed $MUT_TOTAL)" test "$MUT_TOTAL" -ge 227
+  t "mutation floor: at least 238 mutation rows ran (the exact current count; observed $MUT_TOTAL)" test "$MUT_TOTAL" -ge 238
 fi
 
 # --- accounting ---
@@ -2479,7 +2517,7 @@ if [[ "$((pass + fail))" != "$asserted" ]]; then
   no "accounting: passes + fails ($((pass + fail))) != asserted ($asserted) - a verdict was dropped"
 fi
 if [[ "$SELECT" == all && -z "$INNER" ]]; then
-  t "floor: at least 2423 assertions ran (a suite that checked nothing is RED; observed $asserted)" test "$asserted" -ge 2423
+  t "floor: at least 2451 assertions ran (a suite that checked nothing is RED; observed $asserted)" test "$asserted" -ge 2451
 fi
 printf '\n%s passed, %s failed (%s asserted)\n' "$pass" "$fail" "$asserted"
 if [[ "$fail" -gt 0 ]]; then exit 1; fi

@@ -51,3 +51,7 @@ entitled-token Concierge case only.
   `gh gist`, LFS objects) render with the same transport-shaped `Forbidden`
   as the original incident — triage via the host-by-subcommand deny map in
   the PR #5090 learning, not re-diagnosis.
+
+## Addendum — 2026-11-18 (#12585): `allowedDomains: []` does not by itself close sandboxed egress
+
+The empty allowlist makes the SDK's sandbox proxy ASK `canUseTool` (as `SandboxNetworkAccess {host}`) for every host outside the list; what closes it is the answer. Until #12585 the answer was the deny-default branch; it is now the explicit `SandboxNetworkAccess` arm, which denies (deny-all for entitled sessions, measured reasons in ADR-278's 2026-11-18 addendum).
