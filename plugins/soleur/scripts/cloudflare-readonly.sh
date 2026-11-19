@@ -192,6 +192,7 @@ QLIMIT=0   # a row cap; the edge and colo arms each set it to their template's c
 HOURS=0
 MAX_HOURS=216
 # the end offset of analytics-health-colo; assigned here unconditionally (an inherited value would be evaluated in arithmetic)
+# MAX_OFFSET is 743 - MAX_HOURS; 743 = 31 x 24 - 1, so a window never reaches past the documented 31-day retention
 MAX_OFFSET=527
 END_OFFSET=0
 GQL_MSG_RE='^[A-Za-z0-9 ._'"'"'"()-]{1,160}$'
@@ -508,6 +509,8 @@ sub_analytics_edge_errors() {
 # sub_analytics_health_colo: the F query scoped to the host app.soleur.ai and split by coloCode, over a window that ends END_OFFSET
 # hours before the current hour. Hours are accepted only on the hour; a coloCode that is null or a string passes the guard and prints
 # only as three capital letters or null (the raw value is never printed); the series is sorted on the cleaned values.
+# Its row cap is the 10000 of GQL_COLO_TPL (the dataset's documented maxPageSize example). Its truncated test is written with the
+# cap on the left, the reverse of the edge arm's spelling, so each arm's mutation anchor matches exactly once; keep them different.
 sub_analytics_health_colo() {
   local body
   gql_window

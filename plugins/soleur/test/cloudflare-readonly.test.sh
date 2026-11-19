@@ -1676,6 +1676,7 @@ grp_proj_colo() {
   shape_bad analytics-health-colo "a negative count" "$(gql_wrap "[$(jq -c '.count=-1' <<<"$crow")]")"
   shape_bad analytics-health-colo "a p90 above 1e7" "$(gql_wrap "[$(jq -c '.quantiles.originResponseDurationMsP90=20000000' <<<"$crow")]")"
   shape_bad analytics-health-colo "a missing avg object" "$(gql_wrap "[$(jq -c 'del(.avg)' <<<"$crow")]")"
+  shape_bad analytics-health-colo "a missing quantiles object" "$(gql_wrap "[$(jq -c 'del(.quantiles)' <<<"$crow")]")"
   shape_bad analytics-health-colo "two zones" '{"data":{"viewer":{"zones":[{"httpRequestsAdaptiveGroups":[]},{"httpRequestsAdaptiveGroups":[]}]}},"errors":null}'
   # truncated at the 10000-row cap (the template limit), not below it
   g10000=$(jq -nc '[range(10000)|{count:1,dimensions:{datetimeHour:"2026-11-01T10:00:00Z",coloCode:"LHR"},avg:{originResponseDurationMs:1},quantiles:{originResponseDurationMsP50:1,originResponseDurationMsP90:1}}]')

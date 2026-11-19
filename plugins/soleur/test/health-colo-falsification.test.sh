@@ -14,9 +14,10 @@
 #     and both sides of boundaries (i)-(ix) of the plan;
 #   * the runbook's recorded-outputs block (`health-colo-r2-outputs` markers) equals this file's case list, in order, so the
 #     copy the reader sees cannot drift from what was pre-registered;
-#   * seven recipe mutation rows (edit_once style: exactly one anchor match, the mutant differs and still compiles), each named
+#   * ten recipe mutation rows (edit_once style: exactly one anchor match, the mutant differs and still compiles), each named
 #     with the case that must turn RED, plus a comment-only control that must turn no case RED;
-#   * an executed-row floor and a mutation-row floor, reported by printf + exit 1, never through the helpers they backstop.
+#   * an executed-row floor and a mutation-row floor, reported by printf + exit 1, never through the helpers they backstop;
+#   * a child run with one failed row and every floor met must exit 1 (the exit status is what the runner grades).
 #
 # Pure jq, no network, no git, no scratch files: inputs reach jq on a pipe and the recipe through process substitution.
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -45,6 +46,34 @@ check() {
   fi
 }
 summary() { printf '\n%s passed, %s failed (%s rows executed, %s mutation rows)\n' "$pass" "$fail" "$rows_run" "$mut_run"; }
+
+# --- floors (printf + exit 1, never through check/no) and accounting ---------------------------------------------------------
+MUT_FLOOR=10
+ROW_FLOOR=63
+# finish: the suite's verdict. The real run and the forced-fail child below both call it, so the child exercises these lines.
+finish() {
+  if [[ "$((pass + fail))" != "$rows_run" ]]; then
+    printf 'FAIL: accounting: passes + fails (%s) != rows executed (%s) - a verdict was dropped\n' "$((pass + fail))" "$rows_run" >&2
+    exit 1
+  fi
+  summary
+  if [[ "$mut_run" -lt "$MUT_FLOOR" ]]; then
+    printf 'FAIL: mutation-row floor: only %s recipe mutation rows ran, need %s (vacuity)\n' "$mut_run" "$MUT_FLOOR" >&2
+    exit 1
+  fi
+  if [[ "$rows_run" -lt "$ROW_FLOOR" ]]; then
+    printf 'FAIL: executed-row floor: only %s rows ran, need at least %s (the exact current count; vacuity)\n' "$rows_run" "$ROW_FLOOR" >&2
+    exit 1
+  fi
+  if [[ "$fail" -gt 0 ]]; then exit 1; fi
+  exit 0
+}
+# The exit status is what the runner grades: a run with every floor met and one failed row must exit 1. The child is selected
+# by argv, never by an environment flag, so an inherited variable cannot select it.
+if [[ "${1:-}" == --forced-fail-child ]]; then
+  pass=$((ROW_FLOOR - 1)) fail=1 rows_run=$ROW_FLOOR mut_run=$MUT_FLOOR
+  finish >/dev/null 2>&1
+fi
 
 # --- instrument self-test: check() must be able to fail AND to pass, or every row below is vacuous ---------------------------
 ( pass=0; fail=0; check "self-test" "a" "b" >/dev/null; [[ "$fail" -eq 1 && "$pass" -eq 0 ]] ) \
@@ -131,6 +160,12 @@ add_case ix-null-colo-overrides-not-supported 'at("AAA"; 0; 60; .p90_ms = 400) |
 add_case bad-input-truncated         '.truncated = true'                                            "inconclusive: bad-input"
 add_case bad-input-other-subcommand  '.subcommand = "analytics-health"'                             "inconclusive: bad-input"
 add_case bad-input-duplicate-row     '.series += [.series[0]]'                                      "inconclusive: bad-input"
+add_case bad-input-truncated-absent 'del(.truncated)' "inconclusive: bad-input"
+add_case bad-input-not-an-object '[.]' "inconclusive: bad-input"
+add_case bad-input-negative-count '.series[0].count = -1' "inconclusive: bad-input"
+add_case bad-input-hour-off-the-hour '.series[0].hour = "2026-11-06T21:30:00Z"' "inconclusive: bad-input"
+add_case bad-input-colo-not-three-capitals '.series[0].colo = "aaa"' "inconclusive: bad-input"
+add_case order-unsorted-series '.series |= reverse' "inconclusive: positive-colo$Z"
 
 # All case inputs in ONE jq call (one compact line per case, in case order): jq start-up, not the recipe, dominates the time.
 PROG="$PRELUDE"
@@ -182,7 +217,7 @@ check "split: the joined pair gives the base's whole output" "$WANT_BASE" \
 # mutate <label> <case that must turn RED> <from> <to>: ONE literal edit of the extracted recipe. The row measures something
 # only when the anchor matched exactly once, the mutant differs, and the mutant still compiles (a mutant that does not compile
 # reds every case and proves nothing about the case set). A named mutation runs its named case only. The comment-only control
-# runs last, on every case the seven name, and must turn none of them RED (the runner does not red every edit).
+# runs last, on every case the named mutations name, and must turn none of them RED (the runner does not red every edit).
 NAMED_IDX=()
 mutate() {
   local label="$1" want_case="$2" from="$3" to="$4" tmp cnt mut i red=0 hit=""
@@ -214,23 +249,16 @@ mutate "M4 step by row position, not by clock hour" v-missing-hour-in-run '[rang
 mutate "M5 only the first exceedance from 01Z on is tried" vii-late-run-from-06Z '[$qr[] | select(.k >= 2 and .p90_ms > $m) | .k | select(sustained)]' '[[$qr[] | select(.k >= 2 and .p90_ms > $m) | .k][0:1][] | select(sustained)]'
 mutate "M6 the second not-supported path dropped" viii-late-run-from-01Z ' or ($j | any(.late_run != null))' ''
 mutate "M7 the D2 null-colo rule dropped" ix-null-colo-at-10 'if $nq > 0 then "inconclusive: invalid-colo"' 'if false then "inconclusive: invalid-colo"'
+mutate "M8 the count check dropped from okrow" bad-input-negative-count '  and (.count | type == "number" and . >= 0)' ''
+mutate "M9 a missing truncated key read as not truncated" bad-input-truncated-absent '.truncated == false' '.truncated != true'
+mutate "M10 the object check dropped from okinput" bad-input-not-an-object 'def okinput: type == "object" and ' 'def okinput: '
 mutate "control: comment-only edit" "" '# health-colo R2 recipe:' '# (control) health-colo R2 recipe:'
 
-# --- floors (printf + exit 1, never through check/no) and accounting ---------------------------------------------------------
-if [[ "$((pass + fail))" != "$rows_run" ]]; then
-  printf 'FAIL: accounting: passes + fails (%s) != rows executed (%s) - a verdict was dropped\n' "$((pass + fail))" "$rows_run" >&2
+# --- the exit-status check and the verdict --------------------------------------------------------------------------------
+bash "${BASH_SOURCE[0]}" --forced-fail-child >/dev/null 2>&1
+frc=$?
+if [[ "$frc" -ne 1 ]]; then
+  printf 'FAIL: exit status: a run with one failed row exited %s, not 1 - the runner would read a failure as green\n' "$frc" >&2
   exit 1
 fi
-summary
-MUT_FLOOR=7
-if [[ "$mut_run" -lt "$MUT_FLOOR" ]]; then
-  printf 'FAIL: mutation-row floor: only %s recipe mutation rows ran, need %s (vacuity)\n' "$mut_run" "$MUT_FLOOR" >&2
-  exit 1
-fi
-ROW_FLOOR=54
-if [[ "$rows_run" -lt "$ROW_FLOOR" ]]; then
-  printf 'FAIL: executed-row floor: only %s rows ran, need at least %s (the exact current count; vacuity)\n' "$rows_run" "$ROW_FLOOR" >&2
-  exit 1
-fi
-if [[ "$fail" -gt 0 ]]; then exit 1; fi
-exit 0
+finish
