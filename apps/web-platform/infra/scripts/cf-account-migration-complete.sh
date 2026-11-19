@@ -80,24 +80,23 @@ _cfam_summary() {
   fi
 }
 
-# _cfam_load_gate — source the phase-gate library once (the ONE address list, and the NEW account
-# id constant the phase gate grades plans against). 0 ok, 1 unusable.
+# _cfam_load_gate — source the phase-gate library (the ONE address list, the NEW and OLD ids, the
+# state bucket and the R2 call) unless it is loaded, then shape-check the four ids. Called once per
+# run, before the state is read: cfam_main for a local file, cfam_from_r2 once the run is gated.
+# 0 ok; 2 unusable (verdict printed).
 _cfam_load_gate() {
-  if declare -F cf_account_migrate_phase_spec >/dev/null 2>&1 && [[ -n "${CFAM_NEW_ACCOUNT_ID:-}" ]]; then
-    [[ "${CFAM_NEW_ACCOUNT_ID}" =~ ^[0-9a-f]{32}$ && "${CFAM_NEW_ZONE_ID:-}" =~ ^[0-9a-f]{32}$ ]] || return 1
-    return 0
-  fi
-  [[ -r "$CFAM_GATE_LIB" ]] || { echo "$P: gate library unreadable: $CFAM_GATE_LIB" >&2; return 1; }
+  local v bad=""
   # shellcheck source=/dev/null
-  source "$CFAM_GATE_LIB" || return 1
-  declare -F cf_account_migrate_phases >/dev/null && declare -F cf_account_migrate_phase_spec >/dev/null || return 1
-  [[ "${CFAM_NEW_ACCOUNT_ID:-}" =~ ^[0-9a-f]{32}$ && "${CFAM_NEW_ZONE_ID:-}" =~ ^[0-9a-f]{32}$ ]] || return 1
+  { declare -F cf_account_migrate_phase_spec >/dev/null || source "$CFAM_GATE_LIB"; } || bad="unloadable"
+  for v in CFAM_NEW_ZONE_ID CFAM_NEW_ACCOUNT_ID CFAM_OLD_ZONE_ID CFAM_OLD_ACCOUNT_ID; do
+    [[ "${!v:-}" =~ ^[0-9a-f]{32}$ ]] || bad+=" $v"
+  done
+  [[ -z "$bad" ]] || { _cfam_unreadable gate-library-unusable "the phase-gate library at $CFAM_GATE_LIB is unusable (${bad# })"; return 2; }
 }
 
 # cfam_required_addresses — JSON array, the union of every phase's allow-set, from the gate.
 cfam_required_addresses() {
   local phase spec all="[]"
-  _cfam_load_gate || return 1
   while IFS= read -r phase; do
     [[ -n "$phase" ]] || continue
     spec="$(cf_account_migrate_phase_spec "$phase")" || return 1
@@ -106,7 +105,8 @@ cfam_required_addresses() {
   printf '%s\n' "$all"
 }
 
-# cfam_evaluate <mode> <state.json> — 0 complete, 1 incomplete, 2 unreadable.
+# cfam_evaluate <mode> <state.json> — 0 complete, 1 incomplete, 2 unreadable. Needs the gate
+# library loaded (_cfam_load_gate).
 cfam_evaluate() {
   local mode="$1" state="$2" req n_req reasons
   case "$mode" in full|web2-replace) ;; *) echo "$P: unknown mode '$mode'" >&2; return 2 ;; esac
@@ -119,7 +119,6 @@ cfam_evaluate() {
   jq -e '.resources | type == "array"' "$state" >/dev/null 2>&1 \
     || { _cfam_unreadable no-resources-array "the state has no resources array"; return 2; }
 
-  _cfam_load_gate || { _cfam_unreadable gate-library-unusable "the phase-gate library could not be loaded from $CFAM_GATE_LIB"; return 2; }
   req="$(cfam_required_addresses)" || { _cfam_unreadable required-set-unavailable "the phase allow-set could not be read from $CFAM_GATE_LIB"; return 2; }
   n_req="$(jq -r 'length' <<<"$req" 2>/dev/null)" || n_req=""
   # Anti-vacuity: an empty required set would reduce "every migrated address is in state" to true.
@@ -249,7 +248,7 @@ cfam_from_r2() {
     return 2
   fi
   command -v aws >/dev/null 2>&1 || { _cfam_unreadable aws-cli-missing "the aws CLI is not on PATH"; return 2; }
-  _cfam_load_gate || { _cfam_unreadable gate-library-unusable "the phase-gate library could not be loaded from $CFAM_GATE_LIB"; return 2; }
+  _cfam_load_gate || return 2
 
   umask 077
   local base="${RUNNER_TEMP:-${TMPDIR:-/tmp}}" work rc uri="s3://${CFAM_STATE_BUCKET}/${CFAM_STATE_KEY}"
@@ -286,7 +285,7 @@ cfam_main() {
       mode="${2-}"; shift 2 || { echo "usage: $0 [--mode full|web2-replace] <state.json>" >&2; return 2; } ;;
   esac
   if [[ $# -ne 1 ]]; then echo "usage: $0 [--mode full|web2-replace] <state.json>" >&2; return 2; fi
-  case "$mode" in full|web2-replace) ;; *) echo "usage: --mode must be full or web2-replace (got '$mode')" >&2; return 2 ;; esac
+  _cfam_load_gate || return 2
   cfam_evaluate "$mode" "$1"
 }
 

@@ -276,6 +276,19 @@ check "A22 no arguments is a usage error (rc 2)" eval '[[ $RC -eq 2 ]]'
 mut_state "$WORK/a23.json" '.resources = {}'
 run_eval "$SCRIPT" "$WORK/a23" "$WORK/a23.json"
 check "A23 a non-array resources member is unreadable (rc 2)" eval '[[ $RC -eq 2 ]] && has "$WORK/a23" "reason=no-resources-array"'
+# A27: the gate library is loaded once and its four ids shape-checked. A tree whose library names
+# a malformed OLD zone id is unusable (rc 2), never evaluated against the state.
+BADLIB="$WORK/badlib"
+mkdir -p "$BADLIB/apps/web-platform/infra/scripts" "$BADLIB/tests/scripts/lib"
+cp "$REPO/tests/scripts/lib/plan-gate-preamble.sh" "$BADLIB/tests/scripts/lib/"
+sed 's/^CFAM_OLD_ZONE_ID=.*/CFAM_OLD_ZONE_ID="not-an-id"/' "$GATE" > "$BADLIB/tests/scripts/lib/cf-account-migrate-gate.sh"
+row_bad_lib_unusable() {
+  cp "$1" "$BADLIB/apps/web-platform/infra/scripts/cf-account-migration-complete.sh"
+  run_eval "$BADLIB/apps/web-platform/infra/scripts/cf-account-migration-complete.sh" "$WORK/a27" "$COMPLETE"
+  [[ $RC -eq 2 ]] && has "$WORK/a27" "reason=gate-library-unusable" && has "$WORK/a27" "(CFAM_OLD_ZONE_ID)"
+}
+if cmp -s "$GATE" "$BADLIB/tests/scripts/lib/cf-account-migrate-gate.sh"; then no "A27 fixture: the library copy did not change"
+else check "A27 a gate library with a malformed OLD zone id is unusable (rc 2) and names it" row_bad_lib_unusable "$SCRIPT"; fi
 
 # ── B. scope decisions ─────────────────────────────────────────────────────────────────────
 scope_of() { # <script> <workflow-file> <job> <event> <web_host_key>
@@ -488,6 +501,7 @@ mut_row "tunnel account check dropped"            row_tunnel_old_refused       '
 mut_row "required-address check disarmed"         row_missing_refused          's/"missing " \+ \./empty/'
 mut_row "zero-cloudflare guard dropped"           row_zero_cloudflare_refused  's/\["no-cloudflare-resources"\]/[]/'
 mut_row "version check dropped"                   row_version_unreadable       's/\.version == 4/true/'
+mut_row "gate library id shape check dropped"     row_bad_lib_unusable         's/\|\| bad\+=" \$v"/|| :/'
 mut_row "web-2 exception accepts any key"         row_scope_web1_refused       's/"\$key" == "web-2"/"$key" == web-*/'
 mut_row "web-2 exception dropped"                 row_scope_web2_excepted      's/printf .gated web2-replace\\n./printf '"'"'gated full\\n'"'"'/'
 mut_row "deny-by-default inverted to exempt"      row_scope_unknown_job_gated  's/^  printf .gated full\\n.$/  printf '"'"'exempt-job %s\\n'"'"' "$job"/'
@@ -506,8 +520,8 @@ if (( PASS + FAIL != CASES )); then
   printf 'CONSERVATION FAILED: PASS(%s)+FAIL(%s) != CASES(%s) — a verdict was dropped or the helpers were neutered.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-# 92 rows ran when measured (2026-11-19, D1 review fixes); C14 may skip on a host whose aws sits beside jq.
-MIN_ASSERTIONS=91
+# 94 rows ran when measured (2026-11-20, simplicity review); C14 may skip on a host whose aws sits beside jq.
+MIN_ASSERTIONS=93
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s — rows were skipped, truncated, or the assertion machinery was neutered.\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
