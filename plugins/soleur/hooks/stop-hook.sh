@@ -311,7 +311,7 @@ if [[ -f "$TALLY_SCRIPT" ]]; then
 fi
 grant_exact=0
 consumed_set=0
-FRONT_NOW=$(awk '/^---$/{c++; next} c==1' "$RALPH_STATE_FILE" 2>/dev/null || true)
+FRONT_NOW=$(awk '/^---$/{c++; if (c>=2) exit; next} c==1' "$RALPH_STATE_FILE" 2>/dev/null || true)
 if printf '%s\n' "$FRONT_NOW" | grep -qx 'retry_budget_grant: 1'; then
   grant_exact=1
 fi
@@ -346,6 +346,7 @@ fi
 # The same pass rewrites an exact unquoted retry_budget_grant: 1 to 0 and sets
 # retry_budget_consumed: 1. It never clears the consumed line.
 TEMP_FILE="${RALPH_STATE_FILE}.tmp.$$"
+awk_rc=0
 awk -v iter="$NEXT_ITERATION" -v sc="$STUCK_COUNT" -v lrh="$LAST_RESPONSE_HASH" -v rc="$REPEAT_COUNT" -v simc="$SIMILARITY_COUNT" -v lrw="$LAST_RESPONSE_WORDS" -v downgrade="$downgrade" '
   BEGIN { seen_consumed = 0 }
   /^---$/ {
@@ -365,7 +366,18 @@ awk -v iter="$NEXT_ITERATION" -v sc="$STUCK_COUNT" -v lrh="$LAST_RESPONSE_HASH" 
   c==1 && /^retry_budget_consumed: 1$/ { seen_consumed = 1; print; next }
   c==1 && downgrade == 1 && /^retry_budget_grant: 1$/ { print "retry_budget_grant: 0"; next }
   { print }
-' "$RALPH_STATE_FILE" > "$TEMP_FILE" 2>/dev/null || true
+' "$RALPH_STATE_FILE" > "$TEMP_FILE" 2>/dev/null || awk_rc=$?
+awk_rc="${awk_rc:-0}"
+if [[ "$downgrade" -eq 1 ]]; then
+  front_closes=0
+  if [[ -f "$TEMP_FILE" ]]; then
+    front_closes=$(grep -c '^---$' "$TEMP_FILE" || true)
+  fi
+  if [[ "$awk_rc" -ne 0 || ! -s "$TEMP_FILE" ]] || ! grep -qx 'retry_budget_consumed: 1' "$TEMP_FILE" || [[ "$front_closes" -lt 2 ]]; then
+    rm -f "$TEMP_FILE"
+    exit 0
+  fi
+fi
 if [[ -s "$TEMP_FILE" ]]; then
   mv "$TEMP_FILE" "$RALPH_STATE_FILE" || { rm -f "$TEMP_FILE"; exit 0; }
 else
@@ -398,19 +410,27 @@ fi
 if [[ -n "$TALLY_CAPPED" ]]; then
   _TN=$(printf '%s' "$TALLY_OUT" | grep -o "^tally:.*" | grep -o "${TALLY_CAPPED}=[0-9]*" | cut -d= -f2 || true)
   printf 'SOLEUR_TALLY_CAPPED dim=%s cap=%s\n' "$TALLY_CAPPED" "${TALLY_CAP:-0}" >&2
-  # `--reset` deliberately NOT suggested: bare `init --max-<dim> N` takes
-  # `capped-reset`, which unlatches but PRESERVES the tally the feature
-  # exists to keep.
-  printf 'Ralph loop: pipeline tally is budget-capped; resume via pipeline-tally.sh init --max-%s N (raised caps).\n' "$(printf '%s' "$TALLY_CAPPED" | tr '_' '-')" >&2
   # Classified-stop artifact: the state file is the ralph loop's own
   # record — a resume that only reads stderr would never see the stop.
   printf 'budget-capped: %s=%s/%s\n' "$TALLY_CAPPED" "${_TN:-0}" "${TALLY_CAP:-0}" >> "$RALPH_STATE_FILE" 2>/dev/null || true
   if [[ "$downgrade" -eq 1 ]]; then
-    readback=$(awk '/^---$/{c++; next} c==1' "$RALPH_STATE_FILE" 2>/dev/null || true)
-    if ! printf '%s\n' "$readback" | grep -qx 'retry_budget_grant: 0'; then
+    readback=$(awk '/^---$/{c++; if (c>=2) exit; next} c==1' "$RALPH_STATE_FILE" 2>/dev/null || true)
+    grant_rc=0
+    printf '%s\n' "$readback" | grep -qx 'retry_budget_grant: 0' || grant_rc=$?
+    if [[ "$grant_rc" -ne 0 ]]; then
+      exit 0
+    fi
+    consumed_rc=0
+    printf '%s\n' "$readback" | grep -qx 'retry_budget_consumed: 1' || consumed_rc=$?
+    if [[ "$consumed_rc" -ne 0 ]]; then
       exit 0
     fi
   else
+    # `--reset` deliberately NOT suggested: bare `init --max-<dim> N` takes
+    # `capped-reset`, which unlatches but PRESERVES the tally the feature
+    # exists to keep. The resume line is the real halt. A grant path falls
+    # through to the keep-alive block and does not print it.
+    printf 'Ralph loop: pipeline tally is budget-capped; resume via pipeline-tally.sh init --max-%s N (raised caps).\n' "$(printf '%s' "$TALLY_CAPPED" | tr '_' '-')" >&2
     exit 0
   fi
 fi

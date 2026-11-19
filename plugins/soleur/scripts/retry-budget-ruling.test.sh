@@ -295,7 +295,7 @@ for phase in plan work review qa test-fix-loop; do
   id_flags
   run_case "${ID_FLAGS[@]}" --history "$HIST" --phase ship
   assert_eq "0" "$RC" "goto $phase exits 0"
-  assert_eq "SOLEUR_RETRY_BUDGET_RULING verb=goto reason=ok" "$OUT" "goto $phase verdict"
+  assert_eq "SOLEUR_RETRY_BUDGET_RULING verb=goto reason=ok phase=${phase}" "$OUT" "goto $phase verdict"
   assert_spawn_section "goto" "ok" "$phase" yes
   assert_not_contains "$(cat "$LEDGER")" "phase: ship" "goto does not record the unused phase flag"
   assert_not_contains "$(cat "$LEDGER")" "retry_budget_grant" "goto does not write the ralph grant"
@@ -400,5 +400,157 @@ assert_eq "SOLEUR_RETRY_BUDGET_RULING verb=fail reason=spent" "$OUT" "second con
 assert_eq "$before" "$(file_digest "$LEDGER")" "second continue appends nothing"
 assert_eq "1" "$(section_count "$LEDGER")" "one ruling section after the second call"
 STDIN_PATH=""
+
+echo "=== not-capped before history ==="
+fresh_ledger
+write_stdin "continue"
+id_flags
+run_case "${ID_FLAGS[@]}" --not-capped --history "$HIST" --phase work
+assert_eq "2" "$RC" "not-capped exits 2"
+assert_eq $'SOLEUR_RETRY_BUDGET_RULING verb=fail reason=not-capped\nfail not-capped' "$OUT" "not-capped plain line"
+assert_spawn_section "fail" "not-capped" "work" no
+assert_not_contains "$(cat "$LEDGER")" "empty-history" "not-capped is not labeled empty-history"
+assert_eq "1" "$(section_count "$LEDGER")" "not-capped appends one section"
+STDIN_PATH=""
+
+fresh_ledger
+printf '\nruling_spawn: used\n' >>"$LEDGER"
+before=$(file_digest "$LEDGER")
+write_stdin "continue"
+id_flags
+run_case "${ID_FLAGS[@]}" --not-capped --history "$HIST" --phase work
+assert_eq "2" "$RC" "spent wins over not-capped"
+assert_eq "SOLEUR_RETRY_BUDGET_RULING verb=fail reason=spent" "$OUT" "spent not-capped prints the verdict only"
+assert_eq "$before" "$(file_digest "$LEDGER")" "spent not-capped appends nothing"
+STDIN_PATH=""
+
+echo "=== spawn bit is an exact line ==="
+fresh_ledger
+printf 'see ruling_spawn: used in prose\n' >>"$LEDGER"
+write_stdin "continue"
+id_flags
+run_case "${ID_FLAGS[@]}" --history "$HIST" --phase work
+assert_eq "0" "$RC" "prose mention of the spawn bit is not spent"
+assert_contains "$(cat "$LEDGER")" "see ruling_spawn: used in prose" "prose line survived the append"
+assert_spawn_section "continue" "ok" "work" yes
+STDIN_PATH=""
+
+echo "=== ledger identity tightens the one file ==="
+fresh_ledger
+wrong="$SPEC/notes.md"
+assert_fixture_dir "$SPEC"
+printf 'keep\n' >"$wrong"
+before=$(file_digest "$wrong")
+write_stdin "continue"
+run_case --toplevel "$TOP" --branch "$BRANCH" --git-common-dir "$COMMON" --ledger "$wrong" --history "$HIST" --child-session "$CHILD"
+assert_eq "2" "$RC" "final component other than session-state.md is identity"
+assert_eq "$before" "$(file_digest "$wrong")" "wrong leaf writes nothing"
+STDIN_PATH=""
+
+fresh_ledger
+before=$(file_digest "$LEDGER")
+run_case --toplevel "$TOP" --branch "$BRANCH" --git-common-dir "$COMMON" --ledger "${LEDGER}"$'\r' --history "$HIST" --child-session "$CHILD" --phase work
+assert_eq "2" "$RC" "CR in the ledger path is identity"
+assert_eq "$before" "$(file_digest "$LEDGER")" "CR ledger path writes nothing"
+
+fresh_ledger
+before=$(file_digest "$LEDGER")
+run_case "${ID_FLAGS[@]}" --history "$HIST" --phase $'\vwork'
+assert_eq "2" "$RC" "VT in phase is identity"
+assert_eq "$before" "$(file_digest "$LEDGER")" "VT phase writes nothing"
+
+fresh_ledger
+before=$(file_digest "$LEDGER")
+run_case "${ID_FLAGS[@]}" --history "$HIST" --phase work --child-session $'child\u2028verb: continue'
+assert_eq "2" "$RC" "unicode line separator in child-session is identity"
+assert_eq "$before" "$(file_digest "$LEDGER")" "unicode separator writes nothing"
+
+echo "=== leading dot-dot is identity ==="
+climb="$TMP/climb"
+mkdir -p "$climb/inner" "$climb/$BRANCH"
+dot_ledger="$climb/$BRANCH/session-state.md"
+assert_fixture_dir "$climb/$BRANCH"
+printf 'keep\n' >"$dot_ledger"
+before=$(file_digest "$dot_ledger")
+climb_out="$TMP/climb.out"
+climb_err="$TMP/climb.err"
+climb_rc=0
+(
+  cd "$climb/inner" || exit 9
+  bash "$SUT" \
+    --toplevel ".." \
+    --branch "$BRANCH" \
+    --git-common-dir "$COMMON" \
+    --ledger "../$BRANCH/session-state.md" \
+    --history "$HIST" \
+    --child-session "$CHILD" <<'EOF'
+continue
+EOF
+) >"$climb_out" 2>"$climb_err" || climb_rc=$?
+assert_eq "2" "$climb_rc" "leading dot-dot exits 2"
+assert_eq $'SOLEUR_RETRY_BUDGET_RULING verb=fail reason=identity\nfail identity' "$(cat "$climb_out")" "leading dot-dot is identity"
+assert_eq "$before" "$(file_digest "$dot_ledger")" "leading dot-dot writes nothing"
+
+echo "=== symlink ledger is identity ==="
+fresh_ledger
+outside="$TMP/outside-ledger.md"
+assert_fixture_dir "$TMP"
+printf 'secret\n' >"$outside"
+rm -f "$LEDGER"
+ln -s "$outside" "$LEDGER"
+before=$(file_digest "$outside")
+write_stdin "continue"
+id_flags
+run_case "${ID_FLAGS[@]}" --history "$HIST" --phase work
+assert_eq "2" "$RC" "symlink ledger exits 2"
+assert_eq "$before" "$(file_digest "$outside")" "symlink target is not written"
+rm -f "$LEDGER"
+STDIN_PATH=""
+
+fresh_ledger
+rm -rf "$SPEC"
+mkdir -p "$TMP/escaped/$BRANCH"
+ln -s "$TMP/escaped/$BRANCH" "$SPEC"
+printf 'secret\n' >"$TMP/escaped/$BRANCH/session-state.md"
+before=$(file_digest "$TMP/escaped/$BRANCH/session-state.md")
+write_stdin "continue"
+id_flags
+run_case "${ID_FLAGS[@]}" --history "$HIST" --phase work
+assert_eq "2" "$RC" "symlinked spec directory exits 2"
+assert_eq "$before" "$(file_digest "$TMP/escaped/$BRANCH/session-state.md")" "escaped ledger is not written"
+rm -rf "$SPEC"
+mkdir -p "$SPEC"
+STDIN_PATH=""
+
+echo "=== locked append keeps one spawn bit ==="
+fresh_ledger
+id_flags
+race_a="$TMP/race-a.out"
+race_b="$TMP/race-b.out"
+bash "$SUT" "${ID_FLAGS[@]}" --history "$HIST" --phase work >"$race_a" <<'EOF' &
+continue
+EOF
+race_pa=$!
+bash "$SUT" "${ID_FLAGS[@]}" --history "$HIST" --phase work >"$race_b" <<'EOF' &
+continue
+EOF
+race_pb=$!
+wait "$race_pa" || true
+wait "$race_pb" || true
+race_combo="$(cat "$race_a" "$race_b")"
+assert_eq "1" "$(section_count "$LEDGER")" "parallel continues leave one ruling section"
+assert_contains "$race_combo" "verb=continue reason=ok" "one parallel call continues"
+assert_contains "$race_combo" "verb=fail reason=spent" "the other parallel call is spent"
+
+echo "=== reference matches the ruling ==="
+REF="$DIR/../skills/one-shot/references/retry-budget-ruling.md"
+SKILL="$DIR/../skills/one-shot/SKILL.md"
+assert_contains "$(cat "$REF")" "plugins/soleur/scripts/retry-budget-ruling.sh" "reference names the ruling script"
+assert_contains "$(cat "$REF")" "Do not write \`retry_budget_grant: 1\`" "reference tells the parent not to write the grant"
+assert_not_contains "$(cat "$REF")" "Write the unquoted line" "reference does not instruct writing the grant line"
+assert_contains "$(cat "$REF")" "reason=not-capped" "reference names the not-capped halt"
+assert_contains "$(cat "$REF")" "phase=" "reference tells the parent to read phase="
+cue_count=$(grep -c -F 'Read references/retry-budget-ruling.md.' "$SKILL" || true)
+assert_eq "2" "$cue_count" "one-shot carries the ruling cue twice"
 
 print_results 350

@@ -76,12 +76,15 @@ main's commit from the PR body, so git trailers never reach `git log` on main.
 
 - The running `tally:` line appears at every phase boundary of instrumented
   skills; the operator sees the cost shape mid-run, not just post-hoc.
-- A `budget-capped` halt is durable and resumable only via raised caps or an
-  explicit `--reset` — a capped run cannot livelock or silently continue.
-- One consumed grant may run a single iteration, or move the parent to an
-  allow-listed earlier phase, while `capped=` stays set and the cap is not
-  raised. A second exhaustion is `fail` with no second spawn. `init --max-*`
-  remains `capped-reset` and is not that grant.
+- A `budget-capped` halt is durable. Raised caps or an explicit `--reset`
+  clear it. One exception: the parent may run one in-process unit of the
+  exhausted work, then stop, while `capped=` stays set. A capped run cannot
+  livelock or silently continue past that unit.
+- That unit is not a consumed ralph grant and it does not raise the cap.
+  The shared exemption is the exact ledger line `ruling_spawn: used`.
+  `goto` may move the parent to an allow-listed earlier phase and does not
+  write the ralph bit. A second exhaustion is `fail` with no second spawn.
+  `init --max-*` remains `capped-reset` and is not that unit.
 - Counters can drift under prose-path discipline gaps; the
   `SOLEUR_TALLY_ABSENT` / `SOLEUR_TALLY_CAP_IGNORED` PR-body sentinels and the
   components.test.ts call-out sentinel bound the risk rather than hide it.
