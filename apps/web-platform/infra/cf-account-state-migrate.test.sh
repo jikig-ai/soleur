@@ -18,16 +18,18 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 SUT="$SCRIPT_DIR/scripts/cf-account-state-migrate.sh"
+LIB="$REPO/tests/scripts/lib/cf-account-migrate-gate.sh"
 [[ -x "$SUT" ]] || { printf '[FATAL] not executable: %s\n' "$SUT" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { printf '[FATAL] jq is required\n' >&2; exit 2; }
 
-# The legacy ids are literals here, never read out of the script under test: a typo in the
-# script then reds this suite instead of agreeing with it (#12931 review, SM1).
+# The legacy ids are literals here, never read out of the library the script sources: a typo
+# there then reds this suite instead of agreeing with it (#12931 review, SM1).
 OZ="5af02a2f394e9ba6e0ea23c381a26b67"
 OA="4d5ba6f096b2686fbdd404167dd4e125"
-grep -qx "readonly OLD_ZONE_ID=\"$OZ\"" "$SUT" && grep -qx "readonly OLD_ACCOUNT_ID=\"$OA\"" "$SUT" \
-  || { printf '[FATAL] OLD ids in the script differ from the legacy account literals\n' >&2; exit 1; }
+grep -qx "CFAM_OLD_ZONE_ID=\"$OZ\"" "$LIB" && grep -qx "CFAM_OLD_ACCOUNT_ID=\"$OA\"" "$LIB" \
+  || { printf '[FATAL] OLD ids in the gate library differ from the legacy account literals\n' >&2; exit 1; }
 NZ="11111111111111111111111111111111"
 NA="22222222222222222222222222222222"
 UNK="99999999999999999999999999999999"
@@ -35,8 +37,12 @@ SENTINEL="SENTINEL-STATE-VALUE-DO-NOT-PRINT"
 
 SBX="$(mktemp -d -t cf-state-migrate.XXXXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
 trap 'rm -rf "$SBX"' EXIT INT TERM HUP
-mkdir -p "$SBX/bin" "$SBX/runs" "$SBX/mut" || { printf '[FATAL] mkdir failed\n' >&2; exit 2; }
-PRISTINE="$SBX/pristine.sh"
+# The script sources the gate library by its own relative path, so the pristine copy and every
+# mutant sit at the script's depth in a mirror tree whose tests/ is the real one.
+MUT_DIR="$SBX/tree/apps/web-platform/infra/scripts"
+mkdir -p "$SBX/bin" "$SBX/runs" "$MUT_DIR" || { printf '[FATAL] mkdir failed\n' >&2; exit 2; }
+ln -s "$REPO/tests" "$SBX/tree/tests" || { printf '[FATAL] ln failed\n' >&2; exit 2; }
+PRISTINE="$MUT_DIR/pristine.sh"
 cp "$SUT" "$PRISTINE" || { printf '[FATAL] cp failed\n' >&2; exit 2; }
 
 PASS=0; FAIL=0; CASES=0
@@ -444,7 +450,7 @@ green() {
 }
 # mk_mutant <name> <sed-expr...>: copy pristine, apply, require it landed and parses.
 mk_mutant() {
-  local name="$1" m="$SBX/mut/$1.sh" e; shift
+  local name="$1" m="$MUT_DIR/mut-$1.sh" e; shift
   cp "$PRISTINE" "$m" || return 1
   for e in "$@"; do sed -i -e "$e" "$m" || return 1; done
   if cmp -s "$PRISTINE" "$m"; then printf '[FATAL] mutant %s did not land\n' "$name" >&2; exit 2; fi
@@ -577,7 +583,7 @@ M5="$(mk_mutant reorder '/^take_backup$/d' 's/^apply_rm$/apply_rm\ntake_backup/'
 red "row 5 mutant: state rm moved before the backup" "$M5" chk_backup_first '^rm-before-backup$' setup_mixed
 green "row 5b: the upload uses the pinned endpoint (R2_ENDPOINT ignored), the shared R2 env and a 60 s bound" chk_r2_call_shape setup_mixed
 # shellcheck disable=SC2016 # sed expressions match literal script text
-M5E="$(mk_mutant env-endpoint 's/--endpoint-url "$R2_ENDPOINT_PINNED"/--endpoint-url "${R2_ENDPOINT:-$R2_ENDPOINT_PINNED}"/')"
+M5E="$(mk_mutant env-endpoint 's/--endpoint-url "$CFAM_R2_ENDPOINT"/--endpoint-url "${R2_ENDPOINT:-$CFAM_R2_ENDPOINT}"/')"
 red "row 5b mutant: the environment picks the endpoint" "$M5E" chk_r2_call_shape '^endpoint-not-pinned$' setup_mixed
 M5P="$(mk_mutant env-prefix 's/^  env AWS_DEFAULT_REGION=auto AWS_REQUEST_CHECKSUM_CALCULATION=when_required \\$/  env \\/')"
 red "row 5b mutant: the shared R2 env prefix dropped" "$M5P" chk_r2_call_shape '^aws-env-prefix$' setup_mixed
@@ -616,14 +622,16 @@ green "fallback: no RUNNER_TEMP, no --backup-dir -> uploaded, and the mktemp cop
 MF="$(mk_mutant fallback-kept 's/^  if \[\[ -n "$FALLBACK_DIR" && -d "$FALLBACK_DIR" \]\]; then rm -rf "$FALLBACK_DIR"; fi$/  :/')"
 red "fallback mutant: the mktemp dir is not registered for cleanup" "$MF" chk_fallback_cleaned '^fallback-left:1$' setup_norunner
 
-# --- one source for the R2 literals the job also uses -----------------------
-printf '\n[parity] literals shared with cf-account-migrate-job.sh\n'
-JOB="$SCRIPT_DIR/scripts/cf-account-migrate-job.sh"
-for lit in 'readonly STATE_BUCKET=' 'readonly BACKUP_PREFIX=' 'serial_of() {'; do
-  a="$(grep -F -- "$lit" "$SUT")"; b="$(grep -F -- "$lit" "$JOB")"
-  r=1; [[ -n "$a" && "$(grep -c '' <<<"$a")" -eq 1 && "$a" == "$b" ]] && r=0
-  verdict "$r" "parity: '$lit' is byte-identical in the state-forget script and the job"
-done
+# --- the OLD ids are the gate library's (one copy, shared with the job and the predicate) ----
+printf '\n[one source] the script classifies by the library it sources\n'
+LT="$SBX/libtree"
+mkdir -p "$LT/apps/web-platform/infra/scripts" "$LT/tests/scripts/lib" || exit 2
+cp "$PRISTINE" "$LT/apps/web-platform/infra/scripts/cf-account-state-migrate.sh" || exit 2
+cp "$REPO/tests/scripts/lib/plan-gate-preamble.sh" "$LT/tests/scripts/lib/" || exit 2
+sed "s/^CFAM_OLD_ZONE_ID=\"$OZ\"$/CFAM_OLD_ZONE_ID=\"$UNK\"/" "$LIB" >"$LT/tests/scripts/lib/cf-account-migrate-gate.sh"
+if cmp -s "$LIB" "$LT/tests/scripts/lib/cf-account-migrate-gate.sh"; then printf '[FATAL] library copy did not change\n' >&2; exit 2; fi
+green_mut "one source: a library naming another OLD zone makes the fixture's OLD-zone entries unknown-id, 0 removed" \
+  "$LT/apps/web-platform/infra/scripts/cf-account-state-migrate.sh" chk_abort_unknown setup_2c
 
 # --- Rehearsal. --------------------------------------------------------------
 printf '\n[rehearsal] no aws call, local backup only\n'
@@ -663,7 +671,7 @@ verdict "$r" "args: non-rehearsal without R2_ENDPOINT uploads to the pinned endp
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=71
+EXPECTED_CASES=69
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

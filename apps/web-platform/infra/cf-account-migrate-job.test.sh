@@ -13,7 +13,7 @@
 #   gate functions' output.
 # - Refusals are proven load-bearing with sed mutants of a PRISTINE COPY: each mutant must differ
 #   (cmp), parse (bash -n), and turn a check that is GREEN on pristine RED for the named reason.
-# - Fixtures are synthesized; the OLD ids are derived from the state-forget script.
+# - Fixtures are synthesized; the OLD ids are literals, checked against the gate library.
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
@@ -24,12 +24,13 @@ MIGRATE="$HERE/scripts/cf-account-state-migrate.sh"
 [[ -f "$SUT" && -x "$MIGRATE" ]] || { printf '[FATAL] script under test missing\n' >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { printf '[FATAL] jq is required\n' >&2; exit 2; }
 
-# The legacy ids are literals here, never read out of the script under test: a typo in the
-# script then reds this suite instead of agreeing with it (#12931 review, SM1).
+# The legacy ids are literals here, never read out of the gate library the scripts source: a typo
+# there then reds this suite instead of agreeing with it (#12931 review, SM1).
 OZ="5af02a2f394e9ba6e0ea23c381a26b67"
 OA="4d5ba6f096b2686fbdd404167dd4e125"
-grep -qx "readonly OLD_ZONE_ID=\"$OZ\"" "$MIGRATE" && grep -qx "readonly OLD_ACCOUNT_ID=\"$OA\"" "$MIGRATE" \
-  || { printf '[FATAL] OLD ids in the script differ from the legacy account literals\n' >&2; exit 1; }
+grep -qx "CFAM_OLD_ZONE_ID=\"$OZ\"" "$REPO/tests/scripts/lib/cf-account-migrate-gate.sh" \
+  && grep -qx "CFAM_OLD_ACCOUNT_ID=\"$OA\"" "$REPO/tests/scripts/lib/cf-account-migrate-gate.sh" \
+  || { printf '[FATAL] OLD ids in the gate library differ from the legacy account literals\n' >&2; exit 1; }
 SENTINEL="SENTINEL-SECRET-VALUE-DO-NOT-PRINT"
 
 # shellcheck source=/dev/null
@@ -722,8 +723,9 @@ red "M7 -replace args dropped" "$M7" chk_zone_rest_args '^argv-mismatch$' setup_
 M9="$(mk_mutant inflight-exempt-drift 's/grep -qxF -- "$base" <<<"$exempt" && continue/[[ "$base" == apply-web-platform-infra.yml ]] \&\& continue/')"
 red "M9 the in-flight check skips a gated workflow (exempt list not the predicate's)" "$M9" chk_inflight '^not-refused' setup_inflight
 # Selector drift the argv-exact fakes now see (review J1, J2, J4).
-J1="$(mk_mutant backup-prefix 's#^readonly BACKUP_PREFIX="web-platform/backups/"$#readonly BACKUP_PREFIX="web-platform/nonexistent/"#')"
-red "J1 BACKUP_PREFIX drifts from the state-forget's" "$J1" chk_rehearsal_clean '^stub-refused$' setup_rehearsal
+# shellcheck disable=SC2016 # sed expression matches literal script text
+J1="$(mk_mutant backup-prefix 's#--prefix "$CFAM_BACKUP_PREFIX"#--prefix "web-platform/nonexistent/"#')"
+red "J1 the backup listing's prefix drifts from the state-forget's (the library's CFAM_BACKUP_PREFIX)" "$J1" chk_rehearsal_clean '^stub-refused$' setup_rehearsal
 J2="$(mk_mutant doppler-config 's/-c prd_terraform --name-transformer/-c prd --name-transformer/g')"
 red "J2 doppler run reads -c prd instead of prd_terraform" "$J2" chk_rehearsal_clean '^stub-refused$' setup_rehearsal
 J4="$(mk_mutant live-statuses 's/pending requested)$/completed success)/')"

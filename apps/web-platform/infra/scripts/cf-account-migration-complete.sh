@@ -41,11 +41,10 @@ esac
 CFAM_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly CFAM_GATE_LIB="${CFAM_SELF_DIR}/../../../../tests/scripts/lib/cf-account-migrate-gate.sh"
 readonly CFAM_RUNBOOK="knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md"
-readonly CFAM_OLD_ZONE_ID="5af02a2f394e9ba6e0ea23c381a26b67"
-readonly CFAM_OLD_ACCOUNT_ID="4d5ba6f096b2686fbdd404167dd4e125"
 readonly CFAM_TUNNEL_ADDR="cloudflare_zero_trust_tunnel_cloudflared.web"
-readonly CFAM_STATE_URI="s3://soleur-terraform-state/web-platform/terraform.tfstate"
-readonly CFAM_R2_ENDPOINT="https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com"
+# The state object, in the gate library's bucket (CFAM_OLD_*, CFAM_STATE_BUCKET and CFAM_R2_ENDPOINT
+# are the library's: one copy, shared with the migrate job and the state forget).
+readonly CFAM_STATE_KEY="web-platform/terraform.tfstate"
 readonly P="cf-account-migration-complete"
 
 # SCOPE (CTO D1, 2026-11-19): deny by default. EVERY workflow that calls the infra-credentials
@@ -250,9 +249,10 @@ cfam_from_r2() {
     return 2
   fi
   command -v aws >/dev/null 2>&1 || { _cfam_unreadable aws-cli-missing "the aws CLI is not on PATH"; return 2; }
+  _cfam_load_gate || { _cfam_unreadable gate-library-unusable "the phase-gate library could not be loaded from $CFAM_GATE_LIB"; return 2; }
 
   umask 077
-  local base="${RUNNER_TEMP:-${TMPDIR:-/tmp}}" work rc
+  local base="${RUNNER_TEMP:-${TMPDIR:-/tmp}}" work rc uri="s3://${CFAM_STATE_BUCKET}/${CFAM_STATE_KEY}"
   work="$(mktemp -d "${base%/}/cfam.XXXXXXXX")" || { _cfam_unreadable workdir "cannot create a private work dir"; return 2; }
   # shellcheck disable=SC2064 # expand $work now: the trap must remove THIS dir
   trap "rm -rf '$work'" EXIT
@@ -262,15 +262,15 @@ cfam_from_r2() {
   AWS_ACCESS_KEY_ID="$CFAM_KEY_ID" AWS_SECRET_ACCESS_KEY="$CFAM_KEY_SECRET" \
     AWS_DEFAULT_REGION=auto AWS_EC2_METADATA_DISABLED=true AWS_SESSION_TOKEN="" \
     AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required \
-    timeout 60 aws s3 cp "$CFAM_STATE_URI" "$work/state.json" --endpoint-url "$CFAM_R2_ENDPOINT" --only-show-errors \
+    timeout 60 aws s3 cp "$uri" "$work/state.json" --endpoint-url "$CFAM_R2_ENDPOINT" --only-show-errors \
     >/dev/null 2>&1 || rc=$?
   CFAM_KEY_ID="" CFAM_KEY_SECRET=""
   if (( rc == 124 )); then
-    _cfam_unreadable copy-timeout "copying ${CFAM_STATE_URI} did not finish within 60 s (credentials=${CFAM_CRED_SOURCE})"
+    _cfam_unreadable copy-timeout "copying ${uri} did not finish within 60 s (credentials=${CFAM_CRED_SOURCE})"
     return 2
   fi
   if (( rc != 0 )) || [[ ! -s "$work/state.json" ]]; then
-    _cfam_unreadable copy-failed "copying ${CFAM_STATE_URI} failed (rc=${rc}, credentials=${CFAM_CRED_SOURCE})"
+    _cfam_unreadable copy-failed "copying ${uri} failed (rc=${rc}, credentials=${CFAM_CRED_SOURCE})"
     return 2
   fi
   cfam_evaluate "$mode" "$work/state.json"

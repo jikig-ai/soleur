@@ -34,15 +34,12 @@
 set -uo pipefail
 umask 077
 
-readonly OLD_ZONE_ID="5af02a2f394e9ba6e0ea23c381a26b67"
-readonly OLD_ACCOUNT_ID="4d5ba6f096b2686fbdd404167dd4e125"
-# STATE_BUCKET and BACKUP_PREFIX are byte-identical to cf-account-migrate-job.sh's (the job's
-# rehearsal "no backup appeared" assertion lists this prefix); the suite pins the pair.
-readonly STATE_BUCKET="soleur-terraform-state"
-readonly BACKUP_PREFIX="web-platform/backups/"
-# The credentialed upload's destination is a literal, like the predicate's CFAM_R2_ENDPOINT
-# and the backend's endpoint (main.tf): an R2_ENDPOINT from the environment is ignored.
-readonly R2_ENDPOINT_PINNED="https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com"
+# The OLD ids, the state bucket, the backup prefix (the job's rehearsal "no backup appeared"
+# assertion lists it), the pinned R2 endpoint and cfam_serial_of come from the phase-gate library,
+# the one copy the job and the completion predicate also source.
+# shellcheck source=/dev/null
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../../../tests/scripts/lib/cf-account-migrate-gate.sh" \
+  || { printf 'cf-state-migrate verdict=abort reason=gate-library-unusable\n'; exit 1; }
 readonly AWS_TIMEOUT_S=60
 readonly P="cf-state-migrate"
 
@@ -74,7 +71,7 @@ trap cleanup EXIT
 r2_aws() {
   env AWS_DEFAULT_REGION=auto AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
     AWS_RESPONSE_CHECKSUM_VALIDATION=when_required \
-    timeout "$AWS_TIMEOUT_S" aws "$@" --endpoint-url "$R2_ENDPOINT_PINNED"
+    timeout "$AWS_TIMEOUT_S" aws "$@" --endpoint-url "$CFAM_R2_ENDPOINT"
 }
 
 # abort <reason-code> <message> [exit-code]
@@ -108,7 +105,7 @@ parse_args() {
   done
   is_id "$NEW_ZONE_ID"    || usage "--new-zone must be 32 lowercase hex characters"
   is_id "$NEW_ACCOUNT_ID" || usage "--new-account must be 32 lowercase hex characters"
-  for old in "$OLD_ZONE_ID" "$OLD_ACCOUNT_ID"; do
+  for old in "$CFAM_OLD_ZONE_ID" "$CFAM_OLD_ACCOUNT_ID"; do
     [[ "$NEW_ZONE_ID" != "$old" ]]    || usage "--new-zone equals an OLD id"
     [[ "$NEW_ACCOUNT_ID" != "$old" ]] || usage "--new-account equals an OLD id"
   done
@@ -116,15 +113,11 @@ parse_args() {
   command -v terraform >/dev/null 2>&1 || usage "terraform is required"
 }
 
-# serial_of <state-file>: the numeric serial, byte-identical to cf-account-migrate-job.sh's
-# reader (the suite pins the pair).
-serial_of() { jq -er 'if (.serial | type) == "number" then .serial else error("no serial") end' "$1" 2>/dev/null; }
-
 # pull_serial <out-file>: pull state into the file and print its numeric serial.
 pull_serial() {
   terraform state pull >"$1" 2>/dev/null || return 1
   [[ -s "$1" ]] || return 1
-  serial_of "$1"
+  cfam_serial_of "$1"
 }
 
 take_backup() {
@@ -147,7 +140,7 @@ take_backup() {
     printf '%s backup=local path=%s\n' "$P" "$BACKUP_FILE"
     return 0
   fi
-  uri="s3://$STATE_BUCKET/${BACKUP_PREFIX}pre-cf-account-migration-$ts.tfstate"
+  uri="s3://$CFAM_STATE_BUCKET/${CFAM_BACKUP_PREFIX}pre-cf-account-migration-$ts.tfstate"
   r2_aws s3 cp "$BACKUP_FILE" "$uri" --only-show-errors >/dev/null 2>&1; rc=$?
   if [[ "$rc" -eq 124 ]]; then
     abort backup-upload-timeout "backup upload to $uri did not finish within ${AWS_TIMEOUT_S}s; 0 removed"
@@ -205,8 +198,8 @@ read_candidates() {
 # id_class <field> <value>: old | new | unknown
 id_class() {
   local old new
-  if [[ "$1" == zone ]]; then old="$OLD_ZONE_ID"; new="$NEW_ZONE_ID"
-  else old="$OLD_ACCOUNT_ID"; new="$NEW_ACCOUNT_ID"; fi
+  if [[ "$1" == zone ]]; then old="$CFAM_OLD_ZONE_ID"; new="$NEW_ZONE_ID"
+  else old="$CFAM_OLD_ACCOUNT_ID"; new="$NEW_ACCOUNT_ID"; fi
   if [[ "$2" == "$old" ]]; then printf 'old'
   elif [[ "$2" == "$new" ]]; then printf 'new'
   else printf 'unknown'; fi
@@ -269,7 +262,7 @@ verify_after() {
   out="$(list_candidates "$show" 2>/dev/null)" || post_write_fail relist-failed "post-rm terraform show -json is unparseable"
   if [[ -n "$out" ]]; then
     while IFS=$'\x1f' read -r addr type zid aid; do
-      if [[ "$zid" == "$OLD_ZONE_ID" || "$aid" == "$OLD_ACCOUNT_ID" ]]; then
+      if [[ "$zid" == "$CFAM_OLD_ZONE_ID" || "$aid" == "$CFAM_OLD_ACCOUNT_ID" ]]; then
         printf '%s still-old address=%s\n' "$P" "$addr" >&2
         left=$((left + 1))
       fi

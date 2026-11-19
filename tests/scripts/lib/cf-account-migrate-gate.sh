@@ -45,6 +45,21 @@ fi
 
 CFAM_NEW_ZONE_ID="951ce525552201ec6c696b24251abed7"
 CFAM_NEW_ACCOUNT_ID="66d4f93f7397f196544e9fe84c3557c2"
+# The OLD ids, the state bucket, the forget's backup prefix and the R2 endpoint that holds the
+# bucket. One copy: the job, the state forget (apps/web-platform/infra/scripts/
+# cf-account-state-migrate.sh) and the completion predicate all source this file. R2 stays on the
+# legacy account (ADR-329); a credentialed request's destination is this literal, never an
+# environment value (#7873).
+CFAM_OLD_ZONE_ID="5af02a2f394e9ba6e0ea23c381a26b67"
+CFAM_OLD_ACCOUNT_ID="4d5ba6f096b2686fbdd404167dd4e125"
+# shellcheck disable=SC2034 # read by the scripts that source this library
+{
+  CFAM_STATE_BUCKET="soleur-terraform-state"
+  CFAM_BACKUP_PREFIX="web-platform/backups/"
+  CFAM_R2_ENDPOINT="https://${CFAM_OLD_ACCOUNT_ID}.r2.cloudflarestorage.com"
+}
+# cfam_serial_of <state-file>: the numeric serial of a raw tfstate; rc != 0 when it has none.
+cfam_serial_of() { jq -er 'if (.serial | type) == "number" then .serial else error("no serial") end' "$1" 2>/dev/null; }
 # The committed imports file is what Guard 1 compares import ids against. CFAM_IMPORTS_FILE is a
 # test seam for a COPY of this library sourced from a temp dir, whose own path cannot locate the
 # file. Wherever the committed file is reachable (the job, the predicate, the suite's own source),
@@ -162,9 +177,6 @@ cf_account_migrate_gate() {
   local _cfam_refuse_destroy=1 _cfam_check_ids=1 _cfam_check_pure=1 _cfam_check_literal=1
   local _cfam_check_present=1 _cfam_check_reason=1 _cfam_check_physid=1 _cfam_check_noncf_old=1
   local spec literals violations="" v creates imports destroys n_rep
-  # The OLD ids, for the non-Cloudflare in-set check only (local: the predicate that sources this
-  # library declares its own readonly CFAM_OLD_* names).
-  local old_zone="5af02a2f394e9ba6e0ea23c381a26b67" old_account="4d5ba6f096b2686fbdd404167dd4e125"
 
   spec="$(cf_account_migrate_phase_spec "$phase")" || { echo "cf_account_migrate_gate: REFUSE — unknown phase '${phase}'"; return 1; }
   plan_gate_assert_readable     "cf_account_migrate_gate" "$plan_json" || return 1
@@ -262,7 +274,7 @@ cf_account_migrate_gate() {
   # allow-set: an out-of-set change is already refused above, and an R2 secret outside it may
   # legitimately carry the legacy account.
   if [[ "$_cfam_check_noncf_old" -eq 1 ]]; then
-    v="$(jq -r --argjson spec "$spec" --arg oz "$old_zone" --arg oa "$old_account" '
+    v="$(jq -r --argjson spec "$spec" --arg oz "$CFAM_OLD_ZONE_ID" --arg oa "$CFAM_OLD_ACCOUNT_ID" '
       .resource_changes[] | select((.mode // "managed") == "managed")
       | select($spec[.address] != null) | select(.type | startswith("cloudflare_") | not)
       | select(.change.after != null)

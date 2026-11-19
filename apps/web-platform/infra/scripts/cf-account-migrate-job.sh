@@ -8,7 +8,7 @@
 #   REHEARSAL       true | false
 #   REASON          non-blank audit text
 #   GITHUB_WORKSPACE, RUNNER_TEMP, INFRA_DIR (absolute, or relative to the workspace)
-#   R2_ENDPOINT     optional; when set it must equal the pinned state endpoint (R2_ENDPOINT_PINNED),
+#   R2_ENDPOINT     optional; when set it must equal the pinned state endpoint (CFAM_R2_ENDPOINT),
 #                   which is what every R2 call here and the state-forget use
 #   GH_TOKEN, GH_REPO   read of in-flight runs; DOPPLER_TOKEN   prd_terraform read for `doppler run`
 #   CFAM_VERIFY_TRIES, CFAM_VERIFY_SLEEP   optional post-apply probe budget (default 12 x 10s;
@@ -33,11 +33,8 @@ esac
 umask 077
 
 readonly P="cf-account-migrate"
-readonly STATE_BUCKET="soleur-terraform-state"
-readonly BACKUP_PREFIX="web-platform/backups/"
-# The legacy-account R2 endpoint that holds the state bucket (main.tf backend). A credentialed
-# request's destination is pinned, never taken from the environment (#7873).
-readonly R2_ENDPOINT_PINNED="https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com"
+# The OLD ids, the state bucket, the backup prefix and the pinned R2 endpoint (CFAM_*) and
+# cfam_serial_of come from the phase-gate library (load_libs), shared with the state forget.
 readonly PREDICATE_REL="apps/web-platform/infra/scripts/cf-account-migration-complete.sh"
 readonly LIVE_STATUSES=(queued in_progress waiting pending requested)
 
@@ -119,11 +116,11 @@ validate_inputs() {
   for v in RUNNER_TEMP INFRA_DIR; do
     [[ -n "${!v:-}" ]] || refuse missing-env "$v is not set"
   done
-  if [[ -n "${R2_ENDPOINT:-}" && "$R2_ENDPOINT" != "$R2_ENDPOINT_PINNED" ]]; then
+  if [[ -n "${R2_ENDPOINT:-}" && "$R2_ENDPOINT" != "$CFAM_R2_ENDPOINT" ]]; then
     refuse r2-endpoint-not-pinned "R2_ENDPOINT is set to something other than the pinned state endpoint; refusing to send state or credentials there"
   fi
   # The state-forget reads R2_ENDPOINT from the environment: hand it the pinned value only.
-  export R2_ENDPOINT="$R2_ENDPOINT_PINNED"
+  export R2_ENDPOINT="$CFAM_R2_ENDPOINT"
   # Integers only: the budget feeds bash arithmetic, where an array subscript would run a command.
   [[ "${CFAM_VERIFY_TRIES:-12}" =~ ^([1-9]|[1-5][0-9]|60)$ && "${CFAM_VERIFY_SLEEP:-10}" =~ ^([0-9]|[1-5][0-9]|60)$ ]] \
     || refuse bad-verify-budget "CFAM_VERIFY_TRIES must be 1-60 and CFAM_VERIFY_SLEEP 0-60 (integers)"
@@ -176,7 +173,6 @@ refuse_inflight() {
 # the LEGACY account; and every provider token the phase uses (cf_account_migrate_phase_tokens)
 # answers 200 on one GET against the NEW zone or account. No id or token is printed: a token
 # reaches curl on its stdin config channel, and only the HTTP code comes back.
-readonly R2_ACCOUNT_OLD="4d5ba6f096b2686fbdd404167dd4e125"
 readonly CF_API="https://api.cloudflare.com/client/v4"
 # The read probe per token, inside that token's own grant (the read half of what it edits).
 token_probe_path() {
@@ -225,7 +221,7 @@ check_ids() {
     || refuse zone-id-not-new "cf_zone_id does not resolve to the Soleur-account zone (Doppler still holds the OLD id, or none). Do the runbook Phase 2 flip first. Nothing was written."
   [[ "$acct" == "$CFAM_NEW_ACCOUNT_ID" ]] \
     || refuse account-id-not-new "cf_account_id does not resolve to the Soleur account (Doppler still holds the OLD id, or none). Do the runbook Phase 2 flip first. Nothing was written."
-  [[ "$r2" == "$R2_ACCOUNT_OLD" ]] \
+  [[ "$r2" == "$CFAM_OLD_ACCOUNT_ID" ]] \
     || refuse r2-account-not-old "cf_r2_account_id does not resolve to the legacy account that holds R2 (ADR-329: R2 never moves). Nothing was written."
   while IFS= read -r n; do
     line="$(awk -v n="$n" '$1 == "tok" && $2 == n {print $3; exit}' <<<"$out")"
@@ -259,16 +255,14 @@ entrypoint_gate() {
     _ "$GITHUB_WORKSPACE/tests/scripts/lib/preapply-entrypoint-gate.sh" "$W/tfplan.json" 2>&1
 }
 
-serial_of() { jq -er 'if (.serial | type) == "number" then .serial else error("no serial") end' "$1" 2>/dev/null; }
-
 # pull_remote <out-file>: the remote state, read through the real root's backend.
 pull_remote() { (cd "$ROOT" && terraform state pull) >"$1" 2>/dev/null && [[ -s "$1" ]]; }
 
 # list_backups: the sorted key list under the backup prefix. rc 124 = the listing timed out.
 list_backups() {
   local rc=0
-  r2_aws s3api list-objects-v2 --bucket "$STATE_BUCKET" --prefix "$BACKUP_PREFIX" \
-    --endpoint-url "$R2_ENDPOINT_PINNED" --output json >"$W/backups.json" 2>/dev/null || rc=$?
+  r2_aws s3api list-objects-v2 --bucket "$CFAM_STATE_BUCKET" --prefix "$CFAM_BACKUP_PREFIX" \
+    --endpoint-url "$CFAM_R2_ENDPOINT" --output json >"$W/backups.json" 2>/dev/null || rc=$?
   [[ "$rc" -eq 0 ]] || return "$rc"
   jq -sc '[.[0].Contents[]?.Key] | sort' "$W/backups.json" 2>/dev/null
 }
@@ -279,8 +273,8 @@ BK=""
 backups_or_refuse() {
   local rc=0
   BK="$(list_backups)" || rc=$?
-  [[ "$rc" -ne 124 ]] || refuse backups-timeout "listing s3://$STATE_BUCKET/$BACKUP_PREFIX ($1) did not finish within 60 s"
-  [[ "$rc" -eq 0 ]] || refuse backups-unreadable "cannot list s3://$STATE_BUCKET/$BACKUP_PREFIX ($1); the no-write assertion needs it"
+  [[ "$rc" -ne 124 ]] || refuse backups-timeout "listing s3://$CFAM_STATE_BUCKET/$CFAM_BACKUP_PREFIX ($1) did not finish within 60 s"
+  [[ "$rc" -eq 0 ]] || refuse backups-unreadable "cannot list s3://$CFAM_STATE_BUCKET/$CFAM_BACKUP_PREFIX ($1); the no-write assertion needs it"
 }
 
 state_migrate() { # [--rehearsal --backup-dir <dir>]; runs in the current directory
@@ -318,7 +312,7 @@ run_rehearsal() {
   backups_or_refuse before; b_before="$BK"
   mkdir -p "$scratch" "$W/backup" || refuse scratch-failed "cannot create the scratch root"
   pull_remote "$W/pull.tfstate" || refuse state-pull-failed "terraform state pull failed"
-  before="$(serial_of "$W/pull.tfstate")" || refuse state-pull-failed "pulled state has no numeric serial"
+  before="$(cfam_serial_of "$W/pull.tfstate")" || refuse state-pull-failed "pulled state has no numeric serial"
   tar -C "$ROOT" --exclude=./.terraform -cf - . | tar -C "$scratch" -xf - || refuse scratch-failed "cannot copy the root"
   rm -rf "$scratch/.terraform"
   printf 'terraform {\n  backend "local" {\n    path = "rehearsal.tfstate"\n  }\n}\n' >"$scratch/backend_override.tf"
@@ -336,11 +330,11 @@ run_rehearsal() {
   # The no-write assertions run whatever the rehearsal body did.
   # (rc 2: the entrypoint gate refused; any other non-zero: the forget or the phase gate.)
   pull_remote "$W/after.tfstate" || refuse state-pull-failed "terraform state pull (after) failed"
-  after="$(serial_of "$W/after.tfstate")" || refuse state-pull-failed "post-rehearsal state has no numeric serial"
+  after="$(cfam_serial_of "$W/after.tfstate")" || refuse state-pull-failed "post-rehearsal state has no numeric serial"
   rm -f "$W/after.tfstate"
   [[ "$after" == "$before" ]] || refuse remote-serial-changed "the remote state serial went $before -> $after during a rehearsal"
   backups_or_refuse after; b_after="$BK"
-  [[ "$b_after" == "$b_before" ]] || refuse backup-written "a new object appeared under $BACKUP_PREFIX during a rehearsal"
+  [[ "$b_after" == "$b_before" ]] || refuse backup-written "a new object appeared under $CFAM_BACKUP_PREFIX during a rehearsal"
   printf '%s rehearsal remote_serial=%s serial_unchanged=true backups_unchanged=true\n' "$P" "$before"
   [[ "$rc" -ne 2 ]] || refuse entrypoint-gate-refused "the whole-list entrypoint gate refused (a live phase entrypoint is populated, or its emptiness could not be proven); see the ::error lines above. Nothing was written."
   [[ "$rc" -eq 0 ]] || refuse rehearsal-refused "the rehearsal did not reach gate verdict=PASS (see above); nothing was written"

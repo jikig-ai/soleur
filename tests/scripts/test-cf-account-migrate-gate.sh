@@ -355,8 +355,30 @@ gate_mutate_layered "M-classify: the gate INVOKES the classifiable assert; neute
 gate_mutate_and_check "M-evalfail: the jq-error refusal is load-bearing (a check that cannot evaluate must not read as no violations)" \
   's|_cfam_eval_fail; return 1;|:;|g' cf_account_migrate_gate zone-rest "$TMP/zr9c-badstate.json" "$TMP/zr-badstate.json"
 
+# ── one source: the job, the state forget and the predicate read the shared constants here ──
+# The literals are this suite's own (an oracle independent of the library), so a typo in the
+# library reds here; a consumer that re-types one, or keeps its own serial reader, reds below.
+if [[ "$CFAM_OLD_ZONE_ID" == "$OZ" && "$CFAM_OLD_ACCOUNT_ID" == "$OA" && "$CFAM_STATE_BUCKET" == soleur-terraform-state \
+      && "$CFAM_BACKUP_PREFIX" == web-platform/backups/ && "$CFAM_R2_ENDPOINT" == "https://$OA.r2.cloudflarestorage.com" ]] \
+   && printf '{"serial":7}' > "$TMP/ser.json" && [[ "$(cfam_serial_of "$TMP/ser.json")" == 7 ]] \
+   && printf '{"serial":"7"}' > "$TMP/ser.json" && ! cfam_serial_of "$TMP/ser.json" >/dev/null; then
+  pass "one source: the library holds the OLD ids, bucket, backup prefix, legacy R2 endpoint and a numeric-only serial reader"
+else fail "one source: a shared constant or cfam_serial_of is wrong" 1 ""; fi
+CONSUMER_DIR="$HERE/../../apps/web-platform/infra/scripts"
+# own_copies <file>: code lines (full-line comments dropped) that re-type a shared literal or a serial reader.
+own_copies() { grep -vE '^[[:space:]]*#' "$1" | grep -nE "${OZ}|${OA}|soleur-terraform-state|web-platform/backups/|\.serial \| type"; }
+for c in cf-account-migrate-job.sh cf-account-state-migrate.sh cf-account-migration-complete.sh; do
+  if grep -vE '^[[:space:]]*#' "$CONSUMER_DIR/$c" | grep -q 'cf-account-migrate-gate\.sh' && [[ -z "$(own_copies "$CONSUMER_DIR/$c")" ]]; then
+    pass "one source: $c sources this library and re-types none of its ids, bucket, prefix, endpoint or serial reader"
+  else fail "one source: $c keeps its own copy (or does not source the library)" 1 "$(own_copies "$CONSUMER_DIR/$c")"; fi
+done
+sed "s/^set -uo pipefail\$/&\nreadonly OLD_ZONE_ID=\"$OZ\"/" "$CONSUMER_DIR/cf-account-state-migrate.sh" > "$TMP/own-copy.sh"
+if cmp -s "$TMP/own-copy.sh" "$CONSUMER_DIR/cf-account-state-migrate.sh"; then fail "M-own-copy: the mutation did not land" 1 ""
+elif [[ -n "$(own_copies "$TMP/own-copy.sh")" ]]; then pass "M-own-copy: a state forget that re-types the OLD zone id is caught (RED)"
+else fail "M-own-copy: a re-typed OLD zone id was not seen" 1 ""; fi
+
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 70 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 70)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 75 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 75)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]
