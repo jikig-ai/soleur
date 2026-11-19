@@ -592,8 +592,7 @@ const WEB_EGRESS_PROMPT_ADDENDUM =
 // spawn failed). The session then runs as if Agent web access were off, and without this line the prompt says nothing
 // about it, so the agent cannot explain why WebFetch is missing and retries or mis-states what it can do. The line
 // itself makes no GitHub claim (GitHub access differs between the repo-token and no-repo cases, and
-// GH_NO_NETWORK_PROMPT_ADDENDUM covers the latter); the GitHub clause below is appended only when the server-side
-// `github_*` read tools are registered, which is exactly when it is true.
+// GH_NO_NETWORK_PROMPT_ADDENDUM covers the latter).
 const WEB_EGRESS_START_FAILED_PROMPT_LINE =
   "## Web access unavailable in this session\n" +
   "Your workspace owner enabled Agent web access, but it failed to start for this session, so this " +
@@ -606,8 +605,8 @@ const WEB_EGRESS_START_FAILED_PROMPT_LINE =
 // Those tools run server-side with the installation token, so a failed forwarder does not affect them. No `gh` claim:
 // `registered` does not prove a sandbox token was minted.
 const WEB_EGRESS_START_FAILED_GITHUB_READ_CLAUSE =
-  "Your GitHub read tools (the `github_*` tools in your tool list) are not affected: use them for questions about " +
-  "the connected repository.";
+  "Your read-only GitHub tools (the `github_read_*` and `github_list_*` tools in your tool list) are not affected: " +
+  "use them for questions about the connected repository.";
 
 // feat-reasoning-chat-boxes (#5370) — instructs the Concierge to drive the
 // always-registered narrate/summarize tools. Appended UNCONDITIONALLY (the
@@ -3685,6 +3684,11 @@ export const realSdkQueryFactory: QueryFactory = async (
         if (text) githubReadPromptSuffix = `\n\n${text}`;
       }
     }
+    // #12598: the failed-to-start line, plus the read-tools clause when those tools are registered.
+    const startFailedSuffix = webEgressStartFailed
+      ? `\n\n${WEB_EGRESS_START_FAILED_PROMPT_LINE}` +
+        (readRegistration?.registered ? ` ${WEB_EGRESS_START_FAILED_GITHUB_READ_CLAUSE}` : "")
+      : "";
 
     let authProbe: AgentAuthFailureProbe = NOOP_AGENT_AUTH_PROBE;
     try {
@@ -3732,10 +3736,7 @@ export const realSdkQueryFactory: QueryFactory = async (
           effectiveSystemPrompt +
           (webEgress ? `\n\n${WEB_EGRESS_PROMPT_ADDENDUM}` : "") +
           githubReadPromptSuffix +
-          (webEgressStartFailed
-            ? `\n\n${WEB_EGRESS_START_FAILED_PROMPT_LINE}` +
-              (readRegistration?.registered ? ` ${WEB_EGRESS_START_FAILED_GITHUB_READ_CLAUSE}` : "")
-            : ""),
+          startFailedSuffix,
         resumeSessionId: safeResumeSessionId,
         // feat-open-web-egress (#9534) — live forwarder handle. Presence IS
         // the entitlement+spawn-verified condition (fail-closed: undefined

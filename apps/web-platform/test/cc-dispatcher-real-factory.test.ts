@@ -534,7 +534,8 @@ function makeFakeQuery() {
 const WORKSPACE_PATH = "/tmp/cc-test-workspace";
 // #12598: the heading of the line a session gets when its workspace grant is on but its forwarder failed to start.
 const START_FAILED_HEAD = "## Web access unavailable in this session";
-// #12598: the line's body (the text after its heading), so content asserts cannot match another prompt section.
+// #12598: asserts the line appears exactly once and returns its body (the text after its heading), so content asserts
+// cannot match another prompt section.
 const startFailedBody = (p: string): string => {
   const parts = p.split(START_FAILED_HEAD);
   expect(parts).toHaveLength(2);
@@ -599,6 +600,8 @@ function makeArgs(overrides: Partial<Parameters<typeof realSdkQueryFactory>[0]> 
 describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // #12598: clearAllMocks keeps implementations; reset the logger so a row that makes it throw cannot leak.
+    mockLogInfo.mockReset();
     // #11636: the push registration's seams default to the dark path (flag OFF) so every pre-existing case is unaffected.
     registrarOverride.fn = null;
     readRegistrarOverride.fn = null;
@@ -1659,7 +1662,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(outcome()[0][1].tags.forwarderLive).toBe("false");
       // #12598: a public repo is connected and the spawn failed, so the failed-to-start line appears exactly once, and it
       // says the registered GitHub read tools still work (they run server-side, not through the forwarder).
-      expect(startFailedBody(prompt())).toContain("`github_*` tools in your tool list");
+      expect(startFailedBody(prompt())).toContain("read-only GitHub tools");
     });
 
     it("entitled + NO connected repo: no tools, the connect-a-repository line, a debounced warning with its OWN literal, no info event", async () => {
@@ -2959,13 +2962,12 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
   // feat-open-web-egress (#9534) — workspace "Agent web access" grant.
   // -------------------------------------------------------------------------
   describe("web egress entitlement (#9534)", () => {
-    const LINE_HEAD = START_FAILED_HEAD;
     const prompt = () => mockQuery.mock.calls.at(-1)![0].options.systemPrompt as string;
 
     it("unentitled (default) → no forwarder spawn, no webEgress handle", async () => {
       await realSdkQueryFactory(makeArgs());
       expect(mockSpawnEgressForwarder).not.toHaveBeenCalled();
-      expect(prompt()).not.toContain(LINE_HEAD);
+      expect(prompt()).not.toContain(START_FAILED_HEAD);
       const opts = mockQuery.mock.calls[0][0].options;
       // WebFetch stays disallowed; WebSearch too.
       expect(opts.disallowedTools).toContain("WebFetch");
@@ -3016,7 +3018,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
         expect.anything(),
         expect.objectContaining({ allowWebEgress: true }),
       );
-      expect(prompt()).not.toContain(LINE_HEAD);
+      expect(prompt()).not.toContain(START_FAILED_HEAD);
     });
 
     it("entitled + spawn failure → degrade to zero-egress, mirrored, Query still built", async () => {
@@ -3042,7 +3044,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       expect(body).toMatch(/new conversation/);
       expect(body).not.toMatch(/WebFetch`? (is|are) (still )?available/);
       // No GitHub read tools are registered without a repo, so no GitHub clause.
-      expect(body).not.toContain("`github_*`");
+      expect(body).not.toContain("read-only GitHub tools");
     });
 
     it("entitled + spawn OK but the bound log line throws → the session keeps its live forwarder and gets no failed-to-start line", async () => {
@@ -3055,7 +3057,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
         await realSdkQueryFactory(makeArgs());
         const p = prompt();
         expect(p).toContain("## Web access enabled for this session");
-        expect(p).not.toContain(LINE_HEAD);
+        expect(p).not.toContain(START_FAILED_HEAD);
       } finally {
         mockLogInfo.mockImplementation(() => {});
       }
@@ -3070,7 +3072,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       });
       await realSdkQueryFactory(makeArgs({ persona: "support" }));
       expect(mockSpawnEgressForwarder).not.toHaveBeenCalled();
-      expect(prompt()).not.toContain(LINE_HEAD);
+      expect(prompt()).not.toContain(START_FAILED_HEAD);
     });
   });
 
