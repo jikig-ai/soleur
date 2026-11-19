@@ -16,6 +16,27 @@ lane: cross-domain
 
 PR-1b of the #11637 order (CTO ruling on #11637, 2026-11-19). `Ref #12906`. This PR does not close #12906.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-19 (after a plan review the same day)
+**Sections enhanced:** Proposed Solution (script steps 5, 8, 9b, 10, 10a; pointers; redaction), Verdict rules, Technical Considerations, Attack Surface, Phases 1 to 5, Guard Contract, Acceptance Criteria, User-Brand Impact
+**Agents used:** plan review: dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer, soleur:engineering:cto (devex), a sharp-edges verification pass. Deepen: security-sentinel, test-design-reviewer, a verify-the-negative and stale-symbol sweep. CTO rulings: items 16 to 20.
+
+### Key Improvements
+1. **The baseline is a scratch install of `MEASURED_BASELINE`.** That one exported object is shared with the runtime suite and carries pinned integrity, so a bump branch can no longer measure the candidate twice (CTO items B and E).
+2. **The run is contained.** `$HOME` and `$XDG_RUNTIME_DIR` are masked, and the worktree and git common dir are read-only, proven by a write probe that fails closed. npm runs with no access to the operator's npmrc token or cache (CTO item D).
+3. **The classifier cannot read a blind sensor as a finding.** A fixed precedence table, count-based F2 rules, a `post-teardown-ran` precondition and the per-arm observed CLI version guard against it. MIXED is conclusive in its coherent direction (CTO item A).
+4. **The operator can use it at the next bump without this plan.** It prints one `REMEASURE verdict= exit= reason= next=` line. A verdict-to-action table is in the script header and the ADR. `--markdown` writes the drafts.
+5. **The offline tests can go red.** The stubs refuse any argv they do not model, the real classifier is wired in, and the clock, disk and timeout are stubbed.
+
+### New Considerations Discovered
+- `npm view <pkg> time --json` returns the whole time map. The floor must read `time[exact]`.
+- `DETECTED bump` in `sdk-bump-sandbox-gate.sh` prints once per bumped package and is skipped without a base lockfile. The pointer `echo` goes after the loop.
+- The git common dir (with `.git/hooks`) lies outside the worktree. Remounting the worktree alone would leave the hooks writable.
+- `npm audit signatures` is not provenance. 0.3.328 has none.
+- The harness `.mts` is outside the tsconfig include, so the runtime suite is its only typecheck.
+- The discoverability probe returns rc=2 on this branch until #12897 merges and Phase 2 adds the command to the runtime suite. It is expected to pass after the Build stage.
+
 ## Overview
 
 Evidence-only follow-up to #12585 (PR #12897). On Agent SDK 0.3.321, PR #12897 measured that the SDK remembers a `SandboxNetworkAccess` allow per host for the rest of the CLI session. The permission callback is then never asked again for that host, so a later deny for it can never be given. That finding is why the arm ships deny-all (`gateway-unverified`) and why #12906, a real allow arm, is blocked.
@@ -65,7 +86,7 @@ If the session cannot wait for the Measure stage, the PR stays a draft and the s
   - exact-version-only input: CTO item 6 ruled dist-tags resolved and both recorded;
   - folding MIXED into INCONCLUSIVE (CTO item A).
 
-**Value-proposition measurement (Phase 0.6c).** Not a cost or performance claim. The cost of one run is two harness runs, each bounded by the suite's existing 420 s ceiling, plus a roughly 380 MB install. There is no model API spend, because the harness drives a local scripted Anthropic stub (`test/helpers/anthropic-stub.ts`).
+**Value-proposition measurement (Phase 0.6c).** Not a cost or performance claim. The cost of one run is two harness runs, each bounded by the script's 600 s timeout (the suite's own ceiling is 420 s), plus a roughly 380 MB install. There is no model API spend, because the harness drives a local scripted Anthropic stub (`test/helpers/anthropic-stub.ts`).
 
 **Relevant code (content anchors; all on the #12897 branch until it merges).**
 - `test/helpers/netns-egress-harness.mts`: `const { query } = await import("@anthropic-ai/claude-agent-sdk");` inside `runArm` is the only runtime SDK import. Spec shape `{ appRoot, scratch, tap, arms }`. Output lines `NETNS_STEP0 <json>` and `NETNS_ARM <json>`. `setupNamespace()` computes `step0.ok`. Arms `control`, `B`, `D`, `E`, `F` (`duringTurn` tears down after `.f-step1` and writes `.f-barrier`), `F2` (`followUps`).
@@ -126,27 +147,36 @@ If the session cannot wait for the Measure stage, the PR stays a draft and the s
      - the verdict JSON (`--out`);
      - with `--markdown <dir>`, two data-only drafts, `addendum.md` and `issue-comment.md` (plan-review, CTO devex finding 3). Each holds the exact command, a versions table for both runs, the per-arm tables, the verdict and the exit code. Each also holds a marked placeholder where the dated policy sentences from ADR-278 go. The script never writes those sentences itself, because they carry dates and conditions that would go stale.
    - **Exit code:** the process exit code is the classifier's (CTO items 3 and 5).
-   - **Single source of the pinned answer:** it exports `MEASURED_BASELINE = { version: "0.3.321", reading: "CACHES", fHosts: ["198.51.100.1"], f2Hosts: ["198.51.100.1", "example.test"] }`. The runtime suite imports `MEASURED_ON_SDK` from `MEASURED_BASELINE.version`, and its F and F2 blocks import the two host lists. A pin move then edits one object, and the suite and the classifier cannot drift apart (plan review: CTO devex 1, DHH 6, simplicity 1, sharp-edge 9).
+   - **Single source of the pinned answer:** it exports `MEASURED_BASELINE = { version: "0.3.321", reading: "CACHES", fHosts: ["198.51.100.1"], f2Hosts: ["198.51.100.1", "example.test"], integrity: { sdk: "<dist.integrity of 0.3.321>", linuxX64: "<dist.integrity of its linux-x64 package>" } }`. The runtime suite imports `MEASURED_ON_SDK` from `MEASURED_BASELINE.version`, and its F and F2 blocks import the two host lists. A pin move then edits one object, and the suite and the classifier cannot drift apart (plan review: CTO devex 1, DHH 6, simplicity 1, sharp-edge 9). The two integrity values are copied from `npm view <pkg>@<v> dist.integrity` at build time (CTO item E).
 
-3. **Re-run script (`apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh <version|dist-tag> [--out <path>] [--markdown <dir>] [--keep-scratch]`).** It honors `TMPDIR`. Each stage prints a progress line to stderr, such as `[4/7] candidate harness run (up to 10 min)`. Every exit path ends with the `REMEASURE verdict=... exit=... reason=... next=...` line. On paths the script decides before the classifier runs, the verdict word is `UNVERIFIED`, `REFUSED` or `ERROR`.
+3. **Re-run script (`apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh <version|dist-tag> [--out <path>] [--markdown <dir>] [--keep-scratch]`).** It honors `TMPDIR`. Each stage prints a progress line to stderr, such as `[10/11] candidate harness run (up to 10 min)`, numbered by script step. Every exit path ends with the `REMEASURE verdict=... exit=... reason=... next=...` line. On paths the script decides before the classifier runs, the verdict word is `UNVERIFIED`, `REFUSED` or `ERROR`.
 
    Steps:
    1. **Setup preflight.** The host must be Linux x64 with glibc, because the CLI lookup mirrors the SDK's glibc linux-x64 path. Any other host gets exit 3, reason `unsupported-arch` (plan review: Kieran 6). The setup also requires `node`, `npm`, `unshare` and the app's `node_modules/.bin/tsx`. If any is missing: exit 1, reason `setup-missing`, next `run npm ci in apps/web-platform`. This path prints no `UNVERIFIED` token, because a setup mistake is not a host limitation (CTO devex 5). The harness's own step 0 covers `ip`, `curl`, `socat` and `bwrap` (simplicity 8).
    2. **Namespace check.** If `unshare -rnm true` fails: exit 3, reason `no-userns`.
    3. **EXIT trap.** Set `scratch=""` and arm the trap before anything is written, so `set -u` holds on an early exit. It removes the scratch dir if one was created (unless `--keep-scratch` is set). It also re-hashes the app files. A changed hash forces exit 1 `app-mutated`, which overrides whatever exit the run was heading for.
    4. **App hash.** Hash the app's `package.json`, its `package-lock.json`, and every file under `node_modules/@anthropic-ai/claude-agent-sdk*`, using `find ... -type f -print0 | sort -z | xargs -0 sha256sum`. The hash covers the installed binaries, not only `package.json`, because the candidate CLI is itself a process that can write (sharp-edge 10).
-   5. **Resolve the version.** Resolve the argument to an exact version with `npm view @anthropic-ai/claude-agent-sdk@<arg> version`. Record both the argument and the exact version (CTO item 6). Read the linux-x64 package version from the SDK's `optionalDependencies`.
+   5. **Resolve the version.** Before any npm call, the argument must match `^([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?|[a-z][a-z0-9-]{0,30})$`, which refuses `npm:` aliases, `file:` paths, git and tarball URLs (exit 1 `bad-version-arg`; deepen: security 4). The resolved exact version must match the semver half. Resolve the argument to an exact version with `npm view @anthropic-ai/claude-agent-sdk@<arg> version`. Record both the argument and the exact version (CTO item 6). Read the linux-x64 package version from the SDK's `optionalDependencies`.
    6. **Release-age floor.** Read `npm view <pkg> time --json` for the SDK and for `@anthropic-ai/claude-agent-sdk-linux-x64`. Select the `time["<exact>"]` key, never `created` or `modified`; the command returns the whole time map (sharp-edge 5, verified 2026-11-19). The check is plain shell date arithmetic (`date -u -d`). If either package is under 3 days old: exit 3, reason `release-age-floor`, next `re-run after <clear time>`, verdict word `REFUSED`, and no `UNVERIFIED` token (CTO item 10; plan review: DHH 1, simplicity 2).
    7. **Scratch dirs and disk.** Under one `mktemp -d` in `TMPDIR`, create two install prefixes, `baseline/` and `candidate/`. Each harness run gets its own fresh `spec.scratch` and HOME dir, as `runHarness` makes a fresh `mkdtemp` per run. That makes four directories in all, never shared between an install and a run (plan review: Kieran 8). Check that at least 2 GB is free there. Two installs of about 380 MB each fit with headroom, and `/tmp` is RAM-backed on some hosts (CTO devex 4).
-   8. **Install.** For each prefix, from inside it, run `npm install --prefix "$dir" --ignore-scripts --no-audit --no-fund --save-exact --min-release-age=3 @anthropic-ai/claude-agent-sdk@<v>`, then `npm audit signatures`. The baseline installs `MEASURED_BASELINE.version`; the candidate installs the exact requested version. If signatures fail: exit 3, reason `signature-verification-failed`, verdict word `REFUSED`, next `file a security issue; do not record a finding`, no `UNVERIFIED` token.
+   8. **Install.** Every npm call in steps 5 to 8 runs as `env -i PATH="$PATH" HOME="$root/npm-home" npm_config_userconfig=/dev/null npm_config_globalconfig=/dev/null npm_config_cache="$root/npm-cache" npm_config_registry=https://registry.npmjs.org/ npm ...`. The real `~/.npmrc` carries a registry auth token, and the shared `~/.npm` cache and any registry override must not reach the run (deepen: security 1). For each prefix, from inside it, run `npm install --prefix "$dir" --ignore-scripts --no-audit --no-fund --save-exact --min-release-age=3 @anthropic-ai/claude-agent-sdk@<v>`, then `npm audit signatures`. The baseline installs `MEASURED_BASELINE.version`; the candidate installs the exact requested version. If signatures fail: exit 3, reason `signature-verification-failed`, verdict word `REFUSED`, next `file a security issue; do not record a finding`, no `UNVERIFIED` token.
    9. **Version asserts.** In each prefix, assert that the installed SDK `package.json` version equals the requested one and that the linux-x64 binary exists. The expected CLI version comes from that install's `claudeCodeVersion` field, never a constant (CTO item 6).
-   10. **Harness runs.** Run the harness twice under `unshare -rnm` with a constructed environment: `env -i`, the keys `runHarness` passes (`PATH`, `HOME` set to a scratch dir, `LANG`, `NODE_ENV=test`), plus `NETNS_SDK_ENTRY` set to that prefix's `sdk.mjs`. Both runs set the entry, so the app's own `node_modules` SDK is never the measured one. That is what makes the baseline valid on a bump branch, where the app already pins the new version (plan review: CTO devex 1, amending CTO item 9's "default entry"). Each run uses spec `{ tap: "allow-all", arms: ["control","B","D","E","F","F2"] }` (CTO item 4) and a 600 s timeout. A timeout or a non-zero harness exit is exit 1 `harness-crash`, which prints the harness stderr tail with the sentinel redaction below applied.
+   9b. **Integrity.** `npm audit signatures` is a registry signature and integrity check, not provenance: the packages carry no provenance attestation, so a stolen publish token would still yield a validly signed package. For the baseline prefix, the scratch lockfile's `integrity` for the SDK and linux-x64 tarballs must equal `MEASURED_BASELINE.integrity`. A mismatch is exit 3, reason `baseline-integrity-mismatch`, verdict `REFUSED`, and the candidate never runs, because published npm bytes never change. The candidate's two integrity values go into the verdict JSON and the addendum (CTO item E).
+   10. **Harness runs.** Run the harness twice under `unshare -rnm` with a constructed environment: `env -i`, the keys `runHarness` passes (`PATH`, `HOME` set to a scratch dir, `LANG`, `NODE_ENV=test`), plus `NETNS_SDK_ENTRY` set to that prefix's `sdk.mjs`. Both runs set the entry, so the app's own `node_modules` SDK is never the measured one. That is what makes the baseline valid on a bump branch, where the app already pins the new version (plan review: CTO devex 1, amending CTO item 9's "default entry"). Each run uses spec `{ appRoot, scratch, tap: "allow-all", arms: ["control","B","D","E","F","F2"] }` (CTO item 4), with `cwd` the app root and `tsx --tsconfig <app>/tsconfig.json`, as `runHarness` does. It is launched as `timeout -k 10 600 unshare -rnm --fork --pid --mount-proc --kill-child ...`, so the CLI, forwarder and socat children die with the run and cannot outlive the trap (deepen: security 3). A timeout or a non-zero harness exit is exit 1 `harness-crash`, which prints the harness stderr tail with the sentinel redaction below applied.
+   10a. **Containment (CTO item D).** Inside each run's mount namespace, before `tsx` starts, the script:
+       - mounts a tmpfs over the real `$HOME` and over `$XDG_RUNTIME_DIR`;
+       - bind-remounts read-only both the worktree top level (`git rev-parse --show-toplevel`) and the git common dir (`git rev-parse --git-common-dir`). The common dir lies outside a worktree and holds `.git/hooks`, so remounting only the app root would leave the hooks writable;
+       - asserts the scratch root lies outside `$HOME`, the worktree and the git common dir, else exit 3 `scratch-inside-protected-path`;
+       - runs a write probe: creating a file must fail in `$HOME`, the worktree and the git common dir, and succeed in scratch. Any wrong result, or any failed mount, is exit 3 `containment-unavailable`. It never falls back to running uncontained;
+       - sets `PATH` explicitly under `env -i`, with no shim directory under the masked `$HOME` (node resolves to `/usr/bin/node` on this host, and `tsx` is read from the app's `node_modules`).
+
+       Remaining exposure, named in the verdict JSON and the addendum: `/tmp` outside scratch and the rest of the user-writable host filesystem. #12969 still owns masking for the shared harness and the vitest suite.
    11. **Classify.** Pass both outputs and the expected versions to the classifier, and propagate its exit code.
 
 4. **Pointers (CTO item 7).** The exact one-line command is named in three places:
    - **The runtime suite's `MEASURED_ON_SDK` failure message.** It is reworded to give both versions and to say the script measures them side by side, for example "installed `<x>`, measured `<y>`: run `bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh <x>` (it installs both into scratch dirs), record the result in ADR-278, then update `MEASURED_BASELINE`" (CTO devex 6).
    - **The "Re-measure trigger" paragraph of ADR-278's 2026-11-18 addendum.** It names the command and gets the verdict-to-action table below (CTO devex 2).
-   - **`scripts/sdk-bump-sandbox-gate.sh`.** One `echo` right after the always-printed `DETECTED bump` line, not on the missing-ack error, which is skipped once the trailer is present (CTO devex 6).
+   - **`scripts/sdk-bump-sandbox-gate.sh`.** One `echo`, printed once right after the per-package loop that prints the `DETECTED bump` lines, when any SDK package bumped. It does not depend on the ack trailer, unlike the missing-ack error (CTO devex 6). The `DETECTED bump` echo prints once per bumped package and is skipped when the base lockfile cannot be read (deepen: verify-the-negative).
 
    The script's header and `--help` also carry the verdict-to-action table, so whoever runs it at the next bump needs nothing from this archived plan (CTO devex 2):
 
@@ -159,7 +189,7 @@ If the session cannot wait for the Measure stage, the PR stays a draft and the s
    | ERROR | Fix the cause (`setup-missing`, `harness-crash`, parse) and re-run; `app-mutated` also files a bug against the script |
    | LEAK | Separate ADR-278 addendum plus a bug issue against adopting that SDK |
    | UNVERIFIED | Record `UNVERIFIED:sdk-<v>-sandbox-network-allow-cache` and file an issue |
-   | REFUSED | No finding; wait for the floor (release-age) or file a security issue (signatures) |
+   | REFUSED | No finding; wait for the floor (release-age), or file a security issue (signatures, baseline integrity) |
 
 5. **Records (Measure stage).**
    - A new section in ADR-278: `## Addendum — <run date> (#12906): per-host allow cache re-measured on Agent SDK 0.3.328`.
@@ -182,7 +212,7 @@ The rules apply per run, then combine. The precedence is fixed (sharp-edge 4, si
 
 **Per-run preconditions.** Each one is an entry in one list that the combine step iterates:
 - **`versions`:** the observed `sdkVersion` equals the version expected for that run, and `cliVersion` and every arm's `initClaudeCodeVersion` equal the expected CLI version.
-- **`arms-present`:** every arm in `control,B,D,E,F,F2` emitted a record, and none has a `thrown` value.
+- **`arms-present`:** every arm in `control,B,D,E,F,F2` emitted a record, and every `thrown` is the empty string (the harness defaults it to `""`).
 - **`control`:** the control arm hit every decoy the silence checks rely on: `198.51.100.1:443`, `:80` and `:22`, `127.0.0.2:p` and `169.254.169.254:80`. Its gateway list is empty.
 - **`teardown`:** `F` and `F2` each have `fStep1`, `fTornDown` and `fPortClosed` set to true. F's `f-barrier` and F2's `f2-barrier` results are both `seen=yes`. Each arm's whole gateway list equals exactly `["CONNECT 198.51.100.1:443 HTTP/1.1"]`, with `authOk` true. Gateway records carry no timestamp, so the check is on the whole list.
 - **`post-teardown-ran`:** F's `f-3` result and F2's `f2-2` result match `DEAD_FORWARDER`, the regex the runtime suite uses, exported from the classifier so there is one copy. Without this check, a run in which the post-teardown curls never executed would read CACHES, a false finding from a blind sensor (plan review: Kieran 1).
@@ -205,11 +235,13 @@ The rules apply per run, then combine. The precedence is fixed (sharp-edge 4, si
 - the environment: node, npm, kernel, bwrap and the host OS;
 - the exact command line, and the UTC start and end times.
 
+**Path and identity redaction (deepen: security 6).** Before any output is written, the classifier rewrites absolute paths to relative forms (`<scratch>/candidate/...`, `<app>/...`). It refuses to emit output containing the stub sentinel, the operator's `$HOME`, `$USER`, the hostname, or the forwarder's egress-token format. The same check runs on the `--markdown` drafts before Phase 5 posts them with `gh issue comment`. `--keep-scratch` prints a warning that the kept directory holds unredacted transcripts.
+
 **Sentinel redaction.** The JSON never carries the harness's `stubRequests`, `toolResult` or `calls[].message` fields wholesale. The classifier copies only the fields listed above. As a backstop, it refuses to emit any output containing the stub's key sentinel (`decoy-api-key-sentinel`). The same check applies to the stderr tail the script prints on a crash (sharp-edge 12).
 
 ## Technical Considerations
 
-- **Security of the measured binary.** The CLI runs outside bwrap on the host filesystem inside `unshare -rnm`. There is no network during the run, but the operator's real home directory is visible. That is the reason for the 3-day floor and the signature check (CTO item 10). Masking HOME for the whole suite is tracked separately in #12969 (CTO item 10 dissent).
+- **Security of the measured binary.** The CLI runs outside bwrap, inside `unshare -rnm`, so there is no network during the run. The script's own run contains it (CTO item D): `$HOME` and `$XDG_RUNTIME_DIR` are masked with tmpfs, and the worktree and git common dir are read-only, proven by a write probe before `tsx` starts. What remains writable is scratch, `/tmp` outside scratch, and other user-writable host paths. The release-age floor lowers the odds of a bad release, and pinned baseline integrity plus the registry signature check verify the bytes. None of them is provenance (CTO item E). Masking for the shared harness and the vitest suite stays in #12969.
 - **No production change.** Nothing under `apps/web-platform/server/`, `app/`, `infra/` or `lib/` changes. `package.json` and `package-lock.json` are asserted unchanged. The harness edit keeps the default path byte-for-byte equivalent for the existing runtime suite.
 - **Required lane impact.** The runtime suite runs in ci.yml's `test-webplat` lane with `C4_BWRAP_REQUIRED: "1"`. The harness edit and the new step-0 assertion must stay green there. The new vitest classifier suite and the new `.test.sh` run in the existing shards (`test/**/*.test.ts` and the `apps/web-platform/scripts/*.test.sh` glob).
 - **Known flake (#12914).** The PRODUCTION-phase arms flaked once in 12 runs with a forwarder that looked not-live. The MEASUREMENT arms use the allow-all tap and never consult `isLive`, but a forwarder that died early would drop F's pre-teardown CONNECT. The precondition "exactly one pre-teardown CONNECT" turns that into INCONCLUSIVE, not a false RE-ASKS-AFTER-TEARDOWN.
@@ -224,8 +256,8 @@ This PR adds no path from sandboxed code to the network. It measures one. The su
 
 | Surface | Disposition |
 |---|---|
-| npm install of a candidate SDK (network) | Exact version, `--min-release-age=3`, `--ignore-scripts`, `npm audit signatures`, scratch cwd and prefix, app files hash-checked |
-| Candidate CLI binary executing on the host | No network (`unshare -rnm`); HOME exposure accepted under the floor; masking tracked in #12969 |
+| npm install of a candidate SDK (network) | Validated exact version or dist-tag, `--min-release-age=3`, `--ignore-scripts`, `npm audit signatures` (registry signature and integrity, not provenance), pinned baseline `dist.integrity`, `env -i` with scratch HOME, cache and `/dev/null` user and global npmrc, explicit registry, scratch cwd and prefix, app tree hash-checked |
+| Candidate CLI binary executing on the host | No network (`unshare -rnm`); tmpfs over `$HOME` and `$XDG_RUNTIME_DIR`; worktree and git common dir read-only, with a write probe that fails closed (`containment-unavailable`); `--fork --pid --kill-child` so no child outlives the run. Remaining: `/tmp` outside scratch and other user-writable paths |
 | Harness env | Constructed with `env -i` from the same keys the vitest `runHarness` passes; no ambient credential reaches the child |
 | Verdict JSON and the #12906 comment | Hosts are the synthetic decoys (`198.51.100.1`, `example.test`, `metadata.test`); no workspace, user or credential value |
 
@@ -242,7 +274,7 @@ Write the failing tests first in each phase (`cq-write-failing-tests-before`).
      - RE-ASKS-AFTER-TEARDOWN: F re-asks the decoy IP, and F2 re-asks it while also asking `example.test`.
      - MIXED: F caches and F2 re-asks. It is exit 0.
      - INCONCLUSIVE `incoherent-f-f2`: F re-asks and F2 caches. It is exit 2.
-   - **INCONCLUSIVE, one case per precondition:**
+   - **INCONCLUSIVE, one case per precondition.** Each case is a one-field change from the canonical fixture. Each asserts the exact `reason=candidate:<name>` (or `baseline:<name>`), not only exit 2. One test asserts that the canonical fixture passes every precondition (deepen: test-design 5).
      - control missed one decoy (each of the five, iterated);
      - `fPortClosed` false;
      - `f-barrier` or `f2-barrier` `seen=no`;
@@ -270,6 +302,7 @@ Write the failing tests first in each phase (`cq-write-failing-tests-before`).
 
 **Phase 2 — Harness override.**
 1. Edit `test/sandbox-network-access-runtime.test.ts`:
+   - Assert `step0.sdkVersion`, `step0.cliVersion` and each `initClaudeCodeVersion` are semver strings before comparing them, so two failed probes cannot pass as `null === null` (deepen: test-design 5).
    - Import `MEASURED_BASELINE` and `DEAD_FORWARDER` from the classifier module, and drop the local literals: `MEASURED_ON_SDK = MEASURED_BASELINE.version`, and the F and F2 blocks' host lists.
    - In the MEASUREMENT step-0 test, add `expect(run.step0.sdkVersion).toBe(MEASURED_ON_SDK)`. Also assert that every arm's `initClaudeCodeVersion` equals `step0.cliVersion`.
    - These assertions stay red until the harness records the fields.
@@ -279,11 +312,15 @@ Write the failing tests first in each phase (`cq-write-failing-tests-before`).
    - record the four STEP0 fields without changing `step0.ok`;
    - capture `initClaudeCodeVersion` from the `system`/`init` message in the existing message loop, before its `msg.type !== "user"` skip.
 3. Reword the `MEASURED_ON_SDK` failure message as in Proposed Solution 4. Per CTO item B, it says `MEASURED_BASELINE` moves only with a CACHES verdict and an ADR-278 addendum in the same PR.
-4. Run the runtime suite locally under `unshare` (it skips without userns). It must stay green on 0.3.321. This suite is the harness's only typecheck: `tsconfig.json` includes `**/*.ts`, not `.mts`.
+4. Run the runtime suite locally under `unshare` (it skips without userns). It must stay green on 0.3.321 with zero skipped tests. This suite is the harness's only typecheck: `tsconfig.json` includes `**/*.ts`, not `.mts`.
 
 **Phase 3 — Re-run script (tests first).**
 1. Create `apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.test.sh`. It is an offline suite in the `real-sdk-ask-probe.test.sh` style (CTO item C).
-   - **How it isolates the run:** stub `npm`, `unshare` and `uname` executables come first on `PATH`. The stub `unshare` prints canned `NETNS_*` output. Each row copies the script into a fixture app tree under the test's own `mktemp -d`, with a fake `node_modules/@anthropic-ai/claude-agent-sdk*`, and the script derives the app root from its own location. So there are no env seams, and nothing a real run could set to change its behavior (plan review: sharp-edge 1, DHH 2).
+   - **How it isolates the run:** stub `npm`, `unshare`, `uname`, `df`, `timeout` and glibc-probe executables come first on `PATH`.
+     - Each stub accepts only the exact argv it models: `unshare` only `-rnm --fork --pid --mount-proc --kill-child`, `npm` only the exact `view`, `install` (all flags, including `--min-release-age=3`, `--ignore-scripts` and the exact `@<v>`) and `audit signatures` forms, and the hardened npm environment. Any other argv exits 64 and is logged to a refusal file that every row asserts empty. So dropping `-n`, `env -i`, the floor flag or `--ignore-scripts` turns a row red (deepen: test-design 1 and 2).
+     - The stub `unshare` then runs the rest of its argv. A fixture harness prints synthesized `NETNS_*` lines and dumps its environment. A row asserts the env keys are exactly `{PATH,HOME,LANG,NODE_ENV,NETNS_SDK_ENTRY}`.
+     - The fixture tree links the real `tsx` and copies the real classifier module, so the script-to-classifier wiring (argv, expected versions, exit pass-through) is what runs (deepen: test-design 3).
+     - Fixture timestamps are offsets from now, at least one day from the 3-day line, except the exact-boundary row (deepen: test-design 4). Each row copies the script into a fixture app tree under the test's own `mktemp -d`, with a fake `node_modules/@anthropic-ai/claude-agent-sdk*`, and the script derives the app root from its own location. So there are no env seams, and nothing a real run could set to change its behavior (plan review: sharp-edge 1, DHH 2).
    - **Rows:**
      - an SDK whose `time["<exact>"]` is under the floor, while `created` and `modified` in the same map are old, gives exit 3 `release-age-floor`, verdict `REFUSED`, no `UNVERIFIED` token, and no `install` argv;
      - the same for a fresh linux-x64 package with an old SDK;
@@ -295,19 +332,28 @@ Write the failing tests first in each phase (`cq-write-failing-tests-before`).
      - a stub that touches the fixture's `package-lock.json`, or any file under the fixture's installed SDK, gives exit 1 `app-mutated`;
      - the scratch dir is gone after every exit row, including a harness that exits non-zero, and is kept with `--keep-scratch`;
      - both harness runs receive `NETNS_SDK_ENTRY`, each pointing into its own prefix;
-     - every row's last line matches `^REMEASURE verdict=\S+ exit=[0-9] reason=\S+ next=`.
+     - every row's last line matches `^REMEASURE verdict=\S+ exit=[0-9] reason=\S+ next=`;
+     - classifier wiring: fixture harness outputs that classify as exit 0, 2 and 4 make the script exit the same code with the same `reason=`;
+     - a package exactly 3 days old is allowed, and one a minute under is refused;
+     - a stub `df` under 2 GB gives exit 1 `low-disk` with no install;
+     - a stub `timeout` returning 124 gives exit 1 `harness-crash`, and its stderr tail contains no `decoy-api-key-sentinel`;
+     - a fixture tree whose `claude-agent-sdk*` glob matches nothing gives exit 1 `setup-missing`, so the app hash can never pass over zero files;
+     - a `npm:`-alias, `file:` or URL argument gives exit 1 `bad-version-arg` with no npm call.
+     - a stub containment probe that can write into the fixture `$HOME` (or the fixture git common dir) gives exit 3 `containment-unavailable` and starts no harness;
+     - a scratch root under the fixture `$HOME` gives exit 3 `scratch-inside-protected-path`;
+     - a baseline lockfile integrity that differs from the fixture `MEASURED_BASELINE.integrity` gives exit 3 `baseline-integrity-mismatch` and no candidate install.
 2. Create `apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh`. Use `set -uo pipefail`, and a header in the `sdk-bump-sandbox-gate.sh` style: purpose, issue and ADR refs, the exit table, the verdict-to-action table, and the "evidence only, never moves the pin" scope line. `--help` prints the header.
 3. `git add` the new suite, then run it and `bash scripts/lint-orphan-test-suites.sh`. The lint walks `git ls-files`, so it cannot see an untracked suite.
 
 **Phase 4 — Pointers.**
-- `scripts/sdk-bump-sandbox-gate.sh`: one `echo` naming the command, right after the `DETECTED bump` line. Run `scripts/sdk-bump-sandbox-gate.test.sh`, and update its pinned output if a row pins it.
+- `scripts/sdk-bump-sandbox-gate.sh`: one `echo` naming the command, once, after the loop that prints the `DETECTED bump` lines. Run `scripts/sdk-bump-sandbox-gate.test.sh`, and update its pinned output if a row pins it.
 - ADR-278's 2026-11-18 addendum, "Re-measure trigger" paragraph: name the command, and add the verdict-to-action table.
 
 **Phase 5 — Measure (waits for the later of #12897 merged and 2026-11-21T23:14Z).**
 1. Run `bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.328 --out <scratchpad>/verdict-0.3.328.json`. Use Monitor with an until-loop, or a run_in_background launch with its notification. Never poll with sleep (`hr-monitor-not-run-in-background-for-polling`).
 2. Branch on the `verdict=` word of the final `REMEASURE` line. The exit code only cross-checks it, because exit 0 covers three findings. Write the drafts with `--markdown <scratchpad>/records`, then paste the ADR-278 policy sentences into their placeholders:
    - **0 CACHES:** write the addendum. #12906 stays blocked, and the next run happens on the next SDK bump.
-   - **0 RE-ASKS-AFTER-TEARDOWN** (the brief's "no longer caches" case; renamed by CTO item 11 so it cannot be over-read): write the addendum stating:
+   - **0 RE-ASKS-AFTER-TEARDOWN** (the brief's "no longer caches" case; renamed by CTO item 14 so it cannot be over-read): write the addendum stating:
      - this run cannot tell three explanations apart: (i) the cache is gone; (ii) the SDK re-asks only because the connection to the dead forwarder failed, and would still reuse the allow while the forwarder is live; (iii) the cache became per-command or time-limited;
      - so the result is a trigger to build #12906's allow arm (not built here) and to run that issue's required live-forwarder deny-flip arm. It is not evidence that an allow can be revoked;
      - adopting 0.3.328 fires the results note's SDK-version and CLI-version re-measure triggers, which re-arms CLO gate B-2;
@@ -315,10 +361,10 @@ Write the failing tests first in each phase (`cq-write-failing-tests-before`).
      - building the allow arm re-fires the CLO DPIA t4 re-screen before merge.
    - **0 MIXED** (CTO item A): write the addendum stating that F cached within one command while F2 re-asked across commands, which is most consistent with explanation (iii), a cache per command. Like RE-ASKS-AFTER-TEARDOWN, it is a trigger for #12906 and its deny-flip arm, not evidence that an allow can be revoked. The B-2, full-suite and DPIA t4 statements apply as in that branch.
    - **2 INCONCLUSIVE:** re-run once. A conclusive re-run is the finding, recorded next to the first run, which it never replaces. Otherwise record INCONCLUSIVE with its reason, and file an issue naming it (plan review: DHH 8).
-   - **3 `UNVERIFIED`** (`no-userns`, `unsupported-arch` or `step0`): record `UNVERIFIED:sdk-0.3.328-sandbox-network-allow-cache` in the addendum, and file an issue with the step-0 fields and host versions.
-   - **3 `REFUSED`** (`release-age-floor` or `signature-verification-failed`): do not record a finding. For release-age, wait. For signature, file a security issue and stop.
+   - **3 `UNVERIFIED`** (`no-userns`, `unsupported-arch`, `containment-unavailable`, `scratch-inside-protected-path` or `step0`): record `UNVERIFIED:sdk-0.3.328-sandbox-network-allow-cache` in the addendum, and file an issue with the step-0 fields and host versions.
+   - **3 `REFUSED`** (`release-age-floor`, `signature-verification-failed` or `baseline-integrity-mismatch`): do not record a finding. A baseline integrity mismatch also files a security issue: published npm bytes never change. For release-age, wait. For signature, file a security issue and stop.
    - **4 LEAK:** write a separate short addendum and comment on #12906. A candidate LEAK files a bug issue against adopting that SDK. A `LEAK (baseline)` files a P1 issue against the production pin, and the addendum says the pinned SDK leaked.
-   - **1 `ERROR`, `setup-missing` or `app-mutated`:** fix the cause and re-run. Record nothing, except that `app-mutated` also files a bug issue against the script.
+   - **1 `ERROR`** (`setup-missing`, `harness-crash`, parse, `app-mutated`): fix the cause and re-run. Record nothing, except that `app-mutated` also files a bug issue against the script.
 3. Every addendum, whatever the verdict, also carries:
    - the exact command;
    - the requested and exact versions, and the observed SDK, CLI, node, npm, kernel and bwrap versions of both runs;
@@ -381,7 +427,7 @@ Deferred: masking the real HOME from the CLI in the harness, tracked in #12969 (
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** nothing directly. No production code, pin or config changes. The indirect failure is a wrong verdict. A false RE-ASKS-AFTER-TEARDOWN could start #12906 on a false premise. That PR has its own runtime suite, PRODUCTION arms and CLO re-screen. A false CACHES keeps sandboxed web egress unavailable longer for owners who turned Agent web access on (today's state).
-- **If this leaks, the user's data is exposed via:** no user data path. The run uses synthetic decoys, a local model stub and no workspace or credential. The operator's own host is exposed to a compromised candidate SDK binary during the run, which the release-age floor and the signature check bound (#12969 tracks masking HOME).
+- **If this leaks, the user's data is exposed via:** no user data path. The run uses synthetic decoys, a local model stub and no workspace or credential. The operator's own host is exposed to a compromised candidate SDK binary during the run, which the script contains: `$HOME` and `$XDG_RUNTIME_DIR` are masked, the repo and git common dir are read-only, and there is no network. `/tmp` and other user-writable paths remain exposed. The release-age floor lowers the odds, and pinned integrity verifies the baseline bytes (CTO items D and E; #12969 tracks the shared harness).
 - **Brand-survival threshold:** `none`
 - `threshold: none, reason: evidence-only test tooling and records; no file under the sensitive-path regex changes, no production behavior or pin moves, and the verdict gates nothing automatically.`
 - **Threshold decision (challengeable):** the one way this reaches a user is through #12906, which carries its own `single-user incident` gates. This PR's output is evidence for that PR, not a decision.
@@ -451,17 +497,19 @@ discoverability_test:
 
 **Property.** After any run, whatever its exit, `apps/web-platform/package.json`, `apps/web-platform/package-lock.json` and every file under the installed `apps/web-platform/node_modules/@anthropic-ai/claude-agent-sdk*` are byte-identical to their state before the run, and the scratch directory no longer exists.
 
-**Assembly.** The writers that could touch the app tree are the npm calls, the harness runs and the candidate CLI they start. The installs run with cwd and `--prefix` set to the scratch prefixes, and the CLI runs with a scratch HOME and cwd. The pre-run hash is taken before the first npm call. The post-run comparison and the scratch removal both run in the EXIT trap. The trap is armed, with `scratch=""`, before the hash and before any write, so every exit passes through it, and `app-mutated` overrides any other exit. Exit sites by position: tool and userns refusals, and the release-age refusal, happen before any write, with no scratch dir yet. The install, signature, version, harness and classifier exits all happen after the scratch dir exists and before the trap returns.
+**Assembly.** The writers that could touch the app tree are the npm calls, the harness runs and the candidate CLI they start. The installs run with cwd and `--prefix` set to the scratch prefixes, and the CLI runs with `$HOME` masked and the worktree and git common dir read-only (CTO item D), so it cannot write the app tree at all; the hash is the after-the-fact check on top. The pre-run hash is taken before the first npm call. The post-run comparison and the scratch removal both run in the EXIT trap. The trap is armed, with `scratch=""`, before the hash and before any write, so every exit after step 2 passes through it, and `app-mutated` overrides any other exit. Steps 1 and 2 exit before any write. Exit sites by position: tool and userns refusals, and the release-age refusal, happen before any write, with no scratch dir yet. The install, signature, version, harness and classifier exits all happen after the scratch dir exists and before the trap returns.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Drop `--prefix` (install lands in cwd) and run from the app dir | RED: the `.test.sh` stub-npm row writes into the fixture app and expects exit 1 `app-mutated` |
+| 1a | Drop `--prefix` from the install | RED: the stub `npm` refuses the argv (exit 64, refusal log non-empty) |
+| 1b | Run the install with cwd the app dir instead of the scratch prefix | RED: the stub `npm` writes into its cwd, and the row expects exit 1 `app-mutated` |
 | 2 | Own dispatch: the post-run hash compares the pre-run value with itself | RED: the "stub touches package-lock" row expects exit 1 |
 | 3 | Second member: hash only `package-lock.json`, not the installed SDK tree | RED: a stub that rewrites only a file under the fixture's installed `claude-agent-sdk-linux-x64` expects exit 1 |
 | 4 | Reorder: arm the trap after `mktemp -d`, with an exit between them | RED: the row whose harness stub exits non-zero asserts the scratch dir is gone |
 | 5 | The release-age check runs after the install | RED: the under-floor row asserts the stub npm saw no `install` argv |
+| 6 | Drop the read-only remount of the git common dir (keep the worktree remount) | RED: the containment-probe row whose fixture common dir is writable expects exit 3 `containment-unavailable` |
 
 **Harness rows:**
 - Suite edit that must go RED: a row runs the script in place, from the real `apps/web-platform`, instead of the copy in the fixture tree. A guard row asserts that every script path the suite executes is under its own `mktemp -d`.
@@ -475,10 +523,10 @@ discoverability_test:
 |---|---------------------|-----------|--------|
 | 1 | "re-measure, on @anthropic-ai/claude-agent-sdk 0.3.328 ... whether the SDK still caches a per-host SandboxNetworkAccess allow for the whole session, so that a later deny for the same host is never asked" [brief] | Phase 5 run; arms F and F2; verdict rules | mapped |
 | 2 | "Use the same network-namespace harness Phase 1a used ... (the child harness under `unshare -rnm`, with routable decoys and a positive control ...)" [brief] | Phase 2 harness override; control arm precondition | mapped |
-| 3 | "do NOT bump the production SDK pin in this PR, and run the measurement against 0.3.328 installed in an isolated harness directory" [brief] | Script steps 3 to 9 and 12; Guard 2 | mapped |
+| 3 | "do NOT bump the production SDK pin in this PR, and run the measurement against 0.3.328 installed in an isolated harness directory" [brief] | Script steps 3, 4, 7, 8 and 10; Guard 2 | mapped |
 | 4 | "Record the result in a dated addendum to ADR-278 and as a comment on #12906, with the exact command, versions and per-case outcome" [brief] | Phase 5 steps 3 and 4 | mapped |
 | 5 | "If 0.3.328 no longer caches, state that this is the trigger to build #12906's real allow arm (do not build it here) and note that any SDK bump re-arms CLO gate B-2" [brief] | Phase 5 step 2, RE-ASKS-AFTER-TEARDOWN branch | mapped |
-| 6 | "If the harness cannot run in this environment (no user namespaces), record `UNVERIFIED:sdk-0.3.328-sandbox-network-allow-cache` and file an issue" [brief] | Script step 13; Phase 5 step 2, environment branch | mapped |
+| 6 | "If the harness cannot run in this environment (no user namespaces), record `UNVERIFIED:sdk-0.3.328-sandbox-network-allow-cache` and file an issue" [brief] | Script step 2 (`no-userns`), the classifier's rank-3 `step0` row; Phase 5 step 2, `UNVERIFIED` branch | mapped |
 | 7 | "Commit the harness invocation as a reusable script so the next SDK bump can re-run it in one command" [brief] | Files to Create (script, classifier, tests); Phase 4 pointers; `MEASURED_BASELINE`; `--markdown` drafts; the verdict-to-action table in the script header and ADR | mapped |
 
 ### Plan-Item Provenance
@@ -515,7 +563,7 @@ Build stage:
 - **AC4** `apps/web-platform/test/sandbox-network-access-runtime.test.ts` passes on the 0.3.321 pin in the required `test-webplat` lane, including the new step-0 `sdkVersion` and `initClaudeCodeVersion` assertions. It now imports `MEASURED_BASELINE`.
 - **AC5** The pointers are anchored, never bare tokens (`cq-assert-anchor-not-bare-token`):
   - `grep -c 'bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh' apps/web-platform/test/sandbox-network-access-runtime.test.ts` is at least 1;
-  - `grep -A1 'DETECTED bump' apps/web-platform/scripts/sdk-bump-sandbox-gate.sh | grep -c remeasure-sdk-sandbox-network-cache.sh` is 1;
+  - `grep -c 'bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh' apps/web-platform/scripts/sdk-bump-sandbox-gate.sh` is at least 1, and a `sdk-bump-sandbox-gate.test.sh` row bumping one SDK package asserts that line is printed exactly once;
   - for ADR-278, `awk '/^\*\*Re-measure trigger\.\*\*/{f=1} f&&/^$/{exit} f' <ADR> | grep -c remeasure-sdk-sandbox-network-cache.sh` is at least 1.
 - **AC6** `git diff --quiet origin/main...HEAD -- apps/web-platform/package.json apps/web-platform/package-lock.json` exits 0.
 - **AC7** With the new `.test.sh` tracked (`git ls-files` lists it), `bash scripts/lint-orphan-test-suites.sh` passes. `tsc --noEmit` also passes in apps/web-platform. The harness `.mts` is not in the tsconfig include, so AC4 is its gate.

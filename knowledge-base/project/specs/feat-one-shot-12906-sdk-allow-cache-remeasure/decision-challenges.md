@@ -24,6 +24,8 @@ PR-1b for #12906 (`Ref #12906`): the 0.3.328 re-measure of the SDK's per-host `S
 | 16 (A) MIXED handling (plan review: Kieran vs DHH/simplicity) | technical | Ruled by CTO agent, 2026-11-19: (b) for the coherent direction only: F caches and F2 re-asks the allowed host gives MIXED, conclusive, exit 0, with its own addendum branch (explanation (iii) likely, a trigger for #12906, not evidence of revocability); the reverse is INCONCLUSIVE incoherent-f-f2 - the stub is deterministic, so the split is a real reading, but only one direction fits a cache model |
 | 17 (B) Baseline source (plan review: CTO devex 1) | technical | Ruled by CTO agent, 2026-11-19: confirmed; the baseline is a scratch install of MEASURED_BASELINE.version, which is the only place the version, reading, fHosts, f2Hosts and DEAD_FORWARDER are written, gated exactly like the candidate (exact version, release-age floor, signatures, observed versions), and it moves only with a CACHES verdict and an addendum update in the same PR - a default-entry baseline measures the candidate twice at the next bump |
 | 18 (C) Single TS orchestrator (plan review: DHH 5) | technical | Ruled by CTO agent, 2026-11-19: decline confirmed; bash wrapper plus TS classifier, the wrapper's floor, signature, arch, untouched-app and cleanup branches covered by an offline .test.sh with stubbed npm, following real-sdk-ask-probe.sh and .test.sh - verdict logic stays in the classifier's vitest suite. Dissent: two test runners for one tool, accepted |
+| 19 (D) Containment of the candidate CLI during the script's run (deepen: security-sentinel) | technical | Ruled by CTO agent, 2026-11-19: (a) the script's own run puts a tmpfs over $HOME and $XDG_RUNTIME_DIR and bind-remounts read-only the worktree top level and the git common dir (which holds .git/hooks and lies outside the worktree), keeps scratch writable and asserted outside all of them, runs a write probe that must fail on each protected path and succeed on scratch, exits 3 containment-unavailable on any failure and never falls back to running without containment, and names /tmp and other user-writable paths as the remaining exposure; #12969 keeps the harness and suite - the script already owns the mount namespace, and checking after the fact cannot undo a planted hook or persisted credential. Dissent: /tmp and other user-writable paths stay exposed, accepted |
+| 20 (E) Supply-chain claim and baseline integrity (deepen: security-sentinel) | technical | Ruled by CTO agent, 2026-11-19: confirmed; npm audit signatures is described as a registry signature and integrity check, not provenance; MEASURED_BASELINE pins dist.integrity for the sdk and linux-x64 tarballs and the scratch lockfile must match, else exit 3 baseline-integrity-mismatch before the candidate runs; the candidate's integrity is recorded in the verdict and addendum - without provenance a stolen token yields a validly signed package, and published npm bytes never change, so a pinned integrity is the strongest available check |
 
 Note: items 3, 5 and 8 above quote NO-LONGER-CACHES as ruled at the time; item 14 renames that verdict to RE-ASKS-AFTER-TEARDOWN everywhere else.
 
@@ -51,3 +53,21 @@ Panel: dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer (per 
 | Operator usability: verdict-to-action table, `--markdown`, progress, TMPDIR, `--keep-scratch`, pointer placement (CTO devex 2, 3, 4, 6) | taste | Applied: tooling-only, no user-visible, money or scope effect, and each serves ask 7 ("re-run it in one command"). Listed here so it can be challenged |
 | Cut dist-tag input (simplicity 3) | taste | Declined: CTO item 6 ruled dist-tags resolved and recorded |
 | Drop the mutation matrices from ACs (DHH 4) | taste | Partly applied: matrices kept for the guard lint; the "observe the red" step is replaced by naming the failing test in the PR body |
+
+## Deepen-plan (2026-11-19, headless)
+
+| Finding | Class | Disposition |
+|---|---|---|
+| npm calls saw the real HOME, `~/.npmrc` auth token and cache (security 1) | mechanical | Applied: `env -i` npm with scratch HOME and cache, `/dev/null` user and global config, explicit registry |
+| Children could outlive the trap (security 3) | mechanical | Applied: `timeout -k 10 600 unshare -rnm --fork --pid --mount-proc --kill-child` |
+| Version argument unvalidated (security 4) | mechanical | Applied: regex before any npm call, `bad-version-arg` |
+| Paths, user, hostname and token in public output (security 6) | mechanical | Applied: relative paths, refuse-on-match list, drafts checked before posting |
+| HOME and repo writable by the CLI (security 2) | fork, routed to CTO | See item 19 (D) |
+| Signatures described as provenance (security 5) | fork, routed to CTO | See item 20 (E) |
+| Stubs accepted any argv; canned output bypassed the real invocation (test-design 1, 2) | mechanical | Applied: argv-exact stubs, refusal log, env-key assertion |
+| Fake classifier in the fixture tree (test-design 3) | mechanical | Applied: real `tsx` and classifier in the fixture |
+| Clock, disk, glibc and timeout ambient (test-design 4) | mechanical | Applied: stubs and offset timestamps; `low-disk`, `harness-crash` rows |
+| INCONCLUSIVE cases asserted only the exit code; `null === null` (test-design 5) | mechanical | Applied: exact `reason=`, one-field deltas, semver asserts |
+| Boundary, empty-glob and stderr-redaction rows missing (test-design 6) | mechanical | Applied |
+| `DETECTED bump` prints per package and not always (sweep) | mechanical | Applied: the pointer goes after the loop; AC5 and the test row reworded |
+| Stale step numbers, CTO item citation, 420 s vs 600 s, trap coverage, spec fields, `thrown` default (sweep) | mechanical | Applied |
