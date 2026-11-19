@@ -4322,6 +4322,10 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
   const REVIEWER_LESS_RATCHET = new Set([
     "infra_privileged",
     "release_publish",
+    // #9294 — the deploy-channel carrier. Unattended from birth by design (the
+    // deploy-trigger consumers it will admit run with no human in the loop);
+    // a reviewers block would deadlock them, exactly like release_publish.
+    "deploy_channel",
   ]);
 
   test("every cutover-gate environment in the infra root gates on ≥1 reviewer", () => {
@@ -4375,6 +4379,10 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     // population for the same reason: deleting release-publish-environment.tf would
     // silently drop the reviewer-less limb's second member with the suite still green.
     expect(names).toContain("release_publish");
+    // (#9294) The reviewer-less deploy-channel carrier must be IN the population —
+    // the same reason as release_publish: deleting deploy-channel-environment.tf
+    // would silently drop the ratchet member with the suite still green.
+    expect(names).toContain("deploy_channel");
     // (#11923) The rotation-approval environment must be IN the population — its
     // ratchet membership is only load-bearing if the extractor actually sees it.
     expect(names).toContain("key_rotate_approval");

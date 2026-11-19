@@ -76,6 +76,7 @@ describe("resolveWorkspaceIdentityForSettings (General page — AC6/AC7/AC8)", (
       organizationId: ORG_ID,
       organizationName: "Acme",
       isOwner: true,
+      ownerCheck: "owner",
       hasLogo: true,
       canRename: false,
     });
@@ -107,7 +108,34 @@ describe("resolveWorkspaceIdentityForSettings (General page — AC6/AC7/AC8)", (
       service as never,
     );
     expect(result?.isOwner).toBe(false);
+    expect(result?.ownerCheck).toBe("member");
     expect(result?.hasLogo).toBe(false);
+  });
+
+  // #12704 V10: a failed or timed-out owner check is distinguishable from "not the owner"; the controls stay fail-closed.
+  it.each([
+    ["an RPC error", async () => ({ data: null, error: { message: "boom" } })],
+    ["a non-boolean answer", async () => ({ data: null, error: null })],
+    ["a rejected RPC", async () => { throw new Error("socket hang up"); }],
+  ])("%s -> ownerCheck 'unknown', isOwner false", async (_n, rpc) => {
+    const supabase = { auth: makeSupabase(true).auth, rpc: vi.fn(rpc) };
+    const service = makeService({ workspaces: { organization_id: null, logo_path: null } });
+    const result = await resolveWorkspaceIdentityForSettings(supabase as never, service as never);
+    expect(result?.ownerCheck).toBe("unknown");
+    expect(result?.isOwner).toBe(false);
+  });
+
+  it("an owner check that never settles -> 'unknown' at the resolver's bound", async () => {
+    vi.useFakeTimers();
+    try {
+      const supabase = { auth: makeSupabase(true).auth, rpc: vi.fn(() => new Promise(() => {})) };
+      const service = makeService({ workspaces: { organization_id: null, logo_path: null } });
+      const p = resolveWorkspaceIdentityForSettings(supabase as never, service as never);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect((await p)?.ownerCheck).toBe("unknown");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns null when no workspace row exists (renders nothing, no crash)", async () => {

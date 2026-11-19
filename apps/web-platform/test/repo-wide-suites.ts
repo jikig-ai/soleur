@@ -25,7 +25,9 @@
 //     via `"../../../plugins/soleur/..."`, which a `readFileSync`-plus-literal
 //     heuristic misses entirely.
 // A file escapes only when its longest `..` run EXCEEDS its depth below
-// `apps/web-platform`, or it names a repo-root helper (GIT_ROOT, repoRoot, …).
+// `apps/web-platform`, or it names a repo-root helper (GIT_ROOT, repoRoot, …),
+// or it imports a non-test module under test/ or lib/ that escapes (the
+// app-local `test/helpers/git-fixture-env.ts` re-export, for one).
 export const REPO_WIDE_SUITES: readonly string[] = [
   "test/adhoc-npm-install-pin-table.test.ts",
   "test/agent-outer-wrap.test.ts",
@@ -47,6 +49,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/cla-evidence/hash.test.ts",
   "test/cla-evidence/roster-entry-gate.test.ts",
   "test/claude-pin-lockstep.test.ts",
+  "test/connected-repo-git.test.ts",
   "test/context-injection.test.ts",
   "test/context-queries-hook.test.ts",
   "test/context-queries-shell-parity.test.ts",
@@ -169,4 +172,12 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/ws-resume-by-context-path.test.ts",
   "test/host-git-consumers-real-git.test.ts",
   "test/host-git.test.ts",
+  "test/git-isolated-local-real-git.test.ts",
+  "test/kb-sync-x2-alternate-refs-real-git.test.ts",
+  "test/kb-sync-held-real-git.test.ts",
+  "test/session-sync-kb-only-push-real-git.test.ts",
+  // #12718 (D24(10), D25(5)): these import the app-local test/helpers/git-fixture-env.ts re-export, an escaping helper
+  "test/kb-sync-pull.test.ts",
+  "test/session-sync-pull-isolated-real-git.test.ts",
+  "test/workspace-sync-self-heal-real-git.test.ts",
 ];

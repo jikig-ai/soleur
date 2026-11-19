@@ -19,6 +19,8 @@ import { reportSilentFallback } from "@/server/observability";
 // of cc-dispatcher — otherwise every test that loads the real dispatcher would
 // fail to resolve `server-only` under vitest. The handler runs only at real
 // tool invocation, where server-only is inert.
+// A type-only import is erased at compile time, so it adds no runtime edge.
+import type { C4WorkspaceSyncHeld } from "@/server/c4-writer";
 
 export const EDIT_C4_DIAGRAM_TOOL = "edit_c4_diagram";
 
@@ -94,6 +96,27 @@ export const C4_PROMPT_ADDENDUM =
   "any other folder you cannot re-render it: tell the " +
   "user to re-run the diagram export for that folder in their repository.";
 
+/**
+ * #12600 (CTO rulings D16, D22(c)): what the model is told when the commit landed on GitHub but a sync found the workspace
+ * in a designed hold (`workspaceSync: "pending"`). Re-sending would commit the same content again, so the text says not to
+ * retry to DELIVER this write; the render outcome is still relayed, because the render reads the commit from GitHub and a
+ * diagnostic stays actionable. A hold on only the post-render resync leaves the saved source in the workspace, so the text
+ * says the workspace "may not show this save yet"; with a held resync the model DID commit, so `rerendered:false` there
+ * is the hold, never a supersede.
+ */
+export function c4WorkspaceSyncPendingText(held: C4WorkspaceSyncHeld | undefined): string {
+  const rendered = held === "rerender" || held === "save_and_rerender";
+  const hold = "because it holds local changes that aren't on the repository's main branch yet.";
+  return [
+    rendered ? "Committed to GitHub, and the diagram was re-rendered on GitHub." : "Committed to GitHub.",
+    held === "rerender" ? `The workspace may not show this save yet ${hold}` : `The workspace copy was not updated ${hold}`,
+    "Do not retry to deliver this write: it is already on GitHub.",
+    rendered
+      ? "`rerendered` is false only because the workspace does not show the new diagram yet; no newer change superseded it, so do not offer to save again."
+      : "`rerendered` and `rerenderDiagnostic` still describe the diagram render.",
+  ].join(" ");
+}
+
 type ToolTextResponse = {
   content: Array<{ type: "text"; text: string }>;
   isError?: true;
@@ -109,6 +132,8 @@ function textResponse(payload: unknown, isError = false): ToolTextResponse {
 
 export interface BuildC4ConciergeToolsOpts {
   userId: string;
+  /** The active workspace id the dispatcher resolved: `writeC4Diagram`'s workspace sync keys on it (#12718, D27). */
+  workspaceId: string;
   installationId: number;
   owner: string;
   repo: string;
@@ -133,7 +158,7 @@ export interface BuildC4ConciergeToolsOpts {
  * Returns an array so the caller can spread it into `createSdkMcpServer`.
  */
 export function buildC4ConciergeTools(opts: BuildC4ConciergeToolsOpts) {
-  const { userId, installationId, owner, repo, workspacePath } = opts;
+  const { userId, workspaceId, installationId, owner, repo, workspacePath } = opts;
   return [
     tool(
       EDIT_C4_DIAGRAM_TOOL,
@@ -150,6 +175,7 @@ export function buildC4ConciergeTools(opts: BuildC4ConciergeToolsOpts) {
         const { writeC4Diagram } = await import("@/server/c4-writer");
         const result = await writeC4Diagram({
           userId,
+          workspaceId,
           installationId,
           owner,
           repo,
@@ -162,6 +188,22 @@ export function buildC4ConciergeTools(opts: BuildC4ConciergeToolsOpts) {
             { error: result.error, code: result.code, status: result.status },
             true,
           );
+        }
+        // #12600 D16, D22(c): the workspace was held, so an open workspace has no new
+        // diagram to reload and is not notified; the render outcome is still relayed
+        // (it ran on this commit, fetched from GitHub).
+        if (result.workspaceSync === "pending") {
+          return textResponse({
+            ok: true,
+            relativePath: args.relativePath,
+            commitSha: result.commitSha,
+            rerendered: result.rerendered,
+            ...(result.rerenderDiagnostic
+              ? { rerenderDiagnostic: result.rerenderDiagnostic }
+              : {}),
+            workspaceSync: result.workspaceSync,
+            message: c4WorkspaceSyncPendingText(result.workspaceSyncHeld),
+          });
         }
         // #8739 — notify the open workspace on `.c4` writes. `.md` view-embed
         // saves never re-render, so reporting them `rerendered:true` would let

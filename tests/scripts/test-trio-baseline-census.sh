@@ -223,7 +223,7 @@ REPO = a.repo
 
 # ── constants ────────────────────────────────────────────────────────────────────────────
 STEMS = ["WEBHOOK_DEPLOY_SECRET", "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"]
-PENDING_ENVS = {"deploy-channel", "inngest-cutover"}
+PENDING_ENVS = {"inngest-cutover"}
 MAX_EXPIRY = datetime.date(2027, 3, 31)
 ROW_EXPIRY = "2026-11-30"
 WARN_DAYS = 21
@@ -735,10 +735,10 @@ check("T6: the guard constants are pinned: the baseline records (stems, exempt c
       not pin_bad, "; ".join(pin_bad))
 
 if a.sibling:
-    extra = sorted((PENDING_ENVS - (SIB or set())) - {"deploy-channel"})
-    check("E1: the Tier-B environment set is single-sourced from %s (TIER_B_ENVIRONMENTS, %d names) plus only the pending name deploy-channel"
+    extra = sorted((PENDING_ENVS - (SIB or set())) - {"inngest-cutover"})
+    check("E1: the Tier-B environment set is single-sourced from %s (TIER_B_ENVIRONMENTS, %d names) plus only the pending name inngest-cutover"
           % (os.path.basename(a.sibling), len(SIB or ())), bool(SIB) and not extra,
-          "sibling set %s; pending names the sibling lacks beyond deploy-channel: %s" % (sorted(SIB or ()), extra))
+          "sibling set %s; pending names the sibling lacks beyond inngest-cutover: %s" % (sorted(SIB or ()), extra))
 else:
     check("E1: the Tier-B environment set is the fixture set (no sibling given)", True, "envs=%s" % sorted(ENVS))
 
@@ -2458,10 +2458,10 @@ landed_dir; mutant m54f T5c "B3: a doppler run of any config inside a Tier-B-env
 prep c54
 knobs RF_ENVS= RF_SIB="$ROOT/$SIBLING_REL"
 printf 'landed' > "$D/landed"
-green c54 "E1: with the environment set single-sourced from the sibling census (plus the pending deploy-channel) the fixture is all green" "E1: the Tier-B environment set is single-sourced from"
+green c54 "E1: with the environment set single-sourced from the sibling census (plus the pending inngest-cutover) the fixture is all green" "E1: the Tier-B environment set is single-sourced from"
 prep m54d
 cp "$T/trio.py" "$D/trio.py"
-edit "$D/trio.py" 'PENDING_ENVS = {"deploy-channel", "inngest-cutover"}' 'PENDING_ENVS = {"deploy-channel", "inngest-cutover", "not-a-real-environment"}'
+edit "$D/trio.py" 'PENDING_ENVS = {"inngest-cutover"}' 'PENDING_ENVS = {"inngest-cutover", "not-a-real-environment"}'
 knobs RF_PY="$D/trio.py" RF_ENVS= RF_SIB="$ROOT/$SIBLING_REL"
 landed_dir; mutant m54d E1 "R18: a pending environment name the sibling census does not hold is not accepted" "not-a-real-environment"
 

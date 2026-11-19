@@ -53,7 +53,7 @@ const {
   mockGetCurrentRepoUrl: vi.fn(),
   mockGetCurrentRepoStatus: vi.fn(),
   mockResolveEffectiveInstallationId: vi.fn(),
-  mockSyncPull: vi.fn(),
+  mockSyncPull: vi.fn(async () => ({ heldFiles: 0, onRecovered: 0, pullReason: null, checkedAt: null })),
   mockSendToClient: vi.fn(),
   mockCaptureException: vi.fn(),
   mockReportSilentFallback: vi.fn(),
@@ -135,6 +135,10 @@ vi.mock("@/server/resolve-web-egress", () => ({
   resolveWebEgressStrict: vi.fn(async () => false),
 }));
 vi.mock("@/server/egress-forwarder", () => ({
+  markEgressRevoked: vi.fn(),
+  EgressRevokedError: class extends Error {},
+  egressRevocationEpoch: () => 0,
+  isEgressRevoked: () => false,
   spawnEgressForwarder: vi.fn(),
   teardownEgressForwarder: vi.fn(),
   reapOrphanEgressForwarders: vi.fn(),

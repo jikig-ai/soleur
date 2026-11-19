@@ -3,6 +3,7 @@ import { PROVIDER_CONFIG } from "./providers";
 import { assertTrustedPluginPath, isPluginPathTestEnv } from "./plugin-path";
 import { API_KEY_ENV_VAR, OAUTH_ENV_VAR } from "./agent-auth-env-vars";
 import { AGENT_GIT_GLOBAL_CONFIG } from "./host-git";
+import { WEB_EGRESS_NO_PROXY } from "./sandbox-network-access";
 import { SECCOMP_SELECTOR_ENV, seccompArtifactFor, usesUnixDenyArtifact } from "./agent-sandbox-seccomp";
 
 /**
@@ -324,12 +325,16 @@ export function buildAgentEnv(
   // the proxy even with these hosts listed — the gateway must therefore
   // allow them (they are ordinary public CONNECTs) and the ADR records the
   // control-plane audit noise as accepted Phase-A posture.
+  // > Superseded 2026-11-18 (#12585): re-measured on SDK 0.3.321, the CLI's
+  // > own Messages API traffic to a NO_PROXY host (api.anthropic.com) goes
+  // > DIRECT and never reaches the gateway (ADR-278 addendum, measurement 4).
+  // > Sandboxed commands never see this env: the SDK proxy gives them its
+  // > own, and the canUseTool SandboxNetworkAccess arm denies the hosts below.
   if (opts?.egressProxy) {
     const proxyUrl = `http://${opts.egressProxy.workspaceId}:${opts.egressProxy.token}@127.0.0.1:${opts.egressProxy.port}`;
-    // Curl-class stacks DO honor this — keep it complete for those even
-    // though the SDK API path ignores it (spec TR7 arm on NO_PROXY).
-    const noProxy =
-      "localhost,127.0.0.1,::1,api.anthropic.com,mcp-proxy.anthropic.com,statsig.anthropic.com,*.sentry.io,*.datadoghq.com,*.supabase.co,*.supabase.in,api.stripe.com,github.com,*.github.com";
+    // Curl-class stacks DO honor this. One source with the SandboxNetworkAccess
+    // arm (#12585, CTO T1): server/sandbox-network-access.ts.
+    const noProxy = WEB_EGRESS_NO_PROXY;
     env.HTTP_PROXY = proxyUrl;
     env.HTTPS_PROXY = proxyUrl;
     env.http_proxy = proxyUrl;

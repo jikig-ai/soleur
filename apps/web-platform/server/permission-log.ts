@@ -31,7 +31,8 @@ export type PermissionLayer =
   | "canUseTool-support-skill"
   | "canUseTool-support-bash"
   | "canUseTool-support-tool"
-  | "canUseTool-support-question";
+  | "canUseTool-support-question"
+  | "canUseTool-sandbox-network";
 
 export function logPermissionDecision(
   layer: PermissionLayer,
