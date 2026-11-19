@@ -232,8 +232,14 @@ were rewritten unquoted and the comments on three records added during the incid
 `cloudflare_record` import plans as a pure no-op. If a rehearsal shows an import plus update on a TXT record or a
 `comment` diff, that record has drifted again: re-read it and fix the record or the pinned id, never widen the gate.
 
-`Operator-authorizes:` the dispatch with `migrate_phase=redirects-dns -f confirm=MIGRATE-CF-redirects-dns
--f rehearsal=true`. Expected in the run log:
+`Operator-authorizes:` the rehearsal dispatch:
+
+```bash
+gh workflow run cf-account-migrate.yml --ref main -f migrate_phase=redirects-dns \
+  -f confirm=MIGRATE-CF-redirects-dns -f rehearsal=true -f reason='#12931 redirects-dns rehearsal'
+```
+
+Expected in the run log:
 
 - `cf-state-migrate … verdict=ok removed=N skipped=M` against the local rehearsal copy, with the remote serial
   unchanged and no new object under `web-platform/backups/`;
@@ -242,7 +248,7 @@ were rewritten unquoted and the comments on three records added during the incid
   import; 26 records, the Pages project and 2 Pages domains imported; 1 `doppler_secret.cf_zone_id_prd` add). Compare
   nothing by eye.
 
-Any `verdict=REFUSE <reason>` or `verdict=abort` stops the phase: nothing was applied. Read the reason, fix forward in a
+Any `verdict=REFUSE` line (its `REFUSE <address> …` reason lines print above it) or `verdict=abort` stops the phase: nothing was applied. Read the reason, fix forward in a
 PR, re-rehearse.
 
 `Operator-authorizes:` the same dispatch with `rehearsal=false`, then approve the `web-platform-infra-apply`
@@ -269,11 +275,18 @@ needs a re-mint.
 
 ### Step 3: `zone-rest` rehearsal and apply
 
-Probe the 0b tokens first. `Operator-authorizes:` the dispatch with `migrate_phase=zone-rest
--f confirm=MIGRATE-CF-zone-rest`, `rehearsal=true`, then `rehearsal=false`. Expected gate line: a
+Probe the 0b tokens first. `Operator-authorizes:` the rehearsal, then the apply (`rehearsal=false`):
+
+```bash
+gh workflow run cf-account-migrate.yml --ref main -f migrate_phase=zone-rest \
+  -f confirm=MIGRATE-CF-zone-rest -f rehearsal=true -f reason='#12931 zone-rest rehearsal'
+```
+
+Expected gate line: a
 `zone_settings_override` create that adopts the parity settings with no visible change, a `bot_management` create or
 update, 2 `github_actions_secret` updates (`CLOUDFLARE_API_TOKEN_PAGES`, `CLOUDFLARE_ACCOUNT_ID_PAGES`) and one
-`doppler_secret.cf_api_token_dns_edit` replace (`action_reason=replace_by_request`), destroys 0.
+`doppler_secret.cf_api_token_dns_edit` replace (`action_reason=replace_by_request`), so `destroys=1`: the gate
+counts a replace's delete half, and that one is the only delete it lets through.
 
 Verify on the next docs push: `deploy-docs.yml` probe A (`https://soleur-docs-40x.pages.dev/version.txt`) passes and
 probe B (apex `version.txt`) equals the pushed sha.
