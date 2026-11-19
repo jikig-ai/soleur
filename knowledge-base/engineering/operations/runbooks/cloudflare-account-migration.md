@@ -122,6 +122,7 @@ mode (CTO ruling D2): a ruleset create is a whole-list PUT, so an entrypoint tha
 | Share revoke answers `502 purge-failed` (Sentry `feature:kb-share op:revoke-purge`) | Now → Phase 3 step 5 release redeploy | The running containers' env was frozen at `docker run` and still holds the old `CF_ZONE_ID` and `CF_API_TOKEN_PURGE`. The revoke itself is recorded; only the edge purge fails, and no edge copy exists to purge because `cache_shared_binaries` is created only after that redeploy (CTO ruling D3). |
 | `cron-gh-pages-cert-reissue` reports `precondition_blocked` | Old DNS-edit token revoke → Phase 3 step 5 release redeploy | Its frozen container env still holds the revoked token. Fails closed by design. |
 | Token-drift `DEAD credential` issue for a key this runbook just revoked | Revoke → the same act's key delete | A revoked value still sits in a scanned `CF_API_TOKEN*` key. The fix is the revoke recipe's step 4 (delete that key), never a rotation. |
+| `inngest-public-sdk-url-preflight.sh` refuses `[ruleset-id]` (the public `sdk_url` replace dispatch) | Phase 2 flip → PR2 re-pin of `RULESET_ID` | It pins the legacy zone's config entrypoint id; after the flip it reads the new zone, whose entrypoint `redirects-dns` creates with a new id. Fails closed. Do not dispatch that replace in this window. |
 | Connector census in `scheduled-inngest-health.yml` red (no tunnel, then 0 connectors) | Phase 2 flip → web-2 replace | The census looks the tunnel up by name under the new `CF_ACCOUNT_ID`. |
 | `deploy.`/`ssh.`/`registry.` answer 530/1033 instead of Error 1000 | Tunnel apply → web-2 replace | The new tunnel exists with 0 connectors. Both states are down; nothing regresses. |
 | First CI-SSH token sync warns on an empty secret | First tunnel-phase apply | A freshly synced secret reads empty on the first run; expect one re-dispatch. |
@@ -359,6 +360,10 @@ Expected: the four redirect monitors read `up`. Then revoke the three superseded
 go each, on `prd_terraform` `CF_API_TOKEN_PREV`, `CF_API_TOKEN_RULESETS_PREV` and `CF_API_TOKEN_PAGES_PREV` (the
 recipe's step 4 deletes each `_PREV` key). `CF_ZONE_ID_PREV` and `CF_ACCOUNT_ID_PREV` may stay until cleanup; after
 this apply they are never restored (Halt).
+
+Then read the new zone's config entrypoint id (`plugins/soleur/scripts/cloudflare-readonly.sh config-entrypoint`, which
+prints the id and never a token) and post it on #12931: PR2 must re-pin `RULESET_ID` in
+`tests/scripts/lib/inngest-public-sdk-url-preflight.sh` to it, so the public `sdk_url` replace preflight passes again.
 
 ### Step 3: the 0b swap, then `zone-rest` rehearsal and apply
 

@@ -5331,12 +5331,19 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
   // Rule shape mirrors cloudflare-readonly.sh's config-entrypoint projection. Each refusal prints exactly one ::error::
   // line led by its bracketed tag, and no fixture byte outside the fixed tags reaches stdout/stderr.
   const SEO_RULESET_ID = "a21ac79d368f425a95c895c43a090d57";
-  test("B10: the preflight's pinned ruleset id is the entrypoint id seo-config-rules.tf imports", () => {
+  // #12931 (ADR-329): seo-config-rules.tf no longer imports this entrypoint; it lives in the moved legacy zone and
+  // the migration CREATES the new zone's entrypoint (a new id). Until PR2 re-pins RULESET_ID to that id, the pin stays the
+  // legacy id, so after the CF_ZONE_ID flip the preflight refuses [ruleset-id] (fail closed). The runbook owns the re-pin.
+  test("B10: the preflight's pinned ruleset id is the legacy entrypoint until the #12931 re-pin, and the runbook owns it", () => {
     const tf = readFileSync(join(REPO_ROOT, "apps/web-platform/infra/seo-config-rules.tf"), "utf8");
     const imp = /^import \{\n(?:.*\n)*?\s*to\s*=\s*cloudflare_ruleset\.seo_config_settings\n(?:.*\n)*?\s*id\s*=\s*"zone\/\$\{var\.cf_zone_id\}\/([0-9a-f]{32})"/m.exec(tf);
     const libId = /^RULESET_ID="([0-9a-f]{32})"$/m.exec(readFileSync(join(REPO_ROOT, PREFLIGHT_LIB), "utf8"));
-    expect(imp?.[1], "the seo-config-rules.tf import id").toBe(SEO_RULESET_ID);
+    const runbook = readFileSync(join(REPO_ROOT, "knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md"), "utf8");
+    // An import block, if one returns, must carry the pinned id (the pre-#12931 property).
+    if (imp) expect(imp[1], "the seo-config-rules.tf import id").toBe(libId?.[1]);
     expect(libId?.[1], "the preflight's RULESET_ID").toBe(SEO_RULESET_ID);
+    expect(runbook, "the runbook re-pin step names the preflight lib").toContain("tests/scripts/lib/inngest-public-sdk-url-preflight.sh");
+    expect(runbook, "the runbook re-pin step names RULESET_ID").toMatch(/re-pin[^\n]*`RULESET_ID`|`RULESET_ID`[^\n]*re-pin/);
   });
   test("B10: the preflight passes only a strict host-wide last app-host rule no later ssl rule can override, and names each refusal", () => {
     const lib = join(REPO_ROOT, PREFLIGHT_LIB);

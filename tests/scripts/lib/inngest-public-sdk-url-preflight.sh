@@ -20,7 +20,7 @@
 #     exactly one JSON value on one line [malformed];
 #   - the projection has the pinned shape (subcommand config-entrypoint, a string id, rules[] of {enabled bool,
 #     ssl null|string, mentions_app_host bool, host_literal_only bool});
-#   - the projection id is RULESET_ID below, the entrypoint ruleset that apps/web-platform/infra/seo-config-rules.tf imports
+#   - the projection id is RULESET_ID below, the zone's config-settings entrypoint ruleset
 #     (a forged zone or token cannot return it) [ruleset-id];
 #   - let L be the LAST enabled rule that mentions app.soleur.ai with a non-null ssl: L exists [no-match / all-disabled],
 #     L.ssl is strict [last-not-strict], and L is host_literal_only, i.e. its whole expression is exactly
@@ -42,8 +42,10 @@
 set -euo pipefail
 export LC_ALL=C
 
-# The config-settings entrypoint ruleset id from the import block in apps/web-platform/infra/seo-config-rules.tf (B10 pins
-# the two equal). A Cloudflare ruleset id, not a secret; it is compared, never printed.
+# The config-settings entrypoint ruleset id. This is the legacy zone's (seo-config-rules.tf imported it before #12931); the
+# migration creates the new zone's entrypoint with a new id, and PR2 of #12931 re-pins this value to it (runbook
+# cloudflare-account-migration.md, B10). Until then the preflight refuses [ruleset-id] after the CF_ZONE_ID flip: fail
+# closed. A Cloudflare ruleset id, not a secret; it is compared, never printed.
 RULESET_ID="a21ac79d368f425a95c895c43a090d57"
 
 refuse() { # $1 = tag, $2 = fixed message (never a value)
@@ -130,7 +132,7 @@ PASS_RE='^pass [0-9]+$'
 case "$VERDICT" in
   multi) refuse malformed "the projection line is not exactly one JSON value" ;;
   shape) refuse shape "the projection does not have the pinned config-entrypoint rule shape" ;;
-  ruleset-id) refuse ruleset-id "the projection is not the seo-config-rules.tf entrypoint ruleset (wrong zone or token)" ;;
+  ruleset-id) refuse ruleset-id "the projection is not the pinned config entrypoint ruleset (wrong zone or token, or the #12931 re-pin is pending)" ;;
   no-match) refuse no-match "no enabled config rule with an ssl setting mentions app.soleur.ai" ;;
   all-disabled) refuse all-disabled "every config rule with an ssl setting for app.soleur.ai is disabled" ;;
   last-not-strict) refuse last-not-strict "the last enabled app.soleur.ai ssl rule is not strict (Cloudflare to origin is not strict TLS)" ;;
