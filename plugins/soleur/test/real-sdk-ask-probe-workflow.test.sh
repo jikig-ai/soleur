@@ -126,6 +126,7 @@ EXCLUDED|apps/web-platform/server/observability.ts|Sentry/pino mirror helper, no
 EXCLUDED|apps/web-platform/server/notifications.ts|notification payload types only
 EXCLUDED|apps/web-platform/server/review-gate.ts|the probe stubs abortableReviewGate, so a change to this file is not observable to the probe (covered by the unit tests and the weekly cron)
 EXCLUDED|apps/web-platform/server/sandbox.ts|workspace path containment helper for file tools, not the Bash lane
+EXCLUDED|apps/web-platform/server/sandbox-network-access.ts|the SandboxNetworkAccess arm's pure deny decision (#12585), a separate canUseTool branch the destroy-ask probe never sends; pinned by its unit suite and the netns runtime suite
 EXCLUDED|apps/web-platform/server/support-directive.ts|support-persona skill allowlist, not in the probe wiring
 EXCLUDED|apps/web-platform/server/support-escalation.ts|support-persona denial helper, not in the probe wiring
 EXCLUDED|apps/web-platform/server/tool-path-checker.ts|file-tool path checks, not the Bash lane

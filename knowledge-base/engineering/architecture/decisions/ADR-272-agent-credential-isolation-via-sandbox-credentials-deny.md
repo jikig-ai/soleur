@@ -186,3 +186,5 @@ arm; pinned for regression by `test/bwrap-shim.test.ts` tail-ordering rows.
 > **See also ADR-311 (#9543, 2026-10-30):** its deferral of the SDK `mask` mode to #9543 is measured for one carrier (see ADR-311 Decision 2).
 
 > **Addendum 2026-11-04 (#12026):** the canary fixture was re-captured at SDK 0.3.311 (with the `${CANARY_SEED_ADMIN}` placeholder), so the "not re-captured / cannot be re-captured" statement above describes 0.3.284 only. See ADR-079's 2026-11-04 addendum.
+
+> **Addendum 2026-11-18 (#12585):** "Outbound network from sandboxed Bash is closed (`allowedDomains: []`)" (Residuals, Consequences) needs one correction: the empty allowlist makes the SDK ask `canUseTool` for every host, and it is the explicit `SandboxNetworkAccess` arm's deny that closes it (before #12585, the deny-default branch). The residual's conclusion stands. Measurements: ADR-278's 2026-11-18 addendum.

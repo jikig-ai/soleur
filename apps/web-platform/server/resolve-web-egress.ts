@@ -102,3 +102,26 @@ export async function resolveWebEgress(
     return false;
   }
 }
+
+/** Does the grant for `workspaceId` read EXACTLY off, as `userId` sees it?
+ *  For the toggle-off route's failure path (#12585): a write that errored may
+ *  still have committed, so the route tears down only when the grant really
+ *  reads off. The RPC returns NULL for a non-member (a removed member's stale
+ *  current-workspace pointer, #4307), and NULL is NOT off here - otherwise a
+ *  caller who cannot write the grant could still ride a transient fault into
+ *  a teardown of the owner's sessions. Never throws: any fault reads as "not
+ *  known off", so nothing is torn down and the next dispatch re-reads. */
+export async function webEgressReadsOff(
+  userId: string,
+  workspaceId: string,
+): Promise<boolean> {
+  try {
+    const tenant = await getFreshTenantClient(userId);
+    const { data, error } = await tenant.rpc("get_workspace_web_egress", {
+      p_workspace_id: workspaceId,
+    });
+    return !error && data === false;
+  } catch {
+    return false;
+  }
+}
