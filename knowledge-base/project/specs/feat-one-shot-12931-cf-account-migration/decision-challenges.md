@@ -64,3 +64,17 @@ Mechanical findings were applied to the plan. Each row below records what change
 | Old-account objects left behind by the forget (DHH) | operator (irreversible) | Added to Phase 5 step 7: delete by name from the backup-derived list, one go each. The old LB monitor and pool may still bill, and the old `ci_ssh`/`registry_push` tokens stay valid until they expire. Recommended: delete right after Phase 3 verification. |
 | Move ADR-329 and C4 edits to the cleanup PR (DHH) | taste | Declined; kept in PR1. PR1's LB gate falsifies the C4 `cloudflare` and `inngest -> api` descriptions, and the C4 mandate keeps the model true in the PR that changes it. The `infra-security.md` and 8209 literal edits did move to cleanup. |
 | One standing delegation for the migration dispatches (CTO devex item 3) | operator (production-mutating) | Recommended: record one standing delegation on #12931 covering the `cf-account-migrate` rehearsal and apply lines and the `web-host-replace web-2` line, each envelope naming its exact `gh workflow run` command. Without it, each dispatch needs its own go. |
+
+## Deepen-plan (2026-11-19)
+
+| Item | Class | Ruling |
+|---|---|---|
+| Measured TF 1.10.5 behaviours: imports or `-replace` outside `-target` are dropped silently; multi-address `state rm` skips missing addresses with exit 0; a pure import is `["no-op"]` | technical | Applied: Guard 1 rows 9/9b/9c, the Guard 2 removed-count assertion, Sharp Edges. Evidence from terraform-architect local experiments (no network, no credentials). |
+| Ruleset import prefix must be exactly `zone`/`account` | technical | Applied to Sharp Edges. v4 silently reads `zones/` as account. |
+| Apply legs under the reviewer-gated `web-platform-infra-apply` environment (security) | technical | Applied. The rehearsal stays on `infra-privileged`. The environment approval doubles as the production-write authorization. |
+| Token mint transcript leak via Playwright snapshot (security) | technical | Applied: no snapshot after Create; one evaluate step pipes the value into Doppler; fallback is an operator paste. |
+| Secret-printing verification and long-lived `_PREV`/`_NEXT` (security) | technical | Applied: sha256 compare; `_NEXT` deleted at the swap; token `_PREV` deleted after `redirects-dns` verification; the temporary token is revoked after Phase 0a. |
+| Deploy-policy exception checks (security) | technical | Applied: name, expiry, `non_identity`, single include, app id, read-only GET. |
+| C4 completeness: 7 `model.c4` edits plus `model.likec4.json` regeneration; ADR-329 amends ADR-068 and ADR-321 (architecture-strategist) | technical | Applied. |
+| Phase 0c early noindex: create the transform entrypoint in the new zone before PR1 merges, rendered from code, then imported (security) | operator (production-mutating) | Recommended: yes. It closes the `app.soleur.ai` `/shared` and `/invite` indexability window hours or days earlier. It is a new-zone write, so it needs the operator's go. |
+| Expire share/invite tokens issued since 16:24 UTC 2026-11-18 (security) | operator (scope) | Recommended: decide after the Search Console check (CMO P1). Expire only if a token URL is found indexed. |

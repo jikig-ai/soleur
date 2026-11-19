@@ -14,15 +14,20 @@ Lane note: there is no spec.md for this branch (one-shot entry), so the lane def
 
 - [ ] 0.1 Doppler `prd_terraform` `CF_R2_ACCOUNT_ID` = legacy account id. This must exist before PR1 merges. `Operator-authorizes:` agent write.
 - [ ] 0.2 Phase 0a mints: `CF_API_TOKEN`, `CF_API_TOKEN_RULESETS`, `CF_API_TOKEN_PAGES`, each into a `<KEY>_NEXT` staging key with the exact permission groups in the plan table. Use the dashboard via `cf-token-scope`. `Operator-authorizes:`.
-- [ ] 0.3 Run the non-mutating `cf-token-scope.sh` new-account profile for `redirects-dns` (invalid-body write probes). Record the verdicts and every pre-existing entrypoint id.
+  - Scope each token to the new account and the soleur.ai zone, with an expiry.
+  - Take no Playwright snapshot after Create; the value is piped from one evaluate step straight into Doppler.
+  - Verify by sha256 compare, never by printing.
+- [ ] 0.2b Revoke `CF_API_TOKEN_SOLEUR_ACCT` once 0a is probed. `Operator-authorizes:`.
+- [ ] 0.3 Run the non-mutating `cf-token-scope.sh` new-account profile for `redirects-dns`: invalid-body write probes, deny probes on the old account and zone, a `success:true` check, and a known-present control. Record the verdicts and every pre-existing entrypoint id.
+- [ ] 0.3b Optional Phase 0c early noindex: create the `http_response_headers_transform` entrypoint, rendered from `seo-rulesets.tf` via `terraform console`. Operator row, recommended yes. `Operator-authorizes:`.
 - [ ] 0.4 Read-only dump of new-zone record ids for the 26 non-tunnel, non-`app` records plus `app`. The dump stays outside the repo; only the ids are committed.
 - [ ] 0.5 Phase 0b mints (`_ZONE_SETTINGS`, `_BOT_MANAGEMENT`, `_DNS_EDIT`, `_PURGE`) into `_NEXT` keys. These can run in parallel with Phase 2. `Operator-authorizes:`.
 
 ## Phase 1: PR1 code (this branch). Tests first.
 
 - [ ] 1.1 RED suites first:
-  - [ ] 1.1.1 state-migrate (Guard 2, every declared `cloudflare_*` type in the fixture)
-  - [ ] 1.1.2 phase gate (Guard 1, rows 1-11)
+  - [ ] 1.1.1 state-migrate (Guard 2, every declared `cloudflare_*` type in the fixture; assert `Successfully removed N` equals the rm set and zero old ids after)
+  - [ ] 1.1.2 phase gate (Guard 1, rows 1-11 including 9b `replace_by_request` and 9c physical-id)
   - [ ] 1.1.3 in-progress predicate (Guard 3) and the workflow-grep test over every plan-running job
   - [ ] 1.1.4 tftest `expect_failures` for the old-id validations (Guard 4)
   - [ ] 1.1.5 rehearsal shape (local backend override, zero S3 writes)
@@ -40,14 +45,17 @@ Lane note: there is no spec.md for this branch (one-shot entry), so the lane def
 - [ ] 1.9 `scripts/cf-account-state-migrate.sh`: backup, state-derived candidates, null-safe classification, one atomic `state rm`, serial +1 assertion.
 - [ ] 1.10 `scripts/cf-account-migrate-gate.sh`: per-phase list generating `-target`, pure-import check, derived counts, `plan-gate-preamble.sh`, `gate-suite-harness.sh` suite.
 - [ ] 1.11 `scripts/cf-account-migration-complete.sh` and its call sites in every plan-capable job except `cf_account_migrate` (with the `web_host_replace web-2` exception).
-- [ ] 1.12 `apply-web-platform-infra.yml`:
+- [ ] 1.12 `apply-web-platform-infra.yml` (rehearsal on `infra-privileged`, every apply leg on the reviewer-gated `web-platform-infra-apply`; `$RUNNER_TEMP` with `umask 077`; no `upload-artifact`, no `TF_LOG`; queued-run refusal):
   - `apply_target=cf-account-migrate`, `migrate_phase`, `confirm`;
   - job `cf_account_migrate` (infra-privileged, shared concurrency group, no SSH, no bridge);
   - rehearsal in a scratch root with remote-serial assertion;
   - post-apply curl verification.
 - [ ] 1.13 `scripts/check-cloudflare-token-drift.sh` repoint; `cf-token-scope.sh` new-account profiles.
 - [ ] 1.14 `deploy-docs.yml` probe A URL → `soleur-docs-40x.pages.dev`.
-- [ ] 1.15 ADR-329 (`status: adopting`, via `soleur:architecture`). `model.c4` edits to the `cloudflare` system description, the `inngest -> api` edge and the `tunnel` description. C4 tests green.
+- [ ] 1.15 ADR-329 (`status: adopting`, via `soleur:architecture`; `amends: [ADR-068, ADR-321]`, related 006/114/143/194/304, with addenda on 068, 321 and 194).
+  - `model.c4`: the 7 edits listed in the plan's C4 section.
+  - Run `scripts/regenerate-c4-model.sh`.
+  - `c4-model-freshness`, `c4-code-syntax`, `c4-render` and `c4-count-parity` all green.
 - [ ] 1.16 Runbook `knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md`: phases, expected reds, fix-forward, full revert, branch-config write list.
 - [ ] 1.17 Register new suites in `run-registered-suites.sh` inputs. Full local battery green.
 - [ ] 1.18 Registry render delta on the PR1 diff = `deliver=false`.
@@ -55,7 +63,7 @@ Lane note: there is no spec.md for this branch (one-shot entry), so the lane def
 
 ## Phase 2: Redirect restore (after PR1 merges)
 
-- [ ] 2.1 `Operator-authorizes:` one sequence:
+- [ ] 2.1 `Operator-authorizes:` one sequence (`_NEXT` deleted after the swap; once 2.3 is verified, revoke the old non-R2 tokens and delete the token `_PREV` keys):
   - `<KEY>_PREV` copies;
   - flip `CF_ZONE_ID`/`CF_ACCOUNT_ID`;
   - swap the 0a `_NEXT` keys;
@@ -72,13 +80,13 @@ Lane note: there is no spec.md for this branch (one-shot entry), so the lane def
 - [ ] 3.1 PR2 code:
   - `cf-access-deploy-token-mint.sh` and its test;
   - `cf-tunnel-host-predelete.sh` and its test (Guard 5);
-  - the `tunnel` phase in the job and the gate (deploy-policy exception plus token-exists GET);
+  - the `tunnel` phase in the job and the gate (deploy-policy exception: token name, expiry, `non_identity`, a single include, app id, read-only GET);
   - the `app` import enabled;
   - `local.deploy_service_token_ids`.
 - [ ] 3.2 `Operator-authorizes:` mint the `CF_API_TOKEN_ACCESS_MINT` token, run the mint script, commit the UUID, revoke the mint token.
 - [ ] 3.3 Merge PR2 with `[skip-web-platform-apply]`. `Operator-authorizes:` pre-delete dry-run, then apply; `tunnel` rehearsal, then apply; CI-SSH token sync.
 - [ ] 3.4 `Operator-authorizes:` the `web-host-replace web_host_key=web-2` rehearsal, then the run.
-- [ ] 3.5 `Operator-authorizes:` Origin CA re-mint from the new zone.
+- [ ] 3.5 `Operator-authorizes:` Origin CA re-mint from the new zone, before the release redeploy in 3.6.
 - [ ] 3.6 Verify:
   - census shows 1 connector;
   - `verify-tunnel-ingress-origin.sh` passes;
@@ -95,7 +103,10 @@ Lane note: there is no spec.md for this branch (one-shot entry), so the lane def
 
 - [ ] 5.1 Delete the imports file, the state-migrate script, the predicate and its call sites, the migration variables, the `cf_account_migrate` job, input and option, and the gate. Keep the mint script and the probe profiles.
 - [ ] 5.2 `Operator-authorizes:` revoke `CF_API_TOKEN_SOLEUR_ACCT` and the superseded tokens; remove the `_PREV`/`_NEXT` keys.
-- [ ] 5.3 `Operator-authorizes:` delete the old tunnel and the other forgotten old-ACCOUNT objects by name (never old-zone objects). Delete the state backup object.
+- [ ] 5.3 `Operator-authorizes:` delete the old tunnel and the other forgotten old-ACCOUNT objects by name (never old-zone objects).
+  - Include the old deploy service token `d9204def…`.
+  - Revoke the old-zone Origin CA certificate.
+  - Delete every version of the state backup object.
 - [ ] 5.4 Re-scope the read-only tokens. Update `infra-security.md` and the 8209 runbook literals. Update the expense ledger.
 - [ ] 5.5 Set ADR-329 to `accepted`. The PR body carries `Closes #12931`.
 - [ ] 5.6 Follow-up issues to file: DNSSEC re-enable, LB purchase decision plus the `lb-staging` root, the app-level `X-Robots-Tag` fallback.

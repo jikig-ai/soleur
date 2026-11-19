@@ -8,6 +8,38 @@ issue: 12931
 
 # infra(cloudflare): migrate Terraform to the new Soleur account and zone
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-19 (plan written 2026-11-18, plan-reviewed the same day).
+**Sections enhanced:** 14. They are Phase 0, Phase 0c (new), Phase 1 items 7–12, Phase 2, Phase 3, Phase 5, Guard 1 and Guard 2, Architecture Decision (ADR/C4), Downtime & Cutover (new), Network-Outage Deep-Dive (new), Scope Check and Sharp Edges.
+**Research agents used:**
+- plan review: DHH, Kieran, code-simplicity, CTO devex;
+- deepen: learnings-researcher, terraform-architect (local experiments on TF 1.10.5 plus cloudflare 4.52.7 with no network), security-sentinel, architecture-strategist (all three `.c4` files read in full), and a negative-claim plus self-audit sweep.
+
+### Key improvements
+
+1. **Phase-1 wedge removed.** `cloudflare_record.app` pulls the tunnel through `hcloud_server.web`, so its import moved to the tunnel phase.
+2. **Rehearsal is real.** It runs in a scratch root with a `backend "local"` override, measured working with an `s3` main backend. The earlier `-state=` fallback was ignored under s3 and is deleted.
+3. **Gate sees what TF silently drops.** These were measured on TF 1.10.5:
+   - imports outside `-target` vanish without warning;
+   - a `-replace` outside `-target` is dropped;
+   - a multi-address `state rm` skips missing addresses and still exits 0.
+
+   Guard 1 and Guard 2 now assert pure imports, `replace_by_request`, physical ids and the removed count.
+4. **Security.**
+   - Apply legs run under the reviewer-gated `web-platform-infra-apply` environment.
+   - Token values never reach a transcript: no Playwright snapshot, hash-compared verification.
+   - `_NEXT`/`_PREV` copies and the temporary token are short-lived.
+   - The deploy-policy exception checks name, expiry, decision, include set and app.
+5. **C4 and ADR completeness.** There are 6 falsified `model.c4` descriptions, not 2, plus the `model.likec4.json` regeneration CI enforces. ADR-329 amends ADR-068 and ADR-321.
+
+### New considerations discovered
+
+- Branch Doppler configs keep their own copies, so the runtime ids and tokens are written per config (CTO devex plus learning `2026-10-19-doppler-branch-config-does-not-inherit-new-keys…`).
+- The CLA-evidence bootstrap reads `CF_ACCOUNT_ID` for an object-locked R2 bucket, so it now reads `CF_R2_ACCOUNT_ID`.
+- An optional early-noindex step (Phase 0c) closes the indexability window before PR1 merges. It is an operator decision.
+- `cloudflare_zone_settings_override` has no importer. A future destroy reverts to the new zone's hand-restored snapshot.
+
 ## Overview
 
 The soleur.ai zone moved to a new Cloudflare account and zone on 2026-11-18. The site, app and sign-in were restored by hand; Terraform still points at the old zone and account. This plan moves the Terraform root onto the new zone and account in phases: the redirect and SEO rulesets first (pure Cloudflare edge config), then the tunnel, Access applications and the deploy/ssh/registry hostnames, then the remaining token and secret re-points.
@@ -186,6 +218,13 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
    | `CF_API_TOKEN_R2` | **Not re-minted.** It stays on the old account. |
    | `CF_API_TOKEN_ORIGIN_CA` (`soleur-infra-privileged/prd`, Phase 5) | Zone: SSL and Certificates:Edit, new zone |
 
+   **Mint hygiene (security review):**
+   - Scope every token to the specific new account and the `soleur.ai` zone only, never "all zones" or "all accounts", and give it an expiry. The default is 90 days for the provider tokens and 7 days for `CF_API_TOKEN_ACCESS_MINT`.
+   - The Playwright flow takes **no** `browser_snapshot` or screenshot after "Create Token". The token value is read inside one `browser_evaluate` code step that pipes it straight into the Doppler write and returns nothing to the transcript. If that cannot be guaranteed, the operator pastes the value into Doppler instead. Rehearse the flow on a throwaway token first.
+   - Each token also gets **deny probes**: it must be refused on the old account and old zone, and on one permission group it must not hold.
+   - `CF_API_TOKEN_ACCESS_MINT` stays separate from `CF_API_TOKEN` even though the latter holds Access: Service Tokens:Edit. The mint script runs on the agent's machine, and `CF_API_TOKEN` (Tunnel, Access apps and policies, DNS) must never be exported there (CTO F8).
+   - The probe must see `success:true` and a parsed `.result` before treating any entrypoint as present or empty, and each phase profile includes one known-present control endpoint, so a degraded `200` or a 404 is never read as "empty" (learning `2026-07-23-live-api-fail-closed-guard-counts-degraded-200-as-empty-…`).
+
    Phase 5 re-scopes the read-only and audit tokens (`CF_API_TOKEN_AUDIT` in `dev*`, `_ANALYTICS_READ`, `_PAGERULES_READ`, `_DNS_RULESETS`, and the duplicate `_BOTMANAGEMENT`) after a consumer census. None of them blocks a phase.
 
 2. **Write-probe every token before its phase's dispatch.** A GET proves read access only (ADR-130; the `2026-07-24-cf-token-config-rules-scope-gap` post-mortem). **Probes never mutate** (plan review). A `PUT` to an absent phase entrypoint would create an empty ruleset that the Terraform create then collides with, and a `PUT` to a present one replaces its rules. Each write probe sends a deliberately invalid body: `400` means authorized, `403`/`10000` means denied. It never `PUT`s a valid body to an entrypoint and never `DELETE`s.
@@ -194,19 +233,29 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
    - No new probe script. The probe sets become profiles on the existing `plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh` (it already runs fail-closed rulesets and default-token probe sets), parameterised by account and zone id plus a `--phase` set. The agent runs it once per phase, before that phase's rehearsal, and records the verdict lines in the PR thread. It is not a job step on every dispatch.
    - **Phase 0a / 0b (CTO devex).** 0a mints and probes only what `redirects-dns` needs (`CF_API_TOKEN` for DNS and Doppler-adjacent records, `CF_API_TOKEN_RULESETS`, `CF_API_TOKEN_PAGES`). 0b (`_ZONE_SETTINGS`, `_BOT_MANAGEMENT`, `_DNS_EDIT`, `_PURGE`) runs while the first dispatch is in flight. If a `-target` plan still configures an unused provider alias and fails on its stale token (unverified), the agent mints 0b first.
 
-3. **Doppler writes.** The agent runs these after a typed, command-naming go. Every write pipes the value on stdin, uses `--silent` with stdout to `/dev/null`, and is verified by a separate `get`.
+3. **Doppler writes.** The agent runs these after a typed, command-naming go. Every write pipes the value on stdin and uses `--silent` with stdout to `/dev/null`. **Verification never prints a secret** (security review): compare `sha256sum` of source and destination (for example `doppler secrets get K --plain … | sha256sum`), and print at most an 8-character prefix for non-secret ids. Copies (`<KEY>` → `<KEY>_PREV`) are direct `get --plain | set` pipes, never via a shell variable or argv.
    - `prd_terraform` `CF_R2_ACCOUNT_ID=4d5ba6f096b2686fbdd404167dd4e125` is a new key. It must land **before PR1 merges**, because the variable has no default (ADR-065 sequencing).
    - **New token values go into staging keys, never over the live ones** (plan review). Write them as `<KEY>_NEXT` (for example `CF_API_TOKEN_RULESETS_NEXT`) in `prd_terraform`. Overwriting `CF_API_TOKEN*` while `CF_ZONE_ID`/`CF_ACCOUNT_ID` still hold the old ids would break every real-credential plan of this root and destroy the rollback values.
    - `CF_ZONE_ID`, `CF_ACCOUNT_ID` and every `<KEY>` ← `<KEY>_NEXT` swap **in one agent-run sequence after PR1 merges, immediately before the first dispatch** (Phase 2 step 2). The old values are first copied to `<KEY>_PREV` for the revert path.
+   - **Short lifetimes (security review).** The tf-var transformer exports every `prd_terraform` key into every job of this root, so these copies are not left around:
+     - `<KEY>_NEXT` is deleted right after the swap.
+     - Once the `redirects-dns` apply is verified, `Operator-authorizes:` revoke the superseded old-account non-R2 tokens and delete the token `_PREV` keys. The id `_PREV` keys may stay until cleanup; they are not secrets. After that point the full revert path needs a re-mint, which is acceptable because the flip is fix-forward.
+     - `CF_API_TOKEN_SOLEUR_ACCT` (the temporary token) is revoked as soon as Phase 0a is minted and probed, not in Phase 5 (COO plus security).
 
 4. **Stop the runtime from writing to the moved zone** (CTO risk). This runs at Phase 2 step 2, right after the swap, not before it. `cron-gh-pages-cert-reissue` holds the old `CF_ZONE_ID` and the old `CF_API_TOKEN_DNS_EDIT` in its frozen container env. `Operator-authorizes:` revoke the old-zone "Edit zone DNS" token in the dashboard once the new token is in Doppler. The cron then fails closed as `precondition_blocked`, by design (see the `cf-cert-reissue-token.tf` header). Revoking a user token mutates no zone.
+
+#### Phase 0c — Optional early noindex (operator decision; before PR1 merges)
+
+`app.soleur.ai` stays indexable, including `/shared/[token]` and `/invite/[token]`, until the `redirects-dns` apply, and PR1 is about 1,050 lines (security review).
+- Option: with the Phase 0a rulesets token, create only the `http_response_headers_transform` entrypoint in the new zone, with the same four rules `seo-rulesets.tf` declares, rendered from the code by `terraform console`, never hand-typed. The plan's existing "probe found an entrypoint, so import it" path then adopts it in `redirects-dns` as a pure import, and Guard 1 row 9 proves it matches the code.
+- This is a production mutation of the new zone. It is recorded as an `operator (production-mutating)` row with a recommended yes.
 
 #### Phase 1 — PR1 code (this branch)
 
 1. **Variables** (`variables.tf`):
    - Add `cf_r2_account_id`: no default, validation `^[0-9a-f]{32}$`.
    - Add validations rejecting the old ids: `cf_zone_id` must not equal `5af02a2f394e9ba6e0ea23c381a26b67`, and `cf_account_id` must not equal `4d5ba6f096b2686fbdd404167dd4e125`. Each error message names #12931 and the runbook.
-   - Add four bools: `cf_load_balancing_enabled` (default false), `cf_zone_plan_pro` (default false), `cf_zone_dnssec_enabled` (default false), and `cf_migration_imports_enabled` (default true). The tftest sets `cf_migration_imports_enabled` to false, for the same reason it disabled the retired `adopt_seo_config_entrypoint`: the mock provider does not mock `import`.
+   - Add five bools: `cf_load_balancing_enabled` (default false), `cf_zone_plan_pro` (default false), `cf_zone_dnssec_enabled` (default false), `cf_migration_imports_enabled` (default true), and `cf_migration_import_app` (default false; flipped in PR2). The tftest sets `cf_migration_imports_enabled` to false, for the same reason it disabled the retired `adopt_seo_config_entrypoint`: the mock provider does not mock `import`.
    - Delete `adopt_seo_config_entrypoint`.
 2. **R2 carve-out.** Switch these to `var.cf_r2_account_id`:
    - `workspaces-luks-header.tf`: `local.r2_s3_endpoint` and `cloudflare_r2_bucket.workspaces_luks_header.account_id`;
@@ -250,6 +299,8 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
 10. **Dispatch target** (`apply-web-platform-infra.yml`):
     - New `apply_target` option `cf-account-migrate`, new input `migrate_phase` (`redirects-dns` | `zone-rest`; PR2 adds `tunnel`), and `confirm=MIGRATE-CF-<phase>`.
     - New job `cf_account_migrate` on `environment: infra-privileged` (main-only), in the shared `terraform-apply-web-platform-host` concurrency group. `plan_only` is honoured.
+    - **Environment split (security review).** `infra-privileged` has no reviewers; it only pins the run to `main`. The rehearsal leg (`plan_only=true`) runs there. **Every apply leg runs under `web-platform-infra-apply`**, the reviewer-gated environment `web_host_create` uses (`web-host-birth-environment.tf`), so the operator's environment approval is the authorization for each production write. At work time, verify that environment can load the tier credentials the job needs, mirroring `web_host_create`'s credential steps.
+    - **Runner hygiene (security review).** All state copies, `tfplan`, `tfplan.json` and the rehearsal scratch root live under `$RUNNER_TEMP/cf-migrate` with `umask 077` and are removed by an `if: always()` step. The gate and the migrate script print address and action only, never `.change.after`. A workflow-grep test asserts the job has no `upload-artifact` step and no `TF_LOG`. Before dispatch, the agent lists queued and in-progress runs of `apply-web-platform-infra.yml` and refuses if a stale one exists, because a queued run still executes (learning `2026-11-16-web2-kernel-currency-replace-five-operational-traps`).
     - Steps, in order:
       1. tiered credentials;
       2. the state migrate (`redirects-dns` only; against the local rehearsal copy under `plan_only`);
@@ -341,6 +392,13 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
    - The phase target set: `random_id.tunnel_secret` (`-replace`, CTO F9), the tunnel, the tunnel config, 3 Access apps, 3 policies, the `ci_ssh` and `registry_push` service tokens, the `service_token_expiry` notification policy, `cloudflare_record.deploy`/`.ssh`/`.registry`, and `doppler_secret.registry_push_access_token_id`/`_secret` (`-replace`).
    - The gate exception: exactly one create of `cloudflare_zero_trust_access_policy.deploy_service_token`, in the NEW zone, whose `include[0].service_token` equals `local.deploy_service_token_ids`. Because the plan is derived from that same local, the comparison alone proves nothing. The gate step therefore also `GET`s `/accounts/<new>/access/service_tokens/<uuid>` and requires a `200` before the apply. The merge path's deploy-policy HALT is unchanged.
    - The `cloudflare_record.app` import moves here (see Phase 1 item 7). It must plan as a pure import.
+   - The deploy-token check goes beyond the `200` (security review). With a read-only token, the gate step `GET`s the service token and asserts:
+     - its name is `github-actions-deploy`, and its `expires_at` is about 8760h out;
+     - the planned policy has `decision = "non_identity"`;
+     - `include` holds exactly that one service token: no `everyone`, email, IP or any-valid-service-token rule;
+     - the policy's `application_id` is the planned `deploy` Access app.
+   - The pre-delete `--apply` runs only as a step inside the gated `cf_account_migrate` tunnel-phase apply leg, after a passing rehearsal. It never runs from the agent's machine.
+   - The CI-SSH token sync handles the first-run empty secret. A workflow that consumes a freshly synced secret sees it empty on its first run (learning `2026-05-20-doppler-write-token-bootstrap-cycle-and-access-enum`), so the sync step warns and the runbook expects one re-dispatch.
    - The tunnel name stays `soleur-web-platform`, because the census looks it up by name.
 3. **Tunnel phase apply.** Merge PR2 with `[skip-web-platform-apply]`. `Operator-authorizes:` the `migrate_phase=tunnel` rehearsal, then the apply.
    - The post-apply steps reuse the `apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh` logic to write `CI_SSH_ACCESS_TOKEN_ID/_SECRET` from the new outputs into `prd_terraform`.
@@ -380,6 +438,8 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
 4. `Operator-authorizes:` delete the old tunnel `fc4509ed…` from the OLD account once web-2's replace has dropped its connections. It is an account object, not part of the old zone. It is still irreversible, so it needs its own go.
 5. Re-scope the read-only tokens to the new ids (`check-cloudflare-token-drift.sh` was already repointed in PR1).
 7. `Operator-authorizes:` delete the objects the forget step left behind in the OLD account, each by name after its own go. The delete list comes from the pre-migration state backup, filtered to old-account, non-R2 entries: the LB monitor and pool (they keep health-checking origins and may still bill), the `ci_ssh` and `registry_push` service tokens (valid credentials until they expire), the Access apps and policies, the lists, the account ruleset and the notification policies. Old-ZONE objects are never touched. The zone is `moved` and read-only, and the constraint stands.
+   Add two unmanaged leftovers the state-derived list misses (security review): the old deploy service token (the pre-migration `local.deploy_service_token_ids` value `d9204def…`), and the old-zone Origin CA certificate (revoke it once the Phase 3 re-mint serves).
+   Delete every object version of the state backup, not only the current one (check bucket versioning first). Track the deadline in the cleanup PR's issue.
 8. Flip ADR-329 to `accepted`.
 6. Update the expense ledger (`knowledge-base/operations/expenses.md`), per the COO. Also move the deferred `infra-security.md` and `infra-credential-tiers-8209.md` literal edits here (they restore nothing):
    - soleur.ai row: "Free, new Soleur account (#12931)";
@@ -457,6 +517,41 @@ PR1:
 - `knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md`: the phase runbook. Every command is owner-named, with expected outputs and the recovery path.
 - `knowledge-base/engineering/architecture/decisions/ADR-329-cloudflare-zone-resources-live-on-the-soleur-account-r2-stays.md`. The ordinal is provisional; `soleur:ship` re-verifies it.
 - `knowledge-base/project/specs/feat-one-shot-12931-cf-account-migration/decision-challenges.md`: written at plan time.
+
+## Downtime & Cutover
+
+**Offline-inducing operations and the surface each affects:**
+
+1. **`web-host-replace web-2`** (Phase 3 step 4): a destroy-then-create of `hcloud_server.web["web-2"]`.
+   - Surface: the tunnel connector, which carries deploy, ssh and registry.
+   - `app.soleur.ai` is served by web-1 through its plain proxied A record (the LB is gated off) and is untouched.
+2. **The Doppler id flip plus the state forget** (Phase 2): no serving surface goes offline. Redirects, noindex and the WAF allowlist are already absent, and this step restores them.
+3. **The six-record pre-delete and the CNAME create** (Phase 3 step 3): `ssh.`/`registry.` move from Error 1000 to 530/1033. Both are down states, so nothing regresses.
+
+**Zero-downtime evaluation (the default):**
+
+- **Blue-green for the tunnel.** The new tunnel is created next to the old one in a different account. The old tunnel keeps its 4 connections from the current web-2 until web-2 is replaced. The cutover moment is the CNAME create in the new zone, and that already points at a surface that is down today. So no user-visible service drops at any step.
+- **Why not run a second connector before the replace:** a connector needs the new token on a host. The only token path is user_data at create (ADR-304). A replace of the connector host is the delivery mechanism, not an avoidable outage. web-2 serves no LB traffic while the LB is gated off.
+- **Expand-contract for state.** The forget plus import is state-only re-addressing (the `terraform state mv` class). It runs with no Cloudflare write except the creates of objects that are absent today.
+
+**Residual downtime accepted:** none on `app.soleur.ai`. The deploy, ssh and registry hosts stay down from now until the end of Phase 3 step 4, the window being about one web-2 boot after the tunnel apply. This is the incident's existing outage being ended, not a new one.
+
+**Per-stage verification and rollback:**
+
+| Stage | Verification | Rollback |
+|---|---|---|
+| Phase 2 dispatches | job curl checks plus Better Stack | fix forward. Full revert per Phase 2 step 2 |
+| Tunnel apply | gate PASS; CNAMEs resolve to the new `<id>.cfargotunnel.com` | re-run the phase (idempotent) |
+| web-2 replace | `soleur-wait-ready service cloudflared`; census shows 1 connector | re-run `web-host-replace web-2`; web-1 is unaffected |
+
+## Network-Outage Deep-Dive
+
+The trigger keywords (SSH, unreachable, 530/1000) appear because `ssh.soleur.ai` is a broken host in this incident, not a symptom under diagnosis. The cause is known and measured: the records moved to a new zone with no tunnel. Layer status, from L3 to L7:
+
+- **L3 firewall allow-list: not applicable, by evidence.** The Error 1000 / no-record states are generated at Cloudflare's edge, so no packet reaches a Hetzner firewall. The CI SSH path goes through the tunnel (`cf-tunnel-ssh-bridge`), not a public port. A firewall diff would verify nothing about this incident. Recorded as `not verified: packet never leaves the Cloudflare edge`.
+- **L3 DNS/routing: verified.** A read-only DoH query at plan time (`curl -s 'https://cloudflare-dns.com/dns-query?name=ssh.soleur.ai&type=A' -H 'accept: application/dns-json'`) returned the three proxied Cloudflare A records 104.26.10.163, 104.26.11.163 and 172.67.73.132. The same held for `registry.`. `deploy.` returned no record.
+- **L7 TLS/proxy: verified by symptom.** Error 1000 ("DNS points to prohibited IP") is a Cloudflare edge response. After Phase 3 the expected edge response before web-2's replace is 530/1033 (no connector). `curl -sI https://deploy.soleur.ai/hooks/deploy-status` shows which one.
+- **L7 application: not applicable.** The `webhook` service and `sshd` on web-1 are not reached. Health is read after cutover through `verify-tunnel-ingress-origin.sh` and the census, never through SSH (`hr-no-ssh-fallback-in-runbooks`).
 
 ## Open Code-Review Overlap
 
@@ -623,7 +718,9 @@ in_transit:
 | 6 | `tunnel` phase plan missing the `random_id.tunnel_secret` replace (flag ignored) | RED |
 | 7 | `tunnel` phase: a second create of the deploy policy, or `include.service_token` not equal to the committed UUID list | RED |
 | 8 | `forget` action on any address (a `removed{}` slipped in) | RED |
-| 9 | An `import` entry whose `.change.actions` is `["update"]` (import + update: a mis-pinned id would rewrite a live MX/DKIM record) | RED |
+| 9 | An `import` entry (non-null `.change.importing`) whose `.change.actions` is anything but `["no-op"]`: `["update"]`, or `["delete","create"]` for a record swapped across types (measured on TF 1.10.5 by the terraform-architect pass) | RED |
+| 9b | A declared `-replace` address planned without `.action_reason == "replace_by_request"` (TF drops a `-replace` outside the `-target` set with no warning; measured) | RED |
+| 9c | A `-replace` target whose `before` physical id differs from the id recorded in pre-plan state (the gate binds by address AND physical id; learning `2026-07-23-terraform-destroy-guard-address-vs-physical-id-and-replace-recovery-arm`) | RED |
 | 10 | An `import` entry whose `.change.importing.id` differs from the committed literal | RED |
 | 11 | Counts: one expected import missing from the plan (the plan has fewer imports than the committed file) | RED |
 
@@ -682,7 +779,15 @@ in_transit:
 
 **Assembly.** Two `validation` blocks, plus `tests/web-hosts-eu-pin.tftest.hcl` `expect_failures` runs.
 
-**Mutation matrix:** (1) `cf_zone_id = old`: `expect_failures` passes, and the validation deleted turns it RED. (2) `cf_account_id = old`: same. (3) Must-PASS: the new ids and a third arbitrary 32-hex id both validate. (4) `cf_r2_account_id` empty: RED.
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | tftest run with `cf_zone_id = 5af02a2f…` (old); then delete the validation block | `expect_failures` passes; with the block deleted the run goes RED |
+| 2 | tftest run with `cf_account_id = 4d5ba6f0…` (old); then delete the validation block | same as row 1 |
+| 3 | Must-PASS: new ids, and a third arbitrary 32-hex id | validates |
+| 4 | `cf_r2_account_id` empty or 31 hex chars | RED (validation fires) |
+| 5 | Old zone id in upper case (`5AF02A2F…`) | RED: the validation compares on `lower()`, and a test pins it |
 
 ### Guard 5 — tunnel-host pre-delete (`scripts/cf-tunnel-host-predelete.sh`)
 
@@ -712,19 +817,31 @@ New ADR-329 (provisional ordinal): **"Cloudflare zone-bound resources live on th
 - The state-forget-then-import migration mechanism, the old-id validations, and the plan-tier gates (`cf_zone_plan_pro`, `cf_load_balancing_enabled`, `cf_zone_dnssec_enabled`).
 - Alternatives: moving R2 too (rejected: 8 backends, no benefit, LUKS escrow risk); parallel variables; a plain flip.
 
-It amends ADR-006 (the remote backend stays on the legacy account) and is cross-referenced from ADR-114/ADR-304 (the tunnel is recreated, and the connector stays on web-2). Written via `soleur:architecture` in PR1.
+Frontmatter (architecture-strategist pass): `amends: [ADR-068, ADR-321]` and `related_adrs: [ADR-006, ADR-114, ADR-143, ADR-194, ADR-304]`.
+- ADR-068 gets a dated addendum. Its 2026-11 amendment records web-2 serving at weight 1 through the LB, and gating the LB off undoes that state.
+- ADR-321 gets a dated addendum. Its "adopted rule" (`a21ac79d`) is no longer imported, because Terraform creates the config rule in the new zone. The Origin CA certificate is re-minted from the new zone, and its LB health-monitor wording no longer applies.
+- ADR-006 gets a one-line cross-reference only. The backend and its endpoint stay correct.
+- ADR-194 gets a cross-reference addendum: the Pages project and the account Bulk Redirects now live on the Soleur account, served at `soleur-docs-40x.pages.dev`.
+- ADR-304 gets a cross-reference: recreating the tunnel means a mandatory web-2 replace, which is exactly its retirement mechanism.
+- No ADR states "one Cloudflare account" (grep of the decisions directory).
 
 ### C4 views
 
-All three model files were read for this plan (`model.c4` grep for the Cloudflare/tunnel/R2/LB elements, plus the `views.c4`/`spec.c4` sizes).
+All three model files (`model.c4`, `views.c4`, `spec.c4`) were read in full by the deepen-plan architecture-strategist pass. `views.c4` and `spec.c4` need no change: no view, tag or kind refers to an account, the LB or DNSSEC.
 
 - Already modeled and unchanged: the external actor `Cloudflare` (system), the containers `tunnel` and `zotRegistry`, the edges `github -> tunnel`, `hetzner -> tunnel`, `hetzner -> cloudflare` (LUKS header escrow to R2) and `api -> cloudflare` (the cert-reissue cron).
 - No new actor and no new external system.
-- Falsified descriptions to edit in `model.c4`, in PR1:
-  - the `cloudflare` system description, which states one account and "carries the GA LOAD BALANCE…": now two accounts (zone and Pages and tunnel on Soleur, R2 on the legacy account), with the LB gated off;
-  - the `inngest -> api` edge, which says "The app.soleur.ai load balancer steers each step call": true only while the LB is enabled.
+- Falsified descriptions to edit in `model.c4`, in PR1. Each is identified by its element or edge, not by line number:
+  1. **`cloudflare` element, first sentence** ("DNS, CDN, R2 storage, zero-trust tunnel — and…"). New text: DNS, CDN, Pages, rulesets, the zero-trust tunnel and Access live on the Soleur account (`var.cf_account_id`). R2 (the Terraform state buckets, the LUKS header escrow, CLA evidence) stays on the legacy account (`var.cf_r2_account_id`). That is two accounts, one vendor and one DPA (#12931, ADR-329). The zone runs on Free, with DNSSEC gated off.
+  2. **`cloudflare` element, the LB passage** (from "Since #11181/PR #11766 it also carries the GA LOAD BALANCER" through "never the routine apply"). New text: the app.soleur.ai LB is gated off since #12931 (`cf_load_balancing_enabled=false`, and `cf-lb-overlay.yml` refuses). The proxied A record serves app.soleur.ai from web-1 alone.
+  3. **`inngest -> api` edge** ("The app.soleur.ai load balancer steers each step call…"). New text: while the LB is gated off, every step call lands on web-1 through the app A record. With the LB enabled, it steers each call to any serving host.
+  4. **`betterstack -> hetzner` edge** ("Origin uptime probe at the LB-fronted app.soleur.ai surface"). Drop "LB-fronted", or qualify it as "only while `cf_load_balancing_enabled`".
+  5. **`github -> cloudflare` edge**: add that the R2 state backend is on the legacy account, while the rulesets GETs and all provider writes target the Soleur account.
+  6. **`hetzner -> cloudflare` edge, the LIMITATION clause**: add that both R2 buckets stay on the legacy account, and that the single `cloudflare` node hides the account boundary.
+  7. **`tunnel` container** (advisory): "ONE tunnel … on the Soleur account, recreated by #12931 (forcing a web-2 replace, since the token is create-time user_data). The old tunnel lingers on the legacy account until cleanup."
+- Splitting the `cloudflare` node in two was rejected: it would change the layout for a boundary the description already states.
 - No `views.c4` include changes.
-- Run `apps/web-platform/test/c4-code-syntax.test.ts`, `apps/web-platform/test/c4-render.test.ts` and `plugins/soleur/test/c4-count-parity.test.sh`. All must be green.
+- After the edits, regenerate `knowledge-base/engineering/architecture/diagrams/model.likec4.json` with `scripts/regenerate-c4-model.sh`. Then run `plugins/soleur/test/c4-model-freshness.test.sh`, `apps/web-platform/test/c4-code-syntax.test.ts`, `apps/web-platform/test/c4-render.test.ts` and `plugins/soleur/test/c4-count-parity.test.sh`; all must be green. Without the regeneration the freshness gate fails PR1 in CI.
 
 ### Sequencing
 
@@ -791,19 +908,19 @@ Artifact and vector pairs for `soleur:engineering:review:user-impact-reviewer`:
 | Bot-management Free shape, DNSSEC gate | asks 15, 18 | asked (DNSSEC: inferred — justification: the unconditional `cloudflare_zone_dnssec` would be created by the first full plan; enabling DNSSEC mid-cutover is a new whole-domain failure mode, CTO F10) |
 | `doppler_secret.cf_zone_id_prd` | ask 20 | asked |
 | `deploy-docs.yml` probe URL | ask 21 | asked |
-| Token probe script | ask 5 | asked |
-| Deploy-token mint script, pre-delete script | asks 2, 17 | asked |
+| `cf-token-scope.sh` new-account probe profiles (replaces the cut probe script) | — | inferred — justification: safety. The `2026-07-24` scope-gap class means a GET-only check cannot prove write scope. |
+| Deploy-token mint script, pre-delete script (PR2) | asks 2, 17 | asked |
 | Runbook | ask 7 | asked |
 | ADR-329 + C4 edits | — | inferred — justification: `wg-architecture-decision-is-a-plan-deliverable`; the account split changes recorded architecture |
 | `infra-security.md`, `infra-credential-tiers-8209.md` literals | ask 20 ("The same applies to `plugins/soleur/scripts/cloudflare-readonly.sh` …") | asked |
-| Origin CA re-mint (Phase 5) | — | inferred — justification: safety. A certificate minted against the moved zone may be revoked at zone deletion, and `app.soleur.ai` would then fail under `ssl=strict`. |
+| Origin CA re-mint (Phase 3 step 4) | — | inferred — justification: safety. A certificate minted against the moved zone may be revoked at zone deletion, and `app.soleur.ai` would then fail under `ssl=strict`. |
 | Old-tunnel retirement (Phase 5) | — | inferred — justification: leaves no second live tunnel holding the old secret; owner-named, irreversible |
 | Expense ledger edit | ask 18 | asked |
 
 ### Split Assessment
 
 - Subsystems touched: 4 — `apps/web-platform`, `.github`, `plugins/soleur`, `knowledge-base`.
-- Planned files (PR1, after plan review): about 32 (21 edits plus about 11 creates, of which 4 scripts and 4 tests) | Estimated changed lines (PR1): about 1,050 (workflow job about 300, scripts about 300, tests about 300, the rest config and docs). The manifest, the new probe script, the id-preflight step and the two PR2 scripts were cut or moved.
+- Planned files (PR1, after plan review): about 32 (21 edits plus about 11 creates, of which 3 scripts and 4 tests: state-migrate, gate, predicate, plus the rehearsal-shape test) | Estimated changed lines (PR1): about 1,050 (workflow job about 300, scripts about 300, tests about 300, the rest config and docs). The manifest, the new probe script, the id-preflight step and the two PR2 scripts were cut or moved.
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines. All exceeded.
 - Recommendation: split. The split is already structural (CTO F4): PR1 redirects plus machinery, PR2 tunnel, a cleanup PR. A further split of PR1 (machinery first, phases second) is declined: it would add a merge-and-review cycle in front of the P1 redirect restore, and every PR1 file is needed before the first dispatch can run. The deferred scripts (`cf-access-deploy-token-mint.sh`, `cf-tunnel-host-predelete.sh`) are the one movable seam. If PR1 review runs long, move them to PR2.
 
@@ -836,7 +953,8 @@ Artifact and vector pairs for `soleur:engineering:review:user-impact-reviewer`:
 - [ ] `cloudflare_record.supabase_acme_challenge` is under management in the new zone. The runbook notes the `api.soleur.ai` renewal check before 2026-12-26.
 - [ ] PR2: the census shows 1 connector on the new tunnel, `verify-tunnel-ingress-origin.sh` passes, a CI SSH bridge round-trip and a registry push canary succeed, a `web-platform-release.yml` redeploy succeeds, and `manual-rerun` is green.
 - [ ] The post-mortem shows `status: resolved` only after the item above holds, plus all 9 monitors `up`.
-- [ ] Cleanup PR: the temporary token is revoked, the Origin CA certificate is re-minted from the new zone, the old tunnel is deleted after its connections drop, the state backup object is deleted, and `Closes #12931`.
+- [ ] Cleanup PR: the temporary token is revoked, the old tunnel is deleted after its connections drop, the state backup object is deleted, and `Closes #12931`.
+- [ ] PR2/Phase 3: the Origin CA certificate is re-minted from the new zone before the `web-platform-release.yml` redeploy, and `app.soleur.ai` serves it (`curl -sv https://app.soleur.ai/health` through the proxy returns 200 under `ssl=strict`).
 
 ## Test Scenarios
 
@@ -911,7 +1029,11 @@ Not applicable: no UI surface in Files to Edit/Create (mechanical override did n
 
 - A plan whose `## User-Brand Impact` section is empty, holds only placeholder text, or omits the threshold fails `deepen-plan` Phase 4.6.
 - `doppler secrets set` prints every remaining secret to stdout unless redirected. Every write in this plan pipes the value on stdin with `--silent` and stdout to `/dev/null`, then verifies with a separate `get`. (A hook blocked an unredirected form while this plan was being written.)
-- Import-id shapes are v4: rulesets use `zone/<zone>/<id>` (singular), records `<zone>/<record>`, Pages `<account>/<project>[/<domain>]`. A v5-shaped id fails as a misleading 10000.
+- Import-id shapes are v4: rulesets use `zone/<zone>/<id>` (singular), records `<zone>/<record>`, Pages `<account>/<project>[/<domain>]`. A v5-shaped id fails as a misleading 10000. The ruleset level must be exactly `zone` or `account`. v4 reads any other prefix, `zones/` included, as account, and silently sends the read to `/accounts/<zone_id>/rulesets/<id>` (measured). Every bare or under-segmented shape fails locally with a format error.
+- `terraform state rm a b c` exits 0 and still bumps the serial when an address is missing, skipping it silently (measured on TF 1.10.5). The state-migrate script asserts `Successfully removed N` equals its `rm` set and re-lists state afterwards to confirm zero old-id entries. Exit code plus serial is not enough.
+- An `import {}` whose `to` address is outside a phase's `-target` list is dropped with no warning (measured). Guard 1 row 11 (import count against the committed file) is the only thing that catches a missing target.
+- `cloudflare_zone_settings_override` has no importer. Its create reads the zone's current settings into `initial_settings` and applies the declared ones, and a destroy reverts to that snapshot: the new zone's hand-restored state, not the old Pro zone's.
+- In the scratch rehearsal root, `rm -rf .terraform` before `init -reconfigure`. A stale `.terraform` that records `s3` is tolerated (measured), but the learning `2026-03-21-terraform-state-r2-migration` records a TLS failure from stale backend metadata.
 - `plan_only` must never write the backend. The rehearsal runs in a scratch copy with a `backend "local"` override (`-state=` is ignored under the `s3` backend), and the job asserts the remote serial is unchanged. This is part of the contract, not an optimisation.
 - `-target=cloudflare_record.app` pulls `hcloud_server.web` and, through its user_data, the tunnel. Any phase before `tunnel` must not name it. Check every record's `content` expression for a resource reference before adding it to a phase.
 - Write probes must send an invalid body. A valid `PUT` to a phase entrypoint creates or replaces the ruleset.
