@@ -331,7 +331,12 @@ vi.mock("@supabase/supabase-js", () => ({
 // test does not pull `mintFounderJwt` or the lease's `fetchAndDecrypt`
 // chain.
 vi.mock("@/lib/supabase/tenant", () => ({
-  getFreshTenantClient: vi.fn(async () => ({ from: mockSupabaseFrom })),
+  // #12704: the stored held-count RPC answers zero rows (the non-member shape: no line, no warning), so a test that counts
+  // warnings counts only its own.
+  getFreshTenantClient: vi.fn(async () => ({
+    from: mockSupabaseFrom,
+    rpc: async (fn: string) => (fn === "get_workspace_kb_sync_held" ? { data: [], error: null } : { data: null, error: null }),
+  })),
   mintFounderJwt: vi.fn(),
   RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
@@ -462,9 +467,15 @@ vi.mock("@/server/cc-github-read", async (importOriginal) => {
 });
 
 // #11636: the approval-queue flag read, shared by the registrar and the gate's default seam. A per-test switch.
+// #12704 D40(1): the registrar reads the detailed shape; it wraps the same switch.
 vi.mock("@/server/approval/flag", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/approval/flag")>()),
   isApprovalQueueEnabled: mockApprovalFlag,
+  // A rejection propagates: the registrar's own catch reports it under cc-push-flag-resolve (the throwing-seam path).
+  readApprovalQueueFlagDetailed: async (identity: unknown) => ({
+    value: (await (mockApprovalFlag as (...a: unknown[]) => Promise<unknown>)(identity)) === true,
+    fellBack: false,
+  }),
 }));
 
 // #11636: the default-branch lookup. The file-wide github-app mock exposes only three exports, so the REAL github-api is kept

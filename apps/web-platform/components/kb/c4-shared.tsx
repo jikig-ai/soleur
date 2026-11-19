@@ -35,6 +35,12 @@ import "@likec4/diagram/styles.css";
 // order (defense-in-depth alongside the scoped-selector specificity in the file).
 import "./c4-theme.css";
 import type { Diagnostic } from "@/lib/c4-model-shape";
+import {
+  isWorkspaceSyncPending,
+  isWorkspaceSyncResyncOnly,
+  kbWorkspaceSyncPendingNotice,
+  kbWorkspaceSyncResyncPendingNotice,
+} from "@/lib/kb-workspace-sync-notice";
 
 // By supplying our own MantineProvider (Lever 1, below) we displace
 // @likec4/diagram's LikeC4MantineProvider — which the library renders only when
@@ -507,7 +513,15 @@ export function C4CodePanel({
     const diagnostic =
       typeof j?.rerenderDiagnostic === "string" ? j.rerenderDiagnostic : null;
     setSaveMsg(
-      rerendered
+      // #12600 D16: the commit landed but the workspace was held, so the diagram did not re-render here.
+      // D22(c): the render ran on GitHub's copy, so a render diagnostic is still shown after the notice.
+      isWorkspaceSyncPending(j)
+        ? isWorkspaceSyncResyncOnly(j)
+          ? kbWorkspaceSyncResyncPendingNotice()
+          : diagnostic
+            ? `${kbWorkspaceSyncPendingNotice("save")} — ${diagnostic}`
+            : kbWorkspaceSyncPendingNotice("save")
+        : rerendered
         ? "Saved — diagram updated."
         : diagnostic
           ? `Saved — ${diagnostic}`
@@ -583,11 +597,6 @@ export function C4CodePanel({
                 A+
               </button>
             </div>
-            {saveMsg && (
-              <span className="text-[11px] text-soleur-text-muted">
-                {saveMsg}
-              </span>
-            )}
             {saveAction.error && (
               <span role="alert" className="text-[11px] text-red-400">
                 {saveAction.error.message}
@@ -606,6 +615,13 @@ export function C4CodePanel({
           </div>
         )}
       </div>
+      {/* #12714 D31(2): the save message (up to ~230 characters with the held-workspace notice) is a full-width status
+          row directly under the header, so the header stays one line at any pane width. Same 11 px muted style. */}
+      {!isReadmeFile && saveMsg && (
+        <div role="status" className="border-b border-soleur-border-default px-3 py-2 text-[11px] leading-relaxed text-soleur-text-muted">
+          {saveMsg}
+        </div>
+      )}
       <div className="min-h-0 flex-1 overflow-auto">
         {isReadmeFile ? (
           // Directory index, read-only: rendered markdown, no editor/Save/PUT.

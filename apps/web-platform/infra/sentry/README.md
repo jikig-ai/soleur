@@ -46,8 +46,11 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   emails `issue_owners` → `ActiveMembers` at most once a day per monitor. A
   **muted** monitor environment creates no issue, so it sends nothing even though
   it is routed; mute cannot be set through the provider.
-- **4 uptime monitors** — vendor-hosted HTTP checks, auto-applied on the same
-  push-to-main path.
+- **1 uptime monitor** (the production app, declared new; the auto-detected 1422253 is deleted through the API; ADR-328) —
+  `sentry_uptime_monitor.app` in `uptime-monitors.tf` watches
+  `https://app.soleur.ai`, auto-applied on the same push-to-main path. Sentry
+  includes one uptime slot and bills each further monitor; marketing-site uptime
+  (soleur.ai) is Better Stack's (`../uptime-alerts.tf`).
 
 ## Diagnostic rule: `agent-auth-failure` (temporary, #10455 / #10548)
 

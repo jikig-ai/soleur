@@ -22,6 +22,8 @@ export {
 
 export type KbRouteContext = {
   user: { id: string };
+  /** The membership-resolved active workspace id (`resolveActiveWorkspaceKbRoot`): `syncWorkspace` keys the repo URL on it. */
+  workspaceId: string;
   userData: {
     workspace_path: string;
     repo_url: string;
@@ -170,6 +172,7 @@ export async function authenticateAndResolveKbPath(
     ok: true,
     ctx: {
       user: { id: userId },
+      workspaceId: access.activeWorkspaceId,
       userData: {
         workspace_path: userData.workspace_path,
         repo_url: userData.repo_url,

@@ -237,7 +237,10 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.tenant == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 19, not 15 (#12905): at 15 the job timed out on 5 of 8 main runs (passes
+    # took 680-868 s). Must stay below DEV_SUITE_MUTEX_HOLD_S (1170 s) in
+    # scripts/dev-suite-mutex.sh; tests/scripts/test-dev-suite-mutex-wiring.sh W5 pins that.
+    timeout-minutes: 19
     # pull-requests: read is for the drift probe's ledger classifier only: it
     # reads each fresh owner branch's pull-request state (closed-grace/closed,
     # ADR-061 amendment for #8605). The repo is public, so this exposes nothing a
@@ -322,9 +325,9 @@ jobs:
       # THE CAPACITY ARITHMETIC, STATED IN THE RIGHT UNITS. Observed run
       # durations were 14-30 min, but that is END-TO-END WALL CLOCK UNDER THE
       # GLOBAL MUTEX -- queue time plus execution -- so using it as service time
-      # measures the symptom as if it were the cause. `timeout-minutes: 15` above
-      # bounds EXECUTION, so serialized service capacity is >= 4 runs/hour against
-      # ~22 arrivals/hour: still ~5x oversubscribed, which is what makes the queue
+      # measures the symptom as if it were the cause. `timeout-minutes: 19` above
+      # bounds EXECUTION, so serialized service capacity is >= 3 runs/hour against
+      # ~22 arrivals/hour: still ~7x oversubscribed, which is what makes the queue
       # unbounded. If you ever re-derive this, derive it from execution time under
       # the job timeout, never from wall clock measured while a queue existed.
       #
@@ -348,7 +351,7 @@ jobs:
       # `failure` (NOT `cancelled`), so it does not even reach the eviction arm's
       # diagnosis. This is the PRE-#7986 baseline, not something #8048 introduces
       # -- but it is a real open hazard and the mutex is the wrong place to fix
-      # it: a repo-wide CI mutex spends 15 minutes of capacity to protect seconds
+      # it: a repo-wide CI mutex spends a full job (19 min) of capacity to protect seconds
       # of DDL. The right fix is a transaction-scoped advisory lock around a
       # re-checked apply inside run-migrations.sh. Tracked in #8049.
       #

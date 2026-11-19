@@ -491,7 +491,7 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
     "create_pull_request",
     "Create a pull request on the user's connected GitHub repository. " +
       "The repository is determined server-side from the user's connected repo. " +
-      "The head branch must already exist on the remote (push first via git). " +
+      "The head branch must already exist on the remote (push it first with `github_push_branch`). " +
       "Requires the workspace Owner's approval.",
     {
       head: z.string().describe("Branch name containing changes (just the name, not owner:branch)"),
