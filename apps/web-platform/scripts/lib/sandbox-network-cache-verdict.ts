@@ -389,6 +389,11 @@ function arg(argv: string[], name: string): string | undefined {
 }
 
 export async function main(argv: string[], write: (s: string) => void = (s) => process.stdout.write(s)): Promise<number> {
+  // The script reads the pinned baseline (version and integrity) from here, so there is one copy.
+  if (argv[0] === "baseline-json") {
+    write(`${JSON.stringify(MEASURED_BASELINE)}\n`);
+    return 0;
+  }
   const need = ["--baseline", "--candidate", "--baseline-sdk", "--baseline-cli", "--candidate-sdk", "--candidate-cli", "--requested", "--command"];
   const missing = need.filter((n) => arg(argv, n) === undefined);
   if (missing.length) {
