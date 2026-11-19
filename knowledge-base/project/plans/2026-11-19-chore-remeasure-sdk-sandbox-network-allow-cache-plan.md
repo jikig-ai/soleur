@@ -48,9 +48,10 @@ The work splits into two stages with different start conditions (CTO items 1 and
 | Stage | What | Starts when |
 |---|---|---|
 | Build | The harness override, the classifier, the re-run script, their unit suites, the pointer edits | #12897 has merged and this branch is rebased onto main |
-| Measure | The 0.3.328 run, the ADR-278 addendum, the #12906 comment | The later of: #12897 merged, or 2026-11-21T23:14Z (0.3.328 clears the 3-day release-age floor) |
+| Measure (interim, this PR) | One real run on the newest SDK already past the floor (0.3.326 at or after 2026-11-19T18:44:37Z, else 0.3.325), the ADR-278 addendum, the #12906 comment | #12897 merged and this branch rebased (CTO item 21) |
+| Measure (0.3.328, follow-up issue) | The 0.3.328 run and its records | Not before 2026-11-21T23:14Z, when 0.3.328 clears the 3-day release-age floor (CTO items 10 and 21) |
 
-If the session cannot wait for the Measure stage, the PR stays a draft and the session ends with a resume prompt. It does not ship an UNVERIFIED result as its finding.
+CTO item 21 replaced the earlier "stay draft and end with a resume prompt" rule: this PR merges with an interim measurement, labelled as such, and the 0.3.328 run is tracked in a follow-up issue filed before merge. No UNVERIFIED token is recorded for the floor, because the harness can run here.
 
 ## Research Insights
 
@@ -165,9 +166,9 @@ If the session cannot wait for the Measure stage, the PR stays a draft and the s
    10. **Harness runs.** Run the harness twice under `unshare -rnm` with a constructed environment: `env -i`, the keys `runHarness` passes (`PATH`, `HOME` set to a scratch dir, `LANG`, `NODE_ENV=test`), plus `NETNS_SDK_ENTRY` set to that prefix's `sdk.mjs`. Both runs set the entry, so the app's own `node_modules` SDK is never the measured one. That is what makes the baseline valid on a bump branch, where the app already pins the new version (plan review: CTO devex 1, amending CTO item 9's "default entry"). Each run uses spec `{ appRoot, scratch, tap: "allow-all", arms: ["control","B","D","E","F","F2"] }` (CTO item 4), with `cwd` the app root and `tsx --tsconfig <app>/tsconfig.json`, as `runHarness` does. It is launched as `timeout -k 10 600 unshare -rnm --fork --pid --mount-proc --kill-child ...`, so the CLI, forwarder and socat children die with the run and cannot outlive the trap (deepen: security 3). A timeout or a non-zero harness exit is exit 1 `harness-crash`, which prints the harness stderr tail with the sentinel redaction below applied.
    10a. **Containment (CTO item D).** Inside each run's mount namespace, before `tsx` starts, the script:
        - mounts a tmpfs over the real `$HOME` and over `$XDG_RUNTIME_DIR`;
-       - bind-remounts read-only both the worktree top level (`git rev-parse --show-toplevel`) and the git common dir (`git rev-parse --git-common-dir`). The common dir lies outside a worktree and holds `.git/hooks`, so remounting only the app root would leave the hooks writable;
-       - asserts the scratch root lies outside `$HOME`, the worktree and the git common dir, else exit 3 `scratch-inside-protected-path`;
-       - runs a write probe: creating a file must fail in `$HOME`, the worktree and the git common dir, and succeed in scratch. Any wrong result, or any failed mount, is exit 3 `containment-unavailable`. It never falls back to running uncontained;
+       - bind-remounts read-only every worktree path listed by `git worktree list --porcelain` (this includes the main checkout, so every sibling under `.worktrees/` is covered) and the git common dir (`git rev-parse --git-common-dir`). The common dir lies outside a worktree and holds `.git/hooks`, so remounting only the app root would leave the hooks writable (CTO item 21 widened this from the current worktree alone);
+       - asserts the scratch root lies outside `$HOME`, every listed worktree and the git common dir, else exit 3 `scratch-inside-protected-path`;
+       - runs a write probe: creating a file must fail in `$HOME`, in every listed worktree and in the git common dir, and succeed in scratch. Any wrong result, or any failed mount, is exit 3 `containment-unavailable`. It never falls back to running uncontained;
        - sets `PATH` explicitly under `env -i`, with no shim directory under the masked `$HOME` (node resolves to `/usr/bin/node` on this host, and `tsx` is read from the app's `node_modules`).
 
        Remaining exposure, named in the verdict JSON and the addendum: `/tmp` outside scratch and the rest of the user-writable host filesystem. #12969 still owns masking for the shared harness and the vitest suite.
@@ -349,8 +350,13 @@ Write the failing tests first in each phase (`cq-write-failing-tests-before`).
 - `scripts/sdk-bump-sandbox-gate.sh`: one `echo` naming the command, once, after the loop that prints the `DETECTED bump` lines. Run `scripts/sdk-bump-sandbox-gate.test.sh`, and update its pinned output if a row pins it.
 - ADR-278's 2026-11-18 addendum, "Re-measure trigger" paragraph: name the command, and add the verdict-to-action table.
 
-**Phase 5 — Measure (waits for the later of #12897 merged and 2026-11-21T23:14Z).**
-1. Run `bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.328 --out <scratchpad>/verdict-0.3.328.json`. Use Monitor with an until-loop, or a run_in_background launch with its notification. Never poll with sleep (`hr-monitor-not-run-in-background-for-polling`).
+**Phase 5 — Measure (CTO item 21).**
+
+5a (this PR, after #12897 merges and the branch is rebased): run the script once against the newest version past the floor, 0.3.326 if the run starts at or after 2026-11-19T18:44:37Z, otherwise 0.3.325. The script's own floor check decides; there is no override. The addendum and #12906 comment label it "interim version, not 0.3.328" and say: "0.3.328 measurement pending the ADR-191 release-age floor, not before 2026-11-21T23:14Z, tracked in #<follow-up>". An interim RE-ASKS-AFTER-TEARDOWN or MIXED verdict is already a #12906 trigger; an interim LEAK takes the LEAK path. In the steps below read `0.3.328` as the interim version for 5a.
+
+5b (follow-up issue, filed before merge with `Ref #12906`): the 0.3.328 run, not before 2026-11-21T23:14Z, with the exact command, the 0.3.328 AC8 and the record steps below.
+
+1. Run `bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh <version> --out <scratchpad>/verdict-<version>.json`. Use Monitor with an until-loop, or a run_in_background launch with its notification. Never poll with sleep (`hr-monitor-not-run-in-background-for-polling`).
 2. Branch on the `verdict=` word of the final `REMEASURE` line. The exit code only cross-checks it, because exit 0 covers three findings. Write the drafts with `--markdown <scratchpad>/records`, then paste the ADR-278 policy sentences into their placeholders:
    - **0 CACHES:** write the addendum. #12906 stays blocked, and the next run happens on the next SDK bump.
    - **0 RE-ASKS-AFTER-TEARDOWN** (the brief's "no longer caches" case; renamed by CTO item 14 so it cannot be over-read): write the addendum stating:
@@ -570,7 +576,8 @@ Build stage:
 
 Measure stage:
 
-- **AC8** The script ran against `0.3.328` after 2026-11-21T23:14Z. The addendum quotes the exact command, the exit code and the final `REMEASURE` line.
+- **AC8** (CTO item 21) The script ran for real against the interim version (0.3.326 or 0.3.325, past the floor). The addendum quotes the exact command, the exit code and the final `REMEASURE` line, labelled "interim version, not 0.3.328". The follow-up issue for the 0.3.328 run exists, carries `Ref #12906`, the exact command and the not-before time 2026-11-21T23:14Z, and holds the 0.3.328 form of this criterion.
+- **AC8b** (CTO item 21) The offline `.test.sh` has a row with a two-worktree fixture whose sibling worktree stays writable; it exits 3 `containment-unavailable`.
 - **AC9** The ADR-278 addendum `## Addendum — <run date> (#12906): ...` records:
   - the requested and exact versions;
   - the observed SDK, CLI, node, npm, kernel and bwrap versions of both runs;
