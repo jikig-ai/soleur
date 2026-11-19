@@ -25,3 +25,4 @@
 
 - constraint: This is evidence-only, do NOT bump the production SDK pin in this PR, and run the measurement against 0.3.328 installed in an isolated harness directory.
 - constraint: Commit the harness invocation as a reusable script so the next SDK bump can re-run it in one command.
+cto_spawns=1
