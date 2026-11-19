@@ -1663,6 +1663,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       // #12598: a public repo is connected and the spawn failed, so the failed-to-start line appears exactly once, and it
       // says the registered GitHub read tools still work (they run server-side, not through the forwarder).
       expect(startFailedBody(prompt())).toContain("read-only GitHub tools");
+      // AC4 (with a repo connected): a failed spawn never also carries the enabled section.
+      expect(prompt()).not.toContain("## Web access enabled for this session");
     });
 
     it("entitled + NO connected repo: no tools, the connect-a-repository line, a debounced warning with its OWN literal, no info event", async () => {

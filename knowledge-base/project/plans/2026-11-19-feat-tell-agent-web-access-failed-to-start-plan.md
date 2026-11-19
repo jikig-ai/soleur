@@ -437,3 +437,12 @@ Superseded by CTO review rulings T2-r1, T3-r3 and T1-r2 (see the spec's decision
 from the live forwarder handle after the spawn block (not set in the catch), the line gains a clause about the
 `github_*` read tools only when they are registered, and the test's content asserts read the line's body. The code
 sketch and Assessment above record the plan as written before review.
+
+## Addendum - 2026-11-19 (ship completeness check, PR #12957)
+
+The second grep in AC1 and both commands in AC2 were written for the catch-set flag that T1-r2 replaced, so on the
+merged code they print 0 and nothing. They were ticked against the code before review. What now holds: the suffix
+line after `githubReadPromptSuffix +` is `startFailedSuffix`, and `webEgressStartFailed` is derived once, after the
+spawn block, as `webEgressEntitled && mode.runRepoLifecycle && webEgress === undefined`. That conjunction is the
+spawn guard itself, so a session that never tried to spawn cannot read as failed. The behaviour checks are the
+real-factory rows. AC4's repo-connected half now also asserts that the enabled section is absent.
