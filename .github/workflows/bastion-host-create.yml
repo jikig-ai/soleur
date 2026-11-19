@@ -41,6 +41,15 @@ on:
         required: false
         type: string
         default: ""
+    # Exactly the secrets this body reads, passed by name (never `secrets: inherit`: the git-data
+    # root-token census allows inherit only on the release callers). The job asserts what it needs.
+    secrets:
+      DOPPLER_TOKEN_INFRA_PRIVILEGED:
+        required: false
+      DOPPLER_TOKEN:
+        required: false
+      SENTRY_ACTIONS_RO_TOKEN:
+        required: false
 
 permissions:
   contents: read

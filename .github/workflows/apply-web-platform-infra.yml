@@ -6127,7 +6127,10 @@ jobs:
       confirm: ${{ inputs.confirm }}
       plan_only: ${{ inputs.plan_only }}
       reason: ${{ inputs.reason }}
-    secrets: inherit
+    secrets:
+      DOPPLER_TOKEN_INFRA_PRIVILEGED: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
 
   # ── #7095: re-mint the CF Access ci_ssh service token ──────────────────────
   # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §ci_ssh_token_replace

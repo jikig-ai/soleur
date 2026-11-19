@@ -444,9 +444,9 @@ bstep() { # <job text> <exact step name>: that step's lines
   awk -v n="      - name: $2" '/^      - (name|uses):/{c=($0 == n)} c' <<<"$1"
 }
 # One predicate per property, so the mutation rows below drive the SAME code the real rows do.
-ac8e_verify_if() { bstep "$1" "Verify the bastion boot (power off on anything but ready)" \
-  | grep -qxF "        if: \${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}"; }
-ac8e_apply_gated() { bstep "$1" "Terraform apply (bastion birth)" | grep -qxF '        if: inputs.plan_only != true'; }
+ac8e_verify_if() { grep -qxF "        if: \${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') }}" \
+  < <(bstep "$1" "Verify the bastion boot (power off on anything but ready)"); }
+ac8e_apply_gated() { grep -qxF '        if: inputs.plan_only != true' < <(bstep "$1" "Terraform apply (bastion birth)"); }
 BJOB="$(bjob_of "$BWF")"
 [ -n "$BJOB" ] || no "AC8e: no bastion_host_create job in $(basename "$BWF")"
 for id in apply verify boot_anchor cancel_poweroff; do
@@ -464,21 +464,21 @@ else
   no "AC8e: verify must call bastion_boot_verify \"\${BOOT_TRAIL_SINCE:-}\" \"\${APPLY_OUTCOME:-}\" bastion-host-create"
 fi
 if ac8e_apply_gated "$BJOB" \
-   && bstep "$BJOB" "Stamp boot-trail run anchor (bastion create)" | grep -qxF '        if: inputs.plan_only != true'; then
+   && grep -qxF '        if: inputs.plan_only != true' < <(bstep "$BJOB" "Stamp boot-trail run anchor (bastion create)"); then
   ok "AC8e: plan_only stops the anchor and the apply (the verify, pin and cancel steps follow the apply's outcome)"
 else
   no "AC8e: the anchor and apply steps must each carry if: inputs.plan_only != true"
 fi
-if bstep "$BJOB" "Power off on cancel (unverified bastion)" \
-   | grep -qxF "        if: \${{ cancelled() && steps.apply.outcome != 'skipped' && steps.verify.outcome != 'success' && inputs.plan_only != true }}"; then
+if grep -qxF "        if: \${{ cancelled() && steps.apply.outcome != 'skipped' && steps.verify.outcome != 'success' && inputs.plan_only != true }}" \
+   < <(bstep "$BJOB" "Power off on cancel (unverified bastion)"); then
   ok "AC8e: a cancelled run that reached the apply powers an unverified bastion off"
 else
   no "AC8e: the cancel power-off step's if: must be cancelled() && apply not skipped && verify not success && not plan_only"
 fi
 # The interlock's token-shape predicate is the READER's, byte for byte (LC_ALL=C included), so the
 # interlock never admits a token the reader then refuses (review, simplicity 8 / pattern P3-3).
-want_bo="$(grep -E '^_bearer_ok\(\) \{' "$TRAIL" | head -1)"
-got_bo="$(grep -E '^[[:space:]]*_bearer_ok\(\) \{' <<<"$BJOB" | sed 's/^[[:space:]]*//' | head -1)"
+want_bo="$(grep -E '^_bearer_ok\(\) \{' "$TRAIL" | head -1)" || want_bo=""
+got_bo="$(grep -E '^[[:space:]]*_bearer_ok\(\) \{' <<<"$BJOB" | sed 's/^[[:space:]]*//' | head -1)" || got_bo=""
 if [ -n "$want_bo" ] && [ "$got_bo" = "$want_bo" ]; then ok "AC8e: the interlock's _bearer_ok is byte-identical to the reader's"; else no "AC8e: the interlock's _bearer_ok ('${got_bo}') differs from the reader's ('${want_bo}')"; fi
 TO="$(awk '/^  bastion_host_create:/{c=1;next} c&&/^  [A-Za-z0-9_-]+:/{c=0} c&&/^    timeout-minutes: [0-9]+$/{print $2; exit}' "$BWF")"
 if [[ "$TO" =~ ^[0-9]+$ ]] && [ "$TO" -ge 45 ]; then ok "AC8e: job timeout-minutes ($TO) is read (the budget row lives in kernel-currency.test.sh)"; else no "AC8e: bastion_host_create timeout-minutes unreadable or below 45 ('${TO}')"; fi
@@ -497,7 +497,7 @@ ac8e_gate_closed() { # <job> <gate fn>: `if ! <fn> tfplan.json; then` ... `exit 
     END { exit !(seen == 1 && ex) }'
 }
 ac8e_no_coe() { ! grep -qE '^[[:space:]]*continue-on-error:' <<<"$1"; }
-ac8e_verify_exit() { bstep "$1" "Verify the bastion boot (power off on anything but ready)" | grep -qxF '          exit "$rc"'; }
+ac8e_verify_exit() { grep -qxF '          exit "$rc"' < <(bstep "$1" "Verify the bastion boot (power off on anything but ready)"); }
 ac8e_no_concurrency() { ! grep -qE '^[[:space:]]*concurrency:' <<<"$1"; }
 for gate in bastion_host_birth_gate stock_preflight_gate; do
   if ac8e_gate_closed "$BJOB" "$gate"; then ok "AC8e: a ${gate} refusal exits 1 (the bare call is the if! condition)"; else no "AC8e: the plan step must read 'if ! ${gate} tfplan.json; then' with an 'exit 1' before its 'fi'"; fi

@@ -124,19 +124,31 @@ fake_wf 'on:\n  push:\n    tags: ["v*"]\njobs: {}\n'
 check "shape: a tag-only push trigger passes (a merge does not wake it)" PASS python3 "$LINT" shape "$DIR" "$FAKE"
 fake_wf 'on:\n  push:\n    paths:\n      - "apps/web-platform/infra/zot-*"\njobs: {}\n'
 check "shape: a non-matching push filter passes" PASS python3 "$LINT" shape "$DIR" "$FAKE"
+# git_index <dir>: init and stage a fixture checkout under the shared fixture environment (a discovery
+# ceiling and a scrubbed git environment), so a hook-exported GIT_DIR/GIT_INDEX_FILE cannot retarget
+# the write at this worktree's own index (plugins/soleur/AGENTS.md, Test Fixture Conventions).
+# shellcheck source=../../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$ROOT/plugins/soleur/test/lib/git-fixture-env.sh" || harness "the fixture-env helper did not load"
+git_index() {
+  : "${1:?git_index: empty fixture dir}"
+  (
+    git_fixture_env "$1" || exit 64
+    git -C "$1" init -q && git -C "$1" add -A
+  ) 2>/dev/null
+}
 # In a checkout the file list is `git ls-files '*bastion*'`, so a bastion file no list names (2b's
 # replace gate, say) is still covered: a filter matching ONLY that file must be RED.
 GROOT="$WORK/gitroot"; mkdir -p "$GROOT/.github/workflows" "$GROOT/scripts/lib"
 : > "$GROOT/scripts/lib/bastion-replace-gate.sh"
 printf 'on:\n  push:\n    paths:\n      - "scripts/lib/bastion-replace-*"\njobs: {}\n' > "$GROOT/.github/workflows/other.yml"
-if git -C "$GROOT" init -q 2>/dev/null && git -C "$GROOT" add -A 2>/dev/null; then
+if git_index "$GROOT"; then
   EXPECT="scripts/lib/bastion-replace-gate.sh" check "shape: a tracked bastion file outside the fixed list is covered (git ls-files)" RED python3 "$LINT" shape "$DIR" "$GROOT"
 else harness "git init of the shape fixture failed"; fi
 # Zero-item floors: each comparison that found nothing to compare must fail.
 ZROOT="$WORK/zeroroot"; mkdir -p "$ZROOT/.github/workflows"
 printf 'on:\n  workflow_dispatch: {}\njobs: {}\n' > "$ZROOT/.github/workflows/other.yml"
 EXPECT="no workflow push trigger was read" check "shape floor: no workflow carries a push trigger (0 checked)" RED python3 "$LINT" shape "$DIR" "$ZROOT"
-if git -C "$ZROOT" init -q 2>/dev/null && git -C "$ZROOT" add -A 2>/dev/null; then
+if git_index "$ZROOT"; then
   EXPECT="found no *bastion* file" check "shape floor: a checkout with no tracked bastion file (0 checked)" RED python3 "$LINT" shape "$DIR" "$ZROOT"
 else harness "git init of the zero fixture failed"; fi
 ZINFRA="$WORK/zeroinfra"; mkdir -p "$ZINFRA"; cp "$TF" "$ZINFRA/"

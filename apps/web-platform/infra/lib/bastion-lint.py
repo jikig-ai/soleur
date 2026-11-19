@@ -44,6 +44,11 @@ METADATA_ROW = "meta skuid 0 ip daddr 169.254.169.254 tcp dport 80"
 USER_ONLY = {"meta skuid systemd-timesync udp dport 123", "meta skuid systemd-network udp sport 68 udp dport 67"}
 
 
+
+def _read(path):
+    with open(path) as f:
+        return f.read()
+
 def daddrs(match):
     """The literal addresses an `ip daddr` qualifier names ([] for a set reference, None if absent)."""
     m = re.search(r"\bip daddr\s+(\{[^}]*\}|@\S+|\S+)", match)
@@ -56,7 +61,7 @@ def daddrs(match):
 
 
 def load_render(path):
-    lines = open(path).read().splitlines()
+    lines = _read(path).splitlines()
     if lines and lines[0].lstrip().startswith("<<"):
         lines = lines[1:-1]
     body = "\n".join(lines)
@@ -85,7 +90,7 @@ def egress(render, tf_path):
     bad = []
     doc, _ = load_render(render)
     files = files_of(doc)
-    tf = open(tf_path).read()
+    tf = _read(tf_path)
     consumers = set(BASE_CONSUMERS) | set(files)
     consumers |= {os.path.basename(p) for p in files if p.startswith("/etc/systemd/system/")}
     base = files.get(BASELINE)
@@ -224,7 +229,7 @@ def settle_blocks(text):
 
 def settle(web, bastion):
     bad = []
-    w, b = settle_blocks(open(web).read()), settle_blocks(open(bastion).read())
+    w, b = settle_blocks(_read(web)), settle_blocks(_read(bastion))
     pkgs = None
     for k in list(ANCHORS) + ["settle"]:
         if len(w[k]) != 1:
@@ -256,7 +261,7 @@ def hostkey(render, pub, priv_file):
         bad.append("ssh_keys carries other key types: %s" % ", ".join(extra))
     if str(keys.get("ed25519_public", "")).strip() != pub.strip():
         bad.append("the rendered ed25519_public is not the Terraform key's public half")
-    if str(keys.get("ed25519_private", "")).strip() != open(priv_file).read().strip():
+    if str(keys.get("ed25519_private", "")).strip() != _read(priv_file).strip():
         bad.append("the rendered ed25519_private is not the Terraform key's private half")
     if doc.get("ssh_deletekeys") is not True:
         bad.append("ssh_deletekeys is not true")
@@ -314,7 +319,7 @@ BASTION_FILES = [
 
 def shape(infra, root):
     bad = []
-    tf = open(os.path.join(infra, "bastion.tf")).read()
+    tf = _read(os.path.join(infra, "bastion.tf"))
     fw = tf_block(tf, "hcloud_firewall", "bastion")
     if fw is None:
         bad.append("hcloud_firewall.bastion is absent")
@@ -341,7 +346,7 @@ def shape(infra, root):
         for name in sorted(os.listdir(infra)):
             if not name.endswith(".tf") or name == "bastion.tf":
                 continue
-            t = open(os.path.join(infra, name)).read()
+            t = _read(os.path.join(infra, name))
             taken |= set(re.findall(r'private_ip\s*=\s*"(10\.0\.1\.[0-9]+)"', t))
             taken |= set(re.findall(r'_private_ip\s*=\s*"(10\.0\.1\.[0-9]+)"', t))
             if name == "variables.tf":
@@ -362,7 +367,7 @@ def shape(infra, root):
         if not name.endswith((".yml", ".yaml")) or name in EXPECTED_WAKE:
             continue
         try:
-            w = yaml.load(open(os.path.join(wf_dir, name)), Loader=loader)
+            w = yaml.load(_read(os.path.join(wf_dir, name)), Loader=loader)
         except yaml.YAMLError as e:
             bad.append("%s does not parse, so its push filter cannot be read: %s" % (name, str(e).splitlines()[0]))
             continue
@@ -420,7 +425,7 @@ def main(argv):
         elif mode == "settle":
             bad = settle(*args)
         elif mode == "hostkey":
-            bad = hostkey(args[0], open(args[1]).read(), args[2])
+            bad = hostkey(args[0], _read(args[1]), args[2])
         elif mode == "shape":
             bad = shape(*args)
         elif mode == "emitter":

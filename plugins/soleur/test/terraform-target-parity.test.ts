@@ -11265,12 +11265,22 @@ describe("bastion: one resource list, pinned to the birth job and the exclusions
   const job = extractJobBlock(bwfText, "bastion_host_create");
   const caller = extractJobBlock(wf, "bastion_host_create");
 
-  test("the caller job dispatches the reusable body with the birth inputs and secrets: inherit", () => {
+  test("the caller job dispatches the reusable body with the birth inputs and exactly the secrets it reads", () => {
     const c = stripComments(caller);
     expect(c).toMatch(/^\s*if: github\.event_name == 'workflow_dispatch' && inputs\.apply_target == 'bastion-host-create'\s*$/m);
     expect(c).toMatch(/^\s*uses: \.\/\.github\/workflows\/bastion-host-create\.yml\s*$/m);
     for (const k of ["confirm", "plan_only", "reason"]) expect(c).toMatch(new RegExp(`^\\s*${k}: \\$\\{\\{ inputs\\.${k} \\}\\}\\s*$`, "m"));
-    expect(c).toMatch(/^\s*secrets: inherit\s*$/m);
+    // Exactly the three secrets the body reads, by name; never `secrets: inherit` (the git-data
+    // root-token census allows inherit only on the release callers).
+    expect(c).not.toMatch(/^\s*secrets: inherit\s*$/m);
+    for (const k of ["DOPPLER_TOKEN_INFRA_PRIVILEGED", "DOPPLER_TOKEN", "SENTRY_ACTIONS_RO_TOKEN"]) {
+      expect(c).toMatch(new RegExp(`^\\s*${k}: \\$\\{\\{ secrets\\.${k} \\}\\}\\s*$`, "m"));
+    }
+    const declared = Object.keys(
+      ((parseYaml(bwfText) as { on: { workflow_call: { secrets?: Record<string, unknown> } } }).on.workflow_call.secrets) ?? {},
+    ).sort();
+    const read = [...new Set([...stripComments(bwfText).matchAll(/secrets\.([A-Za-z_]+)/g)].map((m) => m[1]))].sort();
+    expect(declared).toEqual(read);
     expect(c).toMatch(/^\s*issues: write\s*$/m);
     // The body runs inside the caller's run, which holds the workflow-level lock: a second group
     // of the same name in the callee would only risk cancelling the caller.

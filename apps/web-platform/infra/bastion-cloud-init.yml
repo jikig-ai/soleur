@@ -249,7 +249,7 @@ runcmd:
     STAGE=apt_path
     timeout 240 apt-get update --error-on=any -o Acquire::Retries=3 -o DPkg::Lock::Timeout=300
     STAGE=private_ip
-    i=0; until ip -4 -o addr show | grep -qwF '${private_ip}'; do i=$((i+1)); [ "$i" -lt 60 ] || { printf 'ip=absent waited=%ss' $((i*2)) > $D; exit 1; }; sleep 2; done
+    i=0; until ip -4 -o addr show | grep -wF -- '${private_ip}' >/dev/null; do i=$((i+1)); [ "$i" -lt 60 ] || { printf 'ip=absent waited=%ss' $((i*2)) > $D; exit 1; }; sleep 2; done
     STAGE=ssh_masked
     [ "$(systemctl is-enabled ssh.service 2>/dev/null || true)" = masked ]
     _emit "soleur-cloud-init boot stage" cloud_init_complete info
