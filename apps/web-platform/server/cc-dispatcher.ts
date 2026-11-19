@@ -588,10 +588,12 @@ const WEB_EGRESS_PROMPT_ADDENDUM =
   "proxy/connection error mid-session, report it rather than retrying in a " +
   "loop — the session's web access may have been revoked.";
 
-// #12598 — appended ONLY when the workspace grant is on and the forwarder spawn failed (the catch below). The
-// session then runs as if Agent web access were off; without this line the agent sees the grant but no WebFetch,
-// and retries or mis-states what it can do. No GitHub claim: GitHub access differs between the repo-token and
-// no-repo cases, and GH_NO_NETWORK_PROMPT_ADDENDUM already covers the latter.
+// #12598 — appended ONLY to a Command Center session whose workspace grant is on but which has no live forwarder (the
+// spawn failed). The session then runs as if Agent web access were off, and without this line the prompt says nothing
+// about it, so the agent cannot explain why WebFetch is missing and retries or mis-states what it can do. The line
+// itself makes no GitHub claim (GitHub access differs between the repo-token and no-repo cases, and
+// GH_NO_NETWORK_PROMPT_ADDENDUM covers the latter); the GitHub clause below is appended only when the server-side
+// `github_*` read tools are registered, which is exactly when it is true.
 const WEB_EGRESS_START_FAILED_PROMPT_LINE =
   "## Web access unavailable in this session\n" +
   "Your workspace owner enabled Agent web access, but it failed to start for this session, so this " +
@@ -599,6 +601,13 @@ const WEB_EGRESS_START_FAILED_PROMPT_LINE =
   "retry web fetches, and do not try to reach other websites from shell commands (for example with curl). " +
   "If the user asks for something that needs the web, tell them web access failed to start for this " +
   "session and that starting a new conversation may restore it, or ask them to paste what you need.";
+
+// #12598 — appended to the line above only when the GitHub read tools are registered (`readRegistration.registered`).
+// Those tools run server-side with the installation token, so a failed forwarder does not affect them. No `gh` claim:
+// `registered` does not prove a sandbox token was minted.
+const WEB_EGRESS_START_FAILED_GITHUB_READ_CLAUSE =
+  "Your GitHub read tools (the `github_*` tools in your tool list) are not affected: use them for questions about " +
+  "the connected repository.";
 
 // feat-reasoning-chat-boxes (#5370) — instructs the Concierge to drive the
 // always-registered narrate/summarize tools. Appended UNCONDITIONALLY (the
@@ -3595,7 +3604,6 @@ export const realSdkQueryFactory: QueryFactory = async (
     let webEgress:
       | { workspaceId: string; token: string; port: number }
       | undefined;
-    let webEgressStartFailed = false;
     if (webEgressEntitled && mode.runRepoLifecycle) {
       try {
         const fwd = await spawnEgressForwarder(
@@ -3626,9 +3634,12 @@ export const realSdkQueryFactory: QueryFactory = async (
           message:
             "web-egress forwarder spawn failed; session proceeds zero-egress",
         });
-        webEgressStartFailed = true;
       }
     }
+    // #12598: the grant is on but this session has no live forwarder. Derived from `webEgress` (not set in the catch) so
+    // it can never coexist with the "Web access enabled" addendum, which gates on the same handle.
+    const webEgressStartFailed =
+      webEgressEntitled && mode.runRepoLifecycle && webEgress === undefined;
 
     // #4671 / ADR-287 — resolve the WebFetch injection-scan flags ONLY for sessions that
     // actually have web egress (WebFetch is otherwise disallowed), with the dispatch
@@ -3714,12 +3725,17 @@ export const realSdkQueryFactory: QueryFactory = async (
         // gated on the LIVE forwarder handle, not the resolved entitlement —
         // a spawn-degraded session keeps WebFetch disallowed and gets no
         // addendum claiming egress, plus the failed-to-start prompt line
-        // (#12598), appended after the GitHub suffix.
+        // (#12598). That line and githubReadPromptSuffix never both appear
+        // (the suffix needs a live forwarder, the line a missing one); it is
+        // a separate term only to keep the #12469 adjacency pin green.
         systemPrompt:
           effectiveSystemPrompt +
           (webEgress ? `\n\n${WEB_EGRESS_PROMPT_ADDENDUM}` : "") +
           githubReadPromptSuffix +
-          (webEgressStartFailed ? `\n\n${WEB_EGRESS_START_FAILED_PROMPT_LINE}` : ""),
+          (webEgressStartFailed
+            ? `\n\n${WEB_EGRESS_START_FAILED_PROMPT_LINE}` +
+              (readRegistration?.registered ? ` ${WEB_EGRESS_START_FAILED_GITHUB_READ_CLAUSE}` : "")
+            : ""),
         resumeSessionId: safeResumeSessionId,
         // feat-open-web-egress (#9534) — live forwarder handle. Presence IS
         // the entitlement+spawn-verified condition (fail-closed: undefined

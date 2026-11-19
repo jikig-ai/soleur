@@ -532,6 +532,14 @@ function makeFakeQuery() {
  */
 
 const WORKSPACE_PATH = "/tmp/cc-test-workspace";
+// #12598: the heading of the line a session gets when its workspace grant is on but its forwarder failed to start.
+const START_FAILED_HEAD = "## Web access unavailable in this session";
+// #12598: the line's body (the text after its heading), so content asserts cannot match another prompt section.
+const startFailedBody = (p: string): string => {
+  const parts = p.split(START_FAILED_HEAD);
+  expect(parts).toHaveLength(2);
+  return parts[1];
+};
 
 function setupSupabaseMockReturning(
   workspacePath: string | null = WORKSPACE_PATH,
@@ -1649,8 +1657,9 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(prompt()).not.toContain(ADDENDUM_HEAD);
       expect(prompt()).not.toContain("GitHub tools are unavailable");
       expect(outcome()[0][1].tags.forwarderLive).toBe("false");
-      // #12598: a public repo is connected and the spawn failed, so the failed-to-start line appears exactly once.
-      expect(prompt().split("## Web access unavailable in this session")).toHaveLength(2);
+      // #12598: a public repo is connected and the spawn failed, so the failed-to-start line appears exactly once, and it
+      // says the registered GitHub read tools still work (they run server-side, not through the forwarder).
+      expect(startFailedBody(prompt())).toContain("`github_*` tools in your tool list");
     });
 
     it("entitled + NO connected repo: no tools, the connect-a-repository line, a debounced warning with its OWN literal, no info event", async () => {
@@ -2950,14 +2959,13 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
   // feat-open-web-egress (#9534) — workspace "Agent web access" grant.
   // -------------------------------------------------------------------------
   describe("web egress entitlement (#9534)", () => {
-    // #12598: the line a session gets when the grant is on but its forwarder failed to start.
-    const LINE_HEAD = "## Web access unavailable in this session";
-    const builtPrompt = () => mockQuery.mock.calls.at(-1)![0].options.systemPrompt as string;
+    const LINE_HEAD = START_FAILED_HEAD;
+    const prompt = () => mockQuery.mock.calls.at(-1)![0].options.systemPrompt as string;
 
     it("unentitled (default) → no forwarder spawn, no webEgress handle", async () => {
       await realSdkQueryFactory(makeArgs());
       expect(mockSpawnEgressForwarder).not.toHaveBeenCalled();
-      expect(builtPrompt()).not.toContain(LINE_HEAD);
+      expect(prompt()).not.toContain(LINE_HEAD);
       const opts = mockQuery.mock.calls[0][0].options;
       // WebFetch stays disallowed; WebSearch too.
       expect(opts.disallowedTools).toContain("WebFetch");
@@ -3008,7 +3016,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
         expect.anything(),
         expect.objectContaining({ allowWebEgress: true }),
       );
-      expect(builtPrompt()).not.toContain(LINE_HEAD);
+      expect(prompt()).not.toContain(LINE_HEAD);
     });
 
     it("entitled + spawn failure → degrade to zero-egress, mirrored, Query still built", async () => {
@@ -3022,13 +3030,35 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
         ([, o]) => o?.op === "web-egress-forwarder-spawn",
       );
       expect(calls).toHaveLength(1);
-      // #12598: the agent is told its web access failed to start (no repo connected here: top-level beforeEach).
-      const p = builtPrompt();
-      expect(p.split(LINE_HEAD)).toHaveLength(2);
+      // #12598: the agent is told its web access failed to start (no repo connected here: top-level beforeEach). Content
+      // asserts read the line's BODY: the base prompt already contains "sandbox failed to start".
+      const p = prompt();
       expect(p).not.toContain("## Web access enabled for this session");
-      expect(p).toContain("failed to start");
-      expect(p).toContain("`WebFetch` is unavailable");
-      expect(p).not.toMatch(/WebFetch`? (is|are) (still )?available/);
+      const body = startFailedBody(p);
+      expect(body).toContain("failed to start");
+      expect(body).toContain("`WebFetch` is unavailable");
+      expect(body).toMatch(/do not retry/i);
+      expect(body).toMatch(/shell commands/);
+      expect(body).toMatch(/new conversation/);
+      expect(body).not.toMatch(/WebFetch`? (is|are) (still )?available/);
+      // No GitHub read tools are registered without a repo, so no GitHub clause.
+      expect(body).not.toContain("`github_*`");
+    });
+
+    it("entitled + spawn OK but the bound log line throws → the session keeps its live forwarder and gets no failed-to-start line", async () => {
+      mockResolveWebEgress.mockResolvedValue(true);
+      mockSpawnEgressForwarder.mockResolvedValue({ port: 28711, token: "tok-abc", pid: 4242 });
+      mockLogInfo.mockImplementation((_o: unknown, msg?: unknown) => {
+        if (msg === "cc-dispatcher: web egress forwarder bound") throw new Error("log boom");
+      });
+      try {
+        await realSdkQueryFactory(makeArgs());
+        const p = prompt();
+        expect(p).toContain("## Web access enabled for this session");
+        expect(p).not.toContain(LINE_HEAD);
+      } finally {
+        mockLogInfo.mockImplementation(() => {});
+      }
     });
 
     it("entitled but support persona → no forwarder (repo lifecycle is off)", async () => {
@@ -3040,7 +3070,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       });
       await realSdkQueryFactory(makeArgs({ persona: "support" }));
       expect(mockSpawnEgressForwarder).not.toHaveBeenCalled();
-      expect(builtPrompt()).not.toContain(LINE_HEAD);
+      expect(prompt()).not.toContain(LINE_HEAD);
     });
   });
 

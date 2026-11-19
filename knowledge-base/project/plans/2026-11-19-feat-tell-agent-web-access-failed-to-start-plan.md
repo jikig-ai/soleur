@@ -430,3 +430,10 @@ on the devex lens (the plan edits code). No security or feasibility regression w
   hedge). DHH P3, collapsing the gated sections (Observability, Scope Check, Domain Review): these are required by
   plan and deepen-plan gates. DHH P3, cutting the `!webEgress` mutation row: kept, because a
   `webEgress ? ADDENDUM : LINE` ternary is a natural way to write this bug.
+
+## Addendum - 2026-11-19 (review of PR #12957)
+
+Superseded by CTO review rulings T2-r1, T3-r3 and T1-r2 (see the spec's decision-challenges.md): the flag is derived
+from the live forwarder handle after the spawn block (not set in the catch), the line gains a clause about the
+`github_*` read tools only when they are registered, and the test's content asserts read the line's body. The code
+sketch and Assessment above record the plan as written before review.

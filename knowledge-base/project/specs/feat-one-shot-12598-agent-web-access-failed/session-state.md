@@ -33,3 +33,7 @@
 - constraint: No edits under docs and no legal documents.
 - constraint: Never ask me a technical question.
 - ci-is-the-gate: shall we rely on CI instead?
+
+## Review Phase
+
+- Panel: 10 report-only seats at 84f1394b7e; no P1. CTO amendments T2-r1, T3-r3, T1-r2 (decision-challenges.md) supersede the Plan Phase mechanism and test bullets above where they differ: the flag is now derived from `webEgress`, the line gains a conditional GitHub-read-tools clause, and content asserts read the line's body.
