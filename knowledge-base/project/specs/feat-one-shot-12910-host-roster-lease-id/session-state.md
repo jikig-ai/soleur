@@ -41,3 +41,9 @@ soleur:plan, soleur:deepen-plan, plan-review panel (dhh-rails-reviewer, kieran-r
 - Phase 0 (2026-11-18): live SOLEUR_HOST_ROSTER keys = [web-1, web-2], both addresses match var.web_hosts; no Doppler write.
 - Phase 1 done (3086ba3244). Phase 2: ci-deploy.sh resolve_host_key + T3 sticky check (top of the web-platform branch, before any prune/pull/run); retry only on a failed curl (an empty answer is final, keeps harness deploys fast); env-file refusal dropped (T1 verification makes a Doppler-set key inert).
 - Phase 3 (0c4b50566b), Phase 4, Phase 6 (ADR-068 addendum via soleur:architecture; no amend sub-command, appended directly; domain-model.md has no host_id row, 8.5 skipped).
+
+## QA (2026-11-20, HEAD cf3d30a1f1 + QA edits)
+- Phase 5 roster read (read-only, booleans only): `{"keys":["web-1","web-2"],"web1_ok":true,"web2_ok":true,"n":2}` (AC9).
+- Automated QA skipped: the plan's Test Scenarios carry no Browser:/API verify: steps; coverage is the single-file suites (ci-deploy 833/833, docker-run-tuple 366, web-hosts-generic 58, cat-deploy-state 167, inngest-inventory 173, fresh-boot-ready 75, lb-weight-gate-with-marker OK, inngest-link-resolver OK; vitest host-identity 57, session-router 21, real-factory 146, worktree-validity 24, boot-wiring 7, ws-handler-proxied-attach 8, session-proxy-hello 83; tsc 0).
+- AC8 amended in place (the curl-flag line); AC10 technical-ruling-gate PASS (27 rows).
+- CI at c762b36c93: 54 pass / 3 fail = draft-light `test` aggregator + `deploy-script-tests (4/4)` inngest pin red inherited from main (bump PR #12985) + its roll-up.

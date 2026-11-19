@@ -544,17 +544,18 @@ CPO sign-off was given on 2026-11-18, with conditions (see Domain Review). `sole
 
 ### Pre-merge
 
-- [ ] AC1: `describeHostIdentity()` returns each `source` as specified in Phase 1, including `key-unverified` for `SOLEUR_HOST_KEY=web-1` with `SOLEUR_HOST_PRIVATE_IP=10.0.1.11`, and the instance id for an empty private IP (canary). `resolveHostId()` equals `describeHostIdentity().id`. Production with nothing set still throws (`test/host-identity.test.ts`).
-- [ ] AC2: with roster `{"web-1":"10.0.1.10","web-2":"10.0.1.11"}`, a `web-2` holder seen from `web-1` gives `{decision:"proxy", ownerAddress:"10.0.1.11"}`, and a `hetzner-176328334` holder gives `owner-unresolved` (`test/session-router.test.ts`).
-- [ ] AC3: `resolve_host_key` maps `soleur-web-platform` to `web-1` and `soleur-web-2` to `web-2`. It returns rc 1 for `soleur-web-1`, an unmapped name, an empty body, a malformed key and an unreachable URL, and the stickiness cases behave as in Phase 2 (`infra/ci-deploy.test.sh`).
-- [ ] AC4: the prod `docker run` carries `-e SOLEUR_HOST_KEY="$HOST_KEY"` and the canary carries `-e SOLEUR_HOST_KEY=`. The new kill rows go RED when either is deleted (`infra/docker-run-tuple.test.sh`).
-- [ ] AC5: Guard 1 rows 1-8 and the must-PASS row behave as specified (`infra/lb-weight-gate.test.sh`, `infra/lb-weight-gate-with-marker.test.sh`).
-- [ ] AC6: Guard 2 rows 1-6 behave as specified, and the anti-vacuity floor is raised by the new assertion count (`infra/web-hosts-generic.test.sh`).
-- [ ] AC7: Phase 4 tests (a), (b) and (c) pass, and the pre-heal-position emit is gone (`git grep -n 'Fires BEFORE the heal' apps/web-platform/server/cc-dispatcher.ts` returns nothing).
-- [ ] AC8: `resolve_host_id` in `ci-deploy.sh`, `cat-deploy-state.sh` and `inngest-inventory.sh` is unchanged. `git diff origin/main -- apps/web-platform/infra/cat-deploy-state.sh apps/web-platform/infra/inngest-inventory.sh` is empty, and `inngest-inventory.test.sh` "#6425 AC4" passes.
-- [ ] AC9: the Phase 5 read prints `{"keys":["web-1","web-2"],"web1_ok":true,"web2_ok":true,"n":2}` on the day of merge.
-- [ ] AC10: `bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh --branch` passes.
-- [ ] AC11: the ADR-068 addendum exists, names #12910, and states the 240 s transition cost and the `create_before_destroy` precondition.
+- [x] AC1: `describeHostIdentity()` returns each `source` as specified in Phase 1, including `key-unverified` for `SOLEUR_HOST_KEY=web-1` with `SOLEUR_HOST_PRIVATE_IP=10.0.1.11`, and the instance id for an empty private IP (canary). `resolveHostId()` equals `describeHostIdentity().id`. Production with nothing set still throws (`test/host-identity.test.ts`).
+- [x] AC2: with roster `{"web-1":"10.0.1.10","web-2":"10.0.1.11"}`, a `web-2` holder seen from `web-1` gives `{decision:"proxy", ownerAddress:"10.0.1.11"}`, and a `hetzner-176328334` holder gives `owner-unresolved` (`test/session-router.test.ts`).
+- [x] AC3: `resolve_host_key` maps `soleur-web-platform` to `web-1` and `soleur-web-2` to `web-2`. It returns rc 1 for `soleur-web-1`, an unmapped name, an empty body, a malformed key and an unreachable URL, and the stickiness cases behave as in Phase 2 (`infra/ci-deploy.test.sh`).
+- [x] AC4: the prod `docker run` carries `-e SOLEUR_HOST_KEY="$HOST_KEY"` and the canary carries `-e SOLEUR_HOST_KEY=`. The new kill rows go RED when either is deleted (`infra/docker-run-tuple.test.sh`).
+- [x] AC5: Guard 1 rows 1-8 and the must-PASS row behave as specified (`infra/lb-weight-gate.test.sh`, `infra/lb-weight-gate-with-marker.test.sh`).
+- [x] AC6: Guard 2 rows 1-6 behave as specified, and the anti-vacuity floor is raised by the new assertion count (`infra/web-hosts-generic.test.sh`).
+- [x] AC7: Phase 4 tests (a), (b) and (c) pass, and the pre-heal-position emit is gone (`git grep -n 'Fires BEFORE the heal' apps/web-platform/server/cc-dispatcher.ts` returns nothing).
+- [x] AC8 (amended at QA, 2026-11-20): `resolve_host_id` in `ci-deploy.sh`, `cat-deploy-state.sh` and `inngest-inventory.sh` is unchanged. `git diff origin/main -- apps/web-platform/infra/cat-deploy-state.sh apps/web-platform/infra/inngest-inventory.sh` is empty, and `inngest-inventory.test.sh` "#6425 AC4" passes.
+  **Measured at QA:** no longer true as written. Review rounds 1 and 2 added `--disable --noproxy '*'` to the one metadata `curl` in all three copies (security F5 / code-quality N7: keep the link-local read off any proxy env and `~/.curlrc`), so that diff is exactly one line per file. The id logic is unchanged, and the 3-copy drift guard in `inngest-inventory.test.sh` now also pins the curl flags. It passes: all 3 copies carry the tokens, it goes red on a renamed token, and it reports an absent function. The full suite passed 173 tests.
+- [x] AC9: the Phase 5 read prints `{"keys":["web-1","web-2"],"web1_ok":true,"web2_ok":true,"n":2}` on the day of merge.
+- [x] AC10: `bash plugins/soleur/skills/ship/scripts/technical-ruling-gate.sh --branch` passes.
+- [x] AC11: the ADR-068 addendum exists, names #12910, and states the 240 s transition cost and the `create_before_destroy` precondition.
 
 ### Post-merge (the agent runs the reads; the T9 redeploy needs the owner's go-ahead or a valid Standing Delegation; the owner authorizes the serve dispatch)
 
