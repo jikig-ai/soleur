@@ -51,7 +51,7 @@ G13 replace-path placement: it ships with #12869).
 
 - [x] 4.1 ADR-263 addendum (floor, cap, grader, `env -i`, residuals AP-027 / #12938 / #12939, the 6604 reader)
       and supersession blockquote; ADR-068 pointer.
-- [ ] 4.2 `model.c4` edit; regenerate `model.likec4.json`; C4 tests. (model.c4 edited; regen pending)
+- [x] 4.2 `model.c4` edit; regenerate `model.likec4.json`; C4 tests.
 - [x] 4.3 Runbooks: `cf-lb-a-record-gaplessness-verify.md` (new section + refusal table incl. `*_invalid`, id
       `none`, the 90-day `NOT_YET` row), `web-host-replace.md`.
 
