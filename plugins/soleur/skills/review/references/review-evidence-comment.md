@@ -44,6 +44,9 @@ the queue past the evidence head, and their P3 findings had to be fixed forward 
 
 ## Arm check
 
+A delegated `gh pr merge ... --auto` (standing-delegation envelope) requires this check's first statement in its
+`Verification` section; see `standing-delegation.md` §"Review-Evidence arm check for delegated auto-merge".
+
 Ship's arm and CI-fix re-arm, merge-pr's merge gate, drain-prs §4's arm, product-roadmap's locked arm,
 merge-queue-dequeue.md's step 3 re-arm and settle-then-admin-merge.md's step 2 run this one check, and the
 re-arm instructions printed by sync-pr-behind.sh and merge-queue-jump.sh point here; it is the only copy. Never

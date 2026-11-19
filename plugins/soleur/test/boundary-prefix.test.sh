@@ -223,7 +223,7 @@ echo "-- consumption census (derived site set, not a member list) --"
 #     command boundary.
 #   resolve-regenerable-conflicts.test.sh:719 — `_PUSH_RE` `[^-[:alnum:]]`
 #     boundary: space before `git` already matches.
-#   delegation-verify.sh:249,250,255,256,259,409 (is_denied / ops-prose DENY lists) — these are
+#   delegation-verify.sh:249,250,255,256,259,415 (is_denied / ops-prose DENY lists) — these are
 #     refusal patterns over envelope TEXT, not gates on an executed command. Their boundary is the
 #     negative class `[^[:alnum:]_-]`, which a space satisfies, so `rtk git push`, `sudo rm -rf` and
 #     `X=1 gh secret` are already refused. Interpolating the wrapper-prefix atom would only NARROW
@@ -260,7 +260,7 @@ EXEMPTIONS=(
   "plugins/soleur/scripts/delegation-verify.sh:256"
   "plugins/soleur/scripts/delegation-verify.sh:259"
   "plugins/soleur/scripts/delegation-verify.sh:369"
-  "plugins/soleur/scripts/delegation-verify.sh:409"
+  "plugins/soleur/scripts/delegation-verify.sh:415"
   "plugins/soleur/scripts/delegation-verify.test.sh:1321"
   "plugins/soleur/scripts/delegation-verify.test.sh:1371"
 )
