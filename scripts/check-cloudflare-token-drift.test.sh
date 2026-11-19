@@ -1150,6 +1150,17 @@ else
   fail "an *R2* key must be verified at the legacy account ${OLD_ACCT:0:8}… only (rc=$RC; see $CURL_LOG)"
 fi
 
+echo "A2b: one value under an R2 key and a non-R2 key is asked of BOTH accounts (memo key carries the account)"
+MOCK_HTTP_BODY='{"success":false}' MOCK_ACCT_VERIFY_BODY='{"success":true}' \
+  run_sut a2b 200 "prd_terraform|CF_API_TOKEN_R2|synthetic-shared-not-real
+prd_terraform|CF_API_TOKEN_DNS_EDIT|synthetic-shared-not-real" prd_terraform
+if [[ "$RC" == "0" ]] && grep -qF "client/v4/accounts/${OLD_ACCT}/tokens/verify" "$CURL_LOG" \
+   && grep -qF "client/v4/accounts/${NEW_ACCT}/tokens/verify" "$CURL_LOG"; then
+  pass "a shared value is verified at the legacy account for the R2 key and the new one for the other"
+else
+  fail "dropping the account from the verify memo key reuses one account's verdict for the other (rc=$RC; see $CURL_LOG)"
+fi
+
 echo "A3: a token both endpoints refuse is still DEAD (the account arm cannot launder a revoked token)"
 MOCK_HTTP_BODY='{"success":false}' MOCK_ACCT_VERIFY_BODY='{"success":false}' \
   run_sut a3 200 "prd|CF_API_TOKEN_DNS_EDIT|synthetic-revoked-not-real"
@@ -2366,9 +2377,9 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 #
 # Raised 91 -> 104 with T36b and A1-A5, the account binding of the CF_API_TOKEN* verify
 # (#12931): account-owned tokens on the new account, R2 on the legacy one. 104 is the
-# REALIZED count on a green run.
-if [[ "$((PASS + FAIL))" -lt 104 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 104. The suite did not execute what it claims to." >&2
+# REALIZED count on a green run. Raised 104 -> 105 with A2b (the memo key carries the account).
+if [[ "$((PASS + FAIL))" -lt 105 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 105. The suite did not execute what it claims to." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
