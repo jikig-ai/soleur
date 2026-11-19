@@ -71,7 +71,21 @@ CF_SENTINEL="synthcf$((6 * 7))tokenNOTREAL"
 mk terraform '[[ "$*" == "output -raw cf_tunnel_zone_id" ]] || exit 64; [[ "${MOCK_TF_RC:-0}" == 0 ]] || exit "$MOCK_TF_RC"; printf "%s" "${MOCK_ZONE_ID}"'
 mk doppler 'printf "%s" "${MOCK_CF_TOKEN:-}"'
 # curl: log argv + stdin config; the zone read writes MOCK_ZONE_JSON to -o; DoH prints MOCK_DOH_JSON.
-mk curl '
+# Quoted heredoc so the canonical assert_fixture_dir can be copied in byte-for-byte: the -o
+# operand comes from the workflow under test, so the stub refuses a relative or degenerate one
+# before writing to it.
+cat > "$STUB/curl" <<'CURL_STUB'
+#!/usr/bin/env bash
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 printf "%s\n" "$*" >> "$MOCK_LOG.curl"
 out=""; url=""; args=("$@")
 for ((i=0; i<${#args[@]}; i++)); do
@@ -79,10 +93,15 @@ for ((i=0; i<${#args[@]}; i++)); do
 done
 if [[ " $* " == *" --config - "* ]]; then cat >> "$MOCK_LOG.stdin"; fi
 case "$url" in
-  https://api.cloudflare.com/*) [[ "${MOCK_ZONE_RC:-0}" == 0 ]] || exit "$MOCK_ZONE_RC"; printf "%s" "$MOCK_ZONE_JSON" > "$out" ;;
+  https://api.cloudflare.com/*)
+    [[ "${MOCK_ZONE_RC:-0}" == 0 ]] || exit "$MOCK_ZONE_RC"
+    assert_fixture_dir "$out"
+    printf "%s" "$MOCK_ZONE_JSON" > "$out" ;;
   https://1.1.1.1/dns-query*)   [[ "${MOCK_DOH_RC:-0}" == 0 ]] || exit "$MOCK_DOH_RC"; printf "%s" "$MOCK_DOH_JSON" ;;
   *) exit 64 ;;
-esac'
+esac
+CURL_STUB
+chmod +x "$STUB/curl"
 mk gh '
 printf "%s\n" "$*" >> "$MOCK_LOG.gh"
 case "$1 $2" in
