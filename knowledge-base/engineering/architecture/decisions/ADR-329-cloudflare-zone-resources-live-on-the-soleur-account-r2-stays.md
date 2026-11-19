@@ -70,7 +70,7 @@ Two facts shape the decision:
      plus creates for objects absent from the new zone;
    - a phase gate on `tfplan.json` (no destroys, allow-set only, new ids only, `-replace` honoured);
    - a migration-in-progress predicate that refuses every other plan-capable job until the tunnel is in state on the
-     new account. A rehearsal (`plan_only`) writes nothing to R2.
+     new account. A rehearsal (`rehearsal=true`) writes nothing to R2.
 4. **Plan-tier gates.** `cf_zone_plan_pro` (default false) nulls the Super Bot Fight Mode fields;
    `cf_load_balancing_enabled` (default false) count-gates the load balancer, pool, monitor and health-alert policy,
    and `cf-lb-overlay.yml` refuses while it is false; `cf_zone_dnssec_enabled` (default false) count-gates DNSSEC,

@@ -3,9 +3,11 @@
 # and confirm a newly-added scope is live (rulesets profile: --target-entrypoint;
 # default-token profile: --expect-lb-scopes).
 #
-# Deterministic, read-only probe. The widen itself is driven by Playwright MCP
-# per the skill (SKILL.md) — this script never touches the browser and never
-# mutates anything (no Doppler write, no infra apply).
+# Deterministic probe, read-only except the two migration profiles
+# (redirects-dns, zone-rest), which send PUT/POST/PATCH with one fixed invalid
+# body that can never validate (see MIGRATION PROFILES). The widen itself is
+# driven by Playwright MCP per the skill (SKILL.md) — this script never touches
+# the browser, never writes Doppler and never applies infra.
 #
 # It runs the selected profile's retained-scope probe set — the ADR-130 set
 # against CF_API_TOKEN_RULESETS by default, the CF_API_TOKEN ledger + LB
@@ -200,7 +202,8 @@ Usage:
   cf-token-scope.sh [--profile <rulesets|default-token>] [--target-entrypoint <phase>] [--expect-lb-scopes] [--dry-run]
   cf-token-scope.sh --profile <redirects-dns|zone-rest> [--staged] [--account-id <id>] [--zone-id <id>] [--dry-run]
 
-Runs a retained-scope probe set for a NAMED PROFILE (read-only). Profiles only —
+Runs a retained-scope probe set for a NAMED PROFILE (read-only, except the
+migration profiles' fixed-invalid-body write probes). Profiles only —
 no raw token-var knob. The widen itself is driven via Playwright MCP — see SKILL.md.
 
   profiles:
