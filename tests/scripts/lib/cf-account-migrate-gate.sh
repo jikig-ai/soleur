@@ -182,9 +182,6 @@ cf_account_migrate_gate() {
   local phase="${1-}"
   local plan_json="${2-}"
   local state_json="${3-}"
-  # Arm switches. Each is a mutation anchor for the suite; production never changes them.
-  local _cfam_refuse_destroy=1 _cfam_check_ids=1 _cfam_check_pure=1 _cfam_check_literal=1
-  local _cfam_check_present=1 _cfam_check_reason=1 _cfam_check_physid=1 _cfam_check_noncf_old=1
   local spec literals violations="" v creates imports destroys n_rep
 
   spec="$(cf_account_migrate_phase_spec "$phase")" || { echo "cf_account_migrate_gate: REFUSE — unknown phase '${phase}'"; return 1; }
@@ -209,15 +206,13 @@ cf_account_migrate_gate() {
     state_json=""
   fi
 
-  # Every check below appends violation lines; all are reported, then the verdict.
-  if [[ "$_cfam_refuse_destroy" -eq 1 ]]; then
-    v="$(jq -r --argjson spec "$spec" '
-      .resource_changes[] | select((.mode // "managed") == "managed")
-      | select((.change.actions | index("forget")) or
-               ((.change.actions | index("delete")) and ($spec[.address] != "replace")))
-      | "REFUSE destroys or forgets \(.address) (actions \(.change.actions | tostring))"' "$plan_json")" || { _cfam_eval_fail; return 1; }
-    violations+="${v:+$v$'\n'}"
-  fi
+  # Every check below appends violation lines; all are reported, then the verdict. Each check's
+  # `v="$(jq` opener line is unique: the suite's mutation rows neuter a check there (`: jq`).
+  v="$(jq -r --argjson spec "$spec" '.resource_changes[] | select((.mode // "managed") == "managed")
+    | select((.change.actions | index("forget")) or
+             ((.change.actions | index("delete")) and ($spec[.address] != "replace")))
+    | "REFUSE destroys or forgets \(.address) (actions \(.change.actions | tostring))"' "$plan_json")" || { _cfam_eval_fail; return 1; }
+  violations+="${v:+$v$'\n'}"
 
   v="$(jq -r --argjson spec "$spec" --arg phase "$phase" '
     .resource_changes[]
@@ -244,76 +239,62 @@ cf_account_migrate_gate() {
   (( gv_rc <= 1 )) || { _cfam_eval_fail; return 1; }
   violations+="${v:+$v$'\n'}"
 
-  if [[ "$_cfam_check_pure" -eq 1 ]]; then
-    v="$(jq -r '.resource_changes[] | select(.change.importing != null) | select(.change.actions != ["no-op"])
-      | "REFUSE \(.address) is not a pure no-op import (actions \(.change.actions | tostring)): a mis-pinned import id writes to the zone under cover of an import"' "$plan_json")" || { _cfam_eval_fail; return 1; }
-    violations+="${v:+$v$'\n'}"
-  fi
+  v="$(jq -r '.resource_changes[] | select(.change.importing != null) | select(.change.actions != ["no-op"])
+    | "REFUSE \(.address) is not a pure no-op import (actions \(.change.actions | tostring)): a mis-pinned import id writes to the zone under cover of an import"' "$plan_json")" || { _cfam_eval_fail; return 1; }
+  violations+="${v:+$v$'\n'}"
 
-  if [[ "$_cfam_check_literal" -eq 1 ]]; then
-    v="$(jq -r --argjson spec "$spec" --argjson lit "$literals" '
-      .resource_changes[] | select(.change.importing != null)
-      | select($spec[.address] != "import" or $lit[.address] == null or .change.importing.id != $lit[.address])
-      | "REFUSE import of \(.address) differs from the committed literal (planned \(.change.importing.id // "null"), committed \($lit[.address] // "none"))"' "$plan_json")" || { _cfam_eval_fail; return 1; }
-    violations+="${v:+$v$'\n'}"
-  fi
+  v="$(jq -r --argjson spec "$spec" --argjson lit "$literals" '
+    .resource_changes[] | select(.change.importing != null)
+    | select($spec[.address] != "import" or $lit[.address] == null or .change.importing.id != $lit[.address])
+    | "REFUSE import of \(.address) differs from the committed literal (planned \(.change.importing.id // "null"), committed \($lit[.address] // "none"))"' "$plan_json")" || { _cfam_eval_fail; return 1; }
+  violations+="${v:+$v$'\n'}"
 
   # The new-id check. Every planned non-R2 cloudflare_* object must POSITIVELY carry a new id:
   # an id known only after apply (after_unknown), an id present with any other value (old, a
   # third id, false), or no id at all (absent or null on both) is refused. An absent id is never
   # read as the new one. R2 is the whole cloudflare_r2_* family, the same predicate the forget
   # script and the completion predicate use: it stays on the legacy account.
-  if [[ "$_cfam_check_ids" -eq 1 ]]; then
-    v="$(jq -r --arg nz "$CFAM_NEW_ZONE_ID" --arg na "$CFAM_NEW_ACCOUNT_ID" '
-      .resource_changes[] | select((.mode // "managed") == "managed")
-      | select(.type | startswith("cloudflare_")) | select(.type | startswith("cloudflare_r2_") | not)
-      | select(.change.after != null)
-      | (.change.after.zone_id) as $z | (.change.after.account_id) as $a | (.change.after_unknown // {}) as $u
-      | select(
-          ($u.zone_id == true) or ($u.account_id == true)
-          or ($z != null and $z != $nz) or ($a != null and $a != $na)
-          or ($z != $nz and $a != $na))
-      | "REFUSE \(.address) carries an id that is not the new zone/account (zone_id \($z | tostring), account_id \($a | tostring)\(if ($u.zone_id == true) or ($u.account_id == true) then ", known only after apply" else "" end))"' "$plan_json")" || { _cfam_eval_fail; return 1; }
-    violations+="${v:+$v$'\n'}"
-  fi
+  v="$(jq -r --arg nz "$CFAM_NEW_ZONE_ID" --arg na "$CFAM_NEW_ACCOUNT_ID" '
+    .resource_changes[] | select((.mode // "managed") == "managed")
+    | select(.type | startswith("cloudflare_")) | select(.type | startswith("cloudflare_r2_") | not)
+    | select(.change.after != null)
+    | (.change.after.zone_id) as $z | (.change.after.account_id) as $a | (.change.after_unknown // {}) as $u
+    | select(
+        ($u.zone_id == true) or ($u.account_id == true)
+        or ($z != null and $z != $nz) or ($a != null and $a != $na)
+        or ($z != $nz and $a != $na))
+    | "REFUSE \(.address) carries an id that is not the new zone/account (zone_id \($z | tostring), account_id \($a | tostring)\(if ($u.zone_id == true) or ($u.account_id == true) then ", known only after apply" else "" end))"' "$plan_json")" || { _cfam_eval_fail; return 1; }
+  violations+="${v:+$v$'\n'}"
 
   # A non-Cloudflare address in the allow-set (doppler_secret.cf_zone_id_prd, the github secrets,
   # the dns-edit secret) republishes an id or token; it must not republish an OLD id. Any string
   # leaf of its planned `after` equal to the OLD zone or account id is refused. Scoped to the
   # allow-set: an out-of-set change is already refused above, and an R2 secret outside it may
   # legitimately carry the legacy account.
-  if [[ "$_cfam_check_noncf_old" -eq 1 ]]; then
-    v="$(jq -r --argjson spec "$spec" --arg oz "$CFAM_OLD_ZONE_ID" --arg oa "$CFAM_OLD_ACCOUNT_ID" '
-      .resource_changes[] | select((.mode // "managed") == "managed")
-      | select($spec[.address] != null) | select(.type | startswith("cloudflare_") | not)
-      | select(.change.after != null)
-      | select([.change.after | .. | strings | ascii_downcase | select(. == $oz or . == $oa)] | length > 0)
-      | "REFUSE \(.address) republishes an OLD zone/account id in its planned value"' "$plan_json")" || { _cfam_eval_fail; return 1; }
-    violations+="${v:+$v$'\n'}"
-  fi
+  v="$(jq -r --argjson spec "$spec" --arg oz "$CFAM_OLD_ZONE_ID" --arg oa "$CFAM_OLD_ACCOUNT_ID" '
+    .resource_changes[] | select((.mode // "managed") == "managed")
+    | select($spec[.address] != null) | select(.type | startswith("cloudflare_") | not)
+    | select(.change.after != null)
+    | select([.change.after | .. | strings | ascii_downcase | select(. == $oz or . == $oa)] | length > 0)
+    | "REFUSE \(.address) republishes an OLD zone/account id in its planned value"' "$plan_json")" || { _cfam_eval_fail; return 1; }
+  violations+="${v:+$v$'\n'}"
 
-  if [[ "$_cfam_check_present" -eq 1 ]]; then
-    v="$(jq -r --argjson spec "$spec" '[.resource_changes[].address] as $have
-      | $spec | keys_unsorted[] | select(. as $a | $have | index($a) | not)
-      | "REFUSE \(.) is missing from the plan (every allow-set address must be planned; a dropped -target or a disabled import reads as success otherwise)"' "$plan_json")" || { _cfam_eval_fail; return 1; }
-    violations+="${v:+$v$'\n'}"
-  fi
+  v="$(jq -r --argjson spec "$spec" '[.resource_changes[].address] as $have
+    | $spec | keys_unsorted[] | select(. as $a | $have | index($a) | not)
+    | "REFUSE \(.) is missing from the plan (every allow-set address must be planned; a dropped -target or a disabled import reads as success otherwise)"' "$plan_json")" || { _cfam_eval_fail; return 1; }
+  violations+="${v:+$v$'\n'}"
 
   if [[ -n "$state_json" ]]; then
-    if [[ "$_cfam_check_reason" -eq 1 ]]; then
-      v="$(jq -r --argjson spec "$spec" '.resource_changes[] | select($spec[.address] == "replace")
-        | select(.action_reason != "replace_by_request")
-        | "REFUSE \(.address) is a declared -replace but action_reason is \(.action_reason // "null"), not replace_by_request (the -replace flag was dropped)"' "$plan_json")" || { _cfam_eval_fail; return 1; }
-      violations+="${v:+$v$'\n'}"
-    fi
-    if [[ "$_cfam_check_physid" -eq 1 ]]; then
-      v="$(jq -r --argjson spec "$spec" --slurpfile st "$state_json" '
-        ([$st[0].values | .. | objects | select(has("address") and has("values")) | {(.address): .values.id}] | add // {}) as $ids
-        | .resource_changes[] | select($spec[.address] == "replace")
-        | select(.change.before.id == null or .change.before.id != $ids[.address])
-        | "REFUSE \(.address) replace targets physical id \(.change.before.id // "null") but pre-plan state holds \($ids[.address] // "null")"' "$plan_json")" || { _cfam_eval_fail; return 1; }
-      violations+="${v:+$v$'\n'}"
-    fi
+    v="$(jq -r --argjson spec "$spec" '.resource_changes[] | select($spec[.address] == "replace")
+      | select(.action_reason != "replace_by_request")
+      | "REFUSE \(.address) is a declared -replace but action_reason is \(.action_reason // "null"), not replace_by_request (the -replace flag was dropped)"' "$plan_json")" || { _cfam_eval_fail; return 1; }
+    violations+="${v:+$v$'\n'}"
+    v="$(jq -r --argjson spec "$spec" --slurpfile st "$state_json" '
+      ([$st[0].values | .. | objects | select(has("address") and has("values")) | {(.address): .values.id}] | add // {}) as $ids
+      | .resource_changes[] | select($spec[.address] == "replace")
+      | select(.change.before.id == null or .change.before.id != $ids[.address])
+      | "REFUSE \(.address) replace targets physical id \(.change.before.id // "null") but pre-plan state holds \($ids[.address] // "null")"' "$plan_json")" || { _cfam_eval_fail; return 1; }
+    violations+="${v:+$v$'\n'}"
   fi
 
   creates="$(jq -r '[.resource_changes[] | select(.change.actions == ["create"])] | length' "$plan_json")" || { _cfam_eval_fail; return 1; }

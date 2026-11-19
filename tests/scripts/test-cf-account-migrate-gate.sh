@@ -283,28 +283,36 @@ elif [[ "$d3_mut_in" == "redirects-dns" ]]; then pass "D3 mutation: $CSB added b
 else fail "D3 mutation: $CSB added back to redirects-dns is not seen" 1 "$d3_mut_in"; fi
 
 # ── mutation rows: prove the gate's arms are load-bearing ──────────────────────────────────
+# neuter <anchor>: a sed expression that turns the one `v="$(jq` opener on the line matching
+# <anchor> into `v="$(: jq`, so that check yields no violation lines (each anchor is unique).
+# shellcheck disable=SC2016 # a sed expression over literal gate text
+neuter() { printf '/%s/s|v="\\$(jq|v="$(: jq|' "$1"; }
 # Layered: a delete of an in-set create-class address is also off-class, so neutering the destroy
 # arm must hand the refusal to the class arm, never to PASS.
 mutate_plan "$VALID" "$TMP/r1c.json" '(.resource_changes[] | select(.address=="cloudflare_list.www_canonical") | .change.actions) = ["delete"]'
+# shellcheck disable=SC2016 # sed anchors match literal gate text
 gate_mutate_layered "M-forget: the destroy arm owns a delete refusal; neutered it hands off to the class arm" \
-  's|_cfam_refuse_destroy=1|_cfam_refuse_destroy=0|' "destroys or forgets" "planned with actions" cf_account_migrate_gate redirects-dns "$TMP/r1c.json"
+  "$(neuter '^  v="\$(jq -r --argjson spec "\$spec" .\.resource_changes\[\] | select((\.mode')" \
+  "destroys or forgets" "planned with actions" cf_account_migrate_gate redirects-dns "$TMP/r1c.json"
 # Sole guard: a replace of a mutable secret is refused only by the class arm since the destroy arm
 # exempts nothing but the declared replace set.
 jq -c '(.resource_changes[] | select(.address=="github_actions_secret.cloudflare_account_id_pages") | .change.actions) = ["delete","create"]' "$TMP/zr.json" > "$TMP/zrrep.json"
 check "zone-rest: a replace of a mutable secret is refused" 1 "REFUSE" zone-rest "$TMP/zrrep.json" "$TMP/zr-state.json"
 jq -c '(.resource_changes[] | select(.address=="github_actions_secret.cloudflare_account_id_pages") | .change.actions) = ["create","create"]' "$TMP/zr.json" > "$TMP/zrcc.json"
 check "zone-rest: a mutable planned [create,create] is refused (exact match, not containment)" 1 "(class mutable) planned with actions" zone-rest "$TMP/zrcc.json" "$TMP/zr-state.json"
+# shellcheck disable=SC2016 # sed anchors match literal gate text
 gate_mutate_and_check "M-id: neutering the new-id check admits row 3" \
-  's|_cfam_check_ids=1|_cfam_check_ids=0|' cf_account_migrate_gate redirects-dns "$TMP/r3.json"
+  "$(neuter '--arg nz "\$CFAM_NEW_ZONE_ID"')" cf_account_migrate_gate redirects-dns "$TMP/r3.json"
 # The pre-review id check defaulted an absent id to the new one; restoring that reads row 3d as a pass.
 # shellcheck disable=SC2016 # sed expressions match literal gate text
 gate_mutate_and_check "M-id-absent: dropping the 'at least one NEW id' clause admits an absent zone_id (row 3d)" \
-  's|          or (\$z != \$nz and \$a != \$na))|          )|' cf_account_migrate_gate redirects-dns "$TMP/r3d.json"
+  's|        or (\$z != \$nz and \$a != \$na))|        )|' cf_account_migrate_gate redirects-dns "$TMP/r3d.json"
 # shellcheck disable=SC2016 # sed expressions match literal gate text
 gate_mutate_and_check "M-id-unknown: dropping the after_unknown clause admits row 3g2" \
-  's|^          (\$u.zone_id == true) or (\$u.account_id == true)$|          false|' cf_account_migrate_gate redirects-dns "$TMP/r3g2.json"
+  's|^        (\$u.zone_id == true) or (\$u.account_id == true)$|        false|' cf_account_migrate_gate redirects-dns "$TMP/r3g2.json"
+# shellcheck disable=SC2016 # sed anchors match literal gate text
 gate_mutate_and_check "M-noncf-old: neutering the non-Cloudflare old-id check admits row 3j" \
-  's|_cfam_check_noncf_old=1|_cfam_check_noncf_old=0|' cf_account_migrate_gate redirects-dns "$TMP/r3j.json"
+  "$(neuter '--arg oz "\$CFAM_OLD_ZONE_ID"')" cf_account_migrate_gate redirects-dns "$TMP/r3j.json"
 # shellcheck disable=SC2016 # sed expressions match literal gate text
 gate_mutate_and_check "M-replace-class (G2): neutering the replace clause admits a bare delete of the replace target" \
   's|(\$cls == "replace" and .change.actions != \["delete","create"\] and .change.actions != \["create","delete"\])|($cls == "replace" and false)|' \
@@ -338,16 +346,33 @@ seam_mut_out="$(seam_run "$SEAM/tests/scripts/lib/seam-mut.sh")"; seam_mut_rc=$?
 if cmp -s "$SEAM/tests/scripts/lib/seam-mut.sh" "$GATE"; then fail "M-imports-seam: the mutation did not land" 1 ""
 elif [[ "$seam_mut_rc" -eq 0 ]]; then pass "M-imports-seam: without the guard the forged literal passes row 10 (the guard is load-bearing)"
 else fail "M-imports-seam: removing the guard did not admit the forged literal" "$seam_mut_rc" "$seam_mut_out"; fi
+# shellcheck disable=SC2016 # sed anchors match literal gate text
 gate_mutate_and_check "M-pure: neutering the pure-import check admits row 9" \
-  's|_cfam_check_pure=1|_cfam_check_pure=0|' cf_account_migrate_gate redirects-dns "$TMP/r9.json"
+  "$(neuter '^  v="\$(jq -r .\.resource_changes\[\] | select(\.change\.importing != null)')" cf_account_migrate_gate redirects-dns "$TMP/r9.json"
+# shellcheck disable=SC2016 # sed anchors match literal gate text
 gate_mutate_and_check "M-literal: neutering the literal check admits row 10" \
-  's|_cfam_check_literal=1|_cfam_check_literal=0|' cf_account_migrate_gate redirects-dns "$TMP/r10.json"
+  "$(neuter '--argjson lit "\$literals"')" cf_account_migrate_gate redirects-dns "$TMP/r10.json"
+# shellcheck disable=SC2016 # sed anchors match literal gate text
 gate_mutate_and_check "M-missing: neutering the presence check admits row 11" \
-  's|_cfam_check_present=1|_cfam_check_present=0|' cf_account_migrate_gate redirects-dns "$TMP/r11.json"
+  "$(neuter 'as \$have$')" cf_account_migrate_gate redirects-dns "$TMP/r11.json"
+# shellcheck disable=SC2016 # sed anchors match literal gate text
 gate_mutate_and_check "M-reason: neutering the replace_by_request check admits row 9b" \
-  's|_cfam_check_reason=1|_cfam_check_reason=0|' cf_account_migrate_gate zone-rest "$TMP/zr9b.json" "$TMP/zr-state.json"
+  "$(neuter '^    v="\$(jq .*select(\$spec\[\.address\] == "replace")$')" cf_account_migrate_gate zone-rest "$TMP/zr9b.json" "$TMP/zr-state.json"
+# shellcheck disable=SC2016 # sed anchors match literal gate text
 gate_mutate_and_check "M-physid: neutering the physical-id check admits row 9c" \
-  's|_cfam_check_physid=1|_cfam_check_physid=0|' cf_account_migrate_gate zone-rest "$TMP/zr9c.json" "$TMP/zr-state.json"
+  "$(neuter '--slurpfile st')" cf_account_migrate_gate zone-rest "$TMP/zr9c.json" "$TMP/zr-state.json"
+# Each neuter anchor lands on exactly one opener (a non-unique anchor would neuter two checks and
+# could pass a row for the wrong arm's reason).
+n_bad=""
+# shellcheck disable=SC2016 # sed anchors match literal gate text
+for a in '^  v="\$(jq -r --argjson spec "\$spec" .\.resource_changes\[\] | select((\.mode' '--arg nz "\$CFAM_NEW_ZONE_ID"' \
+  '--arg oz "\$CFAM_OLD_ZONE_ID"' '^  v="\$(jq -r .\.resource_changes\[\] | select(\.change\.importing != null)' \
+  '--argjson lit "\$literals"' 'as \$have$' '^    v="\$(jq .*select(\$spec\[\.address\] == "replace")$' '--slurpfile st'; do
+  sed "$(neuter "$a")" "$GATE" > "$TMP/neuter.sh"
+  [[ "$(diff "$GATE" "$TMP/neuter.sh" | grep -c '^>')" -eq 1 ]] || n_bad+=" [$a]"
+done
+if [[ -z "$n_bad" ]]; then pass "neuter: each of the 8 mutation anchors rewrites exactly one check opener"
+else fail "neuter: anchors that do not land on exactly one opener:$n_bad" 1 ""; fi
 gate_mutate_layered "M-preamble: the gate INVOKES the readable assert (not merely sources it)" \
   's|^  plan_gate_assert_readable .*|  :|' "an unreadable plan is not evidence" "unclassifiable plan entry" cf_account_migrate_gate redirects-dns "$TMP/d2.json"
 gate_mutate_layered "M-classify: the gate INVOKES the classifiable assert; neutered, the eval-fail arm still refuses" \
@@ -426,6 +451,6 @@ r2_mut "M-r2-bound: the 60 s bound dropped" 's|^  timeout 60 env |  env |' unbou
 
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 81 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 81)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 82 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 82)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]
