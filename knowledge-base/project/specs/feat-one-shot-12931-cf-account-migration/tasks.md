@@ -15,10 +15,10 @@ Lane note: there is no spec.md for this branch (one-shot entry), so the lane def
 - [ ] 0.1 Doppler `prd_terraform` `CF_R2_ACCOUNT_ID` = legacy account id. This must exist before PR1 merges. `Operator-authorizes:` agent write.
 - [ ] 0.2 Phase 0a mints: `CF_API_TOKEN`, `CF_API_TOKEN_RULESETS`, `CF_API_TOKEN_PAGES`, each into a `<KEY>_NEXT` staging key with the exact permission groups in the plan table. Use the dashboard via `cf-token-scope`. `Operator-authorizes:`.
   - Scope each token to the new account and the soleur.ai zone, with an expiry.
-  - Take no Playwright snapshot after Create; the value is piped from one evaluate step straight into Doppler.
+  - Hand-off per CTO L75: `browser_run_code_unsafe` creates the token and `page.request.post`s it to a 127.0.0.1 one-shot sink (mode 0600, scratchpad, outside every work tree); Bash pipes it to Doppler on stdin and shreds it. Never `browser_evaluate` with `filename`, never a snapshot. After each mint, `git status --porcelain` in the main checkout and the worktree shows no new file.
   - Verify by sha256 compare, never by printing.
 - [ ] 0.2b Revoke `CF_API_TOKEN_SOLEUR_ACCT` once 0a is probed. `Operator-authorizes:`.
-- [ ] 0.3 Run the non-mutating `cf-token-scope.sh` new-account profile for `redirects-dns`: invalid-body write probes, deny probes on the old account and zone, a `success:true` check, and a known-present control. Record the verdicts and every pre-existing entrypoint id.
+- [ ] 0.3 Run the non-mutating `cf-token-scope.sh` new-account profile for `redirects-dns`: invalid-body write probes (one fixed never-valid literal; any 2xx aborts with a read-back; a known-denied token first proves 403-before-400, CTO L49), deny probes on the old account and zone, a `success:true` check, and a known-present control. Record the verdicts and every pre-existing entrypoint id.
 - [ ] 0.3b Optional Phase 0c early noindex: create the `http_response_headers_transform` entrypoint, rendered from `seo-rulesets.tf` via `terraform console`. Operator row, recommended yes. `Operator-authorizes:`.
 - [ ] 0.4 Read-only dump of new-zone record ids for the 26 non-tunnel, non-`app` records plus `app`. The dump stays outside the repo; only the ids are committed.
 - [ ] 0.5 Phase 0b mints (`_ZONE_SETTINGS`, `_BOT_MANAGEMENT`, `_DNS_EDIT`, `_PURGE`) into `_NEXT` keys. These can run in parallel with Phase 2. `Operator-authorizes:`.
@@ -26,11 +26,11 @@ Lane note: there is no spec.md for this branch (one-shot entry), so the lane def
 ## Phase 1: PR1 code (this branch). Tests first.
 
 - [ ] 1.1 RED suites first:
-  - [ ] 1.1.1 state-migrate (Guard 2, every declared `cloudflare_*` type in the fixture; assert `Successfully removed N` equals the rm set and zero old ids after)
+  - [ ] 1.1.1 state-migrate (Guard 2, every declared `cloudflare_*` type in the fixture; assert `Successfully removed N` equals the rm set and zero old ids after, mutation row 7; classify all before any write, an unknown id anywhere aborts with 0 removed, CTO L47/L72)
   - [ ] 1.1.2 phase gate (Guard 1, rows 1-11 including 9b `replace_by_request` and 9c physical-id)
   - [ ] 1.1.3 in-progress predicate (Guard 3) and the workflow-grep test over every plan-running job
   - [ ] 1.1.4 tftest `expect_failures` for the old-id validations (Guard 4)
-  - [ ] 1.1.5 rehearsal shape (local backend override, zero S3 writes)
+  - [ ] 1.1.5 rehearsal shape (local backend override, backup to `$RUNNER_TEMP/cf-migrate`, no `aws s3 cp`, remote serial unchanged and no new object under `web-platform/backups/`, CTO L24/L43)
   - [ ] 1.1.6 `apps/cla-evidence/infra/main.test.sh` assertion for `CF_R2_ACCOUNT_ID`
 - [ ] 1.2 `variables.tf`:
   - add `cf_r2_account_id`, the old-id validations, `cf_load_balancing_enabled`, `cf_zone_plan_pro`, `cf_zone_dnssec_enabled`, `cf_migration_imports_enabled`, `cf_migration_import_app`;
@@ -56,7 +56,7 @@ Lane note: there is no spec.md for this branch (one-shot entry), so the lane def
   - `model.c4`: the 7 edits listed in the plan's C4 section.
   - Run `scripts/regenerate-c4-model.sh`.
   - `c4-model-freshness`, `c4-code-syntax`, `c4-render` and `c4-count-parity` all green.
-- [ ] 1.16 Runbook `knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md`: phases, expected reds, fix-forward, full revert, branch-config write list.
+- [ ] 1.16 Runbook `knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md`: phases, expected reds, fix-forward, full revert (fresh state pull, lineage check, `state push -force` as its own `Operator-authorizes:` act, CTO L59), branch-config write list.
 - [ ] 1.17 Register new suites in `run-registered-suites.sh` inputs. Full local battery green.
 - [ ] 1.18 Registry render delta on the PR1 diff = `deliver=false`.
 - [ ] 1.19 PR body first line: "Merging this alone mutates no production resource". Use `Ref #12931`. The merge commit carries `[skip-web-platform-apply]`.

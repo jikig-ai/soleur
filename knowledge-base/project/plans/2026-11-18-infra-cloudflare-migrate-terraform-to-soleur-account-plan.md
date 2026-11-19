@@ -220,14 +220,14 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
 
    **Mint hygiene (security review):**
    - Scope every token to the specific new account and the `soleur.ai` zone only, never "all zones" or "all accounts", and give it an expiry. The default is 90 days for the provider tokens and 7 days for `CF_API_TOKEN_ACCESS_MINT`.
-   - The Playwright flow takes **no** `browser_snapshot` or screenshot after "Create Token". The token value is read inside one `browser_evaluate` code step that pipes it straight into the Doppler write and returns nothing to the transcript. If that cannot be guaranteed, the operator pastes the value into Doppler instead. Rehearse the flow on a throwaway token first.
+   - **Hand-off (CTO L75, re-ruled on 2026-11-18 evidence).** Mint with `browser_run_code_unsafe`: the Node-side `page.evaluate` creates the token through `/api/v4/user/tokens` (session `x-atok`), and `page.request.post` hands the value to a one-shot python sink bound to `127.0.0.1` that writes a mode-0600 file in the session scratchpad, outside every git work tree. The tool result prints only the token id, the sink status and the length. Bash pipes the file into Doppler on stdin, shreds it, and confirms with `/user/tokens/verify` without printing the value. `browser_evaluate` with `filename` is banned for secrets: on 2026-11-18 it wrote relative to the MCP server's working directory, inside the main repository. After each mint, `git status --porcelain` in the main checkout and the worktree must show no new untracked file. No `browser_snapshot` or screenshot after "Create Token". On any failure, delete that token and re-mint, or fall back to an operator paste.
    - Each token also gets **deny probes**: it must be refused on the old account and old zone, and on one permission group it must not hold.
    - `CF_API_TOKEN_ACCESS_MINT` stays separate from `CF_API_TOKEN` even though the latter holds Access: Service Tokens:Edit. The mint script runs on the agent's machine, and `CF_API_TOKEN` (Tunnel, Access apps and policies, DNS) must never be exported there (CTO F8).
    - The probe must see `success:true` and a parsed `.result` before treating any entrypoint as present or empty, and each phase profile includes one known-present control endpoint, so a degraded `200` or a 404 is never read as "empty" (learning `2026-07-23-live-api-fail-closed-guard-counts-degraded-200-as-empty-…`).
 
    Phase 5 re-scopes the read-only and audit tokens (`CF_API_TOKEN_AUDIT` in `dev*`, `_ANALYTICS_READ`, `_PAGERULES_READ`, `_DNS_RULESETS`, and the duplicate `_BOTMANAGEMENT`) after a consumer census. None of them blocks a phase.
 
-2. **Write-probe every token before its phase's dispatch.** A GET proves read access only (ADR-130; the `2026-07-24-cf-token-config-rules-scope-gap` post-mortem). **Probes never mutate** (plan review). A `PUT` to an absent phase entrypoint would create an empty ruleset that the Terraform create then collides with, and a `PUT` to a present one replaces its rules. Each write probe sends a deliberately invalid body: `400` means authorized, `403`/`10000` means denied. It never `PUT`s a valid body to an entrypoint and never `DELETE`s.
+2. **Write-probe every token before its phase's dispatch.** A GET proves read access only (ADR-130; the `2026-07-24-cf-token-config-rules-scope-gap` post-mortem). **Probes never mutate** (plan review). A `PUT` to an absent phase entrypoint would create an empty ruleset that the Terraform create then collides with, and a `PUT` to a present one replaces its rules. Each write probe sends a deliberately invalid body: `400` means authorized, `403`/`10000` means denied. It never `PUT`s a valid body to an entrypoint and never `DELETE`s. **Probe safety (CTO L49):** the invalid body is one fixed literal that can never validate (never `{"rules":[]}`, which would wipe a live entrypoint); any `2xx` response is a fatal abort followed by an immediate read-back of that entrypoint; and each profile first proves, with a known-denied token, that the endpoint answers `403` before `400`, otherwise a `400` does not count as authorized.
    - The rulesets token is probed on every phase entrypoint it must write: `http_request_dynamic_redirect`, `http_response_headers_transform`, `http_config_settings`, `http_request_cache_settings`, `http_request_firewall_custom`, account `http_request_redirect`, and `/accounts/<new>/rules/lists`.
    - The same probe doubles as the whole-list audit (ADR-136). A 404 on an entrypoint means no hand-made entrypoint exists there. Any entrypoint that already exists in the new zone is recorded by id and imported, never overwritten blind.
    - No new probe script. The probe sets become profiles on the existing `plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh` (it already runs fail-closed rulesets and default-token probe sets), parameterised by account and zone id plus a `--phase` set. The agent runs it once per phase, before that phase's rehearsal, and records the verdict lines in the PR thread. It is not a job step on every dispatch.
@@ -287,12 +287,12 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
    - Every `import` must plan as a pure import (`.change.actions == ["no-op"]`). An import plus update means an id literal is mis-pinned, for example two TXT records swapped, and the gate refuses it (Guard 1).
    - The records Terraform never managed (`76624499`, the `send.outbound` MX/TXT, `resend._domainkey.outbound`, two extra apex TXT) are not adopted.
 8. **State-forget script** (new `scripts/cf-account-state-migrate.sh`; **no manifest**, plan review). The candidate set is derived from state itself: every `cloudflare_*` resource in `terraform show -json` except `cloudflare_r2_bucket`. Each entry is then classified by its own id. A hand list would drift whenever a resource is added. The script runs only inside `cf-account-migrate`:
-   - It `terraform state pull`s a backup and uploads it with the backend credentials to the state bucket at `web-platform/backups/pre-cf-account-migration-<utc>.tfstate`. The backup is never an artifact and never printed.
+   - It `terraform state pull`s a backup and uploads it with the backend credentials to the state bucket at `web-platform/backups/pre-cf-account-migration-<utc>.tfstate`. The backup is never an artifact and never printed. **In rehearsal mode (CTO L43)** the backup goes to `$RUNNER_TEMP/cf-migrate/` and the script never runs `aws s3 cp`.
    - It reads `terraform show -json`. Classification uses the one non-null id of each entry. Zone rulesets, Access apps and policies, and records carry only `zone_id`. Lists, the account ruleset, service tokens, notification policies, Pages and the LB carry only `account_id`. An entry is `rm` if that id is OLD and `already-migrated` if it is NEW. The script ABORTs before any write if an entry has both ids null, an unknown id, or is a `cloudflare_r2_bucket`. Any other `cloudflare_*` type without either attribute (`cloudflare_zone_settings_override` carries `zone_id`; the fixture covers every resource type declared in the root) is the same abort.
    - **One atomic write** (plan review): all `rm` addresses go to a single `terraform state rm <addr…>` call. The script then asserts that the state `serial` went up by exactly 1. The backend has `use_lockfile = false`, so a per-address loop could leave half-migrated state if it failed partway.
    - It prints one line per address, `cf-state-migrate address=… action=rm|skip|absent`, then a final `verdict=ok removed=N skipped=M`.
    - It is idempotent: a re-run removes 0.
-   - **Rehearsal (`plan_only`) mechanism, fixed** (plan review). `-state=` is ignored under the `s3` backend, so the earlier fallback is deleted. The rehearsal copies the root to a scratch directory and writes a `backend_override.tf` there with `terraform { backend "local" { path = "rehearsal.tfstate" } }`. It writes the pulled state to that path, runs `init -reconfigure`, runs the real state-migrate script against the local copy, then plans with normal refresh. Nothing touches the R2 object. The job asserts the remote serial is unchanged before and after the rehearsal. A test runs this shape on a mock-provider root.
+   - **Rehearsal (`plan_only`) mechanism, fixed** (plan review). `-state=` is ignored under the `s3` backend, so the earlier fallback is deleted. The rehearsal copies the root to a scratch directory and writes a `backend_override.tf` there with `terraform { backend "local" { path = "rehearsal.tfstate" } }`. It writes the pulled state to that path, runs `init -reconfigure`, runs the real state-migrate script against the local copy, then plans with normal refresh. Nothing touches the R2 object. The job asserts the remote serial is unchanged before and after the rehearsal, and that no new object appeared under `web-platform/backups/` (CTO L24, L43: a rehearsal writes nothing to R2, because `infra-privileged` has no reviewers and the backup holds secrets). A test runs this shape on a mock-provider root.
 
    Per F1 everything is forgotten in the first dispatch, so no later plan can contain an old-zone destroy.
 9. **Phase gate** (new `scripts/cf-account-migrate-gate.sh`, sourced by the job and by its test). It reads `tfplan.json`; its properties are the Guard Contract below.
@@ -345,7 +345,7 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
 
    **Merge-to-flip window.** From PR1's merge until this step, every plan of this root fails on the old-id validations, including `web-host-replace` and the registry dispatcher. That fails safe, but this step must follow the merge within the same sitting.
 
-   **No rollback by flip** (CTO devex). After the flip, the validations reject the old ids. A failed phase is fixed forward with a new PR. The full revert, used only if the migration is abandoned, is: `git revert` PR1, restore `<KEY>` ← `<KEY>_PREV`, and `terraform state push` the pre-migration backup. The runbook spells it out.
+   **No rollback by flip** (CTO devex). After the flip, the validations reject the old ids. A failed phase is fixed forward with a new PR. The full revert, used only if the migration is abandoned (CTO L59): `git revert` PR1, restore `<KEY>` ← `<KEY>_PREV`, take a fresh `terraform state pull` of the current state into `web-platform/backups/`, confirm its lineage matches the pre-migration backup, then run `terraform state push -force <pre-migration backup>`. A plain `state push` is refused because the backup's serial is lower than live after the forget and the imports, and `-force` overwrites unlocked state (`use_lockfile = false`), so that push is its own `Operator-authorizes:` act. The runbook spells it out.
 
    The dispatches in this phase and in Phase 3 can run under one standing delegation recorded on #12931 (see the operator row in `decision-challenges.md`). Otherwise each needs its own go.
 3. `Operator-authorizes:` the rehearsal:
@@ -610,7 +610,7 @@ So PR1's merge mutates no production resource. Production changes start at the P
 
 - `dev != prd`: Doppler `dev*` configs carry only `CF_ZONE_ID` and the audit token. No Terraform resource writes `dev`.
 - Validations make any plan carrying an old id fail before refresh.
-- The in-progress predicate blocks the routine apply and the drift job between the Doppler flip and the end of the tunnel phase.
+- The in-progress predicate makes every plan-capable job except `cf_account_migrate` (and the web-2 `web_host_replace` after the tunnel phase) exit non-zero with `::error::` between the Doppler flip and the end of the tunnel phase. The drift job is not gated: it only runs `terraform plan -detailed-exitcode` (CTO L50).
 - The state backup object holds secrets (as all state does). It lives only in the state bucket, under `web-platform/backups/`, and is deleted in the cleanup PR after a successful `manual-rerun`. Logging that deletion is part of the runbook.
 - `lifecycle.ignore_changes` call-outs:
   - `doppler_secret.registry_push_*` and `doppler_secret.cf_api_token_dns_edit` (`ignore_changes=[value]`) need `-replace` in their phase;
@@ -641,7 +641,7 @@ liveness_signal:
 
 error_reporting:
   destination: "GitHub Actions job failure + step summary for every dispatch (cf_account_migrate, web_host_replace); Sentry for the web-2 fresh-boot fatal emits (soleur-boot-emit, baked SENTRY_DSN) and for the runtime cf-cache-purge / cert-reissue paths"
-  fail_loud: "cf-state-migrate verdict=abort, cf-account-migrate-gate verdict=REFUSE <reason>, cf-tunnel-host-predelete verdict=refuse, ::error:: lines; verdict=cf-account-migration-in-progress on the blocked routine/drift paths is a ::warning:: plus summary line, never silent"
+  fail_loud: "cf-state-migrate verdict=abort, cf-account-migrate-gate verdict=REFUSE <reason>, cf-tunnel-host-predelete verdict=refuse, ::error:: lines; verdict=cf-account-migration-in-progress on every blocked plan-capable job is an ::error:: with a non-zero exit plus a summary line, never silent (the drift job is not gated)"
 
 failure_modes:
   - mode: "rulesets token lacks a phase write scope (403 at apply)"
@@ -737,7 +737,7 @@ in_transit:
 
 **Property.** The script removes a state entry only if that entry's own `zone_id`/`account_id` is an OLD id. It never removes an R2 resource. It removes nothing once it finds any entry it cannot classify.
 
-**Assembly.** There is one input, `terraform show -json` of current state (the candidate set is every non-R2 `cloudflare_*` entry), and one write site: a single `terraform state rm` call carrying every `rm` address. Every removal flows through one function, `_forget <addr>`, which re-checks the classification immediately before the rm. The backup step must succeed before the first `_forget`.
+**Assembly.** There is one input, `terraform show -json` of current state (the candidate set is every non-R2 `cloudflare_*` entry), and one write site: a single `terraform state rm` call carrying every `rm` address. Every entry is classified before any write (CTO L47): an unknown id anywhere aborts with 0 removed and no `state rm` call. There is no per-address re-check. The backup step must succeed before the single `state rm` call.
 
 **Mutation matrix:**
 
@@ -748,16 +748,17 @@ in_transit:
 | 2b | An entry with both `zone_id` and `account_id` null | RED (abort before any write) |
 | 2c | A mixed state where rulesets carry only `zone_id` and lists carry only `account_id`, both old | PASS: both classes `rm` |
 | 2d | `state rm` is called more than once, or the serial goes up by more than 1 | RED |
-| 3 | First entry old-zone (removed), SECOND entry carries an unknown zone id | RED (abort before the second; the first removal is logged) |
+| 3 | First entry old-zone, SECOND entry carries an unknown zone id | RED (abort with 0 removed and no `state rm` call) |
 | 4 | Backup upload fails (stubbed `aws s3 cp` exit 1) | RED, 0 removed |
-| 5 | Order: `_forget` is called before the backup (reorder) | RED. The test observes the stub call order inside the run, not the final state. |
+| 5 | Order: the `state rm` call runs before the backup (reorder) | RED. The test observes the stub call order inside the run, not the final state. |
 | 6 | Re-run after a complete migration | PASS with `removed=0` |
+| 7 | A stubbed `state rm` reports fewer `Successfully removed` lines than the rm set, or the post-rm re-list still shows an old-id entry (CTO L72) | RED |
 
 **Harness rows:** H1 is a must-PASS mixed state (old-zone records plus new-zone records already imported) that yields `rm` only for the old ones. H2: if the stubbed `terraform` ignores `state rm` calls, the test's call-recorder assertion fails, so the suite goes RED.
 
 ### Guard 3 — migration-in-progress predicate (`scripts/cf-account-migration-complete.sh`)
 
-**Property.** The routine apply and the drift job do not plan while any non-R2 `cloudflare_*` state entry carries an OLD id, or while the tunnel is absent from state or carries an account id other than the new one.
+**Property.** No plan-capable job other than `cf_account_migrate` (and the web-2 `web_host_replace` after the tunnel phase) plans while any non-R2 `cloudflare_*` state entry carries an OLD id, or while the tunnel is absent from state or carries an account id other than the new one.
 
 **Assembly.** The predicate is called before `terraform plan` in every plan-capable job of `apply-web-platform-infra.yml` except `cf_account_migrate`, with the `web_host_replace web-2` exception once the tunnel is in state. A workflow-grep test enumerates the jobs that run `terraform plan` and asserts each one calls the predicate, so a new job cannot silently skip it.
 
