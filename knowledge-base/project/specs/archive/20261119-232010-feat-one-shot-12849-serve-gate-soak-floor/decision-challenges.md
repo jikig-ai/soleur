@@ -1,6 +1,6 @@
 # Decision challenges: feat-one-shot-12849-serve-gate-soak-floor
 
-Plan: `knowledge-base/project/plans/2026-11-18-fix-serve-gate-soak-floor-and-per-instance-grader-plan.md` (#12849).
+Plan: `knowledge-base/project/plans/archive/20261119-232010-2026-11-18-fix-serve-gate-soak-floor-and-per-instance-grader-plan.md` (#12849).
 
 ## Decision Classes
 

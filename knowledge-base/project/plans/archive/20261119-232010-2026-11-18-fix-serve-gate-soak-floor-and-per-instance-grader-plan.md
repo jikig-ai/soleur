@@ -95,7 +95,7 @@ octal 8, so a configured 10-day soak is enforced as 8 days.
 ## Proposed Solution
 
 All decisions below are recorded in
-`knowledge-base/project/specs/feat-one-shot-12849-serve-gate-soak-floor/decision-challenges.md`
+`knowledge-base/project/specs/archive/20261119-232010-feat-one-shot-12849-serve-gate-soak-floor/decision-challenges.md`
 (D1-D5 are the 2026-11-18 ruling; F1-F11 are the derived forks, also Ruled by CTO agent, 2026-11-18).
 
 ### Part 1 — `lb-weight-gate.sh`: the floor and the evidence line

@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-11-18-fix-serve-gate-soak-floor-and-per-instance-grader-plan.md
+- Plan file: knowledge-base/project/plans/archive/20261119-232010-2026-11-18-fix-serve-gate-soak-floor-and-per-instance-grader-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
 - cto_spawns=0 (pipeline-level; the planning subagent's CTO rulings D1-D5, F1-F11, G1-G13 are recorded in decision-challenges.md)

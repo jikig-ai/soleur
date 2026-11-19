@@ -1,6 +1,6 @@
 # Tasks: serve gate soak floor and per-instance grader (#12849)
 
-Plan: `knowledge-base/project/plans/2026-11-18-fix-serve-gate-soak-floor-and-per-instance-grader-plan.md`
+Plan: `knowledge-base/project/plans/archive/20261119-232010-2026-11-18-fix-serve-gate-soak-floor-and-per-instance-grader-plan.md`
 Decisions: `decision-challenges.md` (D1-D5, F1-F11, G1-G13 Ruled by CTO agent, 2026-11-18, including the
 G13 replace-path placement: it ships with #12869).
 
