@@ -432,3 +432,12 @@ apps/web-platform/server/inngest/functions/cron-git-data-erasure-redrive.ts
 # go through the shared agent-on-spawn-settle settle path (terminal
 # failure_reason) and the spawn-dead-letter reporter — no PII egress.
 apps/web-platform/server/inngest/functions/cron-agent-spawn-stale-settle.ts
+
+# PERMANENT — #12714 held-files count (rulings D39(a)/(b)/(f), D42, D43, D45(b)). The ONE compute-and-write path of the
+# display-only `workspaces.kb_sync_held_files` / `kb_sync_held_checked_at` / `kb_sync_pull_blocked` columns (migration
+# 187). Those columns have no UPDATE policy (RLS 053) and are outside the `authenticated` column grant, so the write
+# needs the service role; its callers (session-sync, the self-heal, the cc runner's after-turn refresh) are not service
+# importers and the frozen signatures carry no client. Two service uses, both keyed on a server-resolved workspace id:
+# the guarded held UPDATE (via writeKbSyncHeldCols: `repo_status = 'ready'`, newer checked_at only) and, for a system
+# caller with no userId (D43), the `repo_url` read on a `ready` row. No gate reads these columns (readers census).
+apps/web-platform/server/kb-sync-held-refresh.ts

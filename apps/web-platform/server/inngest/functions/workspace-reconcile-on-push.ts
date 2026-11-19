@@ -472,8 +472,11 @@ export async function workspaceReconcileOnPushHandler({
       }
 
       // VALID .git — preserve the existing pull/reset sync path unchanged.
+      // D43: a system job. The owner is not the acting principal (and an owner-less workspace must heal too), so the
+      // self-heal reads the repo by this workspace's id through the service client, never by a minted user token.
       const syncResult = await syncWorkspace(installationId, workspacePath, logger, {
-        userId: ownerId ?? ws.id,
+        system: true,
+        workspaceId: ws.id,
         op: "push",
       });
 
@@ -481,12 +484,16 @@ export async function workspaceReconcileOnPushHandler({
       const at = new Date(completedAt).toISOString();
 
       if (!syncResult.ok) {
-        reportSilentFallback(syncResult.error, {
-          feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
-          op: "sync",
-          extra: { workspaceId: ws.id, installationId, deliveryId },
-          message: "Workspace sync failed",
-        });
+        // #12600 D23: a designed hold (`held`) is already emitted, tagged and debounced per workspace by the self-heal;
+        // capturing it here too would add one undebounced event per upstream push. The audit row below stays.
+        if (!syncResult.held) {
+          reportSilentFallback(syncResult.error, {
+            feature: WORKSPACE_RECONCILE_SENTRY_FEATURE,
+            op: "sync",
+            extra: { workspaceId: ws.id, installationId, deliveryId },
+            message: "Workspace sync failed",
+          });
+        }
         await writeAuditRow({
           at,
           trigger: "webhook_push",
@@ -524,7 +531,7 @@ export async function workspaceReconcileOnPushHandler({
   if (synced === 0) {
     // Intentionally silent: every path that lands here already emitted its own
     // mirror inside the fan-out loop (reportSilentFallback op="sync" on sync
-    // failure; the inner ensure-workspace-repo mirrors — corrupt-worktree-block
+    // failure, or the self-heal's own debounced op on a designed hold; the inner ensure-workspace-repo mirrors — corrupt-worktree-block
     // / clone — on a reclone honest-block / clone-fail). The not-recovered
     // reclone path adds only a breadcrumb (no double-page). An aggregate mirror
     // here would double-report the same incident. (cq-silent-fallback-must-

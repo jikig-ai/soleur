@@ -22,6 +22,8 @@ This ADR covers **leg 1 only** of the three legs the legal ruling names (the app
 
 > **Superseded 2026-11-13 (#10479/#10538, PR #12737):** leg 3 is TLS under `strict` since 2026-11-07T23:43:43Z UTC (the strict rule's write; first proven 23:44:39Z), and the adopted rule itself becomes `strict` at PR #12737's merge apply (ADR-321 item 13). Leg 2: remedy (c) (the poll moves to the public serve URL, ADR-100 Decision 1 amendment) is declared at PR #12737's merge and live only at the owner's `inngest-host-replace` (#12742); the acceptance runs to 2026-11-20, and the 2026-12-10 extension is dead (it lapsed when #10538 did not merge by 2026-11-12).
 
+> **Superseded 2026-11-17 (#12742), as to "the acceptance runs to 2026-11-20":** before that date the owner renewed the leg-2 acceptance in session, on the same terms, to 2026-12-10, and the CLO agent ruled that sufficient (`knowledge-base/legal/audits/2026-11-17-a7-leg2-owner-renewal-inngest-sdk-url-poll.md`; ledger date on the merge of PR #12884). This is a renewal, not the 2026-11-02 conditional extension, which stays dead. 2026-12-10 is the outer limit; nothing is accepted after it.
+
 ## Context
 
 The web-platform app talks to the dedicated Inngest host (`10.0.1.40`, ADR-100) over plain HTTP on the Hetzner private network. ADR-100's 2026-09-15 addendum recorded that as a conscious acceptance: "transport confidentiality on this link is accepted, not provided" (encryption-posture ledger row, exception tracked on #6897 and then #10136). That hop carries `INNGEST_EVENT_KEY` (in the `/e/<key>` path), the hashed signing key as a Bearer on run-list reads, and event payloads: user prompts and agent output. Any peer on `10.0.1.0/24` can read it.

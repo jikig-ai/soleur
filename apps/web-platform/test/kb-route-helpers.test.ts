@@ -50,13 +50,18 @@ vi.mock("@/server/workspace-resolver", () => ({
   resolveActiveWorkspaceRepoMeta: mockResolveRepoMeta,
 }));
 
-const { mockReportSilentFallback, mockWarnSilentFallback } = vi.hoisted(() => ({
+const { mockReportSilentFallback, mockWarnSilentFallback, mockMirrorWithDebounce, mockMirrorWarnWithDebounce } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
   mockWarnSilentFallback: vi.fn(),
+  mockMirrorWithDebounce: vi.fn(),
+  mockMirrorWarnWithDebounce: vi.fn(),
 }));
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: mockWarnSilentFallback,
+  // #12600 D15(e): the two branch aborts stay error level, debounced per workspace
+  mirrorWithDebounce: mockMirrorWithDebounce,
+  mirrorWarnWithDebounce: mockMirrorWarnWithDebounce,
 }));
 
 vi.mock("@/lib/auth/validate-origin", () => ({
@@ -66,6 +71,11 @@ vi.mock("@/lib/auth/validate-origin", () => ({
 
 vi.mock("@/server/git-auth", () => ({
   gitWithInstallationAuth: mockGitWithAuth,
+}));
+// #12600 D6d: the self-heal's local verbs run token-free through this runner. Routed into the same scripted mock so
+// every row below sees one ordered argv list; test/server/workspace-sync-self-heal-gate.test.ts pins the split.
+vi.mock("@/server/workspace-local-git", () => ({
+  runWorkspaceLocalGit: (args: string[], opts: unknown) => mockGitWithAuth(args, 0, opts),
 }));
 
 vi.mock("@/server/sandbox", () => ({
@@ -92,6 +102,7 @@ import {
 const TEST_USER_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const TEST_INSTALLATION_ID = 12345;
 const TEST_WORKSPACE_PATH = "/workspaces/test-user";
+const TEST_WORKSPACE_ID = "33333333-3333-4333-8333-333333333333";
 const TEST_REPO_URL = "https://github.com/test-owner/test-repo";
 
 function createRequest(): Request {
@@ -454,7 +465,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "delete" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "delete" },
     );
     expect(result.ok).toBe(true);
 
@@ -476,7 +487,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "rename" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "rename" },
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toBe(pullErr);
@@ -493,6 +504,7 @@ describe("syncWorkspace", () => {
 
     await syncWorkspace(TEST_INSTALLATION_ID, TEST_WORKSPACE_PATH, logger, {
       userId: TEST_USER_ID,
+      workspaceId: TEST_WORKSPACE_ID,
       op: "upload",
     });
 
@@ -517,6 +529,7 @@ describe("syncWorkspace", () => {
 
     await syncWorkspace(TEST_INSTALLATION_ID, TEST_WORKSPACE_PATH, fakeLogger, {
       userId: TEST_USER_ID,
+      workspaceId: TEST_WORKSPACE_ID,
       op: "delete",
     });
 
@@ -564,6 +577,9 @@ describe("syncWorkspace", () => {
     // `git branch <recovery> HEAD` — the branch-aside that preserves un-pushed
     // commits before the reset.
     branch?: () => Promise<unknown>;
+    // `git status --porcelain -z --untracked-files=no` (#12600 D6a/b gate).
+    // Defaults to a clean tracked tree.
+    status?: () => Promise<unknown>;
   }) {
     mockGitWithAuth.mockImplementation((args: string[]) => {
       const verb = args[0];
@@ -575,7 +591,7 @@ describe("syncWorkspace", () => {
       if (verb === "symbolic-ref") {
         return handlers.symbolicRef
           ? handlers.symbolicRef()
-          : Promise.resolve(Buffer.from("origin/main\n"));
+          : Promise.resolve(Buffer.from("refs/remotes/origin/main\n"));
       }
       if (verb === "rev-parse") {
         return handlers.revParse
@@ -602,6 +618,12 @@ describe("syncWorkspace", () => {
           ? handlers.reset()
           : Promise.resolve(Buffer.from(""));
       }
+      if (verb === "status") {
+        return handlers.status
+          ? handlers.status()
+          : Promise.resolve(Buffer.from(""));
+      }
+      // `diff --quiet` (#12600 D6c) resolves = exit 0: the held commits' content is upstream.
       return Promise.resolve(Buffer.from(""));
     });
   }
@@ -616,6 +638,12 @@ describe("syncWorkspace", () => {
     "error: Your local changes to the following files would be overwritten by merge:\n" +
     "\t.claude/settings.json\n" +
     "Please commit your changes or stash them before you merge.\nAborting";
+  // An untracked file colliding with an incoming tracked path: the same
+  // non_fast_forward class, but a clean TRACKED tree, so the self-heal resets.
+  const UNTRACKED_COLLISION_STDERR =
+    "error: The following untracked working tree files would be overwritten by merge:\n" +
+    "\tnew.txt\n" +
+    "Please move or remove them before you merge.\nAborting";
 
   test("classifies a non-fast-forward stderr as non_fast_forward", async () => {
     // Diverged with ZERO local commits → safe self-heal path resets and recovers.
@@ -628,7 +656,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     // Recovered → ok:true. The classification is asserted via the self-heal
@@ -637,28 +665,37 @@ describe("syncWorkspace", () => {
     if (result.ok) expect(result.recovered).toBe(true);
   });
 
-  test("#4886-followup: dirty-working-tree abort self-heals (reset --hard) → {ok:true, recovered:true}", async () => {
+  test("#4886-followup: dirty-working-tree abort routes to the gated self-heal, which refuses over a tracked edit (#12600 D6b)", async () => {
     // The KB-mirror clone had an uncommitted `.claude/settings.json` edit; the
     // dirty-tree abort must route to the SAME gated self-heal as non_fast_forward
-    // (reset --hard discards the spurious edit; the un-pushed-commit gate protects
-    // real session work). Before this fix it classified as sync_failed → froze.
+    // (before #4886 it classified as sync_failed → froze). Since #12600 (CTO
+    // ruling D6b) the gate refuses to `reset --hard` over ANY tracked change: the
+    // edit is kept and the next session-start autostash pull resolves the stall.
     scriptGit({
       pull: () => Promise.reject(new Error(DIRTY_TREE_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revList: () => Promise.resolve(Buffer.from("0\n")),
+      status: () => Promise.resolve(Buffer.from(" M .claude/settings.json\0")),
     });
 
     const result = await syncWorkspace(
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.recovered).toBe(true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorClass).toBe("non_fast_forward");
     const calls = mockGitWithAuth.mock.calls.map((c: unknown[]) => c[0] as string[]);
-    expect(calls).toContainEqual(["reset", "--hard", "origin/main"]);
+    expect(calls).toContainEqual(["fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"]);
+    expect(calls.some((a) => a[0] === "reset")).toBe(false);
+    expect(mockMirrorWarnWithDebounce).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ op: "self-heal-aborted-dirty-tracked" }),
+      TEST_WORKSPACE_PATH,
+      "self-heal-aborted-dirty-tracked",
+    );
   });
 
   // De-noise (Sentry 9ccf1d86…): a self-HEALED ff-only abort must NOT emit an
@@ -666,10 +703,10 @@ describe("syncWorkspace", () => {
   // `log.error({ err })` (pino-mirrored to Sentry as feature:"pino-mirror",
   // level error) + `reportSilentFallback` UNCONDITIONALLY before the self-heal,
   // so a benign, recovered dirty-tree abort paged the operator on every push.
-  test("de-noise: dirty-tree abort that self-heals emits NO error mirror (no log.error, no reportSilentFallback), only an info breadcrumb + self-heal-reset warn", async () => {
+  test("de-noise: untracked-collision abort that self-heals emits NO error mirror (no log.error, no reportSilentFallback), only an info breadcrumb + self-heal-reset warn", async () => {
     scriptGit({
-      pull: () => Promise.reject(new Error(DIRTY_TREE_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      pull: () => Promise.reject(new Error(UNTRACKED_COLLISION_STDERR)),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revList: () => Promise.resolve(Buffer.from("0\n")),
     });
 
@@ -677,7 +714,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(true);
@@ -703,7 +740,7 @@ describe("syncWorkspace", () => {
     expect(infoCtx).not.toHaveProperty("err");
     // Recovery stays observable via the warning-level self-heal-reset mirror.
     expect(mockWarnSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-reset" }),
     );
   });
@@ -711,7 +748,7 @@ describe("syncWorkspace", () => {
   test("de-noise: diverged (non-FF) abort that self-heals also emits NO error mirror, only an info breadcrumb + self-heal-reset warn", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revList: () => Promise.resolve(Buffer.from("0\n")),
     });
 
@@ -719,7 +756,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(true);
@@ -734,7 +771,7 @@ describe("syncWorkspace", () => {
       expect.stringMatching(/ff-only pull blocked/i),
     );
     expect(mockWarnSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-reset" }),
     );
   });
@@ -745,7 +782,7 @@ describe("syncWorkspace", () => {
     // feature branch must keep aborting to protect un-pushed work.
     scriptGit({
       pull: () => Promise.reject(new Error(DIRTY_TREE_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revParse: () => Promise.resolve(Buffer.from("feat-session-work\n")),
       revList: () => Promise.resolve(Buffer.from("2\n")),
     });
@@ -754,7 +791,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(false);
@@ -772,7 +809,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "manual" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "manual" },
     );
 
     expect(result.ok).toBe(false);
@@ -785,7 +822,7 @@ describe("syncWorkspace", () => {
   test("self-heal: non-FF + ZERO local commits → fetch + reset to resolved default branch, returns {ok:true, recovered:true}", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revList: () => Promise.resolve(Buffer.from("0\n")),
     });
 
@@ -793,17 +830,17 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.recovered).toBe(true);
 
     const calls = mockGitWithAuth.mock.calls.map((c: unknown[]) => c[0] as string[]);
-    // fetch origin <default> and reset --hard origin/<default> must be present,
-    // resolved (not literal "main" passed by us — derived from symbolic-ref).
-    expect(calls).toContainEqual(["fetch", "origin", "main"]);
-    expect(calls).toContainEqual(["reset", "--hard", "origin/main"]);
+    // fetch origin <default> and reset --keep refs/remotes/origin/<default> must be
+    // present, resolved (not literal "main" passed by us — derived from symbolic-ref).
+    expect(calls).toContainEqual(["fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"]);
+    expect(calls).toContainEqual(["reset", "--keep", "refs/remotes/origin/main"]);
     // rev-list guard ran before reset.
     const verbs = calls.map((a) => a[0]);
     expect(verbs.indexOf("rev-list")).toBeLessThan(verbs.indexOf("reset"));
@@ -815,7 +852,7 @@ describe("syncWorkspace", () => {
     // fall-through (Kieran P1-3).
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revParse: () => Promise.resolve(Buffer.from("feat-something\n")),
       revList: () => Promise.resolve(Buffer.from("3\n")), // un-pushed agent work
     });
@@ -824,7 +861,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(false);
@@ -835,10 +872,12 @@ describe("syncWorkspace", () => {
     );
     expect(verbs).not.toContain("reset");
     expect(verbs).not.toContain("branch");
-    // Dirty-abort is observable + fail_loud.
-    expect(mockReportSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
+    // Dirty-abort is observable + fail_loud (error level, debounced per workspace since #12600 D15e).
+    expect(mockMirrorWithDebounce).toHaveBeenCalledWith(
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-aborted-dirty" }),
+      TEST_WORKSPACE_PATH,
+      "self-heal-aborted-dirty",
     );
   });
 
@@ -852,8 +891,8 @@ describe("syncWorkspace", () => {
   test("AC1/AC2 recovery: non-FF + un-pushed commits on the DEFAULT branch → branch-aside BEFORE reset, returns {ok:true, recovered:true}", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      // resolved default branch (symbolic-ref → origin/main → "main")
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      // resolved default branch (symbolic-ref → refs/remotes/origin/main → "main")
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       // HEAD is ON the default branch — compared against the RESOLVED default,
       // not a hardcoded literal, so the test passes for the right reason.
       revParse: () => Promise.resolve(Buffer.from("main\n")),
@@ -866,7 +905,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     // AC1 — recovered, not aborted.
@@ -882,7 +921,7 @@ describe("syncWorkspace", () => {
     // `git branch <recovery> HEAD` — preserves the un-pushed commits on a ref.
     expect(branchCall?.[2]).toBe("HEAD");
     expect(branchCall?.[1]).toMatch(/^soleur\/recovered-kb-sync-\d+$/);
-    expect(calls).toContainEqual(["reset", "--hard", "origin/main"]);
+    expect(calls).toContainEqual(["reset", "--keep", "refs/remotes/origin/main"]);
 
     // AC2 — non-destructive ordering: branch-aside is issued BEFORE the reset
     // so the commit objects live on a named ref before the default ref moves.
@@ -893,7 +932,7 @@ describe("syncWorkspace", () => {
     // Recovery is observable as a distinct WARN op (queryable recovery rate,
     // does not page) and NOT bucketed into the abort/phantom-reset slugs.
     expect(mockWarnSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-recovered-diverged" }),
     );
     // It is a recovery, not a failure — no error-level mirror.
@@ -903,7 +942,7 @@ describe("syncWorkspace", () => {
   test("AC4 detached HEAD: rev-parse → literal \"HEAD\" + un-pushed commits → abort with DISTINCT op, no branch/reset", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       // `git rev-parse --abbrev-ref HEAD` emits the literal "HEAD" when detached.
       revParse: () => Promise.resolve(Buffer.from("HEAD\n")),
       revList: () => Promise.resolve(Buffer.from("1\n")),
@@ -913,7 +952,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(false);
@@ -925,25 +964,30 @@ describe("syncWorkspace", () => {
     expect(verbs).not.toContain("branch");
     expect(verbs).not.toContain("reset");
     // Distinct, queryable slug — never silently bucketed into aborted-dirty.
-    expect(mockReportSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
+    expect(mockMirrorWithDebounce).toHaveBeenCalledWith(
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-aborted-detached-head" }),
+      TEST_WORKSPACE_PATH,
+      "self-heal-aborted-detached-head",
     );
-    expect(mockReportSilentFallback).not.toHaveBeenCalledWith(
-      expect.anything(),
+    expect(mockMirrorWithDebounce).not.toHaveBeenCalledWith(
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-aborted-dirty" }),
+      expect.anything(),
+      expect.anything(),
     );
   });
 
   test("AC5a observability: recovery payload carries pseudonymized userId and NO raw workspacePath", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revParse: () => Promise.resolve(Buffer.from("main\n")),
       revList: () => Promise.resolve(Buffer.from("2\n")),
     });
     await syncWorkspace(TEST_INSTALLATION_ID, TEST_WORKSPACE_PATH, fakeLogger, {
       userId: TEST_USER_ID,
+      workspaceId: TEST_WORKSPACE_ID,
       op: "push",
     });
     expect(mockWarnSilentFallback.mock.calls.length).toBeGreaterThan(0);
@@ -957,16 +1001,17 @@ describe("syncWorkspace", () => {
   test("AC5b observability: detached-abort payload carries pseudonymized userId and NO raw workspacePath", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revParse: () => Promise.resolve(Buffer.from("HEAD\n")),
       revList: () => Promise.resolve(Buffer.from("1\n")),
     });
     await syncWorkspace(TEST_INSTALLATION_ID, TEST_WORKSPACE_PATH, fakeLogger, {
       userId: TEST_USER_ID,
+      workspaceId: TEST_WORKSPACE_ID,
       op: "push",
     });
-    expect(mockReportSilentFallback.mock.calls.length).toBeGreaterThan(0);
-    for (const call of mockReportSilentFallback.mock.calls) {
+    expect(mockMirrorWithDebounce.mock.calls.length).toBeGreaterThan(0);
+    for (const call of mockMirrorWithDebounce.mock.calls) {
       const opts = call[1] as { extra?: Record<string, unknown> };
       expect(opts.extra).not.toHaveProperty("workspacePath");
       expect(opts.extra?.userId).toBe(TEST_USER_ID);
@@ -976,7 +1021,7 @@ describe("syncWorkspace", () => {
   test("AC6 phantom path unchanged: ZERO local commits → self-heal-reset, issues NO branch", async () => {
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revList: () => Promise.resolve(Buffer.from("0\n")),
     });
 
@@ -984,7 +1029,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(true);
@@ -998,11 +1043,11 @@ describe("syncWorkspace", () => {
     expect(verbs).not.toContain("branch");
     // It stays the phantom-reset slug, NOT the diverged-recovery one.
     expect(mockWarnSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-reset" }),
     );
     expect(mockWarnSilentFallback).not.toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-recovered-diverged" }),
     );
   });
@@ -1013,7 +1058,7 @@ describe("syncWorkspace", () => {
     // buggy `headRef === "main"` impl would abort here instead of recovering.
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/trunk\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/trunk\n")),
       revParse: () => Promise.resolve(Buffer.from("trunk\n")),
       revList: () => Promise.resolve(Buffer.from("1\n")),
     });
@@ -1022,7 +1067,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(true);
@@ -1031,9 +1076,9 @@ describe("syncWorkspace", () => {
       (c: unknown[]) => c[0] as string[],
     );
     expect(calls.some((a) => a[0] === "branch")).toBe(true);
-    expect(calls).toContainEqual(["reset", "--hard", "origin/trunk"]);
+    expect(calls).toContainEqual(["reset", "--keep", "refs/remotes/origin/trunk"]);
     expect(mockWarnSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-recovered-diverged" }),
     );
   });
@@ -1044,7 +1089,7 @@ describe("syncWorkspace", () => {
     // output → parseInt(...) === NaN → abort, preserve work.
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revParse: () => Promise.resolve(Buffer.from("main\n")),
       revList: () => Promise.resolve(Buffer.from("")), // unparseable → NaN
     });
@@ -1053,7 +1098,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(false);
@@ -1069,7 +1114,7 @@ describe("syncWorkspace", () => {
     const resetErr = new Error("fatal: reset failed");
     scriptGit({
       pull: () => Promise.reject(new Error(NON_FF_STDERR)),
-      symbolicRef: () => Promise.resolve(Buffer.from("origin/main\n")),
+      symbolicRef: () => Promise.resolve(Buffer.from("refs/remotes/origin/main\n")),
       revList: () => Promise.resolve(Buffer.from("0\n")),
       reset: () => Promise.reject(resetErr),
     });
@@ -1078,14 +1123,15 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "push" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "push" },
     );
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.errorClass).toBe("non_fast_forward");
+    // #12600 D8: null error (the #8629 Error-path tag loss), the cause's name in extra only (never its message).
     expect(mockReportSilentFallback).toHaveBeenCalledWith(
-      resetErr,
-      expect.objectContaining({ op: "self-heal-failed" }),
+      null,
+      expect.objectContaining({ op: "self-heal-failed", extra: expect.objectContaining({ errName: "Error" }) }),
     );
   });
 
@@ -1097,11 +1143,12 @@ describe("syncWorkspace", () => {
 
     await syncWorkspace(TEST_INSTALLATION_ID, TEST_WORKSPACE_PATH, fakeLogger, {
       userId: TEST_USER_ID,
+      workspaceId: TEST_WORKSPACE_ID,
       op: "push",
     });
 
     expect(mockWarnSilentFallback).toHaveBeenCalledWith(
-      expect.anything(),
+      null, // #12600 D8: null-first
       expect.objectContaining({ op: "self-heal-reset" }),
     );
   });
@@ -1113,7 +1160,7 @@ describe("syncWorkspace", () => {
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
       fakeLogger,
-      { userId: TEST_USER_ID, op: "manual" },
+      { userId: TEST_USER_ID, workspaceId: TEST_WORKSPACE_ID, op: "manual" },
     );
 
     expect(result.ok).toBe(true);

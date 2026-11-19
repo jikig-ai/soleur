@@ -47,7 +47,7 @@ const {
   mockResolveInstallationId: vi.fn(),
   mockGetCurrentRepoUrl: vi.fn(),
   mockResolveEffectiveInstallationId: vi.fn(),
-  mockSyncPull: vi.fn(),
+  mockSyncPull: vi.fn(async () => ({ heldFiles: 0, onRecovered: 0, pullReason: null, checkedAt: null })),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({

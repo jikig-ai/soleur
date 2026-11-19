@@ -34,6 +34,7 @@ vi.mock("@/server/logger", () => {
 vi.mock("@sentry/nextjs", () => ({ addBreadcrumb: vi.fn(), captureException: vi.fn() }));
 vi.mock("@/server/workspace-repo-mirror", () => ({
   writeRepoColsToWorkspace: vi.fn().mockResolvedValue(undefined),
+  clearKbSyncHeldCols: vi.fn().mockResolvedValue(undefined),
 }));
 // Only the membership-verified resolver is controlled; workspaceReapRoots stays REAL.
 vi.mock("@/server/workspace-resolver", async (importOriginal) => ({

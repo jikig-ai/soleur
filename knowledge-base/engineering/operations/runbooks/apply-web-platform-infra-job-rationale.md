@@ -514,6 +514,35 @@ create. After the swap web-1's password leaves the push-apply graph; its address
 - **Reach.** The pair is `-target`ed by the `apply` job and by no other job or workflow file
   (`terraform-target-parity.test.ts`); only `apply` carries the HALT.
 
+## MAIN plan step: the allow-list history (#7539)
+
+Relocated from the comment above the MAIN plan step (`Terraform plan (allow-list, non-SSH resources only)`) on 2026-11-17
+(#12726), to keep the workflow under the size gate (`workflow-file-size.test.ts`) when the flip-silence canary pair added
+two `-target` lines. The step comment keeps the GROUP BY TRANSPORT rule and the enforcement pointer. Verbatim, as it stood
+after that rule:
+
+```text
+This instruction already said so and did not hold: it landed 2026-05-20
+and `terraform_data.inngest_consumer_probe_install` was appended six
+lines beneath it on 2026-08-12, batched beside the other
+inngest-consumer resources by feature (#7539). Prose is not the
+enforcement -- Guard 1 in
+plugins/soleur/test/terraform-target-parity.test.ts is, and it fails
+the PR rather than the apply.
+
+`scheduled-terraform-drift.yml` is a 12h backstop for a FORGOTTEN
+resource; it did not surface #7539, because a MISPLACED resource is
+declared and targeted -- just on the stage that cannot provision it.
+```
+
+**The two `inngest_cutover_flip_silent_canary` `-target` lines are a throwaway (+1 pair, #12726).** They live only while
+the canary does (tracker #12878). This note sits here because the MAIN plan command is one backslash-continued line, and
+a `#` among its `-target` lines would break the command. The canary retirement PR deletes the canary blocks but keeps
+these two bare lines, and lists both addresses in the census `INTENDED_DESTROYS`, for its own destroying apply: a bare
+target on an address with no configuration is what plans the delete. The removal PR merges with its standalone
+`[ack-destroy]` line. After that apply, a follow-up removes the lines and both `INTENDED_DESTROYS` entries, as the egress
+canary's retirement did (#12268 kept its lines and added the entries, #12306 removed both).
+
 ## Comment prose relocated from the apply step
 
 The workflow file is held under the size gate (`workflow-file-size.test.ts`); prose that used to sit in the apply step's
@@ -587,6 +616,21 @@ hcloud_server.* (placement_group_id / server_type change →
 power-off reboot of the running host, 0 destroys — invisible to
 the two counters above). Source of truth:
 tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+```
+
+Verbatim, the comment above `set -euo pipefail` in the plan step's `run:` (relocated 2026-11-17, #12844, to keep
+the workflow under the size gate when `betteruptime_monitor.soleur_changelog_deep` joined the `-target` list):
+
+```text
+THIS COMMENT USED TO SAY "`-e` is intentionally omitted", AND THAT NEVER WORKED.
+GitHub invokes a bare `run:` as `bash -e {0}`; omitting -e from the `set` line
+cannot clear what the invocation already applied, so on a plan failure the step
+died AT the doppler line and both the `rc=$?` capture and the `::error::` branch
+below it were unreachable. The explicit `set +e` bracket is what delivers the
+property the comment claimed. The two sibling copies of the old comment (in
+apply-github-infra.yml and apply-sentry-infra.yml) were corrected under #7304,
+which also shipped scripts/lint-workflow-errexit-capture.py so the class cannot
+recur silently. The broader `set … pipefail`-without-`-e` audit remains #7098.
 ```
 
 ## registry_luks_recut

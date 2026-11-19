@@ -916,6 +916,8 @@ for site in egress_gw_probe_silent_canary betterstack-logs-alerts.tf apply-web-p
 done
 # DERIVED, not a literal list: every tracked file that names the canary (outside the plan/spec history and this probe) must
 # be named in the RETIREMENT header, so a suite added later that hardcodes the canary cannot be missed by the deletion PR.
+# The pattern names THIS canary (egress_gw_probe_silent_canary / soleur-egress-gw-probe-silent-canary-prd): #12726 added a
+# second, unrelated canary (inngest_cutover_flip_silent_canary) whose referrers a bare `silent_canary` would also match.
 ref_n=0
 refs_seen=()
 in_git=0; git -C "$HERE" rev-parse --is-inside-work-tree >/dev/null 2>&1 && in_git=1
@@ -925,7 +927,7 @@ while IFS= read -r ref; do
   key="${ref##*/}"; [[ "$key" =~ ^(ADR-[0-9]+)- ]] && key="${BASH_REMATCH[1]}"   # an ADR is named by its number
   refs_seen+=("$key")
   if grep -qF -- "$key" <<<"$retire_block"; then pass "RETIREMENT header names the referrer ${key}"; else fail "RETIREMENT header lacks the referrer ${ref}"; fi
-done < <(git -C "$HERE" grep -lE 'silent_canary|probe-silent-canary' -- ':(top)' ':(top,exclude)knowledge-base/project' ':(top,exclude)scripts/followthroughs' 2>/dev/null)
+done < <(git -C "$HERE" grep -lE 'egress_gw_probe_silent_canary|egress-gw-probe-silent-canary' -- ':(top)' ':(top,exclude)knowledge-base/project' ':(top,exclude)scripts/followthroughs' 2>/dev/null)
 # Anti-vacuity: the derivation must have found EXACTLY the files that still name the canary (the set below). This is
 # an explicit set, not a floor: a vacuous derivation and an extra or a dropped referrer both fail. The set was derived
 # from live repo state after #12270 (7 files to 5): the retirement (#12189) removed the .tf and the send-failed suite

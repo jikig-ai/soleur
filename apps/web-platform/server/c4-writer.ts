@@ -53,6 +53,8 @@ const MAX_C4_MODEL_BYTES = 4 * 1024 * 1024;
 
 export type WriteC4Input = {
   userId: string;
+  /** The membership-resolved workspace the write targets: `syncWorkspace` keys the repo URL on it (#12718, D27). */
+  workspaceId: string;
   installationId: number;
   owner: string;
   repo: string;
@@ -61,6 +63,8 @@ export type WriteC4Input = {
   relativePath: string;
   content: string;
 };
+
+export type C4WorkspaceSyncHeld = "save" | "rerender" | "save_and_rerender";
 
 export type WriteC4Result =
   | {
@@ -71,6 +75,17 @@ export type WriteC4Result =
       // sanitized, user-facing reason the diagram didn't update (e.g. an
       // unresolved-reference hint). Absent on success and on `.md` saves.
       rerenderDiagnostic?: string;
+      // #12600 (CTO ruling D16): the commit landed on GitHub but a sync found the
+      // workspace in a designed hold (local changes not on the default branch
+      // yet), so the workspace copy was deliberately not updated. Absent otherwise.
+      workspaceSync?: "pending";
+      // D22(c): which sync was held, present exactly when `workspaceSync` is.
+      // "save": the first sync, and no render committed a model (a `.md` save, or
+      // a render that failed or was superseded). "rerender": only the post-render
+      // resync, so the saved source IS in the workspace but the model committed on
+      // GitHub is not. "save_and_rerender": both. With a held resync the render
+      // committed, so its `rerendered:false` is the hold, not a supersede.
+      workspaceSyncHeld?: C4WorkspaceSyncHeld;
     }
   | { ok: false; status: number; error: string; code?: string };
 
@@ -82,7 +97,7 @@ export type WriteC4Result =
 export async function writeC4Diagram(
   input: WriteC4Input,
 ): Promise<WriteC4Result> {
-  const { userId, installationId, owner, repo, workspacePath, relativePath, content } =
+  const { userId, workspaceId, installationId, owner, repo, workspacePath, relativePath, content } =
     input;
 
   // --- Scope guard (security-critical) ------------------------------------
@@ -133,10 +148,18 @@ export async function writeC4Diagram(
 
     const sync = await syncWorkspace(installationId, workspacePath, logger, {
       userId,
+      workspaceId,
       op: "manual",
     });
-    if (!sync.ok) {
-      Sentry.captureException(sync.error);
+    // A designed hold (`sync.held`, #12600 D16) is a success: the commit is on
+    // GitHub, so answering SYNC_FAILED would invite a retry of a write that
+    // already happened. Every non_fast_forward outcome is already emitted,
+    // tagged and debounced, by the self-heal, so only a sync_failed is captured.
+    let saveHeld = false;
+    if (!sync.ok && sync.held) {
+      saveHeld = true;
+    } else if (!sync.ok) {
+      if (sync.errorClass !== "non_fast_forward") Sentry.captureException(sync.error);
       return {
         ok: false,
         status: 500,
@@ -159,6 +182,7 @@ export async function writeC4Diagram(
     // return rerendered:false, degrading to the Layer-1 honest-stale banner.
     let rerendered = true;
     let rerenderDiagnostic: string | undefined;
+    let rerenderHeld = false;
     if (relativePath.endsWith(C4_SOURCE_EXT)) {
       const r = await rerenderAndCommit({
         installationId,
@@ -166,6 +190,7 @@ export async function writeC4Diagram(
         repo,
         workspacePath,
         userId,
+        workspaceId,
         relativePath,
         // #8623: the render input is THIS commit's diagrams subtree, fetched
         // from GitHub — never the (tenant-writable) workspace.
@@ -174,12 +199,21 @@ export async function writeC4Diagram(
       });
       rerendered = r.rerendered;
       rerenderDiagnostic = r.diagnostic;
+      rerenderHeld = r.workspaceSyncPending === true;
+      // A full re-render ends with a resync that succeeded, so the workspace is
+      // current even when the first sync was held (the hold cleared in between).
+      if (r.rerendered) saveHeld = false;
     }
+    // The render outcome is returned whether or not a sync was held (D22(c)):
+    // the render reads this commit from GitHub, never the workspace (#8623).
+    const workspaceSyncHeld: C4WorkspaceSyncHeld | null =
+      saveHeld && rerenderHeld ? "save_and_rerender" : saveHeld ? "save" : rerenderHeld ? "rerender" : null;
     return {
       ok: true,
       commitSha: result?.commit?.sha ?? null,
       rerendered,
       ...(rerenderDiagnostic ? { rerenderDiagnostic } : {}),
+      ...(workspaceSyncHeld ? { workspaceSync: "pending" as const, workspaceSyncHeld } : {}),
     };
   } catch (error) {
     Sentry.captureException(error);
@@ -220,6 +254,7 @@ type RerenderInput = {
   repo: string;
   workspacePath: string;
   userId: string;
+  workspaceId: string;
   relativePath: string;
   /** The commit GitHub returned for the `.c4` write. */
   commitSha: string | undefined;
@@ -234,6 +269,9 @@ type RerenderOutcome = {
    *  supersedes this render (see rerenderAndCommit): nothing on the page
    *  refreshes on its own, so the banner names the supersede instead. */
   diagnostic?: string;
+  /** The model JSON committed but the re-sync found a designed workspace hold (#12600 D16): not a failure, and not a
+   *  supersede, though it reports `rerendered:false` (the workspace does not show the new model). */
+  workspaceSyncPending?: true;
 };
 
 // User-facing copy (CPO-approved, plan 2026-09-24 "Behaviour changes a tenant
@@ -357,7 +395,7 @@ const HEAD_RELIST_TIMEOUT_MS = 5_000;
 async function rerenderAndCommit(
   input: RerenderInput,
 ): Promise<RerenderOutcome> {
-  const { installationId, owner, repo, workspacePath, userId, relativePath, commitSha, content } =
+  const { installationId, owner, repo, workspacePath, userId, workspaceId, relativePath, commitSha, content } =
     input;
   const jsonRelPath = `${C4_DIAGRAMS_DIR}/${C4_MODEL_JSON}`;
   const jsonFilePath = `knowledge-base/${jsonRelPath}`;
@@ -505,8 +543,12 @@ async function rerenderAndCommit(
 
     const resync = await syncWorkspace(installationId, workspacePath, logger, {
       userId,
+      workspaceId,
       op: "manual",
     });
+    // A designed hold (#12600 D16): the model IS committed on GitHub and the
+    // workspace was deliberately not updated; the self-heal already emitted it.
+    if (!resync.ok && resync.held) return { rerendered: false, workspaceSyncPending: true };
     if (!resync.ok) {
       reportSilentFallback(null, {
         feature: "c4-rerender",

@@ -2020,7 +2020,7 @@ eqv_sh="$(_eqv "$EQV_SH")"
 #   detector is a text pattern): `cat >/dev/null "$F"`, `cat >"$F" "$G"`, `dd of=/dev/null </dev/null`, `timeout 0.001 cat`, `echo "cat >/dev/null"`, `: the cat`, `exit 0 && cat >/dev/null`, `cat >&-`, `cat >/dev/full`, `if false;
 #   then cat >/dev/null; fi`, `[ 1 = 2 ] && cat >/dev/null`, `[ ! -t 1 ] || cat >/dev/null`, `cat >/dev/null 2>&-`. These text-window limits are NOT attempted and are listed so that a reader does not assume them closed: a drain
 #   in another case arm than the one the producer reaches (case-arm crossing), a heredoc writer with an unquoted delimiter, a never-true condition (`[ -n "${NEVER:-}" ] && cat`, `if false; then cat`), `cat <&3` (a descriptor
-#   other than stdin), and a spelling inside a string. No `drains` row relies on any of them (the 31 stub definitions of the 21 drains rows were read for this), and closing them needs a parser, not a wider window.
+#   other than stdin), and a spelling inside a string. No `drains` row relies on any of them (the 31 stub definitions of the 21 drains rows were read for this; the fidelity-suite curl row added later writes its stubs with unquoted heredocs, and each drains with a literal `cat` as its first statement), and closing them needs a parser, not a wider window.
 #   Rows: an `exempt` row is an attestation, not a measurement: only its first word is checked against the closed vocabulary (and, for `fenced`, the tracker number), and the reach table in the S7c evidence file (not this table) says which
 #   pairs ran at all. PJ_TRIPLES is a count pin: an edit that adds one triple and removes another leaves the count and passes (the swap escape; a set-diff pin is deliberately not attempted here).
 #   Recompute PJ_TRIPLES from a tree with no uncommitted tracked change: `PJ_ALL="$(git ls-files)"; . <(sed -n '/^# PJ-DERIVE-BEGIN/,/^# PJ-DERIVE-END/p' .claude/hooks/grep-q-pipe-guard.test.sh); pj_join_pairs | LC_ALL=C sort -u | wc -l`
@@ -2244,7 +2244,7 @@ PRODUCER_JOIN=(
   'tests/scripts/test-git-data-boot-signal-poll.sh | doppler | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/21s; hits 0 (stdin-flag))'
   'tests/scripts/test-git-data-rung2-evidence-capture.sh | curl | exempt | text-only reach probe: suite ran green and no piped call reached the stub (2 non-test producers) (reach T1; t1:rc1/92s red3:rc0/38s; hits 0 (stdin-flag))'
   'tests/scripts/test-registry-d10-workflow-wiring.sh | doppler | exempt | text-only the suite runs the restore step body and the Restore summary step body, of which only the restore step calls doppler (bare, in a command substitution, no stdin); the text piped into doppler lives in other steps of the workflow file it names, and none of those steps runs (1 non-test producers)'
-  'tests/scripts/test-sentry-alert-live-fidelity.sh | curl | drains | 2 | *'
+  'tests/scripts/test-sentry-alert-live-fidelity.sh | curl | drains | 4 | *'
   'plugins/soleur/test/token-drift-workflow-causes.test.sh | curl | drains | 1 | *'
   'tests/scripts/test-supabase-advisor-scan.sh | curl | drains | 1 | --header @-'
   'tests/scripts/test-workspaces-luks-cutover-gate.sh | cryptsetup | exempt | text-only reach probe: suite ran green and no piped call reached the stub (1 non-test producers) (reach T1; t1:rc0/5s; hits 0)'

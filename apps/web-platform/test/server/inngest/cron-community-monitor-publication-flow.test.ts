@@ -160,6 +160,7 @@ vi.mock("@/server/inngest/functions/_cron-claude-eval-substrate", () => ({
   }),
   COMMUNITY_DISALLOWED_TOOLS: "Read,Glob,Grep,Write,Edit,MultiEdit,NotebookEdit,Task,Agent,Skill",
   KILL_ESCALATION_MS: 5000,
+  PLUGIN_ROOT_TOKEN: "<plugin-root>",
 }));
 
 vi.mock("@/server/inngest/functions/_cron-safe-commit", () => ({
@@ -327,7 +328,7 @@ beforeEach(() => {
   // The marker emit runs on EVERY re-invocation of the handler (it sits outside a step), so a
   // fault injected into it must be sticky across passes and cleared here.
   digestFileMarkerSpy.mockReset();
-  setupWorkspaceSpy.mockResolvedValue({ ephemeralRoot: tmpRoot, spawnCwd });
+  setupWorkspaceSpy.mockResolvedValue({ ephemeralRoot: tmpRoot, spawnCwd, pluginRoot: "/app/shared/plugins/soleur" });
   teardownSpy.mockResolvedValue(undefined);
   mintSpy.mockImplementation(async (opts: { permissions?: Record<string, string> }) =>
     opts.permissions?.contents === "read" ? READ_TOK : WRITE_TOK,

@@ -301,6 +301,9 @@ export async function gitWithInstallationAuth(
   opts: GitExecOptions = {},
 ): Promise<Buffer> {
   const { hardened, ...execOpts } = opts;
+  // #12600 (CTO ruling D19(1)): a PRESENT `hardened` key with the value undefined is a caller's falsy handle, never the legacy
+  // arm (the census classifies `hardened:` by value; this is the runtime half). Only an absent key is the legacy form.
+  if ("hardened" in opts && hardened === undefined) throw new Error("hardened git invocation: the isolated directory is undefined");
   // The legacy arm refuses a redirecting `.git` shape BEFORE the mint, so a refused workspace costs no GitHub App token
   // on every pull, push and fallback call (the shared host-git invocation below repeats the same check).
   if (hardened === undefined && execOpts.cwd !== undefined) assertWorkspaceGitShape(execOpts.cwd);
