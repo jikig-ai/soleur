@@ -51,6 +51,10 @@ vi.mock("@/server/observability", () => ({
 }));
 
 vi.mock("@/server/egress-forwarder", () => ({
+  markEgressRevoked: vi.fn(),
+  EgressRevokedError: class extends Error {},
+  egressRevocationEpoch: () => 0,
+  isEgressRevoked: () => false,
   spawnEgressForwarder: vi.fn(),
   teardownEgressForwarder: mockTeardownEgressForwarder,
   reapOrphanEgressForwarders: vi.fn(),

@@ -223,6 +223,9 @@ vi.mock("@/server/resolve-web-egress", () => ({
 // feat-open-web-egress (#9534) — never spawn a real forwarder in
 // unit tests; the module lifecycle is covered by web-egress.test.ts.
 vi.mock("@/server/egress-forwarder", () => ({
+  EgressRevokedError: class extends Error {},
+  egressRevocationEpoch: () => 0,
+  isEgressRevoked: () => false,
   spawnEgressForwarder: mockSpawnEgressForwarder,
   teardownEgressForwarder: mockTeardownEgressForwarder,
   reapOrphanEgressForwarders: vi.fn(),

@@ -442,8 +442,10 @@ export function sessionTranscriptDirs(env: Record<string, string | undefined> = 
  * `opts.allowGithubEgress` widens ONLY `network.allowedDomains` to the
  * exact GitHub hosts. Callers must derive it from entitled-token
  * presence (`Boolean(ghToken)`), never pass `true` unconditionally —
- * the sandbox proxy denies all other hosts either way
- * (`allowManagedDomainsOnly` stays on).
+ * for every other host the sandbox proxy ASKS canUseTool
+ * (`SandboxNetworkAccess {host}`), and the explicit arm in
+ * permission-callback.ts denies it (#12585; ADR-278 addendum 2026-11-18).
+ * `allowManagedDomainsOnly` stays on.
  */
 export function buildAgentSandboxConfig(
   workspacePath: string,
