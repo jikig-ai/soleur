@@ -7,8 +7,9 @@
 #
 # PROPERTY. A cf-account-migrate plan applies only if it destroys nothing outside the phase's
 # declared replace set, changes only addresses in the phase's allow-set, and every planned
-# Cloudflare object carries the NEW zone or account id. R2 resources stay on the legacy account
-# and may appear only as no-op.
+# Cloudflare object positively carries the NEW zone or account id (absent, null or unknown is
+# not the new id). R2 resources (every cloudflare_r2_* type) stay on the legacy account and may
+# appear only as no-op.
 #
 # ONE LIST PER PHASE. cf_account_migrate_phase_spec is the single source: the job generates its
 # -target and -replace args from it (cf_account_migrate_targets / _replaces), the gate grades the
@@ -44,7 +45,17 @@ fi
 
 CFAM_NEW_ZONE_ID="951ce525552201ec6c696b24251abed7"
 CFAM_NEW_ACCOUNT_ID="66d4f93f7397f196544e9fe84c3557c2"
-CFAM_IMPORTS_FILE="${CFAM_IMPORTS_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/apps/web-platform/infra/cf-account-migration-imports.tf}"
+# The committed imports file is what Guard 1 compares import ids against. CFAM_IMPORTS_FILE is a
+# test seam for a COPY of this library sourced from a temp dir, whose own path cannot locate the
+# file. Wherever the committed file is reachable (the job, the predicate, the suite's own source),
+# an override naming any other file is ignored: the environment must not choose the literals the
+# gate trusts (#12931 review, security P3).
+_cfam_imports_default="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd)/apps/web-platform/infra/cf-account-migration-imports.tf"
+if [[ -n "${CFAM_IMPORTS_FILE:-}" && -e "$_cfam_imports_default" && ! "$CFAM_IMPORTS_FILE" -ef "$_cfam_imports_default" ]]; then
+  echo "cf-account-migrate-gate: ignoring CFAM_IMPORTS_FILE=${CFAM_IMPORTS_FILE} (not the committed imports file)" >&2
+  CFAM_IMPORTS_FILE="$_cfam_imports_default"
+fi
+CFAM_IMPORTS_FILE="${CFAM_IMPORTS_FILE:-$_cfam_imports_default}"
 
 cf_account_migrate_phases() { printf '%s\n' redirects-dns zone-rest; }
 
@@ -142,11 +153,18 @@ _cfam_import_literals() {
 _cfam_eval_fail() { echo "cf_account_migrate_gate: REFUSE — a check could not be evaluated (jq error); fail-closed"; }
 
 cf_account_migrate_gate() {
-  local phase="${1-}" plan_json="${2-}" state_json="${3-}"
+  # One declaration per line: test-plan-gate-preamble.sh finds plan-grading gates by the literal
+  # `local plan_json`, so a combined declaration hides this gate from its drift sweep.
+  local phase="${1-}"
+  local plan_json="${2-}"
+  local state_json="${3-}"
   # Arm switches. Each is a mutation anchor for the suite; production never changes them.
   local _cfam_refuse_destroy=1 _cfam_check_ids=1 _cfam_check_pure=1 _cfam_check_literal=1
-  local _cfam_check_present=1 _cfam_check_reason=1 _cfam_check_physid=1
-  local spec literals violations="" v creates imports destroys
+  local _cfam_check_present=1 _cfam_check_reason=1 _cfam_check_physid=1 _cfam_check_noncf_old=1
+  local spec literals violations="" v creates imports destroys n_rep
+  # The OLD ids, for the non-Cloudflare in-set check only (local: the predicate that sources this
+  # library declares its own readonly CFAM_OLD_* names).
+  local old_zone="5af02a2f394e9ba6e0ea23c381a26b67" old_account="4d5ba6f096b2686fbdd404167dd4e125"
 
   spec="$(cf_account_migrate_phase_spec "$phase")" || { echo "cf_account_migrate_gate: REFUSE — unknown phase '${phase}'"; return 1; }
   plan_gate_assert_readable     "cf_account_migrate_gate" "$plan_json" || return 1
@@ -157,7 +175,11 @@ cf_account_migrate_gate() {
   fi
   literals="$(_cfam_import_literals)" || return 1
 
-  if [[ "$(jq -r '[to_entries[] | select(.value=="replace")] | length' <<<"$spec")" -gt 0 ]]; then
+  # Guarded: a failed jq here yields "", `[[ "" -gt 0 ]]` is false, and the replace arms below
+  # would silently be skipped.
+  n_rep="$(jq -r '[to_entries[] | select(.value=="replace")] | length' <<<"$spec")" || { _cfam_eval_fail; return 1; }
+  plan_gate_assert_numeric "cf_account_migrate_gate" "replace_count=${n_rep}" || return 1
+  if [[ "$n_rep" -gt 0 ]]; then
     if [[ -z "$state_json" || ! -r "$state_json" ]] || ! jq -e '.values' "$state_json" >/dev/null 2>&1; then
       echo "cf_account_migrate_gate: REFUSE — phase ${phase} declares a replace set and needs the pre-plan state JSON (terraform show -json) to bind each replace to its physical id"
       return 1
@@ -215,13 +237,37 @@ cf_account_migrate_gate() {
     violations+="${v:+$v$'\n'}"
   fi
 
+  # The new-id check. Every planned non-R2 cloudflare_* object must POSITIVELY carry a new id:
+  # an id known only after apply (after_unknown), an id present with any other value (old, a
+  # third id, false), or no id at all (absent or null on both) is refused. An absent id is never
+  # read as the new one. R2 is the whole cloudflare_r2_* family, the same predicate the forget
+  # script and the completion predicate use: it stays on the legacy account.
   if [[ "$_cfam_check_ids" -eq 1 ]]; then
     v="$(jq -r --arg nz "$CFAM_NEW_ZONE_ID" --arg na "$CFAM_NEW_ACCOUNT_ID" '
       .resource_changes[] | select((.mode // "managed") == "managed")
-      | select(.type | startswith("cloudflare_")) | select(.type != "cloudflare_r2_bucket")
+      | select(.type | startswith("cloudflare_")) | select(.type | startswith("cloudflare_r2_") | not)
       | select(.change.after != null)
-      | select(((.change.after.zone_id // $nz) != $nz) or ((.change.after.account_id // $na) != $na))
-      | "REFUSE \(.address) carries an id that is not the new zone/account (zone_id \(.change.after.zone_id // "null"), account_id \(.change.after.account_id // "null"))"' "$plan_json")" || { _cfam_eval_fail; return 1; }
+      | (.change.after.zone_id) as $z | (.change.after.account_id) as $a | (.change.after_unknown // {}) as $u
+      | select(
+          ($u.zone_id == true) or ($u.account_id == true)
+          or ($z != null and $z != $nz) or ($a != null and $a != $na)
+          or ($z != $nz and $a != $na))
+      | "REFUSE \(.address) carries an id that is not the new zone/account (zone_id \($z | tostring), account_id \($a | tostring)\(if ($u.zone_id == true) or ($u.account_id == true) then ", known only after apply" else "" end))"' "$plan_json")" || { _cfam_eval_fail; return 1; }
+    violations+="${v:+$v$'\n'}"
+  fi
+
+  # A non-Cloudflare address in the allow-set (doppler_secret.cf_zone_id_prd, the github secrets,
+  # the dns-edit secret) republishes an id or token; it must not republish an OLD id. Any string
+  # leaf of its planned `after` equal to the OLD zone or account id is refused. Scoped to the
+  # allow-set: an out-of-set change is already refused above, and an R2 secret outside it may
+  # legitimately carry the legacy account.
+  if [[ "$_cfam_check_noncf_old" -eq 1 ]]; then
+    v="$(jq -r --argjson spec "$spec" --arg oz "$old_zone" --arg oa "$old_account" '
+      .resource_changes[] | select((.mode // "managed") == "managed")
+      | select($spec[.address] != null) | select(.type | startswith("cloudflare_") | not)
+      | select(.change.after != null)
+      | select([.change.after | .. | strings | ascii_downcase | select(. == $oz or . == $oa)] | length > 0)
+      | "REFUSE \(.address) republishes an OLD zone/account id in its planned value"' "$plan_json")" || { _cfam_eval_fail; return 1; }
     violations+="${v:+$v$'\n'}"
   fi
 

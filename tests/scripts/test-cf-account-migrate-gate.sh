@@ -131,6 +131,34 @@ mutate_plan "$VALID" "$TMP/r3b.json" '(.resource_changes[] | select(.address=="c
 check "row 3b: an in-set list create carrying the OLD account id is refused" 1 "not the new" redirects-dns "$TMP/r3b.json"
 mutate_plan "$VALID" "$TMP/r3c.json" '(.resource_changes[] | select(.address=="cloudflare_ruleset.seo_page_redirects") | .change.after.zone_id) = "0123456789abcdef0123456789abcdef"'
 check "row 3c: an unknown third zone id is refused" 1 "not the new" redirects-dns "$TMP/r3c.json"
+# An id that is absent, null, false or known only after apply is NOT the new id (both shapes:
+# a zone-bound ruleset and an account-bound list).
+SPR="cloudflare_ruleset.seo_page_redirects"; LGL="cloudflare_list.legal_redirects"
+set_after() { # <out> <address> <after-jq> [<after_unknown-jq>]
+  local u="${4:-}"; [[ -n "$u" ]] || u='{}'
+  mutate_plan "$VALID" "$1" "(.resource_changes[] | select(.address==\"$2\") | .change) |= (.after = $3 | .after_unknown = $u)"
+}
+set_after "$TMP/r3d.json" "$SPR" '{}'
+check "row 3d: an in-set zone create with zone_id ABSENT is refused" 1 "$SPR carries an id that is not the new" redirects-dns "$TMP/r3d.json"
+set_after "$TMP/r3e.json" "$SPR" '{zone_id:null,account_id:null}'
+check "row 3e: an in-set zone create with zone_id null is refused" 1 "$SPR carries an id that is not the new" redirects-dns "$TMP/r3e.json"
+set_after "$TMP/r3f.json" "$SPR" '{zone_id:false}'
+check "row 3f: an in-set zone create with zone_id false is refused" 1 "$SPR carries an id that is not the new" redirects-dns "$TMP/r3f.json"
+set_after "$TMP/r3g.json" "$SPR" '{}' '{zone_id:true}'
+check "row 3g: an in-set zone create whose zone_id is known only after apply is refused" 1 "known only after apply" redirects-dns "$TMP/r3g.json"
+# Synthetic: the unknown marker refuses on its own, even beside a new-looking value.
+set_after "$TMP/r3g2.json" "$SPR" "{zone_id:\"$NZ\"}" '{zone_id:true}'
+check "row 3g2: an after_unknown id marker is refused on its own" 1 "known only after apply" redirects-dns "$TMP/r3g2.json"
+set_after "$TMP/r3h.json" "$LGL" '{}'
+check "row 3h: an in-set account create with account_id ABSENT is refused" 1 "$LGL carries an id that is not the new" redirects-dns "$TMP/r3h.json"
+set_after "$TMP/r3i.json" "$LGL" '{account_id:null}' '{account_id:true}'
+check "row 3i: an in-set account create whose account_id is known only after apply is refused" 1 "known only after apply" redirects-dns "$TMP/r3i.json"
+# A non-Cloudflare allow-set address must not republish an OLD id (the job's check_ids and the
+# variables.tf validations stop it upstream; this is the gate's own refusal).
+set_after "$TMP/r3j.json" doppler_secret.cf_zone_id_prd "{name:\"CF_ZONE_ID\",value:\"$OZ\"}"
+check "row 3j: doppler_secret.cf_zone_id_prd planned with the OLD zone id is refused" 1 "republishes an OLD zone/account id" redirects-dns "$TMP/r3j.json"
+set_after "$TMP/r3j2.json" doppler_secret.cf_zone_id_prd "{name:\"CF_ZONE_ID\",value:\"$NZ\"}"
+check "row 3j2: doppler_secret.cf_zone_id_prd planned with the NEW zone id passes" 0 "verdict=PASS" redirects-dns "$TMP/r3j2.json"
 
 # Row 4: a create outside every allow-set.
 mutate_plan "$VALID" "$TMP/r4.json" '.resource_changes += [{address:"cloudflare_load_balancer.app[0]",mode:"managed",type:"cloudflare_load_balancer",change:{actions:["create"],before:null,after:{zone_id:"'"$NZ"'"}}}]'
@@ -141,6 +169,12 @@ mutate_plan "$VALID" "$TMP/r5.json" '.resource_changes += [{address:"cloudflare_
 check "row 5: an R2 bucket update is refused" 1 "outside the redirects-dns allow-set" redirects-dns "$TMP/r5.json"
 mutate_plan "$VALID" "$TMP/r5b.json" '.resource_changes += [{address:"cloudflare_r2_bucket.workspaces_luks_header",mode:"managed",type:"cloudflare_r2_bucket",change:{actions:["no-op"],before:{account_id:"'"$OA"'"},after:{account_id:"'"$OA"'"}}}]'
 check "row 5b: an R2 bucket planned as no-op on the legacy account passes" 0 "verdict=PASS" redirects-dns "$TMP/r5b.json"
+# The R2 carve-out is the whole cloudflare_r2_* family (the same predicate as the forget script and
+# the completion predicate), not the bucket type alone.
+mutate_plan "$VALID" "$TMP/r5c.json" '.resource_changes += [{address:"cloudflare_r2_bucket_cors.state",mode:"managed",type:"cloudflare_r2_bucket_cors",change:{actions:["no-op"],before:{account_id:"'"$OA"'"},after:{account_id:"'"$OA"'"}}}]'
+check "row 5c: another cloudflare_r2_* type planned as no-op on the legacy account passes" 0 "verdict=PASS" redirects-dns "$TMP/r5c.json"
+mutate_plan "$VALID" "$TMP/r5d.json" '.resource_changes += [{address:"cloudflare_r2_bucket_cors.state",mode:"managed",type:"cloudflare_r2_bucket_cors",change:{actions:["update"],before:{account_id:"'"$OA"'"},after:{account_id:"'"$OA"'"}}}]'
+check "row 5d: a cloudflare_r2_* change outside the allow-set is still refused" 1 "outside the redirects-dns allow-set" redirects-dns "$TMP/r5d.json"
 
 # Row 8: forget.
 mutate_plan "$VALID" "$TMP/r8.json" '(.resource_changes[] | select(.address=="cloudflare_list.www_canonical") | .change.actions) = ["forget"]'
@@ -203,6 +237,15 @@ check "row 9c-3: a pre-plan state the physical-id check cannot evaluate is refus
 # A delete of a github secret outside a replace stays refused.
 jq -c '(.resource_changes[] | select(.address=="github_actions_secret.cloudflare_api_token_pages") | .change.actions) = ["delete"]' "$TMP/zr.json" > "$TMP/zrdel.json"
 check "zone-rest: a bare delete of a mutable secret is refused" 1 "REFUSE" zone-rest "$TMP/zrdel.json" "$TMP/zr-state.json"
+# G2: a BARE delete of the declared replace target, carrying replace_by_request and the right
+# physical id. The destroy arm exempts the replace set and the reason/physid arms are satisfied,
+# so only the class arm's replace clause refuses it (M-replace-class below).
+jq -c '(.resource_changes[] | select(.address=="doppler_secret.cf_api_token_dns_edit") | .change.actions) = ["delete"]' "$TMP/zr.json" > "$TMP/zrg2.json"
+check "row G2: a bare delete of the declared replace target (replace_by_request, right id) is refused" 1 "(class replace) planned with actions [\"delete\"]" zone-rest "$TMP/zrg2.json" "$TMP/zr-state.json"
+jq -c '(.resource_changes[] | select(.address=="doppler_secret.cf_api_token_dns_edit") | .change.actions) = ["create","delete"]' "$TMP/zr.json" > "$TMP/zrcbd.json"
+check "zone-rest: the declared replace planned create-before-destroy passes" 0 "verdict=PASS" zone-rest "$TMP/zrcbd.json" "$TMP/zr-state.json"
+jq -c '(.resource_changes[] | select(.address=="github_actions_secret.cloudflare_account_id_pages") | .change.after) = {secret_name:"CLOUDFLARE_ACCOUNT_ID_PAGES",plaintext_value:"'"$OA"'"}' "$TMP/zr.json" > "$TMP/zrold.json"
+check "zone-rest: a github secret republishing the OLD account id is refused" 1 "github_actions_secret.cloudflare_account_id_pages republishes an OLD" zone-rest "$TMP/zrold.json" "$TMP/zr-state.json"
 
 # ── -target / -replace generation from the single list ─────────────────────────────────────
 tg="$(cf_account_migrate_targets redirects-dns)"
@@ -249,6 +292,48 @@ jq -c '(.resource_changes[] | select(.address=="github_actions_secret.cloudflare
 check "zone-rest: a replace of a mutable secret is refused" 1 "REFUSE" zone-rest "$TMP/zrrep.json" "$TMP/zr-state.json"
 gate_mutate_and_check "M-id: neutering the new-id check admits row 3" \
   's|_cfam_check_ids=1|_cfam_check_ids=0|' cf_account_migrate_gate redirects-dns "$TMP/r3.json"
+# The pre-review id check defaulted an absent id to the new one; restoring that reads row 3d as a pass.
+# shellcheck disable=SC2016 # sed expressions match literal gate text
+gate_mutate_and_check "M-id-absent: dropping the 'at least one NEW id' clause admits an absent zone_id (row 3d)" \
+  's|          or (\$z != \$nz and \$a != \$na))|          )|' cf_account_migrate_gate redirects-dns "$TMP/r3d.json"
+# shellcheck disable=SC2016 # sed expressions match literal gate text
+gate_mutate_and_check "M-id-unknown: dropping the after_unknown clause admits row 3g2" \
+  's|^          (\$u.zone_id == true) or (\$u.account_id == true)$|          false|' cf_account_migrate_gate redirects-dns "$TMP/r3g2.json"
+gate_mutate_and_check "M-noncf-old: neutering the non-Cloudflare old-id check admits row 3j" \
+  's|_cfam_check_noncf_old=1|_cfam_check_noncf_old=0|' cf_account_migrate_gate redirects-dns "$TMP/r3j.json"
+# shellcheck disable=SC2016 # sed expressions match literal gate text
+gate_mutate_and_check "M-replace-class (G2): neutering the replace clause admits a bare delete of the replace target" \
+  's|(\$cls == "replace" and .change.actions != \["delete","create"\] and .change.actions != \["create","delete"\])|($cls == "replace" and false)|' \
+  cf_account_migrate_gate zone-rest "$TMP/zrg2.json" "$TMP/zr-state.json"
+# Inverse direction: narrowing the R2 carve-out back to the bucket type must REFUSE row 5c.
+r2m="$TMP/mutated-r2.sh"
+sed 's/select(.type | startswith("cloudflare_r2_") | not)/select(.type != "cloudflare_r2_bucket")/' "$GATE" > "$r2m"
+r2out="$(bash -c "source '$PREAMBLE'; source '$r2m'; cf_account_migrate_gate redirects-dns '$TMP/r5c.json'" 2>&1)"; r2rc=$?
+if cmp -s "$r2m" "$GATE"; then fail "M-r2-prefix: the mutation did not land" 1 ""
+elif [[ "$r2rc" -eq 1 && "$r2out" == *"cloudflare_r2_bucket_cors.state carries an id that is not the new"* ]]; then
+  pass "M-r2-prefix: narrowing the R2 carve-out to the bucket type refuses row 5c (the prefix is load-bearing)"
+else fail "M-r2-prefix: narrowing the R2 carve-out did not change row 5c" "$r2rc" "$r2out"; fi
+# The imports-file seam: in a tree where the committed imports file is reachable, an override
+# naming another file is ignored, so a forged literal cannot rubber-stamp row 10's id.
+SEAM="$TMP/seam-tree"; mkdir -p "$SEAM/tests/scripts/lib" "$SEAM/apps/web-platform/infra" "$SEAM/forged"
+cp "$GATE" "$PREAMBLE" "$SEAM/tests/scripts/lib/"
+cp "$IMPORTS" "$SEAM/apps/web-platform/infra/cf-account-migration-imports.tf"
+first_id="$(head -1 "$imports_tsv" | cut -f2)"
+sed "s|\"${first_id}\"|\"${NZ}/ffffffffffffffffffffffffffffffff\"|" "$IMPORTS" > "$SEAM/forged/imports.tf"
+seam_run() { # <gate-copy>: grade row 10 with CFAM_IMPORTS_FILE pointing at the forged file
+  CFAM_IMPORTS_FILE="$SEAM/forged/imports.tf" bash -c "source '$PREAMBLE'; source '$1'; cf_account_migrate_gate redirects-dns '$TMP/r10.json'" 2>&1
+}
+seam_out="$(seam_run "$SEAM/tests/scripts/lib/cf-account-migrate-gate.sh")"; seam_rc=$?
+if cmp -s "$SEAM/forged/imports.tf" "$IMPORTS"; then fail "imports seam: the forged file equals the committed one (fixture did not land)" 1 ""
+elif [[ "$seam_rc" -eq 1 && "$seam_out" == *"differs from the committed literal"* && "$seam_out" == *"ignoring CFAM_IMPORTS_FILE"* ]]; then
+  pass "imports seam: an override naming a forged imports file is ignored where the committed file is reachable"
+else fail "imports seam: a forged imports file was honoured" "$seam_rc" "$seam_out"; fi
+# shellcheck disable=SC2016 # sed expression matches literal gate text
+sed 's|^if \[\[ -n "\${CFAM_IMPORTS_FILE:-}" && -e |if false \&\& [[ -e |' "$SEAM/tests/scripts/lib/cf-account-migrate-gate.sh" > "$SEAM/tests/scripts/lib/seam-mut.sh"
+seam_mut_out="$(seam_run "$SEAM/tests/scripts/lib/seam-mut.sh")"; seam_mut_rc=$?
+if cmp -s "$SEAM/tests/scripts/lib/seam-mut.sh" "$GATE"; then fail "M-imports-seam: the mutation did not land" 1 ""
+elif [[ "$seam_mut_rc" -eq 0 ]]; then pass "M-imports-seam: without the guard the forged literal passes row 10 (the guard is load-bearing)"
+else fail "M-imports-seam: removing the guard did not admit the forged literal" "$seam_mut_rc" "$seam_mut_out"; fi
 gate_mutate_and_check "M-pure: neutering the pure-import check admits row 9" \
   's|_cfam_check_pure=1|_cfam_check_pure=0|' cf_account_migrate_gate redirects-dns "$TMP/r9.json"
 gate_mutate_and_check "M-literal: neutering the literal check admits row 10" \
@@ -268,6 +353,6 @@ gate_mutate_and_check "M-evalfail: the jq-error refusal is load-bearing (a check
 
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 47 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 47)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 68 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 68)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]
