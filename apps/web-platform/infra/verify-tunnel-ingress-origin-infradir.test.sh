@@ -165,7 +165,7 @@ g3fail() { echo "FAIL: $1"; sed 's/^/    /' "$G3/out" | tail -8; fails=1; }
 g3row() { if eval "$2"; then g3pass "$1"; else g3fail "$1"; fi; }
 CFG_URL="accounts/${NEW_ACCT}/cfd_tunnel/${NEW_TUN}/configurations"
 # The must-PASS predicate, reused by the mutation rows: green AND the read went to the TF-output account + tunnel.
-p_reads_soleur_tunnel() { [[ "$G3RC" -eq 0 ]] && grep -qF "$CFG_URL" "$G3/curl.log"; }
+p_reads_soleur_tunnel() { if [[ "$G3RC" -eq 0 ]] && grep -qF "$CFG_URL" "$G3/curl.log"; then return 0; fi; return 1; }
 
 # Must-PASS: all three correct rules + the catch-all, deploy-status 200.
 cfg "tcp://10.0.1.30:5000"; conns 1

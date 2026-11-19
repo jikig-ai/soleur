@@ -332,9 +332,12 @@ p_sol_policy() {
 }
 p_sol_app() { # <tf> <app-name> <host> <duration>
   local b; b="$(block_of "$1" cloudflare_zero_trust_access_application "$2" | tr -d '\n')"
-  [[ -n "$b" ]] && grep -qE "account_id[[:space:]]*=[[:space:]]*local\.cf_soleur_account_id" <<<"$b" \
-    && grep -qF "domain           = \"$3.\${var.app_domain_base}\"" <<<"$b" \
-    && grep -qE "session_duration[[:space:]]*=[[:space:]]*\"$4\"" <<<"$b" && ! grep -qE '(^|[^_])policies[[:space:]]*=' <<<"$b"
+  [[ -n "$b" ]] || return 1
+  grep -qE "account_id[[:space:]]*=[[:space:]]*local\.cf_soleur_account_id" <<<"$b" || return 1
+  grep -qF "domain           = \"$3.\${var.app_domain_base}\"" <<<"$b" || return 1
+  grep -qE "session_duration[[:space:]]*=[[:space:]]*\"$4\"" <<<"$b" || return 1
+  if grep -qE '(^|[^_])policies[[:space:]]*=' <<<"$b"; then return 1; fi
+  return 0
 }
 p_sol_precond() { local b; b="$(block_of "$1" cloudflare_zero_trust_access_policy deploy_service_token_soleur)"; grep -qF 'length(local.deploy_service_token_ids_soleur) > 0' <<<"$b" && grep -qF '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' <<<"$b"; }
 INC_DEPLOY='local\.deploy_service_token_ids_soleur'
