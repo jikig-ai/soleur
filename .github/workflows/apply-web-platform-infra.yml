@@ -4446,20 +4446,7 @@ jobs:
   # of state this job planned a bare create the gate accepts plus an attachment replace that detaches
   # the sole copy. A future recut is a new reviewed PR (#6931), never a dispatch. The steps after the
   # first are kept, unreachable, so the suites that pin them stay meaningful. HISTORICAL below.
-  #
-  # Selected by `-f apply_target=workspaces-luks-recut` (#6855, #6812). A scoped `terraform
-  # -replace=hcloud_volume.workspaces_luks` (+ its attachment) that DESTROYS the dead-man-orphaned
-  # LUKS volume (Hetzner id 106406962, already crypto_LUKS, holding the operator-ACCEPTED-discarded
-  # 2026-07-20 27-min window) and creates a genuinely RAW replacement with the SAME name — so the
-  # existing cutover resolves the new device by name (workspaces-luks-cutover.yml queries the Hetzner
-  # API `?name=soleur-web-platform-data-luks`), hits the raw→luksFormat arm, and copies from the
-  # then-serving plaintext /mnt/data. UNLIKE workspaces-luks-cutover (an ADDITIVE first provision, un-gated), THIS
-  # is DESTRUCTIVE on sole-copy data, so it carries an `environment:` reviewer gate — the sole human
-  # authorization (DP-11 F8) — plus a typed confirm token. The passphrase is REUSED (never re-minted);
-  # the sourced workspaces_luks_recut_gate ABORTS unless the plan is EXACTLY {volume REPLACE +
-  # attachment CREATE} with the then-serving plaintext volume/attachment + web-1 + passphrase all
-  # untouched. NO [ack-destroy] bypass. Zero downtime (then): /mnt/data served from the untouched
-  # /dev/sdb throughout; attach/detach is a hot Hetzner-API operation.
+  # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §workspaces_luks_recut
   workspaces_luks_recut:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'workspaces-luks-recut'
     runs-on: ubuntu-24.04
