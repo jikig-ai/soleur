@@ -17,6 +17,32 @@ lane: cross-domain
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). (No `spec.md` exists for this branch; the one-shot
 path went straight to plan.)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-19
+**Sections enhanced:** 5 (Research Insights, Observability, Test Scenarios, Acceptance Criteria, Sharp Edges)
+**Agents used:** `soleur:engineering:review:agent-native-reviewer`, `soleur:engineering:review:observability-coverage-reviewer`,
+`soleur:engineering:review:test-design-reviewer`. The fan-out was right-sized to the two-file change, per the brief.
+The skill's "run every agent" breadth was not used, and no external research was needed (no new library or API).
+The hard gates 4.6 to 4.13 were run directly: all pass or skip. 4.9 (UI), 4.10 (store), 4.11 (guard) and 4.13 (task)
+do not trigger.
+
+### Key Improvements
+
+1. Observability now cites its layers (layer 2 Sentry mirror, layer 6 CI log) and names where the failure cause is
+   discriminated (the exception message, distinct per stage in `server/egress-forwarder.ts`). No new field, per T4.
+2. Test design: a new mutation (`!readRegistration?.registered`) gives row 5 a mutant that only it kills, and row 5
+   now asserts "exactly once". The TDD order is corrected: rows 2 to 4 are absence checks proven by mutations, and
+   every mutation is run, not only the first three.
+3. Recorded why the GitHub-read-tools silence in the failure state is deliberate, so a later reviewer does not move the
+   line into `githubReadPromptSuffix`.
+
+### New Considerations Discovered
+
+- Sentry reaches a person for this op only through its default new-issue notification; there is no dedicated alert rule.
+- Verified live: the forwarder has exactly one spawn call site (`server/cc-dispatcher.ts`), and every cited issue or
+  PR state matches the plan.
+
 ## Overview
 
 When a workspace has Agent web access turned on but the per-session egress forwarder fails to start, the Command Center
@@ -80,7 +106,7 @@ one CTO clause correction folded in (rows L1 to L3).
    ```
 
    The two existing lines stay as they are. `test/cc-github-read-prompt.test.ts` pins
-   `/WEB_EGRESS_PROMPT_ADDENDUM\}` : ""\) \+\s+githubReadPromptSuffix/`, so nothing may go between those terms.
+   ``/WEB_EGRESS_PROMPT_ADDENDUM\}` : ""\) \+\s+githubReadPromptSuffix/``, so nothing may go between those terms.
    Also update the two existing comments that list what the degraded state does, so they stay true: the one above
    `systemPrompt:` ("a spawn-degraded session keeps WebFetch disallowed and gets no addendum claiming egress") and the
    block comment above the spawn ("the session degrades to zero-egress (`webEgress` stays undefined → no proxy env,
@@ -148,6 +174,13 @@ the grep authority). The owner-facing indicator (#12572) is a different property
 - `test/egress-audit-agent-surface-absence.test.ts` scans `cc-dispatcher.ts` with `/egress[-_]?audit/i`. The new
   const and comment do not match.
 
+**States considered and left alone (agent-native review, deepen pass).** In the failure state the GitHub read tools are
+still registered while the read addendum is absent (it is gated on a live forwarder). That is deliberate (#12469): the
+credential deny census is not applied, so `gh` works and must not be called broken, and the tools describe themselves.
+Do not "fix" it by moving the new line into `githubReadPromptSuffix` (ruled against in T1-r). The line is decided per
+cold dispatch (one Query), so it cannot go stale inside a Query; a conversation resumed into a new cold dispatch whose
+earlier history shows successful `WebFetch` calls is exactly the case the line corrects.
+
 **Learnings applied.**
 
 - `knowledge-base/project/learnings/2026-05-05-baseline-prompt-must-declare-capabilities-or-model-fabricates-missing-tools.md`:
@@ -211,22 +244,22 @@ error_reporting:
 
 failure_modes:
   - mode: forwarder spawn fails for an entitled session (the state this line describes)
-    detection: in-surface Sentry event op "web-egress-forwarder-spawn" emitted from the dispatch process that builds the prompt; whether the line was appended follows from it (the flag is set only in that catch)
-    alert_route: Sentry issue to the operator
+    detection: 'layer 2 (pino to Sentry mirror; reportSilentFallback(err, ...) captureException), emitted in-surface by the dispatch process that builds the prompt; whether the line was appended follows from it (the flag is set only in that catch). The cause is in the exception message, which server/egress-forwarder.ts makes distinct per stage: "egress gateway unreachable at ..." (gateway-side start), an fs error with the token path redacted (token write), "egress forwarder did not report a bound port" or "exited before bind (code N)" (bind)'
+    alert_route: Sentry issue (default new-issue notification; no dedicated alert rule)
   - mode: line appended to a session whose forwarder started (flag set outside the catch)
     detection: unit test in test/cc-dispatcher-real-factory.test.ts (spawn-OK case asserts the line is absent) on every CI run
-    alert_route: red CI check on the PR
+    alert_route: layer 6 (workflow run log; the CI test job fails with the vitest error on the PR)
 
 logs:
   where: Sentry (web-platform) and the app's pino logs shipped to Better Stack
   retention: Sentry plan retention; Better Stack plan retention
 
 discoverability_test:
-  command: grep -o 'op: "web-egress-forwarder-spawn"' apps/web-platform/server/cc-dispatcher.ts
+  command: grep -o web-egress-forwarder-spawn apps/web-platform/server/cc-dispatcher.ts
   expected_output: web-egress-forwarder-spawn
 ```
 
-The probe was run on this branch before finalizing and printed `op: "web-egress-forwarder-spawn"`.
+The probe was run on this branch before finalizing and printed `web-egress-forwarder-spawn`.
 
 ## Scope Check
 
@@ -279,7 +312,7 @@ The probe was run on this branch before finalizing and printed `op: "web-egress-
       session; an entitled support-persona session.
 - [ ] AC6: the existing #12469-suite case `entitled + DEGRADED forwarder` keeps every current assertion (tool list,
       read `ADDENDUM_HEAD` absent, no "GitHub tools are unavailable", `forwarderLive` `false`) and also asserts that the
-      line is present. The push-suite degraded case is unchanged.
+      line appears exactly once (`split(LINE_HEAD)` has length 2). The push-suite degraded case is unchanged.
 - [ ] AC7: the spawn-failure case's built `systemPrompt` contains `failed to start` and `` `WebFetch` is unavailable ``
       and does not match `` /WebFetch`? (is|are) (still )?available/ ``.
 - [ ] AC8: from `apps/web-platform`,
@@ -333,7 +366,7 @@ spawn-failure case is already the no-repo case. Use a local `LINE_HEAD = "## Web
 3. Given an unentitled session, then the spawn is not called and `LINE_HEAD` is absent.
 4. Given an entitled support-persona session, then the spawn is not called and `LINE_HEAD` is absent.
 5. Given an entitled session with a public repo connected, when the spawn rejects, then the line is present, and the
-   tool registration is unchanged from today. Done by adding `expect(prompt()).toContain(LINE_HEAD)` to the existing
+   tool registration is unchanged from today. Done by adding `expect(prompt().split(LINE_HEAD)).toHaveLength(2)` to the existing
    #12469-suite case `entitled + DEGRADED forwarder` without removing any of its assertions (CTO T3-r2: the push-suite
    copy is not added).
 
@@ -349,8 +382,15 @@ and `test/egress-audit-agent-surface-absence.test.ts` already scans `cc-dispatch
 | Gate the append on `webEgressEntitled` alone | 2 (spawn OK), 4 (support persona with the grant) |
 | Gate the append on `!webEgress` alone | 3 (unentitled), 4 |
 | Reword the const to claim access ("`WebFetch` is still available") | 1 |
+| Gate the append on `!readRegistration?.registered` | 5 only (row 1 has no registered tools, so it stays green) |
 
-Write rows 1 to 5 first and see them fail (`cq-write-failing-tests-before`), then make the production change.
+Order of work (`cq-write-failing-tests-before`): rows 1 and 5 are presence checks and must fail before the change. Rows
+2 to 4 are absence checks that pass before the change, so they are proven only by the mutations: after the change is
+GREEN and committed, apply EVERY mutation in the table, one at a time, run the suite, confirm the named rows red, and
+restore with `git restore apps/web-platform/server/cc-dispatcher.ts`. Running them in a `scripts/soleur-sandbox.sh` copy
+instead of the live tree is also fine. Note: `vi.clearAllMocks` keeps mock implementations in vitest 4 and
+`mockSpawnEgressForwarder` is never reset, so rows 1, 2 and 4 each set the spawn mock themselves (the existing cases
+already do); row 3 relies on the spawn not being called.
 
 ## Sharp Edges
 
@@ -362,6 +402,8 @@ Write rows 1 to 5 first and see them fail (`cq-write-failing-tests-before`), the
   that turns entitlement on with a bare `vi.fn()` spawn mock now gets the line, because `fwd.token` throws into the
   catch. Plan review found none that byte-pins the prompt today; AC8 runs every one of them, so do not trust a
   hand-written list. Fix any newly pinned prompt there rather than loosening the new test.
+- The line is decided once per cold dispatch (Query construction). There is no mid-session re-spawn, so the line
+  cannot go stale within a Query, and a warm turn never re-evaluates it.
 - Keep "egress audit" spellings out of the new const and its comment (`egress-audit-agent-surface-absence.test.ts`).
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the
   threshold will fail `deepen-plan` Phase 4.6. Fill it before requesting deepen-plan or `soleur:work`.
