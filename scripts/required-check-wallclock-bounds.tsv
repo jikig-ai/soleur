@@ -51,7 +51,7 @@
 # ROW SEED (2026-11-19, tenant-integration-required, #12755): the 300 s PR
 # bound mis-seeded the check's bimodal latency. Probe dry-run
 # 2026-11-19T11:02Z, last ~30 completed+success ci.yml runs per surface
-# (755 qualifying samples, 0 failed check-runs reads;
+# (755 qualifying samples, 0 failed/empty check-runs reads;
 # sentinel drift=46676c5b3076ed42ea8133c737b3b44cdc06bf2d):
 # PR p90 915 s (n=26, p50 51, p90 dur 21) / merge_group p90 70 s (n=30,
 # p50 50, p90 dur 21). The population is bimodal: 23/26 PR samples at
@@ -59,8 +59,8 @@
 # suite's needs-chain wait (suite ~835-910 s, aggregator ~20 s later),
 # not queue congestion — same-run independent siblings stayed <=355 s.
 # merge_group skips the suite (tenant=false), so its bound stays 180.
-# Seed = next-minute ceiling of measured p90 -> 960/180; margin 0.30
-# unchanged.
+# Seed = next-minute ceiling of measured p90 -> 960 (next-minute of
+# 915) / 180 (unchanged MQ bound); margin 0.30 unchanged.
 #
 # Blank lines and #-comments are ignored. A row with an unparsable number or a
 # wrong column count is a cannot-establish error in the probe, never a silent

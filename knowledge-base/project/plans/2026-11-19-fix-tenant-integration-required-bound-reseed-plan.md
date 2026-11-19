@@ -61,6 +61,9 @@ required population with a structurally bimodal latency profile.
   ::error::wallclock p90 breach: 'tenant-integration-required' (pull_request) p90=915s > bound 300s x (1+0.30)
   ```
 
+  (Commit-time re-verification 11:02Z, same window: identical except PR
+  p50=51s — diagnostic column only; p90/duration unchanged.)
+
 - The check's own execution is ~21s at p90. The PR-surface bound of 300s was
   seeded at #11774 before the window contained a path-gated heavy suite run;
   the brief's alternative hypothesis (queue-side wait vs execution-side
@@ -408,7 +411,7 @@ seed block), matching the 2026-11-17 shape:
 # ROW SEED (tenant-integration-required): re-measured 2026-11-19T<HH:MM>Z
 #   pull_request: n=<n> p90=<p90>s duration_p90=<d>s -> bound 960
 #   merge_group:  n=<n> p90=<p90>s duration_p90=<d>s -> bound 180 (unchanged)
-#   sentinel: <commit sha of the measurement script at measure time>
+#   sentinel: <flagged-set drift sha1 (`drift=<sha1>`) from the probe report>
 #   note: bimodal latency — slow mode = tenant-integration suite wait
 #   (needs-chain), not queue congestion; see runbook Measured history.
 ```
@@ -517,9 +520,9 @@ None — planning artifacts only (this plan + `specs/feat-one-shot-tenant-p90-bo
   `awk -F'\t' '$1=="tenant-integration-required"{print $2,$3,$4}' scripts/required-check-wallclock-bounds.tsv`
   prints `960 180 0.30` (literal tabs in the file; re-run this exact command
   — verified pre-plan it prints `300 180 0.30` today).
-- [ ] **AC-3 (provenance).** `grep -c 'ROW SEED (tenant-integration-required)' scripts/required-check-wallclock-bounds.tsv` ≥ 1 and the comment records the commit-time measurement fields (n, p90, duration_p90, sentinel sha).
+- [ ] **AC-3 (provenance).** `grep -c 'ROW SEED (2026-11-19, tenant-integration-required' scripts/required-check-wallclock-bounds.tsv` ≥ 1 and the comment records the commit-time measurement fields (n, p90, duration_p90, sentinel sha).
 - [ ] **AC-4 (runbook).**
-  `grep -c 'tenant-integration-required.*bound-row re-seed' knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md`
+  `grep -c 'tenant-integration-required.*PR bound re-seed' knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md`
   ≥ 1 under `## Measured history`, and the bullet names the bimodal finding +
   the sibling-check discriminator.
 - [ ] **AC-5 (invariant, not proxy).** Post-edit dry-run on the merge head:
