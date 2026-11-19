@@ -13,6 +13,41 @@ brand_survival_threshold: aggregate pattern
 
 # fix(infra): re-home the registry/deploy/ssh tunnel hosts into the Soleur Cloudflare account
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-19. **Inputs:** plan-review (DHH, Kieran, code-simplicity, CTO devex), a
+scoped advisor consult with two CTO rulings, and a deepen fan-out (architecture-strategist,
+security-sentinel, observability-coverage-reviewer, terraform-architect against the pinned 4.52.7
+provider schema and source, spec-flow-analyzer, a verify-the-negative grep pass). Halt gates 4.5, 4.55,
+4.6, 4.7, 4.8, 4.10, 4.11 and 4.12 pass; ADR-329 is free on `origin/main` and every pushed branch.
+
+### Key Improvements
+
+1. **The registry token would never have reached Doppler.** `replace_triggered_by` does not fire on a
+   create, and `ignore_changes = [value]` hid the repoint. The plan now drops `ignore_changes` (in-place
+   update, no `[ack-destroy]`); the #4492 "secret empty after refresh" claim was shown false from the
+   provider's read code.
+2. **Pinned-schema attribute list** for every `_soleur` block: account-scoped apps and policies,
+   `self_hosted` app type, registry `origin_request`, the tunnel name the census looks up, and the
+   deploy policy taking the token UUID.
+3. **Release re-runs serialized** around the shared draft tag, newest deploy arm first, run list
+   rebuilt at execution time, and this PR's own merge release named as the run that proves the marker.
+4. **Hidden consumers repointed:** the 15-minute connector census and all six `ci_ssh_token_replace`
+   literals; expected-red list for the merge→Phase-5 window.
+5. **Security hardening:** body capture through the script's single EXIT-trapped temp file, marker
+   fields validated against closed sets, secrets on stdin, idempotent mint with cleanup, Access policy
+   parity test, and the ack gate extended to the registry and ci_ssh policies.
+6. **Discoverability probe now passes pre-merge** (preflight Check 10 runs at ship); the live edge
+   check moved to a post-merge acceptance criterion. Failure modes now cite observability layers.
+
+### New Considerations Discovered
+
+- Merging this PR triggers four expected reds (infra apply, pipeline-fix apply, its own release and
+  deploy arm) plus a census issue until web-2 is reborn.
+- A revert PR cannot roll back a target-scoped apply; rollback before Phase 5 is a targeted destroy.
+- The old zone's purge date is not exposed by the API; once purged, the old addresses on the push
+  `-target` list break every push apply, which bounds the teardown follow-up.
+
 ## Overview
 
 Every Web Platform Release push run since 18:15Z on 2026-11-18 has failed at the zot mirror step's
@@ -44,7 +79,7 @@ Pages secrets, `cf_zone_id`/`cf_account_id`, and teardown of the old-account cop
 | #12937: "a tunnel outage (530) looks like this" (job's diagnosis) | Edge answered **403 Cloudflare Error 1000** (DNS points to prohibited IP) on `registry.`/`ssh.`; `deploy.` is **NXDOMAIN**. | Classifier gains `edge-error-<NNNN>`, `host-nxdomain`, `tunnel-down` (Phase 2). |
 | Brief: tunnel slice can move by changing `var.cf_zone_id`/`var.cf_account_id` | 47 / 20 references; changing them moves every zone resource (#12931 scope) | New committed `locals` + new `_soleur` addresses (CTO Item 2). |
 | Brief: the push apply carries the whole slice | Push `-target` list includes tunnel, config, deploy/ssh apps + policies, `ci_ssh` token, `cloudflare_record.deploy/ssh`; **omits** every registry address (they are in `OPERATOR_APPLIED_EXCLUSIONS`, `plugins/soleur/test/terraform-target-parity.test.ts` registry block) | New registry addresses ride the merge apply's `-target` list; old ones stay excluded (CTO Item 2 amendment). |
-| `tunnel.tf` comment: `-replace` of `registry_push` token re-writes Doppler | `doppler_secret.registry_push_access_token_*` carry `ignore_changes = [value]`, so a new token does **not** reach Doppler | `replace_triggered_by` on the new token + comment fix. |
+| `tunnel.tf` comment: `-replace` of `registry_push` token re-writes Doppler | `doppler_secret.registry_push_access_token_*` carry `ignore_changes = [value]`, so a new token does **not** reach Doppler | Drop `ignore_changes = [value]` so the repoint is an in-place update; `replace_triggered_by` does not fire on a create (deepen, Terraform source). |
 | `deploy` service token is Terraform-managed | Hand-minted (`removed {}` block in `tunnel.tf`; `local.deploy_service_token_ids` pins `d9204def…`); read from GitHub repo secrets, Doppler `soleur-infra-privileged/prd`, Doppler `soleur/prd_terraform` (TF var feeding `server.tf` `push-infra-config.sh` local-exec) | Mint in the new account via API; write every copy; hash-equality check. |
 | Verify step proves the tunnel | `verify-tunnel-ingress-origin.sh` reads tunnel id from state address `…tunnel_cloudflared.web` and `CF_ACCOUNT_ID` from Doppler (old account); never checks `registry.` | Repoint to the new address, read account id from a TF output, add `registry.`. |
 | 16:33Z `supabase-ref-resolver` failure may be a separate defect | Same incident: `api.soleur.ai` in the new zone was scanner-created 16:03Z and only hand-fixed to an unproxied CNAME at 17:09:57Z; the resolver's `dig CNAME` fallback could not see `*.supabase.co` at 16:34Z. Every run since 18:15Z passes both Supabase validation steps. | Not separate. No new issue filed. Recorded in Root Cause. |
@@ -67,7 +102,8 @@ Live state now:
 - `https://registry.soleur.ai/v2/` and `https://ssh.soleur.ai/` → 403, Cloudflare **Error 1000**,
   no `cf-access-*` header.
 - `deploy.soleur.ai` → NXDOMAIN at 1.1.1.1 and 8.8.8.8.
-- `app.soleur.ai` → fine. It is a proxied A record to web-1 and does not use the tunnel.
+- `app.soleur.ai` → fine. It is a proxied A record to web-1 with a `cloudflare_load_balancer "app"`
+  overlay whose pool origin is an IP (`dns.tf`, `cloudflare-lb.tf`); neither uses the tunnel.
 
 The old account still holds the tunnel `soleur-web-platform` (`fc4509ed-91fd-4b9a-b613-6de8e649b8d7`)
 and its 3 Access apps: Registry Push (CI), SSH (CI runner), Deploy Webhook. The tunnel ingress is
@@ -116,7 +152,13 @@ account and zone sit beside the untouched old-account addresses. The connector r
     operator enables Zero Trust (Free plan) in the dashboard. If Cloudflare asks for a payment method,
     that is a money decision and needs an explicit operator go.
 <!-- lint-infra-ignore end -->
-0.3 The agent verifies both, read-only: `/user/tokens/verify` is active; GETs on new-account
+0.3 The agent also reads the new zone's bot settings (Bot Fight Mode can challenge `deploy.` before
+    Access) and records the token's permission list (`GET /user/tokens/<id>`) for the PR body; after
+    0.2, Access: Organizations Read is removed again (least privilege; the token also reaches
+    `pull_request` plan runs in `infra-validation.yml`). The `cf-token-scope` skill reads only
+    `CF_ACCOUNT_ID` (old account, `cf-token-scope.sh` `ACCT_SECRET`), so it cannot verify this
+    widening; these GETs are the authority.
+    The agent verifies both, read-only: `/user/tokens/verify` is active; GETs on new-account
     `cfd_tunnel`, `access/apps`, `access/service_tokens` and `access/organizations` return
     `success:true`. Record the outputs in the PR body.
 
@@ -137,13 +179,34 @@ account and zone sit beside the untouched old-account addresses. The connector r
     - Add `cloudflare_zero_trust_access_application.{deploy,ssh,registry}_soleur`,
       `cloudflare_zero_trust_access_policy.{deploy_service_token,ci_ssh_service_token,registry_push_service_token}_soleur`,
       `cloudflare_zero_trust_access_service_token.{ci_ssh,registry_push}_soleur` and
-      `cloudflare_notification_policy.service_token_expiry_soleur`, all on `local.cf_soleur_account_id`.
-      Mirror the attributes of the old blocks: session duration, `app_launcher_visible`, decision
-      `non_identity`, and exactly one `include { service_token = [...] }`.
+      `cloudflare_notification_policy.service_token_expiry_soleur`. Apps **and** policies all use
+      `account_id = local.cf_soleur_account_id` (the old ones use `zone_id`; an app/policy scope
+      mismatch fails at the API, and Phase 0.1 grants account-level Access). Attributes to copy, from
+      the pinned 4.52.7 schema and the old blocks (deepen, Terraform review):
+      - tunnel: `name = "soleur-web-platform"` (names are unique per account; the census looks it up by
+        name), `secret = random_id.tunnel_secret_soleur.b64_std` with `byte_length = 32`,
+        `config_src = "cloudflare"`;
+      - config: literal `ingress_rule` blocks (not `dynamic`; `tunnel-origin-relative-ingress.test.sh`
+        parses literal blocks), and on the `registry.` rule
+        `origin_request { connect_timeout = "5s"  no_happy_eyeballs = true }`;
+      - apps: `type = "self_hosted"` for all three (no `tcp` type exists; `ssh` is browser-rendered),
+        `name`, `domain`, `session_duration` 24h deploy / 15m ssh / 15m registry; do not set
+        `app_launcher_visible` (the old blocks do not) or the app's `policies` attribute;
+      - policies: `application_id`, `precedence = 1`, `decision = "non_identity"`, exactly one
+        `include { service_token = [...] }`, `name`; the deploy policy's include takes the token's UUID
+        `id`, not its `client_id` (`<hex>.access`);
+      - tokens: `name`, `lifecycle { create_before_destroy = true }`;
+      - notification policy: `alert_type = "expiring_service_token_alert"`, `name`, `description`,
+        `enabled`, `email_integration { id = var.cf_notification_email }`.
     - Repoint `doppler_secret.registry_push_access_token_{id,secret}` values to `…registry_push_soleur`
-      and add `lifecycle { replace_triggered_by = [cloudflare_zero_trust_access_service_token.registry_push_soleur] }`.
-      Keep `ignore_changes = [value]`.
-    - Fix the comment that claims `-replace` of the token rewrites Doppler.
+      and **remove** `ignore_changes = [value]`, so the merge apply updates them in place. Terraform's
+      `replace_triggered_by` fires only when the referenced resource is updated or replaced, never on its
+      create, so the CTO-Item-2 mechanism would leave the old token in Doppler `prd`. Dropping
+      `ignore_changes` is safe: the provider's read never touches `client_secret`, so a Terraform-created
+      token keeps its secret in state across refreshes (empty only after an import). Optionally keep
+      `replace_triggered_by` for future rotations, with a comment saying it does not fire on create.
+    - Fix the `tunnel.tf` comments: the one claiming `-replace` of the token rewrites Doppler, and the
+      #4492 one claiming `client_secret` reads empty after create (true only after import).
     - Repoint `output "tunnel_token"` and `output "ci_ssh_access_service_token_client_{id,secret}"` to
       the `_soleur` resources. Add `output "cf_tunnel_id"`, `output "cf_tunnel_account_id"`
       (= `…tunnel_cloudflared.web_soleur.account_id`, not the bare local: a constant-valued output
@@ -151,7 +214,8 @@ account and zone sit beside the untouched old-account addresses. The connector r
       `output "cf_tunnel_zone_id"` (= `cloudflare_record.deploy_soleur.zone_id`, read by Guard 4).
     - Leave the old blocks untouched (CTO Item 2: no forget, no destroy in this PR).
 1.2 `apps/web-platform/infra/dns.tf`: add `cloudflare_record.{deploy,ssh,registry}_soleur` with
-    `zone_id = local.cf_soleur_zone_id`, CNAME to `${…web_soleur.id}.cfargotunnel.com`, proxied,
+    `zone_id = local.cf_soleur_zone_id`, CNAME `content` (not the deprecated `value`) =
+    `${…web_soleur.id}.cfargotunnel.com`, proxied,
     `ttl = 1`. Leave the old three untouched.
 1.3 `apps/web-platform/infra/server.tf` (the `tunnel_token = …` line in the `hcloud_server.web` cloud-init
     render): change it to `cloudflare_zero_trust_tunnel_cloudflared.web_soleur.tunnel_token`. web-1 and
@@ -173,7 +237,12 @@ account and zone sit beside the untouched old-account addresses. The connector r
     `include[0].service_token` to `$ids` and emits a count the gate reads. A delete, or a second include
     block, stays `deploy_policy_unsafe`. The old address must still plan as no change, or the gate
     reds. Add rows to `tests/scripts/test-deploy-access-token-forget.sh` (or a sibling suite) per the
-    Guard 2 matrix.
+    Guard 2 matrix. The same branch covers `registry_push_service_token_soleur` and
+    `ci_ssh_service_token_soleur` (security review: the old registry policy was operator-applied; under
+    1.4-1.5 any merged PR could change the new one), each with its own committed token reference.
+    Add a static policy-parity test over `tunnel.tf`: each `_soleur` policy references its own `_soleur`
+    app, has exactly one include holding only its own `_soleur` token, contains no
+    `any_valid_service_token` or `everyone`, and session durations stay 24h/15m/15m.
 1.7 `apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh`:
     - read the tunnel id from `terraform output -raw cf_tunnel_id` and the account from
       `terraform output -raw cf_tunnel_account_id`, not from Doppler `CF_ACCOUNT_ID`;
@@ -189,7 +258,8 @@ account and zone sit beside the untouched old-account addresses. The connector r
       and exits 0, "Falling back to operator sync", leaving the old pair in Doppler with nothing red).
 1.9 `verify-tunnel-ingress-origin.sh`: when the data-plane probe fails, read the tunnel's connection
     count from the CF API and print `SOLEUR_TUNNEL_VERIFY cause=no-connector tunnel=<id> connections=0`
-    (or `cause=<other measured cause>`), write a one-paragraph explanation to `$GITHUB_STEP_SUMMARY`
+    (or `cause=<other measured cause>`), feed the cause into the apply job's failure email (else it sends
+    the generic "may be un-applied" text), write a one-paragraph explanation to `$GITHUB_STEP_SUMMARY`
     when the cause is `no-connector` (expected before the connector re-bake; see #12937), then **still
     exit non-zero**. No zero-connector pass path is
     added: a dead connector on a future apply must stay red (CTO ruling, fork 1, rejecting the advisor's
@@ -197,9 +267,12 @@ account and zone sit beside the untouched old-account addresses. The connector r
 
 #### Phase 2 — Make the cause visible (classifier + marker)
 
-2.1 `scripts/check-cloudflare-token-drift.sh` `access_probe()`: write the response body to a
-    `mktemp` file capped at 64 KiB instead of `/dev/null`, and delete it in the same function. Never
-    print the body.
+2.1 `scripts/check-cloudflare-token-drift.sh` `access_probe()`: capture the body of the uncredentialed
+    control probe only, into one global `PROBE_BODY` file created once and freed by the existing
+    `_tmpfile_cleanup` EXIT trap, truncated before each probe exactly as `PROBE_HDR` is (the script's
+    L835-849/L1282 comments reject per-call `mktemp`+`rm`: it leaks on a signal). Cap it with
+    `--max-filesize 65536` and treat curl rc 63 as "body truncated, read what was written", not as
+    unreachable. Never print the body; derive the cause only from captured `1[0-9]{3}` digits.
     `verify_access_pair()` control ladder:
     - curl exit 6 → `host-nxdomain` (previously folded into `host-unreachable`). Today
       `access_probe` discards curl's rc (`(( rc != 0 )) && PROBE_CODE=000`) and the ladder grades `000`
@@ -215,19 +288,29 @@ account and zone sit beside the untouched old-account addresses. The connector r
       for `<base>`; compare public NS with the Terraform zone (#12931)".
     - new helper `zot_bridge_marker <stage> <verdict> <cause> <host> <rc>` prints exactly
       `SOLEUR_ZOT_BRIDGE stage=<listener|login|push> verdict=<v> cause=<c> host=<h> rc=<n> runbook=knowledge-base/engineering/operations/runbooks/zot-registry-revert.md`
-      (the `runbook=` field mirrors `SOLEUR_GHCR_PUSH_FAILED`). An unknown
+      (the `runbook=` field mirrors `SOLEUR_GHCR_PUSH_FAILED`). Every field is validated against its own
+      closed set or pattern (stage/verdict/cause closed sets, host `^[a-z0-9.-]+$`, rc `^[0-9]+$`); a
+      field that fails prints `invalid`, so CR/LF, `::` or U+2028 cannot forge a workflow command or log
+      line (Guard 1 rows). An unknown
       cause prints `cause=unknown`. The line carries no token ids, secrets or bodies (CTO Item 7).
 2.3 `.github/actions/cf-tunnel-registry-bridge/action.yml`: in both failure branches (listener never
     bound; docker login failed), print the marker once to stderr through the helper.
-2.4 `.github/workflows/reusable-release.yml` mirror failure path: print the same marker, and append
-    the identical line to the notify-ops email body.
+2.4 `.github/workflows/reusable-release.yml` mirror failure path: print the same marker, and pass it to
+    the notify-ops email as a step output re-validated against the marker grammar (the email body is
+    built from an allow-list). Add an emission-site test modelled on
+    `plugins/soleur/test/reusable-release-push-failed-marker.test.sh` covering `action.yml` and
+    `reusable-release.yml`.
 2.5 Tests: `scripts/check-cloudflare-token-drift.test.sh` uses `MOCK_HTTP_BODY` and `MOCK_CURL_EXIT=6`
     rows. `scripts/zot-mirror-diagnosis.test.sh` keeps the cause-set ⇔ remedy-set equality and adds
     marker field-order and unknown-cause rows. Both follow Guard 1.
 2.6 `.github/workflows/scheduled-terraform-drift.yml`: add an alerting step (not an apply
     preflight) for the zone that carries the tunnel hostnames (`local.cf_soleur_zone_id`). If its
     `status != active`, or public NS (DoH 1.1.1.1) ≠ the zone's `name_servers`, it files or updates one
-    deduped `ci/tunnel-zone-authority` issue. The old `var.cf_zone_id` mismatch stays #12931's
+    deduped `ci/tunnel-zone-authority` issue. Follow the workflow's existing shape: `gh label create
+    … || true` before filing, a dedupe query with a stated failure disposition that passes
+    `scripts/lint-gh-dedupe-shape.py`, a close arm when the zone is healthy again, and an `unavailable`
+    outcome (DoH failure, or the token cannot read the zone) that files under the same label with
+    `state=unavailable` rather than going nowhere. The old `var.cf_zone_id` mismatch stays #12931's
     (Guard 4).
 
 #### Phase 3 — Credentials and DNS hygiene (agent, one script, one operator go)
@@ -238,7 +321,14 @@ stage verifying before the next. **Sequencing:** 3.1 runs before the commit that
 `local.deploy_service_token_ids_soleur`; until that commit lands, the PR's validation plan is expected
 red on the UUID precondition, so run 3.1 as soon as Phase 0 is done.
 
-3.1 Mint the deploy service token in the new account through the API with the widened token. Write the
+Secret handling for the whole script: values go on stdin (`gh secret set NAME` without `--body`;
+Doppler with the value on stdin, never in argv) with stdout to `/dev/null` (Doppler's set prints the
+remaining secrets); the Cloudflare bearer header goes through `curl --config -` as `access_probe`
+does; sha256 digests are compared, never printed.
+
+3.1 Look the deploy token up by name first (reuse it, or delete a stray from an earlier attempt), then
+    mint it in the new account through the API with the widened token. If any later write in 3.2 fails,
+    delete the minted token by id so a re-run leaves no orphan. Write the
     secret straight to Doppler without printing it. Put its id in `local.deploy_service_token_ids_soleur`
     (committed) before merge.
 3.2 Write the deploy pair to **every** reader, which was enumerated read-only during planning:
@@ -260,21 +350,33 @@ red on the UUID precondition, so run 3.1 as soon as Phase 0 is done.
 
 #### Phase 4 — Merge and merge-apply
 
-4.1 Merge with `[ack-deploy-policy]` and `[ack-destroy]`, each on its own line. The destroy is the
-    `replace_triggered_by` replacement of the two registry `doppler_secret`s. Expect the push apply to
+4.1 Merge with `[ack-deploy-policy]` on its own line (no `[ack-destroy]`: the two registry
+    `doppler_secret`s now update in place). Expect the push apply to
     create every new resource, publish the new CI-SSH pair (step moved, Phase 1.8), then go red at
     "Verify tunnel ingress" with `SOLEUR_TUNNEL_VERIFY cause=no-connector … connections=0`, because the
-    new tunnel has no connector yet. Any other red cause is a real failure. **Nothing may be destroyed
-    except the two Doppler secrets.** Assert this from the plan JSON in the run log.
+    new tunnel has no connector yet. Any other red cause is a real failure. **Nothing may be destroyed.**
+    Assert from the plan JSON in the run log: creates for the `_soleur` slice, `update` (not
+    delete/create) on both `doppler_secret.registry_push_access_token_*`. Record this merge's release
+    run id and deploy-arm run id now: that release also fails (the PR touches `apps/web-platform/**`),
+    and it is the **only** run that carries the new classifier and marker (6.3's re-runs execute their
+    old commits' workflow and scripts). Expected-red list for the merge→Phase-5 window: this apply
+    (verify), `apply-deploy-pipeline-fix.yml` (bridge), the merge commit's release (bridge) and its
+    deploy arm (Slack/email alert), and the repointed connector census (`zero_connectors`, every 15 min,
+    files a `ci/tunnel-connector-drift` issue that Phase 5.3 closes).
 4.2 Confirm from the API that the new tunnel exists with 0 connections. Confirm the 3 Access apps and
     policies exist, and that Doppler `prd` `REGISTRY_PUSH_ACCESS_TOKEN_ID` equals the new token's client
-    id (written by the apply itself via `replace_triggered_by`), and that Doppler `prd_terraform`
+    id (written by the apply's in-place update), and that Doppler `prd_terraform`
     `CI_SSH_ACCESS_TOKEN_ID` equals the new `ci_ssh_soleur` client id (sha256 of the secret matches the
     state output, never printed). Today's step order ("Terraform apply" → "Verify tunnel ingress"
     `if: success()` → "Sync CF Access CI-SSH service token to Doppler" default `success()`) would skip
-    the sync on the expected red, and relying on the Phase 6 re-run to self-heal rests on the unverified
-    claim that the v4 provider keeps `client_secret` readable after refresh (`tunnel.tf` #4492 comment).
-    Phase 1.8 moves the sync, so this check holds on the merge run itself.
+    the sync on the expected red; Phase 1.8 moves the sync, so this check holds on the merge run itself.
+    (The provider keeps `client_secret` in state across refreshes for a Terraform-created token, per its
+    read code, so a later re-run would also have synced it; the move just removes the dependency.)
+4.4 Before Phase 5, an uncredentialed probe of each of `deploy.`, `ssh.` and `registry.` returns a 403
+    carrying the Access stamp (`cf-access-domain`), proving the Access apps sit in front of the hosts
+    before the connector comes up. Also probe `deploy.soleur.ai/hooks/deploy-status` with the
+    `CF_ACCESS_CLIENT_*` pair the deploy arm uses, from a workflow run, so the GitHub secret copy is
+    proven before any release is published (it reaches Access and fails at the origin until Phase 5).
 
 4.3 Second push-triggered apply woken by this diff: `.github/workflows/apply-deploy-pipeline-fix.yml`
     has `apps/web-platform/infra/server.tf` in its `paths:`. Its "CF Tunnel SSH bridge" step runs
@@ -297,7 +399,8 @@ red on the UUID precondition, so run 3.1 as soon as Phase 0 is done.
     for this act; no separate go is asked. Arm a Monitor watch on the run (`hr-dispatch-async-must-arm-watch`).
     The gate allow-set is exactly the four web-2 addresses. Any tunnel diff aborts, which is why Phase 4
     must already be applied.
-5.3 Verify: the new tunnel has ≥1 connection from web-2 (CF API `cfd_tunnel/<id>/connections`).
+5.3 Verify: the new tunnel has ≥1 connection from web-2 (CF API `cfd_tunnel/<id>/connections`), and a
+    green run of the repointed connector census; close the `ci/tunnel-connector-drift` issue it filed.
 
 #### Phase 6 — Prove the fix, then unblock the releases
 
@@ -307,11 +410,25 @@ red on the UUID precondition, so run 3.1 as soon as Phase 0 is done.
 6.2 Run `doppler run -p soleur -c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh`. It
     must report `REGISTRY_PUSH_ACCESS_TOKEN` and `CI_SSH_ACCESS_TOKEN` LIVE in every config.
 6.3 The brief already authorizes these re-runs ("re-run the failed push runs"); no separate go.
-    Re-run the failed push runs in chronological order, each with `gh run rerun <id> --failed`, then
-    its workflow_run deploy arm:
+    Freeze deployable-path merges until 6.4, and rebuild the run list at this point with
+    `gh run list -w web-platform-release.yml -e push --status failure` filtered to runs since
+    2026-11-18T18:15Z (a merge in the window takes the next version ahead of older commits). Before
+    starting, list release drafts and confirm one per tag. "Compute next version" takes the latest
+    published tag plus the bump and every failed run left a draft, so re-runs of different commits
+    (per-commit concurrency, `cancel-in-progress: false`) can collide: start each release re-run only
+    after the previous one's "Finalise release (publish draft)" concludes. Then re-run **only the newest
+    deploy arm** first; older arms then conclude `superseded`, so web-1 swaps once. Re-run each failed
+    push run with `gh run rerun <id> --failed`, oldest first:
     - 44375972612 (`5d4851f7af`, #12935), then deploy arm 44376350232;
     - 44427650817 (`52bf12cc5b`, #12704), then deploy arm 44427961170;
-    - this PR's own merge push run if it failed at the bridge.
+    - this PR's merge release run and deploy arm (ids recorded in 4.1); its log must carry exactly one
+      `SOLEUR_ZOT_BRIDGE` line with a cause from the closed set from the original failure (proof of the
+      marker; the older re-runs cannot prove it).
+    Re-dispatch `apply-deploy-pipeline-fix.yml` only after 6.4 (it redeploys whatever image `/health`
+    reports).
+6.3b Re-read the old zone's status; if Cloudflare has purged it, the old-zone records and tunnel on the
+    push `-target` list will make every push apply try to re-create them, so pull the 7.1 teardown
+    forward.
     `deploy-arm.sh`'s ancestry rule refuses to deploy a SHA older than production, so an
     older re-run concludes "superseded" rather than rolling back. Runs 44348563238 (`7e1d286ebe`) and
     44367779280 (`9577d98f5e`) are ancestors of `52bf12cc5b` and are not re-run.
@@ -364,7 +481,8 @@ red on the UUID precondition, so run 3.1 as soon as Phase 0 is done.
 - `knowledge-base/engineering/architecture/diagrams/model.c4` (tunnel container + Cloudflare system descriptions)
 - `knowledge-base/engineering/operations/runbooks/cloudflare-service-token-rotation.md` (new-account copy list)
 - `knowledge-base/engineering/operations/runbooks/zot-registry-revert.md` ("grep for" section naming
-  `SOLEUR_ZOT_BRIDGE` and `SOLEUR_TUNNEL_VERIFY`; remedies point at `zot_mirror_cause_help`, not copied)
+  `SOLEUR_ZOT_BRIDGE` and `SOLEUR_TUNNEL_VERIFY`, opening with `gh run view <id> --log-failed` piped to
+  `grep -E 'SOLEUR_(ZOT_BRIDGE|TUNNEL_VERIFY)'`; remedies point at `zot_mirror_cause_help`, not copied)
 - `.github/workflows/scheduled-inngest-health.yml` "Census tunnel connectors (ADR-114 I1)" and
   `scripts/tunnel-connector-census.sh`: today they read Doppler `CF_ACCOUNT_ID` (old account) and
   look up `cfd_tunnel?name=soleur-web-platform`, so after Phase 5 they report `zero_connectors` every
@@ -372,9 +490,10 @@ red on the UUID precondition, so run 3.1 as soon as Phase 0 is done.
   literal lives once in the script with a parity test asserting it equals `local.cf_soleur_account_id`.
   Other `CF_ACCOUNT_ID` readers (`cf-lb-overlay.yml`, `scheduled-followthrough-sweeper.yml`,
   `ga-lb-pool-soak-6027.sh`) are zone/LB scope and stay #12931's (noted in the follow-up).
-- `.github/workflows/apply-web-platform-infra.yml` `ci_ssh_token_replace` job: repoint its hard-coded
-  `-replace=…service_token.ci_ssh` to `…ci_ssh_soleur`, or it rotates the dead token and re-syncs the
-  unchanged new pair.
+- `.github/workflows/apply-web-platform-infra.yml` `ci_ssh_token_replace` job: repoint all six hard-coded
+  sites to the `_soleur` addresses (the two `-target` lines, `-replace`, and the blast-radius gate's
+  `REPLACE_TARGET`, policy and token literals), or it rotates the dead token and re-syncs the unchanged
+  new pair.
 - `knowledge-base/operations/expenses.md` (soleur.ai row: Free zone in the Soleur account)
 - `knowledge-base/operations/domains.md` (three tunnel CNAMEs)
 
@@ -446,8 +565,8 @@ red on the UUID precondition, so run 3.1 as soon as Phase 0 is done.
 - ADR-166 and the 2026-08-03 post-mortem: a CI message names only a measured cause. The classifier
   extension measures; it does not guess.
 - ADR-304: connector placement lives on replaceable web-2, and re-bake goes through `web-host-replace`.
-- ADR-154: repair the credential channel. Write-once secrets need explicit re-write; hence
-  `replace_triggered_by`.
+- ADR-154: repair the credential channel. A write-once (`ignore_changes = [value]`) secret never
+  follows its source, so this plan drops `ignore_changes` on the two re-pointed secrets.
 - `2026-07-17-target-scoped-terraform-apply-makes-resource-deletion-a-silent-noop.md`: no deletions
   ride this PR.
 - `2026-11-16-web2-kernel-currency-replace-five-operational-traps.md`: before any mutating dispatch,
@@ -483,7 +602,9 @@ input line and adds no `count`/`for_each`.
   (Phase 5). The old tunnel keeps its connector until then and is retired by the follow-up teardown.
   No step takes down a surface that is up today.
 - **Per-stage verification / rollback:**
-  - Before Phase 5: a revert PR removes the new resources (nothing uses them).
+  - Before Phase 5: forward-only by default. A revert PR alone removes nothing (a target-scoped apply
+    makes deletion a silent no-op, `2026-07-17-target-scoped-terraform-apply-makes-resource-deletion-a-silent-noop.md`);
+    an actual rollback is a targeted `-destroy` dispatch of the `_soleur` addresses behind `[ack-destroy]`.
   - After Phase 5: forward-only, because the old tunnel cannot serve the new zone. A failed web-2 birth
     follows `fresh-host-bootstrap-recovery.md` (re-dispatch `web-host-replace`); web-1 keeps serving
     users throughout.
@@ -506,7 +627,7 @@ input line and adds no `count`/`for_each`.
 ### Apply path
 
 - (b)-shaped, two steps:
-  1. merge-triggered targeted apply (creates only; two Doppler secret replaces behind `[ack-destroy]`);
+  1. merge-triggered targeted apply (creates only, plus two in-place Doppler secret updates);
   2. `web-host-replace web-2` (destroy + create of the cattle standby).
 - Blast radius: web-2 only. Expected window ~10–15 min for the birth.
 
@@ -573,9 +694,6 @@ ADR-329 is authored now as `adopting`. It flips to `accepted` when the teardown 
 - **Doppler branch inheritance:** `REGISTRY_PUSH_ACCESS_TOKEN_*` is written to `prd` root. If any
   `prd_*` branch overrides it with a stale value, the drift detector reports DEAD there. Phase 6.2
   catches this.
-- **Registry Doppler key briefly absent:** the `replace_triggered_by` replace deletes then recreates
-  `REGISTRY_PUSH_ACCESS_TOKEN_*` in `prd`, so the 9 inheriting configs see it missing for seconds.
-  Harmless while releases are already down.
 - **Deploy pair rotation breaks nothing live:** every consumer targets `deploy.soleur.ai`, which is
   NXDOMAIN today.
 - **The merge-apply red is expected.** Phase 4.1 asserts its shape (creates only, plus 2 Doppler
@@ -618,31 +736,33 @@ error_reporting:
 failure_modes:
   - mode: "tunnel hostname record missing or wrong in the authoritative zone (this incident: Error 1000 / NXDOMAIN)"
     detection: "classifier cause edge-error-1000 / host-nxdomain in the release job; scheduled-terraform-drift.yml zone-authority step for the tunnel zone"
-    alert_route: "notify-ops email; deduped ci/tunnel-zone-authority issue"
+    alert_route: "layer 6: workflow run log + ::error:: annotation (release job, notify-ops email); deduped ci/tunnel-zone-authority issue"
   - mode: "tunnel has no connector (web-2 down or not yet reborn)"
     detection: "classifier cause tunnel-down (530 / 1033); verify-tunnel-ingress-origin.sh prints SOLEUR_TUNNEL_VERIFY cause=no-connector tunnel=<id> connections=0 and writes the expected-red explanation to the step summary; tunnel-connector census (repointed)"
-    alert_route: "notify-ops email; failed apply run"
+    alert_route: "layer 6: workflow run log + ::error:: annotation (failed apply run, its failure email); census ci/tunnel-connector-drift issue"
   - mode: "stale registry-push token in Doppler after re-home"
     detection: "token preflight verdict=stale (Access stamp present with credentials) before the mirror"
-    alert_route: "release job warning + notify-ops email"
+    alert_route: "layer 6: workflow run log + ::warning:: annotation (release job) + notify-ops email"
   - mode: "zot down or restarting"
     detection: "SOLEUR_ZOT_DISK zot_restarts / state_status in Better Stack; scheduled-zot-restart-loop.yml"
-    alert_route: "ci/zot-restart-loop issue"
+    alert_route: "layer 3: Vector journald -> Better Stack (SOLEUR_ZOT_DISK); ci/zot-restart-loop issue"
 
 logs:
   where: "GitHub Actions run logs (gh run view <id> --log-failed); Better Stack source soleur-inngest-vector-prd for SOLEUR_ZOT_DISK registry rows"
   retention: "GitHub Actions 90 days; Better Stack per plan retention (archive arm via scripts/betterstack-query.sh)"
 
 discoverability_test:
-  command: "curl -sS -m 10 -o /dev/null -w '%header{cf-access-domain}' https://registry.soleur.ai/v2/"
-  expected_output: "registry.soleur.ai"
+  command: "grep -o -m1 -e SOLEUR_ZOT_BRIDGE scripts/zot-mirror-diagnosis.sh"
+  expected_output: "SOLEUR_ZOT_BRIDGE"
 ```
 
-Baseline at planning time (measured 2026-11-19, curl 8.23): the command prints an empty line, because
-Error 1000 carries no Access stamp. After Phase 6.1 it must print `registry.soleur.ai`: Access's own
-denial page stamps `cf-access-domain` (`check-cloudflare-token-drift.sh` "rejected -> 403, ~39 kB,
-cf-access-aud + -domain"). The command carries no `|`, `$`, `;`, `&`, `<` or `>`, so it passes preflight
-Check 10's shell-active reject (`founder-check.py` `_SHELL_ACTIVE`). `%header{}` needs curl >= 7.84.
+The probe runs at ship time, before merge, so it must pass on the PR's tree: it discovers the marker's
+single emitter (`zot_bridge_marker`), which the PR adds (today it prints nothing). It carries no `|`,
+`$`, `;`, `&`, `<` or `>` (preflight Check 10 `_SHELL_ACTIVE`). The live edge check moved to a Phase 6
+acceptance criterion: `curl -sS -m 10 -o /dev/null -w '%header{cf-access-domain}'
+https://registry.soleur.ai/v2/` prints `registry.soleur.ai` (measured empty on 2026-11-19, curl 8.23,
+because Error 1000 carries no Access stamp; Access's denial page stamps `cf-access-domain` per
+`check-cloudflare-token-drift.sh` "rejected -> 403, ~39 kB, cf-access-aud + -domain").
 
 ## Encryption Posture
 
@@ -704,7 +824,7 @@ Must-PASS: a stamped 403 with a ~39 kB Access page body is `gated`, and an unsta
 
 ### Guard 2 — deploy-policy gate covers the new policy address
 
-**Property.** No plan may create, delete or re-include the deploy Access policy at either address
+**Property.** (Extended in deepen to the registry and ci_ssh `_soleur` policies, same rules.) No plan may create, delete or re-include the deploy Access policy at either address
 unless it is the single acknowledged create of `…deploy_service_token_soleur` with exactly one include
 block equal to the committed id list.
 
@@ -833,8 +953,8 @@ path.
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines.
 - Recommendation: single PR. Justification: the subsystem count is tripped by the parity, gate and
   doc files any infra change must carry. A natural seam exists (Phase 2 observability alone), but it
-  is not taken. The marker must ship with the fix, so the Phase 6 re-runs exercise and prove it, and the
-  brief scopes one PR. Phase 2 commits are ordered first so they can be split out if review asks.
+  is not taken. The marker must ship with the fix: this PR's own merge release (which fails at the bridge
+  before Phase 5) is the run that exercises and proves it, and the brief scopes one PR. Phase 2 commits are ordered first so they can be split out if review asks.
 
 ## Acceptance Criteria
 
@@ -844,8 +964,7 @@ path.
 
 - [ ] The PR's validation plan (`infra-validation.yml`, full-root `-refresh=false`) differs from its
       recorded baseline ("14 to add / 3 to change / 6 to destroy") by exactly the `_soleur` creates
-      plus the two `doppler_secret.registry_push_access_token_*` replaces: deltas only, no new destroy
-      outside those two. The authoritative check is the merge push apply's targeted plan JSON (post-merge
+      plus in-place updates of the two `doppler_secret.registry_push_access_token_*`: deltas only, no new destroy. The authoritative check is the merge push apply's targeted plan JSON (post-merge
       AC). The old tunnel, Access, record and token addresses show no new change.
 - [ ] `local.deploy_service_token_ids_soleur` holds the id minted in Phase 3.1. The UUID precondition
       passes.
@@ -865,15 +984,15 @@ path.
 - [ ] The 6 scanner A records are absent in zone `951ce525…` at merge time. The CF API returns 0 A
       records for `registry`/`ssh`.
 - [ ] PR body first line answers "does merging this alone mutate production?": yes, the merge-triggered
-      targeted apply creates the `_soleur` slice and replaces two Doppler secrets.
+      targeted apply creates the `_soleur` slice and updates two Doppler secrets in place.
 - [ ] PR body: `Ref #12937` (not `Closes`; the bridge is restored only post-merge by Phases 5-6) and
       `Ref #12931`, the Phase 0.3 verification output, and the expected red shape of the merge apply
       (`SOLEUR_TUNNEL_VERIFY cause=no-connector`).
 
 ### Post-merge (operator-approved stages)
 
-- [ ] The merge push apply created all `_soleur` resources and destroyed nothing but the two Doppler
-      secrets. Asserted from the run's plan JSON.
+- [ ] The merge push apply created all `_soleur` resources, updated the two registry Doppler secrets
+      in place and destroyed nothing. Asserted from the run's plan JSON.
 - [ ] `apply-deploy-pipeline-fix.yml` post-Phase-6.1 re-dispatch is green (its merge run is expected
       red at the bridge step).
 - [ ] `web-host-replace web-2` run green. The new tunnel shows ≥1 connection from web-2.
@@ -887,8 +1006,11 @@ path.
 - [ ] `deploy-arm.sh served <newest released sha>` prints `CONTAINED`, and `/health` reports it.
 - [ ] `soleur:postmerge` completed for the `5d4851f7af` merge.
 - [ ] Follow-up teardown issue filed (Phase 7.1). #12931 commented (7.2).
-- [ ] `gh issue close 12937` run only after Phase 6.3's release re-runs are green, with a comment
-      linking the green runs.
+- [ ] `gh issue close 12937` run only after 6.4 (`served` prints `CONTAINED` and `/health` matches),
+      with a comment linking the green runs.
+- [ ] `curl -sS -m 10 -o /dev/null -w '%header{cf-access-domain}' https://registry.soleur.ai/v2/`
+      prints `registry.soleur.ai`.
+- [ ] This PR's merge release log carries exactly one `SOLEUR_ZOT_BRIDGE` line with a closed-set cause.
 
 ## Test Scenarios
 
@@ -927,9 +1049,10 @@ path.
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text,
   or omits the threshold will fail `deepen-plan` Phase 4.6. Fill it before requesting deepen-plan or
   `soleur:work`.
-- `doppler_secret` with `ignore_changes = [value]` never follows its source. Re-homing the token
-  without `replace_triggered_by` leaves the old-account secret in Doppler `prd`. The release would then
-  fail with an Access refusal, and `verdict=stale` would be the only clue.
+- `doppler_secret` with `ignore_changes = [value]` never follows its source, and `replace_triggered_by`
+  does not fire when the referenced resource is created. Re-homing the token while keeping
+  `ignore_changes` leaves the old-account secret in Doppler `prd`; the release would then fail with an
+  Access refusal, and `verdict=stale` would be the only clue.
 - The `web-host-replace` gate aborts on any tunnel diff, so Phase 4 must be applied before Phase 5.
 - Both web-host boot paths (`apply_target=web-host-create` and `web-host-replace`) render the same
   `server.tf` cloud-init, so the `tunnel_token` input change reaches every route that can birth a web
@@ -937,7 +1060,9 @@ path.
 - Do not edit `apps/web-platform/infra/variables.tf` or `zot-registry.tf` in this PR. Either wakes
   `registry-host-replace-dispatch.yml`, and although its render gate makes an unrelated wake a no-op,
   keep the wake set minimal.
-- Re-run order matters only for clarity. `deploy-arm.sh`'s ancestry rule prevents a rollback.
+- Re-run order matters: concurrent release re-runs collide on the shared draft tag (6.3). Deploy-arm
+  order does not risk a rollback (`deploy-arm.sh` ancestry rule), but re-run the newest arm first to
+  swap web-1 once.
 - Before any dispatch, confirm via `gh run view --json jobs` that no earlier queued run applied
   (learning 2026-11-16).
 

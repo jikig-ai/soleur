@@ -16,8 +16,9 @@ No `spec.md` exists for this branch (one-shot entry), so `lane: cross-domain` is
 
 ## Phase 1: Terraform tunnel slice
 
-- [ ] 1.1 `tunnel.tf`: locals, `_soleur` tunnel, config, Access apps, policies, tokens,
-      notification policy, `replace_triggered_by` on the registry Doppler secrets, outputs.
+- [ ] 1.1 `tunnel.tf`: locals, `_soleur` tunnel (name `soleur-web-platform`), config, account-scoped
+      Access apps and policies, tokens, notification policy, outputs; drop `ignore_changes = [value]` on
+      the registry Doppler secrets; fix the two stale comments.
 - [ ] 1.2 `dns.tf`: three `_soleur` CNAMEs.
 - [ ] 1.3 `server.tf`: point the cloud-init `tunnel_token` input at the new tunnel.
 - [ ] 1.4 Push-plan `-target` list gains every new address.
@@ -28,7 +29,9 @@ No `spec.md` exists for this branch (one-shot entry), so `lane: cross-domain` is
 - [ ] 1.8 Move the CI-SSH Doppler sync ahead of the verify step; fail on empty outputs when this run
       creates `ci_ssh`.
 - [ ] 1.9 Verify script prints `SOLEUR_TUNNEL_VERIFY cause=…` and still exits non-zero.
-- [ ] 1.10 Run every guard suite listed under Files to Edit; fix any that go red.
+- [ ] 1.10 Repoint the connector census (workflow + script) and the six `ci_ssh_token_replace`
+      literals; add the Access policy-parity test.
+- [ ] 1.11 Run every guard suite listed under Files to Edit; fix any that go red.
 
 ## Phase 2: Make the cause visible
 
@@ -56,10 +59,13 @@ No `spec.md` exists for this branch (one-shot entry), so `lane: cross-domain` is
 
 ## Phase 4: Merge
 
-- [ ] 4.1 Merge with `[ack-deploy-policy]` and `[ack-destroy]`. Assert the run shape from the plan
-      JSON. Expect a red `SOLEUR_TUNNEL_VERIFY cause=no-connector`.
+- [ ] 4.1 Merge with `[ack-deploy-policy]` (no `[ack-destroy]`). Assert from the plan JSON: creates plus
+      in-place updates of the two registry Doppler secrets. Expect a red
+      `SOLEUR_TUNNEL_VERIFY cause=no-connector`. Record this merge's release and deploy-arm run ids.
 - [ ] 4.2 Check the API and Doppler state after the apply.
-- [ ] 4.3 Check the shape of the `apply-deploy-pipeline-fix.yml` merge run.
+- [ ] 4.3 `apply-deploy-pipeline-fix.yml` merge run is expected red at its bridge step.
+- [ ] 4.4 Uncredentialed probes of the 3 hosts return an Access-stamped 403; deploy-status probe with
+      the GitHub-secret pair reaches Access.
 
 ## Phase 5: Connector re-bake
 
@@ -70,12 +76,15 @@ No `spec.md` exists for this branch (one-shot entry), so `lane: cross-domain` is
 
 ## Phase 6: Prove the fix and unblock releases
 
-- [ ] 6.1 `manual-rerun` apply green; re-dispatch `apply-deploy-pipeline-fix.yml`.
+- [ ] 6.1 `manual-rerun` apply green.
 - [ ] 6.2 Token drift check reports LIVE in every config.
-- [ ] 6.3 Re-run 44375972612 and then 44376350232; re-run 44427650817 and then 44427961170.
+- [ ] 6.3 Freeze deployable merges; rebuild the failed-run list; check drafts (one per tag); re-run
+      releases one at a time oldest first (wait for each to publish), then only the newest deploy arm.
+      Includes 44375972612, 44427650817 and this PR's merge release.
 - [ ] 6.4 `deploy-arm.sh served <sha>` prints `CONTAINED`.
 - [ ] 6.5 Run `soleur:postmerge` for `5d4851f7af`.
-- [ ] 6.6 Close #12937 with a comment linking the green runs.
+- [ ] 6.6 Re-dispatch `apply-deploy-pipeline-fix.yml`; re-read the old zone status.
+- [ ] 6.7 Close #12937 after 6.4, with a comment linking the green runs.
 
 ## Phase 7: Follow-ups
 
