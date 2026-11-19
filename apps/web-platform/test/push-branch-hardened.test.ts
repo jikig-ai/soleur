@@ -100,6 +100,7 @@ vi.mock("../server/git-isolated-push-dir", async (importOriginal) => {
 import { ApprovedCommitUnavailableError, pushBranch } from "../server/push-branch";
 import { GIT_HARDENING_ARGS } from "../server/inngest/functions/_git-hardening";
 import { HARDENED_GIT_ARGS } from "../server/git-hardened-env";
+import { callSites } from "./approval/source-scan";
 
 const git = (cwd: string, ...args: string[]): string =>
   realExec("git", args, { cwd, stdio: "pipe", encoding: "utf8", env: gitFixtureEnv(cwd) }).trim();
@@ -560,9 +561,17 @@ describe("pushBranch hardened", () => {
     });
 
     test("the commit check's lazy import runs INSIDE the try (a rejected import must not leak the directory: the caller holds no handle yet)", () => {
-      // An import() rejection cannot be induced from a test, so the property is pinned on the source text of the one function.
-      const src = readFileSync(join(__dirname, "../server/push-branch.ts"), "utf8");
-      const body = src.slice(src.indexOf("async function checkCommitPresent("), src.indexOf("async function prepareIsolatedPush("));
+      // An import() rejection cannot be induced from a test, so the property is pinned on the source text. Since #12600 the
+      // check runs on the token-free isolated runner, which owns the lazy import (and never rejects).
+      const pb = readFileSync(join(__dirname, "../server/push-branch.ts"), "utf8");
+      const [from, to] = [pb.indexOf("async function checkCommitPresent("), pb.indexOf("async function prepareIsolatedPush(")];
+      expect(from).toBeGreaterThan(-1);
+      expect(to).toBeGreaterThan(from);
+      // D21 (cq-assert-anchor-not-bare-token): a real CALL of the runner inside checkCommitPresent, not a substring a comment satisfies
+      const inCheck = callSites(pb, "server/push-branch.ts", "runIsolatedGitLocal").filter((c) => c.pos > from && c.pos < to);
+      expect(inCheck.length).toBeGreaterThan(0);
+      const src = readFileSync(join(__dirname, "../server/git-isolated-local.ts"), "utf8");
+      const body = src.slice(src.indexOf("export async function runIsolatedGitLocal("), src.indexOf("export type GitObjectType"));
       expect(body.length).toBeGreaterThan(200);
       const tryAt = body.indexOf("try {");
       const importAt = body.indexOf('await import("node:child_process")');
