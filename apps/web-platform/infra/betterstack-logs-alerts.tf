@@ -2658,3 +2658,95 @@ resource "logtail_exploration_alert" "inngest_registry_empty" {
     team_name = var.betterstack_paid_tier ? null : "Your team"
   }
 }
+
+# ── #12585: a granted session's sandboxed network request was denied because its egress is degraded ───────────────
+# WHAT IT DETECTS. server/permission-callback.ts answers the Agent SDK's `SandboxNetworkAccess` request (a sandboxed
+# command dialing a host) and logs EVERY deny as one pino warn row: feature `cc-permissions`, op `sandbox-network-denied`,
+# msg `sandboxed network request denied`, with the extra keys `reason`, `granted` (a JSON boolean: the workspace's web
+# access grant), `matchedEntry` and `subagent`. This alert pages on the degraded case only: `granted` true AND reason
+# `not-entitled` (the grant is on but the session's egress forwarder failed to spawn) or `egress-not-running` (it died
+# mid-session). Normal count is about zero. Every other reason is expected volume and is read on demand: `not-entitled`
+# with granted false is the default posture, the host reasons are the model's own attempts, and `gateway-unverified` is
+# EVERY sandboxed request of an entitled session while the arm ships deny-all (plan row 6').
+#
+# ROW SHAPE: the agent_sandbox_bash_denial shape above (raw.CONTAINER_NAME `soleur-web-platform`, raw.message an OBJECT
+# with the extra keys at top level). `granted` is read with JSONExtractRaw so only the JSON boolean matches (live-probed
+# 2026-11-18: JSONExtractRaw gives `true` for a boolean and `"true"` for a string, while JSONExtractString gives `true`
+# for both). NO host_name conjunct: the signal belongs to every web host. Live-probed 2026-11-18 over the hot window: the
+# predicate runs and counts 0 while the container population counted 682; no row of this op exists before the deploy, so
+# its first real hit is the positive control, and the drift guard evaluates the predicate on fixture rows.
+#
+# Paging semantics are agent_sandbox_bash_denial's (ADR-218): one matching row in the 5-min window alerts, treat_as_zero
+# so the open incident observes recovery; on the free tier the channel is team email only.
+# Both -target= lines are enforced by apps/web-platform/test/infra/sandbox-network-denied-alert.test.sh.
+locals {
+  sandbox_network_degraded_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-web-platform'
+      AND JSONExtractString(raw, 'message', 'feature') = 'cc-permissions'
+      AND JSONExtractString(raw, 'message', 'op') = 'sandbox-network-denied'
+      AND JSONExtractRaw(raw, 'message', 'granted') = 'true'
+      AND JSONExtractString(raw, 'message', 'reason') IN ('not-entitled', 'egress-not-running')
+    GROUP BY time
+  SQL
+
+  sandbox_network_degraded_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/betterstack-log-query.md#standing-alarms-over-this-source-log-content-recurrence-alarms"
+}
+
+resource "logtail_exploration" "sandbox_network_degraded" {
+  name      = "soleur-sandbox-network-degraded-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.sandbox_network_degraded_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "sandbox_network_degraded" {
+  exploration_id = logtail_exploration.sandbox_network_degraded.id
+  name           = "soleur-sandbox-network-degraded-prd"
+
+  # agent_sandbox_bash_denial's values: one row alerts within about a minute, the 5-min window holds ONE incident
+  # across a burst, and 10 quiet minutes auto-resolve it.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 60
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "A workspace with web access turned on ran an agent session whose egress forwarder was not running (reason not-entitled: the forwarder failed to spawn; reason egress-not-running: it died mid-session), so the session has no working web egress. The row is the app container's op=sandbox-network-denied pino warn line with granted=true; it carries only the reason, granted, matchedEntry and subagent, never the host. Correlate with feature=cc-dispatcher op=web-egress-forwarder-spawn and feature=egress-forwarder rows in the same window via the runbook Query block, without SSH. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was fixed. Runbook: ${local.sandbox_network_degraded_runbook_url}"
+  metadata = {
+    runbook = local.sandbox_network_degraded_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}

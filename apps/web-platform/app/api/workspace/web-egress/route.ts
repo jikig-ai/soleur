@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { verifiedUserId } from "@/server/request-auth";
-import { resolveWebEgress } from "@/server/resolve-web-egress";
+import { resolveWebEgress, webEgressReadsOff } from "@/server/resolve-web-egress";
 import {
   setWebEgress,
   WebEgressOwnerDeniedError,
 } from "@/server/set-web-egress";
+import { teardownEgressForwardersForWorkspace } from "@/server/egress-forwarder";
+import { getFreshTenantClient } from "@/lib/supabase/tenant";
+import { resolveCurrentWorkspaceId } from "@/server/workspace-resolver";
 
 // feat-open-web-egress (#9534) — per-workspace "Agent web access" toggle
 // (active-workspace). Cookie-authenticated browser route; the read/write
@@ -41,16 +44,36 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "value_must_be_boolean" }, { status: 400 });
   }
 
+  let workspaceId: string | undefined;
   try {
     // The owner check lives in the SECURITY DEFINER RPC; a non-owner caller
     // raises (P0001) → WebEgressOwnerDeniedError → 403. A genuine infra fault
     // is NOT an authz denial → 500 (so it surfaces in 5xx alerting rather than
     // hiding behind a 403).
-    const webEgress = await setWebEgress(userId, body.value);
+    // #12585 (CTO D1) — resolve the workspace ONCE so the write and the
+    // teardown act on the same one. Turning web access off tears down the
+    // forwarders this process holds for that workspace, marks those
+    // conversations revoked, and bumps the workspace epoch so a spawn still
+    // starting cannot register afterwards (CTO R4). A sandboxed request is
+    // then denied egress-not-running. Not covered: the other web host's
+    // forwarders (revoked by the next-dispatch re-resolve, #12903).
+    workspaceId = await resolveCurrentWorkspaceId(userId, await getFreshTenantClient(userId));
+    const webEgress = await setWebEgress(userId, body.value, workspaceId);
+    if (webEgress === false) teardownEgressForwardersForWorkspace(workspaceId);
     return NextResponse.json({ webEgress });
   } catch (err) {
     if (err instanceof WebEgressOwnerDeniedError) {
+      // No write happened, and a non-owner must not tear down the owner's sessions.
       return NextResponse.json({ error: "not_authorized" }, { status: 403 });
+    }
+    // A toggle-off whose write errored may still have committed (a response lost after
+    // commit), and turning web access off withdraws consent (CTO R4). Re-read the grant
+    // and tear down only when it reads exactly off: a caller who cannot write it (a
+    // non-owner member, or a removed one, #4307) cannot turn a transient fault into a
+    // teardown of the owner's sessions. Any doubt leaves forwarders up; the next
+    // dispatch re-reads the grant.
+    if (body.value === false && workspaceId && (await webEgressReadsOff(userId, workspaceId))) {
+      teardownEgressForwardersForWorkspace(workspaceId);
     }
     return NextResponse.json({ error: "set_failed" }, { status: 500 });
   }

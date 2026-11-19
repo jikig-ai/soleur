@@ -107,6 +107,8 @@ security review (each host is exfiltration surface).
    **Prevention:** existing rule (single-call `cd && cmd` chains) covers
    this; no new rule.
 
+> **Correction 2026-11-18 (#12585):** "with an empty allowlist the SDK's sandbox proxy denies CONNECT to every host" is the outcome, not the mechanism: the proxy asks `canUseTool` (`SandboxNetworkAccess {host}`) for each host and the callback's deny closes it, now via an explicit arm (ADR-278 addendum 2026-11-18).
+
 ## Tags
 
 category: bug-fixes

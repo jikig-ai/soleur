@@ -201,7 +201,12 @@ import {
   resolveWebEgressStrict,
 } from "./resolve-web-egress";
 import {
+  EgressRevokedError,
   egressForwarderWorkspaceId,
+  egressRevocationEpoch,
+  isEgressForwarderLive,
+  isEgressRevoked,
+  markEgressRevoked,
   spawnEgressForwarder,
   teardownEgressForwarder,
 } from "./egress-forwarder";
@@ -603,6 +608,26 @@ const WEB_EGRESS_PROMPT_ADDENDUM =
   "retry them and do not promise the user a retry. If `WebFetch` fails with a " +
   "proxy/connection error mid-session, report it rather than retrying in a " +
   "loop — the session's web access may have been revoked.";
+
+// #12598 — appended ONLY to a Command Center session whose workspace grant is on but which has no live forwarder (the
+// spawn failed). The session then runs as if Agent web access were off, and without this line the prompt says nothing
+// about it, so the agent cannot explain why WebFetch is missing and retries or mis-states what it can do. The line
+// itself makes no GitHub claim (GitHub access differs between the repo-token and no-repo cases, and
+// GH_NO_NETWORK_PROMPT_ADDENDUM covers the latter).
+const WEB_EGRESS_START_FAILED_PROMPT_LINE =
+  "## Web access unavailable in this session\n" +
+  "Your workspace owner enabled Agent web access, but it failed to start for this session, so this " +
+  "session runs as if it were off: `WebFetch` is unavailable and you have no general web access. Do not " +
+  "retry web fetches, and do not try to reach other websites from shell commands (for example with curl). " +
+  "If the user asks for something that needs the web, tell them web access failed to start for this " +
+  "session and that starting a new conversation may restore it, or ask them to paste what you need.";
+
+// #12598 — appended to the line above only when the GitHub read tools are registered (`readRegistration.registered`).
+// Those tools run server-side with the installation token, so a failed forwarder does not affect them. No `gh` claim:
+// `registered` does not prove a sandbox token was minted.
+const WEB_EGRESS_START_FAILED_GITHUB_READ_CLAUSE =
+  "Your read-only GitHub tools (the `github_read_*` and `github_list_*` tools in your tool list) are not affected: " +
+  "use them for questions about the connected repository.";
 
 // feat-reasoning-chat-boxes (#5370) — instructs the Concierge to drive the
 // always-registered narrate/summarize tools. Appended UNCONDITIONALLY (the
@@ -2183,6 +2208,8 @@ export const realSdkQueryFactory: QueryFactory = async (
       });
     }
 
+    // #12585 (CTO R4) — the toggle-off epoch, read before the grant: a toggle-off after this read wins over the spawn.
+    const egressEpochAtGrant = egressRevocationEpoch(activeWorkspaceId);
     // installationId joins the existing Promise.all; all four workspace-keyed
     // consumers now receive the ONE resolved id (no second divergent resolve).
     const [
@@ -3611,8 +3638,9 @@ export const realSdkQueryFactory: QueryFactory = async (
     // before sdkQuery: on ANY failure (token write, bind, gateway-side
     // start) the session degrades to zero-egress (`webEgress` stays
     // undefined → no proxy env, WebFetch stays disallowed, no credential
-    // census change) + Sentry — a dead forwarder must never produce a
-    // session whose CLI env proxies to a refused listener.
+    // census change) + Sentry, plus the failed-to-start prompt line (#12598)
+    // — a dead forwarder must never produce a session whose CLI env proxies
+    // to a refused listener.
     let webEgress:
       | { workspaceId: string; token: string; port: number }
       | undefined;
@@ -3621,6 +3649,7 @@ export const realSdkQueryFactory: QueryFactory = async (
         const fwd = await spawnEgressForwarder(
           args.conversationId,
           activeWorkspaceId,
+          egressEpochAtGrant,
         );
         webEgress = {
           workspaceId: activeWorkspaceId,
@@ -3639,7 +3668,13 @@ export const realSdkQueryFactory: QueryFactory = async (
           "cc-dispatcher: web egress forwarder bound",
         );
       } catch (err) {
-        reportSilentFallback(err, {
+        if (err instanceof EgressRevokedError) {
+          // The owner turned web access off while this spawn was starting: their choice, not a failure.
+          log.info(
+            { feature: "cc-dispatcher", op: "web-egress-forwarder-spawn-revoked", conversationId: args.conversationId, workspaceId: activeWorkspaceId },
+            "cc-dispatcher: web access turned off during forwarder spawn; session proceeds zero-egress",
+          );
+        } else reportSilentFallback(err, {
           feature: "cc-dispatcher",
           op: "web-egress-forwarder-spawn",
           extra: { userId: args.userId, workspaceId: activeWorkspaceId },
@@ -3648,6 +3683,13 @@ export const realSdkQueryFactory: QueryFactory = async (
         });
       }
     }
+    // #12598: the grant is on but this session has no live forwarder. Derived from `webEgress` (not set in the catch) so
+    // it can never coexist with the "Web access enabled" addendum, which gates on the same handle.
+    const webEgressStartFailed =
+      webEgressEntitled && mode.runRepoLifecycle && webEgress === undefined;
+
+    // #12585 — the handle the SandboxNetworkAccess liveness probe closes over (a const: no later reassignment leaks in).
+    const liveEgress = webEgress;
 
     // #4671 / ADR-287 — resolve the WebFetch injection-scan flags ONLY for sessions that
     // actually have web egress (WebFetch is otherwise disallowed), with the dispatch
@@ -3693,6 +3735,11 @@ export const realSdkQueryFactory: QueryFactory = async (
         if (text) githubReadPromptSuffix = `\n\n${text}`;
       }
     }
+    // #12598: the failed-to-start line, plus the read-tools clause when those tools are registered.
+    const startFailedSuffix = webEgressStartFailed
+      ? `\n\n${WEB_EGRESS_START_FAILED_PROMPT_LINE}` +
+        (readRegistration?.registered ? ` ${WEB_EGRESS_START_FAILED_GITHUB_READ_CLAUSE}` : "")
+      : "";
 
     let authProbe: AgentAuthFailureProbe = NOOP_AGENT_AUTH_PROBE;
     try {
@@ -3732,11 +3779,15 @@ export const realSdkQueryFactory: QueryFactory = async (
         // feat-open-web-egress (#9534): the honest-capability addendum is
         // gated on the LIVE forwarder handle, not the resolved entitlement —
         // a spawn-degraded session keeps WebFetch disallowed and gets no
-        // addendum claiming egress.
+        // addendum claiming egress, plus the failed-to-start prompt line
+        // (#12598). That line and githubReadPromptSuffix never both appear
+        // (the suffix needs a live forwarder, the line a missing one); it is
+        // a separate term only to keep the #12469 adjacency pin green.
         systemPrompt:
           effectiveSystemPrompt +
           (webEgress ? `\n\n${WEB_EGRESS_PROMPT_ADDENDUM}` : "") +
-          githubReadPromptSuffix,
+          githubReadPromptSuffix +
+          startFailedSuffix,
         resumeSessionId: safeResumeSessionId,
         // feat-open-web-egress (#9534) — live forwarder handle. Presence IS
         // the entitlement+spawn-verified condition (fail-closed: undefined
@@ -3840,6 +3891,16 @@ export const realSdkQueryFactory: QueryFactory = async (
           // allowlist ({kb-search}) when persona=support (defense-in-depth for a
           // model that emits a non-loaded skill despite the SDK `skills` filter).
           persona: args.persona,
+          // #12585 — the SandboxNetworkAccess arm keys entitlement on the LIVE forwarder handle (CTO F1), re-checked per
+          // request; `liveEgress` is a const so the closure cannot see a later reassignment of `webEgress`.
+          sandboxNetworkEgress: liveEgress
+            ? { isLive: () => isEgressForwarderLive(args.conversationId, liveEgress.token) }
+            : undefined,
+          // Observability only (Sentry `granted` tag, deny copy), never a decision input (CTO T13).
+          // Only a persona that spawns a forwarder (runRepoLifecycle) can be granted; support never is (fix round).
+          webEgressGranted: webEgressEntitled && mode.runRepoLifecycle,
+          // CTO R1 — a toggle-off mid-session reports granted=false (copy and tag), so it neither pages nor says "isn't working".
+          webEgressRevoked: () => isEgressRevoked(args.conversationId),
           deps: ccDeps,
         }),
         // #5772 lever 1 (ADR-070) — opt into the L3 phase-surface hint on the
@@ -4541,6 +4602,32 @@ export async function dispatchSoleurGo(
   }
 }
 
+/**
+ * The warm-dispatch web-egress re-resolve (rationale at its call site in dispatchSoleurGoInner): a DEFINITIVE false
+ * tears the conversation's forwarder down; a read fault leaves it be and mirrors. #12585 (CTO T18): extracted unchanged
+ * so a test can await it and then see the SandboxNetworkAccess arm deny `egress-not-running`. @internal exported for tests.
+ */
+export function reResolveWarmWebEgress(userId: string, conversationId: string): Promise<void> {
+  const fwdWorkspaceId = egressForwarderWorkspaceId(conversationId);
+  if (!fwdWorkspaceId) return Promise.resolve();
+  return resolveWebEgressStrict(userId, fwdWorkspaceId)
+    .then((entitled) => {
+      if (!entitled) {
+        // The grant was withdrawn (possibly on the other web host): mark it revoked so this host's denies read
+        // granted=false with the turned-off copy instead of paging as degraded (fix round, R1).
+        markEgressRevoked(conversationId);
+        teardownEgressForwarder(conversationId);
+      }
+    })
+    .catch((err) => {
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: "web-egress-re-resolve",
+        extra: { userId, conversationId, workspaceId: fwdWorkspaceId },
+      });
+    });
+}
+
 async function dispatchSoleurGoInner(
   args: DispatchSoleurGoArgs,
 ): Promise<void> {
@@ -4845,20 +4932,7 @@ async function dispatchSoleurGoInner(
   // there is no mid-session re-spawn path, so a revoked-then-recovered
   // grant would leave the CLI holding a dead proxy URL with WebFetch
   // still admitted. Only a DEFINITIVE false tears down.
-  const fwdWorkspaceId = egressForwarderWorkspaceId(conversationId);
-  if (fwdWorkspaceId) {
-    void resolveWebEgressStrict(userId, fwdWorkspaceId)
-      .then((entitled) => {
-        if (!entitled) teardownEgressForwarder(conversationId);
-      })
-      .catch((err) => {
-        reportSilentFallback(err, {
-          feature: "cc-dispatcher",
-          op: "web-egress-re-resolve",
-          extra: { userId, conversationId, workspaceId: fwdWorkspaceId },
-        });
-      });
-  }
+  void reResolveWarmWebEgress(userId, conversationId);
 
   // #5340 / #5240 design item #2 — deterministic workspace re-provision on
   // reconnect. After a sandbox/host reclaim the resolved workspace path can be a

@@ -7,6 +7,8 @@ tags: [security-verification, agent-sdk]
 
 # Learning: canUseTool Does Not Cache — Bridge Auth Is a Separate Code Path
 
+> **Scope note — 2026-11-18 (#12585).** This learning covers ordinary tool calls. It does not hold for `SandboxNetworkAccess` on Agent SDK 0.3.321: the SDK's sandbox proxy caches a per-host ALLOW for the whole CLI session and never re-asks that host (a deny is not cached). See ADR-278's 2026-11-18 addendum.
+
 ## Problem
 
 The Agent SDK spike (#876) observed "only 1 canUseTool callback invocation despite 5 tool uses," raising concern that the SDK caches permission decisions per tool name, which would invalidate the canUseTool-based workspace sandbox.
