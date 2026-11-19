@@ -58,7 +58,7 @@ recreate.
 Step 2 ships as two PRs. This one (2a) declares `soleur-bastion` and its gated birth route; the birth
 itself is an owner-authorized dispatch after merge. #12879 (2b) adds the replace route and heartbeat,
 and blocks step 3. The plan is
-`knowledge-base/project/plans/2026-11-17-feat-dedicated-bastion-host-gated-routes-plan.md`; the operator
+`knowledge-base/project/plans/archive/20261119-111207-2026-11-17-feat-dedicated-bastion-host-gated-routes-plan.md`; the operator
 acts are in `knowledge-base/engineering/operations/runbooks/bastion-host.md`.
 
 - **Routes are `apply_target` choices of `apply-web-platform-infra.yml`.** `bastion-host-create` is a
