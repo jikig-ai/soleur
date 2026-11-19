@@ -152,6 +152,16 @@
 #                  also covers two pre-existing staging writes, hence 22->18 and not 22->20. The lib suite is
 #                  18 -> 18 net, the S3 suite 20 -> 18 net.
 #
+#   2026-11-19   #12849 (PR #12934) adds three rows; the step-summary writes in the new
+#                  scripts/lib/serve-soak-evidence.sh go straight to $GITHUB_STEP_SUMMARY (an excluded CI
+#                  sink), so they are not rows.
+#                     1  scripts/lib/serve-soak-evidence.sh -- `rm -rf "$ghome"`, the grader's scratch HOME from
+#                        `mktemp -d -p "${RUNNER_TEMP:-/tmp}"` (mktemp-inherits). RUNNER_TEMP is absolute on a
+#                        hosted runner; the helper is not a test, so assert_fixture_dir is not available to it.
+#                     2  apps/web-platform/infra/lb-weight-gate.test.sh -- FALSE POSITIVES: one is a line of the
+#                        quoted-heredoc workflow-body snapshot (SK_GATE_BODY), the other the same text inside a
+#                        single-quoted `grep -nxF` pattern. Nothing is written. Left as rows, not respelled.
+#
 # A future change that SHRINKS this file deserves the scrutiny a growth would get. From the count
 # alone, a better resolver and a detector that stopped looking are indistinguishable, and across
 # three review rounds every defect found in this rule has been in the shrinking direction.
@@ -223,6 +233,7 @@
 1	apps/web-platform/infra/inngest-wiped-volume-verify.sh
 1	apps/web-platform/infra/inngest-wiped-volume-verify.test.sh
 112	apps/web-platform/infra/key-rotate-workflow.test.sh
+2	apps/web-platform/infra/lb-weight-gate.test.sh
 25	apps/web-platform/infra/lb-weight-gate-with-marker.test.sh
 5	apps/web-platform/infra/luks-monitor.test.sh
 1	apps/web-platform/infra/nic-wait-gate.test.sh
@@ -514,6 +525,7 @@
 2	scripts/lib/git-data-boot-signal-poll.sh
 6	scripts/lib/mutation-harness-controls.sh
 2	scripts/lib/scratch-root.sh
+1	scripts/lib/serve-soak-evidence.sh
 3	scripts/lib/test-affected-derive-cache.sh
 4	scripts/lib/test-contention.sh
 18	scripts/lib/trusted-verdict.test.sh

@@ -55,7 +55,7 @@ SSE_INSTANCE_DONE=0
 # id is read from the anchored gate_fail line; when the wrapper refused before the gate ran it is
 # gate_not_run_<class> (from its marker_source_fail line); `none` when neither line is there.
 sse_gate_chain_mirror() {
-  local f="$1" host="$2" rc="$3" id=none wrap="" l sum="${GITHUB_STEP_SUMMARY:-/dev/null}" floor_d=$((SOAK_FLOOR_S / 86400))
+  local f="$1" host="$2" rc="$3" id=none wrap="" l floor_d=$((SOAK_FLOOR_S / 86400))
   [[ -r "$f" ]] || { echo "::error::§(c) gate chain: the captured gate stderr ($f) is missing - a wiring defect, do not re-dispatch"; return 1; }
   [[ "$rc" =~ ^[0-9]+$ ]] || { echo "::error::§(c) gate chain: gate rc '$rc' is not an integer - a wiring defect, do not re-dispatch"; return 1; }
   [[ "$host" =~ ^[a-z][a-z0-9-]{0,30}$ ]] || host=invalid
@@ -70,15 +70,15 @@ sse_gate_chain_mirror() {
     if [[ "$id" == *_soak_days_below_floor ]]; then
       echo "::error::a configured soak value is below the ${floor_d}-day floor; delete it from Doppler prd (#12933, Operator-authorizes) - the floor cannot be shortened, values may only lengthen it. Never restore the weight by a full-root apply."
     fi
-    printf '### §(c) gate chain soak evidence (refused: sub_condition=%s)\n\n' "$id" >>"$sum" || return 1
+    printf '### §(c) gate chain soak evidence (refused: sub_condition=%s)\n\n' "$id" >>"${GITHUB_STEP_SUMMARY:-/dev/null}" || return 1
   else
-    printf '### §(c) gate chain soak evidence\n\n' >>"$sum" || return 1
+    printf '### §(c) gate chain soak evidence\n\n' >>"${GITHUB_STEP_SUMMARY:-/dev/null}" || return 1
   fi
-  printf '```text\n' >>"$sum" || return 1
-  grep -E "^${SOAK_EV_RE}\$" "$f" >>"$sum" || [[ $? -eq 1 ]] || return 1
-  printf '```\n\n' >>"$sum" || return 1
+  printf '```text\n' >>"${GITHUB_STEP_SUMMARY:-/dev/null}" || return 1
+  grep -E "^${SOAK_EV_RE}\$" "$f" >>"${GITHUB_STEP_SUMMARY:-/dev/null}" || [[ $? -eq 1 ]] || return 1
+  printf '```\n\n' >>"${GITHUB_STEP_SUMMARY:-/dev/null}" || return 1
   if [[ "$rc" -ne 0 ]]; then
-    printf -- '- per-instance soak grader: NOT RUN (gate refused)\n' >>"$sum" || return 1
+    printf -- '- per-instance soak grader: NOT RUN (gate refused)\n' >>"${GITHUB_STEP_SUMMARY:-/dev/null}" || return 1
     return 1
   fi
   return 0
@@ -125,14 +125,14 @@ sse_gate_chain_verify() {
 # _sse_instance_emit <rc|none|interrupted> <VERDICT> [grade-text] — the one verdict line: stderr, plus a fenced copy in
 # the summary (and the grader's own first line in a second fence, when it is verdict-shaped).
 _sse_instance_emit() {
-  local line="SOLEUR_INSTANCE_SOAK host=${SSE_INSTANCE_HOST} grader=${SSE_GRADER_NAME} rc=$1 verdict=$2" sum="${GITHUB_STEP_SUMMARY:-/dev/null}"
+  local line="SOLEUR_INSTANCE_SOAK host=${SSE_INSTANCE_HOST} grader=${SSE_GRADER_NAME} rc=$1 verdict=$2"
   SSE_INSTANCE_DONE=1
   printf '%s\n' "$line" >&2
   # shellcheck disable=SC2016 # the backticks are the markdown fence, not an expansion
-  printf '### per-instance soak grader (serve only)\n\n```text\n%s\n```\n\n' "$line" >>"$sum" || return 1
+  printf '### per-instance soak grader (serve only)\n\n```text\n%s\n```\n\n' "$line" >>"${GITHUB_STEP_SUMMARY:-/dev/null}" || return 1
   if [[ -n "${3:-}" ]]; then
     # shellcheck disable=SC2016 # the backticks are the markdown fence, not an expansion
-    printf '```text\ngrade_text=%s\n```\n\n' "$3" >>"$sum" || return 1
+    printf '```text\ngrade_text=%s\n```\n\n' "$3" >>"${GITHUB_STEP_SUMMARY:-/dev/null}" || return 1
   fi
   return 0
 }
