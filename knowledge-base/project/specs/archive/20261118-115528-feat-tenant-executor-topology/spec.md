@@ -18,7 +18,7 @@ updated: 2026-11-18
 > **Superseded in part (2026-11-18) by ADR-325 (adopting),** `knowledge-base/engineering/architecture/decisions/ADR-325-egress-credential-injection-is-a-property-of-the-hop.md`. The body is left as written on 2026-10-09; lines it overrides carry an inline *[ADR-325]* marker.
 > S3 (#9845) is widened to generic per-host credential injection at the egress hop with approval attachment, and S0 (#9859) Arm D, added after this doc, is now the Cloudflare Sandbox trial (ADR-325 Decisions 2, 5).
 > "Managed vendors: no" (Build vs Adopt, Orchestrator row), NG2's managed-vendor clause and the Cloudflare Sandbox rejection are now a measured contingency: self-run injection on the hop is measured first and a managed platform is the fallback (the Cloudflare trial has not yet run); EU-only is negotiable only when an ADR-325 flip fact holds, that trial has passed and the CLO gates are met (ADR-325 Decisions 2, 3).
-> gVisor per session (#9842) is unchanged (ADR-325 Decision 5); #9842 must re-measure the carrier and ADR-325's measurement criteria 1, 5 and 6 (Decision 1).
+> gVisor per session (#9842) is unchanged (ADR-325 Decision 5); #9842 must re-measure the carrier and ADR-325's measurement criteria 1, 5 and 6 (ADR-325 Decision 1).
 > Sandbox-state descriptions below are as of 2026-10-09; for the current state see ADR-075 and its addenda.
 
 Evidence tags used below: **CONFIRMED** (read in code/vendor doc), **INFERRED**
