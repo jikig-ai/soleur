@@ -96,7 +96,7 @@ jq -n --slurpfile r "$REQ" --arg nz "$NZ" --arg na "$NA" --arg oz "$OZ" --arg oa
        | res($p[0]; $p[1]; (if ($p[0] | startswith("cloudflare_")) then {zone_id: $nz, account_id: $na, content: $s} else {name: "x"} end)) ]
      + [ res("cloudflare_zero_trust_tunnel_cloudflared"; "web"; {account_id: $na, name: "web", content: $s}),
          res("cloudflare_r2_bucket"; "terraform_state_privileged"; {account_id: $oa, name: "b", content: $s}),
-         res("hcloud_server"; "web"; {name: "web-1"}),
+         res("hcloud_server"; "web"; {name: "web-9"}),
          {mode: "managed", type: "cloudflare_record", name: "indexed", instances: [
            {index_key: "a", attributes: {zone_id: $nz, content: $s}}, {index_key: "b", attributes: {zone_id: $nz, content: $s}}]},
          ({module: "module.edge"} + res("cloudflare_ruleset"; "mod"; {zone_id: $nz, content: $s})),

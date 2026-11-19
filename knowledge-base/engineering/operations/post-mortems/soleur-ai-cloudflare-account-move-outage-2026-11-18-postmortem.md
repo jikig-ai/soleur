@@ -31,7 +31,7 @@ User-facing service recovered at 17:15:32Z. Still degraded at the time of writin
 
 ## Symptom
 
-From about 16:24 UTC, soleur.ai, www.soleur.ai and app.soleur.ai returned HTTP 403 (Cloudflare Error 1000, "DNS points to prohibited IP"). Sign-in failed because api.soleur.ai (the Supabase custom domain, which also carries the GitHub OAuth callback) was proxied by Cloudflare and answered 404. Mail records were wrong too. The three Proton DKIM CNAMEs had become proxied (so they returned Cloudflare IPs, and outbound mail likely failed DKIM under `p=reject`). The inbound MX, the SES feedback MX/SPF records and the Resend subdomain DKIM keys were missing.
+From about 16:24 UTC, `soleur.ai`, `www.soleur.ai` and `app.soleur.ai` returned HTTP 403 (Cloudflare Error 1000, "DNS points to prohibited IP"). Sign-in failed because `api.soleur.ai` (the Supabase custom domain, which also carries the GitHub OAuth callback) was proxied by Cloudflare and answered 404. Mail records were wrong too. The three Proton DKIM CNAMEs had become proxied (so they returned Cloudflare IPs, and outbound mail likely failed DKIM under `p=reject`). The inbound MX, the SES feedback MX/SPF records and the Resend subdomain DKIM keys were missing.
 
 ## Incident Timeline
 
@@ -116,7 +116,7 @@ Fixed forward in the new Soleur account; the old zone was only read. Steps: mint
 
 ### Services Impacted
 
-soleur.ai and www.soleur.ai (marketing and docs site), app.soleur.ai (dashboard and health), sign-in through api.soleur.ai (Supabase custom domain, including the GitHub OAuth callback), and email: outbound DKIM (Proton), inbound SES MX, SES feedback MX/SPF and Resend subdomain DKIM. Still degraded and tracked in #12931: legacy-URL and www 301 redirects, the `X-Robots-Tag` rules, and the deploy/ssh/registry tunnel hosts.
+`soleur.ai` and `www.soleur.ai` (marketing and docs site), `app.soleur.ai` (dashboard and health), sign-in through `api.soleur.ai` (Supabase custom domain, including the GitHub OAuth callback), and email: outbound DKIM (Proton), inbound SES MX, SES feedback MX/SPF and Resend subdomain DKIM. Still degraded and tracked in #12931: legacy-URL and www 301 redirects, the `X-Robots-Tag` rules, and the deploy/ssh/registry tunnel hosts.
 
 ### Customer Impact (by role)
 

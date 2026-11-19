@@ -168,7 +168,7 @@ root|cloudflare_record.new_one|cloudflare_record|$NZ|absent
 root|cloudflare_list.new_list|cloudflare_list|null|$NA
 root|cloudflare_r2_bucket.state|cloudflare_r2_bucket|absent|$OA
 root|data.cloudflare_zone.z|cloudflare_zone|$OZ|absent|data
-root|hcloud_server.web["web-1"]|hcloud_server|absent|absent
+root|hcloud_server.web["web-9"]|hcloud_server|absent|absent
 child|module.edge.cloudflare_zero_trust_access_application.app|cloudflare_zero_trust_access_application|$OZ|absent
 child|module.edge.cloudflare_zero_trust_access_service_token.t|cloudflare_zero_trust_access_service_token|absent|$OA
 EOF
@@ -185,7 +185,7 @@ setup_empty_obj() { setup_mixed "$1"; printf '{}\n' >"$1/show.0.json"; }
 setup_no_cf() {
   fx "$1" 3 <<EOF
 root|cloudflare_r2_bucket.state|cloudflare_r2_bucket|absent|$OA
-root|hcloud_server.web["web-1"]|hcloud_server|absent|absent
+root|hcloud_server.web["web-9"]|hcloud_server|absent|absent
 root|data.cloudflare_zone.z|cloudflare_zone|$OZ|absent|data
 EOF
 }
@@ -273,7 +273,7 @@ chk_h1() {
   [[ "$got" == "$H1_RM" ]] || { WHY="rm-args"; return 1; }
   got="$(jq -r 'def mods: ., (.child_modules[]? | mods);
     [.values.root_module | mods | .resources[]? | .address] | unique | join(",")' "$(final_show "$d")")"
-  [[ "$got" == 'cloudflare_list.new_list,cloudflare_r2_bucket.state,cloudflare_record.new_one,data.cloudflare_zone.z,hcloud_server.web["web-1"]' ]] \
+  [[ "$got" == 'cloudflare_list.new_list,cloudflare_r2_bucket.state,cloudflare_record.new_one,data.cloudflare_zone.z,hcloud_server.web["web-9"]' ]] \
     || { WHY="final-state:$got"; return 1; }
   chk_no_leak "$d" || return 1
   chk_no_unexpected "$d" || return 1
