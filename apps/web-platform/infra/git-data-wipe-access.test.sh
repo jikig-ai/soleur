@@ -90,7 +90,7 @@ mkdir -p "$T/cz" "$T/mut" "$T/sim" "$T/specs" "$T/cases" || { printf 'FAIL SETUP
 
 printf '\n=== git-data wipe job census (plan Phase 4/5, Guard Contract 1-8) ===\n\n'
 
-MUTANT_FLOOR=184
+MUTANT_FLOOR=185
 cat > "$T/wfsim.py" <<'PYEOF'
 #!/usr/bin/env python3
 # wfsim: a tiny GitHub-Actions expression engine, the wipe-job census, a step-by-step simulator that runs the
@@ -1771,7 +1771,8 @@ MUTANTS = {
     "g1-7b-using-node": [F("  using: composite", "  using: node20")],
     "g1-8-empty-list": [S("wipe_loader", "id: wipe_loader", "id: wipe_loadx")],
     "g1-9-legacy-input": [S("wipe_loader", "doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}", "doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}")],
-    "g1-10-mask-blob": [F("while IFS= read -r line; do", "for line in $payload; do")],
+    "g1-10-mask-blob": [F("\n        while IFS= read -r line; do", "\n        for line in $payload; do")],
+    "g1-10b-narrow-mask-blob": [F("\n          while IFS= read -r line; do", "\n          for line in $payload; do")],
     "g1-11-variant-reordered-lc-all": [R("wipe_reread", r'(exec env -i )(PATH="\$PATH" HOME="\$HOME") (RUNNER_TEMP="\$RUNNER_TEMP") (GITHUB_WORKSPACE="\$GITHUB_WORKSPACE") (GITHUB_OUTPUT="\$GITHUB_OUTPUT") (VOLUME_ID="\$VOLUME_ID") \\\n', r'\1VOLUME_ID="$VOLUME_ID" \5 \4 \3 LC_ALL="C" \2 \\\n')],
     # Guard 2
     "g2-2-host-after-detach": [{"op": "move_after", "step": "wipe_host_assert", "after": "wipe_detach"}],
@@ -1954,7 +1955,7 @@ declare -A WANT=(
   [g1-1-env-u]=2 [g1-2-cred-on-envi]=2 [g1-3-second-bare-step]=4 [g1-4a-remote-uses-before-loader]=1 [g1-4b-remote-uses-after-loader]=1
   [g1-4c-install-version]=2 [g1-4d-install-sha]=2 [g1-5a-printenv]=1 [g1-5b-export-p]=1 [g1-5c-declare-x]=1 [g1-5d-bare-env]=1
   [g1-5e-bare-set]=1 [g1-5f-compgen-e]=1 [g1-6-first-statement]=1 [g1-7a-post-hook]=1 [g1-7b-using-node]=2 [g1-8-empty-list]=2
-  [g1-9-legacy-input]=2 [g1-10-mask-blob]=2 [g1-11-variant-reordered-lc-all]=2 [g2-2-host-after-detach]=118 [g2-2b-host-read-after-detach]=75 [g2-3-second-read]=14
+  [g1-9-legacy-input]=2 [g1-10-mask-blob]=2 [g1-10b-narrow-mask-blob]=2 [g1-11-variant-reordered-lc-all]=2 [g2-2-host-after-detach]=118 [g2-2b-host-read-after-detach]=75 [g2-3-second-read]=14
   [g2-5a-gate-record-check-removed]=1 [g2-5c-dgate-record-check-removed]=1 [g2-8-finish-no-record]=2 [g2h-5b-helper-w7-site]=1
   [g2h-5d-helper-w10b-site]=1 [g2h-6-no-w10b-restamp]=1 [g2h-6b-w10b-from-w7]=2 [g3-1b-marker-before-checks]=4 [g3-1c-dmarker-before-checks]=4
   [g3-1d-marker-after-call-swap]=34 [g3-2-merge-gate-into-detach]=15 [g3-3-chain-reordered]=2 [g3-4-finish-not-in-list]=2
@@ -2090,6 +2091,7 @@ cmut g1-7b-using-node bridge "G1-actions-composite:"
 cmut g1-8-empty-list wf "G1-floor:"
 cmut g1-9-legacy-input wf "G1-loader-once:"
 cmut g1-10-mask-blob loader "G1-loader-mask:"
+cmut g1-10b-narrow-mask-blob loader "G1-loader-mask:"
 # Guard 2 (static halves; the executed halves are in section F)
 cmut g2-5a-gate-record-check-removed wf "G2-record-check-sites:"
 cmut g2-5c-dgate-record-check-removed wf "G2-record-check-sites:" "G2-delete-gate-order:"

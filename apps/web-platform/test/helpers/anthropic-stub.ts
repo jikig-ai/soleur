@@ -3,6 +3,8 @@
 // or the network. EVERY request that carries tools and no tool_result answers
 // with one `Bash` tool_use (the stub keeps no state, so keep the command
 // side-effect free: `true`); every other request answers with plain text.
+// Options (#12585): a listen `host`, a scripted subagent call first
+// (`subagentPrompt`) and further commands per later tool turn (`followUps`).
 //
 // Point the CLI at it with ANTHROPIC_BASE_URL. The model is out of the
 // assertion path (the sharp-edge rule for LLM-mediated security tests): what a
@@ -16,7 +18,30 @@ export interface AnthropicStub {
   close: () => Promise<void>;
 }
 
-export async function startAnthropicStub(command: string): Promise<AnthropicStub> {
+export interface AnthropicStubOptions {
+  /** Listen address (default 127.0.0.1). #12585 arm D binds a non-loopback alias so a proxy hop is observable. */
+  host?: string;
+  /**
+   * #12585 arm G: when set, a tool turn whose `tools` offer a subagent tool (`Task` or `Agent`) answers with ONE call to
+   * that tool carrying this prompt; the subagent's own tool turn (no subagent tool on offer) then gets the Bash call.
+   */
+  subagentPrompt?: string;
+  /**
+   * #12585 arm F: further Bash commands for the same session, one per later tool turn (the n-th tool_result in the
+   * conversation gets `followUps[n-1]`), so one CLI session runs several separate commands. Default: none.
+   */
+  followUps?: string[];
+}
+
+const SUBAGENT_TOOLS = ["Task", "Agent"];
+
+function toolNames(tools: unknown[] | undefined): string[] {
+  return Array.isArray(tools)
+    ? tools.map((t) => (t && typeof t === "object" ? String((t as { name?: unknown }).name ?? "") : "")).filter(Boolean)
+    : [];
+}
+
+export async function startAnthropicStub(command: string, opts: AnthropicStubOptions = {}): Promise<AnthropicStub> {
   let requests = 0;
   const server = http.createServer((req, res) => {
     let body = "";
@@ -35,13 +60,24 @@ export async function startAnthropicStub(command: string): Promise<AnthropicStub
       } catch {
         // an unparseable body gets the plain-text answer
       }
-      const hasResult = JSON.stringify(parsed.messages ?? []).includes('"tool_result"');
+      const results = JSON.stringify(parsed.messages ?? []).split('"tool_result"').length - 1;
+      const followUp = results > 0 ? opts.followUps?.[results - 1] : undefined;
       const tiny = typeof parsed.max_tokens === "number" && parsed.max_tokens <= 1;
       const toolTurn =
-        !hasResult && !tiny && Array.isArray(parsed.tools) && parsed.tools.length > 0;
+        (results === 0 || followUp !== undefined) && !tiny && Array.isArray(parsed.tools) && parsed.tools.length > 0;
+      const toolUseId = `toolu_stub${results + 1}`;
       const model = parsed.model ?? "claude-haiku-5-5";
       const stop = toolTurn ? "tool_use" : "end_turn";
       const text = tiny ? "ok" : "done";
+      // Which tool the tool turn calls: the subagent tool when one is offered and a subagent prompt is scripted.
+      const subagentTool =
+        opts.subagentPrompt !== undefined && results === 0
+          ? toolNames(parsed.tools).find((n) => SUBAGENT_TOOLS.includes(n))
+          : undefined;
+      const callName = subagentTool ?? "Bash";
+      const callInput: Record<string, unknown> = subagentTool
+        ? { description: "run the scripted command", prompt: opts.subagentPrompt, subagent_type: "general-purpose" }
+        : { command: followUp ?? command };
 
       if (!parsed.stream) {
         res.writeHead(200, { "content-type": "application/json" });
@@ -52,7 +88,7 @@ export async function startAnthropicStub(command: string): Promise<AnthropicStub
             role: "assistant",
             model,
             content: toolTurn
-              ? [{ type: "tool_use", id: "toolu_stub1", name: "Bash", input: { command } }]
+              ? [{ type: "tool_use", id: toolUseId, name: callName, input: callInput }]
               : [{ type: "text", text }],
             stop_reason: stop,
             stop_sequence: null,
@@ -82,12 +118,12 @@ export async function startAnthropicStub(command: string): Promise<AnthropicStub
         send("content_block_start", {
           type: "content_block_start",
           index: 0,
-          content_block: { type: "tool_use", id: "toolu_stub1", name: "Bash", input: {} },
+          content_block: { type: "tool_use", id: toolUseId, name: callName, input: {} },
         });
         send("content_block_delta", {
           type: "content_block_delta",
           index: 0,
-          delta: { type: "input_json_delta", partial_json: JSON.stringify({ command }) },
+          delta: { type: "input_json_delta", partial_json: JSON.stringify(callInput) },
         });
       } else {
         send("content_block_start", {
@@ -114,7 +150,7 @@ export async function startAnthropicStub(command: string): Promise<AnthropicStub
 
   const port = await new Promise<number>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(0, opts.host ?? "127.0.0.1", () => {
       const address = server.address();
       if (address && typeof address === "object") resolve(address.port);
       else reject(new Error("anthropic-stub: no port"));
