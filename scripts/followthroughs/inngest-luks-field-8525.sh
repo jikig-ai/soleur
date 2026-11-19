@@ -5,9 +5,9 @@
 #
 # WHAT IT VERIFIES — POSITIVELY, NEVER BY ABSENCE. PASS requires an observed
 # SOLEUR_INNGEST_SERVER_PROBE row from THE SERVING dedicated host carrying BOTH
-# `probe_schema=9` AND `data_luks=crypto_LUKS` in the SAME row. `probe_schema=9` alone is not
-# the verdict (a field that resolved `__UNREADABLE__` still carries schema 9), and
-# `data_luks=crypto_LUKS` alone is not the verdict (it must be the schema-9 row's field). The
+# `probe_schema=9` or later AND `data_luks=crypto_LUKS` in the SAME row. `probe_schema=9` alone is not
+# the verdict (a field that resolved `__UNREADABLE__` still carries the schema), and
+# `data_luks=crypto_LUKS` alone is not the verdict (it must be the probe row's field). The
 # pairing is the follow-through condition the issue names.
 #
 # HOST ISOLATION IS MANDATORY — same reasoning as inngest-host-not-serving-7674.sh: the probe
@@ -20,7 +20,7 @@
 # outer row matches nothing ever. Filter on the decoded .message, as the sibling probe does.
 #
 # EXIT CONTRACT (scripts/sweep-followthroughs.sh):
-#   0 = PASS       an observed serving-host row with probe_schema=9 AND data_luks=crypto_LUKS.
+#   0 = PASS       an observed serving-host row with probe_schema>=9 AND data_luks=crypto_LUKS.
 #   2 = TRANSIENT  host not yet emitting schema 9 (the emitter is a baked carrier — it lands on
 #                  the next image+host replace), channel dark, credentials unprovisioned, or any
 #                  query/decode failure. Each prints a DISTINCT reason.
@@ -100,18 +100,20 @@ if [[ -z "$mine" ]]; then
 fi
 
 # --- the POSITIVE discriminator ---------------------------------------------------------------
-# BOTH tokens in the SAME row, each with its token boundary: `probe_schema=9( |$)` does not match
-# `probe_schema=9x`, and `data_luks=crypto_LUKS( |$)` is the exact accepting value the ledger's
+# BOTH tokens in the SAME row, each with its token boundary: `probe_schema=(9|…)( |$)` does not
+# match `probe_schema=9x`, and `data_luks=crypto_LUKS( |$)` is the exact accepting value the ledger's
 # live_verification reads. `data_luks=n/a` (web rows) and `data_luks=__UNREADABLE__` cannot pass.
-# The conjunct is read off the NEWEST schema-9 row, not any row in the window —
+# #12742: the schema predicate is >=9 — a schema-10 row still carries `data_luks` from the same
+# gather arm, so pinning `=9` would TRANSIENT the follow-through on the bumped emitter forever.
+# The conjunct is read off the NEWEST schema-9-or-later row, not any row in the window —
 # an hourly emitter overflows the row limit, so an any-row PASS would keep the
 # gate green for days after a replace onto a non-LUKS disk (review P3).
-newest9="$(printf '%s\n' "$mine" | grep -E 'probe_schema=9( |$)' | tail -1)"
+newest9="$(printf '%s\n' "$mine" | grep -E 'probe_schema=(9|[1-9][0-9])( |$)' | tail -1)"
 ok="$(printf '%s' "$newest9" | grep -cE 'data_luks=crypto_LUKS( |$)')"
 case "$ok" in ''|*[!0-9]*) ok=0 ;; esac
 
 if [[ "$ok" -gt 0 ]]; then
-  echo "PASS: ${HOST_NAME}'s newest schema-9 row carries data_luks=crypto_LUKS."
+  echo "PASS: ${HOST_NAME}'s newest schema-≥9 row carries data_luks=crypto_LUKS."
   echo "      #8525's live verdict holds: /mnt/data rides a LUKS container on the serving host."
   exit 0
 fi
@@ -123,8 +125,8 @@ luks="$(printf '%s' "$last" | grep -oE 'data_luks=[^ ]+' | head -1)"
 
 echo "TRANSIENT: reason=not_schema9_luks host=${INNGEST_HOST}/${HOST_NAME} ${schema:-probe_schema=?} ${luks:-data_luks=(absent)}" >&2
 case "$schema" in
-  probe_schema=9)
-    echo "           The row IS schema 9, so the emitter replaced already; the data_luks read" >&2
+  probe_schema=9 | probe_schema=[1-9][0-9])
+    echo "           The row IS schema ≥9, so the emitter replaced already; the data_luks read" >&2
     echo "           itself did not resolve to crypto_LUKS — read the emitted value before" >&2
     echo "           treating this as 'replace not landed'." >&2 ;;
   "")

@@ -219,9 +219,10 @@ DOPPLER_RUN = re.compile(r"doppler\s+run\b")
 # `doppler run` wrapper fail-closes" is a sentence, not an invocation. A census anchored on the bare
 # token scores every one of those, so the anchor is SYNTACTIC: the token must sit where a command
 # can start (line start, or after `|`, `;`, `&&`, `||`, `(`, `$(`, `{`, `!`, `then`, `do`, `else`,
-# optionally behind VAR=value prefixes), on a line that is not a shell comment.
+# optionally behind VAR=value prefixes and one `timeout N[smhd]` prefix, #12742 R3), on a line that is not a shell comment.
+# Guard 2's `doppler run` census does not rely on this list: it counts every hit in shell code (in_code), see invocations().
 CMD_POS = re.compile(r"(?:^|[|;&({!]|\$\(|&&|\|\||\bthen\b|\bdo\b|\belse\b)\s*"
-                     r"(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+)*$")
+                     r"(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+)*(?:timeout\s+[0-9]+[smhd]?\s+)?$")
 
 HEREDOC_OPEN = re.compile(r"<<-?\s*[\"\']?([A-Za-z_][A-Za-z0-9_]*)[\"\']?")
 
@@ -249,9 +250,39 @@ def in_quotes(line, idx):
         i += 1
     return sq or dq
 
-def cmd_sites(body, pat):
+def in_code(line, idx):
+    """True when `idx` is in shell CODE: outside every quoted span, or inside a `$( )` command
+    substitution (which re-opens code even inside double quotes: `OUT="$(doppler run ...)"`).
+    A stack scanner, unlike in_quotes, because the substitution nests."""
+    st = ["c"]
+    i = 0
+    while i < idx and i < len(line):
+        c, top = line[i], st[-1]
+        if c == "\\" and top != "s":
+            i += 2
+            continue
+        if top == "s":
+            if c == "'":
+                st.pop()
+        elif c == "$" and line[i + 1:i + 2] == "(":
+            st.append("p")
+            i += 1
+        elif top == "d":
+            if c == '"':
+                st.pop()
+        elif c == "'":
+            st.append("s")
+        elif c == '"':
+            st.append("d")
+        elif c == ")" and top == "p":
+            st.pop()
+        i += 1
+    return st[-1] in ("c", "p")
+
+def cmd_sites(body, pat, any_pos=False):
     """(line, match) for every `pat` hit that sits in command position on a non-comment,
-    non-HEREDOC line.
+    non-HEREDOC line. With any_pos, a hit in shell CODE (in_code) counts whatever precedes it;
+    only a hit inside a quoted string still needs CMD_POS (Guard 2's fail-closed census).
 
     The heredoc skip is load-bearing, not tidiness. This repo's workflows print operator
     instructions out of heredocs and `echo` bodies -- "re-run wrapped in `doppler run -p
@@ -296,7 +327,7 @@ def cmd_sites(body, pat):
             # census to exactly those.
             if printing and in_quotes(line, m.start()):
                 continue
-            if CMD_POS.search(line[:m.start()]):
+            if CMD_POS.search(line[:m.start()]) or (any_pos and in_code(line, m.start())):
                 yield line, m
         if h:
             pending = h.group(1)
@@ -1108,8 +1139,15 @@ def invocations(body):
     """Each `doppler run` invocation's own argument text: from the token up to the ` -- ` separator
     or the end of its (continuation-joined) line. `[^\\n]` in an ERE is a bracket expression
     excluding backslash and the letter n, not "any char but newline", so the slice is taken by
-    index rather than by a negated class."""
-    for line, m in cmd_sites(body, DOPPLER_RUN):
+    index rather than by a negated class.
+
+    FAIL CLOSED ON THE PREFIX (#12742 round 2): every `doppler run` in shell code is an invocation,
+    whatever precedes it (`timeout -k 5 90`, `timeout 1m30s`, `env -u X`, `nice`, `exec`), so a
+    wrapper prefix CMD_POS does not list cannot hide a flagless leg. Only a comment, a heredoc
+    body, an echo/printf argument, or a quoted string not in command position is data.
+    RESIDUAL: a quoted `sh -c 'exec doppler run ...'` behind a non-CMD_POS word is still read as
+    data (the operator prose in quoted messages is indistinguishable from it statically)."""
+    for line, m in cmd_sites(body, DOPPLER_RUN, any_pos=True):
         rest = line[m.end():]
         k = rest.find(" -- ")
         yield line[m.start():m.end() + (k if k != -1 else len(rest))]
@@ -3941,6 +3979,39 @@ if mutate g2-2-second-run-no-flag "$MUTDIR/tree/.github/workflows/tierb-apply.ym
   fixcensus "$MUTDIR" "$T/mut/g2-2.tsv" ""
   mutant_red g2-2-second-run-no-flag wf_row "$T/mut/g2-2.tsv" "G2a:"
 fi
+# Row 2b (#12742 R3) — a SECOND `doppler run` behind a `timeout N` prefix, without the flag. CMD_POS must
+# read `timeout 90 doppler run` as a command, or every time-bounded leg escapes the census.
+MUTDIR="$(fixcopy g2-2b)"; assert_fixture_dir "$MUTDIR"
+if mutate g2-2b-timeout-prefixed-run-no-flag "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 1 '/^          bash scripts\/tierb-helper\.sh$/a\          OUT="$(timeout 90 doppler run -p soleur -c prd_terraform -- terraform output -raw x)"'; then
+  fixcensus "$MUTDIR" "$T/mut/g2-2b.tsv" ""
+  mutant_red g2-2b-timeout-prefixed-run-no-flag wf_row "$T/mut/g2-2b.tsv" "G2a:"
+fi
+# Rows 2c-2g (#12742 round 2) — G2a fails closed on the PREFIX: a flagless `doppler run` behind any wrapper CMD_POS
+# does not list (timeout options, a unit-suffixed duration, `env -u`, a quoted command substitution) still reds.
+g2_prefix_row() { # <name> <the added run line>
+  MUTDIR="$(fixcopy "$1")"; assert_fixture_dir "$MUTDIR"
+  if mutate "$1" "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 1 "/^          bash scripts\/tierb-helper\.sh\$/a\\          $2"; then
+    fixcensus "$MUTDIR" "$T/mut/$1.tsv" ""
+    mutant_red "$1" wf_row "$T/mut/$1.tsv" "G2a:"
+  fi
+}
+g2_prefix_row g2-2c-timeout-kill-after-no-flag 'timeout -k 5 90 doppler run -p soleur -c prd_terraform -- terraform output -raw x'
+g2_prefix_row g2-2d-timeout-preserve-status-no-flag 'timeout --preserve-status 90 doppler run -p soleur -c prd_terraform -- terraform output -raw x'
+g2_prefix_row g2-2e-timeout-1m30s-no-flag 'timeout 1m30s doppler run -p soleur -c prd_terraform -- terraform output -raw x'
+g2_prefix_row g2-2f-env-unset-no-flag 'env -u X doppler run -p soleur -c prd_terraform -- terraform output -raw x'
+g2_prefix_row g2-2g-quoted-substitution-no-flag 'OUT="$(timeout -k 5 90 doppler run -p soleur -c prd_terraform -- terraform output -raw x)"'
+# Row 2h (control, must stay GREEN): `doppler run` inside quoted operator prose (a message variable, a case-arm echo)
+# is data, so the fail-closed prefix rule neither reds G2a nor counts it as an invocation.
+MUTDIR="$(fixcopy g2-2h)"; assert_fixture_dir "$MUTDIR"
+if mutate g2-2h-quoted-prose-stays-data "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 2 '/^          bash scripts\/tierb-helper\.sh$/a\          LEVER="route back: doppler run -p soleur -c prd_terraform -- terraform output -raw x"\n          case 1 in 5) echo "read '"'"'doppler run -p soleur -c prd -- y'"'"' first" ;; esac'; then
+  fixcensus "$MUTDIR" "$T/mut/g2-2h.tsv" ""
+  _g2n() { grep -oE '^ok	G2a: .*\[[0-9]+ invocations' "$1" | grep -oE '[0-9]+ invocations'; }
+  if [ -n "$(_g2n "$T/control.tsv")" ] && [ "$(_g2n "$T/mut/g2-2h.tsv")" = "$(_g2n "$T/control.tsv")" ]; then
+    pass "M-g2-2h-quoted-prose: quoted operator prose naming \`doppler run\` stays data (G2a green, invocation count unchanged)"
+  else
+    fail "M-g2-2h-quoted-prose: G2a read quoted prose as an invocation" "$(grep G2a "$T/mut/g2-2h.tsv" | cut -c1-240)"
+  fi
+fi
 # Row 3 — the flag removed from a `doppler run` inside the script a Tier-B job invokes by
 # `bash scripts/<x>.sh`. A census that skips script indirection stays green here.
 MUTDIR="$(fixcopy g2-3)"; assert_fixture_dir "$MUTDIR"
@@ -5357,7 +5428,11 @@ fi
 # 180 -> 181: g7c2-redeploy-exclusion (must-pass fixture: an alphanumeric-prefixed
 #   `redeploy-channel` mention in a secret body must NOT red — pins the exclusion side
 #   of the lookbehind). 1 landing. Measured: 181 ran.
-MUTANT_FLOOR=181
+# 164 -> 165 (#12742 R3): g2-2b (a `timeout 90 doppler run` without --preserve-env); 1 landing.
+# 165 -> 171 (#12742 round 2, G2a fails closed on the prefix): g2-2c..g2-2g (timeout -k / --preserve-status / 1m30s,
+#   env -u, a quoted `$(timeout -k ...)`) and the g2-2h quoted-prose control; 1 landing each. Measured: 171 ran.
+# 181 + 7 -> 188 (main merge into #12876): main's #9294 rows and this PR's g2-2b..g2-2h rows are disjoint. Measured: 188 ran.
+MUTANT_FLOOR=188
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -5436,7 +5511,11 @@ _ran=$((passes + fails))
 #   match without reding the suite. Measured: 459 ran.
 # 459 -> 460 (main merge): main added the G1k check for the env-scoped
 #   DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE (#9927 D2-2 / #12158). Measured: 460 ran.
-FLOOR=460
+# 422 -> 424 (#12742 R3): g2-2b (1 landing + 1 verdict). Measured: 425 ran (the floor sat one below).
+# 425 -> 437 (#12742 round 2): g2-2c..g2-2g (5 landings + 5 verdicts), g2-2h (1 landing + 1 must-stay-green). Measured: 437 ran.
+# 460 + 14 -> 474 (main merge into #12876): this PR's 15 rows above were measured on a base that already ran
+#   G1k (its 425, one over the 424 floor), and main counts G1k in its 459 -> 460 step. Measured: 474 ran.
+FLOOR=474
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
