@@ -76,12 +76,89 @@ interface RegistryEntry extends EgressForwarderHandle {
 }
 
 /** conversationId → live forwarder. One forwarder per conversation (a Query
- *  spans many turns; the entitlement is per-session, not per-dispatch). */
-const egressForwarders = new Map<string, RegistryEntry>();
+ *  spans many turns; the entitlement is per-session, not per-dispatch).
+ *  #12585 — held on globalThis under a registered symbol: the custom server
+ *  (esbuild bundle, where cc-dispatcher spawns) and the Next route bundle
+ *  (where the web-access toggle tears down) each get their own copy of this
+ *  module in one process, so a module-level Map would leave the toggle-off
+ *  route looking at an always-empty registry. */
+const REGISTRY_KEY = Symbol.for("soleur.egressForwarders");
+const egressForwarders: Map<string, RegistryEntry> = ((
+  globalThis as unknown as Record<symbol, Map<string, RegistryEntry> | undefined>
+)[REGISTRY_KEY] ??= new Map<string, RegistryEntry>());
+
+/** #12585 (CTO R1/R4) — revocation state, on globalThis for the same two-bundle reason as the registry. `revoked`: the
+ *  conversations a toggle-off tore down (cleared by a later successful spawn for that conversation), read by the
+ *  SandboxNetworkAccess arm for its copy and Sentry tag only. `epoch`: bumped per workspace on every toggle-off, so a
+ *  spawn that was awaiting the gateway probe or the bind when the toggle-off ran cannot register a forwarder afterwards. */
+type Revocation = { revoked: Set<string>; epoch: Map<string, number> };
+const revocation: Revocation = ((globalThis as unknown as Record<symbol, Revocation | undefined>)[
+  Symbol.for("soleur.egressRevocation")
+] ??= { revoked: new Set<string>(), epoch: new Map<string, number>() });
+
+/** #12585 — a spawn lost to a web-access toggle-off: the user's choice, not a failure (pino info, no Sentry). */
+export class EgressRevokedError extends Error {
+  constructor() {
+    super("web access was turned off while the egress forwarder was starting");
+    this.name = "EgressRevokedError";
+  }
+}
+
+/** #12585 (CTO R4) — the workspace's toggle-off counter. cc-dispatcher reads it next to the grant read and passes it to
+ *  spawnEgressForwarder, so a toggle-off anywhere between the grant read and the bind wins. */
+export function egressRevocationEpoch(workspaceId: string): number {
+  return revocation.epoch.get(workspaceId) ?? 0;
+}
+
+/** #12585 (CTO R1) — mark a conversation whose grant was withdrawn (toggle-off here, or the warm re-resolve seeing the
+ *  other web host's toggle-off). Cleared by the next spawn attempt. */
+export function markEgressRevoked(conversationId: string): void {
+  // Bounded: a Set keeps insertion order, so the oldest marks go first (a long-gone conversation's mark is harmless).
+  revocation.revoked.delete(conversationId);
+  revocation.revoked.add(conversationId);
+  while (revocation.revoked.size > MAX_REVOKED_MARKS) {
+    revocation.revoked.delete(revocation.revoked.values().next().value as string);
+  }
+}
+const MAX_REVOKED_MARKS = 10_000;
+
+/** #12585 (CTO R1) — did a web-access toggle-off tear down this conversation's forwarder (and no spawn since)? */
+export function isEgressRevoked(conversationId: string): boolean {
+  return revocation.revoked.has(conversationId);
+}
 
 /** Test/QA hook: is a forwarder registered for this conversation? */
 export function hasEgressForwarder(conversationId: string): boolean {
   return egressForwarders.has(conversationId);
+}
+
+/**
+ * #12585 — is THIS session's forwarder still the registered one? Keyed on the token as handle identity (mirrors the exit
+ * handler's `?.proc === proc` check): after a teardown, an exit, or a re-spawn under the same conversationId with a new
+ * token, the old session's probe answers false for good. The SandboxNetworkAccess arm reads it per request.
+ */
+export function isEgressForwarderLive(conversationId: string, token: string): boolean {
+  return egressForwarders.get(conversationId)?.token === token;
+}
+
+/**
+ * #12585 (CTO D1) — tear down every forwarder THIS process holds for a workspace, right after its owner turns web access
+ * off. Returns how many were torn down. The other web host's forwarders are revoked by the next-dispatch re-resolve.
+ */
+export function teardownEgressForwardersForWorkspace(workspaceId: string): number {
+  revocation.epoch.set(workspaceId, (revocation.epoch.get(workspaceId) ?? 0) + 1);
+  const conversations = [...egressForwarders.entries()]
+    .filter(([, entry]) => entry.workspaceId === workspaceId)
+    .map(([conversationId]) => conversationId);
+  for (const conversationId of conversations) {
+    markEgressRevoked(conversationId);
+    teardownEgressForwarder(conversationId);
+  }
+  log.info(
+    { feature: "egress-forwarder", op: "teardown-revoked", workspaceId, count: conversations.length, cause: "web-egress-off" },
+    "egress-forwarder: web access turned off, forwarders torn down",
+  );
+  return conversations.length;
 }
 
 /** The workspace a live forwarder was minted for (undefined when none). */
@@ -204,9 +281,10 @@ function assertGatewayReachable(host: string, port: number): Promise<void> {
 export async function spawnEgressForwarder(
   conversationId: string,
   workspaceId: string,
+  epochAtGrant?: number,
 ): Promise<EgressForwarderHandle> {
   try {
-    return await spawnEgressForwarderUnscrubbed(conversationId, workspaceId);
+    return await spawnEgressForwarderUnscrubbed(conversationId, workspaceId, epochAtGrant);
   } catch (err) {
     // Every throw out of here reaches cc-dispatcher's reportSilentFallback; an fs error from the
     // token-dir writes/cleanups below carries the token file NAME (a live credential).
@@ -217,10 +295,25 @@ export async function spawnEgressForwarder(
 async function spawnEgressForwarderUnscrubbed(
   conversationId: string,
   workspaceId: string,
+  epochAtGrant?: number,
 ): Promise<EgressForwarderHandle> {
   // A second spawn for the same conversation (supersede / stale-resume edge)
   // must not orphan the first child and its still-valid token file.
   teardownEgressForwarder(conversationId);
+  // CTO R4 — a toggle-off since the caller read the grant (epochAtGrant), or while this spawn awaits the gateway probe
+  // or the bind, must win. Every revoked throw also marks the conversation revoked, so its denies read granted=false
+  // with the turned-off copy instead of paging as degraded. A spawn attempt means the caller re-resolved the grant as
+  // true, so an older mark is cleared first: a failed re-granted spawn then pages as degraded (fix round).
+  const epochAtStart = epochAtGrant ?? egressRevocationEpoch(workspaceId);
+  const revokedSinceStart = () => egressRevocationEpoch(workspaceId) !== epochAtStart;
+  // Callers clean up anything this spawn registered or minted first. A newer spawn that now owns the conversation's
+  // registry entry was re-granted, so its session is not marked revoked (verification pass).
+  const failRevoked = (): never => {
+    if (!egressForwarders.has(conversationId)) markEgressRevoked(conversationId);
+    throw new EgressRevokedError();
+  };
+  revocation.revoked.delete(conversationId);
+  if (revokedSinceStart()) failRevoked();
 
   // Dead gateway = fail fast (the caller degrades to zero-egress) instead of
   // logging "forwarder bound" for a session whose every CONNECT dies at the
@@ -229,6 +322,7 @@ async function spawnEgressForwarderUnscrubbed(
   // path only reaches entries that were registered).
   const gw = egressGwTarget();
   await assertGatewayReachable(gw.host, gw.port);
+  if (revokedSinceStart()) failRevoked(); // before a token is minted
 
   // base64url: filename-safe AND header-safe — the token is a token-dir
   // filename on one side and a proxy-URL password on the other.
@@ -268,6 +362,8 @@ async function spawnEgressForwarderUnscrubbed(
     workspaceId,
   };
   egressForwarders.set(conversationId, entry);
+  // No re-check here: nothing awaits between the post-probe check and this set, and a throw before the bind promise
+  // below attaches the child's error listener would leave an async spawn error unhandled (fix round).
 
   // Mid-session forwarder death = live egress silently dead for the
   // entitled session. Mirror to Sentry (the session continues zero-egress —
@@ -364,8 +460,22 @@ async function spawnEgressForwarderUnscrubbed(
     }
     proc.kill();
     rmSync(join(egressTokenDir(), token), { force: true });
+    // A toggle-off during the bind kills this registered child, so the bind fails: report it as the revocation it is.
+    if (revokedSinceStart()) failRevoked();
     throw err;
   }
+  // Defense in depth (not reachable by test: a toggle-off kills the registered child, failing the bind above).
+  if (revokedSinceStart()) {
+    // Identity-guarded: a newer spawn for the same conversation may own the registry entry now.
+    if (egressForwarders.get(conversationId)?.proc === proc) teardownEgressForwarder(conversationId);
+    else {
+      proc.kill();
+      rmSync(join(egressTokenDir(), token), { force: true });
+    }
+    failRevoked();
+  }
+  // A superseded older spawn may have marked the conversation while this one was starting; this one is live.
+  revocation.revoked.delete(conversationId);
 
   return { port: entry.port, token, pid: entry.pid };
 }

@@ -2219,6 +2219,17 @@
 "id": "297phgcjd6fne",
 "title": "Ships SOLEUR_PRIVATE_NIC from web-1 (the §3 private-NIC guard, #6438 §3/ADR-123) to the shared Logs source 2457081 — detect + emit + alarm, NO reboot (unlike the registry's self-converging guard). ALSO pings the web_nic_guard liveness heartbeat every healthy run so the fault-emitter is observable-when-healthy (a SOLEUR_PRIVATE_NIC that never fires is indistinguishable from a dead guard). Distinct from the Vector journald edge above"
 },
+"2988cb7g03lcf": {
+"technology": "HTTP CONNECT on container loopback",
+"source": {
+"model": "platform.engine.claude"
+},
+"target": {
+"model": "platform.webapp.egressForwarder"
+},
+"id": "2988cb7g03lcf",
+"title": "Spawned-CLI HTTPS CONNECTs arrive via SRT's upstream chain carrying the env proxy-URL credentials (workspaceId:sessionToken) — in-process WebFetch uses the same env proxy; a sandboxed command's host first passes the canUseTool SandboxNetworkAccess gate, which denies every host while the SDK caches allows (#12585)"
+},
 "29yesvgqp9dka": {
 "source": {
 "model": "platform.engine.claude.registry"
@@ -3021,17 +3032,6 @@
 "id": "3q20kgm5yx0v",
 "title": "Workstream tab: reads connected-repo issues (REST) + Project v2 board Status (GraphQL); AND writes issues — create / title / label-driven status / close-reopen — via the audited GitHub App-token client (ADR-109). The board is the canonical Status store (ADR-097); a status write is a label mutation that the board-status-sync workflow (github-internal) mirrors. owner/repo/installation resolve from the active workspace (ADR-044), never request input. ALSO Pages cert admin: the cron-gh-pages-cert-reissue routine (served by this container, event-triggered) does PUT /pages cname-toggle to re-order a bad_authz TLS cert via a least-privilege App token holding BOTH administration:write AND pages:write — PUT /pages requires both, proven empirically (pages-only 403, admin-only 403, both 204); GitHub's REST docs do not state it (ADR-125, #6698). AND the diagram-editor re-render: commits the .c4 source and the rendered model.likec4.json (Contents API) and fetches ONLY the regular-file LikeC4 source blobs of that commit's diagrams folder (Contents listing + Trees/Blobs API) to render in a private staging dir — the repo's likec4 config, symlinks and submodules are refused, never loaded, and the render does not read the workspace clone (ADR-050 amendment 2026-09-24)."
 },
-"3q5imokre8wg9": {
-"technology": "HTTP CONNECT on container loopback",
-"source": {
-"model": "platform.engine.claude"
-},
-"target": {
-"model": "platform.webapp.egressForwarder"
-},
-"id": "3q5imokre8wg9",
-"title": "Spawned-CLI HTTPS CONNECTs arrive via SRT's upstream chain carrying the env proxy-URL credentials (workspaceId:sessionToken) — in-process WebFetch uses the same env proxy"
-},
 "3qo86o01npyts": {
 "technology": "HTTPS (Web Push / VAPID)",
 "source": {
@@ -3280,6 +3280,17 @@
 },
 "id": "de9r7gnfj59q",
 "title": "CONSUMER reachability probe (#6548): web-git-data-probe.sh does a bounded SSH connect-and-close to 10.0.1.20:22 over the private net and pings the git_data_prd heartbeat on success. Fail-soft (connect-and-close, not a git ls-remote — the accepted reachability-vs-serviceability tradeoff for a v1 overlay); this is what finally FEEDS git_data_prd, previously unfed. The target host is born (ADR-149); its store is empty until the LUKS cutover (#5274)"
+},
+"drlfjmzmvkq4": {
+"technology": "doppler CLI (project-scoped read service token, delivered as a main-only GitHub environment secret)",
+"source": {
+"model": "github"
+},
+"target": {
+"model": "doppler"
+},
+"id": "drlfjmzmvkq4",
+"title": "Deploy-channel credentials (#9294, ADR-241 D10/D11): .github/actions/infra-credentials gains a NARROW arm for the soleur-deploy-channel/prd project, selected by doppler-project=soleur-deploy-channel and reaching Doppler with a read service token that is the environment secret DOPPLER_TOKEN_DEPLOY_CHANNEL on the deploy-channel environment — a deployment-branch policy admitting `main` ONLY and an empty reviewer set BY DESIGN (the branch policy is the boundary, as on infra-privileged; a reviewer gate on an environment used for unattended applies is dead weight). The narrow arm reads ONLY that project/config: an empty token is the named no_credential_source refusal BEFORE any Doppler call, never a legacy prd_terraform fallback and never a silent widen to soleur-infra-privileged, and the loader's two-literal case dispatch refuses any other project name by name. The carrier file (apps/web-platform/infra/deploy-channel-environment.tf) declares containers only — github_repository_environment + github_repository_environment_deployment_policy (branch_pattern=main) and doppler_project + doppler_environment — no doppler_secret, doppler_service_token or data source, because this root's state is readable by the very Tier-A credentials the move evicts. STATUS (Phase 1): the environment, the project and the loader arm exist and are pinned by the tier census (G7c/G7d/G7e widened to the second project; G7i on the arm's shape) and by the loader suite's dc1-dc6 fixtures; NO consumer job references DOPPLER_TOKEN_DEPLOY_CHANNEL or names the narrow project yet — the /hooks/infra-config and /hooks/deploy-status consumers migrate in Phase 2, and the prd_terraform copies are deleted only in the operator-named Phase 3 tail, so until then this edge is the carrier, not a live credential read"
 },
 "dzi0y2l27gzq": {
 "source": {
@@ -9179,7 +9190,8 @@
 "32q0mefae0wq7",
 "3j05altb1wez",
 "9kpu4xmy19ky",
-"b5wqsiskal5e"
+"b5wqsiskal5e",
+"drlfjmzmvkq4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -12209,7 +12221,7 @@
 "id": "kx6dth",
 "source": "platform.engine",
 "target": "platform.webapp",
-"label": "Spawned-CLI HTTPS CONNECTs arrive via \nSRT's upstream chain carrying the env \nproxy-URL credentials \n(workspaceId:sessionToken) — in-process \nWebFetch uses the same env proxy",
+"label": "Spawned-CLI HTTPS CONNECTs arrive via \nSRT's upstream chain carrying the env \nproxy-URL credentials \n(workspaceId:sessionToken) — in-process \nWebFetch uses the same env proxy; a ",
 "points": [
 [
 1969,
@@ -12260,7 +12272,7 @@
 },
 "parent": "platform",
 "relations": [
-"3q5imokre8wg9"
+"2988cb7g03lcf"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14630,7 +14642,8 @@
 "32q0mefae0wq7",
 "3j05altb1wez",
 "9kpu4xmy19ky",
-"b5wqsiskal5e"
+"b5wqsiskal5e",
+"drlfjmzmvkq4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24545,7 +24558,8 @@
 "32q0mefae0wq7",
 "3j05altb1wez",
 "9kpu4xmy19ky",
-"b5wqsiskal5e"
+"b5wqsiskal5e",
+"drlfjmzmvkq4"
 ],
 "color": "gray",
 "line": "dashed",
@@ -33462,7 +33476,7 @@
 "id": "1562929",
 "source": "platform.engine.claude",
 "target": "platform.webapp",
-"label": "Spawned-CLI HTTPS CONNECTs arrive via \nSRT's upstream chain carrying the env \nproxy-URL credentials \n(workspaceId:sessionToken) — in-process \nWebFetch uses the same env proxy",
+"label": "Spawned-CLI HTTPS CONNECTs arrive via \nSRT's upstream chain carrying the env \nproxy-URL credentials \n(workspaceId:sessionToken) — in-process \nWebFetch uses the same env proxy; a ",
 "points": [
 [
 2283,
@@ -33489,7 +33503,7 @@
 },
 "parent": null,
 "relations": [
-"3q5imokre8wg9"
+"2988cb7g03lcf"
 ],
 "color": "gray",
 "line": "dashed",
