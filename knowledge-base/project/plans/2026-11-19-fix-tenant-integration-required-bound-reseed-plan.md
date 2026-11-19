@@ -13,6 +13,32 @@ requires_cpo_signoff: false
 
 # Plan: fix(ci): re-seed tenant-integration-required wallclock-p90 bound
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-19 (headless; no Agent/Task spawn available, so the
+per-section research fan-out ran as inline verification passes — see
+`## Deepen Pass` for gate verdicts and live re-verification).
+
+**Key improvements:**
+
+1. `## Observability` rewritten to the mandatory 5-field YAML schema
+   (liveness_signal / error_reporting / failure_modes / logs /
+   discoverability_test) — `scripts/*.tsv` does not match the pure-docs
+   skip set, so §4.7 applies.
+2. Watch-script line citations corrected against the live file: bounds
+   parser §(0b) :125-159, association-guard rule at :15-16 + :197-198,
+   aggregation :247-268, breach flag :292-294, epic-goal constants
+   `GOAL_PR_S=1200`/`GOAL_MQ_S=900` at :96-97.
+3. Unverified "#12329 skip-aware redesign" attribution removed — #12329 is
+   a MERGED PR (`feat(ci): S4 PR3b — required affected-index-ratchet +
+   oracle-review-required context`); the plan now states only what was
+   verified.
+4. One new consideration surfaced: the bound-seeding method is
+   mode-blind — p90 over a bimodal population reads whichever mode has ≥4
+   members in the 30-sample window, so any future "the suite got faster
+   (#12905)" re-seed must re-run the same per-sample census, not just
+   next-minute(p90). Recorded in Sharp Edges.
+
 ## Overview
 
 Re-seed the `tenant-integration-required` pull-request wallclock bound in
@@ -119,7 +145,7 @@ it, and is unrelated to queue wait.
 
 **What the 4 `NOSAMPLE`s are.** Three are `earlier-batch`: a check run from a
 prior same-sha push batch completed before the sampled run's `created_at`, so
-the watch's association guard (line 129-132) correctly declines it — they are
+the watch's association guard (:197-198) correctly declines it — they are
 exclusions, not dropouts. The fourth (11:45Z, 11-18) is genuinely interesting
 but in a different class: the heavy suite was `cancelled` at ~15.6 min —
 consistent with the workflow's documented third-arrival eviction arm
@@ -150,6 +176,10 @@ the 30-run window; the runbook bullet names it as observed history.
   matter for Epic #11556, not a regression finding. The only systemic defect
   is the bound's seed, which this slice fixes.
 
+(Required-context provenance: `tenant-integration-required` came required via
+the #5585-class aggregator gate work; the oracle sibling's context was added
+by MERGED PR #12329 — verified live 2026-11-19.)
+
 ## Proposed Solution
 
 - `scripts/required-check-wallclock-bounds.tsv` (data layer): one-row edit,
@@ -166,8 +196,8 @@ the 30-run window; the runbook bullet names it as observed history.
 - The `merge_group` bound stays 180s: measured p90=70s, fast mode only —
   merge groups post a skipped-required context rather than rerunning the
   dev-Supabase suite, so no slow mode exists on that surface.
-- Out of scope — deliberately: no bound-semantics change (unlike #12329's
-  `ci-oracle-review` skip-aware redesign — the check is healthy; only its
+- Out of scope — deliberately: no bound-semantics change (the metric's
+  single-bound-per-surface design stands; the check is healthy — only its
   seed is stale), no workflow/script behavior change, no tightening of the
   mq bound, no new issue filed for the eviction event (it is the mutex's
   documented accepted residual).
@@ -175,13 +205,22 @@ the 30-run window; the runbook bullet names it as observed history.
 ## Technical Considerations
 
 - **File shape (TSV):** tab-separated 4-column data rows; `#` comment lines
-  and blanks ignored by the reader (`awk -F'\t'` at
-  `scripts/watch-wallclock-p90-11774.sh:71-74`). The edit must keep literal
-  tabs in the row — the suite's AC asserts the row with `awk -F'\t'`, not a
-  whitespace-insensitive grep.
+  and blanks ignored by the reader (`awk -F'\t'` NF check at
+  `scripts/watch-wallclock-p90-11774.sh:134`, bounds-table section (0b)
+  :125-159). The edit must keep literal tabs in the row — the suite's AC
+  asserts the row with `awk -F'\t'`, not a whitespace-insensitive grep.
 - **Seed contract (file header, `required-check-wallclock-bounds.tsv:3-6`):**
-  bound = `ceil(p90/60)*60` with margin `0.30` ⇒ breach threshold bound×1.3;
-  a bound may loosen only with the measurement recorded in the runbook.
+  bound = `ceil(p90/60)*60` with margin `0.30` ⇒ breach threshold bound×1.3
+  (flag at :292-294); a bound may loosen only with the measurement recorded
+  in the runbook.
+- **Epic goals at source:** `GOAL_PR_S=1200`/`GOAL_MQ_S=900`
+  (`watch-wallclock-p90-11774.sh:96-97`) — the seeded bounds sit inside
+  both; the epic's 20-minute PR goal is a p90 goal, and today the slow
+  mode alone (915s) fits inside it.
+- **Association guard (why 3 of the NOSAMPLEs are excluded):** the watch
+  never associates a check run that completed BEFORE the sampled run's
+  `created_at` — that check belongs to an earlier trigger batch
+  (header comment :15-16, resolvable-candidate impl :197-198).
 - **Check-name shape:** the TSV check name must match the REQUIRED-check job
   name as it appears in the check-runs API — `tenant-integration-required`
   matches `scripts/required-checks.txt` and the workflow's aggregator job
@@ -280,26 +319,52 @@ insufficiency, disposition (a).
 
 ## User-Brand Impact
 
-- Threshold: **none** — internal CI observability data + knowledge-base
-  provenance only; no user-facing surface, no operator-visible behavior
-  beyond one fewer false-positive drift finding on #12755.
-- Brand-survival framing: not applicable; no `brand_survival_threshold`
-  enforcement needed.
+- **If this lands broken, the user experiences:** the weekly
+  wallclock-p90 digest keeps reporting a false-positive tenant breach on
+  #12755 — a noisy standing finding that can mask the next real breach.
+- **If this leaks, the user's [data / workflow / money] is exposed via:**
+  nothing user-facing — the diff is a CI-observability data row plus
+  knowledge-base artifacts; no user data, credentials, or product surface
+  is touched.
+- **Brand-survival threshold:** `none`
+- **Threshold decision (challengeable):** internal CI-observability repair
+  on a config data file; a wrong bound produces a red or a quiet weekly
+  watch run, not a user-visible incident — `none`, not `single-user
+  incident`.
+- `threshold: none, reason: the touched paths are a CI-observability TSV
+  and knowledge-base docs — no user-facing surface or regulated data`
 
 ## Observability
 
 The watch IS the observability layer; this slice corrects one of its
-calibration inputs.
+calibration inputs. Metric: `latency_s = completed_at - run.created_at`
+nearest-rank p50/p90 per (check, surface) — definition at
+`watch-wallclock-p90-11774.sh:18-30`, aggregation at :247-268.
 
-- **Metric:** `wallclock_p90` per check × surface (run `created_at` →
-  check `completed_at`), nearest-rank over ≤30 qualifying samples per
-  surface — `scripts/watch-wallclock-p90-11774.sh:99-110, 160-180`.
-- **Population:** non-comment rows of `scripts/required-checks.txt` over the
-  last 30 successful `ci.yml` runs per surface (`pull_request`,
-  `merge_group`).
-- **Alert surface:** `::error::wallclock p90 breach` annotations + drift
-  comment posted to tracker #12755 by `wallclock-p90-watch.yml` (Friday
-  09:07 UTC cron + `workflow_dispatch`).
+```yaml
+liveness_signal:
+  what: weekly wallclock-p90-watch verdict + standing tracker #12755 body
+  cadence: weekly (Fri 09:07 UTC) + workflow_dispatch
+  alert_target: operator digest §6 (reads tracker by ci/wallclock-p90 label)
+  configured_in: .github/workflows/wallclock-p90-watch.yml
+error_reporting:
+  destination: standing tracker body + drift comments (issue #12755)
+  fail_loud: "flagged findings list names offenders; exit 1 turns the workflow red"
+failure_modes:
+  - mode: "bound row malformed (wrong columns/non-numeric)"
+    detection: "probe exit 3 cannot-establish; ::error:: names the row"
+    alert_route: "weekly workflow goes red; tracker reports cannot-establish"
+  - mode: "seeded bound drifts below real p90 (slow-mode recurrence)"
+    detection: "breach finding when p90 > bound x 1.30"
+    alert_route: "weekly workflow red + drift comment on flagged-set change"
+logs:
+  where: "GitHub Actions log of wallclock-p90-watch.yml; tracker issue body history"
+  retention: "Actions retention window; tracker body rewritten each run"
+discoverability_test:
+  command: "grep -c '^tenant-integration-required' scripts/required-check-wallclock-bounds.tsv"
+  expected_output: "1"
+```
+
 - **Verification hook (pre-merge):** `gh api
   'repos/{owner}/{repo}/commits/<pr-head-sha>/check-runs?per_page=100'` —
   `tenant-integration-required` `started_at`/`completed_at` ≈ ~50s on the
@@ -529,3 +594,99 @@ None — planning artifacts only (this plan + `specs/feat-one-shot-tenant-p90-bo
   commit, the FR-3 conditional arm re-seeds to next-minute(p90) — the
   contract is bound ≥ commit-time p90, not "the number written in this
   plan".
+
+## Deepen Pass
+
+Recorded 2026-11-19. No nested-subagent capability in this harness (per
+`2026-11-01-devin-subagents-cannot-spawn-nested-subagents`), so the skill's
+fan-out ran as inline verification passes; the parent pipeline may still run
+`soleur:plan-review` and the batched CTO consult downstream.
+
+### Gate verdicts
+
+| Gate | Verdict |
+|---|---|
+| 4.4 Precedent-diff | PASS — see below; sibling data rows uniform `<name>\t<int>\t<int>\t0.30`, dated `#`-header seed notes are the canonical provenance form (oracle `# ROW SEED`, merged #12877) |
+| 4.45 verify-the-negative / self-audit | see below |
+| 4.5 Network-outage | not triggered — `timeout`/`SSH`/`5xx` patterns absent from Overview, Problem Statement, and hypotheses (`timeout-minutes` appears only in the Evidence table's job-constant citation) |
+| 4.55 Downtime & Cutover | not triggered — TSV data row + docs only |
+| 4.6 User-Brand Impact | PASS — section present, threshold `none`, touched paths miss the sensitive-path regex, scope-out reason present |
+| 4.7 Observability | PASS — all 5 fields non-placeholder; probe verb `grep` is Check-10 allowlisted; `expected_output` literal `1`; no SSH, no banned metacharacters, sub-15 s; command executed once: prints `1` today (row exists — the probe discovers the row, not the bound value) |
+| 4.8 PAT-shaped variable | PASS — zero hits on the 4-pattern sweep (`GH_TOKEN=` env read is the watch's existing mechanism, not a `var.*`/`TF_VAR_*` infra-write credential) |
+| 4.9 UI wireframe | not triggered — no UI-surface files |
+| 4.10 Encryption posture | not triggered — no store/connection introduced; the word "queue" in prose is the runner-queue symptom noun, not a provisioned store |
+| 4.11 Guard contract | not triggered — deliverable is a data row; prose references the watch's EXISTING association guard, unchanged |
+| 4.12 Scope check | PASS — exactly 1 unfenced `## Scope Check`; 6 mapped asks; the one `inferred` row justified; `Recommendation: single PR` present; no `status: BLOCKED` |
+| 4.13 Task design | not triggered — no autonomous-task surface |
+
+### Claims re-verified live (2026-11-19)
+
+- #12755 OPEN standing tracker; `wallclock-p90-watch:v1` sentinel present;
+  2026-11-13 body carried this same tenant breach (`gh issue view`).
+- #12877 `state: MERGED` — file shapes mirrored from its merged artifacts.
+- #12905 OPEN — narrows the tenant test set inside the suite.
+- #11556 OPEN epic; goals read at source `GOAL_PR_S=1200`/`GOAL_MQ_S=900`
+  (`watch-wallclock-p90-11774.sh:96-97`).
+- #12329 MERGED PR, title `feat(ci): S4 PR3b — required
+  affected-index-ratchet + oracle-review-required context` — the plan now
+  cites it only as the oracle context's requiring PR; an earlier draft's
+  "skip-aware redesign" attribution was dropped as unverified.
+- Watch-script citations re-read at line level: bounds parser `awk -F'\t'`
+  NF check :134 (section (0b) :125-159); association-guard rule :15-16 +
+  impl :197-198; aggregation `sorted(vals)` :257 within :247-268; breach
+  flag :292-294; `unbound` finding :281.
+- Workflow citations: `tenant-integration:` job :236,
+  `timeout-minutes: 19` :243 with the #12905 sizing comment; eviction-arm
+  comment :295-305 ("accepted, NOT greened"); Friday cron `7 9 * * 5`
+  confirmed in `wallclock-p90-watch.yml` (:66).
+- TSV header seed contract re-read at
+  `required-check-wallclock-bounds.tsv:3-6`; AC-2's awk ran pre-edit and
+  prints `300 180 0.30` as the AC expects; AC-5's dry-run emitted exactly
+  one `::error::` line for this check.
+- No open PR touches `scripts/required-check-wallclock-bounds.tsv`
+  (`gh pr list --search`).
+- Rule-id citations in the plan body: none — nothing to check against the
+  active/retired registries.
+- Labels prescribed: none — no `gh issue create` in this plan.
+
+### Verify-the-negative + self-audit
+
+- "No queue congestion" — supported positively, not just by absence:
+  sibling checks measured on the SAME three slow runs stayed ≤478s while
+  `tenant-integration` sat at ~835-910s and the aggregator completed ~19s
+  after it each time. A shared-queue burst inflates all checks; the tail
+  is specific to this needs-chain.
+- "Not execution regression" — duration_p90=21s ≈ fast-mode durations
+  (11-30s) across all 26 qualifying samples; no duration outlier exists.
+- "4 NOSAMPLE = exclusions, not dropouts" — 3 match the earlier-batch
+  predicate (check `completed_at` < run `created_at`, guard :197-198);
+  1 is a suite-`cancelled` gate fail-closed excluded by the success-only
+  filter. Post-edit census must still read n=26±window-drift, never a
+  silent jump.
+- Post-edit self-audit: no symbols, files, or fixtures dropped or
+  renamed — trivially clean.
+
+### Precedent-diff (§4.4)
+
+Sibling data rows are uniform `<name>\t<int>\t<int>\t0.30` and dated
+`#`-header seed notes are the provenance precedent (UMBRELLA RE-SEED plus
+the 2026-11-17 `# ROW SEED` block merged in #12877). This edit changes one
+field of an existing row and adds a same-shape comment block — no
+precedent divergence.
+
+## References
+
+- Standing tracker: #12755 · Epic: #11556 · Ratchet issue: #11774 ·
+  Precedent: merged PR #12877 + its archived sibling plan
+  (`knowledge-base/project/plans/archive/20261117-181758-2026-11-17-fix-oracle-review-required-bound-row-plan.md`)
+- `scripts/required-check-wallclock-bounds.tsv` header (columns + seeding
+  method) · `scripts/watch-wallclock-p90-11774.sh` (metric :18-30,
+  population, association guard :197-198, aggregation :247-268,
+  breach flag :292-294)
+- `.github/workflows/tenant-integration.yml` (path-gated suite :236-243,
+  eviction arm :295-305) · `.github/workflows/wallclock-p90-watch.yml`
+  (cron `7 9 * * 5`)
+- Runbook:
+  `knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md`
+  §The wall-clock ratchet · §Measured history
+- Complementary: #12905 (tenant test-set narrowing, execution side)
