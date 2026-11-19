@@ -1,19 +1,11 @@
-// #5426 — KB-sync protected-branch trigger fix.
+// #5426 — KB-sync protected-branch fallback: the op and alert contract of `syncPush` (#12600 plan task 4.5).
 //
-// Phase 1: classifyPushError — pure classifier over git/GitHub push-rejection
-// stderr. Distinguishes a protected-branch rejection (→ side-branch + PR
-// fallback) from a persistent non-protection reject that must NOT loop
-// (`shallow update not allowed`) from transient/other (existing best-effort
-// retry). Fixtures are synthesized from real GitHub stderr shapes per
-// cq-test-fixtures-synthesized-only.
-//
-// Phase 2: the protected-fallback path in `syncPush`. Mocked-git behavioral
-// tests assert the COMMAND SEQUENCE (tree-overlay accretion, ordering of the
-// default reset relative to the side-branch push + PR), the create-or-update
-// PR contract against the user's own repo, and the observability ops. Git is
-// fully mocked, so these assert the git argv sequence the fallback issues — the
-// shape that distinguishes tree-overlay from `checkout -B`-from-default and
-// from cherry-pick (the understated R1 defect AC4 guards).
+// Since #12600 the fallback runs entirely in the isolated GIT_DIR (`runSideFallback` in server/kb-sync-publish.ts): no
+// workspace checkout, commit or reset. Its git behaviour (side parents, the side push, the local branch, the dirty file
+// kept) is asserted on real git in test/session-sync-kb-only-push-real-git.test.ts (matrix 10, 12, 13, 16, 20). The
+// classifier lives in test/server/classify-push-error.test.ts. What stays here is the mapping from the publish result to
+// the Sentry ops the issue alert keys on (`kb-sync.protected-fallback-failed`, `kb-sync.push-protected-fallback`), the
+// closed `fallback_reason` tag, and "bookkeeping only after a delivered push". Synthesized data only.
 
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import { stripHostGitBlock } from "../helpers/host-git-block";
@@ -21,45 +13,33 @@ import { stripHostGitBlock } from "../helpers/host-git-block";
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test-service-role-key";
 
-const {
-  reportSilentFallbackSpy,
-  warnSilentFallbackSpy,
-  gitWithInstallationAuthSpy,
-  getCurrentRepoUrlSpy,
-  findOpenPullRequestSpy,
-  createPullRequestSpy,
-  resolveInstallationIdSpy,
-} = vi.hoisted(() => ({
+const { reportSilentFallbackSpy, warnSilentFallbackSpy, mirrorWithDebounceSpy, mirrorWarnWithDebounceSpy, publishSpy, writeRepoColsSpy } = vi.hoisted(() => ({
   reportSilentFallbackSpy: vi.fn(),
+  mirrorWithDebounceSpy: vi.fn(),
+  mirrorWarnWithDebounceSpy: vi.fn(),
   warnSilentFallbackSpy: vi.fn(),
-  gitWithInstallationAuthSpy: vi.fn<(argv: string[]) => Promise<Buffer>>(),
-  getCurrentRepoUrlSpy: vi.fn<() => Promise<string | null>>(),
-  findOpenPullRequestSpy: vi.fn(),
-  createPullRequestSpy: vi.fn(),
-  resolveInstallationIdSpy: vi.fn<() => Promise<number | null>>(),
+  publishSpy: vi.fn(),
+  writeRepoColsSpy: vi.fn(async () => undefined),
 }));
 
-// execFileSync (sync connected-repo wrapper): `remote -v` returns a remote so
-// hasRemote() passes; `rev-list` returns 1 so hasLocalCommits() says yes;
-// `status -z` returns one allowlisted KB path so the auto-commit add/commit run.
-vi.mock("child_process", () => ({
-  execFileSync: vi.fn((_cmd: string, rawArgs: string[]) => {
+// execFileSync (connected-repo wrapper): `remote -v` returns a remote so hasRemote() passes; `rev-list` returns 1 so
+// hasLocalCommits() says yes; `status -z` is clean (no auto-commit).
+vi.mock("child_process", async () => {
+  // D38(1): the connected-repo runner is async; the sync stub drives `execFile` through the adapter.
+  const { execFileFromSync } = await import("../helpers/exec-file-from-sync");
+  const execFileSync = vi.fn((_cmd: string, rawArgs: string[]) => {
     const args = stripHostGitBlock(rawArgs);
-    if (args[0] === "remote") {
-      return Buffer.from("origin\tgit@github.com:acme/widgets.git (fetch)\n");
-    }
+    if (args[0] === "remote") return Buffer.from("origin\tgit@github.com:acme/widgets.git (fetch)\n");
     if (args[0] === "rev-list") return Buffer.from("1\n");
-    if (args[0] === "status") {
-      return Buffer.from("A  knowledge-base/notes.md\0");
-    }
     return Buffer.from("");
-  }),
-}));
+  });
+  return { execFileSync, execFile: vi.fn(execFileFromSync(execFileSync)) };
+});
 
 vi.mock("fs", () => ({
   readdirSync: vi.fn(() => []),
   lstatSync: vi.fn(() => {
-    throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); // host-git shape guard: the fake workspace has no .git
+    throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); // no .git, no MERGE_HEAD
   }),
 }));
 
@@ -67,21 +47,11 @@ vi.mock("@supabase/supabase-js", () => ({ createClient: vi.fn() }));
 
 vi.mock("@/lib/supabase/tenant", () => {
   class FakeRuntimeAuthError extends Error {}
-  const fakeRow = { id: "user-1", kb_sync_history: [] };
-  const eqChain: Record<string, unknown> = {};
-  eqChain.eq = () => eqChain;
-  eqChain.single = async () => ({ data: fakeRow, error: null });
-  eqChain.maybeSingle = async () => ({ data: fakeRow, error: null });
-  eqChain.then = (resolve: (v: unknown) => void) => resolve({ error: null });
-  const fromChain = {
-    select: () => ({ eq: () => eqChain }),
-    update: () => ({ eq: () => eqChain }),
-  };
+  const chain: Record<string, unknown> = {};
+  chain.eq = () => chain;
+  chain.maybeSingle = async () => ({ data: { id: "user-1" }, error: null });
   return {
-    getFreshTenantClient: vi.fn(async () => ({
-      from: () => fromChain,
-      rpc: async () => ({ error: null }),
-    })),
+    getFreshTenantClient: vi.fn(async () => ({ from: () => ({ select: () => chain }), rpc: async () => ({ error: null }) })),
     RuntimeAuthError: FakeRuntimeAuthError,
   };
 });
@@ -89,478 +59,206 @@ vi.mock("@/lib/supabase/tenant", () => {
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: reportSilentFallbackSpy,
   warnSilentFallback: warnSilentFallbackSpy,
+  mirrorWithDebounce: mirrorWithDebounceSpy,
+  mirrorWarnWithDebounce: mirrorWarnWithDebounceSpy,
   hashUserId: (s: string) => `hash-${s}`,
 }));
 
-vi.mock("../../server/git-auth", () => ({
-  gitWithInstallationAuth: gitWithInstallationAuthSpy,
+// The token-bearing arm is never reached here (`publishKbOnly` is the seam); mocked so its module graph loads.
+vi.mock("../../server/git-auth", () => ({ gitWithInstallationAuth: vi.fn() }));
+vi.mock("../../server/resolve-installation-id", () => ({ resolveInstallationId: async () => 42 }));
+vi.mock("../../server/workspace-repo-mirror", () => ({ writeRepoColsToWorkspace: writeRepoColsSpy }));
+vi.mock("../../server/approval/workspace-head", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../server/approval/workspace-head")>()),
+  readWorkspaceHeadRef: () => ({ sha: "a".repeat(40), refName: "refs/heads/main" }),
 }));
-
-vi.mock("../../server/current-repo-url", () => ({
-  getCurrentRepoUrl: getCurrentRepoUrlSpy,
+vi.mock("../../server/kb-sync-publish", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../server/kb-sync-publish")>()),
+  publishKbOnly: publishSpy,
 }));
+vi.mock("../../server/logger", () => {
+  const l = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  return { default: l, createChildLogger: () => l };
+});
 
-vi.mock("../../server/github-app", () => ({
-  findOpenPullRequest: findOpenPullRequestSpy,
-  createPullRequest: createPullRequestSpy,
-}));
+import { CONNECTED_REPO_GIT_TIMEOUT_MS } from "@/server/connected-repo-git";
+import { syncPush } from "@/server/session-sync";
+import { KbSyncError } from "../../server/kb-sync-publish";
 
-vi.mock("../../server/resolve-installation-id", () => ({
-  resolveInstallationId: resolveInstallationIdSpy,
-}));
-
-vi.mock("../../server/logger", () => ({
-  default: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-  createChildLogger: () => ({
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  }),
-}));
-
-import { classifyPushError, syncPush } from "@/server/session-sync";
-
-// ADR-044 PR-B: syncPush now takes an injected service client + resolved
-// workspace id (threaded by agent-runner). The injected stub satisfies
-// writeRepoColsToWorkspace's `.from().update().eq().select()` chain.
-const STUB_SERVICE = {
-  from: () => ({
-    update: () => ({
-      eq: () => ({
-        select: () => Promise.resolve({ data: [{ id: "user-1" }], error: null }),
-      }),
-    }),
-  }),
-} as never;
-
-function pushErr(message: string, stderr?: string): Error {
-  const e = new Error(message);
-  if (stderr !== undefined) {
-    (e as Error & { stderr?: string }).stderr = stderr;
-  }
-  return e;
-}
-
-const PROTECTED_STDERR = [
-  "remote: error: GH006: Protected branch update failed for refs/heads/main.",
-  "remote: error: Changes must be made through a pull request.",
-  " ! [remote rejected] main -> main (protected branch hook declined)",
-].join("\n");
-
-// Records every gitWithInstallationAuth argv in order so tests can assert the
-// command SEQUENCE (the shape that distinguishes tree-overlay from
-// checkout-B-from-default and from cherry-pick).
-let gitCalls: string[][];
-
-interface GitMockOpts {
-  /** bare `git push` outcome: "protected" | "shallow" | "auth" | "ok" */
-  initialPush?: "protected" | "shallow" | "auth" | "ok";
-  /** does origin/soleur/kb-sync already exist? */
-  sideExists?: boolean;
-  /** make the side-branch push fail (co-member non-ff race) */
-  sideBranchPushFails?: boolean;
-  /** value returned for `rev-list --count origin/<default>..HEAD` */
-  commitRange?: string;
-  /** `diff --cached --quiet` exits 0 (no overlay diff → no commit) */
-  noStagedChanges?: boolean;
-  /** what `symbolic-ref --short refs/remotes/origin/HEAD` resolves to */
-  defaultRef?: string;
-}
-
-function makeGitMock(opts: GitMockOpts = {}) {
-  const defaultRef = opts.defaultRef ?? "origin/main";
-  return async (args: string[]): Promise<Buffer> => {
-    gitCalls.push(args);
-
-    // bare `git push` (the pre-fallback push attempt)
-    if (args[0] === "push" && args.length === 1) {
-      switch (opts.initialPush ?? "protected") {
-        case "protected":
-          throw pushErr("Command failed: git push", PROTECTED_STDERR);
-        case "shallow":
-          throw pushErr(
-            "Command failed: git push",
-            " ! [remote rejected] main -> main (shallow update not allowed)",
-          );
-        case "auth":
-          throw pushErr(
-            "Command failed: git push",
-            "fatal: Authentication failed for 'https://github.com/acme/widgets.git/'",
-          );
-        case "ok":
-          return Buffer.from("");
-      }
-    }
-
-    // side-branch refspec push
-    if (args[0] === "push") {
-      if (opts.sideBranchPushFails) {
-        throw pushErr("push failed", " ! [rejected] (non-fast-forward)");
-      }
-      return Buffer.from("");
-    }
-
-    if (
-      args[0] === "symbolic-ref" &&
-      args[args.length - 1] === "refs/remotes/origin/HEAD"
-    ) {
-      return Buffer.from(`${defaultRef}\n`);
-    }
-    if (args[0] === "rev-parse" && args[1] === "HEAD") {
-      return Buffer.from("defHEAD\n");
-    }
-    if (args[0] === "rev-parse" && args.includes("--verify")) {
-      if (opts.sideExists) return Buffer.from("sidesha\n");
-      throw new Error("not a valid ref");
-    }
-    if (args[0] === "rev-list") {
-      return Buffer.from(`${opts.commitRange ?? "1"}\n`);
-    }
-    if (args[0] === "fetch" && args[args.length - 1] === "soleur/kb-sync") {
-      if (opts.sideExists) return Buffer.from("");
-      throw new Error("couldn't find remote ref soleur/kb-sync");
-    }
-    if (args[0] === "fetch") return Buffer.from("");
-    if (args[0] === "diff") {
-      // exit 0 (no diff) → no commit; exit 1 (changes) → commit
-      if (opts.noStagedChanges) return Buffer.from("");
-      throw new Error("changes staged");
-    }
-    // checkout / commit / reset → no output
-    return Buffer.from("");
-  };
-}
-
-/** Index of the first git call whose argv joins to `needle` (or -1). */
-function gitIdx(needle: string): number {
-  return gitCalls.findIndex((a) => a.join(" ") === needle);
-}
+const STUB_SERVICE = {} as never;
+const run = () => syncPush("user-1", "/tmp/ws-fallback", STUB_SERVICE, "ws-1");
+const opsOf = (spy: typeof reportSilentFallbackSpy, op: string) =>
+  spy.mock.calls.filter(([, ctx]) => (ctx as { op?: string }).op === op);
+const gh006 = () => new KbSyncError("push_rejected", "protected_branch");
 
 beforeEach(() => {
-  gitCalls = [];
-  reportSilentFallbackSpy.mockReset();
-  warnSilentFallbackSpy.mockReset();
-  gitWithInstallationAuthSpy.mockReset();
-  getCurrentRepoUrlSpy.mockReset();
-  getCurrentRepoUrlSpy.mockResolvedValue("https://github.com/acme/widgets");
-  findOpenPullRequestSpy.mockReset();
-  findOpenPullRequestSpy.mockResolvedValue(null);
-  createPullRequestSpy.mockReset();
-  createPullRequestSpy.mockResolvedValue({
-    number: 7,
-    htmlUrl: "https://github.com/acme/widgets/pull/7",
-    url: "https://api.github.com/repos/acme/widgets/pulls/7",
-  });
-  resolveInstallationIdSpy.mockReset();
-  resolveInstallationIdSpy.mockResolvedValue(42);
+  for (const f of [reportSilentFallbackSpy, warnSilentFallbackSpy, mirrorWithDebounceSpy, mirrorWarnWithDebounceSpy, publishSpy, writeRepoColsSpy]) f.mockReset();
 });
 
-describe("classifyPushError", () => {
-  test("GH006 protected-branch rejection → protected_branch", () => {
-    const err = pushErr("Command failed: git push", PROTECTED_STDERR);
-    expect(classifyPushError(err)).toBe("protected_branch");
+describe("syncPush — protected-branch fallback op contract (#5426, #12600)", () => {
+  test("the publish receives the frozen HEAD and an injected workspace writer", async () => {
+    publishSpy.mockResolvedValue({ kind: "pushed" });
+    await run();
+    expect(publishSpy).toHaveBeenCalledTimes(1);
+    const input = publishSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(input).toEqual(
+      expect.objectContaining({ userId: "user-1", workspaceId: "ws-1", installationId: 42, headSha: "a".repeat(40), refName: "refs/heads/main" }),
+    );
+    expect(Object.keys(input.writer as object).sort()).toEqual(["casBranch", "setTracking", "unpack"]);
   });
 
-  test("required-approving-review tail still classifies protected_branch", () => {
-    const err = pushErr(
-      "push failed",
-      "remote: error: GH006: Protected branch update failed for refs/heads/main.\nremote: error: At least 1 approving review is required by reviewers with write access.",
-    );
-    expect(classifyPushError(err)).toBe("protected_branch");
+  test("D13: the injected workspace writers run their git child with a timeout (a stalled .lock cannot wedge the turn)", async () => {
+    publishSpy.mockResolvedValue({ kind: "noop" });
+    await run();
+    const writer = publishSpy.mock.calls[0][0].writer as {
+      unpack(b: Buffer): Promise<void>;
+      casBranch(b: string, n: string, p: string): Promise<void>;
+      setTracking(b: string, s: string): Promise<void>;
+    };
+    const { execFile } = await import("child_process");
+    const spy = vi.mocked(execFile);
+    spy.mockClear();
+    await writer.unpack(Buffer.from("PACK"));
+    await writer.casBranch("main", "a".repeat(40), "b".repeat(40));
+    await writer.setTracking("main", "c".repeat(40));
+    expect(spy).toHaveBeenCalledTimes(3);
+    // D21: a 30 s bound; D38(1): the child is async and SIGKILLed at the bound, so it never blocks the event loop
+    expect(CONNECTED_REPO_GIT_TIMEOUT_MS).toBe(30_000);
+    for (const call of spy.mock.calls) {
+      const opts = call[2] as { timeout?: number; killSignal?: string };
+      expect(opts.timeout).toBe(CONNECTED_REPO_GIT_TIMEOUT_MS);
+      expect(opts.killSignal).toBe("SIGKILL");
+    }
   });
 
-  test("required-status-check tail still classifies protected_branch", () => {
-    const err = pushErr(
-      "push failed",
-      ' ! [remote rejected] main -> main (protected branch hook declined)\nremote: error: Required status check "ci" is expected.',
-    );
-    expect(classifyPushError(err)).toBe("protected_branch");
-  });
-
-  test("require-PR tail without GH006 prefix still classifies protected_branch", () => {
-    // Defensive: GitHub always prefixes with GH006 today, but a require-PR-only
-    // protection config whose stderr drops the prefix must still route to the
-    // fallback, not loop the divergence treadmill.
-    const err = pushErr(
-      "push failed",
-      " ! [remote rejected] main -> main\nremote: error: Changes must be made through a pull request.",
-    );
-    expect(classifyPushError(err)).toBe("protected_branch");
-  });
-
-  test("shallow clone reject → persistent_other (must not loop)", () => {
-    const err = pushErr(
-      "push failed",
-      " ! [remote rejected] main -> main (shallow update not allowed)\nerror: failed to push some refs",
-    );
-    expect(classifyPushError(err)).toBe("persistent_other");
-  });
-
-  test("auth failure → other (existing best-effort retry)", () => {
-    const err = pushErr(
-      "Command failed: git push",
-      "remote: Invalid username or password.\nfatal: Authentication failed for 'https://github.com/owner/repo.git/'",
-    );
-    expect(classifyPushError(err)).toBe("other");
-  });
-
-  test("network failure → other", () => {
-    const err = pushErr(
-      "Command failed: git push",
-      "fatal: unable to access 'https://github.com/owner/repo.git/': Could not resolve host: github.com",
-    );
-    expect(classifyPushError(err)).toBe("other");
-  });
-
-  test("non-Error input does not throw and classifies other", () => {
-    expect(classifyPushError("some string")).toBe("other");
-    expect(classifyPushError(undefined)).toBe("other");
-  });
-});
-
-describe("syncPush — protected-branch fallback (#5426 Phase 2)", () => {
-  // AC2 — pushes soleur/kb-sync to the USER's repo + opens a PR, base resolved
-  // dynamically (never hardcoded main).
-  test("AC2: protected push → side branch + create PR in the user's repo", async () => {
-    gitWithInstallationAuthSpy.mockImplementation(makeGitMock());
-
-    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
-
-    expect(gitIdx("push origin HEAD:refs/heads/soleur/kb-sync")).toBeGreaterThan(
-      -1,
-    );
-    expect(createPullRequestSpy).toHaveBeenCalledTimes(1);
-    expect(createPullRequestSpy).toHaveBeenCalledWith(
-      42,
-      "acme",
-      "widgets",
-      "soleur/kb-sync",
-      "main",
-      expect.stringMatching(/knowledge-base/i),
-      expect.any(String),
-    );
-  });
-
-  test("AC2: base is the RESOLVED default branch, never hardcoded main", async () => {
-    gitWithInstallationAuthSpy.mockImplementation(
-      makeGitMock({ defaultRef: "origin/develop" }),
-    );
-
-    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
-
-    expect(createPullRequestSpy).toHaveBeenCalledWith(
-      42,
-      "acme",
-      "widgets",
-      "soleur/kb-sync",
-      "develop",
-      expect.any(String),
-      expect.any(String),
-    );
-    // reset target also tracks the resolved default
-    expect(gitIdx("reset --hard origin/develop")).toBeGreaterThan(-1);
-  });
-
-  // AC3 — after success, default is reset to origin and HEAD restored to it,
-  // and the reset happens ONLY AFTER the side-branch push + PR.
-  test("AC3: default reset to origin happens after side-branch push + PR", async () => {
-    gitWithInstallationAuthSpy.mockImplementation(makeGitMock());
-
-    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
-
-    const sidePush = gitIdx("push origin HEAD:refs/heads/soleur/kb-sync");
-    const checkoutDefault = gitIdx("checkout main");
-    const reset = gitIdx("reset --hard origin/main");
-    expect(sidePush).toBeGreaterThan(-1);
-    expect(reset).toBeGreaterThan(sidePush);
-    expect(checkoutDefault).toBeGreaterThan(sidePush);
-    expect(reset).toBeGreaterThan(checkoutDefault);
-  });
-
-  // AC4 — tree-overlay accretion: build soleur/kb-sync FROM the existing side
-  // branch (preserving its prior commits) via `checkout <defaultHead> --
-  // knowledge-base`, never `checkout -B` from default and never cherry-pick.
-  test("AC4: accretes via tree-overlay onto the durable side branch (not checkout-B-from-default, not cherry-pick)", async () => {
-    // First fallback — side branch absent → branch from origin/default.
-    gitWithInstallationAuthSpy.mockImplementation(
-      makeGitMock({ sideExists: false }),
-    );
-    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
-    expect(gitIdx("checkout -f -B soleur/kb-sync origin/main")).toBeGreaterThan(
-      -1,
-    );
-    expect(gitIdx("checkout defHEAD -- knowledge-base")).toBeGreaterThan(-1);
-    expect(createPullRequestSpy).toHaveBeenCalledTimes(1);
-
-    // Second fallback — side branch now exists → branch from the SIDE branch
-    // (preserves prior commits), reuse the open PR.
-    gitCalls = [];
-    findOpenPullRequestSpy.mockResolvedValue({
-      number: 7,
-      htmlUrl: "https://github.com/acme/widgets/pull/7",
-      url: "https://api.github.com/repos/acme/widgets/pulls/7",
-    });
-    createPullRequestSpy.mockClear();
-    gitWithInstallationAuthSpy.mockImplementation(
-      makeGitMock({ sideExists: true }),
-    );
-    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
-
-    expect(
-      gitIdx("checkout -f -B soleur/kb-sync origin/soleur/kb-sync"),
-    ).toBeGreaterThan(-1);
-    expect(gitIdx("checkout -f -B soleur/kb-sync origin/main")).toBe(-1);
-    expect(gitIdx("checkout defHEAD -- knowledge-base")).toBeGreaterThan(-1);
-    // never cherry-pick
-    expect(gitCalls.some((a) => a[0] === "cherry-pick")).toBe(false);
-    // PR reused, not recreated
-    expect(createPullRequestSpy).not.toHaveBeenCalled();
-  });
-
-  // AC5 — unprotected path unchanged: bare push succeeds → no fallback at all.
-  test("AC5: unprotected default → direct push, no fallback", async () => {
-    gitWithInstallationAuthSpy.mockImplementation(
-      makeGitMock({ initialPush: "ok" }),
-    );
-
-    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
-
-    expect(createPullRequestSpy).not.toHaveBeenCalled();
-    expect(gitCalls.some((a) => a[0] === "checkout")).toBe(false);
-    expect(gitCalls.some((a) => a[0] === "reset")).toBe(false);
-    // no failure op
-    expect(
-      reportSilentFallbackSpy.mock.calls.some(
-        ([, ctx]) =>
-          (ctx as { op?: string }).op === "kb-sync.protected-fallback-failed",
-      ),
-    ).toBe(false);
-  });
-
-  // AC6 — failure preserves writes: a side-branch push failure must NOT reset
-  // default, must restore HEAD to default, and must emit the failure op.
-  test("AC6: side-branch push failure preserves writes (no reset) + emits failure op", async () => {
-    gitWithInstallationAuthSpy.mockImplementation(
-      makeGitMock({ sideBranchPushFails: true }),
-    );
-
-    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
-
-    // default NOT reset (writes survive on default for next-session retry)
-    expect(gitIdx("reset --hard origin/main")).toBe(-1);
-    // PR never attempted (failed before it)
-    expect(createPullRequestSpy).not.toHaveBeenCalled();
-    // restored back to default branch so the workspace isn't parked on the side branch
-    expect(gitIdx("checkout main")).toBeGreaterThan(-1);
-    // failure op emitted, discriminated as a ran-and-failed fallback
-    const failed = reportSilentFallbackSpy.mock.calls.filter(
-      ([, ctx]) =>
-        (ctx as { op?: string }).op === "kb-sync.protected-fallback-failed",
-    );
-    expect(failed).toHaveLength(1);
-    expect((failed[0][1] as { extra?: { reason?: string } }).extra?.reason).toBe(
-      "fallback_failed",
-    );
-  });
-
-  // AC7 — idempotent re-entry: empty range + no overlay diff + open PR exists →
-  // no-op reuse, NOT reported as failure, success warn emitted.
-  test("AC7: idempotent empty re-entry reuses PR and is not a failure", async () => {
-    findOpenPullRequestSpy.mockResolvedValue({
-      number: 7,
-      htmlUrl: "https://github.com/acme/widgets/pull/7",
-      url: "https://api.github.com/repos/acme/widgets/pulls/7",
-    });
-    gitWithInstallationAuthSpy.mockImplementation(
-      makeGitMock({ sideExists: true, commitRange: "0", noStagedChanges: true }),
-    );
-
-    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
-
-    // no commit when overlay produced no diff
-    expect(gitCalls.some((a) => a[0] === "commit")).toBe(false);
-    // PR reused, not recreated
-    expect(createPullRequestSpy).not.toHaveBeenCalled();
-    // not a failure
-    expect(
-      reportSilentFallbackSpy.mock.calls.some(
-        ([, ctx]) =>
-          (ctx as { op?: string }).op === "kb-sync.protected-fallback-failed",
-      ),
-    ).toBe(false);
-    // success warn op fired
-    expect(
-      warnSilentFallbackSpy.mock.calls.some(
-        ([, ctx]) =>
-          (ctx as { op?: string }).op === "kb-sync.push-protected-fallback",
-      ),
-    ).toBe(true);
-  });
-
-  // Observability — success entry op carries PR url + commit count.
-  test("success emits kb-sync.push-protected-fallback warn with PR url + commit count", async () => {
-    gitWithInstallationAuthSpy.mockImplementation(
-      makeGitMock({ commitRange: "2" }),
-    );
-
-    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
-
-    const warn = warnSilentFallbackSpy.mock.calls.find(
-      ([, ctx]) =>
-        (ctx as { op?: string }).op === "kb-sync.push-protected-fallback",
-    );
-    expect(warn).toBeDefined();
-    expect(warn![1]).toEqual(
+  test("fallback delivered -> warn kb-sync.push-protected-fallback with PR url + commit count, no last-synced stamp", async () => {
+    publishSpy.mockResolvedValue({ kind: "fallback", prUrl: "https://github.com/acme/widgets/pull/7", commitCount: 1 });
+    await run();
+    const warned = opsOf(warnSilentFallbackSpy, "kb-sync.push-protected-fallback");
+    expect(warned).toHaveLength(1);
+    expect(warned[0][1]).toEqual(
       expect.objectContaining({
         feature: "session-sync",
-        op: "kb-sync.push-protected-fallback",
-        extra: expect.objectContaining({
-          prUrl: "https://github.com/acme/widgets/pull/7",
-          commitCount: 2,
-        }),
+        extra: expect.objectContaining({ prUrl: "https://github.com/acme/widgets/pull/7", commitCount: 1 }),
       }),
     );
+    expect(opsOf(reportSilentFallbackSpy, "kb-sync.protected-fallback-failed")).toHaveLength(0);
+    // W5 (D29(9)): a delivered fallback no longer stamps `repo_last_synced_at` (only syncPull does)
+    expect(writeRepoColsSpy).not.toHaveBeenCalled();
   });
 
-  // Classification routing — persistent_other does NOT enter the fallback and
-  // gets a distinct failure op (no infinite retry loop).
-  test("persistent_other (shallow) → failure op, no fallback git work", async () => {
-    gitWithInstallationAuthSpy.mockImplementation(
-      makeGitMock({ initialPush: "shallow" }),
-    );
+  test("fallback failed -> kb-sync.protected-fallback-failed, null err, closed fallback_reason + push_class tags, debounced per workspace and reason, no bookkeeping", async () => {
+    for (const fallbackReason of ["side_hash_mismatch", "side_guard_failed", "side_push_rejected", "pr_failed"]) {
+      mirrorWithDebounceSpy.mockReset();
+      publishSpy.mockResolvedValue({ kind: "fallback_failed", fallbackReason, pushErr: gh006() });
+      await run();
+      // D8: the Error path loses the tags to the pino-mirror capture (#8629), so the emit is null-first and debounced (R16).
+      expect(opsOf(reportSilentFallbackSpy, "kb-sync.protected-fallback-failed")).toHaveLength(0);
+      const failed = opsOf(mirrorWithDebounceSpy, "kb-sync.protected-fallback-failed");
+      expect(failed, fallbackReason).toHaveLength(1);
+      const [err, ctx, key, errorClass] = failed[0] as [unknown, { extra?: Record<string, unknown>; tags?: Record<string, string>; message?: string }, string, string];
+      expect(err).toBeNull();
+      expect(ctx.extra).toEqual({ userId: "user-1", reason: "fallback_failed" });
+      expect(ctx.tags).toEqual({ reason: "fallback_failed", fallback_reason: fallbackReason, push_class: "protected_branch" });
+      expect(ctx.message).toMatch(/fallback failed/);
+      expect(key).toBe("ws-1");
+      expect(errorClass).toBe(`kb-sync-fallback-failed:${fallbackReason}`);
+    }
+    expect(writeRepoColsSpy).not.toHaveBeenCalled();
+  });
 
-    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
-
-    // fallback never ran (no default-branch resolution)
-    expect(gitCalls.some((a) => a[0] === "symbolic-ref")).toBe(false);
-    expect(createPullRequestSpy).not.toHaveBeenCalled();
-    const failed = reportSilentFallbackSpy.mock.calls.filter(
-      ([, ctx]) =>
-        (ctx as { op?: string }).op === "kb-sync.protected-fallback-failed",
-    );
+  test("persistent_other (shallow) -> kb-sync.protected-fallback-failed with null err and tag reason persistent_other, debounced per workspace (D21), not op syncPush", async () => {
+    publishSpy.mockRejectedValue(new KbSyncError("push_rejected", "persistent_other"));
+    await run();
+    expect(opsOf(reportSilentFallbackSpy, "kb-sync.protected-fallback-failed")).toHaveLength(0);
+    const failed = opsOf(mirrorWithDebounceSpy, "kb-sync.protected-fallback-failed");
     expect(failed).toHaveLength(1);
-    // same op as a failed fallback, but discriminated via reason so Sentry can
-    // tell "never attempted" from "ran and failed"
-    expect((failed[0][1] as { extra?: { reason?: string } }).extra?.reason).toBe(
-      "persistent_other",
-    );
+    const [err, ctx, key, errorClass] = failed[0] as [unknown, { extra?: Record<string, unknown>; tags?: Record<string, string> }, string, string];
+    expect(err).toBeNull();
+    expect(ctx.extra).toEqual({ userId: "user-1", reason: "persistent_other" });
+    expect(ctx.tags).toEqual({ reason: "persistent_other", push_class: "persistent_other" });
+    expect(key).toBe("ws-1");
+    expect(errorClass).toBe("kb-sync-persistent-other");
+    expect(opsOf(reportSilentFallbackSpy, "syncPush")).toHaveLength(0);
+    expect(writeRepoColsSpy).not.toHaveBeenCalled();
   });
 
-  // Classification routing — `other` (auth/network) falls through to the
-  // existing outer-catch best-effort retry (op:syncPush), no fallback.
-  test("other (auth) → outer catch op:syncPush, no fallback", async () => {
-    gitWithInstallationAuthSpy.mockImplementation(
-      makeGitMock({ initialPush: "auth" }),
-    );
+  test("D21: a transient side push (side_push_transient) warns OFF the paging op, debounced per workspace; no bookkeeping", async () => {
+    publishSpy.mockResolvedValue({ kind: "fallback_failed", fallbackReason: "side_push_transient", pushErr: new KbSyncError("push_transient", "other") });
+    await run();
+    expect(opsOf(mirrorWithDebounceSpy, "kb-sync.protected-fallback-failed")).toHaveLength(0);
+    expect(opsOf(reportSilentFallbackSpy, "kb-sync.protected-fallback-failed")).toHaveLength(0);
+    const warned = opsOf(mirrorWarnWithDebounceSpy, "kb-sync.side-push-transient");
+    expect(warned).toHaveLength(1);
+    const [err, ctx, key, errorClass] = warned[0] as [unknown, { tags?: Record<string, string>; extra?: Record<string, unknown> }, string, string];
+    expect(err).toBeNull();
+    expect(ctx.tags).toEqual({ fallback_reason: "side_push_transient", push_class: "other" });
+    expect(ctx.extra).toEqual({ userId: "user-1" });
+    expect(key).toBe("ws-1");
+    expect(errorClass).toBe("kb-sync-side-push-transient");
+    expect(writeRepoColsSpy).not.toHaveBeenCalled();
+  });
 
-    await syncPush("user-1", "/tmp/ws", STUB_SERVICE, "user-1");
+  test("D21: an isolated_refused error carries the refusal's closed reason as a tag (no path)", async () => {
+    publishSpy.mockRejectedValue(new KbSyncError("isolated_refused", undefined, "shallow_invalid"));
+    await run();
+    const outer = opsOf(reportSilentFallbackSpy, "syncPush");
+    expect(outer).toHaveLength(1);
+    expect((outer[0][1] as { tags?: Record<string, string> }).tags).toEqual({ reason: "isolated_refused", push_class: "none", isolated_reason: "shallow_invalid" });
+  });
 
-    expect(gitCalls.some((a) => a[0] === "symbolic-ref")).toBe(false);
-    expect(createPullRequestSpy).not.toHaveBeenCalled();
-    const syncPushOp = reportSilentFallbackSpy.mock.calls.filter(
-      ([, ctx]) => (ctx as { op?: string }).op === "syncPush",
-    );
-    expect(syncPushOp).toHaveLength(1);
+  test("other (auth / network) -> outer catch op:syncPush, null err, closed reason + push_class tags, no fallback op", async () => {
+    publishSpy.mockRejectedValue(new KbSyncError("push_transient", "other"));
+    await run();
+    const outer = opsOf(reportSilentFallbackSpy, "syncPush");
+    expect(outer).toHaveLength(1);
+    const [err, ctx] = outer[0] as [unknown, { extra?: Record<string, unknown>; tags?: Record<string, string> }];
+    expect(err).toBeNull();
+    expect(ctx.tags).toEqual({ reason: "push_transient", push_class: "other" });
+    expect(ctx.extra).toEqual({ userId: "user-1" });
+    expect(opsOf(reportSilentFallbackSpy, "kb-sync.protected-fallback-failed")).toHaveLength(0);
+  });
+
+  test("a non-KbSyncError -> op:syncPush with reason unclassified and extra.errName only, never err.message (argv)", async () => {
+    class GitChildError extends Error {}
+    publishSpy.mockRejectedValue(Object.assign(new GitChildError("Command failed: git push https://github.com/acme/widgets.git abc:main"), { name: "GitChildError" }));
+    await run();
+    const outer = opsOf(reportSilentFallbackSpy, "syncPush");
+    expect(outer).toHaveLength(1);
+    const [err, ctx] = outer[0] as [unknown, { extra?: Record<string, unknown>; tags?: Record<string, string>; message?: string }];
+    expect(err).toBeNull();
+    expect(ctx.tags).toEqual({ reason: "unclassified", push_class: "none" });
+    expect(ctx.extra).toEqual({ userId: "user-1", errName: "GitChildError" });
+    expect(JSON.stringify(outer)).not.toMatch(/github\.com|Command failed/);
+  });
+
+  test("D20/D23: a non-KbSyncError carries extra.frame = its first server/app/lib stack frame as file:line:column, never the message", async () => {
+    // the message itself holds an `at` line naming an app path: only the frames AFTER the header may be read
+    const err = new TypeError("Cannot read https://github.com/acme/widgets.git\n    at forged (/srv/app/apps/web-platform/server/evil.ts:1:1)");
+    err.stack = [
+      `TypeError: ${err.message}`,
+      "    at Object.next (node:internal/streams/x:10:3)",
+      "    at helper (/srv/app/node_modules/pkg/index.js:5:1)",
+      "    at publishKbOnly (/srv/app/apps/web-platform/server/kb-sync-publish.ts:812:17)",
+      "    at syncPush (/srv/app/apps/web-platform/server/session-sync.ts:842:20)",
+    ].join("\n");
+    publishSpy.mockRejectedValue(err);
+    await run();
+    const outer = opsOf(reportSilentFallbackSpy, "syncPush");
+    expect(outer).toHaveLength(1);
+    const [, ctx] = outer[0] as [unknown, { extra?: Record<string, unknown>; tags?: Record<string, string> }];
+    expect(ctx.extra).toEqual({ userId: "user-1", errName: "TypeError", frame: "server/kb-sync-publish.ts:812:17" });
+    expect(ctx.tags).toEqual({ reason: "unclassified", push_class: "none" });
+    expect(JSON.stringify(outer)).not.toMatch(/github\.com|evil|Cannot read/);
+  });
+
+  test("held or nothing to sync -> no fallback op, no bookkeeping", async () => {
+    for (const result of [{ kind: "held", reason: "side_ahead" }, { kind: "noop" }]) {
+      publishSpy.mockResolvedValue(result);
+      await run();
+    }
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+    expect(writeRepoColsSpy).not.toHaveBeenCalled();
   });
 });

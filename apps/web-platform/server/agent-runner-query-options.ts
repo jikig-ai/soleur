@@ -303,6 +303,12 @@ export function assertAllowedToolsPreApprovalSafe(args: {
         `buildAgentQueryOptions: allowedTools entry would pre-approve Bash ahead of canUseTool: ${JSON.stringify(entry.slice(0, ENTRY_ECHO_MAX))}`,
       );
     }
+    // #12585 (CTO R6) — a SandboxNetworkAccess entry would pre-approve sandboxed hosts ahead of the deny-only arm.
+    if (normalised === "sandboxnetworkaccess" || normalised.startsWith("sandboxnetworkaccess(")) {
+      throw new Error(
+        `buildAgentQueryOptions: allowedTools entry would pre-approve SandboxNetworkAccess ahead of canUseTool: ${JSON.stringify(entry.slice(0, ENTRY_ECHO_MAX))}`,
+      );
+    }
     if (!normalised.startsWith("mcp__")) continue;
     if (!isPreApprovable(entry) && parsePluginWildcard(entry) === null) {
       throw new Error(

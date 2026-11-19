@@ -137,7 +137,7 @@ export async function DELETE(request: Request) {
   // appears connected and the agent could still act under the revoked GitHub
   // grant. The helper throws on either failure so we surface a 500 and the
   // (idempotent) disconnect is retried.
-  const { writeRepoColsToWorkspace } = await import(
+  const { writeRepoColsToWorkspace, clearKbSyncHeldCols } = await import(
     "@/server/workspace-repo-mirror"
   );
   try {
@@ -204,6 +204,13 @@ export async function DELETE(request: Request) {
   await drainBeforeReap(() => waitForWorkspaceSessionsToDeregister(activeWorkspaceId), logger, {
     workspaceIdHash,
   });
+
+  // #12714 (D29(1), D33(2), D39(f), D42): the held-files columns describe this connection, so they must not reappear
+  // after a reconnect. Cleared AFTER the drain (history H2: a sync that already read its installation could otherwise
+  // write a count back after an earlier clear; `repo_status = 'not_connected'` above already makes any later held
+  // write a no-op) and BEFORE the reap. A SEPARATE best-effort UPDATE: it never throws, and a failure (a missing
+  // column) sends one debounced mirror and leaves this route's status and response unchanged.
+  await clearKbSyncHeldCols(serviceClient, activeWorkspaceId);
 
   // Best-effort workspace cleanup — deleteWorkspace derives the paths from every
   // tenant root + the workspace identifier and handles non-existent directories.

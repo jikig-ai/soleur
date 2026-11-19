@@ -161,6 +161,14 @@ gh pr create --fill [--head <branch>] [--base <branch>]
 `k` is `[A-Za-z0-9_.-]+`, `v` is `[A-Za-z0-9._/:@+,-]+`, `branch` is `[A-Za-z0-9._/-]+`. A revert is a `gh pr create --fill`
 of a revert branch. Everything else stays with the operator: the grammar is the whole list, not a sample.
 
+### Review-Evidence arm check for delegated auto-merge
+
+A delegated `gh pr merge ... --auto` arms auto-merge on a PR whose head must already be covered by a passing
+`Review-Evidence:` comment. The verifier cannot run that check (it has no PR state), so the envelope's `Verification`
+section must carry the arm check's first statement as a backticked span. See
+`plugins/soleur/skills/review/references/review-evidence-comment.md` §"Arm check". An envelope that arms auto-merge
+without it is rejected with reason `arm-check-missing`.
+
 ### Scope binding
 
 The cited Scope item's own words must name the command's target as a whole token: for merge and ready, the pull request
@@ -396,6 +404,7 @@ source of these sentences; other documents point here and do not restate them.
 | `ran-in-future` | The record says this step already ran at a time that has not happened yet, so I cannot accept it. |
 | `no-answer` | I did not get an answer when I checked your standing approval, so I am waiting and have not done anything. |
 | `verifier-error` | The check of your standing approval gave an answer I could not understand, so I am waiting and have not done anything. |
+| `arm-check-missing` | A delegated merge that arms auto-merge needs the review evidence arm check in its verification, so I have paused and done nothing. |
 
 ## 8. The execution receipt
 

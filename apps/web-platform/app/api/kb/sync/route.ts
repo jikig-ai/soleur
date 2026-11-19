@@ -102,7 +102,7 @@ async function handleSync(userId: string): Promise<Response> {
     repoMeta.githubInstallationId,
     access.workspacePath,
     logger,
-    { userId, op: "manual" },
+    { userId, workspaceId: access.activeWorkspaceId, op: "manual" },
   );
 
   // Anchor `at` to sync-completion (not sync-start) so manual and

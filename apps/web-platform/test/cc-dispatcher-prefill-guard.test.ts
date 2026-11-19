@@ -112,6 +112,10 @@ vi.mock("@/server/resolve-web-egress", () => ({
   resolveWebEgressStrict: vi.fn(async () => false),
 }));
 vi.mock("@/server/egress-forwarder", () => ({
+  markEgressRevoked: vi.fn(),
+  EgressRevokedError: class extends Error {},
+  egressRevocationEpoch: () => 0,
+  isEgressRevoked: () => false,
   spawnEgressForwarder: vi.fn(),
   teardownEgressForwarder: vi.fn(),
   reapOrphanEgressForwarders: vi.fn(),
@@ -157,6 +161,8 @@ vi.mock("@/server/permission-callback", () => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
+  // #12704 obs F7: the stored held-count read warns through the debounced warning mirror.
+  mirrorWarnWithDebounce: vi.fn(),
   // #3369: mirrorWithDebounce extracted to observability.
   // These dispatcher tests do not exercise the debounce TTL, so
   // the stub forwards every call straight through to the spy.

@@ -104,6 +104,35 @@ describe("resolveWebEgressStrict — revocation-site contract (#9534)", () => {
   });
 });
 
+describe("webEgressReadsOff — toggle-off failure path (#12585)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("is true ONLY when the membership-checked read returns exactly false", async () => {
+    const { webEgressReadsOff } = await import("@/server/resolve-web-egress");
+    mockRpc.mockResolvedValue({ data: false, error: null });
+    expect(await webEgressReadsOff("user-1", "ws-1")).toBe(true);
+    expect(mockRpc).toHaveBeenCalledWith("get_workspace_web_egress", { p_workspace_id: "ws-1" });
+    mockRpc.mockResolvedValue({ data: true, error: null });
+    expect(await webEgressReadsOff("user-1", "ws-1")).toBe(false);
+    // NULL = not a member (a removed member's stale pointer, #4307): never "off" here.
+    mockRpc.mockResolvedValue({ data: null, error: null });
+    expect(await webEgressReadsOff("user-1", "ws-1")).toBe(false);
+  });
+
+  it("never throws: an RPC or auth fault reads as not-known-off", async () => {
+    const { RuntimeAuthError, getFreshTenantClient } = await import("@/lib/supabase/tenant");
+    const { webEgressReadsOff } = await import("@/server/resolve-web-egress");
+    mockRpc.mockResolvedValue({ data: false, error: { message: "boom" } });
+    expect(await webEgressReadsOff("user-1", "ws-1")).toBe(false);
+    vi.mocked(getFreshTenantClient).mockImplementationOnce(async () => {
+      throw new RuntimeAuthError("jwt_mint", "token expired");
+    });
+    expect(await webEgressReadsOff("user-1", "ws-1")).toBe(false);
+  });
+});
+
 describe("resolveWebEgress (workspace-scoped, RPC-only, fail-closed)", () => {
   beforeEach(() => {
     vi.clearAllMocks();

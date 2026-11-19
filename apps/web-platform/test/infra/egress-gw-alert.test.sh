@@ -665,8 +665,9 @@ s = s.replace(old, "greatest(toInt64(2) - toInt64(")' \
     "silent predicate"
   mutate_red "silent: DISTINCT host_name regresses to count(*) (the host-mask defect)" TF \
     'old = "toInt64(count(DISTINCT JSONExtractString(raw, \x27host_name\x27)))"
-assert s.count(old) == 1
-s = s.replace(old, "toInt64(count(*))")' \
+# Scoped to the egress local (exactly once inside it): #12726 gave inngest_cutover_flip_silent_sql the
+# egress_gw_probe_silent_sql form with the roster constant 1, so this inner count also occurs there.
+s = edit(s, SILLOC, old, "toInt64(count(*))", SQLEND)' \
     "host-mask defect"
   mutate_red "silent: GROUP BY time reintroduced (per-bucket row counts again)" TF \
     'old = "      AND JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) = \x27egress-gw-probe\x27\n  SQL\n\n  # Verdict failures"

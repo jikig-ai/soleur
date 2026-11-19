@@ -52,9 +52,11 @@ vi.mock("@/server/logger", () => ({
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 
 import { writeC4Diagram } from "@/server/c4-writer";
+import * as Sentry from "@sentry/nextjs";
 
 const BASE = {
   userId: "user-1",
+  workspaceId: "22222222-2222-4222-8222-222222222222",
   installationId: 42,
   owner: "jikig-ai",
   repo: "soleur",
@@ -520,5 +522,76 @@ describe("writeC4Diagram — #8623 refusal and staging diagnostics (verbatim)", 
       expect(res.rerenderDiagnostic ?? "").not.toMatch(/will update|re-render/i);
       expect(res.rerenderDiagnostic).toBeTruthy();
     }
+  });
+});
+
+describe("writeC4Diagram — a designed workspace hold after the commit (#12600 D16)", () => {
+  const HELD = { ok: false, error: new Error("held"), errorClass: "non_fast_forward", held: "held_commits" };
+  beforeEach(() => {
+    vi.mocked(Sentry.captureException).mockClear();
+  });
+
+  it("first sync held -> ok:true with workspaceSync pending; no route-level Sentry capture; no c4-rerender resync report", async () => {
+    mocks.syncWorkspace.mockResolvedValue(HELD);
+    const res = await writeC4Diagram(source(C4));
+    // D22(c): the render still ran (from GitHub) and committed, and its resync was held too
+    expect(res).toEqual(expect.objectContaining({ ok: true, commitSha: "commit123", workspaceSync: "pending", workspaceSyncHeld: "save_and_rerender", rerendered: false }));
+    if (!res.ok) return;
+    expect(res.rerenderDiagnostic).toBeUndefined();
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+    const ops = mocks.reportSilentFallback.mock.calls.map(([, o]) => (o as { op?: string }).op);
+    expect(ops).not.toContain("resync");
+  });
+
+  it("first sync ok, re-sync held -> ok:true with workspaceSync pending and no retry diagnostic", async () => {
+    mocks.syncWorkspace.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce(HELD);
+    const res = await writeC4Diagram(source(C4));
+    // D22(c): only the post-render resync was held, so the saved source IS in the workspace
+    expect(res).toEqual(expect.objectContaining({ ok: true, workspaceSync: "pending", workspaceSyncHeld: "rerender", rerendered: false }));
+    if (!res.ok) return;
+    expect(res.rerenderDiagnostic).toBeUndefined();
+    expect(mocks.reportSilentFallback.mock.calls.map(([, o]) => (o as { op?: string }).op)).not.toContain("resync");
+  });
+
+  it("D22(c): first sync held and the render FAILS -> pending (held at the save) and the render diagnostic is still returned", async () => {
+    mocks.syncWorkspace.mockResolvedValue(HELD);
+    renderReturns({ ok: false, reason: "timeout", detail: "stage: deadline", phase: "stage" });
+    const res = await writeC4Diagram(source(C4));
+    expect(res).toEqual(expect.objectContaining({ ok: true, workspaceSync: "pending", workspaceSyncHeld: "save", rerendered: false }));
+    if (!res.ok) return;
+    expect(res.rerenderDiagnostic).toBeTruthy();
+  });
+
+  it("D22(c): first sync held on a `.md` save (no render) -> pending held at the save", async () => {
+    mocks.syncWorkspace.mockResolvedValue(HELD);
+    const res = await writeC4Diagram(source(MD));
+    expect(res).toEqual(expect.objectContaining({ ok: true, workspaceSync: "pending", workspaceSyncHeld: "save", rerendered: true }));
+  });
+
+  it("D22(c): first sync held but the post-render resync succeeds -> the workspace is current, so no pending", async () => {
+    mocks.syncWorkspace.mockResolvedValueOnce(HELD).mockResolvedValueOnce({ ok: true });
+    const res = await writeC4Diagram(source(C4));
+    expect(res).toEqual(expect.objectContaining({ ok: true, rerendered: true }));
+    expect(res).not.toHaveProperty("workspaceSync");
+    expect(res).not.toHaveProperty("workspaceSyncHeld");
+  });
+
+  it("a non_fast_forward abort with no hold stays SYNC_FAILED, without the route-level capture", async () => {
+    mocks.syncWorkspace.mockResolvedValueOnce({ ok: false, error: new Error("abort"), errorClass: "non_fast_forward" });
+    const res = await writeC4Diagram(source(C4));
+    expect(res).toEqual(expect.objectContaining({ ok: false, status: 500, code: "SYNC_FAILED" }));
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it("a sync_failed is still captured", async () => {
+    mocks.syncWorkspace.mockResolvedValueOnce({ ok: false, error: new Error("boom"), errorClass: "sync_failed" });
+    await writeC4Diagram(source(C4));
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+  });
+
+  it("a plain success carries no workspaceSync key", async () => {
+    const res = await writeC4Diagram(source(C4));
+    expect(res).not.toHaveProperty("workspaceSync");
+    expect(res).not.toHaveProperty("workspaceSyncHeld");
   });
 });

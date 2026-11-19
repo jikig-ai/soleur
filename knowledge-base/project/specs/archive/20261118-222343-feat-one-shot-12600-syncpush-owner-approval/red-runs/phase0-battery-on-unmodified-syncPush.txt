@@ -1,0 +1,35 @@
+× syncPush publishes only a Soleur-built KB commit (real git) > H1: a KB-only auto-commit over T is published as S (parent T, HEAD's tree, Soleur identity); local == tracking == S
+× syncPush publishes only a Soleur-built KB commit (real git) > H1b: a KB-only local commit plus a session-start pull merge of an upstream code change publishes S on the new T
+× syncPush publishes only a Soleur-built KB commit (real git) > H2 (matrix 1, 3, 4, 5, 11): foreign commit + KB edit -> remote gets only S; local is M and keeps the foreign commit
+× syncPush publishes only a Soleur-built KB commit (real git) > H3: foreign commit and no KB change -> remote unchanged, one held_foreign info line, no Sentry event
+× syncPush publishes only a Soleur-built KB commit (real git) > H5 (matrix 7, 8): every token-bearing call is hardened and names exactly the literal URL; no legacy-arm call
+✓ syncPush publishes only a Soleur-built KB commit (real git) > H6: the turn after a successful push with no new commits mints no token and writes no history row
+× syncPush publishes only a Soleur-built KB commit (real git) > H7: turn 2 after H2 with another KB edit -> remote S2 (parent S), local M2
+× syncPush publishes only a Soleur-built KB commit (real git) > matrix 2: forged bytes for T's root tree in the workspace store -> nothing pushed, hash_mismatch
+× syncPush publishes only a Soleur-built KB commit (real git) > matrix 6: a forged refs/remotes/origin/main is never the base (parent is the ls-remote tip)
+× syncPush publishes only a Soleur-built KB commit (real git) > matrix 7: push.default=matching and a second local branch holding a foreign commit -> remote gains no branch
+× syncPush publishes only a Soleur-built KB commit (real git) > matrix 8: remote.origin.url pointed at another bare remote -> that remote receives nothing
+× syncPush publishes only a Soleur-built KB commit (real git) > matrix 9: a remote KB edit fetched but not merged plus a local KB edit -> nothing pushed, remote_ahead
+× syncPush publishes only a Soleur-built KB commit (real git) > remote tip absent from the workspace -> nothing pushed, remote_unknown_tip
+× syncPush publishes only a Soleur-built KB commit (real git) > detached HEAD -> nothing pushed, detached_head
+× syncPush publishes only a Soleur-built KB commit (real git) > matrix 18: a local feature branch that also exists on the remote -> remote feature unchanged, non_default_branch
+× syncPush publishes only a Soleur-built KB commit (real git) > a bare remote with no HEAD -> nothing pushed, remote_branch_absent
+× syncPush publishes only a Soleur-built KB commit (real git) > knowledge-base replaced by a file -> nothing pushed, kb_not_tree
+× syncPush publishes only a Soleur-built KB commit (real git) > matrix 17: MERGE_HEAD present with conflict markers in a KB file -> no auto-commit, no push, merge_in_progress
+× syncPush publishes only a Soleur-built KB commit (real git) > matrix 15: HEAD moves during the ls-remote -> nothing pushed, the new commit stays, head_moved
+× syncPush publishes only a Soleur-built KB commit (real git) > matrix 19: refs/heads/main swapped to a symref after the HEAD read -> refs/heads/x is untouched
+✓ syncPush publishes only a Soleur-built KB commit (real git) > matrix 14: after H2 the real syncWorkspace (reconcile webhook shape) fast-forwards with no recovery branch
+× syncPush publishes only a Soleur-built KB commit (real git) > matrix 21: held foreign commit + dirty tracked code file, upstream main moves -> syncWorkspace does not reset
+✓ syncPush publishes only a Soleur-built KB commit (real git) > R18 positive control: only KB files dirty -> syncWorkspace still recovers (branch-aside + reset)
+× syncPush publishes only a Soleur-built KB commit (real git) > a failing ls-remote -> the isolated dir is disposed and op syncPush carries reason ls_remote_failed, no URL
+× protected default branch: side commit on soleur/kb-sync (real git, real pre-receive hook) > matrix 12: KB-only edit + dirty code file -> single-parent side on T, PR created, local == tracking == side, dirty file kept
+× protected default branch: side commit on soleur/kb-sync (real git, real pre-receive hook) > matrix 13: protected + foreign commit -> local is M, keeps the foreign commit and the dirty code file
+× protected default branch: side commit on soleur/kb-sync (real git, real pre-receive hook) > matrix 10: a forged refs/remotes/origin/soleur/kb-sync (remote has none) is never the side parent
+× protected default branch: side commit on soleur/kb-sync (real git, real pre-receive hook) > matrix 20: an unmerged side tip on an older T (ancestor of HEAD) -> side has parents (P, T); after a PR merge pull --ff-only fast-forwards
+× protected default branch: side commit on soleur/kb-sync (real git, real pre-receive hook) > matrix 16: a side tip holding unmerged KB content not in HEAD's history -> nothing pushed, side_ahead
+× protected default branch: side commit on soleur/kb-sync (real git, real pre-receive hook) > matrix 16 positive: the side tip's KB equals T's (PR merged) -> the side commit is built
+× census (AC3, AC4) > the push argv appears exactly once in kb-sync-publish.ts and never in session-sync.ts
+× census (AC3, AC4) > no history walk, no agent-writable base, no legacy resolver
+⎯⎯⎯⎯⎯⎯ Failed Tests 29 ⎯⎯⎯⎯⎯⎯⎯
+      Tests  29 failed | 3 passed (32)
+   Duration  5.27s (transform 209ms, setup 32ms, import 263ms, tests 4.62s, environment 0ms)
