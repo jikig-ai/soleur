@@ -12,7 +12,7 @@
 #   GH_TOKEN, GH_REPO   read of in-flight runs; DOPPLER_TOKEN   prd_terraform read for `doppler run`
 #   CFAM_VERIFY_TRIES, CFAM_VERIFY_SLEEP   optional post-apply probe budget (default 12 x 10s)
 #
-# Order: inputs -> no run in flight on the three gated workflows -> Doppler resolves the NEW ids ->
+# Order: inputs -> no run in flight on any gated workflow -> Doppler resolves the NEW ids ->
 # init. Rehearsal: a scratch copy of the root on a local backend runs the real state-forget
 # (--rehearsal) and the plan and gate, never applies, then asserts the remote state serial and the
 # web-platform/backups/ listing are unchanged. Apply: state-forget (redirects-dns only), plan with
@@ -29,13 +29,14 @@ umask 077
 readonly P="cf-account-migrate"
 readonly STATE_BUCKET="soleur-terraform-state"
 readonly BACKUP_PREFIX="web-platform/backups/"
-readonly GATED_WORKFLOWS=(apply-web-platform-infra.yml apply-deploy-pipeline-fix.yml cf-lb-overlay.yml)
+readonly PREDICATE_REL="apps/web-platform/infra/scripts/cf-account-migration-complete.sh"
 readonly LIVE_STATUSES=(queued in_progress waiting pending requested)
 
 W=""
 ROOT=""
 TARGET_ARGS=()
 REPLACE_ARGS=()
+GATED=()
 
 refuse() { # <reason-code> <message>
   printf '%s phase=%s verdict=refuse reason=%s\n' "$P" "${MIGRATE_PHASE:-?}" "$1"
@@ -81,13 +82,35 @@ validate_inputs() {
   done
 }
 
+# gated_workflows: every workflow that calls ./.github/actions/infra-credentials and is NOT in the
+# predicate's CFAM_EXEMPT_WORKFLOWS (CTO D1). The exempt list is read from the predicate itself,
+# in a child shell (both scripts declare a readonly P), so there is no second copy to drift.
+gated_workflows() {
+  local exempt f base
+  # shellcheck disable=SC2016 # expanded by the child bash
+  exempt="$(bash -c 'source "$1" && printf "%s\n" "${CFAM_EXEMPT_WORKFLOWS[@]}"' _ "$GITHUB_WORKSPACE/$PREDICATE_REL" 2>/dev/null)" \
+    || refuse runs-unreadable "cannot read CFAM_EXEMPT_WORKFLOWS from $PREDICATE_REL"
+  [[ -n "${exempt//[[:space:]]/}" ]] || refuse runs-unreadable "the predicate's exempt workflow list is empty"
+  for f in "$GITHUB_WORKSPACE"/.github/workflows/*.yml "$GITHUB_WORKSPACE"/.github/workflows/*.yaml; do
+    [[ -f "$f" ]] || continue
+    awk '/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*\.\/\.github\/actions\/infra-credentials\/?[[:space:]]*(#.*)?$/ {found=1} END {exit !found}' "$f" || continue
+    base="${f##*/}"
+    grep -qxF -- "$base" <<<"$exempt" && continue
+    GATED+=("$base")
+  done
+  [[ "${#GATED[@]}" -gt 0 ]] || refuse runs-unreadable "no gated workflow found under .github/workflows (the derivation is broken)"
+}
+
 # A queued or approval-waiting run still executes later, against state this job is rewriting.
 refuse_inflight() {
-  local wf st n busy=0
-  for wf in "${GATED_WORKFLOWS[@]}"; do
+  local wf st n rc busy=0
+  gated_workflows
+  for wf in "${GATED[@]}"; do
     for st in "${LIVE_STATUSES[@]}"; do
-      n="$(gh run list --workflow "$wf" --status "$st" --limit 50 --json databaseId --jq 'length' 2>/dev/null)" \
-        || refuse runs-unreadable "gh run list failed for $wf (status $st); cannot prove no run is in flight"
+      rc=0
+      n="$(timeout 30 gh run list --workflow "$wf" --status "$st" --limit 50 --json databaseId --jq 'length' 2>/dev/null)" || rc=$?
+      [[ "$rc" -ne 124 ]] || refuse runs-timeout "gh run list for $wf (status $st) did not answer within 30 s; cannot prove no run is in flight"
+      [[ "$rc" -eq 0 ]] || refuse runs-unreadable "gh run list failed for $wf (status $st); cannot prove no run is in flight"
       [[ "$n" =~ ^[0-9]+$ ]] || refuse runs-unreadable "gh run list for $wf (status $st) returned a non-count"
       if [[ "$n" -gt 0 ]]; then
         printf '%s inflight workflow=%s status=%s count=%s\n' "$P" "$wf" "$st" "$n"
@@ -95,8 +118,8 @@ refuse_inflight() {
       fi
     done
   done
-  [[ "$busy" -eq 0 ]] || refuse run-in-flight "a run of a workflow on this root is queued, waiting or running; let it finish or cancel it, then re-dispatch"
-  printf '%s inflight=none workflows=%s\n' "$P" "${#GATED_WORKFLOWS[@]}"
+  [[ "$busy" -eq 0 ]] || refuse run-in-flight "a run of a gated workflow is queued, waiting or running; let it finish or cancel it, then re-dispatch"
+  printf '%s inflight=none workflows=%s\n' "$P" "${#GATED[@]}"
 }
 
 # Guard 4 fails the plan on an old id, but the redirects-dns forget runs BEFORE the plan, so the

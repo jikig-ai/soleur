@@ -618,13 +618,12 @@ runs:
 
     # ---- #12931 / CTO L79: the Cloudflare account migration in-progress gate ------
     #
-    # LAST, and its own step. Every Tier-B job of the three workflows that plan against the
-    # web-platform root reaches Terraform only through this action, so a refusal here stops
-    # each of them before its first plan without adding one byte to apply-web-platform-infra.yml
-    # (ADR-231's cap). The script owns the scope: deny by default inside
-    # apply-web-platform-infra.yml / apply-deploy-pipeline-fix.yml / cf-lb-overlay.yml, every
-    # other workflow passes through untouched (cf-account-migrate.yml, the drift job,
-    # infra-validation.yml).
+    # LAST, and its own step. Every Tier-B job that plans against the web-platform root reaches
+    # Terraform only through this action, so a refusal here stops each of them before its first
+    # plan without adding one byte to apply-web-platform-infra.yml (ADR-231's cap). The script
+    # owns the scope, deny by default (CTO D1): every workflow that calls this action is gated
+    # unless the script's CFAM_EXEMPT_WORKFLOWS names it (the migrator, the plan-only drift job,
+    # and callers that never touch the root).
     #
     # A SEPARATE step because the load step's $GITHUB_ENV exports (TF_STATE_AWS_*) are visible
     # only to LATER steps. The script reads them, or the read-only AWS_* pair from prd_terraform

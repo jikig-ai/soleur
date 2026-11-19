@@ -146,6 +146,24 @@ row_old_module_named() {
   run_eval "$1" "$WORK/a5" "$WORK/a5.json"
   [[ $RC -eq 1 ]] && has "$WORK/a5" "old-id module.edge.cloudflare_ruleset.mod"
 }
+row_third_zone_refused() {
+  mut_state "$WORK/a24.json" '(.resources[] | select(.type=="cloudflare_record" and .name=="www") | .instances[0].attributes.zone_id) = "0123456789abcdef0123456789abcdef"'
+  run_eval "$1" "$WORK/a24" "$WORK/a24.json"
+  [[ $RC -eq 1 ]] && has "$WORK/a24" "unknown-id cloudflare_record.www" && ! has "$WORK/a24" "old-id"
+}
+row_third_account_refused() {
+  mut_state "$WORK/a25.json" '(.resources[] | select(.type=="cloudflare_pages_project") | .instances[0].attributes.account_id) = "fedcba9876543210fedcba9876543210"'
+  run_eval "$1" "$WORK/a25" "$WORK/a25.json"
+  [[ $RC -eq 1 ]] && has "$WORK/a25" "unknown-id cloudflare_pages_project.docs"
+}
+row_unbound_ids_pass() {
+  # null, absent and "" all mean "not bound to an id": an account-level object carries no zone.
+  mut_state "$WORK/a26.json" '(.resources[] | select(.type=="cloudflare_pages_project") | .instances[0].attributes.zone_id) = ""
+    | (.resources[] | select(.type=="cloudflare_list" and .name=="www_canonical") | .instances[0].attributes) |= del(.zone_id)
+    | (.resources[] | select(.type=="cloudflare_record" and .name=="dmarc") | .instances[0].attributes.account_id) = null'
+  run_eval "$1" "$WORK/a26" "$WORK/a26.json"
+  [[ $RC -eq 0 ]] && has "$WORK/a26" "verdict=cf-account-migration-complete mode=full"
+}
 row_r2_old_passes() {
   mut_state "$WORK/a6.json" '.resources += [{mode:"managed",type:"cloudflare_r2_custom_domain",name:"x",instances:[{attributes:{zone_id:"'"$OZ"'",account_id:"'"$OA"'"}}]}]'
   run_eval "$1" "$WORK/a6" "$WORK/a6.json"
@@ -204,6 +222,9 @@ check "A3 old account id on cloudflare_pages_project refuses and names it" row_o
 check "A4 an old id on one instance of an indexed resource names that instance only" row_old_indexed_named "$SCRIPT"
 check "A5 an old id inside a module is caught (address carries the module path)" row_old_module_named "$SCRIPT"
 check "A6 any cloudflare_r2_* on the old ids is excepted" row_r2_old_passes "$SCRIPT"
+check "A24 a third zone id (neither old nor new) refuses as unknown-id (allowlist, not an old-id denylist)" row_third_zone_refused "$SCRIPT"
+check "A25 a third account id refuses as unknown-id" row_third_account_refused "$SCRIPT"
+check "A26 a null, absent or empty zone_id / account_id is unbound and passes" row_unbound_ids_pass "$SCRIPT"
 check "A7 tunnel absent refuses" row_tunnel_absent_refused "$SCRIPT"
 check "A8 tunnel on the old account refuses" row_tunnel_old_refused "$SCRIPT"
 check "A9 tunnel instance without attributes refuses" row_tunnel_noattrs_refused "$SCRIPT"
@@ -240,7 +261,7 @@ check "A17 a required address with zero instances counts as missing" eval '[[ $R
 
 # A18: output hygiene — no attribute value and no id ever printed, on pass or refuse.
 leak=0
-for pre in a1 a2 a3 a4 a8 a10 a14 a15; do no_leak "$WORK/$pre" || leak=1; done
+for pre in a1 a2 a3 a4 a8 a10 a14 a15 a24; do no_leak "$WORK/$pre" || leak=1; done
 if [[ $leak -eq 0 ]]; then ok "A18 no attribute value or id appears in any verdict output"; else no "A18 an attribute value or id leaked into a verdict output"; fi
 
 # A19-A21: unreadable / usage
@@ -269,13 +290,14 @@ row_scope_web2_excepted() { row_scope "$1" apply-web-platform-infra.yml web_host
 row_scope_unknown_job_gated() { row_scope "$1" apply-web-platform-infra.yml a_brand_new_job push "" "gated full"; }
 row_scope_exempt_workflow() { row_scope "$1" scheduled-terraform-drift.yml drift-check schedule "" "exempt-workflow scheduled-terraform-drift.yml"; }
 row_scope_exempt_job() { row_scope "$1" apply-web-platform-infra.yml entrypoint_audit workflow_dispatch "" "exempt-job entrypoint_audit"; }
+row_scope_new_workflow_gated() { row_scope "$1" new-planner.yml plan push "" "gated full"; }
 
 check "B1 apply-web-platform-infra.yml / apply is gated (full)" row_scope "$SCRIPT" apply-web-platform-infra.yml apply push "" "gated full"
 check "B2 apply-deploy-pipeline-fix.yml / apply is gated (full)" row_scope "$SCRIPT" apply-deploy-pipeline-fix.yml apply workflow_dispatch "" "gated full"
 check "B3 cf-lb-overlay.yml / staging_record is gated (no exempt jobs outside apply-web-platform-infra.yml)" row_scope "$SCRIPT" cf-lb-overlay.yml staging_record workflow_dispatch "" "gated full"
 check "B4 scheduled-terraform-drift.yml is exempt" row_scope_exempt_workflow "$SCRIPT"
 check "B5 cf-account-migrate.yml is exempt" row_scope "$SCRIPT" cf-account-migrate.yml cf_account_migrate workflow_dispatch "" "exempt-workflow cf-account-migrate.yml"
-check "B6 infra-validation.yml is exempt" row_scope "$SCRIPT" infra-validation.yml plan pull_request "" "exempt-workflow infra-validation.yml"
+check "B6 infra-validation.yml (not a loader caller, not named) is gated by default" row_scope "$SCRIPT" infra-validation.yml plan pull_request "" "gated full"
 for j in entrypoint_audit registry_pull_path_gate registry_store_restore; do
   check "B7 exempt job ${j} in apply-web-platform-infra.yml passes through" row_scope "$SCRIPT" apply-web-platform-infra.yml "$j" workflow_dispatch "" "exempt-job ${j}"
 done
@@ -288,6 +310,19 @@ check "B13 web-2 on a different job (web_host_create) is not excepted" row_scope
 check "B14 an empty workflow_ref is gated (deny by default)" row_scope "$SCRIPT" "" apply push "" "gated full"
 check "B15 a workflow_ref with a nested path is gated (deny by default)" row_scope "$SCRIPT" "sub/apply-web-platform-infra.yml" apply push "" "gated full"
 check "B16 web-2 exception key match is exact (web-2x is not web-2)" row_scope "$SCRIPT" apply-web-platform-infra.yml web_host_replace workflow_dispatch web-2x "gated full"
+check "B17 a workflow nobody named (new-planner.yml) is gated (deny by default, D1)" row_scope_new_workflow_gated "$SCRIPT"
+for w in key-rotate.yml inngest-key-rotate.yml cf-lb-overlay.yaml apply-web-platform-infra-v2.yml; do
+  check "B18 ${w} is gated (full)" row_scope "$SCRIPT" "$w" rotate workflow_dispatch "" "gated full"
+done
+EXEMPT_NAMES="$(env -i PATH="$(dirname "$REAL_JQ"):/usr/bin:/bin" bash -c 'source "$1"; printf "%s\n" "${CFAM_EXEMPT_WORKFLOWS[@]}"' _ "$SCRIPT")"
+n_ex=0; bad_ex=""
+while IFS= read -r w; do
+  [[ -n "$w" ]] || continue
+  n_ex=$((n_ex + 1))
+  [[ "$(scope_of "$SCRIPT" "$w" any workflow_dispatch "")" == "exempt-workflow $w" ]] || bad_ex+=" $w"
+done <<<"$EXEMPT_NAMES"
+check "B19 each of the ${n_ex} named exempt workflows is exempt, the list holds both plan-only ones" \
+  eval '[[ -z "$bad_ex" && $n_ex -ge 10 ]] && grep -qx cf-account-migrate.yml <<<"$EXEMPT_NAMES" && grep -qx scheduled-terraform-drift.yml <<<"$EXEMPT_NAMES"'
 
 # ── C. the --from-r2 wrapper, end to end under stubs ──────────────────────────────────────
 mkdir -p "$WORK/bin"
@@ -298,6 +333,10 @@ printf '%s\n' "$*" >> "${STUB_CALLS:?}"
 if [[ "${AWS_ACCESS_KEY_ID:-}" != "${STUB_EXPECT_KEY_ID:-}" || "${AWS_SECRET_ACCESS_KEY:-}" != "${STUB_EXPECT_SECRET:-}" || -z "${AWS_ACCESS_KEY_ID:-}" ]]; then
   echo "MISS: aws auth" >> "$STUB_CALLS"; exit 254
 fi
+if [[ "${AWS_DEFAULT_REGION:-}" != auto || "${AWS_REQUEST_CHECKSUM_CALCULATION:-}" != when_required \
+      || "${AWS_RESPONSE_CHECKSUM_VALIDATION:-}" != when_required ]]; then
+  echo "MISS: aws R2 env prefix" >> "$STUB_CALLS"; exit 64
+fi
 if [[ $# -ne 7 || "$1 $2 $3" != "s3 cp s3://soleur-terraform-state/web-platform/terraform.tfstate" \
       || "$5 $6" != "--endpoint-url https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com" || "$7" != "--only-show-errors" ]]; then
   echo "MISS: aws $*" >> "$STUB_CALLS"; exit 64
@@ -305,6 +344,7 @@ fi
 case "${STUB_AWS_MODE:-copy}" in
   copy) cp "${STUB_STATE:?}" "$4" ;;
   fail) exit 1 ;;
+  timeout) exit 124 ;;
   empty) : ;;
 esac
 STUB
@@ -312,6 +352,7 @@ cat > "$WORK/bin/doppler" <<'STUB'
 #!/usr/bin/env bash
 set -u
 printf 'doppler %s\n' "$*" >> "${STUB_CALLS:?}"
+[[ "${STUB_DOPPLER_MODE:-}" == timeout ]] && exit 124
 if [[ "${DOPPLER_TOKEN:-}" != "${STUB_EXPECT_LEGACY_TOKEN:-dp.st.LEGACY-FIXTURE}" ]]; then
   echo "Doppler Error: Invalid Auth token (unauthorized)" >&2; exit 1
 fi
@@ -366,6 +407,14 @@ row_wrap_copy_failure() {
   run_wrap "$1" "$WORK/c4" "$COMPLETE" apply-web-platform-infra.yml apply push "" "${TIERB[@]}" STUB_AWS_MODE=fail
   [[ $RC -eq 2 ]] && has "$WORK/c4" "verdict=cf-account-migration-state-unreadable reason=copy-failed" && rt_clean "$WORK/c4"
 }
+row_wrap_copy_timeout() {
+  run_wrap "$1" "$WORK/c15" "$COMPLETE" apply-web-platform-infra.yml apply push "" "${TIERB[@]}" STUB_AWS_MODE=timeout
+  [[ $RC -eq 2 ]] && has "$WORK/c15" "verdict=cf-account-migration-state-unreadable reason=copy-timeout" && no_miss "$WORK/c15"
+}
+row_wrap_doppler_timeout() {
+  run_wrap "$1" "$WORK/c16" "$COMPLETE" apply-web-platform-infra.yml apply push "" "${LEGACY[@]}" STUB_DOPPLER_MODE=timeout
+  [[ $RC -eq 2 ]] && has "$WORK/c16" "reason=no-credentials-legacy_read_timeout" && ! grep -q "s3 cp" "$WORK/c16.calls"
+}
 row_wrap_web1_refused() {
   run_wrap "$1" "$WORK/c5" "$WORK/c-inprog.json" apply-web-platform-infra.yml web_host_replace workflow_dispatch web-1 "${TIERB[@]}"
   [[ $RC -eq 1 ]] && has "$WORK/c5" "scope=gated mode=full" && has "$WORK/c5" "verdict=cf-account-migration-in-progress"
@@ -396,6 +445,8 @@ check "C10 web_host_replace web-2 is refused while the tunnel is on the old acco
 run_wrap "$SCRIPT" "$WORK/c12" "$WORK/c-inprog.json" apply-web-platform-infra.yml web_host_replace workflow_dispatch web-2 "${TIERB[@]}"
 check "C11 web_host_replace web-2 proceeds once the tunnel is new, even with other entries old" eval '[[ $RC -eq 0 ]] && has "$WORK/c12" "mode=web2-replace"'
 check "C12 a gated-workflow job missing from the exempt list is gated" row_wrap_gated_unlisted_job "$SCRIPT"
+check "C15 an aws copy that times out (rc 124) fails closed with reason=copy-timeout" row_wrap_copy_timeout "$SCRIPT"
+check "C16 a Doppler read that times out (rc 124) fails closed with a named reason, no aws call" row_wrap_doppler_timeout "$SCRIPT"
 run_wrap "$SCRIPT" "$WORK/c13" "$COMPLETE" apply-web-platform-infra.yml entrypoint_audit workflow_dispatch ""
 check "C13 exempt job passes through with no credential and no aws call" eval '[[ $RC -eq 0 ]] && [[ ! -s "$WORK/c13.calls" ]]'
 NOAWS_PATH="$WORK/nobin:$(dirname "$REAL_JQ"):/bin"
@@ -425,8 +476,13 @@ mut_row() { # <label> <row-fn> <sed-expr>
   if "$2" "$m"; then no "MUT $1: SURVIVED ($2 stayed green)"; else ok "MUT $1: caught by $2"; fi
 }
 mut_row "R2 exception widened to every type"      row_r2_old_passes            's/startswith\("cloudflare_r2_"\) \| not/startswith("cloudflare_NOPE_") | not/g'
-mut_row "old-zone comparison dropped"             row_old_zone_refused         's/\.attributes\.zone_id == \$oz or //'
-mut_row "old-account comparison dropped"          row_old_account_refused      's/ or \.attributes\.account_id == \$oa//'
+mut_row "new-zone comparison dropped"             row_old_zone_refused         's/\(\$z != null and \$z != \$nz\) or //'
+mut_row "new-account comparison dropped"          row_old_account_refused      's/ or \(\$ac != null and \$ac != \$na\)//'
+mut_row "allowlist reverted to an old-id denylist" row_third_zone_refused      's/select\(\(\$z != null and \$z != \$nz\) or \(\$ac != null and \$ac != \$na\)\)/select($z == $oz or $ac == $oa)/'
+mut_row "empty string read as a bound id"         row_unbound_ids_pass         's/if \$v == "" then null else \$v end/$v/'
+mut_row "copy timeout not named"                  row_wrap_copy_timeout        's/if \(\( rc == 124 \)\); then/if false; then/'
+mut_row "doppler timeout not named"               row_wrap_doppler_timeout     's/if \(\( rc_id == 124 \|\| rc_sec == 124 \)\); then/if false; then/'
+mut_row "R2 env prefix dropped"                   row_wrap_tierb_complete      's/AWS_DEFAULT_REGION=auto //'
 mut_row "tunnel reasons dropped from full mode"   row_tunnel_absent_refused    's/^( *)\+ \$tun_reasons$/\1+ []/'
 mut_row "tunnel account check dropped"            row_tunnel_old_refused       's/ or \.attributes\.account_id != \$na//'
 mut_row "required-address check disarmed"         row_missing_refused          's/"missing " \+ \./empty/'
@@ -435,7 +491,8 @@ mut_row "version check dropped"                   row_version_unreadable       '
 mut_row "web-2 exception accepts any key"         row_scope_web1_refused       's/"\$key" == "web-2"/"$key" == web-*/'
 mut_row "web-2 exception dropped"                 row_scope_web2_excepted      's/printf .gated web2-replace\\n./printf '"'"'gated full\\n'"'"'/'
 mut_row "deny-by-default inverted to exempt"      row_scope_unknown_job_gated  's/^  printf .gated full\\n.$/  printf '"'"'exempt-job %s\\n'"'"' "$job"/'
-mut_row "exempt workflow list ignored (all gated)" row_wrap_exempt_passthrough 's/for w in "\$\{CFAM_GATED_WORKFLOWS\[@\]\}"; do \[\[ "\$wf" == "\$w" \]\] && gated=1; done/gated=1/'
+mut_row "exempt workflow list ignored (all gated)" row_wrap_exempt_passthrough 's/if \[\[ "\$wf" == "\$w" \]\]; then printf .exempt-workflow/if false; then printf '"'"'exempt-workflow/'
+mut_row "every workflow treated as exempt"        row_scope_new_workflow_gated 's/for w in "\$\{CFAM_EXEMPT_WORKFLOWS\[@\]\}"; do/for w in "$wf"; do/'
 mut_row "legacy read loses -c prd_terraform"      row_wrap_legacy_creds        's/ -p soleur -c prd_terraform/ -p soleur/g'
 mut_row "legacy values not masked"                row_wrap_legacy_creds        's/printf .::add-mask::%s\\n. "\$ln"/:/'
 mut_row "copy failure verdict masked"             row_wrap_copy_failure        's/if \(\( rc != 0 \)\) \|\| \[\[ ! -s "\$work\/state.json" \]\]; then/if false; then/'
@@ -449,8 +506,8 @@ if (( PASS + FAIL != CASES )); then
   printf 'CONSERVATION FAILED: PASS(%s)+FAIL(%s) != CASES(%s) — a verdict was dropped or the helpers were neutered.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-# 75 rows ran when measured (2026-11-19); C14 may skip on a host whose aws sits beside jq.
-MIN_ASSERTIONS=74
+# 92 rows ran when measured (2026-11-19, D1 review fixes); C14 may skip on a host whose aws sits beside jq.
+MIN_ASSERTIONS=91
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s — rows were skipped, truncated, or the assertion machinery was neutered.\n' "$TOTAL" "$MIN_ASSERTIONS" >&2

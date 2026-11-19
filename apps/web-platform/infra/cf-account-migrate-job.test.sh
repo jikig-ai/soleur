@@ -114,19 +114,20 @@ export TF_VAR_cf_zone_id="${TF_VAR_cf_zone_id:-$(sed -n 1p "$D/ids")}"
 export TF_VAR_cf_account_id="${TF_VAR_cf_account_id:-$(sed -n 2p "$D/ids")}"
 exec "$@"
 STUB
+# gh accepts exactly the modeled argv: `run list --workflow <gated wf> --status <one of the five
+# live statuses> --limit 50 --json databaseId --jq length`. Anything else exits 64 and lands in
+# refused.log, which the suite asserts empty for every pristine run.
 cat >"$SBX/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 set -uo pipefail
 D="${STUB_DIR:?}"
-wf=""; st=""
-args=("$@")
-for ((i = 0; i < ${#args[@]}; i++)); do
-  case "${args[$i]}" in --workflow) wf="${args[$((i + 1))]}" ;; --status) st="${args[$((i + 1))]}" ;; esac
-done
-printf 'gh %s %s workflow=%s status=%s\n' "${1:-}" "${2:-}" "$wf" "$st" >>"$D/calls.log"
-[[ "${1:-} ${2:-}" == "run list" && -n "$wf" && -n "$st" ]] || exit 64
-[[ -f "$D/mode.gh" ]] && exit 1
-if [[ -f "$D/gh.$wf.$st" ]]; then cat "$D/gh.$wf.$st"; else printf '0\n'; fi
+no() { printf 'gh %s\n' "$*" >>"$D/refused.log"; exit 64; }
+[[ $# -eq 12 && "$1 $2 $3 $5" == "run list --workflow --status" && "$7 $8 $9 ${10} ${11} ${12}" == "--limit 50 --json databaseId --jq length" ]] || no "$@"
+case "$6" in queued|in_progress|waiting|pending|requested) ;; *) no "$@" ;; esac
+grep -qxF -- "$4" "${STUB_GATED:?}" || no "$@"
+printf 'gh run list workflow=%s status=%s\n' "$4" "$6" >>"$D/calls.log"
+if [[ -f "$D/mode.gh" ]]; then rc="$(cat "$D/mode.gh")"; exit "${rc:-1}"; fi
+if [[ -f "$D/gh.$4.$6" ]]; then cat "$D/gh.$4.$6"; else printf '0\n'; fi
 STUB
 cat >"$SBX/bin/aws" <<'STUB'
 #!/usr/bin/env bash
@@ -207,6 +208,21 @@ remote_state() {
     ]}}}}' >"$1"
 }
 
+# The gated set, derived here independently of the job: every workflow file that uses the
+# infra-credentials action, minus the predicate's CFAM_EXEMPT_WORKFLOWS (CTO D1). A literal sample
+# stops a shrunk derivation from shrinking the suite with it.
+GATED_FILE="$SBX/gated.txt"
+EXEMPT_TXT="$(bash -c 'source "$1"; printf "%s\n" "${CFAM_EXEMPT_WORKFLOWS[@]}"' _ "$HERE/scripts/cf-account-migration-complete.sh")" \
+  || { printf '[FATAL] cannot read the predicate exempt list\n' >&2; exit 2; }
+: >"$GATED_FILE"
+for f in "$REPO"/.github/workflows/*.yml "$REPO"/.github/workflows/*.yaml; do
+  [[ -f "$f" ]] || continue
+  awk '/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*\.\/\.github\/actions\/infra-credentials\/?[[:space:]]*(#.*)?$/ {x=1} END {exit !x}' "$f" || continue
+  grep -qxF -- "${f##*/}" <<<"$EXEMPT_TXT" || printf '%s\n' "${f##*/}" >>"$GATED_FILE"
+done
+N_GATED="$(grep -c . "$GATED_FILE")"
+LIVE="queued in_progress waiting pending requested"
+
 LAST_D=""
 # new_case <label> <phase> <rehearsal> -> sets LAST_D; a valid, converging case by default.
 new_case() {
@@ -226,13 +242,14 @@ new_case() {
 run_job() { # <dir> <script>
   local d="$1"
   env -u TF_VAR_cf_zone_id -u TF_VAR_cf_account_id \
-    PATH="$SBX/bin:$PATH" STUB_DIR="$d" \
+    PATH="$SBX/bin:$PATH" STUB_DIR="$d" STUB_GATED="$GATED_FILE" \
     MIGRATE_PHASE="$(cat "$d/phase")" CONFIRM="$(cat "$d/confirm")" REHEARSAL="$(cat "$d/rehearsal")" \
     REASON="$(cat "$d/reason")" GITHUB_WORKSPACE="$REPO" RUNNER_TEMP="$d/runner" INFRA_DIR="$d/root" \
     R2_ENDPOINT="https://r2.example.invalid" GH_TOKEN=stub GH_REPO=o/r DOPPLER_TOKEN=stub \
     GITHUB_STEP_SUMMARY="$d/summary.md" CFAM_VERIFY_TRIES=2 CFAM_VERIFY_SLEEP=0 \
     bash "$2" >"$d/out.txt" 2>"$d/err.txt"
   printf '%s' "$?" >"$d/rc"
+  printf '%s' "$2" >"$d/script"
 }
 
 rc_of() { cat "$1/rc"; }
@@ -347,16 +364,29 @@ chk_refused_early "$LAST_D" bad-rehearsal; verdict "$?" "rehearsal=yes -> reason
 
 # --- In-flight runs -------------------------------------------------------------
 printf '\n[inflight] a queued/waiting/running run on any gated workflow refuses\n'
-for spec in apply-web-platform-infra.yml:waiting apply-deploy-pipeline-fix.yml:queued cf-lb-overlay.yml:in_progress; do
+r=1
+for w in apply-web-platform-infra.yml apply-deploy-pipeline-fix.yml cf-lb-overlay.yml key-rotate.yml inngest-key-rotate.yml; do
+  grep -qxF "$w" "$GATED_FILE" || r=0
+done
+grep -qxF cf-account-migrate.yml "$GATED_FILE" && r=0
+grep -qxF scheduled-terraform-drift.yml "$GATED_FILE" && r=0
+[[ "$r" -eq 1 && "$N_GATED" -ge 5 ]]; verdict "$?" "derived gated set (${N_GATED}) holds the five root planners and neither plan-only exempt workflow"
+for spec in apply-web-platform-infra.yml:waiting apply-deploy-pipeline-fix.yml:queued cf-lb-overlay.yml:in_progress key-rotate.yml:pending inngest-key-rotate.yml:requested; do
   new_case "inflight-${spec%%:*}" redirects-dns true; printf '1\n' >"$LAST_D/gh.${spec%%:*}.${spec#*:}"
   run_job "$LAST_D" "$PRISTINE"; WHY=""
   chk_inflight "$LAST_D"; verdict "$?" "${spec#*:} run of ${spec%%:*} -> reason=run-in-flight ($WHY)"
 done
 new_case inflight-ghfail redirects-dns false; : >"$LAST_D/mode.gh"; run_job "$LAST_D" "$PRISTINE"; WHY=""
 chk_refused_early "$LAST_D" runs-unreadable; verdict "$?" "gh run list failure -> reason=runs-unreadable, fail closed ($WHY)"
+new_case inflight-timeout redirects-dns false; printf '124' >"$LAST_D/mode.gh"; run_job "$LAST_D" "$PRISTINE"; WHY=""
+chk_refused_early "$LAST_D" runs-timeout; verdict "$?" "gh run list timing out (rc 124) -> reason=runs-timeout, fail closed ($WHY)"
 new_case inflight-all redirects-dns true; run_job "$LAST_D" "$PRISTINE"
-r=1; [[ "$(calls "$LAST_D" '^gh run list')" -eq 15 ]] && r=0
-verdict "$r" "the in-flight check reads 3 workflows x 5 live statuses (15 calls)"
+r=1
+diff <(sed -n 's/^gh run list workflow=\([^ ]*\) status=\(.*\)$/\1 \2/p' "$LAST_D/calls.log" | sort) \
+  <(while IFS= read -r w; do for st in $LIVE; do printf '%s %s\n' "$w" "$st"; done; done <"$GATED_FILE" | sort) >/dev/null && r=0
+verdict "$r" "the in-flight check reads every gated workflow (${N_GATED}) x the 5 live statuses, each pair exactly once"
+r=1; grep -qx "cf-account-migrate inflight=none workflows=${N_GATED}" "$LAST_D/out.txt" && r=0
+verdict "$r" "the in-flight line reports the derived gated count"
 
 # --- Id preflight ---------------------------------------------------------------
 printf '\n[ids] Doppler must resolve the NEW ids before anything is written\n'
@@ -455,14 +485,27 @@ red "M6 apply not conditioned on the gate" "$M6" chk_gate_blocks_apply '^apply-c
 M7="$(mk_mutant no-replace 's/ \${REPLACE_ARGS\[@\]+"\${REPLACE_ARGS\[@\]}"}//')"
 red "M7 -replace args dropped" "$M7" chk_zone_rest_args '^argv-mismatch$' setup_zone_rest_apply
 # shellcheck disable=SC2016
+# shellcheck disable=SC2016
+M9="$(mk_mutant inflight-exempt-drift 's/grep -qxF -- "$base" <<<"$exempt" && continue/[[ "$base" == apply-web-platform-infra.yml ]] \&\& continue/')"
+red "M9 the in-flight check skips a gated workflow (exempt list not the predicate's)" "$M9" chk_inflight '^not-refused' setup_inflight
 M8="$(mk_mutant always-apply 's/if \[\[ "$REHEARSAL" == true \]\]; then run_rehearsal; else run_apply; fi/run_apply/')"
 red "M8 rehearsal dispatch routed to the apply path" "$M8" chk_rehearsal_clean '^(apply-called|aws-s3-cp|remote-state-rm)$' setup_rehearsal
+
+# --- Stub refusals ---------------------------------------------------------------
+# Every PATH fake refuses an unmodeled argv into refused.log. A pristine run must never trip one:
+# a drifted selector (bucket/prefix, Doppler config, status literal) shows up here, not as a pass.
+r=0; bad=""
+for d in "$SBX"/runs/*/; do
+  [[ "$(cat "$d/script" 2>/dev/null)" == "$PRISTINE" ]] || continue
+  if [[ -s "$d/refused.log" ]]; then r=1; bad+=" ${d%/}"; fi
+done
+verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ (refused in:${bad##*/})}"
 
 # ---------------------------------------------------------------------------
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=49
+EXPECTED_CASES=56
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

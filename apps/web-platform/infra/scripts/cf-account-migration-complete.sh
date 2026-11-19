@@ -17,8 +17,10 @@
 #
 # COMPLETE (mode full) means ALL of:
 #   - the state carries at least one managed cloudflare_* resource;
-#   - no managed cloudflare_* instance outside cloudflare_r2_* carries the OLD zone id or the OLD
-#     account id (R2 stays on the legacy account, ADR-329);
+#   - every managed cloudflare_* instance outside cloudflare_r2_* carries the NEW zone id and the NEW
+#     account id, or none (null / absent / ""). An allowlist, not an old-id denylist: an instance on
+#     the OLD ids reads "old-id", one on any third id "unknown-id" (R2 stays on the legacy account,
+#     ADR-329);
 #   - cloudflare_zero_trust_tunnel_cloudflared.web is in state and every instance carries the NEW
 #     account id;
 #   - every address of every phase in tests/scripts/lib/cf-account-migrate-gate.sh is in state.
@@ -46,12 +48,23 @@ readonly CFAM_STATE_URI="s3://soleur-terraform-state/web-platform/terraform.tfst
 readonly CFAM_R2_ENDPOINT="https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com"
 readonly P="cf-account-migration-complete"
 
-# SCOPE (L79). Deny by default INSIDE a gated workflow: every job is gated unless named here.
-# Every other workflow is out of scope (cf-account-migrate.yml, scheduled-terraform-drift.yml,
-# infra-validation.yml, ...). tests/scripts/test-cf-account-migration-scope.sh derives the set of
-# workflows that plan against the web-platform root and asserts it equals this list plus its named
-# exempt workflows, so a new planner cannot land outside both.
-readonly CFAM_GATED_WORKFLOWS=(apply-web-platform-infra.yml apply-deploy-pipeline-fix.yml cf-lb-overlay.yml)
+# SCOPE (CTO D1, 2026-11-19): deny by default. EVERY workflow that calls the infra-credentials
+# loader is gated unless it is named below. A new workflow, or a renamed one, is therefore gated
+# until a reviewed diff names it here. The exempt names are the plan-only / migrator workflows and
+# the loader callers that never plan or apply apps/web-platform/infra (other roots, or no
+# Terraform at all). tests/scripts/test-cf-account-migration-scope.sh checks each name is a real
+# loader caller and that no exempt workflow outside the plan-only pair (or a repo script it runs
+# with `bash <path>`, one level, plus what that script sources) pairs a terraform invocation with
+# the bare root path. It does not see Terraform reached any other way. The cf-account-migrate
+# job reads this same list for its in-flight check (no second copy).
+readonly CFAM_EXEMPT_WORKFLOWS=(
+  cf-account-migrate.yml scheduled-terraform-drift.yml
+  apply-github-infra.yml apply-sentry-infra.yml apply-git-data-root-key.yml git-data-rung2-rehearsal.yml
+  inngest-provision-rehearsal.yml mint-origin-ca-cert.yml cutover-inngest.yml git-data-cutover.yml
+  web-host-escrow-diagnose.yml
+)
+# The plan-only / migrator subset: they plan (and the migrator applies) the root by design.
+readonly CFAM_PLAN_ONLY_WORKFLOWS=(cf-account-migrate.yml scheduled-terraform-drift.yml)
 # Jobs of apply-web-platform-infra.yml that call the credential loader but run no Terraform.
 readonly CFAM_EXEMPT_JOBS=(entrypoint_audit registry_pull_path_gate registry_store_restore)
 
@@ -71,12 +84,15 @@ _cfam_summary() {
 # _cfam_load_gate — source the phase-gate library once (the ONE address list, and the NEW account
 # id constant the phase gate grades plans against). 0 ok, 1 unusable.
 _cfam_load_gate() {
-  declare -F cf_account_migrate_phase_spec >/dev/null 2>&1 && [[ -n "${CFAM_NEW_ACCOUNT_ID:-}" ]] && return 0
+  if declare -F cf_account_migrate_phase_spec >/dev/null 2>&1 && [[ -n "${CFAM_NEW_ACCOUNT_ID:-}" ]]; then
+    [[ "${CFAM_NEW_ACCOUNT_ID}" =~ ^[0-9a-f]{32}$ && "${CFAM_NEW_ZONE_ID:-}" =~ ^[0-9a-f]{32}$ ]] || return 1
+    return 0
+  fi
   [[ -r "$CFAM_GATE_LIB" ]] || { echo "$P: gate library unreadable: $CFAM_GATE_LIB" >&2; return 1; }
   # shellcheck source=/dev/null
   source "$CFAM_GATE_LIB" || return 1
   declare -F cf_account_migrate_phases >/dev/null && declare -F cf_account_migrate_phase_spec >/dev/null || return 1
-  [[ "${CFAM_NEW_ACCOUNT_ID:-}" =~ ^[0-9a-f]{32}$ ]] || return 1
+  [[ "${CFAM_NEW_ACCOUNT_ID:-}" =~ ^[0-9a-f]{32}$ && "${CFAM_NEW_ZONE_ID:-}" =~ ^[0-9a-f]{32}$ ]] || return 1
 }
 
 # cfam_required_addresses — JSON array, the union of every phase's allow-set, from the gate.
@@ -116,10 +132,12 @@ cfam_evaluate() {
   # One jq pass. Each line is "<reason> <address>" (or a bare reason). A jq error is unreadable,
   # never an empty reason list (an empty list reads as complete).
   reasons="$(jq -r --arg oz "$CFAM_OLD_ZONE_ID" --arg oa "$CFAM_OLD_ACCOUNT_ID" \
-      --arg na "$CFAM_NEW_ACCOUNT_ID" --arg tun "$CFAM_TUNNEL_ADDR" --arg mode "$mode" \
+      --arg na "$CFAM_NEW_ACCOUNT_ID" --arg nz "$CFAM_NEW_ZONE_ID" --arg tun "$CFAM_TUNNEL_ADDR" --arg mode "$mode" \
       --argjson req "$req" '
     def raddr: (if (.module // "") != "" then .module + "." else "" end) + .type + "." + .name;
     def iaddr($a): $a + (if has("index_key") then "[" + (.index_key | tojson) + "]" else "" end);
+    # Unbound = null, absent or "". Any other value must be the NEW id (allowlist).
+    def bound($k): (.attributes[$k] // "") as $v | if $v == "" then null else $v end;
     [ .resources[] | select((.mode // "managed") == "managed") ] as $m
     | ($m | map(select(.type | startswith("cloudflare_")))) as $cf
     | ($m | map(select(raddr == $tun)) | map(.instances // []) | add // []) as $tunnel
@@ -133,7 +151,9 @@ cfam_evaluate() {
             | select((.attributes | type) != "object") | "instance-without-attributes " + iaddr($a) ]
         + [ $cf[] | select(.type | startswith("cloudflare_r2_") | not) | raddr as $a | (.instances // [])[]
             | select((.attributes | type) == "object")
-            | select(.attributes.zone_id == $oz or .attributes.account_id == $oa) | "old-id " + iaddr($a) ]
+            | bound("zone_id") as $z | bound("account_id") as $ac
+            | select(($z != null and $z != $nz) or ($ac != null and $ac != $na))
+            | (if $z == $oz or $ac == $oa then "old-id " else "unknown-id " end) + iaddr($a) ]
         + $tun_reasons
         + ( [ $m[] | select((.instances // []) | length > 0) | raddr ] as $have
             | [ $req[] | select(. as $r | $have | index($r) | not) | "missing " + . ] )
@@ -166,12 +186,9 @@ cfam_scope() {
     printf 'gated full\n'
     return 0
   fi
-  local gated=0
-  for w in "${CFAM_GATED_WORKFLOWS[@]}"; do [[ "$wf" == "$w" ]] && gated=1; done
-  if (( gated == 0 )); then
-    printf 'exempt-workflow %s\n' "$wf"
-    return 0
-  fi
+  for w in "${CFAM_EXEMPT_WORKFLOWS[@]}"; do
+    if [[ "$wf" == "$w" ]]; then printf 'exempt-workflow %s\n' "$wf"; return 0; fi
+  done
   if [[ "$wf" == "apply-web-platform-infra.yml" ]]; then
     for j in "${CFAM_EXEMPT_JOBS[@]}"; do
       if [[ "$job" == "$j" ]]; then printf 'exempt-job %s\n' "$job"; return 0; fi
@@ -198,11 +215,14 @@ cfam_resolve_creds() {
     CFAM_CRED_SOURCE="tier_b_half_set"
     return 1
   fi
-  local tok="${CFAM_DOPPLER_TOKEN_LEGACY:-}" id="" sec=""
+  local tok="${CFAM_DOPPLER_TOKEN_LEGACY:-}" id="" sec="" rc_id=0 rc_sec=0
   [[ -n "$tok" ]] || { CFAM_CRED_SOURCE="none"; return 1; }
   command -v doppler >/dev/null 2>&1 || { CFAM_CRED_SOURCE="doppler-missing"; return 1; }
-  id="$(DOPPLER_TOKEN="$tok" doppler secrets get AWS_ACCESS_KEY_ID --plain -p soleur -c prd_terraform 2>/dev/null)" || id=""
-  sec="$(DOPPLER_TOKEN="$tok" doppler secrets get AWS_SECRET_ACCESS_KEY --plain -p soleur -c prd_terraform 2>/dev/null)" || sec=""
+  # Bounded: a stalled Doppler must fail this step with a named reason, not hold the job to its
+  # timeout-minutes (a composite step cannot set its own).
+  id="$(DOPPLER_TOKEN="$tok" timeout 30 doppler secrets get AWS_ACCESS_KEY_ID --plain -p soleur -c prd_terraform 2>/dev/null)" || { rc_id=$?; id=""; }
+  sec="$(DOPPLER_TOKEN="$tok" timeout 30 doppler secrets get AWS_SECRET_ACCESS_KEY --plain -p soleur -c prd_terraform 2>/dev/null)" || { rc_sec=$?; sec=""; }
+  if (( rc_id == 124 || rc_sec == 124 )); then CFAM_CRED_SOURCE="legacy_read_timeout"; return 1; fi
   if [[ -z "$id" || -z "$sec" ]]; then CFAM_CRED_SOURCE="legacy_read_failed"; return 1; fi
   # Doppler-fetched values are not auto-masked by Actions. Mask per line before any further use.
   local ln
@@ -242,9 +262,13 @@ cfam_from_r2() {
   AWS_ACCESS_KEY_ID="$CFAM_KEY_ID" AWS_SECRET_ACCESS_KEY="$CFAM_KEY_SECRET" \
     AWS_DEFAULT_REGION=auto AWS_EC2_METADATA_DISABLED=true AWS_SESSION_TOKEN="" \
     AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required \
-    aws s3 cp "$CFAM_STATE_URI" "$work/state.json" --endpoint-url "$CFAM_R2_ENDPOINT" --only-show-errors \
+    timeout 60 aws s3 cp "$CFAM_STATE_URI" "$work/state.json" --endpoint-url "$CFAM_R2_ENDPOINT" --only-show-errors \
     >/dev/null 2>&1 || rc=$?
   CFAM_KEY_ID="" CFAM_KEY_SECRET=""
+  if (( rc == 124 )); then
+    _cfam_unreadable copy-timeout "copying ${CFAM_STATE_URI} did not finish within 60 s (credentials=${CFAM_CRED_SOURCE})"
+    return 2
+  fi
   if (( rc != 0 )) || [[ ! -s "$work/state.json" ]]; then
     _cfam_unreadable copy-failed "copying ${CFAM_STATE_URI} failed (rc=${rc}, credentials=${CFAM_CRED_SOURCE})"
     return 2
