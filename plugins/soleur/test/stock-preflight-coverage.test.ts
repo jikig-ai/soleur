@@ -30,7 +30,8 @@
 // DOCUMENTED LIMITATION: this guard is one-directional in the same sense as its model
 // (terraform-target-parity.test.ts). It proves every dispatchable option is gated-or-
 // declared; it does NOT prove the gate is reached at runtime (a step-level `if:` that
-// skips it, or an early `exit 0` above it, is not modelled). It also cannot see paths
+// skips it, or an early `exit 0` above it, is not modelled; nor is a job-level `if:` in a called
+// reusable file other than a constant false, which calledApplyingSteps refuses). It also cannot see paths
 // that are not `apply_target` options at all — notably web-3, which is born by an
 // operator-local full apply outside CI (apply-web-platform-infra.yml:454) and adds zero
 // options; that gap is structural and belongs to #6459.
@@ -279,16 +280,31 @@ beforeAll(() => {
   options = on.workflow_dispatch.inputs.apply_target.options;
   jobs = wf.jobs;
   // A thin caller job (`uses: ./.github/workflows/<file>.yml`, #12866) has no steps of its own:
-  // it runs inside this workflow's run, and its body is the called file's jobs. Read that body,
-  // so a gate the reusable file carries counts and a gate it drops reds here. Local files only;
-  // a caller whose file is missing keeps no steps and fails closed below.
+  // it runs inside this workflow's run, and its body is the called file's jobs. Bind it to the ONE
+  // called job that applies (calledApplyingSteps), so a gate the reusable file carries counts and a
+  // gate it drops reds here. Local files only; a remote `uses:` keeps no steps and fails closed
+  // below; a missing local file throws here, which fails the whole suite.
   for (const job of Object.values(jobs) as Array<Job & { uses?: string }>) {
     const m = /^\.\/(\.github\/workflows\/[\w.-]+\.ya?ml)$/.exec(String(job.uses ?? ""));
     if (!m) continue;
-    const called = parseYaml(readFileSync(resolve(REPO_ROOT, m[1]), "utf8"));
-    job.steps = Object.values(called.jobs ?? {}).flatMap((j) => (j as Job).steps ?? []);
+    job.steps = calledApplyingSteps(parseYaml(readFileSync(resolve(REPO_ROOT, m[1]), "utf8")));
   }
 });
+
+/**
+ * The steps of the one job in a called (reusable) workflow that applies terraform, or none.
+ *
+ * Per job, never flattened: jobs run on separate runners, so a gate or token read in job A does not
+ * guard an apply in job B. Fail closed: zero or two applying jobs, or an applying job whose own `if:`
+ * is a constant false, give no steps, so the caller reads as ungated.
+ */
+function calledApplyingSteps(called: { jobs?: Record<string, Job> }): Job["steps"] {
+  const applying = Object.values(called?.jobs ?? {}).filter((j) => appliesTerraform(j));
+  if (applying.length !== 1) return [];
+  const cond = String(applying[0].if ?? "").replace(/\s+/g, "");
+  if (cond === "false" || cond === "${{false}}") return [];
+  return applying[0].steps ?? [];
+}
 
 describe("stock-preflight coverage over apply_target options (#6453 AC3)", () => {
   test("the options enum parses and did not collapse (non-vacuity)", () => {
@@ -371,5 +387,28 @@ describe("stock-preflight coverage over apply_target options (#6453 AC3)", () =>
       return /if\s*\[\[.*HEAD_MSG.*ack-destroy/s.test(jobBody(found[1]));
     });
     expect(bypassed).toEqual([]);
+  });
+});
+
+describe("a reusable caller binds to the called file's one applying job (#12866 review)", () => {
+  const gate = { run: "source tests/scripts/lib/stock-preflight-gate.sh\nstock_preflight_gate tfplan.json" };
+  const apply = { run: "terraform apply -target=hcloud_server.bastion tfplan" };
+  test("the gate in the applying job counts", () => {
+    const steps = calledApplyingSteps({ jobs: { a: { steps: [gate, apply] } } });
+    expect(callsGate({ steps })).toBe(true);
+  });
+  test("a gate in a different job of the called file does not count", () => {
+    const steps = calledApplyingSteps({ jobs: { decoy: { if: "false", steps: [gate] }, a: { steps: [apply] } } });
+    expect(callsGate({ steps })).toBe(false);
+  });
+  test("two applying jobs give no steps (ambiguous, fail closed)", () => {
+    expect(calledApplyingSteps({ jobs: { a: { steps: [gate, apply] }, b: { steps: [gate, apply] } } })).toEqual([]);
+  });
+  test("an applying job whose own if: is a constant false gives no steps", () => {
+    expect(calledApplyingSteps({ jobs: { a: { if: "${{ false }}", steps: [gate, apply] } } })).toEqual([]);
+    expect(calledApplyingSteps({ jobs: { a: { if: "false", steps: [gate, apply] } } })).toEqual([]);
+  });
+  test("a called file with no applying job gives no steps", () => {
+    expect(calledApplyingSteps({ jobs: { a: { steps: [gate] } } })).toEqual([]);
   });
 });

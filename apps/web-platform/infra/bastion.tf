@@ -1,8 +1,8 @@
 # soleur-bastion — the dedicated SSH bastion (#12866, ADR-327 step 2a; CTO rulings F4, F5, F8).
 #
 # Step 2 builds the host and nothing dials it: sshd is masked, the Hetzner firewall has zero inbound
-# rules, and the host's own nftables drops inbound and allowlists egress (bastion-cloud-init.yml,
-# bastion-egress.sh). Step 3 (#12867) unmasks sshd with its first dialer.
+# rules, and the host's own nftables drops inbound and allowlists egress from egress_load on
+# (bastion-cloud-init.yml, bastion-egress.sh; its header names the first-boot window before both apply). Step 3 (#12867) unmasks sshd with its first dialer.
 #
 # BIRTH ONLY THROUGH apply_target=bastion-host-create. Every address in this file is listed in
 # tests/scripts/lib/bastion-resources.txt (the birth gate's allow-set and the job's -target lines)

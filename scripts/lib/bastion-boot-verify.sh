@@ -23,8 +23,9 @@
 # not prove ready must not sit running on the private network. Power-off (not delete) keeps the disk
 # for the post-mortem; the recovery is bastion-host-replace. The run URL is commented on #12879.
 #
-# The reader's output is STREAMED (tee to a tempfile, read back afterwards), so a run cancelled or
-# killed by its timeout mid-poll still shows the trail it had read.
+# The reader's output is STREAMED: each line is written to the job's stdout as the reader prints it
+# and kept in a copy for the verdict check, so a run cancelled or killed by its timeout mid-poll still
+# shows the trail it had read.
 #
 # Outputs, when the runner provides them:
 #   $GITHUB_OUTPUT        poweroff_result=not_needed|powered_off|absent|failed
@@ -95,6 +96,29 @@ _bbv_poweroff() {  # power off the one soleur-bastion; never guesses between two
     echo "::error::bastion-boot-verify: the poweroff call for server ${_BBV_SERVER_ID} failed (HTTP ${code}). Power soleur-bastion off in the Hetzner console now."
     return 1
   fi
+  # A 201 means Hetzner ACCEPTED the action, not that the host is off: wait for the action itself
+  # (bounded, ~60 s), so an action that ends in error is never reported as powered off.
+  local aid status="" i
+  aid="$(jq -r '.action.id // empty' <<<"${resp%$'\n'*}" 2>/dev/null)"
+  if [[ ! "$aid" =~ ^[0-9]+$ ]]; then
+    echo "::error::bastion-boot-verify: the poweroff answer for server ${_BBV_SERVER_ID} carried no action id. Confirm soleur-bastion is off in the Hetzner console now."
+    return 1
+  fi
+  for i in $(seq 1 20); do
+    resp="$(_bbv_call GET "https://api.hetzner.cloud/v1/actions/${aid}")"
+    code="${resp##*$'\n'}"
+    status="$(jq -r '.action.status // empty' <<<"${resp%$'\n'*}" 2>/dev/null)"
+    [[ "$code" == 200 && "$status" == success ]] && break
+    if [[ "$code" == 200 && "$status" == error ]]; then
+      echo "::error::bastion-boot-verify: the poweroff action ${aid} for server ${_BBV_SERVER_ID} ended in error. Power soleur-bastion off in the Hetzner console now."
+      return 1
+    fi
+    [[ "$i" -eq 20 ]] || sleep 3
+  done
+  if [[ "$status" != success ]]; then
+    echo "::error::bastion-boot-verify: the poweroff action ${aid} for server ${_BBV_SERVER_ID} did not finish (last status '${status:-unread}'). Confirm soleur-bastion is off in the Hetzner console now."
+    return 1
+  fi
   echo "bastion-boot-verify: soleur-bastion (server ${_BBV_SERVER_ID}) powered off; its disk is kept for the post-mortem."
   _BBV_POWEROFF=powered_off
 }
@@ -124,12 +148,16 @@ bastion_boot_verify() {
     out="bastion-boot-verify: ${reason}; the boot trail was not read"; rc=1
     printf '%s\n' "$out"
   elif [[ -f "$reader" ]]; then
-    # Stream the reader to the run log as it runs (its wait can last 25 minutes) and keep a copy:
-    # tee to a duplicate of stdout, and exit the substitution with the reader's own status.
+    # Stream the reader to the run log as it runs (its wait can last 25 minutes) and keep a copy.
+    # Each line is written through a DUPLICATE of stdout, never by reopening /dev/fd/N: `tee` reopens
+    # the path, which truncates a stdout that is a regular file and writes at a second offset that the
+    # shell then overwrites. The substitution exits with the reader's own status.
     local fd
     exec {fd}>&1
     out="$(BOOT_TRAIL_STRICT=1 BOOT_TRAIL_HOST_NAME=soleur-bastion BOOT_TRAIL_HOST_ID="$host_id" BOOT_TRAIL_SINCE="$since" \
-      JOB_STATUS="$job_status" DISPATCH_LABEL="$label" bash "$reader" 2>&1 | tee "/dev/fd/${fd}"; exit "${PIPESTATUS[0]}")" || rc=$?
+      JOB_STATUS="$job_status" DISPATCH_LABEL="$label" bash "$reader" 2>&1 \
+      | { while IFS= read -r line || [[ -n "$line" ]]; do printf '%s\n' "$line" >&"$fd"; printf '%s\n' "$line"; done; }
+      exit "${PIPESTATUS[0]}")" || rc=$?
     exec {fd}>&-
   else
     out="bastion-boot-verify: the boot-trail reader is missing at ${reader}"; rc=2

@@ -1,7 +1,9 @@
 #cloud-config
 # soleur-bastion first boot (#12866, ADR-327 step 2a). Rendered by templatefile() in bastion.tf.
-# Nothing connects to the bastion in step 2: sshd is masked, inbound is dropped by the host's own
-# nftables and by the zero-rule hcloud_firewall.bastion. Egress is an allowlist (bastion-egress.sh).
+# Nothing connects to the bastion in step 2: sshd is masked, inbound is dropped by the zero-rule
+# hcloud_firewall.bastion and, from egress_load on, by the host's own nftables. FIRST-BOOT WINDOW: the
+# Hetzner firewall attaches only after the server exists, and nftables loads after the reboot, so until
+# then the public interface is filtered by neither; bootcmd masks ssh first, and root has only the CI key. Egress is an allowlist (bastion-egress.sh).
 # The apt and kernel-settle blocks below are the same bytes as cloud-init.yml's (Guard 3,
 # bastion.test.sh SETTLE). Changing anything here is a bastion-host-replace (#12879).
 

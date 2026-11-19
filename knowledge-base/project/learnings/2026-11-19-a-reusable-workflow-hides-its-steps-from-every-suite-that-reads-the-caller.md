@@ -38,9 +38,16 @@ Deleting the gate call in the reusable file turns the suite red (measured: 8 pas
 
 **Key insight.** A suite that walks workflow files sees the moved body. A suite keyed on
 `<caller file> + <job id> + steps` does not. Before you move a job body into a reusable workflow, run
-`git grep -lE 'jobs|\.steps' -- plugins/soleur/test tests scripts | xargs grep -l '<caller>.yml'`.
-For each hit, decide whether it reads by job id. If it does, it must follow `uses: ./.github/workflows/…`
-into the called file, or it is now vacuous for that job.
+this repo-wide (most infra suites live under `apps/`, which an earlier draft of this recipe skipped):
+
+    git grep -l '<caller>.yml' -- ':!knowledge-base' ':!.github' ':!*.md' | xargs grep -lE '<job_id>|\.jobs\b|\.steps\b|jobs\[|\bsteps:'
+
+For each hit, decide whether it reads the caller's jobs: by job id, by an `apply_target` `if:` match
+(as `stock-preflight-coverage.test.ts` does, which names no job id), or by an extracted `^  <job_id>:`
+block (as `kernel-currency.test.sh` and `soleur-host-bootstrap-observability.test.sh` do). If it does, it
+must follow `uses: ./.github/workflows/…` into the called file, or it is now vacuous for that job.
+Measured on #12873: 54 files, four of which read the moved job. The same command lives in
+`plan-sharp-edges.md`; keep the two identical.
 
 ## 2. Writing a dpkg conffile before `apt-get install` fails without a tty (rc=100)
 

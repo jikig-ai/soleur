@@ -410,7 +410,7 @@
    "kind": "secret-store",
    "at_rest": {
     "mechanism": "plaintext-exception",
-    "evidence": "apps/web-platform/infra/bastion-cloud-init.yml: ssh_keys (ed25519_private/ed25519_public from tls_private_key.bastion_host_ssh, bastion.tf) written by cloud-init to /etc/ssh at 0600 root, and the Sentry DSN baked into the runcmd _emit helper. No volume, no LUKS; the root disk holds the OS, journald and nothing else. Both values also sit in hcloud_server.bastion.user_data and in Terraform state (the EXPOSURE note in bastion.tf).",
+    "evidence": "apps/web-platform/infra/bastion-cloud-init.yml: ssh_keys (ed25519_private/ed25519_public from tls_private_key.bastion_host_ssh, bastion.tf) written by cloud-init to /etc/ssh at 0600 root, and the Sentry DSN baked into the runcmd _emit helper. No volume, no LUKS; the root disk holds the OS, journald and cloud-init's own copies of user_data (/var/lib/cloud/instance/user-data.txt and cloud-config.txt hold the host private key; /var/lib/cloud/instance/scripts/runcmd holds the DSN), all root-only. Both values also sit in hcloud_server.bastion.user_data and in Terraform state (the EXPOSURE note in bastion.tf).",
     "defends_against": "nothing at rest; there is no user data on this disk to protect",
     "does_not_defend": "a seized or RMA'd root disk, or any root on the host (user_data is readable from the metadata endpoint), yields the host private key and the Sentry DSN; a reader of main-root Terraform state reads the same key in clear",
     "disclosed_as": "not-publicly-claimed",

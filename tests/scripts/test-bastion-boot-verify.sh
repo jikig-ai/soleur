@@ -71,6 +71,8 @@ case "$method $url" in
     else emit '{"servers":[{"id":4242,"name":"soleur-bastion"}]}' 200; fi ;;
   "POST https://api.hetzner.cloud/v1/servers/4242/actions/poweroff")
     emit '{"action":{"id":1,"status":"running"}}' "${BBV_POWEROFF_CODE:-201}" ;;
+  "GET https://api.hetzner.cloud/v1/actions/1")
+    emit "{\"action\":{\"id\":1,\"status\":\"${BBV_ACTION_STATUS:-success}\"}}" 200 ;;
   *) emit '' 000; exit 7 ;;
 esac
 STUB
@@ -122,6 +124,8 @@ run noverdict 'boot-trail: something\n' 0 success
 t "no verdict line is not ready, even with exit 0" "$(not_ready_shape; echo $?)"
 run twoverdicts 'verdict=ready\nverdict=ready\n' 0 success
 t "two verdict lines are not ready" "$(not_ready_shape; echo $?)"
+run mixedverdicts 'verdict=not_ready\nverdict=ready\n' 0 success
+t "a not_ready verdict beside a ready one is not ready" "$(not_ready_shape; echo $?)"
 run readyrc1 'verdict=ready\n' 1 success
 t "verdict=ready beside a non-zero exit is not ready" "$(not_ready_shape; echo $?)"
 run readyspace 'verdict=ready \n' 0 success
@@ -146,6 +150,55 @@ run defaultreader 'unused' 0 failure BASTION_BOOT_TRAIL=
 t "with no BASTION_BOOT_TRAIL the real reader at the default path runs (its strict skip line is printed)" \
   "$([[ "$RC" -eq 1 && "$OUT" == *"boot-trail strict: the Sentry token is not bound (unbound token)"* && "$OUT" == *"verdict=skipped"* ]]; echo $?)"
 
+echo "streaming"
+# The library runs with stdout on a REGULAR FILE (an operator's `> log`, not the pipe the rows above
+# use). The reader stub prints a trail line, then polls that file for it before printing its verdict:
+# `streamed=yes` means the line reached the run log while the reader was still running. The line the
+# shell printed before the call must survive (a reopened /dev/fd/N truncates it).
+cat > "$WORK/reader-stream.sh" <<'STUB'
+#!/usr/bin/env bash
+printf 'boot-trail: stage1\n'
+s=no
+for _ in $(seq 1 50); do grep -qx 'boot-trail: stage1' "$BBV_STDOUT" 2>/dev/null && { s=yes; break; }; sleep 0.1; done
+printf '%s\n' "$s" > "$BBV_LOG/streamed"
+printf 'verdict=ready\n'
+STUB
+chmod +x "$WORK/reader-stream.sh"
+stream_row() {
+  local log="$WORK/stream"; rm -rf "$log"; mkdir -p "$log"; : > "$log/curl.log"; : > "$log/gh.log"; : > "$log/out"; : > "$log/sum"
+  RC=0
+  env -i PATH="$BIN:/usr/bin:/bin" HOME="$WORK" TMPDIR="$TMPDIR" BBV_LOG="$log" BBV_STDOUT="$log/stdout" \
+    BASTION_BOOT_TRAIL="$WORK/reader-stream.sh" HCLOUD_TOKEN=hcloudtok123 GH_TOKEN=ghtok RUN_URL="https://github.com/o/r/actions/runs/1" \
+    GITHUB_OUTPUT="$log/out" GITHUB_STEP_SUMMARY="$log/sum" \
+    bash -c 'source "$1" || exit 98; echo BEFORE-CALL; bastion_boot_verify 1790000000 success' _ "$LIB_UNDER_TEST" > "$log/stdout" 2>&1 || RC=$?
+  STREAMED="$(cat "$log/streamed" 2>/dev/null)"; OUT="$(tr -d '\000' < "$log/stdout")"; CURL="$(cat "$log/curl.log")"; GH="$(cat "$log/gh.log")"
+}
+stream_shape() { [[ "$RC" -eq 0 && "$STREAMED" == yes && "$(grep -cx 'BEFORE-CALL' <<<"$OUT")" -eq 1 && "$(grep -cx 'boot-trail: stage1' <<<"$OUT")" -eq 1 && "$OUT" == *"READY"* ]]; }
+stream_row
+t "the trail reaches a file stdout while the reader runs, once, and the line printed before the call survives" "$(stream_shape; echo $?)"
+# srow <label> <from> <to>: stream_shape holds on the real library and fails on the mutant.
+srow() {
+  local label="$1" from="$2" to="$3"
+  MUT=$((MUT + 1))
+  python3 - "$LIB" "$WORK/mut$MUT.sh" "$from" "$to" <<'PY2' || { cases=$((cases + 1)); fail "mutation $label did not land"; return; }
+import sys
+s, d, a, b = sys.argv[1:]
+t = open(s).read()
+if t.count(a) != 1: sys.exit(1)
+open(d, "w").write(t.replace(a, b))
+PY2
+  stream_row; local before=1; stream_shape && before=0
+  LIB_UNDER_TEST="$WORK/mut$MUT.sh" stream_row; local after=1; stream_shape && after=0
+  LIB_UNDER_TEST="$LIB"
+  cases=$((cases + 1))
+  if [[ "$before" -eq 0 && "$after" -ne 0 ]]; then pass "mutation caught: $label"; else fail "mutation SURVIVED: $label (predicate before=$before after=$after)"; fi
+}
+MUT=0
+srow "the trail printed only after the reader ends" 'printf '"'"'%s\n'"'"' "$line" >&"$fd"; printf '"'"'%s\n'"'"' "$line"; done; }
+      exit "${PIPESTATUS[0]}")" || rc=$?' 'printf '"'"'%s\n'"'"' "$line"; done; }
+      exit "${PIPESTATUS[0]}")" || rc=$?; printf '"'"'%s\n'"'"' "$out"'
+srow "the trail teed by reopening /dev/fd/N" '      | { while IFS= read -r line || [[ -n "$line" ]]; do printf '"'"'%s\n'"'"' "$line" >&"$fd"; printf '"'"'%s\n'"'"' "$line"; done; }' '      | tee "/dev/fd/${fd}"'
+
 echo "power-off arm"
 run noserver 'verdict=not_ready\n' 1 failure BBV_LOOKUP_BODY='{"servers":[]}'
 t "no soleur-bastion server: nothing to power off, still returns 1 and comments" "$([[ "$RC" -eq 1 && "$CURL" != *POST* && "$GH" == *"12879"* && "$OUT" == *"no soleur-bastion server"* && "$PO" == absent ]]; echo $?)"
@@ -162,6 +215,8 @@ run poweroff500 'verdict=not_ready\n' 1 success BBV_POWEROFF_CODE=500
 t "a failed poweroff call is an error naming the manual step, returns 1" "$([[ "$RC" -eq 1 && "$OUT" == *"::error::"*"poweroff"* && "$PO" == failed ]]; echo $?)"
 poweroff_failed_comment_shape() { [[ "$GH" == *"issue comment 12879"*"the power-off FAILED, soleur-bastion may still be running"* && "$GH" != *"powered off, disk kept"* && "$SUM" == *"power-off FAILED"* ]]; }
 t "a failed poweroff: the #12879 comment and the summary say the power-off FAILED" "$(poweroff_failed_comment_shape; echo $?)"
+run actionerror 'verdict=not_ready\n' 1 success BBV_ACTION_STATUS=error
+t "an accepted poweroff whose action ends in error is a failed power-off, never 'powered off'" "$([[ "$RC" -eq 1 && "$PO" == failed && "$OUT" == *"ended in error"* && "$SUM" == *"power-off FAILED"* ]]; echo $?)"
 run notoken 'verdict=not_ready\n' 1 success HCLOUD_TOKEN=
 t "no HCLOUD_TOKEN: no API call, an error, returns 1, still comments" "$([[ "$RC" -eq 1 && -z "$CURL" && "$OUT" == *"HCLOUD_TOKEN"* && "$PO" == failed && "$GH" == *"issue comment 12879"* ]]; echo $?)"
 run notready 'verdict=not_ready\n' 1 success
@@ -172,7 +227,6 @@ run nogh 'verdict=not_ready\n' 1 success GH_TOKEN=
 t "no GH_TOKEN: the comment is skipped by name, the power-off still happens" "$(nogh_shape; echo $?)"
 
 echo "mutation rows"
-MUT=0
 mrow() { # <label> <from> <to> <predicate> <case-args...>: the predicate holds on the real library and fails on the mutant
   local label="$1" from="$2" to="$3" pred="$4"; shift 4
   MUT=$((MUT + 1))
@@ -204,7 +258,7 @@ mrow "the comment only on a successful power-off" 'if [[ -n "${GH_TOKEN:-}" ]]; 
 mrow "the lookup takes the first of two servers" '  if [[ "$n" -ne 1 ]]; then' '  if [[ "$n" -lt 1 ]]; then' two_servers_shape twoservers 'verdict=not_ready\n' 1 success 'BBV_LOOKUP_BODY={"servers":[{"id":4242,"name":"soleur-bastion"},{"id":4343,"name":"soleur-bastion"}]}'
 
 echo
-MIN_CASES=42
+MIN_CASES=47
 if [[ "$cases" -lt "$MIN_CASES" ]]; then printf 'test-bastion-boot-verify: FAIL (only %d assertions ran; floor %d)\n' "$cases" "$MIN_CASES" >&2; exit 1; fi
 if [[ $((passes + fails)) -ne "$cases" ]]; then printf 'test-bastion-boot-verify: FAIL (accounting: passes+fails=%d != cases=%d)\n' "$((passes + fails))" "$cases" >&2; exit 1; fi
 if [[ "$fails" -gt 0 ]]; then printf 'test-bastion-boot-verify: FAIL (%d of %d assertions failed)\n' "$fails" "$cases" >&2; exit 1; fi

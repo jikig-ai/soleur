@@ -11294,6 +11294,13 @@ describe("bastion: one resource list, pinned to the birth job and the exclusions
     expect(new Set(list).size).toBe(list.length);
   });
 
+  test("bastion.tf declares exactly the listed resources (a resource missing from the list is never born)", () => {
+    const tf = stripComments(readFileSync(resolve(INFRA_DIR, "bastion.tf"), "utf8"));
+    const declared = [...tf.matchAll(/^resource\s+"(\w+)"\s+"(\w+)"/gm)].map((m) => `${m[1]}.${m[2]}`);
+    expect(declared.length).toBeGreaterThanOrEqual(5);
+    expect([...declared].sort()).toEqual([...list].sort());
+  });
+
   test("the bastion_host_create job's -target lines equal the list (as a multiset)", () => {
     expect(job.length).toBeGreaterThan(0);
     expect([...extractTargetsWithKeys(job)].sort()).toEqual([...list].sort());
