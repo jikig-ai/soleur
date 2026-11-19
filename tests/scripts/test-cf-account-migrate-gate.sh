@@ -44,6 +44,18 @@ OZ=5af02a2f394e9ba6e0ea23c381a26b67
 OA=4d5ba6f096b2686fbdd404167dd4e125
 
 check() { local n="$1"; shift; gate_check "$n" cf_account_migrate_gate "$@"; }
+# check() decides most rows, so it gets its own self-test (G1): a probe whose expectation
+# cannot hold must add exactly one failure and no pass. Unwound afterwards.
+_ck_p=$passes; _ck_f=$fails
+_cfam_ck_probe() { return 0; }
+_cfam_saved_gate="$(declare -f cf_account_migrate_gate)"
+cf_account_migrate_gate() { _cfam_ck_probe; }
+check "check() self-test probe" 1 "never-printed-needle" >/dev/null
+eval "$_cfam_saved_gate"; unset -f _cfam_ck_probe
+if [[ $passes -ne $_ck_p || $fails -ne $((_ck_f + 1)) ]]; then
+  printf 'FAIL INSTRUMENT: check() did not record a failing row as exactly one failure\n'; exit 1
+fi
+passes=$_ck_p; fails=$_ck_f
 
 # ── build the valid redirects-dns fixture from the committed imports file ──────────────────
 # Imports: every `to`/`id` pair in the imports file whose block uses the plain import set.

@@ -49,6 +49,15 @@ if (( PASS != _pc_p + 1 || FAIL != _pc_f + 1 || CASES != _pc_c + 2 )); then
   exit 2
 fi
 PASS=$_pc_p; FAIL=$_pc_f; CASES=$_pc_c
+# check() decides most rows, so it gets its own self-test (C1): a false probe must add one
+# failure, a true one one pass, each one case. Unwound afterwards.
+check "check() self-test false probe" false >/dev/null
+check "check() self-test true probe" true >/dev/null
+if (( PASS != _pc_p + 1 || FAIL != _pc_f + 1 || CASES != _pc_c + 2 )); then
+  printf '[FATAL] instrument self-test: check() did not map a probe to its verdict\n' >&2
+  exit 2
+fi
+PASS=$_pc_p; FAIL=$_pc_f; CASES=$_pc_c
 
 [[ -f "$SCRIPT" ]] || { printf '[FATAL] script missing: %s\n' "$SCRIPT" >&2; exit 2; }
 [[ -f "$GATE" ]] || { printf '[FATAL] gate library missing: %s\n' "$GATE" >&2; exit 2; }
