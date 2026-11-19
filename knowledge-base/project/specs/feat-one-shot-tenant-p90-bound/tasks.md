@@ -44,8 +44,8 @@ Disposition: (a) bound mis-seed → re-seed (bimodal latency; see plan Evidence)
 - [x] 2.3 Parser spot-check:
   `awk -F'\t' '$1=="tenant-integration-required"{print NF, $2, $3, $4}' scripts/required-check-wallclock-bounds.tsv`
   prints `4 960 180 0.30`.
-- [ ] 2.4 Diff scope: `git diff --name-only origin/main...HEAD` ⊆ {the
+- [x] 2.4 Diff scope: `git diff --name-only origin/main...HEAD` ⊆ {the
   bounds TSV, the runbook, this plan file, this spec dir}.
-- [ ] 2.5 PR body: reference #12755, #11556, #12905 contextually; NO
+- [x] 2.5 PR body: reference #12755, #11556, #12905 contextually; NO
   `Closes`/`Fixes`/`Resolves` keyword against #12755 (standing tracker);
   include the `## Changelog` section the version-bump workflow reads.
