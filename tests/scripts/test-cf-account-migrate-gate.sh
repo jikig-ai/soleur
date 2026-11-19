@@ -2,7 +2,7 @@
 # Suite for tests/scripts/lib/cf-account-migrate-gate.sh (#12931 Guard 1).
 #
 # The oracle is independent of the gate's own data where it matters: the valid redirects-dns
-# fixture's expected counts (9 creates, 29 imports) and a sample of addresses are literals here,
+# fixture's expected counts (8 creates, 29 imports) and a sample of addresses are literals here,
 # so a gate whose allow-set silently shrank cannot also shrink this suite's expectations.
 set -uo pipefail
 
@@ -71,7 +71,7 @@ n_imports="$(wc -l < "$imports_tsv" | tr -d ' ')"
 if [[ "$n_imports" -eq 29 ]]; then pass "imports file carries 29 redirects-dns imports (26 records + project + 2 domains)"; else fail "imports file import count" "$n_imports" "want 29"; fi
 if grep -q 'cloudflare_record.app' "$imports_tsv"; then fail "cloudflare_record.app must not be a redirects-dns import" 1 ""; else pass "cloudflare_record.app is not in the redirects-dns import set"; fi
 
-CREATES='cloudflare_ruleset.allowlist_ai_crawlers cloudflare_ruleset.cache_shared_binaries cloudflare_ruleset.seo_config_settings cloudflare_ruleset.seo_page_redirects cloudflare_ruleset.seo_response_headers cloudflare_ruleset.bulk_redirects cloudflare_list.legal_redirects cloudflare_list.www_canonical doppler_secret.cf_zone_id_prd'
+CREATES='cloudflare_ruleset.allowlist_ai_crawlers cloudflare_ruleset.seo_config_settings cloudflare_ruleset.seo_page_redirects cloudflare_ruleset.seo_response_headers cloudflare_ruleset.bulk_redirects cloudflare_list.legal_redirects cloudflare_list.www_canonical doppler_secret.cf_zone_id_prd'
 
 entry_create() { # <address>
   local a="$1" t="${1%%.*}" after
@@ -105,7 +105,7 @@ mutate_plan() { # <in> <out> <jq-filter>
 
 VALID="$TMP/valid.json"
 build_redirects "$VALID"
-check "valid redirects-dns plan passes with derived counts" 0 "verdict=PASS creates=9 imports=29 destroys=0" redirects-dns "$VALID"
+check "valid redirects-dns plan passes with derived counts" 0 "verdict=PASS creates=8 imports=29 destroys=0" redirects-dns "$VALID"
 
 # H2: order-insensitive, and a data-source read rides along.
 mutate_plan "$VALID" "$TMP/h2.json" '.resource_changes |= (reverse + [{address:"data.cloudflare_zone.x",mode:"data",type:"cloudflare_zone",change:{actions:["read"]}}])'
@@ -206,13 +206,36 @@ check "zone-rest: a bare delete of a mutable secret is refused" 1 "REFUSE" zone-
 
 # ── -target / -replace generation from the single list ─────────────────────────────────────
 tg="$(cf_account_migrate_targets redirects-dns)"
-if [[ "$(grep -c '^-target=' <<<"$tg")" -eq 38 ]] && grep -qx -- '-target=doppler_secret.cf_zone_id_prd' <<<"$tg" && ! grep -q 'cloudflare_record.app$' <<<"$tg"; then
-  pass "redirects-dns generates 38 -target args, includes the runtime zone id, excludes the app record"
+if [[ "$(grep -c '^-target=' <<<"$tg")" -eq 37 ]] && grep -qx -- '-target=doppler_secret.cf_zone_id_prd' <<<"$tg" && ! grep -q 'cloudflare_record.app$' <<<"$tg"; then
+  pass "redirects-dns generates 37 -target args, includes the runtime zone id, excludes the app record"
 else fail "redirects-dns -target generation" 1 "$tg"; fi
 rp="$(cf_account_migrate_replaces zone-rest)"
 if [[ "$rp" == "-replace=doppler_secret.cf_api_token_dns_edit" ]]; then pass "zone-rest generates exactly its one -replace"; else fail "zone-rest -replace generation" 1 "$rp"; fi
 if [[ -z "$(cf_account_migrate_replaces redirects-dns)" ]]; then pass "redirects-dns declares no -replace"; else fail "redirects-dns -replace must be empty" 1 ""; fi
 if cf_account_migrate_targets nope >/dev/null 2>&1; then fail "targets for an unknown phase must fail" 0 ""; else pass "targets for an unknown phase fail"; fi
+
+# ── D3: cache_shared_binaries is in no phase; the routine apply still -targets it ─────────────
+# A revoked /api/shared/<token> must not be edge-cached while the containers still purge against
+# the OLD zone, so no migrate phase creates the ruleset: the Phase 3 step 6 manual-rerun does.
+# phases_holding <gate-file> <address>: the phases whose spec names <address>, one per line.
+phases_holding() {
+  bash -c 'source "$1"; source "$2"; while IFS= read -r ph; do
+      cf_account_migrate_phase_spec "$ph" | jq -e --arg a "$3" "has(\$a)" >/dev/null && printf "%s\n" "$ph"
+    done < <(cf_account_migrate_phases); exit 0' _ "$PREAMBLE" "$1" "$2"
+}
+CSB="cloudflare_ruleset.cache_shared_binaries"
+csb_in="$(phases_holding "$GATE" "$CSB")"; csb_rc=$?
+if [[ "$csb_rc" -eq 0 && -z "$csb_in" ]]; then pass "D3: no phase spec contains $CSB"; else fail "D3: $CSB is in a phase spec" "$csb_rc" "$csb_in"; fi
+APPLY_WF="$HERE/../../.github/workflows/apply-web-platform-infra.yml"
+if grep -qE "^[[:space:]]+-target=${CSB//./\\.} \\\\\$" "$APPLY_WF"; then
+  pass "D3: apply-web-platform-infra.yml still carries -target=$CSB (the manual-rerun creates it)"
+else fail "D3: apply-web-platform-infra.yml lost -target=$CSB" 1 ""; fi
+# Mutation: put it back into redirects-dns. The same check must name the phase (RED).
+sed 's|^  "cloudflare_ruleset.allowlist_ai_crawlers": "create",$|&\n  "cloudflare_ruleset.cache_shared_binaries": "create",|' "$GATE" > "$TMP/d3-mut.sh"
+d3_mut_in="$(phases_holding "$TMP/d3-mut.sh" "$CSB")"
+if cmp -s "$TMP/d3-mut.sh" "$GATE"; then fail "D3 mutation: the sed did not land" 1 ""
+elif [[ "$d3_mut_in" == "redirects-dns" ]]; then pass "D3 mutation: $CSB added back to redirects-dns is caught (RED)"
+else fail "D3 mutation: $CSB added back to redirects-dns is not seen" 1 "$d3_mut_in"; fi
 
 # ── mutation rows: prove the gate's arms are load-bearing ──────────────────────────────────
 # Layered: a delete of an in-set create-class address is also off-class, so neutering the destroy
@@ -245,6 +268,6 @@ gate_mutate_and_check "M-evalfail: the jq-error refusal is load-bearing (a check
 
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 44 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 44)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 47 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 47)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

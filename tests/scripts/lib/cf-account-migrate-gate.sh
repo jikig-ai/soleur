@@ -49,13 +49,16 @@ CFAM_IMPORTS_FILE="${CFAM_IMPORTS_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../
 cf_account_migrate_phases() { printf '%s\n' redirects-dns zone-rest; }
 
 # cf_account_migrate_phase_spec <phase> — JSON object {address: class}. The ONE list.
+# cloudflare_ruleset.cache_shared_binaries is in NO phase (CTO ruling D3): caching /api/shared/*
+# at the edge while the running containers still purge against the OLD zone would keep serving
+# a revoked share. It is created by the routine apply's existing -target at the Phase 3 step 6
+# manual-rerun, after the redeploy loads the new purge token.
 cf_account_migrate_phase_spec() {
   case "${1-}" in
     redirects-dns)
       cat <<'JSON'
 {
   "cloudflare_ruleset.allowlist_ai_crawlers": "create",
-  "cloudflare_ruleset.cache_shared_binaries": "create",
   "cloudflare_ruleset.seo_config_settings": "create",
   "cloudflare_ruleset.seo_page_redirects": "create",
   "cloudflare_ruleset.seo_response_headers": "create",
