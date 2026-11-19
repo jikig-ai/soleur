@@ -162,6 +162,9 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — SECURITY DEFINER RPC bypass (local
     expect(await readAsA(`select get_workspace_debug_mode('${ctx.wsA}')`), "A must read its own debug_mode=true").toBe(true);
     expect(await readAsA(`select get_workspace_autonomous_ack('${ctx.wsA}')`), "A must read its own ack timestamp").not.toBeNull();
     expect(await readAsA(`select resolve_workspace_installation_id('${ctx.wsA}')`), "A must resolve its own installation id").not.toBeNull();
+    // The held-files read (mig 187, recreated by 188) denies by returning zero rows, so its ATTACK row is vacuous unless a member gets
+    // exactly one row (tests F5): A reads its own workspace's row.
+    expect(await readAsA(`select count(*)::int from get_workspace_kb_sync_held('${ctx.wsA}')`), "A must read its own held row").toBe(1);
   });
 
   // authorize_template bespoke attack (#6307 Item 2). founder-scoped write: the

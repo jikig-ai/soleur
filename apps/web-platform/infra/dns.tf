@@ -340,6 +340,14 @@ resource "cloudflare_record" "protonmail_dkim_3" {
 #   pinned by www-apex-canonicalizer.test.sh so this sentence cannot go stale
 #   silently; do not widen it without revisiting this ruling. ADR-204 and
 #   knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md.
+#
+#   DETECTION IS BETTER STACK ONLY since ADR-328, which removed every Sentry
+#   marketing-site monitor (the Sentry www reachability probe caught the rejected
+#   522 outcome ~8 min sooner). Both outcomes -- www serving its own 200 (chosen)
+#   and a hard 522 (rejected) -- now page through the same
+#   betteruptime_monitor.soleur_www_redirect on the same ~23 min timer, because
+#   any response other than the 301 fails it (DNS, TLS and 5xx included). The
+#   ruling turns on which failure is preferable to a user, not on latency.
 
 # THE TWO-MERGE CONTRACT (#7640, ADR-194 D5). Read this before editing either block.
 #

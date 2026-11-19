@@ -224,6 +224,16 @@ describe("countNewRuleDenials (#12757)", () => {
     });
   });
 
+  // #12847 escalation (observability P1) — a skill script called by the clone path, never the plugin root.
+  it("counts a clone-path plugin script call as plugin-clone-path, and not the same call on the plugin root", () => {
+    expect(
+      countNewRuleDenials([
+        d("Bash", { command: "bash plugins/soleur/skills/growth/scripts/x.sh audit" }),
+        d("Bash", { command: "bash /app/shared/plugins/soleur/skills/growth/scripts/x.sh audit" }),
+      ]),
+    ).toEqual({ "plugin-clone-path": 1 });
+  });
+
   it("a plain git status is no new-rule denial", () => {
     expect(countNewRuleDenials([d("Bash", { command: "git status" })])).toEqual({});
   });

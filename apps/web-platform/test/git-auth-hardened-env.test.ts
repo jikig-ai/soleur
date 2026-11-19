@@ -180,6 +180,20 @@ describe("gitWithInstallationAuth child env and argv", () => {
     }
   });
 
+  test("D19(1): a PRESENT `hardened` key whose value is undefined is refused before the mint (a falsy handle never runs the legacy arm)", async () => {
+    calls.length = 0;
+    mint.mockClear();
+    await expect(gitWithInstallationAuth(["push", "u", "HEAD:refs/heads/x"], 1, { hardened: undefined, cwd: "/ws/parent/work" })).rejects.toThrow(
+      /hardened/,
+    );
+    expect(mint).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+    // the key ABSENT is the legacy form, unchanged
+    await gitWithInstallationAuth(["push", "u", "HEAD:refs/heads/x"], 1, { cwd: "/ws/parent/work" });
+    expect(mint).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(1);
+  });
+
   test("hardened: the child env is EXACTLY the allowlist (those that are set) + the shared hardening env + the pins + the askpass wiring", async () => {
     const saved = new Map<string, string | undefined>();
     for (const k of HARDENED_ENV_ALLOWLIST) {
@@ -332,12 +346,23 @@ describe("gitWithInstallationAuth child env and argv", () => {
     const { args } = calls[0] as Call;
     expect(args.slice(0, 2)).toEqual(["-c", "credential.helper="]);
     expect(args.slice(2, 2 + GIT_HARDENING_ARGS.length)).toEqual([...GIT_HARDENING_ARGS]);
-    for (const c of ["http.proxy=", "http.https://github.com/.proxy=", "http.extraHeader=", "push.followTags=false"]) {
+    for (const c of ["http.proxy=", "http.https://github.com/.proxy=", "http.extraHeader=", "push.followTags=false", "maintenance.auto=false"]) {
       const i = args.indexOf(c);
       expect(i, c).toBeGreaterThan(0);
       expect(args[i - 1]).toBe("-c");
     }
     expect(args.slice(-3)).toEqual(["push", "u", `${"c".repeat(40)}:refs/heads/x`]);
+  });
+
+  test("hardened argv: core.alternateRefsCommand=true, so a fetch spawns no token-env for-each-ref child in the workspace .git (#12600 X2, F1)", async () => {
+    await call();
+    const { args } = calls[0] as Call;
+    const i = args.indexOf("core.alternateRefsCommand=true");
+    expect(i).toBeGreaterThan(0);
+    expect(args[i - 1]).toBe("-c");
+    expect(i).toBeLessThan(args.indexOf("push"));
+    // not the empty value: git runs the empty command '' and it fails (`error: cannot run`) on every fetch; `true` is the no-op
+    expect(args).not.toContain("core.alternateRefsCommand=");
   });
 
   test("legacy form (field unset): the shared host-git block precedes the credential reset, the env is scrubbed, GIT_DIR is the workspace's own", async () => {

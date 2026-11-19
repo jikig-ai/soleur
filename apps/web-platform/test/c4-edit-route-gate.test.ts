@@ -113,6 +113,34 @@ describe("PUT /api/kb/c4/[...path] — c4-edit gate (security boundary)", () => 
     expect(mocks.mockWriteC4Diagram).toHaveBeenCalledTimes(1);
   });
 
+  it("D16 — a designed workspace hold answers 200 plus workspace_sync: pending (the c4 save is a KB write)", async () => {
+    process.env.FLAG_C4_EDIT = "1";
+    mocks.mockWriteC4Diagram.mockResolvedValue({ ok: true, commitSha: "abc123", rerendered: false, workspaceSync: "pending" });
+    const res = await PUT(putRequest(), { params: PARAMS });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.commitSha).toBe("abc123");
+    expect(body.workspace_sync).toBe("pending");
+  });
+
+  it("D22(c) — the route forwards which sync was held (workspace_sync_held) so the UI can word a resync-only hold", async () => {
+    process.env.FLAG_C4_EDIT = "1";
+    mocks.mockWriteC4Diagram.mockResolvedValue({
+      ok: true, commitSha: "abc123", rerendered: false, workspaceSync: "pending", workspaceSyncHeld: "rerender",
+    });
+    const body = await (await PUT(putRequest(), { params: PARAMS })).json();
+    expect(body.workspace_sync).toBe("pending");
+    expect(body.workspace_sync_held).toBe("rerender");
+  });
+
+  it("D16 — no hold ⇒ no workspace_sync key", async () => {
+    process.env.FLAG_C4_EDIT = "1";
+    const res = await PUT(putRequest(), { params: PARAMS });
+    const keys = Object.keys(await res.json());
+    expect(keys).not.toContain("workspace_sync");
+    expect(keys).not.toContain("workspace_sync_held");
+  });
+
   it("AC8 — resolves the REAL identity (createClient → resolveIdentity) before the gate", async () => {
     process.env.FLAG_C4_EDIT = "0";
     await PUT(putRequest(), { params: PARAMS });

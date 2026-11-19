@@ -21,8 +21,10 @@ const calls: Call[] = [];
 // Controlled git-status-porcelain output per test.
 let porcelainOutput = "";
 
-vi.mock("child_process", () => ({
-  execFileSync: vi.fn((cmd: string, rawArgs: string[], _opts?: unknown) => {
+vi.mock("child_process", async () => {
+  // D38(1): the connected-repo runner is async; the sync stub drives `execFile` through the adapter.
+  const { execFileFromSync } = await import("./helpers/exec-file-from-sync");
+  const execFileSync = vi.fn((cmd: string, rawArgs: string[], _opts?: unknown) => {
     const args = stripHostGitBlock(rawArgs);
     calls.push({ cmd, args });
     if (args[0] === "remote") {
@@ -36,8 +38,9 @@ vi.mock("child_process", () => ({
       return Buffer.from("1\n");
     }
     return Buffer.from("");
-  }),
-}));
+  });
+  return { execFileSync, execFile: vi.fn(execFileFromSync(execFileSync)) };
+});
 
 vi.mock("fs", () => ({
   readdirSync: vi.fn(() => []),
@@ -96,6 +99,9 @@ vi.mock("@/lib/supabase/tenant", () => {
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
+  hashUserId: (u: string) => `hash:${u}`,
+  // R2-B: the pull's outer catch-all now writes its pull-held line (obs F3), whose warning mirror this reaches
+  mirrorWarnWithDebounce: vi.fn(),
 }));
 
 vi.mock("../server/git-auth", () => ({
@@ -116,7 +122,9 @@ vi.mock("../server/logger", () => ({
   }),
 }));
 
+import { assertConnectedRepoArgv, MERGE_CONFIG_PINS, mergeArgv } from "../server/connected-repo-git";
 import { syncPull, syncPush } from "../server/session-sync";
+import { AUTO_MERGE_MSG_PULL } from "../server/kb-sync-pull";
 
 // ADR-044 PR-B: syncPull/syncPush take an injected service client + resolved
 // workspace id. A minimal stub satisfies writeRepoColsToWorkspace's chain.
@@ -283,6 +291,18 @@ describe("session-sync path allowlist (#2905)", () => {
     expect(gitArgs0).not.toContain("branch");
   });
 
+  test("D21: syncPush runs ONE status per turn, and that one run still sees an unmerged entry (no add, no commit)", async () => {
+    porcelainOutput = "M  knowledge-base/a.md\0?? knowledge-base/new.md\0";
+    await syncPush("user-1", "/tmp/fake-workspace", STUB_SERVICE, "user-1");
+    expect(calls.filter((c) => c.args[0] === "status")).toHaveLength(1);
+    expect(calls.filter((c) => c.args[0] === "add")[0]?.args).toEqual(["add", "--", "knowledge-base/a.md", "knowledge-base/new.md"]);
+    calls.length = 0;
+    porcelainOutput = "UU knowledge-base/a.md\0?? knowledge-base/new.md\0";
+    await syncPush("user-1", "/tmp/fake-workspace", STUB_SERVICE, "user-1");
+    expect(calls.filter((c) => c.args[0] === "status")).toHaveLength(1);
+    expect(calls.filter((c) => c.args[0] === "add" || c.args[0] === "commit")).toEqual([]);
+  });
+
   test("auto-commit never invokes 'git add -A' or 'git add .'", async () => {
     porcelainOutput =
       " M .claude/settings.json\0 M knowledge-base/foo.md\0 M .github/workflows/x.yml\0";
@@ -294,5 +314,110 @@ describe("session-sync path allowlist (#2905)", () => {
     // Tight invariant: the staged argv MUST be exactly add + -- + paths.
     // Rejects "-A", "-u", ".", ":", and any future regression to a sweep flag.
     expect(adds[0].args).toEqual(["add", "--", "knowledge-base/foo.md"]);
+  });
+});
+
+// #12600 (CTO rulings R12, R19, R20): the only two workspace WRITE verbs the KB sync adds, each behind an exact-argv
+// guard. Every other argv for these verbs throws before git runs.
+describe("connected-repo argv guard: update-ref --no-deref and unpack-objects -q (#12600)", () => {
+  const A = "a".repeat(40);
+  const B = "b".repeat(40);
+  test.each([
+    [["update-ref", "--no-deref", "refs/heads/main", A, B]],
+    [["update-ref", "--no-deref", "refs/heads/trunk", A, B]],
+    [["update-ref", "--no-deref", "refs/remotes/origin/main", A]],
+    [["unpack-objects", "-q"]],
+  ])("accepts the guarded shape %j", (argv) => {
+    expect(() => assertConnectedRepoArgv(argv)).not.toThrow();
+  });
+  test.each([
+    [["update-ref", "--no-deref", "refs/heads/main", A]], // CAS old value mandatory on refs/heads
+    [["update-ref", "--no-deref", "refs/remotes/origin/main", A, B]],
+    [["update-ref", "--no-deref", "refs/heads/main", A, B, "extra"]],
+    [["update-ref", "--no-deref", "refs/tags/v1", A, B]],
+    [["update-ref", "--no-deref", "refs/heads/main", "HEAD", B]],
+    [["update-ref", "--no-deref", "refs/heads/main", A.toUpperCase(), B]],
+    [["update-ref", "--no-deref", "refs/heads/bad..name", A, B]],
+    [["update-ref", "--no-deref", "refs/heads/main", A, "0".repeat(39)]],
+    [["update-ref", "-d", "refs/heads/main"]],
+    [["update-ref", "--stdin"]],
+    [["update-ref", "--no-deref", "-m", "x", "refs/heads/main", A, B]],
+    [["update-ref", "--no-deref", "refs/remotes/upstream/main", A]],
+    [["update-ref", "--no-deref", "HEAD", A, B]],
+    [["update-ref", "--no-deref", "refs/heads/main", "0".repeat(40), B]], // all-zero new value (D13)
+    [["update-ref", "--no-deref", "refs/heads/main", A, "0".repeat(40)]], // all-zero old value ("must not exist")
+    [["update-ref", "--no-deref", "refs/remotes/origin/main", "0".repeat(40)]],
+    [["unpack-objects"]],
+    [["unpack-objects", "-q", "--strict"]],
+    [["unpack-objects", "-n"]],
+    [["update-ref", "--no-deref", "refs/heads/main", A, B, "--force"]],
+  ])("refuses %j", (argv) => {
+    expect(() => assertConnectedRepoArgv(argv)).toThrow();
+  });
+  test.each([
+    [["update-ref", "refs/heads/main", A, B]],
+    [["update-ref", "refs/remotes/origin/main", A]],
+    [["update-ref", "-m", "x", "--no-deref", "refs/heads/main", A, B]],
+  ])("refuses %j for the missing --no-deref (R19), not for another shape reason", (argv) => {
+    expect(() => assertConnectedRepoArgv(argv)).toThrow(/--no-deref/);
+  });
+  test("other verbs keep their existing checks (destructive verbs and forbidden flags still refuse)", () => {
+    expect(() => assertConnectedRepoArgv(["reset", "--hard"])).toThrow();
+    expect(() => assertConnectedRepoArgv(["checkout", "main"])).toThrow();
+    expect(() => assertConnectedRepoArgv(["commit", "--amend"])).toThrow();
+    expect(() => assertConnectedRepoArgv(["status", "--porcelain=v1", "-z"])).not.toThrow();
+  });
+});
+
+// TX1-e, shape half (#12718, D26(2), D26(5)): the session-start merge is ONE exact argv. Equality with the in-memory `T` is
+// the kb-sync-pull row (test/kb-sync-pull.test.ts); here only the shape.
+describe("connected-repo argv guard: the pinned session-start merge (#12718)", () => {
+  const T = "c".repeat(40);
+  const MERGE = ["merge", "--no-edit", "--autostash", "--no-overwrite-ignore", "-m", AUTO_MERGE_MSG_PULL, T];
+  test("the pins, then the merge of a 40-hex target, pass", () => {
+    expect(mergeArgv(T)).toEqual([...MERGE_CONFIG_PINS, ...MERGE]);
+    expect(() => assertConnectedRepoArgv(mergeArgv(T))).not.toThrow();
+  });
+  test("every D26(2) pin is present, each behind its own -c", () => {
+    const pins = MERGE_CONFIG_PINS.filter((_, i) => i % 2 === 1);
+    expect(MERGE_CONFIG_PINS.filter((_, i) => i % 2 === 0).every((c) => c === "-c")).toBe(true);
+    expect(pins).toEqual([
+      "merge.verifySignatures=false",
+      "gpg.program=/bin/false",
+      "gpg.ssh.program=/bin/false",
+      "gpg.x509.program=/bin/false",
+      "merge.renormalize=false",
+      // R2-B (data-sec P3-1): no directory-rename relocation of an upstream path onto an ignored local one
+      "merge.directoryRenames=false",
+      "merge.default=text",
+      "rerere.enabled=false",
+      "rerere.autoUpdate=false",
+      "merge.stat=false",
+      "maintenance.auto=false",
+      "gc.auto=0",
+      "core.hooksPath=/dev/null",
+    ]);
+  });
+  const without = (drop: string): string[] => mergeArgv(T).filter((a) => a !== drop);
+  test.each([
+    ["the merge without its pins", MERGE],
+    ["a missing pin", [...MERGE_CONFIG_PINS.slice(2), ...MERGE]],
+    ["an extra -c pin", ["-c", "core.fsmonitor=x", ...MERGE_CONFIG_PINS, ...MERGE]],
+    ["a -c pin on another verb", [...MERGE_CONFIG_PINS, "commit", "-m", "x"]],
+    ["--ff-only", [...MERGE_CONFIG_PINS, "merge", "--ff-only", T]],
+    ["merge --abort", [...MERGE_CONFIG_PINS, "merge", "--abort"]],
+    ["a bare merge --abort", ["merge", "--abort"]],
+    ["no --no-overwrite-ignore", without("--no-overwrite-ignore")],
+    ["no --autostash", without("--autostash")],
+    ["another message", [...MERGE_CONFIG_PINS, "merge", "--no-edit", "--autostash", "--no-overwrite-ignore", "-m", "x", T]],
+    ["a ref name target", [...MERGE_CONFIG_PINS, ...MERGE.slice(0, -1), "refs/remotes/origin/main"]],
+    ["an all-zero target", mergeArgv("0".repeat(40))],
+    ["a second target", [...mergeArgv(T), T]],
+    ["an option-shaped target", [...MERGE_CONFIG_PINS, ...MERGE.slice(0, -1), "--strategy=ours"]],
+    ["no merge.directoryRenames=false pin (pull shape)", without("merge.directoryRenames=false").filter((a, i, all) => !(a === "-c" && all[i + 1] === "-c"))],
+    ["merge.directoryRenames=true", mergeArgv(T).map((a) => (a === "merge.directoryRenames=false" ? "merge.directoryRenames=true" : a))],
+    ["no merge.directoryRenames=false pin (self-heal shape)", mergeArgv(T, { autostash: false }).map((a) => (a === "merge.directoryRenames=false" ? "merge.directoryRenames=conflict" : a))],
+  ])("refuses %s", (_name, argv) => {
+    expect(() => assertConnectedRepoArgv(argv)).toThrow(/pinned session-start merge/);
   });
 });

@@ -1,0 +1,79 @@
+===== probe6
+count: 1
+S tree differs from T tree: yes
+S non-KB diff vs T: 0
+objects to hand over: 3
+CAS ok
+CAS with wrong old value refused (expected)
+status:  M src/s.ts 
+push S ok
+foreign absent on remote (expected)
+ahead count @{u}..HEAD: 3
+pull --ff-only ok
+status after pull:  M src/s.ts 
+remote tip is ancestor of HEAD (ADR-068 ok)
+turn2: T is ancestor
+turn2 count: 2
+git version 2.39.5
+===== probe7
+--- after planting T-tree bytes under F's tree name:
+rev-list count: 0
+diff-tree rc=0 (0 = no non-KB change seen)
+ls-tree F: error: hash mismatch 1b4a1cd737aa989a468340b5d2764211e13a6ff9 fatal: not a tree object 
+tree
+error: fb1e420d82a63cdd25ff91f628aa5c2ef3f658e4: hash-path mismatch, found at: .git/objects/1b/4a1cd737aa989a468340b5d2764211e13a6ff9
+error: hash mismatch 1b4a1cd737aa989a468340b5d2764211e13a6ff9
+error: 1b4a1cd737aa989a468340b5d2764211e13a6ff9: invalid sha1 pointer in cache-tree
+--- via alternate from another GIT_DIR:
+0
+git version 2.39.5
+===== probe8
+verify commit ok
+verify tree ok
+after forging T's tree:
+verify tree FAIL (got '1b4a1cd737aa989a468340b5d2764211e13a6ff9')
+packed object case:
+verify tree FAIL (got '1b4a1cd737aa989a468340b5d2764211e13a6ff9')
+verify commit ok
+===== probe9
+--- ls-remote --symref <url> HEAD refs/heads/soleur/kb-sync
+ref: refs/heads/main	HEAD
+<sha>	HEAD
+<sha>	refs/heads/soleur/kb-sync
+rc=0
+side present in ws before fetch: no
+--- fetch --depth 1 --no-tags <url> refs/heads/soleur/kb-sync
+rc=0
+FETCH_HEAD == side tip: yes
+side present after fetch: yes
+workspace shallow unchanged: yes
+isolated shallow lines: 2
+git version 2.39.5
+===== probe10
+S tree differs from T tree: yes
+side push (non-force) ok
+local main CAS to side ok
+PR merge simulated
+pull --ff-only after PR merge: fast-forward ok
+side is an ancestor of local HEAD
+git version 2.39.5
+===== probe11
+clone: single-branch=+refs/heads/main:refs/remotes/origin/main
+--- bare git push (default push.default=simple), new local branch, no upstream
+fatal: The current branch feature has no upstream branch.
+To push the current branch and set the remote as upstream, use
+
+    git push --set-upstream origin feature
+
+To have this happen automatically for branches without a tracking
+rc=128
+remote feature ref: absent
+--- same, when the remote already has a 'feature' branch the clone does not track
+fatal: The current branch feature has no upstream branch.
+To push the current branch and set the remote as upstream, use
+
+    git push --set-upstream origin feature
+
+To have this happen automatically for branches without a tracking
+rc=128
+git version 2.39.5

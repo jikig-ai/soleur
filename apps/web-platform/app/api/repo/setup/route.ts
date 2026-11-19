@@ -7,7 +7,7 @@ import { isWorkspaceBeingReaped } from "@/server/workspace-reap-guard";
 import { WorkspaceReapInProgressError } from "@/server/workspace-reap-error";
 import { scanProjectHealth } from "@/server/project-scanner";
 import { normalizeRepoUrl } from "@/lib/repo-url";
-import { writeRepoColsToWorkspace } from "@/server/workspace-repo-mirror";
+import { clearKbSyncHeldCols, writeRepoColsToWorkspace } from "@/server/workspace-repo-mirror";
 import { resolveActiveWorkspace } from "@/server/workspace-resolver";
 import {
   resolveReachableInstallationIds,
@@ -303,6 +303,11 @@ export async function POST(request: Request) {
     );
   }
 
+  // #12714 (D29(1), D33(2)): a (re)connect starts with no held count; the first sync of the new clone writes it. A
+  // SEPARATE best-effort UPDATE after the flip: it never throws, and a failure (a missing column) sends one mirror
+  // and leaves this route's status and response unchanged.
+  await clearKbSyncHeldCols(serviceClient, activeWorkspaceId);
+
   // Kick off clone in the background (don't await)
   const userName = user.user_metadata?.full_name ?? user.email?.split("@")[0] ?? "Soleur User";
   const userEmail = userData?.email ?? user.email ?? "";
@@ -424,6 +429,8 @@ export async function POST(request: Request) {
           repo_last_synced_at: null,
           repo_error: null,
         });
+        // #12714 (D33(2)): the separate best-effort held clear, as on the cloning flip.
+        await clearKbSyncHeldCols(serviceClient, activeWorkspaceId);
         return;
       }
       Sentry.withIsolationScope(() => {

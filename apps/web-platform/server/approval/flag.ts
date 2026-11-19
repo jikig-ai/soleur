@@ -1,4 +1,4 @@
-import { getRuntimeFlag } from "@/lib/feature-flags/server";
+import { getRuntimeFlag, readRuntimeFlagDetailed } from "@/lib/feature-flags/server";
 import { reportApprovalOp } from "./ops";
 
 /**
@@ -27,6 +27,43 @@ export function resetFlagReadFailureReport(): void {
   lastReadFailureReportedAt = null;
 }
 
+/**
+ * Fail closed AND visible: a silently-off flag would look like a healthy dormant feature. Debounced (one report per TTL
+ * window per process, shared by both reads below), so a flag-service outage cannot flood Sentry (the gate reads the flag on
+ * every gated call) and a long outage still re-surfaces instead of latching silent after the first event.
+ */
+function reportReadFailure(err: unknown): void {
+  const now = Date.now();
+  if (lastReadFailureReportedAt === null || now - lastReadFailureReportedAt >= FLAG_READ_FAILURE_REPORT_TTL_MS) {
+    lastReadFailureReportedAt = now;
+    reportApprovalOp("flagReadFailed", err);
+  }
+}
+
+/**
+ * #12704 review (ruling D40(1)): the SAME read as `isApprovalQueueEnabled` (the same snapshot, so the same `value`), plus
+ * whether Flagsmith ANSWERED. `fellBack` is true when the value came from the `FLAG_APPROVAL_QUEUE` env mirror after a
+ * Flagsmith failure; `"error"` is a read that threw (reported, debounced). Read-only: it never creates or flips the flag.
+ * Callers that only decide ON/OFF keep `isApprovalQueueEnabled`; this one exists so a blip can read as "could not be
+ * checked" instead of a lasting "off" (the cc push registrar's `flag-error` reason and the Settings publish-route predicate).
+ */
+export type ApprovalFlagRead = { readonly value: boolean; readonly fellBack: boolean } | "error";
+
+export async function readApprovalQueueFlagDetailed(identity: ApprovalFlagIdentity): Promise<ApprovalFlagRead> {
+  try {
+    return await readRuntimeFlagDetailed("approval-queue", {
+      userId: identity.userId,
+      role: "prd",
+      orgId: identity.workspaceId,
+      email: null,
+      subscriptionStatus: null,
+    });
+  } catch (err) {
+    reportReadFailure(err);
+    return "error";
+  }
+}
+
 export async function isApprovalQueueEnabled(identity: ApprovalFlagIdentity): Promise<boolean> {
   try {
     return await getRuntimeFlag("approval-queue", {
@@ -37,14 +74,7 @@ export async function isApprovalQueueEnabled(identity: ApprovalFlagIdentity): Pr
       subscriptionStatus: null,
     });
   } catch (err) {
-    // Fail closed AND visible: a silently-off flag would look like a healthy dormant feature. Debounced (one report per
-    // TTL window per process), so a flag-service outage cannot flood Sentry (the gate reads the flag on every gated
-    // call) and a long outage still re-surfaces instead of latching silent after the first event.
-    const now = Date.now();
-    if (lastReadFailureReportedAt === null || now - lastReadFailureReportedAt >= FLAG_READ_FAILURE_REPORT_TTL_MS) {
-      lastReadFailureReportedAt = now;
-      reportApprovalOp("flagReadFailed", err);
-    }
+    reportReadFailure(err);
     return false;
   }
 }

@@ -13,6 +13,7 @@ const mockServiceFrom = vi.fn();
 const mockValidateOrigin = vi.fn();
 const mockProvisionWorkspaceWithRepo = vi.fn();
 const mockWriteRepoColsToWorkspace = vi.fn();
+const mockClearKbSyncHeldCols = vi.fn(async (..._a: unknown[]) => {});
 const mockResolveReachable = vi.fn();
 const mockResolveOwning = vi.fn();
 const mockResolveActiveWorkspace = vi.fn();
@@ -46,6 +47,7 @@ vi.mock("@/lib/repo-url", () => ({ normalizeRepoUrl: (u: string) => u }));
 vi.mock("@/server/workspace-repo-mirror", () => ({
   writeRepoColsToWorkspace: (...a: unknown[]) =>
     mockWriteRepoColsToWorkspace(...a),
+  clearKbSyncHeldCols: (...a: unknown[]) => mockClearKbSyncHeldCols(...a),
 }));
 vi.mock("@/server/workspace-resolver", () => ({
   resolveActiveWorkspace: (...a: unknown[]) => mockResolveActiveWorkspace(...a),
@@ -258,6 +260,13 @@ describe("POST /api/repo/setup — quiet-window kill-switch (#8211)", () => {
       repo_error: null,
     });
     expect(writes.some((w) => w.repo_status === "error")).toBe(false);
+    // #12714 (D33(2)): the held columns are nulled by the separate best-effort clear, after the restore. Two clears: the
+    // cloning flip's and the reaped-clone arm's (tests F8: a call-count, so deleting the reaped arm's clear reds).
+    expect(mockClearKbSyncHeldCols).toHaveBeenCalledTimes(2);
+    expect(mockClearKbSyncHeldCols.mock.calls[1]).toEqual([expect.anything(), "user-1"]);
+    expect(mockWriteRepoColsToWorkspace.mock.invocationCallOrder.at(-1)!).toBeLessThan(
+      mockClearKbSyncHeldCols.mock.invocationCallOrder[1],
+    );
   });
 
   test("any OTHER background provisioning failure is still reported and written as `error`", async () => {
