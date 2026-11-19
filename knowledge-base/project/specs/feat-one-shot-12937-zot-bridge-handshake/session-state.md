@@ -33,3 +33,9 @@
 ## Technical Rulings
 
 - cto_spawns=2
+
+## Work Phase
+
+- Status: code complete for Phases 1, 2, 2b (commits 90a90897a8..b19eae5331).
+- Affected gate (run on c86b4b35bf+stub fix): rc=1. Real reds fixed (lint-shell-capture-exit S4 x2, fixture-relative-assert). Contention reds re-run in isolation green: trio-baseline-census 603/603, check-web-host-escrow-config 105/105, plugins/soleur bun 5848 tests with 2 unrelated fails (inngest-userdata-budget pre-existing #12850; pencil-adapter-stub-repl MCP timeout). Web-platform app suites killed under load left to CI (no app code touched).
+- Blocked on operator: CF_API_TOKEN widening (Phase 0.1); placeholder deploy token id FILL-AT-PHASE-3.1 in tunnel.tf must be replaced before merge.
