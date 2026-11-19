@@ -496,31 +496,139 @@ case "$real_default" in
   false) ok "lb gate: committed variables.tf default=false -> gate refuses" "$real_rc" 1 ;;
   *)     ok "lb gate: committed variables.tf carries a literal cf_load_balancing_enabled default (got '${real_default}')" 1 0 ;;
 esac
-# Workflow wiring: one gate job, no secrets/environment/terraform in it, and EVERY arm job
-# (each job keyed on inputs.arm) needs it.
+# Workflow wiring, by EXACT EQUALITY against the reviewed literals (#12931 review L1-L4: a
+# substring grep plus a `needs:` count let `|| true`, step- or job-level continue-on-error and an
+# `always()` arm all pass). lb_wiring_violations prints one line per violation; empty = wired.
+#   - lb_enabled_gate: if == the dispatch literal; no continue-on-error, env, needs, environment
+#     or secrets; exactly two steps (checkout, then the gate step); the gate step's run equals
+#     LB_GATE_RUN byte for byte, with no if/continue-on-error/env on either step.
+#   - workflow env INFRA_DIR == apps/web-platform/infra (the file the gate reads).
+#   - every other job is an arm: if == "github.event_name == 'workflow_dispatch' &&
+#     inputs.arm == '<arm>'" for an arm in the dispatch options, each option exactly once (no
+#     status function can appear), and needs == lb_enabled_gate exactly.
 WF_LB="$REPO_ROOT_LB/.github/workflows/cf-lb-overlay.yml"
-gate_block="$(awk '/^  lb_enabled_gate:$/ {f=1; print; next} f && /^  [a-z_]+:$/ {exit} f {print}' "$WF_LB")"
 # shellcheck disable=SC2016  # the literal, unexpanded workflow text is the assertion
-if [[ -n "$gate_block" ]] && grep -qF 'cf_lb_gate_lb_enabled "${INFRA_DIR}/variables.tf"' <<<"$gate_block"; then
-  ok "lb gate: the workflow's lb_enabled_gate job calls cf_lb_gate_lb_enabled on variables.tf" 0 0
+LB_GATE_RUN='set -euo pipefail
+# shellcheck source=tests/scripts/lib/cf-lb-overlay-gate.sh
+source "${GITHUB_WORKSPACE}/tests/scripts/lib/cf-lb-overlay-gate.sh"
+cf_lb_gate_lb_enabled "${INFRA_DIR}/variables.tf"
+'
+lb_wiring_violations() { # <workflow-file>; exit 0 even with violations, 3 if unparseable
+  LB_GATE_RUN="$LB_GATE_RUN" python3 - "$1" <<'PY'
+import os, sys
+try:
+    import yaml
+    wf = yaml.safe_load(open(sys.argv[1]))
+except Exception as e:  # unparseable is a violation, never a pass
+    print(f"unparseable workflow: {e}"); sys.exit(3)
+out = []
+v = out.append
+DISPATCH = "github.event_name == 'workflow_dispatch'"
+on = wf.get("on", wf.get(True)) or {}
+try:
+    arms = list(on["workflow_dispatch"]["inputs"]["arm"]["options"])
+except Exception:
+    arms = []; v("no workflow_dispatch arm options")
+if (wf.get("env") or {}).get("INFRA_DIR") != "apps/web-platform/infra":
+    v(f"workflow env INFRA_DIR is {(wf.get('env') or {}).get('INFRA_DIR')!r}, not 'apps/web-platform/infra'")
+jobs = wf.get("jobs") or {}
+g = jobs.get("lb_enabled_gate")
+if not isinstance(g, dict):
+    v("no lb_enabled_gate job")
+    g = {}
+if g.get("if") != DISPATCH:
+    v(f"lb_enabled_gate if is {g.get('if')!r}")
+for k in ("continue-on-error", "env", "needs", "environment", "secrets", "strategy", "uses"):
+    if k in g:
+        v(f"lb_enabled_gate carries {k}")
+steps = g.get("steps") or []
+if len(steps) != 2:
+    v(f"lb_enabled_gate has {len(steps)} steps, want 2 (checkout, gate)")
+for i, st in enumerate(steps):
+    for k in ("if", "continue-on-error", "env", "working-directory", "shell"):
+        if isinstance(st, dict) and k in st:
+            v(f"lb_enabled_gate step {i} carries {k}")
+if len(steps) >= 1 and not str((steps[0] or {}).get("uses", "")).startswith("actions/checkout@"):
+    v("lb_enabled_gate step 0 is not actions/checkout")
+if len(steps) >= 2 and (steps[1] or {}).get("run") != os.environ["LB_GATE_RUN"]:
+    v(f"lb_enabled_gate gate step run differs from the reviewed literal: {(steps[1] or {}).get('run')!r}")
+seen = []
+for name, j in jobs.items():
+    if name == "lb_enabled_gate":
+        continue
+    if not isinstance(j, dict):
+        v(f"job {name} is not a mapping"); continue
+    cond = j.get("if")
+    arm = next((a for a in arms if cond == f"{DISPATCH} && inputs.arm == '{a}'"), None)
+    if arm is None:
+        v(f"job {name} if is not an exact arm literal: {cond!r}")
+    else:
+        seen.append(arm)
+    if j.get("needs") not in ("lb_enabled_gate", ["lb_enabled_gate"]):
+        v(f"job {name} needs is {j.get('needs')!r}, not lb_enabled_gate")
+if sorted(seen) != sorted(arms) or len(arms) != 7:
+    v(f"arm jobs {sorted(seen)} do not cover the 7 dispatch options {sorted(arms)} exactly once")
+print("\n".join(out))
+PY
+}
+lbw="$(lb_wiring_violations "$WF_LB")"; lbw_rc=$?
+if [[ "$lbw_rc" -eq 0 && -z "$lbw" ]]; then
+  ok "lb gate: the committed workflow's gate job and all 7 arms match the reviewed wiring literals" 0 0
 else
-  ok "lb gate: the workflow's lb_enabled_gate job calls cf_lb_gate_lb_enabled on variables.tf" 1 0
+  echo "$lbw"; ok "lb gate: the committed workflow's gate job and all 7 arms match the reviewed wiring literals" 1 0
 fi
-if [[ -n "$gate_block" ]] && ! grep -qE 'secrets\.|environment:|terraform |doppler |needs:|inputs\.arm' <<<"$gate_block"; then
-  ok "lb gate: the gate job reads no secret, has no environment, runs no terraform/doppler and runs for every arm" 0 0
-else
-  ok "lb gate: the gate job reads no secret, has no environment, runs no terraform/doppler and runs for every arm" 1 0
-fi
-arm_jobs="$(awk '/^jobs:$/ {j=1; next} j && /^  [a-z_]+:$/ {name=$1; sub(/:$/, "", name)} j && /^    if: .*inputs\.arm == / {print name}' "$WF_LB" | sort -u)"
-arm_n="$(grep -c . <<<"$arm_jobs" || true)"
-gated_n="$(awk '/^jobs:$/ {j=1; next} j && /^  [a-z_]+:$/ {name=$1; sub(/:$/, "", name)} j && /^    needs: lb_enabled_gate$/ {print name}' "$WF_LB" | sort -u | grep -cxF -f <(printf '%s\n' "$arm_jobs") || true)"
-if [[ "$arm_n" -eq 7 && "$gated_n" -eq "$arm_n" ]]; then
-  ok "lb gate: all ${arm_n} arm jobs need lb_enabled_gate" 0 0
-else
-  ok "lb gate: all arm jobs need lb_enabled_gate (arms=${arm_n}, gated=${gated_n})" 1 0
-fi
+# Mutation rows: each bypass shape must produce a violation. wf_mut copies the workflow with one
+# exact replacement (count must be 1, and the copy must differ).
+wf_mut() { # <out> <old> <new>
+  python3 - "$WF_LB" "$1" "$2" "$3" <<'PY'
+import sys
+src, dst, old, new = sys.argv[1:5]
+s = open(src).read()
+if s.count(old) != 1:
+    sys.exit(f"wf_mut: '{old[:60]}' occurs {s.count(old)} times")
+open(dst, "w").write(s.replace(old, new))
+PY
+}
+lb_mut_row() { # <label> <old> <new> <violation-needle>
+  local m="$TMP/lbw-mut.yml" out rc
+  if ! wf_mut "$m" "$2" "$3" || cmp -s "$m" "$WF_LB"; then ok "lb wiring mutation $1: the mutation did not land" 1 0; return; fi
+  out="$(lb_wiring_violations "$m")"; rc=$?
+  if [[ "$rc" -eq 0 && "$out" == *"$4"* ]]; then ok "lb wiring mutation $1 is caught" 0 0
+  else echo "$out"; ok "lb wiring mutation $1 is caught (want '$4')" 1 0; fi
+}
+# shellcheck disable=SC2016  # literal workflow text
+lb_mut_row "L1 masked gate call (|| true)" \
+  '          cf_lb_gate_lb_enabled "${INFRA_DIR}/variables.tf"' \
+  '          cf_lb_gate_lb_enabled "${INFRA_DIR}/variables.tf" || true' "gate step run differs"
+lb_mut_row "L2 step-level continue-on-error" \
+  '      - name: Refuse while Load Balancing is gated off (cf_load_balancing_enabled)
+' '      - name: Refuse while Load Balancing is gated off (cf_load_balancing_enabled)
+        continue-on-error: true
+' "lb_enabled_gate step 1 carries continue-on-error"
+lb_mut_row "L3 always() on an arm" \
+  "    if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-overlay'" \
+  "    if: always() && github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-overlay'" "job ga_overlay if is not an exact arm literal"
+lb_mut_row "L4 job-level continue-on-error" \
+  '  lb_enabled_gate:
+    if: github.event_name == '"'workflow_dispatch'"'
+' '  lb_enabled_gate:
+    if: github.event_name == '"'workflow_dispatch'"'
+    continue-on-error: true
+' "lb_enabled_gate carries continue-on-error"
+lb_mut_row "L5 an arm drops needs" \
+  "    if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-pool-update'
+    needs: lb_enabled_gate
+" "    if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-pool-update'
+" "job ga_pool_update needs is None"
+lb_mut_row "L6 INFRA_DIR re-pointed" \
+  '  INFRA_DIR: apps/web-platform/infra
+' '  INFRA_DIR: apps/web-platform/infra/lb-staging
+' "workflow env INFRA_DIR"
+lb_mut_row "L7 an arm OR-ed open" \
+  "inputs.arm == 'staging-record'" \
+  "inputs.arm == 'staging-record' || always()" "job staging_record if is not an exact arm literal"
 
 # anti-vacuity floor: the suite must have exercised a real battery, not a stubbed one.
-if [[ "$checks" -lt 141 ]]; then echo "FAIL: anti-vacuity — only $checks assertions ran"; fail=1; fi
+if [[ "$checks" -lt 157 ]]; then echo "FAIL: anti-vacuity — only $checks assertions ran"; fail=1; fi
 
 if [[ $fail -eq 0 ]]; then echo "ALL TESTS PASSED ($checks assertions)"; else echo "FAILURES PRESENT"; exit 1; fi
