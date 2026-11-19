@@ -7,7 +7,7 @@
 # duplicates.
 #
 # WHY THIS IS THE HIGHEST-PRIORITY DELIVERABLE OF ITS PR. Sharding `test-scripts` makes the
-# required `test` check green off eight legs (Guard 1b below covers the three-leg
+# required `test` check green off the declared matrix legs (Guard 1b below covers the three-leg
 # `test-scripts-heavy` matrix under the identical contract). If the partition drops a
 # registration, that check reports green while running a strict subset — a regression
 # reaching production behind a green pipeline. That is strictly WORSE than the blocked
@@ -174,7 +174,7 @@ fi
 # --- The matrix leg list, read from ci.yml ---------------------------------------------------
 #
 # Read as VALUES, not as a count. Mutation row 5 is a matrix listing one leg short of
-# ["1/8".."8/8"] — seven legs whose values still say /8 — where leg 8's suites run nowhere and
+# ["1/N".."N/N"] — eleven legs whose values still say /12 — where leg 12's suites run nowhere and
 # all surviving legs are green. A count-based read cannot see that; the value list can.
 awk '
   /^  test-scripts:$/ { inj=1; next }

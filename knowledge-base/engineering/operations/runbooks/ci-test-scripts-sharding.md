@@ -74,16 +74,23 @@ benchmark the lookup, not the parse.
 # timing fetch; the durations table takes only the parity delta (stale rows
 # out, new labels in at floor with src=floor; measured rows byte-identical) —
 # the manifest diff is exactly the added/removed rows. Refuses
-# --run/--runs/--timings-dir.
+# --run/--runs/--timings-dir/--event.
 python3 scripts/regenerate-shard-manifest.py --incremental --write
 python3 scripts/regenerate-shard-manifest.py --group heavy --incremental --write
-# Full regen — the balance-correction path; median over the last 5 green main
-# runs. This is the only mode that rebalances incumbents and the only one that
-# re-aggregates the durations tables from fresh measurements.
+# Full regen — the balance-correction path; median over the last 5 green
+# merge_group runs of ci.yml (the ci.yml groups default --event to
+# merge_group: only queue runs carry the full required battery — push runs on
+# main are selection-reduced and ship no suite-timings artifacts. Override
+# with --event {auto,push,merge_group}; infra-validation keeps its
+# main-branch population). This is the only mode that rebalances incumbents
+# and the only one that re-aggregates the durations tables from fresh
+# measurements. A committed --write whose sample contains ZERO measured rows
+# is refused (exit 2) — pass --allow-all-floor only when an all-floor rewrite
+# is genuinely intended.
 python3 scripts/regenerate-shard-manifest.py --runs 5 --write
 python3 scripts/regenerate-shard-manifest.py --run <green-ci-run-id> --write   # single-run override
 python3 scripts/regenerate-shard-manifest.py --group heavy --runs 5 --write
-# With --timings-dir (offline inputs) re-list the newest green main runs right
+# With --timings-dir (offline inputs) re-list the newest green merge_group runs right
 # before --write and require "0 at floor" in the dry-run summary: a suite that
 # landed after your staged runs is priced at the floor until a run carries its
 # timing, and the leg it shares then looks lighter than it is (#9449).
@@ -96,7 +103,9 @@ python3 scripts/regenerate-shard-manifest.py --group infra --runs 5 --write
 ```
 
 Without `--write` it prints predicted per-leg totals and the incumbent diff.
-`--runs N` (default 5) aggregates the N most recent green main runs by
+`--runs N` (default 5) aggregates the N most recent green runs in the
+resolved `--event` population (merge_group for the ci.yml groups, main-branch
+runs for infra) by
 **median** per label — a sustained drift moves a weight, a one-run contention
 spike does not; `--timings-dir` (repeatable — one run per dir) reads local
 `suite-timings.tsv` files instead. Sticky-LPT keeps incumbent legs within 5%
@@ -111,7 +120,11 @@ problem.
 **Floor rule (#9232).** A registered label absent from every timing input is
 still tabled — at `floor_ms`, the median of the group's measured labels, or
 `DEFAULT_SUITE_MS = 60000` when nothing measured at all (an all-floor,
-count-balanced manifest with a WARN — never a die). Floor rows carry
+count-balanced manifest with a WARN). One bound: a *committed* `--write`
+whose sample carries zero `src=measured` rows refuses outright — an all-floor
+rewrite of committed prices was exactly what a battery-less `--runs` sample
+produced; `--allow-all-floor` acknowledges the intent (redirected emissions
+stay ungated — fixtures and local packs). Floor rows carry
 `src=floor` in the durations table so a later aggregation re-derives the
 estimate rather than entrenching it as a measurement.
 
@@ -480,6 +493,31 @@ span to the NEXT registered mark.
   its execution is sub-30 s. Committed bounds 180/120 (next-minute
   ceilings) at margin 0.30 — comfortably inside the epic goals
   (PR ≤ 1200 s / MQ ≤ 900 s).
+- **2026-11-19 K=8→K=12 light-matrix reprice (#12964):** five green
+  `merge_group` runs — 44422317370, 44367783886, 44361074603,
+  44341020337, 44334556285 — each carrying 762 timed labels over 8
+  light + 3 heavy artifact dirs (a sixth green run, 44485722708, was a
+  reduced 25-job battery with no timing artifacts and was excluded).
+  Motivation: median `test` umbrella wall ~37 min — critical path was a
+  light leg (run 44422317370's `test-scripts (5/8)` at ~37.7 min).
+  Fresh-median simulation: K=8 repacks to ~26.6 min/leg (the serial-work
+  floor itself, not balance, was the binding constraint); K=10 worst leg
+  1,506 s; K=14 ~911.9 s. Chosen **K=12**: all 12 legs 1,028.8–1,082.0 s
+  (~17.1–18.0 min) of predicted suite time, spread 53.2 s — inside the
+  <30-min target with headroom, while K=14 buys ~2.5 min more for +2
+  runners/run. `--write --allow-growth` (4 violations acknowledged, the
+  gate's recorded channel): 758 tabled, 758 measured, 0 at floor
+  (1,520 ms), total measured weight 12,765,937 ms, 246 rows re-seated.
+  Heavy group repriced from the same runs: 0 moved (three atomic legs —
+  `tests/scripts/registry-gate-mutation-battery` median 744.9 s binds
+  the heavy wall at ~12.4 min, under the K=12 light wall; the observed
+  1,133 s on run 44422317370 was a spike, range 731–1,133 s). Both
+  matrix consumers moved in lockstep: `ci.yml` `test-scripts` and
+  `main-health-monitor.yml` `test-scripts`. Same-diff generator
+  hardening: `--event {auto,push,merge_group}` (ci.yml groups now
+  default --runs to merge_group — push runs carry no suite-timings
+  artifacts) and a committed-write refusal on zero `src=measured` rows
+  (ack: `--allow-all-floor`).
 
 ## Runner-availability data (why extra legs are not free)
 

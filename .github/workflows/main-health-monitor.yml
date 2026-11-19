@@ -64,7 +64,7 @@
 #   test-webplat        matrix 1/2..2/2  VITEST_SHARD   (vitest native shard)
 #   test-webplat-mutations  matrix x3 battery stems  direct battery invocation (#12626)
 #   test-bun            1 leg            TEST_GROUP=bun
-#   test-scripts        matrix 1/8..8/8  SCRIPTS_SHARD  (ADR-240 manifest, n=8)
+#   test-scripts        matrix 1/12..12/12  SCRIPTS_SHARD  (ADR-240 manifest, n=12)
 #   test-scripts-heavy  matrix 1/3..3/3  SCRIPTS_SHARD  (ADR-240 manifest, n=3)
 #   test-infra          1 leg            TEST_GROUP=infra (default -P width)
 #   report              needs all six    tracker + mintwatch + Sentry check-in
@@ -468,10 +468,11 @@ jobs:
           retention-days: 14
 
   # ---------------------------------------------------------------------------
-  # LEGS: the light scripts group, 8-way on the ADR-240 manifest.
-  # Leg membership comes from scripts/suite-shard-legs.tsv (n=8), not from
+  # LEGS: the light scripts group, 12-way on the ADR-240 manifest.
+  # Leg membership comes from scripts/suite-shard-legs.tsv (n=12), not from
   # position — the same manifest ci.yml's test-scripts consumes. Every leg under
-  # ~600 s of predicted suite time (#9307); untabled labels hash-fallback.
+  # ~1100 s of predicted suite time (K=12 reprice, 2026-11; #9307 was the K=8
+  # bump); untabled labels hash-fallback.
   # ---------------------------------------------------------------------------
   test-scripts:
     runs-on: ubuntu-24.04
@@ -479,7 +480,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"]
+        shard: ["1/12", "2/12", "3/12", "4/12", "5/12", "6/12", "7/12", "8/12", "9/12", "10/12", "11/12", "12/12"]
     env:
       # Same two-channel shape as ci.yml: TEST_GROUP is a step env naming WHICH
       # suites exist, SCRIPTS_SHARD is a job env naming WHICH SLICE this leg

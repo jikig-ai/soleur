@@ -242,7 +242,7 @@ jobs:
           # full battery — eliding the push run here would leave main with no post-merge full-battery run for that SHA, which
           # is the oracle's backstop. Every leg the lane can skip must have concluded `success` in that merge_group run: the
           # six heavy legs PLUS shard-totality-mutations. A `skipped`, absent, running or malformed entry fails closed.
-          # Matrix children are grouped by their base name (`test-scripts (1/8)` -> `test-scripts`), so the set check is over
+          # Matrix children are grouped by their base name (`test-scripts (1/12)` -> `test-scripts`), so the set check is over
           # the SEVEN lane-skippable legs and every one of their child jobs. The leg-name set is pinned bi-directionally with
           # the driver's allowlist and the aggregator's six-name regex by the sentinel: a new skippable leg requires editing
           # all three in the same diff.
@@ -1802,7 +1802,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"]
+        shard: ["1/12", "2/12", "3/12", "4/12", "5/12", "6/12", "7/12", "8/12", "9/12", "10/12", "11/12", "12/12"]
     # A SILENT BOUND MUST NEVER FIRE BEFORE A LOUD ONE (#7902 review).
     #
     # CORRECTED during review. An earlier revision claimed three bounds sit on this leg, "two of
@@ -1980,7 +1980,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           # One artifact per shard, keyed on `strategy.job-index` (0-based) rather
-          # than `matrix.shard`. NOT a normalisation: `matrix.shard` is `1/8` and
+          # than `matrix.shard`. NOT a normalisation: `matrix.shard` is `1/12` and
           # `/` is not permitted in an artifact name, so it is not used at all —
           # an earlier revision of this comment described a `/`->`-` rewrite the
           # code never performed. job-index is also matrix-resize-safe, matching

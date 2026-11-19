@@ -429,12 +429,12 @@ in_range && SOLEUR_SHARD_MANIFEST=off row "ROW4" "$RUNNER" \
   RED "every leg claims every registration (union right, multiset wrong)"
 
 # --- Row 5: ci.yml leg count disagrees with N -------------------------------------------------
-# Seven legs whose values still say /8: leg 8's suites run nowhere and all surviving legs are
+# Eleven legs whose values still say /12: leg 12's suites run nowhere and all surviving legs are
 # green. A count-based read of the matrix cannot see this.
 in_range && row "ROW5" "$CI_YML" \
-  '        shard: ["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"]' \
-  '        shard: ["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8"]' \
-  RED "ci.yml declares 7 legs while the partition computes mod 8"
+  '        shard: ["1/12", "2/12", "3/12", "4/12", "5/12", "6/12", "7/12", "8/12", "9/12", "10/12", "11/12", "12/12"]' \
+  '        shard: ["1/12", "2/12", "3/12", "4/12", "5/12", "6/12", "7/12", "8/12", "9/12", "10/12", "11/12"]' \
+  RED "ci.yml declares 11 legs while the partition computes mod 12"
 
 # --- Row 5b: the HEAVY job's leg count disagrees with N ----------------------------------------
 # Same defect shape one job down: the test-scripts-heavy matrix is its own literal, and the

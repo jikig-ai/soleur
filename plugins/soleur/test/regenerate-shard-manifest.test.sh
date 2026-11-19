@@ -1076,25 +1076,50 @@ fi
 # === Fixture Z3: default (no --group/--durations/--manifest) loops light+heavy ==
 # against the COMMITTED tables — heavy comes free from the same artifact dirs.
 FZ3="$WORK/Z3"; mkdir -p "$FZ3/run1/suite-timings-scripts-0"; assert_fixture_dir "$FZ3"
-# Time one REAL committed floor label so a DRIFT_ROW lands on the default path.
+# Time one REAL committed floor label so a DRIFT_ROW lands on the default
+# path. When the committed table is fully measured (a fresh complete reprice
+# leaves zero floor rows — a legitimate state, not a broken precondition), the
+# arm falls back to a committed measured label timed at its committed price:
+# within every bound, so the pinned shape becomes "the default loop emits no
+# row for it" plus FLOOR_UNMEASURED light 0.
 Z3_LABEL="$(awk -F'\t' '$3=="floor" {print $1; exit}' "$REPO_ROOT/scripts/suite-durations.tsv")"
-[[ -n "$Z3_LABEL" ]] || { echo "FATAL: committed durations has no floor row to fixture" >&2; exit 2; }
+Z3_KIND=floor
+if [[ -z "$Z3_LABEL" ]]; then
+  Z3_LABEL="$(awk -F'\t' '$3=="measured" {print $1; exit}' "$REPO_ROOT/scripts/suite-durations.tsv")"
+  Z3_KIND=measured
+fi
+[[ -n "$Z3_LABEL" ]] || { echo "FATAL: committed durations has no row to fixture" >&2; exit 2; }
 Z3_MS="$(awk -F'\t' -v l="$Z3_LABEL" '$1==l {print $2; exit}' "$REPO_ROOT/scripts/suite-durations.tsv")"
 [[ -n "$Z3_MS" ]] || { echo "FATAL: committed ms for $Z3_LABEL not found" >&2; exit 2; }
 Z3_FLOORS="$(awk -F'\t' '$3=="floor"' "$REPO_ROOT/scripts/suite-durations.tsv" | wc -l)"
-printf '%s\t700000\n' "$Z3_LABEL" > "$FZ3/run1/suite-timings-scripts-0/suite-timings.tsv"
+case "$Z3_KIND" in
+  floor)    Z3_TIME=700000 ;;
+  measured) Z3_TIME="$Z3_MS" ;;
+esac
+printf '%s\t%s\n' "$Z3_LABEL" "$Z3_TIME" > "$FZ3/run1/suite-timings-scripts-0/suite-timings.tsv"
 if python3 "$GEN" --drift-report --timings-dir "$FZ3/run1" \
      > "$FZ3/out.txt" 2> "$FZ3/err.txt"; then
   check pass "Z3: default drift-report exits 0 on the committed tables"
 else
   check fail "Z3: default drift-report refused: $(tail -2 "$FZ3/err.txt")"
 fi
-if grep -qxF "DRIFT_ROW light $Z3_LABEL $Z3_MS 700000 1/1" "$FZ3/out.txt"; then
-  check pass "Z3: default loop reports committed floor rows that measured"
+if [[ "$Z3_KIND" == floor ]]; then
+  if grep -qxF "DRIFT_ROW light $Z3_LABEL $Z3_MS 700000 1/1" "$FZ3/out.txt"; then
+    check pass "Z3: default loop reports committed floor rows that measured"
+  else
+    check fail "Z3: DRIFT_ROW for the committed floor label missing: $(grep DRIFT_ROW "$FZ3/out.txt")"
+  fi
+  Z3_EXPECT_UNMEASURED=$(( Z3_FLOORS - 1 ))
 else
-  check fail "Z3: DRIFT_ROW for the committed floor label missing: $(grep DRIFT_ROW "$FZ3/out.txt")"
+  if ! grep -q "DRIFT_ROW light $Z3_LABEL" "$FZ3/out.txt" \
+     && ! grep -q "PRICE_DRIFT_ROW light $Z3_LABEL" "$FZ3/out.txt"; then
+    check pass "Z3: fully-measured committed table — a within-bounds measured label emits no row"
+  else
+    check fail "Z3: a measured label timed at its committed price emitted a row: $(grep "$Z3_LABEL" "$FZ3/out.txt")"
+  fi
+  Z3_EXPECT_UNMEASURED=$Z3_FLOORS
 fi
-if grep -qxF "FLOOR_UNMEASURED light $(( Z3_FLOORS - 1 ))" "$FZ3/out.txt" \
+if grep -qxF "FLOOR_UNMEASURED light $Z3_EXPECT_UNMEASURED" "$FZ3/out.txt" \
    && grep -qxF 'FLOOR_UNMEASURED heavy 0' "$FZ3/out.txt" \
    && ! grep -q 'DRIFT_ROW heavy' "$FZ3/out.txt"; then
   check pass "Z3: group loop covers light + heavy (heavy floor set is empty by construction)"
