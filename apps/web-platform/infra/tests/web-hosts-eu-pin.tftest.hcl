@@ -89,20 +89,12 @@ mock_provider "supabase" {
 variables {
   admin_ips = ["203.0.113.1"]
 
-  # Opt this credential-free test OUT of the seo_config_settings entrypoint
-  # adoption. `mock_provider` does NOT mock `import` blocks — Terraform performs
-  # the import read against the REAL provider even under `terraform test`, so
-  # leaving this at its production default (`true`) fails the whole file with
-  # `error reading ruleset ID ... Authentication error (10000)` before any
-  # var.web_hosts validation runs. That is a credential error in a job whose
-  # entire premise is running without credentials.
-  #
-  # The default stays `true` so production adopts rather than clobbers; only
-  # this test opts out. seo-config-rules.tf explains what the adoption is for,
-  # and test/seo-config-rules.test.ts pins that the default is `true` — because
-  # flipping it to `false` silently restores the whole-list clobber (#6767).
-  adopt_seo_config_entrypoint = false
-  betterstack_api_token       = "dummy"
+  # mock_provider does not mock `import` blocks: Terraform performs the import read against
+  # the REAL provider even under `terraform test`, so the #12931 import blocks
+  # (cf-account-migration-imports.tf) are switched off here. Production keeps the default.
+  cf_migration_imports_enabled = false
+  cf_r2_account_id             = "fedcba9876543210fedcba9876543210"
+  betterstack_api_token        = "dummy"
   # Length-bearing, not "dummy": modules/git-data-userdata/variables.tf validates this is a
   # real ingest token, because an empty or stub value renders `BETTERSTACK_LOGS_TOKEN=` and
   # darkens eight of the nine git-data boot stages on a HASH-VALID boot (#7460).
@@ -185,4 +177,46 @@ run "reject_non_sk_ant_ci_key" {
     anthropic_api_key_ci = "not-an-anthropic-key"
   }
   expect_failures = [var.anthropic_api_key_ci]
+}
+
+# #12931 / ADR-329 Guard 4: the OLD zone and account ids are refused before any refresh.
+run "reject_old_zone_id" {
+  command = plan
+  variables {
+    cf_zone_id = "5af02a2f394e9ba6e0ea23c381a26b67"
+  }
+  expect_failures = [var.cf_zone_id]
+}
+
+# The comparison is on lower(): an upper-case paste of the old id is still refused.
+run "reject_old_zone_id_upper_case" {
+  command = plan
+  variables {
+    cf_zone_id = "5AF02A2F394E9BA6E0EA23C381A26B67"
+  }
+  expect_failures = [var.cf_zone_id]
+}
+
+run "reject_old_account_id" {
+  command = plan
+  variables {
+    cf_account_id = "4d5ba6f096b2686fbdd404167dd4e125"
+  }
+  expect_failures = [var.cf_account_id]
+}
+
+run "reject_short_r2_account_id" {
+  command = plan
+  variables {
+    cf_r2_account_id = "4d5ba6f096b2686fbdd404167dd4e12"
+  }
+  expect_failures = [var.cf_r2_account_id]
+}
+
+run "reject_empty_r2_account_id" {
+  command = plan
+  variables {
+    cf_r2_account_id = ""
+  }
+  expect_failures = [var.cf_r2_account_id]
 }

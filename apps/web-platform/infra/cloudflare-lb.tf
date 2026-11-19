@@ -48,6 +48,9 @@
 # Rollback is a revert PR plus the `ga-monitor-fix` arm (http/:80, graded by cf_lb_gate_ga_monitor_update).
 # Traffic is not at risk either way: both origins serve (web-2 is weight 1) and the B1 fallback serves web-1 if every origin reads down.
 resource "cloudflare_load_balancer_monitor" "web" {
+  # Gated off since #12931: the Soleur account has no Load Balancing subscription.
+  count = var.cf_load_balancing_enabled ? 1 : 0
+
   account_id       = var.cf_account_id
   type             = "https"
   port             = 443
@@ -89,6 +92,9 @@ locals {
 }
 
 resource "cloudflare_load_balancer_pool" "web_1" {
+  # Gated off since #12931: the Soleur account has no Load Balancing subscription.
+  count = var.cf_load_balancing_enabled ? 1 : 0
+
   account_id    = var.cf_account_id
   name          = "web-1"
   check_regions = ["WEU"]
@@ -120,7 +126,7 @@ resource "cloudflare_load_balancer_pool" "web_1" {
     policy = "random"
   }
 
-  monitor = cloudflare_load_balancer_monitor.web.id
+  monitor = cloudflare_load_balancer_monitor.web[0].id
 
   latitude  = 0
   longitude = 0
@@ -142,6 +148,9 @@ resource "cloudflare_load_balancer_pool" "web_1" {
 # `load_balancing_health_alert` IS in the account's available_alerts (unlike the
 # http_alert_* Enterprise types documented at uptime-alerts.tf).
 resource "cloudflare_notification_policy" "web_lb_health" {
+  # Gated off since #12931: the Soleur account has no Load Balancing subscription.
+  count = var.cf_load_balancing_enabled ? 1 : 0
+
   account_id  = var.cf_account_id
   name        = "GA LB pool health (app.soleur.ai)"
   description = "Alert when the GA load balancer's web pool or any origin reports unhealthy (ADR-068 §(b))"
@@ -149,7 +158,7 @@ resource "cloudflare_notification_policy" "web_lb_health" {
   enabled     = true
 
   filters {
-    pool_id      = [cloudflare_load_balancer_pool.web_1.id]
+    pool_id      = [cloudflare_load_balancer_pool.web_1[0].id]
     event_source = ["pool", "origin"]
     # new_health is ["Unhealthy"] only — the documented vocabulary for
     # load_balancing_health_alert is {Unhealthy, Healthy} (CF docs; the shipped
@@ -168,11 +177,14 @@ resource "cloudflare_notification_policy" "web_lb_health" {
 # The Load Balancer itself, overlaid on app.soleur.ai. The retained A record
 # (cloudflare_record.app in dns.tf) stays as the automatic fallback for a disabled LB.
 resource "cloudflare_load_balancer" "app" {
+  # Gated off since #12931: the Soleur account has no Load Balancing subscription.
+  count = var.cf_load_balancing_enabled ? 1 : 0
+
   zone_id = var.cf_zone_id
   name    = "app.soleur.ai"
   # default_pool_ids contains ONLY web-1's pool; web-2 rides inside it as a gated member (B2).
-  default_pool_ids = [cloudflare_load_balancer_pool.web_1.id]
-  fallback_pool_id = cloudflare_load_balancer_pool.web_1.id
+  default_pool_ids = [cloudflare_load_balancer_pool.web_1[0].id]
+  fallback_pool_id = cloudflare_load_balancer_pool.web_1[0].id
   steering_policy  = "off" # pool-level knob; one default pool — origin selection lives in the pool's origin_steering
   proxied          = true
 

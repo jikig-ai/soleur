@@ -197,48 +197,12 @@
 #   - seo-rulesets.tf (sibling rulesets on the same provider alias)
 #   - Ref #3379 (the api.soleur.ai dormant-rule tracker — deliberately untouched here)
 
-# ADOPTION, not creation. The http_config_settings entrypoint for this zone
-# already exists and is already populated, so this resource IMPORTS it — see
-# "PREREQUISITE 2" above.
-#
-# Import ID format is `zone/<zone_id>/<ruleset_id>` — SINGULAR `zone`, on the
-# pinned provider 4.52.7. The published docs on the provider's `main` branch say
-# `zones/...` (plural); that is v5 syntax and it FAILS HERE, but not loudly:
-# v4 does not reject the unknown prefix, it silently falls through to the
-# account-level path and issues
-# `GET /accounts/<zone_id>/rulesets/<id>` — a zone ID in an accounts URL — which
-# surfaces as `Authentication error (10000)`. The error names authentication, so
-# it reads like a token-scope problem and sends you back to re-probe a
-# credential that was already correct. Verified empirically against 4.52.7:
-# 2-segment `<zone_id>/<ruleset_id>` → "invalid import identifier";
-# `zones/...` → wrong-path auth error; `zone/...` → correct
-# `GET /zones/<zone_id>/rulesets/<id>`.
-# test/seo-config-rules.test.ts pins the singular form.
-#
-# `provider` here is EXPLICIT, not required: an import block DOES inherit its
-# target resource's provider. Measured — with this line deleted and the DEFAULT
-# `cloudflare` provider's token replaced by a garbage value, the plan still
-# succeeded (`1 to import`), which is only possible via the `rulesets` alias.
-# (An earlier revision of this comment claimed the opposite. It was wrong: the
-# `zones/`→`zone/` ID fix alone resolved the failure, and adding `provider` had
-# changed nothing.) Kept because it makes the credential legible at the call
-# site, and pinned by the test so it cannot be dropped silently.
-#
-# The ruleset ID is hardcoded while the zone is a variable. That coupling is
-# deliberate — the ID is valid only for this zone — and it fails CLOSED: a
-# repointed `cf_zone_id`, or an entrypoint recreated in the dashboard, makes the
-# import read fail rather than clobber. Note the blast radius, though, measured
-# on Terraform 1.10.5 (2026-09-15, #7884): a plan whose `-target` set excludes
-# this import's `to` address skips the import silently, while an untargeted plan
-# or one that targets the address aborts on the failed read. The per-merge apply
-# targets cloudflare_ruleset.seo_config_settings and the scheduled drift plan is
-# untargeted, so both would abort for the whole root, not just this resource.
-import {
-  for_each = var.adopt_seo_config_entrypoint ? toset(["adopt"]) : toset([])
-  provider = cloudflare.rulesets
-  to       = cloudflare_ruleset.seo_config_settings
-  id       = "zone/${var.cf_zone_id}/a21ac79d368f425a95c895c43a090d57"
-}
+# NO IMPORT BLOCK SINCE #12931. The entrypoint this resource adopted (a21ac79d…) lives in
+# the OLD zone, which moved to the Soleur account on 2026-11-18. In the new zone Terraform
+# creates the entrypoint (cf-account-migrate phase redirects-dns); if a hand-made one is
+# found there first, it is imported by its NEW id in cf-account-migration-imports.tf.
+# The `zone/<zone_id>/<ruleset_id>` import id (SINGULAR `zone`) still applies on 4.52.7:
+# `zones/...` silently falls through to the account path and fails as an auth error.
 
 # `name` and `description` deliberately mirror the live entrypoint EXACTLY
 # ("default" / empty) rather than carrying a descriptive label. Cloudflare names

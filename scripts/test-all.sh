@@ -6778,6 +6778,7 @@ if want_scripts; then
   # allow-sets fail closed). Registered HERE for the same reason as the rung2 and
   # inngest-provision entries above: nothing auto-discovers tests/scripts/.
   run_suite "tests/scripts/cf-lb-overlay-gate" bash tests/scripts/test-cf-lb-overlay-gate.sh
+  run_suite "tests/scripts/cf-account-migrate-gate" bash tests/scripts/test-cf-account-migrate-gate.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
   # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
   # host-key option anywhere in the tree), its mutation harness, and the track.sh

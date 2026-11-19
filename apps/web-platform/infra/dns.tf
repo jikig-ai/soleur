@@ -443,5 +443,7 @@ resource "cloudflare_record" "buttondown_ns2" {
 # Status is computed-only in provider v4.x (not configurable).
 # Verify: dig soleur.ai DS @8.8.8.8 +short
 resource "cloudflare_zone_dnssec" "soleur_ai" {
+  # Off during the #12931 cutover; re-enable in a tracked follow-up.
+  count   = var.cf_zone_dnssec_enabled ? 1 : 0
   zone_id = var.cf_zone_id
 }

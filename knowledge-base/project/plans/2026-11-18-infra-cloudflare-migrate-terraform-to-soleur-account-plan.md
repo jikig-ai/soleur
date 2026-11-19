@@ -328,7 +328,7 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
     - The `dev*` configs carry `CF_ZONE_ID` for the read-only audit token. Those are agent Doppler writes after a go, recorded in the runbook.
 13. **Docs CI**: in `.github/workflows/deploy-docs.yml`, probe A's `PROBE_URL` becomes `https://soleur-docs-40x.pages.dev/version.txt`. Update the "Measured 2026-09-02: soleur-docs.pages.dev" comment to match.
 14. **Stale literals: deferred to the cleanup PR** (plan review: they restore nothing). These are `plugins/soleur/agents/engineering/infra/infra-security.md` (zone and account ids to the new ones, R2 note) and the `infra-credential-tiers-8209.md` note.
-15. **Remove the TEMPORARY `ssl=full` config rule** from `seo-config-rules.tf` (its description begins "TEMPORARY (2026-08-16 outage)"). Without this, `redirects-dns` would recreate it in the new zone. Update the single-`ssl`-rule assertion in `apps/web-platform/test/seo-config-rules.test.ts` with it. The apex is served by Pages, so `strict` applies (#12931 asks for this).
+15. **Keep the TEMPORARY `ssl=full` config rule** (overturned 2026-11-19, CTO L55 re-ruling). It is recreated in the new zone with `cloudflare_ruleset.seo_config_settings` in `redirects-dns`. Its removal belongs to #7799, together with the `dns.tf` `github_pages` -> `pages_apex` moved block and the apex rollback tooling; `ssl-full-mitigation.test.sh` stays armed on that moved block. Phase 5 does not delete it. After the state-forget the moved block is a no-op (its source is not in state).
     - `scripts/cf-access-deploy-token-mint.sh` (F8) and `scripts/cf-tunnel-host-predelete.sh` (F5) **move to PR2** (all three reviewers). They serve no PR1 property, and PR2 gets its own review.
 16. **Tests come first** (`cq-write-failing-tests-before`): see Test Scenarios. Each guard's mutation matrix is written before the guard.
 
@@ -485,7 +485,7 @@ PR1 (this branch):
   - the in-progress predicate call in `apply`;
   - `doppler_secret.cf_zone_id_prd` and `cloudflare_zone_dnssec.soleur_ai[0]` in the stage-1 `-target` list.
 - `scripts/check-cloudflare-token-drift.sh`: repoint expectations to the new account and zone (F11, in PR1). `plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh`: add the per-phase new-account probe profiles (non-mutating invalid-body write probes).
-- `apps/web-platform/infra/seo-config-rules.tf`: also delete the TEMPORARY `ssl=full` rule (Phase 1 item 15).
+- `apps/web-platform/infra/seo-config-rules.tf`: the TEMPORARY `ssl=full` rule is kept (Phase 1 item 15, #7799).
 - `.github/workflows/cf-lb-overlay.yml`: refuse while `cf_load_balancing_enabled` is false.
 - `.github/workflows/deploy-docs.yml`: probe A URL.
 - `apps/web-platform/test/seo-config-rules.test.ts`: adoption assertions.
@@ -886,7 +886,7 @@ Artifact and vector pairs for `soleur:engineering:review:user-impact-reviewer`:
 | 10 | "prefer phasing so redirects (pure Cloudflare, no host change) land and are applied first, then the tunnel/Access/deploy hosts" [brief] | PR1/PR2 split, phases redirects-dns → zone-rest → tunnel | mapped |
 | 11 | "Redirects (the 4 Better Stack 301 monitors are red)" [issue #12931] | Phase 2 steps 3–5 | mapped |
 | 12 | "Transform rules `http_response_headers_transform`" [issue #12931] | Phase 2 (redirects-dns target set) | mapped |
-| 13 | "Config rules `http_config_settings`: … Drop the TEMPORARY `ssl=full` rule" [issue #12931] | Phase 2 (seo_config_settings created from config). Work-time check: if `seo-config-rules.tf` still declares the temporary `ssl=full` rule, delete it in PR1 (the apex serves under strict). | mapped |
+| 13 | "Config rules `http_config_settings`: … Drop the TEMPORARY `ssl=full` rule" [issue #12931] | Phase 2 (seo_config_settings created from config). The "drop the TEMPORARY rule" half is deferred to #7799 (CTO L55 re-ruling, 2026-11-19): it is removed together with the `github_pages` moved block and the apex rollback tooling. | deferred (#7799) |
 | 14 | "Cache rule `http_request_cache_settings`" [issue #12931] | Phase 2 | mapped |
 | 15 | "WAF custom rule allowlisting AI crawler UAs … and bot management" [issue #12931] | Phase 2 (allowlist), Phase 2 step 6 (bot management, Free shape) | mapped |
 | 16 | "Load balancer `app.soleur.ai` … needs a subscription" [issue #12931] | Phase 1 item 3; operator money row | mapped |

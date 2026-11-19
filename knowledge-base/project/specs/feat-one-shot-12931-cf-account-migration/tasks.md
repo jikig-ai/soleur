@@ -39,7 +39,7 @@ Lane note: there is no spec.md for this branch (one-shot entry), so the lane def
 - [ ] 1.3 R2 carve-out: `workspaces-luks-header.tf`, `workspaces-luks-header-web.tf`, `infra-privileged-environment.tf` → `var.cf_r2_account_id`. Also `apps/cla-evidence/infra/bootstrap.sh` reads `CF_R2_ACCOUNT_ID`.
 - [ ] 1.4 LB count gate (`cloudflare-lb.tf`) and `[0]` refs; LB-address tests (`rg` sweep); `cf-lb-overlay.yml` refusal; retire `ga-lb-pool-soak-6027` followthrough if still armed.
 - [ ] 1.5 `bot-management.tf` `sbfm_*` ternaries; `dns.tf` DNSSEC count gate and `[0]` refs.
-- [ ] 1.6 `seo-config-rules.tf`: delete the old-id import block and the TEMPORARY `ssl=full` rule; update `apps/web-platform/test/seo-config-rules.test.ts` and any fixture an assertion reads.
+- [ ] 1.6 `seo-config-rules.tf`: delete the old-id import block (the TEMPORARY `ssl=full` rule is KEPT, CTO L55 re-ruling, #7799); update `apps/web-platform/test/seo-config-rules.test.ts` and any fixture an assertion reads.
 - [ ] 1.7 `cf-account-migration-imports.tf`: 26 records, the Pages project and 2 domains, plus any probe-found entrypoints. The `app` import is gated off by `cf_migration_import_app`.
 - [ ] 1.8 `cf-runtime-zone-id.tf`: `doppler_secret.cf_zone_id_prd`; add it to the stage-1 `-target` list.
 - [ ] 1.9 `scripts/cf-account-state-migrate.sh`: backup, state-derived candidates, null-safe classification, one atomic `state rm`, serial +1 assertion.
