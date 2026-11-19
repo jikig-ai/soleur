@@ -2270,7 +2270,7 @@ S10_CRED="$(s8_run sdk-cred)"
 assert "#12742 R4 userinfo + query + fragment stripped: the entry is the bare URL" \
   "grep -qE 'sdk_app_url=https://app\.soleur\.ai/api/inngest!ok( |\$)' '$S10_CRED'"
 assert "#12742 R4 ...and no fragment of the credential or the token reaches the row" \
-  "! grep -qE 'fixture-user|fixture-pass|fixturetoken|frag' '$S10_CRED' && ! grep -oE 'sdk_app_url=[^ ]*' '$S10_CRED' | grep -qF '@'"
+  "! grep -qE 'fixture-user|fixture-pass|fixturetoken|frag' '$S10_CRED' && ! grep -qF '@' < <(grep -oE 'sdk_app_url=[^ ]*' '$S10_CRED')"
 # Userinfo is stripped BEFORE query/fragment: a `?` inside the password would otherwise end the
 # URL early and ship the credential's head (`https://u:pa`). And a scheme-less URL loses
 # everything up to the last `@` before its first `/` too — no scheme is no exemption.
@@ -2364,7 +2364,7 @@ S10_LIVE_LEN="$(printf '%s' "$S10_LIVE_MSG" | wc -c | tr -d ' ')"
 S10_EDGE_MSG="$(s10_widen "$S10_CAP160")"
 S10_EDGE_LEN="$(printf '%s' "$S10_EDGE_MSG" | wc -c | tr -d ' ')"
 assert "#12742 live-width non-vacuity: the measured rows carry the sdk entries and the widened fields" \
-  "printf '%s' \"\$S10_LIVE_MSG\" | grep -qE 'sdk_app_url=[^ ]+!ok,[^ ]+!error\$' && printf '%s' \"\$S10_LIVE_MSG\" | grep -qE 'image_ref=i{138} .* redis_key_patterns=p{158} ' && printf '%s' \"\$S10_EDGE_MSG\" | grep -qE 'redis_key_patterns=p{158} .* sdk_app_url=[^ ]+!ok,\\+1\$'"
+  "grep -qE 'sdk_app_url=[^ ]+!ok,[^ ]+!error\$' < <(printf '%s' \"\$S10_LIVE_MSG\") && grep -qE 'image_ref=i{138} .* redis_key_patterns=p{158} ' < <(printf '%s' \"\$S10_LIVE_MSG\") && grep -qE 'redis_key_patterns=p{158} .* sdk_app_url=[^ ]+!ok,\\+1\$' < <(printf '%s' \"\$S10_EDGE_MSG\")"
 assert "#12742 the live-width post-replace probe row is <= 1024 bytes (measured ${S10_LIVE_LEN} B; logger does not cut sdk_app_url)" \
   "[[ '$S10_LIVE_LEN' -le 1024 ]]"
 assert "#12742 the live-width row at the 160 B cap boundary is <= 1024 bytes (measured ${S10_EDGE_LEN} B)" \
@@ -2375,7 +2375,7 @@ s8_curl 200 "$S10_FNS"
 assert "#12742 the sdk arm is drift-pinned at column zero beside FUNCTIONS_GQL_QUERY" \
   "grep -qE '^readonly SDK_SYNC_GQL_QUERY=' '$PROBE_SRC'"
 assert "#12742 the sdk curl is BOUNDED and discards stderr like the registry curl" \
-  "grep -cE 'timeout 10 curl -s --max-time 10' '$PROBE_SRC' | grep -qE '^[2-9]'"
+  "[ \"\$(grep -cE 'timeout 10 curl -s --max-time 10' '$PROBE_SRC')\" -ge 2 ]"
 S10_ALL="'$S10_OK' '$S10_ERR' '$S10_TWO' '$S10_EMPTYERR' '$S10_NONE' '$S10_GQLERR' '$S10_PARTIAL' '$S10_ERROBJ' '$S10_ERRSTR' '$S10_DOWN' '$S10_502' '$S10_500OK' '$S10_DRIFT' '$S10_URLNULL' '$S10_HOSTILE' '$S10_CRED' '$S10_CRED2' '$S10_CAP5' '$S10_CAP10' '$S10_CAPBIG' '$S10_CAPPUB' '$S10_CAPHUGE' '$S10_CAP160'"
 assert "#12742 every field emitted is one of the five sdk_sync values" \
   "grep -hoE 'sdk_sync=[^ ]+' $S10_ALL | grep -vE 'sdk_sync=(ok|error|no_apps|n/a|__UNREADABLE__)' ; test \$? -eq 1"
