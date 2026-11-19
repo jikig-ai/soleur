@@ -452,6 +452,74 @@ run cf_lb_gate_record "$TMP/m1.json"; ok "malformed json refused" $? 1
 mk m2 '{"resource_changes":[{"address":"x.y","change":{"actions":42}}]}'
 run cf_lb_gate_ga "$TMP/m2.json"; ok "unclassifiable actions refused" $? 1
 
+# --- LB-enabled gate (#12931): every arm refuses while cf_load_balancing_enabled defaults false ---
+mkv() { printf '%s\n' "$2" > "$TMP/$1.tf"; }
+mkv lv_false 'variable "cf_load_balancing_enabled" {
+  description = "x"
+  type        = bool
+  default     = false
+}'
+mkv lv_true 'variable "cf_load_balancing_enabled" {
+  type    = bool
+  default = true # turned on in a reviewed PR
+}'
+mkv lv_absent 'variable "cf_zone_plan_pro" {
+  default = true
+}'
+mkv lv_other_true 'variable "cf_zone_plan_pro" {
+  default = true
+}
+
+variable "cf_load_balancing_enabled" {
+  # default = true   (a commented-out default is not a default)
+  default = false
+}'
+mkv lv_nonliteral 'variable "cf_load_balancing_enabled" {
+  default = var.something
+}'
+run cf_lb_gate_lb_enabled "$TMP/lv_false.tf"; ok "lb gate: default false refuses" $? 1
+lb_out="$(cf_lb_gate_lb_enabled "$TMP/lv_false.tf" 2>&1 || true)"
+if [[ "$lb_out" == "::error::"*"gated off"*"NOTHING planned or applied." ]]; then ok "lb gate: the refusal is a loud ::error:: naming the gate" 0 0; else ok "lb gate: the refusal is a loud ::error:: naming the gate" 1 0; fi
+run cf_lb_gate_lb_enabled "$TMP/lv_true.tf"; ok "lb gate: default true (with a trailing comment) proceeds" $? 0
+run cf_lb_gate_lb_enabled "$TMP/lv_absent.tf"; ok "lb gate: variable absent refuses (fail closed)" $? 1
+run cf_lb_gate_lb_enabled "$TMP/lv_other_true.tf"; ok "lb gate: another variable's true and a commented true do not unlock it" $? 1
+run cf_lb_gate_lb_enabled "$TMP/lv_nonliteral.tf"; ok "lb gate: a non-literal default refuses" $? 1
+run cf_lb_gate_lb_enabled "$TMP/does-not-exist.tf"; ok "lb gate: an unreadable variables.tf refuses" $? 1
+# The committed variables.tf must parse to a literal (whichever way it is set today), and the
+# gate's verdict must agree with that literal — never the "unknown" arm.
+REPO_ROOT_LB="$(cd "$HERE/../.." && pwd)"
+REAL_VARS="$REPO_ROOT_LB/apps/web-platform/infra/variables.tf"
+real_default="$(awk '/^variable "cf_load_balancing_enabled"[[:space:]]*\{/ {f=1; next} f && /^\}/ {exit} f && /^[[:space:]]*default[[:space:]]*=/ {gsub(/[[:space:]]|default|=/, ""); print; exit}' "$REAL_VARS")"
+real_rc=0; cf_lb_gate_lb_enabled "$REAL_VARS" >/dev/null 2>&1 || real_rc=$?
+case "$real_default" in
+  true)  ok "lb gate: committed variables.tf default=true -> gate proceeds" "$real_rc" 0 ;;
+  false) ok "lb gate: committed variables.tf default=false -> gate refuses" "$real_rc" 1 ;;
+  *)     ok "lb gate: committed variables.tf carries a literal cf_load_balancing_enabled default (got '${real_default}')" 1 0 ;;
+esac
+# Workflow wiring: one gate job, no secrets/environment/terraform in it, and EVERY arm job
+# (each job keyed on inputs.arm) needs it.
+WF_LB="$REPO_ROOT_LB/.github/workflows/cf-lb-overlay.yml"
+gate_block="$(awk '/^  lb_enabled_gate:$/ {f=1; print; next} f && /^  [a-z_]+:$/ {exit} f {print}' "$WF_LB")"
+# shellcheck disable=SC2016  # the literal, unexpanded workflow text is the assertion
+if [[ -n "$gate_block" ]] && grep -qF 'cf_lb_gate_lb_enabled "${INFRA_DIR}/variables.tf"' <<<"$gate_block"; then
+  ok "lb gate: the workflow's lb_enabled_gate job calls cf_lb_gate_lb_enabled on variables.tf" 0 0
+else
+  ok "lb gate: the workflow's lb_enabled_gate job calls cf_lb_gate_lb_enabled on variables.tf" 1 0
+fi
+if [[ -n "$gate_block" ]] && ! grep -qE 'secrets\.|environment:|terraform |doppler |needs:|inputs\.arm' <<<"$gate_block"; then
+  ok "lb gate: the gate job reads no secret, has no environment, runs no terraform/doppler and runs for every arm" 0 0
+else
+  ok "lb gate: the gate job reads no secret, has no environment, runs no terraform/doppler and runs for every arm" 1 0
+fi
+arm_jobs="$(awk '/^jobs:$/ {j=1; next} j && /^  [a-z_]+:$/ {name=$1; sub(/:$/, "", name)} j && /^    if: .*inputs\.arm == / {print name}' "$WF_LB" | sort -u)"
+arm_n="$(grep -c . <<<"$arm_jobs" || true)"
+gated_n="$(awk '/^jobs:$/ {j=1; next} j && /^  [a-z_]+:$/ {name=$1; sub(/:$/, "", name)} j && /^    needs: lb_enabled_gate$/ {print name}' "$WF_LB" | sort -u | grep -cxF -f <(printf '%s\n' "$arm_jobs") || true)"
+if [[ "$arm_n" -eq 7 && "$gated_n" -eq "$arm_n" ]]; then
+  ok "lb gate: all ${arm_n} arm jobs need lb_enabled_gate" 0 0
+else
+  ok "lb gate: all arm jobs need lb_enabled_gate (arms=${arm_n}, gated=${gated_n})" 1 0
+fi
+
 # anti-vacuity floor: the suite must have exercised a real battery, not a stubbed one.
 if [[ "$checks" -lt 141 ]]; then echo "FAIL: anti-vacuity — only $checks assertions ran"; fail=1; fi
 

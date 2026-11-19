@@ -464,6 +464,8 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
 
 - Migrating the `apps/web-platform/infra/lb-staging/` root. It reads the same Doppler ids, but `cf-lb-overlay.yml` refuses while `cf_load_balancing_enabled` is false, so the flip cannot plan a destroy there. Tracked with the LB purchase decision.
 - DNSSEC on the new zone (count-gated off, tracked by a follow-up issue).
+- Re-enabling Load Balancing (tracked with the LB purchase decision). `cf-lb-overlay.yml` now refuses every arm through its `lb_enabled_gate` job (`cf_lb_gate_lb_enabled` in `tests/scripts/lib/cf-lb-overlay-gate.sh`, reading the committed `cf_load_balancing_enabled` default). The PR that turns it on must also move the GA allow-sets in that lib, which still name `cloudflare_load_balancer.app` and its siblings, to the indexed `[0]` plan addresses. It must also widen `CF_API_TOKEN` with the Load Balancing scopes.
+- The `ga-lb-pool-soak-6027` follow-through (tracker #11942, open, the sweeper has graded it FAIL daily through 2026-11-18). It was still armed at work time. PR1 retires it in code: `scripts/followthroughs/ga-lb-pool-soak-6027.sh` exits NOT YET (2) while `cf_load_balancing_enabled` is false, after its secret gates and before any network call. The tracker itself is left open. Closing it as not planned, or keeping it until Load Balancing returns, is a tracker decision for after PR1 merges.
 - An app-level `X-Robots-Tag` fallback in Next.js headers (CMO P1). That is new scope, recorded as an `operator (scope)` row in `decision-challenges.md`.
 - Adopting the DNS records Terraform never managed.
 - Moving R2 (state bucket, LUKS headers, CLA evidence) to the new account.
@@ -603,7 +605,7 @@ So PR1's merge mutates no production resource. Production changes start at the P
 - `apps/cla-evidence/infra/bootstrap.sh` (R2, operator-local): fixed in PR1, above.
 - `apps/web-platform/infra/lb-staging/` and `cf-lb-overlay.yml`: refuse while LB is gated off (Non-Goals).
 - `scheduled-inngest-health.yml` tunnel census: looks the tunnel up by name in `CF_ACCOUNT_ID`. Between the flip and the tunnel phase it finds no tunnel and reports red. The runbook lists this as an expected red.
-- `scheduled-followthrough-sweeper.yml` → `scripts/followthroughs/ga-lb-pool-soak-6027.sh` (GitHub secret `CF_ACCOUNT_ID`, LB pools): work-time check whether this followthrough is still armed. If it is, retire it with the LB gate in PR1, because it would read pools that no longer exist.
+- `scheduled-followthrough-sweeper.yml` → `scripts/followthroughs/ga-lb-pool-soak-6027.sh` (GitHub secret `CF_ACCOUNT_ID`, LB pools): work-time check whether this followthrough is still armed. If it is, retire it with the LB gate in PR1, because it would read pools that no longer exist. Checked at work time: armed (tracker #11942). Retired in code: the probe exits NOT YET while `cf_load_balancing_enabled` is false (see Non-Goals).
 - `plugins/soleur/skills/provision-*/scripts/*.sh` and the other roots' `main.tf` backend endpoints: R2 endpoint literals on the legacy account. Correct as they are; unchanged.
 
 ### Distinctness / drift safeguards

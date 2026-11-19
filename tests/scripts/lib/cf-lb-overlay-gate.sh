@@ -45,6 +45,51 @@ if ! declare -F plan_gate_assert_readable >/dev/null 2>&1; then
   unset _CFLB_DIR
 fi
 
+# LB-ENABLED GATE (#12931, the Cloudflare account migration). cloudflare-lb.tf counts the
+# four GA addresses (monitor, pool, notification policy, load balancer) on
+# var.cf_load_balancing_enabled, default false since the move to the Soleur account: Load
+# Balancing is deferred there (no subscription bought, COO) and app.soleur.ai serves from
+# the proxied A record. Every arm of cf-lb-overlay.yml creates, updates, grades or tears down an LB, so
+# while the switch is off each one would plan against addresses that do not exist (count =
+# 0), or create a staging LB on an account where Load Balancing is deferred.
+#
+# The signal is the COMMITTED default in variables.tf, because turning Load Balancing back
+# on is a reviewed code change (the default, the CF_API_TOKEN LB scopes, and the GA
+# allow-sets above, which still name the un-indexed addresses: with count the plan JSON
+# says cloudflare_load_balancer.app[0]). A Doppler TF_VAR cannot unlock this gate: a false
+# default refuses whatever Doppler holds. Anything but a literal `true` refuses.
+cf_lb_gate_lb_enabled() {
+  local vars_tf="$1" val
+  if [[ ! -f "$vars_tf" || ! -r "$vars_tf" ]]; then
+    echo "::error::cf-lb-overlay LB gate: cannot read ${vars_tf}, so whether Load Balancing is enabled is unknown. Refusing. NOTHING planned or applied."
+    return 1
+  fi
+  val=$(awk '
+    /^variable "cf_load_balancing_enabled"[[:space:]]*\{/ { f = 1; next }
+    f && /^\}/ { exit }
+    f {
+      line = $0
+      sub(/#.*/, "", line)
+      if (match(line, /^[[:space:]]*default[[:space:]]*=[[:space:]]*/)) {
+        v = substr(line, RLENGTH + 1)
+        gsub(/[[:space:]]/, "", v)
+        print v
+        exit
+      }
+    }' "$vars_tf")
+  case "$val" in
+    true)
+      echo "cf-lb-overlay LB gate: cf_load_balancing_enabled defaults to true in ${vars_tf}; the arm may proceed."
+      return 0 ;;
+    false)
+      echo "::error::cf-lb-overlay LB gate: Load Balancing is gated off (cf_load_balancing_enabled defaults to false in ${vars_tf}, #12931). Every arm refuses while it is off: the GA LB addresses are count = 0 and Load Balancing is deferred on the Soleur account. To turn it on, land a reviewed PR that sets the default to true, widens CF_API_TOKEN with the Load Balancing scopes, and moves the GA allow-sets in tests/scripts/lib/cf-lb-overlay-gate.sh to the indexed [0] addresses. NOTHING planned or applied."
+      return 1 ;;
+    *)
+      echo "::error::cf-lb-overlay LB gate: no literal true/false default for cf_load_balancing_enabled in ${vars_tf} (got '${val}'). Refusing. NOTHING planned or applied."
+      return 1 ;;
+  esac
+}
+
 # Entries that are NOT a change for grading purposes: converged no-ops and deferred
 # data-source reads. Everything else (incl. forget/import/moved/[] verbs) is a change.
 _CF_LB_CHANGES='[.resource_changes[] | select(.change.actions != ["no-op"] and .change.actions != ["read"])]'

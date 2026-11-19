@@ -16,8 +16,10 @@ on:
       # A change to the publish path must PUBLISH. Without this, merging ADR-194
       # PR2 fires no deploy, the Pages project keeps zero deployments, and PR3's
       # precondition — attaching the apex to a project that has at least one —
-      # is never established. Measured 2026-09-02: soleur-docs.pages.dev
-      # returned 522, which is what a zero-deployment project looks like.
+      # is never established. Measured 2026-09-02: the project's pages.dev
+      # alias returned 522, which is what a zero-deployment project looks like.
+      # Since the #12931 account move the project lives on the Soleur account
+      # and that alias is soleur-docs-40x.pages.dev (probe A below).
       # Deliberately this file only, not '.github/workflows/**': an unrelated
       # workflow edit should not run a Playwright docs deploy. PR4 is dns.tf
       # only and so still does not fire this workflow, which is required — a
@@ -338,7 +340,7 @@ jobs:
         if: always()
         continue-on-error: true
         env:
-          PROBE_URL: https://soleur-docs.pages.dev/version.txt
+          PROBE_URL: https://soleur-docs-40x.pages.dev/version.txt
           EXPECTED_SHA: ${{ github.sha }}
         run: bash apps/web-platform/infra/pages-build-identity-probe.sh
 

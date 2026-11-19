@@ -21,6 +21,9 @@
 # Prints verdict lines and addresses only; terraform output goes through tf_redact_random_ids.
 # Exit: 0 ok, 1 refused or failed, 2 setup error.
 set -uo pipefail
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 umask 077
 
 readonly P="cf-account-migrate"
