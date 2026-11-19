@@ -242,7 +242,7 @@ by MERGED PR #12329 — verified live 2026-11-19.)
   table is the artifact the runbook bullet cites; no state is written by a
   `--dry-run`/`--print-report` invocation.
 - **Precedent:** merged PR #12877 —
-  `knowledge-base/project/plans/2026-11-17-fix-oracle-review-required-bound-seed-plan.md`
+  `knowledge-base/project/plans/archive/20261117-181758-2026-11-17-fix-oracle-review-required-bound-row-plan.md`
   is the sibling plan; its `decision-challenges.md` carries the binding CTO
   ruling on `Ref`-vs-`Closes` for tracker #12755, reused verbatim here.
 - **Merge effect:** the TSV is read at every watch invocation
