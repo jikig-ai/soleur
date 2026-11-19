@@ -28,6 +28,7 @@
 import { reportSilentFallback } from "./observability";
 import { readWorktreeLeaseHolder, resolveWorktreeId } from "./worktree-write-lease";
 import { loadHostRoster } from "./host-roster";
+import { readHostPrivateIp } from "./host-private-ip";
 
 /** Minimal structural supabase shape for the membership re-verify (mirrors
  *  workspace-resolver's SupabaseLike). */
@@ -47,15 +48,6 @@ export type SessionRouteDecision =
   | { decision: "local"; reason: "owner" | "cold" }
   | { decision: "proxy"; ownerHostId: string; ownerAddress: string }
   | { decision: "owner-unresolved"; ownerHostId: string };
-
-/**
- * The host roster `SOLEUR_HOST_ROSTER` maps each web host's `var.web_hosts` key
- * (`web-1`, `web-2`; the verified value `resolveHostId()` returns and the lease
- * records as `host_id`, #12910) to that host's private-net address the proxy
- * dials. The pure parse lives in the `./host-roster` leaf so host-identity.ts
- * can verify a key without importing this module; re-exported here for callers.
- */
-export { loadHostRoster };
 
 /** Resolve an owning `host_id` to its private-net address, or `null` when the
  *  host is not in the roster. */
@@ -97,6 +89,24 @@ export async function resolveSessionRoute(params: {
       {
         feature: "control_plane_route",
         op: "resolveSessionRoute.owner-unresolved",
+        extra: { workspaceId, ownerHostId: holder.hostId, myHostId },
+      },
+    );
+    return { decision: "owner-unresolved", ownerHostId: holder.hostId };
+  }
+  // The roster maps the owner to OUR OWN address: this host is the owner under an
+  // id it no longer resolves to (#12910: a fallback off its verified key, or a
+  // revert, while a lease outlived the old container's drain). Proxying would
+  // relay the socket to ourselves and read as a healthy route; say what it is.
+  if (ownerAddress === readHostPrivateIp()) {
+    reportSilentFallback(
+      new Error(
+        `session-router: owning host '${holder.hostId}' maps to this host's own address — ` +
+          `this host's lease id changed under a live lease (owner-unresolved)`,
+      ),
+      {
+        feature: "control_plane_route",
+        op: "resolveSessionRoute.owner-is-self",
         extra: { workspaceId, ownerHostId: holder.hostId, myHostId },
       },
     );

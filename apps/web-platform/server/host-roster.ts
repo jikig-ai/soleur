@@ -2,8 +2,12 @@
 //
 // The roster maps each web host's `var.web_hosts` key (`web-1`, `web-2`, the
 // value resolveHostId() returns once verified) to that host's private-net
-// address. session-router.ts dials it; host-identity.ts reads it to verify the
-// host's own key against its own private IP (CTO ruling T1).
+// address. Readers: session-router.ts dials it; host-identity.ts reads it to
+// verify the host's own key against its own private IP (CTO ruling T1); outside
+// the app, ci-deploy.sh relay_peer_probe (deploy-time peer probe),
+// host_key_running_verified (the T3a sticky check's mirror of the T1 rule) and
+// lb-weight-gate.sh Condition A (serve-time only). The only writer is Doppler prd,
+// hand-kept until #12919 generates it from Terraform.
 //
 // A leaf: no imports, read at call time (never cached at module load), never
 // throws. Empty, unset or invalid gives `{}`, so a peer is never resolvable and

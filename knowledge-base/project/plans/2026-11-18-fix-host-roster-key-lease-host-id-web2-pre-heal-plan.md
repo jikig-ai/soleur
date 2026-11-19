@@ -135,7 +135,7 @@ Full rows live in `knowledge-base/project/specs/feat-one-shot-12910-host-roster-
 - **T4:** no `SOLEUR_HOST_KEY_OVERRIDE`. The inverse is the exact census of `server.tf`'s name expression: `soleur-web-platform` maps to `web-1`, `soleur-web-1` gives rc 1, and anything else must be `soleur-<key>` with a key that matches the regex.
 - **R2 + T5 (gate):** keep the existing A.3 checks and add three checks, which surface as four fail codes (the three plus `A_web_hosts_absent` for a missing input): every roster key is a committed `var.web_hosts` key; every roster key's address equals that key's committed `private_ip`; every `SOLEUR_SERVING_ROTATION` member is a roster key. The simplicity cut was considered and rejected: `has($HOST)` alone passes a wrong address, and a pooled host with no roster entry is the incident. These checks retire when #12919 generates the roster.
 - **T6:** pin the absence of `create_before_destroy` on `hcloud_server.web`, because generation carry across a replace is safe only while the old host is destroyed first.
-- **T7 (vocabulary):** one exported pure `describeHostIdentity()` returning `{ id, source }`, where `source` is one of `web-host-key`, `key-absent`, `key-malformed`, `key-unverified`, `dev-sentinel`. At boot, one `host_identity source=<enum>` line and one `reportSilentFallback` when in production with a non-empty private IP and a source other than `web-host-key`. No `keyState`, no `ownerHostIdShape`, no separate boot module.
+- **T7 (vocabulary):** one exported pure `describeHostIdentity()` returning `{ id, source }`, where `source` is one of `web-host-key`, `key-absent`, `key-malformed`, `key-unverified`, `dev-sentinel`. At boot, one `host_identity source=<enum>` line (`source=unresolved key=<enum>` when `resolveHostId()` will throw, e.g. the cloud-init first-boot container) and one `reportSilentFallback` (tag `source`) when the PROD container (`SOLEUR_PROXY_BIND=0.0.0.0`, set only by the prod `docker run`) did not verify its key. Review amendment: the earlier "non-empty private IP" condition was dropped because a late private NIC empties exactly that input on a real prod host; the rule lives in the pure `hostIdentityBootReport()`. No `keyState`, no `ownerHostIdShape`, no separate boot module.
 - **R3 → T8 (defect 2):** do not delete the emit; narrow it. It fires only when the **post-heal re-probe** finds a `file-pointer` whose gitdir escapes the workspace. Host `rev-parse` cannot see that strand, so this emit is its only host-side record. An absent `.git`, the false-stop case, stays silent. Keep the `host-pre-heal` source value.
 - **R4:** no Doppler prd write. Re-run the read-only check before merge.
 - **T9 (delivery):** after merge, once `apply-deploy-pipeline-fix.yml` succeeds, a release redeploy runs on main, and the agent verifies the on-host `DEPLOY_SCRIPT_SHA` and the `host_key resolved=` line on both hosts. Rollback is a revert PR plus the same redeploy. **Deepen-plan correction:** the redeploy is a deploy, a destructive shared-prod write under `hr-menu-option-ack-not-prod-write-auth`. The agent shows the exact command and runs it only on the owner's per-command go-ahead, or under a Standing Delegation that `delegation-verify.sh` reports valid. The CTO's "outside the owner-gated set" reading of the brief does not override that rule. See the operator row in `decision-challenges.md`.
@@ -208,8 +208,8 @@ Re-run the read-only roster check from Phase 5 and record the boolean output in 
 - Prod `docker run`: add `-e SOLEUR_HOST_KEY="$HOST_KEY"` next to `-e SOLEUR_HOST_ID`. Canary `docker run`: add `-e SOLEUR_HOST_KEY=` (empty, T10).
 - One `log_host_key` helper with a single `logger` call emits exactly one closed-grammar line per deploy:
   - `host_key resolved=<key>`;
-  - `host_key resolved=fallback`;
-  - `host_key resolved=abort reason=key_change`.
+  - `host_key fallback reason=<metadata_unreachable|name_unmapped|name_reserved|key_malformed>`;
+  - `host_key abort reason=<key_change|key_lost|inspect_failed>[ running=<key>]` (review amendment, CTO ruling T3a; `fallback` and `abort` are verbs, never a key value).
   It never prints the raw hostname.
 - `infra/lib/docker-run-tuple.py`: `SOLEUR_HOST_KEY` needs a per-surface value, so add it to the `IDENTITY_PROD_ENV` (`{"$HOST_KEY"}`) / `IDENTITY_CANARY_ENV` (empty) pair, not `_COMMON_ENV`. The first-boot tuple (`IDENTITY_FIRST_BOOT_ENV`) is unchanged (see Non-Goals). This file is a test-time checker and is not delivered to hosts.
 - Tests:
@@ -284,10 +284,12 @@ No new ADR is needed.
    - On each host, `DEPLOY_SCRIPT_SHA` equals `sha256sum apps/web-platform/infra/ci-deploy.sh` at the merge SHA.
    - The deploys log `host_key resolved=web-1` and `host_key resolved=web-2`.
    - Each boot logs `host_identity source=web-host-key`.
-   - If either host logs `fallback`, stop. web-2 stays at weight 0, and a new CTO ruling decides the next step (dissent: b1).
-3. **Prove (owner-authorized serve).** Only after step 2 is green on both hosts, the owner authorizes one `cf-lb-overlay.yml` serve dispatch (`Operator-authorizes:`).
-   - The agent places a turn on web-2 by opening a chat session for a user whose lease is held on web-2, or a cold user routed by the LB.
-   - The agent then reads the AC13 rows.
+   - If either host logs `host_key fallback`, stop. web-2 stays at weight 0, and a new CTO ruling decides the next step (dissent: b1). The `reason=` token says which failure it was.
+   - Once both hosts are green, resolve any Sentry `feature:host_identity` issue first seen during the transition (an image that booted under the old script reports `key-absent`), so a later real fallback opens a fresh issue instead of adding events to a resolved-in-practice one.
+3. **Prove (owner step, CTO ruling T12).** Only after step 2 is green on both hosts, ONE owner step (`Operator-authorizes:`) covers both production acts: the owner authorizes one `cf-lb-overlay.yml` serve dispatch, then places one chat turn from their own account.
+   - The agent runs only read-only Better Stack reads: the host_key and host_identity rows for the serving host, then the AC13 rows (polling via Monitor).
+   - An organic web-2 turn seen in the AC13 rows within 60 minutes of the serve run finishing satisfies AC13 without the owner turn.
+   - If the owner's turn lands on web-1, the owner retries once in a new session after 240 s idle (the lease liveness window). After two misses the agent stops, reports, and a new ruling decides.
 4. **Drain back** to weight 0, if the owner wants it. That is the owner's separate dispatch.
 
 ## Files to Edit
@@ -400,10 +402,10 @@ error_reporting:
   fail_loud: "resolveHostId.key-fallback with extra.source key-absent/key-malformed/key-unverified; resolveSessionRoute.owner-unresolved (extra ownerHostId + myHostId, already on main); deploy exit 1 with host_key resolved=abort reason=key_change; lb-weight-gate gate_fail sub_condition=A_web_hosts_absent / A_roster_key_not_web_host / A_roster_addr_mismatch / A_rotation_member_not_in_roster"
 failure_modes:
   - mode: "metadata hostname unreachable or unmapped on first rollout, so the placement id stays hetzner-<id>"
-    detection: "deploy line `host_key resolved=fallback` plus the boot Sentry event resolveHostId.key-fallback source=key-absent, both from the affected host"
+    detection: "deploy line `host_key fallback reason=<token>` plus the boot Sentry event resolveHostId.key-fallback source=key-absent, both from the affected host"
     alert_route: "Sentry issue to the operator; Phase 7 step 2 stops before any serve"
   - mode: "metadata flips on a later deploy for a host already keyed"
-    detection: "deploy exits 1 before the canary with `host_key resolved=abort reason=key_change`; web-platform-release run fails"
+    detection: "deploy exits 1 before the canary with `host_key abort reason=key_change` (or `key_lost`, `inspect_failed`); web-platform-release run fails"
     alert_route: "GitHub Actions run failure"
   - mode: "a key that does not verify against the host's own private IP (wrong hostname, wrong roster, mis-set env)"
     detection: "boot Sentry event resolveHostId.key-fallback source=key-unverified"
@@ -426,7 +428,7 @@ discoverability_test:
 
 ### Guard 1 — lb-weight-gate A.3 runtime-shape checks
 
-**Property.** The serve gate refuses to pool a gated host unless every roster key is a committed `var.web_hosts` key mapped to its committed private IP, and every serving-rotation member is in the roster. The gate passes only a roster under which `resolveHostAddress(resolveHostId())` resolves for every pooled host.
+**Property.** The serve gate refuses to pool a gated host unless every roster key is a committed `var.web_hosts` key mapped to its committed private IP, and every serving-rotation member is in the roster. That is a configuration property: it holds `resolveHostAddress(key)` for every pooled host's committed key, but it does not observe which key a running host actually resolved (a host that fell back to `hetzner-<id>` still passes). That runtime half is AC12's deploy and boot lines for this rollout, and #12979 for later serves.
 
 **Assembly.** One chokepoint: the A.3 block of `apps/web-platform/infra/lb-weight-gate.sh`, reached only on the pooling branch after the top-guard. It reads `SOLEUR_HOST_ROSTER` (Doppler prd), `SOLEUR_SERVING_ROTATION` (workflow-injected) and `SOLEUR_WEB_HOSTS`. That last input has one producer, `lb-weight-gate-with-marker.sh`, which reads the committed `variables.tf`. The wrapper's `GATE_ENV_ALLOW` is the only path into the gate.
 

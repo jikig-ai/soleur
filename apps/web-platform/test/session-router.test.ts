@@ -26,9 +26,9 @@ vi.mock("@/server/observability", () => ({ reportSilentFallback: reportSilentFal
 import {
   resolveSessionRoute,
   verifyProxiedSessionMembership,
-  loadHostRoster,
   resolveHostAddress,
 } from "@/server/session-router";
+import { loadHostRoster } from "@/server/host-roster";
 import { resolveWorktreeId } from "@/server/worktree-write-lease";
 
 const WS = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
@@ -46,6 +46,7 @@ beforeEach(() => {
   reportSilentFallbackMock.mockReset();
   vi.unstubAllEnvs();
   vi.stubEnv("SOLEUR_HOST_ROSTER", "");
+  vi.stubEnv("SOLEUR_HOST_PRIVATE_IP", "");
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -76,6 +77,18 @@ describe("resolveSessionRoute — user-sticky placement", () => {
     expect(reportSilentFallbackMock).toHaveBeenCalledTimes(1);
     expect((reportSilentFallbackMock.mock.calls[0][1] as { feature: string }).feature).toBe(
       "control_plane_route",
+    );
+  });
+
+  test("the owner maps to THIS host's own address → owner-unresolved, never a proxy to self (#12910)", async () => {
+    vi.stubEnv("SOLEUR_HOST_ROSTER", JSON.stringify({ [HOST_2]: "10.0.1.12" }));
+    vi.stubEnv("SOLEUR_HOST_PRIVATE_IP", "10.0.1.12");
+    readHolderMock.mockResolvedValue(holder(HOST_2));
+    const r = await resolveSessionRoute({ workspaceId: WS, userId: USER_A, myHostId: HOST_1 });
+    expect(r).toEqual({ decision: "owner-unresolved", ownerHostId: HOST_2 });
+    expect(reportSilentFallbackMock).toHaveBeenCalledTimes(1);
+    expect((reportSilentFallbackMock.mock.calls[0][1] as { op: string }).op).toBe(
+      "resolveSessionRoute.owner-is-self",
     );
   });
 

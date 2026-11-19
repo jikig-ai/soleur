@@ -44,6 +44,9 @@ The `soleur:ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" surfaces this contr
 | `lock_contention` | 1 | Another ci-deploy.sh holds flock | Wait for prior run to finish; if stuck >10min, SSH to kill |
 | `doppler_unavailable` | 1 | doppler binary missing on server | Re-run terraform apply to reprovision |
 | `doppler_token_missing` | 1 | DOPPLER_TOKEN env var not set | Check `/etc/default/webhook-deploy` on server |
+| `host_key_change` | 1 | #12910 T3/T3a: the running prod container had VERIFIED a `var.web_hosts` key and this deploy resolved a different one; aborted before prune/pull/canary, the old container keeps serving | Read the deploy line: `scripts/betterstack-query.sh --grep 'host_key abort'` (`running=<key>`). A changed metadata hostname or a `server.tf` name edit is the cause; do NOT re-run blindly and do NOT SSH. Fix the name (or the roster) in a PR, then redeploy |
+| `host_key_lost` | 1 | #12910 T3a: the running container had verified a key and this deploy resolved none (metadata hostname unreadable or unmapped) | `scripts/betterstack-query.sh --grep 'host_key'` for the newest `fallback reason=` context; `metadata_unreachable` is transient, re-run the deploy after a few minutes; any other reason is a naming defect, fix in a PR. Do NOT SSH |
+| `host_key_inspect_failed` | 1 | #12910 T3a: `docker inspect` of the running prod container failed for a reason other than "no such container"; the sticky check refuses to read that as "no container" | Transient daemon error: re-run the deploy. Persisting: the host's docker daemon is unhealthy, see the host's Sentry/Better Stack rows. Do NOT SSH |
 | `doppler_fetch_failed` | 1 | Transient Doppler API failure | Retry deploy |
 | `command_missing` | 1 | Empty SSH_ORIGINAL_COMMAND | Check webhook -> ssh trigger wiring |
 | `command_malformed` | 1 | Wrong arg count | Check CI payload shape |

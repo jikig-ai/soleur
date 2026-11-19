@@ -29,10 +29,10 @@
 import { loadHostRoster } from "./host-roster";
 import { readHostPrivateIp } from "./host-private-ip";
 
-// auth.uid() values are UUIDs (8-4-4-4-12 hex). A host id is a Hetzner integer
-// server id or a 32-hex machine-id — NEVER UUID-shaped. A UUID here means the
-// value was wrongly sourced from a user id. (A `var.web_hosts` key, `web-1`,
-// is never UUID-shaped either.)
+// auth.uid() values are UUIDs (8-4-4-4-12 hex). A host id is `hetzner-<n>`,
+// `machine-<12 hex>` (ci-deploy.sh resolve_host_id) or a `var.web_hosts` key
+// (`web-1`, at most 31 chars from a leading letter) — NEVER UUID-shaped. A UUID
+// here means the value was wrongly sourced from a user id.
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -69,20 +69,8 @@ export interface HostIdentity {
 export function describeHostIdentity(
   env: NodeJS.ProcessEnv = process.env,
 ): HostIdentity {
-  const key = env.SOLEUR_HOST_KEY?.trim() ?? "";
-  let source: HostIdentitySource;
-  if (!key) {
-    source = "key-absent";
-  } else if (!HOST_KEY_RE.test(key)) {
-    source = "key-malformed";
-  } else {
-    const ip = readHostPrivateIp(env.SOLEUR_HOST_PRIVATE_IP);
-    if (ip === null || loadHostRoster(env)[key] !== ip) {
-      source = "key-unverified";
-    } else {
-      return { id: key, source: "web-host-key" };
-    }
-  }
+  const { key, source } = classifyHostKey(env);
+  if (source === "web-host-key") return { id: key, source };
   const id = env.SOLEUR_HOST_ID?.trim();
   if (id) return { id, source };
   if (env.NODE_ENV === "production") {
@@ -94,6 +82,63 @@ export function describeHostIdentity(
     );
   }
   return { id: "dev-local", source: "dev-sentinel" }; // never a per-container value
+}
+
+/** The key half of the rules: whether SOLEUR_HOST_KEY verifies. Never throws. */
+function classifyHostKey(env: NodeJS.ProcessEnv): {
+  key: string;
+  source: Exclude<HostIdentitySource, "dev-sentinel">;
+} {
+  const key = env.SOLEUR_HOST_KEY?.trim() ?? "";
+  if (!key) return { key, source: "key-absent" };
+  if (!HOST_KEY_RE.test(key)) return { key, source: "key-malformed" };
+  const ip = readHostPrivateIp(env.SOLEUR_HOST_PRIVATE_IP);
+  if (ip === null || loadHostRoster(env)[key] !== ip) {
+    return { key, source: "key-unverified" };
+  }
+  return { key, source: "web-host-key" };
+}
+
+/** What the boot line reports: the identity source, or `unresolved` when
+ *  `resolveHostId()` will throw at lease time (production, no verified key and no
+ *  SOLEUR_HOST_ID: the cloud-init first-boot container, until its first ci-deploy). */
+export type HostIdentityBootSource = HostIdentitySource | "unresolved";
+
+export interface HostIdentityBootReport {
+  source: HostIdentityBootSource;
+  /** Closed grammar, enums only, never the id or an address. */
+  line: string;
+  /** Send the production Sentry fallback event. */
+  reportFallback: boolean;
+}
+
+/**
+ * The boot-time identity report (#12910). Pure: reads only `env`.
+ *
+ * `reportFallback` is keyed on SOLEUR_PROXY_BIND === "0.0.0.0", a literal only the
+ * ci-deploy.sh PROD `docker run` sets (the canary sets it empty, the cloud-init
+ * first-boot run does not set it). It deliberately does NOT depend on the identity
+ * inputs: a prod host whose private NIC was late at deploy gets an EMPTY
+ * SOLEUR_HOST_PRIVATE_IP, falls back off its key, and must still report — that is
+ * the #12910 incident shape, not the canary.
+ */
+export function hostIdentityBootReport(
+  env: NodeJS.ProcessEnv = process.env,
+): HostIdentityBootReport {
+  let source: HostIdentityBootSource;
+  let line: string;
+  try {
+    source = describeHostIdentity(env).source;
+    line = `host_identity source=${source}`;
+  } catch {
+    source = "unresolved";
+    line = `host_identity source=unresolved key=${classifyHostKey(env).source}`;
+  }
+  const reportFallback =
+    env.NODE_ENV === "production" &&
+    env.SOLEUR_PROXY_BIND?.trim() === "0.0.0.0" &&
+    source !== "web-host-key";
+  return { source, line, reportFallback };
 }
 
 /**

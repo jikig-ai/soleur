@@ -514,6 +514,7 @@ import { RESOLVE_TIMEOUT_MS } from "@/server/resolve-protected-branches";
 import { createApprovalGateDeps } from "@/server/approval/gate";
 import { recordSandboxPosture } from "@/server/agent-sandbox-seccomp";
 import { __resetAgentAuthDedupeForTests } from "@/server/agent-auth-failure";
+import { _resetResolverDivergenceDedupeForTests } from "@/server/repo-resolver-divergence";
 import { createCanUseTool } from "@/server/permission-callback";
 import { ExecutionGrants, putGrant } from "@/server/approval/grants";
 import { APPROVAL_REQUIRED_TOOLS } from "@/server/approval/tools";
@@ -3179,7 +3180,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
   // pre-heal emit used to fire for ANY not-ready shape (an absent `.git` the heal then cloned included),
   // a false `agent-readiness-self-stop gitKind=absent source=host-pre-heal` on a turn that ran, and its
   // fingerprint masked the post-heal emit for a REAL absent strand in the same process.
-  describe("realSdkQueryFactory — #12910 self-stop narrowing (post-heal, escaping pointer only)", () => {
+  describe("realSdkQueryFactory — #12910 self-stop after the heal (T8, T8a)", () => {
     const selfStops = () =>
       mockReportSilentFallback.mock.calls.filter(
         (c) => (c[1] as { feature?: string } | undefined)?.feature === "agent-readiness-self-stop",
@@ -3187,6 +3188,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
     beforeEach(() => {
       gitShapeOverride.probe = null;
       gitShapeOverride.realEvaluate = false;
+      _resetResolverDivergenceDedupeForTests();
       // A CONNECTED repo (the parent default is none, which skips the whole readiness path).
       mockGetCurrentRepoUrl.mockResolvedValue("https://github.com/jikig-ai/soleur");
       // ...with a stored install that already owns it (no entitlement promotion, no access refusal).
@@ -3198,16 +3200,15 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       gitShapeOverride.realEvaluate = false;
     });
 
-    it("(a) an absent `.git` the heal fixes emits NO self-stop and reaches the SDK query", async () => {
+    it("(a) an absent `.git` the heal fixes emits NO self-stop and reaches the SDK query; (b) a later post-heal absent strand then emits once WITH gitRevParseValid=false (not dedupe-masked)", async () => {
       gitShapeOverride.probe = [{ kind: "absent" }, { kind: "dir-valid" }];
       mockReportSilentFallback.mockClear();
       mockQuery.mockClear();
       await realSdkQueryFactory(makeArgs());
       expect(selfStops()).toHaveLength(0);
       expect(mockQuery).toHaveBeenCalledOnce();
-    });
 
-    it("(b) after (a), a post-heal absent strand emits exactly once WITH gitRevParseValid=false (not dedupe-masked)", async () => {
+      // (b), in the same process (same dedupe set): the fingerprint (a) would have spent pre-#12910.
       gitShapeOverride.probe = [{ kind: "absent" }];
       gitShapeOverride.realEvaluate = true;
       mockReportSilentFallback.mockClear();
@@ -3218,6 +3219,36 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       const opts = calls[0][1] as { tags: Record<string, string> };
       expect(opts.tags).toMatchObject({ gitKind: "absent", gitRevParseValid: "false" });
       expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it("(d) an ESCAPING pointer the heal repairs emits NO self-stop (the emit reads the POST-heal re-probe, not the pre-heal shape)", async () => {
+      gitShapeOverride.probe = [{ kind: "file-pointer", gitdirEscapesWorkspace: true }, { kind: "dir-valid" }];
+      mockReportSilentFallback.mockClear();
+      mockQuery.mockClear();
+      await realSdkQueryFactory(makeArgs());
+      expect(selfStops()).toHaveLength(0);
+      expect(mockQuery).toHaveBeenCalledOnce();
+    });
+
+    it("(e) a post-heal `.git` of kind other (symlink / EACCES) emits once with gitKind=other (T8a)", async () => {
+      gitShapeOverride.probe = [{ kind: "other" }];
+      mockReportSilentFallback.mockClear();
+      await realSdkQueryFactory(makeArgs());
+      const calls = selfStops();
+      expect(calls).toHaveLength(1);
+      expect((calls[0][1] as { tags: Record<string, string> }).tags).toMatchObject({
+        gitKind: "other",
+        source: "host-pre-heal",
+      });
+    });
+
+    it("(f) a post-heal UNREADABLE pointer (gitdirEscapesWorkspace undefined) emits once (T8a)", async () => {
+      gitShapeOverride.probe = [{ kind: "file-pointer" }];
+      mockReportSilentFallback.mockClear();
+      await realSdkQueryFactory(makeArgs());
+      const calls = selfStops();
+      expect(calls).toHaveLength(1);
+      expect((calls[0][1] as { tags: Record<string, string> }).tags).toMatchObject({ gitKind: "file-pointer" });
     });
 
     it("(c) a post-heal ESCAPING file-pointer emits exactly once with gitKind=file-pointer, gitdirEscapesWorkspace=true", async () => {

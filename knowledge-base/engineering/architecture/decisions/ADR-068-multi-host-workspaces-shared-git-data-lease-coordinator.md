@@ -1605,27 +1605,42 @@ date, "Self-heal"). Pinned by `test/session-sync-kb-only-push-real-git.test.ts` 
 
 ## Addendum — 2026-11-18 (#12910): the lease host_id is the verified var.web_hosts key
 
-§2 made the lease's `host_id` the Hetzner instance id (`hetzner-<id>`, read from metadata by `ci-deploy.sh`). That was the wrong
-id. It changes on every host replace, and it is not the key `SOLEUR_HOST_ROSTER` is keyed by (`web-1`, `web-2`), so the router
-could not resolve a peer's lease: web-1 refused web-2's sessions as `owner-unresolved` while the serve gate passed the roster.
+§2 made the lease's `host_id` the Hetzner instance id (`hetzner-<id>`, read from metadata by `ci-deploy.sh`, with a hashed
+`machine-<id>` fallback). That was the wrong id. It changes on every host replace, and it is not the key `SOLEUR_HOST_ROSTER` is
+keyed by (`web-1`, `web-2`), so the router could not resolve a peer's lease: web-1 refused web-2's sessions as `owner-unresolved`
+while the serve gate passed the roster. (§2's 120 s liveness figure is superseded by migration 133's 240 s,
+`LEASE_LIVENESS_WINDOW_MS`.)
 
-- **The id.** `host_id` is now the host's `var.web_hosts` key. `ci-deploy.sh` `resolve_host_key` derives it from the metadata
-  hostname by inverting `server.tf`'s server-name expression and injects it as `SOLEUR_HOST_KEY` (empty on the canary).
+- **The id.** From the first deploy whose `ci-deploy.sh` carries `resolve_host_key` (CTO ruling T9; verified by the
+  `host_key resolved=web-<n>` deploy line on both hosts), `host_id` is the host's `var.web_hosts` key. `resolve_host_key` derives
+  it from the metadata hostname by inverting `server.tf`'s server-name expression and injects it as `SOLEUR_HOST_KEY` (empty on
+  the canary). Until that deploy runs, a host keeps writing `hetzner-<id>`.
 - **Self-verification (CTO ruling T1).** `host-identity.ts` `describeHostIdentity()` accepts the key only when the roster maps
-  it to this container's own `SOLEUR_HOST_PRIVATE_IP`. Otherwise it falls back to `SOLEUR_HOST_ID`, and boot logs
-  `host_identity source=<enum>` (Sentry `host_identity` / `resolveHostId.key-fallback` in production). Two live hosts cannot
-  share a private IP, so a wrong key can only degrade to the instance id, never to a peer's key. Migration 116's "same host"
-  carve-out therefore now means "same `var.web_hosts` slot".
+  it to this container's own `SOLEUR_HOST_PRIVATE_IP`. Otherwise it falls back to `SOLEUR_HOST_ID`. Boot logs
+  `host_identity source=<enum>`, and the prod container (not the canary or the first-boot one) sends Sentry `host_identity` /
+  `resolveHostId.key-fallback` whenever it did not verify, including when a late private NIC left its IP empty. Two live hosts
+  cannot share a private IP, so a wrong key can only degrade to the instance id, never to a peer's key. Migration 116's "same
+  host" carve-out therefore now means "same `var.web_hosts` slot" for hosts that verified. The router refuses to proxy a
+  session to its own address (`owner-is-self`), which a host that fell back would otherwise do for its own old-key leases.
+- **Stickiness (CTO rulings T3, T3a).** A deploy aborts before the canary when the running prod container had verified a key
+  and the new one differs (`key_change`) or is empty (`key_lost`), or when `docker inspect` fails (`inspect_failed`). Only a
+  verified running key pins, so a stray Doppler `SOLEUR_HOST_KEY` or a key the app rejected cannot lock deploys out.
 - **Generation carry across a replace.** A replaced host re-acquires its predecessor's live leases at the same generation. That
-  is safe only because the two never run at once: `hcloud_server.web` has no `create_before_destroy`, pinned by
-  `web-hosts-generic.test.sh` C8 (with the name round-trip and the one key regex).
-- **ADR-143 D5 precondition.** A volume-preserving reprovision must stop the app before the detach, so the old host's leases are
-  released (tombstoned) rather than carried by a host that is still writing.
-- **The gate.** `lb-weight-gate.sh` A.3 now checks the runtime shape: every roster key is a committed `var.web_hosts` key at its
-  committed private IP, and every rotation member is in the roster (`SOLEUR_WEB_HOSTS`, derived by
-  `lb-weight-gate-with-marker.sh` from `variables.tf`).
-- **Transition cost.** On the first rollout, and on any revert, a worktree whose live lease was taken under the other id has its
-  acquire refused for up to 240 s (`LEASE_LIVENESS_WINDOW_MS`, migration 133). A generation-bumped takeover follows.
+  rests on the two never running at once: Terraform's default destroy-before-create for `hcloud_server.web` (no
+  `create_before_destroy`, pinned by `web-hosts-generic.test.sh` C8 with the name round-trip and the four key regexes), plus
+  Hetzner's per-project unique server names and per-network unique private IPs. A replace in practice flips the id twice: the
+  cloud-init first-boot container carries no key and no `SOLEUR_HOST_ID` (in production its first lease throws, boot line
+  `source=unresolved`) until the host's first ci-deploy, which then writes `web-<n>`.
+- **ADR-143 D5 precondition.** A volume-preserving reprovision must stop the app before the detach (stricter than D5's
+  write-quiesce), so the old host's leases are released (tombstoned) rather than carried by a host that is still writing.
+- **The gate.** `lb-weight-gate.sh` A.3 checks the roster against the committed `var.web_hosts` default whenever web-2 is being
+  pooled: every roster key is a committed key at its committed private IP, and every rotation member is in the roster
+  (`SOLEUR_WEB_HOSTS`, derived by `lb-weight-gate-with-marker.sh` from `variables.tf`). It does not run on the weight-0 standby
+  branch, and it checks configuration, not which key a running host actually wrote (that is the deploy and boot lines).
+- **Transition cost.** On the first rollout, a worktree whose lease outlived the old container's SIGTERM drain stays live under
+  `hetzner-<id>` for up to 240 s: the router closes its socket with 4014 (`owner-unresolved`) and the acquire is refused, then a
+  generation-bumped takeover follows. On a revert the same lease, live under `web-<n>`, is refused as `owner-is-self`. Leases the
+  drain released are unaffected.
 
 Rejected options are recorded in
 [decision-challenges.md](../../../project/specs/feat-one-shot-12910-host-roster-lease-id/decision-challenges.md).

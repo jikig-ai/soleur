@@ -30,8 +30,7 @@ import {
 import { activeLegacySessionCount } from "./agent-session-registry";
 import { startQuietWindowReporter } from "./quiet-window";
 import { startProxyListenerReporter } from "./proxy-listener-status";
-import { describeHostIdentity } from "./host-identity";
-import { readHostPrivateIp } from "./host-private-ip";
+import { hostIdentityBootReport } from "./host-identity";
 // feat-open-web-egress (#9534) — the orphan-forwarder reaper runs at BOOT,
 // not lazily on first dispatch (getSoleurGoRunner): a dispatcher restart
 // leaves the previous generation's forwarders reparented to init with live
@@ -261,27 +260,21 @@ app.prepare().then(() => {
   });
 
   // #12910 — which id the worktree write-lease places this host under: one
-  // closed-grammar boot line (the enum only, never the id), plus a Sentry event
-  // when a production host with a private IP fell back off its verified
-  // var.web_hosts key (the router can then not resolve this host's leases).
+  // closed-grammar boot line (enums only, never the id), plus a Sentry event when
+  // the PROD container fell back off its verified var.web_hosts key (the router can
+  // then not resolve this host's leases). The rules live in hostIdentityBootReport.
+  // warn, not info: the app-container Vector filter ships pino level >= 40 only, so
+  // the healthy `source=web-host-key` line is the off-box delivery proof.
   {
-    let source: string;
-    try {
-      source = describeHostIdentity().source;
-    } catch {
-      source = "unresolved"; // resolveHostId() throws later, at lease time
-    }
-    log.warn({ source }, `host_identity source=${source}`);
-    if (
-      process.env.NODE_ENV === "production" &&
-      readHostPrivateIp() !== null &&
-      source !== "web-host-key"
-    ) {
+    const boot = hostIdentityBootReport();
+    log.warn({ source: boot.source }, boot.line);
+    if (boot.reportFallback) {
       reportSilentFallback(null, {
         feature: "host_identity",
         op: "resolveHostId.key-fallback",
-        message: `host_identity source=${source}: lease placement id is not the verified var.web_hosts key`,
-        extra: { source },
+        message: `${boot.line}: lease placement id is not the verified var.web_hosts key`,
+        tags: { source: boot.source },
+        extra: { source: boot.source },
       });
     }
   }

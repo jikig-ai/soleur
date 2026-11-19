@@ -288,6 +288,15 @@ web_hosts_refused() { # <sed expr over the sandbox variables.tf | RM> — the ga
 scn_web_hosts_unparseable() { web_hosts_refused 's/private_ip = "10.0.1.11"/private_ip = var.web2_ip/' "$1"; }
 scn_web_hosts_duplicate()   { web_hosts_refused '0,/^    "web-[0-9]*" = {/{/^    "web-[0-9]*" = {/p}' "$1"; }  # repeat the first host line
 scn_web_hosts_no_file()     { web_hosts_refused RM "$1"; }
+scn_web_hosts_unquoted()    { web_hosts_refused '/^    "web-2" = {/a\    web3 = { location = "hel1", private_ip = "10.0.1.12" }' "$1"; }  # an unquoted key is never skipped
+scn_web_hosts_tracks_file() { # the derived map follows an EDITED variables.tf (not a hard-coded copy of today's)
+  build_sb "$1" spy; set_marker "$OLD4D"
+  sed -i 's/private_ip = "10.0.1.11"/private_ip = "10.0.1.22"/' "$SB/variables.tf"
+  sed -i '/^    "web-2" = {/a\    "web-3" = { location = "hel1", private_ip = "10.0.1.23" }' "$SB/variables.tf"
+  run_wb
+  local want; want="$(jq -c '(.[keys[] | select(. == "web-2")] = "10.0.1.22") + {"web-3": "10.0.1.23"}' <<<"$COMMITTED_WEB_HOSTS")"
+  [ "$RC" -eq 42 ] && [ "$want" != "$COMMITTED_WEB_HOSTS" ] && grep -qxF "SOLEUR_WEB_HOSTS=$want" "$FX/gate.env"
+}
 scn_caller_not_preferred() { # Doppler's fresh value governs even when the caller offers an old, valid one
   build_sb "$1" real; set_marker "$FRESH1D"; run_wb "WORKSPACES_LUKS_CUTOVER_AT=$OLD4D"
   [ "$RC" -eq 1 ] && [[ "$ERR" == *"sub_condition=B_workspaces_luks_soak_not_elapsed"* ]]
@@ -605,6 +614,8 @@ assert "#12910: a caller-set SOLEUR_WEB_HOSTS is overridden by the derived value
 assert "#12910: an unparseable host line leaves it unset (A_web_hosts_absent), a caller value notwithstanding" scn_web_hosts_unparseable "$WRAPPER"
 assert "#12910: a duplicate host key leaves it unset (A_web_hosts_absent)" scn_web_hosts_duplicate "$WRAPPER"
 assert "#12910: a missing variables.tf leaves it unset (A_web_hosts_absent)" scn_web_hosts_no_file "$WRAPPER"
+assert "#12910: an unquoted host key in the default block leaves it unset (A_web_hosts_absent), never skipped" scn_web_hosts_unquoted "$WRAPPER"
+assert "#12910: the derived map follows an edited variables.tf (a moved IP and an added host)" scn_web_hosts_tracks_file "$WRAPPER"
 assert "#12910: the reference parse finds the same key set as web-hosts-generic.test.sh's counter (>= 2 keys)" \
   test "$(printf '%s' "$COMMITTED_WEB_HOSTS" | jq -r 'keys | join(",")')" = "$(awk '/^variable "web_hosts" \{/{v=1} v&&/^  default = \{/{d=1;next} d&&/^  \}/{exit} d' "$SCRIPT_DIR/variables.tf" | grep -oE '^[[:space:]]*"web-[0-9]+"' | tr -d ' "' | sort | paste -sd, -)"
 assert "Doppler's value governs even when the caller offers a different valid one (soak not elapsed)" scn_caller_not_preferred "$WRAPPER"
@@ -863,7 +874,7 @@ if [ "$cases" -ne "$verdicts" ]; then
   printf '  FAIL CONSERVATION: %s cases ran but %s verdicts were recorded.\n' "$cases" "$verdicts" >&2
   exit 1
 fi
-CASES_FLOOR=135 # #12910: +10 (six SOLEUR_WEB_HOSTS derivation asserts, mutants W1-W4)
+CASES_FLOOR=137 # #12910: +12 (eight SOLEUR_WEB_HOSTS derivation asserts, mutants W1-W4)
 if [ "$cases" -lt "$CASES_FLOOR" ]; then
   printf '  FAIL ANTI-VACUITY: only %s cases ran, floor is %s.\n' "$cases" "$CASES_FLOOR" >&2
   exit 1

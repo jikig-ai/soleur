@@ -3,8 +3,10 @@ import {
   resolveHostId,
   assertHostIdNotUserId,
   describeHostIdentity,
+  hostIdentityBootReport,
   HOST_KEY_RE,
 } from "@/server/host-identity";
+import verifyCases from "./fixtures/host-key-verify-cases.json";
 
 beforeEach(() => {
   vi.stubEnv("SOLEUR_HOST_ID", "");
@@ -169,8 +171,80 @@ describe("describeHostIdentity (#12910, verified var.web_hosts key)", () => {
     expect(resolveHostId()).toBe(INSTANCE);
   });
 
+  it("a verified key needs no instance id, even in production", () => {
+    expect(
+      describeHostIdentity(
+        env({ SOLEUR_HOST_ID: "", SOLEUR_HOST_KEY: "web-2", SOLEUR_HOST_PRIVATE_IP: "10.0.1.11" }),
+      ),
+    ).toEqual({ id: "web-2", source: "web-host-key" });
+  });
+
   it("HOST_KEY_RE alone matches an instance-id key; only the roster check rejects it", () => {
     expect(HOST_KEY_RE.test("hetzner-176328334")).toBe(true);
     expect(HOST_KEY_RE.source).toBe("^[a-z][a-z0-9-]{0,30}$");
+  });
+});
+
+describe("hostIdentityBootReport (#12910 boot line + Sentry condition)", () => {
+  const ROSTER = JSON.stringify({ "web-2": "10.0.1.11" });
+  const PROD = {
+    NODE_ENV: "production",
+    SOLEUR_HOST_ID: "hetzner-176328334",
+    SOLEUR_HOST_ROSTER: ROSTER,
+    SOLEUR_PROXY_BIND: "0.0.0.0",
+  };
+  const report = (over: Record<string, string | undefined>) =>
+    hostIdentityBootReport({ ...PROD, ...over } as NodeJS.ProcessEnv);
+
+  it("a verified prod host logs web-host-key and does not report", () => {
+    expect(report({ SOLEUR_HOST_KEY: "web-2", SOLEUR_HOST_PRIVATE_IP: "10.0.1.11" })).toEqual({
+      source: "web-host-key",
+      line: "host_identity source=web-host-key",
+      reportFallback: false,
+    });
+  });
+
+  it("a prod host with an EMPTY private IP (late NIC) still reports", () => {
+    expect(report({ SOLEUR_HOST_KEY: "web-2", SOLEUR_HOST_PRIVATE_IP: "" })).toEqual({
+      source: "key-unverified",
+      line: "host_identity source=key-unverified",
+      reportFallback: true,
+    });
+  });
+
+  it("the canary (empty SOLEUR_PROXY_BIND, empty key and IP) never reports", () => {
+    expect(
+      report({ SOLEUR_PROXY_BIND: "", SOLEUR_HOST_KEY: "", SOLEUR_HOST_PRIVATE_IP: "" }).reportFallback,
+    ).toBe(false);
+  });
+
+  it("the first-boot container (no proxy bind, no ids) logs unresolved with the key reason and does not report", () => {
+    expect(
+      report({ SOLEUR_PROXY_BIND: undefined, SOLEUR_HOST_ID: undefined, SOLEUR_HOST_PRIVATE_IP: "10.0.1.11" }),
+    ).toEqual({
+      source: "unresolved",
+      line: "host_identity source=unresolved key=key-absent",
+      reportFallback: false,
+    });
+  });
+
+  it("outside production nothing reports", () => {
+    expect(report({ NODE_ENV: "development", SOLEUR_HOST_KEY: "" }).reportFallback).toBe(false);
+  });
+});
+
+// CTO ruling T3a: the same table drives ci-deploy.sh host_key_running_verified (ci-deploy.test.sh HKV rows).
+describe("shared host-key verification table (app side of the T3a parity pin)", () => {
+  it("carries cases on both sides of the verdict", () => {
+    expect(verifyCases.cases.filter((c) => c.verified).length).toBeGreaterThan(0);
+    expect(verifyCases.cases.filter((c) => !c.verified).length).toBeGreaterThan(0);
+  });
+  it.each(verifyCases.cases)("$name", ({ env, verified }) => {
+    const r = describeHostIdentity({
+      NODE_ENV: "production",
+      SOLEUR_HOST_ID: "hetzner-1",
+      ...env,
+    } as NodeJS.ProcessEnv);
+    expect(r.source === "web-host-key" ? r.id : "").toBe(verified);
   });
 });
