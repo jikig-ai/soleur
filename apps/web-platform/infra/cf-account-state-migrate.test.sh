@@ -22,10 +22,12 @@ SUT="$SCRIPT_DIR/scripts/cf-account-state-migrate.sh"
 [[ -x "$SUT" ]] || { printf '[FATAL] not executable: %s\n' "$SUT" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { printf '[FATAL] jq is required\n' >&2; exit 2; }
 
-OZ="$(sed -n 's/^readonly OLD_ZONE_ID="\([0-9a-f]*\)"$/\1/p' "$SUT")"
-OA="$(sed -n 's/^readonly OLD_ACCOUNT_ID="\([0-9a-f]*\)"$/\1/p' "$SUT")"
-[[ "$OZ" =~ ^[0-9a-f]{32}$ && "$OA" =~ ^[0-9a-f]{32}$ ]] \
-  || { printf '[FATAL] could not derive OLD ids from the script\n' >&2; exit 2; }
+# The legacy ids are literals here, never read out of the script under test: a typo in the
+# script then reds this suite instead of agreeing with it (#12931 review, SM1).
+OZ="5af02a2f394e9ba6e0ea23c381a26b67"
+OA="4d5ba6f096b2686fbdd404167dd4e125"
+grep -qx "readonly OLD_ZONE_ID=\"$OZ\"" "$SUT" && grep -qx "readonly OLD_ACCOUNT_ID=\"$OA\"" "$SUT" \
+  || { printf '[FATAL] OLD ids in the script differ from the legacy account literals\n' >&2; exit 1; }
 NZ="11111111111111111111111111111111"
 NA="22222222222222222222222222222222"
 UNK="99999999999999999999999999999999"

@@ -24,9 +24,12 @@ MIGRATE="$HERE/scripts/cf-account-state-migrate.sh"
 [[ -f "$SUT" && -x "$MIGRATE" ]] || { printf '[FATAL] script under test missing\n' >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { printf '[FATAL] jq is required\n' >&2; exit 2; }
 
-OZ="$(sed -n 's/^readonly OLD_ZONE_ID="\([0-9a-f]*\)"$/\1/p' "$MIGRATE")"
-OA="$(sed -n 's/^readonly OLD_ACCOUNT_ID="\([0-9a-f]*\)"$/\1/p' "$MIGRATE")"
-[[ "$OZ" =~ ^[0-9a-f]{32}$ && "$OA" =~ ^[0-9a-f]{32}$ ]] || { printf '[FATAL] cannot derive OLD ids\n' >&2; exit 2; }
+# The legacy ids are literals here, never read out of the script under test: a typo in the
+# script then reds this suite instead of agreeing with it (#12931 review, SM1).
+OZ="5af02a2f394e9ba6e0ea23c381a26b67"
+OA="4d5ba6f096b2686fbdd404167dd4e125"
+grep -qx "readonly OLD_ZONE_ID=\"$OZ\"" "$MIGRATE" && grep -qx "readonly OLD_ACCOUNT_ID=\"$OA\"" "$MIGRATE" \
+  || { printf '[FATAL] OLD ids in the script differ from the legacy account literals\n' >&2; exit 1; }
 SENTINEL="SENTINEL-SECRET-VALUE-DO-NOT-PRINT"
 
 # shellcheck source=/dev/null
