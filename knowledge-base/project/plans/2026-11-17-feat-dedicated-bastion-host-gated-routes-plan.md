@@ -481,7 +481,7 @@ logs:
   where: "Sentry events (birth stages); journald on the host (not shipped in step 2: no Vector on the bastion)"
   retention: "Sentry project retention"
 discoverability_test:
-  command: "grep -cE '_emit \"soleur-cloud-init boot stage\" (fresh_boot_ready|cloud_init_complete) info' apps/web-platform/infra/bastion-cloud-init.yml"
+  command: "grep -c -e '_emit \"soleur-cloud-init boot stage\" fresh_boot_ready info' -e '_emit \"soleur-cloud-init boot stage\" cloud_init_complete info' apps/web-platform/infra/bastion-cloud-init.yml"
   expected_output: "2"
 ```
 
