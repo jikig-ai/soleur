@@ -662,9 +662,7 @@ scope_of() { CFAM_WORKFLOW_REF="example-org/example-repo/.github/workflows/$1@re
 for w in new-planner.yml key-rotate.yml inngest-key-rotate.yml; do
   if [[ "$(scope_of "$w")" == "gated full" ]]; then ok "scope: $w is gated full (deny by default)"; else no "scope: $w -> '$(scope_of "$w")', want 'gated full'"; fi
 done
-bad_scope=""
-for w in $EXEMPT_WF; do [[ "$(scope_of "$w")" == "exempt-workflow $w" ]] || bad_scope+=" $w"; done
-if [[ -z "$bad_scope" ]]; then ok "scope: every named exempt workflow is exempt-workflow"; else no "scope: exempt names not exempt:${bad_scope}"; fi
+# Every named exempt workflow being exempt-workflow is B19 in cf-account-migration-complete.test.sh.
 
 # (7) the job script carries no workflow-file list: it reads the predicate's exempt list.
 JOB="$REPO/apps/web-platform/infra/scripts/cf-account-migrate-job.sh"
@@ -738,7 +736,7 @@ if (( PASS + FAIL != CASES )); then
   printf 'CONSERVATION FAILED: PASS(%s)+FAIL(%s) != CASES(%s)\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_ASSERTIONS=63
+MIN_ASSERTIONS=62
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
