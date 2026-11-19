@@ -416,22 +416,22 @@ To read them: open the run's step summary, or `gh run view <id> --log` and look 
 
 **Two clocks.** The gate's soak runs from the marker: its earliest pass is `marker_at` + `required_s`. The grader's soak runs from the newest web-2 readiness row: it needs green probe rows on 3 distinct days after that row, no non-green row since, and the newest probe row on the readiness row's boot_id. Both must pass, so the later of the two sets the earliest serve.
 
-Class: WAIT = retry later, no action; OPERATOR = an Operator-authorizes step; AGENT = an agent can do it now; DEFECT = a code or wiring defect, do not re-dispatch.
+Class: WAIT = retry later, no action; HOLD = an Operator-authorizes hold (an agent dispatches the named workflow after the go); AGENT = an agent can do it now; DEFECT = a code or wiring defect, do not re-dispatch.
 
 | Refusal | Class | What to do |
 |---|---|---|
-| `*_soak_days_below_floor` | OPERATOR | Delete the Doppler `prd` value (#12933, Operator-authorizes). Until #12933, every serve refuses this way. |
+| `*_soak_days_below_floor` | HOLD | Delete the Doppler `prd` value (#12933, Operator-authorizes). Until #12933, every serve refuses this way. |
 | `*_soak_not_elapsed` | WAIT | Wait until `marker_at` + `required_s`. |
-| `*_soak_days_invalid` | OPERATOR | The knob is not a plain integer from 1 to 999 (a leading zero, more than 3 digits, or text); the log prints `soak_days=invalid` on purpose. The operator reads the value (`doppler secrets get <KNOB> -p soleur -c prd --plain`, a secret read), then sets a plain integer from 3 to 999 or deletes it (Operator-authorizes). |
+| `*_soak_days_invalid` | HOLD | The knob is not a plain integer from 1 to 999 (a leading zero, more than 3 digits, or text); the log prints `soak_days=invalid` on purpose. The operator reads the value (`doppler secrets get <KNOB> -p soleur -c prd --plain`, a secret read), then sets a plain integer from 3 to 999 or deletes it (Operator-authorizes). |
 | refusing id `gate_not_run_<class>` | AGENT | The wrapper or Doppler failed before the gate ran (`marker_source_fail class=<class>`). Read the replayed stderr in the step log; a transport class (`names_rc_*`) is retried by re-dispatching; `bad_doppler_bin` is a DEFECT. |
 | refusing id `none` | DEFECT | Neither a `gate_fail` nor a `marker_source_fail` line was captured; read the replayed stderr and file the defect. |
-| `NOT_YET`, `grade_text` says "no GREEN web-2 readiness row" and web-2 is older than 90 days | OPERATOR | The readiness lookback is 90 days and the row is written once per instance: drain first if web-2 serves, replace the host (`web-host-replace.md`), wait for the 3-day soak (G12; #12938). |
-| `NOT_YET`, `grade_text` names `luks_arm=`, a RED readiness reason other than the two below, or "are not one known boot" | OPERATOR | Waiting cannot repair it (the readiness row is written once per instance, so a reboot never gets a new one): drain first if web-2 serves, then replace the host. |
+| `NOT_YET`, `grade_text` says "no GREEN web-2 readiness row" and web-2 is older than 90 days | HOLD | The readiness lookback is 90 days and the row is written once per instance: drain first if web-2 serves, replace the host (`web-host-replace.md`), wait for the 3-day soak (G12; #12938). |
+| `NOT_YET`, `grade_text` names `luks_arm=`, a RED readiness reason other than the two below, or "are not one known boot" | HOLD | Waiting cannot repair it (the readiness row is written once per instance; the same instance never writes a second one): drain first if web-2 serves, then replace the host. |
 | `NOT_YET`, `grade_text` names `ready_body_unparseable` | AGENT | A Better Stack read fault on the readiness row: retry now. |
 | `NOT_YET`, `grade_text` names `ready_judge_error` | DEFECT | The readiness judge failed (a code defect); do not re-dispatch. |
 | `NOT_YET`, `grade_text` says "did not answer" or "could not be parsed" | AGENT | A Better Stack read fault: retry now. |
 | `NOT_YET` (a soak still running) | WAIT | Retry after 3 distinct green probe days. Still `NOT_YET` 4 days after readiness: telemetry dark; run the readiness-row and daily probe-row (`SYSLOG_IDENTIFIER = luks-monitor`, `host_name = soleur-web-2`) Better Stack queries in `web-host-replace.md` (`scripts/betterstack-query.sh`). |
-| `FAIL` | OPERATOR | The instance's soak is spoiled: drain first if web-2 serves, read the non-green probe rows with the same `web-host-replace.md` queries, then replace the host (the repair). |
+| `FAIL` | HOLD | The instance's soak is spoiled: drain first if web-2 serves, read the non-green probe rows with the same `web-host-replace.md` queries, then replace the host (the repair). |
 | `CANNOT_ESTABLISH` with rc 3 and a `CANNOT ESTABLISH:` grade_text | AGENT | Better Stack credentials or the shared helper are missing: check the step's three `BETTERSTACK_QUERY_*` bindings; the grade_text names the missing one. |
 | `CANNOT_ESTABLISH` with `rc=interrupted` | AGENT | The run was cancelled, timed out or aborted while the grader ran: re-dispatch once. |
 | `CANNOT_ESTABLISH` with `rc=none`, `::error::` "no scratch HOME could be created" | AGENT | The runner's `RUNNER_TEMP` was not writable: re-dispatch once; a second refusal is a DEFECT. |
