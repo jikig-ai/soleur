@@ -14,6 +14,53 @@ emit() {
   fi
 }
 
+# 0 when any component from root through path is a symlink. A trailing
+# slash or a final "/." does not hide the link. A path outside root is
+# refused the same way.
+path_has_symlink() {
+  local root="$1" path="$2" rel part acc
+  root="${root%/}"
+  while [[ "$path" == */ ]]; do
+    path="${path%/}"
+  done
+  while [[ "$path" == */. ]]; do
+    path="${path%/.}"
+    while [[ "$path" == */ ]]; do
+      path="${path%/}"
+    done
+  done
+  if [[ -L "$root" ]]; then
+    return 0
+  fi
+  if [[ "$path" == "$root" ]]; then
+    return 1
+  fi
+  if [[ "$path" != "$root/"* ]]; then
+    return 0
+  fi
+  rel="${path#"$root"/}"
+  acc="$root"
+  while [[ -n "$rel" ]]; do
+    part="${rel%%/*}"
+    if [[ "$rel" == */* ]]; then
+      rel="${rel#*/}"
+    else
+      rel=""
+    fi
+    if [[ -z "$part" || "$part" == "." ]]; then
+      continue
+    fi
+    if [[ "$part" == ".." ]]; then
+      return 0
+    fi
+    acc="${acc}/${part}"
+    if [[ -L "$acc" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 for arg in "$@"; do
   if [[ "$arg" == "--probe" ]]; then
     printf '%s\n' ok
@@ -136,8 +183,14 @@ if [[ "$real_base" != "$branch" ]]; then
   emit fail identity 1
   exit 2
 fi
+# Basename equality is not enough. Refuse a symlink in any component from
+# the toplevel through the parent, including a same-basename directory link.
+if path_has_symlink "$top" "$parent"; then
+  emit fail identity 1
+  exit 2
+fi
 if [[ -n "$child_session" ]]; then
-  if [[ -L "$child_session" ]]; then
+  if path_has_symlink "$top" "$child_session"; then
     emit fail identity 1
     exit 2
   fi
@@ -197,6 +250,7 @@ append_section() {
     SOLEUR_RULING_SPAWN_LINE="$spawn_line" \
     SOLEUR_RULING_APPLIED="$applied" \
     python3 - <<'PY' || py_rc=$?
+import errno
 import os
 import sys
 import time
@@ -244,13 +298,56 @@ def write_all(fd, payload):
         view = view[wrote:]
     return True
 
+def open_ledger(path, top, open_flags):
+    # Open the parent with a no-follow directory fd, then the leaf from
+    # that fd. O_NOFOLLOW on a full path follows every earlier component.
+    def bare(value):
+        while value.endswith("/"):
+            value = value[:-1]
+        while value.endswith("/."):
+            value = value[:-2]
+            while value.endswith("/"):
+                value = value[:-1]
+        return value
+
+    path = bare(path)
+    top = bare(top)
+    prefix = top + "/"
+    if not path.startswith(prefix):
+        sys.exit(5)
+    parts = [part for part in path[len(prefix):].split("/") if part not in ("", ".")]
+    if not parts or any(part == ".." for part in parts):
+        sys.exit(5)
+    nofollow = os.O_NOFOLLOW if hasattr(os, "O_NOFOLLOW") else 0
+    try:
+        dirfd = os.open(top, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        sys.exit(5)
+    try:
+        for part in parts[:-1]:
+            try:
+                nextfd = os.open(
+                    part, os.O_RDONLY | os.O_DIRECTORY | nofollow, dir_fd=dirfd
+                )
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.ENOENT):
+                    sys.exit(5)
+                sys.exit(2)
+            os.close(dirfd)
+            dirfd = nextfd
+        try:
+            return os.open(parts[-1], open_flags, 0o644, dir_fd=dirfd)
+        except OSError as exc:
+            if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                sys.exit(5)
+            sys.exit(2)
+    finally:
+        os.close(dirfd)
+
 flags = os.O_RDWR | os.O_CREAT | os.O_APPEND
 if hasattr(os, "O_NOFOLLOW"):
     flags |= os.O_NOFOLLOW
-try:
-    fd = os.open(ledger, flags, 0o644)
-except OSError:
-    sys.exit(2)
+fd = open_ledger(ledger, os.environ["SOLEUR_RULING_TOPLEVEL"], flags)
 deadline = time.monotonic() + 5
 while True:
     try:

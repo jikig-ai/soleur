@@ -2,14 +2,18 @@
 #
 # Tests for plugins/soleur/scripts/retry-budget-ruling.sh.
 # Written from the plan's Phase 1 contract and Guard 1. The script is the
-# only verb parser: identity, then ruling_spawn: used, then empty history,
-# then at most 64 stdin bytes.
+# only verb parser: identity, then ruling_spawn: used, then --not-capped,
+# then empty history, then at most 64 stdin bytes.
 #
 # Residuals this file does not lock: a CR on the ledger leaf fails the leaf
 # compare before the byte scan; the parallel wait has no barrier, so a first
 # writer that finishes before the second starts passes without the in-lock
-# re-read; the flood cases do not count unread bytes. A later shape of those
-# three is covered by this note.
+# re-read; the flood cases do not count unread bytes. A CR in --phase is
+# refused by the phase allow-list before the byte scan. A regular history
+# file outside the toplevel is not a separate locked case. The in-tree
+# symlink case locks the sibling digest, not the identity verdict line.
+# applied: not-run and subagent_type also appear in a second sentence.
+# A later shape of those is covered by this note.
 #
 # Run: bash plugins/soleur/scripts/retry-budget-ruling.test.sh
 
@@ -607,6 +611,57 @@ assert_eq "2" "$RC" "in-tree spec symlink exits 2"
 assert_eq "$before" "$(file_digest "$TOP/knowledge-base/project/specs/other-branch/session-state.md")" "in-tree sibling is not written"
 rm -rf "$SPEC"
 mkdir -p "$SPEC"
+STDIN_PATH=""
+
+fresh_ledger
+alias_dir="$TOP/alias-tree/$BRANCH"
+mkdir -p "$alias_dir"
+printf 'secret\n' >"$alias_dir/session-state.md"
+before=$(file_digest "$alias_dir/session-state.md")
+rm -rf "$SPEC"
+ln -s "$alias_dir" "$SPEC"
+write_stdin $'goto plan\n'
+id_flags
+run_case "${ID_FLAGS[@]}" --history "$HIST" --phase work
+assert_eq "2" "$RC" "same-basename directory symlink exits 2"
+assert_eq $'SOLEUR_RETRY_BUDGET_RULING verb=fail reason=identity\nfail identity' "$OUT" "same-basename directory symlink is identity"
+assert_eq "$before" "$(file_digest "$alias_dir/session-state.md")" "same-basename alias is not written"
+rm -rf "$SPEC" "$TOP/alias-tree"
+mkdir -p "$SPEC"
+STDIN_PATH=""
+
+fresh_ledger
+mirror="$TOP/mirror/knowledge-base/project/specs/$BRANCH"
+mkdir -p "$mirror"
+printf 'secret\n' >"$mirror/session-state.md"
+before=$(file_digest "$mirror/session-state.md")
+rm -rf "$TOP/knowledge-base"
+ln -s "$TOP/mirror/knowledge-base" "$TOP/knowledge-base"
+write_stdin $'goto plan\n'
+id_flags
+run_case "${ID_FLAGS[@]}" --history "$HIST" --phase work
+assert_eq "2" "$RC" "ancestor directory symlink exits 2"
+assert_eq $'SOLEUR_RETRY_BUDGET_RULING verb=fail reason=identity\nfail identity' "$OUT" "ancestor directory symlink is identity"
+assert_eq "$before" "$(file_digest "$mirror/session-state.md")" "ancestor alias is not written"
+rm -rf "$TOP/knowledge-base" "$TOP/mirror"
+mkdir -p "$SPEC"
+STDIN_PATH=""
+
+fresh_ledger
+before=$(file_digest "$LEDGER")
+mkdir -p "$TOP/real-child"
+printf 'note\n' >"$TOP/real-child/body.md"
+ln -s "$TOP/real-child" "$TOP/child-dir-link"
+write_stdin $'goto plan\n'
+run_case --toplevel "$TOP" --branch "$BRANCH" --git-common-dir "$COMMON" --ledger "$LEDGER" --history "$HIST" --child-session "$TOP/child-dir-link/" --phase work
+assert_eq "2" "$RC" "child directory symlink with a trailing slash exits 2"
+assert_eq $'SOLEUR_RETRY_BUDGET_RULING verb=fail reason=identity\nfail identity' "$OUT" "child directory symlink with a trailing slash is identity"
+assert_eq "$before" "$(file_digest "$LEDGER")" "trailing-slash child symlink writes nothing"
+run_case --toplevel "$TOP" --branch "$BRANCH" --git-common-dir "$COMMON" --ledger "$LEDGER" --history "$HIST" --child-session "$TOP/child-dir-link/." --phase work
+assert_eq "2" "$RC" "child directory symlink with /. exits 2"
+assert_eq $'SOLEUR_RETRY_BUDGET_RULING verb=fail reason=identity\nfail identity' "$OUT" "child directory symlink with /. is identity"
+assert_eq "$before" "$(file_digest "$LEDGER")" "slash-dot child symlink writes nothing"
+rm -rf "$TOP/child-dir-link" "$TOP/real-child"
 STDIN_PATH=""
 
 fresh_ledger
