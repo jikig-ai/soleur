@@ -32,3 +32,4 @@
 - constraint: Do not touch or flip the approval-queue feature flag.
 - constraint: No edits under docs and no legal documents.
 - constraint: Never ask me a technical question.
+- ci-is-the-gate: shall we rely on CI instead?

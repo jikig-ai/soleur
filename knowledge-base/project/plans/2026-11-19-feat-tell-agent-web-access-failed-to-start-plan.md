@@ -295,27 +295,27 @@ The probe was run on this branch before finalizing and printed `web-egress-forwa
 
 <!-- founder-stated check: see plan-founder-check.md -->
 
-- [ ] AC1: `grep -c '^const WEB_EGRESS_START_FAILED_PROMPT_LINE =' apps/web-platform/server/cc-dispatcher.ts` prints `1`,
+- [x] AC1: `grep -c '^const WEB_EGRESS_START_FAILED_PROMPT_LINE =' apps/web-platform/server/cc-dispatcher.ts` prints `1`,
       and the use sits directly after the suffix:
       `grep -A1 -F 'githubReadPromptSuffix +' apps/web-platform/server/cc-dispatcher.ts | grep -c 'webEgressStartFailed ?'`
       prints `1`.
-- [ ] AC2: `grep -c "webEgressStartFailed = true" apps/web-platform/server/cc-dispatcher.ts` prints `1`, and
+- [x] AC2: `grep -c "webEgressStartFailed = true" apps/web-platform/server/cc-dispatcher.ts` prints `1`, and
       `awk '/op: "web-egress-forwarder-spawn"/{f=1} f && /const untrustedContentFlags/{exit} f && /webEgressStartFailed = true/{print "in-catch"; exit}' apps/web-platform/server/cc-dispatcher.ts`
       prints `in-catch` (the only assignment sits between the spawn-failure Sentry call and the next statement block).
       This is a review aid; the behaviour check that the flag is set only on failure is Test Scenario 2.
-- [ ] AC3: the existing pin `WEB_EGRESS_PROMPT_ADDENDUM\}` : ""\) \+\s+githubReadPromptSuffix` still matches (the
+- [x] AC3: the existing pin `WEB_EGRESS_PROMPT_ADDENDUM\}` : ""\) \+\s+githubReadPromptSuffix` still matches (the
       `cc-github-read-prompt.test.ts` "pinned neighbours" case is green and unedited).
-- [ ] AC4: in the real-factory suite, an entitled Command Center session whose spawn rejects has a `systemPrompt` that
+- [x] AC4: in the real-factory suite, an entitled Command Center session whose spawn rejects has a `systemPrompt` that
       contains `## Web access unavailable in this session` exactly once and does not contain
       `## Web access enabled for this session`. Checked both with a repo connected and with none.
-- [ ] AC5: in the real-factory suite, the line is absent for: an entitled session whose spawn succeeds; an unentitled
+- [x] AC5: in the real-factory suite, the line is absent for: an entitled session whose spawn succeeds; an unentitled
       session; an entitled support-persona session.
-- [ ] AC6: the existing #12469-suite case `entitled + DEGRADED forwarder` keeps every current assertion (tool list,
+- [x] AC6: the existing #12469-suite case `entitled + DEGRADED forwarder` keeps every current assertion (tool list,
       read `ADDENDUM_HEAD` absent, no "GitHub tools are unavailable", `forwarderLive` `false`) and also asserts that the
       line appears exactly once (`split(LINE_HEAD)` has length 2). The push-suite degraded case is unchanged.
-- [ ] AC7: the spawn-failure case's built `systemPrompt` contains `failed to start` and `` `WebFetch` is unavailable ``
+- [x] AC7: the spawn-failure case's built `systemPrompt` contains `failed to start` and `` `WebFetch` is unavailable ``
       and does not match `` /WebFetch`? (is|are) (still )?available/ ``.
-- [ ] AC8: from `apps/web-platform`,
+- [x] AC8: from `apps/web-platform`,
       `npx vitest run $(grep -rln --include='*.test.ts' spawnEgressForwarder test/) test/cc-github-read-prompt.test.ts test/web-egress-prompt-addendum.test.ts test/egress-audit-agent-surface-absence.test.ts`
       passes, and `npx tsc --noEmit` passes.
 - [ ] AC9: `git diff --name-only origin/main...HEAD` lists only the two files in Files to Edit plus this plan, its
