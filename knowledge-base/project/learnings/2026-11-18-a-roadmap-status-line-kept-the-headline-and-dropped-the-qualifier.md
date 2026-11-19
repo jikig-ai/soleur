@@ -76,4 +76,6 @@ correction adds, including dates (`date -d <d> +%A`).
    run `worktree-manager.sh` with `run_in_background`.
 10. **The flag-name fix missed its twin in the MU4.1 row.** This is the same file-indexed sweep miss as item 4, and the
    delta review of the compound commit caught it. Recovery: fixed the MU4.1 row. **Prevention:** after any rename-shaped fix, grep
-   the wrong token across the directory (`grep -rn <old> knowledge-base/product/`), not only the cell you edited.
+   the wrong token across the whole repo (`git grep -n <old>`), not only the cell you edited or its directory. The old
+   `BYOK_DELEGATIONS_ENABLED` name also survives in historical "Last Updated" notes of the published legal docs, which a
+   directory-scoped grep misses.

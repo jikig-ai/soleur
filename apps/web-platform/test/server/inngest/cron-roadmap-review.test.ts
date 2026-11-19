@@ -106,6 +106,7 @@ describe("ROADMAP_REVIEW_PROMPT — anchor strings (regression-detection)", () =
       ["ISSUE CLOSURE SAFETY:", "close/reassign blast-radius bound"],
       ["ROADMAP.MD CONFLICT GUARD:", "human/agent edit collision"],
       ["FOG AND SCOPE RULE:", "workshop-owned roadmap sections and blocked-is-not-stale (#8292)"],
+      ["STATUS TEXT RULE:", "status cells keep the source's qualifiers, not its title (#12899)"],
       ["CLONE DEPTH RULE:", "stale `git log` misuse on --depth=1 clone"],
       ["STAGING RULE (#5091):", "scoped staging on the live Tier-1 auto-fix-PR path"],
       [

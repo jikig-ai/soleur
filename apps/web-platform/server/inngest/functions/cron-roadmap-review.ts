@@ -165,6 +165,8 @@ If any open PR touches roadmap.md, do NOT make conflicting edits. Instead, post 
 
 FOG AND SCOPE RULE: The \`## Not Yet Specified\` and \`## Out of Scope\` sections of roadmap.md are bullet lists maintained only by the product-roadmap workshop. Never file issues for, reorder, or delete their entries. An open issue with an open blockedBy edge is waiting, not stale: never close it or flag it for inactivity.
 
+STATUS TEXT RULE: When you rewrite a roadmap.md status cell, take the wording from the source ADR's decision section or the issue's body and latest maintainer comment, never from its title, and keep its qualifiers: what it does not decide, the open issue that owns rollout, draft or counsel status, and flag names spelled as the code spells them.
+
 ## Output
 
 After your analysis, create a new issue with:
