@@ -207,6 +207,7 @@ eq "parity: every workflow WEB_HOST_PRIVATE_IP copy is the jump host's address, 
 # Ceilings are the counts measured when this suite landed (2026-11-10). A later PR that removes a
 # literal lowers the ceiling in the same commit; one that adds a literal reds here. PR 7 of the #9421
 # sequence drives both to zero. Markdown and the knowledge base are history, not configuration.
+# New test fixtures that need a peer host use web-3 / 10.0.1.12, never the prod web-1 literals (#12910).
 count_lit() { # count_lit <ERE>
   (cd "$ROOT" && git ls-files -z -- ':!knowledge-base/**' ':!*.md' ":!$SELF_REL" | xargs -0 grep -ohE "$1" 2>/dev/null | wc -l | tr -d ' ')
 }
