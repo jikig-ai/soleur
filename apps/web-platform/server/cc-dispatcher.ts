@@ -588,6 +588,18 @@ const WEB_EGRESS_PROMPT_ADDENDUM =
   "proxy/connection error mid-session, report it rather than retrying in a " +
   "loop — the session's web access may have been revoked.";
 
+// #12598 — appended ONLY when the workspace grant is on and the forwarder spawn failed (the catch below). The
+// session then runs as if Agent web access were off; without this line the agent sees the grant but no WebFetch,
+// and retries or mis-states what it can do. No GitHub claim: GitHub access differs between the repo-token and
+// no-repo cases, and GH_NO_NETWORK_PROMPT_ADDENDUM already covers the latter.
+const WEB_EGRESS_START_FAILED_PROMPT_LINE =
+  "## Web access unavailable in this session\n" +
+  "Your workspace owner enabled Agent web access, but it failed to start for this session, so this " +
+  "session runs as if it were off: `WebFetch` is unavailable and you have no general web access. Do not " +
+  "retry web fetches, and do not try to reach other websites from shell commands (for example with curl). " +
+  "If the user asks for something that needs the web, tell them web access failed to start for this " +
+  "session and that starting a new conversation may restore it, or ask them to paste what you need.";
+
 // feat-reasoning-chat-boxes (#5370) — instructs the Concierge to drive the
 // always-registered narrate/summarize tools. Appended UNCONDITIONALLY (the
 // tools are always built; see the soleur_platform always-build block). The
@@ -3577,11 +3589,13 @@ export const realSdkQueryFactory: QueryFactory = async (
     // before sdkQuery: on ANY failure (token write, bind, gateway-side
     // start) the session degrades to zero-egress (`webEgress` stays
     // undefined → no proxy env, WebFetch stays disallowed, no credential
-    // census change) + Sentry — a dead forwarder must never produce a
-    // session whose CLI env proxies to a refused listener.
+    // census change) + Sentry, plus the failed-to-start prompt line (#12598)
+    // — a dead forwarder must never produce a session whose CLI env proxies
+    // to a refused listener.
     let webEgress:
       | { workspaceId: string; token: string; port: number }
       | undefined;
+    let webEgressStartFailed = false;
     if (webEgressEntitled && mode.runRepoLifecycle) {
       try {
         const fwd = await spawnEgressForwarder(
@@ -3612,6 +3626,7 @@ export const realSdkQueryFactory: QueryFactory = async (
           message:
             "web-egress forwarder spawn failed; session proceeds zero-egress",
         });
+        webEgressStartFailed = true;
       }
     }
 
@@ -3698,11 +3713,13 @@ export const realSdkQueryFactory: QueryFactory = async (
         // feat-open-web-egress (#9534): the honest-capability addendum is
         // gated on the LIVE forwarder handle, not the resolved entitlement —
         // a spawn-degraded session keeps WebFetch disallowed and gets no
-        // addendum claiming egress.
+        // addendum claiming egress, plus the failed-to-start prompt line
+        // (#12598), appended after the GitHub suffix.
         systemPrompt:
           effectiveSystemPrompt +
           (webEgress ? `\n\n${WEB_EGRESS_PROMPT_ADDENDUM}` : "") +
-          githubReadPromptSuffix,
+          githubReadPromptSuffix +
+          (webEgressStartFailed ? `\n\n${WEB_EGRESS_START_FAILED_PROMPT_LINE}` : ""),
         resumeSessionId: safeResumeSessionId,
         // feat-open-web-egress (#9534) — live forwarder handle. Presence IS
         // the entitlement+spawn-verified condition (fail-closed: undefined
