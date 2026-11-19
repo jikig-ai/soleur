@@ -1286,12 +1286,15 @@ function stripDispatchJobs(workflowText: string): string {
   // doppler_secret.inngest_link_tls, an OPERATOR_APPLIED_EXCLUSION on purpose: a merge must never flip the
   // production Inngest URL. Stripped so the dispatch job's target cannot masquerade as per-merge coverage
   // (the per-merge list is asserted below NOT to contain it).
+  // bastion_host_create (#12866, ADR-327 step 2a): the dispatch-only bastion BIRTH path. Every one
+  // of its -targets is an OPERATOR_APPLIED_EXCLUSION, so folding them in would assert per-merge
+  // coverage for a host the per-merge apply must never touch (the bastion describe block pins it).
   //
   // NOTE for whoever edits this function next: the guard above extracts EVERY
   // "[a-z0-9_]+" string literal in this body and requires each to name a real top-level
   // job. Adding any other lowercase quoted literal here — even in a helper call — makes
   // that guard treat it as a job name and go red. Comments are fine; literals are not.
-  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create"), "inngest_link_flag");
+  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create"), "inngest_link_flag"), "bastion_host_create");
 }
 
 /** Inverse of stripJob: return ONLY the named job's block (header → next job/EOF). */
@@ -1636,6 +1639,16 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_server.grok_dogfood",
   "hcloud_firewall.grok_dogfood",
   "hcloud_firewall_attachment.grok_dogfood",
+  // #12866 (ADR-327 step 2a) — the dedicated bastion. Born only by the bastion_host_create dispatch,
+  // replaced only by bastion-host-replace (#12879); a per-PR -target would birth or mutate a host the
+  // HALT forbids. The host key never rotates on a replace (F5), so no routine apply may touch it.
+  // tests/scripts/lib/bastion-resources.txt is the one list; the bastion describe block below
+  // asserts every entry is here and equals the job's -target lines.
+  "tls_private_key.bastion_host_ssh",
+  "hcloud_firewall.bastion",
+  "hcloud_server.bastion",
+  "hcloud_server_network.bastion",
+  "hcloud_firewall_attachment.bastion",
 ]);
 // Operator-applied doppler_service_token exceptions to the "every token is CI-targeted"
 // assertion (#5566). A token belongs here ONLY when it is minted into an operator-created
@@ -3360,6 +3373,8 @@ const MAIN_ROOT_TF_WORKFLOWS = [
   "cf-lb-overlay.yml",
   "scheduled-terraform-drift.yml",
   "infra-validation.yml",
+  // #12866: the reusable body of apply-web-platform-infra's bastion_host_create caller job.
+  "bastion-host-create.yml",
 ];
 
 describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)", () => {
@@ -3488,7 +3503,7 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     // computed at runtime from a changed-files job), so it is listed by hand; every other
     // entry must be found, and nothing else may be.
     expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => f !== "infra-validation.yml").sort());
-    expect(found.length).toBe(4);
+    expect(found.length).toBe(5);
   });
 
   // ─── Inline pin-load arm (follower retired, #8211 PR2 / ADR-237 D6 amendment) ───────
@@ -11430,5 +11445,95 @@ describe("this suite itself cannot be silently narrowed", () => {
     // deleting a test on purpose should cost one deliberate edit here.
     const declared = selfText.match(/^\s*test\(/gm)?.length ?? 0;
     expect(declared).toBeGreaterThanOrEqual(TEST_FLOOR);
+  });
+});
+
+// #12866 (ADR-327 step 2a): tests/scripts/lib/bastion-resources.txt is the ONE bastion address list.
+// The birth gate reads it as its allow-set; this block pins the other two consumers to it, so 2b and
+// steps 3-4 widen one file instead of three hand-synced ones (git-data carries three).
+describe("bastion: one resource list, pinned to the birth job and the exclusions (#12866)", () => {
+  const list = readFileSync(resolve(REPO_ROOT, "tests/scripts/lib/bastion-resources.txt"), "utf8")
+    .split("\n")
+    .map((l) => l.replace(/#.*/, "").trim())
+    .filter(Boolean);
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  // The job body lives in the reusable bastion-host-create.yml (the caller stays in wf: size gate, #8361).
+  const bwfText = readFileSync(resolve(REPO_ROOT, ".github/workflows/bastion-host-create.yml"), "utf8");
+  const job = extractJobBlock(bwfText, "bastion_host_create");
+  const caller = extractJobBlock(wf, "bastion_host_create");
+
+  test("the caller job dispatches the reusable body with the birth inputs and every declared secret but the environment-only one", () => {
+    const c = stripComments(caller);
+    expect(c).toMatch(/^\s*if: github\.event_name == 'workflow_dispatch' && inputs\.apply_target == 'bastion-host-create'\s*$/m);
+    expect(c).toMatch(/^\s*uses: \.\/\.github\/workflows\/bastion-host-create\.yml\s*$/m);
+    for (const k of ["confirm", "plan_only", "reason"]) expect(c).toMatch(new RegExp(`^\\s*${k}: \\$\\{\\{ inputs\\.${k} \\}\\}\\s*$`, "m"));
+    // Secrets by name, never `secrets: inherit` (the git-data root-token census allows inherit only on
+    // the release callers): every secret the callee declares except the environment-only one.
+    expect(c).not.toMatch(/^\s*secrets: inherit\s*$/m);
+    // Three sets: the secrets the caller passes, the ones the callee declares, and the
+    // ones its body reads. YAML comments are `#` only (a `//` in a URL is not one), and a bracket
+    // read is refused outright because the name scan cannot see it.
+    const passedMap = (parseYaml(wf) as { jobs: Record<string, { secrets?: unknown }> }).jobs.bastion_host_create.secrets;
+    expect(typeof passedMap).toBe("object");
+    for (const [k, v] of Object.entries(passedMap as Record<string, string>)) expect([k, v]).toEqual([k, `\${{ secrets.${k} }}`]);
+    const passed = Object.keys(passedMap as Record<string, string>).sort();
+    const declared = Object.keys(
+      ((parseYaml(bwfText) as { on: { workflow_call: { secrets?: Record<string, unknown> } } }).on.workflow_call.secrets) ?? {},
+    ).sort();
+    const body = bwfText.split("\n").map((l) => l.replace(/(^|\s)#.*$/, "")).join("\n");
+    expect(body).not.toMatch(/secrets\s*\[/i);
+    const read = [...new Set([...body.matchAll(/secrets\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))].sort();
+    expect(read).toEqual(["DOPPLER_TOKEN", "DOPPLER_TOKEN_INFRA_PRIVILEGED", "SENTRY_ACTIONS_RO_TOKEN"]);
+    expect(declared).toEqual(read);
+    // The caller passes every declared secret EXCEPT the environment secret: its job carries no
+    // `environment:` (a reusable caller cannot), so its copy is empty, and the Tier-B census
+    // (G1b) forbids a job without `environment:` to name it. The callee's `environment:` supplies it.
+    const ENV_ONLY = ["DOPPLER_TOKEN_INFRA_PRIVILEGED"];
+    for (const k of ENV_ONLY) expect(declared).toContain(k); // a renamed secret must not empty the filter silently
+    expect(passed).toEqual(declared.filter((k) => !ENV_ONLY.includes(k)));
+    expect(c).toMatch(/^\s*issues: write\s*$/m);
+    // The body runs inside the caller's run, which holds the workflow-level lock: a second group
+    // of the same name in the callee would only risk cancelling the caller.
+    expect((parseYaml(bwfText) as { concurrency?: unknown }).concurrency).toBeUndefined();
+    // W15 (caller side): a job-level group on the caller would split it from the per-merge apply
+    // (the R2 backend has no state lock).
+    expect(c).not.toMatch(/^\s*concurrency:/m);
+    expect((parseYaml(wf) as { concurrency?: { group?: string } }).concurrency?.group).toBe("terraform-apply-web-platform-host");
+    expect(stripComments(job)).toMatch(/^\s*environment: web-platform-infra-apply\s*$/m);
+  });
+
+  test("the reusable body redeclares the caller's Terraform env (workflow env is not propagated)", () => {
+    const callee = (parseYaml(bwfText) as { env: Record<string, string> }).env;
+    const callerEnv = (parseYaml(wf) as { env: Record<string, string> }).env;
+    for (const k of ["TERRAFORM_VERSION", "TF_VAR_terraform_version", "INFRA_DIR"]) expect([k, callee[k]]).toEqual([k, callerEnv[k]]);
+  });
+
+  test("the list parses, holds the server, and has no duplicates (non-vacuity)", () => {
+    expect(list.length).toBeGreaterThanOrEqual(5);
+    expect(list).toContain("hcloud_server.bastion");
+    expect(new Set(list).size).toBe(list.length);
+  });
+
+  test("bastion.tf declares exactly the listed resources (a resource missing from the list is never born)", () => {
+    const tf = stripComments(readFileSync(resolve(INFRA_DIR, "bastion.tf"), "utf8"));
+    const declared = [...tf.matchAll(/^resource\s+"(\w+)"\s+"(\w+)"/gm)].map((m) => `${m[1]}.${m[2]}`);
+    expect(declared.length).toBeGreaterThanOrEqual(5);
+    expect([...declared].sort()).toEqual([...list].sort());
+  });
+
+  test("the bastion_host_create job's -target lines equal the list (as a multiset)", () => {
+    expect(job.length).toBeGreaterThan(0);
+    expect([...extractTargetsWithKeys(job)].sort()).toEqual([...list].sort());
+  });
+
+  test("every list entry is an OPERATOR_APPLIED_EXCLUSION", () => {
+    expect(list.filter((a) => !OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
+  });
+
+  test("no main-root workflow -targets a bastion address outside the stripped dispatch jobs", () => {
+    for (const f of MAIN_ROOT_TF_WORKFLOWS) {
+      const t = extractAllTargets(stripDispatchJobs(readFileSync(resolve(REPO_ROOT, ".github/workflows", f), "utf8")));
+      expect([f, list.filter((a) => t.has(a))]).toEqual([f, []]);
+    }
   });
 });

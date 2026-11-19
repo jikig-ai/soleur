@@ -25,6 +25,8 @@ SRC="$DIR/cloud-init.yml"
 BOOT="$DIR/soleur-host-bootstrap.sh"
 TRAIL="$DIR/scripts/fresh-host-boot-trail.sh"
 WF="$DIR/../../../.github/workflows/apply-web-platform-infra.yml"
+# #12866: the bastion birth's body (reusable; its caller job sits in $WF).
+BWF="$DIR/../../../.github/workflows/bastion-host-create.yml"
 
 cases=0
 passes=0
@@ -65,7 +67,7 @@ fi
 passes="$ST_P"; fails="$ST_F"; cases="$ST_C"
 
 harness() { printf '[HARNESS] %s\n' "$1" >&2; exit 2; }
-for f in "$SRC" "$BOOT" "$TRAIL" "$WF"; do [[ -f "$f" ]] || harness "missing $f"; done
+for f in "$SRC" "$BOOT" "$TRAIL" "$WF" "$BWF"; do [[ -f "$f" ]] || harness "missing $f"; done
 
 WORK="$(mktemp -d "${TMPDIR}/kernel-currency.XXXXXXXX")" || harness "mktemp failed"
 trap 'rm -rf "${WORK:?}"' EXIT
@@ -83,9 +85,14 @@ G=$(sed -n 's/^CC_GRACE="\${SOLEUR_BOOT_TRAIL_CC_GRACE:-\([0-9][0-9]*\)}"$/\1/p'
 SL=$(sed -n 's/^  sleep \([0-9][0-9]*\)$/\1/p' "$TRAIL" | head -1)
 CM=$(sed -n 's/.*curl --disable --noproxy .\*. -s --max-time \([0-9][0-9]*\) -G .*/\1/p' "$TRAIL" | head -1)
 RQ=$(sed -n 's/.*curl --disable --noproxy .\*. -s --max-time \([0-9][0-9]*\) -o "\$tmp".*/\1/p' "$TRAIL" | head -1)
-job_timeout() { awk -v j="  $1:" '$0==j{f=1;next} f&&/^  [a-z_]+:$/{exit} f&&/^    timeout-minutes: [0-9]+$/{print $2; exit}' "$WF"; }
+job_timeout() { awk -v j="  $1:" '$0==j{f=1;next} f&&/^  [a-z_]+:$/{exit} f&&/^    timeout-minutes: [0-9]+$/{print $2; exit}' "${2:-$WF}"; }
 TC=$(job_timeout web_host_create); TR=$(job_timeout web_host_replace)
-for v in W D G SL CM RQ TC TR; do [[ "${!v}" =~ ^[0-9]+$ ]] || harness "budget operand $v unreadable ('${!v}')"; done
+# The bastion route reads the trail in STRICT mode, whose deadline is its own literal (the bastion
+# has no SOLEUR_FRESH_BOOT_WINDOW_SECONDS; a slow-mirror apt retry boot needs more than 1200 s).
+# Fail closed when it is absent: a budget over a guessed deadline proves nothing.
+TB=$(job_timeout bastion_host_create "$BWF")
+DS=$(sed -n 's/^BOOT_TRAIL_STRICT_DEADLINE_S=\([0-9][0-9]*\)$/\1/p' "$TRAIL" | head -1)
+for v in W D G SL CM RQ TC TR TB DS; do [[ "${!v}" =~ ^[0-9]+$ ]] || harness "budget operand $v unreadable ('${!v}')"; done
 eq "budget: trail deadline = host boot window + 60 s (moved together)" "$D" "$((W + 60))"
 ok "budget: the boot window covers the settle reboot (>= 1140 s)" "$([[ "$W" -ge 1140 ]]; echo $?)"
 grep -qF 'DEADLINE=$(( SECONDS + BOOT_TRAIL_DEADLINE_S ))' "$TRAIL"; ok "budget: the poll deadline is computed from BOOT_TRAIL_DEADLINE_S" $?
@@ -98,6 +105,12 @@ PRE_POLL_S=660
 WORST=$((D + G + 2 * (SL + CM) + 3 * RQ))
 ok "budget: create worst case ($((PRE_POLL_S + WORST)) s) fits timeout-minutes $TC" "$([[ $((PRE_POLL_S + WORST)) -le $((TC * 60)) ]]; echo $?)"
 ok "budget: replace worst case ($((PRE_POLL_S + 60 + WORST)) s) fits timeout-minutes $TR" "$([[ $((PRE_POLL_S + 60 + WORST)) -le $((TR * 60)) ]]; echo $?)"
+# Bastion (#12866): no digest or image pull, so the web create's PRE_POLL_S is an upper bound for
+# init + plan + stock + apply; +60 s for the power-off lookup, the poweroff call and the #12879
+# comment, all of which run INSIDE the verify step and must finish before the job is killed.
+WORST_B=$((DS + G + 2 * (SL + CM) + 3 * RQ))
+ok "budget: bastion strict deadline ($DS s) is at least the web deadline ($D s)" "$([[ "$DS" -ge "$D" ]]; echo $?)"
+ok "budget: bastion birth worst case ($((PRE_POLL_S + 60 + WORST_B)) s) fits timeout-minutes $TB" "$([[ $((PRE_POLL_S + 60 + WORST_B)) -le $((TB * 60)) ]]; echo $?)"
 
 # ── Raw-template structural rows ───────────────────────────────────────────────────────────────
 SEM_PATH=/var/lib/cloud/instance/sem/config_scripts_user

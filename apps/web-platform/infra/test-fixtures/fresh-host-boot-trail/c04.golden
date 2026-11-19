@@ -1,0 +1,4 @@
+rc=0
+--- out
+::error::BOOT_TRAIL_SINCE='abc' is not an epoch — the boot-trail read did NOT run (this is NOT a 'host emitted nothing' result).
+--- summary
