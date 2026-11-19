@@ -933,9 +933,9 @@ grader), and the change adds no external API.
       **by hand** mutation and the row it turned RED (G5).
 - [x] AC13: `infra-validation.yml`'s `pull_request` paths include `scripts/followthroughs/web2-luks-live-6931.sh`,
       `scripts/lib/serve-soak-evidence.sh` and `scripts/serve-soak-evidence-last.sh`.
-- [ ] AC14: ADR-263 carries the 2026-11-18 addendum (including the G1 overflow fix and the AP-027 residual) and
+- [x] AC14: ADR-263 carries the 2026-11-18 addendum (including the G1 overflow fix and the AP-027 residual) and
       the supersession blockquote; ADR-068 carries the floor pointer; `model.c4` edits land and
-      `c4-model-freshness`, `c4-count-parity`, `c4-code-syntax` and `c4-render` are green.
+      `c4-model-freshness`, `c4-count-parity`, `c4-code-syntax` and `c4-render` are green (CI at 0845f2d946: the two .sh suites `[ok]` in test-scripts, the two vitest suites in the green test-webplat leg).
 - [x] AC15: Both runbooks name the floor and the grader as serve preconditions.
 - [x] AC16: The PR body says `Closes #12849`, `Ref #12008`, `Ref #9421`, and carries the Operator Holds below.
 - [x] AC17: A refusal is a red job whose `::error::` line names the reason, so the dispatcher is alerted, not
