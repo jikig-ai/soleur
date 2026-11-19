@@ -802,7 +802,7 @@ dc_mutant() { # <sed-expr> <label> <project> <token>
   # (the census `mutate` convention applied to a region rather than a line count).
   # (`{ diff || true; }` -- pipefail would otherwise score diff's exit-1-when-different
   # through grep's match and read "landed" as "did not land".)
-  if cmp -s "$ACTION_YML" "$mut" || ! { diff "$ACTION_YML" "$mut" || true; } | grep -qE 'soleur-deploy-channel|DP_DEPLOY_CHANNEL'; then
+  if cmp -s "$ACTION_YML" "$mut" || ! grep -qE 'soleur-deploy-channel|DP_DEPLOY_CHANNEL' < <(diff "$ACTION_YML" "$mut" || true); then
     fail "dc-mutant $label: the mutation did not land in the narrow arm"; return 0
   fi
   if ! extract_loader "$mut" "$msh" 2>/dev/null; then fail "dc-mutant $label: extraction failed"; return 0; fi
