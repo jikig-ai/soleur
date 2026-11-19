@@ -878,56 +878,56 @@ grader), and the change adds no external API.
 
 <!-- founder-stated check: see plan-founder-check.md -->
 
-- [ ] AC1: With either knob at `1` or `2`, the gate exits 1 with the whole line
+- [x] AC1: With either knob at `1` or `2`, the gate exits 1 with the whole line
       `gate_fail sub_condition=B_luks_soak_days_below_floor` (git data) or
       `gate_fail sub_condition=B_workspaces_luks_soak_days_below_floor` (workspaces).
-- [ ] AC2: With either knob at `3` (4-day markers) or `5` (6-day markers), the gate exits 0; with `5` and
+- [x] AC2: With either knob at `3` (4-day markers) or `5` (6-day markers), the gate exits 0; with `5` and
       4-day markers it refuses `*_soak_not_elapsed` and the line carries `required_s=432000`.
-- [ ] AC3: `0`, `010`, `08`, `abc`, `1 verdict=pass`, `1000`, `200000000000000` and `18446744073709551619`
+- [x] AC3: `0`, `010`, `08`, `abc`, `1 verdict=pass`, `1000`, `200000000000000` and `18446744073709551619`
       refuse as `*_invalid` (`999` with 1000-day markers passes), and the evidence line carries
       `soak_days=invalid` and exactly one `verdict=` field.
-- [ ] AC4: Unset and empty knobs give `source=default soak_days=3`; a set knob gives `source=env`.
-- [ ] AC5: On a full pass the gate's stderr holds exactly two lines matching `SOAK_EV_RE`, one per kind, each
+- [x] AC4: Unset and empty knobs give `source=default soak_days=3`; a set knob gives `source=env`.
+- [x] AC5: On a full pass the gate's stderr holds exactly two lines matching `SOAK_EV_RE`, one per kind, each
       `verdict=pass sub_condition=none`; on every refusal inside B.2-B.10 exactly one line of that kind with
       `verdict=fail` and `sub_condition` equal to the `gate_fail` id; on the standby branch, Condition A and B.1
       refusals, zero lines.
-- [ ] AC6: No raw environment text appears in an evidence line: `marker_at` is `none`, `unparseable` or an
+- [x] AC6: No raw environment text appears in an evidence line: `marker_at` is `none`, `unparseable` or an
       epoch-rebuilt `YYYY-MM-DDTHH:MM:SSZ`.
-- [ ] AC7: `scn_allow_parity` stays green with the allowlist unchanged from the base branch (11 names today, 12
+- [x] AC7: `scn_allow_parity` stays green with the allowlist unchanged from the base branch (11 names today, 12
       after #12918 lands); no new environment name is read by the gate.
-- [ ] AC8: `ga_pool_update` contains exactly one step `per-instance soak grader (serve only)`, after the gate
+- [x] AC8: `ga_pool_update` contains exactly one step `per-instance soak grader (serve only)`, after the gate
       chain and before the health precondition and the plan, serve-gated, keys exactly `name/if/env/run`, env
       exactly `SOLEUR_GATED_HOST: web-2` plus the three `BETTERSTACK_QUERY_*` secrets; its run body sources
       `scripts/lib/serve-soak-evidence.sh` and makes one `sse_instance_soak` call.
-- [ ] AC9: Executing `sse_instance_soak` with a stub grader returning 1, 2, 3, 78, 126 and 127 exits 1 each time,
+- [x] AC9: Executing `sse_instance_soak` with a stub grader returning 1, 2, 3, 78, 126 and 127 exits 1 each time,
       with a `::error::` line and `SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=<n> verdict=<V>`
       (FAIL, NOT_YET, CANNOT_ESTABLISH, CANNOT_ESTABLISH, CANNOT_ESTABLISH, CANNOT_ESTABLISH) on stderr and in the
       summary; rc 0 exits 0 with `verdict=PASS`; the stub is called exactly once and sees an empty
       `SOLEUR_FT_EARLIEST` under an ambient value; a non-web-2 host refuses with `rc=none
       verdict=CANNOT_ESTABLISH` and never calls the stub; an empty host prints `host=invalid`; the stub sees only the `env -i` allowlist and
       none of the planted decoy credentials (G10).
-- [ ] AC10: Executing `sse_gate_chain_check`: on refuse and pass, the summary holds, between a ```` ```text ````
+- [x] AC10: Executing `sse_gate_chain_check`: on refuse and pass, the summary holds, between a ```` ```text ````
       fence pair under the heading, only the grammar-matching lines; the gate step's EXIT trap replays every
       wrapper stderr line; a pass missing either kind's line, with `none` fields, with `required_s` below
       259200, or for a different host exits 1 with the anti-vacuity message; a zero-line refusal still prints
       its `::error::`. `SOAK_EV_RE` exists once (the helper) and the G4 negative fixtures do not match.
-- [ ] AC11: Grader `SOAK_DAYS` equals gate `SOAK_FLOOR_DAYS`, and the helper's `SOAK_FLOOR_S` equals both times
+- [x] AC11: Grader `SOAK_DAYS` equals gate `SOAK_FLOOR_DAYS`, and the helper's `SOAK_FLOOR_S` equals both times
       86400 (parity row); the grader's comment names
       `SOAK_FLOOR_DAYS`; `web2-luks-live-6931.test.sh` passes unchanged.
 - [ ] AC12: Every **committed** Guard 1-4 mutation row lands and drives its guard RED; the PR body lists every
       **by hand** mutation and the row it turned RED (G5).
-- [ ] AC13: `infra-validation.yml`'s `pull_request` paths include `scripts/followthroughs/web2-luks-live-6931.sh`,
+- [x] AC13: `infra-validation.yml`'s `pull_request` paths include `scripts/followthroughs/web2-luks-live-6931.sh`,
       `scripts/lib/serve-soak-evidence.sh` and `scripts/serve-soak-evidence-last.sh`.
 - [ ] AC14: ADR-263 carries the 2026-11-18 addendum (including the G1 overflow fix and the AP-027 residual) and
       the supersession blockquote; ADR-068 carries the floor pointer; `model.c4` edits land and
       `c4-model-freshness`, `c4-count-parity`, `c4-code-syntax` and `c4-render` are green.
 - [ ] AC15: Both runbooks name the floor and the grader as serve preconditions.
 - [ ] AC16: The PR body says `Closes #12849`, `Ref #12008`, `Ref #9421`, and carries the Operator Holds below.
-- [ ] AC17: A refusal is a red job whose `::error::` line names the reason, so the dispatcher is alerted, not
+- [x] AC17: A refusal is a red job whose `::error::` line names the reason, so the dispatcher is alerted, not
       only the log (CPO concern 1).
-- [ ] AC18: `bash scripts/serve-soak-evidence-last.sh` passes shellcheck and its stub-`gh` row;
+- [x] AC18: `bash scripts/serve-soak-evidence-last.sh` passes shellcheck and its stub-`gh` row;
       `preflight-discoverability-test.test.ts` passes with `BASELINE_DECLARED_PROBES = 99`.
-- [ ] AC19: `cf-lb-overlay.yml` names neither soak knob on a non-comment line nor the soak marker's Doppler name
+- [x] AC19: `cf-lb-overlay.yml` names neither soak knob on a non-comment line nor the soak marker's Doppler name
       anywhere; every `sub_condition=` check in both suites is anchored (census row).
 
 ## Domain Review
