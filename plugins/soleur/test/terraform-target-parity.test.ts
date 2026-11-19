@@ -11273,13 +11273,13 @@ describe("bastion: one resource list, pinned to the birth job and the exclusions
   const job = extractJobBlock(bwfText, "bastion_host_create");
   const caller = extractJobBlock(wf, "bastion_host_create");
 
-  test("the caller job dispatches the reusable body with the birth inputs and exactly the secrets it reads", () => {
+  test("the caller job dispatches the reusable body with the birth inputs and every declared secret but the environment-only one", () => {
     const c = stripComments(caller);
     expect(c).toMatch(/^\s*if: github\.event_name == 'workflow_dispatch' && inputs\.apply_target == 'bastion-host-create'\s*$/m);
     expect(c).toMatch(/^\s*uses: \.\/\.github\/workflows\/bastion-host-create\.yml\s*$/m);
     for (const k of ["confirm", "plan_only", "reason"]) expect(c).toMatch(new RegExp(`^\\s*${k}: \\$\\{\\{ inputs\\.${k} \\}\\}\\s*$`, "m"));
-    // Exactly the three secrets the body reads, by name; never `secrets: inherit` (the git-data
-    // root-token census allows inherit only on the release callers).
+    // Secrets by name, never `secrets: inherit` (the git-data root-token census allows inherit only on
+    // the release callers): every secret the callee declares except the environment-only one.
     expect(c).not.toMatch(/^\s*secrets: inherit\s*$/m);
     // Three sets: the secrets the caller passes, the ones the callee declares, and the
     // ones its body reads. YAML comments are `#` only (a `//` in a URL is not one), and a bracket
@@ -11300,6 +11300,7 @@ describe("bastion: one resource list, pinned to the birth job and the exclusions
     // `environment:` (a reusable caller cannot), so its copy is empty, and the Tier-B census
     // (G1b) forbids a job without `environment:` to name it. The callee's `environment:` supplies it.
     const ENV_ONLY = ["DOPPLER_TOKEN_INFRA_PRIVILEGED"];
+    for (const k of ENV_ONLY) expect(declared).toContain(k); // a renamed secret must not empty the filter silently
     expect(passed).toEqual(declared.filter((k) => !ENV_ONLY.includes(k)));
     expect(c).toMatch(/^\s*issues: write\s*$/m);
     // The body runs inside the caller's run, which holds the workflow-level lock: a second group
