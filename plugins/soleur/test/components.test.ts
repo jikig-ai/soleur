@@ -781,12 +781,12 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     [SD, "sd9", "forces a `Problem found` line"],
     [SD, "sd9", "is never reused as evidence for a go or a tick"],
     [SD, "sd9", "the exact parsed hostnames of items 2 and 3"],
-    // Cloudflare as a Class R vendor (Ref #10479, #12441): one wrapper, four GET reads and two fixed read-only POST reads.
+    // Cloudflare as a Class R vendor (Ref #10479, #12441, #12846): one wrapper, four GET reads and three fixed read-only POST reads.
     [SD, "sd9", "plugins/soleur/scripts/cloudflare-readonly.sh"],
     [SD, "sd9", "the exact parsed `api.cloudflare.com`"],
-    [SD, "sd9", "`ssl-mode`, `config-entrypoint`, `pagerules-ssl`, `change-history`, `analytics-health` or `analytics-edge-errors`"],
+    [SD, "sd9", "`ssl-mode`, `config-entrypoint`, `pagerules-ssl`, `change-history`, `analytics-health`, `analytics-edge-errors` or `analytics-health-colo`"],
     [SD, "sd9", "the wrapper sends GET only on its four configuration subcommands"],
-    [SD, "sd9", "the two analytics subcommands each send one POST of a fixed GraphQL query compiled into the script"],
+    [SD, "sd9", "the three analytics subcommands each send one POST of a fixed GraphQL query compiled into the script"],
     [SD, "sd9", "this is the one stated departure from the Boundary paragraph's sentence that none of a read's text is copied into a transcript"],
     [SD, "sd9", "never prints a rule `expression`"],
     [SD, "sd9", "never answered by widening a token"],
@@ -894,7 +894,7 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
         "the `--table` and `--grep` flag forms",
         "plugins/soleur/scripts/cloudflare-readonly.sh",
         "the wrapper sends GET only on its four configuration subcommands",
-        "the two analytics subcommands each send one POST",
+        "the three analytics subcommands each send one POST",
         "this is the one stated departure from the Boundary paragraph's sentence",
         // the drift guard: a wrapper runs only from a checkout that matches a freshly fetched origin/main
         "a freshly fetched `origin/main` (`git fetch origin main`, then `git diff origin/main -- <wrapper>` is empty)",
@@ -923,7 +923,9 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
   // PAIRS rows only; a second surviving copy of a row's text keeps that row green, so the guarantee
   // is that at least the item-scoped REQUIRED test or one of these goes red.
   const WRAPPER = resolve(PLUGIN_ROOT, "scripts/cloudflare-readonly.sh");
-  const CF_SIX = ["analytics-edge-errors", "analytics-health", "change-history", "config-entrypoint", "pagerules-ssl", "ssl-mode"];
+  // The closed set, sorted; every count below is derived from its length (CTO T4: a count in a name goes stale).
+  const CF_SUBCOMMANDS = ["analytics-edge-errors", "analytics-health", "analytics-health-colo", "change-history", "config-entrypoint", "pagerules-ssl", "ssl-mode"];
+  const CF_COUNT_WORD = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"][CF_SUBCOMMANDS.length];
   const sdItems = () => sectionRaw(readRel(SD), "## 9.").split("\n").filter((l) => /^\d+\. /.test(l));
   const sdItem = (n: number) => flatten(sdItems().find((l) => l.startsWith(`${n}. `)) ?? "");
   // Text of `s` from the first `from` to the first `to` after it ("" when either is missing).
@@ -937,19 +939,19 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
   // Whole-line comments removed; a trailing comment is left alone on purpose (the wrapper has none on these lines).
   const codeOnly = (t: string) => t.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
 
-  test("Cloudflare subcommand parity: item 2 text, wrapper SUBCOMMANDS array, dispatcher case labels and --list are the same six", () => {
-    const names = backticked(slice(sdItem(2), "its six subcommands", ", as a status")).sort();
-    expect(names.length, "item 2 lost the backticked subcommand names after `its six subcommands` (an empty slice must fail)").toBe(6);
-    expect(names, "item 2 subcommand list").toEqual(CF_SIX);
+  test(`Cloudflare subcommand parity: item 2 text, wrapper SUBCOMMANDS array, dispatcher case labels and --list are the same ${CF_COUNT_WORD}`, () => {
+    const names = backticked(slice(sdItem(2), `its ${CF_COUNT_WORD} subcommands`, ", as a status")).sort();
+    expect(names.length, `item 2 lost the backticked subcommand names after \`its ${CF_COUNT_WORD} subcommands\` (an empty slice must fail)`).toBe(CF_SUBCOMMANDS.length);
+    expect(names, "item 2 subcommand list").toEqual(CF_SUBCOMMANDS);
 
     const src = codeOnly(readFileSync(WRAPPER, "utf-8"));
     const arr = /^\s*SUBCOMMANDS=\(([^)]*)\)/m.exec(src);
     expect(arr, "the wrapper has no SUBCOMMANDS=(...) array").not.toBeNull();
     const arrNames = arr![1].trim().split(/\s+/).filter(Boolean).sort();
-    expect(arrNames.length, "the wrapper SUBCOMMANDS array must hold six names").toBe(6);
+    expect(arrNames.length, `the wrapper SUBCOMMANDS array must hold ${CF_COUNT_WORD} names`).toBe(CF_SUBCOMMANDS.length);
     expect(arrNames, "wrapper SUBCOMMANDS array vs item 2 text").toEqual(names);
 
-    // Every one of the six is a dispatcher case label (an extra seventh arm is caught by the wrapper suite's arm census and unknown-endpoint rows).
+    // Every member of the set is a dispatcher case label (an extra arm is caught by the wrapper suite's arm census and unknown-endpoint rows).
     const labels = new Set([...src.matchAll(/^\s*([a-z][a-z0-9-]*(?:\|[a-z][a-z0-9-]*)*)\)/gm)].flatMap((m) => m[1].split("|")));
     for (const n of names) expect(labels.has(n), `the wrapper dispatcher has no case label for "${n}"`).toBe(true);
 
@@ -989,6 +991,21 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     expect(adr, "the ADR-289 addendum message cap vs the wrapper").toContain(`at most ${cap![1]} characters`);
   });
 
+  test("the end-offset bounds section 9 item 2 and the ADR-289 addendum state are the wrapper's own: offset 0 to MAX_OFFSET, span at most MAX_HOURS + MAX_OFFSET (Ref #12846)", () => {
+    const src = codeOnly(readFileSync(WRAPPER, "utf-8"));
+    const hours = /^MAX_HOURS=(\d+)$/m.exec(src);
+    const off = /^MAX_OFFSET=(\d+)$/m.exec(src);
+    expect(hours, "the wrapper has no MAX_HOURS=<n> line").not.toBeNull();
+    expect(off, "the wrapper has no MAX_OFFSET=<n> line").not.toBeNull();
+    const span = Number(hours![1]) + Number(off![1]);
+    const item = sdItem(2);
+    expect(item, "item 2 offset bound vs the wrapper MAX_OFFSET").toContain(`a whole number of hours from 0 to ${off![1]}`);
+    expect(item, "item 2 span bound vs the wrapper MAX_HOURS + MAX_OFFSET").toContain(`with the two numbers together at most ${span}`);
+    const adr = flatten(readFileSync(resolve(REPO, "knowledge-base/engineering/architecture/decisions/ADR-289-standing-delegation-and-production-envelope.md"), "utf-8"));
+    expect(adr, "the ADR-289 addendum offset bound vs the wrapper MAX_OFFSET").toContain(`a whole number of hours from 0 to ${off![1]}`);
+    expect(adr, "the ADR-289 addendum span bound vs the wrapper MAX_HOURS + MAX_OFFSET").toContain(`with the two numbers together at most ${span}`);
+  });
+
   test("Cloudflare Credentials clause names exactly the five bound token variables, and CF_API_TOKEN is never one of them", () => {
     const cred = paragraph(sectionRaw(readRel(SD), "## 9."), "Credentials.");
     const clause = slice(cred, "Cloudflare reads use only the token variable bound to the subcommand", "An absent bound token makes the read `unverified`.");
@@ -1008,7 +1025,8 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
 
   const VENDOR_SENTENCE =
     "Class R is read-only on the operator's own vendor accounts (Sentry, Better Stack and Cloudflare, the last added by a CTO-agent ruling of 2026-11-04 that the owner reviews on the draft pull request, " +
-    "and widened to two analytics reads by a CTO-agent ruling of 2026-11-09 on the mechanism and a CLO-agent ruling of 2026-11-09 that the POST read stays Class R, both of which the owner reviews on the draft pull request; any further vendor still needs a CTO ruling and a test row)";
+    "and widened to two analytics reads by a CTO-agent ruling of 2026-11-09 on the mechanism and a CLO-agent ruling of 2026-11-09 that the POST read stays Class R, both of which the owner reviews on the draft pull request, " +
+    "and to a third analytics read by a CTO-agent ruling of 2026-11-19 on the mechanism and a CLO-agent ruling of 2026-11-19 that it stays Class R, both of which the owner reviews on the draft pull request; any further vendor still needs a CTO ruling and a test row)";
 
   test("the Boundary sentence pins the vendor list whole: exactly Sentry, Better Stack, Cloudflare, a CTO-agent ruling the owner reviews, and the further-vendor gate", () => {
     const b = paragraph(sectionRaw(readRel(SD), "## 9."), "Boundary.");
@@ -1093,26 +1111,33 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
     return [...out].sort();
   };
 
-  test("the Cloudflare clause of item 2 names exactly one host: api.cloudflare.com (every dotted token, no TLD allow-list)", () => {
+  // The dotted tokens of the Cloudflare clause, as a closed set: the one contacted host `api.cloudflare.com`, plus `app.soleur.ai`, which
+  // since #12846 is the compiled-in host FILTER of `analytics-health-colo` (a query literal, never a target; the CLO text says so in place).
+  const CF_CLAUSE_HOSTS = ["api.cloudflare.com", "app.soleur.ai"];
+  test("the Cloudflare clause of item 2 names exactly one contacted host, api.cloudflare.com, and app.soleur.ai only as the fixed query filter (every dotted token, no TLD allow-list)", () => {
     const clause = slice(sdItem(2), "Cloudflare through", "are not Class R");
     expect(clause, "item 2 lost the Cloudflare clause").not.toBe("");
-    expect(hostTokens(clause), "dotted hostname-like tokens in the Cloudflare clause").toEqual(["api.cloudflare.com"]);
+    expect(hostTokens(clause), "dotted hostname-like tokens in the Cloudflare clause").toEqual(CF_CLAUSE_HOSTS);
+    expect(clause.includes("its one host is the exact parsed `api.cloudflare.com`"), "the clause lost its one contacted host").toBe(true);
+    // `app.soleur.ai` occurs once, and only inside the filter phrase, so it cannot drift into a second target.
+    expect((clause.match(/app\.soleur\.ai/g) ?? []).length, "`app.soleur.ai` must occur exactly once in the Cloudflare clause").toBe(1);
+    expect(clause.includes("on the fixed host `app.soleur.ai` and path `/health`"), "`app.soleur.ai` left the fixed-filter phrase").toBe(true);
   });
 
   test("the host extractor is live: an extra host on .xyz, .cloud, an IP, a URL with userinfo or a wildcard goes red; a file path does not", () => {
     const clause = slice(sdItem(2), "Cloudflare through", "are not Class R");
     expect(clause, "item 2 lost the Cloudflare clause").not.toBe("");
     for (const extra of ["evil.xyz", "evil.cloud", "127.0.0.1", "https://u:p@a.example.io:8443/p", "*.cloudflare.com", "evil.example/path", "10.0.0.1:8080", "api.cloudflare.com.evil.sh"]) {
-      expect(hostTokens(`${clause} and also \`${extra}\`.`), `an added "${extra}" must change the host set`).not.toEqual(["api.cloudflare.com"]);
+      expect(hostTokens(`${clause} and also \`${extra}\`.`), `an added "${extra}" must change the host set`).not.toEqual(CF_CLAUSE_HOSTS);
     }
     expect(hostTokens("see `plugins/soleur/scripts/cloudflare-readonly.sh` and origin/main, run `a/b.c`"), "file paths are not hosts").toEqual([]);
     expect(hostTokens("one `api.cloudflare.com`, two"), "a plain host with trailing punctuation").toEqual(["api.cloudflare.com"]);
   });
 
   test("Cloudflare slicers are live: a clause re-flowed over lines still slices, a missing anchor slices to empty", () => {
-    const flow = flatten("Cloudflare through\n  `x.sh` only, with one of its six\n subcommands `a` or `b`,   as a status: the wrapper sends GET only. The Cloudflare MCP server are not Class R.");
+    const flow = flatten(`Cloudflare through\n  \`x.sh\` only, with one of its ${CF_COUNT_WORD}\n subcommands \`a\` or \`b\`,   as a status: the wrapper sends GET only. The Cloudflare MCP server are not Class R.`);
     expect(slice(flow, "Cloudflare through", "are not Class R").includes("sends GET only")).toBe(true);
-    expect(backticked(slice(flow, "its six subcommands", ", as a status"))).toEqual(["a", "b"]);
+    expect(backticked(slice(flow, `its ${CF_COUNT_WORD} subcommands`, ", as a status"))).toEqual(["a", "b"]);
     expect(slice(flow, "no such anchor", ":")).toBe("");
   });
 

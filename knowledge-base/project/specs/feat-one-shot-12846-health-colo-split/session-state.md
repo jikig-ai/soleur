@@ -25,3 +25,4 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; repo-research-analyst, lear
 
 - constraint: No production apply, workflow dispatch, or credential change without the owner's typed go.
 - constraint: Do not dispatch apply-web-platform-infra.yml before #12931 lands.
+- cto_spawns=1 (work phase, rulings W1-W11)
