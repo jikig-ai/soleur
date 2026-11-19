@@ -632,6 +632,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_RULES_TEST_SH_PATHS=(
   "plugins/soleur/test/gitleaks-rules.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
+AFFECTED_PLUGINS_SOLEUR_TEST_HEALTH_COLO_FALSIFICATION_TEST_SH_PATHS=(
+  "knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md"  # real read: the recipe and recorded-outputs marker blocks (CTO D3, #12846)
+  "plugins/soleur/test/fixtures/health-colo-falsification/"  # the synthetic base fixture every case patches
+  "plugins/soleur/test/health-colo-falsification.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_HOLD_GATE_EVAL_TEST_SH_PATHS=(
   "knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md"  # real read: the runbook wording pin (plugins/soleur/test/hold-gate-eval.test.sh:914)
   "plugins/soleur/scripts/lib/bearer-fetch.sh"  # sourced by the SUT and copied into the mutant sandboxes (plugins/soleur/test/hold-gate-eval.test.sh:1375)

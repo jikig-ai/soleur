@@ -408,6 +408,205 @@ Ruled by CTO agent, 2026-11-17 (marker; per PR #12843 and #12845): trigger (2) o
 
 Save every analytics read with the Handoff step 2 loop above and commit the file it writes; never leave a read in a session scratchpad.
 
+##### Addendum 2026-11-19: the per-colo host-scoped read and its pre-registered test (Ref #12846)
+
+Additions-only: the 2026-11-09, 2026-11-11 and 2026-11-16 addenda above are left as written. This addendum is conditioned on the merge of the change that adds `analytics-health-colo` to `plugins/soleur/scripts/cloudflare-readonly.sh` (Ref #12846). It was written before any `analytics-health-colo` data existed: it fixes the window and the test first, so the data cannot shape the rule. No cause is claimed for anything below.
+
+**The read.** `cloudflare-readonly.sh analytics-health-colo <hours> <end-offset-hours>`, Records key `Cloudflare analytics-health-colo (H) #12846`, run as `doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh analytics-health-colo <H> <O>` from a checkout that matches `origin/main`. It sends one fixed, compiled-in, read-only GraphQL query (a POST, token `CF_API_TOKEN_ANALYTICS_READ`, zone from Doppler `CF_ZONE_ID`) for the complete UTC hours `[E - H h, E)`, where `E` is the current hour minus `O` hours. `H` is 1 to 216 and `O` is 0 to 527, so a window reaches back at most 743 hours. It covers Cloudflare-side origin response time (average, p50 and p90 of `originResponseDurationMs`) and the sampled request count, per hour and per colo (`coloCode`), for requests to the host `app.soleur.ai` on the path `/health`. It does not cover any other host or path, any client-side timing, or the origin's own view of a request. It has no `requestSource` filter, on purpose (CTO F5): the only differences from `analytics-health` (F) are the host filter and the colo split, so the 2026-11-11 path-only evidence file can check the new rows. The Step C query shape above included `requestSource: "eyeball"`; it was left out here on purpose. Line 2 prints `zone` (the zone the read describes), `window_end`, `window_hours`, `rows`, `truncated` (true at the 10000-row cap), a fixed `note` and `series`. A colo code is printed only as three capital letters, otherwise as `null`. Counts are sampled estimates. The read's results are always `Unverified:` lines, never `Checked:`, like F and G.
+
+**The pre-registered window (R1)**, verbatim from the 2026-11-19 decision record (`knowledge-base/project/specs/feat-one-shot-12846-health-colo-split/decision-challenges.md`):
+
+> Ruled by CTO agent, 2026-11-19: H=216, window end E=2026-11-12T12:00:00Z (start 2026-11-03T12:00:00Z), O = (floor_hour(now) - E)/3600 via `date -u`, refuse outside 0..528; record E, O and the read instant - fixing the target window makes the read reproducible whatever the read time; the flip sits at +107.7 h / -108.3 h.
+
+CTO T6 later narrowed the offset bound to 0..527; the handoff loop below refuses an offset outside 0..527.
+
+**The rule as first ruled (R2, superseded the same day by T2)**, verbatim:
+
+> Ruled by CTO agent, 2026-11-19: (superseded by T2 the same day) a colo-hour qualifies at sampled count >= 10; a colo is judged with >= 24 qualifying hours each side; baseline = qualifying hours stamped <= 2026-11-07T22Z (23Z is mixed, never baseline); change point = the first qualifying hour whose p90 exceeds the colo's baseline max, and it must be 2026-11-07T23Z or 2026-11-08T00Z; sustained = every qualifying hour in the next 24 h above the baseline max with >= 6 of those hours qualifying, else "not judged"; host-level "supported" only if >= 1 judged colo is positive, no judged colo shows a sustained exceedance starting outside +-1 h, and no other event is in the window; else "not supported" or "inconclusive" with the reason - deliberately strict against false attribution.
+
+**The falsification rule that replaces it (T2)**, verbatim:
+
+> Ruled by CTO agent, 2026-11-19: an "other event" is any origin-path change in `[2026-11-07T22:43Z, 2026-11-08T00:43Z]` (the 23:47-23:50Z release deploy, the 00:14-00:15Z restart pair, Doppler writes 22:54:34Z, 23:41:47Z, 00:13:25Z, any `git log origin/main` release deployed in that span); the read is a falsification test with outcomes `not supported` or `inconclusive` only, and the label stays "provisionally attributed" unless the outcome is `not supported`; the 23Z hour is never baseline and never counts toward either side's 24 hours but can be a change point; change point = first qualifying hour at or after 23Z whose p90 exceeds the colo's baseline max; a colo is positive when its change point is 23Z or 00Z and it is sustained (hours cp+1..cp+24 each above the baseline max, >= 6 of them qualifying); every qualifying hour from 01Z on is scanned as a possible start of a sustained run; verdict `not supported` if >= 1 colo is judged and none is positive, or if any non-positive judged colo has a sustained run starting at 01Z or later; otherwise `inconclusive` with the reason; the jq recipe goes into this PR's runbook addendum and is run against three synthetic fixtures before real data exists - a release deploy shares the flip's hour, so "supported" was never reachable (dissent: a pre-registered exclusion of that deploy by its diff was rejected as judgment-dependent).
+
+**The null-colo rule (D2)**, verbatim:
+
+> Ruled by CTO agent, 2026-11-19: `colo: null` rows are never judged; any null-colo row with count >= 10 makes the verdict `inconclusive: invalid-colo`; the verdict line and the handoff kept line print `null_colo_rows=<n> null_colo_qualifying=<m>` - a hidden colo can change the verdict only if it has qualifying hours, so rows under 10 cannot move it, and voiding on any null row could waste the only read before the old zone is deleted.
+
+**The terms, as the recipe below implements them.** T2 defines four terms. It keeps three more from R2 without restating them.
+
+- Kept from R2. "Qualifying": a colo-hour row with `count >= 10`. "Baseline": the qualifying hours stamped 2026-11-07T22Z or earlier; the baseline max is the largest `p90_ms` among them. "Judged": a colo with at least 24 qualifying hours on each side, where the before side is the baseline and the after side is the qualifying hours stamped 2026-11-08T00Z or later. The 23Z hour counts toward neither side.
+- T2 term 1, "other event": any origin-path change in `[2026-11-07T22:43Z, 2026-11-08T00:43Z]` (listed below).
+- T2 term 2, "change point": the first qualifying hour at or after 2026-11-07T23Z whose `p90_ms` is above the colo's baseline max.
+- T2 term 3, "sustained" from a start hour `s`: each of the 24 clock hours `s+1` to `s+24` has a row whose `p90_ms` is above the baseline max, and at least 6 of those 24 rows qualify. The recipe steps by clock hour, never by row position. Three readings are fixed here, before any data exists: a clock hour with no row is not above the baseline max, so it breaks the run; a row under count 10 must still be above the baseline max (it only does not count toward the 6); a value equal to the baseline max is not above it.
+- T2 term 4, "positive": a judged colo whose change point is 2026-11-07T23Z or 2026-11-08T00Z and is sustained from that hour.
+- The scan: for each judged colo that is not positive, every qualifying hour from 2026-11-08T01Z on whose `p90_ms` is above the baseline max is tried as the start of a sustained run. A colo that is not judged is never positive and is never scanned.
+- The verdict: `not supported` if at least one colo is judged and none is positive, or if any judged colo that is not positive has a sustained run starting at 01Z or later. Otherwise `inconclusive`, with one reason from the closed set below. `colo: null` rows are never judged (D2).
+
+**The recipe.** Input: one kept `analytics-health-colo` evidence file. Output: line 1 is the verdict, `not supported` or `inconclusive: <reason>`, followed by `; null_colo_rows=<n> null_colo_qualifying=<m>`. Then comes one line per colo, sorted by colo code: whether it was judged, its before and after counts, its baseline max, its change point, whether it is positive, and the first hour from 01Z on that starts a sustained run (`late_run`). Run it from the repository root, exactly as the suite runs it:
+
+```bash
+/usr/bin/env -i /usr/bin/jq -r -f <(awk '/^<!-- health-colo-r2-recipe:start -->$/ { f = 1; next } /^<!-- health-colo-r2-recipe:end -->$/ { f = 0 } f && /^```/ { g = !g; next } f && g { print }' knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md) "$file"
+```
+
+If the main read was split into two H=108 files (see the keep rules below), join them first, the newer file first, and run the recipe on the joined file:
+
+```bash
+/usr/bin/env -i /usr/bin/jq -s '.[0] + {window_hours: (map(.window_hours) | add), rows: (map(.rows) | add), truncated: (map(.truncated) | any), series: (map(.series) | add | sort_by(.hour, .colo))}' "$newer" "$older" > "$joined"
+```
+
+The `inconclusive:` reasons are a closed set. The recipe prints no other:
+
+| Reason | When |
+|---|---|
+| `bad-input` | The input is not a kept `analytics-health-colo` file: not an object, `subcommand` is not `analytics-health-colo`, `truncated` is not `false`, or a row has an hour that is not on the hour, a colo that is neither three capital letters nor `null`, a missing or negative count, or a missing `p90_ms`, or two rows share an hour and a colo. Line 1 is then `inconclusive: bad-input` alone. |
+| `invalid-colo` | Any `colo: null` row has `count >= 10` (D2). It wins over every other outcome, `not supported` included. |
+| `no-judged-colo` | No colo is judged. |
+| `positive-colo` | At least one judged colo is positive, and no judged colo that is not positive has a sustained run from 01Z on. This is the outcome the flip predicts, and it is still not "supported" (see below). |
+
+<!-- health-colo-r2-recipe:start -->
+
+```jq
+# health-colo R2 recipe: CTO T2 with the D2 null-colo rule, pre-registered 2026-11-19 (Ref #12846).
+# Input: one kept analytics-health-colo evidence file. Output: line 1 is the verdict, then one line per colo.
+# k is the clock-hour offset from the straddling hour 2026-11-07T23Z (k = 0); 00Z is k = 1, 01Z is k = 2.
+def F: "2026-11-07T23:00:00Z" | fromdateiso8601;
+def q: .count >= 10;
+def okrow: type == "object"
+  and (.hour | type == "string" and test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:00:00Z\\z"))
+  and (.colo == null or (.colo | type == "string" and test("\\A[A-Z]{3}\\z")))
+  and (.count | type == "number" and . >= 0)
+  and (.p90_ms | type == "number");
+def okinput: type == "object" and .subcommand == "analytics-health-colo" and .truncated == false
+  and (.series | type == "array") and (.series | all(okrow))
+  and ((.series | map([.hour, .colo]) | unique | length) == (.series | length));
+def judge:
+  (map(. + {k: (((.hour | fromdateiso8601) - F) / 3600)}) | sort_by(.k)) as $rows
+  | ($rows | map(select(q))) as $qr
+  | ($qr | map(select(.k <= -1))) as $base
+  | ($qr | map(select(.k >= 1))) as $after
+  | ($base | map(.p90_ms) | max) as $m
+  | (reduce $rows[] as $r ({}; .[$r.k | tostring] = $r)) as $by
+  | def sustained: . as $s | [range($s + 1; $s + 25) | $by[tostring]] as $w
+      | ($w | all(. != null and .p90_ms > $m)) and ([$w[] | select(. != null and q)] | length >= 6);
+    (($base | length) >= 24 and ($after | length) >= 24) as $judged
+  | ([$qr[] | select(.k >= 0 and .p90_ms > $m)] | .[0]) as $cp
+  | ($judged and $cp != null and ($cp.k == 0 or $cp.k == 1) and ($cp.k | sustained)) as $positive
+  | (if $judged and ($positive | not)
+     then [$qr[] | select(.k >= 2 and .p90_ms > $m) | .k | select(sustained)] | .[0]
+     else null end) as $late
+  | {judged: $judged, before: ($base | length), after: ($after | length), baseline_max: $m,
+     change_point: (if $cp == null then null else $cp.hour end), positive: $positive,
+     late_run: (if $late == null then null else $by[$late | tostring].hour end)};
+if okinput | not then "inconclusive: bad-input"
+else
+  ([.series[] | select(.colo == null)] | length) as $n
+  | ([.series[] | select(.colo == null and q)] | length) as $nq
+  | [.series | map(select(.colo != null)) | group_by(.colo)[] | {colo: .[0].colo} + judge] as $c
+  | [$c[] | select(.judged)] as $j
+  | (if $nq > 0 then "inconclusive: invalid-colo"
+     elif ($j | length) == 0 then "inconclusive: no-judged-colo"
+     elif ($j | all(.positive | not)) or ($j | any(.late_run != null)) then "not supported"
+     else "inconclusive: positive-colo" end) as $v
+  | "\($v); null_colo_rows=\($n) null_colo_qualifying=\($nq)",
+    ($c[] | "colo=\(.colo) judged=\(.judged) before=\(.before) after=\(.after) baseline_max=\(.baseline_max) change_point=\(.change_point) positive=\(.positive) late_run=\(.late_run)")
+end
+```
+
+<!-- health-colo-r2-recipe:end -->
+
+**Recorded outputs**, 2026-11-19, before any real H data existed: the recipe above, run on the synthetic fixture `plugins/soleur/test/fixtures/health-colo-falsification/base.json` with each case's one-line patch. `plugins/soleur/test/health-colo-falsification.test.sh` checks that this block equals its case list, in order, and that each of seven recipe mutations turns a named case RED. In the base fixture, colo AAA steps from 400 ms to 900 ms p90 at 23Z and colo BBB stays at 400 ms (both at count 20, 26 hours before 23Z and 60 after it).
+
+<!-- health-colo-r2-outputs:start -->
+
+```text
+base-positive-23Z: inconclusive: positive-colo; null_colo_rows=0 null_colo_qualifying=0
+class-none-positive: not supported; null_colo_rows=0 null_colo_qualifying=0
+class-no-judged-colo: inconclusive: no-judged-colo; null_colo_rows=0 null_colo_qualifying=0
+i-cp-00Z-positive: inconclusive: positive-colo; null_colo_rows=0 null_colo_qualifying=0
+i-cp-01Z-not-positive: not supported; null_colo_rows=0 null_colo_qualifying=0
+ii-before-23-not-judged: inconclusive: no-judged-colo; null_colo_rows=0 null_colo_qualifying=0
+ii-before-24-judged: not supported; null_colo_rows=0 null_colo_qualifying=0
+ii-after-23-not-judged: inconclusive: no-judged-colo; null_colo_rows=0 null_colo_qualifying=0
+ii-after-24-judged: not supported; null_colo_rows=0 null_colo_qualifying=0
+iii-6-qualifying-positive: inconclusive: positive-colo; null_colo_rows=0 null_colo_qualifying=0
+iii-5-qualifying-not-positive: not supported; null_colo_rows=0 null_colo_qualifying=0
+iv-dip-at-cp24-breaks: not supported; null_colo_rows=0 null_colo_qualifying=0
+iv-dip-at-cp25-holds: inconclusive: positive-colo; null_colo_rows=0 null_colo_qualifying=0
+v-missing-hour-in-run: not supported; null_colo_rows=0 null_colo_qualifying=0
+v-missing-hour-after-run: inconclusive: positive-colo; null_colo_rows=0 null_colo_qualifying=0
+vi-count-9-in-run: not supported; null_colo_rows=0 null_colo_qualifying=0
+vi-count-10-in-run: inconclusive: positive-colo; null_colo_rows=0 null_colo_qualifying=0
+vi-p90-equal-baseline-max: not supported; null_colo_rows=0 null_colo_qualifying=0
+vi-p90-above-baseline-max: inconclusive: positive-colo; null_colo_rows=0 null_colo_qualifying=0
+vii-late-run-from-06Z: not supported; null_colo_rows=0 null_colo_qualifying=0
+vii-exceedance-01Z-only: inconclusive: positive-colo; null_colo_rows=0 null_colo_qualifying=0
+viii-late-run-from-01Z: not supported; null_colo_rows=0 null_colo_qualifying=0
+viii-run-from-00Z-positive: inconclusive: positive-colo; null_colo_rows=0 null_colo_qualifying=0
+ix-null-colo-under-10: inconclusive: positive-colo; null_colo_rows=3 null_colo_qualifying=0
+ix-null-colo-at-10: inconclusive: invalid-colo; null_colo_rows=3 null_colo_qualifying=1
+ix-null-colo-overrides-not-supported: inconclusive: invalid-colo; null_colo_rows=1 null_colo_qualifying=1
+bad-input-truncated: inconclusive: bad-input
+bad-input-other-subcommand: inconclusive: bad-input
+bad-input-duplicate-row: inconclusive: bad-input
+```
+
+<!-- health-colo-r2-outputs:end -->
+
+**Other events in the window `[2026-11-07T22:43Z, 2026-11-08T00:43Z]`**, by pointer to this runbook's own records:
+
+- the release run 42426213123 that deployed v0.395.7: `deploy` 23:47:12Z to 23:48:34Z, `verify-peer-deploy` to 23:49:53Z, restart pair 23:48:28Z / 23:49:43Z ("Restarts before and after the flip" above);
+- the v0.395.8 restart pair 00:13:58Z / 00:15:11Z (same table);
+- the v0.395.6 restart pair 22:55:45Z / 22:56:58Z (same table). It is not in T2's list, but it falls inside the window and is an origin-path change by T2's definition;
+- the Doppler `prd_terraform` writes at 22:54:34Z, 23:41:47Z and 00:13:25Z (the Act 3 record above and "What was NOT run before the flip" below);
+- any release in `git log origin/main` deployed in that span.
+
+`cloudflare-readonly.sh change-history` cannot add to this list: it reads only the last 7 days, and its token sits under the dev config, so it cannot reach 2026-11-07.
+
+**"Supported" is not a reachable outcome.** The v0.395.7 release deploy is an origin-side change in the flip's own hour, and a per-colo shape cannot tell the two apart: both act on the origin side. So the label on the p90 step stays "provisionally attributed" (the CTO ruling of 2026-11-16 above) unless the outcome is `not supported`. Every `inconclusive:` outcome, `positive-colo` included, leaves the label where it is.
+
+**Deadline.** Only the old zone holds the flip-window hours. It has been in status `moved` since 2026-11-18 and may be deleted from about 2026-11-25, and #12931 will change Doppler `CF_ZONE_ID` to the new zone. A read after either one describes a different zone or none; the printed `zone` field tells which. Hard date for the capture: 2026-11-24 (CTO T3). Run it in the session that lands the change, from a fresh `origin/main`, push the kept evidence files alone on a branch at once, and record the verdict later: the verdict has no deadline, the capture does. The verdict goes into the change that closes #12846, as an `Unverified:` line carrying the recipe's line 1. If the capture cannot run in time, record `Unverified: Cloudflare analytics-health-colo (H) #12846, other: no-zone-access` (or `other: wrong-zone`); the label then stays "provisionally attributed", with the 2026-11-11 evidence file as the only pre-flip hourly record.
+
+**Handoff loop for the H read.** This copy is the one that runs. Paste it into a bash shell at the repository root.
+
+```bash
+d=knowledge-base/engineering/operations/runbooks/evidence; mkdir -p "$d"; sub=analytics-health-colo; fetched=yes
+git fetch -q origin main || fetched=no
+keep='.window_end == $e and .window_hours == $h and (.zone | type == "string" and startswith("5af02a2f")) and .rows > 0 and .truncated == false'
+diag='"zone=\(.zone | tostring | .[0:8]) rows=\(.rows) truncated=\(.truncated) window_end=\(.window_end) window_hours=\(.window_hours)"'
+nulls='"null_colo_rows=\([.series[] | select(.colo == null)] | length) null_colo_qualifying=\([.series[] | select(.colo == null and .count >= 10)] | length)"'
+h_read() { # $1 = H, $2 = window end E (YYYY-MM-DDTHH:00:00Z). 0 kept | 2 truncated only | 1 not kept
+  [ "$fetched" != no ] && git diff --quiet origin/main -- plugins/soleur/scripts/cloudflare-readonly.sh || { echo "other: wrapper-drift"; return 1; }
+  local H="$1" Es="$2" E now O err out rc line1 j f
+  [[ "$Es" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:00:00Z$ ]] || { echo "refused: E is not an on-the-hour UTC stamp"; return 1; }
+  E=$(date -u -d "$Es" +%s) || { echo "refused: date could not read E=$Es"; return 1; }
+  now=$(date -u +%s); O=$(( (now - now % 3600 - E) / 3600 ))
+  [[ "$O" =~ ^[0-9]+$ ]] && [ "$O" -ge 0 ] && [ "$O" -le 527 ] || { echo "refused: H=$H O=$O outside 0..527"; return 1; }
+  err=$(mktemp); out=$(doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh "$sub" "$H" "$O" 2>"$err"); rc=$?
+  line1=$(printf '%s\n' "$out" | sed -n 1p); j=$(printf '%s\n' "$out" | sed -n 2p); f="$d/$(date -u +%F)-$sub-${H}h-off${O}h.json"
+  if [ "$rc" -eq 0 ] && [ "$line1" = "cloudflare-readonly: $sub ok" ] && printf '%s\n' "$j" | /usr/bin/env -i /usr/bin/jq -e --arg e "$Es" --argjson h "$H" "$keep" >/dev/null 2>&1; then
+    rm -f "$err"
+    if [ -L "$d" ] || [ -L "$f" ]; then echo "refused: $f or its directory is a symlink"; return 1; fi
+    ( set -C; printf '%s\n' "$j" > "$f" ) || { echo "refused: $f already exists"; return 1; }
+    echo "kept $f, read at $(date -u +%FT%TZ), $(printf '%s\n' "$j" | /usr/bin/env -i /usr/bin/jq -r "$nulls")"; return 0
+  fi
+  echo "$sub H=$H E=$Es: not kept, rc=$rc, stdout line 1: ${line1:-none}, stderr line 1: $(sed -n 1p "$err"), line 2: $(printf '%s\n' "$j" | /usr/bin/env -i /usr/bin/jq -r "$diag" 2>/dev/null || echo 'not JSON')"; rm -f "$err"
+  if [ "$rc" -eq 0 ] && printf '%s\n' "$j" | /usr/bin/env -i /usr/bin/jq -e '.truncated == true' >/dev/null 2>&1; then return 2; fi
+  return 1
+}
+h_read 216 2026-11-12T12:00:00Z; r=$?
+if [ "$r" -eq 2 ]; then
+  h_read 108 2026-11-12T12:00:00Z; r1=$?; h_read 108 2026-11-08T00:00:00Z; r2=$?
+  echo "split reads: $r1 $r2 (2 = that half truncated again: split it once more into two H=54 reads at its midpoint; 1 = record the line above)"
+fi
+h_read 216 2026-11-18T17:00:00Z   # archival capture of the old zone's last full week; never a verdict input
+```
+
+Keep rules (CTO T3): rc 0, line 1 exactly `cloudflare-readonly: analytics-health-colo ok`, `.window_end == E`, `.window_hours == H`, `.zone` starting `5af02a2f` (the old zone named in #12931; a read of any other zone is not the flip-window record), `.rows > 0`, `.truncated == false`. A truncated main read falls back to two H=108 reads split exactly at 2026-11-08T00Z (one further split to H=54 is allowed). The `.window_end` check also makes a read whose offset was computed in a different hour from the wrapper's own clock fail closed; re-run it. The archival capture (H=216 ending 2026-11-18T17:00Z) is never a verdict input. The loop needs GNU `date` (`-d`), as the wrapper does. Hardening (CTO D5): the wrapper-drift check runs before every read and never `exit`s (a pasted interactive shell would close); `E` and `O` are checked by shape before any range test, and the range test is fail-closed (`[ "" -lt 0 ]` is rc 2, not false); the evidence write is one noclobber write, so an existing file or a dangling symlink refuses it; every jq in the loop runs under `env -i`, so a planted `~/.jq` cannot redefine `startswith`. The kept line prints `null_colo_rows=<n> null_colo_qualifying=<m>` (CTO D2); a not-kept line prints the zone's first 8 characters, `rows`, `truncated`, `window_end` and `window_hours`. The arithmetic, the keep predicate (old zone kept; new zone and `rows: 0` refused), the refusals and `bash -n` were run on 2026-11-19 against a stub `doppler` and synthetic line-2 values; the real `doppler run` line is first exercised by the post-merge read.
+
+**This session's premise read.**
+
+Unverified: Cloudflare analytics-health (F) #12441, premise read for #12846, run 2026-11-19T10:03:19Z through `doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh analytics-health 216`: `ok`, 199 contiguous hourly rows, 2026-11-10T10Z to 2026-11-18T16Z, and no rows after them (the configured zone is the old zone, and its traffic ends at the 2026-11-18 move). Evidence file `knowledge-base/engineering/operations/runbooks/evidence/2026-11-19-analytics-health-216h.json`. The window starts 2026-11-10T10Z, so no pre-flip hour is in it and it adds nothing to the flip comparison. Every figure in it is a sampled estimate.
+
 #### What was NOT run before the flip
 
 - The local read-only plan (Act 0): not run. The flip plan itself (1 change) was read after the fact in the apply log.
