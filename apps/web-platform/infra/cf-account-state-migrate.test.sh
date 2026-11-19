@@ -12,8 +12,8 @@
 #   PRISTINE COPY: each mutant must differ from pristine (cmp), must still parse
 #   (bash -n), and the same check must be GREEN on pristine and RED on the
 #   mutant, for the named reason (WHY), not merely rc != 0.
-# - Fixtures are synthesized. Only the OLD ids are real; they are derived from
-#   the script, never retyped here.
+# - Fixtures are synthesized. Only the OLD ids are real; they are literals
+#   here, checked against the script (never read out of it).
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
@@ -108,12 +108,22 @@ cat >"$SBX/bin/aws" <<'STUB'
 set -uo pipefail
 D="${STUB_DIR:?}"
 printf 'aws %s\n' "$*" >>"$D/calls.log"
+printf 'aws-env region=%s req=%s resp=%s\n' "${AWS_DEFAULT_REGION:-unset}" \
+  "${AWS_REQUEST_CHECKSUM_CALCULATION:-unset}" "${AWS_RESPONSE_CHECKSUM_VALIDATION:-unset}" >>"$D/calls.log"
 [[ "${1:-} ${2:-}" == "s3 cp" ]] || exit 64
 [[ -s "${3:-}" ]] && jq -r '.serial' "$3" >"$D/aws_src_serial" 2>/dev/null
 if [[ -f "$D/mode.aws" ]]; then exit "$(cat "$D/mode.aws")"; fi
 exit 0
 STUB
-chmod +x "$SBX/bin/terraform" "$SBX/bin/aws"
+# timeout shim: records the bound, then runs the command (no real clock in the suite). A
+# simulated timeout is the aws stub exiting 124, which is what timeout(1) itself returns.
+cat >"$SBX/bin/timeout" <<'STUB'
+#!/usr/bin/env bash
+printf 'timeout %s %s\n' "${1:-}" "${2:-}" >>"${STUB_DIR:?}/calls.log"
+shift
+exec "$@"
+STUB
+chmod +x "$SBX/bin/terraform" "$SBX/bin/aws" "$SBX/bin/timeout"
 
 # ---------------------------------------------------------------------------
 # FIXTURES
@@ -184,9 +194,17 @@ root|cloudflare_list.hosts|cloudflare_list|null|$OA
 EOF
 }
 setup_empty_obj() { setup_mixed "$1"; printf '{}\n' >"$1/show.0.json"; }
+# D10: the state after a committed forget: R2 (never forgotten) plus non-Cloudflare entries.
 setup_no_cf() {
   fx "$1" 3 <<EOF
 root|cloudflare_r2_bucket.state|cloudflare_r2_bucket|absent|$OA
+root|hcloud_server.web["web-9"]|hcloud_server|absent|absent
+root|data.cloudflare_zone.z|cloudflare_zone|$OZ|absent|data
+EOF
+}
+# No managed cloudflare_* at all (not even R2): an empty or foreign state.
+setup_no_cf_at_all() {
+  fx "$1" 3 <<EOF
 root|hcloud_server.web["web-9"]|hcloud_server|absent|absent
 root|data.cloudflare_zone.z|cloudflare_zone|$OZ|absent|data
 EOF
@@ -217,8 +235,18 @@ root|cloudflare_record.apex|cloudflare_record|$OZ|absent
 root|cloudflare_r2_bucket.luks|cloudflare_r2_bucket|absent|$OA
 EOF
 }
+# Another cloudflare_r2_* type on the legacy account (the carve-out is the whole family).
+setup_r2_family() {
+  fx "$1" 9 <<EOF
+root|cloudflare_record.apex|cloudflare_record|$OZ|absent
+root|cloudflare_r2_bucket.luks|cloudflare_r2_bucket|absent|$OA
+root|cloudflare_r2_bucket_cors.luks|cloudflare_r2_bucket_cors|absent|$OA
+EOF
+}
 with_mode() { printf '%s' "$3" >"$1/mode.$2"; }
 setup_aws_fail()   { setup_mixed "$1"; with_mode "$1" aws 1; }
+setup_aws_timeout() { setup_mixed "$1"; with_mode "$1" aws 124; }
+setup_norunner()   { setup_mixed "$1"; : >"$1/norunner"; }
 setup_pull_fail()  { setup_mixed "$1"; with_mode "$1" pull fail; }
 setup_pull_empty() { setup_mixed "$1"; with_mode "$1" pull empty; }
 setup_pull_noser() { setup_mixed "$1"; with_mode "$1" pull noserial; }
@@ -229,11 +257,14 @@ setup_rm_fail()    { setup_mixed "$1"; with_mode "$1" rm fail; }
 setup_ignore()     { setup_mixed "$1"; with_mode "$1" rm ignore; }
 
 # run_sut <dir> <script> [args...]: default args when none given; an argument
-# "__D__" becomes <dir>/given-backups; <dir>/noendpoint leaves R2_ENDPOINT unset.
+# "__D__" becomes <dir>/given-backups; <dir>/noendpoint leaves R2_ENDPOINT unset. Otherwise
+# R2_ENDPOINT is a HOSTILE value: the script must ignore it for its pinned literal.
 run_sut() {
   local d="$1" s="$2" x; shift 2
   [[ $# -gt 0 ]] || set -- --new-zone "$NZ" --new-account "$NA"
-  local -a args=() envs=(PATH="$SBX/bin:$PATH" STUB_DIR="$d" RUNNER_TEMP="$d/runner")
+  local -a args=() envs=(PATH="$SBX/bin:$PATH" STUB_DIR="$d")
+  # <dir>/norunner: no RUNNER_TEMP, TMPDIR=<dir>/tmp (the script's mktemp fallback lands there).
+  if [[ -f "$d/norunner" ]]; then mkdir -p "$d/tmp"; envs+=(TMPDIR="$d/tmp"); else envs+=(RUNNER_TEMP="$d/runner"); fi
   for x in "$@"; do [[ "$x" == __D__ ]] && x="$d/given-backups"; args+=("$x"); done
   [[ -f "$d/noendpoint" ]] || envs+=(R2_ENDPOINT="https://r2.invalid")
   (cd "$d/tf" && env -u R2_ENDPOINT -u RUNNER_TEMP "${envs[@]}" bash "$s" "${args[@]}") \
@@ -291,6 +322,13 @@ chk_r2_kept() {
     "$(final_show "$d")" >/dev/null || { WHY="r2-missing-from-state"; return 1; }
 }
 
+chk_r2_family_kept() {
+  local d="$1"
+  [[ "$(rc_of "$d")" == 0 ]] || { WHY="rc:$(rc_of "$d")"; return 1; }
+  if grep -q '^cloudflare_r2_' "$d/rm_args.1" 2>/dev/null; then WHY="r2-forgotten"; return 1; fi
+  grep -qx 'cf-state-migrate verdict=ok removed=1 skipped=0' "$d/out.txt" || { WHY="verdict-line"; return 1; }
+}
+
 # chk_abort <dir> <reason>: refused, nothing removed, no state rm call.
 chk_abort() {
   local d="$1" r="$2"
@@ -307,7 +345,28 @@ chk_abort_unknown() { chk_abort "$1" unknown-id; }
 chk_abort_mixed()   { chk_abort "$1" mixed-ids; }
 chk_abort_r2()      { chk_abort "$1" r2-in-rm-set; }
 chk_abort_upload()  { chk_abort "$1" backup-upload-failed; }
+chk_abort_upload_timeout() { chk_abort "$1" backup-upload-timeout; }
 chk_abort_backup()  { chk_abort "$1" backup-failed; }
+
+# D10: nothing to forget in a populated state -> ok removed=0, and NO backup (no pull, no aws).
+chk_r2_only_ok() {
+  local d="$1"
+  [[ "$(rc_of "$d")" == 0 ]] || { WHY="rc:$(rc_of "$d")"; return 1; }
+  grep -qx 'cf-state-migrate verdict=ok removed=0 skipped=0' "$d/out.txt" || { WHY="verdict-line"; return 1; }
+  if grep -qE '^aws|^terraform state pull' "$d/calls.log"; then WHY="backup-taken"; return 1; fi
+  chk_no_rm "$d" || return 1
+  [[ "$(cat "$d/counter")" == 0 ]] || { WHY="state-changed"; return 1; }
+  chk_no_leak "$d" || return 1
+}
+
+# The mktemp fallback (no RUNNER_TEMP, no --backup-dir) holds a full-state copy: gone on exit.
+chk_fallback_cleaned() {
+  local d="$1" left
+  [[ "$(rc_of "$d")" == 0 ]] || { WHY="rc:$(rc_of "$d")"; return 1; }
+  grep -q '^aws s3 cp ' "$d/calls.log" || { WHY="no-upload"; return 1; }
+  left="$(find "$d/tmp" -name 'pre-cf-account-migration-*.tfstate' | wc -l)"
+  [[ "$left" -eq 0 ]] || { WHY="fallback-left:$left"; return 1; }
+}
 
 # chk_post_fail <dir> <reason>: the write ran; the failure is loud and names the backup.
 chk_post_fail() {
@@ -316,6 +375,8 @@ chk_post_fail() {
   grep -qx "cf-state-migrate verdict=abort reason=$r" "$d/out.txt" || { WHY="reason:$(grep -o 'reason=.*' "$d/out.txt" | head -n1)"; return 1; }
   grep -q 'PARTIALLY MIGRATED' "$d/err.txt" || { WHY="not-loud"; return 1; }
   grep -q 's3://soleur-terraform-state/web-platform/backups/pre-cf-account-migration-' "$d/err.txt" || { WHY="backup-not-named"; return 1; }
+  # The uploaded object is the backup; the local file is deleted with the job's work dir.
+  if grep -qE 'local copy|runner/cf-migrate/pre-cf-account-migration-' "$d/err.txt"; then WHY="names-local-copy"; return 1; fi
   if grep -q 'verdict=ok' "$d/out.txt"; then WHY="ok-printed"; return 1; fi
   chk_no_leak "$d" || return 1
 }
@@ -332,8 +393,19 @@ chk_backup_first() {
   [[ -n "$up" && "$up" -lt "$rmn" ]] || { WHY="rm-before-backup"; return 1; }
   [[ "$(first_line "$d" '^terraform state pull')" -lt "$rmn" ]] || { WHY="rm-before-pull"; return 1; }
   [[ "$(cat "$d/aws_src_serial" 2>/dev/null)" == 41 ]] || { WHY="backup-not-pre-migration"; return 1; }
-  grep -qE '^aws s3 cp [^ ]+/pre-cf-account-migration-[0-9]{8}T[0-9]{6}Z\.tfstate s3://soleur-terraform-state/web-platform/backups/pre-cf-account-migration-[0-9]{8}T[0-9]{6}Z\.tfstate --endpoint-url https://r2\.invalid' "$d/calls.log" \
+  grep -qE '^aws s3 cp [^ ]+/pre-cf-account-migration-[0-9]{8}T[0-9]{6}Z\.tfstate s3://soleur-terraform-state/web-platform/backups/pre-cf-account-migration-[0-9]{8}T[0-9]{6}Z\.tfstate ' "$d/calls.log" \
     || { WHY="upload-target"; return 1; }
+}
+
+# The upload goes to the PINNED legacy-account endpoint whatever R2_ENDPOINT says (run_sut
+# sets it to https://r2.invalid), under the shared R2 env prefix and a 60 s bound.
+R2_PIN="https://${OA}.r2.cloudflarestorage.com"
+chk_r2_call_shape() {
+  local d="$1"
+  grep -qF -- "--endpoint-url $R2_PIN" "$d/calls.log" || { WHY="endpoint-not-pinned"; return 1; }
+  if grep -q 'r2\.invalid' "$d/calls.log"; then WHY="env-endpoint-used"; return 1; fi
+  grep -qx 'aws-env region=auto req=when_required resp=when_required' "$d/calls.log" || { WHY="aws-env-prefix"; return 1; }
+  grep -qx 'timeout 60 aws' "$d/calls.log" || { WHY="no-timeout"; return 1; }
 }
 
 # Rehearsal: no aws call at all, backup only under the given dir, mode 600.
@@ -431,22 +503,36 @@ verdict "$r" "H2: the script itself also refuses a state rm that reports no remo
 # --- Row 1: R2 bucket. -------------------------------------------------------
 printf '\n[row 1] R2 buckets are never forgotten\n'
 green "row 1 control: R2 bucket on the OLD account is not a candidate and survives" chk_r2_kept setup_r2_old
-M1A="$(mk_mutant r2-filter 's/ and \.type != "cloudflare_r2_bucket")/)/')"
+M1A="$(mk_mutant r2-filter 's#^               and ((.type // "") | startswith("cloudflare_r2_") | not)) \]$#               ) ]#')"
 green_mut() { # <label> <mutant> <check> <setup>: a mutant another guard must still catch
   local d; d="$(run_case "$1" "$2" "$4")"; WHY=""
   if "$3" "$d"; then verdict 0 "$1"; else verdict 1 "$1 (WHY=$WHY)"; fi
 }
 green_mut "row 1: classifier bug lets R2 into the candidate set -> defense aborts, 0 removed" "$M1A" chk_abort_r2 setup_r2_old
-M1B="$(mk_mutant r2-filter-and-defense 's/ and \.type != "cloudflare_r2_bucket")/)/' 's/|| abort r2-in-rm-set/|| true/')"
+M1B="$(mk_mutant r2-filter-and-defense 's#^               and ((.type // "") | startswith("cloudflare_r2_") | not)) \]$#               ) ]#' 's/|| abort r2-in-rm-set/|| true/')"
 red "row 1 mutant: filter and defense both removed" "$M1B" chk_r2_kept '^r2-forgotten$' setup_r2_old
+green "row 1b: another cloudflare_r2_* type on the legacy account is not a candidate" chk_r2_family_kept setup_r2_family
+# shellcheck disable=SC2016 # sed expressions match literal script text
+M1C="$(mk_mutant r2-bucket-only 's#startswith("cloudflare_r2_") | not)) \]$#. != "cloudflare_r2_bucket")) ]#' 's/\[\[ "$type" != cloudflare_r2_\* \]\]/[[ "$type" != cloudflare_r2_bucket ]]/')"
+red "row 1b mutant: the carve-out narrowed back to the bucket type" "$M1C" chk_r2_family_kept '^r2-forgotten$' setup_r2_family
 
 # --- Row 2: 0 checked. -------------------------------------------------------
 printf '\n[row 2] zero candidates refused\n'
 green "row 2: show -json returns {} -> abort zero-candidates" chk_abort_zero setup_empty_obj
-green "row 2: state with zero non-R2 cloudflare_* entries -> abort zero-candidates" chk_abort_zero setup_no_cf
+green "row 2: no managed cloudflare_* at all (not even R2) -> abort zero-candidates" chk_abort_zero setup_no_cf_at_all
 green "row 2: unparseable show -json -> abort show-unparseable" chk_abort_garbage setup_garbage
-M2="$(mk_mutant zero-refusal 's/|| abort zero-candidates/|| true/')"
-red "row 2 mutant: zero-candidate refusal removed" "$M2" chk_abort_zero '^rc:0$' setup_empty_obj
+# D10: after a committed forget the state holds R2 plus non-Cloudflare entries only. A
+# re-dispatch must reach the plan: ok removed=0, and no backup and no state rm.
+green "row 2 (D10): R2 plus non-Cloudflare only -> ok removed=0, no backup, no state rm" chk_r2_only_ok setup_no_cf
+# shellcheck disable=SC2016 # sed expressions match literal script text
+M2="$(mk_mutant zero-witness 's/    if (( n_r2 >= 1 )); then/    if true; then/')"
+red "row 2 mutant: the R2 witness dropped (empty reads as ok)" "$M2" chk_abort_zero '^rc:0$' setup_no_cf_at_all
+M2E="$(mk_mutant zero-refusal 's/^    abort zero-candidates /    return 0 # /')"
+red "row 2 mutant: the zero-candidate refusal removed" "$M2E" chk_abort_zero '^rc:0$' setup_empty_obj
+M2W="$(mk_mutant zero-always-abort 's/^      return 0$/      abort zero-candidates "x"/')"
+red "row 2 (D10) mutant: zero candidates always abort (the pre-ruling deadlock)" "$M2W" chk_r2_only_ok '^rc:1$' setup_no_cf
+M2O="$(mk_mutant backup-before-read '/^take_backup$/d' 's/^read_candidates$/take_backup\nread_candidates/')"
+red "row 2 (D10) mutant: backup taken before the remove set is known" "$M2O" chk_r2_only_ok '^backup-taken$' setup_no_cf
 
 # --- Row 2b: both ids null. --------------------------------------------------
 printf '\n[row 2b] unclassifiable entry\n'
@@ -477,13 +563,27 @@ green "row 4: aws s3 cp exits 1 -> abort, 0 removed" chk_abort_upload setup_aws_
 green "row 4: state pull fails -> abort, 0 removed" chk_abort_backup setup_pull_fail
 green "row 4: state pull empty -> abort, 0 removed" chk_abort_backup setup_pull_empty
 green "row 4: state pull without numeric serial -> abort, 0 removed" chk_abort_backup setup_pull_noser
-M4="$(mk_mutant upload-check 's/|| abort backup-upload-failed/|| true/')"
+# shellcheck disable=SC2016 # sed expressions match literal script text
+M4="$(mk_mutant upload-check 's/^  elif \[\[ "$rc" -ne 0 \]\]; then$/  elif false; then/')"
 red "row 4 mutant: upload failure ignored" "$M4" chk_abort_upload '^rc:0$' setup_aws_fail
+green "row 4: aws s3 cp times out (rc 124) -> abort backup-upload-timeout, 0 removed" chk_abort_upload_timeout setup_aws_timeout
+# shellcheck disable=SC2016 # sed expressions match literal script text
+M4T="$(mk_mutant upload-timeout 's/^  if \[\[ "$rc" -eq 124 \]\]; then$/  if false; then/')"
+red "row 4 mutant: the rc 124 arm removed (a timeout is mis-named)" "$M4T" chk_abort_upload_timeout '^reason:reason=backup-upload-failed$' setup_aws_timeout
 
 # --- Row 5: order. -----------------------------------------------------------
 printf '\n[row 5] backup precedes state rm (observed call order)\n'
 M5="$(mk_mutant reorder '/^take_backup$/d' 's/^apply_rm$/apply_rm\ntake_backup/')"
 red "row 5 mutant: state rm moved before the backup" "$M5" chk_backup_first '^rm-before-backup$' setup_mixed
+green "row 5b: the upload uses the pinned endpoint (R2_ENDPOINT ignored), the shared R2 env and a 60 s bound" chk_r2_call_shape setup_mixed
+# shellcheck disable=SC2016 # sed expressions match literal script text
+M5E="$(mk_mutant env-endpoint 's/--endpoint-url "$R2_ENDPOINT_PINNED"/--endpoint-url "${R2_ENDPOINT:-$R2_ENDPOINT_PINNED}"/')"
+red "row 5b mutant: the environment picks the endpoint" "$M5E" chk_r2_call_shape '^endpoint-not-pinned$' setup_mixed
+M5P="$(mk_mutant env-prefix 's/^  env AWS_DEFAULT_REGION=auto AWS_REQUEST_CHECKSUM_CALCULATION=when_required \\$/  env \\/')"
+red "row 5b mutant: the shared R2 env prefix dropped" "$M5P" chk_r2_call_shape '^aws-env-prefix$' setup_mixed
+# shellcheck disable=SC2016 # sed expressions match literal script text
+M5T="$(mk_mutant no-timeout 's/^    timeout "$AWS_TIMEOUT_S" aws "$@"/    aws "$@"/')"
+red "row 5b mutant: the aws call is unbounded" "$M5T" chk_r2_call_shape '^no-timeout$' setup_mixed
 
 # --- Row 6: idempotent re-run. -----------------------------------------------
 printf '\n[row 6] re-run after a complete migration\n'
@@ -493,6 +593,8 @@ r=1; [[ "$(rc_of "$d")" == 0 ]] && grep -qx 'cf-state-migrate verdict=ok removed
 verdict "$r" "row 6: second run exits 0 with verdict=ok removed=0 skipped=2"
 r=1; [[ "$(rm_calls "$d")" -eq 1 ]] && r=0
 verdict "$r" "row 6: the second run makes no state rm call"
+r=1; [[ "$(grep -c '^aws s3 cp ' "$d/calls.log")" -eq 1 ]] && r=0
+verdict "$r" "row 6 (D10): the second run uploads no backup (one aws s3 cp across both runs)"
 
 # --- Row 7: removed count and re-list. ---------------------------------------
 printf '\n[row 7] post-write verification\n'
@@ -503,6 +605,25 @@ M7A="$(mk_mutant count-check 's/post_write_fail rm-count-mismatch/true/')"
 red "row 7 mutant: removed-count check removed" "$M7A" chk_post_count '^rc:0$' setup_short
 M7B="$(mk_mutant relist-check 's/post_write_fail old-id-remains/true/')"
 red "row 7 mutant: post-rm re-list check removed" "$M7B" chk_post_stale '^rc:0$' setup_stale
+# shellcheck disable=SC2016 # sed expressions match literal script text
+M7C="$(mk_mutant local-copy-named 's/^  BACKUP_LOCATION="$uri"$/  BACKUP_LOCATION="$uri (local copy $BACKUP_FILE)"/')"
+red "row 7 mutant: the failure message names the deleted local copy" "$M7C" chk_post_serial '^names-local-copy$' setup_double
+
+# --- mktemp fallback cleanup -----------------------------------------------
+printf '\n[fallback] the mktemp backup dir is removed on exit\n'
+green "fallback: no RUNNER_TEMP, no --backup-dir -> uploaded, and the mktemp copy is gone" chk_fallback_cleaned setup_norunner
+# shellcheck disable=SC2016 # sed expressions match literal script text
+MF="$(mk_mutant fallback-kept 's/^  if \[\[ -n "$FALLBACK_DIR" && -d "$FALLBACK_DIR" \]\]; then rm -rf "$FALLBACK_DIR"; fi$/  :/')"
+red "fallback mutant: the mktemp dir is not registered for cleanup" "$MF" chk_fallback_cleaned '^fallback-left:1$' setup_norunner
+
+# --- one source for the R2 literals the job also uses -----------------------
+printf '\n[parity] literals shared with cf-account-migrate-job.sh\n'
+JOB="$SCRIPT_DIR/scripts/cf-account-migrate-job.sh"
+for lit in 'readonly STATE_BUCKET=' 'readonly BACKUP_PREFIX=' 'serial_of() {'; do
+  a="$(grep -F -- "$lit" "$SUT")"; b="$(grep -F -- "$lit" "$JOB")"
+  r=1; [[ -n "$a" && "$(grep -c '' <<<"$a")" -eq 1 && "$a" == "$b" ]] && r=0
+  verdict "$r" "parity: '$lit' is byte-identical in the state-forget script and the job"
+done
 
 # --- Rehearsal. --------------------------------------------------------------
 printf '\n[rehearsal] no aws call, local backup only\n'
@@ -534,15 +655,15 @@ bad_args "31-char zone id" --new-zone "${NZ:1}" --new-account "$NA"
 bad_args "new zone equals OLD zone" --new-zone "$OZ" --new-account "$NA"
 bad_args "new account equals OLD account" --new-zone "$NZ" --new-account "$OA"
 d="$(new_run args-noendpoint)"; setup_mixed "$d"; : >"$d/noendpoint"
-run_sut "$d" "$PRISTINE"
-r=1; [[ "$(rc_of "$d")" == 2 && ! -s "$d/calls.log" ]] && r=0
-verdict "$r" "args: non-rehearsal without R2_ENDPOINT -> exit 2, no terraform/aws call"
+run_sut "$d" "$PRISTINE"; WHY=""
+r=1; [[ "$(rc_of "$d")" == 0 ]] && chk_r2_call_shape "$d" && r=0
+verdict "$r" "args: non-rehearsal without R2_ENDPOINT uploads to the pinned endpoint ($WHY)"
 
 # ---------------------------------------------------------------------------
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=52
+EXPECTED_CASES=71
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

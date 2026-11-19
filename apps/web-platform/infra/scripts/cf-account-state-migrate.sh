@@ -12,11 +12,21 @@
 # 1 abort or post-write verification failure, 2 usage error.
 #
 # Contract:
-# - Backup first. Non-rehearsal uploads it to the state bucket (R2_ENDPOINT
-#   required); rehearsal keeps it local and never invokes `aws`.
-# - The candidate set is every managed cloudflare_* resource in state except
-#   cloudflare_r2_bucket. Every candidate is classified before any write; one
-#   unclassifiable candidate aborts the whole run with 0 removed.
+# - Read and classify first (read-only), then back up, then write. The order is
+#   read_candidates -> classify_all -> (remove set empty: ok, exit 0, NO backup)
+#   -> take_backup -> apply_rm -> verify_after (CTO ruling D10). A re-dispatch
+#   that forgets nothing writes no second "pre-cf-account-migration" object.
+# - Backup before the write. Non-rehearsal uploads it to the state bucket at the
+#   pinned legacy-account R2 endpoint (never an environment-supplied host);
+#   rehearsal keeps it local and never invokes `aws`.
+# - The candidate set is every managed cloudflare_* resource in state except the
+#   cloudflare_r2_* family (R2 stays on the legacy account; the same predicate as
+#   the phase gate and the completion predicate). Every candidate is classified
+#   before any write; one unclassifiable candidate aborts with 0 removed.
+# - Zero candidates is "ok removed=0" only when state still holds a managed
+#   cloudflare_r2_bucket (R2 never leaves, so it witnesses a real, populated state
+#   whose forget already ran). Zero candidates and no R2 bucket aborts
+#   zero-candidates: an empty or foreign state is never a vacuous pass.
 # - One write: a single `terraform state rm` carrying every rm address (the
 #   backend has no lock, so a per-address loop could stop half-way).
 # - After the write: removed count, serial delta (+1) and a re-list are checked.
@@ -26,8 +36,14 @@ umask 077
 
 readonly OLD_ZONE_ID="5af02a2f394e9ba6e0ea23c381a26b67"
 readonly OLD_ACCOUNT_ID="4d5ba6f096b2686fbdd404167dd4e125"
+# STATE_BUCKET and BACKUP_PREFIX are byte-identical to cf-account-migrate-job.sh's (the job's
+# rehearsal "no backup appeared" assertion lists this prefix); the suite pins the pair.
 readonly STATE_BUCKET="soleur-terraform-state"
-readonly BACKUP_PREFIX="web-platform/backups"
+readonly BACKUP_PREFIX="web-platform/backups/"
+# The credentialed upload's destination is a literal, like the predicate's CFAM_R2_ENDPOINT
+# and the backend's endpoint (main.tf): an R2_ENDPOINT from the environment is ignored.
+readonly R2_ENDPOINT_PINNED="https://4d5ba6f096b2686fbdd404167dd4e125.r2.cloudflarestorage.com"
+readonly AWS_TIMEOUT_S=60
 readonly P="cf-state-migrate"
 
 NEW_ZONE_ID=""
@@ -36,14 +52,30 @@ REHEARSAL=0
 BACKUP_DIR=""
 BACKUP_FILE=""
 BACKUP_LOCATION=""
+FALLBACK_DIR=""
 WORK=""
 RM_ADDRS=()
 CAND_LINES=()
 SKIPPED=0
 
 # shellcheck disable=SC2329 # invoked by the EXIT trap
-cleanup() { if [[ -n "$WORK" && -d "$WORK" ]]; then rm -rf "$WORK"; fi; }
+cleanup() {
+  if [[ -n "$WORK" && -d "$WORK" ]]; then rm -rf "$WORK"; fi
+  # The mktemp fallback (no --backup-dir, no RUNNER_TEMP) holds a full-state copy with
+  # secrets; it is removed on exit like WORK. A rehearsal that wants to keep its backup
+  # passes --backup-dir.
+  if [[ -n "$FALLBACK_DIR" && -d "$FALLBACK_DIR" ]]; then rm -rf "$FALLBACK_DIR"; fi
+}
 trap cleanup EXIT
+
+# r2_aws <aws-args...>: every R2 call shares one environment (region auto, checksums only
+# when required: R2 rejects the CLI's default integrity checksums on some versions, the same
+# prefix as cf-account-migration-complete.sh) and one bounded wall clock.
+r2_aws() {
+  env AWS_DEFAULT_REGION=auto AWS_REQUEST_CHECKSUM_CALCULATION=when_required \
+    AWS_RESPONSE_CHECKSUM_VALIDATION=when_required \
+    timeout "$AWS_TIMEOUT_S" aws "$@" --endpoint-url "$R2_ENDPOINT_PINNED"
+}
 
 # abort <reason-code> <message> [exit-code]
 abort() {
@@ -56,7 +88,7 @@ abort() {
 post_write_fail() {
   printf '%s verdict=abort reason=%s\n' "$P" "$1"
   printf '%s: FAILED AFTER STATE WRITE: %s\n' "$P" "$2" >&2
-  printf '%s: state may be PARTIALLY MIGRATED; restore from the backup at %s\n' "$P" "$BACKUP_LOCATION" >&2
+  printf '%s: state may be PARTIALLY MIGRATED. A re-dispatch forgets what is left (fix forward, runbook Halt); the pre-write backup (DR evidence) is %s\n' "$P" "$BACKUP_LOCATION" >&2
   exit 1
 }
 
@@ -80,29 +112,31 @@ parse_args() {
     [[ "$NEW_ZONE_ID" != "$old" ]]    || usage "--new-zone equals an OLD id"
     [[ "$NEW_ACCOUNT_ID" != "$old" ]] || usage "--new-account equals an OLD id"
   done
-  if [[ "$REHEARSAL" -eq 0 && -z "${R2_ENDPOINT:-}" ]]; then
-    usage "R2_ENDPOINT must be set outside --rehearsal (backup upload target)"
-  fi
   command -v jq >/dev/null 2>&1 || usage "jq is required"
   command -v terraform >/dev/null 2>&1 || usage "terraform is required"
 }
+
+# serial_of <state-file>: the numeric serial, byte-identical to cf-account-migrate-job.sh's
+# reader (the suite pins the pair).
+serial_of() { jq -er 'if (.serial | type) == "number" then .serial else error("no serial") end' "$1" 2>/dev/null; }
 
 # pull_serial <out-file>: pull state into the file and print its numeric serial.
 pull_serial() {
   terraform state pull >"$1" 2>/dev/null || return 1
   [[ -s "$1" ]] || return 1
-  jq -er 'if (.serial | type) == "number" then .serial else error("no serial") end' "$1" 2>/dev/null
+  serial_of "$1"
 }
 
 take_backup() {
-  local ts dir
+  local ts dir uri rc
   ts="$(date -u +%Y%m%dT%H%M%SZ)" || abort backup-failed "date failed"
   if [[ -n "$BACKUP_DIR" ]]; then
     dir="$BACKUP_DIR"
   elif [[ -n "${RUNNER_TEMP:-}" ]]; then
     dir="$RUNNER_TEMP/cf-migrate"
   else
-    dir="$(mktemp -d)/cf-migrate" || abort backup-failed "mktemp failed"
+    FALLBACK_DIR="$(mktemp -d)" || abort backup-failed "mktemp failed"
+    dir="$FALLBACK_DIR/cf-migrate"
   fi
   mkdir -p "$dir" || abort backup-failed "cannot create backup dir $dir"
   BACKUP_FILE="$dir/pre-cf-account-migration-$ts.tfstate"
@@ -113,10 +147,16 @@ take_backup() {
     printf '%s backup=local path=%s\n' "$P" "$BACKUP_FILE"
     return 0
   fi
-  local uri="s3://$STATE_BUCKET/$BACKUP_PREFIX/pre-cf-account-migration-$ts.tfstate"
-  aws s3 cp "$BACKUP_FILE" "$uri" --endpoint-url "$R2_ENDPOINT" --only-show-errors >/dev/null \
-    || abort backup-upload-failed "backup upload to $uri failed; 0 removed"
-  BACKUP_LOCATION="$uri (local copy $BACKUP_FILE)"
+  uri="s3://$STATE_BUCKET/${BACKUP_PREFIX}pre-cf-account-migration-$ts.tfstate"
+  r2_aws s3 cp "$BACKUP_FILE" "$uri" --only-show-errors >/dev/null 2>&1; rc=$?
+  if [[ "$rc" -eq 124 ]]; then
+    abort backup-upload-timeout "backup upload to $uri did not finish within ${AWS_TIMEOUT_S}s; 0 removed"
+  elif [[ "$rc" -ne 0 ]]; then
+    abort backup-upload-failed "backup upload to $uri failed (exit $rc); 0 removed"
+  fi
+  # Once uploaded, the R2 object is THE backup: the local file lives in the job's work dir,
+  # which the job's trap deletes, so a failure message must not send anyone to it.
+  BACKUP_LOCATION="$uri"
   printf '%s backup=uploaded uri=%s\n' "$P" "$uri"
 }
 
@@ -128,7 +168,7 @@ list_candidates() {
     [ (.values.root_module // empty) | mods | .resources[]?
       | select(.mode == "managed"
                and ((.type // "") | startswith("cloudflare_"))
-               and .type != "cloudflare_r2_bucket") ]
+               and ((.type // "") | startswith("cloudflare_r2_") | not)) ]
     | .[]
     | [ .address, .type,
         ((.values.zone_id // "") | tostring),
@@ -137,13 +177,29 @@ list_candidates() {
   ' "$1"
 }
 
+# r2_bucket_count <show-json-file>: managed cloudflare_r2_bucket entries (the witness).
+r2_bucket_count() {
+  jq -r '
+    def mods: ., (.child_modules[]? | mods);
+    [ (.values.root_module // empty) | mods | .resources[]?
+      | select(.mode == "managed" and .type == "cloudflare_r2_bucket") ] | length
+  ' "$1"
+}
+
 read_candidates() {
-  local show="$WORK/show.json" out
+  local show="$WORK/show.json" out n_r2
   terraform show -json >"$show" 2>/dev/null || abort show-failed "terraform show -json failed; 0 removed"
   out="$(list_candidates "$show" 2>/dev/null)" || abort show-unparseable "terraform show -json is not parseable state JSON; 0 removed"
-  [[ -n "$out" ]] || abort zero-candidates "0 checked: no cloudflare_* candidates in state (refusing a vacuous pass); 0 removed"
-  # Guarded so an empty list never yields one blank pseudo-candidate.
-  if [[ -n "$out" ]]; then mapfile -t CAND_LINES <<<"$out"; fi
+  if [[ -z "$out" ]]; then
+    n_r2="$(r2_bucket_count "$show" 2>/dev/null)" || abort show-unparseable "terraform show -json is not parseable state JSON; 0 removed"
+    [[ "$n_r2" =~ ^[0-9]+$ ]] || abort show-unparseable "could not count cloudflare_r2_bucket entries; 0 removed"
+    if (( n_r2 >= 1 )); then
+      printf '%s candidates=0 r2_buckets=%d (nothing left to forget: a populated state whose forget already ran)\n' "$P" "$n_r2"
+      return 0
+    fi
+    abort zero-candidates "0 checked: no cloudflare_* candidates and no cloudflare_r2_bucket in state (refusing a vacuous pass); 0 removed"
+  fi
+  mapfile -t CAND_LINES <<<"$out"
 }
 
 # id_class <field> <value>: old | new | unknown
@@ -159,7 +215,7 @@ id_class() {
 classify_all() {
   local line addr type zid aid zc ac cls
   local -a actions=()
-  for line in "${CAND_LINES[@]}"; do
+  for line in ${CAND_LINES[@]+"${CAND_LINES[@]}"}; do
     IFS=$'\x1f' read -r addr type zid aid <<<"$line"
     zc=""; ac=""
     [[ -n "$zid" ]] && zc="$(id_class zone "$zid")"
@@ -175,13 +231,13 @@ classify_all() {
     fi
     cls="${zc:-$ac}"
     if [[ "$cls" == old ]]; then
-      [[ "$type" != "cloudflare_r2_bucket" ]] || abort r2-in-rm-set "$addr is an R2 bucket; refusing to forget it; 0 removed"
+      [[ "$type" != cloudflare_r2_* ]] || abort r2-in-rm-set "$addr is an R2 resource; refusing to forget it; 0 removed"
       RM_ADDRS+=("$addr"); actions+=("$addr rm")
     else
       SKIPPED=$((SKIPPED + 1)); actions+=("$addr skip")
     fi
   done
-  for line in "${actions[@]}"; do
+  for line in ${actions[@]+"${actions[@]}"}; do
     printf '%s address=%s action=%s\n' "$P" "${line% *}" "${line##* }"
   done
 }
@@ -224,13 +280,15 @@ verify_after() {
 
 parse_args "$@"
 WORK="$(mktemp -d)" || abort mktemp-failed "mktemp failed"
-take_backup
 read_candidates
 classify_all
+# Nothing to forget: no write, so no backup (a second "pre-cf-account-migration" object
+# taken after the forget would hold a POST-forget state under a pre-migration name).
 if [[ "${#RM_ADDRS[@]}" -eq 0 ]]; then
   printf '%s verdict=ok removed=0 skipped=%d\n' "$P" "$SKIPPED"
   exit 0
 fi
+take_backup
 apply_rm
 verify_after
 printf '%s verdict=ok removed=%d skipped=%d\n' "$P" "${#RM_ADDRS[@]}" "$SKIPPED"
