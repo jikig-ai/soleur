@@ -1367,7 +1367,7 @@ assert "A4 a failed curl degrades http_code to the literal 000, not to an empty 
 # is asserted, in EVERY arm, over EVERY field — including the arms where the expected token is
 # also pinned positively.
 # Presence/parity list. `redis_keys` is here.
-PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_expires redis_key_patterns data_mount_src data_bytes data_mount_base data_mount_devid registry_fns data_luks"
+PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_expires redis_key_patterns data_mount_src data_bytes data_mount_base data_mount_devid registry_fns data_luks sdk_sync sdk_app_url"
 # NEVER-ZERO list — deliberately EXCLUDES redis_keys, and that exclusion is the whole point.
 # For every other field `0` is a degradation masquerading as a measurement. For redis_keys `0`
 # is the CLEARING VALUE: an empty keyspace is exactly what authorizes the recut. Putting it in
@@ -1382,10 +1382,12 @@ PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_expires
 # the field was added to detect can never be emitted.
 # #8525: data_luks joins the never-zero list -- its accepting values are blkid TYPEs
 # (crypto_LUKS, ext4) and the two sentinels; a literal `0` can only be a degradation.
-PROBE_7695_NEVER_ZERO="probe_schema host_role flush_latched data_mount_src data_bytes data_mount_base data_mount_devid data_luks"
+# #12742: sdk_sync and sdk_app_url join too -- every accepting value (ok/error/no_apps, the
+# `<url>!<ok|error>` entry list, or a sentinel) is non-numeric, so a literal `0` can only be a degradation.
+PROBE_7695_NEVER_ZERO="probe_schema host_role flush_latched data_mount_src data_bytes data_mount_base data_mount_devid data_luks sdk_sync sdk_app_url"
 
-assert "#8525 probe declares probe_schema=9 (the execute gate refuses a stale_schema row, E6)" \
-  "grep -qE 'probe_schema=9( |\$)' '$PROBE_LOG'"
+assert "#12742 probe declares probe_schema=10 (the execute gate refuses a stale_schema row, E6)" \
+  "grep -qE 'probe_schema=10( |\$)' '$PROBE_LOG'"
 for _f7695 in $PROBE_7695_FIELDS; do
   assert "#7695 probe emits a non-empty $_f7695" \
     "grep -qE '$_f7695=[^ ]' '$PROBE_LOG'"
@@ -1431,7 +1433,7 @@ PATH="$PROBE_W_BIN:$PATH" LOGGER_OUT="$PROBE_W_LOG" \
 
 assert "#7695 web host declares host_role=web (the row carries its own role, not just an id)" \
   "grep -qE 'host_role=web( |\$)' '$PROBE_W_LOG'"
-for _f7695 in flush_latched redis_keys data_mount_src data_bytes data_luks; do
+for _f7695 in flush_latched redis_keys data_mount_src data_bytes data_luks sdk_sync sdk_app_url; do
   assert "#7695 web host with /mnt/data MOUNTED and a latch present, $_f7695 is n/a" \
     "grep -qE '$_f7695=n/a( |\$)' '$PROBE_W_LOG'"
 done
@@ -1653,15 +1655,32 @@ S8_VOLID="106261946"
 # A GQL-aware curl. The base stub returns `exit 7` UNCONDITIONALLY, so it cannot express a
 # health-200-plus-registry-answer host at all; registry_fns would be pinned to __UNREADABLE__ by
 # the stub rather than by the code.
-s8_curl() {
+# #12742: the probe now issues TWO /v0/gql requests per run — RegistryProbe, then
+# SdkSyncProbe — so the stub discriminates on the REQUEST BODY (the --data-binary arg
+# carries the query name), not just the URL. It also emulates `-w '\n%{http_code}'` on the
+# sdk arm: the probe captures the response code off the write-out, and a stub that printed
+# only the body would pin sdk_sync to __UNREADABLE__ by fixture rather than by code.
+s8_curl() {  # s8_curl <health> <fns-body> [fns-rc] [apps-body] [apps-rc] [apps-code]
   cat > "$PROBE_S8_BIN/curl" <<CURLEOF
 #!/bin/sh
+_wantw=0
+_gql=none
 for a in "\$@"; do
   case "\$a" in
     *"/health") printf '%s' "$1"; exit 0 ;;
-    *"/v0/gql") printf '%s' '$2'; exit ${3:-0} ;;
+    -w) _wantw=1 ;;
+    *SdkSyncProbe*) _gql=sdk ;;
+    *RegistryProbe*) _gql=reg ;;
   esac
 done
+case "\$_gql" in
+  sdk)
+    printf '%s' '${4:-}'
+    [ "\$_wantw" = 1 ] && printf '\n%s' '${6:-200}'
+    exit ${5:-0} ;;
+  reg)
+    printf '%s' '$2'; exit ${3:-0} ;;
+esac
 exit 7
 CURLEOF
   chmod +x "$PROBE_S8_BIN/curl"
@@ -1854,6 +1873,39 @@ s8_curl 000 '{"data":{"functions":[]}}'
 S8_REGDEAD="$(s8_run registry-dead)"
 assert "#8015 a non-200 /health => __UNREADABLE__, never a count we did not take" \
   "grep -qE 'registry_fns=__UNREADABLE__( |\$)' '$S8_REGDEAD'"
+# #12742: the SAME health-down arm gates the sdk question — and the apps body staged here is a
+# clean sync, so only the /health gate can make these read __UNREADABLE__.
+s8_curl 000 '{"data":{"functions":[]}}' 0 '{"data":{"apps":[{"url":"https://app.soleur.ai/api/inngest","error":null}]}}'
+S8_SDKDEAD="$(s8_run sdk-dead)"
+assert "#12742 a non-200 /health => sdk_sync=__UNREADABLE__ (a clean apps body is never asked for)" \
+  "grep -qE 'sdk_sync=__UNREADABLE__( |\$)' '$S8_SDKDEAD' && grep -qE 'sdk_app_url=__UNREADABLE__( |\$)' '$S8_SDKDEAD'"
+# NO jq ON THE HOST. jq is a host fact, guarded, never assumed: `command -v` cannot be stubbed
+# to fail while a real jq sits later on PATH, so this arm runs on a PATH rebuilt from every
+# directory of the real one with each entry symlinked EXCEPT jq.
+S8_NOJQ_PATH="$PING_TMP/nojq-path"
+mkdir -p "$S8_NOJQ_PATH"
+_ifs_save="$IFS"; IFS=:
+for _d in $PATH; do
+  [ -d "$_d" ] || continue
+  for _x in "$_d"/*; do
+    _b="${_x##*/}"
+    [ "$_b" = jq ] && continue
+    [ -x "$_x" ] && [ ! -e "$S8_NOJQ_PATH/$_b" ] && ln -s "$_x" "$S8_NOJQ_PATH/$_b" 2>/dev/null
+  done
+done
+IFS="$_ifs_save"
+s8_curl 200 '{"data":{"functions":[{"id":"a"}]}}' 0 '{"data":{"apps":[{"url":"https://app.soleur.ai/api/inngest","error":null}]}}'
+S8_NOJQ_LOG="$PING_TMP/logger-probe-s8-nojq.txt"
+: > "$S8_NOJQ_LOG"
+PATH="$PROBE_S8_BIN:$S8_NOJQ_PATH" LOGGER_OUT="$S8_NOJQ_LOG" \
+  PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" PROBE_DATA_MOUNT="/mnt/data" \
+  PROBE_BYID_DIR="$PROBE_S8_BYID" DOPPLER_PROJECT="soleur-inngest" \
+  INNGEST_REDIS_PASSWORD="fixture-not-a-real-password" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+assert "#12742 no-jq non-vacuity: the rebuilt PATH has no jq, yet the probe still emitted its row" \
+  "! PATH='$PROBE_S8_BIN:$S8_NOJQ_PATH' command -v jq >/dev/null 2>&1 && grep -qE 'probe_schema=10( |\$)' '$S8_NOJQ_LOG'"
+assert "#12742 no jq => sdk_sync=__UNREADABLE__ and sdk_app_url=__UNREADABLE__ (never a parse we could not run)" \
+  "grep -qE 'sdk_sync=__UNREADABLE__( |\$)' '$S8_NOJQ_LOG' && grep -qE 'sdk_app_url=__UNREADABLE__( |\$)' '$S8_NOJQ_LOG'"
 s8_curl 200 '{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
 
 # --- #8013: the key histogram must not ship an identifier --------------------------------
@@ -2094,6 +2146,243 @@ assert "#8525 the cryptsetup call is BOUNDED, like every other call in this prob
   "grep -qE 'timeout [0-9]+ cryptsetup' '$PROBE_SRC'"
 assert "#8525 blkid is NEVER invoked on \$data_mount_src under a mapper (the ext4 trap): the mapper arm resolves cryptsetup first" \
   "awk '/\\/dev\\/mapper\\/\\*\)/,/esac/' '$PROBE_SRC' | grep -c 'cryptsetup' >/dev/null && ! awk '/\\/dev\\/mapper\\/\\*\)/,/esac/' '$PROBE_SRC' | grep -c 'blkid.*data_mount_src' >/dev/null"
+
+# ============================================================================================
+# ARM 5d — probe_schema=10: sdk_sync / sdk_app_url, the server's own pollSDKs state (#12742)
+# ============================================================================================
+# The post-replace measurement needs host-local evidence that the server's 60s sdk_url poll
+# still reaches the app. `apps[].error` is refreshed BY that poll, so `ok` certifies the LAST
+# attempt and `sdk_app_url` names the registered URL — the legible difference between the
+# stale private URL and https://app.soleur.ai in the same row.
+#
+# The stub discriminates on the query body (why: the comment above s8_curl); params 4-6 are
+# the apps arm: s8_curl <health> <fns-body> [fns-rc] [apps-body] [apps-rc] [apps-code].
+S10_FNS='{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
+
+# --- shape 1: a registered app with a clean last sync => ok + the URL -----------------------
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"https://app.soleur.ai/api/inngest","error":null}]}}'
+S10_OK="$(s8_run sdk-ok)"
+assert "#12742 a clean apps[] sync => sdk_sync=ok" \
+  "grep -qE 'sdk_sync=ok( |\$)' '$S10_OK'"
+assert "#12742 ...and names the registered URL with its OWN state, exactly one entry (item 4's pass shape)" \
+  "grep -qE 'sdk_app_url=https://app\.soleur\.ai/api/inngest!ok( |\$)' '$S10_OK'"
+assert "#12742 ...while the SAME row still carries the registry measurement" \
+  "grep -qE 'registry_fns=3( |\$)' '$S10_OK'"
+
+# --- shape 2: a non-empty apps[].error => error, and the URL still ships --------------------
+# (A synthesized private address, not the real web host: web-hosts-generic.test.sh ratchets that literal.)
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"http://10.0.9.9:3000/api/inngest","error":"dial tcp: connection refused"}]}}'
+S10_ERR="$(s8_run sdk-error)"
+assert "#12742 a failing sync => sdk_sync=error with registry_fns still positive" \
+  "grep -qE 'sdk_sync=error( |\$)' '$S10_ERR' && grep -qE 'registry_fns=3( |\$)' '$S10_ERR'"
+assert "#12742 ...and the stale private URL is LEGIBLE in the row with its failing state (item 4's evidence)" \
+  "grep -qE 'sdk_app_url=http://10\.0\.9\.9:3000/api/inngest!error( |\$)' '$S10_ERR'"
+assert "#12742 the GQL error TEXT never ships (the tag is allowlisted to a third party)" \
+  "! grep -qF 'connection refused' '$S10_ERR'"
+
+# --- shape 2b (R4): two apps, one failing — WHICH poll fails must be legible ----------------
+# The aggregate alone cannot say whether the PUBLIC poll works when a stale private row also
+# exists; the per-entry state is what answers it. Order is the server's, entries keep it.
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"https://app.soleur.ai/api/inngest","error":null},{"url":"http://10.0.9.9:3000/api/inngest","error":"dial tcp: i/o timeout"}]}}'
+S10_TWO="$(s8_run sdk-two)"
+assert "#12742 R4 two apps, one failing => the aggregate is error" \
+  "grep -qE 'sdk_sync=error( |\$)' '$S10_TWO'"
+assert "#12742 R4 ...and BOTH entries ship, each with its own state (public ok, private error)" \
+  "grep -qE 'sdk_app_url=https://app\.soleur\.ai/api/inngest!ok,http://10\.0\.9\.9:3000/api/inngest!error( |\$)' '$S10_TWO'"
+
+# --- shape 2c: error:"" is the healthy shape (empty == no error), not a failure --------------
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"https://app.soleur.ai/api/inngest","error":""}]}}'
+S10_EMPTYERR="$(s8_run sdk-emptyerr)"
+assert "#12742 error:\"\" reads as ok (the field is present-but-empty on a clean sync)" \
+  "grep -qE 'sdk_sync=ok( |\$)' '$S10_EMPTYERR' && grep -qE 'sdk_app_url=https://app\.soleur\.ai/api/inngest!ok( |\$)' '$S10_EMPTYERR'"
+
+# --- shape 3: an empty apps array => no_apps (pre-registration / diagnostic boot) -----------
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[]}}'
+S10_NONE="$(s8_run sdk-noapps)"
+assert "#12742 an empty apps[] => sdk_sync=no_apps" \
+  "grep -qE 'sdk_sync=no_apps( |\$)' '$S10_NONE'"
+assert "#12742 ...and sdk_app_url=none, never an empty field" \
+  "grep -qE 'sdk_app_url=none( |\$)' '$S10_NONE'"
+
+# --- shape 4: an error envelope => __UNREADABLE__, and no error text ships -------------------
+s8_curl 200 "$S10_FNS" 0 '{"errors":[{"message":"boom-secret"}],"data":null}'
+S10_GQLERR="$(s8_run sdk-gqlerr)"
+assert "#12742 a GQL error envelope => __UNREADABLE__" \
+  "grep -qE 'sdk_sync=__UNREADABLE__( |\$)' '$S10_GQLERR' && grep -qE 'sdk_app_url=__UNREADABLE__( |\$)' '$S10_GQLERR'"
+assert "#12742 the error envelope's text never reaches the allowlisted row" \
+  "! grep -qF 'boom-secret' '$S10_GQLERR'"
+# A PARTIAL answer: data.apps present AND a non-empty top-level errors[]. GraphQL returns this
+# when one resolver fails; the apps it did list are not the whole answer, so it must not read ok.
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"https://app.soleur.ai/api/inngest","error":null}]},"errors":[{"message":"partial-secret"}]}'
+S10_PARTIAL="$(s8_run sdk-partial)"
+assert "#12742 data.apps PLUS a non-empty errors[] => __UNREADABLE__ (partial data never reads ok)" \
+  "grep -qE 'sdk_sync=__UNREADABLE__( |\$)' '$S10_PARTIAL' && grep -qE 'sdk_app_url=__UNREADABLE__( |\$)' '$S10_PARTIAL' && ! grep -qF 'partial-secret' '$S10_PARTIAL'"
+# A NON-ARRAY `errors` (an object or a bare string) is drift, not "no errors": it must not be
+# skipped as an empty list. Kills `else true` -> `else false` in the errors arm.
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"https://app.soleur.ai/api/inngest","error":null}]},"errors":{"message":"obj-secret"}}'
+S10_ERROBJ="$(s8_run sdk-errobj)"
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"https://app.soleur.ai/api/inngest","error":null}]},"errors":"str-secret"}'
+S10_ERRSTR="$(s8_run sdk-errstr)"
+assert "#12742 errors as a non-array OBJECT or STRING => __UNREADABLE__ (never read as no errors)" \
+  "grep -qE 'sdk_app_url=__UNREADABLE__( |\$)' '$S10_ERROBJ' && grep -qE 'sdk_app_url=__UNREADABLE__( |\$)' '$S10_ERRSTR' && ! grep -qE 'obj-secret|str-secret' '$S10_ERROBJ' '$S10_ERRSTR'"
+
+# --- shape 5: transport failure and non-200 => __UNREADABLE__ --------------------------------
+s8_curl 200 "$S10_FNS" 0 '' 7 000
+S10_DOWN="$(s8_run sdk-down)"
+assert "#12742 a transport failure (rc!=0, write-out 000) => __UNREADABLE__" \
+  "grep -qE 'sdk_sync=__UNREADABLE__( |\$)' '$S10_DOWN'"
+s8_curl 200 "$S10_FNS" 0 '<html>bad gateway</html>' 0 502
+S10_502="$(s8_run sdk-502)"
+assert "#12742 a non-200 GQL response => __UNREADABLE__, never a parsed-looking guess" \
+  "grep -qE 'sdk_sync=__UNREADABLE__( |\$)' '$S10_502' && ! grep -qF 'bad gateway' '$S10_502'"
+# The HTTP-code check is load-bearing ON ITS OWN: a 500 carrying a body that WOULD parse as a
+# clean sync must still read __UNREADABLE__ (the 502 row above has an unparseable body, so jq
+# alone would refuse it and the code check could be deleted with that row still green).
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"https://app.soleur.ai/api/inngest","error":null}]}}' 0 500
+S10_500OK="$(s8_run sdk-500ok)"
+assert "#12742 HTTP 500 with a VALID ok body => __UNREADABLE__ (the status gates before the parse)" \
+  "grep -qE 'sdk_sync=__UNREADABLE__( |\$)' '$S10_500OK' && grep -qE 'sdk_app_url=__UNREADABLE__( |\$)' '$S10_500OK'"
+
+# --- shape 6: schema drift (an app row missing `url`) => __UNREADABLE__ ----------------------
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"name":"web"}]}}'
+S10_DRIFT="$(s8_run sdk-drift)"
+assert "#12742 schema drift (no url key) => __UNREADABLE__, not a silent ok" \
+  "grep -qE 'sdk_sync=__UNREADABLE__( |\$)' '$S10_DRIFT'"
+# url PRESENT but null: has("url") is true, so a key-presence check alone lets it through.
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":null,"error":null}]}}'
+S10_URLNULL="$(s8_run sdk-urlnull)"
+assert "#12742 url:null => __UNREADABLE__ (a present-but-null url is drift, not a nameless ok)" \
+  "grep -qE 'sdk_sync=__UNREADABLE__( |\$)' '$S10_URLNULL' && grep -qE 'sdk_app_url=__UNREADABLE__( |\$)' '$S10_URLNULL'"
+
+# --- shape 7: a hostile URL cannot re-tokenize the row --------------------------------------
+# A space inside sdk_app_url would split the space-separated emit into extra key=value fields.
+# The jq reduction (and the tr -c guard behind it) collapses it to `_` before the row leaves.
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"https://app.soleur.ai/api/inngest registry_fns=5","error":null}]}}'
+S10_HOSTILE="$(s8_run sdk-hostile)"
+assert "#12742 a space-bearing URL is charset-confined (cannot mask registry_fns=0)" \
+  "grep -qE 'sdk_app_url=https://app\.soleur\.ai/api/inngest_registry_fns_5!ok( |\$)' '$S10_HOSTILE' && grep -qE 'registry_fns=3( |\$)' '$S10_HOSTILE'"
+
+# --- shape 8 (R4): userinfo and query/fragment are stripped before the URL ships ------------
+# The row reaches a third-party warehouse; a credential in the authority or a token in the
+# query must never ride it. An `@` cannot survive at all (the charset drops it).
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"https://fixture-user:fixture-pass@app.soleur.ai/api/inngest?fixturetoken=abc#frag","error":null}]}}'
+S10_CRED="$(s8_run sdk-cred)"
+assert "#12742 R4 userinfo + query + fragment stripped: the entry is the bare URL" \
+  "grep -qE 'sdk_app_url=https://app\.soleur\.ai/api/inngest!ok( |\$)' '$S10_CRED'"
+assert "#12742 R4 ...and no fragment of the credential or the token reaches the row" \
+  "grep -qE 'sdk_app_url=' '$S10_CRED' && ! grep -qE 'fixture-user|fixture-pass|fixturetoken|frag' '$S10_CRED' && ! grep -qF '@' < <(grep -oE 'sdk_app_url=[^ ]*' '$S10_CRED')"
+# Userinfo is stripped BEFORE query/fragment: a `?` inside the password would otherwise end the
+# URL early and ship the credential's head (`https://u:pa`). And a scheme-less URL loses
+# everything up to the last `@` before its first `/` too — no scheme is no exemption.
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"https://fixture-u:fixture-pa?fixture-ss@10.0.9.9/api/inngest","error":null},{"url":"fixture-nu:fixture-np@10.0.9.8:3000/api/inngest","error":null}]}}'
+S10_CRED2="$(s8_run sdk-cred2)"
+assert "#12742 R4 userinfo-first strip: a ? in the password and a scheme-less userinfo both reduce to the bare URL" \
+  "grep -qE 'sdk_app_url=https://10\.0\.9\.9/api/inngest!ok,10\.0\.9\.8:3000/api/inngest!ok( |\$)' '$S10_CRED2'"
+assert "#12742 R4 ...and no credential fragment of either reaches the row" \
+  "! grep -qF 'fixture-' '$S10_CRED2'"
+# A scheme-relative URL (`//user:pass@host/...`) is an authority too: its userinfo goes as well.
+s8_curl 200 "$S10_FNS" 0 '{"data":{"apps":[{"url":"//fixture-su:fixture-sp@10.0.9.7/api/inngest","error":null}]}}'
+S10_CRED3="$(s8_run sdk-cred3)"
+assert "#12742 R4 scheme-relative userinfo stripped: the entry keeps // and loses the credential" \
+  "grep -qE 'sdk_app_url=//10\.0\.9\.7/api/inngest!ok( |\$)' '$S10_CRED3' && ! grep -qF 'fixture-' '$S10_CRED3'"
+
+# --- shape 9 (R4): the 160-byte cap, at an ENTRY boundary, with a dropped-count marker -------
+# Each fixture entry is exactly 50 bytes (a 47-byte URL + `!ok`). Three fit (3*50+2 = 152) with
+# no marker; ten keep three (152 + `,+7` = 155 — a fourth would make 206).
+s10_apps() {  # s10_apps <n> -> {"data":{"apps":[...n entries...]}}
+  local i out=""
+  for ((i = 0; i < $1; i++)); do
+    out="${out:+$out,}{\"url\":\"$(printf 'http://10.0.9.9:3000/api/inngest/pad-%02daaaaaaaa' "$i")\",\"error\":null}"
+  done
+  printf '{"data":{"apps":[%s]}}' "$out"
+}
+s10_entries() {  # s10_entries <n> -> the first n expected entries, comma-joined
+  local i out=""
+  for ((i = 0; i < $1; i++)); do out="${out:+$out,}$(printf 'http://10.0.9.9:3000/api/inngest/pad-%02daaaaaaaa!ok' "$i")"; done
+  printf '%s' "$out"
+}
+s8_curl 200 "$S10_FNS" 0 "$(s10_apps 3)"
+S10_CAP5="$(s8_run sdk-cap5)"
+assert "#12742 R4 cap: three 50-byte entries (152 B) all ship, with NO dropped-count marker" \
+  "grep -qE \"sdk_app_url=$(s10_entries 3)( |\\\$)\" '$S10_CAP5'"
+s8_curl 200 "$S10_FNS" 0 "$(s10_apps 10)"
+S10_CAP10="$(s8_run sdk-cap10)"
+assert "#12742 R4 cap: ten entries keep the first three WHOLE and append ,+7 (never a cut entry)" \
+  "grep -qE \"sdk_app_url=$(s10_entries 3),\\+7( |\\\$)\" '$S10_CAP10'"
+assert "#12742 R4 cap: the capped value is <= 160 bytes" \
+  "[[ \$(grep -oE 'sdk_app_url=[^ ]*' '$S10_CAP10' | sed 's/^sdk_app_url=//' | tr -d '\n' | wc -c) -le 160 ]]"
+# One URL longer than the cap: no whole entry fits, so the value is the marker alone.
+s8_curl 200 "$S10_FNS" 0 "{\"data\":{\"apps\":[{\"url\":\"http://10.0.9.9:3000/$(printf 'a%.0s' $(seq 1 300))\",\"error\":null}]}}"
+S10_CAPBIG="$(s8_run sdk-capbig)"
+assert "#12742 R4 cap: a single over-cap URL ships as +1 (dropped, never truncated mid-URL)" \
+  "grep -qE 'sdk_app_url=\+1( |\$)' '$S10_CAPBIG' && grep -qE 'sdk_sync=ok( |\$)' '$S10_CAPBIG'"
+# The PUBLIC entry is moved to the front (stable otherwise), so a cap can never drop the one
+# entry item 4 reads: ten private entries ahead of it still ship it, then the first two private.
+s8_curl 200 "$S10_FNS" 0 "$(s10_apps 10 | sed 's|\]}}$|,{"url":"https://app.soleur.ai/api/inngest","error":null}]}}|')"
+S10_CAPPUB="$(s8_run sdk-cappub)"
+assert "#12742 R4 cap: the public entry is kept FIRST past a cap; the rest keep their order (public,pad-00,pad-01,+8)" \
+  "grep -qE \"sdk_app_url=https://app\\.soleur\\.ai/api/inngest!ok,$(s10_entries 2),\\+8( |\\\$)\" '$S10_CAPPUB'"
+# The cap search is BOUNDED: no URL is shorter than 0 B, so no entry is shorter than 3 B (`!ok`),
+# and 41 entries (4*41-1 = 163 B) can never fit 160 B. A search from n down re-joins up to n
+# entries n times — measured 40 s of jq CPU for 5000 apps on a host whose probe runs each minute.
+s8_curl 200 "$S10_FNS" 0 "$(s10_apps 5000)"
+_s10_t0=$SECONDS
+S10_CAPHUGE="$(s8_run sdk-caphuge)"
+S10_CAPHUGE_S=$((SECONDS - _s10_t0))
+assert "#12742 R4 cap: 5000 apps finish in bounded time (${S10_CAPHUGE_S}s <= 5s) with the same three-plus-marker answer" \
+  "[[ '$S10_CAPHUGE_S' -le 5 ]] && grep -qE \"sdk_app_url=$(s10_entries 3),\\+4997( |\\\$)\" '$S10_CAPHUGE'"
+# The 160 B BOUNDARY: a 157 B entry plus `,+1` is exactly 160 B and ships (kills `< 160`); the
+# whole pair is 197 B, so a looser cap (e.g. `<= 202`) ships both and the 1024 B row below reds.
+S10_B157="http://10.0.9.9:3000/$(printf 'b%.0s' $(seq 1 133))"
+s8_curl 200 "$S10_FNS" 0 "{\"data\":{\"apps\":[{\"url\":\"$S10_B157\",\"error\":null},{\"url\":\"http://10.0.9.8:3000/api/inngest/pad\",\"error\":null}]}}"
+S10_CAP160="$(s8_run sdk-cap160)"
+assert "#12742 R4 cap: a value of EXACTLY 160 B ships (157 B entry + ,+1)" \
+  "grep -qE \"sdk_app_url=${S10_B157}!ok,\\+1( |\\\$)\" '$S10_CAP160' && [[ \$(grep -oE 'sdk_app_url=[^ ]*' '$S10_CAP160' | sed 's/^sdk_app_url=//' | tr -d '\n' | wc -c) -eq 160 ]]"
+
+# --- shape 10: the item-4 row fits logger's 1024-byte message limit --------------------------
+# util-linux `logger` TRUNCATES a single argument over its --size (default 1024; measured on
+# 2.42: the tail is dropped silently). sdk_app_url is the LAST field, so a truncation cuts it.
+# Every field the fixture cannot render is widened to the WIDEST live width seen (image_ref 138,
+# cli_version 17, instance_id 17, redis_key_patterns 158, the LUKS mapper path). Measured: the
+# widened row is 837 B up to and including the 13 B ` sdk_app_url=` key, so a value of
+# 160 B (the cap) makes 997 B — inside 1024. Two rows are measured: the post-replace
+# evidence row (public + stale private entry) and the 160 B BOUNDARY fixture (the widest value
+# the cap can emit; a looser cap such as `<= 202` ships 197 B there and this row reds).
+# RESIDUAL, pre-existing: redis_key_patterns at ITS 400 B cap still pushes the row past 1024 B;
+# the runbook's item-4 rule says to read that width in the same row before trusting a
+# single-entry pass. Closing it needs `logger --size` on the emit line (anchored by several suites).
+s10_widen() {  # s10_widen <log> -> the probe message with the live-width fields substituted
+  sed -n 's/^.*\(SOLEUR_INNGEST_SERVER_PROBE .*\)$/\1/p' "$1" | head -1 | sed -E \
+    -e "s/ image_ref=[^ ]*/ image_ref=$(printf 'i%.0s' $(seq 1 138))/" \
+    -e "s/ cli_version=[^ ]*/ cli_version=$(printf 'c%.0s' $(seq 1 17))/" \
+    -e "s/ instance_id=[^ ]*/ instance_id=$(printf 'n%.0s' $(seq 1 17))/" \
+    -e "s/ redis_key_patterns=[^ ]*/ redis_key_patterns=$(printf 'p%.0s' $(seq 1 158))/" \
+    -e "s| data_mount_src=[^ ]*| data_mount_src=/dev/mapper/inngest-redis|"
+}
+S10_LIVE_MSG="$(s10_widen "$S10_TWO")"
+S10_LIVE_LEN="$(printf '%s' "$S10_LIVE_MSG" | wc -c | tr -d ' ')"
+S10_EDGE_MSG="$(s10_widen "$S10_CAP160")"
+S10_EDGE_LEN="$(printf '%s' "$S10_EDGE_MSG" | wc -c | tr -d ' ')"
+assert "#12742 live-width non-vacuity: the measured rows carry the sdk entries and the widened fields" \
+  "grep -qE 'sdk_app_url=[^ ]+!ok,[^ ]+!error\$' < <(printf '%s' \"\$S10_LIVE_MSG\") && grep -qE 'image_ref=i{138} .* redis_key_patterns=p{158} ' < <(printf '%s' \"\$S10_LIVE_MSG\") && grep -qE 'redis_key_patterns=p{158} .* sdk_app_url=[^ ]+!ok,\\+1\$' < <(printf '%s' \"\$S10_EDGE_MSG\")"
+assert "#12742 the live-width post-replace probe row is <= 1024 bytes (measured ${S10_LIVE_LEN} B; logger does not cut sdk_app_url)" \
+  "[[ '$S10_LIVE_LEN' -le 1024 ]]"
+assert "#12742 the live-width row at the 160 B cap boundary is <= 1024 bytes (measured ${S10_EDGE_LEN} B)" \
+  "[[ '$S10_EDGE_LEN' -le 1024 ]]"
+
+# --- restore: downstream arms and the mutate_emitter rows model only the functions query ----
+s8_curl 200 "$S10_FNS"
+assert "#12742 the sdk arm is drift-pinned at column zero beside FUNCTIONS_GQL_QUERY" \
+  "grep -qE '^readonly SDK_SYNC_GQL_QUERY=' '$PROBE_SRC'"
+assert "#12742 the sdk curl is BOUNDED and discards stderr like the registry curl" \
+  "[ \"\$(grep -cE 'timeout 10 curl -s --max-time 10' '$PROBE_SRC')\" -ge 2 ] && grep -qE '^[[:space:]]*_sdk_out=\"\\\$\\(timeout 10 curl -s --max-time 10 ' '$PROBE_SRC'"
+S10_ALL="'$S10_OK' '$S10_ERR' '$S10_TWO' '$S10_EMPTYERR' '$S10_NONE' '$S10_GQLERR' '$S10_PARTIAL' '$S10_ERROBJ' '$S10_ERRSTR' '$S10_DOWN' '$S10_502' '$S10_500OK' '$S10_DRIFT' '$S10_URLNULL' '$S10_HOSTILE' '$S10_CRED' '$S10_CRED2' '$S10_CAP5' '$S10_CAP10' '$S10_CAPBIG' '$S10_CAPPUB' '$S10_CAPHUGE' '$S10_CAP160'"
+assert "#12742 every field emitted is one of the five sdk_sync values" \
+  "grep -hoE 'sdk_sync=[^ ]+' $S10_ALL | grep -vE 'sdk_sync=(ok|error|no_apps|n/a|__UNREADABLE__)' ; test \$? -eq 1"
+# Every sdk_app_url is a sentinel, or `,`-joined entries `<url>!<ok|error>` with an optional
+# trailing `+<n>` — the shape the runbook's item-4 read depends on.
+assert "#12742 R4 every sdk_app_url emitted is a sentinel or well-formed <url>!<ok|error> entries" \
+  "grep -hoE 'sdk_app_url=[^ ]+' $S10_ALL | sed 's/^sdk_app_url=//' | grep -vE '^(none|n/a|__UNREADABLE__|\+[0-9]+|[A-Za-z0-9_:./+-]+!(ok|error)(,[A-Za-z0-9_:./+-]+!(ok|error))*(,\+[0-9]+)?)\$' ; test \$? -eq 1"
 
 # ============================================================================================
 # mutate_emitter — emitter-side mutation rows that RUN (#8017 task 1a.1)
@@ -2389,8 +2678,8 @@ for _l7695 in "$PROBE_LOG" "$PROBE_W_LOG" "$PROBE_D_LOG" "$PROBE_N_LOG" "$PROBE_
 done
 # Cardinality guard on the loop above: a typo in either list makes the body run zero times and
 # this block reports success having asserted nothing.
-assert "#7695 never-zero invariant covered 6 logs x 8 fields" \
-  "[[ \$(printf '%s\n' \$PROBE_7695_NEVER_ZERO | wc -l) -eq 8 ]]"
+assert "#7695 never-zero invariant covered 6 logs x 10 fields" \
+  "[[ \$(printf '%s\n' \$PROBE_7695_NEVER_ZERO | wc -l) -eq 10 ]]"
 # TWO more since probe_schema=4: `redis_keys` (0 is its CLEARING value) and
 # `redis_key_patterns` (whose clearing value is the token `__NONE__`, not 0 — it is never
 # numeric, so the never-zero loop has nothing to say about it either).
@@ -3465,7 +3754,13 @@ if [[ "$DASH_SKIPPED" -ne 0 && "$DASH_SKIPPED" -ne "$DASH_ROWS" ]]; then printf 
 # #10540: 586 -> 601 (the app copies derive from the dedicated random_id: expression equality, derivation, ignore_changes kept,
 # dedicated pair without lifecycle, contract/NOTE/retired-comment pins; 15 rows).
 # flip-token split: 601 -> 602 (the flip drop-in's unprefixed, Condition-less EnvironmentFile= pin).
-INNGEST_MIN_ASSERTIONS_FULL=602
+# #12742 R4 review fix-round: 602 -> 620 (the per-entry sdk_app_url rows: two-app per-entry state, error:"",
+# partial errors[], HTTP 500 with an ok body, url:null, userinfo/query strip, the three cap rows, the
+# live-width 1024 B row pair, the entry-shape sweep, and the health-down + no-jq sdk arms; 18 rows).
+# #12742 R4 round 2: 620 -> 627 (non-array errors, the userinfo-first strip pair, public-first under
+# the cap, the bounded 5000-app search, the exact-160 B boundary, the 1024 B row at that boundary).
+# Verification round: 627 -> 628 (the scheme-relative userinfo row).
+INNGEST_MIN_ASSERTIONS_FULL=628
 INNGEST_MIN_ASSERTIONS=$((INNGEST_MIN_ASSERTIONS_FULL - DASH_SKIPPED - TF_SKIPPED))
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \

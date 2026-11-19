@@ -13,6 +13,7 @@ pass() { PASS_N=$((PASS_N + 1)); printf 'PASS  %s\n' "$1"; }
 fail() { FAIL_N=$((FAIL_N + 1)); printf 'FAIL  %s — got rc=%s out=%s\n' "$1" "$2" "$3"; }
 
 MSG_OK='SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=failed cutover_flag=rolled-back probe_schema=9 host_role=dedicated data_mount_src=/dev/mapper/inngest-redis data_mount_devid=scsi-0HC_Volume_1 registry_fns=7 data_luks=crypto_LUKS'
+MSG_OK10='SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active cutover_flag=done probe_schema=10 host_role=dedicated data_mount_src=/dev/mapper/inngest-redis data_mount_devid=scsi-0HC_Volume_1 registry_fns=7 data_luks=crypto_LUKS sdk_sync=ok sdk_app_url=https://app.soleur.ai/api/inngest!ok'
 MSG_S8='SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=failed cutover_flag=rolled-back probe_schema=8 host_role=dedicated data_mount_src=/dev/sdb registry_fns=7'
 MSG_UNREAD='SOLEUR_INNGEST_SERVER_PROBE probe_schema=9 host_role=dedicated data_luks=__UNREADABLE__'
 MSG_EXT4='SOLEUR_INNGEST_SERVER_PROBE probe_schema=9 host_role=dedicated data_luks=ext4'
@@ -56,6 +57,12 @@ out="$(FT_FIXTURE=<(bs_line soleur-inngest soleur-inngest-prd "$MSG_OK") bash -c
 printf '%s\n' "$(bs_line soleur-inngest soleur-inngest-prd "$MSG_OK")" > "$TMP/f-pass"
 rc=0; out="$(FT_FIXTURE="$TMP/f-pass" env -i PATH="$PATH" FT_FIXTURE="$TMP/f-pass" BETTERSTACK_QUERY_HOST=x BETTERSTACK_QUERY_USERNAME=x BETTERSTACK_QUERY_PASSWORD=x INNGEST_SERVING_QUERY_BIN="$TMP/query-q.sh" bash "$PROBE" 2>&1)" || rc=$?
 [[ "$rc" -eq 0 && "$out" == PASS:* ]] && pass "schema9+crypto_LUKS => PASS rc0" || fail "schema9+crypto_LUKS => PASS rc0" "$rc" "$out"
+
+# 1b. PASS: a schema-10 row (#12742) still satisfies the >=9 predicate — the bumped emitter
+#    must not strand this follow-through on TRANSIENT.
+printf '%s\n' "$(bs_line soleur-inngest soleur-inngest-prd "$MSG_OK10")" > "$TMP/f-pass10"
+rc=0; out="$(FT_FIXTURE="$TMP/f-pass10" env -i PATH="$PATH" FT_FIXTURE="$TMP/f-pass10" BETTERSTACK_QUERY_HOST=x BETTERSTACK_QUERY_USERNAME=x BETTERSTACK_QUERY_PASSWORD=x INNGEST_SERVING_QUERY_BIN="$TMP/query-q.sh" bash "$PROBE" 2>&1)" || rc=$?
+[[ "$rc" -eq 0 && "$out" == PASS:* ]] && pass "schema10+crypto_LUKS => PASS rc0 (the >=9 predicate)" || fail "schema10+crypto_LUKS => PASS rc0" "$rc" "$out"
 
 # 2. TRANSIENT: schema-8 rows only (the baked carrier has not landed).
 printf '%s\n' "$(bs_line soleur-inngest soleur-inngest-prd "$MSG_S8")" > "$TMP/f-s8"
@@ -102,4 +109,12 @@ rc=0; out="$(env -i PATH="$PATH" INNGEST_SERVING_QUERY_BIN="$TMP/query-q.sh" bas
 [[ "$rc" -eq 2 && "$out" == *credentials_unprovisioned* ]] && pass "missing creds => TRANSIENT credentials_unprovisioned" || fail "credentials" "$rc" "$out"
 
 printf '\n%d passed, %d failed\n' "$PASS_N" "$FAIL_N"
+# Pass-count floor, reported directly with printf + exit (ADR-193), never through pass()/fail():
+# a floor routed through the helper it backstops dies with the same edit that disarms the helper,
+# and a deleted or skipped case would otherwise leave a shorter all-green run. 10 cases today.
+P8525_MIN_PASS=10
+if [ "$PASS_N" -lt "$P8525_MIN_PASS" ]; then
+  printf 'FATAL: pass-count floor: only %d cases passed, expected >= %d (a case was skipped or emptied).\n' "$PASS_N" "$P8525_MIN_PASS" >&2
+  exit 1
+fi
 [ "$FAIL_N" -eq 0 ]
