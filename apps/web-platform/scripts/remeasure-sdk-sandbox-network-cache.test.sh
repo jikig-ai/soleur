@@ -324,7 +324,7 @@ eq "caches: JSON requested" "$CAND_V" "$(node -p 'require(process.argv[1]).reque
 eq "caches: JSON env carries the candidate integrity" "sha512-candidatesdk==" "$(node -p 'require(process.argv[1]).env.candidateIntegritySdk' "$F/verdict.json")"
 check "caches: JSON paths are redacted to <scratch>" bash -c '! grep -q "$0" "$1"' "$F/tmp/remeasure-sdk" "$F/verdict.json"
 check "caches: both markdown drafts written with the command" bash -c 'grep -q "remeasure-sdk-sandbox-network-cache.sh $0" "$1/addendum.md" && grep -q "| F2 |" "$1/issue-comment.md"' "$CAND_V" "$F/md"
-check "caches: no draft carries the sentinel" bash -c '! grep -rq "$0" "$1"' "$SENTINEL" "$F/md"
+check "caches: no draft carries the sentinel" bash -c '! grep -q "$0" "$1/addendum.md" "$1/issue-comment.md"' "$SENTINEL" "$F/md"
 check "caches: app package-lock untouched" app_untouched_lock
 check "caches: no UNVERIFIED token" no_unverified
 
