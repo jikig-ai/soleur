@@ -119,3 +119,14 @@ containers on the pinned `ubuntu:24.04` image. It runs in the `bastion-boot-rehe
   It would still not be Hetzner's image, costs about 600 MB per run, and `/dev/kvm` is unverified on the
   runner class. It reopens on a fault the container provably cannot reproduce, or once `/dev/kvm` is
   confirmed on `ubuntu-24.04` runners with a cached image.
+- **Review round, 2026-11-20 (CTO Q27-Q29).** Appended; the bullets above stand as written.
+  - *Q27:* both fixture images mask `getty@.service`, `console-getty.service` and `getty.target`. Under
+    `--privileged` an unmasked getty would own the developer host's tty1. The suite refuses an image
+    without the masks (`BRH_GETTY_UNMASKED`) before any boot.
+  - *Q28:* a SKIP verdict exits 0 only on `pull_request` and `push`. On any other event, or none under
+    CI, it fails (`BRH_SKIP_ON_GATE_EVENT`), so a dispatched birth-gate run reds on a skipped row. The
+    runbook's pre-birth check also requires exactly one `bastion-runcmd-rehearsal: PASS (` line.
+  - *Q29:* with no reason line, the fatal's `detail` is `why=no_reason_line nft=<Result> egress=<Result>
+    st=<ExecMainStatus> last=<the unit's last output line>`, at most 180 bytes. Every journal and
+    systemctl read in `_egress_why` is bounded by `timeout 10`, so a stalled journald cannot stop the
+    fatal. The bastion ships no journal, so this tag is the only remote signal.

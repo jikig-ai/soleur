@@ -28,8 +28,11 @@ Encryption Posture, Observability, Guard Contract, Scope Check, Acceptance Crite
 ### Key Improvements
 1. **The job is advisory, not a merge gate** (security review, CTO Q22). `deploy-script-tests-done`
    is not in `infra/github/ruleset-ci-required.tf` (#6480 owns the gap). The plan's "gates every
-   merge" claim is rewritten, and the real birth gate is #12942's Checks API read of
-   `bastion-boot-rehearsal` on the birth SHA.
+   merge" claim is rewritten. The birth gate will be #12942's: the birth workflow runs the rehearsal
+   as its own job and the apply needs it `success` (CTO Q26; the suite reds a SKIP on
+   `workflow_dispatch`, Q28). Until #12942 lands, the runbook's dispatched `bastion-boot-rehearsal`
+   job (conclusion `success` and exactly one `bastion-runcmd-rehearsal: PASS (` line) is the interim
+   gate. No gate reads an existing check-run.
 2. **Host-kernel containment for privileged systemd** (CTO Q21): `-e container=docker`, masked
    sysctl/binfmt/modules-load/udev units, journald `ReadKMsg=no`, 10.0.1.70/32 on `lo` instead of a
    dummy NIC, a netns-differs guard and a static argv check.
@@ -377,7 +380,8 @@ no workaround); B1 asserts `cloud-init status --long` names the NoCloud datasour
 host). A static check over the suite's own text fails if any `docker run`/`docker create` argv
 carries `--network host`, `--pid host`, `--ipc host`, `--uts host` or a `-v /:` bind. The fixture image
 masks `systemd-sysctl`, `systemd-binfmt`, `systemd-modules-load`, `systemd-udevd` and
-`systemd-udev-trigger` and sets `ReadKMsg=no` in `/etc/systemd/journald.conf.d/brh.conf`, so PID 1
+`systemd-udev-trigger` (and, by CTO Q27, `getty@.service`, `console-getty.service` and `getty.target`,
+refused with `BRH_GETTY_UNMASKED` before any boot if any is not masked) and sets `ReadKMsg=no` in `/etc/systemd/journald.conf.d/brh.conf`, so PID 1
 writes no host sysctl and journald reads no host kmsg. It also creates `/var/log/journal`
 (persistent journal, as on the real image). `systemd-timesyncd` is not masked.
 
@@ -475,11 +479,13 @@ run against synthesized capture files:
 append-only and the verdict reads it. `SKIPPED_ASSERTIONS` is denominated in assertions. The floor is
 `passes + fails + SKIPPED_ASSERTIONS >= MIN_CASES`, and `passes + fails + SKIPPED_ASSERTIONS == cases`,
 both reported by `printf` + `exit 1`. A `ROWS_BOOTED` count (incremented only when a row's
-`cloud-init-output.log` was actually copied out, not per `boot_row` call) must equal the row registry length unless
+`cloud-init-output.log` was actually copied out, not per `gather`/`boot_once` call) must equal the row registry length unless
 the shortfall is a counted ADR-188 skip. If every boot row skipped, the terminal line is
 `bastion-runcmd-rehearsal: SKIP (...)`, never `PASS` (CTO Q7). Under `CI` the skip ceiling is 2 rows
 and B1 may never skip; breaching either prints `BRH_SKIP_CEILING` and exits 1 (CTO Q17), so the
-required aggregator cannot go green on a run that booted nothing. Terminal lines:
+advisory aggregator cannot go green on a run that booted nothing. A SKIP exits 0 only on
+`pull_request` and `push`; on any other event, or none under CI, it is
+`FAIL (BRH_SKIP_ON_GATE_EVENT)` (CTO Q28). Terminal lines:
 `bastion-runcmd-rehearsal: PASS (<n> assertions, 0 failed)`, `... FAIL (...)`, `... SKIP (...)`,
 `... PARTIAL (...)` (subset runs only, never under CI).
 
@@ -597,9 +603,10 @@ and an apt `Hash Sum mismatch` in `cloud-init-output.log` is reported as
   exist; the QEMU/KVM alternative and its reopening trigger (CTO Q11); the birth gate stays #12942's.
 - `knowledge-base/engineering/operations/runbooks/bastion-host.md`: one paragraph naming the suite and
   the CI job as the pre-birth boot evidence, and the local command.
-- A comment on #12942 stating that its gate should read the `bastion-boot-rehearsal` check-run
-  conclusion on the birth SHA through the Checks API and refuse anything but `success` (CTO Q9, Q22),
-  because the job is advisory on PRs and a red run can merge.
+- A comment on #12942 (CTO Q9, Q22; transport amended by Q26 and Q28): the birth workflow will run
+  the rehearsal as its own job and the apply job will need it `success`; the suite exits 1 on a SKIP
+  for `workflow_dispatch`, so that conclusion is enough. Until then the runbook's dispatched check is
+  the interim gate. The job is advisory on PRs, so a red run can merge.
 
 ## Files to Create
 
@@ -641,7 +648,7 @@ Three open `code-review` issues mention files this plan edits; none concerns the
 2. **Fix the template** (FAULT-A, FAULT-B). Re-run: all rows GREEN, the mutation rows RED where
    designed. Run `bastion.test.sh` and fix any row the new bytes trip.
 3. **Registration and CI.** Runner map, registration arms, workflow job, aggregator (and its
-   `cancelled)` classification), aggregator-diagnosis test, main-health-monitor marker, SPECS, PROMOTED.
+   `cancelled)` classification), aggregator-diagnosis test, main-health-monitor marker (removed by Q25), SPECS, PROMOTED.
    Run `bash .github/scripts/test/test-infra-suite-registration.sh`, `bash apps/web-platform/infra/apt-bounded.test.sh`,
    `bash scripts/guard-vacuity-floor.test.sh`, `bash apps/web-platform/infra/run-registered-suites.test.sh`
    and the ratchet lints (`lint-shell-capture-exit`, `fixture-relative-assert`, `fixture-dir-operand-assert`)
@@ -735,29 +742,32 @@ Neither connection is new; rows B1 and M2 assert that the apt connection stays h
 
 ```yaml
 liveness_signal:
-  what: the bastion-boot-rehearsal job result in infra-validation.yml (advisory on PRs, rolled into the advisory deploy-script-tests-done; read at birth by #12942's Checks API gate); the suite's terminal line "bastion-runcmd-rehearsal: PASS|FAIL|SKIP" (PARTIAL for local subsets only)
-  cadence: per pull_request and push touching apps/*/infra/** (the workflow's existing path filter)
-  alert_target: the bastion-boot-rehearsal check on the PR (advisory, CTO Q22); notify-main-failure on main; the #12942 birth gate
+  what: 'the bastion-boot-rehearsal job result in infra-validation.yml (advisory on PRs, rolled into the advisory deploy-script-tests-done); the suite''s terminal line "bastion-runcmd-rehearsal: PASS|FAIL|SKIP" (PARTIAL for local subsets only) in the workflow run log (layer 6). At birth, until #12942 lands, the runbook''s dispatched run on main: job conclusion success and exactly one "bastion-runcmd-rehearsal: PASS (" line (CTO Q26, Q28); #12942 will run the rehearsal inside the birth run and its apply job will need it success'
+  cadence: per pull_request and push touching apps/*/infra/** (the workflow's existing path filter); per birth, the runbook's dispatched run
+  alert_target: the bastion-boot-rehearsal check on the PR (advisory, CTO Q22) with ::error per failed assertion and ::warning on SKIP; notify-main-failure on main; the runbook's pre-birth check
   configured_in: .github/workflows/infra-validation.yml (job bastion-boot-rehearsal)
 error_reporting:
-  destination: on the real host, the Sentry project behind TF_VAR_sentry_dsn (prd_terraform SENTRY_DSN) via the runcmd _emit; in CI, the job log
-  fail_loud: "fresh_boot_not_ready_<stage>" fatal events with a detail naming the reason (FAULT-B fix); the suite's "FAIL: <row> ..." lines
+  destination: on the real host, the Sentry project behind TF_VAR_sentry_dsn (prd_terraform SENTRY_DSN) via the runcmd _emit; in CI, the workflow run log (layer 6)
+  fail_loud: '"fresh_boot_not_ready_<stage>" fatal events with a detail naming the reason (FAULT-B fix); the suite''s "FAIL: <row> ..." lines and their ::error annotations'
 failure_modes:
   - mode: a template edit breaks a boot stage
-    detection: rows B1/B2 go red with the stage name from the stub capture
-    alert_route: the bastion-boot-rehearsal check on the PR; refused at birth by the #12942 gate
-  - mode: the egress_load fatal's detail stops naming the reason
-    detection: rows F1 and FA (detail predicates) and the offline must-RED boilerplate fixture
-    alert_route: the bastion-boot-rehearsal check on the PR; refused at birth by the #12942 gate
+    detection: rows B1/B2 go red with the stage name from the stub capture, in the workflow run log (layer 6)
+    alert_route: 'the bastion-boot-rehearsal check on the PR (::error per failure); at birth, the runbook''s dispatched check (later #12942''s in-birth job)'
+  - mode: the egress_load fatal's detail stops naming the reason (CI side)
+    detection: rows F1 and FA (detail predicates), the offline _egress_why fixtures and must-RED boilerplate fixture, and bastion.test.sh's EGRESS-WHY call-site pins, in the workflow run log (layer 6)
+    alert_route: 'the bastion-boot-rehearsal and infra-validation checks on the PR; at birth, the runbook''s dispatched check (later #12942''s in-birth job)'
+  - mode: on the real host, egress_load dies and the fatal reaches Sentry without its reason
+    detection: Sentry (layer 1), event fresh_boot_not_ready_egress_load, tag detail; it names the reason line, or why=no_reason_line nft=<Result> egress=<Result> st=<ExecMainStatus> last=<line> (CTO Q29); the bastion ships no journal, so this tag is the only remote signal
+    alert_route: 'the birth workflow''s boot-verify read of the Sentry trail (not ready -> power-off and a #12879 comment)'
   - mode: the rehearsal silently stops booting (all rows skipped, or zero rows run)
-    detection: the ROWS_BOOTED identity and the ADR-193 floor; an all-skip run ends SKIP, never PASS
-    alert_route: the bastion-boot-rehearsal check on the PR; refused at birth by the #12942 gate; SKIP (loud) lines in the job log
+    detection: the ROWS_BOOTED identity and the ADR-193 floor; an all-skip run ends SKIP, never PASS, and fails on a gate event (BRH_SKIP_ON_GATE_EVENT, Q28), in the workflow run log (layer 6)
+    alert_route: the bastion-boot-rehearsal check on the PR (::warning on SKIP); at birth, the runbook's PASS-line count; SKIP (loud) lines in the workflow run log
   - mode: the suite drifts onto a matrix leg or off the dedicated job
-    detection: the generalized dedicated-job arm, Arm 4's need loop and the monitor-marker assertion in test-infra-suite-registration.sh, plus the --list arm in run-registered-suites.test.sh
-    alert_route: the bastion-boot-rehearsal check on the PR; refused at birth by the #12942 gate
+    detection: the generalized dedicated-job arm and Arm 4's need loop in test-infra-suite-registration.sh, plus the --list arm in run-registered-suites.test.sh (the monitor-marker assertion was removed by Q25), in the workflow run log (layer 6)
+    alert_route: the infra-validation checks on the PR
 logs:
-  where: GitHub Actions log of the bastion-boot-rehearsal job; on the real host, journald and /var/log/cloud-init-output.log, read only through the Sentry boot trail
-  retention: GitHub Actions default log retention for the repo
+  where: the workflow run log (layer 6) of the bastion-boot-rehearsal job, plus its bastion-boot-rehearsal-workdir artifact on failure; on the real host, journald and /var/log/cloud-init-output.log, read only through the Sentry boot trail
+  retention: GitHub Actions default log retention for the repo; the artifact 14 days
 # Verified 2026-11-20: prints 0 on main and 1 on the prototype's fixed template (fixb.tpl); the planned
 # `journalctl -b -u nftables.service -u bastion-egress.service` line still contains the literal.
 discoverability_test:
@@ -829,8 +839,11 @@ Boot paths covered. The birth (`bastion-host-create`), the future replace (#1287
 local apply all consume `main`. This job runs on every PR and push touching `apps/*/infra/**`, but it
 is advisory: neither it nor `deploy-script-tests-done` is a required context in
 `infra/github/ruleset-ci-required.tf` (security review; CTO Q22), so a red run can merge. The gate
-that makes the property binding is #12942's: the birth reads the `bastion-boot-rehearsal` check-run
-conclusion on the birth SHA through the Checks API and refuses anything but `success`. This PR leaves
+that makes the property binding will be #12942's: the birth workflow will run the rehearsal as its own
+job and its apply job will need it `success` (CTO Q26; a SKIP on `workflow_dispatch` exits 1, Q28).
+Until #12942 lands, the runbook's dispatched check is the interim gate: the `bastion-boot-rehearsal`
+job of a birth-day `workflow_dispatch` run on main concludes `success` and its log carries exactly one
+`bastion-runcmd-rehearsal: PASS (` line. No gate reads an existing check-run. This PR leaves
 the ruleset alone (a production ruleset mutation, and #6480's paths-filter gap would block non-infra
 PRs) and records the requirement in the #12942 comment.
 
@@ -843,7 +856,7 @@ PRs) and records the requirement in the #12942 comment.
 | 3 | Template: `nft flush ruleset` removed from `on_err` (F1-M) | RED: no fatal reaches the stub |
 | 4 | Template: FAULT-B capture reverted to the old `tail -c 180` | RED: F1's detail predicate (and its offline boilerplate fixture) |
 | 5 | Template: `systemd-timesyncd` dropped from apt_install (FA) | RED: `User does not exist` |
-| 6 | Suite: the row registry emptied, or `boot_row` returns before `docker run` (own dispatch) | RED: ROWS_BOOTED != registry, floor fails |
+| 6 | Suite: the row registry emptied, or `gather` returns before `docker create`/`boot_once` (own dispatch) | RED: ROWS_BOOTED != registry, floor fails |
 | 7 | Capture: a compliant `fresh_boot_ready` followed by a second event that is fatal (second member) | RED: the fatal scan reads every line |
 | 8 | Order: `fresh_boot_ready` moved above `egress_load` in the template's post-settle item | RED: trail order |
 | 9 | Suite: the minimal image gains `systemd-timesyncd` (e.g. `--no-install-recommends` dropped) | RED: `BRH_BASELINE_NOT_MINIMAL` |
@@ -856,7 +869,8 @@ PRs) and records the requirement in the #12942 comment.
 **Harness rows.**
 - The stub stops writing `capture.log` → B1 RED (an empty capture is never a pass).
 - The stub accepts any path, a missing `X-Sentry-Auth` or a wrong key → the live stub self-test goes
-  RED before any boot (the offline wrong-path fixture never runs the stub's routing, so it cannot
+  RED (it runs from a neighbour container before each row's boot and is asserted with that row's
+  verdict, after the waves; the offline wrong-path fixture never runs the stub's routing, so it cannot
   carry this row).
 - The decoy is not started → B1-E's neighbour-container liveness control fails, so a CLOSED probe
   cannot pass vacuously; a CLOSED probe that errors (curl rc 6, 7 or 60) is a FAIL, not a CLOSED.
@@ -923,7 +937,7 @@ decision-challenges.md). No taste or user-challenge item arose.
 ## Test Scenarios
 
 1. Fresh clone, docker and terraform present: `bash apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh`
-   → `bastion-runcmd-rehearsal: PASS (<n> assertions, 0 failed)`, cold under 900 s.
+   → `bastion-runcmd-rehearsal: PASS (<n> assertions, 0 failed)`, inside the derived 780 s deadline (CTO Q14).
 2. The same on main before the template fix → B1 RED naming `egress_load` and `User does not exist`,
    F1 RED on the detail predicate.
 3. docker absent locally → one `SKIP (loud)` line, exit 0; with `CI=true` → `BRH_TOOL_ABSENT:docker`,
@@ -1008,7 +1022,9 @@ decision-challenges.md). No taste or user-challenge item arose.
   ends `SKIP`, never `PASS`; under `CI` more than 2 skipped rows, or a skipped B1, prints
   `BRH_SKIP_CEILING` and exits 1; `BRH_ROWS`/`BRH_STATIC_ONLY` and the archive-pin override are refused
   under `CI`.
-- [ ] AC9. ADR-327 carries the 2026-11-20 addendum; `bastion-host.md` names the suite and job and says
-  it is advisory on PRs; `c4-count-parity.test.sh` passes; #12942 has the gate comment naming the
-  Checks API read of `bastion-boot-rehearsal` on the birth SHA.
+- [ ] AC9 (superseded by Q26/Q28). ADR-327 carries the 2026-11-20 addendum; `bastion-host.md` names the
+  suite and job, says it is advisory on PRs, and carries the pre-birth check (dispatched job conclusion
+  `success` plus exactly one `bastion-runcmd-rehearsal: PASS (` line); `c4-count-parity.test.sh` passes;
+  #12942 has the gate comment naming the in-birth rehearsal job (Q26) and the SKIP-on-dispatch rule (Q28),
+  never a Checks API read of an existing check-run.
 - [ ] AC10. PR body: `Closes #12941`, `Ref #12866`, `Ref #9421`; no `Closes` for #9421 or #12008.

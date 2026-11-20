@@ -1,7 +1,7 @@
 # Tasks — feat-one-shot-12941-bastion-runcmd-rehearsal
 
 Plan: `knowledge-base/project/plans/2026-11-20-feat-bastion-runcmd-rehearsal-plan.md`.
-Rulings: `decision-challenges.md` (Q1-Q24). Prototype: `prototype/`.
+Rulings: `decision-challenges.md` (Q1-Q29). Prototype: `prototype/`.
 Issue #12941 (Closes), Ref #12866, Ref #9421. Draft PR #12995.
 
 ## 1. Setup
@@ -38,8 +38,8 @@ Issue #12941 (Closes), Ref #12866, Ref #9421. Draft PR #12995.
 ## 4. Registration and CI
 
 - 4.1 `run-registered-suites.sh`: `DEDICATED_JOB_WHY`, shard exclusion, `--enumerate` exclusion, `SOLEUR_INFRA_SKIP_DEDICATED` marker with its loud line, `_SUITE_BOUNDS` 900, TOOLING line. (CTO Q25: the marker and the 900 s bound removed; the runner never executes the suite, sharded or unsharded.)
-- 4.2 `run-registered-suites.test.sh`: shard / unsharded / marker arm via `--list`.
-- 4.3 `test-infra-suite-registration.sh`: scoped PRIVILEGED parse, generalized job arm, manifest/durations treatment (no tsv rows, CTO Q20), Arm 4 `need` loop, monitor-marker assertion, no-secrets/hosted-runner/contents:read assertion; run Guard 2 mutations 1-9.
+- 4.2 `run-registered-suites.test.sh`: shard / unsharded / marker arm via `--list`. (The marker arm was removed by Q25: the `--list` arm asserts the suite is never in any execute set.)
+- 4.3 `test-infra-suite-registration.sh`: scoped PRIVILEGED parse, generalized job arm, manifest/durations treatment (no tsv rows, CTO Q20), Arm 4 `need` loop, monitor-marker assertion (removed by Q25), no-secrets/hosted-runner/contents:read assertion; run Guard 2 mutations 1-9.
 - 4.4 `infra-validation.yml`: job `bastion-boot-rehearsal` (18 min with derivation comment, checkout `persist-credentials: false`, failure artifact `brh.*` retention 14 d via the legs' upload-artifact pin, no credentials, advisory); aggregator `needs`, `entries`, env, `cancelled)` rewrite.
 - 4.5 `deploy-script-tests-aggregator-diagnosis.test.sh`: third result, cancelled rows, wiring row.
 - 4.6 `main-health-monitor.yml`: `SOLEUR_INFRA_SKIP_DEDICATED=1` on `test-infra`. (Reverted by CTO Q25: nothing to drop.)
@@ -49,7 +49,7 @@ Issue #12941 (Closes), Ref #12866, Ref #9421. Draft PR #12995.
 ## 5. Records and verification
 
 - 5.1 ADR-327 addendum (rehearsal requirement, user-install invariant, IMAGE_ASSUMED, two baselines, QEMU alternative and trigger, #12942 gate).
-- 5.2 `bastion-host.md` paragraph (states the job is advisory on PRs and the birth gate is #12942's).
+- 5.2 `bastion-host.md` paragraph (states the job is advisory on PRs; the birth gate will be #12942's in-birth job, and until it lands the runbook's dispatched check, Q26/Q28).
 - 5.3 Read `model.c4`, `views.c4`, `spec.c4` in full; run `bash plugins/soleur/test/c4-count-parity.test.sh`.
-- 5.4 Comment on #12942: its gate reads the `bastion-boot-rehearsal` check-run conclusion on the birth SHA through the Checks API and refuses anything but `success` (CTO Q22).
+- 5.4 (superseded by Q26/Q28) ~~Comment on #12942: its gate reads the `bastion-boot-rehearsal` check-run conclusion on the birth SHA through the Checks API.~~ Done as Q26/Q28 say instead: #12942's birth workflow will run the rehearsal as its own job and the apply job needs it `success` (the suite reds a SKIP on `workflow_dispatch`, Q28); until then the runbook's dispatched check (job conclusion `success` and exactly one `bastion-runcmd-rehearsal: PASS (` line) is the interim gate. The #12942 comments carry the Q26 transport (posted) and the Q28 rule (the lead's follow-up).
 - 5.5 Record wall times (local cold/warm, first CI run) and the discoverability probe output (`1`) in the PR body; PR body first line states merging mutates no production resource.
