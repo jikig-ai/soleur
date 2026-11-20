@@ -383,6 +383,62 @@ The step runs after the §(c) gate chain and before the plan, and refuses (exit 
 
 **Accepted residual (structural):** web-1's probe is journaled at web-1's deploy BEFORE it fans the deploy out to web-2, so it exercises web-2's PREVIOUS container and cannot prove web-2's newest one. There is no SSH at serve time to close that. The fresh evidence is web-2's own 60 s line and the reverse probe written by web-2's own deploy. Practice: dispatch serve right after a release deploy, so all three rows describe the same build.
 
+### Before dispatching mode=serve: the soak floor and the per-instance grader (#12849)
+
+Two serve preconditions run before the plan, and both must pass. The §(c) gate chain enforces each LUKS soak (`git_data`, `workspaces_luks`) for at least 3 days: `SOAK_FLOOR_DAYS` in `lb-weight-gate.sh` is a floor, and a configured `GIT_DATA_LUKS_SOAK_DAYS` or `WORKSPACES_LUKS_SOAK_DAYS` may only lengthen it. The next step, `per-instance soak grader (serve only)`, runs the #6931 grader (`scripts/followthroughs/web2-luks-live-6931.sh`) for web-2 with the boot_id join on (`W2L_REQUIRE_BOOT_JOIN=1`) and refuses on any verdict other than PASS (NOTHING planned, NOTHING applied). A verdict counts only when the grader's exit code and its first line agree.
+
+**A refused serve changes no weight and never drains.** If web-2 is already serving (live weight 1) when a serve refuses, it keeps serving: dispatch the drain if the refusal says web-2 should not serve (`FAIL`, a boot_id mismatch, a replace remedy). The drain is an Operator-authorizes dispatch; every input below is required:
+
+```bash
+gh workflow run cf-lb-overlay.yml --ref main -f arm=ga-pool-update -f mode=drain -f confirm=UPDATE-GA-LB-POOL -f reason="<why, e.g. serve refused FAIL run <id>>"
+```
+
+ Never restore or keep the weight by a full-root apply while a serve refuses: it takes the `web2_lb_weight` default of 1 outside both checks (see "After the serve" below). For a below-floor refusal, deleting the Doppler value (#12933) is the only sanctioned route.
+
+**Drain during a running serve.** The job holds the `terraform-apply-web-platform-host` concurrency group (`cancel-in-progress: false`), and GitHub keeps one pending run per group. To drain fast, cancel the in-flight serve first, then dispatch the drain, and dispatch nothing else to the group until the drain has run (a later dispatch replaces the queued one).
+
+**Check before dispatching (read-only, Better Stack reads only).** The grader runs locally with the environment the serve step gives it (`env -i`, a fixed `PATH`, a fresh `HOME`, only the three Better Stack read values), so the caller's `~/.jq`, `PATH` and the rest of `prd_terraform` cannot change or reach it. The launching shell unsets the bash startup variables (as the serve step does, R4) and `--preserve-env` keeps a Doppler `PATH` or `TMPDIR` from overriding yours:
+
+```bash
+doppler run --preserve-env -p soleur -c prd_terraform -- env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 bash -c 'h="$(mktemp -d)"; env -i PATH=/usr/bin:/bin HOME="$h" TMPDIR="${TMPDIR:-/tmp}" BETTERSTACK_QUERY_HOST="$BETTERSTACK_QUERY_HOST" BETTERSTACK_QUERY_USERNAME="$BETTERSTACK_QUERY_USERNAME" BETTERSTACK_QUERY_PASSWORD="$BETTERSTACK_QUERY_PASSWORD" SOLEUR_FT_EARLIEST= W2L_REQUIRE_BOOT_JOIN=1 bash scripts/followthroughs/web2-luks-live-6931.sh; rc=$?; rm -rf "$h"; exit "$rc"'
+```
+
+Its first line is the verdict the serve step would see. The gate's clock (`marker_at`) is known before dispatch only from the last evidence line.
+
+Each step reports one kind of line, on stderr and in the step summary (inside a `text` fence under the step's heading):
+
+- `SOLEUR_SOAK_EVIDENCE`, one line per soak kind the gate evaluated: `kind`, `host`, `soak_days` (`invalid` when the knob is not a plain integer from 1 to 999), `source` (`default` or `env`), `floor_days`, `marker_at` (rebuilt from the marker's epoch, or `none` / `unparseable`), `age_s`, `required_s`, `verdict` (`pass` or `fail`, lower case) and `sub_condition` (the refusing id, or `none`).
+- `SOLEUR_INSTANCE_SOAK`, one line per serve dispatch that reached the grader step: `host`, `grader`, `rc` (the grader's exit code; `none` = the grader was not run; `interrupted` = a cancel, timeout or abort while it ran) and `verdict` (`PASS`, `FAIL`, `NOT_YET` or `CANNOT_ESTABLISH`, upper case). The next line, `grade_text=<the grader's first line>`, is the reason; it is in the log and in its own fence in the summary.
+
+The exact grammar of each line is `SOAK_EV_RE` / `INSTANCE_EV_RE` in `scripts/lib/serve-soak-evidence.sh` (the one copy), recorded in the ADR-263 addendum of 2026-11-18. The refusing id of record is the `gate_fail sub_condition=<id>` line; the evidence line is a report, not the contract.
+
+To read them: open the run's step summary, or `gh run view <id> --log` and look for the prefixes (the log prefixes each line with the job, step and timestamp). `bash scripts/serve-soak-evidence-last.sh` prints the newest completed `cf-lb-overlay.yml` run that carries them: `run= branch= sha= conclusion=`, then the soak lines, the first `gate_fail` line, the instance line and its `grade_text=` line. It skips runs still in progress or with no readable log (counted on stderr), exits 2 when no readable run carries evidence (the expected state until the first serve on this code), and 3 on a read fault.
+
+**Two clocks.** The gate's soak runs from the marker: its earliest pass is `marker_at` + `required_s`. The grader's soak runs from the newest web-2 readiness row: it needs green probe rows on 3 distinct days after that row, no non-green row since, and the newest probe row on the readiness row's boot_id. Both must pass, so the later of the two sets the earliest serve.
+
+Class: WAIT = retry later, no action; HOLD = an Operator-authorizes hold (an agent dispatches the named workflow after the go); AGENT = an agent can do it now; DEFECT = a code or wiring defect, do not re-dispatch.
+
+| Refusal | Class | What to do |
+|---|---|---|
+| `*_soak_days_below_floor` | HOLD | Delete the Doppler `prd` value (#12933, Operator-authorizes). Until #12933, every serve refuses this way. |
+| `*_soak_not_elapsed` | WAIT | Wait until `marker_at` + `required_s`. |
+| `*_soak_days_invalid` | HOLD | The knob is not a plain integer from 1 to 999 (a leading zero, more than 3 digits, or text); the log prints `soak_days=invalid` on purpose. The operator reads the value (`doppler secrets get <KNOB> -p soleur -c prd --plain`, a secret read), then sets a plain integer from 3 to 999 or deletes it (Operator-authorizes). |
+| refusing id `gate_not_run_<class>` | AGENT | The wrapper or Doppler failed before the gate ran (`marker_source_fail class=<class>`). Read the replayed stderr in the step log; a transport class (`names_rc_*`) is retried by re-dispatching; `bad_doppler_bin` is a DEFECT. |
+| refusing id `none` | DEFECT | Neither a `gate_fail` nor a `marker_source_fail` line was captured; read the replayed stderr and file the defect. |
+| `NOT_YET`, `grade_text` says "no GREEN web-2 readiness row" and web-2 is older than 90 days | HOLD | The readiness lookback is 90 days and the row is written once per instance: drain first if web-2 serves, replace the host (`web-host-replace.md`), wait for the 3-day soak (G12; #12938). |
+| `NOT_YET`, `grade_text` names `luks_arm=`, a RED readiness reason other than the two below, or "are not one known boot" | HOLD | Waiting cannot repair it (the readiness row is written once per instance; the same instance never writes a second one): drain first if web-2 serves, then replace the host. |
+| `NOT_YET`, `grade_text` names `ready_body_unparseable` | AGENT | A Better Stack read fault on the readiness row: retry now. |
+| `NOT_YET`, `grade_text` names `ready_judge_error` | DEFECT | The readiness judge failed (a code defect); do not re-dispatch. |
+| `NOT_YET`, `grade_text` says "did not answer" or "could not be parsed" | AGENT | A Better Stack read fault: retry now. |
+| `NOT_YET` (a soak still running) | WAIT | Retry after 3 distinct green probe days. Still `NOT_YET` 4 days after readiness: telemetry dark; run the readiness-row and daily probe-row (`SYSLOG_IDENTIFIER = luks-monitor`, `host_name = soleur-web-2`) Better Stack queries in `web-host-replace.md` (`scripts/betterstack-query.sh`). |
+| `FAIL` | HOLD | The instance's soak is spoiled: drain first if web-2 serves, read the non-green probe rows with the same `web-host-replace.md` queries, then replace the host (the repair). |
+| `CANNOT_ESTABLISH` with rc 3 and a `CANNOT ESTABLISH:` grade_text | AGENT | Better Stack credentials or the shared helper are missing: check the step's three `BETTERSTACK_QUERY_*` bindings; the grade_text names the missing one. |
+| `CANNOT_ESTABLISH` with `rc=interrupted` | AGENT | The run was cancelled, timed out or aborted while the grader ran: re-dispatch once. |
+| `CANNOT_ESTABLISH` with `rc=none`, `::error::` "no scratch HOME could be created" | AGENT | The runner's `RUNNER_TEMP` was not writable: re-dispatch once; a second refusal is a DEFECT. |
+| `CANNOT_ESTABLISH` with `rc=none`, any other `::error::` | DEFECT | The grader was not run: the gated host is not web-2 (until #12869). Do not re-dispatch. |
+| `CANNOT_ESTABLISH` with an exit code and grade_text that disagree, rc 126, 127 or another code | DEFECT | Do not re-dispatch. |
+| Anti-vacuity ("soak evidence ... missing or malformed", "malformed soak evidence line") | DEFECT | Do not re-dispatch. |
+
 ### After the serve: the tree and live agree on web-2 = 1 (#12363)
 
 The rule, in one sentence: **the `web2_lb_weight` default is 1 (live web-2 serves); drain is an explicit `-var=web2_lb_weight=0`.** The serve flip applied on 2026-11-08 (run 42488889045) and #12363 moved the default to 1 with the pins that encoded 0, so Terraform state, the live pool and the configuration agree. What that means in practice:

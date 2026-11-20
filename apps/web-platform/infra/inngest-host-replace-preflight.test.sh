@@ -16,6 +16,11 @@
 # (a -replace of hcloud_server.inngest in a workflow/action file, a literal or bracket secrets reference, the
 # dynamic toJSON/join/format forms). They are not a proof that no other consumer can exist: a reusable workflow
 # that hides the replace in a script, or a composite action fed the secret through an input, is outside them.
+# Guard 1's step-order check is a tripwire for an ordinary edit that puts a terraform step ahead of the preflight
+# (any flag spelling of -replace, terraform's global flags and `\` continuations, TF_CLI_ARGS* step env, a custom
+# shell:, an untrusted or unreadable uses: step, a local composite judged by its own steps). Out of scope: a command
+# split by shell quoting (`"terraform" apply`, `-re""place`), terraform reached through a script the run calls, and a
+# reusable workflow. Each needs an author who could as easily delete the preflight itself; review covers that.
 #
 # Harness conventions: code-edit rows run as MUTANTS (copy, sed the copy, assert the edit LANDED on the
 # expected diff-line count, require the NAMED violation); the unmutated control runs first and must be clean;
@@ -123,9 +128,9 @@ PATH_FULL="$(make_path full 1 1)"; PATH_NODOP="$(make_path nodop 0 1)"; PATH_NOJ
 # extract_step <workflow> <outdir>: writes <outdir>/body.sh and <outdir>/meta (key=value lines).
 extract_step() {
   local wf="$1" out="$2"; assert_fixture_dir "$out"; mkdir -p "$out"
-  python3 - "$wf" "$out" "$STEP_NAME" "$JOB" <<'PY'
-import sys, yaml
-wf, out, name, job = sys.argv[1:5]
+  python3 - "$wf" "$out" "$STEP_NAME" "$JOB" "${PF_ACTION_ROOT:-$ROOT}" <<'PY'
+import os, sys, yaml
+wf, out, name, job, root = sys.argv[1:6]
 d = yaml.safe_load(open(wf))
 steps = d["jobs"][job]["steps"]
 exact = [s for s in steps if s.get("name") == name]
@@ -137,7 +142,38 @@ names = [s.get("name", "") for s in steps]
 idx = next((i for i, s in enumerate(steps) if s.get("name") == name), -1)
 def runs_of(st):
     return st.get("run") if isinstance(st.get("run"), str) else ""
-first_plan = next((i for i, st in enumerate(steps) if (isinstance(st.get("name"), str) and (st["name"].startswith("Terraform plan") or st["name"].startswith("Terraform apply"))) or (i != idx and re.search(r"terraform\s+(plan|apply)|-replace", runs_of(st)))), 10**6)
+# A step is plan-like when its run text invokes terraform plan/apply (global flags such as -chdir allowed, `\`
+# continuations included) or passes a -replace/--replace FLAG (bounded both sides, so the word inside
+# `inngest-host-replace` does not count), when its own env sets TF_CLI_ARGS*, or when it is a `uses:` step this
+# guard cannot read: only the pinned checkout/setup-terraform are trusted, and a local composite is judged by its
+# own steps (a missing action.yml counts as plan-like, fail-closed).
+RUN_RE = re.compile(r"terraform(?:(?:\s|\\\n)+-\S+)*(?:\s|\\\n)+(plan|apply)\b|(?<![\w-])--?replace(?![\w-])")
+TRUSTED_USES = ("actions/checkout@", "hashicorp/setup-terraform@")
+ROOT_REAL = os.path.realpath(root)
+def plan_like(st, depth=0):
+    env = st.get("env")
+    if env is not None and not isinstance(env, dict):
+        return True  # an expression env (`${{ fromJSON(...) }}`) cannot be read for TF_CLI_ARGS*
+    text = runs_of(st) + "\n" + (st.get("shell") if isinstance(st.get("shell"), str) else "")
+    if RUN_RE.search(text) or any(str(k).upper().startswith("TF_CLI_ARGS") for k in (env or {})):
+        return True
+    if depth > 0 and "${{ inputs." in runs_of(st):
+        return True  # a composite command built from the caller's with: is unreadable here
+    u = st.get("uses")
+    if not isinstance(u, str) or u.startswith(TRUSTED_USES):
+        return False
+    if not u.startswith("./") or depth > 2:
+        return True
+    p = os.path.realpath(os.path.join(ROOT_REAL, u[2:]))
+    if not p.startswith(ROOT_REAL + os.sep):
+        return True  # outside the checkout: a `./..` traversal, or a `.//` path os.path.join reads as absolute
+    try:
+        act = yaml.safe_load(open(os.path.join(p, "action.yml")))
+        sub = act["runs"]["steps"]
+    except Exception:
+        return True
+    return any(plan_like(x, depth + 1) for x in sub)
+first_plan = next((i for i, st in enumerate(steps) if (isinstance(st.get("name"), str) and (st["name"].startswith("Terraform plan") or st["name"].startswith("Terraform apply"))) or (i != idx and plan_like(st))), 10**6)
 pat = re.compile(r"-replace(=|[ \t]+)['\"]?[^\s'\"]*hcloud_server\.inngest")
 jb = d["jobs"][job]
 defaults_bad = "1" if (d.get("defaults") or jb.get("defaults") or any(k in (jb.get("env") or {}) for k in ("BASH_ENV", "ENV", "PATH", "SHELLOPTS"))) else "0"
@@ -335,6 +371,26 @@ if [ -z "$v" ]; then pass "G3: access read, by-reference scope, secret carries i
 
 # need_viol <fn-output> <code> <label>
 need() { if grep -qF -- "$2" <<<"$1"; then pass "$3"; else fail "$3" "wanted $2, got: $(printf '%s' "$1" | tr '\n' ' ')"; fi; }
+# need_only <fn-output> <line> <label>: the output is exactly that one line, so a parse failure (which also prints
+# VIOL:step-order beside VIOL:step-not-found-once) cannot pass a row for the wrong reason.
+need_empty() { if [ -z "$1" ]; then pass "$2"; else fail "$2" "wanted no violation, got: $(printf '%s' "$1" | tr '\n' ' ')"; fi; }
+# mutate_insert <label> <want-lines>: insert stdin's YAML lines ahead of the preflight step in a copy of the workflow
+# (no sed quoting layers, so continuations and quotes reach the YAML as written); the count must land exactly.
+mutate_insert() {
+  local label="$1" want="$2" dst="$SANDBOX/mut.$1" snip; snip="$(cat)"
+  SNIP="$snip" python3 - "$WF_REAL" "$dst" "$want" <<'PYI' || { printf 'FAIL HARNESS: insert failed for %s\n' "$label" >&2; exit 1; }
+import os, sys
+src, dst, want = sys.argv[1], sys.argv[2], int(sys.argv[3])
+lines = open(src).read().split("\n")
+hits = [i for i, l in enumerate(lines) if "- name: 'Preflight - inherited-done check" in l]
+snip = os.environ["SNIP"].split("\n")
+if len(hits) != 1 or len(snip) != want:
+    sys.exit(1)
+open(dst, "w").write("\n".join(lines[:hits[0]] + snip + lines[hits[0]:]))
+PYI
+  MUTANTS_RUN=$((MUTANTS_RUN + 1)); MUT="$dst"
+}
+need_only() { if [ "$1" = "$2" ]; then pass "$3"; else fail "$3" "wanted exactly $2, got: $(printf '%s' "$1" | tr '\n' ' ')"; fi; }
 
 # The mutants only mean something against a clean control; skip them (and say so) when it is not.
 if [ "${#FAILURES[@]}" -eq 0 ]; then
@@ -375,7 +431,97 @@ PYM
   MUTANTS_RUN=$((MUTANTS_RUN + 1)); need "$(static_viol "$m" m18)" 'VIOL:replace-job-unguarded' "G1 m18: a second job that replaces the host without the preflight -> RED"
   mutate "$WF_REAL" g1m21 2 -e "$RNG{" -e 's/chars, value withheld/chars, value ${FLAG}/' -e '}'; m=$MUT; need "$(rows "$m" m21)" '(value-echoed)' "G1 m21: the unexpected flag value echoed to the log -> RED"
   mutate "$WF_REAL" g1m22 2 -e "$RNG{" -e 's/timeout 30 doppler secrets --only-names/doppler secrets --only-names/' -e '}'; m=$MUT; need "$(static_viol "$m" m22)" 'VIOL:timeout-pin' "G1 m22: the timeout dropped from a doppler call -> RED"
-  mutate "$WF_REAL" g1m24 2 "/- name: 'Preflight - inherited-done check/i\\      - name: Scoped replace\\n        run: terraform apply -auto-approve"; m=$MUT; need "$(static_viol "$m" m24)" 'VIOL:step-order' "G1 m24: a terraform apply step (any name) ahead of the preflight -> RED"
+  mutate "$WF_REAL" g1m24 2 "/- name: 'Preflight - inherited-done check/i\\      - name: Scoped replace\\n        run: terraform apply -auto-approve"; m=$MUT; need_only "$(static_viol "$m" m24)" 'VIOL:step-order' "G1 m24: a terraform apply step (any name) ahead of the preflight -> RED"
+  # The order predicate reads terraform's `-replace` FLAG, not the word: a step ahead of the preflight whose prose names
+  # the `inngest-host-replace` target is not a plan/apply step (PR #12876's confirm step tripped the bare `-replace`).
+  mutate "$WF_REAL" g1m40 2 "/- name: 'Preflight - inherited-done check/i\\      - name: Prose decoy\\n        run: echo 'inngest-host-replace requires a token'"; m=$MUT
+  if ! grep -qF 'VIOL:step-order' <<<"$(static_viol "$m" m40)"; then pass "G1 m40: a step whose prose names inngest-host-replace stays GREEN"; else fail "G1 m40: a step whose prose names inngest-host-replace stays GREEN" "the bare -replace word tripped step-order"; fi
+  mutate "$WF_REAL" g1m41 2 "/- name: 'Preflight - inherited-done check/i\\      - name: Innocent name\\n        run: tf -replace=hcloud_server.inngest"; m=$MUT; need_only "$(static_viol "$m" m41)" 'VIOL:step-order' "G1 m41: a -replace= flag in any step ahead of the preflight -> RED"
+  # Every other spelling of the same flag or invocation, and the two ways a step can act without readable run text.
+  mutate "$WF_REAL" g1m42 2 "/- name: 'Preflight - inherited-done check/i\\      - name: Dd\\n        run: tf --replace=hcloud_server.inngest"; m=$MUT; need_only "$(static_viol "$m" m42)" 'VIOL:step-order' "G1 m42: a --replace= (double-dash) flag ahead of the preflight -> RED"
+  mutate "$WF_REAL" g1m43 2 "/- name: 'Preflight - inherited-done check/i\\      - name: Sp\\n        run: tf -replace hcloud_server.inngest"; m=$MUT; need_only "$(static_viol "$m" m43)" 'VIOL:step-order' "G1 m43: a space-separated -replace flag ahead of the preflight -> RED"
+  mutate "$WF_REAL" g1m44 2 "/- name: 'Preflight - inherited-done check/i\\      - name: Qt\\n        run: tf \"-replace=hcloud_server.inngest\""; m=$MUT; need_only "$(static_viol "$m" m44)" 'VIOL:step-order' "G1 m44: a quoted -replace= flag ahead of the preflight -> RED"
+  mutate "$WF_REAL" g1m45 2 "/- name: 'Preflight - inherited-done check/i\\      - name: Cd\\n        run: terraform -chdir=infra apply -auto-approve"; m=$MUT; need_only "$(static_viol "$m" m45)" 'VIOL:step-order' "G1 m45: terraform -chdir=X apply ahead of the preflight -> RED"
+  mutate "$WF_REAL" g1m46 4 "/- name: 'Preflight - inherited-done check/i\\      - name: Env\\n        env:\\n          TF_CLI_ARGS_plan: x\\n        run: tf plan"; m=$MUT; need_only "$(static_viol "$m" m46)" 'VIOL:step-order' "G1 m46: a TF_CLI_ARGS* step env ahead of the preflight -> RED"
+  mutate "$WF_REAL" g1m47 2 "/- name: 'Preflight - inherited-done check/i\\      - name: Uses\\n        uses: some-org/some-action@v1"; m=$MUT; need_only "$(static_viol "$m" m47)" 'VIOL:step-order' "G1 m47: an untrusted uses: step ahead of the preflight -> RED"
+  mutate "$WF_REAL" g1m48 2 "/- name: 'Preflight - inherited-done check/i\\      - name: Local\\n        uses: ./.github/actions/no-such-action"; m=$MUT; need_only "$(static_viol "$m" m48)" 'VIOL:step-order' "G1 m48: a local composite with no readable action.yml ahead of the preflight -> RED"
+  mutate_insert g1m49 5 <<'EOF'
+      - name: Cont
+        run: |
+          terraform \
+            -chdir=infra \
+            apply
+EOF
+  need_only "$(static_viol "$MUT" m49)" 'VIOL:step-order' "G1 m49: a backslash-continued terraform apply ahead of the preflight -> RED"
+  mutate_insert g1m50 2 <<'EOF'
+      - name: Innocuous
+        run: terraform plan -out=x
+EOF
+  need_only "$(static_viol "$MUT" m50)" 'VIOL:step-order' "G1 m50: a terraform plan under an innocuous name ahead of the preflight -> RED"
+  mutate_insert g1m51 2 <<'EOF'
+      - name: Lookalike
+        uses: actions/checkout-lookalike@v1
+EOF
+  need_only "$(static_viol "$MUT" m51)" 'VIOL:step-order' "G1 m51: a lookalike of a trusted action ahead of the preflight -> RED"
+  mutate_insert g1m52 3 <<'EOF'
+      - name: Expr env
+        env: '${{ fromJSON(vars.X) }}'
+        run: tf plan
+EOF
+  need_only "$(static_viol "$MUT" m52)" 'VIOL:step-order' "G1 m52: an expression env (unreadable for TF_CLI_ARGS*) ahead of the preflight -> RED"
+  mutate_insert g1m53 2 <<'EOF'
+      - name: Prose flags
+        run: echo 'see -replacement notes and the --replace-all option'
+EOF
+  need_empty "$(static_viol "$MUT" m53)" "G1 m53: prose words that merely start with -replace stay GREEN"
+  mutate_insert g1m54 3 <<'EOF'
+      - name: Shell
+        shell: terraform apply -auto-approve {0}
+        run: x
+EOF
+  need_only "$(static_viol "$MUT" m54)" 'VIOL:step-order' "G1 m54: terraform in a custom shell: ahead of the preflight -> RED"
+  AROOT="$SANDBOX/aroot"; assert_fixture_dir "$AROOT"
+  mkdir -p "$AROOT/.github/actions/infra-credentials" "$AROOT/.github/actions/tfc" "$AROOT/.github/actions/inp" \
+    "$AROOT/.github/actions/ok" "$AROOT/.github/actions/c1" "$AROOT/.github/actions/c2" "$AROOT/.github/actions/c3" \
+    "$AROOT/.github/actions/c4" "$SANDBOX/abs/benign"
+  cp "$ROOT/.github/actions/infra-credentials/action.yml" "$AROOT/.github/actions/infra-credentials/action.yml"
+  printf 'runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: terraform apply -auto-approve\n' > "$AROOT/.github/actions/tfc/action.yml"
+  printf 'runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: terraform ${{ inputs.cmd }} -auto-approve\n' > "$AROOT/.github/actions/inp/action.yml"
+  printf 'runs:\n  using: composite\n  steps:\n    - shell: bash\n      run: echo ok\n' > "$AROOT/.github/actions/ok/action.yml"
+  cp "$AROOT/.github/actions/ok/action.yml" "$AROOT/.github/actions/c4/action.yml"
+  cp "$AROOT/.github/actions/ok/action.yml" "$SANDBOX/abs/benign/action.yml"
+  for c in 1 2 3; do printf 'runs:\n  using: composite\n  steps:\n    - uses: ./.github/actions/c%s\n' "$((c + 1))" > "$AROOT/.github/actions/c$c/action.yml"; done
+  mutate_insert g1m55 2 <<'EOF'
+      - name: Benign composite
+        uses: ./.github/actions/ok
+EOF
+  need_empty "$(PF_ACTION_ROOT="$AROOT" static_viol "$MUT" m55)" "G1 m55: a benign local composite stays GREEN under the fixture root (the real infra-credentials resolves there too)"
+  mutate_insert g1m56 2 <<'EOF'
+      - name: TF composite
+        uses: ./.github/actions/tfc
+EOF
+  need_only "$(PF_ACTION_ROOT="$AROOT" static_viol "$MUT" m56)" 'VIOL:step-order' "G1 m56: a local composite whose own step runs terraform apply ahead of the preflight -> RED"
+  mutate_insert g1m57 3 <<'EOF'
+      - name: Input composite
+        uses: ./.github/actions/inp
+        with: {cmd: apply}
+EOF
+  need_only "$(PF_ACTION_ROOT="$AROOT" static_viol "$MUT" m57)" 'VIOL:step-order' "G1 m57: a composite command built from the caller's inputs ahead of the preflight -> RED"
+  mutate_insert g1m58 2 <<'EOF'
+      - name: Deep chain
+        uses: ./.github/actions/c1
+EOF
+  need_only "$(PF_ACTION_ROOT="$AROOT" static_viol "$MUT" m58)" 'VIOL:step-order' "G1 m58: a composite chain past the depth bound ahead of the preflight -> RED"
+  mutate_insert g1m59 2 <<EOF
+      - name: Escaping path
+        uses: .//${SANDBOX#/}/abs/benign
+EOF
+  need_only "$(PF_ACTION_ROOT="$AROOT" static_viol "$MUT" m59)" 'VIOL:step-order' "G1 m59: a .// composite path that resolves outside the checkout ahead of the preflight -> RED"
+  mutate_insert g1m60 2 <<'EOF'
+      - name: Traversal
+        uses: ./../abs/benign
+EOF
+  need_only "$(PF_ACTION_ROOT="$AROOT" static_viol "$MUT" m60)" 'VIOL:step-order' "G1 m60: a ./.. composite path that resolves outside the checkout ahead of the preflight -> RED"
   m="$SANDBOX/mut.g1m23.yml"
   python3 - "$WF_REAL" "$m" "$JOB" <<'PYM'
 import sys, yaml
@@ -442,12 +588,12 @@ fi
 TOTAL=$((passes + fails))
 printf '\n== %d passed, %d failed (%d assertions, %d stubbed executions in the control, %d mutants)\n' "$passes" "$fails" "$TOTAL" "$CONTROL_ROWS" "$MUTANTS_RUN"
 # Anti-vacuity floors, reported with printf + exit so a neutered pass()/fail() cannot hide them.
-MIN_ASSERTIONS=48
+MIN_ASSERTIONS=69
 if [ "$passes" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FAIL: assertion floor: only %d assertions passed, floor %d\n' "$passes" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
-MIN_MUTANTS=40
+MIN_MUTANTS=61
 if [ "$fails" -eq 0 ] && [ "$MUTANTS_RUN" -lt "$MIN_MUTANTS" ]; then
   printf 'FAIL: assertion floor: only %d mutants ran, floor %d\n' "$MUTANTS_RUN" "$MIN_MUTANTS" >&2
   exit 1
