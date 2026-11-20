@@ -328,7 +328,7 @@ self-tests, the image checks, S0 and S1, but still builds the fixture images, so
   fixture image (`docker run --rm`), so the host needs no cloud-init.
 - S1: the runcmd items joined with newlines (cloud-init's `shellify` of string items) pass `dash -n`
   inside the fixture image. It keeps one must-RED control (a copy with one unbalanced `fi` fails
-  `dash -n`), so it stays non-vacuous under the promoted vacuity floor (CTO Q18c).
+  `dash -n`), so it stays non-vacuous under the promoted vacuity floor (CTO Q18, the S1 control).
 
 **Fixture images.** Built once per run from `UBUNTU_BASE` through `gd_apt_install_bounded
 --no-install-recommends` (Kieran review: noble's `systemd` Recommends `systemd-timesyncd` and
@@ -439,7 +439,7 @@ three waves of up to three: [`B1` (which also carries B1-E and B1-P), `B2`, `M1`
 `F1-M`], [`FA`, `B1-C`]. That is 9 boots (B2 boots twice). Each row owns its network, stub and
 capture dir. Plan-time timing for the reboot row: 87 s for both boots.
 
-**Cloud-faithful package set (CTO Q10, Q18b).** An inline array `CLOUD_IMAGE_PKGS=(apt
+**Cloud-faithful package set (CTO Q10, Q18 inline array).** An inline array `CLOUD_IMAGE_PKGS=(apt
 ca-certificates cloud-init curl iproute2 nftables openssh-server systemd systemd-resolved
 systemd-timesyncd)` with a comment naming the manifest (`noble-server-cloudimg-amd64.manifest`), its
 serial and the retrieval date (2026-11-20). These are the manifest's packages that the template
@@ -473,7 +473,7 @@ run against synthesized capture files:
   `fresh_boot_ready` before `egress_load`; a wrong `host_name`; an empty file; a detail with only
   systemd boilerplate (the prototype's real FAULT-A detail, `Dependency failed for
   bastion-egress.service ... Failed to start bastion-egress.service ...`, replaces the cut F1-D boot,
-  CTO Q18a); a body posted to a wrong path; a body without `sentry_key=pubkey123`.
+  CTO Q18, the F1-D cut); a body posted to a wrong path; a body without `sentry_key=pubkey123`.
 
 **Verdict and anti-vacuity (ADR-193).** `cases` moves at every assertion call site. `FAILURES=()` is
 append-only and the verdict reads it. `SKIPPED_ASSERTIONS` is denominated in assertions. The floor is
@@ -757,8 +757,8 @@ failure_modes:
     detection: rows F1 and FA (detail predicates), the offline _egress_why fixtures and must-RED boilerplate fixture, and bastion.test.sh's EGRESS-WHY call-site pins, in the workflow run log (layer 6)
     alert_route: 'the bastion-boot-rehearsal and infra-validation checks on the PR; at birth, the runbook''s dispatched check (later #12942''s in-birth job)'
   - mode: on the real host, egress_load dies and the fatal reaches Sentry without its reason
-    detection: Sentry (layer 1), event fresh_boot_not_ready_egress_load, tag detail; it names the reason line, or why=no_reason_line nft=<Result> egress=<Result> st=<ExecMainStatus> last=<line> (CTO Q29); the bastion ships no journal, so this tag is the only remote signal
-    alert_route: 'the birth workflow''s boot-verify read of the Sentry trail (not ready -> power-off and a #12879 comment)'
+    detection: 'the Sentry event fresh_boot_not_ready_egress_load, posted by the runcmd _emit straight to the Sentry store API (not Inngest layer 1, no Vector: none of layers 1-5 carries it), tag detail; it names the reason line, or why=no_reason_line nft=<Result> egress=<Result> st=<ExecMainStatus> last=<line, or unread> (CTO Q29); the bastion ships no journal, so this tag is the only remote signal'
+    alert_route: 'boot-verify''s streamed boot-trail lines (stage=... detail=...) and its ::error:: NOT-ready line in the birth workflow run log (layer 6) -> power-off and a #12879 comment'
   - mode: the rehearsal silently stops booting (all rows skipped, or zero rows run)
     detection: the ROWS_BOOTED identity and the ADR-193 floor; an all-skip run ends SKIP, never PASS, and fails on a gate event (BRH_SKIP_ON_GATE_EVENT, Q28), in the workflow run log (layer 6)
     alert_route: the bastion-boot-rehearsal check on the PR (::warning on SKIP); at birth, the runbook's PASS-line count; SKIP (loud) lines in the workflow run log
@@ -924,15 +924,15 @@ decision-challenges.md). No taste or user-challenge item arose.
   of `--enumerate`; the aggregator replay test and its `cancelled)` order dependence; Arm 4's `need`
   loop; the main-health-monitor consumer (ruled Q16); `journalctl --sync` and `-b`; the CI skip ceiling
   (ruled Q17); SPECS counts derived, not hand-counted; terraform 1.10.5 re-render; image tag week term.
-- Applied (DHH, simplicity): F1-D cut (Q18a); the decoy only on B1's network; the baseline file
-  replaced by an inline array (Q18b); IMAGE_ASSUMED merged with the fixture list; P8 restated; P10 and
+- Applied (DHH, simplicity): F1-D cut (Q18); the decoy only on B1's network; the baseline file
+  replaced by an inline array (Q18); IMAGE_ASSUMED merged with the fixture list; P8 restated; P10 and
   P11 added for B1-P and B1-C.
 - Applied (CTO devex): evidence kept on failure plus the CI artifact; `BRH_ANCHOR_MISS`;
   `BRH_STATIC_ONLY` and `BRH_ROWS` (ending `PARTIAL`, refused under CI); the template header pointer;
   the line estimate revised.
 - Ruled, not applied as proposed: DHH's single-source budget and simplicity's cut became the derived
   deadline (Q14); DHH's fixed-literal fallback became the structured `Result` line (Q15); S1 keeps its
-  must-RED control (Q18c).
+  must-RED control (Q18).
 
 ## Test Scenarios
 
