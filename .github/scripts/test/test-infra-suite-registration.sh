@@ -25,13 +25,16 @@
 #      job, below) — it is the single verdict `notify-main-failure` reads.
 #   5. The DEDICATED set (#12941, CTO Q25: suites that cannot ride a ship battery) is
 #      derive-but-do-not-execute, like PRIVILEGED — the runner never executes them,
-#      sharded or unsharded, and omits them from --enumerate. Each must be invoked,
-#      unmasked, by `bash <path>` in the job its DEDICATED_JOB_WHY value names
-#      (`runs in the <job> job`); that job must run on a hosted runner with job-level
-#      `permissions: contents: read` only, reference no `secrets.`, and check out with
-#      `persist-credentials: false`. The runner's never-execute BEHAVIOUR is pinned by
+#      sharded or unsharded, and omits them from --enumerate. Each must be invoked by
+#      exactly one bare `run: bash <path>` step — unmasked, no `||`/`set +e`, no
+#      job-level `continue-on-error:` — in the job its DEDICATED_JOB_WHY value names
+#      (`runs in the <job> job`), and by NO other line of any workflow. That job must run
+#      on a hosted runner with job-level `permissions: contents: read` only, reference no
+#      credential (`secrets.`/`secrets[`/`github.token`, job or workflow env), set no
+#      `CI`/`GITHUB_ACTIONS`/`BRH_*` key, and check out with `persist-credentials: false`
+#      on every checkout step. The runner's never-execute BEHAVIOUR is pinned by
 #      apps/web-platform/infra/run-registered-suites.test.sh (T11k), which executes the
-#      runner; this gate stays text-only.
+#      runner; this gate reads only the runner's derive-only `--list`.
 #
 # WHAT IT DOES *NOT* ASSERT, stated so no reader over-reads a green run:
 #   - Whether a suite's VERDICT blocks merge. deploy-script-tests is advisory; promotion
@@ -48,8 +51,10 @@
 # The privileged and dedicated lists are read FROM THE RUNNER (its PRIVILEGED_WHY and
 # DEDICATED_JOB_WHY maps, each parsed only inside its own `declare -A` block), never
 # duplicated here — two lists over one set is the drift this file exists to prevent,
-# one level up. Each entry must cite a tracking issue, the same fail-closed discipline
-# the old EXCLUSIONS array carried.
+# one level up. The parse is then held EQUAL to the runner's own `--list` SKIP sets,
+# so an entry the text parse cannot see fails here instead of vanishing from CI.
+# Each entry must cite a tracking issue, the same fail-closed discipline the old
+# EXCLUSIONS array carried.
 #
 # WHY IT LIVES HERE. The `test-*.sh` glob in run-all.sh feeds guard-script-fixture-tests --
 # REQUIRED, merge_group-triggered, path-filter-free. So this gate is genuinely blocking while
@@ -340,6 +345,57 @@ declare -A TRACKED=()
 declare -A TRACKED_REL=()
 for rel in "${SUITES[@]}"; do TRACKED["${rel##*/}"]=1; TRACKED_REL["$rel"]=1; done
 
+# ── Map cross-check: the text parse above vs what the RUNNER evaluates ─────────
+# map_entries is a format-pinned read; the runner's set is whatever bash evaluates. An
+# entry the sed cannot see (a trailing `# comment`, single quotes, a `MAP[x]=` assignment
+# after the block) is excluded from every leg by the runner while every check here stays
+# green over it — the suite then runs in NO CI job (#12941 review, rows G9-G11). Three
+# refusals, each fail-closed: (1) every non-blank, non-comment block line must parse;
+# (2) the map is assigned at exactly one site, its `declare -A` line; (3) the parsed set
+# (tracked members) EQUALS the runner's own `--list` `SKIP <kind>:` set — set equality,
+# not a count, so a swap of one member for another cannot pass. `--list` derives only
+# and runs nothing (bash + git ls-tree), so the bash-only contract above still holds.
+_rl_rc=0
+RUNNER_LIST=$(cd "$REPO_ROOT" && env -u SOLEUR_INFRA_DIR -u SOLEUR_INFRA_SHARD \
+  -u SOLEUR_INFRA_MANIFEST INFRA_ORPHAN_LIST=/dev/null bash "$RUNNER" --list 2>&1) || _rl_rc=$?
+if (( _rl_rc != 0 )); then
+  err "\`bash ${RUNNER_REL} --list\` exited $_rl_rc — the runner's own exclusion sets cannot be"
+  err "  read, so the parse below cannot be cross-checked: $(tail -2 <<< "$RUNNER_LIST" | tr '\n' ' ')"
+  fails=$((fails + 1))
+fi
+map_crosscheck() {  # map_crosscheck <MAP_NAME> <list-kind> <assoc-name of the parsed set>
+  local -n _parsed="$3"
+  local _bad _sites _want _got _b
+  _bad=$(awk -v open="declare -A $1=(" '
+    $0 == open { inmap = 1; next }
+    inmap && /^\)/ { exit }
+    inmap && !/^[[:space:]]*(#|$)/ { print }
+  ' "$RUNNER" | grep -vE '^  \[[A-Za-z0-9._-]*\.test\.sh\]=".*"$' || true)
+  if [[ -n "$_bad" ]]; then
+    err "$1 in ${RUNNER_REL} has block line(s) this gate cannot parse (the runner still"
+    err "  honours them): $(head -3 <<< "$_bad" | tr '\n' '|') — one \`  [x.test.sh]=\"…\"\` per line."
+    fails=$((fails + 1))
+  fi
+  _sites=$(grep -vE '^[[:space:]]*#' "$RUNNER" | grep -cE "(^|[^A-Za-z0-9_])$1(\[[^]]*\])?[+]?=" || true)
+  if (( _sites != 1 )); then
+    err "$1 is assigned at ${_sites} site(s) in ${RUNNER_REL} (expected 1, its \`declare -A\`"
+    err "  block) — an entry added elsewhere is invisible to this gate's parse."
+    fails=$((fails + 1))
+  fi
+  (( _rl_rc == 0 )) || return 0
+  _want=$(for _b in "${!_parsed[@]}"; do
+      if [[ -n "${TRACKED[$_b]+x}" ]]; then printf '%s\n' "$_b"; fi
+    done | LC_ALL=C sort -u)
+  _got=$(sed -n "s|^  SKIP $2: \([^ ]*\) .*|\1|p" <<< "$RUNNER_LIST" | sed 's|.*/||' | LC_ALL=C sort -u)
+  if [[ "$_want" != "$_got" ]]; then
+    err "the runner's \`--list\` SKIP $2 set differs from $1 as parsed here — runner:"
+    err "  [$(tr '\n' ' ' <<< "$_got")] gate: [$(tr '\n' ' ' <<< "$_want")]. Fix the entry's shape."
+    fails=$((fails + 1))
+  fi
+}
+map_crosscheck PRIVILEGED_WHY privileged PRIVILEGED
+map_crosscheck DEDICATED_JOB_WHY dedicated DEDICATED
+
 # Manifest coherence: every row in the committed shard manifest must name an
 # EXECUTABLE suite by its full repo-relative path (the set the runner's
 # --enumerate emits — privileged basenames are derived but never tabled), with
@@ -460,11 +516,15 @@ done < <(printf '%s\n' "${!PRIVILEGED[@]}" | LC_ALL=C sort)
 unset base_re
 
 # ── Arm 5: the dedicated set — derived from the RUNNER, invoked in its own job ─
+# The workflow-level `env:` block (column 0, comment lines stripped), inherited by every job.
+WF_ENV_RAW=$(awk '/^env:[[:space:]]*$/ { inenv = 1; next } inenv && /^[^[:space:]#]/ { inenv = 0 } inenv { print }' \
+  "$WF" | grep -vE '^[[:space:]]*#' | sed -E 's/[[:space:]]+#.*$//' || true)
 # The exclusion waives the k/N legs, never the invocation: each DEDICATED_JOB_WHY entry
-# must be `bash <full repo-relative path>`-invoked by a step of the job its value names,
-# unmasked. Trailing ` # …` comments are stripped first, so an invocation written only
-# in a comment never satisfies it (full-line comments are already gone in slice_job).
-# A multi-line `run: |` block counts — the step may carry setup lines.
+# must be invoked by ONE bare `run: bash <full repo-relative path>` step of the job its
+# value names, unmasked. Trailing ` # …` comments are stripped first, so an invocation
+# written only in a comment never satisfies it (full-line comments are already gone in
+# slice_job). A multi-line `run: |` block does NOT count — it is where `set +e` and
+# `|| true` hide, and the suite needs no setup lines.
 while IFS= read -r base; do
   [[ -n "$base" ]] || continue
   if [[ -z "${TRACKED[$base]+x}" ]]; then
@@ -487,15 +547,53 @@ while IFS= read -r base; do
     continue
   fi
   drel_re="${drel//./[.]}"
-  inv_re="(^|[[:space:]])bash[[:space:]]+${drel_re}([[:space:]]|$)"
-  if ! grep -qE "$inv_re" <<< "$DJOB_RAW"; then
+  # Any line naming `bash <path>` is a MENTION; the invocation is the one mention that is the
+  # whole `run:` value (the way Arm 1 pins the runner step). `run: echo bash <path>` and
+  # `run: bash <path> || true` mention it without running it unmasked (rows G1/G2).
+  inv_re="(^|[^A-Za-z0-9_-])bash[[:space:]]+(\./)?${drel_re}([^A-Za-z0-9._/-]|$)"
+  anchor_re="^[[:space:]]+run: bash ${drel_re}[[:space:]]*$"
+  _inv_n=$(grep -cE "$inv_re" <<< "$DJOB_RAW" || true)
+  if (( _inv_n == 0 )); then
     err "$base is DEDICATED (never executed by the runner) but is NOT \`bash $drel\`-invoked"
     err "  in the \`$djob\` job — so it runs in NO CI job. Restore that step, or delete the"
     err "  DEDICATED_JOB_WHY entry and let the legs run it."
     fails=$((fails + 1))
     continue
   fi
+  if (( _inv_n != 1 )) || ! grep -qE "$anchor_re" <<< "$DJOB_RAW"; then
+    err "the \`$djob\` job names \`bash $drel\` on ${_inv_n} line(s), and none or more than one"
+    err "  is a bare \`run: bash $drel\` step — an echo, a wrapper or a second copy is not"
+    err "  the one unmasked invocation this gate certifies."
+    fails=$((fails + 1))
+  fi
   mask_check "$DJOB_RAW" "bash[[:space:]]+${drel_re}" "the \`$djob\` step for $base"
+  _rec=$(printf '%s\n' "$DJOB_RAW" | awk -v RS='      - ' -v pat="bash[[:space:]]+${drel_re}" \
+    '$0 ~ pat {print; exit}' | grep -vE '^[[:space:]]*(- )?name:' || true)
+  if grep -qE '\|\||;[[:space:]]*(true|:)([[:space:]]|$)|;[[:space:]]*exit[[:space:]]+0|set[[:space:]]+\+e' <<< "$_rec"; then
+    err "the \`$djob\` step for $base masks its exit (\`||\`, \`; true\`, \`; exit 0\` or"
+    err "  \`set +e\`) — a red rehearsal would conclude success."
+    fails=$((fails + 1))
+  fi
+  # A JOB-level `continue-on-error:` lets a failed job read as success to `needs:` (G3).
+  if grep -qE '^    continue-on-error:' <<< "$DJOB_RAW"; then
+    err "the \`$djob\` job carries a job-level \`continue-on-error:\` — the aggregator would"
+    err "  read a red rehearsal as success."
+    fails=$((fails + 1))
+  fi
+  # The ONLY invocation (CTO Q25, rows G12/G13): a second `bash <path>` in any other job of any
+  # workflow runs the privileged boots outside the posture checked below.
+  _elsewhere=$(for w in "$REPO_ROOT"/.github/workflows/*.yml "$REPO_ROOT"/.github/workflows/*.yaml; do
+      [[ -f "$w" ]] || continue
+      grep -vE '^[[:space:]]*#' "$w" | sed -E 's/[[:space:]]+#.*$//' | grep -E "$inv_re" \
+        | sed "s|^|${w#"$REPO_ROOT"/}: |" || true
+    done)
+  _all_n=$(grep -c . <<< "$_elsewhere" || true)
+  if (( _all_n != _inv_n )); then
+    err "$drel is \`bash\`-invoked outside the \`$djob\` job ($_all_n workflow line(s), $_inv_n in"
+    err "  the job): $(head -3 <<< "$_elsewhere" | tr '\n' '|')"
+    err "  — the dedicated job is its only CI home; remove the other invocation."
+    fails=$((fails + 1))
+  fi
 
   # The job's own posture (#12941 Guard 2 row 8): a hosted runner, no secret, read-only.
   # The suite boots PRIVILEGED containers, so whatever the job holds, they can reach.
@@ -504,9 +602,19 @@ while IFS= read -r base; do
     err "  privileged containers on a self-hosted or shared runner reach that host."
     fails=$((fails + 1))
   fi
-  if grep -qE 'secrets\.' <<< "$DJOB_RAW"; then
-    err "the \`$djob\` job references \`secrets.\` — the rehearsal needs no credential, and"
+  # The workflow-level `env:` block reaches every job, so it is read with the job (G4/G5/G7/G8).
+  _posture="$DJOB_RAW"$'\n'"$WF_ENV_RAW"
+  if grep -qE 'secrets[.[]|toJSON\([[:space:]]*secrets|github\.token|github\[' <<< "$_posture"; then
+    err "the \`$djob\` job (or the workflow env) references a credential (\`secrets.\`,"
+    err "  \`secrets[\`, \`toJSON(secrets\`, \`github.token\`) — the rehearsal needs none, and"
     err "  anything bound in a job that boots privileged containers is readable from them."
+    fails=$((fails + 1))
+  fi
+  # `CI` keys every one of the suite's CI refusals; `BRH_*` are its narrowing knobs (G7/G8).
+  _knob=$(grep -oE '^[[:space:]]+(CI|GITHUB_ACTIONS|BRH_[A-Za-z0-9_]+):' <<< "$_posture" | tr -d ' :' | tr '\n' ' ' || true)
+  if [[ -n "$_knob" ]]; then
+    err "the \`$djob\` job (or the workflow env) sets ${_knob% }— CI/GITHUB_ACTIONS turn the"
+    err "  suite's CI refusals off and BRH_* narrow it; the job must run it as CI hands it over."
     fails=$((fails + 1))
   fi
   _perm=$(awk '
@@ -520,15 +628,18 @@ while IFS= read -r base; do
     err "  '$(tr '\n' ' ' <<< "${_perm:-<none — inherits the workflow block>}")') — declare it on the job, read-only."
     fails=$((fails + 1))
   fi
-  if grep -qE 'uses:[[:space:]]*actions/checkout@' <<< "$DJOB_RAW" \
-     && ! grep -qE '^[[:space:]]+persist-credentials:[[:space:]]*false[[:space:]]*$' <<< "$DJOB_RAW"; then
-    err "the \`$djob\` job checks out without \`persist-credentials: false\` — the token"
-    err "  would sit in .git/config on a disk its privileged containers can read."
+  # Per checkout STEP, not job-wide: one compliant checkout must not cover a second (G6).
+  _ck_open=$(printf '%s\n' "$DJOB_RAW" | awk -v RS='      - ' '
+    /uses:[[:space:]]*actions\/checkout@/ && !/\n[[:space:]]+persist-credentials:[[:space:]]*false[[:space:]]*(\n|$)/ { n++ }
+    END { print n + 0 }')
+  if (( _ck_open > 0 )); then
+    err "the \`$djob\` job has ${_ck_open} actions/checkout step(s) without \`persist-credentials: false\`"
+    err "  — the token would sit in .git/config on a disk its privileged containers can read."
     fails=$((fails + 1))
   fi
-  unset _perm
+  unset _perm _rec _elsewhere _all_n _inv_n _posture _knob _ck_open
 done < <(printf '%s\n' "${!DEDICATED[@]}" | LC_ALL=C sort)
-unset drel drel_re inv_re djob DJOB_RAW
+unset drel drel_re inv_re anchor_re djob DJOB_RAW
 
 # ── Arm 3b: test/infra suites must be invoked SOMEWHERE ──────────────────────
 # apps/web-platform/test/infra/*.test.sh lives OUTSIDE the runner's glob and is
