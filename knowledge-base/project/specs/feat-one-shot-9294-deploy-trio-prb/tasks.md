@@ -9,7 +9,7 @@ consumer edits, baseline regeneration last.
 ## Phase 0 — Preconditions and fork rulings
 
 - [ ] 0.1 Re-run the consumer census: `git grep -nE 'WEBHOOK_DEPLOY_SECRET|CF_ACCESS_CLIENT_ID|CF_ACCESS_CLIENT_SECRET' -- .github/workflows/` and reconcile against the plan's consumer table before editing.
-- [ ] 0.2 Resolve `pending - assumed` rows D-1 and D-2 in `decision-challenges.md` via the parent's `soleur:engineering:cto` spawn; write the rulings into the file before touching sweeper or scanner code.
+- [x] 0.2 Resolve `pending - assumed` rows D-1 and D-2 in `decision-challenges.md` via the parent's `soleur:engineering:cto` spawn; write the rulings into the file before touching sweeper or scanner code. — DONE 2026-11-20: parent CTO spawn ruled all rows (gate PASS, 9 rows); D-1 derived-`@stems` partition, D-2 pinned scanner refinement (see decision file for the exact exemption shape).
 - [ ] 0.3 Emit the pre-state baseline: `bash tests/scripts/test-trio-baseline-census.sh --emit-baseline` and save the row inventory as the diff reference.
 
 ## Phase 1 — Census constants and boundary guard rows
@@ -39,7 +39,7 @@ consumer edits, baseline regeneration last.
 - [ ] 4.3 `apps/web-platform/scripts/github-app-key-status.sh`: `${!v}` loop → three explicit `${VAR:?}` checks; header recipe → `soleur-deploy-channel/prd` prose.
 - [ ] 4.4 `apps/web-platform/infra/infra-config-verify.sh` + `infra/scripts/verify-tunnel-ingress-origin.sh`: `doppler` reads of `APP_DOMAIN_BASE`/`WEB1_IP`/`CF_API_TOKEN`/`CF_ACCOUNT_ID` → `scripts/derive-app-domain-base.sh` or env reads; `${!_cred}` → explicit; recipe strings → prose; residual → D-2.
 - [ ] 4.5 `scripts/ensure-doppler.sh`, `scripts/inngest-key-rotate.sh`: correct recipe comments to name `soleur-deploy-channel/prd` as the trio's home.
-- [ ] 4.6 Apply the D-2 disposition (scanner class refinement or per-row `Reclass:`) to `apply-deploy-pipeline-fix.yml`, `scripts/key-rotate.sh`, `scripts/cutover-inngest.sh`, `scripts/check-deploy-script-parity.sh`, `apps/web-platform/infra/soleur-host-bootstrap.sh`, and any residual — in the same diff as the ADR-241 amendment that records it.
+- [ ] 4.6 Apply the D-2 disposition (ruled: the pinned scanner class refinement — targeted non-family `secrets get` not counted; `doppler run`/`download` exempt only with literal `-p`+`-c` outside the pinned trio-carrying set; fail closed otherwise — no `Reclass:` lines) to `apply-deploy-pipeline-fix.yml`, `scripts/key-rotate.sh`, `scripts/cutover-inngest.sh`, `scripts/check-deploy-script-parity.sh`, `apps/web-platform/infra/soleur-host-bootstrap.sh`, and any residual — in the same diff as the ADR-241 amendment that records it.
 
 ## Phase 5 — Probe retirement
 
@@ -60,7 +60,7 @@ consumer edits, baseline regeneration last.
 
 - [ ] 8.1 Regenerate `tests/scripts/trio-baseline.tsv` via `--emit-baseline`; assert zero `tier-a`, `FALLBACK:*`, `ALIAS:*` rows and scanner agreement on every survivor.
 - [ ] 8.2 `bash tests/scripts/test-trio-baseline-census.sh` + `bash tests/scripts/test-infra-privileged-tier-census.sh` green incl. mutation fixtures; `bash tests/scripts/test-argv-bearer-sweep.sh` unchanged-green.
-- [ ] 8.3 Append the dated D1 census-amendment entry to `ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md` (incl. `Allow:`/`Reclass:`/`Re-date:` lines the baseline diff requires + the scanner refinement if D-2 rules for it).
+- [ ] 8.3 Append the dated D1 census-amendment entry to `ADR-241-terraform-credentials-are-tiered-main-only-environment-secrets.md` (incl. `Allow:`/`Reclass:`/`Re-date:` lines the baseline diff requires + the ruled D-2 scanner refinement).
 - [ ] 8.4 `model.c4`: rewrite the deploy-channel edge `STATUS (Phase 1)` clause to the migrated state, add `deploy-channel` to the Tier-B edge's environment enumeration, refresh the loader-consumer wording.
 
 ## Phase 9 — Final verification
