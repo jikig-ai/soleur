@@ -7090,6 +7090,14 @@ if want_scripts; then
   run_suite "tests/scripts/sentry-full-root-apply" bash tests/scripts/test-sentry-full-root-apply.sh
   run_suite "tests/scripts/sentry-destroy-gate-verdict" bash tests/scripts/test-sentry-destroy-gate-verdict.sh
   run_suite "tests/scripts/sentry-squash-ack-detect" bash tests/scripts/test-sentry-squash-ack-detect.sh
+  # #12971 — the rundevoo.run destroy-guard set: full-root delete/forget
+  # counting, the fail-closed aggregator verdict, the squash-body emulation,
+  # and the whole-list DNS set-equality probe (the only mechanism that sees
+  # out-of-band-added records; nothing under tests/scripts/ is auto-discovered).
+  run_suite "tests/scripts/destroy-guard-counter-rundevoo" bash tests/scripts/test-destroy-guard-counter-rundevoo.sh
+  run_suite "tests/scripts/rundevoo-destroy-gate-verdict" bash tests/scripts/test-rundevoo-destroy-gate-verdict.sh
+  run_suite "tests/scripts/rundevoo-squash-ack-detect" bash tests/scripts/test-rundevoo-squash-ack-detect.sh
+  run_suite "tests/scripts/rundevoo-dns-set-equality" bash tests/scripts/test-rundevoo-dns-set-equality.sh
   run_suite "tests/scripts/sentry-create-gate" bash tests/scripts/test-sentry-create-gate.sh
   # #7650 Phase 2 — Guard A (create protection, now wired into BOTH workflow jobs)
   # and Guard B (the forget<->import bijection) for the sentry_alert adoption.

@@ -1622,10 +1622,13 @@ AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_REGEX_PARITY_PATHS=(
   ".github/workflows/apply-github-infra.yml"
   ".github/workflows/apply-sentry-infra.yml"
   ".github/workflows/apply-web-platform-infra.yml"
+  ".github/workflows/apply-rundevoo-infra.yml"
   "tests/scripts/test-destroy-guard-counter.sh"
   "tests/scripts/test-destroy-guard-counter-sentry.sh"
   "tests/scripts/test-destroy-guard-counter-web-platform.sh"
+  "tests/scripts/test-destroy-guard-counter-rundevoo.sh"
   "scripts/sentry-squash-ack-detect.sh"
+  "scripts/rundevoo-squash-ack-detect.sh"
   "tests/scripts/test-destroy-guard-regex-parity.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
@@ -1964,6 +1967,48 @@ AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_COUNTER_SENTRY_PATHS=(
   "tests/scripts/fixtures/tfplan-sentry-real-baseline.json"
   "tests/scripts/lib/destroy-guard-filter-sentry.jq"
   "tests/scripts/test-destroy-guard-counter-sentry.sh"
+)
+
+# tests/scripts/destroy-guard-counter-rundevoo (#12971) — the counter suite's
+# subjects are the jq filter, the shipped counts script, and the apply
+# workflow whose gate pipeline it mirrors.
+AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_COUNTER_RUNDEVOO_PATHS=(
+  ".github/workflows/apply-rundevoo-infra.yml"
+  "scripts/rundevoo-destroy-counts.sh"
+  "tests/scripts/lib/destroy-guard-filter-rundevoo.jq"
+  "tests/scripts/test-destroy-guard-counter-rundevoo.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# tests/scripts/rundevoo-destroy-gate-verdict — subjects are the verdict
+# script and the aggregator job that calls it.
+AFFECTED_TESTS_SCRIPTS_RUNDEVOO_DESTROY_GATE_VERDICT_PATHS=(
+  ".github/workflows/apply-rundevoo-infra.yml"
+  "scripts/rundevoo-destroy-gate-verdict.sh"
+  "tests/scripts/test-rundevoo-destroy-gate-verdict.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# tests/scripts/rundevoo-squash-ack-detect — subjects are the squash-body
+# emulator and the workflow gate that calls it.
+AFFECTED_TESTS_SCRIPTS_RUNDEVOO_SQUASH_ACK_DETECT_PATHS=(
+  ".github/workflows/apply-rundevoo-infra.yml"
+  "scripts/rundevoo-squash-ack-detect.sh"
+  "tests/scripts/test-rundevoo-squash-ack-detect.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# tests/scripts/rundevoo-dns-set-equality — subjects are the probe script,
+# the drift leg that invokes it, the zone.tf import block the zone id is
+# derived from, and the shared bearer helper it sources.
+AFFECTED_TESTS_SCRIPTS_RUNDEVOO_DNS_SET_EQUALITY_PATHS=(
+  ".github/workflows/apply-rundevoo-infra.yml"
+  ".github/workflows/scheduled-terraform-drift.yml"
+  "apps/cla-evidence/scripts/_cf-admin-token.sh"
+  "infra/rundevoo-run/"
+  "scripts/rundevoo-dns-set-equality.sh"
+  "tests/scripts/test-rundevoo-dns-set-equality.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
 # tests/scripts/host-image-coherence-preflight — derived edges could not reach its subject; declared from the
