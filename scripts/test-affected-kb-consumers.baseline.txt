@@ -357,6 +357,10 @@ tests/hooks/emissions	knowledge-base/engineering/operations/runbooks/origin-tls-
 tests/scripts/argv-bearer-sweep	knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md
 tests/scripts/argv-bearer-sweep	knowledge-base/project
 tests/scripts/argv-bearer-sweep	knowledge-base/project/specs/archive/20261113-090857-feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh
+tests/scripts/bastion-host-birth-gate	knowledge-base/engineering/operations/runbooks
+tests/scripts/bastion-host-birth-gate	knowledge-base/engineering/operations/runbooks/git-data-birth.md
+tests/scripts/bastion-host-birth-gate	knowledge-base/project/specs
+tests/scripts/bastion-host-birth-gate	knowledge-base/project/specs/archive
 tests/scripts/betterstack-query-archive	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 tests/scripts/git-data-root-token-census	knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md
 tests/scripts/git-data-rung2-evidence-capture	knowledge-base/project/learnings

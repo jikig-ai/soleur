@@ -221,7 +221,7 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    > the cutover's own canary (2026-07-19), never this workflow, so the §5 gate was dead from
    > 2026-07-17 until #6807. A `failure` conclusion on a run before this fix says nothing.
    >
-   > **`ready=true` is a FLOOR, not an inventory.** `readiness.ts:81` is
+   > **`ready=true` is a FLOOR, not an inventory.** `readiness.ts` `isWorkspacesPopulated` is
    > `countWorkspaceDirsAt(root) > 0`, so a cutover preserving 1 of 8 sole-copy workspaces still
    > reports ready. The `workspace_count` comparison is what carries the "inventory survived" claim.
    >

@@ -50,8 +50,11 @@ readonly MAP='web|web|control
 git_data|git_data|plain
 registry|registry|plain
 inngest|inngest|plain
+bastion|bastion|plain
 grok_dogfood|grok_dogfood|excluded'
-readonly ATTACH_ALLOW='git_data registry'
+# bastion (#12866, ADR-327 step 2a): zero-rule firewall bound by hcloud_firewall_attachment.bastion, the
+# binding its birth gate reads (bastion-host-birth-gate.sh), git-data's form.
+readonly ATTACH_ALLOW='git_data registry bastion'
 readonly MODULE_ALLOW='git_data_userdata'
 
 pass=0; fail=0
@@ -284,6 +287,7 @@ base_fixture() { # dir
     tf_attach web web 'for h in hcloud_server.web : h.id'
     tf_server git_data; tf_fw_plain git_data; tf_attach git_data git_data 'hcloud_server.git_data.id'
     tf_server registry; tf_fw_plain registry; tf_attach registry registry 'hcloud_server.registry.id'
+    tf_server bastion; tf_fw_plain bastion; tf_attach bastion bastion 'hcloud_server.bastion.id'
     tf_server inngest "" inngest; tf_fw_plain inngest
     printf 'removed {\n  from = hcloud_firewall_attachment.inngest\n  lifecycle {\n    destroy = false\n  }\n}\n\n'
     printf 'module "git_data_userdata" {\n  source = "./modules/git-data-userdata"\n}\n\n'
@@ -420,6 +424,7 @@ case_noncanonical() {
     printf 'resource "hcloud_firewall_attachment" "registry" {\n  server_ids = [\n    hcloud_server.registry.id,\n  ]\n  firewall_id = hcloud_firewall.registry.id\n}\n\n'
     tf_server web; tf_fw_web; tf_attach web web 'for h in hcloud_server.web : h.id'
     tf_server git_data; tf_fw_plain git_data; tf_attach git_data git_data 'hcloud_server.git_data.id'
+    tf_server bastion; tf_fw_plain bastion; tf_attach bastion bastion 'hcloud_server.bastion.id'
     printf 'resource "hcloud_server" "inngest" {\n  firewall_ids = [\n    hcloud_firewall.inngest.id,\n  ]\n}\nresource "hcloud_firewall" "inngest" {\n}\n'
     tf_server grok_dogfood count; tf_fw_plain grok_dogfood
     printf 'variable "enable_grok_dogfood" {\n  default = false\n}\nlocals {\n  grok_dogfood_enabled = var.enable_grok_dogfood\n}\n'

@@ -550,6 +550,19 @@ t_hcloud_reboot_ack_allows() {
 # merge (T30/T31 pin that), so this costs nothing until the drift recurs.
 # ---------------------------------------------------------------------------
 
+# T29c (#12866, ADR-327 step 2a): a per-merge plan that births the dedicated bastion HALTs. Its full
+# five-address fan-out (synthesized) counts exactly one host create: only hcloud_server.bastion, never
+# its key, firewall, NIC or attachment. ADR-327 relies on this HALT to keep the bastion's birth on
+# bastion-host-create; the per-merge plan is targeted, so this is the break-glass path's tripwire.
+t_host_create_bastion_halts() {
+  local out; out=$(_run_host_creates_gate "$FIXTURES/tfplan-hcloud-server-bastion-create.json")
+  if [[ "$out" == "1:1" ]]; then
+    _report "T29c per-merge hcloud_server.bastion create HALTs (hc=1 rc=1; key/firewall/NIC/attachment uncounted)" ok
+  else
+    _report "T29c per-merge hcloud_server.bastion create HALTs" fail "got '$out' want '1:1'"
+  fi
+}
+
 # T29 (RED→GREEN anchor): the exact plan shape from #6416 — a per-PR
 # `hcloud_server.web["web-2"]` create — HALTs. Reuses the EXISTING
 # tfplan-hcloud-server-create.json fixture (measured host_creates=1); T18 above
@@ -1182,6 +1195,7 @@ t_hcloud_noop_attr_update_passes
 t_hcloud_create_is_not_a_reboot
 t_hcloud_reboot_ack_allows
 t_host_create_halts
+t_host_create_bastion_halts
 t_host_create_no_ack_bypass
 t_host_replace_halts
 t_host_creates_baseline_zero
@@ -2650,15 +2664,15 @@ _ran=$((pass + fail))
 # T47c roster-change cert replace is ackable) = 113, + 8 origin-TLS rollback replay rows (ADR-321 item 10: T65 x 5 toggles, 2 cleanup, 1 hazard) = 121, + 15 relay hello-key counter rows (PR A of #8211 / #12167, F1: T66a-T66o, one
 # _report call per id: a-j behaviour, k-n the four mutant rows, o the executed HALT segment) = 136, + 8 coalesced-feed rows (#12403:
 # T67a-c feed pins + T67d-g executed kill-switch span + T67h apply-side feed pin; renumbered from T66 on the
-# hello-key merge collision) = 144, + 1 T65 cleanup-fixture after-shape row (ADR-321 item 13, #10479) = 145. Exact, not a
-# ceiling: deleting a single arm invocation reports "only 144 assertions ran, floor is 145". The floor sits at the
+# hello-key merge collision) = 144, + 1 T65 cleanup-fixture after-shape row (ADR-321 item 13, #10479) = 145, + 1 T29c bastion create row (#12866) = 146. Exact, not a
+# ceiling: deleting a single arm invocation reports "only 145 assertions ran, floor is 146". The floor sits at the
 # current count rather than leaving slack: the review panel showed 3 assertions of headroom absorbed a deleted arm
 # silently, and slack in an anti-vacuity floor is attack budget, not padding. Re-derive with a green run when adding rows.
-if [[ "$_ran" -lt 145 ]]; then
+if [[ "$_ran" -lt 146 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 145. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 146. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 145)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 146)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="

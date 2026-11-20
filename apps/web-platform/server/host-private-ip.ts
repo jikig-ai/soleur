@@ -26,9 +26,9 @@
 // constant would freeze the empty-canary value into prod and route modules
 // load without env during `next build`.
 //
-// This module imports NOTHING from server/ — the same leaf discipline as
-// host-identity.ts, so inngest/* modules can consume it without pulling the
-// request-path dependency tree.
+// This module imports NOTHING from server/ (a leaf, like host-roster.ts; host-identity.ts
+// imports only these two leaves), so inngest/* modules can consume it without pulling
+// the request-path dependency tree.
 
 /** `process.env.SOLEUR_HOST_PRIVATE_IP` is the only source. */
 export const HOST_PRIVATE_IP_ENV = "SOLEUR_HOST_PRIVATE_IP";

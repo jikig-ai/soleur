@@ -155,6 +155,7 @@ import {
   probeGitWorktreeShape,
   evaluateAgentReadiness,
   isLstatValidKind,
+  isStrandingFilePointer,
 } from "./git-worktree-validity";
 // #5394 — Concierge dispatch readiness gate. Block a dispatch whose active
 // workspace repo is still `cloning` or whose setup `error`'d, BEFORE spawning
@@ -298,6 +299,21 @@ const log = createChildLogger("cc-dispatcher");
 // outlast a long interactive agent turn so `gh` doesn't fail mid-conversation
 // on an expired token. Mirrors the cron's TOKEN_MIN_LIFETIME_MS (~60 min).
 const GH_TOKEN_MIN_LIFETIME_MS = 60 * 60 * 1000;
+
+// #12910 (CTO ruling Q5) — `.git` open() errnos that say "this process is short
+// of descriptors / memory, or the IO blipped", not "this `.git` is a strand".
+// The post-heal self-stop skips a kind-`other` shape carrying one of these BEFORE
+// reportAgentReadinessSelfStop, so the blip neither reports a false strand nor
+// spends the per-process dedupe slot a real strand (ELOOP / EACCES / EPERM / a
+// fifo) for the same workspace needs. An unknown errno still emits.
+const TRANSIENT_GIT_OPEN_ERRNOS: ReadonlySet<string> = new Set([
+  "EMFILE",
+  "ENFILE",
+  "EIO",
+  "EAGAIN",
+  "EINTR",
+  "ENOMEM",
+]);
 
 // Non-routable internal leader id reserved for cc-soleur-go path
 // audit-log attribution. Used by `createCanUseTool` (R-AC14), the WS
@@ -2484,9 +2500,9 @@ export const realSdkQueryFactory: QueryFactory = async (
     // #5862 → constant parent deny). The prompt-driven
     // `/soleur:go` Step 0.0 then self-stops with NO server event — the dark
     // surface all three prior fixes missed. One `probeGitWorktreeShape` (sync
-    // lstat(s); a small pointer-body read only when `.git` is a FILE) drives BOTH
-    // the SYNC readiness decision and the observability emit here — no re-lstat on
-    // the sync path. The common dir-valid case pays this single cheap probe here;
+    // lstat(s); a small pointer-body read only when `.git` is a FILE) drives the
+    // SYNC readiness decision here; the observability emit re-probes once after
+    // the heal (#12910, below). The common dir-valid case pays this cheap probe;
     // the additive host `rev-parse` confirm below (#5733 deliverable A) then
     // re-probes ONLY that dir-valid slice the lstat verdict greenlights but the
     // agent can still strand on (detailed in the note immediately following).
@@ -2503,24 +2519,6 @@ export const realSdkQueryFactory: QueryFactory = async (
       gitShape.kind === "dir-valid" ||
       (gitShape.kind === "file-pointer" &&
         gitShape.gitdirEscapesWorkspace === false);
-    // #5733 Phase 1b — emit the agent-readiness self-stop for ANY connected,
-    // DB-ready workspace whose on-disk `.git` is NOT rev-parse-ready (escaping
-    // pointer / corrupt dir / absent). The agent self-stops on its in-bwrap `git
-    // rev-parse` for ALL of these, and Phase 0 could not confirm WHICH shape prod
-    // has — so the one queryable event must cover them all (`gitKind`
-    // distinguishes). Excludes a legitimately repo-less workspace (no `repoUrl`)
-    // and a cloning/error status (the honest RepoNotReadyError owns those). Fires
-    // BEFORE the heal so the strand is queryable on this very dispatch.
-    if (repoReadiness.ok && repoUrl && !gitReady) {
-      reportAgentReadinessSelfStop({
-        userId: args.userId,
-        activeWorkspaceId,
-        // lstat-validity (the FILE-pointer trap) — derived from the same probe.
-        gitValid: isLstatValidKind(gitShape.kind),
-        gitKind: gitShape.kind,
-        gitdirEscapesWorkspace: gitShape.gitdirEscapesWorkspace,
-      });
-    }
     // `gitReady` treats an escaping pointer / corrupt dir as NOT ready, so it
     // falls through to the self-heal. `gitDirValid` (the seam consumed by
     // resolveRepoReadinessWithSelfHeal) uses the same `isReadyGitWorkTree`
@@ -2715,6 +2713,42 @@ export const realSdkQueryFactory: QueryFactory = async (
           "Your workspace's repository couldn't be set up — the automatic clone failed. Please re-connect the repository in Settings → Repository.",
           "repo_setup_failed",
         );
+      }
+    }
+
+    // #5733 Phase 1b, moved after the heal by #12910 (CTO rulings T8, T8a) — the
+    // agent-readiness self-stop for the strands the post-heal gate below cannot
+    // see, because evaluateAgentReadiness returns "ready" for every kind other
+    // than dir-valid: a `.git` FILE whose `gitdir:` escapes the workspace or cannot
+    // be read (isStrandingFilePointer; host `rev-parse` follows an escaping pointer,
+    // but the agent's in-bwrap rev-parse cannot read sibling workspaces), and a
+    // `.git` of kind `other` (symlink, EACCES, fifo; a transient open() errno in
+    // TRANSIENT_GIT_OPEN_ERRNOS is skipped, see there). Emit only, never a block. It
+    // is a re-probe AFTER the heal and the dispatch clone, so a shape the heal
+    // fixed is not reported (the false `gitKind=absent` stop of #12910); an absent
+    // or corrupt `.git` that survives the heal is the post-heal gate's to emit and
+    // block. `confirmDbReady` is always true here (a failed heal threw above); it
+    // stays as the guard the post-heal gate also takes. The `source` stays
+    // `host-pre-heal`, now a legacy name: renaming it would break the existing
+    // Sentry queries. The fingerprint carries `gitKind`, so it never collides with
+    // the post-heal absent emit.
+    if (mode.runRepoLifecycle && confirmDbReady && repoUrl) {
+      const postHealShape = probeGitWorktreeShape(workspacePath);
+      const transientOpenError =
+        postHealShape.kind === "other" &&
+        postHealShape.errno !== undefined &&
+        TRANSIENT_GIT_OPEN_ERRNOS.has(postHealShape.errno);
+      if (
+        !transientOpenError &&
+        (isStrandingFilePointer(postHealShape) || postHealShape.kind === "other")
+      ) {
+        reportAgentReadinessSelfStop({
+          userId: args.userId,
+          activeWorkspaceId,
+          gitValid: isLstatValidKind(postHealShape.kind),
+          gitKind: postHealShape.kind,
+          gitdirEscapesWorkspace: postHealShape.gitdirEscapesWorkspace,
+        });
       }
     }
 

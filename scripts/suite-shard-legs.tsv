@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1802
-# generated-at=2026-11-20T06:30:54Z
+# generated-at=2026-11-20T09:41:54Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -110,6 +110,7 @@ plugins/soleur/scripts/pipeline-tally.test.sh	4
 plugins/soleur/scripts/precommit-guard.test.sh	2
 plugins/soleur/scripts/required-set-report.test.sh	2
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	6
+plugins/soleur/scripts/retry-budget-ruling.test.sh	3
 plugins/soleur/scripts/run-health-emit.test.sh	2
 plugins/soleur/scripts/run-in-pid-namespace.test.sh	3
 plugins/soleur/scripts/scan-ancestor-signal-helpers.test.sh	8
@@ -336,7 +337,7 @@ plugins/soleur/test/technical-ruling-gate.test.sh	8
 plugins/soleur/test/technical-ruling-owner-list.test.sh	4
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	7
 plugins/soleur/test/terraform-drift-step-order.test.sh	6
-plugins/soleur/test/terraform-drift-tunnel-zone-authority.test.sh	3
+plugins/soleur/test/terraform-drift-tunnel-zone-authority.test.sh	7
 plugins/soleur/test/test-pyramid-fixtures.test.sh	3
 plugins/soleur/test/ticket-triage-clauses.test.sh	5
 plugins/soleur/test/token-drift-workflow-causes.test.sh	6
@@ -362,7 +363,7 @@ plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh	4
 plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh	3
 plugins/soleur/test/worktree-manager-sandbox-tmp-sweep.test.sh	3
 plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh	1
-plugins/soleur/test/zot-bridge-marker-emission.test.sh	7
+plugins/soleur/test/zot-bridge-marker-emission.test.sh	3
 plugins/soleur/test/zot-http-deadlines-required.test.sh	3
 plugins/soleur/test/zot-image-mirror-publish.test.sh	8
 scripts/actions-queue-health	6
@@ -678,6 +679,8 @@ tests/scripts/argv-bearer-sweep	7
 tests/scripts/assert-dev-doppler-scope-wiring	3
 tests/scripts/audit-bot-codeql-coverage	8
 tests/scripts/audit-ruleset-bypass	4
+tests/scripts/bastion-boot-verify	3
+tests/scripts/bastion-host-birth-gate	7
 tests/scripts/betterstack-absence-classifier	8
 tests/scripts/betterstack-ingest-probe	2
 tests/scripts/betterstack-query-archive	2

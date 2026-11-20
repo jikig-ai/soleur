@@ -142,8 +142,8 @@ NEW_TUN="11111111-2222-4333-8444-555555555555"; OLD_TUN="99999999-8888-4777-8666
 # cfg <registry-service> [extra-rule-json] -> a synthesized /configurations body
 cfg() {
   jq -nc --arg reg "$1" --argjson extra "${2:-[]}" '{success: true, result: {config: {ingress: ([
-    {hostname: "deploy.soleur.ai", service: "http://10.0.1.10:9000"},
-    {hostname: "ssh.soleur.ai", service: "ssh://10.0.1.10:22"},
+    {hostname: "deploy.soleur.ai", service: "http://10.0.1.12:9000"},
+    {hostname: "ssh.soleur.ai", service: "ssh://10.0.1.12:22"},
     {hostname: "registry.soleur.ai", service: $reg}] + $extra + [{service: "http_status:404"}])}}}' >"$G3/cfg.json"
 }
 conns() { jq -nc --argjson n "$1" '{success: true, result: ([range($n)] | map({id: "c\(.)aaaaaaaa", conns: [{colo_name: "hel01", client_version: "2026.10.4"}]}))}' >"$G3/conns.json"; }
@@ -153,7 +153,7 @@ g3run() {
   set +e
   ( cd "$INFRA_ABS" && env PATH="$G3/bin:$PATH" STUB_CURL_LOG="$G3/curl.log" STUB_REFUSED_LOG="$G3/refused.log" STUB_CONN_PATH="$CONN_URL" STUB_CFG_FILE="$G3/cfg.json" \
       STUB_CONN_FILE="$G3/conns.json" STUB_CONN_CODE="${G3_CONN_CODE:-200}" STUB_DEPLOY_CODE="${G3_DEPLOY_CODE:-200}" \
-      STUB_WEB1_IP="10.0.1.10" STUB_REG_EP="10.0.1.30:5000" STUB_STATE_TUNNEL_ID="$OLD_TUN" \
+      STUB_WEB1_IP="10.0.1.12" STUB_REG_EP="10.0.1.30:5000" STUB_STATE_TUNNEL_ID="$OLD_TUN" \
       STUB_TFOUT_cf_tunnel_id="${G3_TFOUT_TUN-$NEW_TUN}" STUB_TFOUT_cf_tunnel_account_id="${G3_TFOUT_ACCT-$NEW_ACCT}" \
       STUB_DOPPLER_CF_API_TOKEN="stubtoken123" STUB_DOPPLER_CF_ACCOUNT_ID="$OLD_ACCT" STUB_DOPPLER_APP_DOMAIN_BASE="soleur.ai" \
       WEBHOOK_DEPLOY_SECRET="whsec" CF_ACCESS_CLIENT_ID="id.access" CF_ACCESS_CLIENT_SECRET="sec" \
