@@ -314,7 +314,8 @@ unset C8_LC RE_TS RE_GATE RE_DEPLOY RE_MARKER RE_JQ C8_LINES C8_KEYS C8_N C8_BAD
 ok "census: the doc names all eight rows" "$([[ "$(grep -cE '^\| C[1-8] \|' "$CENSUS")" -eq 8 ]]; echo $?)"
 
 # ── Anti-vacuity floor ────────────────────────────────────────────────────────────────────────
-MIN_CASES=58  # #12910: +16 (C8: name shape, extraction, key floor, every-line census, round-trip, special-key negative, five-regex parity, lifecycle, and their siblings); floor re-measured 42 -> 58
+# #12910: +16 (C8: name shape, extraction, key floor, every-line census, round-trip, special-key negative, five-regex parity, lifecycle, and their siblings); floor re-measured 42 -> 58
+MIN_CASES=58
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf 'web-hosts-generic: FAIL (only %d assertions ran; floor %d - the suite may have been truncated)\n' "$cases" "$MIN_CASES" >&2
   exit 1

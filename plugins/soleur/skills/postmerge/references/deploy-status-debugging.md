@@ -95,7 +95,7 @@ The `soleur:ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" surfaces this contr
 
 ### Host identity signals (#12910): not deploy-status reasons, read them beside one
 
-These come from the app, not from `ci-deploy.sh`, so `/hooks/deploy-status` never returns them.
+These come from the app, not from `ci-deploy.sh`, so the deploy-status hook never returns them.
 
 | Signal | Where | Meaning | Action |
 |---|---|---|---|

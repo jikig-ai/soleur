@@ -13580,21 +13580,21 @@ for ((hkv_i = 0; hkv_i < HKV_N; hkv_i++)); do
 done
 
 # Static pins over the real script (comment lines stripped first).
-HK_CODE="$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT")"
+HK_CODE="$(grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT")" || true
 hk_row HK-18 "one logger line, and one resolved / fallback / abort call each" "1|1|1|1" \
   "$(printf '%s\n' "$HK_CODE" | grep -cE '^  logger -t "\$LOG_TAG" "host_key \$1" \|\| true$')|$(printf '%s\n' "$HK_CODE" | grep -cE 'log_host_key "resolved=\$\{HOST_KEY\}"')|$(printf '%s\n' "$HK_CODE" | grep -cE 'log_host_key "fallback reason=\$\(host_key_fallback_reason "\$HOST_KEY_RC"\)"')|$(printf '%s\n' "$HK_CODE" | grep -cE 'log_host_key "abort reason=\$\{HK_ABORT\}')"
 hk_row HK-19 "prod docker run injects -e SOLEUR_HOST_KEY=\"\$HOST_KEY\"" "1" \
   "$(printf '%s\n' "$HK_CODE" | grep -cE -- '-e SOLEUR_HOST_KEY="\$HOST_KEY" \\$')"
 hk_row HK-20 "canary docker run injects an EMPTY -e SOLEUR_HOST_KEY= (T10)" "1" \
   "$(printf '%s\n' "$HK_CODE" | grep -cE -- '-e SOLEUR_HOST_KEY= \\$')"
-HK_CANARY_LINE="$(printf '%s\n' "$HK_CODE" | grep -nE -- '--name soleur-web-platform-canary' | head -1 | cut -d: -f1)"
-HK_STICKY_LINE="$(printf '%s\n' "$HK_CODE" | grep -nE '^[[:space:]]+host_key_sticky_check \|\| HK_STICKY_RC=\$\?$' | head -1 | cut -d: -f1)"
+HK_CANARY_LINE="$(printf '%s\n' "$HK_CODE" | grep -nE -- '--name soleur-web-platform-canary' | head -1 | cut -d: -f1)" || true
+HK_STICKY_LINE="$(printf '%s\n' "$HK_CODE" | grep -nE '^[[:space:]]+host_key_sticky_check \|\| HK_STICKY_RC=\$\?$' | head -1 | cut -d: -f1)" || true
 hk_row HK-21 "the sticky check runs before the canary docker run" "yes" \
   "$([[ -n "$HK_STICKY_LINE" && -n "$HK_CANARY_LINE" && "$HK_STICKY_LINE" -lt "$HK_CANARY_LINE" ]] && echo yes || echo no)"
 hk_row HK-22 "HOST_KEY is resolved once at top level and made readonly" "2" \
   "$(printf '%s\n' "$HK_CODE" | grep -cE '^(HOST_KEY="\$\(resolve_host_key\)" \|\| HOST_KEY_RC=\$\?|readonly HOST_KEY HOST_KEY_RC)$')"
-HK_SCRUB_LINE="$(printf '%s\n' "$HK_CODE" | grep -nE '^[[:space:]]+inngest_link_scrub_env_file "\$ENV_FILE" \|\| INNGEST_SCRUB_RC=\$\?$' | head -1 | cut -d: -f1)"
-HK_NEXT_LINE="$(printf '%s\n' "$HK_CODE" | grep -nE '^[[:space:]]+if ! host_key_next_check "\$ENV_FILE"; then$' | head -1 | cut -d: -f1)"
+HK_SCRUB_LINE="$(printf '%s\n' "$HK_CODE" | grep -nE '^[[:space:]]+inngest_link_scrub_env_file "\$ENV_FILE" \|\| INNGEST_SCRUB_RC=\$\?$' | head -1 | cut -d: -f1)" || true
+HK_NEXT_LINE="$(printf '%s\n' "$HK_CODE" | grep -nE '^[[:space:]]+if ! host_key_next_check "\$ENV_FILE"; then$' | head -1 | cut -d: -f1)" || true
 hk_row HK-35 "the next-env check runs once, after the env-file scrub and before the canary docker run" "1|yes" \
   "$(printf '%s\n' "$HK_CODE" | grep -cE 'host_key_next_check "\$ENV_FILE"')|$([[ -n "$HK_SCRUB_LINE" && -n "$HK_NEXT_LINE" && -n "$HK_CANARY_LINE" && "$HK_SCRUB_LINE" -lt "$HK_NEXT_LINE" && "$HK_NEXT_LINE" -lt "$HK_CANARY_LINE" ]] && echo yes || echo no)"
 hk_row HK-36 "a key_unverifiable abort logs its line and writes its state" "1|1" \
