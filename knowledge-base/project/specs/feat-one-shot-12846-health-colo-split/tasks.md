@@ -49,5 +49,6 @@ Standing limits for every task: no production apply, no workflow dispatch (inclu
 
 ## 6. Post-landing (same session, Class R; then the PR that closes #12846)
 
-- [ ] 6.1 From a fresh `origin/main` checkout with an empty wrapper diff, run the handoff loop (main capture, split fallback if truncated, archival capture); push the kept files alone on a branch at once. Hard date 2026-11-24.
+- [ ] 6.0 Right after merge, file the follow-through tracker (CTO Q10): title "Capture the per-colo H read before the old zone is deleted (deadline 2026-11-24)", label `follow-through`, body with `Ref #12846` and, unfenced at column 0, `<!-- soleur:followthrough script=scripts/followthroughs/health-colo-capture-12846.sh earliest=<merge instant, YYYY-MM-DDTHH:MM:SSZ> secrets=GH_TOKEN -->`; then confirm the next sweeper run log shows the probe's `exit=` line.
+- [ ] 6.1 From a fresh `origin/main` checkout with an empty wrapper diff, run the handoff loop (main capture, split fallback if truncated, archival capture); push the kept files alone on a branch at once. Hard date 2026-11-24. Then, with the owner's typed go (a record marker is not Class R, standing-delegation section 9 item 5), post on #12846 a comment with a line starting `S1-HEALTHCOLO-CAPTURED: <read instant>`, the kept file names, the branch and the archival result; post it only when the main read is kept for the whole R1 window.
 - [ ] 6.2 Follow-up PR (`Closes #12846`): run the pre-registered T2 recipe on the main capture; record the one-line outcome as an `Unverified:` line in a dated runbook addendum.

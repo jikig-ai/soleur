@@ -42,6 +42,12 @@
 # environment for curl AND for every jq and date child (`/usr/bin/env -i`; an empty HOME means a planted ~/.jq is not
 # loaded and `$ENV` is empty, verified on jq 1.8.2), the credential on curl's stdin config only, and the xtrace refusal. See standing-delegation.md
 # section 9 (Credentials) for the stated exception. A 403 is recorded as unverified and never answered by a token swap.
+# CLOSED ENVIRONMENT (security fix round 1, Ref #12846): `doppler run` puts every secret of prd_terraform in this script's
+# environment, so after the xtrace refusal the script keeps only a fixed allowlist of exported names (the Doppler pair, CF_ZONE_ID,
+# CF_ACCOUNT_ID, the five bound tokens, PATH and LC_ALL) and drops every other name and every exported function by re-execing
+# itself once under `/usr/bin/env -u <name>...` with argv unchanged. The decision is made on the set of names present, never on a
+# marker a caller sets; the per-name decisions sit beside the code. So no later line can read a caller-chosen variable, whatever
+# its syntax (indirection, nameref, printf -v, arithmetic): a read of an unlisted name finds it unset. CF_API_TOKEN is not kept.
 #
 # READ-ONLY POST EXCEPTION (#12441, #12846): a GraphQL read is an HTTP POST that only reads. Exactly three fixed queries are compiled
 # into this file (GQL_HEALTH_TPL, GQL_EDGE_TPL, GQL_COLO_TPL); the only substitutions are the zone id and two window stamps computed
@@ -50,14 +56,15 @@
 # on argv. The window is complete UTC hours, [E - hours, E), where E is the current hour minus the end offset (0 for F and G), so
 # the newest series point lags by up to one hour. Counts are sampled estimates.
 # A zone the token cannot see and a wrong zone id are not distinguished (`no-zone-access`), like the 401 / 403 note below.
-# Unverified (public docs do not cover them; the first sanctioned read after the merge is the check, at most two fix PRs in total):
+# Unverified (public docs do not cover them; the first sanctioned read after the merge is the check; fix PRs: F and G at most two in total, #12441; H at most one, #12846):
 # the edgeResponseStatus dimension and its range operators, orderBy datetimeHour_DESC on this node, the duration quantile names, the
 # coloCode dimension, the host and path filters together on this node, and the 10000 row cap.
 #
 # RESIDUAL, not fixed here: BASH_ENV, exported BASH_FUNC_* functions, SHELLOPTS and PS4, LD_PRELOAD and the shebang's PATH lookup
-# (`#!/usr/bin/env bash`) are caller-environment channels that act in this script's OWN bash before and around its checks, so
-# `env -i` on the children does not reach them. The caller is the operator's `doppler run`; nothing in this file claims to defend
-# against a hostile caller environment.
+# (`#!/usr/bin/env bash`) are caller-environment channels that act in this script's OWN first bash before its checks (the closed
+# environment drops them at the re-exec, but they have already acted in the first start, which runs the xtrace and closed-
+# environment blocks; LD_PRELOAD is removed too, after it has loaded once). The caller is the operator's `doppler run`; nothing in
+# this file claims to defend against a hostile caller environment.
 # ACCEPTED RESIDUAL: a rule ref or an id is operator-authored data and is printed verbatim after a shape check (1 to 64 characters
 # of A-Z a-z 0-9 _ -); it is data under the Boundary paragraph of section 9, never an instruction, and the shapes are bounded.
 #
@@ -139,7 +146,7 @@
 #                       is never "no data problem" (a wrong zone or filter returns nothing too). A `zone` that is not the zone the
 #                       record claims makes the read `other: wrong-zone` for that record. A colo that is not three capital letters
 #                       prints as null; a truncated read is never a verdict input (re-run with a smaller window).
-#   What to do next for F, G and H, by wrapper output (the same table is in the runbook origin-tls-strict-flip.md, keep both in step):
+#   What to do next for F, G and H, by wrapper output (the runbook origin-tls-strict-flip.md holds F and G's copy in its additions-only 2026-11-09 addendum; H's cap and deadline are in its 2026-11-19 addendum):
 #     `api-error (graphql: unknown field ...)`        -> a wrapper fix PR (F and G: at most two in total, #12441; H: at most one, #12846)
 #     plain `api-error` (the message gate refused it) -> re-run once; if it repeats it counts as a wrapper fix PR (same cap)
 #     `bad-response (shape)` or `(jq exit n)`         -> the vendor shape differs from the query's assumptions: a wrapper fix PR (same cap)
@@ -171,6 +178,42 @@ case "$-" in
     fi
     ;;
 esac
+
+# CLOSED ENVIRONMENT (see the header). Runs after the tracing check and before any other variable is read. When the environment
+# holds an exported name outside this allowlist, or any exported shell function, the script re-execs itself ONCE with exactly those
+# removed and argv unchanged. The decision is the SET OF NAMES (compgen), never a variable a caller could set to skip it:
+# CF_RO_ENV_CLOSED is set only by the re-exec, to stop a second one, and a caller who sets it while the environment is still open is
+# refused (64), never let through. Removal is `env -u NAME`, names only, so no credential value is ever on an argv or a traced line.
+# One decision per allowed name:
+#   DOPPLER_PROJECT DOPPLER_CONFIG     read by guard_source
+#   CF_ZONE_ID CF_ACCOUNT_ID           read by load_credential and the URL templates
+#   CF_API_TOKEN_ZONE_SETTINGS CF_API_TOKEN_RULESETS CF_API_TOKEN_PAGERULES_READ CF_API_TOKEN_AUDIT CF_API_TOKEN_ANALYTICS_READ
+#                                      the five bound tokens, read only through ${!TOKVAR}
+#   PATH                               forwarded as is; reset to /usr/bin:/bin below, and every tool is called by absolute path
+#   LC_ALL                             forwarded; exported as C below (forwarded so a caller locale still meets that line)
+#   CF_RO_ENV_CLOSED                   this block's own one-shot guard
+#   PWD SHLVL _                        bash's own, re-created by bash at every start and never read here (exempt, so no loop)
+# Removed, among every other name: CF_API_TOKEN (read only by the tracing check above, which has already run; never sent), HOME,
+# LANG and the other LC_*, TZ, TMPDIR, BASH_ENV, SHELLOPTS, BASHOPTS, PS4, the other DOPPLER_* names and every other secret that
+# doppler run injects. Proof of one re-exec: the second start sees only allowed names plus what bash itself adds (PWD SHLVL _).
+[ "$(type -t compgen)" = builtin ] || { printf 'cloudflare-readonly: refused: the environment cannot be listed\n' >&2; exit 64; }
+mapfile -t ENV_NAMES < <(compgen -e)
+mapfile -t ENV_FUNCS < <(compgen -A function)
+ENV_DROP=()
+for ENV_N in ${ENV_NAMES[@]+"${ENV_NAMES[@]}"}; do
+  case "$ENV_N" in
+    DOPPLER_PROJECT | DOPPLER_CONFIG | CF_ZONE_ID | CF_ACCOUNT_ID | CF_API_TOKEN_ZONE_SETTINGS | CF_API_TOKEN_RULESETS) : ;;
+    CF_API_TOKEN_PAGERULES_READ | CF_API_TOKEN_AUDIT | CF_API_TOKEN_ANALYTICS_READ | PATH | LC_ALL | CF_RO_ENV_CLOSED) : ;;
+    PWD | SHLVL | _) : ;;
+    *) ENV_DROP=(${ENV_DROP[@]+"${ENV_DROP[@]}"} -u "$ENV_N") ;;
+  esac
+done
+for ENV_N in ${ENV_FUNCS[@]+"${ENV_FUNCS[@]}"}; do ENV_DROP=(${ENV_DROP[@]+"${ENV_DROP[@]}"} -u "BASH_FUNC_${ENV_N}%%"); done
+if [ "${#ENV_DROP[@]}" -gt 0 ]; then
+  if [ -n "${CF_RO_ENV_CLOSED:-}" ]; then printf 'cloudflare-readonly: refused: the environment is still open after the re-exec\n' >&2; exit 64; fi
+  exec /usr/bin/env "${ENV_DROP[@]}" CF_RO_ENV_CLOSED=1 "$BASH" "$0" "$@"
+fi
+unset ENV_NAMES ENV_FUNCS ENV_DROP ENV_N
 
 export LC_ALL=C
 PATH=/usr/bin:/bin

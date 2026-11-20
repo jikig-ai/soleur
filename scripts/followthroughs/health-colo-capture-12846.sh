@@ -6,32 +6,43 @@
 # After the change that adds the `analytics-health-colo` read to plugins/soleur/scripts/cloudflare-readonly.sh merges, the
 # H handoff loop must be run once against the old zone and its kept evidence files pushed on a branch (runbook
 # knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md, addendum 2026-11-19, "Deadline"). This probe
-# proves that the capture was RECORDED: a comment on #12846 by an author with write permission holding an unfenced line
+# proves that the capture was RECORDED: a comment on #12846, by an author with write permission, with a line (any line of
+# the comment) starting
 #   S1-HEALTHCOLO-CAPTURED: YYYY-MM-DDTHH:MM:SSZ <the kept file names and the branch>
-# whose time is a real UTC time. It does not prove the capture itself (the files, the zone, the window): that is the
-# runbook's keep predicate, run by the loop. It nags daily until the line exists. The verdict on the data has no deadline
-# and is not this probe's concern.
+# It does not prove the capture itself (the files, the zone, the window): that is the runbook's keep predicate, run by the
+# loop. It nags daily until the line exists. The verdict on the data has no deadline and is not this probe's concern.
+#
+# WHO POSTS THE LINE. It is a record marker (it closes a tracker), so it is never a Class R act (standing-delegation section
+# 9 item 5): the owner posts it, or a session posts it under the owner's typed go. The asks say so. The probe cannot tell who
+# typed it: it checks only that the author holds write permission.
 #
 # THE MARKER is read through scripts/lib/trusted-verdict.sh (`trusted_verdict_bodies 12846`), never by a direct comment
 # read: only an author holding admin, maintain or write counts, and a line inside a fenced block or an HTML comment does
 # not count (the lib strips both). `S1-HEALTHCOLO-CAPTURED:` is in the lib's candidate family `S[0-9]+-[A-Z][A-Z0-9_-]*:`.
-# The time must match YYYY-MM-DDTHH:MM:SSZ, parse with `date -u -d`, and print back identically (so 24:00:00 or Feb 30 is
-# not a time). A marker line whose time fails is no capture, and the ask says so without echoing the line.
+# The time must match YYYY-MM-DDTHH:MM:SSZ, parse with GNU `date -u -d` (which itself refuses hour 24, Feb 30 and :60), and
+# be at or after 2026-11-20T00:00:00Z: this probe ships after that instant, so an older time is a quoted example or a
+# forgery, never a capture. The probe also requires the parsed time to print back identically; that is defence in depth for
+# a `date` build that normalises instead of refusing, and no suite row exercises it on GNU date. A marker line that fails any
+# of these is no capture, and the ask says so without echoing the line.
 #
 # EXIT CONTRACT. 1 is NEVER taken (this probe has no "should not close" regression to report).
-#   0 PASS               a trusted S1-HEALTHCOLO-CAPTURED: line with a real UTC time exists -> the sweeper closes the tracker
+#   0 PASS               a trusted S1-HEALTHCOLO-CAPTURED: line with a valid time exists -> the sweeper closes the tracker
 #   3 CANNOT ESTABLISH   gh, jq, grep, date or tr missing; GH_TOKEN unset; the lib unavailable; the lib's rc 2 (a failed
 #                        comment or permission read, the lib header's rc 2 list); an unparseable clock; any internal error
-#   5 ACTION REQUIRED    no qualifying line. Before 2026-11-25T00:00:00Z the ask is to run the loop before 2026-11-24; from
-#                        then on it is to record the runbook's fallback `Unverified:` line on #12846 and close the tracker
+#   5 ACTION REQUIRED    no qualifying line. Before DEADLINE (2026-11-25T00:00:00Z) the ask is to run the loop by the end of
+#                        2026-11-24 UTC (the date is derived from DEADLINE); from then on it is conditional: if the capture
+#                        did not run, record the runbook's fallback `Unverified:` line and close the tracker; if it ran, post
+#                        the marker line
 # Under shell tracing with GH_TOKEN set it refuses with 78 (EX_CONFIG). The body returns an internal code for PASS (10), so a
 # stray `exit 0` from anything the body runs or sources lands on the internal-error arm (3), never on a close.
 #
 # HEALTHCOLO_CAPTURE_NOW (YYYY-MM-DDTHH:MM:SSZ) is a TEST SEAM for the clock. It is inert in production: the sweeper runs
 # this under `env -i` and the tracker directive declares only GH_TOKEN, so nothing can bind it.
 #
-# PUBLIC OUTPUT. The sweeper republishes stdout in a public comment, so every line is authored text built from constants:
-# no login, no comment text, no matched line.
+# PUBLIC OUTPUT. The sweeper republishes stdout AND stderr in a public comment. Every line this probe writes to stdout is
+# authored text built from constants: no login, no comment text, no matched line. The trusted-verdict lib's own stderr is
+# passed through on purpose, because on its rc 2 it names the failed stage; in one internal-invariant arm the lib names an
+# author login, which is already public on #12846. Discarding it would hide the cause of a CANNOT ESTABLISH.
 #
 # CREDENTIAL POSTURE. GH_TOKEN only, used read-only: the comment read of #12846 and the lib's author-permission lookups.
 # Directive: secrets=GH_TOKEN.
@@ -64,17 +75,20 @@ ISSUE=12846
 REPO="jikig-ai/soleur"
 MARKER="S1-HEALTHCOLO-CAPTURED"
 DEADLINE="2026-11-25T00:00:00Z"
+EARLIEST_CAPTURE="2026-11-20T00:00:00Z"
 RUNBOOK="knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md"
 CAPTURED=10
 
 say() { printf '%s\n' "$*"; }
 
-# real_utc <ts>: rc 0 when <ts> (already shape-checked) is a real UTC time that prints back identically.
-real_utc() {
+# utc_epoch <ts>: prints the epoch of <ts> (already shape-checked) and returns 0 when GNU date parses it and it prints back
+# identically (the print-back is defence in depth, see the header).
+utc_epoch() {
   local e back
   e="$(date -u -d "$1" +%s 2>/dev/null)" && [[ "$e" =~ ^[0-9]+$ ]] || return 1
   back="$(date -u -d "@$e" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" || return 1
-  [ "$back" = "$1" ]
+  [ "$back" = "$1" ] || return 1
+  printf '%s' "$e"
 }
 
 # The body runs in a subshell so an internal error (unbound variable, failed builtin, a sourced exit) cannot leak 0 or 1.
@@ -85,19 +99,21 @@ main() {
   done
   [ -n "${GH_TOKEN:-}" ] || { say "CANNOT ESTABLISH: GH_TOKEN is not set (the tracker directive must declare secrets=GH_TOKEN)"; return 3; }
 
-  local now_e deadline_e
+  local now_e deadline_e earliest_e last_day
   if [ -n "${HEALTHCOLO_CAPTURE_NOW:-}" ]; then
     [[ "$HEALTHCOLO_CAPTURE_NOW" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
       || { say "CANNOT ESTABLISH: the clock override is not YYYY-MM-DDTHH:MM:SSZ"; return 3; }
-    real_utc "$HEALTHCOLO_CAPTURE_NOW" || { say "CANNOT ESTABLISH: the clock override is not a real UTC time"; return 3; }
-    now_e="$(date -u -d "$HEALTHCOLO_CAPTURE_NOW" +%s 2>/dev/null)"
+    now_e="$(utc_epoch "$HEALTHCOLO_CAPTURE_NOW")" || { say "CANNOT ESTABLISH: the clock override is not a real UTC time"; return 3; }
   else
     now_e="$(date -u +%s 2>/dev/null)"
   fi
   [[ "$now_e" =~ ^[0-9]+$ ]] || { say "CANNOT ESTABLISH: the current time does not parse"; return 3; }
   # Dates are compared as epochs, never with [[ a < b ]]: a bare < or > reads as a redirect to scanners.
-  deadline_e="$(date -u -d "$DEADLINE" +%s 2>/dev/null)" && [[ "$deadline_e" =~ ^[0-9]+$ ]] \
-    || { say "CANNOT ESTABLISH: the deadline constant does not parse"; return 3; }
+  deadline_e="$(utc_epoch "$DEADLINE")" && earliest_e="$(utc_epoch "$EARLIEST_CAPTURE")" \
+    || { say "CANNOT ESTABLISH: a date constant does not parse"; return 3; }
+  # The last day still in time, derived from DEADLINE so the ask and the clock cannot drift apart.
+  last_day="$(date -u -d "@$((deadline_e - 1))" +%F 2>/dev/null)" && [[ "$last_day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+    || { say "CANNOT ESTABLISH: the deadline's last day does not compute"; return 3; }
 
   local libdir
   libdir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)" || libdir=""
@@ -116,7 +132,7 @@ main() {
   lines="$(grep -E "^${MARKER}:" <<<"$bodies")"; rc=$?
   [ "$rc" -le 1 ] || { say "CANNOT ESTABLISH: could not scan the comments on #$ISSUE"; return 3; }
 
-  local captured=0 bad=0 line ts
+  local captured=0 bad=0 line ts ts_e
   if [ "$rc" -eq 0 ]; then
     while IFS= read -r line; do
       if [[ "$line" =~ ^${MARKER}:\ ([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)([[:space:]].*)?$ ]]; then
@@ -124,25 +140,28 @@ main() {
       else
         bad=1; continue
       fi
-      real_utc "$ts" || { bad=1; continue; }
+      ts_e="$(utc_epoch "$ts")" || { bad=1; continue; }
+      [ "$ts_e" -ge "$earliest_e" ] || { bad=1; continue; }
       captured=1
     done <<<"$lines"
   fi
 
   if [ "$captured" -eq 1 ]; then
-    say "PASS: the per-colo H capture is recorded on #$ISSUE (a trusted $MARKER: line with a real UTC time)."
+    say "PASS: the per-colo H capture is recorded on #$ISSUE (a trusted $MARKER: line with a valid time)."
     return "$CAPTURED"
   fi
 
+  local who="by the owner, or by a session under the owner's typed go (a record marker is never a Class R act)"
   if [ "$now_e" -lt "$deadline_e" ]; then
-    say "ACTION REQUIRED: run the H handoff loop now (runbook $RUNBOOK, addendum 2026-11-19) before 2026-11-24, then post the $MARKER: line on #$ISSUE"
-    say "The line goes first in an unfenced comment on #$ISSUE by an author with write permission: $MARKER: followed by the read instant as YYYY-MM-DDTHH:MM:SSZ, then the kept file names and the branch."
+    say "ACTION REQUIRED: run the H handoff loop now (runbook $RUNBOOK, addendum 2026-11-19) by the end of $last_day UTC, then post the $MARKER: line on #$ISSUE"
+    say "Post it $who: a comment on #$ISSUE with a line starting $MARKER: followed by the read instant as YYYY-MM-DDTHH:MM:SSZ, then the kept file names and the branch. Keep that line outside any code block or HTML comment."
   else
-    say "ACTION REQUIRED: deadline passed without a capture: record the runbook's fallback Unverified: line on #$ISSUE and close this tracker"
-    say "The fallback lines are in the 2026-11-19 addendum's Deadline paragraph of $RUNBOOK. Close this tracker and remove its follow-through label."
+    say "ACTION REQUIRED: the deadline (end of $last_day UTC) passed and no capture line is recorded on #$ISSUE"
+    say "If the capture did not run, record the runbook's fallback Unverified: line on #$ISSUE (the Deadline paragraph of the 2026-11-19 addendum of $RUNBOOK, or its \"If the first H read fails\" paragraph for a read that failed), then close this tracker and remove its follow-through label."
+    say "If the capture ran, post the $MARKER: line on #$ISSUE $who, with the read instant as YYYY-MM-DDTHH:MM:SSZ, and this probe closes the tracker."
   fi
   if [ "$bad" -eq 1 ]; then
-    say "A line starting with $MARKER: was found on #$ISSUE but its time is not a real UTC time in the form YYYY-MM-DDTHH:MM:SSZ, so it was ignored."
+    say "A line starting with $MARKER: was found on #$ISSUE but its time is not a real UTC time in the form YYYY-MM-DDTHH:MM:SSZ at or after $EARLIEST_CAPTURE, so it was ignored."
   fi
   return 5
 }

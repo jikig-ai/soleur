@@ -19,7 +19,8 @@
 #   * an executed-row floor and a mutation-row floor, reported by printf + exit 1, never through the helpers they backstop;
 #   * a child run with one failed row and every floor met must exit 1 (the exit status is what the runner grades).
 #
-# Pure jq, no network, no git, no scratch files: inputs reach jq on a pipe and the recipe through process substitution.
+# Pure jq, no network, no git. Inputs reach jq on a pipe and the recipe through process substitution; the two run-block rows
+# write one mktemp file each (the block reads its file twice) and remove it.
 export TMPDIR="${TMPDIR:-/var/tmp}"
 set -uo pipefail
 
@@ -103,8 +104,8 @@ for i in "${!RUN_LINES[@]}"; do
 done
 # The whole block, line for line: the fenced block right after the sentence that introduces it holds these four lines and
 # nothing else, in this order (a per-line pin alone is satisfied by lines split across blocks or reordered).
-RUN_BLOCK=$(awk '/exactly as the suite runs it:$/ { f = 1; next } f && /^```bash$/ { g = 1; next } g && /^```$/ { exit } g { print }' "$RUNBOOK")
-check "runbook: the run block under 'exactly as the suite runs it' is exactly the four pinned lines, in order" \
+RUN_BLOCK=$(awk '/with this four-line block \(the falsification suite pins it line for line\):$/ { f = 1; next } f && /^```bash$/ { g = 1; next } g && /^```$/ { exit } g { print }' "$RUNBOOK")
+check "runbook: the run block under 'with this four-line block' is exactly the four pinned lines, in order" \
   "$(printf '%s\n' "${RUN_LINES[@]}")" "$RUN_BLOCK"
 # The preflight refuses the synthetic fixture (its zone is not the old zone) and accepts it once zone and R1 window match.
 pf() { /usr/bin/env -i "$JQ" -e "$PREFLIGHT" >/dev/null 2>&1; echo $?; }
@@ -113,6 +114,16 @@ check "preflight: refuses the fixture as it is (another zone)" "1" "$(pf < "$FIX
 check "preflight: accepts the fixture with the old zone and the R1 window" "0" "$(/usr/bin/env -i "$JQ" -c "$R1_PATCH" "$FIXTURE" | pf)"
 check "preflight: refuses a row stamped at the R1 window end (half-open)" "1" \
   "$(/usr/bin/env -i "$JQ" -c "$R1_PATCH | .series[0].hour = \"2026-11-12T12:00:00Z\"" "$FIXTURE" | pf)"
+# One cause each, on the accepted file: every clause of the preflight is needed.
+for brk in '.zone = "0123456789abcdef0123456789abcdef"' '.subcommand = "analytics-health"' '.window_end = "2026-11-12T13:00:00Z"' \
+  '.window_hours = 215' '.series[0].hour = "2026-11-03T11:00:00Z"' '.series = {}'; do
+  check "preflight: refuses the accepted file with only $brk changed" "1" \
+    "$(/usr/bin/env -i "$JQ" -c "$R1_PATCH | $brk" "$FIXTURE" | pf)"
+done
+# The loop and the preflight name the same old zone and the same R1 window (two copies of one fact; CLO item 4 may change it).
+OLD_ZONE=$(printf '%s\n' "$PREFLIGHT" | sed -n 's/^\.zone == "\([0-9a-f]*\)".*/\1/p')
+check "runbook: the handoff loop keeps the preflight's zone ($OLD_ZONE) and reads the preflight's R1 window end" "1 1" \
+  "$(grep -cF -- "and .zone == \"$OLD_ZONE\" and" "$RUNBOOK") $(grep -cxF -- 'h_read 216 2026-11-12T12:00:00Z; r=$?' "$RUNBOOK")"
 
 # --- cases: name | one-line jq patch on the base fixture | full expected verdict line ----------------------------------------
 # Patch helpers (test side only). k is the clock-hour offset from 2026-11-07T23Z, as in the recipe. The base: colo AAA has
@@ -158,6 +169,7 @@ add_case bad-input-other-subcommand  '.subcommand = "analytics-health"'         
 add_case bad-input-duplicate-row     '.series += [.series[0]]'                                      "inconclusive: bad-input"
 add_case bad-input-truncated-absent 'del(.truncated)' "inconclusive: bad-input"
 add_case bad-input-not-an-object '[.]' "inconclusive: bad-input"
+add_case bad-input-series-not-an-array '.series = {}' "inconclusive: bad-input"
 add_case bad-input-negative-count '.series[0].count = -1' "inconclusive: bad-input"
 add_case bad-input-hour-off-the-hour '.series[0].hour = "2026-11-06T21:30:00Z"' "inconclusive: bad-input"
 add_case bad-input-colo-not-three-capitals '.series[0].colo = "aaa"' "inconclusive: bad-input"
@@ -205,6 +217,13 @@ colo=AAA judged=false before=26 after=9 baseline_max=400 change_point=null posit
 colo=BBB judged=false before=26 after=9 baseline_max=400 change_point=null positive=false late_run=null"
 check "class-no-judged-colo: the whole output (an unjudged colo shows change_point=null)" "$WANT_NJ" \
   "$(printf '%s\n' "${CASE_INPUT[${NJ:-0}]}" | /usr/bin/env -i "$JQ" -r -f <(printf '%s\n' "$RECIPE") 2>&1)"
+# A null-colo row is never a table line (D2): the whole output of ix-null-colo-at-10 has exactly the two real colos.
+for i in "${!CASE_NAME[@]}"; do [[ "${CASE_NAME[$i]}" == ix-null-colo-at-10 ]] && NC="$i"; done
+WANT_NC="inconclusive: invalid-colo; null_colo_rows=3 null_colo_qualifying=1
+colo=AAA judged=true before=26 after=60 baseline_max=400 change_point=2026-11-07T23:00:00Z positive=true late_run=null
+colo=BBB judged=true before=26 after=60 baseline_max=400 change_point=null positive=false late_run=null"
+check "ix-null-colo-at-10: the whole output (no colo=null table line)" "$WANT_NC" \
+  "$(printf '%s\n' "${CASE_INPUT[${NC:-0}]}" | /usr/bin/env -i "$JQ" -r -f <(printf '%s\n' "$RECIPE") 2>&1)"
 
 # --- the recorded-outputs block equals the case list, in order ---------------------------------------------------------------
 WANT_OUT=$(for i in "${!CASE_NAME[@]}"; do printf '%s: %s\n' "${CASE_NAME[$i]}" "${CASE_WANT[$i]}"; done)
@@ -223,11 +242,29 @@ check "split: the joined pair carries the later file's window_end and the summed
 check "split: the joined pair gives the base's whole output" "$WANT_BASE" \
   "$(printf '%s\n' "$JOINED" | /usr/bin/env -i "$JQ" -r -f <(printf '%s\n' "$RECIPE") 2>&1)"
 # A join refuses (and the recipe then prints bad-input) for another zone, another subcommand, or a gap between the windows.
-for bad in '.zone = "fedcba9876543210fedcba9876543210"' '.subcommand = "analytics-health"' '.window_end = "2026-11-07T23:00:00Z"'; do
-  check "split: a join whose older half has $bad is refused (bad-input)" "inconclusive: bad-input" \
+for bad in '.zone = "fedcba9876543210fedcba9876543210"' '.subcommand = "analytics-health"' '.window_end = "2026-11-07T23:00:00Z"' '.truncated = true'; do
+  check "split: a join whose older half has $bad is refused or flagged (bad-input)" "inconclusive: bad-input" \
     "$(/usr/bin/env -i "$JQ" -c -s "$JOIN" <(/usr/bin/env -i "$JQ" -c "$LATER" "$FIXTURE") <(/usr/bin/env -i "$JQ" -c "$EARLIER | $bad" "$FIXTURE") 2>&1 \
        | /usr/bin/env -i "$JQ" -r -f <(printf '%s\n' "$RECIPE") 2>&1)"
 done
+
+# The documented path, end to end: the joined file goes through the pinned four-line run block, from the repository root.
+# A correct R1 split (two H=108 halves of the old zone) gives the base output; a refused join stops at the preflight line.
+runblock() { # $1 = joined JSON -> the run block's output and its status
+  local f rc out
+  f=$(mktemp) || { echo "mktemp failed"; return; }
+  printf '%s\n' "$1" > "$f"
+  out=$(cd "$REPO_ROOT" && file="$f" /usr/bin/env -i PATH=/usr/bin:/bin file="$f" /bin/bash -c "$(printf '%s\n' "${RUN_LINES[@]}")" 2>&1); rc=$?
+  rm -f "$f"
+  printf '%s\nrc=%s' "$out" "$rc"
+}
+R1Z='.zone = "5af02a2f394e9ba6e0ea23c381a26b67"'
+NEWER="$LATER | $R1Z | .window_end = \"2026-11-12T12:00:00Z\" | .window_hours = 108"
+OLDER="$EARLIER | $R1Z | .window_hours = 108"
+check "run block: a correct R1 split, joined, gives the base's whole output (rc 0)" "$WANT_BASE
+rc=0" "$(runblock "$(/usr/bin/env -i "$JQ" -c -s "$JOIN" <(/usr/bin/env -i "$JQ" -c "$NEWER" "$FIXTURE") <(/usr/bin/env -i "$JQ" -c "$OLDER" "$FIXTURE"))")"
+check "run block: a join with a gap stops at the preflight (refused line, rc 1, the recipe never runs)" "refused: <file> is not the pre-registered read (zone, subcommand or R1 window)
+rc=1" "$(runblock "$(/usr/bin/env -i "$JQ" -c -s "$JOIN" <(/usr/bin/env -i "$JQ" -c "$NEWER" "$FIXTURE") <(/usr/bin/env -i "$JQ" -c "$OLDER | .window_end = \"2026-11-07T23:00:00Z\"" "$FIXTURE"))" | sed -E 's#refused: [^ ]+ is#refused: <file> is#')"
 
 # --- recipe mutation rows ----------------------------------------------------------------------------------------------------
 # mutate <label> <case that must turn RED> <from> <to>: ONE literal edit of the extracted recipe. The row measures something
@@ -297,7 +334,7 @@ if [[ "$mut_run" -lt "$MUT_FLOOR" ]]; then
   printf 'FAIL: mutation-row floor: only %s recipe mutation rows ran, need %s (vacuity)\n' "$mut_run" "$MUT_FLOOR" >&2
   exit 1
 fi
-ROW_FLOOR=84
+ROW_FLOOR=96
 if [[ "$rows_run" -lt "$ROW_FLOOR" ]]; then
   printf 'FAIL: executed-row floor: only %s rows ran, need at least %s (the exact current count; vacuity)\n' "$rows_run" "$ROW_FLOOR" >&2
   exit 1

@@ -183,6 +183,12 @@ if [[ "$method" == POST ]]; then
   [[ "$nl/$na/$nc/$nd" == "3/1/1/1" ]] || refuse "post-stdin:$nl/$na/$nc/$nd"
 fi
 export -p > "$D/env.log"
+# the wrapper's OWN process environment, NAMES only (never a value): the stub's parent is the wrapper's bash, and
+# /proc/<pid>/environ is what that process was exec'd with (the closed-environment rows read it; no caller can set it)
+if [[ -r "/proc/$PPID/environ" ]]; then
+  mapfile -d '' -t pe < "/proc/$PPID/environ"
+  for e in "${pe[@]}"; do printf "%s\n" "${e%%=*}"; done > "$D/penv.log"
+fi
 status=$(<"$D/status"); body=$(<"$D/body"); ce=$(<"$D/curl_exit")
 if [[ -s "$D/stderr" ]]; then printf "%s\n" "$(<"$D/stderr")" >&2; fi
 if [[ "$ce" != 0 ]]; then exit "$ce"; fi
@@ -215,7 +221,7 @@ fixture() { # status body [curl_exit] [stderr-text]
   printf '%s' "$2" > "$STUB/body"
   printf '%s' "${3:-0}" > "$STUB/curl_exit"
   printf '%s' "${4:-}" > "$STUB/stderr"
-  rm -f "${STUB:?}/calls.log" "${STUB:?}/argv.bin" "${STUB:?}/stdin.log" "${STUB:?}/env.log" "${STUB:?}/refusal.log"
+  rm -f "${STUB:?}/calls.log" "${STUB:?}/argv.bin" "${STUB:?}/stdin.log" "${STUB:?}/env.log" "${STUB:?}/refusal.log" "${STUB:?}/penv.log"
 }
 RUNFLAGS=()
 OUT="" ERR="" RC=0 L1=""
@@ -378,8 +384,12 @@ tpl_limit() { grep -E "^$1=" "$STRIPPED" | grep -oE 'limit:[0-9]+' | head -n 1 |
 # sub_calls <function name>: how many cf_graphql calls the body of that function holds
 sub_calls() { awk -v f="$1" '$0 ~ "^" f "\\(\\) \\{" {i=1; next} i && /^}/ {i=0} i' "$STRIPPED" | grep -c 'cf_graphql '; }
 MSG_RE_LINE="GQL_MSG_RE='^[A-Za-z0-9 ._'\"'\"'\"()-]{1,160}\$'"
-# CTO ruling Q11 censuses. A pin proves an original line still exists; these prove nothing was ADDED. Each reads a file (the
-# comment-stripped wrapper, or a control fixture) and prints a space-joined sorted list; the expected lists are literals in grp_source.
+# CTO ruling Q11 censuses. A pin proves an original line still exists; these catch an ADDITION in three syntax families only: a name
+# read as $NAME or ${NAME, an identifier inside $(( )) or for (( )), and a ${NAME-/:-/=/?/+} expansion. They do NOT see ${!x}
+# indirection, [[ -v NAME ]], declare -n, printf -v, read, bare (( )), let, array subscripts or a quote-split command word (the
+# security fix round 1 found eight such one-line edits). The control for that class is the wrapper's closed environment: after
+# the re-exec no unlisted name exists to be read, whatever the syntax (group `closed`, and its mutation rows). The censuses stay
+# as tripwires. Each reads a file (the comment-stripped wrapper, or a control fixture) and prints a space-joined sorted list.
 # name_set: every name read with $NAME or ${NAME (the prefix dropped), so a new ${X-default} read without a colon is still seen.
 name_set() { grep -oE '[$][{]?[A-Za-z_][A-Za-z0-9_]*' "$1" | sed -E 's/^[$][{]?//' | sort -u | tr '\n' ' '; }
 # arith_ids: the identifiers inside every $(( ... )) and for (( ... )) construct, with parentheses balanced (a nested ( ) is kept).
@@ -392,6 +402,42 @@ arith_ids() {
 default_forms() { grep -oE '[$][{]!?[A-Za-z_0-9]+:?[-=?+]' "$1" | sort -u | tr '\n' ' '; }
 # fn_body <name> <file>: the whole function, from its `name() {` line to the first column-0 `}`
 fn_body() { sed -n "/^$1() {/,/^}/p" "$2"; }
+# code_only <file>: the shell code with every quoted text emptied (the quote marks stay) and every comment dropped. A small quote
+# scanner, state carried across lines: '...', $'...' (backslash escapes), "..." (backslash escapes; a $( inside returns to code
+# until its parentheses balance), and a # that starts a word. It exists for the ban rows below (`source` / `.` as a command, `~`),
+# so a jq program or a message that holds those characters is not code.
+code_only() {
+  awk '
+    function push(s, d) { sp++; st[sp] = s; dp[sp] = d }
+    BEGIN { sp = 0; push("c", -1) }
+    {
+      line = $0; n = length(line); out = ""; i = 1
+      while (i <= n) {
+        ch = substr(line, i, 1); nx = substr(line, i + 1, 1); s = st[sp]
+        if (s == "s") { if (ch == "\047") { out = out ch; sp-- } i++; continue }
+        if (s == "a") { if (ch == "\\") { i += 2; continue } if (ch == "\047") { out = out ch; sp-- } i++; continue }
+        if (s == "d") {
+          if (ch == "\\") { i += 2; continue }
+          if (ch == "\"") { out = out ch; sp--; i++; continue }
+          if (ch == "$" && nx == "(") { out = out "$("; push("c", 1); i += 2; continue }
+          i++; continue
+        }
+        if (ch == "\\") { out = out ch nx; i += 2; continue }
+        if (ch == "#" && (i == 1 || substr(line, i - 1, 1) ~ /[[:space:]]/)) break
+        if (ch == "$" && nx == "\047") { out = out "$\047"; push("a", -1); i += 2; continue }
+        if (ch == "\047") { out = out ch; push("s", -1); i++; continue }
+        if (ch == "\"") { out = out ch; push("d", -1); i++; continue }
+        if (dp[sp] > 0 && ch == "(") dp[sp]++
+        if (dp[sp] > 0 && ch == ")") { dp[sp]--; if (dp[sp] == 0) { out = out ch; sp--; i++; continue } }
+        out = out ch; i++
+      }
+      print out
+    }' "$1"
+}
+# the two ban patterns, applied to code_only output: `source` or `.` as a command word, and a `~` that is not the [[ =~ ]] operator
+# (an assignment `x=~user` IS a tilde expansion, so `NAME=~` is flagged; the operator is written ` =~ ` with a space before it)
+SOURCE_BAN_RE='(^|[;&|({!]|[[:space:]])(source|\.)[[:space:]]+[^[:space:]]'
+TILDE_BAN_RE='(^|[^=])~|[A-Za-z0-9_]=~'
 
 grp_source() {
   t "source: wrapper file is non-empty after comment stripping (anchor for every lacks-row)" test -s "$STRIPPED"
@@ -542,9 +588,9 @@ grp_source() {
   t "source control: eq accepts equal strings" eq a a
   tn "source control: eq rejects a mismatch" eq a b
   t "source: BASE is assigned once, as the exact api.cloudflare.com literal" eq "$(grep -cx "BASE='https://api.cloudflare.com/client/v4'" "$STRIPPED")/$(grep -cE '^[[:space:]]*(export[[:space:]]+)?BASE=' "$STRIPPED")" "1/1"
-  t "source: Q11.R3 the only \${NAME-default} style expansions (colon optional, any of - = ? +) are the thirteen known ones" eq "$(default_forms "$STRIPPED")" "$(sorted_join '${!TOKVAR:-' '${1:-' '${2:-' '${CF_ACCOUNT_ID:-' '${CF_ZONE_ID:-' '${DOPPLER_CONFIG:-' '${DOPPLER_PROJECT:-' '${CF_API_TOKEN:+' '${CF_API_TOKEN_ANALYTICS_READ:+' '${CF_API_TOKEN_AUDIT:+' '${CF_API_TOKEN_PAGERULES_READ:+' '${CF_API_TOKEN_RULESETS:+' '${CF_API_TOKEN_ZONE_SETTINGS:+')"
+  t "source: Q11.R3 the only \${NAME-default} style expansions (colon optional, any of - = ? +) are the fourteen known ones" eq "$(default_forms "$STRIPPED")" "$(sorted_join '${!TOKVAR:-' '${CF_RO_ENV_CLOSED:-' '${1:-' '${2:-' '${CF_ACCOUNT_ID:-' '${CF_ZONE_ID:-' '${DOPPLER_CONFIG:-' '${DOPPLER_PROJECT:-' '${CF_API_TOKEN:+' '${CF_API_TOKEN_ANALYTICS_READ:+' '${CF_API_TOKEN_AUDIT:+' '${CF_API_TOKEN_PAGERULES_READ:+' '${CF_API_TOKEN_RULESETS:+' '${CF_API_TOKEN_ZONE_SETTINGS:+')"
   t "source: TOK is read by one exact line and assigned in exactly three places (init, read, trim)" eq "$(grep -cxF '  TOK="${!TOKVAR:-}"' "$STRIPPED")/$(grep -cE '(^|[[:space:]])TOK=' "$STRIPPED")" "1/3"
-  t "source: the CF_* names the code reads are exactly the five tokens, CF_API_TOKEN (xtrace test), CF_ZONE_ID and CF_ACCOUNT_ID" eq "$(grep -oE 'CF_[A-Z0-9_]+' "$STRIPPED" | sort -u | tr '\n' ' ')" "CF_ACCOUNT_ID CF_API_TOKEN CF_API_TOKEN_ANALYTICS_READ CF_API_TOKEN_AUDIT CF_API_TOKEN_PAGERULES_READ CF_API_TOKEN_RULESETS CF_API_TOKEN_ZONE_SETTINGS CF_ZONE_ID "
+  t "source: the CF_* names the code reads are exactly the five tokens, CF_API_TOKEN (xtrace test), CF_ZONE_ID, CF_ACCOUNT_ID and the closed-environment guard CF_RO_ENV_CLOSED" eq "$(grep -oE 'CF_[A-Z0-9_]+' "$STRIPPED" | sort -u | tr '\n' ' ')" "CF_ACCOUNT_ID CF_API_TOKEN CF_API_TOKEN_ANALYTICS_READ CF_API_TOKEN_AUDIT CF_API_TOKEN_PAGERULES_READ CF_API_TOKEN_RULESETS CF_API_TOKEN_ZONE_SETTINGS CF_RO_ENV_CLOSED CF_ZONE_ID "
   t "source: each curl line carries exactly four dollar signs before its stdin feed (the out=\$( capture, \$CURL, the -w format, the URL variable), so no expansion extends the argv" eq "$(dollars_before_stdin "$WORK/curl_lines.txt")" "4 4 "
   printf '%s\n' 'x=$(/usr/bin/env -i "$CURL" --disable --noproxy "*" -X GET "${CF_CURL_EXTRA:-}" -w $'"'"'\n%{http_code}'"'"' --config - "$url" < <(a))' > "$WORK/dl1.txt"
   t "source control: an expansion added to a curl line is counted" eq "$(dollars_before_stdin "$WORK/dl1.txt")" "5 "
@@ -597,8 +643,8 @@ PINNED
   # --- CTO ruling Q11: closed censuses over the comment-stripped wrapper. The expected sets are literals measured from the wrapper,
   # never derived from it at test time, so ANY added name, arithmetic operand or default-form expansion reds a row. ---
   t "source: Q11.R1 the names the code reads are exactly the known set (a new \$NAME or \${NAME read fails)" eq "$(name_set "$STRIPPED")" "$(sorted_join \
-    b BASE body BODY CF_ACCOUNT_ID CF_API_TOKEN CF_API_TOKEN_ANALYTICS_READ CF_API_TOKEN_AUDIT CF_API_TOKEN_PAGERULES_READ CF_API_TOKEN_RULESETS \
-    CF_API_TOKEN_ZONE_SETTINGS CF_ZONE_ID CURL DOPPLER_CONFIG DOPPLER_PROJECT end esc g GQL_COLO_TPL GQL_EDGE_TPL GQL_HEALTH_TPL GQL_MSG \
+    b BASE BASH body BODY CF_ACCOUNT_ID CF_API_TOKEN CF_API_TOKEN_ANALYTICS_READ CF_API_TOKEN_AUDIT CF_API_TOKEN_PAGERULES_READ CF_API_TOKEN_RULESETS \
+    CF_API_TOKEN_ZONE_SETTINGS CF_RO_ENV_CLOSED CF_ZONE_ID CURL DOPPLER_CONFIG DOPPLER_PROJECT end ENV_DROP ENV_FUNCS ENV_N ENV_NAMES esc g GQL_COLO_TPL GQL_EDGE_TPL GQL_HEALTH_TPL GQL_MSG \
     GQL_MSG_RE GQL_URL hours HOURS ID_RE JQ_DEFS jrc kind limit LIMIT lm m MAX_HOURS MAX_OFFSET now out p qlimit QLIMIT r rc res rr rules s \
     since STAMP_RE start STATUS SUB SUBCOMMANDS t times TOK TOKEN_RE TOKVAR url WIN_END WIN_START)"
   t "source: Q11.R2 the identifiers inside every \$(( )) and for (( )) are exactly END_OFFSET end HOURS i t TOK" eq "$(arith_ids "$STRIPPED")" "$(sorted_join END_OFFSET end HOURS i t TOK)"
@@ -679,6 +725,19 @@ Q11_CF_GRAPHQL
   t "census control: Q11.R3 the default-form census sees - + = ? :- forms and not \${#L} or \${M//}" eq "$(default_forms "$WORK/q11c.txt")" "$(sorted_join '${ZONE_PIN-' '${HOST_PIN:+' '${!V=' '${W?' '${K:-')"
   printf '%s\n' 'gql_fill() {' '  b=1' '  b="${b//app.soleur.ai/${HOST_PIN-app.soleur.ai}}"' '}' 'after() {' '  x' '}' > "$WORK/q11d.txt"
   t "census control: Q11.R4 the body extractor stops at the first column-0 } and keeps an added line" eq "$(fn_body gql_fill "$WORK/q11d.txt")" "$(printf '%s\n' 'gql_fill() {' '  b=1' '  b="${b//app.soleur.ai/${HOST_PIN-app.soleur.ai}}"' '}')"
+  # --- security fix round 1: two channels the closed environment does NOT close (a file the script reads by itself: HOME is gone, but
+  # bash still expands ~ from the password database). Both are banned in code; quoted text and comments are not code (code_only). ---
+  code_only "$STRIPPED" > "$WORK/code_only.sh"
+  t "source: anchor - the quote scanner keeps every line of the wrapper (one output line per input line)" eq "$(wc -l < "$WORK/code_only.sh")" "$(wc -l < "$STRIPPED")"
+  tn "source: no source or . used as a command anywhere in the code (quoted text and comments excluded)" grep -Eq "$SOURCE_BAN_RE" "$WORK/code_only.sh"
+  tn "source: no ~ (tilde expansion) anywhere in the code (quoted text, comments and the [[ =~ ]] operator excluded)" grep -Eq "$TILDE_BAN_RE" "$WORK/code_only.sh"
+  t "source control: without the quote scanner the two ban patterns DO match the wrapper's jq programs and messages (the scanner is load-bearing)" bash -c '[ "$(grep -cE "$2" "$1")" -gt 0 ] && [ "$(grep -cE "$3" "$1")" -gt 0 ]' _ "$STRIPPED" "$SOURCE_BAN_RE" "$TILDE_BAN_RE"
+  printf '%s\n' '[ -r ~/.cfro.rc ] && . ~/.cfro.rc' 'source /etc/cfro.rc' 'x=1; . "$f"' 'y=$(. ./a)' 'z="$(source b)"' > "$WORK/ban_src.txt"
+  t "source control: the source/. ban flags each of five command forms (bare, word, after ;, in \$( ), in \"\$( )\")" eq "$(code_only "$WORK/ban_src.txt" | grep -cE "$SOURCE_BAN_RE")" 5
+  printf '%s\n' '[ -r ~/.cfro_url ] && read -r GQL_URL < ~/.cfro_url' 'w=~root' 'PATH=/x:~/bin' > "$WORK/ban_tl.txt"
+  t "source control: the tilde ban flags a ~/ path, an assignment ~user and a :~ path element" eq "$(code_only "$WORK/ban_tl.txt" | grep -cE "$TILDE_BAN_RE")" 3
+  printf '%s\n' "jq '. == null and (. * 10)' x" 'die 64 "no Doppler source set ~ here"' '[[ $a =~ b ]]' "TOKEN_RE='^[~.]\$'" 'echo "$(printf "%s" ". x")"' 'f # . comment ~' 'guard_source; requestSource' 'x="${y%.*}" "$#" "${#z}"' "m=\$'a . ~ b'" > "$WORK/ban_ok.txt"
+  t "source control: neither ban flags a jq program, a message, the =~ operator, a quoted ~, a comment, a _source name or \${y%.*}" eq "$(code_only "$WORK/ban_ok.txt" | grep -cE "$SOURCE_BAN_RE|$TILDE_BAN_RE")" 0
 }
 
 # =============================================================================================
@@ -2129,6 +2188,75 @@ grp_gql() {
 
 
 # =============================================================================================
+# Group: closed (security fix round 1: the closed environment). A planted unknown name changes nothing the wrapper sends, and the
+# wrapper's own process (read by the stub from /proc/<its parent>/environ, which no caller can set) holds only allowed names.
+# =============================================================================================
+# the names that may reach the wrapper's own process: the wrapper allowlist, written here independently of the wrapper, plus what
+# bash adds by itself (PWD SHLVL _)
+CLOSED_ALLOWED_RE='^(DOPPLER_PROJECT|DOPPLER_CONFIG|CF_ZONE_ID|CF_ACCOUNT_ID|CF_API_TOKEN_ZONE_SETTINGS|CF_API_TOKEN_RULESETS|CF_API_TOKEN_PAGERULES_READ|CF_API_TOKEN_AUDIT|CF_API_TOKEN_ANALYTICS_READ|PATH|LC_ALL|CF_RO_ENV_CLOSED|PWD|SHLVL|_)$'
+# planted names: each one a one-line edit could read (the security seat's ALT_GQL, ALT_TOK and SKEW_H, a Doppler-style secret
+# name, the wrapper's own global names, CF_API_TOKEN), on top of BASE_ENV's HOME
+CLOSED_PLANT=("ALT_GQL=https://evil.invalid/graphql" "ALT_TOK=$TOK_BARE" "SKEW_H=5" "CF_API_TOKEN_EXTRA=$TOK_BARE"
+  "GQL_URL=https://evil.invalid/graphql" "BASE=https://evil.invalid" "END_OFFSET=7" "CF_API_TOKEN=$TOK_BARE")
+penv_extra() { # the names in the wrapper's own environment that are not allowed (empty when closed); "missing" without a log
+  if [[ ! -s "$STUB/penv.log" ]]; then printf 'missing'; return; fi
+  grep -vE "$CLOSED_ALLOWED_RE" "$STUB/penv.log" | sort -u | tr '\n' ' '
+}
+grp_closed() {
+  local s fnp out0
+  # a fixed clock for every date child (the epoch, now and 7 days ago), so two runs send byte-identical stamps
+  printf '#!/bin/bash\ncase " $* " in\n  *" -d @"*) exec /usr/bin/date "$@" ;;\n  *" +%%s "*) echo %s ;;\n  *"7 days ago"*) echo 2026-11-01T10:00:00Z ;;\n  *) echo 2026-11-08T10:00:00Z ;;\nesac\n' "$FAKE_T" > "$STUB/fakedate_all"
+  chmod +x "$STUB/fakedate_all"
+  if ! make_variant closedclock "s|/usr/bin/env -i /usr/bin/date|/usr/bin/env -i $STUB/fakedate_all|g"; then
+    vno "closed: the fixed-clock variant could not be built"
+    return
+  fi
+  for s in "${ALLSUBS[@]}"; do
+    sargs "$s"
+    # the reference run: an environment of allowed names only (BASE_ENV without HOME) is not re-exec'd
+    mkenv HOME
+    fixture 200 "$(ok_body "$s")"
+    run "${ENVX[@]}" -- "${SARGS[@]}"
+    t "wire[closed-env/$s]: anchor - an allowed-names-only run is ok and sends once" eq "$L1|$(ncalls)" "cloudflare-readonly: $s ok|1"
+    t "wire[closed-env/$s]: an allowed-names-only environment is not re-exec'd (the wrapper's own environment has no CF_RO_ENV_CLOSED)" bash -c '[[ -s "$1" ]] && ! grep -qx CF_RO_ENV_CLOSED "$1"' _ "$STUB/penv.log"
+    cp "$STUB/argv.bin" "$WORK/ce.argv"
+    cp "$STUB/stdin.log" "$WORK/ce.stdin"
+    out0="$OUT"
+    # the planted run: HOME plus every planted name
+    fixture 200 "$(ok_body "$s")"
+    run "${BASE_ENV[@]}" "${CLOSED_PLANT[@]}" -- "${SARGS[@]}"
+    t "wire[closed-env/$s]: with planted unknown names the curl argv (flags and URL) is byte-identical" cmp -s "$WORK/ce.argv" "$STUB/argv.bin"
+    t "wire[closed-env/$s]: with planted unknown names the stdin config (the bound token and the body) is byte-identical" cmp -s "$WORK/ce.stdin" "$STUB/stdin.log"
+    t "wire[closed-env/$s]: with planted unknown names the output is identical" eq "$OUT" "$out0"
+    t "wire[closed-env/$s]: the wrapper's own process environment holds only allowed names (planted names, HOME and CF_API_TOKEN gone)" eq "$(penv_extra)" ""
+    t "wire[closed-env/$s]: the re-exec happened (the wrapper's own environment carries the CF_RO_ENV_CLOSED its re-exec set)" grep -qx CF_RO_ENV_CLOSED "$STUB/penv.log"
+  done
+  SUTX=""
+  # argv survives the re-exec exactly: the full two-integer vector, and an empty argument that must still count as one
+  fixture 200 "$(ok_body analytics-health-colo)"
+  run "${BASE_ENV[@]}" "${CLOSED_PLANT[@]}" -- analytics-health-colo 216 527
+  t "wire[closed-env]: the re-exec keeps argv: analytics-health-colo 216 527 is ok, sent once, window_hours 216" eq "$L1|$(ncalls)|$(jq -r '.window_hours' <<<"${OUT#*$'\n'}")" "cloudflare-readonly: analytics-health-colo ok|1|216"
+  fixture 200 "$SSL_OK"
+  run "${BASE_ENV[@]}" "${CLOSED_PLANT[@]}" -- ssl-mode ''
+  t "wire[closed-env]: the re-exec keeps an empty argument: ssl-mode '' is still refused as an extra argument (64), nothing sent" eq "$RC|$(ncalls)|$ERR" "64|0|cloudflare-readonly: usage: cloudflare-readonly.sh <subcommand> | --list (refused: missing or extra argument)"
+  # the guard is not a skip switch: a caller who sets it while the environment is open is refused, nothing is sent
+  fixture 200 "$SSL_OK"
+  run "${BASE_ENV[@]}" "${CLOSED_PLANT[@]}" "CF_RO_ENV_CLOSED=1" -- ssl-mode
+  t "wire[closed-env]: a caller-set CF_RO_ENV_CLOSED with an open environment is refused (64) and nothing is sent" eq "$RC|$(ncalls)|$ERR" "64|0|cloudflare-readonly: refused: the environment is still open after the re-exec"
+  # an exported function is dropped too: a planted printf override would write a probe file from every printf after the re-exec
+  fnp="$WORK/fn_probe"
+  rm -f "$fnp"
+  fixture 200 "$SSL_OK"
+  run "${BASE_ENV[@]}" "BASH_FUNC_printf%%=() { builtin printf \"\$@\"; builtin printf x >> $fnp; }" -- ssl-mode
+  t "wire[closed-env]: an exported function (a printf override) never runs after the re-exec, and the read is ok" eq "$L1|$([[ -e "$fnp" ]] && echo probe-written || echo no-probe)" "cloudflare-readonly: ssl-mode ok|no-probe"
+  # the probe is live: the same planted function DOES run in a bash that keeps its environment
+  rm -f "$fnp"
+  /usr/bin/env -i PATH=/usr/bin:/bin "BASH_FUNC_printf%%=() { builtin printf \"\$@\"; builtin printf x >> $fnp; }" "$BASH" -c 'printf ""' > /dev/null
+  t "wire[closed-env] control: the planted printf override writes the probe in a bash that keeps its environment" test -e "$fnp"
+  rm -f "$fnp"
+}
+
+# =============================================================================================
 # Run the groups
 # =============================================================================================
 if [[ "$SANDBOX_OK" != 1 ]]; then
@@ -2140,7 +2268,7 @@ grp_selftest() {
   vno "selftest: deliberate failing assertion (this child MUST exit non-zero)"
 }
 PROJ_FLOOR=213
-for g in source wire refuse token env status xtrace proj shape tools gql selftest; do
+for g in source wire refuse token env status xtrace proj shape tools gql closed selftest; do
   if [[ "$g" == selftest ]]; then
     [[ "$SELECT" == selftest ]] || continue
   fi
@@ -2231,6 +2359,24 @@ mutate_suite() { # mutate_suite <kind> <label> <expect> <groups> <from> <to>
   launch "$kind" "$label" "$expect" "$d" "$groups"
   LAUNCH_SUITE="$SELF"
 }
+# the wrapper's re-exec line (the closed environment); mutate_inert removes it in the twin row
+CLOSED_EXEC_LINE='  exec /usr/bin/env "${ENV_DROP[@]}" CF_RO_ENV_CLOSED=1 "$BASH" "$0" "$@"'
+# mutate_inert <label> <row the twin reds> <from> <to>: two rows for one edit. The edit alone must be inert under the closed
+# environment (kind inert, group closed); the same edit with the re-exec line removed must be caught by the named closed-env row,
+# so the inert verdict is not an edit the closed rows simply cannot see.
+mutate_inert() {
+  local label="$1" expect="$2" from="$3" to="$4" d
+  MUT_KIND=inert mutate_kind "$label" "" closed "$from" "$to"
+  mut_n=$((mut_n + 1))
+  MUT_TOTAL=$((MUT_TOTAL + 1))
+  d="$WORK/mut.$mut_n"
+  assert_fixture_dir "$d"
+  mkdir -p "$d"
+  edit_once "$PROD" "$from" "$to" "$label (twin)" "$d/step.sh" || return
+  edit_once "$d/step.sh" "$CLOSED_EXEC_LINE" '  :' "$label (twin)" "$d/cf.sh" || return
+  LAUNCH_SUITE="$SELF"
+  launch mut "$label, twin with the re-exec removed" "$expect" "$d" closed
+}
 # collect: wait for every child, then judge each in launch order.
 collect() {
   local i kind label expect d irc nfail sp
@@ -2307,6 +2453,16 @@ collect() {
               vno "mutate[$label]: the scratch directory was still removed (NOT caught)"
             fi
             ;;
+          inert)
+            # an edit the closed environment makes inert: the closed group stays green and its planted-name rows all ran (its twin
+            # row, the same edit with the re-exec removed, must be caught; see mutate_inert)
+            if [[ "$irc" == 0 ]] && [[ "$(grep -c '^ok   - wire\[closed-env/' "$d/out")" -ge "$((${#ALLSUBS[@]} * 7))" ]]; then
+              MUT_CAUGHT=$((MUT_CAUGHT + 1))
+              vok "mutate[$label]: inert - the closed group stays green with the names the edit reads planted"
+            else
+              vno "mutate[$label]: NOT inert under the closed environment (rc $irc, $nfail failing rows)"
+            fi
+            ;;
           suitemut)
             # a mutated suite: judged exactly like a wrapper mutant, but the named row is a row of the suite itself
             if [[ "$irc" != 0 ]] && grep -qF -- "$expect" "$d/failed" && [[ "$nfail" -le "$MUT_MAXFAIL" ]]; then
@@ -2347,7 +2503,7 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "G1.3 refusing arm calls cf_get" "refuse: unknown subcommand raw -> exit 64" refuse '  *) die 64 "refused: unknown subcommand" ;;' '  *) cf_get ssl-mode ;;'
   mutate "G1.4 extra curl site" "source: exactly two curl call sites" "source,status" $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) unverified token-lacks-scope 11 ;;' $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) /usr/bin/env -i "$CURL" --disable -X GET "$url" --config - < <(printf \'header = "Authorization: Bearer %s"\\n\' "${CF_API_TOKEN_RULESETS:-x}"); unverified token-lacks-scope 11 ;;'
   mutate "G1.4b extra curl site (403 retried)" "curl called exactly once" "source,status" $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) unverified token-lacks-scope 11 ;;' $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) /usr/bin/env -i "$CURL" --disable -X GET "$url" --config - < <(printf \'header = "Authorization: Bearer %s"\\n\' "${CF_API_TOKEN_RULESETS:-x}"); unverified token-lacks-scope 11 ;;'
-  mutate "G1.5 host overridable" "URL host is api.cloudflare.com despite a planted CF_API_BASE" wire "BASE='https://api.cloudflare.com/client/v4'" 'BASE="${CF_API_BASE:-https://api.cloudflare.com/client/v4}"'
+  mutate "G1.5 host overridable (CF_API_BASE is dropped by the closed environment, so the default-form census is the row)" "source: Q11.R3 the only \${NAME-default} style expansions" wire,source "BASE='https://api.cloudflare.com/client/v4'" 'BASE="${CF_API_BASE:-https://api.cloudflare.com/client/v4}"'
   mutate "G1.6a add -L" "argv has none of -d" wire '-X GET -sS --max-time 20 --max-redirs 0' '-X GET -sS --max-time 20 --max-redirs 0 -L'
   mutate "G1.6b drop --max-redirs 0" "argv has --max-redirs 0" wire '-X GET -sS --max-time 20 --max-redirs 0' '-X GET -sS --max-time 20 --max-time 21'
   mutate "G1.6c --disable not first" "argv[1] is --disable" wire '"$CURL" --disable --noproxy '"'*'"' -X GET' '"$CURL" --noproxy "*" --disable --noproxy '"'*'"' -X GET'
@@ -2356,7 +2512,7 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "G1.8b delete trailing-whitespace trim" "token: trailing newline is accepted" token 'TOK="${TOK%"${TOK##*[![:space:]]}"}"' ':'
   mutate "G1.9a swap token binding" "wire[ssl-mode]: stdin carries the bound token exactly once" wire 'TOKVAR=CF_API_TOKEN_ZONE_SETTINGS' 'TOKVAR=CF_API_TOKEN_RULESETS'
   mutate "G1.9a2 swap pagerules binding back to RULESETS" "token: pagerules-ssl with every token EXCEPT PAGERULES_READ set -> exit 10" token 'pagerules-ssl) TOKVAR=CF_API_TOKEN_PAGERULES_READ;' 'pagerules-ssl) TOKVAR=CF_API_TOKEN_RULESETS;'
-  mutate "G1.9b CF_API_TOKEN fallback" "only CF_API_TOKEN present -> exit 10" token 'TOK="${!TOKVAR:-}"' 'TOK="${!TOKVAR:-${CF_API_TOKEN:-}}"'
+  mutate "G1.9b CF_API_TOKEN fallback (CF_API_TOKEN is dropped by the closed environment, so the default-form census is the row)" "source: Q11.R3 the only \${NAME-default} style expansions" token,source 'TOK="${!TOKVAR:-}"' 'TOK="${!TOKVAR:-${CF_API_TOKEN:-}}"'
   mutate "G1.10 delete DOPPLER pin" "refuse: DOPPLER_CONFIG=dev -> exit 64" refuse 'if [ "${DOPPLER_PROJECT:-}" != soleur ] || [ "${DOPPLER_CONFIG:-}" != prd_terraform ]; then' 'if false; then'
   mutate "G1.11a curl by name" "source: sandbox rewrite of CURL= matches exactly once" source $'\nCURL=/usr/bin/curl\n' $'\nCURL=curl\n'
   mutate "G1.11b env override for curl path" "source: no environment override" source $'\nCURL=/usr/bin/curl\n' $'\nCURL=${CF_CURL:-/usr/bin/curl}\n'
@@ -2434,9 +2590,9 @@ if [[ -z "$INNER" ]] && want all; then
   mutate_suite suitemut "G2.A6 harness: the analytics token is no leak needle" "leak control: needle list has at least 14 non-empty members" status 'LEAK_NEEDLES=("$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_N" "$TOK_''BARE"' 'LEAK_NEEDLES=("$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_BARE"'
 
   # --- review round: children run under env -i (W1) ---
-  mutate "W1.1 project jq without env -i" "env[jq/ssl-mode]: a planted \$HOME/.jq redefining test leaks no token" env,source '  res=$(/usr/bin/env -i /usr/bin/jq -c' '  res=$(/usr/bin/jq -c'
+  mutate "W1.1 project jq without env -i (HOME is dropped by the closed environment, so the planted-.jq row cannot see it; the call-form census does)" "census: every jq/date use is the exact call form" env,source '  res=$(/usr/bin/env -i /usr/bin/jq -c' '  res=$(/usr/bin/jq -c'
   mutate "W1.2 guard jq without env -i" "census: every jq/date use is the exact call form" source '  kind=$(/usr/bin/env -i /usr/bin/jq -r "if .success' '  kind=$(/usr/bin/jq -r "if .success'
-  mutate "W1.2b guard jq without env -i, behavioural" "env[jq-guard/ssl-mode]: with a planted" env '  kind=$(/usr/bin/env -i /usr/bin/jq -r "if .success' '  kind=$(/usr/bin/jq -r "if .success'
+  mutate "W1.2b guard jq without env -i (HOME is dropped by the closed environment, so the planted-.jq row cannot see it; the call-form census does)" "census: every jq/date use is the exact call form" env,source '  kind=$(/usr/bin/env -i /usr/bin/jq -r "if .success' '  kind=$(/usr/bin/jq -r "if .success'
   mutate "W1.3 date (now) without env -i" "census: every jq/date use is the exact call form" source '  now=$(/usr/bin/env -i /usr/bin/date' '  now=$(/usr/bin/date'
   mutate "W1.4 date (since) without env -i" "census: every jq/date use is the exact call form" source '  since=$(/usr/bin/env -i /usr/bin/date' '  since=$(/usr/bin/date'
   mutate "W1.6 bare jq with a decoy trailing comment" "census: every jq/date use is the exact call form" source '  res=$(/usr/bin/env -i /usr/bin/jq -c --argjson limit "$LIMIT" --argjson qlimit "$QLIMIT" --argjson hours "$HOURS" "$JQ_DEFS $1" < <(printf '"'%s'"' "$BODY") 2>&1)' '  res=$(/usr/bin/jq -c --argjson limit "$LIMIT" --argjson qlimit "$QLIMIT" --argjson hours "$HOURS" "$JQ_DEFS $1" < <(printf '"'%s'"' "$BODY") 2>&1) # $(/usr/bin/env -i /usr/bin/jq '
@@ -2490,7 +2646,7 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "W4.13 action type without gk" "proj[change-history]: hostile action-type is sanitized" proj 'by_action_type: ([$r[] | ((.action | if type == "object" then .type else null end) | gk)]' 'by_action_type: ([$r[] | ((.action | if type == "object" then .type else null end))]'
   mutate "W4.14 resource type without gk" "proj[change-history]: hostile resource-type is sanitized" proj 'by_resource_type: ([$r[] | ((.resource | if type == "object" then .type else null end) | gk)]' 'by_resource_type: ([$r[] | ((.resource | if type == "object" then .type else null end))]'
   mutate "W4.15 audit time filter dropped" "proj[change-history]: hostile action-time is sanitized" proj 'select(type == "string" and test(rfc))' 'select(type == "string")'
-  mutate_suite suitemut "W4.16 the proj group is dropped from the run loop" "proj floor" proj "for g in source wire refuse token env status xtrace pr""oj shape tools gql selftest; do" "for g in source wire refuse token env status xtrace shape tools gql selftest; do"
+  mutate_suite suitemut "W4.16 the proj group is dropped from the run loop" "proj floor" proj "for g in source wire refuse token env status xtrace pr""oj shape tools gql closed selftest; do" "for g in source wire refuse token env status xtrace shape tools gql closed selftest; do"
 
   # --- closed argv vector (W5) ---
   mutate "W5.1 duplicated -X GET" "wire[ssl-mode]: recorded argv equals the closed vector" wire '-X GET -sS' '-X GET -X GET -sS'
@@ -2554,7 +2710,7 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "G1.H14 an error list is ignored" "api-error message ok is printed" proj 'if ((.errors | type) == \"array\" and (.errors | length) > 0) then \"api\" elif' 'if false then \"api\" elif'
   mutate "W1.9 message jq without env -i" "census: every jq/date use is the exact call form" source '  m=$(/usr/bin/env -i /usr/bin/jq -j' '  m=$(/usr/bin/jq -j'
   mutate "W1.10 gql guard jq without env -i" "census: every jq/date use is the exact call form" source '  kind=$(/usr/bin/env -i /usr/bin/jq -r "$JQ_DEFS' '  kind=$(/usr/bin/jq -r "$JQ_DEFS'
-  mutate "W1.10b gql guard jq without env -i, behavioural" "env[jq-guard/analytics-health]: with a planted" env '  kind=$(/usr/bin/env -i /usr/bin/jq -r "$JQ_DEFS' '  kind=$(/usr/bin/jq -r "$JQ_DEFS'
+  mutate "W1.10b gql guard jq without env -i (HOME is dropped by the closed environment, so the planted-.jq row cannot see it; the call-form census does)" "census: every jq/date use is the exact call form" env,source '  kind=$(/usr/bin/env -i /usr/bin/jq -r "$JQ_DEFS' '  kind=$(/usr/bin/jq -r "$JQ_DEFS'
   mutate "W1.11 the epoch date child without env -i" "census: every jq/date use is the exact call form" source '  t=$(/usr/bin/env -i /usr/bin/date' '  t=$(/usr/bin/date'
   mutate "W1.12 the window-end date child without env -i" "census: every jq/date use is the exact call form" source '  WIN_END=$(/usr/bin/env -i /usr/bin/date' '  WIN_END=$(/usr/bin/date'
   mutate "W1.13 the window-start date child without env -i" "census: every jq/date use is the exact call form" source '  WIN_START=$(/usr/bin/env -i /usr/bin/date' '  WIN_START=$(/usr/bin/date'
@@ -2583,7 +2739,7 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "D1.M2 the splice line deleted" "proj[analytics-health-colo]: line 2 begins with the spliced zone and window_end prefix" proj $'    res="{$2,${res#\\{}"\n' ''
   mutate "D1.M3 analytics-health gets the same prefix" "source: exactly one project call passes a second argument" proj,source 'not host- or requestSource-scoped", series: [$g[] | {hour: .dimensions.datetimeHour, count: .count, avg_ms: (.avg.originResponseDurationMs | r1), p50_ms: (.quantiles.originResponseDurationMsP50 | r1), p90_ms: (.quantiles.originResponseDurationMsP90 | r1)}]}'"'" 'not host- or requestSource-scoped", series: [$g[] | {hour: .dimensions.datetimeHour, count: .count, avg_ms: (.avg.originResponseDurationMs | r1), p50_ms: (.quantiles.originResponseDurationMsP50 | r1), p90_ms: (.quantiles.originResponseDurationMsP90 | r1)}]}'"'"' "$(printf '"'"'"zone":"%s"'"'"' "$CF_ZONE_ID")"'
   mutate "D1.M4 the splice accepts a projection holding a newline" "proj[analytics-health-colo]: a colo projection that emits two-values is bad-response (shape)" proj $'*$\'\\n\'*) bad_shape ;;' $'*$\'\\n\'*) : ;;'
-  mutate "D5.M1 END_OFFSET defaulted from the environment" "canary: an inherited END_OFFSET on analytics-health runs no command" gql $'\nEND_OFFSET=0\n' $'\n: "${END_OFFSET:=0}"\n'
+  mutate "D5.M1 END_OFFSET defaulted from the environment (END_OFFSET is dropped by the closed environment, so the default-form census is the row)" "source: Q11.R3 the only \${NAME-default} style expansions" gql,source $'\nEND_OFFSET=0\n' $'\n: "${END_OFFSET:=0}"\n'
 
   # --- the per-colo read, Guard 2: the two caller integers are refused before any credential or request ---
   mutate "G2.C1 MAX_OFFSET raised to 528" "refuse: analytics-health-colo H=1 O=528 (offset over, span within 743) -> exit 64" refuse $'\nMAX_OFFSET=527\n' $'\nMAX_OFFSET=528\n'
@@ -2625,10 +2781,32 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "Q11.M7 a name-free edit to gql_window" "source: Q11.R4 the whole gql_window body is the pinned text" source '  start=$((end - HOURS * 3600))' '  start=$((end - HOURS * 3600 + 0))'
   # --- review P2-3: a field the wrapper renames is a field the recipe no longer reads ---
   mutate "P2-3.M1 the colo projection renames truncated" "proj[analytics-health-colo]: link - the runbook R2 recipe reads the wrapper's real colo line" proj 'truncated: ($qlimit <=' 'truncated_x: ($qlimit <='
+  # --- security fix round 1 (P1): the seat's one-line edits. A file read by the script itself (C, J and a source word) is banned in
+  # code; every edit that reads a caller-chosen name (A B D E F G H) is inert under the closed environment, and its twin (the same
+  # edit with the re-exec removed) is caught, so the closed rows do see the edit. ---
+  GU='GQL_URL="$BASE/graphql"'
+  mutate_inert "SEC.A \${!url} indirection to ALT_GQL" "wire[closed-env/analytics-health]: with planted unknown names the curl argv (flags and URL) is byte-identical" "$GU" "$GU"$'\nurl=ALT_GQL\n[[ -v ALT_GQL ]] && GQL_URL=${!url}'
+  mutate_inert "SEC.B declare -n GQL_URL=ALT_GQL" "wire[closed-env/analytics-health]: with planted unknown names the curl argv (flags and URL) is byte-identical" "$GU" "$GU"$'\n[[ -v ALT_GQL ]] && declare -n GQL_URL=ALT_GQL'
+  mutate "SEC.C . ~/.cfro.rc" "source: no source or . used as a command" source "$GU" "$GU"$'\n[ -r ~/.cfro.rc ] && . ~/.cfro.rc'
+  mutate "SEC.C2 source /etc/cfro.rc (the word form, no tilde)" "source: no source or . used as a command" source "$GU" "$GU"$'\n[ -r /etc/cfro.rc ] && source /etc/cfro.rc'
+  mutate_inert "SEC.D bare (( )) adds SKEW_H to the offset" "wire[closed-env/analytics-health-colo]: with planted unknown names the stdin config (the bound token and the body) is byte-identical" '  END_OFFSET="$3"' $'  END_OFFSET="$3"\n  [[ -v SKEW_H ]] && (( END_OFFSET = END_OFFSET + SKEW_H ))'
+  mutate_inert "SEC.E a hardcoded host behind [[ -v ALT_GQL ]]" "wire[closed-env/analytics-health]: with planted unknown names the curl argv (flags and URL) is byte-identical" "$GU" "$GU"$'\n[[ -v ALT_GQL ]] && GQL_URL=https://evil.example/graphql'
+  mutate_inert "SEC.F a quote-split 'ev'al" "wire[closed-env/analytics-health]: with planted unknown names the curl argv (flags and URL) is byte-identical" "$GU" "$GU"$'\n[[ -v ALT_GQL ]] && \'ev\'al $\'GQL_URL=\\x24ALT_GQL\''
+  mutate_inert "SEC.G TOKVAR=ALT_TOK before the token read" "wire[closed-env/ssl-mode]: with planted unknown names the stdin config (the bound token and the body) is byte-identical" '  TOK="${!TOKVAR:-}"' $'  [[ -v ALT_TOK ]] && TOKVAR=ALT_TOK\n  TOK="${!TOKVAR:-}"'
+  mutate_inert "SEC.H printf -v GQL_URL from \${!url}" "wire[closed-env/analytics-health]: with planted unknown names the curl argv (flags and URL) is byte-identical" "$GU" "$GU"$'\n[[ -v ALT_GQL ]] && url=ALT_GQL && printf -v GQL_URL %s "${!url}"'
+  mutate "SEC.J read -r GQL_URL < ~/.cfro_url" "source: no ~ (tilde expansion) anywhere in the code" source "$GU" "$GU"$'\n[ -r ~/.cfro_url ] && read -r GQL_URL < ~/.cfro_url'
+  # --- the closed environment itself: each part of it has a row that reds when that part is removed or weakened ---
+  mutate "CE.1 the allowlist check removed (no re-exec)" "wire[closed-env/ssl-mode]: the wrapper's own process environment holds only allowed names" closed "$CLOSED_EXEC_LINE" '  :'
+  mutate "CE.2 the allowlist widened to every name" "wire[closed-env/ssl-mode]: the wrapper's own process environment holds only allowed names" closed '    *) ENV_DROP=(${ENV_DROP[@]+"${ENV_DROP[@]}"} -u "$ENV_N") ;;' '    *) : ;;'
+  mutate "CE.3 exported functions are not dropped" "wire[closed-env]: an exported function (a printf override) never runs after the re-exec" closed 'for ENV_N in ${ENV_FUNCS[@]+"${ENV_FUNCS[@]}"}; do ENV_DROP=(${ENV_DROP[@]+"${ENV_DROP[@]}"} -u "BASH_FUNC_${ENV_N}%%"); done' ':'
+  mutate "CE.4 the re-exec drops argv" "wire[closed-env]: the re-exec keeps argv: analytics-health-colo 216 527" closed '"$BASH" "$0" "$@"' '"$BASH" "$0"'
+  mutate "CE.5 the re-exec drops an empty argument (unquoted \$@)" "wire[closed-env]: the re-exec keeps an empty argument" closed '"$BASH" "$0" "$@"' '"$BASH" "$0" $@'
+  mutate "CE.6 a caller-set marker skips the re-exec" "wire[closed-env]: a caller-set CF_RO_ENV_CLOSED with an open environment is refused" closed 'if [ "${#ENV_DROP[@]}" -gt 0 ]; then' 'if [ "${#ENV_DROP[@]}" -gt 0 ] && [ -z "${CF_RO_ENV_CLOSED:-}" ]; then'
+  mutate "CE.7 the decision keyed on the marker instead of the names" "wire[closed-env/ssl-mode]: an allowed-names-only environment is not re-exec'd" closed 'if [ "${#ENV_DROP[@]}" -gt 0 ]; then' 'if [ -z "${CF_RO_ENV_CLOSED:-}" ]; then'
 
   collect
   t "mutation floor: every mutation row ran and was caught ($MUT_CAUGHT of $MUT_TOTAL)" eq "$MUT_CAUGHT" "$MUT_TOTAL"
-  t "mutation floor: at least 246 mutation rows ran (the exact current count; observed $MUT_TOTAL)" test "$MUT_TOTAL" -ge 246
+  t "mutation floor: at least 270 mutation rows ran (the exact current count; observed $MUT_TOTAL)" test "$MUT_TOTAL" -ge 270
 fi
 
 # --- accounting ---
@@ -2636,7 +2814,7 @@ if [[ "$((pass + fail))" != "$asserted" ]]; then
   no "accounting: passes + fails ($((pass + fail))) != asserted ($asserted) - a verdict was dropped"
 fi
 if [[ "$SELECT" == all && -z "$INNER" ]]; then
-  t "floor: at least 2472 assertions ran (a suite that checked nothing is RED; observed $asserted)" test "$asserted" -ge 2472
+  t "floor: at least 2557 assertions ran (a suite that checked nothing is RED; observed $asserted)" test "$asserted" -ge 2557
 fi
 printf '\n%s passed, %s failed (%s asserted)\n' "$pass" "$fail" "$asserted"
 if [[ "$fail" -gt 0 ]]; then exit 1; fi
