@@ -155,6 +155,21 @@ describe("git-worktree-validity", () => {
       await symlink(real, join(p, ".git"));
       expect(probeGitWorktreeShape(p).kind).toBe("other");
     });
+
+    // #12910 (CTO Q5): `other` carries the open() errno so the post-heal self-stop
+    // can skip transient descriptor/IO errors; structural shapes keep their code.
+    it("`.git` SYMLINK → other with errno ELOOP (the open() code is carried)", async () => {
+      const p = await ws("shape-symlink-errno");
+      const real = join(dir, "shape-real-git-errno");
+      await mkdir(real, { recursive: true });
+      await symlink(real, join(p, ".git"));
+      expect(probeGitWorktreeShape(p)).toEqual({ kind: "other", errno: "ELOOP" });
+    });
+
+    it("a non-other shape never carries errno (absent stays exactly { kind: absent })", async () => {
+      const p = await ws("shape-absent-errno");
+      expect(probeGitWorktreeShape(p)).not.toHaveProperty("errno");
+    });
   });
 
   // #5733 — readiness-grade validity: a `.git` FILE pointer is lstat-VALID but
