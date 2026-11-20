@@ -22,6 +22,22 @@
 # single acknowledged creates the first merge apply needs (GREEN), R* the refusals (each asserting UNWEDGE), C* the
 # committed-id read from tunnel.tf, MG* the mutation proof that each R row reds when its guard leaves the filter, and
 # Q*/MQ* the static policy parity over tunnel.tf.
+#
+# ACCESS FAMILY (the class, not one shape per round). Plan layer: every non-no-op change to a
+# `cloudflare_(zero_trust_)access_(policy|application)` entry, in any module, is refused with no ack unless its
+# address is in the filter's `access_family_table` (rows SP*); a legacy address may only leave (a re-create is
+# refused); a `_soleur` app is an ackable change only in its committed shape (rows A*). Static layer: the
+# table's keys equal the resource / `removed { from }` blocks of that family in apps/web-platform/infra/**/*.tf
+# (Q12, one source: the static row evaluates the jq def itself). RESIDUALS this suite does NOT cover:
+#   - while a `_soleur` ci_ssh / registry_push token is unknown (its create or replace), the plan cannot see
+#     an extra LITERAL id beside the reference; static Q2/Q3 are the only defence there;
+#   - in-place updates of the legacy (old-zone) apps/policies are unjudged; they serve no live host, and
+#     re-scoping one to the Soleur zone forces a replace, which is refused;
+#   - other Access types (groups, identity providers, organization, mTLS) and a tunnel ingress hostname or
+#     DNS record that reaches an origin with no Access app at all;
+#   - policy `require` / `exclude` / `session_duration` (they only narrow, or shorten a session);
+#   - a module sourced from outside apps/web-platform/infra is not read statically (the plan layer still
+#     refuses it: its address is not in the table).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -37,12 +53,20 @@ source "$ROOT/tests/scripts/lib/hcl-effective-text.sh"
 # shellcheck source=lib/deploy-policy-gate.sh
 source "$GATE"
 
-MIN_ASSERTIONS=150
+MIN_ASSERTIONS=205
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
 bad() { FAIL=$((FAIL + 1)); printf '  FAIL %s\n' "$1"; }
 check() { local label="$1"; shift; if "$@"; then ok "$label"; else bad "$label"; fi; }
 check_not() { local label="$1"; shift; if "$@"; then bad "$label"; else ok "$label"; fi; }
+# INSTRUMENT SELF-TEST: drive both verdict helpers once; refuse to continue unless both counters moved.
+ok  "instrument self-test (ok records)"
+bad "instrument self-test (bad records) - EXPECTED, subtracted below"
+if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 ]]; then
+  printf '[FATAL] INSTRUMENT BROKEN: self-test left PASS=%d FAIL=%d, expected 1/1.\n' "$PASS" "$FAIL" >&2
+  exit 2
+fi
+PASS=0; FAIL=0
 
 UUID_RE='"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"'
 SBX="$(mktemp -d)"; trap 'rm -rf "$SBX"' EXIT
@@ -151,7 +175,7 @@ PY
 }
 mtf m_comment 's = s.replace("\nremoved {\n", "\n/* removed {\n", 1).replace("destroy = false\n  }\n}\n", "destroy = false\n  }\n} */\n", 1)' || bad "M-landing: m_comment"
 check_not "M1: wrapping the removed block in a /* */ comment fails S2" p_removed "$SBX/m_comment.tf"
-mtf m_noprecond 's = s.replace("precondition {", "unused_block {", 1)' || bad "M-landing: m_noprecond"
+mtf m_noprecond 's = s.replace("precondition {\n      condition     = length(local.deploy_service_token_ids) >", "unused_block {\n      condition     = length(local.deploy_service_token_ids) >", 1)' || bad "M-landing: m_noprecond"
 check_not "M2: deleting the policy precondition fails S4" p_precondition "$SBX/m_noprecond.tf"
 mtf m_resource 's += "\nresource \"cloudflare_zero_trust_access_service_token\" \"deploy\" {\n  account_id = var.cf_account_id\n  name       = \"x\"\n}\n"' || bad "M-landing: m_resource"
 check_not "M3: re-declaring the resource fails S1" p_no_resource "$SBX/m_resource.tf"
@@ -189,6 +213,17 @@ IDS='["00000000-0000-4000-8000-0000000000a1"]'
 # The three policy creates as provider 4.52.7 plans them (terraform show -json, offline, synthetic ids). A token created in
 # the same apply leaves service_token ABSENT from `after` and wholly unknown in `after_unknown`.
 REAL="$ROOT/tests/scripts/fixtures/tfplan-access-policy-soleur-create.json"
+# The three `_soleur` app creates as the same offline 4.52.7 run planned them (synthetic account / domain / name).
+APP="$ROOT/tests/scripts/fixtures/tfplan-access-app-soleur-create.json"
+# apps_add <deploy-actions> <ssh-actions> <registry-actions>: stdin plan + the three app entries (a non-create has before = after)
+apps_add() {
+  jq -c --slurpfile app "$APP" --argjson ad "$1" --argjson as "$2" --argjson ar "$3" '
+    def ent($addr; $acts): ($app[0].resource_changes[] | select(.address == $addr)) | .change.actions = $acts
+      | .change.before = (if $acts == ["create"] then null else .change.after end);
+    .resource_changes += [ent("cloudflare_zero_trust_access_application.deploy_soleur"; $ad),
+      ent("cloudflare_zero_trust_access_application.ssh_soleur"; $as),
+      ent("cloudflare_zero_trust_access_application.registry_soleur"; $ar)]'
+}
 # sol_plan <deploy-actions> <ssh-actions> <registry-actions> -> the old deploy policy no-op + the three real-shape _soleur
 # entries + their configuration. A non-create ci_ssh / registry entry has its token already in state: its id is known.
 sol_plan() {
@@ -307,8 +342,8 @@ assert s != old, "mutation did not land"
 open(sys.argv[2], "w").write(s)
 PY
 }
-# Drops the selector from deploy_policy_changes only (dropping the table itself trips the stray-policy counter instead).
-mfilter f_nosel 's = s.replace("         | select(IN(.address; deploy_policy_soleur_addrs[]))\n         | select(.change.actions != [\"no-op\"]) ]", "         | select(false) ]", 1)' || bad "M-landing: f_nosel"
+# Drops the selector from deploy_policy_changes only (dropping the table itself trips the allowlist counter instead).
+mfilter f_nosel 's = s.replace("         | select(IN(.address; deploy_policy_soleur_gated[]))\n         | select(.change.actions != [\"no-op\"]) ]", "         | select(false) ]", 1)' || bad "M-landing: f_nosel"
 sp "$CRE" "$NOOP" "$NOOP"
 check     "MG1: with the _soleur addresses dropped from the selector, R1's un-acked create would PASS (R1 depends on the selector)" sgate "$SBX/sp.json" "merge" "$SBX/f_nosel.jq"
 check_not "MG1b: ... and R4's four-address count would not hold" test "$(scnt "$SBX/sol-upd-all.json" deploy_policy_changes "$SBX/f_nosel.jq")" = "4"
@@ -332,9 +367,6 @@ check_not "MG6: the forget fixture (no _soleur entries) does not satisfy H1b's 3
 p5() { jq -e '[.resource_changes[] | select(.address | test("(ci_ssh|registry_push)_service_token_soleur$")) | .change
   | (.after.include[0] | has("service_token") | not) and (.after_unknown.include[0].service_token == true)] == [true, true]' "$REAL" >/dev/null; }
 check     "P5: the captured fixture keeps the provider's shape: ci_ssh / registry_push service_token absent from after, wholly unknown" p5
-check     "H6 GREEN: the captured plan alone (old policy absent, +1) counts 4 changes / 0 unsafe" test "$(scnt "$REAL" deploy_policy_changes)/$(scnt "$REAL" deploy_policy_unsafe)" = "4/0"
-check     "H6b GREEN: the gate passes the captured plan with [ack-deploy-policy]" sgate "$REAL" "$ACK"
-sred      "R1e RED: the captured plan without the ack is refused (UNWEDGE)" "$REAL" "merge"
 spm "$NOOP" "$NOOP" "$CRE" "($CFG_REG.expressions.include[0].service_token.references) = [\"cloudflare_zero_trust_access_service_token.ci_ssh_soleur.id\",\"cloudflare_zero_trust_access_service_token.ci_ssh_soleur\"]"
 sred      "R7d RED: a registry_push policy create cross-wired to ci_ssh_soleur.id is refused even with the ack (UNWEDGE)" "$SBX/sp.json" "$ACK"
 check     "R7e: ... counted as unsafe (1)" test "$(scnt "$SBX/sp.json" deploy_policy_unsafe)" = "1"
@@ -350,28 +382,6 @@ spm "$NOOP" "$UPD" "$NOOP" '(.resource_changes[2].change.after.decision) = "bypa
 sred      "R12 RED: decision bypass on the ci_ssh policy is refused even with the ack (UNWEDGE)" "$SBX/dec-bypass.json" "$ACK"
 spm "$CRE" "$NOOP" "$NOOP" 'del(.resource_changes[1].change.after.decision) | (.resource_changes[1].change.after_unknown.decision) = true'
 sred      "R12b RED: a decision unknown at plan time is refused (UNWEDGE)" "$SBX/sp.json" "$ACK"
-# stray <name> <app>: a NEW policy outside the table on <app>, bypass + everyone, with its configuration entry
-stray() {
-  jq -c --arg n "$1" --arg app "cloudflare_zero_trust_access_application.$2" '
-    (.resource_changes[] | select(.address == "cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur")) as $t
-    | (.configuration.root_module.resources[] | select(.address == "cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur")) as $c
-    | .resource_changes += [$t | .address = "cloudflare_zero_trust_access_policy.\($n)" | .name = $n | .change.actions = ["create"]
-        | .change.after.decision = "bypass" | .change.after.include[0].everyone = true | .change.after_unknown.include[0] |= del(.service_token)]
-    | .configuration.root_module.resources += [$c | .address = "cloudflare_zero_trust_access_policy.\($n)" | .name = $n
-        | .expressions.application_id.references = [$app + ".id", $app] | .expressions.include = [{"everyone": {"constant_value": true}}]]'
-}
-sol_plan "$NOOP" "$NOOP" "$NOOP" | stray deploy_open deploy_soleur > "$SBX/stray-deploy.json"
-check     "S8: a NEW policy outside the table on deploy_soleur is unsafe (1) at 0 table changes" test "$(scnt "$SBX/stray-deploy.json" deploy_policy_changes)/$(scnt "$SBX/stray-deploy.json" deploy_policy_unsafe)" = "0/1"
-sred      "S8b RED: ... and the gate refuses it with NO ack (UNWEDGE)" "$SBX/stray-deploy.json" ""
-sred      "S8c RED: ... and WITH the ack (UNWEDGE)" "$SBX/stray-deploy.json" "$ACK"
-sol_plan "$NOOP" "$NOOP" "$NOOP" | stray ssh_open ssh_soleur | jq -c '(.configuration.root_module.resources[-1].expressions.application_id.references) = ["cloudflare_zero_trust_access_application.ssh_soleur.id"]' > "$SBX/stray-ssh.json"
-check     "S8d: a stray on ssh_soleur referenced by .id alone is unsafe too" test "$(scnt "$SBX/stray-ssh.json" deploy_policy_unsafe)" = "1"
-sol_plan "$NOOP" "$NOOP" "$NOOP" | stray reg_open registry_soleur > "$SBX/stray-reg.json"
-check     "S8e: a stray on registry_soleur is unsafe" test "$(scnt "$SBX/stray-reg.json" deploy_policy_unsafe)" = "1"
-sol_plan "$NOOP" "$NOOP" "$NOOP" | stray ssh_old ssh | jq -c '(.resource_changes[-1].change.after.decision) = "non_identity" | (.resource_changes[-1].change.after.include[0].everyone) = null' > "$SBX/stray-old.json"
-check     "S8f: a policy on an OLD app (ssh) is not a _soleur stray (0 unsafe)" test "$(scnt "$SBX/stray-old.json" deploy_policy_unsafe)" = "0"
-jq -c '(.resource_changes[-1].change.actions) = ["no-op"]' "$SBX/stray-deploy.json" > "$SBX/stray-noop.json"
-check     "S8g: the counter judges changes only: an unchanged stray already in state counts 0" test "$(scnt "$SBX/stray-noop.json" deploy_policy_unsafe)" = "0"
 mfilter f_nounk 's = s.replace("    elif (($unk[0].service_token? // false) == true) then false\n", "", 1)' || bad "M-landing: f_nounk"
 check_not "MG7: without the unknown-token arm, H1's real-shape create of all three is refused with the ack" sgate "$SBX/sol-create-all.json" "$ACK" "$SBX/f_nounk.jq"
 check     "MG7b: ... because ci_ssh and registry_push read as unsafe (2)" test "$(scnt "$SBX/sol-create-all.json" deploy_policy_unsafe "$SBX/f_nounk.jq")" = "2"
@@ -379,8 +389,116 @@ mfilter f_noallow 's = s.replace("    elif ($inc[0] | to_entries | any(.key != \
 check     "MG8: without the include allowlist, R11's ip include would PASS with the ack" sgate "$SBX/inc-ip.json" "$ACK" "$SBX/f_noallow.jq"
 mfilter f_nodec 's = s.replace("    elif ((.change.after // {}).decision? // null) != \"non_identity\" then true\n", "", 1)' || bad "M-landing: f_nodec"
 check     "MG9: without the decision check, R12's bypass would PASS with the ack" sgate "$SBX/dec-bypass.json" "$ACK" "$SBX/f_nodec.jq"
-mfilter f_nostray 's = s.replace("      + deploy_policy_soleur_stray($plan)\n", "", 1)' || bad "M-landing: f_nostray"
-check     "MG10: without the stray-policy counter, S8's bypass-everyone policy on deploy_soleur would PASS with no ack" sgate "$SBX/stray-deploy.json" "" "$SBX/f_nostray.jq"
+# stray <address> <application_id-expression-json|null>: a NEW bypass + everyone policy at <address> (real ci_ssh shape) with
+# its configuration entry; null leaves application_id out (a reusable policy). A module address gets no root configuration.
+stray() {
+  jq -c --arg addr "$1" --argjson app "$2" '
+    ($addr | capture("^(?<m>(module\\.[^.]+\\.)*)(?<t>[^.]+)\\.(?<n>.+)$")) as $p
+    | (.resource_changes[] | select(.address == "cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur")) as $t
+    | (.configuration.root_module.resources[] | select(.address == "cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur")) as $c
+    | .resource_changes += [$t | .address = $addr | .type = $p.t | .name = $p.n | .change.actions = ["create"]
+        | .change.after.decision = "bypass" | .change.after.include[0].everyone = true | .change.after_unknown.include[0] |= del(.service_token)]
+    | if $p.m != "" then . else .configuration.root_module.resources += [$c | .address = $addr | .type = $p.t | .name = $p.n
+        | .expressions.include = [{"everyone": {"constant_value": true}}]
+        | if $app == null then .expressions |= del(.application_id) else .expressions.application_id = $app end] end'
+}
+refs() { printf '{"references":["cloudflare_zero_trust_access_application.%s.id","cloudflare_zero_trust_access_application.%s"]}' "$1" "$1"; }
+ZTP=cloudflare_zero_trust_access_policy
+sol_plan "$NOOP" "$NOOP" "$NOOP" > "$SBX/sol-noop.json"
+stray "$ZTP.deploy_open" "$(refs deploy_soleur)" < "$SBX/sol-noop.json" > "$SBX/stray-deploy.json"
+check     "S8: a NEW policy outside the table on deploy_soleur is unsafe (1) at 0 table changes" test "$(scnt "$SBX/stray-deploy.json" deploy_policy_changes)/$(scnt "$SBX/stray-deploy.json" deploy_policy_unsafe)" = "0/1"
+sred      "S8c RED: ... and the gate refuses it WITH the ack (UNWEDGE)" "$SBX/stray-deploy.json" "$ACK"
+stray "$ZTP.ssh_open" '{"references":["cloudflare_zero_trust_access_application.ssh_soleur.id"]}' < "$SBX/sol-noop.json" > "$SBX/stray-ssh.json"
+check     "S8d: a stray on ssh_soleur referenced by .id alone is unsafe too" test "$(scnt "$SBX/stray-ssh.json" deploy_policy_unsafe)" = "1"
+stray "$ZTP.reg_open" "$(refs registry_soleur)" < "$SBX/sol-noop.json" > "$SBX/stray-reg.json"
+check     "S8e: a stray on registry_soleur is unsafe" test "$(scnt "$SBX/stray-reg.json" deploy_policy_unsafe)" = "1"
+stray "$ZTP.ssh_old" "$(refs ssh)" < "$SBX/sol-noop.json" | jq -c '(.resource_changes[-1].change.after.decision) = "non_identity" | (.resource_changes[-1].change.after.include[0].everyone) = null' > "$SBX/stray-old.json"
+check     "S8f: a NEW non_identity policy on an OLD app (ssh) is outside the table too (1 unsafe)" test "$(scnt "$SBX/stray-old.json" deploy_policy_unsafe)" = "1"
+jq -c '(.resource_changes[-1].change.actions) = ["no-op"]' "$SBX/stray-deploy.json" > "$SBX/stray-noop.json"
+check     "S8g: the counter judges changes only: an unchanged stray already in state counts 0 (static Q12 owns its block)" test "$(scnt "$SBX/stray-noop.json" deploy_policy_unsafe)" = "0"
+# The five security-review sibling shapes, each refused by the allowlist whatever binds it to the host.
+stray "cloudflare_access_policy.deploy_open" "$(refs deploy_soleur)" < "$SBX/sol-noop.json" > "$SBX/sp1.json"
+sred      "SP1 RED: the legacy type name cloudflare_access_policy on deploy_soleur is refused even with the ack (UNWEDGE)" "$SBX/sp1.json" "$ACK"
+stray "$ZTP.via_local" '{"references":["local.deploy_app.id","local.deploy_app"]}' < "$SBX/sol-noop.json" > "$SBX/sp2.json"
+sred      "SP2 RED: a policy whose application_id is a local is refused even with the ack (UNWEDGE)" "$SBX/sp2.json" "$ACK"
+stray "$ZTP.via_literal" '{"constant_value":"00000000000000000000000000000abc"}' < "$SBX/sol-noop.json" > "$SBX/sp3.json"
+sred      "SP3 RED: a policy whose application_id is a literal app id is refused even with the ack (UNWEDGE)" "$SBX/sp3.json" "$ACK"
+HOOKS_APP='{"address":"cloudflare_zero_trust_access_application.deploy_hooks","mode":"managed","type":"cloudflare_zero_trust_access_application","name":"deploy_hooks"}'
+jq -c --slurpfile app "$APP" --argjson h "$HOOKS_APP" '.resource_changes += [($app[0].resource_changes[0] | . + $h | .change.after.domain = "deploy.example.com/hooks")]' "$SBX/sol-noop.json" > "$SBX/sp4-app.json"
+check     "SP4b: a NEW app on a more specific path of deploy. is unsafe on its own (1)" test "$(scnt "$SBX/sp4-app.json" deploy_policy_unsafe)" = "1"
+stray "$ZTP.hooks_open" "$(refs deploy_hooks)" < "$SBX/sp4-app.json" > "$SBX/sp4.json"
+check     "SP4: ... and with its bypass + everyone policy both are unsafe (2)" test "$(scnt "$SBX/sp4.json" deploy_policy_unsafe)" = "2"
+sred      "SP4c RED: ... and the gate refuses it even with the ack (UNWEDGE)" "$SBX/sp4.json" "$ACK"
+stray "$ZTP.reusable" null < "$SBX/sol-noop.json" > "$SBX/sp5-pol.json"
+check     "SP5b: a reusable policy (no application_id) is unsafe on its own (1)" test "$(scnt "$SBX/sp5-pol.json" deploy_policy_unsafe)" = "1"
+apps_add "$UPD" "$NOOP" "$NOOP" < "$SBX/sp5-pol.json" | jq -c '(.resource_changes[-3].change) |= (del(.after.policies) | .after_unknown.policies = true)' > "$SBX/sp5.json"
+check     "SP5: ... and attached through deploy_soleur's policies both are unsafe (2)" test "$(scnt "$SBX/sp5.json" deploy_policy_unsafe)" = "2"
+sred      "SP5c RED: ... and the gate refuses it even with the ack (UNWEDGE)" "$SBX/sp5.json" "$ACK"
+stray "module.m.$ZTP.deploy_service_token_soleur" null < "$SBX/sol-noop.json" > "$SBX/sp6.json"
+check     "SP6: a policy in a MODULE, even under a table name, is unsafe (1)" test "$(scnt "$SBX/sp6.json" deploy_policy_unsafe)" = "1"
+stray "$ZTP.ci_ssh_service_token_soleur[1]" "$(refs ssh_soleur)" < "$SBX/sol-noop.json" > "$SBX/sp6b.json"
+check     "SP6b: an indexed sibling of a table address is unsafe (1)" test "$(scnt "$SBX/sp6b.json" deploy_policy_unsafe)" = "1"
+legacy() { jq -c --arg a "$1" --argjson acts "$2" '($a | split(".")) as $p | .resource_changes += [{"address":$a,"mode":"managed","type":$p[0],"name":$p[1],"change":{"actions":$acts,"before":{"domain":"deploy.example.com"},"after":(if $acts == ["forget"] then null else {"domain":"deploy.example.com"} end),"after_unknown":{}}}]' "$SBX/sol-noop.json"; }
+legacy cloudflare_zero_trust_access_application.deploy '["delete","create"]' > "$SBX/sp7.json"
+check     "SP7: a replace (re-create) of a LEGACY app is unsafe (1): legacy addresses only leave" test "$(scnt "$SBX/sp7.json" deploy_policy_unsafe)" = "1"
+legacy "$ZTP.ci_ssh_service_token" '["update"]' > "$SBX/sp7b.json"
+check     "SP7b: an in-place update of a legacy policy is not unsafe (0; a header residual)" test "$(scnt "$SBX/sp7b.json" deploy_policy_unsafe)" = "0"
+legacy cloudflare_zero_trust_access_application.ssh '["forget"]' > "$SBX/sp7c.json"
+check     "SP7c: a forget of a legacy app (the teardown path) is not unsafe (0)" test "$(scnt "$SBX/sp7c.json" deploy_policy_unsafe)" = "0"
+jq -c '.resource_changes += [{"address":"data.cloudflare_zero_trust_access_application.x","mode":"data","type":"cloudflare_zero_trust_access_application","name":"x","change":{"actions":["read"],"before":null,"after":{}}}]' "$SBX/sol-noop.json" > "$SBX/sp8.json"
+check     "SP8: a data-source read of the family is not a change (0)" test "$(scnt "$SBX/sp8.json" deploy_policy_unsafe)" = "0"
+mfilter f_noallowlist 's = s.replace("      + access_family_unsafe\n", "\n", 1)' || bad "M-landing: f_noallowlist"
+check     "MG10: without the allowlist counter, S8's bypass-everyone policy on deploy_soleur would PASS with no ack" sgate "$SBX/stray-deploy.json" "" "$SBX/f_noallowlist.jq"
+check     "MG10b: ... and SP1's legacy-type policy would PASS with no ack" sgate "$SBX/sp1.json" "" "$SBX/f_noallowlist.jq"
+mfilter f_nolegacy 's = s.replace("        or ($role == \"legacy\" and .address != deploy_policy_old_addr and ((.change.actions? // []) | index(\"create\")))\n", "", 1)' || bad "M-landing: f_nolegacy"
+check     "MG11: without the legacy re-create arm, SP7's legacy replace reads 0 unsafe" test "$(scnt "$SBX/sp7.json" deploy_policy_unsafe "$SBX/f_nolegacy.jq")" = "0"
+
+# ── the `_soleur` apps: an ackable change only in the committed shape (real 4.52.7 create shape, APP fixture) ──────────
+p_app_fx() { jq -e '[.resource_changes[].change.after | .policies == null and .options_preflight_bypass == false and .self_hosted_domains == null and .destinations == [] and .cors_headers == []] == [true, true, true]' "$APP" >/dev/null; }
+check     "A0: the captured app fixture keeps the provider's create shape (policies/self_hosted_domains null, preflight false, [] blocks)" p_app_fx
+sp "$CRE" "$CRE" "$CRE"; apps_add "$CRE" "$CRE" "$CRE" < "$SBX/sp.json" > "$SBX/merge-first.json"
+check     "A1 GREEN: the merge apply's first create (3 apps + 3 policies) counts 6 changes / 0 unsafe" test "$(scnt "$SBX/merge-first.json" deploy_policy_changes)/$(scnt "$SBX/merge-first.json" deploy_policy_unsafe)" = "6/0"
+check     "A1b GREEN: ... and passes with [ack-deploy-policy]" sgate "$SBX/merge-first.json" "$ACK"
+sred      "A1c RED: ... and is refused without it (UNWEDGE)" "$SBX/merge-first.json" "merge"
+# apm <deploy> <ssh> <registry> <jq-edit>: the no-op policies + the three apps; apps sit at [-3] deploy, [-2] ssh, [-1] registry
+apm() { apps_add "$1" "$2" "$3" < "$SBX/sol-noop.json" | jq -c "$4" > "$SBX/sp.json"; }
+apm "$CRE" "$NOOP" "$NOOP" '(.resource_changes[-3].change.after.options_preflight_bypass) = true'; cp "$SBX/sp.json" "$SBX/app-preflight.json"
+sred      "A2 RED: a deploy_soleur create with options_preflight_bypass = true is refused even with the ack (UNWEDGE)" "$SBX/app-preflight.json" "$ACK"
+apm "$UPD" "$NOOP" "$NOOP" '(.resource_changes[-3].change.after.session_duration) = "12h"'; cp "$SBX/sp.json" "$SBX/app-dur.json"
+check     "A3: an in-place session_duration update of deploy_soleur is an ackable change (1/0)" test "$(scnt "$SBX/app-dur.json" deploy_policy_changes)/$(scnt "$SBX/app-dur.json" deploy_policy_unsafe)" = "1/0"
+sred      "A3b RED: ... refused without the ack (UNWEDGE)" "$SBX/app-dur.json" "merge"
+apm "$UPD" "$NOOP" "$NOOP" '(.resource_changes[-3].change.after.domain) = "deploy.example.org"'; cp "$SBX/sp.json" "$SBX/app-dom.json"
+sred      "A4 RED: a domain change on deploy_soleur is refused even with the ack (UNWEDGE)" "$SBX/app-dom.json" "$ACK"
+apm "$NOOP" "$CRE" "$NOOP" '(.resource_changes[-2].change.after.domain) = "deploy.example.com"'
+sred      "A4b RED: an ssh_soleur create on another host is refused even with the ack (UNWEDGE)" "$SBX/sp.json" "$ACK"
+apm "$CRE" "$NOOP" "$NOOP" '(.resource_changes[-3].change.after.domain) = "deploy.example.com/hooks"'
+sred      "A4c RED: a deploy_soleur create on a path is refused even with the ack (UNWEDGE)" "$SBX/sp.json" "$ACK"
+apm "$UPD" "$NOOP" "$NOOP" '(.resource_changes[-3].change) |= (del(.after.policies) | .after_unknown.policies = true)'; cp "$SBX/sp.json" "$SBX/app-polunk.json"
+sred      "A5 RED: policies unknown at plan time on deploy_soleur is refused even with the ack (UNWEDGE)" "$SBX/app-polunk.json" "$ACK"
+while IFS='|' read -r k v; do
+  apm "$NOOP" "$NOOP" "$CRE" "(.resource_changes[-1].change.after.$k) = $v"
+  check   "A6/$k: a registry_soleur create setting $k is unsafe (1)" test "$(scnt "$SBX/sp.json" deploy_policy_unsafe)" = "1"
+done <<'ROWS'
+policies|["p"]
+self_hosted_domains|["registry.example.com"]
+destinations|[{"uri":"registry.example.com/x"}]
+cors_headers|[{"allow_all_origins":true}]
+type|"ssh"
+ROWS
+for acts in '["delete"]' '["forget"]' '["create","delete"]'; do
+  apm "$NOOP" "$acts" "$NOOP" '.'
+  check   "A7/$acts: ssh_soleur $acts is unsafe (the host would sit behind the tunnel ungated)" test "$(scnt "$SBX/sp.json" deploy_policy_unsafe)" = "1"
+done
+mfilter f_noappshape 's = s.replace("\n        or ($role == \"soleur_app\" and deploy_policy_soleur_app_unsafe)) ]", ") ]", 1)' || bad "M-landing: f_noappshape"
+check     "MA1: without the _soleur app shape arm, A2's preflight bypass would PASS with the ack" sgate "$SBX/app-preflight.json" "$ACK" "$SBX/f_noappshape.jq"
+mfilter f_noappsel 's = s.replace("def deploy_policy_soleur_gated: deploy_policy_soleur_addrs + deploy_policy_soleur_apps;", "def deploy_policy_soleur_gated: deploy_policy_soleur_addrs;", 1)' || bad "M-landing: f_noappsel"
+check     "MA2: without the apps in the changes selector, A3's update would PASS with no ack" sgate "$SBX/app-dur.json" "merge" "$SBX/f_noappsel.jq"
+mfilter f_noappeq 's = s.replace("    elif $act == [\"update\"] and any(deploy_policy_soleur_app_keys[]; . as $k | $a[$k] != $b[$k]?) then true\n", "", 1)' || bad "M-landing: f_noappeq"
+check     "MA3: without the update-equality arm, A4's domain change would PASS with the ack" sgate "$SBX/app-dom.json" "$ACK" "$SBX/f_noappeq.jq"
+mfilter f_noappblank 's = s.replace("    elif any(deploy_policy_soleur_app_keys[2:][]; . as $k | $a[$k] | deploy_policy_blank | not) then true\n", "", 1)' || bad "M-landing: f_noappblank"
+check     "MA4: without the blank-keys arm, A2's preflight bypass would PASS with the ack" sgate "$SBX/app-preflight.json" "$ACK" "$SBX/f_noappblank.jq"
+mfilter f_noappunk 's = s.replace("    elif any(deploy_policy_soleur_app_keys[]; . as $k | $u[$k] | deploy_policy_has_true) then true\n", "", 1)' || bad "M-landing: f_noappunk"
+check     "MA5: without the unknown arm, A5's unknown policies would PASS with the ack" sgate "$SBX/app-polunk.json" "$ACK" "$SBX/f_noappunk.jq"
 
 # ── #12937 static policy parity over tunnel.tf: each _soleur policy is bound to its own app and its own token ───────────────
 # p_sol_policy <tf> <policy-name> <app-name> <include-ERE>: account-scoped, application_id = its OWN _soleur app, exactly one
@@ -405,6 +523,8 @@ p_sol_app() { # <tf> <app-name> <host> <duration>
   grep -qE 'type[[:space:]]*=[[:space:]]*"self_hosted"' <<<"$b" || return 1
   [[ "$(grep -oE '(^|[^_a-z])type[[:space:]]*=' <<<"$b" | wc -l)" -eq 1 ]] || return 1
   if grep -qE '(^|[^_])policies[[:space:]]*=' <<<"$b"; then return 1; fi
+  # gate-shaping keys the committed apps never set (an OPTIONS bypass, extra hosts, destinations, CORS)
+  if grep -qE '(^|[^_a-z])(options_preflight_bypass|self_hosted_domains|destinations|cors_headers)[[:space:]]*(=|\{)' <<<"$b"; then return 1; fi
   return 0
 }
 p_sol_precond() { local b; b="$(block_of "$1" cloudflare_zero_trust_access_policy deploy_service_token_soleur)"; grep -qF 'length(local.deploy_service_token_ids_soleur) > 0' <<<"$b" && grep -qF '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' <<<"$b" && grep -qF "&& id != \"$NIL_ID\"" <<<"$b"; }
@@ -439,23 +559,52 @@ check_not "MQ6: a zone-scoped registry policy (app/policy scope mismatch) fails 
 mtf q_noprecond 's = s.replace("length(local.deploy_service_token_ids_soleur) > 0", "true", 1)' || bad "M-landing: q_noprecond"
 check_not "MQ7: dropping the _soleur UUID precondition fails Q7" p_sol_precond "$SBX/q_noprecond.tf"
 
-# Q9: exactly ONE access policy block across the root references each _soleur app (a second one is a second gate).
-p_one_policy_per_app() { # <infra-dir> <app-name>
-  local f n c=0
-  for f in "$1"/*.tf; do
-    while read -r n; do
-      [[ -n "$n" ]] || continue
-      if grep -qE "cloudflare_zero_trust_access_application\.$2\.id" <<<"$(block_of "$f" cloudflare_zero_trust_access_policy "$n")"; then c=$((c + 1)); fi
-    done < <(eff "$f" | sed -nE 's/^resource[[:space:]]+"cloudflare_zero_trust_access_policy"[[:space:]]+"([^"]+)".*/\1/p')
-  done
-  [[ "$c" -eq 1 ]]
+# Q12: ONE table. The filter's access_family_table (evaluated by jq, so the static side reads what the gate reads) must
+# list exactly the Access app/policy addresses declared in apps/web-platform/infra/**/*.tf: every `resource` block of the
+# family (any type alias, quoted or bare labels, any directory) and every `removed { from = ... }` of it (a teardown keeps
+# its row until the forget applies). Sorted WITH duplicates, so a module block reusing a table name is an extra row.
+table_keys() { jq -rn "$(sed -n '/^def access_family_table: {$/,/^};$/p' "$1") access_family_table | keys[]" | LC_ALL=C sort; }
+tf_access_family() { # <infra-dir>
+  local f
+  while IFS= read -r f; do
+    eff "$f" | sed -nE 's/^[[:space:]]*resource[[:space:]]+"?(cloudflare_(zero_trust_)?access_(policy|application))"?[[:space:]]+"?([A-Za-z0-9_-]+)"?.*/\1.\4/p'
+    eff "$f" | tr -d '\n' | grep -oE 'removed[[:space:]]*\{[[:space:]]*from[[:space:]]*=[[:space:]]*cloudflare_(zero_trust_)?access_(policy|application)\.[A-Za-z0-9_-]+' | sed -E 's/.*=[[:space:]]*//' || true
+  done < <(find -H "$1" -name .terraform -prune -o -type f -name '*.tf' -print | LC_ALL=C sort)
 }
-for app in deploy_soleur ssh_soleur registry_soleur; do
-  check   "Q9/$app: exactly one access policy block in apps/web-platform/infra/*.tf references $app" p_one_policy_per_app "$INFRA" "$app"
-done
-rm -rf "$SBX/rootq9"; mkdir -p "$SBX/rootq9"; cp "$INFRA"/*.tf "$SBX/rootq9/"
-printf 'resource "cloudflare_zero_trust_access_policy" "deploy_open" {\n  account_id     = local.cf_soleur_account_id\n  application_id = cloudflare_zero_trust_access_application.deploy_soleur.id\n  name           = "x"\n  decision       = "bypass"\n  precedence     = 2\n\n  include {\n    everyone = true\n  }\n}\n' > "$SBX/rootq9/zz-extra.tf"
-check_not "MQ9: a second policy on deploy_soleur in another root file fails Q9" p_one_policy_per_app "$SBX/rootq9" deploy_soleur
+p_table_eq() { # <infra-dir> <filter>
+  local t d; t="$(table_keys "$2")" || return 1; d="$(tf_access_family "$1" | LC_ALL=C sort)"
+  [[ -n "$t" && "$t" == "$d" ]]
+}
+p_no_tfjson() { ! find -H "$1" -name .terraform -prune -o -type f -name '*.tf.json' -print | xargs -r grep -lE 'access_(policy|application)' | grep . >/dev/null; }
+p_table_roles() { # the table's soleur_policy rows are exactly the per-address policy checks' keys
+  local defs; defs="$(sed -n '/^def deploy_policy_soleur_refs: {$/,/^};$/p;/^def access_family_table: {$/,/^};$/p' "$1")"
+  jq -en "$defs ([access_family_table | to_entries[] | select(.value == \"soleur_policy\") | .key] | sort) == (deploy_policy_soleur_refs | keys) and (access_family_table | length) > 0" >/dev/null
+}
+check     "Q12: the filter's access_family_table equals the Access app/policy blocks in apps/web-platform/infra/**/*.tf" p_table_eq "$INFRA" "$FILTER"
+check     "Q12b: no *.tf.json under the root declares an Access app or policy (the static read is HCL only)" p_no_tfjson "$INFRA"
+check     "Q12c: the table's soleur_policy rows are exactly deploy_policy_soleur_refs (one list, two roles)" p_table_roles "$FILTER"
+# q12tree <name> -> a copy of every .tf under the root, same layout, in $SBX/<name>
+q12tree() { rm -rf "${SBX:?}/$1"; (cd "$INFRA" && find . -name .terraform -prune -o -type f -name '*.tf' -print | while IFS= read -r f; do mkdir -p "$SBX/$1/$(dirname "$f")"; cp "$f" "$SBX/$1/$f"; done); }
+POL_BYPASS='  account_id     = local.cf_soleur_account_id\n  name           = "x"\n  decision       = "bypass"\n  precedence     = 2\n\n  include {\n    everyone = true\n  }\n'
+q12tree q12ctl
+check     "MQ12-ctl: the copied tree satisfies Q12 (the mutants below start from a green control)" p_table_eq "$SBX/q12ctl" "$FILTER"
+q12row() { # <label> <relative-file> <hcl>
+  q12tree q12m; printf '%b' "$3" > "$SBX/q12m/$2"
+  check_not "$1" p_table_eq "$SBX/q12m" "$FILTER"
+}
+q12row "MQ12a (SP1): a legacy-type cloudflare_access_policy block on deploy_soleur fails Q12" zz-extra.tf "resource \"cloudflare_access_policy\" \"deploy_open\" {\n  application_id = cloudflare_zero_trust_access_application.deploy_soleur.id\n$POL_BYPASS}\n"
+q12row "MQ12b (SP2): a policy bound through a local fails Q12" zz-extra.tf "locals {\n  deploy_app = cloudflare_zero_trust_access_application.deploy_soleur\n}\nresource \"cloudflare_zero_trust_access_policy\" \"via_local\" {\n  application_id = local.deploy_app.id\n$POL_BYPASS}\n"
+q12row "MQ12c (SP3): a policy bound to a literal app id fails Q12" zz-extra.tf "resource \"cloudflare_zero_trust_access_policy\" \"via_literal\" {\n  application_id = \"00000000000000000000000000000abc\"\n$POL_BYPASS}\n"
+q12row "MQ12d (SP4): a NEW app on deploy.<base>/hooks fails Q12" zz-extra.tf "resource \"cloudflare_zero_trust_access_application\" \"deploy_hooks\" {\n  account_id = local.cf_soleur_account_id\n  name       = \"x\"\n  domain     = \"deploy.\${var.app_domain_base}/hooks\"\n  type       = \"self_hosted\"\n}\n"
+q12row "MQ12e (SP5): a reusable policy (no application_id) fails Q12" zz-extra.tf "resource \"cloudflare_zero_trust_access_policy\" \"reusable\" {\n$POL_BYPASS}\n"
+q12row "MQ12f: a policy in a module directory fails Q12 (the read recurses)" modules/git-data-userdata/zz-extra.tf "resource \"cloudflare_zero_trust_access_policy\" \"deploy_service_token_soleur\" {\n$POL_BYPASS}\n"
+q12row "MQ12g: a bare-label resource block fails Q12" zz-extra.tf "resource cloudflare_zero_trust_access_policy bare {\n$POL_BYPASS}\n"
+q12tree q12rm; python3 -c 'import sys; p = sys.argv[1]; s = open(p).read(); a = s.index("resource \"cloudflare_zero_trust_access_policy\" \"registry_push_service_token\" {"); b = s.index("\n}\n", a) + 3; open(p, "w").write(s[:a] + "removed {\n  from = cloudflare_zero_trust_access_policy.registry_push_service_token\n\n  lifecycle {\n    destroy = false\n  }\n}\n" + s[b:])' "$SBX/q12rm/tunnel.tf"
+check     "MQ12h GREEN: a legacy block turned into removed { from } keeps Q12 green (the teardown path)" p_table_eq "$SBX/q12rm" "$FILTER"
+mfilter f_tabrow 's = s.replace("  \"cloudflare_zero_trust_access_application.registry\": \"legacy\",\n", "", 1)' || bad "M-landing: f_tabrow"
+check_not "MQ12i: a table row dropped from the filter fails Q12" p_table_eq "$INFRA" "$SBX/f_tabrow.jq"
+mfilter f_tabrole 's = s.replace("\"cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur\": \"soleur_policy\"", "\"cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur\": \"legacy\"", 1)' || bad "M-landing: f_tabrole"
+check_not "MQ12j: a _soleur policy demoted to legacy in the table fails Q12c" p_table_roles "$SBX/f_tabrole.jq"
 
 # Q10: each _soleur CNAME waits for its own Access policy, so a failed Access create leaves the host unrouted.
 DNS="$INFRA/dns.tf"
@@ -485,6 +634,29 @@ check_not "MQ13: a non-self_hosted registry_soleur app fails Q6" p_sol_app "$SBX
 mtf q_nilok 's = s.replace(" && id != \"00000000-0000-0000-0000-000000000000\"", "", 1)' || bad "M-landing: q_nilok"
 check_not "MQ14: a precondition that accepts the nil placeholder fails Q7" p_sol_precond "$SBX/q_nilok.tf"
 
+for k in options_preflight_bypass self_hosted_domains destinations cors_headers; do
+  case "$k" in destinations|cors_headers) v="$k {\n    uri = \"x\"\n  }" ;; options_preflight_bypass) v="$k = true" ;; *) v="$k = [\"x\"]" ;; esac
+  mtf "q_app_$k" "s = s.replace('  session_duration = \"24h\"\n}\n\n# The include takes', '  session_duration = \"24h\"\n  $v\n}\n\n# The include takes', 1)" || bad "M-landing: q_app_$k"
+  check_not "MQ15/$k: setting $k on the deploy_soleur app fails Q4" p_sol_app "$SBX/q_app_$k.tf" deploy_soleur deploy 24h
+done
+
+# Q13: teardown before flip. The LEGACY tunnel refuses a plan once var.cf_account_id is the Soleur account.
+p_legacy_flip() { grep -qE 'lifecycle[[:space:]]*\{.*precondition[[:space:]]*\{[[:space:]]*condition[[:space:]]*=[[:space:]]*var\.cf_account_id[[:space:]]*!=[[:space:]]*local\.cf_soleur_account_id' <<<"$(block_of "$1" cloudflare_zero_trust_tunnel_cloudflared web | tr -d '\n')"; }
+check     "Q13: the legacy tunnel's precondition refuses var.cf_account_id == local.cf_soleur_account_id (teardown before #12931's flip)" p_legacy_flip "$TF"
+mtf q_flip 's = s.replace("condition     = var.cf_account_id != local.cf_soleur_account_id", "condition     = true", 1)' || bad "M-landing: q_flip"
+check_not "MQ16: a legacy-tunnel precondition that always holds fails Q13" p_legacy_flip "$SBX/q_flip.tf"
+
+# C10: refusals reach the log through BOTH `$(...)` captures (the workflow captures deploy_policy_counts, which captures
+# the id reader): they go to stderr, so stdout stays empty and the message is on stderr.
+c10() { # <gate-lib>
+  ( source "$1"; o=""; if o="$(deploy_policy_counts "$SBX/sol-create-all.json" "$SBX/ids-nil.tf" "$FILTER" 2>"$SBX/c10.err")"; then exit 1; fi
+    if [[ -z "$o" ]] && grep -qF '::error::deploy policy guard: placeholder deploy token id still committed' "$SBX/c10.err"; then exit 0; fi
+    exit 1 )
+}
+check     "C10: a deploy_policy_counts refusal inside \$(...) leaves stdout empty and prints its ::error:: on stderr" c10 "$GATE"
+sed 's/" >&2$/"/' "$GATE" > "$SBX/gate-stdout.sh"
+check_not "MC10: with the refusal echoes back on stdout (the mutation landed: $(cmp -s "$GATE" "$SBX/gate-stdout.sh" && echo NO || echo yes)), C10 fails" c10 "$SBX/gate-stdout.sh"
+
 # ── dispatch: the assertions above must have RUN (a deleted call site is otherwise a silent green) ───────────────────────
 echo ""
 echo "=== deploy-access-token-forget: $PASS passed, $FAIL failed ==="
@@ -492,4 +664,8 @@ if [[ $((PASS + FAIL)) -lt "$MIN_ASSERTIONS" ]]; then
   printf '  FAIL assertion floor: %d assertions ran, the floor is %d — assertions were deleted or skipped\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
-[[ "$FAIL" -eq 0 ]]
+if [[ "$FAIL" -ne 0 ]]; then
+  printf '  FAIL verdict: %d assertion(s) failed\n' "$FAIL" >&2
+  exit 1
+fi
+exit 0

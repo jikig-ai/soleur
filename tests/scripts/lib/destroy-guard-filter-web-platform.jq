@@ -254,11 +254,25 @@ def deploy_policy_soleur_refs: {
   "cloudflare_zero_trust_access_policy.registry_push_service_token_soleur": "cloudflare_zero_trust_access_service_token.registry_push_soleur"
 };
 def deploy_policy_soleur_addrs: deploy_policy_soleur_refs | keys;
-def deploy_policy_soleur_apps: [
-  "cloudflare_zero_trust_access_application.deploy_soleur",
-  "cloudflare_zero_trust_access_application.ssh_soleur",
-  "cloudflare_zero_trust_access_application.registry_soleur"
-];
+# EVERY Access app/policy address in this repo, with its role. A literal object on purpose: the static
+# side (test-deploy-access-token-forget.sh Q12) evaluates THIS def with jq and requires its keys to equal
+# the `resource` (and `removed { from }`) blocks of that family in apps/web-platform/infra/**/*.tf.
+def access_family_table: {
+  "cloudflare_zero_trust_access_application.deploy": "legacy",
+  "cloudflare_zero_trust_access_application.ssh": "legacy",
+  "cloudflare_zero_trust_access_application.registry": "legacy",
+  "cloudflare_zero_trust_access_policy.deploy_service_token": "legacy",
+  "cloudflare_zero_trust_access_policy.ci_ssh_service_token": "legacy",
+  "cloudflare_zero_trust_access_policy.registry_push_service_token": "legacy",
+  "cloudflare_zero_trust_access_application.deploy_soleur": "soleur_app",
+  "cloudflare_zero_trust_access_application.ssh_soleur": "soleur_app",
+  "cloudflare_zero_trust_access_application.registry_soleur": "soleur_app",
+  "cloudflare_zero_trust_access_policy.deploy_service_token_soleur": "soleur_policy",
+  "cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur": "soleur_policy",
+  "cloudflare_zero_trust_access_policy.registry_push_service_token_soleur": "soleur_policy"
+};
+def deploy_policy_soleur_apps: [ access_family_table | to_entries[] | select(.value == "soleur_app") | .key ];
+def deploy_policy_soleur_gated: deploy_policy_soleur_addrs + deploy_policy_soleur_apps;
 def deploy_policy_has_true: [.. | select(. == true)] | length > 0;
 def deploy_policy_blank: . == null or . == false or . == [] or . == "" or . == {};
 
@@ -297,23 +311,51 @@ def deploy_policy_soleur_unsafe($plan; $ids):
       or (($ids | type) != "array") or (($ids | length) == 0)
       or (($inc[0].service_token? // null) != $ids)
     # The real provider plans a token created in the same apply as service_token absent from `after`
-    # and wholly unknown; ref_ok above already bound it to this policy's own token.
+    # and wholly unknown; ref_ok above already bound it to this policy's own token. ref_ok cannot see a
+    # LITERAL id beside the reference (config `references` list no constants), so while the token is
+    # unknown the static rows Q2/Q3 are the only defence against an extra literal token.
     elif (($unk[0].service_token? // false) == true) then false
     else
       ((($inc[0].service_token? // []) | length) != 1)
     end;
 
-# A policy outside the table attached to a `_soleur` app (bound through its configured
-# application_id) is unsafe whatever it says: no ack can admit a second gate on those hosts.
-def deploy_policy_soleur_stray($plan):
+# `.` is one resource_changes entry at a `_soleur` app. Its first create (and a later in-place update)
+# is an ackable change only while the gate-shaping attributes hold the committed shape: self_hosted,
+# `<host>.<base>` with no path or wildcard, and none of policies / options_preflight_bypass /
+# self_hosted_domains / destinations / cors_headers set, known or unknown. An update must also leave
+# them equal to `before`. A delete, forget or replace leaves the host behind the tunnel ungated.
+def deploy_policy_soleur_app_keys: ["domain", "type", "policies", "options_preflight_bypass", "self_hosted_domains", "destinations", "cors_headers"];
+def deploy_policy_soleur_app_unsafe:
+  (.change.actions? // []) as $act
+  | (.change.after // {}) as $a
+  | (.change.before // {}) as $b
+  | (.change.after_unknown // {}) as $u
+  | (.address | ltrimstr("cloudflare_zero_trust_access_application.") | rtrimstr("_soleur")) as $host
+  | if ($act | type) != "array" or ($act | length) == 0 then true
+    elif $act != ["create"] and $act != ["update"] then true
+    elif ($a | type) != "object" or ($u | type) != "object" then true
+    elif any(deploy_policy_soleur_app_keys[]; . as $k | $u[$k] | deploy_policy_has_true) then true
+    elif $a.type != "self_hosted" then true
+    elif ($a.domain | type) != "string" or ($a.domain | startswith($host + ".") | not) or ($a.domain | test("[/*]")) then true
+    elif any(deploy_policy_soleur_app_keys[2:][]; . as $k | $a[$k] | deploy_policy_blank | not) then true
+    elif $act == ["update"] and any(deploy_policy_soleur_app_keys[]; . as $k | $a[$k] != $b[$k]?) then true
+    else false end;
+
+# The Access family ALLOWLIST: no ack can admit a second gate on a host. A non-no-op entry of type
+# cloudflare_(zero_trust_)access_(policy|application), in ANY module, is unsafe when its address is not in
+# access_family_table (a new policy or app, a legacy type name, a module or indexed address, however it
+# is bound), when it would (re)create a legacy address (legacy only leaves; a create is the #12931 flip
+# re-planting it), or when it is a `_soleur` app off its committed shape. The `_soleur` policies keep
+# their own per-address check below; the old deploy policy keeps its own rule.
+def access_family_unsafe:
   [ .resource_changes[]?
-    | select(.type == "cloudflare_zero_trust_access_policy")
-    | select((.change.actions? // []) != ["no-op"])
-    | select(IN(.address; deploy_policy_soleur_addrs[]) | not)
-    | (.type + "." + .name) as $cfg
-    | select(any($plan.configuration.root_module.resources[]? | select(.address == $cfg)
-                 | .expressions.application_id.references[]?;
-                 . as $r | any(deploy_policy_soleur_apps[]; $r == . or $r == (. + ".id")))) ]
+    | select((.type? // "") | test("^cloudflare_(zero_trust_)?access_(policy|application)$"))
+    | select((.change.actions? // []) as $a | $a != ["no-op"] and $a != ["read"])
+    | access_family_table[.address | tostring] as $role
+    | select(
+        $role == null
+        or ($role == "legacy" and .address != deploy_policy_old_addr and ((.change.actions? // []) | index("create")))
+        or ($role == "soleur_app" and deploy_policy_soleur_app_unsafe)) ]
   | length;
 
 {
@@ -732,7 +774,7 @@ def deploy_policy_soleur_stray($plan):
   # as 1 (the policy is always in the -target list, so an absent entry is a changed plan shape). The only
   # acknowledgeable one: a rotation PR changes the include on purpose and carries [ack-deploy-policy].
   #
-  # #12937: the three `_soleur` policies flow through the SAME counters (deploy_policy_soleur_refs
+  # #12937: the three `_soleur` policies AND apps flow through the SAME counters (deploy_policy_soleur_gated
   # above). A non-no-op `_soleur` entry counts as a change (its single create rides the merge apply
   # and needs [ack-deploy-policy]); an ABSENT `_soleur` entry counts 0 — the per-merge -target
   # coverage (terraform-target-parity.test.ts) is what keeps them in the plan.
@@ -741,7 +783,7 @@ def deploy_policy_soleur_stray($plan):
      | if ($p | length) == 0 then 1
        else ($p | map(select(.change.actions != ["no-op"])) | length) end)
     + ([ .resource_changes[]?
-         | select(IN(.address; deploy_policy_soleur_addrs[]))
+         | select(IN(.address; deploy_policy_soleur_gated[]))
          | select(.change.actions != ["no-op"]) ] | length)
   ),
   # deploy_policy_unsafe: the policy would be created or deleted, or its planned include is not exactly ONE
@@ -752,7 +794,8 @@ def deploy_policy_soleur_stray($plan):
   # create/update leaves its include other than ONE block bound to its own committed reference (the
   # deploy one: the planned id list must EQUAL `--argjson ids`, the list committed in tunnel.tf),
   # or sets any include key but service_token, or a decision other than non_identity. Its single
-  # acknowledged create is NOT unsafe. Any other policy attached to a `_soleur` app is unsafe.
+  # acknowledged create is NOT unsafe. access_family_unsafe adds every Access app/policy change outside
+  # the address allowlist, a legacy re-create, and a `_soleur` app off its committed shape.
   deploy_policy_unsafe: (
     . as $plan
     | ($ARGS.named.ids // null) as $ids
@@ -767,7 +810,7 @@ def deploy_policy_soleur_stray($plan):
       + ([ .resource_changes[]?
            | select(IN(.address; deploy_policy_soleur_addrs[]))
            | select(deploy_policy_soleur_unsafe($plan; $ids)) ] | length)
-      + deploy_policy_soleur_stray($plan)
+      + access_family_unsafe
   ),
   # access_token_stray_forgets: a forget of an Access service token other than the deploy token this PR
   # forgets on purpose (the ci_ssh and registry_push tokens are other credentials). Once the forget has

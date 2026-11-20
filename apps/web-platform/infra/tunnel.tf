@@ -20,6 +20,13 @@ resource "cloudflare_zero_trust_tunnel_cloudflared" "web" {
   # TODO: remove ignore_changes after clean reprovisioning (import artifact)
   lifecycle {
     ignore_changes = [secret, config_src]
+
+    # Teardown before flip (ADR-330): the legacy slice must leave state before #12931 sets
+    # var.cf_account_id to the Soleur account, or it re-plans as creates beside the `_soleur` slice.
+    precondition {
+      condition     = var.cf_account_id != local.cf_soleur_account_id
+      error_message = "The legacy tunnel slice must leave state before #12931 flips var.cf_account_id to the Soleur account."
+    }
   }
 }
 
@@ -331,7 +338,7 @@ resource "doppler_secret" "registry_push_access_token_id" {
   value      = cloudflare_zero_trust_access_service_token.registry_push_soleur.client_id
   visibility = "masked"
 
-  # An imported token reads empty: never write "" over the live prd value.
+  # A state value that reads empty must not overwrite prd.
   lifecycle {
     precondition {
       condition     = cloudflare_zero_trust_access_service_token.registry_push_soleur.client_id != ""
@@ -347,7 +354,7 @@ resource "doppler_secret" "registry_push_access_token_secret" {
   value      = cloudflare_zero_trust_access_service_token.registry_push_soleur.client_secret
   visibility = "masked"
 
-  # An imported token reads empty: never write "" over the live prd value.
+  # A state value that reads empty must not overwrite prd.
   lifecycle {
     precondition {
       condition     = nonsensitive(cloudflare_zero_trust_access_service_token.registry_push_soleur.client_secret != "")

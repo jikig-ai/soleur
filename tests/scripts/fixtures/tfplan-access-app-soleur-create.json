@@ -1,0 +1,303 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.17.2",
+  "resource_changes": [
+    {
+      "address": "cloudflare_zero_trust_access_application.deploy_soleur",
+      "mode": "managed",
+      "type": "cloudflare_zero_trust_access_application",
+      "name": "deploy_soleur",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "account_id": "a",
+          "allow_authenticate_via_warp": null,
+          "allowed_idps": null,
+          "app_launcher_logo_url": null,
+          "app_launcher_visible": true,
+          "auto_redirect_to_identity": false,
+          "bg_color": null,
+          "cors_headers": [],
+          "custom_deny_message": null,
+          "custom_deny_url": null,
+          "custom_non_identity_deny_url": null,
+          "custom_pages": null,
+          "destinations": [],
+          "domain": "deploy.example.com",
+          "enable_binding_cookie": false,
+          "footer_links": [],
+          "header_bg_color": null,
+          "http_only_cookie_attribute": null,
+          "landing_page_design": [],
+          "logo_url": null,
+          "name": "d",
+          "options_preflight_bypass": false,
+          "policies": null,
+          "saas_app": [],
+          "same_site_cookie_attribute": null,
+          "scim_config": [],
+          "self_hosted_domains": null,
+          "service_auth_401_redirect": false,
+          "session_duration": "24h",
+          "skip_app_launcher_login_page": false,
+          "skip_interstitial": false,
+          "tags": null,
+          "target_criteria": [],
+          "type": "self_hosted"
+        },
+        "after_unknown": {
+          "aud": true,
+          "cors_headers": [],
+          "destinations": [],
+          "domain_type": true,
+          "footer_links": [],
+          "id": true,
+          "landing_page_design": [],
+          "saas_app": [],
+          "scim_config": [],
+          "target_criteria": [],
+          "zone_id": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {
+          "cors_headers": [],
+          "destinations": [],
+          "footer_links": [],
+          "landing_page_design": [],
+          "saas_app": [],
+          "scim_config": [],
+          "target_criteria": []
+        }
+      }
+    },
+    {
+      "address": "cloudflare_zero_trust_access_application.registry_soleur",
+      "mode": "managed",
+      "type": "cloudflare_zero_trust_access_application",
+      "name": "registry_soleur",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "account_id": "a",
+          "allow_authenticate_via_warp": null,
+          "allowed_idps": null,
+          "app_launcher_logo_url": null,
+          "app_launcher_visible": true,
+          "auto_redirect_to_identity": false,
+          "bg_color": null,
+          "cors_headers": [],
+          "custom_deny_message": null,
+          "custom_deny_url": null,
+          "custom_non_identity_deny_url": null,
+          "custom_pages": null,
+          "destinations": [],
+          "domain": "registry.example.com",
+          "enable_binding_cookie": false,
+          "footer_links": [],
+          "header_bg_color": null,
+          "http_only_cookie_attribute": null,
+          "landing_page_design": [],
+          "logo_url": null,
+          "name": "r",
+          "options_preflight_bypass": false,
+          "policies": null,
+          "saas_app": [],
+          "same_site_cookie_attribute": null,
+          "scim_config": [],
+          "self_hosted_domains": null,
+          "service_auth_401_redirect": false,
+          "session_duration": "15m",
+          "skip_app_launcher_login_page": false,
+          "skip_interstitial": false,
+          "tags": null,
+          "target_criteria": [],
+          "type": "self_hosted"
+        },
+        "after_unknown": {
+          "aud": true,
+          "cors_headers": [],
+          "destinations": [],
+          "domain_type": true,
+          "footer_links": [],
+          "id": true,
+          "landing_page_design": [],
+          "saas_app": [],
+          "scim_config": [],
+          "target_criteria": [],
+          "zone_id": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {
+          "cors_headers": [],
+          "destinations": [],
+          "footer_links": [],
+          "landing_page_design": [],
+          "saas_app": [],
+          "scim_config": [],
+          "target_criteria": []
+        }
+      }
+    },
+    {
+      "address": "cloudflare_zero_trust_access_application.ssh_soleur",
+      "mode": "managed",
+      "type": "cloudflare_zero_trust_access_application",
+      "name": "ssh_soleur",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "account_id": "a",
+          "allow_authenticate_via_warp": null,
+          "allowed_idps": null,
+          "app_launcher_logo_url": null,
+          "app_launcher_visible": true,
+          "auto_redirect_to_identity": false,
+          "bg_color": null,
+          "cors_headers": [],
+          "custom_deny_message": null,
+          "custom_deny_url": null,
+          "custom_non_identity_deny_url": null,
+          "custom_pages": null,
+          "destinations": [],
+          "domain": "ssh.example.com",
+          "enable_binding_cookie": false,
+          "footer_links": [],
+          "header_bg_color": null,
+          "http_only_cookie_attribute": null,
+          "landing_page_design": [],
+          "logo_url": null,
+          "name": "s",
+          "options_preflight_bypass": false,
+          "policies": null,
+          "saas_app": [],
+          "same_site_cookie_attribute": null,
+          "scim_config": [],
+          "self_hosted_domains": null,
+          "service_auth_401_redirect": false,
+          "session_duration": "15m",
+          "skip_app_launcher_login_page": false,
+          "skip_interstitial": false,
+          "tags": null,
+          "target_criteria": [],
+          "type": "self_hosted"
+        },
+        "after_unknown": {
+          "aud": true,
+          "cors_headers": [],
+          "destinations": [],
+          "domain_type": true,
+          "footer_links": [],
+          "id": true,
+          "landing_page_design": [],
+          "saas_app": [],
+          "scim_config": [],
+          "target_criteria": [],
+          "zone_id": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {
+          "cors_headers": [],
+          "destinations": [],
+          "footer_links": [],
+          "landing_page_design": [],
+          "saas_app": [],
+          "scim_config": [],
+          "target_criteria": []
+        }
+      }
+    }
+  ],
+  "configuration": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "cloudflare_zero_trust_access_application.deploy_soleur",
+          "mode": "managed",
+          "type": "cloudflare_zero_trust_access_application",
+          "name": "deploy_soleur",
+          "provider_config_key": "cloudflare",
+          "expressions": {
+            "account_id": {
+              "constant_value": "a"
+            },
+            "domain": {
+              "constant_value": "deploy.example.com"
+            },
+            "name": {
+              "constant_value": "d"
+            },
+            "session_duration": {
+              "constant_value": "24h"
+            },
+            "type": {
+              "constant_value": "self_hosted"
+            }
+          },
+          "schema_version": 0
+        },
+        {
+          "address": "cloudflare_zero_trust_access_application.registry_soleur",
+          "mode": "managed",
+          "type": "cloudflare_zero_trust_access_application",
+          "name": "registry_soleur",
+          "provider_config_key": "cloudflare",
+          "expressions": {
+            "account_id": {
+              "constant_value": "a"
+            },
+            "domain": {
+              "constant_value": "registry.example.com"
+            },
+            "name": {
+              "constant_value": "r"
+            },
+            "session_duration": {
+              "constant_value": "15m"
+            },
+            "type": {
+              "constant_value": "self_hosted"
+            }
+          },
+          "schema_version": 0
+        },
+        {
+          "address": "cloudflare_zero_trust_access_application.ssh_soleur",
+          "mode": "managed",
+          "type": "cloudflare_zero_trust_access_application",
+          "name": "ssh_soleur",
+          "provider_config_key": "cloudflare",
+          "expressions": {
+            "account_id": {
+              "constant_value": "a"
+            },
+            "domain": {
+              "constant_value": "ssh.example.com"
+            },
+            "name": {
+              "constant_value": "s"
+            },
+            "session_duration": {
+              "constant_value": "15m"
+            },
+            "type": {
+              "constant_value": "self_hosted"
+            }
+          },
+          "schema_version": 0
+        }
+      ]
+    }
+  }
+}

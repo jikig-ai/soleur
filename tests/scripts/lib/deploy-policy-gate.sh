@@ -23,12 +23,15 @@
 #                                                                  show the policy UNCHANGED; a rotation PR changes the
 #                                                                  include on purpose and carries the ack)
 #   a counter that is not a non-negative integer                -> refuse (a jq failure must not read as 0)
-# `[ack-destroy]` is deliberately NOT consulted. Prints ::error:: lines; returns 1 to refuse, 0 to pass.
+# `[ack-destroy]` is deliberately NOT consulted. Prints ::error:: lines to STDERR (the id reader and
+# deploy_policy_counts run inside `$(...)` captures, which swallow stdout); returns 1 to refuse, 0 to pass.
 #
 # #12937 (Ruled by CTO agent, 2026-11-19): the same counters also cover the three Soleur-account policies
 # (`cloudflare_zero_trust_access_policy.{deploy_service_token,ci_ssh_service_token,registry_push_service_token}_soleur`),
 # each judged against its OWN committed token reference. Their single acknowledged create passes; a delete,
-# a second include block, a wrong id or a re-include on any of them is unsafe. The deploy one needs the id
+# a second include block, a wrong id or a re-include on any of them is unsafe. The three `_soleur` apps count as
+# changes too (unsafe off their committed shape), and any Access app/policy change outside the filter's
+# access_family_table is unsafe. The deploy one needs the id
 # list committed in tunnel.tf, which plan JSON does not carry, so the workflow feeds this gate from
 # deploy_policy_counts (below), never from the destroy guard's own id-less `counts`.
 UUID_ERE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
@@ -44,16 +47,16 @@ deploy_policy_committed_ids() { # <tunnel.tf>
   lines="$(grep -E '^[[:space:]]*deploy_service_token_ids_soleur[[:space:]]*=' "$tf" 2>/dev/null || true)"
   n=0; [[ -n "$lines" ]] && n="$(grep -c . <<<"$lines")"
   if [[ "$n" != "1" ]]; then
-    echo "::error::deploy policy guard: ${tf} declares deploy_service_token_ids_soleur on ${n} line(s), expected exactly 1. Refusing to apply."
+    echo "::error::deploy policy guard: ${tf} declares deploy_service_token_ids_soleur on ${n} line(s), expected exactly 1. Refusing to apply." >&2
     return 1
   fi
   list="$(sed -nE 's/^[[:space:]]*deploy_service_token_ids_soleur[[:space:]]*=[[:space:]]*(\[[^]#]*\])[[:space:]]*(#.*)?$/\1/p' <<<"$lines")"
   if ! jq -ce --arg re "$UUID_ERE" 'if type == "array" and length > 0 and all(.[]; type == "string" and test($re)) then . else error("bad") end' <<<"${list:-null}" >/dev/null 2>&1; then
-    echo "::error::deploy policy guard: deploy_service_token_ids_soleur in ${tf} is not a non-empty literal list of UUIDs (got '${list}'). Refusing to apply."
+    echo "::error::deploy policy guard: deploy_service_token_ids_soleur in ${tf} is not a non-empty literal list of UUIDs (got '${list}'). Refusing to apply." >&2
     return 1
   fi
   if jq -e --arg nil "$NIL_UUID" 'any(.[]; . == $nil)' <<<"$list" >/dev/null 2>&1; then
-    echo "::error::deploy policy guard: placeholder deploy token id still committed (FILL-AT-PHASE-3.1) in ${tf}. Refusing to apply."
+    echo "::error::deploy policy guard: placeholder deploy token id still committed (FILL-AT-PHASE-3.1) in ${tf}. Refusing to apply." >&2
     return 1
   fi
   jq -c . <<<"$list"
@@ -65,7 +68,7 @@ deploy_policy_counts() { # <tfplan.json> <tunnel.tf> <filter.jq>
   local plan="$1" tf="$2" filter="$3" ids out
   ids="$(deploy_policy_committed_ids "$tf")" || return 1
   if ! out="$(jq --argjson ids "$ids" -f "$filter" < "$plan" 2>/dev/null)" || [[ -z "$out" ]]; then
-    echo "::error::deploy policy guard: the destroy-guard filter could not read ${plan} with the committed ids. Refusing to apply."
+    echo "::error::deploy policy guard: the destroy-guard filter could not read ${plan} with the committed ids. Refusing to apply." >&2
     return 1
   fi
   printf '%s\n' "$out"
@@ -78,19 +81,19 @@ deploy_policy_gate() { # <counts-json> <combined tip+push-commit messages>
   for k in deploy_policy_changes deploy_policy_unsafe access_token_stray_forgets; do
     v="$(jq -r --arg k "$k" '.[$k] // "missing"' <<<"$counts" 2>/dev/null)" || v="unparsed"
     [[ "$v" =~ ^[0-9]+$ ]] || {
-      echo "::error::deploy policy guard: counter ${k} did not parse as a non-negative integer (got '${v}'). Refusing to apply."
+      echo "::error::deploy policy guard: counter ${k} did not parse as a non-negative integer (got '${v}'). Refusing to apply." >&2
       return 1
     }
     n[$k]="$v"
   done
   if [[ "${n[deploy_policy_unsafe]}" -gt 0 || "${n[access_token_stray_forgets]}" -gt 0 ]]; then
-    echo "::error::deploy policy guard: the plan would create/delete the old deploy Access policy, delete/replace a _soleur Access policy (deploy, ci_ssh or registry_push), leave an include other than ONE service_token-only block bound to its own committed token (the deploy one: exactly local.deploy_service_token_ids_soleur) with decision non_identity, attach any other policy to a _soleur app, or forget an Access token other than the deploy token (unsafe=${n[deploy_policy_unsafe]}, stray_forgets=${n[access_token_stray_forgets]}). That locks the deploy webhook, CI SSH or registry push out. No ack reaches this HALT."
-    echo "::error::${DEPLOY_POLICY_UNWEDGE}"
+    echo "::error::deploy policy guard: the plan would create/delete the old deploy Access policy, delete/replace a _soleur Access policy or app (deploy, ci_ssh or registry_push), leave an include other than ONE service_token-only block bound to its own committed token (the deploy one: exactly local.deploy_service_token_ids_soleur) with decision non_identity, change a _soleur app's domain/type/policies/options_preflight_bypass/self_hosted_domains/destinations/cors_headers, change any Access app or policy whose address is not in the filter's access_family_table, re-create a legacy Access address, or forget an Access token other than the deploy token (unsafe=${n[deploy_policy_unsafe]}, stray_forgets=${n[access_token_stray_forgets]}). That locks the deploy webhook, CI SSH or registry push out. No ack reaches this HALT." >&2
+    echo "::error::${DEPLOY_POLICY_UNWEDGE}" >&2
     return 1
   fi
   if [[ "${n[deploy_policy_changes]}" -gt 0 ]] && ! [[ "$msg" =~ (^|$'\n')\[ack-deploy-policy\]($|$'\n') ]]; then
-    echo "::error::deploy policy guard: the plan changes a gated Access policy (changes=${n[deploy_policy_changes]}): the old deploy policy, or a _soleur deploy/ci_ssh/registry_push policy (its first create included). The PR that forgets the deploy token must show it UNCHANGED; a PR that creates or re-includes a gated policy on purpose adds a line containing exactly '[ack-deploy-policy]' to the merge commit message ([ack-destroy] does not count)."
-    echo "::error::${DEPLOY_POLICY_UNWEDGE}"
+    echo "::error::deploy policy guard: the plan changes a gated Access policy (changes=${n[deploy_policy_changes]}): the old deploy policy, or a _soleur deploy/ci_ssh/registry_push policy or app (its first create included). The PR that forgets the deploy token must show it UNCHANGED; a PR that creates or re-includes a gated policy on purpose adds a line containing exactly '[ack-deploy-policy]' to the merge commit message ([ack-destroy] does not count)." >&2
+    echo "::error::${DEPLOY_POLICY_UNWEDGE}" >&2
     return 1
   fi
   return 0
