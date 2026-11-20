@@ -51,7 +51,9 @@
 # (indirection, nameref, printf -v, arithmetic). It closes nothing else. An environment entry bash does not import (a name that is
 # not an identifier, such as `a-b=1`) is not listed, so it is not removed and stays readable through /proc/self/environ. Reading a
 # file, or another process's environment (/proc/<pid>/environ, the parent's included), is not closed by it either: those are
-# refused by the suite's code censuses (no file input redirection, no source or `.`, no tilde, absolute tools only), not here.
+# narrowed by the suite's code censuses (no file input redirection, no source or `.`, no tilde, absolute tools only), not here,
+# and not closed: a file named as a tool operand or a builtin's path argument (`date -f FILE`, a jq file operand, `history -r
+# FILE`) is not a redirection, and whether another suite row reds such an edit is unmeasured.
 #
 # READ-ONLY POST EXCEPTION (#12441, #12846): a GraphQL read is an HTTP POST that only reads. Exactly three fixed queries are compiled
 # into this file (GQL_HEALTH_TPL, GQL_EDGE_TPL, GQL_COLO_TPL); the only substitutions are the zone id and two window stamps computed

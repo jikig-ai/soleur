@@ -1,6 +1,6 @@
 # Tasks: feat-one-shot-12846-health-colo-split
 
-Plan: `knowledge-base/project/plans/2026-11-19-feat-analytics-health-colo-host-offset-plan.md` (issue #12846, `Ref` only; draft PR #12959). Rulings: `decision-challenges.md`; section 9 text: `clo-ruling-text.md` (apply verbatim, do not re-word).
+Plan: `knowledge-base/project/plans/archive/20261120-104525-2026-11-19-feat-analytics-health-colo-host-offset-plan.md` (issue #12846, `Ref` only; draft PR #12959). Rulings: `decision-challenges.md`; section 9 text: `clo-ruling-text.md` (apply verbatim, do not re-word).
 
 Standing limits for every task: no production apply, no workflow dispatch (including `apply-web-platform-infra.yml`), no Doppler or credential change. Do not edit or comment on PR #12876.
 
@@ -44,7 +44,7 @@ Standing limits for every task: no production apply, no workflow dispatch (inclu
 
 ## 5. PR and sequencing
 
-- [x] 5.1 Push; update draft PR #12959: `Ref #12846`, `Ref #12441`, `Ref #10479`, no `Closes`, `closingIssuesReferences` is `[]`; lead with the deadline; the six CLO owner-review items; the per-floor deltas and the rebase-and-re-pin note for whichever of this PR and #12876 lands second.
+- [x] 5.1 Push; update draft PR #12959: `Ref #12846`, `Ref #12441`, `Ref #10479`, no `Closes`, `closingIssuesReferences` is `[]`; lead with the deadline; the six CLO owner-review items; the per-floor deltas and the rebase-and-re-pin note for whichever of this PR and #12876 lands second. (Note moot at ship: #12876 merged first, and this branch merged main and re-pinned its floors, so the PR body carries the re-pinned table instead.)
 - [x] 5.2 One comment on #12931: run the #12846 read against the old zone before Doppler `CF_ZONE_ID` changes; old zone may be deleted from about 2026-11-25; new-zone token reach is unverified.
 
 ## 6. Post-landing (same session, Class R; then the PR that closes #12846)

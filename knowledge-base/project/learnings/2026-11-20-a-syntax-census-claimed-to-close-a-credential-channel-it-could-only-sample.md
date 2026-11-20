@@ -31,14 +31,16 @@ After the class fix (the closed environment below), the verification seat found 
 
 ## Solution
 
-1. **Close the channel instead of enumerating its spellings.** Right after its xtrace refusal, the wrapper re-execs once. The re-exec removes every exported name outside a fixed allowlist, using `env -u NAME`. That puts names only on argv: `env -i NAME=value` would put every token value into `/proc/<pid>/cmdline`. The decision is keyed on the set of names `compgen -e` lists, never on a marker a caller could set. A caller-set marker with an open environment is refused with exit 64. After the re-exec, every syntax for reading a caller-chosen variable finds it unset. The suite's closed-environment wire rows check this per subcommand: they plant names and compare curl argv, the stdin config and the output byte for byte.
+1. **Close the channel instead of enumerating its spellings.** Right after its xtrace refusal, the wrapper re-execs once. The re-exec removes every name `compgen -e` lists outside a fixed allowlist, using `env -u NAME`. An entry whose name is not an identifier (`a-b=1`) is not listed, so it is not removed and stays readable through `/proc/self/environ`; the header says so. That puts names only on argv: `env -i NAME=value` would put every token value into `/proc/<pid>/cmdline`. The decision is keyed on the set of names `compgen -e` lists, never on a marker a caller could set. A caller-set marker with an open environment is refused with exit 64. After the re-exec, a read of an unlisted identifier from the process environment finds it unset, whatever its syntax. The suite's closed-environment wire rows check this per subcommand: they plant names and compare curl argv, the stdin config and the output byte for byte.
 2. **Census what the closure leaves open.** These rows run on a quote-aware copy of the code:
    - a ban on `.` or `source` used as a command;
    - a ban on `~` in code;
-   - a redirection census: every input redirection must be `< <(`, so no row may read a file or `/proc`.
+   - a redirection census: every input redirection in the code must be `< <(`, so no redirection reads a file or `/proc`.
+
+   This narrows file reads; it does not close them. A file named as a tool operand or a builtin's path argument (`date -f FILE`, a jq file operand, `history -r FILE`) is not a redirection. The `--rawfile`/`--slurpfile` ban and the tool allowlist narrow that further, and the header states the rest as unmeasured.
 
    Each row has positive and negative control fixtures and mutation rows.
-3. **State the residual where the reader acts.** The wrapper header says the closed environment closes the shell-visible process environment only. `BASH_ENV`, exported builtin-named functions, `SHELLOPTS`, `PS4` and `LD_PRELOAD` still act in the first bash start, before the re-exec.
+3. **State the residual where the reader acts.** The wrapper header says the closed environment closes the shell-visible process environment only. `BASH_ENV`, exported builtin-named functions, `SHELLOPTS`, `PS4`, `LD_PRELOAD` and the shebang's `PATH` lookup still act in the first bash start, before the re-exec.
 
 Result: the wrapper suite passes 2565/0, with 273 of 273 mutation rows caught.
 
