@@ -354,7 +354,7 @@ jobs:
           # inside a YAML block scalar puts its body at column 0, which ends the scalar and
           # makes the whole workflow unparseable. (Measured — the first version of this did
           # exactly that.) Parsing stays in python; the DECISION stays in bash, below.
-          # `causes` rides along because UNVERIFIABLE has TEN disjoint causes with
+          # `causes` rides along because UNVERIFIABLE has several disjoint causes with
           # different remedies, and this step previously collapsed them into one email that
           # said "add a hostname mapping to access_hostname_for()". That is correct for
           # exactly one cause; for the others the mapping already exists, so the instruction
@@ -417,7 +417,7 @@ jobs:
           # heredoc mangled), an empty string would match no consumer condition and the run
           # would report nothing at all. Empty is unavailable.
           [[ -n "$verdict" ]] || verdict=unavailable
-          # Closed vocabulary (the ten causes the detector emits, plus `unknown` for a
+          # Closed vocabulary (the causes the detector emits, plus `unknown` for a
           # row with no cause field), comma-joined — no newlines, so it cannot
           # break the $GITHUB_OUTPUT key=value framing.
           # A NON-EMPTY GUARD ON EVERY FIELD, new ones included. An empty value would
@@ -1318,6 +1318,9 @@ jobs:
           fi
           printf 'state=%s\n' "$STATE" >> "$GITHUB_OUTPUT"
           echo "tunnel-zone authority: state=${STATE} zone=${ZONE_ID:-none} status=${ZONE_STATUS:-unread} zone_ns=${ZONE_NS:-unread} public_ns=${PUBLIC_NS:-unread}"
+          if [[ "$STATE" == drift ]]; then echo "::error::tunnel_zone_drift — ${WHY}"; fi
+          # escalation=ok|failed: did the issue channel accept this run's state? The email step below reads it.
+          escalation() { printf 'escalation=%s\n' "$1" >> "$GITHUB_OUTPUT"; }
 
           # 6. The one filing site.
           LIST_RC=0
@@ -1325,14 +1328,24 @@ jobs:
           EXISTING=$(gh issue list --label "$LABEL" --state open -L 5 --json number --jq '.[0].number // empty') || LIST_RC=$?
           if (( LIST_RC != 0 )); then
             echo "::error::tunnel_zone_list_failed — could not query open ${LABEL} issues (gh exit ${LIST_RC}); state '${STATE}' reached no issue channel this run."
+            escalation failed
             exit 0
           fi
           if [[ "$STATE" == healthy ]]; then
-            [[ -n "$EXISTING" ]] || { echo "tunnel zone healthy; no open ${LABEL} issue."; exit 0; }
+            [[ -n "$EXISTING" ]] || { echo "tunnel zone healthy; no open ${LABEL} issue."; escalation ok; exit 0; }
             if gh issue close "$EXISTING" --comment "Healthy again: run ${RUN_URL} read zone ${ZONE_NAME} (${ZONE_ID}) as \`active\` with public NS equal to its name_servers (${ZONE_NS}). Auto-closed."; then
-              echo "Closed ${LABEL} issue #${EXISTING}."
+              echo "Closed ${LABEL} issue #${EXISTING}."; escalation ok
             else
-              echo "::error::tunnel_zone_close_failed — the zone is healthy but issue #${EXISTING} could not be closed."
+              echo "::error::tunnel_zone_close_failed — the zone is healthy but issue #${EXISTING} could not be closed."; escalation failed
+            fi
+            exit 0
+          fi
+          # An unmeasured run must not overwrite a standing drift finding: comment, keep the title and body.
+          if [[ "$STATE" == unavailable && -n "$EXISTING" ]]; then
+            if gh issue comment "$EXISTING" --body "state=unavailable — run ${RUN_URL} could not measure the zone: ${WHY} The title and body above are from the last measured run."; then
+              echo "Commented on ${LABEL} issue #${EXISTING} (unavailable)."; escalation ok
+            else
+              echo "::error::tunnel_zone_update_failed — gh issue comment could not reach issue #${EXISTING} (state 'unavailable')."; escalation failed
             fi
             exit 0
           fi
@@ -1356,19 +1369,34 @@ jobs:
           } > "$BODY"
           if [[ -n "$EXISTING" ]]; then
             if gh issue edit "$EXISTING" --title "$TITLE" --body-file "$BODY"; then
-              echo "Rewrote ${LABEL} issue #${EXISTING} for state '${STATE}'."
+              echo "Rewrote ${LABEL} issue #${EXISTING} for state '${STATE}'."; escalation ok
             else
-              echo "::error::tunnel_zone_update_failed — gh issue edit could not rewrite issue #${EXISTING} (state '${STATE}')."
+              echo "::error::tunnel_zone_update_failed — gh issue edit could not rewrite issue #${EXISTING} (state '${STATE}')."; escalation failed
             fi
             gh issue edit "$EXISTING" --add-label action-required --add-label priority/p1-high --add-label "$LABEL" >/dev/null 2>&1 || true
           elif gh issue create --title "$TITLE" --body-file "$BODY" \
                  --label "$LABEL" --label action-required --label priority/p1-high \
                  --milestone "Post-MVP / Later"; then
-            echo "Filed a ${LABEL} issue for state '${STATE}'."
+            echo "Filed a ${LABEL} issue for state '${STATE}'."; escalation ok
           else
-            echo "::error::tunnel_zone_escalation_failed — gh issue create did not succeed; state '${STATE}' reached no issue channel this run."
+            echo "::error::tunnel_zone_escalation_failed — gh issue create did not succeed; state '${STATE}' reached no issue channel this run."; escalation failed
           fi
           rm -f "$BODY"
+
+      # The issue is the tunnel_zone step's only other channel, and that step is continue-on-error, so a drift,
+      # a refused issue write, or a crashed/timed-out step (no outputs; `outcome` is set) also emails ops.
+      - name: Email notification (tunnel zone — drift, or the issue channel is unreachable)
+        if: >-
+          always()
+          && (steps.tunnel_zone.outputs.state == 'drift'
+              || steps.tunnel_zone.outputs.escalation == 'failed'
+              || steps.tunnel_zone.outcome == 'failure')
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[TUNNEL ZONE] The zone carrying registry/deploy/ssh needs attention'
+          body: '<p><strong>The tunnel-zone authority check measured state <code>${{ steps.tunnel_zone.outputs.state }}</code>; issue channel <code>${{ steps.tunnel_zone.outputs.escalation }}</code> (step outcome <code>${{ steps.tunnel_zone.outcome }}</code>).</strong></p><p><code>drift</code> means the zone holding the tunnel CNAMEs is not active or is not the authoritative one, so registry., deploy. and ssh. are down. An empty state or <code>failed</code> channel means the check crashed or its <code>ci/tunnel-zone-authority</code> issue could not be written; the run is green either way.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the <code>tunnel_zone_</code> annotation.</p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       # The four reporting steps below are INDEPENDENT emitters, not a pipeline. Moving the
       # enforce step to the end of the job stopped it from skipping them, but they were

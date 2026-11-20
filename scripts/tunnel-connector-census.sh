@@ -56,7 +56,7 @@ set -euo pipefail
 # The Cloudflare account that holds the `soleur-web-platform` tunnel the census reads (#12937). Since the
 # 2026-11-18 soleur.ai zone move that is the zone-owning Soleur account, NOT Doppler's CF_ACCOUNT_ID
 # (still the old account, #12931's scope). The literal lives ONCE, here; the scheduled census step reads
-# it after sourcing this file, and verify-tunnel-ingress-origin-infradir.test.sh asserts it equals
+# it after sourcing this file, and apps/web-platform/infra/tunnel-origin-relative-ingress.test.sh (AC5) asserts it equals
 # apps/web-platform/infra/tunnel.tf `local.cf_soleur_account_id`. An account id is not a secret.
 # shellcheck disable=SC2034  # read by the sourcing workflow step, not here
 CF_TUNNEL_ACCOUNT_ID="66d4f93f7397f196544e9fe84c3557c2"

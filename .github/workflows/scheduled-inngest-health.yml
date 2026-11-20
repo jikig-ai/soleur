@@ -1613,15 +1613,19 @@ jobs:
             exit 0
           fi
 
-          TUNNEL_ID=$(bc_curl scheduled-inngest-health 'Authorization:Bearer :CF_API_TOKEN' -- -s --max-time 20 \
-            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/cfd_tunnel?name=soleur-web-platform" \
-            | jq -r '.result[0].id // empty' 2>/dev/null || true)
+          # is_deleted=false: a replaced tunnel's deleted namesake must not be result[0]. The HTTP code rides into the
+          # reason so a token that cannot see this account (403) reads differently from an absent tunnel (200, empty).
+          LOOKUP=$(bc_curl scheduled-inngest-health 'Authorization:Bearer :CF_API_TOKEN' -- -s --max-time 20 -w '\n%{http_code}' \
+            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/cfd_tunnel?name=soleur-web-platform&is_deleted=false" || printf '\n000')
+          LOOKUP_CODE=$(printf '%s' "$LOOKUP" | tail -1)
+          [[ "$LOOKUP_CODE" =~ ^[0-9]{3}$ ]] || LOOKUP_CODE=000
+          TUNNEL_ID=$(printf '%s' "$LOOKUP" | sed '$d' | jq -r '.result[0].id // empty' 2>/dev/null || true)
           if [[ -z "$TUNNEL_ID" ]]; then
             echo "verdict=census_unavailable" >> "$GITHUB_OUTPUT"
             echo "count=-1" >> "$GITHUB_OUTPUT"
             echo "version_verdict=version_unreadable" >> "$GITHUB_OUTPUT"
-            echo "detail=could not resolve tunnel id for soleur-web-platform" >> "$GITHUB_OUTPUT"
-            echo "SOLEUR_ORIGIN_HOST_CHURN verdict=census_unavailable count=-1 version_verdict=version_unreadable reason=tunnel_id_unresolved"
+            echo "detail=could not resolve tunnel id for soleur-web-platform (lookup HTTP ${LOOKUP_CODE})" >> "$GITHUB_OUTPUT"
+            echo "SOLEUR_ORIGIN_HOST_CHURN verdict=census_unavailable count=-1 version_verdict=version_unreadable reason=tunnel_lookup_http_${LOOKUP_CODE}"
             exit 0
           fi
 

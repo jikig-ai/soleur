@@ -180,7 +180,7 @@ for attempt in 1 2 3 4 5; do
 done
 
 if [[ "$HTTP_CODE" != "200" ]]; then
-  # SOLEUR_TUNNEL_VERIFY (#12937; Ruled by CTO agent, 2026-11-19): name the MEASURED cause before failing.
+  # SOLEUR_TUNNEL_VERIFY (Ruled by CTO agent, 2026-11-19): name the MEASURED cause before failing.
   # The data plane cannot tell "no connector" from "dead origin" (both are an edge 5xx), the control plane
   # can: read the tunnel's connector census (the same classifier the scheduled census uses). No pass path
   # is added at zero connectors — a dead connector on a future apply must stay red.
@@ -192,26 +192,39 @@ if [[ "$HTTP_CODE" != "200" ]]; then
   read -r CENSUS CONNS <<<"$(classify_connector_census "$(tail -1 <<<"$CONN_RESP")" "$(sed '$d' <<<"$CONN_RESP")")"
   case "$CENSUS" in
     zero_connectors) VERIFY_CAUSE="no-connector" ;;
-    census_unavailable) VERIFY_CAUSE="connections-unreadable"; CONNS="unknown" ;;
-    *) VERIFY_CAUSE="origin-not-serving" ;;
+    # A connector is up, so a 403 is Cloudflare Access refusing the deploy credential, not the origin.
+    ok|multi_connector) if [[ "$HTTP_CODE" == "403" ]]; then VERIFY_CAUSE="access-refused"; else VERIFY_CAUSE="origin-not-serving"; fi ;;
+    # census_unavailable, or any verdict this script does not know: nothing was measured.
+    *) VERIFY_CAUSE="connections-unreadable"; CONNS="unknown" ;;
   esac
   echo "SOLEUR_TUNNEL_VERIFY cause=${VERIFY_CAUSE} tunnel=${TUNNEL_ID} connections=${CONNS}"
   [[ -n "${GITHUB_OUTPUT:-}" ]] && echo "cause=${VERIFY_CAUSE}" >> "$GITHUB_OUTPUT"
-  if [[ "$VERIFY_CAUSE" == "no-connector" ]]; then
-    echo "::error::SOLEUR_TUNNEL_VERIFY cause=no-connector: tunnel ${TUNNEL_ID} has 0 connections, so nothing serves deploy./ssh./registry. The Terraform apply itself landed."
-    if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-      cat >> "$GITHUB_STEP_SUMMARY" <<SUMMARY
-**Tunnel verify: no connector.** Tunnel \`${TUNNEL_ID}\` has 0 connections, so deploy./ssh./registry. have nothing behind them. This is EXPECTED on the apply that first creates the Soleur-account tunnel, before web-2 is re-born with its token (\`web-host-replace web-2\`, #12937). Any later apply that reports it means the connector died, which is a real outage.
+  # Each cause gets its own annotation; only origin-not-serving blames the origin and prescribes the pin revert.
+  case "$VERIFY_CAUSE" in
+    no-connector)
+      echo "::error::SOLEUR_TUNNEL_VERIFY cause=no-connector: tunnel ${TUNNEL_ID} has 0 connections, so nothing serves deploy./ssh./registry. The Terraform apply itself landed. Remedy: re-bake the connector host (apply_target=web-host-replace, web_host_key=web-2)."
+      if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+        cat >> "$GITHUB_STEP_SUMMARY" <<SUMMARY
+**Tunnel verify: no connector.** Tunnel \`${TUNNEL_ID}\` has 0 connections, so deploy./ssh./registry. have nothing behind them. This is EXPECTED on the first apply after the tunnel moved account, before the connector host is re-born with its token (\`web-host-replace web-2\`). Any other apply that reports it means the connector is down, which is a real outage.
 SUMMARY
-    fi
-  fi
-  cat >&2 <<EOF
+      fi
+      ;;
+    connections-unreadable)
+      echo "::error::SOLEUR_TUNNEL_VERIFY cause=connections-unreadable: deploy.${APP_DOMAIN_BASE}/hooks/deploy-status returned HTTP ${HTTP_CODE} and the tunnel's connection count could not be read, so neither the connector nor the origin was measured."
+      ;;
+    access-refused)
+      echo "::error::SOLEUR_TUNNEL_VERIFY cause=access-refused: Cloudflare Access refused deploy-status (HTTP 403) with a live connector; the origin was not reached. Check the deploy Access policy's service token against CF_ACCESS_CLIENT_ID/SECRET."
+      ;;
+    *)
+      cat >&2 <<EOF
 ::error::deploy.${APP_DOMAIN_BASE}/hooks/deploy-status returned HTTP ${HTTP_CODE} after the ingress pin — the pinned origin ${WEB1_IP}:9000 is NOT serving. The management plane is down.
 CF's edge-generated 502 does not name the origin it failed to reach, so check, in order:
   1. web-1's private NIC is up and holds ${WEB1_IP} (a fresh boot can serve ingress before the NIC converges — ADR-114:210-213; #6557 documents attaches that land while the guest never configures the address).
   2. webhook.service is running and bound to 0.0.0.0:9000.
 Recovery: revert the ingress pin and merge. tunnel.tf applies via the Cloudflare API, NOT through the deploy. tunnel, so the revert lands even with deploy. and ssh. both dead.
 EOF
+      ;;
+  esac
   cat "$DEPLOY_STATUS_TMP" >&2 2>/dev/null || true
   exit 1
 fi

@@ -25,6 +25,11 @@
 #   f  create without the dedupe read                        Z7
 #   g  bearer in argv                                        Z8
 #   h  every row skipped                                     the row floor
+#   i  an unavailable run rewrites the open issue            Z6
+#   j  drift without ::error:: / no escalation output        Z10 / Z12
+#   k  the email step loses a leg                            W3
+#   l  drop the DoH type==2 filter                           Z11
+#   m  drop the token charset refusal                        Z13
 #
 # Run: bash plugins/soleur/test/terraform-drift-tunnel-zone-authority.test.sh
 
@@ -106,6 +111,8 @@ mk gh '
 printf "%s\n" "$*" >> "$MOCK_LOG.gh"
 case "$1 $2" in
   "issue list") [[ "${MOCK_LIST_RC:-0}" == 0 ]] || exit "$MOCK_LIST_RC"; printf "%s" "${MOCK_EXISTING:-}" ;;
+  "issue create") [[ "${MOCK_CREATE_RC:-0}" == 0 ]] || exit "$MOCK_CREATE_RC" ;;&
+  "issue comment") [[ "${MOCK_COMMENT_RC:-0}" == 0 ]] || exit "$MOCK_COMMENT_RC"; exit 0 ;;
   "issue create"|"issue edit"|"issue close"|"label create")
     for ((i=1; i<=$#; i++)); do [[ "${!i}" == --body-file ]] && { j=$((i+1)); cp "${!j}" "$MOCK_LOG.body"; }; done
     exit 0 ;;
@@ -143,6 +150,8 @@ state() { grep -E '^state=' "$GHOUT" | tail -1 | cut -d= -f2; }
 created() { grep -c '^issue create' "$LOG.gh" || true; }
 closed() { grep -c '^issue close' "$LOG.gh" || true; }
 edited() { grep -cE '^issue edit [0-9]+ --title' "$LOG.gh" || true; }
+commented() { grep -c '^issue comment' "$LOG.gh" || true; }
+escalation() { grep -E '^escalation=' "$GHOUT" | tail -1 | cut -d= -f2; }
 
 echo "=== wiring ==="
 ROWS=$((ROWS + 1))
@@ -162,6 +171,28 @@ _lint="$(python3 -I "$REPO_ROOT/scripts/lint-gh-dedupe-shape.py" --root "$TMP/li
 [[ "$_lint" == *"unclassified: 0"* ]] || _ok=0
 [[ "$_lint" =~ scanned\ 1\ file ]] || _ok=0
 check "W2: the dedupe capture passes scripts/lint-gh-dedupe-shape.py" "$_ok"
+
+ROWS=$((ROWS + 1))
+# The step is continue-on-error, so its only other channel is an email gated on drift, a failed issue write, or a failed step.
+_w3="$(python3 -I - "$WF" <<'PY'
+import sys, yaml
+for job in yaml.safe_load(open(sys.argv[1]))["jobs"].values():
+    st = job.get("steps") or []
+    for i, s in enumerate(st):
+        if s.get("id") == "tunnel_zone":
+            for e in st[i + 1:]:
+                cond = " ".join(str(e.get("if", "")).split())
+                if e.get("uses") == "./.github/actions/notify-ops-email" and "steps.tunnel_zone" in cond:
+                    print(cond)
+                    raise SystemExit(0)
+PY
+)"
+_ok=1
+[[ "$_w3" == "always() && ("* ]] || _ok=0
+for _leg in "steps.tunnel_zone.outputs.state == 'drift'" "steps.tunnel_zone.outputs.escalation == 'failed'" "steps.tunnel_zone.outcome == 'failure'"; do
+  [[ "$_w3" == *"$_leg"* ]] || _ok=0
+done
+check "W3: a notify-ops email follows the step, gated on drift, escalation=failed or a failed step (got: ${_w3:-none})" "$_ok"
 
 echo "=== must-pass ==="
 ROWS=$((ROWS + 1))
@@ -234,8 +265,15 @@ check "Z4d: a zone with empty name_servers is unavailable, never compared (state
 ROWS=$((ROWS + 1))
 run_step z6 MOCK_DOH_RC=28 MOCK_EXISTING=9
 _ok=1
-[[ "$(closed)" == 0 && "$(edited)" == 1 ]] || _ok=0
-check "Z6: an unavailable run never closes the open issue; it rewrites it" "$_ok"
+[[ "$(closed)" == 0 && "$(edited)" == 0 && "$(commented)" == 1 && "$(escalation)" == ok ]] || _ok=0
+grep -q -- '--body-file' "$LOG.gh" && _ok=0
+[[ -e "$LOG.body" ]] && _ok=0
+grep -qF 'issue comment 9 --body state=unavailable' "$LOG.gh" || _ok=0
+check "Z6: an unavailable run never closes or rewrites the open (drift) issue; it only comments" "$_ok"
+
+ROWS=$((ROWS + 1))
+run_step z6b MOCK_DOH_RC=28 MOCK_EXISTING=9 MOCK_COMMENT_RC=1
+check "Z6b: a refused unavailable comment reports escalation=failed (got $(escalation))" "$([[ "$(escalation)" == failed ]] && echo 1 || echo 0)"
 
 ROWS=$((ROWS + 1))
 run_step z7 MOCK_ZONE_JSON="$(zone_json moved laila.ns.cloudflare.com lennon.ns.cloudflare.com)" MOCK_LIST_RC=1
@@ -243,6 +281,50 @@ _ok=1
 [[ "$RC" == "0" && "$(created)" == 0 ]] || _ok=0
 grep -qF 'tunnel_zone_list_failed' "$OUT" || _ok=0
 check "Z7: an unreadable dedupe list declines to file a possible duplicate, loudly" "$_ok"
+
+ROWS=$((ROWS + 1))
+run_step z10 MOCK_ZONE_JSON="$(zone_json moved laila.ns.cloudflare.com lennon.ns.cloudflare.com)"
+_ok=1
+grep -qF "::error::tunnel_zone_drift — zone soleur.ai" "$OUT" || _ok=0
+[[ "$(escalation)" == ok ]] || _ok=0
+check "Z10: drift prints an ::error:: annotation and a filed issue reports escalation=ok" "$_ok"
+
+ROWS=$((ROWS + 1))
+run_step z12 MOCK_ZONE_JSON="$(zone_json moved laila.ns.cloudflare.com lennon.ns.cloudflare.com)" MOCK_CREATE_RC=1
+_ok=1
+[[ "$(escalation)" == failed ]] || _ok=0
+grep -qF 'tunnel_zone_escalation_failed' "$OUT" || _ok=0
+run_step z12b MOCK_LIST_RC=1
+[[ "$(escalation)" == failed ]] || _ok=0
+run_step z12c
+[[ "$(escalation)" == ok ]] || _ok=0
+check "Z12: a refused create or list reports escalation=failed; a clean healthy run reports ok" "$_ok"
+
+echo "=== hostile and malformed input ==="
+ROWS=$((ROWS + 1))
+run_step z11 MOCK_DOH_JSON='{"Status":0,"Answer":[{"name":"soleur.ai","type":2,"data":"laila.ns.cloudflare.com."},{"name":"soleur.ai","type":1,"data":"1.2.3.4"},{"name":"soleur.ai","type":2,"data":"lennon.ns.cloudflare.com."}]}'
+_ok=1
+[[ "$(state)" == healthy ]] || _ok=0
+run_step z11b MOCK_DOH_JSON='{"Status":0,"Answer":[{"name":"soleur.ai","type":5,"data":"elsewhere.example."}]}'
+[[ "$(state)" == unavailable ]] || _ok=0
+check "Z11: non-NS DoH answers are ignored (an A record beside the NS set stays healthy; CNAME-only is unavailable)" "$_ok"
+
+ROWS=$((ROWS + 1))
+_hostile=$'synth"tok\nheader = "Host: evil.example'
+run_step z13 MOCK_CF_TOKEN="$_hostile"
+_ok=1
+[[ "$(state)" == unavailable ]] || _ok=0
+grep -q 'api.cloudflare.com' "$LOG.curl" && _ok=0
+[[ -s "$LOG.stdin" ]] && _ok=0
+grep -qF 'evil.example' "$OUT" && _ok=0
+check "Z13: a token carrying a quote/newline is refused before any curl and never echoed (state=$(state))" "$_ok"
+
+ROWS=$((ROWS + 1))
+run_step z14 MOCK_ZONE_ID="0123456789abcdef/../../accounts"
+_ok=1
+[[ "$(state)" == unavailable ]] || _ok=0
+grep -q 'api.cloudflare.com' "$LOG.curl" && _ok=0
+check "Z14: a non-empty malformed zone id is unavailable and never reaches the zone URL (state=$(state))" "$_ok"
 
 ROWS=$((ROWS + 1))
 run_step z8 MOCK_ZONE_JSON="$(zone_json moved laila.ns.cloudflare.com lennon.ns.cloudflare.com)"
@@ -261,8 +343,8 @@ echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # Conservation: every row reports exactly once, so a neutered pass()/fail() breaks the
 # equality even when the row counter is intact.
-if (( ROWS < 17 || PASS + FAIL != ROWS )); then
-  echo "FATAL: only ${ROWS} rows / $((PASS + FAIL)) assertions ran, expected >= 17." >&2
+if (( ROWS < 24 || PASS + FAIL != ROWS )); then
+  echo "FATAL: only ${ROWS} rows / $((PASS + FAIL)) assertions ran, expected >= 24." >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]]

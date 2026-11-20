@@ -127,7 +127,9 @@ done
 printf '%s\n' "$url" >>"$STUB_CURL_LOG"
 case "$url" in
   */configurations) cat "$STUB_CFG_FILE" ;;
-  */connections) cat "$STUB_CONN_FILE"; printf '\n%s' "$STUB_CONN_CODE" ;;
+  */connections)
+    [[ "$url" == "https://api.cloudflare.com/client/v4/${STUB_CONN_PATH}" ]] || { printf '%s\n' "$url" >>"$STUB_REFUSED_LOG"; exit 64; }
+    cat "$STUB_CONN_FILE"; printf '\n%s' "$STUB_CONN_CODE" ;;
   */hooks/deploy-status) [[ -n "$out" ]] && printf '{"host_id":"stub-host"}' >"$out"; printf '%s' "$STUB_DEPLOY_CODE" ;;
   *) exit 7 ;;
 esac
@@ -147,9 +149,9 @@ cfg() {
 conns() { jq -nc --argjson n "$1" '{success: true, result: ([range($n)] | map({id: "c\(.)aaaaaaaa", conns: [{colo_name: "hel01", client_version: "2026.10.4"}]}))}' >"$G3/conns.json"; }
 # g3run [script] -> runs the verify with the stubs; leaves rc in G3RC, stdout+stderr in $G3/out, curl URLs in $G3/curl.log
 g3run() {
-  : >"$G3/curl.log"; : >"$G3/gh_output"; : >"$G3/gh_summary"
+  : >"$G3/curl.log"; : >"$G3/refused.log"; : >"$G3/gh_output"; : >"$G3/gh_summary"
   set +e
-  ( cd "$INFRA_ABS" && env PATH="$G3/bin:$PATH" STUB_CURL_LOG="$G3/curl.log" STUB_CFG_FILE="$G3/cfg.json" \
+  ( cd "$INFRA_ABS" && env PATH="$G3/bin:$PATH" STUB_CURL_LOG="$G3/curl.log" STUB_REFUSED_LOG="$G3/refused.log" STUB_CONN_PATH="$CONN_URL" STUB_CFG_FILE="$G3/cfg.json" \
       STUB_CONN_FILE="$G3/conns.json" STUB_CONN_CODE="${G3_CONN_CODE:-200}" STUB_DEPLOY_CODE="${G3_DEPLOY_CODE:-200}" \
       STUB_WEB1_IP="10.0.1.10" STUB_REG_EP="10.0.1.30:5000" STUB_STATE_TUNNEL_ID="$OLD_TUN" \
       STUB_TFOUT_cf_tunnel_id="${G3_TFOUT_TUN-$NEW_TUN}" STUB_TFOUT_cf_tunnel_account_id="${G3_TFOUT_ACCT-$NEW_ACCT}" \
@@ -162,8 +164,13 @@ g3run() {
 }
 g3pass() { echo "PASS: $1"; }
 g3fail() { echo "FAIL: $1"; sed 's/^/    /' "$G3/out" | tail -8; fails=1; }
-g3row() { if eval "$2"; then g3pass "$1"; else g3fail "$1"; fi; }
+g3rows=0
+g3row() { g3rows=$((g3rows + 1)); if eval "$2"; then g3pass "$1"; else g3fail "$1"; fi; }
+# Self-test, exiting directly: a neutered g3fail/g3row that never moves the fail flag would turn every row green.
+( fails=0; g3fail "self-test" >/dev/null 2>&1; [[ "$fails" -eq 1 ]] ) || { printf 'FAIL: g3fail does not set the fail flag\n'; exit 1; }
+( fails=0; g3row "self-test" false >/dev/null 2>&1; [[ "$fails" -eq 1 ]] ) || { printf 'FAIL: a false g3row predicate does not set the fail flag\n'; exit 1; }
 CFG_URL="accounts/${NEW_ACCT}/cfd_tunnel/${NEW_TUN}/configurations"
+CONN_URL="accounts/${NEW_ACCT}/cfd_tunnel/${NEW_TUN}/connections"
 # The must-PASS predicate, reused by the mutation rows: green AND the read went to the TF-output account + tunnel.
 p_reads_soleur_tunnel() { if [[ "$G3RC" -eq 0 ]] && grep -qF "$CFG_URL" "$G3/curl.log"; then return 0; fi; return 1; }
 
@@ -185,17 +192,31 @@ G3_TFOUT_ACCT="" g3run
 g3row "G3 harness: an EMPTY terraform output for cf_tunnel_account_id reds (never a skip)" '[[ "$G3RC" -ne 0 ]] && grep -qF "terraform output cf_tunnel_account_id" "$G3/out"'
 
 # 1.9: the data plane fails -> SOLEUR_TUNNEL_VERIFY names the measured cause, and the script STILL exits non-zero.
+# T1's must-hold predicate (reused by MG3-T1c): red, the no-connector line, and the census read went to the TF-output account + tunnel.
+p_t1() {
+  if [[ "$G3RC" -ne 0 ]] && grep -qxF "SOLEUR_TUNNEL_VERIFY cause=no-connector tunnel=${NEW_TUN} connections=0" "$G3/out" \
+     && grep -qF "$CONN_URL" "$G3/curl.log" && ! grep -q . "$G3/refused.log"; then return 0; fi
+  return 1
+}
 conns 0; G3_DEPLOY_CODE=530 g3run
-g3row "T1: 0 connectors -> 'SOLEUR_TUNNEL_VERIFY cause=no-connector tunnel=<id> connections=0' and a non-zero exit" \
-  '[[ "$G3RC" -ne 0 ]] && grep -qxF "SOLEUR_TUNNEL_VERIFY cause=no-connector tunnel=${NEW_TUN} connections=0" "$G3/out"'
+g3row "T1: 0 connectors -> 'SOLEUR_TUNNEL_VERIFY cause=no-connector tunnel=<id> connections=0', a non-zero exit, census read from the TF-output account + tunnel" p_t1
+g3row "T1c: ... the annotation carries the web-2 rebake remedy and never blames the origin or prescribes the pin revert" \
+  'grep -qF "::error::SOLEUR_TUNNEL_VERIFY cause=no-connector" "$G3/out" && grep -qF "web_host_key=web-2" "$G3/out" && ! grep -qF "management plane is down" "$G3/out" && ! grep -qF "revert the ingress pin" "$G3/out"'
 g3row "T1b: ... the cause reaches GITHUB_OUTPUT (the failure email reads it) and the step summary explains it" \
   'grep -qxF "cause=no-connector" "$G3/gh_output" && grep -qF "no connector" "$G3/gh_summary"'
 conns 1; G3_DEPLOY_CODE=502 g3run
 g3row "T2: a live connector but a dead origin -> cause=origin-not-serving connections=1, non-zero exit" \
   '[[ "$G3RC" -ne 0 ]] && grep -qxF "SOLEUR_TUNNEL_VERIFY cause=origin-not-serving tunnel=${NEW_TUN} connections=1" "$G3/out" && ! grep -q . "$G3/gh_summary"'
+g3row "T2b: ... and only origin-not-serving prints the origin-down annotation and the pin-revert recovery" \
+  'grep -qF "management plane is down" "$G3/out" && grep -qF "revert the ingress pin" "$G3/out"'
+G3_DEPLOY_CODE=403 g3run
+g3row "T4: a live connector and an Access 403 -> cause=access-refused (not an origin fault), non-zero exit" \
+  '[[ "$G3RC" -ne 0 ]] && grep -qxF "SOLEUR_TUNNEL_VERIFY cause=access-refused tunnel=${NEW_TUN} connections=1" "$G3/out" && grep -qxF "cause=access-refused" "$G3/gh_output" && ! grep -qF "management plane is down" "$G3/out"'
 G3_DEPLOY_CODE=000 G3_CONN_CODE=500 g3run
 g3row "T3: an unreadable connection count -> cause=connections-unreadable (never a zero), non-zero exit" \
   '[[ "$G3RC" -ne 0 ]] && grep -qxF "SOLEUR_TUNNEL_VERIFY cause=connections-unreadable tunnel=${NEW_TUN} connections=unknown" "$G3/out"'
+g3row "T3b: ... says nothing was measured, and never blames the origin" \
+  'grep -qF "neither the connector nor the origin was measured" "$G3/out" && ! grep -qF "management plane is down" "$G3/out"'
 conns 1
 
 # Mutation proof: each Guard 3 row reds when its guard is removed. The mutant runs from a mirror of the repo layout
@@ -223,11 +244,23 @@ g3row "MG3-4: a script reading the account from Doppler CF_ACCOUNT_ID again fail
 g3mut m_noreg 's = s.replace(" \"registry|tcp://${REGISTRY_ENDPOINT}\"; do", "; do", 1).replace("[[ \"$n_checked\" -eq 3 ]]", "[[ \"$n_checked\" -eq 2 ]]", 1)' || fails=1
 cfg "http://10.0.1.30:5000"; g3run "$MUT/m_noreg.sh"
 g3row "MG3-2: without the registry. pair, row 2's http:// registry rule would verify GREEN (row 2 depends on it)" '[[ "$G3RC" -eq 0 ]]'
-g3mut m_skip0 's = s.replace("  cat >&2 <<EOF\n::error::deploy.", "  [[ \"$VERIFY_CAUSE\" == \"no-connector\" ]] \x26\x26 exit 0\n  cat >&2 <<EOF\n::error::deploy.", 1)' || fails=1
+g3mut m_skip0 's = s.replace("  # Each cause gets its own annotation;", "  [[ \"$VERIFY_CAUSE\" == \"no-connector\" ]] \x26\x26 exit 0\n  # Each cause gets its own annotation;", 1)' || fails=1
 cfg "tcp://10.0.1.30:5000"; conns 0; G3_DEPLOY_CODE=530 g3run "$MUT/m_skip0.sh"
 g3row "MG3-T1: a green skip at zero connectors (the rejected advisor fork) fails T1's non-zero-exit predicate" '[[ "$G3RC" -eq 0 ]]'
+g3mut m_oldconn 's = s.replace("accounts/${TUNNEL_ACCOUNT_ID}/cfd_tunnel/${TUNNEL_ID}/connections", "accounts/$(printenv STUB_DOPPLER_CF_ACCOUNT_ID)/cfd_tunnel/${TUNNEL_ID}/connections", 1)' || fails=1
+conns 0; G3_DEPLOY_CODE=530 g3run "$MUT/m_oldconn.sh"
+g3row "MG3-T1c: a census read pointed at the old account fails T1's predicate (the stub refuses it)" '! p_t1 && grep -qF "$OLD_ACCT" "$G3/refused.log"'
 conns 1
+# An unknown census verdict must read as unmeasured. A census lib whose classifier answers a verdict the script does not know:
+mkdir -p "$G3/fv/apps/web-platform/infra/scripts" "$G3/fv/scripts"
+printf 'classify_connector_census() { echo "future_verdict 2"; }\n' >"$G3/fv/scripts/tunnel-connector-census.sh"
+cp "$TARGET" "$G3/fv/apps/web-platform/infra/scripts/v.sh"
+G3_DEPLOY_CODE=502 g3run "$G3/fv/apps/web-platform/infra/scripts/v.sh"
+g3row "T5: an unknown census verdict -> cause=connections-unreadable connections=unknown (never origin-not-serving)" \
+  '[[ "$G3RC" -ne 0 ]] && grep -qxF "SOLEUR_TUNNEL_VERIFY cause=connections-unreadable tunnel=${NEW_TUN} connections=unknown" "$G3/out"'
 
-
+# Floor, exiting directly (not through g3fail): rows that silently stop running must not read as green.
+G3_FLOOR=21
+[[ "$g3rows" -ge "$G3_FLOOR" ]] || { printf 'FAIL: only %s Guard 3 rows ran (floor %s)\n' "$g3rows" "$G3_FLOOR"; exit 1; }
 [[ "$fails" -eq 0 ]] || exit 1
 echo "OK"

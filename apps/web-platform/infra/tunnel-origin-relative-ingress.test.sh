@@ -107,9 +107,10 @@ rules_by_res="$(
     # --- pass 2: extract ingress_rule records ---
     /^resource "cloudflare_zero_trust_tunnel_cloudflared_config"/ { inres = 1; split($0, q, "\""); res = q[4] }
     inres && /ingress_rule[[:space:]]*\{/ {
-      inrule = 1; depth = 0; host = ""; svc = ""
+      inrule = 1; depth = 0; host = ""; svc = ""; orq = ""; inorq = 0
     }
     inrule {
+      if ($0 ~ /origin_request[[:space:]]*\{/) { inorq = 1; orqd = depth }
       n = gsub(/\{/, "{"); depth += n
       n = gsub(/\}/, "}"); depth -= n
       if ($0 ~ /^[[:space:]]*hostname[[:space:]]*=/) {
@@ -124,17 +125,19 @@ rules_by_res="$(
         # inner quotes of var.web_hosts["web-1"], silently defeating the var assert.
         sub(/^"/, "", svc); sub(/"[[:space:]]*$/, "", svc)
       }
+      # origin_request body, whitespace-free and blank-line-free, so AC4 compares it too (#6357 fail-fast).
+      if (inorq) { line = $0; gsub(/[[:space:]]+/, "", line); if (line != "") orq = orq line ";"; if (depth <= orqd) inorq = 0 }
       if (depth <= 0) {
-        if (svc != "") { print res "\t" host "|" svc }
+        if (svc != "") { print res "\t" host "|" svc "\t" orq }
         inrule = 0
       }
     }
   '
 )"
 
-# Each record is "<config resource name>\t<hostname>|<service>"; every assertion below reads the
-# rule half, and AC4 (#12937) compares the two config resources' rule sets.
-rules="$(cut -f2- <<<"$rules_by_res")"
+# Each record is "<config resource name>\t<hostname>|<service>\t<origin_request body>"; every assertion
+# below reads the rule field, and AC4 compares the two config resources' rule + origin_request sets.
+rules="$(cut -f2 <<<"$rules_by_res")"
 
 rule_count=0
 [[ -n "$rules" ]] && rule_count=$(printf '%s\n' "$rules" | grep -c '|') || true
@@ -200,7 +203,7 @@ done
 # The zone move re-homed the tunnel as `_config.web_soleur` beside the untouched `_config.web`. Its
 # rules must be derived from the same expressions (ADR-114 I2 holds for both) — compared as the
 # exact sorted record set, so a drifted, missing or extra rule on either side reds.
-rules_of() { awk -F'\t' -v r="$2" '$1 == r { print $2 }' <<<"$1" | LC_ALL=C sort; }
+rules_of() { awk -F'\t' -v r="$2" '$1 == r { print $2 "\t" $3 }' <<<"$1" | LC_ALL=C sort; }
 same_rules() { # <records> -> 0 when web and web_soleur hold identical, 4-rule sets
   local a b; a="$(rules_of "$1" web)"; b="$(rules_of "$1" web_soleur)"
   [[ -n "$b" && "$(grep -c . <<<"$b")" -eq 4 && "$a" == "$b" ]]
@@ -216,6 +219,17 @@ if [[ "$mut_rules" != "$rules_by_res" ]] && ! same_rules "$mut_rules"; then
 else
   fail "AC4 mutation did not land or was not caught — the comparison is vacuous"
 fi
+if grep -qxF $'web_soleur\tregistry.${var.app_domain_base}|tcp://${local.registry_endpoint}\torigin_request{;connect_timeout="5s";no_happy_eyeballs=true;};' <<<"$rules_by_res"; then
+  pass "AC4: web_soleur's registry rule carries the fail-fast origin_request (connect_timeout, no_happy_eyeballs)"
+else
+  fail "AC4: web_soleur's registry rule lost its origin_request {connect_timeout, no_happy_eyeballs} (#6357)"
+fi
+mut_rules="$(sed -E 's#^(web_soleur\tregistry\.[^\t]*\t).*#\1#' <<<"$rules_by_res")"
+if [[ "$mut_rules" != "$rules_by_res" ]] && ! same_rules "$mut_rules"; then
+  pass "AC4 mutation: a web_soleur registry rule with its origin_request deleted is caught"
+else
+  fail "AC4 origin_request mutation did not land or was not caught"
+fi
 
 # --- AC5 (#12937): the connector census reads the tunnel in the account tunnel.tf creates it in ----------
 # The id literal lives ONCE, in scripts/tunnel-connector-census.sh; the scheduled census step reads it after
@@ -223,16 +237,18 @@ fi
 P_TMP="$(mktemp -d)"
 trap 'rm -rf "$P_TMP"' EXIT
 acct_of() { grep -E '^[[:space:]]*cf_soleur_account_id[[:space:]]*=' "$1" | sed -E 's/.*"([0-9a-f]{32})".*/\1/'; }
+# The ONE parity predicate, run on the real tunnel.tf and on the mutated copy below.
+acct_parity() { local t; t="$(acct_of "$1")"; [[ -n "$t" && "$2" == "$t" ]]; }
 TF_ACCT="$(acct_of "$TF")"
 CENSUS_ACCT="$(bash -c 'source "$1" >/dev/null 2>&1; printf "%s" "${CF_TUNNEL_ACCOUNT_ID:-}"' _ "$REPO_ROOT/scripts/tunnel-connector-census.sh")"
-if [[ -n "$TF_ACCT" && "$CENSUS_ACCT" == "$TF_ACCT" ]]; then
+if acct_parity "$TF" "$CENSUS_ACCT"; then
   pass "census CF_TUNNEL_ACCOUNT_ID equals tunnel.tf local.cf_soleur_account_id"
 else
   fail "census CF_TUNNEL_ACCOUNT_ID ('$CENSUS_ACCT') differs from tunnel.tf local.cf_soleur_account_id ('$TF_ACCT')"
 fi
 sed -E 's/^([[:space:]]*cf_soleur_account_id[[:space:]]*=[[:space:]]*")[0-9a-f]{32}"/\1ffffffffffffffffffffffffffffffff"/' "$TF" >"$P_TMP/tunnel-mut.tf"
 MUT_ACCT="$(acct_of "$P_TMP/tunnel-mut.tf")"
-if [[ "$MUT_ACCT" == "ffffffffffffffffffffffffffffffff" && "$CENSUS_ACCT" != "$MUT_ACCT" ]]; then
+if [[ "$MUT_ACCT" == "ffffffffffffffffffffffffffffffff" ]] && ! acct_parity "$P_TMP/tunnel-mut.tf" "$CENSUS_ACCT"; then
   pass "AC5 mutation: a tunnel.tf account that differs from the census literal is caught"
 else
   fail "AC5 mutation did not land or was not caught"
@@ -250,6 +266,19 @@ if ! cmp -s "$CENSUS_WF" "$P_TMP/census-mut.yml" && ! reads_tunnel_acct "$P_TMP/
   pass "AC5 mutation: a census step that no longer reads CF_TUNNEL_ACCOUNT_ID is caught"
 else
   fail "AC5 census mutation did not land or was not caught"
+fi
+# The tunnel lookup skips deleted namesakes and names its HTTP code in the unavailable reason.
+lookup_ok() { local cs; cs="$(census_step "$1")"; grep -qF 'cfd_tunnel?name=soleur-web-platform&is_deleted=false"' <<<"$cs" && grep -qF 'reason=tunnel_lookup_http_${LOOKUP_CODE}"' <<<"$cs"; }
+if lookup_ok "$CENSUS_WF"; then
+  pass "the census tunnel lookup filters is_deleted=false and reports its HTTP code"
+else
+  fail "the census tunnel lookup lost is_deleted=false or its reason=tunnel_lookup_http_<code>"
+fi
+sed 's/&is_deleted=false"/"/' "$CENSUS_WF" >"$P_TMP/census-mut2.yml"
+if ! cmp -s "$CENSUS_WF" "$P_TMP/census-mut2.yml" && ! lookup_ok "$P_TMP/census-mut2.yml"; then
+  pass "AC5 mutation: a lookup without is_deleted=false is caught"
+else
+  fail "AC5 lookup mutation did not land or was not caught"
 fi
 
 # --- AC3: this guard is actually wired into CI --------------------------------------

@@ -8388,6 +8388,52 @@ function channelGuardViolations(wfText: string): string[] {
   return out;
 }
 
+describe("ci_ssh_token_replace blast-radius gate refuses a widened ci_ssh policy", () => {
+  const POLICY = "cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur";
+  const TOKEN = "cloudflare_zero_trust_access_service_token.ci_ssh_soleur";
+  const APP = "cloudflare_zero_trust_access_application.ssh_soleur";
+  const gate = (() => {
+    const doc = parseYaml(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")) as { jobs: Record<string, { steps: Array<Record<string, unknown>> }> };
+    const step = doc.jobs.ci_ssh_token_replace.steps.find((s) => s.name === "Blast-radius gate (reads the PLAN, not the flags)");
+    const m = /<<'PY'\n([\s\S]*?)\nPY\n/.exec(String(step?.run ?? ""));
+    return m ? m[1] : "";
+  })();
+  const inc = (extra: Record<string, unknown> = {}) => ({ service_token: [null], everyone: false, email: [], group: [], ...extra });
+  const run = (policyAfter: Record<string, unknown>) => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-ssh-gate-"));
+    try {
+      writeFileSync(join(dir, "gate.py"), gate);
+      writeFileSync(join(dir, "plan.json"), JSON.stringify({ resource_changes: [
+        { address: TOKEN, type: "cloudflare_zero_trust_access_service_token", change: { actions: ["create", "delete"], after: {} } },
+        { address: POLICY, type: "cloudflare_zero_trust_access_policy", change: { actions: ["update"], after: policyAfter } },
+        { address: APP, type: "cloudflare_zero_trust_access_application", change: { actions: ["update"], after: { session_duration: "24h" } } },
+      ] }));
+      const r = spawnSync("python3", ["-I", join(dir, "gate.py"), join(dir, "plan.json")], { encoding: "utf8" });
+      return { rc: r.status, out: `${r.stdout}${r.stderr}` };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  test("the gate body was extracted", () => {
+    expect(gate).toContain("REPLACE_TARGET");
+  });
+  test("a token-only re-point passes (the app update is not a policy)", () => {
+    const r = run({ decision: "non_identity", include: [inc()] });
+    expect(r.out).toContain("Blast-radius gate passed");
+    expect(r.rc).toBe(0);
+  });
+  test.each([
+    ["everyone = true", { decision: "non_identity", include: [inc({ everyone: true })] }],
+    ["an email include", { decision: "non_identity", include: [inc({ email: ["x@example.com"] })] }],
+    ["a second include block", { decision: "non_identity", include: [inc(), { everyone: true }] }],
+    ["decision = allow", { decision: "allow", include: [inc()] }],
+  ])("refuses a policy update with %s", (_label, after) => {
+    const r = run(after as Record<string, unknown>);
+    expect(r.out).toContain("the ci_ssh policy widens past its token");
+    expect(r.rc).toBe(1);
+  });
+});
+
 describe("apply-web-platform-infra has a failure channel", () => {
   const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
   const doc = parseYaml(wf) as {
@@ -8503,6 +8549,23 @@ describe("apply-web-platform-infra has a failure channel", () => {
     expect(String((cause!.env as Record<string, string>).TUNNEL_VERIFY_CAUSE)).toBe("${{ needs.apply.outputs.tunnel_verify_cause }}");
     expect(body).toMatch(/case "\$\{TUNNEL_VERIFY_CAUSE:-\}" in\n\s+no-connector\)/);
     expect(body).not.toMatch(/\$\{?TUNNEL_VERIFY_CAUSE[^:]/);
+  });
+
+  test("AC2e: the job output reads the verify step's cause, and the email arms every cause the script can emit", () => {
+    const apply = (doc.jobs as Record<string, { outputs?: Record<string, string>; steps?: Array<Record<string, unknown>> }>)?.apply;
+    const verify = (apply?.steps ?? []).find((s) => s.id === "tunnel_verify");
+    expect(verify).toBeDefined();
+    expect(String(verify!.run)).toContain("apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh");
+    expect(apply!.outputs?.tunnel_verify_cause).toBe("${{ steps.tunnel_verify.outputs.cause }}");
+    const script = readFileSync(resolve(REPO_ROOT, "apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh"), "utf8");
+    const produced = [...new Set([...script.matchAll(/VERIFY_CAUSE="([a-z-]+)"/g)].map((m) => m[1]))].sort();
+    expect(produced).toEqual(["access-refused", "connections-unreadable", "no-connector", "origin-not-serving"]);
+    const body = String((job!.steps ?? []).find((s) => s.id === "cause")!.run ?? "");
+    const arms = [...body.matchAll(/^\s+([a-z-]+)\)\n\s+action_msg="\$\{action_msg\} <strong>Cause: ([a-z-]+)\.<\/strong>/gm)]
+      .filter((m) => m[1] === m[2])
+      .map((m) => m[1])
+      .sort();
+    expect(arms).toEqual(produced);
   });
 
   /** The `case "$swept"` table that resolves the sweep prose, as {value: sentence}. */
