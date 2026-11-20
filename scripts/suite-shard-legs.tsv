@@ -1,12 +1,12 @@
-# suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
-# n=8
+# default-weight-ms=1802
+# generated-at=2026-11-20T09:35:38Z
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1800
-# generated-at=2026-11-20T17:18:48Z
 # generator=regenerate-shard-manifest.py v3
+# n=8
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
+# suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 .claude/hooks/agent-token-tee.test.sh	3
 .claude/hooks/background-poll-prefer-monitor.test.sh	7
 .claude/hooks/bare-head-self-heal.test.sh	1
@@ -249,6 +249,7 @@ plugins/soleur/test/go-hold-routing.test.sh	5
 plugins/soleur/test/go-routing-table-parity.test.sh	1
 plugins/soleur/test/go-session-gates.test.sh	5
 plugins/soleur/test/harvest-debt.test.sh	2
+plugins/soleur/test/health-colo-falsification.test.sh	7
 plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh	6
 plugins/soleur/test/hold-gate-eval.test.sh	6
 plugins/soleur/test/hook-git-env-coverage.test.sh	6
@@ -459,6 +460,7 @@ scripts/git-data-reboot-evidence-landed-8210	6
 scripts/git-data-rehearsal-evidence-8211	1
 scripts/git-data-replication-signal-11704	3
 scripts/guard-vacuity-floor	7
+scripts/health-colo-capture-12846	3
 scripts/host-kernel-cadence-12008	2
 scripts/host-tcp-exposure	2
 scripts/hosted-destroy-ask-window-9776	8
