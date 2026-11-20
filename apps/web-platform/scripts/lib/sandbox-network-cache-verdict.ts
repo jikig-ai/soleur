@@ -368,8 +368,12 @@ export interface Identity {
   logname?: string;
   host?: string;
 }
+/**
+ * The operator's identity. The script runs this module under `env -i` with HOME pointed at a scratch dir, so it passes
+ * the real home as REMEASURE_IDENTITY_HOME; without it the home-path check would compare against the scratch HOME.
+ */
 export const currentIdentity = (): Identity => ({
-  home: process.env.HOME,
+  home: process.env.REMEASURE_IDENTITY_HOME || process.env.HOME,
   user: process.env.USER,
   logname: process.env.LOGNAME,
   host: hostname(),

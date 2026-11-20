@@ -561,6 +561,14 @@ describe("CLI: --out, --markdown and sentinel redaction", () => {
     expect(stdout).toMatch(/^REMEASURE verdict=ERROR exit=1 reason=redaction-refused:user /m);
     expect(existsSync(join(dir, "verdict.json"))).toBe(false);
   });
+  it("the real home passed as REMEASURE_IDENTITY_HOME is refused even when HOME is the scratch npm-home", async () => {
+    vi.stubEnv("HOME", "/var/tmp/zzscratch/npm-home");
+    vi.stubEnv("REMEASURE_IDENTITY_HOME", "/home/zzfixturehome");
+    const { code, stdout } = await runMain(harnessRun({ mut: (_s, a) => (a.get("B")!.gateway[0].line = "CONNECT /home/zzfixturehome/x HTTP/1.1") }));
+    expect(code).toBe(1);
+    expect(stdout).toMatch(/^REMEASURE verdict=ERROR exit=1 reason=redaction-refused:home /m);
+    expect(existsSync(join(dir, "verdict.json"))).toBe(false);
+  });
   it("table prints one `<VERDICT>\\t<next>` line per verdict, in precedence order, from NEXT", async () => {
     const out: string[] = [];
     expect(await main(["table"], (s) => out.push(s))).toBe(0);

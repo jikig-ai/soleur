@@ -259,10 +259,11 @@ npmx() { # the hardened npm environment: no ~/.npmrc, no shared cache, explicit 
 read_json() {
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=process.argv.slice(1).reduce((o,k)=>o==null?undefined:o[k],JSON.parse(s));process.stdout.write(v==null?"":typeof v==="object"?JSON.stringify(v):String(v))}catch{}})' "$@"
 }
-# The classifier, under a clean environment (no operator NODE_OPTIONS, tsx or npm settings). USER and LOGNAME pass
-# through so its redaction check still knows whose name must not appear in a record.
+# The classifier, under a clean environment (no operator NODE_OPTIONS, tsx or npm settings). USER, LOGNAME and the
+# real home (as REMEASURE_IDENTITY_HOME) pass through so its redaction check still knows what must not appear in a record.
 classifier() {
   (cd "$APP" && env -i PATH="$PATH" HOME="$scratch/npm-home" USER="${USER:-}" LOGNAME="${LOGNAME:-}" \
+    REMEASURE_IDENTITY_HOME="$HOME" \
     "$TSX" --tsconfig "$APP/tsconfig.json" "$CLASSIFIER" "$@")
 }
 
