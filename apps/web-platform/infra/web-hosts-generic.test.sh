@@ -211,7 +211,7 @@ eq "parity: every workflow WEB_HOST_PRIVATE_IP copy is the jump host's address, 
 count_lit() { # count_lit <ERE>
   (cd "$ROOT" && git ls-files -z -- ':!knowledge-base/**' ':!*.md' ":!$SELF_REL" | xargs -0 grep -ohE "$1" 2>/dev/null | wc -l | tr -d ' ')
 }
-IP_CEIL=317  # re-baselined at the origin/main merge (f6c475f15b): +9 from main's placement-decision-forward-9137 follow-through test (+43 at 4aadbe8109); -1 at #12910 review round 2 (measured 317)
+IP_CEIL=318  # re-baselined at the origin/main merge (f6c475f15b): +9 from main's placement-decision-forward-9137 follow-through test (+43 at 4aadbe8109); -1 at #12910 review round 2 (measured 317); +1 at the second #12910 main merge (c265041716): the bastion-lint.py comment from #12873 (measured 318)
 N_IP="$(count_lit '10\.0\.1\.10([^0-9]|$)')"
 cases=$((cases + 1))
 if [[ "$N_IP" -le "$IP_CEIL" && "$N_IP" -gt 0 ]]; then pass "ratchet: web-1 private-IP literal count $N_IP <= $IP_CEIL"; else fail "ratchet: web-1 private-IP literal count $N_IP exceeds the ceiling $IP_CEIL (or reads 0 - lower the ceiling to 0 deliberately)"; fi
