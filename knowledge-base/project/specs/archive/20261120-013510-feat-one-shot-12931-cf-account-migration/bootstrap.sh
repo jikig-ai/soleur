@@ -70,11 +70,11 @@ set -f
 # SOLEUR-STAGE inventory|read|Nothing changes: this lists which Doppler configs hold the Cloudflare id and token names, names only.|None needed.
 # SOLEUR-STAGE prev-0a|write|Doppler prd_terraform gets revert copies (KEY_PREV) of the old zone id, the old account id and the three redirects-dns tokens; nothing reads them yet.|Delete the new _PREV keys in Doppler prd_terraform; nothing else changed.
 # SOLEUR-STAGE flip-ids|write|Terraform's Doppler config switches to the new Cloudflare zone and account, so routine plans of the web-platform root stay stopped until the migration completes.|Before the redirects-dns apply only, copy CF_ZONE_ID_PREV and CF_ACCOUNT_ID_PREV back (runbook Halt section); after that apply, fix forward.
-# SOLEUR-STAGE swap-0a|write|After a non-mutating scope probe, the three redirects-dns token keys in Doppler prd_terraform take the new-account tokens and their staging copies are deleted.|Copy each KEY_PREV back over KEY in Doppler prd_terraform.
-# SOLEUR-STAGE branch-copies-zone-id|write|Every other Doppler config that holds CF_ZONE_ID gets the new zone id; running containers keep the old one until their next redeploy.|Before the redirects-dns apply only, write the old zone id back to those configs; after it, fix forward.
+# SOLEUR-STAGE swap-0a|write|After a non-mutating scope probe, the three redirects-dns token keys in Doppler prd_terraform take the new-account tokens and their staging copies are deleted.|Until the KEY_PREV revoke only, copy each KEY_PREV back over KEY in Doppler prd_terraform; after that revoke the old token is dead, so fix forward.
+# SOLEUR-STAGE branch-copies-zone-id|write|Every other Doppler config that holds CF_ZONE_ID gets the new zone id; running containers keep the old one until their next redeploy.|None in these configs: they stay on the new zone id, and the runbook revert restores prd_terraform only; fix forward.
 # SOLEUR-STAGE prev-0b|write|Doppler prd_terraform gets revert copies (KEY_PREV) of the four zone-rest and runtime tokens; nothing reads them yet.|Delete the new _PREV keys in Doppler prd_terraform; nothing else changed.
-# SOLEUR-STAGE swap-0b|write|After a non-mutating scope probe and an active-token check, the four zone-rest and runtime token keys in Doppler prd_terraform take the new-account tokens and their staging copies are deleted.|Copy each KEY_PREV back over KEY in Doppler prd_terraform.
-# SOLEUR-STAGE branch-copies-tokens|write|Every other Doppler config that holds CF_API_TOKEN_PURGE or CF_API_TOKEN_DNS_EDIT gets the new token from prd_terraform; containers pick it up at their next redeploy.|Copy the prd_terraform KEY_PREV value back into those configs.
+# SOLEUR-STAGE swap-0b|write|After a non-mutating scope probe and an active-token check, the four zone-rest and runtime token keys in Doppler prd_terraform take the new-account tokens and their staging copies are deleted.|Until the KEY_PREV revoke only, copy each KEY_PREV back over KEY in Doppler prd_terraform; after that revoke the old token is dead, so fix forward.
+# SOLEUR-STAGE branch-copies-tokens|write|Every other Doppler config that holds CF_API_TOKEN_PURGE or CF_API_TOKEN_DNS_EDIT gets the new token from prd_terraform; containers pick it up at their next redeploy.|Fix forward: copying the old token back would re-arm the old-zone writer that the KEY_PREV revoke exists to stop, so do it only as part of the full runbook revert and before that revoke.
 # SOLEUR-STAGE verify|read|Nothing changes: this checks every id and token the stages wrote, by name and verdict only.|None needed.
 
 # `--list` is a STATIC read of the table above: no library, no credentials, no
@@ -330,21 +330,35 @@ trap on_exit EXIT
 # CONTRACT (what the guards pin; tests/scripts/test-cf-account-migration-bootstrap.sh):
 #   - a value is read byte-exact: plain_get drops exactly the CLI's one trailing newline, and id_of
 #     sees the same bytes (an id stored as `hex\n` is refused);
-#   - every bearer call passes ONE character check first (token_chars_ok), so a token value can never
-#     add a curl config line;
-#   - a revert copy is accepted by its VALUE, never its name; a swap overwrites only a key that still
-#     holds its revert copy, stops at the first failed copy, and deletes a _NEXT only after the live
-#     key reads back equal to it;
-#   - verify calls a token key swapped only when its _PREV differs from it, or, with _PREV revoked,
-#     when the live key is active AND reads the new zone (an old token is active until revoked);
-#   - branch copies replace only the legacy id or the old token, never a third value.
+#   - a token value can never add a curl config line: bearer_config builds the whole config (the
+#     header line and the url line) from ONE Doppler read, in one awk pass that emits nothing when the
+#     value is empty, has a byte outside the class, or has a second line. token_chars_ok runs the same
+#     pass first only to print MALFORMED and skip the curl process; it is not the boundary;
+#   - a transport failure (curl rc != 0) is its own outcome, SOLEUR_CFAM_TOKEN_UNREACHABLE (retry),
+#     never read as "not active" or "old";
+#   - a revert copy is accepted by its VALUE, never its name; a fresh one is never taken from a <KEY>
+#     that already equals its staged <KEY>_NEXT; a swap overwrites only a key that still holds its
+#     revert copy, stops at the first failed copy, and deletes a _NEXT only after the live key reads
+#     back equal to it;
+#   - verify calls a token key swapped only when both it and its _PREV read and differ, or, with _PREV
+#     revoked, when the key is a NEW-account token (token_is_new): the key's own read (TOKEN_READS,
+#     the job's token_probe_path plus the two runtime keys) answers success on the NEW zone/account
+#     AND does not on the OLD one. Reading NEW alone is not enough: an old token scoped to "All zones"
+#     reads both once the operator's user is a member of the new account;
+#   - branch copies replace only the legacy id or the old token, never a third value;
+#   - no write stage plans while a cf-account-migrate.yml run is queued or in progress (the job
+#     re-reads Doppler mid-run), and a gh that cannot answer refuses too (SOLEUR_CFAM_RUN_IN_FLIGHT).
 # RESIDUALS (left to review and the runbook, not closed here):
 #   - verify cannot see a hand-edited _PREV restored to a NEW value: with _PREV present it compares
 #     digests only (no network), so <KEY> != <KEY>_PREV reads ok whichever of the two is old;
-#   - prev_copy_sound with no <KEY>_NEXT staged accepts any readable non-empty _PREV: a junk _PREV is
-#     indistinguishable from the legitimate post-swap state without a network read of the old token;
-#   - token_reads_new_zone proves the key reads the NEW zone, not that it carries every permission its
-#     phase needs (the swap's scope probe owns that, before the write).
+#   - prev_copy_sound accepts any readable non-empty _PREV with no <KEY>_NEXT staged, or with <KEY>
+#     already equal to its staged <KEY>_NEXT (an interrupted swap): a junk _PREV is then
+#     indistinguishable from the legitimate state without a network read of the old token;
+#   - token_is_new rests on the plan's scoping of the NEW tokens (the new account and zone only, never
+#     "All zones"/"All accounts"). If the OLD zone or account stops existing, the OLD-read half answers
+#     not-success for every token and the test reduces to "reads NEW";
+#   - token_is_new proves the key's one read, not that it carries every permission its phase needs
+#     (the swap's scope probe owns that, before the write).
 
 readonly PROJ="soleur"
 readonly TFC="prd_terraform"
@@ -365,6 +379,8 @@ readonly BRANCH_TOKENS=(CF_API_TOKEN_PURGE CF_API_TOKEN_DNS_EDIT)
 readonly WATCHED=(CF_ZONE_ID CF_ACCOUNT_ID CF_R2_ACCOUNT_ID CF_API_TOKEN_SOLEUR_ACCT "${KEYS_0A[@]}" "${KEYS_0B[@]}")
 readonly INVENTORY_REL="apps/web-platform/infra/doppler-config-inventory.txt"
 readonly SCOPE_REL="plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh"
+readonly MIGRATE_WF="cf-account-migrate.yml"
+readonly CF_API="https://api.cloudflare.com/client/v4"
 EMPTY_SHA="$(printf '' | soleur_approval_sha256)"
 readonly EMPTY_SHA
 
@@ -446,6 +462,25 @@ require_flipped() {
     || soleur_op_precondition_failed "$1" flip-ids "Doppler ${TFC} does not hold the new zone and account ids yet. Run the flip-ids stage first; nothing was changed."
 }
 
+# require_no_run_in_flight <stage> — no cf-account-migrate.yml run is queued or in progress. The job
+# re-reads Doppler several times in one run, so a write while it runs changes what it reads mid-run.
+# Every status but `completed` counts as in flight (queued, in_progress, waiting, requested, pending,
+# and any status GitHub adds later). Fails CLOSED: no repository root, no gh, a failed `gh run list`
+# or an answer that is not a list of runs refuses with runs=unknown. Prints
+# SOLEUR_CFAM_RUN_IN_FLIGHT stage=<s> workflow=<wf> runs=<n|unknown>, then refuses the stage.
+require_no_run_in_flight() {
+  local root out n
+  if root="$(repo_root)" && command -v gh >/dev/null 2>&1 \
+     && out="$(cd "$root" && gh run list --workflow "$MIGRATE_WF" --limit 50 --json status 2>/dev/null)" \
+     && n="$(jq -er 'if type == "array" and all(.[]; type == "object" and (.status | type) == "string") then [.[] | select(.status != "completed")] | length else error("not a run list") end' <<<"$out" 2>/dev/null)"; then
+    [[ "$n" -eq 0 ]] && return 0
+    printf 'SOLEUR_CFAM_RUN_IN_FLIGHT stage=%s workflow=%s runs=%s\n' "$1" "$MIGRATE_WF" "$n"
+    soleur_op_precondition_failed "$1" "$1" "A ${MIGRATE_WF} run is queued or in progress, and it re-reads Doppler while it runs, so a write now could change what it reads mid-run. Wait until no run of it is in flight (gh run list --workflow ${MIGRATE_WF}), then run this stage again; nothing was changed."
+  fi
+  printf 'SOLEUR_CFAM_RUN_IN_FLIGHT stage=%s workflow=%s runs=unknown\n' "$1" "$MIGRATE_WF"
+  soleur_op_precondition_failed "$1" "$1" "gh could not list the ${MIGRATE_WF} runs (not installed, not signed in, or the API failed), so a run in flight cannot be ruled out and this stage refuses rather than guess. Fix gh (gh auth status), then run this stage again; nothing was changed."
+}
+
 # --- write helpers (apply only; each verifies by a separate read) --------------
 
 # copy_secret <src-cfg> <src-name> <dst-cfg> <dst-name> — value on stdin end to end, never in a
@@ -468,48 +503,92 @@ set_id() {
   printf 'SOLEUR_CFAM_ID_SET target=%s/%s prefix=%s verified=readback\n' "$1" "$2" "${3:0:8}"
 }
 
-# token_chars_ok <cfg> <name> — the ONE character check every bearer call passes first. rc 0 safe;
-# rc 2 malformed (prints SOLEUR_CFAM_TOKEN_MALFORMED; the caller makes no network call); rc 1
-# unreadable. The value is spliced into a curl config line, so a quote or newline in it would add
-# config (a second URL that also receives the header). Same character class as the migrate job's
-# preflight; counted with tr so the value never lands in a variable and the pipe drains fully.
-# plain_get drops only the CLI's own trailing newline, so an EMBEDDED newline still counts as bad.
-# Never add \n to this class: a second config line could send the bearer to another URL.
+# bearer_config <cfg> <name> <url> — the WHOLE curl config of one bearer GET, built from ONE Doppler
+# read: `header = "Authorization: Bearer <v>"` and `url = "<url>"`. The awk pass validates and emits
+# at once: an empty value, a byte outside the migrate job's class, or a second line (the trailing
+# printf makes a stored trailing newline a second, empty line) emits NOTHING, so curl gets no URL
+# and sends no request. The pass reads to EOF (no early exit), so the reader never takes a SIGPIPE
+# that would pass for a failed read. rc 0 emitted; rc 1 the read failed; rc 2 malformed. Safe in any
+# errexit context: the pipeline's statuses are taken inside a `|| true` group. Never widen the class
+# to \n or `"`: either would let a value add a config line.
+readonly BEARER_AWK='NR == 1 && /^[A-Za-z0-9._~+\/=-]+$/ { t = $0; next } { bad = 1 } END { if (bad || NR != 1) exit 3; printf "header = \"Authorization: Bearer %s\"\nurl = \"%s\"\n", t, u }'
+bearer_config() {
+  local -a ps=()
+  { { plain_get "$1" "$2" && printf '\n'; } | LC_ALL=C awk -v u="$3" "$BEARER_AWK"; ps=("${PIPESTATUS[@]}"); } || true
+  [[ "${ps[0]:-1}" -eq 0 ]] || return 1
+  [[ "${ps[1]:-1}" -eq 0 ]] || return 2
+}
+
+# token_chars_ok <cfg> <name> — the up-front verdict: the same pass with its output discarded. rc 0
+# well-formed; rc 2 malformed (prints SOLEUR_CFAM_TOKEN_MALFORMED; no curl process is started); rc 1
+# unreadable. NOT the injection boundary (bearer_config re-checks the value it actually sends).
 token_chars_ok() {
-  local bad
-  bad="$(set -o pipefail; plain_get "$1" "$2" | LC_ALL=C tr -d 'A-Za-z0-9._~+/=-' | wc -c)" || return 1
-  [[ "$bad" -eq 0 ]] || { printf 'SOLEUR_CFAM_TOKEN_MALFORMED name=%s\n' "$2"; return 2; }
+  local rc=0
+  bearer_config "$1" "$2" "" >/dev/null || rc=$?
+  [[ "$rc" -ne 2 ]] || printf 'SOLEUR_CFAM_TOKEN_MALFORMED name=%s\n' "$2"
+  return "$rc"
 }
 
 # bearer_get <cfg> <name> <url> — GET <url> with the key's value as the bearer; the response body on
-# stdout. The bearer travels on curl's stdin config as the ONLY config line, never argv and never a
-# shell variable. Call only after token_chars_ok returned 0.
+# stdout. The bearer travels on curl's stdin config, never argv and never a shell variable. rc 0
+# answered (any HTTP status: no --fail); rc 1 unreadable; rc 2 malformed at this read; rc 100+<curl
+# rc> a transport failure (DNS, connect, TLS, timeout), kept distinct so a caller never reads it as
+# an answer.
 bearer_get() {
-  { printf 'header = "Authorization: Bearer '; plain_get "$1" "$2"; printf '"\n'; } \
-    | curl --disable --noproxy '*' -sS --max-time 30 --config - "$3" 2>/dev/null
+  local -a ps=()
+  { bearer_config "$1" "$2" "$3" | curl --disable --noproxy '*' -sS --max-time 30 --config - 2>/dev/null; ps=("${PIPESTATUS[@]}"); } || true
+  [[ "${ps[0]:-1}" -eq 0 ]] || return "${ps[0]:-1}"
+  [[ "${ps[1]:-1}" -eq 0 ]] || return $((100 + ps[1]))
 }
 
-# token_active <cfg> <name> — /user/tokens/verify says success and active. rc 0 active; rc 2
-# malformed (no network call); rc 1 anything else (unreadable, inactive). NOT proof of a new token:
-# an old token is active too until it is revoked (token_reads_new_zone tells the two apart).
-token_active() {
+# token_read <cfg> <name> <url> <jq-filter> — one bearer GET judged by <jq-filter>. rc 0 the API
+# answered and the filter holds; rc 1 it answered and the filter does not (403, success:false); rc 2
+# malformed (MALFORMED printed); rc 3 unreachable (prints SOLEUR_CFAM_TOKEN_UNREACHABLE name=<name>
+# e=<curl rc>: retry, never re-mint); rc 4 unreadable.
+token_read() {
   local out rc=0
   token_chars_ok "$1" "$2" || rc=$?
-  [[ "$rc" -eq 0 ]] || return "$rc"
-  out="$(bearer_get "$1" "$2" https://api.cloudflare.com/client/v4/user/tokens/verify)" || return 1
-  jq -e '.success == true and .result.status == "active"' >/dev/null 2>&1 <<<"$out"
+  case "$rc" in 0) ;; 2) return 2 ;; *) return 4 ;; esac
+  out="$(bearer_get "$1" "$2" "$3")" || rc=$?
+  case "$rc" in
+    0) jq -e "$4" >/dev/null 2>&1 <<<"$out" && return 0; return 1 ;;
+    1) return 4 ;;
+    2) printf 'SOLEUR_CFAM_TOKEN_MALFORMED name=%s\n' "$2"; return 2 ;;
+    *) printf 'SOLEUR_CFAM_TOKEN_UNREACHABLE name=%s e=%s\n' "$2" "$((rc - 100))"; return 3 ;;
+  esac
 }
 
-# token_reads_new_zone <cfg> <name> — GET /zones/<NEW_ZONE> answers success with that zone's own id.
-# Only a token minted on the NEW account can: the old tokens are scoped to the old zone (runbook Halt
-# 'a revert copy is not sound' uses the same read). rc 0 reads it; rc 2 malformed (no network call);
-# rc 1 anything else (unreadable, 403, success:false, another zone's id).
-token_reads_new_zone() {
-  local out rc=0
-  token_chars_ok "$1" "$2" || rc=$?
-  [[ "$rc" -eq 0 ]] || return "$rc"
-  out="$(bearer_get "$1" "$2" "https://api.cloudflare.com/client/v4/zones/${NEW_ZONE}")" || return 1
-  jq -e --arg z "$NEW_ZONE" '.success == true and .result.id == $z' >/dev/null 2>&1 <<<"$out"
+# token_active <cfg> <name> — /user/tokens/verify says success and active (token_read's rc). NOT
+# proof of a new token: an old token is active too until it is revoked.
+token_active() { token_read "$1" "$2" "${CF_API}/user/tokens/verify" '.success == true and .result.status == "active"'; }
+
+# TOKEN_READS (token_read_path <key> <zone> <account>) — the one read each key's OWN grant answers.
+# The five Terraform keys mirror the job's token_probe_path; DNS_EDIT and PURGE (runtime only) read
+# their own resource. A zone read is not universal: the Pages token is account-scoped and gets 9109
+# on /zones/<id>. An unknown key has no read (rc 1, fail closed).
+token_read_path() {
+  case "$1" in
+    CF_API_TOKEN|CF_API_TOKEN_DNS_EDIT) printf 'zones/%s/dns_records?per_page=1' "$2" ;;
+    CF_API_TOKEN_RULESETS) printf 'zones/%s/rulesets' "$2" ;;
+    CF_API_TOKEN_PAGES) printf 'accounts/%s/pages/projects' "$3" ;;
+    CF_API_TOKEN_ZONE_SETTINGS) printf 'zones/%s/settings' "$2" ;;
+    CF_API_TOKEN_BOT_MANAGEMENT) printf 'zones/%s/bot_management' "$2" ;;
+    CF_API_TOKEN_PURGE) printf 'zones/%s' "$2" ;;
+    *) return 1 ;;
+  esac
+}
+
+# token_is_new <cfg> <key> — <key> holds a NEW-account token: its own read answers success on the
+# NEW zone/account AND does not on the OLD one. rc 0 new; rc 1 not new (fails the NEW read, or also
+# reads the OLD resource: an old "All zones" token); rc 2 malformed; rc 3 unreachable (either read;
+# never "old"); rc 4 unreadable or a key with no read. Success on a read implies an active token
+# (a revoked, expired or disabled token answers no read), so no separate verify call is made.
+token_is_new() {
+  local np op rc=0
+  np="$(token_read_path "$2" "$NEW_ZONE" "$NEW_ACCT")" && op="$(token_read_path "$2" "$OLD_ZONE" "$OLD_ACCT")" || return 4
+  token_read "$1" "$2" "${CF_API}/${np}" '.success == true' || return $?
+  token_read "$1" "$2" "${CF_API}/${op}" '.success == true' || rc=$?
+  case "$rc" in 0) return 1 ;; 1) return 0 ;; *) return "$rc" ;; esac
 }
 
 # run_scope_probe <profile> — the non-mutating new-account write probe on the STAGED keys. Any
@@ -552,8 +631,12 @@ PREV_KEYS=()
 # prev stage only when it provably holds the old value: the legacy id for an id key; for a token,
 # a readable non-empty copy that, while <KEY>_NEXT is still staged and unswapped, equals <KEY>.
 # A name alone is not a copy: a failed or interrupted write leaves the name with the wrong value.
-# RESIDUAL (stated, not closed): with no <KEY>_NEXT staged, a junk _PREV cannot be told apart from a
-# legitimate post-swap state (<KEY> already new, _PREV old) without a network check of the old token.
+# RESIDUAL (stated, not closed): with no <KEY>_NEXT staged, or with <KEY> already equal to its staged
+# <KEY>_NEXT (an interrupted swap), a junk _PREV cannot be told apart from the legitimate state
+# (<KEY> new, _PREV old) without a network check of the old token.
+# OLD_NEW_HINT — the one way to tell an old token from a new one, named by every "copy neither way"
+# refusal: status cannot (both verify active), the key's own read (TOKEN_READS) can.
+readonly OLD_NEW_HINT="Both an old and a new token verify active, so status cannot tell them apart: run the key's own read on each value (runbook Halt 'a revert copy is not sound'); the NEW token is the one that answers on the new zone or account and NOT on the old one, and the other is the old token."
 prev_copy_sound() {
   local stage="$1" k="$2" want dp dk dn
   case "$k" in
@@ -567,12 +650,12 @@ prev_copy_sound() {
       if in_names "${k}_NEXT" "$TF_NAMES"; then
         dk="$(digest_of "$TFC" "$k" || true)"; dn="$(digest_of "$TFC" "${k}_NEXT" || true)"
         [[ -n "$dk" && ( "$dk" == "$dp" || "$dk" == "$dn" ) ]] \
-          || soleur_op_precondition_failed "$stage" inventory "${TFC}: neither ${k}_PREV nor ${k}_NEXT equals ${k}, so one of ${k} / ${k}_PREV is not the old token; copy neither way. Both an old and a new token verify active, so status cannot tell them apart: the one that does NOT read the new zone (runbook Halt 'a revert copy is not sound') is the old token. Nothing was changed."
+          || soleur_op_precondition_failed "$stage" inventory "${TFC}: neither ${k}_PREV nor ${k}_NEXT equals ${k}, so one of ${k} / ${k}_PREV is not the old token; copy neither way. ${OLD_NEW_HINT} Nothing was changed."
       fi ;;
   esac
 }
 prev_plan_common() { # <stage> <keys...>
-  local stage="$1" k v want; shift
+  local stage="$1" k v want dk; shift
   PREV_KEYS=()
   require_tf_names "$stage"
   for k in "$@"; do
@@ -589,8 +672,12 @@ prev_plan_common() { # <stage> <keys...>
       *)
         in_names "${k}_NEXT" "$TF_NAMES" \
           || soleur_op_precondition_failed "$stage" inventory "No ${k}_NEXT is staged, so ${k} may already hold a new token and a copy would not be the old one. Mint the token into ${k}_NEXT first (runbook Phase 0); nothing was changed."
-        digest_of "$TFC" "$k" >/dev/null \
-          || soleur_op_precondition_failed "$stage" inventory "${TFC}/${k} is unreadable or empty. Nothing was changed." ;;
+        dk="$(digest_of "$TFC" "$k")" \
+          || soleur_op_precondition_failed "$stage" inventory "${TFC}/${k} is unreadable or empty. Nothing was changed."
+        # <KEY> already equal to the staged token (a hand copy, a mis-aimed re-stage): a copy now
+        # would certify the NEW token as the revert copy, and swap's delete branch would accept it.
+        [[ "$dk" != "$(digest_of "$TFC" "${k}_NEXT" || true)" ]] \
+          || soleur_op_precondition_failed "$stage" inventory "${TFC}/${k} already equals the staged ${k}_NEXT and no ${k}_PREV exists, so ${k} may no longer hold the old token and a copy would not be a revert copy; copy neither way. Find the old token before any write. ${OLD_NEW_HINT} Nothing was changed." ;;
     esac
     soleur_op_plan_op copy-to-revert-key "${TFC}/${k}->${k}_PREV"
     PREV_KEYS[${#PREV_KEYS[@]}]="$k"
@@ -662,7 +749,7 @@ swap_plan_common() { # <stage> <prev-stage> <keys...>
         # Overwrite only a key that still holds its revert copy: anything else (a write that did not
         # read back equal) would be lost, and the copy would no longer be provably the old token.
         [[ "$dk" == "$dp" ]] \
-          || soleur_op_precondition_failed "$stage" inventory "${TFC}/${k} holds neither its revert copy ${k}_PREV nor the staged ${k}_NEXT, so one of ${k} / ${k}_PREV is not the old token; copy neither way. Both an old and a new token verify active, so status cannot tell them apart: the one that does NOT read the new zone (runbook Halt 'a revert copy is not sound') is the old token. Nothing was changed."
+          || soleur_op_precondition_failed "$stage" inventory "${TFC}/${k} holds neither its revert copy ${k}_PREV nor the staged ${k}_NEXT, so one of ${k} / ${k}_PREV is not the old token; copy neither way. ${OLD_NEW_HINT} Nothing was changed."
         soleur_op_plan_op copy-staged-token "${TFC}/${k}_NEXT->${k}"
         soleur_op_plan_op delete-staging-key "${TFC}/${k}_NEXT"
         COPY_KEYS[${#COPY_KEYS[@]}]="$k"
@@ -685,7 +772,10 @@ swap_apply_common() { # <profile> <active-check-keys...>
     run_scope_probe "$profile" || return 1
     for k in "$@"; do
       rc=0; token_active "$TFC" "${k}_NEXT" || rc=$?
-      [[ "$rc" -ne 2 ]] || return 1    # MALFORMED already printed, and no network call was made
+      # rc 2 MALFORMED / rc 3 UNREACHABLE already printed their marker; only an ANSWERED "not
+      # active" (rc 1) is NOT_ACTIVE (re-mint): a transport failure is a retry, never a re-mint.
+      [[ "$rc" -ne 2 && "$rc" -ne 3 ]] || return 1
+      [[ "$rc" -ne 4 ]] || { soleur_op_red "  cannot read ${TFC}/${k}_NEXT"; return 1; }
       [[ "$rc" -eq 0 ]] || { printf 'SOLEUR_CFAM_TOKEN_NOT_ACTIVE name=%s_NEXT\n' "$k"; return 1; }
       printf 'SOLEUR_CFAM_TOKEN_ACTIVE name=%s_NEXT\n' "$k"
     done
@@ -751,7 +841,7 @@ apply_branch_copies_zone_id() {
 # --- branch-copies-tokens (write) -----------------------------------------------
 TOKEN_TARGETS=()
 plan_branch_copies_tokens() {
-  local cfgs c names k src dc old
+  local cfgs c names k src dc old dk dp
   TOKEN_TARGETS=()
   require_tf_names branch-copies-tokens
   for k in "${BRANCH_TOKENS[@]}"; do
@@ -762,7 +852,8 @@ plan_branch_copies_tokens() {
     # prev-0b would refuse too (no _NEXT to prove <KEY> old). Say so rather than send the agent there.
     in_names "${k}_PREV" "$TF_NAMES" \
       || soleur_op_precondition_failed branch-copies-tokens verify "${TFC}/${k}_PREV and ${TFC}/${k}_NEXT are both absent: the revert copy was revoked (runbook Revoke recipe step 4), so nothing here can prove which value a branch config holds. Either this stage already ran, or the branch copies must be decided by hand: run the verify stage, and on any ${k}=matches-${TFC} fail stop for an owner decision (runbook Halt). Do not run prev-0b; nothing was changed."
-    [[ "$(digest_of "$TFC" "$k" || echo a)" != "$(digest_of "$TFC" "${k}_PREV" || echo a)" ]] \
+    # Both reads must succeed: one shared fallback on both sides would call an unreadable key "differs".
+    dk="$(digest_of "$TFC" "$k")" && dp="$(digest_of "$TFC" "${k}_PREV")" && [[ "$dk" != "$dp" ]] \
       || soleur_op_precondition_failed branch-copies-tokens swap-0b "${TFC}/${k} still equals its revert copy (or is unreadable). Run swap-0b first; nothing was changed."
   done
   cfgs="$(branch_configs)" || soleur_op_precondition_failed branch-copies-tokens inventory "${INVENTORY_REL} is not readable from this repository. Nothing was changed."
@@ -797,7 +888,7 @@ vcheck() { # <label> <0|1>
   if [[ "$2" -eq 0 ]]; then printf 'SOLEUR_CFAM_VERIFY check=%s verdict=ok\n' "$1"; else printf 'SOLEUR_CFAM_VERIFY check=%s verdict=fail\n' "$1"; VBAD=1; fi
 }
 read_verify() {
-  local names k c cfgs cnames src r
+  local names k c cfgs cnames src r dk dp
   VBAD=0
   if ! names="$(names_of "$TFC")"; then printf 'SOLEUR_CFAM_UNREADABLE config=%s\n' "$TFC"; printf 'SOLEUR_CFAM_VERIFY verdict=fail\n'; return 1; fi
   r=1; [[ "$(id_of "$TFC" CF_ZONE_ID || true)" == "$NEW_ZONE" ]] && r=0; vcheck "${TFC}/CF_ZONE_ID=new" "$r"
@@ -805,16 +896,16 @@ read_verify() {
   r=1; [[ "$(id_of "$TFC" CF_R2_ACCOUNT_ID || true)" == "$OLD_ACCT" ]] && r=0; vcheck "${TFC}/CF_R2_ACCOUNT_ID=legacy" "$r"
   for k in "${KEYS_0A[@]}" "${KEYS_0B[@]}"; do
     r=0; in_names "${k}_NEXT" "$names" && r=1; vcheck "${TFC}/${k}_NEXT=absent" "$r"
-    # Swapped: no _NEXT, and either the revert copy differs from the live key, or the revert copy is
-    # gone (the revoke recipe deletes _PREV only after the old token's verify reads false) and the
-    # live key itself is a NEW-account token: active AND able to read the new zone. Active alone is
-    # not enough: the old token is active until it is revoked, so a never-swapped key with no _PREV
-    # and no _NEXT would read ok on it.
+    # Swapped: no _NEXT, and either the live key and its revert copy BOTH read and differ (an empty,
+    # deleted or unreadable live key is not swapped), or the revert copy is gone (the revoke recipe
+    # deletes _PREV only after the old token's verify reads false) and the live key itself is a
+    # NEW-account token (token_is_new: its own read answers on the new resource and not on the old).
+    # Active alone is not enough: the old token is active until it is revoked.
     if in_names "${k}_PREV" "$names"; then
-      r=1; ! in_names "${k}_NEXT" "$names" && [[ "$(digest_of "$TFC" "$k" || echo a)" != "$(digest_of "$TFC" "${k}_PREV" || echo a)" ]] && r=0
+      r=1; ! in_names "${k}_NEXT" "$names" && dk="$(digest_of "$TFC" "$k")" && dp="$(digest_of "$TFC" "${k}_PREV")" && [[ "$dk" != "$dp" ]] && r=0
       vcheck "${TFC}/${k}=swapped" "$r"
     else
-      r=1; ! in_names "${k}_NEXT" "$names" && token_active "$TFC" "$k" && token_reads_new_zone "$TFC" "$k" && r=0
+      r=1; ! in_names "${k}_NEXT" "$names" && token_is_new "$TFC" "$k" && r=0
       vcheck "${TFC}/${k}=swapped-prev-revoked" "$r"
     fi
   done
@@ -862,6 +953,8 @@ dispatch_stage() {
       impact="$(soleur_op_stage_field "${BASH_SOURCE[0]}" "$stage" 3)"
       rollback="$(soleur_op_stage_field "${BASH_SOURCE[0]}" "$stage" 4)"
       [[ "$ROTATE_TOKEN" == "1" ]] && flags="rotate-token"
+      # Every write stage, before its plan reads anything (D35): plan and apply both re-check.
+      require_no_run_in_flight "$stage"
       soleur_op_plan_begin
       "plan_${fn}"
       n="$(soleur_op_plan_count)"

@@ -26,9 +26,19 @@
 #      `set` stores stdin exactly): every live key and revert copy is byte-exact (cmp against the
 #      stored file) and the staged tokens read active.
 #   P10 a staged token carrying a quote or an embedded newline is MALFORMED: no curl call, no write.
-#   P11 verify accepts a revoked _PREV only when the live key verifies active AND reads the new zone;
+#   P11 verify accepts a revoked _PREV only when the live key is a NEW-account token (its own read
+#      answers on the new resource and not on the old); a revoked token fails;
 #   P11b a key holding the old token (active) with no _PREV and no _NEXT fails verify;
 #   P11c 0b keys never swapped, their _NEXT gone and no _PREV, fail verify each;
+#   P11d an old "All zones" token on a never-swapped key fails verify (it reads the OLD zone too);
+#   P11e every _PREV revoked: all seven keys ok, each on its own read (Pages never reads a zone);
+#   P15 with _PREV present, an empty or deleted live key fails verify; P15b branch-copies-tokens
+#      refuses need=swap-0b on an unreadable prd_terraform key;
+#   P16 prev-0a / prev-0b refuse a <KEY> already equal to its _NEXT when no _PREV exists;
+#   P17 a value that changes between the character check and the bearer read sends nothing;
+#   P18 a transport failure is TOKEN_UNREACHABLE (retry) in swap and verify, never NOT_ACTIVE;
+#   P19 every write stage refuses RUN_IN_FLIGHT while a cf-account-migrate.yml run is in flight, and
+#      when gh cannot answer; with none in flight it plans; read stages do not ask;
 #   P12 branch-copies-tokens replaces only the old token; prev-0a matches each id key to its OWN
 #      legacy id; an id-key _PREV that is not the legacy id does not satisfy prev-0a;
 #   P13 an id stored as `hex\n` is refused by id_of (no `$(...)` newline strip);
@@ -37,30 +47,43 @@
 # ASSEMBLY. A fixture git repository per world holds a copy of bootstrap.sh at its real relative
 # path, a synthesized doppler-config-inventory.txt, and a stub cf-token-scope.sh (the script runs
 # only TRACKED files, so the stub is committed). PATH-stubbed `doppler` keeps state in files and
-# logs every call; PATH-stubbed `curl` answers /user/tokens/verify and GET /zones/<new zone> (a
-# SYNTH-NEW* value reads the new zone, any other value gets 403). Nothing reaches a network.
+# logs every call; PATH-stubbed `curl` answers /user/tokens/verify and each key's own read with a
+# per-key, per-account scope model (see the stub); PATH-stubbed `gh` answers `gh run list`.
+# Nothing reaches a network.
 # Fixtures are synthesized (cq-test-fixtures-synthesized-only): the ids are the public account and
 # zone ids from the runbook's id table, the token values are sentinel strings.
 #
-# MUTATIONS (each proven to land: cmp differs, bash -n clean), each must turn its row RED:
-#   M0 plain_get's trailing-newline strip dropped (the pre-fix reads) -> P9, P7 rows
-#   M1 the _NEXT delete moved ABOVE the digest compare          -> P3b row
-#   M2 the branch-copies-tokens _NEXT refusal dropped            -> P2b row
-#   M3 the scope probe call dropped from the swap apply          -> P4 row
-#   M4 an existing _PREV accepted by name (prev_copy_sound skipped) -> P6, P7 rows
-#   M5 swap overwrites a key that no longer holds its revert copy -> P6 row
-#   M6 swap tolerates an unreadable _PREV                        -> P7 row
-#   M7 branch-copies-zone-id overwrites any zone id              -> P8 row
-#   M8 the stop-after-a-failed-copy return dropped               -> P3 row
-#   M9 the shared token character check dropped                  -> P10 rows
-#   M10 verify's active check on a revoked _PREV dropped          -> P11 negative row
-#   M11 branch-copies-tokens' old-token-only refusal dropped      -> P12a row
-#   M12 prev-0a accepts either legacy id for either id key        -> P12b row
-#   M13 prev_copy_sound's id-key value check dropped              -> P12c row
-#   M14 verify's new-zone read on a revoked _PREV dropped         -> P11b, P11c rows
-#   M15 id_of back on a `$(...)` capture of the raw CLI output    -> P13 row
-#   M16 the copy loop runs on after a failed copy (no break)     -> P3 row
-# NOT MUTATED: P14 pins refusal wording only (the refusal itself predates it and is P2-adjacent).
+# MUTATIONS (each proven to land: cmp differs, bash -n clean). Each must turn its row RED AT the
+# named step (`at <step>` in the row; killed() rejects a red that happened anywhere else, e.g. in
+# setup):
+#   M0 plain_get's trailing-newline strip dropped (the pre-fix reads) -> P9 @prev-0a-bytes
+#   M1 the _NEXT delete moved ABOVE the digest compare          -> P3b @next-kept
+#   M2 the branch-copies-tokens _NEXT refusal dropped            -> P2b @refuse
+#   M3 the scope probe call dropped from the swap apply          -> P4 @stops
+#   M4 an existing _PREV accepted by name (prev_copy_sound skipped) -> P6, P7 @prev-refuses
+#   M5 swap overwrites a key that no longer holds its revert copy -> P6 @swap-refuses
+#   M6 swap tolerates an unreadable _PREV                        -> P7 @swap-refuses
+#   M7 branch-copies-zone-id overwrites any zone id              -> P8 @refuse
+#   M8 the stop-after-a-failed-copy return dropped               -> P3 @next-kept
+#   M9 the up-front character check dropped                      -> P10 quote, newline @no-curl
+#   M10 token_is_new's NEW-read half dropped                     -> P11 inactive @verdict
+#   M11 branch-copies-tokens' old-token-only refusal dropped      -> P12a @refuse
+#   M12 prev-0a accepts either legacy id for either id key        -> P12b @refuse
+#   M13 prev_copy_sound's id-key value check dropped              -> P12c @refuse
+#   M14 token_is_new's OLD-read half dropped                     -> P11d @verdict
+#   M15 id_of back on a `$(...)` capture of the raw CLI output    -> P13 @refuse
+#   M16 the copy loop runs on after a failed copy (no break)     -> P3 @no-later-write
+#   M17 one zone read for every key (the per-key table bypassed) -> P11e @verdict
+#   M18 a transport failure folded into "unreadable"            -> P18 @swap-unreachable
+#   M19 the bearer value read a second time (pre-fix bearer_get) -> P17 @no-inject
+#   M20 verify's swapped arm back on one shared `|| echo a`      -> P15 @empty
+#   M21 prev copies a <KEY> already equal to its _NEXT           -> P16 @refuse
+#   M22 branch-copies-tokens back on one shared `|| echo a`      -> P15b @refuse
+#   M23 the run-in-flight guard dropped                          -> P19 @in-flight
+# NOT MUTATED: P14 pins refusal wording only (the refusal itself predates it and is P2-adjacent);
+# P11b and P11c are held by BOTH halves of token_is_new (an old-zone-only token fails the NEW read
+# and answers the OLD one), so dropping either half alone leaves them green by design.
+# The old M0 -> P7 kill is dropped: M0 broke P7 at its setup copy, not at an empty-value read.
 #
 # LOCATION: this suite lives in tests/scripts (not beside the script) and finds bootstrap.sh by glob, so an
 # archive-kb move of the spec directory breaks nothing; exactly one match is required, else exit 2.
@@ -130,6 +153,8 @@ write_stubs() { # <bin-dir>
 #   $STUB_D/.corrupt/<config>.<NAME>   a set of that name stores a DIFFERENT value
 #   $STUB_D/.clobber-on-set/<config>.<NAME>  holds OTHER: a set of NAME also overwrites OTHER
 #                                      (a concurrent writer, after OTHER's own copy read back equal)
+#   $STUB_D/.race/<config>.<NAME>      a get of NAME that IMMEDIATELY follows another get of NAME
+#                                      serves this value instead (a writer between two reads)
 log() { printf '%s\t%s\n' "$1" "$2" >> "$STUB_LOG"; }
 args=("$@"); proj=""; cfg=""; i=0
 while (( i < ${#args[@]} )); do
@@ -147,7 +172,9 @@ case "$1 ${2:-}" in
   "secrets get")
     log read "get $cfg/$3"
     [[ " $* " == *" --plain "* ]] || exit 64
+    prev="$(cat "$STUB_D/.last-get" 2>/dev/null)"; printf '%s' "$cfg/$3" > "$STUB_D/.last-get"
     [[ -f "$D/$3" ]] || exit 1
+    if [[ -f "$STUB_D/.race/$cfg.$3" && "$prev" == "$cfg/$3" ]]; then cat "$STUB_D/.race/$cfg.$3"; printf '\n'; exit 0; fi
     cat "$D/$3"; printf '\n'; exit 0 ;;
   "secrets set")
     log mutating "set $cfg/$3"
@@ -166,37 +193,79 @@ exit 64
 DOPPLER
   cat > "$b/curl" <<'CURL'
 #!/usr/bin/env bash
-# Two endpoints. The WHOLE config must be the one header line: a second line (an injected URL) fails
-# both. Token naming decides the account: SYNTH-NEW-* / SYNTH-NEW2-* are new-account tokens, every
-# other SYNTH-* value (SYNTH-OLD-*, SYNTH-THIRD-*, ...) is old-account.
-#   /user/tokens/verify      any well-formed SYNTH-* token is active (an old token is active until it
-#                            is revoked); $STUB_D/.curl-inactive makes every token inactive.
-#   /zones/<new zone id>     a new-account token answers 200 with that zone; an old one answers 403
-#                            with success:false.
-# Each endpoint has its own switch so verify's two checks are killed independently; a real revoked
-# token fails both.
-url=""; for a in "$@"; do case "$a" in https://*) url="$a" ;; esac; done
-printf 'read\tcurl %s\n' "$url" >> "$STUB_LOG"
-cfg="$(cat)"
-case "$url" in
-  https://api.cloudflare.com/client/v4/user/tokens/verify)
-    re='^header = "Authorization: Bearer SYNTH-[A-Z0-9_-]+"$'
-    if [[ ! -e "$STUB_D/.curl-inactive" && "$cfg" =~ $re ]]; then
-      printf '{"success":true,"result":{"id":"x","status":"active"}}'
-    else
-      printf '{"success":false,"errors":[{"code":1000}]}'
-    fi ;;
-  https://api.cloudflare.com/client/v4/zones/951ce525552201ec6c696b24251abed7)
-    re='^header = "Authorization: Bearer SYNTH-NEW[0-9]*-[A-Z0-9_-]+"$'
-    if [[ "$cfg" =~ $re ]]; then
-      printf '{"success":true,"result":{"id":"951ce525552201ec6c696b24251abed7","name":"synth.invalid"}}'
-    else
-      printf '{"success":false,"errors":[{"code":9109,"message":"Unauthorized to access requested resource"}]}'
-    fi ;;
+# Models real curl on the bootstrap's one call shape, `--config -` on stdin. Every URL curl would
+# fetch (a config `url =` line or an argv https:// argument) is logged as `curl <url>`; a config line
+# that is neither the header nor a url is logged as `curl-config-extra` (an injected directive) and
+# the call fails. No URL at all: `curl NOURL`, exit 2, no request (what real curl does).
+#   $STUB_D/.curl-down      every request is a transport failure: exit 7, no body.
+#   $STUB_D/.curl-inactive  every token is revoked: success:false on every endpoint.
+# /user/tokens/verify: any well-formed SYNTH-* token is active (an old token is active until revoked).
+# Resource reads: SCOPE comes from the value SYNTH-<KIND>-<KEY>-SENTINEL. KIND NEW, NEW2, ... reads the
+# new zone/account only (the plan's scoping); OLD the old one only; ALLZ is an old "All zones / All
+# accounts" token and reads both; any other value reads nothing. KEY decides the PERMISSION: each key
+# reads only its own grant (the bootstrap's TOKEN_READS), plus zone details zones/<id> for the keys
+# whose groups Cloudflare accepts there (CF_API_TOKEN, DNS_EDIT, ZONE_SETTINGS, PURGE). The Pages
+# token (account-scoped), Rulesets and Bot Management get 403/9109 on zones/<id>.
+set -f
+urls=(); tok=""; extra=0
+hre='^header = "Authorization: Bearer ([^"]*)"$'; ure='^url = "([^"]*)"$'
+for a in "$@"; do case "$a" in https://*) urls+=("$a") ;; esac; done
+while IFS= read -r line; do
+  if [[ "$line" =~ $hre ]]; then tok="${BASH_REMATCH[1]}"
+  elif [[ "$line" =~ $ure ]]; then [[ -z "${BASH_REMATCH[1]}" ]] || urls+=("${BASH_REMATCH[1]}")
+  elif [[ -n "$line" ]]; then extra=1
+  fi
+done < <(cat)
+[[ "$extra" -eq 0 ]] || printf 'read\tcurl-config-extra\n' >> "$STUB_LOG"
+[[ "${#urls[@]}" -gt 0 ]] || { printf 'read\tcurl NOURL\n' >> "$STUB_LOG"; exit 2; }
+for u in "${urls[@]}"; do printf 'read\tcurl %s\n' "$u" >> "$STUB_LOG"; done
+[[ "$extra" -eq 0 && "${#urls[@]}" -eq 1 ]] || exit 64
+[[ -e "$STUB_D/.curl-down" ]] && exit 7
+api=https://api.cloudflare.com/client/v4; u="${urls[0]}"
+deny() { printf '{"success":false,"errors":[{"code":9109,"message":"Unauthorized to access requested resource"}]}'; exit 0; }
+if [[ "$u" == "$api/user/tokens/verify" ]]; then
+  if [[ ! -e "$STUB_D/.curl-inactive" && "$tok" =~ ^SYNTH-[A-Za-z0-9_-]+$ ]]; then printf '{"success":true,"result":{"id":"x","status":"active"}}'
+  else printf '{"success":false,"errors":[{"code":1000}]}'; fi
+  exit 0
+fi
+[[ ! -e "$STUB_D/.curl-inactive" ]] || deny
+kre='^SYNTH-([A-Z0-9]+)-(CF_API_TOKEN[A-Z_]*)-SENTINEL$'
+[[ "$tok" =~ $kre ]] || deny
+kind="${BASH_REMATCH[1]}"; key="${BASH_REMATCH[2]}"
+path="${u#"$api"/}"
+case "$path" in
+  zones/*) id="${path#zones/}"; id="${id%%[/?]*}"; want="zones:${path#zones/"$id"}" ;;
+  accounts/*) id="${path#accounts/}"; id="${id%%/*}"; want="accounts:${path#accounts/"$id"}" ;;
   *) exit 64 ;;
 esac
+case "$id" in
+  951ce525552201ec6c696b24251abed7|66d4f93f7397f196544e9fe84c3557c2) side=new ;;
+  5af02a2f394e9ba6e0ea23c381a26b67|4d5ba6f096b2686fbdd404167dd4e125) side=old ;;
+  *) deny ;;
+esac
+case "$kind" in NEW|NEW[0-9]) [[ "$side" == new ]] || deny ;; OLD) [[ "$side" == old ]] || deny ;; ALLZ) : ;; *) deny ;; esac
+case "$key" in
+  CF_API_TOKEN|CF_API_TOKEN_DNS_EDIT) grants="zones:/dns_records?per_page=1 zones:" ;;
+  CF_API_TOKEN_RULESETS) grants="zones:/rulesets" ;;
+  CF_API_TOKEN_PAGES) grants="accounts:/pages/projects" ;;
+  CF_API_TOKEN_ZONE_SETTINGS) grants="zones:/settings zones:" ;;
+  CF_API_TOKEN_BOT_MANAGEMENT) grants="zones:/bot_management" ;;
+  CF_API_TOKEN_PURGE) grants="zones:" ;;
+  *) grants="" ;;
+esac
+for g in $grants; do [[ "$g" == "$want" ]] && { printf '{"success":true,"result":{"id":"%s"}}' "$id"; exit 0; }; done
+deny
 CURL
-  chmod +x "$b/doppler" "$b/curl"
+  cat > "$b/gh" <<'GH'
+#!/usr/bin/env bash
+# `gh run list` stand-in (D35). $STUB_D/.gh-fail: exit 1 (not signed in, API down); $STUB_D/.gh-runs:
+# the JSON answer; default: one completed run. Any other argv is unmodelled (exit 64).
+printf 'read\tgh %s\n' "$*" >> "$STUB_LOG"
+[[ "$*" == "run list --workflow cf-account-migrate.yml --limit 50 --json status" ]] || exit 64
+[[ ! -e "$STUB_D/.gh-fail" ]] || exit 1
+if [[ -f "$STUB_D/.gh-runs" ]]; then cat "$STUB_D/.gh-runs"; else printf '[{"status":"completed"}]\n'; fi
+GH
+  chmod +x "$b/doppler" "$b/curl" "$b/gh"
 }
 
 # make_repo <dir> <bootstrap-src> — a fixture repository tracking the script, the inventory and a
@@ -222,13 +291,14 @@ SCOPE
 
 # world <name> [<bootstrap-src>] — fresh state, the pre-flip world, a fixture repo.
 world() {
-  local src="${2:-$SCRIPT_SRC}" k c
+  local src="${2:-$SCRIPT_SRC}" k
+  STEP="world"
   W="$SB/w-$1"; rm -rf "$W"; mkdir -p "$W/state" "$W/xdg"
   write_stubs "$W/bin"
   make_repo "$W/repo" "$src"
   S="$W/repo/$REL"
   STUB_D="$W/state"; STUB_LOG="$W/calls.log"; : > "$STUB_LOG"
-  mkdir -p "$STUB_D/prd_terraform" "$STUB_D/prd" "$STUB_D/prd_cla" "$STUB_D/dev" "$STUB_D/prd_other" "$STUB_D/.corrupt" "$STUB_D/.unreadable" "$STUB_D/.clobber-on-set"
+  mkdir -p "$STUB_D/prd_terraform" "$STUB_D/prd" "$STUB_D/prd_cla" "$STUB_D/dev" "$STUB_D/prd_other" "$STUB_D/.corrupt" "$STUB_D/.unreadable" "$STUB_D/.clobber-on-set" "$STUB_D/.race"
   sv() { printf '%s' "$3" > "$STUB_D/$1/$2"; }
   sv prd_terraform CF_ZONE_ID "$OZ"; sv prd_terraform CF_ACCOUNT_ID "$OA"; sv prd_terraform CF_R2_ACCOUNT_ID "$OA"
   for k in "${K0A[@]}" "${K0B[@]}"; do sv prd_terraform "$k" "$(old_val "$k")"; sv prd_terraform "${k}_NEXT" "$(new_val "$k")"; done
@@ -251,6 +321,12 @@ run() {
 digest() { sed -n 's/^SOLEUR_BOOTSTRAP_PLAN stage=[^ ]* operations=[0-9]* digest=\([0-9a-f]*\)$/\1/p' <<<"$OUT"; }
 ops() { sed -n 's/^SOLEUR_BOOTSTRAP_PLAN stage=[^ ]* operations=\([0-9]*\) digest=.*$/\1/p' <<<"$OUT"; }
 mut() { grep -c "^mutating" "$STUB_LOG" || true; }
+# STEP: a row names the assertion it is about to make (`at <step>`); a row that returns non-zero
+# leaves STEP at the step it stopped on. killed <rc> <step>: a mutation counts as killed only when
+# the row went red AT the step its header names, never during setup (the job suite's `red` WHY).
+STEP=""
+at() { STEP="$1"; }
+killed() { [[ "$1" -ne 0 && "$STEP" == "$2" ]] || { echo "    row rc=$1 stopped at step '${STEP}', want '$2'"; return 1; }; }
 # approve <stage>: plan, the REAL hook mints a receipt for the exact apply command, then the
 # rewritten command runs as the harness would run it. Leaves OUT/RC of the apply.
 approve() {
@@ -279,14 +355,19 @@ row_p3_mismatch_keeps_next() { # <bootstrap-src>
   : > "$STUB_D/.corrupt/prd_terraform.CF_API_TOKEN_RULESETS"
   : > "$STUB_LOG"
   approve swap-0a
+  at swap-stops
   [[ "$RC" -ne 0 ]] || return 1
   grep -qF 'SOLEUR_CFAM_COPY_MISMATCH src=prd_terraform/CF_API_TOKEN_RULESETS_NEXT dst=prd_terraform/CF_API_TOKEN_RULESETS' <<<"$OUT" || return 1
+  at next-kept
   for k in "${K0A[@]}"; do
     [[ "$(val prd_terraform "${k}_NEXT")" == "$(new_val "$k")" ]] || return 1
   done
+  at no-delete
   ! grep -qE '^mutating[[:space:]]delete ' "$STUB_LOG" || return 1
+  at no-later-write
   ! grep -qxF "$(printf 'mutating\tset prd_terraform/CF_API_TOKEN_PAGES')" "$STUB_LOG" || return 1
   [[ "$(val prd_terraform CF_API_TOKEN_PAGES)" == "$(old_val CF_API_TOKEN_PAGES)" ]] || return 1
+  at rerun
   # the documented rollback of the failed key, then the re-run
   rm -f "$STUB_D/.corrupt/prd_terraform.CF_API_TOKEN_RULESETS"
   cp "$STUB_D/prd_terraform/CF_API_TOKEN_RULESETS_PREV" "$STUB_D/prd_terraform/CF_API_TOKEN_RULESETS"
@@ -303,8 +384,10 @@ row_p3b_drift_keeps_next() { # <bootstrap-src>
   approve flip-ids; [[ "$RC" -eq 0 ]] || return 1
   printf 'CF_API_TOKEN' > "$STUB_D/.clobber-on-set/prd_terraform.CF_API_TOKEN_PAGES"
   approve swap-0a
+  at swap-stops
   [[ "$RC" -ne 0 ]] || return 1
   grep -qF 'SOLEUR_CFAM_SWAP_MISMATCH name=CF_API_TOKEN kept=CF_API_TOKEN_NEXT' <<<"$OUT" || return 1
+  at next-kept
   [[ "$(val prd_terraform CF_API_TOKEN_NEXT)" == "$(new_val CF_API_TOKEN)" ]]
 }
 row_p2b_restaged_refuses() { # <bootstrap-src>
@@ -313,6 +396,7 @@ row_p2b_restaged_refuses() { # <bootstrap-src>
   for s in prev-0a flip-ids swap-0a branch-copies-zone-id prev-0b swap-0b; do approve "$s"; [[ "$RC" -eq 0 ]] || return 1; done
   printf '%s' "SYNTH-NEW2-CF_API_TOKEN_PURGE-SENTINEL" > "$STUB_D/prd_terraform/CF_API_TOKEN_PURGE_NEXT"
   : > "$STUB_LOG"
+  at refuse
   run --stage branch-copies-tokens
   [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=branch-copies-tokens need=swap-0b' <<<"$OUT"
 }
@@ -323,6 +407,7 @@ row_p4_probe_fail_stops() { # <bootstrap-src>
   : > "$STUB_D/.scope-fail"
   : > "$STUB_LOG"
   approve swap-0a
+  at stops
   [[ "$RC" -ne 0 ]] || return 1
   grep -qE '^read[[:space:]]scope --profile redirects-dns --staged$' "$STUB_LOG" || return 1
   [[ "$(mut)" -eq 0 ]] || return 1
@@ -330,8 +415,9 @@ row_p4_probe_fail_stops() { # <bootstrap-src>
 }
 
 # neutral_refusal <KEY> — OUT carries the direction-free "copy neither way" advice and no copy direction.
+HINT="Both an old and a new token verify active, so status cannot tell them apart: run the key's own read on each value (runbook Halt 'a revert copy is not sound'); the NEW token is the one that answers on the new zone or account and NOT on the old one, and the other is the old token."
 neutral_refusal() {
-  grep -qF "one of ${1} / ${1}_PREV is not the old token; copy neither way. Both an old and a new token verify active, so status cannot tell them apart: the one that does NOT read the new zone (runbook Halt 'a revert copy is not sound') is the old token." <<<"$OUT" \
+  grep -qF "one of ${1} / ${1}_PREV is not the old token; copy neither way. ${HINT}" <<<"$OUT" \
     && ! grep -qF 'keep the one that verifies active' <<<"$OUT" \
     && ! grep -qF 'back over' <<<"$OUT"
 }
@@ -341,15 +427,19 @@ neutral_refusal() {
 row_p6_bad_revert_copy_refuses() { # <bootstrap-src>
   world p6 "$1"
   : > "$STUB_D/.corrupt/prd_terraform.CF_API_TOKEN_PREV"
+  at first-copy
   approve prev-0a; [[ "$RC" -ne 0 ]] && grep -qF 'SOLEUR_CFAM_COPY_MISMATCH src=prd_terraform/CF_API_TOKEN dst=prd_terraform/CF_API_TOKEN_PREV' <<<"$OUT" || return 1
   rm -f "$STUB_D/.corrupt/prd_terraform.CF_API_TOKEN_PREV"
   # the two keys after the failed one get sound copies, so swap-0a reaches CF_API_TOKEN's own guard
   printf '%s' "$(old_val CF_API_TOKEN_RULESETS)" > "$STUB_D/prd_terraform/CF_API_TOKEN_RULESETS_PREV"
   printf '%s' "$(old_val CF_API_TOKEN_PAGES)" > "$STUB_D/prd_terraform/CF_API_TOKEN_PAGES_PREV"
+  at prev-refuses
   : > "$STUB_LOG"; run --stage prev-0a
   [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=prev-0a need=inventory' <<<"$OUT" \
     && grep -qF 'neither CF_API_TOKEN_PREV nor CF_API_TOKEN_NEXT equals CF_API_TOKEN' <<<"$OUT" && neutral_refusal CF_API_TOKEN || return 1
+  at setup
   approve flip-ids; [[ "$RC" -eq 0 ]] || return 1
+  at swap-refuses
   : > "$STUB_LOG"; run --stage swap-0a
   [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=swap-0a need=inventory' <<<"$OUT" \
     && grep -qF 'prd_terraform/CF_API_TOKEN holds neither its revert copy' <<<"$OUT" && neutral_refusal CF_API_TOKEN || return 1
@@ -361,13 +451,16 @@ row_p6_bad_revert_copy_refuses() { # <bootstrap-src>
 row_p7_empty_revert_copy_refuses() { # <bootstrap-src>
   world p7 "$1"
   : > "$STUB_D/prd_terraform/CF_API_TOKEN_PAGES_PREV"
+  at prev-refuses
   : > "$STUB_LOG"; run --stage prev-0a
   [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=prev-0a need=inventory' <<<"$OUT" || return 1
+  at setup
   rm -f "$STUB_D/prd_terraform/CF_API_TOKEN_PAGES_PREV"
   approve prev-0a; [[ "$RC" -eq 0 ]] || return 1
   approve flip-ids; [[ "$RC" -eq 0 ]] || return 1
   : > "$STUB_D/prd_terraform/CF_API_TOKEN_PAGES_PREV"
   printf '%s' "$(new_val CF_API_TOKEN_PAGES)" > "$STUB_D/prd_terraform/CF_API_TOKEN_PAGES"
+  at swap-refuses
   : > "$STUB_LOG"; run --stage swap-0a
   [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=swap-0a need=prev-0a' <<<"$OUT" \
     && grep -qF 'prd_terraform/CF_API_TOKEN_PAGES_PREV is unreadable or empty' <<<"$OUT" || return 1
@@ -379,6 +472,7 @@ row_p8_third_zone_refuses() { # <bootstrap-src>
   approve prev-0a; [[ "$RC" -eq 0 ]] || return 1
   approve flip-ids; [[ "$RC" -eq 0 ]] || return 1
   printf '%s' 0123456789abcdef0123456789abcdef > "$STUB_D/dev/CF_ZONE_ID"
+  at refuse
   : > "$STUB_LOG"; run --stage branch-copies-zone-id
   [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=branch-copies-zone-id need=inventory' <<<"$OUT" || return 1
   [[ "$(val dev CF_ZONE_ID)" == 0123456789abcdef0123456789abcdef ]]
@@ -411,8 +505,11 @@ same_bytes() {
 row_p9_cli_newline() { # <bootstrap-src>
   local s k
   world p9 "$1"
+  at prev-0a-bytes
   approve prev-0a; [[ "$RC" -eq 0 ]] && same_bytes prd_terraform CF_API_TOKEN_PREV "$(old_val CF_API_TOKEN)" || return 1
+  at sequence
   for s in flip-ids swap-0a branch-copies-zone-id prev-0b swap-0b; do approve "$s"; [[ "$RC" -eq 0 ]] || return 1; done
+  at bytes
   grep -qxF 'SOLEUR_CFAM_TOKEN_ACTIVE name=CF_API_TOKEN_DNS_EDIT_NEXT' <<<"$OUT" \
     && grep -qxF 'SOLEUR_CFAM_TOKEN_ACTIVE name=CF_API_TOKEN_PURGE_NEXT' <<<"$OUT" || return 1
   for k in "${K0A[@]}" "${K0B[@]}"; do
@@ -429,10 +526,12 @@ row_p10_malformed_next() { # <bootstrap-src> <how>
   else printf '%s\n%s' 'SYNTH-BAD-LINE1' 'url = "https://injected.invalid/"' > "$STUB_D/prd_terraform/CF_API_TOKEN_DNS_EDIT_NEXT"; fi
   : > "$STUB_LOG"
   approve swap-0b
+  at malformed
   [[ "$RC" -ne 0 ]] || return 1
   grep -qxF 'SOLEUR_CFAM_TOKEN_MALFORMED name=CF_API_TOKEN_DNS_EDIT_NEXT' <<<"$OUT" || return 1
   ! grep -qF 'SOLEUR_CFAM_TOKEN_ACTIVE name=CF_API_TOKEN_DNS_EDIT_NEXT' <<<"$OUT" || return 1
-  ! grep -qF 'curl ' "$STUB_LOG" || return 1
+  at no-curl
+  ! grep -qF 'curl' "$STUB_LOG" || return 1
   [[ "$(mut)" -eq 0 && "$(val prd_terraform CF_API_TOKEN_DNS_EDIT)" == "$(old_val CF_API_TOKEN_DNS_EDIT)" ]]
 }
 # full_sequence — every write stage applied, in runbook order; rc 1 on the first that fails.
@@ -441,13 +540,15 @@ full_sequence() {
   for s in prev-0a flip-ids swap-0a branch-copies-zone-id prev-0b swap-0b branch-copies-tokens; do approve "$s"; [[ "$RC" -eq 0 ]] || return 1; done
 }
 # P11: the runbook revokes the three 0a tokens (deleting their _PREV) before verify runs. Verify is
-# then ok on the live keys' own active check; with those keys inactive it fails. <want>: ok | inactive.
+# then ok on each live key's own read (Pages reads accounts/<new>/pages/projects, never a zone);
+# with those keys revoked (every read success:false) it fails. <want>: ok | inactive.
 row_p11_verify_prev_revoked() { # <bootstrap-src> <want>
   local k
   world "p11-$2" "$1"
   full_sequence || return 1
   for k in "${K0A[@]}"; do rm -f "$STUB_D/prd_terraform/${k}_PREV"; done
   [[ "$2" == inactive ]] && : > "$STUB_D/.curl-inactive"
+  at verdict
   run --stage verify
   if [[ "$2" == ok ]]; then
     [[ "$RC" -eq 0 ]] && grep -qx 'SOLEUR_CFAM_VERIFY verdict=ok' <<<"$OUT" || return 1
@@ -465,6 +566,7 @@ row_p12a_branch_third_token_refuses() { # <bootstrap-src>
   world p12a "$1"
   for s in prev-0a flip-ids swap-0a branch-copies-zone-id prev-0b swap-0b; do approve "$s"; [[ "$RC" -eq 0 ]] || return 1; done
   printf '%s' 'SYNTH-THIRD-PURGE-SENTINEL' > "$STUB_D/prd/CF_API_TOKEN_PURGE"
+  at refuse
   : > "$STUB_LOG"; run --stage branch-copies-tokens
   [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=branch-copies-tokens need=inventory' <<<"$OUT" \
     && grep -qF 'soleur/prd CF_API_TOKEN_PURGE holds neither the new token' <<<"$OUT" || return 1
@@ -475,6 +577,7 @@ row_p12a_branch_third_token_refuses() { # <bootstrap-src>
 row_p12b_crossed_legacy_id_refuses() { # <bootstrap-src>
   world p12b "$1"
   printf '%s' "$OA" > "$STUB_D/prd_terraform/CF_ZONE_ID"
+  at refuse
   : > "$STUB_LOG"; run --stage prev-0a
   [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=prev-0a need=inventory' <<<"$OUT" \
     && grep -qF 'CF_ZONE_ID in prd_terraform no longer holds the legacy id' <<<"$OUT"
@@ -483,6 +586,7 @@ row_p12b_crossed_legacy_id_refuses() { # <bootstrap-src>
 row_p12c_bad_id_prev_refuses() { # <bootstrap-src>
   world p12c "$1"
   printf '%s' 0123456789abcdef0123456789abcdef > "$STUB_D/prd_terraform/CF_ZONE_ID_PREV"
+  at refuse
   : > "$STUB_LOG"; run --stage prev-0a
   [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=prev-0a need=inventory' <<<"$OUT" \
     && grep -qF 'prd_terraform/CF_ZONE_ID_PREV exists but does not hold the legacy id' <<<"$OUT"
@@ -498,7 +602,7 @@ row_p11b_old_token_no_prev_fails() { # <bootstrap-src>
   [[ "$RC" -eq 1 ]] && grep -qx 'SOLEUR_CFAM_VERIFY verdict=fail' <<<"$OUT" \
     && grep -qxF 'SOLEUR_CFAM_VERIFY check=prd_terraform/CF_API_TOKEN=swapped-prev-revoked verdict=fail' <<<"$OUT" \
     && grep -qxF 'SOLEUR_CFAM_VERIFY check=prd_terraform/CF_API_TOKEN_RULESETS=swapped verdict=ok' <<<"$OUT" \
-    && grep -qxF "$(printf 'read\tcurl https://api.cloudflare.com/client/v4/zones/%s' "$NZ")" "$STUB_LOG" \
+    && grep -qxF "$(printf 'read\tcurl https://api.cloudflare.com/client/v4/zones/%s/dns_records?per_page=1' "$NZ")" "$STUB_LOG" \
     && [[ "$(mut)" -eq 0 ]]
 }
 # P11c: the four 0b keys were never swapped and their _NEXT deleted by hand (no _NEXT, no _PREV):
@@ -519,6 +623,7 @@ row_p11c_0b_never_swapped_fails() { # <bootstrap-src>
 row_p13_id_trailing_newline_refuses() { # <bootstrap-src>
   world p13 "$1"
   printf '%s\n' "$OZ" > "$STUB_D/prd_terraform/CF_ZONE_ID"
+  at refuse
   : > "$STUB_LOG"; run --stage prev-0a
   [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=prev-0a need=inventory' <<<"$OUT" \
     && grep -qF 'CF_ZONE_ID in prd_terraform no longer holds the legacy id' <<<"$OUT"
@@ -534,6 +639,138 @@ row_p14_revoked_prev_named() { # <bootstrap-src>
     && grep -qF 'prd_terraform/CF_API_TOKEN_PURGE_PREV and prd_terraform/CF_API_TOKEN_PURGE_NEXT are both absent: the revert copy was revoked' <<<"$OUT" \
     && grep -qF '(runbook Halt)' <<<"$OUT" \
     && ! grep -qF 'Run prev-0b and swap-0b first' <<<"$OUT"
+}
+API=https://api.cloudflare.com/client/v4
+# P11d: an old "All zones" token on a never-swapped key (no _PREV, no _NEXT) reads the NEW zone too;
+# its read on the OLD zone also answers, so verify fails the key.
+row_p11d_allzones_old_token_fails() { # <bootstrap-src>
+  world p11d "$1"
+  full_sequence || return 1
+  rm -f "$STUB_D/prd_terraform/CF_API_TOKEN_PURGE_PREV"
+  printf '%s' 'SYNTH-ALLZ-CF_API_TOKEN_PURGE-SENTINEL' > "$STUB_D/prd_terraform/CF_API_TOKEN_PURGE"
+  at verdict
+  : > "$STUB_LOG"; run --stage verify
+  [[ "$RC" -eq 1 ]] && grep -qxF 'SOLEUR_CFAM_VERIFY check=prd_terraform/CF_API_TOKEN_PURGE=swapped-prev-revoked verdict=fail' <<<"$OUT" || return 1
+  at reads
+  grep -qxF "$(printf 'read\tcurl %s/zones/%s' "$API" "$NZ")" "$STUB_LOG" && grep -qxF "$(printf 'read\tcurl %s/zones/%s' "$API" "$OZ")" "$STUB_LOG"
+}
+# P11e: every _PREV revoked (0a and 0b): each of the seven keys is ok on its OWN read. Pages answers
+# only on accounts/<new>/pages/projects; Rulesets and Bot Management get 9109 on zones/<id>.
+row_p11e_all_prev_revoked_ok() { # <bootstrap-src>
+  local k
+  world p11e "$1"
+  full_sequence || return 1
+  for k in "${K0A[@]}" "${K0B[@]}"; do rm -f "$STUB_D/prd_terraform/${k}_PREV"; done
+  at verdict
+  : > "$STUB_LOG"; run --stage verify
+  [[ "$RC" -eq 0 ]] && grep -qx 'SOLEUR_CFAM_VERIFY verdict=ok' <<<"$OUT" || return 1
+  for k in "${K0A[@]}" "${K0B[@]}"; do grep -qxF "SOLEUR_CFAM_VERIFY check=prd_terraform/${k}=swapped-prev-revoked verdict=ok" <<<"$OUT" || return 1; done
+  at reads
+  grep -qxF "$(printf 'read\tcurl %s/accounts/%s/pages/projects' "$API" "$NA")" "$STUB_LOG" \
+    && grep -qxF "$(printf 'read\tcurl %s/accounts/%s/pages/projects' "$API" "$OA")" "$STUB_LOG"
+}
+# P15: with _PREV present, an EMPTY or DELETED live key is not swapped (both digests must read).
+row_p15_unreadable_live_key_fails() { # <bootstrap-src>
+  world p15 "$1"
+  full_sequence || return 1
+  at empty
+  : > "$STUB_D/prd_terraform/CF_API_TOKEN"
+  run --stage verify
+  [[ "$RC" -eq 1 ]] && grep -qxF 'SOLEUR_CFAM_VERIFY check=prd_terraform/CF_API_TOKEN=swapped verdict=fail' <<<"$OUT" || return 1
+  at deleted
+  rm -f "$STUB_D/prd_terraform/CF_API_TOKEN"
+  run --stage verify
+  [[ "$RC" -eq 1 ]] && grep -qxF 'SOLEUR_CFAM_VERIFY check=prd_terraform/CF_API_TOKEN=swapped verdict=fail' <<<"$OUT"
+}
+# P15b: the same class in branch-copies-tokens: an unreadable prd_terraform key is "not swapped yet"
+# (need=swap-0b), never "differs from its revert copy".
+row_p15b_branch_unreadable_key_refuses() { # <bootstrap-src>
+  world p15b "$1"
+  full_sequence || return 1
+  : > "$STUB_D/prd_terraform/CF_API_TOKEN_PURGE"
+  at refuse
+  : > "$STUB_LOG"; run --stage branch-copies-tokens
+  [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qxF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=branch-copies-tokens need=swap-0b' <<<"$OUT"
+}
+# P16: <KEY> already equal to its staged _NEXT with no _PREV: prev-0a and prev-0b refuse (copy
+# neither way) instead of certifying the NEW token as the revert copy.
+row_p16_key_equals_next_refuses() { # <bootstrap-src>
+  world p16 "$1"
+  printf '%s' "$(new_val CF_API_TOKEN)" > "$STUB_D/prd_terraform/CF_API_TOKEN"
+  printf '%s' "$(new_val CF_API_TOKEN_ZONE_SETTINGS)" > "$STUB_D/prd_terraform/CF_API_TOKEN_ZONE_SETTINGS"
+  at refuse
+  : > "$STUB_LOG"; run --stage prev-0a
+  [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=prev-0a need=inventory' <<<"$OUT" \
+    && grep -qF "prd_terraform/CF_API_TOKEN already equals the staged CF_API_TOKEN_NEXT and no CF_API_TOKEN_PREV exists, so CF_API_TOKEN may no longer hold the old token and a copy would not be a revert copy; copy neither way. Find the old token before any write. ${HINT}" <<<"$OUT" || return 1
+  : > "$STUB_LOG"; run --stage prev-0b
+  [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'prd_terraform/CF_API_TOKEN_ZONE_SETTINGS already equals the staged CF_API_TOKEN_ZONE_SETTINGS_NEXT' <<<"$OUT" || return 1
+  ! has prd_terraform CF_API_TOKEN_PREV && ! has prd_terraform CF_API_TOKEN_ZONE_SETTINGS_PREV
+}
+# P17: the value changes between the character check and the bearer read (a writer between two
+# reads). The bearer config is built from its own one read, so the changed value sends nothing.
+row_p17_bearer_single_read() { # <bootstrap-src>
+  local s
+  world p17 "$1"
+  for s in prev-0a flip-ids swap-0a branch-copies-zone-id prev-0b; do approve "$s"; [[ "$RC" -eq 0 ]] || return 1; done
+  printf '%s\n%s' 'SYNTH-RACE"' 'url = "https://injected.invalid/' > "$STUB_D/.race/prd_terraform.CF_API_TOKEN_DNS_EDIT_NEXT"
+  : > "$STUB_LOG"
+  approve swap-0b
+  at no-inject
+  [[ "$RC" -ne 0 ]] || return 1
+  ! grep -qE 'injected\.invalid|curl-config-extra' "$STUB_LOG" || return 1
+  at malformed
+  grep -qxF 'SOLEUR_CFAM_TOKEN_MALFORMED name=CF_API_TOKEN_DNS_EDIT_NEXT' <<<"$OUT" && [[ "$(mut)" -eq 0 ]]
+}
+# P18: a transport failure is UNREACHABLE (retry), never NOT_ACTIVE (re-mint) and never "old".
+row_p18_unreachable_is_retry() { # <bootstrap-src>
+  local s k
+  world p18 "$1"
+  for s in prev-0a flip-ids swap-0a branch-copies-zone-id prev-0b; do approve "$s"; [[ "$RC" -eq 0 ]] || return 1; done
+  : > "$STUB_D/.curl-down"; : > "$STUB_LOG"
+  approve swap-0b
+  at swap-unreachable
+  [[ "$RC" -ne 0 && "$(mut)" -eq 0 ]] && grep -qxF 'SOLEUR_CFAM_TOKEN_UNREACHABLE name=CF_API_TOKEN_DNS_EDIT_NEXT e=7' <<<"$OUT" \
+    && ! grep -qF 'SOLEUR_CFAM_TOKEN_NOT_ACTIVE' <<<"$OUT" || return 1
+  at setup
+  rm -f "$STUB_D/.curl-down"; approve swap-0b; [[ "$RC" -eq 0 ]] || return 1
+  for k in "${K0A[@]}"; do rm -f "$STUB_D/prd_terraform/${k}_PREV"; done
+  : > "$STUB_D/.curl-down"
+  at verify-unreachable
+  run --stage verify
+  [[ "$RC" -eq 1 ]] && grep -qxF 'SOLEUR_CFAM_TOKEN_UNREACHABLE name=CF_API_TOKEN e=7' <<<"$OUT" \
+    && grep -qxF 'SOLEUR_CFAM_VERIFY check=prd_terraform/CF_API_TOKEN=swapped-prev-revoked verdict=fail' <<<"$OUT"
+}
+# P19 (D35): while a cf-account-migrate.yml run is in flight every write stage refuses BEFORE its
+# plan reads Doppler; a gh that cannot answer refuses too; with none in flight the stage plans.
+row_p19_run_in_flight_refuses() { # <bootstrap-src>
+  local st s gh_line
+  world p19 "$1"
+  gh_line="$(printf 'read\tgh run list --workflow cf-account-migrate.yml --limit 50 --json status')"
+  printf '[{"status":"in_progress"},{"status":"completed"}]\n' > "$STUB_D/.gh-runs"
+  at in-flight
+  for st in prev-0a flip-ids swap-0a branch-copies-zone-id prev-0b swap-0b branch-copies-tokens; do
+    : > "$STUB_LOG"; run --stage "$st"
+    [[ "$RC" -eq 1 && -z "$(digest)" ]] && grep -qxF "SOLEUR_CFAM_RUN_IN_FLIGHT stage=${st} workflow=cf-account-migrate.yml runs=1" <<<"$OUT" \
+      && grep -qxF "SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=${st} need=${st}" <<<"$OUT" \
+      && [[ "$(cat "$STUB_LOG")" == "$gh_line" ]] || return 1
+  done
+  at statuses
+  for s in queued waiting requested pending; do
+    printf '[{"status":"%s"}]\n' "$s" > "$STUB_D/.gh-runs"
+    run --stage prev-0a; [[ "$RC" -eq 1 ]] && grep -qxF 'SOLEUR_CFAM_RUN_IN_FLIGHT stage=prev-0a workflow=cf-account-migrate.yml runs=1' <<<"$OUT" || return 1
+  done
+  at gh-fails
+  rm -f "$STUB_D/.gh-runs"; : > "$STUB_D/.gh-fail"
+  run --stage swap-0a
+  [[ "$RC" -eq 1 ]] && grep -qxF 'SOLEUR_CFAM_RUN_IN_FLIGHT stage=swap-0a workflow=cf-account-migrate.yml runs=unknown' <<<"$OUT" && grep -qF 'gh could not list' <<<"$OUT" || return 1
+  rm -f "$STUB_D/.gh-fail"; printf 'not a run list\n' > "$STUB_D/.gh-runs"
+  run --stage swap-0a; [[ "$RC" -eq 1 ]] && grep -qxF 'SOLEUR_CFAM_RUN_IN_FLIGHT stage=swap-0a workflow=cf-account-migrate.yml runs=unknown' <<<"$OUT" || return 1
+  at none-in-flight
+  printf '[{"status":"completed"}]\n' > "$STUB_D/.gh-runs"
+  run --stage prev-0a; [[ -n "$(digest)" ]] && ! grep -qF 'SOLEUR_CFAM_RUN_IN_FLIGHT' <<<"$OUT" || return 1
+  at read-stage
+  printf '[{"status":"in_progress"}]\n' > "$STUB_D/.gh-runs"
+  run --stage inventory; [[ "$RC" -eq 0 ]]
 }
 
 echo "== --list =="
@@ -661,9 +898,17 @@ row_p11b_old_token_no_prev_fails "$SCRIPT_SRC"; check "P11b verify fails a key h
 row_p11c_0b_never_swapped_fails "$SCRIPT_SRC"; check "P11c verify fails every never-swapped 0b key once its _NEXT is gone and no _PREV exists" $?
 row_p13_id_trailing_newline_refuses "$SCRIPT_SRC"; check "P13 an id stored as hex plus newline is refused by id_of (prev-0a will not keep it)" $?
 row_p14_revoked_prev_named "$SCRIPT_SRC"; check "P14 branch-copies-tokens after a revoked 0b _PREV names the revoke, not prev-0b" $?
+row_p11d_allzones_old_token_fails "$SCRIPT_SRC"; check "P11d verify fails an old All-zones token on a never-swapped key (it also reads the OLD zone)" $?
+row_p11e_all_prev_revoked_ok "$SCRIPT_SRC"; check "P11e every _PREV revoked: all seven keys ok on their own read (Pages on accounts/<new>/pages/projects)" $?
+row_p15_unreadable_live_key_fails "$SCRIPT_SRC"; check "P15 verify fails an empty, then a deleted, live key that still has its _PREV" $?
+row_p15b_branch_unreadable_key_refuses "$SCRIPT_SRC"; check "P15b branch-copies-tokens refuses need=swap-0b on an unreadable prd_terraform key" $?
+row_p16_key_equals_next_refuses "$SCRIPT_SRC"; check "P16 prev-0a and prev-0b refuse a <KEY> that already equals its _NEXT with no _PREV" $?
+row_p17_bearer_single_read "$SCRIPT_SRC"; check "P17 a value changed between the check and the bearer read sends nothing (one-read bearer config)" $?
+row_p18_unreachable_is_retry "$SCRIPT_SRC"; check "P18 a transport failure prints TOKEN_UNREACHABLE e=<rc> in swap and verify, never NOT_ACTIVE" $?
+row_p19_run_in_flight_refuses "$SCRIPT_SRC"; check "P19 every write stage refuses RUN_IN_FLIGHT before its plan; gh failure refuses; none in flight plans" $?
 
 echo "== P5: no synthesized secret value in any output =="
-! grep -qE 'SYNTH-(OLD|NEW)[^ ]*SENTINEL' "$ALL_OUT"
+! grep -qE 'SYNTH-[^ ]*SENTINEL|injected\.invalid' "$ALL_OUT"
 check "no SYNTH-*-SENTINEL value appears in any stdout/stderr" $?
 
 echo "== mutations =="
@@ -675,120 +920,138 @@ mutate() { # <label> <dst> — perl program on stdin; proves it landed
   bash -n "$dst" 2>/dev/null || { fail "mutation ${label} does not parse"; return 1; }
   pass "mutation ${label} landed (differs from the source, bash -n clean)"
 }
+# mkill <label> <row-fn> <mutant> <step> [<row-arg>] — the row must go red AT <step> (killed()).
+mkill() {
+  local label="$1" fn="$2" src="$3" step="$4" r; shift 4
+  "$fn" "$src" "$@"; r=$?
+  killed "$r" "$step"; check "${label} turns ${fn#row_} RED at step ${step}" $?
+}
 if mutate M1 "$SB/m1.sh" <<'PERL'; then
 s{(  for k in \$\{COPY_KEYS\[\@\]\+"\$\{COPY_KEYS\[\@\]\}"\} \$\{DEL_KEYS\[\@\]\+"\$\{DEL_KEYS\[\@\]\}"\}; do\n)}{$1    doppler secrets delete "\$\{k\}_NEXT" -p "\$PROJ" -c "\$TFC" --yes >/dev/null 2>&1 || true\n}
 PERL
-  row_p3b_drift_keeps_next "$SB/m1.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M1 (delete above the compare) turns P3b RED" $?
+  mkill "M1 (delete above the compare)" row_p3b_drift_keeps_next "$SB/m1.sh" next-kept
 fi
 if mutate M2 "$SB/m2.sh" <<'PERL'; then
 s{    in_names "\$\{k\}_NEXT" "\$TF_NAMES" \\\n      && soleur_op_precondition_failed branch-copies-tokens swap-0b [^\n]*\n}{}
 PERL
-  row_p2b_restaged_refuses "$SB/m2.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M2 (the _NEXT refusal dropped) turns P2b RED" $?
+  mkill "M2 (the _NEXT refusal dropped)" row_p2b_restaged_refuses "$SB/m2.sh" refuse
 fi
 if mutate M3 "$SB/m3.sh" <<'PERL'; then
 s{    run_scope_probe "\$profile" \|\| return 1\n}{}
 PERL
-  row_p4_probe_fail_stops "$SB/m3.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M3 (the scope probe dropped) turns P4 RED" $?
+  mkill "M3 (the scope probe dropped)" row_p4_probe_fail_stops "$SB/m3.sh" stops
 fi
 if mutate M4 "$SB/m4.sh" <<'PERL'; then
 s{      prev_copy_sound "\$stage" "\$k"; continue\n}{      continue\n}
 PERL
-  row_p6_bad_revert_copy_refuses "$SB/m4.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M4 (an existing _PREV accepted by name) turns P6 RED" $?
-  row_p7_empty_revert_copy_refuses "$SB/m4.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M4 (an existing _PREV accepted by name) turns P7 RED" $?
+  mkill "M4 (an existing _PREV accepted by name)" row_p6_bad_revert_copy_refuses "$SB/m4.sh" prev-refuses
+  mkill "M4 (an existing _PREV accepted by name)" row_p7_empty_revert_copy_refuses "$SB/m4.sh" prev-refuses
 fi
 if mutate M5 "$SB/m5.sh" <<'PERL'; then
 s{        \[\[ "\$dk" == "\$dp" \]\] \\\n          \|\| soleur_op_precondition_failed [^\n]*\n}{}
 PERL
-  row_p6_bad_revert_copy_refuses "$SB/m5.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M5 (swap overwrites a key that no longer holds its revert copy) turns P6 RED" $?
+  mkill "M5 (swap overwrites a key that no longer holds its revert copy)" row_p6_bad_revert_copy_refuses "$SB/m5.sh" swap-refuses
 fi
 if mutate M6 "$SB/m6.sh" <<'PERL'; then
 s{    dp="\$\(digest_of "\$TFC" "\$\{k\}_PREV"\)" \|\| soleur_op_precondition_failed "\$stage" "\$prev" [^\n]*\n}{    dp="\$(digest_of "\$TFC" "\$\{k\}_PREV" || true)"\n}
 PERL
-  row_p7_empty_revert_copy_refuses "$SB/m6.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M6 (swap tolerates an unreadable _PREV) turns P7 RED" $?
+  mkill "M6 (swap tolerates an unreadable _PREV)" row_p7_empty_revert_copy_refuses "$SB/m6.sh" swap-refuses
 fi
 if mutate M7 "$SB/m7.sh" <<'PERL'; then
 s{    \[\[ "\$v" == "\$OLD_ZONE" \]\] \\\n      \|\| soleur_op_precondition_failed branch-copies-zone-id [^\n]*\n}{}
 PERL
-  row_p8_third_zone_refuses "$SB/m7.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M7 (branch copy overwrites any zone id) turns P8 RED" $?
+  mkill "M7 (branch copy overwrites any zone id)" row_p8_third_zone_refuses "$SB/m7.sh" refuse
 fi
 if mutate M0 "$SB/m0.sh" <<'PERL'; then
-s{ \| LC_ALL=C awk '[^'\n]*'\n}{\n}
+s{ \| LC_ALL=C awk 'NR>1[^'\n]*'\n}{\n}
 PERL
-  row_p9_cli_newline "$SB/m0.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M0 (the CLI's trailing newline kept, the pre-fix reads) turns P9 RED" $?
-  row_p7_empty_revert_copy_refuses "$SB/m0.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M0 (the CLI's trailing newline kept) turns P7 RED (an empty value no longer reads empty)" $?
+  mkill "M0 (the CLI's trailing newline kept, the pre-fix reads)" row_p9_cli_newline "$SB/m0.sh" prev-0a-bytes
 fi
 if mutate M8 "$SB/m8.sh" <<'PERL'; then
 s{  \[\[ "\$fail" -eq 0 \]\] \|\| return 1\n}{}
 PERL
-  row_p3_mismatch_keeps_next "$SB/m8.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M8 (deletes run after a failed copy) turns P3 RED" $?
+  mkill "M8 (deletes run after a failed copy)" row_p3_mismatch_keeps_next "$SB/m8.sh" next-kept
 fi
 if mutate M9 "$SB/m9.sh" <<'PERL'; then
-s{  bad="\$\(set -o pipefail; plain_get [^\n]*\n  \[\[ "\$bad" -eq 0 \]\] [^\n]*\n}{}
+s{  token_chars_ok "\$1" "\$2" \|\| rc=\$\?\n  case "\$rc" in 0\) ;; 2\) return 2 ;; \*\) return 4 ;; esac\n}{}
 PERL
-  row_p10_malformed_next "$SB/m9.sh" quote; r=$?
-  [[ "$r" -ne 0 ]]; check "M9 (token_active's character check dropped) turns P10 quote RED" $?
-  row_p10_malformed_next "$SB/m9.sh" newline; r=$?
-  [[ "$r" -ne 0 ]]; check "M9 (token_active's character check dropped) turns P10 newline RED" $?
+  mkill "M9 (the up-front character check dropped)" row_p10_malformed_next "$SB/m9.sh" no-curl quote
+  mkill "M9 (the up-front character check dropped)" row_p10_malformed_next "$SB/m9.sh" no-curl newline
 fi
 if mutate M10 "$SB/m10.sh" <<'PERL'; then
-s{ && token_active "\$TFC" "\$k" && token_reads_new_zone }{ && token_reads_new_zone }
+s{  token_read "\$1" "\$2" "\$\{CF_API\}/\$\{np\}" '\.success == true' \|\| return \$\?\n}{}
 PERL
-  row_p11_verify_prev_revoked "$SB/m10.sh" inactive; r=$?
-  [[ "$r" -ne 0 ]]; check "M10 (verify skips the active check on a revoked _PREV) turns P11 negative RED" $?
+  mkill "M10 (token_is_new's NEW-read half dropped)" row_p11_verify_prev_revoked "$SB/m10.sh" verdict inactive
 fi
 if mutate M11 "$SB/m11.sh" <<'PERL'; then
 s{      \[\[ -n "\$dc" && "\$dc" == "\$old" \]\] \\\n        \|\| soleur_op_precondition_failed [^\n]*\n}{}
 PERL
-  row_p12a_branch_third_token_refuses "$SB/m11.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M11 (branch copy overwrites any token) turns P12a RED" $?
+  mkill "M11 (branch copy overwrites any token)" row_p12a_branch_third_token_refuses "$SB/m11.sh" refuse
 fi
 if mutate M12 "$SB/m12.sh" <<'PERL'; then
 s{        \[\[ "\$v" == "\$want" \]\] \\\n}{        [[ "\$v" == "\$OLD_ZONE" || "\$v" == "\$OLD_ACCT" ]] \\\n}
 PERL
-  row_p12b_crossed_legacy_id_refuses "$SB/m12.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M12 (either legacy id accepted for either key) turns P12b RED" $?
+  mkill "M12 (either legacy id accepted for either key)" row_p12b_crossed_legacy_id_refuses "$SB/m12.sh" refuse
 fi
 if mutate M13 "$SB/m13.sh" <<'PERL'; then
 s{      \[\[ "\$\(id_of "\$TFC" "\$\{k\}_PREV" \|\| true\)" == "\$want" \]\] \\\n}{      true \\\n}
 PERL
-  row_p12c_bad_id_prev_refuses "$SB/m13.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M13 (an id-key _PREV accepted without its value) turns P12c RED" $?
+  mkill "M13 (an id-key _PREV accepted without its value)" row_p12c_bad_id_prev_refuses "$SB/m13.sh" refuse
 fi
 if mutate M14 "$SB/m14.sh" <<'PERL'; then
-s{ && token_reads_new_zone "\$TFC" "\$k" && r=0\n}{ && r=0\n}
+s{  token_read "\$1" "\$2" "\$\{CF_API\}/\$\{op\}" '\.success == true' \|\| rc=\$\?\n}{  rc=1\n}
 PERL
-  row_p11b_old_token_no_prev_fails "$SB/m14.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M14 (verify's new-zone read dropped) turns P11b RED" $?
-  row_p11c_0b_never_swapped_fails "$SB/m14.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M14 (verify's new-zone read dropped) turns P11c RED" $?
+  mkill "M14 (token_is_new's OLD-read half dropped)" row_p11d_allzones_old_token_fails "$SB/m14.sh" verdict
 fi
 if mutate M15 "$SB/m15.sh" <<'PERL'; then
 s{  v="\$\(plain_get "\$1" "\$2" && printf x\)" \|\| return 1\n  v="\$\{v%x\}"\n}{  v="\$(doppler secrets get "\$2" -p "\$PROJ" -c "\$1" --plain 2>/dev/null)" || return 1\n}
 PERL
-  row_p13_id_trailing_newline_refuses "$SB/m15.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M15 (id_of back on a newline-stripping capture) turns P13 RED" $?
+  mkill "M15 (id_of back on a newline-stripping capture)" row_p13_id_trailing_newline_refuses "$SB/m15.sh" refuse
 fi
 if mutate M16 "$SB/m16.sh" <<'PERL'; then
 s{ \|\| \{ fail=1; break; \}\n}{ || fail=1\n}
 PERL
-  row_p3_mismatch_keeps_next "$SB/m16.sh"; r=$?
-  [[ "$r" -ne 0 ]]; check "M16 (the copy loop runs on after a failed copy) turns P3 RED" $?
+  mkill "M16 (the copy loop runs on after a failed copy)" row_p3_mismatch_keeps_next "$SB/m16.sh" no-later-write
+fi
+if mutate M17 "$SB/m17.sh" <<'PERL'; then
+s{(token_read_path\(\) \{\n  case "\$1" in\n)}{$1    *) printf 'zones/%s' "\$2" ;;\n}
+PERL
+  mkill "M17 (one zone read for every key, the per-key table bypassed)" row_p11e_all_prev_revoked_ok "$SB/m17.sh" verdict
+fi
+if mutate M18 "$SB/m18.sh" <<'PERL'; then
+s{\|\| return \$\(\(100 \+ ps\[1\]\)\)}{|| return 1}
+PERL
+  mkill "M18 (a transport failure folded into an unreadable read)" row_p18_unreachable_is_retry "$SB/m18.sh" swap-unreachable
+fi
+if mutate M19 "$SB/m19.sh" <<'PERL'; then
+s#  \{ bearer_config "\$1" "\$2" "\$3" \| curl (--disable [^\n]*) --config - 2>/dev/null;#  { { printf 'header = "Authorization: Bearer '; plain_get "\$1" "\$2"; printf '"\\n'; } | curl $1 --config - "\$3" 2>/dev/null;#
+PERL
+  mkill "M19 (the bearer line read a second time, the pre-fix bearer_get)" row_p17_bearer_single_read "$SB/m19.sh" no-inject
+fi
+if mutate M20 "$SB/m20.sh" <<'PERL'; then
+s{ && dk="\$\(digest_of "\$TFC" "\$k"\)" && dp="\$\(digest_of "\$TFC" "\$\{k\}_PREV"\)" && \[\[ "\$dk" != "\$dp" \]\] && r=0\n}{ && [[ "\$(digest_of "\$TFC" "\$k" || echo a)" != "\$(digest_of "\$TFC" "\$\{k\}_PREV" || echo a)" ]] && r=0\n}
+PERL
+  mkill "M20 (verify's swapped arm back on one shared fallback)" row_p15_unreadable_live_key_fails "$SB/m20.sh" empty
+fi
+if mutate M21 "$SB/m21.sh" <<'PERL'; then
+s{        \[\[ "\$dk" != "\$\(digest_of "\$TFC" "\$\{k\}_NEXT" \|\| true\)" \]\] \\\n          \|\| soleur_op_precondition_failed [^\n]*\n}{        true ;;\n}
+PERL
+  mkill "M21 (prev copies a <KEY> already equal to its _NEXT)" row_p16_key_equals_next_refuses "$SB/m21.sh" refuse
+fi
+if mutate M22 "$SB/m22.sh" <<'PERL'; then
+s{    dk="\$\(digest_of "\$TFC" "\$k"\)" && dp="\$\(digest_of "\$TFC" "\$\{k\}_PREV"\)" && \[\[ "\$dk" != "\$dp" \]\] \\\n}{    [[ "\$(digest_of "\$TFC" "\$k" || echo a)" != "\$(digest_of "\$TFC" "\$\{k\}_PREV" || echo a)" ]] \\\n}
+PERL
+  mkill "M22 (branch-copies-tokens back on one shared fallback)" row_p15b_branch_unreadable_key_refuses "$SB/m22.sh" refuse
+fi
+if mutate M23 "$SB/m23.sh" <<'PERL'; then
+s{      require_no_run_in_flight "\$stage"\n}{}
+PERL
+  mkill "M23 (the run-in-flight guard dropped)" row_p19_run_in_flight_refuses "$SB/m23.sh" in-flight
 fi
 
 # --- anti-vacuity floor (reported directly, never through fail()) ---------------
 TOTAL=$((PASS + FAIL))
-FLOOR=86
+FLOOR=106
 if [[ "$TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$TOTAL" "$FLOOR" >&2
   printf 'Total: %s assertions, %s failed\n' "$TOTAL" "$((FAIL + 1))"
