@@ -19,22 +19,51 @@
 #      carry `if: failure()`/`always()`).
 #   3. The PRIVILEGED set (suites that need root and therefore must NOT run under the
 #      unprivileged runner — the derive-but-do-not-execute contract from #7076) must
-#      each be `sudo bash`-invoked inside `deploy-script-tests-fixed`. The exclusion
-#      waives the RUNNER, never the invocation.
+#      each be `sudo bash`-invoked inside `deploy-script-tests-fixed`, as a whole command
+#      line (not an `echo`, not `… || true`), in a step with no `if:`/`continue-on-error:`/
+#      `shell:`/`set +e`. The exclusion waives the RUNNER, never the invocation. (Not
+#      allowlisted like item 5: the fixed job is a shared battery whose steps change often.)
 #   4. `deploy-script-tests-done` must exist and need both legs (and every dedicated
 #      job, below) — it is the single verdict `notify-main-failure` reads.
 #   5. The DEDICATED set (#12941, CTO Q25: suites that cannot ride a ship battery) is
 #      derive-but-do-not-execute, like PRIVILEGED — the runner never executes them,
-#      sharded or unsharded, and omits them from --enumerate. Each must be invoked by
-#      exactly one bare `run: bash <path>` step — unmasked, no `||`/`set +e`, no
-#      job-level `continue-on-error:` — in the job its DEDICATED_JOB_WHY value names
-#      (`runs in the <job> job`), and by NO other line of any workflow. That job must run
-#      on a hosted runner with job-level `permissions: contents: read` only, reference no
-#      credential (`secrets.`/`secrets[`/`github.token`, job or workflow env), set no
-#      `CI`/`GITHUB_ACTIONS`/`BRH_*` key, and check out with `persist-credentials: false`
-#      on every checkout step. The runner's never-execute BEHAVIOUR is pinned by
+#      sharded or unsharded, and omits them from --enumerate. The claim is quantified over
+#      an ALLOWLISTED job shape, not over the spellings a denylist happened to list. For
+#      every DEDICATED_JOB_WHY entry, the job its value names (`runs in the <job> job`)
+#      holds ONLY: job keys needs / if (one allowlisted value) / runs-on (a pinned hosted
+#      ubuntu-NN.NN) / permissions (exactly `contents: read`) / timeout-minutes / steps;
+#      steps at the canonical indentation; `uses:` steps of actions/checkout (`with:` =
+#      exactly `persist-credentials: false`), hashicorp/setup-terraform and
+#      actions/upload-artifact (the only one that may carry `if:`), each @<40-hex sha>; and
+#      EXACTLY ONE `run:` step whose whole value is `bash <path>` and which holds only
+#      name:/run:. Refused by name anywhere in the job: `shell:`, `defaults:`, `env:`,
+#      `continue-on-error:`, `working-directory:`, `GITHUB_ENV`/`GITHUB_PATH`; and at the
+#      workflow level `defaults:`. Every `${{ }}` in the job and the workflow env it
+#      inherits is on an exact, case-insensitive allowlist; the `secrets` context in any
+#      spelling, `github.token`, `github[`, `toJSON(github)` are refused; the workflow env
+#      is held to its key allowlist. The suite's stem appears on exactly ONE
+#      comment-stripped line of .github/workflows/** and .github/actions/** — that step.
+#      Under that shape, a green gate means: the suite runs, unmasked, as CI hands it
+#      over, in that job only, on a hosted runner, with no credential bound and no
+#      persisted token. The runner's never-execute BEHAVIOUR is pinned by
 #      apps/web-platform/infra/run-registered-suites.test.sh (T11k), which executes the
 #      runner; this gate reads only the runner's derive-only `--list`.
+#      RESIDUALS of item 5 (outside the allowlisted subset by construction, so a later
+#      shape inside one of these is recorded here, not a new gate gap):
+#        - What the allowlisted actions and the runner image DO: a SHA bump of checkout/
+#          setup-terraform/upload-artifact, or a GitHub change to the ubuntu-NN.NN image
+#          (docker, cloud-init, the default `bash -e` shell), changes behaviour this gate
+#          never reads. Pin review and the suite's own refusals own those.
+#        - The suite's BODY: an `exit 0` committed into the suite itself. Its own self-tests
+#          and code review own that; this gate certifies the wiring, not the suite.
+#        - Callers: infra-validation.yml has no `workflow_call` trigger today; if one is
+#          added, a caller chooses triggers and inputs/`secrets: inherit` (the job still
+#          references none). Triggers and paths filters are the existing asymmetry below.
+#        - Constructed paths: a mention assembled at runtime (a glob over infra/*.test.sh,
+#          string concatenation, `find`) in another job carries no stem token to count.
+#          The runner is the only sanctioned glob, and it never executes this set.
+#        - Runtime verdicts: a job-level `if:` that skips or a timeout that cancels the job
+#          is read as non-success by deploy-script-tests-done (item 4), not by this gate.
 #
 # WHAT IT DOES *NOT* ASSERT, stated so no reader over-reads a green run:
 #   - Whether a suite's VERDICT blocks merge. deploy-script-tests is advisory; promotion
@@ -91,10 +120,15 @@ fi
 # Slice a job's YAML text (comment lines stripped — a commented-out invocation must
 # never satisfy a check; that was the anti-vacuity core of the old gate too).
 # Job-scoping is load-bearing: a whole-file scan cannot honestly say "runs in no CI job".
+# The slice ends at ANY non-comment line at indent 2 or 0 — the next job header however it
+# is spelled (`  next:  # note`, `  "next":`, `  next :`), or the end of the jobs map. A
+# header-shape match (`^  name:$`) let a following job whose header carried a trailing
+# comment be read as part of this one (#12941 review round 2, row H25). No line inside a job
+# sits at indent 2: its keys are at 4 and block-scalar content is deeper than its key.
 slice_job() {  # slice_job <job-name>
   awk -v job="  $1:" '
     $0 == job { injob = 1; next }
-    injob && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { injob = 0 }
+    injob && (/^  [^[:space:]#]/ || /^[^[:space:]#]/) { injob = 0 }
     injob { print }
   ' "$WF" | grep -vE '^[[:space:]]*#' || true
 }
@@ -488,6 +522,9 @@ fi
 
 # Iteration order pinned for diff-comparable logs (assoc traversal is
 # hash-order; the runner pins LC_ALL=C for the same reason).
+# Trailing ` # …` comments dropped (full-line ones already are): a `sudo bash <path>  # note`
+# line is still the bare invocation, and a comment can never be one.
+FIXED_NC=$(sed -E 's/[[:space:]]+#.*$//' <<< "$FIXED_RAW")
 while IFS= read -r base; do
   [[ -n "$base" ]] || continue
   if [[ -z "${TRACKED[$base]+x}" ]]; then
@@ -497,34 +534,130 @@ while IFS= read -r base; do
     continue
   fi
   # The exclusion waives the runner, never the invocation: it must be `sudo bash`ed
-  # inside deploy-script-tests-fixed. Any shape inside that job counts (multi-line
-  # `run: |` included — the sudo steps carry setup commands).
+  # inside deploy-script-tests-fixed, as a WHOLE command line — `run: sudo bash <path>`, or
+  # a `run: |` line that is only `sudo bash <path>` (the sudo steps carry setup lines). A
+  # mention is not an invocation: `echo sudo bash <path>` and `sudo bash <path> || true`
+  # used to satisfy this (#12941 review round 2, rows P1/P2). The step is then selected by
+  # that same anchored line, never by a looser pattern a decoy line could match first.
   base_re="${base//./[.]}"
-  if ! grep -qE "(^|[[:space:]])sudo[[:space:]]+bash[[:space:]]+${INFRA_PREFIX}/([A-Za-z0-9._-]+/)*${base_re}([[:space:]]|$)" <<< "$FIXED_RAW"; then
+  priv_re="sudo[[:space:]]+bash[[:space:]]+${INFRA_PREFIX}/([A-Za-z0-9._-]+/)*${base_re}"
+  if ! grep -qE "^[[:space:]]+(run:[[:space:]]+)?${priv_re}[[:space:]]*$" <<< "$FIXED_NC"; then
     err "$base is PRIVILEGED (excluded from the runner, needs root) but is NOT"
-    err "  sudo-invoked anywhere in the \`$FIXED_JOB\` job — so it runs in NO job."
-    err "  Either restore its \`sudo bash\` step there, or delete it from PRIVILEGED_WHY"
+    err "  invoked by a bare \`sudo bash <path>\` command line in the \`$FIXED_JOB\` job — so it"
+    err "  runs in NO job. Either restore that step there, or delete it from PRIVILEGED_WHY"
     err "  and let the legs run it unprivileged (only if it no longer needs root)."
     fails=$((fails + 1))
   else
-    # An unmasked invocation is what "runs" means — a `continue-on-error:` or
-    # `if:` on the sudo step re-masks the coverage the invocation stands for.
-    mask_check "$FIXED_RAW" "sudo[[:space:]]+bash[[:space:]]+${INFRA_PREFIX}/([A-Za-z0-9._-]+/)*${base_re}" \
-      "the \`$FIXED_JOB\` sudo step for $base"
+    # An unmasked invocation is what "runs" means — a `continue-on-error:` or `if:` on the
+    # sudo step, a `shell:` override or a `set +e` before it re-masks the coverage.
+    _prec="(^|\n)[[:space:]]*(run:[[:space:]]+)?${priv_re}[[:space:]]*(\n|$)"
+    mask_check "$FIXED_NC" "$_prec" "the \`$FIXED_JOB\` sudo step for $base"
+    _prow=$(awk -v RS='      - ' -v pat="$_prec" '$0 ~ pat {print; exit}' <<< "$FIXED_NC")
+    if grep -qE '^[[:space:]]+shell:|set[[:space:]]+\+e' <<< "$_prow"; then
+      err "the \`$FIXED_JOB\` sudo step for $base masks its exit (\`shell:\` or \`set +e\`)."
+      fails=$((fails + 1))
+    fi
   fi
 done < <(printf '%s\n' "${!PRIVILEGED[@]}" | LC_ALL=C sort)
-unset base_re
+unset base_re priv_re _prec _prow
 
 # ── Arm 5: the dedicated set — derived from the RUNNER, invoked in its own job ─
-# The workflow-level `env:` block (column 0, comment lines stripped), inherited by every job.
-WF_ENV_RAW=$(awk '/^env:[[:space:]]*$/ { inenv = 1; next } inenv && /^[^[:space:]#]/ { inenv = 0 } inenv { print }' \
+# Contract: header item 5. The job is held to an ALLOWLIST (every key, step kind, `with:` key,
+# `if:` value and `${{ }}` expression it may contain is enumerated below), because the
+# round-1 denylist kept losing to sibling spellings (#12941 review round 2: `shell: true {0}`,
+# a `$GITHUB_ENV` pre-step, `toJson(secrets)`, a decoy step, `bash -x`, a composite action…).
+# Everything is read comment-stripped: full-line comments, then trailing ` # …` (YAML's own
+# plain-scalar comment rule), so text written only in a comment never satisfies a check.
+WF_NC=$(grep -vE '^[[:space:]]*#' "$WF" | sed -E 's/[[:space:]]+#.*$//' || true)
+# The workflow-level `env:` block in ANY style — its header line is kept, so a flow mapping
+# (`env: { CI: '' }`) is read too — inherited by every job.
+WF_ENV_RAW=$(awk '/^env:/ { inenv = 1; print; next } inenv && /^[^[:space:]#]/ { inenv = 0 } inenv { print }' \
   "$WF" | grep -vE '^[[:space:]]*#' | sed -E 's/[[:space:]]+#.*$//' || true)
-# The exclusion waives the k/N legs, never the invocation: each DEDICATED_JOB_WHY entry
-# must be invoked by ONE bare `run: bash <full repo-relative path>` step of the job its
-# value names, unmasked. Trailing ` # …` comments are stripped first, so an invocation
-# written only in a comment never satisfies it (full-line comments are already gone in
-# slice_job). A multi-line `run: |` block does NOT count — it is where `set +e` and
-# `|| true` hide, and the suite needs no setup lines.
+# The allowlists — exactly what the job and the env it inherits hold today. Extending one is a
+# deliberate edit to this file, reviewed as such; nothing else may appear.
+DED_WF_ENV_KEYS=" TERRAFORM_VERSION TF_VAR_terraform_version "
+DED_EXPR_RE='\$\{\{[[:space:]]*(env\.terraform_version|runner\.temp)[[:space:]]*\}\}'   # lowercased text
+# The structural allowlist, one violation per output line. Job keys: needs, if, runs-on,
+# permissions, timeout-minutes, steps. Steps at indent 6 (`      - `), their keys at 8, `with:`
+# children at 10 — any other indentation is refused, never re-read (records split on the
+# 6-space step prefix, so a re-indented job would merge steps). Step kinds: actions/checkout
+# (`with:` = exactly `persist-credentials: false`), hashicorp/setup-terraform, and
+# actions/upload-artifact (the only step that may carry `if:`), each @<40-hex sha>; plus
+# EXACTLY ONE `run:` step whose value is exactly `bash <path>` and which holds only name:/run:.
+# POSIX awk only (CI's ubuntu awk is mawk): no intervals, no `delete arr`.
+# shellcheck disable=SC2016  # awk program text; the backticks are message punctuation
+DED_SHAPE_AWK='
+function viol(m) { print m }
+function norm(s) { s = tolower(s); gsub(/[[:space:]]/, "", s); sub(/^\$\{\{/, "", s); sub(/\}\}$/, "", s); return s }
+function withok(a, k) {
+  if (a == "actions/checkout") return k == "persist-credentials"
+  if (a == "hashicorp/setup-terraform") return k == "terraform_version" || k == "terraform_wrapper"
+  if (a == "actions/upload-artifact") return k == "name" || k == "path" || k == "if-no-files-found" || k == "retention-days"
+  return 0
+}
+function skey(l,   k, v) {
+  if (l !~ /^[A-Za-z_-]+:/) { viol("step " nstep " line `" l "` is not a plain `key: value` step key"); cur = "bad"; return }
+  k = l; sub(/:.*/, "", k); v = l; sub(/^[A-Za-z_-]+:[[:space:]]*/, "", v)
+  if (k in sk) viol("step " nstep " declares `" k ":` twice")
+  sk[k] = 1; sv[k] = v; cur = k
+}
+function wkey(l,   k, v) {
+  if (l !~ /^[A-Za-z_-]+:/) { viol("step " nstep " `with:` line `" l "` is not a plain `key: value`"); wcur = ""; return }
+  k = l; sub(/:.*/, "", k); v = l; sub(/^[A-Za-z_-]+:[[:space:]]*/, "", v)
+  if (k in wk) viol("step " nstep " `with:` declares `" k ":` twice")
+  wk[k] = 1; wv[k] = v; wcur = k
+}
+function finish(   k, act, pin) {
+  if (!nstep || fin[nstep]) return
+  fin[nstep] = 1
+  if (("uses" in sk) == ("run" in sk)) viol("step " nstep " has " (("uses" in sk) ? "both" : "neither") " of uses:/run:")
+  else if ("run" in sk) {
+    nrun++
+    for (k in sk) if (k != "name" && k != "run") viol("step " nstep " (the run: step) carries `" k ":` — it may hold only name: and run:")
+    if (sv["run"] != "bash " drel) viol("step " nstep " runs `" sv["run"] "`, not exactly `bash " drel "`")
+  } else {
+    act = sv["uses"]; sub(/@.*/, "", act); pin = sv["uses"]; sub(/^[^@]*@/, "", pin)
+    if ((act != "actions/checkout" && act != "hashicorp/setup-terraform" && act != "actions/upload-artifact") \
+        || pin !~ /^[0-9a-f]+$/ || length(pin) != 40)
+      viol("step " nstep " uses `" sv["uses"] "` — allowed: actions/checkout, hashicorp/setup-terraform, actions/upload-artifact, each @<40-hex sha>")
+    for (k in sk) if (k != "name" && k != "uses" && k != "with" && k != "if") viol("step " nstep " (" act ") carries `" k ":` — it may hold only name:, uses:, with: and if:")
+    if ("if" in sk) {
+      if (act != "actions/upload-artifact") viol("step " nstep " (" act ") carries `if:` — only the upload-artifact step may")
+      else if (norm(sv["if"]) != "failure()||cancelled()") viol("step " nstep " `if: " sv["if"] "` is not allowlisted (failure() || cancelled())")
+    }
+    if (("with" in sk) && sv["with"] != "") viol("step " nstep " `with:` is not a block mapping")
+    for (k in wk) if (!withok(act, k)) viol("step " nstep " (" act ") `with:` key `" k ":` is not allowlisted")
+    if (act == "actions/checkout" && wv["persist-credentials"] != "false") viol("step " nstep " (actions/checkout) lacks `persist-credentials: false` as a direct with: child")
+  }
+  split("", sk); split("", sv); split("", wk); split("", wv); cur = ""; wcur = ""
+}
+/^[[:space:]]*$/ { next }
+{
+  match($0, /^ */); i = RLENGTH; l = substr($0, i + 1); sub(/[[:space:]]+$/, "", l)
+  if (i == 4) {
+    finish()
+    if (l ~ /^- /) { viol("a step at indent 4 — steps sit at indent 6 (`      - `), their keys at 8"); sec = "bad"; next }
+    k = l; sub(/:.*/, "", k); v = l; sub(/^[A-Za-z_-]+:[[:space:]]*/, "", v)
+    if (l !~ /^[A-Za-z_-]+:/ || (k != "needs" && k != "if" && k != "runs-on" && k != "permissions" && k != "timeout-minutes" && k != "steps")) {
+      viol("job key `" l "` is not allowlisted (needs, if, runs-on, permissions, timeout-minutes, steps)"); sec = "bad"; next
+    }
+    if (k in jseen) viol("job key `" k ":` is declared twice")
+    jseen[k] = 1; sec = k
+    if (k == "if" && norm(v) != "needs.detect-changes.outputs.pr_duplicate!=\047true\047") viol("job `if: " v "` is not allowlisted")
+    if (k == "steps" && v != "") viol("`steps:` is not a block sequence")
+    next
+  }
+  if (sec == "bad") next
+  if (sec == "permissions" && i == 6) next
+  if (sec == "needs" && i == 6 && l ~ /^- [A-Za-z0-9_-]+$/) next
+  if (sec == "steps" && i == 6 && l ~ /^- /) { finish(); nstep++; sub(/^- +/, "", l); skey(l); next }
+  if (sec == "steps" && i == 8 && nstep && l !~ /^- /) { skey(l); next }
+  if (sec == "steps" && i == 10 && cur == "with") { wkey(l); next }
+  if (sec == "steps" && i > 10 && cur == "with" && wcur != "" && wv[wcur] ~ /^[|>][-+0-9]*$/) next
+  viol("line at a non-canonical indentation or position (indent " i ", under `" sec ":`): `" l "`")
+}
+END { finish(); if (nrun != 1) viol("the job has " (nrun + 0) " run: step(s) (expected exactly 1, the bare invocation)") }
+'
 while IFS= read -r base; do
   [[ -n "$base" ]] || continue
   if [[ -z "${TRACKED[$base]+x}" ]]; then
@@ -539,6 +672,7 @@ while IFS= read -r base; do
   for rel in "${SUITES[@]}"; do
     if [[ "${rel##*/}" == "$base" ]]; then drel="$rel"; break; fi
   done
+  stem="${base%.test.sh}"
   DJOB_RAW=$(slice_job "$djob" | sed -E 's/[[:space:]]+#.*$//')
   if [[ -z "${DJOB_RAW//[[:space:]]/}" ]]; then
     err "$base is DEDICATED to job \`$djob\`, but $WF_REL has no such job — the suite"
@@ -547,12 +681,9 @@ while IFS= read -r base; do
     continue
   fi
   drel_re="${drel//./[.]}"
-  # Any line naming `bash <path>` is a MENTION; the invocation is the one mention that is the
-  # whole `run:` value (the way Arm 1 pins the runner step). `run: echo bash <path>` and
-  # `run: bash <path> || true` mention it without running it unmasked (rows G1/G2).
-  inv_re="(^|[^A-Za-z0-9_-])bash[[:space:]]+(\./)?${drel_re}([^A-Za-z0-9._/-]|$)"
-  anchor_re="^[[:space:]]+run: bash ${drel_re}[[:space:]]*$"
-  _inv_n=$(grep -cE "$inv_re" <<< "$DJOB_RAW" || true)
+  # The invocation: the job's one mention of the suite is its whole `run:` value.
+  anchor_re="^[[:space:]]+(- )?run: bash ${drel_re}[[:space:]]*$"
+  _inv_n=$(grep -cF -- "$stem" <<< "$DJOB_RAW" || true)
   if (( _inv_n == 0 )); then
     err "$base is DEDICATED (never executed by the runner) but is NOT \`bash $drel\`-invoked"
     err "  in the \`$djob\` job — so it runs in NO CI job. Restore that step, or delete the"
@@ -560,38 +691,68 @@ while IFS= read -r base; do
     fails=$((fails + 1))
     continue
   fi
-  if (( _inv_n != 1 )) || ! grep -qE "$anchor_re" <<< "$DJOB_RAW"; then
-    err "the \`$djob\` job names \`bash $drel\` on ${_inv_n} line(s), and none or more than one"
+  _anc_n=$(grep -cE "$anchor_re" <<< "$DJOB_RAW" || true)
+  if (( _inv_n != 1 || _anc_n != 1 )); then
+    err "the \`$djob\` job mentions \`$stem\` on ${_inv_n} line(s), and none or more than one"
     err "  is a bare \`run: bash $drel\` step — an echo, a wrapper or a second copy is not"
     err "  the one unmasked invocation this gate certifies."
     fails=$((fails + 1))
   fi
-  mask_check "$DJOB_RAW" "bash[[:space:]]+${drel_re}" "the \`$djob\` step for $base"
-  _rec=$(printf '%s\n' "$DJOB_RAW" | awk -v RS='      - ' -v pat="bash[[:space:]]+${drel_re}" \
-    '$0 ~ pat {print; exit}' | grep -vE '^[[:space:]]*(- )?name:' || true)
-  if grep -qE '\|\||;[[:space:]]*(true|:)([[:space:]]|$)|;[[:space:]]*exit[[:space:]]+0|set[[:space:]]+\+e' <<< "$_rec"; then
-    err "the \`$djob\` step for $base masks its exit (\`||\`, \`; true\`, \`; exit 0\` or"
-    err "  \`set +e\`) — a red rehearsal would conclude success."
+  # The step is selected by THAT anchor, never by a looser pattern a decoy line matches first.
+  mask_check "$DJOB_RAW" "(^|\n)[[:space:]]*run: bash ${drel_re}[[:space:]]*(\n|$)" "the \`$djob\` step for $base"
+
+  # SINGLE MENTION across every workflow and local action (CTO Q25): the suite's stem appears on
+  # exactly ONE comment-stripped line of .github/workflows/** and .github/actions/** — the step
+  # above. Matching the stem, not a `bash <path>` spelling, covers `./<path>`, a bare path,
+  # `bash -x`, quotes, `${{ github.workspace }}/<path>`, `cd … && bash <basename>` and composite
+  # actions alike. Trailing comments are NOT stripped here: ` #` inside a quoted string is not a
+  # comment, so stripping could hide a real invocation, and a mention in a comment fails closed.
+  _mentions=$(for d in "$REPO_ROOT/.github/workflows" "$REPO_ROOT/.github/actions"; do
+      [[ -d "$d" ]] || continue
+      find "$d" -type f | LC_ALL=C sort | while IFS= read -r f; do
+        grep -vE '^[[:space:]]*#' "$f" | grep -F -- "$stem" | sed "s|^|${f#"$REPO_ROOT"/}: |" || true
+      done
+    done)
+  _all_n=$(grep -c . <<< "$_mentions" || true)
+  if (( _all_n != 1 )); then
+    err "\`$stem\` is mentioned on ${_all_n} comment-stripped line(s) across .github/workflows and"
+    err "  .github/actions (expected exactly 1, the \`$djob\` step): $(head -3 <<< "$_mentions" | tr '\n' '|')"
+    err "  — any other mention can run it outside the job whose posture this gate checks."
+    fails=$((fails + 1))
+  fi
+
+  # The structural allowlist (above).
+  while IFS= read -r _v; do
+    [[ -n "$_v" ]] || continue
+    err "the \`$djob\` job is outside its allowlist: $_v"
+    fails=$((fails + 1))
+  done < <(awk -v drel="$drel" "$DED_SHAPE_AWK" <<< "$DJOB_RAW")
+  # File-wide refusals, named so the message says what to remove (the allowlist above refuses
+  # them too, by position). Each one re-routes or skips the suite while the step stays bare:
+  # `shell: true {0}` runs /usr/bin/true, `defaults:` sets that for every step, `env:` reaches
+  # the suite's CI refusals and BRH_* knobs, `working-directory:` moves the relative path,
+  # `$GITHUB_ENV`/`$GITHUB_PATH` let an earlier step set env or shim `bash`.
+  _refused=$(grep -oE "(^|[[:space:]{,])[\"']?(shell|defaults|env|continue-on-error|working-directory)[\"']?[[:space:]]*:" \
+      <<< "$DJOB_RAW" | sed -E "s/^[[:space:]{,]*[\"']?//; s/[\"']?[[:space:]]*:\$/:/" | LC_ALL=C sort -u | tr '\n' ' ' || true)
+  if [[ -n "$_refused" ]]; then
+    err "the \`$djob\` job carries refused key(s): ${_refused% } — the job needs none of them."
+    fails=$((fails + 1))
+  fi
+  _ghfile=$(grep -oiE 'GITHUB_(ENV|PATH)' <<< "$DJOB_RAW" | LC_ALL=C sort -u | tr '\n' ' ' || true)
+  if [[ -n "$_ghfile" ]]; then
+    err "the \`$djob\` job references ${_ghfile% } — an earlier step could set the suite's env"
+    err "  or put a \`bash\` shim first on PATH for the step this gate certifies."
+    fails=$((fails + 1))
+  fi
+  if grep -qE "^[\"']?defaults[\"']?[[:space:]]*:" <<< "$WF_NC"; then
+    err "$WF_REL declares a workflow-level defaults: block — it applies to the \`$djob\` job"
+    err "  (\`run: shell: true {0}\` would run no suite); declare defaults per job instead."
     fails=$((fails + 1))
   fi
   # A JOB-level `continue-on-error:` lets a failed job read as success to `needs:` (G3).
   if grep -qE '^    continue-on-error:' <<< "$DJOB_RAW"; then
     err "the \`$djob\` job carries a job-level \`continue-on-error:\` — the aggregator would"
     err "  read a red rehearsal as success."
-    fails=$((fails + 1))
-  fi
-  # The ONLY invocation (CTO Q25, rows G12/G13): a second `bash <path>` in any other job of any
-  # workflow runs the privileged boots outside the posture checked below.
-  _elsewhere=$(for w in "$REPO_ROOT"/.github/workflows/*.yml "$REPO_ROOT"/.github/workflows/*.yaml; do
-      [[ -f "$w" ]] || continue
-      grep -vE '^[[:space:]]*#' "$w" | sed -E 's/[[:space:]]+#.*$//' | grep -E "$inv_re" \
-        | sed "s|^|${w#"$REPO_ROOT"/}: |" || true
-    done)
-  _all_n=$(grep -c . <<< "$_elsewhere" || true)
-  if (( _all_n != _inv_n )); then
-    err "$drel is \`bash\`-invoked outside the \`$djob\` job ($_all_n workflow line(s), $_inv_n in"
-    err "  the job): $(head -3 <<< "$_elsewhere" | tr '\n' '|')"
-    err "  — the dedicated job is its only CI home; remove the other invocation."
     fails=$((fails + 1))
   fi
 
@@ -603,19 +764,45 @@ while IFS= read -r base; do
     fails=$((fails + 1))
   fi
   # The workflow-level `env:` block reaches every job, so it is read with the job (G4/G5/G7/G8).
+  # Expression contexts and function names are case-insensitive: read lowercased.
   _posture="$DJOB_RAW"$'\n'"$WF_ENV_RAW"
-  if grep -qE 'secrets[.[]|toJSON\([[:space:]]*secrets|github\.token|github\[' <<< "$_posture"; then
-    err "the \`$djob\` job (or the workflow env) references a credential (\`secrets.\`,"
-    err "  \`secrets[\`, \`toJSON(secrets\`, \`github.token\`) — the rehearsal needs none, and"
-    err "  anything bound in a job that boots privileged containers is readable from them."
+  _posture_lc=$(tr '[:upper:]' '[:lower:]' <<< "$_posture")
+  if grep -qE '(^|[^a-z0-9_-])secrets([^a-z0-9_-]|$)|github\.token|github[[:space:]]*\[|tojson\([[:space:]]*github[[:space:]]*\)' \
+       <<< "$_posture_lc"; then
+    err "the \`$djob\` job (or the workflow env) references a credential (the \`secrets\` context in"
+    err "  any spelling, \`github.token\`, \`github[\`, \`toJSON(github)\`; case-insensitive) — the rehearsal"
+    err "  needs none, and anything bound in a job that boots privileged containers is readable from them."
     fails=$((fails + 1))
   fi
-  # `CI` keys every one of the suite's CI refusals; `BRH_*` are its narrowing knobs (G7/G8).
-  _knob=$(grep -oE '^[[:space:]]+(CI|GITHUB_ACTIONS|BRH_[A-Za-z0-9_]+):' <<< "$_posture" | tr -d ' :' | tr '\n' ' ' || true)
+  _expr_left=$(sed -E "s/${DED_EXPR_RE}//g" <<< "$_posture_lc" | grep -oE '\$\{\{[^}]*(\}\})?' | head -3 | tr '\n' ' ' || true)
+  if [[ -n "$_expr_left" ]]; then
+    err "the \`$djob\` job (or the workflow env) holds \`\${{ }}\` expression(s) outside its allowlist"
+    err "  (env.TERRAFORM_VERSION, runner.temp): ${_expr_left% }"
+    fails=$((fails + 1))
+  fi
+  # `CI` keys every one of the suite's CI refusals; `BRH_*` are its narrowing knobs (G7/G8) —
+  # block, flow (`{ CI: '' }`) or quoted (`"CI":`) keys alike.
+  _knob=$(grep -oE "(^|[[:space:]{,])[\"']?(CI|GITHUB_ACTIONS|BRH_[A-Za-z0-9_]+)[\"']?[[:space:]]*:" <<< "$_posture" \
+    | sed -E "s/^[[:space:]{,]*[\"']?//; s/[\"']?[[:space:]]*:\$//" | LC_ALL=C sort -u | tr '\n' ' ' || true)
   if [[ -n "$_knob" ]]; then
-    err "the \`$djob\` job (or the workflow env) sets ${_knob% }— CI/GITHUB_ACTIONS turn the"
+    err "the \`$djob\` job (or the workflow env) sets ${_knob% } — CI/GITHUB_ACTIONS turn the"
     err "  suite's CI refusals off and BRH_* narrow it; the job must run it as CI hands it over."
     fails=$((fails + 1))
+  fi
+  # The inherited workflow env is held to its key allowlist, block style, unquoted keys
+  # (BASH_ENV, PATH or a quoted key would reach the suite with no knob name to refuse).
+  if [[ -n "${WF_ENV_RAW//[[:space:]]/}" ]]; then
+    _wfe_bad=$(awk -v keys="$DED_WF_ENV_KEYS" '
+      NR == 1 { if ($0 !~ /^env:[[:space:]]*$/) print "header `" $0 "`"; next }
+      /^[[:space:]]*$/ { next }
+      $0 !~ /^  [A-Za-z_][A-Za-z0-9_]*:/ { print "line `" $0 "`"; next }
+      { k = $0; sub(/^  /, "", k); sub(/:.*/, "", k); if (index(keys, " " k " ") == 0) print "key " k }
+    ' <<< "$WF_ENV_RAW" | tr '\n' ';')
+    if [[ -n "$_wfe_bad" ]]; then
+      err "the workflow-level env the \`$djob\` job inherits is outside its allowlist (block style,"
+      err "  keys:${DED_WF_ENV_KEYS% }): ${_wfe_bad%;} — set job-specific env on the job that needs it."
+      fails=$((fails + 1))
+    fi
   fi
   _perm=$(awk '
     /^    permissions:[[:space:]]*$/ { inp = 1; next }
@@ -628,18 +815,20 @@ while IFS= read -r base; do
     err "  '$(tr '\n' ' ' <<< "${_perm:-<none — inherits the workflow block>}")') — declare it on the job, read-only."
     fails=$((fails + 1))
   fi
-  # Per checkout STEP, not job-wide: one compliant checkout must not cover a second (G6).
+  # Per checkout STEP, not job-wide: one compliant checkout must not cover a second (G6), and
+  # the key counts only as a DIRECT `with:` child (indent 10) — the same text inside a block
+  # scalar is not the key (H23). Records split on the canonical step prefix the allowlist pins.
   _ck_open=$(printf '%s\n' "$DJOB_RAW" | awk -v RS='      - ' '
-    /uses:[[:space:]]*actions\/checkout@/ && !/\n[[:space:]]+persist-credentials:[[:space:]]*false[[:space:]]*(\n|$)/ { n++ }
+    /uses:[[:space:]]*actions\/checkout@/ && !/\n          persist-credentials:[[:space:]]*false[[:space:]]*(\n|$)/ { n++ }
     END { print n + 0 }')
   if (( _ck_open > 0 )); then
     err "the \`$djob\` job has ${_ck_open} actions/checkout step(s) without \`persist-credentials: false\`"
     err "  — the token would sit in .git/config on a disk its privileged containers can read."
     fails=$((fails + 1))
   fi
-  unset _perm _rec _elsewhere _all_n _inv_n _posture _knob _ck_open
+  unset _perm _all_n _inv_n _anc_n _posture _posture_lc _knob _ck_open _mentions _refused _ghfile _expr_left _wfe_bad _v
 done < <(printf '%s\n' "${!DEDICATED[@]}" | LC_ALL=C sort)
-unset drel drel_re inv_re anchor_re djob DJOB_RAW
+unset drel drel_re anchor_re djob DJOB_RAW stem WF_NC
 
 # ── Arm 3b: test/infra suites must be invoked SOMEWHERE ──────────────────────
 # apps/web-platform/test/infra/*.test.sh lives OUTSIDE the runner's glob and is
