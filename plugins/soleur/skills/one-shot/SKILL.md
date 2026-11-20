@@ -47,7 +47,7 @@ Read [references/token-discipline.md](${CLAUDE_PLUGIN_ROOT}/skills/one-shot/refe
 If running against a tight budget, run `soleur:plan` instead and review the plan before invoking `soleur:work` separately.
 </decision_gate>
 
-**Pipeline tally & budget caps (#9403).** Parse `--max-<dim> N` (seats|ci_cycles|fix_rounds|agent_rounds) from `$ARGUMENTS`; strip them from children's args (caps persist in the ledger). Contract per `pipeline-tally.sh` header: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` once, `show` at boundaries, `gate <dim> [n]` before expensive steps — `STOP` → `budget-capped` session-state write + exit (never a prompt); `WARN`/`UNKNOWN` → continue. A child's `budget-capped` marker (`grep -q budget-capped` its session-state.md) halts the pipeline. Read references/retry-budget-ruling.md.
+**Tally.** Parse `--max-<dim> N` (seats|ci_cycles|fix_rounds|agent_rounds) from `$ARGUMENTS`; strip them from child args (ledger keeps caps). `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` once, `show` at boundaries, `gate <dim> [n]` before expensive steps: `STOP` → `budget-capped` session-state write + exit (never a prompt); `WARN`/`UNKNOWN` → continue. A `budget-capped` marker (`grep -q budget-capped` its session-state.md) halts. Read [retry-budget-ruling.md](${CLAUDE_PLUGIN_ROOT}/skills/one-shot/references/retry-budget-ruling.md).
 
 **Step 0a: Linear context preflight.** Before creating the worktree, scan `$ARGUMENTS` for substrings matching `[A-Z]{2,}-[0-9]+` or `linear\.app/[^/]+/issue/`. Ignore `ADR-[0-9]+` matches — those are this repo's architecture-decision ordinals, not Linear ids (#8511). If any other match:
 
@@ -264,7 +264,7 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
 **Steps 3-8: Implementation, Review, and Ship**
 
-**Tally:** before steps 3, 4, 5.5, 7 — `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show` + `gate agent_rounds`; `incr agent_rounds` per child; `grep -q budget-capped` the child's session-state.md marker. Read references/retry-budget-ruling.md.
+**Tally:** before steps 3, 4, 5.5, 7: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show` + `gate agent_rounds`; `incr agent_rounds` per child; `grep -q budget-capped` its session-state.md. Read [retry-budget-ruling.md](${CLAUDE_PLUGIN_ROOT}/skills/one-shot/references/retry-budget-ruling.md).
 
 3. **Claude:** Skill tool `skill: soleur:work`. **Grok:** Read `plugins/soleur/skills/work/SKILL.md` in this process (`soleur:work`), args: "<plan_file_path>". Work handles implementation only (Phases 0-3). It does NOT invoke ship -- one-shot controls the full lifecycle below.
 

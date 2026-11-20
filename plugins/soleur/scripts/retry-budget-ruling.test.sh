@@ -691,7 +691,7 @@ assert_contains "$(cat "$REF")" "phase=" "reference tells the parent to read pha
 assert_contains "$(cat "$REF")" "applied: not-run" "reference records continue as not-run"
 assert_contains "$(cat "$REF")" "subagent_type" "reference names the blank Grok spawn"
 assert_contains "$(cat "$REF")" "Do not write the compact marker" "reference does not ask for a continue marker"
-cue_count=$(grep -c -F 'Read references/retry-budget-ruling.md.' "$SKILL" || true)
+cue_count=$(grep -c -F 'Read [retry-budget-ruling.md](${CLAUDE_PLUGIN_ROOT}/skills/one-shot/references/retry-budget-ruling.md)' "$SKILL" || true)
 assert_eq "2" "$cue_count" "one-shot carries the ruling cue twice"
 
 print_results 350
