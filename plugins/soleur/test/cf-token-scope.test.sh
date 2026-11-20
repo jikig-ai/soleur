@@ -853,6 +853,10 @@ src_lacks 'DELETE\|' "D12 no DELETE row in any migration table"
 #     `c${e}url`, `c$()url`), `$'\x63'url`, eval of a string, a variable that
 #     assembles the command. The parse holds the expansion, not its value, and
 #     (S) strips only ' " \;
+#   - a name built by pathname or brace expansion, which needs no variable: a
+#     glob that matches the curl binary (a bracket expression or `?` in place of
+#     a letter of the path) or a brace alternation that expands to it. Bash
+#     prints both as written, so no printed line names curl, even after (S);
 #   - text that is data to this parse and code to another: a heredoc or string
 #     fed to an interpreter, a sourced file, a second script. A heredoc body is
 #     printed verbatim, so a curl there reds (I) unless it replaces a canonical
