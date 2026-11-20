@@ -40,7 +40,7 @@ Incident: `knowledge-base/engineering/operations/post-mortems/soleur-ai-cloudfla
 - **Doppler writes go through the bootstrap.** Phase 2's revert copies, id flip, token swaps and branch-config copies
   are the stages of `bootstrap.sh` in the #12931 spec directory (CTO ruling D11), never retyped by hand. Set `B` from
   the repo root (archive-kb moves the directory; exactly one match, else stop):
-  `B="$(git ls-files --full-name ':(top)*feat-one-shot-12931-cf-account-migration/bootstrap.sh')"; [[ $(printf '%s\n' "$B" | grep -c .) -eq 1 ]] || echo STOP`.
+  `B="$(git ls-files --full-name ':(top)*feat-one-shot-12931-cf-account-migration/bootstrap.sh')"; [[ $(printf '%s\n' "$B" | grep -c .) -eq 1 ]] && B="$(git rev-parse --show-toplevel)/$B" || echo STOP`.
   Run it per the `soleur:operator-bootstrap` agent protocol: `--list`; `--stage <name>` prints the plan; relay its
   `SOLEUR_BOOTSTRAP_IMPACT` and `SOLEUR_BOOTSTRAP_ROLLBACK` lines verbatim; issue the printed apply command as one
   simple command and let the approval prompt carry the person's decision. A stage whose plan says `operations=0` is

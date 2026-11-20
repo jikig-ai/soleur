@@ -483,7 +483,7 @@ out("RED" if n6 < 8 else "OK", "A6-floor", "%d exempt non-plan-only workflows ch
 # So an exempt workflow must not call a local reusable workflow that loads the credentials (the
 # callee would inherit the exemption), and no exempt name may be a workflow_call-only workflow
 # (its own name never reaches the predicate, so exempting it does nothing).
-REUSE = re.compile(r"^[ \t]*uses:[ \t]*\./\.github/workflows/([A-Za-z0-9._-]+\.ya?ml)[ \t]*(?:#.*)?$", re.M)
+REUSE = re.compile(r"^[ \t]*uses:[ \t]*[\"']?\./\.github/workflows/([A-Za-z0-9._-]+\.ya?ml)[\"']?[ \t]*(?:#.*)?$", re.M)
 bad8 = []
 for ex in sorted(EXEMPT):
     if ex not in texts: continue
@@ -614,6 +614,7 @@ mut_row() {
 AWPI=apply-web-platform-infra.yml
 mut_row "an exempt workflow starts planning the root" A6-exempt-no-root-planner apply-github-infra.yml 's#^  INFRA_DIR: infra/github#  INFRA_DIR: apps/web-platform/infra#'
 mut_row "an exempt workflow calls the credential-loading bastion workflow" A8-exempt-no-reusable-loader apply-github-infra.yml 's#^jobs:$#jobs:\n  smuggle:\n    uses: ./.github/workflows/bastion-host-create.yml#'
+mut_row "an exempt workflow calls the bastion workflow by a quoted path" A8-exempt-no-reusable-loader apply-github-infra.yml 's#^jobs:$#jobs:\n  smuggle:\n    uses: "./.github/workflows/bastion-host-create.yml"#'
 mut_row "a gated root's directory becomes unresolvable" A1-unresolvable cf-lb-overlay.yml      's#^  INFRA_DIR: apps/web-platform/infra#  INFRA_DIR: ${{ vars.SOME_DIR }}#'
 mut_row "a root planner drops the loader entirely"  A1-unknown-planner  apply-deploy-pipeline-fix.yml 's#uses: \./\.github/actions/infra-credentials#uses: ./.github/actions/not-the-loader#'
 mut_row "the loader is removed from one gated job"  A2-loader-first     "$AWPI"                '/^  apply:$/,/^  [a-z_]+:$/s#uses: \./\.github/actions/infra-credentials#uses: ./.github/actions/not-the-loader#'
@@ -764,7 +765,7 @@ if (( PASS + FAIL != CASES )); then
   printf 'CONSERVATION FAILED: PASS(%s)+FAIL(%s) != CASES(%s)\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_ASSERTIONS=65
+MIN_ASSERTIONS=66
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
