@@ -59,7 +59,7 @@ This plan ships four layers:
 - `plugins/soleur/lib/completion-floors.ts` — declarative registry (SSoT) of phase → required artifact checks, plus types and a `checkFloor(phase, ctx)` helper.
 - `plugins/soleur/scripts/completion-floor.sh` — portable CLI; args: `--phase <phase> [--root <path>]`; emits `SOLEUR_FLOOR_GATE phase=<p> status=pass|fail missing=<list>`; exit 0 on pass, 1 on fail, 2 on usage/unknown.
 - `plugins/soleur/scripts/completion-floor.test.sh` — fixture-based tests mirroring `pipeline-tally.test.sh` conventions.
-- `knowledge-base/engineering/architecture/decisions/ADR-142-completion-floors.md` — new ADR (provisional ordinal; re-verify at ship).
+- `knowledge-base/engineering/architecture/decisions/ADR-329-completion-floors.md` — new ADR (provisional ordinal; re-verify at ship).
 
 ## Files to Edit
 
@@ -131,7 +131,7 @@ Implement in skill prose (and a small helper `completion-floor-retry.sh` if need
 | `completion-floors.ts` | asked | core deliverable |
 | `completion-floor.sh` | asked | core deliverable |
 | `completion-floor.test.sh` | inferred | test coverage for verifier; needed for regression safety |
-| ADR-142 | inferred | architecture decision record; standard for new contract |
+| ADR-329 | inferred | architecture decision record; standard for new contract |
 
 ### Split Assessment
 
