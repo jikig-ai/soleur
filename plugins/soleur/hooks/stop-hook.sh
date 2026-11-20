@@ -312,10 +312,10 @@ fi
 grant_exact=0
 consumed_set=0
 FRONT_NOW=$(awk '/^---$/{c++; if (c>=2) exit; next} c==1' "$RALPH_STATE_FILE" 2>/dev/null || true)
-if printf '%s\n' "$FRONT_NOW" | grep -qx 'retry_budget_grant: 1'; then
+if grep -qx 'retry_budget_grant: 1' <<<"$FRONT_NOW"; then
   grant_exact=1
 fi
-if printf '%s\n' "$FRONT_NOW" | grep -qx 'retry_budget_consumed: 1'; then
+if grep -qx 'retry_budget_consumed: 1' <<<"$FRONT_NOW"; then
   consumed_set=1
 fi
 # One consumed grant, and only while the tally is capped. A later 1 does not arm again.
@@ -422,7 +422,7 @@ if [[ -n "$TALLY_CAPPED" ]]; then
   if [[ "$downgrade" -eq 1 ]]; then
     readback=$(awk '/^---$/{c++; if (c>=2) exit; next} c==1' "$RALPH_STATE_FILE" 2>/dev/null || true)
     grant_rc=0
-    printf '%s\n' "$readback" | grep -qx 'retry_budget_grant: 0' || grant_rc=$?
+    grep -qx 'retry_budget_grant: 0' <<<"$readback" || grant_rc=$?
     if [[ "$grant_rc" -ge 2 ]]; then
       printf 'SOLEUR_TALLY_GRANT_READ grep-rc=%s\n' "$grant_rc" >&2
     fi
@@ -430,7 +430,7 @@ if [[ -n "$TALLY_CAPPED" ]]; then
       exit 0
     fi
     consumed_rc=0
-    printf '%s\n' "$readback" | grep -qx 'retry_budget_consumed: 1' || consumed_rc=$?
+    grep -qx 'retry_budget_consumed: 1' <<<"$readback" || consumed_rc=$?
     if [[ "$consumed_rc" -ge 2 ]]; then
       printf 'SOLEUR_TALLY_GRANT_READ grep-rc=%s\n' "$consumed_rc" >&2
     fi

@@ -1086,7 +1086,7 @@ insert_before_close() {
 front_has_exact() {
   local file="$1" line="$2" front
   front=$(awk '/^---$/{c++; next} c==1' "$file" 2>/dev/null || true)
-  printf '%s\n' "$front" | grep -qx "$line"
+  grep -qx "$line" <<<"$front"
 }
 
 # Test 56: capped + exact grant 1 -> one block, grant consumed, latch unchanged.
