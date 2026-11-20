@@ -5151,6 +5151,16 @@ AFFECTED_APPS_WEB_PLATFORM_INFRA_INNGEST_LUKS_SOLE_COPY_PATHS=(
 
 
 
+# scripts/health-colo-capture-12846 (#12846): the probe names the runbook it sends the operator to, so a runbook edit
+# re-runs the suite; the suite also drives the real trusted-verdict lib.
+AFFECTED_SCRIPTS_HEALTH_COLO_CAPTURE_12846_PATHS=(
+  "knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md"  # the probe cites its Deadline paragraph
+  "scripts/followthroughs/health-colo-capture-12846.sh"  # SUT
+  "scripts/followthroughs/health-colo-capture-12846.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+  "scripts/lib/trusted-verdict.sh"  # the suite drives the REAL lib through a gh shim
+)
+
 # scripts/host-tcp-exposure (#12008): reads every Terraform file in the infra directory as TEXT (no host, no
 # network); a change to any of them can move the declared-design verdict, which the argv self-edge and the
 # name-stem convention cannot reach.

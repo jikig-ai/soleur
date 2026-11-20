@@ -54,7 +54,7 @@
 #   scripts/followthroughs/health-colo-capture-12846.test.sh
 #   the run_suite line for scripts/health-colo-capture-12846 in scripts/test-all.sh
 #   its rows in scripts/suite-shard-legs.tsv and scripts/suite-durations.tsv (regenerate with --incremental --write)
-#   no scripts/lib/test-affected-paths.sh entry (none declared: the edge is derived from the file names)
+#   the AFFECTED_SCRIPTS_HEALTH_COLO_CAPTURE_12846_PATHS block in scripts/lib/test-affected-paths.sh (the runbook edge)
 #   the tracker's soleur:followthrough directive and its follow-through label
 #   the probe's name in the 2026-11-19 addendum's "Deadline" paragraph of origin-tls-strict-flip.md
 # Re-census at retirement with: git grep -n 'health-colo-capture-12846'
