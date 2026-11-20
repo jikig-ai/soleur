@@ -186,11 +186,11 @@ t_missing_token_refuses() {
 # changes which zone is probed; pin the derivation to the real file.
 t_zone_id_from_import_block() {
   local want got
-  want=$(grep -oE '^[[:space:]]*id = "[0-9a-f]{32}"' "$REPO_ROOT/infra/rundevoo-run/zone.tf" | grep -oE -m1 '[0-9a-f]{32}')
+  want=$(grep -oE -m1 '[0-9a-f]{32}' < <(grep -oE '^[[:space:]]*id = "[0-9a-f]{32}"' "$REPO_ROOT/infra/rundevoo-run/zone.tf") || true)
   LIVE_PAGE1=$(live_doc "${BASE_RECORDS[@]}")
   : > "$CURL_LOG"
   _run >/dev/null || true
-  got=$(grep -oE -m1 'zones/[0-9a-f]{32}' "$CURL_LOG" | cut -d/ -f2)
+  got=$(grep -oE -m1 'zones/[0-9a-f]{32}' "$CURL_LOG" | cut -d/ -f2 || true)
   if [[ "$got" == "$want" && ${#want} -eq 32 ]]; then
     _report "T9 probe targets the committed import-block zone id" ok
   else

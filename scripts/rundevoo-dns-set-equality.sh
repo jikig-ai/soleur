@@ -88,7 +88,7 @@ fi
 # The `|| true` inside the substitution is load-bearing: without it a no-match
 # pipeline fails under pipefail+errexit at the assignment and the named
 # diagnostic below is never reached.
-ZONE_ID=$(grep -oE '^[[:space:]]*id = "[0-9a-f]{32}"' "$ZONE_TF" | grep -oE -m1 '[0-9a-f]{32}' || true)
+ZONE_ID=$(grep -oE -m1 '[0-9a-f]{32}' < <(grep -oE '^[[:space:]]*id = "[0-9a-f]{32}"' "$ZONE_TF") || true)
 [[ ${#ZONE_ID} -eq 32 ]] || { red "could not read the zone id from $ZONE_TF import block"; exit 1; }
 
 # ── managed set: type<TAB>name<TAB>content per cloudflare_record in state ──

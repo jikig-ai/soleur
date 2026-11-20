@@ -150,7 +150,7 @@ jobs:
           # Anchors mirror the `paths:` filter PLUS this workflow file and the
           # gate scripts: a PR editing any piece of the gate must run the gate
           # against itself (self-trigger posture).
-          if printf '%s\n' "$CHANGED" | grep -qE '^(infra/rundevoo-run/|tests/scripts/lib/destroy-guard-filter-rundevoo\.jq$|scripts/rundevoo-destroy-counts\.sh$|scripts/rundevoo-destroy-gate-verdict\.sh$|scripts/rundevoo-squash-ack-detect\.sh$|scripts/rundevoo-dns-set-equality\.sh$|tests/scripts/test-destroy-guard-counter-rundevoo\.sh$|tests/scripts/test-rundevoo-|\.github/workflows/apply-rundevoo-infra\.yml$|\.github/workflows/scheduled-terraform-drift\.yml$)'; then
+          if grep -qE '^(infra/rundevoo-run/|tests/scripts/lib/destroy-guard-filter-rundevoo\.jq$|scripts/rundevoo-destroy-counts\.sh$|scripts/rundevoo-destroy-gate-verdict\.sh$|scripts/rundevoo-squash-ack-detect\.sh$|scripts/rundevoo-dns-set-equality\.sh$|tests/scripts/test-destroy-guard-counter-rundevoo\.sh$|tests/scripts/test-rundevoo-|\.github/workflows/apply-rundevoo-infra\.yml$|\.github/workflows/scheduled-terraform-drift\.yml$)' <<<"$CHANGED"; then
             printf 'rundevoo=true\n' >> "$GITHUB_OUTPUT"
           else
             printf 'rundevoo=false\n' >> "$GITHUB_OUTPUT"

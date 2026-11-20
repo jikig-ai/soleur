@@ -63,6 +63,8 @@ for v in "$resource_deletes" "$resource_forgets" "$nested_deletes" "$undecidable
 done
 
 if [[ "$undecidable_actions" -gt 0 ]]; then
+  # MEASURED-BY: the jq filter above emitted undecidable_actions by counting the
+  # resource changes whose actions it could not classify.
   echo "::error::rundevoo-destroy-counts: $undecidable_actions resource change(s) have empty or non-array 'actions' — the count predicates cannot classify them. HALT (ack-unreachable): inspect the plan document before proceeding." >&2
   exit 1
 fi

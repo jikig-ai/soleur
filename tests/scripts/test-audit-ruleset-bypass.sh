@@ -706,6 +706,9 @@ t_rsc_order_insensitive() {
 # the full battery already runs on every PR and merge_group entry;
 # oracle-review-required stays required and re-scoped onto
 # scripts/ci-oracle-surface.txt).
+# bumped 11->12 by #12971 (rundevoo-destroy-required — the always-run
+# aggregator that makes an unacknowledged rundevoo-run full-root destroy
+# unmergeable, the #6589-pattern sibling of sentry-destroy-required).
 # The exact count is kept in lockstep
 # with infra/github/ruleset-ci-required.tf by T-rsc-9 below.
 #
@@ -723,10 +726,10 @@ t_rsc_real_canonical_shape() {
   codeql_rows=$(jq '[.[] | select(.context=="CodeQL")] | length' < "$real")
   # Every check is a GitHub Actions context (15368). CodeQL (GHAS 57789) is NOT required.
   non_15368_apps=$(jq -r '[.[] | select(.integration_id != 15368) | .context] | join(",")' < "$real")
-  if [[ "$n" == "11" && "$codeql_rows" == "0" && -z "$non_15368_apps" ]]; then
-    _report "T-rsc-7 real canonical RSC: 11 entries, no CodeQL row, all 15368" ok
+  if [[ "$n" == "12" && "$codeql_rows" == "0" && -z "$non_15368_apps" ]]; then
+    _report "T-rsc-7 real canonical RSC: 12 entries, no CodeQL row, all 15368" ok
   else
-    _report "T-rsc-7 real canonical RSC: 11 entries, no CodeQL row, all 15368" fail "n=$n codeql_rows=$codeql_rows non_15368=$non_15368_apps"
+    _report "T-rsc-7 real canonical RSC: 12 entries, no CodeQL row, all 15368" fail "n=$n codeql_rows=$codeql_rows non_15368=$non_15368_apps"
   fi
 }
 
