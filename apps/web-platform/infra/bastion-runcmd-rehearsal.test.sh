@@ -29,11 +29,15 @@
 #     shims (runcmd's PATH puts /usr/local/sbin first)
 #   10.0.1.70/32 on lo (CTO Q21; the private_ip stage   the hot-attached Hetzner private NIC, and the
 #     matches the address on any interface)             networkd file write_files installs for it
-#   containers share the host boot_id (CTO Q24)         `journalctl -b`'s per-boot scoping; on the real
-#                                                       host it separates the settle reboot's two boots
+#   containers share the host boot_id (CTO Q24); the    `journalctl -b`'s per-boot scoping; on the real
+#     same holds for `_egress_why`'s `-b               host it separates the settle reboot's two boots
+#     _SYSTEMD_UNIT=` read (CTO Q29)
 #   `container=docker`; systemd-sysctl, -binfmt,        nothing the template uses (it calls no sysctl,
 #     -modules-load, -udevd, -udev-trigger masked;      modprobe or udev); timesyncd is NOT masked and
 #     journald ReadKMsg=no (CTO Q21)                    skips itself (ConditionVirtualization=!container)
+#   getty@, console-getty and getty.target masked       no getty runs on the real host's first boot path;
+#     (CTO Q27; BRH_GETTY_UNMASKED refuses an image     under --privileged one would own the host's tty1
+#     that lacks the masks, before any boot)
 #   cloud-init from the archive (version printed)       whatever cloud-init the Hetzner image bakes
 #   IMAGE_ASSUMED installed into the fixture            whether the Hetzner image really ships it
 #   the empty-DSN render arm is not booted              it dies silently at egress_load by design; the
@@ -50,6 +54,11 @@
 # (two boots), M1 conffile, M2 preserve_sources_list removed, F1 egress_load fatal, F1-M flush removed,
 # FA NTP user dropped, B1-C cloud-faithful. 9 boots in three waves of up to three.
 #
+# VERDICTS. PASS, FAIL, SKIP (a boot row declined by the archive, ADR-188; never a PASS, CTO Q7) or
+# PARTIAL (a local subset). SKIP exits 0 only on GITHUB_EVENT_NAME pull_request or push, which gate
+# nothing; any other event (a dispatched birth-gate run), or none under CI, turns it into
+# `FAIL (BRH_SKIP_ON_GATE_EVENT)` (CTO Q28). CI means CI or GITHUB_ACTIONS is set.
+#
 # LOCAL SUBSETS. BRH_STATIC_ONLY=1 boots nothing (the self-tests, the image checks, S0 and S1) but
 # still builds the fixture images, so it needs the archive; BRH_ROWS=B1,F1 boots
 # only the named rows. Both end `bastion-runcmd-rehearsal: PARTIAL (...)`, never PASS, and both are
@@ -58,10 +67,16 @@
 # archive names to an address (Test Scenario 4, refused under CI).
 #
 # MUTATION ANCHORS. The template lines this file edits for M1, M2, F1-M and FA live in the ANCHORS
-# block below. A rewording of those template lines prints `BRH_ANCHOR_MISS:<row> anchor=...`: update
-# the anchor here, the template is not at fault.
+# block below. A miss prints `BRH_ANCHOR_MISS:<row> anchor=...`: either the template line was reworded
+# (update the anchor here) or the fix the row guards was reverted (FA's anchor is the FAULT-A apt line;
+# bastion.test.sh egress row 23 reds that revert on substance).
+#
+# STALE RUNS. A run killed without its EXIT trap leaves `brh-<pid>-*` containers and networks and a
+# /var/tmp/brh.* dir; the next run reaps containers and networks whose <pid> is dead (and older than an
+# hour), under the subnet flock, and work dirs older than 12 h.
 #
 # Run: bash apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh   (CI: job bastion-boot-rehearsal)
+# pyramid-justified: e2e layer by necessity (CTO Q1, Q6): the two shipped faults (FAULT-A, nft refusing the user a package never installed; FAULT-B, the boilerplate fatal detail) were invisible to every static pin and reproduce only under real cloud-init, dpkg, nft and journald.
 # Presence under apps/web-platform/infra/ IS registration — run-registered-suites.sh (#8736).
 # shellcheck source-path=SCRIPTDIR
 # shellcheck disable=SC2016,SC2319  # single-quoted scripts expand in the containers; "$(cond; echo $?)" turns a condition into an rc argument
@@ -91,7 +106,7 @@ declare -A ROW_MODE=([B1]=settled [B2]=reboot [M1]=settled [M2]=settled [F1]=set
 declare -A ROW_IMG=([B1]=min [B2]=min [M1]=min [M2]=min [F1]=min [F1-M]=min [FA]=min [B1-C]=cloud)
 # Assertions each row makes (its assert_* function); a row that makes a different number is a FAIL.
 declare -A ROW_CASES=([B1]=21 [B2]=6 [M1]=4 [M2]=4 [F1]=3 [F1-M]=5 [FA]=2 [B1-C]=10)
-STATIC_CASES=32
+STATIC_CASES=58
 
 # IMAGE_ASSUMED — the declared contract with the Hetzner image (ADR-327 amendment) AND the minimal
 # fixture's install list: packages the template uses but never installs, and the users its rules or
@@ -142,8 +157,11 @@ _st="$( (pass x >/dev/null; fail y 2>/dev/null; printf '%s %s %s' "$passes" "$fa
 if [ "$_st" != "1 1 1" ]; then printf 'FAIL INSTRUMENT: pass()/fail() self-test read "%s", expected "1 1 1"\n' "$_st" >&2; exit 1; fi
 
 # ── Subsets and CI refusals (AC8) ──────────────────────────────────────────────────────────────
-PARTIAL=""
-if [ -n "${CI:-}" ]; then
+# CI is CI or GITHUB_ACTIONS: a step env `CI: ''` must not switch every refusal off.
+is_ci() { [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; }
+# Only this script sets the subset floor; an inherited value would replace MIN_CASES on a full run.
+PARTIAL=""; BRH_PARTIAL_MIN=""
+if is_ci; then
   for v in BRH_ROWS BRH_STATIC_ONLY BRH_ARCHIVE_PIN; do
     if [ -n "${!v:-}" ]; then printf 'BRH_SUBSET_REFUSED: %s is set under CI; a partial or pinned run can never be read as proof\n' "$v" >&2
       printf 'bastion-runcmd-rehearsal: FAIL (refused: %s under CI)\n' "$v" >&2; exit 1; fi
@@ -163,7 +181,7 @@ selected() { local s; for s in "${SELECTED[@]}"; do [ "$s" = "$1" ] && return 0;
 
 # ── Preconditions (CTO Q7) ─────────────────────────────────────────────────────────────────────
 absent() {
-  if [ -n "${CI:-}" ]; then printf 'BRH_TOOL_ABSENT:%s\n' "$1" >&2; printf 'bastion-runcmd-rehearsal: FAIL (BRH_TOOL_ABSENT:%s under CI)\n' "$1" >&2; exit 1; fi
+  if is_ci; then printf 'BRH_TOOL_ABSENT:%s\n' "$1" >&2; printf 'bastion-runcmd-rehearsal: FAIL (BRH_TOOL_ABSENT:%s under CI)\n' "$1" >&2; exit 1; fi
   printf 'SKIP (loud): bastion-runcmd-rehearsal: %s absent\n' "$1"; exit 0
 }
 for t in docker terraform python3 ssh-keygen openssl dash curl flock ip; do command -v "$t" >/dev/null 2>&1 || absent "$t"; done
@@ -200,9 +218,15 @@ umask 077
 WORK="$(mktemp -d "${TMPDIR}/brh.XXXXXX")" || { printf 'HARNESS: mktemp failed\n' >&2; exit 2; }
 assert_fixture_dir "$WORK"
 declare -A WPID=()
+gha_esc() { # one workflow-command-safe line: no newline, `%` escaped, `::` defused, 300 bytes at most
+  printf '%s' "$1" | tr '\r\n' '  ' | sed -e 's/%/%25/g' -e 's/::/: :/g' | head -c 300
+}
 cleanup() {
   local rc=$? p ids keep="${BRH_KEEP_TMP:-}"
   for p in "${WPID[@]}"; do kill "$p" 2>/dev/null; done
+  if [ "$rc" -ne 0 ] && [ -n "${GITHUB_ACTIONS:-}" ]; then
+    for p in "${FAILURES[@]}"; do printf '::error title=bastion-boot-rehearsal::%s\n' "$(gha_esc "$p")"; done
+  fi
   ids="$(docker ps -aq --filter "name=brh-$$-" 2>/dev/null)"
   # shellcheck disable=SC2086  # one container id per word
   [ -z "$ids" ] || docker rm -f $ids >/dev/null 2>&1
@@ -220,6 +244,44 @@ cleanup() {
 }
 trap cleanup EXIT
 printf 'NOTICE: bastion-runcmd-rehearsal starts privileged systemd containers\n'
+
+# ── Stale-run reaper (resources of runs killed without their EXIT trap) ────────────────────────
+LOCKF="${TMPDIR}/brh-subnets.lock"
+pid_alive() { kill -0 "$1" 2>/dev/null || [ -d "/proc/$1" ]; }   # EPERM (another user's pid) is alive
+stale_owner() { # <docker name> -> rc 0 when it is brh-<pid>-* and <pid> is not alive (never this run's)
+  local p
+  case "$1" in brh-[0-9]*-*) p="${1#brh-}"; p="${p%%-*}" ;; *) return 1 ;; esac
+  case "$p" in *[!0-9]*|"") return 1 ;; esac
+  [ "$p" != "$$" ] && ! pid_alive "$p"
+}
+old_enough() { # <created timestamp> -> rc 0 when over an hour old (a pid from another pid namespace can look dead)
+  local c; c="$(date -d "$1" +%s 2>/dev/null)" || return 1
+  [ $(( $(date +%s) - c )) -ge 3600 ]
+}
+reap_stale() {
+  local lk n c
+  assert_fixture_dir "$LOCKF"
+  exec {lk}>>"$LOCKF"
+  flock -w 60 "$lk" || { printf 'BRH_SUBNET_BUSY: could not take %s for the stale-run reaper\n' "$LOCKF" >&2; exec {lk}>&-; return 0; }
+  for n in $(docker ps -a --format '{{.Names}}' --filter name=brh- 2>/dev/null); do
+    stale_owner "$n" || continue
+    c="$(docker inspect -f '{{.Created}}' "$n" 2>/dev/null)"; old_enough "$c" || continue
+    docker rm -f "$n" >/dev/null 2>&1 && printf 'reaped stale container %s\n' "$n"
+  done
+  for n in $(docker network ls --format '{{.Name}}' --filter name=brh- 2>/dev/null); do
+    stale_owner "$n" || continue
+    c="$(docker network inspect -f '{{.Created}}' "$n" 2>/dev/null)"; old_enough "$c" || continue
+    docker network rm "$n" >/dev/null 2>&1 && printf 'reaped stale network %s\n' "$n"
+  done
+  flock -u "$lk"; exec {lk}>&-
+  find "${SOLEUR_SCRATCH_BASE:-${TMPDIR:-/var/tmp}}" -maxdepth 1 -type d -name 'brh.*' -mmin +720 \
+    -exec rm -rf {} + 2>/dev/null || true
+}
+reap_stale
+_dead="$(sh -c 'echo $$')"
+_sr=1; if ! stale_owner "brh-$$-B1" && stale_owner "brh-$_dead-B1" && ! stale_owner "brh-x$_dead-B1" && ! stale_owner "zot-$_dead-B1" \
+          && ! stale_owner "brh-1-B1"; then _sr=0; fi
+chk "reaper: a dead pid's brh-<pid>-* is stale; this run's, pid 1's, and other names are not" "$_sr" "dead=$_dead"
 
 # ── Static checks over this file and the anchors (seconds) ─────────────────────────────────────
 # Host containment (CTO Q21): no docker run/create in this file may share a host namespace or bind
@@ -239,7 +301,7 @@ import sys
 row, src, dst, a, b = sys.argv[1:]
 t = open(src).read()
 if t.count(a) != 1:
-    print("BRH_ANCHOR_MISS:%s anchor=%r (%d occurrences); update the anchor in bastion-runcmd-rehearsal.test.sh; the template is not at fault" % (row, a[:100], t.count(a)))
+    print("BRH_ANCHOR_MISS:%s anchor=%r (%d occurrences): the template line was reworded (update the anchor in bastion-runcmd-rehearsal.test.sh) or the fix this row guards was reverted" % (row, a[:100], t.count(a)))
     sys.exit(1)
 open(dst, "w").write(t.replace(a, b))
 PY
@@ -616,7 +678,7 @@ exec /usr/bin/systemctl poweroff
 R
 chmod 0755 /usr/local/sbin/uname /usr/local/sbin/reboot
 printf '[Journal]\nReadKMsg=no\n' > /etc/systemd/journald.conf.d/brh.conf
-systemctl mask systemd-sysctl.service systemd-binfmt.service systemd-modules-load.service systemd-udevd.service systemd-udev-trigger.service
+systemctl mask systemd-sysctl.service systemd-binfmt.service systemd-modules-load.service systemd-udevd.service systemd-udev-trigger.service getty@.service console-getty.service getty.target
 rm -rf /var/lib/apt/lists/* /etc/ssh/ssh_host_*
 cloud-init --version
 SH
@@ -624,8 +686,9 @@ SH
 #!/bin/sh
 printf 'journalctl %s\n' "$*" >> "$BRH_FAKE_LOG"
 case "$*" in
-  "--sync") exit 0 ;;
+  "--sync") [ -n "${BRH_FAKE_SYNC_HANG:-}" ] && sleep 30; exit 0 ;;
   "-b -u nftables.service -u bastion-egress.service --no-pager -o cat") cat "$BRH_FAKE_JOURNAL"; exit 0 ;;
+  "-b _SYSTEMD_UNIT=bastion-egress.service --no-pager -o cat") cat "${BRH_FAKE_UNITOUT:-/dev/null}"; exit 0 ;;
 esac
 exit 3
 SH
@@ -634,6 +697,7 @@ SH
 case "$*" in
   "show -p Result --value nftables.service") echo "$BRH_FAKE_NFT" ;;
   "show -p Result --value bastion-egress.service") echo "$BRH_FAKE_EGRESS" ;;
+  "show -p ExecMainStatus --value bastion-egress.service") echo "$BRH_FAKE_ST" ;;
   *) printf 'BADARGV systemctl %s\n' "$*" >> "$BRH_FAKE_LOG"; exit 3 ;;
 esac
 SH
@@ -643,14 +707,106 @@ write_helpers
 PRED="$WORK/pred.py"
 pred() { python3 "$PRED" "$@" 2>&1; }
 
+# ── Row verdict helpers (defined before any boot so the instrument self-test below drives them) ─
+RB=()
+rk() { # <label> <rc> [detail]: a row assertion, buffered until the row is classified (ADR-188)
+  if [ "$2" -eq 0 ]; then RB+=("P${TAB}$1${TAB}"); else RB+=("F${TAB}$1${TAB}$(printf '%s' "${3:-}" | tr '\t\n' '  ' | head -c 900)"); fi
+}
+rf() { cat "$RD/f/$1" 2>/dev/null; }
+rc_is() { [ "$(rf "$1")" = "$2" ]; }
+row_stage() { # the stage a failed row died at: its fatal, else the apt process alive at the cap
+  local s
+  s="$(python3 "$PRED" fatalstage "$RD/capture-boot.log" "$SRC" 2>/dev/null)"
+  if [ -z "$s" ] && [ "$(rf end)" = cap ]; then
+    if grep -q ' update' "$RD/f/boot.cap-apt" "$RD/f/boot1.cap-apt" "$RD/f/boot2.cap-apt" 2>/dev/null; then s=apt_update
+    elif grep -q ' install' "$RD/f/boot.cap-apt" "$RD/f/boot1.cap-apt" "$RD/f/boot2.cap-apt" 2>/dev/null; then s=apt_install; fi
+  fi
+  printf '%s' "$s"
+}
+row_brief() {
+  local b
+  b="$(python3 "$PRED" last "$RD/capture-boot.log" "$SRC" 2>/dev/null) end=$(rf end) elapsed=$(rf elapsed)s"
+  [ -f "$RD/f/harness" ] && b="HARNESS: $(rf harness); $b"
+  [ -f "$RD/f/deadline" ] && b="$(rf deadline); $b"
+  [ "$(rf end)" = cap ] && b="BRH_BOOT_CAP:$ROW stage=$(row_stage) elapsed=$(rf elapsed); $b"
+  printf '%s' "$b"
+}
+row_ctx() {
+  printf '      %s journal reason: %s\n' "$ROW" "$(grep -aE '\[bastion-egress\] FAIL:|: Error: ' "$RD/journal.txt" 2>/dev/null | tail -n 3 | tr '\n' ' ' | head -c 400)"
+  printf '      %s last 20 lines of cloud-init-output.log:\n' "$ROW"
+  tail -n 20 "$RD/cloud-init-output.log" 2>/dev/null | sed -e 's/::/: :/g' -e 's/^/        | /'
+}
+SKIPPED_ROWS=(); ROWS_BOOTED=0; ROWS_SKIPPED_UNBOOTED=0
+flush_row() {
+  local n="${#RB[@]}" want="${ROW_CASES[$ROW]}" nf=0 e st lbl det brief stg
+  for e in "${RB[@]}"; do [ "${e%%"$TAB"*}" = F ] && nf=$((nf + 1)); done
+  if [ "$n" -ne "$want" ]; then chk "$ROW: the row made $n assertions, ROW_CASES says $want" 1; fi
+  if [ "$nf" -gt 0 ] && grep -q 'Hash Sum mismatch' "$RD/cloud-init-output.log" 2>/dev/null; then
+    chk "BRH_APT_MIRROR_INCONSISTENT:$ROW (apt Hash Sum mismatch; re-run, never a skip)" 1
+  elif [ "$nf" -gt 0 ]; then
+    stg="$(row_stage)"
+    # M1's designed fatal is apt_install: it is an environment decline only when the conffile marker
+    # (the property M1 exists for) is absent. Measured under an archive outage (Test Scenario 4):
+    # `apt-get update` exits 0 on a dead mirror, so rows die at apt_install; the cloud-faithful image
+    # already carries every package, so B1-C dies at apt_path (the M2 widening, same reason).
+    [ "$ROW" = M1 ] && grep -q 'conffile prompt' "$RD/cloud-init-output.log" 2>/dev/null && stg=designed
+    case "$stg" in
+      apt_update|apt_install|apt_path)
+        reprobe
+        if [ "$PROBE_OK" -eq 0 ] || [ "$REPROBE_OK" -eq 0 ]; then
+          cases=$((cases + n)); SKIPPED_ASSERTIONS=$((SKIPPED_ASSERTIONS + n)); SKIPPED_ROWS+=("$ROW")
+          printf 'SKIP (loud): %s ADR-188: died at %s with the archive probe failing (first: %s; at classification: %s)\n' "$ROW" "$stg" "$PROBE_LINE" "$REPROBE_LINE"
+          RB=(); return
+        fi ;;
+    esac
+  fi
+  brief="$(row_brief)"
+  for e in "${RB[@]}"; do
+    IFS="$TAB" read -r st lbl det <<<"$e"
+    cases=$((cases + 1))
+    if [ "$st" = P ]; then pass "$ROW: $lbl"; else fail "$ROW: $lbl [$brief]" "$det"; fi
+  done
+  [ "$nf" -eq 0 ] || row_ctx >&2
+  RB=()
+}
+# Instrument self-test, part two: the verdict-owning helpers through their real dispatch (chk; rk ->
+# flush_row), in a subshell, so this run's counters, ledger and case tally are untouched (the subshell
+# is the unwind). Reported by printf + exit, never by the helpers under test.
+_st="$( (cases=0; passes=0; fails=0; SKIPPED_ASSERTIONS=0; FAILURES=(); RB=(); SKIPPED_ROWS=()
+  ROW=_st; ROW_CASES[_st]=2; RD="$WORK/st-none"; SRC=198.18.0.10
+  chk st-a 0 >/dev/null; chk st-b 1 2>/dev/null; rk st-p 0; rk st-f 1 d; flush_row >/dev/null 2>&1
+  printf '%s %s %s %s %s|%s|%s' "$cases" "$passes" "$fails" "$SKIPPED_ASSERTIONS" "${#RB[@]}" "${FAILURES[0]:-}" "${FAILURES[1]%% \[*}") )"
+if [ "$_st" != "4 2 2 0 0|st-b|_st: st-f" ]; then printf 'FAIL INSTRUMENT: chk/rk/flush_row self-test read "%s", expected "4 2 2 0 0|st-b|_st: st-f"\n' "$_st" >&2; exit 1; fi
+
+# ── SKIP on a gate event (CTO Q28) and the CI definition (B1), offline ─────────────────────────
+# A SKIP exits 0 only on pull_request and push (they gate nothing; ADR-188); any other event, or
+# none under CI, is a gate run and a SKIP there is a FAIL.
+_skip_is_failure() { case "${GITHUB_EVENT_NAME-__unset__}" in __unset__) is_ci ;; pull_request|push) return 1 ;; *) return 0 ;; esac; }
+_sk=""
+for _c in "none|" "ci|CI=true" "gha|GITHUB_ACTIONS=true" "pr|GITHUB_EVENT_NAME=pull_request" "push|GITHUB_EVENT_NAME=push" \
+          "dispatch|GITHUB_EVENT_NAME=workflow_dispatch" "schedule|GITHUB_EVENT_NAME=schedule" "empty|GITHUB_EVENT_NAME="; do
+  _r="$( unset CI GITHUB_ACTIONS GITHUB_EVENT_NAME; [ -z "${_c#*|}" ] || export "${_c#*|}"; _skip_is_failure && echo yes || echo no )"
+  _sk="$_sk ${_c%%|*}=$_r"
+done
+chk "verdict: SKIP fails on a gate event (dispatch, schedule, empty, or unset under CI) and not on pull_request/push" \
+  "$([ "$_sk" = " none=no ci=yes gha=yes pr=no push=no dispatch=yes schedule=yes empty=yes" ]; echo $?)" "table:$_sk"
+_o="$(env -i PATH="$PATH" HOME="${HOME:-/tmp}" CI= GITHUB_ACTIONS=true BRH_STATIC_ONLY=1 bash "$SELF" 2>&1)"; _r=$?
+chk "CI refusals: GITHUB_ACTIONS=true with CI='' still refuses BRH_STATIC_ONLY (BRH_SUBSET_REFUSED)" \
+  "$([ "$_r" -eq 1 ] && printf '%s' "$_o" | grep -q '^BRH_SUBSET_REFUSED: BRH_STATIC_ONLY'; echo $?)" "rc=$_r $(head -c 300 <<<"$_o")"
+_blk="$(sed -n '/^# ── Subsets and CI refusals/,/^selected() {/p' "$SELF" | sed '$d')"
+_r="$( unset CI GITHUB_ACTIONS BRH_ROWS BRH_STATIC_ONLY BRH_ARCHIVE_PIN; BRH_PARTIAL_MIN=1; ROW_BOOTS=([B1]=1); ROWS=(B1)
+  eval "$_blk" >/dev/null 2>&1; printf '[%s][%s]' "${PARTIAL-unset}" "${BRH_PARTIAL_MIN-unset}" )"
+chk "floor: a full run ignores an inherited BRH_PARTIAL_MIN (the subset block resets it)" \
+  "$([ "$_r" = "[][]" ] && [ -n "$_blk" ]; echo $?)" "after the subset block: PARTIAL/BRH_PARTIAL_MIN=$_r"
+
 # ── Offline predicate self-tests (no docker; run first) ────────────────────────────────────────
-ev() { # <stage> <level> [host_name] [host_id] [path] [key] [detail]: one synthesized capture line
+ev() { # <stage> <level> [host_name] [host_id] [path] [key] [detail] [port] [verdict]: one synthesized capture line
   python3 -c '
 import json, sys
-s, l, hn, hi, p, k, d = sys.argv[1:]
-print(json.dumps({"src": "198.18.0.10", "port": 443, "method": "POST", "path": p, "key": k or None, "verdict": "accepted",
+s, l, hn, hi, p, k, d, po, v = sys.argv[1:]
+print(json.dumps({"src": "198.18.0.10", "port": int(po), "method": "POST", "path": p, "key": k or None, "verdict": v,
   "body": {"message": "soleur-cloud-init boot stage", "level": l, "tags": {"stage": s, "host_id": hi, "detail": d, "host_name": hn}}}))' \
-    "$1" "$2" "${3:-soleur-bastion}" "${4:-i-brh-T}" "${5:-/api/4242/store/}" "${6-pubkey123}" "${7:-}"
+    "$1" "$2" "${3:-soleur-bastion}" "${4:-i-brh-T}" "${5:-/api/4242/store/}" "${6-pubkey123}" "${7:-}" "${8:-443}" "${9:-accepted}"
 }
 selftest_preds() {
   assert_fixture_dir "$WORK"
@@ -676,7 +832,38 @@ selftest_preds() {
     out="$(pred trail "$d/${c%%:*}" "${T[@]}")"; rc=$?
     chk "predicate must-RED: ${c#*:}" "$([ "$rc" -eq 1 ]; echo $?)" "rc=$rc $out"
   done
-  # The prototype's real FAULT-A detail (CTO Q18a: replaces the cut F1-D boot).
+  # Every predicate a boot row's verdict rests on gets its own must-PASS/must-RED rows here: the live
+  # rows are built to produce the expected verdict, so a neutered predicate would never red there.
+  local FD='[bastion-egress] FAIL: lookup failed for nx-ingest.invalid (cloud-init); the loaded ruleset is unchanged'
+  local TP=(--port 443 198.18.0.10 i-brh-T "${HEALTHY_TRAIL[@]}") H=(198.18.0.10 i-brh-T)
+  { ev runcmd_start info; ev egress_load info; ev fresh_boot_not_ready_egress_load fatal "" "" "" pubkey123 "$FD"; } > "$d/f1"
+  { cat "$d/f1"; ev fresh_boot_ready info; } > "$d/fready"
+  { ev runcmd_start info; ev egress_load info; } > "$d/endeg"
+  { ev runcmd_start info; ev egress_load info "" "" "" pubkey123 "" 80; ev cloud_init_complete info; ev fresh_boot_ready info; } > "$d/port80"
+  { ev runcmd_start info; ev egress_load info soleur-bastion i-brh-X; ev cloud_init_complete info; ev fresh_boot_ready info; } > "$d/hostid"
+  { ev runcmd_start info; ev egress_load info "" "" "" pubkey123 "" 443 rejected; ev cloud_init_complete info; ev fresh_boot_ready info; } > "$d/rejected"
+  { cat "$d/healthy"; ev egress_load info; } > "$d/infotail"
+  { ev runcmd_start info; ev kernel_reboot info; ev runcmd_start info; ev runcmd_start info; ev egress_load info; ev cloud_init_complete info; ev fresh_boot_ready info; } > "$d/b2three"
+  out="$(pred fatal "$d/f1" "${H[@]}" egress_load 'lookup failed for nx-ingest.invalid')"; chk "predicate must-PASS: fatal at the wanted stage, detail naming the wanted reason" $? "$out"
+  out="$(pred absent "$d/noegress" "${H[@]}" egress_load)"; chk "predicate must-PASS: absent on a trail without the stage" $? "$out"
+  out="$(pred nofatal_last "$d/endeg" "${H[@]}" egress_load)"; chk "predicate must-PASS: nofatal_last on a fatal-free trail ending at egress_load" $? "$out"
+  out="$(pred detail '/etc/nftables.conf:16:48-60: Error: User does not exist' 'User does not exist')"; chk "predicate must-PASS: detail on nft's real FAULT-A refusal" $? "$out"
+  for c in "fatal|healthy|egress_load|-|fatal: a trail with no fatal" "fatal|f1|apt_install|-|fatal: a fatal at a stage other than the wanted one" \
+           "fatal|fready|egress_load|-|fatal: a fatal followed by fresh_boot_ready" \
+           "fatal|f1|egress_load|User does not exist|fatal: a detail naming a reason but not the wanted one" \
+           "absent|healthy|egress_load|-|absent: the stage is present" "nofatal_last|f1|egress_load|-|nofatal_last: a fatal reached the stub"; do
+    IFS='|' read -r _p _f _s _h _l <<<"$c"
+    if [ "$_h" = - ]; then out="$(pred "$_p" "$d/$_f" "${H[@]}" "$_s")"; else out="$(pred "$_p" "$d/$_f" "${H[@]}" "$_s" "$_h")"; fi; rc=$?
+    chk "predicate must-RED: $_l" "$([ "$rc" -eq 1 ]; echo $?)" "rc=$rc $out"
+  done
+  for c in "port80:an event on :80 under --port 443" "hostid:an event with a wrong host_id" "rejected:an event the stub rejected" \
+           "infotail:an info event after fresh_boot_ready"; do
+    out="$(pred trail "$d/${c%%:*}" "${TP[@]}")"; rc=$?
+    chk "predicate must-RED: trail: ${c#*:}" "$([ "$rc" -eq 1 ]; echo $?)" "rc=$rc $out"
+  done
+  out="$(pred trail "$d/b2three" "${B[@]}")"; rc=$?
+  chk "predicate must-RED: trail: three runcmd_start against count:runcmd_start=2" "$([ "$rc" -eq 1 ]; echo $?)" "rc=$rc $out"
+  # The prototype's real FAULT-A detail (CTO Q18: replaces the cut F1-D boot).
   out="$(pred detail 'Dependency failed for bastion-egress.service - soleur-bastion egress allowlist (#12866). Failed to start bastion-egress.service - soleur-bastion egress allowlist (#12866).' '')"; rc=$?
   chk "predicate must-RED: a detail carrying only systemd boilerplate (the real FAULT-A detail)" "$([ "$rc" -eq 1 ]; echo $?)" "rc=$rc $out"
 }
@@ -733,10 +920,15 @@ egress_why_test() {
   mkdir -p "$d"
   [ -n "${ROW_RENDER[B1]:-}" ] && python3 "$PRED" extract "${ROW_RENDER[B1]}" "$d" >/dev/null 2>&1
   fn="$d/egress_why.sh"
-  run_ew() { # <fn-file> <journal-file> -> D's contents in $d/D, the fakes' argv log in $d/log
+  run_ew() { # <fn-file> <journal-file> -> D's contents; reads EW_NFT EW_EGRESS EW_ST EW_UNITOUT EW_SYNC_HANG EW_LC EW_OUTER
+    local -a lc=()
+    [ -z "${EW_LC:-}" ] || lc=(LC_ALL="$EW_LC")
     : > "$d/log"; rm -f "$d/D"
-    env -i PATH="$WORK/fake:/usr/bin:/bin" BRH_FAKE_LOG="$d/log" BRH_FAKE_JOURNAL="$2" BRH_FAKE_NFT=exit-code BRH_FAKE_EGRESS=dependency \
+    timeout "${EW_OUTER:-60}" env -i PATH="$WORK/fake:/usr/bin:/bin" "${lc[@]}" BRH_FAKE_LOG="$d/log" BRH_FAKE_JOURNAL="$2" \
+      BRH_FAKE_NFT="${EW_NFT:-exit-code}" BRH_FAKE_EGRESS="${EW_EGRESS:-success}" BRH_FAKE_ST="${EW_ST:-0}" \
+      BRH_FAKE_UNITOUT="${EW_UNITOUT:-/dev/null}" BRH_FAKE_SYNC_HANG="${EW_SYNC_HANG:-}" \
       "$DASH" -c '. "$1"; D="$2"; _egress_why' _ "$1" "$d/D" >/dev/null 2>&1
+    echo "$?" > "$d/rc"
     cat "$d/D" 2>/dev/null
   }
   synced() { grep -n . "$d/log" | head -2 | tr '\n' ' ' | grep -qE '^1:journalctl --sync 2:journalctl -b '; }
@@ -751,9 +943,24 @@ egress_why_test() {
   { for i in 1 2; do printf '[bastion-egress] FAIL: %0150d\n' 0; done; } > "$d/j-long"
   printf '%s\n' 'Dependency failed for bastion-egress.service - soleur-bastion egress allowlist (#12866).' \
     'Failed to start bastion-egress.service.' > "$d/j-none"
+  # Three reasons from both units, interleaved with boilerplate: exactly the LAST two, in order.
+  printf '%s\n' '[bastion-egress] FAIL: lookup failed for a.invalid (cloud-init); the loaded ruleset is unchanged' \
+    'bastion-egress.service: Main process exited, code=exited, status=1/FAILURE' \
+    '/etc/nftables.conf:16:48-60: Error: User does not exist' \
+    'nftables.service: Main process exited, code=exited, status=1/FAILURE' \
+    '[bastion-egress] FAIL: lookup failed for b.invalid (cloud-init)' \
+    'Failed to start bastion-egress.service - soleur-bastion egress allowlist (#12866).' > "$d/j-three"
+  { printf '[bastion-egress] FAIL: '; printf '%0200d\n' 0; } > "$d/j-one-long"
+  printf '%s\n' 'Starting bastion-egress.service: a note quoting [bastion-egress] FAIL: mid-line' \
+    '[bastion-egress] FAIL: lookup failed for nx-ingest.invalid (cloud-init)' > "$d/j-mid"
+  printf '[bastion-egress] FAIL: lookup failed for \377\376.invalid (cloud-init)\n' > "$d/j-bytes"
+  printf '%s\n' 'bastion-egress.service: Starting' '/usr/local/sbin/bastion-egress.sh: line 57: RESOLVERS: unbound variable' > "$d/u-unbound"
   if [ ! -s "$fn" ]; then
     for i in "selects the [bastion-egress] FAIL: line after --sync" "selects nft's ': Error: ' refusal" "cuts at 180 bytes" \
-             "no reason line -> why=no_reason_line with both Result values" "mutation RED: -b dropped" "mutation RED: --sync dropped"; do
+             "no reason line -> why=no_reason_line nft=exit-code egress=success st=0 last=" "mutation RED: -b dropped" "mutation RED: --sync dropped" \
+             "egress died outside die -> st and its own last output line" "a hung journalctl --sync is cut and D is still written" \
+             "three reasons from both units -> exactly the last two" "one line over 180 bytes is cut to 180" \
+             "a mid-line [bastion-egress] FAIL: is not a reason (^ anchor)" "non-UTF-8 bytes: byte-for-byte in C; the fallback under C.UTF-8"; do
       chk "_egress_why: $i" 1 "no _egress_why() { ... } function in the rendered runcmd (FAULT-B fix absent)"
     done
     return
@@ -767,15 +974,40 @@ egress_why_test() {
   out="$(run_ew "$fn" "$d/j-long")"; rc=1
   [ "${#out}" -eq 180 ] && [ "${out:0:22}" = "[bastion-egress] FAIL:" ] && rc=0
   chk "_egress_why: cuts at 180 bytes" "$rc" "len=${#out}"
+  # nftables refused (exit-code) and the egress unit never ran: real Result values (CTO Q29).
   out="$(run_ew "$fn" "$d/j-none")"; rc=1
-  [ "$out" = "why=no_reason_line nft=exit-code egress=dependency" ] && rc=0
-  chk "_egress_why: no reason line -> why=no_reason_line with both Result values" "$rc" "D=[$out]"
+  [ "$out" = "why=no_reason_line nft=exit-code egress=success st=0 last=" ] && rc=0
+  chk "_egress_why: no reason line -> why=no_reason_line nft=exit-code egress=success st=0 last=" "$rc" "D=[$out]"
+  local ul='/usr/local/sbin/bastion-egress.sh: line 57: RESOLVERS: unbound variable'
+  out="$(EW_NFT=success EW_EGRESS=exit-code EW_ST=1 EW_UNITOUT="$d/u-unbound" run_ew "$fn" "$d/j-none")"; rc=1
+  [ "$out" = "why=no_reason_line nft=success egress=exit-code st=1 last=${ul:0:60}" ] && rc=0
+  chk "_egress_why: egress died outside die -> st and its own last output line" "$rc" "D=[$out]"
+  out="$(EW_SYNC_HANG=1 EW_OUTER=25 run_ew "$fn" "$d/j-fail")"; rc=1
+  [ "$(cat "$d/rc")" = 0 ] && [ -n "$out" ] && rc=0
+  chk "_egress_why: a hung journalctl --sync is cut and D is still written" "$rc" "rc=$(cat "$d/rc") D=[$out]"
+  out="$(run_ew "$fn" "$d/j-three")"; rc=1
+  [ "$out" = "/etc/nftables.conf:16:48-60: Error: User does not exist [bastion-egress] FAIL: lookup failed for b.invalid (cloud-init) " ] && rc=0
+  chk "_egress_why: three reasons from both units -> exactly the last two" "$rc" "D=[$out]"
+  out="$(run_ew "$fn" "$d/j-one-long")"; rc=1
+  [ "${#out}" -eq 180 ] && [ "$out" = "$(head -c 180 "$d/j-one-long")" ] && rc=0
+  chk "_egress_why: one line over 180 bytes is cut to 180" "$rc" "len=${#out}"
+  out="$(run_ew "$fn" "$d/j-mid")"; rc=1
+  [ "$out" = "[bastion-egress] FAIL: lookup failed for nx-ingest.invalid (cloud-init) " ] && rc=0
+  chk "_egress_why: a mid-line [bastion-egress] FAIL: is not a reason (^ anchor)" "$rc" "D=[$out]"
+  # In C the line passes byte for byte (tr and head are byte-oriented); under C.UTF-8 grep treats it as
+  # binary and selects nothing, and the fallback still names the cause (journalctl -o cat prints such a
+  # message as a blob placeholder on the real host, so this is the robustness edge, not the usual path).
+  out="$(run_ew "$fn" "$d/j-bytes")"; rc=1
+  local u8; u8="$(EW_LC=C.UTF-8 run_ew "$fn" "$d/j-bytes")"
+  [ "$out" = "$(printf '[bastion-egress] FAIL: lookup failed for \377\376.invalid (cloud-init) ')" ] \
+    && case "$u8" in "[bastion-egress] FAIL: "*|"why=no_reason_line nft="*) true ;; *) false ;; esac && rc=0
+  chk "_egress_why: non-UTF-8 bytes: byte-for-byte in C; the fallback under C.UTF-8" "$rc" "C=[$(printf '%s' "$out" | od -An -c | tr -s ' ' | head -c 200)] C.UTF-8=[$u8]"
   if out="$(mutate ew "$fn" "$d/nob.sh" 'journalctl -b -u' 'journalctl -u')"; then
     out="$(run_ew "$d/nob.sh" "$d/j-fail")"; rc=1
     [ "$out" = "[bastion-egress] FAIL: lookup failed for nx-ingest.invalid (cloud-init); the loaded ruleset is unchanged " ] || rc=0
     chk "_egress_why: mutation RED: -b dropped" "$rc" "the mutant still produced [$out]"
   else chk "_egress_why: mutation RED: -b dropped" 1 "$out"; fi
-  if out="$(mutate ew "$fn" "$d/nosync.sh" '  journalctl --sync 2>/dev/null || :
+  if out="$(mutate ew "$fn" "$d/nosync.sh" '  timeout 10 journalctl --sync 2>/dev/null || :
 ' '')"; then
     run_ew "$d/nosync.sh" "$d/j-fail" >/dev/null; rc=1
     synced || rc=0
@@ -830,7 +1062,7 @@ build_images() {
   kb="$(df -Pk "${root:-/}" 2>/dev/null | awk 'NR==2 {print $4}')"
   [ -n "$kb" ] || kb="$(df -Pk / | awk 'NR==2 {print $4}')"
   if [ "${kb:-0}" -lt 4194304 ]; then printf 'BRH_DISK_LOW: %s KB free under %s, 4 GB needed\n' "$kb" "${root:-/}" >&2
-    [ -n "${CI:-}" ] && { printf 'bastion-runcmd-rehearsal: FAIL (BRH_DISK_LOW)\n' >&2; exit 1; }; fi
+    is_ci && { printf 'bastion-runcmd-rehearsal: FAIL (BRH_DISK_LOW)\n' >&2; exit 1; }; fi
   if ! docker image inspect "$IMG_MIN" >/dev/null 2>&1; then
     docker rm -f "brh-$$-build" >/dev/null 2>&1
     gd_apt_state_arm "$WORK/aptstate" "$APT_BUDGET_S" || { echo "FIXTURE-FAIL: the shared apt budget could not be armed" >&2; exit 2; }
@@ -889,7 +1121,7 @@ if ! build_images; then
   fi
 fi
 
-# ── Pre-arm image checks, S0 and S1 (CTO Q1, Q18c) ────────────────────────────────────────────
+# ── Pre-arm image checks, S0 and S1 (CTO Q1, Q18, Q27) ────────────────────────────────────────────
 if [ -z "$SKIP_ALL" ]; then
   assert_fixture_dir "$WORK"
   cp "${ROW_RENDER[B1]:-/dev/null}" "$WORK/static/user-data" 2>/dev/null
@@ -900,27 +1132,38 @@ if [ -z "$SKIP_ALL" ]; then
     echo "TSU=$(getent passwd systemd-timesync)"
     cloud-init schema -c /x/user-data > /tmp/s0 2>&1; echo "S0_RC=$?"; sed -n "1,8s/^/S0| /p" /tmp/s0
     dash -n /x/joined.sh; echo "S1_RC=$?"
-    dash -n /x/joined-red.sh 2>/dev/null; echo "S1RED_RC=$?"' 2>&1)"
+    dash -n /x/joined-red.sh 2>/dev/null; echo "S1RED_RC=$?"
+    for u in getty@.service console-getty.service getty.target; do echo "GETTY $u $(readlink /etc/systemd/system/$u)"; done
+    echo "BRH_PROBE_DONE=1"' 2>&1)"
   _v() { printf '%s\n' "$_o" | sed -n "s/^$1=//p" | head -1; }
   CI_VERSION="$(_v BRH_CI_VERSION)"; printf 'cloud-init in the fixture: %s\n' "$CI_VERSION"
   case "$CI_VERSION" in *" $CLOUD_INIT_RECORDED"*) : ;; *) printf 'BRH_CLOUD_INIT_VERSION_DRIFT: fixture cloud-init is "%s", recorded %s (a warning, not a failure)\n' "$CI_VERSION" "$CLOUD_INIT_RECORDED" ;; esac
-  _min_rc=1; if ! _v TSD | grep -q 'install ok installed' && [ -z "$(_v TSU)" ]; then _min_rc=0; fi
-  chk "image: the minimal fixture has no systemd-timesyncd package and no systemd-timesync user" "$_min_rc" "BRH_BASELINE_NOT_MINIMAL: TSD=[$(_v TSD)] TSU=[$(_v TSU)]"
-  if [ "$_min_rc" -ne 0 ]; then printf 'BRH_BASELINE_NOT_MINIMAL\nbastion-runcmd-rehearsal: FAIL (BRH_BASELINE_NOT_MINIMAL: FA and the FAULT-A claim are void)\n' >&2; exit 1; fi
-  _c="$(img_run "$IMG_CLOUD" "$WORK/static" 'dpkg-query -W -f="\${Package} \${Status}\n" nftables systemd-timesyncd 2>&1')"
+  # An absence proves nothing unless the probe ran to its end: no sentinel is its own failure.
+  _min_rc=1; _min_tok=BRH_IMAGE_PROBE_NO_EVIDENCE
+  if [ "$(_v BRH_PROBE_DONE)" = 1 ]; then _min_tok=BRH_BASELINE_NOT_MINIMAL
+    if ! _v TSD | grep -q 'install ok installed' && [ -z "$(_v TSU)" ]; then _min_rc=0; fi; fi
+  chk "image: the minimal fixture has no systemd-timesyncd package and no systemd-timesync user" "$_min_rc" "$_min_tok: TSD=[$(_v TSD)] TSU=[$(_v TSU)] probe=[$(head -c 300 <<<"$_o")]"
+  if [ "$_min_rc" -ne 0 ]; then printf '%s\nbastion-runcmd-rehearsal: FAIL (%s: FA and the FAULT-A claim are void)\n' "$_min_tok" "$_min_tok" >&2; exit 1; fi
+  _c="$(img_run "$IMG_CLOUD" "$WORK/static" 'dpkg-query -W -f="\${Package} \${Status}\n" nftables systemd-timesyncd 2>&1
+    for u in getty@.service console-getty.service getty.target; do echo "GETTY $u $(readlink /etc/systemd/system/$u)"; done')"
   _cl_rc=1; [ "$(printf '%s\n' "$_c" | grep -c ' install ok installed$')" -eq 2 ] && _cl_rc=0
   chk "image: the cloud-faithful fixture already carries nftables and systemd-timesyncd" "$_cl_rc" "BRH_CLOUD_NOT_FAITHFUL: $_c"
   if [ "$_cl_rc" -ne 0 ]; then printf 'BRH_CLOUD_NOT_FAITHFUL\nbastion-runcmd-rehearsal: FAIL (BRH_CLOUD_NOT_FAITHFUL)\n' >&2; exit 1; fi
+  # CTO Q27: getty@tty1 is enabled in both images and its only guard (/dev/tty0) holds under
+  # --privileged, so an unmasked getty would hang up and reset the real host's tty1 on every boot.
+  _gt="$(printf '%s\n%s\n' "$_o" "$_c" | grep -cE '^GETTY (getty@\.service|console-getty\.service|getty\.target) /dev/null$')"
+  chk "image: both fixtures mask getty@.service, console-getty.service and getty.target (no host-VT getty under --privileged)" \
+    "$([ "$_gt" = 6 ]; echo $?)" "BRH_GETTY_UNMASKED: $(printf '%s\n%s\n' "$_o" "$_c" | grep '^GETTY' | tr '\n' ' ')"
+  if [ "$_gt" != 6 ]; then printf 'BRH_GETTY_UNMASKED\nbastion-runcmd-rehearsal: FAIL (BRH_GETTY_UNMASKED)\n' >&2; exit 1; fi
   chk "S0: cloud-init schema accepts the render" "$([ "$(_v S0_RC)" = 0 ]; echo $?)" "$(printf '%s\n' "$_o" | grep '^S0' | head -10)"
   chk "S1: the joined runcmd items pass dash -n" "$([ "$(_v S1_RC)" = 0 ]; echo $?)" "rc=$(_v S1_RC)"
   chk "S1 control: a copy with an unbalanced fi fails dash -n" "$([ "$(_v S1RED_RC)" = 2 ] || [ "$(_v S1RED_RC)" = 1 ]; echo $?)" "rc=$(_v S1RED_RC)"
 else
   printf 'SKIP (loud): S0/S1 and image checks: %s\n' "$SKIP_ALL"
-  cases=$((cases + 5)); SKIPPED_ASSERTIONS=$((SKIPPED_ASSERTIONS + 5))
+  cases=$((cases + 6)); SKIPPED_ASSERTIONS=$((SKIPPED_ASSERTIONS + 6))
 fi
 
 # ── Per-row topology and evidence (background, three waves) ────────────────────────────────────
-LOCKF="${TMPDIR}/brh-subnets.lock"
 declare -A ROW_K=()
 K_NEXT=1
 route_busy() { # <k>: a non-default host route covers 198.18.k.0/24 (e.g. a fake-IP proxy)
@@ -1123,68 +1366,7 @@ if [ -z "$SKIP_ALL" ] && [ "${#SELECTED[@]}" -gt 0 ]; then
   done
 fi
 
-# ── Row verdicts (serial, in registry order) ───────────────────────────────────────────────────
-RB=()
-rk() { # <label> <rc> [detail]: a row assertion, buffered until the row is classified (ADR-188)
-  if [ "$2" -eq 0 ]; then RB+=("P${TAB}$1${TAB}"); else RB+=("F${TAB}$1${TAB}$(printf '%s' "${3:-}" | tr '\t\n' '  ' | head -c 900)"); fi
-}
-rf() { cat "$RD/f/$1" 2>/dev/null; }
-rc_is() { [ "$(rf "$1")" = "$2" ]; }
-row_stage() { # the stage a failed row died at: its fatal, else the apt process alive at the cap
-  local s
-  s="$(python3 "$PRED" fatalstage "$RD/capture-boot.log" "$SRC" 2>/dev/null)"
-  if [ -z "$s" ] && [ "$(rf end)" = cap ]; then
-    if grep -q ' update' "$RD/f/boot.cap-apt" "$RD/f/boot1.cap-apt" "$RD/f/boot2.cap-apt" 2>/dev/null; then s=apt_update
-    elif grep -q ' install' "$RD/f/boot.cap-apt" "$RD/f/boot1.cap-apt" "$RD/f/boot2.cap-apt" 2>/dev/null; then s=apt_install; fi
-  fi
-  printf '%s' "$s"
-}
-row_brief() {
-  local b
-  b="$(python3 "$PRED" last "$RD/capture-boot.log" "$SRC" 2>/dev/null) end=$(rf end) elapsed=$(rf elapsed)s"
-  [ -f "$RD/f/harness" ] && b="HARNESS: $(rf harness); $b"
-  [ -f "$RD/f/deadline" ] && b="$(rf deadline); $b"
-  [ "$(rf end)" = cap ] && b="BRH_BOOT_CAP:$ROW stage=$(row_stage) elapsed=$(rf elapsed); $b"
-  printf '%s' "$b"
-}
-row_ctx() {
-  printf '      %s journal reason: %s\n' "$ROW" "$(grep -aE '\[bastion-egress\] FAIL:|: Error: ' "$RD/journal.txt" 2>/dev/null | tail -n 3 | tr '\n' ' ' | head -c 400)"
-  printf '      %s last 20 lines of cloud-init-output.log:\n' "$ROW"
-  tail -n 20 "$RD/cloud-init-output.log" 2>/dev/null | sed -e 's/::/: :/g' -e 's/^/        | /'
-}
-SKIPPED_ROWS=(); ROWS_BOOTED=0; ROWS_SKIPPED_UNBOOTED=0
-flush_row() {
-  local n="${#RB[@]}" want="${ROW_CASES[$ROW]}" nf=0 e st lbl det brief stg
-  for e in "${RB[@]}"; do [ "${e%%"$TAB"*}" = F ] && nf=$((nf + 1)); done
-  if [ "$n" -ne "$want" ]; then chk "$ROW: the row made $n assertions, ROW_CASES says $want" 1; fi
-  if [ "$nf" -gt 0 ] && grep -q 'Hash Sum mismatch' "$RD/cloud-init-output.log" 2>/dev/null; then
-    chk "BRH_APT_MIRROR_INCONSISTENT:$ROW (apt Hash Sum mismatch; re-run, never a skip)" 1
-  elif [ "$nf" -gt 0 ]; then
-    stg="$(row_stage)"
-    # M1's designed fatal is apt_install: it is an environment decline only when the conffile marker
-    # (the property M1 exists for) is absent. Measured under an archive outage (Test Scenario 4):
-    # `apt-get update` exits 0 on a dead mirror, so rows die at apt_install; the cloud-faithful image
-    # already carries every package, so B1-C dies at apt_path (the M2 widening, same reason).
-    [ "$ROW" = M1 ] && grep -q 'conffile prompt' "$RD/cloud-init-output.log" 2>/dev/null && stg=designed
-    case "$stg" in
-      apt_update|apt_install|apt_path)
-        reprobe
-        if [ "$PROBE_OK" -eq 0 ] || [ "$REPROBE_OK" -eq 0 ]; then
-          cases=$((cases + n)); SKIPPED_ASSERTIONS=$((SKIPPED_ASSERTIONS + n)); SKIPPED_ROWS+=("$ROW")
-          printf 'SKIP (loud): %s ADR-188: died at %s with the archive probe failing (first: %s; at classification: %s)\n' "$ROW" "$stg" "$PROBE_LINE" "$REPROBE_LINE"
-          RB=(); return
-        fi ;;
-    esac
-  fi
-  brief="$(row_brief)"
-  for e in "${RB[@]}"; do
-    IFS="$TAB" read -r st lbl det <<<"$e"
-    cases=$((cases + 1))
-    if [ "$st" = P ]; then pass "$ROW: $lbl"; else fail "$ROW: $lbl [$brief]" "$det"; fi
-  done
-  [ "$nf" -eq 0 ] || row_ctx >&2
-  RB=()
-}
+# ── Row verdicts (serial, in registry order; helpers defined above the boots) ──────────────────
 selftest_rk() {
   local o; o="$(cat "$RD/f/selftest.out" 2>/dev/null)"; local rc=1 p
   if printf '%s\n' "$o" | grep -qxE 'wrongpath 4[0-9][0-9]' && printf '%s\n' "$o" | grep -qxE 'noauth 4[0-9][0-9]' \
@@ -1234,7 +1416,7 @@ assert_B2() {
   out="$(pred trail --port 443 "$RD/capture-boot.log" "$SRC" "$HID" "${REBOOT_TRAIL[@]}" count:runcmd_start=2 count:kernel_reboot=1)"
   rk "trail runcmd_start, kernel_reboot, runcmd_start, egress_load, cloud_init_complete, fresh_boot_ready; exactly 2 runcmd_start, 1 kernel_reboot; zero fatals" $? "$out"
   rk "/var/lib/soleur/kernel-settle exists" "$(rc_is settle.rc 0; echo $?)" "rc=$(rf settle.rc)"
-  rk "the second boot ran on the settled kernel (cloud-init-output of boot two has no second reboot)" "$([ -s "$RD/cloud-init-output.boot1.log" ] && rc_is boot2.end terminal; echo $?)" "boot2=$(rf boot2.end)"
+  rk "the second boot ran on the settled kernel: boot one's cloud-init-output was copied and boot two ended terminal with no new reboot.log line" "$([ -s "$RD/cloud-init-output.boot1.log" ] && rc_is boot2.end terminal; echo $?)" "boot2=$(rf boot2.end)"
 }
 assert_M1() {
   local out
@@ -1284,8 +1466,8 @@ for ROW in "${ROWS[@]}"; do
   flush_row
 done
 
-# ── Verdict (ADR-193 floor and identity, ADR-188 skip accounting, CTO Q7/Q17) ───────────────────
-if [ -n "${CI:-}" ]; then
+# ── Verdict (ADR-193 floor and identity, ADR-188 skip accounting, CTO Q7/Q17/Q28) ───────────────
+if is_ci; then
   _b1s=0; for r in "${SKIPPED_ROWS[@]}"; do [ "$r" = B1 ] && _b1s=1; done
   if [ "${#SKIPPED_ROWS[@]}" -gt 2 ] || [ "$_b1s" -eq 1 ]; then
     printf 'BRH_SKIP_CEILING: %d row(s) skipped (%s) under CI; the ceiling is 2 and B1 may never skip\n' "${#SKIPPED_ROWS[@]}" "${SKIPPED_ROWS[*]}" >&2
@@ -1298,9 +1480,9 @@ fi
 if [ -n "$PARTIAL" ]; then
   BRH_PARTIAL_MIN=$STATIC_CASES; for r in "${SELECTED[@]}"; do BRH_PARTIAL_MIN=$((BRH_PARTIAL_MIN + ROW_CASES[$r])); done
 fi
-# 32 static assertions + 55 row assertions (B1 21, B2 6, M1 4, M2 4, F1 3, F1-M 5, FA 2, B1-C 10); a
+# 58 static assertions + 55 row assertions (B1 21, B2 6, M1 4, M2 4, F1 3, F1-M 5, FA 2, B1-C 10); a
 # subset run (PARTIAL only) floors at BRH_PARTIAL_MIN, folded into the condition so the literal stays adjacent.
-MIN_CASES=87
+MIN_CASES=113
 if [ $(( ${passes:-0} + ${fails:-0} + ${SKIPPED_ASSERTIONS:-0} )) -lt "${BRH_PARTIAL_MIN:-$MIN_CASES}" ]; then
   printf 'bastion-runcmd-rehearsal: FAIL (only %d assertions ran or were skipped; floor %d)\n' "$(( ${passes:-0} + ${fails:-0} + ${SKIPPED_ASSERTIONS:-0} ))" "${BRH_PARTIAL_MIN:-$MIN_CASES}" >&2; exit 1
 fi
@@ -1314,8 +1496,18 @@ if [ "${#FAILURES[@]}" -gt 0 ]; then
 fi
 if [ -n "$PARTIAL" ]; then printf 'bastion-runcmd-rehearsal: PARTIAL (%s; %d assertions, 0 failed)\n' "$PARTIAL" "$cases"; exit 0; fi
 # A run that skipped any boot row is never a PASS (CTO Q7): it ends SKIP, naming the rows.
+# A SKIP exits 0 only on pull_request and push (CTO Q28): on a gate event it is a FAIL.
 if [ "${#SKIPPED_ROWS[@]}" -gt 0 ]; then
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    printf '::warning title=bastion-boot-rehearsal SKIP::%d of %d boot rows skipped (%s); this run is not a PASS (CTO Q7)\n' \
+      "${#SKIPPED_ROWS[@]}" "${#SELECTED[@]}" "${SKIPPED_ROWS[*]}"
+  fi
   printf 'bastion-runcmd-rehearsal: SKIP (%d of %d boot rows skipped: %s; %d assertions skipped, 0 failed)\n' \
-    "${#SKIPPED_ROWS[@]}" "${#SELECTED[@]}" "${SKIPPED_ROWS[*]}" "$SKIPPED_ASSERTIONS"; exit 0
+    "${#SKIPPED_ROWS[@]}" "${#SELECTED[@]}" "${SKIPPED_ROWS[*]}" "$SKIPPED_ASSERTIONS"
+  if _skip_is_failure; then
+    printf 'BRH_SKIP_ON_GATE_EVENT: event=%s rows=%s\n' "${GITHUB_EVENT_NAME:-unset}" "${SKIPPED_ROWS[*]}" >&2
+    printf 'bastion-runcmd-rehearsal: FAIL (BRH_SKIP_ON_GATE_EVENT)\n' >&2; exit 1
+  fi
+  exit 0
 fi
 printf 'bastion-runcmd-rehearsal: PASS (%d assertions, 0 failed)\n' "$cases"
