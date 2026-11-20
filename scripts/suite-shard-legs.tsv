@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1802
-# generated-at=2026-11-19T20:41:59Z
+# generated-at=2026-11-20T02:40:04Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -683,6 +683,10 @@ tests/scripts/betterstack-ingest-probe	2
 tests/scripts/betterstack-query-archive	2
 tests/scripts/betterstack-read-classify	8
 tests/scripts/betterstack-roundtrip-latency	2
+tests/scripts/cf-account-migrate-gate	3
+tests/scripts/cf-account-migration-bootstrap	7
+tests/scripts/cf-account-migration-runbook	3
+tests/scripts/cf-account-migration-scope	8
 tests/scripts/cf-lb-overlay-gate	3
 tests/scripts/cleanup-merged-space	8
 tests/scripts/deploy-access-token-forget	5

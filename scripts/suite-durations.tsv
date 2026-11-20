@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
 # default-weight-ms=1802
-# generated-at=2026-11-19T20:41:59Z
+# generated-at=2026-11-20T02:40:04Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7d0cd2b5340986989503a52b56d26678f0e677e02dc0e30d7950aea5d95d712f
 .claude/hooks/agent-token-tee.test.sh	7099	measured
@@ -681,6 +681,10 @@ tests/scripts/betterstack-ingest-probe	110	measured
 tests/scripts/betterstack-query-archive	178	measured
 tests/scripts/betterstack-read-classify	219	measured
 tests/scripts/betterstack-roundtrip-latency	166467	measured
+tests/scripts/cf-account-migrate-gate	1802	floor
+tests/scripts/cf-account-migration-bootstrap	1802	floor
+tests/scripts/cf-account-migration-runbook	1802	floor
+tests/scripts/cf-account-migration-scope	1802	floor
 tests/scripts/cf-lb-overlay-gate	5411	measured
 tests/scripts/cleanup-merged-space	9477	measured
 tests/scripts/deploy-access-token-forget	1460	measured

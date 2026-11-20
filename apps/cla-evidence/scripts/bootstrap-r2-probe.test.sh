@@ -162,7 +162,10 @@ if [[ "${1:-}" == secrets && "${2:-}" == get ]]; then
     printf '%s' "$v"
   else
     case "${3:-}" in
-      CF_ACCOUNT_ID) printf '%s' "${STUB_ACCT:?}" ;;
+      # R2 stays on the legacy account (#12931, ADR-329): bootstrap.sh must read CF_R2_ACCOUNT_ID.
+      # CF_ACCOUNT_ID returns a decoy, so a revert routes the probe off the stubbed endpoint and reds.
+      CF_R2_ACCOUNT_ID) printf '%s' "${STUB_ACCT:?}" ;;
+      CF_ACCOUNT_ID) printf '%s' 'decoysoleuraccountnotr2' ;;
       *) printf 'stub-%s' "${3:-}" ;;
     esac
   fi
