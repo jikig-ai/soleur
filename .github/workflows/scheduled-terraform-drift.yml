@@ -69,6 +69,19 @@ jobs:
           # exports reaches the third-party provider. The plan is full-root (no -target=),
           # so every resource type in the root is compared.
           - apps/web-platform/infra/sentry
+          # infra/rundevoo-run (#12971): the rundevoo.run zone root. It
+          # authenticates as apply-rundevoo-infra.yml does: the zone-scoped
+          # CF_API_TOKEN_RUNDEVOO from prd_terraform, bound as the raw
+          # CLOUDFLARE_API_TOKEN the cloudflare provider reads — NO doppler
+          # run / tf-var transformer of any form (a TF_VAR_* leak would feed
+          # the token to provider internals), and no fallback to a broader
+          # credential. terraform runs under an `env -i` ALLOWLIST (same
+          # posture as the sentry leg). The plan is full-root. This leg ALSO
+          # runs scripts/rundevoo-dns-set-equality.sh: a plan can only see
+          # state UNION config, so an out-of-band-added DNS record is
+          # invisible to it — only enumerating the live record set covers
+          # that direction.
+          - infra/rundevoo-run
       fail-fast: false
 
     steps:
@@ -154,6 +167,40 @@ jobs:
               # Masking only covers the Actions log, not an issue body posted through the API.
               PLAN_OUTPUT=${PLAN_OUTPUT//"$SENTRY_IAC_AUTH_TOKEN"/***}
             fi
+          elif [[ "$MATRIX_DIR" == "infra/rundevoo-run" ]]; then
+            # (#12971) The raw-token path of apply-rundevoo-infra.yml: NO
+            # doppler run of any form. The zone-scoped token is pulled once,
+            # mapped to the two names the legs need — inside an `env -i`
+            # allowlist so nothing else this job exports (HCLOUD_TOKEN,
+            # Tier-B Doppler keys, TF_CLI_ARGS*, proxy vars) reaches the
+            # provider.
+            CF_TOKEN="$(doppler secrets get CF_API_TOKEN_RUNDEVOO --plain)"
+            if [[ -z "$CF_TOKEN" ]]; then
+              echo "::error::cf_token_rundevoo_absent — CF_API_TOKEN_RUNDEVOO is empty in prd_terraform; the rundevoo leg cannot authenticate. Run infra/rundevoo-run/bootstrap.sh."
+              PLAN_OUTPUT="CF_API_TOKEN_RUNDEVOO is not configured (empty) — the rundevoo leg cannot authenticate."
+              EXIT_CODE=1
+            elif [[ ! "$CF_TOKEN" =~ ^[A-Za-z0-9/+=_.-]+$ ]]; then
+              # Shape check before the literal `${PLAN_OUTPUT//"$CF_TOKEN"/***}`
+              # below: a glob-metachar token would be interpreted as a PATTERN
+              # and could under-redact output that lands in a public issue.
+              echo "::error::CF_API_TOKEN_RUNDEVOO does not have the shape of a single-line credential; refusing to run the plan."
+              PLAN_OUTPUT="CF_API_TOKEN_RUNDEVOO failed shape check — refusing."
+              EXIT_CODE=1
+            else
+              # Both names: TF_VAR_ feeds the required variable the provider
+              # api_token binds to (the env default never reaches an explicit
+              # binding); CLOUDFLARE_API_TOKEN stays for the REST probe below.
+              PLAN_OUTPUT=$(env -i PATH="$PATH" HOME="$HOME" \
+                AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}" AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}" \
+                TF_VAR_cf_api_token_rundevoo="$CF_TOKEN" \
+                CLOUDFLARE_API_TOKEN="$CF_TOKEN" \
+                terraform plan -detailed-exitcode -no-color -input=false 2>&1)
+              EXIT_CODE=$?
+              # Masking only covers the Actions log, not an issue body posted
+              # through the API — the plan output is truncated into a public
+              # issue below.
+              PLAN_OUTPUT=${PLAN_OUTPUT//"$CF_TOKEN"/***}
+            fi
           elif [[ "$MATRIX_DIR" == "infra/github" ]]; then
             # (#9362) The same variable inputs as apply-github-infra.yml: no doppler run, no tf-var
             # transformer. Every root variable defaults; the soleur-infra App credentials
@@ -197,6 +244,48 @@ jobs:
           else
             echo "::error::Terraform plan failed in $STACK_NAME (exit $EXIT_CODE)"
           fi
+
+      # (#12971) Whole-list DNS drift probe — rundevoo leg ONLY, after the
+      # plan. `terraform plan` compares state UNION config; an out-of-band
+      # `cloudflare_record` added in the dashboard is in NEITHER set, so the
+      # plan can never see it — on a parked company domain that is exactly the
+      # record that serves arbitrary content. This enumerates the live zone's
+      # complete record set against recorded state and fails the leg on any
+      # unmanaged record. Runs even when the plan is already red: an out-of-
+      # band record is additive information the plan-leg failure would hide.
+      - name: DNS whole-list set equality (rundevoo.run)
+        id: dns_equality
+        # A bare failure (no continue-on-error) keeps the job red; the outcome
+        # is folded into the filer/email/check-in `if:`s below, because every
+        # one of them otherwise keys only on steps.plan.outputs.exit_code and a
+        # probe-only failure would report `ok` to the monitor with no issue
+        # and no email. On non-rundevoo legs the step is `skipped`, which is
+        # != 'failure', so their behavior is unchanged.
+        if: always() && matrix.directory == 'infra/rundevoo-run'
+        working-directory: ${{ matrix.directory }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          CF_TOKEN="$(doppler secrets get CF_API_TOKEN_RUNDEVOO --plain)"
+          if [[ -z "$CF_TOKEN" ]]; then
+            echo "::error::cf_token_rundevoo_absent — CF_API_TOKEN_RUNDEVOO is empty in prd_terraform; the set-equality probe cannot run."
+            exit 1
+          fi
+          if [[ ! "$CF_TOKEN" =~ ^[A-Za-z0-9/+=_.-]+$ ]]; then
+            echo "::error::CF_API_TOKEN_RUNDEVOO does not have the shape of a single-line credential; refusing to probe."
+            exit 1
+          fi
+          # `terraform show -json` of RECORDED state — the managed set. AWS_*
+          # (the R2 backend creds) is already in the job environment.
+          terraform show -json > "${RUNNER_TEMP}/rundevoo-state.json"
+          # env -i allowlist again: the probe sources the shared bearer helper
+          # and must see exactly PATH, HOME, and the token — nothing else.
+          env -i PATH="$PATH" HOME="$HOME" CLOUDFLARE_API_TOKEN="$CF_TOKEN" \
+            bash "${GITHUB_WORKSPACE}/scripts/rundevoo-dns-set-equality.sh" \
+              "${RUNNER_TEMP}/rundevoo-state.json"
 
       # FR-B4 — actually invoke the token-drift detector.
       #
@@ -1199,14 +1288,16 @@ jobs:
       # `always() &&` on the email pair makes the first stumble cost one emitter instead of
       # all of them.
       - name: Ensure infra-drift label exists
-        if: always() && steps.plan.outputs.exit_code == '2'
+        # dns_equality.outcome: an unmanaged DNS record IS infra drift — file
+        # the same issue the plan-drift arm files.
+        if: always() && (steps.plan.outputs.exit_code == '2' || steps.dns_equality.outcome == 'failure')
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh label create "infra-drift" --description "Terraform detected infrastructure drift" --color "D93F0B" 2>/dev/null || true
 
       - name: Create or update drift issue
-        if: always() && steps.plan.outputs.exit_code == '2'
+        if: always() && (steps.plan.outputs.exit_code == '2' || steps.dns_equality.outcome == 'failure')
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1216,6 +1307,7 @@ jobs:
           SERVER_URL: ${{ github.server_url }}
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
+          PROBE_FAILED: ${{ steps.dns_equality.outcome == 'failure' }}
         run: |
           TITLE="infra: drift detected in ${STACK_NAME}"
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
@@ -1233,7 +1325,11 @@ jobs:
               echo "<details><summary>Plan output</summary>"
               echo ""
               echo '```'
-              cat ${RUNNER_TEMP}/plan-output.txt
+              if compgen -G "${RUNNER_TEMP}/plan-output.*" > /dev/null; then
+                cat ${RUNNER_TEMP}/plan-output.txt
+              else
+                echo "(plan output unavailable)"
+              fi
               echo '```'
               echo ""
               echo "</details>"
@@ -1248,12 +1344,20 @@ jobs:
               echo "**Detected:** ${TIMESTAMP}"
               echo "**Workflow:** [Run #${RUN_NUMBER}](${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID})"
               echo ""
-              echo "Terraform \`plan -detailed-exitcode\` returned exit code 2, indicating infrastructure has drifted from the Terraform state."
+              if [[ "$PROBE_FAILED" == "true" ]]; then
+                echo "The DNS whole-list set-equality probe failed — either an unmanaged record exists in the live rundevoo.run zone, DNSSEC was disabled out-of-band, or the probe could not verify (API or pagination failure). Read the run's 'DNS whole-list set equality' step output for the diff or the error."
+              else
+                echo "Terraform \`plan -detailed-exitcode\` returned exit code 2, indicating infrastructure has drifted from the Terraform state."
+              fi
               echo ""
               echo "<details><summary>Plan output</summary>"
               echo ""
               echo '```'
-              cat ${RUNNER_TEMP}/plan-output.txt
+              if compgen -G "${RUNNER_TEMP}/plan-output.*" > /dev/null; then
+                cat ${RUNNER_TEMP}/plan-output.txt
+              else
+                echo "(plan output unavailable)"
+              fi
               echo '```'
               echo ""
               echo "</details>"
@@ -1273,6 +1377,17 @@ jobs:
              - **A create (`+`) that no recent merge added.** The object was deleted in Sentry's web UI. The apply's create gate refuses to re-create it from a dispatch. Restore it through a PR whose diff explains the create (re-add or touch the block, or an `import {}` for an object re-created by hand).
              - **A destroy (`-`) or a replace.** A dispatch can never carry `[ack-destroy]`, so the destroy gate refuses it. Re-run the failed push-triggered apply, which still has its merge commit and its ack, or land a PR whose merge commit carries `[ack-destroy]`.
           SENTRY_STEP
+              elif [[ "$MATRIX_DIR" == "infra/rundevoo-run" ]]; then
+                # (#12971) The generic else below steers the operator to `terraform apply`
+                # locally — for this root that path carries NO [ack-destroy] requirement,
+                # no state lock (use_lockfile=false), and bypasses every gate this
+                # pipeline exists to enforce. Never print it for rundevoo.
+                cat <<'RUNDEVOO_STEP'
+          2. Act on what the plan shows. A manual dispatch of `apply-rundevoo-infra.yml` passes the same gates as a merge, and those gates refuse two of these cases. Never apply locally: the backend has `use_lockfile = false` (ADR-031) and a local apply carries no `[ack-destroy]` requirement at all.
+             - **In-place updates (`~`) only.** First check the latest `apply-rundevoo-infra.yml` runs on `main` (`gh run list -w apply-rundevoo-infra.yml -b main -L 3`). A plan that lands between a merge and its apply shows that merge's blocks as pending: close this issue once the apply converges. If the latest run FAILED, re-run it (`gh run rerun <run-id> --failed`). Otherwise dispatch: `gh workflow run apply-rundevoo-infra.yml --ref main -f reason="reconcile drift (drift run @@RUN_ID@@)"`.
+             - **A create (`+`) that no recent merge added.** Re-add it through a PR — the apply's create direction is ungated by design; additive live drift is the set-equality probe's job (check its output in the same drift run).
+             - **A destroy (`-`) or a replace.** A dispatch can never carry `[ack-destroy]`, so the destroy gate refuses it. Re-run the failed push-triggered apply, which still has its merge commit and its ack, or land a PR whose merge commit carries `[ack-destroy]`.
+          RUNDEVOO_STEP
               else
                 echo "2. If the drift is intentional, run \`terraform apply\` locally to update state"
                 echo "3. If the drift is unintentional, revert the manual change"
@@ -1293,9 +1408,10 @@ jobs:
 
       - name: Prepare email content
         id: email
-        if: always() && steps.plan.outputs.exit_code != '0'
+        if: always() && (steps.plan.outputs.exit_code != '0' || steps.dns_equality.outcome == 'failure')
         env:
           EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
+          PROBE_FAILED: ${{ steps.dns_equality.outcome == 'failure' }}
           STACK_NAME: ${{ steps.plan.outputs.stack_name }}
           MATRIX_DIR: ${{ matrix.directory }}
         run: |
@@ -1308,7 +1424,10 @@ jobs:
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
 
-          if [[ "$EXIT_CODE" == "2" ]]; then
+          if [[ "$PROBE_FAILED" == "true" ]]; then
+            SUBJECT="[DRIFT] DNS equality probe failed for ${STACK_NAME}"
+            ALERT_TYPE="DNS equality probe failure (unmanaged record or probe could not verify)"
+          elif [[ "$EXIT_CODE" == "2" ]]; then
             SUBJECT="[DRIFT] Infrastructure drift detected in ${STACK_NAME}"
             ALERT_TYPE="Drift Detected"
           elif [[ -z "$EXIT_CODE" ]]; then
@@ -1340,7 +1459,7 @@ jobs:
           { echo "body<<EOFBODY"; cat /tmp/email-body.html; echo "EOFBODY"; } >> "$GITHUB_OUTPUT"
 
       - name: Email notification (drift/error)
-        if: always() && steps.plan.outputs.exit_code != '0'
+        if: always() && (steps.plan.outputs.exit_code != '0' || steps.dns_equality.outcome == 'failure')
         uses: ./.github/actions/notify-ops-email
         with:
           subject: ${{ steps.email.outputs.subject }}
@@ -1367,7 +1486,7 @@ jobs:
         uses: ./.github/actions/sentry-heartbeat
         with:
           monitor-slug: scheduled-terraform-drift
-          status: ${{ (steps.plan.outputs.exit_code == '0' || steps.plan.outputs.exit_code == '2') && 'ok' || 'error' }}
+          status: ${{ (steps.plan.outputs.exit_code == '0' || steps.plan.outputs.exit_code == '2') && steps.dns_equality.outcome != 'failure' && 'ok' || 'error' }}
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

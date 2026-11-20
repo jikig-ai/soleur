@@ -222,6 +222,23 @@
 /.github/workflows/apply-sentry-infra.yml               @deruelle
 /.github/workflows/apply-web-platform-infra.yml         @deruelle
 
+# rundevoo.run zone root + its destroy-guard / set-equality set (#12971).
+# Same review scope as the sentry rows: the root's apply auto-fires on
+# push-to-main, so a mutating diff to the guards — or to the whole-list
+# set-equality probe that watches for out-of-band DNS records — silently
+# neutralises the [ack-destroy] gate or the drift channel.
+/infra/rundevoo-run/                                     @deruelle
+/.github/workflows/apply-rundevoo-infra.yml              @deruelle
+/scripts/rundevoo-destroy-counts.sh                      @deruelle
+/scripts/rundevoo-destroy-gate-verdict.sh                @deruelle
+/scripts/rundevoo-squash-ack-detect.sh                   @deruelle
+/scripts/rundevoo-dns-set-equality.sh                    @deruelle
+/tests/scripts/lib/destroy-guard-filter-rundevoo.jq       @deruelle
+/tests/scripts/test-destroy-guard-counter-rundevoo.sh     @deruelle
+/tests/scripts/test-rundevoo-destroy-gate-verdict.sh      @deruelle
+/tests/scripts/test-rundevoo-squash-ack-detect.sh         @deruelle
+/tests/scripts/test-rundevoo-dns-set-equality.sh          @deruelle
+
 # Inngest RLS-lockdown (ADR-030 I8). The SQL artifact REVOKEs anon/authenticated
 # on the production Inngest project and the workflow auto-applies it via the
 # Supabase Management API — a change here can re-expose prod data or break Inngest's

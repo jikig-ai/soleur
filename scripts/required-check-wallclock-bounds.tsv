@@ -66,3 +66,4 @@ vendor-pin-required	180	120	0.30
 oracle-review-required	180	120	0.30
 cla-check	240	120	0.30
 cla-evidence	180	120	0.30
+rundevoo-destroy-required	180	120	0.30
