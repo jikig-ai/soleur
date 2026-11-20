@@ -233,18 +233,19 @@ Handoff loop for the post-merge H read (the runbook copy is the one that runs):
 ```bash
 d=knowledge-base/engineering/operations/runbooks/evidence; mkdir -p "$d"; sub=analytics-health-colo; fetched=yes
 git fetch -q origin main || fetched=no
-keep='.window_end == $e and .window_hours == $h and (.zone | type == "string" and startswith("5af02a2f")) and .rows > 0 and .truncated == false'
-diag='"zone=\(.zone | tostring | .[0:8]) rows=\(.rows) truncated=\(.truncated) window_end=\(.window_end) window_hours=\(.window_hours)"'
+keep='.window_end == $e and .window_hours == $h and .zone == "5af02a2f394e9ba6e0ea23c381a26b67" and .rows > 0 and .truncated == false'
+diag='"zone=\(.zone | tostring) rows=\(.rows) truncated=\(.truncated) window_end=\(.window_end) window_hours=\(.window_hours)"'
 nulls='"null_colo_rows=\([.series[] | select(.colo == null)] | length) null_colo_qualifying=\([.series[] | select(.colo == null and .count >= 10)] | length)"'
 h_read() { # $1 = H, $2 = window end E (YYYY-MM-DDTHH:00:00Z). 0 kept | 2 truncated only | 1 not kept
-  [ "$fetched" != no ] && git diff --quiet origin/main -- plugins/soleur/scripts/cloudflare-readonly.sh || { echo "other: wrapper-drift"; return 1; }
+  [ "$fetched" != no ] || { echo "other: fetch-failed (git fetch origin main failed; nothing was read)"; return 1; }
+  git diff --quiet origin/main -- plugins/soleur/scripts/cloudflare-readonly.sh || { echo "other: wrapper-drift"; return 1; }
   local H="$1" Es="$2" E now O err out rc line1 j f
   [[ "$Es" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:00:00Z$ ]] || { echo "refused: E is not an on-the-hour UTC stamp"; return 1; }
   E=$(date -u -d "$Es" +%s) || { echo "refused: date could not read E=$Es"; return 1; }
   now=$(date -u +%s); O=$(( (now - now % 3600 - E) / 3600 ))
-  [[ "$O" =~ ^[0-9]+$ ]] && [ "$O" -ge 0 ] && [ "$O" -le 527 ] || { echo "refused: H=$H O=$O outside 0..527"; return 1; }
+  [[ "$O" =~ ^[0-9]+$ ]] || { echo "refused: H=$H O=$O is not a whole number of hours (E in the future?)"; return 1; }
   err=$(mktemp); out=$(doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh "$sub" "$H" "$O" 2>"$err"); rc=$?
-  line1=$(printf '%s\n' "$out" | sed -n 1p); j=$(printf '%s\n' "$out" | sed -n 2p); f="$d/$(date -u +%F)-$sub-${H}h-off${O}h.json"
+  line1=$(printf '%s\n' "$out" | sed -n 1p); j=$(printf '%s\n' "$out" | sed -n 2p); f="$d/$sub-${H}h-end$(date -u -d "$Es" +%Y%m%dT%HZ).json"
   if [ "$rc" -eq 0 ] && [ "$line1" = "cloudflare-readonly: $sub ok" ] && printf '%s\n' "$j" | /usr/bin/env -i /usr/bin/jq -e --arg e "$Es" --argjson h "$H" "$keep" >/dev/null 2>&1; then
     rm -f "$err"
     if [ -L "$d" ] || [ -L "$f" ]; then echo "refused: $f or its directory is a symlink"; return 1; fi
@@ -258,12 +259,14 @@ h_read() { # $1 = H, $2 = window end E (YYYY-MM-DDTHH:00:00Z). 0 kept | 2 trunca
 h_read 216 2026-11-12T12:00:00Z; r=$?
 if [ "$r" -eq 2 ]; then
   h_read 108 2026-11-12T12:00:00Z; r1=$?; h_read 108 2026-11-08T00:00:00Z; r2=$?
-  echo "split reads: $r1 $r2 (2 = that half truncated again: split it once more into two H=54 reads at its midpoint; 1 = record the line above)"
+  if [ "$r1" -eq 2 ]; then h_read 54 2026-11-12T12:00:00Z; h_read 54 2026-11-10T06:00:00Z; fi
+  if [ "$r2" -eq 2 ]; then h_read 54 2026-11-08T00:00:00Z; h_read 54 2026-11-05T18:00:00Z; fi
+  echo "split reads: $r1 $r2 (2 = that half was split again into two H=54 reads above; 1 = record the line above)"
 fi
 h_read 216 2026-11-18T17:00:00Z   # archival capture of the old zone's last full week; never a verdict input
 ```
 
-Keep rules (CTO T3): rc 0, line 1 exactly `cloudflare-readonly: analytics-health-colo ok`, `.window_end == E`, `.window_hours == H`, `.zone` starting `5af02a2f` (the old zone named in #12931; a read of any other zone is not the flip-window record), `.rows > 0`, `.truncated == false`. A truncated main read falls back to two H=108 reads split exactly at 2026-11-08T00Z (one further split to H=54 is allowed). The `.window_end` check also makes a read whose offset was computed in a different hour from the wrapper's own clock fail closed; re-run it. The archival capture (H=216 ending 2026-11-18T17:00Z) is never a verdict input. The loop needs GNU `date` (`-d`), as the wrapper does. Hardening (CTO D5): the wrapper-drift check runs before every read and never `exit`s (a pasted interactive shell would close); `E` and `O` are checked by shape before any range test, and the range test is fail-closed (`[ "" -lt 0 ]` is rc 2, not false); the evidence write is one noclobber write, so an existing file or a dangling symlink refuses it; every jq in the loop runs under `env -i`, so a planted `~/.jq` cannot redefine `startswith`. The kept line prints `null_colo_rows=<n> null_colo_qualifying=<m>` (CTO D2); a not-kept line prints the zone's first 8 characters, `rows`, `truncated`, `window_end` and `window_hours`. The arithmetic, the keep predicate (old zone kept; new zone and `rows: 0` refused), the refusals and `bash -n` were run on 2026-11-19 against a stub `doppler` and synthetic line-2 values; the real `doppler run` line is first exercised by the post-merge read.
+Keep rules (CTO T3): rc 0, line 1 exactly `cloudflare-readonly: analytics-health-colo ok`, `.window_end == E`, `.window_hours == H`, `.zone` starting `5af02a2f` (the old zone named in #12931; a read of any other zone is not the flip-window record), `.rows > 0`, `.truncated == false`. A truncated main read falls back to two H=108 reads split exactly at 2026-11-08T00Z (one further split to H=54 is allowed). The `.window_end` check also makes a read whose offset was computed in a different hour from the wrapper's own clock fail closed; re-run it. The archival capture (H=216 ending 2026-11-18T17:00Z) is never a verdict input. The loop needs GNU `date` (`-d`), as the wrapper does. Hardening (CTO D5): the wrapper-drift check runs before every read and never `exit`s (a pasted interactive shell would close); `E` and `O` are checked by shape before any range test, and the range test is fail-closed (`[ "" -lt 0 ]` is rc 2, not false); the evidence write is one noclobber write, so an existing file or a dangling symlink refuses it; every jq in the loop runs under `env -i`, so a planted `~/.jq` cannot redefine `startswith`. The kept line prints `null_colo_rows=<n> null_colo_qualifying=<m>` (CTO D2); a not-kept line prints the full zone id (it is public, and a wrong zone can share any prefix), `rows`, `truncated`, `window_end` and `window_hours`. The arithmetic, the keep predicate (old zone kept; new zone and `rows: 0` refused), the refusals and `bash -n` were run on 2026-11-19 against a stub `doppler` and synthetic line-2 values; the real `doppler run` line is first exercised by the post-merge read.
 
 ## Implementation Phases
 

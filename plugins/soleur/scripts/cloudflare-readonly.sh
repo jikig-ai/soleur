@@ -140,7 +140,7 @@
 #                       record claims makes the read `other: wrong-zone` for that record. A colo that is not three capital letters
 #                       prints as null; a truncated read is never a verdict input (re-run with a smaller window).
 #   What to do next for F, G and H, by wrapper output (the same table is in the runbook origin-tls-strict-flip.md, keep both in step):
-#     `api-error (graphql: unknown field ...)`        -> a wrapper fix PR (at most two in total across both queries)
+#     `api-error (graphql: unknown field ...)`        -> a wrapper fix PR (F and G: at most two in total, #12441; H: at most one, #12846)
 #     plain `api-error` (the message gate refused it) -> re-run once; if it repeats it counts as a wrapper fix PR (same cap)
 #     `bad-response (shape)` or `(jq exit n)`         -> the vendor shape differs from the query's assumptions: a wrapper fix PR (same cap)
 #     `upstream-error` (429, 5xx, curl exit)          -> one re-run after a pause, then record; not a fix PR

@@ -14,7 +14,7 @@
 #     and both sides of boundaries (i)-(ix) of the plan;
 #   * the runbook's recorded-outputs block (`health-colo-r2-outputs` markers) equals this file's case list, in order, so the
 #     copy the reader sees cannot drift from what was pre-registered;
-#   * ten recipe mutation rows (edit_once style: exactly one anchor match, the mutant differs and still compiles), each named
+#   * thirteen recipe mutation rows (edit_once style: exactly one anchor match, the mutant differs and still compiles), each named
 #     with the case that must turn RED, plus a comment-only control that must turn no case RED;
 #   * an executed-row floor and a mutation-row floor, reported by printf + exit 1, never through the helpers they backstop;
 #   * a child run with one failed row and every floor met must exit 1 (the exit status is what the runner grades).
@@ -48,8 +48,8 @@ check() {
 summary() { printf '\n%s passed, %s failed (%s rows executed, %s mutation rows)\n' "$pass" "$fail" "$rows_run" "$mut_run"; }
 
 # --- floors (printf + exit 1, never through check/no) and accounting ---------------------------------------------------------
-MUT_FLOOR=10
-ROW_FLOOR=63
+MUT_FLOOR=13
+ROW_FLOOR=83
 # finish: the suite's verdict. The real run and the forced-fail child below both call it, so the child exercises these lines.
 finish() {
   if [[ "$((pass + fail))" != "$rows_run" ]]; then
@@ -115,8 +115,27 @@ RECIPE=$(awk "$EXTRACT" "$RUNBOOK")
 check "runbook: the extracted recipe is non-empty and starts with its title comment" "# health-colo R2 recipe" "${RECIPE:0:23}"
 check "runbook: the extracted recipe compiles (jq -n on it prints bad-input)" "inconclusive: bad-input" \
   "$(/usr/bin/env -i "$JQ" -r -n -f <(printf '%s\n' "$RECIPE") 2>&1)"
-RUN_CMD="/usr/bin/env -i /usr/bin/jq -r -f <(awk '$EXTRACT' knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md)"
-check "runbook: the documented run command (env -i, absolute jq, this extraction) appears exactly once" "1" "$(grep -cF -- "$RUN_CMD" "$RUNBOOK")"
+# The documented run block (CTO Q6, Q7): a preflight on the file, the extraction, a sha256 check of the recipe, then the run.
+# Each of its four lines must appear in the runbook exactly once, as a whole line.
+RECIPE_SHA256=e30242b23618c50cf7c0629bc16e55155d239d1117f08ffae6018086664a7641
+check "runbook: the recipe's sha256 is the pre-registered value (change it only with a CTO ruling row)" "$RECIPE_SHA256" \
+  "$(printf '%s\n' "$RECIPE" | sha256sum | cut -d' ' -f1)"
+PREFLIGHT='.zone == "5af02a2f394e9ba6e0ea23c381a26b67" and .subcommand == "analytics-health-colo" and .window_end == "2026-11-12T12:00:00Z" and .window_hours == 216 and (.series | type == "array" and all(.hour | type == "string" and . >= "2026-11-03T12:00:00Z" and . < "2026-11-12T12:00:00Z"))'
+RUN_LINES=()
+RUN_LINES+=("/usr/bin/env -i /usr/bin/jq -e '$PREFLIGHT' \"\$file\" >/dev/null || { echo \"refused: \$file is not the pre-registered read (zone, subcommand or R1 window)\"; false; } &&")
+RUN_LINES+=("R=\$(awk '$EXTRACT' knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md) &&")
+RUN_LINES+=("{ [ \"\$(printf '%s\\n' \"\$R\" | sha256sum | cut -d' ' -f1)\" = \"$RECIPE_SHA256\" ] || { echo \"other: recipe-drift\"; false; }; } &&")
+RUN_LINES+=("/usr/bin/env -i /usr/bin/jq -r -f <(printf '%s\\n' \"\$R\") \"\$file\"")
+for i in "${!RUN_LINES[@]}"; do
+  check "runbook: run-block line $((i + 1)) of ${#RUN_LINES[@]} appears exactly once, as a whole line" "1" "$(grep -cxF -- "${RUN_LINES[$i]}" "$RUNBOOK")"
+done
+# The preflight refuses the synthetic fixture (its zone is not the old zone) and accepts it once zone and R1 window match.
+pf() { /usr/bin/env -i "$JQ" -e "$PREFLIGHT" >/dev/null 2>&1; echo $?; }
+R1_PATCH='.zone = "5af02a2f394e9ba6e0ea23c381a26b67" | .window_end = "2026-11-12T12:00:00Z" | .window_hours = 216'
+check "preflight: refuses the fixture as it is (another zone)" "1" "$(pf < "$FIXTURE")"
+check "preflight: accepts the fixture with the old zone and the R1 window" "0" "$(/usr/bin/env -i "$JQ" -c "$R1_PATCH" "$FIXTURE" | pf)"
+check "preflight: refuses a row stamped at the R1 window end (half-open)" "1" \
+  "$(/usr/bin/env -i "$JQ" -c "$R1_PATCH | .series[0].hour = \"2026-11-12T12:00:00Z\"" "$FIXTURE" | pf)"
 
 # --- cases: name | one-line jq patch on the base fixture | full expected verdict line ----------------------------------------
 # Patch helpers (test side only). k is the clock-hour offset from 2026-11-07T23Z, as in the recipe. The base: colo AAA has
@@ -166,6 +185,12 @@ add_case bad-input-negative-count '.series[0].count = -1' "inconclusive: bad-inp
 add_case bad-input-hour-off-the-hour '.series[0].hour = "2026-11-06T21:30:00Z"' "inconclusive: bad-input"
 add_case bad-input-colo-not-three-capitals '.series[0].colo = "aaa"' "inconclusive: bad-input"
 add_case order-unsorted-series '.series |= reverse' "inconclusive: positive-colo$Z"
+add_case x-null-p90-unjudged-colo 'gone("BBB") | .series += [{hour: "2026-11-08T05:00:00Z", colo: "CCC", count: 12, avg_ms: null, p50_ms: null, p90_ms: null}]' "inconclusive: positive-colo$Z"
+add_case x-null-p90-in-run-breaks 'at("AAA"; 5; 5; .p90_ms = null)' "not supported$Z"
+add_case x-null-p90-baseline-not-counted 'at("AAA"; -26; -24; .p90_ms = null)' "not supported$Z"
+add_case bad-input-p90-key-absent '.series[0] |= del(.p90_ms)' "inconclusive: bad-input"
+add_case ix-null-colo-null-p90-at-10 'nul(5; 10) | .series[-1].p90_ms = null' "inconclusive: invalid-colo; null_colo_rows=1 null_colo_qualifying=1"
+add_case ix-two-null-colos-one-hour 'nul(5; 1) | nul(5; 2)' "inconclusive: positive-colo; null_colo_rows=2 null_colo_qualifying=0"
 
 # All case inputs in ONE jq call (one compact line per case, in case order): jq start-up, not the recipe, dominates the time.
 PROG="$PRELUDE"
@@ -196,6 +221,13 @@ colo=AAA judged=true before=26 after=60 baseline_max=400 change_point=2026-11-07
 colo=BBB judged=true before=26 after=60 baseline_max=400 change_point=null positive=false late_run=null"
 GOT_BASE=$(/usr/bin/env -i "$JQ" -r -f <(printf '%s\n' "$RECIPE") "$FIXTURE" 2>&1)
 check "base: the whole output (verdict line plus one table line per colo, sorted by colo)" "$WANT_BASE" "$GOT_BASE"
+# An unjudged colo prints no change point (CTO Q4): the verdict never uses one, so none is shown.
+for i in "${!CASE_NAME[@]}"; do [[ "${CASE_NAME[$i]}" == class-no-judged-colo ]] && NJ="$i"; done
+WANT_NJ="inconclusive: no-judged-colo$Z
+colo=AAA judged=false before=26 after=9 baseline_max=400 change_point=null positive=false late_run=null
+colo=BBB judged=false before=26 after=9 baseline_max=400 change_point=null positive=false late_run=null"
+check "class-no-judged-colo: the whole output (an unjudged colo shows change_point=null)" "$WANT_NJ" \
+  "$(printf '%s\n' "${CASE_INPUT[${NJ:-0}]}" | /usr/bin/env -i "$JQ" -r -f <(printf '%s\n' "$RECIPE") 2>&1)"
 
 # --- the recorded-outputs block equals the case list, in order ---------------------------------------------------------------
 WANT_OUT=$(for i in "${!CASE_NAME[@]}"; do printf '%s: %s\n' "${CASE_NAME[$i]}" "${CASE_WANT[$i]}"; done)
@@ -203,7 +235,7 @@ GOT_OUT=$(region health-colo-r2-outputs | grep -v '^```')
 check "runbook: the recorded-outputs block equals this suite's case names and expected lines, in order" "$WANT_OUT" "$GOT_OUT"
 
 # --- a split main read (two H=108 files, split at 2026-11-08T00Z) joins to the same verdict -----------------------------------
-JOIN='.[0] + {window_hours: (map(.window_hours) | add), rows: (map(.rows) | add), truncated: (map(.truncated) | any), series: (map(.series) | add | sort_by(.hour, .colo))}'
+JOIN='if (try ((map(.zone) | unique | length) == 1 and all(.[]; .subcommand == "analytics-health-colo") and ([range(1; length) as $i | ((.[$i - 1].window_end | fromdateiso8601) - .[$i - 1].window_hours * 3600) == (.[$i].window_end | fromdateiso8601)] | all)) catch false) then .[0] + {window_hours: (map(.window_hours) | add), rows: (map(.rows) | add), truncated: (map(.truncated) | any), series: (map(.series) | add | sort_by(.hour, .colo))} else {subcommand: "join-refused"} end'
 check "runbook: the split-read join program appears exactly once" "1" "$(grep -cF -- "$JOIN" "$RUNBOOK")"
 LATER="$PRELUDE .series |= map(select(k >= 1)) | .window_hours = 60 | .rows = (.series | length)"
 EARLIER="$PRELUDE .series |= map(select(k <= 0)) | .window_end = \"2026-11-08T00:00:00Z\" | .window_hours = 27 | .rows = (.series | length)"
@@ -212,6 +244,12 @@ check "split: the joined pair carries the later file's window_end and the summed
   "$(printf '%s\n' "$JOINED" | /usr/bin/env -i "$JQ" -r '"\(.window_end) \(.window_hours) \(.rows) \(.truncated)"' 2>&1)"
 check "split: the joined pair gives the base's whole output" "$WANT_BASE" \
   "$(printf '%s\n' "$JOINED" | /usr/bin/env -i "$JQ" -r -f <(printf '%s\n' "$RECIPE") 2>&1)"
+# A join refuses (and the recipe then prints bad-input) for another zone, another subcommand, or a gap between the windows.
+for bad in '.zone = "fedcba9876543210fedcba9876543210"' '.subcommand = "analytics-health"' '.window_end = "2026-11-07T23:00:00Z"'; do
+  check "split: a join whose older half has $bad is refused (bad-input)" "inconclusive: bad-input" \
+    "$(/usr/bin/env -i "$JQ" -c -s "$JOIN" <(/usr/bin/env -i "$JQ" -c "$LATER" "$FIXTURE") <(/usr/bin/env -i "$JQ" -c "$EARLIER | $bad" "$FIXTURE") 2>&1 \
+       | /usr/bin/env -i "$JQ" -r -f <(printf '%s\n' "$RECIPE") 2>&1)"
+done
 
 # --- recipe mutation rows ----------------------------------------------------------------------------------------------------
 # mutate <label> <case that must turn RED> <from> <to>: ONE literal edit of the extracted recipe. The row measures something
@@ -252,6 +290,9 @@ mutate "M7 the D2 null-colo rule dropped" ix-null-colo-at-10 'if $nq > 0 then "i
 mutate "M8 the count check dropped from okrow" bad-input-negative-count '  and (.count | type == "number" and . >= 0)' ''
 mutate "M9 a missing truncated key read as not truncated" bad-input-truncated-absent '.truncated == false' '.truncated != true'
 mutate "M10 the object check dropped from okinput" bad-input-not-an-object 'def okinput: type == "object" and ' 'def okinput: '
+mutate "M11 a null p90 counts as qualifying" x-null-p90-baseline-not-counted 'def q: .count >= 10 and .p90_ms != null;' 'def q: .count >= 10;'
+mutate "M12 uniqueness over every row, null colos included" ix-two-null-colos-one-hour '  and (.series | map(select(.colo != null)) | (map([.hour, .colo]) | unique | length) == length);' '  and ((.series | map([.hour, .colo]) | unique | length) == (.series | length));'
+mutate "M13 a missing p90_ms key read as null" bad-input-p90-key-absent 'and has("p90_ms") and ' 'and '
 mutate "control: comment-only edit" "" '# health-colo R2 recipe:' '# (control) health-colo R2 recipe:'
 
 # --- the exit-status check and the verdict --------------------------------------------------------------------------------

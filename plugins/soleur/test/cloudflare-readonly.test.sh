@@ -378,6 +378,20 @@ tpl_limit() { grep -E "^$1=" "$STRIPPED" | grep -oE 'limit:[0-9]+' | head -n 1 |
 # sub_calls <function name>: how many cf_graphql calls the body of that function holds
 sub_calls() { awk -v f="$1" '$0 ~ "^" f "\\(\\) \\{" {i=1; next} i && /^}/ {i=0} i' "$STRIPPED" | grep -c 'cf_graphql '; }
 MSG_RE_LINE="GQL_MSG_RE='^[A-Za-z0-9 ._'\"'\"'\"()-]{1,160}\$'"
+# CTO ruling Q11 censuses. A pin proves an original line still exists; these prove nothing was ADDED. Each reads a file (the
+# comment-stripped wrapper, or a control fixture) and prints a space-joined sorted list; the expected lists are literals in grp_source.
+# name_set: every name read with $NAME or ${NAME (the prefix dropped), so a new ${X-default} read without a colon is still seen.
+name_set() { grep -oE '[$][{]?[A-Za-z_][A-Za-z0-9_]*' "$1" | sed -E 's/^[$][{]?//' | sort -u | tr '\n' ' '; }
+# arith_ids: the identifiers inside every $(( ... )) and for (( ... )) construct, with parentheses balanced (a nested ( ) is kept).
+arith_ids() {
+  awk '{ s = $0; while ((p = match(s, /[$][(][(]|for [(][(]/)) > 0) { s = substr(s, p + RLENGTH); d = 2; o = ""
+    while (length(s) > 0) { c = substr(s, 1, 1); s = substr(s, 2); if (c == "(") d++; else if (c == ")") { d--; if (d == 0) break }; o = o c }
+    print o } }' "$1" | grep -oE '[A-Za-z_][A-Za-z0-9_]*' | sort -u | tr '\n' ' '
+}
+# default_forms: every ${NAME-, ${NAME:-, ${NAME=, ${NAME?, ${NAME+ (colon optional, ! indirection included)
+default_forms() { grep -oE '[$][{]!?[A-Za-z_0-9]+:?[-=?+]' "$1" | sort -u | tr '\n' ' '; }
+# fn_body <name> <file>: the whole function, from its `name() {` line to the first column-0 `}`
+fn_body() { sed -n "/^$1() {/,/^}/p" "$2"; }
 
 grp_source() {
   t "source: wrapper file is non-empty after comment stripping (anchor for every lacks-row)" test -s "$STRIPPED"
@@ -528,7 +542,7 @@ grp_source() {
   t "source control: eq accepts equal strings" eq a a
   tn "source control: eq rejects a mismatch" eq a b
   t "source: BASE is assigned once, as the exact api.cloudflare.com literal" eq "$(grep -cx "BASE='https://api.cloudflare.com/client/v4'" "$STRIPPED")/$(grep -cE '^[[:space:]]*(export[[:space:]]+)?BASE=' "$STRIPPED")" "1/1"
-  t "source: the only \${NAME:-default} style reads are the seven known ones" eq "$(grep -oE '[$][{]!?[A-Za-z_0-9]+:[-=?]' "$STRIPPED" | sort -u | tr '\n' ' ')" "$(printf '%s\n' '${!TOKVAR:-' '${1:-' '${2:-' '${CF_ACCOUNT_ID:-' '${CF_ZONE_ID:-' '${DOPPLER_CONFIG:-' '${DOPPLER_PROJECT:-' | sort -u | tr '\n' ' ')"
+  t "source: Q11.R3 the only \${NAME-default} style expansions (colon optional, any of - = ? +) are the thirteen known ones" eq "$(default_forms "$STRIPPED")" "$(sorted_join '${!TOKVAR:-' '${1:-' '${2:-' '${CF_ACCOUNT_ID:-' '${CF_ZONE_ID:-' '${DOPPLER_CONFIG:-' '${DOPPLER_PROJECT:-' '${CF_API_TOKEN:+' '${CF_API_TOKEN_ANALYTICS_READ:+' '${CF_API_TOKEN_AUDIT:+' '${CF_API_TOKEN_PAGERULES_READ:+' '${CF_API_TOKEN_RULESETS:+' '${CF_API_TOKEN_ZONE_SETTINGS:+')"
   t "source: TOK is read by one exact line and assigned in exactly three places (init, read, trim)" eq "$(grep -cxF '  TOK="${!TOKVAR:-}"' "$STRIPPED")/$(grep -cE '(^|[[:space:]])TOK=' "$STRIPPED")" "1/3"
   t "source: the CF_* names the code reads are exactly the five tokens, CF_API_TOKEN (xtrace test), CF_ZONE_ID and CF_ACCOUNT_ID" eq "$(grep -oE 'CF_[A-Z0-9_]+' "$STRIPPED" | sort -u | tr '\n' ' ')" "CF_ACCOUNT_ID CF_API_TOKEN CF_API_TOKEN_ANALYTICS_READ CF_API_TOKEN_AUDIT CF_API_TOKEN_PAGERULES_READ CF_API_TOKEN_RULESETS CF_API_TOKEN_ZONE_SETTINGS CF_ZONE_ID "
   t "source: each curl line carries exactly four dollar signs before its stdin feed (the out=\$( capture, \$CURL, the -w format, the URL variable), so no expansion extends the argv" eq "$(dollars_before_stdin "$WORK/curl_lines.txt")" "4 4 "
@@ -580,6 +594,91 @@ PINNED
   t "source: exactly one project call passes a second argument (the analytics-health-colo arm)" eq "$(grep -cE "^[[:space:]]*project '[^']*' \"" "$STRIPPED")/$(grep -E "^[[:space:]]*project '[^']*' \"" "$STRIPPED" | grep -c 'subcommand: "analytics-health-colo"')" "1/1"
   t "source: the colo query filters the host and the path, groups by coloCode and has no requestSource filter" bash -c 'l=$(grep -E "^GQL_COLO_TPL=" "$1"); [[ "$l" == *"clientRequestHTTPHost:\\\"app.soleur.ai\\\",clientRequestPath:\\\"/health\\\""* && "$l" == *"dimensions{datetimeHour coloCode}"* && "$l" != *requestSource* ]]' _ "$STRIPPED"
   t "source: the header says an api-error parenthetical is never copied into a Records line" has_file "$SUT_SRC" "anything in parentheses is DATA and is never copied"
+  # --- CTO ruling Q11: closed censuses over the comment-stripped wrapper. The expected sets are literals measured from the wrapper,
+  # never derived from it at test time, so ANY added name, arithmetic operand or default-form expansion reds a row. ---
+  t "source: Q11.R1 the names the code reads are exactly the known set (a new \$NAME or \${NAME read fails)" eq "$(name_set "$STRIPPED")" "$(sorted_join \
+    b BASE body BODY CF_ACCOUNT_ID CF_API_TOKEN CF_API_TOKEN_ANALYTICS_READ CF_API_TOKEN_AUDIT CF_API_TOKEN_PAGERULES_READ CF_API_TOKEN_RULESETS \
+    CF_API_TOKEN_ZONE_SETTINGS CF_ZONE_ID CURL DOPPLER_CONFIG DOPPLER_PROJECT end esc g GQL_COLO_TPL GQL_EDGE_TPL GQL_HEALTH_TPL GQL_MSG \
+    GQL_MSG_RE GQL_URL hours HOURS ID_RE JQ_DEFS jrc kind limit LIMIT lm m MAX_HOURS MAX_OFFSET now out p qlimit QLIMIT r rc res rr rules s \
+    since STAMP_RE start STATUS SUB SUBCOMMANDS t times TOK TOKEN_RE TOKVAR url WIN_END WIN_START)"
+  t "source: Q11.R2 the identifiers inside every \$(( )) and for (( )) are exactly END_OFFSET end HOURS i t TOK" eq "$(arith_ids "$STRIPPED")" "$(sorted_join END_OFFSET end HOURS i t TOK)"
+  local want_fill want_stdin want_window want_graphql
+  want_fill=$(cat <<'Q11_GQL_FILL'
+gql_fill() {
+  local b="$1"
+  b="${b//@ZONE@/$CF_ZONE_ID}"
+  b="${b//@START@/$WIN_START}"
+  b="${b//@END@/$WIN_END}"
+  printf '%s' "$b"
+}
+Q11_GQL_FILL
+)
+  want_stdin=$(cat <<'Q11_GQL_STDIN'
+gql_stdin() { # $1 = the escaped body ; the three config lines of the POST
+  printf 'header = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\ndata-raw = "%s"\n' "$TOK" "$1"
+}
+Q11_GQL_STDIN
+)
+  want_window=$(cat <<'Q11_GQL_WINDOW'
+gql_window() {
+  local t end start rc
+  [ -x /usr/bin/date ] || unverified "no-tool (date)" 14
+  t=$(/usr/bin/env -i /usr/bin/date -u +%s)
+  rc=$?
+  if [ "$rc" -ne 0 ] || [[ ! "$t" =~ ^[0-9]{10}$ ]]; then die 64 "refused: date produced no valid UTC stamp"; fi
+  end=$((10#$t - 10#$t % 3600))
+  end=$((end - END_OFFSET * 3600))
+  start=$((end - HOURS * 3600))
+  WIN_END=$(/usr/bin/env -i /usr/bin/date -u -d "@$end" +%Y-%m-%dT%H:%M:%SZ)
+  rc=$?
+  if [ "$rc" -ne 0 ] || [[ ! "$WIN_END" =~ $STAMP_RE ]]; then die 64 "refused: date produced no valid UTC stamp"; fi
+  WIN_START=$(/usr/bin/env -i /usr/bin/date -u -d "@$start" +%Y-%m-%dT%H:%M:%SZ)
+  rc=$?
+  if [ "$rc" -ne 0 ] || [[ ! "$WIN_START" =~ $STAMP_RE ]]; then die 64 "refused: date produced no valid UTC stamp"; fi
+}
+Q11_GQL_WINDOW
+)
+  want_graphql=$(cat <<'Q11_CF_GRAPHQL'
+cf_graphql() { # $1 = the finished one-line JSON body ; sets BODY, or exits with the mapped verdict
+  local body="$1" esc out rc
+  preflight
+  case "$body" in
+    '{"query":"query{viewer{zones(filter:{zoneTag:\"'*) : ;;
+    *) die 64 "refused: request body does not start with the fixed query prefix" ;;
+  esac
+  if [[ "$body" =~ [[:cntrl:]] ]]; then die 64 "refused: request body holds a control character"; fi
+  esc="${body//\\/\\\\}"
+  esc="${esc//\"/\\\"}"
+  out=$(/usr/bin/env -i "$CURL" --disable --noproxy '*' -X POST -sS --max-time 20 --max-redirs 0 -w $'\n%{http_code}' --config - "$GQL_URL" < <(gql_stdin "$esc") 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then unverified "upstream-error (curl exit $rc)" 14; fi
+  STATUS="${out##*$'\n'}"
+  BODY="${out%$'\n'*}"
+  if [[ ! "$STATUS" =~ ^[0-9]{3}$ ]]; then unverified bad-response 14; fi
+  case "$STATUS" in
+    2??) : ;;
+    400) gql_api_error ;;
+    401) unverified token-invalid 11 ;;
+    403) unverified token-lacks-scope 11 ;;
+    404) unverified not-found 14 ;;
+    *) unverified upstream-error 14 ;;
+  esac
+}
+Q11_CF_GRAPHQL
+)
+  t "source: Q11.R4 the whole gql_fill body is the pinned text" eq "$(fn_body gql_fill "$STRIPPED")" "$want_fill"
+  t "source: Q11.R4 the whole gql_stdin body is the pinned text" eq "$(fn_body gql_stdin "$STRIPPED")" "$want_stdin"
+  t "source: Q11.R4 the whole gql_window body is the pinned text" eq "$(fn_body gql_window "$STRIPPED")" "$want_window"
+  t "source: Q11.R4 the whole cf_graphql body is the pinned text" eq "$(fn_body cf_graphql "$STRIPPED")" "$want_graphql"
+  # Q11 census controls: each census sees the one-line seat edit it exists for (a fixture, never the wrapper)
+  printf '%s\n' 'GQL_URL="${GQL_ENDPOINT-$GQL_URL}"' > "$WORK/q11a.txt"
+  t "census control: Q11.R1 the name census sees a colon-less \${NAME-default} read" eq "$(name_set "$WORK/q11a.txt")" "$(sorted_join GQL_ENDPOINT GQL_URL)"
+  printf '%s\n' '  end=$((end - ${SKEW_H-0} * 3600))' '  x=$(( (a + B) * c ))' '  for ((j = 0; j < n; j++)); do :; done' 'y=$((10#$t))' > "$WORK/q11b.txt"
+  t "census control: Q11.R2 the arithmetic census sees a \${NAME-} operand, a nested ( ), a for (( )) and 10#\$t" eq "$(arith_ids "$WORK/q11b.txt")" "$(sorted_join end SKEW_H a B c j n t)"
+  printf '%s\n' 'a="${ZONE_PIN-$z}" b="${HOST_PIN:+x}" c="${!V=}" d="${W?}" e="${K:-}" f="${#L}" g="${M//x/y}"' > "$WORK/q11c.txt"
+  t "census control: Q11.R3 the default-form census sees - + = ? :- forms and not \${#L} or \${M//}" eq "$(default_forms "$WORK/q11c.txt")" "$(sorted_join '${ZONE_PIN-' '${HOST_PIN:+' '${!V=' '${W?' '${K:-')"
+  printf '%s\n' 'gql_fill() {' '  b=1' '  b="${b//app.soleur.ai/${HOST_PIN-app.soleur.ai}}"' '}' 'after() {' '  x' '}' > "$WORK/q11d.txt"
+  t "census control: Q11.R4 the body extractor stops at the first column-0 } and keeps an added line" eq "$(fn_body gql_fill "$WORK/q11d.txt")" "$(printf '%s\n' 'gql_fill() {' '  b=1' '  b="${b//app.soleur.ai/${HOST_PIN-app.soleur.ai}}"' '}')"
 }
 
 # =============================================================================================
@@ -1641,6 +1740,14 @@ grp_proj_colo() {
   t "proj[analytics-health-colo]: durations are rounded to one decimal" jqe '.series[2]=={hour:"2026-11-01T11:00:00Z",colo:"LHR",count:40,avg_ms:512.3,p50_ms:480.1,p90_ms:902}'
   t "proj[analytics-health-colo]: a null duration passes as null and a zero duration stays 0" jqe '.series[0].avg_ms==null and .series[0].p90_ms==null and .series[1].avg_ms==0 and .series[1].p90_ms==700'
   t "proj[analytics-health-colo]: the fixed note is present verbatim" jqe --arg n "$AN_NOTE_COLO" '.note==$n'
+  # wrapper-to-recipe link (review P2-3): the runbook's R2 recipe, extracted exactly as the operator command extracts it, accepts every
+  # row shape this line legally carries (a null p90_ms and a null avg_ms included); a recipe that read a field the wrapper does not emit,
+  # or a wrapper that renamed one, reads bad-input here. An empty extraction would run jq's identity, so the exact verdict line is asserted.
+  json2 > "$WORK/colo_link.json"
+  awk '/^<!-- health-colo-r2-recipe:start -->$/ { f = 1; next } /^<!-- health-colo-r2-recipe:end -->$/ { f = 0 } f && /^```/ { g = !g; next } f && g { print }' \
+    "$REPO_ROOT/knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md" > "$WORK/colo_recipe.jq"
+  t "proj[analytics-health-colo]: link - the runbook R2 recipe reads the wrapper's real colo line without bad-input (verdict line is the no-judged-colo one)" \
+    eq "$(/usr/bin/env -i /usr/bin/jq -r -f "$WORK/colo_recipe.jq" "$WORK/colo_link.json" 2>&1 | head -n 1)" "inconclusive: no-judged-colo; null_colo_rows=0 null_colo_qualifying=0"
   # the zone printed is the zone the run used (an alternate id and token)
   mkenv CF_ZONE_ID CF_API_TOKEN_ANALYTICS_READ
   PROJ_ROWS=$((PROJ_ROWS + 1))
@@ -2032,7 +2139,7 @@ grp_selftest() {
   printf 'SCRATCH=%s\n' "$WORK"
   vno "selftest: deliberate failing assertion (this child MUST exit non-zero)"
 }
-PROJ_FLOOR=212
+PROJ_FLOOR=213
 for g in source wire refuse token env status xtrace proj shape tools gql selftest; do
   if [[ "$g" == selftest ]]; then
     [[ "$SELECT" == selftest ]] || continue
@@ -2508,9 +2615,20 @@ if [[ -z "$INNER" ]] && want all; then
   mutate_suite invert "W6.25 harness: no() stops counting a failure" "deliberate failing assertion" selftest 'no() { fa''il=$((fa''il + 1)); printf' 'no() { printf'
   mutate_suite negscratch "W6.26 harness: the cleanup trap no longer removes the scratch directory" "" selftest 'if [[ -n "${WO''RK:-}" ]]; then rm -rf -- "${WO''RK:?}"; fi' ':'
 
+  # --- CTO ruling Q11: the five one-line seat edits that passed the suite before the closed censuses, each with the row it reds ---
+  mutate "Q11.M1 the GraphQL URL overridable without a colon" "source: Q11.R1 the names the code reads are exactly the known set" source 'GQL_URL="$BASE/graphql"' $'GQL_URL="$BASE/graphql"\nGQL_URL="${GQL_ENDPOINT-$GQL_URL}"'
+  mutate "Q11.M2 an extra curl config line in gql_stdin" "source: Q11.R4 the whole gql_stdin body is the pinned text" source '"$TOK" "$1"' $'"$TOK" "$1"\n  [ -z "${CFG_X-}" ] || printf \'%s\\n\' "$CFG_X"'
+  mutate "Q11.M3 the query host overridable in gql_fill" "source: Q11.R4 the whole gql_fill body is the pinned text" source '  b="${b//@END@/$WIN_END}"' $'  b="${b//@END@/$WIN_END}"\n  b="${b//app.soleur.ai/${HOST_PIN-app.soleur.ai}}"'
+  mutate "Q11.M4 the zone id overridden after its shape check" "source: Q11.R3 the only \${NAME-default} style expansions" source 'die 64 "refused: CF_ZONE_ID is not a 32-character hex id"; fi' $'die 64 "refused: CF_ZONE_ID is not a 32-character hex id"; fi\n      CF_ZONE_ID="${ZONE_PIN-$CF_ZONE_ID}"'
+  mutate "Q11.M5 a skew read from the environment in gql_window" "source: Q11.R2 the identifiers inside every" source '  end=$((end - END_OFFSET * 3600))' $'  end=$((end - END_OFFSET * 3600))\n  end=$((end - ${SKEW_H-0} * 3600))'
+  mutate "Q11.M6 a name-free edit to cf_graphql" "source: Q11.R4 the whole cf_graphql body is the pinned text" source '  esc="${esc//\"/\\\"}"' $'  esc="${esc//\\"/\\\\\\"}"\n  esc="${esc//x/x}"'
+  mutate "Q11.M7 a name-free edit to gql_window" "source: Q11.R4 the whole gql_window body is the pinned text" source '  start=$((end - HOURS * 3600))' '  start=$((end - HOURS * 3600 + 0))'
+  # --- review P2-3: a field the wrapper renames is a field the recipe no longer reads ---
+  mutate "P2-3.M1 the colo projection renames truncated" "proj[analytics-health-colo]: link - the runbook R2 recipe reads the wrapper's real colo line" proj 'truncated: ($qlimit <=' 'truncated_x: ($qlimit <='
+
   collect
   t "mutation floor: every mutation row ran and was caught ($MUT_CAUGHT of $MUT_TOTAL)" eq "$MUT_CAUGHT" "$MUT_TOTAL"
-  t "mutation floor: at least 238 mutation rows ran (the exact current count; observed $MUT_TOTAL)" test "$MUT_TOTAL" -ge 238
+  t "mutation floor: at least 246 mutation rows ran (the exact current count; observed $MUT_TOTAL)" test "$MUT_TOTAL" -ge 246
 fi
 
 # --- accounting ---
@@ -2518,7 +2636,7 @@ if [[ "$((pass + fail))" != "$asserted" ]]; then
   no "accounting: passes + fails ($((pass + fail))) != asserted ($asserted) - a verdict was dropped"
 fi
 if [[ "$SELECT" == all && -z "$INNER" ]]; then
-  t "floor: at least 2451 assertions ran (a suite that checked nothing is RED; observed $asserted)" test "$asserted" -ge 2451
+  t "floor: at least 2472 assertions ran (a suite that checked nothing is RED; observed $asserted)" test "$asserted" -ge 2472
 fi
 printf '\n%s passed, %s failed (%s asserted)\n' "$pass" "$fail" "$asserted"
 if [[ "$fail" -gt 0 ]]; then exit 1; fi
