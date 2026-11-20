@@ -132,7 +132,9 @@ Commit the current working tree as a rollback checkpoint before applying fixes. 
 
 Before the checkpoint commit run `git grep -niE --untracked '\[DEBUG-[0-9a-f]{4}\]' -- ':/' ':(top,exclude)knowledge-base/**/*.md'`; it must print nothing (top-anchored: the whole repo from whatever cwd the suite needs). On output, remove the probes and re-run the suite before committing -- a probe removal is not a fix and never checkpoints as one (ADR-230). Then `git ls-files --others --exclude-standard | grep -iE '\.(har|webm|mp4|mov|dmp|core)$'` -- also nothing: a captured artifact from `soleur:reproduce-bug` Phase 2 option 3 must never be swept up by the `git add -A` below.
 
-    git add -A && git commit -m "test-fix-loop: checkpoint iteration N"
+```bash
+git add -A && git commit -m "test-fix-loop: checkpoint iteration N"
+```
 
 Apply fixes to implementation code only. NEVER modify test files, add skip annotations, delete tests, or weaken assertions.
 
