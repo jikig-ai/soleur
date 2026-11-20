@@ -64,6 +64,9 @@ on:
       # and the classifier; a reworded needle must run the guard that pins the alert to them.
       - "apps/web-platform/server/cc-dispatcher.ts"
       - "apps/web-platform/server/sandbox-startup-classifier.ts"
+      # (#12585) sandbox-network-denied-alert.test.sh reads the alert's needles from the deny reporter and the reason union.
+      - "apps/web-platform/server/permission-callback.ts"
+      - "apps/web-platform/server/sandbox-network-access.ts"
       # (#8097) Suites under apps/web-platform/test/infra/ run inside deploy-script-tests-fixed
       # (the SEND_FAILED alert guard + battery); editing a suite must run the suite.
       - "apps/web-platform/test/infra/**"
@@ -974,6 +977,12 @@ jobs:
       - name: Run inngest LUKS key-continuity probe alert drift guard (#9927)
         run: bash apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh
 
+      # (#10538) The registry-empty Logs alert: a serving dedicated Inngest host whose registry_fns is not
+      # a positive integer. Canonical SQL equality from derived needles (the probe's own emit line),
+      # the no-volume-reference row (ADR-282), parameters, both -target lines, and the mutation rows.
+      - name: Run inngest registry-empty alert drift guard (#10538)
+        run: bash apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh
+
       # (#9045) The workspaces-LUKS dead-man FIRED Logs alert: the tag, host, marker and result=fired
       # conjuncts (read against the fire command's own logger line), the paging semantics, both
       # -target lines, and the mutation rows that each require this guard to red.
@@ -992,6 +1001,12 @@ jobs:
       # resource in the .tf, and the mutation rows that each require this guard to red.
       - name: Run agent sandbox Bash denial alert drift guard (#10445)
         run: bash apps/web-platform/test/infra/sandbox-alerts.test.sh
+
+      # (#12585) The granted-but-degraded sandboxed-egress Logs alert: the feature/op needles read from the
+      # permission-callback deny reporter and the reason union, the five-conjunct predicate evaluated against
+      # production-shaped fixture rows, the paging semantics, both -target lines, the runbook row, and the mutation rows.
+      - name: Run sandbox network degraded alert drift guard (#12585)
+        run: bash apps/web-platform/test/infra/sandbox-network-denied-alert.test.sh
 
       # (#10453) The deploy-time SDK Bash smoke Logs alert: the marker, reason and op needles read from ci-deploy.sh's
       # own sandbox_canary_sentry_event format and the smoke's page call, the three-conjunct predicate EVALUATED against
@@ -1042,8 +1057,10 @@ jobs:
       - name: Run web NIC guard unpinned ingest URL refusal alert drift guard (#9639)
         run: bash apps/web-platform/test/infra/web-nic-guard-unpinned-url-alert.test.sh
 
-      # (#11820) The cutover-flip silence alert: the JSON-object discriminator and host pin compared
-      # whole, the window against the emitter's throttle, both -target lines, the runbook and
+      # (#11820, #12726) The cutover-flip silence alert: the missing-count predicate with the JSON-object
+      # discriminator and host pin compared whole, higher_than/0/treat_as_zero on it and its canary, the
+      # canary's replace() derivation, the window against the emitter's throttle, the four -target lines
+      # (the alert, its exploration, the canary alert and the canary exploration), the runbook and
       # standing-alarms rows, this suite's own dispatch, and its mutation rows.
       - name: Run Inngest cutover-flip silence alert drift guard (#11820)
         run: bash apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh

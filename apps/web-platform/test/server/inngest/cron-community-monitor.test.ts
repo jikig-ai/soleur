@@ -34,6 +34,7 @@ vi.hoisted(() => {
 
 import {
   COMMUNITY_MONITOR_PROMPT,
+  renderCommunityMonitorPrompt,
   cronCommunityMonitor,
   KILL_ESCALATION_MS,
   MAX_TURN_DURATION_MS,
@@ -215,12 +216,19 @@ describe("registration source-shape anchors (cross-check the import-time smoke)"
 });
 
 describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", () => {
+  it("#12824: the rendered prompt names the read-only plugin root, never the clone path, and refuses without one", () => {
+    const rendered = renderCommunityMonitorPrompt("/app/shared/plugins/soleur");
+    expect(rendered).not.toContain("<plugin-root>");
+    expect(rendered).not.toContain("bash plugins/soleur/");
+    expect(rendered).toContain("bash /app/shared/plugins/soleur/skills/community/scripts/community-router.sh platforms");
+    expect(() => renderCommunityMonitorPrompt(null)).toThrow(/no plugin root/);
+  });
   describe("original GHA-workflow prompt anchors (must survive port)", () => {
     it.each([
       ["You are a community monitoring agent", "opening line"],
       ["## Instructions", "section marker"],
       [
-        "plugins/soleur/skills/community/scripts/community-router.sh",
+        "<plugin-root>/skills/community/scripts/community-router.sh",
         "router path (NOT abbreviated as router.sh)",
       ],
       [
@@ -242,11 +250,11 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
       ["titlePrefix: SCHEDULED_DIGEST_TITLE_PREFIX", "issue title prefix (shared constant)"],
       ["scheduled-community-monitor", "label name"],
       ["discord messages <channel_id>", "Discord messages invocation (literal verb, prompt-parity)"],
-      ["bash plugins/soleur/skills/community/scripts/community-router.sh discord", "Discord platform invocation (literal path)"],
-      ["bash plugins/soleur/skills/community/scripts/community-router.sh github activity", "GitHub activity invocation (literal path)"],
-      ["bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions", "Hacker News invocation (literal path)"],
-      ["bash plugins/soleur/skills/community/scripts/community-router.sh bsky get-metrics", "Bluesky invocation (literal path)"],
-      ["bash plugins/soleur/skills/community/scripts/community-router.sh linkedin fetch-metrics", "LinkedIn fetch-metrics invocation (literal path)"],
+      ["bash <plugin-root>/skills/community/scripts/community-router.sh discord", "Discord platform invocation (literal path)"],
+      ["bash <plugin-root>/skills/community/scripts/community-router.sh github activity", "GitHub activity invocation (literal path)"],
+      ["bash <plugin-root>/skills/community/scripts/community-router.sh hn mentions", "Hacker News invocation (literal path)"],
+      ["bash <plugin-root>/skills/community/scripts/community-router.sh bsky get-metrics", "Bluesky invocation (literal path)"],
+      ["bash <plugin-root>/skills/community/scripts/community-router.sh linkedin fetch-metrics", "LinkedIn fetch-metrics invocation (literal path)"],
     ])("contains %s (%s)", (anchor) => {
       expect(SUT_SOURCE).toContain(anchor);
     });
@@ -349,9 +357,9 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
     it("one Bash call per platform: no call combines commands of two platforms, and every call is ONE LINE", () => {
       expect(PROMPT).toContain("ONE Bash call PER PLATFORM");
       expect(PROMPT).toContain("Each Bash call is ONE LINE");
-      const ROUTER = "bash plugins/soleur/skills/community/scripts/community-router.sh";
+      const ROUTER = "bash <plugin-root>/skills/community/scripts/community-router.sh";
       // Every backtick-delimited command group is a single platform's call.
-      const groups = [...PROMPT.matchAll(/`(bash plugins\/soleur[^`]*)`/g)].map((m) => m[1]);
+      const groups = [...PROMPT.matchAll(/`(bash <plugin-root>[^`]*)`/g)].map((m) => m[1]);
       expect(groups.length).toBeGreaterThanOrEqual(9);
       for (const g of groups) {
         expect(g, "a command span must not contain a line break").not.toMatch(/[\r\n]/);
@@ -366,8 +374,8 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
     });
 
     it("Discord: guild-info and channels are SEPARATE calls, at most the first 40 channels are read, a failing channel is skipped (not partial), and an over-cap server is partial/timeout", () => {
-      const ROUTER = "bash plugins/soleur/skills/community/scripts/community-router.sh";
-      const groups = [...PROMPT.matchAll(/`(bash plugins\/soleur[^`]*)`/g)].map((m) => m[1]);
+      const ROUTER = "bash <plugin-root>/skills/community/scripts/community-router.sh";
+      const groups = [...PROMPT.matchAll(/`(bash <plugin-root>[^`]*)`/g)].map((m) => m[1]);
       expect(groups).toContain(`${ROUTER} discord guild-info`);
       expect(groups).toContain(`${ROUTER} discord channels`);
       // never chained together

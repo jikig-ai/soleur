@@ -50,10 +50,10 @@
 //
 // PLUGIN-LOADING — Verbatim PR-5 ephemeral-workspace pattern:
 //   - repo/                          (in-handler `git clone --depth=1`)
-//   - repo/plugins/soleur            (the clone's own tracked tree — #5091)
+//   - repo/plugins/soleur            (the clone's tracked tree; never loaded — #12824)
 //   - repo/.claude/settings.json     (DEFAULT_SETTINGS overlay)
 // Plugin resolution under headless `--print` requires the explicit
-// `--plugin-dir plugins/soleur` flag — the plugins/soleur dir is NOT
+// `--plugin-dir` flag (substrate-owned since #12824) — the plugins/soleur dir is NOT
 // auto-discovered from spawn cwd in headless mode (the interactive
 // marketplace/enabledPlugins trust flow does not run under --print). This
 // producer's prompt invokes no /soleur:* skill, so it needs no flag change; the
@@ -111,8 +111,10 @@ import {
   makeThrewSpawnResult,
   setOriginToken,
   COMMUNITY_DISALLOWED_TOOLS,
+  PLUGIN_ROOT_TOKEN,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
+import { NonRetriableError } from "inngest";
 import { safeCommitAndPr } from "./_cron-safe-commit";
 import {
   COMMUNITY_DIGEST_DIR_PATH,
@@ -146,6 +148,7 @@ import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
+import { CRON_GIT_CONFIG_PIN } from "@/server/host-git";
 
 // =============================================================================
 // Constants
@@ -236,6 +239,9 @@ const CLAUDE_CODE_FLAGS = [
 // digest #5357 carried real LinkedIn metrics: 3 followers, 2,137 impressions).
 // If a future Tier-2 deferral re-adds "community-monitor" to the set, collection
 // pauses behind the deferral heartbeat until restore.
+// #12824 — the router path is the PLUGIN_ROOT_TOKEN placeholder, the same token the allowlist lines in
+// COMMUNITY_ROUTER_READ_VERBS carry. renderCommunityMonitorPrompt substitutes the resolved read-only root,
+// the same root buildAllowlistLines substitutes, so the prompt and the allowlist cannot disagree.
 export const COMMUNITY_MONITOR_PROMPT = `You are a community monitoring agent. Your job is to collect community
 metrics from the enabled platforms and report them as ONE JSON draft in your
 final message. You cannot write files, create issues or post anywhere: the
@@ -253,7 +259,7 @@ put a date or a period in your output.
 ## Instructions
 
 1. **Detect platforms** using the community router:
-   Run: \`bash plugins/soleur/skills/community/scripts/community-router.sh platforms\`
+   Run: \`bash <plugin-root>/skills/community/scripts/community-router.sh platforms\`
    This shows which platforms are enabled/disabled. Report every platform the
    router prints as disabled or missing with status "disabled" and keep
    collecting from the enabled ones. The router names Bluesky \`bsky\`. In your
@@ -277,15 +283,15 @@ put a date or a period in your output.
    Run only the commands listed here. The only part you substitute is
    <channel_id>, with a numeric channel ID.
    - Discord (if enabled), three kinds of call, each in its OWN Bash call.
-     First: \`bash plugins/soleur/skills/community/scripts/community-router.sh discord guild-info\`
+     First: \`bash <plugin-root>/skills/community/scripts/community-router.sh discord guild-info\`
      members is the guild's approximate member count from that output
      (\`approximate_member_count\`).
-     Second: \`bash plugins/soleur/skills/community/scripts/community-router.sh discord channels\`
+     Second: \`bash <plugin-root>/skills/community/scripts/community-router.sh discord channels\`
      channels is its \`count\` (the number of text channels); the channel IDs are
      in \`channel_ids\`.
      Then make ONE more Bash call PER channel ID from that list, at most the
      FIRST 40 channels:
-     \`bash plugins/soleur/skills/community/scripts/community-router.sh discord messages <channel_id> 50\`
+     \`bash <plugin-root>/skills/community/scripts/community-router.sh discord messages <channel_id> 50\`
      (substitute the numeric channel ID; never combine channels or other
      platforms in one call). messages is the sum of each call's \`count\` across
      the channels you read (each call counts at most 50, the latest in that
@@ -295,17 +301,17 @@ put a date or a period in your output.
      example 403, no access) is simply skipped: it does NOT make Discord
      "partial". If EVERY channel call fails, report Discord as "partial" with
      failureCause "script-error" and put 0 in messages.
-   - X/Twitter (if enabled): \`bash plugins/soleur/skills/community/scripts/community-router.sh x fetch-metrics\`
+   - X/Twitter (if enabled): \`bash <plugin-root>/skills/community/scripts/community-router.sh x fetch-metrics\`
      followers is \`followers_count\` and posts is \`tweet_count\`.
      Do NOT call fetch-mentions or fetch-timeline (403 on Free tier).
-   - Bluesky (if enabled): \`bash plugins/soleur/skills/community/scripts/community-router.sh bsky get-metrics\`
+   - Bluesky (if enabled): \`bash <plugin-root>/skills/community/scripts/community-router.sh bsky get-metrics\`
      followers is \`followersCount\` and posts is \`postsCount\`.
-   - LinkedIn (if enabled): \`bash plugins/soleur/skills/community/scripts/community-router.sh linkedin fetch-metrics\` (aggregate Company Page metrics: follower total + share statistics). If it fails, log the error and continue.
+   - LinkedIn (if enabled): \`bash <plugin-root>/skills/community/scripts/community-router.sh linkedin fetch-metrics\` (aggregate Company Page metrics: follower total + share statistics). If it fails, log the error and continue.
      followers is \`total_followers\` (null means unavailable); impressions,
      likes, comments and shares come from \`share_statistics\`. engagementRatePct
      is the collector's \`share_statistics.engagement\`, which is a 0 to 1 RATIO:
      multiply it by 100 (a ratio of 0.0097 is engagementRatePct 0.97).
-   - GitHub: \`bash plugins/soleur/skills/community/scripts/community-router.sh github repo-stats 1; bash plugins/soleur/skills/community/scripts/community-router.sh github activity 1; bash plugins/soleur/skills/community/scripts/community-router.sh github contributors 1; bash plugins/soleur/skills/community/scripts/community-router.sh github discussions 1; bash plugins/soleur/skills/community/scripts/community-router.sh github fetch-interactions 1\`
+   - GitHub: \`bash <plugin-root>/skills/community/scripts/community-router.sh github repo-stats 1; bash <plugin-root>/skills/community/scripts/community-router.sh github activity 1; bash <plugin-root>/skills/community/scripts/community-router.sh github contributors 1; bash <plugin-root>/skills/community/scripts/community-router.sh github discussions 1; bash <plugin-root>/skills/community/scripts/community-router.sh github fetch-interactions 1\`
      stars, forks and watchers are \`stargazers_count\`, \`forks_count\` and
      \`subscribers_count\` from repo-stats;
      newStargazers is \`new_stargazers_count\`, except that when it is null (\`stargazers_unavailable\`
@@ -315,7 +321,7 @@ put a date or a period in your output.
      \`commit_total\` from contributors. Activity and discussions list only the
      newest 40 titles per list (\`issues.titles\`, \`pull_requests.titles\`,
      \`titles\`); counts stay exact.
-   - Hacker News (if enabled): \`bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions --query soleur --limit 20\`
+   - Hacker News (if enabled): \`bash <plugin-root>/skills/community/scripts/community-router.sh hn mentions --query soleur --limit 20\`
      mentions is the output's \`count\`.
    If any command fails, log the error and continue collecting the remaining
    platforms — but "continue" NEVER means the failure disappears from
@@ -376,6 +382,15 @@ PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
 The platform publishes everything itself from your final message.
 You have no file-writing or issue-creating tools; do not try to use any.
 `;
+
+/** The prompt with the resolved plugin root in every router command. Throws without one (fail closed). */
+export function renderCommunityMonitorPrompt(pluginRoot: string | null | undefined): string {
+  if (!pluginRoot) {
+    // A missing root is a wiring fault, not a transient: retrying cannot produce one.
+    throw new NonRetriableError("cron-community-monitor: no plugin root from setup-workspace; refusing to spawn (#12824)");
+  }
+  return COMMUNITY_MONITOR_PROMPT.replaceAll(PLUGIN_ROOT_TOKEN, pluginRoot);
+}
 
 // #6750 (ADR-126 amendment) — this producer's class, single-sourced against
 // scripts/cron-artifact-age.sh's `class` column by a parity test so the shell
@@ -654,6 +669,7 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     X_API_SECRET: process.env.X_API_SECRET,
     X_ACCESS_TOKEN: process.env.X_ACCESS_TOKEN,
     X_ACCESS_TOKEN_SECRET: process.env.X_ACCESS_TOKEN_SECRET,
+    ...CRON_GIT_CONFIG_PIN,
   };
 }
 
@@ -842,7 +858,7 @@ export async function cronCommunityMonitorHandler({
   }
 
   // Outside the catch, before the try/finally — see unwrapSetupVerdict (#8726).
-  const { ephemeralRoot, spawnCwd } = unwrapSetupVerdict(verdict, "cron-community-monitor");
+  const { ephemeralRoot, spawnCwd, pluginRoot } = unwrapSetupVerdict(verdict, "cron-community-monitor");
 
   try {
     // #5728 — flag pattern. The body (claude-eval → verify-collector-status →
@@ -908,10 +924,11 @@ export async function cronCommunityMonitorHandler({
         "claude-eval",
         async (): Promise<SpawnResult> => {
           const result = await spawnClaudeEval({
+            loadPlugin: false, // #12824 — no plugin loaded; only CRON_PLUGIN_LOADERS crons may pass true
             spawnCwd: spawnCwd,
             installationToken: readToken,
             flags: CLAUDE_CODE_FLAGS,
-            prompt: injectRunDate(COMMUNITY_MONITOR_PROMPT, runStartedAt),
+            prompt: injectRunDate(renderCommunityMonitorPrompt(pluginRoot), runStartedAt),
             // #7122 — this cron's deliverable IS the final message, so it opts in to
             // the capped, redacted capture (off by default for every other cron).
             captureFinalMessage: true,
@@ -1336,6 +1353,9 @@ export async function cronCommunityMonitorHandler({
             try {
               return await resolveOutputAwareOk({
                 spawnOk: spawnResult!.ok,
+                // #12847 escalation — a reseed sets ok:false with exit 0; without the flag this advisory call
+                // would also report it as a non-zero exit (scheduled-output-nonzero-exit), the wrong cause.
+                pluginReseeded: spawnResult!.pluginReseeded,
                 label: SENTRY_MONITOR_SLUG,
                 runStartedAt,
                 cronName: "cron-community-monitor",
@@ -1398,6 +1418,9 @@ export async function cronCommunityMonitorHandler({
     //     true for a trailing-step failure -- so the page was silently lost on
     //     exactly the compound-failure run. The catch falls through to here.
     if (collectorSignalRed) heartbeatOk = false;
+    // #12847 fix round 2 — the plugin mount was reseeded while the router scripts ran (Sentry
+    // `plugin-reseeded-mid-run`): red, applied after persistence for the same reason as the collector gate.
+    if (spawnResult?.pluginReseeded) heartbeatOk = false;
 
     // #6714 — the liveness signal APPLIED. Same two reasons as #6695 above:
     // after persistence (heartbeatOk gates safeCommitAndPr, so lowering it any

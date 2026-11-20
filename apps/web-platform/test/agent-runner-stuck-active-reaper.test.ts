@@ -89,6 +89,10 @@ vi.mock("@/server/resolve-web-egress", () => ({
   resolveWebEgressStrict: vi.fn(async () => false),
 }));
 vi.mock("@/server/egress-forwarder", () => ({
+  markEgressRevoked: vi.fn(),
+  EgressRevokedError: class extends Error {},
+  egressRevocationEpoch: () => 0,
+  isEgressRevoked: () => false,
   spawnEgressForwarder: vi.fn(),
   teardownEgressForwarder: vi.fn(),
   reapOrphanEgressForwarders: vi.fn(),
@@ -112,7 +116,7 @@ vi.mock("../server/domain-leaders", () => ({
   DOMAIN_LEADERS: [{ id: "cpo", name: "CPO", title: "Chief Product Officer", description: "Product" }],
 }));
 vi.mock("../server/domain-router", () => ({ routeMessage: vi.fn() }));
-vi.mock("../server/session-sync", () => ({ syncPull: vi.fn(), syncPush: vi.fn() }));
+vi.mock("../server/session-sync", () => ({ syncPull: vi.fn(async () => ({ heldFiles: 0, onRecovered: 0, pullReason: null, checkedAt: null })), syncPush: vi.fn() }));
 vi.mock("../server/github-app", () => ({ createPullRequest: vi.fn() }));
 vi.mock("../server/vision-helpers", () => ({
   tryCreateVision: vi.fn(),

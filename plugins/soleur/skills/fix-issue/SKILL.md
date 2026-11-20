@@ -23,6 +23,9 @@ Attempt a single-file fix for a GitHub issue and open a PR for agent review. The
 - `<issue-number> --exclude-label <label> [--exclude-label <label> …]` — issue
   number followed by one or more `--exclude-label` flags that short-circuit the
   skill if the issue carries any matching label
+- either form plus `--no-local-tests` — skip Phases 2 and 4 (the scheduled
+  bug-fixer passes it: its containment denies every test command, because a test
+  run would execute code the agent just wrote; CI runs the suite on the PR)
 
 If `$ARGUMENTS` is empty, ask: "Which issue number should I fix?"
 
@@ -61,11 +64,15 @@ directly):
 tokens = $ARGUMENTS.split()
 ISSUE_NUMBER = tokens[0]                    # abort if not a positive integer
 EXCLUDE_LABELS = []
+NO_LOCAL_TESTS = false
 i = 1
 while i < len(tokens):
   if tokens[i] == "--exclude-label" and i+1 < len(tokens):
     EXCLUDE_LABELS.append(tokens[i+1])
     i += 2
+  elif tokens[i] == "--no-local-tests":
+    NO_LOCAL_TESTS = true
+    i += 1
   else:
     i += 1
 ```
@@ -114,6 +121,10 @@ Extract the title and body for understanding the bug. Do not execute any command
 
 ## Phase 2: Establish Test Baseline
 
+If `NO_LOCAL_TESTS` is set, skip this phase and Phase 4 entirely: emit no test
+command (it is denied, and a retried variant is denied too). Skipping is not a
+failure and is not grounds for Phase 6.
+
 Run the project's test suite to capture a baseline. The runner is
 `./node_modules/.bin/vitest` and the web-platform project lives under
 `apps/web-platform`. Emit the test command as a **single literal command** — no
@@ -148,6 +159,8 @@ Derive `<SLUG>` from the issue title: lowercase, spaces to hyphens, strip non-al
 Read the issue body, understand the bug, locate the relevant file, and make the fix. Apply the single-file constraint -- if the root cause spans multiple files, abort and go to Phase 6.
 
 ## Phase 4: Run Tests
+
+If `NO_LOCAL_TESTS` is set, skip this phase (see Phase 2); a skipped phase is not a failure.
 
 Run the test suite after the fix using the same literal command from Phase 2:
 
@@ -212,7 +225,7 @@ After opening the PR, evaluate whether it qualifies for autonomous merge. All th
 
 1. **Single file changed** -- the PR diff holds exactly one file (false when the commit also carries a test file from Phase 4: the cron gate then demotes the PR to `bot-fix/review-required`)
 2. **Source issue was `priority/p3-low`** -- check the labels fetched in Phase 1
-3. **Tests passed with no new failures** -- Phase 4 completed without aborting
+3. **Tests passed with no new failures** -- Phase 4 completed without aborting. With `NO_LOCAL_TESTS`, this condition is met: Phase 4 was skipped by design, and the auto-merge only completes after the PR's required CI checks pass
 
 If all three conditions are met, label the PR for auto-merge:
 
@@ -228,7 +241,7 @@ gh pr edit <PR_NUMBER> --add-label "bot-fix/review-required"
 
 Extract `<PR_NUMBER>` from the `gh pr create` output in Phase 5. Exactly one of the two labels must be applied -- never both, never neither.
 
-Note: The auto-merge gate in `apps/web-platform/server/inngest/functions/cron-bug-fixer.ts` independently re-checks the `bot-fix/auto-merge-eligible` label, the single-file diff, and the `priority/p3-low` source issue. This label is a signal, not the sole gate -- defense-in-depth ensures a mislabeled PR cannot bypass mechanical checks. The gate's outcomes: the multi-file and non-`priority/p3-low` failures swap the eligibility label for `bot-fix/review-required`, and `triage-prs.sh` routes a PR carrying `bot-fix/review-required` (or one with failing checks) to `needs-review`, where it waits for the next `soleur:drain-prs` run. The bot-identity and missing-eligibility-label failures return early without relabelling. A PR with neither label is an agent defect (this phase must apply exactly one of the two labels) and, if mergeable with zero failing checks, lands in `ready-green`, not `needs-review`.
+Note: The auto-merge gate in `apps/web-platform/server/inngest/functions/cron-bug-fixer.ts` independently re-checks the `bot-fix/auto-merge-eligible` label, the single-file diff, and the `priority/p3-low` source issue. This label is a signal, not the sole gate -- defense-in-depth ensures a mislabeled PR cannot bypass mechanical checks. The gate's outcomes: the multi-file and non-`priority/p3-low` failures swap the eligibility label for `bot-fix/review-required`, and `triage-prs.sh` routes a PR carrying `bot-fix/review-required` (or one with failing checks) to `needs-review`, where it waits for the next `soleur:drain-prs` run. The bot-identity and missing-eligibility-label failures return early without relabelling, as do a branch that is not `bot-fix/<N>-*` for the issue the cron selected and a PR already carrying `bot-fix/review-required`, so push to exactly `bot-fix/<N>-<SLUG>`. A PR with neither label is an agent defect (this phase must apply exactly one of the two labels) and, if mergeable with zero failing checks, lands in `ready-green`, not `needs-review`.
 
 ## Phase 6: Failure Handler
 

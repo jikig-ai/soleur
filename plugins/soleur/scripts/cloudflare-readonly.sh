@@ -99,24 +99,23 @@
 #   A ssl-mode          figure value=<value>; Records ok when value is strict (the runbook claim), bad on any other value.
 #                       An A ok NEVER stands alone for a flip go: read it together with B.
 #   B config-entrypoint figures rule_count, enabled_ssl_rules (the count of rules that are enabled, i.e. `enabled != false`,
-#                       with a non-null ssl) and per rule ref, enabled, ssl and two host booleans. The host booleans are
-#                       LITERAL SUBSTRING figures only and are not a verdict input: a wildcard such as
-#                       ends_with(http.host, ".soleur.ai") or an expression of true defeats them. Records ok ONLY when
-#                       the baseline (both ORIGIN-TLS switches off) enabled_ssl_rules is 2 AND one of those rules has ref dcb85b75bc3c4f4aa2a8c13a080bf854 with ssl=flexible
-#                       (the other is the `ssl = "full"` rule on soleur.ai and www) AND rule_count is 5; anything else is
-#                       recorded not ok with the figures. rule_count is 5 because the ruleset carries the three baseline rules plus the
-#                       two ALWAYS-PRESENT ORIGIN-TLS rules (ADR-321: the canary and the strict flip; present but disabled
-#                       while their Doppler switches ENABLE_ORIGIN_TLS_CANARY_RULE / ENABLE_ORIGIN_TLS_STRICT are off, so the
-#                       count never changes when a switch flips). enabled_ssl_rules is 2 PLUS one for each of those switches that is
-#                       on: 2 with both off, 3 with the canary on, 4 with both on; read it against the switches' Doppler state.
-#                       The wrapper CANNOT verify that
-#                       the rule's expression is host-scoped (it never prints the expression), so Records ok does not depend
-#                       on the host booleans; the owner compares the live expression with
-#                       apps/web-platform/infra/seo-config-rules.tf before any flip go. The 5, the 2 and the ref are DATED
-#                       SNAPSHOTS (re-derived 2026-11-07: rule_count 3 -> 5 when the two ORIGIN-TLS rules became static blocks;
-#                       2026-11-05: enabled_ssl_rules 1 -> 2, the `ssl = "full"` rule was missed on 2026-11-04): they are
-#                       re-derived from that file at read time,
-#                       and the wrapper test fails when the counts here drift from it.
+#                       with a non-null ssl) and per rule ref, enabled, ssl, two host booleans and host_literal_only. The
+#                       host booleans are LITERAL SUBSTRING figures only and are not a verdict input: a wildcard such as
+#                       ends_with(http.host, ".soleur.ai") or an expression of true defeats them. host_literal_only is a
+#                       value-free whole-expression shape boolean (#12742): true ONLY when the expression is exactly
+#                       `(http.host eq "<h>")` or `(http.host in {"<h1>" "<h2>" ...})`, single spaces, each host 1 to 253
+#                       of a-z 0-9 . - (anchored \A and \z), so a negation, a path or other clause, a wildcard, any added
+#                       byte or a vendor re-spelling of the text makes it false. It is not a Records input either; the
+#                       public-sdk_url preflight (tests/scripts/lib/inngest-public-sdk-url-preflight.sh) reads it. Records ok ONLY when
+#                       enabled_ssl_rules is 2 AND one of those rules has ref dcb85b75bc3c4f4aa2a8c13a080bf854 with ssl=strict (the
+#                       other is the `ssl = "full"` rule on soleur.ai and www) AND rule_count is 3; anything else is
+#                       recorded not ok with the figures. The wrapper never prints the expression, so Records ok does not
+#                       depend on the host booleans or host_literal_only; the owner compares the live expression with
+#                       apps/web-platform/infra/seo-config-rules.tf (the adopted rule is `(http.host eq "app.soleur.ai")`).
+#                       The 3, the 2, the ref and the ssl value are a DATED SNAPSHOT (2026-11-13, the ADR-321 item 13
+#                       cleanup, #10479; history in git and ADR-321): they are re-derived from that file at read time, and
+#                       the wrapper test fails when the counts or the adopted rule's ssl value here drift from it (a
+#                       reviewed rollback to flexible edits this header only).
 #   C pagerules-ssl     figures active_rule_count, ssl_rule_count and per rule the matches_app_host substring figure. Records
 #                       ok ONLY when ssl_rule_count is 0. Any SSL page rule is recorded not ok with the figures and flagged
 #                       for CTO review even when matches_app_host is false (a wildcard pattern defeats that boolean).
@@ -228,7 +227,9 @@ def tkey: sub("Z$"; "") | if contains(".") then . else . + ".0" end;
 def dur: . == null or (type == "number" and . >= 0 and . <= 1e7);
 def cnt: type == "number" and . == floor and . >= 0 and . <= 1e12;
 def r1: if . == null then null else ((. * 10 | round) / 10) end;
-def verstr: if . == null then null elif (type == "string" or type == "number") and (tostring | test("\\A[0-9]{1,10}\\z")) then tostring else "invalid" end;'
+def verstr: if . == null then null elif (type == "string" or type == "number") and (tostring | test("\\A[0-9]{1,10}\\z")) then tostring else "invalid" end;
+def hn: "[a-z0-9.-]{1,253}";
+def hostlit: type == "string" and test("\\A\\(http\\.host (eq \"" + hn + "\"|in \\{\"" + hn + "\"( \"" + hn + "\")*\\})\\)\\z");'
 
 # guard_body <jq condition>: type guard on the whole body. success:false is an api-error, anything
 # that is not the expected shape (including a jq failure) is bad-response. Never keyed on `.result | length`.
@@ -428,7 +429,7 @@ sub_ssl_mode() {
 sub_config_entrypoint() {
   cf_get "$BASE/zones/$CF_ZONE_ID/rulesets/phases/http_config_settings/entrypoint"
   guard_body '.success == true and (.result | type) == "object" and ((.result.rules // []) | type) == "array" and all((.result.rules // [])[]; type == "object")'
-  project '.result as $r | ($r.rules // []) as $rules | [$rules[] | {ref: (.ref | idv), enabled: (.enabled != false), ssl: ((.action_parameters | if type == "object" then .ssl else null end) | sslv), mentions_app_host: ((.expression // "") | type == "string" and contains("\"app.soleur.ai\"")), mentions_lb_staging_host: ((.expression // "") | type == "string" and contains("\"lb-staging.soleur.ai\""))}] as $rr | {subcommand: "config-entrypoint", id: ($r.id | idv), version: ($r.version | verstr), last_updated: ($r.last_updated | tsn), rule_count: ($rules | length), enabled_ssl_rules: ([$rr[] | select(.enabled and .ssl != null)] | length), rules: $rr}'
+  project '.result as $r | ($r.rules // []) as $rules | [$rules[] | {ref: (.ref | idv), enabled: (.enabled != false), ssl: ((.action_parameters | if type == "object" then .ssl else null end) | sslv), mentions_app_host: ((.expression // "") | type == "string" and contains("\"app.soleur.ai\"")), mentions_lb_staging_host: ((.expression // "") | type == "string" and contains("\"lb-staging.soleur.ai\"")), host_literal_only: (.expression | hostlit)}] as $rr | {subcommand: "config-entrypoint", id: ($r.id | idv), version: ($r.version | verstr), last_updated: ($r.last_updated | tsn), rule_count: ($rules | length), enabled_ssl_rules: ([$rr[] | select(.enabled and .ssl != null)] | length), rules: $rr}'
 }
 sub_pagerules_ssl() {
   cf_get "$BASE/zones/$CF_ZONE_ID/pagerules?status=active"

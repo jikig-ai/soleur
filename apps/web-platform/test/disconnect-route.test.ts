@@ -15,6 +15,8 @@ const {
   mockWriteRepoColsToWorkspace,
   mockAbortAllSessionsForWorkspace,
   mockWaitForWorkspaceSessions,
+  mockReportSilentFallback,
+  mockMirrorWithDebounce,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockFrom: vi.fn(),
@@ -25,6 +27,8 @@ const {
   mockWriteRepoColsToWorkspace: vi.fn(),
   mockAbortAllSessionsForWorkspace: vi.fn(),
   mockWaitForWorkspaceSessions: vi.fn(),
+  mockReportSilentFallback: vi.fn(),
+  mockMirrorWithDebounce: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -51,8 +55,16 @@ vi.mock("@/server/workspace-resolver", () => ({
 // ADR-044 PR-2: the repo-column CLEAR is now authoritative on the `workspaces`
 // row, written via the dynamically-imported mirror helper. Mock it so we can
 // assert the exact (client, id, patch, opts) and exercise the fail-closed path.
-vi.mock("@/server/workspace-repo-mirror", () => ({
+// #12714 (D33(2)): the REAL `clearKbSyncHeldCols` runs against the service mock below, so the held-column UPDATE and
+// its mirror are observed end to end.
+vi.mock("@/server/workspace-repo-mirror", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/workspace-repo-mirror")>()),
   writeRepoColsToWorkspace: mockWriteRepoColsToWorkspace,
+}));
+vi.mock("@/server/observability", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/observability")>()),
+  reportSilentFallback: mockReportSilentFallback,
+  mirrorWithDebounce: mockMirrorWithDebounce,
 }));
 
 // ADR-044 PR-2 / P0-6: live member agent sessions are aborted before teardown.
@@ -128,8 +140,13 @@ function setupServiceMocks(opts: {
   repoStatus?: string;
   selectError?: { message: string } | null;
   updateError?: { message: string } | null;
+  heldUpdateError?: { message: string; code?: string } | null;
 }) {
-  const { repoStatus = "ready", selectError = null, updateError = null } = opts;
+  const { repoStatus = "ready", selectError = null, updateError = null, heldUpdateError = null } = opts;
+  // #12714 (D33(2)): the separate best-effort held-column UPDATE on `workspaces` (`update(row).eq("id", id).select("id")`).
+  const mockHeldSelect = vi.fn().mockResolvedValue({ data: heldUpdateError ? null : [{ id: "ws" }], error: heldUpdateError });
+  const mockHeldUpdateEq = vi.fn(() => ({ select: mockHeldSelect }));
+  const mockHeldUpdate = vi.fn(() => ({ eq: mockHeldUpdateEq }));
 
   const selectChain = mockQueryChain(
     selectError ? null : { repo_status: repoStatus },
@@ -143,7 +160,7 @@ function setupServiceMocks(opts: {
     if (table === "workspaces") {
       // Only the cloning-guard select hits this table directly; the CLEAR goes
       // through the mocked writeRepoColsToWorkspace helper.
-      return { select: selectChain.select };
+      return { select: selectChain.select, update: mockHeldUpdate };
     }
     if (table === "users") {
       // Solo-only readiness reset (health_snapshot / workspace_status).
@@ -152,7 +169,7 @@ function setupServiceMocks(opts: {
     return {};
   });
 
-  return { mockUpdate };
+  return { mockUpdate, mockHeldUpdate, mockHeldUpdateEq };
 }
 
 // ---------------------------------------------------------------------------
@@ -557,5 +574,60 @@ describe("DELETE /api/repo/disconnect", () => {
       expect(res.status).toBe(200);
       expect(mockUpdate).not.toHaveBeenCalled();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #12714 (D29(1), D33(2)): the held columns are nulled by a SEPARATE best-effort UPDATE after the repo-column clear.
+// ---------------------------------------------------------------------------
+
+describe("DELETE /api/repo/disconnect — held-files columns (#12714)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsAllowed.mockReturnValue(true);
+    mockWaitForWorkspaceSessions.mockResolvedValue({ drained: true, waitedMs: 0 });
+    mockRpc.mockResolvedValue({ data: true, error: null });
+    mockResolveActiveWorkspace.mockResolvedValue({ ok: true, workspaceId: TEAM_WORKSPACE_ID });
+    mockGetUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } }, error: null });
+    mockWriteRepoColsToWorkspace.mockResolvedValue(undefined);
+    mockDeleteWorkspace.mockResolvedValue(undefined);
+  });
+
+  const heldMirrors = () =>
+    mockMirrorWithDebounce.mock.calls.filter((c) => (c[1] as { op?: string } | undefined)?.op === "kb-sync-held.clear");
+
+  test("clears the held columns on the active workspace, in its own UPDATE after the drain and before the reap (D39(f))", async () => {
+    const { mockHeldUpdate, mockHeldUpdateEq } = setupServiceMocks({});
+    const before = Date.now();
+    const res = await DELETE(makeRequest());
+    expect(res.status).toBe(200);
+    // count and pull-blocked null; checked_at STAMPED with the clear's instant, never null (verify-data-sec P3-3), so
+    // a session that read T before the disconnect loses the D39(f) guard after a reconnect
+    expect(mockHeldUpdate).toHaveBeenCalledWith({
+      kb_sync_held_files: null,
+      kb_sync_held_checked_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+      kb_sync_pull_blocked: null,
+    });
+    const stamped = Date.parse(((mockHeldUpdate.mock.calls[0] as unknown[])[0] as { kb_sync_held_checked_at: string }).kb_sync_held_checked_at);
+    expect(stamped).toBeGreaterThanOrEqual(before);
+    expect(stamped).toBeLessThanOrEqual(Date.now());
+    expect(mockHeldUpdateEq).toHaveBeenCalledWith("id", TEAM_WORKSPACE_ID);
+    const heldAt = mockHeldUpdate.mock.invocationCallOrder[0];
+    expect(mockWriteRepoColsToWorkspace.mock.invocationCallOrder[0]).toBeLessThan(heldAt);
+    // History H2: an in-flight sync that already read its installation could repopulate a count cleared earlier, so
+    // the clear runs after the sessions are aborted and drained, and before the workspace is deleted.
+    expect(mockAbortAllSessionsForWorkspace.mock.invocationCallOrder[0]).toBeLessThan(heldAt);
+    expect(mockWaitForWorkspaceSessions.mock.invocationCallOrder[0]).toBeLessThan(heldAt);
+    expect(heldAt).toBeLessThan(mockDeleteWorkspace.mock.invocationCallOrder[0]);
+    expect(heldMirrors()).toHaveLength(0);
+  });
+
+  test("a failing held UPDATE (column missing) leaves the route's status and body unchanged, and mirrors once", async () => {
+    setupServiceMocks({ heldUpdateError: { message: "column workspaces.kb_sync_held_files does not exist", code: "42703" } });
+    const res = await DELETE(makeRequest());
+    expect(res.status).toBe(200);
+    expect((await res.json()).ok).toBe(true);
+    expect(mockDeleteWorkspace).toHaveBeenCalledWith(TEAM_WORKSPACE_ID);
+    expect(heldMirrors()).toHaveLength(1);
   });
 });

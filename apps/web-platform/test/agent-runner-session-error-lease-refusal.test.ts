@@ -176,6 +176,10 @@ vi.mock("@/server/resolve-web-egress", () => ({
   resolveWebEgressStrict: vi.fn(async () => false),
 }));
 vi.mock("@/server/egress-forwarder", () => ({
+  markEgressRevoked: vi.fn(),
+  EgressRevokedError: class extends Error {},
+  egressRevocationEpoch: () => 0,
+  isEgressRevoked: () => false,
   spawnEgressForwarder: vi.fn(),
   teardownEgressForwarder: vi.fn(),
   reapOrphanEgressForwarders: vi.fn(),
@@ -207,7 +211,7 @@ vi.mock("../server/byok-resolver", () => ({
   resolveKeyOwnerThenLease: (...a: unknown[]) => mockResolveKeyOwnerThenLease(...a),
 }));
 vi.mock("../server/session-sync", () => ({
-  syncPull: vi.fn(),
+  syncPull: vi.fn(async () => ({ heldFiles: 0, onRecovered: 0, pullReason: null, checkedAt: null })),
   syncPush: vi.fn(),
 }));
 vi.mock("../server/github-app", () => ({ createPullRequest: vi.fn() }));

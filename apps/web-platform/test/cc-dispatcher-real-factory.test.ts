@@ -36,6 +36,8 @@ const {
   mockResolveWebEgressStrict,
   mockSpawnEgressForwarder,
   mockTeardownEgressForwarder,
+  fakeForwarders,
+  fakeRevoked,
   mockResolveAutonomousAck,
   mockResolveIsWorkspaceOwner,
   mockWriteAskpassScriptTo,
@@ -94,6 +96,10 @@ const {
   mockResolveWebEgressStrict: vi.fn(),
   mockSpawnEgressForwarder: vi.fn(),
   mockTeardownEgressForwarder: vi.fn(),
+  // #12585 — a fake forwarder registry (conversationId -> {token, workspaceId}) the egress-forwarder mock reads, so the
+  // SandboxNetworkAccess liveness probe and the warm re-resolve see a spawn/teardown like the real module's.
+  fakeForwarders: new Map<string, { token: string; workspaceId: string }>(),
+  fakeRevoked: new Set<string>(),
   mockResolveAutonomousAck: vi.fn(),
   mockResolveIsWorkspaceOwner: vi.fn(),
   mockWriteAskpassScriptTo: vi.fn(),
@@ -225,11 +231,16 @@ vi.mock("@/server/resolve-web-egress", () => ({
 // feat-open-web-egress (#9534) — never spawn a real forwarder in
 // unit tests; the module lifecycle is covered by web-egress.test.ts.
 vi.mock("@/server/egress-forwarder", () => ({
+  markEgressRevoked: (c: string) => void fakeRevoked.add(c),
+  EgressRevokedError: class extends Error {},
+  egressRevocationEpoch: () => 0,
+  isEgressRevoked: (c: string) => fakeRevoked.has(c),
   spawnEgressForwarder: mockSpawnEgressForwarder,
   teardownEgressForwarder: mockTeardownEgressForwarder,
   reapOrphanEgressForwarders: vi.fn(),
   hasEgressForwarder: vi.fn(() => false),
-  egressForwarderWorkspaceId: vi.fn(() => undefined),
+  egressForwarderWorkspaceId: (c: string) => fakeForwarders.get(c)?.workspaceId,
+  isEgressForwarderLive: (c: string, t: string) => fakeForwarders.get(c)?.token === t,
 }));
 
 // feat-bash-autonomous-default-on — first-run consent soft-gate inputs. Default
@@ -319,7 +330,12 @@ vi.mock("@supabase/supabase-js", () => ({
 // test does not pull `mintFounderJwt` or the lease's `fetchAndDecrypt`
 // chain.
 vi.mock("@/lib/supabase/tenant", () => ({
-  getFreshTenantClient: vi.fn(async () => ({ from: mockSupabaseFrom })),
+  // #12704: the stored held-count RPC answers zero rows (the non-member shape: no line, no warning), so a test that counts
+  // warnings counts only its own.
+  getFreshTenantClient: vi.fn(async () => ({
+    from: mockSupabaseFrom,
+    rpc: async (fn: string) => (fn === "get_workspace_kb_sync_held" ? { data: [], error: null } : { data: null, error: null }),
+  })),
   mintFounderJwt: vi.fn(),
   RuntimeAuthError: class RuntimeAuthError extends Error {},
 }));
@@ -450,9 +466,15 @@ vi.mock("@/server/cc-github-read", async (importOriginal) => {
 });
 
 // #11636: the approval-queue flag read, shared by the registrar and the gate's default seam. A per-test switch.
+// #12704 D40(1): the registrar reads the detailed shape; it wraps the same switch.
 vi.mock("@/server/approval/flag", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/approval/flag")>()),
   isApprovalQueueEnabled: mockApprovalFlag,
+  // A rejection propagates: the registrar's own catch reports it under cc-push-flag-resolve (the throwing-seam path).
+  readApprovalQueueFlagDetailed: async (identity: unknown) => ({
+    value: (await (mockApprovalFlag as (...a: unknown[]) => Promise<unknown>)(identity)) === true,
+    fellBack: false,
+  }),
 }));
 
 // #11636: the default-branch lookup. The file-wide github-app mock exposes only three exports, so the REAL github-api is kept
@@ -485,6 +507,7 @@ import {
   getCcRegisteredApprovalTools,
   getCcRegisteredReadTools,
   realSdkQueryFactory,
+  reResolveWarmWebEgress,
 } from "@/server/cc-dispatcher";
 import { ccPushPromptAddendum } from "@/server/cc-github-push";
 import { RESOLVE_TIMEOUT_MS } from "@/server/resolve-protected-branches";
@@ -521,6 +544,15 @@ function makeFakeQuery() {
  */
 
 const WORKSPACE_PATH = "/tmp/cc-test-workspace";
+// #12598: the heading of the line a session gets when its workspace grant is on but its forwarder failed to start.
+const START_FAILED_HEAD = "## Web access unavailable in this session";
+// #12598: asserts the line appears exactly once and returns its body (the text after its heading), so content asserts
+// cannot match another prompt section.
+const startFailedBody = (p: string): string => {
+  const parts = p.split(START_FAILED_HEAD);
+  expect(parts).toHaveLength(2);
+  return parts[1];
+};
 
 function setupSupabaseMockReturning(
   workspacePath: string | null = WORKSPACE_PATH,
@@ -580,6 +612,8 @@ function makeArgs(overrides: Partial<Parameters<typeof realSdkQueryFactory>[0]> 
 describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // #12598: clearAllMocks keeps implementations; reset the logger so a row that makes it throw cannot leak.
+    mockLogInfo.mockReset();
     // #11636: the push registration's seams default to the dark path (flag OFF) so every pre-existing case is unaffected.
     registrarOverride.fn = null;
     readRegistrarOverride.fn = null;
@@ -1638,6 +1672,11 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(prompt()).not.toContain(ADDENDUM_HEAD);
       expect(prompt()).not.toContain("GitHub tools are unavailable");
       expect(outcome()[0][1].tags.forwarderLive).toBe("false");
+      // #12598: a public repo is connected and the spawn failed, so the failed-to-start line appears exactly once, and it
+      // says the registered GitHub read tools still work (they run server-side, not through the forwarder).
+      expect(startFailedBody(prompt())).toContain("read-only GitHub tools");
+      // AC4 (with a repo connected): a failed spawn never also carries the enabled section.
+      expect(prompt()).not.toContain("## Web access enabled for this session");
     });
 
     it("entitled + NO connected repo: no tools, the connect-a-repository line, a debounced warning with its OWN literal, no info event", async () => {
@@ -2937,9 +2976,12 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
   // feat-open-web-egress (#9534) — workspace "Agent web access" grant.
   // -------------------------------------------------------------------------
   describe("web egress entitlement (#9534)", () => {
+    const prompt = () => mockQuery.mock.calls.at(-1)![0].options.systemPrompt as string;
+
     it("unentitled (default) → no forwarder spawn, no webEgress handle", async () => {
       await realSdkQueryFactory(makeArgs());
       expect(mockSpawnEgressForwarder).not.toHaveBeenCalled();
+      expect(prompt()).not.toContain(START_FAILED_HEAD);
       const opts = mockQuery.mock.calls[0][0].options;
       // WebFetch stays disallowed; WebSearch too.
       expect(opts.disallowedTools).toContain("WebFetch");
@@ -2967,6 +3009,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       expect(mockSpawnEgressForwarder).toHaveBeenCalledWith(
         "conv-1",
         expect.any(String),
+        expect.any(Number), // the toggle-off epoch read before the grant (CTO R4, fix round)
       );
       const opts = mockQuery.mock.calls[0][0].options;
       // WebFetch re-enabled; WebSearch stays disallowed (Phase A).
@@ -2990,6 +3033,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
         expect.anything(),
         expect.objectContaining({ allowWebEgress: true }),
       );
+      expect(prompt()).not.toContain(START_FAILED_HEAD);
     });
 
     it("entitled + spawn failure → degrade to zero-egress, mirrored, Query still built", async () => {
@@ -3003,6 +3047,138 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
         ([, o]) => o?.op === "web-egress-forwarder-spawn",
       );
       expect(calls).toHaveLength(1);
+      // #12598: the agent is told its web access failed to start (no repo connected here: top-level beforeEach). Content
+      // asserts read the line's BODY: the base prompt already contains "sandbox failed to start".
+      const p = prompt();
+      expect(p).not.toContain("## Web access enabled for this session");
+      const body = startFailedBody(p);
+      expect(body).toContain("failed to start");
+      expect(body).toContain("`WebFetch` is unavailable");
+      expect(body).toMatch(/do not retry/i);
+      expect(body).toMatch(/shell commands/);
+      expect(body).toMatch(/new conversation/);
+      expect(body).not.toMatch(/WebFetch`? (is|are) (still )?available/);
+      // No GitHub read tools are registered without a repo, so no GitHub clause.
+      expect(body).not.toContain("read-only GitHub tools");
+    });
+
+    it("entitled + spawn OK but the bound log line throws → the session keeps its live forwarder and gets no failed-to-start line", async () => {
+      mockResolveWebEgress.mockResolvedValue(true);
+      mockSpawnEgressForwarder.mockResolvedValue({ port: 28711, token: "tok-abc", pid: 4242 });
+      mockLogInfo.mockImplementation((_o: unknown, msg?: unknown) => {
+        if (msg === "cc-dispatcher: web egress forwarder bound") throw new Error("log boom");
+      });
+      try {
+        await realSdkQueryFactory(makeArgs());
+        const p = prompt();
+        expect(p).toContain("## Web access enabled for this session");
+        expect(p).not.toContain(START_FAILED_HEAD);
+      } finally {
+        mockLogInfo.mockImplementation(() => {});
+      }
+    });
+
+    // #12585 AC17 (CTO T10) / AC18 (CTO T18): the SandboxNetworkAccess arm keys entitlement on the live forwarder handle.
+    describe("SandboxNetworkAccess wiring (#12585)", () => {
+      const ctxArg = () =>
+        (createCanUseTool as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as {
+          sandboxNetworkEgress?: { isLive: () => boolean };
+          webEgressGranted?: boolean;
+        };
+      beforeEach(() => {
+        fakeForwarders.clear();
+        fakeRevoked.clear();
+        mockSpawnEgressForwarder.mockImplementation(async (conversationId: string, workspaceId: string) => {
+          fakeForwarders.set(conversationId, { token: "tok-abc", workspaceId });
+          return { port: 28711, token: "tok-abc", pid: 4242 };
+        });
+        mockTeardownEgressForwarder.mockImplementation((conversationId: string) => fakeForwarders.delete(conversationId));
+      });
+      afterEach(() => {
+        fakeForwarders.clear();
+        fakeRevoked.clear();
+        mockSpawnEgressForwarder.mockReset();
+        mockTeardownEgressForwarder.mockReset();
+      });
+
+      it("AC17: grant on + spawn ok → sandboxNetworkEgress reaches createCanUseTool; isLive true, false after teardown", async () => {
+        mockResolveWebEgress.mockResolvedValue(true);
+        await realSdkQueryFactory(makeArgs());
+        const ctx = ctxArg();
+        expect(ctx.webEgressGranted).toBe(true);
+        expect(ctx.sandboxNetworkEgress).toBeDefined();
+        expect(ctx.sandboxNetworkEgress!.isLive()).toBe(true);
+        mockTeardownEgressForwarder("conv-1");
+        expect(ctx.sandboxNetworkEgress!.isLive()).toBe(false);
+      });
+
+      it("grant on but spawn failed → no handle (not-entitled), granted still true for the degraded signal", async () => {
+        mockResolveWebEgress.mockResolvedValue(true);
+        mockSpawnEgressForwarder.mockRejectedValue(new Error("bind boom"));
+        await realSdkQueryFactory(makeArgs());
+        expect(ctxArg().sandboxNetworkEgress).toBeUndefined();
+        expect(ctxArg().webEgressGranted).toBe(true);
+      });
+
+      it("fix round: the support persona never spawns a forwarder, so it is never tagged granted (no false page)", async () => {
+        mockResolveWebEgress.mockResolvedValue(true);
+        await realSdkQueryFactory(makeArgs({ persona: "support" }));
+        expect(mockSpawnEgressForwarder).not.toHaveBeenCalled();
+        expect(ctxArg().sandboxNetworkEgress).toBeUndefined();
+        expect(ctxArg().webEgressGranted).toBe(false);
+      });
+
+      it("fix round: a spawn lost to a toggle-off is the owner's choice: pino info, no spawn-failed Sentry", async () => {
+        const { EgressRevokedError } = await import("@/server/egress-forwarder");
+        mockResolveWebEgress.mockResolvedValue(true);
+        mockSpawnEgressForwarder.mockRejectedValue(new EgressRevokedError());
+        await realSdkQueryFactory(makeArgs());
+        expect(ctxArg().sandboxNetworkEgress).toBeUndefined();
+        expect(
+          mockReportSilentFallback.mock.calls.some((c: unknown[]) => (c[1] as { op?: string }).op === "web-egress-forwarder-spawn"),
+        ).toBe(false);
+      });
+
+      it("grant off → no handle, granted false", async () => {
+        mockResolveWebEgress.mockResolvedValue(false);
+        await realSdkQueryFactory(makeArgs());
+        expect(ctxArg().sandboxNetworkEgress).toBeUndefined();
+        expect(ctxArg().webEgressGranted).toBe(false);
+      });
+
+      it("AC18: a warm re-resolve that returns a definitive false tears down; the next request is egress-not-running", async () => {
+        const actual = await vi.importActual<typeof import("@/server/permission-callback")>("@/server/permission-callback");
+        (createCanUseTool as unknown as { mockImplementationOnce(f: unknown): void }).mockImplementationOnce(
+          actual.createCanUseTool,
+        );
+        mockResolveWebEgress.mockResolvedValue(true);
+        await realSdkQueryFactory(makeArgs());
+        const canUseTool = mockQuery.mock.calls[0][0].options.canUseTool as (
+          n: string,
+          i: Record<string, unknown>,
+          o: unknown,
+        ) => Promise<{ behavior: string; message?: string }>;
+        const opts = { signal: new AbortController().signal, toolUseID: "tu-1", requestId: "req-1" };
+        const before = await canUseTool("SandboxNetworkAccess", { host: "example.com" }, opts);
+        expect(before.message).toMatch(/`WebFetch` tool/); // live: gateway-unverified
+
+        mockResolveWebEgressStrict.mockResolvedValue(false);
+        await reResolveWarmWebEgress("user-1", "conv-1");
+        expect(mockResolveWebEgressStrict).toHaveBeenCalledWith("user-1", expect.any(String));
+        expect(mockTeardownEgressForwarder).toHaveBeenCalledWith("conv-1");
+        const after = await canUseTool("SandboxNetworkAccess", { host: "example.com" }, opts);
+        // Fix round (R1): the re-resolve marks the conversation revoked, so the deny says web access was turned off and
+        // reports granted=false (the degraded alert does not page for the owner's own choice).
+        expect(after.message).toMatch(/^Web access was turned off for this workspace/);
+      });
+
+      it("a re-resolve READ FAULT leaves the forwarder live (mirrored, no teardown)", async () => {
+        fakeForwarders.set("conv-1", { token: "tok-abc", workspaceId: "ws-1" });
+        mockResolveWebEgressStrict.mockRejectedValue(new Error("supabase blip"));
+        await reResolveWarmWebEgress("user-1", "conv-1");
+        expect(mockTeardownEgressForwarder).not.toHaveBeenCalled();
+        expect(fakeForwarders.has("conv-1")).toBe(true);
+      });
     });
 
     it("entitled but support persona → no forwarder (repo lifecycle is off)", async () => {
@@ -3014,6 +3190,7 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       });
       await realSdkQueryFactory(makeArgs({ persona: "support" }));
       expect(mockSpawnEgressForwarder).not.toHaveBeenCalled();
+      expect(prompt()).not.toContain(START_FAILED_HEAD);
     });
   });
 

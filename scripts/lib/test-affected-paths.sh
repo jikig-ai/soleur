@@ -138,10 +138,10 @@ ALWAYS_ON_SUITES=(
   # construction (git ls-files + per-file comment-stripped invocation discovery).
   "scripts/betterstack-emitter-read-live"
   "scripts/followthrough-varq-ban-live"
-  # #9826 slice 2a: the public-claim guard greps every public-copy surface (docs, legal, README, site data,
-  # public app pages) for image-scan claims, so any edit to those surfaces can trip it — repo-global by
-  # construction, and a cheap grep, so always-on rather than a hand-listed edge set.
-  "scripts/image-cve-public-claim-guard"
+  # scripts/image-cve-public-claim-guard is NOT here: the #11556 5-run re-price put its
+  # measured median over the fast-tier cap. (#11556) demoted to edge-selection — see the
+  # withdrawn-to-edge-selection index below.
+  #
   # #9826 slice 2a: the verdict consumer sweep reads every tracked script, workflow and composite action (a poller of the
   # verdict marker can live anywhere), so it is repo-global; it is its own small suite so the ~75 s verdict suite stays edge-selected.
   "scripts/image-cve-verdict-consumers"
@@ -367,6 +367,7 @@ ALWAYS_ON_SUITES=(
   #   scripts/lint-encryption-posture                        -> AFFECTED_SCRIPTS_LINT_ENCRYPTION_POSTURE_PATHS
   #   plugins/soleur/test/gitleaks-merge-commit.test.sh      -> AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_MERGE_COMMIT_TEST_SH_PATHS
   #   scripts/lint-gh-argv-arg-live                          -> AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS
+  #   scripts/image-cve-public-claim-guard                   -> AFFECTED_SCRIPTS_IMAGE_CVE_PUBLIC_CLAIM_GUARD_PATHS
   #
   # #11648 withdrew all eight: fresh 5-run merge_group medians (receipts/medians-11648.txt
   # under knowledge-base/project/specs/feat-one-shot-11648-fast-tier-demotion/) put each
@@ -379,6 +380,12 @@ ALWAYS_ON_SUITES=(
   # declared as dir-anchored glob:<dir>/**.<ext> rows, so it still selects on
   # most code-bearing diffs; that high selection rate is the truthful
   # classification, not a leak-back.
+  #
+  # #11556 added a ninth: image-cve-public-claim-guard, whose committed floor
+  # (1,223 ms) under-priced the SURFACES walk — the 5-run merge_group medians
+  # from the Lever-A re-price put it at 11,494 ms measured. Its edge set is the
+  # guard's own SURFACES list, declared verbatim in
+  # AFFECTED_SCRIPTS_IMAGE_CVE_PUBLIC_CLAIM_GUARD_PATHS.
 )
 
 # CONSUMED EDGE SETS. These labels already carry their edge declarations in
@@ -473,9 +480,12 @@ AFFECTED_INFRA_RUNNER_PATHS=(
   ".github/workflows/apply-web-platform-infra.yml"
   "scripts/lib/test-affected-paths.sh"   # THIS FILE — see the self-inclusion note above
 )
-# The web-platform [repo-wide+component] bundle's edges. The first three entries are
-# WEBPLAT_APP_PATHS (scripts/lib/test-relevance-paths.sh) verbatim, so the app diff and the
-# relevance-lib diff still select it; scripts/lint-orphan-test-suites.sh enforces that
+# The web-platform [repo-wide+component] bundle's edges. The first NINE entries are
+# WEBPLAT_APP_PATHS (scripts/lib/test-relevance-paths.sh) verbatim — including the
+# PR_GATE_MACHINERY_PATHS spread it gained at #9340, hand-copied element-for-element because a
+# live spread here would resolve at source time and source order is not guaranteed — so the app
+# diff, the machinery diff and the relevance-lib diff still select it;
+# scripts/lint-orphan-test-suites.sh enforces that
 # WEBPLAT_APP_PATHS is a prefix of this array. The rest are files OUTSIDE
 # apps/web-platform/ that a repo-wide suite reads, which neither the wrapper argv nor
 # `vitest related` (app-relative inputs only) can reach (#8643):
@@ -487,6 +497,14 @@ AFFECTED_INFRA_RUNNER_PATHS=(
 # the CI run of the bundle instead.
 AFFECTED_WEBPLAT_REPO_WIDE_BUNDLE_PATHS=(
   "apps/web-platform/"
+  # --- WEBPLAT_APP_PATHS' PR_GATE_MACHINERY_PATHS spread, copied by hand (#9340) ---
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"  # also THIS FILE below — a machinery member now
+  "scripts/lib/affected-glob.sh"
+  ".github/workflows/ci.yml"
+  "scripts/suite-shard-legs.tsv"
+  "scripts/suite-shard-legs-heavy.tsv"
+  # --- end copied machinery spread ---
   "apps/web-platform/test/repo-wide-containment.test.ts"
   "scripts/lib/test-relevance-paths.sh"
   "plugins/soleur/skills/model-launch-review/scripts/audit-models.sh"  # claude-cli-pin-knows-models.test.ts › AUDIT_SH
@@ -1511,6 +1529,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "tests/scripts/lib/git-data-host-birth-gate.sh"
   "tests/scripts/lib/git-data-host-replace-gate.sh"
   "tests/scripts/lib/inngest-host-shape-gate.sh"
+  "tests/scripts/lib/inngest-public-sdk-url-preflight.sh"  # plugins/soleur/test/terraform-target-parity.test.ts B10 runs it (#12742)
   "tests/scripts/lib/tf-redact-random-ids.sh"
   "tests/scripts/lib/web-host-birth-gate.sh"
   "tests/scripts/lib/web-host-replace-gate.sh"
@@ -1708,6 +1727,18 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_BOOT_SIGNAL_POLL_PATHS=(
   "scripts/lib/git-data-boot-signal-poll.sh"
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-git-data-boot-signal-poll.sh"
+)
+
+# tests/scripts/bastion-boot-verify (#12866) — derived edges could not reach its subject (the suite
+# runs the library under `env -i` with a stubbed reader); declared from the repo paths it names, plus
+# the reader the library calls by default and the reusable workflow that sources it.
+AFFECTED_TESTS_SCRIPTS_BASTION_BOOT_VERIFY_PATHS=(
+  ".github/workflows/bastion-host-create.yml"
+  "apps/web-platform/infra/scripts/fresh-host-boot-trail.sh"
+  "scripts/lib/bastion-boot-verify.sh"
+  "scripts/lib/bearer-curl.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-bastion-boot-verify.sh"
 )
 
 # tests/scripts/git-data-rung2-evidence-capture — derived edges could not reach its subject; declared from the
@@ -3284,6 +3315,18 @@ AFFECTED_TESTS_SCRIPTS_DISPATCH_WEB_REDEPLOY_PATHS=(
   "tests/scripts/test-dispatch-web-redeploy.sh"
 )
 
+# plugins/soleur/test/arm-check-sites.test.sh — corpus walk is SCOPED to
+# plugins/soleur/skills/ (A2b single-copy and A6 tombstone greps), plus the three scripts
+# whose re-arm or not-armed messages A5 reads (#12656).
+AFFECTED_PLUGINS_SOLEUR_TEST_ARM_CHECK_SITES_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/monitor-pr-checks.sh"
+  "plugins/soleur/scripts/sync-pr-behind.sh"
+  "scripts/merge-queue-jump.sh"
+  "plugins/soleur/skills/"
+  "plugins/soleur/test/arm-check-sites.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/admin-merge-ready-wiring.test.sh — corpus walk is SCOPED
 # to plugins/soleur/ (any file there gaining `gh pr merge --admin` must carry
 # the ready-gate), plus its SUT script and the skills that must reference it.
@@ -3775,8 +3818,10 @@ AFFECTED_SCRIPTS_TEST_ALL_INFRA_COVERAGE_NOTICE_PATHS=(
 # on any dir-less corpus member no declared edge covers.
 # Declared edge (#11631): luks-monitor-install.test.sh is a PROMOTED_FILES member, so this suite builds and runs mutants of
 # it, and that suite really reads the LUKS cutover runbook. The edge makes a runbook edit select this suite.
+# Same for web-hosts-generic.test.sh (#9421, promoted): it reads the web-host bound-state census.
 AFFECTED_SCRIPTS_GUARD_VACUITY_FLOOR_PATHS=(
   "knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md"
+  "knowledge-base/engineering/operations/web-host-bound-state-census.md"
   "apps/"
   ".claude/"
   ".github/"
@@ -5037,6 +5082,44 @@ AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# scripts/image-cve-public-claim-guard (#11556 demotion, re-priced median 11,494 ms) —
+# #9826's repo-global tripwire left ALWAYS_ON_SUITES when the Lever-A 5-run re-price
+# moved its row off the 1,223 ms floor. The honest read set IS the suite's own
+# SURFACES list (scripts/image-cve-public-claim-guard.test.sh SURFACES=(), ~line 206):
+# every public-copy surface the guard walks, verbatim. Directory rows use the
+# trailing-slash dir-entry shape (the components/settings/*-toggle.tsx glob and the
+# two named files under plugins/soleur/docs are subsumed by their parent dirs).
+# The (auth)/(public)/(dashboard) rows carry parens — outside the registration-only
+# classifier's closed charset, so this array can never anchor a `registration-only`
+# diff. Runtime matching is unaffected (dir-prefix edges match parens literally).
+AFFECTED_SCRIPTS_IMAGE_CVE_PUBLIC_CLAIM_GUARD_PATHS=(
+  "plugins/soleur/docs/"
+  "docs/legal/"
+  "README.md"
+  "apps/web-platform/app/page.tsx"
+  "apps/web-platform/app/layout.tsx"
+  "apps/web-platform/app/manifest.ts"
+  "apps/web-platform/app/error.tsx"
+  "apps/web-platform/app/global-error.tsx"
+  "apps/web-platform/app/shared/"
+  "apps/web-platform/public/offline.html"
+  "apps/web-platform/app/(auth)/"
+  "apps/web-platform/app/(public)/"
+  "apps/web-platform/app/(dashboard)/"
+  "apps/web-platform/components/"
+  "apps/web-platform/lib/legal/disclosures.ts"
+  "apps/web-platform/lib/messages/"
+  "plugins/soleur/skills/"
+  "plugins/soleur/agents/"
+  "plugins/soleur/README.md"
+  "plugins/soleur/.claude-plugin/plugin.json"
+  "plugins/soleur/.claude-plugin/agents.manifest.json"
+  ".claude-plugin/marketplace.json"
+  "knowledge-base/marketing/"
+  "scripts/image-cve-public-claim-guard.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # scripts/lint-gh-dedupe-shape — the suite `cp -r`s the whole real .github tree into a scratch repo and
 # runs the linter over it (a planted-regression probe on each workflow), so EVERY .github file's state
 # feeds the verdict; dir entry, not a per-workflow name list.
@@ -5082,4 +5165,19 @@ AFFECTED_SCRIPTS_HOST_KERNEL_CADENCE_12008_PATHS=(
   "scripts/host-tcp-exposure.test.sh"
   "knowledge-base/engineering/operations/runbooks/host-kernel-patch-cadence.md"
   "glob:apps/web-platform/infra/**.tf"
+)
+
+# tests/scripts/relay-inngest-write-token-12158 (#12158 D2-2) — the suite greps the staged
+# relay script's text at a spec path no name-stem convention reaches. The spec dir was
+# archived at ship; the dir-prefix edge also covers the suite's .env check-ignore ref, which
+# resolves to the dir itself (the .env file is gitignored, never tracked).
+AFFECTED_TESTS_SCRIPTS_RELAY_INNGEST_WRITE_TOKEN_12158_PATHS=(
+  ".github/workflows/cutover-inngest.yml"
+  "apps/web-platform/infra/inngest-arm-write-token.tf"
+  "knowledge-base/project/specs/archive/20261113-090857-feat-one-shot-9927-d2-2-new-write-path/"
+  "plugins/soleur/scripts/lib/operator-script.sh"
+  "plugins/soleur/skills/operator-bootstrap/template.sh"
+  "scripts/cutover-inngest.sh"
+  "tests/scripts/test-relay-inngest-write-token-12158.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )

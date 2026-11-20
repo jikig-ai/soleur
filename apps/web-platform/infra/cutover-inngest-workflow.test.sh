@@ -2537,7 +2537,7 @@ assert "#8054 2.0 region extraction is non-vacuous (>60 non-comment lines, got $
 H5_BOOT="a1b2c3d4-0000-4000-8000-00000000cafe"; H5_BID="${H5_BOOT//-/}"
 H5_PROBE_DT="$(date -u -d '-7 min' '+%Y-%m-%d %H:%M:%S')"
 H5_HB_DT="$(date -u -d '-1 min' '+%Y-%m-%d %H:%M:%S')"
-H5_MSG="SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=failed vector_active=active redis_active=active uptime_s=100 boot_id=$H5_BOOT image_ref=ghcr.io/other@sha256:fff instance_id=1 cli_version=v1 cutover_flag=rolled-back probe_schema=9 host_role=dedicated flush_latched=false redis_keys=16 redis_expires=0 redis_key_patterns=k:1 data_mount_src=/dev/sdb data_bytes=4096 data_mount_base=sdb data_mount_devid=scsi-0HC_Volume_1 registry_fns=__UNREADABLE__ data_luks=crypto_LUKS zz_trailing=1"
+H5_MSG="SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=failed vector_active=active redis_active=active uptime_s=100 boot_id=$H5_BOOT image_ref=ghcr.io/other@sha256:fff instance_id=1 cli_version=v1 cutover_flag=rolled-back probe_schema=10 host_role=dedicated flush_latched=false redis_keys=16 redis_expires=0 redis_key_patterns=k:1 data_mount_src=/dev/sdb data_bytes=4096 data_mount_base=sdb data_mount_devid=scsi-0HC_Volume_1 registry_fns=__UNREADABLE__ data_luks=crypto_LUKS sdk_sync=__UNREADABLE__ sdk_app_url=__UNREADABLE__ zz_trailing=1"
 H5_PROBE_ROW=$(jq -cn --arg dt "$H5_PROBE_DT" --arg m "$H5_MSG" --arg b "$H5_BID" '{dt:$dt, raw: ({host:"soleur-inngest", host_name:"soleur-inngest-prd", SYSLOG_IDENTIFIER:"inngest-server-probe", _BOOT_ID:$b, message:$m} | tojson)}')
 H5_HB_ROW=$(jq -cn --arg dt "$H5_HB_DT" --arg b "$H5_BID" '{dt:$dt, raw: ({host:"soleur-inngest", host_name:"soleur-inngest-prd", SYSLOG_IDENTIFIER:"inngest-cutover-flip", _BOOT_ID:$b, message:{flag:"rolled-back", reason:"noop-rolled-back", guard:"7761", exit_code:0}} | tojson)}')
 # #8079 D8 — the flag_armed 2x2 needs the probe row and the heartbeat each sampled at `done`
@@ -2562,13 +2562,13 @@ _h5_hb_row() {  # $1 flag
 SERVING_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "${H5_MSG/http_code=000 server_active=failed/http_code=200 server_active=active}" soleur-inngest)
 WRONGHOST_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "$H5_MSG" web-1)
 STALE_PROBE_ROW=$(_h5_probe_row "$(date -u -d '-3 hour' '+%Y-%m-%d %H:%M:%S')" "$H5_MSG" soleur-inngest)
-SCHEMA8_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "${H5_MSG/probe_schema=9/probe_schema=8}" soleur-inngest)
+SCHEMA9_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "${H5_MSG/probe_schema=10/probe_schema=9}" soleur-inngest)
 UNKNOWNFLAG_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "${H5_MSG/cutover_flag=rolled-back/cutover_flag=unknown}" soleur-inngest)
 ABORTED_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "${H5_MSG/cutover_flag=rolled-back/cutover_flag=aborted}" soleur-inngest)
 ROLLBACKFLAG_HB_ROW=$(_h5_hb_row rollback)
 ABORTED_HB_ROW=$(_h5_hb_row aborted)
-assert "#8079 per-token fixtures are each ONE substitution from H5 (serving/schema8/unknownflag/aborted differ in 2 tokens; wronghost only in host; stale only in dt)" \
-  "[[ \$(diff <(tr ' ' '\n' <<<\"\$H5_MSG\") <(tr ' ' '\n' <<<\"\${H5_MSG/probe_schema=9/probe_schema=8}\") | grep -c '^[<>]') -eq 2 && \$(jq -r '.raw|fromjson|.host' <<<\"\$WRONGHOST_PROBE_ROW\") == web-1 && \$(jq -r '.raw|fromjson|.host' <<<\"\$H5_PROBE_ROW\") == soleur-inngest && \$(jq -r .dt <<<\"\$STALE_PROBE_ROW\") != \$(jq -r .dt <<<\"\$H5_PROBE_ROW\") ]]"
+assert "#8079 per-token fixtures are each ONE substitution from H5 (serving/schema9/unknownflag/aborted differ in 2 tokens; wronghost only in host; stale only in dt)" \
+  "[[ \$(diff <(tr ' ' '\n' <<<\"\$H5_MSG\") <(tr ' ' '\n' <<<\"\${H5_MSG/probe_schema=10/probe_schema=9}\") | grep -c '^[<>]') -eq 2 && \$(jq -r '.raw|fromjson|.host' <<<\"\$WRONGHOST_PROBE_ROW\") == web-1 && \$(jq -r '.raw|fromjson|.host' <<<\"\$H5_PROBE_ROW\") == soleur-inngest && \$(jq -r .dt <<<\"\$STALE_PROBE_ROW\") != \$(jq -r .dt <<<\"\$H5_PROBE_ROW\") ]]"
 assert "#8079 2x2 fixtures differ from H5 in the flag ONLY (done/armed probe rows; done/armed heartbeats)" \
   "[[ \"\$DONE_MSG\" != \"\$H5_MSG\" && \"\$ARMED_MSG\" != \"\$H5_MSG\" && \$(diff <(tr ' ' '\n' <<<\"\$H5_MSG\") <(tr ' ' '\n' <<<\"\$DONE_MSG\") | grep -c '^[<>]') -eq 2 && \$(diff <(tr ' ' '\n' <<<\"\$H5_MSG\") <(tr ' ' '\n' <<<\"\$ARMED_MSG\") | grep -c '^[<>]') -eq 2 ]]"
 # render_2_0 <region-file> <webhook-code> <webhook-body> <probe-mode> <hb-mode>  — echoes stdout+stderr, returns rc
@@ -2623,8 +2623,8 @@ render_2_0() {
     printf 'STUB_CODE=%q; STUB_BODY=%q; PMODE=%q; HMODE=%q; TMPD=%q\n' "$code" "$body" "$pmode" "$hmode" "$tmpd"
     printf 'H5_PROBE_ROW=%q; H5_HB_ROW=%q\n' "$H5_PROBE_ROW" "$H5_HB_ROW"
     printf 'DONE_PROBE_ROW=%q; ARMED_PROBE_ROW=%q; DONE_HB_ROW=%q; ARMED_HB_ROW=%q\n' "$DONE_PROBE_ROW" "$ARMED_PROBE_ROW" "$DONE_HB_ROW" "$ARMED_HB_ROW"
-    printf 'SERVING_PROBE_ROW=%q; WRONGHOST_PROBE_ROW=%q; STALE_PROBE_ROW=%q; SCHEMA8_PROBE_ROW=%q; UNKNOWNFLAG_PROBE_ROW=%q; ABORTED_PROBE_ROW=%q\n' \
-      "$SERVING_PROBE_ROW" "$WRONGHOST_PROBE_ROW" "$STALE_PROBE_ROW" "$SCHEMA8_PROBE_ROW" "$UNKNOWNFLAG_PROBE_ROW" "$ABORTED_PROBE_ROW"
+    printf 'SERVING_PROBE_ROW=%q; WRONGHOST_PROBE_ROW=%q; STALE_PROBE_ROW=%q; SCHEMA9_PROBE_ROW=%q; UNKNOWNFLAG_PROBE_ROW=%q; ABORTED_PROBE_ROW=%q\n' \
+      "$SERVING_PROBE_ROW" "$WRONGHOST_PROBE_ROW" "$STALE_PROBE_ROW" "$SCHEMA9_PROBE_ROW" "$UNKNOWNFLAG_PROBE_ROW" "$ABORTED_PROBE_ROW"
     printf 'ROLLBACKFLAG_HB_ROW=%q; ABORTED_HB_ROW=%q\n' "$ROLLBACKFLAG_HB_ROW" "$ABORTED_HB_ROW"
     printf '%s\n' "$BS_CLASSIFY_FN"
     printf '%s\n' "$BS_READER_FN"
@@ -2648,7 +2648,7 @@ doppler() {
         serving)     printf '%s\n' "$SERVING_PROBE_ROW"; return 0 ;;
         wronghost)   printf '%s\n' "$WRONGHOST_PROBE_ROW"; return 0 ;;
         stale)       printf '%s\n' "$STALE_PROBE_ROW"; return 0 ;;
-        schema8)     printf '%s\n' "$SCHEMA8_PROBE_ROW"; return 0 ;;
+        schema9)     printf '%s\n' "$SCHEMA9_PROBE_ROW"; return 0 ;;
         unknownflag) printf '%s\n' "$UNKNOWNFLAG_PROBE_ROW"; return 0 ;;
         aborted)     printf '%s\n' "$ABORTED_PROBE_ROW"; return 0 ;;
         badjson)     printf 'not json\n'; return 0 ;;
@@ -2934,7 +2934,7 @@ _rpg_refusal() {  # $1 label  $2 pmode  $3 hmode  $4 token  $5 headline ERE
 _rpg_refusal 'host_serving' serving h5 host_serving 'row \([0-9]+s old — hourly.*90 minutes\).*WAS serving.*hook just failed to reach 10\.0\.1\.40:8288.*inngest-host-state\.sh.*op=inventory reads the WEB host'
 _rpg_refusal 'wrong_host' wronghost h5 wrong_host 'Two causes with opposite remedies.*dead host, not a mislabel.*inngest-host-state\.sh.*treat this as silent'
 _rpg_refusal 'stale_row' stale h5 stale_row '90-minute bound.*FSM transition.*Wait for the next hourly probe'
-_rpg_refusal 'stale_schema' schema8 h5 stale_schema 'not probe_schema=9.*unbumped pin re-delivers the same bytes'
+_rpg_refusal 'stale_schema' schema9 h5 stale_schema 'not probe_schema=10.*unbumped pin re-delivers the same bytes'
 _rpg_refusal 'flag_unreadable E11' unknownflag h5 flag_unreadable 'HOURLY probe row \([0-9]+s old\).*Do NOT write the flag by hand'
 _rpg_refusal 'flag_unreadable E13' h5 rollbackflag flag_unreadable 'same-boot heartbeat \([0-9]+s old\).*reports it as __UNREADABLE__'
 _rpg_refusal 'unreadable rc=0' badjson h5 unreadable 'answered \(rc=0\).*Nothing about the host was measured'
@@ -4353,6 +4353,52 @@ assert "#9927 G2 MUTATION: a one-line case arm '  newop) cmd ;;' is extracted as
 assert "#9927 G2 MUTATION: a one-line combined/quoted arm '  \"quoted-op\"|other-op) cmd ;;' yields both labels" \
   "[[ \"\$(_g2_labels '$G2M_DIR/body-oneliner-multi.sh')\" == *other-op* && \"\$(_g2_labels '$G2M_DIR/body-oneliner-multi.sh')\" == *quoted-op* ]]"
 
+# =============================================================================================
+# #9927 step D2-2 / #12158 — the NEW write path: DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE, an
+# `inngest-cutover` ENVIRONMENT secret (main-only + required-reviewer). The arm token stays
+# exported until the step-4 revoke change but the rollback/resume arms now consume the new
+# variable, and the first credential step of those ops refuses write_token_stale fail-closed.
+# =============================================================================================
+G2W_TOK_LINE=$(grep -E '^[[:space:]]+DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE:' "$_G2_YAML_CODE" | sed -n '1p' || true)
+G2W_TOK_SET=$(printf '%s' "$G2W_TOK_LINE" | _g2_ops)
+G2W_IF_LINE=$(awk '/- name: Export Inngest write token/{f=1;next} f && /^[[:space:]]+if:/{print;exit}' "$_G2_YAML_CODE")
+G2W_IF_SET=$(printf '%s' "$G2W_IF_LINE" | _g2_ops)
+G2W_CHK_BLOCK="$(mktemp)"; SCRATCH+=("$G2W_CHK_BLOCK")
+awk '/- name: Write-token freshness check/{f=1} f{print} /^      - name: Run cutover host op/{exit}' "$WF_YAML" > "$G2W_CHK_BLOCK"
+G2W_RB="$(mktemp)"; SCRATCH+=("$G2W_RB")
+awk '/^            rollback\)$/,/^              ;;$/' "$WF" > "$G2W_RB"
+G2W_RS="$(mktemp)"; SCRATCH+=("$G2W_RS")
+awk '/^            resume\)$/,/^              ;;$/' "$WF" > "$G2W_RS"
+_g2w_secret_n() { grep -vE '^[[:space:]]*#' "$1" | grep -oiE "secrets(\.|\[[^]]*)doppler_token_inngest_cutover_write" | wc -l | tr -d ' '; }
+assert "#9927 D2-2 the write-token secret is consumed EXACTLY once in the workflow (non-comment): the one scoped env ternary" \
+  "[[ \"\$(_g2w_secret_n '$WF_YAML')\" == 1 ]]"
+assert "#9927 D2-2 the write-token env ternary names EXACTLY the literal set: $_G2_TOKEN_OPS" \
+  "[[ '$G2W_TOK_SET' == '$_G2_TOKEN_OPS' ]]"
+assert "#9927 D2-2 the write-token export step's own if: names EXACTLY the literal set: $_G2_TOKEN_OPS" \
+  "[[ '$G2W_IF_SET' == '$_G2_TOKEN_OPS' ]]"
+G2W_CHK_IF=$(awk '/- name: Write-token freshness check/{f=1;next} f && /^[[:space:]]+if:/{print;exit}' "$_G2_YAML_CODE")
+G2W_CHK_SET=$(printf '%s' "$G2W_CHK_IF" | _g2_ops)
+assert "#9927 D2-2 the freshness check step is gated to the same literal op set (extracted, not assumed)" \
+  "[[ '$G2W_CHK_SET' == '$_G2_TOKEN_OPS' ]]"
+assert "#9927 D2-2 the freshness check refuses with the named verdict write_token_stale (both refusal arms)" \
+  "[[ \"\$(grep -c 'write_token_stale' '$G2W_CHK_BLOCK')\" -ge 2 ]]"
+assert "#9927 D2-2 the freshness check does an authenticated Doppler read with the NEW token BEFORE the op run step" \
+  "grep -qF 'DOPPLER_TOKEN=\"\$DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE\" doppler secrets get DOPPLER_PROJECT -p soleur-inngest -c prd --plain' '$G2W_CHK_BLOCK'"
+assert "#9927 D2-2 the freshness check sits between the export step and the op run step" \
+  "awk '/- name: Export Inngest write token/{e=NR} /- name: Write-token freshness check/{c=NR} /- name: Run cutover host op/{r=NR} END{exit !(e && c && r && e<c && c<r)}' '$WF_YAML'"
+assert "#9927 D2-2 rollback) arm reads the NEW write token (non-empty extraction first)" \
+  "[[ -s '$G2W_RB' ]] && grep -qF 'DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE' '$G2W_RB'"
+assert "#9927 D2-2 resume) arm reads the NEW write token (non-empty extraction first)" \
+  "[[ -s '$G2W_RS' ]] && grep -qF 'DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE' '$G2W_RS'"
+assert "#9927 D2-2 neither rollback) nor resume) authenticates with the arm token any more" \
+  "! grep -qF 'DOPPLER_TOKEN=\"\$DOPPLER_TOKEN_INNGEST_ARM\"' '$G2W_RB' && ! grep -qF 'DOPPLER_TOKEN=\"\$DOPPLER_TOKEN_INNGEST_ARM\"' '$G2W_RS'"
+assert "#9927 D2-2 no terraform resource publishes the new key as a GitHub secret (static grep, D1c)" \
+  "! grep -rhE 'secret_name[[:space:]]*=[[:space:]]*\"DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE\"' apps/web-platform/infra/*.tf apps/*/infra/*.tf 2>/dev/null"
+assert "#9927 D2-2 the new token is declared read/write by-reference with a name distinct from inngest-cutover-arm" \
+  "grep -q 'name    = \"inngest-cutover-write\"' < <(awk '/resource \"doppler_service_token\" \"inngest_cutover_write\"/,/^}/' apps/web-platform/infra/inngest-arm-write-token.tf) && grep -q 'access  = \"read/write\"' < <(awk '/resource \"doppler_service_token\" \"inngest_cutover_write\"/,/^}/' apps/web-platform/infra/inngest-arm-write-token.tf)"
+assert "#9927 D2-2 non-vacuity: a widened write-token ternary is no longer equal to the literal set (judged RED)" \
+  "[[ \"\$(printf '%s' \"DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE: \\\${{ (inputs.op == 'rollback' || inputs.op==\\\"backup\\\" || inputs.op == 'resume') && 1 }}\" | _g2_ops)\" != '$_G2_TOKEN_OPS' ]]"
+
 _DISPATCHED=$((PASS + FAIL))
 # 628 -> 630 (+2) at PR #8204 review: the clean-fixture parse-rc and numeric-count rows on the two
 # dupe-detector programs (a jq crash on CLEAN_FIXTURE must not read as 'clean').
@@ -4476,7 +4522,12 @@ _DISPATCHED=$((PASS + FAIL))
 # 965 -> 977 (+12) at the #9927 review round (this PR), measured from the STALE FLOOR FATAL line: Guard 2 hardening - arm-token
 #   consumption count==1, no `secrets: inherit`, tolerant op-literal extraction, one-line case-arm labels (live + mutation rows).
 # 977 -> 982 (+5, this PR's review fix round): bracket/lower-case arm readers, quoted inherit, toJSON(secrets) ban + live row.
-_EXACT_FLOOR=982
+# 982 -> 995 (+13) at #9927 step D2-2 / #12158 (this PR), measured: the D2-2 block — write-token
+#   consumption-once, env ternary + export if: literal sets, freshness-check gate set + write_token_stale
+#   + authenticated-read + step-ordering, rollback)/resume) new-variable reads + no arm-token auth, the
+#   static-grep no-github-secret pin, the by-reference read/write declaration pin, and the widened-set
+#   non-vacuity row.
+_EXACT_FLOOR=995
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

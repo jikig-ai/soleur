@@ -41,6 +41,7 @@ export default defineConfig({
         "**/start-fresh-*.e2e.ts",
         "**/cc-soleur-go-*.e2e.ts",
         "**/nav-states-*.e2e.ts",
+        "**/settings-kb-sync-held.e2e.ts",
       ],
       use: {
         browserName: "chromium",
@@ -54,6 +55,7 @@ export default defineConfig({
         "**/start-fresh-*.e2e.ts",
         "**/cc-soleur-go-*.e2e.ts",
         "**/nav-states-*.e2e.ts",
+        "**/settings-kb-sync-held.e2e.ts",
       ],
       timeout: 60_000,
       use: {

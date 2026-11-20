@@ -102,6 +102,7 @@ vi.mock("@/server/inngest/functions/_cron-claude-eval-substrate", () => ({
   }),
   COMMUNITY_DISALLOWED_TOOLS: "Read,Glob,Grep,Write,Edit,MultiEdit,NotebookEdit,Task,Agent,Skill",
   KILL_ESCALATION_MS: 5000,
+  PLUGIN_ROOT_TOKEN: "<plugin-root>",
 }));
 
 vi.mock("@/server/inngest/functions/_cron-safe-commit", () => ({
@@ -253,7 +254,7 @@ beforeEach(() => {
   // resolves 202). Mirrors the dedup suite.
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(FROZEN);
-  setupWorkspaceSpy.mockResolvedValue({ ephemeralRoot: tmpRoot, spawnCwd: join(tmpRoot, "repo") });
+  setupWorkspaceSpy.mockResolvedValue({ ephemeralRoot: tmpRoot, spawnCwd: join(tmpRoot, "repo"), pluginRoot: "/app/shared/plugins/soleur" });
   spawnClaudeEvalSpy.mockResolvedValue(okSpawn);
   resolveOutputAwareOkSpy.mockResolvedValue(true);
   safeCommitAndPrSpy.mockImplementation(async () => committedWithDigest());

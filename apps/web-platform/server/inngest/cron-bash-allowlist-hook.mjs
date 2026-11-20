@@ -44,11 +44,107 @@
 // (D-new-1), so the whole body is wrapped and the catch emits deny.
 // =============================================================================
 
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, posix, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ---- decision primitives ---------------------------------------------------
+
+// --- Write confinement (#12824, CTO S1) ------------------------------------
+// Write/Edit/MultiEdit are ALLOW-BY-ROOT: the target must resolve inside the run's clone (spawnCwd) or
+// the TMPDIR (`<HOME>/tmp`) of its per-spawn HOME, never HOME itself. Before #12824 the branch allowed any path no WRITE_PROTECTED_PATTERNS entry hit,
+// so a prompt-injected cron could write `/app/.next/server/*.js` (code the web server runs) or a
+// founder's `/workspaces/<uuid>/…`. This is an allow-list, not another deny pattern.
+//
+// spawnCwd is a fixed walk up from THIS file (`<spawnCwd>/apps/web-platform/server/inngest/<hook>`),
+// never an env value. The second root is `<HOME>/tmp` (the spawn's TMPDIR), admitted only when
+// `process.env.HOME` is exactly a `home-*` child of dirname(spawnCwd) (the substrate's mkdtemp shape),
+// so an env value cannot widen the area. HOME itself is NOT a root: programs the allowlist runs read
+// their config from it (`~/.config/gh/config.yml` names a browser/editor gh launches, `~/.curlrc`,
+// `~/.gitconfig`, `~/.claude.json`), and a write root that holds a config file an allowlisted program
+// loads is a write-then-execute path. Nothing reads config from TMPDIR. (#12847 review, security P1)
+// Computed lazily, inside a try: a module-init throw in the server bundle would take down every cron.
+export function hookSpawnCwd() {
+  try {
+    return resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+  } catch {
+    return null;
+  }
+}
+
+/** The allowed write roots: [spawnCwd] plus `<spawn HOME>/tmp` when HOME's shape checks out; null fails closed. */
+export function deriveWriteRoots(spawnCwd = hookSpawnCwd(), envHome = process.env.HOME) {
+  if (typeof spawnCwd !== "string" || !isAbsolute(spawnCwd)) return null;
+  const roots = [spawnCwd];
+  if (
+    typeof envHome === "string" &&
+    isAbsolute(envHome) &&
+    resolve(envHome) === envHome &&
+    dirname(envHome) === dirname(spawnCwd) &&
+    /^home-[A-Za-z0-9]+$/.test(basename(envHome))
+  ) {
+    roots.push(join(envHome, "tmp"));
+  }
+  return roots;
+}
+
+// The realpath of `abs`'s nearest existing ancestor, with the missing tail re-appended. An existing
+// entry is detected with lstat, not existsSync: a DANGLING symlink in the clone (`repo/x -> /etc/y`)
+// must be realpath'd (and fail), never skipped as "absent" — the write would follow it outward.
+function realpathOfNearestExisting(abs) {
+  let cur = abs;
+  const rest = [];
+  for (;;) {
+    let present = false;
+    try {
+      lstatSync(cur);
+      present = true;
+    } catch {
+      present = false;
+    }
+    if (present) break;
+    const parent = dirname(cur);
+    if (parent === cur) return null;
+    rest.unshift(basename(cur));
+    cur = parent;
+  }
+  let real;
+  try {
+    real = realpathSync(cur);
+  } catch {
+    return null; // a dangling or looping link: fail closed
+  }
+  return rest.length ? resolve(real, ...rest) : real;
+}
+
+/** null when `p` may be written; otherwise the deny reason. Relative paths resolve against spawnCwd. */
+export function writeOutsideRootsReason(p, roots) {
+  if (!Array.isArray(roots) || roots.length === 0) return "write roots unresolvable (fail-closed)";
+  // #12847 fix round — name the literal temp root: the Write tool does not expand `$TMPDIR`.
+  const shown =
+    `write outside run roots: ${String(p).slice(0, 60)} -- write under the working directory` +
+    (roots[1] ? ` or under ${roots[1]}` : "") +
+    " instead";
+  const real = realpathOfNearestExisting(resolve(roots[0], p));
+  if (!real) return shown;
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    let rr;
+    try {
+      rr = realpathSync(root);
+    } catch {
+      continue;
+    }
+    if (real === rr || real.startsWith(rr + sep)) return null;
+  }
+  return shown;
+}
+
+/** The realpath a write to `p` lands on (nearest existing ancestor), or null. Relative to roots[0]. */
+export function resolvedWriteTarget(p, roots) {
+  if (!Array.isArray(roots) || roots.length === 0) return null;
+  return realpathOfNearestExisting(resolve(roots[0], p));
+}
 
 // --- Filing justification (#8038) ----------------------------------------
 // CLASS 3 OF THE FILING SURFACE. `guardrails:require-filing-justification` in
@@ -278,7 +374,7 @@ export function filingJustificationReason(tokens, readTaxonomy, runReportLabel =
   // gh then sends every -f/-F to the QUERY STRING, so a `labels[]=` token here
   // never reaches the issue. Runs BEFORE exits 0 and 1 for that reason.
   if (isApiIssue && tokens.some((t) => t === "--input" || t.startsWith("--input=")))
-    return "this gh api filing uses --input, so this gate cannot read its body or labels, and gh sends any -f/-F field to the query string instead of the issue. Drop --input and pass every field with -f: -f title=... -f body=... and, for a finding about Soleur own verification machinery, -f labels[]=meta/machinery. The body must then carry the justification (a User-Impact: + Fix-Size: pair, or a Mandated-By: line).";
+    return "this gh api filing uses --input, so this gate cannot read its body or labels, and gh sends any -f/-F field to the query string instead of the issue. Drop --input and pass every field with -f: -f title=... -f body=... and, for a finding about Soleur own verification machinery, -f 'labels[]=meta/machinery'. The body must then carry the justification (a User-Impact: + Fix-Size: pair, or a Mandated-By: line).";
 
   // EXIT 0 — the run-report directive (#8076, ADR-216 addendum). The substrate
   // wrote `run-report-label <label>` into THIS spawn's cron-allow.txt for a cron
@@ -379,6 +475,17 @@ export function denyDecision(reason) {
   };
 }
 
+// #12757 F2 — the git global config and the trust root that holds the pinned identity file.
+// Named so the gate (WRITE_PROTECTED_PATTERNS) and the off-host metric (classifyNewRuleDeny)
+// read the same three objects. This file is plain .mjs and cannot import
+// AGENT_GIT_GLOBAL_CONFIG from host-git.ts; the hook test imports it and asserts the
+// trust-root pattern matches it.
+const GITCONFIG_FILE_RE = /(^|\/)\.gitconfig$/;
+// Assumes XDG_CONFIG_HOME is unset (git then reads $HOME/.config/git/*); nothing under server/ sets it.
+const XDG_GIT_DIR_RE = /(^|\/)\.config\/git(\/|$)/;
+const TRUST_ROOT_DIR_RE = /(^|\/)usr\/local\/share\/soleur(\/|$)/;
+
+const UX_AUDIT_OUTPUT_DIR_RE = /(^|\/)tmp\/ux-audit(\/|$)/;
 // Secret / credential paths that must never be read by ANY tool (Bash cat,
 // Read, Glob, Grep). Matched as substrings against the resolved path argument.
 // `.git` is load-bearing: `buildAuthenticatedCloneUrl` writes the GH_TOKEN into
@@ -393,9 +500,10 @@ const SECRET_PATH_PATTERNS = [
   /(^|\/)\.netrc$/,
   /(^|\/)\.docker(\/|$)/,
   /(^|\/)\.config(\/|$)/, // ~/.config/gh/hosts.yml (gh cred store)
-  /(^|\/)\.gitconfig$/,
+  GITCONFIG_FILE_RE,
   /(^|\/)\.git-credentials$/, // git credential-store plaintext (defense-in-depth)
   /(^|\/)\.claude(\/|$)/, // the spawn settings + this hook's allowlist file
+  /(^|\/)\.claude\.json$/, // #12847 fix round 2 — the CLI's per-HOME state file (a read deny, not a write-protect)
   /(^|\/)settings\.json$/,
   /(^|\/)hosts\.ya?ml$/,
   /(^|\/)run\/secrets(\/|$)/,
@@ -407,9 +515,15 @@ const SECRET_PATH_PATTERNS = [
   // else the relaxed cron could Read the session then encode it into an
   // allowlisted `gh`/`browser_navigate` egress call.
   /(^|\/)storage-state\.json$/,
-  /(^|\/)tmp\/ux-audit(\/|$)/,
+  UX_AUDIT_OUTPUT_DIR_RE,
   /(^|\/)playwright-mcp-profile(\/|$)/,
 ];
+// #12847 fix round — the secret paths a gh body file (`--body-file`, `-F`, `--input`, `--recover`) may not
+// name. ux-audit's own issue bodies are `<clone>/tmp/ux-audit/body-<hash>.md` (SKILL "File mode"), so that
+// directory is the one read-secret entry left out. What that gives up: gh may post the findings and
+// screenshots the Read gate keeps out of context, which the agent wrote itself. The session file and the
+// browser profile live in `<ephemeralRoot>/workspace/` and stay denied by their own entries.
+const BODY_FILE_SECRET_PATTERNS = SECRET_PATH_PATTERNS.filter((re) => re !== UX_AUDIT_OUTPUT_DIR_RE);
 
 // Write/Edit-protected paths: a model rewriting the hook, its allowlist, or the
 // settings file would neuter containment on the NEXT tool call (D-new-2).
@@ -423,7 +537,90 @@ const WRITE_PROTECTED_PATTERNS = [
   /(^|\/)settings\.json$/,
   /(^|\/)\.git(\/|$)/,
   /\.env(\.[\w-]+)?$/,
+  GITCONFIG_FILE_RE, // #12757 — ~/.gitconfig: a planted alias/hook/autocorrect runs on the next git call
+  XDG_GIT_DIR_RE, // #12757 — $HOME/.config/git/{config,ignore,attributes}: read whatever the pin says
+  TRUST_ROOT_DIR_RE, // #12757 — /usr/local/share/soleur holds AGENT_GIT_GLOBAL_CONFIG, the pinned identity
 ];
+
+// #12757 — the closed rule ids of the new write rules, keyed by the pattern object itself.
+const NEW_WRITE_RULES = new Map([
+  [GITCONFIG_FILE_RE, "protected-gitconfig"],
+  [XDG_GIT_DIR_RE, "protected-xdg-git"],
+  [TRUST_ROOT_DIR_RE, "protected-trust-root"],
+]);
+// Every id classifyNewRuleDeny can return. cron-filing-deny-marker.test.ts asserts the TS-side
+// NEW_RULE_IDS equals this list, so a new hook id cannot be dropped silently by that filter.
+// `write-outside-roots` (#12824) is classified only when the caller passes the run's write roots.
+export const HOOK_NEW_RULE_IDS = Object.freeze([
+  "git-gh-shape",
+  ...NEW_WRITE_RULES.values(),
+  "write-outside-roots",
+  "body-file-secret-path",
+  "plugin-clone-path",
+]);
+// The deny-reason prefix of the body-file secret-path check, and its next step for the agent.
+const BODY_FILE_SECRET_REASON = "secret-path body file via";
+const BODY_FILE_SECRET_HINT =
+  "-- write the body to a plain relative path such as tmp/<name>.md (not under .claude/ or .git, not a credential file name)";
+// #12847 escalation (observability P1) — a clone-relative script path of the plugin tree. Since #12824 the
+// plugin loads from the vendored root (`<plugin-root>`), so `bash plugins/soleur/…` is never allowlisted.
+const CLONE_PLUGIN_PATH_RE = /^(\.\/)?plugins\/soleur\//;
+// #12847 verification — the same tree by absolute path: the workspace clone is `<workspace-root>/soleur-<cron>-*/repo`,
+// so its plugin tree ends in a `/repo/plugins/soleur/` segment. The read-only plugin root (`/app/shared/plugins/
+// soleur`, and getPluginPath() only accepts an `/app/` path in production) never does; `/app/` is excluded too,
+// so an ops repoint to an `/app/…/repo/plugins/soleur` root cannot be counted as a clone path.
+const CLONE_PLUGIN_ABS_PATH_RE = /^\/(?!app\/)(?:[^/]+\/)*repo\/plugins\/soleur\//;
+const SCRIPT_INTERPRETERS = new Set(["bash", "sh", "node", "bun", "python3", "python", ".", "source"]);
+// Launchers that run the next word as the command. Their option tokens are skipped, plus `env`'s VAR=val
+// tokens and the number `timeout` (duration) and `nice` (`-n 10`) take.
+const SCRIPT_LAUNCHERS = new Set(["env", "timeout", "nice", "nohup", "command", "exec"]);
+const LAUNCHER_NUMBER_RE = /^\d+(\.\d+)?[smhd]?$/;
+// The word a segment runs as its script: past any launchers and their arguments, then past an interpreter
+// and its option tokens (`bash -x`, `bash --`). Undefined when the segment runs out of tokens.
+function scriptWordOf(tokens) {
+  let i = 0;
+  while (SCRIPT_LAUNCHERS.has(tokens[i])) {
+    const launcher = tokens[i++];
+    while (
+      i < tokens.length &&
+      (tokens[i].startsWith("-") ||
+        (launcher === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) ||
+        ((launcher === "timeout" || launcher === "nice") && LAUNCHER_NUMBER_RE.test(tokens[i])))
+    )
+      i++;
+  }
+  if (SCRIPT_INTERPRETERS.has(tokens[i])) {
+    i++;
+    while (i < tokens.length && tokens[i].startsWith("-")) i++;
+  }
+  return tokens[i];
+}
+const isClonePluginPath = (w) =>
+  typeof w === "string" &&
+  [w, posix.normalize(w)].some((t) => CLONE_PLUGIN_PATH_RE.test(t) || CLONE_PLUGIN_ABS_PATH_RE.test(t));
+
+// The entries of `patterns` a path hits, testing the raw path AND its posix.normalize form.
+// Normalising can only add denies: a doubled or `.` separator (`.config//git/config`,
+// `/run/./secrets/x`, `/usr/local//share/soleur/…`) defeats a pattern that needs two segments to be
+// adjacent on the raw string (#12757). Used by the read gate, the write gate and the metric.
+function pathPatternMatches(patterns, p) {
+  if (typeof p !== "string" || !p) return [];
+  const targets = [p, posix.normalize(p)];
+  return patterns.filter((re) => targets.some((t) => re.test(t)));
+}
+const protectedWriteMatches = (p) => pathPatternMatches(WRITE_PROTECTED_PATTERNS, p);
+
+// A path argument that is present but not a string is refused, not coerced: the pattern gates
+// above only see strings, and before #12757 `re.test([path])` coerced an array and denied it.
+const nonStringPath = (p) => p !== undefined && p !== null && p !== "" && typeof p !== "string";
+
+// The #12757 rule a write deny is attributable to: only when every pattern the target hit is a
+// new one (a path an older rule already denied is not a new-rule deny). Gated on membership in
+// WRITE_PROTECTED_PATTERNS, so removing an entry from the gate removes it from the metric too.
+function newWriteRule(matches) {
+  if (!matches.length || !matches.every((re) => NEW_WRITE_RULES.has(re))) return null;
+  return NEW_WRITE_RULES.get(matches[0]);
+}
 
 // Quote-stripping helpers for metachar detection. Shell semantics:
 //   - single-quoted spans are fully literal → strip for ALL metachar checks
@@ -458,8 +655,33 @@ function stripQuoted(command, { stripDouble }) {
 // (`gh issue list && cat /proc/self/environ`, `"$(...)"`, `> /dev/tcp/...`).
 // `&&` / `||` / `;` are chain operators handled by segment-splitting.
 // Returns a deny reason string, or null if clean.
+// #12757 fix round 2 — a backslash outside single quotes. Bash treats `\'`, `\"`, `\{` and `\}` as literal characters,
+// but stripQuoted() and the brace check read them as quote or group boundaries, so an escaped quote could hide a
+// `{,-a}` (or anything else) inside a span the hook thought was quoted. With no backslash outside single quotes, the
+// hook's quote tracking is the same as bash's. Inside single quotes a backslash is literal in bash, so a quoted
+// `--jq '"\(.number)"'` stays allowed. Fix round 3: an unquoted `$'…'` (ANSI-C) or `$"…"` (locale) quote is refused
+// too. Inside `$'…'` bash reads `\'` as a literal quote, so `$'\'' $(cmd) #'` looked like two closed single-quoted
+// spans to the hook while bash ran `$(cmd)`; and `$'-a'` reached git as `-a` past the raw-token rules.
+function shellQuotingReason(command) {
+  let q = null;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (q === "'") {
+      if (c === "'") q = null;
+    } else if (c === "\\") return "backslash escape outside single quotes -- put literal text in '...' instead";
+    else if (q === '"') {
+      if (c === '"') q = null;
+    } else if (c === "$" && (command[i + 1] === "'" || command[i + 1] === '"'))
+      return "$'...' or $\"...\" quoting -- use plain '...' quotes";
+    else if (c === "'" || c === '"') q = c;
+  }
+  return null;
+}
+
 function dangerousMetacharReason(command) {
   if (/[\n\r]/.test(command)) return "multiline command";
+  const quotingReason = shellQuotingReason(command);
+  if (quotingReason) return quotingReason;
   // substitution: active even inside double quotes → strip only single quotes
   const substScan = stripQuoted(command, { stripDouble: false });
   if (substScan === null) return "unbalanced quote";
@@ -473,6 +695,10 @@ function dangerousMetacharReason(command) {
   // (`$name`, `$1`, `$?`, `$$`, `$@`, `$*`, `$#`, `$!`, `$-`); a literal `$`
   // inside single quotes was stripped above and stays allowed.
   if (/\$[A-Za-z_0-9?$@*#!-]/.test(substScan)) return "$VAR expansion";
+  // #12757 fix round 4 — any other `$` that is not followed by whitespace or the end is refused too: `$[expr]` is
+  // bash's legacy arithmetic expansion, and `git status $[GIT_CONFIG_GLOBAL=0]` reassigned the exported pin (measured:
+  // core.fsmonitor code execution). A deny-list of `$` forms kept missing one, so this closes the class.
+  if (/\$(?![\s"]|$)/.test(substScan)) return "$ expansion";
   if (/<\(|>\(/.test(substScan)) return "process substitution";
   // control metachars: literal inside any quote → strip single AND double
   const ctrlScan = stripQuoted(command, { stripDouble: true });
@@ -480,6 +706,19 @@ function dangerousMetacharReason(command) {
   if (/[<>]/.test(ctrlScan)) return "redirection";
   if (/(^|[^|])\|([^|]|$)/.test(ctrlScan)) return "pipe";
   if (/(^|[^&])&([^&]|$)/.test(ctrlScan)) return "background &";
+  // #12757 fix rounds — unquoted brace expansion. Bash expands `{,~/.config/git}` to `~/.config/git` (then `~`) AFTER
+  // the hook has read the raw token, so every raw-token rule (worktree path, `git add .`, `commit -a`) could be
+  // re-spelled past (measured: `git worktree add -b x {,~/.config/git}` planted the ignore file). A regex for the
+  // expanding forms missed nested lists (`{-a,-m{}}`), so ANY unquoted `{` is refused; a quoted `--jq '{…}'` was
+  // stripped above and stays allowed.
+  if (/\{/.test(ctrlScan)) return "brace expansion -- quote any literal { } text";
+  // Fix round 5 — unquoted pathname expansion, the same class: bash globs `-?` / `--*` into a file the agent wrote
+  // named `-A` or `--all` (measured: a whole-tree stage), and `? ??` into most of the tree, after the hook read the
+  // raw word. Quoted text is git's own pathspec matching, checked per verb below.
+  if (/[*?[]|[!@+]\(/.test(ctrlScan)) return "pathname expansion -- quote any literal * ? [ text";
+  // Fix round 6 — unquoted tilde expansion at a word start or after `=`/`:` (`~`, `~+` = $PWD, `~-`, `~user`):
+  // `git add ~+` staged the whole tree past the absolute-path rule. A mid-word `~` (`HEAD~1`) is not expanded.
+  if (/(^|[\s=:])~/.test(ctrlScan)) return "tilde expansion -- use a path relative to the clone";
   return null;
 }
 
@@ -557,7 +796,35 @@ export function tokenize(segment) {
 // Argument-injection / egress-via-allowed-verb denials that apply even when the
 // leading verb is allowlisted (SECURITY PANEL P0-B). Returns a deny reason or
 // null if clean.
+// `-F` is a body/notes file flag on the gh subcommands the allowlists hold; on `gh api` (and `gh workflow
+// run`) it is a field flag (#12847 fix round 2; no allowlist holds `gh workflow run`).
+const isGhBodyCommand = (tokens) => tokens[0] === "gh" && tokens[1] !== "api";
+
+// #12847 escalation — the path value of every body-file spelling argumentInjectionReason refuses:
+// `--body-file X`, `--body-file=X`, `-F X` / `-F<X>` / `-F=<X>` / `-wF X` / `-wF<X>` (gh body commands),
+// `--input[=]X`, `--recover[=]X`. The off-host metric (classifyNewRuleDeny) judges these values, so a secret
+// body file counts as body-file-secret-path whichever check refused the command first.
+function bodyFileValues(tokens) {
+  const ghBody = isGhBodyCommand(tokens);
+  const values = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === "--body-file" || t === "--input" || t === "--recover" || (ghBody && /^-[A-Za-z]*F$/.test(t))) {
+      values.push(tokens[i + 1] || "");
+      continue;
+    }
+    const eq = /^--(body-file|input|recover)=(.*)$/s.exec(t);
+    if (eq) values.push(eq[2]);
+    const attached = ghBody ? /^-[A-Za-z]*F=?(.+)$/s.exec(t) : null;
+    if (attached) values.push(attached[1]);
+  }
+  return values;
+}
+
+const ATTACHED_F_HINT = "-- put a space after -F (-F <path>), or reword a --title/--body value that starts with -F";
+
 function argumentInjectionReason(tokens) {
+  const ghBody = isGhBodyCommand(tokens);
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
     // gh/curl-style file-as-body flags read a file the model never saw and post
@@ -565,9 +832,36 @@ function argumentInjectionReason(tokens) {
     // -f body=@file, gh's `@-`/`@file` value forms.
     if (t === "--body-file" || t === "-F" || t === "--field" || t === "-f") {
       const v = tokens[i + 1] || "";
-      if (v.includes("@") || /\.\.|\/(proc|etc|root|home)\b|\.git|\.env/.test(v))
-        return `file-as-arg via ${t}`;
+      if (v.includes("@") || /\.\.|\/(proc|etc|root|home)(\/|$)|\.git|\.env/.test(v))
+        return t === "-f"
+          ? "file-as-arg via -f -- a -f value may not contain @, .git, .env, .., or a /proc, /etc, /root or /home path; reword it, or file with gh issue create --body-file <relative path>"
+          : `file-as-arg via ${t}`;
     }
+    // #12847 fix round (security P1) — gh reads a body or input file itself, so the paths the Read gate
+    // refuses are refused here too (storage-state.json, a spawn HOME's .claude/ transcripts, hosts.yml,
+    // /run/secrets). A file path is never shell-expanded here (`~`, `$` are refused earlier).
+    if (
+      (t === "--body-file" || t === "--input" || t === "--recover" || (t === "-F" && ghBody)) &&
+      pathPatternMatches(BODY_FILE_SECRET_PATTERNS, tokens[i + 1] || "").length
+    )
+      return `${BODY_FILE_SECRET_REASON} ${t} ${BODY_FILE_SECRET_HINT}`;
+    const eqFile = /^--(input|recover)=(.*)$/s.exec(t);
+    if (eqFile && pathPatternMatches(BODY_FILE_SECRET_PATTERNS, eqFile[2]).length)
+      return `${BODY_FILE_SECRET_REASON} --${eqFile[1]}= ${BODY_FILE_SECRET_HINT}`;
+    // #12847 escalation (security P3) — the check above is lexical (raw + posix.normalize) but gh opens the path
+    // physically: `/dev/fd` links to `/proc/self/fd`, so `/dev/fd/../environ` is `/proc/self/environ` while
+    // normalize reads `/dev/environ`. A `..` segment is refused here, as the --body-file / -F guard refuses it.
+    if ((t === "--input" || t === "--recover") && (tokens[i + 1] || "").split("/").includes(".."))
+      return `file-as-arg via ${t} (a .. segment)`;
+    if (eqFile && eqFile[2].split("/").includes("..")) return `file-as-arg via --${eqFile[1]}= (a .. segment)`;
+    // An attached or clustered short -F (`-F<path>`, `-F=<path>`, `-wF <path>`) would skip every check above.
+    // Checked on EVERY token, flag values included. A "previous token is a value flag" skip was tried and is
+    // unsound: `--title --label -F<path>` makes `--label` the title and gh still reads the file (#12847 round 4,
+    // measured on gh 2.104.0). Accepted over-deny: a title or body that starts with `-F` is refused; use a body file.
+    // Refused whatever the path; the off-host metric still counts one as body-file-secret-path when its
+    // value is a secret path (bodyFileValues).
+    if (ghBody && /^-[A-Za-z]*F./.test(t)) return `file-as-arg via attached -F ${ATTACHED_F_HINT}`;
+    if (ghBody && /^-[A-Za-z]+F$/.test(t)) return `file-as-arg via clustered -F ${ATTACHED_F_HINT}`;
     if (/^--body-file=/.test(t)) return "file-as-arg via --body-file=";
     if (/=@/.test(t) || /^@/.test(t)) return "@file argument";
     // VAR=val prefix (env indirection before the verb) — leading token only
@@ -625,7 +919,9 @@ function gitVerbReason(tokens) {
       const t = tokens[i];
       if (t === "--") continue;
       if (t.startsWith("--")) {
-        if (t === "--all" || t === "--update")
+        // git accepts any unambiguous prefix of a long option (`--al` is `--all`), and --no-ignore-removal is --all.
+        const isPrefix = (long) => t.length >= 3 && long.startsWith(t.split("=")[0]);
+        if (isPrefix("--all") || isPrefix("--update") || isPrefix("--no-ignore-removal") || isPrefix("--pathspec-from-file"))
           return `blanket git-add flag ${t} denied — ${scoped}`;
         continue;
       }
@@ -635,7 +931,12 @@ function gitVerbReason(tokens) {
         continue;
       }
       const path = t.replace(/^\.\//, "");
-      if (t === "." || t === "./" || path.startsWith(":") || t.includes("*"))
+      // `./.`, `.//`, `./././` all resolve to the tree root; `?`, `[` and extglob are pathname expansion bash runs on
+      // the raw word after the hook has read it (`git add ? ?? ???` stages almost every file).
+      const rootish = t.replace(/\/+$/, "").replace(/^(\.\/+)+/, "").replace(/\/+$/, "");
+      // Only `*` here: unquoted globs were refused as a metachar, and a quoted `[id]` is a Next.js route path git
+      // matches literally (a quoted `*` is git's own match-everything pathspec).
+      if (rootish === "." || rootish === "" || path.startsWith(":") || t.includes("*"))
         return `git-add pathspec '${t}' denied (stages the whole tree) — ${scoped}`;
       // Absolute paths resolve back into the clone (`git add /abs/cwd` ===
       // `git add .`) and dodge every relative-form check above — no
@@ -644,6 +945,17 @@ function gitVerbReason(tokens) {
         return `git-add pathspec '${t}' denied (absolute paths can stage the whole tree) — ${scoped}`;
       if (path === ".claude" || path.startsWith(".claude/"))
         return `git-add pathspec '${t}' denied (.claude/ is run-scoped workspace scaffolding, never commit it) — ${scoped}`;
+    }
+  }
+  // #12757 (CTO F2) — `git worktree add|move <path>` writes a whole tree at <path>, so it is a
+  // write and must not land outside the clone or on a protected path (`git worktree add
+  // ~/.config/git <branch>` plants a committed ignore/attributes file, measured). The skill's
+  // form is relative (`.worktrees/bot-fix-<N>-<slug>`); a branch or commit-ish never trips this.
+  if (sub === "worktree" && (tokens[2] === "add" || tokens[2] === "move")) {
+    for (const t of tokens.slice(3)) {
+      if (t.startsWith("-")) continue;
+      if (t.startsWith("/") || t.startsWith("~") || t.startsWith("$") || t.split("/").includes("..") || protectedWriteMatches(t).length)
+        return `git worktree ${tokens[2]} path '${t.slice(0, 60)}' denied (outside the clone or protected) -- use a relative path under .worktrees/`;
     }
   }
   // #11076 review (CTO K1') — an allow-list, not a deny-list. In the depth-1 clone the hooks
@@ -671,12 +983,71 @@ function gitVerbReason(tokens) {
   if (sub === "commit") {
     for (let i = 2; i < tokens.length; i++) {
       const t = tokens[i];
-      if (t === "--all")
+      if (t.length >= 4 && "--pathspec-from-file".startsWith(t.split("=")[0]) && t.split("=")[0].length >= 11)
+        return "git commit --pathspec-from-file denied (commits paths listed in a file the agent wrote) — commit only files you explicitly staged";
+      if (t.length >= 4 && "--all".startsWith(t.split("=")[0]))
         return "git commit --all denied (stages every tracked change, bypassing scoped add) — commit only files you explicitly staged";
       if (t.startsWith("-") && !t.startsWith("--") && t.slice(1).includes("a"))
         return `git commit ${t} denied (the -a flag stages every tracked change, bypassing scoped add) — commit only files you explicitly staged`;
     }
+    // Fix round 6 — a positional pathspec makes git commit record the listed paths' working-tree content and ignore
+    // the index (git-commit(1)), so `git commit -m x .` is `commit -a`. The skill commits only what it staged, so any
+    // pathspec is refused. Skip the value of each value-taking option (git also accepts long-option prefixes).
+    const VALUE_SHORT = "mFCct";
+    const VALUE_LONG = ["--author", "--date", "--message", "--file", "--reuse-message", "--reedit-message", "--fixup", "--squash", "--template", "--cleanup", "--trailer"];
+    for (let i = 2; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (t === "--" || !t.startsWith("-") || t === "-")
+        return `git commit pathspec '${t.slice(0, 60)}' denied (a commit pathspec commits those paths' working-tree content, bypassing scoped add) — stage with git add <path>, then git commit -m "..."`;
+      if (t.startsWith("--")) {
+        if (!t.includes("=") && t.length >= 4 && VALUE_LONG.some((l) => l.startsWith(t))) i++;
+        continue;
+      }
+      const cluster = t.slice(1);
+      // `-S`/`-u` take an OPTIONAL attached value, so the rest of the cluster is theirs (`-Sc` is key id "c").
+      const at = [...cluster].findIndex((c) => "mFCctSu".includes(c));
+      if (at === cluster.length - 1 && VALUE_SHORT.includes(cluster[at])) i++;
+    }
   }
+  return null;
+}
+
+// #12757 F1. The allowlist matches normalizeSegmentWhitespace(tokens.join(" ")), but every git/gh
+// rule here (gitVerbReason, the gh api dot-segment branch, the filing gate) reads RAW tokens at
+// fixed positions. Every git/gh allowlist line is a plain `git <sub>`, `gh <group> <verb>` or
+// `gh api <path>` (CRON_BASH_ALLOWLISTS; the hook test's allowlist census keeps that true), so
+// requiring the raw command words at those positions to be plain makes the two views agree on
+// every word a rule keys on. Fail closed. An NBSP is invisible to the agent that typed it, so the
+// reason names the word's position and shows it with non-printing characters escaped.
+const COMMAND_WORD_RE = /^[A-Za-z0-9-]+$/;
+const visibleWord = (w) =>
+  w === undefined
+    ? "missing"
+    : JSON.stringify(w.slice(0, 60)).replace(/[^\x20-\x7e]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+function commandWordShapeReason(tokens) {
+  const norm = normalizeSegmentWhitespace(tokens.join(" ")).split(" ");
+  const verb = norm[0];
+  if (verb !== "git" && verb !== "gh") return null;
+  const isApi = verb === "gh" && norm[1] === "api";
+  const n = verb === "git" || isApi ? 2 : 3;
+  const form = verb === "git" ? "git <sub>" : isApi ? "gh api <path>" : "gh <group> <verb>";
+  for (let i = 0; i < n; i++) {
+    const w = tokens[i];
+    if (w === undefined)
+      return `incomplete ${verb} command (word #${i + 1} missing) -- write the whole \`${form}\``;
+    // Moving a git global option after the sub-command changes its meaning (`git log -C` is copy
+    // detection, `git commit -c` reuses a message), so the git reason says drop, not move.
+    if (i > 0 && w.startsWith("-"))
+      return verb === "git"
+        ? `git global option before the sub-command (word #${i + 1} ${visibleWord(w)}) is not permitted -- drop it: git already runs in the repo, and identity and config are platform-managed; if git fails without it, report the failure instead of retrying`
+        : `flag before the sub-command in a gh command (word #${i + 1} ${visibleWord(w)}) -- write \`${form}\` first, then flags`;
+    if (i === 0 ? w !== verb : !COMMAND_WORD_RE.test(w))
+      return `irregular command word in a ${verb} command (word #${i + 1} ${visibleWord(w)}) -- write \`${form}\` with plain spaces and no quotes around the command words`;
+  }
+  // The gh api path is the word the dot-segment check and the filing gate read; both split it on
+  // whitespace, so a space inside a quoted path would hide a `..` segment or an issues collection.
+  if (isApi && typeof tokens[2] === "string" && /\s/.test(tokens[2]))
+    return `whitespace inside the gh api path (word #3 ${visibleWord(tokens[2])}) -- write the path with no spaces`;
   return null;
 }
 
@@ -933,7 +1304,7 @@ export function strictArgumentGrammarReason(command, literalLines = null) {
 
 // ---- the decision function (pure; unit-tested) -----------------------------
 
-export function decide(input, allowPrefixes) {
+export function decide(input, allowPrefixes, opts = {}) {
   let parsed;
   try {
     parsed = typeof input === "string" ? JSON.parse(input) : input;
@@ -987,6 +1358,9 @@ export function decide(input, allowPrefixes) {
         if (!tokens.length) return denyDecision("empty segment");
         const argReason = argumentInjectionReason(tokens);
         if (argReason) return denyDecision(argReason);
+        // #12757 F1 — ahead of every raw-position reader below (classifyNewRuleDeny mirrors this order).
+        const shapeReason = commandWordShapeReason(tokens);
+        if (shapeReason) return denyDecision(shapeReason);
         const gitReason = gitVerbReason(tokens);
         if (gitReason) return denyDecision(gitReason);
         // A measured GET of repos/jikig-ai/soleur/labels/../issues returned
@@ -1027,7 +1401,8 @@ export function decide(input, allowPrefixes) {
       const p = ti.file_path || ti.path || ti.pattern || "";
       const grepPath = ti.path || "";
       for (const target of [p, grepPath]) {
-        if (target && SECRET_PATH_PATTERNS.some((re) => re.test(target)))
+        if (nonStringPath(target)) return denyDecision("non-string path argument");
+        if (pathPatternMatches(SECRET_PATH_PATTERNS, target).length)
           return denyDecision(`secret-path read: ${target.slice(0, 60)}`);
       }
       return allowDecision();
@@ -1036,8 +1411,25 @@ export function decide(input, allowPrefixes) {
     case "Edit":
     case "MultiEdit": {
       const p = ti.file_path || ti.path || "";
-      if (WRITE_PROTECTED_PATTERNS.some((re) => re.test(p)))
-        return denyDecision(`protected-path write: ${p.slice(0, 60)}`);
+      if (nonStringPath(p)) return denyDecision("non-string path argument");
+      if (!p) return denyDecision("write with no path");
+      const matches = protectedWriteMatches(p);
+      if (matches.length)
+        return denyDecision(
+          `protected-path write: ${p.slice(0, 60)}` +
+            (newWriteRule(matches)
+              ? " -- git config and identity are platform-managed; do not write them under any path, report the failure instead"
+              : ""),
+        );
+      // #12824 (CTO S1) — after the pattern gate: protected paths inside the roots stay denied.
+      const roots = opts.writeRoots ?? deriveWriteRoots();
+      const outside = writeOutsideRootsReason(p, roots);
+      if (outside) return denyDecision(outside);
+      // #12847 review — the pattern gate again on the path the write LANDS on: an in-clone symlink
+      // aliasing `.claude/` (or any protected name) must not launder a protected write.
+      const landed = resolvedWriteTarget(p, roots);
+      if (landed && protectedWriteMatches(landed).length)
+        return denyDecision(`protected-path write: ${p.slice(0, 60)} (resolves to a protected path)`);
       return allowDecision();
     }
     case "ToolSearch":
@@ -1082,6 +1474,84 @@ export function decide(input, allowPrefixes) {
       // hook remains the secret-in-context severance per the threat model).
       return denyDecision(`tool class not permitted: ${tool || "<unknown>"}`);
     }
+  }
+}
+
+// #12757 (CTO H3) — which new containment rule a denied tool call hit, as a closed id
+// (HOOK_NEW_RULE_IDS: `git-gh-shape`, `protected-gitconfig`, `protected-xdg-git`, `protected-trust-root`,
+// `write-outside-roots`, `body-file-secret-path`, `plugin-clone-path`), or null. `body-file-secret-path`
+// is named for any argument-injection deny whose body-file value (every spelling, bodyFileValues) is a
+// Read-gate secret path; `plugin-clone-path` for a segment whose script word is a clone-relative
+// `plugins/soleur/` path or the clone's absolute `…/repo/plugins/soleur/` path (never allowlisted, so
+// refused as not allowlisted).
+// The deny reason never leaves the host (permission_denials[] carries only the tool input), so
+// the off-host metric (`countNewRuleDenials` in cron-filing-deny-marker.ts) classifies with THIS
+// function, which runs the same predicates decide() gates on (commandWordShapeReason,
+// protectedWriteMatches, writeOutsideRootsReason, the realpath re-check), so the metric cannot drift
+// from the gate; `write-outside-roots` and the realpath re-check are named only when the caller passes
+// the run's write roots. Reads the filesystem (realpath) for Write rows; never throws; never returns any
+// part of the command or path.
+//
+// Bash mirrors decide()'s allowlist-independent order: a command decide() refuses earlier
+// (length, metachar, unbalanced quote, argument injection, or a git-verb / dot-segment deny on
+// an earlier segment) is not a shape deny. RESIDUAL: the allowlist and the filing gate of an
+// earlier segment are unknown here, so a command whose earlier segment was refused for those
+// reasons, and whose later segment is irregular, is still counted as git-gh-shape; the same holds for a
+// later segment that runs a clone-path script, counted as plugin-clone-path (`cd x ; bash plugins/soleur/…`
+// was refused for `cd x`). It also has no
+// view of the per-cron `no-file-tools` directive, which decide() checks first; the substrate
+// therefore skips this metric for the CRON_NO_FILE_TOOLS crons. It is an attribution metric: a
+// command that was never allowlisted (`git -C dir status`) and is now refused by the shape rule
+// first counts as git-gh-shape, so a non-zero count is a pointer to read, not proof of an over-deny.
+/**
+ * @param {unknown} toolName
+ * @param {unknown} toolInput
+ * @param {readonly string[] | null} [writeRoots] the run's write roots; without them write-outside-roots is never named
+ * @returns {string | null}
+ */
+export function classifyNewRuleDeny(toolName, toolInput, writeRoots = null) {
+  try {
+    const ti = toolInput && typeof toolInput === "object" ? toolInput : {};
+    if (toolName === "Bash") {
+      const command = typeof ti.command === "string" ? ti.command : "";
+      if (!command.trim() || command.length > MAX_BASH_COMMAND_CHARS) return null;
+      if (dangerousMetacharReason(command)) return null;
+      for (const seg of splitSegments(command)) {
+        const tokens = tokenize(seg);
+        if (tokens === null || !tokens.length) return null;
+        // Any refused body-file spelling whose value is a Read-gate secret path, whichever check refused it.
+        if (argumentInjectionReason(tokens))
+          return bodyFileValues(tokens).some((v) => pathPatternMatches(BODY_FILE_SECRET_PATTERNS, v).length)
+            ? "body-file-secret-path"
+            : null;
+        if (commandWordShapeReason(tokens)) return "git-gh-shape";
+        if (gitVerbReason(tokens)) return null;
+        if (tokens[0] === "gh" && tokens[1] === "api" && tokens.some(hasDotSegment)) return null;
+        // The script word only (`plugins/soleur/…`, `bash -x plugins/soleur/…`, `timeout 60 bun …`, or the
+        // clone's absolute `…/repo/plugins/soleur/…`; scriptWordOf): no allowlist line runs that way (hook test
+        // pins it), so this segment was refused as not allowlisted. A clone path as an argument
+        // (`git add plugins/soleur/x`) is not counted.
+        if (isClonePluginPath(scriptWordOf(tokens))) return "plugin-clone-path";
+      }
+      return null;
+    }
+    if (toolName === "Write" || toolName === "Edit" || toolName === "MultiEdit") {
+      const p = ti.file_path || ti.path || "";
+      if (typeof p !== "string" || !p) return null;
+      const matches = protectedWriteMatches(p);
+      if (matches.length) return newWriteRule(matches);
+      // #12824 — decide()'s next gate. Id only: the path never leaves this function.
+      if (Array.isArray(writeRoots) && writeRoots.length) {
+        if (writeOutsideRootsReason(p, writeRoots)) return "write-outside-roots";
+        const landed = resolvedWriteTarget(p, writeRoots); // decide()'s realpath re-check
+        const landedMatches = landed ? protectedWriteMatches(landed) : [];
+        if (landedMatches.length) return newWriteRule(landedMatches);
+      }
+      return null;
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 

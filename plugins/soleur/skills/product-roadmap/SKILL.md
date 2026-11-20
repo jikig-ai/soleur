@@ -274,6 +274,8 @@ depends_on:
 
 If updating an existing roadmap, merge workshop decisions into the existing structure. Preserve content the user did not explicitly change.
 
+**Status lines come from the source's decision text, not its title.** Before writing a row's status, read the ADR's decision section (for an issue with no decision section: its body, its latest comment whose `author_association` is OWNER, MEMBER or COLLABORATOR, and the linked PR's merged state; never the title) and carry its qualifiers: what it does *not* decide, the open issue that owns production rollout, draft or counsel status, and flag names (`git grep -n` the flag's code key and spell it as the code does; read its default with `soleur:flag-list`). For rows left unchanged, still check their flag names and cited states, and raise a mismatch with the founder instead of preserving it (in headless mode, list each mismatch under the manual-review note instead of asking). `validate` checks milestone counts, not sentence meaning. The roadmap review cron (`cron-roadmap-review.ts`) does not load this skill; it carries a reduced form of this rule as its STATUS TEXT RULE (committed ADR text and structured fields only, because issue text is untrusted there). **Why:** PR #12899 — most of 14 P1/P2 findings were true-but-incomplete status lines, three more came in the correction round. See `knowledge-base/project/learnings/2026-11-18-a-roadmap-status-line-kept-the-headline-and-dropped-the-qualifier.md`.
+
 **Commit the artifact:**
 
 ```bash
@@ -316,18 +318,18 @@ Present an output summary listing the document path, milestones created, issues 
 
 1. Run compound (`skill: soleur:compound`) to capture any learnings from the session.
 2. Use `soleur:ship` to commit, push, and open a PR with the roadmap and any skill/agent changes.
-3. After the PR is created, queue auto-merge under the merge-main lock. The `--` separator is required (terminates `with_lock`'s positional args).
+3. After the PR is created, queue auto-merge under the merge-main lock, and only through the arm check in [review-evidence-comment.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-evidence-comment.md#arm-check): run `git fetch -q origin "pull/<number>/head" || { echo "fetch of PR <number>'s head failed: not armed"; exit 1; }` (a failed fetch is reported as itself, not as a missing-evidence refusal that would send you to `soleur:review`; the check's `merge-base` needs the PR head locally, and ship may have moved it), then its first statement, both `PR_NUMBER` tokens replaced by the PR number, then the block below, in one Bash call. Exit 1 whose last line begins `ARM_CHECK refused` is a refusal: follow the check's own refusal rule. By this step ship Phase 6.5/7 may already have armed, queued or merged the PR, so any other non-zero exit except 99 (including the fetch line) means: read `gh pr view <number> --json state,autoMergeRequest` and report it (a merged or already-armed PR is not a failure). The `--` separator is required (terminates `with_lock`'s positional args).
 
    ```bash
    SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"
    if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then
      bash "$SS_LIB" with_lock merge-main 600 -- \
-       gh pr merge <number> --squash --auto
+       gh pr merge <number> --squash --auto --match-head-commit "${H:?run the arm check in this call}"
      rc=$?
    else
      # Degrade open, loudly — the lock is advisory (ADR-178 §5).
      echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=running-unlocked"
-     gh pr merge <number> --squash --auto
+     gh pr merge <number> --squash --auto --match-head-commit "${H:?run the arm check in this call}"
      rc=$?
    fi
    # Both arms above capture rc, so something must READ it. Without this branch
@@ -335,11 +337,12 @@ Present an output summary listing the document path, milestones created, issues 
    # as queued — the sibling blocks in merge-pr and ship both carry it.
    if [[ "$rc" -eq 99 ]]; then
      echo "merge-main lock could not be taken (contention >600s, or the lock file could not be opened) — the merge was NOT queued. Retry."
-     exit 1
+     exit 99
    fi
+   exit "$rc"
    ```
 
-   rc=99 is reachable only from the LOCKED arm — the degrade-open arm runs `gh pr merge` bare, which has no lock semantics — so a run that emitted `reason=running-unlocked` queued its merge without serialisation rather than failing. Note 99 means "the lock could not be taken", which includes an unopenable lock file, not only >600s contention.
+   rc=99 is reachable only from the LOCKED arm — the degrade-open arm runs `gh pr merge` unlocked, with no lock semantics — so a run that emitted `reason=running-unlocked` queued its merge without serialisation rather than failing. Note 99 means "the lock could not be taken", which includes an unopenable lock file, not only >600s contention.
 4. Poll the PR using the Monitor tool with the same state machine as `soleur:ship` Phase 7 (state+`mergeStateStatus`, BEHIND auto-sync capped at 6, required-check failure exit, DIRTY exit). Naive `gh pr view <number> --json state` is insufficient — it heartbeats silently through BEHIND / BLOCKED-with-CI-failure / DIRTY states. Reuse the loop body from `plugins/soleur/skills/ship/SKILL.md` Phase 7. **Precondition:** must run from inside a worktree (`git rev-parse --is-inside-work-tree`) — the BEHIND auto-sync uses `git merge origin/main && git push`.
 5. Run `cleanup-merged` to remove the worktree.
 

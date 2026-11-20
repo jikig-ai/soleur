@@ -394,74 +394,19 @@ done
   || no "missing -target= line(s):$_miss — the resource would never be applied"
 
 # ── presence row: the .tf-wide pair census ──────────────────────────────────────────────────
-# MARKER-based, copied from the sibling guard. A resource is a wrong-volume resource when its
+# MARKER-based, the shared lib logtail-pair-census.awk. A resource is a wrong-volume resource when its
 # raw block names the stem (the header itself always does), or when it reads a local whose body
 # carries the stem (`…_sql` via the alias interpolation, `…_alias`/`…_runbook_url` via their
 # own names). Leading whitespace and a trailing comment after the brace do not hide a header.
 # The declared set must equal WRONGVOLUME_EXPLORATIONS on BOTH the exploration and alert sides.
 # A family-wide structural suite (betterstack-alert-structure.test.sh) independently enforces
 # one alert per exploration.
-CENSUS_AWK='function cv(s) { gsub(/"([^"\\]|\\.)*"/, "\"\"", s); sub(/[[:space:]]*(#|\/\/).*$/, "", s); return s }
-function hdopen(c) {
-  if (match(c, /<<-?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/)) { hd = substr(c, RSTART); sub(/^<<-?/, "", hd); sub(/[[:space:]]+$/, "", hd) }
-}
-FNR == 1 { hd = ""; loc = ""; inb = 0 }
-{
-  line = $0
-  if (hd != "") {
-    if (line ~ ("^[[:space:]]*" hd "[[:space:]]*$")) { hd = ""; loc = "" }
-    else if (index(line, MARK) > 0) { if (inb) braw[nb] = braw[nb] " " MARK; else if (loc != "") marked[loc] = 1 }
-    next
-  }
-  if (line ~ /^[[:space:]]*(#|\/\/)/) next
-  c = cv(line)
-  if (!inb) {
-    if (match(line, /^[[:space:]]*resource[[:space:]]+"?logtail_exploration(_alert)?"?[[:space:]]+"?[^" {]+"?[[:space:]]*\{/)) {
-      kind = (line ~ /logtail_exploration_alert/) ? "A" : "E"
-      nm = line
-      sub(/^[[:space:]]*resource[[:space:]]+"?logtail_exploration(_alert)?"?[[:space:]]+"?/, "", nm)
-      sub(/["[:space:]{].*$/, "", nm)
-      nb++; bkind[nb] = kind; bname[nb] = nm; braw[nb] = ""; bcv[nb] = ""; inb = 1; d = 0
-    } else {
-      if (match(c, /^[[:space:]]*[A-Za-z0-9_-]+[[:space:]]*=[[:space:]]*<<-?[A-Za-z_]/)) {
-        loc = c; sub(/^[[:space:]]*/, "", loc); sub(/[[:space:]]*=.*$/, "", loc)
-      } else if (line ~ /^[[:space:]]*[A-Za-z0-9_-]+[[:space:]]*=/) {
-        l2 = line; sub(/^[[:space:]]*/, "", l2); sub(/[[:space:]]*=.*$/, "", l2); lbody[l2] = line
-        if (index(line, MARK) > 0) marked[l2] = 1
-      }
-      hdopen(c)
-      next
-    }
-  }
-  if (inb) {
-    braw[nb] = braw[nb] " " line; bcv[nb] = bcv[nb] " " c
-    o = gsub(/\{/, "{", c); x = gsub(/\}/, "}", c); d += o - x
-    hdopen(cv(line))
-    if (d <= 0) { inb = 0 }
-  }
-}
-END {
-  do {   # a single-line local that names a marked local carries the marker too, however deep the chain
-    ch = 0
-    for (l in lbody) if (!(l in marked)) for (m in marked) if (lbody[l] ~ ("local\\." m "([^A-Za-z0-9_-]|$)")) { newm[l] = 1; break }
-    for (l in newm) { marked[l] = 1; ch = 1 }
-    delete newm
-  } while (ch)
-  for (i = 1; i <= nb; i++) {
-    car[i] = (index(braw[i], MARK) > 0)
-    for (l in marked) if (bcv[i] ~ ("local\\." l "([^A-Za-z0-9_-]|$)")) car[i] = 1
-  }
-  for (i = 1; i <= nb; i++) if (bkind[i] == "E") ecar[bname[i]] = car[i]
-  for (i = 1; i <= nb; i++) {
-    if (bkind[i] == "E") { printf "E|%s|%d\n", bname[i], car[i]; continue }
-    b = ""; t = bcv[i]
-    if (match(t, /exploration_id[[:space:]]*=[[:space:]]*logtail_exploration\.[A-Za-z0-9_-]+\.id/)) {
-      b = substr(t, RSTART, RLENGTH); sub(/^.*logtail_exploration\./, "", b); sub(/\.id$/, "", b)
-    }
-    printf "A|%s|%d|%s\n", bname[i], (b != "" && ecar[b]), b
-  }
-}'
+CENSUS_AWK_LIB="${PAIR_CENSUS_AWK:-$REPO/apps/web-platform/test/infra/logtail-pair-census.awk}"
+CENSUS_AWK="$(cat "$CENSUS_AWK_LIB" 2>/dev/null || true)"
 CENSUS="$(awk -v MARK="$WRONGVOLUME_STEM" "$CENSUS_AWK" "$(dirname "$TF")"/*.tf 2>/dev/null)"
+[ -n "$CENSUS_AWK" ] && grep -q '^E|' <<<"$CENSUS" \
+  && ok "the shared pair-census lib (logtail-pair-census.awk) read non-empty and enumerated explorations" \
+  || no "the shared pair-census lib ${CENSUS_AWK_LIB} is missing or empty, or enumerated no exploration: the census rows compare nothing"
 _dexp="$(while IFS='|' read -r _k _n _c _b; do
   [ "$_k" = E ] || continue
   if [ "$_c" = 1 ] || [[ "$_n" == "$WRONGVOLUME_STEM"* ]]; then printf '%s\n' "$_n"; fi
@@ -608,13 +553,15 @@ PY
   # gets its REPO line rewritten to the real repo, so its non-overridable reads (BOOT/CI/RB/
   # VT/LIB) resolve — no fourth env axis exists to subvert.
   mutate_floor_red() {  # mutate_floor_red <label>
-    local label="$1" copy rc=0
-    copy="$MUT_DIR/floor-mutated.test.sh"
-    sed -e 's/^PRESENCE_ROWS=43$/PRESENCE_ROWS=44/' \
+    local label="$1" copy log rc=0
+    copy="$MUT_DIR/floor-mutated.test.sh"; log="$MUT_DIR/floor-mutated.log"
+    sed -e 's/^PRESENCE_ROWS=44$/PRESENCE_ROWS=45/' \
         -e "s|^REPO=.*|REPO=\"$REPO\"|" "$SELF" > "$copy"
-    if cmp -s "$SELF" "$copy"; then no "mutation '$label' did not land (PRESENCE_ROWS anchor drifted)"; return 0; fi
+    if ! grep -q '^PRESENCE_ROWS=45$' "$copy"; then no "mutation '$label' did not land (PRESENCE_ROWS anchor drifted)"; return 0; fi
     LUKS_GUARD_TF="$TF" LUKS_GUARD_VARS="$VARS" LUKS_GUARD_WF="$WF" \
-      MUT_SKIP=1 bash "$copy" >/dev/null 2>&1 || rc=$?
+      PAIR_CENSUS_AWK="$CENSUS_AWK_LIB" MUT_SKIP=1 bash "$copy" >"$log" 2>&1 || rc=$?
+    # rc=1 alone cannot tell the floor from any other [FAIL]: RED needs the floor's own line and no [FAIL] row.
+    if [ "$rc" = 1 ] && { ! grep -q '^\[FATAL\] assertion floor' "$log" || grep -q '^\[FAIL\]' "$log"; }; then rc=fail-row; fi
     case "$rc" in
       1) ok "mutation RED: $label" ;;
       0) no "mutation SURVIVED: $label - the assertion floor pins nothing" ;;
@@ -708,6 +655,15 @@ s = s[:i] + region.replace(old, "data_mount_devid=$${local.inngest_luks_wrong_vo
     's = s + "\nresource \"logtail_exploration_alert\" \"inngest_luks_wrong_volume_x\" {\n  exploration_id = logtail_exploration.inngest_luks_wrong_volume.id\n}\n"' \
     "WRONGVOLUME_EXPLORATIONS"
   mutate_floor_red "DISPATCH: PRESENCE_ROWS raised by one trips the assertion floor"
+  # Neutering row (#12737): the pair census lives in apps/web-platform/test/infra/logtail-pair-census.awk, shared by
+  # the three Inngest logs-alert guards. An emptied lib must red this suite, not leave the census rows comparing nothing.
+  _empty_awk="$MUT_DIR/empty-pair-census.awk"; : > "$_empty_awk"; _nrc=0
+  PAIR_CENSUS_AWK="$_empty_awk" MUT_SKIP=1 bash "$SELF" >/dev/null 2>&1 || _nrc=$?
+  case "$_nrc" in
+    1) ok "mutation RED: the shared pair-census lib is emptied" ;;
+    0) no "mutation SURVIVED: an emptied logtail-pair-census.awk leaves this suite green" ;;
+    *) no "mutation UNRESOLVED (inner rc=$_nrc): emptied pair-census lib - instrument, not evidence" ;;
+  esac
   mutate_green "a # comment outside any resource block is reworded (legitimate edits stay green)" TF \
     'old = "watched alias = the live encrypted alias"
 assert s.count(old) == 1
@@ -861,8 +817,8 @@ fi
 # dead battery).
 # Floor self-reference (accepted residual, #11899): a row-count decrement landing alongside a
 # row deletion stays green — PRESENCE_ROWS is two-write-site (here + the floor row's sed anchor).
-PRESENCE_ROWS=43
-MUT_ROWS=54
+PRESENCE_ROWS=44
+MUT_ROWS=55
 _floor=$((PRESENCE_ROWS + MUT_ROWS))
 [ -n "${MUT_SKIP:-}" ] && _floor=$PRESENCE_ROWS
 _ran=$((pass + fail))

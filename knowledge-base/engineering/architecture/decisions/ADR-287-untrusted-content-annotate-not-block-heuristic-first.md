@@ -298,6 +298,7 @@ WebFetch scorer off also removes this note.
    annotates a superset of what the hosted hook annotates. The known extra cases (a `#`-commented tail, and a command over the
    hosted 8192-character cap) over-annotate. That is accepted, with the same under-action residual as item 5. The failure
    posture is inverted relative to containment: a null token list or a throw from the shared parser means "no annotation".
+   `[Cross-reference 2026-11-16 — #12757]` `gh "" pr view`, `gh issue "view 1"` and NBSP-in-token shapes are now denied by containment's command-word shape rule (ADR-033, 2026-11-16 amendment); framing them is redundant but harmless. The decisions in this item are unchanged.
 3. **Self-test.** When `settings.json` registers a `PostToolUse` key, the spawn-time self-test deep-equals it against the one
    expected entry. It then runs a gh-read probe, which must print exactly the annotation object, and an `ls` probe, which must
    print nothing. Any failure throws and aborts the cron. When the key is absent, nothing new runs. The self-test catches a

@@ -514,6 +514,35 @@ create. After the swap web-1's password leaves the push-apply graph; its address
 - **Reach.** The pair is `-target`ed by the `apply` job and by no other job or workflow file
   (`terraform-target-parity.test.ts`); only `apply` carries the HALT.
 
+## MAIN plan step: the allow-list history (#7539)
+
+Relocated from the comment above the MAIN plan step (`Terraform plan (allow-list, non-SSH resources only)`) on 2026-11-17
+(#12726), to keep the workflow under the size gate (`workflow-file-size.test.ts`) when the flip-silence canary pair added
+two `-target` lines. The step comment keeps the GROUP BY TRANSPORT rule and the enforcement pointer. Verbatim, as it stood
+after that rule:
+
+```text
+This instruction already said so and did not hold: it landed 2026-05-20
+and `terraform_data.inngest_consumer_probe_install` was appended six
+lines beneath it on 2026-08-12, batched beside the other
+inngest-consumer resources by feature (#7539). Prose is not the
+enforcement -- Guard 1 in
+plugins/soleur/test/terraform-target-parity.test.ts is, and it fails
+the PR rather than the apply.
+
+`scheduled-terraform-drift.yml` is a 12h backstop for a FORGOTTEN
+resource; it did not surface #7539, because a MISPLACED resource is
+declared and targeted -- just on the stage that cannot provision it.
+```
+
+**The two `inngest_cutover_flip_silent_canary` `-target` lines are a throwaway (+1 pair, #12726).** They live only while
+the canary does (tracker #12878). This note sits here because the MAIN plan command is one backslash-continued line, and
+a `#` among its `-target` lines would break the command. The canary retirement PR deletes the canary blocks but keeps
+these two bare lines, and lists both addresses in the census `INTENDED_DESTROYS`, for its own destroying apply: a bare
+target on an address with no configuration is what plans the delete. The removal PR merges with its standalone
+`[ack-destroy]` line. After that apply, a follow-up removes the lines and both `INTENDED_DESTROYS` entries, as the egress
+canary's retirement did (#12268 kept its lines and added the entries, #12306 removed both).
+
 ## Comment prose relocated from the apply step
 
 The workflow file is held under the size gate (`workflow-file-size.test.ts`); prose that used to sit in the apply step's
@@ -587,6 +616,21 @@ hcloud_server.* (placement_group_id / server_type change →
 power-off reboot of the running host, 0 destroys — invisible to
 the two counters above). Source of truth:
 tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+```
+
+Verbatim, the comment above `set -euo pipefail` in the plan step's `run:` (relocated 2026-11-17, #12844, to keep
+the workflow under the size gate when `betteruptime_monitor.soleur_changelog_deep` joined the `-target` list):
+
+```text
+THIS COMMENT USED TO SAY "`-e` is intentionally omitted", AND THAT NEVER WORKED.
+GitHub invokes a bare `run:` as `bash -e {0}`; omitting -e from the `set` line
+cannot clear what the invocation already applied, so on a plan failure the step
+died AT the doppler line and both the `rc=$?` capture and the `::error::` branch
+below it were unreachable. The explicit `set +e` bracket is what delivers the
+property the comment claimed. The two sibling copies of the old comment (in
+apply-github-infra.yml and apply-sentry-infra.yml) were corrected under #7304,
+which also shipped scripts/lint-workflow-errexit-capture.py so the class cannot
+recur silently. The broader `set … pipefail`-without-`-e` audit remains #7098.
 ```
 
 ## registry_luks_recut
@@ -1443,3 +1487,13 @@ The safe resolution is to skip THAT merge's apply and let the supervised operato
 **`set +e` in the gate step:** Actions runs a bare `run:` block as `bash -e {0}` (ADR-170), and errexit dies AT the doppler line on the first non-zero read — rc=4 is the EXPECTED state for the first minutes of every healthy replace, so the whole poll is unreachable without this. (Measured: lint-workflow-errexit-capture.py flags the bare form.)
 
 **`timeout 90` per read** keeps one stalled Doppler API call from eating the whole window — a timeout surfaces as rc=124 via doppler, counted as a non-verdict read. **`env -u` strips the reader's override seams:** `doppler run` injects EVERY key of prd_terraform into the env, and `INNGEST_STATE_QUERY` / `INNGEST_PROBE_ROW_LIB` / `INNGEST_STATE_SINCE` can substitute a fabricated row source for the real query — a green without a row. The gate's green must be exactly as trustworthy as the config it reads, so the seams cannot arrive through it.
+
+<!-- lint-infra-ignore start: describes the pre-existing OPERATOR_APPLIED_EXCLUSIONS break-glass (a local untargeted apply the HALT messages print); owner-reserved recovery, not a prescribed agent step -->
+**Strict-SSL preflight (#12742 item 1; CTO rulings 4, 6 and 10, 2026-11-17; review rulings R1 to R6, 2026-11-18).** The step immediately after `Load infra credentials (tiered)` and before `Terraform init`, with no `if:`, runs `tests/scripts/lib/inngest-public-sdk-url-preflight.sh`; the `inngest_host` (birth) job runs the same step in the same slot. It execs `plugins/soleur/scripts/cloudflare-readonly.sh config-entrypoint` under `doppler run` and judges the wrapper's per-rule projection; the pass predicate, the exact `doppler run` line and the residuals are written once, in that script's header. Every refusal prints one `::error::[<tag>]` line naming #12742 and never a token, ref or body (the remedy per tag is the refusal-tag table in `inngest-server.md`). The protected property: no terraform step runs unless the live read passed, and the step sits before `Extract backend credentials` adds more secret material (ruling 6). The old #10538 step sat before any credential loaded; a live read needs the credential, so that property is gone by design. The replace job refuses unless `inputs.confirm == REPLACE-INNGEST-HOST` (R5), in its own `Validate typed confirm (inngest-host-replace)` step placed before `Load infra credentials (tiered)`, so a typo loads no Tier-B secret: a typo-guard on the destructive target, not authorization, matching the other destroying targets; the birth takes no token, and the `confirm` input stays for the other targets (ruling 10). The preflight is not the authorization either: `infra-privileged` has no reviewers (main-only), so the owner's go before the dispatch is. Since #12737 the host's `--sdk-url` is the public serve URL (`https://app.soleur.ai/api/inngest`), and that value reaches a host through this replace, a fresh birth (the disaster-recovery row "server absent" in `inngest-server.md`), or a local untargeted `terraform apply` (the OPERATOR_APPLIED_EXCLUSIONS break-glass that the HALT messages print, for example the pinned-image chain or `luks_key_touched=1`): `hcloud_server.inngest` has no `ignore_changes = [user_data]`, so a full apply plans its replace. That third path has no gate: run the "Read it yourself first" pair in `inngest-server.md` before it and abort on a refusal, or add `-target`s that exclude `hcloud_server.inngest`. A replace still carries all three known risks: (1) a stale non-zero `registry_fns` hiding a failing poll; (2) the first sync after boot can double-fire functions (#7228); (3) a stale private-URL app row can keep being polled over plaintext. Since probe_schema=10, (1) and (3) are readable in the probe row (`sdk_sync`, and `sdk_app_url`'s per-app entries) once a schema-10 host serves; neither pages (deferred, #12742 ruling 3). Pinned by B10 in `plugins/soleur/test/terraform-target-parity.test.ts`, which also requires every copy-paste replace recipe to carry `-f confirm=REPLACE-INNGEST-HOST` and every birth recipe to carry no `confirm=`.
+<!-- lint-infra-ignore end -->
+
+## workspaces_luks_recut
+
+*(Relocated 2026-11-19 from the job's header comment, #12866, byte gate. The job is HARD-RETIRED by #6604 step 7: its first step exits 1 on every dispatch. This is its design as it stood.)*
+
+Selected by `-f apply_target=workspaces-luks-recut` (#6855, #6812). A scoped `terraform -replace=hcloud_volume.workspaces_luks` (+ its attachment) that DESTROYS the dead-man-orphaned LUKS volume (Hetzner id 106406962, already crypto_LUKS, holding the operator-ACCEPTED-discarded 2026-07-20 27-min window) and creates a genuinely RAW replacement with the SAME name — so the existing cutover resolves the new device by name (workspaces-luks-cutover.yml queries the Hetzner API `?name=soleur-web-platform-data-luks`), hits the raw→luksFormat arm, and copies from the then-serving plaintext /mnt/data. UNLIKE workspaces-luks-cutover (an ADDITIVE first provision, un-gated), THIS is DESTRUCTIVE on sole-copy data, so it carries an `environment:` reviewer gate — the sole human authorization (DP-11 F8) — plus a typed confirm token. The passphrase is REUSED (never re-minted); the sourced workspaces_luks_recut_gate ABORTS unless the plan is EXACTLY {volume REPLACE + attachment CREATE} with the then-serving plaintext volume/attachment + web-1 + passphrase all untouched. NO [ack-destroy] bypass. Zero downtime (then): /mnt/data served from the untouched /dev/sdb throughout; attach/detach is a hot Hetzner-API operation.

@@ -334,9 +334,10 @@ Do this:
   on and `push = true` on `app_health` measured at apply. If Slack or the vendor push channel is
   down, an incident still lands only in an inbox — the same 2026-09-28 gap.
 
-**Delivery-path check (once, operator):** confirm `ops@jikigai.com` accepted the Better Stack
-team invite (re-accept from the invite email if pending) — the Slack path is independent of it,
-but email remains a secondary channel. And confirm the Slack integration is actually connected:
+**Delivery-path check (once, operator):** confirm `ops@jikigai.com` is listed as a member of the
+Better Stack team (it is the org Admin since 2026-11-16, managed in the vendor UI, not Terraform;
+there is no invite to accept) — the Slack path is independent of it, but email remains a
+secondary channel. And confirm the Slack integration is actually connected:
 `GET /api/v2/slack-integrations` on the read-only token returned `{"data":[]}` before #9168 —
 non-empty means wired.
 

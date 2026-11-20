@@ -170,7 +170,7 @@ if [[ "$n_prezot" -eq 0 ]]; then
   echo "           and the channel answers, but zero pre-zot-pull stages. That stage exists only in" >&2
   echo "           post-#7516 cloud-init, so this host is running an older user_data." >&2
   echo "           Next: this is a provisioning question, not a wait — dispatch" >&2
-  echo "           apply_target=inngest-host-replace (#7462 steps 4-6)." >&2
+  echo "           apply_target=inngest-host-replace confirm=REPLACE-INNGEST-HOST (#7462 steps 4-6)." >&2
   exit 2
 fi
 

@@ -290,7 +290,7 @@ production write and needs the operator's per-command go-ahead:
 
 | Signal | What it means now | Route |
 | --- | --- | --- |
-| Host dark / probe silent, volume intact (first read `GET /v1/servers/<id>` with the read-only token, §5b read-backs: the LUKS volume must still be attached, else stop and escalate) | Host or shipper failure, store not implicated | `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason="<why>"` (keeps the LUKS volume by omission), then `gh workflow run cutover-inngest.yml -f op=resume` (#7228) |
+| Host dark / probe silent, volume intact (first read `GET /v1/servers/<id>` with the read-only token, §5b read-backs: the LUKS volume must still be attached, else stop and escalate) | Host or shipper failure, store not implicated | `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f confirm=REPLACE-INNGEST-HOST -f reason="<why>"` (typo-guard token and strict-SSL preflight, #12742) (keeps the LUKS volume by omission), then `gh workflow run cutover-inngest.yml -f op=resume` (#7228) |
 | `data_mount_src` is not `/dev/mapper/inngest-redis`, or the wrong-volume alert fires | The store is on a device the ledger does not claim | Incident (`soleur:incident`); do NOT replace the host until the probe row says which device is mounted |
 | `op=luks-cutover` dispatched again | The verb no longer exists (deleted 2026-11-05, §5a-2): GitHub rejects the dispatch as an invalid `op` input. Before that it was refused on this host (durable pointer set, flag `done`, G1/G2) | Nothing to do |
 
@@ -747,7 +747,7 @@ several merge cycles; there is no faster data-safe route**:
    PR merges it opens a dated re-protect follow-through issue (step 3, with its date), because once step 1 lands the
    HCL, the live state and the drift plan all agree on `false` and nothing alerts. The per-merge apply lands it, so live
    state equals the HCL. Read back `not-protected` (the expected word for this PR; not a failure).
-2. Dispatch `inngest-host-replace` (the volume now plans as a no-op, which both gates accept), then `op=resume` per #7228.
+2. Dispatch `inngest-host-replace` with `-f confirm=REPLACE-INNGEST-HOST` (the volume now plans as a no-op, which both gates accept), then `op=resume` per #7228.
 3. A re-protect PR restores the attribute and the guards; the per-merge apply lands it; read back `protected`. **The
    unprotected window is a stated cost of this route**: from step 1's apply until step 3's apply the sole copy is deletable
    by a console click, a wrong id or a pasted recipe, and the dated issue from step 1 is the only forcing function.
@@ -911,7 +911,7 @@ sequence end to end.
    The PR opens a dated revert follow-through before it merges: once `prd` satisfies the glob,
    nothing alerts if it stays — the follow-through script should assert the literal on main is back
    to `rehearsal_*)`, not only remind.
-3. **Dispatch `apply_target=inngest-host-replace`** on `apply-web-platform-infra.yml`. The host is
+3. **Dispatch `apply_target=inngest-host-replace`** with `-f confirm=REPLACE-INNGEST-HOST` on `apply-web-platform-infra.yml` (the job checks that typo-guard token and runs the strict-SSL preflight in inngest-server.md first; read #12742 first). The host is
    born with the new blank volume attached; `STAGE=resolve` takes `mode=unpointed`, the widened
    allowlist admits `prd`, and the unpointed arm runs its format path.
 4. **Verify the stage rows** (Better Stack, `inngest-luks-stage` source): `luks_format` →

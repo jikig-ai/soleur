@@ -4,8 +4,11 @@
 # WORKFLOW-INVOKED. This file IS the body of the single `run:` step in
 # .github/workflows/cutover-inngest.yml, moved out of the YAML verbatim. It reads only
 # process environment supplied by that step's `env:` map (OP, WEBHOOK_SECRET, the two
-# CF_ACCESS_* values, DOPPLER_TOKEN, DOPPLER_TOKEN_INNGEST_ARM, SUPABASE_ACCESS_TOKEN and
-# the CUTOVER_* knobs), which a child bash inherits, so the move required no edits.
+# CF_ACCESS_* values, DOPPLER_TOKEN, DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE (the rollback/resume
+# write credential since #9927 step D2-2; the arm token DOPPLER_TOKEN_INNGEST_ARM is still
+# exported by the workflow until the #12158 step-4 revoke change but is no longer read here),
+# SUPABASE_ACCESS_TOKEN and the CUTOVER_* knobs), which a child bash inherits, so the move
+# required no edits.
 #
 # WHY IT WAS MOVED. actionlint pipes every `run:` body into shellcheck over a pipe. This
 # body was 118,722 bytes against a 65,536-byte pipe buffer, so actionlint blocked writing
@@ -1860,13 +1863,13 @@ case "$OP" in
           fi
           exit 1 ;;
         silent)
-          echo "::error::2.0 REFUSED (silent): the read path answered but the dedicated host emitted NO probe row in the window — silence is not darkness. Read the latest health run: gh run list --workflow scheduled-inngest-health.yml --limit 1, then gh run view <id> --log | grep '#7674 dedicated host'. BEFORE treating silence as a dead host, confirm INGEST health/quota: on 2026-08-14 the Better Stack Logs quota exhausted and ingest returned 402 for ~49h while the READ path answered 200 — rows absent, read healthy, i.e. exactly this verdict with no host fault. Two consecutive probe-unavailable readings there, with ingest healthy, make it: gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason=<why> (the only no-SSH path to a dead Vector/timer). Do NOT SSH the host."; exit 1 ;;
+          echo "::error::2.0 REFUSED (silent): the read path answered but the dedicated host emitted NO probe row in the window — silence is not darkness. Read the latest health run: gh run list --workflow scheduled-inngest-health.yml --limit 1, then gh run view <id> --log | grep '#7674 dedicated host'. BEFORE treating silence as a dead host, confirm INGEST health/quota: on 2026-08-14 the Better Stack Logs quota exhausted and ingest returned 402 for ~49h while the READ path answered 200 — rows absent, read healthy, i.e. exactly this verdict with no host fault. Two consecutive probe-unavailable readings there, with ingest healthy, make it: gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f confirm=REPLACE-INNGEST-HOST -f reason=<why> (read #12742 first) (the only no-SSH path to a dead Vector/timer). Do NOT SSH the host."; exit 1 ;;
         wrong_host)
           echo "::error::2.0 REFUSED (wrong_host): probe rows are present but none carries the dedicated host's identity (host=$INNGEST_HOST AND host_name=$INNGEST_HOST_NAME AND host_role=dedicated) — an identity mislabel (#6616 class). File an issue with this run URL; the host is not the problem and needs no action."; exit 1 ;;
         stale_row)
           echo "::error::2.0 REFUSED (stale_row): the dedicated host's newest probe row is older than the gate's bound (or future-dated). Wait for the next hourly probe and re-dispatch op=execute; if it stays stale, treat it as silent (see that remedy). There is no no-SSH way to fire the probe early."; exit 1 ;;
         stale_schema)
-          echo "::error::2.0 REFUSED (stale_schema): the dedicated host's probe row is not probe_schema=${_IHDG_EXPECTED_SCHEMA} — the emitter is BAKED, so it needs a host replace on a pin that carries the schema-${_IHDG_EXPECTED_SCHEMA} emitter. Confirm first: git show vinngest-<pin>:apps/web-platform/infra/inngest-bootstrap.sh | grep -c \"^probe_schema=${_IHDG_EXPECTED_SCHEMA}\$\" (a replace on an unbumped pin re-delivers the same bytes), then gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason=<why>."; exit 1 ;;
+          echo "::error::2.0 REFUSED (stale_schema): the dedicated host's probe row is not probe_schema=${_IHDG_EXPECTED_SCHEMA} — the emitter is BAKED, so it needs a host replace on a pin that carries the schema-${_IHDG_EXPECTED_SCHEMA} emitter. Confirm first: git show vinngest-<pin>:apps/web-platform/infra/inngest-bootstrap.sh | grep -c \"^probe_schema=${_IHDG_EXPECTED_SCHEMA}\$\" (a replace on an unbumped pin re-delivers the same bytes), then gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f confirm=REPLACE-INNGEST-HOST -f reason=<why> (read #12742 first)."; exit 1 ;;
         host_serving)
           echo "::error::2.0 REFUSED (host_serving): the dedicated host's own row says it is serving (loopback 200 or unit active) while the webhook returned HTTP $CODE — the row and the webhook disagree. Check the WEBHOOK path first: gh workflow run cutover-inngest.yml -f op=registry-probe (CF Access / WAF / web host). If that run prints a registry_empty= line the host IS serving: gh workflow run cutover-inngest.yml -f op=doublefire-probe -f cron_period_seconds=1200; a double-fire means op=rollback; clean means re-dispatch op=execute. Do NOT SSH the host."; exit 1 ;;
         flag_armed)
@@ -1888,7 +1891,7 @@ case "$OP" in
           fi
           exit 1 ;;
         fsm_silent)
-          echo "::error::2.0 REFUSED (fsm_silent): the probe row is dark but the flip FSM has not reported on THIS boot within the gate's 15-minute heartbeat bound — freshness cannot be established. Re-dispatch op=execute after >= 15 min. A SECOND fsm_silent with the probe row still dark means inngest-cutover-flip.timer or Vector is down on a host the probe still sees: gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason=<why> (the health workflow reads the probe stream, not the heartbeat, so it cannot supply that second reading). Do NOT SSH the host."; exit 1 ;;
+          echo "::error::2.0 REFUSED (fsm_silent): the probe row is dark but the flip FSM has not reported on THIS boot within the gate's 15-minute heartbeat bound — freshness cannot be established. Re-dispatch op=execute after >= 15 min. A SECOND fsm_silent with the probe row still dark means inngest-cutover-flip.timer or Vector is down on a host the probe still sees: gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f confirm=REPLACE-INNGEST-HOST -f reason=<why> (read #12742 first) (the health workflow reads the probe stream, not the heartbeat, so it cannot supply that second reading). Do NOT SSH the host."; exit 1 ;;
         fsm_unreadable)
           if [[ "$HB_RC" -ne 0 ]]; then
             _bs_read_remedy heartbeat "$HB_RC" "$HB_ERR" "$HB_ROWS"
@@ -2581,7 +2584,9 @@ case "$OP" in
     # deploy hook over the private net (no SSH). op=rollback was a SEPARATE verb from op=arm
     # (ADR-100 Decision 6b forward/reverse symmetry; op=arm retired in #9927, rollback kept).
     # Half (A) is value-silent + behind the inngest-cutover environment required-reviewer gate +
-    # conditional DOPPLER_TOKEN_INNGEST_ARM (now consumed only by op=rollback and op=resume); it writes ONLY the flip value (never POSTGRES_URI/HEARTBEAT). This is also the
+    # conditional DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE (consumed only by op=rollback and op=resume
+    # since #9927 step D2-2; the workflow's write-token freshness check has already refused
+    # write_token_stale when the environment secret is unset or dead); it writes ONLY the flip value (never POSTGRES_URI/HEARTBEAT). This is also the
     # P0-3 `aborted`-state recovery (the DBSIZE gate disabled the web schedulers; (B) restores them).
     if [[ -z "${CUTOVER_HOSTS:-}" ]]; then
       echo "::error::CUTOVER_HOSTS is empty — refusing to run rollback against an empty host-set"; exit 1
@@ -2592,8 +2597,8 @@ case "$OP" in
     fi
 
     # ---- Half (A): the no-SSH reverse flip write (#6369). Behind the environment gate.
-    if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
-      echo "::error::op=rollback: DOPPLER_TOKEN_INNGEST_ARM is empty — the repo secret did not resolve (approve the inngest-cutover environment required-reviewer gate on this dispatch; else check 'gh secret list | grep DOPPLER_TOKEN_INNGEST_ARM'). Refusing the reverse flip write."; exit 1
+    if [[ -z "${DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE:-}" ]]; then
+      echo "::error::op=rollback: DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE is empty — the inngest-cutover ENVIRONMENT secret did not resolve (approve the environment's required-reviewer gate on this dispatch; if it is genuinely unset, run the relay script knowledge-base/project/specs/archive/20261113-090857-feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh). Refusing the reverse flip write — never a fallback to the arm token."; exit 1
     fi
     # G1' decides ONLY whether to WRITE the reverse flip — it must NOT gate Half (B). Half (B),
     # the web re-enable, is the pre-#6369 UNCONDITIONAL reverse of 2.2 quiesce and the documented
@@ -2603,15 +2608,15 @@ case "$OP" in
     # already rollback/rolled-back; for a non-forward state (unset/empty/aborted) there is nothing
     # on the dedicated host to reverse. Fail-CLOSED on a read error (a swallowed read must not be
     # mistaken for 'unset'). The flip state is a public enum — not masked.
-    if ! DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get DOPPLER_PROJECT -p soleur-inngest -c prd --plain >/dev/null 2>&1; then
+    if ! DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE" doppler secrets get DOPPLER_PROJECT -p soleur-inngest -c prd --plain >/dev/null 2>&1; then
       echo "::error::op=rollback: cannot read soleur-inngest/prd (config-readability probe failed). Refusing the reverse-flip decision FAIL-CLOSED; retry once the read path is healthy. Do NOT SSH the host."; exit 1
     fi
-    RB_CUR=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null || echo "unset")
+    RB_CUR=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE" doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null || echo "unset")
     case "$RB_CUR" in
       armed|flipping|flushed|done)
         echo "::notice::op=rollback: G1' — forward flip is '$RB_CUR'; writing the reverse flip to stop the dedicated scheduler BEFORE re-enabling the web schedulers (prevents two live schedulers double-firing prod crons)."
         RB_TS=$(date +%s)
-        printf '%s' 'rollback' | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=rollback: writing INNGEST_CUTOVER_FLIP=rollback FAILED. Re-dispatch op=rollback. Do NOT SSH the host."; exit 1; }
+        printf '%s' 'rollback' | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE" doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=rollback: writing INNGEST_CUTOVER_FLIP=rollback FAILED. Re-dispatch op=rollback. Do NOT SSH the host."; exit 1; }
         echo "::notice::op=rollback: wrote INNGEST_CUTOVER_FLIP=rollback to soleur-inngest/prd (no value echoed) — the enabled on-host timer stops the dedicated scheduler and drives the FSM to rolled-back."
         # BLOCKING confirm: the dedicated scheduler MUST be confirmed stopped BEFORE Half (B)
         # re-enables the web schedulers — else both run and double-fire prod crons (user-impact
@@ -2652,7 +2657,7 @@ case "$OP" in
     # >/dev/null) so a real Doppler error's cause is visible inline in the ::warning::,
     # not just "transient error". Safe: delete only ever handled the secret NAME, never a
     # value, so the stderr tail carries no secret.
-    if DELETE_ERR=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets delete INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd --yes 2>&1 >/dev/null); then
+    if DELETE_ERR=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE" doppler secrets delete INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd --yes 2>&1 >/dev/null); then
       echo "::notice::op=rollback: deleted INNGEST_HEARTBEAT_URL from soleur-inngest/prd (inverse of the retired op=arm's G4 heartbeat write) — the dedicated heartbeat dark arm now skips its ping; one pusher per monitor restored (no value echoed)."
     else
       ERR_TAIL=$(printf '%s' "$DELETE_ERR" | tr -d '\r' | tr '\n' ' ' | tail -c 300)
@@ -2837,10 +2842,10 @@ case "$OP" in
     #     can re-arm or clear the latch (op=arm / op=reflush retired in #9927; no apply_target
     #     recuts /mnt/data, inngest-volume-recut was retired by #8285). The latch is what stops a
     #     second FLUSHALL, so that is correct; recovery from `aborted` is not a dispatch of this op.
-    if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
-      echo "::error::op=resume: DOPPLER_TOKEN_INNGEST_ARM is empty — the repo secret did not resolve (approve the inngest-cutover environment required-reviewer gate on this dispatch). Refusing the post-flush re-entry write."; exit 1
+    if [[ -z "${DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE:-}" ]]; then
+      echo "::error::op=resume: DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE is empty — the inngest-cutover ENVIRONMENT secret did not resolve (approve the environment's required-reviewer gate on this dispatch; if it is genuinely unset, run the relay script knowledge-base/project/specs/archive/20261113-090857-feat-one-shot-9927-d2-2-new-write-path/relay-inngest-write-token.sh). Refusing the post-flush re-entry write — never a fallback to the arm token."; exit 1
     fi
-    RS_CUR=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null || echo "__READ_FAILED__")
+    RS_CUR=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE" doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null || echo "__READ_FAILED__")
     # SCOPED TO `done`, and that scoping IS the safety argument. `done` is the only value that
     # evidences a COMPLETED flip, i.e. that a FLUSHALL actually happened — which is exactly what
     # writing `flushed` asserts. Widening this to aborted/rolled-back would let the resume arm
@@ -2924,7 +2929,7 @@ case "$OP" in
         echo "::error::op=resume: G4 — resume_bootstrap_decide returned an unrecognised outcome. Refusing FAIL-CLOSED."; exit 1 ;;
     esac
 
-    printf '%s' 'flushed' | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=resume: writing INNGEST_CUTOVER_FLIP=flushed FAILED. Re-dispatch op=resume. Do NOT SSH the host."; exit 1; }
+    printf '%s' 'flushed' | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE" doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=resume: writing INNGEST_CUTOVER_FLIP=flushed FAILED. Re-dispatch op=resume. Do NOT SSH the host."; exit 1; }
     echo "::notice::op=resume: wrote INNGEST_CUTOVER_FLIP=flushed to soleur-inngest/prd. The enabled 30s on-host timer takes the post-flush resume arm: start -> verify it SERVES -> record the done-owner marker -> done, with NO re-FLUSHALL."
     ;;
 

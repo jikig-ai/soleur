@@ -56,7 +56,9 @@ vi.mock("@/lib/repo-url", () => ({
 
 // ADR-044 PR-2: the route's authoritative repo-connection write now targets the
 // `workspaces` row via writeRepoColsToWorkspace (was the solo-`users` mirror).
-vi.mock("@/server/workspace-repo-mirror", () => ({
+// #12714 (D33(2)): the REAL `clearKbSyncHeldCols` runs against the service mock, so its UPDATE and mirror are observed.
+vi.mock("@/server/workspace-repo-mirror", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/workspace-repo-mirror")>()),
   writeRepoColsToWorkspace: (...a: unknown[]) =>
     mockWriteRepoColsToWorkspace(...a),
 }));
@@ -81,6 +83,7 @@ vi.mock("@/server/logger", () => ({
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
+  mirrorWithDebounce: vi.fn(),
 }));
 
 vi.mock("@/server/userid-pseudonymize", () => ({
@@ -123,6 +126,7 @@ let storedInstallationId: number | null = null;
 // Captures every `workspaces.update(patch)` patch + the id it was `.eq("id", ·)`
 // scoped to, so tests can assert the AUTHORITATIVE install write lands on the
 // workspaces row (was a users.update of github_installation_id pre-PR-2).
+let heldUpdateError: { message: string; code?: string } | null = null;
 let workspacesUpdateCalls: Array<{
   patch: Record<string, unknown>;
   id: string;
@@ -178,6 +182,10 @@ function setupServiceClient() {
           const chain: Record<string, unknown> = {
             eq: (_col: string, id: string) => {
               workspacesUpdateCalls.push({ patch, id });
+              // #12714 (D33(2)): the held clear is `.eq("id", id).select("id")`, resolving to the matched rows.
+              if ("kb_sync_held_files" in patch) {
+                return { select: async () => ({ data: heldUpdateError ? null : [{ id }], error: heldUpdateError }) };
+              }
               return chain;
             },
             neq: () => chain,
@@ -205,6 +213,7 @@ describe("POST /api/repo/setup — install resolution", () => {
     vi.clearAllMocks();
     storedInstallationId = null;
     workspacesUpdateCalls = [];
+    heldUpdateError = null;
     usersUpdateCalled = false;
     mockValidateOrigin.mockReturnValue({
       valid: true,
@@ -360,6 +369,47 @@ describe("POST /api/repo/setup — install resolution", () => {
     // write throws and fails this test. No separate assertion needed here
     // (`usersUpdateCalled` is set by the async readiness callback, which this
     // synchronous `await POST` does not await — asserting its value would race).
+  });
+
+  test("#12714 (D29(1), D33(2), D42): after the cloning flip, a SEPARATE update clears the held columns; the flip payload is unchanged", async () => {
+    storedInstallationId = 999;
+    mockResolveReachable.mockResolvedValue([999]);
+    mockResolveOwning.mockResolvedValue(999);
+
+    const res = await POST(makeRequest({ repoUrl: "https://github.com/jikig-ai/soleur" }));
+    expect(res.status).toBe(200);
+
+    const flipIdx = workspacesUpdateCalls.findIndex((c) => c.patch.repo_status === "cloning");
+    const heldIdx = workspacesUpdateCalls.findIndex((c) => "kb_sync_held_files" in c.patch);
+    expect(flipIdx).toBeGreaterThanOrEqual(0);
+    expect(workspacesUpdateCalls[flipIdx].patch).not.toHaveProperty("kb_sync_held_files");
+    expect(workspacesUpdateCalls[flipIdx].patch).not.toHaveProperty("kb_sync_held_checked_at");
+    expect(heldIdx).toBeGreaterThan(flipIdx);
+    // checked_at is stamped, never null (verify-data-sec P3-3): a run that read T before the re-clone loses the guard
+    expect(workspacesUpdateCalls[heldIdx]).toEqual({
+      patch: {
+        kb_sync_held_files: null,
+        kb_sync_held_checked_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+        kb_sync_pull_blocked: null,
+      },
+      id: "user-1",
+    });
+  });
+
+  test("#12714 (D33(2)): a failing held update (column missing) leaves the route's status and body unchanged, and mirrors once", async () => {
+    storedInstallationId = 999;
+    mockResolveReachable.mockResolvedValue([999]);
+    mockResolveOwning.mockResolvedValue(999);
+    heldUpdateError = { message: "column workspaces.kb_sync_held_files does not exist", code: "42703" };
+
+    const res = await POST(makeRequest({ repoUrl: "https://github.com/jikig-ai/soleur" }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "cloning" });
+    const { mirrorWithDebounce } = await import("@/server/observability");
+    const held = vi.mocked(mirrorWithDebounce).mock.calls.filter(
+      (c) => (c[1] as { op?: string } | undefined)?.op === "kb-sync-held.clear",
+    );
+    expect(held).toHaveLength(1);
   });
 
   test("T11: personal happy path — stored id present, owning probe 'ok' → clones with stored id", async () => {

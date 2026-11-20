@@ -214,7 +214,7 @@ _EMIT_COMMANDS=0
 #              sharded full battery (the required `test` context), not any
 #              local run. A green affected run is not a full-coverage claim.
 # --full       The whole battery — what CI runs on push, merge_group and dispatch (a
-#              pull_request run declines six self-test mutation batteries whose subject
+#              pull_request run declines fifteen self-test mutation batteries whose subject
 #              the diff does not touch, ADR-262). Refused under SOLEUR_SUBAGENT=1
 #              or measured sibling contention unless SOLEUR_ALLOW_FULL_GATE=1.
 # --print-affected-set   Enumerate-shaped plumbing: walks every registration and
@@ -405,7 +405,7 @@ Usage: bash scripts/test-all.sh [flags] [all|webplat|bun|scripts|infra]
    or: TEST_GROUP=<value> bash scripts/test-all.sh [flags]
 
 Modes (local default is --affected; CI runs the full battery, except that a pull_request run
-declines six self-test mutation batteries whose subject the diff does not touch — ADR-262):
+declines fifteen self-test mutation batteries whose subject the diff does not touch — ADR-262):
   --affected            run the suites this diff can move, plus every always-on
                         repo-global ratchet. Exempt from the full-gate refusals.
                         TEST_GROUP=affected is a deprecated compat alias of this
@@ -2765,7 +2765,7 @@ fi
 # this append's line — a wrapping conditional truncates that extraction
 # mid-statement, and naming the command here would end it a line early.
 _diff_names="${_diff_names}
-$(if [[ "${_AFF_SCOPE:-branch}" == "staged" ]]; then :; else git ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}" 2>/dev/null || true; fi)"
+$(if [[ "${_AFF_SCOPE:-branch}" == "staged" ]]; then :; else git -c core.quotePath=false ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}" 2>/dev/null || true; fi)"
 # Affected mode ALSO appends the UNSCOPED untracked list (#8322): any untracked
 # file can be an edge target — a brand-new suite file's own path is its
 # self-edge, and a new file under a declared prefix must select the suite
@@ -2790,7 +2790,7 @@ if (( _AFFECTED == 1 )); then
   # `if (( _AFFECTED == 1 )); then` opener to its first column-0 `fi`.
   if [[ "${_AFF_SCOPE:-branch}" != "staged" ]]; then
   _diff_names="${_diff_names}
-$(git ls-files --others --exclude-standard 2>/dev/null || true)"
+$(git -c core.quotePath=false ls-files --others --exclude-standard 2>/dev/null || true)"
   fi
 fi
 # --paths (#9307): the caller named the paths, so they ARE the diff. Both detection
@@ -4383,8 +4383,10 @@ _aff_runner_banner() {
 # #10448: +1 always-on (boundary-prefix wholesale dir-glob sweep; measured-verdict install, 718 ms / selection over the 25% bar); re-pinned at 117-5.
 # #9659: +1 always-on (lint-gh-dedupe-shape, repo-global); re-pinned at 118-5.
 # #12348: +1 always-on (the -live tree scan; the unit suite is edge-selected, E5); re-pinned at 119-5.
-# #12494: +1 always-on (scripts/allowlist-diff, the .gitleaks.toml pathspec read; repo-global like its rename-guard sibling); with #12348 below the count is 120, so the floor is re-pinned at 120-5.
-_MIN_ALWAYS_ON_DECLARED=115
+# #12494: +1 always-on (scripts/allowlist-diff, the .gitleaks.toml pathspec read; repo-global like its rename-guard sibling); count 120.
+# #11556: -1 always-on (image-cve-public-claim-guard withdrawn to edge-selection when the Lever-A
+# 5-run re-price put its measured median over the 10s fast-tier cap); count 119, floor re-pinned at 119-5.
+_MIN_ALWAYS_ON_DECLARED=114
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5960,6 +5962,13 @@ if want_scripts; then
   # that reported a clean bill of health for a family it never enumerated, and an
   # unregistered suite is the same failure one level up.
   run_suite "scripts/check-cloudflare-token-drift" bash scripts/check-cloudflare-token-drift.test.sh
+  # #12666: the post-merge required-check bypass detector (merge-queue / direct-push
+  # escape that merged past a red required `test` check). Registered explicitly —
+  # scripts/*.test.sh is NOT auto-globbed (the #5417 orphan class), so this line is
+  # the suite's only registration. The detector script itself is
+  # scripts/merge-bypass-audit.sh; its scheduled workflow is
+  # .github/workflows/merge-bypass-audit.yml.
+  run_suite "scripts/merge-bypass-audit" bash scripts/merge-bypass-audit.test.sh
   # #9377: the web-host escrow-split contract (Guard 3 census: every web-class path selects
   # prd_workspaces_luks_web, web-1 keeps prd_workspaces_luks) plus its live-mode stub-doppler rows.
   # Registered explicitly: scripts/*.test.sh is NOT auto-globbed (the #5417 orphan class). The
@@ -5974,7 +5983,15 @@ if want_scripts; then
   # runner itself now uses. Registered explicitly — scripts/*.test.sh is NOT in
   # the auto-glob below, so an unregistered suite is an ORPHAN that gates
   # nothing (the #5417 class). lint-orphan-test-suites.sh enforces this line.
-  run_suite "scripts/test-contention" bash scripts/test-contention.test.sh
+  # #9340 / ADR-262 (2026-11-12 addendum): --pr-gated — the verdict is a property
+  # of the closed TEST_CONTENTION_PATHS edge set; counted [skip] on the else arm.
+  if _diff_touches --pr-gated "${TEST_CONTENTION_PATHS[@]}"; then
+    run_suite "scripts/test-contention" bash scripts/test-contention.test.sh
+  else
+    _relevance_declined=$((_relevance_declined + 1))
+    skip_suite "scripts/test-contention" "relevance" \
+      "bash scripts/test-contention.test.sh"
+  fi
   # #9763: the fast-tier budget ratchet — pins always-on committed weight to
   # <=10s per suite and <=300s total so the local tier cannot silently regrow.
   run_suite "scripts/test-all-fast-tier-budget" bash scripts/test-all-fast-tier-budget.test.sh
@@ -6101,13 +6118,13 @@ if want_scripts; then
   # leaves every one of them ANCHOR MISSING (measured on #7718: 9/42 rows red).
   if _diff_touches --pr-gated "${LINT_ORPHAN_BATTERY_PATHS[@]}"; then
     run_suite "scripts/lint-orphan-test-suites-mutations-a" bash scripts/lint-orphan-test-suites.test.sh --rows 1-18
-    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-35
+    run_suite "scripts/lint-orphan-test-suites-mutations-b" bash scripts/lint-orphan-test-suites.test.sh --rows 19-40
   else
     _relevance_declined=$((_relevance_declined + 2))
     skip_suite "scripts/lint-orphan-test-suites-mutations-a" "relevance" \
       "bash scripts/lint-orphan-test-suites.test.sh --rows 1-18"
     skip_suite "scripts/lint-orphan-test-suites-mutations-b" "relevance" \
-      "bash scripts/lint-orphan-test-suites.test.sh --rows 19-35"
+      "bash scripts/lint-orphan-test-suites.test.sh --rows 19-40"
   fi
   # #9855 env-gate dormancy sentinel. The LIVE line points the census at this
   # working tree; the battery builds synthetic fixture repos and proves each
@@ -6255,6 +6272,10 @@ if want_scripts; then
   # Registered explicitly (orphan-suite class above); a probe that stops at its first member would go quiet
   # while the token is still in config.
   run_suite "scripts/arm-token-revisit-12229" bash scripts/followthroughs/arm-token-revisit-12229.test.sh
+  # #12738: exit-code harness for the inngest write-token revisit probe (notify-only; exits 2, 3 or
+  # 5, never 0 or 1). Registered explicitly (orphan-suite class above); the arm-token probe watches
+  # only the arm token, so the D2-2 replacement needs its own coverage.
+  run_suite "scripts/inngest-write-token-revisit-12738" bash scripts/followthroughs/inngest-write-token-revisit-12738.test.sh
   # #12008: exit-code harness for the host kernel cadence probe (notify-only; exits 2, 3 or 5, never 0 or 1).
   # Registered explicitly (orphan-suite class above); an unknown row read as within-cadence would turn the
   # tracker's all-clear into a false assurance about host patching.
@@ -6661,6 +6682,9 @@ if want_scripts; then
   # #7966: the rotation script had never completed a run (TARGETS exported after the check that
   # reads it). End-to-end against stub doppler/curl/docker; explicit, scripts/*.test.sh is not globbed.
   run_suite "scripts/rotate-supabase-db-credential" bash scripts/rotate-supabase-db-credential.test.sh
+  # The Sentry token rotation chain (ro + iac profiles) runs by hand against a live credential;
+  # end-to-end against stub gh/curl/doppler/agent-browser. Explicit, scripts/*.test.sh is not globbed.
+  run_suite "scripts/rotate-sentry-actions-ro-token" bash scripts/rotate-sentry-actions-ro-token.test.sh
   # #7242: an alarm step that cannot run after an earlier failure cannot report the FIRE it
   # exists to report. Static gate over both alarm workflows — the condition is evaluated by
   # GitHub, so the YAML is the only artifact there is to test.
@@ -6725,7 +6749,19 @@ if want_scripts; then
   run_suite "tests/scripts/git-data-host-birth-gate" bash tests/scripts/test-git-data-host-birth-gate.sh
   run_suite "tests/scripts/betterstack-read-classify" bash tests/scripts/test-betterstack-read-classify.sh
   run_suite "tests/scripts/git-data-boot-signal-poll" bash tests/scripts/test-git-data-boot-signal-poll.sh
-  run_suite "tests/scripts/git-data-birth-readiness-gate" bash tests/scripts/test-git-data-birth-readiness-gate.sh
+  # #12866 (ADR-327 step 2a): the bastion birth gate and its boot-verify decision; same
+  # registration reason as the three above (tests/scripts/ is outside both auto-globs).
+  run_suite "tests/scripts/bastion-host-birth-gate" bash tests/scripts/test-bastion-host-birth-gate.sh
+  run_suite "tests/scripts/bastion-boot-verify" bash tests/scripts/test-bastion-boot-verify.sh
+  # #9340 / ADR-262 (2026-11-12 addendum): --pr-gated — closed
+  # GIT_DATA_BIRTH_READINESS_GATE_PATHS edge set; counted [skip] on the else arm.
+  if _diff_touches --pr-gated "${GIT_DATA_BIRTH_READINESS_GATE_PATHS[@]}"; then
+    run_suite "tests/scripts/git-data-birth-readiness-gate" bash tests/scripts/test-git-data-birth-readiness-gate.sh
+  else
+    _relevance_declined=$((_relevance_declined + 1))
+    skip_suite "tests/scripts/git-data-birth-readiness-gate" "relevance" \
+      "bash tests/scripts/test-git-data-birth-readiness-gate.sh"
+  fi
   # (#7025) The rung-2 evidence-capture decision function. Registered HERE for the same
   # reason as every line around it: nothing auto-discovers tests/scripts/. This script is
   # what decides whether the file that RELEASES the birth interlock gets written, so an
@@ -6774,7 +6810,16 @@ if want_scripts; then
   # greenly. Both are registered here in the same commit that adds them.
   run_suite "tests/scripts/betterstack-absence-classifier" bash tests/scripts/test-betterstack-absence-classifier.sh
   run_suite "tests/scripts/betterstack-ingest-probe" bash tests/scripts/test-betterstack-ingest-probe.sh
-  run_suite "tests/scripts/betterstack-roundtrip-latency" bash tests/scripts/test-betterstack-roundtrip-latency.sh
+  # #9340 / ADR-262 (2026-11-12 addendum): --pr-gated — this is the UNIT suite for
+  # the followthrough probe (stubbed, never live), so its verdict is a property of
+  # the closed BETTERSTACK_ROUNDTRIP_LATENCY_PATHS edge set; counted [skip] below.
+  if _diff_touches --pr-gated "${BETTERSTACK_ROUNDTRIP_LATENCY_PATHS[@]}"; then
+    run_suite "tests/scripts/betterstack-roundtrip-latency" bash tests/scripts/test-betterstack-roundtrip-latency.sh
+  else
+    _relevance_declined=$((_relevance_declined + 1))
+    skip_suite "tests/scripts/betterstack-roundtrip-latency" "relevance" \
+      "bash tests/scripts/test-betterstack-roundtrip-latency.sh"
+  fi
   run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
   run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
   run_suite "scripts/rule-metrics-aggregate" bash scripts/rule-metrics-aggregate.test.sh
@@ -6960,6 +7005,9 @@ if want_scripts; then
   run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
   run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
   run_suite "tests/scripts/infra-privileged-tier-census" bash tests/scripts/test-infra-privileged-tier-census.sh
+  # #12158 (D2-2): text pins for the staged relay script — stdin delivery to the environment
+  # secret, xtrace refusal, generated-operator-script v2 contract.
+  run_suite "tests/scripts/relay-inngest-write-token-12158" bash tests/scripts/test-relay-inngest-write-token-12158.sh
   # Sole-copy LUKS Guard 1 (#9927 item 10, ADR-282): registered HERE so a red Guard 1 blocks merge through the required `test` context
   # (test-scripts). Also covered by the infra runner glob (deploy-script-tests), hence its DOUBLE_COVERED_ACK entry in
   # scripts/lint-orphan-test-suites.sh; the G2f pin in plugins/soleur/test/terraform-target-parity.test.ts (test-bun leg) keeps this line from being dropped.
@@ -7046,7 +7094,16 @@ if want_scripts; then
   # every happy-path test anyone writes. This suite is one row per DRIFT CLASS the
   # probe's header claims to detect, so the claim is checked rather than asserted.
   # Hermetic: the live GET is replaced by SENTRY_FIXTURE_RULES throughout.
-  run_suite "tests/scripts/sentry-alert-live-fidelity" bash tests/scripts/test-sentry-alert-live-fidelity.sh
+  # #9340 / ADR-262 (2026-11-12 addendum): --pr-gated — fixture-driven despite the
+  # "live" in its name, so its verdict is a property of the closed
+  # SENTRY_ALERT_LIVE_FIDELITY_PATHS edge set; counted [skip] below.
+  if _diff_touches --pr-gated "${SENTRY_ALERT_LIVE_FIDELITY_PATHS[@]}"; then
+    run_suite "tests/scripts/sentry-alert-live-fidelity" bash tests/scripts/test-sentry-alert-live-fidelity.sh
+  else
+    _relevance_declined=$((_relevance_declined + 1))
+    skip_suite "tests/scripts/sentry-alert-live-fidelity" "relevance" \
+      "bash tests/scripts/test-sentry-alert-live-fidelity.sh"
+  fi
   # (#7843) The argv-bearer sweep's CONVERSION BATTERY (Guard 2). Registered HERE for the
   # reason every line around it is: nothing auto-discovers tests/scripts/, and the orphan
   # linter's producer is `*.test.sh`. Hermetic: a PATH-shim curl, synthesized tokens, no
@@ -7126,7 +7183,7 @@ if want_scripts; then
   # #9323 soak probe's own contract suite (fake gh): exit-code semantics 0/1/2/3/78. EXPLICIT, because
   # scripts/followthroughs/ is covered by no glob here.
   run_suite "scripts/followthroughs/pr-battery-gate-saving-9323" bash scripts/followthroughs/pr-battery-gate-saving-9323.test.sh
-  # ADR-262 Guard 1: the pull_request gate over the six self-test mutation batteries. Explicit run_suite
+  # ADR-262 Guard 1: the pull_request gate over the fifteen self-test mutation batteries. Explicit run_suite
   # (scripts/*.test.sh is covered by no glob here), classified ALWAYS_ON (it is a runner-SUT property
   # suite), and registered at the end of the block for the positional-shard reason stated just above.
   run_suite "scripts/test-all-pr-battery-gate" bash scripts/test-all-pr-battery-gate.test.sh
@@ -7234,6 +7291,14 @@ if want_scripts; then
   # (its edge array is in scripts/lib/test-affected-paths.sh); their shard legs are manifest rows
   # in scripts/suite-shard-legs.tsv. The -live row runs under `python3 -I` like the CI member step.
   run_suite "scripts/lint-cve-safe-status" bash scripts/lint-cve-safe-status.test.sh
+  # #12626: exit-code harness for the scheduled main-health-monitor mutation-leg confirmation probe
+  # (>=2 post-merge soleur-ai[bot] workflow_dispatch runs, each carrying all three
+  # test-webplat-mutations legs green). Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Seated at the block tail: the G2-anchor
+  # grammar admits no anchor after a `python3 -I` argv, so the -live line below must stay last.
+  # Its exit code decides whether the sweeper closes the #12626 follow-through tracker, so a
+  # vacuous PASS must redden CI.
+  run_suite "scripts/followthroughs/main-health-monitor-mutations-12626" bash scripts/followthroughs/main-health-monitor-mutations-12626.test.sh
   run_suite "scripts/lint-cve-safe-status-live" python3 -I scripts/lint-cve-safe-status.py
   
 fi
@@ -7364,7 +7429,10 @@ if want_webplat; then
   run_suite "apps/web-platform [repo-wide+component]" env VITEST_SHARD="${VITEST_SHARD:-}" \
     WEBPLAT_RELATED="${_webplat_related:-}" bash apps/web-platform/scripts/vitest-related.sh bundle
 
-  if _diff_touches "${WEBPLAT_APP_PATHS[@]}"; then
+  # #9340 / ADR-262 (2026-11-12 addendum): the `unit` arm is --pr-gated on
+  # WEBPLAT_APP_PATHS; `repo-wide+component` above stays ungated as the containment
+  # authority, and merge_group/scheduled runs still run the full battery.
+  if _diff_touches --pr-gated "${WEBPLAT_APP_PATHS[@]}"; then
     run_suite "apps/web-platform [unit]" env VITEST_SHARD="${VITEST_SHARD:-}" \
       WEBPLAT_RELATED="${_webplat_related:-}" bash apps/web-platform/scripts/vitest-related.sh unit
   else
@@ -7622,10 +7690,30 @@ if want_scripts; then
     # `run_suite "$f" bash "$f"` below is left byte-for-byte unchanged, so the glob's discovery
     # surface is untouched and the suite is still registered exactly once, by the glob.
     if [[ "$f" == "plugins/soleur/test/c4-from-components.test.sh" ]]; then
-      if ! _diff_touches "${C4_PRODUCER_PATHS[@]}"; then
+      if ! _diff_touches --pr-gated "${C4_PRODUCER_PATHS[@]}"; then
         _relevance_declined=$((_relevance_declined + 1))
         skip_suite "plugins/soleur/test/c4-from-components.test.sh" "relevance" \
           "bash plugins/soleur/test/c4-from-components.test.sh"
+        continue
+      fi
+    fi
+    # #9340 / ADR-262 (2026-11-12 addendum): two more glob-registered admits, same
+    # shape as c4 above — one `if` block each, --pr-gated inside the block, the
+    # glob's `run_suite "$f" bash "$f"` line untouched so each suite is still
+    # registered exactly once and one-array-one-call-site holds.
+    if [[ "$f" == "plugins/soleur/test/monitor-pr-checks.test.sh" ]]; then
+      if ! _diff_touches --pr-gated "${MONITOR_PR_CHECKS_PATHS[@]}"; then
+        _relevance_declined=$((_relevance_declined + 1))
+        skip_suite "plugins/soleur/test/monitor-pr-checks.test.sh" "relevance" \
+          "bash plugins/soleur/test/monitor-pr-checks.test.sh"
+        continue
+      fi
+    fi
+    if [[ "$f" == "plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh" ]]; then
+      if ! _diff_touches --pr-gated "${PLAYWRIGHT_MCP_REDACT_PROXY_PATHS[@]}"; then
+        _relevance_declined=$((_relevance_declined + 1))
+        skip_suite "plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh" "relevance" \
+          "bash plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh"
         continue
       fi
     fi
@@ -7752,11 +7840,14 @@ if want_scripts_heavy; then
   # the suite, the reason, and the exact re-run command. Reading the floor as coverage of a run
   # that never happened is the same green-that-is-not-evidence shape ADR-181 closes one level up.
   #
-  # RELEVANCE-GATED (ADR-181) — declined on 56% of recent commits. `run_suite … bash
-  # .github/scripts/test/run-all.sh` keeps its
+  # RELEVANCE-GATED (ADR-181) — declined on 56% of recent commits; #9340 admits it
+  # to --pr-gated (ADR-262 2026-11-12 addendum) — the required
+  # `guard-script-fixture-tests` home in pr-quality-guards.yml still runs this
+  # runner on every PR, so a decline here can never merge an escape. `run_suite …
+  # bash .github/scripts/test/run-all.sh` keeps its
   # command shape byte-for-byte because scripts/lint-orphan-test-suites.sh's REQUIRED_RUNNERS check
   # anchors on the COMMAND, not the label.
-  if _diff_touches "${GITHUB_SCRIPTS_SUITE_PATHS[@]}"; then
+  if _diff_touches --pr-gated "${GITHUB_SCRIPTS_SUITE_PATHS[@]}"; then
     run_suite ".github/scripts/test/run-all.sh" bash .github/scripts/test/run-all.sh
   else
     _relevance_declined=$((_relevance_declined + 1))

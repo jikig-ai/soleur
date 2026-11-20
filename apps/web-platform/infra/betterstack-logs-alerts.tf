@@ -24,11 +24,11 @@
 # also PRIORITY 2) is deliberately outside the operator's stated scope — decision-challenges
 # UC-1 and ADR-218 record the exclusion; opting in is one more needle.
 #
-# ROUTING. The free tier has no escalation policy (every `betteruptime_policy` is
+# ROUTING. Escalation policies are gated off (every `betteruptime_policy` is
 # `count = var.betterstack_paid_tier ? 1 : 0`), so this alert emails the same team surface every
-# sibling monitor and heartbeat uses (account owner + betteruptime_team_member.ops) and escalates
-# to betteruptime_policy.uptime when the paid tier is enabled — the same ternary as
-# uptime-alerts.tf, in the alert's escalation_target shape.
+# sibling monitor and heartbeat uses (ops@jikigai.com, the vendor-managed org Admin; see the
+# removed block in uptime-alerts.tf) and escalates to betteruptime_policy.uptime when the paid
+# tier is enabled — the same ternary as uptime-alerts.tf, in the alert's escalation_target shape.
 #
 # CHANGED THE SQL? BUMP THE REV. `monitor_send_failed_probe_rev` is the ONLY trigger of
 # terraform_data.send_failed_alert_probe (server.tf): the SSH apply runs on every push to main
@@ -2111,24 +2111,60 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # alerts' string-position predicate cannot select them. Do not use a `startsWith` on the raw text:
 # Better Stack re-serializes the keys alphabetically. `JSONType` is the first use in this file.
 #
-# WAS PAUSED PENDING #11869 (false positive, measured 2026-11-02); RE-ARMED 2026-11-12 under #9927
-# step D2-1a on #12221 decision 2. The alert opened an incident at its
-# first evaluation (started 14:00:00Z, alert created 14:05:54Z) and has read `Current value: 0` ever
-# since, while the query API returns 3 rows for a 900 s window (269 object rows in 24 h;
-# `JSONType(...)='Object'` and `JSONExtractRaw(raw,'message') LIKE '{%'` select the identical 269 rows,
-# and an empty window returns 0 under both). The API accepted the resource (no 422), so the evaluator
-# does not REJECT it; it returns 0 for a window that holds rows. The predicate cannot be blamed alone:
-# the sibling silence alert `egress_gw_probe_silent` (`lower_than` until #12180 inverted it on 2026-11-05; the same `toDateTime({{end_time}})`
-# + `dt BETWEEN` shape, NO JSONType) has sat at `Current value: 0` since 2026-10-12 while the query API
-# returns 2 distinct hosts against its threshold of 2. So replacing JSONType cannot be validated here
-# (the evaluator is observable only through a live incident), and a wrong guess costs a merge-apply
-# cycle plus another false page. The resource is kept and the predicate is UNCHANGED: #12221
-# decision 2 made the re-arm conditional on the first post-replace `noop-*` row arriving from the
-# new host, and that precondition is met (13 `noop-done` rows on new host 175859399 as of
-# 2026-11-12), so the alert was re-armed as it stood. The guard now pins `paused = false` so the
-# armed state cannot be lost silently. The stuck-at-0 failure mode is not excluded: if the
-# evaluator reads 0 while rows arrive again, the response is the #12180-class measured predicate
-# change, not another silent pause.
+# HISTORY (#11869, #12726). The alert was created on 2026-11-02 as a `count(*)` of object rows paging on
+# `lower_than 1`. It opened an incident at its first evaluation (1045365287, started 14:00:00Z, alert created
+# 14:05:54Z) and read `Current value: 0` while the query API returned 3 object rows per 900 s window, so it was
+# paused (#11869). It was re-armed unchanged on 2026-11-13 (apply run 43333522781, 00:01:47Z) under #9927 step D2-1a,
+# once the first `noop-*` row from the replaced host was measured (#12221 decision 2). The same thing happened again:
+# incident 1051496324 was born at the first evaluation after the re-arm (back-dated to 2026-11-12T23:45:00Z) and read
+# `Current value: 0` for five days, while the alert's own SQL replayed on four 900 s windows returned 3, 2, 2 and 3
+# object rows and the largest gap between consecutive object rows since 2026-11-12 17:10Z was 370 s (measured
+# 2026-11-17 with betterstack-query.sh, read only). It was at least the fourth `lower_than` silence-alert incident in
+# this account opened on healthy data (luks_monitor_host_timer_dark's 1023423999 under #11048, 33 nights of
+# `Current value: 0` on passing rows; 1045365287 above; egress_gw_probe_silent's 1047829421; and this one;
+# claude_cost_capture_dark's 1020832712 under #11049 was not measured). Egress 1031046761 stayed open 24 days
+# (began 2026-10-12 as a true positive; rows measured arriving 2026-11-02; resolved 2026-11-05), and
+# egress_gw_probe_silent read 0 with no JSONType at all, so #12726 applied ADR-218's 2026-11-05 rule to it: count
+# the MISSING, not the present.
+#
+# SHAPE (#12726, ADR-218 amendment 2026-11-17). The value is ADR-218's host-count canon with a roster of one,
+# greatest(toInt64(1) - toInt64(count(DISTINCT host_name)), 0) over the object-typed rows from the production host:
+# 0 = healthy, 1 = no object row in the window. The alert pages on `higher_than 0`, so an evaluator step that reads 0
+# now reads healthy instead of opening a false incident. The greatest/toInt64 form is kept on purpose although the
+# roster is one host: it is the egress_gw_probe_silent_sql form with the roster constant 1, the only inverted shape
+# whose canary fired (incident 1048213461); relay_probe_silent_sql uses another form with no canary of its own. No
+# GROUP BY: an aggregate without one always returns one row, so a fully dark window reads 1, not "no data". The
+# mechanism behind the stuck 0 stays INFERRED, not measured: neither the incident nor the alert object carries an
+# evaluated value.
+#
+# THE CANARY (#12726, throwaway; tracker #12878). The canary pair below runs this exact query with only the host pin
+# swapped, by one replace() on the local, to a host no machine has. It is expected (predicted, until the apply +25 min
+# tracker read measures it) to read 1 on every evaluation and to open an incident that never recovers: the positive
+# evidence that the evaluator delivers a non-zero value for THIS predicate shape (the tag IN, the host pin and
+# JSONType), which the egress canary never exercised. If it never fires, the response is the egress rule: keep this
+# alert armed in the inverted shape, build the heartbeat poller (#12190) next, and rely on the LUKS key-probe deadman
+# meanwhile. Never revert, never guess a predicate. Its mirror issue is expected and must not be closed while the
+# canary lives.
+# RETIREMENT (CTO F2 amended, tracker #12878): the canary-removal PR opens at the FIRST of (i) the first tracker read
+# at or after apply +4 h showing the canary incident exists (it fired), (ii) the +25 min read showing the canary absent
+# while its alert has been live and unpaused for more than 20 min (the F3 response above), (iii) apply +24 h, whatever
+# the read shows. No production incident since the apply floor, 1051496324 resolved, this alert unpaused at
+# `higher_than 0` and object rows present gate CLOSING #12726 and #12878, not the removal. A canary incident that
+# recovered is a finding for #12190 that blocks closing #12726, not the retirement.
+# DELETION TRAP: the removal PR deletes the two canary blocks but KEEPS their two bare `-target=` lines in
+# apply-web-platform-infra.yml (and lists both addresses in the census INTENDED_DESTROYS) for its own destroying
+# apply, because a bare target on an address with no configuration is what plans the delete; the removal PR merges
+# with its standalone `[ack-destroy]` line, and after that apply a follow-up removes the lines and both
+# INTENDED_DESTROYS entries. The egress canary went the same way (#12268 kept the targets, #12306 removed them).
+#
+# FALSE-SILENCE RESIDUAL (accepted, CTO R2/R7). Under treat_as_zero an evaluator error or timeout also reads 0, which
+# this shape reads as healthy. Compensating controls, each scoped to what it sees: the canary (this predicate shape,
+# only while it lives; after its retirement this residual has no positive control); the LUKS key-probe deadman
+# (soleur-inngest-luks-key-probe-deadman-prd, about 26 h to fire) for arms 1 and 3, NOT for a Vector-only outage (its
+# feeder also counts the curl phone-home leg, which bypasses Vector) and unverified for arm 2; the server-probe
+# heartbeat (soleur-inngest-server-probe-prd) for a dark host; and the heartbeat poller (#12190) as the fallback. Also
+# not excluded (ADR-218 2026-11-05): partial visibility or lag of rows in the evaluator's window reads 1 under either
+# operator. Under this shape it would show as a NEW incident on healthy data; the response is the poller, not a revert.
 #
 # THIS ALERT HAS NO REPLACE-WINDOW SUPPRESSION AND WILL EMAIL DURING AN OWNER-AUTHORIZED
 # `apply_target=inngest-host-replace`: the host is legitimately dark from the destroy until the
@@ -2137,34 +2173,30 @@ resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
 # workflow, so the suppression lives in the workflow, not in the query). Email
 # only, like egress_gw_probe_silent: push, call and sms stay off and critical_alert stays false.
 #
-# WINDOW. The emitter writes at most one noop row per 300 s, so a 900 s query window holds about
-# three rows; the alert pages only when none arrived (value lower_than 1, treat_as_zero so a fully
-# dark window reads 0). The 900 s window is the ceiling every alert created since 2026-10-01 stays
-# within; a longer window was refused by the Better Stack API.
+# WINDOW. The emitter writes at most one noop row per 300 s, so a 900 s query window holds about three object rows;
+# the value is 1 only when none arrived. treat_as_zero is kept (CTO R2): it is NOT what detects a fully dark window
+# (the aggregate returns 1 there) and it is the source of the false-silence residual above. The 900 s window is the
+# ceiling every alert created since 2026-10-01 stays within; a longer window was refused by the Better Stack API.
 #
-# INCIDENT LIFECYCLE (#11820, mirror #11869). A `lower_than` silence incident may stay open after the data returns.
-# Open does not mean currently silent. Verify with `betterstack-query.sh`, and resolve manually. The runbook bullets for
-# this alert carry those three sentences, each followed by a per-alert resolve rule (the egress_gw_probe_silent bullet
-# dropped them when #12180 inverted that alert); edit the bullet and this comment together.
-# Observed 2026-11-02, re-read with betterstack-query.sh (read only): incident 1031046761 (egress_gw_probe_silent, whose
-# SQL has no JSONType, so this is not a JSONType artefact) is Started and unresolved since 2026-10-12 while probe rows
-# keep arriving (22 in the last hour). Incident 1045365287 (this alert) started at 14:00Z, so it was only hours old at
-# writing, and was still open with object rows arriving about one per 5 min (11 in the last hour). Since the mirror
-# began (first mirror issue 2026-10-25), no `lower_than` incident has resolved while its alert was live: the only two
-# closures (#11048, #11049) came minutes after their alerts were deleted (#11631). The `higher_than` twin
-# egress_gw_probe_fail closed its mirror issue in about 30 minutes. The mechanism is not established. CTO ruling
-# 2026-11-02: leave the alert as it is.
+# INCIDENT LIFECYCLE (#11820, #12726). An incident that was open before an in-place update is not known to clear on
+# its own (the egress anchor incident needed an API resolve after its inversion). An open incident while object rows
+# arrive is a false positive: verify with `betterstack-query.sh`, and resolve it only with the owner's go. Under this
+# shape a NEW incident opened while rows arrive points to the heartbeat poller (#12190), never a revert. The runbook
+# bullets for this alert carry the same rule; edit the bullet and this comment together.
 locals {
-  # One aggregate over the whole window, `dt` as the time column (the sibling silence alert's
-  # shape), pinned to the production Inngest host so a web host or a dev host cannot satisfy it.
+  # One whole-window scalar, `dt` as the time column: the missing-host count over a roster of one (see SHAPE
+  # above), pinned to the production Inngest host so a web host or a dev host cannot satisfy it.
   inngest_cutover_flip_silent_sql = <<-SQL
-    SELECT toDateTime({{end_time}}) AS time, count(*) AS value
+    SELECT toDateTime({{end_time}}) AS time, greatest(toInt64(1) - toInt64(count(DISTINCT JSONExtractString(raw, 'host_name'))), 0) AS value
     FROM {{source}}
     WHERE dt BETWEEN {{start_time}} AND {{end_time}}
       AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') IN ('inngest-cutover-flip')
       AND JSONExtractString(raw, 'host_name') = 'soleur-inngest-prd'
       AND JSONType(raw, 'message') = 'Object'
   SQL
+
+  # The canary (#12726, throwaway): the production query with ONLY the host pin swapped to a host no machine has.
+  inngest_cutover_flip_silent_canary_sql = replace(local.inngest_cutover_flip_silent_sql, "'soleur-inngest-prd'", "'soleur-inngest-canary-absent'")
 
   inngest_cutover_flip_silent_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/inngest-server.md#flip-token-split-adr-282-addendum-2026-10-30-9927-item-4"
 }
@@ -2194,18 +2226,20 @@ resource "logtail_exploration_alert" "inngest_cutover_flip_silent" {
   exploration_id = logtail_exploration.inngest_cutover_flip_silent.id
   name           = "soleur-inngest-cutover-flip-silent-prd"
 
+  # Pages when the production host sent no object row in the window (value 1). The pinned triple
+  # higher_than / 0 / treat_as_zero is this alert's own convention (ADR-218 2026-11-17, CTO F4).
   alert_type          = "threshold"
-  operator            = "lower_than"
-  value               = 1
+  operator            = "higher_than"
+  value               = 0
   check_period        = 300
   query_period        = 900
   confirmation_period = 0
   recovery_period     = 900
   on_missing_data     = "treat_as_zero"
 
-  # Armed: re-armed under #9927 step D2-1a (was paused under #11869 — see "WAS PAUSED PENDING
-  # #11869" above). The reconciler's `logs-alert-paused` arm reports exactly this shape: a live
-  # pause under a declaration that resolves to `paused = false`.
+  # Armed: re-armed under #9927 step D2-1a (was paused under #11869; see HISTORY above). The
+  # reconciler's `logs-alert-paused` arm reports exactly this shape: a live pause under a
+  # declaration that resolves to `paused = false`.
   paused = false
 
   email          = true
@@ -2214,7 +2248,64 @@ resource "logtail_exploration_alert" "inngest_cutover_flip_silent" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "No JSON inngest-cutover-flip row arrived from the production Inngest host in 15+ min. The flip unit is not running to completion: a revoked, rotated-alone or invalid flip Doppler token fails it before the script starts, the boot-time flip-file write may have aborted, or Vector stopped shipping the tag. The LUKS key-continuity probe is silent with it. EXPECTED during an owner-authorized inngest-host-replace (the host is dark until the first noop row after boot), and then it clears on its own. Runbook: ${local.inngest_cutover_flip_silent_runbook_url}"
+  incident_cause = "No JSON inngest-cutover-flip row arrived from the production Inngest host in 15+ min (the value is 1 when the production host sent no object row in the window, 0 when it did). The flip unit is not running to completion: a revoked, rotated-alone or invalid flip Doppler token fails it before the script starts, the boot-time flip-file write may have aborted, or Vector stopped shipping the tag. The LUKS key-continuity probe is silent with it. EXPECTED during an owner-authorized inngest-host-replace (the host is dark until the first noop row after boot), and then it clears on its own. Runbook: ${local.inngest_cutover_flip_silent_runbook_url}"
+  metadata = {
+    runbook = local.inngest_cutover_flip_silent_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# The throwaway canary for the alert above (#12726): the same query with only the host pin swapped (see THE CANARY
+# above). It is expected to fire and stay open. Its removal PR opens at the first of the apply +4 h tracker read
+# showing it fired, the +25 min read showing it absent after more than 20 min live and unpaused, or apply +24 h
+# (RETIREMENT above, tracker #12878); that PR keeps the two canary -target= lines (DELETION TRAP above).
+resource "logtail_exploration" "inngest_cutover_flip_silent_canary" {
+  name      = "soleur-inngest-cutover-flip-silent-canary-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    sql_query       = replace(trimspace(local.inngest_cutover_flip_silent_canary_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "inngest_cutover_flip_silent_canary" {
+  exploration_id = logtail_exploration.inngest_cutover_flip_silent_canary.id
+  name           = "soleur-inngest-cutover-flip-silent-canary-prd"
+
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 900
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "CANARY, expected to stay open; do not resolve or close its mirror issue (closing it files a fresh P1 at the next mirror run). Throwaway positive control for soleur-inngest-cutover-flip-silent-prd (#12726), NOT an outage: it runs that alert's query against a host no machine has, so it is expected to read 1 on every evaluation. Never firing = the evaluator cannot evaluate this predicate shape: keep the production alert armed and build the poller (#12190). Removal PR opens per tracker #12878 (first of: fired at the +4 h read, absent at +25 min after 20+ min live and unpaused, apply +24 h). Runbook: ${local.inngest_cutover_flip_silent_runbook_url}"
   metadata = {
     runbook = local.inngest_cutover_flip_silent_runbook_url
   }
@@ -2460,6 +2551,198 @@ resource "logtail_exploration_alert" "relay_peer_probe_failed" {
   incident_cause = "A deploy-time session-relay peer dial failed: relay_peer_probe result is refused (nothing listening or unreachable), timeout, tls (handshake or certificate pin failed, OR the peer's source-address allowlist does not carry this host: since #12288 the peer resets a non-allowlisted source before the handshake, so read the peer's createProxyServer.peer-deny events to tell the two apart) or denied (the peer closed right after the upgrade). Sessions proxied between these hosts would fail the same way. A refused/timeout right after the peer's own deploy can be the peer container mid-swap: re-read the row after that deploy before treating it as a defect. The email has no row body: read the peer and result from the runbook query. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the dial was fixed. Runbook: ${local.relay_probe_runbook_url}"
   metadata = {
     runbook = local.relay_probe_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #10538: a serving dedicated Inngest host that owns no functions (registry-empty alert) ───────
+# Pages when an hourly SOLEUR_INNGEST_SERVER_PROBE row from a SERVING dedicated host (server_active=active,
+# http_code=200) past the uptime floor (uptime_s > 900: the first probe after a replace is still syncing)
+# reports a registry_fns that is not a positive integer: the public sdk_url poll (#10538) may be failing.
+# Shape from inngest_luks_wrong_volume_sql (emitter anchor, marker at position 1, phone-home leg B on
+# `detail`); every needle is space-delimited on BOTH sides (`detail` starts with a field, hence `(?:^| )`),
+# and the registry test is NEGATED so a missing/renamed/0/__UNREADABLE__ field fires. No volume reference
+# (ADR-282) and no `detail = ''` disjunct (ruling F1: not-serving rows are the probe heartbeat's).
+# LIVE 2026-11-13 17:30 UTC, SELECT count() only, 24 h hot remote() UNION s3Cluster archive: (a) predicate
+# 0; (b) negation dropped 24 (registry_fns=77); (c) emitter+marker+' host_role=dedicated ' 24. Leg B, 7 d:
+# 1 row (not serving), 0 un-negated matches; the `(?:^| )` extract/match forms were checked on constants.
+# Residual: a STALE non-zero registry is invisible (#12742). Runbook: inngest-server.md#registry-empty-alert-10538.
+# Pinned by apps/web-platform/test/infra/inngest-registry-empty-alert.test.sh.
+locals {
+  inngest_registry_empty_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND (
+        JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-server-probe'
+        AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_SERVER_PROBE') = 1
+        AND position(JSONExtractString(raw, 'message'), ' host_role=dedicated ') > 0
+        AND position(JSONExtractString(raw, 'message'), ' server_active=active ') > 0
+        AND position(JSONExtractString(raw, 'message'), ' http_code=200 ') > 0
+        AND toUInt64OrZero(extract(JSONExtractString(raw, 'message'), ' uptime_s=([0-9]+) ')) > 900
+        AND NOT match(JSONExtractString(raw, 'message'), ' registry_fns=[1-9][0-9]* ')
+        OR (
+          JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home'
+          AND JSONExtractString(raw, 'stage') = 'inngest-server-probe-vector-down'
+          AND match(JSONExtractString(raw, 'detail'), '(?:^| )host_role=dedicated ')
+          AND match(JSONExtractString(raw, 'detail'), '(?:^| )server_active=active ')
+          AND match(JSONExtractString(raw, 'detail'), '(?:^| )http_code=200 ')
+          AND toUInt64OrZero(extract(JSONExtractString(raw, 'detail'), '(?:^| )uptime_s=([0-9]+) ')) > 900
+          AND NOT match(JSONExtractString(raw, 'detail'), '(?:^| )registry_fns=[1-9][0-9]* ')
+        )
+      )
+    GROUP BY time
+  SQL
+
+  inngest_registry_empty_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/inngest-server.md#registry-empty-alert-10538"
+}
+
+resource "logtail_exploration" "inngest_registry_empty" {
+  name      = "soleur-inngest-registry-empty-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.inngest_registry_empty_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "inngest_registry_empty" {
+  exploration_id = logtail_exploration.inngest_registry_empty.id
+  name           = "soleur-inngest-registry-empty-prd"
+
+  # The probe emits hourly; one serving row past the uptime floor with no positive registry pages
+  # within ~5 min. 900 s is the ceiling for an alert created since 2026-10-01; the row stays in the
+  # window for three checks. recovery_period 7200 covers two emissions, so one good row does not
+  # close an incident the next row would re-open.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 7200
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = true
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "A serving dedicated Inngest host (server_active=active, http_code=200, uptime above 900 s) reports registry_fns that is not a positive integer: it owns no functions or cannot read its registry, so no step and no cron is planned. After an inngest-host-replace the public sdk_url poll (https://app.soleur.ai/api/inngest, #10538) may be failing. If Vector was down, the row arrived on the phone-home channel (shipper=cloud-init-phone-home, stage=inngest-server-probe-vector-down): decode its .detail. This alert does NOT detect a stale non-zero registry (#12742 adds that field). Runbook: ${local.inngest_registry_empty_runbook_url}"
+  metadata = {
+    runbook = local.inngest_registry_empty_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #12585: a granted session's sandboxed network request was denied because its egress is degraded ───────────────
+# WHAT IT DETECTS. server/permission-callback.ts answers the Agent SDK's `SandboxNetworkAccess` request (a sandboxed
+# command dialing a host) and logs EVERY deny as one pino warn row: feature `cc-permissions`, op `sandbox-network-denied`,
+# msg `sandboxed network request denied`, with the extra keys `reason`, `granted` (a JSON boolean: the workspace's web
+# access grant), `matchedEntry` and `subagent`. This alert pages on the degraded case only: `granted` true AND reason
+# `not-entitled` (the grant is on but the session's egress forwarder failed to spawn) or `egress-not-running` (it died
+# mid-session). Normal count is about zero. Every other reason is expected volume and is read on demand: `not-entitled`
+# with granted false is the default posture, the host reasons are the model's own attempts, and `gateway-unverified` is
+# EVERY sandboxed request of an entitled session while the arm ships deny-all (plan row 6').
+#
+# ROW SHAPE: the agent_sandbox_bash_denial shape above (raw.CONTAINER_NAME `soleur-web-platform`, raw.message an OBJECT
+# with the extra keys at top level). `granted` is read with JSONExtractRaw so only the JSON boolean matches (live-probed
+# 2026-11-18: JSONExtractRaw gives `true` for a boolean and `"true"` for a string, while JSONExtractString gives `true`
+# for both). NO host_name conjunct: the signal belongs to every web host. Live-probed 2026-11-18 over the hot window: the
+# predicate runs and counts 0 while the container population counted 682; no row of this op exists before the deploy, so
+# its first real hit is the positive control, and the drift guard evaluates the predicate on fixture rows.
+#
+# Paging semantics are agent_sandbox_bash_denial's (ADR-218): one matching row in the 5-min window alerts, treat_as_zero
+# so the open incident observes recovery; on the free tier the channel is team email only.
+# Both -target= lines are enforced by apps/web-platform/test/infra/sandbox-network-denied-alert.test.sh.
+locals {
+  sandbox_network_degraded_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-web-platform'
+      AND JSONExtractString(raw, 'message', 'feature') = 'cc-permissions'
+      AND JSONExtractString(raw, 'message', 'op') = 'sandbox-network-denied'
+      AND JSONExtractRaw(raw, 'message', 'granted') = 'true'
+      AND JSONExtractString(raw, 'message', 'reason') IN ('not-entitled', 'egress-not-running')
+    GROUP BY time
+  SQL
+
+  sandbox_network_degraded_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/betterstack-log-query.md#standing-alarms-over-this-source-log-content-recurrence-alarms"
+}
+
+resource "logtail_exploration" "sandbox_network_degraded" {
+  name      = "soleur-sandbox-network-degraded-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.sandbox_network_degraded_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "sandbox_network_degraded" {
+  exploration_id = logtail_exploration.sandbox_network_degraded.id
+  name           = "soleur-sandbox-network-degraded-prd"
+
+  # agent_sandbox_bash_denial's values: one row alerts within about a minute, the 5-min window holds ONE incident
+  # across a burst, and 10 quiet minutes auto-resolve it.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 60
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "A workspace with web access turned on ran an agent session whose egress forwarder was not running (reason not-entitled: the forwarder failed to spawn; reason egress-not-running: it died mid-session), so the session has no working web egress. The row is the app container's op=sandbox-network-denied pino warn line with granted=true; it carries only the reason, granted, matchedEntry and subagent, never the host. Correlate with feature=cc-dispatcher op=web-egress-forwarder-spawn and feature=egress-forwarder rows in the same window via the runbook Query block, without SSH. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was fixed. Runbook: ${local.sandbox_network_degraded_runbook_url}"
+  metadata = {
+    runbook = local.sandbox_network_degraded_runbook_url
   }
 
   escalation_target {

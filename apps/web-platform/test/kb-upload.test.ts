@@ -93,12 +93,20 @@ vi.mock("@/server/git-auth", () => ({
   gitWithInstallationAuth: mockGitWithAuth,
 }));
 
+// #12600 (CTO ruling D16): pass-through spy on the real syncWorkspace, so a row can script a designed hold (`held`).
+vi.mock("@/server/workspace-sync", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/workspace-sync")>();
+  return { ...actual, syncWorkspace: vi.fn(actual.syncWorkspace) };
+});
+
 vi.mock("@/server/sandbox", () => ({
   isPathInWorkspace: mockIsPathInWorkspace,
 }));
 
 vi.mock("@/server/logger", () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  // R2-B: syncWorkspace now loads server/connected-repo-git (the workspace lock), whose module scope makes a child logger
+  createChildLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }));
 
 vi.mock("@sentry/nextjs", () => ({
@@ -118,6 +126,10 @@ vi.mock("@/server/pdf-linearize", () => ({
 
 import { POST } from "@/app/api/kb/upload/route";
 import { validateOrigin } from "@/lib/auth/validate-origin";
+import { syncWorkspace } from "@/server/workspace-sync";
+import * as Sentry from "@sentry/nextjs";
+const HELD = { ok: false as const, error: new Error("held"), errorClass: "non_fast_forward" as const, held: "dirty_tracked" as const };
+const NFF_ABORT = { ok: false as const, error: new Error("aborted"), errorClass: "non_fast_forward" as const };
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -930,5 +942,33 @@ describe("POST /api/kb/upload", () => {
       const res = await upload(md("virus.exe", 2, "application/x-msdownload"));
       expect(res.status).toBe(415);
     });
+  });
+});
+
+describe("POST /api/kb/upload: a designed workspace hold after the GitHub commit (D16)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test("held -> the normal 201 success body plus workspace_sync pending; attribution still recorded; no Sentry capture", async () => {
+    setupFullMocks();
+    vi.mocked(syncWorkspace).mockResolvedValueOnce({ ...HELD, held: "untracked_collision" });
+    const formData = createFormData(makeTestFile(), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body).toEqual(expect.objectContaining({ path: "knowledge-base/uploads/test.png", workspace_sync: "pending" }));
+    expect(typeof body.commitSha).toBe("string");
+    expect(mockFrom).toHaveBeenCalledWith("kb_files");
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  test("a non_fast_forward abort with no hold stays 500 SYNC_FAILED", async () => {
+    setupFullMocks();
+    vi.mocked(syncWorkspace).mockResolvedValueOnce(NFF_ABORT);
+    const formData = createFormData(makeTestFile(), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(500);
+    expect((await res.json()).code).toBe("SYNC_FAILED");
   });
 });
