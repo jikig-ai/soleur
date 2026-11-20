@@ -839,7 +839,7 @@ selftest_preds() {
   # Every predicate a boot row's verdict rests on gets its own must-PASS/must-RED rows here: the live
   # rows are built to produce the expected verdict, so a neutered predicate would never red there.
   local FD='[bastion-egress] FAIL: lookup failed for nx-ingest.invalid (cloud-init); the loaded ruleset is unchanged'
-  local TP=(--port 443 198.18.0.10 i-brh-T "${HEALTHY_TRAIL[@]}") H=(198.18.0.10 i-brh-T)
+  local TP=(198.18.0.10 i-brh-T "${HEALTHY_TRAIL[@]}") H=(198.18.0.10 i-brh-T)
   { ev runcmd_start info; ev egress_load info; ev fresh_boot_not_ready_egress_load fatal "" "" "" pubkey123 "$FD"; } > "$d/f1"
   { cat "$d/f1"; ev fresh_boot_ready info; } > "$d/fready"
   { ev runcmd_start info; ev egress_load info; } > "$d/endeg"
@@ -852,21 +852,27 @@ selftest_preds() {
   out="$(pred absent "$d/noegress" "${H[@]}" egress_load)"; chk "predicate must-PASS: absent on a trail without the stage" $? "$out"
   out="$(pred nofatal_last "$d/endeg" "${H[@]}" egress_load)"; chk "predicate must-PASS: nofatal_last on a fatal-free trail ending at egress_load" $? "$out"
   out="$(pred detail '/etc/nftables.conf:16:48-60: Error: User does not exist' 'User does not exist')"; chk "predicate must-PASS: detail on nft's real FAULT-A refusal" $? "$out"
-  for c in "fatal|healthy|egress_load|-|fatal: a trail with no fatal" "fatal|f1|apt_install|-|fatal: a fatal at a stage other than the wanted one" \
-           "fatal|fready|egress_load|-|fatal: a fatal followed by fresh_boot_ready" \
-           "fatal|f1|egress_load|User does not exist|fatal: a detail naming a reason but not the wanted one" \
-           "absent|healthy|egress_load|-|absent: the stage is present" "nofatal_last|f1|egress_load|-|nofatal_last: a fatal reached the stub"; do
-    IFS='|' read -r _p _f _s _h _l <<<"$c"
+  # Each must-RED row also names the reason it must red for, so a row that reds for another reason
+  # (a malformed call, a missing file) is a FAIL, not a pass.
+  for c in "fatal|healthy|egress_load|-|no fatal event|fatal: a trail with no fatal" \
+           "fatal|f1|apt_install|-|fatal at fresh_boot_not_ready_egress_load|fatal: a fatal at a stage other than the wanted one" \
+           "fatal|fready|egress_load|-|fresh_boot_ready also sent|fatal: a fatal followed by fresh_boot_ready" \
+           "fatal|f1|egress_load|User does not exist|detail lacks|fatal: a detail naming a reason but not the wanted one" \
+           "absent|healthy|egress_load|-|present:|absent: the stage is present" \
+           "nofatal_last|f1|egress_load|-|a fatal reached the stub|nofatal_last: a fatal reached the stub"; do
+    IFS='|' read -r _p _f _s _h _w _l <<<"$c"
     if [ "$_h" = - ]; then out="$(pred "$_p" "$d/$_f" "${H[@]}" "$_s")"; else out="$(pred "$_p" "$d/$_f" "${H[@]}" "$_s" "$_h")"; fi; rc=$?
-    chk "predicate must-RED: $_l" "$([ "$rc" -eq 1 ]; echo $?)" "rc=$rc $out"
+    chk "predicate must-RED: $_l" "$([ "$rc" -eq 1 ] && case "$out" in *"$_w"*) true ;; *) false ;; esac; echo $?)" "rc=$rc want [$_w] got $out"
   done
-  for c in "port80:an event on :80 under --port 443" "hostid:an event with a wrong host_id" "rejected:an event the stub rejected" \
-           "infotail:an info event after fresh_boot_ready"; do
-    out="$(pred trail "$d/${c%%:*}" "${TP[@]}")"; rc=$?
-    chk "predicate must-RED: trail: ${c#*:}" "$([ "$rc" -eq 1 ]; echo $?)" "rc=$rc $out"
+  for c in "port80|port 80|an event on :80 under --port 443" "hostid|host_id 'i-brh-X'|an event with a wrong host_id" \
+           "rejected|stub verdict rejected|an event the stub rejected" "infotail|the last event is egress_load|an info event after fresh_boot_ready"; do
+    IFS='|' read -r _f _w _l <<<"$c"
+    out="$(pred trail --port 443 "$d/$_f" "${TP[@]}")"; rc=$?
+    chk "predicate must-RED: trail: $_l" "$([ "$rc" -eq 1 ] && case "$out" in *"$_w"*) true ;; *) false ;; esac; echo $?)" "rc=$rc want [$_w] got $out"
   done
   out="$(pred trail "$d/b2three" "${B[@]}")"; rc=$?
-  chk "predicate must-RED: trail: three runcmd_start against count:runcmd_start=2" "$([ "$rc" -eq 1 ]; echo $?)" "rc=$rc $out"
+  chk "predicate must-RED: trail: three runcmd_start against count:runcmd_start=2" \
+    "$([ "$rc" -eq 1 ] && case "$out" in *"runcmd_start occurs 3 times"*) true ;; *) false ;; esac; echo $?)" "rc=$rc got $out"
   # The prototype's real FAULT-A detail (CTO Q18: replaces the cut F1-D boot).
   out="$(pred detail 'Dependency failed for bastion-egress.service - soleur-bastion egress allowlist (#12866). Failed to start bastion-egress.service - soleur-bastion egress allowlist (#12866).' '')"; rc=$?
   chk "predicate must-RED: a detail carrying only systemd boilerplate (the real FAULT-A detail)" "$([ "$rc" -eq 1 ]; echo $?)" "rc=$rc $out"
