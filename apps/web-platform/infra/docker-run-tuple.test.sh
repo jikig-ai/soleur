@@ -537,6 +537,15 @@ kill_row K32m-first-boot-no-private-ip-env 'm_del first-boot "-e SOLEUR_HOST_PRI
 kill_row K32n-first-boot-private-ip-literal 'm_repl first-boot "-e SOLEUR_HOST_PRIVATE_IP=\${private_ip}" "-e SOLEUR_HOST_PRIVATE_IP=10.0.1.10"' "ENV_NAME: SOLEUR_HOST_PRIVATE_IP value '10.0.1.10' in cloud-init.yml first-boot" '!ci-deploy.sh' '#1'
 kill_row K32o-first-boot-private-ip-other-var 'm_repl first-boot "-e SOLEUR_HOST_PRIVATE_IP=\${private_ip}" "-e SOLEUR_HOST_PRIVATE_IP=\${other_ip}"' 'UNPARSEABLE_OPTION: -e SOLEUR_HOST_PRIVATE_IP=${other_ip} in cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
 
+# --- #12910 (T10, round-2 Q3): SOLEUR_HOST_KEY is $HOST_KEY on prod and a literal EMPTY on the canary and on first-boot.
+kill_row K33a-prod-no-host-key-env     'm_del prod "-e SOLEUR_HOST_KEY"'                  'MISSING_DECLARED: env SOLEUR_HOST_KEY missing from ci-deploy.sh prod' '!canary' '!cloud-init.yml' '#1'
+kill_row K33b-prod-host-key-literal    'm_repl prod "-e SOLEUR_HOST_KEY=\"\$HOST_KEY\"" "-e SOLEUR_HOST_KEY=web-1"' "ENV_NAME: SOLEUR_HOST_KEY value 'web-1' in ci-deploy.sh prod" '!canary' '#1'
+kill_row K33c-canary-host-key-prod-var 'm_repl canary "-e SOLEUR_HOST_KEY=" "-e SOLEUR_HOST_KEY=\"\$HOST_KEY\""' 'UNPARSEABLE_OPTION: -e SOLEUR_HOST_KEY=$HOST_KEY in ci-deploy.sh canary' '!prod' '#1'
+kill_row K33d-canary-no-host-key-env   'm_del canary "-e SOLEUR_HOST_KEY"'                'MISSING_DECLARED: env SOLEUR_HOST_KEY missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K33e-first-boot-host-key      'm_repl first-boot "-e SOLEUR_HOST_KEY=" "-e SOLEUR_HOST_KEY=web-1"' "ENV_NAME: SOLEUR_HOST_KEY value 'web-1' in cloud-init.yml first-boot" '!ci-deploy.sh' '#1'
+kill_row K33f-first-boot-no-host-key-env 'm_del first-boot "-e SOLEUR_HOST_KEY"'           'MISSING_DECLARED: env SOLEUR_HOST_KEY missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+kill_row K33g-first-boot-host-key-templated 'm_repl first-boot "-e SOLEUR_HOST_KEY=" "-e SOLEUR_HOST_KEY=\${web_host_key}"' 'UNPARSEABLE_OPTION: -e SOLEUR_HOST_KEY=${web_host_key} in cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+
 # --- must-PASS rows (non-canonical shapes of the SAME posture) ------------------------------------
 pass_row P1-reordered-equals      'm_secopts_last prod; m_repl prod "--restart unless-stopped" "--restart=unless-stopped"; m_repl prod "--log-driver journald" "--log-driver=journald"'
 pass_row P2-other-memory          'm_repl prod "--memory \"\$PROD_MEMORY_CAP\"" "--memory 3g"'
@@ -768,7 +777,7 @@ if [ "$((PASS + FAIL))" -ne "$ROWS" ]; then
   printf '[FATAL] accounting identity: passes(%s) + fails(%s) != rows(%s) - a verdict was discarded\n' "$PASS" "$FAIL" "$ROWS" >&2
   exit 1
 fi
-MIN_ROWS=359
+MIN_ROWS=366  # #12910 round 2 (Q3): +2, K33f and K33g (K33e re-pointed to the declared empty first-boot key)
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1

@@ -1603,6 +1603,57 @@ reconcile self-heal, which resets only when the local commits' content is alread
 date, "Self-heal"). Pinned by `test/session-sync-kb-only-push-real-git.test.ts` (H7, matrix 14, matrix 20) and
 `test/workspace-sync-self-heal-real-git.test.ts` (the squash-merged row).
 
+## Addendum — 2026-11-18 (#12910): the lease host_id is the verified var.web_hosts key
+
+§2 made the lease's `host_id` the Hetzner instance id (`hetzner-<id>`, read from metadata by `ci-deploy.sh`, with a hashed
+`machine-<id>` fallback). That was the wrong id. It changes on every host replace, and it is not the key `SOLEUR_HOST_ROSTER` is
+keyed by (`web-1`, `web-2`), so the router could not resolve a peer's lease: web-1 refused web-2's sessions as `owner-unresolved`
+while the serve gate passed the roster. (§2's 120 s liveness figure is superseded by migration 133's 240 s,
+`LEASE_LIVENESS_WINDOW_MS`.)
+
+- **The id.** From the first deploy whose `ci-deploy.sh` carries `resolve_host_key` (CTO ruling T9; verified by the
+  `host_key resolved=web-<n>` deploy line on both hosts), `host_id` is the host's `var.web_hosts` key. `resolve_host_key` derives
+  it from the metadata hostname by inverting `server.tf`'s server-name expression and injects it as `SOLEUR_HOST_KEY` (empty on
+  the canary). Until that deploy runs, a host keeps writing `hetzner-<id>`.
+- **Self-verification (CTO ruling T1).** `host-identity.ts` `describeHostIdentity()` accepts the key only when the roster maps
+  it to this container's own `SOLEUR_HOST_PRIVATE_IP`. Otherwise it falls back to `SOLEUR_HOST_ID`. Boot logs
+  `host_identity source=<enum>`, and the prod container (not the canary or the first-boot one) sends Sentry `host_identity` /
+  `resolveHostId.key-fallback` whenever it did not verify, including when a late private NIC left its IP empty. Two live hosts
+  cannot share a private IP, so a wrong key can only degrade to the instance id, never to a peer's key. Migration 116's "same
+  host" carve-out therefore now means "same `var.web_hosts` slot" for hosts that verified. When this host knows its private
+  IP, the router refuses to proxy a session to its own address (`owner-is-self`), which a host that fell back would otherwise
+  do for its own old-key leases. With a null IP the guard is inert and such a lease is proxied to itself until it expires
+  (up to 240 s). In production that case is covered upstream: ci-deploy refuses a deploy whose next container could not
+  verify the running key (`key_unverifiable`, below), and the boot sends the `resolveHostId.key-fallback` Sentry event.
+- **Stickiness (CTO rulings T3, T3a).** A deploy aborts before the canary when the running prod container had verified a key
+  and the new one differs (`key_change`) or is empty (`key_lost`), or when `docker inspect` fails (`inspect_failed`). Only a
+  verified running key pins, so a stray Doppler `SOLEUR_HOST_KEY` or a key the app rejected cannot lock deploys out. The key
+  string alone is not enough (round-2 CTO ruling Q1): after the env-file is final, ci-deploy puts the next prod container's
+  env through the same verification rule and aborts `key_unverifiable` when it would not verify the running key (a late
+  private NIC, or a Doppler roster that drifted). The shell check mirrors the verification RULE over the running env, not the
+  running app's own decision, so an old image under the new script can abort `key_lost` once; a re-run recovers it.
+- **Generation carry across a replace.** A replaced host re-acquires its predecessor's live leases at the same generation. That
+  rests on the two never running at once: Terraform's default destroy-before-create for `hcloud_server.web` (no
+  `create_before_destroy`, pinned by `web-hosts-generic.test.sh` C8 with the name round-trip and the five key regexes), plus
+  Hetzner's per-project unique server names and per-network unique private IPs. A replace does not change the placement id (when the
+  replaced host's first ci-deploy verifies its key; `SOLEUR_HOST_ID` does change); it leaves a gap. The cloud-init first-boot container has no usable id: it runs with an empty `-e SOLEUR_HOST_KEY=` (round-2 CTO ruling
+  Q3, so a Doppler key cannot reach it) and no `SOLEUR_HOST_ID`. In production its first lease throws and its boot line reads
+  `source=unresolved`. That lasts until the host's first ci-deploy writes `web-<n>` again.
+- **ADR-143 D5 precondition.** A volume-preserving reprovision must stop the app before the detach (stricter than D5's
+  write-quiesce), so the old host's leases are released (tombstoned) rather than carried by a host that is still writing.
+- **The gate.** `lb-weight-gate.sh` A.3 checks the roster against the committed `var.web_hosts` default whenever web-2 is being
+  pooled: every roster key is a committed key at its committed private IP, and every rotation member is in the roster
+  (`SOLEUR_WEB_HOSTS`, derived by `lb-weight-gate-with-marker.sh` from `variables.tf`). It does not run on the weight-0 standby
+  branch, and it checks configuration, not which key a running host actually wrote (that is the deploy and boot lines).
+- **Transition cost.** On the first rollout, a worktree whose lease outlived the old container's SIGTERM drain stays live under
+  `hetzner-<id>` for up to 240 s: the router closes its socket with 4014 (`owner-unresolved`) and the acquire is refused, then a
+  generation-bumped takeover follows. A revert deletes the `owner-is-self` guard along with the key, so on a revert the same
+  lease, live under `web-<n>` (a roster key at this host's own IP), is proxied to this host's own address until it expires (up
+  to 240 s). Leases the drain released are unaffected.
+
+Rejected options are recorded in
+[decision-challenges.md](../../../project/specs/archive/20261120-012010-feat-one-shot-12910-host-roster-lease-id/decision-challenges.md).
+
 ## Addendum — 2026-11-19 (#12931): the GA load balancer is gated off on the new Cloudflare account
 
 The 2026-11-08 addendum above records web-2 serving at pool weight 1 behind `cloudflare_load_balancer.app`. That state does not survive the 2026-11-18 move of the `soleur.ai` zone to the Soleur Cloudflare account (ADR-329): the new account has no Load Balancing subscription, so the load balancer, its pool, its monitor and `cloudflare_notification_policy.web_lb_health` are count-gated by `var.cf_load_balancing_enabled` (default `false`), their old-account state entries are forgotten by the migration, and `cf-lb-overlay.yml` refuses while the flag is false. `app.soleur.ai` is served from its plain proxied A record, so every request and every Inngest step call lands on web-1; web-2 serves no public traffic and holds only the tunnel connector (ADR-304). `var.web2_lb_weight` and the serve/drain arms are dormant, not deleted. Re-enabling is an operator money decision, tracked by #12983. The flag is locked to `false` by a `variables.tf` validation, so turning it on is a reviewed PR that deletes that validation; when it happens the pool is re-created in the new account and the §(c) gate chain and the 2026-11-08 operational rules apply again from a fresh create.

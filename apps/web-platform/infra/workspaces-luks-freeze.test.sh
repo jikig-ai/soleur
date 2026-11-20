@@ -359,7 +359,7 @@ done
 
 # T24 — readyz classification, four arms, one reason code each.
 #
-# The arm that matters most is the gate regression: readiness.ts:113 answers a non-loopback request
+# The arm that matters most is the gate regression: the readyz handler's loopback gate (readiness.ts isLoopbackHost + isLoopbackPeer) answers a non-loopback request
 # with `403 {"error":"forbidden"}` — VALID JSON that simply is not ready:true. Classified body-first
 # it lands in the not-ready arm and pages "the container is serving an EMPTY /workspaces": a
 # confidently-wrong sole-copy DATA-LOSS verdict for what is really a routing bug. Status before body.
@@ -380,7 +380,7 @@ if died && outF 'EMIT_DRIFT: readyz_not_ready'; then
 else
   no "T24b ready:false mishandled (rc=$CASE_RC) ${CASE_OUT:0:200}"
 fi
-# ready:false is answered with 503, not 200 (readiness.ts:119). A 503 sits in the generic RETRYABLE
+# ready:false is answered with 503, not 200 (readiness.ts, the readyz handler's ready:false branch). A 503 sits in the generic RETRYABLE
 # set — correct for /health, fatal here: retrying a DETERMINATE not-ready answer would burn the
 # budget and report a timeout for a host that plainly said it is not ready, converting a real
 # data-loss signal into a deadline. Terminal on the first answer, hence exactly one probe.

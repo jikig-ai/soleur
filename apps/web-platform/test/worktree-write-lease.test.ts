@@ -57,6 +57,18 @@ describe("acquireWorktreeLease", () => {
     expect(reportSilentFallbackMock).not.toHaveBeenCalled();
   });
 
+  test("refuses (null, no RPC) a host_id that is the user id or UUID-shaped — the DSAR boundary", async () => {
+    const USER = "22222222-2222-2222-2222-222222222222";
+    expect(await acquireWorktreeLease(WS, USER, USER)).toBeNull();
+    expect(await acquireWorktreeLease(WS, WT, "33333333-3333-3333-3333-333333333333")).toBeNull();
+    expect(rpcMock).not.toHaveBeenCalled();
+    expect(reportSilentFallbackMock).toHaveBeenCalledTimes(2);
+    for (const [err, opts] of reportSilentFallbackMock.mock.calls) {
+      expect((opts as { op: string }).op).toBe("acquire.host-id-guard");
+      expect(String((err as Error).message)).not.toMatch(/[0-9a-f]{8}-/);
+    }
+  });
+
   test("returns null when another host holds it (zero rows = lost)", async () => {
     rpcMock.mockResolvedValueOnce({ data: [], error: null });
     expect(await acquireWorktreeLease(WS, WT, HOST)).toBeNull();

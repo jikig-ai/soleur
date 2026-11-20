@@ -1,5 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/service";
 import { reportSilentFallback } from "./observability";
+import { assertHostIdNotUserId } from "./host-identity";
 
 /**
  * Thin RPC client over the migration-116 worktree-write-lease functions
@@ -9,7 +10,8 @@ import { reportSilentFallback } from "./observability";
  * reportSilentFallback on error, never throws).
  *
  * `host_id` is passed in by the caller — a host-STABLE infra identity (the
- * Hetzner server id injected at cloud-init), NEVER the per-container hostname
+ * verified `var.web_hosts` key from `resolveHostId()`, #12910; the Hetzner
+ * instance id only as a fallback), NEVER the per-container hostname
  * and NEVER an auth.uid(). Resolving that stable source + wiring acquire/touch/
  * release into the write path (SIGTERM-release, ≤50s heartbeat, fail-loud on a
  * touch-0, and the `git push --push-option=lease-gen=<N>` fence wrapper) is
@@ -181,6 +183,20 @@ export async function acquireWorktreeLease(
   worktreeId: string,
   hostId: string,
 ): Promise<WorktreeLease | null> {
+  // The DSAR boundary (host-identity.ts assertHostIdNotUserId): host_id is pure
+  // infra identity, never a user id (worktreeId IS the user id, resolveWorktreeId).
+  // Fail closed as "lost", never throw; the Sentry message is fixed text, because
+  // the guard's own error quotes the offending value, which would be a user id.
+  try {
+    assertHostIdNotUserId(hostId, worktreeId);
+  } catch {
+    reportSilentFallback(new Error("worktree lease: host_id failed the not-a-user-id guard"), {
+      feature: "worktree_lease",
+      op: "acquire.host-id-guard",
+      extra: { workspaceId },
+    });
+    return null;
+  }
   for (let attempt = 0; attempt < 3; attempt++) {
     const { data, error } = await supabase.rpc("acquire_worktree_lease", {
       p_workspace_id: workspaceId,
@@ -265,7 +281,8 @@ export async function touchWorktreeLease(
 }
 
 /**
- * Graceful release: delete the lease row only if `hostId` AND `leaseGeneration`
+ * Graceful release: tombstone the lease row (release_worktree_lease keeps the row and
+ * its generation, migration 116) only if `hostId` AND `leaseGeneration`
  * still match (a reclaimer's row is never stomped — a stale-gen release is a
  * server-side no-op). Best-effort teardown: errors are mirrored to Sentry but
  * not re-thrown. Never throws.

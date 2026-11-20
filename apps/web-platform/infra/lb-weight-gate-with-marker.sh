@@ -89,7 +89,7 @@ GATE_ENV_ALLOW=(
   SOLEUR_PROXY_PEER_ALLOWLIST SOLEUR_HOST_ROSTER
   GIT_DATA_STORE_ENABLED GIT_DATA_LUKS_SOAK_DAYS GIT_DATA_LUKS_CUTOVER_AT
   WORKSPACES_LUKS_SOAK_DAYS WORKSPACES_LUKS_CUTOVER_AT
-  WORKSPACES_LUKS_MARKER_HOST
+  WORKSPACES_LUKS_MARKER_HOST SOLEUR_WEB_HOSTS
 )
 
 # Constants — parity-pinned to scripts/lib/web2-luks-rows.sh W2L_MARKER_NAME/PROJECT/CONFIG by the test.
@@ -108,6 +108,36 @@ GATE="${SELF_DIR}/lb-weight-gate.sh"
 
 unset WORKSPACES_LUKS_CUTOVER_AT # seam:unset-caller
 unset WORKSPACES_LUKS_MARKER_HOST # seam:unset-caller-host
+unset SOLEUR_WEB_HOSTS # seam:unset-caller-web-hosts
+
+# SOLEUR_WEB_HOSTS (#12910) — the committed var.web_hosts default as {key: private_ip}, read from THIS
+# directory's variables.tf (the serve job checks out main: the environment's branch policy pins it), never
+# from the caller. The gate checks every roster key against it, so the roster can only carry keys the
+# runtime writes (host-identity.ts resolveHostId() -> the verified var.web_hosts key). One host per line,
+# `"<key>" = { ... private_ip = "<ip>" ... }`. Inside the default block every line must be that host shape,
+# blank, or a `#` comment: anything else (an unquoted key, a multi-line entry), a duplicate key or zero
+# hosts leaves the value UNSET, which the gate refuses as A_web_hosts_absent (never an empty pass, and
+# never a silently skipped host that the gate would then blame on the Doppler roster). The key regex is
+# one of five copies of the var.web_hosts key shape; web-hosts-generic.test.sh C8 pins all five equal.
+derive_web_hosts() {
+  local f="${SELF_DIR}/variables.tf" line key ip out='{}'
+  [[ -r "$f" ]] || return 1
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[[:space:]]*\"([a-z][a-z0-9-]{0,30})\"[[:space:]]*=[[:space:]]*\{(.*)\}[[:space:]]*$ ]]; then
+      key="${BASH_REMATCH[1]}"
+      [[ "${BASH_REMATCH[2]}" =~ (^|[[:space:],])private_ip[[:space:]]*=[[:space:]]*\"([0-9]{1,3}(\.[0-9]{1,3}){3})\" ]] || return 1
+      ip="${BASH_REMATCH[2]}"
+      jq -e --arg k "$key" 'has($k) | not' >/dev/null <<<"$out" || return 1 # seam:dup-key
+      out="$(jq -c --arg k "$key" --arg v "$ip" '. + {($k): $v}' <<<"$out")" || return 1
+    elif [[ ! "$line" =~ ^[[:space:]]*(#.*)?$ ]]; then
+      return 1
+    fi
+  done < <(awk '/^variable "web_hosts" \{/ { v = 1 } v && /^  default = \{/ { d = 1; next } d && /^  \}/ { exit } d' "$f")
+  [[ "$out" != '{}' ]] || return 1
+  printf '%s' "$out"
+}
+if web_hosts="$(derive_web_hosts)"; then export SOLEUR_WEB_HOSTS="$web_hosts"; fi # seam:derive-web-hosts
+unset web_hosts
 
 src_fail() {
   # $1 = class. Never prints Doppler's own output (it can carry request detail).
