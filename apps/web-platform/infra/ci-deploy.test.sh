@@ -13487,6 +13487,7 @@ hk_sticky() { # running Config.Env as a JSON array ('' = no container, '!err' = 
   ( set -euo pipefail; source "$HK_SRC"
     HK_ENV="$1"; HOST_KEY="$2"
     docker() {
+      case " $* " in *" --password-stdin "*) [ -t 0 ] || timeout 2 cat >/dev/null ;; esac
       if [[ "$#" -ne 6 || "$1 $2 $3 $4" != "inspect --type container --format" \
             || "$5" != '{{json .Config.Env}}' || "$6" != "soleur-web-platform" ]]; then
         echo "docker $*" >> "$HK_REFUSED"; return 64
