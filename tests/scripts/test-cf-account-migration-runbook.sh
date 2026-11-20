@@ -228,6 +228,13 @@ row_r10() {
            'only a `redirects-dns` `rehearsal=false` refusal carries it' 'cf-state-migrate verdict=abort reason=<code>'; do
     grep -qF -- "$k" <<<"$c" || { echo "    committed bullet lacks: $k" >&2; bad=1; }
   done
+  # fr4 F1: a gh error is never silence. The loop prints an `unreadable` line for a run it cannot
+  # read (no 2>/dev/null on gh run view), the bucket listing is a command, and "not committed"
+  # needs all three sources answered.
+  ! grep -qF 'gh run view "$r" --log 2>/dev/null' <<<"$c" && grep -qF 'echo "run=$r unreadable"' <<<"$c" \
+    && grep -qF -- '--prefix "${CFAM_BACKUP_PREFIX}pre-cf-account-migration-"' <<<"$c" \
+    && grep -qF 'ALL THREE' <<<"$c" && grep -qF 'Never read silence as "not committed"' <<<"$c" \
+    || { echo "    committed record can read a gh error as not committed" >&2; bad=1; }
   c="$(halt_bullet "$1" 'The apply run was cancelled')"
   for k in 'gh run view <run-id> --json conclusion --jq .conclusion' \
            "gh run view <run-id> --log | grep -oE 'cf-account-migrate inflight=none|cf-state-migrate backup=uploaded|mode=apply (applying|applied)=true|verdict=refuse reason=[a-z-]+' | sort -u" \

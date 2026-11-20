@@ -95,8 +95,9 @@ re-dispatch:
 - `zone-id-not-new` / `account-id-not-new`: Doppler still holds an old id; do the Phase 2 flip first.
 - `token-not-new-zone`: a phase token did not answer `200` on the new zone or account (its `preflight=token` line
   names it); swap or re-mint it.
-- `token-unreachable`: a token probe failed in transport (`http=000 e=<curl rc>`), so nothing is known about the
-  token; re-dispatch the rehearsal, and never re-mint on this reason alone.
+- `token-unreachable`: a token probe got no verdict: it failed in transport (`http=000 e=<curl rc>`) or the API
+  answered `429` or a `5xx` (`http=<code>`), so nothing is known about the token; re-dispatch the rehearsal, and never
+  re-mint on this reason alone.
 - `bad-expected-in-state-updates`: the `expected_in_state_updates` input holds an entry that is not a Terraform
   address; fix the input and re-dispatch.
 - `in-state-updates-unexpected`: the gate admitted a different set of in-state updates than the input names (the
@@ -581,14 +582,22 @@ validation (Load Balancing #12983, DNSSEC #12982).
   ```bash
   gh issue view 12931 --json comments --jq '[.comments[].body | select(test("cf-state-migrate backup=uploaded uri="))] | length'
   for r in $(gh run list --workflow cf-account-migrate.yml --limit 100 --json databaseId --jq '.[].databaseId'); do
-    gh run view "$r" --log 2>/dev/null | grep -m1 -oE 'cf-state-migrate backup=uploaded uri=[^ ]+' | sed "s/^/run=$r /"
+    if log="$(gh run view "$r" --log)"; then
+      grep -m1 -oE 'cf-state-migrate backup=uploaded uri=[^ ]+' <<<"$log" | sed "s/^/run=$r /"
+    else echo "run=$r unreadable"; fi
   done
+  doppler run -p soleur -c prd_terraform -- bash -c 'source tests/scripts/lib/cf-account-migrate-gate.sh &&
+    cfam_r2_aws s3api list-objects-v2 --bucket "$CFAM_STATE_BUCKET" \
+      --prefix "${CFAM_BACKUP_PREFIX}pre-cf-account-migration-" --query "length(Contents || \`[]\`)"'
   ```
 
   Committed: the first command prints `1` or more (the backup-uri comment of Phase 2 step 2), or the loop prints a
-  `run=` line, or any `pre-cf-account-migration-*` object exists under `web-platform/backups/` in the state bucket.
-  Not committed: the first command prints `0` and the loop prints no line. Anything else (a `gh` error, no number) is
-  not an answer: stop for an owner decision.
+  `run=<id> cf-state-migrate backup=uploaded` line, or the listing prints `1` or more (a
+  `pre-cf-account-migration-*` object exists). Not committed: ALL THREE
+  answered and none says committed: the first command prints `0`, the loop prints no line at all (no `unreadable`),
+  and the listing prints `0`. Anything else (a `run=<id> unreadable` line, a `gh` or `doppler` error, a listing that
+  prints no number) is not an answer: stop for an owner decision. Never read silence as "not committed": an
+  unreadable run log is exactly the run that may have committed it.
   The job's refusal field says the same for one run only, and only a `redirects-dns` `rehearsal=false` refusal carries
   it (a rehearsal, `zone-rest` or `tunnel` refusal carries none: use the record above). `forget=committed`: this run's
   forget finished ok or uploaded its backup, so the forget is committed. `forget=unknown` (on `state-migrate-failed`
@@ -615,9 +624,15 @@ validation (Load Balancing #12983, DNSSEC #12982).
   with or without `applied=true`): rules may have landed in this run. `Agent:` run that phase's local Verify block
   first; on any failure follow the `verify-failed` steps below (a `redirects-dns` `apply-failed` refusal also carries
   its own best-effort `verify=ok` or `failing=` field). Then fix the cause forward and re-dispatch.
+- **A rehearsal that refused `remote-serial-changed` or `backup-written`**: the one case where a rehearsal may
+  have written. `remote-serial-changed`: the remote state's serial moved while the rehearsal ran, so something wrote
+  the web-platform state (another writer, which the concurrency group should rule out, or the rehearsal itself); `backup-written`: a new
+  `pre-cf-account-migration-*` object appeared, so the rehearsal's forget escaped its scratch copy. Either way: no
+  re-dispatch, no revert. `Agent:` post the run id and its refusal line on #12931, run the "Is the forget committed?"
+  record above, and stop for an owner decision.
 - **A stop before `applying=true`** (`gate-refused`, `entrypoint-gate-refused`, `state-migrate-failed`, any other
-  `verdict=refuse` line, or a cancelled run with no `mode=apply applying=true`): this run applied nothing, so there is
-  nothing to verify and no edited value to carry. Fix the refusal's cause (a reviewed PR when it is in code; nothing
+  `verdict=refuse` line except the two rehearsal reasons above, or a cancelled run with no `mode=apply applying=true`):
+  this run applied nothing, so there is nothing to verify and no edited value to carry. Fix the refusal's cause (a reviewed PR when it is in code; nothing
   for a timeout), re-rehearse, re-dispatch. Whether the revert above is still allowed is the committed test, not this
   refusal.
 - **The apply run was cancelled** (timeout or by hand; the ops email says "did not complete" and the log holds no
@@ -728,8 +743,9 @@ validation (Load Balancing #12983, DNSSEC #12982).
     trailing newline); no network call was made. Re-stage `<KEY>_NEXT` from the mint file with Phase 0 step 2's strip
     form.
   - `SOLEUR_CFAM_TOKEN_NOT_ACTIVE`: the staged token's `/user/tokens/verify` did not say active: re-mint (Phase 0).
-  - `SOLEUR_CFAM_TOKEN_UNREACHABLE`: a token read failed in transport (a `curl` error or timeout), which says nothing
-    about the token: re-run the stage. Never re-mint on this marker.
+  - `SOLEUR_CFAM_TOKEN_UNREACHABLE`: a token read got no verdict: `e=<curl rc>` (a `curl` error or timeout) or
+    `http=<code>` (a `429`, a `5xx`, a body that is not JSON), which says nothing about the token: re-run the stage.
+    Never re-mint on this marker.
   - `SOLEUR_CFAM_RUN_IN_FLIGHT`: a writing stage refused because a `cf-account-migrate.yml` run is queued or in
     progress (or `gh` could not list the runs). Wait for that run to finish, read its verdict line, then re-run the
     stage.
@@ -755,8 +771,9 @@ validation (Load Balancing #12983, DNSSEC #12982).
     lines): act per check. `<cfg>/CF_ZONE_ID=new` or `CF_ACCOUNT_ID=new`: run `flip-ids` (for `prd_terraform`) or
     `branch-copies-zone-id` (a branch config). `CF_R2_ACCOUNT_ID=legacy`: the `CF_R2_ACCOUNT_ID` section above.
     `<KEY>_NEXT=absent` or `<KEY>=swapped`: that key's swap stage has not completed: run it. `<KEY>=swapped-prev-revoked`:
-    read `<KEY>` with its NEW read from the table above; `true` means the verify's own read failed (re-run verify);
-    `false` means the live key is not a new-account token and its revert copy is gone: stop for an owner decision.
+    read `<KEY>` with BOTH its NEW and its OLD read from the table above. NEW `true` and OLD `false`: the verify's own
+    read failed (re-run verify). NEW `false`, or OLD `true` (an old "All zones" token), or a read with no verdict: the
+    live key is not provably a new-account token and its revert copy is gone: stop for an owner decision.
     `<cfg>/<KEY>=matches-prd_terraform`: run `branch-copies-tokens`; if it refuses with `need=verify`, stop for an
     owner decision. `<cfg>=readable` or `inventory=readable`: as `SOLEUR_CFAM_UNREADABLE`.
 - The backup object is disaster-recovery evidence only. It is never pushed back as state; Phase 5 deletes every
