@@ -1,5 +1,5 @@
 # default-weight-ms=1802
-# generated-at=2026-11-20T09:35:38Z
+# generated-at=2026-11-20T19:19:54Z
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # generator=regenerate-shard-manifest.py v3
@@ -249,7 +249,7 @@ plugins/soleur/test/go-hold-routing.test.sh	5
 plugins/soleur/test/go-routing-table-parity.test.sh	1
 plugins/soleur/test/go-session-gates.test.sh	5
 plugins/soleur/test/harvest-debt.test.sh	2
-plugins/soleur/test/health-colo-falsification.test.sh	7
+plugins/soleur/test/health-colo-falsification.test.sh	3
 plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh	6
 plugins/soleur/test/hold-gate-eval.test.sh	6
 plugins/soleur/test/hook-git-env-coverage.test.sh	6
@@ -460,7 +460,7 @@ scripts/git-data-reboot-evidence-landed-8210	6
 scripts/git-data-rehearsal-evidence-8211	1
 scripts/git-data-replication-signal-11704	3
 scripts/guard-vacuity-floor	7
-scripts/health-colo-capture-12846	3
+scripts/health-colo-capture-12846	8
 scripts/host-kernel-cadence-12008	2
 scripts/host-tcp-exposure	2
 scripts/hosted-destroy-ask-window-9776	8
@@ -691,6 +691,7 @@ tests/scripts/cf-lb-overlay-gate	3
 tests/scripts/cleanup-merged-space	8
 tests/scripts/deploy-access-token-forget	5
 tests/scripts/destroy-guard-counter-github	4
+tests/scripts/destroy-guard-counter-rundevoo	7
 tests/scripts/destroy-guard-counter-sentry	7
 tests/scripts/destroy-guard-counter-web-platform	5
 tests/scripts/destroy-guard-regex-parity	2
@@ -737,6 +738,9 @@ tests/scripts/registry-restore-from-ghcr	3
 tests/scripts/relay-inngest-write-token-12158	5
 tests/scripts/rule-id-regex-parity	3
 tests/scripts/rule-metrics-aggregate	8
+tests/scripts/rundevoo-destroy-gate-verdict	3
+tests/scripts/rundevoo-dns-set-equality	8
+tests/scripts/rundevoo-squash-ack-detect	7
 tests/scripts/scratch-residue	8
 tests/scripts/scratch-session	7
 tests/scripts/sentry-ac17-derived-counts	1

@@ -36,6 +36,10 @@
     "integration_id": 15368
   },
   {
+    "context": "rundevoo-destroy-required",
+    "integration_id": 15368
+  },
+  {
     "context": "vendor-pin-required",
     "integration_id": 15368
   },

@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
 # default-weight-ms=1802
-# generated-at=2026-11-20T09:35:38Z
+# generated-at=2026-11-20T19:19:54Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7d0cd2b5340986989503a52b56d26678f0e677e02dc0e30d7950aea5d95d712f
 .claude/hooks/agent-token-tee.test.sh	7099	measured
@@ -689,6 +689,7 @@ tests/scripts/cf-lb-overlay-gate	5411	measured
 tests/scripts/cleanup-merged-space	9477	measured
 tests/scripts/deploy-access-token-forget	1460	measured
 tests/scripts/destroy-guard-counter-github	116	measured
+tests/scripts/destroy-guard-counter-rundevoo	1802	floor
 tests/scripts/destroy-guard-counter-sentry	331	measured
 tests/scripts/destroy-guard-counter-web-platform	12402	measured
 tests/scripts/destroy-guard-regex-parity	27	measured
@@ -735,6 +736,9 @@ tests/scripts/registry-restore-from-ghcr	20158	measured
 tests/scripts/relay-inngest-write-token-12158	1802	floor
 tests/scripts/rule-id-regex-parity	100	measured
 tests/scripts/rule-metrics-aggregate	2215	measured
+tests/scripts/rundevoo-destroy-gate-verdict	1802	floor
+tests/scripts/rundevoo-dns-set-equality	1802	floor
+tests/scripts/rundevoo-squash-ack-detect	1802	floor
 tests/scripts/scratch-residue	64154	measured
 tests/scripts/scratch-session	17719	measured
 tests/scripts/sentry-ac17-derived-counts	322	measured
