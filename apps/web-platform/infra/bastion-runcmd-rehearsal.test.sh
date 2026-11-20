@@ -167,6 +167,9 @@ if is_ci; then
       printf 'bastion-runcmd-rehearsal: FAIL (refused: %s under CI)\n' "$v" >&2; exit 1; fi
   done
 fi
+# The refusal self-test below re-runs this file as a child with this set: a child that got past the
+# refusals stops here, so a broken refusal can never recurse into another full run.
+if [ -n "${BRH_REFUSAL_PROBE:-}" ]; then printf 'BRH_REFUSAL_PROBE: not refused\n' >&2; exit 3; fi
 SELECTED=("${ROWS[@]}")
 if [ -n "${BRH_STATIC_ONLY:-}" ]; then SELECTED=(); PARTIAL="static only"
 elif [ -n "${BRH_ROWS:-}" ]; then
@@ -774,8 +777,9 @@ flush_row() {
 # is the unwind). Reported by printf + exit, never by the helpers under test.
 _st="$( (cases=0; passes=0; fails=0; SKIPPED_ASSERTIONS=0; FAILURES=(); RB=(); SKIPPED_ROWS=()
   ROW=_st; ROW_CASES[_st]=2; RD="$WORK/st-none"; SRC=198.18.0.10
-  chk st-a 0 >/dev/null; chk st-b 1 2>/dev/null; rk st-p 0; rk st-f 1 d; flush_row >/dev/null 2>&1
-  printf '%s %s %s %s %s|%s|%s' "$cases" "$passes" "$fails" "$SKIPPED_ASSERTIONS" "${#RB[@]}" "${FAILURES[0]:-}" "${FAILURES[1]%% \[*}") )"
+  chk st-a 0 >/dev/null 2>&1; chk st-b 1 >/dev/null 2>&1; rk st-p 0; rk st-f 1 d; flush_row >/dev/null 2>&1
+  _f1="${FAILURES[1]:-}"
+  printf '%s %s %s %s %s|%s|%s' "$cases" "$passes" "$fails" "$SKIPPED_ASSERTIONS" "${#RB[@]}" "${FAILURES[0]:-}" "${_f1%% \[*}") )"
 if [ "$_st" != "4 2 2 0 0|st-b|_st: st-f" ]; then printf 'FAIL INSTRUMENT: chk/rk/flush_row self-test read "%s", expected "4 2 2 0 0|st-b|_st: st-f"\n' "$_st" >&2; exit 1; fi
 
 # ── SKIP on a gate event (CTO Q28) and the CI definition (B1), offline ─────────────────────────
@@ -790,7 +794,7 @@ for _c in "none|" "ci|CI=true" "gha|GITHUB_ACTIONS=true" "pr|GITHUB_EVENT_NAME=p
 done
 chk "verdict: SKIP fails on a gate event (dispatch, schedule, empty, or unset under CI) and not on pull_request/push" \
   "$([ "$_sk" = " none=no ci=yes gha=yes pr=no push=no dispatch=yes schedule=yes empty=yes" ]; echo $?)" "table:$_sk"
-_o="$(env -i PATH="$PATH" HOME="${HOME:-/tmp}" CI= GITHUB_ACTIONS=true BRH_STATIC_ONLY=1 bash "$SELF" 2>&1)"; _r=$?
+_o="$(env -i PATH="$PATH" HOME="${HOME:-/tmp}" CI= GITHUB_ACTIONS=true BRH_STATIC_ONLY=1 BRH_REFUSAL_PROBE=1 timeout 60 bash "$SELF" 2>&1)"; _r=$?
 chk "CI refusals: GITHUB_ACTIONS=true with CI='' still refuses BRH_STATIC_ONLY (BRH_SUBSET_REFUSED)" \
   "$([ "$_r" -eq 1 ] && printf '%s' "$_o" | grep -q '^BRH_SUBSET_REFUSED: BRH_STATIC_ONLY'; echo $?)" "rc=$_r $(head -c 300 <<<"$_o")"
 _blk="$(sed -n '/^# ── Subsets and CI refusals/,/^selected() {/p' "$SELF" | sed '$d')"
