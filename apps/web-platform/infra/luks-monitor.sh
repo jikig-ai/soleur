@@ -348,7 +348,7 @@ if [ "${LUKS_MONITOR_ASSERT_READYZ:-0}" = "1" ]; then
     emit_readiness_and_die readiness_helper_unavailable
   fi
   # Capacity FIRST, so a ready=false verdict can be discriminated capacity-fault vs data-loss. A
-  # full or read-only mount makes isWorkspacesWritable fail closed (readiness.ts:54-60 catches
+  # full or read-only mount makes isWorkspacesWritable fail closed (readiness.ts isWorkspacesWritable catches
   # ENOSPC/EROFS/EACCES/EIO alike), and escalating a full disk to "data-recovery incident on
   # sole-copy data" is a destructive operator response to a non-destructive problem.
   # Shared with app_canary via the helper — both emitters of a not-ready verdict must populate it.
@@ -360,7 +360,7 @@ if [ "${LUKS_MONITOR_ASSERT_READYZ:-0}" = "1" ]; then
   fi
 
   # --- INVENTORY. readyz proves a FLOOR, not an inventory ---------------------
-  # readiness.ts:81 is `countWorkspaceDirsAt(root) > 0`, so a cutover that preserved 1 of 8
+  # readiness.ts isWorkspacesPopulated is `countWorkspaceDirsAt(root) > 0`, so a cutover that preserved 1 of 8
   # sole-copy workspaces returns ready=true. The count below is what actually carries the claim
   # "the inventory survived". It runs HOST-SIDE (not in the workflow run block) for four reasons:
   # it BINDS the value (a runner-side echo plus a prefix grep passes on workspace_count=1 exactly

@@ -192,6 +192,8 @@ build_sb() {
   SB="$(mktemp -d "$TMP/sb.XXXXXX")"; FX="$SB/fx"
   mkdir -p "$SB/bin" "$FX"
   sed "s|^PINNED_PATH=\"|PINNED_PATH=\"$SB/bin:|" "$wrapper" > "$SB/lb-weight-gate-with-marker.sh"
+  # #12910: the wrapper reads var.web_hosts from its OWN directory, so the sandbox carries the committed file.
+  cp "$SCRIPT_DIR/variables.tf" "$SB/variables.tf"
   if [ "$kind" = real ]; then cp "$GATE" "$SB/lb-weight-gate.sh"
   else
     printf '#!/usr/bin/env bash\nenv > "%s/gate.env"\nexit "$(cat "%s/gate_rc" 2>/dev/null || echo 42)"\n' "$FX" "$FX" > "$SB/lb-weight-gate.sh"
@@ -252,6 +254,51 @@ scn_argv() { # the exact argv, exactly twice, from the exact config; never run/d
 scn_unset_caller() { # a caller-supplied marker is discarded: Doppler says absent => the gate fails closed
   build_sb "$1" real; set_marker ABSENT; run_wb "WORKSPACES_LUKS_CUTOVER_AT=$OLD4D"
   [ "$RC" -eq 1 ] && gate_fail_is B_workspaces_luks_marker_absent
+}
+# #12910: SOLEUR_WEB_HOSTS is derived from the committed variables.tf, never taken from the caller.
+# The independent reference parse (python, not the wrapper's bash regex) reads the same default block.
+committed_web_hosts() {
+  python3 -I - "$SCRIPT_DIR/variables.tf" <<'PYEOF'
+import json, re, sys
+src = open(sys.argv[1]).read()
+blk = src[src.index('variable "web_hosts" {'):]
+blk = blk[blk.index("\n  default = {") + 1:]
+blk = blk[:blk.index("\n  }\n")]
+out = {}
+for line in blk.splitlines()[1:]:
+    m = re.match(r'\s*"(web-\d+)"\s*=\s*\{.*\bprivate_ip\s*=\s*"([^"]+)"', line)
+    if m:
+        out[m.group(1)] = m.group(2)
+print(json.dumps(out, separators=(",", ":")))
+PYEOF
+}
+COMMITTED_WEB_HOSTS="$(committed_web_hosts)"
+scn_web_hosts_derived() { # the gate receives exactly the committed {key: private_ip} map
+  build_sb "$1" spy; set_marker "$OLD4D"; run_wb
+  [ "$RC" -eq 42 ] && [ -n "$COMMITTED_WEB_HOSTS" ] && [ "$COMMITTED_WEB_HOSTS" != "{}" ] \
+    && grep -qxF "SOLEUR_WEB_HOSTS=$COMMITTED_WEB_HOSTS" "$FX/gate.env"
+}
+scn_web_hosts_caller_overridden() { # a caller value never reaches the gate when the file parses
+  build_sb "$1" spy; set_marker "$OLD4D"; run_wb 'SOLEUR_WEB_HOSTS={"web-9":"10.0.1.99"}'
+  [ "$RC" -eq 42 ] && grep -qxF "SOLEUR_WEB_HOSTS=$COMMITTED_WEB_HOSTS" "$FX/gate.env" && ! grep -q 'web-9' "$FX/gate.env"
+}
+web_hosts_refused() { # <sed expr over the sandbox variables.tf | RM> — the gate refuses, even with a valid caller value
+  build_sb "$2" real; set_marker "$OLD4D"
+  if [ "$1" = RM ]; then rm -f "$SB/variables.tf"; else sed -i "$1" "$SB/variables.tf"; fi
+  run_wb "SOLEUR_WEB_HOSTS=$COMMITTED_WEB_HOSTS"
+  [ "$RC" -eq 1 ] && gate_fail_is A_web_hosts_absent
+}
+scn_web_hosts_unparseable() { web_hosts_refused 's/private_ip = "10.0.1.11"/private_ip = var.web2_ip/' "$1"; }
+scn_web_hosts_duplicate()   { web_hosts_refused '0,/^    "web-[0-9]*" = {/{/^    "web-[0-9]*" = {/p}' "$1"; }  # repeat the first host line
+scn_web_hosts_no_file()     { web_hosts_refused RM "$1"; }
+scn_web_hosts_unquoted()    { web_hosts_refused '/^    "web-2" = {/a\    web3 = { location = "hel1", private_ip = "10.0.1.12" }' "$1"; }  # an unquoted key is never skipped
+scn_web_hosts_tracks_file() { # the derived map follows an EDITED variables.tf (not a hard-coded copy of today's)
+  build_sb "$1" spy; set_marker "$OLD4D"
+  sed -i 's/private_ip = "10.0.1.11"/private_ip = "10.0.1.22"/' "$SB/variables.tf"
+  sed -i '/^    "web-2" = {/a\    "web-3" = { location = "hel1", private_ip = "10.0.1.23" }' "$SB/variables.tf"
+  run_wb
+  local want; want="$(jq -c '(.[keys[] | select(. == "web-2")] = "10.0.1.22") + {"web-3": "10.0.1.23"}' <<<"$COMMITTED_WEB_HOSTS")"
+  [ "$RC" -eq 42 ] && [ "$want" != "$COMMITTED_WEB_HOSTS" ] && grep -qxF "SOLEUR_WEB_HOSTS=$want" "$FX/gate.env"
 }
 scn_caller_not_preferred() { # Doppler's fresh value governs even when the caller offers an old, valid one
   build_sb "$1" real; set_marker "$FRESH1D"; run_wb "WORKSPACES_LUKS_CUTOVER_AT=$OLD4D"
@@ -470,14 +517,14 @@ wrapper_allow_vars() { # the NAMEs inside the wrapper's GATE_ENV_ALLOW=( ... ) a
 BASH_ADDED='^(PWD|SHLVL|_|OLDPWD)$'
 scn_allow_parity() { # the wrapper's allowlist equals the gate's own read set (a drift either way is RED)
   local d w; d="$(gate_read_vars)"; w="$(wrapper_allow_vars "$1")"
-  [ -n "$d" ] && [ "$(wc -l <<<"$d")" -eq 11 ] && [ "$d" = "$w" ]  # +1 SOLEUR_GATED_HOST, +1 WORKSPACES_LUKS_MARKER_HOST (#9421)
+  [ -n "$d" ] && [ "$(wc -l <<<"$d")" -eq 12 ] && [ "$d" = "$w" ]  # +1 SOLEUR_GATED_HOST, +1 WORKSPACES_LUKS_MARKER_HOST (#9421), +1 SOLEUR_WEB_HOSTS (#12910)
 }
 scn_derive_sees_every_form() { # PLANTED reads in every expansion form are derived as inputs; the gate's own variables are not
   local real="$GATE" planted="$TMP/gate.planted.sh" got
   { cat "$real"; printf '%s\n' 'x_plain=$PLANT_PLAIN' 'x_brace="${PLANT_BRACE}"' 'x_req="${PLANT_REQ:?missing}"' 'x_dflt="${PLANT_DFLT:-d}"' 'PLANT_OWN=1' 'x_own="$PLANT_OWN"' '# $PLANT_COMMENT'; } > "$planted"
   GATE="$planted"; got="$(gate_read_vars)"; GATE="$real"
   grep -qxF PLANT_PLAIN <<<"$got" && grep -qxF PLANT_BRACE <<<"$got" && grep -qxF PLANT_REQ <<<"$got" && grep -qxF PLANT_DFLT <<<"$got" \
-    && ! grep -qxF PLANT_OWN <<<"$got" && ! grep -qxF PLANT_COMMENT <<<"$got" && [ "$(wc -l <<<"$got")" -eq 15 ]
+    && ! grep -qxF PLANT_OWN <<<"$got" && ! grep -qxF PLANT_COMMENT <<<"$got" && [ "$(wc -l <<<"$got")" -eq 16 ]  # 12 gate inputs + 4 planted
 }
 scn_survivors() { # nothing but PATH + allowlisted gate inputs reaches the gate, INCLUDING non-identifier names and functions
   # DOPPLER_BIN (and RUNNER_TEMP) are SET and VALID here, with the only working doppler under RUNNER_TEMP: the chain
@@ -500,7 +547,7 @@ scn_allow_passthrough() { # every allowlisted input the caller SET reaches the g
   build_sb "$1" spy; set_marker "$OLD4D"
   local v i=0 -a args 2>/dev/null; local -a ex=()
   for v in $(gate_read_vars); do
-    case "$v" in "$MARKER"|WORKSPACES_LUKS_MARKER_HOST) continue ;; esac  # both are seam-owned, never caller-passed
+    case "$v" in "$MARKER"|WORKSPACES_LUKS_MARKER_HOST|SOLEUR_WEB_HOSTS) continue ;; esac  # all three are seam-owned, never caller-passed
     i=$((i + 1)); ex+=("$v=sentinel-$i")
   done
   run_wb "${ex[@]}" GIT_DATA_LUKS_SOAK_DAYS=
@@ -565,6 +612,15 @@ scn_confdir_cleanup() { # the private dir is also removed on a failure exit (nam
 assert "H2: a valid marker 4 days old yields the gate's authorized-shape exit 0 (requires_runtime_bind_probe=true)" scn_happy "$WRAPPER"
 assert "the exact argv, exactly two calls, the exact config prd_workspaces_luks_marker, never doppler run / secrets download" scn_argv "$WRAPPER"
 assert "a caller-supplied marker is discarded (Doppler says absent => B_workspaces_luks_marker_absent)" scn_unset_caller "$WRAPPER"
+assert "#12910: the gate receives SOLEUR_WEB_HOSTS = the committed var.web_hosts {key: private_ip}" scn_web_hosts_derived "$WRAPPER"
+assert "#12910: a caller-set SOLEUR_WEB_HOSTS is overridden by the derived value" scn_web_hosts_caller_overridden "$WRAPPER"
+assert "#12910: an unparseable host line leaves it unset (A_web_hosts_absent), a caller value notwithstanding" scn_web_hosts_unparseable "$WRAPPER"
+assert "#12910: a duplicate host key leaves it unset (A_web_hosts_absent)" scn_web_hosts_duplicate "$WRAPPER"
+assert "#12910: a missing variables.tf leaves it unset (A_web_hosts_absent)" scn_web_hosts_no_file "$WRAPPER"
+assert "#12910: an unquoted host key in the default block leaves it unset (A_web_hosts_absent), never skipped" scn_web_hosts_unquoted "$WRAPPER"
+assert "#12910: the derived map follows an edited variables.tf (a moved IP and an added host)" scn_web_hosts_tracks_file "$WRAPPER"
+assert "#12910: the reference parse finds the same key set as web-hosts-generic.test.sh's counter (>= 2 keys)" \
+  test "$(printf '%s' "$COMMITTED_WEB_HOSTS" | jq -r 'keys | join(",")')" = "$(awk '/^variable "web_hosts" \{/{v=1} v&&/^  default = \{/{d=1;next} d&&/^  \}/{exit} d' "$SCRIPT_DIR/variables.tf" | grep -oE '^[[:space:]]*"web-[0-9]+"' | tr -d ' "' | sort | paste -sd, -)"
 assert "Doppler's value governs even when the caller offers a different valid one (soak not elapsed)" scn_caller_not_preferred "$WRAPPER"
 assert "a transport error exits 3, the gate never runs, and Doppler's own stderr is not echoed" scn_names_fail "$WRAPPER"
 assert "a prefix-colliding name does not satisfy the membership test and no get is issued" scn_prefix "$WRAPPER"
@@ -752,6 +808,10 @@ mutate() {
   if "$scn" "$mf"; then no "$label — the mutant stayed GREEN: the battery cannot see this defect"; else ok "$label -> RED"; fi
 }
 mutate "row 1: the caller-supplied marker is no longer unset" '/# seam:unset-caller$/d' scn_unset_caller
+mutate "row W1 (#12910): the caller's SOLEUR_WEB_HOSTS is no longer unset" '/# seam:unset-caller-web-hosts$/d' scn_web_hosts_unparseable
+mutate "row W2 (#12910): SOLEUR_WEB_HOSTS is no longer derived" '/# seam:derive-web-hosts$/d' scn_web_hosts_derived
+mutate "row W3 (#12910): SOLEUR_WEB_HOSTS is dropped from GATE_ENV_ALLOW (parity with the gate)" 's/^  WORKSPACES_LUKS_MARKER_HOST SOLEUR_WEB_HOSTS$/  WORKSPACES_LUKS_MARKER_HOST/' scn_allow_parity
+mutate "row W4 (#12910): a duplicate host key is accepted (last wins)" '/# seam:dup-key$/d' scn_web_hosts_duplicate
 mutate "row 2a: the read uses --config prd" 's/^MARKER_CONFIG="prd_workspaces_luks_marker"/MARKER_CONFIG="prd"/' scn_argv
 mutate "row 2b: --config is dropped from the names call" 's/ --config "\$MARKER_CONFIG" 2>\/dev\/null)" || names_rc/ 2>\/dev\/null)" || names_rc/' scn_argv
 mutate "row 4: a transport error is treated as absent (the gate runs)" 's/then src_fail "names_rc_\${names_rc}"; fi # seam:names-fail/then names=""; fi # seam:names-fail/' scn_names_fail
@@ -829,7 +889,8 @@ if [ "$cases" -ne "$verdicts" ]; then
   printf '  FAIL CONSERVATION: %s cases ran but %s verdicts were recorded.\n' "$cases" "$verdicts" >&2
   exit 1
 fi
-CASES_FLOOR=126
+# 125 -> 126 (#12849) + 12 (#12910: eight SOLEUR_WEB_HOSTS derivation asserts, mutants W1-W4); summed at the #12918 merge, measured
+CASES_FLOOR=138
 if [ "$cases" -lt "$CASES_FLOOR" ]; then
   printf '  FAIL ANTI-VACUITY: only %s cases ran, floor is %s.\n' "$cases" "$CASES_FLOOR" >&2
   exit 1

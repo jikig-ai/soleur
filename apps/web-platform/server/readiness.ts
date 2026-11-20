@@ -76,6 +76,11 @@ function isWorkspacesWritable(root: string): boolean {
 
 // Read-only populated signal (no write probe, nothing written to disk): the one
 // definition shared by the readyz builder and the per-minute relay_probe line.
+// It counts the legacy /workspaces root only, never WORKTREE_ROOT (per-user git-data
+// worktrees, #8211), so a relay_probe `workspaces_populated=0` on a host whose turns all
+// run from WORKTREE_ROOT is expected and is not by itself a relay defect (#12910: web-2).
+// /internal/readyz still reports `ready:false` there by design (ready = writable AND
+// populated), and the LUKS scripts that read readyz rely on that.
 export function isWorkspacesPopulated(root: string = getWorkspacesRoot()): boolean {
   return countWorkspaceDirsAt(root) > 0;
 }

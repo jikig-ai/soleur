@@ -45,7 +45,9 @@
 #     → FAIL CLOSED) + SOLEUR_SERVING_ROTATION (present, comma-set; absent → FAIL CLOSED). PASS iff
 #     weight==0 AND web-2 ∉ rotation. Otherwise → Conditions A + B.
 #   Condition A (owner-side relay config-shape): SOLEUR_PROXY_PEER_ALLOWLIST parses to non-empty set;
-#     SOLEUR_HOST_ROSTER JSON object with web-2 present, allowlist ⊆ roster addrs (outbound dial),
+#     SOLEUR_HOST_ROSTER JSON object with web-2 present, every roster key a committed var.web_hosts
+#     key at its committed private_ip (SOLEUR_WEB_HOSTS, #12910: the key resolveHostId() writes),
+#     every rotation member in the roster, allowlist ⊆ roster addrs (outbound dial),
 #     web-2 addr ∈ allowlist (inbound accept). The relay BIND is deliberately not checked here: it is a
 #     literal in ci-deploy.sh, not a Doppler value. Bind/reachability evidence is the serve arm's
 #     relay-evidence step (#12168), NOT this gate.
@@ -196,7 +198,8 @@ fi
 # PARITY POINTER: the roster/allowlist parsing below intentionally MIRRORS (and is stricter than)
 # the two TypeScript loaders it gates for:
 #   - allowlist  ← session-proxy.ts  `parseProxyPeerAllowlist` (split ",", trim, drop empties)
-#   - roster     ← session-router.ts `loadHostRoster`          (JSON object, string values)
+#   - roster     ← host-roster.ts    `loadHostRoster`          (JSON object, string values), keyed by
+#                  the verified var.web_hosts key host-identity.ts `resolveHostId()` returns (#12910)
 # Keep the three in sync: a change to either loader's parse contract must be reflected here. The
 # DIRECTIONS differ — the allowlist is the INBOUND accept set, the roster the OUTBOUND dial map — so
 # this gate asserts BOTH containment directions (see A.3 below).
@@ -245,6 +248,24 @@ key_uniq=$(printf '%s\n' "$ROSTER_KEYS" | sort -u | grep -c . || true)
 
 # web-2 specifically present as a roster host_id.
 jq -e --arg h "$HOST" 'has($h)' >/dev/null 2>&1 <<<"$ROSTER_RAW" || fail "A_web2_not_in_roster"
+
+# #12910 — the RUNTIME shape. The roster is keyed by the lease's host_id, which resolveHostId()
+# (host-identity.ts) makes the verified var.web_hosts key: a key the runtime never writes (an
+# instance id like hetzner-<n>, a retired name) is a roster the router cannot read. SOLEUR_WEB_HOSTS
+# is the committed var.web_hosts default as {key: private_ip}, derived from variables.tf by
+# lb-weight-gate-with-marker.sh (the only producer). Checked over EVERY roster key, not only $HOST.
+WEB_HOSTS_RAW="${SOLEUR_WEB_HOSTS-}"
+jq -e 'type == "object" and length > 0 and all(.[]; type == "string" and length > 0)' \
+  >/dev/null 2>&1 <<<"$WEB_HOSTS_RAW" || fail "A_web_hosts_absent"
+# Slurped as [roster, web_hosts]: keys first (a key the runtime never writes), then exact
+# {key, address} pairs (with every key known, any remaining difference is an address).
+printf '%s\n%s\n' "$ROSTER_RAW" "$WEB_HOSTS_RAW" | jq -e -s '(.[0] | keys) - (.[1] | keys) == []' \
+  >/dev/null 2>&1 || fail "A_roster_key_not_web_host"
+printf '%s\n%s\n' "$ROSTER_RAW" "$WEB_HOSTS_RAW" | jq -e -s '(.[0] | to_entries) - (.[1] | to_entries) == []' \
+  >/dev/null 2>&1 || fail "A_roster_addr_mismatch"
+for member in "${!ROTATION_SET[@]}"; do
+  jq -e --arg h "$member" 'has($h)' >/dev/null 2>&1 <<<"$ROSTER_RAW" || fail "A_rotation_member_not_in_roster"
+done
 
 # Allowlist peers ⊆ roster addresses (OUTBOUND-dial direction: every peer we accept must be reachable).
 declare -A ROSTER_ADDRS=()

@@ -54,6 +54,7 @@ reset_def() {
     [WORKSPACES_LUKS_MARKER_HOST]='web-2'
     [WORKSPACES_LUKS_SOAK_DAYS]='3'
   )
+  DEF[SOLEUR_WEB_HOSTS]="${DEF[SOLEUR_HOST_ROSTER]}"  # #12910: the committed var.web_hosts the default roster matches
 }
 
 GATE_OUT=""
@@ -151,17 +152,60 @@ assert_rejects_with "third key: web-3 in rotation, absent from roster -> refused
 # web-3 pooled with a roster + allowlist naming it -> the authorized-flip pass, keyed on web-3 not web-2.
 # The workspaces LUKS marker is unkeyed and attests only its writer's host (web-2): web-3 cannot inherit it.
 R13='{"web-1":"10.0.1.10","web-3":"10.0.1.12"}'
-reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$R13"; run_with_def
+# #12910: a roster naming web-3 needs a committed var.web_hosts naming it (deliberate fixture edit, not a weakening).
+reset_def; W123="$(jq -c '. + {"web-3": "10.0.1.12"}' <<<"${DEF[SOLEUR_HOST_ROSTER]}")"
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$R13"; DEF[SOLEUR_WEB_HOSTS]="$W123"; run_with_def
 assert_rejects_with "third key: web-3 pooled on web-2's LUKS marker -> refused" "B_workspaces_luks_marker_other_host"
 reset_def; unset 'DEF[WORKSPACES_LUKS_MARKER_HOST]'; run_with_def
 assert_rejects_with "marker host unset (marker present) -> refused, never assumed" "B_workspaces_luks_marker_other_host"
 # Same web-3 config with a marker that attests web-3 -> the authorized-flip pass, keyed on web-3 not web-2.
-reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[WORKSPACES_LUKS_MARKER_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$R13"; run_with_def
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[WORKSPACES_LUKS_MARKER_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$R13"; DEF[SOLEUR_WEB_HOSTS]="$W123"; run_with_def
 assert_zero "third key: web-3 pooled, in roster, addr allowlisted, marker attests web-3 -> authorized"
 assert_stdout_contains "third key: authorized branch prints the flip marker" "requires_runtime_bind_probe=true"
 # web-3 pooled, roster has it but its address is not allowlisted (web-2's is) -> refused on web-3's address.
-reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10","web-2":"10.0.1.11","web-3":"10.0.1.12"}'; run_with_def
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10","web-2":"10.0.1.11","web-3":"10.0.1.12"}'; DEF[SOLEUR_WEB_HOSTS]="$W123"; run_with_def
 assert_rejects_with "third key: web-3 address not in the allowlist -> refused" "A_web2_addr_not_in_allowlist"
+# --- #12910 Guard 1: A.3 tests the RUNTIME shape. Every roster key is a committed var.web_hosts key
+# at its committed private_ip (SOLEUR_WEB_HOSTS), and every rotation member is in the roster. Each row
+# edits ONE field of the default (valid) roster, so the row's input differs from a passing one by that edit.
+g1_roster() { reset_def; DEF[SOLEUR_HOST_ROSTER]="$(G1_GATED="${DEF[SOLEUR_GATED_HOST]}" jq -c "$1" <<<"${DEF[SOLEUR_HOST_ROSTER]}")"; }
+g1_roster '. + {"hetzner-176328334": .[env.G1_GATED]}'
+G1_ONE="${DEF[SOLEUR_HOST_ROSTER]}"; run_with_def
+assert_rejects_with "G1-1 an instance-id roster key the runtime never writes -> refused" "A_roster_key_not_web_host"
+g1_roster '. + {"web-9": "10.0.1.19"}'; run_with_def
+assert_rejects_with "G1-3 a non-var.web_hosts key after compliant ones -> refused" "A_roster_key_not_web_host"
+g1_roster '(keys - [env.G1_GATED])[0] as $peer | .[$peer] = "10.0.1.99"'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]+=',10.0.1.99'; run_with_def
+assert_rejects_with "G1-4 a NON-gated key at the wrong address -> refused" "A_roster_addr_mismatch"
+g1_roster '(keys - [env.G1_GATED])[0] as $peer | .[env.G1_GATED] = .[$peer]'
+DEF[SOLEUR_PROXY_PEER_ALLOWLIST]="$(G1_GATED="${DEF[SOLEUR_GATED_HOST]}" jq -r '.[env.G1_GATED]' <<<"${DEF[SOLEUR_HOST_ROSTER]}")"; run_with_def
+assert_rejects_with "G1-5 the gated key at a peer's address -> refused" "A_roster_addr_mismatch"
+reset_def; DEF[SOLEUR_SERVING_ROTATION]+=',web-3'; run_with_def
+assert_rejects_with "G1-6 a rotation member absent from the roster -> refused" "A_rotation_member_not_in_roster"
+reset_def; unset 'DEF[SOLEUR_WEB_HOSTS]'; run_with_def
+assert_rejects_with "G1-7 SOLEUR_WEB_HOSTS unset (the wrapper stopped deriving it) -> refused" "A_web_hosts_absent"
+for g1_bad in '' '{}' '[]' 'not json' '{"web-2":""}' '{"web-2":10}'; do
+  reset_def; DEF[SOLEUR_WEB_HOSTS]="$g1_bad"; run_with_def
+  assert_rejects_with "G1-7 SOLEUR_WEB_HOSTS='${g1_bad}' -> refused" "A_web_hosts_absent"
+done
+unset g1_bad
+reset_def; DEF[SOLEUR_WEB2_SERVING_WEIGHT]='0'; DEF[SOLEUR_SERVING_ROTATION]="${DEF[SOLEUR_SERVING_ROTATION]%%,*}"; unset 'DEF[SOLEUR_WEB_HOSTS]'; run_with_def
+assert_zero "G1-8 standby with SOLEUR_WEB_HOSTS unset -> standby pass (#6575 cannot return)"
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[WORKSPACES_LUKS_MARKER_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]+=',web-3'
+DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$W123"; DEF[SOLEUR_WEB_HOSTS]="$W123"; run_with_def
+assert_zero "G1 must-PASS: a three-key roster at committed addresses, web-3 gated -> authorized"
+# G1-2: the check's own dispatch. A gate whose A_roster_key_not_web_host check never fails must let
+# G1-1's input through (so the suite above would go RED), proving the row is not vacuous.
+G1_MUT="$(mktemp "${TMPDIR:-/var/tmp}/g1mut.XXXXXX")"
+sed 's/|| fail "A_roster_key_not_web_host"/|| true/' "$GATE" > "$G1_MUT"
+G1_SAVED="$GATE"; GATE="$G1_MUT"
+reset_def; DEF[SOLEUR_HOST_ROSTER]="$G1_ONE"; run_with_def
+GATE="$G1_SAVED"
+if ! cmp -s "$G1_SAVED" "$G1_MUT" && [[ "$GATE_ERR" != *A_roster_key_not_web_host* ]]; then
+  pass "G1-2 mutant (key check disarmed) lets G1-1's roster past that check -> the G1-1 row is load-bearing"
+else
+  fail "G1-2 mutant did not change the gate, or still emitted A_roster_key_not_web_host"
+fi
+rm -f "$G1_MUT"; unset G1_MUT G1_SAVED G1_ONE; unset -f g1_roster
 # The gate's code lines name no host key (comments may cite history).
 TOTAL=$((TOTAL + 1))
 if [[ "$(grep -vE '^[[:space:]]*#' "$GATE" | grep -cE 'web-[0-9]' || true)" -eq 0 ]]; then
@@ -304,6 +348,7 @@ reset_def; DEF[GIT_DATA_LUKS_CUTOVER_AT]="$BOUNDARY_CUTOVER"; DEF[WORKSPACES_LUK
 assert_zero "soak boundary (markers exactly 3d old) → exit 0"
 reset_def
 DEF[SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10","web-2":"10.0.1.11","web-3":"10.0.1.12"}'
+DEF[SOLEUR_WEB_HOSTS]="$W123"
 DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.10,10.0.1.11'
 run_with_def
 assert_zero "roster with extra host + allowlist all-in-roster (web-2 addr present) → exit 0"
@@ -1454,7 +1499,7 @@ sk_check "G2: per-kind age: the git_data line reads the git-data marker (4 d)" p
 sk_check "G2: per-kind age: the workspaces_luks line reads the workspaces marker (10 d), not the git-data one" p_ev_age workspaces_luks $(( 10 * 86400 ))
 sk_check "G2: per-kind marker: the workspaces_luks line prints its own marker" p_ev workspaces_luks "marker_at=$TEN_D_CUTOVER"
 # H2: the host is not hardcoded — web-3 pooled on web-2's marker
-reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$R13"; run_with_def
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$R13"; DEF[SOLEUR_WEB_HOSTS]="$W123"; run_with_def
 sk_check "G2 H2: web-3 on web-2's marker refuses B_workspaces_luks_marker_other_host" p_refuses B_workspaces_luks_marker_other_host
 sk_check "G2 H2: web-3: the git_data line says host=web-3 verdict=pass" p_ev git_data host=web-3 verdict=pass sub_condition=none
 sk_check "G2 H2: web-3: the workspaces_luks line says host=web-3 marker_at=none sub_condition=B_workspaces_luks_marker_other_host" \
@@ -2048,7 +2093,8 @@ sk_check "R8 executed: a grade_text line that is not verdict-shaped and a malfor
 sec_close
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=658 # 330 -> 613 (#12849 §SK rows) -> 643 (#12934 review fixes R1-R10 + test-design rows) -> 652 (fix round: R4 class, gate body, if spellings, R2 parity, probe rows) -> 658 (fix round 2: parsed-YAML key checks + 5 mutants; measured)
+# #12910 Guard 1: +27 (G1-1..G1-8, the six malformed SOLEUR_WEB_HOSTS shapes, the must-PASS three-key row, the G1-2 mutant).
+MIN_CASES=685 # 330 -> 658 (#12849 §SK rows, #12934 review fixes and fix rounds) + 27 (#12910 Guard 1); summed at the #12918 merge, measured
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
