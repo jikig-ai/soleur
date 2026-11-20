@@ -255,8 +255,15 @@ time (handled by the review skill's conditional-agent block).
   `required_version >= 1.7`; R2 backend `soleur-terraform-state` key
   `rundevoo-run/terraform.tfstate`, `use_lockfile = false`.
 - Sensitive vars: `TF_VAR_cf_api_token_rundevoo` ← Doppler `prd_terraform`
-  `CF_API_TOKEN_RUNDEVOO` (zone-scoped 3-group token, minted by bootstrap);
-  `TF_VAR_cf_account_id` ← `CF_ACCOUNT_ID`.
+  `CF_API_TOKEN_RUNDEVOO` (zone-scoped `Zone Read` + `DNS Write` + `Zone
+  Settings Write` token, minted by bootstrap — DNS Write covers the
+  `/zones/{id}/dnssec` PATCH per the API reference, so no separate DNSSEC
+  group exists to request).
+- `account_id` is a **literal** in `zone.tf` (measured 2026-11-19: the zone
+  lives in the `66d4f93f…` "Soleur" account, NOT prd_terraform's
+  `CF_ACCOUNT_ID` `4d5ba6f0…` — the R2/state/tunnel account; soleur.ai sits
+  in the same Soleur account). No `cf_account_id` var — a literal bound to
+  the zone id fails closed on account change and needs no new secret.
 - `infra/github/ruleset-ci-required.tf` gains one `context` entry —
   second auto-applied root; **parallel-safe, distinct state keys** (the two
   workflows' concurrency groups differ, so they genuinely run concurrently —
