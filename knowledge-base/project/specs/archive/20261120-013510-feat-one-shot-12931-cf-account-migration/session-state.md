@@ -74,5 +74,10 @@ the platform's own parser or a stricter positive check.
 | D30 n_deep ordering; VERIFY_PASS_MAX hand-counted; /health no Location | simplicity, agent-native | reorder; derive; redirect_url |
 | D31 grep -q rc 2 read as no marker (job:462) | code-quality | capture rc |
 | D32 runbook "only" for in-state update too strong | architecture | scope sentence |
+| D33 zone-rest apply has no live post-apply probe (zone settings / bot management can 526 the app or 403 GPTBot) | coverage consult | app-health + gptbot + noindex probes after zone-rest apply, verify-failed on failure |
+| D34 old-id refusal points only at prd_terraform; loader's soleur-infra-privileged values win under --preserve-env | coverage consult | refusal text + runbook name both stores |
+| D35 a Doppler-writing bootstrap stage can run while a migrate run is in flight | coverage consult | SOLEUR_CFAM_RUN_IN_FLIGHT refusal, fail closed on gh error |
+| D36 gate replace arm accepts create-before-destroy; name-keyed doppler_secret would delete the key it wrote | coverage consult | delete-then-create only |
 
-Wontfix: light-suite floor rows 7-38x under CI (performance P3-4) — no leg near cap, regenerated at next rebalance.
+Wontfix: light-suite floor rows under CI (performance P3-4), including the bootstrap suite (now ~184 s local vs a 1802 ms floor, under the 600 s corpus cap) — advisory, regenerated at the next shard rebalance.
+Coverage consult (5 leads): 4 verified and added (D33-D36); the GitHub repo-secret consumer lead was already handled at work time (plan, scheduled-followthrough-sweeper row).
