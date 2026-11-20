@@ -142,8 +142,11 @@ expect_line "R9b concluded sibling second (fixed)" "$BODY" \
   cancelled success cancelled push "its own declared timeout-minutes" 1 "supersession cannot occur"
 expect_line "R9c concluded sibling third (bastion)" "$BODY" \
   cancelled cancelled success push "its own declared timeout-minutes" 1 "supersession cannot occur"
-expect_line "R9d same on pull_request is NOT supersession" "$BODY" \
-  cancelled success cancelled pull_request "its own declared timeout-minutes" 1 "SUPERSEDED"
+# On pull_request a concluded sibling cannot rule out a cancel-in-progress supersession
+# that landed after it finished, so the line names both causes and points at the job
+# annotation instead of asserting a timeout (and never claims the whole-run class).
+expect_line "R9d same on pull_request names timeout OR supersession" "$BODY" \
+  cancelled success cancelled pull_request "timeout-minutes or supersession (cancel-in-progress); check the job annotation" 1 "SUPERSEDED"
 # The timeout line names the sibling that concluded, so the reader knows which
 # job's verdict proves the run was not superseded.
 expect_line "R9e the timeout line names the concluded sibling" "$BODY" \

@@ -15,7 +15,15 @@ this page holds only the acts.
 
 The agent runs both dispatches below. Each needs the owner's typed go naming the exact command.
 
-**Pre-birth boot evidence.** `apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh` boots the rendered template under real cloud-init in the pinned `ubuntu:24.04` image. CI runs it as the `bastion-boot-rehearsal` job of `infra-validation.yml`; locally, `bash apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh` (needs Docker with `--privileged`). The job is advisory on pull requests, so a red run can merge. Until #12942 lands, the agent checks that run is green on the birth commit before the real birth; #12942 makes the birth refuse it otherwise.
+**Pre-birth boot evidence.** `apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh` boots the rendered template under real cloud-init in the pinned `ubuntu:24.04` image. CI runs it as the `bastion-boot-rehearsal` job of `infra-validation.yml`; locally, `bash apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh` (needs Docker with `--privileged`, and terraform). The job is advisory on pull requests, so a red run can merge. #12942 will run the rehearsal inside the birth run and refuse the birth unless it succeeds. Until it lands, the agent runs this check after the rehearsal (step 1 below) and before the real birth:
+
+- Dispatch the workflow on main: `gh workflow run infra-validation.yml --ref main`. Arm a watch on the run (hr-dispatch-async-must-arm-watch).
+- Pick the `workflow_dispatch` run created after the dispatch whose `headSha` equals the commit the plan_only run reports: `gh run list --workflow infra-validation.yml --event workflow_dispatch --branch main --json databaseId,headSha,createdAt`.
+- Require `gh run view <id> --json jobs --jq '.jobs[]|select(.name=="bastion-boot-rehearsal")|.conclusion'` to print exactly `success`. Read this job's conclusion, never the run's or `deploy-script-tests-done`'s: other legs of the run can fail for unrelated reasons.
+- Do not substitute an existing check-run. Push runs are paths-filtered and duplicate-skipped, so the birth commit usually has none, and the suite installs from the live archive, so only a birth-day run speaks for birth day.
+- If main moves before the real birth run, dispatch again.
+
+This dispatch writes nothing, so it needs no owner go (unlike the two birth dispatches below).
 
 **Dispatch only when the owner can approve at once.** The run holds the shared `terraform-apply-web-platform-host` group while it waits for the environment reviewer, and GitHub keeps one pending run per group: a later queued run (a merge's apply, an `cf-lb-overlay` drain, a key rotation) cancels the one waiting behind it. Approve it promptly or cancel it.
 
