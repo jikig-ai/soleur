@@ -13,7 +13,7 @@ SUT="$REPO_ROOT/scripts/rundevoo-dns-set-equality.sh"
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 STUB_DIR="$TMPD/stubs"; mkdir -p "$STUB_DIR"
 pass=0; fail=0
-EXPECTED_TESTS=10
+EXPECTED_TESTS=11
 
 _report() {
   if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); echo "[ok] $1"
@@ -205,6 +205,19 @@ t_token_not_in_argv() {
   fi
 }
 
+# T11: apex CDS/CDNSKEY records — auto-published by Cloudflare once DNSSEC is
+# enabled (RFC 8078) and never Terraform resources — are excluded at the apex
+# only, like apex NS. Without the exclusion the first apply would red.
+t_apex_dnssec_records_excluded() {
+  LIVE_PAGE1=$(live_doc "${BASE_RECORDS[@]}" \
+    "CDS|rundevoo.run|2371 13 2 AABBCCDDEEFF" \
+    "CDNSKEY|rundevoo.run|257 3 13 mdsswUyr3DPW132mOi8V9xESWE8jTo0dXfjjSPtA")
+  local rc=0
+  _run || rc=$?
+  [[ "$rc" == "0" ]] && _report "T11 apex CDS/CDNSKEY excluded" ok \
+    || _report "T11 apex CDS/CDNSKEY excluded" fail "rc=$rc; $(tail -3 "$OUT")"
+}
+
 t_set_equality_passes
 t_unmanaged_record_trips
 t_missing_record_trips
@@ -215,6 +228,7 @@ t_runaway_pagination_fails_closed
 t_missing_token_refuses
 t_zone_id_from_import_block
 t_token_not_in_argv
+t_apex_dnssec_records_excluded
 
 echo "=== $pass passed, $fail failed ==="
 ran=$((pass + fail))

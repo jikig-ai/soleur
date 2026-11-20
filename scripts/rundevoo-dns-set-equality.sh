@@ -27,7 +27,10 @@
 #
 # KNOWN LIVE-ONLY MEMBERS. Cloudflare auto-manages the apex NS records
 # (the zone's authoritative nameservers): they exist in the live record list
-# and are NEVER Terraform resources. They are excluded on the live side only —
+# and are NEVER Terraform resources. Enabling DNSSEC also causes Cloudflare
+# to auto-publish apex CDS and CDNSKEY records (RFC 8078 — Registrar zones
+# rely on them for automatic DS propagation), which likewise never appear in
+# terraform state. All three are excluded on the live side at the apex only —
 # a future delegated NS record for a subdomain is NOT excluded and would
 # correctly trip the probe. Anything else that appears live-only is unmanaged
 # drift and fails the probe.
@@ -99,7 +102,7 @@ while :; do
   [[ "$success" == "true" ]] \
     || { red "dns_records page $page returned success=$success"; exit 1; }
   printf '%s' "$resp" | jq -r '
-    [.result[]? | select((.type == "NS" and .name == "rundevoo.run") | not)
+    [.result[]? | select((.name == "rundevoo.run" and (.type == "NS" or .type == "CDS" or .type == "CDNSKEY")) | not)
       | [.type, .name, .content] | @tsv][] ' >> "$live"
   total_pages=$(printf '%s' "$resp" | jq -r '.result_info.total_pages // 1')
   [[ "$page" -ge "$total_pages" ]] && break
@@ -128,6 +131,6 @@ if [[ -n "$missing" ]]; then
   rc=1
 fi
 if [[ "$rc" -eq 0 ]]; then
-  green "dns set equality: live == managed ($(wc -l < "$live" | tr -d ' ') record(s), apex NS excluded)"
+  green "dns set equality: live == managed ($(wc -l < "$live" | tr -d ' ') record(s), apex NS/CDS/CDNSKEY excluded)"
 fi
 exit "$rc"

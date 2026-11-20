@@ -3,6 +3,7 @@
 # helpers. Sourced (NEVER executed) by:
 #   - apps/cla-evidence/scripts/gdpr-override.sh   (GDPR Art. 17 erasure driver)
 #   - apps/cla-evidence/infra/bootstrap.sh         (one-shot post-merge bootstrap)
+#   - infra/rundevoo-run/bootstrap.sh              (zone-token mint, #12971)
 #
 # Extracted per issue #3950 item 3 (the two call sites overlapped ~70%). The
 # verify function adopts gdpr-override's MORE-DEFENSIVE empty-id hard-fail —

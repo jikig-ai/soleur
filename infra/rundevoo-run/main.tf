@@ -23,11 +23,13 @@ terraform {
 }
 
 provider "cloudflare" {
-  # Explicit var binding: every consumer leg runs under
-  # `doppler run --name-transformer tf-var` over prd_terraform, which exports
-  # TF_VAR_cf_api_token_rundevoo. Do NOT rely on a provider env-var default —
-  # the shared legs do not export CLOUDFLARE_API_TOKEN (workflows map it
-  # explicitly from CF_API_TOKEN_RUNDEVOO where a raw REST call needs it).
+  # Explicit var binding: the shared infra-validation leg runs under
+  # `doppler run --name-transformer tf-var` over prd_terraform (exports
+  # TF_VAR_cf_api_token_rundevoo); this root's own apply/drift legs export the
+  # same TF_VAR name directly from CF_API_TOKEN_RUNDEVOO. Do NOT rely on a
+  # provider env-var default — an explicitly-bound api_token never reads
+  # CLOUDFLARE_API_TOKEN (that name is exported only for the set-equality
+  # REST probe, which takes a raw bearer).
   api_token = var.cf_api_token_rundevoo
 
   # 5xx retry budget ~7.75min/request (15+30+60+120+120+120s vs ~7s v4

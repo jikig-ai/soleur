@@ -170,18 +170,22 @@ jobs:
           elif [[ "$MATRIX_DIR" == "infra/rundevoo-run" ]]; then
             # (#12971) The raw-token path of apply-rundevoo-infra.yml: NO
             # doppler run of any form. The zone-scoped token is pulled once,
-            # mapped to CLOUDFLARE_API_TOKEN — the only name the provider
-            # reads — inside an `env -i` allowlist so nothing else this job
-            # exports (HCLOUD_TOKEN, Tier-B Doppler keys, TF_CLI_ARGS*, proxy
-            # vars) reaches the provider.
+            # mapped to the two names the legs need — inside an `env -i`
+            # allowlist so nothing else this job exports (HCLOUD_TOKEN,
+            # Tier-B Doppler keys, TF_CLI_ARGS*, proxy vars) reaches the
+            # provider.
             CF_TOKEN="$(doppler secrets get CF_API_TOKEN_RUNDEVOO --plain)"
             if [[ -z "$CF_TOKEN" ]]; then
               echo "::error::cf_token_rundevoo_absent — CF_API_TOKEN_RUNDEVOO is empty in prd_terraform; the rundevoo leg cannot authenticate. Run infra/rundevoo-run/bootstrap.sh."
               PLAN_OUTPUT="CF_API_TOKEN_RUNDEVOO is not configured (empty) — the rundevoo leg cannot authenticate."
               EXIT_CODE=1
             else
+              # Both names: TF_VAR_ feeds the required variable the provider
+              # api_token binds to (the env default never reaches an explicit
+              # binding); CLOUDFLARE_API_TOKEN stays for the REST probe below.
               PLAN_OUTPUT=$(env -i PATH="$PATH" HOME="$HOME" \
                 AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}" AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}" \
+                TF_VAR_cf_api_token_rundevoo="$CF_TOKEN" \
                 CLOUDFLARE_API_TOKEN="$CF_TOKEN" \
                 terraform plan -detailed-exitcode -no-color -input=false 2>&1)
               EXIT_CODE=$?

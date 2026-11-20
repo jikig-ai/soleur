@@ -85,14 +85,17 @@ MINTED_TOKEN_ID=""
 MINTED_TOKEN_VALUE=""
 cleanup() {
   rc=$?
-  if [[ -n "${CF_ADMIN_TOKEN_BOOTSTRAP:-}" && -n "${CF_ADMIN_TOKEN_ID:-}" ]]; then
-    cf_token_self_revoke "$CF_ADMIN_TOKEN_BOOTSTRAP" "$CF_ADMIN_TOKEN_ID" >/dev/null 2>&1 || true
-  fi
+  # Order matters: the minted-token revoke rides the admin token, so it must
+  # run BEFORE the admin self-revoke — after that the DELETE would 401 and a
+  # half-finished bootstrap would leave a live zone credential.
   if [[ "$BOOTSTRAP_VERIFIED" != "1" && -n "$MINTED_TOKEN_ID" && -n "${CF_ADMIN_TOKEN_BOOTSTRAP:-}" ]]; then
     yellow "  bootstrap incomplete — revoking minted token $MINTED_TOKEN_ID"
     _cf_admin_curl "$CF_ADMIN_TOKEN_BOOTSTRAP" \
       "$CF_API_BASE/user/tokens/$MINTED_TOKEN_ID" --max-time 30 -fsS -X DELETE \
       >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${CF_ADMIN_TOKEN_BOOTSTRAP:-}" && -n "${CF_ADMIN_TOKEN_ID:-}" ]]; then
+    cf_token_self_revoke "$CF_ADMIN_TOKEN_BOOTSTRAP" "$CF_ADMIN_TOKEN_ID" >/dev/null 2>&1 || true
   fi
   if [[ "$BOOTSTRAP_VERIFIED" == "1" && $rc -eq 0 ]]; then
     green "  admin token self-revoked (trap EXIT)"

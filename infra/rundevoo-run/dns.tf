@@ -4,7 +4,7 @@
 # spoofing surface implicit.
 
 # RFC 7505 null MX — declares the apex accepts no mail. `content = "."` is the
-# literal null-MX target (verified against the local 4.52.7 provider schema
+# literal null-MX target (verified against the committed 4.52.10 lockfile provider schema
 # before authoring — provider docs drift, see
 # knowledge-base/project/learnings/integration-issues/2026-04-10-context7-terraform-provider-version-mismatch.md).
 resource "cloudflare_record" "null_mx" {

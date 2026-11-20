@@ -23,10 +23,12 @@
 # skips the auto-apply.
 #
 # Credential mapping (plan §Token/bootstrap): the zone-scoped token lives in
-# Doppler prd_terraform as CF_API_TOKEN_RUNDEVOO and is bound to
-# CLOUDFLARE_API_TOKEN — the ONLY env var the cloudflare provider reads —
-# with NO fallback to a broader token. A broader credential would defeat the
-# scope boundary the bootstrap certifies.
+# Doppler prd_terraform as CF_API_TOKEN_RUNDEVOO and is exported under BOTH
+# names each leg needs: TF_VAR_cf_api_token_rundevoo for `terraform` (the
+# provider's api_token is bound to that required variable — CLOUDFLARE_API_TOKEN
+# never reaches an explicitly-bound argument) and CLOUDFLARE_API_TOKEN for the
+# set-equality REST probe — with NO fallback to a broader token. A broader
+# credential would defeat the scope boundary the bootstrap certifies.
 #
 # `pull_request`, NEVER `pull_request_target`: the latter would run
 # `terraform plan` with the zone token against UNTRUSTED fork-authored .tf —
@@ -100,6 +102,9 @@ jobs:
         # The token can sit below the tip when the merge queue coalesces
         # (#12501): the read is over HEAD_MSG + every push commit's message
         # combined into POLICY_MSGS — the same trust class as head_commit.
+        # event.commits caps at 20 entries — a token older than the window in
+        # a giant coalesced push still misses (fail-open for the skip), a
+        # documented residual, not engineered around.
         run: |
           POLICY_MSGS="$HEAD_MSG"
           more_msgs="$(jq -r 'join("\n")' <<<"${EVENT_MSGS_JSON:-null}" 2>/dev/null || true)"
@@ -202,9 +207,10 @@ jobs:
           set -euo pipefail
           KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain)}"
           SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)}"
-          # The zone-scoped token, mapped to the ONLY name the cloudflare
-          # provider reads. No fallback to a broader credential: bounded reach
-          # is the property this pipeline certifies.
+          # The zone-scoped token, exported under both names: TF_VAR_ feeds the
+          # required variable the provider api_token is bound to; the raw name
+          # feeds the set-equality REST probe. No fallback to a broader
+          # credential: bounded reach is the property this pipeline certifies.
           CF_TOKEN="${CLOUDFLARE_API_TOKEN:-$(doppler secrets get CF_API_TOKEN_RUNDEVOO --plain)}"
           if [[ -z "$CF_TOKEN" ]]; then
             echo "::error::CF_API_TOKEN_RUNDEVOO is not configured in Doppler soleur/prd_terraform — run infra/rundevoo-run/bootstrap.sh."
@@ -216,6 +222,7 @@ jobs:
           printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
           printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
           printf 'CLOUDFLARE_API_TOKEN=%s\n' "$CF_TOKEN" >> "$GITHUB_ENV"
+          printf 'TF_VAR_cf_api_token_rundevoo=%s\n' "$CF_TOKEN" >> "$GITHUB_ENV"
 
       - name: Terraform init
         working-directory: ${{ env.INFRA_DIR }}
@@ -359,6 +366,7 @@ jobs:
     needs: [preflight]
     if: >-
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && github.ref == 'refs/heads/main'
       && needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -395,6 +403,7 @@ jobs:
           printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
           printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
           printf 'CLOUDFLARE_API_TOKEN=%s\n' "$CF_TOKEN" >> "$GITHUB_ENV"
+          printf 'TF_VAR_cf_api_token_rundevoo=%s\n' "$CF_TOKEN" >> "$GITHUB_ENV"
 
       - name: Terraform init
         working-directory: ${{ env.INFRA_DIR }}
