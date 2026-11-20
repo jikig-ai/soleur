@@ -180,7 +180,7 @@ and runs **before** `disarm_dead_man` so an app-level failure still has the unat
 > the LUKS mount and pages. See the
 > [2026-09-28 addendum](#addendum-2026-09-28-the-dead-man-guards-the-freeze-window-only-9045).
 
-**`readyz` proves a FLOOR, not an INVENTORY (#6807).** `readiness.ts:81` is
+**`readyz` proves a FLOOR, not an INVENTORY (#6807).** `readiness.ts` `isWorkspacesPopulated` is
 `countWorkspaceDirsAt(root) > 0`, and `isWorkspacesWritable` write+unlinks **one** probe file at the
 root. A cutover that preserved **1 of 8** sole-copy workspaces therefore returns `ready=true`.
 Certifying a cutover needs a **separate inventory count** compared against a persisted baseline —

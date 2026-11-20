@@ -561,7 +561,8 @@ extract_fn_body() {  # $1=file $2=fn-name — the fn's body, brace-delimited at 
 }
 host_id_tokens_missing() {  # $1=file — "" when every load-bearing token is present
   local f="$1" tok body missing=""
-  local tokens=(SOLEUR_HOST_ID_OVERRIDE SOLEUR_HOST_ID_METADATA_URL 'hetzner-%s' 'machine-%s')
+  # The curl flags keep the link-local metadata read off any proxy and any ~/.curlrc (#12910 round 2).
+  local tokens=(SOLEUR_HOST_ID_OVERRIDE SOLEUR_HOST_ID_METADATA_URL 'hetzner-%s' 'machine-%s' "curl --disable --noproxy '*' -sf --max-time 3")
   body=$(extract_fn_body "$f" resolve_host_id)
   [[ -n "$body" ]] || { printf '%s' "$(basename "$f"):resolve_host_id-not-found"; return; }
   for tok in "${tokens[@]}"; do
