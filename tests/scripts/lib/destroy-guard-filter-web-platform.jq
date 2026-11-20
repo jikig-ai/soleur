@@ -254,7 +254,13 @@ def deploy_policy_soleur_refs: {
   "cloudflare_zero_trust_access_policy.registry_push_service_token_soleur": "cloudflare_zero_trust_access_service_token.registry_push_soleur"
 };
 def deploy_policy_soleur_addrs: deploy_policy_soleur_refs | keys;
+def deploy_policy_soleur_apps: [
+  "cloudflare_zero_trust_access_application.deploy_soleur",
+  "cloudflare_zero_trust_access_application.ssh_soleur",
+  "cloudflare_zero_trust_access_application.registry_soleur"
+];
 def deploy_policy_has_true: [.. | select(. == true)] | length > 0;
+def deploy_policy_blank: . == null or . == false or . == [] or . == "" or . == {};
 
 # The planned include of a `_soleur` policy is bound to its committed reference: exactly one include
 # block in the configuration, whose service_token expression references ONLY that one name (the
@@ -271,23 +277,44 @@ def deploy_policy_soleur_ref_ok($plan; $addr):
                   and ($r | all(. == $ref or . == ($ref + ".id")))
                   and (if ($ref | startswith("local.")) then true else ($r | index($ref + ".id")) != null end)));
 
-# `.` is one resource_changes entry at a `_soleur` address.
+# `.` is one resource_changes entry at a `_soleur` address. The include is an allowlist: only
+# service_token may carry a value (known or unknown), and decision must be a known "non_identity".
 def deploy_policy_soleur_unsafe($plan; $ids):
   (.change.actions? // []) as $act
   | ((.change.after // {}) | .include? // []) as $inc
+  | (.change.after_unknown.include? // []) as $unk
   | if ($act | type) != "array" or ($act | length) == 0 then true
     elif ($act | any(. == "delete" or . == "forget")) then true
     elif $act == ["no-op"] or $act == ["read"] then false
-    elif ($inc | length) != 1 then true
-    elif (($inc[0].everyone? // false) != false) or (($inc[0].any_valid_service_token? // false) != false) then true
+    elif ($inc | length) != 1 or ($inc[0] | type) != "object" then true
+    elif ($inc[0] | to_entries | any(.key != "service_token" and (.value | deploy_policy_blank | not))) then true
+    elif ($unk | type) != "array" or ($unk | length) > 1 then true
+    elif (($unk[0] // {}) | if type == "object" then del(.service_token) else . end | deploy_policy_has_true) then true
+    elif ((.change.after // {}).decision? // null) != "non_identity" then true
     elif (deploy_policy_soleur_ref_ok($plan; .address) | not) then true
     elif .address == "cloudflare_zero_trust_access_policy.deploy_service_token_soleur" then
-      ((.change.after_unknown.include? // []) | deploy_policy_has_true)
+      ($unk | deploy_policy_has_true)
       or (($ids | type) != "array") or (($ids | length) == 0)
       or (($inc[0].service_token? // null) != $ids)
+    # The real provider plans a token created in the same apply as service_token absent from `after`
+    # and wholly unknown; ref_ok above already bound it to this policy's own token.
+    elif (($unk[0].service_token? // false) == true) then false
     else
       ((($inc[0].service_token? // []) | length) != 1)
     end;
+
+# A policy outside the table attached to a `_soleur` app (bound through its configured
+# application_id) is unsafe whatever it says: no ack can admit a second gate on those hosts.
+def deploy_policy_soleur_stray($plan):
+  [ .resource_changes[]?
+    | select(.type == "cloudflare_zero_trust_access_policy")
+    | select((.change.actions? // []) != ["no-op"])
+    | select(IN(.address; deploy_policy_soleur_addrs[]) | not)
+    | (.type + "." + .name) as $cfg
+    | select(any($plan.configuration.root_module.resources[]? | select(.address == $cfg)
+                 | .expressions.application_id.references[]?;
+                 . as $r | any(deploy_policy_soleur_apps[]; $r == . or $r == (. + ".id")))) ]
+  | length;
 
 {
   # IS THIS PLAN GRADEABLE AT ALL? Every clause below reads `.resource_changes[]?`,
@@ -724,7 +751,8 @@ def deploy_policy_soleur_unsafe($plan; $ids):
   # #12937: a `_soleur` policy is unsafe when it would be deleted/forgotten/replaced, or when a planned
   # create/update leaves its include other than ONE block bound to its own committed reference (the
   # deploy one: the planned id list must EQUAL `--argjson ids`, the list committed in tunnel.tf),
-  # or adds `everyone` / `any_valid_service_token`. Its single acknowledged create is NOT unsafe.
+  # or sets any include key but service_token, or a decision other than non_identity. Its single
+  # acknowledged create is NOT unsafe. Any other policy attached to a `_soleur` app is unsafe.
   deploy_policy_unsafe: (
     . as $plan
     | ($ARGS.named.ids // null) as $ids
@@ -739,6 +767,7 @@ def deploy_policy_soleur_unsafe($plan; $ids):
       + ([ .resource_changes[]?
            | select(IN(.address; deploy_policy_soleur_addrs[]))
            | select(deploy_policy_soleur_unsafe($plan; $ids)) ] | length)
+      + deploy_policy_soleur_stray($plan)
   ),
   # access_token_stray_forgets: a forget of an Access service token other than the deploy token this PR
   # forgets on purpose (the ci_ssh and registry_push tokens are other credentials). Once the forget has

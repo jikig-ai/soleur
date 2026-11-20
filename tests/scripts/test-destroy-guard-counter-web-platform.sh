@@ -1788,8 +1788,13 @@ _run_apply_halt_span() { # <fixture> <tfplan.txt> [mutate-sed-expr]
   chmod +x "$w/bin/doppler" "$w/bin/terraform"
   _with_deploy_policy < "$fixture" > "$w/plan.json"; cp "$txt" "$w/plan.txt"
   printf '%s\n' "$span" > "$w/span.sh"
+  # The deploy-policy gate reads tunnel.tf's committed _soleur id; these rows judge the HALTs, so the nil
+  # placeholder is filled in a workspace copy (a no-op once minted; test-deploy-access-token-forget.sh Q8 owns it).
+  mkdir -p "$w/ws/apps/web-platform/infra"; ln -s "$REPO_ROOT/tests" "$w/ws/tests"
+  sed 's/"00000000-0000-0000-0000-000000000000"/"00000000-0000-4000-8000-0000000000a1"/' \
+    "$REPO_ROOT/apps/web-platform/infra/tunnel.tf" > "$w/ws/apps/web-platform/infra/tunnel.tf"
   APPLY_SPAN_RC=0
-  APPLY_SPAN_OUT="$( cd "$w" && env -i PATH="$w/bin:$PATH" HOME="$w" GITHUB_WORKSPACE="$REPO_ROOT" INFRA_DIR="$w" \
+  APPLY_SPAN_OUT="$( cd "$w" && env -i PATH="$w/bin:$PATH" HOME="$w" GITHUB_WORKSPACE="$w/ws" INFRA_DIR="$w" \
       DOPPLER_TOKEN=stub CI_SSH_PUB=stub STUB_TXT="$w/plan.txt" STUB_JSON="$w/plan.json" \
       HEAD_MSG=$'chore: unrelated\n\n[ack-destroy]\n[ack-luks]\n[skip-web-platform-apply]' ALLOW_LUKS=1 SKIP_LUKS=1 SKIP_GUARD=1 \
       bash -e span.sh 2>&1 )" || APPLY_SPAN_RC=$?

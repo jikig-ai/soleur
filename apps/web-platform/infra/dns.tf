@@ -73,6 +73,8 @@ resource "cloudflare_record" "registry" {
 # tunnel in the same account as the record, so these point at the `_soleur` tunnel; the three above
 # sit in the moved-away zone and are left untouched (no forget/destroy in this PR). A leftover
 # scanner A record at the same name makes the create fail loudly — that is the protection.
+# Each record waits for its own Access policy (and so its app): a failed Access create leaves the
+# hostname unrouted instead of reachable without a gate.
 resource "cloudflare_record" "deploy_soleur" {
   zone_id = local.cf_soleur_zone_id
   name    = "deploy"
@@ -80,6 +82,8 @@ resource "cloudflare_record" "deploy_soleur" {
   type    = "CNAME"
   proxied = true
   ttl     = 1
+
+  depends_on = [cloudflare_zero_trust_access_policy.deploy_service_token_soleur]
 }
 
 resource "cloudflare_record" "ssh_soleur" {
@@ -89,6 +93,8 @@ resource "cloudflare_record" "ssh_soleur" {
   type    = "CNAME"
   proxied = true
   ttl     = 1
+
+  depends_on = [cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur]
 }
 
 resource "cloudflare_record" "registry_soleur" {
@@ -98,6 +104,8 @@ resource "cloudflare_record" "registry_soleur" {
   type    = "CNAME"
   proxied = true
   ttl     = 1
+
+  depends_on = [cloudflare_zero_trust_access_policy.registry_push_service_token_soleur]
 }
 
 # Email authentication records for Resend SMTP (sends via Amazon SES, eu-west-1)

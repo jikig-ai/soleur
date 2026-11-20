@@ -32,11 +32,13 @@
 # list committed in tunnel.tf, which plan JSON does not carry, so the workflow feeds this gate from
 # deploy_policy_counts (below), never from the destroy guard's own id-less `counts`.
 UUID_ERE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+NIL_UUID='00000000-0000-0000-0000-000000000000'
 
 # deploy_policy_committed_ids <tunnel.tf> -> the committed `deploy_service_token_ids_soleur = [...]` list as
 # compact JSON on stdout. Exactly ONE non-comment line may declare it (the same line the policy's UUID
 # precondition reads); a trailing `# ...` comment is allowed. Anything else (absent, twice, empty, a
-# non-UUID entry, not a literal list) returns 1 with an ::error::, so a broken read never becomes a pass.
+# non-UUID entry, the nil placeholder, not a literal list) returns 1 with an ::error::, so a broken read
+# never becomes a pass.
 deploy_policy_committed_ids() { # <tunnel.tf>
   local tf="$1" lines n list
   lines="$(grep -E '^[[:space:]]*deploy_service_token_ids_soleur[[:space:]]*=' "$tf" 2>/dev/null || true)"
@@ -46,10 +48,15 @@ deploy_policy_committed_ids() { # <tunnel.tf>
     return 1
   fi
   list="$(sed -nE 's/^[[:space:]]*deploy_service_token_ids_soleur[[:space:]]*=[[:space:]]*(\[[^]#]*\])[[:space:]]*(#.*)?$/\1/p' <<<"$lines")"
-  if ! jq -ce --arg re "$UUID_ERE" 'if type == "array" and length > 0 and all(.[]; type == "string" and test($re)) then . else error("bad") end' <<<"${list:-null}" 2>/dev/null; then
+  if ! jq -ce --arg re "$UUID_ERE" 'if type == "array" and length > 0 and all(.[]; type == "string" and test($re)) then . else error("bad") end' <<<"${list:-null}" >/dev/null 2>&1; then
     echo "::error::deploy policy guard: deploy_service_token_ids_soleur in ${tf} is not a non-empty literal list of UUIDs (got '${list}'). Refusing to apply."
     return 1
   fi
+  if jq -e --arg nil "$NIL_UUID" 'any(.[]; . == $nil)' <<<"$list" >/dev/null 2>&1; then
+    echo "::error::deploy policy guard: placeholder deploy token id still committed (FILL-AT-PHASE-3.1) in ${tf}. Refusing to apply."
+    return 1
+  fi
+  jq -c . <<<"$list"
 }
 
 # deploy_policy_counts <tfplan.json> <tunnel.tf> <filter.jq> -> the destroy-guard counters with the committed
@@ -77,7 +84,7 @@ deploy_policy_gate() { # <counts-json> <combined tip+push-commit messages>
     n[$k]="$v"
   done
   if [[ "${n[deploy_policy_unsafe]}" -gt 0 || "${n[access_token_stray_forgets]}" -gt 0 ]]; then
-    echo "::error::deploy policy guard: the plan would create/delete the old deploy Access policy, delete/replace a _soleur Access policy (deploy, ci_ssh or registry_push), leave an include other than ONE service_token block bound to its own committed token (the deploy one: exactly local.deploy_service_token_ids_soleur), or forget an Access token other than the deploy token (unsafe=${n[deploy_policy_unsafe]}, stray_forgets=${n[access_token_stray_forgets]}). That locks the deploy webhook, CI SSH or registry push out. No ack reaches this HALT."
+    echo "::error::deploy policy guard: the plan would create/delete the old deploy Access policy, delete/replace a _soleur Access policy (deploy, ci_ssh or registry_push), leave an include other than ONE service_token-only block bound to its own committed token (the deploy one: exactly local.deploy_service_token_ids_soleur) with decision non_identity, attach any other policy to a _soleur app, or forget an Access token other than the deploy token (unsafe=${n[deploy_policy_unsafe]}, stray_forgets=${n[access_token_stray_forgets]}). That locks the deploy webhook, CI SSH or registry push out. No ack reaches this HALT."
     echo "::error::${DEPLOY_POLICY_UNWEDGE}"
     return 1
   fi

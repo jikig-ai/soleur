@@ -330,6 +330,14 @@ resource "doppler_secret" "registry_push_access_token_id" {
   name       = "REGISTRY_PUSH_ACCESS_TOKEN_ID"
   value      = cloudflare_zero_trust_access_service_token.registry_push_soleur.client_id
   visibility = "masked"
+
+  # An imported token reads empty: never write "" over the live prd value.
+  lifecycle {
+    precondition {
+      condition     = cloudflare_zero_trust_access_service_token.registry_push_soleur.client_id != ""
+      error_message = "registry_push_soleur.client_id is empty in state; refusing to blank Doppler prd."
+    }
+  }
 }
 
 resource "doppler_secret" "registry_push_access_token_secret" {
@@ -338,6 +346,14 @@ resource "doppler_secret" "registry_push_access_token_secret" {
   name       = "REGISTRY_PUSH_ACCESS_TOKEN_SECRET"
   value      = cloudflare_zero_trust_access_service_token.registry_push_soleur.client_secret
   visibility = "masked"
+
+  # An imported token reads empty: never write "" over the live prd value.
+  lifecycle {
+    precondition {
+      condition     = nonsensitive(cloudflare_zero_trust_access_service_token.registry_push_soleur.client_secret != "")
+      error_message = "registry_push_soleur.client_secret is empty in state; refusing to blank Doppler prd."
+    }
+  }
 }
 
 # Alert one week before any CF Access service token expires.
@@ -456,8 +472,8 @@ resource "cloudflare_zero_trust_access_policy" "deploy_service_token_soleur" {
 
   lifecycle {
     precondition {
-      condition     = length(local.deploy_service_token_ids_soleur) > 0 && alltrue([for id in local.deploy_service_token_ids_soleur : can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", id))])
-      error_message = "local.deploy_service_token_ids_soleur must be a non-empty list of Cloudflare service-token ids (UUIDs). An empty include would lock the deploy webhook out."
+      condition     = length(local.deploy_service_token_ids_soleur) > 0 && alltrue([for id in local.deploy_service_token_ids_soleur : can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", id)) && id != "00000000-0000-0000-0000-000000000000"])
+      error_message = "local.deploy_service_token_ids_soleur must be a non-empty list of Cloudflare service-token ids (UUIDs), not the nil placeholder (FILL-AT-PHASE-3.1). An empty include would lock the deploy webhook out."
     }
   }
 }
