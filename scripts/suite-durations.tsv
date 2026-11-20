@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
 # default-weight-ms=1802
-# generated-at=2026-11-20T02:40:04Z
+# generated-at=2026-11-20T17:20:31Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7d0cd2b5340986989503a52b56d26678f0e677e02dc0e30d7950aea5d95d712f
 .claude/hooks/agent-token-tee.test.sh	7099	measured
@@ -246,6 +246,7 @@ plugins/soleur/test/go-hold-routing.test.sh	35281	measured
 plugins/soleur/test/go-routing-table-parity.test.sh	60	measured
 plugins/soleur/test/go-session-gates.test.sh	2777	measured
 plugins/soleur/test/harvest-debt.test.sh	127	measured
+plugins/soleur/test/health-colo-falsification.test.sh	1802	floor
 plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh	6034	measured
 plugins/soleur/test/hold-gate-eval.test.sh	128311	measured
 plugins/soleur/test/hook-git-env-coverage.test.sh	184	measured
@@ -456,6 +457,7 @@ scripts/git-data-reboot-evidence-landed-8210	1176	measured
 scripts/git-data-rehearsal-evidence-8211	19754	measured
 scripts/git-data-replication-signal-11704	2761	measured
 scripts/guard-vacuity-floor	55336	measured
+scripts/health-colo-capture-12846	1802	floor
 scripts/host-kernel-cadence-12008	9486	measured
 scripts/host-tcp-exposure	10741	measured
 scripts/hosted-destroy-ask-window-9776	16850	measured

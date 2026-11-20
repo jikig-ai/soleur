@@ -587,6 +587,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_HEAD_VERDICT_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_CLOUDFLARE_READONLY_TEST_SH_PATHS=(
   "apps/web-platform/infra/seo-config-rules.tf"  # real read: snapshot pin counts rules{}/ssl= against the SUT header (#10479 drift pin)
+  "knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md"  # real read: the wrapper-to-recipe link row extracts the R2 recipe (#12846)
   "plugins/soleur/scripts/cloudflare-readonly.sh"  # SUT
   "plugins/soleur/test/cloudflare-readonly.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
@@ -630,6 +631,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST_DESTRUCTIVE_COMMAND_GUARD_MUTATION_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_RULES_TEST_SH_PATHS=(
   ".gitleaks.toml"  # plugins/soleur/test/gitleaks-rules.test.sh:2
   "plugins/soleur/test/gitleaks-rules.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_HEALTH_COLO_FALSIFICATION_TEST_SH_PATHS=(
+  "knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md"  # real read: the recipe and recorded-outputs marker blocks (CTO D3, #12846)
+  "plugins/soleur/test/fixtures/health-colo-falsification/"  # the synthetic base fixture every case patches
+  "plugins/soleur/test/health-colo-falsification.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_HOLD_GATE_EVAL_TEST_SH_PATHS=(
@@ -5143,6 +5150,16 @@ AFFECTED_APPS_WEB_PLATFORM_INFRA_INNGEST_LUKS_SOLE_COPY_PATHS=(
 )
 
 
+
+# scripts/health-colo-capture-12846 (#12846): the probe names the runbook it sends the operator to, so a runbook edit
+# re-runs the suite; the suite also drives the real trusted-verdict lib.
+AFFECTED_SCRIPTS_HEALTH_COLO_CAPTURE_12846_PATHS=(
+  "knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md"  # the probe cites its Deadline paragraph
+  "scripts/followthroughs/health-colo-capture-12846.sh"  # SUT
+  "scripts/followthroughs/health-colo-capture-12846.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+  "scripts/lib/trusted-verdict.sh"  # the suite drives the REAL lib through a gh shim
+)
 
 # scripts/host-tcp-exposure (#12008): reads every Terraform file in the infra directory as TEXT (no host, no
 # network); a change to any of them can move the declared-design verdict, which the argv self-edge and the

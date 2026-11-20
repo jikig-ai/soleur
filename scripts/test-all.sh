@@ -6557,6 +6557,11 @@ if want_scripts; then
   # decision table through a gh shim and the REAL trusted-verdict and relayed-verdict libs (untrusted-author, fenced-anchor and
   # RELAYED-record rows included; the relayed-verdict lib has no suite of its own, this one drives it).
   run_suite "scripts/inngest-a5-a6-owner-ask-10136" bash scripts/followthroughs/inngest-a5-a6-owner-ask-10136.test.sh
+  # #12846 per-colo H capture probe (CTO Q10). Never exits 1: closes (0) on a trusted S1-HEALTHCOLO-CAPTURED: line with a
+  # real UTC time, else ACTION REQUIRED (5) with a before/after-2026-11-25 ask; a failed read is 3. Drives the REAL
+  # trusted-verdict lib through a gh shim on a curated PATH (untrusted, fenced and HTML-commented marker rows), plus six
+  # anchored mutants of a probe copy that must each turn a named row red.
+  run_suite "scripts/health-colo-capture-12846" bash scripts/followthroughs/health-colo-capture-12846.test.sh
   # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
   # verdict out of free text a human typed, so the suite pins the two properties that decide
   # whether it can be trusted: the verdict is anchored at line start (an unanchored grep closes
