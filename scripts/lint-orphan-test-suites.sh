@@ -295,9 +295,9 @@ infra_rc=0
 # a broken parse here manufactures phantom orphans a reader would rightly ignore.
 infra_declared=$(sed -nE 's/^Derived ([0-9]+) registered infra suite.*/\1/p' "$WORK/infra_list" | head -1)
 infra_priv=$(grep -c '^  SKIP privileged: ' "$WORK/infra_list" || true)
-# DEDICATED suites (#12941) are derived and executed unsharded, but --enumerate omits them (no leg
-# times them); their CI coverage is a `run: bash` step, which surfaces 5/6 already read.
-infra_ded=$(grep -cE '^  (RUN|SKIP) dedicated: ' "$WORK/infra_list" || true)
+# DEDICATED suites (#12941) are derived, never executed by the runner (Q25), and --enumerate omits
+# them (no leg times them); their CI coverage is a `run: bash` step, which surfaces 5/6 already read.
+infra_ded=$(grep -c '^  SKIP dedicated: ' "$WORK/infra_list" || true)
 sed -nE 's/^SUITE_REGISTRATION\t(.*\.test\.sh)$/\1/p' "$WORK/infra_enum" | LC_ALL=C sort -u > "$WORK/raw3"
 infra_parsed=$(wc -l < "$WORK/raw3" | tr -d ' ')
 # SURFACE-3 FLOOR. The declared-vs-parsed check below compares two numbers that move TOGETHER:

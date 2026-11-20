@@ -1483,9 +1483,10 @@ jobs:
       # On failure the suite keeps its work dir (renders, stub captures, each container's
       # cloud-init-output.log and journal) after deleting every private key and the seed
       # user-data that embeds the synthesized host key; everything left is a per-run fixture.
-      # Only `brh.*` paths are uploaded, under both TMPDIR homes the suite can use.
+      # Only `brh.*` paths are uploaded, under both TMPDIR homes the suite can use. `cancelled()`
+      # too: a timeout-minutes kill cancels the job, and that run has the least log context.
       - name: Upload kept rehearsal work dir
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: bastion-boot-rehearsal-workdir

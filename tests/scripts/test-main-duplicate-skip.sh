@@ -245,8 +245,12 @@ else fail "Guard-4: notify-main-failure lost the pr_duplicate conjunct"; fi
 # A heavy job missing from the duplicate-skip call can be `skipped` on a green PR run, and the
 # merge push is then a proven duplicate that never runs it on main — "a SKIPPED heavy job is
 # not coverage". Tokenised compare, so deploy-script-tests never matches inside -fixed.
+# The haystack is comment-stripped and the call must be UNIQUE: a doc comment that lists the jobs
+# would otherwise satisfy the awk's first match while the real call omits one.
 IV="$REPO_ROOT/.github/workflows/infra-validation.yml"
-dup_args=" $(awk '/bash scripts\/main-push-duplicate-skip\.sh/{f=1; next} f{print; if ($0 !~ /\\[[:space:]]*$/) exit}' "$IV" \
+iv_code=$(grep -vE '^[[:space:]]*#' "$IV")
+dup_calls=$(grep -c 'bash scripts/main-push-duplicate-skip\.sh' <<< "$iv_code" || true)
+dup_args=" $(awk '/bash scripts\/main-push-duplicate-skip\.sh/{f=1; next} f{print; if ($0 !~ /\\[[:space:]]*$/) exit}' <<< "$iv_code" \
   | tr -d '\\' | tr -s '[:space:]' ' ') "
 done_needs=$(awk '/^  deploy-script-tests-done:/{f=1; next} f && /^    needs:/{print; exit}' "$IV" \
   | sed 's/.*\[//; s/\].*//; s/,/ /g')
@@ -255,7 +259,9 @@ for j in $done_needs; do
   [ "$j" = detect-changes ] && continue
   [[ "$dup_args" == *" $j "* ]] || g5_missing="$g5_missing $j"
 done
-if [ -n "$done_needs" ] && [[ "$dup_args" == *" validate "* ]] && [ -z "$g5_missing" ]; then pass
+if [ "$dup_calls" != 1 ]; then
+  fail "Guard-5: infra-validation.yml has $dup_calls uncommented duplicate-skip call(s), expected exactly 1"
+elif [ -n "$done_needs" ] && [[ "$dup_args" == *" validate "* ]] && [ -z "$g5_missing" ]; then pass
 else fail "Guard-5: infra-validation.yml's duplicate-skip call omits job(s) deploy-script-tests-done needs:${g5_missing:- <could not parse: needs='$done_needs' args='$dup_args'>}"; fi
 
 echo "test-main-duplicate-skip: $passes passed, $fails failed"
