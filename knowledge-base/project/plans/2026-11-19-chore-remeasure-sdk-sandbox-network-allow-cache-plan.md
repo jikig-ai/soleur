@@ -35,7 +35,7 @@ PR-1b of the #11637 order (CTO ruling on #11637, 2026-11-19). `Ref #12906`. This
 - The git common dir (with `.git/hooks`) lies outside the worktree. Remounting the worktree alone would leave the hooks writable.
 - `npm audit signatures` is not provenance. 0.3.328 has none.
 - The harness `.mts` is outside the tsconfig include, so the runtime suite is its only typecheck.
-- The discoverability probe returns rc=2 on this branch until #12897 merges and Phase 2 adds the command to the runtime suite. It is expected to pass after the Build stage.
+- The discoverability probe returns rc=2 on this branch until #12897 merges and Phase 2 adds the command to the runtime suite. It is expected to pass after the Build stage. (Superseded 2026-11-20: #12897 merged; see the status update under Premise Validation.)
 
 ## Overview
 
@@ -56,6 +56,7 @@ CTO item 21 replaced the earlier "stay draft and end with a resume prompt" rule:
 ## Research Insights
 
 **Premise Validation (Phase 0.6).**
+- Status update, 2026-11-20 (review): PR #12897 merged at 2026-11-19T13:13:15Z as `681279f03b`, and this branch is rebased onto it. The "OPEN", "until it merges" and "on the #12897 branch" statements in this section and in the Build table describe the plan's starting state, not the current one; the files they name are now on `main`.
 - #12906 is OPEN. Its body names the trigger: "An SDK release that re-asks per connection (the F/F2 runtime assertions go red when caching stops: that is the trigger)".
 - PR #12897 is OPEN, auto-merge armed, head `cbe7f21beb`. It is not merged. Everything this plan builds on is on that branch only: `apps/web-platform/test/helpers/netns-egress-harness.mts`, `apps/web-platform/test/sandbox-network-access-runtime.test.ts`, `apps/web-platform/server/sandbox-network-access.ts`, and the ADR-278 2026-11-18 addendum. `git show origin/main:apps/web-platform/test/helpers/netns-egress-harness.mts` fails today. The plan therefore depends on the merge (CTO item 1).
 - The CTO ruling on #11637 (2026-11-19) names this PR: "PR-1b (`Ref #12906`): re-measure the Phase 1a per-host allow cache at SDK 0.3.328 (main pins 0.3.321). Runs alongside PR-1."
