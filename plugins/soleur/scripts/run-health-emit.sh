@@ -53,6 +53,9 @@ done
 
 if [[ "$DISCOVER" == "1" ]]; then
   d="$(mktemp -d -t runhealth-discover.XXXXXXXX)" || { echo "run-health-emit: mktemp failed" >&2; exit 0; }
+  # One owning trap. The rm below covers the success path. This covers a
+  # death between the allocation and that rm. Fail-open stays exit 0.
+  trap 'rm -rf -- "${d:-/nonexistent}"' EXIT
   printf 'discover\n' > "$d/prompt.md"
   bash "$0" --run-dir "$d/run" --phase 0 --status started --prompt-file "$d/prompt.md" >/dev/null
   bash "$0" --run-dir "$d/run" --status completed --seal >/dev/null
