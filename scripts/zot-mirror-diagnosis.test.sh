@@ -191,9 +191,11 @@ DETECTOR="$SCRIPT_DIR/check-cloudflare-token-drift.sh"
 # detected from that row template and sampled as 1000 (the zone-move code) and 1016 (a
 # non-1000 member, so a remedy keyed on 1000 alone cannot satisfy the family). The
 # `UNVERIFIABLE:[a-z-]+` grep would otherwise extract the bare prefix `edge-error-`.
+# The row literals are read with the same regex token-drift-workflow-causes.test.sh uses, so a
+# new `|<cause>|` row reds here without anyone editing a list in this file.
 mapfile -t DETECTOR_CAUSES < <(
   { grep -oE 'UNVERIFIABLE:[a-z-]+' "$DETECTOR" | sed 's/UNVERIFIABLE://' | grep -vxF 'edge-error-'
-    grep -oE '\|(gate-absent|host-unreachable|detector-env|control-blocked|probe-failed|no-probe-configured)\|' "$DETECTOR" | tr -d '|'
+    grep -oE 'UNVERIFIABLE_ROWS\+=\("\$\{base\}_ID/_SECRET\|[a-z0-9-]+\|' "$DETECTOR" | grep -oE '\|[a-z0-9-]+\|$' | tr -d '|'
     if grep -qF '|edge-error-${_edge_code}|' "$DETECTOR"; then printf '%s\n' edge-error-1000 edge-error-1016; fi
   } | sort -u
 )
@@ -236,7 +238,7 @@ assert_contains "live gates the re-run on a plateau, not on the clock" "plateau"
 
 # "No rotation headline" is a claim about the FIRST line specifically — the body legitimately
 # says "Rotating the token will not help", so a whole-text grep would be the wrong anchor.
-LIVE_HEAD="$(printf '%s' "$LIVE_TXT" | head -1)"
+LIVE_HEAD="${LIVE_TXT%%$'\n'*}"
 assert_not_contains "live HEADLINE does not lead with token rotation" "check-cloudflare-token-drift.sh" "$LIVE_HEAD"
 assert_contains "live headline names the measured verdict" "MEASURED LIVE" "$LIVE_HEAD"
 
@@ -249,7 +251,10 @@ assert_contains "stale states the CORRECTED remedy (every config, no inheritance
   "Doppler branch configs do NOT inherit" "$STALE_TXT"
 assert_contains "stale names the detector as the way to list the affected configs" \
   "check-cloudflare-token-drift.sh" "$STALE_TXT"
-assert_contains "stale warns terraform apply cannot propagate a rotation" "No changes" "$STALE_TXT"
+assert_contains "stale names the Terraform rotation for the registry pair" "client_secret_version" "$STALE_TXT"
+# Terraform writes this pair (no ignore_changes), so the old "Terraform will NOT fix this" is false.
+assert_not_contains "stale does not claim Terraform cannot fix the registry pair" "ignore_changes = [value]" "$STALE_TXT"
+assert_contains "stale warns that a hand-set prd value is reverted" "next apply writes the state's value back" "$STALE_TXT"
 assert_contains "stale headline names the measured verdict" "MEASURED DEAD" "$STALE_TXT"
 # The falsified clause must not come back on the arm that a real rotation lands on.
 assert_not_contains "stale does not repeat the falsified root-config-inherits clause" \
@@ -309,7 +314,7 @@ assert_contains "an unrecognised verdict is reported, not silently rendered" "un
 
 echo "=== SOLEUR_ZOT_BRIDGE marker (#12937) ==="
 
-RUNBOOK_SUFFIX="runbook=knowledge-base/engineering/operations/runbooks/zot-registry-revert.md"
+RUNBOOK_SUFFIX="runbook=knowledge-base/engineering/operations/runbooks/zot-registry-revert.md#grep-for-the-bridge-markers-first"
 
 # The acceptance line, byte for byte: field ORDER is part of the grammar (a log grep and the
 # release workflow's re-validation both anchor on it).
@@ -323,7 +328,7 @@ assert_eq "exactly one line is printed" "1" \
   "$(zot_bridge_marker listener unmeasured unknown registry.soleur.ai 1 | wc -l | tr -d ' ')"
 
 # Every member of each closed set passes through unchanged.
-for _s in listener login push; do
+for _s in setup listener login push; do
   assert_contains "stage ${_s} is printed as itself" "stage=${_s} " "$(zot_bridge_marker "$_s" live unknown h.example 1)"
 done
 for _v in live stale unverifiable unmeasured; do
@@ -355,7 +360,7 @@ for _bad in $'edge-error-1000\n::error::forged' $'x\r::warning::y' "::add-mask::
 done
 assert_contains "an upper-case host is not in ^[a-z0-9.-]+$" "host=invalid " "$(zot_bridge_marker push live unknown Registry.soleur.ai 1)"
 assert_contains "a non-numeric rc is invalid" "rc=invalid " "$(zot_bridge_marker push live unknown h.example n/a)"
-assert_contains "Stage names outside the set (setup) are invalid" "stage=invalid " "$(zot_bridge_marker setup live unknown h.example 1)"
+assert_contains "Stage names outside the set (preflight) are invalid" "stage=invalid " "$(zot_bridge_marker preflight live unknown h.example 1)"
 
 # The validator accepts exactly what the helper prints, and nothing it would not.
 _good="$(zot_bridge_marker login unverifiable edge-error-1000 registry.soleur.ai 1)"
@@ -368,6 +373,10 @@ assert_eq "validator rejects a cause outside the vocabulary" "rejected" \
   "$(zot_bridge_marker_valid "${_good/edge-error-1000/made-up}" && echo ok || echo rejected)"
 assert_eq "validator rejects a different runbook" "rejected" \
   "$(zot_bridge_marker_valid "${_good/zot-registry-revert/other}" && echo ok || echo rejected)"
+assert_eq "validator rejects the runbook without its section anchor" "rejected" \
+  "$(zot_bridge_marker_valid "${_good%#*}" && echo ok || echo rejected)"
+assert_eq "validator accepts the setup stage" "ok" \
+  "$(zot_bridge_marker_valid "$(zot_bridge_marker setup unmeasured unknown invalid '')" && echo ok || echo rejected)"
 assert_eq "validator rejects an empty value" "rejected" \
   "$(zot_bridge_marker_valid "" && echo ok || echo rejected)"
 
@@ -377,12 +386,22 @@ assert_eq "discoverability: the marker name is in the library" "SOLEUR_ZOT_BRIDG
   "$(grep -o -m1 -e SOLEUR_ZOT_BRIDGE "$SCRIPT_DIR/zot-mirror-diagnosis.sh")"
 
 echo "=== remedies for the #12937 edge causes ==="
+assert_contains "edge-error-1000 names the authoritative-zone remedy" \
+  "DNS record is wrong or missing in the zone that is authoritative for" "$(zot_mirror_cause_help edge-error-1000)"
+# curl exit 6 is also a runner resolver failure, so host-nxdomain must not assert the zone is wrong.
+assert_contains "host-nxdomain admits the runner's resolver as a cause" \
+  "NXDOMAIN, or the runner's resolver failed" "$(zot_mirror_cause_help host-nxdomain)"
+assert_not_contains "host-nxdomain does not assert the zone record is wrong" \
+  "DNS record is wrong" "$(zot_mirror_cause_help host-nxdomain)"
 for _c in host-nxdomain edge-error-1000; do
-  assert_contains "${_c} names the authoritative-zone remedy" \
-    "DNS record is wrong or missing in the zone that is authoritative for" "$(zot_mirror_cause_help "$_c")"
   assert_contains "${_c} points at #12931" "#12931" "$(zot_mirror_cause_help "$_c")"
 done
 assert_contains "tunnel-down names the connector" "connector" "$(zot_mirror_cause_help tunnel-down)"
+# Each edge cause names one command an agent can run.
+assert_contains "host-nxdomain names a runnable command" "gh issue list --label ci/tunnel-zone-authority" "$(zot_mirror_cause_help host-nxdomain)"
+assert_contains "edge-error-1000 names a runnable command" "gh issue list --label ci/tunnel-zone-authority" "$(zot_mirror_cause_help edge-error-1000)"
+assert_contains "other edge codes name a runnable command" "gh workflow run scheduled-terraform-drift.yml" "$(zot_mirror_cause_help edge-error-1016)"
+assert_contains "tunnel-down names a runnable command" "gh issue list --label ci/tunnel-connector-drift" "$(zot_mirror_cause_help tunnel-down)"
 assert_contains "a non-1000 edge code renders its own code" "(1016)" "$(zot_mirror_cause_help edge-error-1016)"
 assert_contains "the unverifiable arm surfaces an edge cause verbatim" "edge-error-1000" \
   "$(zot_mirror_diagnosis unverifiable "20:23:05Z" "" "edge-error-1000")"
@@ -394,7 +413,7 @@ echo "=== Results: $PASS passed, $FAIL failed ==="
 # like ordinary cleanup — yields "0 passed, 0 failed" and exit 0, and scripts/test-all.sh
 # reads only the exit code. A floor (never equality: equality makes every new assertion a
 # spurious failure) is the only thing that notices.
-MIN_ASSERTIONS=143  # the REALIZED count on a green run, raised from 50 with the #12937 SOLEUR_ZOT_BRIDGE rows
+MIN_ASSERTIONS=153  # the REALIZED count on a green run
 if [[ $((PASS + FAIL)) -lt "$MIN_ASSERTIONS" ]]; then
   echo "FAIL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "      The suite did not execute what it claims to. Fix the dispatch, do not lower the floor." >&2

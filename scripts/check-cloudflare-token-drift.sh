@@ -5,7 +5,8 @@
 # ----------------------------------------------
 # Every `doppler_secret` that carries a Cloudflare token declares
 # `lifecycle { ignore_changes = [value] }` (cf-cert-reissue-token.tf,
-# tunnel.tf, zot-registry.tf). That rule is deliberate — it stops refresh-time
+# zot-registry.tf; tunnel.tf's REGISTRY_PUSH_ACCESS_TOKEN_* pair is the
+# exception: Terraform writes it). That rule is deliberate — it stops refresh-time
 # churn — but it has a consequence nothing surfaces: **Terraform can never
 # propagate a rotated token**. `terraform apply` reports `No changes` while the
 # `prd` root config still holds the dead value — and so does every OTHER config
@@ -1519,6 +1520,10 @@ verify_access_pair() {
         # cannot work when the refusing layer's status is operator-configurable. LIVE now
         # requires positive evidence of success; everything unrecognised is loud.
         PAIR_VERDICT[$cache_key]="LIVE"
+      elif [[ "$PROBE_CODE" == 530 ]]; then
+        # Access present, no connector behind it (the gate answers, the tunnel does not). The
+        # credentialed body is never read, so the bare 530 is the only tunnel signal here.
+        PAIR_VERDICT[$cache_key]="UNVERIFIABLE:tunnel-down"
       else
         PAIR_VERDICT[$cache_key]="UNVERIFIABLE:unexpected-status"
       fi ;;
@@ -1566,9 +1571,9 @@ for base in ${ACCESS_BASES[@]+"${ACCESS_BASES[@]}"}; do
         host-unreachable)
           UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|host-unreachable|the control probe to ${host} got no answer at all (timeout / DNS / TLS), so nothing is known about the credential. Do NOT rotate on the strength of this row; re-run once ${host} is reachable. (seen in ${cfg})") ;;
         host-nxdomain)
-          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|host-nxdomain|${host} does not resolve (curl exit 6: no DNS answer), so the request never reached Cloudflare and nothing is known about the credential. The tunnel hostname's DNS record is wrong or missing in the zone that is authoritative for ${APP_DOMAIN_BASE}; compare the public NS with the Terraform zone (#12931). Do NOT rotate. (seen in ${cfg})") ;;
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|host-nxdomain|${host} did not resolve (NXDOMAIN, or the runner's resolver failed: curl exit 6 is both), so the request never reached Cloudflare and nothing is known about the credential. If it repeats, check the record in the zone that is authoritative for ${APP_DOMAIN_BASE} against the Terraform zone (#12931). Do NOT rotate. (seen in ${cfg})") ;;
         tunnel-down)
-          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|tunnel-down|${host} answered an uncredentialed request with Cloudflare's tunnel-error shape (HTTP 530, or error code 1033) and no Access stamp: the tunnel behind the hostname has no healthy connector. Nothing is known about the credential. Do NOT rotate; check the tunnel's connectors. (seen in ${cfg})") ;;
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|tunnel-down|${host} answered with Cloudflare's tunnel-error shape (HTTP 530, or error code 1033) and no Access stamp: the tunnel behind the hostname has no healthy connector. Nothing is known about the credential. Do NOT rotate; check the tunnel's connectors. (seen in ${cfg})") ;;
         edge-error-1[0-9][0-9][0-9])
           _edge_code="${state##*-}"   # the digits after the last `-` (validated ^1[0-9]{3}$ upstream)
           UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|edge-error-${_edge_code}|${host} answered an uncredentialed request with Cloudflare's own error page, error code ${_edge_code}, and no Access stamp: the edge refused before Access was consulted. Error 1000 (DNS points to a prohibited IP) and its siblings mean the tunnel hostname's DNS record is wrong in the zone that is authoritative for ${APP_DOMAIN_BASE}. Nothing is known about the credential. Do NOT rotate. (seen in ${cfg})") ;;
@@ -1632,9 +1637,22 @@ else
     echo "STALE — these configs hold a token value Cloudflare no longer accepts:"
     for r in "${DEAD_ROWS[@]}"; do echo "  ${r%%|*}  in  ${r##*|}"; done
     echo
-    echo "A rotation did not propagate. Terraform will NOT fix this: the"
-    echo "doppler_secret resources carry lifecycle.ignore_changes = [value], so"
-    echo "'terraform apply' reports 'No changes' while the stale value persists."
+    echo "A rotation did not propagate."
+    _dead_tf=0; _dead_other=0
+    for r in "${DEAD_ROWS[@]}"; do
+      case "$r" in REGISTRY_PUSH_ACCESS_TOKEN_*) _dead_tf=1 ;; *) _dead_other=1 ;; esac
+    done
+    if (( _dead_other )); then
+      echo "Where a doppler_secret carries lifecycle.ignore_changes = [value], Terraform will"
+      echo "NOT fix it: 'terraform apply' reports 'No changes' while the stale value persists."
+    fi
+    # Terraform owns this pair's 'prd' copy (tunnel.tf, no ignore_changes): a hand-set value
+    # is reverted by the next apply, so the remedy is a rotation through Terraform.
+    if (( _dead_tf )); then
+      echo "REGISTRY_PUSH_ACCESS_TOKEN_* is written to 'prd' BY Terraform: rotate it by bumping"
+      echo "client_secret_version on registry_push_soleur in a PR and applying"
+      echo "(cloudflare-service-token-rotation.md). Do NOT hand-set the 'prd' value."
+    fi
     # The previous line here read "Set the live value on the 'prd' ROOT config; branch
     # configs inherit it." That is FALSIFIED, and it was the remedy printed on the acute
     # path: measured 2026-08-02, CF_API_TOKEN_DNS_EDIT is carried independently by seven
@@ -1643,9 +1661,9 @@ else
     # who performed it would verify the one config they edited, get a green result, and
     # leave every other stale copy in place: the exact silent-and-delayed shape this
     # script's own header cites as the reason it exists.
-    echo "Set the live value in EVERY config named above — Doppler branch configs do NOT"
-    echo "inherit values from the 'prd' root config. Setting root alone leaves the other"
-    echo "stale copies in place and looks completely successful."
+    echo "Fix EVERY config named above — Doppler branch configs do NOT inherit values from"
+    echo "the 'prd' root config. Fixing root alone leaves the other stale copies in place and"
+    echo "looks completely successful."
   fi
   if [[ "$UNVERIFIABLE_N" -gt 0 ]]; then
     echo
@@ -1684,9 +1702,10 @@ else
     fi
     if grep -qE '\|(host-nxdomain|tunnel-down|edge-error-1[0-9]{3})\|' <<<"$(printf '%s\n' "${UNVERIFIABLE_ROWS[@]}")"; then
       echo "  host-nxdomain / edge-error-<code> / tunnel-down: the EDGE answered (or DNS did not),"
-      echo "    and the cause is named. host-nxdomain and edge-error-1000 mean the tunnel"
-      echo "    hostname's DNS record is wrong or missing in the authoritative zone; tunnel-down"
-      echo "    means the tunnel has no healthy connector. Do NOT rotate the credential."
+      echo "    and the cause is named. host-nxdomain means the name did not resolve (NXDOMAIN, or"
+      echo "    the runner's resolver failed); edge-error-1000 means the tunnel hostname's DNS record"
+      echo "    is wrong in the authoritative zone; tunnel-down means the tunnel has no healthy"
+      echo "    connector. Do NOT rotate the credential."
     fi
     if grep -qE '\|(refused-unstamped|control-blocked)\|' <<<"$(printf '%s\n' "${UNVERIFIABLE_ROWS[@]}")"; then
       echo "  refused-unstamped / control-blocked: something in FRONT of Cloudflare Access"

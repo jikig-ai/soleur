@@ -280,15 +280,17 @@ done
 # Without this a single MOCK_HTTP_CODE governs every host, which makes a fixture carrying
 # two bases structurally unable to express "this host admits, that one rejects" — the axis
 # the previous suite could not test at all.
-# Field order: host|c_code|c_stamp|r_code|r_stamp|r_mitigated|c_access_redirect
-# The last two model the two refusal shapes that carry NO cf-access-* header and are
-# therefore invisible to the stamp alone: Cloudflare's own block/challenge (cf-mitigated)
-# and an Access identity-policy redirect to the IdP login (Location).
-_c_code=""; _c_stamp=""; _r_code=""; _r_stamp=""; _r_mitig=""; _c_redir=""
+# Field order: host|c_code|c_stamp|r_code|r_stamp|r_mitigated|c_access_redirect|body
+# r_mitigated / c_access_redirect model the two refusal shapes that carry NO cf-access-*
+# header and are therefore invisible to the stamp alone: Cloudflare's own block/challenge
+# (cf-mitigated) and an Access identity-policy redirect to the IdP login (Location). `body`
+# (last, so it may hold `|`) overrides MOCK_HTTP_BODY for that host, so one run can give two
+# hosts different pages.
+_c_code=""; _c_stamp=""; _r_code=""; _r_stamp=""; _r_mitig=""; _c_redir=""; _h_body=""
 if [[ -n "${MOCK_HOSTS:-}" && -f "${MOCK_HOSTS}" && -n "$_host" ]]; then
   _line=$(grep -E "^${_host}\|" "$MOCK_HOSTS" 2>/dev/null | head -1)
   if [[ -n "$_line" ]]; then
-    IFS='|' read -r _ _c_code _c_stamp _r_code _r_stamp _r_mitig _c_redir <<< "$_line"
+    IFS='|' read -r _ _c_code _c_stamp _r_code _r_stamp _r_mitig _c_redir _h_body <<< "$_line"
   fi
 fi
 : "${_r_mitig:=0}"
@@ -347,6 +349,7 @@ if [[ -n "$_hdrfile" ]]; then
 fi
 
 _body="${MOCK_HTTP_BODY:-}"
+[[ -n "$_h_body" ]] && _body="$_h_body"
 if [[ -n "$_outfile" ]]; then
   printf '%s' "$_body" > "$_outfile" 2>/dev/null || true
 else
@@ -2447,12 +2450,82 @@ else
   fail "the per-cause footer must cover the new causes, or the row stands without a remedy"
 fi
 
+echo "E11: Access present, no connector: an unstamped 530 to the CREDENTIALED probe -> tunnel-down"
+E_ROWS=$((E_ROWS + 1))
+JE11="$TMP/e11.json"
+MOCK_CONTROL_STAMPED=1 MOCK_CONTROL_CODE=403 run_sut e11 530 "$ACCESS_FIXTURE" prd "--json-file $JE11"
+_e11=1
+[[ "$RC" == "1" ]] || _e11=0
+[[ "$(first_cause "$JE11")" == "tunnel-down" ]] || _e11=0
+grep -qF '[tunnel-down]' "$OUT" || _e11=0
+grep -qF 'unexpected-status' "$OUT" && _e11=0
+[[ "$(cred_probes)" == "1" ]] || _e11=0
+if [[ "$_e11" == "1" ]]; then
+  pass "a gated host whose credentialed probe gets a bare 530 names tunnel-down, not unexpected-status"
+else
+  fail "behind Access the post-merge no-connector window reads as a credentialed 530; it must grade tunnel-down (rc=$RC, cause=$(first_cause "$JE11"))"
+fi
+
+echo "E12: an unstamped 429 carrying a 1xxx code is not an edge-error (the 403/5xx status guard)"
+E_ROWS=$((E_ROWS + 1))
+JE12="$TMP/e12.json"
+MOCK_CONTROL_STAMPED=0 MOCK_CONTROL_CODE=429 MOCK_HTTP_BODY='error code: 1015' \
+  run_sut e12 200 "$ACCESS_FIXTURE" prd "--json-file $JE12"
+if [[ "$(first_cause "$JE12")" == "gate-indeterminate" ]] && ! grep -q 'edge-error' "$OUT"; then
+  pass "a body code is read only on a 403 or 5xx; a 429 with a code stays gate-indeterminate"
+else
+  fail "dropping the status guard names edge-error-1015 on a 429 (cause=$(first_cause "$JE12"))"
+fi
+
+echo "E13: PROBE_EDGE_CODE resets per probe: host 1 carries errorCode 1000, host 2 an empty 403"
+E_ROWS=$((E_ROWS + 1))
+JE13="$TMP/e13.json"
+# Bases are probed in sorted order, so ssh. (CI_SSH) is probed before registry. (REGISTRY_PUSH).
+printf 'ssh.soleur.ai|403|0|200|0|0|0|%s\nregistry.soleur.ai|403|0|200|0|0|0|\n' "$E_PAGE_1000" > "$TMP/e13.hosts"
+MOCK_HOSTS="$TMP/e13.hosts" run_sut e13 200 "$CI_SSH_FIXTURE
+$ACCESS_FIXTURE" prd "--json-file $JE13"
+_e13_causes="$(python3 -c '
+import json, sys
+rows = json.load(open(sys.argv[1])).get("unverifiable_keys") or []
+print(" ".join(sorted("%s=%s" % (r.get("key","").split("_ACCESS")[0], r.get("cause")) for r in rows)))
+' "$JE13" 2>/dev/null || printf '<unparseable>')"
+if [[ "$_e13_causes" == "CI_SSH=edge-error-1000 REGISTRY_PUSH=gate-indeterminate" ]]; then
+  pass "the second host does not inherit the first host's edge code"
+else
+  fail "without the per-probe reset an empty 403 inherits edge-error-1000 from the host probed before it (got: ${_e13_causes})"
+fi
+
+echo "E14: a DEAD registry-push pair names the Terraform rotation; a DEAD CI-SSH pair keeps the ignore_changes note"
+E_ROWS=$((E_ROWS + 1))
+MOCK_CRED_STAMPED=1 run_sut e14a 403 "$ACCESS_FIXTURE"
+_e14=1
+grep -qF 'client_secret_version' "$OUT" || _e14=0
+grep -qF 'ignore_changes' "$OUT" && _e14=0
+MOCK_CRED_STAMPED=1 run_sut e14b 403 "$CI_SSH_FIXTURE"
+grep -qF 'ignore_changes' "$OUT" || _e14=0
+grep -qF 'client_secret_version' "$OUT" && _e14=0
+if [[ "$_e14" == "1" ]]; then
+  pass "the DEAD remedy depends on whether Terraform writes the token"
+else
+  fail "REGISTRY_PUSH_ACCESS_TOKEN_* is Terraform-written (no ignore_changes); telling the operator Terraform cannot fix it sends them to hand-set a value the next apply reverts"
+fi
+
+echo "E15: host-nxdomain does not assert the zone record is wrong (curl exit 6 is also a resolver failure)"
+E_ROWS=$((E_ROWS + 1))
+JE15="$TMP/e15.json"
+MOCK_CURL_EXIT=6 run_sut e15 000 "$ACCESS_FIXTURE" prd "--json-file $JE15"
+if grep -qF "NXDOMAIN, or the runner's resolver failed" "$OUT" && ! grep -qF "record is wrong or missing" "$OUT"; then
+  pass "the host-nxdomain row and footer name both readings of curl exit 6"
+else
+  fail "a runner resolver failure also exits 6; the row must not send the operator to edit a healthy zone"
+fi
+
 # Row-count floor for THIS block (Guard 1 row 5): an edit that skips the block must red even
 # if the file-wide floor below still has slack from elsewhere.
 # Enforced with echo + exit, never through `fail` (scripts/guard-vacuity-floor.test.sh: a
 # floor routed through the assertion helper goes quiet when the helper is neutered).
-if (( E_ROWS < 14 )); then
-  echo "FATAL: only ${E_ROWS} Guard 1 rows executed, expected >= 14." >&2
+if (( E_ROWS < 19 )); then
+  echo "FATAL: only ${E_ROWS} Guard 1 rows executed, expected >= 19." >&2
   exit 1
 fi
 
@@ -2499,10 +2572,10 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # unsampled), plus specificity assertions in M3 and non-zero-position fixtures in M4.
 # 91 is the REALIZED count on a green run.
 #
-# Raised 91 -> 112 with E1-E10, Guard 1 of the edge-cause classifier (#12937). 112 is the
-# REALIZED count on a green run.
-if [[ "$((PASS + FAIL))" -lt 112 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 112. The suite did not execute what it claims to." >&2
+# Raised 91 -> 112 with E1-E10, Guard 1 of the edge-cause classifier (#12937), then -> 117
+# with E11-E15. 117 is the REALIZED count on a green run.
+if [[ "$((PASS + FAIL))" -lt 117 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 117. The suite did not execute what it claims to." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

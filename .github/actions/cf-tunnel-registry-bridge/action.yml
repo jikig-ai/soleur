@@ -174,6 +174,9 @@ runs:
         SKIP: ${{ inputs.skip-docker-login }}
       run: |
         set -euo pipefail
+        # The SOLEUR_ZOT_BRIDGE stage until a later step names its own: a failure before the
+        # listener (Doppler install, cloudflared download, token read) is `setup`.
+        printf 'ZOT_BRIDGE_STAGE=setup\n' >> "${GITHUB_ENV:-/dev/null}" || true
         case "${SKIP:-false}" in
           true|false) ;;
           *)
@@ -337,8 +340,11 @@ runs:
           # #12937. ONE SOLEUR_ZOT_BRIDGE line, from the library's single emitter, rendering the
           # preflight's verdict and cause (no second probe). The stage and rc are also published
           # job-wide so the caller's failure path can render the same line into its email.
+          # The validated line is also an annotation, so the check-runs API carries stage/host/rc.
           if declare -F zot_bridge_marker >/dev/null 2>&1; then
-            zot_bridge_marker listener "${TOKEN_VERDICT:-unmeasured}" "${TOKEN_CAUSE:-unknown}" "$ZOT_BRIDGE_HOST" "$nc_rc" >&2 || true
+            _marker="$(zot_bridge_marker listener "${TOKEN_VERDICT:-unmeasured}" "${TOKEN_CAUSE:-unknown}" "$ZOT_BRIDGE_HOST" "$nc_rc" || true)"
+            printf '%s\n' "$_marker" >&2
+            if zot_bridge_marker_valid "$_marker"; then printf '::notice title=SOLEUR_ZOT_BRIDGE::%s\n' "$_marker"; fi
           fi
           printf 'ZOT_BRIDGE_STAGE=listener\nZOT_BRIDGE_RC=%s\n' "$nc_rc" >> "$GITHUB_ENV" || true
           cat /tmp/cloudflared-registry.log >&2 || true
@@ -379,6 +385,8 @@ runs:
         ZOT_PUSH_TOKEN=$(doppler secrets get ZOT_PUSH_TOKEN --plain || true)
         if [[ -z "$ZOT_PUSH_USER" || -z "$ZOT_PUSH_TOKEN" ]]; then
           echo "::error::ZOT_PUSH_USER/ZOT_PUSH_TOKEN missing or empty in Doppler prd (written by zot-registry.tf on the operator full apply)."
+          # The listener came up; this step's own credential read failed (docker never ran).
+          printf 'ZOT_BRIDGE_STAGE=login\n' >> "$GITHUB_ENV" || true
           exit 1
         fi
         printf '::add-mask::%s\n' "$ZOT_PUSH_TOKEN"
@@ -429,7 +437,9 @@ runs:
           echo "::endgroup::"
           # #12937 — see the listener branch above. ZOT_BRIDGE_HOST was published by that step.
           if declare -F zot_bridge_marker >/dev/null 2>&1; then
-            zot_bridge_marker login "${TOKEN_VERDICT:-unmeasured}" "${TOKEN_CAUSE:-unknown}" "${ZOT_BRIDGE_HOST:-invalid}" "$login_rc" >&2 || true
+            _marker="$(zot_bridge_marker login "${TOKEN_VERDICT:-unmeasured}" "${TOKEN_CAUSE:-unknown}" "${ZOT_BRIDGE_HOST:-invalid}" "$login_rc" || true)"
+            printf '%s\n' "$_marker" >&2
+            if zot_bridge_marker_valid "$_marker"; then printf '::notice title=SOLEUR_ZOT_BRIDGE::%s\n' "$_marker"; fi
           fi
           printf 'ZOT_BRIDGE_STAGE=login\nZOT_BRIDGE_RC=%s\n' "$login_rc" >> "$GITHUB_ENV" || true
           echo "::group::cloudflared registry bridge log (tail 200)"

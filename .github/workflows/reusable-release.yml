@@ -971,6 +971,9 @@ jobs:
         id: zot_bridge
         if: steps.docker_build.outcome == 'success'
         continue-on-error: true
+        # Observed 5-7 s; the bound covers the cloudflared download's own retries (4 x 120 s).
+        # A timeout is a failure, so the mirror step below still reports it with a marker.
+        timeout-minutes: 12
         uses: ./.github/actions/cf-tunnel-registry-bridge
         with:
           # DOPPLER_TOKEN_PRD, NOT the generic DOPPLER_TOKEN (#6122 cutover fix): the bridge
@@ -1013,6 +1016,9 @@ jobs:
         # release that never intended to mirror anything. docker_build success is exactly
         # the precondition that guarantees IMAGE and DIGEST are populated.
         if: steps.docker_build.outcome == 'success'
+        # Observed 92-141 s. Bounded well inside the 60-minute job so a hung crane/docker call
+        # fails this step (the failure email still runs) instead of cancelling the job.
+        timeout-minutes: 20
         # ── WHY THIS STEP IS RELEASE-BLOCKING (four clauses; ADR-096 amended) ──────────
         #
         # (i) GHCR COUPLING — this gate is correct ONLY while GHCR is not a usable pull
@@ -1028,11 +1034,10 @@ jobs:
         #
         # (ii) CF ACCESS COUPLING — the bridge is now effectively release-blocking, which
         #     promotes the registry_push CF Access service token to a release-blocking
-        #     credential. Its propagation after a rotation is DELIBERATELY only detected,
-        #     never automated: the doppler_secret resources carry
-        #     lifecycle { ignore_changes = [value] }, and removing that would trade a
-        #     silent-staleness bug for a refresh-churn bug already hit once. Detection
-        #     lives in scripts/check-cloudflare-token-drift.sh.
+        #     credential. Terraform writes its `prd` copy (doppler_secret
+        #     .registry_push_access_token_*, no ignore_changes), so a rotation is a
+        #     client_secret_version bump plus apply; copies in other configs are only
+        #     detected, by scripts/check-cloudflare-token-drift.sh.
         #
         # (iii) WHY THE GATE LIVES HERE AND NOT AT DEPLOY — the load-bearing sub-value is
         #     publish-ordering / version-space integrity, NOT availability. A release
@@ -1234,21 +1239,26 @@ jobs:
           # bridge failures and print none. Rendered by the library's single emitter from the
           # preflight's verdict and cause — no second probe — then RE-VALIDATED against the
           # marker grammar before it leaves this step as `bridge_marker`, the only form in which
-          # it reaches the notify-ops email. An action failure that set no stage stopped before
-          # docker login ran, so the listener never served: that is `listener`; its rc was not
-          # measured and renders `invalid`.
+          # it reaches the notify-ops email. An action failure that set no stage never reached
+          # the action's first step: that is `setup`, and its rc renders `invalid`. A verify
+          # `unresolvable` read crossed the bridge after the copy, so it is `push` too.
+          # BRIDGE_MARKER carries the validated line into degraded()'s ::error:: annotation.
+          BRIDGE_MARKER=""
           emit_bridge_marker() {
             local reason="$1" rc="$2" stage="" mrc="" marker=""
             case "$reason" in
-              bridge) stage="${ZOT_BRIDGE_STAGE:-listener}"; mrc="${ZOT_BRIDGE_RC:-}" ;;
+              bridge) stage="${ZOT_BRIDGE_STAGE:-setup}"; mrc="${ZOT_BRIDGE_RC:-}" ;;
               copy_*) stage="push"; mrc="$rc" ;;
+              verify) [[ "$rc" == unresolvable ]] || return 0; stage="push" ;;
               *) return 0 ;;
             esac
             declare -F zot_bridge_marker >/dev/null 2>&1 || return 0
             marker="$(zot_bridge_marker "$stage" "${TOKEN_VERDICT:-unmeasured}" "${TOKEN_CAUSE:-unknown}" "${ZOT_BRIDGE_HOST:-invalid}" "$mrc")"
             if zot_bridge_marker_valid "$marker"; then
               printf '%s\n' "$marker" >&2
+              printf '::notice title=SOLEUR_ZOT_BRIDGE::%s\n' "$marker"
               printf 'bridge_marker=%s\n' "$marker" >> "$GITHUB_OUTPUT"
+              BRIDGE_MARKER="$marker"
             fi
             return 0
           }
@@ -1276,7 +1286,7 @@ jobs:
             # cheap in a group and expensive in an annotation; this stops paying the
             # annotation cost for text the annotation cannot carry.
             local detail_head="${detail%%$'\n'*}"
-            echo "::error::zot mirror FAILED at stage '${reason}' for ${ZOT:-<image>} (rc=${rc}) — ${detail_head} This release is BLOCKED and will not deploy. Full diagnosis in the job summary and the 'zot mirror diagnosis' log group."
+            echo "::error::zot mirror FAILED at stage '${reason}' for ${ZOT:-<image>} (rc=${rc}) — ${detail_head} This release is BLOCKED and will not deploy. Full diagnosis in the job summary and the 'zot mirror diagnosis' log group.${BRIDGE_MARKER:+ ${BRIDGE_MARKER}}"
             # THE POINTER IS NOT GATED ON THE DETAIL'S SHAPE (#7555 review). It used to live inside
             # the `$detail != $detail_head` arm below, which renders ONLY for a multi-line detail —
             # and MEASURED, 8 of the 9 live degraded() call sites pass a SINGLE-LINE detail,
@@ -1412,18 +1422,8 @@ jobs:
             # now BRANCHES on a verdict this job actually computed, and it lives in
             # scripts/zot-mirror-diagnosis.sh so this site and the two in
             # .github/actions/cf-tunnel-registry-bridge/action.yml cannot drift apart.
-            # #7242 / ADR-166.
-            # The load is GUARDED, and the guard is load-bearing rather than defensive
-            # boilerplate. An unguarded `source` of a missing/unreadable path aborts this
-            # block under `set -u`, which would mean degraded() never runs — and a bridge
-            # failure that reports NOTHING is precisely the #6416 defect this branch was
-            # written to close. A diagnosis helper must never be able to silence the
-            # failure it exists to explain, so a load failure degrades to the short form.
+            # #7242 / ADR-166. The library was loaded (guarded) above, before this branch.
             DIAG=""
-            if [[ -n "${GITHUB_WORKSPACE:-}" && -r "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh" ]]; then
-              # shellcheck source=/dev/null
-              source "${GITHUB_WORKSPACE}/scripts/zot-mirror-diagnosis.sh"
-            fi
 
             # Measure the ORIGIN hypothesis here, in-job, rather than telling the operator to
             # go look at a dashboard (hr-no-dashboard-eyeball-pull-data-yourself). This is an

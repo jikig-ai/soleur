@@ -525,8 +525,15 @@ fi
 # its PAIR_VERDICT string intact left this suite fully green while the detector emitted
 # a cause the email had no <li> for — the exact defect this file exists to catch.
 # Verified by mutation.
-mapfile -t CAUSES < <(grep -oE 'UNVERIFIABLE_ROWS\+=\("\$\{base\}_ID/_SECRET\|[a-z-]+\|' "$DETECTOR" \
-                      | grep -oE '\|[a-z-]+\|' | tr -d '|' | sort -u)
+# Digits are in the class: the edge-error family carries them. `edge-error-${_edge_code}` is a
+# row TEMPLATE (one member per Cloudflare 1xxx code), sampled at 1000 (the zone-move code, which
+# the email names on its own) and 1016 (a member only the family remedy covers).
+mapfile -t CAUSES < <({ grep -oE 'UNVERIFIABLE_ROWS\+=\("\$\{base\}_ID/_SECRET\|[a-z0-9-]+\|' "$DETECTOR" \
+                        | grep -oE '\|[a-z0-9-]+\|$' | tr -d '|'
+                      if grep -qF 'UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|edge-error-${_edge_code}|' "$DETECTOR"; then
+                        printf '%s\n' edge-error-1000 edge-error-1016
+                      fi; } | sort -u)
+EDGE_FAMILY_RE='^edge-error-1[0-9]{3}$'
 # The two vocabularies must agree. They are separate literals in separate lines of the
 # detector, so either can drift alone: a PAIR_VERDICT state with no `case` arm emits
 # nothing (dead code), and an emitted cause with no PAIR_VERDICT state means the `case`
@@ -560,7 +567,7 @@ mapfile -t CAUSES < <(printf '%s\n' "${CAUSES[@]}" | sort -u)
 # covering less. A DROP below this number means the extraction drifted; raise it when
 # the detector legitimately grows a cause.
 echo "T9: the cause vocabulary is complete (guards a silently-broken extraction)"
-if (( ${#CAUSES[@]} >= 11 )); then
+if (( ${#CAUSES[@]} >= 15 )); then
   pass "derived ${#CAUSES[@]} causes from the detector: ${CAUSES[*]}"
 else
   fail "derived only ${#CAUSES[@]} causes — the extraction regex has drifted from the detector, and every parity assertion below would pass vacuously over an empty set"
@@ -585,10 +592,16 @@ missing=()
 # symmetric: T10 asks "is every derived cause in the rendered set", T11 asks "is every
 # rendered entry a derived cause", and both now read the same rendered set.
 mapfile -t _RENDERED_CAUSES < <(printf '%s' "$UNVER_BODY" \
-         | grep -oE '<li><code>[a-z-]+</code>( / <code>[a-z-]+</code>)?' \
-         | grep -oE '<code>[a-z-]+</code>' | sed 's/<\/\?code>//g' | sort -u)
+         | grep -oE '<li><code>[a-z0-9-]+</code>( / <code>[a-z0-9-]+</code>)?' \
+         | grep -oE '<code>[a-z0-9-]+</code>' | sed 's/<\/\?code>//g' | sort -u)
+# The family remedy (`<code>edge-error-&lt;code&gt;</code>`) explains every member except 1000,
+# which the email must name in its own entry.
+_FAMILY_RENDERED=0
+grep -qF '<code>edge-error-&lt;code&gt;</code>' <<<"$UNVER_BODY" && _FAMILY_RENDERED=1
 for c in "${CAUSES[@]}"; do
-  grep -qxF "$c" <<<"$(printf '%s\n' ${_RENDERED_CAUSES[@]+"${_RENDERED_CAUSES[@]}"})" || missing+=("$c")
+  grep -qxF "$c" <<<"$(printf '%s\n' ${_RENDERED_CAUSES[@]+"${_RENDERED_CAUSES[@]}"})" && continue
+  [[ "$c" =~ $EDGE_FAMILY_RE && "$c" != edge-error-1000 && "$_FAMILY_RENDERED" == 1 ]] && continue
+  missing+=("$c")
 done
 if (( ${#missing[@]} == 0 )); then
   pass "all ${#CAUSES[@]} causes have a <li><code>cause</code> entry"
@@ -613,8 +626,8 @@ while IFS= read -r tok; do
 # states) and those are not orphaned remedies. Cause entries are always at list-item
 # position, optionally as a `<code>a</code> / <code>b</code>` pair sharing one remedy.
 done < <(printf '%s' "$UNVER_BODY" \
-         | grep -oE '<li><code>[a-z-]+</code>( / <code>[a-z-]+</code>)?' \
-         | grep -oE '<code>[a-z-]+</code>' | sed 's/<\/\?code>//g' | sort -u)
+         | grep -oE '<li><code>[a-z0-9-]+</code>( / <code>[a-z0-9-]+</code>)?' \
+         | grep -oE '<code>[a-z0-9-]+</code>' | sed 's/<\/\?code>//g' | sort -u)
 if (( ${#stale_entries[@]} == 0 )); then
   pass "no orphaned cause entries in the email"
 else

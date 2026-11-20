@@ -104,9 +104,9 @@ except Exception:
 # Echo the detector's own cause token for the first unverifiable row, or `unknown`.
 # $1 = path to the --json-file output.
 #
-# The detector emits a CLOSED cause vocabulary (gate-indeterminate, stamped-non-refusal,
-# unexpected-status, refused-unstamped) precisely so a consumer never has to pattern-match
-# English prose. Each carries a different investigation and all four carry "Do NOT rotate".
+# The detector emits a CLOSED cause vocabulary (the keys of zot_mirror_cause_help below)
+# precisely so a consumer never has to pattern-match English prose. Each carries a different
+# investigation and every one carries "Do NOT rotate".
 zot_mirror_unverifiable_cause() {
   local json_file="$1" cause
   cause=$(python3 -c '
@@ -124,7 +124,7 @@ except Exception:
 
 # Per-cause remedy for an `unverifiable` verdict. $1 = the detector's cause token.
 #
-# THE VOCABULARY HAS TEN MEMBERS, NOT FOUR. An earlier version of this library rendered a
+# THE TABLE MUST COVER THE WHOLE VOCABULARY. An earlier version of this library rendered a
 # hardcoded four-row table under the sentence "Every cause in that vocabulary describes the
 # edge or the probe" — so an operator handed `control-blocked` got a cause token followed by
 # a list that did not contain it, beneath a claim that the list was exhaustive. Two of the
@@ -136,7 +136,7 @@ except Exception:
 #
 # Keyed by token so `zot-mirror-diagnosis.test.sh` can assert set-equality against the
 # detector's own emissions. A per-member spot-check ("does it grep <member>?") can never
-# detect a MISSING member, which is how four-of-ten survived.
+# detect a MISSING member, which is how a four-row table survived.
 #
 # #12937 added the three EDGE causes, which name what the control probe measured instead of
 # folding it into gate-indeterminate / host-unreachable. `edge-error-<NNNN>` is a FAMILY
@@ -144,11 +144,11 @@ except Exception:
 # because it is the zone-move shape.
 zot_mirror_cause_help() {
   case "${1:-unknown}" in
-    host-nxdomain)       echo "  The tunnel hostname does not resolve (NXDOMAIN): the tunnel hostname's DNS record is wrong or missing in the zone that is authoritative for <base>; compare public NS with the Terraform zone (#12931). Nothing is known about the credential. Do NOT rotate." ;;
-    edge-error-1000)     echo "  Cloudflare answered with its own Error 1000 (DNS points to a prohibited IP), no Access stamp: the tunnel hostname's DNS record is wrong or missing in the zone that is authoritative for <base>; compare public NS with the Terraform zone (#12931). A tunnel CNAME only routes inside the account that owns the zone. Nothing is known about the credential. Do NOT rotate." ;;
+    host-nxdomain)       echo "  The tunnel hostname did not resolve (NXDOMAIN, or the runner's resolver failed): curl exit 6 cannot tell the two apart. If it repeats, the record may be missing from the zone that is authoritative for <base> (#12931). Run: gh issue list --label ci/tunnel-zone-authority (or gh workflow run scheduled-terraform-drift.yml to re-measure). Nothing is known about the credential. Do NOT rotate." ;;
+    edge-error-1000)     echo "  Cloudflare answered with its own Error 1000 (DNS points to a prohibited IP), no Access stamp: the tunnel hostname's DNS record is wrong or missing in the zone that is authoritative for <base> (#12931). A tunnel CNAME only routes inside the account that owns the zone. Run: gh issue list --label ci/tunnel-zone-authority (or gh workflow run scheduled-terraform-drift.yml to re-measure). Nothing is known about the credential. Do NOT rotate." ;;
     edge-error-1[0-9][0-9][0-9])
-                         echo "  Cloudflare answered with its own error page (${1#edge-error-}) before Access was consulted, so the credential could not be graded. Look the code up in Cloudflare's 1xxx error reference; DNS-class codes mean the hostname's record is wrong in the zone that is authoritative for <base>. Do NOT rotate." ;;
-    tunnel-down)         echo "  Cloudflare reported the tunnel behind the host as having no healthy connector (HTTP 530 / error 1033). The connector host (web-2) is down or registered to a different tunnel. Nothing is known about the credential. Do NOT rotate; check the tunnel's connections." ;;
+                         echo "  Cloudflare answered with its own error page (${1#edge-error-}) before Access was consulted, so the credential could not be graded. Look the code up in Cloudflare's 1xxx error reference; DNS-class codes mean the hostname's record is wrong in the zone that is authoritative for <base>. Run: gh workflow run scheduled-terraform-drift.yml (its tunnel-zone step compares public NS with the Terraform zone). Do NOT rotate." ;;
+    tunnel-down)         echo "  Cloudflare reported the tunnel behind the host as having no healthy connector (HTTP 530 / error 1033). The connector host (web-2) is down or registered to a different tunnel. Nothing is known about the credential. Do NOT rotate. Run: gh issue list --label ci/tunnel-connector-drift (or gh workflow run scheduled-inngest-health.yml, whose connector_census job re-counts the connectors)." ;;
     gate-indeterminate)  echo "  The host answered an uncredentialed request with no Access stamp and no Cloudflare error code, which characterises neither a gate nor its absence. Nothing is known about the credential. Re-run." ;;
     stamped-non-refusal) echo "  An Access stamp on something that is not a refusal — not evidence the credential was rejected. Investigate the Access application for the host." ;;
     unexpected-status)   echo "  No stamp and no success. LIVE requires positive evidence of admission, and this is not evidence of staleness either. Re-run and investigate the edge." ;;
@@ -208,15 +208,17 @@ MEASURED DEAD — the registry-push credential was probed in this job and Cloudf
 rejected it. A rotation did not propagate, and this is the one verdict on which rotating
 is the remedy.
 
-Terraform will NOT fix this: the doppler_secret resources carry
-lifecycle.ignore_changes = [value], so 'terraform apply' reports "No changes" while the
-stale value keeps being served.
+Terraform OWNS the 'prd' root copy: doppler_secret.registry_push_access_token_{id,secret}
+carry no ignore_changes and take their value from registry_push_soleur. Rotate by bumping
+client_secret_version on cloudflare_zero_trust_access_service_token.registry_push_soleur in
+a PR and letting the merge apply write the new pair (cloudflare-service-token-rotation.md).
+Do NOT hand-set the 'prd' value: the next apply writes the state's value back over it.
 
-List the affected configs, then set the live value in EVERY ONE of them:
+List the affected configs; any config OTHER than 'prd' carries its own copy, set by hand:
   doppler run -p soleur -c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh
 
 Doppler branch configs do NOT inherit values from the 'prd' root config — measured
-2026-08-02, one token was carried independently by seven configs. Setting root alone
+2026-08-02, one token was carried independently by seven configs. Fixing root alone
 leaves every other stale copy in place and looks completely successful, which is the
 silent-and-delayed failure this detector exists to catch.
 
@@ -277,7 +279,7 @@ EOF
 # cause outside the detector's vocabulary prints `unknown` (same token
 # zot_mirror_unverifiable_cause uses for "no cause"). The line never carries a token id, a
 # secret or a response body: no field can hold one.
-ZOT_BRIDGE_RUNBOOK="knowledge-base/engineering/operations/runbooks/zot-registry-revert.md"
+ZOT_BRIDGE_RUNBOOK="knowledge-base/engineering/operations/runbooks/zot-registry-revert.md#grep-for-the-bridge-markers-first"
 
 _zot_bridge_cause_known() {
   case "$1" in
@@ -291,7 +293,7 @@ _zot_bridge_cause_known() {
 zot_bridge_marker() {
   local LC_ALL=C
   local stage="${1-}" verdict="${2-}" cause="${3-}" host="${4-}" rc="${5-}"
-  case "$stage" in listener|login|push) ;; *) stage=invalid ;; esac
+  case "$stage" in setup|listener|login|push) ;; *) stage=invalid ;; esac
   case "$verdict" in live|stale|unverifiable|unmeasured) ;; *) verdict=invalid ;; esac
   if _zot_bridge_cause_known "$cause"; then :
   elif [[ "$cause" =~ ^[a-z0-9-]{1,64}$ ]]; then cause=unknown
@@ -310,7 +312,7 @@ zot_bridge_marker() {
 # the helper cannot reach the email.
 zot_bridge_marker_valid() {
   local LC_ALL=C line="${1-}"
-  local re='^SOLEUR_ZOT_BRIDGE stage=(listener|login|push|invalid) verdict=(live|stale|unverifiable|unmeasured|invalid) cause=([a-z0-9-]{1,64}) host=([a-z0-9.-]{1,253}) rc=([0-9]{1,5}|invalid) runbook=knowledge-base/engineering/operations/runbooks/zot-registry-revert\.md$'
+  local re='^SOLEUR_ZOT_BRIDGE stage=(setup|listener|login|push|invalid) verdict=(live|stale|unverifiable|unmeasured|invalid) cause=([a-z0-9-]{1,64}) host=([a-z0-9.-]{1,253}) rc=([0-9]{1,5}|invalid) runbook=knowledge-base/engineering/operations/runbooks/zot-registry-revert\.md#grep-for-the-bridge-markers-first$'
   [[ "$line" =~ $re ]] || return 1
   local c="${BASH_REMATCH[3]}"
   _zot_bridge_cause_known "$c" || [[ "$c" == invalid ]] || return 1

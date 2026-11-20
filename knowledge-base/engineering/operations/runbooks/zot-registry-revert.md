@@ -131,9 +131,11 @@ markers before forming a hypothesis:
 gh run view <id> --log-failed | grep -E 'SOLEUR_(ZOT_BRIDGE|TUNNEL_VERIFY)'
 ```
 
-- **`SOLEUR_ZOT_BRIDGE stage=<listener|login|push> verdict=<v> cause=<c> host=<h> rc=<n> runbook=<this file>`.** It is
-  printed once on a bridge failure, by `.github/actions/cf-tunnel-registry-bridge/action.yml` or by the
-  `reusable-release.yml` mirror failure path, and the ops email carries the same line. `verdict` is the token
+- **`SOLEUR_ZOT_BRIDGE stage=<setup|listener|login|push> verdict=<v> cause=<c> host=<h> rc=<n> runbook=<this file>#grep-for-the-bridge-markers-first`.**
+  It is printed on a bridge failure by `.github/actions/cf-tunnel-registry-bridge/action.yml` and again by the
+  `reusable-release.yml` mirror failure path, each time with a `::notice title=SOLEUR_ZOT_BRIDGE::` copy that the
+  run summary shows, and the ops email carries the same line. `stage=setup` means the bridge never started its
+  listener (input, Doppler CLI, cloudflared download, or token read). `verdict` is the token
   preflight's verdict (the table in step 2 below). `cause` is the cause the classifier measured in
   `scripts/check-cloudflare-token-drift.sh` `verify_access_pair()`. The remedy for each cause lives only in
   `zot_mirror_cause_help` in `scripts/zot-mirror-diagnosis.sh`, and a set-equality test pins it to the
@@ -147,7 +149,7 @@ gh run view <id> --log-failed | grep -E 'SOLEUR_(ZOT_BRIDGE|TUNNEL_VERIFY)'
 - **`SOLEUR_TUNNEL_VERIFY cause=<c> tunnel=<id> connections=<n>`.** It is printed by
   `apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh` when its data-plane probe fails, and the step
   still exits non-zero. `cause=no-connector connections=0` means the tunnel that the CNAMEs point at has no
-  connector. That was expected between the #12937 merge apply and the web-2 re-bake. At any other time, web-2's
+  connector. That was expected between the #12937 merge apply and the web-2 re-bake; any later one means web-2's
   connector is down: re-bake it with `apply_target=web-host-replace web_host_key=web-2 confirm=REPLACE-web-2` (ADR-304).
 
 `cause=host-nxdomain` and `cause=edge-error-1000` were the 2026-11-18 shapes: the zone that answers for
