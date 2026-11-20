@@ -179,9 +179,6 @@
 #                           apps/web-platform/infra — in-repo = git ls-files,
 #                           outside = find)
 #   SOLEUR_INFRA_SHARD      k/N leg selector (malformed/out-of-range = exit 2)
-#   SOLEUR_INFRA_SKIP_DEDICATED  `1` drops the DEDICATED_JOB_WHY suites from an
-#                           unsharded run (main-health-monitor's test-infra leg);
-#                           unset/empty = run them; any other value = exit 2
 #   SOLEUR_INFRA_MANIFEST   manifest override: `off`, or an absolute path —
 #                           invalid forms fail closed
 #   SOLEUR_INFRA_TIMINGS    per-suite timing feed path (label<TAB>ms<TAB>verdict;
@@ -439,16 +436,15 @@ for _s in "${ALL_SUITES[@]}"; do
 done
 unset _s
 
-# DEDICATED — derived and EXECUTED by an unsharded run, but owned in CI by a job
-# of its own, never by a k/N leg (#12941, CTO rulings Q6/Q6c/Q16). A suite lands
-# here when its wall time cannot fit a leg (the bastion rehearsal boots real
-# cloud-init ~10 times, ~5 min). Unlike PRIVILEGED it still runs locally:
-# `bash scripts/test-all.sh infra` and a plain invocation of this file run it.
-# It is dropped from (a) every SOLEUR_INFRA_SHARD=k/N execute set, (b) an
-# unsharded run under SOLEUR_INFRA_SKIP_DEDICATED=1 (main-health-monitor's
-# test-infra leg, already at its timeout ceiling), each time with one loud
-# `DEDICATED:` line naming the owning job, and (c) `--enumerate`, so the shard
-# manifest never tables a row no leg can time. The value names the owning job as
+# DEDICATED — derived, never executed by this runner in any mode (sharded or
+# unsharded), exactly like PRIVILEGED (#12941, CTO rulings Q6/Q25). CI runs it in
+# the job its value names; locally, run it directly (`bash <path>`). A suite
+# lands here when it cannot ride a ship battery: the bastion rehearsal boots real
+# cloud-init 9 times in privileged systemd containers (~5 min). It is DERIVED
+# (presence = registration, ADR-252, so it stays counted and visible: `--list`
+# and every run print one `SKIP dedicated:` line naming the owning job and the
+# direct invocation) and omitted from `--enumerate`, so the shard manifest never
+# tables a row no leg can time. The value names the owning job as
 # `runs in the <job> job`; the registration gate
 # (.github/scripts/test/test-infra-suite-registration.sh) reads that name and
 # requires an unmasked `bash <path>` step in that job of infra-validation.yml —
@@ -474,6 +470,14 @@ for _s in "${SUITES[@]}"; do
   fi
 done
 unset _s
+SUITES=("${ENUM_SUITES[@]}")
+_ded_skip_lines() {  # one `SKIP dedicated:` line per DEDICATED suite (--list and every run)
+  local _s
+  for _s in "${DED_SUITES[@]}"; do
+    printf '  SKIP dedicated: %s — owner: %s — %s; run locally: bash %s\n' "$_s" \
+      "$(_dedicated_job "${_s##*/}")" "${DEDICATED_JOB_WHY[${_s##*/}]}" "$_s"
+  done
+}
 
 # SUITE_REGISTRATION enumerate — the machine-readable form the shard-manifest
 # generator (`regenerate-shard-manifest.py --group infra`) consumes for its ⊆
@@ -515,44 +519,6 @@ if [[ -n "${SOLEUR_INFRA_SHARD+x}" ]]; then
   echo "[shard] SOLEUR_INFRA_SHARD resolved k/N = ${_SHARD_K}/${_SHARD_N}"
 fi
 
-# Dedicated-suite drop (see DEDICATED_JOB_WHY above). BEFORE the partition, so a
-# dedicated suite never takes a leg's hash/positional slot. The marker parses
-# strictly, like the shard value: a typo must not silently run (or skip) a
-# ~5-minute suite.
-_SKIP_DEDICATED=0
-case "${SOLEUR_INFRA_SKIP_DEDICATED-}" in
-  "") ;;
-  1) _SKIP_DEDICATED=1 ;;
-  *)
-    echo "ERROR: SOLEUR_INFRA_SKIP_DEDICATED must be 1 or unset (got: '${SOLEUR_INFRA_SKIP_DEDICATED}')." >&2
-    echo "       A malformed value is never inferred: it fails closed." >&2
-    exit 2 ;;
-esac
-DED_DROPPED=()
-if (( ${#DED_SUITES[@]} > 0 )); then
-  _ded_reason=""
-  if (( _SHARD_N > 0 )); then
-    _ded_reason="shard ${_SHARD_K}/${_SHARD_N}: dedicated suites are on no k/N leg"
-  elif (( _SKIP_DEDICATED == 1 )); then
-    _ded_reason="SOLEUR_INFRA_SKIP_DEDICATED=1"
-  fi
-  if [[ -n "$_ded_reason" ]]; then
-    DED_DROPPED=("${DED_SUITES[@]}")
-    SUITES=("${ENUM_SUITES[@]}")
-    for _s in "${DED_DROPPED[@]}"; do
-      echo "DEDICATED: ${_s} is NOT run here (${_ded_reason}) — its owner is CI job $(_dedicated_job "${_s##*/}") in infra-validation.yml; ${DEDICATED_JOB_WHY[${_s##*/}]}"
-    done
-    unset _s
-    # A marker run that drops EVERYTHING would print "0 failed" over nothing —
-    # the false green the zero-guard above refuses. (Sharded runs keep their own
-    # zero-assignment refusal below.)
-    if (( _SHARD_N == 0 && ${#SUITES[@]} == 0 )); then
-      echo "ERROR: SOLEUR_INFRA_SKIP_DEDICATED=1 left ZERO suites to run — refusing a vacuous green." >&2
-      exit 2
-    fi
-  fi
-  unset _ded_reason
-fi
 _EXECUTABLE_N=${#SUITES[@]}
 
 # Shard-assignment manifest (ADR-240 pattern): the committed
@@ -701,9 +667,7 @@ fi
 
 # The carriers are consumed above — unset them so a suite that spawns a nested
 # runner (run-registered-suites.test.sh re-executes this file) never inherits a
-# partition it did not ask for (the #7902 lesson on SCRIPTS_SHARD; the same holds for
-# SOLEUR_INFRA_SKIP_DEDICATED — run-registered-suites.test.sh, itself a registered suite,
-# asserts the unsharded fixture run KEEPS a dedicated suite). TIMINGS is
+# partition it did not ask for (the #7902 lesson on SCRIPTS_SHARD). TIMINGS is
 # captured first: this process still writes the feed at the end, but a nested
 # runner must not scribble on the caller's artifact path mid-run.
 _TIMINGS_OUT="${SOLEUR_INFRA_TIMINGS:-}"
@@ -716,7 +680,7 @@ if [[ -n "$_TIMINGS_OUT" && "$_TIMINGS_OUT" != /* ]]; then
   echo "       (got: '$_TIMINGS_OUT') — this runner never normalises cwd." >&2
   exit 2
 fi
-unset SOLEUR_INFRA_SHARD SOLEUR_INFRA_MANIFEST SOLEUR_INFRA_TIMINGS SOLEUR_INFRA_SKIP_DEDICATED
+unset SOLEUR_INFRA_SHARD SOLEUR_INFRA_MANIFEST SOLEUR_INFRA_TIMINGS
 
 # Per-suite bound. The monolithic job's step-level `timeout-minutes` convention
 # becomes the runner's responsibility in the sharded shape — a suite that stalls
@@ -838,12 +802,6 @@ _SUITE_BOUNDS=(
   # The weight row (suite-durations.tsv) is an ESTIMATE, never measured on CI: the first CI wall time of this suite's leg must be recorded
   # (ADR-317, the runbook residuals), and the suite moves to a lighter leg if the leg exceeds ~700 s.
   "apps/web-platform/infra/key-rotate-workflow.test.sh=840"
-  # #12941 (CTO Q12/Q14): DEDICATED (see DEDICATED_JOB_WHY), so this bound applies to LOCAL unsharded runs
-  # only — CI runs the suite in its own bastion-boot-rehearsal job, under that job's 18-minute ceiling. The
-  # suite derives its own deadline (build cap 180 s + the three boot waves' worst rows 300 + 150 + 150 =
-  # 780 s) and reports a deadline-cut row by name; 900 s sits above that so a slow run renders as the
-  # suite's own verdict, and a real hang as this suite's RED (rc=124), never an anonymous stall.
-  "apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh=900"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT
@@ -903,19 +861,10 @@ if (( LIST_ONLY )); then
     done
   fi
   if (( ${#DED_SUITES[@]} > 0 )); then
-    # Status from the FINAL execute set, not from the drop decision: `RUN` means
-    # this invocation would execute it, `SKIP` that it would not.
     echo ""
-    echo "Dedicated — derived; CI runs them in their own job, never on a k/N leg (${#DED_SUITES[@]}):"
-    for _s in "${DED_SUITES[@]}"; do
-      _ded_status=SKIP
-      for _x in "${SUITES[@]}"; do
-        if [[ "$_x" == "$_s" ]]; then _ded_status=RUN; break; fi
-      done
-      printf '  %s dedicated: %s — owner: %s — %s\n' "$_ded_status" "$_s" \
-        "$(_dedicated_job "${_s##*/}")" "${DEDICATED_JOB_WHY[${_s##*/}]}"
-    done
-    unset _s _x _ded_status
+    echo "Dedicated — derived but NOT executed here, sharded or unsharded (${#DED_SUITES[@]}; CI runs"
+    echo "each in the job named below):"
+    _ded_skip_lines
   fi
   if (( _SHARD_N > 0 )); then
     echo ""
@@ -1042,8 +991,10 @@ if (( ${#PRIV_SUITES[@]} > 0 )); then
   echo "(${#PRIV_SUITES[@]} privileged suite(s) derived but not executed — CI runs them"
   echo " via 'sudo bash' in deploy-script-tests-fixed.)"
 fi
-if (( ${#DED_DROPPED[@]} > 0 )); then
-  echo "(${#DED_DROPPED[@]} dedicated suite(s) derived but not executed here — see the DEDICATED: line(s) above.)"
+if (( ${#DED_SUITES[@]} > 0 )); then
+  echo "(${#DED_SUITES[@]} dedicated suite(s) derived but not executed — CI runs each in its own job:"
+  _ded_skip_lines
+  echo ")"
 fi
 
 # The child still emits `PASS <path>` / `RED  <path>` FIRST and in the same byte shape — every
@@ -1418,7 +1369,7 @@ emit_unaccounted_names() {
 # each child's own `.trow` file, concatenated single-threaded strictly after
 # xargs — never appended by the children (a shared open file description is not
 # PIPE_BUF-atomic). UNACCOUNTED suites (shim killed, no .meta/.trow) and the
-# privileged set (and any dropped dedicated suite) get explicit `skip=` rows so the feed names the gap rather than
+# privileged and dedicated sets get explicit `skip=` rows so the feed names the gap rather than
 # omitting it; the generator's skip=/FAIL exclusions drop them from the balance.
 # BEFORE the logdir reap below — the .trow files live under it.
 if [[ -n "${_TIMINGS_OUT:-}" ]]; then
@@ -1433,8 +1384,8 @@ if [[ -n "${_TIMINGS_OUT:-}" ]]; then
     if (( ${#PRIV_SUITES[@]} > 0 )); then
       for _s in "${PRIV_SUITES[@]}"; do printf '%s\t0\tskip=privileged\n' "$_s"; done
     fi
-    if (( ${#DED_DROPPED[@]} > 0 )); then
-      for _s in "${DED_DROPPED[@]}"; do printf '%s\t0\tskip=dedicated\n' "$_s"; done
+    if (( ${#DED_SUITES[@]} > 0 )); then
+      for _s in "${DED_SUITES[@]}"; do printf '%s\t0\tskip=dedicated\n' "$_s"; done
     fi
   } > "${_TIMINGS_OUT}" || \
     echo "WARNING: could not write timings feed to ${_TIMINGS_OUT}" >&2

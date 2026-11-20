@@ -23,14 +23,14 @@
 #      waives the RUNNER, never the invocation.
 #   4. `deploy-script-tests-done` must exist and need both legs (and every dedicated
 #      job, below) — it is the single verdict `notify-main-failure` reads.
-#   5. The DEDICATED set (#12941: suites too slow for a k/N leg, which the runner drops
-#      from every shard and from --enumerate but still runs unsharded) must each be
-#      invoked, unmasked, by `bash <path>` in the job its DEDICATED_JOB_WHY value names
+#   5. The DEDICATED set (#12941, CTO Q25: suites that cannot ride a ship battery) is
+#      derive-but-do-not-execute, like PRIVILEGED — the runner never executes them,
+#      sharded or unsharded, and omits them from --enumerate. Each must be invoked,
+#      unmasked, by `bash <path>` in the job its DEDICATED_JOB_WHY value names
 #      (`runs in the <job> job`); that job must run on a hosted runner with job-level
 #      `permissions: contents: read` only, reference no `secrets.`, and check out with
-#      `persist-credentials: false`; and main-health-monitor's `test-infra` leg must set
-#      SOLEUR_INFRA_SKIP_DEDICATED=1. The shard/unsharded BEHAVIOUR of the drop is pinned
-#      by apps/web-platform/infra/run-registered-suites.test.sh (T11k), which executes the
+#      `persist-credentials: false`. The runner's never-execute BEHAVIOUR is pinned by
+#      apps/web-platform/infra/run-registered-suites.test.sh (T11k), which executes the
 #      runner; this gate stays text-only.
 #
 # WHAT IT DOES *NOT* ASSERT, stated so no reader over-reads a green run:
@@ -67,9 +67,6 @@ WF_REL=".github/workflows/infra-validation.yml"
 WF="$REPO_ROOT/$WF_REL"
 RUNNER_REL="apps/web-platform/infra/run-registered-suites.sh"
 RUNNER="$REPO_ROOT/$RUNNER_REL"
-MHM_REL=".github/workflows/main-health-monitor.yml"
-MHM="$REPO_ROOT/$MHM_REL"
-MHM_INFRA_JOB="test-infra"
 JOB="deploy-script-tests"
 FIXED_JOB="deploy-script-tests-fixed"
 DONE_JOB="deploy-script-tests-done"
@@ -89,12 +86,12 @@ fi
 # Slice a job's YAML text (comment lines stripped — a commented-out invocation must
 # never satisfy a check; that was the anti-vacuity core of the old gate too).
 # Job-scoping is load-bearing: a whole-file scan cannot honestly say "runs in no CI job".
-slice_job() {  # slice_job <job-name> [workflow-file, default $WF]
+slice_job() {  # slice_job <job-name>
   awk -v job="  $1:" '
     $0 == job { injob = 1; next }
     injob && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { injob = 0 }
     injob { print }
-  ' "${2:-$WF}" | grep -vE '^[[:space:]]*#' || true
+  ' "$WF" | grep -vE '^[[:space:]]*#' || true
 }
 
 JOB_RAW=$(slice_job "$JOB")
@@ -485,14 +482,14 @@ while IFS= read -r base; do
   DJOB_RAW=$(slice_job "$djob" | sed -E 's/[[:space:]]+#.*$//')
   if [[ -z "${DJOB_RAW//[[:space:]]/}" ]]; then
     err "$base is DEDICATED to job \`$djob\`, but $WF_REL has no such job — the suite"
-    err "  is dropped from every leg and runs in NO CI job."
+    err "  is never executed by the runner and runs in NO CI job."
     fails=$((fails + 1))
     continue
   fi
   drel_re="${drel//./[.]}"
   inv_re="(^|[[:space:]])bash[[:space:]]+${drel_re}([[:space:]]|$)"
   if ! grep -qE "$inv_re" <<< "$DJOB_RAW"; then
-    err "$base is DEDICATED (dropped from every k/N leg) but is NOT \`bash $drel\`-invoked"
+    err "$base is DEDICATED (never executed by the runner) but is NOT \`bash $drel\`-invoked"
     err "  in the \`$djob\` job — so it runs in NO CI job. Restore that step, or delete the"
     err "  DEDICATED_JOB_WHY entry and let the legs run it."
     fails=$((fails + 1))
@@ -500,7 +497,7 @@ while IFS= read -r base; do
   fi
   mask_check "$DJOB_RAW" "bash[[:space:]]+${drel_re}" "the \`$djob\` step for $base"
 
-  # The job's own posture (#12941 Guard 2 row 9): a hosted runner, no secret, read-only.
+  # The job's own posture (#12941 Guard 2 row 8): a hosted runner, no secret, read-only.
   # The suite boots PRIVILEGED containers, so whatever the job holds, they can reach.
   if ! grep -qE '^    runs-on:[[:space:]]*ubuntu-[0-9]+\.[0-9]+[[:space:]]*$' <<< "$DJOB_RAW"; then
     err "the \`$djob\` job does not run on a pinned GitHub-hosted ubuntu-NN.NN runner —"
@@ -532,26 +529,6 @@ while IFS= read -r base; do
   unset _perm
 done < <(printf '%s\n' "${!DEDICATED[@]}" | LC_ALL=C sort)
 unset drel drel_re inv_re djob DJOB_RAW
-
-# The monitor's unsharded infra leg must drop the dedicated set (CTO Q16: it runs at its
-# step ceiling) — by the explicit marker on the step that runs the infra group.
-if (( ${#DEDICATED[@]} > 0 )); then
-  if [[ ! -f "$MHM" ]]; then
-    err "$MHM_REL not found — cannot verify its \`$MHM_INFRA_JOB\` leg drops the dedicated suites."
-    fails=$((fails + 1))
-  else
-    MHM_INFRA_RAW=$(slice_job "$MHM_INFRA_JOB" "$MHM" | sed -E 's/[[:space:]]+#.*$//')
-    MHM_INFRA_STEP=$(printf '%s\n' "$MHM_INFRA_RAW" | awk -v RS='      - ' '/TEST_GROUP:[[:space:]]*infra/{print; exit}')
-    if [[ -z "$MHM_INFRA_STEP" ]]; then
-      err "could not find the \`TEST_GROUP: infra\` step in $MHM_REL's \`$MHM_INFRA_JOB\` job."
-      fails=$((fails + 1))
-    elif ! grep -qE "^[[:space:]]+SOLEUR_INFRA_SKIP_DEDICATED:[[:space:]]*(1|\"1\"|'1')[[:space:]]*$" <<< "$MHM_INFRA_STEP"; then
-      err "$MHM_REL's \`$MHM_INFRA_JOB\` step does not set SOLEUR_INFRA_SKIP_DEDICATED=1 —"
-      err "  the unsharded monitor run would boot the dedicated suites inside its step ceiling."
-      fails=$((fails + 1))
-    fi
-  fi
-fi
 
 # ── Arm 3b: test/infra suites must be invoked SOMEWHERE ──────────────────────
 # apps/web-platform/test/infra/*.test.sh lives OUTSIDE the runner's glob and is

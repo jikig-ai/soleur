@@ -98,7 +98,7 @@ run against the template on main. It found two boot faults, both fixed by this p
 |---|---|---|
 | `/etc/nftables.conf` is written before `apt-get install nftables` (dpkg conffile prompt, rc=100) | Fixed in #12873: the baseline is `/etc/soleur/bastion-nftables.conf`, installed to `/etc/nftables.conf` at `egress_load`, after apt. Prototype M1 reproduced the fault (rc=100, "end of file on stdin at conffile prompt") when the old path is restored. | Not re-fixed. Row M1 pins it. |
 | cloud-init's apt_configure rewrites the https sources | Fixed in #12873: `apt: preserve_sources_list: true`. Prototype: with it, the https file survives; without it, cc_apt_configure rewrites `ubuntu.sources` to `http://`. | Not re-fixed. Row M2 pins it. |
-| "register it in scripts/test-all.sh" | Presence under `apps/web-platform/infra/` is registration (ADR-252). `scripts/test-all.sh` reaches infra suites only through `run-registered-suites.sh` (one `run_suite` of the runner). No per-suite entry exists or is needed. | No `test-all.sh` edit. The suite stays in the runner's unsharded set, so `bash scripts/test-all.sh infra` runs it locally (CTO Q6c). |
+| "register it in scripts/test-all.sh" | Presence under `apps/web-platform/infra/` is registration (ADR-252). `scripts/test-all.sh` reaches infra suites only through `run-registered-suites.sh` (one `run_suite` of the runner). No per-suite entry exists or is needed. | No `test-all.sh` edit. The runner derives the suite (presence = registration) but never executes it, sharded or unsharded (CTO Q25, superseding Q6c); local coverage is the direct invocation, `bash apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh`. |
 | "the egress script under a netns" | A container has its own network namespace. The allowlist must be tested on a path that leaves through a non-loopback interface, because `oif "lo" accept` passes all local traffic. | The stub and decoy run in separate containers on a per-row docker network, so probes cross `eth0`. |
 | "run its runcmd stages (apt ...)" | The verbatim apt_install line (`curl linux-image-generic nftables`, with recommends) downloads 895 MB across 159 packages in the pinned image, measured with `apt-get install -y --print-uris`. | Fixture dummy debs satisfy `linux-image-generic` (see Proposed Solution). The apt line runs byte-for-byte. |
 | Kernel settle is covered | `kernel-currency.test.sh` executes the web copy only. The bastion copy is pinned byte-equal by SETTLE and never executed. | Row B2 executes the reboot branch under real cloud-init. |
@@ -258,7 +258,7 @@ nftables configurator. Nothing installed.
 
 Every technical fork was ruled by the CTO agent on 2026-11-20 and is persisted in
 `knowledge-base/project/specs/feat-one-shot-12941-bastion-runcmd-rehearsal/decision-challenges.md`
-(Q1-Q24 and Q6c). The IaC review (terraform-architect, 2026-11-20) is folded into
+(Q1-Q26 and Q6c; Q25 supersedes Q6c). The IaC review (terraform-architect, 2026-11-20) is folded into
 `## Infrastructure (IaC)`. The prototype's first image passed `--no-install-recommends` and its
 `build.sh` later added `systemd-timesyncd systemd-resolved`; the second image (`boot-reboot-row.sh`)
 purged `systemd-timesyncd` again. The suite's minimal image must match the plan, not the prototype
@@ -315,8 +315,8 @@ followed by "update the anchor in bastion-runcmd-rehearsal.test.sh; the template
 an editor who rewords a template line can tell a stale anchor from a regression. A header comment in
 `bastion-cloud-init.yml` names the suite, the fast subset command and where the anchors live.
 
-**Local subsets (CTO devex review).** `BRH_STATIC_ONLY=1` runs only the offline predicate self-tests,
-S0 and S1 (seconds). `BRH_ROWS=B1,F1` boots only the named rows and ends
+**Local subsets (CTO devex review).** `BRH_STATIC_ONLY=1` boots nothing: it runs the predicate
+self-tests, the image checks, S0 and S1, but still builds the fixture images, so it needs the archive. `BRH_ROWS=B1,F1` boots only the named rows and ends
 `bastion-runcmd-rehearsal: PARTIAL (...)`, never `PASS`. Under `CI`, either variable is refused with
 `BRH_SUBSET_REFUSED` and exit 1, so a partial run can never be read as proof.
 
@@ -445,8 +445,8 @@ is a reviewed edit of the array and its comment.
 **Budget (CTO Q14).** The suite derives its deadline from its own constants: build cap 180 s plus,
 for each wave, its worst row's boot count times the per-boot cap (150 s): 180 + 300 + 150 + 150 =
 780 s. Changing a wave or a cap moves the deadline with it; there is no cross-file read. The CI job's
-`timeout-minutes: 18` carries a comment citing that derivation. `_SUITE_BOUNDS` (900 s) binds local
-runs only, because the CI job runs the suite directly. Rows not finished at the deadline FAIL with
+`timeout-minutes: 18` carries a comment citing that derivation. (No `_SUITE_BOUNDS` entry: the runner
+never executes the suite, CTO Q25.) Rows not finished at the deadline FAIL with
 `BRH_DEADLINE:<row>`, or SKIP only under the ADR-188 corroboration below.
 
 **Privileged containers (CTO Q13, Q21).** `--privileged` stays (Tier B precedent), contained as in
@@ -529,19 +529,17 @@ and an apt `Hash Sum mismatch` in `cloud-init-output.log` is reported as
 - Both edits land before the bastion exists, so no replace is needed. After birth, any template edit
   is a replace delivered by #12879.
 
-### 3. Registration and CI (CTO Q6, Q6c)
+### 3. Registration and CI (CTO Q6, Q25)
 
 - `apps/web-platform/infra/run-registered-suites.sh`: a `DEDICATED_JOB_WHY` map (one entry, this suite
-  → "real cloud-init boots, ~5 min; runs in the bastion-boot-rehearsal job (#12941)"). When
-  `SOLEUR_INFRA_SHARD` is set, the shard branch drops these suites from every k/N execute set. When it
-  is unset (local runs, `test-all.sh`), they run like any suite. `_SUITE_BOUNDS` gains
-  `"apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh=900"`. The TOOLING DEPENDENCY header
-  gains one line for this suite.
+  → "real cloud-init boots, ~5 min; runs in the bastion-boot-rehearsal job (#12941)"). Like
+  PRIVILEGED, these suites are derived but never executed by the runner, sharded or unsharded (CTO
+  Q25): `--list` and every run print one `SKIP dedicated:` line naming the owning job and the direct
+  invocation, and local coverage is the direct invocation. The TOOLING DEPENDENCY header gains one line
+  for this suite. (Q25 removed the earlier `_SUITE_BOUNDS` 900 s entry and the main-health-monitor
+  `SOLEUR_INFRA_SKIP_DEDICATED` marker: with no unsharded execution, neither has anything to bound.)
   The suite is also left out of `--enumerate` (as PRIVILEGED suites are), so
-  `regenerate-shard-manifest.py` never tables a leg row no leg runs. It is also left out when the
-  main-health-monitor's `test-infra` leg runs the unsharded runner: that leg sets an explicit env marker
-  (`SOLEUR_INFRA_SKIP_DEDICATED=1`) and the runner prints one loud line naming `bastion-boot-rehearsal`
-  as the owner (CTO Q16; that leg already runs at its timeout ceiling).
+  `regenerate-shard-manifest.py` never tables a leg row no leg runs.
 - `.github/scripts/test/test-infra-suite-registration.sh`: today's PRIVILEGED arm parses every
   `^  [x.test.sh]="..."` line in the runner without scoping it to the `PRIVILEGED_WHY` block
   (simplicity review), so a `DEDICATED_JOB_WHY` entry would be read as PRIVILEGED and demand a
@@ -549,11 +547,10 @@ and an apt `Hash Sum mismatch` in `cloud-init-output.log` is reported as
   reuse it for `DEDICATED_JOB_WHY` → job `bastion-boot-rehearsal`, invoked by `bash <rel>` with no
   `continue-on-error:` and no step-level `if:` (`mask_check`). Treat DEDICATED like PRIVILEGED in the
   manifest and durations checks (~lines 299, 344). Add the job to Arm 4's `for need in "$JOB"
-  "$FIXED_JOB"` loop (~line 430). Assert that main-health-monitor's `test-infra` leg sets
-  `SOLEUR_INFRA_SKIP_DEDICATED=1`.
+  "$FIXED_JOB"` loop (~line 430).
 - `apps/web-platform/infra/run-registered-suites.test.sh`: the shard arm (shard behavior lives
   there): `--list` under `SOLEUR_INFRA_SHARD=k/4` for k=1..4 never contains the suite, the unsharded
-  `--list` does, and the monitor marker drops it. (`--enumerate` exits before the shard branch, so it
+  `--list` does not either (it prints `SKIP dedicated:`), and a real unsharded run never executes it. (`--enumerate` exits before the shard branch, so it
   cannot carry this check; Kieran review.)
 - `.github/workflows/infra-validation.yml`: job `bastion-boot-rehearsal` — `needs: detect-changes`,
   `if: needs.detect-changes.outputs.pr_duplicate != 'true'`, `runs-on: ubuntu-24.04`,
@@ -582,7 +579,6 @@ and an apt `Hash Sum mismatch` in `cloud-init-output.log` is reported as
   `.github/scripts/test/test-infra-suite-registration-mutations.sh` and
   `tests/scripts/test-main-duplicate-skip.sh` also read `deploy-script-tests-done`: re-run both; the
   new job carries the `pr_duplicate` conjunct the latter pins.
-- `.github/workflows/main-health-monitor.yml`: the `test-infra` leg sets `SOLEUR_INFRA_SKIP_DEDICATED=1`.
 - `apps/web-platform/infra/apt-bounded.test.sh`: one `SPECS` line for the suite. The declared-unmounted
   and mounted counts are derived from the suite's final text with the census's own grammar (boot, stub,
   decoy and static-check containers unmounted; each `gd_apt_install_bounded` image-build site mounted,
@@ -612,12 +608,11 @@ and an apt `Hash Sum mismatch` in `cloud-init-output.log` is reported as
 ## Files to Edit
 
 - `apps/web-platform/infra/bastion-cloud-init.yml` — FAULT-A package, FAULT-B capture and comment.
-- `apps/web-platform/infra/run-registered-suites.sh` — `DEDICATED_JOB_WHY`, shard exclusion, `_SUITE_BOUNDS`, header line.
+- `apps/web-platform/infra/run-registered-suites.sh` — `DEDICATED_JOB_WHY`, never-execute exclusion, header line.
 - `.github/scripts/test/test-infra-suite-registration.sh` — scoped PRIVILEGED parse, the generalized job arm, manifest/durations treatment, Arm 4's `need` loop.
-- `apps/web-platform/infra/run-registered-suites.test.sh` — the shard / unsharded / monitor-marker arm.
+- `apps/web-platform/infra/run-registered-suites.test.sh` — the shard / unsharded never-execute arm.
 - `.github/workflows/infra-validation.yml` — job `bastion-boot-rehearsal` (with failure artifact), aggregator `needs`/`entries`/env and the `cancelled)` classification.
 - `plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh` — third result, cancelled rows, wiring row.
-- `.github/workflows/main-health-monitor.yml` — `SOLEUR_INFRA_SKIP_DEDICATED=1` on the `test-infra` leg.
 - `apps/web-platform/infra/apt-bounded.test.sh` — `SPECS` line.
 - `scripts/guard-vacuity-floor.test.sh` — `PROMOTED_FILES` entry.
 - `knowledge-base/engineering/architecture/decisions/ADR-327-dedicated-bastion-web-hosts-are-identical-cattle.md` — addendum.
@@ -656,7 +651,7 @@ Three open `code-review` issues mention files this plan edits; none concerns the
    `deploy-script-tests-done`'s `needs` and update them.
 4. **Records.** ADR-327 addendum, runbook paragraph, `c4-count-parity` run, comment on #12942.
 5. **Measure.** Two full local runs (cold and warm image cache) and the first CI run; record wall
-   times in the PR body against the 780 s deadline, the 900 s bound and the 18-min job timeout.
+   times in the PR body against the 780 s deadline and the 18-min job timeout.
 
 ## Infrastructure (IaC)
 
@@ -803,7 +798,7 @@ tasks:
 ### Engineering
 
 **Status:** reviewed
-**Assessment:** The CTO agent ruled Q1-Q24 and Q6c (decision-challenges.md). The terraform-architect
+**Assessment:** The CTO agent ruled Q1-Q26 and Q6c (decision-challenges.md; Q25 supersedes Q6c). The terraform-architect
 review confirmed apply path (a), zero blast radius at merge, the replace semantics after birth, the
 templatefile escaping rules, and that BUDGET measures the raw render.
 
@@ -876,13 +871,13 @@ diff cannot rename a stage in the template and in the expectation. The pinned im
 ### Guard 2 — dedicated-job registration
 
 **Property.** The rehearsal suite runs in job `bastion-boot-rehearsal` unmasked, on a hosted runner,
-with no secret and `contents: read`; never in a k/N matrix leg or the main-health-monitor `test-infra`
-leg (`SOLEUR_INFRA_SKIP_DEDICATED=1`); and always in the plain unsharded local runner.
+with no secret and `contents: read`; never in a k/N matrix leg nor in the plain unsharded runner (CTO
+Q25); local coverage is the direct invocation.
 
 **Assembly.** `DEDICATED_JOB_WHY` in `run-registered-suites.sh` (the single source), the runner's shard
 branch, the workflow job (its steps, `runs-on`, `permissions` and any `secrets.` reference),
-`deploy-script-tests-done`'s `needs` and `entries`, and main-health-monitor's `test-infra` leg env. All
-five are read by `test-infra-suite-registration.sh`.
+and `deploy-script-tests-done`'s `needs` and `entries`. All four are read by
+`test-infra-suite-registration.sh`; the runner's never-execute behaviour by `run-registered-suites.test.sh` (T11k).
 
 **Mutation matrix:**
 
@@ -891,12 +886,11 @@ five are read by `test-infra-suite-registration.sh`.
 | 1 | Delete the `bash apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh` step from the job | RED |
 | 2 | Add `continue-on-error: true` or a step `if:` to that step | RED |
 | 3 | Drop the shard exclusion so the suite lands on leg k/4 | RED |
-| 4 | Exclude it from the unsharded set too | RED |
+| 4 | Put it back in the unsharded execute set | RED |
 | 5 | `DEDICATED_JOB_WHY` parses to zero entries while the map exists (own dispatch) | RED |
 | 6 | Add a second `DEDICATED_JOB_WHY` entry with no invoking step, after a compliant first | RED |
 | 7 | Remove the job from `deploy-script-tests-done`'s `needs` | RED |
-| 8 | Drop `SOLEUR_INFRA_SKIP_DEDICATED=1` from main-health-monitor's `test-infra` leg | RED |
-| 9 | Add `${{ secrets.X }}` to the job, set `runs-on: self-hosted`, or widen `permissions` | RED |
+| 8 | Add `${{ secrets.X }}` to the job, set `runs-on: self-hosted`, or widen `permissions` | RED |
 
 **Harness rows.** A fixture workflow whose step has the invocation only in a comment must RED; a
 fixture with the invocation in a multi-line `run: |` block must PASS.
@@ -938,8 +932,9 @@ decision-challenges.md). No taste or user-challenge item arose.
    unrouted 198.18.255.1) → apt-stage rows SKIP with the probe output; the run ends `SKIP`, never
    `PASS`.
 5. `SOLEUR_INFRA_SHARD=2/4 bash apps/web-platform/infra/run-registered-suites.sh --list` omits the
-   suite; the unsharded `--list` includes it.
-6. `bash scripts/test-all.sh infra` on a branch touching `apps/web-platform/infra/` runs the suite.
+   suite; the unsharded `--list` omits it too and prints its `SKIP dedicated:` line.
+6. `bash scripts/test-all.sh infra` does not run the suite (it prints the `SKIP dedicated:` line); local
+   coverage is the direct invocation, `bash apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh`.
 
 ## Scope Check
 
@@ -950,7 +945,7 @@ decision-challenges.md). No taste or user-challenge item arose.
 | 1 | "a suite modelled on git-data-runcmd-rehearsal.test.sh that renders the template and runs its runcmd stages (apt, the egress script under a netns, the trap/emit path with a stub Sentry) in the pinned image" [issue #12941] | Proposed Solution §1, Files to Create | mapped |
 | 2 | "apt with the nftables conffile ordering" [brief] | rows B1, M1 | mapped |
 | 3 | "cloud-init apt_configure https sources" [brief] | rows B1, M2 | mapped |
-| 4 | "register it in scripts/test-all.sh" [brief] | §3 (runner unsharded set; no test-all.sh edit needed, ADR-252) | mapped |
+| 4 | "register it in scripts/test-all.sh" [brief] | §3 (derived by the runner, never executed by it; no test-all.sh edit needed, ADR-252; local coverage is the direct invocation, CTO Q25) | mapped |
 | 5 | "fix any boot fault it finds in the template" [brief] | §2 FAULT-A, FAULT-B | mapped |
 | 6 | "Use \"Ref #12866\" and \"Ref #9421\" (never Closes for #9421 or #12008); \"Closes #12941\" in the PR body" [brief] | PR body line under the title | mapped |
 
@@ -987,9 +982,9 @@ decision-challenges.md). No taste or user-challenge item arose.
 - [ ] AC4. `bastion-cloud-init.yml` installs `systemd-timesyncd` in the apt_install line, and the
   `egress_load` capture selects `[bastion-egress] FAIL:` and nft `Error:` lines from both unit journals;
   `bash apps/web-platform/infra/bastion.test.sh` ends `bastion: PASS`.
-- [ ] AC5. `SOLEUR_INFRA_SHARD=k/4` (k=1..4) execute sets never contain the suite; the unsharded set
-  does; `bash .github/scripts/test/test-infra-suite-registration.sh` passes and its new arms go RED
-  under Guard 2 rows 1-9 (run as mutations during work, recorded in the PR body).
+- [ ] AC5. `SOLEUR_INFRA_SHARD=k/4` (k=1..4) execute sets never contain the suite; neither does the
+  unsharded set (CTO Q25); `bash .github/scripts/test/test-infra-suite-registration.sh` passes and its new arms go RED
+  under Guard 2 rows 1-8 (run as mutations during work, recorded in the PR body).
 - [ ] AC6. `infra-validation.yml` has job `bastion-boot-rehearsal` (`timeout-minutes: 18`, no
   credentials, unmasked invocation) and `deploy-script-tests-done` lists it in `needs` and `entries`.
 - [ ] AC7. `apt-bounded.test.sh`, `guard-vacuity-floor.test.sh` (with `MAX_DEFERRED` unchanged),
@@ -997,9 +992,9 @@ decision-challenges.md). No taste or user-challenge item arose.
   ratchet lints pass, each by its own CI invocation shape.
 - [ ] AC7b. The suite's deadline is computed from its constants (180 + 300 + 150 + 150 = 780 s) and
   printed; the job's `timeout-minutes: 18` comment cites it.
-- [ ] AC7c. `run-registered-suites.sh --list` under `SOLEUR_INFRA_SHARD=k/4` (k=1..4) and with
-  `SOLEUR_INFRA_SKIP_DEDICATED=1` omits the suite, the plain unsharded `--list` includes it, and
-  `--enumerate` omits it; `bash plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh`,
+- [ ] AC7c. `run-registered-suites.sh --list` under `SOLEUR_INFRA_SHARD=k/4` (k=1..4) and the plain
+  unsharded `--list` omit the suite from the execute set (each prints `SKIP dedicated:`), a real
+  unsharded run never executes it, and `--enumerate` omits it; `bash plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh`,
   `bash .github/scripts/test/test-infra-suite-registration-mutations.sh` and
   `bash tests/scripts/test-main-duplicate-skip.sh` pass.
 - [ ] AC7d. Host containment: every boot passes the netns-differs guard; the static argv check holds

@@ -37,12 +37,12 @@ Issue #12941 (Closes), Ref #12866, Ref #9421. Draft PR #12995.
 
 ## 4. Registration and CI
 
-- 4.1 `run-registered-suites.sh`: `DEDICATED_JOB_WHY`, shard exclusion, `--enumerate` exclusion, `SOLEUR_INFRA_SKIP_DEDICATED` marker with its loud line, `_SUITE_BOUNDS` 900, TOOLING line.
+- 4.1 `run-registered-suites.sh`: `DEDICATED_JOB_WHY`, shard exclusion, `--enumerate` exclusion, `SOLEUR_INFRA_SKIP_DEDICATED` marker with its loud line, `_SUITE_BOUNDS` 900, TOOLING line. (CTO Q25: the marker and the 900 s bound removed; the runner never executes the suite, sharded or unsharded.)
 - 4.2 `run-registered-suites.test.sh`: shard / unsharded / marker arm via `--list`.
 - 4.3 `test-infra-suite-registration.sh`: scoped PRIVILEGED parse, generalized job arm, manifest/durations treatment (no tsv rows, CTO Q20), Arm 4 `need` loop, monitor-marker assertion, no-secrets/hosted-runner/contents:read assertion; run Guard 2 mutations 1-9.
 - 4.4 `infra-validation.yml`: job `bastion-boot-rehearsal` (18 min with derivation comment, checkout `persist-credentials: false`, failure artifact `brh.*` retention 14 d via the legs' upload-artifact pin, no credentials, advisory); aggregator `needs`, `entries`, env, `cancelled)` rewrite.
 - 4.5 `deploy-script-tests-aggregator-diagnosis.test.sh`: third result, cancelled rows, wiring row.
-- 4.6 `main-health-monitor.yml`: `SOLEUR_INFRA_SKIP_DEDICATED=1` on `test-infra`.
+- 4.6 `main-health-monitor.yml`: `SOLEUR_INFRA_SKIP_DEDICATED=1` on `test-infra`. (Reverted by CTO Q25: nothing to drop.)
 - 4.7 `apt-bounded.test.sh` SPECS line (counts derived); `guard-vacuity-floor.test.sh` PROMOTED entry.
 - 4.8 `git add` the suite, then run: registration test + its mutations, `run-registered-suites.test.sh`, `deploy-script-tests-aggregator-diagnosis.test.sh`, `test-main-duplicate-skip.sh`, `apt-bounded.test.sh`, `guard-vacuity-floor.test.sh`, `lint-orphan-test-suites.sh`, `lint-shell-capture-exit`, `fixture-relative-assert`, `fixture-dir-operand-assert`, `regenerate-shard-manifest.py --group infra --incremental` (dry run, no change).
 
