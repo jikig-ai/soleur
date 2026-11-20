@@ -424,9 +424,138 @@ expect_red_durations "M30 durations/manifest key divergence" "different label" \
   sed -i '/^apps\/web-platform\/infra\/ci-deploy\.test\.sh\t/d' "$SB/$DURATIONS_REL"
 
 # ---------------------------------------------------------------------------
+# Arm 5 + the exclusion-map cross-check (#12941 review). The DEDICATED counterparts of
+# M3/M6/M8/M25, the job-posture arms, and one row per review gap G1-G13 — every one of
+# those was GREEN against the gate before the fix, so each row here is the proof the fix
+# bites. Workflow edits are scoped to the bastion-boot-rehearsal job's line range: a bare
+# `runs-on:`/`timeout-minutes:` sed would land in whichever job comes first.
+# ---------------------------------------------------------------------------
+DED_P="${INFRA_PREFIX}/bastion-runcmd-rehearsal.test.sh"
+DJ='/^  bastion-boot-rehearsal:$/,/^  [a-z-]*:$/'
+CI_REL=".github/workflows/ci.yml"
+cp "$SB/$CI_REL" "$SB/ci.pristine" || setup_die "cp ci pristine"
+
+expect_red_runner() {  # runner-mutating variant of expect_red
+  local label="$1" needle="$2"; shift 2
+  restore_wf; restore_runner
+  "$@" || setup_die "mutation cmd for $label"
+  assert_landed_runner "$label"
+  local rc; rc=$(run_gate)
+  restore_runner
+  if [[ "$rc" == "0" ]]; then
+    bad "$label: gate stayed GREEN (vacuous arm)"
+  elif grep -qF -- "$needle" "$SB/out.log"; then
+    ok "$label: rc=$rc and message names the right mode"
+  else
+    bad "$label: rc=$rc but expected message missing ($needle): $(tail -3 "$SB/out.log")"
+  fi
+}
+
+# A5-1..A5-9: Arm 5 itself.
+expect_red "A5-1 delete the dedicated suite step's run: line" "DEDICATED (never executed by the runner) but is NOT" \
+  sed -i "\|^        run: bash ${DED_P}\$|d" "$SB/$WF_REL"
+expect_red "A5-2 if: false on the dedicated step" "step for bastion-runcmd-rehearsal.test.sh carries" \
+  sed -i "s|^        run: bash ${DED_P}\$|        if: false\n        run: bash ${DED_P}|" "$SB/$WF_REL"
+expect_red "A5-3 continue-on-error on the dedicated step" "step for bastion-runcmd-rehearsal.test.sh carries" \
+  sed -i "s|^        run: bash ${DED_P}\$|        continue-on-error: true\n        run: bash ${DED_P}|" "$SB/$WF_REL"
+expect_red "A5-4 dedicated job on a self-hosted runner" "pinned GitHub-hosted" \
+  sed -i "${DJ} s|^    runs-on: ubuntu-24.04\$|    runs-on: self-hosted|" "$SB/$WF_REL"
+expect_red "A5-5 dedicated job binds secrets.X" "references a credential" \
+  sed -i "${DJ} s|^    timeout-minutes: 18\$|    timeout-minutes: 18\n    env:\n      T: \${{ secrets.HCLOUD_TOKEN }}|" "$SB/$WF_REL"
+expect_red "A5-6 dedicated checkout drops persist-credentials: false" "actions/checkout step(s) without" \
+  sed -i "${DJ} {/^          persist-credentials: false\$/d}" "$SB/$WF_REL"
+expect_red "A5-7 dedicated job permissions widened" "permissions are not exactly" \
+  sed -i "${DJ} s|^      contents: read\$|      contents: write|" "$SB/$WF_REL"
+# shellcheck disable=SC2016  # the needle is the gate's literal backtick-quoted job name
+expect_red "A5-8 dedicated job dropped from -done needs:" 'does not list `bastion-boot-rehearsal`' \
+  sed -i "s|^    needs: \[detect-changes, deploy-script-tests, deploy-script-tests-fixed, bastion-boot-rehearsal\]\$|    needs: [detect-changes, deploy-script-tests, deploy-script-tests-fixed]|" "$SB/$WF_REL"
+expect_red "A5-9 dedicated job renamed" "has no such job" \
+  sed -i "s|^  bastion-boot-rehearsal:\$|  bastion-boot-rehearsal-renamed:|" "$SB/$WF_REL"
+
+# D1..D5: the DEDICATED_JOB_WHY parse (runner mutations).
+expect_red_runner "D1 dedicated entry cites #0" "DEDICATED_JOB_WHY cites no tracking" \
+  sed -i 's|bastion-boot-rehearsal job (#12941)"|bastion-boot-rehearsal job (#0)"|' "$SB/$RUNNER_REL"
+expect_red_runner "D2 stale dedicated entry" "lists 'zzz-nonexistent-rehearsal.test.sh', which is not a tracked" \
+  sed -i 's|^  \[bastion-runcmd-rehearsal\.test\.sh\]=|  [zzz-nonexistent-rehearsal.test.sh]=|' "$SB/$RUNNER_REL"
+expect_red_runner "D3 dedicated entry names no owning job" "names no owning job" \
+  sed -i 's|; runs in the bastion-boot-rehearsal job (#12941)"|; runs in its own lane (#12941)"|' "$SB/$RUNNER_REL"
+expect_red_runner "D4 suite in both exclusion maps" "is in BOTH" \
+  sed -i 's|^declare -A PRIVILEGED_WHY=($|declare -A PRIVILEGED_WHY=(\n  [bastion-runcmd-rehearsal.test.sh]="x (#12941)"|' "$SB/$RUNNER_REL"
+expect_red_runner "D5 dedicated entry deleted (map parses to zero)" "DEDICATED_JOB_WHY exists in" \
+  sed -i '/^  \[bastion-runcmd-rehearsal\.test\.sh\]=/d' "$SB/$RUNNER_REL"
+
+# G1..G8: the invocation and posture gaps (A2/A4/A5).
+expect_red "G1 invocation is an echo" "none or more than one" \
+  sed -i "s|^        run: bash ${DED_P}\$|        run: echo bash ${DED_P}|" "$SB/$WF_REL"
+expect_red "G2 invocation masked with || true" "masks its exit" \
+  sed -i "s|^        run: bash ${DED_P}\$|        run: bash ${DED_P} \|\| true|" "$SB/$WF_REL"
+expect_red "G3 job-level continue-on-error" "carries a job-level" \
+  sed -i "${DJ} s|^    timeout-minutes: 18\$|    timeout-minutes: 18\n    continue-on-error: true|" "$SB/$WF_REL"
+expect_red "G4 job env binds github.token" "references a credential" \
+  sed -i "${DJ} s|^    timeout-minutes: 18\$|    timeout-minutes: 18\n    env:\n      GH_TOKEN: \${{ github.token }}|" "$SB/$WF_REL"
+expect_red "G5 job env binds secrets['X']" "references a credential" \
+  sed -i "${DJ} s|^    timeout-minutes: 18\$|    timeout-minutes: 18\n    env:\n      T: \${{ secrets['HCLOUD_TOKEN'] }}|" "$SB/$WF_REL"
+expect_red "G6 second checkout without persist-credentials: false" "actions/checkout step(s) without" \
+  sed -i "${DJ} s|^\(      - uses: hashicorp/setup-terraform@.*\)\$|      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5\n        with:\n          path: second\n\1|" "$SB/$WF_REL"
+expect_red "G7 step env CI: ''" "sets CI" \
+  sed -i "s|^        run: bash ${DED_P}\$|        env:\n          CI: ''\n        run: bash ${DED_P}|" "$SB/$WF_REL"
+expect_red "G8 step env BRH_PARTIAL_MIN" "sets BRH_PARTIAL_MIN" \
+  sed -i "s|^        run: bash ${DED_P}\$|        env:\n          BRH_PARTIAL_MIN: '1'\n        run: bash ${DED_P}|" "$SB/$WF_REL"
+expect_red "G8b workflow-level env CI: '' (inherited by the job)" "sets CI" \
+  sed -i "s|^  TERRAFORM_VERSION: \"1.10.5\"\$|  TERRAFORM_VERSION: \"1.10.5\"\n  CI: ''|" "$SB/$WF_REL"
+
+# G9..G11 + the cross-check's own arms (A1): entries the text parse cannot see.
+expect_red_runner "G9 second dedicated entry with a trailing comment" "cannot parse" \
+  sed -i 's|^\(  \[bastion-runcmd-rehearsal\.test\.sh\]=.*\)$|  [bastion.test.sh]="x; runs in the bastion-boot-rehearsal job (#1)"  # note\n\1|' "$SB/$RUNNER_REL"
+expect_red_runner "G10 second dedicated entry assigned after the block" "assigned at 2 site(s)" \
+  sed -i 's|^_dedicated_job() {|DEDICATED_JOB_WHY[bastion.test.sh]="x; runs in the bastion-boot-rehearsal job (#1)"\n_dedicated_job() {|' "$SB/$RUNNER_REL"
+expect_red_runner "G11 second dedicated entry single-quoted" "cannot parse" \
+  sed -i "s|^\(  \[bastion-runcmd-rehearsal\.test\.sh\]=.*\)\$|  [bastion.test.sh]='x; runs in the bastion-boot-rehearsal job (#1)'\n\1|" "$SB/$RUNNER_REL"
+# Set equality alone: block parses, one assignment site, but bash's set differs.
+expect_red_runner "X1 dedicated entry unset after the block (runner set != parsed set)" "SKIP dedicated set differs" \
+  sed -i "s|^_dedicated_job() {|unset 'DEDICATED_JOB_WHY[bastion-runcmd-rehearsal.test.sh]'\n_dedicated_job() {|" "$SB/$RUNNER_REL"
+expect_red_runner "X2 privileged entry with a trailing comment (same parse, same class)" "PRIVILEGED_WHY in ${RUNNER_REL} has block line(s)" \
+  sed -i 's|^\(  \[workspaces-luks-loopback\.test\.sh\]=".*"\)$|\1  # note|' "$SB/$RUNNER_REL"
+expect_red_runner "X3 privileged entry unset after the block" "SKIP privileged set differs" \
+  sed -i "s|^PRIV_SUITES=()\$|unset 'PRIVILEGED_WHY[workspaces-luks-loopback.test.sh]'\nPRIV_SUITES=()|" "$SB/$RUNNER_REL"
+expect_red_runner "X4 runner --list fails (sets unreadable)" "--list\` exited 3" \
+  sed -i 's|^  --list) LIST_ONLY=1 ;;$|  --list) exit 3 ;;|' "$SB/$RUNNER_REL"
+
+# G12/G13 (A3): a second invocation anywhere else.
+expect_red "G12 second invocation in deploy-script-tests-fixed" "invoked outside" \
+  sed -i "s|^\(        run: bash .github/scripts/test/fixtures-validate-infra-templates.sh\)\$|\1\n      - name: extra\n        run: bash ${DED_P}|" "$SB/$WF_REL"
+restore_wf
+sed -i "s|^\(        run: bash scripts/test-all.sh webplat\)\$|\1\n      - run: bash ${DED_P}|" "$SB/$CI_REL" || setup_die "G13 mutation cmd"
+cmp -s "$SB/ci.pristine" "$SB/$CI_REL" && setup_die "mutation 'G13' did not land (ci.yml byte-identical)"
+rc=$(run_gate)
+cp "$SB/ci.pristine" "$SB/$CI_REL" || setup_die "restore ci.yml"
+if [[ "$rc" == "0" ]]; then
+  bad "G13 second invocation in ci.yml: gate stayed GREEN (vacuous arm)"
+elif grep -qF "invoked outside" "$SB/out.log"; then
+  ok "G13 second invocation in ci.yml: rc=$rc and message names the right mode"
+else
+  bad "G13 second invocation in ci.yml: rc=$rc but expected message missing: $(tail -3 "$SB/out.log")"
+fi
+
+# GREEN: a trailing comment on the bare invocation is still the one unmasked invocation.
+restore_wf; restore_runner
+sed -i "s|^        run: bash ${DED_P}\$|        run: bash ${DED_P}  # the one CI home (Q25)|" "$SB/$WF_REL" \
+  || setup_die "G-green mutation cmd"
+assert_landed "G-green"
+rc=$(run_gate)
+if [[ "$rc" == "0" ]]; then
+  ok "G-green trailing comment on the bare invocation stays GREEN (anchor is not over-strict)"
+else
+  bad "G-green trailing comment on the bare invocation: gate red-failed a valid step: $(tail -3 "$SB/out.log")"
+fi
+restore_wf
+
+# ---------------------------------------------------------------------------
 # Assertion floor.
 # ---------------------------------------------------------------------------
-MIN_ASSERTS=31
+# 31 -> 65 with the #12941 review rows (A5-1..9, D1..5, G1..G13 + G8b, X1..X4, G-green = 33
+# rows, plus the pre-existing 32): measured on the green run that added them.
+MIN_ASSERTS=65
 if (( asserts < MIN_ASSERTS )); then
   echo "[FAIL] assertion floor: only $asserts assertion(s) ran, expected >= $MIN_ASSERTS." >&2
   echo "       Rows were removed or short-circuited. Lower the floor deliberately, with a reason." >&2
