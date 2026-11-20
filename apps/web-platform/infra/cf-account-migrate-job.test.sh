@@ -637,7 +637,7 @@ isu_case() { # <label> <rehearsal> [<expected_in_state_updates>]
     "$LAST_D/remote.tfstate" >"$LAST_D/s" && mv "$LAST_D/s" "$LAST_D/remote.tfstate"
   jq --arg a "$ISU_ADDR" '(.resource_changes[] | select(.address == $a) | .change) |= (.actions = ["update"] | .before = (.after | del(.value)))' \
     "$LAST_D/plan.json" >"$LAST_D/p" && mv "$LAST_D/p" "$LAST_D/plan.json"
-  if [[ "$#" -ge 3 ]]; then printf 'CFAM_EXPECTED_IN_STATE_UPDATES=%s\n' "$3" >"$LAST_D/env.extra"; fi
+  if [[ -n "${3+set}" ]]; then printf 'CFAM_EXPECTED_IN_STATE_UPDATES=%s\n' "$3" >"$LAST_D/env.extra"; fi
 }
 setup_isu_unexpected() { isu_case "unexp-$1" false; }
 chk_isu_unexpected() { # refused before applying=true, both sets printed, forget=committed
