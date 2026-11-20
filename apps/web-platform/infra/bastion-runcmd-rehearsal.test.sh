@@ -50,7 +50,8 @@
 # (two boots), M1 conffile, M2 preserve_sources_list removed, F1 egress_load fatal, F1-M flush removed,
 # FA NTP user dropped, B1-C cloud-faithful. 9 boots in three waves of up to three.
 #
-# LOCAL SUBSETS. BRH_STATIC_ONLY=1 runs the offline self-tests, S0 and S1 only; BRH_ROWS=B1,F1 boots
+# LOCAL SUBSETS. BRH_STATIC_ONLY=1 boots nothing (the self-tests, the image checks, S0 and S1) but
+# still builds the fixture images, so it needs the archive; BRH_ROWS=B1,F1 boots
 # only the named rows. Both end `bastion-runcmd-rehearsal: PARTIAL (...)`, never PASS, and both are
 # refused under CI (BRH_SUBSET_REFUSED). BRH_KEEP_TMP=1 keeps the work dir on a pass (it is always kept
 # on a failure, with private keys and seed user-data deleted first). BRH_ARCHIVE_PIN=<ip> pins the
@@ -232,21 +233,22 @@ argv_scan() { # <file> -> rc 1 (and the offending statements) when any docker ru
   printf '%s\n' "$bad" | cut -c1-200 | head -3; return 1
 }
 _out="$(argv_scan "$SELF")"; chk "containment: no docker run/create here shares a host namespace or binds /" $? "$_out"
-mutate_raw() { # <src> <dst> <from> <to>: exact single-occurrence edit
+mutate() { # <row> <src> <dst> <from> <to>: exact single occurrence, or BRH_ANCHOR_MISS
   python3 - "$@" <<'PY'
 import sys
-src, dst, a, b = sys.argv[1:]
+row, src, dst, a, b = sys.argv[1:]
 t = open(src).read()
 if t.count(a) != 1:
-    print("anchor occurs %d times" % t.count(a)); sys.exit(1)
+    print("BRH_ANCHOR_MISS:%s anchor=%r (%d occurrences); update the anchor in bastion-runcmd-rehearsal.test.sh; the template is not at fault" % (row, a[:100], t.count(a)))
+    sys.exit(1)
 open(dst, "w").write(t.replace(a, b))
 PY
 }
 _from="--cgroup-parent=docker.slice -e contain""er=docker"
-if _m="$(mutate_raw "$SELF" "$WORK/self-mut.sh" "$_from" "$_from --network ho""st")"; then
+if _m="$(mutate static "$SELF" "$WORK/self-mut.sh" "$_from" "$_from --network ho""st")"; then
   argv_scan "$WORK/self-mut.sh" >/dev/null; _r=$?
   chk "containment control: a boot docker create given the host network is caught (Guard 1 row 13)" "$([ "$_r" -eq 1 ]; echo $?)" "scan rc=$_r"
-else chk "containment control: a boot docker create given the host network is caught (Guard 1 row 13)" 1 "BRH_ANCHOR_MISS:static anchor=$_from ($_m)"; fi
+else chk "containment control: a boot docker create given the host network is caught (Guard 1 row 13)" 1 "$_m"; fi
 _lits="$(sed -nE 's/^[[:space:]]*for lit in ([a-z_ ]+); do.*/\1/p' "$CREATE_WF" | head -1)"
 _anchor_rc=1
 if [ "$_lits" = "$ST_READY $ST_FATAL $ST_COMPLETE" ] && grep -qF "\"$ST_READY\"" "$TRAIL_READER"; then _anchor_rc=0; fi
@@ -277,7 +279,7 @@ write_helpers() {
   cat > "$WORK/pred.py" <<'PY'
 import difflib, json, re, sys, yaml
 MSG = "soleur-cloud-init boot stage"
-REASON = re.compile(r"\[bastion-egress\] FAIL:|: Error: |(^| )why=")
+REASON = re.compile(r"\[bastion-egress\] FAIL:|: Error: ")
 
 def load(path):
     try:
@@ -693,17 +695,6 @@ open(sys.argv[2], "w").write("\n".join(L) + "\n")
 PY
   [ "$(head -1 "$3")" = "#cloud-config" ]
 }
-mutate() { # <row> <src> <dst> <from> <to>: exact single occurrence, or BRH_ANCHOR_MISS
-  python3 - "$@" <<'PY'
-import sys
-row, src, dst, a, b = sys.argv[1:]
-t = open(src).read()
-if t.count(a) != 1:
-    print("BRH_ANCHOR_MISS:%s anchor=%r (%d occurrences); update the anchor in bastion-runcmd-rehearsal.test.sh; the template is not at fault" % (row, a[:100], t.count(a)))
-    sys.exit(1)
-open(dst, "w").write(t.replace(a, b))
-PY
-}
 declare -A ROW_RENDER=()
 do_renders() {
   assert_fixture_dir "$WORK"
@@ -779,17 +770,17 @@ egress_why_test() {
   out="$(run_ew "$fn" "$d/j-none")"; rc=1
   [ "$out" = "why=no_reason_line nft=exit-code egress=dependency" ] && rc=0
   chk "_egress_why: no reason line -> why=no_reason_line with both Result values" "$rc" "D=[$out]"
-  if out="$(mutate_raw "$fn" "$d/nob.sh" 'journalctl -b -u' 'journalctl -u')"; then
+  if out="$(mutate ew "$fn" "$d/nob.sh" 'journalctl -b -u' 'journalctl -u')"; then
     out="$(run_ew "$d/nob.sh" "$d/j-fail")"; rc=1
     [ "$out" = "[bastion-egress] FAIL: lookup failed for nx-ingest.invalid (cloud-init); the loaded ruleset is unchanged " ] || rc=0
     chk "_egress_why: mutation RED: -b dropped" "$rc" "the mutant still produced [$out]"
-  else chk "_egress_why: mutation RED: -b dropped" 1 "BRH_ANCHOR_MISS:ew anchor='journalctl -b -u' ($out)"; fi
-  if out="$(mutate_raw "$fn" "$d/nosync.sh" '  journalctl --sync 2>/dev/null || :
+  else chk "_egress_why: mutation RED: -b dropped" 1 "$out"; fi
+  if out="$(mutate ew "$fn" "$d/nosync.sh" '  journalctl --sync 2>/dev/null || :
 ' '')"; then
     run_ew "$d/nosync.sh" "$d/j-fail" >/dev/null; rc=1
     synced || rc=0
     chk "_egress_why: mutation RED: --sync dropped" "$rc" "argv=$(tr '\n' '|' < "$d/log")"
-  else chk "_egress_why: mutation RED: --sync dropped" 1 "BRH_ANCHOR_MISS:ew anchor='journalctl --sync' ($out)"; fi
+  else chk "_egress_why: mutation RED: --sync dropped" 1 "$out"; fi
 }
 egress_why_test
 
@@ -924,6 +915,7 @@ if [ -z "$SKIP_ALL" ]; then
   chk "S1: the joined runcmd items pass dash -n" "$([ "$(_v S1_RC)" = 0 ]; echo $?)" "rc=$(_v S1_RC)"
   chk "S1 control: a copy with an unbalanced fi fails dash -n" "$([ "$(_v S1RED_RC)" = 2 ] || [ "$(_v S1RED_RC)" = 1 ]; echo $?)" "rc=$(_v S1RED_RC)"
 else
+  printf 'SKIP (loud): S0/S1 and image checks: %s\n' "$SKIP_ALL"
   cases=$((cases + 5)); SKIPPED_ASSERTIONS=$((SKIPPED_ASSERTIONS + 5))
 fi
 
@@ -1027,7 +1019,7 @@ gather() { # <row>: boots the row and copies its evidence out; never a verdict (
     done
     echo $((SECONDS - t0)) > "$RD/f/$tag.elapsed"
   }
-  if [ "$row" = B2 ]; then
+  if [ "${ROW_MODE[$row]}" = reboot ]; then
     boot_once boot1 || return 1
     if [ "$(cat "$RD/f/boot1.end")" = exited ]; then
       docker cp "$C:/var/log/cloud-init-output.log" "$RD/cloud-init-output.boot1.log" >/dev/null 2>&1

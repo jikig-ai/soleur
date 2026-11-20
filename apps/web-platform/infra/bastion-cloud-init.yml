@@ -7,7 +7,8 @@
 # The apt and kernel-settle blocks below are the same bytes as cloud-init.yml's (Guard 3,
 # bastion.test.sh SETTLE). Changing anything here is a bastion-host-replace (#12879).
 # BOOT-REHEARSED by bastion-runcmd-rehearsal.test.sh (#12941): real cloud-init boots this render in the
-# pinned ubuntu:24.04 image. Fast subset: BRH_STATIC_ONLY=1 bash apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh.
+# pinned ubuntu:24.04 image. No-boot subset (still builds the fixture images, so needs the archive):
+# BRH_STATIC_ONLY=1 bash apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh.
 # Its mutation rows edit lines of this file by exact anchor (its ANCHORS block): if you reword one and it
 # prints BRH_ANCHOR_MISS, update the anchor there.
 
