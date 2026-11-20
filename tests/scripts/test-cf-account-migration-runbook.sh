@@ -64,7 +64,7 @@ row_r2() {
   [[ -n "$gl" && -n "$dr" && -n "$mr" && "$gl" -lt "$mr" && "$dr" -lt "$mr" ]]
 }
 row_r3() {
-  reopen_block "$1" | grep -qF '`cloudflare_ruleset.cache_shared_binaries` create' \
+  grep -qF '`cloudflare_ruleset.cache_shared_binaries` create' < <(reopen_block "$1") \
     && grep -qF '`cache_shared_binaries` is not in this phase (CTO ruling D3)' "$1"
 }
 declared_stages() { grep -a '^# SOLEUR-STAGE ' "$BOOTSTRAP" | sed 's/^# SOLEUR-STAGE //' | cut -d'|' -f1; }
@@ -73,11 +73,11 @@ row_r4() {
   for s in $(declared_stages); do grep -qF "\`${s}\`" "$1" || grep -qF -- "--stage ${s}" "$1" || { echo "    undeclared in runbook: $s" >&2; bad=1; }; done
   n="$(declared_stages | wc -l)"; [[ "$n" -ge 9 ]] || bad=1
   for s in $(grep -oE -- '--stage [a-z0-9-]+' "$1" | awk '{print $2}' | sort -u); do
-    declared_stages | grep -qx "$s" || { echo "    runbook issues an undeclared stage: $s" >&2; bad=1; }
+    grep -qx "$s" < <(declared_stages) || { echo "    runbook issues an undeclared stage: $s" >&2; bad=1; }
   done
   # every numbered stage item in Phase 2 ("1. `prev-0a`: …") is a declared stage
   for s in $(grep -oE '^[0-9]+\. `[a-z0-9-]+`:' "$1" | sed -E 's/^[0-9]+\. `([a-z0-9-]+)`:/\1/' | sort -u); do
-    declared_stages | grep -qx "$s" || { echo "    numbered stage not declared: $s" >&2; bad=1; }
+    grep -qx "$s" < <(declared_stages) || { echo "    numbered stage not declared: $s" >&2; bad=1; }
   done
   [[ "$bad" -eq 0 ]]
 }

@@ -805,7 +805,7 @@ if grep -qE -- "$D12C_PAT" "$WORK/d12c-positive.txt"; then ok "D12c positive con
 # the guard is SCOPED rather than absolute: every write-flag line must carry the
 # fixed INVALID_BODY literal, and the run path sends it from exactly ONE site.
 grep -nE -- "$D12C_PAT" "$SUT" > "$WORK/d12c-hits.txt" || true
-if [[ -s "$WORK/d12c-hits.txt" ]] && ! grep -vF 'INVALID_BODY' "$WORK/d12c-hits.txt" | grep -q .; then
+if [[ -s "$WORK/d12c-hits.txt" ]] && ! grep -q . < <(grep -vF 'INVALID_BODY' "$WORK/d12c-hits.txt"); then
   ok "D12c every write-flag line in source carries INVALID_BODY (no other body can be sent)"
 else
   no "D12c a write-flag line without INVALID_BODY (see $WORK/d12c-hits.txt)"

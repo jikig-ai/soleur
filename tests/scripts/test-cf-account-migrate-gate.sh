@@ -398,7 +398,7 @@ own_copies() {
   grep -q 'cfam_r2_aws s3' <<<"$code" || echo "no-shared-call"
 }
 for c in cf-account-migrate-job.sh cf-account-state-migrate.sh cf-account-migration-complete.sh; do
-  if grep -vE '^[[:space:]]*#' "$CONSUMER_DIR/$c" | grep -q 'cf-account-migrate-gate\.sh' && [[ -z "$(own_copies "$CONSUMER_DIR/$c")" ]]; then
+  if grep -q 'cf-account-migrate-gate\.sh' < <(grep -vE '^[[:space:]]*#' "$CONSUMER_DIR/$c") && [[ -z "$(own_copies "$CONSUMER_DIR/$c")" ]]; then
     pass "one source: $c sources this library, re-types none of its ids, bucket, prefix, endpoint or serial reader, and makes every R2 call through cfam_r2_aws"
   else fail "one source: $c keeps its own copy (or does not source the library)" 1 "$(own_copies "$CONSUMER_DIR/$c")"; fi
 done

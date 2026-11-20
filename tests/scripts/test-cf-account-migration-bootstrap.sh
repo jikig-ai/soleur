@@ -156,7 +156,8 @@ echo "cf-token-scope: migration profile $prof (stub)"
 echo "probe=$prof verdict=pass"
 SCOPE
   printf '.env\n.env.tmp.*\nbootstrap-runs.jsonl\n' > "$r/.gitignore"
-  ( git_fixture_env "$r" || exit 1
+  (
+    git_fixture_env "$r" || exit 1
     cd "$r" && git init -q . && git add -A && git commit -qm fixture ) >/dev/null 2>&1 || { printf 'HARNESS: fixture repo failed\n' >&2; exit 2; }
 }
 

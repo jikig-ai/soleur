@@ -395,7 +395,7 @@ TIERB=(TF_STATE_AWS_ACCESS_KEY_ID="$TB_ID" TF_STATE_AWS_SECRET_ACCESS_KEY="$TB_S
 LEGACY=(CFAM_DOPPLER_TOKEN_LEGACY="dp.st.LEGACY-FIXTURE" STUB_LEGACY_ID="$LG_ID" STUB_LEGACY_SECRET="$LG_SEC" STUB_EXPECT_KEY_ID="$LG_ID" STUB_EXPECT_SECRET="$LG_SEC")
 no_miss() { ! grep -q '^MISS' "$1.calls"; }
 creds_not_in_argv() { ! grep -qE "$TB_ID|$TB_SEC|$LG_ID|$LG_SEC" "$1.calls"; }
-creds_only_masked() { ! grep -vE '^::add-mask::' "$1.out" | grep -qE "$TB_ID|$TB_SEC|$LG_ID|$LG_SEC"; }
+creds_only_masked() { ! grep -qE "$TB_ID|$TB_SEC|$LG_ID|$LG_SEC" < <(grep -vE '^::add-mask::' "$1.out"); }
 rt_clean() { [[ -z "$(ls -A "$1.rt")" ]]; }
 
 mut_state "$WORK/c-inprog.json" '(.resources[] | select(.type=="cloudflare_record" and .name=="www") | .instances[0].attributes.zone_id) = "'"$OZ"'"'

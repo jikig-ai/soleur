@@ -742,7 +742,7 @@ mig_mut() { # <label> <sed-expr>
   mig_fixture "$d"
   sed -E "$2" "$WORK/mig-ok/cf-account-migrate.yml" > "$d/cf-account-migrate.yml"
   if cmp -s "$WORK/mig-ok/cf-account-migrate.yml" "$d/cf-account-migrate.yml"; then no "MUT A4 $1: did not land"; return; fi
-  if analyze "$d" "$ACTION" "" "$EXEMPT_LIST" "" | grep -q '^RED A4-migrate '; then ok "MUT A4 $1: RED"; else no "MUT A4 $1: stayed green"; fi
+  if grep -q '^RED A4-migrate ' < <(analyze "$d" "$ACTION" "" "$EXEMPT_LIST" ""); then ok "MUT A4 $1: RED"; else no "MUT A4 $1: stayed green"; fi
 }
 mig_mut "concurrency group differs"   's#group: terraform-apply-web-platform-host#group: cf-migrate#'
 mig_mut "cancel-in-progress true"     's#cancel-in-progress: false#cancel-in-progress: true#'
