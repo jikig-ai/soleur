@@ -240,7 +240,8 @@ fi
 case "$url" in
   https://app.soleur.ai/health) if [[ -f "$D/mode.health" ]]; then printf '526 '; else printf '200 '; fi ;;
   https://www.soleur.ai/) printf '301 https://soleur.ai/' ;;
-  https://soleur.ai/) [[ "$ua" == *GPTBot* ]] && printf '200 ' || printf '403 ' ;;
+  # mode.gptbot: bot_management blocks the allowlisted crawler (403).
+  https://soleur.ai/) [[ "$ua" == *GPTBot* && ! -f "$D/mode.gptbot" ]] && printf '200 ' || printf '403 ' ;;
   https://soleur.ai/pages/agents.html) printf '301 https://soleur.ai/agents/' ;;
   https://soleur.ai/pages/legal/privacy-policy.html) printf '301 https://soleur.ai/legal/privacy-policy/' ;;
   https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/) printf '301 https://soleur.ai/blog/soleur-vs-anthropic-cowork/' ;;
@@ -286,8 +287,8 @@ build_plan() {
             elif $c == "mutable" then {actions: ["update"], before: {},
                 after: (if $a == "github_actions_secret.cloudflare_account_id_pages"
                         then {repository: "soleur", secret_name: "CLOUDFLARE_ACCOUNT_ID_PAGES", plaintext_value: $na}
-                        else {plaintext_value: $s} end)}
-            else {actions: ["delete", "create"], before: {id: "tok-id-1"}, after: {value: $s}} end)}
+                        else {repository: "soleur", secret_name: "CLOUDFLARE_API_TOKEN_PAGES", plaintext_value: $s} end)}
+            else {actions: ["delete", "create"], before: {id: "tok-id-1"}, after: {project: "soleur", config: "prd", name: "CF_API_TOKEN_DNS_EDIT", visibility: "masked", value: $s}} end)}
          + (if $c == "replace" then {action_reason: "replace_by_request"} else {} end))
     ]}' >"$2"
 }
@@ -734,6 +735,10 @@ verdict "$r" "the job's gated set over that workspace equals the suite's derivat
 printf '\n[ids] Doppler must resolve the NEW ids before anything is written\n'
 setup_old_ids x; run_job "$LAST_D" "$PRISTINE"; WHY=""
 chk_ids_refused "$LAST_D"; verdict "$?" "old zone id in Doppler -> reason=zone-id-not-new before init/forget ($WHY)"
+# D34: the loader's soleur-infra-privileged export wins under --preserve-env, so the refusal names both sources.
+DOPPLER_SRC_TXT='The value checked is the effective one: soleur/prd_terraform, unless the soleur-infra-privileged project (exported by the credential loader) carries the same name, whose value wins under doppler run --preserve-env. Check both before re-flipping.'
+r=1; grep -qF -- "::error title=cf-account-migrate::cf_zone_id does not resolve to the Soleur-account zone (Doppler still holds the OLD id, or none). Do the runbook Phase 2 flip first. $DOPPLER_SRC_TXT Nothing was written." "$LAST_D/out.txt" && r=0
+verdict "$r" "zone-id-not-new names both Doppler sources (prd_terraform, and the loader's infra-privileged export that wins)"
 new_case oldacct redirects-dns false; printf '%s\n%s\n' "$NZ" "$OA" >"$LAST_D/ids"; run_job "$LAST_D" "$PRISTINE"
 r=1; refused_for "$LAST_D" account-id-not-new && ! grep -q '^terraform' "$LAST_D/calls.log" && r=0
 verdict "$r" "old account id in Doppler -> reason=account-id-not-new before any terraform call"
@@ -749,6 +754,8 @@ verdict "$r" "the NEW account id in upper case -> reason=account-id-not-new befo
 printf '\n[preflight] R2 stays legacy; every phase token reads the NEW zone/account\n'
 setup_token_403 x; run_job "$LAST_D" "$PRISTINE"; WHY=""
 chk_token_403 "$LAST_D"; verdict "$?" "rulesets token 403 on the new zone -> reason=token-not-new-zone, only the code printed, no terraform call ($WHY)"
+r=1; grep -qF -- "swap or re-mint it (runbook Phase 0/2). $DOPPLER_SRC_TXT Nothing was written." "$LAST_D/out.txt" && r=0
+verdict "$r" "token-not-new-zone names both Doppler sources before a swap or re-mint"
 setup_r2_new x; run_job "$LAST_D" "$PRISTINE"; WHY=""
 chk_r2_old "$LAST_D"; verdict "$?" "cf_r2_account_id = the NEW account -> reason=r2-account-not-old, no terraform call ($WHY)"
 setup_token_unreach x; run_job "$LAST_D" "$PRISTINE"; WHY=""
@@ -822,9 +829,37 @@ new_case planfail redirects-dns false; printf '1' >"$LAST_D/mode.plan"; run_job 
 r=1; refused_for "$LAST_D" gate-refused && grep -q 'Guard 4' "$LAST_D/out.txt" && ! grep -q '\] apply' "$LAST_D/calls.log" \
   && chk_forget_committed "$LAST_D" gate-refused && r=0
 verdict "$r" "plan failure (e.g. Guard 4 validation) surfaces an ::error:: naming Guard 4, no apply, forget=committed"
+# D33: zone-rest writes the zone SSL settings and bot_management, so it is probed after apply too
+# (app-health, gptbot, app-noindex), never with the redirect pairs.
+REDIRECT_PAIR_CURL='^curl https://(soleur[.]ai/(pages|blog)/|www[.]soleur[.]ai/)'
+chk_zrest_probed() { # <dir>: the zone-rest live probes ran, the redirect pairs did not
+  grep -qx 'curl https://app.soleur.ai/health' "$1/calls.log" && grep -qx 'curl https://soleur.ai/' "$1/calls.log" \
+    && grep -qx 'curl https://app.soleur.ai/' "$1/calls.log" || { WHY="not-probed"; return 1; }
+  if grep -qE "$REDIRECT_PAIR_CURL" "$1/calls.log"; then WHY="pair-probed"; return 1; fi
+}
+chk_zrest_apply_ok() {
+  [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
+  chk_zone_rest_args "$1" || return 1
+  if grep -q 'state rm' "$1/calls.log"; then WHY="forget"; return 1; fi
+  grep -qx 'cf-account-migrate verify=zone-rest verdict=ok' "$1/out.txt" || { WHY="no-ok"; return 1; }
+  chk_zrest_probed "$1"
+}
 setup_zone_rest_apply x; run_job "$LAST_D" "$PRISTINE"; WHY=""
-r=1; [[ "$(rc_of "$LAST_D")" == 0 ]] && chk_zone_rest_args "$LAST_D" && ! grep -qE 'state rm|^curl https://[a-z.]*soleur[.]ai' "$LAST_D/calls.log" && r=0
-verdict "$r" "zone-rest apply: no forget, no probes, -target/-replace argv equals the gate's lists, applied ($WHY)"
+chk_zrest_apply_ok "$LAST_D"; verdict "$?" "zone-rest apply: no forget, -target/-replace argv equals the gate's lists, applied, live probes ok without the redirect pairs ($WHY)"
+setup_zrest_health() { new_case "zrh-$1" zone-rest false; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; : >"$LAST_D/mode.health"; }
+chk_zrest_health() { # app-health 526 after a zone-rest apply: verify-failed applied=true, stopped after one pass
+  refused_for "$1" verify-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
+  grep -qxF -- 'cf-account-migrate phase=zone-rest verdict=refuse reason=verify-failed applied=true failing=app-health=>526' "$1/out.txt" || { WHY="no-field"; return 1; }
+  grep -qxF -- '- cf-account-migrate phase=zone-rest rehearsal=false verdict=refuse reason=verify-failed applied=true failing=app-health=>526' "$1/summary.md" || { WHY="no-summary"; return 1; }
+  grep -qx 'cf-account-migrate verify=zone-rest pass=1 app-health=526 retry=stopped' "$1/out.txt" || { WHY="no-stop-line"; return 1; }
+  grep -qF 'zone-rest has no ruled dashboard edit' "$1/out.txt" || { WHY="no-halt-text"; return 1; }
+  chk_zrest_probed "$1"
+}
+setup_zrest_health x; run_job "$LAST_D" "$PRISTINE"; WHY=""
+chk_zrest_health "$LAST_D"; verdict "$?" "zone-rest apply, then app-health 526 -> reason=verify-failed applied=true failing=app-health=>526, its own Halt text ($WHY)"
+new_case zrest-gptbot zone-rest false; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; : >"$LAST_D/mode.gptbot"; run_job "$LAST_D" "$PRISTINE"
+r=1; grep -qxF -- 'cf-account-migrate phase=zone-rest verdict=refuse reason=verify-failed applied=true failing=gptbot=>403' "$LAST_D/out.txt" && r=0
+verdict "$r" "zone-rest apply, then GPTBot 403 (bot_management) -> reason=verify-failed applied=true failing=gptbot=>403"
 new_case verify-broken redirects-dns false; : >"$LAST_D/mode.verify"; run_job "$LAST_D" "$PRISTINE"; D_HEALTH_MSG="$LAST_D"
 r=1; refused_for "$LAST_D" verify-failed && grep -q '\] apply' "$LAST_D/calls.log" \
   && grep -q '^cf-account-migrate verify=redirects-dns verdict=fail failing=.* app-noindex=>200+hdr=absent ' "$LAST_D/out.txt" && r=0
@@ -847,13 +882,16 @@ r=1; grep -qF 'The runbook Halt verify-failed steps apply to those failing items
 verdict "$r" "apply-failed with failing=: points at the runbook Halt verify-failed steps (app-health first)"
 chk_zrest_applyfail() {
   refused_for "$1" apply-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
-  grep -qx 'cf-account-migrate phase=zone-rest verdict=refuse reason=apply-failed' "$1/out.txt" || { WHY="fields"; return 1; }
-  if grep -q '^curl https://[a-z.]*soleur[.]ai' "$1/calls.log"; then WHY="probed"; return 1; fi
+  grep -qx 'cf-account-migrate phase=zone-rest verdict=refuse reason=apply-failed verify=ok' "$1/out.txt" || { WHY="fields"; return 1; }
   if grep -q 'forget' "$1/out.txt"; then WHY="forget-sentence"; return 1; fi
+  chk_zrest_probed "$1"
 }
 setup_zrest_applyfail() { new_case "afz-$1" zone-rest false; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; printf '1' >"$LAST_D/mode.apply"; }
 setup_zrest_applyfail x; run_job "$LAST_D" "$PRISTINE"; WHY=""
-chk_zrest_applyfail "$LAST_D"; verdict "$?" "zone-rest apply failure -> reason=apply-failed with no forget or probe field, no probes, no forget sentence ($WHY)"
+chk_zrest_applyfail "$LAST_D"; verdict "$?" "zone-rest apply failure -> reason=apply-failed verify=ok (the partial apply probed, no redirect pairs), no forget field or sentence ($WHY)"
+new_case afz-health zone-rest false; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; printf '1' >"$LAST_D/mode.apply"; : >"$LAST_D/mode.health"; run_job "$LAST_D" "$PRISTINE"
+r=1; grep -qxF -- 'cf-account-migrate phase=zone-rest verdict=refuse reason=apply-failed failing=app-health=>526' "$LAST_D/out.txt" && r=0
+verdict "$r" "zone-rest apply failure with app-health 526 -> reason=apply-failed failing=app-health=>526"
 r=1; grep -qF 'a dashboard edit is allowed only for app-health=>525/526 (the ssl rule) or an app-health 3xx whose Location equals a Terraform redirect target' "$D_HEALTH_MSG/out.txt" \
   && grep -qF 'for 000 or any other code make no edit' "$D_HEALTH_MSG/out.txt" && r=0
 verdict "$r" "verify-failed names the runbook's edit cases only (525/526, a Terraform-target 3xx; no edit otherwise)"
@@ -888,7 +926,7 @@ fn_passes() {
   lib="$(mktemp "$SBX/fnlib.XXXXXX")" && cnt="$(mktemp "$SBX/fncount.XXXXXX")" || return 2
   sed '/^main "\$@"$/d' "$1" >"$lib"
   # shellcheck disable=SC2016 # expanded by the child bash
-  env -u CFAM_VERIFY_TRIES -u CFAM_VERIFY_SLEEP -u CFAM_VERIFY_DEADLINE -u SECONDS FN_COUNT="$cnt" bash -c '
+  env -u CFAM_VERIFY_TRIES -u CFAM_VERIFY_SLEEP -u CFAM_VERIFY_DEADLINE -u SECONDS MIGRATE_PHASE=redirects-dns FN_COUNT="$cnt" bash -c '
     source "$1" || exit 2; shift
     curl() { case "$*" in *app.soleur.ai/health*) printf x >>"$FN_COUNT" ;; esac
              if [[ "$*" == *" -D - "* ]]; then printf "HTTP/2 500\r\n\r\n"; else printf "500 "; fi; }
@@ -896,7 +934,7 @@ fn_passes() {
     "$@" >/dev/null' _ "$lib" "${@:2}"
   printf '%s' "$(($(wc -c <"$cnt")))"
 }
-r=1; fp="$(fn_passes "$PRISTINE" probe_partial_apply)"; fv="$(fn_passes "$PRISTINE" verify_redirects_dns)"
+r=1; fp="$(fn_passes "$PRISTINE" probe_partial_apply)"; fv="$(fn_passes "$PRISTINE" verify_live)"
 [[ "$fp" == 7 && "$fv" == 12 ]] && r=0
 verdict "$r" "defaults: the apply-failed probe polls 7 passes (60 s deadline, 10 s pause); the post-apply verify 12 (passes $fp / $fv)"
 new_case rerun redirects-dns false; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; run_job "$LAST_D" "$PRISTINE"
@@ -1137,7 +1175,7 @@ red "V4 the deadline set to the verify's start (end=\$SECONDS) gives up after on
 V5="$(mk_mutant no-cap '/^  if ((cap < end)); then end=\$cap; fi$/d')"
 red "V5 the verify deadline without the script-start cap runs every pass past 1395 s" "$V5" chk_deadline '^passes:3$' setup_cap
 # shellcheck disable=SC2016 # sed expression matches literal script text
-V6="$(mk_mutant applyfail-no-probe 's/^      if probe_partial_apply; then vf="verify=ok"; else vf="failing=\${VERIFY_FAILING}"; fi$/      :/')"
+V6="$(mk_mutant applyfail-no-probe 's/^    if probe_partial_apply; then vf="verify=ok"; else vf="failing=\${VERIFY_FAILING}"; fi$/    :/')"
 red "V6 a failed apply is not probed (the partial apply's 526 is unreported)" "$V6" chk_applyfail_health '^no-field$' setup_applyfail_health
 # shellcheck disable=SC2016 # sed expression matches literal script text
 V7="$(mk_mutant applyfail-no-forget 's/ "\${fx}\${vf:+\${fx:+ }\$vf}"$/ "$vf"/')"
@@ -1177,8 +1215,17 @@ red "V22 (D12) any app-health failure stops the verify (a 500 is no longer retri
 # shellcheck disable=SC2016 # sed expression matches literal script text
 V23="$(mk_mutant forget-sentence-always 's/^    \[\[ "\$MIGRATE_PHASE" != redirects-dns \]\] || msg+=" the forget/    msg+=" the forget/')"
 red "V23 (D9) zone-rest apply-failed carries the redirects-dns forget sentence" "$V23" chk_zrest_applyfail '^forget-sentence$' setup_zrest_applyfail
+# shellcheck disable=SC2016 # sed expression matches literal script text
+V24="$(mk_mutant zrest-no-verify 's/^  verify_live || refuse verify-failed/  [[ "$MIGRATE_PHASE" != redirects-dns ]] || verify_live || refuse verify-failed/')"
+red "V24 (D33) the post-apply live verify skipped for zone-rest (a 526 after it goes unreported)" "$V24" chk_zrest_health '^rc:0$' setup_zrest_health
+# shellcheck disable=SC2016 # sed expression matches literal script text
+V25="$(mk_mutant zrest-no-applyfail-probe 's/^    if probe_partial_apply; then vf=/    if [[ "$MIGRATE_PHASE" != redirects-dns ]]; then :; elif probe_partial_apply; then vf=/')"
+red "V25 (D33) a failed zone-rest apply is not probed" "$V25" chk_zrest_applyfail '^fields$' setup_zrest_applyfail
+# shellcheck disable=SC2016 # sed expression matches literal script text
+V26="$(mk_mutant zrest-probes-pairs 's/^  \[\[ "\$ph" != redirects-dns \]\] || pairs=/  pairs=/')"
+red "V26 (D33) zone-rest probes the redirect pairs too" "$V26" chk_zrest_apply_ok '^(pair-probed|rc:1)$' setup_zone_rest_apply
 # D13: the apply-failed probe's 60 s ceiling, function level (virtual clock, no wall time).
-F1="$(mk_mutant applyfail-no-ceiling 's/^probe_partial_apply() { verify_redirects_dns 60; }$/probe_partial_apply() { verify_redirects_dns; }/')"
+F1="$(mk_mutant applyfail-no-ceiling 's/^probe_partial_apply() { verify_live 60; }$/probe_partial_apply() { verify_live; }/')"
 r=1; n="$(fn_passes "$F1" probe_partial_apply)"; [[ "$n" == 12 ]] && r=0
 verdict "$r" "F1 (D13) the apply-failed probe without its 60 s ceiling polls the full budget: RED as required (passes $n, pristine 7)"
 # shellcheck disable=SC2016 # sed expression matches literal script text
@@ -1211,7 +1258,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=161
+EXPECTED_CASES=169
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

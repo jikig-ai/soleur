@@ -28,7 +28,9 @@
 # itself starts after 1500 - SLEEP - VERIFY_PASS_MAX s still runs its one pass, and prints at most
 # VERIFY_PASS_MAX s after it started. A pass whose app-health reads 525 or 526 ends the loop at once
 # (that rule has landed and will not heal while the loop waits); every other failure is retried.
-# The apply-failed probe (probe_partial_apply) is the same loop polled on a 60 s deadline.
+# The apply-failed probe (probe_partial_apply) is the same loop polled on a 60 s deadline. Both
+# phases are probed (verify_live): gptbot, app-noindex and app-health always, the redirect pairs on
+# redirects-dns only; a zone-rest failure refuses verify-failed applied=true failing=<list> too.
 # RESIDUALS: bash imports SECONDS from the environment, so a SECONDS set in the step env shifts the
 # clock (the workflow sets none; the suite uses it to place the clock near the cap). The pass
 # figure assumes curl honours --max-time; process start-up time is not counted.
@@ -52,7 +54,7 @@
 # remote state serial and the web-platform/backups/ listing are unchanged. Apply: state-forget
 # (redirects-dns only), plan with the gate's -target/-replace lists, phase gate, then the
 # whole-list entrypoint gate (ADR-136, CTO D2: a ruleset create is a whole-list PUT over the live
-# phase entrypoint), apply the graded tfplan only when both PASS, verify.
+# phase entrypoint), apply the graded tfplan only when both PASS, verify the live probes (both phases).
 #
 # Prints verdict lines and addresses only; terraform output goes through tf_redact_random_ids.
 # Exit: 0 ok, 1 refused or failed, 2 setup error.
@@ -292,6 +294,9 @@ done
 PREFLIGHT
 )"
 readonly PREFLIGHT_SH
+# Where a refused value comes from: doppler run --preserve-env keeps what the credential loader
+# already exported, so a TF_VAR_* the soleur-infra-privileged project carries wins over prd_terraform.
+readonly DOPPLER_SRC=" The value checked is the effective one: soleur/prd_terraform, unless the soleur-infra-privileged project (exported by the credential loader) carries the same name, whose value wins under doppler run --preserve-env. Check both before re-flipping."
 check_ids() {
   local out zone acct r2 rc=0 tokens n path line code e bad=0 unreach=0
   local -a pairs=()
@@ -310,11 +315,11 @@ check_ids() {
   acct="$(sed -n 2p <<<"$out")"
   r2="$(sed -n 3p <<<"$out")"
   [[ "$zone" == "$CFAM_NEW_ZONE_ID" ]] \
-    || refuse zone-id-not-new "cf_zone_id does not resolve to the Soleur-account zone (Doppler still holds the OLD id, or none). Do the runbook Phase 2 flip first. Nothing was written."
+    || refuse zone-id-not-new "cf_zone_id does not resolve to the Soleur-account zone (Doppler still holds the OLD id, or none). Do the runbook Phase 2 flip first.${DOPPLER_SRC} Nothing was written."
   [[ "$acct" == "$CFAM_NEW_ACCOUNT_ID" ]] \
-    || refuse account-id-not-new "cf_account_id does not resolve to the Soleur account (Doppler still holds the OLD id, or none). Do the runbook Phase 2 flip first. Nothing was written."
+    || refuse account-id-not-new "cf_account_id does not resolve to the Soleur account (Doppler still holds the OLD id, or none). Do the runbook Phase 2 flip first.${DOPPLER_SRC} Nothing was written."
   [[ "$r2" == "$CFAM_OLD_ACCOUNT_ID" ]] \
-    || refuse r2-account-not-old "cf_r2_account_id does not resolve to the legacy account that holds R2 (ADR-329: R2 never moves). Nothing was written."
+    || refuse r2-account-not-old "cf_r2_account_id does not resolve to the legacy account that holds R2 (ADR-329: R2 never moves).${DOPPLER_SRC} Nothing was written."
   while IFS= read -r n; do
     line="$(awk -v n="$n" '$1 == "tok" && $2 == n {print $3, $4; exit}' <<<"$out")"
     code="${line%% *}"; code="${code:-missing}"; e="${line#* }"
@@ -324,7 +329,7 @@ check_ids() {
     # A transport failure is not a token verdict: retry, do not re-mint.
     if [[ "$e" != 0 ]]; then unreach=1; elif [[ "$code" != 200 ]]; then bad=1; fi
   done <<<"$tokens"
-  [[ "$bad" -eq 0 ]] || refuse token-not-new-zone "a provider token for $MIGRATE_PHASE did not answer 200 on the NEW zone/account (see the preflight=token lines): swap or re-mint it (runbook Phase 0/2). Nothing was written."
+  [[ "$bad" -eq 0 ]] || refuse token-not-new-zone "a provider token for $MIGRATE_PHASE did not answer 200 on the NEW zone/account (see the preflight=token lines): swap or re-mint it (runbook Phase 0/2).${DOPPLER_SRC} Nothing was written."
   [[ "$unreach" -eq 0 ]] || refuse token-unreachable "the Cloudflare API did not answer a token probe for $MIGRATE_PHASE (curl failed: see the e= on the preflight=token lines): a network fault, not a token verdict. Re-dispatch; do not re-mint. Nothing was written."
   printf '%s preflight=ids verdict=ok tokens=%s\n' "$P" "$(grep -c . <<<"$tokens")"
 }
@@ -475,10 +480,15 @@ readonly VERIFY_PAIRS=(
 # One pass: a probe per pair, then gptbot, app-noindex and app-health, each of at most VERIFY_PROBE_S.
 readonly VERIFY_CAP=1500 VERIFY_PROBE_S=15
 readonly VERIFY_PASS_MAX=$(((${#VERIFY_PAIRS[@]} + 3) * VERIFY_PROBE_S))
-# verify_redirects_dns [<deadline ceiling, s>]: the loop and bound in the header (VERIFY BOUND).
-verify_redirects_dns() {
+# verify_live [<deadline ceiling, s>]: the live probes of the phase just applied, with the loop and
+# bound in the header (VERIFY BOUND). Every phase: gptbot (bot_management, the crawler allowlist),
+# app-noindex and app-health (an ssl rule or the zone SSL settings can 525/526 the app). The
+# redirect pairs: redirects-dns only. VERIFY_PASS_MAX counts the pairs, so it bounds both phases.
+verify_live() {
   local tries="${CFAM_VERIFY_TRIES:-12}" pause="${CFAM_VERIFY_SLEEP:-10}" dl="${CFAM_VERIFY_DEADLINE:-600}"
-  local i bad u want pair hdrs got end cap nrc stuck
+  local i bad u want pair hdrs got end cap nrc stuck ph="${MIGRATE_PHASE:-?}"
+  local -a pairs=()
+  [[ "$ph" != redirects-dns ]] || pairs=("${VERIFY_PAIRS[@]}")
   if [[ -n "${1:-}" && "$1" -lt "$dl" ]]; then dl="$1"; fi
   end=$((SECONDS + dl))
   cap=$((VERIFY_CAP - pause - VERIFY_PASS_MAX))
@@ -487,7 +497,7 @@ verify_redirects_dns() {
   # tells a wrong destination from a 404, a timeout (000) or a 526 from the ssl=strict rule.
   for ((i = 1; i <= tries; i++)); do
     bad=""; stuck=""
-    for pair in "${VERIFY_PAIRS[@]}"; do
+    for pair in ${pairs[@]+"${pairs[@]}"}; do
       u="${pair%%|*}"; want="${pair#*|}"
       got="$(probe "$u")"
       [[ "$got" == "301 $want" ]] || bad+=" $u=>$(obs_line "$got")"
@@ -501,15 +511,16 @@ verify_redirects_dns() {
       [[ "$nrc" -eq 0 ]] || got+=" e=$nrc"
       bad+=" app-noindex=>$(obs_line "$got")"
     fi
-    # The same apply creates the app's ssl=strict config rule: prove the product still serves.
+    # redirects-dns creates the app's ssl=strict config rule and zone-rest the zone SSL settings:
+    # prove the product still serves.
     got="$(probe https://app.soleur.ai/health)"
     served "$got" 200 || bad+=" app-health=>$(obs_line "$got")"
-    # A 525/526 is the landed ssl=strict rule: it will not heal while the loop waits, and the
-    # refusal is what sends the ops email. Every other failure (a redirect still propagating) retries.
+    # A 525/526 is a landed SSL setting: it will not heal while the loop waits, and the refusal is
+    # what sends the ops email. Every other failure (a redirect still propagating) retries.
     [[ "$got" =~ ^52[56]\  && "$got" != *" e="* ]] && stuck="${got%% *}"
-    if [[ -z "$bad" ]]; then printf '%s verify=redirects-dns verdict=ok\n' "$P"; return 0; fi
+    if [[ -z "$bad" ]]; then printf '%s verify=%s verdict=ok\n' "$P" "$ph"; return 0; fi
     if [[ -n "$stuck" ]]; then
-      printf '%s verify=redirects-dns pass=%s app-health=%s retry=stopped\n' "$P" "$i" "$stuck"
+      printf '%s verify=%s pass=%s app-health=%s retry=stopped\n' "$P" "$ph" "$i" "$stuck"
       break
     fi
     # The deadline (VERIFY BOUND in the header) is checked after each failing pass, so the
@@ -518,13 +529,13 @@ verify_redirects_dns() {
     sleep "$pause"
   done
   VERIFY_FAILING="${bad# }"
-  printf '%s verify=redirects-dns verdict=fail failing=%s\n' "$P" "$VERIFY_FAILING"
+  printf '%s verify=%s verdict=fail failing=%s\n' "$P" "$ph" "$VERIFY_FAILING"
   return 1
 }
 
 # probe_partial_apply: the best-effort probe after a failed apply, polled on a 60 s deadline (up to
 # TRIES passes). A partial apply may already serve rules to every visitor.
-probe_partial_apply() { verify_redirects_dns 60; }
+probe_partial_apply() { verify_live 60; }
 
 run_apply() {
   local rc g fg="" fx="" vf="" msg
@@ -559,19 +570,21 @@ run_apply() {
   if [[ "$rc" -ne 0 ]]; then
     # apply-failed stays the reason; the result of the best-effort probe is a field.
     msg="terraform apply of the graded plan failed (exit $rc); state may hold a partial apply."
-    if [[ "$MIGRATE_PHASE" == redirects-dns ]]; then
-      if probe_partial_apply; then vf="verify=ok"; else vf="failing=${VERIFY_FAILING}"; fi
-      msg+=" Probe of the partial apply (polled on a 60 s deadline): ${vf}."
-      [[ "$vf" != failing=* ]] || msg+=" The runbook Halt verify-failed steps apply to those failing items (app-health first)."
-    fi
+    if probe_partial_apply; then vf="verify=ok"; else vf="failing=${VERIFY_FAILING}"; fi
+    msg+=" Probe of the partial apply (polled on a 60 s deadline): ${vf}."
+    [[ "$vf" != failing=* ]] || msg+=" The runbook Halt verify-failed steps apply to those failing items (app-health first)."
     msg+=" Fix forward (a reviewed PR if the cause is in code), then re-dispatch the same phase:"
     [[ "$MIGRATE_PHASE" != redirects-dns ]] || msg+=" the forget then removes 0 (cf-state-migrate verdict=ok removed=0),"
     refuse apply-failed "$msg imports already in state plan as no-op, and only the remainder is planned and gated." "${fx}${vf:+${fx:+ }$vf}"
   fi
   printf '%s phase=%s mode=apply applied=true\n' "$P" "$MIGRATE_PHASE"
+  local what="noindex/crawler/app-health" halt
+  halt="zone-rest has no ruled dashboard edit: make none and stop for an owner decision (an app-health 525/526 here comes from the zone SSL settings this phase writes, a gptbot 403 from bot_management). Then a fix-forward PR, a rehearsal, and a re-dispatch of this phase with expected_in_state_updates set to the rehearsal's admitted set."
   if [[ "$MIGRATE_PHASE" == redirects-dns ]]; then
-    verify_redirects_dns || refuse verify-failed "applied, but the redirect/noindex/crawler/app-health probes did not all pass: ${VERIFY_FAILING}. Runbook Halt, verify-failed: a dashboard edit is allowed only for app-health=>525/526 (the ssl rule) or an app-health 3xx whose Location equals a Terraform redirect target (remove that one rule or list item), by the owner, on the NEW zone only; for 000 or any other code make no edit and stop for an owner decision. Then a fix-forward PR, a rehearsal, and a re-dispatch of this phase with expected_in_state_updates set to the rehearsal's admitted set (the dashboard-edited rule must plan as a no-op; only a rule nobody edited plans as an in-state update)." "applied=true${fx:+ $fx} failing=${VERIFY_FAILING}"
+    what="redirect/$what"
+    halt="a dashboard edit is allowed only for app-health=>525/526 (the ssl rule) or an app-health 3xx whose Location equals a Terraform redirect target (remove that one rule or list item), by the owner, on the NEW zone only; for 000 or any other code make no edit and stop for an owner decision. Then a fix-forward PR, a rehearsal, and a re-dispatch of this phase with expected_in_state_updates set to the rehearsal's admitted set (the dashboard-edited rule must plan as a no-op; only a rule nobody edited plans as an in-state update)."
   fi
+  verify_live || refuse verify-failed "applied, but the ${what} probes did not all pass: ${VERIFY_FAILING}. Runbook Halt, verify-failed: ${halt}" "applied=true${fx:+ $fx} failing=${VERIFY_FAILING}"
   printf '%s phase=%s mode=apply verdict=PASS applied=true\n' "$P" "$MIGRATE_PHASE"
   summary "verdict=PASS applied=true"
 }
