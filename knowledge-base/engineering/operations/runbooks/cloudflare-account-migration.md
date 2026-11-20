@@ -95,6 +95,13 @@ re-dispatch:
 - `zone-id-not-new` / `account-id-not-new`: Doppler still holds an old id; do the Phase 2 flip first.
 - `token-not-new-zone`: a phase token did not answer `200` on the new zone or account (its `preflight=token` line
   names it); swap or re-mint it.
+- `token-unreachable`: a token probe failed in transport (`http=000 e=<curl rc>`), so nothing is known about the
+  token; re-dispatch the rehearsal, and never re-mint on this reason alone.
+- `bad-expected-in-state-updates`: the `expected_in_state_updates` input holds an entry that is not a Terraform
+  address; fix the input and re-dispatch.
+- `in-state-updates-unexpected`: the gate admitted a different set of in-state updates than the input names (the
+  log prints `admitted=` and `expected=`). Copy the rehearsal's `cf-account-migrate in-state-updates admitted=`
+  value only after checking each address against Halt `verify-failed` step 4; never widen the input to make it pass.
 - `entrypoint-gate-refused`: a live phase entrypoint already holds rules; commit the printed import block first, and
   in the same reviewed PR flip that address's spec class from `create` to `import` in
   `tests/scripts/lib/cf-account-migrate-gate.sh` (every ruleset and list is `create` class, and the phase gate refuses
