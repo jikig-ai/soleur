@@ -34,23 +34,31 @@
 # The new ids are constants, not inputs (any other id, old or unknown, is refused): a mis-set Doppler value must not be able to
 # re-point what the gate accepts. Not secrets.
 #
-# EXPECTED VALUES (contract). _cfam_expected_values is a closed table of the non-Cloudflare members
-# whose planned value is fixed, with every attribute their .tf block sets: doppler_secret.cf_zone_id_prd
-# (cf-runtime-zone-id.tf: project soleur, config prd, name CF_ZONE_ID, value the NEW zone id) and
-# github_actions_secret.cloudflare_account_id_pages (cf-pages.tf: repository soleur, secret_name
-# CLOUDFLARE_ACCOUNT_ID_PAGES, plaintext_value the NEW account id). Any planned action with a non-null
-# `after` (create, update, no-op) must carry each attribute exactly: absent, another value, or known
-# only after apply (after_unknown) is refused. The value check runs on the plan JSON, which holds a
-# sensitive attribute's value in clear (after_sensitive only marks it), so a sensitive value is graded,
-# not skipped. The suite pins that every non-Cloudflare spec member is in this table or in its own
-# literal list of token-valued members.
-# RESIDUALS: the token-valued members (github_actions_secret.cloudflare_api_token_pages,
-# doppler_secret.cf_api_token_dns_edit) carry a credential no constant can name; the old-id check and
-# the job's token preflight cover them. A .tf edit that adds an attribute to a table member is not
-# seen here until the table gains it (review).
+# EXPECTED VALUES (contract). _cfam_expected_values is a closed table of EVERY non-Cloudflare spec
+# member, with every attribute its .tf block sets to a constant:
+#   doppler_secret.cf_zone_id_prd (cf-runtime-zone-id.tf): project soleur, config prd, name
+#     CF_ZONE_ID, value the NEW zone id;
+#   github_actions_secret.cloudflare_account_id_pages (cf-pages.tf): repository soleur, secret_name
+#     CLOUDFLARE_ACCOUNT_ID_PAGES, plaintext_value the NEW account id;
+#   github_actions_secret.cloudflare_api_token_pages (cf-pages.tf): repository soleur, secret_name
+#     CLOUDFLARE_API_TOKEN_PAGES (its plaintext_value is a token: not in the table);
+#   doppler_secret.cf_api_token_dns_edit (cf-cert-reissue-token.tf): project soleur, config prd, name
+#     CF_API_TOKEN_DNS_EDIT, visibility masked (its value is a token: not in the table).
+# Any planned action with a non-null `after` (create, update, no-op, and the create half of the
+# declared replace) must carry each attribute exactly: absent, another value, or known only after
+# apply (after_unknown) is refused. The check runs on the plan JSON, which holds a sensitive
+# attribute's value in clear (after_sensitive only marks it), so a sensitive value is graded, not
+# skipped. The suite pins that every non-Cloudflare spec member is in this table, that the table's
+# attributes equal the .tf block's constant attributes, and that exactly its own literal list of
+# token-valued members carries no value attribute.
+# RESIDUALS: the VALUE of the two token-valued members is not graded (no constant can name a
+# credential); only the old-id check (no OLD zone or account id inside it) and the job's token
+# preflight (the token answers on the NEW zone or account) see it. Their destination attributes ARE
+# graded above.
 #
 # SPEC SHAPE (contract). A phase spec is one flat JSON object naming each address once with a string
-# class: a nested value or a key written twice refuses the phase before any plan entry is graded.
+# class: a value other than one of the four class strings (a nested object or array included) or a
+# key written twice refuses the phase before any plan entry is graded.
 # Usage:
 #   source tests/scripts/lib/cf-account-migrate-gate.sh
 #   cf_account_migrate_targets  <phase>                       # one -target=<addr> per line
@@ -202,6 +210,8 @@ _cfam_expected_values() {
   jq -n --arg z "$CFAM_NEW_ZONE_ID" --arg a "$CFAM_NEW_ACCOUNT_ID" '{}
     + {"doppler_secret.cf_zone_id_prd": {project: "soleur", config: "prd", name: "CF_ZONE_ID", value: $z}}
     + {"github_actions_secret.cloudflare_account_id_pages": {repository: "soleur", secret_name: "CLOUDFLARE_ACCOUNT_ID_PAGES", plaintext_value: $a}}
+    + {"github_actions_secret.cloudflare_api_token_pages": {repository: "soleur", secret_name: "CLOUDFLARE_API_TOKEN_PAGES"}}
+    + {"doppler_secret.cf_api_token_dns_edit": {project: "soleur", config: "prd", name: "CF_API_TOKEN_DNS_EDIT", visibility: "masked"}}
   '
 }
 
@@ -215,7 +225,7 @@ cf_account_migrate_gate() {
   local phase="${1-}"
   local plan_json="${2-}"
   local state_json="${3-}"
-  local spec literals want violations="" v creates imports destroys n_rep n_raw n_obj n_deep admitted gv_rc
+  local spec literals want violations="" v creates imports destroys n_rep n_raw n_obj admitted gv_rc
 
   spec="$(cf_account_migrate_phase_spec "$phase")" || { echo "cf_account_migrate_gate: REFUSE — unknown phase '${phase}'"; return 1; }
   plan_gate_assert_readable     "cf_account_migrate_gate" "$plan_json" || return 1
@@ -227,22 +237,22 @@ cf_account_migrate_gate() {
   literals="$(_cfam_import_literals)" || return 1
   want="$(_cfam_expected_values)" || { _cfam_eval_fail; return 1; }
 
-  # SPEC SHAPE (header), checked on the streaming parser, which sees every occurrence: a key written
-  # twice in the spec heredoc parses as its LAST value silently, so the top-level key count differs
-  # from the parsed object's; and any event path longer than one is a nested value (the spec must be
-  # flat). Both run before the class check, so each owns its refusal.
+  # SPEC SHAPE (header). First the class: a value outside the four class strings (a typo, or a
+  # nested object or array) would be graded as nothing by the class check below (any action
+  # passes), so it refuses the phase. Then the key count, on the streaming parser, which sees every
+  # occurrence: a key written twice parses as its LAST value silently, so the number of top-level
+  # values differs from the parsed object's length. A top-level value ends either with a leaf event
+  # at depth 1 (a scalar, {} or []) or with the closing event of its own container (path length 2),
+  # so an earlier nested copy of a key is counted too. With the class check first, a nested value
+  # is never reported as a duplicate.
   # Guarded: a failed jq here yields "", `[[ "" -gt 0 ]]` is false, and the replace arms below
   # would silently be skipped.
-  n_deep="$(jq -n --stream '[inputs | select((.[0] | length) > 1)] | length' <<<"$spec")" || { _cfam_eval_fail; return 1; }
-  n_raw="$(jq -n --stream '[inputs | select(length == 2 and (.[0] | length) == 1)] | length' <<<"$spec")" || { _cfam_eval_fail; return 1; }
-  n_obj="$(jq 'length' <<<"$spec")" || { _cfam_eval_fail; return 1; }
-  plan_gate_assert_numeric "cf_account_migrate_gate" "spec_nested=${n_deep}" "spec_keys=${n_raw}" "spec_addresses=${n_obj}" || return 1
-  [[ "$n_deep" -eq 0 ]] || { echo "cf_account_migrate_gate: REFUSE — phase ${phase} declares a nested value (${n_deep} stream event(s) below the top level); the spec must be flat"; return 1; }
-  [[ "$n_raw" -eq "$n_obj" ]] || { echo "cf_account_migrate_gate: REFUSE — phase ${phase} declares an address more than once (${n_raw} keys, ${n_obj} distinct); the spec must name each address once"; return 1; }
-  # A class outside the four is a typo in the spec, and the class check below would grade it as
-  # nothing (any action passes): refuse the phase instead.
   v="$(jq -r '[to_entries[] | select(.value != "create" and .value != "import" and .value != "mutable" and .value != "replace") | "\(.key)=\(.value)"] | join(" ")' <<<"$spec")" || { _cfam_eval_fail; return 1; }
   [[ -z "$v" ]] || { echo "cf_account_migrate_gate: REFUSE — phase ${phase} declares an unknown class (${v}); the classes are create, import, mutable, replace"; return 1; }
+  n_raw="$(jq -n --stream '[inputs | select((length == 2 and (.[0] | length) == 1) or (length == 1 and (.[0] | length) == 2))] | length' <<<"$spec")" || { _cfam_eval_fail; return 1; }
+  n_obj="$(jq 'length' <<<"$spec")" || { _cfam_eval_fail; return 1; }
+  plan_gate_assert_numeric "cf_account_migrate_gate" "spec_keys=${n_raw}" "spec_addresses=${n_obj}" || return 1
+  [[ "$n_raw" -eq "$n_obj" ]] || { echo "cf_account_migrate_gate: REFUSE — phase ${phase} declares an address more than once (${n_raw} keys, ${n_obj} distinct); the spec must name each address once"; return 1; }
   n_rep="$(jq -r '[to_entries[] | select(.value=="replace")] | length' <<<"$spec")" || { _cfam_eval_fail; return 1; }
   plan_gate_assert_numeric "cf_account_migrate_gate" "replace_count=${n_rep}" || return 1
   if [[ -z "$state_json" || ! -r "$state_json" ]] || ! jq -e '.values' "$state_json" >/dev/null 2>&1; then

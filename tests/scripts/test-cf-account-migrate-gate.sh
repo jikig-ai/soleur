@@ -5,13 +5,16 @@
 # fixture's expected counts (8 creates, 29 imports) and a sample of addresses are literals here,
 # so a gate whose allow-set silently shrank cannot also shrink this suite's expectations.
 #
-# ONE SOURCE (contract, the sources_lib / defines_lib_fn rows): each consumer carries its reviewed
-# source line(s) as whole lines (the forget's backslash continuation pinned to the line after it),
-# re-types none of the library's constants, makes every R2 call through cfam_r2_aws, and DEFINES
-# none of the library's function names (a consumer-side redefinition would shadow the bytes under
-# test). RESIDUALS (review): a reviewed source line inside a dead branch (`if false; then` … `fi`)
-# still reads as sourcing; a definition made through eval, an alias or a sourced third file is not
-# seen.
+# ONE SOURCE (contract, the sources_lib / defines_lib_fn / reassigns_lib_var rows): each consumer
+# carries its reviewed source line(s) as whole lines (the forget's backslash continuation pinned to
+# the line after it; the job's path binding followed by its source line with only comments and one
+# reviewed seam strip between), re-types none of the library's literals, names none of the library's
+# CFAM_* constants bare after its source line (no reassignment in any form), makes every R2 call
+# through cfam_r2_aws, and DEFINES none of the library's function names, at the start of a line or
+# after a separator or group opener (a consumer-side redefinition would shadow the bytes under test).
+# RESIDUALS (review): a reviewed source line inside a dead branch (`if false; then` … `fi`) still reads
+# as sourcing; a definition or assignment made through eval of a built string, an alias or a sourced
+# third file is not seen.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -259,21 +262,37 @@ dup_mut_out="$(dup_run "$TMP/dup-mut.sh")"; dup_mut_rc=$?
 if cmp -s "$TMP/dup-mut.sh" "$TMP/dup.sh"; then fail "M-dup: the mutation did not land" 1 ""
 elif [[ "$dup_mut_rc" -eq 0 ]]; then pass "M-dup: without the key-count check the duplicated spec passes (the check is load-bearing)"
 else fail "M-dup: removing the key-count check did not admit the duplicate" "$dup_mut_rc" "$dup_mut_out"; fi
-# U9: a nested value in the spec refuses the phase (the spec must be flat). Layered: with the nested
-# check neutered, the key-count check refuses it (a nested key has no depth-1 leaf event).
+# U9: a nested value in the spec refuses the phase as an unknown class (the spec must be flat), and
+# is NOT misreported as a duplicate key (the class check runs first; the key count counts a nested
+# value once).
+NEST_CLS='declares an unknown class (cloudflare_ruleset.seo_config_settings={"class":"create"})'
 sed 's|^  "cloudflare_ruleset.seo_config_settings": "create",$|  "cloudflare_ruleset.seo_config_settings": {"class": "create"},|' "$GATE" > "$TMP/nest.sh"
 nest_out="$(dup_run "$TMP/nest.sh")"; nest_rc=$?
 if cmp -s "$TMP/nest.sh" "$GATE"; then fail "U9: the nested-value fixture did not land" 1 ""
-elif [[ "$nest_rc" -eq 1 ]] && grep -qF -- "declares a nested value (2 stream event(s) below the top level); the spec must be flat" <<<"$nest_out"; then
-  pass "U9: a spec with a nested value refuses the phase"
-else fail "U9: a nested spec value was not refused" "$nest_rc" "$nest_out"; fi
+elif [[ "$nest_rc" -eq 1 ]] && grep -qF -- "$NEST_CLS" <<<"$nest_out" && ! grep -qF -- 'more than once' <<<"$nest_out"; then
+  pass "U9: a spec with a nested value refuses the phase as an unknown class, never as a duplicate"
+else fail "U9: a nested spec value was not refused as an unknown class (or was misreported)" "$nest_rc" "$nest_out"; fi
 # shellcheck disable=SC2016 # sed expression matches literal gate text
-sed 's#\[\[ "\$n_deep" -eq 0 \]\] ||#true ||#' "$TMP/nest.sh" > "$TMP/nest-mut.sh"
+sed 's#^  \[\[ -z "\$v" \]\] || { echo "cf_account_migrate_gate: REFUSE — phase \${phase} declares an unknown class#  true || { echo "x#' "$TMP/nest.sh" > "$TMP/nest-mut.sh"
 nest_mut_out="$(dup_run "$TMP/nest-mut.sh")"; nest_mut_rc=$?
-if cmp -s "$TMP/nest-mut.sh" "$TMP/nest.sh"; then fail "M-nest: the mutation did not land" 1 ""
-elif [[ "$nest_mut_rc" -eq 1 ]] && ! grep -qF -- 'nested value' <<<"$nest_mut_out" && grep -qF -- 'declares an address more than once' <<<"$nest_mut_out"; then
-  pass "M-nest: with the flat check neutered the nested spec hands off to the key-count refusal (layered)"
-else fail "M-nest: neutering the flat check did not hand off to the key-count refusal" "$nest_mut_rc" "$nest_mut_out"; fi
+if cmp -s "$TMP/nest-mut.sh" "$TMP/nest.sh"; then fail "M-class: the mutation did not land" 1 ""
+elif [[ "$nest_mut_rc" -eq 0 ]]; then pass "M-class: without the class check the nested spec passes (the class check is the sole guard; nothing else misreports it)"
+else fail "M-class: neutering the class check did not admit the nested spec" "$nest_mut_rc" "$nest_mut_out"; fi
+# U10: a key written twice whose FIRST copy is nested and last is a valid class: the parsed object
+# holds only the valid copy, so only the key count can see the shadowed one.
+sed 's|^  "cloudflare_ruleset.seo_config_settings": "create",$|  "cloudflare_ruleset.seo_config_settings": {"class": "replace"},\n&|' "$GATE" > "$TMP/dupnest.sh"
+dupnest_out="$(dup_run "$TMP/dupnest.sh")"; dupnest_rc=$?
+if cmp -s "$TMP/dupnest.sh" "$GATE"; then fail "U10: the nested-duplicate fixture did not land" 1 ""
+elif [[ "$dupnest_rc" -eq 1 ]] && grep -qF -- "declares an address more than once (38 keys, 37 distinct)" <<<"$dupnest_out"; then
+  pass "U10: a key whose shadowed first copy is nested refuses the phase as a duplicate"
+else fail "U10: a nested shadowed duplicate was not refused" "$dupnest_rc" "$dupnest_out"; fi
+# The previous count (depth-1 leaf events only) cannot see a nested copy: restoring it admits U10.
+# shellcheck disable=SC2016 # sed expression matches literal gate text
+sed 's#select((length == 2 and (.\[0\] | length) == 1) or (length == 1 and (.\[0\] | length) == 2))#select(length == 2 and (.[0] | length) == 1)#' "$TMP/dupnest.sh" > "$TMP/dupnest-mut.sh"
+dupnest_mut_out="$(dup_run "$TMP/dupnest-mut.sh")"; dupnest_mut_rc=$?
+if cmp -s "$TMP/dupnest-mut.sh" "$TMP/dupnest.sh"; then fail "M-dup-nested: the mutation did not land" 1 ""
+elif [[ "$dupnest_mut_rc" -eq 0 ]]; then pass "M-dup-nested: counting leaf events only admits U10 (the container-close count is load-bearing)"
+else fail "M-dup-nested: the leaf-only count still refused U10" "$dupnest_mut_rc" "$dupnest_mut_out"; fi
 
 set_after "$TMP/r3j2.json" doppler_secret.cf_zone_id_prd "$(DOPP "\"$NZ\"")"
 check "row 3j2: doppler_secret.cf_zone_id_prd planned with the NEW zone id passes" 0 "verdict=PASS" redirects-dns "$TMP/r3j2.json"
@@ -345,9 +364,9 @@ zr_plan() { # <out> <replace-reason> <before-id>
   jq -nc --arg nz "$NZ" --arg na "$NA" --arg reason "$2" --arg bid "$3" '{format_version:"1.2",resource_changes:[
     {address:"cloudflare_zone_settings_override.soleur_ai",mode:"managed",type:"cloudflare_zone_settings_override",change:{actions:["create"],before:null,after:{zone_id:$nz}}},
     {address:"cloudflare_bot_management.soleur_ai",mode:"managed",type:"cloudflare_bot_management",change:{actions:["create"],before:null,after:{zone_id:$nz}}},
-    {address:"github_actions_secret.cloudflare_api_token_pages",mode:"managed",type:"github_actions_secret",change:{actions:["update"],before:{},after:{}}},
+    {address:"github_actions_secret.cloudflare_api_token_pages",mode:"managed",type:"github_actions_secret",change:{actions:["update"],before:{},after:{repository:"soleur",secret_name:"CLOUDFLARE_API_TOKEN_PAGES",plaintext_value:"SYNTH-PAGES-TOKEN"}}},
     {address:"github_actions_secret.cloudflare_account_id_pages",mode:"managed",type:"github_actions_secret",change:{actions:["update"],before:{},after:{repository:"soleur",secret_name:"CLOUDFLARE_ACCOUNT_ID_PAGES",plaintext_value:$na}}},
-    {address:"doppler_secret.cf_api_token_dns_edit",mode:"managed",type:"doppler_secret",action_reason:$reason,change:{actions:["delete","create"],before:{id:$bid},after:{}}}
+    {address:"doppler_secret.cf_api_token_dns_edit",mode:"managed",type:"doppler_secret",action_reason:$reason,change:{actions:["delete","create"],before:{id:$bid},after:{project:"soleur",config:"prd",name:"CF_API_TOKEN_DNS_EDIT",visibility:"masked",value:"SYNTH-DNS-EDIT-TOKEN"}}}
   ]}' > "$1"
 }
 zr_state() { # <out> <id>
@@ -381,8 +400,8 @@ jq -c '(.resource_changes[] | select(.address=="doppler_secret.cf_api_token_dns_
 check "zone-rest: the declared replace planned create-before-destroy passes" 0 "verdict=PASS" zone-rest "$TMP/zrcbd.json" "$TMP/zr-state.json"
 jq -c '(.resource_changes[] | select(.address=="github_actions_secret.cloudflare_account_id_pages") | .change.after) = {secret_name:"CLOUDFLARE_ACCOUNT_ID_PAGES",plaintext_value:"'"$OA"'"}' "$TMP/zr.json" > "$TMP/zrold.json"
 check "zone-rest: a github secret republishing the OLD account id is refused" 1 "github_actions_secret.cloudflare_account_id_pages republishes an OLD" zone-rest "$TMP/zrold.json" "$TMP/zr-state.json"
-# The token-valued Pages secret is outside the expected-values table, so the old-id check alone sees it.
-jq -c '(.resource_changes[] | select(.address=="github_actions_secret.cloudflare_api_token_pages") | .change.after) = {plaintext_value:"x-'"$OA"'"}' "$TMP/zr.json" > "$TMP/zrold-tok.json"
+# The token-valued Pages secret's VALUE is outside the expected-values table, so the old-id check alone sees it.
+jq -c '(.resource_changes[] | select(.address=="github_actions_secret.cloudflare_api_token_pages") | .change.after.plaintext_value) = "x-'"$OA"'"' "$TMP/zr.json" > "$TMP/zrold-tok.json"
 check "zone-rest: the token-valued Pages secret carrying the OLD account id is refused" 1 "github_actions_secret.cloudflare_api_token_pages republishes an OLD" zone-rest "$TMP/zrold-tok.json" "$TMP/zr-state.json"
 # P1-P3: the Pages account-id secret must plan exactly its table values (the NEW account id).
 GAP="github_actions_secret.cloudflare_account_id_pages"; GEXP="$GAP must plan its expected value"
@@ -392,32 +411,89 @@ jq -c '(.resource_changes[] | select(.address=="'"$GAP"'") | .change) |= (.after
 check "P2: $GAP whose plaintext_value is known only after apply is refused" 1 "$GEXP (plaintext_value known only after apply;" zone-rest "$TMP/g2.json" "$TMP/zr-state.json"
 jq -c '(.resource_changes[] | select(.address=="'"$GAP"'") | .change) |= (.actions = ["no-op"] | .after.plaintext_value = "0123456789abcdef0123456789abcdef")' "$TMP/zr.json" > "$TMP/g3.json"
 check "P3: $GAP planned as a no-op on a third account id is still graded and refused" 1 "$GEXP (plaintext_value differs; actions [\"no-op\"])" zone-rest "$TMP/g3.json" "$TMP/zr-state.json"
+# T1-T3: the two token-valued members' DESTINATION attributes are graded (their value is not): the
+# Pages token published to another repository, or the dns-edit token's replace written into another
+# Doppler config (the replace's delete half would remove prd's CF_API_TOKEN_DNS_EDIT), is refused.
+GTP="github_actions_secret.cloudflare_api_token_pages"; DNE="doppler_secret.cf_api_token_dns_edit"
+jq -c '(.resource_changes[] | select(.address=="'"$GTP"'") | .change.after.repository) = "elsewhere"' "$TMP/zr.json" > "$TMP/t1.json"
+check "T1: $GTP published to another repository is refused" 1 "$GTP must plan its expected value (repository differs; actions [\"update\"])" zone-rest "$TMP/t1.json" "$TMP/zr-state.json"
+jq -c '(.resource_changes[] | select(.address=="'"$DNE"'") | .change.after.config) = "dev"' "$TMP/zr.json" > "$TMP/t2.json"
+check "T2: $DNE replaced into another Doppler config (dev) is refused" 1 "$DNE must plan its expected value (config differs; actions [\"delete\",\"create\"])" zone-rest "$TMP/t2.json" "$TMP/zr-state.json"
+jq -c '(.resource_changes[] | select(.address=="'"$DNE"'" or .address=="'"$GTP"'") | .change.after) |= (if has("value") then .value = "SYNTH-OTHER" else .plaintext_value = "SYNTH-OTHER" end)' "$TMP/zr.json" > "$TMP/t3.json"
+check "T3: a token-valued member's value is not graded (any synthesized token passes)" 0 "verdict=PASS" zone-rest "$TMP/t3.json" "$TMP/zr-state.json"
+gate_mutate_and_check "M-want-pages-token: dropping the $GTP table entry admits T1" \
+  '/^    + {"github_actions_secret.cloudflare_api_token_pages": /d' cf_account_migrate_gate zone-rest "$TMP/t1.json" "$TMP/zr-state.json"
+gate_mutate_and_check "M-want-dns-edit: dropping the $DNE table entry admits T2" \
+  '/^    + {"doppler_secret.cf_api_token_dns_edit": /d' cf_account_migrate_gate zone-rest "$TMP/t2.json" "$TMP/zr-state.json"
 
-# EXPECTED VALUES closed set: every non-Cloudflare spec member is a table member or one of the
-# token-valued members (a literal here, independent of the gate), and every table member is in a spec.
+# EXPECTED VALUES closed set: every non-Cloudflare spec member is a table member; exactly the
+# token-valued members (a literal here, independent of the gate) are in the table WITHOUT a value
+# attribute, and every other member carries one; every table member is in a spec.
 TOKEN_VALUED=" doppler_secret.cf_api_token_dns_edit github_actions_secret.cloudflare_api_token_pages "
-noncf_unclassified() { # <gate-file>: "unclassified <addr>" / "orphan <addr>" lines; empty when closed
+noncf_unclassified() { # <gate-file>: "unclassified|orphan|token-graded|value-ungraded <addr>" lines; empty when closed
   # shellcheck disable=SC2016 # expanded by the child bash
   bash -c 'source "$1"; source "$2"; tok="$3"
     want="$(_cfam_expected_values)" || { echo "table-unreadable"; exit 0; }
     all="$(while IFS= read -r ph; do cf_account_migrate_phase_spec "$ph" | jq -r "keys[]"; done < <(cf_account_migrate_phases) | sort -u)"
     while IFS= read -r a; do
       [[ "$a" == cloudflare_* ]] && continue
-      jq -e --arg a "$a" "has(\$a)" <<<"$want" >/dev/null && continue
-      [[ "$tok" == *" $a "* ]] && continue
-      printf "unclassified %s\n" "$a"
+      jq -e --arg a "$a" "has(\$a)" <<<"$want" >/dev/null || { printf "unclassified %s\n" "$a"; continue; }
+      hv="$(jq -r --arg a "$a" ".[\$a] | has(\"value\") or has(\"plaintext_value\")" <<<"$want")"
+      if [[ "$tok" == *" $a "* ]]; then [[ "$hv" == false ]] || printf "token-graded %s\n" "$a"
+      else [[ "$hv" == true ]] || printf "value-ungraded %s\n" "$a"; fi
     done <<<"$all"
     while IFS= read -r a; do grep -qxF -- "$a" <<<"$all" || printf "orphan %s\n" "$a"; done < <(jq -r "keys[]" <<<"$want")' _ "$PREAMBLE" "$1" "$TOKEN_VALUED"
 }
 ncu="$(noncf_unclassified "$GATE")"
 n_want="$(bash -c 'source "$1"; source "$2"; _cfam_expected_values | jq length' _ "$PREAMBLE" "$GATE")"
-if [[ -z "$ncu" && "$n_want" == 2 ]]; then pass "expected values: the table holds 2 members, each in a spec; every non-Cloudflare spec member is a table member or token-valued"
+if [[ -z "$ncu" && "$n_want" == 4 ]]; then pass "expected values: the table holds 4 members, each in a spec; every non-Cloudflare spec member is in it, the 2 token-valued ones without a value"
 else fail "expected values: the closed set is broken (table size ${n_want})" 1 "$ncu"; fi
 sed 's|^  "github_actions_secret.cloudflare_api_token_pages": "mutable",$|&\n  "doppler_secret.some_new_id": "mutable",|' "$GATE" > "$TMP/ncu-mut.sh"
 ncu_mut="$(noncf_unclassified "$TMP/ncu-mut.sh")"
 if cmp -s "$TMP/ncu-mut.sh" "$GATE"; then fail "M-ncu: the mutation did not land" 1 ""
-elif [[ "$ncu_mut" == "unclassified doppler_secret.some_new_id" ]]; then pass "M-ncu: a new non-Cloudflare spec member outside the table and the token list is caught (RED)"
+elif [[ "$ncu_mut" == "unclassified doppler_secret.some_new_id" ]]; then pass "M-ncu: a new non-Cloudflare spec member outside the table is caught (RED)"
 else fail "M-ncu: a new unclassified non-Cloudflare member was not seen" 1 "$ncu_mut"; fi
+# Being in the token list no longer exempts a member from the table (it must be in both).
+sed '/^    + {"doppler_secret.cf_api_token_dns_edit": /d' "$GATE" > "$TMP/ncu-tok.sh"
+ncu_tok="$(noncf_unclassified "$TMP/ncu-tok.sh")"
+if cmp -s "$TMP/ncu-tok.sh" "$GATE"; then fail "M-ncu-token: the mutation did not land" 1 ""
+elif [[ "$ncu_tok" == "unclassified doppler_secret.cf_api_token_dns_edit" ]]; then pass "M-ncu-token: a token-valued member dropped from the table is caught (RED; the token list is not an exemption)"
+else fail "M-ncu-token: a token-valued member outside the table was not seen" 1 "$ncu_tok"; fi
+# The table's attributes ARE the .tf block's constant attributes (both directions): each table
+# member's resource block, read from the root, sets exactly the table's non-value attributes to the
+# table's literals, and its only non-literal attribute is the value (var.*), which the table grades as
+# the NEW id or, for a token-valued member, leaves out.
+INFRA="$HERE/../../apps/web-platform/infra"
+tf_table_parity() { # <gate-file> <infra-dir>: one line per drift; empty when the table equals the .tf
+  local want a typ nm blk lit
+  want="$(bash -c 'source "$1"; source "$2"; _cfam_expected_values' _ "$PREAMBLE" "$1")" || { echo "table-unreadable"; return; }
+  while IFS= read -r a; do
+    typ="${a%%.*}"; nm="${a#*.}"
+    # Depth-1 `name = value` lines of the one block `resource "<typ>" "<nm>" {` (nested blocks skipped).
+    blk="$(cat "$2"/*.tf | awk -v h="resource \"$typ\" \"$nm\" {" '
+      $0 == h {n++; d = 1; next}
+      d > 0 { line = $0; o = gsub(/\{/, "{", line); c = gsub(/\}/, "}", line)
+              if (d == 1 && $0 ~ /^[[:space:]]*[a-z_]+[[:space:]]*=/) { sub(/^[[:space:]]*/, ""); print }
+              d += o - c }
+      END { if (n != 1) print "BLOCKS " n }')"
+    if grep -q '^BLOCKS ' <<<"$blk"; then echo "$a: $(grep '^BLOCKS ' <<<"$blk") resource blocks (want 1)"; continue; fi
+    lit="$(sed -nE 's/^([a-z_]+)[[:space:]]*=[[:space:]]*"([^"]*)"[[:space:]]*$/\1\t\2/p' <<<"$blk" | sort)"
+    [[ "$lit" == "$(jq -r --arg a "$a" '.[$a] | to_entries[] | select(.key != "value" and .key != "plaintext_value") | "\(.key)\t\(.value)"' <<<"$want" | sort)" ]] \
+      || echo "$a: .tf literals [$(tr '\t\n' '= ' <<<"$lit")] differ from the table"
+    [[ "$(sed -nE '/^[a-z_]+[[:space:]]*=[[:space:]]*"[^"]*"[[:space:]]*$/d; s/^([a-z_]+)[[:space:]]*=.*/\1/p' <<<"$blk" | tr '\n' ' ')" =~ ^(value|plaintext_value)\ $ ]] \
+      || echo "$a: a non-literal attribute other than the one value"
+  done < <(jq -r 'keys[]' <<<"$want")
+}
+tfp="$(tf_table_parity "$GATE" "$INFRA")"
+if [[ -z "$tfp" ]]; then pass "expected values: each table member's attributes equal its .tf block's literals (value aside)"
+else fail "expected values: the table drifted from the .tf blocks" 1 "$tfp"; fi
+mkdir -p "$TMP/tfp"; for f in "$INFRA"/*.tf; do ln -s "$f" "$TMP/tfp/$(basename "$f")"; done
+rm "$TMP/tfp/cf-cert-reissue-token.tf"
+sed '/^resource "doppler_secret" "cf_api_token_dns_edit" {$/,/^}/s/^  config     = "prd"$/  config     = "dev"/' "$INFRA/cf-cert-reissue-token.tf" > "$TMP/tfp/cf-cert-reissue-token.tf"
+tfp_mut="$(tf_table_parity "$GATE" "$TMP/tfp")"
+if cmp -s "$TMP/tfp/cf-cert-reissue-token.tf" "$INFRA/cf-cert-reissue-token.tf"; then fail "M-tf-parity: the mutation did not land" 1 ""
+elif [[ "$tfp_mut" == "doppler_secret.cf_api_token_dns_edit: .tf literals"*"differ from the table" ]]; then pass "M-tf-parity: a .tf edit of a table member's destination (config dev) is caught (RED)"
+else fail "M-tf-parity: a .tf destination edit was not seen" 1 "$tfp_mut"; fi
 
 # ── -target / -replace generation from the single list ─────────────────────────────────────
 tg="$(cf_account_migrate_targets redirects-dns)"
@@ -587,7 +663,7 @@ CONSUMER_DIR="$HERE/../../apps/web-platform/infra/scripts"
 # serial reader, or run `aws s3…` outside cfam_r2_aws; "no-shared-call" when it never uses it.
 own_copies() {
   local code; code="$(grep -vE '^[[:space:]]*#' "$1")"
-  grep -nE "${OZ}|${OA}|soleur-terraform-state|web-platform/backups/|\.serial \| type|(^|[^_[:alnum:]-])aws s3(api)? " <<<"$code"
+  grep -nE "${OZ}|${OA}|${NZ}|${NA}|soleur-terraform-state|web-platform/backups/|\.serial \| type|(^|[^_[:alnum:]-])aws s3(api)? " <<<"$code"
   grep -q 'cfam_r2_aws s3' <<<"$code" || echo "no-shared-call"
 }
 # sources_lib <file>: the file carries one of the three reviewed source forms, as whole lines (and,
@@ -606,37 +682,97 @@ own_copies() {
 # next_line_is <file> <line> <next>: <line> is a whole line and the line right after it is exactly <next>
 # (a backslash continuation joins them, so the pair is the statement).
 next_line_is() { A="$2" B="$3" awk 'p && $0 == ENVIRON["B"] {f = 1} {p = ($0 == ENVIRON["A"])} END {exit !f}' "$1"; }
+# follows_within <file> <line> <next> <allowed...>: <next> follows <line>, and every line between them
+# is a full-line comment or one of the exact <allowed> lines (so nothing rebinds the path in between,
+# and both sit in the same function body).
+follows_within() {
+  local f="$1" a="$2" b="$3"; shift 3
+  A="$a" B="$b" ALLOW="$(printf '%s\n' "$@")" awk '
+    BEGIN { n = split(ENVIRON["ALLOW"], al, "\n"); for (i = 1; i <= n; i++) if (al[i] != "") ok[al[i]] = 1 }
+    on && $0 == ENVIRON["B"] { f = 1; on = 0; next }
+    on && !($0 ~ /^[[:space:]]*#/ || ($0 in ok)) { on = 0 }
+    $0 == ENVIRON["A"] { on = 1 }
+    END { exit !f }' "$f"
+}
+# The one line the job runs between its lib binding and its source line (a seam strip, before sourcing).
+SRC_JOB_BETWEEN='  unset CFAM_IMPORTS_FILE'
 sources_lib() {
-  { grep -qxF -- "$SRC_JOB_LIB" "$1" && grep -qxF -- "$SRC_JOB" "$1"; } && return 0
+  follows_within "$1" "$SRC_JOB_LIB" "$SRC_JOB" "$SRC_JOB_BETWEEN" && return 0
   next_line_is "$1" "$SRC_FORGET" "$SRC_FORGET_NEXT" && return 0
   grep -qxF -- "$SRC_PRED_LIB" "$1" && grep -qxF -- "$SRC_PRED" "$1"
 }
-# The library's function names (column-0 `name() ` definitions); a consumer must define none of them.
-LIB_FNS="$(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)() .*/\1/p' "$GATE")"
+# The library's function names: every definition `name()` / `name ()` / `name(){` / `function name`,
+# at column 0 (the library defines all its functions there). The count is exact (review).
+LIB_FNS="$(sed -nE 's/^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\(\)[[:space:]]*(\{.*)?$/\1/p; s/^function[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\1/p' "$GATE" | sort -u)"
+LIB_FN_COUNT=11
+# A definition may follow a command separator or a group opener on the same line (`:; f() {`,
+# `true && f() {`, `{ f() {`, `then f() {`), not only the start of the line.
+FN_PFX='(^|[;&|{(!]|(^|[[:space:]])(then|do|else|elif|time)[[:space:]])[[:space:]]*'
 defines_lib_fn() { # <file>: each line of <file> that defines a library function name, in any bash form
   local fn
   while IFS= read -r fn; do
-    grep -nE -- "^[[:space:]]*(function[[:space:]]+${fn}([[:space:]]*\(\))?|${fn}[[:space:]]*\(\))" "$1"
+    grep -nE -- "${FN_PFX}(function[[:space:]]+${fn}([[:space:]]*\(\))?([[:space:]]|\{|$)|${fn}[[:space:]]*\(\))" "$1"
   done <<<"$LIB_FNS"
 }
-if [[ "$(grep -c . <<<"$LIB_FNS")" -ge 11 ]] && grep -qxF -- cf_account_migrate_phase_spec <<<"$LIB_FNS" && grep -qxF -- cfam_r2_aws <<<"$LIB_FNS"; then
-  pass "one source: the library's function-name list is derived ($(grep -c . <<<"$LIB_FNS") names, the phase spec and cfam_r2_aws among them)"
-else fail "one source: the library's function names were not derived" 1 "$LIB_FNS"; fi
+if [[ "$(grep -c . <<<"$LIB_FNS")" -eq "$LIB_FN_COUNT" && "$(defines_lib_fn "$GATE" | wc -l)" -eq "$LIB_FN_COUNT" ]] \
+   && grep -qxF -- cf_account_migrate_phase_spec <<<"$LIB_FNS" && grep -qxF -- cfam_r2_aws <<<"$LIB_FNS"; then
+  pass "one source: the library's function-name list is derived (exactly $LIB_FN_COUNT names, each found once by defines_lib_fn in the library itself)"
+else fail "one source: the library's function names were not derived exactly ($(grep -c . <<<"$LIB_FNS"), want $LIB_FN_COUNT)" 1 "$LIB_FNS"; fi
+sed 's/^cfam_serial_of() { /cfam_serial_of(){ /' "$GATE" > "$TMP/nospace.sh"
+nospace_fns="$(sed -nE 's/^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\(\)[[:space:]]*(\{.*)?$/\1/p; s/^function[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\1/p' "$TMP/nospace.sh" | sort -u)"
+if cmp -s "$TMP/nospace.sh" "$GATE"; then fail "M-fn-nospace: the mutation did not land" 1 ""
+elif [[ "$nospace_fns" == "$LIB_FNS" ]]; then pass "M-fn-nospace: a library function written name(){ is still derived"
+else fail "M-fn-nospace: a name(){ definition dropped out of the derived list" 1 "$nospace_fns"; fi
+# The library's constants (every CFAM_* it assigns). A consumer must not reassign one AFTER its source
+# line: that would re-point what the bytes under test read (the gate's new-id check, check_ids, the
+# forget's ids). Any bare mention of the name after the source line that is not an expansion ($N,
+# ${N…}) is refused (assignment, declare/export/readonly/local, printf -v, read, unset, a nameref),
+# except one reviewed line: the predicate's indirect shape check of the four ids.
+LIB_VARS="$(sed -nE 's/^[[:space:]]*(CFAM_[A-Z0-9_]+)=.*/\1/p' "$GATE" | sort -u)"
+LIB_VAR_COUNT=8
+LIB_VAR_OK='  for v in CFAM_NEW_ZONE_ID CFAM_NEW_ACCOUNT_ID CFAM_OLD_ZONE_ID CFAM_OLD_ACCOUNT_ID; do'
+if [[ "$(grep -c . <<<"$LIB_VARS")" -eq "$LIB_VAR_COUNT" ]] && grep -qxF CFAM_NEW_ZONE_ID <<<"$LIB_VARS" && grep -qxF CFAM_R2_ENDPOINT <<<"$LIB_VARS"; then
+  pass "one source: the library's constant names are derived (exactly $LIB_VAR_COUNT, CFAM_NEW_ZONE_ID and CFAM_R2_ENDPOINT among them)"
+else fail "one source: the library's constant names were not derived exactly" 1 "$LIB_VARS"; fi
+reassigns_lib_var() { # <file> <source-line>: lines after <source-line> that name a library constant bare
+  local v
+  while IFS= read -r v; do
+    SRC="$2" OKL="$LIB_VAR_OK" V="$v" awk '
+      after && !/^[[:space:]]*#/ && $0 != ENVIRON["OKL"] {
+        l = $0; gsub("[$][{]?[!#]?" ENVIRON["V"], "", l)
+        if (l ~ ("(^|[^A-Za-z0-9_])" ENVIRON["V"] "([^A-Za-z0-9_]|$)")) print NR ": " $0 }
+      $0 == ENVIRON["SRC"] { after = 1 }' "$1"
+  done <<<"$LIB_VARS"
+}
+src_line_of() { case "$1" in cf-account-migrate-job.sh) printf '%s' "$SRC_JOB" ;; cf-account-state-migrate.sh) printf '%s' "$SRC_FORGET" ;; *) printf '%s' "$SRC_PRED" ;; esac; }
 for c in cf-account-migrate-job.sh cf-account-state-migrate.sh cf-account-migration-complete.sh; do
-  if sources_lib "$CONSUMER_DIR/$c" && [[ -z "$(own_copies "$CONSUMER_DIR/$c")" && -z "$(defines_lib_fn "$CONSUMER_DIR/$c")" ]]; then
-    pass "one source: $c sources this library, re-types none of its ids, bucket, prefix, endpoint or serial reader, defines none of its functions, and makes every R2 call through cfam_r2_aws"
-  else fail "one source: $c keeps its own copy (or does not source the library)" 1 "$(own_copies "$CONSUMER_DIR/$c"; defines_lib_fn "$CONSUMER_DIR/$c")"; fi
+  if sources_lib "$CONSUMER_DIR/$c" && [[ -z "$(own_copies "$CONSUMER_DIR/$c")" && -z "$(defines_lib_fn "$CONSUMER_DIR/$c")" \
+       && -z "$(reassigns_lib_var "$CONSUMER_DIR/$c" "$(src_line_of "$c")")" ]]; then
+    pass "one source: $c sources this library, re-types none of its ids, bucket, prefix, endpoint or serial reader, reassigns none of its constants, defines none of its functions, and makes every R2 call through cfam_r2_aws"
+  else fail "one source: $c keeps its own copy (or does not source the library)" 1 "$(own_copies "$CONSUMER_DIR/$c"; defines_lib_fn "$CONSUMER_DIR/$c"; reassigns_lib_var "$CONSUMER_DIR/$c" "$(src_line_of "$c")")"; fi
 done
-# A consumer that redefines a library function (either bash form) is caught.
-for form in 'cf_account_migrate_phase_spec() { printf "{}"; }' 'function cfam_r2_aws { :; }'; do
+# A consumer that redefines a library function (any bash form, on its own line or after a separator) is caught.
+for form in 'cf_account_migrate_phase_spec() { printf "{}"; }' 'function cfam_r2_aws { :; }' ':; cfam_r2_aws() { :; }' \
+            "true && cf_account_migrate_phase_spec() { printf '{}'; }" '{ cfam_r2_aws() { :; }; }' 'cfam_r2_aws(){ :; }' \
+            'if true; then cfam_serial_of() { echo 7; }; fi'; do
   { cat "$CONSUMER_DIR/cf-account-migration-complete.sh"; printf '%s\n' "$form"; } > "$TMP/redef.sh"
   if [[ -n "$(defines_lib_fn "$TMP/redef.sh")" ]]; then pass "M-redef: a consumer defining [$form] is caught (RED)"
   else fail "M-redef: a consumer defining [$form] was not seen" 1 ""; fi
 done
-sed "s/^set -uo pipefail\$/&\nreadonly OLD_ZONE_ID=\"$OZ\"/" "$CONSUMER_DIR/cf-account-state-migrate.sh" > "$TMP/own-copy.sh"
-if cmp -s "$TMP/own-copy.sh" "$CONSUMER_DIR/cf-account-state-migrate.sh"; then fail "M-own-copy: the mutation did not land" 1 ""
-elif [[ -n "$(own_copies "$TMP/own-copy.sh")" ]]; then pass "M-own-copy: a state forget that re-types the OLD zone id is caught (RED)"
-else fail "M-own-copy: a re-typed OLD zone id was not seen" 1 ""; fi
+# A consumer that reassigns a library constant after sourcing is caught (two forms); the job's
+# seam strip BEFORE its source line is not (the real-tree row above).
+for form in 'CFAM_NEW_ZONE_ID="0123456789abcdef0123456789abcdef"' 'printf -v CFAM_OLD_ACCOUNT_ID %s x'; do
+  sed "s/^readonly P=\"cf-state-migrate\"\$/&\n$form/" "$CONSUMER_DIR/cf-account-state-migrate.sh" > "$TMP/reassign.sh"
+  if cmp -s "$TMP/reassign.sh" "$CONSUMER_DIR/cf-account-state-migrate.sh"; then fail "M-reassign: the mutation [$form] did not land" 1 ""
+  elif [[ -n "$(reassigns_lib_var "$TMP/reassign.sh" "$SRC_FORGET")" ]]; then pass "M-reassign: a state forget that runs [$form] after sourcing is caught (RED)"
+  else fail "M-reassign: [$form] after sourcing was not seen" 1 ""; fi
+done
+for idv in "OLD_ZONE_ID=$OZ" "NEW_ZONE_ID_COPY=$NZ" "NEW_ACCOUNT_ID_COPY=$NA"; do
+  sed "s/^set -uo pipefail\$/&\nreadonly ${idv%%=*}=\"${idv#*=}\"/" "$CONSUMER_DIR/cf-account-state-migrate.sh" > "$TMP/own-copy.sh"
+  if cmp -s "$TMP/own-copy.sh" "$CONSUMER_DIR/cf-account-state-migrate.sh"; then fail "M-own-copy ${idv%%=*}: the mutation did not land" 1 ""
+  elif [[ -n "$(own_copies "$TMP/own-copy.sh")" ]]; then pass "M-own-copy: a state forget that re-types an id literal (${idv%%=*}) is caught (RED)"
+  else fail "M-own-copy: a re-typed id literal (${idv%%=*}) was not seen" 1 ""; fi
+done
 sed 's/ || source "\$CFAM_GATE_LIB"; }/; }/' "$CONSUMER_DIR/cf-account-migration-complete.sh" > "$TMP/no-source.sh"
 if cmp -s "$TMP/no-source.sh" "$CONSUMER_DIR/cf-account-migration-complete.sh"; then fail "M-no-source: the mutation did not land" 1 ""
 elif ! sources_lib "$TMP/no-source.sh"; then pass "M-no-source: a predicate that names the library but never sources it is caught (RED)"
@@ -660,6 +796,9 @@ src_mut echo cf-account-migration-complete.sh 's#|| source "\$CFAM_GATE_LIB"; }#
 # the line (which joins `source …` to the next statement as arguments) is not the reviewed form.
 src_mut cont-swallowed cf-account-state-migrate.sh "s#^  || { printf 'cf-state-migrate verdict=abort reason=gate-library-unusable.n'; exit 1; }\$#  || :#"
 src_mut cont-dropped cf-account-state-migrate.sh "/^  || { printf 'cf-state-migrate verdict=abort reason=gate-library-unusable/d"
+# The job's path binding must be the one in effect at its source line: a rebinding between them is not
+# the reviewed form.
+src_mut rebind cf-account-migrate-job.sh 's#^  unset CFAM_IMPORTS_FILE$#&\n  lib=/var/empty#'
 sed 's/^    cfam_r2_aws s3 cp /    aws s3 cp /' "$CONSUMER_DIR/cf-account-migration-complete.sh" > "$TMP/bare-aws.sh"
 if cmp -s "$TMP/bare-aws.sh" "$CONSUMER_DIR/cf-account-migration-complete.sh"; then fail "M-bare-aws: the mutation did not land" 1 ""
 elif [[ -n "$(own_copies "$TMP/bare-aws.sh")" ]]; then pass "M-bare-aws: a predicate copy made with a bare aws call is caught (RED)"
@@ -705,6 +844,6 @@ r2_mut "M-r2-bound: the 60 s bound dropped" 's|^  timeout 60 env |  env |' unbou
 
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 132 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 132)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 154 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 154)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]
