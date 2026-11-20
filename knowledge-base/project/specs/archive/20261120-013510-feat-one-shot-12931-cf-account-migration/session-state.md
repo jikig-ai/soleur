@@ -31,3 +31,48 @@ soleur:plan, soleur:plan-review, soleur:spec-templates, soleur:deepen-plan, sole
 - Never mutate or delete the old zone. No SSH to prod.
 
 - cto_spawns=1 (technical-ruling gate: 30 applied-finding rows sent for ruling)
+
+## Review: escalated full panel over fdf2aa5962..d075535c38 (2026-11-20)
+
+14 seats at pin d075535c38. dedup: 71 raw -> 32 unique (1 P1-class gate gap, 4 P2, 27 P3).
+Structural-cause roll-up: (a) a discriminator keyed on a proxy, not the property
+(verify's single zone read, D1; the per-run forget marker, D7); (b) a hand lexer
+re-derived each round (D12c normaliser, D5; A8 walk, D6), so both heuristics are deleted for
+the platform's own parser or a stricter positive check.
+
+| canonical defect key | reporting seat(s) | planned fix |
+|---|---|---|
+| D1 verify/Halt tell old from new by GET /zones/<new> for every key (narrow new tokens fail; all-zones old tokens pass) | git-history, security, architecture, data-integrity, simplicity, user-impact, observability, pattern, structural, agent-native | per-key read inside its grant on NEW must succeed AND same read on OLD must fail; stand-in per-key; Halt per-key + both-false stop |
+| D2 verify swapped arm shares sentinel `a`: empty/unreadable live key reads ok | security, code-quality | both reads must succeed before compare |
+| D3 token read twice (check vs bearer) | security, code-quality | single read, filter-and-emit |
+| D4 gate expected-values leaves token members' destination attrs ungraded; header misstates | structural, pattern | pin non-value attrs, restate residual |
+| D5 D12c awk normaliser desync ($'..') hides a live curl | test-design, simplicity | replace with bash --pretty-print |
+| D6 A8 recursive walk guards unreachable states | simplicity | exempt workflows carry no job-level uses: |
+| D7 cancel/restore guidance keyed on per-run backup=uploaded; forget=unknown undefined; Verify-first over-scoped | architecture, data-integrity, observability, pattern, agent-native | cross-run test (backup-uri comment / R2 listing), applying=true first, named gh commands |
+| D8 Halt step 4 reads rehearsal plan, absence-only grep, names only 525 address | data-integrity, user-impact, observability | expected_in_state_updates input checked before applying=true; PASS line required |
+| D9 job messages: verify-failed over-authorises edit; apply-failed forget sentence on zone-rest; apply-failed failing= omits Halt | architecture, agent-native | message text |
+| D10 bootstrap ROLLBACK lines vs runbook revert; revert loses new tokens | architecture | qualify lines; copy KEY->_NEXT before restore |
+| D11 import-block remedy needs class flip; half-applied zone-rest replace has no row; gptbot=>403 vs Halt | architecture, agent-native | runbook rows |
+| D12 verify retries a 525/526 for its whole budget | user-impact | stop on first 525/526 app-health |
+| D13 apply-failed 60s ceiling untested; "once" wording; job-suite weight/bound | performance | ceiling row, wording, weight 106000 + bound 720 |
+| D14 prev-0a copies NEW into _PREV when KEY==NEXT; header residual omits interrupted swap | data-integrity, code-quality | refuse when KEY==NEXT digest; widen residual |
+| D15 curl failure reads as re-mint/NOT_ACTIVE | pattern | unreachable marker with e=<rc> |
+| D16 preflight case-folds ids | pattern | drop fold |
+| D17 own_copies misses constant reassignment | pattern | add check + row |
+| D18 timeout-minutes vs VERIFY_CAP unpinned | pattern | scope row |
+| D19 gated_workflows misses reusable callers | pattern | include callers |
+| D20 bootstrap failure markers without runbook action | pattern, agent-native | Halt bullets + coverage row |
+| D21 A4 does not pin step shell/working-directory/defaults | test-design | refuse keys |
+| D22 bootstrap mutation rows accept any non-zero (M0->P7) | test-design | pin failing step |
+| D23 defines_lib_fn line-start anchor; LIB_FNS floor | test-design | widen anchor, exact count |
+| D24 sources_lib binding not adjacency-pinned | test-design | next_line_is |
+| D25 parity planner regex narrower than A6 | test-design | state residual (6) |
+| D26 plan-time data http/external, provisioner on spec member unseen | structural | scope row refusing them |
+| D27 rehearsal email "writes nothing" | structural | wording |
+| D28 pipe-guard header archive boundary; cf-token-scope mode 100755 | git-history | header text; mode restore |
+| D29 dead local `c`; pipe-guard \' in FAIL text | sast | trivial |
+| D30 n_deep ordering; VERIFY_PASS_MAX hand-counted; /health no Location | simplicity, agent-native | reorder; derive; redirect_url |
+| D31 grep -q rc 2 read as no marker (job:462) | code-quality | capture rc |
+| D32 runbook "only" for in-state update too strong | architecture | scope sentence |
+
+Wontfix: light-suite floor rows 7-38x under CI (performance P3-4) — no leg near cap, regenerated at next rebalance.
