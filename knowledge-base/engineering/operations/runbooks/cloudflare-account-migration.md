@@ -40,10 +40,13 @@ Incident: `knowledge-base/engineering/operations/post-mortems/soleur-ai-cloudfla
 - **Doppler writes go through the bootstrap.** Phase 2's revert copies, id flip, token swaps and branch-config copies
   are the stages of `bootstrap.sh` in the #12931 spec directory (CTO ruling D11), never retyped by hand. Set `B` from
   the repo root (archive-kb moves the directory; exactly one match, else stop):
-  `B="$(git ls-files --full-name ':(top)*feat-one-shot-12931-cf-account-migration/bootstrap.sh')"; [[ $(printf '%s\n' "$B" | grep -c .) -eq 1 ]] && B="$(git rev-parse --show-toplevel)/$B" || echo STOP`.
+  `B="$(git ls-files --full-name ':(top)*feat-one-shot-12931-cf-account-migration/bootstrap.sh')"; if [[ $(printf '%s\n' "$B" | grep -c .) -eq 1 ]]; then B="$(git rev-parse --show-toplevel)/$B"; printf 'SOLEUR_CFAM_BOOTSTRAP path=%s\n' "$B"; else printf 'SOLEUR_CFAM_BOOTSTRAP verdict=stop matches=%s\n' "$(printf '%s\n' "$B" | grep -c .)"; false; fi`.
+  On `verdict=stop`, stop. A shell variable does not survive between agent tool calls, so substitute the printed
+  absolute path literally wherever a later command says `$B`.
   Run it per the `soleur:operator-bootstrap` agent protocol: `--list`; `--stage <name>` prints the plan; relay its
-  `SOLEUR_BOOTSTRAP_IMPACT` and `SOLEUR_BOOTSTRAP_ROLLBACK` lines verbatim; issue the printed apply command as one
-  simple command and let the approval prompt carry the person's decision. A stage whose plan says `operations=0` is
+  `SOLEUR_BOOTSTRAP_IMPACT` and `SOLEUR_BOOTSTRAP_ROLLBACK` lines verbatim; issue the printed apply command byte for
+  byte as one simple command (it carries the script's absolute path; never respell it with `$B`, which the approval
+  prompt does not recognise) and let the approval prompt carry the person's decision. A stage whose plan says `operations=0` is
   already done. `PRECONDITION_FAILED need=<stage>` means run that stage first.
 - **Every dispatch arms a watch** (`hr-dispatch-async-must-arm-watch`). Find the run you started, then watch it:
 
@@ -252,9 +255,24 @@ from `seo-rulesets.tf`. If the operator still wants it, the import block is part
 
 ## Phase 1 — merge PR1
 
-`Operator-authorizes:` merge PR1 with a merge-commit line containing exactly `[skip-web-platform-apply]`. Arm a watch on
-any push-triggered run anyway (`deploy-docs.yml` red is expected). Merging alone mutates no production resource. The
-merge freeze starts now; run Phase 2 step 1 in the same sitting.
+`Operator-authorizes:` merge PR1. The merge queue squashes with the commit messages, so the kill switch rides in a
+branch commit's message: a line that is exactly `[skip-web-platform-apply]`, on its own (a PR-body line never reaches
+`main`, and `gh pr merge` cannot set the message). Before queueing, `Agent:` confirm it is there; any output but `1`
+or more means stop:
+
+```bash
+git log origin/main..HEAD --format=%B | grep -cx '\[skip-web-platform-apply\]'
+```
+
+On the merge SHA, `apply-web-platform-infra.yml` should show `preflight` success and `apply` skipped
+(`gh run view <run-id> --json jobs --jq '.jobs[] | "\(.name) \(.conclusion)"'`). An `apply` that fails at the
+predicate instead means the marker did not reach the squash: nothing was written (the predicate runs before any
+terraform), but record it on #12931.
+
+Merging mutates no Cloudflare zone, Terraform state or Doppler config. It does fire the routine release, docs and
+plugin publish workflows as any plugin change does, and `deploy-docs.yml` publishes to the legacy-account Pages
+project (Expected reds). Arm a watch on the push-triggered runs. The merge freeze starts now; run Phase 2 step 1 in
+the same sitting.
 
 ## Phase 2 — flip, then restore redirects (`redirects-dns`, `zone-rest`)
 
@@ -329,10 +347,12 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://app.soleur.ai/health          
 curl -sS -o /dev/null -w '%{http_code}\n' -A 'Mozilla/5.0 (compatible; GPTBot/1.2)' https://soleur.ai/  # 200
 doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer %s\n" "$BETTERSTACK_API_TOKEN_READONLY" \
   | curl --disable --noproxy "*" -sS --max-time 30 --header @- https://uptime.betterstack.com/api/v2/monitors' \
-  | jq -r '.data[] | select(.attributes.pronounceable_name | test("redirect"; "i")) | "\(.attributes.pronounceable_name) \(.attributes.status)"'
+  | jq -r '.data[] | select(.attributes.pronounceable_name | test("redirect"; "i")) | "\(.attributes.pronounceable_name) \(.attributes.status)"' \
+  | tee /dev/stderr | grep -c ' up$'                                                                   # 4
 ```
 
-Expected: the four redirect monitors read `up`. Then revoke the three superseded 0a tokens with the revoke recipe, one
+Expected: the four redirect monitors listed, each `up`, and the count line `4` (a missing or renamed monitor shows
+fewer). Then revoke the three superseded 0a tokens with the revoke recipe, one
 go each, on `prd_terraform` `CF_API_TOKEN_PREV`, `CF_API_TOKEN_RULESETS_PREV` and `CF_API_TOKEN_PAGES_PREV` (the
 recipe's step 4 deletes each `_PREV` key). `CF_ZONE_ID_PREV` and `CF_ACCOUNT_ID_PREV` may stay until cleanup; after
 this apply they are never restored (Halt).
@@ -368,7 +388,8 @@ Expected gate line: a `zone_settings_override` create that adopts the parity set
 and one `doppler_secret.cf_api_token_dns_edit` replace (`action_reason=replace_by_request`), so `destroys=1`: the gate
 counts a replace's delete half, and that one is the only delete it lets through.
 
-**Verify** (`Agent:`):
+**Verify** (`Agent:` for the reads; the `deploy-docs.yml` dispatch republishes the production docs site, so
+`Operator-authorizes:` that one command):
 
 ```bash
 gh api repos/jikig-ai/soleur/actions/secrets/CLOUDFLARE_API_TOKEN_PAGES --jq .updated_at   # later than the apply
@@ -498,7 +519,9 @@ the PR thread, and its comment is the read-back.
 ## Halt
 
 **Default: stop at the last verified phase and fix forward** (CTO ruling D4). Do not start the next phase. Read the
-refusal, fix in a PR, re-rehearse, re-dispatch. A re-dispatch after a committed forget is safe (CTO ruling D10): when
+refusal, fix in a PR, re-rehearse, re-dispatch. A `rehearsal=false` `redirects-dns` run counts as having run once its
+forget printed `cf-state-migrate backup=uploaded`, even if the gate then refused (`gate-refused` or
+`entrypoint-gate-refused` say so): from then on the after-the-apply rules below apply (CTO ruling 2026-11-20). A re-dispatch after a committed forget is safe (CTO ruling D10): when
 only R2 and non-Cloudflare entries remain, state-migrate prints `cf-state-migrate verdict=ok removed=0` and takes no
 backup (a backup is taken only when something will be removed); the plan then skips imports already in state and
 covers only the remainder. An apply that fails after the forget says the same in its refusal line: fix forward and
@@ -517,6 +540,16 @@ validation (Load Balancing #12983, DNSSEC #12982).
 - **After the `redirects-dns` apply ran** (the forget is committed): no id restore, no restore of state from the
   backup and no `git revert` of PR1. Each of those would point Terraform at the moved zone, which must never be
   mutated, or re-open routine applies against state that no longer holds the zone's resources. Fix forward only.
+- **`reason=verify-failed applied=true`** (the `redirects-dns` apply landed and a post-apply probe failed; the
+  `failing=` list names each item with what came back, `<item>=><code>+<location>`). CTO ruling 2026-11-20:
+  1. If `app-health` is in `failing=` (the product is down for every user): `Operator-authorizes:` one dashboard edit
+     of the one failing rule, on the NEW zone `951ce525…` only, back to its last good value (for the ssl rule that
+     is `full`, per `origin-tls-strict-flip.md` §Rollback; the CLO's 2026-11-13 ruling requires the legal wording to
+     change the same day). `Agent:` re-run the local Verify block. Never edit the old zone.
+  2. A fix-forward PR under #12931 (the merge freeze allows it; its push-apply red is expected).
+  3. Rehearse `redirects-dns`, then re-dispatch it. The corrected rule plans as an in-state `["update"]` on the new
+     zone, which the gate accepts (and only that), overwriting the dashboard edit with the code value; the job's
+     verify runs again.
 - The backup object is disaster-recovery evidence only. It is never pushed back as state; Phase 5 deletes every
   `pre-cf-account-migration-*` object.
 - If the migration is abandoned outright, stop at the last verified phase, keep the merge freeze, and record the

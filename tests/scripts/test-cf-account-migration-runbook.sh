@@ -47,6 +47,8 @@ if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 ]]; then echo "INSTRUMENT SELF-TEST FAILED"
 PASS=0; FAIL=0
 
 SB="$(mktemp -d -t cfam-runbook.XXXXXXXX)" || { echo "HARNESS: mktemp failed" >&2; exit 2; }
+# shellcheck source=../../plugins/soleur/test/lib/git-fixture-env.sh
+source "${REPO_ROOT}/plugins/soleur/test/lib/git-fixture-env.sh"
 trap 'rm -rf "$SB"' EXIT
 
 # The reopen step: from its bold title to the next numbered step.
@@ -73,13 +75,34 @@ row_r4() {
   for s in $(declared_stages); do grep -qF "\`${s}\`" "$1" || grep -qF -- "--stage ${s}" "$1" || { echo "    undeclared in runbook: $s" >&2; bad=1; }; done
   n="$(declared_stages | wc -l)"; [[ "$n" -ge 9 ]] || bad=1
   for s in $(grep -oE -- '--stage [a-z0-9-]+' "$1" | awk '{print $2}' | sort -u); do
-    grep -qx "$s" < <(declared_stages) || { echo "    runbook issues an undeclared stage: $s" >&2; bad=1; }
+    grep -qxF -- "$s" < <(declared_stages) || { echo "    runbook issues an undeclared stage: $s" >&2; bad=1; }
   done
   # every numbered stage item in Phase 2 ("1. `prev-0a`: …") is a declared stage
   for s in $(grep -oE '^[0-9]+\. `[a-z0-9-]+`:' "$1" | sed -E 's/^[0-9]+\. `([a-z0-9-]+)`:/\1/' | sort -u); do
-    grep -qx "$s" < <(declared_stages) || { echo "    numbered stage not declared: $s" >&2; bad=1; }
+    grep -qxF -- "$s" < <(declared_stages) || { echo "    numbered stage not declared: $s" >&2; bad=1; }
   done
   [[ "$bad" -eq 0 ]]
+}
+# R7: the runbook's B line resolves exactly one bootstrap.sh or stops: one copy prints its absolute
+# path (exit 0); zero or two print verdict=stop with the count and exit non-zero, never an empty or
+# multi-line B a later `bash "$B"` would run.
+b_line() { grep -oE '^  `B="\$\(git ls-files.*; fi`\.$' "$1" | sed -e 's/^  `//' -e 's/`\.$//'; }
+row_r7() {
+  local line d n out rc
+  line="$(b_line "$1")"; [[ -n "$line" ]] || { echo "    no B line" >&2; return 1; }
+  for n in 0 1 2; do
+    d="$SB/r7-$n"; rm -rf "$d"; mkdir -p "$d"
+    ( git_fixture_env "$d" || exit 1
+      cd "$d" && git init -q . \
+        && { [[ "$n" -lt 1 ]] || { mkdir -p a/feat-one-shot-12931-cf-account-migration && : > a/feat-one-shot-12931-cf-account-migration/bootstrap.sh; }; } \
+        && { [[ "$n" -lt 2 ]] || { mkdir -p b/feat-one-shot-12931-cf-account-migration && : > b/feat-one-shot-12931-cf-account-migration/bootstrap.sh; }; } \
+        && : > keep && git add -A && git commit -qm fixture ) >/dev/null 2>&1 || { echo "    HARNESS: r7 fixture $n" >&2; return 1; }
+    rc=0; out="$(cd "$d" && bash -c "$line" 2>&1)" || rc=$?
+    case "$n" in
+      1) [[ "$rc" -eq 0 && "$out" == "SOLEUR_CFAM_BOOTSTRAP path=$(cd "$d" && pwd -P)/a/feat-one-shot-12931-cf-account-migration/bootstrap.sh" ]] || { echo "    one copy: rc=$rc out=$out" >&2; return 1; } ;;
+      *) [[ "$rc" -ne 0 && "$out" == "SOLEUR_CFAM_BOOTSTRAP verdict=stop matches=$n" ]] || { echo "    $n copies: rc=$rc out=$out" >&2; return 1; } ;;
+    esac
+  done
 }
 row_r5() {
   grep -qF 'probe=<phase> verdict=pass' "$1" \
@@ -103,6 +126,7 @@ row_r3 "$RUNBOOK"; check "R3 reopen step names the one cache_shared_binaries cre
 row_r4 "$RUNBOOK"; check "R4 runbook and bootstrap.sh name the same stages (D11)" $?
 row_r5 "$RUNBOOK"; check "R5 the expected probe verdict is the tool's; withdrawn wording gone" $?
 row_r6 "$RUNBOOK"; check "R6 no self-approval line and the revoke read-back are present" $?
+row_r7 "$RUNBOOK"; check "R7 the B line prints one absolute path, or verdict=stop for zero or two copies" $?
 
 echo "== mutations =="
 mutate() { # <label> <dst> — perl program on stdin
@@ -140,8 +164,24 @@ s{probe=<phase> verdict=pass}{probe=<phase> verdict=authorized}
 PERL
   expect_red "M5 (verdict=authorized reintroduced)" row_r5 "$SB/m5.md"
 fi
+if mutate M6 "$SB/m6.md" <<'PERL'; then
+s{\z}{\nbash "\$B" --stage bogus-stage\n}
+PERL
+  expect_red "M6 (the runbook issues an undeclared --stage)" row_r4 "$SB/m6.md"
+fi
+if mutate M7 "$SB/m7.md" <<'PERL'; then
+s{\z}{\n9. `bogus-stage`: not a stage of the script\n}
+PERL
+  expect_red "M7 (a numbered stage item the script does not declare)" row_r4 "$SB/m7.md"
+fi
+if mutate M8 "$SB/m8.md" <<'PERL'; then
+s{; false; fi`\.}{; fi`.}
+PERL
+  [[ -n "$(b_line "$SB/m8.md")" ]]; check "M8 mutant still yields a B line (so R7 reds on its run, not on extraction)" $?
+  expect_red "M8 (the B line's stop no longer fails)" row_r7 "$SB/m8.md"
+fi
 
-TOTAL=$((PASS + FAIL)); FLOOR=18
+TOTAL=$((PASS + FAIL)); FLOOR=26
 if [[ "$TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$TOTAL" "$FLOOR" >&2
   echo "Total: ${TOTAL} assertions, $((FAIL + 1)) failed"; exit 1

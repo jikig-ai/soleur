@@ -214,12 +214,16 @@ if [[ -f "$D/mode.verify" ]]; then
   exit 0
 fi
 if [[ "$dump" -eq 1 ]]; then printf 'HTTP/2 200\r\nx-robots-tag: noindex\r\n\r\n'; exit 0; fi
+# mode.wrongdest: an empty file misdirects agents.html; otherwise it names the one URL to misdirect.
+if [[ -f "$D/mode.wrongdest" ]]; then
+  w="$(cat "$D/mode.wrongdest")"; [[ -n "$w" ]] || w=https://soleur.ai/pages/agents.html
+  [[ "$url" == "$w" ]] && { printf '301 https://soleur.ai/elsewhere/'; exit 0; }
+fi
 case "$url" in
   https://app.soleur.ai/health) if [[ -f "$D/mode.health" ]]; then printf '526 '; else printf '200 '; fi ;;
   https://www.soleur.ai/) printf '301 https://soleur.ai/' ;;
   https://soleur.ai/) [[ "$ua" == *GPTBot* ]] && printf '200 ' || printf '403 ' ;;
-  https://soleur.ai/pages/agents.html)
-    if [[ -f "$D/mode.wrongdest" ]]; then printf '301 https://soleur.ai/elsewhere/'; else printf '301 https://soleur.ai/agents/'; fi ;;
+  https://soleur.ai/pages/agents.html) printf '301 https://soleur.ai/agents/' ;;
   https://soleur.ai/pages/legal/privacy-policy.html) printf '301 https://soleur.ai/legal/privacy-policy/' ;;
   https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/) printf '301 https://soleur.ai/blog/soleur-vs-anthropic-cowork/' ;;
   https://soleur.ai/*) printf '301 https://soleur.ai/elsewhere/' ;;
@@ -325,7 +329,7 @@ run_job() { # <dir> <script>; <dir>/env.extra holds extra KEY=VALUE lines (later
 rc_of() { cat "$1/rc"; }
 calls() { grep -c -- "$2" "$1/calls.log"; }
 line_no() { grep -n -m1 -- "$2" "$1/calls.log" | cut -d: -f1; }
-refused_for() { [[ "$(rc_of "$1")" == 1 ]] && grep -q "verdict=refuse reason=$2\$" "$1/out.txt"; }
+refused_for() { [[ "$(rc_of "$1")" == 1 ]] && grep -qE "verdict=refuse reason=$2( |\$)" "$1/out.txt"; }
 
 # argv_matches <dir> <label> <phase>: the plan's -target/-replace argv equals the gate's lists.
 argv_matches() {
@@ -384,9 +388,16 @@ chk_health() {
   refused_for "$1" verify-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
   grep -q 'verdict=fail failing=.*app-health' "$1/out.txt" || { WHY="no-app-health"; return 1; }
 }
-chk_dest() { # a legacy path that 301s to the wrong page fails the verify
+chk_dest() { # a legacy path that 301s to the wrong page fails the verify, naming what came back
+  chk_dest_for "$1" 'https://soleur.ai/pages/agents.html'
+}
+chk_dest_for() { # <dir> <url>: that URL alone fails, with its observed result, in the line, the
+  # annotation and the summary (which also records that the apply landed)
+  local want="$2=>301+https://soleur.ai/elsewhere/"
   refused_for "$1" verify-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
-  grep -q 'verdict=fail failing=.*pages/agents[.]html' "$1/out.txt" || { WHY="no-agents-dest"; return 1; }
+  grep -qxF "cf-account-migrate verify=redirects-dns verdict=fail failing=${want}" "$1/out.txt" || { WHY="no-dest:$2"; return 1; }
+  grep -qF "::error title=cf-account-migrate::applied, but the redirect/noindex/crawler/app-health probes did not all pass: ${want}." "$1/out.txt" || { WHY="no-annotation"; return 1; }
+  grep -qF "reason=verify-failed applied=true" "$1/summary.md" || { WHY="no-applied-summary"; return 1; }
 }
 chk_reason() { # one sanitized reason line in the step summary, no workflow-command opener
   grep -q '^- cf-account-migrate phase=redirects-dns rehearsal=true reason=re-run after a 5xx :error title=x:pwned' "$1/summary.md" || { WHY="no-reason-line"; return 1; }
@@ -480,6 +491,7 @@ setup_tflog() {
 setup_tflog_doppler() { new_case "tflogd-$1" redirects-dns true; printf 'TF_LOG_PROVIDER=TRACE\n' >"$LAST_D/doppler.inject"; }
 setup_health() { new_case "health-$1" redirects-dns false; : >"$LAST_D/mode.health"; }
 setup_wrongdest() { new_case "wrongdest-$1" redirects-dns false; : >"$LAST_D/mode.wrongdest"; }
+setup_wrongdest_cowork() { new_case "wrongdestc-$1" redirects-dns false; printf 'https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/' >"$LAST_D/mode.wrongdest"; }
 setup_reason() { new_case "reason-$1" redirects-dns true; printf 're-run after a 5xx\n::error title=x::pwned\x07 `code`\npwned2' >"$LAST_D/reason"; }
 setup_backups_timeout() { new_case "bkto-$1" redirects-dns true; printf '124' >"$LAST_D/mode.aws"; }
 setup_ids_timeout() { new_case "idsto-$1" redirects-dns false; printf '124' >"$LAST_D/mode.doppler"; }
@@ -759,10 +771,18 @@ H4="$(mk_mutant tflog-global 's/^  unset TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_P
 red "H4 TF_LOG from the environment reaches terraform" "$H4" chk_rehearsal_clean '^tf-log-leak$' setup_tflog
 H5="$(mk_mutant tflog-doppler 's/^  env -u TF_LOG -u TF_LOG_PATH -u TF_LOG_CORE -u TF_LOG_PROVIDER)$/  )/')"
 red "H5 a Doppler-side TF_LOG* reaches terraform plan" "$H5" chk_rehearsal_clean '^tf-log-leak$' setup_tflog_doppler
-H6="$(mk_mutant no-health '/bad+=" app-health"/d')"
+H6="$(mk_mutant no-health '/bad+=" app-health/d')"
 red "H6 post-apply verify drops the app.soleur.ai/health probe" "$H6" chk_health '^rc:0$' setup_health
 H6b="$(mk_mutant any-301 's/"301 \$want"/301\\ */')"
 red "H6b post-apply verify accepts a legacy 301 to any destination" "$H6b" chk_dest '^rc:0$' setup_wrongdest
+# Every pair is checked, not only agents.html: each other target misdirected alone fails the verify.
+for wd in https://soleur.ai/pages/legal/privacy-policy.html https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/ https://www.soleur.ai/; do
+  new_case "wrongdest-each" redirects-dns false; printf '%s' "$wd" >"$LAST_D/mode.wrongdest"; run_job "$LAST_D" "$PRISTINE"; WHY=""
+  chk_dest_for "$LAST_D" "$wd"; verdict "$?" "verify: $wd 301ing to the wrong page alone fails, naming what came back ($WHY)"
+done
+chk_dest_cowork() { chk_dest_for "$1" 'https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/'; }
+H6c="$(mk_mutant drop-pair '/^    "https:\/\/soleur.ai\/blog\/2026-03-16-soleur-vs-anthropic-cowork\/|/d')"
+red "H6c post-apply verify drops a legacy redirect pair" "$H6c" chk_dest_cowork '^rc:0$' setup_wrongdest_cowork
 H7="$(mk_mutant raw-reason 's/summary "reason=$(reason_line)"/summary "reason=$REASON"/')"
 red "H7 reason written to the summary unsanitized" "$H7" chk_reason '^(double-colon|newline-injected|no-reason-line)$' setup_reason
 H8="$(mk_mutant backups-timeout 's/|| refuse backups-timeout/|| true/')"
@@ -801,7 +821,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=99
+EXPECTED_CASES=103
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

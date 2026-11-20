@@ -39,14 +39,15 @@ readonly LIVE_STATUSES=(queued in_progress waiting pending requested)
 
 W=""
 ROOT=""
+VERIFY_FAILING=""
 TARGET_ARGS=()
 REPLACE_ARGS=()
 GATED=()
 
-refuse() { # <reason-code> <message>
-  printf '%s phase=%s verdict=refuse reason=%s\n' "$P" "${MIGRATE_PHASE:-?}" "$1"
+refuse() { # <reason-code> <message> [<extra summary fields>]
+  printf '%s phase=%s verdict=refuse reason=%s%s\n' "$P" "${MIGRATE_PHASE:-?}" "$1" "${3:+ $3}"
   printf '::error title=%s::%s\n' "$P" "$2"
-  summary "verdict=refuse reason=$1"
+  summary "verdict=refuse reason=$1${3:+ $3}"
   exit 1
 }
 
@@ -65,6 +66,17 @@ reason_line() {
     | LC_ALL=C sed -e 's/\xe2\x80[\xa8\xa9]/ /g' -e 's/::*/:/g' -e 's/[][`<>|*_#]/ /g' | LC_ALL=C tr -s ' ')"
   r="${r# }"
   LC_ALL=C printf '%.200s' "$r"
+}
+
+# obs_line <text>: an observed probe result (a status code and a Location from the network) as one
+# printable token for the failing= list, the annotation and the summary: the same character
+# classes as reason_line become spaces, then spaces become "+"; at most 120 bytes.
+obs_line() {
+  local r
+  r="$(printf '%s' "$1" | LC_ALL=C tr '\000-\037\177' '  ' \
+    | LC_ALL=C sed -e 's/\xe2\x80[\xa8\xa9]/ /g' -e 's/::*/:/g' -e 's/[][`<>|*_#]/ /g' | LC_ALL=C tr -s ' ')"
+  r="${r# }"; r="${r% }"
+  LC_ALL=C printf '%.120s' "${r// /+}"
 }
 
 # shellcheck disable=SC2329 # invoked by the EXIT trap
@@ -331,30 +343,36 @@ probe() { # <url> [<user-agent>]: prints "<code> <redirect_url>"
 }
 
 verify_redirects_dns() {
-  local tries="${CFAM_VERIFY_TRIES:-12}" pause="${CFAM_VERIFY_SLEEP:-10}" i bad u want pair hdrs
+  local tries="${CFAM_VERIFY_TRIES:-12}" pause="${CFAM_VERIFY_SLEEP:-10}" i bad u want pair hdrs got
   # Each legacy path must 301 to its exact target (seo-rulesets.tf / seo-bulk-redirects.tf):
   # a 301 to the wrong page is as broken for a visitor as a 404.
   local -a pairs=(
     "https://soleur.ai/pages/agents.html|https://soleur.ai/agents/"
     "https://soleur.ai/pages/legal/privacy-policy.html|https://soleur.ai/legal/privacy-policy/"
     "https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/|https://soleur.ai/blog/soleur-vs-anthropic-cowork/"
+    "https://www.soleur.ai/|https://soleur.ai/"
   )
+  # Each failing item carries what came back (<item>=><code>+<location>), so the annotation alone
+  # tells a wrong destination from a 404, a timeout (000) or a 526 from the ssl=strict rule.
   for ((i = 1; i <= tries; i++)); do
     bad=""
     for pair in "${pairs[@]}"; do
       u="${pair%%|*}"; want="${pair#*|}"
-      [[ "$(probe "$u")" == "301 $want" ]] || bad+=" $u"
+      got="$(probe "$u")"
+      [[ "$got" == "301 $want" ]] || bad+=" $u=>$(obs_line "$got")"
     done
-    [[ "$(probe https://www.soleur.ai/)" == "301 https://soleur.ai/" ]] || bad+=" https://www.soleur.ai/"
-    [[ "$(probe https://soleur.ai/ 'Mozilla/5.0 (compatible; GPTBot/1.2)')" == 200\ * ]] || bad+=" gptbot"
+    got="$(probe https://soleur.ai/ 'Mozilla/5.0 (compatible; GPTBot/1.2)')"
+    [[ "$got" == 200\ * ]] || bad+=" gptbot=>$(obs_line "$got")"
     hdrs="$(curl -sS -o /dev/null -D - --max-time 15 https://app.soleur.ai/ 2>/dev/null)"
     grep -qiE '^x-robots-tag:.*noindex' <<<"$hdrs" || bad+=" app-noindex"
     # The same apply creates the app's ssl=strict config rule: prove the product still serves.
-    [[ "$(probe https://app.soleur.ai/health)" == 200\ * ]] || bad+=" app-health"
+    got="$(probe https://app.soleur.ai/health)"
+    [[ "$got" == 200\ * ]] || bad+=" app-health=>$(obs_line "$got")"
     if [[ -z "$bad" ]]; then printf '%s verify=redirects-dns verdict=ok\n' "$P"; return 0; fi
     [[ "$i" -lt "$tries" ]] && sleep "$pause"
   done
-  printf '%s verify=redirects-dns verdict=fail failing=%s\n' "$P" "${bad# }"
+  VERIFY_FAILING="${bad# }"
+  printf '%s verify=redirects-dns verdict=fail failing=%s\n' "$P" "$VERIFY_FAILING"
   return 1
 }
 
@@ -365,14 +383,19 @@ run_apply() {
     state_migrate || refuse state-migrate-failed "the state forget did not finish with verdict=ok (see above)"
   fi
   plan_and_gate; rc=$?
-  [[ "$rc" -ne 2 ]] || refuse entrypoint-gate-refused "the whole-list entrypoint gate refused (a live phase entrypoint is populated, or its emptiness could not be proven); adopt it with the printed import block first. Nothing was applied."
-  [[ "$rc" -eq 0 ]] || refuse gate-refused "the plan did not reach gate verdict=PASS; nothing was applied"
+  # After the forget (redirects-dns), a refusal leaves the forget committed: the old-zone entries
+  # stay forgotten (backup uri above) and a re-dispatch resumes with removed=0 (ADR-329 D3, CTO
+  # ruling 2026-11-20). The _PREV id restore no longer applies.
+  local fg=""
+  [[ "$MIGRATE_PHASE" == redirects-dns ]] && fg=" The state forget is committed (backup uri above); runbook Halt: fix forward and re-dispatch (the forget then removes 0); the _PREV id restore no longer applies."
+  [[ "$rc" -ne 2 ]] || refuse entrypoint-gate-refused "the whole-list entrypoint gate refused (a live phase entrypoint is populated, or its emptiness could not be proven); adopt it with the printed import block first. Nothing was applied.${fg}"
+  [[ "$rc" -eq 0 ]] || refuse gate-refused "the plan did not reach gate verdict=PASS; nothing was applied.${fg}"
   tf_env terraform apply -no-color -input=false -auto-approve "$W/tfplan" 2>&1 | tf_redact_random_ids
   rc=${PIPESTATUS[0]}
   [[ "$rc" -eq 0 ]] || refuse apply-failed "terraform apply of the graded plan failed (exit $rc); state may hold a partial apply. Fix forward (a reviewed PR if the cause is in code), then re-dispatch the same phase: the forget then removes 0 (cf-state-migrate verdict=ok removed=0), imports already in state plan as no-op, and only the remainder is planned and gated."
   printf '%s phase=%s mode=apply applied=true\n' "$P" "$MIGRATE_PHASE"
   if [[ "$MIGRATE_PHASE" == redirects-dns ]]; then
-    verify_redirects_dns || refuse verify-failed "applied, but the redirect/noindex/crawler/app-health probes did not all pass"
+    verify_redirects_dns || refuse verify-failed "applied, but the redirect/noindex/crawler/app-health probes did not all pass: ${VERIFY_FAILING}. Runbook Halt, verify-failed: if app-health is failing, the owner may make one dashboard edit of the failing rule on the NEW zone only; then a fix-forward PR, a rehearsal, and a re-dispatch of this phase (the fix plans as an in-state update the gate accepts)." "applied=true"
   fi
   printf '%s phase=%s mode=apply verdict=PASS applied=true\n' "$P" "$MIGRATE_PHASE"
   summary "verdict=PASS applied=true"

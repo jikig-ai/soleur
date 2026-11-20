@@ -117,6 +117,21 @@ check "H2 reversed order + data read still passes" 0 "verdict=PASS" redirects-dn
 mutate_plan "$VALID" "$TMP/rerun.json" '.resource_changes |= map(.change.actions=["no-op"] | del(.change.importing))'
 check "converged re-dispatch (all no-op) passes" 0 "verdict=PASS creates=0 imports=0" redirects-dns "$TMP/rerun.json"
 
+# U1-U5: a fix-forward re-dispatch may plan a create-class rule as ["update"] (CTO ruling
+# 2026-11-20, review fork 1), but only for an address already in the pre-plan state whose `before`
+# carries the NEW id; a first apply (address absent from state) and an old-id `before` stay refused.
+SCS="cloudflare_ruleset.seo_config_settings"
+mutate_plan "$VALID" "$TMP/u1.json" '(.resource_changes[] | select(.address=="'"$SCS"'") | .change) |= (.actions=["update"] | .before={zone_id:"'"$NZ"'",account_id:null})'
+printf '{"values":{"root_module":{"resources":[{"address":"%s","values":{"id":"r1","zone_id":"%s"}}]}}}' "$SCS" "$NZ" > "$TMP/u-state.json"
+printf '{"values":{"root_module":{"resources":[{"address":"cloudflare_ruleset.seo_page_redirects","values":{"id":"r2","zone_id":"%s"}}]}}}' "$NZ" > "$TMP/u-state-other.json"
+check "U1: an in-state create-class rule planned as an update on the NEW zone passes" 0 "verdict=PASS creates=7 imports=29 destroys=0" redirects-dns "$TMP/u1.json" "$TMP/u-state.json"
+check "U2: the same update for an address absent from the pre-plan state is refused" 1 "$SCS (class create) planned as an update" redirects-dns "$TMP/u1.json" "$TMP/u-state-other.json"
+check "U3: the same update with no pre-plan state is refused" 1 "$SCS (class create) planned as an update" redirects-dns "$TMP/u1.json"
+mutate_plan "$TMP/u1.json" "$TMP/u4.json" '(.resource_changes[] | select(.address=="'"$SCS"'") | .change.before.zone_id) = "'"$OZ"'"'
+check "U4: an in-state update whose before carries the OLD zone is refused" 1 "$SCS (class create) planned as an update" redirects-dns "$TMP/u4.json" "$TMP/u-state.json"
+mutate_plan "$VALID" "$TMP/u5.json" '(.resource_changes[] | select(.address=="'"$SCS"'") | .change) |= (.actions=["delete","create"] | .before={zone_id:"'"$NZ"'"})'
+check "U5: an in-state create-class replace is refused" 1 "$SCS (class create) planned with actions" redirects-dns "$TMP/u5.json" "$TMP/u-state.json"
+
 # Row 1: a delete of cloudflare_record.app.
 mutate_plan "$VALID" "$TMP/r1.json" '.resource_changes += [{address:"cloudflare_record.app",mode:"managed",type:"cloudflare_record",change:{actions:["delete"],before:{zone_id:"'"$NZ"'"},after:null}}]'
 check "row 1: a delete is refused" 1 "REFUSE" redirects-dns "$TMP/r1.json"
@@ -361,17 +376,21 @@ gate_mutate_and_check "M-reason: neutering the replace_by_request check admits r
 # shellcheck disable=SC2016 # sed anchors match literal gate text
 gate_mutate_and_check "M-physid: neutering the physical-id check admits row 9c" \
   "$(neuter '--slurpfile st')" cf_account_migrate_gate zone-rest "$TMP/zr9c.json" "$TMP/zr-state.json"
+# shellcheck disable=SC2016 # sed anchors match literal gate text
+gate_mutate_and_check "M-update: neutering the in-state update check admits U2 (an update of an address not in state)" \
+  "$(neuter '--slurpfile pst')" cf_account_migrate_gate redirects-dns "$TMP/u1.json" "$TMP/u-state-other.json"
 # Each neuter anchor lands on exactly one opener (a non-unique anchor would neuter two checks and
 # could pass a row for the wrong arm's reason).
 n_bad=""
 # shellcheck disable=SC2016 # sed anchors match literal gate text
 for a in '^  v="\$(jq -r --argjson spec "\$spec" .\.resource_changes\[\] | select((\.mode' '--arg nz "\$CFAM_NEW_ZONE_ID"' \
   '--arg oz "\$CFAM_OLD_ZONE_ID"' '^  v="\$(jq -r .\.resource_changes\[\] | select(\.change\.importing != null)' \
-  '--argjson lit "\$literals"' 'as \$have$' '^    v="\$(jq .*select(\$spec\[\.address\] == "replace")$' '--slurpfile st'; do
+  '--argjson lit "\$literals"' 'as \$have$' '^    v="\$(jq .*select(\$spec\[\.address\] == "replace")$' '--slurpfile st' \
+  '--slurpfile pst'; do
   sed "$(neuter "$a")" "$GATE" > "$TMP/neuter.sh"
   [[ "$(diff "$GATE" "$TMP/neuter.sh" | grep -c '^>')" -eq 1 ]] || n_bad+=" [$a]"
 done
-if [[ -z "$n_bad" ]]; then pass "neuter: each of the 8 mutation anchors rewrites exactly one check opener"
+if [[ -z "$n_bad" ]]; then pass "neuter: each of the 9 mutation anchors rewrites exactly one check opener"
 else fail "neuter: anchors that do not land on exactly one opener:$n_bad" 1 ""; fi
 gate_mutate_layered "M-preamble: the gate INVOKES the readable assert (not merely sources it)" \
   's|^  plan_gate_assert_readable .*|  :|' "an unreadable plan is not evidence" "unclassifiable plan entry" cf_account_migrate_gate redirects-dns "$TMP/d2.json"
@@ -451,6 +470,6 @@ r2_mut "M-r2-bound: the 60 s bound dropped" 's|^  timeout 60 env |  env |' unbou
 
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 82 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 82)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 88 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 88)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

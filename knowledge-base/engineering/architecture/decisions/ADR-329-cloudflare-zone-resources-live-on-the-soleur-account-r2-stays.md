@@ -56,13 +56,15 @@ Two facts shape the decision:
 
 1. **Account split.** Zone- and account-bound Cloudflare resources (DNS records, zone and account rulesets, lists,
    Pages, the tunnel, Access apps, policies and service tokens, notification policies, and the load balancer when
-   enabled) follow `var.cf_account_id` and `var.cf_zone_id`, which hold the Soleur account and zone. Every
+   enabled) follow `var.cf_account_id` and `var.cf_zone_id`, which must hold the Soleur account and zone (they do
+   from the Phase 2 `flip-ids` stage; until then the validations below refuse every plan). Every
    variable-driven R2 surface (`cloudflare_r2_bucket.*`, `local.r2_s3_endpoint`, the CLA-evidence root's
    `TF_VAR_cf_account_id`) follows the new `var.cf_r2_account_id` (no default, pinned by validation to the legacy
    account). The backend endpoints are literals on the legacy account (a backend
    block cannot read a variable) and stay unchanged.
-2. **Old-id validations.** `cf_zone_id` and `cf_account_id` reject the old ids (compared on `lower()`, proven by
-   tftest `expect_failures`), and all three ids must be 32-hex. Any plan carrying an old id fails before refresh.
+2. **Old-id validations.** `cf_zone_id` and `cf_account_id` reject the old ids (an exact-literal comparison; an
+   upper-case spelling is refused by the lowercase-only 32-hex shape check, proven by tftest `expect_failures`), and
+   all three ids must be 32-hex. Any plan carrying an old id fails before refresh.
    `cf_r2_account_id` is pinned to the legacy account `4d5ba6f096b2686fbdd404167dd4e125`.
 3. **Migration mechanism: state-forget-then-import**, run only by the gated `cf-account-migrate` dispatch, phase by
    phase (`redirects-dns`, `zone-rest`, `tunnel`):

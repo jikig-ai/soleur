@@ -869,7 +869,8 @@ The ADR is written in PR1 with `status: adopting`. It moves to `accepted` when P
   - legacy links and `www.soleur.ai` keep returning non-301 responses (the four red Better Stack monitors stay red);
   - `app.soleur.ai` keeps sending no `X-Robots-Tag: noindex`, so product pages, including `/shared/[token]` and `/invite/[token]` links, stay indexable;
   - deploys and CI registry pushes stay blocked, so no fix reaches `app.soleur.ai`;
-  - worst case, a mis-gated apply re-homes the LUKS header escrow endpoint and a later fresh web host fails to escrow its LUKS header.
+  - worst case, a mis-gated apply re-homes the LUKS header escrow endpoint and a later fresh web host fails to escrow its LUKS header;
+  - if the `redirects-dns` apply's `seo_config_settings` rule breaks the app (for example ssl=strict returning 526), every user loses `app.soleur.ai` until the owner's one dashboard edit on the new zone; the gated re-dispatch then applies the fix as an in-state update (CTO ruling 2026-11-20).
 - **If this leaks, the user's data / workflow is exposed via:**
   - search-engine indexing of `/shared/[token]` and `/invite/[token]` URLs while the noindex header is missing, a pre-existing exposure this plan closes in Phase 2;
   - the state backup object, which holds the same secrets as live state, if the backend R2 key pair leaks;
@@ -889,6 +890,7 @@ Artifact and vector pairs for `soleur:engineering:review:user-impact-reviewer`:
 - Deploy pair and tunnel token secrecy ↔ `scripts/cf-access-deploy-token-mint.sh` (stdin-only test), the `tunnel_token` sensitive output.
 - Revoked share served from the edge ↔ `cloudflare_ruleset.cache_shared_binaries` in no phase list, created only at the Phase 3 step 6 `manual-rerun` after the redeploy (CTO ruling D3; gate suite mutation).
 - Art. 17 erasure on the wrong account ↔ `cla-signature-evidence-retrieval.md` reading `CF_R2_ACCOUNT_ID`, pinned by `apps/cla-evidence/infra/main.test.sh` (a403878e6d).
+- `seo_config_settings` breaking the app after the apply ↔ `verify_redirects_dns` app-health probe (`reason=verify-failed applied=true`), the runbook Halt `verify-failed` steps, and gate rows U1-U5.
 
 ## Scope Check
 

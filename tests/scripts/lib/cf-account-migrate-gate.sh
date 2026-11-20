@@ -17,7 +17,9 @@
 # address is in state". Widening a phase is a reviewed diff here and nowhere else.
 #
 # Classes:
-#   create   planned ["create"], or ["no-op"] on a re-dispatch.
+#   create   planned ["create"], or ["no-op"] on a re-dispatch, or ["update"] of an address already
+#            in the pre-plan state whose `before` carries a NEW id (a fix-forward re-dispatch that
+#            corrects a rule the phase created; refused without the pre-plan state).
 #   import   an import block in apps/web-platform/infra/cf-account-migration-imports.tf. Planned as
 #            a PURE no-op import whose id equals the committed literal, or plain ["no-op"] once in
 #            state. A create means the import block was switched off: refused (it would collide).
@@ -35,7 +37,7 @@
 #   cf_account_migrate_replaces <phase>                       # one -replace=<addr> per line
 #   cf_account_migrate_gate     <phase> <plan.json> [<state.json>]   # 0=PASS, 1=REFUSE
 #     <state.json> = `terraform show -json` of state BEFORE the plan; required for a phase with
-#     a replace set.
+#     a replace set, and the only evidence that lets a create-class address plan as ["update"].
 
 if ! declare -F plan_gate_assert_readable >/dev/null 2>&1; then
   _CFAM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -197,13 +199,12 @@ cf_account_migrate_gate() {
   # would silently be skipped.
   n_rep="$(jq -r '[to_entries[] | select(.value=="replace")] | length' <<<"$spec")" || { _cfam_eval_fail; return 1; }
   plan_gate_assert_numeric "cf_account_migrate_gate" "replace_count=${n_rep}" || return 1
-  if [[ "$n_rep" -gt 0 ]]; then
-    if [[ -z "$state_json" || ! -r "$state_json" ]] || ! jq -e '.values' "$state_json" >/dev/null 2>&1; then
+  if [[ -z "$state_json" || ! -r "$state_json" ]] || ! jq -e '.values' "$state_json" >/dev/null 2>&1; then
+    if [[ "$n_rep" -gt 0 ]]; then
       echo "cf_account_migrate_gate: REFUSE — phase ${phase} declares a replace set and needs the pre-plan state JSON (terraform show -json) to bind each replace to its physical id"
       return 1
     fi
-  else
-    state_json=""
+    state_json=""   # absent or unusable: no address counts as in state, so no create-class update passes
   fi
 
   # Every check below appends violation lines; all are reported, then the verdict. Each check's
@@ -226,7 +227,7 @@ cf_account_migrate_gate() {
     .resource_changes[] | select((.mode // "managed") == "managed") | . as $rc | $spec[.address] as $cls
     | select($cls != null)
     | select(
-        ($cls == "create"  and .change.importing == null and (.change.actions != ["create"] and .change.actions != ["no-op"])) or
+        ($cls == "create"  and .change.importing == null and (.change.actions != ["create"] and .change.actions != ["no-op"] and .change.actions != ["update"])) or
         ($cls == "create"  and .change.importing != null) or
         ($cls == "import"  and .change.importing == null and .change.actions != ["no-op"]) or
         ($cls == "mutable" and (.change.actions as $x | any([["update"],["no-op"],["create"]][]; . == $x) | not)) or
@@ -237,6 +238,22 @@ cf_account_migrate_gate() {
   # a check that cannot be evaluated is a refusal, never "no violation lines".
   v="$(grep -v ' (class create) .* as an import$' <<<"$v")"; local gv_rc=$?
   (( gv_rc <= 1 )) || { _cfam_eval_fail; return 1; }
+  violations+="${v:+$v$'\n'}"
+
+  # A create-class ["update"] is a fix-forward re-dispatch only: the address must already be in the
+  # pre-plan state and, for a Cloudflare object, its `before` must carry a NEW id and no other. On a
+  # first apply every create-class address is absent from state (forgotten or never there), so this
+  # cannot widen a first apply. The new-id check below still grades its `after`.
+  local st_src="${state_json:-/dev/null}"
+  v="$(jq -r --argjson spec "$spec" --arg unz "$CFAM_NEW_ZONE_ID" --arg una "$CFAM_NEW_ACCOUNT_ID" --slurpfile pst "$st_src" '
+    ([($pst[0].values // {}) | .. | objects | select(has("address") and has("values")) | .address]) as $inst
+    | .resource_changes[] | select((.mode // "managed") == "managed")
+    | select($spec[.address] == "create") | select(.change.actions == ["update"])
+    | .address as $ad | (.change.before.zone_id // null) as $bz | (.change.before.account_id // null) as $ba
+    | select(($inst | index($ad)) == null
+        or ((.type | startswith("cloudflare_")) and (
+              ($bz != $unz and $ba != $una) or ($bz != null and $bz != $unz) or ($ba != null and $ba != $una))))
+    | "REFUSE \($ad) (class create) planned as an update, which is allowed only for an address already in the pre-plan state on a NEW id (in state: \(($inst | index($ad)) != null), before zone_id \($bz | tostring), account_id \($ba | tostring))"' "$plan_json")" || { _cfam_eval_fail; return 1; }
   violations+="${v:+$v$'\n'}"
 
   v="$(jq -r '.resource_changes[] | select(.change.importing != null) | select(.change.actions != ["no-op"])
