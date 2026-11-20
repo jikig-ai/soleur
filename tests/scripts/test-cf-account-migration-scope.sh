@@ -23,22 +23,33 @@
 #       the bare root path apps/web-platform/infra (not followed by /<subdir>). This is the only
 #       place script-wrapped Terraform is seen; composite actions and reusable callees are not.
 #   (7) the cf-account-migrate job script carries no workflow-file list (it reads the exempt list).
-#   (8) no exempt workflow calls a local reusable workflow that loads the credentials, and no exempt
-#       name is workflow_call-only: the predicate reads github.workflow_ref, which names the caller.
-#       CONTRACT: callees are walked transitively (seen set); a callee's step `uses` that is
-#       repo-local (`./<path>` or `jikig-ai/soleur/<path>@ref`, owner/repo case-insensitive) is
-#       `..`-normalised and its composite action followed RECURSIVELY with a memo/seen set, so the
-#       walk is bounded by the repository's action directories and a cycle terminates. A repo-local
-#       `uses` that resolves to no action.yml/action.yaml, escapes the repo or does not parse is RED.
-#       RESIDUALS, left to review: a step action from ANOTHER repository (actions/checkout, …) is
-#       not followed (its body is not in this tree); a JavaScript or Docker local action is a leaf
-#       (no steps to follow); a composite that reaches the credentials by a `run:` script rather than
-#       the loader's `uses`; and a `uses` value assembled from an expression.
+#   (8) no exempt workflow has a job-level `uses:` key (parsed, ANY value: it calls no reusable
+#       workflow, local, remote or expression-built), and no exempt name is workflow_call-only: the
+#       predicate reads github.workflow_ref, which inside a callee names the caller, so a callee of
+#       an exempt workflow would inherit the exemption. A composite action stepped into by the exempt
+#       workflow itself runs under that workflow's own ref, which is the exemption working as meant.
+#       An exempt workflow that does not parse is RED.
 #   (4) cf-account-migrate.yml shares the concurrency literal, carries no ssh bridge, ssh,
 #       upload-artifact or TF_LOG, and has EXACTLY two jobs whose environment and REHEARSAL are
-#       literals in the two exact pairs (CTO D7). Absent is RED. The logic is also driven against a
-#       synthesized fixture with one mutation row per bypass shape.
+#       literals in the two exact pairs (CTO D7). The job step is exactly {name?, env, run}: no
+#       shell, working-directory, if, continue-on-error or any other key, and no `defaults` at job
+#       or workflow level, so the reviewed run text is what executes; its env is the exact reviewed
+#       mapping (the apply job alone may add CFAM_EXPECTED_IN_STATE_UPDATES with its one literal
+#       value); no job-level env, and the workflow env names only its reviewed keys. Each job's
+#       timeout-minutes is an integer literal whose seconds cover the job script's VERIFY_CAP (read
+#       from the script) plus 300 s for the steps before it (the script's VERIFY BOUND header), so a
+#       timeout cannot cancel the run before the post-apply verdict prints. Absent is RED. The
+#       logic is also driven against a synthesized fixture with one mutation row per bypass shape.
 #   (5) apply-web-platform-infra.yml contains no `cf-account-migrate` token.
+#   (9) Terraform side channels the plan JSON cannot show (a separate scan of the .tf text): no
+#       `data "http"` or `data "external"` block in apps/web-platform/infra/*.tf or its modules/
+#       (both run during `terraform plan`, before any gate, with every token in the environment),
+#       no *.tf.json there (not scanned), and no `provisioner` block inside the resource block of any
+#       cf_account_migrate_phase_spec member (it would run at apply, after the gate's PASS). Each
+#       spec member's block must be found exactly once (an override file redefining it is RED).
+#       Strings, comments and heredocs are blanked before the scan, so prose naming a provisioner
+#       is not one. RESIDUAL: a module call or a non-spec dependency's provisioner (the gate's
+#       allow-set refuses any non-no-op outside the spec, so it cannot run at apply).
 #
 # The exempt workflow list, the plan-only subset and the exempt jobs are READ FROM THE SCRIPT
 # (sourced), never re-typed.
@@ -88,7 +99,7 @@ trap 'rm -rf "$WORK"' EXIT
 ANALYZER="$WORK/analyze.py"
 cat > "$ANALYZER" <<'PY'
 """Prints one line per check: `OK <id> <msg>` or `RED <id> <msg>`, plus `NOTE`/`SKIP` lines."""
-import os, posixpath, re, sys, glob
+import os, re, sys, glob
 import yaml
 
 Loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
@@ -437,12 +448,57 @@ def check_migrate(rel):
             p.append("%s: the job step's run is %r, want exactly %r" % (jid, str(runs[0][1].get("run") or "").strip(), JOB_RUN))
         if "if" in runs[0][1]:
             p.append("%s: the cf-account-migrate-job.sh step carries an if: key" % jid)
+        # What runs is exactly the reviewed run text: the step carries no other key (shell,
+        # working-directory, timeout-minutes, …), and no `defaults` re-points its shell or directory.
+        extra = sorted(set(runs[0][1]) - STEP_KEYS)
+        if extra: p.append("%s: the cf-account-migrate-job.sh step carries keys %s, want only %s" % (jid, extra, sorted(STEP_KEYS)))
+        if "defaults" in job: p.append("%s: carries a job-level defaults: (shell or working-directory)" % jid)
         runs = [st for _, st in runs]
-        r = (runs[0].get("env") or {}).get("REHEARSAL")
+        senv = runs[0].get("env") if isinstance(runs[0].get("env"), dict) else {}
+        r = senv.get("REHEARSAL")
         if not isinstance(r, str) or "${{" in r or r != reh: p.append("%s REHEARSAL: %r, want the literal %r" % (jid, r, reh))
         if "REHEARSAL" in (job.get("env") or {}) or "REHEARSAL" in (doc.get("env") or {}):
             p.append("%s: REHEARSAL is also set at job or workflow level" % jid)
+        # The step env is the reviewed mapping, exactly; the apply job alone may add one key.
+        rest = {k: v for k, v in senv.items() if k != "REHEARSAL"}
+        opt = APPLY_OPT_ENV if jid == "cf_account_migrate_apply" else {}
+        for k in sorted(set(rest) - set(STEP_ENV) - set(opt)):
+            p.append("%s: the job step env sets %s, which is not in its reviewed mapping" % (jid, k))
+        for k, v in sorted(STEP_ENV.items()):
+            if rest.get(k) != v: p.append("%s: the job step env %s is %r, want %r" % (jid, k, rest.get(k), v))
+        for k, v in sorted(opt.items()):
+            if k in rest and rest[k] != v: p.append("%s: the job step env %s is %r, want %r" % (jid, k, rest[k], v))
+        if "env" in job: p.append("%s: carries a job-level env: (the job step env is the whole reviewed mapping)" % jid)
+        # The verdict must print before timeout-minutes cancels the run: the job's seconds cover the
+        # script's VERIFY_CAP plus the steps before the job step.
+        tm = job.get("timeout-minutes")
+        if verify_cap is None:
+            p.append("cannot read exactly one `readonly VERIFY_CAP=<n>` from %s" % JOB_SCRIPT)
+        elif not isinstance(tm, int) or isinstance(tm, bool) or tm * 60 < verify_cap + PRE_STEPS_S:
+            p.append("%s timeout-minutes: %r, want an integer whose seconds are >= VERIFY_CAP %d + %d" % (jid, tm, verify_cap, PRE_STEPS_S))
+    if "defaults" in doc: p.append("carries a workflow-level defaults: (shell or working-directory)")
+    wenv = doc.get("env") if isinstance(doc.get("env"), dict) else ({} if doc.get("env") is None else {"<not a mapping>": 1})
+    for k in sorted(set(wenv) - WF_ENV_KEYS):
+        p.append("the workflow env sets %s, which is not one of its reviewed keys %s" % (k, sorted(WF_ENV_KEYS)))
     return p
+STEP_KEYS = {"name", "env", "run"}
+STEP_ENV = {
+    "MIGRATE_PHASE": "${{ inputs.migrate_phase }}",
+    "CONFIRM": "${{ inputs.confirm }}",
+    "REASON": "${{ inputs.reason }}",
+    "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}",
+    "GH_REPO": "${{ github.repository }}",
+    "DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN }}",
+}
+APPLY_OPT_ENV = {"CFAM_EXPECTED_IN_STATE_UPDATES": "${{ inputs.expected_in_state_updates }}"}
+WF_ENV_KEYS = {"TERRAFORM_VERSION", "TF_VAR_terraform_version", "INFRA_DIR"}
+JOB_SCRIPT = "apps/web-platform/infra/scripts/cf-account-migrate-job.sh"
+PRE_STEPS_S = 300
+try:
+    _caps = re.findall(r"^readonly VERIFY_CAP=(\d+)\b", open(os.path.join(repo_root, JOB_SCRIPT)).read(), re.M)
+except OSError:
+    _caps = []
+verify_cap = int(_caps[0]) if len(_caps) == 1 else None
 if MIGRATE in docs:
     p = check_migrate(MIGRATE)
     out("RED" if p else "OK", "A4-migrate", "; ".join(p) if p else "%s shares the concurrency literal; no ssh bridge, ssh, upload-artifact or TF_LOG; two jobs with the exact literal environment/REHEARSAL pairs" % MIGRATE)
@@ -508,118 +564,30 @@ out("RED" if bad6 else "OK", "A6-exempt-no-root-planner",
     else "%d exempt non-plan-only workflows and %d bash-run repo scripts carry no root terraform invocation" % (n6, followed))
 out("RED" if n6 < 8 else "OK", "A6-floor", "%d exempt non-plan-only workflows checked" % n6)
 
-# (8) the hold keys on github.workflow_ref, which inside a reusable workflow names the CALLER.
-# So an exempt workflow must not call a local reusable workflow that loads the credentials (the
-# callee would inherit the exemption), and no exempt name may be a workflow_call-only workflow
-# (its own name never reaches the predicate, so exempting it does nothing).
-# The callee set is read from the PARSED jobs.<id>.uses, so quoting, flow mappings and a full
-# same-repo ref (owner/repo/.github/workflows/x.yml@ref, whose workflow_ref is still the caller's)
-# all resolve; it is followed transitively, and a reusable workflow from another repository is
-# refused outright (its body is not in this tree, so a loader in it cannot be ruled out).
-REUSE = re.compile(r"(?:\./|jikig-ai/soleur/)\.github/workflows/([A-Za-z0-9._-]+\.ya?ml)(?:@\S+)?")
-# The loader is recognised from PARSED steps[].uses (flow mappings, quoting and an @ref all
-# normalise away), never from raw text. A REPO-LOCAL step `uses` is `./<path>` or
-# `jikig-ai/soleur/<path>@ref` (owner/repo matched case-insensitively: GitHub resolves them so);
-# its path is normalised (`..` folded) and must stay inside the repository. The walk is RECURSIVE:
-# a composite action's runs.steps[].uses are followed the same way, through every level, with a
-# memo/seen set, so it is bounded by the number of action directories in the repository and a
-# cycle terminates. A repo-local `uses` that resolves to no action.yml/action.yaml, escapes the
-# repository or does not parse is RED (a loader in it cannot be ruled out).
-LOADER_PATH = ".github/actions/infra-credentials"
-LOCAL_ACTION = re.compile(r"(?:\./|(?i:jikig-ai/soleur)/)(.*)")
-def norm_uses(u):
-    return str(u or "").strip().split("@", 1)[0].rstrip("/")
-def local_action_path(u):
-    """-> the normalised repo-relative path of a repo-local step `uses`, or None for a remote one."""
-    m = LOCAL_ACTION.fullmatch(norm_uses(u))
-    return posixpath.normpath(m.group(1) or ".") if m else None
-wf_cache = {}
-def wf_doc(name):
-    """Any workflow in the tree, parsed on demand (not only the terraform-bearing `docs`).
-    -> (doc, None) or (None, reason). A callee that will not parse is RED, not an empty walk."""
-    if name not in wf_cache:
-        if name not in texts:
-            wf_cache[name] = (None, "is not in %s" % os.path.basename(wfdir))
-        else:
-            try:
-                d = yaml.load(texts[name], Loader=Loader) or {}
-                wf_cache[name] = (d, None) if isinstance(d, dict) else (None, "is not a mapping")
-            except yaml.YAMLError as e:
-                wf_cache[name] = (None, "does not parse: %s" % str(e).splitlines()[0])
-    return wf_cache[name]
-action_memo = {}
-def action_reaches_loader(p):
-    """-> '' when the local action at repo path p provably never reaches the loader, else how it
-    does or why that cannot be ruled out. The memo entry is set to '' BEFORE recursing (seen set)."""
-    if p == LOADER_PATH: return "which uses the loader"
-    if p in action_memo: return action_memo[p]
-    action_memo[p] = ""
-    if p == ".." or p.startswith("../") or posixpath.isabs(p):
-        res = "which points outside the repository"
-    else:
-        fs = [f for f in (os.path.join(repo_root, p, n) for n in ("action.yml", "action.yaml")) if os.path.isfile(f)]
-        if not fs:
-            res = "which does not resolve to an action.yml in this repository"
-        else:
-            try:
-                a = yaml.load(open(fs[0]).read(), Loader=Loader) or {}
-                res = ""
-            except yaml.YAMLError:
-                a, res = {}, "which does not parse"
-            st = ((a.get("runs") or {}).get("steps") or []) if isinstance(a, dict) and isinstance(a.get("runs"), dict) else []
-            for s in st if isinstance(st, list) and not res else []:
-                q = local_action_path(s.get("uses")) if isinstance(s, dict) and s.get("uses") else None
-                if q is None: continue
-                r = action_reaches_loader(q)
-                if r:
-                    res = "which uses the loader" if q == LOADER_PATH else "which uses ./%s, %s" % (q, r)
-                    break
-    action_memo[p] = res
-    return res
-def loads_credentials(doc):
-    """-> a description of how this workflow's steps reach the loader, or ''."""
-    for jid, job in ((doc.get("jobs") or {}) if isinstance(doc, dict) else {}).items():
-        if not isinstance(job, dict): continue
-        for s in (job.get("steps") or []) if isinstance(job.get("steps"), list) else []:
-            if not isinstance(s, dict) or not s.get("uses"): continue
-            q = local_action_path(s["uses"])
-            if q is None: continue
-            if q == LOADER_PATH: return "job %s uses the loader" % jid
-            r = action_reaches_loader(q)
-            if r: return "job %s uses %s, %s" % (jid, norm_uses(s["uses"]), r)
-    return ""
-def job_uses(doc):
-    jobs = doc.get("jobs") if isinstance(doc, dict) else None
-    return [str(j.get("uses") or "").strip() for j in (jobs or {}).values() if isinstance(j, dict) and j.get("uses")]
+# (8) the hold keys on github.workflow_ref, which inside a reusable workflow names the CALLER, so
+# an exempt workflow's exemption would pass to any workflow it calls. Positive check: an exempt
+# workflow has NO job-level `uses:` key at all (parsed, any value: local, full ref, quoted, flow
+# mapping, foreign or an expression). A future need trips it and gets a review (deny by default).
+# And no exempt name may be a workflow_call-only workflow (its own name never reaches the
+# predicate, so exempting it does nothing).
 bad8 = []
 for ex in sorted(EXEMPT):
     if ex not in texts: continue
-    doc = docs.get(ex, (None, ""))[0] or {}   # a parse failure already printed RED parse
-    seen, todo = set(), [ex]
-    while todo:
-        cur = todo.pop()
-        cdoc, why = wf_doc(cur)
-        if cdoc is None:
-            if cur != ex: bad8.append("%s reaches %s, which %s (a loader in it cannot be ruled out)" % (ex, cur, why))
-            continue
-        for u in job_uses(cdoc):
-            m = REUSE.fullmatch(u)
-            if not m:
-                bad8.append("%s (via %s) calls a reusable workflow outside this repository: %s" % (ex, cur, u)); continue
-            callee = m.group(1)
-            if callee in seen: continue
-            seen.add(callee)
-            ldoc, _ = wf_doc(callee)
-            how = loads_credentials(ldoc) if ldoc is not None else ""
-            if how:
-                bad8.append("%s calls %s%s, which loads the infra credentials (%s)" % (ex, callee, "" if cur == ex else " via " + cur, how))
-            todo.append(callee)
+    if ex not in docs:
+        bad8.append("%s does not parse (a reusable call in it cannot be ruled out)" % ex); continue
+    doc = docs[ex][0] or {}
+    jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    if not isinstance(jobs, dict):
+        bad8.append("%s has no jobs mapping (a reusable call in it cannot be ruled out)" % ex); jobs = {}
+    for jid, job in jobs.items():
+        if isinstance(job, dict) and "uses" in job:
+            bad8.append("%s job %s calls a reusable workflow (uses: %r); an exempt workflow calls none" % (ex, jid, job["uses"]))
     trig = doc.get("on", doc.get(True)) if isinstance(doc, dict) else None
     keys = set(trig) if isinstance(trig, dict) else ({trig} if isinstance(trig, str) else set(trig or []))
     if keys == {"workflow_call"}:
         bad8.append("%s is workflow_call-only, so its name never reaches the predicate" % ex)
 out("RED" if bad8 else "OK", "A8-exempt-no-reusable-loader",
-    ("; ".join(bad8[:5])) if bad8 else "no exempt workflow calls a credential-loading reusable workflow or is workflow_call-only")
+    ("; ".join(bad8[:5])) if bad8 else "no exempt workflow calls a reusable workflow or is workflow_call-only")
 PY
 
 EXEMPT_WF="$(bash -c 'source "$1"; printf "%s " "${CFAM_EXEMPT_WORKFLOWS[@]}"' _ "$SCRIPT")"
@@ -745,11 +713,9 @@ mut_row() {
 }
 AWPI=apply-web-platform-infra.yml
 mut_row "an exempt workflow starts planning the root" A6-exempt-no-root-planner apply-github-infra.yml 's#^  INFRA_DIR: infra/github#  INFRA_DIR: apps/web-platform/infra#'
-mut_row "an exempt workflow calls the credential-loading bastion workflow" A8-exempt-no-reusable-loader apply-github-infra.yml 's#^jobs:$#jobs:\n  smuggle:\n    uses: ./.github/workflows/bastion-host-create.yml#'
-mut_row "an exempt workflow calls the bastion workflow by a quoted path" A8-exempt-no-reusable-loader apply-github-infra.yml 's#^jobs:$#jobs:\n  smuggle:\n    uses: "./.github/workflows/bastion-host-create.yml"#'
-mut_row "an exempt workflow calls the bastion workflow by its full same-repo ref" A8-exempt-no-reusable-loader apply-github-infra.yml 's#^jobs:$#jobs:\n  smuggle:\n    uses: jikig-ai/soleur/.github/workflows/bastion-host-create.yml@main\n    secrets: inherit#'
-mut_row "an exempt workflow calls the bastion workflow from a flow mapping" A8-exempt-no-reusable-loader apply-github-infra.yml 's#^jobs:$#jobs:\n  smuggle: { uses: ./.github/workflows/bastion-host-create.yml }#'
-mut_row "an exempt workflow calls a reusable workflow from another repository" A8-exempt-no-reusable-loader apply-github-infra.yml 's#^jobs:$#jobs:\n  smuggle:\n    uses: other-org/other-repo/.github/workflows/x.yml@v1#'
+mut_row "an exempt workflow calls a local reusable workflow" A8-exempt-no-reusable-loader apply-github-infra.yml 's#^jobs:$#jobs:\n  smuggle:\n    uses: ./.github/workflows/bastion-host-create.yml#'
+mut_row "an exempt workflow calls an expression-built reusable workflow" A8-exempt-no-reusable-loader apply-github-infra.yml 's#^jobs:$#jobs:\n  smuggle: { uses: "${{ inputs.callee }}" }#'
+mut_row "a cf-account-migrate job's timeout no longer covers the verify cap" A4-migrate cf-account-migrate.yml '0,/^    timeout-minutes: 30$/s//    timeout-minutes: 20/'
 mut_row "a gated root's directory becomes unresolvable" A1-unresolvable cf-lb-overlay.yml      's#^  INFRA_DIR: apps/web-platform/infra#  INFRA_DIR: ${{ vars.SOME_DIR }}#'
 mut_row "a root planner drops the loader entirely"  A1-unknown-planner  apply-deploy-pipeline-fix.yml 's#uses: \./\.github/actions/infra-credentials#uses: ./.github/actions/not-the-loader#'
 mut_row "the loader is removed from one gated job"  A2-loader-first     "$AWPI"                '/^  apply:$/,/^  [a-z_]+:$/s#uses: \./\.github/actions/infra-credentials#uses: ./.github/actions/not-the-loader#'
@@ -851,21 +817,37 @@ jobs:
   cf_account_migrate_rehearsal:
     if: inputs.rehearsal
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: infra-privileged
     steps:
       - run: echo "no ssh here; never ssh into a host"
-      - env:
+      - name: Migrate (rehearsal)
+        env:
+          MIGRATE_PHASE: ${{ inputs.migrate_phase }}
+          CONFIRM: ${{ inputs.confirm }}
           REHEARSAL: "true"
+          REASON: ${{ inputs.reason }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: bash apps/web-platform/infra/scripts/cf-account-migrate-job.sh
       - if: failure() || cancelled()
         uses: ./.github/actions/notify-ops-email
   cf_account_migrate_apply:
     if: ${{ !inputs.rehearsal }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: web-platform-infra-apply
     steps:
-      - env:
+      - name: Migrate (apply)
+        env:
+          MIGRATE_PHASE: ${{ inputs.migrate_phase }}
+          CONFIRM: ${{ inputs.confirm }}
           REHEARSAL: "false"
+          REASON: ${{ inputs.reason }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: bash apps/web-platform/infra/scripts/cf-account-migrate-job.sh
       - if: failure() || cancelled()
         uses: ./.github/actions/notify-ops-email
@@ -906,89 +888,165 @@ mig_mut "the ops email runs before the job step" '/^  cf_account_migrate_apply:$
 mig_mut "the job step gets continue-on-error"  's#^(        run: bash apps/web-platform/infra/scripts/cf-account-migrate-job\.sh)$#\1\n        continue-on-error: true#'
 mig_mut "the job step exit is masked (|| true)" 's#^(        run: bash apps/web-platform/infra/scripts/cf-account-migrate-job\.sh)$#\1 || true#'
 mig_mut "the job step gets if: false"          's#^(        run: bash apps/web-platform/infra/scripts/cf-account-migrate-job\.sh)$#\1\n        if: false#'
-
-# (8) transitive callee walk on multi-file fixtures. The exempt apply-github-infra.yml gains a job
-# calling ./.github/workflows/<entry>; the fixture files join a mirror of the real tree.
-mkdir -p "$WORK/a8/chain" "$WORK/a8/flow" "$WORK/a8/comp" "$WORK/a8/bad" "$WORK/a8/okc" "$WORK/a8root/.github/actions/wrap"
-cat > "$WORK/a8/chain/mid.yml" <<'YML'
-name: mid
-on: workflow_call
-jobs:
-  pass:
-    uses: ./.github/workflows/bastion-host-create.yml
-    secrets: inherit
-YML
-cat > "$WORK/a8/flow/leaf.yml" <<'YML'
-name: leaf
-on: workflow_call
-jobs:
-  a: {runs-on: ubuntu-latest, steps: [{uses: ./.github/actions/infra-credentials}]}
-YML
-cat > "$WORK/a8/comp/leaf.yml" <<'YML'
-name: leaf
-on: workflow_call
-jobs:
-  a:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: ./.github/actions/wrap
-YML
-cat > "$WORK/a8root/.github/actions/wrap/action.yml" <<'YML'
-name: wrap
-runs:
-  using: composite
-  steps:
-    - uses: "./.github/actions/infra-credentials@main"
-YML
-printf 'name: bad\non: workflow_call\njobs: [\n' > "$WORK/a8/bad/leaf.yml"
-cat > "$WORK/a8/okc/leaf.yml" <<'YML'
-name: leaf
-on: workflow_call
-jobs:
-  a: {runs-on: ubuntu-latest, steps: [{uses: actions/checkout@v4}, {uses: ./.github/actions/notify-ops-email}]}
-YML
-# a8_mut <label> <entry> <fixture-dir> <RED|OK> <substring of the A8 line> [repo-root]
-a8_mut() {
-  local label="$1" entry="$2" extra="$3" want="$4" sub="$5" root="${6:-$REPO}" d o line
-  d="$(mirror "a8_$(printf '%s' "$label" | tr -c 'A-Za-z0-9' '_')")"
-  rm -f "$d/wf/apply-github-infra.yml"
-  sed -E "s#^jobs:\$#jobs:\n  smuggle:\n    uses: ./.github/workflows/$entry#" "$WFDIR/apply-github-infra.yml" > "$d/wf/apply-github-infra.yml"
-  if cmp -s "$WFDIR/apply-github-infra.yml" "$d/wf/apply-github-infra.yml"; then no "MUT A8 $label: did not land"; return; fi
-  cp "$extra"/*.yml "$d/wf/"
-  o="$(run_analyzer "$d/wf" "$d/action.yml" "$EXEMPT_WF" "$PLAN_ONLY" "$EXEMPT_LIST" "$root")"
-  line="$(grep -m1 -E '^(OK|RED) A8-exempt-no-reusable-loader ' <<<"$o" || true)"
-  if [[ "$line" == "$want A8-exempt-no-reusable-loader "* ]] && grep -qF -- "$sub" <<<"$line"; then
-    ok "MUT A8 $label: $want"
-  else
-    no "MUT A8 $label: want $want naming [$sub] (${line:-no A8 line; $(grep -m1 '^CRASH' <<<"$o")})"
-  fi
+# D21: the shell or directory that runs the reviewed text, at step, job or workflow level.
+mig_mut "the job step gets a no-op shell"      's#^(        run: bash apps/web-platform/infra/scripts/cf-account-migrate-job\.sh)$#\1\n        shell: "true {0}"#'
+mig_mut "the job step gets a working-directory" 's#^(        run: bash apps/web-platform/infra/scripts/cf-account-migrate-job\.sh)$#\1\n        working-directory: /tmp#'
+mig_mut "a job-level defaults.run.shell"       's#^(    timeout-minutes: 30)$#\1\n    defaults: {run: {shell: "true {0}"}}#'
+mig_mut "a workflow-level defaults.run.shell"  's#^jobs:$#defaults:\n  run:\n    shell: "true {0}"\njobs:#'
+# D18: the job timeout must cover the script's VERIFY_CAP plus the steps before it.
+mig_mut "a job's timeout-minutes drops to 20"  '0,/^    timeout-minutes: 30$/s//    timeout-minutes: 20/'
+mig_mut "a job's timeout-minutes is removed"   '0,/^    timeout-minutes: 30$/{/^    timeout-minutes: 30$/d}'
+# The env that reaches the job step: an unreviewed step key, a changed value, a job-level env.
+mig_mut "the job step env gains TF_CLI_ARGS_plan" 's#^(          DOPPLER_TOKEN: \$\{\{ secrets\.DOPPLER_TOKEN \}\})$#\1\n          TF_CLI_ARGS_plan: -refresh=false#'
+mig_mut "the job step env re-points the phase" '0,/^          MIGRATE_PHASE: .*$/s//          MIGRATE_PHASE: zone-rest/'
+mig_mut "the workflow env gains an unreviewed key" 's#^jobs:$#env:\n  TF_CLI_ARGS: -lock=false\njobs:#'
+# The one optional key (group B's in-state-update expectation): accepted on the apply job with its
+# literal value, refused on the rehearsal job and with any other value.
+EISU='          CFAM_EXPECTED_IN_STATE_UPDATES: ${{ inputs.expected_in_state_updates }}'
+mig_ctl() { # <label> <sed-expr>: the mutated fixture must stay GREEN
+  local d o
+  d="$WORK/mig-$(printf '%s' "$1" | tr -c 'A-Za-z0-9' '_')"
+  mig_fixture "$d"
+  sed -E "$2" "$WORK/mig-ok/cf-account-migrate.yml" > "$d/cf-account-migrate.yml"
+  if cmp -s "$WORK/mig-ok/cf-account-migrate.yml" "$d/cf-account-migrate.yml"; then no "CTL A4 $1: did not land"; return; fi
+  o="$(analyze "$d" "$ACTION" "" "$EXEMPT_LIST" "")"
+  if grep -q '^OK A4-migrate ' <<<"$o"; then ok "CTL A4 $1: green"; else no "CTL A4 $1: reddened ($(grep -E 'A4|^CRASH' <<<"$o"))"; fi
 }
-a8_mut "a two-hop chain through a middle workflow with no terraform text" mid.yml "$WORK/a8/chain" RED "calls bastion-host-create.yml via mid.yml"
-a8_mut "a callee loads the credentials from a flow-mapping step" leaf.yml "$WORK/a8/flow" RED "calls leaf.yml, which loads the infra credentials (job a uses the loader)"
-a8_mut "a callee loads the credentials through a local composite action" leaf.yml "$WORK/a8/comp" RED "uses ./.github/actions/wrap, which uses the loader" "$WORK/a8root"
-a8_mut "a callee that does not parse" leaf.yml "$WORK/a8/bad" RED "reaches leaf.yml, which does not parse"
-a8_mut "control: a callee whose flow-mapping steps load nothing" leaf.yml "$WORK/a8/okc" OK "no exempt workflow calls"
-# The composite walk is recursive, path-normalising and fail-closed on an unresolved local action.
-# a8_leaf <name> <step uses>: a fixture dir whose leaf.yml has one job stepping into <step uses>.
-a8_leaf() { mkdir -p "$WORK/a8/$1"; printf 'name: leaf\non: workflow_call\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: %s\n' "$2" > "$WORK/a8/$1/leaf.yml"; }
-mkdir -p "$WORK/a8root/.github/actions/wrap2" "$WORK/a8root/.github/actions/cyc-a" "$WORK/a8root/.github/actions/cyc-b"
-printf 'name: wrap2\nruns:\n  using: composite\n  steps:\n    - uses: ./.github/actions/wrap\n' > "$WORK/a8root/.github/actions/wrap2/action.yml"
-printf 'name: cyc-a\nruns:\n  using: composite\n  steps:\n    - uses: actions/checkout@v4\n    - uses: ./.github/actions/cyc-b\n' > "$WORK/a8root/.github/actions/cyc-a/action.yml"
-printf 'name: cyc-b\nruns:\n  using: composite\n  steps:\n    - uses: Jikig-AI/Soleur/.github/actions/cyc-a@main\n' > "$WORK/a8root/.github/actions/cyc-b/action.yml"
-a8_leaf two ./.github/actions/wrap2
-a8_leaf fullref jikig-ai/soleur/.github/actions/wrap@main
-a8_leaf casevar Jikig-AI/SOLEUR/.github/actions/wrap@v1
-a8_leaf dotdot ./.github/actions/nope/../wrap
-a8_leaf unres ./.github/actions/nope
-a8_leaf escape ./../outside/action
-a8_leaf cycle ./.github/actions/cyc-a
-a8_mut "a callee loads the credentials through a TWO-level composite" leaf.yml "$WORK/a8/two" RED "uses ./.github/actions/wrap2, which uses ./.github/actions/wrap, which uses the loader" "$WORK/a8root"
-a8_mut "a callee steps into the composite by its full same-repo ref" leaf.yml "$WORK/a8/fullref" RED "uses jikig-ai/soleur/.github/actions/wrap, which uses the loader" "$WORK/a8root"
-a8_mut "a callee steps into the composite with a case-varied owner/repo" leaf.yml "$WORK/a8/casevar" RED "uses Jikig-AI/SOLEUR/.github/actions/wrap, which uses the loader" "$WORK/a8root"
-a8_mut "a callee reaches the composite through a '..' segment" leaf.yml "$WORK/a8/dotdot" RED "uses ./.github/actions/nope/../wrap, which uses the loader" "$WORK/a8root"
-a8_mut "a callee steps into a local action that does not exist" leaf.yml "$WORK/a8/unres" RED "uses ./.github/actions/nope, which does not resolve to an action.yml" "$WORK/a8root"
-a8_mut "a callee steps into a local path outside the repository" leaf.yml "$WORK/a8/escape" RED "which points outside the repository" "$WORK/a8root"
-a8_mut "control: a composite cycle that never loads terminates green" leaf.yml "$WORK/a8/cycle" OK "no exempt workflow calls" "$WORK/a8root"
+mig_ctl "the apply job step carries CFAM_EXPECTED_IN_STATE_UPDATES with its literal value" "s#^(          REHEARSAL: \"false\")\$#\\1\\n${EISU//\$/\\$}#"
+mig_mut "the rehearsal job step carries CFAM_EXPECTED_IN_STATE_UPDATES" "s#^(          REHEARSAL: \"true\")\$#\\1\\n${EISU//\$/\\$}#"
+mig_mut "the apply job step's CFAM_EXPECTED_IN_STATE_UPDATES value is altered" 's#^(          REHEARSAL: "false")$#\1\n          CFAM_EXPECTED_IN_STATE_UPDATES: "cloudflare_ruleset.seo_config_settings"#'
+
+# (9) Terraform side channels the plan JSON cannot show: plan-time data sources and apply-time
+# provisioners on a spec member.
+TFSCAN="$WORK/tfscan.py"
+cat > "$TFSCAN" <<'PY'
+"""argv: <root-dir> <spec address...>. Prints `OK|RED A9-plan-time-data …` and `OK|RED A9-spec-no-provisioner …`."""
+import glob, os, re, sys
+root, members = sys.argv[1], sys.argv[2:]
+
+def blank(t):
+    """Same length and newlines; strings, comments and heredoc bodies become spaces, so only code
+    braces and code words remain. A template interpolation inside a string is blanked with it."""
+    out, i, n, st = list(t), 0, len(t), []
+    def sp(a, b):
+        for k in range(a, b):
+            if out[k] != "\n": out[k] = " "
+    while i < n:
+        c = t[i]
+        mode = st[-1] if st else "N"
+        if mode == "N":
+            if c == "#" or t.startswith("//", i):
+                j = t.find("\n", i); j = n if j < 0 else j; sp(i, j); i = j; continue
+            if t.startswith("/*", i):
+                j = t.find("*/", i + 2); j = n if j < 0 else j + 2; sp(i, j); i = j; continue
+            m = re.match(r"<<-?([A-Za-z_][A-Za-z0-9_]*)[ \t]*\n", t[i:])
+            if m:
+                tag = m.group(1); j = i + m.end()
+                while j < n:
+                    e = t.find("\n", j); e = n if e < 0 else e
+                    if t[j:e].strip() == tag: j = e; break
+                    j = e + 1
+                sp(i, j); i = j; continue
+            if c == '"': st.append("S"); sp(i, i + 1); i += 1; continue
+            i += 1; continue
+        sp(i, i + 1)
+        if mode == "S":
+            if c == "\\": sp(i, i + 2); i += 2; continue
+            if c == '"': st.pop(); i += 1; continue
+            if t.startswith("$${", i) or t.startswith("%%{", i): sp(i, i + 3); i += 3; continue
+            if t.startswith("${", i) or t.startswith("%{", i): st.append("T"); sp(i, i + 2); i += 2; continue
+            i += 1; continue
+        # T: code inside an interpolation; B: a brace group inside it
+        if c == '"': st.append("S")
+        elif c == "{": st.append("B")
+        elif c == "}": st.pop()
+        i += 1
+    return "".join(out)
+
+HDR = re.compile(r'^[ \t]*(resource|data)[ \t]+"?([A-Za-z0-9_-]+)"?[ \t]+"?([A-Za-z0-9_-]+)"?[ \t]*$')
+def top_blocks(path):
+    """-> [(kind, type, name, raw_body_blanked)] for top-level resource/data blocks, or raises."""
+    raw = open(path).read(); b = blank(raw); res, d, start, hdr = [], 0, 0, None
+    for i, c in enumerate(b):
+        if c == "{":
+            if d == 0:
+                ls = raw.rfind("\n", 0, i) + 1
+                hdr = HDR.match(raw[ls:i]); start = i
+            d += 1
+        elif c == "}":
+            d -= 1
+            if d < 0: raise ValueError("unbalanced } in %s" % path)
+            if d == 0 and hdr: res.append((hdr.group(1), hdr.group(2), hdr.group(3), b[start:i + 1])); hdr = None
+    if d != 0: raise ValueError("unbalanced { in %s" % path)
+    return res
+
+files = sorted(glob.glob(os.path.join(root, "*.tf")) + glob.glob(os.path.join(root, "modules", "**", "*.tf"), recursive=True))
+jsons = sorted(glob.glob(os.path.join(root, "*.tf.json")) + glob.glob(os.path.join(root, "modules", "**", "*.tf.json"), recursive=True))
+bad_d, bad_p, defs = [], [], {}
+for f in jsons: bad_d.append("%s is a .tf.json file (not scanned)" % os.path.relpath(f, root))
+for f in files:
+    rel = os.path.relpath(f, root)
+    try:
+        blocks = top_blocks(f)
+    except (ValueError, OSError) as e:
+        bad_d.append("%s does not scan: %s" % (rel, e)); continue
+    for kind, typ, name, body in blocks:
+        if kind == "data" and typ in ("http", "external"):
+            bad_d.append('%s declares data "%s" "%s" (it runs during terraform plan)' % (rel, typ, name))
+        if kind == "resource" and os.path.dirname(rel) == "":
+            defs.setdefault("%s.%s" % (typ, name), []).append((rel, body))
+for a in members:
+    got = defs.get(a, [])
+    if len(got) != 1:
+        bad_p.append("%s has %d resource blocks in the root (want exactly 1)" % (a, len(got))); continue
+    if re.search(r"(?<![A-Za-z0-9_-])provisioner(?![A-Za-z0-9_-])", got[0][1]):
+        bad_p.append("%s (%s) carries a provisioner block (it runs at apply, after the gate)" % (a, got[0][0]))
+print("%s A9-plan-time-data %s" % ("RED" if bad_d else "OK", "; ".join(bad_d[:5]) if bad_d
+      else "%d .tf files: no data \"http\"/\"external\", no .tf.json" % len(files)))
+print("%s A9-spec-no-provisioner %s" % ("RED" if bad_p else "OK", "; ".join(bad_p[:5]) if bad_p
+      else "all %d spec members found once; none carries a provisioner" % len(members)))
+PY
+INFRA_ROOT="$REPO/apps/web-platform/infra"
+SPEC_MEMBERS="$(bash -c 'source "$1"; while IFS= read -r ph; do cf_account_migrate_phase_spec "$ph" | jq -r "keys[]"; done < <(cf_account_migrate_phases) | sort -u' _ "$REPO/tests/scripts/lib/cf-account-migrate-gate.sh")"
+tfscan() { # <root-dir>: scanner lines; a crash is one CRASH line (never read as a verdict)
+  local o rc=0
+  # shellcheck disable=SC2086 # one spec address per word
+  o="$(python3 "$TFSCAN" "$1" $SPEC_MEMBERS 2>&1)" || rc=$?
+  if (( rc != 0 )); then printf 'CRASH rc=%s: %s\n' "$rc" "${o//$'\n'/ | }"; else printf '%s\n' "$o"; fi
+}
+if [[ "$(wc -w <<<"$SPEC_MEMBERS")" -ge 40 ]]; then ok "A9: the spec members are read from the gate library ($(wc -w <<<"$SPEC_MEMBERS") addresses)"; else no "A9: spec members not read ($SPEC_MEMBERS)"; fi
+TF_REAL="$(tfscan "$INFRA_ROOT")"
+for id in A9-plan-time-data A9-spec-no-provisioner; do
+  if grep -q "^OK $id " <<<"$TF_REAL"; then ok "$(grep "^OK $id " <<<"$TF_REAL" | cut -d' ' -f2-)"; else no "$id on the real root: $(grep -E " $id |^CRASH" <<<"$TF_REAL")"; fi
+done
+# tf_mut <label> <expect-RED-id|OK> <file> <sed-expr>: a root of symlinks with one file replaced.
+tf_mut() {
+  local d o
+  d="$WORK/tf-$(printf '%s' "$1" | tr -c 'A-Za-z0-9' '_')"
+  mkdir -p "$d"
+  for f in "$INFRA_ROOT"/*.tf; do ln -s "$f" "$d/$(basename "$f")"; done
+  ln -s "$INFRA_ROOT/modules" "$d/modules"
+  rm "$d/$3"; sed -E "$4" "$INFRA_ROOT/$3" > "$d/$3"
+  if cmp -s "$INFRA_ROOT/$3" "$d/$3"; then no "MUT A9 $1: did not land"; return; fi
+  o="$(tfscan "$d")"
+  if [[ "$2" == OK ]]; then
+    if grep -q '^OK A9-plan-time-data ' <<<"$o" && grep -q '^OK A9-spec-no-provisioner ' <<<"$o"; then ok "CTL A9 $1: green"; else no "CTL A9 $1: reddened ($o)"; fi
+  elif grep -q "^RED $2 " <<<"$o"; then ok "MUT A9 $1: $2 RED"; else no "MUT A9 $1: $2 stayed green or crashed ($o)"; fi
+}
+tf_mut 'a data "http" POST in the root' A9-plan-time-data dns.tf '$a\
+data "http" "x" {\
+  url    = "https://api.cloudflare.com/client/v4/zones/x/dns_records"\
+  method = "POST"\
+}'
+tf_mut 'a data "external" in the root' A9-plan-time-data dns.tf '$a\
+data "external" "x" {\
+  program = ["bash", "-c", "true"]\
+}'
+tf_mut 'a local-exec provisioner inside a spec member' A9-spec-no-provisioner seo-rulesets.tf 's#^resource "cloudflare_ruleset" "seo_page_redirects" \{$#&\n  provisioner "local-exec" {\n    command = "true"\n  }#'
+tf_mut 'a second resource block for a spec member' A9-spec-no-provisioner seo-rulesets.tf '$a\
+resource "cloudflare_ruleset" "seo_page_redirects" {\
+}'
+tf_mut 'a provisioner named only in a comment and a string of a spec member' OK seo-rulesets.tf 's#^resource "cloudflare_ruleset" "seo_page_redirects" \{$#&\n  \# provisioner "local-exec" { command = "x" }\n  description = "no provisioner \\"local-exec\\" {} here"#'
 
 # ── verdict ────────────────────────────────────────────────────────────────────────────────
 printf '\ntest-cf-account-migration-scope.sh: %s passed, %s failed (%s cases)\n' "$PASS" "$FAIL" "$CASES"
@@ -996,7 +1054,7 @@ if (( PASS + FAIL != CASES )); then
   printf 'CONSERVATION FAILED: PASS(%s)+FAIL(%s) != CASES(%s)\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_ASSERTIONS=86
+MIN_ASSERTIONS=92
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s\n' "$TOTAL" "$MIN_ASSERTIONS" >&2

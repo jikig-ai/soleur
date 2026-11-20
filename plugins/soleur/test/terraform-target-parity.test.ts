@@ -3530,7 +3530,11 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     // (4) another interpreter (zsh, dash, python …) or a prefix word not listed above; (5) a
     // planner phrase in a comment the line stripper keeps (stripLineComment tracks only double
     // quotes, so a `#` after an unbalanced `"` survives) is matched: an over-count that reds loudly,
-    // never a miss.
+    // never a miss; (6) a script that spells the terraform call other than `terraform [-chdir=…]
+    // plan|apply` is not a planner here: through a variable (`"$TF" plan`, `"${TF_BIN:-terraform}"
+    // apply`) or with the subcommand passed in (`terraform "$@"`, the shape the scope suite's A6
+    // `x-root.yml` row treats as a planner). cf-account-migrate.yml is pinned by name below
+    // whichever way its script spells it.
     const PFX = String.raw`["']?(?:\$\{\{\s*github\.workspace\s*\}\}\/|\$\{?GITHUB_WORKSPACE\}?\/|\.\/)?`;
     const REL = String.raw`((?:apps|scripts|tests|plugins)\/[\w./-]+\.sh)`;
     const PREFIX_WORDS = String.raw`(?:(?:[A-Za-z_]\w*=\S*|timeout(?:[ \t]+-\S+)*[ \t]+\S+|env|exec|sudo|nohup|time|command)[ \t]+)*`;
