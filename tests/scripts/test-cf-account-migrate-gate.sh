@@ -416,8 +416,16 @@ own_copies() {
   grep -nE "${OZ}|${OA}|soleur-terraform-state|web-platform/backups/|\.serial \| type|(^|[^_[:alnum:]-])aws s3(api)? " <<<"$code"
   grep -q 'cfam_r2_aws s3' <<<"$code" || echo "no-shared-call"
 }
+# sources_lib <file>: a real `source`/`.` command loads the library (directly, or through a
+# CFAM_GATE_LIB assigned to it); a filename in an assignment, echo or message alone is not loading it.
+sources_lib() {
+  local code; code="$(grep -vE '^[[:space:]]*#' "$1")"
+  grep -qE '(^|[;&|{(][[:space:]]*|[[:space:]])(source|\.)[[:space:]]+"[^#]*/cf-account-migrate-gate\.sh"' <<<"$code" && return 0
+  grep -qE '(^|[;&|{(][[:space:]]*|[[:space:]])(source|\.)[[:space:]]+"\$CFAM_GATE_LIB"' <<<"$code" \
+    && grep -qE '^readonly CFAM_GATE_LIB="[^"]*/tests/scripts/lib/cf-account-migrate-gate\.sh"$' <<<"$code"
+}
 for c in cf-account-migrate-job.sh cf-account-state-migrate.sh cf-account-migration-complete.sh; do
-  if grep -q 'cf-account-migrate-gate\.sh' < <(grep -vE '^[[:space:]]*#' "$CONSUMER_DIR/$c") && [[ -z "$(own_copies "$CONSUMER_DIR/$c")" ]]; then
+  if sources_lib "$CONSUMER_DIR/$c" && [[ -z "$(own_copies "$CONSUMER_DIR/$c")" ]]; then
     pass "one source: $c sources this library, re-types none of its ids, bucket, prefix, endpoint or serial reader, and makes every R2 call through cfam_r2_aws"
   else fail "one source: $c keeps its own copy (or does not source the library)" 1 "$(own_copies "$CONSUMER_DIR/$c")"; fi
 done
@@ -425,6 +433,10 @@ sed "s/^set -uo pipefail\$/&\nreadonly OLD_ZONE_ID=\"$OZ\"/" "$CONSUMER_DIR/cf-a
 if cmp -s "$TMP/own-copy.sh" "$CONSUMER_DIR/cf-account-state-migrate.sh"; then fail "M-own-copy: the mutation did not land" 1 ""
 elif [[ -n "$(own_copies "$TMP/own-copy.sh")" ]]; then pass "M-own-copy: a state forget that re-types the OLD zone id is caught (RED)"
 else fail "M-own-copy: a re-typed OLD zone id was not seen" 1 ""; fi
+sed 's/ || source "\$CFAM_GATE_LIB"; }/; }/' "$CONSUMER_DIR/cf-account-migration-complete.sh" > "$TMP/no-source.sh"
+if cmp -s "$TMP/no-source.sh" "$CONSUMER_DIR/cf-account-migration-complete.sh"; then fail "M-no-source: the mutation did not land" 1 ""
+elif ! sources_lib "$TMP/no-source.sh"; then pass "M-no-source: a predicate that names the library but never sources it is caught (RED)"
+else fail "M-no-source: a predicate that never sources the library still reads as sourcing it" 1 ""; fi
 sed 's/^    cfam_r2_aws s3 cp /    aws s3 cp /' "$CONSUMER_DIR/cf-account-migration-complete.sh" > "$TMP/bare-aws.sh"
 if cmp -s "$TMP/bare-aws.sh" "$CONSUMER_DIR/cf-account-migration-complete.sh"; then fail "M-bare-aws: the mutation did not land" 1 ""
 elif [[ -n "$(own_copies "$TMP/bare-aws.sh")" ]]; then pass "M-bare-aws: a predicate copy made with a bare aws call is caught (RED)"
@@ -470,6 +482,6 @@ r2_mut "M-r2-bound: the 60 s bound dropped" 's|^  timeout 60 env |  env |' unbou
 
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 88 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 88)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 89 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 89)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

@@ -92,7 +92,8 @@ row_r7() {
   line="$(b_line "$1")"; [[ -n "$line" ]] || { echo "    no B line" >&2; return 1; }
   for n in 0 1 2; do
     d="$SB/r7-$n"; rm -rf "$d"; mkdir -p "$d"
-    ( git_fixture_env "$d" || exit 1
+    (
+      git_fixture_env "$d" || exit 1
       cd "$d" && git init -q . \
         && { [[ "$n" -lt 1 ]] || { mkdir -p a/feat-one-shot-12931-cf-account-migration && : > a/feat-one-shot-12931-cf-account-migration/bootstrap.sh; }; } \
         && { [[ "$n" -lt 2 ]] || { mkdir -p b/feat-one-shot-12931-cf-account-migration && : > b/feat-one-shot-12931-cf-account-migration/bootstrap.sh; }; } \

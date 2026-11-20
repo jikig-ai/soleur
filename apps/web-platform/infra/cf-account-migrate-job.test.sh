@@ -780,6 +780,33 @@ for wd in https://soleur.ai/pages/legal/privacy-policy.html https://soleur.ai/bl
   new_case "wrongdest-each" redirects-dns false; printf '%s' "$wd" >"$LAST_D/mode.wrongdest"; run_job "$LAST_D" "$PRISTINE"; WHY=""
   chk_dest_for "$LAST_D" "$wd"; verdict "$?" "verify: $wd 301ing to the wrong page alone fails, naming what came back ($WHY)"
 done
+# The verify's exact targets are a hand-kept copy of the Terraform and of the runbook's Verify
+# block: tie each pair to both, so a .tf retarget cannot leave a red run after a correct apply.
+job_pairs() { sed -n '/^  local -a pairs=($/,/^  )$/p' "$REPO/apps/web-platform/infra/scripts/cf-account-migrate-job.sh" | sed -n 's/^    "\(https:[^|]*\)|\(https:[^"]*\)"$/\1 \2/p'; }
+tf_target_of() { # <source-url> -> the Terraform's target for it
+  local src="$1" inf="$REPO/apps/web-platform/infra" slug canon
+  case "$src" in
+    https://soleur.ai/pages/agents.html)
+      awk '/http.request.uri.path eq \\"\/pages\/agents.html\\"/{on=1} on && /value *= *"https:/{sub(/.*value *= *"/,""); sub(/".*/,""); print; exit}' "$inf/seo-rulesets.tf" ;;
+    https://soleur.ai/pages/legal/*)
+      grep -A1 -F "source_url            = \"${src#https://}\"" "$inf/seo-bulk-redirects.tf" | sed -n 's/^ *target_url *= *"\(.*\)"$/\1/p' ;;
+    https://soleur.ai/blog/*)
+      slug="${src#https://soleur.ai/blog/}"; slug="${slug%/}"
+      canon="$(sed -n "s/^ *\"${slug}\" *= *\"\([^\"]*\)\"$/\1/p" "$inf/seo-bulk-redirects.tf")"
+      [[ -n "$canon" ]] && printf 'https://soleur.ai/blog/%s/\n' "$canon" ;;
+    https://www.soleur.ai/) printf 'https://soleur.ai/\n' ;;   # the canonical-host rule, not a per-path target
+  esac
+}
+r=1; WHY=""; n=0
+while read -r src want; do
+  n=$((n + 1))
+  [[ "$(tf_target_of "$src")" == "$want" ]] || { WHY+=" tf:$src"; continue; }
+  rb="$(grep -F "curl " "$REPO/knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md" || true)"
+  rb="$(grep -F "$src" <<<"$rb" || true)"
+  [[ -n "$rb" ]] && grep -qF "301" <<<"$rb" && grep -qF "$want" <<<"$rb" || WHY+=" runbook:$src"
+done < <(job_pairs)
+[[ "$n" -eq 4 && -z "$WHY" ]] && r=0
+verdict "$r" "the verify's four exact targets equal the Terraform's and the runbook Verify block's (n=$n$WHY)"
 chk_dest_cowork() { chk_dest_for "$1" 'https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/'; }
 H6c="$(mk_mutant drop-pair '/^    "https:\/\/soleur.ai\/blog\/2026-03-16-soleur-vs-anthropic-cowork\/|/d')"
 red "H6c post-apply verify drops a legacy redirect pair" "$H6c" chk_dest_cowork '^rc:0$' setup_wrongdest_cowork
@@ -821,7 +848,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=103
+EXPECTED_CASES=104
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

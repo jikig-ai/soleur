@@ -162,10 +162,13 @@ if [[ "${1:-}" == secrets && "${2:-}" == get ]]; then
     printf '%s' "$v"
   else
     case "${3:-}" in
-      # R2 stays on the legacy account (#12931, ADR-329): bootstrap.sh must read CF_R2_ACCOUNT_ID.
-      # CF_ACCOUNT_ID returns a decoy, so a revert routes the probe off the stubbed endpoint and reds.
-      CF_R2_ACCOUNT_ID) printf '%s' "${STUB_ACCT:?}" ;;
-      CF_ACCOUNT_ID) printf '%s' 'decoysoleuraccountnotr2' ;;
+      # R2 stays on the legacy account (#12931, ADR-329): bootstrap.sh must read CF_R2_ACCOUNT_ID
+      # from soleur/prd_terraform. Only that exact argv gets the stubbed account; any other key,
+      # project or config gets a well-formed decoy id, so a revert passes the endpoint shape check
+      # and routes the probe to an unscripted host, which the curl stub refuses.
+      CF_R2_ACCOUNT_ID|CF_ACCOUNT_ID)
+        if [[ "$*" == "secrets get CF_R2_ACCOUNT_ID -p soleur -c prd_terraform --plain" ]]; then printf '%s' "${STUB_ACCT:?}"
+        else printf '%s' 'ffffffffffffffffffffffffffffffff'; fi ;;
       *) printf 'stub-%s' "${3:-}" ;;
     esac
   fi

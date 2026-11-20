@@ -16,7 +16,7 @@ apps/web-platform/infra/canary-bundle-claim-check.test.sh	6000	measured
 apps/web-platform/infra/cat-deploy-state.test.sh	20500	measured
 apps/web-platform/infra/cat-infra-config-state.test.sh	0	measured
 apps/web-platform/infra/cat-inngest-verify-state.test.sh	0	measured
-apps/web-platform/infra/cf-account-migrate-job.test.sh	4000	floor
+apps/web-platform/infra/cf-account-migrate-job.test.sh	57000	estimate
 apps/web-platform/infra/cf-account-migration-complete.test.sh	4000	floor
 apps/web-platform/infra/cf-account-state-migrate.test.sh	4000	floor
 apps/web-platform/infra/ci-deploy-wrapper.test.sh	1000	measured

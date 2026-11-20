@@ -798,18 +798,31 @@ src_lacks 'DELETE\|' "D12 no DELETE row in any migration table"
 # so the POSITIVE control below can prove it matches a synthetic write-flag line
 # before trusting the negative on the SUT (fix-round seat: the first revision of
 # this pattern carried a stray leading '-' and could never match a real flag).
-D12C_PAT='(^|[[:space:]])(-d|-T|-F|--data|--data-binary|--data-raw|--data-urlencode|--form|--form-string|--upload-file|--request)([[:space:]=]|$)'
-printf '%s\n' 'curl --disable -d '"'"'{}'"'"' https://api.cloudflare.com/x' > "$WORK/d12c-positive.txt"
-if grep -qE -- "$D12C_PAT" "$WORK/d12c-positive.txt"; then ok "D12c positive control: pattern catches an implicit-write flag"; else no "D12c pattern cannot match -d — the guard below would be vacuous"; fi
+# A bundled short flag ending in a body letter (-sSd, -sT) is one token to curl; --json and
+# --data-ascii also send a body (test-design seat F1: each survived the earlier pattern).
+D12C_PAT='(^|[[:space:]])(-[A-Za-z]*[dTF]|--data|--data-binary|--data-raw|--data-ascii|--data-urlencode|--json|--form|--form-string|--upload-file|--request)([[:space:]=]|$)'
+d12c_pos_bad=""
+for f in "-d '{}'" "-sSd '{}'" "-T body.json" "-F a=b" "--json '{}'" "--data-ascii '{}'" "--data-raw '{}'" "--upload-file x"; do
+  grep -qE -- "$D12C_PAT" <<<"curl --disable --noproxy '*' $f https://api.cloudflare.com/x" || d12c_pos_bad+=" [$f]"
+done
+for f in "-sS" "-H 'Accept: x'" "-w '%{http_code}'" "--max-time 15" "--disable"; do
+  ! grep -qE -- "$D12C_PAT" <<<"curl $f https://api.cloudflare.com/x" || d12c_pos_bad+=" [read flag $f matched]"
+done
+if [[ -z "$d12c_pos_bad" ]]; then ok "D12c positive control: pattern catches every body flag spelling and no read flag"; else no "D12c pattern controls:$d12c_pos_bad"; fi
 # Since #12931 (CTO L49) the migration profiles send invalid-body write probes, so
 # the guard is SCOPED rather than absolute: every write-flag line must carry the
 # fixed INVALID_BODY literal, and the run path sends it from exactly ONE site.
 grep -nE -- "$D12C_PAT" "$SUT" > "$WORK/d12c-hits.txt" || true
-if [[ -s "$WORK/d12c-hits.txt" ]] && ! grep -q . < <(grep -vF 'INVALID_BODY' "$WORK/d12c-hits.txt"); then
-  ok "D12c every write-flag line in source carries INVALID_BODY (no other body can be sent)"
+if [[ -s "$WORK/d12c-hits.txt" ]] && ! grep -qvF 'INVALID_BODY' "$WORK/d12c-hits.txt"; then
+  ok "D12c every write-flag line in source carries INVALID_BODY"
 else
   no "D12c a write-flag line without INVALID_BODY (see $WORK/d12c-hits.txt)"
 fi
+# ...and exactly ONE body flag per such line, or a second body rides beside INVALID_BODY.
+d12c_multi() { local l; while IFS= read -r l; do [[ "$(grep -oE -- "$D12C_PAT" <<<"$l" | wc -l)" -eq 1 ]] || printf '%s\n' "$l"; done < "$1"; }
+printf '%s\n' "12:curl -X POST --data-binary \"\$INVALID_BODY\" --data-raw '{\"name\":\"x\"}' https://x" > "$WORK/d12c-multi-positive.txt"
+if [[ -n "$(d12c_multi "$WORK/d12c-multi-positive.txt")" ]]; then ok "D12c positive control: a second body flag beside INVALID_BODY is caught"; else no "D12c multi-flag check cannot see a second body flag"; fi
+if [[ -z "$(d12c_multi "$WORK/d12c-hits.txt")" ]]; then ok "D12c each write-flag line carries exactly one body flag (no other body can be sent)"; else no "D12c a write-flag line carries a second body flag: $(d12c_multi "$WORK/d12c-hits.txt" | head -1)"; fi
 # shellcheck disable=SC2016  # literal source text is the assertion
 assert_eq "D12c the run path sends INVALID_BODY from exactly one curl site" 1 "$(grep -cF -- '--data-binary "$INVALID_BODY"' "$SUT" || true)"
 src_lacks 'doppler[[:space:]]+(secrets[[:space:]]+)?(set|upload|download|delete|push|create)\b' "D12b no Doppler write verb in source"

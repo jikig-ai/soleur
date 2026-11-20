@@ -68,7 +68,8 @@
 #               its pipefail fences only, so a fence without pipefail (18 lines in 6 files), prose (12 lines, among them the inline probe templates at
 #               plugins/soleur/skills/ship/SKILL.md "HTTP probe" and "DNS probe"), a fence inside a blockquote or a <pre> block, a fence opened on a list-item line
 #               (`- ```bash`) and a split pipe inside a fence are not read; markdown under knowledge-base (runbooks); the 14 hits in 6 scripts under
-#               knowledge-base archive/ directories (frozen records, never run); a path that holds a colon, a quote, a backslash or a control character (the sweep
+#               knowledge-base archive/ directories (frozen records, never run, with one exception: the #12931 staged bootstrap script in its
+#               archived spec directory is run by the operator and by its own suite, so a reader added there is not seen here); a path that holds a colon, a quote, a backslash or a control character (the sweep
 #               REFUSES such a tree: UNRESOLVED, since the hit format cannot carry it); and this file.
 #   syntax      a reader behind a function (25 candidate functions, 0 call sites); a compound-command opener or a reader that is not the first command of its group
 #               (`x | if grep -q p; then`, `x | while grep -q p`, `x | ! grep -q p`, `x | { cd d; grep -q p; }`; `{ grep -q p; }` and `( grep -q p )` ARE read); a

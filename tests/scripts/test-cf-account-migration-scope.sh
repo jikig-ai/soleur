@@ -453,10 +453,7 @@ bad6, n6, followed = [], 0, 0
 for ex in sorted(EXEMPT - PLAN_ONLY):
     if ex not in texts: continue
     n6 += 1
-    doc = docs.get(ex, (None, ""))[0]
-    if doc is None:
-        try: doc = yaml.load(texts[ex], Loader=Loader) or {}
-        except yaml.YAMLError: doc = {}
+    doc = docs.get(ex, (None, ""))[0] or {}   # a parse failure already printed RED parse
     runs = [str(st.get("run") or "") for j in ((doc.get("jobs") or {}).values()) if isinstance(j, dict)
             for st in (j.get("steps") or []) if isinstance(st, dict)]
     run_nt = "\n".join(normal_text(r) for r in runs)
@@ -483,18 +480,32 @@ out("RED" if n6 < 8 else "OK", "A6-floor", "%d exempt non-plan-only workflows ch
 # So an exempt workflow must not call a local reusable workflow that loads the credentials (the
 # callee would inherit the exemption), and no exempt name may be a workflow_call-only workflow
 # (its own name never reaches the predicate, so exempting it does nothing).
-REUSE = re.compile(r"^[ \t]*uses:[ \t]*[\"']?\./\.github/workflows/([A-Za-z0-9._-]+\.ya?ml)[\"']?[ \t]*(?:#.*)?$", re.M)
+# The callee set is read from the PARSED jobs.<id>.uses, so quoting, flow mappings and a full
+# same-repo ref (owner/repo/.github/workflows/x.yml@ref, whose workflow_ref is still the caller's)
+# all resolve; it is followed transitively, and a reusable workflow from another repository is
+# refused outright (its body is not in this tree, so a loader in it cannot be ruled out).
+REUSE = re.compile(r"(?:\./|jikig-ai/soleur/)\.github/workflows/([A-Za-z0-9._-]+\.ya?ml)(?:@\S+)?")
+LOADER_ANY = re.compile(r"^[ \t]*(?:-[ \t]+)?uses:[ \t]*[\"']?(?:\./|jikig-ai/soleur/)\.github/actions/infra-credentials/?(?:@\S+)?[\"']?[ \t]*(?:#.*)?$", re.M)
+def job_uses(doc):
+    jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    return [str(j.get("uses") or "").strip() for j in (jobs or {}).values() if isinstance(j, dict) and j.get("uses")]
 bad8 = []
 for ex in sorted(EXEMPT):
     if ex not in texts: continue
-    for m in REUSE.finditer(code_lines(texts[ex])):
-        callee = m.group(1)
-        if callee in texts and LOADER.search(texts[callee]):
-            bad8.append("%s calls %s, which loads the infra credentials" % (ex, callee))
-    doc = docs.get(ex, (None, ""))[0]
-    if doc is None:
-        try: doc = yaml.load(texts[ex], Loader=Loader) or {}
-        except yaml.YAMLError: doc = {}
+    doc = docs.get(ex, (None, ""))[0] or {}   # a parse failure already printed RED parse
+    seen, todo = set(), [ex]
+    while todo:
+        cur = todo.pop()
+        for u in job_uses(docs.get(cur, (None, ""))[0] or {}):
+            m = REUSE.fullmatch(u)
+            if not m:
+                bad8.append("%s (via %s) calls a reusable workflow outside this repository: %s" % (ex, cur, u)); continue
+            callee = m.group(1)
+            if callee in seen: continue
+            seen.add(callee)
+            if callee in texts and LOADER_ANY.search(texts[callee]):
+                bad8.append("%s calls %s%s, which loads the infra credentials" % (ex, callee, "" if cur == ex else " via " + cur))
+            todo.append(callee)
     trig = doc.get("on", doc.get(True)) if isinstance(doc, dict) else None
     keys = set(trig) if isinstance(trig, dict) else ({trig} if isinstance(trig, str) else set(trig or []))
     if keys == {"workflow_call"}:
@@ -615,6 +626,9 @@ AWPI=apply-web-platform-infra.yml
 mut_row "an exempt workflow starts planning the root" A6-exempt-no-root-planner apply-github-infra.yml 's#^  INFRA_DIR: infra/github#  INFRA_DIR: apps/web-platform/infra#'
 mut_row "an exempt workflow calls the credential-loading bastion workflow" A8-exempt-no-reusable-loader apply-github-infra.yml 's#^jobs:$#jobs:\n  smuggle:\n    uses: ./.github/workflows/bastion-host-create.yml#'
 mut_row "an exempt workflow calls the bastion workflow by a quoted path" A8-exempt-no-reusable-loader apply-github-infra.yml 's#^jobs:$#jobs:\n  smuggle:\n    uses: "./.github/workflows/bastion-host-create.yml"#'
+mut_row "an exempt workflow calls the bastion workflow by its full same-repo ref" A8-exempt-no-reusable-loader apply-github-infra.yml 's#^jobs:$#jobs:\n  smuggle:\n    uses: jikig-ai/soleur/.github/workflows/bastion-host-create.yml@main\n    secrets: inherit#'
+mut_row "an exempt workflow calls the bastion workflow from a flow mapping" A8-exempt-no-reusable-loader apply-github-infra.yml 's#^jobs:$#jobs:\n  smuggle: { uses: ./.github/workflows/bastion-host-create.yml }#'
+mut_row "an exempt workflow calls a reusable workflow from another repository" A8-exempt-no-reusable-loader apply-github-infra.yml 's#^jobs:$#jobs:\n  smuggle:\n    uses: other-org/other-repo/.github/workflows/x.yml@v1#'
 mut_row "a gated root's directory becomes unresolvable" A1-unresolvable cf-lb-overlay.yml      's#^  INFRA_DIR: apps/web-platform/infra#  INFRA_DIR: ${{ vars.SOME_DIR }}#'
 mut_row "a root planner drops the loader entirely"  A1-unknown-planner  apply-deploy-pipeline-fix.yml 's#uses: \./\.github/actions/infra-credentials#uses: ./.github/actions/not-the-loader#'
 mut_row "the loader is removed from one gated job"  A2-loader-first     "$AWPI"                '/^  apply:$/,/^  [a-z_]+:$/s#uses: \./\.github/actions/infra-credentials#uses: ./.github/actions/not-the-loader#'
@@ -742,7 +756,11 @@ mig_mut() { # <label> <sed-expr>
   mig_fixture "$d"
   sed -E "$2" "$WORK/mig-ok/cf-account-migrate.yml" > "$d/cf-account-migrate.yml"
   if cmp -s "$WORK/mig-ok/cf-account-migrate.yml" "$d/cf-account-migrate.yml"; then no "MUT A4 $1: did not land"; return; fi
-  if grep -q '^RED A4-migrate ' < <(analyze "$d" "$ACTION" "" "$EXEMPT_LIST" ""); then ok "MUT A4 $1: RED"; else no "MUT A4 $1: stayed green"; fi
+  # Captured first: analyze writes the shared pickle cache, so it must finish (and its exit status
+  # count) before the verdict is read; a crash that printed RED is not a kill.
+  local o rc=0
+  o="$(analyze "$d" "$ACTION" "" "$EXEMPT_LIST" "")" || rc=$?
+  if [[ "$rc" -eq 0 ]] && grep -q '^RED A4-migrate ' <<<"$o"; then ok "MUT A4 $1: RED"; else no "MUT A4 $1: stayed green (rc=$rc)"; fi
 }
 mig_mut "concurrency group differs"   's#group: terraform-apply-web-platform-host#group: cf-migrate#'
 mig_mut "cancel-in-progress true"     's#cancel-in-progress: false#cancel-in-progress: true#'
@@ -765,7 +783,7 @@ if (( PASS + FAIL != CASES )); then
   printf 'CONSERVATION FAILED: PASS(%s)+FAIL(%s) != CASES(%s)\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_ASSERTIONS=66
+MIN_ASSERTIONS=69
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s\n' "$TOTAL" "$MIN_ASSERTIONS" >&2

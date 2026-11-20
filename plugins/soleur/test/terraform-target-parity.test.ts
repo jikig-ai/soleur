@@ -3506,14 +3506,29 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     // cf-account-migrate-job.sh, not inline YAML). Every other entry must be found, and nothing
     // else may be.
     const HAND_LISTED = ["infra-validation.yml", "cf-account-migrate.yml"];
-    expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => !HAND_LISTED.includes(f)).sort());
-    expect(found.length).toBe(5);
-    // The filter above removes nothing for a hand-listed name that is missing from the list, so
-    // deleting one would drop it from every parity loop with this census still green.
-    for (const h of HAND_LISTED) {
-      expect(MAIN_ROOT_TF_WORKFLOWS).toContain(h);
-      expect(existsSync(join(dir, h))).toBe(true);
-    }
+    // One equality: a hand-listed name missing from the list, or one the census also finds (it
+    // would appear twice), both red. A missing file throws in the parity loops' readFileSync.
+    expect([...found, ...HAND_LISTED].sort()).toEqual([...MAIN_ROOT_TF_WORKFLOWS].sort());
+    // Independent of HAND_LISTED, so deleting a name from both lists still reds: a workflow that
+    // runs a repo script which itself plans or applies the root must be in the list.
+    const SCRIPT_CALL = /\bbash\s+["']?(?:\$\{\{\s*github\.workspace\s*\}\}\/|\.\/)?((?:apps|scripts|tests|plugins)\/[\w./-]+\.sh)/g;
+    const scriptPlanners = readdirSync(dir)
+      .filter((f) => f.endsWith(".yml"))
+      .filter((f) => {
+        const t = stripComments(readFileSync(join(dir, f), "utf8"));
+        const rootInWorkflow = MAIN_ROOT_FORMS.some((re) => re.test(t));
+        return [...t.matchAll(SCRIPT_CALL)].some(([, rel]) => {
+          const sp = join(REPO_ROOT, rel);
+          if (!existsSync(sp)) return false;
+          const st = stripComments(readFileSync(sp, "utf8"));
+          // The root may be named by the workflow (INFRA_DIR), the script, or the script's own home.
+          const namesRoot = rootInWorkflow || rel.startsWith("apps/web-platform/infra/")
+            || /apps\/web-platform\/infra(?![\w\/-])/.test(st);
+          return /terraform\s+(-chdir=\S+\s+)?(plan|apply)\b/.test(st) && namesRoot;
+        });
+      });
+    for (const f of scriptPlanners) expect(MAIN_ROOT_TF_WORKFLOWS).toContain(f);
+    expect(scriptPlanners).toContain("cf-account-migrate.yml");
   });
 
   // ─── Inline pin-load arm (follower retired, #8211 PR2 / ADR-237 D6 amendment) ───────
