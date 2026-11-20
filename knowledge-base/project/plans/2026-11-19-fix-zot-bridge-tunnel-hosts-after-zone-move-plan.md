@@ -427,7 +427,9 @@ does; sha256 digests are compared, never printed.
 
 6.1 Dispatch `apply_target=manual-rerun` (or re-run the Phase 4 push apply). It must be green,
     including "Verify tunnel ingress origins" with `deploy.`, `ssh.` and `registry.` checked against
-    the new tunnel.
+    the new tunnel. Its plan must show the three `_soleur` Access apps as `["no-op"]`: the policy gate
+    refuses any `_soleur` app update whose pinned attributes differ from state, so a refresh that fills
+    `policies` or `self_hosted_domains` would block every later apply and needs a gate fix first.
 6.2 Run `doppler run -p soleur -c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh`. It
     must report `REGISTRY_PUSH_ACCESS_TOKEN` and `CI_SSH_ACCESS_TOKEN` LIVE in every config.
 6.3 The brief already authorizes these re-runs ("re-run the failed push runs"); no separate go.

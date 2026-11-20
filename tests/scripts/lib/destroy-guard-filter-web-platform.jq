@@ -336,6 +336,7 @@ def deploy_policy_soleur_app_unsafe:
     elif ($a | type) != "object" or ($u | type) != "object" then true
     elif any(deploy_policy_soleur_app_keys[]; . as $k | $u[$k] | deploy_policy_has_true) then true
     elif $a.type != "self_hosted" then true
+    # Plan JSON does not carry var.app_domain_base, so only the host label is checked here; static Q4 pins the full domain.
     elif ($a.domain | type) != "string" or ($a.domain | startswith($host + ".") | not) or ($a.domain | test("[/*]")) then true
     elif any(deploy_policy_soleur_app_keys[2:][]; . as $k | $a[$k] | deploy_policy_blank | not) then true
     elif $act == ["update"] and any(deploy_policy_soleur_app_keys[]; . as $k | $a[$k] != $b[$k]?) then true
