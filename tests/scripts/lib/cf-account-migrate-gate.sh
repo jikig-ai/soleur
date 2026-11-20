@@ -197,6 +197,10 @@ cf_account_migrate_gate() {
 
   # Guarded: a failed jq here yields "", `[[ "" -gt 0 ]]` is false, and the replace arms below
   # would silently be skipped.
+  # A class outside the four is a typo in the spec, and the class check below would grade it as
+  # nothing (any action passes): refuse the phase instead (structural seat, D6).
+  v="$(jq -r '[to_entries[] | select(.value != "create" and .value != "import" and .value != "mutable" and .value != "replace") | "\(.key)=\(.value)"] | join(" ")' <<<"$spec")" || { _cfam_eval_fail; return 1; }
+  [[ -z "$v" ]] || { echo "cf_account_migrate_gate: REFUSE — phase ${phase} declares an unknown class (${v}); the classes are create, import, mutable, replace"; return 1; }
   n_rep="$(jq -r '[to_entries[] | select(.value=="replace")] | length' <<<"$spec")" || { _cfam_eval_fail; return 1; }
   plan_gate_assert_numeric "cf_account_migrate_gate" "replace_count=${n_rep}" || return 1
   if [[ -z "$state_json" || ! -r "$state_json" ]] || ! jq -e '.values' "$state_json" >/dev/null 2>&1; then
@@ -285,14 +289,15 @@ cf_account_migrate_gate() {
 
   # A non-Cloudflare address in the allow-set (doppler_secret.cf_zone_id_prd, the github secrets,
   # the dns-edit secret) republishes an id or token; it must not republish an OLD id. Any string
-  # leaf of its planned `after` equal to the OLD zone or account id is refused. Scoped to the
+  # leaf of its planned `after` that CONTAINS the OLD zone or account id (alone, or inside a URL or
+  # JSON blob) is refused. Scoped to the
   # allow-set: an out-of-set change is already refused above, and an R2 secret outside it may
   # legitimately carry the legacy account.
   v="$(jq -r --argjson spec "$spec" --arg oz "$CFAM_OLD_ZONE_ID" --arg oa "$CFAM_OLD_ACCOUNT_ID" '
     .resource_changes[] | select((.mode // "managed") == "managed")
     | select($spec[.address] != null) | select(.type | startswith("cloudflare_") | not)
     | select(.change.after != null)
-    | select([.change.after | .. | strings | ascii_downcase | select(. == $oz or . == $oa)] | length > 0)
+    | select([.change.after | .. | strings | ascii_downcase | select(contains($oz) or contains($oa))] | length > 0)
     | "REFUSE \(.address) republishes an OLD zone/account id in its planned value"' "$plan_json")" || { _cfam_eval_fail; return 1; }
   violations+="${v:+$v$'\n'}"
 

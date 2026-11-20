@@ -339,7 +339,7 @@ While the predicate is false, every plan-capable job of `apply-web-platform-infr
 
 #### Phase 2 — Redirect restore (after PR1 merges; operator-authorized dispatches)
 
-1. Merge PR1 with a merge-commit line containing exactly `[skip-web-platform-apply]`. Arm a watch on any push-triggered run anyway (`hr-dispatch-async-must-arm-watch`).
+1. Merge PR1 with `[skip-web-platform-apply]` on its own line in a branch commit's message (the queue's squash carries commit messages, never the PR body; runbook Phase 1 has the pre-queue check). Arm a watch on any push-triggered run anyway (`hr-dispatch-async-must-arm-watch`).
 2. **Re-ruled (CTO ruling D11, 2026-11-19):** this sequence is the staged `bootstrap.sh` in the #12931 spec directory (`soleur:operator-bootstrap`, ADR-264), not one typed go. Each stage is idempotent and one prompt-approved write: `prev-0a`, `flip-ids`, `swap-0a` (staged `redirects-dns` probe, copy, digest compare, only then delete `_NEXT`), `branch-copies-zone-id`, then the `redirects-dns` dispatch; `prev-0b`, `swap-0b`, `branch-copies-tokens` (refuses while any `CF_API_TOKEN_{PURGE,DNS_EDIT}_NEXT` exists), then the `zone-rest` dispatch. The original single-go design follows. `Operator-authorizes:` ~~one typed go covering the whole sequence~~ (CTO devex: fewer separate approvals while the incident is live). The agent:
    - copies the live `CF_ZONE_ID`, `CF_ACCOUNT_ID` and Phase 0a token values to `<KEY>_PREV`;
    - flips `prd_terraform` `CF_ZONE_ID` to `951ce525552201ec6c696b24251abed7` and `CF_ACCOUNT_ID` to `66d4f93f7397f196544e9fe84c3557c2`, and swaps each `<KEY>` ← `<KEY>_NEXT`;
@@ -965,7 +965,7 @@ Artifact and vector pairs for `soleur:engineering:review:user-impact-reviewer`:
 - [ ] ADR-329 exists (status `adopting`) and the `model.c4` edits are present.
 - [ ] Doppler `prd_terraform` `CF_R2_ACCOUNT_ID` is present before merge, verified by `doppler secrets get CF_R2_ACCOUNT_ID --plain -p soleur -c prd_terraform | cut -c1-8` printing `4d5ba6f0`.
 
-- [ ] The PR1 merge-commit message carries `[skip-web-platform-apply]` on its own line (checked by `soleur:ship` before merge), and the PR body's first line answers "does merging this alone mutate production?" with "No".
+- [ ] The PR1 merge-commit message carries `[skip-web-platform-apply]` on its own line (the merge queue squashes with the commit messages, so it rides in a branch commit's message; checked before queueing with the runbook Phase 1 `git log origin/main..HEAD` line, no ship gate does this), and the PR body's first line answers "does merging this alone mutate production?" with "No".
 - [ ] The registry user_data render delta on the PR1 diff is `deliver=false`.
 - [ ] `apps/cla-evidence/infra/bootstrap.sh` sources `TF_VAR_cf_account_id` from `CF_R2_ACCOUNT_ID`, and `main.test.sh` asserts it.
 

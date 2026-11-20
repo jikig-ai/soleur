@@ -174,6 +174,15 @@ check "row 3i: an in-set account create whose account_id is known only after app
 # variables.tf validations stop it upstream; this is the gate's own refusal).
 set_after "$TMP/r3j.json" doppler_secret.cf_zone_id_prd "{name:\"CF_ZONE_ID\",value:\"$OZ\"}"
 check "row 3j: doppler_secret.cf_zone_id_prd planned with the OLD zone id is refused" 1 "republishes an OLD zone/account id" redirects-dns "$TMP/r3j.json"
+# U6: an OLD id inside a longer string (a URL) is still a republish; U7: a typo'd class in the
+# spec refuses the phase rather than grading that address as nothing (structural seat).
+set_after "$TMP/u6.json" doppler_secret.cf_zone_id_prd "{name:\"CF_ZONE_ID\",value:\"https://api.cloudflare.com/client/v4/zones/$OZ/x\"}"
+check "U6: a non-Cloudflare value carrying the OLD zone id inside a URL is refused" 1 "republishes an OLD zone/account id" redirects-dns "$TMP/u6.json"
+u7_rc=0
+u7_out="$(cf_account_migrate_phase_spec() { printf '{"%s":"creat"}' "$SCS"; }; cf_account_migrate_gate redirects-dns "$VALID" 2>&1)" || u7_rc=$?
+if [[ "$u7_rc" -eq 1 ]] && grep -qF "declares an unknown class (${SCS}=creat)" <<<"$u7_out"; then pass "U7: a spec class outside create/import/mutable/replace refuses the phase"
+else fail "U7: unknown spec class not refused" "$u7_rc" "$u7_out"; fi
+
 set_after "$TMP/r3j2.json" doppler_secret.cf_zone_id_prd "{name:\"CF_ZONE_ID\",value:\"$NZ\"}"
 check "row 3j2: doppler_secret.cf_zone_id_prd planned with the NEW zone id passes" 0 "verdict=PASS" redirects-dns "$TMP/r3j2.json"
 
@@ -482,6 +491,6 @@ r2_mut "M-r2-bound: the 60 s bound dropped" 's|^  timeout 60 env |  env |' unbou
 
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 89 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 89)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 91 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 91)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]
