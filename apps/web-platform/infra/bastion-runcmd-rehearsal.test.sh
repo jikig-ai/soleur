@@ -111,7 +111,7 @@ declare -A ROW_MODE=([B1]=settled [B2]=reboot [M1]=settled [M2]=settled [F1]=set
 declare -A ROW_IMG=([B1]=min [B2]=min [M1]=min [M2]=min [F1]=min [F1-M]=min [FA]=min [B1-C]=cloud)
 # Assertions each row makes (its assert_* function); a row that makes a different number is a FAIL.
 declare -A ROW_CASES=([B1]=21 [B2]=6 [M1]=4 [M2]=4 [F1]=3 [F1-M]=5 [FA]=2 [B1-C]=10)
-STATIC_CASES=80
+STATIC_CASES=81
 
 # IMAGE_ASSUMED — the declared contract with the Hetzner image (ADR-327 amendment) AND the minimal
 # fixture's install list: packages the template uses but never installs, and the users its rules or
@@ -836,8 +836,16 @@ done
 chk "verdict: SKIP fails on a gate event (dispatch, schedule, empty, or unset under CI) and not on pull_request/push" \
   "$([ "$_sk" = " none=no ci=yes gha=yes pr=no push=no dispatch=yes schedule=yes empty=yes" ]; echo $?)" "table:$_sk"
 _o="$(env -i PATH="$PATH" HOME="${HOME:-/tmp}" CI= GITHUB_ACTIONS=true BRH_STATIC_ONLY=1 BRH_REFUSAL_PROBE=1 timeout 60 bash "$SELF" 2>&1)"; _r=$?
-chk "CI refusals: GITHUB_ACTIONS=true with CI='' still refuses BRH_STATIC_ONLY (BRH_SUBSET_REFUSED)" \
-  "$([ "$_r" -eq 1 ] && printf '%s' "$_o" | grep -q '^BRH_SUBSET_REFUSED: BRH_STATIC_ONLY'; echo $?)" "rc=$_r $(head -c 300 <<<"$_o")"
+chk "CI refusals: GITHUB_ACTIONS=true with CI='' still refuses BRH_STATIC_ONLY (BRH_SUBSET_REFUSED, and its ::error annotation)" \
+  "$([ "$_r" -eq 1 ] && printf '%s' "$_o" | grep -q '^BRH_SUBSET_REFUSED: BRH_STATIC_ONLY' \
+    && printf '%s\n' "$_o" | grep -qx '::error title=bastion-boot-rehearsal::BRH_SUBSET_REFUSED: BRH_STATIC_ONLY under CI'; echo $?)" "rc=$_r $(head -c 400 <<<"$_o")"
+# The annotation contract: a red exit with no failed assertion names its stored reason; failed
+# assertions get one each; nothing on rc 0 or outside GitHub Actions; `::` and `%` are defused.
+_r="$( GITHUB_ACTIONS=true; FAILURES=(); VERDICT_REASON='BRH_X: a::b 5%'; annotate 1; FAILURES=(f1 'f2::x'); annotate 1; annotate 0
+  unset GITHUB_ACTIONS; annotate 1; fail 'l::m' 2>&1 >/dev/null )"
+chk "verdict: annotate names the stored reason when no assertion failed, one ::error per failure otherwise; fail() defuses ::" \
+  "$([ "$_r" = "$(printf '%s\n' '::error title=bastion-boot-rehearsal::BRH_X: a: :b 5%25' '::error title=bastion-boot-rehearsal::f1' \
+    '::error title=bastion-boot-rehearsal::f2: :x' 'FAIL: l: :m')" ]; echo $?)" "got [$_r]"
 # blk_extract <start-line prefix> <end-line ERE> <max lines>: this file's block from the ONE line that
 # starts with the prefix through the first end line after it, or rc 1 and why. An eval'd block is never
 # the rest of the file: a reworded end anchor or a block grown past the bound is a named red, no eval.
@@ -1628,9 +1636,9 @@ fi
 if [ -n "$PARTIAL" ]; then
   BRH_PARTIAL_MIN=$STATIC_CASES; for r in "${SELECTED[@]}"; do BRH_PARTIAL_MIN=$((BRH_PARTIAL_MIN + ROW_CASES[$r])); done
 fi
-# 80 static assertions + 55 row assertions (B1 21, B2 6, M1 4, M2 4, F1 3, F1-M 5, FA 2, B1-C 10); a
+# 81 static assertions + 55 row assertions (B1 21, B2 6, M1 4, M2 4, F1 3, F1-M 5, FA 2, B1-C 10); a
 # subset run (PARTIAL only) floors at BRH_PARTIAL_MIN, folded into the condition so the literal stays adjacent.
-MIN_CASES=135
+MIN_CASES=136
 if [ $(( ${passes:-0} + ${fails:-0} + ${SKIPPED_ASSERTIONS:-0} )) -lt "${BRH_PARTIAL_MIN:-$MIN_CASES}" ]; then
   VERDICT_REASON="floor: too few assertions ran"
   printf 'bastion-runcmd-rehearsal: FAIL (only %d assertions ran or were skipped; floor %d)\n' "$(( ${passes:-0} + ${fails:-0} + ${SKIPPED_ASSERTIONS:-0} ))" "${BRH_PARTIAL_MIN:-$MIN_CASES}" >&2; exit 1
