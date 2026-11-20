@@ -30,6 +30,9 @@
 #   k  the email step loses a leg                            W3
 #   l  drop the DoH type==2 filter                           Z11
 #   m  drop the token charset refusal                        Z13
+#   n  a failed close reports escalation ok                  Z5c
+#   o  GH_TOKEN or DOPPLER_TOKEN dropped from the step env:   W4 (and every filing row)
+#   p  the token refusal narrowed to one character class     the matching Z13 row
 #
 # Run: bash plugins/soleur/test/terraform-drift-tunnel-zone-authority.test.sh
 
@@ -53,28 +56,47 @@ ROWS=0
 pass() { echo "  pass: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 check() { if [[ "$2" == "1" ]]; then pass "$1"; else fail "$1"; fi; }
+# Instrument self-test: one pass and one fail through `check` must move both counters, then are subtracted.
+_p0=$PASS; _f0=$FAIL
+check "self-test" 1 >/dev/null; check "self-test" 0 >/dev/null
+(( PASS == _p0 + 1 && FAIL == _f0 + 1 )) || { printf 'FATAL: check/pass/fail do not move their counters\n' >&2; exit 1; }
+PASS=$_p0; FAIL=$_f0
 
 BODY="$TMP/step.sh"
 STEP_META="$TMP/step.meta"
-python3 -I - "$WF" "$BODY" "$STEP_META" <<'PY' || { echo "FATAL: tunnel_zone step not found in $WF" >&2; exit 2; }
+STEP_ENV="$TMP/step.env"
+# The step's env: map is DERIVED from the YAML (never hand-copied): each ${{ }} expression maps to one synthetic
+# value, an unknown expression is fatal, and the body runs with exactly that env.
+python3 -I - "$WF" "$BODY" "$STEP_META" "$STEP_ENV" <<'PY' || { echo "FATAL: tunnel_zone step not found in $WF (or its env: has an unmapped expression)" >&2; exit 2; }
 import sys, yaml
-wf, out, meta = sys.argv[1:4]
+wf, out, meta, envf = sys.argv[1:5]
+SYNTH = {"${{ github.token }}": "synthetic-gh", "${{ github.server_url }}": "https://github.example",
+         "${{ github.repository }}": "o/r", "${{ github.run_id }}": "1", "${{ secrets.DOPPLER_TOKEN }}": "synthetic-doppler"}
 for name, job in yaml.safe_load(open(wf))["jobs"].items():
     for st in job.get("steps") or []:
         if st.get("id") == "tunnel_zone":
             open(out, "w").write(st["run"])
             open(meta, "w").write("job=%s\nif=%s\ncoe=%s\nwd=%s\n" % (name, st.get("if"), st.get("continue-on-error"), st.get("working-directory")))
+            with open(envf, "w") as f:
+                for k, v in (st.get("env") or {}).items():
+                    v = str(v)
+                    if "${{" in v and v not in SYNTH:
+                        raise SystemExit(3)
+                    f.write("%s=%s\t%s\n" % (k, SYNTH.get(v, v), v))
             raise SystemExit(0)
 raise SystemExit(2)
 PY
 [[ -s "$BODY" ]] || { echo "FATAL: empty run body" >&2; exit 2; }
+STEP_ENV_ARGS=()
+while IFS=$'\t' read -r _kv _expr; do STEP_ENV_ARGS+=("$_kv"); done < "$STEP_ENV"
 
 STUB="$TMP/bin"; mkdir -p "$STUB"
 mk() { printf '#!/usr/bin/env bash\n%s\n' "$2" > "$STUB/$1"; chmod +x "$STUB/$1"; }
 ZID="0123456789abcdef0123456789abcdef"
 CF_SENTINEL="synthcf$((6 * 7))tokenNOTREAL"
 mk terraform '[[ "$*" == "output -raw cf_tunnel_zone_id" ]] || exit 64; [[ "${MOCK_TF_RC:-0}" == 0 ]] || exit "$MOCK_TF_RC"; printf "%s" "${MOCK_ZONE_ID}"'
-mk doppler 'printf "%s" "${MOCK_CF_TOKEN:-}"'
+# The stubs refuse without the credentials the real CLIs need, so a dropped env: mapping turns rows red.
+mk doppler '[[ -n "${DOPPLER_TOKEN:-}" && "${DOPPLER_PROJECT:-}" == soleur && "${DOPPLER_CONFIG:-}" == prd_terraform ]] || exit 1; printf "%s" "${MOCK_CF_TOKEN:-}"'
 # curl: log argv + stdin config; the zone read writes MOCK_ZONE_JSON to -o; DoH prints MOCK_DOH_JSON.
 # Quoted heredoc so the canonical assert_fixture_dir can be copied in byte-for-byte: the -o
 # operand comes from the workflow under test, so the stub refuses a relative or degenerate one
@@ -108,11 +130,13 @@ esac
 CURL_STUB
 chmod +x "$STUB/curl"
 mk gh '
+[[ -n "${GH_TOKEN:-}" ]] || exit 4
 printf "%s\n" "$*" >> "$MOCK_LOG.gh"
 case "$1 $2" in
   "issue list") [[ "${MOCK_LIST_RC:-0}" == 0 ]] || exit "$MOCK_LIST_RC"; printf "%s" "${MOCK_EXISTING:-}" ;;
   "issue create") [[ "${MOCK_CREATE_RC:-0}" == 0 ]] || exit "$MOCK_CREATE_RC" ;;&
   "issue comment") [[ "${MOCK_COMMENT_RC:-0}" == 0 ]] || exit "$MOCK_COMMENT_RC"; exit 0 ;;
+  "issue close") [[ "${MOCK_CLOSE_RC:-0}" == 0 ]] || exit "$MOCK_CLOSE_RC" ;;&
   "issue create"|"issue edit"|"issue close"|"label create")
     for ((i=1; i<=$#; i++)); do [[ "${!i}" == --body-file ]] && { j=$((i+1)); cp "${!j}" "$MOCK_LOG.body"; }; done
     exit 0 ;;
@@ -140,7 +164,7 @@ run_step() { # <label> VAR=value ...
   : > "$LOG.curl"; : > "$LOG.gh"; : > "$LOG.stdin"; : > "$GHOUT"; rm -f "$LOG.body"
   mkdir -p "$TMP/rt-$label"
   env -i PATH="$STUB:/usr/bin:/bin" HOME="$TMP" TMPDIR="$TMPDIR" RUNNER_TEMP="$TMP/rt-$label" \
-    GITHUB_OUTPUT="$GHOUT" SERVER_URL=https://github.example REPOSITORY=o/r RUN_ID=1 GH_TOKEN=synthetic \
+    GITHUB_OUTPUT="$GHOUT" "${STEP_ENV_ARGS[@]}" \
     MOCK_LOG="$LOG" MOCK_ZONE_ID="$ZID" MOCK_CF_TOKEN="$CF_SENTINEL" \
     MOCK_ZONE_JSON="$OK_ZONE" MOCK_DOH_JSON="$OK_DOH" "$@" \
     bash --noprofile --norc -eo pipefail "$BODY" > "$OUT" 2>&1
@@ -162,6 +186,15 @@ grep -qxF 'coe=True' "$STEP_META" || _ok=0
 grep -qxF 'wd=apps/web-platform/infra' "$STEP_META" || _ok=0
 grep -qF '${{' "$BODY" && _ok=0
 check "W1: one step in drift-check, infra leg only, always(), continue-on-error, no \${{ }} in the body" "$_ok"
+
+ROWS=$((ROWS + 1))
+_ok=1
+for _m in 'GH_TOKEN=synthetic-gh	${{ github.token }}' 'DOPPLER_TOKEN=synthetic-doppler	${{ secrets.DOPPLER_TOKEN }}' \
+          'DOPPLER_PROJECT=soleur	soleur' 'DOPPLER_CONFIG=prd_terraform	prd_terraform' 'SERVER_URL=https://github.example	${{ github.server_url }}' \
+          'REPOSITORY=o/r	${{ github.repository }}' 'RUN_ID=1	${{ github.run_id }}'; do
+  grep -qxF "$_m" "$STEP_ENV" || _ok=0
+done
+check "W4: the step env: declares every mapping its body reads (GH_TOKEN, DOPPLER_*, SERVER_URL, REPOSITORY, RUN_ID)" "$_ok"
 
 ROWS=$((ROWS + 1))
 _ok=1
@@ -208,6 +241,13 @@ _ok=1
 [[ "$(state)" == healthy && "$(closed)" == 1 && "$(created)" == 0 ]] || _ok=0
 grep -q '^issue close 42 ' "$LOG.gh" || _ok=0
 check "Z5b: a healthy run closes the open issue" "$_ok"
+
+ROWS=$((ROWS + 1))
+run_step z5c MOCK_EXISTING=9 MOCK_CLOSE_RC=1
+_ok=1
+[[ "$(state)" == healthy && "$(escalation)" == failed ]] || _ok=0
+grep -qF 'tunnel_zone_close_failed' "$OUT" || _ok=0
+check "Z5c: a healthy zone whose open issue cannot be closed reports escalation=failed (got $(escalation))" "$_ok"
 
 echo "=== matrix ==="
 ROWS=$((ROWS + 1))
@@ -309,15 +349,20 @@ run_step z11b MOCK_DOH_JSON='{"Status":0,"Answer":[{"name":"soleur.ai","type":5,
 [[ "$(state)" == unavailable ]] || _ok=0
 check "Z11: non-NS DoH answers are ignored (an A record beside the NS set stays healthy; CNAME-only is unavailable)" "$_ok"
 
-ROWS=$((ROWS + 1))
-_hostile=$'synth"tok\nheader = "Host: evil.example'
-run_step z13 MOCK_CF_TOKEN="$_hostile"
-_ok=1
-[[ "$(state)" == unavailable ]] || _ok=0
-grep -q 'api.cloudflare.com' "$LOG.curl" && _ok=0
-[[ -s "$LOG.stdin" ]] && _ok=0
-grep -qF 'evil.example' "$OUT" && _ok=0
-check "Z13: a token carrying a quote/newline is refused before any curl and never echoed (state=$(state))" "$_ok"
+# One row per refused character, each token carrying only that one (a two-cause fixture proves neither).
+z13_row() { # <label> <what> <token>
+  ROWS=$((ROWS + 1))
+  run_step "$1" MOCK_CF_TOKEN="$3"
+  _ok=1
+  [[ "$(state)" == unavailable ]] || _ok=0
+  grep -q 'api.cloudflare.com' "$LOG.curl" && _ok=0
+  [[ -s "$LOG.stdin" ]] && _ok=0
+  grep -qF 'evil.example' "$OUT" && _ok=0
+  check "Z13 ($2): a token carrying only a $2 is refused before any curl and never echoed (state=$(state))" "$_ok"
+}
+z13_row z13a quote 'synth"Host: evil.example'
+z13_row z13b backslash 'synth\Host: evil.example'
+z13_row z13c newline $'synth\nHost: evil.example'
 
 ROWS=$((ROWS + 1))
 run_step z14 MOCK_ZONE_ID="0123456789abcdef/../../accounts"
@@ -343,8 +388,8 @@ echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # Conservation: every row reports exactly once, so a neutered pass()/fail() breaks the
 # equality even when the row counter is intact.
-if (( ROWS < 24 || PASS + FAIL != ROWS )); then
-  echo "FATAL: only ${ROWS} rows / $((PASS + FAIL)) assertions ran, expected >= 24." >&2
+if (( ROWS < 28 || PASS + FAIL != ROWS )); then
+  echo "FATAL: only ${ROWS} rows / $((PASS + FAIL)) assertions ran, expected >= 28." >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]]

@@ -8414,14 +8414,15 @@ describe("ci_ssh_token_replace blast-radius gate refuses a widened ci_ssh policy
     return m ? m[1] : "";
   })();
   const inc = (extra: Record<string, unknown> = {}) => ({ service_token: [null], everyone: false, email: [], group: [], ...extra });
-  const run = (policyAfter: Record<string, unknown>) => {
+  const APP_NOW = { type: "ssh", domain: "ssh.soleur.ai", policies: ["p1"], options_preflight_bypass: false, session_duration: "24h" };
+  const run = (policyAfter: Record<string, unknown>, policyUnknown: Record<string, unknown> = {}, appAfter: Record<string, unknown> = APP_NOW) => {
     const dir = mkdtempSync(join(tmpdir(), "ci-ssh-gate-"));
     try {
       writeFileSync(join(dir, "gate.py"), gate);
       writeFileSync(join(dir, "plan.json"), JSON.stringify({ resource_changes: [
         { address: TOKEN, type: "cloudflare_zero_trust_access_service_token", change: { actions: ["create", "delete"], after: {} } },
-        { address: POLICY, type: "cloudflare_zero_trust_access_policy", change: { actions: ["update"], after: policyAfter } },
-        { address: APP, type: "cloudflare_zero_trust_access_application", change: { actions: ["update"], after: { session_duration: "24h" } } },
+        { address: POLICY, type: "cloudflare_zero_trust_access_policy", change: { actions: ["update"], after: policyAfter, after_unknown: policyUnknown } },
+        { address: APP, type: "cloudflare_zero_trust_access_application", change: { actions: ["update"], before: APP_NOW, after: appAfter } },
       ] }));
       const r = spawnSync("python3", ["-I", join(dir, "gate.py"), join(dir, "plan.json")], { encoding: "utf8" });
       return { rc: r.status, out: `${r.stdout}${r.stderr}` };
@@ -8432,8 +8433,12 @@ describe("ci_ssh_token_replace blast-radius gate refuses a widened ci_ssh policy
   test("the gate body was extracted", () => {
     expect(gate).toContain("REPLACE_TARGET");
   });
-  test("a token-only re-point passes (the app update is not a policy)", () => {
-    const r = run({ decision: "non_identity", include: [inc()] });
+  test.each([
+    ["a known one-token re-point", { decision: "non_identity", include: [inc()] }, {}],
+    ["a wholly unknown service_token (the replaced token's id)", { decision: "non_identity", include: [{ everyone: false }] }, { include: [{ service_token: true }] }],
+    ["a one-element service_token whose element is unknown", { decision: "non_identity", include: [inc()] }, { include: [{ service_token: [true] }] }],
+  ])("passes %s with an unchanged app", (_label, after, unknown) => {
+    const r = run(after as Record<string, unknown>, unknown as Record<string, unknown>);
     expect(r.out).toContain("Blast-radius gate passed");
     expect(r.rc).toBe(0);
   });
@@ -8442,10 +8447,55 @@ describe("ci_ssh_token_replace blast-radius gate refuses a widened ci_ssh policy
     ["an email include", { decision: "non_identity", include: [inc({ email: ["x@example.com"] })] }],
     ["a second include block", { decision: "non_identity", include: [inc(), { everyone: true }] }],
     ["decision = allow", { decision: "allow", include: [inc()] }],
+    ["w1: two service tokens", { decision: "non_identity", include: [inc({ service_token: ["a", "b"] })] }],
+    ["w2: a second include block holding another token", { decision: "non_identity", include: [inc(), inc()] }],
+    ["no include block", { decision: "non_identity", include: [] }],
   ])("refuses a policy update with %s", (_label, after) => {
     const r = run(after as Record<string, unknown>);
-    expect(r.out).toContain("the ci_ssh policy widens past its token");
+    expect(r.out).toContain(`${POLICY} widens past its token`);
     expect(r.rc).toBe(1);
+  });
+  test.each([
+    ["w3: an unknown ip include", { include: [{ service_token: [true], ip: true }] }],
+    ["an unknown everyone include", { include: [{ everyone: true }] }],
+    ["a wholly unknown include", { include: true }],
+    ["a second unknown include block", { include: [{}, { service_token: true }] }],
+  ])("refuses a policy whose after_unknown carries %s", (_label, unknown) => {
+    const r = run({ decision: "non_identity", include: [inc()] }, unknown as Record<string, unknown>);
+    expect(r.out).toContain(`${POLICY} widens past its token`);
+    expect(r.rc).toBe(1);
+  });
+  test.each([
+    ["w4: options_preflight_bypass + session_duration", { options_preflight_bypass: true, session_duration: "720h" }],
+    ["a type change", { type: "self_hosted" }],
+    ["a domain change", { domain: "*.soleur.ai" }],
+    ["a policies change", { policies: ["p1", "p2"] }],
+  ])("refuses an ssh_soleur app update with %s", (_label, change) => {
+    const r = run({ decision: "non_identity", include: [inc()] }, {}, { ...APP_NOW, ...(change as Record<string, unknown>) });
+    expect(r.out).toContain(`${APP} widens past its token`);
+    expect(r.rc).toBe(1);
+  });
+  // The publish lines drop BOTH streams (#7133: Doppler prints the config table) yet a refusal still fails loudly (#4195).
+  test.each(["Sync CF Access CI-SSH service token to Doppler", "Sync the new CI-SSH service token to Doppler"])("%s: a refused write prints ::error:: and no Doppler output", (name) => {
+    const doc = parseYaml(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")) as { jobs: Record<string, { steps?: Array<Record<string, unknown>> }> };
+    const body = Object.values(doc.jobs).flatMap((j) => j.steps ?? []).filter((s) => s.name === name).map((s) => String(s.run ?? ""));
+    expect(body).toHaveLength(1);
+    const pub = body[0].split("\n").filter((l) => /^\s*pub\(\) \{/.test(l));
+    expect(pub).toHaveLength(1);
+    expect(body[0].match(/\| pub CI_SSH_ACCESS_TOKEN_(ID|SECRET)$/gm)).toHaveLength(2);
+    expect(body[0]).not.toMatch(/doppler secrets set CI_SSH/);
+    const dir = mkdtempSync(join(tmpdir(), "ci-ssh-pub-"));
+    try {
+      writeFileSync(join(dir, "doppler"), '#!/usr/bin/env bash\ncat >/dev/null\necho "SYNTH_TABLE_OUT"\necho "SYNTH_TABLE_ERR" >&2\nexit 1\n', { mode: 0o755 });
+      const r = spawnSync("bash", ["-eo", "pipefail", "-c", `${pub[0]}\nprintf x | pub CI_SSH_ACCESS_TOKEN_ID\necho after`], { encoding: "utf8", env: { PATH: `${dir}:/usr/bin:/bin` } });
+      const out = `${r.stdout}${r.stderr}`;
+      expect(r.status).toBe(1);
+      expect(out).toContain("::error::Doppler refused the CI_SSH_ACCESS_TOKEN_ID write");
+      expect(out).not.toContain("SYNTH_TABLE");
+      expect(out).not.toContain("after");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -8574,7 +8624,7 @@ describe("apply-web-platform-infra has a failure channel", () => {
     expect(apply!.outputs?.tunnel_verify_cause).toBe("${{ steps.tunnel_verify.outputs.cause }}");
     const script = readFileSync(resolve(REPO_ROOT, "apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh"), "utf8");
     const produced = [...new Set([...script.matchAll(/VERIFY_CAUSE="([a-z-]+)"/g)].map((m) => m[1]))].sort();
-    expect(produced).toEqual(["access-refused", "connections-unreadable", "no-connector", "origin-not-serving"]);
+    expect(produced).toEqual(["access-refused", "connections-unreadable", "no-connector", "origin-not-serving", "origin-refused"]);
     const body = String((job!.steps ?? []).find((s) => s.id === "cause")!.run ?? "");
     const arms = [...body.matchAll(/^\s+([a-z-]+)\)\n\s+action_msg="\$\{action_msg\} <strong>Cause: ([a-z-]+)\.<\/strong>/gm)]
       .filter((m) => m[1] === m[2])

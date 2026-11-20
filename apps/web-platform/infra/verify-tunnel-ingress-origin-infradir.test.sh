@@ -118,9 +118,10 @@ STUB
 cat >"$G3/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 cat >/dev/null
-url=""; out=""; prev=""
+url=""; out=""; hdr=""; prev=""
 for a in "$@"; do
   [[ "$prev" == "-o" ]] && out="$a"
+  [[ "$prev" == "-D" ]] && hdr="$a"
   [[ "$a" == https://* ]] && url="$a"
   prev="$a"
 done
@@ -130,7 +131,8 @@ case "$url" in
   */connections)
     [[ "$url" == "https://api.cloudflare.com/client/v4/${STUB_CONN_PATH}" ]] || { printf '%s\n' "$url" >>"$STUB_REFUSED_LOG"; exit 64; }
     cat "$STUB_CONN_FILE"; printf '\n%s' "$STUB_CONN_CODE" ;;
-  */hooks/deploy-status) [[ -n "$out" ]] && printf '{"host_id":"stub-host"}' >"$out"; printf '%s' "$STUB_DEPLOY_CODE" ;;
+  */hooks/deploy-status) [[ -n "$out" ]] && printf '%s' "${STUB_DEPLOY_BODY:-{\"host_id\":\"stub-host\"\}}" >"$out"
+    [[ -n "$hdr" ]] && printf '%b' "HTTP/2 ${STUB_DEPLOY_CODE}\r\n${STUB_DEPLOY_HDR:-}\r\n" >"$hdr"; printf '%s' "$STUB_DEPLOY_CODE" ;;
   *) exit 7 ;;
 esac
 STUB
@@ -153,6 +155,7 @@ g3run() {
   set +e
   ( cd "$INFRA_ABS" && env PATH="$G3/bin:$PATH" STUB_CURL_LOG="$G3/curl.log" STUB_REFUSED_LOG="$G3/refused.log" STUB_CONN_PATH="$CONN_URL" STUB_CFG_FILE="$G3/cfg.json" \
       STUB_CONN_FILE="$G3/conns.json" STUB_CONN_CODE="${G3_CONN_CODE:-200}" STUB_DEPLOY_CODE="${G3_DEPLOY_CODE:-200}" \
+      STUB_DEPLOY_HDR="${G3_DEPLOY_HDR:-}" STUB_DEPLOY_BODY="${G3_DEPLOY_BODY:-}" \
       STUB_WEB1_IP="10.0.1.12" STUB_REG_EP="10.0.1.30:5000" STUB_STATE_TUNNEL_ID="$OLD_TUN" \
       STUB_TFOUT_cf_tunnel_id="${G3_TFOUT_TUN-$NEW_TUN}" STUB_TFOUT_cf_tunnel_account_id="${G3_TFOUT_ACCT-$NEW_ACCT}" \
       STUB_DOPPLER_CF_API_TOKEN="stubtoken123" STUB_DOPPLER_CF_ACCOUNT_ID="$OLD_ACCT" STUB_DOPPLER_APP_DOMAIN_BASE="soleur.ai" \
@@ -198,10 +201,13 @@ p_t1() {
      && grep -qF "$CONN_URL" "$G3/curl.log" && ! grep -q . "$G3/refused.log"; then return 0; fi
   return 1
 }
+# Exactly one SOLEUR_TUNNEL_VERIFY line per run: the annotations carry their own prefix, so the runbook grep is unambiguous.
+one_marker() { [[ "$(grep -c "SOLEUR_TUNNEL_VERIFY" "$G3/out")" -eq 1 ]]; }
 conns 0; G3_DEPLOY_CODE=530 g3run
 g3row "T1: 0 connectors -> 'SOLEUR_TUNNEL_VERIFY cause=no-connector tunnel=<id> connections=0', a non-zero exit, census read from the TF-output account + tunnel" p_t1
-g3row "T1c: ... the annotation carries the web-2 rebake remedy and never blames the origin or prescribes the pin revert" \
-  'grep -qF "::error::SOLEUR_TUNNEL_VERIFY cause=no-connector" "$G3/out" && grep -qF "web_host_key=web-2" "$G3/out" && ! grep -qF "management plane is down" "$G3/out" && ! grep -qF "revert the ingress pin" "$G3/out"'
+g3row "T1c: ... the annotation carries the full web-2 rebake dispatch (confirm included) and never blames the origin or prescribes the pin revert" \
+  'grep -qF "::error::Tunnel verify (no-connector):" "$G3/out" && grep -qF "gh workflow run apply-web-platform-infra.yml -f apply_target=web-host-replace -f web_host_key=web-2 -f confirm=REPLACE-web-2" "$G3/out" && ! grep -qF "management plane is down" "$G3/out" && ! grep -qF "revert the ingress pin" "$G3/out"'
+g3row "T1d: ... exactly one SOLEUR_TUNNEL_VERIFY line (no-connector)" one_marker
 g3row "T1b: ... the cause reaches GITHUB_OUTPUT (the failure email reads it) and the step summary explains it" \
   'grep -qxF "cause=no-connector" "$G3/gh_output" && grep -qF "no connector" "$G3/gh_summary"'
 conns 1; G3_DEPLOY_CODE=502 g3run
@@ -209,14 +215,29 @@ g3row "T2: a live connector but a dead origin -> cause=origin-not-serving connec
   '[[ "$G3RC" -ne 0 ]] && grep -qxF "SOLEUR_TUNNEL_VERIFY cause=origin-not-serving tunnel=${NEW_TUN} connections=1" "$G3/out" && ! grep -q . "$G3/gh_summary"'
 g3row "T2b: ... and only origin-not-serving prints the origin-down annotation and the pin-revert recovery" \
   'grep -qF "management plane is down" "$G3/out" && grep -qF "revert the ingress pin" "$G3/out"'
-G3_DEPLOY_CODE=403 g3run
-g3row "T4: a live connector and an Access 403 -> cause=access-refused (not an origin fault), non-zero exit" \
+g3row "T2c: ... exactly one SOLEUR_TUNNEL_VERIFY line (origin-not-serving)" one_marker
+# Access's own 403 carries its stamp; the webhook's 403 (hooks.json HMAC rule) does not.
+G3_DEPLOY_CODE=403 G3_DEPLOY_HDR='cf-access-aud: synthaud\r\ncf-access-domain: deploy.soleur.ai' g3run
+g3row "T4: a live connector and an Access-stamped 403 -> cause=access-refused (not an origin fault), non-zero exit" \
   '[[ "$G3RC" -ne 0 ]] && grep -qxF "SOLEUR_TUNNEL_VERIFY cause=access-refused tunnel=${NEW_TUN} connections=1" "$G3/out" && grep -qxF "cause=access-refused" "$G3/gh_output" && ! grep -qF "management plane is down" "$G3/out"'
+g3row "T4d: ... the annotation names what was seen and gives the read-only Access-pair probe; exactly one marker line" \
+  'grep -qF "::error::Tunnel verify (access-refused): deploy-status answered HTTP 403 with Cloudflare Access" "$G3/out" && grep -qF -- "-c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh" "$G3/out" && one_marker'
+G3_DEPLOY_CODE=403 G3_DEPLOY_BODY='Hook rules were not satisfied.' G3_DEPLOY_HDR='content-type: text/plain' g3run
+g3row "T4b: a live connector and an UNSTAMPED 403 (the webhook's HMAC refusal) -> cause=origin-refused, never access-refused" \
+  '[[ "$G3RC" -ne 0 ]] && grep -qxF "SOLEUR_TUNNEL_VERIFY cause=origin-refused tunnel=${NEW_TUN} connections=1" "$G3/out" && grep -qxF "cause=origin-refused" "$G3/gh_output" && ! grep -qF "access-refused" "$G3/out"'
+g3row "T4e: ... names WEBHOOK_DEPLOY_SECRET parity with a read-only command, never the pin revert; exactly one marker line" \
+  'grep -qF "::error::Tunnel verify (origin-refused):" "$G3/out" && grep -qF -- "_SECRET parity: doppler" "$G3/out" && grep -qF -- "-c prd_terraform -- bash scripts/check-deploy-script-parity.sh --status-only" "$G3/out" && ! grep -qF "revert the ingress pin" "$G3/out" && one_marker'
+G3_DEPLOY_CODE=302 G3_DEPLOY_HDR='location: https://synthteam.cloudflareaccess.com/cdn-cgi/access/login/deploy.soleur.ai' g3run
+g3row "T4c: a live connector and a 302 to the Access login -> cause=access-refused (not origin-not-serving)" \
+  '[[ "$G3RC" -ne 0 ]] && grep -qxF "SOLEUR_TUNNEL_VERIFY cause=access-refused tunnel=${NEW_TUN} connections=1" "$G3/out" && grep -qF "HTTP 302" "$G3/out"'
+G3_DEPLOY_CODE=302 G3_DEPLOY_HDR='location: https://elsewhere.example/' g3run
+g3row "T4f: a 302 elsewhere is not an Access refusal (origin-not-serving)" \
+  'grep -qxF "SOLEUR_TUNNEL_VERIFY cause=origin-not-serving tunnel=${NEW_TUN} connections=1" "$G3/out"'
 G3_DEPLOY_CODE=000 G3_CONN_CODE=500 g3run
 g3row "T3: an unreadable connection count -> cause=connections-unreadable (never a zero), non-zero exit" \
   '[[ "$G3RC" -ne 0 ]] && grep -qxF "SOLEUR_TUNNEL_VERIFY cause=connections-unreadable tunnel=${NEW_TUN} connections=unknown" "$G3/out"'
-g3row "T3b: ... says nothing was measured, and never blames the origin" \
-  'grep -qF "neither the connector nor the origin was measured" "$G3/out" && ! grep -qF "management plane is down" "$G3/out"'
+g3row "T3b: ... says nothing was measured, never blames the origin, gives a census re-read; exactly one marker line" \
+  'grep -qF "neither the connector nor the origin was measured" "$G3/out" && grep -qF "gh workflow run scheduled-inngest-health.yml" "$G3/out" && ! grep -qF "management plane is down" "$G3/out" && one_marker'
 conns 1
 
 # Mutation proof: each Guard 3 row reds when its guard is removed. The mutant runs from a mirror of the repo layout
@@ -260,7 +281,7 @@ g3row "T5: an unknown census verdict -> cause=connections-unreadable connections
   '[[ "$G3RC" -ne 0 ]] && grep -qxF "SOLEUR_TUNNEL_VERIFY cause=connections-unreadable tunnel=${NEW_TUN} connections=unknown" "$G3/out"'
 
 # Floor, exiting directly (not through g3fail): rows that silently stop running must not read as green.
-G3_FLOOR=21
+G3_FLOOR=28
 [[ "$g3rows" -ge "$G3_FLOOR" ]] || { printf 'FAIL: only %s Guard 3 rows ran (floor %s)\n' "$g3rows" "$G3_FLOOR"; exit 1; }
 [[ "$fails" -eq 0 ]] || exit 1
 echo "OK"

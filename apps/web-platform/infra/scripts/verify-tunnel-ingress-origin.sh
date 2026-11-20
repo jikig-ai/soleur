@@ -34,7 +34,8 @@ _cfg_ok() { local LC_ALL=C; case "${1:-}" in ''|*'"'*|*'\'*|*[[:cntrl:]]*) retur
 # Script-owned scratch for the deploy-status body (was the fixed /tmp/deploy-status-verify.json:
 # a fixed name is shared by every concurrent run of this script).
 DEPLOY_STATUS_TMP="$(mktemp)"
-trap 'rm -f "$DEPLOY_STATUS_TMP"' EXIT
+DEPLOY_STATUS_HDR="$(mktemp)"
+trap 'rm -f "$DEPLOY_STATUS_TMP" "$DEPLOY_STATUS_HDR"' EXIT
 
 # Resolve the infra dir from THIS script's own location — absolute and
 # CWD-independent. Do NOT honor a relative $INFRA_DIR override (#6595): the workflow
@@ -165,7 +166,7 @@ HTTP_CODE="000"
 for attempt in 1 2 3 4 5; do
   # --disable/--noproxy as above (#7797): this call carries the webhook HMAC and both
   # CF Access client credentials.
-  HTTP_CODE=$(curl --disable --noproxy '*' -s -o "$DEPLOY_STATUS_TMP" -w '%{http_code}' --max-time 15 --config - \
+  HTTP_CODE=$(curl --disable --noproxy '*' -s -o "$DEPLOY_STATUS_TMP" -D "$DEPLOY_STATUS_HDR" -w '%{http_code}' --max-time 15 --config - \
     "https://deploy.${APP_DOMAIN_BASE}/hooks/deploy-status" 2>/dev/null \
     < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' \
           "$HMAC" "$CF_ACCESS_ID" "$CF_ACCESS_SECRET") || echo "000")
@@ -192,17 +193,24 @@ if [[ "$HTTP_CODE" != "200" ]]; then
   read -r CENSUS CONNS <<<"$(classify_connector_census "$(tail -1 <<<"$CONN_RESP")" "$(sed '$d' <<<"$CONN_RESP")")"
   case "$CENSUS" in
     zero_connectors) VERIFY_CAUSE="no-connector" ;;
-    # A connector is up, so a 403 is Cloudflare Access refusing the deploy credential, not the origin.
-    ok|multi_connector) if [[ "$HTTP_CODE" == "403" ]]; then VERIFY_CAUSE="access-refused"; else VERIFY_CAUSE="origin-not-serving"; fi ;;
+    # A connector is up. Access's own refusal carries its stamp (cf-access-aud/-domain) or redirects to its login: the
+    # predicate scripts/check-cloudflare-token-drift.sh uses. An unstamped 403 is web-1's webhook (hooks.json HMAC rule).
+    ok|multi_connector)
+      if grep -qiE '^cf-access-(aud|domain):' "$DEPLOY_STATUS_HDR" 2>/dev/null \
+         || { [[ "$HTTP_CODE" == 30? ]] && grep -qiE '^location:.*(cloudflareaccess\.com|/cdn-cgi/access/)' "$DEPLOY_STATUS_HDR" 2>/dev/null; }; then
+        VERIFY_CAUSE="access-refused"
+      elif [[ "$HTTP_CODE" == "403" ]]; then VERIFY_CAUSE="origin-refused"
+      else VERIFY_CAUSE="origin-not-serving"; fi ;;
     # census_unavailable, or any verdict this script does not know: nothing was measured.
     *) VERIFY_CAUSE="connections-unreadable"; CONNS="unknown" ;;
   esac
   echo "SOLEUR_TUNNEL_VERIFY cause=${VERIFY_CAUSE} tunnel=${TUNNEL_ID} connections=${CONNS}"
   [[ -n "${GITHUB_OUTPUT:-}" ]] && echo "cause=${VERIFY_CAUSE}" >> "$GITHUB_OUTPUT"
   # Each cause gets its own annotation; only origin-not-serving blames the origin and prescribes the pin revert.
+  # The annotations do not repeat the SOLEUR_TUNNEL_VERIFY prefix, so the runbook grep finds exactly one line.
   case "$VERIFY_CAUSE" in
     no-connector)
-      echo "::error::SOLEUR_TUNNEL_VERIFY cause=no-connector: tunnel ${TUNNEL_ID} has 0 connections, so nothing serves deploy./ssh./registry. The Terraform apply itself landed. Remedy: re-bake the connector host (apply_target=web-host-replace, web_host_key=web-2)."
+      echo "::error::Tunnel verify (no-connector): tunnel ${TUNNEL_ID} has 0 connections, so nothing serves deploy./ssh./registry. The Terraform apply itself landed. Remedy: re-bake the connector host: gh workflow run apply-web-platform-infra.yml -f apply_target=web-host-replace -f web_host_key=web-2 -f confirm=REPLACE-web-2"
       if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
         cat >> "$GITHUB_STEP_SUMMARY" <<SUMMARY
 **Tunnel verify: no connector.** Tunnel \`${TUNNEL_ID}\` has 0 connections, so deploy./ssh./registry. have nothing behind them. This is EXPECTED on the first apply after the tunnel moved account, before the connector host is re-born with its token (\`web-host-replace web-2\`). Any other apply that reports it means the connector is down, which is a real outage.
@@ -210,10 +218,13 @@ SUMMARY
       fi
       ;;
     connections-unreadable)
-      echo "::error::SOLEUR_TUNNEL_VERIFY cause=connections-unreadable: deploy.${APP_DOMAIN_BASE}/hooks/deploy-status returned HTTP ${HTTP_CODE} and the tunnel's connection count could not be read, so neither the connector nor the origin was measured."
+      echo "::error::Tunnel verify (connections-unreadable): deploy.${APP_DOMAIN_BASE}/hooks/deploy-status returned HTTP ${HTTP_CODE} and the tunnel's connection count could not be read, so neither the connector nor the origin was measured. Re-read the census: gh workflow run scheduled-inngest-health.yml"
       ;;
     access-refused)
-      echo "::error::SOLEUR_TUNNEL_VERIFY cause=access-refused: Cloudflare Access refused deploy-status (HTTP 403) with a live connector; the origin was not reached. Check the deploy Access policy's service token against CF_ACCESS_CLIENT_ID/SECRET."
+      echo "::error::Tunnel verify (access-refused): deploy-status answered HTTP ${HTTP_CODE} with Cloudflare Access's stamp (a cf-access-* header or a redirect to its login) and ${CONNS} live connector(s); the origin was not reached. Probe each Access pair: doppler run -p soleur -c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh"
+      ;;
+    origin-refused)
+      echo "::error::Tunnel verify (origin-refused): deploy-status answered HTTP 403 with no Cloudflare Access stamp and ${CONNS} live connector(s), so Access admitted the request and web-1's webhook refused its X-Signature-256 (hooks.json answers 403 on an HMAC mismatch). Check WEBHOOK_DEPLOY_SECRET parity: doppler run -p soleur -c prd_terraform -- bash scripts/check-deploy-script-parity.sh --status-only"
       ;;
     *)
       cat >&2 <<EOF

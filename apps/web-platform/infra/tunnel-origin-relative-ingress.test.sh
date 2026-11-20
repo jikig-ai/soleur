@@ -267,7 +267,7 @@ if ! cmp -s "$CENSUS_WF" "$P_TMP/census-mut.yml" && ! reads_tunnel_acct "$P_TMP/
 else
   fail "AC5 census mutation did not land or was not caught"
 fi
-# The tunnel lookup skips deleted namesakes and names its HTTP code in the unavailable reason.
+# The tunnel lookup skips deleted namesakes.
 lookup_ok() { local cs; cs="$(census_step "$1")"; grep -qF 'cfd_tunnel?name=soleur-web-platform&is_deleted=false"' <<<"$cs"; }
 if lookup_ok "$CENSUS_WF"; then
   pass "the census tunnel lookup filters is_deleted=false"
@@ -279,6 +279,21 @@ if ! cmp -s "$CENSUS_WF" "$P_TMP/census-mut2.yml" && ! lookup_ok "$P_TMP/census-
   pass "AC5 mutation: a lookup without is_deleted=false is caught"
 else
   fail "AC5 lookup mutation did not land or was not caught"
+fi
+# ...and asks for the name tunnel.tf gives web_soleur: a renamed tunnel leaves the census on tunnel_id_unresolved forever.
+tf_tunnel_name() { awk '/^resource "cloudflare_zero_trust_tunnel_cloudflared" "web_soleur" \{/{f=1} f&&/^\}/{exit} f' "$1" | sed -nE 's/^[[:space:]]*name[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p'; }
+census_name() { census_step "$1" | grep -oE 'cfd_tunnel\?name=[^&"]+' | sed 's/.*name=//' | sort -u; }
+name_parity() { local t c; t="$(tf_tunnel_name "$1")"; c="$(census_name "$2")"; [[ -n "$t" && "$c" == "$t" ]]; }
+if name_parity "$TF" "$CENSUS_WF"; then
+  pass "the census lookup name equals tunnel.tf web_soleur's name ('$(tf_tunnel_name "$TF")')"
+else
+  fail "the census lookup name ('$(census_name "$CENSUS_WF")') differs from tunnel.tf web_soleur's name ('$(tf_tunnel_name "$TF")')"
+fi
+awk '/^resource "cloudflare_zero_trust_tunnel_cloudflared" "web_soleur" \{/{f=1} f&&/^[[:space:]]*name[[:space:]]*=/{sub(/"[^"]+"/, "\"soleur-web-platform-2\""); f=0} {print}' "$TF" >"$P_TMP/tunnel-mut2.tf"
+if [[ "$(tf_tunnel_name "$P_TMP/tunnel-mut2.tf")" == "soleur-web-platform-2" ]] && ! name_parity "$P_TMP/tunnel-mut2.tf" "$CENSUS_WF"; then
+  pass "AC5 mutation: a renamed web_soleur tunnel is caught"
+else
+  fail "AC5 name mutation did not land or was not caught"
 fi
 
 # --- AC3: this guard is actually wired into CI --------------------------------------

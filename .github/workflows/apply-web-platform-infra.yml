@@ -1011,11 +1011,10 @@ jobs:
           fi
           printf '::add-mask::%s\n' "$CLIENT_ID"
           printf '::add-mask::%s\n' "$CLIENT_SECRET"
-          # stdout is dropped (value echo); stderr stays visible so a Doppler refusal shows (#4195).
-          printf '%s' "$CLIENT_ID" \
-            | doppler secrets set CI_SSH_ACCESS_TOKEN_ID --silent --no-interactive -p soleur -c prd_terraform >/dev/null
-          printf '%s' "$CLIENT_SECRET" \
-            | doppler secrets set CI_SSH_ACCESS_TOKEN_SECRET --silent --no-interactive -p soleur -c prd_terraform >/dev/null
+          # 2>&1 too: Doppler prints the config table (#7133); a refusal surfaces as ::error:: (#4195).
+          pub() { doppler secrets set "$1" --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1 || { echo "::error::Doppler refused the $1 write (stderr dropped: it prints the config table)"; exit 1; }; }
+          printf '%s' "$CLIENT_ID" | pub CI_SSH_ACCESS_TOKEN_ID
+          printf '%s' "$CLIENT_SECRET" | pub CI_SSH_ACCESS_TOKEN_SECRET
           unset CLIENT_ID CLIENT_SECRET
           echo "Synced CI_SSH_ACCESS_TOKEN_ID/_SECRET to Doppler prd_terraform."
 
@@ -1620,7 +1619,9 @@ jobs:
             connections-unreadable)
               action_msg="${action_msg} <strong>Cause: connections-unreadable.</strong> deploy-status failed and the connection count could not be read." ;;
             access-refused)
-              action_msg="${action_msg} <strong>Cause: access-refused.</strong> Access refused the deploy-status credential (403); the origin was not reached." ;;
+              action_msg="${action_msg} <strong>Cause: access-refused.</strong> deploy-status got Access's refusal (stamp or login redirect); origin not reached." ;;
+            origin-refused)
+              action_msg="${action_msg} <strong>Cause: origin-refused.</strong> deploy-status got an unstamped 403: web-1's webhook refused the HMAC; check the webhook secret's parity." ;;
           esac
 
           # A RANDOM heredoc delimiter: a fixed one is forgeable by a value that contains it.
@@ -6338,27 +6339,29 @@ jobs:
                         "ci_ssh token may be replaced.".format(addr, ",".join(actions)))
                   failed = True
 
-          # The token must actually be replaced. A plan with zero replaces means the
-          # -replace silently did nothing — applying it would report success and repair
-          # nothing, which is the failure shape this whole issue is about.
-          token = "cloudflare_zero_trust_access_service_token.ci_ssh_soleur"
+          # The token must actually be replaced: zero replaces means -replace did nothing, and the apply would repair nothing.
+          token = REPLACE_TARGET
           token_actions = [a for addr, a in changes if addr == token]
           if not token_actions:
               print("::error::blast-radius gate: {} is absent from the plan — nothing would "
                     "be re-minted. Is it in state?".format(token))
               failed = True
           elif sorted(token_actions[0]) != ["create", "delete"]:
-              # sorted() normalizes both orders: create_before_destroy = true yields
-              # ["create","delete"], a plain replace yields ["delete","create"]. Either is
-              # a replace; anything else (a bare update, a lone create) is not.
+              # sorted(): create_before_destroy and a plain replace order the pair differently; both are a replace.
               print("::error::blast-radius gate: expected the token to be replaced "
                     "(create+delete), got {}.".format(token_actions[0]))
               failed = True
-          # The policy may only re-point its token: no other include key, decision non_identity.
+          # The policy may only re-point its one token (one include, no other key known or unknown); the app may not change.
+          L = lambda v: [x if isinstance(x, dict) else {"?": 1} for x in (v if isinstance(v, list) else [v] if v else [])]
           for c in plan.get("resource_changes", []):
-              a = c["change"].get("after") or {}
-              if c["address"] in ALLOWED and c["type"].endswith("policy") and (a.get("decision") != "non_identity" or any(v for i in a.get("include") or [] for k, v in i.items() if k != "service_token")):
-                  print("::error::blast-radius gate: the ci_ssh policy widens past its token.")
+              a, b, u = (c["change"].get(k) or {} for k in ("after", "before", "after_unknown"))
+              i, ui = L(a.get("include")), L(u.get("include"))
+              if c["address"] in ALLOWED and (c["type"].endswith("policy") and (a.get("decision") != "non_identity"
+                      or len(i) != 1 or len(ui) > 1 or any(v for x in i + ui for k, v in x.items() if k != "service_token")
+                      or not (len(i[0].get("service_token") or []) == 1 or ui and ui[0].get("service_token") is True))
+                      or c["type"].endswith("application") and any(a.get(k) != b.get(k) or u.get(k) for k in
+                      ("type", "domain", "policies", "options_preflight_bypass", "session_duration"))):
+                  print("::error::blast-radius gate: {} widens past its token.".format(c["address"]))
                   failed = True
 
           if failed:
@@ -6400,10 +6403,10 @@ jobs:
           # it. Do NOT re-dispatch this arm (it destroys a working credential to recover from a failed write).
           printf '::add-mask::%s\n' "$CLIENT_ID"
           printf '::add-mask::%s\n' "$CLIENT_SECRET"
-          printf '%s' "$CLIENT_ID" \
-            | doppler secrets set CI_SSH_ACCESS_TOKEN_ID --silent --no-interactive -p soleur -c prd_terraform >/dev/null
-          printf '%s' "$CLIENT_SECRET" \
-            | doppler secrets set CI_SSH_ACCESS_TOKEN_SECRET --silent --no-interactive -p soleur -c prd_terraform >/dev/null
+          # 2>&1 too: Doppler prints the config table (#7133); a refusal surfaces as ::error:: (#4195).
+          pub() { doppler secrets set "$1" --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1 || { echo "::error::Doppler refused the $1 write (stderr dropped: it prints the config table)"; exit 1; }; }
+          printf '%s' "$CLIENT_ID" | pub CI_SSH_ACCESS_TOKEN_ID
+          printf '%s' "$CLIENT_SECRET" | pub CI_SSH_ACCESS_TOKEN_SECRET
           unset CLIENT_ID CLIENT_SECRET
           echo "Published CI_SSH_ACCESS_TOKEN_ID/_SECRET to Doppler prd_terraform."
 
