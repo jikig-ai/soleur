@@ -544,12 +544,13 @@ Unverified: whether CF_API_TOKEN_ANALYTICS_READ can read the new zone, other: no
 - [ ] AC11 The PR body has `Ref #12846` (no `Closes`), `closingIssuesReferences` is `[]`, and the body leads with the deadline and lists the CLO owner-review items; the #12931 sequencing comment is posted.
 - [ ] AC12 No workflow was dispatched by this PR's sessions: `gh run list --workflow apply-web-platform-infra.yml --event workflow_dispatch --created ">=2026-11-19" --json databaseId --jq length` prints `0` at ship time (a dispatch by anyone else is recorded, not ignored); the diff touches no `.github/`, `apps/*/infra/` or Doppler file (`git diff --name-only origin/main...HEAD` holds none).
 
-- [ ] AC14 `bash plugins/soleur/test/health-colo-falsification.test.sh` is green: the runbook holds exactly one recipe marker pair, every case's full output line matches, the outputs block equals the test's case list in order, and each of the seven recipe mutation rows is caught; `bash scripts/test-all.sh --print-selection` on a runbook-only change selects it.
+- [ ] AC14 `bash plugins/soleur/test/health-colo-falsification.test.sh` is green: the runbook holds exactly one recipe marker pair, every case's full output line matches, the outputs block equals the test's case list in order, and each recipe mutation row is caught (seven at plan time, thirteen after the review rulings Q1-Q2 and the input checks); `bash scripts/test-all.sh --print-selection` on a runbook-only change selects it.
 - [ ] AC15 The handoff loop in the runbook is byte-identical to the plan's block, and `bash -n` passes on it.
 
 ### Post-merge (the follow-up PR that closes #12846)
 
 - [ ] AC13 By 2026-11-24, in the landing session, the handoff loop has kept and pushed `evidence/<UTC date>-analytics-health-colo-216h-off<O>h.json` (or the two H=108 split files) passing every T3 keep rule, including `.zone` starting `5af02a2f` (or the old zone's fingerprint, if the owner chose one under owner-review item 4), plus the archival capture ending 2026-11-18T17:00Z; then the PR that closes #12846 records the pre-registered T2 recipe's one-line outcome (`not supported` or `inconclusive: <reason>`) as an `Unverified:` line, or records why the capture could not run.
+  - Amended in review, 2026-11-19/20 (CTO Q5-Q7, Q10; `decision-challenges.md`): kept files are named `evidence/analytics-health-colo-<H>h-end<YYYYMMDDTHHZ>.json` by window end; `.zone` must equal the full old zone id `5af02a2f394e9ba6e0ea23c381a26b67`; the recipe runs behind the runbook's preflight and sha256 check; and the capture is recorded by an `S1-HEALTHCOLO-CAPTURED:` comment on #12846, which closes the follow-through tracker.
 
 ## Test Scenarios
 

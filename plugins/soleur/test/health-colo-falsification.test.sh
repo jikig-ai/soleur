@@ -47,34 +47,6 @@ check() {
 }
 summary() { printf '\n%s passed, %s failed (%s rows executed, %s mutation rows)\n' "$pass" "$fail" "$rows_run" "$mut_run"; }
 
-# --- floors (printf + exit 1, never through check/no) and accounting ---------------------------------------------------------
-MUT_FLOOR=13
-ROW_FLOOR=83
-# finish: the suite's verdict. The real run and the forced-fail child below both call it, so the child exercises these lines.
-finish() {
-  if [[ "$((pass + fail))" != "$rows_run" ]]; then
-    printf 'FAIL: accounting: passes + fails (%s) != rows executed (%s) - a verdict was dropped\n' "$((pass + fail))" "$rows_run" >&2
-    exit 1
-  fi
-  summary
-  if [[ "$mut_run" -lt "$MUT_FLOOR" ]]; then
-    printf 'FAIL: mutation-row floor: only %s recipe mutation rows ran, need %s (vacuity)\n' "$mut_run" "$MUT_FLOOR" >&2
-    exit 1
-  fi
-  if [[ "$rows_run" -lt "$ROW_FLOOR" ]]; then
-    printf 'FAIL: executed-row floor: only %s rows ran, need at least %s (the exact current count; vacuity)\n' "$rows_run" "$ROW_FLOOR" >&2
-    exit 1
-  fi
-  if [[ "$fail" -gt 0 ]]; then exit 1; fi
-  exit 0
-}
-# The exit status is what the runner grades: a run with every floor met and one failed row must exit 1. The child is selected
-# by argv, never by an environment flag, so an inherited variable cannot select it.
-if [[ "${1:-}" == --forced-fail-child ]]; then
-  pass=$((ROW_FLOOR - 1)) fail=1 rows_run=$ROW_FLOOR mut_run=$MUT_FLOOR
-  finish >/dev/null 2>&1
-fi
-
 # --- instrument self-test: check() must be able to fail AND to pass, or every row below is vacuous ---------------------------
 ( pass=0; fail=0; check "self-test" "a" "b" >/dev/null; [[ "$fail" -eq 1 && "$pass" -eq 0 ]] ) \
   || { printf 'FATAL: check() cannot fail - the instrument is neutered\n' >&2; exit 2; }
@@ -295,11 +267,34 @@ mutate "M12 uniqueness over every row, null colos included" ix-two-null-colos-on
 mutate "M13 a missing p90_ms key read as null" bad-input-p90-key-absent 'and has("p90_ms") and ' 'and '
 mutate "control: comment-only edit" "" '# health-colo R2 recipe:' '# (control) health-colo R2 recipe:'
 
-# --- the exit-status check and the verdict --------------------------------------------------------------------------------
-bash "${BASH_SOURCE[0]}" --forced-fail-child >/dev/null 2>&1
-frc=$?
-if [[ "$frc" -ne 1 ]]; then
-  printf 'FAIL: exit status: a run with one failed row exited %s, not 1 - the runner would read a failure as green\n' "$frc" >&2
+# --- the exit-status check, accounting and floors (printf + exit 1, never through check/no) -------------------------------
+# The exit status is what the runner grades: a child run with one failed row and every floor met must exit 1. The child is
+# selected by argv, never by an environment flag, so an inherited variable cannot select it; it sets counters above every
+# floor and falls through to the same trailer below, so the child exercises these very lines.
+if [[ "${1:-}" == --forced-fail-child ]]; then
+  rows_run=100000 mut_run=100000 pass=99999 fail=1
+else
+  bash "${BASH_SOURCE[0]}" --forced-fail-child >/dev/null 2>&1
+  frc=$?
+  if [[ "$frc" -ne 1 ]]; then
+    printf 'FAIL: exit status: a run with one failed row exited %s, not 1 - the runner would read a failure as green\n' "$frc" >&2
+    exit 1
+  fi
+fi
+if [[ "$((pass + fail))" != "$rows_run" ]]; then
+  printf 'FAIL: accounting: passes + fails (%s) != rows executed (%s) - a verdict was dropped\n' "$((pass + fail))" "$rows_run" >&2
   exit 1
 fi
-finish
+summary
+MUT_FLOOR=13
+if [[ "$mut_run" -lt "$MUT_FLOOR" ]]; then
+  printf 'FAIL: mutation-row floor: only %s recipe mutation rows ran, need %s (vacuity)\n' "$mut_run" "$MUT_FLOOR" >&2
+  exit 1
+fi
+ROW_FLOOR=83
+if [[ "$rows_run" -lt "$ROW_FLOOR" ]]; then
+  printf 'FAIL: executed-row floor: only %s rows ran, need at least %s (the exact current count; vacuity)\n' "$rows_run" "$ROW_FLOOR" >&2
+  exit 1
+fi
+if [[ "$fail" -gt 0 ]]; then exit 1; fi
+exit 0

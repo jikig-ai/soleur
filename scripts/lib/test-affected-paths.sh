@@ -587,6 +587,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_HEAD_VERDICT_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_CLOUDFLARE_READONLY_TEST_SH_PATHS=(
   "apps/web-platform/infra/seo-config-rules.tf"  # real read: snapshot pin counts rules{}/ssl= against the SUT header (#10479 drift pin)
+  "knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md"  # real read: the wrapper-to-recipe link row extracts the R2 recipe (#12846)
   "plugins/soleur/scripts/cloudflare-readonly.sh"  # SUT
   "plugins/soleur/test/cloudflare-readonly.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
