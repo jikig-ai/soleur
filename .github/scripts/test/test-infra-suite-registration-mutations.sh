@@ -233,7 +233,7 @@ if [[ "$rc" == "0" ]]; then
 else
   ok "M9 enumeration collapse: rc=$rc (fails closed)"
 fi
-rm -rf "$SB/$INFRA_PREFIX"
+rm -rf "${SB:?}/${INFRA_PREFIX:?}"
 mv "$SB/${INFRA_PREFIX}-moved" "$SB/$INFRA_PREFIX" || setup_die "mv back"
 git -C "$SB" add -A >/dev/null 2>&1 || setup_die "git add after mv back"
 sb_commit mv-back
@@ -487,7 +487,7 @@ expect_red_runner "D5 dedicated entry deleted (map parses to zero)" "DEDICATED_J
 # G1..G8: the invocation and posture gaps (A2/A4/A5).
 expect_red "G1 invocation is an echo" "none or more than one" \
   sed -i "s|^        run: bash ${DED_P}\$|        run: echo bash ${DED_P}|" "$SB/$WF_REL"
-expect_red "G2 invocation masked with || true" "masks its exit" \
+expect_red "G2 invocation masked with || true" "none or more than one" \
   sed -i "s|^        run: bash ${DED_P}\$|        run: bash ${DED_P} \|\| true|" "$SB/$WF_REL"
 expect_red "G3 job-level continue-on-error" "carries a job-level" \
   sed -i "${DJ} s|^    timeout-minutes: 18\$|    timeout-minutes: 18\n    continue-on-error: true|" "$SB/$WF_REL"
@@ -522,7 +522,7 @@ expect_red_runner "X4 runner --list fails (sets unreadable)" "--list\` exited 3"
   sed -i 's|^  --list) LIST_ONLY=1 ;;$|  --list) exit 3 ;;|' "$SB/$RUNNER_REL"
 
 # G12/G13 (A3): a second invocation anywhere else.
-expect_red "G12 second invocation in deploy-script-tests-fixed" "invoked outside" \
+expect_red "G12 second invocation in deploy-script-tests-fixed" "is mentioned on 2" \
   sed -i "s|^\(        run: bash .github/scripts/test/fixtures-validate-infra-templates.sh\)\$|\1\n      - name: extra\n        run: bash ${DED_P}|" "$SB/$WF_REL"
 restore_wf
 sed -i "s|^\(        run: bash scripts/test-all.sh webplat\)\$|\1\n      - run: bash ${DED_P}|" "$SB/$CI_REL" || setup_die "G13 mutation cmd"
@@ -531,7 +531,7 @@ rc=$(run_gate)
 cp "$SB/ci.pristine" "$SB/$CI_REL" || setup_die "restore ci.yml"
 if [[ "$rc" == "0" ]]; then
   bad "G13 second invocation in ci.yml: gate stayed GREEN (vacuous arm)"
-elif grep -qF "invoked outside" "$SB/out.log"; then
+elif grep -qF "is mentioned on 2" "$SB/out.log"; then
   ok "G13 second invocation in ci.yml: rc=$rc and message names the right mode"
 else
   bad "G13 second invocation in ci.yml: rc=$rc but expected message missing: $(tail -3 "$SB/out.log")"
@@ -551,11 +551,143 @@ fi
 restore_wf
 
 # ---------------------------------------------------------------------------
+# Round 2 (#12941 review round 2): the dedicated job is held to an ALLOWLIST. One row per shape
+# the round-1 seats measured GREEN at 851355d84b, each asserting the refusal that names it.
+# ---------------------------------------------------------------------------
+RS_NAME='      - name: Rehearse the bastion first boot'
+RUN_DED="        run: bash ${DED_P}"
+FIX_SITE='        run: bash .github/scripts/test/fixtures-validate-infra-templates.sh'
+pre_step() { sed -i "${DJ} s|^\(${RS_NAME}\)|${1}\n\1|" "$SB/$WF_REL"; }   # a step before the run step
+on_run()   { sed -i "s|^${RUN_DED}\$|${1}\n${RUN_DED}|" "$SB/$WF_REL"; }   # a key on the run step
+job_key()  { sed -i "${DJ} s|^    timeout-minutes: 18\$|    timeout-minutes: 18\n${1}|" "$SB/$WF_REL"; }
+elsewhere() { sed -i "s|^\(${FIX_SITE}\)\$|\1\n      - name: extra\n        run: ${1}|" "$SB/$WF_REL"; }
+# shellcheck disable=SC2016  # literal workflow text: `$GITHUB_ENV` and `${{ }}` must reach the YAML unexpanded
+{
+GH_ENV_STEP='      - run: echo "CI=" >> "$GITHUB_ENV"'
+GH_PATH_STEP='      - run: echo /tmp/shim >> "$GITHUB_PATH"'
+EXPR_TOJSON_GH='    env:\n      CTX: ${{ toJSON(github) }}'
+EXPR_TOJSON_SEC='    env:\n      CTX: ${{ toJson(secrets) }}'
+EXPR_CAP_SEC='    env:\n      FOO: ${{ Secrets.FOO }}'
+EXPR_FMT_SEC="    env:\n      CTX: \${{ format('{0}', secrets) }}"
+WS_PATH='bash ${{ github.workspace }}/'"${DED_P}"
+NAME_EXPR='      - name: Rehearse ${{ github.event.pull_request.title }}'
+}
+
+# shellcheck disable=SC2016  # needles are the gate's literal backtick-quoted text
+{
+expect_red "H1 pre-step rewrites the suite (sed -i '2i exit 0')" "the job has 2 run: step(s)" \
+  pre_step "      - run: sed -i '2i exit 0' ${DED_P}"
+expect_red "H2 shell: true {0} on the run step" "refused key(s): shell:" \
+  on_run "        shell: true {0}"
+expect_red "H3 job-level defaults: run: shell: true {0}" "refused key(s): defaults:" \
+  job_key "    defaults:\n      run:\n        shell: true {0}"
+expect_red "H4 workflow-level defaults: run: shell: true {0}" "workflow-level defaults: block" \
+  sed -i 's|^env:$|defaults:\n  run:\n    shell: true {0}\n\nenv:|' "$SB/$WF_REL"
+expect_red "H5 pre-step writes \$GITHUB_ENV" "references GITHUB_ENV" pre_step "$GH_ENV_STEP"
+expect_red "H5b pre-step writes \$GITHUB_PATH" "references GITHUB_PATH" pre_step "$GH_PATH_STEP"
+expect_red "H6 decoy echo-xbash step + continue-on-error on the real step" \
+  "step for bastion-runcmd-rehearsal.test.sh carries" \
+  sed -i -e "${DJ} s|^\(${RS_NAME}\)|      - run: echo xbash ${DED_P}\n\1|" \
+    -e "s|^${RUN_DED}\$|        continue-on-error: true\n${RUN_DED}|" "$SB/$WF_REL"
+expect_red "H7 job env toJSON(github)" "references a credential" job_key "$EXPR_TOJSON_GH"
+expect_red "H8 job env toJson(secrets)" "references a credential" job_key "$EXPR_TOJSON_SEC"
+expect_red "H9 job env Secrets.FOO" "references a credential" job_key "$EXPR_CAP_SEC"
+expect_red "H10 job env format('{0}', secrets)" "references a credential" job_key "$EXPR_FMT_SEC"
+expect_red "H11 step flow env { CI: '' }" "sets CI" on_run "        env: { CI: '' }"
+expect_red "H12 step env quoted \"CI\" key" "sets CI" on_run "        env:\n          \"CI\": ''"
+expect_red "H13 step env quoted 'BRH_STATIC_ONLY' key" "sets BRH_STATIC_ONLY" \
+  on_run "        env:\n          'BRH_STATIC_ONLY': '1'"
+expect_red "H14 workflow env quoted \"CI\" key" "sets CI" \
+  sed -i "s|^  TERRAFORM_VERSION: \"1.10.5\"\$|&\n  \"CI\": ''|" "$SB/$WF_REL"
+expect_red "H14b workflow env BASH_ENV (no knob name)" "inherits is outside its allowlist" \
+  sed -i "s|^  TERRAFORM_VERSION: \"1.10.5\"\$|&\n  BASH_ENV: apps/web-platform/infra/x.sh|" "$SB/$WF_REL"
+expect_red "H15 step env with a harmless key (env: itself refused)" "refused key(s): env:" \
+  on_run "        env:\n          FOO: bar"
+expect_red "H16 working-directory: on the run step" "refused key(s): working-directory:" \
+  on_run "        working-directory: apps"
+expect_red "H16b expression outside the allowlist" "expression(s) outside its allowlist" \
+  sed -i "${DJ} s|^${RS_NAME}.*\$|${NAME_EXPR}|" "$SB/$WF_REL"
+expect_red "H16c a local composite action step in the job" "allowed: actions/checkout" \
+  pre_step "      - uses: ./.github/actions/zz"
+expect_red "H16d a job key outside the allowlist (container:)" "is not allowlisted (needs, if" \
+  job_key "    container: ubuntu:24.04"
+expect_red "H17 second invocation ./<path>" "is mentioned on 2" elsewhere "./${DED_P}"
+expect_red "H18 second invocation, bare <path>" "is mentioned on 2" elsewhere "${DED_P}"
+expect_red "H19 second invocation bash -x <path>" "is mentioned on 2" elsewhere "bash -x ${DED_P}"
+expect_red "H20 second invocation bash \"<path>\"" "is mentioned on 2" elsewhere "bash \"${DED_P}\""
+expect_red "H21 second invocation \${{ github.workspace }}/<path>" "is mentioned on 2" elsewhere "$WS_PATH"
+# (`\\|`: the helper's sed uses `|` as its delimiter.)
+expect_red "H23 second checkout whose persist-credentials is block-scalar text" \
+  "actions/checkout step(s) without" \
+  pre_step "      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5\n        with:\n          path: other\n          sparse-checkout: \\|\n            persist-credentials: false"
+expect_red "H24 steps re-indented by two spaces" "non-canonical indentation" \
+  sed -i "${DJ} { /^    steps:\$/,/^  [a-z-]*:\$/ s|^      |        | }" "$SB/$WF_REL"
+expect_red "H25 suite step moved into a glued job whose header carries a comment" \
+  "DEDICATED (never executed by the runner) but is NOT" \
+  sed -i "s|^${RUN_DED}\$|        run: echo ok\n\n  sneaky:  # glued\n    needs: detect-changes\n    runs-on: [self-hosted, linux]\n    steps:\n      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5\n        with:\n          persist-credentials: false\n      - name: Rehearse\n${RUN_DED}|" "$SB/$WF_REL"
+expect_red_runner "H26 same-count swap of the dedicated member (set equality, not a count)" \
+  "SKIP dedicated set differs" \
+  sed -i "s|^_dedicated_job() {|declare -n _dj=DEDICATED_JOB_WHY; _dj[bastion.test.sh]=\"x; runs in the bastion-boot-rehearsal job (#1)\"; unset '_dj[bastion-runcmd-rehearsal.test.sh]'; unset -n _dj\n_dedicated_job() {|" "$SB/$RUNNER_REL"
+expect_red_runner "H27 --list prints nothing and exits 0" "SKIP privileged set differs" \
+  sed -i 's|^if (( LIST_ONLY )); then$|&\n  exit 0|' "$SB/$RUNNER_REL"
+
+# P1..P4: the privileged arm's anchored invocation (R2A-7).
+SMP="${INFRA_PREFIX}/sandbox-masked-proc-docker.test.sh"
+expect_red "P1 privileged step masked with || true" \
+  "sandbox-masked-proc-docker.test.sh is PRIVILEGED (excluded from the runner, needs root) but is NOT" \
+  sed -i "s#^\(        run: sudo bash ${SMP}\)\$#\1 || true#" "$SB/$WF_REL"
+expect_red "P2 privileged invocation is an echo" \
+  "sandbox-masked-proc-docker.test.sh is PRIVILEGED (excluded from the runner, needs root) but is NOT" \
+  sed -i "s#^        run: sudo bash ${SMP}\$#        run: echo sudo bash ${SMP}#" "$SB/$WF_REL"
+expect_red "P3 set +e before a privileged run: | line" \
+  "sudo step for workspaces-luks-loopback.test.sh masks its exit" \
+  sed -i "s#^          sudo bash ${LOOPBACK}\$#          set +e\n&#" "$SB/$WF_REL"
+expect_red "P4 decoy echo step before a privileged step masked with if: false" \
+  "sudo step for sandbox-masked-proc-docker.test.sh carries" \
+  sed -i "s#^        run: sudo bash ${SMP}\$#        run: echo decoy\n      - run: echo sudo bash ${SMP}\n      - name: real\n        if: false\n        run: sudo bash ${SMP}#" "$SB/$WF_REL"
+}
+
+# H22: a local composite action invoking the suite (the scan covers .github/actions/**).
+restore_wf
+mkdir -p "$SB/.github/actions/zz" || setup_die "mkdir composite action"
+printf 'runs:\n  using: composite\n  steps:\n    - run: bash %s\n      shell: bash\n' "$DED_P" \
+  > "$SB/.github/actions/zz/action.yml" || setup_die "H22 mutation cmd"
+rc=$(run_gate)
+rm -rf "$SB/.github/actions/zz"
+if [[ "$rc" == "0" ]]; then
+  bad "H22 composite action invoking the suite: gate stayed GREEN (vacuous arm)"
+elif grep -qF "is mentioned on 2" "$SB/out.log"; then
+  ok "H22 composite action invoking the suite: rc=$rc and message names the right mode"
+else
+  bad "H22 composite action invoking the suite: rc=$rc but expected message missing: $(tail -3 "$SB/out.log")"
+fi
+
+# GREEN: the allowlist is not over-strict on the shapes it allows.
+green_row() {  # <label> <mutation cmd…>
+  local label="$1"; shift
+  restore_wf; restore_runner
+  "$@" || setup_die "mutation cmd for $label"
+  assert_landed "$label"
+  local rc; rc=$(run_gate)
+  if [[ "$rc" == "0" ]]; then ok "$label stays GREEN"
+  else bad "$label: gate red-failed a valid shape: $(grep -m2 '::error::' "$SB/out.log")"; fi
+}
+green_row "P-green trailing comment on a privileged sudo line" \
+  sed -i "s|^        run: sudo bash ${SMP}\$|&  # note|" "$SB/$WF_REL"
+green_row "H-green the run step written as its step's first key (- run:)" \
+  sed -i -e "${DJ} {/^${RS_NAME}/d}" -e "s|^${RUN_DED}\$|      - run: bash ${DED_P}|" "$SB/$WF_REL"
+green_row "H-green a comment line inside the job mentioning env:/shell:/secrets" \
+  sed -i "s|^${RUN_DED}\$|        # env: shell: secrets.X \$GITHUB_ENV (commented, so inert)\n${RUN_DED}|" "$SB/$WF_REL"
+restore_wf; restore_runner
+
+# ---------------------------------------------------------------------------
 # Assertion floor.
 # ---------------------------------------------------------------------------
 # 31 -> 65 with the #12941 review rows (A5-1..9, D1..5, G1..G13 + G8b, X1..X4, G-green = 33
 # rows, plus the pre-existing 32): measured on the green run that added them.
-MIN_ASSERTS=65
+# 65 -> 104 with the round-2 allowlist rows (H1..H27 incl. H5b/H14b/H16b-d = 32, P1..P4, and
+# 3 GREEN rows = 39): measured on the green run that added them.
+MIN_ASSERTS=104
 if (( asserts < MIN_ASSERTS )); then
   echo "[FAIL] assertion floor: only $asserts assertion(s) ran, expected >= $MIN_ASSERTS." >&2
   echo "       Rows were removed or short-circuited. Lower the floor deliberately, with a reason." >&2
