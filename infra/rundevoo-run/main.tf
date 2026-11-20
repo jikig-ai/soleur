@@ -19,7 +19,10 @@ terraform {
       version = "~> 4.0"
     }
   }
-  required_version = ">= 1.7"
+  # use_lockfile (S3 backend) landed in Terraform 1.10; a lower floor would
+  # admit versions that hard-error on init. Sibling roots carry the same stale
+  # floor — tracked in #12999.
+  required_version = ">= 1.10"
 }
 
 provider "cloudflare" {

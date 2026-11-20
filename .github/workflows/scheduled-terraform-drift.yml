@@ -254,6 +254,13 @@ jobs:
       # unmanaged record. Runs even when the plan is already red: an out-of-
       # band record is additive information the plan-leg failure would hide.
       - name: DNS whole-list set equality (rundevoo.run)
+        id: dns_equality
+        # A bare failure (no continue-on-error) keeps the job red; the outcome
+        # is folded into the filer/email/check-in `if:`s below, because every
+        # one of them otherwise keys only on steps.plan.outputs.exit_code and a
+        # probe-only failure would report `ok` to the monitor with no issue
+        # and no email. On non-rundevoo legs the step is `skipped`, which is
+        # != 'failure', so their behavior is unchanged.
         if: always() && matrix.directory == 'infra/rundevoo-run'
         working-directory: ${{ matrix.directory }}
         env:
@@ -1281,14 +1288,16 @@ jobs:
       # `always() &&` on the email pair makes the first stumble cost one emitter instead of
       # all of them.
       - name: Ensure infra-drift label exists
-        if: always() && steps.plan.outputs.exit_code == '2'
+        # dns_equality.outcome: an unmanaged DNS record IS infra drift — file
+        # the same issue the plan-drift arm files.
+        if: always() && (steps.plan.outputs.exit_code == '2' || steps.dns_equality.outcome == 'failure')
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh label create "infra-drift" --description "Terraform detected infrastructure drift" --color "D93F0B" 2>/dev/null || true
 
       - name: Create or update drift issue
-        if: always() && steps.plan.outputs.exit_code == '2'
+        if: always() && (steps.plan.outputs.exit_code == '2' || steps.dns_equality.outcome == 'failure')
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1298,6 +1307,7 @@ jobs:
           SERVER_URL: ${{ github.server_url }}
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
+          PROBE_FAILED: ${{ steps.dns_equality.outcome == 'failure' }}
         run: |
           TITLE="infra: drift detected in ${STACK_NAME}"
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
@@ -1315,7 +1325,7 @@ jobs:
               echo "<details><summary>Plan output</summary>"
               echo ""
               echo '```'
-              cat ${RUNNER_TEMP}/plan-output.txt
+              cat ${RUNNER_TEMP}/plan-output.txt 2>/dev/null || echo "(plan output unavailable)"
               echo '```'
               echo ""
               echo "</details>"
@@ -1330,12 +1340,16 @@ jobs:
               echo "**Detected:** ${TIMESTAMP}"
               echo "**Workflow:** [Run #${RUN_NUMBER}](${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID})"
               echo ""
-              echo "Terraform \`plan -detailed-exitcode\` returned exit code 2, indicating infrastructure has drifted from the Terraform state."
+              if [[ "$PROBE_FAILED" == "true" ]]; then
+                echo "The DNS whole-list set-equality probe failed — either an unmanaged record exists in the live rundevoo.run zone, DNSSEC was disabled out-of-band, or the probe could not verify (API or pagination failure). Read the run's 'DNS whole-list set equality' step output for the diff or the error."
+              else
+                echo "Terraform \`plan -detailed-exitcode\` returned exit code 2, indicating infrastructure has drifted from the Terraform state."
+              fi
               echo ""
               echo "<details><summary>Plan output</summary>"
               echo ""
               echo '```'
-              cat ${RUNNER_TEMP}/plan-output.txt
+              cat ${RUNNER_TEMP}/plan-output.txt 2>/dev/null || echo "(plan output unavailable)"
               echo '```'
               echo ""
               echo "</details>"
@@ -1386,9 +1400,10 @@ jobs:
 
       - name: Prepare email content
         id: email
-        if: always() && steps.plan.outputs.exit_code != '0'
+        if: always() && (steps.plan.outputs.exit_code != '0' || steps.dns_equality.outcome == 'failure')
         env:
           EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
+          PROBE_FAILED: ${{ steps.dns_equality.outcome == 'failure' }}
           STACK_NAME: ${{ steps.plan.outputs.stack_name }}
           MATRIX_DIR: ${{ matrix.directory }}
         run: |
@@ -1401,7 +1416,10 @@ jobs:
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M UTC')
 
-          if [[ "$EXIT_CODE" == "2" ]]; then
+          if [[ "$PROBE_FAILED" == "true" ]]; then
+            SUBJECT="[DRIFT] DNS equality probe failed for ${STACK_NAME}"
+            ALERT_TYPE="DNS equality probe failure (unmanaged record or probe could not verify)"
+          elif [[ "$EXIT_CODE" == "2" ]]; then
             SUBJECT="[DRIFT] Infrastructure drift detected in ${STACK_NAME}"
             ALERT_TYPE="Drift Detected"
           elif [[ -z "$EXIT_CODE" ]]; then
@@ -1433,7 +1451,7 @@ jobs:
           { echo "body<<EOFBODY"; cat /tmp/email-body.html; echo "EOFBODY"; } >> "$GITHUB_OUTPUT"
 
       - name: Email notification (drift/error)
-        if: always() && steps.plan.outputs.exit_code != '0'
+        if: always() && (steps.plan.outputs.exit_code != '0' || steps.dns_equality.outcome == 'failure')
         uses: ./.github/actions/notify-ops-email
         with:
           subject: ${{ steps.email.outputs.subject }}
@@ -1460,7 +1478,7 @@ jobs:
         uses: ./.github/actions/sentry-heartbeat
         with:
           monitor-slug: scheduled-terraform-drift
-          status: ${{ (steps.plan.outputs.exit_code == '0' || steps.plan.outputs.exit_code == '2') && 'ok' || 'error' }}
+          status: ${{ (steps.plan.outputs.exit_code == '0' || steps.plan.outputs.exit_code == '2') && steps.dns_equality.outcome != 'failure' && 'ok' || 'error' }}
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
