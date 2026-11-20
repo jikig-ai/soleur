@@ -63,7 +63,7 @@ check_plan() {
   fi
   # fallback: any plan file modified on this branch
   if [[ -z "$plan_file" ]]; then
-    plan_file="$(git diff --name-only "${BASE_REF}...HEAD" 2>/dev/null | grep '^knowledge-base/project/plans/.*\.md$' | head -1)"
+    plan_file="$(git diff -z --no-renames --ignore-submodules=none --name-only "${BASE_REF}...HEAD" | tr '\0' '\n' | grep '^knowledge-base/project/plans/.*\.md$' | head -1)"
   fi
   if [[ -z "$plan_file" || ! -f "$plan_file" ]]; then
     add_missing "plan-file"; return
@@ -77,7 +77,7 @@ check_plan() {
     add_missing "tasks-md"
   fi
   # no-out-of-scope-edits: only plans/specs touched
-  out_of_scope="$(git diff --name-only "${BASE_REF}...HEAD" 2>/dev/null | grep -v '^knowledge-base/project/\(plans\|specs\)/' || true)"
+  out_of_scope="$(git diff -z --no-renames --ignore-submodules=none --name-only "${BASE_REF}...HEAD" | tr '\0' '\n' | grep -v '^knowledge-base/project/\(plans\|specs\)/')"
   if [[ -n "$out_of_scope" ]]; then
     add_missing "no-out-of-scope-edits"
   fi
@@ -125,7 +125,7 @@ check_qa() {
   fi
   if [[ "$has_scenarios" != true && "$has_marker" != true ]]; then
     # docs-only exemption: if no non-doc files changed, exempt
-    non_docs="$(git diff --name-only "${BASE_REF}...HEAD" 2>/dev/null | grep -vE '\.(md|mdx|rst|txt)$' || true)"
+    non_docs="$(git diff -z --no-renames --ignore-submodules=none --name-only "${BASE_REF}...HEAD" | tr '\0' '\n' | grep -vE '\.(md|mdx|rst|txt)$')"
     if [[ -n "$non_docs" ]]; then
       add_missing "test-scenarios-or-marker"
     fi
