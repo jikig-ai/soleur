@@ -92,11 +92,16 @@ ZONE_ID=$(grep -oE -m1 '[0-9a-f]{32}' < <(grep -oE '^[[:space:]]*id = "[0-9a-f]{
 [[ ${#ZONE_ID} -eq 32 ]] || { red "could not read the zone id from $ZONE_TF import block"; exit 1; }
 
 # ── managed set: type<TAB>name<TAB>content per cloudflare_record in state ──
+# `name` in state is the provider's read-back form: FQDN at the apex, the
+# ZONE-RELATIVE label for subdomains (`_dmarc`, never `_dmarc.rundevoo.run` —
+# provider v4 strips the zone suffix on read). The live API always returns
+# FQDN, so normalize the managed side to FQDN before the set compare; without
+# it every subdomain record reads as simultaneously unmanaged and missing.
 managed=$(mktemp); live=$(mktemp)
 trap 'rm -f "$managed" "$live"' EXIT
 jq -r '
   [.values.root_module.resources[]? | select(.type == "cloudflare_record")
-    | .values | [.type, .name, .content] | @tsv][] ' "$state_json" \
+    | .values | [.type, (.name | if endswith("rundevoo.run") then . else . + ".rundevoo.run" end), .content] | @tsv][] ' "$state_json" \
   | sort -u > "$managed"
 
 # ── live set: paginated enumeration (bounded) ──────────────────────────────
