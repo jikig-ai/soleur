@@ -54,7 +54,6 @@ esac
 PKG_LOCK="${SDK_GATE_PKG_LOCK:-apps/web-platform/package-lock.json}"
 BASE_REF="${SDK_GATE_BASE_REF:-origin/main}"
 ACK_TOKEN="sdk-bump-verified"
-FOLLOWUP="the ADR-079 deferral-B follow-up (creds-gated real-argv capture)"
 
 SDK_PACKAGES=("@anthropic-ai/claude-agent-sdk" "@anthropic-ai/claude-code")
 
@@ -116,6 +115,7 @@ if [[ -n "$BASE_CONTENT" ]]; then
 fi
 
 bumped_pkgs=()
+agent_sdk_new=""
 if [[ -n "$BASE_TMP" ]]; then
   for pkg in "${SDK_PACKAGES[@]}"; do
     head_v="$(pkglock_version "$PKG_LOCK" "$pkg")"
@@ -123,11 +123,14 @@ if [[ -n "$BASE_TMP" ]]; then
     if [[ -n "$base_v" && -n "$head_v" && "$head_v" != "$base_v" ]]; then
       echo "sdk-bump-gate: DETECTED bump — ${pkg}: ${base_v} → ${head_v}"
       bumped_pkgs+=("$pkg")
+      [[ "$pkg" == "@anthropic-ai/claude-agent-sdk" ]] && agent_sdk_new="$head_v"
     fi
   done
-  if [[ "${#bumped_pkgs[@]}" -gt 0 ]]; then
-    # #12906: printed once per run (not per package), whether or not the ack trailer is present. ADR-278 records why.
-    echo "sdk-bump-gate: re-measure the SandboxNetworkAccess allow cache on the new SDK before adopting it: bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh <new-version> (ADR-278, #12906)"
+  if [[ -n "$agent_sdk_new" ]]; then
+    # #12906: printed once per run, only when the Agent SDK itself moved (the script takes an Agent SDK version and
+    # measures its bundled CLI; a claude-code-only bump has nothing to pass it), whether or not the ack trailer is
+    # present. ADR-278 records why.
+    echo "sdk-bump-gate: re-measure the SandboxNetworkAccess allow cache on the new SDK before adopting it: bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh ${agent_sdk_new} (ADR-278, #12906)"
   fi
   rm -f "$BASE_TMP"
 else
