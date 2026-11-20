@@ -38,13 +38,13 @@ Standing limits for every task: no production apply, no workflow dispatch (inclu
 
 ## 4. Testing and verification
 
-- [ ] 4.1 Full cloudflare suite, `health-colo-falsification.test.sh` (and `bash scripts/test-all.sh --print-selection` on a runbook-only change), `components.test.ts`, `c4-count-parity.test.sh`, markdown lint, `bash scripts/test-all.sh --affected`.
+- [x] 4.1 Full cloudflare suite, `health-colo-falsification.test.sh` (and `bash scripts/test-all.sh --print-selection` on a runbook-only change), `components.test.ts`, `c4-count-parity.test.sh`, markdown lint, `bash scripts/test-all.sh --affected`.
 - [x] 4.2 AC10 hunk-distance check from `git diff -U0 origin/main...HEAD` against the merge-base anchors.
 - [x] 4.3 Pre-push `git merge-tree --write-tree` against `origin/feat-one-shot-12742-public-sdk-url-poll` (conflicts allowed only on the four floor lines) and `origin/feat-one-shot-12712`.
 
 ## 5. PR and sequencing
 
-- [ ] 5.1 Push; update draft PR #12959: `Ref #12846`, `Ref #12441`, `Ref #10479`, no `Closes`, `closingIssuesReferences` is `[]`; lead with the deadline; the six CLO owner-review items; the per-floor deltas and the rebase-and-re-pin note for whichever of this PR and #12876 lands second.
+- [x] 5.1 Push; update draft PR #12959: `Ref #12846`, `Ref #12441`, `Ref #10479`, no `Closes`, `closingIssuesReferences` is `[]`; lead with the deadline; the six CLO owner-review items; the per-floor deltas and the rebase-and-re-pin note for whichever of this PR and #12876 lands second.
 - [x] 5.2 One comment on #12931: run the #12846 read against the old zone before Doppler `CF_ZONE_ID` changes; old zone may be deleted from about 2026-11-25; new-zone token reach is unverified.
 
 ## 6. Post-landing (same session, Class R; then the PR that closes #12846)
