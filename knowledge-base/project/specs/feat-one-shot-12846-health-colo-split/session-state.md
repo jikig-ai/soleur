@@ -26,3 +26,10 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; repo-research-analyst, lear
 - constraint: No production apply, workflow dispatch, or credential change without the owner's typed go.
 - constraint: Do not dispatch apply-web-platform-infra.yml before #12931 lands.
 - cto_spawns=1 (work phase, rulings W1-W11)
+
+## Review phase (2026-11-19/20)
+
+- cto_spawns=2 (review phase, rulings Q1-Q11; the pipeline's budget of two is spent, so later forks are lead decisions recorded in decision-challenges.md "Fix-round 1 notes")
+- PANEL_SHA=f5aeda0d0596b711018ffcbf4b409e6050f38e4b; full panel 10 seats; risk tier none
+- Dedup ledger (defect key -> reporting seats): recipe input contract vs wrapper output (null p90, duplicate null colo, link row) -> codequality, testdesign, pattern, structural; capture trigger / tracker -> agentnative, architecture, pattern, codequality; wrapper environment census bypass -> structural (round 0), security (fix round 1); join/preflight refusal reporting -> agentnative, architecture, security, codequality; stale cap/offset/zone-prefix wording -> pattern, codequality, architecture, simplicity; exit-status and per-clause refusal coverage -> testdesign; simplicity dissents D1/D3/D4/D5 -> simplicity (ruled Q9)
+- Fix round 1: seats security, testdesign, codequality, architecture, pattern, simplicity, agentnative over first-parent commits 88793975bf..b1c00aed73; findings fixed in 44c2a4a89e; verification pass on 44c2a4a89e
