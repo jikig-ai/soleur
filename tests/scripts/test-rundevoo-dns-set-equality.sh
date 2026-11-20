@@ -60,7 +60,7 @@ state_doc() {
 {"values":{"root_module":{"resources":[
   {"type":"cloudflare_record","values":{"type":"MX","name":"rundevoo.run","content":"."}},
   {"type":"cloudflare_record","values":{"type":"TXT","name":"rundevoo.run","content":"v=spf1 -all"}},
-  {"type":"cloudflare_record","values":{"type":"TXT","name":"_dmarc.rundevoo.run","content":"v=DMARC1; p=reject"}},
+  {"type":"cloudflare_record","values":{"type":"TXT","name":"_dmarc","content":"v=DMARC1; p=reject"}},
   {"type":"cloudflare_zone","values":{"id":"4a16c6fcd6949d1887d6247f95a0d91e"}}
 ]}}}
 JSON
