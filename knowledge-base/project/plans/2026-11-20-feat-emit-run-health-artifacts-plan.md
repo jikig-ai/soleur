@@ -15,6 +15,25 @@ requires_cpo_signoff: true
 
 # feat: instrument one-shot and test-fix-loop to emit run_health.json and phase_prompts
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-20
+**Sections enhanced:** 6
+**Research agents used:** sequential-fallback in this process. Descriptions of the engineering review, research, and design agents were read here. None of those agents was spawned.
+
+Reviewed-Coverage: sequential-fallback
+
+### Key Improvements
+
+1. The phase-token refusal runs in the shell before `mkdir -p "$RUN_DIR/phase_prompts"`. The Python heredoc discards stderr (`2>/dev/null`), so the `run-health-emit:` line is printed by the shell.
+2. `--seal` does not require `--phase` and does not append a phase row. A token `.`, `..`, or any token containing `..` is refused even when it matches `^[A-Za-z0-9._-]+$`, so the check does not depend on the `.md` suffix.
+3. The JSON publish stays `os.replace` of a same-directory temp file, with no `fsync`, matching the two sibling writers. The byte ceiling 52000 is `ceilings.one-shot`, not a top-level key.
+
+### New Considerations Discovered
+
+- Installed Python 3.14.8 `os.replace.__doc__` is "Rename a file or directory, overwriting the destination." It does not say atomic. CPython `Doc/library/os.rst` (Context7 `/python/cpython`, 2026-11-20) says a successful rename is an atomic POSIX operation and may fail across filesystems. Same-directory temp is the guard for that failure. `fsync` is power-loss durability, and neither sibling writer does it.
+- Deepen gates on this file: user-brand pass (`single-user incident`), observability pass, guard-contract lint exit 0 with a structural assembly, scope-check unfenced count 1, PAT sweep empty. No network-outage keyword in Overview or Problem Statement. No downtime trigger. No new autonomous task. No encryption store class (volume, database, bucket, queue, cache, backup target, log sink) and no `.tf`, migration, cloud-init, or compose path. `git ls-files` shows Inngest `cron-*` functions and 24 `.github/workflows/scheduled-*` files. This plan adds no scheduled job, so that precedent does not choose a trigger.
+
 ## Overview
 
 A degraded pipeline run needs a sealed on-disk record of which phases ran, whether they errored, what prompt text that phase used, and how the run exited. The helper that writes that record is already on `origin/main`. Neither `one-shot` nor `test-fix-loop` calls it, the versioned schema file the loop already names is absent, and seal today depends on a magic phase name. This plan finishes that contract: one schema, an explicit seal, skill text that actually invokes the helper, and tests. It does not close the parent epic.
@@ -31,7 +50,7 @@ Keep the one helper. Do not add a second ledger, a cron, or a new ignore rule.
 
 1. Document schema version 1 in `plugins/soleur/skills/one-shot/references/run-health-schema.md` and write `schema_version: 1` into the JSON.
 2. Seal only when the caller passes `--seal` with a terminal status (`completed`, `failed`, or `budget-capped`). A phase name such as `8`, `exit`, or `ship` must not seal by itself. After `sealed` is true, a later phase upsert must leave `sealed`, `completed_at`, and the terminal `status` unchanged.
-3. At `--seal`, copy gate state by running `plugins/soleur/scripts/pipeline-tally.sh show` into `tally_show`, and set `goto_count` by counting `verb=goto` lines in the session-state file the caller passes. Do not invent a second counter. `pipeline-tally.sh` already stores seats, ci cycles, fix rounds, and agent rounds. `plugins/soleur/scripts/retry-budget-ruling.sh` already appends `verb=goto` into `session-state.md`.
+3. At `--seal`, copy gate state by running `plugins/soleur/scripts/pipeline-tally.sh show` into `tally_show`, and set `goto_count` by counting full lines `verb: goto` in the session-state file the caller passes. A missing file yields `goto_count` 0 and exit 0. Do not add a second tally file and do not edit `pipeline-tally.sh`. Ruled by CTO agent, 2026-11-20: the compact marker `retry-budget-ruling: verb=goto phase=` has no producer; `retry-budget-ruling.sh` appends `verb: goto`.
 4. Tell both skills to call the helper. The snapshot is the step invocation (step id, child skill, args), not the whole skill file. The skill file is already in git. Retries keep the first snapshot and write `phase.attempt-N.md`.
 5. Extend `plugins/soleur/scripts/run-health-emit.test.sh`. Do not register a new suite file.
 
@@ -40,10 +59,12 @@ Keep the one helper. Do not add a second ledger, a cron, or a new ignore rule.
 ## Technical Considerations
 
 - The helper stays fail-open. Missing args, a refused phase token, a mkdir failure, and a Python write failure print to stderr and exit 0. Do not switch this file to `set -euo pipefail` or to exit 1 on a bad arg. Constitution exit-1 would abort the pipeline the record is not allowed to abort. The existing test already asserts the missing-arg exit is 0.
-- Phase tokens must match `^[A-Za-z0-9._-]+$`. Anything else exits 0 before the first write, so a token cannot escape `phase_prompts/`.
+- Phase tokens must match `^[A-Za-z0-9._-]+$`. Also refuse `.`, `..`, and any token that contains `..`, even though those tokens match the charset. A bare `..` plus the `.md` suffix becomes the filename `...md` only because of the suffix. Do not rely on that suffix. The check runs in the shell before `mkdir -p "$RUN_DIR/phase_prompts"`. On the current script that `mkdir` is line 44, before Python, and the Python heredoc is `2>/dev/null`, so a refusal printed only from Python is discarded and the directory already exists. The shell prints `run-health-emit:` and exits 0, and the run directory is absent.
+- `--seal` and `--discover` are arms in the argument case, ahead of the unknown-arg arm. That arm shifts once and continues, so an unrecognized flag prints `unknown arg` and then the required-args line. `--seal` does not require `--phase` and does not append a phase row. The three accepted shapes are `--discover` alone, `--seal` with `--run-dir` and a terminal status, and `--run-dir` plus `--phase` plus `--status`.
+- Publish the JSON with `os.replace` of a temp file in the same directory as `run_health.json`. Do not add `fsync` and do not add the `atomicwrites` package. See the precedent diff under Dependencies and Risks.
 - `--discover` writes a temp directory, seals a one-phase ledger, prints `ok`, and deletes the temp directory. It must not write under the repo. Preflight Check 10 runs with the repo read-only.
 - Skill edits stay off the pinned strings. Do not rewrite the overlap-preflight paragraph, the scope-check sentence (`non-zero exit = scope unverified`), the `gh pr diff <M> --name-only` sentence, the anti-bypass markers, or the admin-merge-ready sentence in `one-shot/SKILL.md`. Those strings are pinned by `plugins/soleur/test/pr-overlap-preflight.test.sh`, `plugins/soleur/test/changed-path-readers.test.sh`, `plugins/soleur/test/workflow-fidelity.test.ts`, `plugins/soleur/test/admin-merge-ready-wiring.test.sh`, and `plugins/soleur/test/components.test.ts`.
-- `one-shot/SKILL.md` byte ceiling, measured 2026-11-20: `wc -c` is 51995 and `plugins/soleur/test/skill-body-budget.json` key `one-shot` is 52000 (`lint-skill-body-budget.py` uses `stat().st_size` of the whole file). Spare is 5 bytes. After the edit the file must be at most 51950 bytes (50 bytes of spare). Do not raise the ceiling in this diff. `test-fix-loop/SKILL.md` is 19485 bytes and is not a ceiling key.
+- `one-shot/SKILL.md` byte ceiling, measured 2026-11-20: `wc -c` is 51995 and `plugins/soleur/test/skill-body-budget.json` field `ceilings.one-shot` is 52000 (there is no top-level `one-shot` key; `json.load(...)["one-shot"]` raises KeyError) (`lint-skill-body-budget.py` uses `stat().st_size` of the whole file). Spare is 5 bytes. After the edit the file must be at most 51950 bytes (50 bytes of spare). Do not raise the ceiling in this diff. `test-fix-loop/SKILL.md` is 19485 bytes and is not a ceiling key.
 - The one-shot command list lives in `run-health-schema.md`. The skill file gains only this block, and loses two dated session sentences inside the paragraph that starts `**Why this gate exists.**`: the sentence that starts `The 2026-05-12` and ends at `implementations).`, and the sentence that starts `The 2026-05-29` and ends immediately before `Item 3 now probes`. Those two sentences are history. The re-probe rule and `Item 3 now probes` stay. `git grep` of distinctive slices of those sentences under `plugins/soleur/test` and `plugins/soleur/scripts` returned no pin. Net of a 276-byte block against 676 bytes removed lands near 51595 (`52000 - 51595 = 405` spare). Re-measure with `wc -c` after the edit. If a pin test fails, restore the sentence it needs and trim a different unpinned history clause in that same paragraph until `wc -c` is at most 51950.
 
 ```text
@@ -55,7 +76,7 @@ Keep the one helper. Do not add a second ledger, a cron, or a new ignore rule.
 - Reference the schema with a markdown link, not a backtick path. From `one-shot`: `[run-health-schema.md](./references/run-health-schema.md)`. From `test-fix-loop`: `[run-health-schema.md](../one-shot/references/run-health-schema.md)`.
 - Do not change either skill's `description:` line. `one-shot` is 17 words. `test-fix-loop` is 27 words.
 - Status vocabulary is four tokens. `started` is a phase row only: `--seal` with `started` does not set `sealed`. `completed`, `failed`, and `budget-capped` are terminal: `--seal` with one of those sets `sealed`, `completed_at`, and ledger `status` to that token. Any other token is non-terminal: the phase row may store it, and `--seal` does not set `sealed`. Do not write a stored value `open`.
-- `goto_count` counts lines that contain the compact marker `retry-budget-ruling: verb=goto phase=`. A prose mention of `verb=goto` without that prefix does not count. `tally_show` is the full stdout of `pipeline-tally.sh show` at seal. Measured on this worktree 2026-11-20, that stdout is one line: `tally: seats=0 ci_cycles=0 fix_rounds=0 agent_rounds=1 ci_wall_s=unmeasured`. The test stubs that program by placing a same-named script earlier on `PATH`. It does not edit `plugins/soleur/scripts/pipeline-tally.sh`. The stub prints one line of that same shape with different integers, so a hard-coded copy of the live line is not what the assertion matches.
+- `goto_count` counts full lines `verb: goto` in the session-state file the caller passes. A prose mention of `verb=goto` does not count. A missing file yields 0. Ruled by CTO agent, 2026-11-20. `tally_show` is the full stdout of `pipeline-tally.sh show` at seal. Measured on this worktree 2026-11-20, that stdout is one line: `tally: seats=0 ci_cycles=0 fix_rounds=0 agent_rounds=1 ci_wall_s=unmeasured`. The test stubs that program by placing a same-named script earlier on `PATH`. It does not edit `plugins/soleur/scripts/pipeline-tally.sh`. The stub prints one line of that same shape with different integers, so a hard-coded copy of the live line is not what the assertion matches.
 - The parent `one-shot` context runs the helper. The planning subagent does not. Steps 1–2 are recorded by the parent before the spawn and after the return. The subagent's plan-only diff check stays limited to `knowledge-base/project/(plans|specs)/`.
 - When replacing the loop's Run Health Emission section, do not cite a closed issue number. Name the consumer by path: `plugins/soleur/agents/engineering/review/session-forensics-analyst.md`.
 - NFR register: no row change. The artifact is a local gitignored file. It adds no request-path latency and no hosted availability target.
@@ -67,8 +88,8 @@ Keep the one helper. Do not add a second ledger, a cron, or a new ignore rule.
 
 - Add the schema document and the JSON fields `schema_version`, `sealed`, `goto_count`, `tally_show`.
 - Replace the phase-name seal heuristic with `--seal`.
-- Add `--session-state`, `--import-tally`, `--discover`, and the phase-token refusal.
-- Success criterion: the cases in Test Scenarios pass, including "phase `8` without `--seal` does not seal" and "a write after seal does not clear it".
+- Add `--session-state`, `--import-tally`, `--discover`, and the phase-token refusal in the shell before `mkdir`.
+- Success criterion: the cases in Test Scenarios pass, including "phase `8` without `--seal` does not seal", "a write after seal does not clear it", "token `..` creates nothing", and "a seal with no `--phase` leaves `phases` empty".
 
 #### Phase 2: Skill calls
 
@@ -172,7 +193,7 @@ discoverability_test:
 | Exit | Position | Proves |
 |---|---|---|
 | Missing `--run-dir`, `--phase`, or `--status` (except `--discover`) | Before first write | Exit 0, directory absent |
-| Phase token outside `^[A-Za-z0-9._-]+$` | Before first write | Exit 0, nothing created |
+| Phase token outside `^[A-Za-z0-9._-]+$`, or `.`, `..`, or a token containing `..` | Shell, before `mkdir -p` of `phase_prompts` | Exit 0, run directory absent, stderr `run-health-emit:` |
 | `mkdir` fails | At the first write, before the JSON replace | Exit 0, stderr `run-health-emit:` |
 | Python replace fails | After `mkdir` | Exit 0, stderr `run-health-emit:` |
 | `--seal` with status `started` | Before setting `sealed` | Exit 0, `sealed` stays false |
@@ -224,11 +245,11 @@ discoverability_test:
 
 - [ ] `plugins/soleur/skills/one-shot/references/run-health-schema.md` documents schema version 1, including `goto_count`, `tally_show`, `phases`, `errors`, `status`, `sealed`, and `completed_at`. `run-health-emit.sh` writes `schema_version` 1.
 - [ ] A second call with the same phase and a new `--prompt-file` leaves `phase_prompts/<phase>.md` unchanged and writes `phase_prompts/<phase>.attempt-2.md`.
-- [ ] `--seal` with `completed`, `failed`, or `budget-capped` sets `sealed` true, `completed_at`, and that status. `--phase 8 --status completed` without `--seal` leaves `sealed` false. A later phase upsert does not clear `sealed` or the terminal status.
+- [ ] `--seal` with `completed`, `failed`, or `budget-capped` sets `sealed` true, `completed_at`, and that status. `--seal` with no `--phase` does not append a phase row. `--phase 8 --status completed` without `--seal` leaves `sealed` false. A later phase upsert does not clear `sealed` or the terminal status.
 - [ ] `git check-ignore -q -- .soleur/runs/example/run_health.json` and the same for `.soleur/runs/example/phase_prompts/0.md` both exit 0, from the existing `.gitignore` `.soleur/` rule, with no new ignore line.
 - [ ] `bash plugins/soleur/scripts/run-health-emit.test.sh` exits 0 and prints `fails=0`. The same file asserts each producer skill has a `bash` line containing `run-health-emit.sh` and `--seal`.
 - [ ] `one-shot` records `run_health_dir:` in the schema's call list and seals on every return path from the parent context. `test-fix-loop` calls the helper at the phase ids it names and seals once before the diagnostic report.
-- [ ] `wc -c plugins/soleur/skills/one-shot/SKILL.md` is at most 51950. The ceiling key `one-shot` in `plugins/soleur/test/skill-body-budget.json` is unchanged at 52000.
+- [ ] `wc -c plugins/soleur/skills/one-shot/SKILL.md` is at most 51950. The field `ceilings.one-shot` in `plugins/soleur/test/skill-body-budget.json` is unchanged at 52000.
 - [ ] This plan's `closes` is 12573 only. The parent epic stays open.
 
 ## Test Scenarios
@@ -239,11 +260,13 @@ discoverability_test:
 - Given a ledger, when `--phase 8 --status completed` is sent without `--seal`, then `sealed` is false and `completed_at` is absent. (`unit`)
 - Given a ledger, when `--phase exit --status failed --seal` is sent, then `sealed` is true, `status` is `failed`, and `completed_at` is set. A following `--phase later --status completed` leaves `sealed` true and `status` `failed`. (`unit`)
 - Given `--seal` before any phase row, when a phase upsert follows, then `sealed` stays true. (`unit`)
-- Given a fixture session-state with two lines `retry-budget-ruling: verb=goto phase=work` and one prose line that only says `verb=goto`, when `--seal --session-state` that file is used, then `goto_count` is 2. A missing file yields `goto_count` 0 and does not fail the process. (`unit`)
+- Given a fixture session-state with two full lines `verb: goto` and one prose line that only says `verb=goto`, when `--seal --session-state` that file is used, then `goto_count` is 2. A missing file yields `goto_count` 0 and does not fail the process. (`unit`)
 - Given `--import-tally` and a `PATH` stub named `pipeline-tally.sh` that prints `tally: seats=3 ci_cycles=1 fix_rounds=0 agent_rounds=2 ci_wall_s=unmeasured`, when `--seal` runs, then `tally_show` contains that line. The real `pipeline-tally.sh` is not edited. (`unit`)
 - Given the repo root, when `git check-ignore -q` is run on `.soleur/runs/example/run_health.json` and `.soleur/runs/example/phase_prompts/0.md`, then both exit 0. (`unit`)
 - Given the producer array of the two skill paths, when either file loses its `bash` line that contains `run-health-emit.sh` and `--seal`, then the test exits non-zero. An empty array exits non-zero. A sentence that names both tokens and does not run `bash` exits non-zero. (`unit`)
 - Given a phase token `../x`, when the helper is invoked, then it exits 0, writes nothing, and prints `run-health-emit:` on stderr. (`unit`)
+- Given a phase token `..`, when the helper is invoked, then it exits 0, creates no run directory, and prints `run-health-emit:` on stderr. The charset alone would accept `..`. (`unit`)
+- Given `--run-dir` and `--status failed --seal` and no `--phase`, when the helper runs, then `sealed` is true, `status` is `failed`, and `phases` is empty. (`unit`)
 - Given missing required args, when the helper is invoked, then the exit code is 0. (`unit`)
 - Given `--discover`, when it runs, then stdout contains `ok` and the repo gains no `.soleur/runs` file from that invocation. (`unit`)
 
@@ -262,6 +285,32 @@ No browser flow and no external API. `soleur:qa` has nothing to drive beyond the
 - `--import-tally` shells out to `pipeline-tally.sh`. A missing tally file is stored as the script's own `UNKNOWN` line, not as a fatal error.
 - Parent-epic retention (purge of old run dirs) is not this issue's ask. No purge job is added here.
 - Draft PR 12996 is this branch's empty draft, not a second implementer. Foreign `test-all.sh` processes seen at planning time belong to other worktrees and do not edit these files.
+
+### Research Insights
+
+**Precedent diff (atomic replace).** The pattern is not novel. No `fdatasync` or `os.fsync` call exists under `plugins/soleur/scripts`.
+
+| Writer | Temp location | Publish | fsync |
+|---|---|---|---|
+| `run-health-emit.sh` on origin/main | `run_health.json.tmp` beside the JSON | `os.replace` | no |
+| `lint-ratchet.py` `_write_baseline` | `mkstemp` in the destination parent | `os.replace` | no |
+| `scan-ancestor-signal-helpers.py` | `<dest>.tmp-<pid>` beside the dest | `os.replace` | no |
+| This plan | same directory as `run_health.json` | `os.replace` | no |
+
+**Best Practices:**
+
+- Write the temp file in the destination directory. `os.replace` may fail when the temp and the destination are on different filesystems (CPython `os.rst`; same point in the 2026-09-18 write-up of an `EXDEV` replace).
+- `fsync` of the file and the parent directory is how a library such as `atomicwrites` asks for power-loss durability. That is a different contract from rename atomicity. This ledger is local and fail-open. Matching the siblings means no `fsync`.
+
+**Edge Cases:**
+
+- A crash between `open(tmp)` and `os.replace` can leave `run_health.json.tmp`. The next successful replace is the recovery. Do not switch to copy-plus-delete on `EXDEV`.
+
+**References:**
+
+- <https://zetcode.com/python/os-replace/> (2025-04-11) same-directory temp, then `os.replace`
+- <https://dev.to/codepy_1473/i-trusted-osreplace-for-48-hours-the-dest-path-lived-on-another-mount-44a> (2026-09-18) same-filesystem temp versus `fsync`
+- Context7 library `/python/cpython`, `Doc/library/os.rst`, queried 2026-11-20
 
 ## Domain Review
 
@@ -336,7 +385,24 @@ Planned paths examined against the canonical regex `^(apps/web-platform/supabase
 
 **Probes run 2026-11-20.** `bash plugins/soleur/scripts/run-health-emit.sh --discover` prints `run-health-emit: unknown arg --discover` and exits 0. It does not print `ok`. That flag is part of this change. `bash plugins/soleur/scripts/pipeline-tally.sh show` prints `tally: seats=0 ci_cycles=0 fix_rounds=0 agent_rounds=1 ci_wall_s=unmeasured` and exits 0. `git check-ignore -v` attributes both artifact paths to `.gitignore` line `.soleur/`. The discoverability command contains none of `|`, `;`, `&`, `<`, `>`, `$`, or a backtick. `credentials_required` is omitted. The field is not set to the word none.
 
-**Plan review (sequential-fallback).** DHH, Kieran, and code-simplicity, plus architecture and spec-flow because the threshold is `single-user incident`. Named-panel scan: no UI-surface files, so no UX lead. Tooling files make the CTO devex lens relevant; it was not spawned. Findings applied here: the one-shot procedure moves into the schema file because the skill has 5 bytes of spare; seal status tokens are enumerated; `goto_count` uses the compact marker; the tally stub matches the measured line shape; the producer check requires a `bash` line; the planning subagent does not call the helper. No property was cut. The devex note (a process wrapper would be a second producer) stays on the cut list. `requires_cpo_signoff` stays true. Live CPO was not spawned.
+**Plan review (sequential-fallback).** DHH, Kieran, and code-simplicity, plus architecture and spec-flow because the threshold is `single-user incident`. Named-panel scan: no UI-surface files, so no UX lead. Tooling files make the CTO devex lens relevant; it was not spawned. Findings applied here: the one-shot procedure moves into the schema file because the skill has 5 bytes of spare; seal status tokens are enumerated; `goto_count` counts full lines `verb: goto` in the passed session-state file (Ruled by CTO agent, 2026-11-20); the tally stub matches the measured line shape; the producer check requires a `bash` line; the planning subagent does not call the helper. No property was cut. The devex note (a process wrapper would be a second producer) stays on the cut list. `requires_cpo_signoff` stays true. Live CPO was not spawned.
+
+**Deepen pass (2026-11-20, sequential-fallback).** Same process. No subagent ran.
+
+Verify-the-negative, against `plugins/soleur/scripts/run-health-emit.sh`:
+
+- The plan's end state says a phase name does not seal. The file today seals when `phase.lower()` is in `8`, `ship`, `done`, `final`, `exit`, or `terminate` (the heuristic above `os.replace`). Verdict: contradicts the file on origin/main. The plan deletes that branch. Gap confirmed.
+- The plan's end state says a bad phase token creates nothing. The shell `mkdir -p "$RUN_DIR/phase_prompts"` runs before Python, and there is no token check. Verdict: contradicts the file until the check moves above that `mkdir`. Corrected in this pass.
+- `sealed` does not occur in the file (`grep sealed` is empty). Verdict: not yet applicable. The new field and the immutability test are the proof.
+- The regex `NEVER|MUST NOT|does not reach|cannot leak|is not exposed` has no hit in this plan.
+
+Post-edit self-audit: this pass did not drop a table, column, or module. It narrowed where the token check runs and where the ceiling value lives. `ceilings.one-shot` is the field `scripts/lint-skill-body-budget.py` reads (`json.loads(...).get("ceilings")`).
+
+Skills matched by description, then read for the matching part: `skill-creator` (do not invent a description word-budget number; this plan does not change either `description:` line), `skill-security-scan` filesystem-boundary rules (the new skill text is a fixed `bash` path under `CLAUDE_PLUGIN_ROOT`, not a credential write, a `../` chain of length 3, or a symlink). `preflight` and `gdpr-gate` were already applied above. `eval-harness` was considered and not used: the acceptance list asks for unit tests of emission, and a promptfoo arm would not prove the file was sealed. Other plugin skill descriptions were scanned and do not match a shell ledger, a skill byte ceiling, or this ignore rule.
+
+Agent descriptions read, not spawned: data-integrity (seal stickiness and same-directory replace), security-sentinel (phase token), observability-coverage (stderr is the signal because exit 0), test-design (the `..` case and the empty-phase seal), session-forensics-analyst (leave the consumer), architecture and code-simplicity (one writer), user-impact (threshold already set). Rails, migration, deployment, performance, semgrep, and DDD descriptions do not match these files.
+
+Learning applied: `knowledge-base/project/learnings/2026-09-20-every-defect-in-my-fix-was-a-sentence-i-could-have-run.md`. The sentence "a bad token creates nothing" was false of the current `mkdir` line until this pass moved the check. That learning also names `skill-body-budget`. Running `json.load` on the budget file showed the 52000 value under `ceilings`, not at the top level.
 
 ## Research Reconciliation — Spec vs. Codebase
 

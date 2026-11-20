@@ -1,0 +1,29 @@
+# Session State
+
+## Plan Phase
+- Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-12573-run-health-emit/knowledge-base/project/plans/2026-11-20-feat-emit-run-health-artifacts-plan.md
+- Status: complete
+- Plan artifact: complete (selector=branch)
+
+### Errors
+- technical-ruling-gate.sh --branch exits 1 with 10 unruled-technical rows. Placeholders stay until the parent records the CTO ruling.
+- Deepen-plan edits to the plan, tasks.md, and decision-challenges.md were uncommitted when planning returned.
+
+### Decisions
+- Seal only with explicit --seal and a terminal status (completed, failed, or budget-capped). A seal-only call needs no --phase and appends no phase row. A later upsert leaves sealed in place.
+- goto_count counts retry-budget-ruling: verb=goto phase= lines. tally_show is the stdout of pipeline-tally.sh show. Schema version 1 lives in one schema file. The helper stays fail-open and exits 0.
+- Phase tokens are checked in the shell before mkdir. The charset is ^[A-Za-z0-9._-]+$, and `.`, `..`, and any token containing `..` are refused as well.
+- The JSON publish stays os.replace of a same-directory temp file, with no fsync. The one-shot ceiling is ceilings.one-shot at 52000. The skill file must end at or under 51950 bytes.
+- Brand-survival threshold stays single-user incident with requires_cpo_signoff true. The parent one-shot context emits. The planning subagent does not call the helper.
+
+### Components Invoked
+- plugins/soleur/skills/plan/SKILL.md
+- plugins/soleur/skills/deepen-plan/SKILL.md (Reviewed-Coverage: sequential-fallback)
+
+## Technical rulings
+- cto_spawns=1
+- Item 2 amended the plan: goto_count counts full lines `verb: goto` in the passed session-state file.
+
+## Operator Constraints
+
+- constraint: none recorded. The work target is an issue number, so the issue body was not scanned.
