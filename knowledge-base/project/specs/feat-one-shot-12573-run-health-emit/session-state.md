@@ -27,3 +27,9 @@
 ## Operator Constraints
 
 - constraint: none recorded. The work target is an issue number, so the issue body was not scanned.
+
+## Addendum — 2026-11-20
+
+> **Superseded 2026-11-20:** The Plan Phase errors section records `technical-ruling-gate.sh --branch` exit 1. Re-run after the ruling commit printed `[PASS]` and `gate_rc=0`. The Decisions bullet that counts `retry-budget-ruling: verb=goto phase=` is the planner's assumption. The Technical rulings section is the one that ships: `goto_count` counts full lines `verb: goto`.
+
+- Work phase wrote `schema_version` 1, explicit `--seal`, and the skill call sites. `bash plugins/soleur/scripts/run-health-emit.test.sh` printed `fails=0`. `wc -c` of `plugins/soleur/skills/one-shot/SKILL.md` is 51594. `ceilings.one-shot` stays 52000.
