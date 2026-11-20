@@ -256,6 +256,7 @@ esac
 for g in $grants; do [[ "$g" == "$want" ]] && { printf '{"success":true,"result":{"id":"%s"}}' "$id"; exit 0; }; done
 deny
 CURL
+  assert_fixture_dir "$b"
   cat > "$b/gh" <<'GH'
 #!/usr/bin/env bash
 # `gh run list` stand-in (D35). $STUB_D/.gh-fail: exit 1 (not signed in, API down); $STUB_D/.gh-runs:
