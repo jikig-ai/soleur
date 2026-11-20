@@ -15,6 +15,8 @@ this page holds only the acts.
 
 The agent runs both dispatches below. Each needs the owner's typed go naming the exact command.
 
+**Pre-birth boot evidence.** `apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh` boots the rendered template under real cloud-init in the pinned `ubuntu:24.04` image. CI runs it as the `bastion-boot-rehearsal` job of `infra-validation.yml`; locally, `bash apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh` (needs Docker with `--privileged`). The job is advisory on pull requests, so a red run can merge. Until #12942 lands, the agent checks that run is green on the birth commit before the real birth; #12942 makes the birth refuse it otherwise.
+
 **Dispatch only when the owner can approve at once.** The run holds the shared `terraform-apply-web-platform-host` group while it waits for the environment reviewer, and GitHub keeps one pending run per group: a later queued run (a merge's apply, an `cf-lb-overlay` drain, a key rotation) cancels the one waiting behind it. Approve it promptly or cancel it.
 
 1. **Rehearsal.**
