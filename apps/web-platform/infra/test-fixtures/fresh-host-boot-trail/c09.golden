@@ -1,0 +1,15 @@
+rc=0
+--- out
+boot-trail: ignoring events older than epoch 1790000000 (run anchor)
+web-host-create web-2 — fresh-host Sentry pointer (job=success)
+- `soleur-cloud-init boot stage` — stage=`fresh_boot_ready` host=`?` (2026-09-24T10:03:00Z)
+- image-origin (`soleur-web-2`, since run anchor): `stage=none host=- time=- detail=-`
+fresh-host boot reached fresh_boot_ready — the host booted clean and reported ready.
+--- summary
+## web-host-create web-2 — fresh-host Sentry pointer (best-effort)
+
+Apply succeeded. The trail below should show the probe fired and the last-reached stage (expect `cloud_init_complete` on a healthy fresh boot). An apply can succeed while the boot dies — that is what this read is for.
+_Best-effort: the host id is unknown to the runner, so this matches on message + a recent window — it may show an unrelated host or be empty._
+- `soleur-cloud-init boot stage` — stage=`fresh_boot_ready` host=`?` (2026-09-24T10:03:00Z)
+- image-origin (`soleur-web-2`, since run anchor): `stage=none host=- time=- detail=-`
+fresh-host boot reached fresh_boot_ready — the host booted clean and reported ready.

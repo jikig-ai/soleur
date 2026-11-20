@@ -1,0 +1,25 @@
+rc=1
+--- out
+boot-trail: ignoring events older than epoch 1790000000 (run anchor)
+web-host-replace web-2 — fresh-host Sentry pointer (job=success)
+- `soleur-cloud-init boot stage` — stage=`apt_install` host=`soleur-web-2` (2026-09-24T10:02:00Z)
+  - detail: `rc=100 attempts=3`
+- `soleur-cloud-init boot stage` — stage=`runcmd_start` host=`soleur-web-2` (2026-09-24T10:01:00Z)
+- image-origin (`soleur-web-2`, since run anchor): `stage=none host=- time=- detail=-`
+::error::web-2 (soleur-web-2) booted DARK at stage apt_install: rc=100 attempts=3
+::error::runcmd re-runs only on the one deliberate kernel-settle reboot (ADR-326), so this host CANNOT be repaired by a reboot — it must be replaced. Do NOT put it into service.
+_**The host booted dark.** Host `soleur-web-2`, stage `apt_install`._
+_Cause: `rc=100 attempts=3`_
+_A reboot cannot repair it (runcmd re-runs only on the one kernel-settle reboot) — replace the host._
+--- summary
+## web-host-replace web-2 — fresh-host Sentry pointer (best-effort)
+
+Apply succeeded. The trail below should show the probe fired and the last-reached stage (expect `cloud_init_complete` on a healthy fresh boot). An apply can succeed while the boot dies — that is what this read is for.
+_Best-effort: the host id is unknown to the runner, so this matches on message + a recent window — it may show an unrelated host or be empty._
+- `soleur-cloud-init boot stage` — stage=`apt_install` host=`soleur-web-2` (2026-09-24T10:02:00Z)
+  - detail: `rc=100 attempts=3`
+- `soleur-cloud-init boot stage` — stage=`runcmd_start` host=`soleur-web-2` (2026-09-24T10:01:00Z)
+- image-origin (`soleur-web-2`, since run anchor): `stage=none host=- time=- detail=-`
+_**The host booted dark.** Host `soleur-web-2`, stage `apt_install`._
+_Cause: `rc=100 attempts=3`_
+_A reboot cannot repair it (runcmd re-runs only on the one kernel-settle reboot) — replace the host._
