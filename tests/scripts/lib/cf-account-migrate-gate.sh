@@ -19,7 +19,9 @@
 # Classes:
 #   create   planned ["create"], or ["no-op"] on a re-dispatch, or ["update"] of an address already
 #            in the pre-plan state whose `before` carries a NEW id (a fix-forward re-dispatch that
-#            corrects a rule the phase created; refused without the pre-plan state).
+#            corrects a rule the phase created; refused without the pre-plan state). Each such
+#            update admitted prints `cf-account-migrate-gate: in-state-update <address>` on its own
+#            line, so a rehearsal shows which rules a fix would overwrite.
 #   import   an import block in apps/web-platform/infra/cf-account-migration-imports.tf. Planned as
 #            a PURE no-op import whose id equals the committed literal, or plain ["no-op"] once in
 #            state. A create means the import block was switched off: refused (it would collide).
@@ -36,6 +38,8 @@
 #   cf_account_migrate_targets  <phase>                       # one -target=<addr> per line
 #   cf_account_migrate_replaces <phase>                       # one -replace=<addr> per line
 #   cf_account_migrate_gate     <phase> <plan.json> [<state.json>]   # 0=PASS, 1=REFUSE
+#     Output: REFUSE reason lines, then any `cf-account-migrate-gate: in-state-update <address>`
+#     lines, then ONE `cf_account_migrate_gate: phase=<p> verdict=PASS|REFUSE ...` line.
 #     <state.json> = `terraform show -json` of state BEFORE the plan; required for a phase with
 #     a replace set, and the only evidence that lets a create-class address plan as ["update"].
 
@@ -75,7 +79,7 @@ cfam_serial_of() { jq -er 'if (.serial | type) == "number" then .serial else err
 # test seam for a COPY of this library sourced from a temp dir, whose own path cannot locate the
 # file. Wherever the committed file is reachable (the job, the predicate, the suite's own source),
 # an override naming any other file is ignored: the environment must not choose the literals the
-# gate trusts (#12931 review, security P3).
+# gate trusts.
 _cfam_imports_default="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd)/apps/web-platform/infra/cf-account-migration-imports.tf"
 if [[ -n "${CFAM_IMPORTS_FILE:-}" && -e "$_cfam_imports_default" && ! "$CFAM_IMPORTS_FILE" -ef "$_cfam_imports_default" ]]; then
   echo "cf-account-migrate-gate: ignoring CFAM_IMPORTS_FILE=${CFAM_IMPORTS_FILE} (not the committed imports file)" >&2
@@ -184,7 +188,7 @@ cf_account_migrate_gate() {
   local phase="${1-}"
   local plan_json="${2-}"
   local state_json="${3-}"
-  local spec literals violations="" v creates imports destroys n_rep
+  local spec literals violations="" v creates imports destroys n_rep n_raw n_obj admitted gv_rc
 
   spec="$(cf_account_migrate_phase_spec "$phase")" || { echo "cf_account_migrate_gate: REFUSE — unknown phase '${phase}'"; return 1; }
   plan_gate_assert_readable     "cf_account_migrate_gate" "$plan_json" || return 1
@@ -198,9 +202,15 @@ cf_account_migrate_gate() {
   # Guarded: a failed jq here yields "", `[[ "" -gt 0 ]]` is false, and the replace arms below
   # would silently be skipped.
   # A class outside the four is a typo in the spec, and the class check below would grade it as
-  # nothing (any action passes): refuse the phase instead (structural seat, D6).
+  # nothing (any action passes): refuse the phase instead.
   v="$(jq -r '[to_entries[] | select(.value != "create" and .value != "import" and .value != "mutable" and .value != "replace") | "\(.key)=\(.value)"] | join(" ")' <<<"$spec")" || { _cfam_eval_fail; return 1; }
   [[ -z "$v" ]] || { echo "cf_account_migrate_gate: REFUSE — phase ${phase} declares an unknown class (${v}); the classes are create, import, mutable, replace"; return 1; }
+  # A key written twice in the spec heredoc parses as its LAST value, silently. The streaming
+  # parser sees every occurrence, so its top-level key count differs from the parsed object's.
+  n_raw="$(jq -n --stream '[inputs | select(length == 2 and (.[0] | length) == 1)] | length' <<<"$spec")" || { _cfam_eval_fail; return 1; }
+  n_obj="$(jq 'length' <<<"$spec")" || { _cfam_eval_fail; return 1; }
+  plan_gate_assert_numeric "cf_account_migrate_gate" "spec_keys=${n_raw}" "spec_addresses=${n_obj}" || return 1
+  [[ "$n_raw" -eq "$n_obj" ]] || { echo "cf_account_migrate_gate: REFUSE — phase ${phase} declares an address more than once (${n_raw} keys, ${n_obj} distinct); the spec must name each address once"; return 1; }
   n_rep="$(jq -r '[to_entries[] | select(.value=="replace")] | length' <<<"$spec")" || { _cfam_eval_fail; return 1; }
   plan_gate_assert_numeric "cf_account_migrate_gate" "replace_count=${n_rep}" || return 1
   if [[ -z "$state_json" || ! -r "$state_json" ]] || ! jq -e '.values' "$state_json" >/dev/null 2>&1; then
@@ -246,18 +256,41 @@ cf_account_migrate_gate() {
 
   # A create-class ["update"] is a fix-forward re-dispatch only: the address must already be in the
   # pre-plan state and, for a Cloudflare object, its `before` must carry a NEW id and no other. On a
-  # first apply every create-class address is absent from state (forgotten or never there), so this
-  # cannot widen a first apply. The new-id check below still grades its `after`.
+  # first apply every create-class cloudflare_* address is absent from state (forgotten or never
+  # there), so for those this cannot widen a first apply. doppler_secret.cf_zone_id_prd CAN be in
+  # state on a first apply (the push-triggered stage-1 -target list writes it): its update is
+  # graded by the zone-id-secret check below, which requires the NEW zone id as its value. The
+  # new-id check below still grades every Cloudflare `after`. Each update this arm admits is
+  # printed as an in-state-update line (spec addresses only, so the address is a fixed literal).
   local st_src="${state_json:-/dev/null}"
   v="$(jq -r --argjson spec "$spec" --arg unz "$CFAM_NEW_ZONE_ID" --arg una "$CFAM_NEW_ACCOUNT_ID" --slurpfile pst "$st_src" '
     ([($pst[0].values // {}) | .. | objects | select(has("address") and has("values")) | .address]) as $inst
     | .resource_changes[] | select((.mode // "managed") == "managed")
     | select($spec[.address] == "create") | select(.change.actions == ["update"])
     | .address as $ad | (.change.before.zone_id // null) as $bz | (.change.before.account_id // null) as $ba
-    | select(($inst | index($ad)) == null
+    | if ($inst | index($ad)) == null
         or ((.type | startswith("cloudflare_")) and (
-              ($bz != $unz and $ba != $una) or ($bz != null and $bz != $unz) or ($ba != null and $ba != $una))))
-    | "REFUSE \($ad) (class create) planned as an update, which is allowed only for an address already in the pre-plan state on a NEW id (in state: \(($inst | index($ad)) != null), before zone_id \($bz | tostring), account_id \($ba | tostring))"' "$plan_json")" || { _cfam_eval_fail; return 1; }
+              ($bz == null and $ba == null) or ($bz != null and $bz != $unz) or ($ba != null and $ba != $una)))
+      then "REFUSE \($ad) (class create) planned as an update, which is allowed only for an address already in the pre-plan state on a NEW id (in state: \(($inst | index($ad)) != null), before zone_id \($bz | tostring), account_id \($ba | tostring))"
+      else "cf-account-migrate-gate: in-state-update \($ad)" end' "$plan_json")" || { _cfam_eval_fail; return 1; }
+  # grep exits 1 when it selects nothing (fine) and 2 on an error (a refusal, as above).
+  admitted="$(grep '^cf-account-migrate-gate: in-state-update ' <<<"$v")"; gv_rc=$?
+  (( gv_rc <= 1 )) || { _cfam_eval_fail; return 1; }
+  v="$(grep -v '^cf-account-migrate-gate: in-state-update ' <<<"$v")"; gv_rc=$?
+  (( gv_rc <= 1 )) || { _cfam_eval_fail; return 1; }
+  violations+="${v:+$v$'\n'}"
+
+  # doppler_secret.cf_zone_id_prd is the zone id the runtime reads (cf-runtime-zone-id.tf). A
+  # create or update must publish exactly the NEW zone id: another 32-hex id, an absent or null
+  # value, or a value known only after apply is refused. The old-id check below cannot see a
+  # third id.
+  v="$(jq -r --argjson spec "$spec" --arg zid "$CFAM_NEW_ZONE_ID" '
+    .resource_changes[] | select((.mode // "managed") == "managed")
+    | select(.address == "doppler_secret.cf_zone_id_prd" and $spec[.address] != null)
+    | select(.change.actions == ["create"] or .change.actions == ["update"])
+    | select(((.change.after_unknown // {}) | if type == "object" then .value == true else false end)
+        or ((.change.after // {}) | if type == "object" then .value != $zid else true end))
+    | "REFUSE \(.address) must publish the NEW zone id as its value (actions \(.change.actions | tostring)\(if ((.change.after_unknown // {}) | if type == "object" then .value == true else false end) then ", value known only after apply" else "" end))"' "$plan_json")" || { _cfam_eval_fail; return 1; }
   violations+="${v:+$v$'\n'}"
 
   v="$(jq -r '.resource_changes[] | select(.change.importing != null) | select(.change.actions != ["no-op"])
@@ -326,9 +359,11 @@ cf_account_migrate_gate() {
 
   if [[ -n "$violations" ]]; then
     printf '%s' "$violations"
+    [[ -z "$admitted" ]] || printf '%s\n' "$admitted"
     echo "cf_account_migrate_gate: phase=${phase} verdict=REFUSE creates=${creates} imports=${imports} destroys=${destroys}"
     return 1
   fi
+  [[ -z "$admitted" ]] || printf '%s\n' "$admitted"
   echo "cf_account_migrate_gate: phase=${phase} verdict=PASS creates=${creates} imports=${imports} destroys=${destroys}"
   return 0
 }

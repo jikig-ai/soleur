@@ -98,7 +98,11 @@ row_r7() {
         && { [[ "$n" -lt 1 ]] || { mkdir -p a/feat-one-shot-12931-cf-account-migration && : > a/feat-one-shot-12931-cf-account-migration/bootstrap.sh; }; } \
         && { [[ "$n" -lt 2 ]] || { mkdir -p b/feat-one-shot-12931-cf-account-migration && : > b/feat-one-shot-12931-cf-account-migration/bootstrap.sh; }; } \
         && : > keep && git add -A && git commit -qm fixture ) >/dev/null 2>&1 || { echo "    HARNESS: r7 fixture $n" >&2; return 1; }
-    rc=0; out="$(cd "$d" && bash -c "$line" 2>&1)" || rc=$?
+    # The B line runs git too, so it runs under the same fixture env (never the operator's git config).
+    rc=0; out="$(
+      git_fixture_env "$d" || exit 97
+      cd "$d" && bash -c "$line" 2>&1
+    )" || rc=$?
     case "$n" in
       1) [[ "$rc" -eq 0 && "$out" == "SOLEUR_CFAM_BOOTSTRAP path=$(cd "$d" && pwd -P)/a/feat-one-shot-12931-cf-account-migration/bootstrap.sh" ]] || { echo "    one copy: rc=$rc out=$out" >&2; return 1; } ;;
       *) [[ "$rc" -ne 0 && "$out" == "SOLEUR_CFAM_BOOTSTRAP verdict=stop matches=$n" ]] || { echo "    $n copies: rc=$rc out=$out" >&2; return 1; } ;;

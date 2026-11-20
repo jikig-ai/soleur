@@ -73,7 +73,10 @@ Two facts shape the decision:
      id, derived from state rather than a manifest, aborting with nothing removed on any unclassifiable entry;
    - per-phase `import {}` blocks for the hand-restored objects, each required to plan as a pure `["no-op"]` import,
      plus creates for objects absent from the new zone;
-   - a phase gate on `tfplan.json` (no destroys, allow-set only, new ids only, `-replace` honoured);
+   - a phase gate on `tfplan.json` (no destroys, allow-set only, new ids only, `-replace` honoured). A create-class
+     address may plan an in-place `["update"]` only when it is already in pre-plan state and, for a Cloudflare object,
+     its `before` carries the NEW zone or account id; the one Doppler member must plan exactly the new zone id (CTO
+     ruling 2026-11-20, review fork 1). It is the fix-forward path for a rule the `redirects-dns` apply left broken;
    - a migration-in-progress predicate, the last step of `.github/actions/infra-credentials`, that is deny by
      default: every workflow loading those credentials is refused unless the predicate names it exempt (the plan-only
      and migrator workflows, and callers of other roots). It refuses until every phase address is in state, no
@@ -96,8 +99,9 @@ the cleanup PR.
 
 - One Doppler flip moves the root, and the validations make a half-flip or a revert-by-flip fail loudly. There is no
   full revert (CTO ruling D4, 2026-11-19): on any failure the migration halts at the last verified phase and fixes
-  forward. The `_PREV` id restore is allowed only before the first `redirects-dns` apply and leaves the root closed;
-  after it, restoring ids, reverting PR1 or pushing the backup over live state would aim Terraform at the moved zone.
+  forward. The `_PREV` id restore is allowed only until a `rehearsal=false` `redirects-dns` run prints
+  `cf-state-migrate backup=uploaded` (the forget is then committed, even if the gate refuses; CTO ruling 2026-11-20,
+  review fork 2), and it leaves the root closed; after that, restoring ids, reverting PR1 or pushing the backup over live state would aim Terraform at the moved zone.
   The runbook's `## Halt` section is the operator text.
 - A ruleset create is a whole-list PUT of its phase entrypoint, so creating `seo_config_settings` (and every other
   entrypoint) in the new zone would overwrite any rules a hand-made entrypoint already holds. The migrate job guards
@@ -136,11 +140,14 @@ forget, never pushed back as state (D4); it holds the same secrets as live state
 
 ## Principle Alignment
 
-- AP-001 (Terraform-only): Aligned, with two recorded exceptions. Every hand-restored object is adopted by import;
+- AP-001 (Terraform-only): Aligned, with three recorded exceptions. Every hand-restored object is adopted by import;
   the dashboard acts are token mints and revokes, which have no API path for a Soleur token (ADR-130). The live-zone
   edits of 2026-11-19 (six TXT records rewritten unquoted and the comments on three incident-time records cleared, so
   every record import plans as a pure no-op) were hand edits to records Terraform then adopts unchanged. Phase 0c, a
   hand-made noindex entrypoint, is no longer recommended (D2) and would be adopted by an import block if run.
+  The third exception (CTO ruling 2026-11-20) is a bounded break-glass: when the `redirects-dns` verify fails with
+  the product down, the owner may make one dashboard edit of one Terraform-managed rule on the NEW zone only; the
+  fix-forward PR carries that value and the next gated re-dispatch must plan that address as a no-op.
 - AP-002 (No SSH state mutation): Aligned. The migration job uses only the Cloudflare API; the host change is an
   immutable replace.
 - AP-003 (R2 remote backend): Aligned. The backend and its endpoint are unchanged; ADR-006 stands.

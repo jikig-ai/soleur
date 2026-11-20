@@ -383,11 +383,20 @@ id_of() {
   printf '%s' "$v"
 }
 
+# plain_get <config> <name> — a secret value on stdout, byte-exact. `secrets get --plain` ends its
+# output with ONE newline that is not part of the value (measured: a value `soleur` prints
+# `soleur\n`, an empty value prints a bare `\n`). The awk drops exactly that final newline and keeps
+# an embedded one. Every PIPED consumer reads through here; a `$(...)` capture (id_of) strips it
+# itself. A failed get fails the pipe (pipefail is on script-wide). Never captured in a variable.
+plain_get() {
+  doppler secrets get "$2" -p "$PROJ" -c "$1" --plain 2>/dev/null | LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}'
+}
+
 # digest_of <config> <name> — sha256 of a secret value, for COMPARISON only (never printed). rc 1
 # when the read fails or the value is empty.
 digest_of() {
   local d
-  d="$(set -o pipefail; doppler secrets get "$2" -p "$PROJ" -c "$1" --plain 2>/dev/null | soleur_approval_sha256)" || return 1
+  d="$(set -o pipefail; plain_get "$1" "$2" | soleur_approval_sha256)" || return 1
   [[ "$d" =~ ^[0-9a-f]{64}$ && "$d" != "$EMPTY_SHA" ]] || return 1
   printf '%s' "$d"
 }
@@ -421,7 +430,7 @@ copy_secret() {
   local s d
   s="$(digest_of "$1" "$2")" || { soleur_op_red "  cannot read ${1}/${2}"; return 1; }
   ( set -o pipefail
-    doppler secrets get "$2" -p "$PROJ" -c "$1" --plain 2>/dev/null \
+    plain_get "$1" "$2" \
       | doppler secrets set "$4" -p "$PROJ" -c "$3" --silent >/dev/null 2>&1 ) || { soleur_op_red "  write to ${3}/${4} failed"; return 1; }
   d="$(digest_of "$3" "$4")" || { soleur_op_red "  cannot read back ${3}/${4}"; return 1; }
   [[ "$d" == "$s" ]] || { printf 'SOLEUR_CFAM_COPY_MISMATCH src=%s/%s dst=%s/%s\n' "$1" "$2" "$3" "$4"; return 1; }
@@ -436,15 +445,18 @@ set_id() {
 }
 
 # token_active <cfg> <name> — /user/tokens/verify says success and active. The bearer travels on
-# curl's stdin config, never argv and never a shell variable.
+# curl's stdin config, never argv and never a shell variable. rc 0 active; rc 2 malformed (it prints
+# SOLEUR_CFAM_TOKEN_MALFORMED and makes no network call); rc 1 anything else (unreadable, inactive).
 token_active() {
   local out bad
   # The value is spliced into a curl config line, so a quote or newline in it would add config
   # (a second URL that also receives the header). Same character class as the migrate job's
   # preflight; counted with tr so the value never lands in a variable and the pipe drains fully.
-  bad="$(set -o pipefail; doppler secrets get "$2" -p "$PROJ" -c "$1" --plain 2>/dev/null | LC_ALL=C tr -d 'A-Za-z0-9._~+/=-' | wc -c)" || return 1
-  [[ "$bad" -eq 0 ]] || return 1
-  out="$( { printf 'header = "Authorization: Bearer '; doppler secrets get "$2" -p "$PROJ" -c "$1" --plain 2>/dev/null; printf '"\n'; } \
+  # plain_get drops only the CLI's own trailing newline, so an EMBEDDED newline still counts as bad.
+  # Never add \n to this class: a second config line could send the bearer to another URL.
+  bad="$(set -o pipefail; plain_get "$1" "$2" | LC_ALL=C tr -d 'A-Za-z0-9._~+/=-' | wc -c)" || return 1
+  [[ "$bad" -eq 0 ]] || { printf 'SOLEUR_CFAM_TOKEN_MALFORMED name=%s\n' "$2"; return 2; }
+  out="$( { printf 'header = "Authorization: Bearer '; plain_get "$1" "$2"; printf '"\n'; } \
     | curl --disable --noproxy '*' -sS --max-time 30 --config - https://api.cloudflare.com/client/v4/user/tokens/verify 2>/dev/null)" || return 1
   jq -e '.success == true and .result.status == "active"' >/dev/null 2>&1 <<<"$out"
 }
@@ -489,6 +501,8 @@ PREV_KEYS=()
 # prev stage only when it provably holds the old value: the legacy id for an id key; for a token,
 # a readable non-empty copy that, while <KEY>_NEXT is still staged and unswapped, equals <KEY>.
 # A name alone is not a copy: a failed or interrupted write leaves the name with the wrong value.
+# RESIDUAL (stated, not closed): with no <KEY>_NEXT staged, a junk _PREV cannot be told apart from a
+# legitimate post-swap state (<KEY> already new, _PREV old) without a network check of the old token.
 prev_copy_sound() {
   local stage="$1" k="$2" want dp dk dn
   case "$k" in
@@ -502,12 +516,12 @@ prev_copy_sound() {
       if in_names "${k}_NEXT" "$TF_NAMES"; then
         dk="$(digest_of "$TFC" "$k" || true)"; dn="$(digest_of "$TFC" "${k}_NEXT" || true)"
         [[ -n "$dk" && ( "$dk" == "$dp" || "$dk" == "$dn" ) ]] \
-          || soleur_op_precondition_failed "$stage" inventory "${TFC}/${k}_PREV does not equal ${k}, which still holds the old token, so the revert copy is not the old value. Stop and read the runbook Halt section; nothing was changed."
+          || soleur_op_precondition_failed "$stage" inventory "${TFC}: neither ${k}_PREV nor ${k}_NEXT equals ${k}, so one of ${k} / ${k}_PREV is not the old token; copy neither way. Read each one's token id and status with the runbook's revoke recipe step 2, keep the one that verifies active, and see Halt 'a revert copy is not sound'. Nothing was changed."
       fi ;;
   esac
 }
 prev_plan_common() { # <stage> <keys...>
-  local stage="$1" k v; shift
+  local stage="$1" k v want; shift
   PREV_KEYS=()
   require_tf_names "$stage"
   for k in "$@"; do
@@ -517,8 +531,9 @@ prev_plan_common() { # <stage> <keys...>
     in_names "$k" "$TF_NAMES" || soleur_op_precondition_failed "$stage" inventory "Doppler ${TFC} has no ${k}, so there is nothing to keep a revert copy of. Nothing was changed."
     case "$k" in
       CF_ZONE_ID|CF_ACCOUNT_ID)
+        want="$OLD_ZONE"; [[ "$k" == CF_ACCOUNT_ID ]] && want="$OLD_ACCT"
         v="$(id_of "$TFC" "$k")" || v=""
-        [[ "$v" == "$OLD_ZONE" || "$v" == "$OLD_ACCT" ]] \
+        [[ "$v" == "$want" ]] \
           || soleur_op_precondition_failed "$stage" inventory "${k} in ${TFC} no longer holds the legacy id and no ${k}_PREV exists, so a revert copy would not be the old value. Stop and read the runbook Halt section; nothing was changed." ;;
       *)
         in_names "${k}_NEXT" "$TF_NAMES" \
@@ -596,7 +611,7 @@ swap_plan_common() { # <stage> <prev-stage> <keys...>
         # Overwrite only a key that still holds its revert copy: anything else (a write that did not
         # read back equal) would be lost, and the copy would no longer be provably the old token.
         [[ "$dk" == "$dp" ]] \
-          || soleur_op_precondition_failed "$stage" inventory "${TFC}/${k} holds neither its revert copy ${k}_PREV nor the staged ${k}_NEXT. Copy ${k}_PREV back over ${k} (this stage's rollback), read it back, then re-run ${stage}; nothing was changed."
+          || soleur_op_precondition_failed "$stage" inventory "${TFC}/${k} holds neither its revert copy ${k}_PREV nor the staged ${k}_NEXT, so one of ${k} / ${k}_PREV is not the old token; copy neither way. Read each one's token id and status with the runbook's revoke recipe step 2, keep the one that verifies active, and see Halt 'a revert copy is not sound'. Nothing was changed."
         soleur_op_plan_op copy-staged-token "${TFC}/${k}_NEXT->${k}"
         soleur_op_plan_op delete-staging-key "${TFC}/${k}_NEXT"
         COPY_KEYS[${#COPY_KEYS[@]}]="$k"
@@ -614,11 +629,13 @@ swap_plan_common() { # <stage> <prev-stage> <keys...>
   fi
 }
 swap_apply_common() { # <profile> <active-check-keys...>
-  local profile="$1" k fail=0; shift
+  local profile="$1" k rc fail=0; shift
   if [[ "${#COPY_KEYS[@]}" -gt 0 ]]; then
     run_scope_probe "$profile" || return 1
     for k in "$@"; do
-      token_active "$TFC" "${k}_NEXT" || { printf 'SOLEUR_CFAM_TOKEN_NOT_ACTIVE name=%s_NEXT\n' "$k"; return 1; }
+      rc=0; token_active "$TFC" "${k}_NEXT" || rc=$?
+      [[ "$rc" -ne 2 ]] || return 1    # MALFORMED already printed, and no network call was made
+      [[ "$rc" -eq 0 ]] || { printf 'SOLEUR_CFAM_TOKEN_NOT_ACTIVE name=%s_NEXT\n' "$k"; return 1; }
       printf 'SOLEUR_CFAM_TOKEN_ACTIVE name=%s_NEXT\n' "$k"
     done
   fi
@@ -626,6 +643,9 @@ swap_apply_common() { # <profile> <active-check-keys...>
     mark_changed "${TFC}/${k} may now hold the new token"
     copy_secret "$TFC" "${k}_NEXT" "$TFC" "$k" || fail=1
   done
+  # A failed copy stops the stage BEFORE any delete: deleting another key's _NEXT would leave a
+  # half-swapped set that the re-run (after the rollback of the failed key) refuses as mixed.
+  [[ "$fail" -eq 0 ]] || return 1
   # Delete a staging key ONLY after the live key provably holds the same value.
   for k in ${COPY_KEYS[@]+"${COPY_KEYS[@]}"} ${DEL_KEYS[@]+"${DEL_KEYS[@]}"}; do
     if [[ "$(digest_of "$TFC" "$k" || echo none)" != "$(digest_of "$TFC" "${k}_NEXT" || echo unreadable)" ]]; then
@@ -679,7 +699,7 @@ apply_branch_copies_zone_id() {
 # --- branch-copies-tokens (write) -----------------------------------------------
 TOKEN_TARGETS=()
 plan_branch_copies_tokens() {
-  local cfgs c names k src dc
+  local cfgs c names k src dc old
   TOKEN_TARGETS=()
   require_tf_names branch-copies-tokens
   for k in "${BRANCH_TOKENS[@]}"; do
@@ -699,6 +719,11 @@ plan_branch_copies_tokens() {
       src="$(digest_of "$TFC" "$k")" || soleur_op_precondition_failed branch-copies-tokens inventory "${TFC}/${k} is unreadable. Nothing was changed."
       dc="$(digest_of "$c" "$k" || true)"
       [[ "$dc" == "$src" ]] && continue
+      # Replace only the OLD token (the value prd_terraform kept as ${k}_PREV): any other value is one
+      # no rollback restores, so it refuses rather than being overwritten.
+      old="$(digest_of "$TFC" "${k}_PREV")" || soleur_op_precondition_failed branch-copies-tokens prev-0b "${TFC}/${k}_PREV is unreadable or empty, so nothing proves ${c}/${k} holds the old token. Nothing was changed."
+      [[ -n "$dc" && "$dc" == "$old" ]] \
+        || soleur_op_precondition_failed branch-copies-tokens inventory "${PROJ}/${c} ${k} holds neither the new token from ${TFC} nor the old one (${TFC}/${k}_PREV), or is unreadable, so a copy would replace a value no rollback restores. Inspect ${c}/${k}; nothing was changed."
       soleur_op_plan_op copy-token "${TFC}/${k}->${c}/${k}"
       TOKEN_TARGETS[${#TOKEN_TARGETS[@]}]="${c}|${k}"
     done
@@ -726,8 +751,16 @@ read_verify() {
   r=1; [[ "$(id_of "$TFC" CF_R2_ACCOUNT_ID || true)" == "$OLD_ACCT" ]] && r=0; vcheck "${TFC}/CF_R2_ACCOUNT_ID=legacy" "$r"
   for k in "${KEYS_0A[@]}" "${KEYS_0B[@]}"; do
     r=0; in_names "${k}_NEXT" "$names" && r=1; vcheck "${TFC}/${k}_NEXT=absent" "$r"
-    r=1; in_names "${k}_PREV" "$names" && [[ "$(digest_of "$TFC" "$k" || echo a)" != "$(digest_of "$TFC" "${k}_PREV" || echo a)" ]] && r=0
-    vcheck "${TFC}/${k}=swapped" "$r"
+    # Swapped: no _NEXT, and either the revert copy differs from the live key, or the revert copy is
+    # gone (the revoke recipe deletes _PREV only after the old token's verify reads false) and the
+    # live key itself verifies active.
+    if in_names "${k}_PREV" "$names"; then
+      r=1; ! in_names "${k}_NEXT" "$names" && [[ "$(digest_of "$TFC" "$k" || echo a)" != "$(digest_of "$TFC" "${k}_PREV" || echo a)" ]] && r=0
+      vcheck "${TFC}/${k}=swapped" "$r"
+    else
+      r=1; ! in_names "${k}_NEXT" "$names" && token_active "$TFC" "$k" && r=0
+      vcheck "${TFC}/${k}=swapped-prev-revoked" "$r"
+    fi
   done
   if cfgs="$(branch_configs)"; then
     for c in $cfgs; do

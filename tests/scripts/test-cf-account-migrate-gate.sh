@@ -44,7 +44,7 @@ OZ=5af02a2f394e9ba6e0ea23c381a26b67
 OA=4d5ba6f096b2686fbdd404167dd4e125
 
 check() { local n="$1"; shift; gate_check "$n" cf_account_migrate_gate "$@"; }
-# check() decides most rows, so it gets its own self-test (G1): a probe whose expectation
+# check() decides most rows, so it gets its own self-test: a probe whose expectation
 # cannot hold must add exactly one failure and no pass. Unwound afterwards.
 _ck_p=$passes; _ck_f=$fails
 _cfam_ck_probe() { return 0; }
@@ -81,6 +81,7 @@ entry_create() { # <address>
     cloudflare_list|cloudflare_pages_project|cloudflare_pages_domain) after="{\"account_id\":\"$NA\"}" ;;
     cloudflare_ruleset) if [[ "$a" == *bulk_redirects ]]; then after="{\"account_id\":\"$NA\",\"zone_id\":null}"; else after="{\"zone_id\":\"$NZ\",\"account_id\":null}"; fi ;;
     cloudflare_*) after="{\"zone_id\":\"$NZ\"}" ;;
+    doppler_secret) after="{\"name\":\"CF_ZONE_ID\",\"value\":\"$NZ\"}" ;;   # the runtime's zone id: the NEW one
     *) after='{}' ;;
   esac
   jq -nc --arg a "$a" --arg t "$t" --argjson after "$after" '{address:$a,mode:"managed",type:$t,change:{actions:["create"],before:null,after:$after}}'
@@ -118,7 +119,7 @@ mutate_plan "$VALID" "$TMP/rerun.json" '.resource_changes |= map(.change.actions
 check "converged re-dispatch (all no-op) passes" 0 "verdict=PASS creates=0 imports=0" redirects-dns "$TMP/rerun.json"
 
 # U1-U5: a fix-forward re-dispatch may plan a create-class rule as ["update"] (CTO ruling
-# 2026-11-20, review fork 1), but only for an address already in the pre-plan state whose `before`
+# 2026-11-20), but only for an address already in the pre-plan state whose `before`
 # carries the NEW id; a first apply (address absent from state) and an old-id `before` stay refused.
 SCS="cloudflare_ruleset.seo_config_settings"
 mutate_plan "$VALID" "$TMP/u1.json" '(.resource_changes[] | select(.address=="'"$SCS"'") | .change) |= (.actions=["update"] | .before={zone_id:"'"$NZ"'",account_id:null})'
@@ -131,6 +132,41 @@ mutate_plan "$TMP/u1.json" "$TMP/u4.json" '(.resource_changes[] | select(.addres
 check "U4: an in-state update whose before carries the OLD zone is refused" 1 "$SCS (class create) planned as an update" redirects-dns "$TMP/u4.json" "$TMP/u-state.json"
 mutate_plan "$VALID" "$TMP/u5.json" '(.resource_changes[] | select(.address=="'"$SCS"'") | .change) |= (.actions=["delete","create"] | .before={zone_id:"'"$NZ"'"})'
 check "U5: an in-state create-class replace is refused" 1 "$SCS (class create) planned with actions" redirects-dns "$TMP/u5.json" "$TMP/u-state.json"
+# The in-state update the gate admits is printed on its own line (a rehearsal shows which rule a
+# fix would overwrite); a first apply prints none, and the verdict line keeps its format.
+ISU="cf-account-migrate-gate: in-state-update $SCS"
+isu_out="$(cf_account_migrate_gate redirects-dns "$TMP/u1.json" "$TMP/u-state.json" 2>&1)"; isu_rc=$?
+if [[ "$isu_rc" -eq 0 ]] && grep -qxF -- "$ISU" <<<"$isu_out" \
+   && grep -qxF -- "cf_account_migrate_gate: phase=redirects-dns verdict=PASS creates=7 imports=29 destroys=0" <<<"$isu_out"; then
+  pass "U1b: the admitted in-state update prints its own in-state-update line beside an unchanged PASS line"
+else fail "U1b: no in-state-update line for U1" "$isu_rc" "$isu_out"; fi
+isu_first="$(cf_account_migrate_gate redirects-dns "$VALID" 2>&1)"; isu_first_rc=$?
+if [[ "$isu_first_rc" -eq 0 ]] && ! grep -qF -- 'in-state-update' <<<"$isu_first"; then
+  pass "U1c: a first-apply plan prints no in-state-update line"
+else fail "U1c: a first-apply plan printed an in-state-update line" "$isu_first_rc" "$isu_first"; fi
+# shellcheck disable=SC2016 # sed expression matches literal gate text
+sed 's#^  \[\[ -z "\$admitted" \]\] || printf .*$#  :#' "$GATE" > "$TMP/isu-mut.sh"
+isu_mut="$(bash -c 'source "$1"; source "$2"; cf_account_migrate_gate redirects-dns "$3" "$4"' _ "$PREAMBLE" "$TMP/isu-mut.sh" "$TMP/u1.json" "$TMP/u-state.json" 2>&1)"
+if cmp -s "$TMP/isu-mut.sh" "$GATE"; then fail "M-isu: the mutation did not land" 1 ""
+elif grep -qF -- 'verdict=PASS creates=7' <<<"$isu_mut" && ! grep -qxF -- "$ISU" <<<"$isu_mut"; then pass "M-isu: dropping the print loses U1b's in-state-update line (RED)"
+else fail "M-isu: the in-state-update line survived its print being dropped" 1 "$isu_mut"; fi
+# B1-B3: each sub-condition of the before-id check owns one shape of a wrong `before` (an in-state
+# address, so only this arm can refuse it).
+mutate_plan "$TMP/u1.json" "$TMP/b1.json" '(.resource_changes[] | select(.address=="'"$SCS"'") | .change.before) = {zone_id:"'"$NZ"'",account_id:"'"$OA"'"}'
+check "B1: an in-state update whose before carries the NEW zone and the OLD account is refused" 1 "$SCS (class create) planned as an update" redirects-dns "$TMP/b1.json" "$TMP/u-state.json"
+mutate_plan "$TMP/u1.json" "$TMP/b2.json" '(.resource_changes[] | select(.address=="'"$SCS"'") | .change.before) = {zone_id:"'"$OZ"'",account_id:"'"$NA"'"}'
+check "B2: an in-state update whose before carries the OLD zone and the NEW account is refused" 1 "$SCS (class create) planned as an update" redirects-dns "$TMP/b2.json" "$TMP/u-state.json"
+mutate_plan "$TMP/u1.json" "$TMP/b3.json" '(.resource_changes[] | select(.address=="'"$SCS"'") | .change.before) = {}'
+check "B3: an in-state update whose before carries no id at all is refused" 1 "$SCS (class create) planned as an update" redirects-dns "$TMP/b3.json" "$TMP/u-state.json"
+# shellcheck disable=SC2016 # sed expressions match literal gate text
+gate_mutate_and_check "M-before-none: dropping the no-id clause admits B3" \
+  's/(\$bz == null and \$ba == null) or //' cf_account_migrate_gate redirects-dns "$TMP/b3.json" "$TMP/u-state.json"
+# shellcheck disable=SC2016 # sed expressions match literal gate text
+gate_mutate_and_check "M-before-zone: dropping the wrong-zone clause admits B2" \
+  's/ or (\$bz != null and \$bz != \$unz)//' cf_account_migrate_gate redirects-dns "$TMP/b2.json" "$TMP/u-state.json"
+# shellcheck disable=SC2016 # sed expressions match literal gate text
+gate_mutate_and_check "M-before-account: dropping the wrong-account clause admits B1" \
+  's/ or (\$ba != null and \$ba != \$una)//' cf_account_migrate_gate redirects-dns "$TMP/b1.json" "$TMP/u-state.json"
 
 # Row 1: a delete of cloudflare_record.app.
 mutate_plan "$VALID" "$TMP/r1.json" '.resource_changes += [{address:"cloudflare_record.app",mode:"managed",type:"cloudflare_record",change:{actions:["delete"],before:{zone_id:"'"$NZ"'"},after:null}}]'
@@ -175,16 +211,44 @@ check "row 3i: an in-set account create whose account_id is known only after app
 set_after "$TMP/r3j.json" doppler_secret.cf_zone_id_prd "{name:\"CF_ZONE_ID\",value:\"$OZ\"}"
 check "row 3j: doppler_secret.cf_zone_id_prd planned with the OLD zone id is refused" 1 "republishes an OLD zone/account id" redirects-dns "$TMP/r3j.json"
 # U6: an OLD id inside a longer string (a URL) is still a republish; U7: a typo'd class in the
-# spec refuses the phase rather than grading that address as nothing (structural seat).
+# spec refuses the phase rather than grading that address as nothing.
 set_after "$TMP/u6.json" doppler_secret.cf_zone_id_prd "{name:\"CF_ZONE_ID\",value:\"https://api.cloudflare.com/client/v4/zones/$OZ/x\"}"
 check "U6: a non-Cloudflare value carrying the OLD zone id inside a URL is refused" 1 "republishes an OLD zone/account id" redirects-dns "$TMP/u6.json"
 u7_rc=0
 u7_out="$(cf_account_migrate_phase_spec() { printf '{"%s":"creat"}' "$SCS"; }; cf_account_migrate_gate redirects-dns "$VALID" 2>&1)" || u7_rc=$?
 if [[ "$u7_rc" -eq 1 ]] && grep -qF "declares an unknown class (${SCS}=creat)" <<<"$u7_out"; then pass "U7: a spec class outside create/import/mutable/replace refuses the phase"
 else fail "U7: unknown spec class not refused" "$u7_rc" "$u7_out"; fi
+# U8: an address written twice in the spec heredoc (the last value would win silently) refuses the
+# phase. The duplicate repeats an existing line, so with the count check removed the copy passes.
+sed 's|^  "cloudflare_ruleset.seo_config_settings": "create",$|&\n  "cloudflare_ruleset.seo_config_settings": "create",|' "$GATE" > "$TMP/dup.sh"
+dup_run() { bash -c 'source "$1"; source "$2"; cf_account_migrate_gate redirects-dns "$3"' _ "$PREAMBLE" "$1" "$VALID" 2>&1; }
+dup_out="$(dup_run "$TMP/dup.sh")"; dup_rc=$?
+if cmp -s "$TMP/dup.sh" "$GATE"; then fail "U8: the duplicate-key fixture did not land" 1 ""
+elif [[ "$dup_rc" -eq 1 ]] && grep -qF -- "declares an address more than once (38 keys, 37 distinct)" <<<"$dup_out"; then
+  pass "U8: a spec naming an address twice refuses the phase"
+else fail "U8: a duplicate spec key was not refused" "$dup_rc" "$dup_out"; fi
+# shellcheck disable=SC2016 # sed expression matches literal gate text
+sed 's#\[\[ "\$n_raw" -eq "\$n_obj" \]\] ||#true ||#' "$TMP/dup.sh" > "$TMP/dup-mut.sh"
+dup_mut_out="$(dup_run "$TMP/dup-mut.sh")"; dup_mut_rc=$?
+if cmp -s "$TMP/dup-mut.sh" "$TMP/dup.sh"; then fail "M-dup: the mutation did not land" 1 ""
+elif [[ "$dup_mut_rc" -eq 0 ]]; then pass "M-dup: without the key-count check the duplicated spec passes (the check is load-bearing)"
+else fail "M-dup: removing the key-count check did not admit the duplicate" "$dup_mut_rc" "$dup_mut_out"; fi
 
 set_after "$TMP/r3j2.json" doppler_secret.cf_zone_id_prd "{name:\"CF_ZONE_ID\",value:\"$NZ\"}"
 check "row 3j2: doppler_secret.cf_zone_id_prd planned with the NEW zone id passes" 0 "verdict=PASS" redirects-dns "$TMP/r3j2.json"
+# Z1-Z5: the runtime zone-id secret must publish exactly the NEW zone id, on a create or an update.
+ZSEC="doppler_secret.cf_zone_id_prd"; THIRD="0123456789abcdef0123456789abcdef"
+set_after "$TMP/z1.json" "$ZSEC" "{name:\"CF_ZONE_ID\",value:\"$THIRD\"}"
+check "Z1: $ZSEC created with a third 32-hex id (not old, not new) is refused" 1 "$ZSEC must publish the NEW zone id" redirects-dns "$TMP/z1.json"
+set_after "$TMP/z2.json" "$ZSEC" '{name:"CF_ZONE_ID"}'
+check "Z2: $ZSEC created with no value is refused" 1 "$ZSEC must publish the NEW zone id" redirects-dns "$TMP/z2.json"
+set_after "$TMP/z3.json" "$ZSEC" "{name:\"CF_ZONE_ID\",value:\"$NZ\"}" '{value:true}'
+check "Z3: $ZSEC whose value is known only after apply is refused" 1 "value known only after apply" redirects-dns "$TMP/z3.json"
+printf '{"values":{"root_module":{"resources":[{"address":"%s","values":{"id":"soleur.prd.CF_ZONE_ID","value":"%s"}}]}}}' "$ZSEC" "$NZ" > "$TMP/z-state.json"
+mutate_plan "$TMP/z1.json" "$TMP/z4.json" '(.resource_changes[] | select(.address=="'"$ZSEC"'") | .change) |= (.actions=["update"] | .before={name:"CF_ZONE_ID",value:"'"$NZ"'"})'
+check "Z4: an in-state update of $ZSEC to a third id is refused" 1 "$ZSEC must publish the NEW zone id" redirects-dns "$TMP/z4.json" "$TMP/z-state.json"
+mutate_plan "$TMP/z4.json" "$TMP/z5.json" '(.resource_changes[] | select(.address=="'"$ZSEC"'") | .change.after.value) = "'"$NZ"'"'
+check "Z5: an in-state update of $ZSEC to the NEW zone id passes" 0 "verdict=PASS" redirects-dns "$TMP/z5.json" "$TMP/z-state.json"
 
 # Row 4: a create outside every allow-set.
 mutate_plan "$VALID" "$TMP/r4.json" '.resource_changes += [{address:"cloudflare_load_balancer.app[0]",mode:"managed",type:"cloudflare_load_balancer",change:{actions:["create"],before:null,after:{zone_id:"'"$NZ"'"}}}]'
@@ -334,9 +398,20 @@ gate_mutate_and_check "M-id-absent: dropping the 'at least one NEW id' clause ad
 # shellcheck disable=SC2016 # sed expressions match literal gate text
 gate_mutate_and_check "M-id-unknown: dropping the after_unknown clause admits row 3g2" \
   's|^        (\$u.zone_id == true) or (\$u.account_id == true)$|        false|' cf_account_migrate_gate redirects-dns "$TMP/r3g2.json"
+# The zone-id secret check also refuses row 3j, so on 3j this arm is layered; on the github secret
+# (zone-rest) it is the sole guard.
 # shellcheck disable=SC2016 # sed anchors match literal gate text
-gate_mutate_and_check "M-noncf-old: neutering the non-Cloudflare old-id check admits row 3j" \
-  "$(neuter '--arg oz "\$CFAM_OLD_ZONE_ID"')" cf_account_migrate_gate redirects-dns "$TMP/r3j.json"
+gate_mutate_layered "M-noncf-old: the old-id check owns row 3j; neutered it hands off to the zone-id secret check" \
+  "$(neuter '--arg oz "\$CFAM_OLD_ZONE_ID"')" "republishes an OLD" "must publish the NEW zone id" cf_account_migrate_gate redirects-dns "$TMP/r3j.json"
+# shellcheck disable=SC2016 # sed anchors match literal gate text
+gate_mutate_and_check "M-noncf-old-gh: neutering the non-Cloudflare old-id check admits a github secret carrying the OLD account" \
+  "$(neuter '--arg oz "\$CFAM_OLD_ZONE_ID"')" cf_account_migrate_gate zone-rest "$TMP/zrold.json" "$TMP/zr-state.json"
+# shellcheck disable=SC2016 # sed anchors match literal gate text
+gate_mutate_and_check "M-zsec: neutering the zone-id secret check admits Z1 (a third id)" \
+  "$(neuter '--arg zid "\$CFAM_NEW_ZONE_ID"')" cf_account_migrate_gate redirects-dns "$TMP/z1.json"
+# shellcheck disable=SC2016 # sed anchors match literal gate text
+gate_mutate_and_check "M-zsec-update: neutering the zone-id secret check admits Z4 (an in-state update to a third id)" \
+  "$(neuter '--arg zid "\$CFAM_NEW_ZONE_ID"')" cf_account_migrate_gate redirects-dns "$TMP/z4.json" "$TMP/z-state.json"
 # shellcheck disable=SC2016 # sed expressions match literal gate text
 gate_mutate_and_check "M-replace-class (G2): neutering the replace clause admits a bare delete of the replace target" \
   's|(\$cls == "replace" and .change.actions != \["delete","create"\] and .change.actions != \["create","delete"\])|($cls == "replace" and false)|' \
@@ -395,11 +470,11 @@ n_bad=""
 for a in '^  v="\$(jq -r --argjson spec "\$spec" .\.resource_changes\[\] | select((\.mode' '--arg nz "\$CFAM_NEW_ZONE_ID"' \
   '--arg oz "\$CFAM_OLD_ZONE_ID"' '^  v="\$(jq -r .\.resource_changes\[\] | select(\.change\.importing != null)' \
   '--argjson lit "\$literals"' 'as \$have$' '^    v="\$(jq .*select(\$spec\[\.address\] == "replace")$' '--slurpfile st' \
-  '--slurpfile pst'; do
+  '--slurpfile pst' '--arg zid "\$CFAM_NEW_ZONE_ID"'; do
   sed "$(neuter "$a")" "$GATE" > "$TMP/neuter.sh"
   [[ "$(diff "$GATE" "$TMP/neuter.sh" | grep -c '^>')" -eq 1 ]] || n_bad+=" [$a]"
 done
-if [[ -z "$n_bad" ]]; then pass "neuter: each of the 9 mutation anchors rewrites exactly one check opener"
+if [[ -z "$n_bad" ]]; then pass "neuter: each of the 10 mutation anchors rewrites exactly one check opener"
 else fail "neuter: anchors that do not land on exactly one opener:$n_bad" 1 ""; fi
 gate_mutate_layered "M-preamble: the gate INVOKES the readable assert (not merely sources it)" \
   's|^  plan_gate_assert_readable .*|  :|' "an unreadable plan is not evidence" "unclassifiable plan entry" cf_account_migrate_gate redirects-dns "$TMP/d2.json"
@@ -425,13 +500,22 @@ own_copies() {
   grep -nE "${OZ}|${OA}|soleur-terraform-state|web-platform/backups/|\.serial \| type|(^|[^_[:alnum:]-])aws s3(api)? " <<<"$code"
   grep -q 'cfam_r2_aws s3' <<<"$code" || echo "no-shared-call"
 }
-# sources_lib <file>: a real `source`/`.` command loads the library (directly, or through a
-# CFAM_GATE_LIB assigned to it); a filename in an assignment, echo or message alone is not loading it.
+# sources_lib <file>: the file carries one of the three reviewed source forms, as whole lines (and,
+# where the path is a variable, the exact line that binds it). A filename in an assignment, an
+# echo, `true || source …` or `: source …` is not one of them, so it is not loading the library.
+# A consumer that changes its source line updates the matching pair here, in review.
+# shellcheck disable=SC2016,SC1003 # literal consumer source text, never expanded here
+{
+  SRC_JOB_LIB='  local lib="$GITHUB_WORKSPACE/tests/scripts/lib"'
+  SRC_JOB="  source \"\$lib/cf-account-migrate-gate.sh\" || { printf '%s: cannot source the phase gate\\n' \"\$P\" >&2; exit 2; }"
+  SRC_FORGET='source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../../../tests/scripts/lib/cf-account-migrate-gate.sh" \'
+  SRC_PRED_LIB='readonly CFAM_GATE_LIB="${CFAM_SELF_DIR}/../../../../tests/scripts/lib/cf-account-migrate-gate.sh"'
+  SRC_PRED='  { declare -F cf_account_migrate_phase_spec >/dev/null || source "$CFAM_GATE_LIB"; } || bad="unloadable"'
+}
 sources_lib() {
-  local code; code="$(grep -vE '^[[:space:]]*#' "$1")"
-  grep -qE '(^|[;&|{(][[:space:]]*|[[:space:]])(source|\.)[[:space:]]+"[^#]*/cf-account-migrate-gate\.sh"' <<<"$code" && return 0
-  grep -qE '(^|[;&|{(][[:space:]]*|[[:space:]])(source|\.)[[:space:]]+"\$CFAM_GATE_LIB"' <<<"$code" \
-    && grep -qE '^readonly CFAM_GATE_LIB="[^"]*/tests/scripts/lib/cf-account-migrate-gate\.sh"$' <<<"$code"
+  { grep -qxF -- "$SRC_JOB_LIB" "$1" && grep -qxF -- "$SRC_JOB" "$1"; } && return 0
+  grep -qxF -- "$SRC_FORGET" "$1" && return 0
+  grep -qxF -- "$SRC_PRED_LIB" "$1" && grep -qxF -- "$SRC_PRED" "$1"
 }
 for c in cf-account-migrate-job.sh cf-account-state-migrate.sh cf-account-migration-complete.sh; do
   if sources_lib "$CONSUMER_DIR/$c" && [[ -z "$(own_copies "$CONSUMER_DIR/$c")" ]]; then
@@ -446,6 +530,21 @@ sed 's/ || source "\$CFAM_GATE_LIB"; }/; }/' "$CONSUMER_DIR/cf-account-migration
 if cmp -s "$TMP/no-source.sh" "$CONSUMER_DIR/cf-account-migration-complete.sh"; then fail "M-no-source: the mutation did not land" 1 ""
 elif ! sources_lib "$TMP/no-source.sh"; then pass "M-no-source: a predicate that names the library but never sources it is caught (RED)"
 else fail "M-no-source: a predicate that never sources the library still reads as sourcing it" 1 ""; fi
+# Each consumer's reviewed source line turned into a shape that loads nothing must read as NOT
+# sourcing the library (the previous token-level match accepted all three).
+src_mut() { # <kind> <consumer> <sed-expr>: the mutated consumer must NOT read as sourcing the library
+  local out="$TMP/src-$1.sh"
+  sed "$3" "$CONSUMER_DIR/$2" > "$out"
+  if cmp -s "$out" "$CONSUMER_DIR/$2"; then fail "M-src-$1: the mutation did not land on $2" 1 ""
+  elif ! sources_lib "$out"; then pass "M-src-$1: $2 whose source line becomes a $1 form is caught (RED)"
+  else fail "M-src-$1: $2 with a $1 source form still reads as sourcing the library" 1 "$(grep -n 'cf-account-migrate-gate\|CFAM_GATE_LIB' "$out")"; fi
+}
+# shellcheck disable=SC2016 # sed expressions match literal consumer text
+src_mut true-or cf-account-migrate-job.sh 's#^  source "\$lib/cf-account-migrate-gate.sh" #  true || source "$lib/cf-account-migrate-gate.sh" #'
+# shellcheck disable=SC2016 # sed expressions match literal consumer text
+src_mut colon cf-account-state-migrate.sh 's#^source "\$(cd #: source "$(cd #'
+# shellcheck disable=SC2016 # sed expressions match literal consumer text
+src_mut echo cf-account-migration-complete.sh 's#|| source "\$CFAM_GATE_LIB"; }#|| echo source "$CFAM_GATE_LIB"; }#'
 sed 's/^    cfam_r2_aws s3 cp /    aws s3 cp /' "$CONSUMER_DIR/cf-account-migration-complete.sh" > "$TMP/bare-aws.sh"
 if cmp -s "$TMP/bare-aws.sh" "$CONSUMER_DIR/cf-account-migration-complete.sh"; then fail "M-bare-aws: the mutation did not land" 1 ""
 elif [[ -n "$(own_copies "$TMP/bare-aws.sh")" ]]; then pass "M-bare-aws: a predicate copy made with a bare aws call is caught (RED)"
@@ -491,6 +590,6 @@ r2_mut "M-r2-bound: the 60 s bound dropped" 's|^  timeout 60 env |  env |' unbou
 
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 91 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 91)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 113 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 113)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

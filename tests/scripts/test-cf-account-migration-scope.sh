@@ -404,12 +404,20 @@ def check_migrate(rel):
         e = job.get("environment")
         if not isinstance(e, str) or "${{" in e or e != env: p.append("%s environment: %r, want the literal %r" % (jid, e, env))
         # A timeout or cancel concludes `cancelled`, which failure() misses: the ops email must see both.
-        mails = [st for st in (job.get("steps") or []) if isinstance(st, dict) and str(st.get("uses") or "").rstrip("/").endswith("/notify-ops-email")]
-        if len(mails) != 1 or re.sub(r"\s+", "", str(mails[0].get("if") or "")) != "failure()||cancelled()":
+        jsteps = list(enumerate(job.get("steps") or []))
+        mails = [(i, st) for i, st in jsteps if isinstance(st, dict) and str(st.get("uses") or "").rstrip("/").endswith("/notify-ops-email")]
+        if len(mails) != 1 or re.sub(r"\s+", "", str(mails[0][1].get("if") or "")) != "failure()||cancelled()":
             p.append("%s: want exactly one notify-ops-email step with if: failure() || cancelled()" % jid)
-        runs = [st for st in (job.get("steps") or []) if isinstance(st, dict) and "cf-account-migrate-job.sh" in str(st.get("run") or "")]
+        runs = [(i, st) for i, st in jsteps if isinstance(st, dict) and "cf-account-migrate-job.sh" in str(st.get("run") or "")]
         if len(runs) != 1:
             p.append("%s has %d steps running cf-account-migrate-job.sh, want 1" % (jid, len(runs))); continue
+        # The email reports the job step's failure, so it must come AFTER it; and a job step that
+        # cannot fail the job (continue-on-error) never triggers failure() at all.
+        if len(mails) == 1 and mails[0][0] < runs[0][0]:
+            p.append("%s: the notify-ops-email step (step %d) runs before cf-account-migrate-job.sh (step %d)" % (jid, mails[0][0], runs[0][0]))
+        if "continue-on-error" in runs[0][1]:
+            p.append("%s: the cf-account-migrate-job.sh step carries continue-on-error" % jid)
+        runs = [st for _, st in runs]
         r = (runs[0].get("env") or {}).get("REHEARSAL")
         if not isinstance(r, str) or "${{" in r or r != reh: p.append("%s REHEARSAL: %r, want the literal %r" % (jid, r, reh))
         if "REHEARSAL" in (job.get("env") or {}) or "REHEARSAL" in (doc.get("env") or {}):
@@ -489,7 +497,53 @@ out("RED" if n6 < 8 else "OK", "A6-floor", "%d exempt non-plan-only workflows ch
 # all resolve; it is followed transitively, and a reusable workflow from another repository is
 # refused outright (its body is not in this tree, so a loader in it cannot be ruled out).
 REUSE = re.compile(r"(?:\./|jikig-ai/soleur/)\.github/workflows/([A-Za-z0-9._-]+\.ya?ml)(?:@\S+)?")
-LOADER_ANY = re.compile(r"^[ \t]*(?:-[ \t]+)?uses:[ \t]*[\"']?(?:\./|jikig-ai/soleur/)\.github/actions/infra-credentials/?(?:@\S+)?[\"']?[ \t]*(?:#.*)?$", re.M)
+# The loader is recognised from PARSED steps[].uses (flow mappings, quoting and an @ref all
+# normalise away), never from raw text. A local composite action (./.github/actions/<x>) is
+# followed ONE level: its runs.steps[].uses are checked the same way.
+LOADER_USE = re.compile(r"(?:\./|jikig-ai/soleur/)\.github/actions/infra-credentials")
+LOCAL_ACTION = re.compile(r"\./\.github/actions/([A-Za-z0-9._-]+)")
+def norm_uses(u):
+    return str(u or "").strip().split("@", 1)[0].rstrip("/")
+wf_cache = {}
+def wf_doc(name):
+    """Any workflow in the tree, parsed on demand (not only the terraform-bearing `docs`).
+    -> (doc, None) or (None, reason). A callee that will not parse is RED, not an empty walk."""
+    if name not in wf_cache:
+        if name not in texts:
+            wf_cache[name] = (None, "is not in %s" % os.path.basename(wfdir))
+        else:
+            try:
+                d = yaml.load(texts[name], Loader=Loader) or {}
+                wf_cache[name] = (d, None) if isinstance(d, dict) else (None, "is not a mapping")
+            except yaml.YAMLError as e:
+                wf_cache[name] = (None, "does not parse: %s" % str(e).splitlines()[0])
+    return wf_cache[name]
+def action_uses(name):
+    """runs.steps[].uses of a local composite action, or None when it cannot be read."""
+    for fn in ("action.yml", "action.yaml"):
+        p = os.path.join(repo_root, ".github", "actions", name, fn)
+        if os.path.isfile(p):
+            try:
+                a = yaml.load(open(p).read(), Loader=Loader) or {}
+            except yaml.YAMLError:
+                return None
+            st = ((a.get("runs") or {}).get("steps") or []) if isinstance(a, dict) else []
+            return [norm_uses(s.get("uses")) for s in st if isinstance(s, dict) and s.get("uses")]
+    return None
+def loads_credentials(doc):
+    """-> a description of how this workflow's steps reach the loader, or ''."""
+    for jid, job in ((doc.get("jobs") or {}) if isinstance(doc, dict) else {}).items():
+        if not isinstance(job, dict): continue
+        for s in (job.get("steps") or []) if isinstance(job.get("steps"), list) else []:
+            if not isinstance(s, dict) or not s.get("uses"): continue
+            u = norm_uses(s["uses"])
+            if LOADER_USE.fullmatch(u): return "job %s uses the loader" % jid
+            m = LOCAL_ACTION.fullmatch(u)
+            if m and m.group(1) != "infra-credentials":
+                inner = action_uses(m.group(1))
+                if inner is None: return "job %s uses the unreadable local action %s" % (jid, u)
+                if any(LOADER_USE.fullmatch(x) for x in inner): return "job %s uses %s, which uses the loader" % (jid, u)
+    return ""
 def job_uses(doc):
     jobs = doc.get("jobs") if isinstance(doc, dict) else None
     return [str(j.get("uses") or "").strip() for j in (jobs or {}).values() if isinstance(j, dict) and j.get("uses")]
@@ -500,15 +554,21 @@ for ex in sorted(EXEMPT):
     seen, todo = set(), [ex]
     while todo:
         cur = todo.pop()
-        for u in job_uses(docs.get(cur, (None, ""))[0] or {}):
+        cdoc, why = wf_doc(cur)
+        if cdoc is None:
+            if cur != ex: bad8.append("%s reaches %s, which %s (a loader in it cannot be ruled out)" % (ex, cur, why))
+            continue
+        for u in job_uses(cdoc):
             m = REUSE.fullmatch(u)
             if not m:
                 bad8.append("%s (via %s) calls a reusable workflow outside this repository: %s" % (ex, cur, u)); continue
             callee = m.group(1)
             if callee in seen: continue
             seen.add(callee)
-            if callee in texts and LOADER_ANY.search(texts[callee]):
-                bad8.append("%s calls %s%s, which loads the infra credentials" % (ex, callee, "" if cur == ex else " via " + cur))
+            ldoc, _ = wf_doc(callee)
+            how = loads_credentials(ldoc) if ldoc is not None else ""
+            if how:
+                bad8.append("%s calls %s%s, which loads the infra credentials (%s)" % (ex, callee, "" if cur == ex else " via " + cur, how))
             todo.append(callee)
     trig = doc.get("on", doc.get(True)) if isinstance(doc, dict) else None
     keys = set(trig) if isinstance(trig, dict) else ({trig} if isinstance(trig, str) else set(trig or []))
@@ -618,13 +678,14 @@ mirror() {
 }
 # mut_wf <label> <expect-RED-id> <file> <sed-expr> [action|wf]
 mut_row() {
-  local label="$1" id="$2" file="$3" expr="$4" what="${5:-wf}" d src dst o
+  local label="$1" id="$2" file="$3" expr="$4" what="${5:-wf}" d src dst o rc=0
   d="$(mirror "$(printf '%s' "$label" | tr -c 'A-Za-z0-9' '_')")"
   if [[ "$what" == action ]]; then src="$ACTION"; dst="$d/action.yml"; else src="$WFDIR/$file"; dst="$d/wf/$file"; rm -f "$dst"; fi
   sed -E "$expr" "$src" > "$dst.tmp" && mv "$dst.tmp" "$dst"
   if cmp -s "$src" "$dst"; then no "MUT $label: the mutation did not land (cmp identical)"; return; fi
-  o="$(analyze "$d/wf" "$d/action.yml")"
-  if grep -q "^RED $id " <<<"$o"; then ok "MUT $label: $id RED"; else no "MUT $label: $id stayed green ($(grep " $id " <<<"$o" | head -1))"; fi
+  # rc captured: a crash that printed RED is not a kill (same rule as mig_mut).
+  o="$(analyze "$d/wf" "$d/action.yml")" || rc=$?
+  if [[ "$rc" -eq 0 ]] && grep -q "^RED $id " <<<"$o"; then ok "MUT $label: $id RED"; else no "MUT $label: $id stayed green or crashed (rc=$rc; $(grep -m1 " $id " <<<"$o"))"; fi
 }
 AWPI=apply-web-platform-infra.yml
 mut_row "an exempt workflow starts planning the root" A6-exempt-no-root-planner apply-github-infra.yml 's#^  INFRA_DIR: infra/github#  INFRA_DIR: apps/web-platform/infra#'
@@ -756,8 +817,9 @@ YML
   cp "$WFDIR/$AWPI" "$1/"
 }
 mig_fixture "$WORK/mig-ok"
-o="$(analyze "$WORK/mig-ok" "$ACTION" "" "$EXEMPT_LIST" "")"
-if grep -q '^OK A4-migrate ' <<<"$o"; then ok "A4 control: a conforming cf-account-migrate.yml fixture is green"; else no "A4 control: conforming fixture not green ($(grep A4 <<<"$o"))"; fi
+a4_rc=0
+o="$(analyze "$WORK/mig-ok" "$ACTION" "" "$EXEMPT_LIST" "")" || a4_rc=$?
+if [[ "$a4_rc" -eq 0 ]] && grep -q '^OK A4-migrate ' <<<"$o"; then ok "A4 control: a conforming cf-account-migrate.yml fixture is green"; else no "A4 control: conforming fixture not green (rc=$a4_rc; $(grep A4 <<<"$o"))"; fi
 mig_mut() { # <label> <sed-expr>
   local d
   d="$WORK/mig-$(printf '%s' "$1" | tr -c 'A-Za-z0-9' '_')"
@@ -785,6 +847,70 @@ mig_mut "apply if inverted"                      's#if: \$\{\{ !inputs\.rehearsa
 mig_mut "a third job"                            's#^jobs:$#jobs:\n  extra:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"#'
 mig_mut "one job collapses both legs"            '/^  cf_account_migrate_apply:$/,$d'
 mig_mut "the ops email misses a cancel or timeout" 's#if: failure\(\) \|\| cancelled\(\)$#if: failure()#'
+mig_mut "the ops email runs before the job step" '/^  cf_account_migrate_apply:$/,${/^      - if: failure\(\) \|\| cancelled\(\)$/d;/^        uses: \.\/\.github\/actions\/notify-ops-email$/d;s#^(    steps:)$#\1\n      - if: failure() || cancelled()\n        uses: ./.github/actions/notify-ops-email#}'
+mig_mut "the job step gets continue-on-error"  's#^(        run: bash apps/web-platform/infra/scripts/cf-account-migrate-job\.sh)$#\1\n        continue-on-error: true#'
+
+# (8) transitive callee walk on multi-file fixtures. The exempt apply-github-infra.yml gains a job
+# calling ./.github/workflows/<entry>; the fixture files join a mirror of the real tree.
+mkdir -p "$WORK/a8/chain" "$WORK/a8/flow" "$WORK/a8/comp" "$WORK/a8/bad" "$WORK/a8/okc" "$WORK/a8root/.github/actions/wrap"
+cat > "$WORK/a8/chain/mid.yml" <<'YML'
+name: mid
+on: workflow_call
+jobs:
+  pass:
+    uses: ./.github/workflows/bastion-host-create.yml
+    secrets: inherit
+YML
+cat > "$WORK/a8/flow/leaf.yml" <<'YML'
+name: leaf
+on: workflow_call
+jobs:
+  a: {runs-on: ubuntu-latest, steps: [{uses: ./.github/actions/infra-credentials}]}
+YML
+cat > "$WORK/a8/comp/leaf.yml" <<'YML'
+name: leaf
+on: workflow_call
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/wrap
+YML
+cat > "$WORK/a8root/.github/actions/wrap/action.yml" <<'YML'
+name: wrap
+runs:
+  using: composite
+  steps:
+    - uses: "./.github/actions/infra-credentials@main"
+YML
+printf 'name: bad\non: workflow_call\njobs: [\n' > "$WORK/a8/bad/leaf.yml"
+cat > "$WORK/a8/okc/leaf.yml" <<'YML'
+name: leaf
+on: workflow_call
+jobs:
+  a: {runs-on: ubuntu-latest, steps: [{uses: actions/checkout@v4}, {uses: ./.github/actions/notify-ops-email}]}
+YML
+# a8_mut <label> <entry> <fixture-dir> <RED|OK> <substring of the A8 line> [repo-root]
+a8_mut() {
+  local label="$1" entry="$2" extra="$3" want="$4" sub="$5" root="${6:-$REPO}" d o line rc=0
+  d="$(mirror "a8_$(printf '%s' "$label" | tr -c 'A-Za-z0-9' '_')")"
+  rm -f "$d/wf/apply-github-infra.yml"
+  sed -E "s#^jobs:\$#jobs:\n  smuggle:\n    uses: ./.github/workflows/$entry#" "$WFDIR/apply-github-infra.yml" > "$d/wf/apply-github-infra.yml"
+  if cmp -s "$WFDIR/apply-github-infra.yml" "$d/wf/apply-github-infra.yml"; then no "MUT A8 $label: did not land"; return; fi
+  cp "$extra"/*.yml "$d/wf/"
+  o="$(CFAM_SCOPE_CACHE="$WORK/cache" python3 "$ANALYZER" "$d/wf" "$d/action.yml" "$EXEMPT_WF" "$PLAN_ONLY" "$EXEMPT_LIST" "$root" 2>&1)" || rc=$?
+  line="$(grep -m1 -E '^(OK|RED) A8-exempt-no-reusable-loader ' <<<"$o" || true)"
+  if [[ "$rc" -eq 0 && "$line" == "$want A8-exempt-no-reusable-loader "* ]] && grep -qF -- "$sub" <<<"$line"; then
+    ok "MUT A8 $label: $want"
+  else
+    no "MUT A8 $label: want $want naming [$sub] (rc=$rc; ${line:-no A8 line})"
+  fi
+}
+a8_mut "a two-hop chain through a middle workflow with no terraform text" mid.yml "$WORK/a8/chain" RED "calls bastion-host-create.yml via mid.yml"
+a8_mut "a callee loads the credentials from a flow-mapping step" leaf.yml "$WORK/a8/flow" RED "calls leaf.yml, which loads the infra credentials (job a uses the loader)"
+a8_mut "a callee loads the credentials through a local composite action" leaf.yml "$WORK/a8/comp" RED "uses ./.github/actions/wrap, which uses the loader" "$WORK/a8root"
+a8_mut "a callee that does not parse" leaf.yml "$WORK/a8/bad" RED "reaches leaf.yml, which does not parse"
+a8_mut "control: a callee whose flow-mapping steps load nothing" leaf.yml "$WORK/a8/okc" OK "no exempt workflow calls"
 
 # ── verdict ────────────────────────────────────────────────────────────────────────────────
 printf '\ntest-cf-account-migration-scope.sh: %s passed, %s failed (%s cases)\n' "$PASS" "$FAIL" "$CASES"
@@ -792,7 +918,7 @@ if (( PASS + FAIL != CASES )); then
   printf 'CONSERVATION FAILED: PASS(%s)+FAIL(%s) != CASES(%s)\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_ASSERTIONS=70
+MIN_ASSERTIONS=77
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s\n' "$TOTAL" "$MIN_ASSERTIONS" >&2

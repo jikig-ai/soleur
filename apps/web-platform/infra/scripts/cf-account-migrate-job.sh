@@ -9,8 +9,13 @@
 #   REASON          non-blank audit text
 #   GITHUB_WORKSPACE, RUNNER_TEMP, INFRA_DIR (absolute, or relative to the workspace)
 #   GH_TOKEN, GH_REPO   read of in-flight runs; DOPPLER_TOKEN   prd_terraform read for `doppler run`
-#   CFAM_VERIFY_TRIES, CFAM_VERIFY_SLEEP   optional post-apply probe budget (default 12 x 10s;
-#                   integers, tries 1-60, pause 0-60 s, anything else refuses)
+#   CFAM_VERIFY_TRIES, CFAM_VERIFY_SLEEP, CFAM_VERIFY_DEADLINE   optional post-apply probe budget:
+#                   at most TRIES passes (default 12) with a SLEEP pause between them (default 10 s),
+#                   and no new pass starts once DEADLINE seconds have passed (default 600). One pass
+#                   is 7 sequential probes of at most 15 s each, so the verify ends within
+#                   DEADLINE + one pause + one pass (default 600 + 10 + 105 s), inside the job's
+#                   30-minute timeout. Integers: tries 1-60, pause 0-60, deadline 0-1200; anything
+#                   else refuses.
 # Test seams of the sourced libraries (CFAM_IMPORTS_FILE) are unset before sourcing: the gate
 # compares imports against the COMMITTED file only.
 #
@@ -45,8 +50,12 @@ REPLACE_ARGS=()
 GATED=()
 
 refuse() { # <reason-code> <message> [<extra summary fields>]
+  # GitHub decodes %25, %0D and %0A in a workflow command's message, so a probed value carrying
+  # "%0A::warning::" would render as extra annotation lines: encode them first (every caller).
+  local m="${2//%/%25}"
+  m="${m//$'\r'/%0D}"; m="${m//$'\n'/%0A}"
   printf '%s phase=%s verdict=refuse reason=%s%s\n' "$P" "${MIGRATE_PHASE:-?}" "$1" "${3:+ $3}"
-  printf '::error title=%s::%s\n' "$P" "$2"
+  printf '::error title=%s::%s\n' "$P" "$m"
   summary "verdict=refuse reason=$1${3:+ $3}"
   exit 1
 }
@@ -58,23 +67,24 @@ summary() {
 }
 
 # reason_line: the operator's reason as ONE printable line for the audit trail: C0 controls, DEL,
-# U+2028/U+2029, "::" (workflow-command openers) and markdown-active characters become spaces;
-# at most 200 bytes.
+# U+2028/U+2029, NEL and NBSP (U+0085, U+00A0) and markdown-active characters become spaces, "::"
+# (a workflow-command opener) becomes ":"; at most 200 bytes.
 reason_line() {
   local r
   r="$(printf '%s' "${REASON:-}" | LC_ALL=C tr '\000-\037\177' '  ' \
-    | LC_ALL=C sed -e 's/\xe2\x80[\xa8\xa9]/ /g' -e 's/::*/:/g' -e 's/[][`<>|*_#]/ /g' | LC_ALL=C tr -s ' ')"
+    | LC_ALL=C sed -e 's/\xe2\x80[\xa8\xa9]/ /g' -e 's/\xc2[\x85\xa0]/ /g' -e 's/::*/:/g' -e 's/[][`<>|*_#]/ /g' | LC_ALL=C tr -s ' ')"
   r="${r# }"
   LC_ALL=C printf '%.200s' "$r"
 }
 
-# obs_line <text>: an observed probe result (a status code and a Location from the network) as one
-# printable token for the failing= list, the annotation and the summary: the same character
-# classes as reason_line become spaces, then spaces become "+"; at most 120 bytes.
+# obs_line <text>: an observed probe result (a status code and a Location or header from the
+# network) as one printable token for the failing= list, which reaches the log line, the
+# ::error annotation and the step summary: the same character classes as reason_line become
+# spaces, then spaces become "+"; at most 120 bytes.
 obs_line() {
   local r
   r="$(printf '%s' "$1" | LC_ALL=C tr '\000-\037\177' '  ' \
-    | LC_ALL=C sed -e 's/\xe2\x80[\xa8\xa9]/ /g' -e 's/::*/:/g' -e 's/[][`<>|*_#]/ /g' | LC_ALL=C tr -s ' ')"
+    | LC_ALL=C sed -e 's/\xe2\x80[\xa8\xa9]/ /g' -e 's/\xc2[\x85\xa0]/ /g' -e 's/::*/:/g' -e 's/[][`<>|*_#]/ /g' | LC_ALL=C tr -s ' ')"
   r="${r# }"; r="${r% }"
   LC_ALL=C printf '%.120s' "${r// /+}"
 }
@@ -115,9 +125,11 @@ validate_inputs() {
   for v in RUNNER_TEMP INFRA_DIR; do
     [[ -n "${!v:-}" ]] || refuse missing-env "$v is not set"
   done
-  # Integers only: the budget feeds bash arithmetic, where an array subscript would run a command.
-  [[ "${CFAM_VERIFY_TRIES:-12}" =~ ^([1-9]|[1-5][0-9]|60)$ && "${CFAM_VERIFY_SLEEP:-10}" =~ ^([0-9]|[1-5][0-9]|60)$ ]] \
-    || refuse bad-verify-budget "CFAM_VERIFY_TRIES must be 1-60 and CFAM_VERIFY_SLEEP 0-60 (integers)"
+  # Integers only (no leading zero, which bash reads as octal): the budget feeds bash arithmetic,
+  # where an array subscript would run a command.
+  [[ "${CFAM_VERIFY_TRIES:-12}" =~ ^([1-9]|[1-5][0-9]|60)$ && "${CFAM_VERIFY_SLEEP:-10}" =~ ^([0-9]|[1-5][0-9]|60)$ \
+     && "${CFAM_VERIFY_DEADLINE:-600}" =~ ^(0|[1-9][0-9]{0,2}|1[01][0-9][0-9]|1200)$ ]] \
+    || refuse bad-verify-budget "CFAM_VERIFY_TRIES must be 1-60, CFAM_VERIFY_SLEEP 0-60 and CFAM_VERIFY_DEADLINE 0-1200 (integers)"
   summary "reason=$(reason_line)"
 }
 
@@ -342,8 +354,18 @@ probe() { # <url> [<user-agent>]: prints "<code> <redirect_url>"
   curl -sS -o /dev/null --max-time 15 -w '%{http_code} %{redirect_url}' ${ua[@]+"${ua[@]}"} "$1" 2>/dev/null
 }
 
+# noindex_obs <raw header dump>: "<status> hdr=<x-robots-tag value>" of the last response, with
+# 000 for no status line (a timeout or refused connection) and hdr=absent for no header.
+noindex_obs() {
+  awk '{ sub(/\r$/, "") }
+    /^HTTP\// { c = $2; v = "" }
+    tolower($0) ~ /^x-robots-tag:/ { v = $0; sub(/^[^:]*:[ \t]*/, "", v) }
+    END { printf "%s hdr=%s", (c == "" ? "000" : c), (v == "" ? "absent" : v) }' <<<"$1"
+}
+
 verify_redirects_dns() {
-  local tries="${CFAM_VERIFY_TRIES:-12}" pause="${CFAM_VERIFY_SLEEP:-10}" i bad u want pair hdrs got
+  local tries="${CFAM_VERIFY_TRIES:-12}" pause="${CFAM_VERIFY_SLEEP:-10}" i bad u want pair hdrs got end
+  end=$((SECONDS + ${CFAM_VERIFY_DEADLINE:-600}))
   # Each legacy path must 301 to its exact target (seo-rulesets.tf / seo-bulk-redirects.tf):
   # a 301 to the wrong page is as broken for a visitor as a 404.
   local -a pairs=(
@@ -364,12 +386,15 @@ verify_redirects_dns() {
     got="$(probe https://soleur.ai/ 'Mozilla/5.0 (compatible; GPTBot/1.2)')"
     [[ "$got" == 200\ * ]] || bad+=" gptbot=>$(obs_line "$got")"
     hdrs="$(curl -sS -o /dev/null -D - --max-time 15 https://app.soleur.ai/ 2>/dev/null)"
-    grep -qiE '^x-robots-tag:.*noindex' <<<"$hdrs" || bad+=" app-noindex"
+    grep -qiE '^x-robots-tag:.*noindex' <<<"$hdrs" || bad+=" app-noindex=>$(obs_line "$(noindex_obs "$hdrs")")"
     # The same apply creates the app's ssl=strict config rule: prove the product still serves.
     got="$(probe https://app.soleur.ai/health)"
     [[ "$got" == 200\ * ]] || bad+=" app-health=>$(obs_line "$got")"
     if [[ -z "$bad" ]]; then printf '%s verify=redirects-dns verdict=ok\n' "$P"; return 0; fi
-    [[ "$i" -lt "$tries" ]] && sleep "$pause"
+    # The wall-clock deadline stops new passes, so the verdict=fail line below is always printed
+    # before the job's timeout-minutes can cancel the run.
+    if [[ "$i" -ge "$tries" ]] || ((SECONDS >= end)); then break; fi
+    sleep "$pause"
   done
   VERIFY_FAILING="${bad# }"
   printf '%s verify=redirects-dns verdict=fail failing=%s\n' "$P" "$VERIFY_FAILING"
@@ -384,18 +409,22 @@ run_apply() {
   fi
   plan_and_gate; rc=$?
   # After the forget (redirects-dns), a refusal leaves the forget committed: the old-zone entries
-  # stay forgotten (backup uri above) and a re-dispatch resumes with removed=0 (ADR-329 D3, CTO
-  # ruling 2026-11-20). The _PREV id restore no longer applies.
-  local fg=""
-  [[ "$MIGRATE_PHASE" == redirects-dns ]] && fg=" The state forget is committed (backup uri above); runbook Halt: fix forward and re-dispatch (the forget then removes 0); the _PREV id restore no longer applies."
-  [[ "$rc" -ne 2 ]] || refuse entrypoint-gate-refused "the whole-list entrypoint gate refused (a live phase entrypoint is populated, or its emptiness could not be proven); adopt it with the printed import block first. Nothing was applied.${fg}"
-  [[ "$rc" -eq 0 ]] || refuse gate-refused "the plan did not reach gate verdict=PASS; nothing was applied.${fg}"
+  # stay forgotten (backup uri above) and a re-dispatch resumes with removed=0 (ADR-329 D10, CTO
+  # ruling 2026-11-20). The _PREV id restore no longer applies. forget=committed is the field a
+  # reader of the verdict line or the summary branches on; the prose says what to do.
+  local fg="" fx=""
+  if [[ "$MIGRATE_PHASE" == redirects-dns ]]; then
+    fg=" The state forget is committed (backup uri above); runbook Halt: fix forward and re-dispatch (the forget then removes 0); the _PREV id restore no longer applies."
+    fx="forget=committed"
+  fi
+  [[ "$rc" -ne 2 ]] || refuse entrypoint-gate-refused "the whole-list entrypoint gate refused (a live phase entrypoint is populated, or its emptiness could not be proven); adopt it with the printed import block first. Nothing was applied.${fg}" "$fx"
+  [[ "$rc" -eq 0 ]] || refuse gate-refused "the plan did not reach gate verdict=PASS; nothing was applied.${fg}" "$fx"
   tf_env terraform apply -no-color -input=false -auto-approve "$W/tfplan" 2>&1 | tf_redact_random_ids
   rc=${PIPESTATUS[0]}
   [[ "$rc" -eq 0 ]] || refuse apply-failed "terraform apply of the graded plan failed (exit $rc); state may hold a partial apply. Fix forward (a reviewed PR if the cause is in code), then re-dispatch the same phase: the forget then removes 0 (cf-state-migrate verdict=ok removed=0), imports already in state plan as no-op, and only the remainder is planned and gated."
   printf '%s phase=%s mode=apply applied=true\n' "$P" "$MIGRATE_PHASE"
   if [[ "$MIGRATE_PHASE" == redirects-dns ]]; then
-    verify_redirects_dns || refuse verify-failed "applied, but the redirect/noindex/crawler/app-health probes did not all pass: ${VERIFY_FAILING}. Runbook Halt, verify-failed: if app-health is failing, the owner may make one dashboard edit of the failing rule on the NEW zone only; then a fix-forward PR, a rehearsal, and a re-dispatch of this phase (the fix plans as an in-state update the gate accepts)." "applied=true"
+    verify_redirects_dns || refuse verify-failed "applied, but the redirect/noindex/crawler/app-health probes did not all pass: ${VERIFY_FAILING}. Runbook Halt, verify-failed: if app-health is failing, the owner may make one dashboard edit of the failing rule on the NEW zone only; then a fix-forward PR, a rehearsal, and a re-dispatch of this phase (the fix plans as an in-state update the gate accepts)." "applied=true failing=${VERIFY_FAILING}"
   fi
   printf '%s phase=%s mode=apply verdict=PASS applied=true\n' "$P" "$MIGRATE_PHASE"
   summary "verdict=PASS applied=true"

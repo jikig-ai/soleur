@@ -256,12 +256,13 @@ from `seo-rulesets.tf`. If the operator still wants it, the import block is part
 ## Phase 1 — merge PR1
 
 `Operator-authorizes:` merge PR1. The merge queue squashes with the commit messages, so the kill switch rides in a
-branch commit's message: a line that is exactly `[skip-web-platform-apply]`, on its own (a PR-body line never reaches
-`main`, and `gh pr merge` cannot set the message). Before queueing, `Agent:` confirm it is there; any output but `1`
-or more means stop:
+branch commit's message body: a line that is exactly `[skip-web-platform-apply]`, on its own (a PR-body line never
+reaches `main`, `gh pr merge` cannot set the message, and a commit subject becomes a `* <subject>` line in the squash,
+which the own-line match ignores). Before queueing, `Agent:` confirm it is in a body line of the commits the queue will
+squash; an output of `0` means stop:
 
 ```bash
-git log origin/main..HEAD --format=%B | grep -cx '\[skip-web-platform-apply\]'
+gh pr view <PR1> --json commits --jq '[.commits[].messageBody | split("\n")[] | select(. == "[skip-web-platform-apply]")] | length'
 ```
 
 On the merge SHA, `apply-web-platform-infra.yml` should show `preflight` success and `apply` skipped
@@ -346,13 +347,13 @@ curl -sSI https://app.soleur.ai/ | grep -i '^x-robots-tag'                      
 curl -sS -o /dev/null -w '%{http_code}\n' https://app.soleur.ai/health                                # 200
 curl -sS -o /dev/null -w '%{http_code}\n' -A 'Mozilla/5.0 (compatible; GPTBot/1.2)' https://soleur.ai/  # 200
 doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer %s\n" "$BETTERSTACK_API_TOKEN_READONLY" \
-  | curl --disable --noproxy "*" -sS --max-time 30 --header @- https://uptime.betterstack.com/api/v2/monitors' \
+  | curl --disable --noproxy "*" -sS --max-time 30 --header @- "https://uptime.betterstack.com/api/v2/monitors?per_page=50"' \
   | jq -r '.data[] | select(.attributes.pronounceable_name | test("redirect"; "i")) | "\(.attributes.pronounceable_name) \(.attributes.status)"' \
   | tee /dev/stderr | grep -c ' up$'                                                                   # 4
 ```
 
 Expected: the four redirect monitors listed, each `up`, and the count line `4` (a missing or renamed monitor shows
-fewer). Then revoke the three superseded 0a tokens with the revoke recipe, one
+fewer; the 10 monitors fit one page of 50, so a short count is never a second page). Then revoke the three superseded 0a tokens with the revoke recipe, one
 go each, on `prd_terraform` `CF_API_TOKEN_PREV`, `CF_API_TOKEN_RULESETS_PREV` and `CF_API_TOKEN_PAGES_PREV` (the
 recipe's step 4 deletes each `_PREV` key). `CF_ZONE_ID_PREV` and `CF_ACCOUNT_ID_PREV` may stay until cleanup; after
 this apply they are never restored (Halt).
@@ -388,12 +389,21 @@ Expected gate line: a `zone_settings_override` create that adopts the parity set
 and one `doppler_secret.cf_api_token_dns_edit` replace (`action_reason=replace_by_request`), so `destroys=1`: the gate
 counts a replace's delete half, and that one is the only delete it lets through.
 
-**Verify** (`Agent:` for the reads; the `deploy-docs.yml` dispatch republishes the production docs site, so
-`Operator-authorizes:` that one command):
+**Verify.** `Agent:`
 
 ```bash
 gh api repos/jikig-ai/soleur/actions/secrets/CLOUDFLARE_API_TOKEN_PAGES --jq .updated_at   # later than the apply
+```
+
+`Operator-authorizes:` the docs dispatch, which republishes the production docs site:
+
+```bash
 gh workflow run deploy-docs.yml --ref main
+```
+
+`Agent:` then watch it:
+
+```bash
 gh run list --workflow deploy-docs.yml --limit 1 --json databaseId,createdAt
 gh run watch <run-id> --exit-status
 gh run view <run-id> --log | grep -E 'probe (A|B)'
@@ -415,7 +425,8 @@ on their `_PREV` keys.
    read for R2 (leave it, or move the reader to `CF_R2_ACCOUNT_ID`) or for zone and Access (write the new id after this
    step): `apps/web-platform/server/inngest/functions/event-cf-token-expiry-check.ts` reads `prd` `CF_ACCOUNT_ID` to
    watch the `github-actions-deploy` token, which now lives on the new account. Record each decision on #12931.
-2. `Operator-authorizes:` merge PR2 with `[skip-web-platform-apply]`.
+2. `Operator-authorizes:` merge PR2, with the kill switch carried and checked exactly as in Phase 1 (a body line of a
+   branch commit, confirmed with the same `gh pr view <PR2> --json commits` count before queueing).
 3. **Tunnel phase.** `Operator-authorizes:` the dispatch with `migrate_phase=tunnel -f confirm=MIGRATE-CF-tunnel`,
    `rehearsal=true`, then `rehearsal=false`. The apply leg first runs the pinned six-record pre-delete
    (`cf-tunnel-host-predelete.sh --apply`, never from the agent's machine): it GETs each pinned id and deletes all six
@@ -532,24 +543,47 @@ The off-by-default flags `cf_load_balancing_enabled`, `cf_zone_plan_pro`, `cf_zo
 is pinned to the legacy account. Never fix a red by overriding one: turning a flag on is a reviewed PR that deletes its
 validation (Load Balancing #12983, DNSSEC #12982).
 
-- **Before the first `redirects-dns` apply** (no `rehearsal=false` run of it yet), the flip may be undone:
+- **Before any `rehearsal=false` `redirects-dns` run has printed `cf-state-migrate backup=uploaded`**, the flip may
+  be undone:
   `Operator-authorizes:` copy `CF_ZONE_ID_PREV` and `CF_ACCOUNT_ID_PREV` back over `CF_ZONE_ID` and `CF_ACCOUNT_ID`
   in `prd_terraform` with the stdin pipe form, read each back (`cut -c1-8`), and copy each token `<KEY>_PREV` back the
   same way. That leaves the root closed, not reopened: the validations reject the old ids, so every plan of the root
   fails, and state was never touched.
-- **After the `redirects-dns` apply ran** (the forget is committed): no id restore, no restore of state from the
+- **Once a `rehearsal=false` `redirects-dns` run printed `backup=uploaded`** (the forget is committed; such a refusal
+  also carries `forget=committed`): no id restore, no restore of state from the
   backup and no `git revert` of PR1. Each of those would point Terraform at the moved zone, which must never be
   mutated, or re-open routine applies against state that no longer holds the zone's resources. Fix forward only.
 - **`reason=verify-failed applied=true`** (the `redirects-dns` apply landed and a post-apply probe failed; the
   `failing=` list names each item with what came back, `<item>=><code>+<location>`). CTO ruling 2026-11-20:
-  1. If `app-health` is in `failing=` (the product is down for every user): `Operator-authorizes:` one dashboard edit
-     of the one failing rule, on the NEW zone `951ce525…` only, back to its last good value (for the ssl rule that
-     is `full`, per `origin-tls-strict-flip.md` §Rollback; the CLO's 2026-11-13 ruling requires the legal wording to
-     change the same day). `Agent:` re-run the local Verify block. Never edit the old zone.
-  2. A fix-forward PR under #12931 (the merge freeze allows it; its push-apply red is expected).
-  3. Rehearse `redirects-dns`, then re-dispatch it. The corrected rule plans as an in-state `["update"]` on the new
-     zone, which the gate accepts (and only that), overwriting the dashboard edit with the code value; the job's
-     verify runs again.
+  1. If `app-health` is in `failing=` (the product is down for every user), act by its code:
+     - `app-health=>525` or `=>526`: `Operator-authorizes:` (owner only, as `origin-tls-strict-flip.md` §Break-glass)
+       one dashboard edit on the NEW zone `951ce525…` only: Rules, Configuration Rules (phase `http_config_settings`),
+       the rule with ref `dcb85b75bc3c4f4aa2a8c13a080bf854`, SSL `Strict` to `Full`. Not the zone-wide SSL/TLS
+       setting. The CLO's 2026-11-13 ruling requires the legal wording to change the same day.
+     - `app-health=>3xx`: the owner disables, on the NEW zone only, the one redirect rule whose expression matches
+       `app.soleur.ai`.
+     - `app-health=>000` or any other code: no dashboard edit. `Agent:` re-run the local Verify block and stop for an
+       owner decision.
+     `Agent:` re-run the local Verify block after the edit. Never edit the old zone.
+  2. After a 525/526 window, `Agent:` redeliver the window's failed GitHub App webhook deliveries per
+     `origin-tls-strict-flip.md` §"After any 525/526 window" (GitHub never retries them).
+  3. A fix-forward PR under #12931 (the merge freeze allows it; its push-apply red is expected). It carries the
+     edited value in code (for the ssl rule, the edits `origin-tls-strict-flip.md` §Rollback lists for a forward PR).
+  4. Rehearse `redirects-dns`. The gate prints one `cf-account-migrate-gate: in-state-update <address>` line for each
+     in-state update it admits. The dashboard-edited address must NOT appear there: an update to it means the PR
+     does not carry the working value and would undo the edit, so stop. Then re-dispatch; the job's verify runs
+     again. The gate accepts an in-state `["update"]` only for a Cloudflare object whose `before` carries the NEW
+     zone or account id. A fix that plans as a replace (a ruleset `phase` or `kind` change, say) is refused:
+     widening the phase spec is a reviewed gate diff in `tests/scripts/lib/cf-account-migrate-gate.sh`.
+- **The apply run was cancelled** (timeout or by hand; the ops email says "did not complete" with no `verdict=refuse`
+  line). Read the run log for the last marker: none of `backup=uploaded` means nothing was forgotten (re-dispatch
+  after the rehearsal); `backup=uploaded` without `applied=true` is the committed-forget case above; `applied=true`
+  means treat it as `verify-failed`: `Agent:` run the local Verify block and follow the bullet above on any failure.
+- **A revert copy is not sound** (a `prev-*` or `swap-*` stage says one of `<KEY>` / `<KEY>_PREV` is not the old
+  token). Copy neither way. `Agent:` read each one's token id and status with the revoke recipe's step 2. The one that
+  verifies active is the old token. `Operator-authorizes:` delete the other key only if it is the `_PREV`, then re-run
+  the prev stage, which copies afresh. If `<KEY>` is the dead one, copy `<KEY>_PREV` over it with the stdin pipe form,
+  read it back, and re-run the swap.
 - The backup object is disaster-recovery evidence only. It is never pushed back as state; Phase 5 deletes every
   `pre-cf-account-migration-*` object.
 - If the migration is abandoned outright, stop at the last verified phase, keep the merge freeze, and record the

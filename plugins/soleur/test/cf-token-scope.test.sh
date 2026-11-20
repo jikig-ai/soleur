@@ -107,7 +107,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     -X) shift; method="${1:-}" ;;
     --data-binary) shift; body_arg="${1:-}" ;;
-    -* ) [[ "$1" == *://* ]] && record_url "$1" ;;
+    --disable|-sS) ;;
+    # Any flag this mock does not model is a refusal, never a silent GET: an
+    # unmodelled spelling (-XDELETE, -d@file, --data-raw, -K) would otherwise be
+    # answered as if it were a read. The suite asserts this log stays empty.
+    -*)
+      [[ -n "${MOCK_CURL_UNMODELLED:-}" ]] && { printf 'UNMODELLED'; printf ' %q' "$@"; printf '\n'; } >>"$MOCK_CURL_UNMODELLED"
+      exit 64
+      ;;
     *) record_url "$1" ;;
   esac
   shift
@@ -185,6 +192,10 @@ ln -sf "$JQBIN" "$NOCURLBIN/jq"
 # Mock dir FIRST (shadows real curl/doppler), then system bins so the SUT's `cat`
 # (usage) and the mock shebangs (/usr/bin/env bash) still resolve.
 MOCKPATH="$MOCKBIN:/usr/bin:/bin"
+# Every SUT run inherits this: the curl mock appends "UNMODELLED <args>" and exits
+# 64 for any flag it does not model. Asserted empty at the end of the suite (U1).
+export MOCK_CURL_UNMODELLED="$WORK/curl-unmodelled.log"
+: >"$MOCK_CURL_UNMODELLED"
 
 # run <PATH> <args...> ; sets RC and writes combined output to OUTFILE.
 run() {
@@ -794,37 +805,187 @@ unset MOCK_LB_POOLS
 # --- D12: read-only source guards on the whole script (extends C10 posture) ---
 src_lacks '(^|[[:space:]])-X[[:space:]]+(POST|PUT|PATCH|DELETE)' "D12 no literal mutating curl verb in source (the write verb comes only from the migration tables)"
 src_lacks 'DELETE\|' "D12 no DELETE row in any migration table"
-# D12c: implicit-write curl flags need NO -X (structural seat). Pattern in a var
-# so the POSITIVE control below can prove it matches a synthetic write-flag line
-# before trusting the negative on the SUT (fix-round seat: the first revision of
-# this pattern carried a stray leading '-' and could never match a real flag).
-# A bundled short flag ending in a body letter (-sSd, -sT) is one token to curl; --json and
-# --data-ascii also send a body (test-design seat F1: each survived the earlier pattern).
-D12C_PAT='(^|[[:space:]])(-[A-Za-z]*[dTF]|--data|--data-binary|--data-raw|--data-ascii|--data-urlencode|--json|--form|--form-string|--upload-file|--request)([[:space:]=]|$)'
-d12c_pos_bad=""
-for f in "-d '{}'" "-sSd '{}'" "-T body.json" "-F a=b" "--json '{}'" "--data-ascii '{}'" "--data-raw '{}'" "--upload-file x"; do
-  grep -qE -- "$D12C_PAT" <<<"curl --disable --noproxy '*' $f https://api.cloudflare.com/x" || d12c_pos_bad+=" [$f]"
-done
-for f in "-sS" "-H 'Accept: x'" "-w '%{http_code}'" "--max-time 15" "--disable"; do
-  ! grep -qE -- "$D12C_PAT" <<<"curl $f https://api.cloudflare.com/x" || d12c_pos_bad+=" [read flag $f matched]"
-done
-if [[ -z "$d12c_pos_bad" ]]; then ok "D12c positive control: pattern catches every body flag spelling and no read flag"; else no "D12c pattern controls:$d12c_pos_bad"; fi
-# Since #12931 (CTO L49) the migration profiles send invalid-body write probes, so
-# the guard is SCOPED rather than absolute: every write-flag line must carry the
-# fixed INVALID_BODY literal, and the run path sends it from exactly ONE site.
-grep -nE -- "$D12C_PAT" "$SUT" > "$WORK/d12c-hits.txt" || true
-if [[ -s "$WORK/d12c-hits.txt" ]] && ! grep -qvF 'INVALID_BODY' "$WORK/d12c-hits.txt"; then
-  ok "D12c every write-flag line in source carries INVALID_BODY"
+# --- D12c: curl-invocation ALLOWLIST (third revision; #12932 review). ---
+# CONTRACT. The first two revisions listed forbidden write-flag spellings, and each
+# round found one more that passed (-XDELETE -d@/dev/null, -d"$X", -X "DELETE", a
+# second body flag, an "INVALID_BODY" substring in a comment). This revision pins
+# what IS allowed instead. Over the WHOLE script under test (a superset of the
+# migration-probe section the earlier pattern scanned), after a quote-aware comment
+# strip, backslash-continuation join and whitespace collapse (D12C_NORM below):
+#   (I) every logical line naming curl (case-insensitive) equals, as a multiset, one
+#       of the reviewed canonical forms in D12C_CANON: three executed invocations,
+#       five dry-run recipe strings and the prerequisite loop. A new curl site, an
+#       edited one, a duplicated one or a removed one is RED.
+#   (F) independently, every one of those invocations uses only the read flags
+#       --disable --noproxy -sS --max-time -w -H, plus -X and --data-binary as a
+#       PAIR: -X takes only the table variable ("$method" / $w_method) and the one
+#       body is exactly --data-binary "$INVALID_BODY". No other body-sending flag.
+#   (U) the curl mock refuses any flag it does not model (logs UNMODELLED, exit 64),
+#       and U1 at the end of the suite asserts no run in this file hit that path.
+# RESIDUALS, left to review: a curl reached indirectly (a name assembled at run
+# time, eval, a sourced file or a second script; a heredoc is inventoried only
+# line-by-line); the VALUES of $method and $INVALID_BODY (pinned by D12, M0, M1 and
+# the SUT's own table tripwire, not here); curl behaviour from outside argv (the
+# canonical forms carry --disable and --noproxy '*', nothing more); and whether a
+# canonical form is itself safe, which is the review that accepted it into
+# D12C_CANON. Changing D12C_CANON is a reviewed act, not a mechanical refresh.
+D12C_NORM="$WORK/d12c-norm.awk"
+cat >"$D12C_NORM" <<'AWK'
+function top() { return d ? st[d] : "" }
+function flush() { gsub(/[ \t]+/, " ", buf); sub(/^ /, "", buf); sub(/ $/, "", buf); if (buf != "") print start "\t" buf; buf = ""; start = 0 }
+hd != "" { if ($0 ~ ("^\t*" hd "$")) { hd = ""; next } x = $0; gsub(/[ \t]+/, " ", x); print NR "\theredoc: " x; next }
+{
+  line = $0; out = ""; n = length(line); i = 1; cont = 0
+  if (start == 0) start = NR
+  while (i <= n) {
+    c = substr(line, i, 1); t = top()
+    if (t == "sq") { out = out c; if (c == "'") d--; i++; continue }
+    if (c == "\\") { if (i == n) { cont = 1; i++; continue } out = out c substr(line, i + 1, 1); i += 2; continue }
+    if (c == "$" && substr(line, i + 1, 1) == "(") { st[++d] = "cs"; out = out "$("; i += 2; continue }
+    if (t == "dq") { out = out c; if (c == "\"") d--; i++; continue }
+    if (c == "'") { st[++d] = "sq"; out = out c; i++; continue }
+    if (c == "\"") { st[++d] = "dq"; out = out c; i++; continue }
+    if (c == "(") { st[++d] = "cs"; out = out c; i++; continue }
+    if (c == ")") { if (t == "cs") d--; out = out c; i++; continue }
+    if (c == "#" && (i == 1 || substr(line, i - 1, 1) ~ /[ \t;|&(]/)) break
+    out = out c; i++
+  }
+  buf = buf out " "
+  if (cont || d > 0) next
+  if (match(buf, /(^|[^<])<<-?[ ]*['"]?[A-Za-z_][A-Za-z0-9_]*['"]?/)) { h = substr(buf, RSTART, RLENGTH); sub(/^[^<]*<<-?[ ]*['"]?/, "", h); sub(/['"]$/, "", h); hd = h }
+  flush()
+}
+END { if (d > 0 || hd != "" || buf != "") print "0\tPARSE-ERROR unbalanced quote/substitution/heredoc at EOF" }
+AWK
+# The flag allowlist (F). Input: one logical line per row. Prints each offending row.
+D12C_FLAGS="$WORK/d12c-flags.awk"
+cat >"$D12C_FLAGS" <<'AWK'
+$0 == "for bin in curl doppler jq; do" { next }
+{
+  s = $0; p = match(tolower(s), /curl/); if (!p) { print "no-curl-word: " $0; next }
+  s = substr(s, p + 4); gsub(/\\"/, "\"", s); gsub(/\\\$/, "$", s)
+  n = split(s, w, " "); bad = ""; nx = 0; nb = 0
+  for (k = 1; k <= n; k++) {
+    if (w[k] !~ /^-/) continue
+    if (w[k] ~ /^(--disable|--noproxy|-sS|--max-time|-w|-H)$/) continue
+    if (w[k] == "-X") { nx++; if (w[k + 1] != "\"$method\"" && w[k + 1] != "$w_method") bad = bad " -X<" w[k + 1] ">"; continue }
+    if (w[k] == "--data-binary") { nb++; if (w[k + 1] != "\"$INVALID_BODY\"") bad = bad " body<" w[k + 1] ">"; continue }
+    bad = bad " flag<" w[k] ">"
+  }
+  if (nx > 1 || nb > 1 || nx != nb) bad = bad " -X/--data-binary not exactly one pair (" nx "/" nb ")"
+  if (bad != "") print bad " :: " $0
+}
+AWK
+D12C_CANON="$WORK/d12c-canon.txt"
+cat >"$D12C_CANON" <<'CANON'
+printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$$(mig_key "$c_key")\") $(mig_url "$c_url")"
+printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -X $w_method -H 'Content-Type: application/json' --data-binary \"\$INVALID_BODY\" -H @<(printf 'Authorization: Bearer %s' \"\$$(mig_key "$w_key")\") $(mig_url "$w_url")"
+printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $r_url"
+printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $API/zones/\$ZONE/rulesets/phases/$p/entrypoint"
+printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $API/accounts/\$ACCT/rulesets"
+for bin in curl doppler jq; do
+resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' -H @<(printf 'Authorization: Bearer %s' "$TOK") "$url" 2>/dev/null || true)"
+resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' -H @<(printf 'Authorization: Bearer %s' "${MIG_TOK[$key]}") "$url" 2>/dev/null || true)" ;;
+resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' -X "$method" -H 'Content-Type: application/json' --data-binary "$INVALID_BODY" -H @<(printf 'Authorization: Bearer %s' "${MIG_TOK[$key]}") "$url" 2>/dev/null || true)" ;;
+CANON
+# d12c_curl_lines <script> <out>: the normalised logical lines that name curl.
+d12c_curl_lines() {
+  awk -f "$D12C_NORM" "$1" >"$2.all"
+  grep -iE -- '(^|[^A-Za-z0-9_.-])curl([^A-Za-z0-9_.-]|$)|PARSE-ERROR' "$2.all" | cut -f2- >"$2" || true
+}
+# d12c_inventory <script>: prints nothing when the curl lines equal D12C_CANON as a multiset.
+d12c_inventory() {
+  local o="$WORK/d12c-inv.$RANDOM"
+  d12c_curl_lines "$1" "$o"
+  sort "$o" >"$o.s"; sort "$D12C_CANON" >"$o.c"
+  diff "$o.c" "$o.s" >"$o.d" || cat "$o.d"
+}
+# d12c_flags <script>: prints each curl line that breaks the flag allowlist.
+d12c_flags() { local o="$WORK/d12c-fl.$RANDOM"; d12c_curl_lines "$1" "$o"; awk -f "$D12C_FLAGS" "$o"; }
+
+# Positive controls: the normaliser strips a comment that names curl, keeps a '#'
+# inside quotes, joins a continuation, and reports an unbalanced quote.
+cat >"$WORK/d12c-synth.sh" <<'SYNTH'
+# curl -d @/etc/passwd https://x  (comment: must vanish)
+r="$(curl --disable -sS \
+  -H 'X: #not-a-comment' "$u" 2>/dev/null || true)"  # trailing comment
+SYNTH
+d12c_curl_lines "$WORK/d12c-synth.sh" "$WORK/d12c-synth.out"
+# shellcheck disable=SC2016  # the literal normalised text is the assertion
+if [[ "$(cat "$WORK/d12c-synth.out")" == 'r="$(curl --disable -sS -H '"'"'X: #not-a-comment'"'"' "$u" 2>/dev/null || true)"' ]]; then
+  ok "D12c positive control: normaliser strips comments, keeps a quoted #, joins a continuation"
 else
-  no "D12c a write-flag line without INVALID_BODY (see $WORK/d12c-hits.txt)"
+  no "D12c normaliser control: got [$(cat "$WORK/d12c-synth.out")]"
 fi
-# ...and exactly ONE body flag per such line, or a second body rides beside INVALID_BODY.
-d12c_multi() { local l; while IFS= read -r l; do [[ "$(grep -oE -- "$D12C_PAT" <<<"$l" | wc -l)" -eq 1 ]] || printf '%s\n' "$l"; done < "$1"; }
-printf '%s\n' "12:curl -X POST --data-binary \"\$INVALID_BODY\" --data-raw '{\"name\":\"x\"}' https://x" > "$WORK/d12c-multi-positive.txt"
-if [[ -n "$(d12c_multi "$WORK/d12c-multi-positive.txt")" ]]; then ok "D12c positive control: a second body flag beside INVALID_BODY is caught"; else no "D12c multi-flag check cannot see a second body flag"; fi
-if [[ -z "$(d12c_multi "$WORK/d12c-hits.txt")" ]]; then ok "D12c each write-flag line carries exactly one body flag (no other body can be sent)"; else no "D12c a write-flag line carries a second body flag: $(d12c_multi "$WORK/d12c-hits.txt" | head -1)"; fi
+printf '%s\n' "x='unclosed" >"$WORK/d12c-unbal.sh"
+d12c_curl_lines "$WORK/d12c-unbal.sh" "$WORK/d12c-unbal.out"
+if grep -qF -- 'PARSE-ERROR' "$WORK/d12c-unbal.out"; then ok "D12c positive control: an unbalanced quote is a parse error, never a silent pass"; else no "D12c normaliser accepted an unbalanced quote"; fi
+d12c_curl_lines "$SUT" "$WORK/d12c-sut.txt"
+assert_eq "D12c the script names curl on exactly the 9 reviewed logical lines" 9 "$(wc -l <"$WORK/d12c-sut.txt" | tr -d '[:space:]')"
+# shellcheck disable=SC2016  # literal source text is the assertion
+assert_eq "D12c three of them are executed invocations (\$(curl ...)" 3 "$(grep -cF -- '$(curl ' "$WORK/d12c-sut.txt" || true)"
+d12c_inv_out="$(d12c_inventory "$SUT")"
+if [[ -z "$d12c_inv_out" ]]; then ok "D12c (I) every curl line in source is a reviewed canonical form"; else no "D12c (I) curl lines differ from D12C_CANON: $d12c_inv_out"; fi
+d12c_fl_out="$(d12c_flags "$SUT")"
+if [[ -z "$d12c_fl_out" ]]; then ok "D12c (F) every curl line uses only allowlisted flags; a body is exactly --data-binary \"\$INVALID_BODY\""; else no "D12c (F) flag allowlist broken: $d12c_fl_out"; fi
+d12c_fl_canon="$(awk -f "$D12C_FLAGS" "$D12C_CANON")"
+if [[ -z "$d12c_fl_canon" ]]; then ok "D12c (F) the canonical forms themselves pass the flag allowlist"; else no "D12c (F) a canonical form breaks the allowlist: $d12c_fl_canon"; fi
 # shellcheck disable=SC2016  # literal source text is the assertion
 assert_eq "D12c the run path sends INVALID_BODY from exactly one curl site" 1 "$(grep -cF -- '--data-binary "$INVALID_BODY"' "$SUT" || true)"
+
+# Mutants, each applied to a temp COPY of the script (never the live tree). Every
+# one must red BOTH layers; the non-curl control must leave both green.
+# shellcheck disable=SC2016  # literal source text is the assertion
+D12C_WRITE_ANCHOR='--data-binary "$INVALID_BODY"'
+D12C_GET_ANCHOR="-sS --max-time 15 -w '\n%{http_code}' \\"
+# d12c_mut <label> <anchor> <replacement> | <label> APPEND <line>
+d12c_mut() {
+  local label="$1" anchor="$2" repl="$3" src copy="$WORK/d12c-mut.sh"
+  src="$(cat "$SUT")"
+  if [[ "$anchor" == APPEND ]]; then src+=$'\n'"$repl"; else
+    [[ "$src" == *"$anchor"* ]] || { no "MUT D12c $label: anchor not found in source (mutant is vacuous)"; return; }
+    src="${src/"$anchor"/"$repl"}"
+  fi
+  printf '%s\n' "$src" >"$copy"
+  if [[ -n "$(d12c_inventory "$copy")" ]]; then ok "MUT D12c $label reds the canonical inventory (I)"; else no "MUT D12c $label survives the canonical inventory (I)"; fi
+  if [[ -n "$(d12c_flags "$copy")" ]]; then ok "MUT D12c $label reds the flag allowlist (F)"; else no "MUT D12c $label survives the flag allowlist (F)"; fi
+}
+# shellcheck disable=SC2016  # literal source text is the mutation
+{
+d12c_mut '-XDELETE -d@/dev/null on the write probe' "$D12C_WRITE_ANCHOR" "$D12C_WRITE_ANCHOR -XDELETE -d@/dev/null"
+d12c_mut '-d"$X" beside the invalid body' "$D12C_WRITE_ANCHOR" "$D12C_WRITE_ANCHOR -d\"\$X\""
+d12c_mut 'a second body flag (--data-raw "$INVALID_BODY_V2")' "$D12C_WRITE_ANCHOR" "$D12C_WRITE_ANCHOR --data-raw \"\$INVALID_BODY_V2\""
+d12c_mut '-X "DELETE" in place of the table method' '-X "$method"' '-X "DELETE"'
+d12c_mut '-XDELETE on a read probe (no body)' "$D12C_GET_ANCHOR" "-sS -XDELETE --max-time 15 -w '\n%{http_code}' \\"
+d12c_mut 'a new curl line hiding behind "# INVALID_BODY"' APPEND 'curl -sS -d @/etc/hostname https://example.invalid # INVALID_BODY'
+}
+# Non-curl lines that tripped the old spelling list (grep -qF, sort -T, [[ -d) stay green.
+printf '%s\n%s\n' "$(cat "$SUT")" '[[ -d /tmp ]] && sort -T /tmp </dev/null >/dev/null; grep -qF -- x /dev/null || true' >"$WORK/d12c-mut.sh"
+if [[ -z "$(d12c_inventory "$WORK/d12c-mut.sh")$(d12c_flags "$WORK/d12c-mut.sh")" ]]; then
+  ok "D12c negative control: non-curl -d/-T/-F lines do not false-match"
+else
+  no "D12c a non-curl line false-matched the allowlist"
+fi
+# (U) the mock refuses an unmodelled flag rather than answering it as a GET.
+D12C_ULOG="$WORK/d12c-unmodelled.log"; : >"$D12C_ULOG"
+PATH="$MOCKPATH" MOCK_CURL_UNMODELLED="$D12C_ULOG" "$MOCKBIN/curl" -sS -XDELETE https://api.cloudflare.com/client/v4/x >"$OUTFILE" 2>&1
+d12c_urc=$?
+if [[ "$d12c_urc" == 64 ]] && grep -qF -- 'UNMODELLED -XDELETE' "$D12C_ULOG" && [[ ! -s "$OUTFILE" ]]; then
+  ok "D12c (U) positive control: the mock refuses -XDELETE (exit 64, logged, no response body)"
+else
+  no "D12c (U) the mock answered an unmodelled flag (rc=$d12c_urc)"
+fi
+# End to end: the -XDELETE read-probe mutant, RUN through the mock, lands in the log.
+src="$(cat "$SUT")"; printf '%s\n' "${src/"$D12C_GET_ANCHOR"/"-sS -XDELETE --max-time 15 -w '\n%{http_code}' \\"}" >"$WORK/d12c-mut-run.sh"
+: >"$D12C_ULOG"
+PATH="$MOCKPATH" MOCK_CURL_UNMODELLED="$D12C_ULOG" "$BASHBIN" "$WORK/d12c-mut-run.sh" >"$OUTFILE" 2>&1
+d12c_urc=$?
+if grep -qF -- 'UNMODELLED -XDELETE' "$D12C_ULOG" && [[ "$d12c_urc" != 0 ]]; then
+  ok "MUT D12c the -XDELETE read-probe mutant, run through the mock, is logged UNMODELLED and fails"
+else
+  no "MUT D12c the -XDELETE mutant ran through the mock unseen (rc=$d12c_urc)"
+fi
+unset src d12c_urc
 src_lacks 'doppler[[:space:]]+(secrets[[:space:]]+)?(set|upload|download|delete|push|create)\b' "D12b no Doppler write verb in source"
 # Table-integrity tripwire lives in the SUT (fix-round seats: CI pins D-pc/D3
 # cover profile/table drift; the CLASS-column guard has no argv-reachable twin
@@ -1007,5 +1168,17 @@ d_has '--profile default-token --expect-lb-scopes' "$PLAYBOOK" "D-doc playbook c
 d_has 'accounts/<acct>/alerting/v3/policies' "$SKILLDOC" "D-doc SKILL.md documents the official Notifications route"
 if grep -qF -- 'accounts/<acct>/notification_policies' "$SKILLDOC"; then no "D-doc SKILL.md retains the legacy Notifications route"; else ok "D-doc SKILL.md has no legacy Notifications route"; fi
 
+# --- U1: no SUT run in this suite sent a curl flag the mock does not model (D12c U). ---
+if [[ -f "$MOCK_CURL_UNMODELLED" && ! -s "$MOCK_CURL_UNMODELLED" ]]; then
+  ok "U1 no run in this suite sent a curl flag the mock does not model"
+else
+  no "U1 unmodelled curl flags reached the mock: $(cat "$MOCK_CURL_UNMODELLED" 2>/dev/null)"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
+MIN_ASSERTIONS=319
+if [[ "$((pass + fail))" -lt "$MIN_ASSERTIONS" ]]; then
+  printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
 [[ "$fail" -eq 0 ]]
