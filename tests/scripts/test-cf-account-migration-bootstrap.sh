@@ -243,6 +243,54 @@ row_p4_probe_fail_stops() { # <bootstrap-src>
   [[ "$(val prd_terraform CF_API_TOKEN)" == "$(old_val CF_API_TOKEN)" ]] && has prd_terraform CF_API_TOKEN_NEXT
 }
 
+# P6: a revert copy is accepted by its VALUE, never by its name (#12932 review DI-1). A prev-0a write
+# that does not read back equal leaves CF_API_TOKEN_PREV named but wrong: the re-run must refuse
+# rather than call it satisfied, and swap-0a must refuse rather than overwrite the only old copy.
+row_p6_bad_revert_copy_refuses() { # <bootstrap-src>
+  world p6 "$1"
+  : > "$STUB_D/.corrupt/prd_terraform.CF_API_TOKEN_PREV"
+  approve prev-0a; [[ "$RC" -ne 0 ]] && grep -qF 'SOLEUR_CFAM_COPY_MISMATCH src=prd_terraform/CF_API_TOKEN dst=prd_terraform/CF_API_TOKEN_PREV' <<<"$OUT" || return 1
+  rm -f "$STUB_D/.corrupt/prd_terraform.CF_API_TOKEN_PREV"
+  # the two keys after the failed one get sound copies, so swap-0a reaches CF_API_TOKEN's own guard
+  printf '%s' "$(old_val CF_API_TOKEN_RULESETS)" > "$STUB_D/prd_terraform/CF_API_TOKEN_RULESETS_PREV"
+  printf '%s' "$(old_val CF_API_TOKEN_PAGES)" > "$STUB_D/prd_terraform/CF_API_TOKEN_PAGES_PREV"
+  : > "$STUB_LOG"; run --stage prev-0a
+  [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=prev-0a need=inventory' <<<"$OUT" || return 1
+  approve flip-ids; [[ "$RC" -eq 0 ]] || return 1
+  : > "$STUB_LOG"; run --stage swap-0a
+  [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=swap-0a need=inventory' <<<"$OUT" \
+    && grep -qF 'prd_terraform/CF_API_TOKEN holds neither its revert copy' <<<"$OUT" || return 1
+  [[ "$(val prd_terraform CF_API_TOKEN)" == "$(old_val CF_API_TOKEN)" ]] && has prd_terraform CF_API_TOKEN_NEXT
+}
+# P7: an EMPTY revert copy (a get|set pipe whose get failed) never satisfies prev-0a or swap-0a. The
+# swap half is the interrupted-swap state (the key already holds the staged token), so only the
+# readable-_PREV guard stands between it and deleting the last staging copy.
+row_p7_empty_revert_copy_refuses() { # <bootstrap-src>
+  world p7 "$1"
+  : > "$STUB_D/prd_terraform/CF_API_TOKEN_PAGES_PREV"
+  : > "$STUB_LOG"; run --stage prev-0a
+  [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=prev-0a need=inventory' <<<"$OUT" || return 1
+  rm -f "$STUB_D/prd_terraform/CF_API_TOKEN_PAGES_PREV"
+  approve prev-0a; [[ "$RC" -eq 0 ]] || return 1
+  approve flip-ids; [[ "$RC" -eq 0 ]] || return 1
+  : > "$STUB_D/prd_terraform/CF_API_TOKEN_PAGES_PREV"
+  printf '%s' "$(new_val CF_API_TOKEN_PAGES)" > "$STUB_D/prd_terraform/CF_API_TOKEN_PAGES"
+  : > "$STUB_LOG"; run --stage swap-0a
+  [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=swap-0a need=prev-0a' <<<"$OUT" \
+    && grep -qF 'prd_terraform/CF_API_TOKEN_PAGES_PREV is unreadable or empty' <<<"$OUT" || return 1
+  has prd_terraform CF_API_TOKEN_PAGES_NEXT
+}
+# P8: branch-copies-zone-id replaces only the legacy id; a third value refuses (review DI-2).
+row_p8_third_zone_refuses() { # <bootstrap-src>
+  world p8 "$1"
+  approve prev-0a; [[ "$RC" -eq 0 ]] || return 1
+  approve flip-ids; [[ "$RC" -eq 0 ]] || return 1
+  printf '%s' 0123456789abcdef0123456789abcdef > "$STUB_D/dev/CF_ZONE_ID"
+  : > "$STUB_LOG"; run --stage branch-copies-zone-id
+  [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=branch-copies-zone-id need=inventory' <<<"$OUT" || return 1
+  [[ "$(val dev CF_ZONE_ID)" == 0123456789abcdef0123456789abcdef ]]
+}
+
 echo "== --list =="
 world list
 run --list
@@ -351,6 +399,9 @@ echo "== P2b / P3 / P4 on the real script =="
 row_p2b_restaged_refuses "$SCRIPT_SRC"; check "P2b branch-copies-tokens refuses while a fresh _NEXT is staged after swap-0b" $?
 row_p3_mismatch_keeps_next "$SCRIPT_SRC"; check "P3 a write that does not read back equal keeps <KEY>_NEXT" $?
 row_p4_probe_fail_stops "$SCRIPT_SRC"; check "P4 a failed scope probe stops swap-0a before any write" $?
+row_p6_bad_revert_copy_refuses "$SCRIPT_SRC"; check "P6 a revert copy that does not hold the old token satisfies neither prev-0a nor swap-0a" $?
+row_p7_empty_revert_copy_refuses "$SCRIPT_SRC"; check "P7 an empty revert copy satisfies neither prev-0a nor swap-0a" $?
+row_p8_third_zone_refuses "$SCRIPT_SRC"; check "P8 branch-copies-zone-id refuses a CF_ZONE_ID that is neither the legacy nor the new id" $?
 
 echo "== P5: no synthesized secret value in any output =="
 ! grep -qE 'SYNTH-(OLD|NEW)[^ ]*SENTINEL' "$ALL_OUT"
@@ -383,10 +434,36 @@ PERL
   row_p4_probe_fail_stops "$SB/m3.sh"; r=$?
   [[ "$r" -ne 0 ]]; check "M3 (the scope probe dropped) turns P4 RED" $?
 fi
+if mutate M4 "$SB/m4.sh" <<'PERL'; then
+s{      prev_copy_sound "\$stage" "\$k"; continue\n}{      continue\n}
+PERL
+  row_p6_bad_revert_copy_refuses "$SB/m4.sh"; r=$?
+  [[ "$r" -ne 0 ]]; check "M4 (an existing _PREV accepted by name) turns P6 RED" $?
+  row_p7_empty_revert_copy_refuses "$SB/m4.sh"; r=$?
+  [[ "$r" -ne 0 ]]; check "M4 (an existing _PREV accepted by name) turns P7 RED" $?
+fi
+if mutate M5 "$SB/m5.sh" <<'PERL'; then
+s{        \[\[ "\$dk" == "\$dp" \]\] \\\n          \|\| soleur_op_precondition_failed [^\n]*\n}{}
+PERL
+  row_p6_bad_revert_copy_refuses "$SB/m5.sh"; r=$?
+  [[ "$r" -ne 0 ]]; check "M5 (swap overwrites a key that no longer holds its revert copy) turns P6 RED" $?
+fi
+if mutate M6 "$SB/m6.sh" <<'PERL'; then
+s{    dp="\$\(digest_of "\$TFC" "\$\{k\}_PREV"\)" \|\| soleur_op_precondition_failed "\$stage" "\$prev" [^\n]*\n}{    dp="\$(digest_of "\$TFC" "\$\{k\}_PREV" || true)"\n}
+PERL
+  row_p7_empty_revert_copy_refuses "$SB/m6.sh"; r=$?
+  [[ "$r" -ne 0 ]]; check "M6 (swap tolerates an unreadable _PREV) turns P7 RED" $?
+fi
+if mutate M7 "$SB/m7.sh" <<'PERL'; then
+s{    \[\[ "\$v" == "\$OLD_ZONE" \]\] \\\n      \|\| soleur_op_precondition_failed branch-copies-zone-id [^\n]*\n}{}
+PERL
+  row_p8_third_zone_refuses "$SB/m7.sh"; r=$?
+  [[ "$r" -ne 0 ]]; check "M7 (branch copy overwrites any zone id) turns P8 RED" $?
+fi
 
 # --- anti-vacuity floor (reported directly, never through fail()) ---------------
 TOTAL=$((PASS + FAIL))
-FLOOR=37
+FLOOR=49
 if [[ "$TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$TOTAL" "$FLOOR" >&2
   printf 'Total: %s assertions, %s failed\n' "$TOTAL" "$((FAIL + 1))"

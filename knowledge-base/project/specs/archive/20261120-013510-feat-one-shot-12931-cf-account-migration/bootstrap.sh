@@ -438,7 +438,12 @@ set_id() {
 # token_active <cfg> <name> — /user/tokens/verify says success and active. The bearer travels on
 # curl's stdin config, never argv and never a shell variable.
 token_active() {
-  local out
+  local out bad
+  # The value is spliced into a curl config line, so a quote or newline in it would add config
+  # (a second URL that also receives the header). Same character class as the migrate job's
+  # preflight; counted with tr so the value never lands in a variable and the pipe drains fully.
+  bad="$(set -o pipefail; doppler secrets get "$2" -p "$PROJ" -c "$1" --plain 2>/dev/null | LC_ALL=C tr -d 'A-Za-z0-9._~+/=-' | wc -c)" || return 1
+  [[ "$bad" -eq 0 ]] || return 1
   out="$( { printf 'header = "Authorization: Bearer '; doppler secrets get "$2" -p "$PROJ" -c "$1" --plain 2>/dev/null; printf '"\n'; } \
     | curl --disable --noproxy '*' -sS --max-time 30 --config - https://api.cloudflare.com/client/v4/user/tokens/verify 2>/dev/null)" || return 1
   jq -e '.success == true and .result.status == "active"' >/dev/null 2>&1 <<<"$out"
@@ -480,12 +485,35 @@ read_inventory() {
 
 # --- prev-0a / prev-0b (write): revert copies, never overwritten ----------------
 PREV_KEYS=()
+# prev_copy_sound <stage> <key> — an existing revert copy is never overwritten, so it satisfies a
+# prev stage only when it provably holds the old value: the legacy id for an id key; for a token,
+# a readable non-empty copy that, while <KEY>_NEXT is still staged and unswapped, equals <KEY>.
+# A name alone is not a copy: a failed or interrupted write leaves the name with the wrong value.
+prev_copy_sound() {
+  local stage="$1" k="$2" want dp dk dn
+  case "$k" in
+    CF_ZONE_ID|CF_ACCOUNT_ID)
+      want="$OLD_ZONE"; [[ "$k" == CF_ACCOUNT_ID ]] && want="$OLD_ACCT"
+      [[ "$(id_of "$TFC" "${k}_PREV" || true)" == "$want" ]] \
+        || soleur_op_precondition_failed "$stage" inventory "${TFC}/${k}_PREV exists but does not hold the legacy id, so it is not a revert copy. Stop and read the runbook Halt section; nothing was changed." ;;
+    *)
+      dp="$(digest_of "$TFC" "${k}_PREV")" \
+        || soleur_op_precondition_failed "$stage" inventory "${TFC}/${k}_PREV exists but is unreadable or empty, so it is not a revert copy of the old token. Stop and read the runbook Halt section; nothing was changed."
+      if in_names "${k}_NEXT" "$TF_NAMES"; then
+        dk="$(digest_of "$TFC" "$k" || true)"; dn="$(digest_of "$TFC" "${k}_NEXT" || true)"
+        [[ -n "$dk" && ( "$dk" == "$dp" || "$dk" == "$dn" ) ]] \
+          || soleur_op_precondition_failed "$stage" inventory "${TFC}/${k}_PREV does not equal ${k}, which still holds the old token, so the revert copy is not the old value. Stop and read the runbook Halt section; nothing was changed."
+      fi ;;
+  esac
+}
 prev_plan_common() { # <stage> <keys...>
   local stage="$1" k v; shift
   PREV_KEYS=()
   require_tf_names "$stage"
   for k in "$@"; do
-    in_names "${k}_PREV" "$TF_NAMES" && continue   # satisfied: an existing revert copy is never overwritten
+    if in_names "${k}_PREV" "$TF_NAMES"; then       # satisfied: an existing revert copy is never overwritten
+      prev_copy_sound "$stage" "$k"; continue
+    fi
     in_names "$k" "$TF_NAMES" || soleur_op_precondition_failed "$stage" inventory "Doppler ${TFC} has no ${k}, so there is nothing to keep a revert copy of. Nothing was changed."
     case "$k" in
       CF_ZONE_ID|CF_ACCOUNT_ID)
@@ -557,6 +585,7 @@ swap_plan_common() { # <stage> <prev-stage> <keys...>
   for k in "$@"; do
     in_names "${k}_PREV" "$TF_NAMES" \
       || soleur_op_precondition_failed "$stage" "$prev" "${k}_PREV does not exist, so the old token would be lost by a swap. Run ${prev} first; nothing was changed."
+    dp="$(digest_of "$TFC" "${k}_PREV")" || soleur_op_precondition_failed "$stage" "$prev" "${TFC}/${k}_PREV is unreadable or empty, so the old token would be lost by a swap. Stop and read the runbook Halt section; nothing was changed."
     if in_names "${k}_NEXT" "$TF_NAMES"; then
       dn="$(digest_of "$TFC" "${k}_NEXT")" || soleur_op_precondition_failed "$stage" inventory "${TFC}/${k}_NEXT is unreadable or empty. Nothing was changed."
       dk="$(digest_of "$TFC" "$k" || true)"
@@ -564,6 +593,10 @@ swap_plan_common() { # <stage> <prev-stage> <keys...>
         soleur_op_plan_op delete-staging-key "${TFC}/${k}_NEXT"      # copied by an earlier interrupted run
         DEL_KEYS[${#DEL_KEYS[@]}]="$k"
       else
+        # Overwrite only a key that still holds its revert copy: anything else (a write that did not
+        # read back equal) would be lost, and the copy would no longer be provably the old token.
+        [[ "$dk" == "$dp" ]] \
+          || soleur_op_precondition_failed "$stage" inventory "${TFC}/${k} holds neither its revert copy ${k}_PREV nor the staged ${k}_NEXT. Copy ${k}_PREV back over ${k} (this stage's rollback), read it back, then re-run ${stage}; nothing was changed."
         soleur_op_plan_op copy-staged-token "${TFC}/${k}_NEXT->${k}"
         soleur_op_plan_op delete-staging-key "${TFC}/${k}_NEXT"
         COPY_KEYS[${#COPY_KEYS[@]}]="$k"
@@ -571,7 +604,6 @@ swap_plan_common() { # <stage> <prev-stage> <keys...>
     else
       missing=1
       dk="$(digest_of "$TFC" "$k")" || soleur_op_precondition_failed "$stage" inventory "${TFC}/${k} is unreadable or empty. Nothing was changed."
-      dp="$(digest_of "$TFC" "${k}_PREV")" || soleur_op_precondition_failed "$stage" inventory "${TFC}/${k}_PREV is unreadable or empty. Nothing was changed."
       [[ "$dk" != "$dp" ]] \
         || soleur_op_precondition_failed "$stage" inventory "${k} still equals its revert copy and no ${k}_NEXT is staged. Mint the new token into ${k}_NEXT (runbook Phase 0); nothing was changed."
     fi
@@ -630,6 +662,8 @@ plan_branch_copies_zone_id() {
     in_names CF_ZONE_ID "$names" || continue
     v="$(id_of "$c" CF_ZONE_ID || true)"
     [[ "$v" == "$NEW_ZONE" ]] && continue
+    [[ "$v" == "$OLD_ZONE" ]] \
+      || soleur_op_precondition_failed branch-copies-zone-id inventory "${PROJ}/${c} CF_ZONE_ID holds neither the legacy nor the new zone id (or is unreadable), so a write would replace a value no rollback restores. Nothing was changed."
     soleur_op_plan_op set-id "${c}/CF_ZONE_ID"
     ZONE_TARGETS[${#ZONE_TARGETS[@]}]="$c"
   done
