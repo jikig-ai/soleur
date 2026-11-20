@@ -7,6 +7,8 @@ Called by apps/web-platform/infra/bastion.test.sh. Each mode prints one violatio
   egress  <render.yml> <bastion.tf>          Guard 2: every accept row cites a consumer on the host
                                              and has a closed shape (destination or sending user)
   emitter <render.yml>                       the comment-stripped runcmd sends fresh_boot_ready
+  egresswhy <render.yml>                     both egress_load failures call _egress_why, and no
+                                             journalctl runs outside it (FAULT-B, #12941)
   settle  <cloud-init.yml> <bastion.yml>     Guard 3: the ADR-326 blocks are the web hosts' bytes
   hostkey <render.yml> <pub> <priv-file>     Guard 4: the only host key is the Terraform key
   shape   <infra-dir> <repo-root>            SHAPE: firewall, IP, type, literals, push filters
@@ -25,8 +27,15 @@ except ImportError:  # pragma: no cover
     sys.exit(2)
 
 # Consumers that exist on every bastion without a write_files entry: the base image's own units and
-# the nftables package's unit. A citation outside this set and the render's own files/units is RED.
-BASE_CONSUMERS = {"cloud-init", "systemd-resolved", "systemd-timesyncd", "systemd-networkd", "nftables.service"}
+# the nftables package's unit. The packages the render's apt_install line names are consumers too
+# (derived per render, never listed here: systemd-timesyncd is one, the image is not assumed to ship
+# it, #12941 FAULT-A). A citation outside these and the render's own files/units is RED.
+BASE_CONSUMERS = {"cloud-init", "systemd-resolved", "systemd-networkd", "nftables.service"}
+# Every `meta skuid <user>` must be a user the image contract provides (IMAGE_ASSUMED_USERS, read from
+# bastion-runcmd-rehearsal.test.sh, plus uid 0) or one owned by a package the apt_install line names:
+# nft refuses the WHOLE ruleset when one named user is missing ("User does not exist").
+USER_PACKAGE = {"systemd-timesync": "systemd-timesyncd"}
+SUITE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bastion-runcmd-rehearsal.test.sh")
 STRUCTURAL = [re.compile(r'^(iif|oif) "lo"$'), re.compile(r"^ct state established,related$")]
 BASELINE = "/etc/soleur/bastion-nftables.conf"
 # The one input accept that is not structural: the DHCP client's replies.
@@ -86,12 +95,38 @@ def tf_block(text, kind, name):
     return m.group(1) if m else None
 
 
+def image_assumed_users():
+    m = re.search(r"^IMAGE_ASSUMED_USERS=\(([^)]*)\)$", _read(SUITE), re.M)
+    if not m or not m.group(1).split():
+        raise ValueError("no IMAGE_ASSUMED_USERS=(...) line in %s" % SUITE)
+    return set(m.group(1).split()) | {"0"}
+
+
+def apt_install_pkgs(doc):
+    """The package list of the render's one bounded apt_install line (None when it is not exactly one)."""
+    text = "\n".join(str(i) for i in doc.get("runcmd") or [])
+    hits = PKG.findall(text)
+    return hits[0][1].split() if len(hits) == 1 else None
+
+
+def skuid_users(stmt):
+    m = re.search(r"\bmeta skuid\s+(\{[^}]*\}|\S+)", stmt)
+    if not m:
+        return []
+    return [u.strip() for u in m.group(1).strip("{}").split(",") if u.strip()]
+
+
 def egress(render, tf_path):
     bad = []
     doc, _ = load_render(render)
     files = files_of(doc)
     tf = _read(tf_path)
-    consumers = set(BASE_CONSUMERS) | set(files)
+    pkgs = apt_install_pkgs(doc)
+    if pkgs is None:
+        bad.append("the render carries no single bounded apt_install line, so the users its skuid rows name cannot be traced to a package")
+        pkgs = []
+    assumed = image_assumed_users()
+    consumers = set(BASE_CONSUMERS) | set(files) | set(pkgs)
     consumers |= {os.path.basename(p) for p in files if p.startswith("/etc/systemd/system/")}
     base = files.get(BASELINE)
     script = files.get("/usr/local/sbin/bastion-egress.sh")
@@ -112,6 +147,15 @@ def egress(render, tf_path):
     rules = [s for s in stmts if s.startswith("add rule ")]
     if not rules:
         bad.append("0 rule rows checked")
+    for s in rules:
+        for u in skuid_users(s):
+            if u in assumed:
+                continue
+            owner = USER_PACKAGE.get(u)
+            if owner is None:
+                bad.append("rule names user %s, which is not in IMAGE_ASSUMED_USERS (%s) and has no owning package in USER_PACKAGE: %s" % (u, " ".join(sorted(assumed)), s))
+            elif owner not in pkgs:
+                bad.append("rule names user %s, whose package %s is not in the apt_install list (%s); nft refuses the whole ruleset on a host without it: %s" % (u, owner, " ".join(pkgs), s))
     for s in stmts:
         if s.startswith(("add table", "add chain", "add rule", "add set", "add element")):
             fam = s.split()[2]
@@ -204,6 +248,41 @@ def emitter(render):
     if stages and hits[0] < stages[-1]:
         return ["fresh_boot_ready is sent before the last STAGE= check (%s)" % lines[stages[-1]].strip()]
     return []
+
+
+EW_SITES = ("systemctl enable --now nftables.service || { _egress_why; exit 1; }",
+            "systemctl start bastion-egress.service || { _egress_why; exit 1; }")
+
+
+def egresswhy(render):
+    """Both egress_load failure sites capture their reason through _egress_why (FAULT-B), and nothing
+    else reads the journal: a reverted site falls back to systemd boilerplate with every other suite green."""
+    bad = []
+    doc, _ = load_render(render)
+    items = [str(i) for i in doc.get("runcmd") or []]
+    strip = lambda it: [l.strip() for l in it.splitlines() if l.strip() and not l.strip().startswith("#")]
+    eg = [strip(it) for it in items if any(l.startswith("STAGE=egress_load") for l in strip(it))]
+    if len(eg) != 1:
+        return ["%d runcmd items set STAGE=egress_load (expected 1)" % len(eg)]
+    for site in EW_SITES:
+        n = eg[0].count(site)
+        if n != 1:
+            bad.append("the egress_load item carries %d copies of '%s' (expected 1)" % (n, site))
+    inside = False
+    fns = 0
+    for it in items:
+        for l in strip(it):
+            if l == "_egress_why() {":
+                inside, fns = True, fns + 1
+                continue
+            if inside and l == "}":
+                inside = False
+                continue
+            if not inside and re.search(r"\bjournalctl\b", l):
+                bad.append("journalctl outside _egress_why: %s" % l)
+    if fns != 1:
+        bad.append("the runcmd defines _egress_why %d times (expected 1)" % fns)
+    return bad
 
 
 ANCHORS = ("STAGE=apt_update", "STAGE=apt_install")
@@ -430,6 +509,8 @@ def main(argv):
             bad = shape(*args)
         elif mode == "emitter":
             bad = emitter(*args)
+        elif mode == "egresswhy":
+            bad = egresswhy(*args)
         else:
             print("HARNESS: unknown mode %s" % mode, file=sys.stderr)
             return 2
