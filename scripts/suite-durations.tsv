@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
 # default-weight-ms=1802
-# generated-at=2026-11-20T01:54:56Z
+# generated-at=2026-11-20T09:35:38Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7d0cd2b5340986989503a52b56d26678f0e677e02dc0e30d7950aea5d95d712f
 .claude/hooks/agent-token-tee.test.sh	7099	measured
@@ -108,6 +108,7 @@ plugins/soleur/scripts/pipeline-tally.test.sh	14091	measured
 plugins/soleur/scripts/precommit-guard.test.sh	747	measured
 plugins/soleur/scripts/required-set-report.test.sh	5239	measured
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	25468	measured
+plugins/soleur/scripts/retry-budget-ruling.test.sh	1802	floor
 plugins/soleur/scripts/run-health-emit.test.sh	184	measured
 plugins/soleur/scripts/run-in-pid-namespace.test.sh	590	measured
 plugins/soleur/scripts/scan-ancestor-signal-helpers.test.sh	5709	measured

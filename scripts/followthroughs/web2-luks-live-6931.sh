@@ -19,6 +19,14 @@
 #   4. the newest readiness row says the boot FORMATTED or OPENED the volume (luks_arm formatted|opened, w2l_ready_arm;
 #      `noop` does not count). No reboot is required: owner decision 2026-10-07 (ADR-263 addendum 2026-10-08), the principle being
 #      that a host is replaced, not rebooted, so the evidence is a fresh boot that brought the volume up plus the soak.
+#   5. ONLY when W2L_REQUIRE_BOOT_JOIN=1 (the serve arm sets it; the #6931 sweep does not): the readiness row and the
+#      newest probe row carry the SAME known boot_id, so a replaced or rebooted web-2 whose new readiness row never
+#      shipped cannot be graded on its predecessor's readiness row (Ruled by CTO agent, 2026-11-19, PR #12934 R2).
+#
+# PRODUCTION CALLER. Besides the sweeper, scripts/lib/serve-soak-evidence.sh (sse_instance_soak) runs this file before
+# every cf-lb-overlay.yml serve flip and refuses the flip unless it exits 0 with a `PASS:` first line. The rc meanings
+# below and the first-line shape (`PASS:|FAIL:|NOT YET:|CANNOT ESTABLISH:`) are load-bearing for that caller:
+# changing either, or deleting this file, refuses every serve (lb-weight-gate.test.sh §SK pins the pairing).
 #
 # Exit semantics (sweep-followthroughs.sh rc→word map):
 #   0 = PASS              the soak is met
@@ -68,7 +76,7 @@ if ! source "$_w2l_lib" || ! declare -F w2l_probe_verdict >/dev/null || ! declar
   exit 3
 fi
 
-# 3 days: the same soak the traffic-weight gate defaults to (lb-weight-gate.sh WS_SOAK_DAYS).
+# 3 days: the traffic-weight gate's soak floor SOAK_FLOOR_DAYS (lb-weight-gate.sh, #12849); a parity row in lb-weight-gate.test.sh §SK pins the two equal.
 SOAK_DAYS=3
 SOAK_S=$(( SOAK_DAYS * 86400 ))
 tmp="$(mktemp -d)" || { printf 'CANNOT ESTABLISH: mktemp failed.\n'; exit 3; }
@@ -137,6 +145,14 @@ verdict="$(w2l_probe_verdict "$tmp/probe.jsonl")"
 if [[ "$verdict" != GREEN* ]]; then
   unmet "the newest web-2 probe row is not a fresh LUKS-backed OK row (${verdict})."
 fi
+if [[ "${W2L_REQUIRE_BOOT_JOIN:-}" == 1 ]]; then
+  rbid="${rverdict#GREEN boot_id=}"; rbid="${rbid%% *}"
+  pbid="${verdict#GREEN boot_id=}"; pbid="${pbid%% *}"
+  if [[ ! "$rbid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ || "$rbid" != "$pbid" ]]; then
+    unmet "the readiness row's boot_id (${rbid:-none}) and the newest probe row's (${pbid:-none}) are not one known boot: web-2 was rebooted (the readiness row is written once per instance, so a reboot never gets a new one) or replaced without its readiness row shipping. Replace web-2 (web-host-replace.md) and let the new instance soak."
+  fi
+fi
+# The join runs before the day count, so a reboot mid-soak names its remedy (replace) instead of "wait".
 if (( green_days < SOAK_DAYS )); then
   unmet "${green_days} of ${SOAK_DAYS} distinct days of GREEN probe rows since the readiness row."
 fi

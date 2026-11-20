@@ -37,6 +37,12 @@ NOW_EPOCH=$(date +%s)
 for state_file in "${PROJECT_ROOT}/.claude"/ralph-loop.*.local.md; do
   [[ -f "$state_file" ]] || continue
 
+  # The current session file is read for the one grant after this sweep.
+  # Dead-owner cleanup of other sessions stays.
+  if [[ "$(basename "$state_file")" == "$(basename "$RALPH_STATE_FILE")" ]]; then
+    continue
+  fi
+
   # Extract owner PID from filename: ralph-loop.PID.local.md
   OWNER_PID=$(basename "$state_file" | sed 's/^ralph-loop\.\([0-9]*\)\.local\.md$/\1/')
 
@@ -272,54 +278,16 @@ if [[ -z "$PROMPT_TEXT" ]]; then
   exit 0
 fi
 
-# Update iteration and stuck_count in first frontmatter block only (awk scoped to c==1)
-# Note: on legacy state files without stuck_count field, the awk match is a no-op for that line.
-# The counter will not persist across iterations. Acceptable because legacy files are only
-# created by pre-stuck-detection versions of setup-ralph-loop.sh; all new loops include the field.
-TEMP_FILE="${RALPH_STATE_FILE}.tmp.$$"
-awk -v iter="$NEXT_ITERATION" -v sc="$STUCK_COUNT" -v lrh="$LAST_RESPONSE_HASH" -v rc="$REPEAT_COUNT" -v simc="$SIMILARITY_COUNT" -v lrw="$LAST_RESPONSE_WORDS" '
-  /^---$/ { c++; print; next }
-  c==1 && /^iteration:/ { print "iteration: " iter; next }
-  c==1 && /^stuck_count:/ { print "stuck_count: " sc; next }
-  c==1 && /^last_response_hash:/ { print "last_response_hash: " lrh; next }
-  c==1 && /^repeat_count:/ { print "repeat_count: " rc; next }
-  c==1 && /^similarity_count:/ { print "similarity_count: " simc; next }
-  c==1 && /^last_response_words:/ { print "last_response_words: " lrw; next }
-  { print }
-' "$RALPH_STATE_FILE" > "$TEMP_FILE" 2>/dev/null || true
-if [[ -s "$TEMP_FILE" ]]; then
-  mv "$TEMP_FILE" "$RALPH_STATE_FILE"
-else
-  # awk produced empty output (file vanished) -- clean up and exit
-  rm -f "$TEMP_FILE"
-  exit 0
-fi
-
-# Build system message with iteration count and completion promise info
-if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then
-  SYSTEM_MSG="Ralph iteration $NEXT_ITERATION | To stop: output <promise>$COMPLETION_PROMISE</promise> (ONLY when statement is TRUE - do not lie to exit!)"
-else
-  SYSTEM_MSG="Ralph iteration $NEXT_ITERATION | No completion promise set - loop runs infinitely"
-fi
-
-# --- Pipeline Tally Cap Floor (#9403) ---
-# Negative enforcement: when the branch's ledger shows a cap crossed — the
-# `capped` latch OR any count >= its cap_<dim> (catches a latch that never got
-# set: a skipped gate, a gate that returned UNKNOWN, a dim nobody gates) — the
-# pipeline is budget-capped and this hook declines to keep the loop alive: it
-# removes the fuel rather than denying a tool. Placed immediately before the
-# block emit so every terminating path above still wins. Fail-open in BOTH
-# directions: absent/corrupt/UNKNOWN output changes nothing — the hook never
-# blocks FOR the tally.
-#
-# Path resolution lives in pipeline-tally.sh — this hook reads `show` output
-# (`tally:` counts, `cap:<dim>=<n>` tokens, `capped:<dim>=<cap>`), never the
-# file, so there is one resolver and the transforms cannot drift.
+# Read tally show before the awk rewrite. The grant line is still the value the
+# parent wrote; this pass is what consumes it. Path resolution lives in
+# pipeline-tally.sh — this hook reads `show` output, never the counter file.
 TALLY_SCRIPT="$SCRIPT_DIR/../scripts/pipeline-tally.sh"
+TALLY_OUT=""
+TALLY_CAPPED=""
+TALLY_CAP=""
+downgrade=0
 if [[ -f "$TALLY_SCRIPT" ]]; then
   TALLY_OUT=$(bash "$TALLY_SCRIPT" show 2>/dev/null || true)
-  TALLY_CAPPED=""
-  TALLY_CAP=""
   if [[ "$TALLY_OUT" == *"tally:"* && "$TALLY_OUT" != "UNKNOWN"* ]]; then
     _TD="" _TC="" _TN=""
     for _TD in $(printf '%s' "$TALLY_OUT" | grep -o 'capped:[a-z_]*=[0-9]*' | cut -d: -f2 | cut -d= -f1) \
@@ -339,18 +307,143 @@ if [[ -f "$TALLY_SCRIPT" ]]; then
         TALLY_CAPPED="$_TD"; TALLY_CAP="$_TC"; break
       fi
     done
-    if [[ -n "$TALLY_CAPPED" ]]; then
-      _TN=$(printf '%s' "$TALLY_OUT" | grep -o "^tally:.*" | grep -o "${TALLY_CAPPED}=[0-9]*" | cut -d= -f2 || true)
-      printf 'SOLEUR_TALLY_CAPPED dim=%s cap=%s\n' "$TALLY_CAPPED" "${TALLY_CAP:-0}" >&2
-      # `--reset` deliberately NOT suggested: bare `init --max-<dim> N` takes
-      # `capped-reset`, which unlatches but PRESERVES the tally the feature
-      # exists to keep.
-      printf 'Ralph loop: pipeline tally is budget-capped; resume via pipeline-tally.sh init --max-%s N (raised caps).\n' "$(printf '%s' "$TALLY_CAPPED" | tr '_' '-')" >&2
-      # Classified-stop artifact: the state file is the ralph loop's own
-      # record — a resume that only reads stderr would never see the stop.
-      printf 'budget-capped: %s=%s/%s\n' "$TALLY_CAPPED" "${_TN:-0}" "${TALLY_CAP:-0}" >> "$RALPH_STATE_FILE" 2>/dev/null || true
+  fi
+fi
+grant_exact=0
+consumed_set=0
+FRONT_NOW=$(awk '/^---$/{c++; if (c>=2) exit; next} c==1' "$RALPH_STATE_FILE" 2>/dev/null || true)
+if grep -qx 'retry_budget_grant: 1' <<<"$FRONT_NOW"; then
+  grant_exact=1
+fi
+if grep -qx 'retry_budget_consumed: 1' <<<"$FRONT_NOW"; then
+  consumed_set=1
+fi
+# One consumed grant, and only while the tally is capped. A later 1 does not arm again.
+if [[ -n "$TALLY_CAPPED" && "$grant_exact" -eq 1 && "$consumed_set" -eq 0 ]]; then
+  downgrade=1
+fi
+
+# TTL of the current file runs after the grant read. A file that is about to
+# spend the grant stays. Any other stale current file is removed, which is the
+# pre-grant behavior for a session that has no grant.
+if [[ "$downgrade" -eq 0 && -f "$RALPH_STATE_FILE" ]]; then
+  STARTED_AT=$(printf '%s\n' "$FRONT_NOW" | grep '^started_at:' | sed 's/started_at: *//' | sed 's/^"\(.*\)"$/\1/' || true)
+  if [[ -n "$STARTED_AT" ]]; then
+    STARTED_EPOCH=$(date -d "$STARTED_AT" +%s 2>/dev/null || true)
+    if [[ -n "$STARTED_EPOCH" ]] && [[ $((NOW_EPOCH - STARTED_EPOCH)) -gt $((TTL_HOURS * 3600)) ]]; then
+      AGE_MINS=$(( (NOW_EPOCH - STARTED_EPOCH) / 60 ))
+      echo "Ralph loop: stale state file detected ($(basename "$RALPH_STATE_FILE"), started ${AGE_MINS}m ago, TTL=${TTL_HOURS}h). Auto-removing." >&2
+      rm -f "$RALPH_STATE_FILE"
       exit 0
     fi
+  fi
+fi
+
+# Update iteration and stuck_count in first frontmatter block only (awk scoped to c==1)
+# Note: on legacy state files without stuck_count field, the awk match is a no-op for that line.
+# The counter will not persist across iterations. Acceptable because legacy files are only
+# created by pre-stuck-detection versions of setup-ralph-loop.sh; all new loops include the field.
+# The same pass rewrites an exact unquoted retry_budget_grant: 1 to 0 and sets
+# retry_budget_consumed: 1. It never clears the consumed line.
+TEMP_FILE="${RALPH_STATE_FILE}.tmp.$$"
+awk_rc=0
+awk -v iter="$NEXT_ITERATION" -v sc="$STUCK_COUNT" -v lrh="$LAST_RESPONSE_HASH" -v rc="$REPEAT_COUNT" -v simc="$SIMILARITY_COUNT" -v lrw="$LAST_RESPONSE_WORDS" -v downgrade="$downgrade" '
+  BEGIN { seen_consumed = 0 }
+  /^---$/ {
+    c++
+    if (c == 2 && downgrade == 1 && seen_consumed == 0) {
+      print "retry_budget_consumed: 1"
+    }
+    print
+    next
+  }
+  c==1 && /^iteration:/ { print "iteration: " iter; next }
+  c==1 && /^stuck_count:/ { print "stuck_count: " sc; next }
+  c==1 && /^last_response_hash:/ { print "last_response_hash: " lrh; next }
+  c==1 && /^repeat_count:/ { print "repeat_count: " rc; next }
+  c==1 && /^similarity_count:/ { print "similarity_count: " simc; next }
+  c==1 && /^last_response_words:/ { print "last_response_words: " lrw; next }
+  c==1 && /^retry_budget_consumed: 1$/ { seen_consumed = 1; print; next }
+  c==1 && downgrade == 1 && /^retry_budget_grant: 1$/ { print "retry_budget_grant: 0"; next }
+  { print }
+' "$RALPH_STATE_FILE" > "$TEMP_FILE" 2>/dev/null || awk_rc=$?
+awk_rc="${awk_rc:-0}"
+if [[ "$downgrade" -eq 1 ]]; then
+  front_closes=0
+  consumed_gate=1
+  if [[ -f "$TEMP_FILE" ]]; then
+    front_closes=$(grep -c '^---$' "$TEMP_FILE" || true)
+    consumed_gate=0
+    grep -qx 'retry_budget_consumed: 1' "$TEMP_FILE" || consumed_gate=$?
+  fi
+  if [[ "$awk_rc" -ne 0 || ! -s "$TEMP_FILE" || "$consumed_gate" -ne 0 || "${front_closes:-0}" -lt 2 ]]; then
+    if [[ "$consumed_gate" -ge 2 ]]; then
+      printf 'SOLEUR_TALLY_GRANT_READ grep-rc=%s\n' "$consumed_gate" >&2
+    fi
+    rm -f "$TEMP_FILE"
+    exit 0
+  fi
+fi
+if [[ -s "$TEMP_FILE" ]]; then
+  mv "$TEMP_FILE" "$RALPH_STATE_FILE" || { rm -f "$TEMP_FILE"; exit 0; }
+else
+  # awk produced empty output (file vanished) -- clean up and exit
+  rm -f "$TEMP_FILE"
+  exit 0
+fi
+
+# Build system message with iteration count and completion promise info
+if [[ "$COMPLETION_PROMISE" != "null" ]] && [[ -n "$COMPLETION_PROMISE" ]]; then
+  SYSTEM_MSG="Ralph iteration $NEXT_ITERATION | To stop: output <promise>$COMPLETION_PROMISE</promise> (ONLY when statement is TRUE - do not lie to exit!)"
+else
+  SYSTEM_MSG="Ralph iteration $NEXT_ITERATION | No completion promise set - loop runs infinitely"
+fi
+
+# --- Pipeline Tally Cap Floor (#9403) ---
+# Negative enforcement: when the branch's ledger shows a cap crossed — the
+# `capped` latch OR any count >= its cap_<dim> (catches a latch that never got
+# set: a skipped gate, a gate that returned UNKNOWN, a dim nobody gates) — the
+# pipeline is budget-capped and this hook declines to keep the loop alive: it
+# removes the fuel rather than denying a tool. `show` already ran before the
+# awk rewrite. Placed immediately before the block emit so every terminating
+# path above still wins. Fail-open in BOTH directions: absent/corrupt/UNKNOWN
+# output changes nothing — the hook never blocks FOR the tally.
+#
+# One recorded grant may fall through to the keep-alive block below. That
+# happens only when the read-back after the move is the exact line
+# retry_budget_grant: 0. Any other read-back exits 0 with no block. The hook
+# never clears capped=.
+if [[ -n "$TALLY_CAPPED" ]]; then
+  _TN=$(printf '%s' "$TALLY_OUT" | grep -o "^tally:.*" | grep -o "${TALLY_CAPPED}=[0-9]*" | cut -d= -f2 || true)
+  printf 'SOLEUR_TALLY_CAPPED dim=%s cap=%s\n' "$TALLY_CAPPED" "${TALLY_CAP:-0}" >&2
+  # Classified-stop artifact: the state file is the ralph loop's own
+  # record — a resume that only reads stderr would never see the stop.
+  printf 'budget-capped: %s=%s/%s\n' "$TALLY_CAPPED" "${_TN:-0}" "${TALLY_CAP:-0}" >> "$RALPH_STATE_FILE" 2>/dev/null || true
+  if [[ "$downgrade" -eq 1 ]]; then
+    readback=$(awk '/^---$/{c++; if (c>=2) exit; next} c==1' "$RALPH_STATE_FILE" 2>/dev/null || true)
+    grant_rc=0
+    grep -qx 'retry_budget_grant: 0' <<<"$readback" || grant_rc=$?
+    if [[ "$grant_rc" -ge 2 ]]; then
+      printf 'SOLEUR_TALLY_GRANT_READ grep-rc=%s\n' "$grant_rc" >&2
+    fi
+    if [[ "$grant_rc" -ne 0 ]]; then
+      exit 0
+    fi
+    consumed_rc=0
+    grep -qx 'retry_budget_consumed: 1' <<<"$readback" || consumed_rc=$?
+    if [[ "$consumed_rc" -ge 2 ]]; then
+      printf 'SOLEUR_TALLY_GRANT_READ grep-rc=%s\n' "$consumed_rc" >&2
+    fi
+    if [[ "$consumed_rc" -ne 0 ]]; then
+      exit 0
+    fi
+  else
+    # `--reset` deliberately NOT suggested: bare `init --max-<dim> N` takes
+    # `capped-reset`, which unlatches but PRESERVES the tally the feature
+    # exists to keep. The resume line is the real halt. A grant path falls
+    # through to the keep-alive block and does not print it.
+    printf 'Ralph loop: pipeline tally is budget-capped; resume via pipeline-tally.sh init --max-%s N (raised caps).\n' "$(printf '%s' "$TALLY_CAPPED" | tr '_' '-')" >&2
+    exit 0
   fi
 fi
 
