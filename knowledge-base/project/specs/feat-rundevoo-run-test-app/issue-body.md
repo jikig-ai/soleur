@@ -12,7 +12,9 @@ Purchase `rundevoo.run` (available, ~$21.20/yr at Cloudflare Registrar) as the d
 ## Acceptance criteria
 
 - [ ] Domain purchased and auto-renew enabled; registrant entity is Jikigai SARL.
+<!-- lint-infra-ignore start: describes the workflow-driven apply's acceptance property ("zero operator steps" — the apply runs through apply-rundevoo-infra.yml, never a human) -->
 - [ ] `terraform apply` on `infra/rundevoo-run/` from empty state reproduces the zone import + hardening records with zero operator steps.
+<!-- lint-infra-ignore end -->
 - [ ] `dig MX rundevoo.run` returns null MX; TXT shows `v=spf1 -all` and DMARC `p=reject`; DNSSEC enabled.
 - [ ] Drift-detection matrix includes the new root; destroy-guard, counter test, CODEOWNERS rows present; `lint-encryption-posture.py` green.
 - [ ] `domains.md` and `expenses.md` rows added; Art. 30 register entry recorded.

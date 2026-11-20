@@ -43,8 +43,10 @@ with mail-spoof hardening.
 
 - G1: `rundevoo.run` registered to Jikigai SARL at Cloudflare Registrar, 1-yr,
   auto-renew ON, WHOIS privacy, org registrant email (operator-only step).
+<!-- lint-infra-ignore start: the apply runs through apply-rundevoo-infra.yml; "zero operator steps" names the absence of a human step, not one prescribed -->
 - G2: Zone fully Terraform-managed in a new root `infra/rundevoo-run/` —
   `terraform apply` from empty state reproduces it with zero operator steps.
+<!-- lint-infra-ignore end -->
 - G3: Mail-spoof hardening live: null MX (RFC 7505), `v=spf1 -all`, DMARC
   `p=reject`, DNSSEC enabled.
 - G4: Repo machinery wired: apply workflow, drift-detection matrix leg,

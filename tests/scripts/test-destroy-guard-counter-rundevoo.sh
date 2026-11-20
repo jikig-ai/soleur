@@ -182,9 +182,9 @@ t_no_changes_emits_all_keys() {
     grep -qE "^${k}=[0-9]+$" <<<"$out" || missing+=("$k")
   done
   if [[ ${#missing[@]} -eq 0 ]] && ! grep -q '^resource_creates=' <<<"$out"; then
-    _report "T8 all four keys emitted; resource_creates deliberately absent" ok
+    _report "T8 all five keys emitted; resource_creates deliberately absent" ok
   else
-    _report "T8 all four keys emitted; resource_creates deliberately absent" fail \
+    _report "T8 all five keys emitted; resource_creates deliberately absent" fail \
       "missing: ${missing[*]:-none}; resource_creates leak: $(grep -c '^resource_creates=' <<<"$out")"
   fi
 }
@@ -245,7 +245,7 @@ t_ack_below_tip_allows() {
 # and reads POLICY_MSGS, never $HEAD_MSG alone.
 t_workflow_feeds_all_push_messages() {
   local wf="$REPO_ROOT/.github/workflows/apply-rundevoo-infra.yml"
-  local feeds skip_reads ack_reads
+  local feeds skip_reads ack_reads prov_guards
   # Comment-stripped counts: a `#`-commented line carrying the literal must
   # not satisfy the pin — dead wiring that still greps is a false green.
   # shellcheck disable=SC2016 # intentional literal: matching source text, not expanding
@@ -254,11 +254,14 @@ t_workflow_feeds_all_push_messages() {
   skip_reads=$(grep -v '^[[:space:]]*#' "$wf" | grep -cF 'if [[ "$POLICY_MSGS" =~ (^|$'"'"'\n'"'"')\[skip-rundevoo-apply\]($|$'"'"'\n'"'"') ]]' || true)
   # shellcheck disable=SC2016 # intentional literal: matching source text, not expanding
   ack_reads=$(grep -v '^[[:space:]]*#' "$wf" | grep -cF 'if [[ "$POLICY_MSGS" =~ (^|$'"'"'\n'"'"')\[ack-destroy\]($|$'"'"'\n'"'"') ]]' || true)
-  if [[ "$feeds" -ge 2 && "$skip_reads" -eq 1 && "$ack_reads" -eq 1 ]]; then
-    _report "T13 workflow feeds event.commits to both readers via POLICY_MSGS" ok
+  # The provisioner-class guard is duplicated across the plan_pr and apply
+  # legs by CAP-COUPLING convention; a deleted leg must red this pin.
+  prov_guards=$(grep -v '^[[:space:]]*#' "$wf" | grep -cF 'local-exec|remote-exec' || true)
+  if [[ "$feeds" -ge 2 && "$skip_reads" -eq 1 && "$ack_reads" -eq 1 && "$prov_guards" -eq 2 ]]; then
+    _report "T13 workflow feeds event.commits to both readers; provisioner guard in both legs" ok
   else
-    _report "T13 workflow feeds event.commits to both readers via POLICY_MSGS" fail \
-      "feeds=$feeds (want >=2) skip-reads=$skip_reads ack-reads=$ack_reads (want 1 each)"
+    _report "T13 workflow feeds event.commits to both readers; provisioner guard in both legs" fail \
+      "feeds=$feeds (want >=2) skip-reads=$skip_reads ack-reads=$ack_reads (want 1 each) prov-guards=$prov_guards (want 2)"
   fi
 }
 

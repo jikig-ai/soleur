@@ -2,6 +2,9 @@
 # #12971; the product shape is deferred to #12972). The apex must not send
 # email, so the zone declares that unambiguously rather than leaving the
 # spoofing surface implicit.
+#
+# All `name` values are literal FQDNs, not "@" — the CF API normalizes @ to
+# FQDN, which causes perpetual drift.
 
 # RFC 7505 null MX — declares the apex accepts no mail. `content = "."` is the
 # literal null-MX target (verified against the committed 4.52.10 lockfile provider schema
@@ -9,7 +12,7 @@
 # knowledge-base/project/learnings/integration-issues/2026-04-10-context7-terraform-provider-version-mismatch.md).
 resource "cloudflare_record" "null_mx" {
   zone_id  = cloudflare_zone.rundevoo_run.id
-  name     = "rundevoo.run" # Use FQDN, not "@" -- CF API normalizes @ to FQDN, causing perpetual drift
+  name     = "rundevoo.run"
   content  = "."
   type     = "MX"
   priority = 0
@@ -20,7 +23,7 @@ resource "cloudflare_record" "null_mx" {
 # Deny-all SPF — no host may send mail as @rundevoo.run.
 resource "cloudflare_record" "spf_deny_all" {
   zone_id = cloudflare_zone.rundevoo_run.id
-  name    = "rundevoo.run" # Use FQDN, not "@" -- CF API normalizes @ to FQDN, causing perpetual drift
+  name    = "rundevoo.run"
   content = "v=spf1 -all"
   type    = "TXT"
   ttl     = 1
@@ -32,7 +35,7 @@ resource "cloudflare_record" "spf_deny_all" {
 # address's upkeep.
 resource "cloudflare_record" "dmarc_reject" {
   zone_id = cloudflare_zone.rundevoo_run.id
-  name    = "_dmarc.rundevoo.run" # literal FQDN form, same normalization trap
+  name    = "_dmarc.rundevoo.run"
   content = "v=DMARC1; p=reject"
   type    = "TXT"
   ttl     = 1
