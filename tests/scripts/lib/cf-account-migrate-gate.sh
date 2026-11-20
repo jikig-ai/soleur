@@ -54,9 +54,12 @@
 # attributes equal the .tf block's constant attributes, and that exactly its own literal list of
 # token-valued members carries no value attribute.
 # RESIDUALS: the VALUE of the two token-valued members is not graded (no constant can name a
-# credential); only the old-id check (no OLD zone or account id inside it) and the job's token
-# preflight (the token answers on the NEW zone or account) see it. Their destination attributes ARE
-# graded above.
+# credential); in this gate only the old-id check (no OLD zone or account id inside it) sees it.
+# The job's token preflight probes each phase's PROVIDER tokens (cf_account_migrate_phase_tokens,
+# CTO D8), which for zone-rest are neither of them: cf_api_token_pages is probed only by the earlier
+# redirects-dns run, and cf_api_token_dns_edit by no job step. What vouches for those two values is
+# the bootstrap: swap-0a/0b's scope probe and active check on the staged copy, and verify's per-key
+# old-vs-new read. Their destination attributes ARE graded above.
 #
 # SPEC SHAPE (contract). A phase spec is one flat JSON object naming each address once with a string
 # class: a value other than one of the four class strings (a nested object or array included) or a

@@ -605,6 +605,9 @@ setup_token_unreach() { new_case "tokunr-$1" redirects-dns false; printf '28' >"
 chk_token_unreach() { chk_preflight_refused "$1" token-unreachable || return 1
   grep -qx 'cf-account-migrate preflight=token name=cf_api_token_rulesets http=000 e=28' "$1/out.txt" || { WHY="no-e-line"; return 1; }
 }
+# fr4 F2: the rulesets token probe answers 429: the API gave no verdict.
+setup_token_429() { new_case "tok429-$1" redirects-dns false; printf '429' >"$LAST_D/cfcode.cf_api_token_rulesets"; }
+chk_token_429() { chk_preflight_refused "$1" token-unreachable; }
 # D16: Doppler holds the NEW zone id in upper case; variables.tf's shape check is lowercase-only.
 setup_upper_zone() { new_case "upzone-$1" redirects-dns false; printf '%s\n%s\n%s\n' "${NZ^^}" "$NA" "$OA" >"$LAST_D/ids"; }
 # D12: app-health 526 on every pass, three passes allowed: the verify stops after the first.
@@ -762,6 +765,12 @@ setup_token_unreach x; run_job "$LAST_D" "$PRISTINE"; WHY=""
 chk_token_unreach "$LAST_D"; verdict "$?" "curl times out (28) on the rulesets token probe -> reason=token-unreachable (retry), http=000 e=28 printed, no terraform call ($WHY)"
 new_case tok-mixed redirects-dns false; printf '28' >"$LAST_D/cfrc.cf_api_token_rulesets"; printf '403' >"$LAST_D/cfcode.cf_api_token"; run_job "$LAST_D" "$PRISTINE"; WHY=""
 chk_preflight_refused "$LAST_D" token-not-new-zone; verdict "$?" "one token 403 and another unreachable -> reason=token-not-new-zone (a definite token verdict wins) ($WHY)"
+# fr4 F2: a 429 or a 5xx is the API giving no verdict, not a bad token: retry, never re-mint.
+for c in 429 503; do
+  new_case "tok-$c" redirects-dns false; printf '%s' "$c" >"$LAST_D/cfcode.cf_api_token_rulesets"; run_job "$LAST_D" "$PRISTINE"; WHY=""
+  r=1; chk_preflight_refused "$LAST_D" token-unreachable && grep -qx "cf-account-migrate preflight=token name=cf_api_token_rulesets http=$c" "$LAST_D/out.txt" && r=0
+  verdict "$r" "rulesets token probe answers $c -> reason=token-unreachable (no verdict), never token-not-new-zone"
+done
 new_case tok-paths redirects-dns true; run_job "$LAST_D" "$PRISTINE"
 r=1
 diff <(sed -n 's/^cf-api-probe \(.*\)$/\1/p' "$LAST_D/calls.log" | sort) <(printf '%s\n' \
@@ -852,7 +861,7 @@ chk_zrest_health() { # app-health 526 after a zone-rest apply: verify-failed app
   grep -qxF -- 'cf-account-migrate phase=zone-rest verdict=refuse reason=verify-failed applied=true failing=app-health=>526' "$1/out.txt" || { WHY="no-field"; return 1; }
   grep -qxF -- '- cf-account-migrate phase=zone-rest rehearsal=false verdict=refuse reason=verify-failed applied=true failing=app-health=>526' "$1/summary.md" || { WHY="no-summary"; return 1; }
   grep -qx 'cf-account-migrate verify=zone-rest pass=1 app-health=526 retry=stopped' "$1/out.txt" || { WHY="no-stop-line"; return 1; }
-  grep -qF 'Runbook Halt, verify-failed: a dashboard edit is allowed only for app-health=>525/526 (the ssl rule)' "$1/out.txt" || { WHY="no-halt-text"; return 1; }
+  grep -qF 'Runbook Halt, verify-failed: act on each failing item by its code. app-health=>525/526: the owner may make one dashboard edit on the NEW zone only' "$1/out.txt" || { WHY="no-halt-text"; return 1; }
   chk_zrest_probed "$1"
 }
 setup_zrest_health x; run_job "$LAST_D" "$PRISTINE"; WHY=""
@@ -892,8 +901,11 @@ chk_zrest_applyfail "$LAST_D"; verdict "$?" "zone-rest apply failure -> reason=a
 new_case afz-health zone-rest false; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; printf '1' >"$LAST_D/mode.apply"; : >"$LAST_D/mode.health"; run_job "$LAST_D" "$PRISTINE"
 r=1; grep -qxF -- 'cf-account-migrate phase=zone-rest verdict=refuse reason=apply-failed failing=app-health=>526' "$LAST_D/out.txt" && r=0
 verdict "$r" "zone-rest apply failure with app-health 526 -> reason=apply-failed failing=app-health=>526"
-r=1; grep -qF 'a dashboard edit is allowed only for app-health=>525/526 (the ssl rule) or an app-health 3xx whose Location equals a Terraform redirect target' "$D_HEALTH_MSG/out.txt" \
-  && grep -qF 'for 000, a gptbot or noindex failure, or any other code make no edit' "$D_HEALTH_MSG/out.txt" && r=0
+r=1; grep -qF 'app-health=>525/526: the owner may make one dashboard edit on the NEW zone only (the ssl rule, Strict to Full), then redeliver' "$D_HEALTH_MSG/out.txt" \
+  && grep -qF 'app-health 3xx whose Location equals a Terraform redirect target: the owner removes that one rule or list item' "$D_HEALTH_MSG/out.txt" \
+  && grep -qF 'app-health 000, any other app-health code, or a 3xx no Terraform target matches: no edit, stop for an owner decision' "$D_HEALTH_MSG/out.txt" \
+  && grep -qF 'gptbot=>403 after redirects-dns with fight_mode recorded true' "$D_HEALTH_MSG/out.txt" \
+  && grep -qF 'Any other gptbot, app-noindex or redirect-pair failure: no dashboard edit, fix forward' "$D_HEALTH_MSG/out.txt" && r=0
 verdict "$r" "verify-failed names the runbook's edit cases only (525/526, a Terraform-target 3xx; no edit otherwise)"
 # --- In-state updates (D8) ---
 r=1; grep -qx 'cf-account-migrate in-state-updates count=0 admitted=' "$D_AP/out.txt" && grep -qx 'cf-account-migrate in-state-updates count=0 admitted=' "$D_REH/out.txt" && r=0
@@ -1197,8 +1209,10 @@ red "V15 (D8) the apply never compares the admitted in-state updates with the in
 V16="$(mk_mutant isu-shape-unchecked 's/|| refuse bad-expected-in-state-updates/|| true/')"
 red "V16 (D8) a malformed expected_in_state_updates entry is not refused up front" "$V16" chk_isu_bad '^not-refused' setup_isu_bad
 # shellcheck disable=SC2016 # sed expression matches literal script text
-V17="$(mk_mutant token-rc-folded 's/if \[\[ "\$e" != 0 \]\]; then unreach=1; elif/if false; then :; elif/')"
+V17="$(mk_mutant token-rc-folded 's/^    if \[\[ "\$e" != 0 \]\]; then unreach=1$/    if [[ "$e" != 0 ]]; then bad=1/')"
 red "V17 (D15) a curl transport failure read as a token verdict (re-mint, not retry)" "$V17" chk_token_unreach '^not-refused' setup_token_unreach
+V27="$(mk_mutant token-429-is-verdict 's/^    else case "\$code" in 200) ;; 400|401|403|404|bad|missing) bad=1 ;; \*) unreach=1 ;; esac; fi$/    else case "$code" in 200) ;; *) bad=1 ;; esac; fi/')"
+red "V27 (fr4 F2) a 429 token probe read as a token verdict (re-mint, not retry)" "$V27" chk_token_429 '^not-refused' setup_token_429
 # shellcheck disable=SC2016 # sed expression matches literal script text
 V18="$(mk_mutant zone-case-fold 's/^  zone="\$(sed -n 1p <<<"\$out")"$/  zone="$(sed -n 1p <<<"$out" | tr A-F a-f)"/')"
 red "V18 (D16) the id preflight folds case again: an upper-case NEW zone id passes and the forget runs" "$V18" chk_ids_refused '^remote-state-rm$' setup_upper_zone
@@ -1258,7 +1272,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=169
+EXPECTED_CASES=172
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

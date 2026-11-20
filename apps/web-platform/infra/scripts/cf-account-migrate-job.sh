@@ -326,11 +326,13 @@ check_ids() {
     [[ "$e" =~ ^[0-9]{1,3}$ ]] || e=0
     if [[ "$e" == 0 ]]; then printf '%s preflight=token name=%s http=%s\n' "$P" "$n" "$code"
     else printf '%s preflight=token name=%s http=%s e=%s\n' "$P" "$n" "$code" "$e"; fi
-    # A transport failure is not a token verdict: retry, do not re-mint.
-    if [[ "$e" != 0 ]]; then unreach=1; elif [[ "$code" != 200 ]]; then bad=1; fi
+    # Only a DENIAL (400/401/403/404) or an unusable token shape (bad) is a token verdict. A transport
+    # failure, a 429 or a 5xx is no verdict: retry, do not re-mint.
+    if [[ "$e" != 0 ]]; then unreach=1
+    else case "$code" in 200) ;; 400|401|403|404|bad|missing) bad=1 ;; *) unreach=1 ;; esac; fi
   done <<<"$tokens"
   [[ "$bad" -eq 0 ]] || refuse token-not-new-zone "a provider token for $MIGRATE_PHASE did not answer 200 on the NEW zone/account (see the preflight=token lines): swap or re-mint it (runbook Phase 0/2).${DOPPLER_SRC} Nothing was written."
-  [[ "$unreach" -eq 0 ]] || refuse token-unreachable "the Cloudflare API did not answer a token probe for $MIGRATE_PHASE (curl failed: see the e= on the preflight=token lines): a network fault, not a token verdict. Re-dispatch; do not re-mint. Nothing was written."
+  [[ "$unreach" -eq 0 ]] || refuse token-unreachable "the Cloudflare API gave no verdict on a token probe for $MIGRATE_PHASE (curl failed, or a 429 / 5xx answer: see the e= and http= on the preflight=token lines): not a token verdict. Re-dispatch; do not re-mint. Nothing was written."
   printf '%s preflight=ids verdict=ok tokens=%s\n' "$P" "$(grep -c . <<<"$tokens")"
 }
 
@@ -581,7 +583,7 @@ run_apply() {
   local what="noindex/crawler/app-health" halt
   # One Halt for both phases: the runbook's CTO ruling acts on each failing item by its code, after either
   # phase (the app's ssl configuration rule pins Strict whatever the zone-wide setting zone-rest writes).
-  halt="a dashboard edit is allowed only for app-health=>525/526 (the ssl rule) or an app-health 3xx whose Location equals a Terraform redirect target (remove that one rule or list item), by the owner, on the NEW zone only; for 000, a gptbot or noindex failure, or any other code make no edit and stop for an owner decision. Then a fix-forward PR, a rehearsal, and a re-dispatch of this phase with expected_in_state_updates set to the rehearsal's admitted set (the dashboard-edited rule must plan as a no-op; only a rule nobody edited plans as an in-state update)."
+  halt="act on each failing item by its code. app-health=>525/526: the owner may make one dashboard edit on the NEW zone only (the ssl rule, Strict to Full), then redeliver the window's failed GitHub webhook deliveries (Halt step 2). app-health 3xx whose Location equals a Terraform redirect target: the owner removes that one rule or list item on the NEW zone or account. app-health 000, any other app-health code, or a 3xx no Terraform target matches: no edit, stop for an owner decision. gptbot=>403 after redirects-dns with fight_mode recorded true: the runbook's one allowed next-phase start (run zone-rest). Any other gptbot, app-noindex or redirect-pair failure: no dashboard edit, fix forward. Then a fix-forward PR, a rehearsal, and a re-dispatch of this phase with expected_in_state_updates set to the rehearsal's admitted set (the dashboard-edited rule must plan as a no-op; only a rule nobody edited plans as an in-state update)."
   [[ "$MIGRATE_PHASE" != redirects-dns ]] || what="redirect/$what"
   verify_live || refuse verify-failed "applied, but the ${what} probes did not all pass: ${VERIFY_FAILING}. Runbook Halt, verify-failed: ${halt}" "applied=true${fx:+ $fx} failing=${VERIFY_FAILING}"
   printf '%s phase=%s mode=apply verdict=PASS applied=true\n' "$P" "$MIGRATE_PHASE"
