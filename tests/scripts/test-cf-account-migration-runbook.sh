@@ -120,7 +120,7 @@ PERL
   expect_red "M1 (state push line added)" row_r1 "$SB/m1.md"
 fi
 if mutate M2 "$SB/m2.md" <<'PERL'; then
-s{(   git fetch origin main\n)}{   gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun -f reason='#12931 reopen'\n$1}
+s{(   git[ ]fetch origin main\n)}{   gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun -f reason='#12931 reopen'\n$1}
 PERL
   expect_red "M2 (manual-rerun moved above the reads)" row_r2 "$SB/m2.md"
 fi
