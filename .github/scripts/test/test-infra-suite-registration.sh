@@ -168,8 +168,9 @@ fi
 # SOLEUR_INFRA_SHARD must be wired from the matrix leg ON THE RUNNER STEP — a
 # job-wide grep alone passes if the env lands on a sibling step while the runner
 # step runs the FULL set (4x the wall clock and a leg that LOOKS sharded).
-RUNNER_RECORD=$(printf '%s\n' "$JOB_RAW" | awk -v RS='      - ' \
-  '/run-registered-suites[.]sh/{print; exit}')
+# Herestring, not `printf | awk …exit`: awk exiting on the first match SIGPIPEs printf, and under
+# pipefail + set -e that 141 kills the gate with no message (measured: rc=141 on rows A5-9/G2).
+RUNNER_RECORD=$(awk -v RS='      - ' '/run-registered-suites[.]sh/{print; exit}' <<< "$JOB_RAW")
 if ! grep -qE 'SOLEUR_INFRA_SHARD:[[:space:]]+\$\{\{[[:space:]]*matrix\.leg[[:space:]]*\}\}' \
      <<< "$RUNNER_RECORD"; then
   err "the \`$JOB\` runner step does not set SOLEUR_INFRA_SHARD from matrix.leg —"
@@ -259,7 +260,7 @@ fi
 # `always()`. Assert each pinned step's own block is unmasked.
 mask_check() {  # $1=job_raw $2=record-regex $3=label
   local rec
-  rec=$(printf '%s\n' "$1" | awk -v RS='      - ' -v pat="$2" '$0 ~ pat {print; exit}')
+  rec=$(awk -v RS='      - ' -v pat="$2" '$0 ~ pat {print; exit}' <<< "$1")   # herestring: see RUNNER_RECORD
   [[ -z "$rec" ]] && return 0   # presence is asserted by the owning arm; mask-check what exists
   if grep -qE '^[[:space:]]+(continue-on-error|if):' <<< "$rec"; then
     err "$3 carries a \`continue-on-error:\`/\`if:\` key — masking a step this gate"
