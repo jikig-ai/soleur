@@ -102,9 +102,8 @@ jobs:
             <code>${{ inputs.migrate_phase }}</code> did not complete (failed, or cancelled by
             timeout-minutes=30 or by hand).
             A <code>cf-account-migrate … verdict=refuse reason=…</code> line in the log names the cause.
-            With no <code>verdict=refuse</code> line, the last <code>cf-state-migrate backup=uploaded</code> /
-            <code>applied=true</code> line in the log tells how far it got; see the runbook Halt section,
-            knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md.</p>
+            A rehearsal writes nothing; read its last refuse line, or re-dispatch. See the runbook
+            Halt section, knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md.</p>
             <p>Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>
 
   # rehearsal=false: forget, plan, gate, apply (reviewer-gated environment: the approval is the authorization).
@@ -164,6 +163,6 @@ jobs:
             timeout-minutes=30 or by hand).
             A <code>cf-account-migrate … verdict=refuse reason=…</code> line in the log names the cause.
             With no <code>verdict=refuse</code> line, the last <code>cf-state-migrate backup=uploaded</code> /
-            <code>applied=true</code> line in the log tells how far it got; see the runbook Halt section,
-            knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md.</p>
+            <code>applying=true</code> / <code>applied=true</code> line in the log tells how far it got; see the
+            runbook Halt section, knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md.</p>
             <p>Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>

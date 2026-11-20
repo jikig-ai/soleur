@@ -3511,23 +3511,40 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     expect([...found, ...HAND_LISTED].sort()).toEqual([...MAIN_ROOT_TF_WORKFLOWS].sort());
     // Independent of HAND_LISTED, so deleting a name from both lists still reds: a workflow that
     // runs a repo script which itself plans or applies the root must be in the list.
-    // A repo script is reached from a workflow by an interpreter (`bash`/`sh`, any flags before the
-    // path, e.g. `bash -e`, `bash -euo pipefail`) or directly as the first word of a `run:` line
-    // (`run: ./apps/x.sh`, or a block-scalar line `apps/x.sh …`), with an optional `./`,
-    // `${{ github.workspace }}/`, `$GITHUB_WORKSPACE/` or `${GITHUB_WORKSPACE}/` prefix.
-    // A YAML list item (`- apps/x.sh`, an on.push.paths filter) is not a call, and `.sh ` in
-    // `bash a.sh b.sh` is not the `sh` interpreter.
+    // A repo script is reached from a workflow by:
+    //   - an interpreter (`bash`/`sh`, any flags before the path, e.g. `bash -e`, `bash -euo pipefail`),
+    //     also by an absolute path (`/bin/bash`, `/usr/bin/env bash`), or by `source` / `.`;
+    //   - directly as a command word: first on a `run:` line or block-scalar line (`run: ./apps/x.sh`,
+    //     `apps/x.sh …`), or after `&&`, `||`, `|`, `;`, `then`, `do` or `else`;
+    //   - in both shapes, after leading prefix words: `FOO=1`, `timeout [-flags] 600`, `env`, `exec`,
+    //     `sudo`, `nohup`, `time`, `command`;
+    // with an optional `./`, `${{ github.workspace }}/`, `$GITHUB_WORKSPACE/` or `${GITHUB_WORKSPACE}/`
+    // prefix (quoted or not). A YAML list item (`- apps/x.sh`, an on.push.paths filter) is not a call,
+    // `.sh ` in `bash a.sh b.sh` is not the `sh` interpreter, and `done. x.sh` is not `.`.
+    // A sourced library (tests/scripts/lib/*.sh) is read like any other script; it is not a planner
+    // unless it runs terraform plan/apply itself, so the planner check below still decides.
     // RESIDUALS, not seen by this census: (1) a script reached THROUGH another script (only the
-    // script the workflow names is read, never what it runs in turn); (2) a planner phrase in a
-    // comment the line stripper keeps (stripLineComment tracks only double quotes, so a `#` after
-    // an unbalanced `"` survives) is matched: an over-count that reds loudly, never a miss.
+    // script the workflow names is read, never what it runs or sources in turn); (2) a call inside
+    // `$( … )` or backticks, through xargs / find -exec / `bash -c "…"`, or through a variable
+    // (`"$SCRIPT"`); (3) a script outside apps/ scripts/ tests/ plugins/, or not named `*.sh`;
+    // (4) another interpreter (zsh, dash, python …) or a prefix word not listed above; (5) a
+    // planner phrase in a comment the line stripper keeps (stripLineComment tracks only double
+    // quotes, so a `#` after an unbalanced `"` survives) is matched: an over-count that reds loudly,
+    // never a miss.
     const PFX = String.raw`["']?(?:\$\{\{\s*github\.workspace\s*\}\}\/|\$\{?GITHUB_WORKSPACE\}?\/|\.\/)?`;
     const REL = String.raw`((?:apps|scripts|tests|plugins)\/[\w./-]+\.sh)`;
-    const INTERP_CALL = new RegExp(String.raw`(?<![\w./-])(?:bash|sh)\s+(?:-[\w-]*o\s+\w+\s+|-[\w-]+\s+)*` + PFX + REL, "g");
-    const DIRECT_CALL = new RegExp(String.raw`^[ \t]*(?:(?:-[ \t]+)?run:[ \t]*)?` + PFX + REL, "gm");
+    const PREFIX_WORDS = String.raw`(?:(?:[A-Za-z_]\w*=\S*|timeout(?:[ \t]+-\S+)*[ \t]+\S+|env|exec|sudo|nohup|time|command)[ \t]+)*`;
+    const INTERP_CALL = new RegExp(
+      String.raw`(?<![\w./-])(?:(?:\/[\w.-]+)*\/)?(?:env[ \t]+(?:-\S+[ \t]+|[A-Za-z_]\w*=\S*[ \t]+)*)?(?:bash|sh|source|\.)[ \t]+(?:-[\w-]*o[ \t]+\w+[ \t]+|-[\w-]+[ \t]+)*` + PFX + REL,
+      "g",
+    );
+    const DIRECT_CALL = new RegExp(
+      String.raw`(?:^[ \t]*(?:(?:-[ \t]+)?run:[ \t]*)?|(?:&&|\|\|?|;|\b(?:then|do|else)\b)[ \t]*)` + PREFIX_WORDS + PFX + REL,
+      "gm",
+    );
     const scriptCalls = (t: string): string[] =>
-      [...t.matchAll(INTERP_CALL), ...t.matchAll(DIRECT_CALL)].map(([, rel]) => rel);
-    // Non-vacuity: every accepted spelling is seen, and the two near-misses are not.
+      [...new Set([...t.matchAll(INTERP_CALL), ...t.matchAll(DIRECT_CALL)].map(([, rel]) => rel))];
+    // Non-vacuity: every accepted spelling is seen, and the near-misses are not.
     expect(scriptCalls("run: bash apps/a.sh")).toEqual(["apps/a.sh"]);
     expect(scriptCalls("run: bash -e apps/a.sh")).toEqual(["apps/a.sh"]);
     expect(scriptCalls("run: bash -euo pipefail ./scripts/a.sh")).toEqual(["scripts/a.sh"]);
@@ -3538,8 +3555,21 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     expect(scriptCalls('run: bash "$GITHUB_WORKSPACE/apps/a.sh"')).toEqual(["apps/a.sh"]);
     expect(scriptCalls('      - run: "${GITHUB_WORKSPACE}/tests/a.sh"')).toEqual(["tests/a.sh"]);
     expect(scriptCalls("run: bash ${{ github.workspace }}/plugins/a.sh")).toEqual(["plugins/a.sh"]);
+    expect(scriptCalls("run: /bin/bash scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: /usr/bin/env bash -e scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: source scripts/lib.sh")).toEqual(["scripts/lib.sh"]);
+    expect(scriptCalls('          source "${GITHUB_WORKSPACE}/tests/scripts/lib/gate.sh"')).toEqual(["tests/scripts/lib/gate.sh"]);
+    expect(scriptCalls("          . ./scripts/lib.sh")).toEqual(["scripts/lib.sh"]);
+    expect(scriptCalls("run: FOO=1 ./scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: FOO=1 BAR=x timeout 600 ./scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: timeout -k 5 600 bash scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: cd x && ./scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: true; apps/a.sh")).toEqual(["apps/a.sh"]);
+    expect(scriptCalls("run: if true; then FOO=1 apps/a.sh; fi")).toEqual(["apps/a.sh"]);
     expect(scriptCalls("      - apps/a.sh")).toEqual([]);
     expect(scriptCalls("run: bash scripts/a.sh apps/b.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: echo done. scripts/a.sh")).toEqual([]);
+    expect(scriptCalls("run: x/bin/bash scripts/a.sh")).toEqual([]);
     const scriptPlanners = readdirSync(dir)
       .filter((f) => f.endsWith(".yml"))
       .filter((f) => {

@@ -36,6 +36,12 @@ Incident: `knowledge-base/engineering/operations/post-mortems/soleur-ai-cloudfla
   (`hr-no-ssh-fallback-in-runbooks`).
 - **No secret on screen.** Every Doppler write pipes the value on stdin with `--silent` and stdout to `/dev/null`.
   Verification compares `sha256sum` of source and destination; non-secret ids print at most an 8-character prefix.
+- **The stdin pipe form.** `doppler secrets get … --plain` ends its output with one newline that is not part of the
+  value (measured), so every value read in a pipe goes through the one-newline strip
+  `LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}'`. A copy is
+  `doppler secrets get <SRC> -p soleur -c <cfg> --plain | LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' | doppler secrets set <DST> -p soleur -c <cfg> --silent > /dev/null`,
+  and its read-back compares the two keys' digests read the same way (`… --plain | <strip> | sha256sum`). The
+  bootstrap's `plain_get` is the same strip.
   Never put a token in argv, a shell variable on screen, a Playwright snapshot or a screenshot.
 - **Doppler writes go through the bootstrap.** Phase 2's revert copies, id flip, token swaps and branch-config copies
   are the stages of `bootstrap.sh` in the #12931 spec directory (CTO ruling D11), never retyped by hand. Set `B` from
@@ -63,7 +69,8 @@ Incident: `knowledge-base/engineering/operations/post-mortems/soleur-ai-cloudfla
   recorded on #12931. Its push apply would fail closed at the predicate anyway, and Phase 3 step 6 would then apply it
   unreviewed inside the reopen.
 
-Placeholders: `<phase>` is one of `redirects-dns`, `zone-rest`, `tunnel` (PR2); `<utc>` is `date -u +%Y%m%dT%H%M%SZ`;
+Placeholders: `<PR1>` is #12932 (this runbook's PR); `<PR2>` is the #12931 follow-up that re-pins `RULESET_ID` and
+adds the tunnel phase; `<phase>` is one of `redirects-dns`, `zone-rest`, `tunnel` (PR2); `<utc>` is `date -u +%Y%m%dT%H%M%SZ`;
 `<run-id>` is the dispatched run; `B` is the bootstrap path set above.
 
 ### Ids (not secrets)
@@ -152,9 +159,10 @@ permission groups per key are the plan's Phase 0 table; one token per key, scope
 2. Write it to the **staging** key, never over the live one:
 
    ```bash
-   doppler secrets set <KEY>_NEXT -p soleur -c prd_terraform --silent < "<scratchpad>/<key>.tok" > /dev/null
-   doppler secrets get <KEY>_NEXT -p soleur -c prd_terraform --plain | sha256sum
-   sha256sum < "<scratchpad>/<key>.tok"
+   LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/<key>.tok" \
+     | doppler secrets set <KEY>_NEXT -p soleur -c prd_terraform --silent > /dev/null
+   doppler secrets get <KEY>_NEXT -p soleur -c prd_terraform --plain | LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' | sha256sum
+   LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/<key>.tok" | sha256sum
    ```
 
    Expected: the two digests are equal. Nothing later needs this digest: the bootstrap's swap compares `<KEY>` with
@@ -259,7 +267,7 @@ from `seo-rulesets.tf`. If the operator still wants it, the import block is part
 branch commit's message body: a line that is exactly `[skip-web-platform-apply]`, on its own (a PR-body line never
 reaches `main`, `gh pr merge` cannot set the message, and a commit subject becomes a `* <subject>` line in the squash,
 which the own-line match ignores). Before queueing, `Agent:` confirm it is in a body line of the commits the queue will
-squash; an output of `0` means stop:
+squash; anything but a number of `1` or more (a `0`, an empty output, a `gh` error) means stop:
 
 ```bash
 gh pr view <PR1> --json commits --jq '[.commits[].messageBody | split("\n")[] | select(. == "[skip-web-platform-apply]")] | length'
@@ -348,12 +356,12 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://app.soleur.ai/health          
 curl -sS -o /dev/null -w '%{http_code}\n' -A 'Mozilla/5.0 (compatible; GPTBot/1.2)' https://soleur.ai/  # 200
 doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer %s\n" "$BETTERSTACK_API_TOKEN_READONLY" \
   | curl --disable --noproxy "*" -sS --max-time 30 --header @- "https://uptime.betterstack.com/api/v2/monitors?per_page=50"' \
-  | jq -r '.data[] | select(.attributes.pronounceable_name | test("redirect"; "i")) | "\(.attributes.pronounceable_name) \(.attributes.status)"' \
+  | jq -r '(if .pagination.next != null then "PAGINATED: read the next page" else empty end), (.data[] | select(.attributes.pronounceable_name | test("redirect"; "i")) | "\(.attributes.pronounceable_name) \(.attributes.status)")' \
   | tee /dev/stderr | grep -c ' up$'                                                                   # 4
 ```
 
 Expected: the four redirect monitors listed, each `up`, and the count line `4` (a missing or renamed monitor shows
-fewer; the 10 monitors fit one page of 50, so a short count is never a second page). Then revoke the three superseded 0a tokens with the revoke recipe, one
+fewer; a `PAGINATED` line means the list did not fit one page of 50: read the next page before trusting the count). Then revoke the three superseded 0a tokens with the revoke recipe, one
 go each, on `prd_terraform` `CF_API_TOKEN_PREV`, `CF_API_TOKEN_RULESETS_PREV` and `CF_API_TOKEN_PAGES_PREV` (the
 recipe's step 4 deletes each `_PREV` key). `CF_ZONE_ID_PREV` and `CF_ACCOUNT_ID_PREV` may stay until cleanup; after
 this apply they are never restored (Halt).
@@ -549,10 +557,14 @@ validation (Load Balancing #12983, DNSSEC #12982).
   in `prd_terraform` with the stdin pipe form, read each back (`cut -c1-8`), and copy each token `<KEY>_PREV` back the
   same way. That leaves the root closed, not reopened: the validations reject the old ids, so every plan of the root
   fails, and state was never touched.
-- **Once a `rehearsal=false` `redirects-dns` run printed `backup=uploaded`** (the forget is committed; such a refusal
-  also carries `forget=committed`): no id restore, no restore of state from the
+- **Once a `rehearsal=false` `redirects-dns` run printed `backup=uploaded`** (the forget is committed; every refusal
+  after it carries `forget=committed`, and the log marker is the test when in doubt): no id restore, no restore of state from the
   backup and no `git revert` of PR1. Each of those would point Terraform at the moved zone, which must never be
   mutated, or re-open routine applies against state that no longer holds the zone's resources. Fix forward only.
+  **First, for any such refusal or a cancel after `backup=uploaded`** (`gate-refused`, `entrypoint-gate-refused`,
+  `apply-failed`, `state-migrate-failed`, a cancelled run): `Agent:` run the local Verify block before anything else,
+  because a partial apply may already have landed rules. On any failure, follow the `verify-failed` steps below
+  (an `apply-failed` refusal also carries its own best-effort `verify=ok` or `failing=` field).
 - **`reason=verify-failed applied=true`** (the `redirects-dns` apply landed and a post-apply probe failed; the
   `failing=` list names each item with what came back, `<item>=><code>+<location>`). CTO ruling 2026-11-20:
   1. If `app-health` is in `failing=` (the product is down for every user), act by its code:
@@ -560,30 +572,54 @@ validation (Load Balancing #12983, DNSSEC #12982).
        one dashboard edit on the NEW zone `951ce525…` only: Rules, Configuration Rules (phase `http_config_settings`),
        the rule with ref `dcb85b75bc3c4f4aa2a8c13a080bf854`, SSL `Strict` to `Full`. Not the zone-wide SSL/TLS
        setting. The CLO's 2026-11-13 ruling requires the legal wording to change the same day.
-     - `app-health=>3xx`: the owner disables, on the NEW zone only, the one redirect rule whose expression matches
-       `app.soleur.ai`.
+     - `app-health=>3xx`: `Operator-authorizes:` (owner only) read the `Location` the item carries. If it equals a
+       Terraform redirect target (`seo-rulesets.tf`, or an item of `cloudflare_list.legal_redirects` in
+       `seo-bulk-redirects.tf`), remove only that one rule or list item, on the NEW zone or account. If no Cloudflare
+       target matches, it is an origin redirect: no dashboard edit; stop for an owner decision.
      - `app-health=>000` or any other code: no dashboard edit. `Agent:` re-run the local Verify block and stop for an
        owner decision.
      `Agent:` re-run the local Verify block after the edit. Never edit the old zone.
-  2. After a 525/526 window, `Agent:` redeliver the window's failed GitHub App webhook deliveries per
-     `origin-tls-strict-flip.md` §"After any 525/526 window" (GitHub never retries them).
+  2. After a 525/526 window, redeliver the window's failed GitHub App webhook deliveries per
+     `origin-tls-strict-flip.md` §"After any 525/526 window" (GitHub never retries them). The window runs from the
+     apply job's start (rules land mid-apply) to the first passing local Verify after the edit. `Agent:` list the
+     non-2xx deliveries inside it; `Operator-authorizes:` the redelivery (`POST …/attempts` replays events into the app).
   3. A fix-forward PR under #12931 (the merge freeze allows it; its push-apply red is expected). It carries the
      edited value in code (for the ssl rule, the edits `origin-tls-strict-flip.md` §Rollback lists for a forward PR).
-  4. Rehearse `redirects-dns`. The gate prints one `cf-account-migrate-gate: in-state-update <address>` line for each
-     in-state update it admits. The dashboard-edited address must NOT appear there: an update to it means the PR
-     does not carry the working value and would undo the edit, so stop. Then re-dispatch; the job's verify runs
-     again. The gate accepts an in-state `["update"]` only for a Cloudflare object whose `before` carries the NEW
-     zone or account id. A fix that plans as a replace (a ruleset `phase` or `kind` change, say) is refused:
+  4. Rehearse `redirects-dns`. The gate prints one `cf_account_migrate_gate: in-state-update <address>` line for each
+     in-state update it admits, in the run log only: `Agent:`
+     `gh run view <run-id> --log | grep -F 'cf_account_migrate_gate: in-state-update'`. The 525/526 rule lives in
+     `cloudflare_ruleset.seo_config_settings`; that address must NOT appear: an update to it means the PR does not
+     carry the working value and would undo the edit, so stop. A fix to a sibling rule in the same ruleset goes in
+     its own PR after this one, so the check stays readable. Then re-dispatch; the job's verify runs again. The gate
+     accepts an in-state `["update"]` only for a Cloudflare object whose `before` carries the NEW zone or account id,
+     or for a non-Cloudflare member whose planned value equals its expected new value (the Doppler zone-id secret,
+     the Pages account-id secret). A fix that plans as a replace (a ruleset `phase` or `kind` change, say) is refused:
      widening the phase spec is a reviewed gate diff in `tests/scripts/lib/cf-account-migrate-gate.sh`.
 - **The apply run was cancelled** (timeout or by hand; the ops email says "did not complete" with no `verdict=refuse`
   line). Read the run log for the last marker: none of `backup=uploaded` means nothing was forgotten (re-dispatch
-  after the rehearsal); `backup=uploaded` without `applied=true` is the committed-forget case above; `applied=true`
-  means treat it as `verify-failed`: `Agent:` run the local Verify block and follow the bullet above on any failure.
+  after the rehearsal); `backup=uploaded` without `applying=true` is the committed-forget case above; `applying=true`
+  (with or without `applied=true`) means rules may have landed: `Agent:` run the local Verify block first and
+  follow the `verify-failed` steps on any failure.
 - **A revert copy is not sound** (a `prev-*` or `swap-*` stage says one of `<KEY>` / `<KEY>_PREV` is not the old
-  token). Copy neither way. `Agent:` read each one's token id and status with the revoke recipe's step 2. The one that
-  verifies active is the old token. `Operator-authorizes:` delete the other key only if it is the `_PREV`, then re-run
-  the prev stage, which copies afresh. If `<KEY>` is the dead one, copy `<KEY>_PREV` over it with the stdin pipe form,
-  read it back, and re-run the swap.
+  token). Copy neither way. Both an old and a new token verify active, so status alone cannot tell them apart.
+  `Agent:` for each of the two keys, read whether it can read the NEW zone (the old tokens are scoped to the old
+  zone and cannot):
+
+  ```bash
+  doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer %s\n" "$<KEY_OR_PREV>" \
+    | curl --disable --noproxy "*" -sS --max-time 30 --header @- https://api.cloudflare.com/client/v4/zones/951ce525552201ec6c696b24251abed7' \
+    | jq -r '.success'
+  ```
+
+  The one that prints `false` and verifies active (revoke recipe step 2) is the old token. If both print `true`, or
+  neither verifies active, stop for an owner decision. `Operator-authorizes:` delete the other key only if it is the
+  `_PREV`, then re-run the prev stage, which copies afresh. If `<KEY>` is the bad one, copy `<KEY>_PREV` over it with
+  the stdin pipe form, read it back, and re-run the swap.
+- **Bootstrap markers.** `SOLEUR_CFAM_TOKEN_MALFORMED name=<KEY>_NEXT`: the staged value has a byte outside the token
+  class (often a stored trailing newline); re-stage `<KEY>_NEXT` from the mint file with Phase 0 step 2's strip form.
+  `SOLEUR_CFAM_TOKEN_NOT_ACTIVE`: re-mint (Phase 0). `SOLEUR_CFAM_COPY_MISMATCH`: the stage stopped before any delete;
+  copy `<KEY>_PREV` over `<KEY>` with the stdin pipe form, read it back, and re-run. `SOLEUR_CFAM_DELETE_NOT_CONFIRMED`:
+  re-run the stage, which plans only the delete.
 - The backup object is disaster-recovery evidence only. It is never pushed back as state; Phase 5 deletes every
   `pre-cf-account-migration-*` object.
 - If the migration is abandoned outright, stop at the last verified phase, keep the merge freeze, and record the

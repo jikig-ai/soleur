@@ -209,6 +209,17 @@ if [[ "$url" == https://api.cloudflare.com/client/v4/* ]]; then
   printf '%s\n%s' "$body" "$code"
   exit 0
 fi
+# curl.rc: "<url> <exit code>" lines; that URL answers nothing (000, no header dump) and curl exits so.
+if [[ -f "$D/curl.rc" ]]; then
+  rc="$(awk -v u="$url" '$1 == u {print $2; exit}' "$D/curl.rc")"
+  if [[ -n "$rc" ]]; then [[ "$dump" -eq 1 ]] || printf '000 '; exit "$rc"; fi
+fi
+# mode.flaky: app.soleur.ai/health answers 526 on its first probe only (counted in flaky.n).
+if [[ -f "$D/mode.flaky" && "$url" == https://app.soleur.ai/health ]]; then
+  n="$(cat "$D/flaky.n" 2>/dev/null || printf 0)"; printf '%s' "$((n + 1))" >"$D/flaky.n"
+  if [[ "$n" -eq 0 ]]; then printf '526 '; else printf '200 '; fi
+  exit 0
+fi
 if [[ -f "$D/mode.verify" ]]; then
   [[ "$dump" -eq 1 ]] && printf 'HTTP/2 200\r\n\r\n' || printf '500 '
   exit 0
@@ -264,11 +275,15 @@ build_plan() {
     {format_version: "1.2", resource_changes: [
       $spec | to_entries[] | .key as $a | .value as $c
       | ({address: $a, mode: "managed", type: ($a | split(".")[0]), change: (
-            # The runtime zone-id secret must publish the NEW zone id (the gate requires it).
+            # The gate fixes the planned value of the runtime zone-id secret and of the Pages
+            # account-id secret (its expected-values table): those carry it exactly.
             if $c == "create" then {actions: ["create"], before: null,
-                after: ((if $a == "doppler_secret.cf_zone_id_prd" then {value: $nz} else {value: $s} end) + ids($a) + rs($a))}
+                after: ((if $a == "doppler_secret.cf_zone_id_prd" then {project: "soleur", config: "prd", name: "CF_ZONE_ID", value: $nz} else {value: $s} end) + ids($a) + rs($a))}
             elif $c == "import" then {actions: ["no-op"], importing: {id: $lit[$a]}, before: ids($a), after: ids($a)}
-            elif $c == "mutable" then {actions: ["update"], before: {}, after: {plaintext_value: $s}}
+            elif $c == "mutable" then {actions: ["update"], before: {},
+                after: (if $a == "github_actions_secret.cloudflare_account_id_pages"
+                        then {repository: "soleur", secret_name: "CLOUDFLARE_ACCOUNT_ID_PAGES", plaintext_value: $na}
+                        else {plaintext_value: $s} end)}
             else {actions: ["delete", "create"], before: {id: "tok-id-1"}, after: {value: $s}} end)}
          + (if $c == "replace" then {action_reason: "replace_by_request"} else {} end))
     ]}' >"$2"
@@ -318,12 +333,10 @@ new_case() {
   LAST_D="$d"
 }
 
-run_job() { # <dir> <script>; <dir>/env.extra holds extra KEY=VALUE lines (later wins);
-  # <dir>/wall, when present, bounds the run in seconds (rc 124 when it is cut off)
-  local d="$1" extra=() wall=()
+run_job() { # <dir> <script>; <dir>/env.extra holds extra KEY=VALUE lines (later wins)
+  local d="$1" extra=()
   if [[ -f "$d/env.extra" ]]; then mapfile -t extra <"$d/env.extra"; fi
-  if [[ -f "$d/wall" ]]; then wall=(timeout -k 5 "$(cat "$d/wall")"); fi
-  ${wall[@]+"${wall[@]}"} env -u TF_VAR_cf_zone_id -u TF_VAR_cf_account_id -u TF_LOG -u TF_LOG_PATH -u TF_LOG_CORE -u TF_LOG_PROVIDER \
+  env -u TF_VAR_cf_zone_id -u TF_VAR_cf_account_id -u TF_LOG -u TF_LOG_PATH -u TF_LOG_CORE -u TF_LOG_PROVIDER \
     PATH="$SBX/bin:$PATH" STUB_DIR="$d" STUB_GATED="$GATED_FILE" \
     MIGRATE_PHASE="$(cat "$d/phase")" CONFIRM="$(cat "$d/confirm")" REHEARSAL="$(cat "$d/rehearsal")" \
     REASON="$(cat "$d/reason")" GITHUB_WORKSPACE="$REPO" RUNNER_TEMP="$d/runner" INFRA_DIR="$d/root" \
@@ -385,8 +398,11 @@ chk_gate_blocks_apply() {
   chk_forget_committed "$1" gate-refused
 }
 chk_forget_committed() { # <dir> <reason>: a redirects-dns apply refusal after the forget names it as a field
-  grep -qx "cf-account-migrate phase=redirects-dns verdict=refuse reason=$2 forget=committed" "$1/out.txt" || { WHY="no-forget-field"; return 1; }
-  grep -qx -- "- cf-account-migrate phase=redirects-dns rehearsal=false verdict=refuse reason=$2 forget=committed" "$1/summary.md" || { WHY="no-forget-summary"; return 1; }
+  chk_refuse_fields "$1" "$2" forget=committed || { WHY="no-forget-${WHY#no-}"; return 1; }
+}
+chk_refuse_fields() { # <dir> <reason> <fields>: the redirects-dns apply refusal line and summary carry exactly <fields>
+  grep -qxF -- "cf-account-migrate phase=redirects-dns verdict=refuse reason=$2 $3" "$1/out.txt" || { WHY="no-field"; return 1; }
+  grep -qxF -- "- cf-account-migrate phase=redirects-dns rehearsal=false verdict=refuse reason=$2 $3" "$1/summary.md" || { WHY="no-summary"; return 1; }
 }
 chk_r2_ignored() { # a hostile R2_ENDPOINT changes nothing: PASS, and every aws call met the pinned-endpoint fake
   if [[ -s "$1/refused.log" ]]; then WHY="stub-refused"; return 1; fi
@@ -410,17 +426,40 @@ chk_dest_for() { # <dir> <url>: that URL alone fails, with its observed result, 
   refused_for "$1" verify-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
   grep -qxF -- "cf-account-migrate verify=redirects-dns verdict=fail failing=${want}" "$1/out.txt" || { WHY="no-dest:$2"; return 1; }
   grep -qF -- "::error title=cf-account-migrate::applied, but the redirect/noindex/crawler/app-health probes did not all pass: ${want}." "$1/out.txt" || { WHY="no-annotation"; return 1; }
-  grep -qxF -- "- cf-account-migrate phase=redirects-dns rehearsal=false verdict=refuse reason=verify-failed applied=true failing=${want}" "$1/summary.md" || { WHY="no-applied-summary"; return 1; }
+  grep -qxF -- "- cf-account-migrate phase=redirects-dns rehearsal=false verdict=refuse reason=verify-failed applied=true forget=committed failing=${want}" "$1/summary.md" || { WHY="no-applied-summary"; return 1; }
 }
 chk_hostile_location() { # a network Location carrying %0A and :: stays inside ONE annotation
   refused_for "$1" verify-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
   grep -qF -- '::error title=cf-account-migrate::applied, but the redirect/noindex/crawler/app-health probes did not all pass: https://soleur.ai/pages/agents.html=>301+https://soleur.ai/x%250A:warning:y.' "$1/out.txt" || { WHY="not-encoded"; return 1; }
   if grep -qF -- '::warning' "$1/out.txt" "$1/summary.md"; then WHY="warning-opener"; return 1; fi
 }
-chk_deadline() { # the wall-clock deadline ends the verify with its verdict line, inside the wall bound
+chk_deadline() { # the deadline ends the verify after ONE pass (of TRIES=3), with its verdict line
   refused_for "$1" verify-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
   grep -q '^cf-account-migrate verify=redirects-dns verdict=fail failing=' "$1/out.txt" || { WHY="no-verdict-line"; return 1; }
   [[ "$(grep -c '^curl https://app.soleur.ai/health$' "$1/calls.log")" -eq 1 ]] || { WHY="passes:$(grep -c '^curl https://app.soleur.ai/health$' "$1/calls.log")"; return 1; }
+}
+chk_retry() { # pass 1 fails, pass 2 passes: verdict ok after exactly two passes, applied, rc 0
+  [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
+  grep -qx 'cf-account-migrate verify=redirects-dns verdict=ok' "$1/out.txt" || { WHY="no-ok"; return 1; }
+  [[ "$(grep -c '^curl https://app.soleur.ai/health$' "$1/calls.log")" -eq 2 ]] || { WHY="passes:$(grep -c '^curl https://app.soleur.ai/health$' "$1/calls.log")"; return 1; }
+}
+chk_applyfail_health() { # a failed apply is still probed: the refusal carries forget=committed and the 526
+  refused_for "$1" apply-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
+  grep -q '^terraform\[remote\] apply' "$1/calls.log" || { WHY="no-apply-call"; return 1; }
+  grep -qx 'cf-account-migrate phase=redirects-dns mode=apply applying=true' "$1/out.txt" || { WHY="no-applying-line"; return 1; }
+  if grep -q 'mode=apply applied=true' "$1/out.txt"; then WHY="applied-line"; return 1; fi
+  chk_refuse_fields "$1" apply-failed 'forget=committed failing=app-health=>526' || return 1
+}
+chk_curl_rc() { # curl's own exit code reaches the failing item: +e=<rc>
+  refused_for "$1" verify-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
+  grep -qxF -- 'cf-account-migrate verify=redirects-dns verdict=fail failing=app-noindex=>000+hdr=absent+e=7 app-health=>000+e=28' "$1/out.txt" || { WHY="no-rc-item"; return 1; }
+}
+chk_reason_bidi() { # bidi/format characters in the reason become spaces in the summary line
+  grep -qxF -- '- cf-account-migrate phase=redirects-dns rehearsal=true reason=a b c d e f g h' "$1/summary.md" || { WHY="not-stripped"; return 1; }
+}
+chk_obs_ascii() { # a Location with a bidi override and a non-ASCII letter reads as printable ASCII only
+  refused_for "$1" verify-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
+  grep -qxF -- 'cf-account-migrate verify=redirects-dns verdict=fail failing=https://soleur.ai/pages/agents.html=>301+https://soleur.ai/x+y+z' "$1/out.txt" || { WHY="not-ascii"; return 1; }
 }
 chk_reason() { # one sanitized reason line in the step summary, no workflow-command opener
   grep -q '^- cf-account-migrate phase=redirects-dns rehearsal=true reason=re-run after a 5xx :error title=x:pwned' "$1/summary.md" || { WHY="no-reason-line"; return 1; }
@@ -509,12 +548,26 @@ setup_budget() { new_case "budget-$1" redirects-dns false; printf 'CFAM_VERIFY_T
 # shellcheck disable=SC2016 # injected text, expanded only if the job fails to validate it
 setup_budget_deadline() { new_case "budgetd-$1" redirects-dns false; printf 'CFAM_VERIFY_DEADLINE=P[$(touch %s/pwned)]\n' "$LAST_D" >"$LAST_D/env.extra"; }
 setup_hostile_loc() { new_case "hostloc-$1" redirects-dns false; : >"$LAST_D/mode.wrongdest"; printf 'https://soleur.ai/x%%0A::warning::y' >"$LAST_D/mode.location"; }
-# A budget that would sleep for an hour (60 passes x 60 s) ends after ONE pass at deadline 0; the
-# 20 s wall bound turns a missing deadline into rc 124 instead of a hung suite.
+# Three failing passes allowed, no pause, deadline 0: the deadline ends the verify after ONE pass.
+# The pass count is the observable (passes:1 pristine), so no wall bound is needed.
 setup_deadline() {
-  new_case "deadline-$1" redirects-dns false; : >"$LAST_D/mode.verify"; printf '20' >"$LAST_D/wall"
-  printf 'CFAM_VERIFY_TRIES=60\nCFAM_VERIFY_SLEEP=60\nCFAM_VERIFY_DEADLINE=0\n' >"$LAST_D/env.extra"
+  new_case "deadline-$1" redirects-dns false; : >"$LAST_D/mode.verify"
+  printf 'CFAM_VERIFY_TRIES=3\nCFAM_VERIFY_SLEEP=0\nCFAM_VERIFY_DEADLINE=0\n' >"$LAST_D/env.extra"
 }
+# The clock placed past the cap (bash imports SECONDS from the environment): with DEADLINE=600 the
+# cap alone (1500 - 0 - 105 = 1395 s after the script start) ends the verify after ONE pass.
+setup_cap() {
+  new_case "cap-$1" redirects-dns false; : >"$LAST_D/mode.verify"
+  printf 'CFAM_VERIFY_TRIES=3\nCFAM_VERIFY_SLEEP=0\nCFAM_VERIFY_DEADLINE=600\nSECONDS=1400\n' >"$LAST_D/env.extra"
+}
+setup_retry() {
+  new_case "retry-$1" redirects-dns false; : >"$LAST_D/mode.flaky"
+  printf 'CFAM_VERIFY_TRIES=3\nCFAM_VERIFY_SLEEP=0\nCFAM_VERIFY_DEADLINE=600\n' >"$LAST_D/env.extra"
+}
+setup_applyfail_health() { new_case "afh-$1" redirects-dns false; printf '1' >"$LAST_D/mode.apply"; : >"$LAST_D/mode.health"; }
+setup_curl_rc() { new_case "curlrc-$1" redirects-dns false; printf 'https://app.soleur.ai/ 7\nhttps://app.soleur.ai/health 28\n' >"$LAST_D/curl.rc"; }
+setup_reason_bidi() { new_case "rbidi-$1" redirects-dns true; printf 'a\xe2\x80\xaeb\xe2\x81\xa6c\xef\xbb\xbfd\xe2\x80\x8ee\xe2\x80\x8bf\xc2\xadg\xf3\xa0\x80\x81h' >"$LAST_D/reason"; }
+setup_obs_ascii() { new_case "obsascii-$1" redirects-dns false; : >"$LAST_D/mode.wrongdest"; printf 'https://soleur.ai/x\xe2\x80\xaey\xc3\xa9z' >"$LAST_D/mode.location"; }
 setup_imports_seam() { new_case "impseam-$1" redirects-dns true; printf 'CFAM_IMPORTS_FILE=%s/no-such-imports.tf\n' "$LAST_D" >"$LAST_D/env.extra"; }
 setup_tflog() {
   new_case "tflog-$1" redirects-dns true
@@ -672,9 +725,16 @@ for nx in "000+hdr=absent|" "503+hdr=all|HTTP/2 503\r\nx-robots-tag: all\r\n\r\n
   r=1; refused_for "$LAST_D" verify-failed && grep -qxF -- "cf-account-migrate verify=redirects-dns verdict=fail failing=app-noindex=>${nx%%|*}" "$LAST_D/out.txt" && r=0
   verdict "$r" "app-noindex failing alone reads app-noindex=>${nx%%|*}"
 done
-new_case applyfail redirects-dns false; printf '1' >"$LAST_D/mode.apply"; run_job "$LAST_D" "$PRISTINE"
-r=1; refused_for "$LAST_D" apply-failed && ! grep -q '^curl https://[a-z.]*soleur[.]ai' "$LAST_D/calls.log" && r=0
-verdict "$r" "terraform apply failure -> reason=apply-failed, no probes"
+new_case applyfail redirects-dns false; printf '1' >"$LAST_D/mode.apply"; run_job "$LAST_D" "$PRISTINE"; WHY=""
+r=1; chk_refuse_fields "$LAST_D" apply-failed 'forget=committed verify=ok' \
+  && grep -qx 'cf-account-migrate phase=redirects-dns mode=apply applying=true' "$LAST_D/out.txt" && r=0
+verdict "$r" "terraform apply failure -> reason=apply-failed forget=committed verify=ok (the partial apply is probed once), applying=true printed ($WHY)"
+setup_applyfail_health x; run_job "$LAST_D" "$PRISTINE"; WHY=""
+chk_applyfail_health "$LAST_D"; verdict "$?" "apply fails, then the probe finds app-health 526 -> reason=apply-failed forget=committed failing=app-health=>526 ($WHY)"
+new_case applyfail-zrest zone-rest false; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; printf '1' >"$LAST_D/mode.apply"; run_job "$LAST_D" "$PRISTINE"
+r=1; refused_for "$LAST_D" apply-failed && grep -qx 'cf-account-migrate phase=zone-rest verdict=refuse reason=apply-failed' "$LAST_D/out.txt" \
+  && ! grep -q '^curl https://[a-z.]*soleur[.]ai' "$LAST_D/calls.log" && r=0
+verdict "$r" "zone-rest apply failure -> reason=apply-failed with no forget or probe field, no probes"
 new_case rerun redirects-dns false; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; run_job "$LAST_D" "$PRISTINE"
 r=1; [[ "$(rc_of "$LAST_D")" == 0 ]] && grep -q 'cf-state-migrate verdict=ok removed=0' "$LAST_D/out.txt" && ! grep -q 'state rm' "$LAST_D/calls.log" && r=0
 verdict "$r" "redirects-dns re-dispatch after migration: forget removes 0, apply proceeds"
@@ -697,7 +757,8 @@ verdict "$r" "apply order: phase gate (show tfplan) < entrypoint gate < apply"
 printf '\n[hardening] pinned endpoint, bounded calls, test seams, logging, audit line\n'
 for pair in r2_evil:chk_r2_ignored r2_evil_apply:chk_r2_ignored budget:chk_budget budget_deadline:chk_budget imports_seam:chk_rehearsal_clean tflog:chk_rehearsal_clean \
   tflog_doppler:chk_rehearsal_clean health:chk_health reason:chk_reason backups_timeout:chk_backups_timeout \
-  ids_timeout:chk_ids_timeout hostile_loc:chk_hostile_location; do
+  ids_timeout:chk_ids_timeout hostile_loc:chk_hostile_location retry:chk_retry cap:chk_deadline curl_rc:chk_curl_rc \
+  reason_bidi:chk_reason_bidi obs_ascii:chk_obs_ascii; do
   "setup_${pair%%:*}" x; run_job "$LAST_D" "$PRISTINE"; WHY=""
   "${pair#*:}" "$LAST_D"; verdict "$?" "${pair%%:*}: ${pair#*:} green on the pristine script ($WHY)"
 done
@@ -722,6 +783,8 @@ cat >"$MIRROR/apps/web-platform/infra/scripts/cf-account-state-migrate.sh" <<'ST
 # -> verdict=ok removed=0; zero cloudflare_* at all -> abort zero-candidates.
 set -uo pipefail
 printf 'state-migrate-stub %s\n' "$*" >>"${STUB_DIR:?}/calls.log"
+# mode.forget: the forget prints that file's lines and fails (a mid-forget abort).
+if [[ -f "$STUB_DIR/mode.forget" ]]; then cat "$STUB_DIR/mode.forget"; exit 1; fi
 j="$(terraform show -json)" || { echo "cf-state-migrate verdict=abort reason=show-failed"; exit 1; }
 r2="$(jq '[.values.root_module.resources[]? | select(.mode == "managed" and .type == "cloudflare_r2_bucket")] | length' <<<"$j")"
 cf="$(jq '[.values.root_module.resources[]? | select(.mode == "managed" and (.type | startswith("cloudflare_")) and .type != "cloudflare_r2_bucket")] | length' <<<"$j")"
@@ -756,8 +819,20 @@ new_case redispatch-nocf redirects-dns false
 jq '.show.values.root_module.resources |= map(select(.type | startswith("cloudflare_") | not))' "$LAST_D/remote.tfstate" >"$LAST_D/s" && mv "$LAST_D/s" "$LAST_D/remote.tfstate"
 printf 'GITHUB_WORKSPACE=%s\n' "$MIRROR" >"$LAST_D/env.extra"
 run_job "$LAST_D" "$PRISTINE"
-r=1; refused_for "$LAST_D" state-migrate-failed && ! grep -q 'terraform\[remote\] plan' "$LAST_D/calls.log" && r=0
-verdict "$r" "no cloudflare_* at all: the forget aborts and the job refuses state-migrate-failed before any plan"
+r=1; refused_for "$LAST_D" state-migrate-failed && ! grep -q 'terraform\[remote\] plan' "$LAST_D/calls.log" \
+  && chk_refuse_fields "$LAST_D" state-migrate-failed forget=unknown && r=0
+verdict "$r" "no cloudflare_* at all: the forget aborts with no backup and the job refuses state-migrate-failed forget=unknown before any plan"
+setup_forget_after_backup() {
+  new_case "forgetbk-$1" redirects-dns false; printf 'GITHUB_WORKSPACE=%s\n' "$MIRROR" >"$LAST_D/env.extra"
+  printf 'cf-state-migrate backup=uploaded uri=s3://x/y\ncf-state-migrate verdict=abort reason=state-rm-failed\n' >"$LAST_D/mode.forget"
+}
+chk_forget_after_backup() {
+  refused_for "$1" state-migrate-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
+  if grep -q 'terraform\[remote\] plan' "$1/calls.log"; then WHY="planned"; return 1; fi
+  chk_refuse_fields "$1" state-migrate-failed forget=committed
+}
+setup_forget_after_backup x; run_job "$LAST_D" "$PRISTINE"; WHY=""
+chk_forget_after_backup "$LAST_D"; verdict "$?" "the forget fails after backup=uploaded -> reason=state-migrate-failed forget=committed, no plan ($WHY)"
 new_case applyfail-msg redirects-dns false; printf '1' >"$LAST_D/mode.apply"; run_job "$LAST_D" "$PRISTINE"
 r=1; grep -q 'Fix forward.*re-dispatch the same phase: the forget then removes 0' "$LAST_D/out.txt" && ! grep -q 'every phase is idempotent' "$LAST_D/out.txt" && r=0
 verdict "$r" "apply-failed names the fix-forward / re-dispatch path (removed=0 on the re-run)"
@@ -868,7 +943,7 @@ red "E1 entrypoint gate call deleted" "$E1" chk_entrypoint_refused '^(apply-call
 E2="$(mk_mutant entrypoint-seam 's/ -u PREAPPLY_ENTRYPOINT_FETCH//')"
 red "E2 the gate's fetch seam reaches production" "$E2" chk_entrypoint_ran '^rc:1$' setup_entry_seam
 # shellcheck disable=SC2016
-R1="$(mk_mutant forget-ok-ignored 's/state_migrate || refuse state-migrate-failed/state_migrate \&\& refuse state-migrate-failed/')"
+R1="$(mk_mutant forget-ok-ignored '/^    state_migrate | tee /{n;s/^    if \[\[ "\$rc" -ne 0 \]\]; then$/    if [[ "$rc" -eq 0 ]]; then/;}')"
 setup_redispatch() { new_case "redispatch-mut-$1" redirects-dns false; forgotten_state "$LAST_D/remote.tfstate"; printf 'GITHUB_WORKSPACE=%s\n' "$MIRROR" >"$LAST_D/env.extra"; }
 chk_redispatch_apply() { chk_redispatch "$1" apply; }
 red "R1 a removed=0 forget treated as a failure (re-dispatch deadlock)" "$R1" chk_redispatch_apply '^(rc:1|no-plan)$' setup_redispatch
@@ -879,7 +954,34 @@ V1="$(mk_mutant annotation-unescaped 's#^  local m="\${2//%/%25}"$#  local m="$2
 red "V1 refuse() prints a network value's %0A undecoded into the annotation" "$V1" chk_hostile_location '^not-encoded$' setup_hostile_loc
 # shellcheck disable=SC2016 # sed expression matches literal script text
 V2="$(mk_mutant no-deadline 's/ || ((SECONDS >= end))//')"
-red "V2 the verify loop without its wall-clock deadline outlasts the bound" "$V2" chk_deadline '^rc:124$' setup_deadline
+red "V2 the verify loop without its deadline check runs every pass (TRIES=3, DEADLINE=0)" "$V2" chk_deadline '^passes:3$' setup_deadline
+# shellcheck disable=SC2016 # sed expression matches literal script text
+V4="$(mk_mutant end-now 's/^  end=\$((SECONDS + dl))$/  end=$SECONDS/')"
+red "V4 the deadline set to the verify's start (end=\$SECONDS) gives up after one failing pass" "$V4" chk_retry '^(rc:1|no-ok)$' setup_retry
+# shellcheck disable=SC2016 # sed expression matches literal script text
+V5="$(mk_mutant no-cap '/^  if ((cap < end)); then end=\$cap; fi$/d')"
+red "V5 the verify deadline without the script-start cap runs every pass past 1395 s" "$V5" chk_deadline '^passes:3$' setup_cap
+# shellcheck disable=SC2016 # sed expression matches literal script text
+V6="$(mk_mutant applyfail-no-probe 's/^      if verify_redirects_dns 60; then vf="verify=ok"; else vf="failing=\${VERIFY_FAILING}"; fi$/      :/')"
+red "V6 a failed apply is not probed (the partial apply's 526 is unreported)" "$V6" chk_applyfail_health '^no-field$' setup_applyfail_health
+# shellcheck disable=SC2016 # sed expression matches literal script text
+V7="$(mk_mutant applyfail-no-forget 's/ "\${fx}\${vf:+\${fx:+ }\$vf}"$/ "$vf"/')"
+red "V7 apply-failed without the forget=committed field" "$V7" chk_applyfail_health '^no-field$' setup_applyfail_health
+V8="$(mk_mutant no-applying-line '/mode=apply applying=true/d')"
+red "V8 no applying=true marker before terraform apply" "$V8" chk_applyfail_health '^no-applying-line$' setup_applyfail_health
+# shellcheck disable=SC2016 # sed expression matches literal script text
+V9="$(mk_mutant verify-no-forget 's/"applied=true\${fx:+ \$fx} failing=/"applied=true failing=/')"
+red "V9 verify-failed without the forget=committed field" "$V9" chk_dest '^no-applied-summary$' setup_wrongdest
+V10="$(mk_mutant forget-marker-ignored "s/^      if grep -q '^cf-state-migrate backup=uploaded ' /      if false \\&\\& grep -q '^cf-state-migrate backup=uploaded ' /")"
+red "V10 a forget that failed after backup=uploaded reported as forget=unknown" "$V10" chk_forget_after_backup '^no-field$' setup_forget_after_backup
+# shellcheck disable=SC2016 # sed expression matches literal script text
+V11="$(mk_mutant probe-rc-dropped 's/^  \[\[ "\$rc" -eq 0 \]\] || printf . e=%s. "\$rc"$/  :/')"
+red "V11 probe() drops curl's exit code (a timeout reads as a bare 000)" "$V11" chk_curl_rc '^(no-rc-item|rc:0)$' setup_curl_rc
+V12="$(mk_mutant one-line-no-format '/^    | LC_ALL=C sed -e .s\/\\x/d')"
+red "V12 one_line without the bidi/format-character strip" "$V12" chk_reason_bidi '^not-stripped$' setup_reason_bidi
+# shellcheck disable=SC2016 # sed expression matches literal script text
+V13="$(mk_mutant obs-no-closed-set '/^  r="\$(printf .%s. "\$1" | one_line /s/ | LC_ALL=C tr -c [^|]*|/ |/')"
+red "V13 obs_line without the printable-ASCII closed set" "$V13" chk_obs_ascii '^not-ascii$' setup_obs_ascii
 # shellcheck disable=SC2016 # sed expression matches literal script text
 V3="$(mk_mutant no-forget-field 's/ "\$fx"$//')"
 red "V3 a post-forget gate refusal without the forget=committed field" "$V3" chk_gate_blocks_apply '^no-forget-field$' setup_refuse_apply
@@ -898,7 +1000,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=111
+EXPECTED_CASES=129
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

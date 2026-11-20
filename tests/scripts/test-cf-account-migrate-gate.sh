@@ -4,6 +4,14 @@
 # The oracle is independent of the gate's own data where it matters: the valid redirects-dns
 # fixture's expected counts (8 creates, 29 imports) and a sample of addresses are literals here,
 # so a gate whose allow-set silently shrank cannot also shrink this suite's expectations.
+#
+# ONE SOURCE (contract, the sources_lib / defines_lib_fn rows): each consumer carries its reviewed
+# source line(s) as whole lines (the forget's backslash continuation pinned to the line after it),
+# re-types none of the library's constants, makes every R2 call through cfam_r2_aws, and DEFINES
+# none of the library's function names (a consumer-side redefinition would shadow the bytes under
+# test). RESIDUALS (review): a reviewed source line inside a dead branch (`if false; then` … `fi`)
+# still reads as sourcing; a definition made through eval, an alias or a sourced third file is not
+# seen.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -81,7 +89,7 @@ entry_create() { # <address>
     cloudflare_list|cloudflare_pages_project|cloudflare_pages_domain) after="{\"account_id\":\"$NA\"}" ;;
     cloudflare_ruleset) if [[ "$a" == *bulk_redirects ]]; then after="{\"account_id\":\"$NA\",\"zone_id\":null}"; else after="{\"zone_id\":\"$NZ\",\"account_id\":null}"; fi ;;
     cloudflare_*) after="{\"zone_id\":\"$NZ\"}" ;;
-    doppler_secret) after="{\"name\":\"CF_ZONE_ID\",\"value\":\"$NZ\"}" ;;   # the runtime's zone id: the NEW one
+    doppler_secret) after="{\"project\":\"soleur\",\"config\":\"prd\",\"name\":\"CF_ZONE_ID\",\"value\":\"$NZ\"}" ;;   # the runtime's zone id: the NEW one
     *) after='{}' ;;
   esac
   jq -nc --arg a "$a" --arg t "$t" --argjson after "$after" '{address:$a,mode:"managed",type:$t,change:{actions:["create"],before:null,after:$after}}'
@@ -134,7 +142,7 @@ mutate_plan "$VALID" "$TMP/u5.json" '(.resource_changes[] | select(.address=="'"
 check "U5: an in-state create-class replace is refused" 1 "$SCS (class create) planned with actions" redirects-dns "$TMP/u5.json" "$TMP/u-state.json"
 # The in-state update the gate admits is printed on its own line (a rehearsal shows which rule a
 # fix would overwrite); a first apply prints none, and the verdict line keeps its format.
-ISU="cf-account-migrate-gate: in-state-update $SCS"
+ISU="cf_account_migrate_gate: in-state-update $SCS"
 isu_out="$(cf_account_migrate_gate redirects-dns "$TMP/u1.json" "$TMP/u-state.json" 2>&1)"; isu_rc=$?
 if [[ "$isu_rc" -eq 0 ]] && grep -qxF -- "$ISU" <<<"$isu_out" \
    && grep -qxF -- "cf_account_migrate_gate: phase=redirects-dns verdict=PASS creates=7 imports=29 destroys=0" <<<"$isu_out"; then
@@ -150,6 +158,22 @@ isu_mut="$(bash -c 'source "$1"; source "$2"; cf_account_migrate_gate redirects-
 if cmp -s "$TMP/isu-mut.sh" "$GATE"; then fail "M-isu: the mutation did not land" 1 ""
 elif grep -qF -- 'verdict=PASS creates=7' <<<"$isu_mut" && ! grep -qxF -- "$ISU" <<<"$isu_mut"; then pass "M-isu: dropping the print loses U1b's in-state-update line (RED)"
 else fail "M-isu: the in-state-update line survived its print being dropped" 1 "$isu_mut"; fi
+# U1d: a REFUSE prints no in-state-update line, even for an update the arm admitted (nothing is
+# applied, so nothing would be overwritten); its REFUSE and verdict lines are what is printed.
+mutate_plan "$TMP/u1.json" "$TMP/u1d.json" '.resource_changes += [{address:"cloudflare_record.app",mode:"managed",type:"cloudflare_record",change:{actions:["delete"],before:{zone_id:"'"$NZ"'"},after:null}}]'
+isu_ref_run() { bash -c 'source "$1"; source "$2"; cf_account_migrate_gate redirects-dns "$3" "$4"' _ "$PREAMBLE" "$1" "$TMP/u1d.json" "$TMP/u-state.json" 2>&1; }
+isu_ref="$(isu_ref_run "$GATE")"; isu_ref_rc=$?
+if [[ "$isu_ref_rc" -eq 1 ]] && ! grep -qF -- 'in-state-update' <<<"$isu_ref" \
+   && grep -qxF -- "REFUSE destroys or forgets cloudflare_record.app (actions [\"delete\"])" <<<"$isu_ref" \
+   && grep -qE -- '^cf_account_migrate_gate: phase=redirects-dns verdict=REFUSE ' <<<"$isu_ref"; then
+  pass "U1d: a REFUSE beside an admitted in-state update prints its REFUSE lines and verdict, no in-state-update line"
+else fail "U1d: a REFUSE printed an in-state-update line (or lost its REFUSE lines)" "$isu_ref_rc" "$isu_ref"; fi
+# shellcheck disable=SC2016 # sed expression matches literal gate text
+sed 's#^    printf .%s. "\$violations"$#&\n    [[ -z "$admitted" ]] || printf "%s\\n" "$admitted"#' "$GATE" > "$TMP/isu-ref-mut.sh"
+isu_ref_mut="$(isu_ref_run "$TMP/isu-ref-mut.sh")"
+if cmp -s "$TMP/isu-ref-mut.sh" "$GATE"; then fail "M-isu-refuse: the mutation did not land" 1 ""
+elif grep -qxF -- "$ISU" <<<"$isu_ref_mut"; then pass "M-isu-refuse: printing admitted updates on a REFUSE is caught by U1d (RED)"
+else fail "M-isu-refuse: the REFUSE-branch print was not seen" 1 "$isu_ref_mut"; fi
 # B1-B3: each sub-condition of the before-id check owns one shape of a wrong `before` (an in-state
 # address, so only this arm can refuse it).
 mutate_plan "$TMP/u1.json" "$TMP/b1.json" '(.resource_changes[] | select(.address=="'"$SCS"'") | .change.before) = {zone_id:"'"$NZ"'",account_id:"'"$OA"'"}'
@@ -208,11 +232,13 @@ set_after "$TMP/r3i.json" "$LGL" '{account_id:null}' '{account_id:true}'
 check "row 3i: an in-set account create whose account_id is known only after apply is refused" 1 "known only after apply" redirects-dns "$TMP/r3i.json"
 # A non-Cloudflare allow-set address must not republish an OLD id (the job's check_ids and the
 # variables.tf validations stop it upstream; this is the gate's own refusal).
-set_after "$TMP/r3j.json" doppler_secret.cf_zone_id_prd "{name:\"CF_ZONE_ID\",value:\"$OZ\"}"
+# DOPP <value-jq>: the zone-id secret's planned `after` with every fixed attribute right but the value.
+DOPP() { printf '{project:"soleur",config:"prd",name:"CF_ZONE_ID",value:%s}' "$1"; }
+set_after "$TMP/r3j.json" doppler_secret.cf_zone_id_prd "$(DOPP "\"$OZ\"")"
 check "row 3j: doppler_secret.cf_zone_id_prd planned with the OLD zone id is refused" 1 "republishes an OLD zone/account id" redirects-dns "$TMP/r3j.json"
 # U6: an OLD id inside a longer string (a URL) is still a republish; U7: a typo'd class in the
 # spec refuses the phase rather than grading that address as nothing.
-set_after "$TMP/u6.json" doppler_secret.cf_zone_id_prd "{name:\"CF_ZONE_ID\",value:\"https://api.cloudflare.com/client/v4/zones/$OZ/x\"}"
+set_after "$TMP/u6.json" doppler_secret.cf_zone_id_prd "$(DOPP "\"https://api.cloudflare.com/client/v4/zones/$OZ/x\"")"
 check "U6: a non-Cloudflare value carrying the OLD zone id inside a URL is refused" 1 "republishes an OLD zone/account id" redirects-dns "$TMP/u6.json"
 u7_rc=0
 u7_out="$(cf_account_migrate_phase_spec() { printf '{"%s":"creat"}' "$SCS"; }; cf_account_migrate_gate redirects-dns "$VALID" 2>&1)" || u7_rc=$?
@@ -233,20 +259,39 @@ dup_mut_out="$(dup_run "$TMP/dup-mut.sh")"; dup_mut_rc=$?
 if cmp -s "$TMP/dup-mut.sh" "$TMP/dup.sh"; then fail "M-dup: the mutation did not land" 1 ""
 elif [[ "$dup_mut_rc" -eq 0 ]]; then pass "M-dup: without the key-count check the duplicated spec passes (the check is load-bearing)"
 else fail "M-dup: removing the key-count check did not admit the duplicate" "$dup_mut_rc" "$dup_mut_out"; fi
+# U9: a nested value in the spec refuses the phase (the spec must be flat). Layered: with the nested
+# check neutered, the key-count check refuses it (a nested key has no depth-1 leaf event).
+sed 's|^  "cloudflare_ruleset.seo_config_settings": "create",$|  "cloudflare_ruleset.seo_config_settings": {"class": "create"},|' "$GATE" > "$TMP/nest.sh"
+nest_out="$(dup_run "$TMP/nest.sh")"; nest_rc=$?
+if cmp -s "$TMP/nest.sh" "$GATE"; then fail "U9: the nested-value fixture did not land" 1 ""
+elif [[ "$nest_rc" -eq 1 ]] && grep -qF -- "declares a nested value (2 stream event(s) below the top level); the spec must be flat" <<<"$nest_out"; then
+  pass "U9: a spec with a nested value refuses the phase"
+else fail "U9: a nested spec value was not refused" "$nest_rc" "$nest_out"; fi
+# shellcheck disable=SC2016 # sed expression matches literal gate text
+sed 's#\[\[ "\$n_deep" -eq 0 \]\] ||#true ||#' "$TMP/nest.sh" > "$TMP/nest-mut.sh"
+nest_mut_out="$(dup_run "$TMP/nest-mut.sh")"; nest_mut_rc=$?
+if cmp -s "$TMP/nest-mut.sh" "$TMP/nest.sh"; then fail "M-nest: the mutation did not land" 1 ""
+elif [[ "$nest_mut_rc" -eq 1 ]] && ! grep -qF -- 'nested value' <<<"$nest_mut_out" && grep -qF -- 'declares an address more than once' <<<"$nest_mut_out"; then
+  pass "M-nest: with the flat check neutered the nested spec hands off to the key-count refusal (layered)"
+else fail "M-nest: neutering the flat check did not hand off to the key-count refusal" "$nest_mut_rc" "$nest_mut_out"; fi
 
-set_after "$TMP/r3j2.json" doppler_secret.cf_zone_id_prd "{name:\"CF_ZONE_ID\",value:\"$NZ\"}"
+set_after "$TMP/r3j2.json" doppler_secret.cf_zone_id_prd "$(DOPP "\"$NZ\"")"
 check "row 3j2: doppler_secret.cf_zone_id_prd planned with the NEW zone id passes" 0 "verdict=PASS" redirects-dns "$TMP/r3j2.json"
-# Z1-Z5: the runtime zone-id secret must publish exactly the NEW zone id, on a create or an update.
+# Z1-Z6: the runtime zone-id secret must plan exactly its table values (the NEW zone id and its
+# fixed project, config and name), on a create or an update.
 ZSEC="doppler_secret.cf_zone_id_prd"; THIRD="0123456789abcdef0123456789abcdef"
-set_after "$TMP/z1.json" "$ZSEC" "{name:\"CF_ZONE_ID\",value:\"$THIRD\"}"
-check "Z1: $ZSEC created with a third 32-hex id (not old, not new) is refused" 1 "$ZSEC must publish the NEW zone id" redirects-dns "$TMP/z1.json"
-set_after "$TMP/z2.json" "$ZSEC" '{name:"CF_ZONE_ID"}'
-check "Z2: $ZSEC created with no value is refused" 1 "$ZSEC must publish the NEW zone id" redirects-dns "$TMP/z2.json"
-set_after "$TMP/z3.json" "$ZSEC" "{name:\"CF_ZONE_ID\",value:\"$NZ\"}" '{value:true}'
-check "Z3: $ZSEC whose value is known only after apply is refused" 1 "value known only after apply" redirects-dns "$TMP/z3.json"
+ZEXP="$ZSEC must plan its expected value"
+set_after "$TMP/z1.json" "$ZSEC" "$(DOPP "\"$THIRD\"")"
+check "Z1: $ZSEC created with a third 32-hex id (not old, not new) is refused" 1 "$ZEXP (value differs;" redirects-dns "$TMP/z1.json"
+set_after "$TMP/z2.json" "$ZSEC" '{project:"soleur",config:"prd",name:"CF_ZONE_ID"}'
+check "Z2: $ZSEC created with no value is refused" 1 "$ZEXP (value differs;" redirects-dns "$TMP/z2.json"
+set_after "$TMP/z3.json" "$ZSEC" "$(DOPP "\"$NZ\"")" '{value:true}'
+check "Z3: $ZSEC whose value is known only after apply is refused" 1 "$ZEXP (value known only after apply;" redirects-dns "$TMP/z3.json"
 printf '{"values":{"root_module":{"resources":[{"address":"%s","values":{"id":"soleur.prd.CF_ZONE_ID","value":"%s"}}]}}}' "$ZSEC" "$NZ" > "$TMP/z-state.json"
 mutate_plan "$TMP/z1.json" "$TMP/z4.json" '(.resource_changes[] | select(.address=="'"$ZSEC"'") | .change) |= (.actions=["update"] | .before={name:"CF_ZONE_ID",value:"'"$NZ"'"})'
-check "Z4: an in-state update of $ZSEC to a third id is refused" 1 "$ZSEC must publish the NEW zone id" redirects-dns "$TMP/z4.json" "$TMP/z-state.json"
+check "Z4: an in-state update of $ZSEC to a third id is refused" 1 "$ZEXP (value differs;" redirects-dns "$TMP/z4.json" "$TMP/z-state.json"
+set_after "$TMP/z6.json" "$ZSEC" "{project:\"soleur\",config:\"dev\",name:\"CF_ZONE_ID\",value:\"$NZ\"}"
+check "Z6: $ZSEC planned into another Doppler config (dev) with the NEW id is refused" 1 "$ZEXP (config differs;" redirects-dns "$TMP/z6.json"
 mutate_plan "$TMP/z4.json" "$TMP/z5.json" '(.resource_changes[] | select(.address=="'"$ZSEC"'") | .change.after.value) = "'"$NZ"'"'
 check "Z5: an in-state update of $ZSEC to the NEW zone id passes" 0 "verdict=PASS" redirects-dns "$TMP/z5.json" "$TMP/z-state.json"
 
@@ -297,11 +342,11 @@ check "degraded: an unparseable plan is refused" 1 "an unreadable plan is not ev
 # ── zone-rest ──────────────────────────────────────────────────────────────────────────────
 DNS_EDIT_ID="soleur.prd.CF_API_TOKEN_DNS_EDIT"
 zr_plan() { # <out> <replace-reason> <before-id>
-  jq -nc --arg nz "$NZ" --arg reason "$2" --arg bid "$3" '{format_version:"1.2",resource_changes:[
+  jq -nc --arg nz "$NZ" --arg na "$NA" --arg reason "$2" --arg bid "$3" '{format_version:"1.2",resource_changes:[
     {address:"cloudflare_zone_settings_override.soleur_ai",mode:"managed",type:"cloudflare_zone_settings_override",change:{actions:["create"],before:null,after:{zone_id:$nz}}},
     {address:"cloudflare_bot_management.soleur_ai",mode:"managed",type:"cloudflare_bot_management",change:{actions:["create"],before:null,after:{zone_id:$nz}}},
     {address:"github_actions_secret.cloudflare_api_token_pages",mode:"managed",type:"github_actions_secret",change:{actions:["update"],before:{},after:{}}},
-    {address:"github_actions_secret.cloudflare_account_id_pages",mode:"managed",type:"github_actions_secret",change:{actions:["update"],before:{},after:{}}},
+    {address:"github_actions_secret.cloudflare_account_id_pages",mode:"managed",type:"github_actions_secret",change:{actions:["update"],before:{},after:{repository:"soleur",secret_name:"CLOUDFLARE_ACCOUNT_ID_PAGES",plaintext_value:$na}}},
     {address:"doppler_secret.cf_api_token_dns_edit",mode:"managed",type:"doppler_secret",action_reason:$reason,change:{actions:["delete","create"],before:{id:$bid},after:{}}}
   ]}' > "$1"
 }
@@ -336,6 +381,43 @@ jq -c '(.resource_changes[] | select(.address=="doppler_secret.cf_api_token_dns_
 check "zone-rest: the declared replace planned create-before-destroy passes" 0 "verdict=PASS" zone-rest "$TMP/zrcbd.json" "$TMP/zr-state.json"
 jq -c '(.resource_changes[] | select(.address=="github_actions_secret.cloudflare_account_id_pages") | .change.after) = {secret_name:"CLOUDFLARE_ACCOUNT_ID_PAGES",plaintext_value:"'"$OA"'"}' "$TMP/zr.json" > "$TMP/zrold.json"
 check "zone-rest: a github secret republishing the OLD account id is refused" 1 "github_actions_secret.cloudflare_account_id_pages republishes an OLD" zone-rest "$TMP/zrold.json" "$TMP/zr-state.json"
+# The token-valued Pages secret is outside the expected-values table, so the old-id check alone sees it.
+jq -c '(.resource_changes[] | select(.address=="github_actions_secret.cloudflare_api_token_pages") | .change.after) = {plaintext_value:"x-'"$OA"'"}' "$TMP/zr.json" > "$TMP/zrold-tok.json"
+check "zone-rest: the token-valued Pages secret carrying the OLD account id is refused" 1 "github_actions_secret.cloudflare_api_token_pages republishes an OLD" zone-rest "$TMP/zrold-tok.json" "$TMP/zr-state.json"
+# P1-P3: the Pages account-id secret must plan exactly its table values (the NEW account id).
+GAP="github_actions_secret.cloudflare_account_id_pages"; GEXP="$GAP must plan its expected value"
+jq -c '(.resource_changes[] | select(.address=="'"$GAP"'") | .change.after.plaintext_value) = "0123456789abcdef0123456789abcdef"' "$TMP/zr.json" > "$TMP/g1.json"
+check "P1: $GAP planned with a third 32-hex account id is refused" 1 "$GEXP (plaintext_value differs;" zone-rest "$TMP/g1.json" "$TMP/zr-state.json"
+jq -c '(.resource_changes[] | select(.address=="'"$GAP"'") | .change) |= (.after = {repository:"soleur",secret_name:"CLOUDFLARE_ACCOUNT_ID_PAGES"} | .after_unknown = {plaintext_value:true})' "$TMP/zr.json" > "$TMP/g2.json"
+check "P2: $GAP whose plaintext_value is known only after apply is refused" 1 "$GEXP (plaintext_value known only after apply;" zone-rest "$TMP/g2.json" "$TMP/zr-state.json"
+jq -c '(.resource_changes[] | select(.address=="'"$GAP"'") | .change) |= (.actions = ["no-op"] | .after.plaintext_value = "0123456789abcdef0123456789abcdef")' "$TMP/zr.json" > "$TMP/g3.json"
+check "P3: $GAP planned as a no-op on a third account id is still graded and refused" 1 "$GEXP (plaintext_value differs; actions [\"no-op\"])" zone-rest "$TMP/g3.json" "$TMP/zr-state.json"
+
+# EXPECTED VALUES closed set: every non-Cloudflare spec member is a table member or one of the
+# token-valued members (a literal here, independent of the gate), and every table member is in a spec.
+TOKEN_VALUED=" doppler_secret.cf_api_token_dns_edit github_actions_secret.cloudflare_api_token_pages "
+noncf_unclassified() { # <gate-file>: "unclassified <addr>" / "orphan <addr>" lines; empty when closed
+  # shellcheck disable=SC2016 # expanded by the child bash
+  bash -c 'source "$1"; source "$2"; tok="$3"
+    want="$(_cfam_expected_values)" || { echo "table-unreadable"; exit 0; }
+    all="$(while IFS= read -r ph; do cf_account_migrate_phase_spec "$ph" | jq -r "keys[]"; done < <(cf_account_migrate_phases) | sort -u)"
+    while IFS= read -r a; do
+      [[ "$a" == cloudflare_* ]] && continue
+      jq -e --arg a "$a" "has(\$a)" <<<"$want" >/dev/null && continue
+      [[ "$tok" == *" $a "* ]] && continue
+      printf "unclassified %s\n" "$a"
+    done <<<"$all"
+    while IFS= read -r a; do grep -qxF -- "$a" <<<"$all" || printf "orphan %s\n" "$a"; done < <(jq -r "keys[]" <<<"$want")' _ "$PREAMBLE" "$1" "$TOKEN_VALUED"
+}
+ncu="$(noncf_unclassified "$GATE")"
+n_want="$(bash -c 'source "$1"; source "$2"; _cfam_expected_values | jq length' _ "$PREAMBLE" "$GATE")"
+if [[ -z "$ncu" && "$n_want" == 2 ]]; then pass "expected values: the table holds 2 members, each in a spec; every non-Cloudflare spec member is a table member or token-valued"
+else fail "expected values: the closed set is broken (table size ${n_want})" 1 "$ncu"; fi
+sed 's|^  "github_actions_secret.cloudflare_api_token_pages": "mutable",$|&\n  "doppler_secret.some_new_id": "mutable",|' "$GATE" > "$TMP/ncu-mut.sh"
+ncu_mut="$(noncf_unclassified "$TMP/ncu-mut.sh")"
+if cmp -s "$TMP/ncu-mut.sh" "$GATE"; then fail "M-ncu: the mutation did not land" 1 ""
+elif [[ "$ncu_mut" == "unclassified doppler_secret.some_new_id" ]]; then pass "M-ncu: a new non-Cloudflare spec member outside the table and the token list is caught (RED)"
+else fail "M-ncu: a new unclassified non-Cloudflare member was not seen" 1 "$ncu_mut"; fi
 
 # ── -target / -replace generation from the single list ─────────────────────────────────────
 tg="$(cf_account_migrate_targets redirects-dns)"
@@ -401,17 +483,25 @@ gate_mutate_and_check "M-id-unknown: dropping the after_unknown clause admits ro
 # The zone-id secret check also refuses row 3j, so on 3j this arm is layered; on the github secret
 # (zone-rest) it is the sole guard.
 # shellcheck disable=SC2016 # sed anchors match literal gate text
-gate_mutate_layered "M-noncf-old: the old-id check owns row 3j; neutered it hands off to the zone-id secret check" \
-  "$(neuter '--arg oz "\$CFAM_OLD_ZONE_ID"')" "republishes an OLD" "must publish the NEW zone id" cf_account_migrate_gate redirects-dns "$TMP/r3j.json"
+gate_mutate_layered "M-noncf-old: the old-id check owns row 3j; neutered it hands off to the expected-values check" \
+  "$(neuter '--arg oz "\$CFAM_OLD_ZONE_ID"')" "republishes an OLD" "must plan its expected value" cf_account_migrate_gate redirects-dns "$TMP/r3j.json"
 # shellcheck disable=SC2016 # sed anchors match literal gate text
-gate_mutate_and_check "M-noncf-old-gh: neutering the non-Cloudflare old-id check admits a github secret carrying the OLD account" \
-  "$(neuter '--arg oz "\$CFAM_OLD_ZONE_ID"')" cf_account_migrate_gate zone-rest "$TMP/zrold.json" "$TMP/zr-state.json"
+gate_mutate_and_check "M-noncf-old-gh: neutering the non-Cloudflare old-id check admits the token-valued github secret carrying the OLD account" \
+  "$(neuter '--arg oz "\$CFAM_OLD_ZONE_ID"')" cf_account_migrate_gate zone-rest "$TMP/zrold-tok.json" "$TMP/zr-state.json"
 # shellcheck disable=SC2016 # sed anchors match literal gate text
-gate_mutate_and_check "M-zsec: neutering the zone-id secret check admits Z1 (a third id)" \
-  "$(neuter '--arg zid "\$CFAM_NEW_ZONE_ID"')" cf_account_migrate_gate redirects-dns "$TMP/z1.json"
+gate_mutate_and_check "M-zsec: neutering the expected-values check admits Z1 (a third id)" \
+  "$(neuter '--argjson want "\$want"')" cf_account_migrate_gate redirects-dns "$TMP/z1.json"
 # shellcheck disable=SC2016 # sed anchors match literal gate text
-gate_mutate_and_check "M-zsec-update: neutering the zone-id secret check admits Z4 (an in-state update to a third id)" \
-  "$(neuter '--arg zid "\$CFAM_NEW_ZONE_ID"')" cf_account_migrate_gate redirects-dns "$TMP/z4.json" "$TMP/z-state.json"
+gate_mutate_and_check "M-zsec-update: neutering the expected-values check admits Z4 (an in-state update to a third id)" \
+  "$(neuter '--argjson want "\$want"')" cf_account_migrate_gate redirects-dns "$TMP/z4.json" "$TMP/z-state.json"
+# One mutant per table member: deleting its `+` line admits that member's wrong value.
+gate_mutate_and_check "M-want-doppler: dropping the $ZSEC table entry admits Z1" \
+  '/^    + {"doppler_secret.cf_zone_id_prd": /d' cf_account_migrate_gate redirects-dns "$TMP/z1.json"
+gate_mutate_and_check "M-want-pages: dropping the $GAP table entry admits P1" \
+  '/^    + {"github_actions_secret.cloudflare_account_id_pages": /d' cf_account_migrate_gate zone-rest "$TMP/g1.json" "$TMP/zr-state.json"
+# shellcheck disable=SC2016 # sed expression matches literal gate text
+gate_mutate_and_check "M-want-noop: grading creates and updates only admits P3 (a no-op on a third account)" \
+  's/^    | select(\.change\.after != null) | (\.change\.after_unknown/    | select(.change.after != null and .change.actions != ["no-op"]) | (.change.after_unknown/' cf_account_migrate_gate zone-rest "$TMP/g3.json" "$TMP/zr-state.json"
 # shellcheck disable=SC2016 # sed expressions match literal gate text
 gate_mutate_and_check "M-replace-class (G2): neutering the replace clause admits a bare delete of the replace target" \
   's|(\$cls == "replace" and .change.actions != \["delete","create"\] and .change.actions != \["create","delete"\])|($cls == "replace" and false)|' \
@@ -470,7 +560,7 @@ n_bad=""
 for a in '^  v="\$(jq -r --argjson spec "\$spec" .\.resource_changes\[\] | select((\.mode' '--arg nz "\$CFAM_NEW_ZONE_ID"' \
   '--arg oz "\$CFAM_OLD_ZONE_ID"' '^  v="\$(jq -r .\.resource_changes\[\] | select(\.change\.importing != null)' \
   '--argjson lit "\$literals"' 'as \$have$' '^    v="\$(jq .*select(\$spec\[\.address\] == "replace")$' '--slurpfile st' \
-  '--slurpfile pst' '--arg zid "\$CFAM_NEW_ZONE_ID"'; do
+  '--slurpfile pst' '--argjson want "\$want"'; do
   sed "$(neuter "$a")" "$GATE" > "$TMP/neuter.sh"
   [[ "$(diff "$GATE" "$TMP/neuter.sh" | grep -c '^>')" -eq 1 ]] || n_bad+=" [$a]"
 done
@@ -509,18 +599,39 @@ own_copies() {
   SRC_JOB_LIB='  local lib="$GITHUB_WORKSPACE/tests/scripts/lib"'
   SRC_JOB="  source \"\$lib/cf-account-migrate-gate.sh\" || { printf '%s: cannot source the phase gate\\n' \"\$P\" >&2; exit 2; }"
   SRC_FORGET='source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../../../tests/scripts/lib/cf-account-migrate-gate.sh" \'
+  SRC_FORGET_NEXT="  || { printf 'cf-state-migrate verdict=abort reason=gate-library-unusable\\n'; exit 1; }"
   SRC_PRED_LIB='readonly CFAM_GATE_LIB="${CFAM_SELF_DIR}/../../../../tests/scripts/lib/cf-account-migrate-gate.sh"'
   SRC_PRED='  { declare -F cf_account_migrate_phase_spec >/dev/null || source "$CFAM_GATE_LIB"; } || bad="unloadable"'
 }
+# next_line_is <file> <line> <next>: <line> is a whole line and the line right after it is exactly <next>
+# (a backslash continuation joins them, so the pair is the statement).
+next_line_is() { A="$2" B="$3" awk 'p && $0 == ENVIRON["B"] {f = 1} {p = ($0 == ENVIRON["A"])} END {exit !f}' "$1"; }
 sources_lib() {
   { grep -qxF -- "$SRC_JOB_LIB" "$1" && grep -qxF -- "$SRC_JOB" "$1"; } && return 0
-  grep -qxF -- "$SRC_FORGET" "$1" && return 0
+  next_line_is "$1" "$SRC_FORGET" "$SRC_FORGET_NEXT" && return 0
   grep -qxF -- "$SRC_PRED_LIB" "$1" && grep -qxF -- "$SRC_PRED" "$1"
 }
+# The library's function names (column-0 `name() ` definitions); a consumer must define none of them.
+LIB_FNS="$(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)() .*/\1/p' "$GATE")"
+defines_lib_fn() { # <file>: each line of <file> that defines a library function name, in any bash form
+  local fn
+  while IFS= read -r fn; do
+    grep -nE -- "^[[:space:]]*(function[[:space:]]+${fn}([[:space:]]*\(\))?|${fn}[[:space:]]*\(\))" "$1"
+  done <<<"$LIB_FNS"
+}
+if [[ "$(grep -c . <<<"$LIB_FNS")" -ge 11 ]] && grep -qxF -- cf_account_migrate_phase_spec <<<"$LIB_FNS" && grep -qxF -- cfam_r2_aws <<<"$LIB_FNS"; then
+  pass "one source: the library's function-name list is derived ($(grep -c . <<<"$LIB_FNS") names, the phase spec and cfam_r2_aws among them)"
+else fail "one source: the library's function names were not derived" 1 "$LIB_FNS"; fi
 for c in cf-account-migrate-job.sh cf-account-state-migrate.sh cf-account-migration-complete.sh; do
-  if sources_lib "$CONSUMER_DIR/$c" && [[ -z "$(own_copies "$CONSUMER_DIR/$c")" ]]; then
-    pass "one source: $c sources this library, re-types none of its ids, bucket, prefix, endpoint or serial reader, and makes every R2 call through cfam_r2_aws"
-  else fail "one source: $c keeps its own copy (or does not source the library)" 1 "$(own_copies "$CONSUMER_DIR/$c")"; fi
+  if sources_lib "$CONSUMER_DIR/$c" && [[ -z "$(own_copies "$CONSUMER_DIR/$c")" && -z "$(defines_lib_fn "$CONSUMER_DIR/$c")" ]]; then
+    pass "one source: $c sources this library, re-types none of its ids, bucket, prefix, endpoint or serial reader, defines none of its functions, and makes every R2 call through cfam_r2_aws"
+  else fail "one source: $c keeps its own copy (or does not source the library)" 1 "$(own_copies "$CONSUMER_DIR/$c"; defines_lib_fn "$CONSUMER_DIR/$c")"; fi
+done
+# A consumer that redefines a library function (either bash form) is caught.
+for form in 'cf_account_migrate_phase_spec() { printf "{}"; }' 'function cfam_r2_aws { :; }'; do
+  { cat "$CONSUMER_DIR/cf-account-migration-complete.sh"; printf '%s\n' "$form"; } > "$TMP/redef.sh"
+  if [[ -n "$(defines_lib_fn "$TMP/redef.sh")" ]]; then pass "M-redef: a consumer defining [$form] is caught (RED)"
+  else fail "M-redef: a consumer defining [$form] was not seen" 1 ""; fi
 done
 sed "s/^set -uo pipefail\$/&\nreadonly OLD_ZONE_ID=\"$OZ\"/" "$CONSUMER_DIR/cf-account-state-migrate.sh" > "$TMP/own-copy.sh"
 if cmp -s "$TMP/own-copy.sh" "$CONSUMER_DIR/cf-account-state-migrate.sh"; then fail "M-own-copy: the mutation did not land" 1 ""
@@ -545,6 +656,10 @@ src_mut true-or cf-account-migrate-job.sh 's#^  source "\$lib/cf-account-migrate
 src_mut colon cf-account-state-migrate.sh 's#^source "\$(cd #: source "$(cd #'
 # shellcheck disable=SC2016 # sed expressions match literal consumer text
 src_mut echo cf-account-migration-complete.sh 's#|| source "\$CFAM_GATE_LIB"; }#|| echo source "$CFAM_GATE_LIB"; }#'
+# The forget's continuation line is part of its source statement: swallowing the failure or dropping
+# the line (which joins `source …` to the next statement as arguments) is not the reviewed form.
+src_mut cont-swallowed cf-account-state-migrate.sh "s#^  || { printf 'cf-state-migrate verdict=abort reason=gate-library-unusable.n'; exit 1; }\$#  || :#"
+src_mut cont-dropped cf-account-state-migrate.sh "/^  || { printf 'cf-state-migrate verdict=abort reason=gate-library-unusable/d"
 sed 's/^    cfam_r2_aws s3 cp /    aws s3 cp /' "$CONSUMER_DIR/cf-account-migration-complete.sh" > "$TMP/bare-aws.sh"
 if cmp -s "$TMP/bare-aws.sh" "$CONSUMER_DIR/cf-account-migration-complete.sh"; then fail "M-bare-aws: the mutation did not land" 1 ""
 elif [[ -n "$(own_copies "$TMP/bare-aws.sh")" ]]; then pass "M-bare-aws: a predicate copy made with a bare aws call is caught (RED)"
@@ -590,6 +705,6 @@ r2_mut "M-r2-bound: the 60 s bound dropped" 's|^  timeout 60 env |  env |' unbou
 
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 113 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 113)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 132 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 132)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]
