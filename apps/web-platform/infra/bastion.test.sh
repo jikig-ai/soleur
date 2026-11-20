@@ -8,9 +8,11 @@
 #           the baseline is not the nftables conffile; apt sources are preserved; the egress script
 #           never empties the set on a failed lookup and never loads a private answer.
 #   EMITTER the comment-stripped rendered runcmd sends fresh_boot_ready once, after its last check.
-#   EGRESS-WHY both egress_load failure sites call _egress_why exactly once and no journalctl runs
-#           outside it (FAULT-B, #12941; without this a reverted site is green here and in the
-#           rehearsal's static arm, and only a ~5-min boot catches it).
+#   EGRESS-WHY both egress_load failure sites call _egress_why exactly once, at the item's top level
+#           (a dead copy in a function or if does not count), no journalctl runs outside it, and
+#           each of its six reads begins `timeout 10 ` (FAULT-B, #12941, CTO Q29; without this a
+#           reverted site is green here and in the rehearsal's static arm, and only a ~5-min boot
+#           catches it).
 #   SETTLE  (Guard 3) the ADR-326 apt and kernel-settle blocks are cloud-init.yml's bytes.
 #   HOSTKEY (Guard 4) the only host key the render carries is the fixture Terraform key.
 #   BUDGET  (Guard 5) the render is non-empty and at most 32,768 bytes (Hetzner's user_data cap).
@@ -277,10 +279,19 @@ egress_row "22: bastion-egress.sh carries no ALLOW list" RED sh "ALLOW='" "ALLOW
 # substance (the NTP row names systemd-timesync and nothing installs it), not on an anchor miss.
 egress_row "23: systemd-timesyncd dropped from apt_install (the NTP row's user is then the image's to ship)" RED tpl 'curl linux-image-generic nftables systemd-timesyncd;' 'curl linux-image-generic nftables;' "names user systemd-timesync, whose package systemd-timesyncd is not in the apt_install list"
 egress_row "23: a skuid row names a user no package or image contract provides" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output meta skuid chrony ip daddr 192.0.2.9 udp dport 123 accept comment "soleur-egress: cloud-init"')" "names user chrony, which is not in IMAGE_ASSUMED_USERS"
+# 23c-e: nft takes `skuid` without `meta`, and `skgid` resolves a group the same way; each spelling
+# refuses the whole ruleset on a host without the name, so each is traced (FAULT-A's class).
+egress_row "23c: a bare skuid (no meta) names a user no package or image contract provides" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output skuid chrony ip daddr 192.0.2.9 udp dport 123 accept comment "soleur-egress: cloud-init"')" "names user chrony, which is not in IMAGE_ASSUMED_USERS"
+egress_row "23d: a meta skgid row names a group no package or image contract provides" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output meta skgid chrony ip daddr 192.0.2.9 udp dport 123 accept comment "soleur-egress: cloud-init"')" "names group chrony, which is not in IMAGE_ASSUMED_GROUPS"
+egress_row "23e: a bare skgid row names a group no package or image contract provides" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output skgid chrony ip daddr 192.0.2.9 udp dport 123 accept comment "soleur-egress: cloud-init"')" "names group chrony, which is not in IMAGE_ASSUMED_GROUPS"
+# 23f: an apt_install package is a consumer only when it owns one (curl sends nothing by itself).
+egress_row "23f: a row cites the curl package as its consumer" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output ip daddr 192.0.2.9 tcp dport 443 accept comment "soleur-egress: curl"')" "cites 'curl', which the render does not install"
+# 23g: an apt-get install line in a shell comment installs nothing, so it cannot vouch for a user.
+egress_row "23g: the only apt_install line is commented out" RED tpl '    n=0; until timeout 300 apt-get install' '    # n=0; until timeout 300 apt-get install' "no single bounded apt_install line"
 egress_row "H2: a cited row with reordered match fields and extra spaces" PASS tpl "$NTP_ROW" 'add rule inet soleur_bastion output   meta skuid systemd-timesync   udp   dport 123    accept   comment "soleur-egress: systemd-timesyncd"'
 h1="$(passes=0; fails=0; for r in "${EG_RED[@]}"; do check x RED true "${r%%|*}" "${r#*|}" >/dev/null; done; printf '%s %s' "$passes" "$fails")"
 cases=$((cases + 1))
-if [[ "${#EG_RED[@]}" -eq 34 && "$h1" == "0 34" ]]; then pass "egress H1: all 34 RED rows fail against a lint replaced by true"; else fail "egress H1: rows=${#EG_RED[@]} neutered=$h1"; fi
+if [[ "${#EG_RED[@]}" -eq 39 && "$h1" == "0 39" ]]; then pass "egress H1: all 39 RED rows fail against a lint replaced by true"; else fail "egress H1: rows=${#EG_RED[@]} neutered=$h1"; fi
 # Zero-item floors: a check that examined nothing must fail, never pass vacuously.
 python3 - "$WORK/real.yml" "$WORK/zero.yml" <<'PY' || harness "could not build the zero-rule render"
 import base64, re, sys, yaml
@@ -433,9 +444,29 @@ ew_row "the nftables.service enable site loses its capture" '    systemctl enabl
 ' "0 copies of 'systemctl enable --now nftables.service"
 ew_row "a journal read added outside _egress_why" "$EW_START" "$EW_START    journalctl -b -n 5 --no-pager >/dev/null 2>&1 || :
 " "journalctl outside _egress_why"
+# A dead copy of a site must not satisfy the pin: the live site loses its capture, an exact copy sits
+# where it never runs on the failure path (CTO Q29 review, decoy shapes D03/D04).
+ew_row "the start site loses its capture; an exact copy sits in an unused function" "$EW_START" "    systemctl start bastion-egress.service || exit 1
+    _never() {
+$EW_START    }
+" "0 top-level copies of 'systemctl start bastion-egress.service"
+ew_row "the start site loses its capture; an exact copy sits in an if false branch" "$EW_START" "    systemctl start bastion-egress.service || exit 1
+    if false; then
+$EW_START    fi
+" "0 top-level copies of 'systemctl start bastion-egress.service"
+# CTO Q29: each of _egress_why's six reads is bounded; dropping `timeout 10 ` from any one is RED.
+for _ew in '      timeout 10 journalctl --sync|      journalctl --sync|the journalctl --sync' \
+           'W=$(timeout 10 journalctl -b -u|W=$(journalctl -b -u|the reason read' \
+           '_ew_n=$(timeout 10 systemctl|_ew_n=$(systemctl|the nftables Result read' \
+           '_ew_e=$(timeout 10 systemctl|_ew_e=$(systemctl|the egress Result read' \
+           '_ew_s=$(timeout 10 systemctl|_ew_s=$(systemctl|the ExecMainStatus read' \
+           '_ew_l=$(timeout 10 journalctl|_ew_l=$(journalctl|the unit last-line read'; do
+  IFS='|' read -r _ew_f _ew_t _ew_w <<<"$_ew"
+  ew_row "$_ew_w loses its timeout 10" "$_ew_f" "$_ew_t" "does not begin with \`timeout 10 \`"
+done
 h1="$(passes=0; fails=0; for r in "${EW_RED[@]}"; do check x RED true "$r" >/dev/null; done; printf '%s %s' "$passes" "$fails")"
 cases=$((cases + 1))
-if [[ "${#EW_RED[@]}" -eq 3 && "$h1" == "0 3" ]]; then pass "egress-why H1: all 3 RED rows fail against a lint replaced by true"; else fail "egress-why H1: rows=${#EW_RED[@]} neutered=$h1"; fi
+if [[ "${#EW_RED[@]}" -eq 11 && "$h1" == "0 11" ]]; then pass "egress-why H1: all 11 RED rows fail against a lint replaced by true"; else fail "egress-why H1: rows=${#EW_RED[@]} neutered=$h1"; fi
 
 # ── HOSTKEY (Guard 4) ───────────────────────────────────────────────────────────────────────
 echo "HOSTKEY"
@@ -503,11 +534,11 @@ cases=$((cases + 1))
 if ( wc() { echo 0; }; ! budget_ok "$WORK/real.yml" ); then pass "budget H1: a measurement that returns 0 is RED, never a pass"; else fail "budget H1: a zero measurement passed"; fi
 
 echo
-# 92 unconditional rows, plus row 7's two where an nft checker could prove it discriminates (a leg
+# 105 unconditional rows, plus row 7's two where an nft checker could prove it discriminates (a leg
 # without nft skips them loudly; a CI leg WITH an undiscriminating nft fails row 7 instead).
 # NFT_RAN is re-bound here so the floor block stands alone (guard-vacuity-floor mutates only this block).
 NFT_RAN="${NFT_RAN:-0}"
-MIN_CASES=$((92 + 2 * NFT_RAN))
+MIN_CASES=$((105 + 2 * NFT_RAN))
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf 'bastion: FAIL (only %d assertions ran; floor %d)\n' "$cases" "$MIN_CASES" >&2; exit 1
 fi

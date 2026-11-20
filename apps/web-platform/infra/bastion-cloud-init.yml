@@ -251,8 +251,9 @@ runcmd:
     # units' Result values, the egress script's exit status and its own last output line (60 bytes;
     # _SYSTEMD_UNIT= selects the process's stdout/stderr, never PID 1's start/dependency boilerplate),
     # cut to 180 bytes. `journalctl --sync` first, so the script's stderr is stored before it is read.
-    # Every read is bounded by `timeout 10` and falls back to `unread`, so neither a stalled journald
-    # nor set -e can stop the fatal from being sent. The rehearsal pins this (rows F1 and FA).
+    # Every read is bounded by `timeout 10` and falls back to `unread` (the last-line read tests
+    # journalctl's own status, not the pipeline's), so neither a stalled journald nor set -e can stop
+    # the fatal from being sent. The rehearsal pins this (rows F1 and FA, and its offline hang rows).
     _egress_why() {
       timeout 10 journalctl --sync 2>/dev/null || :
       W=$(timeout 10 journalctl -b -u nftables.service -u bastion-egress.service --no-pager -o cat 2>/dev/null | grep -E '^\[bastion-egress\] FAIL:|: Error: ' | tail -2 | tr '\n' ' ' | head -c 180)
@@ -260,7 +261,7 @@ runcmd:
         _ew_n=$(timeout 10 systemctl show -p Result --value nftables.service 2>/dev/null) || _ew_n=unread
         _ew_e=$(timeout 10 systemctl show -p Result --value bastion-egress.service 2>/dev/null) || _ew_e=unread
         _ew_s=$(timeout 10 systemctl show -p ExecMainStatus --value bastion-egress.service 2>/dev/null) || _ew_s=unread
-        _ew_l=$(timeout 10 journalctl -b _SYSTEMD_UNIT=bastion-egress.service --no-pager -o cat 2>/dev/null | tail -1 | tr -d '\n' | head -c 60) || _ew_l=
+        _ew_l=$(timeout 10 journalctl -b _SYSTEMD_UNIT=bastion-egress.service --no-pager -o cat 2>/dev/null) && _ew_l=$(printf '%s' "$_ew_l" | tail -1 | tr -d '\n' | head -c 60) || _ew_l=unread
         W=$(printf 'why=no_reason_line nft=%s egress=%s st=%s last=%s' "$_ew_n" "$_ew_e" "$_ew_s" "$_ew_l" | head -c 180)
       fi
       printf '%s' "$W" > $D
