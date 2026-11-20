@@ -200,7 +200,8 @@ else
 fi
 # shellcheck disable=SC2016 # the schema sentence is literal text, not this shell's expansion
 if grep -F 'SESSION_STATE="knowledge-base/project/specs/<branch>/session-state.md"' "$SCHEMA" >/dev/null \
-  && grep -F 'Append `run_health_dir:` again after that rewrite' "$SCHEMA" >/dev/null; then
+  && grep -F 'Append `run_health_dir:` again after that rewrite' "$SCHEMA" >/dev/null \
+  && grep -F 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-health-emit.sh" --run-dir "$RUN_DIR" --status failed --seal --session-state "$SESSION_STATE" --import-tally' "$SCHEMA" >/dev/null; then
   pass "schema binds session-state and restores run_health_dir"
 else
   fail "schema binds session-state and restores run_health_dir"
@@ -234,21 +235,25 @@ else
   fail "seal with started does not seal"
 fi
 
-# Case 17: a default PATH still stores pipeline-tally.sh show, not an empty string.
+# Case 17: a default PATH stores the sibling script's own stdout.
+# An empty counter root prints UNKNOWN. A host ledger must not be required.
 # The stub in case 11 is prepended; this case must not see that stub.
+S17root="$TMP/tally-root"
+mkdir -p "$S17root"
 S17="$TMP/run-tally-real"
-PATH=/usr/bin:/bin bash "$SUT" --run-dir "$S17" --status failed --seal --import-tally 2>/dev/null
-if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); t=d.get('tally_show',''); sys.exit(0 if 'tally:' in t else 1)" "$S17/run_health.json" 2>/dev/null; then
+expected="$(PATH=/usr/bin:/bin SOLEUR_SESSION_STATE_ROOT="$S17root" bash "$DIR/pipeline-tally.sh" show 2>/dev/null || true)"
+PATH=/usr/bin:/bin SOLEUR_SESSION_STATE_ROOT="$S17root" bash "$SUT" --run-dir "$S17" --status failed --seal --import-tally 2>/dev/null
+if [[ -n "$expected" ]] && python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get('tally_show','')==sys.argv[2] else 1)" "$S17/run_health.json" "$expected" 2>/dev/null; then
   pass "import-tally finds the sibling script"
 else
-  fail "import-tally finds the sibling script"
+  fail "import-tally finds the sibling script" "expected=$(printf %s "$expected" | head -c 80)"
 fi
 
 # Case 18: a trailing value flag exits 0. A spin is exit 124 from timeout.
 S18err="$TMP/novalue.err"
 timeout 2 bash "$SUT" --run-dir "$TMP/novalue" --status >"$TMP/novalue.out" 2>"$S18err"
 rc=$?
-if [[ "$rc" == "0" ]] && grep -q 'run-health-emit:' "$S18err"; then
+if [[ "$rc" == "0" ]] && grep -q 'run-health-emit: --status requires a value' "$S18err"; then
   pass "missing flag value exits 0"
 else
   fail "missing flag value exits 0" "rc=$rc"
