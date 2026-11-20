@@ -176,7 +176,7 @@
 4	apps/web-platform/infra/arm-heartbeats.sh
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
-65	apps/web-platform/infra/cf-account-migrate-job.test.sh
+88	apps/web-platform/infra/cf-account-migrate-job.test.sh
 13	apps/web-platform/infra/cf-account-migration-complete.test.sh
 11	apps/web-platform/infra/cf-account-state-migrate.test.sh
 21	apps/web-platform/infra/ci-deploy.sh
@@ -614,7 +614,7 @@
 3	tests/scripts/test-cf-account-migrate-gate.sh
 1	tests/scripts/test-cf-account-migration-bootstrap.sh
 1	tests/scripts/test-cf-account-migration-runbook.sh
-28	tests/scripts/test-cf-account-migration-scope.sh
+19	tests/scripts/test-cf-account-migration-scope.sh
 2	tests/scripts/test-git-data-birth-readiness-gate.sh
 1	tests/scripts/test-inngest-host-dark-gate.sh
 20	tests/scripts/test-lint-supabase-deprecated-endpoints.sh
