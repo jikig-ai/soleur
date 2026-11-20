@@ -307,3 +307,5 @@ reason). Then one plain line per hold (`Done:`, `Still waiting:`, `Needs a perso
 hold's own words and a plain reason) and a final machine line `holds: N discharged: M standing: K`. The human lines carry no
 jargon; the evaluator's suite checks them against a jargon denylist (the two machine lines are excluded). Control characters,
 bidi marks and line separators in a hold's words are stripped before they are printed.
+
+**A hold that quotes a `gh workflow run` command passes every `required: true` input of that workflow as `-f`.** Diff the flags against `.on.workflow_dispatch.inputs` before writing the hold, or the command is refused exactly when the hold fires (#12934: a drain quoted without `reason`).

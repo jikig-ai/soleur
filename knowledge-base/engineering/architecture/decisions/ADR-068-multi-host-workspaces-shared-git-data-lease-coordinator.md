@@ -799,6 +799,8 @@ Phase 4b (continuous checkpoint).
 > absent / malformed / future-dated marker is **not satisfied** (the correct fail-closed default
 > today, before GA has happened).
 >
+> *Amendment 2026-11-18 (#12849):* "`GIT_DATA_LUKS_SOAK_DAYS` (default 3, §3.D)" is now a floor of 3 (`SOAK_FLOOR_DAYS` in `lb-weight-gate.sh`), not a default; a configured value may only lengthen it. See the ADR-263 addendum of 2026-11-18.
+>
 > **(3) Warm-standby verification: apply output = attach proof; deploy-status `reason` =
 > web-2-accepted; readyz is the DEFERRED on-host gate.** The volume attach is proven by the
 > terraform **apply output = attach proof** (`hcloud_volume_attachment.workspaces["web-2"]` +
