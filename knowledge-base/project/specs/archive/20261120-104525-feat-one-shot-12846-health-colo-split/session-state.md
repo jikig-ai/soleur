@@ -33,3 +33,15 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; repo-research-analyst, lear
 - PANEL_SHA=f5aeda0d0596b711018ffcbf4b409e6050f38e4b; full panel 10 seats; risk tier none
 - Dedup ledger (defect key -> reporting seats): recipe input contract vs wrapper output (null p90, duplicate null colo, link row) -> codequality, testdesign, pattern, structural; capture trigger / tracker -> agentnative, architecture, pattern, codequality; wrapper environment census bypass -> structural (round 0), security (fix round 1); join/preflight refusal reporting -> agentnative, architecture, security, codequality; stale cap/offset/zone-prefix wording -> pattern, codequality, architecture, simplicity; exit-status and per-clause refusal coverage -> testdesign; simplicity dissents D1/D3/D4/D5 -> simplicity (ruled Q9)
 - Fix round 1: seats security, testdesign, codequality, architecture, pattern, simplicity, agentnative over first-parent commits 88793975bf..b1c00aed73; findings fixed in 44c2a4a89e; verification pass on 44c2a4a89e
+
+### Fix round 2 dedup ledger (2026-11-20, range 3f46e7f4c0..44a2810cf9, docs-only)
+
+| Finding | Sev | Seat | Disposition |
+|---|---|---|---|
+| plan-sharp-edges bullet: re-exec wording invites `env -i NAME=value` (values on argv) | P2 | agent-native-reviewer | fixed 0ee0c642b5 |
+| plan-sharp-edges bullet: scope vs line-307 exhaustive reader census | P3 | agent-native-reviewer | fixed 0ee0c642b5 |
+| plan-sharp-edges bullet: credits all 8 bypasses to the closed env | P3 | verifier | fixed 0ee0c642b5 |
+| learning: "every exported name" (non-identifier entries survive) | P3 | verifier | fixed 0ee0c642b5 |
+| learning + wrapper header: redirection census "closes" file reads (tool operands open) | P3 | verifier | fixed 0ee0c642b5 |
+| learning: residual list omits shebang PATH lookup | P3 | verifier | fixed 0ee0c642b5 |
+| tasks.md: stale plan path; 5.1 #12876 note | P3 | verifier | fixed 0ee0c642b5 |

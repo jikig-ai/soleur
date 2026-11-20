@@ -142,6 +142,7 @@ main() {
       fi
       ts_e="$(utc_epoch "$ts")" || { bad=1; continue; }
       [ "$ts_e" -ge "$earliest_e" ] || { bad=1; continue; }
+      [ "$ts_e" -le "$now_e" ] || { bad=1; continue; }   # a future-dated or mistyped stamp records nothing yet
       captured=1
     done <<<"$lines"
   fi
@@ -161,7 +162,7 @@ main() {
     say "If the capture ran, post the $MARKER: line on #$ISSUE $who, with the read instant as YYYY-MM-DDTHH:MM:SSZ, and this probe closes the tracker."
   fi
   if [ "$bad" -eq 1 ]; then
-    say "A line starting with $MARKER: was found on #$ISSUE but its time is not a real UTC time in the form YYYY-MM-DDTHH:MM:SSZ at or after $EARLIEST_CAPTURE, so it was ignored."
+    say "A line starting with $MARKER: was found on #$ISSUE but its time is not a real UTC time in the form YYYY-MM-DDTHH:MM:SSZ at or after $EARLIEST_CAPTURE and not later than now, so it was ignored."
   fi
   return 5
 }

@@ -181,7 +181,7 @@ IFRAN="If the capture ran, post the S1-HEALTHCOLO-CAPTURED: line on #12846 $WHO"
 PASSMSG="PASS: the per-colo H capture is recorded on #12846"
 BADNOTE="its time is not a real UTC time"
 GOODLINE="S1-HEALTHCOLO-CAPTURED: 2026-11-21T09:15:02Z kept 2026-11-12T12-analytics-health-colo-216h.json on branch evidence-x CANARY-7c1"
-NOW="2026-11-21T08:00:00Z"
+NOW="2026-11-21T10:00:00Z"   # after GOODLINE's stamp: a marker time later than the clock is refused
 
 # Each row_<id> sets ROW_NAME, ROW_WANT, ROW_NEEDLE, ROW_ABSENT and runs the probe once.
 declare -A ROWS_SEEN=()
@@ -222,6 +222,10 @@ row_tooold()      { reset_fixture; mk_comments "owner1|S1-HEALTHCOLO-CAPTURED: 2
                     row "a marker time before 2026-11-20T00:00:00Z (an example or a forgery) => 5, named" 5 "$BADNOTE" "PASS"; }
 row_earliest()    { reset_fixture; mk_comments "owner1|S1-HEALTHCOLO-CAPTURED: 2026-11-20T00:00:00Z kept x"; run_case "$NOW"
                     row "a marker time exactly 2026-11-20T00:00:00Z counts => 0" 0 "$PASSMSG"; }
+row_future()      { reset_fixture; mk_comments "owner1|S1-HEALTHCOLO-CAPTURED: 2026-11-21T10:00:01Z kept x"; run_case "$NOW"
+                    row "a marker time one second after the clock (future-dated or mistyped) => 5, named" 5 "$BADNOTE" "PASS"; }
+row_atnow()       { reset_fixture; mk_comments "owner1|S1-HEALTHCOLO-CAPTURED: 2026-11-21T10:00:00Z kept x"; run_case "$NOW"
+                    row "a marker time exactly at the clock counts => 0" 0 "$PASSMSG"; }
 row_indented()    { reset_fixture; mk_comments "owner1|  $GOODLINE"; run_case "$NOW"
                     row "an indented marker is not at line start => 5, not named" 5 "$BEFORE" "$BADNOTE"; }
 row_lowercase()   { reset_fixture; mk_comments "owner1|s1-healthcolo-captured: 2026-11-21T09:15:02Z"; run_case "$NOW"
@@ -282,7 +286,7 @@ row_nofunc()      { printf 'return 0\n' > "$PLACE/forced/scripts/lib/trusted-ver
                     row "a lib that defines no trusted_verdict_bodies => 3" 3 "trusted-verdict lib unavailable"; }
 
 ROW_IDS=(trusted latepass secondline baremarker badthengood crlf untrusted fenced htmlcomment badtime hour24 feb30 badshape
-         nosecs glued tooold earliest indented lowercase othermarker before beforewho lastsecond after afterifnot afterifran
+         nosecs glued tooold earliest future atnow indented lowercase othermarker before beforewho lastsecond after afterifnot afterifran
          wellafter realclock commentsfail permfail notoken nogh nojq clockshape clockreal nolibdir nolib forced0 forced1 nofunc)
 if [[ "$CHILD" -eq 0 ]]; then
 for id in "${ROW_IDS[@]}"; do run_row "$id"; done
@@ -336,6 +340,7 @@ mutate CAPTURED-GUARD 'if [ "$captured" -eq 1 ]; then' 'if [ "$captured" -eq 0 ]
 mutate RC2-TO-5 '(comment or permission read failed)"; return 3; }' '(comment or permission read failed)"; return 5; }' commentsfail permfail
 mutate TIMEPARSE-DROPPED 'ts_e="$(utc_epoch "$ts")" || { bad=1; continue; }' 'ts_e=$earliest_e' badtime hour24 feb30
 mutate EARLIEST-DROPPED '[ "$ts_e" -ge "$earliest_e" ] || { bad=1; continue; }' ':' tooold
+mutate FUTURE-DROPPED '[ "$ts_e" -le "$now_e" ] || { bad=1; continue; }' ':' future
 mutate DEADLINE-SHIFTED 'DEADLINE="2026-11-25T00:00:00Z"' 'DEADLINE="2026-11-26T00:00:00Z"' lastsecond after
 mutate SENTINEL-ZERO 'CAPTURED=10' 'CAPTURED=0' forced0
 
@@ -391,7 +396,7 @@ echo "Total: $passes passed, $fails failed ($cases cases, $MUTANTS mutants)"
 # falls through these very lines; the parent requires it to exit 1 AND to have printed the sentinel that sits directly above
 # the final failure exit, so a child that died earlier (a floor, an unbound variable) cannot pass for one that reached it.
 if [[ "$CHILD" -eq 1 ]]; then
-  passes=59 fails=1 cases=60 MUTANTS=8
+  passes=62 fails=1 cases=63 MUTANTS=9
   for id in "${ROW_IDS[@]}"; do ROWS_SEEN[$id]=1; done
 else
   child_out="$("$BASH" "${BASH_SOURCE[0]}" --forced-fail-child 2>&1)"
@@ -410,12 +415,12 @@ fi
 # by a floor whose threshold is a plain assignment directly above its `if` (the shape scripts/guard-vacuity-floor.test.sh
 # slices and runs with the assertion helpers neutered), and from above by a ceiling on the same threshold. The accounting
 # check above makes passes + fails equal cases, so one floor on cases covers the assertion count too.
-CASE_FLOOR=60
+CASE_FLOOR=63
 if [[ "$cases" -lt "$CASE_FLOOR" ]]; then
   printf 'anti-vacuity floor: only %s cases counted, expected exactly %s\n' "$cases" "$CASE_FLOOR" >&2
   exit 1
 fi
-MUTANT_FLOOR=8
+MUTANT_FLOOR=9
 if [[ "$MUTANTS" -lt "$MUTANT_FLOOR" ]]; then
   printf 'anti-vacuity floor: only %s mutants ran, expected exactly %s\n' "$MUTANTS" "$MUTANT_FLOOR" >&2
   exit 1
@@ -425,7 +430,7 @@ if [[ "$cases" -gt "$CASE_FLOOR" || "$MUTANTS" -gt "$MUTANT_FLOOR" ]]; then
     "$cases" "$MUTANTS" "$CASE_FLOOR" "$MUTANT_FLOOR" >&2
   exit 1
 fi
-WANT_ROWS=40
+WANT_ROWS=42
 if [[ "${#ROW_IDS[@]}" -ne "$WANT_ROWS" || "${#ROWS_SEEN[@]}" -ne "$WANT_ROWS" ]]; then
   printf 'anti-vacuity: %s rows registered and %s run, expected exactly %s\n' "${#ROW_IDS[@]}" "${#ROWS_SEEN[@]}" "$WANT_ROWS" >&2
   exit 1
