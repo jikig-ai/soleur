@@ -98,6 +98,10 @@ that read what you removed.
     command. Read another ref with `git show <ref>:<path>` and `git grep <ref>`.
 16. **`sed -n "$((n-12)),…p"` ran with an empty `n` twice.** Recovery: grep by a unique string first.
     **Prevention:** one-off. Guard `[[ -n $n ]]` before arithmetic on a grep result.
+17. **On resume the PR was `DIRTY`: main moved after the review pin and four files conflicted** (the pipe-guard
+    test, the expense ledger and both shard TSVs). Recovery: merged main in ship and re-reviewed the merge commit
+    before arming. **Prevention:** covered. Ship merges main, and a commit after the review pin needs a fresh
+    Review-Evidence comment. Regenerate the shard TSVs rather than hand-merging them.
 
 ## Tags
 
