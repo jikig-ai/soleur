@@ -95,7 +95,10 @@ re-dispatch:
 - `zone-id-not-new` / `account-id-not-new`: Doppler still holds an old id; do the Phase 2 flip first.
 - `token-not-new-zone`: a phase token did not answer `200` on the new zone or account (its `preflight=token` line
   names it); swap or re-mint it.
-- `entrypoint-gate-refused`: a live phase entrypoint already holds rules; commit the printed import block first.
+- `entrypoint-gate-refused`: a live phase entrypoint already holds rules; commit the printed import block first, and
+  in the same reviewed PR flip that address's spec class from `create` to `import` in
+  `tests/scripts/lib/cf-account-migrate-gate.sh` (every ruleset and list is `create` class, and the phase gate refuses
+  an import of a create-class address, so the import block alone is refused one step later).
 
 ## Expected reds (do not "fix" these mid-migration)
 
@@ -258,8 +261,10 @@ Expected: `4d5ba6f0`. If it is absent, `Operator-authorizes:`
 
 Not recommended since CTO ruling D2. A hand-made `http_response_headers_transform` entrypoint would hold rules, so
 the migrate job's entrypoint gate refuses the `redirects-dns` create (`reason=entrypoint-gate-refused`) until an import
-block for it lands in a PR. That costs a code PR to save hours at most; `redirects-dns` creates the same four rules
-from `seo-rulesets.tf`. If the operator still wants it, the import block is part of the same go.
+block for it lands in a PR, together with the flip of `cloudflare_ruleset.seo_response_headers` from `create` to
+`import` class in the phase spec (`tests/scripts/lib/cf-account-migrate-gate.sh`; the phase gate refuses an import of a
+create-class address). That costs a code PR to save hours at most; `redirects-dns` creates the same four rules from
+`seo-rulesets.tf`. If the operator still wants it, the import block and the class flip are part of the same go.
 
 ## Phase 1 — merge PR1
 
@@ -305,6 +310,13 @@ the same sitting.
 Each stage verifies its own writes by a separate read. `CF_API_TOKEN_PURGE`, `CF_API_TOKEN_DNS_EDIT` and
 `CF_ACCESS_CLIENT_ID` are not copied here: the first two wait for the 0b swap (step 3), the pair for Phase 3 step 1.
 
+The stages write `soleur/prd_terraform`, but the migrate job reads its values through
+`doppler run --preserve-env` (`cf-account-migrate-job.sh` `TF_ENV`), so a name the `infra-credentials` loader already
+exported from `soleur-infra-privileged` wins over `prd_terraform`. If a rehearsal's preflight still reports an old id
+or token after the flip or a swap (`zone-id-not-new`, `account-id-not-new`, `token-not-new-zone`), check whether
+`soleur-infra-privileged` holds that name (`doppler secrets --only-names --json -p soleur-infra-privileged -c prd | jq -r 'keys[]'`,
+names only) before re-running any stage: re-flipping `prd_terraform` cannot fix it.
+
 ### Step 2: `redirects-dns` rehearsal and apply
 
 Before rehearsing, note the 2026-11-19 zone hygiene: in the new zone, six TXT records created by the move's DNS scan
@@ -334,7 +346,8 @@ Any `cf_account_migrate_gate: … verdict=REFUSE` line (its `REFUSE <address> �
 `cf-account-migrate phase=<phase> verdict=refuse reason=<code>` line or `verdict=abort` stops the phase. Read the
 reason, fix forward in a PR, re-rehearse.
 
-`Operator-authorizes:` the same dispatch with `rehearsal=false`, then the person approves the
+`Operator-authorizes:` the same dispatch with `rehearsal=false` (leave `expected_in_state_updates` empty: only a
+fix-forward re-dispatch sets it, Halt `verify-failed` step 4), then the person approves the
 `web-platform-infra-apply` environment. The real run writes the backup to
 `web-platform/backups/pre-cf-account-migration-<utc>.tfstate` before its single `state rm`. `Agent:` record the key on
 #12931 (it is disaster-recovery evidence, see Halt):
@@ -352,7 +365,7 @@ curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' https://soleur.ai/page
 curl -sSI https://www.soleur.ai/ | grep -iE '^(HTTP|location)'                                        # 301, location: https://soleur.ai/
 curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/ # 301 https://soleur.ai/blog/soleur-vs-anthropic-cowork/
 curl -sSI https://app.soleur.ai/ | grep -i '^x-robots-tag'                                            # x-robots-tag: noindex
-curl -sS -o /dev/null -w '%{http_code}\n' https://app.soleur.ai/health                                # 200
+curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' https://app.soleur.ai/health               # 200 (a 3xx prints its Location: Halt step 1)
 curl -sS -o /dev/null -w '%{http_code}\n' -A 'Mozilla/5.0 (compatible; GPTBot/1.2)' https://soleur.ai/  # 200
 doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer %s\n" "$BETTERSTACK_API_TOKEN_READONLY" \
   | curl --disable --noproxy "*" -sS --max-time 30 --header @- "https://uptime.betterstack.com/api/v2/monitors?per_page=50"' \
@@ -397,7 +410,9 @@ Expected gate line: a `zone_settings_override` create that adopts the parity set
 and one `doppler_secret.cf_api_token_dns_edit` replace (`action_reason=replace_by_request`), so `destroys=1`: the gate
 counts a replace's delete half, and that one is the only delete it lets through.
 
-**Verify.** `Agent:`
+**Verify** (job step, then `Agent:` locally). The `zone-rest` apply runs the app-health, GPTBot and noindex probes after
+it lands and refuses `reason=verify-failed applied=true failing=<list>` when one fails (Halt, `verify-failed`). Then run
+the `x-robots-tag`, `/health` and GPTBot lines of the step 2 Verify block (same expected values), and:
 
 ```bash
 gh api repos/jikig-ai/soleur/actions/secrets/CLOUDFLARE_API_TOKEN_PAGES --jq .updated_at   # later than the apply
@@ -472,7 +487,8 @@ on their `_PREV` keys.
    - a CI SSH bridge round-trip and a `registry.` push canary succeed;
    - `Operator-authorizes:` `gh workflow run web-platform-release.yml --ref main -f bump_type=patch`; the redeploy
      loads the new runtime `CF_ZONE_ID`, `CF_API_TOKEN_PURGE`, `CF_API_TOKEN_DNS_EDIT` and the new certificate;
-     `curl -sS -o /dev/null -w '%{http_code}\n' https://app.soleur.ai/health` returns `200` under `ssl=strict`;
+     `curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' https://app.soleur.ai/health` returns `200` under
+     `ssl=strict`;
    - a share revoke now answers `200` (the 502 expected red clears). Then revoke the old `CF_API_TOKEN_PURGE` with the
      revoke recipe on `prd_terraform` `CF_API_TOKEN_PURGE_PREV`.
 6. **Reopen the routine path** (CTO ruling D5). `Agent:` first, in this order, and post all three on #12931:
@@ -537,37 +553,84 @@ the PR thread, and its comment is the read-back.
 
 ## Halt
 
-**Default: stop at the last verified phase and fix forward** (CTO ruling D4). Do not start the next phase. Read the
-refusal, fix in a PR, re-rehearse, re-dispatch. A `rehearsal=false` `redirects-dns` run counts as having run once its
-forget printed `cf-state-migrate backup=uploaded`, even if the gate then refused (`gate-refused` or
-`entrypoint-gate-refused` say so): from then on the after-the-apply rules below apply (CTO ruling 2026-11-20). A re-dispatch after a committed forget is safe (CTO ruling D10): when
-only R2 and non-Cloudflare entries remain, state-migrate prints `cf-state-migrate verdict=ok removed=0` and takes no
-backup (a backup is taken only when something will be removed); the plan then skips imports already in state and
-covers only the remainder. An apply that fails after the forget says the same in its refusal line: fix forward and
-re-dispatch, never restore from the backup.
+**Default: stop at the last verified phase and fix forward** (CTO ruling D4). Do not start the next phase (the one
+exception is a `gptbot=>403` from Bot Fight Mode, under `verify-failed` below). Read the refusal, fix in a PR,
+re-rehearse, re-dispatch. A re-dispatch after a committed forget is safe (CTO ruling D10): when only R2 and
+non-Cloudflare entries remain, state-migrate prints `cf-state-migrate verdict=ok removed=0` and takes no backup (a
+backup is taken only when something will be removed); the plan then skips imports already in state and covers only
+the remainder. An apply that fails after the forget says the same in its refusal line: fix forward and re-dispatch,
+never restore from the backup.
 
 The off-by-default flags `cf_load_balancing_enabled`, `cf_zone_plan_pro`, `cf_zone_dnssec_enabled` and
 `cf_migration_import_app` are locked to `false` by `variables.tf` validations (CTO ruling D9), and `cf_r2_account_id`
 is pinned to the legacy account. Never fix a red by overriding one: turning a flag on is a reviewed PR that deletes its
 validation (Load Balancing #12983, DNSSEC #12982).
 
-- **Before any `rehearsal=false` `redirects-dns` run has printed `cf-state-migrate backup=uploaded`**, the flip may
-  be undone:
-  `Operator-authorizes:` copy `CF_ZONE_ID_PREV` and `CF_ACCOUNT_ID_PREV` back over `CF_ZONE_ID` and `CF_ACCOUNT_ID`
-  in `prd_terraform` with the stdin pipe form, read each back (`cut -c1-8`), and copy each token `<KEY>_PREV` back the
-  same way. That leaves the root closed, not reopened: the validations reject the old ids, so every plan of the root
-  fails, and state was never touched.
-- **Once a `rehearsal=false` `redirects-dns` run printed `backup=uploaded`** (the forget is committed; every refusal
-  after it carries `forget=committed`, and the log marker is the test when in doubt): no id restore, no restore of state from the
-  backup and no `git revert` of PR1. Each of those would point Terraform at the moved zone, which must never be
-  mutated, or re-open routine applies against state that no longer holds the zone's resources. Fix forward only.
-  **First, for any such refusal or a cancel after `backup=uploaded`** (`gate-refused`, `entrypoint-gate-refused`,
-  `apply-failed`, `state-migrate-failed`, a cancelled run): `Agent:` run the local Verify block before anything else,
-  because a partial apply may already have landed rules. On any failure, follow the `verify-failed` steps below
-  (an `apply-failed` refusal also carries its own best-effort `verify=ok` or `failing=` field).
-- **`reason=verify-failed applied=true`** (the `redirects-dns` apply landed and a post-apply probe failed; the
-  `failing=` list names each item with what came back, `<item>=><code>+<location>`). CTO ruling 2026-11-20:
-  1. If `app-health` is in `failing=` (the product is down for every user), act by its code:
+- **Is the forget committed?** It is a fact of the whole migration, never of one run's log: a re-dispatch after a
+  committed forget prints `removed=0` and no `backup=uploaded`, so this run's log alone never answers it. The forget is
+  committed once ANY `rehearsal=false` `redirects-dns` run printed `cf-state-migrate backup=uploaded`, even if its gate
+  then refused (CTO ruling 2026-11-20). `Agent:` read the cross-run record:
+
+  ```bash
+  gh issue view 12931 --json comments --jq '[.comments[].body | select(test("cf-state-migrate backup=uploaded uri="))] | length'
+  for r in $(gh run list --workflow cf-account-migrate.yml --limit 100 --json databaseId --jq '.[].databaseId'); do
+    gh run view "$r" --log 2>/dev/null | grep -m1 -oE 'cf-state-migrate backup=uploaded uri=[^ ]+' | sed "s/^/run=$r /"
+  done
+  ```
+
+  Committed: the first command prints `1` or more (the backup-uri comment of Phase 2 step 2), or the loop prints a
+  `run=` line, or any `pre-cf-account-migration-*` object exists under `web-platform/backups/` in the state bucket.
+  Not committed: the first command prints `0` and the loop prints no line. Anything else (a `gh` error, no number) is
+  not an answer: stop for an owner decision.
+  The job's refusal field says the same for one run only, and only a `redirects-dns` `rehearsal=false` refusal carries
+  it (a rehearsal, `zone-rest` or `tunnel` refusal carries none: use the record above). `forget=committed`: this run's
+  forget finished ok or uploaded its backup, so the forget is committed. `forget=unknown` (on `state-migrate-failed`
+  only): this run printed no `backup=uploaded`, so this run forgot nothing; read its
+  `cf-state-migrate verdict=abort reason=<code>` line for the cause, and take whether an earlier run committed the
+  forget from the record above.
+- **Before the forget is committed** (the record above says not committed), the flip may be undone. The revert
+  restores `prd_terraform` only: branch configs the `branch-copies-*` stages wrote keep the new values (never write an
+  old id or token back into them; record which ones hold new values on #12931). `Operator-authorizes:`, each with the
+  stdin pipe form:
+  1. for each token key whose swap ran (no `<KEY>_NEXT` exists and `<KEY>` differs from `<KEY>_PREV` by digest),
+     first copy `<KEY>` to `<KEY>_NEXT` and compare the two digests, so the new token is kept for re-entry (the mint
+     files are shredded, and the swap stage needs `_NEXT`);
+  2. copy `CF_ZONE_ID_PREV` and `CF_ACCOUNT_ID_PREV` back over `CF_ZONE_ID` and `CF_ACCOUNT_ID`, and read each back
+     (`cut -c1-8`);
+  3. copy each token `<KEY>_PREV` back over `<KEY>`, and compare the two digests.
+
+  That leaves the root closed, not reopened: the validations reject the old ids, so every plan of the root fails, and
+  state was never touched.
+- **Once the forget is committed**: no id restore, no restore of state from the backup and no `git revert` of PR1.
+  Each of those would point Terraform at the moved zone, which must never be mutated, or re-open routine applies
+  against state that no longer holds the zone's resources. Fix forward only.
+- **A stop after `applying=true`** (`apply-failed`, or a cancelled run whose log shows `mode=apply applying=true`,
+  with or without `applied=true`): rules may have landed in this run. `Agent:` run that phase's local Verify block
+  first; on any failure follow the `verify-failed` steps below (a `redirects-dns` `apply-failed` refusal also carries
+  its own best-effort `verify=ok` or `failing=` field). Then fix the cause forward and re-dispatch.
+- **A stop before `applying=true`** (`gate-refused`, `entrypoint-gate-refused`, `state-migrate-failed`, any other
+  `verdict=refuse` line, or a cancelled run with no `mode=apply applying=true`): this run applied nothing, so there is
+  nothing to verify and no edited value to carry. Fix the refusal's cause (a reviewed PR when it is in code; nothing
+  for a timeout), re-rehearse, re-dispatch. Whether the revert above is still allowed is the committed test, not this
+  refusal.
+- **The apply run was cancelled** (timeout or by hand; the ops email says "did not complete" and the log holds no
+  `verdict=refuse` line). `Agent:` read the conclusion and the markers:
+
+  ```bash
+  gh run view <run-id> --json conclusion --jq .conclusion
+  gh run view <run-id> --log | grep -oE 'cf-account-migrate inflight=none|cf-state-migrate backup=uploaded|mode=apply (applying|applied)=true|verdict=refuse reason=[a-z-]+' | sort -u
+  ```
+
+  Read an absence only when the output holds the job's start line `cf-account-migrate inflight=none` or a `reason=`
+  line; with neither, the log does not show the job ran its checks: stop for an owner decision. Then, in this order:
+  1. `mode=apply applying=true` is present: a stop after `applying=true` (above), so Verify first.
+  2. No `mode=apply applying=true`: a stop before `applying=true` (above). Whether the forget is committed is the
+     committed test, never this log's `backup=uploaded` alone.
+- **`reason=verify-failed applied=true`** (a `redirects-dns` or `zone-rest` apply landed and a post-apply probe
+  failed; the `failing=` list names each item with what came back, `<item>=><code>+<location>`). CTO ruling
+  2026-11-20:
+  1. Act on each failing item by its code, after either phase. If `app-health` is in `failing=` (the product is down
+     for every user):
      - `app-health=>525` or `=>526`: `Operator-authorizes:` (owner only, as `origin-tls-strict-flip.md` §Break-glass)
        one dashboard edit on the NEW zone `951ce525…` only: Rules, Configuration Rules (phase `http_config_settings`),
        the rule with ref `dcb85b75bc3c4f4aa2a8c13a080bf854`, SSL `Strict` to `Full`. Not the zone-wide SSL/TLS
@@ -578,48 +641,117 @@ validation (Load Balancing #12983, DNSSEC #12982).
        target matches, it is an origin redirect: no dashboard edit; stop for an owner decision.
      - `app-health=>000` or any other code: no dashboard edit. `Agent:` re-run the local Verify block and stop for an
        owner decision.
-     `Agent:` re-run the local Verify block after the edit. Never edit the old zone.
+
+     `gptbot=>403` (crawlers blocked): no dashboard edit. After `redirects-dns` with Phase 0's pre-check recorded
+     `fight_mode` `true`, it is Bot Fight Mode, which only `zone-rest` turns off: this is the one next-phase start
+     the Halt allows. `Operator-authorizes:` run Step 3 now (its stages, verify, rehearsal and apply), then re-run the
+     local Verify block. After `zone-rest`, or with `fight_mode` recorded `false`, it is a `zone-rest` value
+     (`cloudflare_bot_management.soleur_ai`, `cloudflare_zone_settings_override.soleur_ai`) or the
+     `cloudflare_ruleset.allowlist_ai_crawlers` rule: fix forward in a PR (steps 3 and 4), never in the dashboard. Any
+     other `gptbot=>` code, and any other item (a redirect pair, `app-noindex`): no dashboard edit; fix forward
+     (steps 3 and 4). `Agent:` re-run the local Verify block after any edit. Never edit the old zone.
   2. After a 525/526 window, redeliver the window's failed GitHub App webhook deliveries per
      `origin-tls-strict-flip.md` §"After any 525/526 window" (GitHub never retries them). The window runs from the
      apply job's start (rules land mid-apply) to the first passing local Verify after the edit. `Agent:` list the
      non-2xx deliveries inside it; `Operator-authorizes:` the redelivery (`POST …/attempts` replays events into the app).
   3. A fix-forward PR under #12931 (the merge freeze allows it; its push-apply red is expected). It carries the
      edited value in code (for the ssl rule, the edits `origin-tls-strict-flip.md` §Rollback lists for a forward PR).
-  4. Rehearse `redirects-dns`. The gate prints one `cf_account_migrate_gate: in-state-update <address>` line for each
-     in-state update it admits, in the run log only: `Agent:`
-     `gh run view <run-id> --log | grep -F 'cf_account_migrate_gate: in-state-update'`. The 525/526 rule lives in
-     `cloudflare_ruleset.seo_config_settings`; that address must NOT appear: an update to it means the PR does not
-     carry the working value and would undo the edit, so stop. A fix to a sibling rule in the same ruleset goes in
-     its own PR after this one, so the check stays readable. Then re-dispatch; the job's verify runs again. The gate
+     The phase to rehearse and re-dispatch is `redirects-dns` when step 1 edited a rule (every address step 1 can edit
+     is in its spec, whichever phase's verify failed), else the phase whose code the PR fixed.
+  4. Rehearse that phase. `Agent:` read the gate's lines from the rehearsal log:
+     `gh run view <run-id> --log | grep -E 'cf_account_migrate_gate: (in-state-update |phase=[a-z-]+ verdict=PASS)'`.
+     Trust an absence only when the output holds exactly one `cf_account_migrate_gate: phase=<phase> verdict=PASS`
+     line (none: the gate did not pass or the log is incomplete; more than one: not one rehearsal; either way stop).
+     The address step 1 edited must NOT be among the `in-state-update` lines: `cloudflare_ruleset.seo_config_settings`
+     for the 525/526 rule, `cloudflare_ruleset.seo_page_redirects` for a removed `seo-rulesets.tf` rule, or
+     `cloudflare_list.legal_redirects` for a removed list item. An update to it means the PR does not carry the
+     working value and would undo the edit, so stop. A fix to a sibling rule in the same ruleset goes in its own PR
+     after this one, so the check stays readable. Then `Operator-authorizes:` the re-dispatch with `rehearsal=false`
+     and `-f expected_in_state_updates='<address> …'`: the `in-state-update` addresses the rehearsal printed,
+     space-separated, empty when it printed none. The apply refuses before `applying=true` when the set its own gate
+     admits differs (a sibling PR merged, or a second dashboard edit made, after the rehearsal), so the set checked
+     here is the set applied. The job's verify runs again.
+     For a create-class address (every ruleset and list of the phase, and `doppler_secret.cf_zone_id_prd`), the gate
      accepts an in-state `["update"]` only for a Cloudflare object whose `before` carries the NEW zone or account id,
-     or for a non-Cloudflare member whose planned value equals its expected new value (the Doppler zone-id secret,
-     the Pages account-id secret). A fix that plans as a replace (a ruleset `phase` or `kind` change, say) is refused:
-     widening the phase spec is a reviewed gate diff in `tests/scripts/lib/cf-account-migrate-gate.sh`.
-- **The apply run was cancelled** (timeout or by hand; the ops email says "did not complete" with no `verdict=refuse`
-  line). Read the run log for the last marker: none of `backup=uploaded` means nothing was forgotten (re-dispatch
-  after the rehearsal); `backup=uploaded` without `applying=true` is the committed-forget case above; `applying=true`
-  (with or without `applied=true`) means rules may have landed: `Agent:` run the local Verify block first and
-  follow the `verify-failed` steps on any failure.
+     or for the Doppler zone-id secret when its planned value equals the new zone id. A `mutable` member (the two
+     `zone-rest` `github_actions_secret` Pages secrets) accepts an update with no such condition. A fix that plans as
+     a replace (a ruleset `phase` or `kind` change, say) is refused: widening the phase spec is a reviewed gate diff in
+     `tests/scripts/lib/cf-account-migrate-gate.sh`.
+- **A `zone-rest` apply failed between the halves of the `doppler_secret.cf_api_token_dns_edit` replace** (a
+  delete-then-create). `Agent:` read the state of it:
+  `gh run view <run-id> --log | grep -oE 'doppler_secret\.cf_api_token_dns_edit: (Destruction|Creation) complete'`
+  prints `Destruction complete` alone, and
+  `doppler secrets --only-names --json -p soleur -c prd | jq -r 'has("CF_API_TOKEN_DNS_EDIT")'` prints `false`
+  (names only). The address is then absent from state and `prd` `CF_API_TOKEN_DNS_EDIT` is gone. A re-dispatch plans
+  `["create"]` for it, which the gate refuses (the address is `replace` class, and its physical-id check needs a
+  `before`). Path: a reviewed PR to `tests/scripts/lib/cf-account-migrate-gate.sh` that admits that one `["create"]`,
+  then re-rehearse and re-dispatch `zone-rest`. Never write the token into `prd` by hand.
 - **A revert copy is not sound** (a `prev-*` or `swap-*` stage says one of `<KEY>` / `<KEY>_PREV` is not the old
   token). Copy neither way. Both an old and a new token verify active, so status alone cannot tell them apart.
-  `Agent:` for each of the two keys, read whether it can read the NEW zone (the old tokens are scoped to the old
-  zone and cannot):
+  `Agent:` read each of the two keys with that key's own read (the one the bootstrap uses; a zone read alone fails for
+  an account-scoped token), once on the NEW resource and once on the OLD:
+
+  | `<KEY>` | NEW read | OLD read |
+  |---|---|---|
+  | `CF_API_TOKEN` | `zones/951ce525552201ec6c696b24251abed7/dns_records?per_page=1` | `zones/5af02a2f394e9ba6e0ea23c381a26b67/dns_records?per_page=1` |
+  | `CF_API_TOKEN_RULESETS` | `zones/951ce525552201ec6c696b24251abed7/rulesets` | `zones/5af02a2f394e9ba6e0ea23c381a26b67/rulesets` |
+  | `CF_API_TOKEN_PAGES` | `accounts/66d4f93f7397f196544e9fe84c3557c2/pages/projects` | `accounts/4d5ba6f096b2686fbdd404167dd4e125/pages/projects` |
+  | `CF_API_TOKEN_ZONE_SETTINGS` | `zones/951ce525552201ec6c696b24251abed7/settings` | `zones/5af02a2f394e9ba6e0ea23c381a26b67/settings` |
+  | `CF_API_TOKEN_BOT_MANAGEMENT` | `zones/951ce525552201ec6c696b24251abed7/bot_management` | `zones/5af02a2f394e9ba6e0ea23c381a26b67/bot_management` |
+  | `CF_API_TOKEN_DNS_EDIT` | `zones/951ce525552201ec6c696b24251abed7/dns_records?per_page=1` | `zones/5af02a2f394e9ba6e0ea23c381a26b67/dns_records?per_page=1` |
+  | `CF_API_TOKEN_PURGE` | `zones/951ce525552201ec6c696b24251abed7` | `zones/5af02a2f394e9ba6e0ea23c381a26b67` |
 
   ```bash
   doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer %s\n" "$<KEY_OR_PREV>" \
-    | curl --disable --noproxy "*" -sS --max-time 30 --header @- https://api.cloudflare.com/client/v4/zones/951ce525552201ec6c696b24251abed7' \
+    | curl --disable --noproxy "*" -sS --max-time 30 --header @- "https://api.cloudflare.com/client/v4/<read>"' \
     | jq -r '.success'
   ```
 
-  The one that prints `false` and verifies active (revoke recipe step 2) is the old token. If both print `true`, or
-  neither verifies active, stop for an owner decision. `Operator-authorizes:` delete the other key only if it is the
-  `_PREV`, then re-run the prev stage, which copies afresh. If `<KEY>` is the bad one, copy `<KEY>_PREV` over it with
-  the stdin pipe form, read it back, and re-run the swap.
-- **Bootstrap markers.** `SOLEUR_CFAM_TOKEN_MALFORMED name=<KEY>_NEXT`: the staged value has a byte outside the token
-  class (often a stored trailing newline); re-stage `<KEY>_NEXT` from the mint file with Phase 0 step 2's strip form.
-  `SOLEUR_CFAM_TOKEN_NOT_ACTIVE`: re-mint (Phase 0). `SOLEUR_CFAM_COPY_MISMATCH`: the stage stopped before any delete;
-  copy `<KEY>_PREV` over `<KEY>` with the stdin pipe form, read it back, and re-run. `SOLEUR_CFAM_DELETE_NOT_CONFIRMED`:
-  re-run the stage, which plans only the delete.
+  Each read prints `true` or `false`; anything else (no output, a `curl` or `jq` error) is a transport failure. A key
+  reads as NEW when its NEW read prints `true` AND its OLD read prints `false`. If exactly one of the two keys reads as
+  NEW, the other is the old token, provided it verifies active (revoke recipe step 2). If both keys read as NEW, or
+  neither does, or any read fails in transport, stop for an owner decision: never pick one.
+  `Operator-authorizes:` if `<KEY>_PREV` is the one that reads as NEW, delete it and re-run the prev stage, which
+  copies `<KEY>` afresh. If `<KEY>` reads as NEW, first read its token id (revoke recipe step 2) and post it on #12931
+  so that stray token can be revoked, then copy `<KEY>_PREV` over it with the stdin pipe form, read it back, and re-run
+  the swap.
+- **Bootstrap markers.** Each failure marker `bootstrap.sh` prints, and what to do. Nothing on this list is fixed by
+  re-minting unless it says so.
+  - `SOLEUR_CFAM_TOKEN_MALFORMED name=<KEY>_NEXT`: the staged value has a byte outside the token class (often a stored
+    trailing newline); no network call was made. Re-stage `<KEY>_NEXT` from the mint file with Phase 0 step 2's strip
+    form.
+  - `SOLEUR_CFAM_TOKEN_NOT_ACTIVE`: the staged token's `/user/tokens/verify` did not say active: re-mint (Phase 0).
+  - `SOLEUR_CFAM_TOKEN_UNREACHABLE`: a token read failed in transport (a `curl` error or timeout), which says nothing
+    about the token: re-run the stage. Never re-mint on this marker.
+  - `SOLEUR_CFAM_RUN_IN_FLIGHT`: a writing stage refused because a `cf-account-migrate.yml` run is queued or in
+    progress (or `gh` could not list the runs). Wait for that run to finish, read its verdict line, then re-run the
+    stage.
+  - `SOLEUR_CFAM_PROBE profile=<phase> verdict=not-pass`: the staged scope probe did not pass, so the swap wrote
+    nothing. Read the `probe=<phase> verdict=…` line it relayed: `denied` means re-mint that key with the plan's
+    permission groups; `inconclusive` means re-run the stage; `fatal-mutation` is the write-probe stop (post the
+    read-back on #12931 and stop).
+  - `SOLEUR_CFAM_COPY_MISMATCH`: the stage stopped before any delete; copy `<KEY>_PREV` over `<KEY>` with the stdin
+    pipe form, read it back, and re-run.
+  - `SOLEUR_CFAM_SWAP_MISMATCH name=<KEY> kept=<KEY>_NEXT`: the copy read back equal but a re-read before the delete
+    did not, so `_NEXT` was kept. Re-run the swap stage: its plan deletes a `_NEXT` that now equals `<KEY>`, copies
+    again over a `<KEY>` that still equals `_PREV`, and refuses anything else (then follow "A revert copy is not
+    sound").
+  - `SOLEUR_CFAM_DELETE_NOT_CONFIRMED`: re-run the stage, which plans only the delete.
+  - `SOLEUR_CFAM_ID_READBACK_FAILED target=<cfg>/<name>`: an id write returned ok but its read-back differs, so the key
+    may hold the new id, the old one or neither. `Agent:` read its prefix (ids are not secrets:
+    `doppler secrets get <name> -p soleur -c <cfg> --plain | cut -c1-8`) and re-run the stage: its plan skips a key that
+    already holds the new id and writes one that holds the legacy id. A key holding neither is refused: stop for an
+    owner decision.
+  - `SOLEUR_CFAM_UNREADABLE config=<cfg>`: that config's names listing could not be read (Doppler auth or network), so
+    nothing in it was read as absent. Re-run; if it repeats, check `doppler me` and stop for an owner decision.
+  - `SOLEUR_CFAM_VERIFY check=<x> verdict=fail` (the closing `SOLEUR_CFAM_VERIFY verdict=fail` follows the per-check
+    lines): act per check. `<cfg>/CF_ZONE_ID=new` or `CF_ACCOUNT_ID=new`: run `flip-ids` (for `prd_terraform`) or
+    `branch-copies-zone-id` (a branch config). `CF_R2_ACCOUNT_ID=legacy`: the `CF_R2_ACCOUNT_ID` section above.
+    `<KEY>_NEXT=absent` or `<KEY>=swapped`: that key's swap stage has not completed: run it. `<KEY>=swapped-prev-revoked`:
+    read `<KEY>` with its NEW read from the table above; `true` means the verify's own read failed (re-run verify);
+    `false` means the live key is not a new-account token and its revert copy is gone: stop for an owner decision.
+    `<cfg>/<KEY>=matches-prd_terraform`: run `branch-copies-tokens`; if it refuses with `need=verify`, stop for an
+    owner decision. `<cfg>=readable` or `inventory=readable`: as `SOLEUR_CFAM_UNREADABLE`.
 - The backup object is disaster-recovery evidence only. It is never pushed back as state; Phase 5 deletes every
   `pre-cf-account-migration-*` object.
 - If the migration is abandoned outright, stop at the last verified phase, keep the merge freeze, and record the
