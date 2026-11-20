@@ -397,7 +397,8 @@ check "zone-rest: a bare delete of a mutable secret is refused" 1 "REFUSE" zone-
 jq -c '(.resource_changes[] | select(.address=="doppler_secret.cf_api_token_dns_edit") | .change.actions) = ["delete"]' "$TMP/zr.json" > "$TMP/zrg2.json"
 check "row G2: a bare delete of the declared replace target (replace_by_request, right id) is refused" 1 "(class replace) planned with actions [\"delete\"]" zone-rest "$TMP/zrg2.json" "$TMP/zr-state.json"
 jq -c '(.resource_changes[] | select(.address=="doppler_secret.cf_api_token_dns_edit") | .change.actions) = ["create","delete"]' "$TMP/zr.json" > "$TMP/zrcbd.json"
-check "zone-rest: the declared replace planned create-before-destroy passes" 0 "verdict=PASS" zone-rest "$TMP/zrcbd.json" "$TMP/zr-state.json"
+# A name-keyed replace planned create-first would delete the key it had just written (D36).
+check "row 9d: the declared replace planned create-before-destroy is refused" 1 "(class replace) planned with actions [\"create\",\"delete\"]" zone-rest "$TMP/zrcbd.json" "$TMP/zr-state.json"
 jq -c '(.resource_changes[] | select(.address=="github_actions_secret.cloudflare_account_id_pages") | .change.after) = {secret_name:"CLOUDFLARE_ACCOUNT_ID_PAGES",plaintext_value:"'"$OA"'"}' "$TMP/zr.json" > "$TMP/zrold.json"
 check "zone-rest: a github secret republishing the OLD account id is refused" 1 "github_actions_secret.cloudflare_account_id_pages republishes an OLD" zone-rest "$TMP/zrold.json" "$TMP/zr-state.json"
 # The token-valued Pages secret's VALUE is outside the expected-values table, so the old-id check alone sees it.
@@ -580,8 +581,11 @@ gate_mutate_and_check "M-want-noop: grading creates and updates only admits P3 (
   's/^    | select(\.change\.after != null) | (\.change\.after_unknown/    | select(.change.after != null and .change.actions != ["no-op"]) | (.change.after_unknown/' cf_account_migrate_gate zone-rest "$TMP/g3.json" "$TMP/zr-state.json"
 # shellcheck disable=SC2016 # sed expressions match literal gate text
 gate_mutate_and_check "M-replace-class (G2): neutering the replace clause admits a bare delete of the replace target" \
-  's|(\$cls == "replace" and .change.actions != \["delete","create"\] and .change.actions != \["create","delete"\])|($cls == "replace" and false)|' \
+  's|(\$cls == "replace" and .change.actions != \["delete","create"\])|($cls == "replace" and false)|' \
   cf_account_migrate_gate zone-rest "$TMP/zrg2.json" "$TMP/zr-state.json"
+gate_mutate_and_check "M-replace-order (D36): accepting create-before-destroy again admits row 9d" \
+  's|(\$cls == "replace" and .change.actions != \["delete","create"\])|($cls == "replace" and .change.actions != ["delete","create"] and .change.actions != ["create","delete"])|' \
+  cf_account_migrate_gate zone-rest "$TMP/zrcbd.json" "$TMP/zr-state.json"
 # Inverse direction: narrowing the R2 carve-out back to the bucket type must REFUSE row 5c.
 r2m="$TMP/mutated-r2.sh"
 sed 's/select(.type | startswith("cloudflare_r2_") | not)/select(.type != "cloudflare_r2_bucket")/' "$GATE" > "$r2m"
@@ -844,6 +848,6 @@ r2_mut "M-r2-bound: the 60 s bound dropped" 's|^  timeout 60 env |  env |' unbou
 
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 154 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 154)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 155 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 155)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

@@ -29,7 +29,9 @@
 #   mutable  a non-Cloudflare secret whose value follows the new ids: update, create or no-op.
 #   replace  passed as -replace: must be a replace with action_reason "replace_by_request" whose
 #            `before` physical id equals the pre-plan state id (Terraform drops a -replace outside
-#            the -target set without a warning; measured on 1.10.5).
+#            the -target set without a warning; measured on 1.10.5). Delete-then-create ONLY: the one
+#            replace member, doppler_secret.cf_api_token_dns_edit, is keyed by project/config/name, so a
+#            create-before-destroy replace would delete the key it had just written.
 #
 # The new ids are constants, not inputs (any other id, old or unknown, is refused): a mis-set Doppler value must not be able to
 # re-point what the gate accepts. Not secrets.
@@ -287,7 +289,7 @@ cf_account_migrate_gate() {
         ($cls == "create"  and .change.importing != null) or
         ($cls == "import"  and .change.importing == null and .change.actions != ["no-op"]) or
         ($cls == "mutable" and (.change.actions as $x | any([["update"],["no-op"],["create"]][]; . == $x) | not)) or
-        ($cls == "replace" and .change.actions != ["delete","create"] and .change.actions != ["create","delete"]))
+        ($cls == "replace" and .change.actions != ["delete","create"]))
     | "REFUSE \(.address) (class \($cls)) planned with actions \(.change.actions | tostring)\(if .change.importing then " as an import" else "" end)"' "$plan_json")" || { _cfam_eval_fail; return 1; }
   # An import of a create-class address is reported by the literal check below, which names it.
   # grep -v exits 1 when every line was filtered (fine) and 2 on an error, which is a refusal:
