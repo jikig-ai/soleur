@@ -253,9 +253,9 @@ done
 runblock() { # $1 = joined JSON -> the run block's output and its status
   local f rc out
   f=$(mktemp) || { echo "mktemp failed"; return; }
+  trap 'rm -f "$f"; trap - RETURN' RETURN
   printf '%s\n' "$1" > "$f"
-  out=$(cd "$REPO_ROOT" && file="$f" /usr/bin/env -i PATH=/usr/bin:/bin file="$f" /bin/bash -c "$(printf '%s\n' "${RUN_LINES[@]}")" 2>&1); rc=$?
-  rm -f "$f"
+  out=$(cd "$REPO_ROOT" && /usr/bin/env -i PATH=/usr/bin:/bin file="$f" /bin/bash -c "$(printf '%s\n' "${RUN_LINES[@]}")" 2>&1); rc=$?
   printf '%s\nrc=%s' "$out" "$rc"
 }
 R1Z='.zone = "5af02a2f394e9ba6e0ea23c381a26b67"'

@@ -43,11 +43,15 @@
 # loaded and `$ENV` is empty, verified on jq 1.8.2), the credential on curl's stdin config only, and the xtrace refusal. See standing-delegation.md
 # section 9 (Credentials) for the stated exception. A 403 is recorded as unverified and never answered by a token swap.
 # CLOSED ENVIRONMENT (security fix round 1, Ref #12846): `doppler run` puts every secret of prd_terraform in this script's
-# environment, so after the xtrace refusal the script keeps only a fixed allowlist of exported names (the Doppler pair, CF_ZONE_ID,
-# CF_ACCOUNT_ID, the five bound tokens, PATH and LC_ALL) and drops every other name and every exported function by re-execing
-# itself once under `/usr/bin/env -u <name>...` with argv unchanged. The decision is made on the set of names present, never on a
-# marker a caller sets; the per-name decisions sit beside the code. So no later line can read a caller-chosen variable, whatever
-# its syntax (indirection, nameref, printf -v, arithmetic): a read of an unlisted name finds it unset. CF_API_TOKEN is not kept.
+# environment, so after the xtrace refusal the script closes its SHELL-VISIBLE environment to a fixed allowlist (the Doppler pair,
+# CF_ZONE_ID, CF_ACCOUNT_ID, the five bound tokens, PATH and LC_ALL): it re-execs itself once under `/usr/bin/env -u <name>...`,
+# argv unchanged, removing every other name `compgen -e` lists and every exported function `compgen -A function` lists. The decision
+# is made on the set of names present, never on a marker a caller sets; the per-name decisions sit beside the code. CF_API_TOKEN is
+# not kept. Scope: after the re-exec a read of an unlisted name from THIS process's environment finds it unset, whatever its syntax
+# (indirection, nameref, printf -v, arithmetic). It closes nothing else. An environment entry bash does not import (a name that is
+# not an identifier, such as `a-b=1`) is not listed, so it is not removed and stays readable through /proc/self/environ. Reading a
+# file, or another process's environment (/proc/<pid>/environ, the parent's included), is not closed by it either: those are
+# refused by the suite's code censuses (no file input redirection, no source or `.`, no tilde, absolute tools only), not here.
 #
 # READ-ONLY POST EXCEPTION (#12441, #12846): a GraphQL read is an HTTP POST that only reads. Exactly three fixed queries are compiled
 # into this file (GQL_HEALTH_TPL, GQL_EDGE_TPL, GQL_COLO_TPL); the only substitutions are the zone id and two window stamps computed
@@ -61,10 +65,11 @@
 # coloCode dimension, the host and path filters together on this node, and the 10000 row cap.
 #
 # RESIDUAL, not fixed here: BASH_ENV, exported BASH_FUNC_* functions, SHELLOPTS and PS4, LD_PRELOAD and the shebang's PATH lookup
-# (`#!/usr/bin/env bash`) are caller-environment channels that act in this script's OWN first bash before its checks (the closed
-# environment drops them at the re-exec, but they have already acted in the first start, which runs the xtrace and closed-
-# environment blocks; LD_PRELOAD is removed too, after it has loaded once). The caller is the operator's `doppler run`; nothing in
-# this file claims to defend against a hostile caller environment.
+# (`#!/usr/bin/env bash`) are caller-environment channels that act in this script's OWN first bash, before and during the xtrace
+# and closed-environment blocks. The re-exec removes their environment entries for the second start, but only when the re-exec
+# runs: an exported function named like a builtin the closed-environment block calls (mapfile, compgen, type, exec, printf, [)
+# can stop the re-exec or fake its result, so the closure itself sits inside this residual. LD_PRELOAD has loaded once by then.
+# The caller is the operator's `doppler run`; nothing in this file claims to defend against a hostile caller environment.
 # ACCEPTED RESIDUAL: a rule ref or an id is operator-authored data and is printed verbatim after a shape check (1 to 64 characters
 # of A-Z a-z 0-9 _ -); it is data under the Boundary paragraph of section 9, never an instruction, and the shapes are bounded.
 #

@@ -388,8 +388,9 @@ MSG_RE_LINE="GQL_MSG_RE='^[A-Za-z0-9 ._'\"'\"'\"()-]{1,160}\$'"
 # read as $NAME or ${NAME, an identifier inside $(( )) or for (( )), and a ${NAME-/:-/=/?/+} expansion. They do NOT see ${!x}
 # indirection, [[ -v NAME ]], declare -n, printf -v, read, bare (( )), let, array subscripts or a quote-split command word (the
 # security fix round 1 found eight such one-line edits). The control for that class is the wrapper's closed environment: after
-# the re-exec no unlisted name exists to be read, whatever the syntax (group `closed`, and its mutation rows). The censuses stay
-# as tripwires. Each reads a file (the comment-stripped wrapper, or a control fixture) and prints a space-joined sorted list.
+# the re-exec no unlisted name exists in the process's shell-visible environment, whatever the syntax (group `closed`, and its
+# mutation rows). It does not close a file read or another process's environment (/proc/<pid>/environ); those are the code
+# censuses' (redir_bad below, the source / . and tilde bans, the absolute-tool census). The censuses stay as tripwires. Each reads a file (the comment-stripped wrapper, or a control fixture) and prints a space-joined sorted list.
 # name_set: every name read with $NAME or ${NAME (the prefix dropped), so a new ${X-default} read without a colon is still seen.
 name_set() { grep -oE '[$][{]?[A-Za-z_][A-Za-z0-9_]*' "$1" | sed -E 's/^[$][{]?//' | sort -u | tr '\n' ' '; }
 # arith_ids: the identifiers inside every $(( ... )) and for (( ... )) construct, with parentheses balanced (a nested ( ) is kept).
@@ -438,6 +439,22 @@ code_only() {
 # (an assignment `x=~user` IS a tilde expansion, so `NAME=~` is flagged; the operator is written ` =~ ` with a space before it)
 SOURCE_BAN_RE='(^|[;&|({!]|[[:space:]])(source|\.)[[:space:]]+[^[:space:]]'
 TILDE_BAN_RE='(^|[^=])~|[A-Za-z0-9_]=~'
+# redir_bad <file>: the code lines (code_only output) that hold an input redirection reading a FILE. Every `<` in the wrapper's code
+# today is `< <(` (8 of them: stdin from a process substitution, whose contents are code that the other censuses read) or a `<=`
+# inside `for (( ))`. Decided per form, in order: (( )) regions (with $(( and for ((, parentheses balanced) are dropped, as their
+# < and <= compare; `<<` and `<<<` are dropped, as heredocs and here-strings carry literal text and have their own refusing row
+# ("no here-string or heredoc"); `< <(` and a bare `<(` (a process substitution passed as an argument) are dropped. Any `<` left is
+# a read from a path: `< /path`, `<"$f"`, `$(< f)`, `0< f`, `<> f`, and a `<` string test inside [[ ]] (not used; refused too).
+redir_bad() {
+  code_only "$1" | awk '{
+      s = $0; o = ""
+      while ((p = index(s, "((")) > 0) {
+        o = o substr(s, 1, p - 1); s = substr(s, p + 2); d = 2
+        while (length(s) > 0) { c = substr(s, 1, 1); s = substr(s, 2); if (c == "(") d++; else if (c == ")") { d--; if (d == 0) break } }
+      }
+      print o s
+    }' | sed -E 's/<<<?//g; s/<[[:space:]]+<[(]//g; s/<[(]//g' | grep -n '<' || true
+}
 
 grp_source() {
   t "source: wrapper file is non-empty after comment stripping (anchor for every lacks-row)" test -s "$STRIPPED"
@@ -725,8 +742,9 @@ Q11_CF_GRAPHQL
   t "census control: Q11.R3 the default-form census sees - + = ? :- forms and not \${#L} or \${M//}" eq "$(default_forms "$WORK/q11c.txt")" "$(sorted_join '${ZONE_PIN-' '${HOST_PIN:+' '${!V=' '${W?' '${K:-')"
   printf '%s\n' 'gql_fill() {' '  b=1' '  b="${b//app.soleur.ai/${HOST_PIN-app.soleur.ai}}"' '}' 'after() {' '  x' '}' > "$WORK/q11d.txt"
   t "census control: Q11.R4 the body extractor stops at the first column-0 } and keeps an added line" eq "$(fn_body gql_fill "$WORK/q11d.txt")" "$(printf '%s\n' 'gql_fill() {' '  b=1' '  b="${b//app.soleur.ai/${HOST_PIN-app.soleur.ai}}"' '}')"
-  # --- security fix round 1: two channels the closed environment does NOT close (a file the script reads by itself: HOME is gone, but
-  # bash still expands ~ from the password database). Both are banned in code; quoted text and comments are not code (code_only). ---
+  # --- security fix round 1: channels the closed environment does NOT close: a file the script reads by itself (HOME is gone, but bash
+  # still expands ~ from the password database; any other path is a plain redirection) and another process's environment through
+  # /proc/<pid>/environ. All are refused in code; quoted text and comments are not code (code_only). ---
   code_only "$STRIPPED" > "$WORK/code_only.sh"
   t "source: anchor - the quote scanner keeps every line of the wrapper (one output line per input line)" eq "$(wc -l < "$WORK/code_only.sh")" "$(wc -l < "$STRIPPED")"
   tn "source: no source or . used as a command anywhere in the code (quoted text and comments excluded)" grep -Eq "$SOURCE_BAN_RE" "$WORK/code_only.sh"
@@ -738,6 +756,16 @@ Q11_CF_GRAPHQL
   t "source control: the tilde ban flags a ~/ path, an assignment ~user and a :~ path element" eq "$(code_only "$WORK/ban_tl.txt" | grep -cE "$TILDE_BAN_RE")" 3
   printf '%s\n' "jq '. == null and (. * 10)' x" 'die 64 "no Doppler source set ~ here"' '[[ $a =~ b ]]' "TOKEN_RE='^[~.]\$'" 'echo "$(printf "%s" ". x")"' 'f # . comment ~' 'guard_source; requestSource' 'x="${y%.*}" "$#" "${#z}"' "m=\$'a . ~ b'" > "$WORK/ban_ok.txt"
   t "source control: neither ban flags a jq program, a message, the =~ operator, a quoted ~, a comment, a _source name or \${y%.*}" eq "$(code_only "$WORK/ban_ok.txt" | grep -cE "$SOURCE_BAN_RE|$TILDE_BAN_RE")" 0
+  # every input redirection in code is a process substitution: no `<` reads a path (a file, /proc/self/stat, another process's environ)
+  t "source: every input redirection in the code is < <( (process substitution); none reads a file or /proc (redirections:$(redir_bad "$STRIPPED" | tr '\n' ' ' | cut -c1-120))" eq "$(redir_bad "$STRIPPED")" ""
+  t "source: anchor - the redirection census sees the wrapper's eight < <( feeds (so its zero is not a blind scan)" eq "$(code_only "$STRIPPED" | grep -o '< <[(]' | wc -l)" 8
+  printf '%s\n' '[ -r /var/tmp/cfro_url ] && read -r GQL_URL < /var/tmp/cfro_url' '[ -r /etc/cfro/url ] && GQL_URL=$(< /etc/cfro/url)' \
+    "read -r _ _ _ p _ < /proc/self/stat; while IFS= read -r -d '' s; do :; done < /proc/\$p/environ" '[ -r ~/.cfro_url ] && read -r GQL_URL < ~/.cfro_url' \
+    'mapfile -t a <"$f"' 'x=$(<"$f")' 'read v 0</etc/x' 'read v <> /etc/x' 'y="$(read -r z < /etc/x; printf %s "$z")"' > "$WORK/redir_bad.txt"
+  t "source control: the redirection census flags each of nine file reads (a path, \$(< ), /proc/self/stat and environ, ~, <\"\$f\", 0<, <>, one inside \"\$( )\")" eq "$(redir_bad "$WORK/redir_bad.txt" | wc -l)" 9
+  printf '%s\n' 'mapfile -t A < <(compgen -e)' 'x=$(/usr/bin/env -i /usr/bin/jq -r . < <(printf %s "$B") 2>&1)' 'for ((i = 0; i <= n && (i < m); i++)); do :; done' \
+    'y=$((a < b ? 1 : 2))' "q=\$(jq '. < 3' x)" 'die 64 "a < b"' 'cat <<<"x"' '/usr/bin/jq -f <(printf x) y' 'z=1 # < /etc/x' "w=\$'a < b'" > "$WORK/redir_ok.txt"
+  t "source control: the redirection census flags none of < <(, a bare <(, arithmetic < and <=, quoted <, a here-string or a comment" eq "$(redir_bad "$WORK/redir_ok.txt")" ""
 }
 
 # =============================================================================================
@@ -2795,6 +2823,11 @@ if [[ -z "$INNER" ]] && want all; then
   mutate_inert "SEC.G TOKVAR=ALT_TOK before the token read" "wire[closed-env/ssl-mode]: with planted unknown names the stdin config (the bound token and the body) is byte-identical" '  TOK="${!TOKVAR:-}"' $'  [[ -v ALT_TOK ]] && TOKVAR=ALT_TOK\n  TOK="${!TOKVAR:-}"'
   mutate_inert "SEC.H printf -v GQL_URL from \${!url}" "wire[closed-env/analytics-health]: with planted unknown names the curl argv (flags and URL) is byte-identical" "$GU" "$GU"$'\n[[ -v ALT_GQL ]] && url=ALT_GQL && printf -v GQL_URL %s "${!url}"'
   mutate "SEC.J read -r GQL_URL < ~/.cfro_url" "source: no ~ (tilde expansion) anywhere in the code" source "$GU" "$GU"$'\n[ -r ~/.cfro_url ] && read -r GQL_URL < ~/.cfro_url'
+  # --- verification after fix round 1 (P2-1): a file read from any path, and the parent's environment through /proc, both of which the
+  # closed environment cannot see; each is caught by the redirection census ---
+  mutate "N1 read -r GQL_URL from a plain path" "source: every input redirection in the code is < <(" source "$GU" "$GU"$'\n[ -r /var/tmp/cfro_url ] && read -r GQL_URL < /var/tmp/cfro_url'
+  mutate "N1b GQL_URL=\$(< file)" "source: every input redirection in the code is < <(" source "$GU" "$GU"$'\n[ -r /etc/cfro/url ] && GQL_URL=$(< /etc/cfro/url)'
+  mutate "N2 the parent's environment read through /proc/self/stat and /proc/<ppid>/environ" "source: every input redirection in the code is < <(" source "$GU" "$GU"$'\nread -r _ _ _ p _ < /proc/self/stat; while IFS= read -r -d \'\' s; do [[ $s == ALT_GQL=* ]] && GQL_URL=${s#ALT_GQL=}; done < /proc/$p/environ'
   # --- the closed environment itself: each part of it has a row that reds when that part is removed or weakened ---
   mutate "CE.1 the allowlist check removed (no re-exec)" "wire[closed-env/ssl-mode]: the wrapper's own process environment holds only allowed names" closed "$CLOSED_EXEC_LINE" '  :'
   mutate "CE.2 the allowlist widened to every name" "wire[closed-env/ssl-mode]: the wrapper's own process environment holds only allowed names" closed '    *) ENV_DROP=(${ENV_DROP[@]+"${ENV_DROP[@]}"} -u "$ENV_N") ;;' '    *) : ;;'
@@ -2806,7 +2839,7 @@ if [[ -z "$INNER" ]] && want all; then
 
   collect
   t "mutation floor: every mutation row ran and was caught ($MUT_CAUGHT of $MUT_TOTAL)" eq "$MUT_CAUGHT" "$MUT_TOTAL"
-  t "mutation floor: at least 270 mutation rows ran (the exact current count; observed $MUT_TOTAL)" test "$MUT_TOTAL" -ge 270
+  t "mutation floor: at least 273 mutation rows ran (the exact current count; observed $MUT_TOTAL)" test "$MUT_TOTAL" -ge 273
 fi
 
 # --- accounting ---
@@ -2814,7 +2847,7 @@ if [[ "$((pass + fail))" != "$asserted" ]]; then
   no "accounting: passes + fails ($((pass + fail))) != asserted ($asserted) - a verdict was dropped"
 fi
 if [[ "$SELECT" == all && -z "$INNER" ]]; then
-  t "floor: at least 2557 assertions ran (a suite that checked nothing is RED; observed $asserted)" test "$asserted" -ge 2557
+  t "floor: at least 2564 assertions ran (a suite that checked nothing is RED; observed $asserted)" test "$asserted" -ge 2564
 fi
 printf '\n%s passed, %s failed (%s asserted)\n' "$pass" "$fail" "$asserted"
 if [[ "$fail" -gt 0 ]]; then exit 1; fi
