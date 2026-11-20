@@ -115,4 +115,4 @@ The check that failed compared a name after the kernel had already followed the 
 ## Related Issues
 
 - Sibling shape, different tool: [2026-09-14-a-registry-that-carries-its-own-hash-certifies-itself.md](../best-practices/2026-09-14-a-registry-that-carries-its-own-hash-certifies-itself.md) (an intermediate-directory symlink was untested on a hash registry).
-- Plan and rulings stay in `knowledge-base/project/plans/2026-11-16-feat-retry-budget-ruling-plan.md` and `knowledge-base/project/specs/feat-12526-retry-budget-arbitration/decision-challenges.md`.
+- Plan and rulings are archived at `knowledge-base/project/plans/archive/20261120-024241-2026-11-16-feat-retry-budget-ruling-plan.md` and `knowledge-base/project/specs/archive/20261120-024241-feat-12526-retry-budget-arbitration/decision-challenges.md`.
