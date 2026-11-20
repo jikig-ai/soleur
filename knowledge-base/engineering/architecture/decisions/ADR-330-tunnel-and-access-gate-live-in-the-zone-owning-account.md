@@ -35,7 +35,7 @@ zot and the tunnel connector were both healthy. The fault was one layer down:
   records in the same Cloudflare account." The old tunnel cannot serve the new zone, whatever its CNAMEs say.
 
 The full account move is #12931. Changing `var.cf_zone_id` and `var.cf_account_id` would move every
-zone-scoped resource at once (47 and 20 references). Some of those moves wait on money decisions (Pro vs
+zone-scoped and account-scoped resource at once. Some of those moves wait on money decisions (Pro vs
 Free, Load Balancing), so the release pipeline cannot wait for them.
 
 The release job could not name the cause. The token preflight's uncredentialed control probe threw away the
@@ -116,9 +116,13 @@ that owns the `soleur.ai` zone. They do not follow `var.cf_zone_id` / `var.cf_ac
   the `_soleur` addresses behind `[ack-destroy]`. After it, the change is forward-only.
 - Once Cloudflare purges the moved zone, the legacy addresses still on the push `-target` list make every
   push apply try to re-create them. That bounds how long the teardown can wait.
-- Tunnel names are unique per account. #12931's own branch (PR #12932) drafts a tunnel phase too.
-  Whichever merges second must adopt or `moved {}` the first one's addresses, and must not create a
-  third tunnel.
+- #12931 collides with this slice when it flips `var.cf_account_id` / `var.cf_zone_id`, not only through
+  its own tunnel phase (PR #12932). A changed `account_id` or `zone_id` forces replacement, so after the
+  flip the legacy addresses would plan to re-create the tunnel name, the three CNAMEs, the Access app
+  domains and the registry Doppler secrets where the `_soleur` copies already hold them. The teardown
+  follow-up therefore lands before that flip (`removed { destroy = false }` on the legacy slice, its
+  `-target` lines dropped), and #12931's tunnel phase adopts the `_soleur` addresses with `moved {}`
+  rather than creating a third tunnel.
 - This ADR moves to `accepted` when the teardown follow-up lands. That follow-up removes the legacy slice,
   `local.deploy_service_token_ids` and the legacy registry exclusions, and settles the `_soleur` suffix.
 

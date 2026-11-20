@@ -69,9 +69,11 @@ No `spec.md` exists for this branch (one-shot entry), so `lane: cross-domain` is
 
 ## Phase 5: Connector re-bake
 
+- [ ] 5.0 Read the authoritative zone's load balancers and `app.` record; drain web-2 there first if it
+      serves, else record that it serves nothing.
 - [ ] 5.1 Stock preflight for web-2's server type.
-- [ ] 5.2 Dispatch `web-host-replace web-2` and arm a Monitor watch. The operator approves the
-      environment.
+- [ ] 5.2 Dispatch `web-host-replace web-2` (no `image_tag`) and arm a Monitor watch. The operator
+      approves the environment. Hold `host_script_files` merges until 5.3.
 - [ ] 5.3 New tunnel has at least one connection from web-2; old tunnel has 0.
 
 ## Phase 6: Prove the fix and unblock releases
@@ -88,5 +90,6 @@ No `spec.md` exists for this branch (one-shot entry), so `lane: cross-domain` is
 
 ## Phase 7: Follow-ups
 
-- [ ] 7.1 File the old-account teardown issue.
-- [ ] 7.2 Comment on #12931.
+- [ ] 7.1 File the old-account teardown issue (before merge), including the expiry-monitor repoint and
+      that it must land before #12931's account/zone flip.
+- [ ] 7.2 Comment on #12931, including the collision note for its variable flip and PR #12932.

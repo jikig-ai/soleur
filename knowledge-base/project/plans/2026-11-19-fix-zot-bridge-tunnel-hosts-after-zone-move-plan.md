@@ -318,8 +318,9 @@ account and zone sit beside the untouched old-account addresses. The connector r
 Phases 3.1-3.3 use one credential (the widened `CF_API_TOKEN`) and run as one agent-executed script
 under a single operator go (`hr-multi-step-post-merge-bootstrap-script`), staged and idempotent, each
 stage verifying before the next. **Sequencing:** 3.1 runs before the commit that writes the id into
-`local.deploy_service_token_ids_soleur`; until that commit lands, the PR's validation plan is expected
-red on the UUID precondition, so run 3.1 as soon as Phase 0 is done.
+`local.deploy_service_token_ids_soleur`; until that commit lands, the static row Q8 in
+`tests/scripts/test-deploy-access-token-forget.sh` and the Terraform precondition both refuse the
+committed all-zero placeholder, so the PR cannot merge with it. Run 3.1 as soon as Phase 0 is done.
 
 Secret handling for the whole script: values go on stdin (`gh secret set NAME` without `--body`;
 Doppler with the value on stdin, never in argv) with stdout to `/dev/null` (Doppler's set prints the
@@ -392,13 +393,22 @@ does; sha256 digests are compared, never printed.
 
 #### Phase 5 — Connector re-bake (web-2)
 
+5.0 Find out whether web-2 serves users before destroying it. `variables.tf` declares it at pool weight
+    1 (serve flip, #12167), but the pool's load balancer lives in `var.cf_zone_id`, the moved-away zone.
+    Read-only: `GET /zones/951ce525552201ec6c696b24251abed7/load_balancers` and the `app.` record in
+    that zone. If no load balancer there lists web-2 and `app.` points only at web-1, record "no LB in
+    the authoritative zone; web-2 serves no app traffic" in session-state and continue. Otherwise drain
+    web-2 in that zone first (the web-host-replace runbook's drain section; the `ga-pool-update` arm
+    targets the old zone and drains nothing live) and wait for the origin to read drained.
 5.1 Check stock for web-2's `server_type` (`cpx22`, hel1) through the Hetzner API, using the runbook's
     stock preflight.
 5.2 Dispatch `apply-web-platform-infra.yml` with `apply_target=web-host-replace web_host_key=web-2
     confirm=REPLACE-web-2`. The operator's `web-platform-infra-apply` environment approval is the go
     for this act; no separate go is asked. Arm a Monitor watch on the run (`hr-dispatch-async-must-arm-watch`).
     The gate allow-set is exactly the four web-2 addresses. Any tunnel diff aborts, which is why Phase 4
-    must already be applied.
+    must already be applied. Do not pass `image_tag`: the default pin is the image production serves
+    (`43234154a2`), the only release image in zot until Phase 6. Hold merges that change
+    `host_script_files` from the merge until 5.3, so the re-born host renders the reviewed bootstrap.
 5.3 Verify: the new tunnel has ≥1 connection from web-2 (CF API `cfd_tunnel/<id>/connections`), and a
     green run of the repointed connector census; close the `ci/tunnel-connector-drift` issue it filed.
 
@@ -443,13 +453,22 @@ does; sha256 digests are compared, never printed.
       `service_token_expiry`, 3 records) and the hand-minted old deploy token;
     - `local.deploy_service_token_ids` (old) and the old registry rows in `OPERATOR_APPLIED_EXCLUSIONS`;
     - whether the `_soleur` suffix is dropped via `moved {}` blocks or kept on purpose;
-    - flipping ADR-330 to `accepted`.
+    - flipping ADR-330 to `accepted`;
+    - repointing the backup expiry monitor (`event-cf-token-expiry-check`, which lists tokens in Doppler
+      `CF_ACCOUNT_ID`, still the legacy account) at the Soleur account;
+    - that it must land before #12931 flips `var.cf_account_id` / `var.cf_zone_id`: the flip forces
+      replacement of every legacy address into the account where the `_soleur` copies already hold the
+      same tunnel name, CNAMEs, Access domains and Doppler secrets, so the legacy slice leaves state
+      first (`removed { destroy = false }`, its `-target` lines dropped).
     Due date: the API does not expose the moved zone's deletion date (`GET /zones?status=moved` on
     2026-11-19 returned `deleted_at: null`, `modified_on 2026-11-19T04:11Z`, no purge field), so set it
     to 2026-11-25 and have the issue's first step re-read the zone status. Old-zone resources still in
     state when Cloudflare purges the zone need `removed {}` forgets rather than destroys. Milestone from
     the roadmap, `Ref #12931`.
-7.2 Comment on #12931 that its "Tunnel hosts" checkbox is done by this PR, with what remains.
+7.2 Comment on #12931 that its "Tunnel hosts" checkbox is done by this PR, with what remains, and that
+    its account/zone variable flip is blocked on the 7.1 teardown; its tunnel phase (PR #12932) should
+    adopt the `_soleur` addresses with `moved {}` instead of declaring a second tunnel. Do not edit or
+    comment on PR #12932 itself.
 
 ## Files to Edit
 

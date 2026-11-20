@@ -13,7 +13,7 @@ The `github-actions-deploy` service token in `apps/web-platform/infra/tunnel.tf`
 Two layers of monitoring are in place:
 
 1. **Terraform notification policy** (`cloudflare_notification_policy.service_token_expiry`) sends an email alert 7 days before expiry. This is the primary alert. A notification policy covers only its own account's tokens, so the Soleur account has its own copy, `cloudflare_notification_policy.service_token_expiry_soleur` (#12937).
-2. **GitHub Actions workflow** (`scheduled-cf-token-expiry-check.yml`) checks the Cloudflare API and creates a GitHub issue when the token is within 30 days of expiry. This is the backup.
+2. **Inngest function** `event-cf-token-expiry-check` (`apps/web-platform/server/inngest/functions/event-cf-token-expiry-check.ts`) checks the Cloudflare API and creates a GitHub issue when the token is within 30 days of expiry. This is the backup. It lists tokens in Doppler `CF_ACCOUNT_ID`, which is still the legacy account, so it does not see the Soleur-account tokens until #12931 flips that value; the teardown follow-up repoints it.
 
 ## Rotation Procedures
 
@@ -50,7 +50,9 @@ Since #12937 the tunnel's Access gate lives in the Soleur Cloudflare account tha
 [ADR-330](../../architecture/decisions/ADR-330-tunnel-and-access-gate-live-in-the-zone-owning-account.md). The legacy-account tokens
 stay until the teardown follow-up, but no hostname routes to them. Ref #12937.
 
-**Deploy pair (minted outside Terraform).** The procedure above still applies, with two changes. The admitted id list is
+**Deploy pair (minted outside Terraform).** Mint and delete it in the account `local.cf_soleur_account_id` names in
+`apps/web-platform/infra/tunnel.tf`, never in Doppler `CF_ACCOUNT_ID` (still the legacy account): `POST` and `DELETE`
+`/accounts/<that id>/access/service_tokens[/<id>]`, with the bearer passed through `curl --config -`. The procedure above still applies, with two changes. The admitted id list is
 `local.deploy_service_token_ids_soleur` in `apps/web-platform/infra/tunnel.tf`, not `local.deploy_service_token_ids`, which now only
 admits the legacy app. Step 3 writes the pair to every copy below from one in-memory value, in one script run, with the values on stdin:
 
@@ -93,7 +95,7 @@ Confirm the deploy step completes with HTTP 200 (not 403).
 - **Created:** 2026-03-21
 - **Expected expiry:** ~2027-03-21
 - **Parent issue:** #974; **re-homed by:** #9294
-- **Originating PR:** #971 / #967
+- **Originating PR:** #963 (token); server-side provisioning #971 / #967
 
 ## Related: CLA Evidence R2 token rotation
 
