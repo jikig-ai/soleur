@@ -9,9 +9,10 @@
 # already covered by the no-changes row).
 #
 # Output contract of the filter: {plan_ok, resource_deletes, resource_forgets,
-# nested_deletes}. NO resource_creates key — see the filter header for why
-# (additive drift is the set-equality probe's job; creates here would only
-# train a blanket ack).
+# nested_deletes, undecidable_actions}. NO resource_creates key — see the
+# filter header for why (additive drift is the set-equality probe's job;
+# creates here would only train a blanket ack). undecidable_actions > 0 is a
+# HALT: the counts script exits before emitting, so no ack can rescue it.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -19,7 +20,7 @@ FILTER="$REPO_ROOT/tests/scripts/lib/destroy-guard-filter-rundevoo.jq"
 COUNTS="$REPO_ROOT/scripts/rundevoo-destroy-counts.sh"
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 pass=0; fail=0
-EXPECTED_TESTS=15
+EXPECTED_TESTS=19
 
 _report() {
   local label="$1" status="$2" detail="${3:-}"
@@ -153,6 +154,7 @@ t_forget_must_be_summed() {
   sed 's/resource_deletes + nested_deletes + resource_forgets/resource_deletes + nested_deletes/' \
     "$COUNTS" > "$mroot/scripts/rundevoo-destroy-counts.sh"
   local mut="$mroot/scripts/rundevoo-destroy-counts.sh"
+  # shellcheck disable=SC2016 # intentional literal: matching source text, not expanding
   if grep -qF 'resource_deletes + nested_deletes + resource_forgets' "$mut" \
      || ! grep -qF '$((resource_deletes + nested_deletes))' "$mut"; then
     _report "T7 an un-summed resource_forgets yields destroy_count=0" fail \
@@ -169,14 +171,14 @@ t_forget_must_be_summed() {
   fi
 }
 
-# T8: all four keys emitted on a no-change plan; resource_creates deliberately
+# T8: all five keys emitted on a no-change plan; resource_creates deliberately
 # absent (eval'ing it under set -u must fail — the absence is the contract).
 t_no_changes_emits_all_keys() {
   local f="$TMPD/nochange2.json"
   printf '{"resource_changes":[]}' > "$f"
   local out; out=$(bash "$COUNTS" "$f")
   local missing=()
-  for k in resource_deletes resource_forgets nested_deletes destroy_count; do
+  for k in resource_deletes resource_forgets nested_deletes undecidable_actions destroy_count; do
     grep -qE "^${k}=[0-9]+$" <<<"$out" || missing+=("$k")
   done
   if [[ ${#missing[@]} -eq 0 ]] && ! grep -q '^resource_creates=' <<<"$out"; then
@@ -212,9 +214,9 @@ t_plan_ok_true_on_plan() {
   fi
 }
 
-# T11: nested_deletes stays 0 even when a record's attributes shrink — the
-# schema inventory holds (all three types carry block_types: []), and a
-# metadata/map-attribute shrink is not an array-of-blocks removal.
+# T11: nested_deletes stays 0 when a record's SCALAR attributes shrink — a
+# comment/metadata map-attribute shrink is not a `data`-block removal (the
+# `data` shrink itself is counted; T16 pins it).
 t_nested_stays_zero_on_record_update() {
   local f="$TMPD/rec-update.json"
   printf '{"resource_changes":[{"type":"cloudflare_record","address":"cloudflare_record.null_mx","change":{"actions":["update"],"before":{"comment":"x","metadata":{"a":"1"}},"after":{"comment":null,"metadata":{}}}}]}' > "$f"
@@ -244,9 +246,14 @@ t_ack_below_tip_allows() {
 t_workflow_feeds_all_push_messages() {
   local wf="$REPO_ROOT/.github/workflows/apply-rundevoo-infra.yml"
   local feeds skip_reads ack_reads
-  feeds=$(grep -cF 'EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}' "$wf" || true)
-  skip_reads=$(grep -cF 'if [[ "$POLICY_MSGS" =~ (^|$'"'"'\n'"'"')\[skip-rundevoo-apply\]($|$'"'"'\n'"'"') ]]' "$wf" || true)
-  ack_reads=$(grep -cF 'if [[ "$POLICY_MSGS" =~ (^|$'"'"'\n'"'"')\[ack-destroy\]($|$'"'"'\n'"'"') ]]' "$wf" || true)
+  # Comment-stripped counts: a `#`-commented line carrying the literal must
+  # not satisfy the pin — dead wiring that still greps is a false green.
+  # shellcheck disable=SC2016 # intentional literal: matching source text, not expanding
+  feeds=$(grep -v '^[[:space:]]*#' "$wf" | grep -cF 'EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}' || true)
+  # shellcheck disable=SC2016 # intentional literal: matching source text, not expanding
+  skip_reads=$(grep -v '^[[:space:]]*#' "$wf" | grep -cF 'if [[ "$POLICY_MSGS" =~ (^|$'"'"'\n'"'"')\[skip-rundevoo-apply\]($|$'"'"'\n'"'"') ]]' || true)
+  # shellcheck disable=SC2016 # intentional literal: matching source text, not expanding
+  ack_reads=$(grep -v '^[[:space:]]*#' "$wf" | grep -cF 'if [[ "$POLICY_MSGS" =~ (^|$'"'"'\n'"'"')\[ack-destroy\]($|$'"'"'\n'"'"') ]]' || true)
   if [[ "$feeds" -ge 2 && "$skip_reads" -eq 1 && "$ack_reads" -eq 1 ]]; then
     _report "T13 workflow feeds event.commits to both readers via POLICY_MSGS" ok
   else
@@ -260,8 +267,8 @@ t_workflow_feeds_all_push_messages() {
 t_workflow_displays_forget_addresses() {
   local wf="$REPO_ROOT/.github/workflows/apply-rundevoo-infra.yml"
   local forget_sel exact_delete_sel
-  forget_sel=$(grep -cE 'select\(\.change\.actions \| index\("forget"\)\)' "$wf" || true)
-  exact_delete_sel=$(grep -cE 'select\(\.change\.actions == \["delete"\]\) \| \.address' "$wf" || true)
+  forget_sel=$(grep -v '^[[:space:]]*#' "$wf" | grep -cE 'select\(\.change\.actions \| index\("forget"\)\)' || true)
+  exact_delete_sel=$(grep -v '^[[:space:]]*#' "$wf" | grep -cE 'select\(\.change\.actions == \["delete"\]\) \| \.address' || true)
   if [[ "$forget_sel" -ge 1 && "$exact_delete_sel" -eq 0 ]]; then
     _report "T14 the destroy gate displays forget addresses, not an empty list" ok
   else
@@ -282,6 +289,56 @@ t_updates_only_passes() {
   fi
 }
 
+# T16: a composed actions array still counts — `index("delete")`, never
+# `== ["delete"]`. A zone REPLACE ("create","delete") is the realistic
+# destructive action on this root and must trip the gate.
+t_composed_actions_trips() {
+  local out; out=$(_run_gate "$(_fixture zreplace.json cloudflare_zone '["create","delete"]')" "feat: replace zone")
+  if [[ "$out" == "1:0:0:1:1" ]]; then
+    _report "T16 replace ([\"create\",\"delete\"]) counts as a destroy (rdel=1 rc=1)" ok
+  else
+    _report "T16 replace counts as a destroy" fail "got '$out' want '1:0:0:1:1'"
+  fi
+}
+
+# T17/T18: undecidable actions HALT the counts script outright — exit 1 before
+# any counts emit, so no [ack-destroy] can rescue an unclassifiable change.
+t_empty_actions_halts() {
+  local f="$TMPD/empty-actions.json"
+  printf '{"resource_changes":[{"type":"cloudflare_record","address":"x","mode":"managed","change":{"actions":[],"before":{},"after":{}}}]}' > "$f"
+  local rc=0
+  bash "$COUNTS" "$f" >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" -eq 1 ]]; then
+    _report "T17 empty actions array HALTs (counts exits 1)" ok
+  else
+    _report "T17 empty actions array HALTs" fail "counts rc=$rc want 1"
+  fi
+}
+t_missing_actions_halts() {
+  local f="$TMPD/missing-actions.json"
+  printf '{"resource_changes":[{"type":"cloudflare_record","address":"x","mode":"managed","change":{"before":{},"after":{}}}]}' > "$f"
+  local rc=0
+  bash "$COUNTS" "$f" >/dev/null 2>&1 || rc=$?
+  if [[ "$rc" -eq 1 ]]; then
+    _report "T18 missing actions HALTs (counts exits 1)" ok
+  else
+    _report "T18 missing actions HALTs" fail "counts rc=$rc want 1"
+  fi
+}
+
+# T19: the data-block shrink is a nested delete — dropping a record's `data {}`
+# payload block plans as "update" yet rewrites live record content.
+t_data_shrink_is_nested_delete() {
+  local f="$TMPD/data-shrink.json"
+  printf '{"resource_changes":[{"type":"cloudflare_record","address":"cloudflare_record.srv","mode":"managed","change":{"actions":["update"],"before":{"data":[{"service":"_sip","proto":"_tls","target":"old.example"}]},"after":{"data":[]}}}]}' > "$f"
+  local out; out=$(_run_gate "$f" "feat: drop srv data")
+  if [[ "$out" == "0:1:0:1:1" ]]; then
+    _report "T19 cloudflare_record data{} shrink counts as nested delete (ndel=1 rc=1)" ok
+  else
+    _report "T19 data{} shrink counts as nested delete" fail "got '$out' want '0:1:0:1:1'"
+  fi
+}
+
 t_zone_delete_trips
 t_no_changes_passes
 t_ack_destroy_allows
@@ -297,6 +354,10 @@ t_ack_below_tip_allows
 t_workflow_feeds_all_push_messages
 t_workflow_displays_forget_addresses
 t_updates_only_passes
+t_composed_actions_trips
+t_empty_actions_halts
+t_missing_actions_halts
+t_data_shrink_is_nested_delete
 
 echo "=== $pass passed, $fail failed ==="
 # HARNESS FLOOR. A commented-out dispatch line reads green forever without this.

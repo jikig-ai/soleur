@@ -7,13 +7,15 @@
 #   cloudflare_zone          — block_types: []  (zone/account_id/type/plan are
 #                              scalars; meta/name_servers are computed)
 #   cloudflare_zone_dnssec   — block_types: []  (all attributes scalar/computed)
-#   cloudflare_record        — block_types: []  (content/name/ttl/priority are
-#                              scalars; `metadata` is a map attribute, not a
-#                              block array)
-# NO nested-block surface exists on any type in this root, so
-# `nested_deletes` is a literal 0 with no per-type clause. Shipping vacuous
-# shrink clauses would be dead code asserting nothing (#4420's rule is
-# clauses-only-where-a-surface-exists).
+#   cloudflare_record        — block_types: ["data", "timeouts"]
+# `data` is the MaxItems:1 nested block carrying the typed payload of
+# structured records (SRV/LOC/CAA/TLSA/... — service, proto, target, lat/long,
+# tag, ...). Shrinking it plans as `actions:["update"]` — the resource stays,
+# so resource_deletes sees nothing — while the live record's payload is
+# silently rewritten. That IS an unreviewed deletion of record content; the
+# `cloudflare_record` clause below counts it per the #4420 per-surface rule.
+# `timeouts` is an operation-level block only (how long the provider waits on
+# the API): dropping it changes no live state and is deliberately NOT counted.
 #
 # EXTENDING THIS FILTER: a future resource type in this root whose schema has
 # a nested block_types array-of-blocks (e.g. cloudflare_ruleset.rules) gets
@@ -45,17 +47,42 @@
 # its mail-hardening records dropped out of management). `index("forget")`,
 # not exact equality: a composed actions array is still a departure.
 #
+# ── undecidable_actions ────────────────────────────────────────────────────
+# The web-platform sibling HALTs on a resource_change whose actions is empty
+# or not an array — the count predicates can't classify it, and an
+# unclassifiable change must never score 0 and green the gate (an ack cannot
+# rescue it either; the counts script exits before emitting). Terraform
+# doesn't emit that shape today; the clause exists so the day it does, the
+# gate is already armed.
+#
 # Input: `terraform show -json <plan>` document.
-# Output: {plan_ok, resource_deletes, resource_forgets, nested_deletes}, all int
-#         except plan_ok (bool).
+# Output: {plan_ok, resource_deletes, resource_forgets, nested_deletes,
+#          undecidable_actions}, all int except plan_ok (bool).
+
+# `data` serializes as a one-element array in change.before/after (SDKv2
+# TypeList MaxItems:1); the object/array/empty normalisation keeps the count
+# honest if the marshalling ever differs.
+def _blockcount($v): if $v == null then 0 elif ($v | type) == "array" then ($v | length) else 1 end;
+
+def cloudflare_record_shrink($before; $after):
+  ($before // {}) as $b | ($after // {}) as $a
+  | (_blockcount($b.data) - _blockcount($a.data));
 
 {
   plan_ok: has("resource_changes"),
   resource_deletes: ([.resource_changes[]? | select(.change.actions? | index("delete"))] | length),
   # Every type, no type-specific clause — a forget is type-independent.
   resource_forgets: ([.resource_changes[]? | select(.change.actions? | index("forget"))] | length),
-  # 0 by construction: every type in this root has `block_types: []` on the
-  # pinned 4.52.10 schema — no array-of-blocks surface exists to shrink. See
-  # the inventory above.
-  nested_deletes: 0
+  undecidable_actions: ([.resource_changes[]? | select((.change.actions? | type) != "array" or (.change.actions | length) == 0)] | length),
+  nested_deletes: (
+    [
+      # cloudflare_record.data — the typed-payload block (MaxItems:1); a
+      # shrink rewrites live record content under an "update" action.
+      (.resource_changes[]?
+       | select(.type == "cloudflare_record")
+       | select(.change.actions? | index("delete") | not)
+       | cloudflare_record_shrink(.change.before; .change.after)
+       | select(. > 0))
+    ] | add // 0
+  )
 }

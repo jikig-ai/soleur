@@ -6,7 +6,8 @@
 #   stdin: a JSON array of the PR's branch commit messages, oldest first —
 #          exactly `gh api repos/:owner/:repo/pulls/N/commits --jq '[.[].commit.message]'`
 #   exit 0: the composed squash body carries a line-anchored [ack-destroy]
-#   exit 1: it does not
+#   non-zero: it does not (a malformed-JSON input dies via set -e with jq's
+#             own code — fail-closed either way)
 #
 # ── WHY THIS EXISTS ────────────────────────────────────────────────────────
 # The apply-side destroy gate reads the MERGE COMMIT message. The PR-side gate

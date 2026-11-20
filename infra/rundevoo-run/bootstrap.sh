@@ -164,7 +164,7 @@ pg_id() {
     .result[]
     | select(.name == $want)
     | select(.scopes | index("com.cloudflare.api.account.zone") != null)
-    | .id' | head -n 1
+    | .id' | jq -r 'first(.) // empty'
 }
 PG_ZONE_READ=$(pg_id "Zone Read")
 PG_DNS_WRITE=$(pg_id "DNS Write")
@@ -175,9 +175,12 @@ done
 
 # Revoke-on-remint: an existing same-named token is a stale credential —
 # rotate it out before minting, so a re-run never leaves two live copies.
+# A failed LIST call must be loud, not `|| ""`: minting beside an
+# un-revoked same-named token leaves two live credentials.
 existing_ids=$(_cf_admin_curl "$CF_ADMIN_TOKEN_BOOTSTRAP" \
   "$CF_API_BASE/user/tokens" --max-time 30 -fsS \
-  | jq -r --arg n "$TOKEN_NAME" '.result[]? | select(.name == $n) | .id') || existing_ids=""
+  | jq -r --arg n "$TOKEN_NAME" '.result[]? | select(.name == $n) | .id') \
+  || { red "GET /user/tokens failed — cannot certify revoke-on-remint; refusing to mint beside a possibly-live $TOKEN_NAME"; exit 1; }
 while IFS= read -r old_id; do
   [[ -n "$old_id" ]] || continue
   _cf_admin_curl "$CF_ADMIN_TOKEN_BOOTSTRAP" \

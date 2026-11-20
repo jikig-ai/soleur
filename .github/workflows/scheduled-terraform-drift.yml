@@ -179,6 +179,13 @@ jobs:
               echo "::error::cf_token_rundevoo_absent — CF_API_TOKEN_RUNDEVOO is empty in prd_terraform; the rundevoo leg cannot authenticate. Run infra/rundevoo-run/bootstrap.sh."
               PLAN_OUTPUT="CF_API_TOKEN_RUNDEVOO is not configured (empty) — the rundevoo leg cannot authenticate."
               EXIT_CODE=1
+            elif [[ ! "$CF_TOKEN" =~ ^[A-Za-z0-9/+=_.-]+$ ]]; then
+              # Shape check before the literal `${PLAN_OUTPUT//"$CF_TOKEN"/***}`
+              # below: a glob-metachar token would be interpreted as a PATTERN
+              # and could under-redact output that lands in a public issue.
+              echo "::error::CF_API_TOKEN_RUNDEVOO does not have the shape of a single-line credential; refusing to run the plan."
+              PLAN_OUTPUT="CF_API_TOKEN_RUNDEVOO failed shape check — refusing."
+              EXIT_CODE=1
             else
               # Both names: TF_VAR_ feeds the required variable the provider
               # api_token binds to (the env default never reaches an explicit
@@ -258,6 +265,10 @@ jobs:
           CF_TOKEN="$(doppler secrets get CF_API_TOKEN_RUNDEVOO --plain)"
           if [[ -z "$CF_TOKEN" ]]; then
             echo "::error::cf_token_rundevoo_absent — CF_API_TOKEN_RUNDEVOO is empty in prd_terraform; the set-equality probe cannot run."
+            exit 1
+          fi
+          if [[ ! "$CF_TOKEN" =~ ^[A-Za-z0-9/+=_.-]+$ ]]; then
+            echo "::error::CF_API_TOKEN_RUNDEVOO does not have the shape of a single-line credential; refusing to probe."
             exit 1
           fi
           # `terraform show -json` of RECORDED state — the managed set. AWS_*
@@ -1344,6 +1355,17 @@ jobs:
              - **A create (`+`) that no recent merge added.** The object was deleted in Sentry's web UI. The apply's create gate refuses to re-create it from a dispatch. Restore it through a PR whose diff explains the create (re-add or touch the block, or an `import {}` for an object re-created by hand).
              - **A destroy (`-`) or a replace.** A dispatch can never carry `[ack-destroy]`, so the destroy gate refuses it. Re-run the failed push-triggered apply, which still has its merge commit and its ack, or land a PR whose merge commit carries `[ack-destroy]`.
           SENTRY_STEP
+              elif [[ "$MATRIX_DIR" == "infra/rundevoo-run" ]]; then
+                # (#12971) The generic else below steers the operator to `terraform apply`
+                # locally — for this root that path carries NO [ack-destroy] requirement,
+                # no state lock (use_lockfile=false), and bypasses every gate this
+                # pipeline exists to enforce. Never print it for rundevoo.
+                cat <<'RUNDEVOO_STEP'
+          2. Act on what the plan shows. A manual dispatch of `apply-rundevoo-infra.yml` passes the same gates as a merge, and those gates refuse two of these cases. Never apply locally: the backend has `use_lockfile = false` (ADR-031) and a local apply carries no `[ack-destroy]` requirement at all.
+             - **In-place updates (`~`) only.** First check the latest `apply-rundevoo-infra.yml` runs on `main` (`gh run list -w apply-rundevoo-infra.yml -b main -L 3`). A plan that lands between a merge and its apply shows that merge's blocks as pending: close this issue once the apply converges. If the latest run FAILED, re-run it (`gh run rerun <run-id> --failed`). Otherwise dispatch: `gh workflow run apply-rundevoo-infra.yml --ref main -f reason="reconcile drift (drift run @@RUN_ID@@)"`.
+             - **A create (`+`) that no recent merge added.** Re-add it through a PR — the apply's create direction is ungated by design; additive live drift is the set-equality probe's job (check its output in the same drift run).
+             - **A destroy (`-`) or a replace.** A dispatch can never carry `[ack-destroy]`, so the destroy gate refuses it. Re-run the failed push-triggered apply, which still has its merge commit and its ack, or land a PR whose merge commit carries `[ack-destroy]`.
+          RUNDEVOO_STEP
               else
                 echo "2. If the drift is intentional, run \`terraform apply\` locally to update state"
                 echo "3. If the drift is unintentional, revert the manual change"

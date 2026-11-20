@@ -153,7 +153,7 @@ time (handled by the review skill's conditional-agent block).
 ### Phase 0 — Bootstrap credential (pre-merge, agent-run)
 
 1. Dump the local provider schema (`terraform providers schema -json` against
-   the pinned ~> 4.0 / 4.52.7 lock) and verify: `cloudflare_record` accepts
+   the pinned ~> 4.0 / 4.52.10 lock) and verify: `cloudflare_record` accepts
    `content = "."` for `type = "MX"` (RFC 7505 null MX), and the
    `cloudflare_zone` + `cloudflare_zone_dnssec` attribute shapes. Do not
    author records against docs — the version-mismatch learning applies.
@@ -582,7 +582,7 @@ domain zones, so `c4-count-parity` is unaffected by adding a zone.
 - **Apex record names are literal FQDNs** (`rundevoo.run`), never `@` —
   perpetual-diff trap per `apps/web-platform/infra/dns.tf` comments.
 - **Verify `content = "."` for the null MX** against the locally dumped
-  4.52.7 schema before authoring (FR3); provider docs drift
+  4.52.10 schema before authoring (FR3); provider docs drift
   (`integration-issues/2026-04-10-context7-terraform-provider-version-mismatch.md`).
 - **Destroy-guard must count `"forget"`** alongside `"delete"` — a state-drop
   of the zone is the incident and passes every gate otherwise.

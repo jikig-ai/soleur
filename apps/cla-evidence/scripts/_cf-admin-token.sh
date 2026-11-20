@@ -4,6 +4,9 @@
 #   - apps/cla-evidence/scripts/gdpr-override.sh   (GDPR Art. 17 erasure driver)
 #   - apps/cla-evidence/infra/bootstrap.sh         (one-shot post-merge bootstrap)
 #   - infra/rundevoo-run/bootstrap.sh              (zone-token mint, #12971)
+#   - scripts/rundevoo-dns-set-equality.sh         (DNS drift probe, #12971 —
+#     calls _cf_admin_curl only; `yellow` is required only by the
+#     verify/self-revoke functions below)
 #
 # Extracted per issue #3950 item 3 (the two call sites overlapped ~70%). The
 # verify function adopts gdpr-override's MORE-DEFENSIVE empty-id hard-fail —
@@ -11,9 +14,11 @@
 # silently disabling its own self-revoke. Hard-failing on empty id is the
 # "more defensive" behavior the issue calls out as the upgrade bootstrap gains.
 #
-# Sourcing preconditions (both callers satisfy these BEFORE the `source` line):
-#   - `red`, `green`, `yellow` log helpers are defined (callers keep their own
-#     stream/format conventions; the helper does not hard-code colors).
+# Sourcing preconditions (all callers satisfy these BEFORE the `source` line):
+#   - `red`, `green` log helpers are defined; `yellow` is additionally required
+#     ONLY by callers of cf_token_verify / cf_token_self_revoke (callers keep
+#     their own stream/format conventions; the helper does not hard-code
+#     colors).
 #   - `curl` and `jq` are on PATH.
 # Optional: CF_API may be set to override the API base; defaults to the
 # canonical Cloudflare v4 base. Any other value is refused (the bearer is sent to

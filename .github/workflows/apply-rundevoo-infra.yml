@@ -209,11 +209,21 @@ jobs:
           SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)}"
           # The zone-scoped token, exported under both names: TF_VAR_ feeds the
           # required variable the provider api_token is bound to; the raw name
-          # feeds the set-equality REST probe. No fallback to a broader
-          # credential: bounded reach is the property this pipeline certifies.
+          # feeds the set-equality REST probe. The `:-` arm is a same-name
+          # ambient-env passthrough (still the same credential), never a
+          # fallback to a broader credential — bounded reach is the property
+          # this pipeline certifies.
           CF_TOKEN="${CLOUDFLARE_API_TOKEN:-$(doppler secrets get CF_API_TOKEN_RUNDEVOO --plain)}"
           if [[ -z "$CF_TOKEN" ]]; then
             echo "::error::CF_API_TOKEN_RUNDEVOO is not configured in Doppler soleur/prd_terraform — run infra/rundevoo-run/bootstrap.sh."
+            exit 1
+          fi
+          # Single-line credentials only: a multi-line value would write more
+          # $GITHUB_ENV lines — arbitrary NAME=value env injection into every
+          # subsequent step (#9362). The charset also pre-validates CF_TOKEN
+          # for the literal string replace used in output redaction.
+          if [[ ! "$KEY_ID" =~ ^[A-Za-z0-9/+=_.-]+$ || ! "$SECRET" =~ ^[A-Za-z0-9/+=_.-]+$ || ! "$CF_TOKEN" =~ ^[A-Za-z0-9/+=_.-]+$ ]]; then
+            echo "::error::a fetched credential does not have the shape of a single-line credential; refusing to write the job environment."
             exit 1
           fi
           printf '::add-mask::%s\n' "$KEY_ID"
@@ -223,6 +233,18 @@ jobs:
           printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
           printf 'CLOUDFLARE_API_TOKEN=%s\n' "$CF_TOKEN" >> "$GITHUB_ENV"
           printf 'TF_VAR_cf_api_token_rundevoo=%s\n' "$CF_TOKEN" >> "$GITHUB_ENV"
+
+      - name: Provisioners are out of scope for this root
+        # A local-exec/remote-exec provisioner runs arbitrary commands at
+        # apply time with the live credentials in env and shows up in the
+        # plan as a plain create/update — the destroy gate sees zero
+        # destroys while the provisioner deletes live records. This root
+        # declares none; refuse the whole class rather than review each use.
+        run: |
+          if grep -rn --include='*.tf' -E '\bprovisioner\b|local-exec|remote-exec' "${{ env.INFRA_DIR }}/"; then
+            echo "::error::a provisioner was added under ${{ env.INFRA_DIR }}/ — provisioners execute outside plan accounting and bypass the destroy gate. Route the action through a resource or remove it."
+            exit 1
+          fi
 
       - name: Terraform init
         working-directory: ${{ env.INFRA_DIR }}
@@ -362,6 +384,19 @@ jobs:
   # apply: reachable only on push-to-main and manual dispatch — never on PR or
   # merge_group (the aggregator covers those). The privileged environment
   # holds the deploy-time approval boundary.
+  #
+  # Two accepted residuals vs the sentry mirror, both bounded by the parked
+  # zone's blast radius:
+  #   1. NO apply-failure issue filer. Sentry files an issue on apply failure
+  #      ("a red run nobody owns"); here the twice-daily drift leg files on
+  #      non-convergence, so a failed apply surfaces within ~12h rather than
+  #      silently. Deliberate drop, re-evaluate if the domain gains a live
+  #      surface (#12972).
+  #   2. A workflow_dispatch executes the file AT THE DISPATCHED REF — a
+  #      pushed branch carrying an edited copy could drop this `if:` and the
+  #      `environment:` key and apply outside the gate. Bounded by
+  #      workflows-scoped push access (same-repo write) + CODEOWNERS on this
+  #      file; inherent to Actions, documented not fixed.
   apply:
     needs: [preflight]
     if: >-
@@ -397,6 +432,12 @@ jobs:
             echo "::error::CF_API_TOKEN_RUNDEVOO is not configured in Doppler soleur/prd_terraform — run infra/rundevoo-run/bootstrap.sh."
             exit 1
           fi
+          # Single-line credentials only (#9362 — see the plan_pr leg's
+          # identical check for the rationale).
+          if [[ ! "$KEY_ID" =~ ^[A-Za-z0-9/+=_.-]+$ || ! "$SECRET" =~ ^[A-Za-z0-9/+=_.-]+$ || ! "$CF_TOKEN" =~ ^[A-Za-z0-9/+=_.-]+$ ]]; then
+            echo "::error::a fetched credential does not have the shape of a single-line credential; refusing to write the job environment."
+            exit 1
+          fi
           printf '::add-mask::%s\n' "$KEY_ID"
           printf '::add-mask::%s\n' "$SECRET"
           printf '::add-mask::%s\n' "$CF_TOKEN"
@@ -404,6 +445,13 @@ jobs:
           printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
           printf 'CLOUDFLARE_API_TOKEN=%s\n' "$CF_TOKEN" >> "$GITHUB_ENV"
           printf 'TF_VAR_cf_api_token_rundevoo=%s\n' "$CF_TOKEN" >> "$GITHUB_ENV"
+
+      - name: Provisioners are out of scope for this root
+        run: |
+          if grep -rn --include='*.tf' -E '\bprovisioner\b|local-exec|remote-exec' "${{ env.INFRA_DIR }}/"; then
+            echo "::error::a provisioner was added under ${{ env.INFRA_DIR }}/ — provisioners execute outside plan accounting and bypass the destroy gate. Route the action through a resource or remove it."
+            exit 1
+          fi
 
       - name: Terraform init
         working-directory: ${{ env.INFRA_DIR }}

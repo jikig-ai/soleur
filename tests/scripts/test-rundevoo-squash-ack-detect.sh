@@ -11,7 +11,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DETECT="$REPO_ROOT/scripts/rundevoo-squash-ack-detect.sh"
 pass=0; fail=0
-EXPECTED_TESTS=7
+EXPECTED_TESTS=14
 
 _report() {
   if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); echo "[ok] $1"
@@ -61,6 +61,45 @@ _case "T6 trailing body-line ack detects" 0 \
 
 # T7: empty input array -> 1 (fail closed, never a green on nothing).
 _case "T7 empty commit list does NOT detect" 1 '[]'
+
+# T8: the DISCRIMINATING case — an ack that IS the whole subject. It fails the
+# anchored regex only because of the "* " bullet prefix; without it a raw
+# grep over inputs would wrongly accept (and the apply gate would then red).
+_case "T8 ack AS the whole subject does NOT detect" 1 '["[ack-destroy]"]'
+
+# T9: same, buried among several commits.
+_case "T9 whole-subject ack among several commits does NOT detect" 1 \
+  '["chore: init","[ack-destroy]","feat: remove record"]'
+
+# T10: ack with trailing text on the same body line is not line-anchored.
+_case "T10 ack with trailing text on the body line does NOT detect" 1 \
+  '["feat: x\n\n[ack-destroy] because the record is dead"]'
+
+# T11-T13: near-miss literals must not satisfy the gate — a partially
+# unanchored or case-insensitive regex "simplification" would green these.
+_case "T11 [ack-destroy-all] does NOT detect" 1 \
+  '["feat: x\n\n[ack-destroy-all]"]'
+_case "T12 [ACK-DESTROY] (wrong case) does NOT detect" 1 \
+  '["feat: x\n\n[ACK-DESTROY]"]'
+_case "T13 bare ack-destroy without brackets does NOT detect" 1 \
+  '["feat: x\n\nack-destroy"]'
+
+# T14: non-vacuity anchor — the SAME literal must give different verdicts in
+# body vs subject position. If both return the same, the script has been
+# "simplified" back into a grep.
+t_emulation_distinguishes_position() {
+  local body_rc=0 subj_rc=0
+  printf '%s' '["feat: x\n\n[ack-destroy]"]' | bash "$DETECT" >/dev/null 2>&1 || body_rc=$?
+  printf '%s' '["[ack-destroy]"]'            | bash "$DETECT" >/dev/null 2>&1 || subj_rc=$?
+  if [[ "$body_rc" -eq 0 && "$subj_rc" -eq 1 ]]; then
+    _report "T14 body-vs-subject give DIFFERENT verdicts (emulation is real)" ok
+  else
+    _report "T14 body-vs-subject give DIFFERENT verdicts" fail \
+      "body_rc=$body_rc (want 0) subj_rc=$subj_rc (want 1) — a grep returns the same verdict for both"
+  fi
+}
+
+t_emulation_distinguishes_position
 
 echo "=== $pass passed, $fail failed ==="
 ran=$((pass + fail))

@@ -15,7 +15,7 @@ Bot-authored PRs never trigger CI (GitHub prevents the loop), so
 verdict depends on what the diff contains — therefore fabricates a pass on exactly the PRs
 the gate cannot inspect. This is the #6049 auto-fabrication guard.
 
-Two prior gates resolved this by argument rather than by code:
+Three gates resolved this by argument rather than by code (two prior, one added 2026-11-19):
 
 | Gate | Guarded surface | Recorded argument |
 |---|---|---|
@@ -23,7 +23,7 @@ Two prior gates resolved this by argument rather than by code:
 | `sentry-destroy-required` (#6589 / ADR-031 amendment) | `apps/web-platform/infra/sentry/**` | outside the action's `ALLOWED_PATHS` |
 | `rundevoo-destroy-required` (#12971) | `infra/rundevoo-run/**` | outside the action's `ALLOWED_PATHS` (re-derived per gate, not inherited — this row is the record of that derivation) |
 
-Both are labelled FABRICATED-NOT-EARNED and are sound because the fabricated assertion is
+All three are labelled FABRICATED-NOT-EARNED and are sound because the fabricated assertion is
 **vacuously true**: no bot PR can produce a diff the gate would reject. Each carries a
 tripwire comment of the form *"the residual goes LIVE the instant `<path>` is added to
 `ALLOWED_PATHS`."*

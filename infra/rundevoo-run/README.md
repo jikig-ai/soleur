@@ -62,10 +62,22 @@ out-of-band *added* records — the REST whole-list probe covers that).
 
 ## Failure modes
 
-- **Zone deleted/recreated:** the zone id changes; the committed `import {}`
-  block hard-fails every plan until edited. Deliberate fail-closed — fix by
-  updating the literal id in `zone.tf`.
+- **Zone deleted/recreated:** the zone id changes. On a fresh backend the
+  committed `import {}` read of the stale id hard-fails; with state present
+  the import block is skipped and the zone plans as a CREATE (name-collision
+  error or duplicate pending zone) — loud either way, and the set-equality
+  probe fails closed on the stale literal id. Fix by updating `zone.tf`.
 - **Token revoked/expired:** drift + apply both fail on 401/403; re-run
   `bootstrap.sh` to rotate.
 - **Out-of-band DNS edit:** drift plan (`-detailed-exitcode`) reds on changes
   Terraform manages; the set-equality probe reds on added records.
+- **Serving surface ≠ DNS enumeration:** the probe watches the record set
+  only. Zone-config objects that need no DNS record — Worker routes
+  (without custom domains), Snippets, redirect/transform rules — are
+  dormant without a record but outside the probe's set. The zone-scoped
+  token cannot create them (no Workers scope), so the residual requires
+  account-level compromise; noted so a future phase doesn't mistake DNS
+  equality for complete serving-surface coverage.
+- **DNSSEC disable out-of-band:** invisible to plan (`status` is
+  computed-only) — the probe asserts `GET /zones/{id}/dnssec` is
+  `active|pending`.

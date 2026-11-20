@@ -4,14 +4,18 @@
 # exists because the same arithmetic inlined in two jobs drifted once already.
 #
 # Usage: rundevoo-destroy-counts.sh <terraform-show-json-file>
-#   stdout (on success): four `key=value` lines, eval-able by the caller:
+#   stdout (on success): five `key=value` lines, eval-able by the caller:
 #       resource_deletes=<int>
 #       resource_forgets=<int>
 #       nested_deletes=<int>
+#       undecidable_actions=<int>
 #       destroy_count=<int>     # resource_deletes + nested_deletes + resource_forgets
 #   exit 0: plan parsed, plan_ok true, counters validated
-#   exit 1: jq failed, plan_ok false (input was not a plan document), or a
-#           counter is not a non-negative integer
+#   exit 1: jq failed, plan_ok false (input was not a plan document), a
+#           counter is not a non-negative integer, or undecidable_actions > 0
+#           (an unclassifiable change — empty or non-array `actions` — HALTs
+#           the gate outright; [ack-destroy] cannot rescue it, matching the
+#           web-platform sibling's must-HALT contract)
 #
 # `resource_forgets` joins the SUM, not just the report — a counter that is
 # emitted but not summed is a report, not a gate. It stays a SEPARATE key from
@@ -49,15 +53,22 @@ fi
 resource_deletes=$(jq -r '.resource_deletes' <<<"$counts")
 resource_forgets=$(jq -r '.resource_forgets' <<<"$counts")
 nested_deletes=$(jq -r '.nested_deletes' <<<"$counts")
+undecidable_actions=$(jq -r '.undecidable_actions' <<<"$counts")
 
-for v in "$resource_deletes" "$resource_forgets" "$nested_deletes"; do
+for v in "$resource_deletes" "$resource_forgets" "$nested_deletes" "$undecidable_actions"; do
   if [[ ! "$v" =~ ^[0-9]+$ ]]; then
-    echo "::error::rundevoo-destroy-counts: counter not a non-negative integer (deletes=$resource_deletes forgets=$resource_forgets nested=$nested_deletes)" >&2
+    echo "::error::rundevoo-destroy-counts: counter not a non-negative integer (deletes=$resource_deletes forgets=$resource_forgets nested=$nested_deletes undecidable=$undecidable_actions)" >&2
     exit 1
   fi
 done
 
+if [[ "$undecidable_actions" -gt 0 ]]; then
+  echo "::error::rundevoo-destroy-counts: $undecidable_actions resource change(s) have empty or non-array 'actions' — the count predicates cannot classify them. HALT (ack-unreachable): inspect the plan document before proceeding." >&2
+  exit 1
+fi
+
 printf 'resource_deletes=%s\n' "$resource_deletes"
 printf 'resource_forgets=%s\n' "$resource_forgets"
 printf 'nested_deletes=%s\n' "$nested_deletes"
+printf 'undecidable_actions=%s\n' "$undecidable_actions"
 printf 'destroy_count=%s\n' "$((resource_deletes + nested_deletes + resource_forgets))"

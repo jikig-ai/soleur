@@ -15,11 +15,14 @@ resource "cloudflare_zone" "rundevoo_run" {
 }
 
 # Literal zone id, discovered 2026-11-19 via GET /zones?name=rundevoo.run.
-# Failure mode: if the zone is ever deleted and recreated in the dashboard the
-# id changes and every plan/apply hard-fails on the import read until this
-# block is edited — that fail-closed behaviour is deliberate (a repointed or
-# recreated zone must not be clobbered silently). The id is valid only for
-# this zone, so the literal coupling is correct.
+# Failure mode if the zone is ever deleted and recreated in the dashboard: on
+# the EMPTY-state path (fresh backend) the import read of the stale literal id
+# hard-fails; on the state-present path the import block is skipped, refresh
+# marks the zone gone, and the plan shows a zone CREATE that either errors on
+# the name collision or parks a duplicate pending zone — in every case the
+# set-equality probe (GET on the committed literal id) fails closed. Either
+# way the change is loud, not silent: fix by updating the literal id here.
+# The id is valid only for this zone, so the literal coupling is correct.
 import {
   to = cloudflare_zone.rundevoo_run
   id = "4a16c6fcd6949d1887d6247f95a0d91e"

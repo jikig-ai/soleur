@@ -12,7 +12,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERDICT="$REPO_ROOT/scripts/rundevoo-destroy-gate-verdict.sh"
 pass=0; fail=0
-EXPECTED_TESTS=27
+EXPECTED_TESTS=30
 
 _report() {
   if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); echo "[ok] $1"
@@ -26,7 +26,7 @@ fi
 
 results=(success failure cancelled skipped "")
 
-# T1..T15: the full 5x5 matrix. Expected pass cells: (success,success) and
+# T1..T25: the full 5x5 matrix. Expected pass cells: (success,success) and
 # (success,skipped). Everything else must exit 1.
 i=0
 for d in "${results[@]}"; do
@@ -57,12 +57,27 @@ else
 fi
 
 # T17: FAIL output goes to stderr as an ::error:: annotation (CI surfaces it).
-err=$(bash "$VERDICT" success failure 2>&1 >/dev/null)
+err=$(bash "$VERDICT" success failure 2>&1 >/dev/null || true)
 if [[ "$err" == *"::error::"* && "$err" == *"FAILED closed"* ]]; then
   _report "T17 FAIL emits an ::error:: annotation naming fail-closed" ok
 else
   _report "T17 FAIL emits an ::error:: annotation" fail "got '$err'"
 fi
+
+# T26-T28: near-miss inputs must NOT pass — a normalization "simplification"
+# (case-folding, prefix match, whitespace trim) would green these while GitHub
+# emitted something the allow-list never certified.
+for near in "Success" "success " " success"; do
+  i=$((i + 1))
+  rc=0
+  bash "$VERDICT" "$near" success >/dev/null 2>&1 || rc=$?
+  label="T$i near-miss detect='${near}' plan='success'"
+  if [[ "$rc" -eq 1 ]]; then
+    _report "$label -> $rc" ok
+  else
+    _report "$label" fail "rc=$rc want 1 — near-miss inputs must fail the allow-list"
+  fi
+done
 
 echo "=== $pass passed, $fail failed ==="
 ran=$((pass + fail))
