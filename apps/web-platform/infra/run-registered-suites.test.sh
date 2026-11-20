@@ -812,6 +812,109 @@ else
   no "T11j: malformed manifest tolerated (rc=$rc_mbad, want 2)"
 fi
 
+# ── T11k: the DEDICATED kind (#12941, CTO Q6c/Q16) ───────────────────────────
+# A DEDICATED_JOB_WHY suite (basename-keyed, so a fixture of the same name inherits
+# the entry) is absent from EVERY k/N execute set, present in the plain unsharded
+# set, dropped by SOLEUR_INFRA_SKIP_DEDICATED=1 with a loud line naming its owning
+# job, and absent from --enumerate. Positional assignment over 6 fixtures and 4
+# legs (MANIFEST=off) puts the dedicated fixture on a leg the moment the drop is
+# lost, so the shard row cannot pass by partition luck.
+FIXD="$TMP/dedfix"; mkdir -p "$FIXD"
+for i in 1 2 3 4 5; do printf '#!/usr/bin/env bash\nexit 0\n' > "$FIXD/d$i.test.sh"; done
+printf '#!/usr/bin/env bash\necho DEDICATED-FIXTURE-RAN\nexit 0\n' > "$FIXD/bastion-runcmd-rehearsal.test.sh"
+DED_FIX="$FIXD/bastion-runcmd-rehearsal.test.sh"
+
+_ded_on_leg=""; _ded_loud=0
+for k in 1 2 3 4; do
+  _lo="$(SOLEUR_INFRA_SHARD=$k/4 SOLEUR_INFRA_MANIFEST=off SOLEUR_INFRA_DIR="$FIXD" \
+        bash "$SUT" --list 2>/dev/null)"
+  if printf '%s\n' "$_lo" | awk '/^Shard [0-9]+\/[0-9]+ execute set/{f=1;next} /^$/{f=0} f' \
+       | grep -qxF "  $DED_FIX"; then
+    _ded_on_leg="${_ded_on_leg} $k/4"
+  fi
+  printf '%s\n' "$_lo" | grep -qE "^DEDICATED: \S*bastion-runcmd-rehearsal\.test\.sh is NOT run here \(shard $k/4.*CI job bastion-boot-rehearsal" \
+    && _ded_loud=$(( _ded_loud + 1 ))
+done
+if [[ -z "$_ded_on_leg" && "$_ded_loud" -eq 4 ]]; then
+  ok "T11k-a: the dedicated suite is in no k/4 execute set, and every leg names its owner (bastion-boot-rehearsal)"
+else
+  no "T11k-a: dedicated suite on leg(s):${_ded_on_leg:- none}; loud owner line on ${_ded_loud}/4 legs"
+fi
+unset _lo _ded_on_leg _ded_loud
+
+_lo="$(SOLEUR_INFRA_DIR="$FIXD" bash "$SUT" --list 2>/dev/null)"
+if printf '%s\n' "$_lo" | grep -qF "  RUN dedicated: $DED_FIX — owner: bastion-boot-rehearsal" \
+   && ! printf '%s\n' "$_lo" | grep -qF "SKIP dedicated:" \
+   && printf '%s\n' "$_lo" | grep -qxF "Execute set: 6 suite(s)"; then
+  ok "T11k-b: the plain unsharded set keeps the dedicated suite (RUN, 6 of 6)"
+else
+  no "T11k-b: the unsharded set lost the dedicated suite: $(printf '%s\n' "$_lo" | grep -E 'dedicated:|^Execute set' | head -3)"
+fi
+
+_lo="$(SOLEUR_INFRA_SKIP_DEDICATED=1 SOLEUR_INFRA_DIR="$FIXD" bash "$SUT" --list 2>/dev/null)"
+if printf '%s\n' "$_lo" | grep -qF "  SKIP dedicated: $DED_FIX — owner: bastion-boot-rehearsal" \
+   && printf '%s\n' "$_lo" | grep -qE '^DEDICATED: \S*bastion-runcmd-rehearsal\.test\.sh is NOT run here \(SOLEUR_INFRA_SKIP_DEDICATED=1\).*CI job bastion-boot-rehearsal' \
+   && printf '%s\n' "$_lo" | grep -qxF "Execute set: 5 suite(s)"; then
+  ok "T11k-c: SOLEUR_INFRA_SKIP_DEDICATED=1 drops it (5 of 6) with one loud line naming bastion-boot-rehearsal"
+else
+  no "T11k-c: the monitor marker did not drop it loudly: $(printf '%s\n' "$_lo" | grep -E 'DEDICATED|dedicated:|^Execute set' | head -3)"
+fi
+unset _lo
+
+ENUM_D="$(SOLEUR_INFRA_DIR="$FIXD" bash "$SUT" --enumerate 2>/dev/null)"
+if [[ "$(printf '%s\n' "$ENUM_D" | grep -cP '^SUITE_REGISTRATION\t\S*d[1-5]\.test\.sh$')" == 5 ]] \
+   && ! printf '%s\n' "$ENUM_D" | grep -qF 'bastion-runcmd-rehearsal'; then
+  ok "T11k-d: --enumerate omits the dedicated suite (no leg times it, so no manifest row)"
+else
+  no "T11k-d: --enumerate wrong: $(printf '%s' "$ENUM_D" | grep -c '' ) rows, bastion present=$(printf '%s' "$ENUM_D" | grep -c bastion)"
+fi
+unset ENUM_D
+
+rc_dbad=0
+SOLEUR_INFRA_SKIP_DEDICATED=yes SOLEUR_INFRA_DIR="$FIXD" bash "$SUT" --list >/dev/null 2>&1 || rc_dbad=$?
+if (( rc_dbad == 2 )); then
+  ok "T11k-e: a malformed SOLEUR_INFRA_SKIP_DEDICATED exits 2 (never inferred)"
+else
+  no "T11k-e: malformed marker tolerated (rc=$rc_dbad, want 2)"
+fi
+
+# Execution, not just listing: the unsharded run EXECUTES the dedicated fixture and the
+# marker run does not — and the marker reaches no nested runner (the runner unsets it).
+_xo="$(SOLEUR_INFRA_DIR="$FIXD" timeout 60 bash "$SUT" 2>&1)"
+_xm="$(SOLEUR_INFRA_SKIP_DEDICATED=1 SOLEUR_INFRA_DIR="$FIXD" timeout 60 bash "$SUT" 2>&1)"
+if printf '%s\n' "$_xo" | grep -qF "PASS $DED_FIX" \
+   && printf '%s\n' "$_xo" | grep -qF '6 passed, 0 failed' \
+   && ! printf '%s\n' "$_xm" | grep -qF "PASS $DED_FIX" \
+   && printf '%s\n' "$_xm" | grep -qF '5 passed, 0 failed'; then
+  ok "T11k-f: the unsharded run executes the dedicated suite (6/6); the marker run skips it (5/5)"
+else
+  no "T11k-f: execution shape wrong: unsharded=[$(printf '%s\n' "$_xo" | grep -E 'passed|bastion' | tail -2 | tr '\n' '|')] marker=[$(printf '%s\n' "$_xm" | grep -E 'passed|bastion' | tail -2 | tr '\n' '|')]"
+fi
+unset _xo _xm
+
+# T11k-g: the same property on the REAL tree and the committed manifest — the real suite
+# path, not a fixture of its name. Parent-only: it pins which committed file carries the
+# DEDICATED entry (a repo property); the fixture rows above carry the runner behaviour
+# into the mutation children.
+if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
+  REAL_DED="apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh"
+  _real_on_leg=""
+  for k in 1 2 3 4; do
+    if SOLEUR_INFRA_SHARD=$k/4 timeout 60 bash "$SUT" --list 2>/dev/null \
+         | awk '/^Shard [0-9]+\/[0-9]+ execute set/{f=1;next} /^$/{f=0} f' \
+         | grep -qxF "  $REAL_DED"; then
+      _real_on_leg="${_real_on_leg} $k/4"
+    fi
+  done
+  if [[ -z "$_real_on_leg" ]] \
+     && timeout 60 bash "$SUT" --list 2>/dev/null | grep -qF "  RUN dedicated: $REAL_DED — owner: bastion-boot-rehearsal"; then
+    ok "T11k-g: $REAL_DED is on no real k/4 leg and RUNs in the real unsharded set"
+  else
+    no "T11k-g: real tree: on leg(s):${_real_on_leg:- none}; unsharded RUN line $(timeout 60 bash "$SUT" --list 2>/dev/null | grep -cF "RUN dedicated: $REAL_DED") (want 1 — is the suite committed?)"
+  fi
+  unset REAL_DED _real_on_leg
+fi
+
 # ── T8: corpus-conformance — every registered suite's failure marker is readable ──
 # Converts a silent degradation into a red test the day a 94th suite lands with a new
 # marker shape. Needs no suite execution.
@@ -1025,6 +1128,10 @@ if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
   # the execute set (the privileged bucket is excluded by construction).
   mapfile -t TMPNS_SET < <(timeout 60 bash "$SUT" --enumerate 2>/dev/null \
     | sed -n 's/^SUITE_REGISTRATION\t//p')
+  # --enumerate omits the DEDICATED suites (no leg times them, #12941), but they still
+  # execute — unsharded here and in their own CI job — so the sweep reads them too.
+  mapfile -t -O "${#TMPNS_SET[@]}" TMPNS_SET < <(timeout 60 bash "$SUT" --list 2>/dev/null \
+    | sed -n 's/^  \(RUN\|SKIP\) dedicated: \(\S*\) — .*/\2/p')
   if (( ${#TMPNS_SET[@]} > 0 )); then
     ok "T12a: --enumerate derived the execute set (${#TMPNS_SET[@]} suites) — the sweep cannot pass on 0 checked"
   else
@@ -1500,6 +1607,23 @@ open(p,'w').write(s)
   run_mutant timings-dropped "T11g:" \
     "s = s.replace('> \"\$logdir/\$key.trow\"', '> /dev/null')"
 
+  # ── T11k-surface mutants (#12941 Guard 2 rows 3-4: the DEDICATED kind) ──────
+  # Guard 2 row 3: the shard drop lost → the dedicated suite takes a k/N leg slot.
+  run_mutant dedicated-on-shard "T11k-a:" \
+    "a = '  if (( _SHARD_N > 0 )); then\n    _ded_reason=\"shard'; assert s.count(a) == 1; s = s.replace(a, '  if false; then\n    _ded_reason=\"shard')"
+
+  # Guard 2 row 4: excluded from the unsharded set too → it runs NOWHERE locally.
+  run_mutant dedicated-dropped-unsharded "T11k-b:" \
+    "a = '  elif (( _SKIP_DEDICATED == 1 )); then\n    _ded_reason='; assert s.count(a) == 1; s = s.replace(a, '  elif true; then\n    _ded_reason=')"
+
+  # The monitor marker parsed but ignored → the monitor leg boots it inside its ceiling.
+  run_mutant dedicated-marker-ignored "T11k-c:" \
+    "a = '  1) _SKIP_DEDICATED=1 ;;'; assert s.count(a) == 1; s = s.replace(a, '  1) _SKIP_DEDICATED=0 ;;')"
+
+  # --enumerate tables the dedicated suite → a manifest row no leg can time.
+  run_mutant dedicated-enumerated "T11k-d:" \
+    "a = '\"\${ENUM_SUITES[@]}\"\n  exit 0'; assert s.count(a) == 1; s = s.replace(a, '\"\${SUITES[@]}\"\n  exit 0')"
+
   # ── Guard 1 rows (#10786): the evidence relay ───────────────────────────────
   # The relay call deleted → nothing is relayed and the probe goes TRANSIENT again.
   run_mutant relay-dropped "T13a:" \
@@ -1551,10 +1675,11 @@ open(p,'w').write(s)
   # merely stay satisfied by it: a floor of 7 against 19 rows is 12 rows of slack a deletion
   # could spend silently.
   MATRIX_CALLS=$(grep -c '^  run_mutant ' "${BASH_SOURCE[0]}" || true)
-  if (( MATRIX_RAN >= 32 && MATRIX_RAN == MATRIX_CALLS )); then
+  # Floor raised 32 -> 36 for the four T11k-surface rows (#12941). Measured: 36 call sites.
+  if (( MATRIX_RAN >= 36 && MATRIX_RAN == MATRIX_CALLS )); then
     ok "T9: mutation matrix dispatched ${MATRIX_RAN} rows (all ${MATRIX_CALLS} call sites ran)"
   else
-    no "T9: matrix dispatched ${MATRIX_RAN} of ${MATRIX_CALLS} call sites (expected >= 32, all run)"
+    no "T9: matrix dispatched ${MATRIX_RAN} of ${MATRIX_CALLS} call sites (expected >= 36, all run)"
   fi
 fi
 
@@ -1593,7 +1718,10 @@ fi
 # 115/75 after the #10786 relay rows, ITEMISED: T13a-T13o are 15 assertions in both, plus 8 matrix
 # scoring lines (relay-dropped, -first-suite-only, -unprefixed, -after-reap, -drop-grep-a,
 # -no-sanitise, -no-byte-bound, -mapfile-no-t) in the parent only; measured on the green run (parent 115, child 75).
-if [[ -n "${SOLEUR_MUTATION_CHILD:-}" ]]; then MIN_ASSERTIONS=75; else MIN_ASSERTIONS=115; fi
+# 126/81 after the #12941 T11k rows, ITEMISED: T11k-a..f are 6 assertions in both, T11k-g (real tree) and
+# the 4 T11k-surface matrix scoring lines (dedicated-on-shard, -dropped-unsharded, -marker-ignored,
+# -enumerated) in the parent only; measured on the green run (parent 126, child 81).
+if [[ -n "${SOLEUR_MUTATION_CHILD:-}" ]]; then MIN_ASSERTIONS=81; else MIN_ASSERTIONS=126; fi
 TOTAL=$(( pass + fail ))
 if (( TOTAL < MIN_ASSERTIONS )); then
   echo "[FAIL] anti-vacuity: only ${TOTAL} assertion(s) ran, expected >= ${MIN_ASSERTIONS}" >&2

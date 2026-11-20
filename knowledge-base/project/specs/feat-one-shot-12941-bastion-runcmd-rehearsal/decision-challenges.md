@@ -1,7 +1,7 @@
 # Decision challenges — feat-one-shot-12941-bastion-runcmd-rehearsal
 
 Plan: `knowledge-base/project/plans/2026-11-20-feat-bastion-runcmd-rehearsal-plan.md`.
-Evidence: the plan-time prototype in `prototype/` (render, fixture image, boot driver, stub Sentry),
+Evidence: the plan-time prototype (render, fixture image, boot driver, stub Sentry; removed at work time, superseded by `apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh`, last present at e888004ebd),
 run 2026-11-20 against the pinned image `ubuntu:24.04@sha256:534baea6…eb55`.
 
 ## Decision Classes

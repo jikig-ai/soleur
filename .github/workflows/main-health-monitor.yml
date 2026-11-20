@@ -727,6 +727,12 @@ jobs:
         env:
           TEST_GROUP: infra
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # (#12941, CTO Q16) Drop the DEDICATED suites (run-registered-suites.sh's
+          # DEDICATED_JOB_WHY: the ~5-min bastion first-boot rehearsal) from this unsharded
+          # run — this leg already runs at its 60-min step ceiling. The runner prints one
+          # `DEDICATED:` line per dropped suite naming its owner, the bastion-boot-rehearsal
+          # job in infra-validation.yml, which runs it on every PR and main push in its paths filter.
+          SOLEUR_INFRA_SKIP_DEDICATED: "1"
         run: |
           set +e
           t0=$SECONDS

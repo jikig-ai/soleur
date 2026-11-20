@@ -10,6 +10,12 @@
 # cancelled, pull_request-only). This harness is the sibling of
 # ci-test-aggregator-diagnosis.test.sh — same contract, different step.
 #
+# THREE RESULTS since #12941 (matrix, fixed, bastion-boot-rehearsal). With more
+# than one sibling the cancelled discrimination must not depend on ENTRY ORDER:
+# the pre-#12941 arm kept the LAST sibling's result, so a cancelled job whose
+# concluded sibling sat earlier in the list was misread as supersession. The R9
+# rows put the one concluded sibling in each position.
+#
 # WHY THE BODY IS EXECUTED, NOT GREPPED. A grep over the workflow source cannot
 # tell "the classifier emits this line" from "the classifier never looked" —
 # both are the same bytes on disk. So this harness EXTRACTS the step's `run:`
@@ -79,27 +85,32 @@ fails=$((fails - 1)); unset 'FAILURES[${#FAILURES[@]}-1]'
 echo "  instrument self-test: pass() and fail() both move"
 
 # ── Execution harness ────────────────────────────────────────────────────────
-run_body() {  # $1=body $2=matrix $3=fixed $4=event ; sets OUT/RC
+run_body() {  # $1=body $2=matrix $3=fixed $4=bastion $5=event ; sets OUT/RC
   OUT="$SANDBOX/out.$RANDOM.$RANDOM"
-  ( MATRIX_RESULT="$2" FIXED_RESULT="$3" EVENT_NAME="$4" \
+  ( MATRIX_RESULT="$2" FIXED_RESULT="$3" BASTION_REHEARSAL_RESULT="$4" EVENT_NAME="$5" \
       bash --noprofile --norc -eo pipefail "$1" ) >"$OUT" 2>&1
   RC=$?
 }
 
-expect_line() {  # $1=label $2=body $3=matrix $4=fixed $5=event $6=needle $7=want_rc
-  local label="$1" body="$2" m="$3" f="$4" ev="$5" needle="$6" want_rc="$7"
-  run_body "$body" "$m" "$f" "$ev"
+# $1=label $2=body $3=matrix $4=fixed $5=bastion $6=event $7=needle $8=want_rc [$9=forbidden]
+# The optional forbidden needle must NOT appear — the R9 rows need it, because the
+# order-dependent arm printed the timeout line for one job AND a supersession line
+# for another, so a presence-only check passes it.
+expect_line() {
+  local label="$1" body="$2" m="$3" f="$4" b="$5" ev="$6" needle="$7" want_rc="$8" forbid="${9:-}"
+  run_body "$body" "$m" "$f" "$b" "$ev"
   local ok=1
   grep -qF -- "$needle" "$OUT" || ok=0
   [ "$RC" -eq "$want_rc" ] || ok=0
+  if [ -n "$forbid" ] && grep -qF -- "$forbid" "$OUT"; then ok=0; fi
   if [ "$ok" -eq 1 ]; then pass; return 0; fi
-  fail "$label — pair=($m,$f) event=$ev: expected a line containing '$needle' and rc=$want_rc; got rc=$RC, output: $(tr '\n' '|' <"$OUT" | head -c 300)"
+  fail "$label — results=($m,$f,$b) event=$ev: expected a line containing '$needle'${forbid:+ and none containing '$forbid'} and rc=$want_rc; got rc=$RC, output: $(tr '\n' '|' <"$OUT" | head -c 400)"
   return 1
 }
 
 # ── CONTROL ──────────────────────────────────────────────────────────────────
 _c0=$fails
-expect_line "CONTROL all-green" "$BODY" success success push \
+expect_line "CONTROL all-green" "$BODY" success success success push \
   "all succeeded" 0
 if [ "$fails" -ne "$_c0" ]; then
   printf '\nCONTROL ROW FAILED — the battery is VOID, not failing.\n' >&2
@@ -108,21 +119,38 @@ fi
 
 # ── Classification rows ──────────────────────────────────────────────────────
 # A failing leg names itself.
-expect_line "R1 matrix failure" "$BODY" failure success push \
+expect_line "R1 matrix failure" "$BODY" failure success success push \
   "deploy-script-tests: FAILED" 1
-expect_line "R2 fixed failure" "$BODY" success failure push \
+expect_line "R2 fixed failure" "$BODY" success failure success push \
   "deploy-script-tests-fixed: FAILED" 1
+expect_line "R8 bastion-boot-rehearsal failure" "$BODY" success success failure push \
+  "bastion-boot-rehearsal: FAILED" 1
 # The cancelled discrimination — the #8735 payload.
-expect_line "R3 superseded on pull_request" "$BODY" cancelled cancelled pull_request \
-  "SUPERSEDED" 1
-expect_line "R4 all-cancelled on push is NOT supersession" "$BODY" cancelled cancelled push \
-  "supersession cannot occur" 1
-expect_line "R5 leg-timeout shape: cancelled beside concluded sibling" \
-  "$BODY" cancelled success push \
-  "its own declared timeout-minutes" 1
-expect_line "R6 skipped" "$BODY" skipped success push \
+expect_line "R3 superseded on pull_request (all three cancelled)" "$BODY" \
+  cancelled cancelled cancelled pull_request "SUPERSEDED" 1 "timeout-minutes"
+expect_line "R4 all-cancelled on push is NOT supersession" "$BODY" \
+  cancelled cancelled cancelled push "supersession cannot occur" 1 "SUPERSEDED"
+expect_line "R5 leg-timeout shape: cancelled beside concluded siblings" \
+  "$BODY" cancelled success success push \
+  "its own declared timeout-minutes" 1 "supersession cannot occur"
+# R9: two cancelled, ONE concluded sibling, in each position. Both cancelled jobs
+# must read as a timeout kill (a sibling concluded, so the run was not
+# superseded) — never as supersession, whatever the entry order.
+expect_line "R9a concluded sibling first (matrix)" "$BODY" \
+  success cancelled cancelled push "its own declared timeout-minutes" 1 "supersession cannot occur"
+expect_line "R9b concluded sibling second (fixed)" "$BODY" \
+  cancelled success cancelled push "its own declared timeout-minutes" 1 "supersession cannot occur"
+expect_line "R9c concluded sibling third (bastion)" "$BODY" \
+  cancelled cancelled success push "its own declared timeout-minutes" 1 "supersession cannot occur"
+expect_line "R9d same on pull_request is NOT supersession" "$BODY" \
+  cancelled success cancelled pull_request "its own declared timeout-minutes" 1 "SUPERSEDED"
+# The timeout line names the sibling that concluded, so the reader knows which
+# job's verdict proves the run was not superseded.
+expect_line "R9e the timeout line names the concluded sibling" "$BODY" \
+  cancelled cancelled failure push "sibling bastion-boot-rehearsal='failure' concluded" 1
+expect_line "R6 skipped" "$BODY" skipped success success push \
   "SKIPPED" 1
-expect_line "R7 unclassified result" "$BODY" potato success push \
+expect_line "R7 unclassified result" "$BODY" potato success success push \
   "UNCLASSIFIED" 1
 
 # ── W: the env→needs wiring feeds the RIGHT results ──────────────────────────
@@ -142,10 +170,30 @@ PY
 )"
 if grep -qE 'MATRIX_RESULT=\$\{\{[[:space:]]*needs\.deploy-script-tests\.result' <<<"$WF_ENV" \
    && grep -qE 'FIXED_RESULT=\$\{\{[[:space:]]*needs\.deploy-script-tests-fixed\.result' <<<"$WF_ENV" \
+   && grep -qE 'BASTION_REHEARSAL_RESULT=\$\{\{[[:space:]]*needs\.bastion-boot-rehearsal\.result' <<<"$WF_ENV" \
    && ! grep -qE 'MATRIX_RESULT=.*-fixed' <<<"$WF_ENV"; then
   pass
 else
-  fail "W env wiring: MATRIX_RESULT/FIXED_RESULT do not map to their own needs.*.result — got: $(tr '\n' '|' <<<"$WF_ENV")"
+  fail "W env wiring: MATRIX_RESULT/FIXED_RESULT/BASTION_REHEARSAL_RESULT do not map to their own needs.*.result — got: $(tr '\n' '|' <<<"$WF_ENV")"
+fi
+
+# W2: the job is in the aggregator's needs: — without it needs.bastion-boot-rehearsal.result
+# renders EMPTY, which the classifier reads as UNCLASSIFIED on every run (never a silent
+# green, but never the job's real verdict either).
+WF_NEEDS="$(python3 - "$WF" <<'PY'
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+job = (doc.get("jobs") or {}).get("deploy-script-tests-done") or {}
+n = job.get("needs") or []
+print("\n".join([n] if isinstance(n, str) else n))
+PY
+)"
+if grep -qxF 'bastion-boot-rehearsal' <<<"$WF_NEEDS" \
+   && grep -qxF 'deploy-script-tests' <<<"$WF_NEEDS" \
+   && grep -qxF 'deploy-script-tests-fixed' <<<"$WF_NEEDS"; then
+  pass
+else
+  fail "W2 needs wiring: deploy-script-tests-done needs: lacks one of deploy-script-tests, deploy-script-tests-fixed, bastion-boot-rehearsal — got: $(tr '\n' '|' <<<"$WF_NEEDS")"
 fi
 
 # ── Mutants — the arms must actually discriminate ────────────────────────────
@@ -155,7 +203,7 @@ if cmp -s "$BODY" "$SANDBOX/body.nocancelled"; then
   fail "M1 setup: cancelled-arm sed produced an identical body (drifted)"
 else
   expect_line "M1 cancelled arm deleted" "$SANDBOX/body.nocancelled" \
-    cancelled success push "UNCLASSIFIED" 1
+    cancelled success success push "UNCLASSIFIED" 1
 fi
 
 # M2: drop the pull_request check — a push cancelled pair would claim
@@ -166,8 +214,33 @@ if cmp -s "$BODY" "$SANDBOX/body.nosupersede"; then
   fail "M2 setup: event-guard sed produced an identical body (drifted)"
 else
   expect_line "M2 supersession arm unreachable on pull_request" \
-    "$SANDBOX/body.nosupersede" cancelled cancelled pull_request \
+    "$SANDBOX/body.nosupersede" cancelled cancelled cancelled pull_request \
     "CANCELLED — the whole run was cancelled on a 'pull_request' event" 1
+fi
+
+# M3: restore the pre-#12941 "last sibling wins" read (each iteration overwrites
+# the verdict instead of stopping at the first concluded sibling). With three
+# entries a cancelled matrix job whose concluded sibling sits in the MIDDLE is then
+# read as supersession — the order dependence R9b exists to catch. The mutant
+# must degrade exactly that way, or R9b is not discriminating.
+python3 - "$BODY" "$SANDBOX/body.lastwins" <<'PY'
+import re, sys
+s = open(sys.argv[1]).read()
+# Indentation-agnostic: the extracted `run:` body carries the block's relative indent.
+pat = re.compile(r'( *)if \[\[ "\$\{other#\*:\}" != "cancelled" \]\]; then\n'
+                 r' *concluded="\$\{other%%:\*\}=\'\$\{other#\*:\}\'"\n'
+                 r' *break\n'
+                 r' *fi\n')
+if len(pat.findall(s)) != 1:
+    sys.exit(3)
+s = pat.sub(lambda m: m.group(1) + 'concluded=""; [[ "${other#*:}" != "cancelled" ]] && concluded="${other%%:*}=\'${other#*:}\'"\n', s)
+open(sys.argv[2], "w").write(s)
+PY
+if [ ! -s "$SANDBOX/body.lastwins" ] || cmp -s "$BODY" "$SANDBOX/body.lastwins"; then
+  fail "M3 setup: the last-sibling-wins mutation did not land (anchor drifted)"
+else
+  expect_line "M3 last-sibling-wins reads a middle-concluded run as supersession" \
+    "$SANDBOX/body.lastwins" cancelled success cancelled push "supersession cannot occur" 1
 fi
 
 echo ""
@@ -175,7 +248,9 @@ echo ""
 # 0 failed while certifying nothing. Exits DIRECTLY: a floor that routes
 # through the counters it guards exits 0 when the counters are neutered
 # (guard-vacuity-floor measured exactly this on this file's first shape).
-MIN_ASSERTS=10
+# 10 -> 20 with #12941: R8, R9a-R9e, W2, M3 and the bastion result threaded through
+# every row (counted: CONTROL, R1-R9e, W, W2, M1, M2, M3 = 20).
+MIN_ASSERTS=20
 if (( passes + fails < MIN_ASSERTS )); then
   printf 'FAIL: assertion floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$((passes + fails))" "$MIN_ASSERTS" >&2

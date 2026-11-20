@@ -174,7 +174,7 @@ settle_row "4: a second kernel-settle block is appended to the bastion file" RED
   - |
     fi
   # Post-settle pass:"
-settle_row "5: linux-image-generic dropped from the bastion package list" RED bastion 'curl linux-image-generic nftables;' 'curl nftables;'
+settle_row "5: linux-image-generic dropped from the bastion package list" RED bastion 'curl linux-image-generic nftables systemd-timesyncd;' 'curl nftables systemd-timesyncd;'
 settle_row "H2: the files differ only outside the markers" PASS bastion '  # Post-settle pass:' '  # a comment outside every marker
   # Post-settle pass:'
 h1="$(passes=0; fails=0; for r in "${SET_RED[@]}"; do check x RED true "${r%%|*}" "${r#*|}" >/dev/null; done; printf '%s %s' "$passes" "$fails")"

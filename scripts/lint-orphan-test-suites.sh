@@ -295,6 +295,9 @@ infra_rc=0
 # a broken parse here manufactures phantom orphans a reader would rightly ignore.
 infra_declared=$(sed -nE 's/^Derived ([0-9]+) registered infra suite.*/\1/p' "$WORK/infra_list" | head -1)
 infra_priv=$(grep -c '^  SKIP privileged: ' "$WORK/infra_list" || true)
+# DEDICATED suites (#12941) are derived and executed unsharded, but --enumerate omits them (no leg
+# times them); their CI coverage is a `run: bash` step, which surfaces 5/6 already read.
+infra_ded=$(grep -cE '^  (RUN|SKIP) dedicated: ' "$WORK/infra_list" || true)
 sed -nE 's/^SUITE_REGISTRATION\t(.*\.test\.sh)$/\1/p' "$WORK/infra_enum" | LC_ALL=C sort -u > "$WORK/raw3"
 infra_parsed=$(wc -l < "$WORK/raw3" | tr -d ' ')
 # SURFACE-3 FLOOR. The declared-vs-parsed check below compares two numbers that move TOGETHER:
@@ -309,8 +312,8 @@ if (( infra_parsed < MIN_INFRA_DERIVED )); then
   echo "ERROR: surface 3 derived only ${infra_parsed} infra suites, below the floor of ${MIN_INFRA_DERIVED} -- run-registered-suites.sh's derivation has narrowed. This is invisible to the declared-vs-parsed check (both numbers shrink together) and to the totals (surface 5's subtraction absorbs exactly the dropped paths), so nothing else in this file can see it." >&2
   fails=$((fails + 1))
 fi
-if (( infra_rc != 0 )) || [[ -z "$infra_declared" ]] || (( infra_parsed + infra_priv != infra_declared )); then
-  echo "ERROR: 'run-registered-suites.sh' exited ${infra_rc}; --list declared '${infra_declared:-<no header>}' derived suites (${infra_priv} privileged) while --enumerate recovered ${infra_parsed} executable -- the infra registration surface is not readable, so every infra suite would be judged against an incomplete covered set." >&2
+if (( infra_rc != 0 )) || [[ -z "$infra_declared" ]] || (( infra_parsed + infra_priv + infra_ded != infra_declared )); then
+  echo "ERROR: 'run-registered-suites.sh' exited ${infra_rc}; --list declared '${infra_declared:-<no header>}' derived suites (${infra_priv} privileged, ${infra_ded} dedicated) while --enumerate recovered ${infra_parsed} executable -- the infra registration surface is not readable, so every infra suite would be judged against an incomplete covered set." >&2
   fails=$((fails + 1))
 fi
 
