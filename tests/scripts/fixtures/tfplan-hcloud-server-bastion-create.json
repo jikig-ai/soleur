@@ -1,0 +1,50 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "tls_private_key.bastion_host_ssh",
+      "mode": "managed",
+      "type": "tls_private_key",
+      "name": "bastion_host_ssh",
+      "provider_name": "registry.terraform.io/hashicorp/tls",
+      "change": { "actions": ["create"], "before": null, "after": { "algorithm": "ED25519" } }
+    },
+    {
+      "address": "hcloud_firewall.bastion",
+      "mode": "managed",
+      "type": "hcloud_firewall",
+      "name": "bastion",
+      "provider_name": "registry.terraform.io/hetznercloud/hcloud",
+      "change": { "actions": ["create"], "before": null, "after": { "name": "soleur-bastion" } }
+    },
+    {
+      "address": "hcloud_server.bastion",
+      "mode": "managed",
+      "type": "hcloud_server",
+      "name": "bastion",
+      "provider_name": "registry.terraform.io/hetznercloud/hcloud",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": { "name": "soleur-bastion", "server_type": "cx23", "location": "hel1" }
+      }
+    },
+    {
+      "address": "hcloud_server_network.bastion",
+      "mode": "managed",
+      "type": "hcloud_server_network",
+      "name": "bastion",
+      "provider_name": "registry.terraform.io/hetznercloud/hcloud",
+      "change": { "actions": ["create"], "before": null, "after": { "ip": "10.0.1.70" } }
+    },
+    {
+      "address": "hcloud_firewall_attachment.bastion",
+      "mode": "managed",
+      "type": "hcloud_firewall_attachment",
+      "name": "bastion",
+      "provider_name": "registry.terraform.io/hetznercloud/hcloud",
+      "change": { "actions": ["create"], "before": null, "after": {} }
+    }
+  ]
+}

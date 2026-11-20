@@ -50,6 +50,15 @@ mock_provider "hcloud" {
       architecture = "x86"
     }
   }
+
+  # #12866: bastion.tf carries the same x86 precondition, so it is the THIRD mocked STRING
+  # assertion. CI failed on it exactly as #7309 predicts ("Hetzner reports architecture=mg989s7r").
+  override_data {
+    target = data.hcloud_server_type.bastion
+    values = {
+      architecture = "x86"
+    }
+  }
 }
 mock_provider "random" {}
 mock_provider "doppler" {}
