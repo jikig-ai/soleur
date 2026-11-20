@@ -89,8 +89,10 @@ jobs:
       - name: Remove runner copies of state and plan
         if: always()
         run: rm -rf "${RUNNER_TEMP}/cf-migrate"
-      - name: Email ops on failure
-        if: failure()
+      - name: Email ops on failure or cancel
+        # cancelled() too: a timeout-minutes kill or a manual cancel concludes `cancelled`, which
+        # failure() does not see, and a cancel can land mid-apply or after the state forget.
+        if: failure() || cancelled()
         uses: ./.github/actions/notify-ops-email
         with:
           subject: "CF account migrate (#12931): ${{ inputs.migrate_phase }} rehearsal run did NOT complete"
@@ -145,8 +147,10 @@ jobs:
       - name: Remove runner copies of state and plan
         if: always()
         run: rm -rf "${RUNNER_TEMP}/cf-migrate"
-      - name: Email ops on failure
-        if: failure()
+      - name: Email ops on failure or cancel
+        # cancelled() too: a timeout-minutes kill or a manual cancel concludes `cancelled`, which
+        # failure() does not see, and a cancel can land mid-apply or after the state forget.
+        if: failure() || cancelled()
         uses: ./.github/actions/notify-ops-email
         with:
           subject: "CF account migrate (#12931): ${{ inputs.migrate_phase }} apply run did NOT complete"

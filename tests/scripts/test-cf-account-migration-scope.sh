@@ -403,6 +403,10 @@ def check_migrate(rel):
         if job.get("if") != cond: p.append("%s if: %r, want %r" % (jid, job.get("if"), cond))
         e = job.get("environment")
         if not isinstance(e, str) or "${{" in e or e != env: p.append("%s environment: %r, want the literal %r" % (jid, e, env))
+        # A timeout or cancel concludes `cancelled`, which failure() misses: the ops email must see both.
+        mails = [st for st in (job.get("steps") or []) if isinstance(st, dict) and str(st.get("uses") or "").rstrip("/").endswith("/notify-ops-email")]
+        if len(mails) != 1 or re.sub(r"\s+", "", str(mails[0].get("if") or "")) != "failure()||cancelled()":
+            p.append("%s: want exactly one notify-ops-email step with if: failure() || cancelled()" % jid)
         runs = [st for st in (job.get("steps") or []) if isinstance(st, dict) and "cf-account-migrate-job.sh" in str(st.get("run") or "")]
         if len(runs) != 1:
             p.append("%s has %d steps running cf-account-migrate-job.sh, want 1" % (jid, len(runs))); continue
@@ -736,6 +740,8 @@ jobs:
       - env:
           REHEARSAL: "true"
         run: bash apps/web-platform/infra/scripts/cf-account-migrate-job.sh
+      - if: failure() || cancelled()
+        uses: ./.github/actions/notify-ops-email
   cf_account_migrate_apply:
     if: ${{ !inputs.rehearsal }}
     runs-on: ubuntu-latest
@@ -744,6 +750,8 @@ jobs:
       - env:
           REHEARSAL: "false"
         run: bash apps/web-platform/infra/scripts/cf-account-migrate-job.sh
+      - if: failure() || cancelled()
+        uses: ./.github/actions/notify-ops-email
 YML
   cp "$WFDIR/$AWPI" "$1/"
 }
@@ -776,6 +784,7 @@ mig_mut "REHEARSAL rendered from the input"      's#REHEARSAL: "false"#REHEARSAL
 mig_mut "apply if inverted"                      's#if: \$\{\{ !inputs\.rehearsal \}\}#if: inputs.rehearsal#'
 mig_mut "a third job"                            's#^jobs:$#jobs:\n  extra:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "true"#'
 mig_mut "one job collapses both legs"            '/^  cf_account_migrate_apply:$/,$d'
+mig_mut "the ops email misses a cancel or timeout" 's#if: failure\(\) \|\| cancelled\(\)$#if: failure()#'
 
 # ── verdict ────────────────────────────────────────────────────────────────────────────────
 printf '\ntest-cf-account-migration-scope.sh: %s passed, %s failed (%s cases)\n' "$PASS" "$FAIL" "$CASES"
@@ -783,7 +792,7 @@ if (( PASS + FAIL != CASES )); then
   printf 'CONSERVATION FAILED: PASS(%s)+FAIL(%s) != CASES(%s)\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_ASSERTIONS=69
+MIN_ASSERTIONS=70
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
