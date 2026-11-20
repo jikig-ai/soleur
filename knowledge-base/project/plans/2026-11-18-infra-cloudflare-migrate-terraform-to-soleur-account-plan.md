@@ -680,9 +680,11 @@ logs:
   retention: "GitHub Actions logs 90 days (repo default); Better Stack Logs per the existing source retention"
 
 discoverability_test:
-  command: "curl -s -o /dev/null -w '%{http_code}' https://soleur.ai/pages/agents.html"
-  expected_output: "301"
+  command: "curl -s -o /dev/null -w '%{http_code}' https://soleur.ai/"
+  expected_output: "200"
 ```
+
+The redirect property (`https://soleur.ai/pages/agents.html` answers `301`) can only be true after merge plus the `redirects-dns` dispatch, so preflight cannot probe it before merge. Three checks verify it after the apply: the dispatch fails on anything but 301 (`apps/web-platform/infra/scripts/cf-account-migrate-job.sh`, the post-apply curl loop), the Better Stack monitor `seo_redirect_bulk_item` expects `[301]` (`apps/web-platform/infra/uptime-alerts.tf`), and the runbook's Phase 2 verification curl. The pre-merge probe above checks that the zone keeps serving the site through the migration (CTO ruling, 2026-11-20, `decision-challenges.md`).
 
 ## Encryption Posture
 
