@@ -288,7 +288,7 @@ account and zone sit beside the untouched old-account addresses. The connector r
       say "the tunnel hostname's DNS record is wrong or missing in the zone that is authoritative
       for `<base>`; compare public NS with the Terraform zone (#12931)".
     - new helper `zot_bridge_marker <stage> <verdict> <cause> <host> <rc>` prints exactly
-      `SOLEUR_ZOT_BRIDGE stage=<listener|login|push> verdict=<v> cause=<c> host=<h> rc=<n> runbook=knowledge-base/engineering/operations/runbooks/zot-registry-revert.md`
+      `SOLEUR_ZOT_BRIDGE stage=<setup|listener|login|push> verdict=<v> cause=<c> host=<h> rc=<n> runbook=knowledge-base/engineering/operations/runbooks/zot-registry-revert.md#grep-for-the-bridge-markers-first`
       (the `runbook=` field mirrors `SOLEUR_GHCR_PUSH_FAILED`). Every field is validated against its own
       closed set or pattern (stage/verdict/cause closed sets, host `^[a-z0-9.-]+$`, rc `^[0-9]+$`); a
       field that fails prints `invalid`, so CR/LF, `::` or U+2028 cannot forge a workflow command or log
@@ -395,12 +395,17 @@ does; sha256 digests are compared, never printed.
 #### Phase 5 — Connector re-bake (web-2)
 
 5.0 Find out whether web-2 serves users before destroying it. `variables.tf` declares it at pool weight
-    1 (serve flip, #12167), but the pool's load balancer lives in `var.cf_zone_id`, the moved-away zone.
-    Read-only: `GET /zones/951ce525552201ec6c696b24251abed7/load_balancers` and the `app.` record in
-    that zone. If no load balancer there lists web-2 and `app.` points only at web-1, record "no LB in
-    the authoritative zone; web-2 serves no app traffic" in session-state and continue. Otherwise drain
-    web-2 in that zone first (the web-host-replace runbook's drain section; the `ga-pool-update` arm
-    targets the old zone and drains nothing live) and wait for the origin to read drained.
+    1 (tracked under #12167; the default-1 flip is #12414), but Terraform's load balancer and `app.`
+    record live in `var.cf_zone_id`, the moved-away zone, and its pool in the legacy account. Read-only:
+    `GET /zones/951ce525552201ec6c696b24251abed7/load_balancers`, then for each pool it names
+    `GET /accounts/66d4f93f7397f196544e9fe84c3557c2/load_balancers/pools/<id>` (a load balancer lists
+    pool ids, not origins), and the `app.` record in that zone. If no pool there has web-2's address as
+    an origin and `app.` points only at web-1, record "no LB in the authoritative zone; web-2 serves no
+    app traffic" in session-state and continue. Otherwise STOP: draining a pool in the Soleur account is
+    a live production write outside Terraform and needs the operator's go. The web-host-replace
+    runbook's drain (`ga-pool-update mode=drain`) targets the moved zone and drains nothing live. With
+    the go: per origin, read it, set web-2's weight to 0 by API, re-read, and wait until the pool reports
+    it drained.
 5.1 Check stock for web-2's `server_type` (`cpx22`, hel1) through the Hetzner API, using the runbook's
     stock preflight.
 5.2 Dispatch `apply-web-platform-infra.yml` with `apply_target=web-host-replace web_host_key=web-2
@@ -412,6 +417,11 @@ does; sha256 digests are compared, never printed.
     `host_script_files` from the merge until 5.3, so the re-born host renders the reviewed bootstrap.
 5.3 Verify: the new tunnel has ≥1 connection from web-2 (CF API `cfd_tunnel/<id>/connections`), and a
     green run of the repointed connector census; close the `ci/tunnel-connector-drift` issue it filed.
+    Skip the runbook's after-replace `ga-pool-update` drain/serve step: it dispatches against the moved
+    zone. The replaced web-2 has a new IPv4, so the legacy account's pool origin goes stale and its
+    `web_lb_health` alert may email; that alert is expected noise until the teardown follow-up. If 5.0
+    drained a live pool, point that origin at the new IPv4 and restore its weight by API, under the same
+    go.
 
 #### Phase 6 — Prove the fix, then unblock the releases
 
@@ -470,7 +480,10 @@ does; sha256 digests are compared, never printed.
     the roadmap, `Ref #12931`.
 7.2 Comment on #12931 that its "Tunnel hosts" checkbox is done by this PR, with what remains, and that
     its account/zone variable flip is blocked on the 7.1 teardown; its tunnel phase (PR #12932) should
-    adopt the `_soleur` addresses with `moved {}` instead of declaring a second tunnel. Do not edit or
+    adopt the `_soleur` addresses with `moved {}` instead of declaring a second tunnel (PR #12932 is
+    PR1, the variable split and flip gate; the tunnel phase is its planned PR2). List the files both
+    branches change, measured with `git merge-tree` against #12932's head when posting; the suite-table
+    `generated-at` headers always conflict and are resolved by regenerating, not by hand. Do not edit or
     comment on PR #12932 itself.
 
 ## Files to Edit
@@ -617,8 +630,10 @@ input line and adds no `count`/`for_each`.
 
 - **Offline-inducing operation:** the `web-host-replace` of web-2, the sole tunnel connector
   (destroy + create). The surface it affects is the management plane only (`deploy.`, `ssh.`,
-  `registry.`). That plane is **already fully down** since ~16:24Z on 2026-11-18. `app.soleur.ai` is a
-  proxied A record to web-1 and is untouched.
+  `registry.`). That plane is **already fully down** since ~16:24Z on 2026-11-18. Terraform declares
+  `app.soleur.ai` as a proxied A record to web-1, but that record and the load balancer sit in the
+  moved zone; Phase 5.0 reads what actually answers for `app.` before the replace, and drains web-2
+  under an operator go if a live pool routes users to it.
 - **Zero-downtime path (default, taken):** blue-green at the tunnel layer. The new tunnel, Access apps
   and CNAMEs are created beside the old ones (Phase 4). The connector moves when web-2 is reborn
   (Phase 5). The old tunnel keeps its connector until then and is retired by the follow-up teardown.
@@ -630,7 +645,9 @@ input line and adds no `count`/`for_each`.
   - After Phase 5: forward-only, because the old tunnel cannot serve the new zone. A failed web-2 birth
     follows `fresh-host-bootstrap-recovery.md` (re-dispatch `web-host-replace`); web-1 keeps serving
     users throughout.
-- **Residual downtime:** none added for users. The management-plane outage ends at Phase 6.1.
+- **Residual downtime:** none added for users when Phase 5.0 finds no live pool member (the expected
+  case). If it finds one, the drain keeps traffic on web-1 during the replace. The management-plane
+  outage ends at Phase 6.1.
 
 ## Infrastructure (IaC)
 
@@ -727,16 +744,21 @@ ADR-330 is authored now as `adopting`. It flips to `accepted` when the teardown 
 
 - **If this lands broken, the user experiences:** app.soleur.ai keeps serving the 2026-11-18 15:54Z
   build. Fixes merged since then (#12704 KB-only end-of-turn sync push, #12935, #12865, #12844) stay
-  undelivered, and every later merge is also blocked. Nothing user-visible regresses, because web-1
-  serves users directly.
+  undelivered, and every later merge is also blocked. Nothing user-visible regresses as long as web-1
+  serves users. One mode would reach users: destroying web-2 while a live pool still routes traffic to
+  it, which aborts its agent sessions and drops uncommitted worktrees. Phase 5.0 reads the
+  authoritative zone's pools first and drains under an operator go.
 - **If this leaks, the user's workflow is exposed via:** a leaked new `registry_push` or `ci_ssh`
   service token admits a caller through the tunnel's Access gate. It is still bounded by the zot push
   htpasswd and the CI SSH key. A leaked deploy pair is still bounded by the webhook HMAC. An attacker
   holding both could trigger a deploy of an already-signed image, so a compromise would reach every
-  user at once.
+  user at once. A hostname routed before its Access gate existed would expose the origin unauthenticated;
+  each `_soleur` CNAME `depends_on` its own Access policy (rows Q10a-c), and the policy gate refuses any
+  Access app or policy address outside the committed table.
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** no single user's data or workspace is reached by this change
-  (management-plane ingress only, no user-data surface). The failure and leak modes both act on the
+  (management-plane ingress only, no user-data surface), provided Phase 5.0 finds web-2 out of any live
+  pool or drains it first. The failure and leak modes both act on the
   whole fleet at once, not on one user.
 
 *Sensitive-path note:* the diff touches `apps/web-platform/infra/` and release/infra workflows. The
@@ -753,7 +775,7 @@ liveness_signal:
 
 error_reporting:
   destination: "GitHub Actions job log + notify-ops email body (the marker line is appended verbatim); not Better Stack — CI logs are not shipped there (CTO Item 7)"
-  fail_loud: "SOLEUR_ZOT_BRIDGE stage=<listener|login|push> verdict=<v> cause=<host-nxdomain|edge-error-NNNN|tunnel-down|gate-indeterminate|...> host=registry.soleur.ai rc=<n> runbook=<path>"
+  fail_loud: "SOLEUR_ZOT_BRIDGE stage=<setup|listener|login|push> verdict=<v> cause=<host-nxdomain|edge-error-NNNN|tunnel-down|gate-indeterminate|...> host=registry.soleur.ai rc=<n> runbook=<path>"
 
 failure_modes:
   - mode: "tunnel hostname record missing or wrong in the authoritative zone (this incident: Error 1000 / NXDOMAIN)"
