@@ -39,6 +39,8 @@
 #   P18 a transport failure is TOKEN_UNREACHABLE (retry) in swap and verify, never NOT_ACTIVE;
 #   P19 every write stage refuses RUN_IN_FLIGHT while a cf-account-migrate.yml run is in flight, and
 #      when gh cannot answer; with none in flight it plans; read stages do not ask;
+#   P20 an old "All zones" token whose OLD read gets no verdict (HTTP 503 HTML, or 429) is never read
+#      as NEW: verify fails the key and prints TOKEN_UNREACHABLE http=<code>;
 #   P12 branch-copies-tokens replaces only the old token; prev-0a matches each id key to its OWN
 #      legacy id; an id-key _PREV that is not the legacy id does not satisfy prev-0a;
 #   P13 an id stored as `hex\n` is refused by id_of (no `$(...)` newline strip);
@@ -80,6 +82,7 @@
 #   M21 prev copies a <KEY> already equal to its _NEXT           -> P16 @refuse
 #   M22 branch-copies-tokens back on one shared `|| echo a`      -> P15b @refuse
 #   M23 the run-in-flight guard dropped                          -> P19 @in-flight
+#   M24 an answer with no verdict (429, 5xx, non-JSON) read as a denial -> P20 @verdict
 # NOT MUTATED: P14 pins refusal wording only (the refusal itself predates it and is P2-adjacent);
 # P11b and P11c are held by BOTH halves of token_is_new (an old-zone-only token fails the NEW read
 # and answers the OLD one), so dropping either half alone leaves them green by design.
@@ -199,6 +202,10 @@ DOPPLER
 # the call fails. No URL at all: `curl NOURL`, exit 2, no request (what real curl does).
 #   $STUB_D/.curl-down      every request is a transport failure: exit 7, no body.
 #   $STUB_D/.curl-inactive  every token is revoked: success:false on every endpoint.
+#   $STUB_D/.curl-old-503   every read of the OLD zone/account answers HTTP 503 with an HTML body.
+#   $STUB_D/.curl-429       every resource read answers HTTP 429 (JSON success:false, code 971).
+# With `-w` on argv (the bootstrap's `-w '\n%{http_code}'`) a last line carries the HTTP status:
+# 200 a pass, 403 a denial (9109), 401 an inactive token on /user/tokens/verify.
 # /user/tokens/verify: any well-formed SYNTH-* token is active (an old token is active until revoked).
 # Resource reads: SCOPE comes from the value SYNTH-<KIND>-<KEY>-SENTINEL. KIND NEW, NEW2, ... reads the
 # new zone/account only (the plan's scoping); OLD the old one only; ALLZ is an old "All zones / All
@@ -221,13 +228,15 @@ done < <(cat)
 for u in "${urls[@]}"; do printf 'read\tcurl %s\n' "$u" >> "$STUB_LOG"; done
 [[ "$extra" -eq 0 && "${#urls[@]}" -eq 1 ]] || exit 64
 [[ -e "$STUB_D/.curl-down" ]] && exit 7
+wo=0; for a in "$@"; do [[ "$a" == -w ]] && wo=1; done
+reply() { printf '%s' "$2"; [[ "$wo" -eq 0 ]] || printf '\n%s' "$1"; exit 0; }
 api=https://api.cloudflare.com/client/v4; u="${urls[0]}"
-deny() { printf '{"success":false,"errors":[{"code":9109,"message":"Unauthorized to access requested resource"}]}'; exit 0; }
+deny() { reply 403 '{"success":false,"errors":[{"code":9109,"message":"Unauthorized to access requested resource"}]}'; }
 if [[ "$u" == "$api/user/tokens/verify" ]]; then
-  if [[ ! -e "$STUB_D/.curl-inactive" && "$tok" =~ ^SYNTH-[A-Za-z0-9_-]+$ ]]; then printf '{"success":true,"result":{"id":"x","status":"active"}}'
-  else printf '{"success":false,"errors":[{"code":1000}]}'; fi
-  exit 0
+  if [[ ! -e "$STUB_D/.curl-inactive" && "$tok" =~ ^SYNTH-[A-Za-z0-9_-]+$ ]]; then reply 200 '{"success":true,"result":{"id":"x","status":"active"}}'
+  else reply 401 '{"success":false,"errors":[{"code":1000}]}'; fi
 fi
+[[ ! -e "$STUB_D/.curl-429" ]] || reply 429 '{"success":false,"errors":[{"code":971,"message":"Please wait and consider throttling your request speed"}]}'
 [[ ! -e "$STUB_D/.curl-inactive" ]] || deny
 kre='^SYNTH-([A-Z0-9]+)-(CF_API_TOKEN[A-Z_]*)-SENTINEL$'
 [[ "$tok" =~ $kre ]] || deny
@@ -243,6 +252,7 @@ case "$id" in
   5af02a2f394e9ba6e0ea23c381a26b67|4d5ba6f096b2686fbdd404167dd4e125) side=old ;;
   *) deny ;;
 esac
+[[ "$side" != old || ! -e "$STUB_D/.curl-old-503" ]] || reply 503 '<html><body>503 Service Unavailable</body></html>'
 case "$kind" in NEW|NEW[0-9]) [[ "$side" == new ]] || deny ;; OLD) [[ "$side" == old ]] || deny ;; ALLZ) : ;; *) deny ;; esac
 case "$key" in
   CF_API_TOKEN|CF_API_TOKEN_DNS_EDIT) grants="zones:/dns_records?per_page=1 zones:" ;;
@@ -253,7 +263,7 @@ case "$key" in
   CF_API_TOKEN_PURGE) grants="zones:" ;;
   *) grants="" ;;
 esac
-for g in $grants; do [[ "$g" == "$want" ]] && { printf '{"success":true,"result":{"id":"%s"}}' "$id"; exit 0; }; done
+for g in $grants; do [[ "$g" == "$want" ]] && reply 200 "{\"success\":true,\"result\":{\"id\":\"${id}\"}}"; done
 deny
 CURL
   assert_fixture_dir "$b"
@@ -655,6 +665,25 @@ row_p11d_allzones_old_token_fails() { # <bootstrap-src>
   at reads
   grep -qxF "$(printf 'read\tcurl %s/zones/%s' "$API" "$NZ")" "$STUB_LOG" && grep -qxF "$(printf 'read\tcurl %s/zones/%s' "$API" "$OZ")" "$STUB_LOG"
 }
+# P20: no verdict is not a denial. An old All-zones token on a key whose _PREV was revoked: the NEW
+# read passes; the OLD read answers 503 (HTML) or 429. Before #12932's fr4 fix either was "not on
+# OLD", so the old token read as NEW and verify printed ok.
+row_p20_no_verdict_is_not_old() { # <bootstrap-src>
+  local mode code
+  for mode in old-503 429; do
+    world "p20-$mode" "$1"
+    full_sequence || return 1
+    rm -f "$STUB_D/prd_terraform/CF_API_TOKEN_PURGE_PREV"
+    printf '%s' 'SYNTH-ALLZ-CF_API_TOKEN_PURGE-SENTINEL' > "$STUB_D/prd_terraform/CF_API_TOKEN_PURGE"
+    : > "$STUB_D/.curl-$mode"; code=503; [[ "$mode" == 429 ]] && code=429
+    at verdict
+    run --stage verify
+    [[ "$RC" -eq 1 ]] && grep -qxF 'SOLEUR_CFAM_VERIFY check=prd_terraform/CF_API_TOKEN_PURGE=swapped-prev-revoked verdict=fail' <<<"$OUT" || return 1
+    at marker
+    grep -qxF "SOLEUR_CFAM_TOKEN_UNREACHABLE name=CF_API_TOKEN_PURGE http=${code}" <<<"$OUT" || return 1
+    rm -f "$STUB_D/.curl-$mode"
+  done
+}
 # P11e: every _PREV revoked (0a and 0b): each of the seven keys is ok on its OWN read. Pages answers
 # only on accounts/<new>/pages/projects; Rulesets and Bot Management get 9109 on zones/<id>.
 row_p11e_all_prev_revoked_ok() { # <bootstrap-src>
@@ -907,6 +936,7 @@ row_p16_key_equals_next_refuses "$SCRIPT_SRC"; check "P16 prev-0a and prev-0b re
 row_p17_bearer_single_read "$SCRIPT_SRC"; check "P17 a value changed between the check and the bearer read sends nothing (one-read bearer config)" $?
 row_p18_unreachable_is_retry "$SCRIPT_SRC"; check "P18 a transport failure prints TOKEN_UNREACHABLE e=<rc> in swap and verify, never NOT_ACTIVE" $?
 row_p19_run_in_flight_refuses "$SCRIPT_SRC"; check "P19 every write stage refuses RUN_IN_FLIGHT before its plan; gh failure refuses; none in flight plans" $?
+row_p20_no_verdict_is_not_old "$SCRIPT_SRC"; check "P20 an OLD read answering 503 or 429 is no verdict: an old All-zones token fails verify with TOKEN_UNREACHABLE, never reads as NEW" $?
 
 echo "== P5: no synthesized secret value in any output =="
 ! grep -qE 'SYNTH-[^ ]*SENTINEL|injected\.invalid' "$ALL_OUT"
@@ -1025,7 +1055,7 @@ PERL
   mkill "M18 (a transport failure folded into an unreadable read)" row_p18_unreachable_is_retry "$SB/m18.sh" swap-unreachable
 fi
 if mutate M19 "$SB/m19.sh" <<'PERL'; then
-s#  \{ bearer_config "\$1" "\$2" "\$3" \| curl (--disable [^\n]*) --config - 2>/dev/null;#  { { printf 'header = "Authorization: Bearer '; plain_get "\$1" "\$2"; printf '"\\n'; } | curl $1 --config - "\$3" 2>/dev/null;#
+s#  \{ bearer_config "\$1" "\$2" "\$3" \| curl (--disable [^\n]*) --config - 2>/dev/null\n#  { { printf 'header = "Authorization: Bearer '; plain_get "\$1" "\$2"; printf '"\\n'; } | curl $1 --config - "\$3" 2>/dev/null\n#
 PERL
   mkill "M19 (the bearer line read a second time, the pre-fix bearer_get)" row_p17_bearer_single_read "$SB/m19.sh" no-inject
 fi
@@ -1049,10 +1079,15 @@ s{      require_no_run_in_flight "\$stage"\n}{}
 PERL
   mkill "M23 (the run-in-flight guard dropped)" row_p19_run_in_flight_refuses "$SB/m23.sh" in-flight
 fi
+if mutate M24 "$SB/m24.sh" <<'PERL'; then
+s{      printf 'SOLEUR_CFAM_TOKEN_UNREACHABLE name=%s http=%s\\n' "\$2" "\$code"; return 3 ;;\n}{      return 1 ;;\n}
+PERL
+  mkill "M24 (an answer with no verdict read as a denial)" row_p20_no_verdict_is_not_old "$SB/m24.sh" verdict
+fi
 
 # --- anti-vacuity floor (reported directly, never through fail()) ---------------
 TOTAL=$((PASS + FAIL))
-FLOOR=106
+FLOOR=109
 if [[ "$TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$TOTAL" "$FLOOR" >&2
   printf 'Total: %s assertions, %s failed\n' "$TOTAL" "$((FAIL + 1))"

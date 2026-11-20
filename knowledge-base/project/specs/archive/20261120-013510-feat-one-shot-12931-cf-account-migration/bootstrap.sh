@@ -70,10 +70,10 @@ set -f
 # SOLEUR-STAGE inventory|read|Nothing changes: this lists which Doppler configs hold the Cloudflare id and token names, names only.|None needed.
 # SOLEUR-STAGE prev-0a|write|Doppler prd_terraform gets revert copies (KEY_PREV) of the old zone id, the old account id and the three redirects-dns tokens; nothing reads them yet.|Delete the new _PREV keys in Doppler prd_terraform; nothing else changed.
 # SOLEUR-STAGE flip-ids|write|Terraform's Doppler config switches to the new Cloudflare zone and account, so routine plans of the web-platform root stay stopped until the migration completes.|Before the redirects-dns apply only, copy CF_ZONE_ID_PREV and CF_ACCOUNT_ID_PREV back (runbook Halt section); after that apply, fix forward.
-# SOLEUR-STAGE swap-0a|write|After a non-mutating scope probe, the three redirects-dns token keys in Doppler prd_terraform take the new-account tokens and their staging copies are deleted.|Until the KEY_PREV revoke only, copy each KEY_PREV back over KEY in Doppler prd_terraform; after that revoke the old token is dead, so fix forward.
+# SOLEUR-STAGE swap-0a|write|After a non-mutating scope probe, the three redirects-dns token keys in Doppler prd_terraform take the new-account tokens and their staging copies are deleted.|Until the KEY_PREV revoke only, first copy each KEY to KEY_NEXT and compare digests (the new token is kept), then copy each KEY_PREV back over KEY in Doppler prd_terraform; after that revoke the old token is dead, so fix forward.
 # SOLEUR-STAGE branch-copies-zone-id|write|Every other Doppler config that holds CF_ZONE_ID gets the new zone id; running containers keep the old one until their next redeploy.|None in these configs: they stay on the new zone id, and the runbook revert restores prd_terraform only; fix forward.
 # SOLEUR-STAGE prev-0b|write|Doppler prd_terraform gets revert copies (KEY_PREV) of the four zone-rest and runtime tokens; nothing reads them yet.|Delete the new _PREV keys in Doppler prd_terraform; nothing else changed.
-# SOLEUR-STAGE swap-0b|write|After a non-mutating scope probe and an active-token check, the four zone-rest and runtime token keys in Doppler prd_terraform take the new-account tokens and their staging copies are deleted.|Until the KEY_PREV revoke only, copy each KEY_PREV back over KEY in Doppler prd_terraform; after that revoke the old token is dead, so fix forward.
+# SOLEUR-STAGE swap-0b|write|After a non-mutating scope probe and an active-token check, the four zone-rest and runtime token keys in Doppler prd_terraform take the new-account tokens and their staging copies are deleted.|Until the KEY_PREV revoke only, first copy each KEY to KEY_NEXT and compare digests (the new token is kept), then copy each KEY_PREV back over KEY in Doppler prd_terraform; after that revoke the old token is dead, so fix forward.
 # SOLEUR-STAGE branch-copies-tokens|write|Every other Doppler config that holds CF_API_TOKEN_PURGE or CF_API_TOKEN_DNS_EDIT gets the new token from prd_terraform; containers pick it up at their next redeploy.|Fix forward: copying the old token back would re-arm the old-zone writer that the KEY_PREV revoke exists to stop, so do it only as part of the full runbook revert and before that revoke.
 # SOLEUR-STAGE verify|read|Nothing changes: this checks every id and token the stages wrote, by name and verdict only.|None needed.
 
@@ -468,6 +468,11 @@ require_flipped() {
 # and any status GitHub adds later). Fails CLOSED: no repository root, no gh, a failed `gh run list`
 # or an answer that is not a list of runs refuses with runs=unknown. Prints
 # SOLEUR_CFAM_RUN_IN_FLIGHT stage=<s> workflow=<wf> runs=<n|unknown>, then refuses the stage.
+# RESIDUAL: only cf-account-migrate.yml is asked. Every other workflow that loads infra-credentials
+# reads prd_terraform too, but from the PR1 merge until the tunnel phase its gated jobs stop at the
+# cf-account-migration predicate before any terraform runs. The exempt ones (CFAM_EXEMPT_WORKFLOWS in
+# cf-account-migration-complete.sh: the drift plan of this root, and applies of other roots) are not
+# asked: a write while one of them runs is not guarded here.
 require_no_run_in_flight() {
   local root out n
   if root="$(repo_root)" && command -v gh >/dev/null 2>&1 \
@@ -530,28 +535,41 @@ token_chars_ok() {
 }
 
 # bearer_get <cfg> <name> <url> — GET <url> with the key's value as the bearer; the response body on
-# stdout. The bearer travels on curl's stdin config, never argv and never a shell variable. rc 0
-# answered (any HTTP status: no --fail); rc 1 unreadable; rc 2 malformed at this read; rc 100+<curl
-# rc> a transport failure (DNS, connect, TLS, timeout), kept distinct so a caller never reads it as
-# an answer.
+# stdout, then a last line holding the HTTP status. The bearer travels on curl's stdin config, never
+# argv and never a shell variable. rc 0 answered (any HTTP status: no --fail); rc 1 unreadable; rc 2
+# malformed at this read; rc 100+<curl rc> a transport failure (DNS, connect, TLS, timeout), kept
+# distinct so a caller never reads it as an answer. PIPESTATUS is taken on the next line: it still
+# names the pipeline above, and nothing on the curl line is then read as its destination.
 bearer_get() {
   local -a ps=()
-  { bearer_config "$1" "$2" "$3" | curl --disable --noproxy '*' -sS --max-time 30 --config - 2>/dev/null; ps=("${PIPESTATUS[@]}"); } || true
+  { bearer_config "$1" "$2" "$3" | curl --disable --noproxy '*' -sS --max-time 30 -w '\n%{http_code}' --config - 2>/dev/null
+    ps=("${PIPESTATUS[@]}"); } || true
   [[ "${ps[0]:-1}" -eq 0 ]] || return "${ps[0]:-1}"
   [[ "${ps[1]:-1}" -eq 0 ]] || return $((100 + ps[1]))
 }
 
 # token_read <cfg> <name> <url> <jq-filter> — one bearer GET judged by <jq-filter>. rc 0 the API
-# answered and the filter holds; rc 1 it answered and the filter does not (403, success:false); rc 2
-# malformed (MALFORMED printed); rc 3 unreachable (prints SOLEUR_CFAM_TOKEN_UNREACHABLE name=<name>
-# e=<curl rc>: retry, never re-mint); rc 4 unreadable.
+# answered and the filter holds; rc 1 it DENIED: HTTP 400, 401, 403 or 404 with a JSON
+# success:false body (a token without the grant, a revoked token, a resource it cannot see); rc 2
+# malformed (MALFORMED printed); rc 3 no verdict (prints SOLEUR_CFAM_TOKEN_UNREACHABLE name=<name>
+# and e=<curl rc> for a transport failure or http=<code> for an answer that is neither a pass nor a
+# denial: 429, 5xx, a non-JSON body; retry, never re-mint); rc 4 unreadable. An answer that is not a
+# denial is never read as "this token cannot read it": token_is_new would then call an old
+# all-zones token NEW on a rate-limited OLD read.
 token_read() {
-  local out rc=0
+  local out rc=0 code body
   token_chars_ok "$1" "$2" || rc=$?
   case "$rc" in 0) ;; 2) return 2 ;; *) return 4 ;; esac
   out="$(bearer_get "$1" "$2" "$3")" || rc=$?
   case "$rc" in
-    0) jq -e "$4" >/dev/null 2>&1 <<<"$out" && return 0; return 1 ;;
+    0)
+      code="${out##*$'\n'}"; body="${out%$'\n'*}"
+      [[ "$code" =~ ^[0-9]{3}$ && "$out" == *$'\n'* ]] || code=unknown
+      jq -e "$4" >/dev/null 2>&1 <<<"$body" && return 0
+      case "$code" in
+        400|401|403|404) jq -e '.success == false' >/dev/null 2>&1 <<<"$body" && return 1 ;;
+      esac
+      printf 'SOLEUR_CFAM_TOKEN_UNREACHABLE name=%s http=%s\n' "$2" "$code"; return 3 ;;
     1) return 4 ;;
     2) printf 'SOLEUR_CFAM_TOKEN_MALFORMED name=%s\n' "$2"; return 2 ;;
     *) printf 'SOLEUR_CFAM_TOKEN_UNREACHABLE name=%s e=%s\n' "$2" "$((rc - 100))"; return 3 ;;
