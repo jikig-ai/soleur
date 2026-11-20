@@ -579,11 +579,10 @@ run_apply() {
   fi
   printf '%s phase=%s mode=apply applied=true\n' "$P" "$MIGRATE_PHASE"
   local what="noindex/crawler/app-health" halt
-  halt="zone-rest has no ruled dashboard edit: make none and stop for an owner decision (an app-health 525/526 here comes from the zone SSL settings this phase writes, a gptbot 403 from bot_management). Then a fix-forward PR, a rehearsal, and a re-dispatch of this phase with expected_in_state_updates set to the rehearsal's admitted set."
-  if [[ "$MIGRATE_PHASE" == redirects-dns ]]; then
-    what="redirect/$what"
-    halt="a dashboard edit is allowed only for app-health=>525/526 (the ssl rule) or an app-health 3xx whose Location equals a Terraform redirect target (remove that one rule or list item), by the owner, on the NEW zone only; for 000 or any other code make no edit and stop for an owner decision. Then a fix-forward PR, a rehearsal, and a re-dispatch of this phase with expected_in_state_updates set to the rehearsal's admitted set (the dashboard-edited rule must plan as a no-op; only a rule nobody edited plans as an in-state update)."
-  fi
+  # One Halt for both phases: the runbook's CTO ruling acts on each failing item by its code, after either
+  # phase (the app's ssl configuration rule pins Strict whatever the zone-wide setting zone-rest writes).
+  halt="a dashboard edit is allowed only for app-health=>525/526 (the ssl rule) or an app-health 3xx whose Location equals a Terraform redirect target (remove that one rule or list item), by the owner, on the NEW zone only; for 000, a gptbot or noindex failure, or any other code make no edit and stop for an owner decision. Then a fix-forward PR, a rehearsal, and a re-dispatch of this phase with expected_in_state_updates set to the rehearsal's admitted set (the dashboard-edited rule must plan as a no-op; only a rule nobody edited plans as an in-state update)."
+  [[ "$MIGRATE_PHASE" != redirects-dns ]] || what="redirect/$what"
   verify_live || refuse verify-failed "applied, but the ${what} probes did not all pass: ${VERIFY_FAILING}. Runbook Halt, verify-failed: ${halt}" "applied=true${fx:+ $fx} failing=${VERIFY_FAILING}"
   printf '%s phase=%s mode=apply verdict=PASS applied=true\n' "$P" "$MIGRATE_PHASE"
   summary "verdict=PASS applied=true"

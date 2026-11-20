@@ -852,11 +852,11 @@ chk_zrest_health() { # app-health 526 after a zone-rest apply: verify-failed app
   grep -qxF -- 'cf-account-migrate phase=zone-rest verdict=refuse reason=verify-failed applied=true failing=app-health=>526' "$1/out.txt" || { WHY="no-field"; return 1; }
   grep -qxF -- '- cf-account-migrate phase=zone-rest rehearsal=false verdict=refuse reason=verify-failed applied=true failing=app-health=>526' "$1/summary.md" || { WHY="no-summary"; return 1; }
   grep -qx 'cf-account-migrate verify=zone-rest pass=1 app-health=526 retry=stopped' "$1/out.txt" || { WHY="no-stop-line"; return 1; }
-  grep -qF 'zone-rest has no ruled dashboard edit' "$1/out.txt" || { WHY="no-halt-text"; return 1; }
+  grep -qF 'Runbook Halt, verify-failed: a dashboard edit is allowed only for app-health=>525/526 (the ssl rule)' "$1/out.txt" || { WHY="no-halt-text"; return 1; }
   chk_zrest_probed "$1"
 }
 setup_zrest_health x; run_job "$LAST_D" "$PRISTINE"; WHY=""
-chk_zrest_health "$LAST_D"; verdict "$?" "zone-rest apply, then app-health 526 -> reason=verify-failed applied=true failing=app-health=>526, its own Halt text ($WHY)"
+chk_zrest_health "$LAST_D"; verdict "$?" "zone-rest apply, then app-health 526 -> reason=verify-failed applied=true failing=app-health=>526, the shared Halt text ($WHY)"
 new_case zrest-gptbot zone-rest false; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; : >"$LAST_D/mode.gptbot"; run_job "$LAST_D" "$PRISTINE"
 r=1; grep -qxF -- 'cf-account-migrate phase=zone-rest verdict=refuse reason=verify-failed applied=true failing=gptbot=>403' "$LAST_D/out.txt" && r=0
 verdict "$r" "zone-rest apply, then GPTBot 403 (bot_management) -> reason=verify-failed applied=true failing=gptbot=>403"
@@ -893,7 +893,7 @@ new_case afz-health zone-rest false; remote_state "$LAST_D/remote.tfstate" "$NZ"
 r=1; grep -qxF -- 'cf-account-migrate phase=zone-rest verdict=refuse reason=apply-failed failing=app-health=>526' "$LAST_D/out.txt" && r=0
 verdict "$r" "zone-rest apply failure with app-health 526 -> reason=apply-failed failing=app-health=>526"
 r=1; grep -qF 'a dashboard edit is allowed only for app-health=>525/526 (the ssl rule) or an app-health 3xx whose Location equals a Terraform redirect target' "$D_HEALTH_MSG/out.txt" \
-  && grep -qF 'for 000 or any other code make no edit' "$D_HEALTH_MSG/out.txt" && r=0
+  && grep -qF 'for 000, a gptbot or noindex failure, or any other code make no edit' "$D_HEALTH_MSG/out.txt" && r=0
 verdict "$r" "verify-failed names the runbook's edit cases only (525/526, a Terraform-target 3xx; no edit otherwise)"
 # --- In-state updates (D8) ---
 r=1; grep -qx 'cf-account-migrate in-state-updates count=0 admitted=' "$D_AP/out.txt" && grep -qx 'cf-account-migrate in-state-updates count=0 admitted=' "$D_REH/out.txt" && r=0
