@@ -596,8 +596,11 @@ mapfile -t _RENDERED_CAUSES < <(printf '%s' "$UNVER_BODY" \
          | grep -oE '<code>[a-z0-9-]+</code>' | sed 's/<\/\?code>//g' | sort -u)
 # The family remedy (`<code>edge-error-&lt;code&gt;</code>`) explains every member except 1000,
 # which the email must name in its own entry.
+# Inside an <li> span only, like the per-cause entries: a mention elsewhere is not a remedy.
 _FAMILY_RENDERED=0
-grep -qF '<code>edge-error-&lt;code&gt;</code>' <<<"$UNVER_BODY" && _FAMILY_RENDERED=1
+python3 -I -c 'import re, sys
+sys.exit(0 if any("<code>edge-error-&lt;code&gt;</code>" in li for li in re.findall(r"<li>(.*?)</li>", sys.argv[1], re.S)) else 1)' \
+  "$UNVER_BODY" && _FAMILY_RENDERED=1
 for c in "${CAUSES[@]}"; do
   grep -qxF "$c" <<<"$(printf '%s\n' ${_RENDERED_CAUSES[@]+"${_RENDERED_CAUSES[@]}"})" && continue
   [[ "$c" =~ $EDGE_FAMILY_RE && "$c" != edge-error-1000 && "$_FAMILY_RENDERED" == 1 ]] && continue

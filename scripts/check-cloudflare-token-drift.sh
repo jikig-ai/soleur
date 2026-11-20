@@ -1571,12 +1571,12 @@ for base in ${ACCESS_BASES[@]+"${ACCESS_BASES[@]}"}; do
         host-unreachable)
           UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|host-unreachable|the control probe to ${host} got no answer at all (timeout / DNS / TLS), so nothing is known about the credential. Do NOT rotate on the strength of this row; re-run once ${host} is reachable. (seen in ${cfg})") ;;
         host-nxdomain)
-          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|host-nxdomain|${host} did not resolve (NXDOMAIN, or the runner's resolver failed: curl exit 6 is both), so the request never reached Cloudflare and nothing is known about the credential. If it repeats, check the record in the zone that is authoritative for ${APP_DOMAIN_BASE} against the Terraform zone (#12931). Do NOT rotate. (seen in ${cfg})") ;;
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|host-nxdomain|${host} did not resolve (NXDOMAIN, or the runner's resolver failed: curl exit 6 is both), so the request never reached Cloudflare and nothing is known about the credential. If it repeats, check the record in the zone that is authoritative for ${APP_DOMAIN_BASE} against the Terraform zone (#12931); remedy: bash -c 'source scripts/zot-mirror-diagnosis.sh && zot_mirror_cause_help host-nxdomain'. Do NOT rotate. (seen in ${cfg})") ;;
         tunnel-down)
-          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|tunnel-down|${host} answered with Cloudflare's tunnel-error shape (HTTP 530, or error code 1033) and no Access stamp: the tunnel behind the hostname has no healthy connector. Nothing is known about the credential. Do NOT rotate; check the tunnel's connectors. (seen in ${cfg})") ;;
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|tunnel-down|${host} answered with Cloudflare's tunnel-error shape (HTTP 530, or error code 1033) and no Access stamp: the tunnel behind the hostname has no healthy connector. Nothing is known about the credential. Do NOT rotate; check the tunnel's connectors; remedy: bash -c 'source scripts/zot-mirror-diagnosis.sh && zot_mirror_cause_help tunnel-down'. (seen in ${cfg})") ;;
         edge-error-1[0-9][0-9][0-9])
           _edge_code="${state##*-}"   # the digits after the last `-` (validated ^1[0-9]{3}$ upstream)
-          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|edge-error-${_edge_code}|${host} answered an uncredentialed request with Cloudflare's own error page, error code ${_edge_code}, and no Access stamp: the edge refused before Access was consulted. Error 1000 (DNS points to a prohibited IP) and its siblings mean the tunnel hostname's DNS record is wrong in the zone that is authoritative for ${APP_DOMAIN_BASE}. Nothing is known about the credential. Do NOT rotate. (seen in ${cfg})") ;;
+          UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|edge-error-${_edge_code}|${host} answered an uncredentialed request with Cloudflare's own error page, error code ${_edge_code}, and no Access stamp: the edge refused before Access was consulted. Error 1000 (DNS points to a prohibited IP) and its siblings mean the tunnel hostname's DNS record is wrong in the zone that is authoritative for ${APP_DOMAIN_BASE}. Nothing is known about the credential; remedy: bash -c 'source scripts/zot-mirror-diagnosis.sh && zot_mirror_cause_help edge-error-${_edge_code}'. Do NOT rotate. (seen in ${cfg})") ;;
         detector-env)
           UNVERIFIABLE_ROWS+=("${base}_ID/_SECRET|detector-env|the detector could not allocate a temp file on this runner, so NOTHING was sent to ${host}. This is a LOCAL fault (full or read-only TMPDIR), not a network or credential one. Do NOT rotate. (seen in ${cfg})") ;;
         gate-indeterminate)
@@ -1640,14 +1640,13 @@ else
     echo "A rotation did not propagate."
     _dead_tf=0; _dead_other=0
     for r in "${DEAD_ROWS[@]}"; do
-      case "$r" in REGISTRY_PUSH_ACCESS_TOKEN_*) _dead_tf=1 ;; *) _dead_other=1 ;; esac
+      # Terraform writes only the 'prd' copy; any other config's copy is hand-set.
+      if [[ "$r" == REGISTRY_PUSH_ACCESS_TOKEN_* && "${r##*|}" == prd ]]; then _dead_tf=1; else _dead_other=1; fi
     done
     if (( _dead_other )); then
       echo "Where a doppler_secret carries lifecycle.ignore_changes = [value], Terraform will"
       echo "NOT fix it: 'terraform apply' reports 'No changes' while the stale value persists."
     fi
-    # Terraform owns this pair's 'prd' copy (tunnel.tf, no ignore_changes): a hand-set value
-    # is reverted by the next apply, so the remedy is a rotation through Terraform.
     if (( _dead_tf )); then
       echo "REGISTRY_PUSH_ACCESS_TOKEN_* is written to 'prd' BY Terraform: rotate it by bumping"
       echo "client_secret_version on registry_push_soleur in a PR and applying"

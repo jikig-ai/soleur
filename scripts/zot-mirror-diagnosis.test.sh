@@ -48,6 +48,16 @@ assert_not_contains() {
   else echo "  PASS: $desc"; PASS=$((PASS + 1)); fi
 }
 
+# Instrument self-test: each helper must move its own counter once per verdict. Voiced by
+# printf + exit, never by the helpers it checks.
+assert_eq "self-test" a a >/dev/null; assert_eq "self-test" a b >/dev/null
+assert_contains "self-test" a a >/dev/null; assert_contains "self-test" a b >/dev/null
+assert_not_contains "self-test" a b >/dev/null; assert_not_contains "self-test" a a >/dev/null
+if (( PASS != 3 || FAIL != 3 )); then
+  printf 'FATAL: the assertion helpers do not count (pass=%d fail=%d after three of each).\n' "$PASS" "$FAIL" >&2; exit 2
+fi
+PASS=0; FAIL=0
+
 # A verdict fixture is a real file on disk, because "the verdict file is absent or
 # unreadable" is one of the states under test and cannot be expressed as a string.
 FIXDIR="$(mktemp -d -t zot-diag-fix.XXXXXXXX)"
@@ -141,8 +151,8 @@ assert_eq "rc=1 but dead=0 and unver=0 (inconsistent) → unmeasured, never live
 echo "=== unverifiable cause extraction ==="
 
 # The detector emits a CLOSED cause vocabulary per row precisely so a consumer does not
-# have to pattern-match English prose. Each cause carries a different remedy, and all four
-# carry "Do NOT rotate".
+# have to pattern-match English prose. Each cause carries a different remedy, and each
+# carries "Do NOT rotate".
 assert_eq "cause read from unverifiable_keys[0]" "gate-indeterminate" \
   "$(zot_mirror_unverifiable_cause "$(mkjson c1.json 0 1 gate-indeterminate)")"
 assert_eq "cause read from unverifiable_keys[0] (stamped-non-refusal)" "stamped-non-refusal" \
@@ -406,6 +416,15 @@ assert_contains "a non-1000 edge code renders its own code" "(1016)" "$(zot_mirr
 assert_contains "the unverifiable arm surfaces an edge cause verbatim" "edge-error-1000" \
   "$(zot_mirror_diagnosis unverifiable "20:23:05Z" "" "edge-error-1000")"
 
+# The marker's runbook anchor must be a heading that exists: slugify every `## ` heading of the
+# file the constant names (GitHub rules: lowercase, drop punctuation but `-`/`_`, spaces to `-`).
+_rb="$SCRIPT_DIR/../${ZOT_BRIDGE_RUNBOOK%%#*}"
+_anchor="${ZOT_BRIDGE_RUNBOOK#*#}"
+_slugs="$(awk '/^```/ { f = !f; next } !f && /^## / { sub(/^## +/, ""); print }' "$_rb" 2>/dev/null \
+  | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9 _-]//g; s/ /-/g' || true)"
+_hit=no; grep -qxF -- "$_anchor" <<<"$_slugs" && _hit=yes
+assert_eq "the marker's runbook anchor #${_anchor} is a ## heading of ${ZOT_BRIDGE_RUNBOOK%%#*}" "yes" "$_hit"
+
 echo "=== Results: $PASS passed, $FAIL failed ==="
 
 # ANTI-VACUITY DISPATCH FLOOR. Every assertion above is reached through assert_eq /
@@ -413,10 +432,11 @@ echo "=== Results: $PASS passed, $FAIL failed ==="
 # like ordinary cleanup — yields "0 passed, 0 failed" and exit 0, and scripts/test-all.sh
 # reads only the exit code. A floor (never equality: equality makes every new assertion a
 # spurious failure) is the only thing that notices.
-MIN_ASSERTIONS=153  # the REALIZED count on a green run
+MIN_ASSERTIONS=154  # the REALIZED count on a green run
 if [[ $((PASS + FAIL)) -lt "$MIN_ASSERTIONS" ]]; then
   echo "FAIL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "      The suite did not execute what it claims to. Fix the dispatch, do not lower the floor." >&2
   exit 1
 fi
-[[ "$FAIL" -eq 0 ]]
+if (( FAIL > 0 )); then printf 'FAILED: %d assertions.\n' "$FAIL" >&2; exit 1; fi
+exit 0

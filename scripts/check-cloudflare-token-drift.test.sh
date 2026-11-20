@@ -41,6 +41,12 @@ PASS=0
 FAIL=0
 pass() { echo "  pass: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
+# Instrument self-test: each helper must move its own counter. Voiced by printf + exit, not the helpers.
+pass "instrument self-test (pass path)" >/dev/null; fail "instrument self-test (fail path)" >/dev/null
+if (( PASS != 1 || FAIL != 1 )); then
+  printf 'FATAL: the assertion helpers do not count (pass=%d fail=%d after one of each).\n' "$PASS" "$FAIL" >&2; exit 2
+fi
+PASS=0; FAIL=0
 
 TMP=$(mktemp -d -t ctd.XXXXXXXX) || { echo "FATAL: could not create sandbox"; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
@@ -2304,8 +2310,10 @@ _e2=1
 grep -qF '[host-nxdomain]' "$OUT" || _e2=0
 grep -qF '[host-unreachable]' "$OUT" && _e2=0
 grep -q 'STALE' "$OUT" && _e2=0
+grep -qF 'host-nxdomain / edge-error-<code> / tunnel-down' "$OUT" || _e2=0
+grep -qF "zot_mirror_cause_help host-nxdomain'" "$OUT" || _e2=0
 if [[ "$_e2" == "1" ]]; then
-  pass "NXDOMAIN is named host-nxdomain ahead of the generic unreachable arm, never STALE"
+  pass "NXDOMAIN is named host-nxdomain ahead of the generic unreachable arm, never STALE; the row names its cause-help command and the footer renders"
 else
   fail "curl exit 6 must grade host-nxdomain; the 000 arm would otherwise swallow it as host-unreachable (rc=$RC, cause=$(first_cause "$JE2"))"
 fi
@@ -2324,8 +2332,9 @@ echo "E3: unstamped 530 with no readable code -> tunnel-down"
 E_ROWS=$((E_ROWS + 1))
 JE3="$TMP/e3.json"
 MOCK_CONTROL_STAMPED=0 MOCK_CONTROL_CODE=530 run_sut e3 200 "$ACCESS_FIXTURE" prd "--json-file $JE3"
-if [[ "$(first_cause "$JE3")" == "tunnel-down" ]] && grep -qF '[tunnel-down]' "$OUT"; then
-  pass "an unstamped 530 names tunnel-down"
+if [[ "$(first_cause "$JE3")" == "tunnel-down" ]] && grep -qF '[tunnel-down]' "$OUT" \
+   && grep -qF 'host-nxdomain / edge-error-<code> / tunnel-down' "$OUT" && grep -qF "zot_mirror_cause_help tunnel-down'" "$OUT"; then
+  pass "an unstamped 530 names tunnel-down, its cause-help command, and the edge footer"
 else
   fail "an unstamped 530 with no body code must grade tunnel-down (cause=$(first_cause "$JE3"))"
 fi
@@ -2444,8 +2453,8 @@ fi
 echo "E10: the report's remedy footer names the edge causes"
 E_ROWS=$((E_ROWS + 1))
 MOCK_CONTROL_STAMPED=0 MOCK_CONTROL_CODE=403 MOCK_HTTP_BODY="$E_PAGE_1000" run_sut e10 200 "$ACCESS_FIXTURE"
-if grep -qF 'host-nxdomain / edge-error-<code> / tunnel-down' "$OUT"; then
-  pass "the grep summary carries the edge-cause remedy"
+if grep -qF 'host-nxdomain / edge-error-<code> / tunnel-down' "$OUT" && grep -qF "zot_mirror_cause_help edge-error-1000'" "$OUT"; then
+  pass "the grep summary carries the edge-cause remedy, and the row names its cause-help command"
 else
   fail "the per-cause footer must cover the new causes, or the row stands without a remedy"
 fi
@@ -2475,6 +2484,17 @@ if [[ "$(first_cause "$JE12")" == "gate-indeterminate" ]] && ! grep -q 'edge-err
   pass "a body code is read only on a 403 or 5xx; a 429 with a code stays gate-indeterminate"
 else
   fail "dropping the status guard names edge-error-1015 on a 429 (cause=$(first_cause "$JE12"))"
+fi
+
+echo "E12b: an unstamped 429 carrying error code 1033 is not tunnel-down (the same status guard)"
+E_ROWS=$((E_ROWS + 1))
+JE12B="$TMP/e12b.json"
+MOCK_CONTROL_STAMPED=0 MOCK_CONTROL_CODE=429 MOCK_HTTP_BODY='error code: 1033' \
+  run_sut e12b 200 "$ACCESS_FIXTURE" prd "--json-file $JE12B"
+if [[ "$(first_cause "$JE12B")" == "gate-indeterminate" ]] && ! grep -q 'tunnel-down' "$OUT"; then
+  pass "1033 is read only on a 403 or 5xx; a 429 carrying it stays gate-indeterminate"
+else
+  fail "dropping the 1033 arm's status guard names tunnel-down on a 429 (cause=$(first_cause "$JE12B"))"
 fi
 
 echo "E13: PROBE_EDGE_CODE resets per probe: host 1 carries errorCode 1000, host 2 an empty 403"
@@ -2510,6 +2530,20 @@ else
   fail "REGISTRY_PUSH_ACCESS_TOKEN_* is Terraform-written (no ignore_changes); telling the operator Terraform cannot fix it sends them to hand-set a value the next apply reverts"
 fi
 
+echo "E14b: a DEAD registry-push copy in a config other than prd keeps the hand-set remedy, not the Terraform rotation"
+E_ROWS=$((E_ROWS + 1))
+MOCK_CRED_STAMPED=1 run_sut e14c 403 "prd_terraform|REGISTRY_PUSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd_terraform|REGISTRY_PUSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}" "prd_terraform"
+_e14b=1
+grep -qF 'in  prd_terraform' "$OUT" || _e14b=0
+grep -qF 'client_secret_version' "$OUT" && _e14b=0
+grep -qF 'Fix EVERY config named above' "$OUT" || _e14b=0
+if [[ "$_e14b" == "1" ]]; then
+  pass "only the 'prd' copy is Terraform-written; a prd_terraform copy is fixed by hand"
+else
+  fail "a stale prd_terraform copy told to rotate through Terraform: that PR changes nothing in prd_terraform (rc=$RC)"
+fi
+
 echo "E15: host-nxdomain does not assert the zone record is wrong (curl exit 6 is also a resolver failure)"
 E_ROWS=$((E_ROWS + 1))
 JE15="$TMP/e15.json"
@@ -2524,8 +2558,8 @@ fi
 # if the file-wide floor below still has slack from elsewhere.
 # Enforced with echo + exit, never through `fail` (scripts/guard-vacuity-floor.test.sh: a
 # floor routed through the assertion helper goes quiet when the helper is neutered).
-if (( E_ROWS < 19 )); then
-  echo "FATAL: only ${E_ROWS} Guard 1 rows executed, expected >= 19." >&2
+if (( E_ROWS < 21 )); then
+  echo "FATAL: only ${E_ROWS} Guard 1 rows executed, expected >= 21." >&2
   exit 1
 fi
 
@@ -2573,9 +2607,10 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # 91 is the REALIZED count on a green run.
 #
 # Raised 91 -> 112 with E1-E10, Guard 1 of the edge-cause classifier (#12937), then -> 117
-# with E11-E15. 117 is the REALIZED count on a green run.
-if [[ "$((PASS + FAIL))" -lt 117 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 117. The suite did not execute what it claims to." >&2
+# with E11-E15, then -> 119 with E12b and E14b. 119 is the REALIZED count on a green run.
+if [[ "$((PASS + FAIL))" -lt 119 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 119. The suite did not execute what it claims to." >&2
   exit 1
 fi
-if [[ "$FAIL" -gt 0 ]]; then exit 1; fi
+if [[ "$FAIL" -gt 0 ]]; then printf 'FAILED: %d assertions.\n' "$FAIL" >&2; exit 1; fi
+exit 0

@@ -971,7 +971,7 @@ jobs:
         id: zot_bridge
         if: steps.docker_build.outcome == 'success'
         continue-on-error: true
-        # Observed 5-7 s; the bound covers the cloudflared download's own retries (4 x 120 s).
+        # Observed 5-8 s (n=12, 2026-11-16..18); the bound covers the cloudflared download's own retries (4 x 120 s).
         # A timeout is a failure, so the mirror step below still reports it with a marker.
         timeout-minutes: 12
         uses: ./.github/actions/cf-tunnel-registry-bridge
@@ -1016,8 +1016,8 @@ jobs:
         # release that never intended to mirror anything. docker_build success is exactly
         # the precondition that guarantees IMAGE and DIGEST are populated.
         if: steps.docker_build.outcome == 'success'
-        # Observed 92-141 s. Bounded well inside the 60-minute job so a hung crane/docker call
-        # fails this step (the failure email still runs) instead of cancelling the job.
+        # Observed 58-190 s (n=12, 2026-11-16..18). Each bridged call below carries its own
+        # `timeout`, so a hang reaches degraded(); this bound backstops the rest, inside the job's 60.
         timeout-minutes: 20
         # ── WHY THIS STEP IS RELEASE-BLOCKING (four clauses; ADR-096 amended) ──────────
         #
@@ -1111,6 +1111,8 @@ jobs:
           # may still read the `mirror_status`/`mirror_reason` OUTPUTS for detail, but the
           # job result is now the load-bearing signal.
           set -uo pipefail
+          # Read only if this step is killed (its timeout-minutes) before degraded() or success overwrite it.
+          echo "mirror_reason=killed" >> "$GITHUB_OUTPUT"
 
           # Bounded retry to self-heal a transient mid-blob TCP reset over the
           # multi-hop CF-tunnel bridge (crane/cosign have no built-in retry). 3
@@ -1213,7 +1215,16 @@ jobs:
                 echo "Read-back evidence — this stage did not push; it read back what the copy left in zot. For 'unresolvable' the manifest never landed, so read the copy stage's own rows; for 'mismatch' zot holds DIFFERENT bits than this release built, which is a writer question, not a transport one. Run: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep PatchBlobUpload"
                 ;;
               bridge)
-                echo "Registry-host health (disk AND zot_restarts/exit_code, which is what an origin flap shows up in): see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd. Run: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_ZOT_DISK"
+                # An edge cause was answered by Cloudflare before any request reached the registry
+                # host, so host telemetry cannot explain it; the cause's own remedy can.
+                case "${TOKEN_CAUSE:-}" in
+                  host-nxdomain|tunnel-down|edge-error-1[0-9][0-9][0-9])
+                    echo "Edge evidence — the preflight measured cause '${TOKEN_CAUSE}' at the Cloudflare edge, before the registry host was reached, so registry-host telemetry does not apply. Run: bash -c 'source scripts/zot-mirror-diagnosis.sh && zot_mirror_cause_help ${TOKEN_CAUSE}'"
+                    ;;
+                  *)
+                    echo "Registry-host health (disk AND zot_restarts/exit_code, which is what an origin flap shows up in): see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd. Run: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_ZOT_DISK"
+                    ;;
+                esac
                 ;;
               crane_install)
                 # NOT grouped with `bridge`, though both precede any copy. This stage is a curl
@@ -1242,6 +1253,8 @@ jobs:
           # it reaches the notify-ops email. An action failure that set no stage never reached
           # the action's first step: that is `setup`, and its rc renders `invalid`. A verify
           # `unresolvable` read crossed the bridge after the copy, so it is `push` too.
+          # A `sign` failure is `push` only when cosign's stderr shows a connection error to the
+          # bridge's 127.0.0.1:5000 (SIGN_BRIDGE_ERR); otherwise Fulcio/Rekor are as likely.
           # BRIDGE_MARKER carries the validated line into degraded()'s ::error:: annotation.
           BRIDGE_MARKER=""
           emit_bridge_marker() {
@@ -1250,6 +1263,7 @@ jobs:
               bridge) stage="${ZOT_BRIDGE_STAGE:-setup}"; mrc="${ZOT_BRIDGE_RC:-}" ;;
               copy_*) stage="push"; mrc="$rc" ;;
               verify) [[ "$rc" == unresolvable ]] || return 0; stage="push" ;;
+              sign) [[ "${SIGN_BRIDGE_ERR:-0}" == 1 ]] || return 0; stage="push"; mrc="$rc" ;;
               *) return 0 ;;
             esac
             declare -F zot_bridge_marker >/dev/null 2>&1 || return 0
@@ -1544,10 +1558,12 @@ jobs:
           # ever runs — without per-arm labels every one of those reads downstream as the
           # same undifferentiated "not ok", which is exactly how an earlier draft came to
           # advertise a Sigstore outage on a copy failure.
+          # Per-call bounds (copy 300 s, sign 120 s, read-back 60 s; the whole mirror measured 58-190 s):
+          # three hung attempts of any one call, 3 x (bound + 5) + 20 s backoff, end inside the step's 20 min.
           for TAG_SPEC in "v${VERSION}:copy_v" "${COMMIT_SHA}:copy_sha" "latest:copy_latest"; do
             TAG="${TAG_SPEC%:*}"
             COPY_REASON="${TAG_SPEC##*:}"
-            retry crane copy "${IMAGE}:${TAG}" "${ZOT}:${TAG}" \
+            retry timeout -k 5 300 crane copy "${IMAGE}:${TAG}" "${ZOT}:${TAG}" \
               || degraded "$COPY_REASON" "$?" "zot did not receive the '${TAG}' tag of this image, so the host has nothing to pull and GHCR is not a fallback. Backfill: 'crane copy ${IMAGE}:${TAG} ${ZOT}:${TAG} && cosign sign --yes ${ZOT}@${DIGEST}', then re-run. A bare 'crane copy' is NOT enough on its own — it does not write the signature the host verifies."
           done
           # Sign the zot digest (same digest; writes a sig referrer into zot so the host's
@@ -1559,12 +1575,27 @@ jobs:
           # fail). Pre-cutover (soak) ZOT_ACTIVE=0 made this latent. `degraded` here is where a
           # present-but-unsigned zot copy is caught. The remediation MUST re-sign, not just
           # re-copy — hence the distinct $2 detail.
-          # MEASURED-BY: $? from `retry cosign sign`, passed to `degraded` as its first
-          # argument. "The image IS in zot at the correct digest" is measured by the copy
-          # steps above; the Sigstore/Fulcio attribution is explicitly hedged ("this is the
-          # one failure mode where … is a PLAUSIBLE cause") rather than asserted.
-          retry cosign sign --yes "${ZOT}@${DIGEST}" \
-            || degraded sign "$?" "The image IS in zot at the correct digest — the copy succeeded. What is missing is its SIGNATURE, which the host verifies before it will run the image, so the boot would hard-fail. This is the one failure mode where a third-party outage is a plausible cause: if Sigstore/Fulcio is down, waiting and re-running is the fix. Otherwise re-sign directly: 'cosign sign --yes ${ZOT}@${DIGEST}'."
+          _sign_err="$(mktemp)"
+          cosign_sign() {
+            local rc=0
+            timeout -k 5 120 cosign sign --yes "${ZOT}@${DIGEST}" 2>"$_sign_err" || rc=$?
+            cat "$_sign_err" >&2
+            return "$rc"
+          }
+          SIGN_BRIDGE_ERR=0; _sign_rc=0
+          retry cosign_sign || _sign_rc=$?
+          if (( _sign_rc != 0 )); then
+            if grep -qE '127\.0\.0\.1:5000.*(connection refused|connection reset|broken pipe|EOF|i/o timeout)' "$_sign_err"; then
+              SIGN_BRIDGE_ERR=1
+              degraded sign "$_sign_rc" "The image IS in zot at the correct digest — the copy succeeded. Its SIGNATURE write failed: cosign's last attempt printed a connection error to 127.0.0.1:5000, the bridge, so the write over the bridge failed. The host verifies the signature before it runs the image, so the boot would hard-fail. Re-run; or re-sign directly: 'cosign sign --yes ${ZOT}@${DIGEST}'."
+            fi
+            # MEASURED-BY: the rc of `retry cosign_sign`, passed to `degraded` as its first
+            # argument. "The image IS in zot at the correct digest" is measured by the copy
+            # steps above; the Sigstore/Fulcio attribution is explicitly hedged ("this is the
+            # one failure mode where … is a PLAUSIBLE cause") rather than asserted.
+            degraded sign "$_sign_rc" "The image IS in zot at the correct digest — the copy succeeded. What is missing is its SIGNATURE, which the host verifies before it will run the image, so the boot would hard-fail. This is the one failure mode where a third-party outage is a plausible cause: if Sigstore/Fulcio is down, waiting and re-running is the fix. Otherwise re-sign directly: 'cosign sign --yes ${ZOT}@${DIGEST}'."
+          fi
+          rm -f "$_sign_err"
 
           # ── FR-A2: the positive post-copy assertion ────────────────────────────────
           # Everything above reports only that no COMMAND failed. That is not the same as
@@ -1609,7 +1640,7 @@ jobs:
           # Moving the notices off stdout instead would silently disable those annotations
           # for every other retried call in this step.
           _cd_out="$(mktemp)"; _cd_err="$(mktemp)"
-          zot_digest_read() { crane digest "${ZOT}:v${VERSION}" >"$_cd_out" 2>"$_cd_err"; }
+          zot_digest_read() { timeout -k 5 60 crane digest "${ZOT}:v${VERSION}" >"$_cd_out" 2>"$_cd_err"; }
           retry zot_digest_read || true
           ZOT_DIGEST="$(tr -d '[:space:]' < "$_cd_out" 2>/dev/null || true)"
           CD_ERR_TAIL="$(tail -c 400 "$_cd_err" 2>/dev/null | tr -d '\r' | tr '\n' '|' | tr -dc '[:print:]|' || true)"
@@ -1620,6 +1651,7 @@ jobs:
             degraded verify "mismatch" "zot holds a DIFFERENT image at v${VERSION} than this release built. zot has ${ZOT_DIGEST}; this build is ${DIGEST}. Deploying would ship bits that are not the ones in these release notes. Do NOT override this. Re-run the release; if it repeats, something else is writing to ${ZOT}:v${VERSION}."
           fi
 
+          echo "mirror_reason=" >> "$GITHUB_OUTPUT"
           echo "mirror_status=ok" >> "$GITHUB_OUTPUT"
           echo "mirror_verified=true" >> "$GITHUB_OUTPUT"
           echo "zot mirror ok: copied v${VERSION}, ${COMMIT_SHA}, latest to ${ZOT}, signed ${ZOT}@${DIGEST}, and VERIFIED that ${ZOT}:v${VERSION} resolves to ${ZOT_DIGEST}."
@@ -1742,7 +1774,7 @@ jobs:
           # the run actually delivers instead: what was measured, and what that rules out.
           # `verdict` rides in the body so the first touchpoint is triageable without
           # opening the run at all.
-          body: '<p><strong>The ${{ inputs.component_display }} release job failed, so no release was published and no deploy ran.</strong></p><p>zot mirror stage: <code>${{ steps.zot_mirror.outputs.mirror_reason || ''n/a — the job failed before or outside the mirror step'' }}</code><br>registry-push token verdict: <code>${{ steps.token_preflight.outputs.verdict || ''unmeasured — the preflight did not run'' }}</code></p>${{ steps.zot_mirror.outputs.bridge_marker != '''' && format(''<p>Bridge marker: <code>{0}</code></p>'', steps.zot_mirror.outputs.bridge_marker) || '''' }}${{ steps.docker_build.outcome == ''failure'' && format(''<p>Image step failed (class <code>{0}</code>, attempt <code>{1}</code>); see the runbook <code>web-platform-release-image-push-failed.md</code>. For <code>push_denied</code>, start at its section <code>First read, before anything else</code> (the read-only Packages budget and usage reads). <code>not_push</code> means the error was not classified as an image-push failure; if the step log shows <code>denied:</code>, follow the runbook anyway.</p>'', steps.push_failed_marker.outputs.class || ''unmeasured — the marker step did not report'', steps.push_failed_marker.outputs.attempt || ''unmeasured'') || '''' }}<p>Nothing was half-shipped: no version was consumed, no git tag was created and no release notes were sent, so re-running is safe: ''Re-run failed jobs'' on ${{ inputs.docker_image != '''' && github.event_name == ''push'' && ''this release run first, then, once it succeeds, on the deploy-arm (workflow_run) run for the same SHA'' || ''this run'' }}. A fresh ''Run workflow'' dispatch is not safe (it loses the semver label). <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> — the failing step reports what it MEASURED and what that rules in or out. Where it could not measure a cause it says so rather than naming one.</p>'
+          body: '<p><strong>The ${{ inputs.component_display }} release job failed, so no release was published and no deploy ran.</strong></p><p>zot mirror stage: <code>${{ (steps.zot_mirror.outputs.mirror_reason == ''killed'' || steps.zot_mirror.outcome == ''failure'' && steps.zot_mirror.outputs.mirror_reason == '''') && ''none recorded — the mirror step was killed by its timeout (or aborted) before it named a stage'' || steps.zot_mirror.outputs.mirror_reason || ''n/a — the job failed before or outside the mirror step'' }}</code><br>registry-push token verdict: <code>${{ steps.token_preflight.outputs.verdict || ''unmeasured — the preflight did not run'' }}</code></p>${{ steps.zot_mirror.outputs.bridge_marker != '''' && format(''<p>Bridge marker: <code>{0}</code></p>'', steps.zot_mirror.outputs.bridge_marker) || '''' }}${{ steps.docker_build.outcome == ''failure'' && format(''<p>Image step failed (class <code>{0}</code>, attempt <code>{1}</code>); see the runbook <code>web-platform-release-image-push-failed.md</code>. For <code>push_denied</code>, start at its section <code>First read, before anything else</code> (the read-only Packages budget and usage reads). <code>not_push</code> means the error was not classified as an image-push failure; if the step log shows <code>denied:</code>, follow the runbook anyway.</p>'', steps.push_failed_marker.outputs.class || ''unmeasured — the marker step did not report'', steps.push_failed_marker.outputs.attempt || ''unmeasured'') || '''' }}<p>Nothing was half-shipped: no version was consumed, no git tag was created and no release notes were sent, so re-running is safe: ''Re-run failed jobs'' on ${{ inputs.docker_image != '''' && github.event_name == ''push'' && ''this release run first, then, once it succeeds, on the deploy-arm (workflow_run) run for the same SHA'' || ''this run'' }}. A fresh ''Run workflow'' dispatch is not safe (it loses the semver label). <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> — the failing step reports what it MEASURED and what that rules in or out. Where it could not measure a cause it says so rather than naming one.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       # Inline step required: GITHUB_TOKEN-created releases don't fire

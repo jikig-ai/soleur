@@ -69,10 +69,12 @@
 # ── OUTPUTS (to $GITHUB_ENV, job-scoped) ───────────────────────────────────
 #  REGISTRY_BRIDGE_PID  — the cloudflared PID (for the caller's teardown). Set in BOTH modes.
 #  ZOT_BRIDGE_HOST      — the bridged hostname (registry.<base>), validated ^[a-z0-9.-]+$.
-#  ZOT_BRIDGE_STAGE / ZOT_BRIDGE_RC — set ONLY on a failure branch (`listener` or `login`, and
-#                         that probe's exit status), next to the one SOLEUR_ZOT_BRIDGE line it
-#                         prints to stderr (#12937). The caller re-renders the marker from them;
-#                         it never trusts them unvalidated (zot_bridge_marker re-checks each).
+#  ZOT_BRIDGE_STAGE     — the last stage entered (`setup|listener|login`), written as each stage
+#                         starts so a step killed by its timeout still names where it was.
+#  ZOT_BRIDGE_RC        — set ONLY on a failure branch: that probe's exit status, next to the one
+#                         SOLEUR_ZOT_BRIDGE line it prints to stderr (#12937). The caller
+#                         re-renders the marker from both and never trusts them unvalidated
+#                         (zot_bridge_marker re-checks each).
 #
 #  DOCKER SESSION — MODE-DEPENDENT, and the difference is the whole point of the input:
 #   - `skip-docker-login` unset / `'false'` (every pre-#7278 caller): docker is logged in to
@@ -298,6 +300,7 @@ runs:
         # cloudflared reads the CF Access service token from these env vars.
         export TUNNEL_SERVICE_TOKEN_ID="$TOKEN_ID"
         export TUNNEL_SERVICE_TOKEN_SECRET="$TOKEN_SECRET"
+        printf 'ZOT_BRIDGE_STAGE=listener\n' >> "$GITHUB_ENV" || true
         cloudflared access tcp \
           --loglevel warn \
           --hostname "registry.${APP_DOMAIN_BASE}" \
@@ -346,7 +349,7 @@ runs:
             printf '%s\n' "$_marker" >&2
             if zot_bridge_marker_valid "$_marker"; then printf '::notice title=SOLEUR_ZOT_BRIDGE::%s\n' "$_marker"; fi
           fi
-          printf 'ZOT_BRIDGE_STAGE=listener\nZOT_BRIDGE_RC=%s\n' "$nc_rc" >> "$GITHUB_ENV" || true
+          printf 'ZOT_BRIDGE_RC=%s\n' "$nc_rc" >> "$GITHUB_ENV" || true
           cat /tmp/cloudflared-registry.log >&2 || true
           exit 1
         fi
@@ -380,13 +383,13 @@ runs:
       # over the tunnel. --password-stdin (never argv). 127.0.0.1 is auto-insecure to docker.
       run: |
         set -euo pipefail
+        # On entry, not on failure: a docker login hung until the step timeout must still read `login`.
+        printf 'ZOT_BRIDGE_STAGE=login\n' >> "$GITHUB_ENV" || true
         # NO 2>/dev/null (see the bridge step): a doppler error must be visible, not swallowed.
         ZOT_PUSH_USER=$(doppler secrets get ZOT_PUSH_USER --plain || true)
         ZOT_PUSH_TOKEN=$(doppler secrets get ZOT_PUSH_TOKEN --plain || true)
         if [[ -z "$ZOT_PUSH_USER" || -z "$ZOT_PUSH_TOKEN" ]]; then
           echo "::error::ZOT_PUSH_USER/ZOT_PUSH_TOKEN missing or empty in Doppler prd (written by zot-registry.tf on the operator full apply)."
-          # The listener came up; this step's own credential read failed (docker never ran).
-          printf 'ZOT_BRIDGE_STAGE=login\n' >> "$GITHUB_ENV" || true
           exit 1
         fi
         printf '::add-mask::%s\n' "$ZOT_PUSH_TOKEN"
@@ -441,7 +444,7 @@ runs:
             printf '%s\n' "$_marker" >&2
             if zot_bridge_marker_valid "$_marker"; then printf '::notice title=SOLEUR_ZOT_BRIDGE::%s\n' "$_marker"; fi
           fi
-          printf 'ZOT_BRIDGE_STAGE=login\nZOT_BRIDGE_RC=%s\n' "$login_rc" >> "$GITHUB_ENV" || true
+          printf 'ZOT_BRIDGE_RC=%s\n' "$login_rc" >> "$GITHUB_ENV" || true
           echo "::group::cloudflared registry bridge log (tail 200)"
           tail -n 200 /tmp/cloudflared-registry.log 2>/dev/null || echo "(no /tmp/cloudflared-registry.log — cloudflared may not have started)"
           echo "::endgroup::"
