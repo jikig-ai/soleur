@@ -16,6 +16,42 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-20
+**Sections enhanced:** 9 (Research Reconciliation, Proposed Solution §1-§4, Architecture Decision,
+Encryption Posture, Observability, Guard Contract, Scope Check, Acceptance Criteria)
+**Research agents used:** security-sentinel, test-design-reviewer, best-practices-researcher
+(hosted-runner feasibility), a mechanical consistency audit; contested items ruled by the CTO agent
+(Q19-Q24 in decision-challenges.md).
+
+### Key Improvements
+1. **The job is advisory, not a merge gate** (security review, CTO Q22). `deploy-script-tests-done`
+   is not in `infra/github/ruleset-ci-required.tf` (#6480 owns the gap). The plan's "gates every
+   merge" claim is rewritten, and the real birth gate is #12942's Checks API read of
+   `bastion-boot-rehearsal` on the birth SHA.
+2. **Host-kernel containment for privileged systemd** (CTO Q21): `-e container=docker`, masked
+   sysctl/binfmt/modules-load/udev units, journald `ReadKMsg=no`, 10.0.1.70/32 on `lo` instead of a
+   dummy NIC, a netns-differs guard and a static argv check.
+3. **Non-vacuous evidence rows** (test-design review): a live stub self-test, curl exit-code
+   classification for OPEN/CLOSED, F1-M positive evidence, P7 RED via the private-ip stanza, B1-P
+   InvocationID, `BRH_CLOUD_NOT_FAITHFUL`, an offline `_egress_why` test, and B1's skuid/getent loop
+   (FA kept, CTO Q19).
+4. **Fixture CA survives `update-ca-certificates`** (CTO Q23), and named flake tokens
+   (`BRH_BOOT_CAP`, `BRH_APT_MIRROR_INCONSISTENT`, `BRH_SUBNET_BUSY`).
+5. **CI hygiene:** `persist-credentials: false`, a scrubbed and scoped failure artifact with 14-day
+   retention, and Guard 2 rows for no secrets, a hosted runner and `contents: read`.
+
+### New Considerations Discovered
+- Containers share the host `boot_id`, so `journalctl -b` does not separate the two container boots;
+  `-b` stays for the real host (CTO Q24) and is a recorded divergence.
+- cloud-init's ds-identify does not gate NoCloud on `is_container`; a seed with `meta-data` and
+  `user-data` is found without a `ds=nocloud` cmdline (canonical/cloud-init `tools/ds-identify`). The
+  prototype needed no workaround; B1 asserts the datasource is NoCloud.
+- The hosted runner has 14 GB of SSD; a `df -h` pre-check guards the image build.
+- A suite-durations floor row was proposed and rejected (CTO Q20): the registration gate rejects a row
+  for a suite no leg executes.
+
 PR body, first line: "Merging this alone mutates no production resource: `hcloud_server.bastion` is outside the per-merge apply (OPERATOR_APPLIED_EXCLUSIONS) and does not exist yet." Then `Closes #12941`, `Ref #12866`, `Ref #9421`. Never `Closes` for #9421 or #12008.
 
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
@@ -67,7 +103,7 @@ run against the template on main. It found two boot faults, both fixed by this p
 | "run its runcmd stages (apt ...)" | The verbatim apt_install line (`curl linux-image-generic nftables`, with recommends) downloads 895 MB across 159 packages in the pinned image, measured with `apt-get install -y --print-uris`. | Fixture dummy debs satisfy `linux-image-generic` (see Proposed Solution). The apt line runs byte-for-byte. |
 | Kernel settle is covered | `kernel-currency.test.sh` executes the web copy only. The bastion copy is pinned byte-equal by SETTLE and never executed. | Row B2 executes the reboot branch under real cloud-init. |
 | The bastion's https apt sources work | No production host uses them: `cloud-init.yml` (web) keeps http sources. The pinned image has no `ca-certificates`. | Prototype proved `apt-get update --error-on=any` over https to archive and security: rc 0. The fixture installs `ca-certificates` (the real image ships it), declared in IMAGE_ASSUMED. |
-| The fixture image stands in for the Hetzner image | The public noble cloud-image manifest (664 packages) ships `systemd-timesyncd`, `systemd-resolved`, `nftables` 1.0.9-1ubuntu0.1, `ca-certificates`, `curl`, `openssh-server`, `iproute2`, cloud-init 26.1 and `linux-image-virtual` (not `-generic`). With `nftables` pre-installed, the M1 conffile prompt does not reproduce. | Two baselines (CTO Q10): minimal for every row, plus row B1-C on a cloud-faithful baseline vendored from that manifest. |
+| The fixture image stands in for the Hetzner image | The public noble cloud-image manifest (664 packages) ships `systemd-timesyncd`, `systemd-resolved`, `nftables` 1.0.9-1ubuntu0.1, `ca-certificates`, `curl`, `openssh-server`, `iproute2`, cloud-init 26.1 and `linux-image-virtual` (not `-generic`). With `nftables` pre-installed, the M1 conffile prompt does not reproduce. | Two baselines (CTO Q10): minimal for every row, plus row B1-C on a cloud-faithful baseline given by the inline `CLOUD_IMAGE_PKGS` array (manifest serial and date in a comment; never fetched). |
 | "TOOLING DEPENDENCY" counts in the runner header | Prose only, no test reads it, already stale (126 suites recorded, 210 now). | Add this suite's line; the wider recount is not this PR's. |
 
 ## Research Insights
@@ -208,7 +244,7 @@ Notes from the prototype that shape the suite:
 - `2026-10-04-a-new-suite-is-invisible-to-repo-ratchets-until-tracked-...`: `git add` the suite before
   running the ratchet lints.
 - `2026-11-07-a-required-shard-on-its-timeout-edge-made-the-merge-queue-a-coin-flip.md`: the suite
-  goes to its own job (CTO Q6b), not onto a leg near its ceiling.
+  goes to its own job (CTO Q6), not onto a leg near its ceiling.
 - `best-practices/2026-07-14-cloud-init-templatefile-escaping-and-ci-deploy-payload-testing.md`:
   new shell lines in the template must not use `${...}` unescaped or a literal `%{`.
 
@@ -222,7 +258,7 @@ nftables configurator. Nothing installed.
 
 Every technical fork was ruled by the CTO agent on 2026-11-20 and is persisted in
 `knowledge-base/project/specs/feat-one-shot-12941-bastion-runcmd-rehearsal/decision-challenges.md`
-(Q1-Q18, Q6b, Q6c). The IaC review (terraform-architect, 2026-11-20) is folded into
+(Q1-Q24 and Q6c). The IaC review (terraform-architect, 2026-11-20) is folded into
 `## Infrastructure (IaC)`. The prototype's first image passed `--no-install-recommends` and its
 `build.sh` later added `systemd-timesyncd systemd-resolved`; the second image (`boot-reboot-row.sh`)
 purged `systemd-timesyncd` again. The suite's minimal image must match the plan, not the prototype
@@ -240,10 +276,12 @@ divergence names the rule or stage it leaves untested:
 |---|---|
 | Names pinned with `--add-host` | the resolver rows `ip daddr { 185.12.64.1, 185.12.64.2 } udp/tcp dport 53` and real DNS under the loaded chain |
 | NoCloud datasource, no metadata service | the `meta skuid 0 ip daddr 169.254.169.254 tcp dport 80 accept` row and the Hetzner datasource |
-| Fixture CA appended to a bind-mounted `/etc/ssl/certs/ca-certificates.crt` | the real Sentry certificate chain |
+| Fixture CA installed with `docker cp` at `/usr/local/share/ca-certificates/brh.crt` plus a host-built bundle at `/etc/ssl/certs/ca-certificates.crt` (CTO Q23) | the real Sentry certificate chain |
 | Dummy `linux-image-generic` 999:0.0.0-1 and `linux-image-0.0.0-1-generic` | the real kernel install and its 895 MB download |
 | `/usr/local/sbin/uname` and `/usr/local/sbin/reboot` shims | the real reboot and the real kernel string |
-| Dummy `priv0` interface carrying 10.0.1.70/32 | the hot-attached Hetzner private NIC and networkd |
+| 10.0.1.70/32 on `lo` (CTO Q21; the private_ip stage matches the address on any interface) | the hot-attached Hetzner private NIC, and the networkd file the template writes for it (`write_files`, near line 50), which is written but never exercised |
+| Containers share the host `boot_id` (CTO Q24) | `journalctl -b`'s per-boot scoping; on the real host it separates the settle reboot's two boots, in the rehearsal it does not (B2 never takes the egress-fail path, so no assertion depends on it) |
+| `-e container=docker`; systemd-sysctl, -binfmt, -modules-load, -udevd, -udev-trigger masked; journald `ReadKMsg=no` (CTO Q21) | nothing the template uses (it calls no sysctl, modprobe or udev); timesyncd is NOT masked and is skipped by its own `ConditionVirtualization=!container` |
 | cloud-init from the archive (version printed at run time) | whatever cloud-init the Hetzner image bakes |
 | IMAGE_ASSUMED packages installed into the fixture | whether the Hetzner image really ships them |
 
@@ -315,18 +353,53 @@ row, so rows run in parallel). Containers: the stub at `.20` (python `ThreadingH
 443 with the fixture cert, http on 80, both logging to a mounted `capture.log`; a `stub.ready` file
 when bound), the decoy at `.21` (same server, its own log; started on B1's network only, the one
 row that probes it), and the bastion at `.10`:
-`docker run -d --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock --tmpfs /tmp
+`docker create --privileged --cgroupns=private --cgroup-parent=docker.slice -e container=docker
+--network brh-$$-<row> --ip 198.18.<k>.10 --tmpfs /run --tmpfs /run/lock --tmpfs /tmp
 --add-host archive.ubuntu.com:<ip> --add-host security.ubuntu.com:<ip>
---add-host o1.ingest.de.sentry.io:198.18.<k>.20 --add-host decoy.example:198.18.<k>.21
--v <seed>:/var/lib/cloud/seed/nocloud:ro -v <bundle>:/etc/ssl/certs/ca-certificates.crt:ro
--v <mode>:/etc/brh/uname-mode:ro <img> /lib/systemd/systemd`. The archive and security addresses
-are resolved host-side once per run with `getent ahostsv4`, refusing any private answer. After the
-container answers `docker exec true`, the harness adds `priv0` (dummy) with `10.0.1.70/32`, and
-again after every `docker start`. Meta-data is `instance-id: i-brh-<row>`.
+--add-host o1.ingest.de.sentry.io:198.18.<k>.20 [B1 only: --add-host decoy.example:198.18.<k>.21]
+-v <seed>:/var/lib/cloud/seed/nocloud:ro -v <mode>:/etc/brh/uname-mode:ro <img> /lib/systemd/systemd`,
+then, before `docker start` (CTO Q23), `docker cp` of the fixture CA to
+`/usr/local/share/ca-certificates/brh.crt` and of a host-built bundle (the image's system bundle
+plus the fixture CA) to `/etc/ssl/certs/ca-certificates.crt`, so an apt-triggered
+`update-ca-certificates` rebuild keeps the CA (a read-only bind breaks the trigger; a plain copied
+bundle is rebuilt without it). `--cgroup-parent=docker.slice` copies the Tier B precedent
+(`cloud-init-inngest-provision-unit.test.sh`, its `docker run` line). The archive and security
+addresses are resolved host-side once per run with `getent ahostsv4`, refusing any private answer.
+After the container answers `docker exec true`, the harness adds `10.0.1.70/32` to `lo` (CTO Q21: no
+dummy module autoload, no host `dummy0`), and again after every `docker start`. Meta-data is
+`instance-id: i-brh-<row>`. The NoCloud seed carries both `meta-data` and `user-data`: ds-identify
+does not gate NoCloud on `is_container`, so no `ds=nocloud` cmdline is needed (the prototype needed
+no workaround); B1 asserts `cloud-init status --long` names the NoCloud datasource.
 
-**Boot wait.** Poll `cloud-init status` until `done` or `error`, capped at 150 s per boot (CTO Q14:
-about 2x the slowest single boot measured, 73 s; B2 gets 150 s per boot). On the cap, record the last
-stage in the capture, copy the evidence out, `docker rm -f`, and classify per ADR-188.
+**Host containment (security review, CTO Q21).** Before each boot: `docker exec <ctr> readlink
+/proc/1/ns/net` must differ from the host's `readlink /proc/self/ns/net`, else
+`BRH_NETNS_SHARED:<row>` and exit 1 (an `nft flush ruleset` in the container must never reach the
+host). A static check over the suite's own text fails if any `docker run`/`docker create` argv
+carries `--network host`, `--pid host`, `--ipc host`, `--uts host` or a `-v /:` bind. The fixture image
+masks `systemd-sysctl`, `systemd-binfmt`, `systemd-modules-load`, `systemd-udevd` and
+`systemd-udev-trigger` and sets `ReadKMsg=no` in `/etc/systemd/journald.conf.d/brh.conf`, so PID 1
+writes no host sysctl and journald reads no host kmsg. It also creates `/var/log/journal`
+(persistent journal, as on the real image). `systemd-timesyncd` is not masked.
+
+**Subnets.** Each row's `198.18.<k>.0/24` is taken under a `flock` on
+`${TMPDIR:-/var/tmp}/brh-subnets.lock`; a `k` whose range already has a docker network or a host
+route (`ip route get 198.18.<k>.1` leaving through a non-docker interface, e.g. a laptop fake-IP
+proxy) is skipped, and when none is free the suite prints `BRH_SUBNET_BUSY` and exits 1.
+
+**Stub self-test (live, before any boot; test-design review).** Against the running stub, from a
+neighbour container on the row's network: a POST to a wrong path, one without `X-Sentry-Auth`, one
+with a wrong `sentry_key`, and a GET each get a 4xx and are logged as `rejected`; a correct POST gets
+200. B1 then asserts zero `rejected` lines from the bastion's address and that every event arrived
+on port 443. The stub writes each capture line under a lock and flushes it.
+
+**Boot wait.** Poll `cloud-init status --format json` until `done`, `error` or `degraded`, capped at
+150 s per boot (CTO Q14: about 2x the slowest single boot measured, 73 s; B2 gets 150 s per boot). On
+the cap, print `BRH_BOOT_CAP:<row> stage=<last stage> elapsed=<s>`, copy the evidence out,
+`docker rm -f`, and classify per ADR-188. B2's poweroff is awaited with a bounded `docker wait`
+(no exit-code assertion; poweroff's container exit code is not a contract). The run prints the
+cloud-init version and emits `BRH_CLOUD_INIT_VERSION_DRIFT` (a warning, never a FAIL) when it is not
+the recorded 26.2. Before the image build, `df -h` of the docker root must show at least 4 GB free,
+else `BRH_DISK_LOW` (FAIL under CI; the hosted runner has a 14 GB SSD).
 
 **Archive probe (ADR-188 corroboration).** Before any boot, the harness runs `curl -sS -o /dev/null
 -w '%{http_code}' --max-time 15` against
@@ -340,15 +413,15 @@ first match.
 
 | Row | Render / fixture | Must hold |
 |---|---|---|
-| B1 healthy | real template, `settled` | status `done`, `errors: []`; trail contains `runcmd_start`, `egress_load`, `cloud_init_complete`, `fresh_boot_ready` in that order; zero `level=fatal` events in the whole capture; every event has `host_name=soleur-bastion` and `host_id=i-brh-B1`; `ubuntu.sources` has exactly the two https URIs and no other `*.sources`/`*.list`; `dpkg -s` reports `curl nftables systemd-timesyncd` installed; `/etc/nftables.conf` equals `/etc/soleur/bastion-nftables.conf`; `nftables`, `bastion-egress`, `bastion-egress.timer` active and enabled; `ssh.service` and `ssh.socket` masked |
-| B1-E egress probes (on B1) | — | set `soleur_egress_allow` holds the pinned archive and security addresses and the stub address; root→stub:443 OPEN (positive control); `setpriv --reuid=nobody` →stub:443 CLOSED; root→stub:80 CLOSED; root→decoy:443 CLOSED. Liveness controls first: the stub's port 80 and the decoy's 443 answer from inside their own containers, so CLOSED means dropped, not down |
-| B1-P PartOf and refresh (on B1) | — | after an nftables.service restart, `bastion-egress` is active and the set again holds the stub address; a start of `bastion-egress-refresh.service` exits 0 |
-| B2 reboot branch | real template, `reboot` | `/var/lib/brh/reboot.log` has exactly one line; the container stopped; after `docker start`, status `done`; trail `runcmd_start`, `kernel_reboot`, `runcmd_start`, `egress_load`, `cloud_init_complete`, `fresh_boot_ready` in order; zero fatals (no `second_mismatch`, no `reboot_returned`); `/var/lib/soleur/kernel-settle` exists |
+| B1 healthy | real template, `settled` | status `done`, `errors: []`; trail contains `runcmd_start`, `egress_load`, `cloud_init_complete`, `fresh_boot_ready` in that order; zero `level=fatal` events in the whole capture; every event has `host_name=soleur-bastion` and `host_id=i-brh-B1`; `ubuntu.sources` has exactly the two https URIs and no other `*.sources`/`*.list`; `dpkg -s` reports `curl nftables systemd-timesyncd` installed; `/etc/nftables.conf` equals `/etc/soleur/bastion-nftables.conf`; `nftables`, `bastion-egress`, `bastion-egress.timer` active and enabled; `ssh.service` and `ssh.socket` masked; the datasource is NoCloud; every user named by a `meta skuid` in `/etc/nftables.conf` resolves with `getent passwd` (with `BRH_BASELINE_NOT_MINIMAL` this proves the template, not the image, supplied `systemd-timesync`; CTO Q19); zero stub `rejected` lines; P7: the private-ip stanza extracted from the render, run under `timeout 5`, exits 0 with 10.0.1.70 on `lo` and 124 after `ip addr del` |
+| B1-E egress probes (on B1) | — | set `soleur_egress_allow` holds the pinned archive and security addresses and the stub address; root→stub:443 OPEN and `setpriv --reuid=_apt` →stub:443 OPEN (both positive controls; OPEN = curl rc 0 AND a matching stub log line); `setpriv --reuid=nobody` →stub:443 CLOSED; root→stub:80 CLOSED; root→decoy:443 CLOSED. One probe command for all five; CLOSED requires curl rc 28 (timeout: dropped), so a refused connection (7), a name failure (6) or a certificate failure (60) is a FAIL, not a pass. Liveness controls first, from a neighbour container on the same network (not loopback): the stub's port 80 and the decoy's 443 answer, so CLOSED means dropped, not down |
+| B1-P PartOf and refresh (on B1, after B1-E) | — | after an nftables.service restart, `bastion-egress`'s `InvocationID` has changed and, within a bounded poll (10 s), the set again holds the stub address; a start of `bastion-egress-refresh.service` exits 0 |
+| B2 reboot branch | real template, `reboot` | `/var/lib/brh/reboot.log` has exactly one line; the container stopped; after `docker start`, status `done`; trail `runcmd_start`, `kernel_reboot`, `runcmd_start`, `egress_load`, `cloud_init_complete`, `fresh_boot_ready` in order, with exactly 2 `runcmd_start` and exactly 1 `kernel_reboot`; zero fatals (no `second_mismatch`, no `reboot_returned`); `/var/lib/soleur/kernel-settle` exists |
 | M1 conffile | baseline path mutated to `/etc/nftables.conf` | fatal `fresh_boot_not_ready_apt_install`; `cloud-init-output.log` contains `conffile prompt`; no `egress_load` event |
 | M2 preserve removed | `apt:\n  preserve_sources_list: true\n` deleted | `ubuntu.sources` URIs are `http://` after the boot; a fatal at `apt_update`, `apt_install` or `apt_path`; no `fresh_boot_ready` |
 | F1 egress_load fatal | real template, `sentry_ingest_host=nx-ingest.invalid` | fatal `fresh_boot_not_ready_egress_load` reaches the stub (so the flush ran); its detail contains `lookup failed for nx-ingest.invalid` |
-| F1-M flush removed | F1 render with the `nft flush ruleset` line deleted from `on_err` | status `error` (the boot died) and the capture holds no fatal event and ends at `egress_load` |
-| B1-C cloud-faithful baseline | real template, `settled`, the cloud-faithful image (`nftables`, `systemd-timesyncd`, `systemd-resolved` already installed) | the B1 trail, zero fatals and the https sources hold, and `apt_install` succeeded with the packages already present |
+| F1-M flush removed | F1 render with the `nft flush ruleset` line deleted from `on_err` | its render differs from F1's by exactly the deleted line (a diff check); status `error`; the capture holds no fatal event and ends at `egress_load`; positive evidence the emit was attempted and blocked: `nft list ruleset` still shows the drop chain with no stub address in `soleur_egress_allow` (F1's container shows an empty ruleset), and `cloud-init-output.log` has a curl error for the ingest host |
+| B1-C cloud-faithful baseline | real template, `settled`, the cloud-faithful image (`nftables`, `systemd-timesyncd`, `systemd-resolved` already installed) | pre-arm `BRH_CLOUD_NOT_FAITHFUL` unless `dpkg -s nftables systemd-timesyncd` succeeds on the image before boot; then B1's full check set (trail, zero fatals, https sources, `nftables.conf` equality, unit states, masked ssh, skuid users) holds |
 | FA missing NTP user | apt_install list mutated to drop `systemd-timesyncd` (minimal image) | fatal `fresh_boot_not_ready_egress_load`; detail contains `User does not exist` (the nft `Error:` path of the FAULT-B capture) |
 
 M2 accepts three fatal stages because the plan-time run died at `apt_update` where plain http to
@@ -376,8 +449,17 @@ for each wave, its worst row's boot count times the per-boot cap (150 s): 180 + 
 runs only, because the CI job runs the suite directly. Rows not finished at the deadline FAIL with
 `BRH_DEADLINE:<row>`, or SKIP only under the ADR-188 corroboration below.
 
-**Privileged containers (CTO Q13).** `--privileged` stays (Tier B precedent). Never `--network host`;
-bind-mount only fixture files; pinned digest; one line `NOTICE: bastion-runcmd-rehearsal starts privileged systemd containers` before the first boot.
+**Privileged containers (CTO Q13, Q21).** `--privileged` stays (Tier B precedent), contained as in
+"Host containment" above. Never `--network host` (statically checked); bind-mount only fixture
+files; pinned digest; one line `NOTICE: bastion-runcmd-rehearsal starts privileged systemd containers` before the first boot.
+
+**Offline `_egress_why` test (no docker; CTO Q19).** The function is extracted from the render (so
+the test reads the bytes that boot) and run under `dash` with fake `journalctl` and `systemctl` on
+`PATH` that accept only the exact expected argv. Cases: a `[bastion-egress] FAIL:` line is selected;
+an nft `Error: ... User does not exist` line is selected; the 180-byte cut; the
+`why=no_reason_line nft=<Result> egress=<Result>` branch; a mutated copy without `-b`, and one without
+`--sync`, each go RED. The selection regex anchors the nft match on `': Error: '` (security review),
+and sanitizing stays in `_emit`.
 
 **Offline predicate self-tests (no docker; run first).** The trail, detail and fatal-scan predicates
 run against synthesized capture files:
@@ -392,7 +474,8 @@ run against synthesized capture files:
 **Verdict and anti-vacuity (ADR-193).** `cases` moves at every assertion call site. `FAILURES=()` is
 append-only and the verdict reads it. `SKIPPED_ASSERTIONS` is denominated in assertions. The floor is
 `passes + fails + SKIPPED_ASSERTIONS >= MIN_CASES`, and `passes + fails + SKIPPED_ASSERTIONS == cases`,
-both reported by `printf` + `exit 1`. A `ROWS_BOOTED` count must equal the row registry length unless
+both reported by `printf` + `exit 1`. A `ROWS_BOOTED` count (incremented only when a row's
+`cloud-init-output.log` was actually copied out, not per `boot_row` call) must equal the row registry length unless
 the shortfall is a counted ADR-188 skip. If every boot row skipped, the terminal line is
 `bastion-runcmd-rehearsal: SKIP (...)`, never `PASS` (CTO Q7). Under `CI` the skip ceiling is 2 rows
 and B1 may never skip; breaching either prints `BRH_SKIP_CEILING` and exits 1 (CTO Q17), so the
@@ -404,7 +487,10 @@ required aggregator cannot go green on a run that booted nothing. Terminal lines
 `SKIP (loud): <row> ...` line carrying the archive-probe output) only when its fatal stage is
 `apt_update` or `apt_install` AND the archive probe failed. M1's expected `apt_install` fatal never
 qualifies, because M1 also requires the conffile marker. Any other missing evidence, including a
-boot that hits the 150 s cap with the probe healthy, is a FAIL. The test-only override that pins
+boot that hits the 150 s cap with the probe healthy, is a FAIL. The archive probe is re-run at
+classification time (an outage that began mid-run is corroborated by the second probe, not the first),
+and an apt `Hash Sum mismatch` in `cloud-init-output.log` is reported as
+`BRH_APT_MIRROR_INCONSISTENT:<row>` (a FAIL, re-runnable, never a SKIP). The test-only override that pins
 `archive.ubuntu.com` to an unrouted address (Test Scenario 4) is refused under `CI`.
 
 ### 2. Template fixes: `apps/web-platform/infra/bastion-cloud-init.yml`
@@ -443,7 +529,7 @@ boot that hits the 150 s cap with the probe healthy, is a FAIL. The test-only ov
 - Both edits land before the bastion exists, so no replace is needed. After birth, any template edit
   is a replace delivered by #12879.
 
-### 3. Registration and CI (CTO Q6b, Q6c)
+### 3. Registration and CI (CTO Q6, Q6c)
 
 - `apps/web-platform/infra/run-registered-suites.sh`: a `DEDICATED_JOB_WHY` map (one entry, this suite
   → "real cloud-init boots, ~5 min; runs in the bastion-boot-rehearsal job (#12941)"). When
@@ -477,13 +563,22 @@ boot that hits the 150 s cap with the probe healthy, is a FAIL. The test-only ov
   and an `if: failure()` upload of the kept work dir (pinned `actions/upload-artifact`, same SHA as the
   legs).
   `deploy-script-tests-done` adds the job to `needs:` and `entries=( ... "bastion-boot-rehearsal:$BASTION_REHEARSAL_RESULT" )`
-  with the matching env. No Hetzner, Doppler or Sentry credentials are bound in the job.
+  with the matching env. No Hetzner, Doppler or Sentry credentials are bound in the job, and the
+  checkout step sets `persist-credentials: false` (as the legs do), so no GITHUB_TOKEN sits in
+  `.git/config` where a privileged container could read the runner disk. The failure artifact
+  (pinned `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2`, 40-char SHA,
+  the legs' pin) uploads only `brh.*` paths with `retention-days: 14`; the suite deletes `*.key`,
+  `*.pem` private keys and the seed `user-data` (which embeds the synthesized host key) before it
+  keeps the dir. The work dir is created under `umask 077`. The fixture CA is valid for 1 day with
+  `basicConstraints=critical,CA:TRUE,pathlen:0` and `nameConstraints` permitting only the two SANs.
+  This job is advisory: `deploy-script-tests-done` is not a required context in
+  `infra/github/ruleset-ci-required.tf` (CTO Q22; #6480 owns why this workflow cannot be required).
   The aggregator's `cancelled)` branch keeps the LAST non-self entry as `other_result`, so with three
   entries the supersession-vs-timeout ruling would depend on entry order (Kieran review): rewrite it to
   classify "all entries cancelled" (supersession) versus "any sibling concluded" (a timeout kill).
 - `plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh`: `run_body` exports only
   `MATRIX_RESULT` and `FIXED_RESULT`; add the third result, the new cancelled rows (all cancelled; one
-  sibling concluded in each position), and the W wiring row for the new env.
+  sibling concluded in each position), and the wiring row for the new env.
   `.github/scripts/test/test-infra-suite-registration-mutations.sh` and
   `tests/scripts/test-main-duplicate-skip.sh` also read `deploy-script-tests-done`: re-run both; the
   new job carries the `pr_duplicate` conjunct the latter pins.
@@ -506,8 +601,9 @@ boot that hits the 150 s cap with the probe healthy, is a FAIL. The test-only ov
   exist; the QEMU/KVM alternative and its reopening trigger (CTO Q11); the birth gate stays #12942's.
 - `knowledge-base/engineering/operations/runbooks/bastion-host.md`: one paragraph naming the suite and
   the CI job as the pre-birth boot evidence, and the local command.
-- A comment on #12942 stating that its gate should require `bastion-boot-rehearsal` green on the birth
-  SHA (CTO Q9).
+- A comment on #12942 stating that its gate should read the `bastion-boot-rehearsal` check-run
+  conclusion on the birth SHA through the Checks API and refuse anything but `success` (CTO Q9, Q22),
+  because the job is advisory on PRs and a red run can merge.
 
 ## Files to Create
 
@@ -549,11 +645,14 @@ Three open `code-review` issues mention files this plan edits; none concerns the
    `systemd-timesyncd` (FAULT-A), F1 detail RED (FAULT-B). Record both outputs.
 2. **Fix the template** (FAULT-A, FAULT-B). Re-run: all rows GREEN, the mutation rows RED where
    designed. Run `bastion.test.sh` and fix any row the new bytes trip.
-3. **Registration and CI.** Runner map, registration arms, workflow job, aggregator, SPECS, PROMOTED.
+3. **Registration and CI.** Runner map, registration arms, workflow job, aggregator (and its
+   `cancelled)` classification), aggregator-diagnosis test, main-health-monitor marker, SPECS, PROMOTED.
    Run `bash .github/scripts/test/test-infra-suite-registration.sh`, `bash apps/web-platform/infra/apt-bounded.test.sh`,
    `bash scripts/guard-vacuity-floor.test.sh`, `bash apps/web-platform/infra/run-registered-suites.test.sh`
    and the ratchet lints (`lint-shell-capture-exit`, `fixture-relative-assert`, `fixture-dir-operand-assert`)
-   after `git add` of the new suite. Grep for suites that pin `infra-validation.yml`'s job list or
+   after `git add` of the new suite, plus `bash plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh`,
+   `bash .github/scripts/test/test-infra-suite-registration-mutations.sh` and
+   `bash tests/scripts/test-main-duplicate-skip.sh`. Grep for suites that pin `infra-validation.yml`'s job list or
    `deploy-script-tests-done`'s `needs` and update them.
 4. **Records.** ADR-327 addendum, runbook paragraph, `c4-count-parity` run, comment on #12942.
 5. **Measure.** Two full local runs (cold and warm image cache) and the first CI run; record wall
@@ -619,7 +718,7 @@ The addendum describes the state this PR ships; nothing is soak-gated.
 ## Encryption Posture
 
 ```yaml
-at_rest: []   # no persistent store is introduced; the suite's fixture state lives in a per-run work dir removed by its EXIT trap
+at_rest: []   # no persistent store is introduced; the per-run work dir is removed by the EXIT trap on PASS and kept on failure (umask 077, private keys and seed user-data deleted first), then uploaded as a 14-day CI artifact holding only synthesized fixtures
 in_transit:
   - connection: soleur-bastion -> archive.ubuntu.com / security.ubuntu.com (apt)
     enforced_at: apps/web-platform/infra/bastion-cloud-init.yml write_files /etc/apt/sources.list.d/ubuntu.sources (URIs https://) + apt preserve_sources_list
@@ -641,9 +740,9 @@ Neither connection is new; rows B1 and M2 assert that the apt connection stays h
 
 ```yaml
 liveness_signal:
-  what: the bastion-boot-rehearsal job result in infra-validation.yml, rolled into deploy-script-tests-done; the suite's terminal line "bastion-runcmd-rehearsal: PASS|FAIL|SKIP"
+  what: the bastion-boot-rehearsal job result in infra-validation.yml (advisory on PRs, rolled into the advisory deploy-script-tests-done; read at birth by #12942's Checks API gate); the suite's terminal line "bastion-runcmd-rehearsal: PASS|FAIL|SKIP" (PARTIAL for local subsets only)
   cadence: per pull_request and push touching apps/*/infra/** (the workflow's existing path filter)
-  alert_target: the required deploy-script-tests-done check on the PR; notify-main-failure on main
+  alert_target: the bastion-boot-rehearsal check on the PR (advisory, CTO Q22); notify-main-failure on main; the #12942 birth gate
   configured_in: .github/workflows/infra-validation.yml (job bastion-boot-rehearsal)
 error_reporting:
   destination: on the real host, the Sentry project behind TF_VAR_sentry_dsn (prd_terraform SENTRY_DSN) via the runcmd _emit; in CI, the job log
@@ -651,20 +750,21 @@ error_reporting:
 failure_modes:
   - mode: a template edit breaks a boot stage
     detection: rows B1/B2 go red with the stage name from the stub capture
-    alert_route: the required check on the PR
+    alert_route: the bastion-boot-rehearsal check on the PR; refused at birth by the #12942 gate
   - mode: the egress_load fatal's detail stops naming the reason
     detection: rows F1 and FA (detail predicates) and the offline must-RED boilerplate fixture
-    alert_route: the required check on the PR
+    alert_route: the bastion-boot-rehearsal check on the PR; refused at birth by the #12942 gate
   - mode: the rehearsal silently stops booting (all rows skipped, or zero rows run)
     detection: the ROWS_BOOTED identity and the ADR-193 floor; an all-skip run ends SKIP, never PASS
-    alert_route: the required check on the PR; SKIP (loud) lines in the job log
+    alert_route: the bastion-boot-rehearsal check on the PR; refused at birth by the #12942 gate; SKIP (loud) lines in the job log
   - mode: the suite drifts onto a matrix leg or off the dedicated job
-    detection: the two test-infra-suite-registration.sh arms
-    alert_route: the required check on the PR
+    detection: the generalized dedicated-job arm, Arm 4's need loop and the monitor-marker assertion in test-infra-suite-registration.sh, plus the --list arm in run-registered-suites.test.sh
+    alert_route: the bastion-boot-rehearsal check on the PR; refused at birth by the #12942 gate
 logs:
   where: GitHub Actions log of the bastion-boot-rehearsal job; on the real host, journald and /var/log/cloud-init-output.log, read only through the Sentry boot trail
   retention: GitHub Actions default log retention for the repo
-# Verified 2026-11-20: prints 0 on main and 1 on the prototype's fixed template (fixb.tpl).
+# Verified 2026-11-20: prints 0 on main and 1 on the prototype's fixed template (fixb.tpl); the planned
+# `journalctl -b -u nftables.service -u bastion-egress.service` line still contains the literal.
 discoverability_test:
   command: grep -c -F -e "-u nftables.service -u bastion-egress.service" apps/web-platform/infra/bastion-cloud-init.yml
   expected_output: "1"
@@ -703,7 +803,7 @@ tasks:
 ### Engineering
 
 **Status:** reviewed
-**Assessment:** The CTO agent ruled Q1-Q9, Q6b and Q6c (decision-challenges.md). The terraform-architect
+**Assessment:** The CTO agent ruled Q1-Q24 and Q6c (decision-challenges.md). The terraform-architect
 review confirmed apply path (a), zero blast radius at merge, the replace semantics after birth, the
 templatefile escaping rules, and that BUDGET measures the raw render.
 
@@ -730,11 +830,14 @@ renders a non-empty DSN; F1 and F1-M also override `sentry_ingest_host`. The emp
 silence and `bastion-host-create`'s strict reader powers the host off. That arm is the birth
 interlock's to refuse, recorded here so it is a stated exclusion, not a gap.
 
-Boot paths covered. Every path that boots this payload boots a template that passed this job: the
-birth (`bastion-host-create`), the future replace (#12879) and an untargeted local apply all consume
-`main`, and `deploy-script-tests-done`, which now requires this job, gates every merge to `main` that
-touches `apps/*/infra/**`. The aggregator is already a required check, so no ruleset or synthetic-check
-change is needed.
+Boot paths covered. The birth (`bastion-host-create`), the future replace (#12879) and an untargeted
+local apply all consume `main`. This job runs on every PR and push touching `apps/*/infra/**`, but it
+is advisory: neither it nor `deploy-script-tests-done` is a required context in
+`infra/github/ruleset-ci-required.tf` (security review; CTO Q22), so a red run can merge. The gate
+that makes the property binding is #12942's: the birth reads the `bastion-boot-rehearsal` check-run
+conclusion on the birth SHA through the Checks API and refuses anything but `success`. This PR leaves
+the ruleset alone (a production ruleset mutation, and #6480's paths-filter gap would block non-infra
+PRs) and records the requirement in the #12942 comment.
 
 **Mutation matrix:**
 
@@ -750,12 +853,18 @@ change is needed.
 | 8 | Order: `fresh_boot_ready` moved above `egress_load` in the template's post-settle item | RED: trail order |
 | 9 | Suite: the minimal image gains `systemd-timesyncd` (e.g. `--no-install-recommends` dropped) | RED: `BRH_BASELINE_NOT_MINIMAL` |
 | 10 | Suite: a `BRH_ROWS` subset run under `CI` | RED: `BRH_SUBSET_REFUSED` |
+| 11 | Template: `-b` or `--sync` dropped from `_egress_why` | RED: the offline `_egress_why` test |
+| 12 | Template: the private-ip stanza's wait replaced by `true` | RED: B1's P7 check (no 124 after `ip addr del`) |
+| 13 | Suite: a boot `docker create` gains `--network host` | RED: the static argv check (and `BRH_NETNS_SHARED` at run time) |
+| 14 | Template: `systemd-timesyncd` dropped while the image already ships it (B1-C shape) | B1-C stays GREEN (cloud image) and FA goes RED (minimal image): the pair, not one row, carries P8 |
 
 **Harness rows.**
 - The stub stops writing `capture.log` → B1 RED (an empty capture is never a pass).
-- The stub accepts any path or a missing `X-Sentry-Auth` → the offline self-test with a wrong-path
-  body goes RED.
-- The decoy is not started → B1-E's liveness control fails, so a CLOSED probe cannot pass vacuously.
+- The stub accepts any path, a missing `X-Sentry-Auth` or a wrong key → the live stub self-test goes
+  RED before any boot (the offline wrong-path fixture never runs the stub's routing, so it cannot
+  carry this row).
+- The decoy is not started → B1-E's neighbour-container liveness control fails, so a CLOSED probe
+  cannot pass vacuously; a CLOSED probe that errors (curl rc 6, 7 or 60) is a FAIL, not a CLOSED.
 - must-PASS, non-canonical: the B2 trail (extra `kernel_reboot`, repeated `runcmd_start`) and a
   healthy trail with interleaved info events both pass.
 
@@ -766,12 +875,14 @@ diff cannot rename a stage in the template and in the expectation. The pinned im
 
 ### Guard 2 — dedicated-job registration
 
-**Property.** The rehearsal suite runs in job `bastion-boot-rehearsal` unmasked, never in a k/N matrix
-leg, and always in the unsharded local runner.
+**Property.** The rehearsal suite runs in job `bastion-boot-rehearsal` unmasked, on a hosted runner,
+with no secret and `contents: read`; never in a k/N matrix leg or the main-health-monitor `test-infra`
+leg (`SOLEUR_INFRA_SKIP_DEDICATED=1`); and always in the plain unsharded local runner.
 
 **Assembly.** `DEDICATED_JOB_WHY` in `run-registered-suites.sh` (the single source), the runner's shard
-branch, the workflow job's steps, and `deploy-script-tests-done`'s `needs` and `entries`. All four are
-read by `test-infra-suite-registration.sh`.
+branch, the workflow job (its steps, `runs-on`, `permissions` and any `secrets.` reference),
+`deploy-script-tests-done`'s `needs` and `entries`, and main-health-monitor's `test-infra` leg env. All
+five are read by `test-infra-suite-registration.sh`.
 
 **Mutation matrix:**
 
@@ -785,6 +896,7 @@ read by `test-infra-suite-registration.sh`.
 | 6 | Add a second `DEDICATED_JOB_WHY` entry with no invoking step, after a compliant first | RED |
 | 7 | Remove the job from `deploy-script-tests-done`'s `needs` | RED |
 | 8 | Drop `SOLEUR_INFRA_SKIP_DEDICATED=1` from main-health-monitor's `test-infra` leg | RED |
+| 9 | Add `${{ secrets.X }}` to the job, set `runs-on: self-hosted`, or widen `permissions` | RED |
 
 **Harness rows.** A fixture workflow whose step has the invocation only in a comment must RED; a
 fixture with the invocation in a multi-line `run: |` block must PASS.
@@ -849,17 +961,18 @@ decision-challenges.md). No taste or user-challenge item arose.
 | The suite and its rows | "renders the template and runs its runcmd stages" | asked |
 | Template fixes | "fix any boot fault it finds in the template" | asked |
 | Runner unsharded registration | "register it in scripts/test-all.sh" | asked |
-| Dedicated CI job, registration arms, aggregator wiring | — | inferred — justification: the suite must run in CI to block a boot fault, and a matrix leg cannot absorb ~5 min (CTO Q6b) |
+| Dedicated CI job, registration arms, aggregator wiring | — | inferred — justification: the suite must run in CI to block a boot fault, and a matrix leg cannot absorb ~5 min (CTO Q6) |
 | apt-bounded SPECS line, PROMOTED_FILES entry | — | inferred — justification: existing repo gates fail without them (repo research) |
 | ADR-327 addendum, runbook paragraph, #12942 comment | — | inferred — justification: architecture decisions ship with the plan that makes them (wg-architecture-decision-is-a-plan-deliverable); CTO Q9 |
 
 ### Split Assessment
 
-- Subsystems touched: 3 code roots — `apps/web-platform/infra/`, `.github/`, `scripts/` (plus docs in `knowledge-base/`)
-- Planned files: 12 | Estimated changed lines: ~1,400-1,800 (the suite ~1,000-1,300; the CTO devex review notes the two sibling suites run 1,846 and 3,935 lines, so ~650 was low)
+- Subsystems touched: 4 code roots — `apps/web-platform/infra/`, `.github/`, `scripts/`, `plugins/` (plus docs in `knowledge-base/`)
+- Planned files: 13 | Estimated changed lines: ~1,400-1,800 (the suite ~1,000-1,300; the CTO devex review notes the two sibling suites run 1,846 and 3,935 lines, so ~650 was low)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: single PR — the line threshold trips on the suite alone. Splitting would ship either
-  a suite that is red on main (FAULT-A, FAULT-B) or a template fix with nothing pinning it.
+- Recommendation: single PR — the subsystem-roots threshold and the line threshold both trip, but the
+  `plugins/` and `scripts/` edits are one-line registrations each, and splitting would ship either a
+  suite that is red on main (FAULT-A, FAULT-B) or a template fix with nothing pinning it.
 
 ## Acceptance Criteria
 
@@ -876,7 +989,7 @@ decision-challenges.md). No taste or user-challenge item arose.
   `bash apps/web-platform/infra/bastion.test.sh` ends `bastion: PASS`.
 - [ ] AC5. `SOLEUR_INFRA_SHARD=k/4` (k=1..4) execute sets never contain the suite; the unsharded set
   does; `bash .github/scripts/test/test-infra-suite-registration.sh` passes and its new arms go RED
-  under Guard 2 rows 1-7 (run as mutations during work, recorded in the PR body).
+  under Guard 2 rows 1-9 (run as mutations during work, recorded in the PR body).
 - [ ] AC6. `infra-validation.yml` has job `bastion-boot-rehearsal` (`timeout-minutes: 18`, no
   credentials, unmasked invocation) and `deploy-script-tests-done` lists it in `needs` and `entries`.
 - [ ] AC7. `apt-bounded.test.sh`, `guard-vacuity-floor.test.sh` (with `MAX_DEFERRED` unchanged),
@@ -889,10 +1002,18 @@ decision-challenges.md). No taste or user-challenge item arose.
   `--enumerate` omits it; `bash plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh`,
   `bash .github/scripts/test/test-infra-suite-registration-mutations.sh` and
   `bash tests/scripts/test-main-duplicate-skip.sh` pass.
+- [ ] AC7d. Host containment: every boot passes the netns-differs guard; the static argv check holds
+  and goes RED on Guard 1 row 13; the fixture image has the five units masked and `ReadKMsg=no`;
+  the job's checkout has `persist-credentials: false`; a kept work dir contains no `PRIVATE KEY`
+  block (`grep -rL`) before upload.
+- [ ] AC7e. Evidence rows are non-vacuous: the live stub self-test passes (4xx on all four bad
+  requests, 200 on the good one); B1-E's CLOSED probes report curl rc 28; F1-M's diff check and
+  ruleset evidence hold; the offline `_egress_why` test passes and its `-b`/`--sync` mutations go RED.
 - [ ] AC8. Docker absent under `CI=true` prints `BRH_TOOL_ABSENT:docker` and exits 1; an all-skip run
   ends `SKIP`, never `PASS`; under `CI` more than 2 skipped rows, or a skipped B1, prints
   `BRH_SKIP_CEILING` and exits 1; `BRH_ROWS`/`BRH_STATIC_ONLY` and the archive-pin override are refused
   under `CI`.
-- [ ] AC9. ADR-327 carries the 2026-11-20 addendum; `bastion-host.md` names the suite and job;
-  `c4-count-parity.test.sh` passes; #12942 has the gate comment.
+- [ ] AC9. ADR-327 carries the 2026-11-20 addendum; `bastion-host.md` names the suite and job and says
+  it is advisory on PRs; `c4-count-parity.test.sh` passes; #12942 has the gate comment naming the
+  Checks API read of `bastion-boot-rehearsal` on the birth SHA.
 - [ ] AC10. PR body: `Closes #12941`, `Ref #12866`, `Ref #9421`; no `Closes` for #9421 or #12008.
