@@ -1652,4 +1652,4 @@ while the serve gate passed the roster. (§2's 120 s liveness figure is supersed
   to 240 s). Leases the drain released are unaffected.
 
 Rejected options are recorded in
-[decision-challenges.md](../../../project/specs/feat-one-shot-12910-host-roster-lease-id/decision-challenges.md).
+[decision-challenges.md](../../../project/specs/archive/20261120-012010-feat-one-shot-12910-host-roster-lease-id/decision-challenges.md).
