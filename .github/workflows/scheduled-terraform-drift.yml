@@ -1325,7 +1325,11 @@ jobs:
               echo "<details><summary>Plan output</summary>"
               echo ""
               echo '```'
-              cat ${RUNNER_TEMP}/plan-output.txt 2>/dev/null || echo "(plan output unavailable)"
+              if compgen -G "${RUNNER_TEMP}/plan-output.*" > /dev/null; then
+                cat ${RUNNER_TEMP}/plan-output.txt
+              else
+                echo "(plan output unavailable)"
+              fi
               echo '```'
               echo ""
               echo "</details>"
@@ -1349,7 +1353,11 @@ jobs:
               echo "<details><summary>Plan output</summary>"
               echo ""
               echo '```'
-              cat ${RUNNER_TEMP}/plan-output.txt 2>/dev/null || echo "(plan output unavailable)"
+              if compgen -G "${RUNNER_TEMP}/plan-output.*" > /dev/null; then
+                cat ${RUNNER_TEMP}/plan-output.txt
+              else
+                echo "(plan output unavailable)"
+              fi
               echo '```'
               echo ""
               echo "</details>"
