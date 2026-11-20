@@ -38,9 +38,10 @@ Incident: `knowledge-base/engineering/operations/post-mortems/soleur-ai-cloudfla
   Verification compares `sha256sum` of source and destination; non-secret ids print at most an 8-character prefix.
   Never put a token in argv, a shell variable on screen, a Playwright snapshot or a screenshot.
 - **Doppler writes go through the bootstrap.** Phase 2's revert copies, id flip, token swaps and branch-config copies
-  are the stages of `bootstrap.sh` in the #12931 spec directory (CTO ruling D11), never retyped by hand. Find it with
-  `git ls-files '*feat-one-shot-12931-cf-account-migration/bootstrap.sh'` (archive-kb moves the directory). Run it
-  per the `soleur:operator-bootstrap` agent protocol: `--list`; `--stage <name>` prints the plan; relay its
+  are the stages of `bootstrap.sh` in the #12931 spec directory (CTO ruling D11), never retyped by hand. Set `B` from
+  the repo root (archive-kb moves the directory; exactly one match, else stop):
+  `B="$(git ls-files --full-name ':(top)*feat-one-shot-12931-cf-account-migration/bootstrap.sh')"; [[ $(printf '%s\n' "$B" | grep -c .) -eq 1 ]] || echo STOP`.
+  Run it per the `soleur:operator-bootstrap` agent protocol: `--list`; `--stage <name>` prints the plan; relay its
   `SOLEUR_BOOTSTRAP_IMPACT` and `SOLEUR_BOOTSTRAP_ROLLBACK` lines verbatim; issue the printed apply command as one
   simple command and let the approval prompt carry the person's decision. A stage whose plan says `operations=0` is
   already done. `PRECONDITION_FAILED need=<stage>` means run that stage first.
@@ -60,7 +61,7 @@ Incident: `knowledge-base/engineering/operations/post-mortems/soleur-ai-cloudfla
   unreviewed inside the reopen.
 
 Placeholders: `<phase>` is one of `redirects-dns`, `zone-rest`, `tunnel` (PR2); `<utc>` is `date -u +%Y%m%dT%H%M%SZ`;
-`<run-id>` is the dispatched run; `B` is the bootstrap path above.
+`<run-id>` is the dispatched run; `B` is the bootstrap path set above.
 
 ### Ids (not secrets)
 
@@ -319,10 +320,10 @@ gh issue comment 12931 --body "redirects-dns apply run <run-id>: <the uri line a
 **Verify** (job step, then `Agent:` locally):
 
 ```bash
-curl -sS -o /dev/null -w '%{http_code}\n' https://soleur.ai/pages/agents.html                         # 301
-curl -sS -o /dev/null -w '%{http_code}\n' https://soleur.ai/pages/legal/privacy-policy.html            # 301
+curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' https://soleur.ai/pages/agents.html              # 301 https://soleur.ai/agents/
+curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' https://soleur.ai/pages/legal/privacy-policy.html # 301 https://soleur.ai/legal/privacy-policy/
 curl -sSI https://www.soleur.ai/ | grep -iE '^(HTTP|location)'                                        # 301, location: https://soleur.ai/
-curl -sS -o /dev/null -w '%{http_code}\n' https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/ # 301
+curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/ # 301 https://soleur.ai/blog/soleur-vs-anthropic-cowork/
 curl -sSI https://app.soleur.ai/ | grep -i '^x-robots-tag'                                            # x-robots-tag: noindex
 curl -sS -o /dev/null -w '%{http_code}\n' https://app.soleur.ai/health                                # 200
 curl -sS -o /dev/null -w '%{http_code}\n' -A 'Mozilla/5.0 (compatible; GPTBot/1.2)' https://soleur.ai/  # 200

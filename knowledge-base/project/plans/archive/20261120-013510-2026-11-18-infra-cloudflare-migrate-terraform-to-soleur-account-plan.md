@@ -684,7 +684,7 @@ discoverability_test:
   expected_output: "200"
 ```
 
-The redirect property (`https://soleur.ai/pages/agents.html` answers `301`) can only be true after merge plus the `redirects-dns` dispatch, so preflight cannot probe it before merge. Three checks verify it after the apply: the dispatch fails on anything but 301 (`apps/web-platform/infra/scripts/cf-account-migrate-job.sh`, the post-apply curl loop), the Better Stack monitor `seo_redirect_bulk_item` expects `[301]` (`apps/web-platform/infra/uptime-alerts.tf`), and the runbook's Phase 2 verification curl. The pre-merge probe above checks that the zone keeps serving the site through the migration (CTO ruling, 2026-11-20, `decision-challenges.md`).
+The redirect property (`https://soleur.ai/pages/agents.html` answers `301`) can only be true after merge plus the `redirects-dns` dispatch, so preflight cannot probe it before merge. Three checks verify the redirect set after the apply: the dispatch fails unless each legacy path answers 301 to its exact target (`apps/web-platform/infra/scripts/cf-account-migrate-job.sh`, the post-apply curl loop), the Better Stack redirect monitors expect `[301]` (`seo_redirect_bulk_item` watches the sibling `privacy-policy.html`; `apps/web-platform/infra/uptime-alerts.tf`), and the runbook's Phase 2 verification curl. The pre-merge probe above checks that the zone keeps serving the site through the migration (CTO ruling, 2026-11-20, `decision-challenges.md`).
 
 ## Encryption Posture
 

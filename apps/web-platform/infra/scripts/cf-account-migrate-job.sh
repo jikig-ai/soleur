@@ -331,12 +331,19 @@ probe() { # <url> [<user-agent>]: prints "<code> <redirect_url>"
 }
 
 verify_redirects_dns() {
-  local tries="${CFAM_VERIFY_TRIES:-12}" pause="${CFAM_VERIFY_SLEEP:-10}" i bad u hdrs
+  local tries="${CFAM_VERIFY_TRIES:-12}" pause="${CFAM_VERIFY_SLEEP:-10}" i bad u want pair hdrs
+  # Each legacy path must 301 to its exact target (seo-rulesets.tf / seo-bulk-redirects.tf):
+  # a 301 to the wrong page is as broken for a visitor as a 404.
+  local -a pairs=(
+    "https://soleur.ai/pages/agents.html|https://soleur.ai/agents/"
+    "https://soleur.ai/pages/legal/privacy-policy.html|https://soleur.ai/legal/privacy-policy/"
+    "https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/|https://soleur.ai/blog/soleur-vs-anthropic-cowork/"
+  )
   for ((i = 1; i <= tries; i++)); do
     bad=""
-    for u in https://soleur.ai/pages/agents.html https://soleur.ai/pages/legal/privacy-policy.html \
-      https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/; do
-      [[ "$(probe "$u")" == 301\ * ]] || bad+=" $u"
+    for pair in "${pairs[@]}"; do
+      u="${pair%%|*}"; want="${pair#*|}"
+      [[ "$(probe "$u")" == "301 $want" ]] || bad+=" $u"
     done
     [[ "$(probe https://www.soleur.ai/)" == "301 https://soleur.ai/" ]] || bad+=" https://www.soleur.ai/"
     [[ "$(probe https://soleur.ai/ 'Mozilla/5.0 (compatible; GPTBot/1.2)')" == 200\ * ]] || bad+=" gptbot"

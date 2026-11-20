@@ -27,7 +27,10 @@ export LC_ALL=C
 
 REPO_ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel 2>/dev/null)" || { echo "HARNESS: not in a git work tree" >&2; exit 2; }
 RUNBOOK="${REPO_ROOT}/knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md"
-BOOTSTRAP="$(git -C "$REPO_ROOT" ls-files --cached --others --exclude-standard --full-name '*feat-one-shot-12931-cf-account-migration/bootstrap.sh' | head -1)"
+# Exactly one copy, or a stale second copy (an untracked leftover, a re-archive) is what R4 reads.
+mapfile -t _bs < <(git -C "$REPO_ROOT" ls-files --cached --others --exclude-standard --full-name '*feat-one-shot-12931-cf-account-migration/bootstrap.sh')
+[[ "${#_bs[@]}" -eq 1 ]] || { echo "HARNESS: expected exactly 1 bootstrap.sh, found ${#_bs[@]}" >&2; exit 2; }
+BOOTSTRAP="${_bs[0]}"
 SCOPE_TOOL="${REPO_ROOT}/plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh"
 [[ -r "$RUNBOOK" && -n "$BOOTSTRAP" && -r "${REPO_ROOT}/${BOOTSTRAP}" && -r "$SCOPE_TOOL" ]] \
   || { echo "HARNESS: runbook, bootstrap or cf-token-scope.sh missing" >&2; exit 2; }

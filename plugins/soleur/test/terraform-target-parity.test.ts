@@ -3508,6 +3508,12 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     const HAND_LISTED = ["infra-validation.yml", "cf-account-migrate.yml"];
     expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => !HAND_LISTED.includes(f)).sort());
     expect(found.length).toBe(5);
+    // The filter above removes nothing for a hand-listed name that is missing from the list, so
+    // deleting one would drop it from every parity loop with this census still green.
+    for (const h of HAND_LISTED) {
+      expect(MAIN_ROOT_TF_WORKFLOWS).toContain(h);
+      expect(existsSync(join(dir, h))).toBe(true);
+    }
   });
 
   // ─── Inline pin-load arm (follower retired, #8211 PR2 / ADR-237 D6 amendment) ───────

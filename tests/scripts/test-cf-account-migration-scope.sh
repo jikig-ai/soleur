@@ -23,6 +23,8 @@
 #       the bare root path apps/web-platform/infra (not followed by /<subdir>). This is the only
 #       place script-wrapped Terraform is seen; composite actions and reusable callees are not.
 #   (7) the cf-account-migrate job script carries no workflow-file list (it reads the exempt list).
+#   (8) no exempt workflow calls a local reusable workflow that loads the credentials, and no exempt
+#       name is workflow_call-only: the predicate reads github.workflow_ref, which names the caller.
 #   (4) cf-account-migrate.yml shares the concurrency literal, carries no ssh bridge, ssh,
 #       upload-artifact or TF_LOG, and has EXACTLY two jobs whose environment and REHEARSAL are
 #       literals in the two exact pairs (CTO D7). Absent is RED. The logic is also driven against a
@@ -476,6 +478,29 @@ out("RED" if bad6 else "OK", "A6-exempt-no-root-planner",
     ("exempt workflows that plan the web-platform root: " + "; ".join(bad6[:5])) if bad6
     else "%d exempt non-plan-only workflows and %d bash-run repo scripts carry no root terraform invocation" % (n6, followed))
 out("RED" if n6 < 8 else "OK", "A6-floor", "%d exempt non-plan-only workflows checked" % n6)
+
+# (8) the hold keys on github.workflow_ref, which inside a reusable workflow names the CALLER.
+# So an exempt workflow must not call a local reusable workflow that loads the credentials (the
+# callee would inherit the exemption), and no exempt name may be a workflow_call-only workflow
+# (its own name never reaches the predicate, so exempting it does nothing).
+REUSE = re.compile(r"^[ \t]*uses:[ \t]*\./\.github/workflows/([A-Za-z0-9._-]+\.ya?ml)[ \t]*(?:#.*)?$", re.M)
+bad8 = []
+for ex in sorted(EXEMPT):
+    if ex not in texts: continue
+    for m in REUSE.finditer(code_lines(texts[ex])):
+        callee = m.group(1)
+        if callee in texts and LOADER.search(texts[callee]):
+            bad8.append("%s calls %s, which loads the infra credentials" % (ex, callee))
+    doc = docs.get(ex, (None, ""))[0]
+    if doc is None:
+        try: doc = yaml.load(texts[ex], Loader=Loader) or {}
+        except yaml.YAMLError: doc = {}
+    trig = doc.get("on", doc.get(True)) if isinstance(doc, dict) else None
+    keys = set(trig) if isinstance(trig, dict) else ({trig} if isinstance(trig, str) else set(trig or []))
+    if keys == {"workflow_call"}:
+        bad8.append("%s is workflow_call-only, so its name never reaches the predicate" % ex)
+out("RED" if bad8 else "OK", "A8-exempt-no-reusable-loader",
+    ("; ".join(bad8[:5])) if bad8 else "no exempt workflow calls a credential-loading reusable workflow or is workflow_call-only")
 PY
 
 EXEMPT_WF="$(bash -c 'source "$1"; printf "%s " "${CFAM_EXEMPT_WORKFLOWS[@]}"' _ "$SCRIPT")"
@@ -505,7 +530,7 @@ while IFS= read -r line; do
     *) no "analyzer emitted an unexpected line: $line" ;;
   esac
 done < "$REAL_OUT"
-for id in A1-unresolvable A1-unknown-planner A1-exempt-callers A1-plan-only-subset A1-floor A2-loader-first A2-floor A2-action-step A3-exempt-jobs A4-migrate A5-no-token A6-exempt-no-root-planner A6-floor; do
+for id in A1-unresolvable A1-unknown-planner A1-exempt-callers A1-plan-only-subset A1-floor A2-loader-first A2-floor A2-action-step A3-exempt-jobs A4-migrate A5-no-token A6-exempt-no-root-planner A6-floor A8-exempt-no-reusable-loader; do
   grep -q "^OK $id " "$REAL_OUT" || grep -q "^RED $id " "$REAL_OUT" || no "check $id never ran"
 done
 
@@ -588,6 +613,7 @@ mut_row() {
 }
 AWPI=apply-web-platform-infra.yml
 mut_row "an exempt workflow starts planning the root" A6-exempt-no-root-planner apply-github-infra.yml 's#^  INFRA_DIR: infra/github#  INFRA_DIR: apps/web-platform/infra#'
+mut_row "an exempt workflow calls the credential-loading bastion workflow" A8-exempt-no-reusable-loader apply-github-infra.yml 's#^jobs:$#jobs:\n  smuggle:\n    uses: ./.github/workflows/bastion-host-create.yml#'
 mut_row "a gated root's directory becomes unresolvable" A1-unresolvable cf-lb-overlay.yml      's#^  INFRA_DIR: apps/web-platform/infra#  INFRA_DIR: ${{ vars.SOME_DIR }}#'
 mut_row "a root planner drops the loader entirely"  A1-unknown-planner  apply-deploy-pipeline-fix.yml 's#uses: \./\.github/actions/infra-credentials#uses: ./.github/actions/not-the-loader#'
 mut_row "the loader is removed from one gated job"  A2-loader-first     "$AWPI"                '/^  apply:$/,/^  [a-z_]+:$/s#uses: \./\.github/actions/infra-credentials#uses: ./.github/actions/not-the-loader#'
@@ -607,6 +633,8 @@ mut_row "predicate step dropped"                    A2-action-step      "" '/^  
 # Script-list mutations: the lists come from the script, so drive the analyzer with mutated lists.
 o="$(analyze "$WFDIR" "$ACTION" "$EXEMPT_WF key-rotate.yml" "$EXEMPT_LIST")"
 if grep -q "^RED A6-exempt-no-root-planner .*key-rotate.yml via bash scripts/key-rotate.sh" <<<"$o"; then ok "MUT exempt list gains key-rotate.yml: A6 RED via scripts/key-rotate.sh (+ the sourced inngest-key-rotate.sh)"; else no "MUT exempt list gains key-rotate.yml: stayed green ($(grep ' A6-exempt-no' <<<"$o"))"; fi
+o="$(analyze "$WFDIR" "$ACTION" "$EXEMPT_WF bastion-host-create.yml" "$EXEMPT_LIST")"
+if grep -q "^RED A8-exempt-no-reusable-loader .*bastion-host-create.yml is workflow_call-only" <<<"$o"; then ok "MUT exempt list gains the workflow_call-only bastion workflow: A8 RED"; else no "MUT exempt list gains bastion-host-create.yml: stayed green ($(grep ' A8-exempt' <<<"$o"))"; fi
 o="$(analyze "$WFDIR" "$ACTION" "$EXEMPT_WF inngest-key-rotate.yml" "$EXEMPT_LIST")"
 if grep -q "^RED A6-exempt-no-root-planner .*inngest-key-rotate.yml via bash scripts/inngest-key-rotate.sh" <<<"$o"; then ok "MUT exempt list gains inngest-key-rotate.yml: A6 RED via its script"; else no "MUT exempt list gains inngest-key-rotate.yml: stayed green"; fi
 o="$(analyze "$WFDIR" "$ACTION" "$EXEMPT_WF apply-web-platform-infra.yml" "$EXEMPT_LIST")"
@@ -736,7 +764,7 @@ if (( PASS + FAIL != CASES )); then
   printf 'CONSERVATION FAILED: PASS(%s)+FAIL(%s) != CASES(%s)\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_ASSERTIONS=62
+MIN_ASSERTIONS=65
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s\n' "$TOTAL" "$MIN_ASSERTIONS" >&2

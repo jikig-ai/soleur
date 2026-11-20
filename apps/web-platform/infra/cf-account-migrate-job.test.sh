@@ -218,6 +218,10 @@ case "$url" in
   https://app.soleur.ai/health) if [[ -f "$D/mode.health" ]]; then printf '526 '; else printf '200 '; fi ;;
   https://www.soleur.ai/) printf '301 https://soleur.ai/' ;;
   https://soleur.ai/) [[ "$ua" == *GPTBot* ]] && printf '200 ' || printf '403 ' ;;
+  https://soleur.ai/pages/agents.html)
+    if [[ -f "$D/mode.wrongdest" ]]; then printf '301 https://soleur.ai/elsewhere/'; else printf '301 https://soleur.ai/agents/'; fi ;;
+  https://soleur.ai/pages/legal/privacy-policy.html) printf '301 https://soleur.ai/legal/privacy-policy/' ;;
+  https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/) printf '301 https://soleur.ai/blog/soleur-vs-anthropic-cowork/' ;;
   https://soleur.ai/*) printf '301 https://soleur.ai/elsewhere/' ;;
   *) printf '404 ' ;;
 esac
@@ -380,6 +384,10 @@ chk_health() {
   refused_for "$1" verify-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
   grep -q 'verdict=fail failing=.*app-health' "$1/out.txt" || { WHY="no-app-health"; return 1; }
 }
+chk_dest() { # a legacy path that 301s to the wrong page fails the verify
+  refused_for "$1" verify-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
+  grep -q 'verdict=fail failing=.*pages/agents[.]html' "$1/out.txt" || { WHY="no-agents-dest"; return 1; }
+}
 chk_reason() { # one sanitized reason line in the step summary, no workflow-command opener
   grep -q '^- cf-account-migrate phase=redirects-dns rehearsal=true reason=re-run after a 5xx :error title=x:pwned' "$1/summary.md" || { WHY="no-reason-line"; return 1; }
   if grep -qF '::' "$1/summary.md"; then WHY="double-colon"; return 1; fi
@@ -471,6 +479,7 @@ setup_tflog() {
 }
 setup_tflog_doppler() { new_case "tflogd-$1" redirects-dns true; printf 'TF_LOG_PROVIDER=TRACE\n' >"$LAST_D/doppler.inject"; }
 setup_health() { new_case "health-$1" redirects-dns false; : >"$LAST_D/mode.health"; }
+setup_wrongdest() { new_case "wrongdest-$1" redirects-dns false; : >"$LAST_D/mode.wrongdest"; }
 setup_reason() { new_case "reason-$1" redirects-dns true; printf 're-run after a 5xx\n::error title=x::pwned\x07 `code`\npwned2' >"$LAST_D/reason"; }
 setup_backups_timeout() { new_case "bkto-$1" redirects-dns true; printf '124' >"$LAST_D/mode.aws"; }
 setup_ids_timeout() { new_case "idsto-$1" redirects-dns false; printf '124' >"$LAST_D/mode.doppler"; }
@@ -752,6 +761,8 @@ H5="$(mk_mutant tflog-doppler 's/^  env -u TF_LOG -u TF_LOG_PATH -u TF_LOG_CORE 
 red "H5 a Doppler-side TF_LOG* reaches terraform plan" "$H5" chk_rehearsal_clean '^tf-log-leak$' setup_tflog_doppler
 H6="$(mk_mutant no-health '/bad+=" app-health"/d')"
 red "H6 post-apply verify drops the app.soleur.ai/health probe" "$H6" chk_health '^rc:0$' setup_health
+H6b="$(mk_mutant any-301 's/"301 \$want"/301\\ */')"
+red "H6b post-apply verify accepts a legacy 301 to any destination" "$H6b" chk_dest '^rc:0$' setup_wrongdest
 H7="$(mk_mutant raw-reason 's/summary "reason=$(reason_line)"/summary "reason=$REASON"/')"
 red "H7 reason written to the summary unsanitized" "$H7" chk_reason '^(double-colon|newline-injected|no-reason-line)$' setup_reason
 H8="$(mk_mutant backups-timeout 's/|| refuse backups-timeout/|| true/')"
@@ -790,7 +801,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=98
+EXPECTED_CASES=99
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1
