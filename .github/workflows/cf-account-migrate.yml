@@ -28,6 +28,11 @@ on:
         description: "Audit trail, required."
         required: true
         type: string
+      expected_in_state_updates:
+        description: "Apply only: the Terraform addresses (space- or comma-separated) the gate may admit as in-state updates, copied from the rehearsal's `in-state-updates admitted=` line. Empty = none (a first apply)."
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: terraform-apply-web-platform-host
@@ -102,8 +107,9 @@ jobs:
             <code>${{ inputs.migrate_phase }}</code> did not complete (failed, or cancelled by
             timeout-minutes=30 or by hand).
             A <code>cf-account-migrate … verdict=refuse reason=…</code> line in the log names the cause.
-            A rehearsal writes nothing; read its last refuse line, or re-dispatch. See the runbook
-            Halt section, knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md.</p>
+            A rehearsal writes nothing unless its refuse reason is remote-serial-changed or backup-written:
+            then stop and read the runbook Halt. Otherwise read its last refuse line, or re-dispatch. See the
+            runbook Halt section, knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md.</p>
             <p>Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>
 
   # rehearsal=false: forget, plan, gate, apply (reviewer-gated environment: the approval is the authorization).
@@ -142,6 +148,7 @@ jobs:
           CONFIRM: ${{ inputs.confirm }}
           REHEARSAL: "false"
           REASON: ${{ inputs.reason }}
+          CFAM_EXPECTED_IN_STATE_UPDATES: ${{ inputs.expected_in_state_updates }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -162,7 +169,9 @@ jobs:
             <code>${{ inputs.migrate_phase }}</code> did not complete (failed, or cancelled by
             timeout-minutes=30 or by hand).
             A <code>cf-account-migrate … verdict=refuse reason=…</code> line in the log names the cause.
-            With no <code>verdict=refuse</code> line, the last <code>cf-state-migrate backup=uploaded</code> /
-            <code>applying=true</code> / <code>applied=true</code> line in the log tells how far it got; see the
-            runbook Halt section, knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md.</p>
+            If the run printed <code>applying=true</code>, rules may have landed: run the runbook's local Verify
+            block first. Whether the state forget is committed is a cross-run fact, not a marker in this run:
+            check the backup-uri comment on #12931 and any <code>pre-cf-account-migration-*</code> object under
+            the R2 backups prefix. See the runbook Halt section,
+            knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md.</p>
             <p>Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>

@@ -12,25 +12,33 @@
 #   CFAM_VERIFY_TRIES, CFAM_VERIFY_SLEEP, CFAM_VERIFY_DEADLINE   optional post-apply probe budget:
 #                   at most TRIES passes (default 12) with a SLEEP pause between them (default 10 s).
 #                   Integers: tries 1-60, pause 0-60, deadline 0-1200; anything else refuses.
+#   CFAM_EXPECTED_IN_STATE_UPDATES   apply only: the Terraform addresses (space- or comma-separated;
+#                   empty = none) the gate may admit as in-state updates. The apply refuses
+#                   in-state-updates-unexpected before `applying=true` when the admitted set differs.
+#                   A rehearsal prints the admitted set (`in-state-updates admitted=`) to copy from.
 #
 # VERIFY BOUND (contract). The verify's deadline `end` is the EARLIER of DEADLINE seconds after the
 # verify starts (default 600) and VERIFY_CAP - SLEEP - VERIFY_PASS_MAX seconds after this script
-# started (bash's SECONDS; VERIFY_CAP = 1500, VERIFY_PASS_MAX = 105 = 7 sequential probes of at most
-# 15 s each). After each failing pass the loop stops when SECONDS >= end; otherwise it pauses and
-# starts the next pass, so a pass can START up to one pause after the deadline, never later. Hence
-# the verdict line prints by 1500 s (25 min) after the script started, inside the job's 30-min
-# timeout-minutes while the steps before this one take under 5 min. Exception: a verify that itself
-# starts after 1500 - SLEEP - 105 s still runs its one pass, and prints at most 105 s after it
-# started. The apply-failed probe uses the same loop with DEADLINE capped at 60 s.
+# started (bash's SECONDS; VERIFY_CAP = 1500; VERIFY_PASS_MAX is derived: one probe per
+# VERIFY_PAIRS entry plus gptbot, app-noindex and app-health, each of at most VERIFY_PROBE_S = 15 s,
+# so 7 x 15 = 105 s today). After each failing pass the loop stops when SECONDS >= end; otherwise it
+# pauses and starts the next pass, so a pass can START up to one pause after the deadline, never
+# later. Hence the verdict line prints by 1500 s (25 min) after the script started, inside the job's
+# 30-min timeout-minutes while the steps before this one take under 5 min. Exception: a verify that
+# itself starts after 1500 - SLEEP - VERIFY_PASS_MAX s still runs its one pass, and prints at most
+# VERIFY_PASS_MAX s after it started. A pass whose app-health reads 525 or 526 ends the loop at once
+# (that rule has landed and will not heal while the loop waits); every other failure is retried.
+# The apply-failed probe (probe_partial_apply) is the same loop polled on a 60 s deadline.
 # RESIDUALS: bash imports SECONDS from the environment, so a SECONDS set in the step env shifts the
-# clock (the workflow sets none; the suite uses it to place the clock near the cap). The 105 s pass
+# clock (the workflow sets none; the suite uses it to place the clock near the cap). The pass
 # figure assumes curl honours --max-time; process start-up time is not counted.
 #
 # REFUSAL FIELDS (contract). On a redirects-dns apply (rehearsal=false) every refusal after the
-# state forget carries forget=committed (entrypoint-gate-refused, gate-refused, apply-failed,
-# verify-failed). state-migrate-failed carries forget=committed when the forget's output holds its
-# `backup=uploaded` marker (the write may have started), else forget=unknown. apply-failed also
-# carries the result of one best-effort probe of the partial apply: verify=ok or failing=<list>.
+# state forget carries forget=committed (entrypoint-gate-refused, gate-refused,
+# in-state-updates-unexpected, apply-failed, verify-failed). state-migrate-failed carries
+# forget=committed when the forget's output holds its `backup=uploaded` marker (the write may have
+# started) or cannot be read, else forget=unknown. apply-failed also carries the result of the
+# best-effort probe of the partial apply (polled on a 60 s deadline): verify=ok or failing=<list>.
 # `applying=true` is printed just before terraform apply. RESIDUAL: a cancel or a timeout-minutes
 # kill prints no refuse line at all; the log markers backup=uploaded, applying=true and applied=true
 # are then the test (runbook Halt).
@@ -63,6 +71,8 @@ readonly LIVE_STATUSES=(queued in_progress waiting pending requested)
 W=""
 ROOT=""
 VERIFY_FAILING=""
+EXPECTED_ISU=""   # sorted, one address per line (validate_inputs)
+ADMITTED_ISU=""   # sorted, one address per line (plan_and_gate, on a gate PASS)
 TARGET_ARGS=()
 REPLACE_ARGS=()
 GATED=()
@@ -161,22 +171,64 @@ validate_inputs() {
   [[ "${CFAM_VERIFY_TRIES:-12}" =~ ^([1-9]|[1-5][0-9]|60)$ && "${CFAM_VERIFY_SLEEP:-10}" =~ ^([0-9]|[1-5][0-9]|60)$ \
      && "${CFAM_VERIFY_DEADLINE:-600}" =~ ^(0|[1-9][0-9]{0,2}|1[01][0-9][0-9]|1200)$ ]] \
     || refuse bad-verify-budget "CFAM_VERIFY_TRIES must be 1-60, CFAM_VERIFY_SLEEP 0-60 and CFAM_VERIFY_DEADLINE 0-1200 (integers)"
+  # Checked here, before anything is written, so a typo cannot surface only after the forget.
+  local a raw="${CFAM_EXPECTED_IN_STATE_UPDATES:-}"; local -a isu=()
+  read -r -d '' -a isu <<<"${raw//,/ }"
+  for a in ${isu[@]+"${isu[@]}"}; do
+    [[ "$a" =~ ^[a-z][a-z0-9_]*\.[A-Za-z_][A-Za-z0-9_-]*$ ]] \
+      || refuse bad-expected-in-state-updates "expected_in_state_updates must be Terraform addresses (type.name), space- or comma-separated, or empty for none; one entry is not of that shape"
+  done
+  if [[ "${#isu[@]}" -gt 0 ]]; then EXPECTED_ISU="$(printf '%s\n' "${isu[@]}" | LC_ALL=C sort -u)"; fi
   summary "reason=$(reason_line)"
 }
 
-# gated_workflows: every workflow that calls ./.github/actions/infra-credentials and is NOT in the
-# predicate's CFAM_EXEMPT_WORKFLOWS (CTO D1). The exempt list is read from the predicate itself,
-# in a child shell (both scripts declare a readonly P), so there is no second copy to drift.
+# isu_csv <one address per line>: the set as one comma-separated token, the form the input takes.
+isu_csv() { paste -sd, - <<<"$1"; }
+
+# check_expected_isu: the in-state updates the gate admitted on THIS plan must be exactly the set
+# the operator passed (copied from the rehearsal's `in-state-updates admitted=` line). An update
+# nobody expected would overwrite a rule (a dashboard edit, say) the rehearsal did not show.
+check_expected_isu() { # <extra refusal prose> <extra refusal fields>
+  [[ "$ADMITTED_ISU" == "$EXPECTED_ISU" ]] && return 0
+  printf '%s in-state-updates admitted=%s expected=%s\n' "$P" "$(isu_csv "$ADMITTED_ISU")" "$(isu_csv "$EXPECTED_ISU")"
+  refuse in-state-updates-unexpected "the gate admitted in-state updates [$(isu_csv "$ADMITTED_ISU")] but expected_in_state_updates is [$(isu_csv "$EXPECTED_ISU")]; nothing was applied. Each admitted update overwrites a rule already on the NEW zone: re-run the rehearsal, read its in-state-updates admitted= line (runbook Halt, verify-failed step 4), and re-dispatch with exactly that set.$1" "$2"
+}
+
+# gated_workflows: every workflow that reaches ./.github/actions/infra-credentials and is NOT in the
+# predicate's CFAM_EXEMPT_WORKFLOWS (CTO D1). It reaches the loader by a step line of its own (bare
+# or quoted), or through a job-level `uses: ./.github/workflows/<callee>` of a workflow that reaches
+# it, followed to a fixed point: a run is listed under the CALLER's name, so the caller is the file
+# `gh run list --workflow` must read. The exempt list is read from the predicate itself, in a child
+# shell (both scripts declare a readonly P), so there is no second copy to drift.
+readonly LOADER_RE="^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*[\"']?\\./\\.github/actions/infra-credentials/?[\"']?[[:space:]]*(#.*)?\$"
+readonly CALLEE_RE="^[[:space:]]*uses:[[:space:]]*[\"']?\\./\\.github/workflows/([A-Za-z0-9._-]+\\.ya?ml)[\"']?[[:space:]]*(#.*)?\$"
 gated_workflows() {
-  local exempt f base
+  local exempt f base c rc reach="" grew=1
+  local -a files=()
   # shellcheck disable=SC2016 # expanded by the child bash
   exempt="$(bash -c 'source "$1" && printf "%s\n" "${CFAM_EXEMPT_WORKFLOWS[@]}"' _ "$GITHUB_WORKSPACE/$PREDICATE_REL" 2>/dev/null)" \
     || refuse runs-unreadable "cannot read CFAM_EXEMPT_WORKFLOWS from $PREDICATE_REL"
   [[ -n "${exempt//[[:space:]]/}" ]] || refuse runs-unreadable "the predicate's exempt workflow list is empty"
   for f in "$GITHUB_WORKSPACE"/.github/workflows/*.yml "$GITHUB_WORKSPACE"/.github/workflows/*.yaml; do
     [[ -f "$f" ]] || continue
-    awk '/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*\.\/\.github\/actions\/infra-credentials\/?[[:space:]]*(#.*)?$/ {found=1} END {exit !found}' "$f" || continue
+    files+=("$f")
+    rc=0; grep -qE -- "$LOADER_RE" "$f" || rc=$?
+    [[ "$rc" -le 1 ]] || refuse runs-unreadable "cannot read ${f##*/} to derive the gated workflows"
+    [[ "$rc" -ne 0 ]] || reach+="${f##*/}"$'\n'
+  done
+  while [[ "$grew" -eq 1 ]]; do
+    grew=0
+    for f in ${files[@]+"${files[@]}"}; do
+      base="${f##*/}"
+      grep -qxF -- "$base" <<<"$reach" && continue
+      while IFS= read -r c; do
+        if [[ -n "$c" ]] && grep -qxF -- "$c" <<<"$reach"; then reach+="$base"$'\n'; grew=1; break; fi
+      done < <(sed -nE "s|${CALLEE_RE}|\\1|p" "$f")
+    done
+  done
+  for f in ${files[@]+"${files[@]}"}; do
     base="${f##*/}"
+    grep -qxF -- "$base" <<<"$reach" || continue
     grep -qxF -- "$base" <<<"$exempt" && continue
     GATED+=("$base")
   done
@@ -222,25 +274,26 @@ token_probe_path() {
     *) return 1 ;;
   esac
 }
-# Runs INSIDE doppler run: prints zone, account, r2 account, then "tok <name> <http-code>" per
-# <name> <url> pair. A token of an unusable shape (a quote or newline would inject a curl config
-# directive) is never sent and reads "bad".
+# Runs INSIDE doppler run: prints zone, account, r2 account, then "tok <name> <http-code> <curl-rc>"
+# per <name> <url> pair. A token of an unusable shape (a quote or newline would inject a curl config
+# directive) is never sent and reads "bad". curl-rc non-zero is a transport failure (a timeout, 28;
+# a DNS or connect failure, 6/7): the API was not reached, which says nothing about the token.
 # shellcheck disable=SC2016 # expanded by the inner bash
 PREFLIGHT_SH="$(cat <<'PREFLIGHT'
 printf "%s\n%s\n%s\n" "${TF_VAR_cf_zone_id:-}" "${TF_VAR_cf_account_id:-}" "${TF_VAR_cf_r2_account_id:-}"
 while [ "$#" -ge 2 ]; do
   n="$1"; u="$2"; shift 2
   v="TF_VAR_$n"; t="${!v:-}"
-  case "$t" in ""|*[!A-Za-z0-9._~+/=-]*) printf "tok %s bad\n" "$n"; continue ;; esac
+  case "$t" in ""|*[!A-Za-z0-9._~+/=-]*) printf "tok %s bad 0\n" "$n"; continue ;; esac
   c="$(curl --disable --noproxy '*' -sS -o /dev/null --max-time 10 -w "%{http_code}" --config - "$u" 2>/dev/null \
-       < <(printf "header = \"Authorization: Bearer %s\"\n" "$t"))" || c="000"
-  printf "tok %s %s\n" "$n" "${c:-000}"
+       < <(printf "header = \"Authorization: Bearer %s\"\n" "$t"))"; e=$?
+  printf "tok %s %s %s\n" "$n" "${c:-000}" "$e"
 done
 PREFLIGHT
 )"
 readonly PREFLIGHT_SH
 check_ids() {
-  local out zone acct r2 rc=0 tokens n path line code bad=0
+  local out zone acct r2 rc=0 tokens n path line code e bad=0 unreach=0
   local -a pairs=()
   tokens="$(cf_account_migrate_phase_tokens "$MIGRATE_PHASE")" || refuse no-tokens "the gate has no token list for $MIGRATE_PHASE"
   [[ -n "$tokens" ]] || refuse no-tokens "the gate's token list for $MIGRATE_PHASE is empty"
@@ -251,9 +304,11 @@ check_ids() {
   out="$(timeout 60 "${TF_ENV[@]}" bash -c "$PREFLIGHT_SH" _ "${pairs[@]}" 2>/dev/null)" || rc=$?
   [[ "$rc" -ne 124 ]] || refuse ids-timeout "doppler run did not resolve the ids and token probes within 60 s"
   [[ "$rc" -eq 0 ]] || refuse ids-unreadable "doppler run could not resolve cf_zone_id / cf_account_id"
-  zone="$(sed -n 1p <<<"$out" | tr 'A-F' 'a-f')"
-  acct="$(sed -n 2p <<<"$out" | tr 'A-F' 'a-f')"
-  r2="$(sed -n 3p <<<"$out" | tr 'A-F' 'a-f')"
+  # Compared exactly as Terraform sees them: variables.tf's shape check is lowercase-only, so an
+  # upper-case spelling is refused here, before the forget, not by the plan after it.
+  zone="$(sed -n 1p <<<"$out")"
+  acct="$(sed -n 2p <<<"$out")"
+  r2="$(sed -n 3p <<<"$out")"
   [[ "$zone" == "$CFAM_NEW_ZONE_ID" ]] \
     || refuse zone-id-not-new "cf_zone_id does not resolve to the Soleur-account zone (Doppler still holds the OLD id, or none). Do the runbook Phase 2 flip first. Nothing was written."
   [[ "$acct" == "$CFAM_NEW_ACCOUNT_ID" ]] \
@@ -261,12 +316,16 @@ check_ids() {
   [[ "$r2" == "$CFAM_OLD_ACCOUNT_ID" ]] \
     || refuse r2-account-not-old "cf_r2_account_id does not resolve to the legacy account that holds R2 (ADR-329: R2 never moves). Nothing was written."
   while IFS= read -r n; do
-    line="$(awk -v n="$n" '$1 == "tok" && $2 == n {print $3; exit}' <<<"$out")"
-    code="${line:-missing}"
-    printf '%s preflight=token name=%s http=%s\n' "$P" "$n" "$code"
-    [[ "$code" == 200 ]] || bad=1
+    line="$(awk -v n="$n" '$1 == "tok" && $2 == n {print $3, $4; exit}' <<<"$out")"
+    code="${line%% *}"; code="${code:-missing}"; e="${line#* }"
+    [[ "$e" =~ ^[0-9]{1,3}$ ]] || e=0
+    if [[ "$e" == 0 ]]; then printf '%s preflight=token name=%s http=%s\n' "$P" "$n" "$code"
+    else printf '%s preflight=token name=%s http=%s e=%s\n' "$P" "$n" "$code" "$e"; fi
+    # A transport failure is not a token verdict: retry, do not re-mint.
+    if [[ "$e" != 0 ]]; then unreach=1; elif [[ "$code" != 200 ]]; then bad=1; fi
   done <<<"$tokens"
   [[ "$bad" -eq 0 ]] || refuse token-not-new-zone "a provider token for $MIGRATE_PHASE did not answer 200 on the NEW zone/account (see the preflight=token lines): swap or re-mint it (runbook Phase 0/2). Nothing was written."
+  [[ "$unreach" -eq 0 ]] || refuse token-unreachable "the Cloudflare API did not answer a token probe for $MIGRATE_PHASE (curl failed: see the e= on the preflight=token lines): a network fault, not a token verdict. Re-dispatch; do not re-mint. Nothing was written."
   printf '%s preflight=ids verdict=ok tokens=%s\n' "$P" "$(grep -c . <<<"$tokens")"
 }
 
@@ -336,6 +395,10 @@ plan_and_gate() {
   printf '%s\n' "$out"
   summary "$(grep -E '^cf_account_migrate_gate: phase=' <<<"$out" | tail -n1)"
   [[ "$rc" -eq 0 ]] && grep -qE "^cf_account_migrate_gate: phase=${MIGRATE_PHASE} verdict=PASS " <<<"$out" || return 1
+  # The set the apply compares with expected_in_state_updates; a rehearsal prints it to copy from.
+  ADMITTED_ISU="$(sed -n 's/^cf_account_migrate_gate: in-state-update //p' <<<"$out" | LC_ALL=C sort -u)"
+  printf '%s in-state-updates count=%s admitted=%s\n' "$P" "$(grep -c . <<<"$ADMITTED_ISU")" "$(isu_csv "$ADMITTED_ISU")"
+  summary "in-state-updates admitted=$(isu_csv "$ADMITTED_ISU")"
   if ! entrypoint_gate; then
     printf '%s entrypoint-gate verdict=refuse\n' "$P"
     return 2
@@ -386,7 +449,7 @@ probe() {
   local -a ua=()
   local out rc=0
   [[ -n "${2:-}" ]] && ua=(-A "$2")
-  out="$(curl -sS -o /dev/null --max-time 15 -w '%{http_code} %{redirect_url}' ${ua[@]+"${ua[@]}"} "$1" 2>/dev/null)" || rc=$?
+  out="$(curl -sS -o /dev/null --max-time "$VERIFY_PROBE_S" -w '%{http_code} %{redirect_url}' ${ua[@]+"${ua[@]}"} "$1" 2>/dev/null)" || rc=$?
   printf '%s' "$out"
   [[ "$rc" -eq 0 ]] || printf ' e=%s' "$rc"
 }
@@ -401,28 +464,30 @@ noindex_obs() {
     END { printf "%s hdr=%s", (c == "" ? "000" : c), (v == "" ? "absent" : v) }' <<<"$1"
 }
 
-readonly VERIFY_CAP=1500 VERIFY_PASS_MAX=105
+# Each legacy path must 301 to its exact target (seo-rulesets.tf / seo-bulk-redirects.tf):
+# a 301 to the wrong page is as broken for a visitor as a 404.
+readonly VERIFY_PAIRS=(
+  "https://soleur.ai/pages/agents.html|https://soleur.ai/agents/"
+  "https://soleur.ai/pages/legal/privacy-policy.html|https://soleur.ai/legal/privacy-policy/"
+  "https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/|https://soleur.ai/blog/soleur-vs-anthropic-cowork/"
+  "https://www.soleur.ai/|https://soleur.ai/"
+)
+# One pass: a probe per pair, then gptbot, app-noindex and app-health, each of at most VERIFY_PROBE_S.
+readonly VERIFY_CAP=1500 VERIFY_PROBE_S=15
+readonly VERIFY_PASS_MAX=$(((${#VERIFY_PAIRS[@]} + 3) * VERIFY_PROBE_S))
 # verify_redirects_dns [<deadline ceiling, s>]: the loop and bound in the header (VERIFY BOUND).
 verify_redirects_dns() {
   local tries="${CFAM_VERIFY_TRIES:-12}" pause="${CFAM_VERIFY_SLEEP:-10}" dl="${CFAM_VERIFY_DEADLINE:-600}"
-  local i bad u want pair hdrs got end cap nrc
+  local i bad u want pair hdrs got end cap nrc stuck
   if [[ -n "${1:-}" && "$1" -lt "$dl" ]]; then dl="$1"; fi
   end=$((SECONDS + dl))
   cap=$((VERIFY_CAP - pause - VERIFY_PASS_MAX))
   if ((cap < end)); then end=$cap; fi
-  # Each legacy path must 301 to its exact target (seo-rulesets.tf / seo-bulk-redirects.tf):
-  # a 301 to the wrong page is as broken for a visitor as a 404.
-  local -a pairs=(
-    "https://soleur.ai/pages/agents.html|https://soleur.ai/agents/"
-    "https://soleur.ai/pages/legal/privacy-policy.html|https://soleur.ai/legal/privacy-policy/"
-    "https://soleur.ai/blog/2026-03-16-soleur-vs-anthropic-cowork/|https://soleur.ai/blog/soleur-vs-anthropic-cowork/"
-    "https://www.soleur.ai/|https://soleur.ai/"
-  )
   # Each failing item carries what came back (<item>=><code>+<location>), so the annotation alone
   # tells a wrong destination from a 404, a timeout (000) or a 526 from the ssl=strict rule.
   for ((i = 1; i <= tries; i++)); do
-    bad=""
-    for pair in "${pairs[@]}"; do
+    bad=""; stuck=""
+    for pair in "${VERIFY_PAIRS[@]}"; do
       u="${pair%%|*}"; want="${pair#*|}"
       got="$(probe "$u")"
       [[ "$got" == "301 $want" ]] || bad+=" $u=>$(obs_line "$got")"
@@ -430,7 +495,7 @@ verify_redirects_dns() {
     got="$(probe https://soleur.ai/ 'Mozilla/5.0 (compatible; GPTBot/1.2)')"
     served "$got" 200 || bad+=" gptbot=>$(obs_line "$got")"
     nrc=0
-    hdrs="$(curl -sS -o /dev/null -D - --max-time 15 https://app.soleur.ai/ 2>/dev/null)" || nrc=$?
+    hdrs="$(curl -sS -o /dev/null -D - --max-time "$VERIFY_PROBE_S" https://app.soleur.ai/ 2>/dev/null)" || nrc=$?
     if [[ "$nrc" -ne 0 ]] || ! grep -qiE '^x-robots-tag:.*noindex' <<<"$hdrs"; then
       got="$(noindex_obs "$hdrs")"
       [[ "$nrc" -eq 0 ]] || got+=" e=$nrc"
@@ -439,7 +504,14 @@ verify_redirects_dns() {
     # The same apply creates the app's ssl=strict config rule: prove the product still serves.
     got="$(probe https://app.soleur.ai/health)"
     served "$got" 200 || bad+=" app-health=>$(obs_line "$got")"
+    # A 525/526 is the landed ssl=strict rule: it will not heal while the loop waits, and the
+    # refusal is what sends the ops email. Every other failure (a redirect still propagating) retries.
+    [[ "$got" =~ ^52[56]\  && "$got" != *" e="* ]] && stuck="${got%% *}"
     if [[ -z "$bad" ]]; then printf '%s verify=redirects-dns verdict=ok\n' "$P"; return 0; fi
+    if [[ -n "$stuck" ]]; then
+      printf '%s verify=redirects-dns pass=%s app-health=%s retry=stopped\n' "$P" "$i" "$stuck"
+      break
+    fi
     # The deadline (VERIFY BOUND in the header) is checked after each failing pass, so the
     # verdict=fail line below prints before the job's timeout-minutes can cancel the run.
     if [[ "$i" -ge "$tries" ]] || ((SECONDS >= end)); then break; fi
@@ -450,17 +522,23 @@ verify_redirects_dns() {
   return 1
 }
 
+# probe_partial_apply: the best-effort probe after a failed apply, polled on a 60 s deadline (up to
+# TRIES passes). A partial apply may already serve rules to every visitor.
+probe_partial_apply() { verify_redirects_dns 60; }
+
 run_apply() {
-  local rc fg="" fx="" vf=""
+  local rc g fg="" fx="" vf="" msg
   cd "$ROOT" || refuse setup "cannot cd to the root"
   if [[ "$MIGRATE_PHASE" == redirects-dns ]]; then
     # The forget's stdout is kept: its backup=uploaded marker is printed after the backup reached R2
-    # and before the one state rm, so without it nothing was forgotten; with it the write may have
+    # and before the one state rm, so without it this run forgot nothing; with it the write may have
     # started (REFUSAL FIELDS in the header).
     state_migrate | tee "$W/state-migrate.out"; rc=${PIPESTATUS[0]}
     if [[ "$rc" -ne 0 ]]; then
-      if grep -q '^cf-state-migrate backup=uploaded ' "$W/state-migrate.out"; then
-        refuse state-migrate-failed "the state forget did not finish with verdict=ok (see above) after its backup was uploaded: entries may already be forgotten. Runbook Halt: fix forward; the _PREV id restore no longer applies." "forget=committed"
+      # grep rc 2 (the kept output cannot be read) is not "no marker": take the safe branch.
+      g=0; grep -q '^cf-state-migrate backup=uploaded ' "$W/state-migrate.out" 2>/dev/null || g=$?
+      if [[ "$g" -ne 1 ]]; then
+        refuse state-migrate-failed "the state forget did not finish with verdict=ok (see above) after its backup was uploaded, or its kept output could not be read: entries may already be forgotten. Runbook Halt: fix forward; the _PREV id restore no longer applies." "forget=committed"
       fi
       refuse state-migrate-failed "the state forget did not finish with verdict=ok (see above) and printed no backup=uploaded marker: read its verdict=abort line before re-dispatching." "forget=unknown"
     fi
@@ -474,20 +552,25 @@ run_apply() {
   plan_and_gate; rc=$?
   [[ "$rc" -ne 2 ]] || refuse entrypoint-gate-refused "the whole-list entrypoint gate refused (a live phase entrypoint is populated, or its emptiness could not be proven); adopt it with the printed import block first. Nothing was applied.${fg}" "$fx"
   [[ "$rc" -eq 0 ]] || refuse gate-refused "the plan did not reach gate verdict=PASS; nothing was applied.${fg}" "$fx"
+  check_expected_isu "$fg" "$fx"
   printf '%s phase=%s mode=apply applying=true\n' "$P" "$MIGRATE_PHASE"
   tf_env terraform apply -no-color -input=false -auto-approve "$W/tfplan" 2>&1 | tf_redact_random_ids
   rc=${PIPESTATUS[0]}
   if [[ "$rc" -ne 0 ]]; then
-    # A partial apply may already serve rules to every visitor: probe it once, best effort, on a
-    # deadline of at most 60 s. apply-failed stays the reason; the probe result is a field.
+    # apply-failed stays the reason; the result of the best-effort probe is a field.
+    msg="terraform apply of the graded plan failed (exit $rc); state may hold a partial apply."
     if [[ "$MIGRATE_PHASE" == redirects-dns ]]; then
-      if verify_redirects_dns 60; then vf="verify=ok"; else vf="failing=${VERIFY_FAILING}"; fi
+      if probe_partial_apply; then vf="verify=ok"; else vf="failing=${VERIFY_FAILING}"; fi
+      msg+=" Probe of the partial apply (polled on a 60 s deadline): ${vf}."
+      [[ "$vf" != failing=* ]] || msg+=" The runbook Halt verify-failed steps apply to those failing items (app-health first)."
     fi
-    refuse apply-failed "terraform apply of the graded plan failed (exit $rc); state may hold a partial apply.${vf:+ Probe of the partial apply: ${vf}.} Fix forward (a reviewed PR if the cause is in code), then re-dispatch the same phase: the forget then removes 0 (cf-state-migrate verdict=ok removed=0), imports already in state plan as no-op, and only the remainder is planned and gated." "${fx}${vf:+${fx:+ }$vf}"
+    msg+=" Fix forward (a reviewed PR if the cause is in code), then re-dispatch the same phase:"
+    [[ "$MIGRATE_PHASE" != redirects-dns ]] || msg+=" the forget then removes 0 (cf-state-migrate verdict=ok removed=0),"
+    refuse apply-failed "$msg imports already in state plan as no-op, and only the remainder is planned and gated." "${fx}${vf:+${fx:+ }$vf}"
   fi
   printf '%s phase=%s mode=apply applied=true\n' "$P" "$MIGRATE_PHASE"
   if [[ "$MIGRATE_PHASE" == redirects-dns ]]; then
-    verify_redirects_dns || refuse verify-failed "applied, but the redirect/noindex/crawler/app-health probes did not all pass: ${VERIFY_FAILING}. Runbook Halt, verify-failed: if app-health is failing, the owner may make one dashboard edit of the failing rule on the NEW zone only; then a fix-forward PR, a rehearsal, and a re-dispatch of this phase (the dashboard-edited rule must plan as a no-op; only a rule nobody edited plans as an in-state update)." "applied=true${fx:+ $fx} failing=${VERIFY_FAILING}"
+    verify_redirects_dns || refuse verify-failed "applied, but the redirect/noindex/crawler/app-health probes did not all pass: ${VERIFY_FAILING}. Runbook Halt, verify-failed: a dashboard edit is allowed only for app-health=>525/526 (the ssl rule) or an app-health 3xx whose Location equals a Terraform redirect target (remove that one rule or list item), by the owner, on the NEW zone only; for 000 or any other code make no edit and stop for an owner decision. Then a fix-forward PR, a rehearsal, and a re-dispatch of this phase with expected_in_state_updates set to the rehearsal's admitted set (the dashboard-edited rule must plan as a no-op; only a rule nobody edited plans as an in-state update)." "applied=true${fx:+ $fx} failing=${VERIFY_FAILING}"
   fi
   printf '%s phase=%s mode=apply verdict=PASS applied=true\n' "$P" "$MIGRATE_PHASE"
   summary "verdict=PASS applied=true"
