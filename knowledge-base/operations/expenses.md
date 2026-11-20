@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-11-17
+last_updated: 2026-11-19
 ---
 
 # Expenses
@@ -116,6 +116,7 @@ contradictory answers above.
 | Service | Provider | Category | Amount | Status | Date | Notes |
 |---------|----------|----------|--------|--------|------|-------|
 | soleur.ai registration | Cloudflare | domain | 140.00 | active | 2026-02-16 | 2-year initial registration |
+| rundevoo.run registration | Cloudflare Registrar | domain | 21.20 | active | 2026-11-19 | 1-year initial registration (#12971). At-cost, no markup. Auto-renew ON — subsequent renewals bill ~$21.20/yr; the recurring posture is tracked in knowledge-base/operations/domains.md (renewal 2027-11-19). Registrant: Jikigai SARL |
 | Sentry credit (jikigai org cancellation) | Sentry | observability | -29.00 | credit | 2026-05-21 | $29 transferred from canceled `jikigai` duplicate org to `jikigai-eu`; applied on next jikigai-eu invoice (2026-06-17). Vendor confirmation: Sentry support (Joe) reply 2026-05-21. Context: #3861 residency reframe, #3962 PIR Phase 8 Gate 3b |
 
 ## Downstream Consumers

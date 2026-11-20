@@ -21,6 +21,7 @@ Two prior gates resolved this by argument rather than by code:
 |---|---|---|
 | `rule-body-lint` (#6103 / ADR-092) | `AGENTS.rules.md` | outside the action's `ALLOWED_PATHS` |
 | `sentry-destroy-required` (#6589 / ADR-031 amendment) | `apps/web-platform/infra/sentry/**` | outside the action's `ALLOWED_PATHS` |
+| `rundevoo-destroy-required` (#12971) | `infra/rundevoo-run/**` | outside the action's `ALLOWED_PATHS` (re-derived per gate, not inherited — this row is the record of that derivation) |
 
 Both are labelled FABRICATED-NOT-EARNED and are sound because the fabricated assertion is
 **vacuously true**: no bot PR can produce a diff the gate would reject. Each carries a

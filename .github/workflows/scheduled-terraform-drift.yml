@@ -69,6 +69,19 @@ jobs:
           # exports reaches the third-party provider. The plan is full-root (no -target=),
           # so every resource type in the root is compared.
           - apps/web-platform/infra/sentry
+          # infra/rundevoo-run (#12971): the rundevoo.run zone root. It
+          # authenticates as apply-rundevoo-infra.yml does: the zone-scoped
+          # CF_API_TOKEN_RUNDEVOO from prd_terraform, bound as the raw
+          # CLOUDFLARE_API_TOKEN the cloudflare provider reads — NO doppler
+          # run / tf-var transformer of any form (a TF_VAR_* leak would feed
+          # the token to provider internals), and no fallback to a broader
+          # credential. terraform runs under an `env -i` ALLOWLIST (same
+          # posture as the sentry leg). The plan is full-root. This leg ALSO
+          # runs scripts/rundevoo-dns-set-equality.sh: a plan can only see
+          # state UNION config, so an out-of-band-added DNS record is
+          # invisible to it — only enumerating the live record set covers
+          # that direction.
+          - infra/rundevoo-run
       fail-fast: false
 
     steps:
@@ -154,6 +167,29 @@ jobs:
               # Masking only covers the Actions log, not an issue body posted through the API.
               PLAN_OUTPUT=${PLAN_OUTPUT//"$SENTRY_IAC_AUTH_TOKEN"/***}
             fi
+          elif [[ "$MATRIX_DIR" == "infra/rundevoo-run" ]]; then
+            # (#12971) The raw-token path of apply-rundevoo-infra.yml: NO
+            # doppler run of any form. The zone-scoped token is pulled once,
+            # mapped to CLOUDFLARE_API_TOKEN — the only name the provider
+            # reads — inside an `env -i` allowlist so nothing else this job
+            # exports (HCLOUD_TOKEN, Tier-B Doppler keys, TF_CLI_ARGS*, proxy
+            # vars) reaches the provider.
+            CF_TOKEN="$(doppler secrets get CF_API_TOKEN_RUNDEVOO --plain)"
+            if [[ -z "$CF_TOKEN" ]]; then
+              echo "::error::cf_token_rundevoo_absent — CF_API_TOKEN_RUNDEVOO is empty in prd_terraform; the rundevoo leg cannot authenticate. Run infra/rundevoo-run/bootstrap.sh."
+              PLAN_OUTPUT="CF_API_TOKEN_RUNDEVOO is not configured (empty) — the rundevoo leg cannot authenticate."
+              EXIT_CODE=1
+            else
+              PLAN_OUTPUT=$(env -i PATH="$PATH" HOME="$HOME" \
+                AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}" AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}" \
+                CLOUDFLARE_API_TOKEN="$CF_TOKEN" \
+                terraform plan -detailed-exitcode -no-color -input=false 2>&1)
+              EXIT_CODE=$?
+              # Masking only covers the Actions log, not an issue body posted
+              # through the API — the plan output is truncated into a public
+              # issue below.
+              PLAN_OUTPUT=${PLAN_OUTPUT//"$CF_TOKEN"/***}
+            fi
           elif [[ "$MATRIX_DIR" == "infra/github" ]]; then
             # (#9362) The same variable inputs as apply-github-infra.yml: no doppler run, no tf-var
             # transformer. Every root variable defaults; the soleur-infra App credentials
@@ -197,6 +233,37 @@ jobs:
           else
             echo "::error::Terraform plan failed in $STACK_NAME (exit $EXIT_CODE)"
           fi
+
+      # (#12971) Whole-list DNS drift probe — rundevoo leg ONLY, after the
+      # plan. `terraform plan` compares state UNION config; an out-of-band
+      # `cloudflare_record` added in the dashboard is in NEITHER set, so the
+      # plan can never see it — on a parked company domain that is exactly the
+      # record that serves arbitrary content. This enumerates the live zone's
+      # complete record set against recorded state and fails the leg on any
+      # unmanaged record. Runs even when the plan is already red: an out-of-
+      # band record is additive information the plan-leg failure would hide.
+      - name: DNS whole-list set equality (rundevoo.run)
+        if: always() && matrix.directory == 'infra/rundevoo-run'
+        working-directory: ${{ matrix.directory }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          CF_TOKEN="$(doppler secrets get CF_API_TOKEN_RUNDEVOO --plain)"
+          if [[ -z "$CF_TOKEN" ]]; then
+            echo "::error::cf_token_rundevoo_absent — CF_API_TOKEN_RUNDEVOO is empty in prd_terraform; the set-equality probe cannot run."
+            exit 1
+          fi
+          # `terraform show -json` of RECORDED state — the managed set. AWS_*
+          # (the R2 backend creds) is already in the job environment.
+          terraform show -json > "${RUNNER_TEMP}/rundevoo-state.json"
+          # env -i allowlist again: the probe sources the shared bearer helper
+          # and must see exactly PATH, HOME, and the token — nothing else.
+          env -i PATH="$PATH" HOME="$HOME" CLOUDFLARE_API_TOKEN="$CF_TOKEN" \
+            bash "${GITHUB_WORKSPACE}/scripts/rundevoo-dns-set-equality.sh" \
+              "${RUNNER_TEMP}/rundevoo-state.json"
 
       # FR-B4 — actually invoke the token-drift detector.
       #

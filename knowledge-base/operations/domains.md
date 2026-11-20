@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-11-13
+last_updated: 2026-11-19
 ---
 
 # Domains
@@ -7,6 +7,7 @@ last_updated: 2026-11-13
 | Domain | Registrar | Renewal Date | Nameservers | Notes |
 |--------|-----------|--------------|-------------|-------|
 | soleur.ai | Cloudflare | 2028-02-16 | ns1.cloudflare.com, ns2.cloudflare.com | Primary brand domain |
+| rundevoo.run | Cloudflare Registrar | 2027-11-19 | laila.ns.cloudflare.com, lennon.ns.cloudflare.com | Test-app domain reserved for future Soleur dogfooding surface (#12971; product shape deferred to #12972). Registered 2026-11-19, ~$21.20/yr at-cost, auto-renew ON, registrant Jikigai SARL. Zone id `4a16c6fcd6949d1887d6247f95a0d91e` in the "Soleur" Cloudflare account (account `66d4f93f…` — NOT the `4d5ba6f0…` R2/state account). Terraform root `infra/rundevoo-run/`; phase-1 posture is safe-by-default DNS only (apex null MX `0 .`, `v=spf1 -all`, `_dmarc` `p=reject`, DNSSEC) — no site records. |
 | jikigai.com | Squarespace Domains II LLC | 2027-08-22 | ns-cloud-c1.googledomains.com, ns-cloud-c2.googledomains.com, ns-cloud-c3.googledomains.com, ns-cloud-c4.googledomains.com | Corporate + email domain (`ops@`, `legal@` on Proton Mail). NOT on Cloudflare: a zone was added and is OBSERVED ABSENT as of 2026-09-09 after four weeks of incomplete nameserver setup (the 28-day auto-delete fires on its own clock, so this is the observation date). DNSSEC-signed at the parent. Re-establishment tracked in #7995 |
 
 ## DNS Records (soleur.ai)

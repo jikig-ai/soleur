@@ -43,6 +43,7 @@
   "cloudflare_load_balancer",
   "cloudflare_load_balancer_monitor",
   "cloudflare_load_balancer_pool",
+  "cloudflare_zone",
   "cloudflare_zone_dnssec",
   "cloudflare_zone_settings_override",
   "doppler_config",
