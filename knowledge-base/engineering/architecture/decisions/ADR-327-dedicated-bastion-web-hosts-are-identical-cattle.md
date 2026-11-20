@@ -52,3 +52,36 @@ recreate.
 - The bastion (about €4–5 per month) and the private load balancer (about €5–6 per month) are new
   recurring costs. The owner approved both on 2026-11-10. They are recorded in the ledger in the PRs
   that create them.
+
+## Addendum — 2026-11-18 (#12866, step 2a)
+
+Step 2 ships as two PRs. This one (2a) declares `soleur-bastion` and its gated birth route; the birth
+itself is an owner-authorized dispatch after merge. #12879 (2b) adds the replace route and heartbeat,
+and blocks step 3. The plan is
+`knowledge-base/project/plans/archive/20261119-111207-2026-11-17-feat-dedicated-bastion-host-gated-routes-plan.md`; the operator
+acts are in `knowledge-base/engineering/operations/runbooks/bastion-host.md`.
+
+- **Routes are `apply_target` choices of `apply-web-platform-infra.yml`.** `bastion-host-create` is a
+  thin job there that calls the reusable `bastion-host-create.yml` (`confirm=BIRTH-bastion`, environment
+  `web-platform-infra-apply`), so it runs inside the caller's run and holds the workflow's concurrency
+  group. The body lives in its own file because the caller sits at its byte gate
+  (`workflow-file-size.test.ts`); 2b's replace job joins it there. Its gate admits only the addresses in
+  `tests/scripts/lib/bastion-resources.txt`; `plan_only` runs first and prints the commit and the
+  planned addresses for the owner's go.
+- **Until 2b merges, the Consequences line "its own replace route bounds that risk" is not yet true.**
+  A birth that does not report `fresh_boot_ready` is powered off (disk kept) and commented on #12879;
+  there is no in-repo exit until 2b.
+- **git-data admits by private-network membership plus forced commands.** Residual: any member of the
+  private network reaches git-data:22. The nftables source allowlist is #12880.
+- **Hetzner firewalls filter only the public interface.** The bastion's own nftables `input` chain
+  drops private-network inbound; git-data does not yet (#12880). The host has no filter of its own
+  until the post-settle pass enables `nftables.service` (on the kernel-update path: the first boot, the
+  settle reboot and the second apt run); sshd is masked and the zero-rule Hetzner firewall cover that window.
+- **Egress rows land with the consumer they serve.** 2a allows DNS to the Hetzner resolvers, NTP for
+  `systemd-timesync`, the metadata endpoint for root, and tcp/443 to the apt mirrors and Sentry ingest for
+  root and `_apt`, each row cited to its on-host consumer. The lint refuses an output accept row with no
+  destination or owner qualifier and any private-range destination. Later steps add rows with their dialers.
+- **The bastion host key does not rotate on replace.** Residual: a leaked copy (Terraform state, or
+  `user_data` as the metadata endpoint serves it to root on the host) stays valid until a deliberate rotation, which the runbook defines.
+- **Cost.** The bastion is EUR 5.99 per month (cx23 plus its primary IPv4), not the EUR 4–5 above.
+  The owner's go on the real birth accepts it; the ledger rows land in this PR.

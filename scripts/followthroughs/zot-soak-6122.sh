@@ -476,7 +476,7 @@ if [[ ! "$INNGEST_ZOT" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 if (( INNGEST_ZOT == 0 )); then
-  echo "FAIL(no-inngest-freshboot-evidence): 0 watched events, but NO zot-served fresh boot of the dedicated soleur-inngest host since $START. That host is UNOBSERVED, not clean. If NO replace has run in the window: dispatch apply-web-platform-infra.yml with apply_target=inngest-host-replace (the host must be BUILT from the #6500 template), in an ADR-100 maintenance window. If a replace DID run, do not replace again yet — read the host's Better Stack channel first: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since '<window start>' --grep 'stage=inngest_zot' --grep sentry-emit-FAILED --grep SOLEUR_INNGEST_BOOT_TRACE_LOST. inngest_zot present plus sentry-emit-FAILED (or TRACE_LOST) is a DELIVERY fault (DSN or egress), not a missing boot.${START_NOTE}"
+  echo "FAIL(no-inngest-freshboot-evidence): 0 watched events, but NO zot-served fresh boot of the dedicated soleur-inngest host since $START. That host is UNOBSERVED, not clean. If NO replace has run in the window: dispatch apply-web-platform-infra.yml with apply_target=inngest-host-replace confirm=REPLACE-INNGEST-HOST (the host must be BUILT from the #6500 template), in an ADR-100 maintenance window. If a replace DID run, do not replace again yet — read the host's Better Stack channel first: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since '<window start>' --grep 'stage=inngest_zot' --grep sentry-emit-FAILED --grep SOLEUR_INNGEST_BOOT_TRACE_LOST. inngest_zot present plus sentry-emit-FAILED (or TRACE_LOST) is a DELIVERY fault (DSN or egress), not a missing boot.${START_NOTE}"
   exit 1
 fi
 
