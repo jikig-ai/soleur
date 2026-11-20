@@ -1178,7 +1178,7 @@ VTIO="$INFRA_SCRIPTS/verify-tunnel-ingress-origin.sh"
 [[ -f "$FHBT" && -f "$VTIO" ]] || fatal "stage 3: the live-in-apply scripts are missing ($FHBT, $VTIO)"
 printf '%s' '[]' > "$BODIES/empty_array.json"
 printf '%s' '{"data":[{"timestamp":"2026-10-01T00:00:00+00:00","stage":"app_zot","host_name":"soleur-web-9","detail":"synthetic"}]}' > "$BODIES/origin_event.json"
-printf '%s' '{"success":true,"result":{"config":{"ingress":[{"hostname":"deploy.soleur.example","service":"http://10.0.1.10:9000"},{"hostname":"ssh.soleur.example","service":"ssh://10.0.1.10:22"},{"service":"http_status:404"}]}}}' > "$BODIES/cf_tunnel_cfg.json"
+printf '%s' '{"success":true,"result":{"config":{"ingress":[{"hostname":"deploy.soleur.example","service":"http://10.0.1.10:9000"},{"hostname":"ssh.soleur.example","service":"ssh://10.0.1.10:22"},{"hostname":"registry.soleur.example","service":"tcp://10.0.1.30:5000"},{"service":"http_status:404"}]}}}' > "$BODIES/cf_tunnel_cfg.json"
 
 # mutated_copy <script> <outfile> <from-literal> <to-literal>: a copy with ONE literal replaced;
 # FATAL if the literal is absent (a mutation that does not land reports the baseline, which is
@@ -1267,11 +1267,12 @@ cat > "$VT_STUBS/doppler" <<'VT_DOPPLER'
 #!/usr/bin/env bash
 set -u
 case "${1:-}" in
-  run) printf '"10.0.1.10"\n' ;;
+  # The console session answers two expressions, one per line: web-1's private IP, then local.registry_endpoint.
+  run) printf '"10.0.1.10"\n"10.0.1.30:5000"\n' ;;
   secrets)
     case "${3:-}" in
       CF_API_TOKEN) printf '%s' "${VT_CF_API_TOKEN:-}" ;;
-      CF_ACCOUNT_ID) printf 'acct0001' ;;
+      # (#12937: the tunnel account comes from `terraform output`, not a CF_ACCOUNT_ID store read; that read exits 1 here.)
       APP_DOMAIN_BASE) printf 'soleur.example' ;;
       # (#9294: the webhook trio is the caller's env, not a doppler answer; a store read of it exits 1 here.)
       *) exit 1 ;;
@@ -1281,8 +1282,10 @@ esac
 VT_DOPPLER
 cat > "$VT_STUBS/terraform" <<'VT_TERRAFORM'
 #!/usr/bin/env bash
-case "${1:-} ${2:-}" in
-  "state show") printf '    id = "11111111-2222-3333-4444-555555555555"\n' ;;
+# #12937: the tunnel id and its account are the `cf_tunnel_id` / `cf_tunnel_account_id` outputs.
+case "${1:-} ${2:-} ${3:-}" in
+  "output -raw cf_tunnel_id") printf '11111111-2222-3333-4444-555555555555' ;;
+  "output -raw cf_tunnel_account_id") printf '0123456789abcdef0123456789abcdef' ;;
   *) exit 1 ;;
 esac
 VT_TERRAFORM

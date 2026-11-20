@@ -66,7 +66,7 @@ fi
 # prose can satisfy or defeat any assertion; (2) walk ingress_rule blocks by brace
 # depth (depth-aware, so a nested origin_request {} cannot close the block early)
 # and emit one record per rule.
-rules="$(
+rules_by_res="$(
   awk '
     # --- pass 1: strip comments, STRING-AWARE ---
     # The string tracking is load-bearing, not defensive polish: without it the `//`
@@ -105,11 +105,12 @@ rules="$(
     }
   ' "$TF" | awk '
     # --- pass 2: extract ingress_rule records ---
-    /^resource "cloudflare_zero_trust_tunnel_cloudflared_config"/ { inres = 1 }
+    /^resource "cloudflare_zero_trust_tunnel_cloudflared_config"/ { inres = 1; split($0, q, "\""); res = q[4] }
     inres && /ingress_rule[[:space:]]*\{/ {
-      inrule = 1; depth = 0; host = ""; svc = ""
+      inrule = 1; depth = 0; host = ""; svc = ""; orq = ""; inorq = 0
     }
     inrule {
+      if ($0 ~ /origin_request[[:space:]]*\{/) { inorq = 1; orqd = depth }
       n = gsub(/\{/, "{"); depth += n
       n = gsub(/\}/, "}"); depth -= n
       if ($0 ~ /^[[:space:]]*hostname[[:space:]]*=/) {
@@ -124,13 +125,19 @@ rules="$(
         # inner quotes of var.web_hosts["web-1"], silently defeating the var assert.
         sub(/^"/, "", svc); sub(/"[[:space:]]*$/, "", svc)
       }
+      # origin_request body, whitespace-free and blank-line-free, so AC4 compares it too (#6357 fail-fast).
+      if (inorq) { line = $0; gsub(/[[:space:]]+/, "", line); if (line != "") orq = orq line ";"; if (depth <= orqd) inorq = 0 }
       if (depth <= 0) {
-        if (svc != "") { print host "|" svc }
+        if (svc != "") { print res "\t" host "|" svc "\t" orq }
         inrule = 0
       }
     }
   '
 )"
+
+# Each record is "<config resource name>\t<hostname>|<service>\t<origin_request body>"; every assertion
+# below reads the rule field, and AC4 compares the two config resources' rule + origin_request sets.
+rules="$(cut -f2 <<<"$rules_by_res")"
 
 rule_count=0
 [[ -n "$rules" ]] && rule_count=$(printf '%s\n' "$rules" | grep -c '|') || true
@@ -191,6 +198,103 @@ for want in "${REQUIRE_WEB1_ORIGIN[@]}"; do
     pass "$want.: $matched rule(s) found, all origin-pinned via var.web_hosts"
   fi
 done
+
+# --- AC4 (#12937): the Soleur-account tunnel config carries the SAME rules as the old one ---------
+# The zone move re-homed the tunnel as `_config.web_soleur` beside the untouched `_config.web`. Its
+# rules must be derived from the same expressions (ADR-114 I2 holds for both) — compared as the
+# exact sorted record set, so a drifted, missing or extra rule on either side reds.
+rules_of() { awk -F'\t' -v r="$2" '$1 == r { print $2 "\t" $3 }' <<<"$1" | LC_ALL=C sort; }
+same_rules() { # <records> -> 0 when web and web_soleur hold identical, 4-rule sets
+  local a b; a="$(rules_of "$1" web)"; b="$(rules_of "$1" web_soleur)"
+  [[ -n "$b" && "$(grep -c . <<<"$b")" -eq 4 && "$a" == "$b" ]]
+}
+if same_rules "$rules_by_res"; then
+  pass "_config.web_soleur carries exactly _config.web's 4 rules (same expressions)"
+else
+  fail "_config.web_soleur's ingress rules differ from _config.web's (or it is missing / not 4 rules) — re-derive them from the same expressions"
+fi
+mut_rules="$(sed -E 's#^(web_soleur\tregistry\.[^|]*\|)tcp://#\1http://#' <<<"$rules_by_res")"
+if [[ "$mut_rules" != "$rules_by_res" ]] && ! same_rules "$mut_rules"; then
+  pass "AC4 mutation: a web_soleur registry rule rewritten to http:// is caught"
+else
+  fail "AC4 mutation did not land or was not caught — the comparison is vacuous"
+fi
+if grep -qxF $'web_soleur\tregistry.${var.app_domain_base}|tcp://${local.registry_endpoint}\torigin_request{;connect_timeout="5s";no_happy_eyeballs=true;};' <<<"$rules_by_res"; then
+  pass "AC4: web_soleur's registry rule carries the fail-fast origin_request (connect_timeout, no_happy_eyeballs)"
+else
+  fail "AC4: web_soleur's registry rule lost its origin_request {connect_timeout, no_happy_eyeballs} (#6357)"
+fi
+mut_rules="$(sed -E 's#^(web_soleur\tregistry\.[^\t]*\t).*#\1#' <<<"$rules_by_res")"
+if [[ "$mut_rules" != "$rules_by_res" ]] && ! same_rules "$mut_rules"; then
+  pass "AC4 mutation: a web_soleur registry rule with its origin_request deleted is caught"
+else
+  fail "AC4 origin_request mutation did not land or was not caught"
+fi
+
+# --- AC5 (#12937): the connector census reads the tunnel in the account tunnel.tf creates it in ----------
+# The id literal lives ONCE, in scripts/tunnel-connector-census.sh; the scheduled census step reads it after
+# sourcing that file, never Doppler CF_ACCOUNT_ID (the pre-zone-move account).
+P_TMP="$(mktemp -d)"
+trap 'rm -rf "$P_TMP"' EXIT
+acct_of() { grep -E '^[[:space:]]*cf_soleur_account_id[[:space:]]*=' "$1" | sed -E 's/.*"([0-9a-f]{32})".*/\1/'; }
+# The ONE parity predicate, run on the real tunnel.tf and on the mutated copy below.
+acct_parity() { local t; t="$(acct_of "$1")"; [[ -n "$t" && "$2" == "$t" ]]; }
+TF_ACCT="$(acct_of "$TF")"
+CENSUS_ACCT="$(bash -c 'source "$1" >/dev/null 2>&1; printf "%s" "${CF_TUNNEL_ACCOUNT_ID:-}"' _ "$REPO_ROOT/scripts/tunnel-connector-census.sh")"
+if acct_parity "$TF" "$CENSUS_ACCT"; then
+  pass "census CF_TUNNEL_ACCOUNT_ID equals tunnel.tf local.cf_soleur_account_id"
+else
+  fail "census CF_TUNNEL_ACCOUNT_ID ('$CENSUS_ACCT') differs from tunnel.tf local.cf_soleur_account_id ('$TF_ACCT')"
+fi
+sed -E 's/^([[:space:]]*cf_soleur_account_id[[:space:]]*=[[:space:]]*")[0-9a-f]{32}"/\1ffffffffffffffffffffffffffffffff"/' "$TF" >"$P_TMP/tunnel-mut.tf"
+MUT_ACCT="$(acct_of "$P_TMP/tunnel-mut.tf")"
+if [[ "$MUT_ACCT" == "ffffffffffffffffffffffffffffffff" ]] && ! acct_parity "$P_TMP/tunnel-mut.tf" "$CENSUS_ACCT"; then
+  pass "AC5 mutation: a tunnel.tf account that differs from the census literal is caught"
+else
+  fail "AC5 mutation did not land or was not caught"
+fi
+CENSUS_WF="$REPO_ROOT/.github/workflows/scheduled-inngest-health.yml"
+census_step() { awk '/- name: Census tunnel connectors \(ADR-114 I1\)/{f=1} f&&/^      - name: /&&!/Census tunnel connectors/{exit} f' "$1" | grep -vE '^[[:space:]]*#'; }
+reads_tunnel_acct() { local cs; cs="$(census_step "$1")"; grep -qF 'CF_ACCOUNT_ID="${CF_TUNNEL_ACCOUNT_ID:-}"' <<<"$cs" && ! grep -qF 'secrets get CF_ACCOUNT_ID' <<<"$cs"; }
+if reads_tunnel_acct "$CENSUS_WF"; then
+  pass "the census step takes its account from CF_TUNNEL_ACCOUNT_ID, not Doppler CF_ACCOUNT_ID"
+else
+  fail "the census step does not read CF_TUNNEL_ACCOUNT_ID (or still reads Doppler CF_ACCOUNT_ID)"
+fi
+sed 's/CF_ACCOUNT_ID="${CF_TUNNEL_ACCOUNT_ID:-}"/CF_ACCOUNT_ID="${CF_ACCOUNT_ID_FROM_DOPPLER:-}"/' "$CENSUS_WF" >"$P_TMP/census-mut.yml"
+if ! cmp -s "$CENSUS_WF" "$P_TMP/census-mut.yml" && ! reads_tunnel_acct "$P_TMP/census-mut.yml"; then
+  pass "AC5 mutation: a census step that no longer reads CF_TUNNEL_ACCOUNT_ID is caught"
+else
+  fail "AC5 census mutation did not land or was not caught"
+fi
+# The tunnel lookup skips deleted namesakes.
+lookup_ok() { local cs; cs="$(census_step "$1")"; grep -qF 'cfd_tunnel?name=soleur-web-platform&is_deleted=false"' <<<"$cs"; }
+if lookup_ok "$CENSUS_WF"; then
+  pass "the census tunnel lookup filters is_deleted=false"
+else
+  fail "the census tunnel lookup lost is_deleted=false"
+fi
+sed 's/&is_deleted=false"/"/' "$CENSUS_WF" >"$P_TMP/census-mut2.yml"
+if ! cmp -s "$CENSUS_WF" "$P_TMP/census-mut2.yml" && ! lookup_ok "$P_TMP/census-mut2.yml"; then
+  pass "AC5 mutation: a lookup without is_deleted=false is caught"
+else
+  fail "AC5 lookup mutation did not land or was not caught"
+fi
+# ...and asks for the name tunnel.tf gives web_soleur: a renamed tunnel leaves the census on tunnel_id_unresolved forever.
+tf_tunnel_name() { awk '/^resource "cloudflare_zero_trust_tunnel_cloudflared" "web_soleur" \{/{f=1} f&&/^\}/{exit} f' "$1" | sed -nE 's/^[[:space:]]*name[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p'; }
+census_name() { census_step "$1" | grep -oE 'cfd_tunnel\?name=[^&"]+' | sed 's/.*name=//' | sort -u; }
+name_parity() { local t c; t="$(tf_tunnel_name "$1")"; c="$(census_name "$2")"; [[ -n "$t" && "$c" == "$t" ]]; }
+if name_parity "$TF" "$CENSUS_WF"; then
+  pass "the census lookup name equals tunnel.tf web_soleur's name ('$(tf_tunnel_name "$TF")')"
+else
+  fail "the census lookup name ('$(census_name "$CENSUS_WF")') differs from tunnel.tf web_soleur's name ('$(tf_tunnel_name "$TF")')"
+fi
+awk '/^resource "cloudflare_zero_trust_tunnel_cloudflared" "web_soleur" \{/{f=1} f&&/^[[:space:]]*name[[:space:]]*=/{sub(/"[^"]+"/, "\"soleur-web-platform-2\""); f=0} {print}' "$TF" >"$P_TMP/tunnel-mut2.tf"
+if [[ "$(tf_tunnel_name "$P_TMP/tunnel-mut2.tf")" == "soleur-web-platform-2" ]] && ! name_parity "$P_TMP/tunnel-mut2.tf" "$CENSUS_WF"; then
+  pass "AC5 mutation: a renamed web_soleur tunnel is caught"
+else
+  fail "AC5 name mutation did not land or was not caught"
+fi
 
 # --- AC3: this guard is actually wired into CI --------------------------------------
 # Since #8736 presence under apps/web-platform/infra/ IS registration — the

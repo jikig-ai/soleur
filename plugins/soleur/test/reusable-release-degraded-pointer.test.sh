@@ -159,6 +159,9 @@ HOST_FAMILY=(bridge)
 # pointer for a stage where nothing ever reached zot.
 RUNNER_FAMILY=(crane_install)
 UNCLASSIFIED=(sign)
+# Edge causes: Cloudflare answered before the registry host was reached, so a `bridge` failure
+# carrying one is pointed at the cause's own remedy, never at registry-host telemetry.
+EDGE_CAUSES=(host-nxdomain tunnel-down edge-error-1000 edge-error-1016)
 
 # ---------------------------------------------------------------------------
 # Run degraded() for one reason and echo everything it printed.
@@ -173,6 +176,7 @@ run_degraded() {
   local reason="$1"
   (
     export GITHUB_OUTPUT="$TMP/out.$$" GITHUB_STEP_SUMMARY="$TMP/sum.$$" ZOT="example/img:v1"
+    [[ -z "${RUN_CAUSE:-}" ]] || export TOKEN_CAUSE="$RUN_CAUSE"
     : > "$GITHUB_OUTPUT"; : > "$GITHUB_STEP_SUMMARY"
     # shellcheck disable=SC1090
     source "$FN"
@@ -285,6 +289,26 @@ for r in "${VERIFY_FAMILY[@]}"; do assert_verify_family "$r"; done
 
 echo "--- host family ---"
 for r in "${HOST_FAMILY[@]}"; do assert_host_family "$r"; done
+echo "--- bridge with an edge cause (names the cause help, not the registry host) ---"
+for c in "${EDGE_CAUSES[@]}"; do
+  out="$(RUN_CAUSE="$c" run_degraded bridge)"
+  if grep -qF -- "$HOST_ANCHOR" <<<"$out"; then
+    fail "bridge with edge cause '$c': points at registry-host telemetry for a cause measured at the edge"
+  else
+    pass "bridge with edge cause '$c' does NOT emit the host-health pointer"
+  fi
+  if grep -qF -- "zot_mirror_cause_help ${c}'" <<<"$out"; then
+    pass "bridge with edge cause '$c' names its cause-help command"
+  else
+    fail "bridge with edge cause '$c': no cause-help command"
+  fi
+done
+out="$(RUN_CAUSE=gate-indeterminate run_degraded bridge)"
+if grep -qF -- "$HOST_ANCHOR" <<<"$out"; then
+  pass "bridge with a non-edge cause keeps the host-health pointer"
+else
+  fail "bridge with a non-edge cause lost the host-health pointer"
+fi
 echo "--- runner family (names NO registry channel) ---"
 for r in "${RUNNER_FAMILY[@]}"; do assert_runner_family "$r"; done
 
@@ -466,7 +490,7 @@ fi
 # green it did not earn. The floor is a function of the derived set size, so it
 # cannot be satisfied by a run that examined less than it claims.
 # ---------------------------------------------------------------------------
-EXPECTED_MIN=$(( (${#UPLOAD_FAMILY[@]} * 2) + (${#VERIFY_FAMILY[@]} * 3) + (${#HOST_FAMILY[@]} * 2) + (${#RUNNER_FAMILY[@]} * 3) + ${#UNCLASSIFIED[@]} + 1 + 7 + 1 ))
+EXPECTED_MIN=$(( (${#UPLOAD_FAMILY[@]} * 2) + (${#VERIFY_FAMILY[@]} * 3) + (${#HOST_FAMILY[@]} * 2) + (${#RUNNER_FAMILY[@]} * 3) + ${#UNCLASSIFIED[@]} + (${#EDGE_CAUSES[@]} * 2) + 1 + 1 + 7 + 1 ))
 # HARNESS CANARY + a floor that does NOT dispatch through the helper it guards. Neutering fail()
 # to a no-op previously left this suite fully GREEN, and the floor's only voice was that same
 # helper — so one edit disarmed the assertions AND their backstop.
@@ -496,7 +520,7 @@ fi
 #
 # It is an absolute lower bound, NOT a substitute for the derived check above: raise it only
 # alongside a real growth in the assertion population.
-FAIL_FLOOR_MIN=25
+FAIL_FLOOR_MIN=34
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$FAIL_FLOOR_MIN" ]]; then
   echo "  FATAL: anti-vacuity: ran $TOTAL assertions, expected >= $FAIL_FLOOR_MIN. Fix the extraction, do not lower the floor." >&2

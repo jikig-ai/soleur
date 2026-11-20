@@ -122,6 +122,42 @@ fresh boot has never been observed, only zot-served rolling deploys (392 pulls i
 > boot. The operator then re-armed the soak at `START=2026-09-24T03:22:41Z` (#6122). The table above
 > is the pre-re-arm window's record and is not part of the new window.
 
+## Grep for the bridge markers first
+
+When a release fails at the zot mirror, or an infra apply fails at "Verify tunnel ingress", read the run's own
+markers before forming a hypothesis:
+
+```bash
+gh run view <id> --log-failed | grep -E 'SOLEUR_(ZOT_BRIDGE|TUNNEL_VERIFY)'
+```
+
+- **`SOLEUR_ZOT_BRIDGE stage=<setup|listener|login|push> verdict=<v> cause=<c> host=<h> rc=<n> runbook=<this file>#grep-for-the-bridge-markers-first`.**
+  It is printed on a bridge failure by `.github/actions/cf-tunnel-registry-bridge/action.yml` and again by the
+  `reusable-release.yml` mirror failure path, each time with a `::notice title=SOLEUR_ZOT_BRIDGE::` copy that the
+  run summary shows, and the ops email carries the same line. `stage=setup` means the bridge never started its
+  listener (input, Doppler CLI, cloudflared download, or token read). `verdict` is the token
+  preflight's verdict (the table in step 2 below). `cause` is the cause the classifier measured in
+  `scripts/check-cloudflare-token-drift.sh` `verify_access_pair()`. The remedy for each cause lives only in
+  `zot_mirror_cause_help` in `scripts/zot-mirror-diagnosis.sh`, and a set-equality test pins it to the
+  classifier's causes. Print it there instead of copying it here:
+
+  ```bash
+  bash -c 'source scripts/zot-mirror-diagnosis.sh && zot_mirror_cause_help <cause>'
+  ```
+
+  A field printed as `invalid` failed its own validation, which is a bug in the emitter, not a diagnosis.
+- **`SOLEUR_TUNNEL_VERIFY cause=<c> tunnel=<id> connections=<n>`.** It is printed by
+  `apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh` when its data-plane probe fails, and the step
+  still exits non-zero. `cause=no-connector connections=0` means the tunnel that the CNAMEs point at has no
+  connector. That was expected between the #12937 merge apply and the web-2 re-bake; any later one means web-2's
+  connector is down: re-bake it with `apply_target=web-host-replace web_host_key=web-2 confirm=REPLACE-web-2` (ADR-304).
+
+`cause=host-nxdomain` and `cause=edge-error-1000` were the 2026-11-18 shapes: the zone that answers for
+`soleur.ai` had moved account, and the tunnel hostnames had no working records in it. The account layout and
+the reason for it are in
+[ADR-330](../../architecture/decisions/ADR-330-tunnel-and-access-gate-live-in-the-zone-owning-account.md).
+The scheduled zone-authority check files `ci/tunnel-zone-authority` when it happens again.
+
 ## What to do instead when zot is unreachable
 
 The pull path has no second source, so the fix is always to restore zot rather than to
@@ -159,7 +195,10 @@ route around it:
    while the stale value keeps being served. Set the live value in **every config the
    detector names**: Doppler branch configs do **not** inherit values from the `prd` root
    config, so setting root alone leaves every other stale copy in place and looks completely
-   successful. (The detector's own header records the 2026-08-02 measurement behind this;
+   successful. (Corrected 2026-11-19, #12937: the two `REGISTRY_PUSH_ACCESS_TOKEN_*` resources no
+   longer carry `ignore_changes`, because they follow the Soleur-account `registry_push_soleur` token;
+   see ADR-330 Decision 4. The `ignore_changes` sentence above no longer describes those two
+   resources. The detector still names each config to set.) (The detector's own header records the 2026-08-02 measurement behind this;
    the count is not re-derivable from a default run, which reads one config — so treat the
    detector's output, not a remembered number, as the list of configs to fix.) The script itself calls the old "branch configs inherit it" advice
    `FALSIFIED`; that correction had never been propagated back here.

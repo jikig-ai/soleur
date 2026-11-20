@@ -1,0 +1,421 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.17.2",
+  "resource_changes": [
+    {
+      "address": "cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur",
+      "mode": "managed",
+      "type": "cloudflare_zero_trust_access_policy",
+      "name": "ci_ssh_service_token_soleur",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "account_id": "a",
+          "approval_group": [],
+          "approval_required": null,
+          "connection_rules": [],
+          "decision": "non_identity",
+          "exclude": [],
+          "include": [
+            {
+              "any_valid_service_token": null,
+              "auth_context": [],
+              "auth_method": null,
+              "azure": [],
+              "certificate": null,
+              "common_name": null,
+              "common_names": null,
+              "device_posture": null,
+              "email": null,
+              "email_domain": null,
+              "email_list": null,
+              "everyone": null,
+              "external_evaluation": [],
+              "geo": null,
+              "github": [],
+              "group": null,
+              "gsuite": [],
+              "ip": null,
+              "ip_list": null,
+              "login_method": null,
+              "okta": [],
+              "saml": []
+            }
+          ],
+          "isolation_required": null,
+          "name": "p",
+          "precedence": 1,
+          "purpose_justification_prompt": null,
+          "purpose_justification_required": null,
+          "require": [],
+          "session_duration": null,
+          "zone_id": null
+        },
+        "after_unknown": {
+          "application_id": true,
+          "approval_group": [],
+          "connection_rules": [],
+          "exclude": [],
+          "id": true,
+          "include": [
+            {
+              "auth_context": [],
+              "azure": [],
+              "external_evaluation": [],
+              "github": [],
+              "gsuite": [],
+              "okta": [],
+              "saml": [],
+              "service_token": true
+            }
+          ],
+          "require": []
+        },
+        "before_sensitive": false,
+        "after_sensitive": {
+          "approval_group": [],
+          "connection_rules": [],
+          "exclude": [],
+          "include": [
+            {
+              "auth_context": [],
+              "azure": [],
+              "external_evaluation": [],
+              "github": [],
+              "gsuite": [],
+              "okta": [],
+              "saml": [],
+              "service_token": []
+            }
+          ],
+          "require": []
+        }
+      }
+    },
+    {
+      "address": "cloudflare_zero_trust_access_policy.deploy_service_token_soleur",
+      "mode": "managed",
+      "type": "cloudflare_zero_trust_access_policy",
+      "name": "deploy_service_token_soleur",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "account_id": "a",
+          "approval_group": [],
+          "approval_required": null,
+          "connection_rules": [],
+          "decision": "non_identity",
+          "exclude": [],
+          "include": [
+            {
+              "any_valid_service_token": null,
+              "auth_context": [],
+              "auth_method": null,
+              "azure": [],
+              "certificate": null,
+              "common_name": null,
+              "common_names": null,
+              "device_posture": null,
+              "email": null,
+              "email_domain": null,
+              "email_list": null,
+              "everyone": null,
+              "external_evaluation": [],
+              "geo": null,
+              "github": [],
+              "group": null,
+              "gsuite": [],
+              "ip": null,
+              "ip_list": null,
+              "login_method": null,
+              "okta": [],
+              "saml": [],
+              "service_token": [
+                "00000000-0000-4000-8000-0000000000a1"
+              ]
+            }
+          ],
+          "isolation_required": null,
+          "name": "p",
+          "precedence": 1,
+          "purpose_justification_prompt": null,
+          "purpose_justification_required": null,
+          "require": [],
+          "session_duration": null,
+          "zone_id": null
+        },
+        "after_unknown": {
+          "application_id": true,
+          "approval_group": [],
+          "connection_rules": [],
+          "exclude": [],
+          "id": true,
+          "include": [
+            {
+              "auth_context": [],
+              "azure": [],
+              "external_evaluation": [],
+              "github": [],
+              "gsuite": [],
+              "okta": [],
+              "saml": [],
+              "service_token": [
+                false
+              ]
+            }
+          ],
+          "require": []
+        },
+        "before_sensitive": false,
+        "after_sensitive": {
+          "approval_group": [],
+          "connection_rules": [],
+          "exclude": [],
+          "include": [
+            {
+              "auth_context": [],
+              "azure": [],
+              "external_evaluation": [],
+              "github": [],
+              "gsuite": [],
+              "okta": [],
+              "saml": [],
+              "service_token": [
+                false
+              ]
+            }
+          ],
+          "require": []
+        }
+      }
+    },
+    {
+      "address": "cloudflare_zero_trust_access_policy.registry_push_service_token_soleur",
+      "mode": "managed",
+      "type": "cloudflare_zero_trust_access_policy",
+      "name": "registry_push_service_token_soleur",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "account_id": "a",
+          "approval_group": [],
+          "approval_required": null,
+          "connection_rules": [],
+          "decision": "non_identity",
+          "exclude": [],
+          "include": [
+            {
+              "any_valid_service_token": null,
+              "auth_context": [],
+              "auth_method": null,
+              "azure": [],
+              "certificate": null,
+              "common_name": null,
+              "common_names": null,
+              "device_posture": null,
+              "email": null,
+              "email_domain": null,
+              "email_list": null,
+              "everyone": null,
+              "external_evaluation": [],
+              "geo": null,
+              "github": [],
+              "group": null,
+              "gsuite": [],
+              "ip": null,
+              "ip_list": null,
+              "login_method": null,
+              "okta": [],
+              "saml": []
+            }
+          ],
+          "isolation_required": null,
+          "name": "p",
+          "precedence": 1,
+          "purpose_justification_prompt": null,
+          "purpose_justification_required": null,
+          "require": [],
+          "session_duration": null,
+          "zone_id": null
+        },
+        "after_unknown": {
+          "application_id": true,
+          "approval_group": [],
+          "connection_rules": [],
+          "exclude": [],
+          "id": true,
+          "include": [
+            {
+              "auth_context": [],
+              "azure": [],
+              "external_evaluation": [],
+              "github": [],
+              "gsuite": [],
+              "okta": [],
+              "saml": [],
+              "service_token": true
+            }
+          ],
+          "require": []
+        },
+        "before_sensitive": false,
+        "after_sensitive": {
+          "approval_group": [],
+          "connection_rules": [],
+          "exclude": [],
+          "include": [
+            {
+              "auth_context": [],
+              "azure": [],
+              "external_evaluation": [],
+              "github": [],
+              "gsuite": [],
+              "okta": [],
+              "saml": [],
+              "service_token": []
+            }
+          ],
+          "require": []
+        }
+      }
+    }
+  ],
+  "configuration": {
+    "provider_config": {
+      "cloudflare": {
+        "name": "cloudflare",
+        "full_name": "registry.terraform.io/cloudflare/cloudflare",
+        "version_constraint": "4.52.7"
+      }
+    },
+    "root_module": {
+      "resources": [
+        {
+          "address": "cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur",
+          "mode": "managed",
+          "type": "cloudflare_zero_trust_access_policy",
+          "name": "ci_ssh_service_token_soleur",
+          "provider_config_key": "cloudflare",
+          "expressions": {
+            "account_id": {
+              "constant_value": "a"
+            },
+            "application_id": {
+              "references": [
+                "cloudflare_zero_trust_access_application.ssh_soleur.id",
+                "cloudflare_zero_trust_access_application.ssh_soleur"
+              ]
+            },
+            "decision": {
+              "constant_value": "non_identity"
+            },
+            "include": [
+              {
+                "service_token": {
+                  "references": [
+                    "cloudflare_zero_trust_access_service_token.ci_ssh_soleur.id",
+                    "cloudflare_zero_trust_access_service_token.ci_ssh_soleur"
+                  ]
+                }
+              }
+            ],
+            "name": {
+              "constant_value": "p"
+            },
+            "precedence": {
+              "constant_value": 1
+            }
+          },
+          "schema_version": 0
+        },
+        {
+          "address": "cloudflare_zero_trust_access_policy.deploy_service_token_soleur",
+          "mode": "managed",
+          "type": "cloudflare_zero_trust_access_policy",
+          "name": "deploy_service_token_soleur",
+          "provider_config_key": "cloudflare",
+          "expressions": {
+            "account_id": {
+              "constant_value": "a"
+            },
+            "application_id": {
+              "references": [
+                "cloudflare_zero_trust_access_application.deploy_soleur.id",
+                "cloudflare_zero_trust_access_application.deploy_soleur"
+              ]
+            },
+            "decision": {
+              "constant_value": "non_identity"
+            },
+            "include": [
+              {
+                "service_token": {
+                  "references": [
+                    "local.deploy_service_token_ids_soleur"
+                  ]
+                }
+              }
+            ],
+            "name": {
+              "constant_value": "p"
+            },
+            "precedence": {
+              "constant_value": 1
+            }
+          },
+          "schema_version": 0
+        },
+        {
+          "address": "cloudflare_zero_trust_access_policy.registry_push_service_token_soleur",
+          "mode": "managed",
+          "type": "cloudflare_zero_trust_access_policy",
+          "name": "registry_push_service_token_soleur",
+          "provider_config_key": "cloudflare",
+          "expressions": {
+            "account_id": {
+              "constant_value": "a"
+            },
+            "application_id": {
+              "references": [
+                "cloudflare_zero_trust_access_application.registry_soleur.id",
+                "cloudflare_zero_trust_access_application.registry_soleur"
+              ]
+            },
+            "decision": {
+              "constant_value": "non_identity"
+            },
+            "include": [
+              {
+                "service_token": {
+                  "references": [
+                    "cloudflare_zero_trust_access_service_token.registry_push_soleur.id",
+                    "cloudflare_zero_trust_access_service_token.registry_push_soleur"
+                  ]
+                }
+              }
+            ],
+            "name": {
+              "constant_value": "p"
+            },
+            "precedence": {
+              "constant_value": 1
+            }
+          },
+          "schema_version": 0
+        }
+      ]
+    }
+  }
+}

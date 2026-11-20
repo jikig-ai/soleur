@@ -1552,15 +1552,18 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // bridged with `cloudflared access tcp` (mirrors the SSH bridge). All operator-applied WITH the
   // registry host (an unattended per-PR apply must not mint a push credential + DNS for a host
   // that doesn't exist yet). The `..._config.web` ingress_rule EDIT rides the already-`-target`ed
-  // config resource (not a new resource). The two doppler_secrets carry ignore_changes=[value]
-  // (CF client_secret is write-once/empty-on-refresh, #4492) — still `doppler_secret`, not the
-  // CI-published github_actions_secret/doppler_service_token types the #5566 test forces.
+  // config resource (not a new resource).
+  // #12937 (Ruled by CTO agent, 2026-11-19): the two `doppler_secret.registry_push_access_token_{id,secret}`
+  // LEFT this list. They now read the Soleur-account `registry_push_soleur` token and are push-`-target`ed
+  // with the rest of the `_soleur` slice, which is NOT excluded either (an unattended merge apply is the
+  // route that re-homes it). Their old `ignore_changes = [value]` rested on "client_secret is
+  // empty-on-refresh" (#4492) — true ONLY for an IMPORTED token: provider 4.52.7's Read never clears
+  // client_secret for a Terraform-created one, so state survives refresh and the secrets follow their
+  // source in place. The old-account registry app/token/policy/record below stay operator-applied.
   "cloudflare_zero_trust_access_application.registry",
   "cloudflare_zero_trust_access_service_token.registry_push",
   "cloudflare_zero_trust_access_policy.registry_push_service_token",
   "cloudflare_record.registry",
-  "doppler_secret.registry_push_access_token_id",
-  "doppler_secret.registry_push_access_token_secret",
   // #6178 (ADR-100) — the dedicated Inngest singleton host. Same class as the registry/git-data
   // hosts: net-new host resources the per-PR CI `-target` path CANNOT provision (it bridges over
   // SSH to the EXISTING web host). All applied by the operator's full apply + the
@@ -8400,6 +8403,102 @@ function channelGuardViolations(wfText: string): string[] {
   return out;
 }
 
+describe("ci_ssh_token_replace blast-radius gate refuses a widened ci_ssh policy", () => {
+  const POLICY = "cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur";
+  const TOKEN = "cloudflare_zero_trust_access_service_token.ci_ssh_soleur";
+  const APP = "cloudflare_zero_trust_access_application.ssh_soleur";
+  const gate = (() => {
+    const doc = parseYaml(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")) as { jobs: Record<string, { steps: Array<Record<string, unknown>> }> };
+    const step = doc.jobs.ci_ssh_token_replace.steps.find((s) => s.name === "Blast-radius gate (reads the PLAN, not the flags)");
+    const m = /<<'PY'\n([\s\S]*?)\nPY\n/.exec(String(step?.run ?? ""));
+    return m ? m[1] : "";
+  })();
+  const inc = (extra: Record<string, unknown> = {}) => ({ service_token: [null], everyone: false, email: [], group: [], ...extra });
+  const APP_NOW = { type: "ssh", domain: "ssh.soleur.ai", policies: ["p1"], options_preflight_bypass: false, session_duration: "24h" };
+  const run = (policyAfter: Record<string, unknown>, policyUnknown: Record<string, unknown> = {}, appAfter: Record<string, unknown> = APP_NOW) => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-ssh-gate-"));
+    try {
+      writeFileSync(join(dir, "gate.py"), gate);
+      writeFileSync(join(dir, "plan.json"), JSON.stringify({ resource_changes: [
+        { address: TOKEN, type: "cloudflare_zero_trust_access_service_token", change: { actions: ["create", "delete"], after: {} } },
+        { address: POLICY, type: "cloudflare_zero_trust_access_policy", change: { actions: ["update"], after: policyAfter, after_unknown: policyUnknown } },
+        { address: APP, type: "cloudflare_zero_trust_access_application", change: { actions: ["update"], before: APP_NOW, after: appAfter } },
+      ] }));
+      const r = spawnSync("python3", ["-I", join(dir, "gate.py"), join(dir, "plan.json")], { encoding: "utf8" });
+      return { rc: r.status, out: `${r.stdout}${r.stderr}` };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  test("the gate body was extracted", () => {
+    expect(gate).toContain("REPLACE_TARGET");
+  });
+  test.each([
+    ["a known one-token re-point", { decision: "non_identity", include: [inc()] }, {}],
+    ["a wholly unknown service_token (the replaced token's id)", { decision: "non_identity", include: [{ everyone: false }] }, { include: [{ service_token: true }] }],
+    ["a one-element service_token whose element is unknown", { decision: "non_identity", include: [inc()] }, { include: [{ service_token: [true] }] }],
+  ])("passes %s with an unchanged app", (_label, after, unknown) => {
+    const r = run(after as Record<string, unknown>, unknown as Record<string, unknown>);
+    expect(r.out).toContain("Blast-radius gate passed");
+    expect(r.rc).toBe(0);
+  });
+  test.each([
+    ["everyone = true", { decision: "non_identity", include: [inc({ everyone: true })] }],
+    ["an email include", { decision: "non_identity", include: [inc({ email: ["x@example.com"] })] }],
+    ["a second include block", { decision: "non_identity", include: [inc(), { everyone: true }] }],
+    ["decision = allow", { decision: "allow", include: [inc()] }],
+    ["w1: two service tokens", { decision: "non_identity", include: [inc({ service_token: ["a", "b"] })] }],
+    ["w2: a second include block holding another token", { decision: "non_identity", include: [inc(), inc()] }],
+    ["no include block", { decision: "non_identity", include: [] }],
+  ])("refuses a policy update with %s", (_label, after) => {
+    const r = run(after as Record<string, unknown>);
+    expect(r.out).toContain(`${POLICY} widens past its token`);
+    expect(r.rc).toBe(1);
+  });
+  test.each([
+    ["w3: an unknown ip include", { include: [{ service_token: [true], ip: true }] }],
+    ["an unknown everyone include", { include: [{ everyone: true }] }],
+    ["a wholly unknown include", { include: true }],
+    ["a second unknown include block", { include: [{}, { service_token: true }] }],
+  ])("refuses a policy whose after_unknown carries %s", (_label, unknown) => {
+    const r = run({ decision: "non_identity", include: [inc()] }, unknown as Record<string, unknown>);
+    expect(r.out).toContain(`${POLICY} widens past its token`);
+    expect(r.rc).toBe(1);
+  });
+  test.each([
+    ["w4: options_preflight_bypass + session_duration", { options_preflight_bypass: true, session_duration: "720h" }],
+    ["a type change", { type: "self_hosted" }],
+    ["a domain change", { domain: "*.soleur.ai" }],
+    ["a policies change", { policies: ["p1", "p2"] }],
+  ])("refuses an ssh_soleur app update with %s", (_label, change) => {
+    const r = run({ decision: "non_identity", include: [inc()] }, {}, { ...APP_NOW, ...(change as Record<string, unknown>) });
+    expect(r.out).toContain(`${APP} widens past its token`);
+    expect(r.rc).toBe(1);
+  });
+  // The publish lines drop BOTH streams (#7133: Doppler prints the config table) yet a refusal still fails loudly (#4195).
+  test.each(["Sync CF Access CI-SSH service token to Doppler", "Sync the new CI-SSH service token to Doppler"])("%s: a refused write prints ::error:: and no Doppler output", (name) => {
+    const doc = parseYaml(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")) as { jobs: Record<string, { steps?: Array<Record<string, unknown>> }> };
+    const body = Object.values(doc.jobs).flatMap((j) => j.steps ?? []).filter((s) => s.name === name).map((s) => String(s.run ?? ""));
+    expect(body).toHaveLength(1);
+    const pub = body[0].split("\n").filter((l) => /^\s*pub\(\) \{/.test(l));
+    expect(pub).toHaveLength(1);
+    expect(body[0].match(/\| pub CI_SSH_ACCESS_TOKEN_(ID|SECRET)$/gm)).toHaveLength(2);
+    expect(body[0]).not.toMatch(/doppler secrets set CI_SSH/);
+    const dir = mkdtempSync(join(tmpdir(), "ci-ssh-pub-"));
+    try {
+      writeFileSync(join(dir, "doppler"), '#!/usr/bin/env bash\ncat >/dev/null\necho "SYNTH_TABLE_OUT"\necho "SYNTH_TABLE_ERR" >&2\nexit 1\n', { mode: 0o755 });
+      const r = spawnSync("bash", ["-eo", "pipefail", "-c", `${pub[0]}\nprintf x | pub CI_SSH_ACCESS_TOKEN_ID\necho after`], { encoding: "utf8", env: { PATH: `${dir}:/usr/bin:/bin` } });
+      const out = `${r.stdout}${r.stderr}`;
+      expect(r.status).toBe(1);
+      expect(out).toContain("::error::Doppler refused the CI_SSH_ACCESS_TOKEN_ID write");
+      expect(out).not.toContain("SYNTH_TABLE");
+      expect(out).not.toContain("after");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("apply-web-platform-infra has a failure channel", () => {
   const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
   const doc = parseYaml(wf) as {
@@ -8508,8 +8607,30 @@ describe("apply-web-platform-infra has a failure channel", () => {
     // 5. A RANDOM heredoc delimiter — a fixed one is forgeable by a value containing it.
     expect(body).toMatch(/delim=.*(openssl rand|RANDOM)/);
     expect(body).toMatch(/failing_step<<%s/);
-    // It must NOT try to read `apply` step outputs: that job declares no `outputs:`.
+    // It must NOT read `apply` step outputs in its run body: on the cancelled path they are unreliable.
+    // The ONE apply output (#12937, the tunnel verify cause) arrives through the step's `env:` and is
+    // consumed only by a closed `case`, never interpolated.
     expect(body).not.toContain("needs.apply.outputs");
+    expect(String((cause!.env as Record<string, string>).TUNNEL_VERIFY_CAUSE)).toBe("${{ needs.apply.outputs.tunnel_verify_cause }}");
+    expect(body).toMatch(/case "\$\{TUNNEL_VERIFY_CAUSE:-\}" in\n\s+no-connector\)/);
+    expect(body).not.toMatch(/\$\{?TUNNEL_VERIFY_CAUSE[^:]/);
+  });
+
+  test("AC2e: the job output reads the verify step's cause, and the email arms every cause the script can emit", () => {
+    const apply = (doc.jobs as Record<string, { outputs?: Record<string, string>; steps?: Array<Record<string, unknown>> }>)?.apply;
+    const verify = (apply?.steps ?? []).find((s) => s.id === "tunnel_verify");
+    expect(verify).toBeDefined();
+    expect(String(verify!.run)).toContain("apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh");
+    expect(apply!.outputs?.tunnel_verify_cause).toBe("${{ steps.tunnel_verify.outputs.cause }}");
+    const script = readFileSync(resolve(REPO_ROOT, "apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh"), "utf8");
+    const produced = [...new Set([...script.matchAll(/VERIFY_CAUSE="([a-z-]+)"/g)].map((m) => m[1]))].sort();
+    expect(produced).toEqual(["access-refused", "connections-unreadable", "no-connector", "origin-not-serving", "origin-refused"]);
+    const body = String((job!.steps ?? []).find((s) => s.id === "cause")!.run ?? "");
+    const arms = [...body.matchAll(/^\s+([a-z-]+)\)\n\s+action_msg="\$\{action_msg\} <strong>Cause: ([a-z-]+)\.<\/strong>/gm)]
+      .filter((m) => m[1] === m[2])
+      .map((m) => m[1])
+      .sort();
+    expect(arms).toEqual(produced);
   });
 
   /** The `case "$swept"` table that resolves the sweep prose, as {value: sentence}. */
@@ -11048,7 +11169,7 @@ describe("#10136 inngest link TLS: key material, merge targets, flag actuator", 
 // (rows, copies, hcl texts) so the mutation rows can feed synthetic inputs through the same code the real rows use.
 const KEY_ROTATE_WORKFLOW = resolve(REPO_ROOT, ".github/workflows/key-rotate.yml");
 const KEY_ROTATE_SCRIPT = resolve(REPO_ROOT, "scripts/key-rotate.sh");
-const KR_OUT_OF_SCOPE_RANDOM_IDS = ["tunnel_secret", "inngest_signing_key_prd", "inngest_event_key_prd"]; // tunnel: ADR-307 amendment; the _prd pair is RETIRED state-only (#11293)
+const KR_OUT_OF_SCOPE_RANDOM_IDS = ["tunnel_secret", "tunnel_secret_soleur", "inngest_signing_key_prd", "inngest_event_key_prd"]; // tunnel: ADR-307 amendment; the _prd pair is RETIRED state-only (#11293)
 
 interface KrRow { phase: string; key: string; address: string; flag: string; actions: string }
 interface KrCopy { key: string; project: string; config: string; name: string; address: string }

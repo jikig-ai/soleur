@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
 # default-weight-ms=1802
-# generated-at=2026-11-20T02:39:17Z
+# generated-at=2026-11-20T09:41:54Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7d0cd2b5340986989503a52b56d26678f0e677e02dc0e30d7950aea5d95d712f
 .claude/hooks/agent-token-tee.test.sh	7099	measured
@@ -335,6 +335,7 @@ plugins/soleur/test/technical-ruling-gate.test.sh	55817	measured
 plugins/soleur/test/technical-ruling-owner-list.test.sh	5190	measured
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	622	measured
 plugins/soleur/test/terraform-drift-step-order.test.sh	51	measured
+plugins/soleur/test/terraform-drift-tunnel-zone-authority.test.sh	1802	floor
 plugins/soleur/test/test-pyramid-fixtures.test.sh	181	measured
 plugins/soleur/test/ticket-triage-clauses.test.sh	25	measured
 plugins/soleur/test/token-drift-workflow-causes.test.sh	16797	measured
@@ -360,6 +361,7 @@ plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh	1377	measured
 plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh	3016	measured
 plugins/soleur/test/worktree-manager-sandbox-tmp-sweep.test.sh	115	measured
 plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh	1535	measured
+plugins/soleur/test/zot-bridge-marker-emission.test.sh	1802	floor
 plugins/soleur/test/zot-http-deadlines-required.test.sh	264	measured
 plugins/soleur/test/zot-image-mirror-publish.test.sh	416	measured
 scripts/actions-queue-health	2446	measured
