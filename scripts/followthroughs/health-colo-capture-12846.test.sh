@@ -40,7 +40,7 @@ WORK="$(mktemp -d "${TMPDIR}/health-colo-capture.XXXXXXXX")" || abort "mktemp fa
 trap 'rm -rf "$WORK"' EXIT
 assert_fixture_dir() {
   case "${1-}" in
-    "") printf 'FATAL: fixture dir is EMPTY\n' >&2; exit 2 ;;
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
     */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
     /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
     /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
@@ -275,7 +275,7 @@ row_nolibdir()    { reset_fixture; mk_comments "owner1|$GOODLINE"; PROBE_UNDER="
                     row "the lib directory is missing => 3" 3 "trusted-verdict lib directory unresolved"; }
 row_nolib()       { reset_fixture; mk_comments "owner1|$GOODLINE"; PROBE_UNDER="$PLACE/emptylib/scripts/followthroughs/probe.sh" run_case "$NOW"
                     row "the lib file is missing => 3" 3 "trusted-verdict lib unavailable"; }
-row_forced0()     { local b="${MUT_BASE:-$PLACE/forced}"; printf 'exit 0\n' > "$b/scripts/lib/trusted-verdict.sh"
+row_forced0()     { local b="${MUT_BASE:-$PLACE/forced}"; assert_fixture_dir "$b"; printf 'exit 0\n' > "$b/scripts/lib/trusted-verdict.sh"
                     reset_fixture; mk_comments "owner1|$GOODLINE"; PROBE_UNDER="$b/scripts/followthroughs/health-colo-capture-12846.sh" run_case "$NOW"
                     row "a lib that runs 'exit 0' inside the body lands on the internal-error arm => 3, never a close" 3 "probe internal error (rc=0)" "PASS"; }
 row_forced1()     { printf 'exit 1\n' > "$PLACE/forced/scripts/lib/trusted-verdict.sh"

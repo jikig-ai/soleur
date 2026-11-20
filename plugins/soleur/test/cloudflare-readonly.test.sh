@@ -733,6 +733,7 @@ Q11_CF_GRAPHQL
   t "source: Q11.R4 the whole gql_stdin body is the pinned text" eq "$(fn_body gql_stdin "$STRIPPED")" "$want_stdin"
   t "source: Q11.R4 the whole gql_window body is the pinned text" eq "$(fn_body gql_window "$STRIPPED")" "$want_window"
   t "source: Q11.R4 the whole cf_graphql body is the pinned text" eq "$(fn_body cf_graphql "$STRIPPED")" "$want_graphql"
+  assert_fixture_dir "$WORK"   # the census fixtures below are written under it
   # Q11 census controls: each census sees the one-line seat edit it exists for (a fixture, never the wrapper)
   printf '%s\n' 'GQL_URL="${GQL_ENDPOINT-$GQL_URL}"' > "$WORK/q11a.txt"
   t "census control: Q11.R1 the name census sees a colon-less \${NAME-default} read" eq "$(name_set "$WORK/q11a.txt")" "$(sorted_join GQL_ENDPOINT GQL_URL)"
@@ -1814,6 +1815,7 @@ AN_NOTE_COLO="counts are sampled estimates (adaptive sampling); durations are or
 COLO_KEYS='["zone","window_end","subcommand","window_hours","rows","truncated","note","series"]'
 grp_proj_colo() {
   local crow vl v raw g10000 g9999 vn vsed
+  assert_fixture_dir "$WORK"
   pr analytics-health-colo "$(gql_wrap "$COLO_OK_GROUPS")"
   t "proj[analytics-health-colo]: ok" eq "$L1|$RC" "cloudflare-readonly: analytics-health-colo ok|0"
   t "proj[analytics-health-colo]: an ok run writes nothing to stderr" eq "$ERR" ""
@@ -2232,6 +2234,7 @@ penv_extra() { # the names in the wrapper's own environment that are not allowed
 }
 grp_closed() {
   local s fnp out0
+  assert_fixture_dir "$WORK"; assert_fixture_dir "$STUB"
   # a fixed clock for every date child (the epoch, now and 7 days ago), so two runs send byte-identical stamps
   printf '#!/bin/bash\ncase " $* " in\n  *" -d @"*) exec /usr/bin/date "$@" ;;\n  *" +%%s "*) echo %s ;;\n  *"7 days ago"*) echo 2026-11-01T10:00:00Z ;;\n  *) echo 2026-11-08T10:00:00Z ;;\nesac\n' "$FAKE_T" > "$STUB/fakedate_all"
   chmod +x "$STUB/fakedate_all"
