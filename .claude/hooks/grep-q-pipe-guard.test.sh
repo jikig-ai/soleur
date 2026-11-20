@@ -68,9 +68,12 @@
 #               its pipefail fences only, so a fence without pipefail (18 lines in 6 files), prose (12 lines, among them the inline probe templates at
 #               plugins/soleur/skills/ship/SKILL.md "HTTP probe" and "DNS probe"), a fence inside a blockquote or a <pre> block, a fence opened on a list-item line
 #               (`- ```bash`) and a split pipe inside a fence are not read; markdown under knowledge-base (runbooks); the 14 hits in 6 scripts under
-#               knowledge-base archive/ directories (frozen records, never run, with one EXECUTED exception outside the sweep:
-#               knowledge-base/project/specs/archive/20261120-013510-feat-one-shot-12931-cf-account-migration/bootstrap.sh, the #12931 staged
-#               bootstrap, is run by the operator and by its own suite, so a reader added there is not seen here; review it by hand);
+#               knowledge-base archive/ directories, which the sweep does not read whether or not anything still runs them. Archived scripts
+#               known to have a caller: knowledge-base/project/specs/archive/20261120-013510-feat-one-shot-12931-cf-account-migration/bootstrap.sh,
+#               the #12931 staged bootstrap, run by the operator and by its own suite; and
+#               knowledge-base/project/specs/archive/20261013-062704-feat-5863-tenant-fs-isolation/tenant-isolation-probe.sh, named as the
+#               founder-check caller in apps/web-platform/scripts/tenant-isolation-inner-probe.sh. That list is not a census: a reader added to
+#               any archived script is not seen here, so review it by hand;
 #               a path that holds a colon, a quote, a backslash or a control character (the sweep
 #               REFUSES such a tree: UNRESOLVED, since the hit format cannot carry it); and this file.
 #   syntax      a reader behind a function (25 candidate functions, 0 call sites); a compound-command opener or a reader that is not the first command of its group
@@ -3453,7 +3456,7 @@ probe_checks=$(grep -cE '(\|\||&&)[[:space:]]+sweep_probe_fail\+=\(' <<<"$_code"
 [[ "$probe_checks" == "$SWEEP_PROBE_CHECKS" ]] \
   || sweep_probe_fail+=("probe-count: this probe carries ${probe_checks:-<err>} checks, pinned at $SWEEP_PROBE_CHECKS — a deleted check cannot fail, so restore it or, if you ADDED one, raise SWEEP_PROBE_CHECKS")
 if [[ "$wire_gate" != 1 || "$wire_exit" != 1 || "$wire_else" != 1 || "$wire_exit1" != 1 || ! "${SWEEP_N:-}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "FAIL: return-wiring: the probe verdict gate matched ${wire_gate:-<err>} lines, the final exit ${wire_exit:-<err>}, the gate's FAIL=1 ${wire_else:-<err>} and its exit 1 ${wire_exit1:-<err>} (want exactly 1 each, at column 0; the gate's else body keeps the bare lines \'  FAIL=1\' and \'  exit 1\' directly around its echo and printf), and the sweep recorded SWEEP_N='${SWEEP_N:-}' (want a swept-file count: a sweep that never ran leaves it empty). Expected 'if (( \${#sweep_probe_fail[@]} == 0 )); then' and 'exit \"\$FAIL\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep"
+  echo "FAIL: return-wiring: the probe verdict gate matched ${wire_gate:-<err>} lines, the final exit ${wire_exit:-<err>}, the gate's FAIL=1 ${wire_else:-<err>} and its exit 1 ${wire_exit1:-<err>} (want exactly 1 each, at column 0; the gate's else body keeps the bare lines '  FAIL=1' and '  exit 1' directly around its echo and printf), and the sweep recorded SWEEP_N='${SWEEP_N:-}' (want a swept-file count: a sweep that never ran leaves it empty). Expected 'if (( \${#sweep_probe_fail[@]} == 0 )); then' and 'exit \"\$FAIL\"'. Fix: restore the statement; if it moved legitimately, update this pin, not the sweep"
   exit 1
 fi
 if (( ${#sweep_probe_fail[@]} == 0 )); then
