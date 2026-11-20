@@ -153,7 +153,8 @@ account and zone sit beside the untouched old-account addresses. The connector r
     that is a money decision and needs an explicit operator go.
 <!-- lint-infra-ignore end -->
 0.3 The agent also reads the new zone's bot settings (Bot Fight Mode can challenge `deploy.` before
-    Access) and records the token's permission list (`GET /user/tokens/<id>`) for the PR body; after
+    Access) and its `http_response_headers_transform` entrypoint (the `deploy.` `X-Robots-Tag: noindex`
+    rule in `seo-rulesets.tf` is still on the old zone; if absent, list it in the 7.2 comment), and records the token's permission list (`GET /user/tokens/<id>`) for the PR body; after
     0.2, Access: Organizations Read is removed again (least privilege; the token also reaches
     `pull_request` plan runs in `infra-validation.yml`). The `cf-token-scope` skill reads only
     `CF_ACCOUNT_ID` (old account, `cf-token-scope.sh` `ACCT_SECRET`), so it cannot verify this
@@ -454,6 +455,8 @@ does; sha256 digests are compared, never printed.
     - `local.deploy_service_token_ids` (old) and the old registry rows in `OPERATOR_APPLIED_EXCLUSIONS`;
     - whether the `_soleur` suffix is dropped via `moved {}` blocks or kept on purpose;
     - flipping ADR-330 to `accepted`;
+    - teaching the `cf-token-scope` skill (`ACCT_SECRET="CF_ACCOUNT_ID"`) to check the Soleur account's
+      grants, so a later token trim that drops them is caught before an apply 403s;
     - repointing the backup expiry monitor (`event-cf-token-expiry-check`, which lists tokens in Doppler
       `CF_ACCOUNT_ID`, still the legacy account) at the Soleur account;
     - that it must land before #12931 flips `var.cf_account_id` / `var.cf_zone_id`: the flip forces
