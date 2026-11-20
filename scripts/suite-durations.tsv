@@ -108,6 +108,7 @@ plugins/soleur/scripts/pipeline-tally.test.sh	14091	measured
 plugins/soleur/scripts/precommit-guard.test.sh	747	measured
 plugins/soleur/scripts/required-set-report.test.sh	5239	measured
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	25468	measured
+plugins/soleur/scripts/retry-budget-ruling.test.sh	1802	floor
 plugins/soleur/scripts/run-health-emit.test.sh	184	measured
 plugins/soleur/scripts/run-in-pid-namespace.test.sh	590	measured
 plugins/soleur/scripts/scan-ancestor-signal-helpers.test.sh	5709	measured

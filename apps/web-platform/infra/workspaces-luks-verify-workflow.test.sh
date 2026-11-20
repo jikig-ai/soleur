@@ -2007,7 +2007,8 @@ PY
   # comment-stripped, backslash continuations joined, the inner `env` that hands the wrapper its token must carry
   # the exact DOPPLER_BIN assignment, the wrapper must be invoked exactly once, and DOPPLER_BIN must appear on no
   # other code line (a prd-planted or outer-env value cannot stand in for it: the inner env overrides).
-  g3_dbin_cmd='env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh"'
+  # `-u BASH_ENV -u ENV` (#12934 R4): a prd secret named BASH_ENV must not run before the wrapper; part of the exact form.
+  g3_dbin_cmd='env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh"'
   # the assignment sits INSIDE the `doppler run ... --` pipeline (the wrapper is the command doppler run executes, so the
   # inner env's DOPPLER_BIN is what the wrapper sees), not in a statement beside it
   g3_dbin_pipeline='doppler run --preserve-env -p soleur -c prd -- '"$g3_dbin_cmd"
@@ -2035,7 +2036,8 @@ PY
   g3_dbin_mut "the DOPPLER_BIN assignment is dropped" ' DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \' ' \'
   g3_dbin_mut "DOPPLER_BIN points at a path other than RUNNER_TEMP/doppler-cli/doppler" 'DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler"' 'DOPPLER_BIN="${HOME}/doppler-cli/doppler"'
   g3_dbin_mut "DOPPLER_BIN moves to the OUTER env (a prd-injected value would override it)" 'env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler run' 'env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" doppler run'
-  g3_dbin_mut "DOPPLER_BIN survives only in a comment (prose is not the command)" 'env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \' $'env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" \\\n            # DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \\'
+  g3_dbin_mut "DOPPLER_BIN survives only in a comment (prose is not the command)" 'env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \' $'env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" \\\n            # DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \\'
+  g3_dbin_mut "the inner env no longer unsets BASH_ENV/ENV (a prd secret named BASH_ENV runs before the wrapper, #12934 R4)" 'env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER"' 'env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER"'
 
   g3_dbin_mut "the wrapper is no longer run by doppler run (the env assignment sits OUTSIDE the doppler run pipeline)" ' doppler run --preserve-env -p soleur -c prd -- \' ' true -- \'
   g3_dbin_mut "the doppler run -- separator is dropped (the assignment is no longer the command's own env)" ' -p soleur -c prd -- \' ' -p soleur -c prd \'
@@ -2382,7 +2384,8 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # #12167: the cf-lb-overlay §(c) DOPPLER_BIN hand-off (one real-tree row + mutation 23 x4) -> 352 (measured green count; the floor had
 # drifted 4 below green since #11766, so this raise also re-pins it to EXACT). Review round: the assignment must sit inside the
 # `doppler run ... --` pipeline (+ mutation rows: pipeline broken, separator dropped) 352 -> 354 (measured green).
-WF_MIN_ASSERTIONS=354
+# #12934 R4: the inner env must unset BASH_ENV/ENV (+ mutation row: the -u flags dropped) 354 -> 355 (measured green).
+WF_MIN_ASSERTIONS=355
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
   exit 1
