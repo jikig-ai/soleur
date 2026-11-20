@@ -288,7 +288,7 @@ row_r13() {
   local j r bad=0
   j="$(joined <"$1")"
   [[ "$(grep -cF 'https://app.soleur.ai/health' "$1")" -ge 2 ]] || bad=1
-  ! grep -F 'https://app.soleur.ai/health' "$1" | grep -vF -- "-w '%{http_code} %{redirect_url}\\n'" | grep -qF 'curl ' || { echo "    a /health curl lacks %{redirect_url}" >&2; bad=1; }
+  ! grep -qF 'curl ' < <(grep -F 'https://app.soleur.ai/health' "$1" | grep -vF -- "-w '%{http_code} %{redirect_url}\\n'") || { echo "    a /health curl lacks %{redirect_url}" >&2; bad=1; }
   r="$(halt_bullet "$1" 'Before the forget is committed')"
   grep -qF 'The revert restores `prd_terraform` only' <<<"$r" || { echo "    revert scope unstated" >&2; bad=1; }
   before "$r" 'first copy `<KEY>` to `<KEY>_NEXT`' 'copy each token `<KEY>_PREV` back over `<KEY>`' || { echo "    _NEXT copy not before the _PREV restore" >&2; bad=1; }
