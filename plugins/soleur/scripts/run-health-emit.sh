@@ -33,17 +33,17 @@ DISCOVER=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --run-dir) RUN_DIR="${2:-}"; shift 2 ;;
-    --run-id) RUN_ID="${2:-}"; shift 2 ;;
-    --issue) ISSUE="${2:-}"; shift 2 ;;
-    --branch) BRANCH="${2:-}"; shift 2 ;;
-    --harness) HARNESS="${2:-}"; shift 2 ;;
-    --phase) PHASE="${2:-}"; shift 2 ;;
-    --status) STATUS="${2:-}"; shift 2 ;;
-    --prompt-file) PROMPT_FILE="${2:-}"; shift 2 ;;
-    --error) ERROR_MSG="${2:-}"; shift 2 ;;
-    --reviewed-coverage) REVIEWED_COVERAGE="${2:-}"; shift 2 ;;
-    --session-state) SESSION_STATE="${2:-}"; shift 2 ;;
+    --run-dir) [[ $# -ge 2 ]] || { echo "run-health-emit: --run-dir requires a value" >&2; exit 0; }; RUN_DIR="$2"; shift 2 ;;
+    --run-id) [[ $# -ge 2 ]] || { echo "run-health-emit: --run-id requires a value" >&2; exit 0; }; RUN_ID="$2"; shift 2 ;;
+    --issue) [[ $# -ge 2 ]] || { echo "run-health-emit: --issue requires a value" >&2; exit 0; }; ISSUE="$2"; shift 2 ;;
+    --branch) [[ $# -ge 2 ]] || { echo "run-health-emit: --branch requires a value" >&2; exit 0; }; BRANCH="$2"; shift 2 ;;
+    --harness) [[ $# -ge 2 ]] || { echo "run-health-emit: --harness requires a value" >&2; exit 0; }; HARNESS="$2"; shift 2 ;;
+    --phase) [[ $# -ge 2 ]] || { echo "run-health-emit: --phase requires a value" >&2; exit 0; }; PHASE="$2"; shift 2 ;;
+    --status) [[ $# -ge 2 ]] || { echo "run-health-emit: --status requires a value" >&2; exit 0; }; STATUS="$2"; shift 2 ;;
+    --prompt-file) [[ $# -ge 2 ]] || { echo "run-health-emit: --prompt-file requires a value" >&2; exit 0; }; PROMPT_FILE="$2"; shift 2 ;;
+    --error) [[ $# -ge 2 ]] || { echo "run-health-emit: --error requires a value" >&2; exit 0; }; ERROR_MSG="$2"; shift 2 ;;
+    --reviewed-coverage) [[ $# -ge 2 ]] || { echo "run-health-emit: --reviewed-coverage requires a value" >&2; exit 0; }; REVIEWED_COVERAGE="$2"; shift 2 ;;
+    --session-state) [[ $# -ge 2 ]] || { echo "run-health-emit: --session-state requires a value" >&2; exit 0; }; SESSION_STATE="$2"; shift 2 ;;
     --seal) SEAL=1; shift ;;
     --import-tally) IMPORT_TALLY=1; shift ;;
     --discover) DISCOVER=1; shift ;;
@@ -99,7 +99,9 @@ fi
 
 TALLY_SHOW=""
 if [[ "$IMPORT_TALLY" == "1" ]]; then
-  TALLY_SHOW="$(pipeline-tally.sh show 2>/dev/null)" || TALLY_SHOW=""
+  # A stub earlier on PATH still wins. The sibling script is the fallback.
+  _tally_dir="$(cd "$(dirname "$0")" && pwd)"
+  TALLY_SHOW="$(PATH="${PATH}:${_tally_dir}" pipeline-tally.sh show 2>/dev/null)" || TALLY_SHOW=""
 fi
 
 mkdir -p "$RUN_DIR/phase_prompts" 2>/dev/null || { echo "run-health-emit: cannot create $RUN_DIR" >&2; exit 0; }

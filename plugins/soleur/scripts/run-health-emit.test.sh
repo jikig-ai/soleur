@@ -164,6 +164,8 @@ refuse_phase() {
 refuse_phase '../x' 'dotdot-slash'
 refuse_phase '..' 'dotdot'
 refuse_phase '.' 'dot'
+refuse_phase 'a..b' 'embedded-dotdot'
+refuse_phase 'a/b' 'slash'
 
 # Case 13: producer skills. Empty list and a prose sentence are not calls.
 REPO="$(git -C "$DIR" rev-parse --show-toplevel)"
@@ -187,12 +189,21 @@ if producer_call "$CALL"; then
 else
   fail "bash line with --seal is a producer call"
 fi
+SCHEMA="$REPO/plugins/soleur/skills/one-shot/references/run-health-schema.md"
 if producer_call \
   "$REPO/plugins/soleur/skills/one-shot/SKILL.md" \
-  "$REPO/plugins/soleur/skills/test-fix-loop/SKILL.md"; then
+  "$REPO/plugins/soleur/skills/test-fix-loop/SKILL.md" \
+  "$SCHEMA"; then
   pass "producer skills call run-health-emit.sh with --seal"
 else
   fail "producer skills call run-health-emit.sh with --seal"
+fi
+# shellcheck disable=SC2016 # the schema sentence is literal text, not this shell's expansion
+if grep -F 'SESSION_STATE="knowledge-base/project/specs/<branch>/session-state.md"' "$SCHEMA" >/dev/null \
+  && grep -F 'Append `run_health_dir:` again after that rewrite' "$SCHEMA" >/dev/null; then
+  pass "schema binds session-state and restores run_health_dir"
+else
+  fail "schema binds session-state and restores run_health_dir"
 fi
 
 # Case 14: existing gitignore covers the artifact paths
@@ -221,6 +232,36 @@ if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.
   pass "seal with started does not seal"
 else
   fail "seal with started does not seal"
+fi
+
+# Case 17: a default PATH still stores pipeline-tally.sh show, not an empty string.
+# The stub in case 11 is prepended; this case must not see that stub.
+S17="$TMP/run-tally-real"
+PATH=/usr/bin:/bin bash "$SUT" --run-dir "$S17" --status failed --seal --import-tally 2>/dev/null
+if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); t=d.get('tally_show',''); sys.exit(0 if 'tally:' in t else 1)" "$S17/run_health.json" 2>/dev/null; then
+  pass "import-tally finds the sibling script"
+else
+  fail "import-tally finds the sibling script"
+fi
+
+# Case 18: a trailing value flag exits 0. A spin is exit 124 from timeout.
+S18err="$TMP/novalue.err"
+timeout 2 bash "$SUT" --run-dir "$TMP/novalue" --status >"$TMP/novalue.out" 2>"$S18err"
+rc=$?
+if [[ "$rc" == "0" ]] && grep -q 'run-health-emit:' "$S18err"; then
+  pass "missing flag value exits 0"
+else
+  fail "missing flag value exits 0" "rc=$rc"
+fi
+
+# Case 19: budget-capped seals, and a later seal does not replace the terminal status.
+S19="$TMP/run-reseal"
+bash "$SUT" --run-dir "$S19" --status budget-capped --seal 2>/dev/null
+bash "$SUT" --run-dir "$S19" --status completed --seal 2>/dev/null
+if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get('sealed') is True and d.get('status')=='budget-capped' and d.get('completed_at') else 1)" "$S19/run_health.json" 2>/dev/null; then
+  pass "later seal keeps budget-capped"
+else
+  fail "later seal keeps budget-capped"
 fi
 
 echo "passes=$passes fails=$fails"

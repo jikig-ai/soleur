@@ -21,7 +21,7 @@ Pass `--seal` with `--run-dir` and a terminal `--status`. That sets `sealed`, `c
 
 The parent one-shot context runs these lines. The planning subagent does not.
 
-After step 0d, once the worktree exists, set `RUN_DIR=".soleur/runs/<branch>-<utc>"` and append a line `run_health_dir: <RUN_DIR>` to `knowledge-base/project/specs/<branch>/session-state.md`.
+After step 0d, once the worktree exists, set `RUN_DIR=".soleur/runs/<branch>-<utc>"` and append a line `run_health_dir: <RUN_DIR>` to `knowledge-base/project/specs/<branch>/session-state.md`. The session-state template rewrite keeps `## Operator Constraints` and drops other lines. Append `run_health_dir:` again after that rewrite. When `RUN_DIR` is unset, read it from that line.
 
 Snapshot the step invocation (step id, child skill, args) to a file. Do not snapshot this skill file. Call the helper at steps `0d`, `1-2`, `3`, `4`, `5`, `5.5`, `6`, `7`, and `8`:
 
@@ -32,6 +32,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-health-emit.sh" --run-dir "$RUN_DIR" --p
 Use the step id as `--phase` (`1-2`, `3`, `4`, `5`, `5.5`, `6`, `7`, `8`). On every return path, including abort and budget-capped, seal before returning. Do not pass `--phase` on the seal:
 
 ```bash
+SESSION_STATE="knowledge-base/project/specs/<branch>/session-state.md"
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-health-emit.sh" --run-dir "$RUN_DIR" --status failed --seal --session-state "$SESSION_STATE" --import-tally
 ```
 
