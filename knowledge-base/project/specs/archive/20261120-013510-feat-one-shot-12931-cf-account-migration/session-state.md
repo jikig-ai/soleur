@@ -81,3 +81,14 @@ the platform's own parser or a stricter positive check.
 
 Wontfix: light-suite floor rows under CI (performance P3-4), including the bootstrap suite (now ~184 s local vs a 1802 ms floor, under the 600 s corpus cap) — advisory, regenerated at the next shard rebalance.
 Coverage consult (5 leads): 4 verified and added (D33-D36); the GitHub repo-secret consumer lead was already handled at work time (plan, scheduled-followthrough-sweeper row).
+
+### Verification pass (one seat, pinned 0f0b43d313)
+
+0 P1, 2 P2, 7 P3. All fixed inline, or stated as residuals in the guard header:
+- F1 (P2) runbook forget record read a gh error as "not committed": fail closed, all three sources required (2918ef51dd).
+- F2 (P2) a 429/5xx/non-JSON OLD read made an old All-zones token read NEW: denial vs no-verdict split in bootstrap token_read (9fdb325c83) and job preflight (675b9ce281).
+- F3 runbook swapped-prev-revoked remedy reads NEW and OLD (2918ef51dd). F4 job verify-failed Halt text follows the runbook ruling (675b9ce281).
+- F5 swap ROLLBACK lines keep the new token in _NEXT; F9 run-in-flight scope stated as residual (9fdb325c83).
+- F6 D12c glob/brace-expansion residual stated. F7 gate header names what vouches for token values (675b9ce281). F8 rehearsal-write refusals get a Halt bullet (2918ef51dd).
+- CI lint-bot-statuses (shell-trace credential refusal) on bearer_get's PIPESTATUS line: fixed (9fdb325c83).
+Below P3, not fixed: gptbot 525/526 still retries for the verify budget; gated_workflows does not follow a composite action that wraps infra-credentials (none exists).
