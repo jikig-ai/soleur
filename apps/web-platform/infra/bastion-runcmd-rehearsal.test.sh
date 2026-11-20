@@ -843,9 +843,13 @@ chk "CI refusals: GITHUB_ACTIONS=true with CI='' still refuses BRH_STATIC_ONLY (
 # assertions get one each; nothing on rc 0 or outside GitHub Actions; `::` and `%` are defused.
 _r="$( GITHUB_ACTIONS=true; FAILURES=(); VERDICT_REASON='BRH_X: a::b 5%'; annotate 1; FAILURES=(f1 'f2::x'); annotate 1; annotate 0
   unset GITHUB_ACTIONS; annotate 1; fail 'l::m' 2>&1 >/dev/null )"
-chk "verdict: annotate names the stored reason when no assertion failed, one ::error per failure otherwise; fail() defuses ::" \
+# ... and the EXIT trap after the work dir exists (cleanup) still annotates: a red exit in a subshell
+# whose WORK is a scratch dir (no container or network of this run exists yet).
+mkdir -p "$WORK/cl"
+_c="$( exec 2>/dev/null; WORK="$WORK/cl"; GITHUB_ACTIONS=true; FAILURES=(); VERDICT_REASON=BRH_CLEANUP_PROBE; trap cleanup EXIT; exit 1 )"
+chk "verdict: annotate names the stored reason when no assertion failed, one ::error per failure otherwise (also from cleanup); fail() defuses ::" \
   "$([ "$_r" = "$(printf '%s\n' '::error title=bastion-boot-rehearsal::BRH_X: a: :b 5%25' '::error title=bastion-boot-rehearsal::f1' \
-    '::error title=bastion-boot-rehearsal::f2: :x' 'FAIL: l: :m')" ]; echo $?)" "got [$_r]"
+    '::error title=bastion-boot-rehearsal::f2: :x' 'FAIL: l: :m')" ] && [ "$_c" = '::error title=bastion-boot-rehearsal::BRH_CLEANUP_PROBE' ]; echo $?)" "got [$_r] cleanup [$_c]"
 # blk_extract <start-line prefix> <end-line ERE> <max lines>: this file's block from the ONE line that
 # starts with the prefix through the first end line after it, or rc 1 and why. An eval'd block is never
 # the rest of the file: a reworded end anchor or a block grown past the bound is a named red, no eval.
