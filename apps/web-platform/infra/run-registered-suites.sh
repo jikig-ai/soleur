@@ -338,7 +338,7 @@ SOLEUR_INFRA_DIR="${SOLEUR_INFRA_DIR:-apps/web-platform/infra}"
 
 # Derivation is the FILESYSTEM GLOB, not a workflow `run: bash` scrape (ADR-252):
 # presence under SOLEUR_INFRA_DIR IS registration — a suite on disk is in the
-# execute set unless it carries a justified PRIVILEGED exclusion below. The scrape
+# execute set unless it carries a justified PRIVILEGED or DEDICATED exclusion below. The scrape
 # this replaced could not see subdirectory suites (its basename class excluded `/`)
 # and made registration a second thing to remember — the #7076 blind spot, nine
 # suites (6 subdir + 3 sudo) that CI ran but this runner never derived.
@@ -381,10 +381,11 @@ done
 
 # Two name-space invariants the machinery depends on, asserted once at derive
 # time rather than degenerating per-suite:
-#  (a) BASENAMES must be unique — PRIVILEGED_WHY is basename-keyed, so a second
-#      `workspaces-luks-loopback.test.sh` in a subdirectory would inherit the
-#      exclusion and run NOWHERE while the gate's sudo grep stayed satisfied by
-#      the original's step.
+#  (a) BASENAMES must be unique — PRIVILEGED_WHY and DEDICATED_JOB_WHY are both
+#      basename-keyed, so a second `workspaces-luks-loopback.test.sh` (or
+#      `bastion-runcmd-rehearsal.test.sh`) in a subdirectory would inherit the
+#      exclusion and run NOWHERE while the gate's invocation check stayed satisfied
+#      by the original's step.
 #  (b) LOG KEYS must be unique — the shim munges a path to `a_b.test.sh` for its
 #      .log/.meta/.trow files, so `infra/a/b.test.sh` and `infra/a_b.test.sh`
 #      share one key: interleaved capture, a lost kill-rc, a dropped timing row.
@@ -392,7 +393,7 @@ done
   _dup="$(printf '%s\n' "${ALL_SUITES[@]##*/}" | LC_ALL=C sort | uniq -d | head -1)"
   [[ -z "$_dup" ]] || {
     echo "FATAL: duplicate suite basename '$_dup' — basenames must be unique across" >&2
-    echo "       ${SOLEUR_INFRA_DIR} (PRIVILEGED_WHY and the registration gate key on them)." >&2
+    echo "       ${SOLEUR_INFRA_DIR} (PRIVILEGED_WHY, DEDICATED_JOB_WHY and the registration gate key on them)." >&2
     exit 2
   }
   _dup="$(printf '%s\n' "${ALL_SUITES[@]//\//_}" | LC_ALL=C sort | uniq -d | head -1)"
@@ -1024,9 +1025,9 @@ fi
 # An EMPTY execute set must not reach xargs: `printf '%s\n' "${SUITES[@]}"` on an
 # empty array emits one newline, and `-I{}` would run the shim once with s=""
 # — a phantom suite with an empty log key. Reachable in fixtures where every
-# derived basename is privileged.
+# derived basename is privileged or dedicated.
 (( ${#SUITES[@]} > 0 )) || {
-  echo "FATAL: the execute set is empty — every derived suite is privileged." >&2
+  echo "FATAL: the execute set is empty — every derived suite is privileged (PRIVILEGED_WHY) or dedicated (DEDICATED_JOB_WHY)." >&2
   echo "       Dispatching would fabricate a phantom suite; refusing." >&2
   exit 2
 }

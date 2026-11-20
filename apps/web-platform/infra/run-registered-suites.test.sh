@@ -111,6 +111,24 @@ else
   no "T2e: the privileged set CHANGED — a new exclusion is a coverage decision, not a refactor:"$'\n'"$(diff "$_epriv" "$_priv" | head -8)"
 fi
 rm -f "$_priv" "$_epriv"
+# T2f: the DEDICATED bucket is exactly the known set, for the same reason. A dedicated entry
+# takes a suite off every k/N leg, out of --enumerate and the shard/durations ledgers; one more
+# "runs in the bastion-boot-rehearsal job" entry with one `run: bash` line satisfies the
+# registration gate, so this is the row that makes the move a visible coverage decision.
+EXPECTED_DEDICATED=(
+  apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh
+)
+_ded=$(mktemp); _eded=$(mktemp)
+printf '%s\n' "$OUT" \
+  | sed -n 's/^  SKIP dedicated: \(apps\/web-platform\/infra\/\S*\.test\.sh\) — .*/\1/p' \
+  | LC_ALL=C sort -u > "$_ded"
+printf '%s\n' "${EXPECTED_DEDICATED[@]}" | LC_ALL=C sort -u > "$_eded"
+if cmp -s "$_ded" "$_eded"; then
+  ok "T2f: the dedicated SKIP set is exactly the bastion first-boot rehearsal (#12941)"
+else
+  no "T2f: the dedicated set CHANGED — a new exclusion is a coverage decision, not a refactor:"$'\n'"$(diff "$_eded" "$_ded" | head -8)"
+fi
+rm -f "$_ded" "$_eded"
 fi
 
 if printf '%s\n' "$OUT" | grep -cE '^(PASS|RED) ' >/dev/null; then
@@ -847,7 +865,6 @@ unset _lo _ded_on_leg _ded_loud
 _lo="$(SOLEUR_INFRA_DIR="$FIXD" bash "$SUT" --list 2>/dev/null)"
 if printf '%s\n' "$_lo" | grep -qF "  SKIP dedicated: $DED_FIX — owner: bastion-boot-rehearsal" \
    && printf '%s\n' "$_lo" | grep -qF "run locally: bash $DED_FIX" \
-   && ! printf '%s\n' "$_lo" | grep -qF "RUN dedicated:" \
    && printf '%s\n' "$_lo" | grep -qxF "Execute set: 5 suite(s)"; then
   ok "T11k-b: the plain unsharded set omits the dedicated suite too (SKIP, 5 of 6), naming its owner and the direct run"
 else
@@ -866,8 +883,8 @@ unset ENUM_D
 
 # Execution, not just listing: a real unsharded run executes the 5 leg fixtures and
 # NEVER the dedicated one (its side-effect file stays absent), and names it once.
-rm -f "$DED_RAN"
-_xo="$(SOLEUR_INFRA_DIR="$FIXD" timeout 60 bash "$SUT" 2>&1)"
+rm -f "$DED_RAN" "$TMP/ded-timings.tsv"
+_xo="$(SOLEUR_INFRA_DIR="$FIXD" SOLEUR_INFRA_TIMINGS="$TMP/ded-timings.tsv" timeout 60 bash "$SUT" 2>&1)"
 if [[ ! -e "$DED_RAN" ]] \
    && ! printf '%s\n' "$_xo" | grep -qF "PASS $DED_FIX" \
    && printf '%s\n' "$_xo" | grep -qF '5 passed, 0 failed' \
@@ -877,6 +894,14 @@ else
   no "T11k-f: execution shape wrong: dedicated ran=$([[ -e "$DED_RAN" ]] && echo yes || echo no) [$(printf '%s\n' "$_xo" | grep -E 'passed|bastion' | tail -2 | tr '\n' '|')]"
 fi
 unset _xo
+# T11k-h: the timings feed NAMES the dedicated gap (`<path>\t0\tskip=dedicated`) rather than
+# omitting it — the same contract as skip=privileged, and the row the generator drops by prefix.
+if [[ "$(grep -cxF "$(printf '%s\t0\tskip=dedicated' "$DED_FIX")" "$TMP/ded-timings.tsv" 2>/dev/null)" == 1 ]] \
+   && [[ "$(grep -c 'skip=dedicated' "$TMP/ded-timings.tsv" 2>/dev/null)" == 1 ]]; then
+  ok "T11k-h: the timings feed carries exactly one skip=dedicated row, for the dedicated suite"
+else
+  no "T11k-h: timings feed lacks the skip=dedicated row: $(grep -E 'bastion|skip=' "$TMP/ded-timings.tsv" 2>/dev/null | head -3 | tr '\n' '|')"
+fi
 
 # T11k-g: the same property on the REAL tree and the committed manifest — the real suite
 # path, not a fixture of its name. Parent-only: it pins which committed file carries the
@@ -892,15 +917,23 @@ if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
       _real_on_leg="${_real_on_leg} $k/4"
     fi
   done
+  # The unsharded `--list` prints the execute set as a COUNT, not members, so "absent from the
+  # unsharded set" is asserted as the exact identity execute = derived - privileged - dedicated:
+  # the set is built by subtraction from the derived list, so the identity holds only if every
+  # SKIP-listed path, the real dedicated suite included, was subtracted (the
+  # dedicated-executed-unsharded shape leaves it in and makes execute one larger).
+  _real_lo="$(timeout 60 bash "$SUT" --list 2>/dev/null)" || true
+  _r_der=$(sed -nE 's/^Derived ([0-9]+) registered infra suite.*/\1/p' <<< "$_real_lo" | head -1)
+  _r_exe=$(sed -nE 's/^Execute set: ([0-9]+) suite\(s\)$/\1/p' <<< "$_real_lo" | head -1)
+  _r_skp=$(grep -cE '^  SKIP (privileged|dedicated): ' <<< "$_real_lo" || true)
   if [[ -z "$_real_on_leg" ]] \
-     && _real_lo="$(timeout 60 bash "$SUT" --list 2>/dev/null)" \
      && printf '%s\n' "$_real_lo" | grep -qF "  SKIP dedicated: $REAL_DED — owner: bastion-boot-rehearsal" \
-     && ! printf '%s\n' "$_real_lo" | grep -qF "RUN dedicated:"; then
-    ok "T11k-g: $REAL_DED is on no real k/4 leg and the real unsharded set SKIPs it (never RUN)"
+     && [[ -n "$_r_der" && -n "$_r_exe" ]] && (( _r_exe == _r_der - _r_skp )); then
+    ok "T11k-g: $REAL_DED is on no real k/4 leg and absent from the real unsharded set (execute ${_r_exe} = derived ${_r_der} - ${_r_skp} skipped)"
   else
-    no "T11k-g: real tree: on leg(s):${_real_on_leg:- none}; unsharded SKIP line $(timeout 60 bash "$SUT" --list 2>/dev/null | grep -cF "SKIP dedicated: $REAL_DED") (want 1 — is the suite committed?)"
+    no "T11k-g: real tree: on leg(s):${_real_on_leg:- none}; unsharded SKIP line $(grep -cF "SKIP dedicated: $REAL_DED" <<< "$_real_lo") (want 1 — is the suite committed?); execute ${_r_exe:-?} vs derived ${_r_der:-?} - ${_r_skp} skipped"
   fi
-  unset REAL_DED _real_on_leg _real_lo
+  unset REAL_DED _real_on_leg _real_lo _r_der _r_exe _r_skp
 fi
 
 # ── T8: corpus-conformance — every registered suite's failure marker is readable ──
@@ -1417,14 +1450,14 @@ if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
   MATRIX_RAN=0
   PRISTINE="$MUTDIR/pristine.sh"; cp "$SUT" "$PRISTINE"
 
-  # mutate <id> <expected-failing-assertion> <python-mutator>
+  # mutate <id> <expected-failing-assertion> <python-mutator> [<second expected-failing assertion>]
   #
   # Each mutant must (a) LAND — verified by diffing against the pristine copy, because a
   # mutator whose pattern silently stopped matching produces a green child that reads exactly
   # like a killed mutant — and (b) be killed by the NAMED assertion, not merely by some
   # failure somewhere.
   run_mutant() {
-    local id="$1" expect="$2" mutator="$3"
+    local id="$1" expect="$2" mutator="$3" also="${4:-}"
     MATRIX_RAN=$(( MATRIX_RAN + 1 ))
     local m="$MUTDIR/$id.sh"
     cp "$PRISTINE" "$m"
@@ -1447,17 +1480,17 @@ open(p,'w').write(s)
     # Anchor on the `no()` prefix, not the bare id. `ok()` emits "[ok] <id>: …", so
     # `grep -qF "T6k:"` matched the PASSING line — two rows scored "killed" against a runner
     # that was never mutated (proven with the noop-control row below).
-    if grep -qF "[FAIL] $expect" <<<"$out"; then
+    if grep -qF "[FAIL] $expect" <<<"$out" && { [[ -z "$also" ]] || grep -qF "[FAIL] $also" <<<"$out"; }; then
       if [[ "$id" == noop-control ]]; then
         no "T9[$id]: a comment-only mutation reddened \"$expect\" — the matrix scores noise"
       else
-        ok "T9[$id]: killed by \"$expect\""
+        ok "T9[$id]: killed by \"$expect\"${also:+ and \"$also\"}"
       fi
     else
       if [[ "$id" == noop-control ]]; then
         ok "T9[$id]: a comment-only mutation is correctly NOT scored as a kill"
       else
-        no "T9[$id]: SURVIVED — expected \"$expect\" to fail and it did not"
+        no "T9[$id]: SURVIVED — expected \"$expect\"${also:+ and \"$also\"} to fail and it did not"
       fi
     fi
   }
@@ -1603,7 +1636,12 @@ open(p,'w').write(s)
   # Guard 2 row 4 (CTO Q25): the suite put back in the execute set → an unsharded run boots
   # 9 privileged systemd containers inside every infra ship battery. Must RED T11k-b and T11k-f.
   run_mutant dedicated-executed-unsharded "T11k-b:" \
-    "a = '\nSUITES=(\"\${ENUM_SUITES[@]}\")\n'; assert s.count(a) == 1; s = s.replace(a, '\n[[ -z \"\${SOLEUR_INFRA_SHARD-}\" ]] || SUITES=(\"\${ENUM_SUITES[@]}\")\n')"
+    "a = '\nSUITES=(\"\${ENUM_SUITES[@]}\")\n'; assert s.count(a) == 1; s = s.replace(a, '\n[[ -z \"\${SOLEUR_INFRA_SHARD-}\" ]] || SUITES=(\"\${ENUM_SUITES[@]}\")\n')" \
+    "T11k-f:"
+
+  # The timings feed's skip=dedicated rows dropped → the feed omits the gap instead of naming it.
+  run_mutant dedicated-timings-dropped "T11k-h:" \
+    "a = \"printf '%s\\\\t0\\\\tskip=dedicated\\\\n'\"; assert s.count(a) == 1; s = s.replace(a, \": '%s'\")"
 
   # --enumerate tables the dedicated suite → a manifest row no leg can time. (Since CTO Q25 the
   # execute set IS ENUM_SUITES, so the mutant appends DED_SUITES rather than swapping in SUITES.)
@@ -1662,11 +1700,12 @@ open(p,'w').write(s)
   # could spend silently.
   MATRIX_CALLS=$(grep -c '^  run_mutant ' "${BASH_SOURCE[0]}" || true)
   # Floor raised 32 -> 36 for the four T11k-surface rows (#12941), then 36 -> 35 when CTO Q25 removed
-  # the monitor marker and its dedicated-marker-ignored row. Measured: 35 call sites.
-  if (( MATRIX_RAN >= 35 && MATRIX_RAN == MATRIX_CALLS )); then
+  # the monitor marker and its dedicated-marker-ignored row; then 35 -> 36 for the #12941 review's
+  # dedicated-timings-dropped row (T11k-h). Measured: 36 call sites.
+  if (( MATRIX_RAN >= 36 && MATRIX_RAN == MATRIX_CALLS )); then
     ok "T9: mutation matrix dispatched ${MATRIX_RAN} rows (all ${MATRIX_CALLS} call sites ran)"
   else
-    no "T9: matrix dispatched ${MATRIX_RAN} of ${MATRIX_CALLS} call sites (expected >= 35, all run)"
+    no "T9: matrix dispatched ${MATRIX_RAN} of ${MATRIX_CALLS} call sites (expected >= 36, all run)"
   fi
 fi
 
@@ -1710,7 +1749,10 @@ fi
 # the monitor-marker rows, deleted), T11k-g (real tree) and the 3 T11k-surface matrix scoring lines
 # (dedicated-on-shard, -executed-unsharded, -enumerated) in the parent only; measured on the green
 # run (parent 123, child 79).
-if [[ -n "${SOLEUR_MUTATION_CHILD:-}" ]]; then MIN_ASSERTIONS=79; else MIN_ASSERTIONS=123; fi
+# 126/80 after the #12941 review rows, ITEMISED: T11k-h (the skip=dedicated timings row) in both;
+# T2f (the exact dedicated set) and the dedicated-timings-dropped matrix scoring line in the parent
+# only; measured on the green run (parent 126, child 80).
+if [[ -n "${SOLEUR_MUTATION_CHILD:-}" ]]; then MIN_ASSERTIONS=80; else MIN_ASSERTIONS=126; fi
 TOTAL=$(( pass + fail ))
 if (( TOTAL < MIN_ASSERTIONS )); then
   echo "[FAIL] anti-vacuity: only ${TOTAL} assertion(s) ran, expected >= ${MIN_ASSERTIONS}" >&2
