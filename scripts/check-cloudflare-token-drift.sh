@@ -1702,7 +1702,7 @@ else
     fi
     if grep -qE '\|(host-nxdomain|tunnel-down|edge-error-1[0-9]{3})\|' <<<"$(printf '%s\n' "${UNVERIFIABLE_ROWS[@]}")"; then
       echo "  host-nxdomain / edge-error-<code> / tunnel-down: the EDGE answered (or DNS did not),"
-      echo "    and the cause is named. host-nxdomain means the name did not resolve (NXDOMAIN, or"
+      echo "    and the row records what was seen. host-nxdomain: the name did not resolve (NXDOMAIN, or"
       echo "    the runner's resolver failed); edge-error-1000 means the tunnel hostname's DNS record"
       echo "    is wrong in the authoritative zone; tunnel-down means the tunnel has no healthy"
       echo "    connector. Do NOT rotate the credential."

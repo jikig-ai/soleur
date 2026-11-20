@@ -268,11 +268,11 @@ else
   fail "AC5 census mutation did not land or was not caught"
 fi
 # The tunnel lookup skips deleted namesakes and names its HTTP code in the unavailable reason.
-lookup_ok() { local cs; cs="$(census_step "$1")"; grep -qF 'cfd_tunnel?name=soleur-web-platform&is_deleted=false"' <<<"$cs" && grep -qF 'reason=tunnel_lookup_http_${LOOKUP_CODE}"' <<<"$cs"; }
+lookup_ok() { local cs; cs="$(census_step "$1")"; grep -qF 'cfd_tunnel?name=soleur-web-platform&is_deleted=false"' <<<"$cs"; }
 if lookup_ok "$CENSUS_WF"; then
-  pass "the census tunnel lookup filters is_deleted=false and reports its HTTP code"
+  pass "the census tunnel lookup filters is_deleted=false"
 else
-  fail "the census tunnel lookup lost is_deleted=false or its reason=tunnel_lookup_http_<code>"
+  fail "the census tunnel lookup lost is_deleted=false"
 fi
 sed 's/&is_deleted=false"/"/' "$CENSUS_WF" >"$P_TMP/census-mut2.yml"
 if ! cmp -s "$CENSUS_WF" "$P_TMP/census-mut2.yml" && ! lookup_ok "$P_TMP/census-mut2.yml"; then

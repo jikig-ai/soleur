@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1802
-# generated-at=2026-11-16T22:24:55Z
+# generated-at=2026-11-20T06:30:54Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -336,6 +336,7 @@ plugins/soleur/test/technical-ruling-gate.test.sh	8
 plugins/soleur/test/technical-ruling-owner-list.test.sh	4
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	7
 plugins/soleur/test/terraform-drift-step-order.test.sh	6
+plugins/soleur/test/terraform-drift-tunnel-zone-authority.test.sh	3
 plugins/soleur/test/test-pyramid-fixtures.test.sh	3
 plugins/soleur/test/ticket-triage-clauses.test.sh	5
 plugins/soleur/test/token-drift-workflow-causes.test.sh	6
@@ -361,6 +362,7 @@ plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh	4
 plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh	3
 plugins/soleur/test/worktree-manager-sandbox-tmp-sweep.test.sh	3
 plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh	1
+plugins/soleur/test/zot-bridge-marker-emission.test.sh	7
 plugins/soleur/test/zot-http-deadlines-required.test.sh	3
 plugins/soleur/test/zot-image-mirror-publish.test.sh	8
 scripts/actions-queue-health	6
