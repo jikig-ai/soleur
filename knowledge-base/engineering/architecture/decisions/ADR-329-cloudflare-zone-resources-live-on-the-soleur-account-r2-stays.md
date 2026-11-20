@@ -12,8 +12,8 @@ related_runbooks:
 
 # ADR-329: Cloudflare zone resources live on the Soleur account; R2 stays on the legacy account
 
-Plan: `knowledge-base/project/plans/2026-11-18-infra-cloudflare-migrate-terraform-to-soleur-account-plan.md`.
-Rulings: `knowledge-base/project/specs/feat-one-shot-12931-cf-account-migration/decision-challenges.md`.
+Plan: `knowledge-base/project/plans/archive/20261120-013510-2026-11-18-infra-cloudflare-migrate-terraform-to-soleur-account-plan.md`.
+Rulings: `knowledge-base/project/specs/archive/20261120-013510-feat-one-shot-12931-cf-account-migration/decision-challenges.md`.
 Incident: `knowledge-base/engineering/operations/post-mortems/soleur-ai-cloudflare-account-move-outage-2026-11-18-postmortem.md`.
 
 ## Context

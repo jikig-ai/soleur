@@ -43,7 +43,7 @@ mapfile -t _found < <(git -C "$REPO_ROOT" ls-files --cached --others --exclude-s
 SCRIPT_SRC="${REPO_ROOT}/${_found[0]}"
 LIB="${REPO_ROOT}/plugins/soleur/scripts/lib/operator-script.sh"
 HOOK="${REPO_ROOT}/plugins/soleur/hooks/operator-stage-approval.sh"
-REL="knowledge-base/project/specs/feat-one-shot-12931-cf-account-migration/bootstrap.sh"
+REL="${_found[0]}"  # the glob result, so this suite survives archive-kb moving the directory
 
 assert_fixture_dir() {
   case "${1-}" in

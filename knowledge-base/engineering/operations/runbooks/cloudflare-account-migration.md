@@ -17,8 +17,8 @@ triggers:
 # Runbook: migrate the web-platform root to the Soleur Cloudflare account
 
 Decision: [ADR-329](../../architecture/decisions/ADR-329-cloudflare-zone-resources-live-on-the-soleur-account-r2-stays.md).
-Plan: `knowledge-base/project/plans/2026-11-18-infra-cloudflare-migrate-terraform-to-soleur-account-plan.md`.
-Rulings: `knowledge-base/project/specs/feat-one-shot-12931-cf-account-migration/decision-challenges.md`.
+Plan: `knowledge-base/project/plans/archive/20261120-013510-2026-11-18-infra-cloudflare-migrate-terraform-to-soleur-account-plan.md`.
+Rulings: `knowledge-base/project/specs/archive/20261120-013510-feat-one-shot-12931-cf-account-migration/decision-challenges.md`.
 Incident: `knowledge-base/engineering/operations/post-mortems/soleur-ai-cloudflare-account-move-outage-2026-11-18-postmortem.md`.
 
 ## Conventions

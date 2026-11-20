@@ -539,7 +539,7 @@ variable "cf_r2_account_id" {
 
 # Plan-tier gates (#12931). The new zone runs on the Free plan and the Soleur account has
 # no Load Balancing subscription; both are operator money decisions recorded in
-# knowledge-base/project/specs/feat-one-shot-12931-cf-account-migration/decision-challenges.md.
+# knowledge-base/project/specs/archive/20261120-013510-feat-one-shot-12931-cf-account-migration/decision-challenges.md.
 #
 # LOCKED OFF (CTO ruling D9). Every root job runs `doppler run --name-transformer tf-var`, so a
 # stray Doppler key (CF_LOAD_BALANCING_ENABLED=true, ...) would otherwise override the committed

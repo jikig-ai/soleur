@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Phase gate for the #12931 Cloudflare account migration (Guard 1 of the plan,
-# knowledge-base/project/plans/2026-11-18-infra-cloudflare-migrate-terraform-to-soleur-account-plan.md).
+# knowledge-base/project/plans/archive/20261120-013510-2026-11-18-infra-cloudflare-migrate-terraform-to-soleur-account-plan.md).
 #
 # Sourced by the cf-account-migrate job and by tests/scripts/test-cf-account-migrate-gate.sh,
 # so the bytes the job runs are the bytes under test.
