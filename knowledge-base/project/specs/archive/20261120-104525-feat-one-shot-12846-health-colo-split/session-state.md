@@ -45,3 +45,6 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; repo-research-analyst, lear
 | learning + wrapper header: redirection census "closes" file reads (tool operands open) | P3 | verifier | fixed 0ee0c642b5 |
 | learning: residual list omits shebang PATH lookup | P3 | verifier | fixed 0ee0c642b5 |
 | tasks.md: stale plan path; 5.1 #12876 note | P3 | verifier | fixed 0ee0c642b5 |
+| ship advisor: probe accepts a marker stamped after the clock | P3 | advisor (Phase 5.5) | fixed 47bdfa426d |
+| verification: probe header omits the not-after-the-clock bound | P3 | verifier | fixed (verification-pass commit) |
+| verification: plan-sharp-edges "every exported name" reintroduced | P3 | verifier | fixed (verification-pass commit) |

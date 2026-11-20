@@ -21,12 +21,14 @@
 # not count (the lib strips both). `S1-HEALTHCOLO-CAPTURED:` is in the lib's candidate family `S[0-9]+-[A-Z][A-Z0-9_-]*:`.
 # The time must match YYYY-MM-DDTHH:MM:SSZ, parse with GNU `date -u -d` (which itself refuses hour 24, Feb 30 and :60), and
 # be at or after 2026-11-20T00:00:00Z: this probe ships after that instant, so an older time is a quoted example or a
-# forgery, never a capture. The probe also requires the parsed time to print back identically; that is defence in depth for
+# forgery, never a capture. It must also be no later than the probe's own clock: a future-dated or mistyped stamp records
+# nothing yet. The probe also requires the parsed time to print back identically; that is defence in depth for
 # a `date` build that normalises instead of refusing, and no suite row exercises it on GNU date. A marker line that fails any
 # of these is no capture, and the ask says so without echoing the line.
 #
 # EXIT CONTRACT. 1 is NEVER taken (this probe has no "should not close" regression to report).
-#   0 PASS               a trusted S1-HEALTHCOLO-CAPTURED: line with a valid time exists -> the sweeper closes the tracker
+#   0 PASS               a trusted S1-HEALTHCOLO-CAPTURED: line with a valid time (not after the clock) exists -> the sweeper closes
+#                        the tracker
 #   3 CANNOT ESTABLISH   gh, jq, grep, date or tr missing; GH_TOKEN unset; the lib unavailable; the lib's rc 2 (a failed
 #                        comment or permission read, the lib header's rc 2 list); an unparseable clock; any internal error
 #   5 ACTION REQUIRED    no qualifying line. Before DEADLINE (2026-11-25T00:00:00Z) the ask is to run the loop by the end of
