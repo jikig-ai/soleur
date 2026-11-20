@@ -24,15 +24,24 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
-import { DEAD_FORWARDER, MEASURED_BASELINE } from "@/scripts/lib/sandbox-network-cache-verdict";
+import {
+  CACHES_MODEL,
+  CONTROL_DECOYS,
+  DEAD_FORWARDER,
+  MEASURED_BASELINE,
+  TEARDOWN_GATEWAY,
+  result,
+} from "@/scripts/lib/sandbox-network-cache-verdict";
 
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const HARNESS = join(APP_ROOT, "test", "helpers", "netns-egress-harness.mts");
 const TSX = join(APP_ROOT, "node_modules", ".bin", "tsx");
 
 // The SDK version the measurements below were taken on (CTO T16). Single-sourced with the re-measure classifier
-// (#12906 PR-1b): MEASURED_BASELINE moves only with a CACHES verdict and an ADR-278 addendum in the same PR.
+// (#12906 PR-1b). MEASURED_BASELINE moves only with a recorded re-measure verdict on the new version and an ADR-278 addendum in the same PR; a move to a version whose reading is not CACHES happens only in #12906's allow-arm PR, which replaces the runtime suite's F/F2 assertions in the same PR.
+// The F/F2 host assertions read CACHES_MODEL (the classifier's invariant CACHES model), guarded by the pinned reading.
 const MEASURED_ON_SDK = MEASURED_BASELINE.version;
+const MOVE_RULE = "MEASURED_BASELINE moves only with a recorded re-measure verdict on the new version and an ADR-278 addendum in the same PR; a move to a version whose reading is not CACHES happens only in #12906's allow-arm PR, which replaces the runtime suite's F/F2 assertions in the same PR.";
 const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 const REMEASURE_CMD = "bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh";
 
@@ -103,7 +112,7 @@ function runHarness(tap: "allow-all" | "production", arms: string[]): { step0: R
 
 const net = (a: ArmRecord) => a.calls.filter((c) => c.tool === "SandboxNetworkAccess");
 const hosts = (a: ArmRecord) => net(a).map((c) => String(c.input?.host));
-const result = (a: ArmRecord, label: string) => a.toolResult?.match(new RegExp(`^R ${label} (.*)$`, "m"))?.[1] ?? "<missing>";
+// result() (the `R <label> <value>` line of an arm's tool result) is imported from the classifier: one copy.
 
 /** The invariants every arm holds whatever it returned: no decoy hit, every gateway connection carries the credential. */
 function assertNoLeak(a: ArmRecord) {
@@ -131,11 +140,16 @@ describe("installed SDK matches the measured one (CTO T16)", () => {
     expect(
       pkg.version,
       `The SDK changed: installed ${pkg.version}, measured ${MEASURED_ON_SDK}. Run \`${REMEASURE_CMD} ${pkg.version}\` ` +
-        "(it installs both into scratch dirs and measures them side by side), record the result in ADR-278, then update " +
-        "MEASURED_BASELINE in scripts/lib/sandbox-network-cache-verdict.ts (only on a CACHES verdict, with the addendum in the same PR)",
+        "(it installs both into scratch dirs and measures them side by side) and record the result in ADR-278. " +
+        `MEASURED_BASELINE is in scripts/lib/sandbox-network-cache-verdict.ts. ${MOVE_RULE}`,
     ).toBe(MEASURED_ON_SDK);
   });
+  it("the classifier's CACHES model is the F/F2 sequence measured on 0.3.321 (one literal copy, PR #12897)", () => {
+    expect(CACHES_MODEL).toEqual({ fHosts: ["198.51.100.1"], f2Hosts: ["198.51.100.1", "example.test"] });
+  });
 });
+
+const READING_MSG = `a pin whose reading is not CACHES needs #12906's allow-arm PR, which replaces these assertions. ${MOVE_RULE}`;
 
 describe.skipIf(!UNSHARE_OK)("MEASUREMENT: the SDK's routing after an allow (allow-all tap, plan Phase 1a)", () => {
   let run: ReturnType<typeof runHarness>;
@@ -165,7 +179,7 @@ describe.skipIf(!UNSHARE_OK)("MEASUREMENT: the SDK's routing after an allow (all
     const a = arm("control");
     expect(a.thrown).toBe("");
     const hit = new Set(a.decoys.map((d) => `${d.addr}:${d.addr.startsWith("127.") ? "p" : d.port}`));
-    for (const d of ["198.51.100.1:443", "198.51.100.1:80", "198.51.100.1:22", "127.0.0.2:p", "169.254.169.254:80"]) {
+    for (const d of CONTROL_DECOYS) {
       expect(hit, `decoy ${d} was not reached: the sensor is blind`).toContain(d);
     }
     expect(a.gateway).toEqual([]);
@@ -219,8 +233,9 @@ describe.skipIf(!UNSHARE_OK)("MEASUREMENT: the SDK's routing after an allow (all
     assertNoLeak(a);
     expect(a).toMatchObject({ fStep1: true, fTornDown: true, fPortClosed: true });
     expect(result(a, "f-barrier")).toBe("seen=yes");
-    expect(hosts(a)).toEqual([...MEASURED_BASELINE.fHosts]); // asked once, for three requests
-    expect(a.gateway.map((g) => g.line)).toEqual(["CONNECT 198.51.100.1:443 HTTP/1.1"]); // only the pre-teardown one
+    expect(MEASURED_BASELINE.reading, READING_MSG).toBe("CACHES");
+    expect(hosts(a)).toEqual([...CACHES_MODEL.fHosts]); // asked once, for three requests
+    expect(a.gateway.map((g) => g.line)).toEqual([...TEARDOWN_GATEWAY]); // only the pre-teardown one
     expect(result(a, "f-3")).toMatch(DEAD_FORWARDER);
     ARMS_RUN.add("m-F");
   });
@@ -229,8 +244,9 @@ describe.skipIf(!UNSHARE_OK)("MEASUREMENT: the SDK's routing after an allow (all
     const a = arm("F2");
     assertNoLeak(a);
     expect(a).toMatchObject({ fStep1: true, fTornDown: true, fPortClosed: true });
-    expect(hosts(a)).toEqual([...MEASURED_BASELINE.f2Hosts]);
-    expect(a.gateway.map((g) => g.line)).toEqual(["CONNECT 198.51.100.1:443 HTTP/1.1"]); // only the pre-teardown one
+    expect(MEASURED_BASELINE.reading, READING_MSG).toBe("CACHES");
+    expect(hosts(a)).toEqual([...CACHES_MODEL.f2Hosts]);
+    expect(a.gateway.map((g) => g.line)).toEqual([...TEARDOWN_GATEWAY]); // only the pre-teardown one
     expect(net(a).length).toBe(2);
     expect(result(a, "f2-2")).toMatch(DEAD_FORWARDER);
     ARMS_RUN.add("m-F2");

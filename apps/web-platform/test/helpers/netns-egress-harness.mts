@@ -22,6 +22,7 @@ import net from "node:net";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { SENTINEL } from "@/scripts/lib/sandbox-network-cache-verdict";
 
 type Tap = "allow-all" | "production";
 interface Spec {
@@ -46,16 +47,19 @@ interface DecoyHit {
   port: number;
 }
 
-const spec: Spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
 
 // #12906 PR-1b: NETNS_SDK_ENTRY points at another install's sdk.mjs (remeasure-sdk-sandbox-network-cache.sh installs the
 // baseline and the candidate into scratch prefixes), so the measured SDK is never the app's own node_modules copy. Unset,
 // the app's pinned SDK is measured, as the runtime suite does.
-const SDK_ENTRY = process.env.NETNS_SDK_ENTRY
-  ? realpathSync(process.env.NETNS_SDK_ENTRY)
-  : fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk"));
-let sdkModule: Promise<typeof import("@anthropic-ai/claude-agent-sdk")> | undefined;
-const loadSdk = () => (sdkModule ??= import(pathToFileURL(SDK_ENTRY).href) as Promise<typeof import("@anthropic-ai/claude-agent-sdk")>);
+// Importing this module has no side effects (main() runs only when it is the entry point), so the unit suite can pin
+// these two seams: loadSdk imports exactly the path resolveSdkEntry returned.
+export function resolveSdkEntry(env: Record<string, string | undefined>): string {
+  return env.NETNS_SDK_ENTRY ? realpathSync(env.NETNS_SDK_ENTRY) : fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk"));
+}
+export const loadSdk = (entry: string) => import(pathToFileURL(entry).href) as Promise<typeof import("@anthropic-ai/claude-agent-sdk")>;
+// Set by main() before anything reads them.
+let spec: Spec;
+let SDK_ENTRY: string;
 const emit = (kind: "NETNS_STEP0" | "NETNS_ARM", o: unknown) => process.stdout.write(`\n${kind} ${JSON.stringify(o)}\n`);
 const sh = (cmd: string, args: string[]) => {
   const r = spawnSync(cmd, args, { encoding: "utf8", timeout: 20_000 });
@@ -234,7 +238,7 @@ async function runArm(arm: ArmCtx, shimDir: string, gwPort: number, decoyPorts: 
   const { buildAgentEnv } = await import("@/server/agent-env");
   const { buildAgentSandboxConfig } = await import("@/server/agent-runner-sandbox-config");
   const fwd = await import("@/server/egress-forwarder");
-  const { query } = await loadSdk();
+  const { query } = await loadSdk(SDK_ENTRY);
 
   const own = join(spec.scratch, `ws-${arm.name}`);
   mkdirSync(own, { recursive: true });
@@ -260,7 +264,7 @@ async function runArm(arm: ArmCtx, shimDir: string, gwPort: number, decoyPorts: 
     }
     if (arm.beforeTurn && forwarder) Object.assign(extra, await arm.beforeTurn({ conversationId, port: forwarder.port, pid: forwarder.pid }));
     const baseEnv = buildAgentEnv(
-      { value: "decoy-api-key-sentinel", scheme: "api_key" },
+      { value: SENTINEL, scheme: "api_key" },
       {},
       forwarder ? { egressProxy: { workspaceId: WORKSPACE_ID, token: forwarder.token, port: forwarder.port } } : {},
     );
@@ -521,6 +525,8 @@ function arms(decoyPorts: Record<string, number>): Record<string, ArmCtx> {
 }
 
 async function main() {
+  spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
+  SDK_ENTRY = resolveSdkEntry(process.env);
   const ok = await setupNamespace();
   emit("NETNS_STEP0", step0);
   if (!ok) process.exit(0);
@@ -546,7 +552,16 @@ async function main() {
   process.exit(0);
 }
 
-main().catch((e) => {
-  emit("NETNS_ARM", { arm: "__harness__", thrown: String(e?.stack ?? e).slice(0, 800) });
-  process.exit(1);
-});
+const isEntry = (() => {
+  try {
+    return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
+if (isEntry) {
+  main().catch((e) => {
+    emit("NETNS_ARM", { arm: "__harness__", thrown: String(e?.stack ?? e).slice(0, 800) });
+    process.exit(1);
+  });
+}
