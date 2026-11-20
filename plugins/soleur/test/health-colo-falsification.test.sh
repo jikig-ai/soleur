@@ -101,6 +101,11 @@ RUN_LINES+=("/usr/bin/env -i /usr/bin/jq -r -f <(printf '%s\\n' \"\$R\") \"\$fil
 for i in "${!RUN_LINES[@]}"; do
   check "runbook: run-block line $((i + 1)) of ${#RUN_LINES[@]} appears exactly once, as a whole line" "1" "$(grep -cxF -- "${RUN_LINES[$i]}" "$RUNBOOK")"
 done
+# The whole block, line for line: the fenced block right after the sentence that introduces it holds these four lines and
+# nothing else, in this order (a per-line pin alone is satisfied by lines split across blocks or reordered).
+RUN_BLOCK=$(awk '/exactly as the suite runs it:$/ { f = 1; next } f && /^```bash$/ { g = 1; next } g && /^```$/ { exit } g { print }' "$RUNBOOK")
+check "runbook: the run block under 'exactly as the suite runs it' is exactly the four pinned lines, in order" \
+  "$(printf '%s\n' "${RUN_LINES[@]}")" "$RUN_BLOCK"
 # The preflight refuses the synthetic fixture (its zone is not the old zone) and accepts it once zone and R1 window match.
 pf() { /usr/bin/env -i "$JQ" -e "$PREFLIGHT" >/dev/null 2>&1; echo $?; }
 R1_PATCH='.zone = "5af02a2f394e9ba6e0ea23c381a26b67" | .window_end = "2026-11-12T12:00:00Z" | .window_hours = 216'
@@ -208,7 +213,8 @@ check "runbook: the recorded-outputs block equals this suite's case names and ex
 
 # --- a split main read (two H=108 files, split at 2026-11-08T00Z) joins to the same verdict -----------------------------------
 JOIN='if (try ((map(.zone) | unique | length) == 1 and all(.[]; .subcommand == "analytics-health-colo") and ([range(1; length) as $i | ((.[$i - 1].window_end | fromdateiso8601) - .[$i - 1].window_hours * 3600) == (.[$i].window_end | fromdateiso8601)] | all)) catch false) then .[0] + {window_hours: (map(.window_hours) | add), rows: (map(.rows) | add), truncated: (map(.truncated) | any), series: (map(.series) | add | sort_by(.hour, .colo))} else {subcommand: "join-refused"} end'
-check "runbook: the split-read join program appears exactly once" "1" "$(grep -cF -- "$JOIN" "$RUNBOOK")"
+check "runbook: the split-read join command appears exactly once, as a whole line" "1" \
+  "$(grep -cxF -- "/usr/bin/env -i /usr/bin/jq -s '$JOIN' \"\$newer\" \"\$older\" > \"\$joined\"" "$RUNBOOK")"
 LATER="$PRELUDE .series |= map(select(k >= 1)) | .window_hours = 60 | .rows = (.series | length)"
 EARLIER="$PRELUDE .series |= map(select(k <= 0)) | .window_end = \"2026-11-08T00:00:00Z\" | .window_hours = 27 | .rows = (.series | length)"
 JOINED=$(/usr/bin/env -i "$JQ" -c -s "$JOIN" <(/usr/bin/env -i "$JQ" -c "$LATER" "$FIXTURE") <(/usr/bin/env -i "$JQ" -c "$EARLIER" "$FIXTURE") 2>&1)
@@ -291,7 +297,7 @@ if [[ "$mut_run" -lt "$MUT_FLOOR" ]]; then
   printf 'FAIL: mutation-row floor: only %s recipe mutation rows ran, need %s (vacuity)\n' "$mut_run" "$MUT_FLOOR" >&2
   exit 1
 fi
-ROW_FLOOR=83
+ROW_FLOOR=84
 if [[ "$rows_run" -lt "$ROW_FLOOR" ]]; then
   printf 'FAIL: executed-row floor: only %s rows ran, need at least %s (the exact current count; vacuity)\n' "$rows_run" "$ROW_FLOOR" >&2
   exit 1
