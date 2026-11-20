@@ -105,6 +105,7 @@ plugins/soleur/scripts/delegation-verify.test.sh	160016	measured
 plugins/soleur/scripts/emit-decision.test.sh	443	measured
 plugins/soleur/scripts/merge-effect-class.test.sh	12213	measured
 plugins/soleur/scripts/pipeline-tally.test.sh	14091	measured
+plugins/soleur/scripts/completion-floor.test.sh	100	measured
 plugins/soleur/scripts/precommit-guard.test.sh	747	measured
 plugins/soleur/scripts/required-set-report.test.sh	5239	measured
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	25468	measured
