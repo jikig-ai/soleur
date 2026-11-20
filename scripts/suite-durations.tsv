@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
 # default-weight-ms=1802
-# generated-at=2026-11-20T01:43:03Z
+# generated-at=2026-11-20T01:54:56Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7d0cd2b5340986989503a52b56d26678f0e677e02dc0e30d7950aea5d95d712f
 .claude/hooks/agent-token-tee.test.sh	7099	measured
@@ -676,6 +676,8 @@ tests/scripts/argv-bearer-sweep	125529	measured
 tests/scripts/assert-dev-doppler-scope-wiring	37	measured
 tests/scripts/audit-bot-codeql-coverage	1262	measured
 tests/scripts/audit-ruleset-bypass	5015	measured
+tests/scripts/bastion-boot-verify	1802	floor
+tests/scripts/bastion-host-birth-gate	1802	floor
 tests/scripts/betterstack-absence-classifier	74	measured
 tests/scripts/betterstack-ingest-probe	110	measured
 tests/scripts/betterstack-query-archive	178	measured

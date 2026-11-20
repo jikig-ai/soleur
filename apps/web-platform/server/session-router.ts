@@ -25,8 +25,10 @@
 // The proxy transport is one-way TLS over the private net (proxy-tls.ts); the
 // owning host re-verifies membership before serving a proxied session (AP-2).
 
-import { reportSilentFallback } from "./observability";
+import { mirrorWithDebounce, reportSilentFallback } from "./observability";
 import { readWorktreeLeaseHolder, resolveWorktreeId } from "./worktree-write-lease";
+import { loadHostRoster } from "./host-roster";
+import { readHostPrivateIp } from "./host-private-ip";
 
 /** Minimal structural supabase shape for the membership re-verify (mirrors
  *  workspace-resolver's SupabaseLike). */
@@ -46,29 +48,6 @@ export type SessionRouteDecision =
   | { decision: "local"; reason: "owner" | "cold" }
   | { decision: "proxy"; ownerHostId: string; ownerAddress: string }
   | { decision: "owner-unresolved"; ownerHostId: string };
-
-/**
- * Parse the host roster `SOLEUR_HOST_ROSTER` — a JSON object mapping a stable
- * `host_id` (the lease's placement authority, = SOLEUR_HOST_ID) to that host's
- * private-net address the proxy dials. Empty/unset/invalid → `{}` (single-host:
- * a peer is never resolvable, so a stray remote holder yields `owner-unresolved`
- * rather than a wrong dial). Fail-safe: never throws.
- */
-export function loadHostRoster(): Record<string, string> {
-  const raw = process.env.SOLEUR_HOST_ROSTER?.trim();
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof v === "string" && v.length > 0) out[k] = v;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
 
 /** Resolve an owning `host_id` to its private-net address, or `null` when the
  *  host is not in the roster. */
@@ -112,6 +91,34 @@ export async function resolveSessionRoute(params: {
         op: "resolveSessionRoute.owner-unresolved",
         extra: { workspaceId, ownerHostId: holder.hostId, myHostId },
       },
+    );
+    return { decision: "owner-unresolved", ownerHostId: holder.hostId };
+  }
+  // The roster maps the owner to OUR OWN address: this host is the owner under an
+  // id it no longer resolves to (#12910: a fallback off its verified key while a
+  // lease taken under that key outlived the old container's drain). Proxying would
+  // relay the socket to ourselves and read as a healthy route; say what it is.
+  // This guard applies only WHEN THIS HOST KNOWS ITS PRIVATE IP: with a null IP
+  // (unset / empty / `0.0.0.0`) it never matches and a self-owned lease still
+  // routes as `proxy` (pinned in session-router.test.ts, CTO ruling Q2). That
+  // null-IP prod case is covered upstream instead: ci-deploy.sh refuses to
+  // canary a host whose key is `key_unverifiable`, and the boot fallback Sentry
+  // report (`resolveHostId.key-fallback`, server/index.ts) fires on the fallback.
+  // Debounced per workspace (MIRROR_DEBOUNCE_MS): every reconnect and control op
+  // of an affected session lands here, and the boot fallback event is the signal.
+  if (ownerAddress === readHostPrivateIp()) {
+    mirrorWithDebounce(
+      new Error(
+        `session-router: owning host '${holder.hostId}' maps to this host's own address — ` +
+          `this host's lease id changed under a live lease (owner-unresolved)`,
+      ),
+      {
+        feature: "control_plane_route",
+        op: "resolveSessionRoute.owner-is-self",
+        extra: { workspaceId, ownerHostId: holder.hostId, myHostId },
+      },
+      workspaceId,
+      "owner-is-self",
     );
     return { decision: "owner-unresolved", ownerHostId: holder.hostId };
   }

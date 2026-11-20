@@ -127,7 +127,9 @@ export function reportRepoResolverDivergence(args: {
  * identifiers) and NO raw `gitdirTarget` (only the `gitKind` + escape boolean).
  */
 /** Where the self-stop was observed. `host-pre-heal` is the server-side
- *  dispatch readiness gate (lstat shape OR the #5733 host `rev-parse` confirm);
+ *  dispatch readiness gate (lstat shape OR the #5733 host `rev-parse` confirm).
+ *  A legacy name since #12910: the cold dispatch's lstat emit now runs AFTER the
+ *  heal (escaping file-pointer only); kept so existing `source:` queries match;
  *  `in-sandbox-backstop` is the agent's OWN in-bwrap Step 0.0 `rev-parse` result
  *  (deliverable C2) — robust to shapes the host confirm is blind to (escaping
  *  pointer, object-store residual). Folded into the dedupe fingerprint so the two
@@ -151,7 +153,7 @@ export function reportAgentReadinessSelfStop(args: {
   /**
    * #5733 deliverable A/C: the AUTHORITATIVE `git rev-parse --is-inside-work-tree`
    * verdict (host confirm OR the agent's in-sandbox result). Omitted on the
-   * pure-lstat pre-heal emit (where no rev-parse ran). When present and `false`
+   * pure-lstat escaping-pointer emit (where no rev-parse ran). When present and `false`
    * alongside `gitValid=true`, the event itself shows the proxy-vs-invariant
    * divergence (lstat said ready; `git` itself disagrees). NEVER carries the
    * subprocess stderr/path (the raw path == raw userId for a solo workspace).

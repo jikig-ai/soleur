@@ -103,7 +103,7 @@ resolve_host_id() {
   fi
   local url="${SOLEUR_HOST_ID_METADATA_URL:-http://169.254.169.254/hetzner/v1/metadata/instance-id}"
   local id
-  id=$(curl -sf --max-time 3 "$url" 2>/dev/null || true)
+  id=$(curl --disable --noproxy '*' -sf --max-time 3 "$url" 2>/dev/null || true)
   if [[ "$id" =~ ^[0-9]+$ ]]; then
     printf 'hetzner-%s' "$id"
     return 0

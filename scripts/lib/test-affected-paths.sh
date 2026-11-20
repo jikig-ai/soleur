@@ -1736,6 +1736,18 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_BOOT_SIGNAL_POLL_PATHS=(
   "tests/scripts/test-git-data-boot-signal-poll.sh"
 )
 
+# tests/scripts/bastion-boot-verify (#12866) — derived edges could not reach its subject (the suite
+# runs the library under `env -i` with a stubbed reader); declared from the repo paths it names, plus
+# the reader the library calls by default and the reusable workflow that sources it.
+AFFECTED_TESTS_SCRIPTS_BASTION_BOOT_VERIFY_PATHS=(
+  ".github/workflows/bastion-host-create.yml"
+  "apps/web-platform/infra/scripts/fresh-host-boot-trail.sh"
+  "scripts/lib/bastion-boot-verify.sh"
+  "scripts/lib/bearer-curl.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-bastion-boot-verify.sh"
+)
+
 # tests/scripts/git-data-rung2-evidence-capture — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(
