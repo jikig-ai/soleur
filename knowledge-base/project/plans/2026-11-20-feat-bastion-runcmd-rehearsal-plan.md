@@ -985,46 +985,46 @@ decision-challenges.md). No taste or user-challenge item arose.
 
 ## Acceptance Criteria
 
-- [ ] AC1. `apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh` exists, is executable, reads
+- [x] AC1. `apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh` exists, is executable, reads
   `UBUNTU_BASE` from `git-data-runcmd-rehearsal.test.sh`, and ends with `PASS` on the fixed template
   (two local runs and the first CI run recorded in the PR body with wall times).
-- [ ] AC2. On the template as merged in #12873 (pre-fix), the suite reports FAIL with B1 naming
+- [x] AC2. On the template as merged in #12873 (pre-fix), the suite reports FAIL with B1 naming
   `egress_load` / `User does not exist` and F1 failing its detail predicate; the output is quoted in
   the PR body.
-- [ ] AC3. Rows M1, M2, F1-M and FA each report their designed RED evidence inside a PASS run
+- [x] AC3. Rows M1, M2, F1-M and FA each report their designed RED evidence inside a PASS run
   (their assertions are that the mutated boot fails in the named way).
-- [ ] AC4. `bastion-cloud-init.yml` installs `systemd-timesyncd` in the apt_install line, and the
+- [x] AC4. `bastion-cloud-init.yml` installs `systemd-timesyncd` in the apt_install line, and the
   `egress_load` capture selects `[bastion-egress] FAIL:` and nft `Error:` lines from both unit journals;
   `bash apps/web-platform/infra/bastion.test.sh` ends `bastion: PASS`.
-- [ ] AC5. `SOLEUR_INFRA_SHARD=k/4` (k=1..4) execute sets never contain the suite; neither does the
+- [x] AC5. `SOLEUR_INFRA_SHARD=k/4` (k=1..4) execute sets never contain the suite; neither does the
   unsharded set (CTO Q25); `bash .github/scripts/test/test-infra-suite-registration.sh` passes and its new arms go RED
   under Guard 2 rows 1-8 (run as mutations during work, recorded in the PR body).
-- [ ] AC6. `infra-validation.yml` has job `bastion-boot-rehearsal` (`timeout-minutes: 18`, no
+- [x] AC6. `infra-validation.yml` has job `bastion-boot-rehearsal` (`timeout-minutes: 18`, no
   credentials, unmasked invocation) and `deploy-script-tests-done` lists it in `needs` and `entries`.
-- [ ] AC7. `apt-bounded.test.sh`, `guard-vacuity-floor.test.sh` (with `MAX_DEFERRED` unchanged),
+- [x] AC7. `apt-bounded.test.sh`, `guard-vacuity-floor.test.sh` (with `MAX_DEFERRED` unchanged),
   `run-registered-suites.test.sh`, `bash scripts/lint-orphan-test-suites.sh` (after `git add`) and the
   ratchet lints pass, each by its own CI invocation shape.
-- [ ] AC7b. The suite's deadline is computed from its constants (180 + 300 + 150 + 150 = 780 s) and
+- [x] AC7b. The suite's deadline is computed from its constants (180 + 300 + 150 + 150 = 780 s) and
   printed; the job's `timeout-minutes: 18` comment cites it.
-- [ ] AC7c. `run-registered-suites.sh --list` under `SOLEUR_INFRA_SHARD=k/4` (k=1..4) and the plain
+- [x] AC7c. `run-registered-suites.sh --list` under `SOLEUR_INFRA_SHARD=k/4` (k=1..4) and the plain
   unsharded `--list` omit the suite from the execute set (each prints `SKIP dedicated:`), a real
   unsharded run never executes it, and `--enumerate` omits it; `bash plugins/soleur/test/deploy-script-tests-aggregator-diagnosis.test.sh`,
   `bash .github/scripts/test/test-infra-suite-registration-mutations.sh` and
   `bash tests/scripts/test-main-duplicate-skip.sh` pass.
-- [ ] AC7d. Host containment: every boot passes the netns-differs guard; the static argv check holds
+- [x] AC7d. Host containment: every boot passes the netns-differs guard; the static argv check holds
   and goes RED on Guard 1 row 13; the fixture image has the five units masked and `ReadKMsg=no`;
   the job's checkout has `persist-credentials: false`; a kept work dir contains no `PRIVATE KEY`
   block (`grep -rL`) before upload.
-- [ ] AC7e. Evidence rows are non-vacuous: the live stub self-test passes (4xx on all four bad
+- [x] AC7e. Evidence rows are non-vacuous: the live stub self-test passes (4xx on all four bad
   requests, 200 on the good one); B1-E's CLOSED probes report curl rc 28; F1-M's diff check and
   ruleset evidence hold; the offline `_egress_why` test passes and its `-b`/`--sync` mutations go RED.
-- [ ] AC8. Docker absent under `CI=true` prints `BRH_TOOL_ABSENT:docker` and exits 1; an all-skip run
+- [x] AC8. Docker absent under `CI=true` prints `BRH_TOOL_ABSENT:docker` and exits 1; an all-skip run
   ends `SKIP`, never `PASS`; under `CI` more than 2 skipped rows, or a skipped B1, prints
   `BRH_SKIP_CEILING` and exits 1; `BRH_ROWS`/`BRH_STATIC_ONLY` and the archive-pin override are refused
   under `CI`.
-- [ ] AC9 (superseded by Q26/Q28). ADR-327 carries the 2026-11-20 addendum; `bastion-host.md` names the
+- [x] AC9 (superseded by Q26/Q28). ADR-327 carries the 2026-11-20 addendum; `bastion-host.md` names the
   suite and job, says it is advisory on PRs, and carries the pre-birth check (dispatched job conclusion
   `success` plus exactly one `bastion-runcmd-rehearsal: PASS (` line); `c4-count-parity.test.sh` passes;
   #12942 has the gate comment naming the in-birth rehearsal job (Q26) and the SKIP-on-dispatch rule (Q28),
   never a Checks API read of an existing check-run.
-- [ ] AC10. PR body: `Closes #12941`, `Ref #12866`, `Ref #9421`; no `Closes` for #9421 or #12008.
+- [x] AC10. PR body: `Closes #12941`, `Ref #12866`, `Ref #9421`; no `Closes` for #9421 or #12008.
