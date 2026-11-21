@@ -514,12 +514,12 @@ set_id() {
 # printf makes a stored trailing newline a second, empty line) emits NOTHING, so curl gets no URL
 # and sends no request. The pass reads to EOF (no early exit), so the reader never takes a SIGPIPE
 # that would pass for a failed read. rc 0 emitted; rc 1 the read failed; rc 2 malformed. Safe in any
-# errexit context: the pipeline's statuses are taken inside a `|| true` group. Never widen the class
+# errexit context: the pipeline is an `if` condition and both branches take its statuses. Never widen the class
 # to \n or `"`: either would let a value add a config line.
 readonly BEARER_AWK='NR == 1 && /^[A-Za-z0-9._~+\/=-]+$/ { t = $0; next } { bad = 1 } END { if (bad || NR != 1) exit 3; printf "header = \"Authorization: Bearer %s\"\nurl = \"%s\"\n", t, u }'
 bearer_config() {
   local -a ps=()
-  { { plain_get "$1" "$2" && printf '\n'; } | LC_ALL=C awk -v u="$3" "$BEARER_AWK"; ps=("${PIPESTATUS[@]}"); } || true
+  if { plain_get "$1" "$2" && printf '\n'; } | LC_ALL=C awk -v u="$3" "$BEARER_AWK"; then ps=("${PIPESTATUS[@]}"); else ps=("${PIPESTATUS[@]}"); fi
   [[ "${ps[0]:-1}" -eq 0 ]] || return 1
   [[ "${ps[1]:-1}" -eq 0 ]] || return 2
 }

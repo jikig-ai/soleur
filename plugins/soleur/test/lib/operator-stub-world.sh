@@ -197,6 +197,10 @@ fi
 case "$1 ${2:-}" in
   "auth status"|"secret list"|"variable list"|"repo view"|"pr view"|"pr list"|"issue view"|"issue list")
     stub_log gh read "$@"; exit 0 ;;
+  # `gh run list` reads run state (the #12931 bootstrap's run-in-flight refusal asks it before a
+  # Doppler write). It answers an empty run list, so no run is in flight in the stub world.
+  "run list")
+    stub_log gh read "$@"; printf '[]\n'; exit 0 ;;
 esac
 # default-deny: secret delete, variable set|delete, workflow run, pr merge, release create,
 # repo edit ... are all MUTATING and refused.
