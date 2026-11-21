@@ -200,7 +200,7 @@ if [[ "$BS_ARM" -eq 1 ]]; then
     command -v doppler >/dev/null || { echo "FATAL: BS arm needs the Doppler CLI (or --bs-rows-file)" >&2; exit 1; }
     rows="$(bash "$ROOT/scripts/lib/doppler-read.sh" bs bash "$ROOT/scripts/betterstack-query.sh" \
       --since "$SINCE" --grep DEPLOY_SCRIPT_SHA --limit "$LIMIT" 2>/dev/null)" \
-      || { echo "FATAL: betterstack-query.sh failed under doppler" >&2; exit 1; }
+      || { echo "FATAL: betterstack-query.sh failed under doppler-read.sh bs" >&2; exit 1; }
   fi
   # Newest sha per host_name: decode .raw (double-JSON), sort by dt desc, first per host.
   newest="$(printf '%s\n' "$rows" | jq -Rr '

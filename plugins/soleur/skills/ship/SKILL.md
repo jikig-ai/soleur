@@ -1061,11 +1061,10 @@ The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` by desi
 
 ```bash
 if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]] && ssh-add -l >/dev/null 2>&1; then
-  cd apps/web-platform/infra
   # Bridge target only (NOT deploy_pipeline_fix): this fallback lands a handler/helper/
   # sudoers change now; the webhook push is covered by the CI auto-apply. Never widen it.
-  doppler run -p soleur -c prd_terraform -- \
-    terraform apply -target=terraform_data.infra_config_handler_bootstrap -input=true
+  bash scripts/lib/doppler-read.sh run soleur prd_terraform \
+    terraform -chdir=apps/web-platform/infra apply -target=terraform_data.infra_config_handler_bootstrap -input=true
   # The Terraform "yes" prompt is the load-bearing authorization
   # (hr-menu-option-ack-not-prod-write-auth). Do NOT pass -auto-approve.
 fi
@@ -1074,9 +1073,9 @@ fi
 Verify via the no-host-login status hook (`hr-no-ssh-fallback-in-runbooks`; `files_written == files_total` at `/hooks/infra-config-status`, never an SSH hash compare):
 
 ```bash
-WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
-CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
-CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
+WEBHOOK_SECRET=$(bash scripts/lib/doppler-read.sh get soleur-deploy-channel prd WEBHOOK_DEPLOY_SECRET)
+CF_ACCESS_ID=$(bash scripts/lib/doppler-read.sh get soleur-deploy-channel prd CF_ACCESS_CLIENT_ID)
+CF_ACCESS_SECRET=$(bash scripts/lib/doppler-read.sh get soleur-deploy-channel prd CF_ACCESS_CLIENT_SECRET)
 HMAC=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
 # headers ride curl's stdin config, not argv
 APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd_terraform --plain)
@@ -1098,9 +1097,8 @@ This PR edits `terraform_data.deploy_pipeline_fix` trigger files. Drift will be
 detected on the next 12h cron tick. To prevent the drift-issue cycle, run the
 apply as part of the merge ritual:
 
-  cd apps/web-platform/infra
-  doppler run -p soleur -c prd_terraform -- \
-    terraform apply -target=terraform_data.deploy_pipeline_fix -input=true
+  bash scripts/lib/doppler-read.sh run soleur prd_terraform \
+    terraform -chdir=apps/web-platform/infra apply -target=terraform_data.deploy_pipeline_fix -input=true
 
 You will be prompted for "yes" by Terraform — that prompt is the load-bearing
 authorization per `hr-menu-option-ack-not-prod-write-auth`. Do NOT pass
@@ -1145,7 +1143,7 @@ Inform the operator: "PR touches `terraform_data.deploy_pipeline_fix` trigger fi
 Same as interactive — surface a tracking comment on the PR noting the auto-apply will fire on merge, then proceed. The comment also names the kill-switch and the fallback terminal command for the rare auto-apply failure case.
 
 ```bash
-TRACKING_MSG=$'[deploy_pipeline_fix-drift-gate] This PR touches a trigger file. `apply-deploy-pipeline-fix.yml` will auto-apply on merge — no action required. To skip the auto-apply, add `[skip-deploy-fix-apply]` to a commit message. If the auto-apply fails (transient outage), run the workflow manually from the Actions tab, or as a last resort the canonical Tier-B apply from `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md` §Local Terraform invocation — export `AWS_*` from `TF_STATE_AWS_*` (soleur-infra-privileged/prd; the `prd_terraform` pair is read-only post-O5b and a bare `doppler run -c prd_terraform -- terraform apply` 403s the state PutObject mid-run) then `doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- terraform apply -target=terraform_data.deploy_pipeline_fix -input=true`.'
+TRACKING_MSG=$'[deploy_pipeline_fix-drift-gate] This PR touches a trigger file. `apply-deploy-pipeline-fix.yml` will auto-apply on merge — no action required. To skip the auto-apply, add `[skip-deploy-fix-apply]` to a commit message. If the auto-apply fails (transient outage), run the workflow manually from the Actions tab, or as a last resort the canonical Tier-B apply from `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md` §Local Terraform invocation — export `AWS_*` from `TF_STATE_AWS_*` (soleur-infra-privileged/prd; the `prd_terraform` pair is read-only post-O5b and a bare apply against it 403s the state PutObject mid-run) then the nested Tier-B tf-var apply it spells out there, targeted at `terraform_data.deploy_pipeline_fix` with `-input=true`.'
 if ! gh pr comment "$PR_NUMBER" --body "$TRACKING_MSG" 2>/dev/null; then
   echo "$TRACKING_MSG" >&2
   if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then

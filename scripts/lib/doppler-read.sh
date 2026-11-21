@@ -11,6 +11,7 @@
 # Modes (DOPPLER_TOKEN comes from the caller's env, as before):
 #   hash <project> <config> <name>   sha256 of the value on stdout; the key
 #                                  exists only on the pipe into sha256sum.
+#   get  <project> <config> <name>   the value itself on stdout (--plain).
 #   tf   <terraform args...>         terraform under the prd_terraform tf-var
 #                                  injection (the caller's env wins under
 #                                  --preserve-env).
@@ -19,11 +20,19 @@
 #                                  prd_terraform via three targeted gets — the
 #                                  exact set scripts/betterstack-query.sh and
 #                                  its callers need.
+#   run  <project> <config> <command> [args...]
+#                                  run <command> with the full <project>/<config>
+#                                  secret set in env — the generic bulk-read
+#                                  form, for steps whose target needs prd env.
 set -u
 case "${1:-}" in
   hash)
     shift
     doppler secrets get "$3" --plain -p "$1" -c "$2" 2>/dev/null | sha256sum | cut -c1-64
+    ;;
+  get)
+    shift
+    exec doppler secrets get "$3" --plain -p "$1" -c "$2"
     ;;
   tf)
     shift
@@ -35,6 +44,11 @@ case "${1:-}" in
       [ -n "${!_n:+x}" ] || export "$_n=$(doppler secrets get "$_n" -p soleur -c prd_terraform --plain 2>/dev/null || true)"
     done
     exec "$@"
+    ;;
+  run)
+    shift
+    _p="$1"; _c="$2"; shift 2
+    exec doppler run -p "$_p" -c "$_c" -- "$@"
     ;;
   *)
     printf 'doppler-read.sh: unknown mode %s\n' "${1:-<none>}" >&2

@@ -66,7 +66,7 @@ Before executing any browser scenarios, check whether the dev server is reachabl
    - Report: "Dev server failed to start within 30s. See server output above."
    - Continue to API verification steps (do not block the pipeline)
 
-   - When `doppler run` starts the dev server but Supabase env vars (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`) are missing from the Doppler config, the server starts but crashes on first request. Check the server log for "Your project's URL and Key are required" before declaring the server ready.
+   - When the dev server is started under a Doppler env but Supabase env vars (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`) are missing from the Doppler config, the server starts but crashes on first request. Check the server log for "Your project's URL and Key are required" before declaring the server ready.
 
 ### Step 2: Detect Environment
 
@@ -161,7 +161,7 @@ Which registrations are wrapped, what to call after an action tool, what a
 withheld result means, and what to do when the `playwright` server fails to
 connect: `agent-browser/SKILL.md` §"Wrapping the server".
 
-- **API verify:** steps — Execute the exact `doppler run` + `curl` command from the scenario. Compare the output against the expected value stated in the scenario.
+- **API verify:** steps — Execute the exact Doppler-env + `curl` command from the scenario. Compare the output against the expected value stated in the scenario.
 - **Cleanup:** steps — Execute cleanup commands to remove test data from external services. Run these regardless of whether the scenario passed or failed.
 
 **Execution order for each scenario:**
@@ -178,7 +178,7 @@ connect: `agent-browser/SKILL.md` §"Wrapping the server".
    - Run the exact command from the scenario via the Bash tool
    - Compare the command output against the expected value
    - If the command fails or output doesn't match, retry up to 3 times (waiting a few seconds between retries) before marking as failed
-   - If a `doppler secrets get` fails (secret not found), warn "Doppler secret unavailable — skipping API verification" and skip this step
+   - If a Doppler secret read fails (secret not found), warn "Doppler secret unavailable — skipping API verification" and skip this step
 4. Execute **Cleanup** steps (if present)
    - Run cleanup commands regardless of pass/fail
    - Cleanup failures produce warnings but do not mark the scenario as failed
@@ -256,7 +256,7 @@ The skill handles missing prerequisites without blocking the pipeline:
 - **A scenario's NEGATIVE CONTROL is a claim to run, not a control to trust — and the Risks table usually cites it as the mitigation for the plan's sharpest hazard.** When a scenario reads "…and a fixture that violates X fails the check", run that fixture before recording coverage; retract any falsified claim in place (append the measurement) and name the control that actually holds. **Why:** #7761 — `systemd-analyze verify` returned rc=0 on a missing `ReadWritePaths` directory (syntax-only check). See `knowledge-base/project/learnings/security-issues/2026-09-03-the-hardening-i-added-disarmed-the-guard-over-the-flushall.md`.
 - This skill does NOT test error paths (network failure, invalid input); deferred.
 - Always include cleanup steps so test data does not accumulate in external services.
-- The deploy-webhook credential triple (`WEBHOOK_DEPLOY_SECRET`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`) lives in Doppler `soleur/prd_terraform`, NOT `prd` — a probe run under `doppler run -c prd` reports `credentials_unprovisioned`, which is the probe being correct, not the secret being absent. And `doppler secrets --only-names` prints a TABLE (`│ NAME │`), so an anchored `grep -c '^NAME$'` over it returns 0 for every config; a zero from an unfamiliar CLI subcommand is "the command's output shape is unknown" until inspected. **Why:** #6178 / PR #8346 — a names-scan reported the triple absent from all 13 configs while `inngest-server.md` §deploy-status already named the right one.
+- The deploy-webhook credential triple (`WEBHOOK_DEPLOY_SECRET`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`) lives in the `soleur-deploy-channel` Doppler project (`prd` config), NOT `soleur/prd` — a probe run under a `soleur/prd` env reports `credentials_unprovisioned`, which is the probe being correct, not the secret being absent. And `doppler secrets --only-names` prints a TABLE (`│ NAME │`), so an anchored `grep -c '^NAME$'` over it returns 0 for every config; a zero from an unfamiliar CLI subcommand is "the command's output shape is unknown" until inspected. **Why:** #6178 / PR #8346 — a names-scan reported the triple absent from all 13 configs while `inngest-server.md` §deploy-status already named the right one.
 - For new scheduled-probe workflows, dry-run every probe step against prod hostnames before merge. Verify the documented success path (HTTP code, redirect host, response shape) matches reality. Workflow YAML lint and unit tests do NOT catch API contract surprises like HEAD-rejecting endpoints or auth-required public endpoints. **Why:** PR #3030 — see `knowledge-base/project/learnings/integration-issues/2026-04-29-supabase-auth-probe-and-sentry-rule-api-quirks.md`.
 - When verifying a secret-scan gate fails loud on a secret, the sentinel must be a shape the scanner actually catches AND is not on its example/stopword allowlist — `AKIAIOSFODNN7EXAMPLE` (gitleaks' canonical AWS doc key) is allowlisted and returns a false `rc=0`. Use a synthetic PEM (`-----BEGIN RSA PRIVATE KEY-----` + random base64) or a repo-custom-rule shape (`postgres://`, `dp.st.`), pair it with a clean control (no-secret → `rc=0`), and run in an isolated throwaway git repo so the synthetic never touches the real worktree/push-protection. **Why:** PR #6050 — see `knowledge-base/project/learnings/security-issues/2026-07-05-fabricated-green-content-gate-ceiling-and-verification-sentinel.md`.
 - For pure-CSS-utility-class fixes whose plan declares `User-Brand Impact: none` AND whose className contracts are fully unit-tested (vitest asserts on `toHaveClass`/`className.match`), a dev-server outage degrades QA to unit-test coverage rather than blocking the pipeline — file the dev-server bug separately with `pre-existing-unrelated` scope-out. For functional, data, auth, or payment fixes, the dev-server bug becomes load-bearing and must be fixed before merge. See `knowledge-base/project/learnings/2026-05-11-qa-degradation-when-dev-server-broken-on-css-only-fix.md`.

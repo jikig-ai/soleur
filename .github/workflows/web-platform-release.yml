@@ -1083,7 +1083,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
-          doppler run -c prd -- bash apps/web-platform/scripts/run-migrations.sh
+          bash scripts/lib/doppler-read.sh run soleur prd bash apps/web-platform/scripts/run-migrations.sh
 
   verify-migrations:
     # Runs supabase/verify/*.sql sentinels post-apply, then closes any open
@@ -1138,7 +1138,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
-          doppler run -c prd -- bash apps/web-platform/scripts/run-verify.sh
+          bash scripts/lib/doppler-read.sh run soleur prd bash apps/web-platform/scripts/run-verify.sh
 
       - name: Close follow-through issues for verified migrations
         # Scans open issues labeled `follow-through` for migration filenames
@@ -1237,7 +1237,7 @@ jobs:
     # checkout reads `github.event.workflow_run.head_sha` — which CAN be a fork
     # PR head (a fork branch literally named `main` satisfies `branches:
     # [main]`) — and then EXECUTES `verify-required-secrets.sh` from that tree
-    # under `doppler run -c prd`, with every prd secret in env. The job-level
+    # under the soleur/prd env wrapper, with every prd secret in env. The job-level
     # `if:` is the only expression evaluated before its steps materialize the
     # tree, so the gate lives here and nowhere later. On an untrusted-shape
     # run the job skips; `deploy` stays blocked the same way it already was
@@ -1278,7 +1278,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
-          doppler run -c prd -- bash apps/web-platform/scripts/verify-required-secrets.sh
+          bash scripts/lib/doppler-read.sh run soleur prd bash apps/web-platform/scripts/verify-required-secrets.sh
 
   deploy:
     needs: [resolve-target, migrate, verify-migrations, verify-doppler-secrets]
@@ -2334,7 +2334,7 @@ jobs:
           set +e
           # Redacted for the same reason the harness step is: this writes to a
           # public run log and the script talks to the auth admin API.
-          doppler run -c prd -- bash apps/web-platform/scripts/seed-live-verify-user.sh 2>&1 \
+          bash scripts/lib/doppler-read.sh run soleur prd bash apps/web-platform/scripts/seed-live-verify-user.sh 2>&1 \
             | bun run apps/web-platform/scripts/live-verify/redact-stdin.ts
           rc=${PIPESTATUS[0]}
           redact_rc=${PIPESTATUS[1]}
@@ -2372,7 +2372,7 @@ jobs:
           # which could embed a captured secret — verbatim into the Actions run
           # log (visible to any Actions-read principal). redact-stdin.ts is
           # idempotent on run.ts's own already-redacted RESULT line.
-          doppler run -c prd -- bun run scripts/live-verify/run.ts 2>&1 \
+          bash scripts/lib/doppler-read.sh run soleur prd bun run scripts/live-verify/run.ts 2>&1 \
             | bun run scripts/live-verify/redact-stdin.ts \
             | tee /tmp/live-verify.out
           rc=${PIPESTATUS[0]}   # bun's exit code (first pipe stage), NOT redact/tee
