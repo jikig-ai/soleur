@@ -74,7 +74,7 @@
 # bastion.test.sh egress row 23 reds that revert on substance).
 #
 # STALE RUNS. A run killed without its EXIT trap leaves `brh-<pid>-*` containers and networks and a
-# `brh.*` work dir under ${SOLEUR_SCRATCH_BASE:-$TMPDIR} (the base the work dir is created in); the
+# `brh.*` work dir under $TMPDIR (the base the work dir is created in); the
 # next run reaps containers and networks whose <pid> is dead and that are over an hour old (age from
 # docker's own Created field: RFC 3339 for a container, `{{.Created.Unix}}` for a network, since
 # `date -d` rejects the network's Go time form), under the subnet flock, and this user's work dirs
@@ -244,10 +244,11 @@ chk "pin: UBUNTU_BASE read from git-data-runcmd-rehearsal.test.sh ($UBUNTU_BASE)
 
 # ── Work dir and the one EXIT trap ─────────────────────────────────────────────────────────────
 umask 077
-# The work dir and the stale-dir sweep share ONE base, so kept evidence outlives a session-root
-# cleanup and the sweep sees every dir this suite made (git-data-runcmd-rehearsal's shape).
-WORK_BASE="${SOLEUR_SCRATCH_BASE:-$TMPDIR}"
-WORK="$(mktemp -d -p "$WORK_BASE" brh.XXXXXX)" || { printf 'HARNESS: mktemp failed under %s\n' "$WORK_BASE" >&2; exit 2; }
+# The work dir and the stale-dir sweep share ONE base, $TMPDIR, so the sweep sees every dir this
+# suite made. Not ${SOLEUR_SCRATCH_BASE:-…}: fixture-relative-assert cannot prove an env-supplied
+# base absolute (git-data-runcmd-rehearsal carries 73 baselined sites for exactly that form).
+WORK_BASE="$TMPDIR"
+WORK="$(mktemp -d "${TMPDIR}/brh.XXXXXX")" || { printf 'HARNESS: mktemp failed under %s\n' "$TMPDIR" >&2; exit 2; }
 assert_fixture_dir "$WORK"
 declare -A WPID=()
 cleanup() {
@@ -1056,6 +1057,7 @@ egress_why_test() {
   run_ew() { # <fn-file> <journal-file> -> D's contents; reads EW_NFT EW_EGRESS EW_ST EW_UNITOUT EW_HANG EW_LC EW_OUTER EW_DIR
     local -a lc=()
     local w="${EW_DIR:-$d}"
+    assert_fixture_dir "$w"
     [ -z "${EW_LC:-}" ] || lc=(LC_ALL="$EW_LC")
     mkdir -p "$w"; : > "$w/log"; rm -f "$w/D"
     timeout "${EW_OUTER:-60}" env -i PATH="$WORK/fake:/usr/bin:/bin" "${lc[@]}" BRH_FAKE_LOG="$w/log" BRH_FAKE_JOURNAL="$2" \

@@ -233,7 +233,8 @@ if [[ "$rc" == "0" ]]; then
 else
   ok "M9 enumeration collapse: rc=$rc (fails closed)"
 fi
-rm -rf "${SB:?}/${INFRA_PREFIX:?}"
+# shellcheck disable=SC2115  # SB is set once at the top; `${SB:?}` here would read as a guard to fixture-scan.py and hide the git -C sites below it
+rm -rf "$SB/$INFRA_PREFIX"
 mv "$SB/${INFRA_PREFIX}-moved" "$SB/$INFRA_PREFIX" || setup_die "mv back"
 git -C "$SB" add -A >/dev/null 2>&1 || setup_die "git add after mv back"
 sb_commit mv-back
