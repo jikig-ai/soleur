@@ -3371,6 +3371,7 @@ const MAIN_ROOT_TF_WORKFLOWS = [
   "apply-web-platform-infra.yml",
   "apply-deploy-pipeline-fix.yml",
   "cf-lb-overlay.yml",
+  "cf-account-migrate.yml",
   "scheduled-terraform-drift.yml",
   "infra-validation.yml",
   // #12866: the reusable body of apply-web-platform-infra's bastion_host_create caller job.
@@ -3499,11 +3500,97 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
         return plans && MAIN_ROOT_FORMS.some((re) => re.test(t));
       })
       .sort();
-    // Exact: infra-validation.yml is the one planner the census cannot see (its matrix is
-    // computed at runtime from a changed-files job), so it is listed by hand; every other
-    // entry must be found, and nothing else may be.
-    expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => f !== "infra-validation.yml").sort());
-    expect(found.length).toBe(5);
+    // Exact: two planners are invisible to this YAML census and listed by hand —
+    // infra-validation.yml (its matrix is computed at runtime from a changed-files job) and
+    // cf-account-migrate.yml (#12931: it plans through apps/web-platform/infra/scripts/
+    // cf-account-migrate-job.sh, not inline YAML). Every other entry must be found, and nothing
+    // else may be.
+    const HAND_LISTED = ["infra-validation.yml", "cf-account-migrate.yml"];
+    // One equality: a hand-listed name missing from the list, or one the census also finds (it
+    // would appear twice), both red. A missing file throws in the parity loops' readFileSync.
+    expect([...found, ...HAND_LISTED].sort()).toEqual([...MAIN_ROOT_TF_WORKFLOWS].sort());
+    // Independent of HAND_LISTED, so deleting a name from both lists still reds: a workflow that
+    // runs a repo script which itself plans or applies the root must be in the list.
+    // A repo script is reached from a workflow by:
+    //   - an interpreter (`bash`/`sh`, any flags before the path, e.g. `bash -e`, `bash -euo pipefail`),
+    //     also by an absolute path (`/bin/bash`, `/usr/bin/env bash`), or by `source` / `.`;
+    //   - directly as a command word: first on a `run:` line or block-scalar line (`run: ./apps/x.sh`,
+    //     `apps/x.sh …`), or after `&&`, `||`, `|`, `;`, `then`, `do` or `else`;
+    //   - in both shapes, after leading prefix words: `FOO=1`, `timeout [-flags] 600`, `env`, `exec`,
+    //     `sudo`, `nohup`, `time`, `command`;
+    // with an optional `./`, `${{ github.workspace }}/`, `$GITHUB_WORKSPACE/` or `${GITHUB_WORKSPACE}/`
+    // prefix (quoted or not). A YAML list item (`- apps/x.sh`, an on.push.paths filter) is not a call,
+    // `.sh ` in `bash a.sh b.sh` is not the `sh` interpreter, and `done. x.sh` is not `.`.
+    // A sourced library (tests/scripts/lib/*.sh) is read like any other script; it is not a planner
+    // unless it runs terraform plan/apply itself, so the planner check below still decides.
+    // RESIDUALS, not seen by this census: (1) a script reached THROUGH another script (only the
+    // script the workflow names is read, never what it runs or sources in turn); (2) a call inside
+    // `$( … )` or backticks, through xargs / find -exec / `bash -c "…"`, or through a variable
+    // (`"$SCRIPT"`); (3) a script outside apps/ scripts/ tests/ plugins/, or not named `*.sh`;
+    // (4) another interpreter (zsh, dash, python …) or a prefix word not listed above; (5) a
+    // planner phrase in a comment the line stripper keeps (stripLineComment tracks only double
+    // quotes, so a `#` after an unbalanced `"` survives) is matched: an over-count that reds loudly,
+    // never a miss; (6) a script that spells the terraform call other than `terraform [-chdir=…]
+    // plan|apply` is not a planner here: through a variable (`"$TF" plan`, `"${TF_BIN:-terraform}"
+    // apply`) or with the subcommand passed in (`terraform "$@"`, the shape the scope suite's A6
+    // `x-root.yml` row treats as a planner). cf-account-migrate.yml is pinned by name below
+    // whichever way its script spells it.
+    const PFX = String.raw`["']?(?:\$\{\{\s*github\.workspace\s*\}\}\/|\$\{?GITHUB_WORKSPACE\}?\/|\.\/)?`;
+    const REL = String.raw`((?:apps|scripts|tests|plugins)\/[\w./-]+\.sh)`;
+    const PREFIX_WORDS = String.raw`(?:(?:[A-Za-z_]\w*=\S*|timeout(?:[ \t]+-\S+)*[ \t]+\S+|env|exec|sudo|nohup|time|command)[ \t]+)*`;
+    const INTERP_CALL = new RegExp(
+      String.raw`(?<![\w./-])(?:(?:\/[\w.-]+)*\/)?(?:env[ \t]+(?:-\S+[ \t]+|[A-Za-z_]\w*=\S*[ \t]+)*)?(?:bash|sh|source|\.)[ \t]+(?:-[\w-]*o[ \t]+\w+[ \t]+|-[\w-]+[ \t]+)*` + PFX + REL,
+      "g",
+    );
+    const DIRECT_CALL = new RegExp(
+      String.raw`(?:^[ \t]*(?:(?:-[ \t]+)?run:[ \t]*)?|(?:&&|\|\|?|;|\b(?:then|do|else)\b)[ \t]*)` + PREFIX_WORDS + PFX + REL,
+      "gm",
+    );
+    const scriptCalls = (t: string): string[] =>
+      [...new Set([...t.matchAll(INTERP_CALL), ...t.matchAll(DIRECT_CALL)].map(([, rel]) => rel))];
+    // Non-vacuity: every accepted spelling is seen, and the near-misses are not.
+    expect(scriptCalls("run: bash apps/a.sh")).toEqual(["apps/a.sh"]);
+    expect(scriptCalls("run: bash -e apps/a.sh")).toEqual(["apps/a.sh"]);
+    expect(scriptCalls("run: bash -euo pipefail ./scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: bash -o pipefail scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: sh ./scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("      - run: ./apps/a.sh --phase x")).toEqual(["apps/a.sh"]);
+    expect(scriptCalls("        apps/web-platform/infra/scripts/a.sh plan")).toEqual(["apps/web-platform/infra/scripts/a.sh"]);
+    expect(scriptCalls('run: bash "$GITHUB_WORKSPACE/apps/a.sh"')).toEqual(["apps/a.sh"]);
+    expect(scriptCalls('      - run: "${GITHUB_WORKSPACE}/tests/a.sh"')).toEqual(["tests/a.sh"]);
+    expect(scriptCalls("run: bash ${{ github.workspace }}/plugins/a.sh")).toEqual(["plugins/a.sh"]);
+    expect(scriptCalls("run: /bin/bash scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: /usr/bin/env bash -e scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: source scripts/lib.sh")).toEqual(["scripts/lib.sh"]);
+    expect(scriptCalls('          source "${GITHUB_WORKSPACE}/tests/scripts/lib/gate.sh"')).toEqual(["tests/scripts/lib/gate.sh"]);
+    expect(scriptCalls("          . ./scripts/lib.sh")).toEqual(["scripts/lib.sh"]);
+    expect(scriptCalls("run: FOO=1 ./scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: FOO=1 BAR=x timeout 600 ./scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: timeout -k 5 600 bash scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: cd x && ./scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: true; apps/a.sh")).toEqual(["apps/a.sh"]);
+    expect(scriptCalls("run: if true; then FOO=1 apps/a.sh; fi")).toEqual(["apps/a.sh"]);
+    expect(scriptCalls("      - apps/a.sh")).toEqual([]);
+    expect(scriptCalls("run: bash scripts/a.sh apps/b.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: echo done. scripts/a.sh")).toEqual([]);
+    expect(scriptCalls("run: x/bin/bash scripts/a.sh")).toEqual([]);
+    const scriptPlanners = readdirSync(dir)
+      .filter((f) => f.endsWith(".yml"))
+      .filter((f) => {
+        const t = stripComments(readFileSync(join(dir, f), "utf8"));
+        const rootInWorkflow = MAIN_ROOT_FORMS.some((re) => re.test(t));
+        return scriptCalls(t).some((rel) => {
+          const sp = join(REPO_ROOT, rel);
+          if (!existsSync(sp)) return false;
+          const st = stripComments(readFileSync(sp, "utf8"));
+          // The root may be named by the workflow (INFRA_DIR), the script, or the script's own home.
+          const namesRoot = rootInWorkflow || rel.startsWith("apps/web-platform/infra/")
+            || /apps\/web-platform\/infra(?![\w\/-])/.test(st);
+          return /terraform\s+(-chdir=\S+\s+)?(plan|apply)\b/.test(st) && namesRoot;
+        });
+      });
+    for (const f of scriptPlanners) expect(MAIN_ROOT_TF_WORKFLOWS).toContain(f);
+    expect(scriptPlanners).toContain("cf-account-migrate.yml");
   });
 
   // ─── Inline pin-load arm (follower retired, #8211 PR2 / ADR-237 D6 amendment) ───────
@@ -5342,12 +5429,19 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
   // Rule shape mirrors cloudflare-readonly.sh's config-entrypoint projection. Each refusal prints exactly one ::error::
   // line led by its bracketed tag, and no fixture byte outside the fixed tags reaches stdout/stderr.
   const SEO_RULESET_ID = "a21ac79d368f425a95c895c43a090d57";
-  test("B10: the preflight's pinned ruleset id is the entrypoint id seo-config-rules.tf imports", () => {
+  // #12931 (ADR-329): seo-config-rules.tf no longer imports this entrypoint; it lives in the moved legacy zone and
+  // the migration CREATES the new zone's entrypoint (a new id). Until PR2 re-pins RULESET_ID to that id, the pin stays the
+  // legacy id, so after the CF_ZONE_ID flip the preflight refuses [ruleset-id] (fail closed). The runbook owns the re-pin.
+  test("B10: the preflight's pinned ruleset id is the legacy entrypoint until the #12931 re-pin, and the runbook owns it", () => {
     const tf = readFileSync(join(REPO_ROOT, "apps/web-platform/infra/seo-config-rules.tf"), "utf8");
     const imp = /^import \{\n(?:.*\n)*?\s*to\s*=\s*cloudflare_ruleset\.seo_config_settings\n(?:.*\n)*?\s*id\s*=\s*"zone\/\$\{var\.cf_zone_id\}\/([0-9a-f]{32})"/m.exec(tf);
     const libId = /^RULESET_ID="([0-9a-f]{32})"$/m.exec(readFileSync(join(REPO_ROOT, PREFLIGHT_LIB), "utf8"));
-    expect(imp?.[1], "the seo-config-rules.tf import id").toBe(SEO_RULESET_ID);
+    const runbook = readFileSync(join(REPO_ROOT, "knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md"), "utf8");
+    // An import block, if one returns, must carry the pinned id (the pre-#12931 property).
+    if (imp) expect(imp[1], "the seo-config-rules.tf import id").toBe(libId?.[1]);
     expect(libId?.[1], "the preflight's RULESET_ID").toBe(SEO_RULESET_ID);
+    expect(runbook, "the runbook re-pin step names the preflight lib").toContain("tests/scripts/lib/inngest-public-sdk-url-preflight.sh");
+    expect(runbook, "the runbook re-pin step names RULESET_ID").toMatch(/re-pin[^\n]*`RULESET_ID`|`RULESET_ID`[^\n]*re-pin/);
   });
   test("B10: the preflight passes only a strict host-wide last app-host rule no later ssl rule can override, and names each refusal", () => {
     const lib = join(REPO_ROOT, PREFLIGHT_LIB);
@@ -6991,11 +7085,13 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(allTf).not.toMatch(/from\s*=\s*doppler_secret\.zot_heartbeat_url_prd\b/);
   });
 
-  test("bot management declares the live SBFM values and does not ignore them", () => {
+  // #12931 (ADR-329): SBFM fields are Pro-only and the Soleur-account zone is Free, so each is
+  // "allow" exactly when var.cf_zone_plan_pro and null otherwise — still declared, never ignored.
+  test("bot management declares the live SBFM values (Pro-gated) and does not ignore them", () => {
     const res = block(tf("bot-management.tf"), /^resource\s+"cloudflare_bot_management"\s+"soleur_ai"\s*\{/m);
     expect(res).toMatch(/^\s*fight_mode\s*=\s*false\s*$/m); // non-vacuity
-    expect(res).toMatch(/^\s*sbfm_definitely_automated\s*=\s*"allow"\s*$/m);
-    expect(res).toMatch(/^\s*sbfm_verified_bots\s*=\s*"allow"\s*$/m);
+    expect(res).toMatch(/^\s*sbfm_definitely_automated\s*=\s*var\.cf_zone_plan_pro\s*\?\s*"allow"\s*:\s*null\s*$/m);
+    expect(res).toMatch(/^\s*sbfm_verified_bots\s*=\s*var\.cf_zone_plan_pro\s*\?\s*"allow"\s*:\s*null\s*$/m);
     // Declared, not ignored: a dashboard flip to "block" must stay visible as drift.
     expect(res).not.toMatch(/ignore_changes/);
   });

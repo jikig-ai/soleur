@@ -5243,3 +5243,22 @@ AFFECTED_TESTS_SCRIPTS_RELAY_INNGEST_WRITE_TOKEN_12158_PATHS=(
   "tests/scripts/test-relay-inngest-write-token-12158.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
+
+# tests/scripts/cf-account-migration-bootstrap — the #12931 Doppler bootstrap suite, which finds bootstrap.sh
+# by glob (CTO ruling D11); the glob also matches the spec directory after archive-kb moves it.
+AFFECTED_TESTS_SCRIPTS_CF_ACCOUNT_MIGRATION_BOOTSTRAP_PATHS=(
+  "glob:knowledge-base/project/specs/*feat-one-shot-12931-cf-account-migration/bootstrap.sh"  # real read: the script under test
+  "plugins/soleur/scripts/lib/operator-script.sh"
+  "plugins/soleur/hooks/operator-stage-approval.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-cf-account-migration-bootstrap.sh"
+)
+# tests/scripts/cf-account-migration-runbook — runbook-content assertions for #12931 (CTO rulings D4, D5).
+AFFECTED_TESTS_SCRIPTS_CF_ACCOUNT_MIGRATION_RUNBOOK_PATHS=(
+  "knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md"  # real read: the runbook text
+  "glob:knowledge-base/project/specs/*feat-one-shot-12931-cf-account-migration/bootstrap.sh"  # real read: the stage table
+  "plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-cf-account-migration-runbook.sh"
+)

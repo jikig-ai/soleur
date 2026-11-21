@@ -6787,6 +6787,13 @@ if want_scripts; then
   # allow-sets fail closed). Registered HERE for the same reason as the rung2 and
   # inngest-provision entries above: nothing auto-discovers tests/scripts/.
   run_suite "tests/scripts/cf-lb-overlay-gate" bash tests/scripts/test-cf-lb-overlay-gate.sh
+  run_suite "tests/scripts/cf-account-migrate-gate" bash tests/scripts/test-cf-account-migrate-gate.sh
+  run_suite "tests/scripts/cf-account-migration-scope" bash tests/scripts/test-cf-account-migration-scope.sh
+  # (#12931, CTO rulings D11, D3-D5) The migration's Doppler bootstrap suite (stub doppler, real
+  # approval hook; it finds bootstrap.sh in the spec directory by glob, before and after
+  # archive-kb) and the runbook's text contract.
+  run_suite "tests/scripts/cf-account-migration-bootstrap" bash tests/scripts/test-cf-account-migration-bootstrap.sh
+  run_suite "tests/scripts/cf-account-migration-runbook" bash tests/scripts/test-cf-account-migration-runbook.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
   # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
   # host-key option anywhere in the tree), its mutation harness, and the track.sh
