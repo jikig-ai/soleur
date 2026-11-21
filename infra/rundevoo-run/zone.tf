@@ -35,3 +35,10 @@ import {
 resource "cloudflare_zone_dnssec" "rundevoo_run" {
   zone_id = cloudflare_zone.rundevoo_run.id
 }
+
+# Same one-time adoption as the record import blocks in dns.tf — DNSSEC was
+# enabled live by the first post-merge apply before its state save failed.
+import {
+  to = cloudflare_zone_dnssec.rundevoo_run
+  id = "4a16c6fcd6949d1887d6247f95a0d91e"
+}
