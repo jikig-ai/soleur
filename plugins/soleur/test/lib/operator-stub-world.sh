@@ -198,9 +198,19 @@ case "$1 ${2:-}" in
   "auth status"|"secret list"|"variable list"|"repo view"|"pr view"|"pr list"|"issue view"|"issue list")
     stub_log gh read "$@"; exit 0 ;;
   # `gh run list` reads run state (the #12931 bootstrap's run-in-flight refusal asks it before a
-  # Doppler write). It answers an empty run list, so no run is in flight in the stub world.
+  # Doppler write). Only the shape that refusal sends gets an answer: a named --workflow and
+  # --json status. That answer is an empty run list, so no run is in flight in the stub world.
+  # Any other shape exits 64 (the vendor-shape rule above).
   "run list")
-    stub_log gh read "$@"; printf '[]\n'; exit 0 ;;
+    stub_log gh read "$@"
+    wf=""; js=""; i=3
+    while (( i <= $# )); do
+      j=$((i+1))
+      case "${!i}" in --workflow) wf="${!j:-}" ;; --json) js="${!j:-}" ;; esac
+      i=$((i+1))
+    done
+    [[ -n "$wf" && "$wf" != -* && "$js" == status ]] || stub_refuse "$@"
+    printf '[]\n'; exit 0 ;;
 esac
 # default-deny: secret delete, variable set|delete, workflow run, pr merge, release create,
 # repo edit ... are all MUTATING and refused.
