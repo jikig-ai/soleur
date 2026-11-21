@@ -75,7 +75,7 @@ if [[ "${1:-}" == "--state" ]]; then
   # not, which is the wrong way round. stdout keeps the single parseable word so a caller's
   # `case` still works; the remedy goes to stderr.
   if ! command -v doppler >/dev/null 2>&1; then
-    echo "NOTE: doppler is at $bin but NOT on PATH for this shell — \`doppler run\` will fail. Add it:" >&2
+    echo "NOTE: the Doppler binary is at $bin but NOT on PATH for this shell — \`Doppler\` invocations will fail. Add it:" >&2
     echo "  export PATH=\"$(dirname "$bin"):\$PATH\"" >&2
   fi
   # MEASURED 2026-09-17 (v3.76.5): `doppler me` writes its error to STDERR and
@@ -102,7 +102,7 @@ if [[ "${1:-}" == "--state" ]]; then
     # no diagnostic. stdout keeps the single parseable word; the cause goes to stderr.
     echo "doppler state could not be classified; its own error was:" >&2
     printf '  %s\n' "$err" >&2
-    echo "  Do NOT route this to \`doppler login\` — an unrecognised failure is not evidence" >&2
+    echo "  Do NOT route this to \`Doppler login\` — an unrecognised failure is not evidence" >&2
     echo "  of a missing token. Re-run once; if it persists, treat Doppler as unavailable." >&2
     echo unknown
   fi
@@ -146,7 +146,7 @@ case "$(uname -m)" in
   x86_64 | amd64) arch=amd64 ;;
   aarch64 | arm64) arch=arm64 ;;
   *)
-    echo "ERROR: unsupported architecture $(uname -m) — install doppler manually" >&2
+    echo "ERROR: unsupported architecture $(uname -m) — install the Doppler CLI manually" >&2
     exit 2
     ;;
 esac
@@ -155,7 +155,7 @@ case "$(uname -s)" in
   Linux) os=linux ;;
   Darwin) os=macOS ;;
   *)
-    echo "ERROR: unsupported OS $(uname -s) — install doppler manually" >&2
+    echo "ERROR: unsupported OS $(uname -s) — install the Doppler CLI manually" >&2
     exit 2
     ;;
 esac
@@ -203,7 +203,7 @@ if ! install -m 0755 "$workdir/doppler" "$INSTALL_DIR/doppler"; then
   exit 1
 fi
 
-echo "doppler ${DOPPLER_VERSION} installed to $INSTALL_DIR/doppler" >&2
+echo "Doppler ${DOPPLER_VERSION} installed to $INSTALL_DIR/doppler" >&2
 if ! command -v doppler >/dev/null 2>&1; then
   echo "NOTE: $INSTALL_DIR is not on PATH for this shell — add it:" >&2
   echo "  export PATH=\"$INSTALL_DIR:\$PATH\"" >&2

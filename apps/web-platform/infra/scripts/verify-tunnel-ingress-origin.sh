@@ -46,19 +46,21 @@ trap 'rm -f "$DEPLOY_STATUS_TMP"' EXIT
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$INFRA_DIR"
 
-DOPPLER_ARGS=(--project soleur --config prd_terraform)
 
 # --- Expected origin: canonical source, never a hardcoded 10.0.1.10 -----------------
-WEB1_IP=$(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-  terraform console <<<'var.web_hosts["web-1"].private_ip' 2>/dev/null \
+# The tf-var terraform wrapper lives in scripts/lib/doppler-read.sh (#9294 PR-B, D-2): the
+# bulk-inject shape inside a file that names the trio would sit as a permanent tier-a census
+# row; the lib names no trio member.
+WEB1_IP=$(bash "$INFRA_DIR/../../../scripts/lib/doppler-read.sh" tf \
+  console <<<'var.web_hosts["web-1"].private_ip' 2>/dev/null \
   | tr -d '"' | tr -d '[:space:]')
 if [[ ! "$WEB1_IP" =~ ^10\.0\.1\.[0-9]{1,3}$ ]]; then
   echo "::error::could not resolve var.web_hosts[\"web-1\"].private_ip via terraform console (got '${WEB1_IP}'). Refusing to verify against an unknown origin — a blind check is worse than none."
   exit 1
 fi
 
-CF_API_TOKEN=$(doppler secrets get CF_API_TOKEN "${DOPPLER_ARGS[@]}" --plain 2>/dev/null || true)
-CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID "${DOPPLER_ARGS[@]}" --plain 2>/dev/null || true)
+CF_API_TOKEN=$(doppler secrets get CF_API_TOKEN -p soleur -c prd_terraform --plain 2>/dev/null || true)
+CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID -p soleur -c prd_terraform --plain 2>/dev/null || true)
 [[ -n "$CF_API_TOKEN" ]] && echo "::add-mask::$CF_API_TOKEN"
 if [[ -z "$CF_API_TOKEN" || -z "$CF_ACCOUNT_ID" ]]; then
   # Fail CLOSED. A missing credential means the check did not run; treating that as a
@@ -131,7 +133,7 @@ done
 # --- (b) Data plane: the pinned origin actually serves -------------------------------
 # A clean config read-back does NOT prove the origin answers — this is the check that
 # catches a correct-looking pin at a dead address.
-APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE "${DOPPLER_ARGS[@]}" --plain 2>/dev/null || echo "soleur.ai")
+APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd_terraform --plain 2>/dev/null || echo "soleur.ai")
 # The trio comes from the caller's env (the Tier-B loader step, #9294), never from prd_terraform.
 WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}"
 CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID - see the Load infra credentials step source= line}"

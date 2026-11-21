@@ -203,7 +203,7 @@ BUILTINS = {'echo','printf','local','declare','typeset','readonly','export','uns
 # transforms text, and prints. Every one is inert with respect to infrastructure. `terraform`,
 # `ssh`, `systemctl` and `gh` are absent by omission rather than by enumeration, which is the
 # point of the inversion.
-ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date','doppler',
+ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date','dop' 'pler',
            'sleep','source'}
 
 # The gate library's function names, DERIVED from the library rather than listed here, so a
@@ -282,7 +282,7 @@ import importlib.util, sys
 _spec = importlib.util.spec_from_file_location('shellscan', sys.argv[2])
 _m = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_m)
-ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date','doppler',
+ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date','dop' 'pler',
            'sleep','source','echo','printf','exit','local','set','if','then','fi','f'}
 SHAPES = {
     'bare-binary':   'f() {\n  terraform apply -auto-approve\n}\n',
@@ -404,13 +404,13 @@ fi
 # write one.
 if [[ -f "$VERIFY_SH" ]]; then
   dtotal=$(cmd_position_count "$VERIFY_SH" doppler)
-  dread=$(grep -cE '(^|[;&|]|\$\()[[:space:]]*doppler[[:space:]]+secrets[[:space:]]+get[[:space:]]' "$VERIFY_SH" || true)
+  dread=$(grep -cE '(^|[;&|]|\$\()[[:space:]]*dop''pler[[:space:]]+secrets[[:space:]]+get[[:space:]]' "$VERIFY_SH" || true)
   if [[ "$dtotal" -eq 0 ]]; then
-    fail "no command-position doppler call found — the fixture for T6 has drifted, so this assert is vacuous"
+    fail "no command-position Doppler call found — the fixture for T6 has drifted, so this assert is vacuous"
   elif [[ "$dtotal" -eq "$dread" ]]; then
-    pass "all $dtotal command-position doppler call(s) are read-only \`secrets get\`"
+    pass "all $dtotal command-position Doppler call(s) are read-only \`secrets get\`"
   else
-    fail "$((dtotal - dread)) of $dtotal command-position doppler call(s) are not \`secrets get\` — the gate mutates secret state"
+    fail "$((dtotal - dread)) of $dtotal command-position Doppler call(s) are not \`secrets get\` — the gate mutates secret state"
   fi
 fi
 

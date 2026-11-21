@@ -117,6 +117,11 @@ jobs:
 
       - name: Run sweeper
         env:
+          # #9294 PR-B (D-1): this arm explicitly skips every tracker whose
+          # `secrets=` names a deploy-channel credential — the trio left this
+          # job's env when the binds below were removed; the
+          # `sweep-deploy-channel` job serves them.
+          FT_ARM: sweep
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
@@ -132,11 +137,12 @@ jobs:
           # A directive that names a secret absent from this block is commented on
           # by the sweeper and reds the run; that is the intended reading, not noise.
           SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
-          # #6178 inngest-soak-6178.sh and #10548 sdk-bash-smoke-verdict-10548.sh — GET /hooks/deploy-status
-          # (HMAC + CF-Access). The probes of four closed trackers were retired by G1 PR-4a (#10937; history in git).
-          WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          # The deploy-webhook credentials (HMAC + CF-Access, #10548
+          # sdk-bash-smoke-verdict-10548.sh — GET /hooks/deploy-status) moved to
+          # the `sweep-deploy-channel` job below (#9294 PR-B); they are no
+          # longer named in this arm by design. The probes of four closed
+          # trackers were retired by G1 PR-4a (#10937; history in git), and the
+          # #6178 soak probe retired with PR-B itself.
           # #5934 chardevice-wedge-nonrecurrence-5934.sh (and #5110 betterstack-
           # quota-verdict, and #6931 web2-luks-live-6931.sh) — Better Stack Telemetry read creds for scripts/
           # betterstack-query.sh (mirror Doppler soleur/prd_terraform). If these GH
@@ -183,6 +189,39 @@ jobs:
           # probe running and TRANSIENTing.
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          bash scripts/sweep-followthroughs.sh
+
+  # #9294 PR-B (D-1): the deploy-channel arm of the sweeper partition. A
+  # tracker whose `secrets=` is a non-empty subset of the deploy-channel trio
+  # set runs HERE — the only arm whose job env can carry them, bound to the
+  # main-only `deploy-channel` environment and fed by the narrow loader (never
+  # a `secrets.<trio>` bind). A `secrets=` mixing trio and non-trio names is
+  # skipped by BOTH arms and reds this job via the coverage assertion. Same
+  # checkout shape as `sweep` (fetch-depth: 0 for the ccla probe's pickaxe,
+  # persist-credentials: false so no ambient credential survives `env -i`).
+  sweep-deploy-channel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: deploy-channel
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Load deploy-channel credentials
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-project: soleur-deploy-channel
+          doppler-token-deploy-channel: ${{ secrets.DOPPLER_TOKEN_DEPLOY_CHANNEL }}
+
+      - name: Run sweeper (deploy-channel arm)
+        env:
+          FT_ARM: deploy-channel
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
         run: |
           set -euo pipefail
           bash scripts/sweep-followthroughs.sh

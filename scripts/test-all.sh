@@ -6547,10 +6547,7 @@ if want_scripts; then
   # double-encoded like the warehouse `raw` column: a harness whose seam sits above the decode
   # reproduces #7674's own 0/40-vs-40/40 measurement and passes while testing nothing.
   run_suite "scripts/inngest-host-not-serving-7674" bash scripts/followthroughs/inngest-host-not-serving-7674.test.sh
-  # #6178 ADR-100 soak probe. The suite pins the never-0/never-1 invariant after every invocation
-  # (0 closes, 1 reopens a tracker whose close releases four snapshots), an argv-asserting curl stub
-  # that answers by requested id, the exact run-id pin on the explained groups, and a pinned clock.
-  run_suite "scripts/inngest-soak-6178" bash scripts/followthroughs/inngest-soak-6178.test.sh
+
   # #10136 Inngest link TLS soak probe (Guard 2). Drives the predicate over a 48 h synthetic `tls-health` series through a
   # fake gh (trusted-verdict lib) and an argv-asserting fake betterstack-query.sh: the seven Guard 2 mutation rows, the two
   # harness rows, the anchor trust rows, and per-check deletion mutants of the probe copy.

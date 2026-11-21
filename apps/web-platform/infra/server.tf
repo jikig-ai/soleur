@@ -222,6 +222,10 @@ locals {
     # large (~6.8 KB) for cloud-init user_data (32,768-byte cap; already ~29.6 KB). The
     # running host gets it byte-for-byte from terraform_data.cosign_trusted_root below.
     "cosign-trusted-root.json",
+    # The bulk prd env-file fetch soleur-doppler-download calls (#9294 PR-B, D-2): split out of
+    # the bootstrap heredoc so the bulk-read line lives in a file that names no deploy-channel
+    # credential. Installed suffix-less as /usr/local/bin/soleur-doppler-fetch.
+    "soleur-doppler-fetch.sh",
     # Vector shipper config (#6396) — baked so the ungated web-host Vector install
     # (soleur-host-bootstrap.sh authors /usr/local/bin/soleur-vector-install, run fail-open
     # at end-of-cloud-init) can render + install it to /etc/vector/vector.toml. Carries the

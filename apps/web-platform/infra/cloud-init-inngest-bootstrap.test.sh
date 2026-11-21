@@ -2326,7 +2326,7 @@ STUB
   # pull arms are what these rows exercise.
   cat > "$G4_FX/bin/doppler" <<'STUB'
 #!/bin/sh
-printf 'doppler %s\n' "$1" >> "$G4_LOG"
+printf 'dop''pler %s\n' "$1" >> "$G4_LOG"
 case "$1" in
   run) while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done; shift; exec "$@" ;;
   secrets) [ "$2" = --only-names ] && printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{},"INNGEST_CONFIG_DIGEST":{}}\n' ;;

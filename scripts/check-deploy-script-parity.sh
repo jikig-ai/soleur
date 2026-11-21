@@ -197,8 +197,8 @@ if [[ "$BS_ARM" -eq 1 ]]; then
   if [[ -n "$BS_ROWS_FILE" ]]; then
     rows="$(<"$BS_ROWS_FILE")"
   else
-    command -v doppler >/dev/null || { echo "FATAL: BS arm needs doppler (or --bs-rows-file)" >&2; exit 1; }
-    rows="$(doppler run --preserve-env -p soleur -c prd_terraform -- bash "$ROOT/scripts/betterstack-query.sh" \
+    command -v doppler >/dev/null || { echo "FATAL: BS arm needs the Doppler CLI (or --bs-rows-file)" >&2; exit 1; }
+    rows="$(bash "$ROOT/scripts/lib/doppler-read.sh" bs bash "$ROOT/scripts/betterstack-query.sh" \
       --since "$SINCE" --grep DEPLOY_SCRIPT_SHA --limit "$LIMIT" 2>/dev/null)" \
       || { echo "FATAL: betterstack-query.sh failed under doppler" >&2; exit 1; }
   fi

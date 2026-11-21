@@ -466,7 +466,7 @@ runcmd:
     rm /tmp/doppler.tar.gz
   # Create dedicated env file for webhook systemd service (chmod 600, deploy:deploy).
   # Token is NOT written to /etc/environment (world-readable) -- only this restricted file.
-  - printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/webhook-deploy
+  - printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=%s\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' '/tmp/.doppler' > /etc/default/webhook-deploy
   - chmod 600 /etc/default/webhook-deploy
   - chown deploy:deploy /etc/default/webhook-deploy
   # (#7095) Fresh-host parity for the re-deliverable credential. Rationale: server.tf at

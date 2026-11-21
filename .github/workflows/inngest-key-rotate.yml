@@ -395,6 +395,10 @@ jobs:
       contents: read
       actions: read
       issues: write
+    # #9294 PR-B: the trio rides the main-only deploy-channel environment; the
+    # narrow loader exports WEBHOOK_DEPLOY_SECRET / CF_ACCESS_CLIENT_{ID,SECRET}
+    # to job env below — no `secrets.<trio>` bind remains.
+    environment: deploy-channel
     env:
       # The fan-out roster for the redeploy (track.sh `peers`). Pinned to var.web_hosts by
       # apps/web-platform/infra/web-hosts-fanout-parity.test.sh; an empty value would redeploy web-1 alone.
@@ -405,9 +409,15 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Load deploy-channel credentials
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-project: soleur-deploy-channel
+          doppler-token-deploy-channel: ${{ secrets.DOPPLER_TOKEN_DEPLOY_CHANNEL }}
+
       # KR_REDEPLOY_STEP_S / 60 (the 4800 s pipeline ceiling plus the step slack, so the step never dies at the instant track.sh gives
-      # up). Holds the deploy webhook trio only. The EFF_BOOT_* / EFF_POST_EPOCH / EFF_VERIFIED_AT values are the reboot job's
-      # MEASURED evidence, carried into the printed record.
+      # up). Reads the deploy webhook trio ambiently from the deploy-channel loader. The EFF_BOOT_* / EFF_POST_EPOCH / EFF_VERIFIED_AT
+      # values are the reboot job's MEASURED evidence, carried into the printed record.
       - name: Fleet redeploy (canary then prod)
         timeout-minutes: 85
         env:
@@ -419,9 +429,6 @@ jobs:
           EFF_POST_EPOCH: ${{ needs.reboot.outputs.post_epoch }}
           EFF_VERIFIED_AT: ${{ needs.reboot.outputs.verified_at }}
           GH_TOKEN: ${{ github.token }}
-          WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: bash scripts/inngest-key-rotate.sh redeploy
 
   # The last job. A job that is cancelled (a pending job-level concurrency slot is replaced when a newer job queues behind the

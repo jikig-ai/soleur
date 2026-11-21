@@ -41,16 +41,23 @@ jobs:
     concurrency:
       group: deploy-inngest-restart
       cancel-in-progress: false
+    # #9294 PR-B: the trio rides the main-only deploy-channel environment; the
+    # narrow loader exports WEBHOOK_DEPLOY_SECRET / CF_ACCESS_CLIENT_{ID,SECRET}
+    # to job env below — no `secrets.<trio>` bind remains. The push registration
+    # trigger is main-only, so the main-only branch policy admits it and the
+    # job-level `if:` still no-ops the op.
+    environment: deploy-channel
     steps:
       # #6407 (code-review Finding B): check out the repo so the restart-poll classifier
       # helper (scripts/inngest-restart-poll-classify.sh) is on disk for the Verify step
       # to source via $GITHUB_WORKSPACE.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Load deploy-channel credentials
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-project: soleur-deploy-channel
+          doppler-token-deploy-channel: ${{ secrets.DOPPLER_TOKEN_DEPLOY_CHANNEL }}
       - name: Trigger restart via webhook
-        env:
-          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           # The signature and the Cloudflare Access pair reach curl on its stdin config (ADR-280, #9597), and the
@@ -58,7 +65,7 @@ jobs:
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
           PAYLOAD='{"command":"restart inngest _ latest"}'
           # shellcheck disable=SC2034  # read by NAME inside bc_curl (indirect expansion)
-          SIGNATURE="$(printf '%s' "$PAYLOAD" | bc_hmac_sha256_hex WEBHOOK_SECRET)" || SIGNATURE=""
+          SIGNATURE="$(printf '%s' "$PAYLOAD" | bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET)" || SIGNATURE=""
           HTTP_CODE=$(bc_curl restart-inngest-server 'X-Signature-256:sha256=:SIGNATURE' 'CF-Access-Client-Id::CF_ACCESS_CLIENT_ID' \
             'CF-Access-Client-Secret::CF_ACCESS_CLIENT_SECRET' -- \
             -s -o /dev/null -w '%{http_code}' \
@@ -83,10 +90,6 @@ jobs:
           echo "Restart initiated (HTTP 202), polling status..."
 
       - name: Verify restart completion
-        env:
-          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           # #6407 (Finding B): pure per-frame classifier + budget-expiry adjudicators
@@ -97,7 +100,7 @@ jobs:
           # Credentials ride curl's stdin config through the shared library, never an argument list (ADR-280, #9597).
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
           # shellcheck disable=SC2034  # read by NAME inside bc_curl (indirect expansion)
-          SIGNATURE="$(bc_hmac_sha256_hex WEBHOOK_SECRET < /dev/null)" || SIGNATURE=""
+          SIGNATURE="$(bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET < /dev/null)" || SIGNATURE=""
           # Client window must exceed ci-deploy.sh's server-side verify worst
           # case (#5145). Verify gates on /health (process liveness); the
           # cron-plan check is advisory (crons re-arm async via redeploy or the
@@ -238,7 +241,7 @@ jobs:
             # load-bearing (a cold-start empty registry must NOT confirm).
             rm -f /tmp/liveness-body
             # shellcheck disable=SC2034  # read by NAME inside bc_curl (indirect expansion)
-            LIVE_SIG="$(bc_hmac_sha256_hex WEBHOOK_SECRET < /dev/null)" || LIVE_SIG=""
+            LIVE_SIG="$(bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET < /dev/null)" || LIVE_SIG=""
             LIVE_CODE=$(bc_curl restart-inngest-server 'X-Signature-256:sha256=:LIVE_SIG' 'CF-Access-Client-Id::CF_ACCESS_CLIENT_ID' \
               'CF-Access-Client-Secret::CF_ACCESS_CLIENT_SECRET' -- \
               -s --max-time 10 -o /tmp/liveness-body -w '%{http_code}' \

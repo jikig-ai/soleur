@@ -297,7 +297,7 @@ row_json() { # $1 host, $2 host_name, $3 SYSLOG_IDENTIFIER, $4 message
 evlog_row() { # $1 = the text an issue body quotes; builds shape (a): a doppler event-log row
   local msg
   msg="$(jq -cn --arg b "$1" '{caller: "api", event: {name: "github/issues.closed", data: {action: "closed", issue: {number: 8833}, body: $b}}}')"
-  row_json soleur-inngest soleur-inngest-prd doppler "$msg"
+  row_json soleur-inngest soleur-inngest-prd 'dop''pler' "$msg"
 }
 # (a) quoting prose with NO server_active=/http_code= token: the incident as it happened live.
 R_EVLOG_BARE="$(evlog_row $'verdict: `probe-unavailable`\n\nno SOLEUR_INNGEST_SERVER_PROBE row from soleur-inngest-prd within 3h, or the read failed.')"
@@ -317,7 +317,7 @@ arm_case "#8846 R_OK then an event-log row QUOTING not-serving tokens is healthy
 # not-serving tokens. The live event-log rows above are JSON, so the ANCHOR alone rejects them; this
 # is the ONLY row that needs the EMITTER clause. An anchor-only select reads it as the newest probe
 # row and grades not-serving (kills: select(inngest_probe_row) -> select(.message|startswith(marker))).
-R_FORGED="$(row_json soleur-inngest soleur-inngest-prd doppler 'SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=inactive cutover_flag=done boot_id=0')"
+R_FORGED="$(row_json soleur-inngest soleur-inngest-prd 'dop''pler' 'SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=inactive cutover_flag=done boot_id=0')"
 arm_case "#8846 R_OK then a FORGED doppler row that begins with the marker is healthy (emitter clause)" "$(fx "$R_OK" "$R_FORGED")" "healthy"
 # CONTROL: an event-log row alone is no probe row at all — probe-unavailable before and after.
 arm_case "#8846 control: an event-log row alone is probe-unavailable" "$(fx "$R_EVLOG_BARE")" "probe-unavailable"

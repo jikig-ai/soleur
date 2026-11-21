@@ -22,17 +22,23 @@ permissions:
 jobs:
   read-canary-status:
     runs-on: ubuntu-latest
+    # #9294 PR-B: the trio rides the main-only deploy-channel environment; the
+    # narrow loader exports WEBHOOK_DEPLOY_SECRET / CF_ACCESS_CLIENT_{ID,SECRET}
+    # to job env below — no `secrets.<trio>` bind remains.
+    environment: deploy-channel
     steps:
       - name: Checkout (for scripts/lib/bearer-curl.sh)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
 
+      - name: Load deploy-channel credentials
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-project: soleur-deploy-channel
+          doppler-token-deploy-channel: ${{ secrets.DOPPLER_TOKEN_DEPLOY_CHANNEL }}
+
       - name: Read /hooks/deploy-status .sandbox_canary
-        env:
-          WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           set -uo pipefail
           : "${WEBHOOK_DEPLOY_SECRET:?}" "${CF_ACCESS_CLIENT_ID:?}" "${CF_ACCESS_CLIENT_SECRET:?}"

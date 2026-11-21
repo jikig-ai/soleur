@@ -395,7 +395,7 @@ kr_hash() {
   local proj name h
   case "$1" in host) proj="$KR_HOST_PROJECT" ;; app) proj="$KR_APP_PROJECT" ;; *) return 2 ;; esac
   name="$(kr_secret_name "$2")" || return 2
-  h="$(DOPPLER_TOKEN="${DOPPLER_TOKEN_TF:-}" doppler secrets get "$name" --plain -p "$proj" -c "$KR_COPY_CONFIG" 2>/dev/null | sha256sum | cut -c1-64)" || return 1
+  h="$(DOPPLER_TOKEN="${DOPPLER_TOKEN_TF:-}" bash "$KR_ROOT/scripts/lib/doppler-read.sh" hash "$proj" "$KR_COPY_CONFIG" "$name" 2>/dev/null)" || return 1
   [[ "$h" =~ ^[0-9a-f]{64}$ && "$h" != "$KR_EMPTY_SHA" ]] || return 1
   printf '%s' "$h"
 }
@@ -436,8 +436,8 @@ kr_tf() {
   shift
   ( cd "$KR_INFRA_DIR" && env -u TF_LOG -u TF_LOG_PATH -u TF_LOG_CORE -u TF_LOG_PROVIDER TF_IN_AUTOMATION=1 \
       timeout --kill-after=30 "${KR_TF_T:-$KR_TF_PLAN_S}" \
-      doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-      terraform "$@" > "$KR_TMP/tf-${name}.out" 2> "$KR_TMP/tf-${name}.err" ) || rc=$?
+      bash "$KR_ROOT/scripts/lib/doppler-read.sh" tf \
+      "$@" > "$KR_TMP/tf-${name}.out" 2> "$KR_TMP/tf-${name}.err" ) || rc=$?
   return "$rc"
 }
 

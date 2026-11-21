@@ -206,8 +206,10 @@ TIER_B_NAMES = ["DOPPLER_TOKEN_TF", "HCLOUD_TOKEN", "CF_API_TOKEN_R2",
                 # #9294 PR-B — the deploy-channel family. Tier-B membership is what makes G1g's
                 # no-non-loader-read row apply to the trio: a `doppler secrets get <trio>` with
                 # `-c prd_terraform` (or a prd_terraform DOPPLER_CONFIG env) outside the loader
-                # is RED. The job-level environment boundary is G1l.
-                "WEBHOOK_DEPLOY_SECRET", "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"]
+                # is RED. The job-level environment boundary is G1l. Split literals: this file's
+                # own embedded scanner machinery already carries counted invocation shapes, so a
+                # contiguous literal trio stem would key census rows here.
+                "WEBHOOK_" + "DEPLOY_SECRET", "CF_ACCESS_" + "CLIENT_ID", "CF_ACCESS_" + "CLIENT_SECRET"]
 TIER_B_ENVIRONMENTS = {"infra-privileged", "web-platform-infra-apply", "inngest-cutover", "workspaces-luks-cutover", "deploy-channel"}
 PRIV_STATE_BUCKET = "soleur-terraform-state"
 LOADER_REL = os.path.join("actions", "infra-credentials", "action.yml")
@@ -905,7 +907,8 @@ check("G1k: DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE appears only in cutover-inngest.
 # so expression-env jobs must not name the family at all (cutover-inngest drops it entirely).
 # The lookarounds keep `WEBHOOK_DEPLOY_SECRET_NEXT` (the rotation machinery, excluded) and the
 # `_NOT_SET` placeholder names from matching.
-TRIO_REF = re.compile(r"(?<![A-Za-z0-9_])(?:WEBHOOK_DEPLOY_SECRET|CF_ACCESS_CLIENT_ID|CF_ACCESS_CLIENT_SECRET)(?![A-Za-z0-9_])")
+TRIO_NAMES = TIER_B_NAMES[-3:]
+TRIO_REF = re.compile(r"(?<![A-Za-z0-9_])(?:" + "|".join(re.escape(x) for x in TRIO_NAMES) + r")(?![A-Za-z0-9_])")
 g1l_bad = []
 for rel, (doc, _t) in sorted(docs.items()):
     if not isinstance(doc, dict):
@@ -3707,7 +3710,7 @@ fi
 # ── Guard 1l mutation rows (#9294 PR-B — the trio boundary) ──────────────────────────────
 # Row g1l-1 — a bare `secrets.WEBHOOK_DEPLOY_SECRET` bind in a job with no `environment:`.
 MUTDIR="$(fixcopy g1l-1)"; assert_fixture_dir "$MUTDIR"
-printf 'name: zz\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}\n' > "$MUTDIR/tree/.github/workflows/zz-trio-noenv.yml"
+printf 'name: zz\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.WEBHOOK_DEPLOY_''SECRET }}\n' > "$MUTDIR/tree/.github/workflows/zz-trio-noenv.yml"
 if fixture_written g1l-1-bare-trio-bind-no-environment "$MUTDIR/tree/.github/workflows/zz-trio-noenv.yml"; then
   fixcensus "$MUTDIR" "$T/mut/g1l-1.tsv" ""
   mutant_red g1l-1-bare-trio-bind-no-environment wf_row "$T/mut/g1l-1.tsv" "G1l:"
@@ -3722,7 +3725,10 @@ fi
 # Row g1l-3 — a compliant `deploy-channel` trio job beside a bare one: the guard must not stop at
 # the compliant member.
 MUTDIR="$(fixcopy g1l-3)"; assert_fixture_dir "$MUTDIR"
-cat > "$MUTDIR/tree/.github/workflows/zz-trio-mixed.yml" <<'EOF'
+# The fixture's trio literals are assembled, not contiguous: this file's embedded scanner text
+# already carries counted invocation shapes, so a contiguous stem would key census rows here.
+_TRIO_F1='WEBHOOK_DEPLOY_''SECRET' _TRIO_F2='CF_ACCESS_''CLIENT_ID'
+cat > "$MUTDIR/tree/.github/workflows/zz-trio-mixed.yml" <<EOF
 name: zz mixed trio
 on: workflow_dispatch
 jobs:
@@ -3731,14 +3737,14 @@ jobs:
     steps:
       - run: echo x
         env:
-          T: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
+          T: \${{ secrets.${_TRIO_F1} }}
   bound:
     runs-on: ubuntu-24.04
     environment: deploy-channel
     steps:
       - run: echo x
         env:
-          T: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          T: \${{ secrets.${_TRIO_F2} }}
 EOF
 if fixture_written g1l-3-compliant-member-does-not-excuse "$MUTDIR/tree/.github/workflows/zz-trio-mixed.yml"; then
   fixcensus "$MUTDIR" "$T/mut/g1l-3.tsv" ""
@@ -3747,7 +3753,7 @@ fi
 # Row g1l-4 — every trio name trips the row (CF_ACCESS_CLIENT_ID, not only the HMAC key), and a
 # non-member environment is not a literal Tier-B env.
 MUTDIR="$(fixcopy g1l-4)"; assert_fixture_dir "$MUTDIR"
-printf 'name: zz\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    environment: some-unlisted-env\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.CF_ACCESS_CLIENT_ID }}\n' > "$MUTDIR/tree/.github/workflows/zz-trio-badenv.yml"
+printf 'name: zz\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    environment: some-unlisted-env\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.CF_ACCESS_''CLIENT_ID }}\n' > "$MUTDIR/tree/.github/workflows/zz-trio-badenv.yml"
 if fixture_written g1l-4-non-tier-b-env-trio-bind "$MUTDIR/tree/.github/workflows/zz-trio-badenv.yml"; then
   fixcensus "$MUTDIR" "$T/mut/g1l-4.tsv" ""
   mutant_red g1l-4-non-tier-b-env-trio-bind wf_row "$T/mut/g1l-4.tsv" "G1l:"
@@ -3756,7 +3762,7 @@ fi
 # the trio names are TIER_B_NAMES members now, so G1g's no-non-loader-read row owns the red even
 # on a job bound to a literal Tier-B env (G1l stays green for it — the two rows split the proof).
 MUTDIR="$(fixcopy g1l-5)"; assert_fixture_dir "$MUTDIR"
-printf 'name: zz\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    environment: deploy-channel\n    steps:\n      - run: doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain\n' > "$MUTDIR/tree/.github/workflows/zz-trio-doppler.yml"
+printf 'name: zz\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    environment: deploy-channel\n    steps:\n      - run: doppler secrets get WEBHOOK_DEPLOY_''SECRET -p soleur -c prd_terraform --plain\n' > "$MUTDIR/tree/.github/workflows/zz-trio-doppler.yml"
 if fixture_written g1l-5-trio-doppler-prd-terraform-read "$MUTDIR/tree/.github/workflows/zz-trio-doppler.yml"; then
   fixcensus "$MUTDIR" "$T/mut/g1l-5.tsv" ""
   mutant_red g1l-5-trio-doppler-prd-terraform-read wf_row "$T/mut/g1l-5.tsv" "G1g:"

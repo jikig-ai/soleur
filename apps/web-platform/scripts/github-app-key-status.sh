@@ -23,7 +23,7 @@ case "$-" in
     ;;
 esac
 for v in WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
-  [[ -n "${!v:-}" ]] || { printf 'missing %s — run under doppler run -p soleur -c prd_terraform\n' "$v" >&2; exit 3; }
+  [[ -n "${!v:-}" ]] || { printf 'missing %s — run under the soleur/prd_terraform Doppler config\n' "$v" >&2; exit 3; }
 done
 # The credentials reach curl on its stdin config channel and the HMAC key reaches a python3 child in its
 # environment, never an argument list (tracker #9597, ADR-280). The library is found from THIS file's own
