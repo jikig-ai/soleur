@@ -646,6 +646,9 @@ expect_red "P3 set +e before a privileged run: | line" \
 expect_red "P4 decoy echo step before a privileged step masked with if: false" \
   "sudo step for sandbox-masked-proc-docker.test.sh carries" \
   sed -i "s#^        run: sudo bash ${SMP}\$#        run: echo decoy\n      - run: echo sudo bash ${SMP}\n      - name: real\n        if: false\n        run: sudo bash ${SMP}#" "$SB/$WF_REL"
+expect_red "P5 single-line privileged run: continued onto a deeper line (YAML folds || true in)" \
+  "continues its single-line" \
+  sed -i "s#^\(        run: sudo bash ${SMP}\)\$#\1\n          || true#" "$SB/$WF_REL"
 }
 
 # H22: a local composite action invoking the suite (the scan covers .github/actions/**).
@@ -688,7 +691,8 @@ restore_wf; restore_runner
 # rows, plus the pre-existing 32): measured on the green run that added them.
 # 65 -> 104 with the round-2 allowlist rows (H1..H27 incl. H5b/H14b/H16b-d = 32, P1..P4, and
 # 3 GREEN rows = 39): measured on the green run that added them.
-MIN_ASSERTS=104
+# 104 -> 105 with P5 (verification pass: a plain-scalar continuation line on the sudo step).
+MIN_ASSERTS=105
 if (( asserts < MIN_ASSERTS )); then
   echo "[FAIL] assertion floor: only $asserts assertion(s) ran, expected >= $MIN_ASSERTS." >&2
   echo "       Rows were removed or short-circuited. Lower the floor deliberately, with a reason." >&2

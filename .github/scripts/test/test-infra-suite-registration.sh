@@ -21,8 +21,13 @@
 #      unprivileged runner — the derive-but-do-not-execute contract from #7076) must
 #      each be `sudo bash`-invoked inside `deploy-script-tests-fixed`, as a whole command
 #      line (not an `echo`, not `… || true`), in a step with no `if:`/`continue-on-error:`/
-#      `shell:`/`set +e`. The exclusion waives the RUNNER, never the invocation. (Not
-#      allowlisted like item 5: the fixed job is a shared battery whose steps change often.)
+#      `shell:`/`set +e`, and no plain-scalar continuation line after a single-line `run:`
+#      (YAML folds it into the command). The exclusion waives the RUNNER, never the
+#      invocation. (Not allowlisted like item 5: the fixed job is a shared battery whose steps
+#      change often.) RESIDUALS, stated so a later shape inside them is "covered by item 3":
+#      inside a multi-line `run: |` block, other lines of the same step can still neutralise
+#      the command (a `trap 'exit 0' EXIT`, an `if false; then … fi` wrapper, a `sudo()`
+#      function); those steps are reviewed as code, not pinned here.
 #   4. `deploy-script-tests-done` must exist and need both legs (and every dedicated
 #      job, below) — it is the single verdict `notify-main-failure` reads.
 #   5. The DEDICATED set (#12941, CTO Q25: suites that cannot ride a ship battery) is
@@ -556,6 +561,16 @@ while IFS= read -r base; do
     _prow=$(awk -v RS='      - ' -v pat="$_prec" '$0 ~ pat {print; exit}' <<< "$FIXED_NC")
     if grep -qE '^[[:space:]]+shell:|set[[:space:]]+\+e' <<< "$_prow"; then
       err "the \`$FIXED_JOB\` sudo step for $base masks its exit (\`shell:\` or \`set +e\`)."
+      fails=$((fails + 1))
+    fi
+    # A single-line `run: sudo bash <path>` followed by a DEEPER-indented line is a YAML
+    # plain-scalar continuation: `    || true` on the next line folds into the command.
+    if awk -v pat="^[[:space:]]+run:[[:space:]]+${priv_re}[[:space:]]*$" '
+         hit { n = match($0, /[^ ]/); if (n > ind && $0 !~ /^[[:space:]]*$/) { bad = 1 } ; hit = 0 }
+         $0 ~ pat { hit = 1; ind = match($0, /run:/) }
+         END { exit bad ? 0 : 1 }' <<< "$FIXED_NC"; then
+      err "the \`$FIXED_JOB\` sudo step for $base continues its single-line \`run:\` onto the"
+      err "  next line (a YAML plain-scalar continuation folds e.g. \`|| true\` into the command)."
       fails=$((fails + 1))
     fi
   fi
