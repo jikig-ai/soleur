@@ -136,7 +136,7 @@ If this fails (no network, or "No commits between main and <branch>"), print a w
 **Step 0d: Initialize the tally.** In the worktree: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (each parsed `--max-*`), `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds`, `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds` — `STOP` on the gate → budget-capped exit.
 
 <!-- run-health-emit:start -->
-**Run health.** After step 0d and on every return path, read [run-health-schema.md](./references/run-health-schema.md) and run its `bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-health-emit.sh"` lines, including `--seal`.
+**Run health.** After step 0d and on every return path, read [run-health-schema.md](${CLAUDE_PLUGIN_ROOT}/skills/one-shot/references/run-health-schema.md) and run its `bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-health-emit.sh"` lines, including `--seal`.
 <!-- run-health-emit:end -->
 
 **Steps 1-2: Plan + Deepen (Isolated Subagent)**

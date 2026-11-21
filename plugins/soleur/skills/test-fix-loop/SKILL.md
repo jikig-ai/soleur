@@ -26,7 +26,7 @@ Autonomous test-fix iteration loop. Run the test suite, diagnose failures, apply
 
 ## Run Health Emission
 
-Read [run-health-schema.md](../one-shot/references/run-health-schema.md). The consumer is `plugins/soleur/agents/engineering/review/session-forensics-analyst.md`. Emission is best-effort and never blocks the loop.
+Read [run-health-schema.md](${CLAUDE_PLUGIN_ROOT}/skills/one-shot/references/run-health-schema.md). The consumer is `plugins/soleur/agents/engineering/review/session-forensics-analyst.md`. Emission is best-effort and never blocks the loop.
 
 After the test command is known, set `RUN_DIR=".soleur/runs/<branch>-tfl-<utc>"` and snapshot that command (not this skill file):
 
