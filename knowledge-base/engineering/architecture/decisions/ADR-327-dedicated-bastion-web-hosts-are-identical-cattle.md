@@ -93,7 +93,7 @@ shipping `systemd-timesyncd`. The public noble cloud image ships it; Hetzner's i
 therefore also needs a runtime rehearsal of the first boot. `apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh`
 boots the rendered `bastion-cloud-init.yml` under real cloud-init, with systemd as PID 1, in privileged
 containers on the pinned `ubuntu:24.04` image. It runs in the `bastion-boot-rehearsal` job of
-`infra-validation.yml`. The plan is `knowledge-base/project/plans/2026-11-20-feat-bastion-runcmd-rehearsal-plan.md`.
+`infra-validation.yml`. The plan is `knowledge-base/project/plans/archive/20261123-002149-2026-11-20-feat-bastion-runcmd-rehearsal-plan.md`.
 
 - **The template installs every user its nftables rules name.** The `skuid` rows name `systemd-timesync`.
   The template did not install `systemd-timesyncd`, which owns that user, so its boot depended on the image
