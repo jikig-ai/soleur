@@ -1547,23 +1547,10 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // DO ride the per-PR -target list). The orphaned secret itself is destroyed by a bare per-merge
   // -target (#8754, pinned by the PR-B describe below), so it needs no exclusion.
   "doppler_service_token.registry",
-  // #6122 (ADR-096) — the CI-push ingress (CTO ruling 2026-07-06): CI reaches the private-net
-  // zot host via the EXISTING `web` Cloudflare Tunnel + a NEW dedicated CF Access service token,
-  // bridged with `cloudflared access tcp` (mirrors the SSH bridge). All operator-applied WITH the
-  // registry host (an unattended per-PR apply must not mint a push credential + DNS for a host
-  // that doesn't exist yet). The `..._config.web` ingress_rule EDIT rides the already-`-target`ed
-  // config resource (not a new resource).
-  // #12937 (Ruled by CTO agent, 2026-11-19): the two `doppler_secret.registry_push_access_token_{id,secret}`
-  // LEFT this list. They now read the Soleur-account `registry_push_soleur` token and are push-`-target`ed
-  // with the rest of the `_soleur` slice, which is NOT excluded either (an unattended merge apply is the
-  // route that re-homes it). Their old `ignore_changes = [value]` rested on "client_secret is
-  // empty-on-refresh" (#4492) — true ONLY for an IMPORTED token: provider 4.52.7's Read never clears
-  // client_secret for a Terraform-created one, so state survives refresh and the secrets follow their
-  // source in place. The old-account registry app/token/policy/record below stay operator-applied.
-  "cloudflare_zero_trust_access_application.registry",
-  "cloudflare_zero_trust_access_service_token.registry_push",
-  "cloudflare_zero_trust_access_policy.registry_push_service_token",
-  "cloudflare_record.registry",
+  // #6122's CI-push ingress (the registry Access app, token and policy, `cloudflare_record.registry` and
+  // the two `doppler_secret.registry_push_access_token_{id,secret}`) LEFT this list with #12937 (Ruled by
+  // CTO agent, 2026-11-23): they are per-merge `-target`ed like the deploy and ssh slices, and the routine
+  // deploy-policy gate refuses any create or replace of them, so ADR-329's tunnel phase is their only birth.
   // #6178 (ADR-100) — the dedicated Inngest singleton host. Same class as the registry/git-data
   // hosts: net-new host resources the per-PR CI `-target` path CANNOT provision (it bridges over
   // SSH to the EXISTING web host). All applied by the operator's full apply + the
@@ -8500,9 +8487,9 @@ function channelGuardViolations(wfText: string): string[] {
 }
 
 describe("ci_ssh_token_replace blast-radius gate refuses a widened ci_ssh policy", () => {
-  const POLICY = "cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur";
-  const TOKEN = "cloudflare_zero_trust_access_service_token.ci_ssh_soleur";
-  const APP = "cloudflare_zero_trust_access_application.ssh_soleur";
+  const POLICY = "cloudflare_zero_trust_access_policy.ci_ssh_service_token";
+  const TOKEN = "cloudflare_zero_trust_access_service_token.ci_ssh";
+  const APP = "cloudflare_zero_trust_access_application.ssh";
   const gate = (() => {
     const doc = parseYaml(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8")) as { jobs: Record<string, { steps: Array<Record<string, unknown>> }> };
     const step = doc.jobs.ci_ssh_token_replace.steps.find((s) => s.name === "Blast-radius gate (reads the PLAN, not the flags)");
@@ -8566,7 +8553,7 @@ describe("ci_ssh_token_replace blast-radius gate refuses a widened ci_ssh policy
     ["a type change", { type: "self_hosted" }],
     ["a domain change", { domain: "*.soleur.ai" }],
     ["a policies change", { policies: ["p1", "p2"] }],
-  ])("refuses an ssh_soleur app update with %s", (_label, change) => {
+  ])("refuses an ssh app update with %s", (_label, change) => {
     const r = run({ decision: "non_identity", include: [inc()] }, {}, { ...APP_NOW, ...(change as Record<string, unknown>) });
     expect(r.out).toContain(`${APP} widens past its token`);
     expect(r.rc).toBe(1);
@@ -11265,7 +11252,7 @@ describe("#10136 inngest link TLS: key material, merge targets, flag actuator", 
 // (rows, copies, hcl texts) so the mutation rows can feed synthetic inputs through the same code the real rows use.
 const KEY_ROTATE_WORKFLOW = resolve(REPO_ROOT, ".github/workflows/key-rotate.yml");
 const KEY_ROTATE_SCRIPT = resolve(REPO_ROOT, "scripts/key-rotate.sh");
-const KR_OUT_OF_SCOPE_RANDOM_IDS = ["tunnel_secret", "tunnel_secret_soleur", "inngest_signing_key_prd", "inngest_event_key_prd"]; // tunnel: ADR-307 amendment; the _prd pair is RETIRED state-only (#11293)
+const KR_OUT_OF_SCOPE_RANDOM_IDS = ["tunnel_secret", "inngest_signing_key_prd", "inngest_event_key_prd"]; // tunnel: ADR-307 amendment; the _prd pair is RETIRED state-only (#11293)
 
 interface KrRow { phase: string; key: string; address: string; flag: string; actions: string }
 interface KrCopy { key: string; project: string; config: string; name: string; address: string }

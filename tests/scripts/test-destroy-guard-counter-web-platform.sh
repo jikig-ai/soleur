@@ -1802,7 +1802,7 @@ _run_apply_halt_span() { # <fixture> <tfplan.txt> [mutate-sed-expr]
   chmod +x "$w/bin/doppler" "$w/bin/terraform"
   _with_deploy_policy < "$fixture" > "$w/plan.json"; cp "$txt" "$w/plan.txt"
   printf '%s\n' "$span" > "$w/span.sh"
-  # The deploy-policy gate reads tunnel.tf's committed _soleur id; these rows judge the HALTs, so the nil
+  # The deploy-policy gate reads tunnel.tf's committed deploy id; these rows judge the HALTs, so the nil
   # placeholder is filled in a workspace copy (a no-op once minted; test-deploy-access-token-forget.sh Q8 owns it).
   mkdir -p "$w/ws/apps/web-platform/infra"; ln -s "$REPO_ROOT/tests" "$w/ws/tests"
   sed 's/"00000000-0000-0000-0000-000000000000"/"00000000-0000-4000-8000-0000000000a1"/' \

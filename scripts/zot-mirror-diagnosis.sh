@@ -209,8 +209,8 @@ rejected it. A rotation did not propagate, and this is the one verdict on which 
 is the remedy.
 
 Terraform OWNS the 'prd' root copy: doppler_secret.registry_push_access_token_{id,secret}
-carry no ignore_changes and take their value from registry_push_soleur. Rotate by bumping
-client_secret_version on cloudflare_zero_trust_access_service_token.registry_push_soleur in
+carry no ignore_changes and take their value from registry_push. Rotate by bumping
+client_secret_version on cloudflare_zero_trust_access_service_token.registry_push in
 a PR and letting the merge apply write the new pair (cloudflare-service-token-rotation.md).
 Do NOT hand-set the 'prd' value: the next apply writes the state's value back over it.
 

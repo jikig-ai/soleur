@@ -74,11 +74,10 @@ if [[ -z "$CF_API_TOKEN" ]]; then
   exit 1
 fi
 
-# The tunnel the `_soleur` CNAMEs point at, and ITS account (#12937). Both come from the TF outputs
-# (tunnel.tf `cf_tunnel_id` / `cf_tunnel_account_id`, the same resource dns.tf's CNAMEs reference),
-# NOT from Doppler `CF_ACCOUNT_ID` (the pre-zone-move account, which no longer owns soleur.ai) and NOT
-# from the old `…tunnel_cloudflared.web` state address — after the 2026-11-18 zone move that tunnel
-# serves no hostname, so verifying it would certify a tunnel nothing routes to.
+# The tunnel the deploy./ssh./registry. CNAMEs point at, and ITS account (#12937). Both come from the
+# TF outputs (tunnel.tf `cf_tunnel_id` / `cf_tunnel_account_id`, read off the `.web` resource dns.tf's
+# CNAMEs reference), NOT from Doppler `CF_ACCOUNT_ID`: state says which tunnel the records route to, so
+# a Doppler id flipped ahead of ADR-329's tunnel phase cannot point this check at another account.
 TUNNEL_ID=$(terraform output -raw cf_tunnel_id 2>/dev/null || true)
 TUNNEL_ACCOUNT_ID=$(terraform output -raw cf_tunnel_account_id 2>/dev/null || true)
 if [[ ! "$TUNNEL_ID" =~ ^[0-9a-fA-F-]{36}$ ]]; then

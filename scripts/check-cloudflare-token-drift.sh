@@ -1696,7 +1696,7 @@ else
     fi
     if (( _dead_tf )); then
       echo "REGISTRY_PUSH_ACCESS_TOKEN_* is written to 'prd' BY Terraform: rotate it by bumping"
-      echo "client_secret_version on registry_push_soleur in a PR and applying"
+      echo "client_secret_version on registry_push in a PR and applying"
       echo "(cloudflare-service-token-rotation.md). Do NOT hand-set the 'prd' value."
     fi
     # The previous line here read "Set the live value on the 'prd' ROOT config; branch

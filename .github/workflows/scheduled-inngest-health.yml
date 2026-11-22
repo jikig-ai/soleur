@@ -1583,10 +1583,10 @@ jobs:
           # prd_terraform holds CF_API_TOKEN (Tunnel scope). Read via Doppler rather than
           # duplicating it into GH Actions secrets: two copies of a credential drift, and
           # `secrets.DOPPLER_TOKEN` is already the read-only token for this config. The ACCOUNT is
-          # NOT Doppler's CF_ACCOUNT_ID (#12937): since the 2026-11-18 soleur.ai zone move the tunnel
-          # lives in the zone-owning Soleur account, whose id is the one constant
-          # CF_TUNNEL_ACCOUNT_ID in scripts/tunnel-connector-census.sh (parity-tested against
-          # tunnel.tf local.cf_soleur_account_id). CF_ACCOUNT_ID stays the old account for #12931.
+          # NOT Doppler's CF_ACCOUNT_ID (#12937): ADR-329's tunnel phase puts the tunnel on the
+          # zone-owning Soleur account, whose id is the one constant CF_TUNNEL_ACCOUNT_ID in
+          # scripts/tunnel-connector-census.sh (parity-tested against CFAM_NEW_ACCOUNT_ID in
+          # tests/scripts/lib/cf-account-migrate-gate.sh). Before that phase this reads census_unavailable.
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail

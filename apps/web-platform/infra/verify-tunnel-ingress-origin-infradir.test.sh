@@ -90,7 +90,7 @@ else
   fails=1
 fi
 
-# ─── #12937 Guard 3: the verify reads the tunnel the `_soleur` CNAMEs point at, and checks all three routes ───────────
+# ─── #12937 Guard 3: the verify reads the tunnel the CNAMEs point at, and checks all three routes ─────────────────────
 # Hermetic: stub doppler / terraform / curl / sleep on PATH, synthesized Cloudflare bodies, no network. The stubs log
 # every curl URL so a row can assert WHICH account and tunnel the script read (behavior, not a source grep).
 # The stubs read their answers with `printenv`, never a bash name indirection: test-trio-baseline-census.sh

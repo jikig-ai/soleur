@@ -92,10 +92,7 @@ PY
 IPS_EXPR="$(grep -E '^[[:space:]]*web_host_private_ips[[:space:]]*=[[:space:]]*join\(' "$INN" | sed -E 's/^[[:space:]]*web_host_private_ips[[:space:]]*=[[:space:]]*//')"
 eq "structure: inngest-host.tf derives web_host_private_ips from var.web_hosts (one assignment)" \
   "$(grep -cE '^[[:space:]]*web_host_private_ips[[:space:]]*=[[:space:]]*join\(",", \[for k in sort\(keys\(var\.web_hosts\)\) : var\.web_hosts\[k\]\.private_ip\]\)$' "$INN")" 1
-# `sort -u`: tunnel.tf holds TWO tunnel configs since the soleur.ai zone move (#12937: `_config.web` and
-# `_config.web_soleur`), each with an ssh. rule. Identical expressions collapse to one; a divergent one keeps
-# two lines and reds the eq below.
-JUMP_EXPR="$(grep -E '^[[:space:]]*service[[:space:]]*=[[:space:]]*"ssh://' "$TUN" | sed -E 's/^[[:space:]]*service[[:space:]]*=[[:space:]]*"ssh:\/\/\$\{(.*)\}:22"$/\1/' | sort -u)"
+JUMP_EXPR="$(grep -E '^[[:space:]]*service[[:space:]]*=[[:space:]]*"ssh://' "$TUN" | sed -E 's/^[[:space:]]*service[[:space:]]*=[[:space:]]*"ssh:\/\/\$\{(.*)\}:22"$/\1/')"
 eq "structure: the ssh. ingress targets the keyed jump host" "$JUMP_EXPR" 'one([for h in values(var.web_hosts) : h.private_ip if h.jump])'
 eq "structure: server.tf connector predicate is the keyed tunnel_connector field" \
   "$(grep -cE '^[[:space:]]*web_tunnel_connector[[:space:]]*=[[:space:]]*each\.value\.tunnel_connector[[:space:]]*$' "$SRV")" 1
@@ -218,7 +215,7 @@ IP_CEIL=318  # re-baselined at the origin/main merge (f6c475f15b): +9 from main'
 N_IP="$(count_lit '10\.0\.1\.10([^0-9]|$)')"
 cases=$((cases + 1))
 if [[ "$N_IP" -le "$IP_CEIL" && "$N_IP" -gt 0 ]]; then pass "ratchet: web-1 private-IP literal count $N_IP <= $IP_CEIL"; else fail "ratchet: web-1 private-IP literal count $N_IP exceeds the ceiling $IP_CEIL (or reads 0 - lower the ceiling to 0 deliberately)"; fi
-KEY_CEIL=420  # re-baselined at 4aadbe8109: +5 from main (host-private-ip.ts, exec-placement-forward test); unchanged at f6c475f15b; +4 at #12910 (ci-deploy.sh resolve_host_key inverts server.tf's web-1 name special case, the T1 collision fixture in host-identity.test.ts, two prod-shaped roster fixtures); +1 #12937 (tunnel.tf `_config.web_soleur` deploy. rule repeats `_config.web`'s origin expression until the old-account teardown drops one)
+KEY_CEIL=419  # re-baselined at 4aadbe8109: +5 from main (host-private-ip.ts, exec-placement-forward test); unchanged at f6c475f15b; +4 at #12910 (ci-deploy.sh resolve_host_key inverts server.tf's web-1 name special case, the T1 collision fixture in host-identity.test.ts, two prod-shaped roster fixtures)
 N_KEY="$(count_lit '"web-1"')"
 cases=$((cases + 1))
 if [[ "$N_KEY" -le "$KEY_CEIL" && "$N_KEY" -gt 0 ]]; then pass "ratchet: \"web-1\" literal count $N_KEY <= $KEY_CEIL"; else fail "ratchet: \"web-1\" literal count $N_KEY exceeds the ceiling $KEY_CEIL (or reads 0 - lower the ceiling to 0 deliberately)"; fi

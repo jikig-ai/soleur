@@ -469,27 +469,16 @@ jobs:
               -target=cloudflare_zero_trust_access_service_token.ci_ssh \
               -target=cloudflare_zero_trust_access_policy.ci_ssh_service_token \
               -target=cloudflare_notification_policy.service_token_expiry \
-              -target=random_id.tunnel_secret_soleur \
-              -target=cloudflare_zero_trust_tunnel_cloudflared.web_soleur \
-              -target=cloudflare_zero_trust_tunnel_cloudflared_config.web_soleur \
-              -target=cloudflare_zero_trust_access_application.deploy_soleur \
-              -target=cloudflare_zero_trust_access_policy.deploy_service_token_soleur \
-              -target=cloudflare_zero_trust_access_application.ssh_soleur \
-              -target=cloudflare_zero_trust_access_service_token.ci_ssh_soleur \
-              -target=cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur \
-              -target=cloudflare_zero_trust_access_application.registry_soleur \
-              -target=cloudflare_zero_trust_access_service_token.registry_push_soleur \
-              -target=cloudflare_zero_trust_access_policy.registry_push_service_token_soleur \
+              -target=cloudflare_zero_trust_access_application.registry \
+              -target=cloudflare_zero_trust_access_service_token.registry_push \
+              -target=cloudflare_zero_trust_access_policy.registry_push_service_token \
               -target=doppler_secret.registry_push_access_token_id \
               -target=doppler_secret.registry_push_access_token_secret \
-              -target=cloudflare_notification_policy.service_token_expiry_soleur \
               -target=cloudflare_zone_settings_override.soleur_ai \
               -target=cloudflare_record.app \
               -target=cloudflare_record.deploy \
               -target=cloudflare_record.ssh \
-              -target=cloudflare_record.deploy_soleur \
-              -target=cloudflare_record.ssh_soleur \
-              -target=cloudflare_record.registry_soleur \
+              -target=cloudflare_record.registry \
               -target=cloudflare_record.dkim_resend \
               -target=cloudflare_record.spf_send \
               -target=cloudflare_record.mx_send \
@@ -992,7 +981,7 @@ jobs:
           fi
 
       - name: Sync CF Access CI-SSH service token to Doppler
-        # Publishes the ci_ssh_soleur outputs to Doppler (#4177) with the write token.
+        # Publishes the ci_ssh outputs to Doppler (#4177) with the write token.
         if: steps.doppler_write_check.outputs.skip_sync != 'true'
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -6292,9 +6281,9 @@ jobs:
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=${CI_SSH_PUB}" \
-              -target=cloudflare_zero_trust_access_service_token.ci_ssh_soleur \
-              -target=cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur \
-              -replace=cloudflare_zero_trust_access_service_token.ci_ssh_soleur 2>&1 | tf_redact_random_ids
+              -target=cloudflare_zero_trust_access_service_token.ci_ssh \
+              -target=cloudflare_zero_trust_access_policy.ci_ssh_service_token \
+              -replace=cloudflare_zero_trust_access_service_token.ci_ssh 2>&1 | tf_redact_random_ids
 
       - name: Blast-radius gate (reads the PLAN, not the flags)
         working-directory: ${{ env.INFRA_DIR }}
@@ -6316,13 +6305,13 @@ jobs:
               if c["change"]["actions"] not in (["no-op"], ["read"])
           ]
 
-          REPLACE_TARGET = "cloudflare_zero_trust_access_service_token.ci_ssh_soleur"
+          REPLACE_TARGET = "cloudflare_zero_trust_access_service_token.ci_ssh"
           # An allowlist (a prefix blacklist misses module-nested addresses). The ssh app is listed because
           # -target pulls it in transitively (the policy references it); omitting it fails the remedy closed.
           ALLOWED = {
               REPLACE_TARGET,
-              "cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur",
-              "cloudflare_zero_trust_access_application.ssh_soleur",
+              "cloudflare_zero_trust_access_policy.ci_ssh_service_token",
+              "cloudflare_zero_trust_access_application.ssh",
           }
 
           failed = False

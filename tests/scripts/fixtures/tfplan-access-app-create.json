@@ -3,10 +3,10 @@
   "terraform_version": "1.17.2",
   "resource_changes": [
     {
-      "address": "cloudflare_zero_trust_access_application.deploy_soleur",
+      "address": "cloudflare_zero_trust_access_application.deploy",
       "mode": "managed",
       "type": "cloudflare_zero_trust_access_application",
-      "name": "deploy_soleur",
+      "name": "deploy",
       "provider_name": "registry.terraform.io/cloudflare/cloudflare",
       "change": {
         "actions": [
@@ -14,7 +14,6 @@
         ],
         "before": null,
         "after": {
-          "account_id": "a",
           "allow_authenticate_via_warp": null,
           "allowed_idps": null,
           "app_launcher_logo_url": null,
@@ -47,9 +46,11 @@
           "skip_interstitial": false,
           "tags": null,
           "target_criteria": [],
-          "type": "self_hosted"
+          "type": "self_hosted",
+          "zone_id": "z"
         },
         "after_unknown": {
+          "account_id": true,
           "aud": true,
           "cors_headers": [],
           "destinations": [],
@@ -59,8 +60,7 @@
           "landing_page_design": [],
           "saas_app": [],
           "scim_config": [],
-          "target_criteria": [],
-          "zone_id": true
+          "target_criteria": []
         },
         "before_sensitive": false,
         "after_sensitive": {
@@ -75,10 +75,10 @@
       }
     },
     {
-      "address": "cloudflare_zero_trust_access_application.registry_soleur",
+      "address": "cloudflare_zero_trust_access_application.registry",
       "mode": "managed",
       "type": "cloudflare_zero_trust_access_application",
-      "name": "registry_soleur",
+      "name": "registry",
       "provider_name": "registry.terraform.io/cloudflare/cloudflare",
       "change": {
         "actions": [
@@ -86,7 +86,6 @@
         ],
         "before": null,
         "after": {
-          "account_id": "a",
           "allow_authenticate_via_warp": null,
           "allowed_idps": null,
           "app_launcher_logo_url": null,
@@ -119,9 +118,11 @@
           "skip_interstitial": false,
           "tags": null,
           "target_criteria": [],
-          "type": "self_hosted"
+          "type": "self_hosted",
+          "zone_id": "z"
         },
         "after_unknown": {
+          "account_id": true,
           "aud": true,
           "cors_headers": [],
           "destinations": [],
@@ -131,8 +132,7 @@
           "landing_page_design": [],
           "saas_app": [],
           "scim_config": [],
-          "target_criteria": [],
-          "zone_id": true
+          "target_criteria": []
         },
         "before_sensitive": false,
         "after_sensitive": {
@@ -147,10 +147,10 @@
       }
     },
     {
-      "address": "cloudflare_zero_trust_access_application.ssh_soleur",
+      "address": "cloudflare_zero_trust_access_application.ssh",
       "mode": "managed",
       "type": "cloudflare_zero_trust_access_application",
-      "name": "ssh_soleur",
+      "name": "ssh",
       "provider_name": "registry.terraform.io/cloudflare/cloudflare",
       "change": {
         "actions": [
@@ -158,7 +158,6 @@
         ],
         "before": null,
         "after": {
-          "account_id": "a",
           "allow_authenticate_via_warp": null,
           "allowed_idps": null,
           "app_launcher_logo_url": null,
@@ -191,9 +190,11 @@
           "skip_interstitial": false,
           "tags": null,
           "target_criteria": [],
-          "type": "self_hosted"
+          "type": "self_hosted",
+          "zone_id": "z"
         },
         "after_unknown": {
+          "account_id": true,
           "aud": true,
           "cors_headers": [],
           "destinations": [],
@@ -203,8 +204,7 @@
           "landing_page_design": [],
           "saas_app": [],
           "scim_config": [],
-          "target_criteria": [],
-          "zone_id": true
+          "target_criteria": []
         },
         "before_sensitive": false,
         "after_sensitive": {
@@ -223,15 +223,12 @@
     "root_module": {
       "resources": [
         {
-          "address": "cloudflare_zero_trust_access_application.deploy_soleur",
+          "address": "cloudflare_zero_trust_access_application.deploy",
           "mode": "managed",
           "type": "cloudflare_zero_trust_access_application",
-          "name": "deploy_soleur",
+          "name": "deploy",
           "provider_config_key": "cloudflare",
           "expressions": {
-            "account_id": {
-              "constant_value": "a"
-            },
             "domain": {
               "constant_value": "deploy.example.com"
             },
@@ -243,20 +240,20 @@
             },
             "type": {
               "constant_value": "self_hosted"
+            },
+            "zone_id": {
+              "constant_value": "z"
             }
           },
           "schema_version": 0
         },
         {
-          "address": "cloudflare_zero_trust_access_application.registry_soleur",
+          "address": "cloudflare_zero_trust_access_application.registry",
           "mode": "managed",
           "type": "cloudflare_zero_trust_access_application",
-          "name": "registry_soleur",
+          "name": "registry",
           "provider_config_key": "cloudflare",
           "expressions": {
-            "account_id": {
-              "constant_value": "a"
-            },
             "domain": {
               "constant_value": "registry.example.com"
             },
@@ -268,20 +265,20 @@
             },
             "type": {
               "constant_value": "self_hosted"
+            },
+            "zone_id": {
+              "constant_value": "z"
             }
           },
           "schema_version": 0
         },
         {
-          "address": "cloudflare_zero_trust_access_application.ssh_soleur",
+          "address": "cloudflare_zero_trust_access_application.ssh",
           "mode": "managed",
           "type": "cloudflare_zero_trust_access_application",
-          "name": "ssh_soleur",
+          "name": "ssh",
           "provider_config_key": "cloudflare",
           "expressions": {
-            "account_id": {
-              "constant_value": "a"
-            },
             "domain": {
               "constant_value": "ssh.example.com"
             },
@@ -293,6 +290,9 @@
             },
             "type": {
               "constant_value": "self_hosted"
+            },
+            "zone_id": {
+              "constant_value": "z"
             }
           },
           "schema_version": 0
