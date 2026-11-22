@@ -587,6 +587,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_HEAD_VERDICT_TEST_SH_PATHS=(
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_CLOUDFLARE_READONLY_TEST_SH_PATHS=(
   "apps/web-platform/infra/seo-config-rules.tf"  # real read: snapshot pin counts rules{}/ssl= against the SUT header (#10479 drift pin)
+  "knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md"  # real read: the wrapper-to-recipe link row extracts the R2 recipe (#12846)
   "plugins/soleur/scripts/cloudflare-readonly.sh"  # SUT
   "plugins/soleur/test/cloudflare-readonly.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
@@ -630,6 +631,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST_DESTRUCTIVE_COMMAND_GUARD_MUTATION_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_RULES_TEST_SH_PATHS=(
   ".gitleaks.toml"  # plugins/soleur/test/gitleaks-rules.test.sh:2
   "plugins/soleur/test/gitleaks-rules.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_HEALTH_COLO_FALSIFICATION_TEST_SH_PATHS=(
+  "knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md"  # real read: the recipe and recorded-outputs marker blocks (CTO D3, #12846)
+  "plugins/soleur/test/fixtures/health-colo-falsification/"  # the synthetic base fixture every case patches
+  "plugins/soleur/test/health-colo-falsification.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_HOLD_GATE_EVAL_TEST_SH_PATHS=(
@@ -1615,10 +1622,13 @@ AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_REGEX_PARITY_PATHS=(
   ".github/workflows/apply-github-infra.yml"
   ".github/workflows/apply-sentry-infra.yml"
   ".github/workflows/apply-web-platform-infra.yml"
+  ".github/workflows/apply-rundevoo-infra.yml"
   "tests/scripts/test-destroy-guard-counter.sh"
   "tests/scripts/test-destroy-guard-counter-sentry.sh"
   "tests/scripts/test-destroy-guard-counter-web-platform.sh"
+  "tests/scripts/test-destroy-guard-counter-rundevoo.sh"
   "scripts/sentry-squash-ack-detect.sh"
+  "scripts/rundevoo-squash-ack-detect.sh"
   "tests/scripts/test-destroy-guard-regex-parity.sh"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
@@ -1957,6 +1967,48 @@ AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_COUNTER_SENTRY_PATHS=(
   "tests/scripts/fixtures/tfplan-sentry-real-baseline.json"
   "tests/scripts/lib/destroy-guard-filter-sentry.jq"
   "tests/scripts/test-destroy-guard-counter-sentry.sh"
+)
+
+# tests/scripts/destroy-guard-counter-rundevoo (#12971) — the counter suite's
+# subjects are the jq filter, the shipped counts script, and the apply
+# workflow whose gate pipeline it mirrors.
+AFFECTED_TESTS_SCRIPTS_DESTROY_GUARD_COUNTER_RUNDEVOO_PATHS=(
+  ".github/workflows/apply-rundevoo-infra.yml"
+  "scripts/rundevoo-destroy-counts.sh"
+  "tests/scripts/lib/destroy-guard-filter-rundevoo.jq"
+  "tests/scripts/test-destroy-guard-counter-rundevoo.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# tests/scripts/rundevoo-destroy-gate-verdict — subjects are the verdict
+# script and the aggregator job that calls it.
+AFFECTED_TESTS_SCRIPTS_RUNDEVOO_DESTROY_GATE_VERDICT_PATHS=(
+  ".github/workflows/apply-rundevoo-infra.yml"
+  "scripts/rundevoo-destroy-gate-verdict.sh"
+  "tests/scripts/test-rundevoo-destroy-gate-verdict.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# tests/scripts/rundevoo-squash-ack-detect — subjects are the squash-body
+# emulator and the workflow gate that calls it.
+AFFECTED_TESTS_SCRIPTS_RUNDEVOO_SQUASH_ACK_DETECT_PATHS=(
+  ".github/workflows/apply-rundevoo-infra.yml"
+  "scripts/rundevoo-squash-ack-detect.sh"
+  "tests/scripts/test-rundevoo-squash-ack-detect.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
+)
+
+# tests/scripts/rundevoo-dns-set-equality — subjects are the probe script,
+# the drift leg that invokes it, the zone.tf import block the zone id is
+# derived from, and the shared bearer helper it sources.
+AFFECTED_TESTS_SCRIPTS_RUNDEVOO_DNS_SET_EQUALITY_PATHS=(
+  ".github/workflows/apply-rundevoo-infra.yml"
+  ".github/workflows/scheduled-terraform-drift.yml"
+  "apps/cla-evidence/scripts/_cf-admin-token.sh"
+  "infra/rundevoo-run/"
+  "scripts/rundevoo-dns-set-equality.sh"
+  "tests/scripts/test-rundevoo-dns-set-equality.sh"
+  "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
 
 # tests/scripts/host-image-coherence-preflight — derived edges could not reach its subject; declared from the
@@ -5170,6 +5222,16 @@ AFFECTED_APPS_WEB_PLATFORM_INFRA_INNGEST_LUKS_SOLE_COPY_PATHS=(
 
 
 
+# scripts/health-colo-capture-12846 (#12846): the probe names the runbook it sends the operator to, so a runbook edit
+# re-runs the suite; the suite also drives the real trusted-verdict lib.
+AFFECTED_SCRIPTS_HEALTH_COLO_CAPTURE_12846_PATHS=(
+  "knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md"  # the probe cites its Deadline paragraph
+  "scripts/followthroughs/health-colo-capture-12846.sh"  # SUT
+  "scripts/followthroughs/health-colo-capture-12846.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+  "scripts/lib/trusted-verdict.sh"  # the suite drives the REAL lib through a gh shim
+)
+
 # scripts/host-tcp-exposure (#12008): reads every Terraform file in the infra directory as TEXT (no host, no
 # network); a change to any of them can move the declared-design verdict, which the argv self-edge and the
 # name-stem convention cannot reach.
@@ -5206,4 +5268,23 @@ AFFECTED_TESTS_SCRIPTS_RELAY_INNGEST_WRITE_TOKEN_12158_PATHS=(
   "scripts/cutover-inngest.sh"
   "tests/scripts/test-relay-inngest-write-token-12158.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
+
+# tests/scripts/cf-account-migration-bootstrap — the #12931 Doppler bootstrap suite, which finds bootstrap.sh
+# by glob (CTO ruling D11); the glob also matches the spec directory after archive-kb moves it.
+AFFECTED_TESTS_SCRIPTS_CF_ACCOUNT_MIGRATION_BOOTSTRAP_PATHS=(
+  "glob:knowledge-base/project/specs/*feat-one-shot-12931-cf-account-migration/bootstrap.sh"  # real read: the script under test
+  "plugins/soleur/scripts/lib/operator-script.sh"
+  "plugins/soleur/hooks/operator-stage-approval.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-cf-account-migration-bootstrap.sh"
+)
+# tests/scripts/cf-account-migration-runbook — runbook-content assertions for #12931 (CTO rulings D4, D5).
+AFFECTED_TESTS_SCRIPTS_CF_ACCOUNT_MIGRATION_RUNBOOK_PATHS=(
+  "knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md"  # real read: the runbook text
+  "glob:knowledge-base/project/specs/*feat-one-shot-12931-cf-account-migration/bootstrap.sh"  # real read: the stage table
+  "plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-cf-account-migration-runbook.sh"
 )

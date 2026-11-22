@@ -26,6 +26,12 @@
 #                     weight 1 (the 0→1 flip, or a no-op re-proof against live {1,1}) and
 #                     runs the §(c) gate chain fail-closed BEFORE plan
 #
+# LB GATE (#12931). Every arm `needs: lb_enabled_gate`, which refuses with ::error:: —
+# before any credential, terraform or Cloudflare call — while cf_load_balancing_enabled
+# defaults to false in apps/web-platform/infra/variables.tf (cf_lb_gate_lb_enabled in
+# tests/scripts/lib/cf-lb-overlay-gate.sh). Since the Soleur-account move the GA addresses
+# are count = 0 and Load Balancing is deferred on that account.
+#
 # Authorization model: per-command operator go-ahead at dispatch (the epic's fresh
 # named authorization), plus per-arm confirm literals (typo-guards, NOT the
 # authorization) and `environment:` gates (infra-privileged = main-only; the GA arm
@@ -85,9 +91,26 @@ env:
   PROBE_LOG: /tmp/lb-staging-continuity.log
 
 jobs:
+  # LB GATE (#12931): runs first on every dispatch and refuses while Load Balancing is gated
+  # off. No secrets, no environment, no terraform: the refusal costs nothing and needs no
+  # approval, and a refused dispatch never reaches an arm's environment gate.
+  lb_enabled_gate:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Refuse while Load Balancing is gated off (cf_load_balancing_enabled)
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/cf-lb-overlay-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/cf-lb-overlay-gate.sh"
+          cf_lb_gate_lb_enabled "${INFRA_DIR}/variables.tf"
+
   # Staging arms after #10479 get HTTP 526 on lb-staging.soleur.ai: see "EDGE TLS FOR THIS HOST" in apps/web-platform/infra/lb-staging/main.tf.
   staging_record:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'staging-record'
+    needs: lb_enabled_gate
     runs-on: ubuntu-24.04
     timeout-minutes: 20  # worst case ≈17min: ~5min init+plan+apply + 60×(5s curl+10s) settle ≤ ~12min
     environment: infra-privileged
@@ -190,6 +213,7 @@ jobs:
 
   staging_overlay:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'staging-overlay'
+    needs: lb_enabled_gate
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: infra-privileged
@@ -334,6 +358,7 @@ jobs:
 
   staging_teardown:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'staging-teardown'
+    needs: lb_enabled_gate
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: infra-privileged
@@ -443,6 +468,7 @@ jobs:
 
   ga_overlay:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-overlay'
+    needs: lb_enabled_gate
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # REVIEWER-GATED — same environment the rung2 dispatch and vector-redeliver ride:
@@ -558,6 +584,7 @@ jobs:
 
   ga_monitor_fix:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-monitor-fix'
+    needs: lb_enabled_gate
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # REVIEWER-GATED like ga-overlay: an update on the LIVE monitor is a prod write.
@@ -699,6 +726,7 @@ jobs:
 
   ga_monitor_https:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-monitor-https'
+    needs: lb_enabled_gate
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # REVIEWER-GATED like ga-overlay: an update on the LIVE monitor is a prod write. ADR-321 R7 (#10479): moves the
@@ -878,6 +906,7 @@ jobs:
 
   ga_pool_update:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-pool-update'
+    needs: lb_enabled_gate
     runs-on: ubuntu-24.04
     # Worst case ~28 min (Ruled by CTO agent, 2026-11-19, PR #12934 R6): setup + gate ~3, per-instance grader
     # 2 x 120 s, relay bind probe 3 x 120 s, init/plan/apply ~5, post-apply continuity 90 x (5 s curl + 1 s) = 9.

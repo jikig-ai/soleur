@@ -1655,3 +1655,7 @@ while the serve gate passed the roster. (§2's 120 s liveness figure is supersed
 
 Rejected options are recorded in
 [decision-challenges.md](../../../project/specs/archive/20261120-012010-feat-one-shot-12910-host-roster-lease-id/decision-challenges.md).
+
+## Addendum — 2026-11-19 (#12931): the GA load balancer is gated off on the new Cloudflare account
+
+The 2026-11-08 addendum above records web-2 serving at pool weight 1 behind `cloudflare_load_balancer.app`. That state does not survive the 2026-11-18 move of the `soleur.ai` zone to the Soleur Cloudflare account (ADR-329): the new account has no Load Balancing subscription, so the load balancer, its pool, its monitor and `cloudflare_notification_policy.web_lb_health` are count-gated by `var.cf_load_balancing_enabled` (default `false`), their old-account state entries are forgotten by the migration, and `cf-lb-overlay.yml` refuses while the flag is false. `app.soleur.ai` is served from its plain proxied A record, so every request and every Inngest step call lands on web-1; web-2 serves no public traffic and holds only the tunnel connector (ADR-304). `var.web2_lb_weight` and the serve/drain arms are dormant, not deleted. Re-enabling is an operator money decision, tracked by #12983. The flag is locked to `false` by a `variables.tf` validation, so turning it on is a reviewed PR that deletes that validation; when it happens the pool is re-created in the new account and the §(c) gate chain and the 2026-11-08 operational rules apply again from a fresh create.

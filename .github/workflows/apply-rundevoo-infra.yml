@@ -1,0 +1,558 @@
+# Apply `infra/rundevoo-run/**` (the rundevoo.run zone + its safe-by-default
+# DNS posture) whenever a PR touching that tree merges to main. See #12971.
+#
+# FULL-ROOT PLAN ONLY. The plan universe is `state UNION config` — removing a
+# resource block yields a real destroy governed by the [ack-destroy] gate
+# below. No `-target=` may ever appear here: a scoped plan cannot see the
+# block that is gone, so a deletion would apply as a silent no-op while the
+# record stayed live (the #6074/#6589 footgun this file mirrors from
+# apply-sentry-infra.yml).
+#
+# The `rundevoo-destroy-required` PR gate is the second half: full-root alone
+# would only relocate the red to AFTER merge (this workflow applies on
+# push-to-main; an unacked delete would orphan live records and go red where
+# nobody watches). The gate is what makes deletion SAFE rather than merely
+# possible.
+#
+# Authorization model: the PR merge IS the human authorization for changes;
+# [ack-destroy] on its own line in the merge commit is the authorization for
+# destroys and `forget`s alike — a `forget` here is itself the incident class
+# (the zone or a hardening record silently unmanaged).
+#
+# Kill switch: `[skip-rundevoo-apply]` on its own line in the merge commit
+# skips the auto-apply.
+#
+# Credential mapping (plan §Token/bootstrap): the zone-scoped token lives in
+# Doppler prd_terraform as CF_API_TOKEN_RUNDEVOO and is exported under BOTH
+# names each leg needs: TF_VAR_cf_api_token_rundevoo for `terraform` (the
+# provider's api_token is bound to that required variable — CLOUDFLARE_API_TOKEN
+# never reaches an explicitly-bound argument) and CLOUDFLARE_API_TOKEN for the
+# set-equality REST probe — with NO fallback to a broader token. A broader
+# credential would defeat the scope boundary the bootstrap certifies.
+#
+# `pull_request`, NEVER `pull_request_target`: the latter would run
+# `terraform plan` with the zone token against UNTRUSTED fork-authored .tf —
+# a token-exfiltration primitive via a single `data "http"` block.
+
+name: Apply rundevoo infra (rundevoo.run zone + safe DNS)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # The whole root — under full-root the path filter is what keeps
+      # `declared => applied` true; a variables.tf/lockfile change must not
+      # silently skip the apply.
+      - "infra/rundevoo-run/**"
+      # Defense-in-depth: re-fire on gate-logic mutations so a PR that edits
+      # a guard without touching infra still exercises the apply path
+      # against main's state.
+      - "tests/scripts/lib/destroy-guard-filter-rundevoo.jq"
+      - "scripts/rundevoo-destroy-counts.sh"
+      - "scripts/rundevoo-destroy-gate-verdict.sh"
+      - "scripts/rundevoo-squash-ack-detect.sh"
+      - "scripts/rundevoo-dns-set-equality.sh"
+  # PR-time destroy gate. NO `paths:` filter — a path-filtered workflow never
+  # reports a status context for a filtered-out PR, so a REQUIRED check would
+  # sit "Expected — Waiting" forever and wedge every unrelated PR (#5585).
+  # Path detection lives in `detect-changes`; the always-run
+  # `rundevoo-destroy-required` aggregator reports on every PR while the
+  # heavy plan runs only on PRs that touch the surface.
+  pull_request:
+    branches: [main]
+  # Merge queue: `rundevoo-destroy-required` is a required context, so it must
+  # report on the gh-readonly-queue/main/* temp ref or the queue stalls. The
+  # heavy plan is not re-run (detect-changes emits rundevoo=false and the
+  # aggregator passes via the plan=skipped cell of the verdict allow-list).
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you applying? (manual re-run only)"
+        required: true
+        type: string
+
+concurrency:
+  # Keyed by ref so a PR's plan cannot cancel main's apply. cancel-in-progress
+  # stays false: a superseded run concludes `cancelled`, which fails the
+  # required gate on the head SHA until a re-run (#5585 R3).
+  group: terraform-apply-rundevoo-infra-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Read the PR's branch commit messages to detect a pre-staged [ack-destroy].
+  pull-requests: read
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+  INFRA_DIR: infra/rundevoo-run
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    outputs:
+      skip: ${{ steps.kill_switch.outputs.skip }}
+    steps:
+      - id: kill_switch
+        env:
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+          EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}
+        # The token can sit below the tip when the merge queue coalesces
+        # (#12501): the read is over HEAD_MSG + every push commit's message
+        # combined into POLICY_MSGS — the same trust class as head_commit.
+        # event.commits caps at 20 entries — a token older than the window in
+        # a giant coalesced push still misses (fail-open for the skip), a
+        # documented residual, not engineered around.
+        run: |
+          POLICY_MSGS="$HEAD_MSG"
+          more_msgs="$(jq -r 'join("\n")' <<<"${EVENT_MSGS_JSON:-null}" 2>/dev/null || true)"
+          [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && POLICY_MSGS="${POLICY_MSGS}"$'\n'"${more_msgs}"
+          if [[ "$POLICY_MSGS" =~ (^|$'\n')\[skip-rundevoo-apply\]($|$'\n') ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Kill switch detected in commit message — skipping apply."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # detect-changes: does this PR touch the rundevoo surface? Cheap — one
+  # checkout + one git diff, no Doppler/Cloudflare access.
+  detect-changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      rundevoo: ${{ steps.filter.outputs.rundevoo }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -uo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            # merge_group: the authoritative plan ran on the PR; the
+            # aggregator passes via detect=success + plan=skipped.
+            # push/dispatch: the apply job owns those events.
+            printf 'rundevoo=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A git/checkout error must FAIL the job — never silently emit
+          # rundevoo=false. The aggregator treats a detect failure as
+          # fail-closed, so this cannot degrade to a green.
+          if ! CHANGED=$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only "origin/${BASE_REF}...HEAD" | tr '\0' '\n'); then
+            echo "::error::git diff against origin/${BASE_REF} failed; failing detect-changes closed." >&2
+            exit 1
+          fi
+          # Anchors mirror the `paths:` filter PLUS this workflow file and the
+          # gate scripts: a PR editing any piece of the gate must run the gate
+          # against itself (self-trigger posture).
+          if grep -qE '^(infra/rundevoo-run/|tests/scripts/lib/destroy-guard-filter-rundevoo\.jq$|scripts/rundevoo-destroy-counts\.sh$|scripts/rundevoo-destroy-gate-verdict\.sh$|scripts/rundevoo-squash-ack-detect\.sh$|scripts/rundevoo-dns-set-equality\.sh$|tests/scripts/test-destroy-guard-counter-rundevoo\.sh$|tests/scripts/test-rundevoo-|\.github/workflows/apply-rundevoo-infra\.yml$|\.github/workflows/scheduled-terraform-drift\.yml$)' <<<"$CHANGED"; then
+            printf 'rundevoo=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'rundevoo=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
+  # plan_pr: the read-only full-root plan, run BEFORE merge so a destroy is
+  # visible while the PR can still be edited.
+  plan_pr:
+    needs: detect-changes
+    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.rundevoo == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Refuse fork PRs (named, not a confusing secret error)
+        env:
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          set -euo pipefail
+          if [[ "$IS_FORK" == "true" ]]; then
+            echo "::error::Fork PRs cannot run the rundevoo plan gate: secrets.* are not exposed to fork workflows, so a full-root plan against the live zone is impossible here. A maintainer must re-open this change from a branch in this repository. (Deliberate: switching to pull_request_target to obtain secrets would run terraform plan with the zone token against untrusted fork-authored .tf — a token-exfiltration primitive.)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Extract backend + zone credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain)}"
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)}"
+          # The zone-scoped token, exported under both names: TF_VAR_ feeds the
+          # required variable the provider api_token is bound to; the raw name
+          # feeds the set-equality REST probe. The `:-` arm is a same-name
+          # ambient-env passthrough (still the same credential), never a
+          # fallback to a broader credential — bounded reach is the property
+          # this pipeline certifies.
+          CF_TOKEN="${CLOUDFLARE_API_TOKEN:-$(doppler secrets get CF_API_TOKEN_RUNDEVOO --plain)}"
+          if [[ -z "$CF_TOKEN" ]]; then
+            echo "::error::CF_API_TOKEN_RUNDEVOO is not configured in Doppler soleur/prd_terraform — run infra/rundevoo-run/bootstrap.sh."
+            exit 1
+          fi
+          # Single-line credentials only: a multi-line value would write more
+          # $GITHUB_ENV lines — arbitrary NAME=value env injection into every
+          # subsequent step (#9362). The charset also pre-validates CF_TOKEN
+          # for the literal string replace used in output redaction.
+          if [[ ! "$KEY_ID" =~ ^[A-Za-z0-9/+=_.-]+$ || ! "$SECRET" =~ ^[A-Za-z0-9/+=_.-]+$ || ! "$CF_TOKEN" =~ ^[A-Za-z0-9/+=_.-]+$ ]]; then
+            echo "::error::a fetched credential does not have the shape of a single-line credential; refusing to write the job environment."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf '::add-mask::%s\n' "$CF_TOKEN"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+          printf 'CLOUDFLARE_API_TOKEN=%s\n' "$CF_TOKEN" >> "$GITHUB_ENV"
+          printf 'TF_VAR_cf_api_token_rundevoo=%s\n' "$CF_TOKEN" >> "$GITHUB_ENV"
+
+      - name: Provisioners are out of scope for this root
+        # A local-exec/remote-exec provisioner runs arbitrary commands at
+        # apply time with the live credentials in env and shows up in the
+        # plan as a plain create/update — the destroy gate sees zero
+        # destroys while the provisioner deletes live records. This root
+        # declares none; refuse the whole class rather than review each use.
+        run: |
+          if grep -rn --include='*.tf' -E '\bprovisioner\b|local-exec|remote-exec' "${{ env.INFRA_DIR }}/"; then
+            echo "::error::a provisioner was added under ${{ env.INFRA_DIR }}/ — provisioners execute outside plan accounting and bypass the destroy gate. Route the action through a resource or remove it."
+            exit 1
+          fi
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Full-root plan + destroy gate
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          # `set +e` bracket: Actions runs a bare run: block as `bash -e {0}` —
+          # without this the step dies AT the plan on failure and the named
+          # ::error:: is unreachable (#7304). The handler exits $rc, so a
+          # failed plan still reds.
+          set +e
+          rm -f /tmp/rundevoo-pr-plan.out
+          terraform plan -no-color -input=false -out=tfplan 2>&1 | tee /tmp/rundevoo-pr-plan.out
+          rc=${PIPESTATUS[0]}
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan failed (exit $rc)"
+            exit $rc
+          fi
+          set -e
+
+          # Type-scope assertion against the PLAN — the authoritative
+          # state UNION config universe. The jq filter's coverage is a fixed
+          # type set (cloudflare_zone, cloudflare_record, cloudflare_zone_dnssec);
+          # a type outside it would have its changes counted as 0 and slip the
+          # guard. This is the run that sees state-only types — exactly the
+          # class a removed-block PR is made of.
+          unexpected=$(terraform show -json tfplan | \
+            jq -r '[.resource_changes[].type] | unique | .[]' | \
+            grep -vxE 'cloudflare_zone|cloudflare_record|cloudflare_zone_dnssec' || true)
+          if [[ -n "$unexpected" ]]; then
+            echo "::error::plan contains resource type(s) outside the destroy filter's coverage: $unexpected — extend tests/scripts/lib/destroy-guard-filter-rundevoo.jq and the allowed-type set together."
+            exit 1
+          fi
+
+          terraform show -json tfplan > /tmp/rundevoo-pr-plan.json
+          # `eval "$(cmd)"` returns EVAL's status, not the script's — on
+          # failure `eval ""` succeeds. Capture and check first, then eval.
+          counts=$(bash "${GITHUB_WORKSPACE}/scripts/rundevoo-destroy-counts.sh" /tmp/rundevoo-pr-plan.json) || {
+            echo "::error::rundevoo destroy counters could not be computed for the PR plan; refusing to report a gate verdict."
+            exit 1
+          }
+          eval "$counts"
+
+          if [[ "$destroy_count" -eq 0 ]]; then
+            echo "rundevoo destroy gate: PASS (no destructive changes in the full-root plan)"
+            exit 0
+          fi
+
+          # The gate's manifest — an ack names no address, so these lists are
+          # the only thing that lets a human tell "forgets, nothing destroyed"
+          # from "a real delete of the zone". `forget` is state-only and
+          # destroys nothing, so the two are labelled, never merged.
+          addresses=$(terraform show -json tfplan | \
+            jq -r '[.resource_changes[] | select(.change.actions | index("delete")) | .address] | sort | .[]')
+          forget_addresses=$(terraform show -json tfplan | \
+            jq -r '[.resource_changes[] | select(.change.actions | index("forget")) | .address] | sort | .[]')
+
+          # The pre-staged [ack-destroy] only survives into the squash commit
+          # while the repo's squash body is COMMIT_MESSAGES. Unreadable under
+          # GITHUB_TOKEN (administration scope) -> warn, the post-merge apply
+          # gate enforces; readable and != COMMIT_MESSAGES -> fail closed.
+          if ! squash_mode=$(gh api "repos/${REPO}" --jq '.squash_merge_commit_message // ""'); then
+            echo "::error::Could not read squash_merge_commit_message (transport failure). Re-run the job. Failing closed because the gate cannot certify the ack without this read."
+            exit 1
+          fi
+          if [[ -z "$squash_mode" ]]; then
+            echo "::warning::This token cannot read squash_merge_commit_message (administration-scoped field). NOT failing the PR gate: the post-merge apply gate reads the actual merge-commit message and fails closed on a missing [ack-destroy]."
+          elif [[ "$squash_mode" != "COMMIT_MESSAGES" ]]; then
+            echo "::error::This gate assumes squash_merge_commit_message=COMMIT_MESSAGES so a pre-staged [ack-destroy] reaches the merge commit; the repo reports '${squash_mode}'. Fix the repo setting or rework the gate. Failing closed."
+            exit 1
+          fi
+
+          # Does a pre-staged [ack-destroy] actually survive into the squash
+          # body? Grepping raw messages would green a SUBJECT-ack that the
+          # apply gate then rejects ("* [ack-destroy]" breaks the line anchor).
+          # The emulation is unit-tested in
+          # tests/scripts/test-rundevoo-squash-ack-detect.sh.
+          if ! commits_json=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/commits" --paginate --slurp); then
+            echo "::error::Could not fetch this PR's commits (transport failure). Re-run the job. Failing closed because the gate cannot certify the ack without the commit list."
+            exit 1
+          fi
+          ack_destroy=false
+          if printf '%s' "$commits_json" \
+             | jq '[.[][] | .commit.message]' \
+             | bash "${GITHUB_WORKSPACE}/scripts/rundevoo-squash-ack-detect.sh"; then
+            ack_destroy=true
+          fi
+
+          _emit_set() { # $1=label $2=payload
+            if [[ -z "$2" ]]; then
+              printf '  %s: (none)\n' "$1"
+            else
+              printf '%s\n' "$2" | sed "s|^|  $1: |"
+            fi
+          }
+
+          if [[ "$ack_destroy" == "true" ]]; then
+            echo "rundevoo destroy gate: PASS (${destroy_count} destructive change(s) acknowledged via a pre-staged [ack-destroy])"
+            _emit_set "DESTROYS (resource-level delete)" "$addresses"
+            _emit_set "forgets (state-only, destroys nothing — still the incident for this root)" "$forget_addresses"
+            exit 0
+          fi
+
+          echo "::error::this PR makes ${destroy_count} destructive change(s) to rundevoo.run:"
+          _emit_set "DESTROYS (resource-level delete)" "$addresses" >&2
+          _emit_set "forgets (state-only, destroys nothing — still the incident for this root)" "$forget_addresses" >&2
+          echo "::error::The merge commit must contain a line [ack-destroy]. Pre-stage it now so it survives the squash: put [ack-destroy] on its own line in the BODY of a commit on this branch (not the subject — GitHub prefixes subjects with '* ', which breaks the line anchor). If you did not intend to destroy anything, restore the resource block(s) instead."
+          exit 1
+
+  # Always-run aggregator. The verdict is an ALLOW-LIST — only
+  # (success,success) and (success,skipped) pass; every other pair, including
+  # cancelled and any future GitHub-added result string, fails closed. The
+  # logic is a script so its cells are unit-tested
+  # (tests/scripts/test-rundevoo-destroy-gate-verdict.sh).
+  rundevoo-destroy-required:
+    needs: [detect-changes, plan_pr]
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Destroy-gate verdict
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          PLAN_RESULT: ${{ needs.plan_pr.result }}
+        run: |
+          bash scripts/rundevoo-destroy-gate-verdict.sh "$DETECT_RESULT" "$PLAN_RESULT"
+
+  # apply: reachable only on push-to-main and manual dispatch — never on PR or
+  # merge_group (the aggregator covers those). The privileged environment
+  # holds the deploy-time approval boundary.
+  #
+  # Two accepted residuals vs the sentry mirror, both bounded by the parked
+  # zone's blast radius:
+  #   1. NO apply-failure issue filer. Sentry files an issue on apply failure
+  #      ("a red run nobody owns"); here the twice-daily drift leg files on
+  #      non-convergence, so a failed apply surfaces within ~12h rather than
+  #      silently. Deliberate drop, re-evaluate if the domain gains a live
+  #      surface (#12972).
+  #   2. A workflow_dispatch executes the file AT THE DISPATCHED REF — a
+  #      pushed branch carrying an edited copy could drop this `if:` and the
+  #      `environment:` key and apply outside the gate. Bounded by
+  #      workflows-scoped push access (same-repo write) + CODEOWNERS on this
+  #      file; inherent to Actions, documented not fixed.
+  apply:
+    needs: [preflight]
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && github.ref == 'refs/heads/main'
+      && needs.preflight.outputs.skip != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: infra-privileged
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      # The tiered loader installs the Doppler CLI itself (it REPLACES a
+      # DopplerHQ/cli-action step) and, when the privileged token resolves,
+      # exports the Tier-B read/write R2 pair as AWS_ACCESS_KEY_ID /
+      # AWS_SECRET_ACCESS_KEY. Without it the extract below falls through to
+      # prd_terraform's AWS_* pair — READ-ONLY after O5b — and the apply
+      # writes every resource live, then dies on S3 PutObject 403 (the
+      # merge-push run of #12971 did exactly this).
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      - name: Extract backend + zone credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain)}"
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)}"
+          CF_TOKEN="${CLOUDFLARE_API_TOKEN:-$(doppler secrets get CF_API_TOKEN_RUNDEVOO --plain)}"
+          # Fail BEFORE any live write: if the Tier-B export above did not
+          # land, KEY_ID is prd_terraform's read-only Tier-A key and the apply
+          # would mutate the zone with no state write possible. Compared in
+          # shell, never printed.
+          TIER_A_ID="$(doppler secrets get AWS_ACCESS_KEY_ID --plain)"
+          if [[ "$KEY_ID" == "$TIER_A_ID" ]]; then
+            echo "::error::backend credentials resolved to the read-only Tier-A pair — the Tier-B loader did not export TF_STATE_AWS_* (privileged token missing or the pair unset). Refusing to apply live changes the state could not record."
+            exit 1
+          fi
+          if [[ -z "$CF_TOKEN" ]]; then
+            echo "::error::CF_API_TOKEN_RUNDEVOO is not configured in Doppler soleur/prd_terraform — run infra/rundevoo-run/bootstrap.sh."
+            exit 1
+          fi
+          # Single-line credentials only (#9362 — see the plan_pr leg's
+          # identical check for the rationale).
+          if [[ ! "$KEY_ID" =~ ^[A-Za-z0-9/+=_.-]+$ || ! "$SECRET" =~ ^[A-Za-z0-9/+=_.-]+$ || ! "$CF_TOKEN" =~ ^[A-Za-z0-9/+=_.-]+$ ]]; then
+            echo "::error::a fetched credential does not have the shape of a single-line credential; refusing to write the job environment."
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf '::add-mask::%s\n' "$CF_TOKEN"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+          printf 'CLOUDFLARE_API_TOKEN=%s\n' "$CF_TOKEN" >> "$GITHUB_ENV"
+          printf 'TF_VAR_cf_api_token_rundevoo=%s\n' "$CF_TOKEN" >> "$GITHUB_ENV"
+
+      - name: Provisioners are out of scope for this root
+        run: |
+          if grep -rn --include='*.tf' -E '\bprovisioner\b|local-exec|remote-exec' "${{ env.INFRA_DIR }}/"; then
+            echo "::error::a provisioner was added under ${{ env.INFRA_DIR }}/ — provisioners execute outside plan accounting and bypass the destroy gate. Route the action through a resource or remove it."
+            exit 1
+          fi
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Full-root plan + destroy gate (apply plan)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+          EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}
+        run: |
+          set -uo pipefail
+          # What this job plans is what actually reaches prod, so the destroy
+          # gate runs here on THE APPLY PLAN, not only on the PR's. `set +e`
+          # bracket for the same errexit reason as plan_pr (#7304).
+          set +e
+          terraform plan -no-color -input=false -out=tfplan 2>&1 | tee /tmp/rundevoo-apply-plan.out
+          rc=${PIPESTATUS[0]}
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan failed (exit $rc)"
+            exit $rc
+          fi
+          set -e
+
+          unexpected=$(terraform show -json tfplan | \
+            jq -r '[.resource_changes[].type] | unique | .[]' | \
+            grep -vxE 'cloudflare_zone|cloudflare_record|cloudflare_zone_dnssec' || true)
+          if [[ -n "$unexpected" ]]; then
+            echo "::error::plan contains resource type(s) outside the destroy filter's coverage: $unexpected — extend tests/scripts/lib/destroy-guard-filter-rundevoo.jq and the allowed-type set together."
+            exit 1
+          fi
+
+          terraform show -json tfplan > /tmp/rundevoo-apply-plan.json
+          counts=$(bash "${GITHUB_WORKSPACE}/scripts/rundevoo-destroy-counts.sh" /tmp/rundevoo-apply-plan.json) || {
+            echo "::error::rundevoo destroy counters could not be computed for the apply plan; refusing to apply."
+            exit 1
+          }
+          eval "$counts"
+
+          if [[ "$destroy_count" -gt 0 ]]; then
+            addresses=$(terraform show -json tfplan | \
+              jq -r '[.resource_changes[] | select(.change.actions | index("delete")) | .address] | sort | .[]')
+            forget_addresses=$(terraform show -json tfplan | \
+              jq -r '[.resource_changes[] | select(.change.actions | index("forget")) | .address] | sort | .[]')
+            _emit_set() {
+              if [[ -z "$2" ]]; then printf '  %s: (none)\n' "$1"
+              else printf '%s\n' "$2" | sed "s|^|  $1: |"; fi
+            }
+            # Canonical line-anchored ack regex over HEAD_MSG + every push
+            # commit's message (the merge-queue-coalesced case, #12501).
+            POLICY_MSGS="$HEAD_MSG"
+            more_msgs="$(jq -r 'join("\n")' <<<"${EVENT_MSGS_JSON:-null}" 2>/dev/null || true)"
+            [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && POLICY_MSGS="${POLICY_MSGS}"$'\n'"${more_msgs}"
+            if [[ "$POLICY_MSGS" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
+              echo "rundevoo destroy gate: PASS (${destroy_count} destructive change(s) acknowledged via [ack-destroy] in the push)"
+              _emit_set "DESTROYS (resource-level delete)" "$addresses"
+              _emit_set "forgets (state-only, destroys nothing — still the incident for this root)" "$forget_addresses"
+            else
+              echo "::error::this apply would make ${destroy_count} destructive change(s) to rundevoo.run with no [ack-destroy] line in the merge commit:"
+              _emit_set "DESTROYS (resource-level delete)" "$addresses" >&2
+              _emit_set "forgets (state-only, destroys nothing — still the incident for this root)" "$forget_addresses" >&2
+              echo "::error::refusing to apply. Land the change via a merge commit carrying a body line [ack-destroy], or restore the resource block(s)."
+              exit 1
+            fi
+          else
+            echo "rundevoo destroy gate: PASS (no destructive changes in the apply plan)"
+          fi
+
+      - name: Terraform apply
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform apply -no-color -input=false -auto-approve tfplan
+
+      - name: Post-apply whole-list DNS set equality
+        # `terraform apply` reports its own diff converged; it cannot see a
+        # record that was never in state or config. This probes the live zone's
+        # complete record set against recorded state so an out-of-band record
+        # cannot hide.
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          set -euo pipefail
+          terraform show -json > /tmp/rundevoo-state.json
+          bash "${GITHUB_WORKSPACE}/scripts/rundevoo-dns-set-equality.sh" /tmp/rundevoo-state.json

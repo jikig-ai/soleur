@@ -356,6 +356,12 @@ fi
 
 _body="${MOCK_HTTP_BODY:-}"
 [[ -n "$_h_body" ]] && _body="$_h_body"
+# The ACCOUNT-owned token verify endpoint (#12931) answers from its own channel when the
+# case sets one, so "user endpoint refuses, account endpoint accepts" is expressible.
+# Unset, it falls back to MOCK_HTTP_BODY — the account arm then mirrors the user arm.
+if [[ "$*" == *"/client/v4/accounts/"*"/tokens/verify"* && -n "${MOCK_ACCT_VERIFY_BODY:-}" ]]; then
+  _body="$MOCK_ACCT_VERIFY_BODY"
+fi
 if [[ -n "$_outfile" ]]; then
   printf '%s' "$_body" > "$_outfile" 2>/dev/null || true
 else
@@ -398,6 +404,7 @@ DOPPLER_ENV_LOG=""
 CURL_ENV_LOG=""
 GH_OUTPUT=""
 MASK_SNAPSHOT=""
+_acct_env=()   # extra env for one case (A5: an ambient account override that must be ignored)
 run_sut() {
   local label="$1" http_code="$2" secrets_body="$3" configs_body="${4:-prd}" only_arg="${5:-}"
   local cfgs="$TMP/$label.configs" secs="$TMP/$label.secrets"
@@ -439,10 +446,11 @@ run_sut() {
   # every case.
   # shellcheck disable=SC2086
   env -u DOPPLER_TOKEN -u DOPPLER_CONFIG -u DOPPLER_TOKEN_MAP \
-  ${_cred[@]+"${_cred[@]}"} ${_ambient[@]+"${_ambient[@]}"} \
+  ${_cred[@]+"${_cred[@]}"} ${_ambient[@]+"${_ambient[@]}"} ${_acct_env[@]+"${_acct_env[@]}"} \
   MOCK_CONFIGS="$cfgs" MOCK_SECRETS="$secs" \
   MOCK_HTTP_CODE="$http_code" MOCK_CURL_LOG="$CURL_LOG" MOCK_CURL_STDIN_LOG="$CURL_STDIN_LOG" \
   MOCK_HTTP_BODY="${MOCK_HTTP_BODY:-}" \
+  MOCK_ACCT_VERIFY_BODY="${MOCK_ACCT_VERIFY_BODY:-}" \
   MOCK_CONTROL_CODE="${MOCK_CONTROL_CODE:-403}" \
   MOCK_CONTROL_STAMPED="${MOCK_CONTROL_STAMPED:-1}" \
   MOCK_CRED_STAMPED="${MOCK_CRED_STAMPED:-}" \
@@ -1092,7 +1100,9 @@ else
 fi
 
 echo "T36: the API-token memo cache is real too"
-run_sut t36 200 "prd|CF_API_TOKEN_X|tokenvalue
+# success:true so the user endpoint answers LIVE and the account fallback (#12931) is not
+# consulted: one value, one verify call. T36b below pins the memo on the DEAD path.
+MOCK_HTTP_BODY='{"success":true}' run_sut t36 200 "prd|CF_API_TOKEN_X|tokenvalue
 prd_a|CF_API_TOKEN_X|tokenvalue
 prd_b|CF_API_TOKEN_X|tokenvalue" "prd
 prd_a
@@ -1102,6 +1112,94 @@ if [[ "$_n" == "1" ]]; then
   pass "three configs, one identical API token, one verify call"
 else
   fail "expected 1 /user/tokens/verify call for 3 configs holding one value, got $_n — the SUT comment says the subshell bug hit 'every memoised helper in this file', but only the Access cache had an instrument, so neutering this one passed 27/27"
+fi
+
+echo "T36b: the memo also holds on the DEAD path (user + account verify, once per value)"
+MOCK_HTTP_BODY='{"success":false}' run_sut t36b 200 "prd|CF_API_TOKEN_X|tokenvalue
+prd_a|CF_API_TOKEN_X|tokenvalue
+prd_b|CF_API_TOKEN_X|tokenvalue" "prd
+prd_a
+prd_b"
+_n=$(grep -c 'tokens/verify' "$CURL_LOG" 2>/dev/null || true)
+if [[ "$_n" == "2" ]] && [[ "$RC" == "1" ]]; then
+  pass "three configs, one dead API token: one user verify + one account verify, graded DEAD"
+else
+  fail "expected 2 verify calls (user + account) for 3 configs holding one dead value and exit 1, got calls=$_n rc=$RC"
+fi
+
+# A1-A6 — ACCOUNT BINDING (#12931, CTO F11/L61). After the Soleur-account migration a
+# non-R2 token may be ACCOUNT-owned on the new account, which /user/tokens/verify does not
+# know. Without the account arm it grades DEAD: a false stale-token alert.
+NEW_ACCT="66d4f93f7397f196544e9fe84c3557c2"
+OLD_ACCT="4d5ba6f096b2686fbdd404167dd4e125"
+echo "A1: a non-R2 token the user endpoint refuses is re-asked at the NEW account and graded LIVE"
+MOCK_HTTP_BODY='{"success":false}' MOCK_ACCT_VERIFY_BODY='{"success":true}' \
+  run_sut a1 200 "prd|CF_API_TOKEN_DNS_EDIT|synthetic-account-owned-not-real"
+_a1=1
+[[ "$RC" == "0" ]] || _a1=0
+grep -qE 'live entries: 1' "$OUT" || _a1=0
+grep -qF 'client/v4/user/tokens/verify' "$CURL_LOG" || _a1=0
+grep -qF "client/v4/accounts/${NEW_ACCT}/tokens/verify" "$CURL_LOG" || _a1=0
+grep -qF "accounts/${OLD_ACCT}/" "$CURL_LOG" && _a1=0
+# The account arm keeps the transport and stdin-bearer pins of the user arm.
+[[ "$(grep -F "accounts/${NEW_ACCT}/tokens/verify" "$CURL_LOG" | grep -cE -- '^--disable --noproxy \* .*--config - ' || true)" == "1" ]] || _a1=0
+[[ "$(grep -cxF 'header = "Authorization: Bearer synthetic-account-owned-not-real"' "$CURL_STDIN_LOG" || true)" == "2" ]] || _a1=0
+grep -qF 'synthetic-account-owned-not-real' "$CURL_LOG" && _a1=0
+if [[ "$_a1" == "1" ]]; then
+  pass "account-owned token on the new account: LIVE via /accounts/${NEW_ACCT:0:8}…/tokens/verify, bearer on stdin only"
+else
+  fail "a non-R2 account-owned token must be verified at the NEW account and graded LIVE (rc=$RC; see $CURL_LOG)"
+fi
+
+echo "A2: an R2 token stays bound to the LEGACY account (R2 did not move)"
+MOCK_HTTP_BODY='{"success":false}' MOCK_ACCT_VERIFY_BODY='{"success":true}' \
+  run_sut a2 200 "prd_terraform|CF_API_TOKEN_R2|synthetic-r2-not-real" prd_terraform
+if [[ "$RC" == "0" ]] && grep -qF "client/v4/accounts/${OLD_ACCT}/tokens/verify" "$CURL_LOG" \
+   && ! grep -qF "accounts/${NEW_ACCT}/" "$CURL_LOG"; then
+  pass "CF_API_TOKEN_R2 is verified at the legacy account, never the new one"
+else
+  fail "an *R2* key must be verified at the legacy account ${OLD_ACCT:0:8}… only (rc=$RC; see $CURL_LOG)"
+fi
+
+echo "A2b: one value under an R2 key and a non-R2 key is asked of BOTH accounts (memo key carries the account)"
+MOCK_HTTP_BODY='{"success":false}' MOCK_ACCT_VERIFY_BODY='{"success":true}' \
+  run_sut a2b 200 "prd_terraform|CF_API_TOKEN_R2|synthetic-shared-not-real
+prd_terraform|CF_API_TOKEN_DNS_EDIT|synthetic-shared-not-real" prd_terraform
+if [[ "$RC" == "0" ]] && grep -qF "client/v4/accounts/${OLD_ACCT}/tokens/verify" "$CURL_LOG" \
+   && grep -qF "client/v4/accounts/${NEW_ACCT}/tokens/verify" "$CURL_LOG"; then
+  pass "a shared value is verified at the legacy account for the R2 key and the new one for the other"
+else
+  fail "dropping the account from the verify memo key reuses one account's verdict for the other (rc=$RC; see $CURL_LOG)"
+fi
+
+echo "A3: a token both endpoints refuse is still DEAD (the account arm cannot launder a revoked token)"
+MOCK_HTTP_BODY='{"success":false}' MOCK_ACCT_VERIFY_BODY='{"success":false}' \
+  run_sut a3 200 "prd|CF_API_TOKEN_DNS_EDIT|synthetic-revoked-not-real"
+if [[ "$RC" == "1" ]] && grep -qE 'dead entries: 1' "$OUT" && [[ "$(grep -c 'tokens/verify' "$CURL_LOG" || true)" == "2" ]]; then
+  pass "refused at the user AND account endpoint -> DEAD, exit 1"
+else
+  fail "a token refused by both endpoints must grade DEAD with exit 1 after exactly two verifies (rc=$RC)"
+fi
+
+echo "A4: a live USER token never reaches the account endpoint"
+MOCK_HTTP_BODY='{"success":true}' MOCK_ACCT_VERIFY_BODY='{"success":false}' \
+  run_sut a4 200 "prd|CF_API_TOKEN_DNS_EDIT|synthetic-user-token-not-real"
+if [[ "$RC" == "0" ]] && ! grep -qF '/accounts/' "$CURL_LOG"; then
+  pass "user-endpoint LIVE short-circuits: no account verify call"
+else
+  fail "a LIVE user token must not trigger the account fallback (rc=$RC)"
+fi
+
+echo "A5: the verify accounts are literals — an ambient override cannot redirect the bearer"
+_acct_env=(CF_TOKEN_DRIFT_ACCOUNT_ID=0000000000000000000000000000000a CF_VERIFY_ACCOUNT=0000000000000000000000000000000a)
+MOCK_HTTP_BODY='{"success":false}' MOCK_ACCT_VERIFY_BODY='{"success":true}' \
+  run_sut a5 200 "prd|CF_API_TOKEN_DNS_EDIT|synthetic-not-real"
+_acct_env=()
+if [[ "$RC" == "0" ]] && grep -qF "accounts/${NEW_ACCT}/tokens/verify" "$CURL_LOG" \
+   && ! grep -qF 'accounts/0000000000000000000000000000000a/' "$CURL_LOG"; then
+  pass "ambient CF_TOKEN_DRIFT_ACCOUNT_ID / CF_VERIFY_ACCOUNT are ignored; the bearer goes to the pinned account"
+else
+  fail "the account destination must be the pinned literal, never an environment value (rc=$RC; see $CURL_LOG)"
 fi
 
 echo "T37: the probe does NOT follow redirects"
@@ -2607,9 +2705,11 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # 91 is the REALIZED count on a green run.
 #
 # Raised 91 -> 112 with E1-E10, Guard 1 of the edge-cause classifier (#12937), then -> 117
-# with E11-E15, then -> 119 with E12b and E14b. 119 is the REALIZED count on a green run.
-if [[ "$((PASS + FAIL))" -lt 119 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 119. The suite did not execute what it claims to." >&2
+# with E11-E15, then -> 119 with E12b and E14b. Separately raised 91 -> 104 with T36b and
+# A1-A5, the account binding of the CF_API_TOKEN* verify (#12931), then -> 105 with A2b.
+# The two sets combine to 126, the REALIZED count on a green run.
+if [[ "$((PASS + FAIL))" -lt 126 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 126. The suite did not execute what it claims to." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then printf 'FAILED: %d assertions.\n' "$FAIL" >&2; exit 1; fi

@@ -754,6 +754,11 @@ _SUITE_BOUNDS=(
   # The weight row (suite-durations.tsv) is an ESTIMATE, never measured on CI: the first CI wall time of this suite's leg must be recorded
   # (ADR-317, the runbook residuals), and the suite moves to a lighter leg if the leg exceeds ~700 s.
   "apps/web-platform/infra/key-rotate-workflow.test.sh=840"
+  # #12931 (PR 12932 review): the CF account migrate job battery runs the real gate and state forget
+  # per case plus its sed mutants; its weight row is 106 s measured (suite-durations.tsv). Under -P 4
+  # contention (the ~2.5-3x #8688 multiplier) that nears the 360 s default, so pin at 720 per the
+  # ATTRIBUTION block's >=1.5x rule; a slow day renders as this suite's own RED, not a leg timeout.
+  "apps/web-platform/infra/cf-account-migrate-job.test.sh=720"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT

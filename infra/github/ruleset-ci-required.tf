@@ -170,8 +170,21 @@ resource "github_repository_ruleset" "ci_required" {
         integration_id = var.actions_integration_id
       }
 
-      # #8203 adds `vendor-pin-required` (24th) — vendor-pin-verify.yml's
-      # always-run aggregator and the THIRD instance of the #5585
+      # #12971 — apply-rundevoo-infra.yml's always-run aggregator, the fourth
+      # instance of the #5585 pattern. Same shape as sentry-destroy-required:
+      # the full-root terraform plan is path-gated behind it, and required is
+      # what makes an unacknowledged destroy of the rundevoo.run zone (or a
+      # `forget` that silently unmanages it) unmergeable rather than merely
+      # visible. Bot-PR disposition is likewise sound-by-UNREACHABILITY
+      # (ALLOWED_PATHS ∩ infra/rundevoo-run/** = ∅); the tripwire comment
+      # lives in scripts/required-checks.txt.
+      required_check {
+        context        = "rundevoo-destroy-required"
+        integration_id = var.actions_integration_id
+      }
+
+      # #8203 adds `vendor-pin-required` (25th — the #12971 rundevoo gate took
+      # the 24th slot ahead of it) — vendor-pin-verify.yml's
       # always-run-aggregator pattern (ADR-032; sentry-destroy-required was
       # the second, #6589). The upstream-blob
       # verification (verify-upstream-blobs, the #8181 path+commit+blob

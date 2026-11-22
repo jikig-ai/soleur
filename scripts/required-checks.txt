@@ -244,6 +244,29 @@ tenant-integration-required
 # the ADR-031 Amendment (2026-07-17, #6589).
 sentry-destroy-required
 
+# #12971 — apply-rundevoo-infra.yml jobs.rundevoo-destroy-required. Always-run
+# aggregator gate job (the full-root terraform plan is path-gated behind it).
+# Bot PRs never trigger CI, so they need the synthetic; on relevant human PRs the
+# real gate job posts the context.
+#
+# ⚠ CONTENT-SCOPED — cleared under the #6049 ceiling by the SAME argument as
+# sentry-destroy-required above, re-derived per ADR-139's per-gate rule: this
+# gate asks "does this PR's plan destroy a rundevoo.run zone resource without
+# an acknowledgement?", which is a question about the diff, so a fabricated
+# green is only sound if no bot PR can produce a destroying diff. It cannot:
+# the action's ALLOWED_PATHS does not intersect infra/rundevoo-run/**, so every
+# bot PR's full-root plan is vacuously non-destroying and the synthetic green
+# asserts something true.
+#
+# The residual goes LIVE the instant any infra/rundevoo-run/** path is added to
+# ALLOWED_PATHS — at which point a bot PR could drop the zone's null-MX/SPF/
+# DMARC hardening (or `forget` the zone itself) under a fabricated green. Do
+# NOT extend ALLOWED_PATHS to any infra/rundevoo-run/** path without first
+# reproducing the full-root plan + destroy gate over the bot diff in the
+# action's preflight. See .github/actions/bot-pr-with-synthetic-checks/
+# action.yml ALLOWED_PATHS.
+rundevoo-destroy-required
+
 # #8203 — vendor-pin-verify.yml `vendor-pin-required` job. Always-run
 # aggregator (third instance of the #5585 pattern — sentry-destroy-required
 # was the second, #6589) that wraps the
