@@ -38,6 +38,9 @@ resource "cloudflare_record" "deploy" {
   type    = "CNAME"
   proxied = true
   ttl     = 1
+
+  # A failed Access create leaves the hostname unrouted instead of reachable without a gate (#12937).
+  depends_on = [cloudflare_zero_trust_access_policy.deploy_service_token]
 }
 
 # SSH ingress for CI runner via Cloudflare Tunnel (see #4177).
@@ -50,6 +53,9 @@ resource "cloudflare_record" "ssh" {
   type    = "CNAME"
   proxied = true
   ttl     = 1
+
+  # A failed Access create leaves the hostname unrouted instead of reachable without a gate (#12937).
+  depends_on = [cloudflare_zero_trust_access_policy.ci_ssh_service_token]
 }
 
 # #6122 (ADR-096) — registry PUSH ingress for CI via Cloudflare Tunnel (CTO ruling).
@@ -66,46 +72,9 @@ resource "cloudflare_record" "registry" {
   type    = "CNAME"
   proxied = true
   ttl     = 1
-}
 
-# #12937 — the three tunnel hostnames in the zone that OWNS soleur.ai since the 2026-11-18 zone move
-# (Soleur account, local.cf_soleur_zone_id in tunnel.tf). A cfargotunnel.com CNAME routes only to a
-# tunnel in the same account as the record, so these point at the `_soleur` tunnel; the three above
-# sit in the moved-away zone and are left untouched (no forget/destroy in this PR). A leftover
-# scanner A record at the same name makes the create fail loudly — that is the protection.
-# Each record waits for its own Access policy (and so its app): a failed Access create leaves the
-# hostname unrouted instead of reachable without a gate.
-resource "cloudflare_record" "deploy_soleur" {
-  zone_id = local.cf_soleur_zone_id
-  name    = "deploy"
-  content = "${cloudflare_zero_trust_tunnel_cloudflared.web_soleur.id}.cfargotunnel.com"
-  type    = "CNAME"
-  proxied = true
-  ttl     = 1
-
-  depends_on = [cloudflare_zero_trust_access_policy.deploy_service_token_soleur]
-}
-
-resource "cloudflare_record" "ssh_soleur" {
-  zone_id = local.cf_soleur_zone_id
-  name    = "ssh"
-  content = "${cloudflare_zero_trust_tunnel_cloudflared.web_soleur.id}.cfargotunnel.com"
-  type    = "CNAME"
-  proxied = true
-  ttl     = 1
-
-  depends_on = [cloudflare_zero_trust_access_policy.ci_ssh_service_token_soleur]
-}
-
-resource "cloudflare_record" "registry_soleur" {
-  zone_id = local.cf_soleur_zone_id
-  name    = "registry"
-  content = "${cloudflare_zero_trust_tunnel_cloudflared.web_soleur.id}.cfargotunnel.com"
-  type    = "CNAME"
-  proxied = true
-  ttl     = 1
-
-  depends_on = [cloudflare_zero_trust_access_policy.registry_push_service_token_soleur]
+  # A failed Access create leaves the hostname unrouted instead of reachable without a gate (#12937).
+  depends_on = [cloudflare_zero_trust_access_policy.registry_push_service_token]
 }
 
 # Email authentication records for Resend SMTP (sends via Amazon SES, eu-west-1)

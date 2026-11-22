@@ -20,13 +20,6 @@ resource "cloudflare_zero_trust_tunnel_cloudflared" "web" {
   # TODO: remove ignore_changes after clean reprovisioning (import artifact)
   lifecycle {
     ignore_changes = [secret, config_src]
-
-    # Teardown before flip (ADR-330): the legacy slice must leave state before #12931 sets
-    # var.cf_account_id to the Soleur account, or it re-plans as creates beside the `_soleur` slice.
-    precondition {
-      condition     = var.cf_account_id != local.cf_soleur_account_id
-      error_message = "The legacy tunnel slice must leave state before #12931 flips var.cf_account_id to the Soleur account."
-    }
   }
 }
 
@@ -190,7 +183,11 @@ locals {
   # this applies. NOTE for the next rotation: deploy_policy_gate wants the
   # [ack-deploy-policy] token alone on its own line in a push commit message —
   # inline in the squash title does not satisfy it.
-  deploy_service_token_ids = ["d9204def-4154-4fea-b9ee-d419d8d665f7"]
+  #
+  # #12931 tunnel phase (ADR-329): this policy is recreated on the Soleur account, where the legacy
+  # id (d9204def-…) does not exist. cf-access-deploy-token-mint.sh mints the new token, and its id
+  # replaces this nil placeholder before merge. The policy's precondition refuses the placeholder.
+  deploy_service_token_ids = ["00000000-0000-0000-0000-000000000000"] # FILL-AT-PHASE-3.1: replace with the minted deploy token id before merge
 }
 
 resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
@@ -206,8 +203,8 @@ resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
 
   lifecycle {
     precondition {
-      condition     = length(local.deploy_service_token_ids) > 0 && alltrue([for id in local.deploy_service_token_ids : can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", id))])
-      error_message = "local.deploy_service_token_ids must be a non-empty list of Cloudflare service-token ids (UUIDs). An empty include would lock the deploy webhook out."
+      condition     = length(local.deploy_service_token_ids) > 0 && alltrue([for id in local.deploy_service_token_ids : can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", id)) && id != "00000000-0000-0000-0000-000000000000"])
+      error_message = "local.deploy_service_token_ids must be a non-empty list of Cloudflare service-token ids (UUIDs), not the nil placeholder (FILL-AT-PHASE-3.1). An empty include would lock the deploy webhook out."
     }
   }
 }
@@ -275,11 +272,13 @@ resource "cloudflare_zero_trust_access_service_token" "registry_push" {
   account_id = var.cf_account_id
   name       = "github-actions-registry-push"
 
-  # See the rationale on `.deploy` above. #12937: this old-account token no longer feeds
-  # Doppler — `doppler_secret.registry_push_access_token_{id,secret}` now derive from
-  # `.registry_push_soleur` (below), whose zone owns registry.<base> since the soleur.ai
-  # zone move. Kept (no forget, no destroy in that PR); its teardown is the old-account
-  # follow-up. Do NOT `-replace` it to "rotate" the registry credential: nothing reads it.
+  # See the rationale on `.deploy` above. This one is load-bearing beyond rotation
+  # ergonomics: `doppler_secret.registry_push_access_token_{id,secret}` derive from
+  # this resource's client_id/client_secret, so Terraform is the ONLY safe way to roll
+  # it. Rotating it out-of-band (the Cloudflare `/rotate` endpoint) leaves the old
+  # client_secret in state, and the next apply pushes that stale value back into
+  # Doppler — breaking registry pushes with no signal saying why. `.deploy` and
+  # `.ci_ssh` are exempt from that trap because they are `output`s, not doppler_secrets.
   lifecycle {
     create_before_destroy = true
   }
@@ -320,29 +319,28 @@ resource "cloudflare_zero_trust_access_policy" "registry_push_service_token" {
 # `ignore_changes = [value]` on the claim that client_secret "reads EMPTY on refresh" (#4492). That
 # is true ONLY for an IMPORTED token: provider 4.52.7's Read never touches client_secret, so a
 # Terraform-CREATED token keeps its secret in state across every refresh. The write-once lifecycle
-# is what broke the zone move: re-pointing `value` at the new-account token would have planned
-# nothing and left the dead old-account pair in Doppler `prd`, with `verdict=stale` the only clue.
-# So the lifecycle is gone and `value` reads `.registry_push_soleur`: the merge apply updates both
-# secrets IN PLACE (no destroy), and they ride the per-merge -target list from that PR on.
-#   - NEVER adopt a `_soleur` token with `import {}`: an imported token's client_secret IS empty in
-#     state, and this secret would then write "" over the live Doppler value.
+# would have broken the account move: the tunnel phase (ADR-329) recreates `.registry_push` on the
+# Soleur account, and the old lifecycle would have planned nothing for `value`, leaving the dead
+# old-account pair in Doppler `prd` with `verdict=stale` the only clue. So the lifecycle is gone:
+# the tunnel-phase apply updates both secrets IN PLACE (no destroy, no `-replace`).
+#   - NEVER adopt this token with `import {}`: an imported token's client_secret IS empty in state,
+#     and this secret would then write "" over the live Doppler value.
 #   - `replace_triggered_by` is not used: it fires on update/replace of the referenced resource,
 #     never on its create, so it could not have carried the first value either.
-#   - Rotate by bumping `client_secret_version` on `.registry_push_soleur` (an in-place update that
-#     returns a new client_secret); this secret follows on the same apply. The old comment's
-#     `-replace` of `.registry_push` would have rewritten NOTHING: `value` was ignored.
+#   - Rotate by bumping `client_secret_version` on `.registry_push` (an in-place update that returns
+#     a new client_secret); this secret follows on the same apply.
 resource "doppler_secret" "registry_push_access_token_id" {
   project    = "soleur"
   config     = "prd"
   name       = "REGISTRY_PUSH_ACCESS_TOKEN_ID"
-  value      = cloudflare_zero_trust_access_service_token.registry_push_soleur.client_id
+  value      = cloudflare_zero_trust_access_service_token.registry_push.client_id
   visibility = "masked"
 
   # A state value that reads empty must not overwrite prd.
   lifecycle {
     precondition {
-      condition     = cloudflare_zero_trust_access_service_token.registry_push_soleur.client_id != ""
-      error_message = "registry_push_soleur.client_id is empty in state; refusing to blank Doppler prd."
+      condition     = cloudflare_zero_trust_access_service_token.registry_push.client_id != ""
+      error_message = "registry_push.client_id is empty in state; refusing to blank Doppler prd."
     }
   }
 }
@@ -351,14 +349,14 @@ resource "doppler_secret" "registry_push_access_token_secret" {
   project    = "soleur"
   config     = "prd"
   name       = "REGISTRY_PUSH_ACCESS_TOKEN_SECRET"
-  value      = cloudflare_zero_trust_access_service_token.registry_push_soleur.client_secret
+  value      = cloudflare_zero_trust_access_service_token.registry_push.client_secret
   visibility = "masked"
 
   # A state value that reads empty must not overwrite prd.
   lifecycle {
     precondition {
-      condition     = nonsensitive(cloudflare_zero_trust_access_service_token.registry_push_soleur.client_secret != "")
-      error_message = "registry_push_soleur.client_secret is empty in state; refusing to blank Doppler prd."
+      condition     = nonsensitive(cloudflare_zero_trust_access_service_token.registry_push.client_secret != "")
+      error_message = "registry_push.client_secret is empty in state; refusing to blank Doppler prd."
     }
   }
 }
@@ -382,216 +380,34 @@ resource "cloudflare_notification_policy" "service_token_expiry" {
   }
 }
 
-# ─── #12937: the tunnel slice in the ZONE-OWNING account (Soleur, 66d4f93f…) ─────────────────────
-# The soleur.ai zone moved to the Soleur Cloudflare account on 2026-11-18 (#12931). Cloudflare
-# routes a `<id>.cfargotunnel.com` CNAME ONLY to a tunnel in the SAME account as the DNS record, so
-# every block above (old account, var.cf_account_id / var.cf_zone_id) stopped serving: registry. and
-# ssh. answer Error 1000, deploy. is NXDOMAIN. The blocks below re-home ONLY the tunnel slice —
-# tunnel, config, the three Access apps + policies, the ci_ssh / registry_push tokens and the expiry
-# alert — as NEW `_soleur` addresses beside the untouched old ones (Ruled by CTO agent, 2026-11-19:
-# committed locals, no provider alias, no new variable, no state mv/import, no forget/destroy here).
-# The connector moves when web-2 is re-born from server.tf's cloud-init (tunnel_token input).
-#
-# Locals, not variables, for the same reason as local.deploy_service_token_ids above: the plan runs
-# under `doppler run --name-transformer tf-var`, so a variable could be overridden from prd_terraform.
-# #12931's end state sets var.cf_* to these same ids on purpose; there is deliberately no
-# "locals differ from vars" check (it would red that migration's own apply).
-locals {
-  cf_soleur_account_id = "66d4f93f7397f196544e9fe84c3557c2"
-  cf_soleur_zone_id    = "951ce525552201ec6c696b24251abed7"
-  # The NEW deploy service token (minted outside Terraform, ADR-241 D10) admitted by
-  # deploy_service_token_soleur. The apply step reads THIS line (tests/scripts/lib/deploy-policy-gate.sh
-  # deploy_policy_committed_ids) and the deploy-policy gate refuses a planned include that differs.
-  deploy_service_token_ids_soleur = ["00000000-0000-0000-0000-000000000000"] # FILL-AT-PHASE-3.1: replace with the minted deploy token id before merge
-}
-
-resource "random_id" "tunnel_secret_soleur" {
-  byte_length = 32
-}
-
-# Same name as the old tunnel on purpose: names are unique PER ACCOUNT, and the connector census
-# (scheduled-inngest-health.yml) looks the tunnel up by name in the Soleur account. Terraform-created,
-# so none of the old block's import-artifact ignore_changes.
-resource "cloudflare_zero_trust_tunnel_cloudflared" "web_soleur" {
-  account_id = local.cf_soleur_account_id
-  name       = "soleur-web-platform"
-  config_src = "cloudflare"
-  secret     = random_id.tunnel_secret_soleur.b64_std
-}
-
-# The SAME three origin-relative rules as `_config.web` above (ADR-114 I2), from the same
-# expressions — never a literal address. The rationale for each rule (the origin pin, `tcp://` for
-# the registry, the v4 duration-string `connect_timeout`) lives on `_config.web`; it is not
-# restated here. Literal ingress_rule blocks, not `dynamic`: tunnel-origin-relative-ingress.test.sh
-# parses literal blocks and asserts the two configs carry identical rule sets.
-resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web_soleur" {
-  account_id = local.cf_soleur_account_id
-  tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.web_soleur.id
-
-  config {
-    ingress_rule {
-      hostname = "deploy.${var.app_domain_base}"
-      service  = "http://${var.web_hosts["web-1"].private_ip}:9000"
-    }
-    ingress_rule {
-      hostname = "ssh.${var.app_domain_base}"
-      service  = "ssh://${one([for h in values(var.web_hosts) : h.private_ip if h.jump])}:22"
-    }
-    ingress_rule {
-      hostname = "registry.${var.app_domain_base}"
-      service  = "tcp://${local.registry_endpoint}"
-      origin_request {
-        connect_timeout   = "5s"
-        no_happy_eyeballs = true
-      }
-    }
-    ingress_rule {
-      service = "http_status:404"
-    }
-  }
-}
-
-# Access apps AND policies are ACCOUNT-scoped here (the old ones are zone-scoped): an app/policy
-# scope mismatch fails at the API. Session durations mirror the old apps (24h / 15m / 15m) and are
-# pinned by tests/scripts/test-deploy-access-token-forget.sh's policy-parity rows, which also pin that
-# each policy has exactly one include holding only its own token (never any_valid_service_token or
-# everyone). Neither `app_launcher_visible` nor the app's `policies` attribute is set (the old blocks
-# set neither; `policies` conflicts with a policy's `application_id`).
-resource "cloudflare_zero_trust_access_application" "deploy_soleur" {
-  account_id       = local.cf_soleur_account_id
-  name             = "Deploy Webhook - soleur-web-platform"
-  domain           = "deploy.${var.app_domain_base}"
-  type             = "self_hosted"
-  session_duration = "24h"
-}
-
-# The include takes the token's UUID `id`, not its client_id (`<hex>.access`).
-resource "cloudflare_zero_trust_access_policy" "deploy_service_token_soleur" {
-  account_id     = local.cf_soleur_account_id
-  application_id = cloudflare_zero_trust_access_application.deploy_soleur.id
-  name           = "Allow GitHub Actions deploy"
-  decision       = "non_identity"
-  precedence     = 1
-
-  include {
-    service_token = local.deploy_service_token_ids_soleur
-  }
-
-  lifecycle {
-    precondition {
-      condition     = length(local.deploy_service_token_ids_soleur) > 0 && alltrue([for id in local.deploy_service_token_ids_soleur : can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", id)) && id != "00000000-0000-0000-0000-000000000000"])
-      error_message = "local.deploy_service_token_ids_soleur must be a non-empty list of Cloudflare service-token ids (UUIDs), not the nil placeholder (FILL-AT-PHASE-3.1). An empty include would lock the deploy webhook out."
-    }
-  }
-}
-
-resource "cloudflare_zero_trust_access_application" "ssh_soleur" {
-  account_id       = local.cf_soleur_account_id
-  name             = "SSH (CI runner) - soleur-web-platform"
-  domain           = "ssh.${var.app_domain_base}"
-  type             = "self_hosted"
-  session_duration = "15m"
-}
-
-# Its client_id/client_secret reach Doppler prd_terraform through the apply job's
-# "Sync CF Access CI-SSH service token to Doppler" step (outputs below).
-resource "cloudflare_zero_trust_access_service_token" "ci_ssh_soleur" {
-  account_id = local.cf_soleur_account_id
-  name       = "github-actions-ci-ssh"
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "cloudflare_zero_trust_access_policy" "ci_ssh_service_token_soleur" {
-  account_id     = local.cf_soleur_account_id
-  application_id = cloudflare_zero_trust_access_application.ssh_soleur.id
-  name           = "Allow GitHub Actions CI SSH"
-  decision       = "non_identity"
-  precedence     = 1
-
-  include {
-    service_token = [cloudflare_zero_trust_access_service_token.ci_ssh_soleur.id]
-  }
-}
-
-resource "cloudflare_zero_trust_access_application" "registry_soleur" {
-  account_id       = local.cf_soleur_account_id
-  name             = "Registry Push (CI) - soleur-web-platform"
-  domain           = "registry.${var.app_domain_base}"
-  type             = "self_hosted"
-  session_duration = "15m"
-}
-
-# Feeds doppler_secret.registry_push_access_token_{id,secret} (above). Rotate via
-# client_secret_version, never via import.
-resource "cloudflare_zero_trust_access_service_token" "registry_push_soleur" {
-  account_id = local.cf_soleur_account_id
-  name       = "github-actions-registry-push"
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "cloudflare_zero_trust_access_policy" "registry_push_service_token_soleur" {
-  account_id     = local.cf_soleur_account_id
-  application_id = cloudflare_zero_trust_access_application.registry_soleur.id
-  name           = "Allow GitHub Actions registry push"
-  decision       = "non_identity"
-  precedence     = 1
-
-  include {
-    service_token = [cloudflare_zero_trust_access_service_token.registry_push_soleur.id]
-  }
-}
-
-# Same alert as service_token_expiry, in the account that now holds the tokens (the alert is
-# account-wide: it fires for every service token in the account, including the deploy token minted
-# outside Terraform).
-resource "cloudflare_notification_policy" "service_token_expiry_soleur" {
-  account_id  = local.cf_soleur_account_id
-  name        = "CF Access service token expiring"
-  description = "Alert when any CF Access service token (github-actions-deploy, github-actions-ci-ssh, or github-actions-registry-push) approaches expiry"
-  alert_type  = "expiring_service_token_alert"
-  enabled     = true
-
-  email_integration {
-    id = var.cf_notification_email
-  }
-}
-
-# Repointed to the `_soleur` tunnel/token (#12937): server.tf's cloud-init renders the new tunnel's
-# token, and the CI-SSH sync step publishes the new pair.
 output "tunnel_token" {
-  value     = cloudflare_zero_trust_tunnel_cloudflared.web_soleur.tunnel_token
+  value     = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
   sensitive = true
 }
 
 output "ci_ssh_access_service_token_client_id" {
-  value     = cloudflare_zero_trust_access_service_token.ci_ssh_soleur.client_id
+  value     = cloudflare_zero_trust_access_service_token.ci_ssh.client_id
   sensitive = true
 }
 
 output "ci_ssh_access_service_token_client_secret" {
-  value     = cloudflare_zero_trust_access_service_token.ci_ssh_soleur.client_secret
+  value     = cloudflare_zero_trust_access_service_token.ci_ssh.client_secret
   sensitive = true
 }
 
 # Read by apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh (Guard 3): the tunnel the
-# `_soleur` CNAMEs point at, and its account. The account output reads the RESOURCE attribute, not
-# the bare local: a constant-valued output depends on no targeted resource, so a `-target` apply may
-# never write it to state.
+# CNAMEs point at, and its account. The account output reads the RESOURCE attribute, not the bare
+# variable: a constant-valued output depends on no targeted resource, so a `-target` apply may never
+# write it to state.
 output "cf_tunnel_id" {
-  value = cloudflare_zero_trust_tunnel_cloudflared.web_soleur.id
+  value = cloudflare_zero_trust_tunnel_cloudflared.web.id
 }
 
 output "cf_tunnel_account_id" {
-  value = cloudflare_zero_trust_tunnel_cloudflared.web_soleur.account_id
+  value = cloudflare_zero_trust_tunnel_cloudflared.web.account_id
 }
 
 # The zone the tunnel CNAMEs live in (read by the tunnel-zone authority drift step).
 output "cf_tunnel_zone_id" {
-  value = cloudflare_record.deploy_soleur.zone_id
+  value = cloudflare_record.deploy.zone_id
 }
