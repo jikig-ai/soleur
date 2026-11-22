@@ -14,6 +14,26 @@ lane: cross-domain
 
 # test: phone-width e2e for the Scope Grants web-egress disclosures
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-22
+**Sections enhanced:** 12 (Research Insights, Proposed Solution, Implementation Phases, Non-Goals, User-Brand Impact, Observability, Guard Contract, Scope Check, Acceptance Criteria, Test Scenarios, Sharp Edges, References)
+**Agents used:** security-sentinel, observability-coverage-reviewer, pattern-recognition-specialist, code-quality-analyst, architecture-strategist, performance-oracle, deployment-verification-agent, data-integrity-guardian, data-migration-expert, agent-native-reviewer, legacy-code-expert, ddd-architect, framework-docs-researcher, best-practices-researcher, git-history-analyzer, test-design-reviewer, and a general-purpose negative-claim sweep.
+
+### Key Improvements
+
+1. The paragraph check now reads only visible paragraphs. Before this, a disclosure hidden on phones passed every check.
+2. The Guard Contract grows to 15 rows, so the paragraph check and the dialog's `expectFitsPhone` each have a mutation only they can catch.
+3. The spec's steps now run in an executable order, with bounded waits on the first anchor and the confirm button.
+4. The post-merge branch covers every `deploy-arm.sh` outcome, so `release_failed` reaches #12937 and no other failure does.
+5. The mock's wire shapes and its unhandled-request diagnostics are specified from the SDK's real behaviour.
+
+### New Considerations Discovered
+
+- `next build` type-checks `e2e/` inside the image, so a pruned-path import in either file would stall the release.
+- The mock binds all interfaces with wildcard CORS during a run. It holds only synthesized data.
+- Postmerge skips Phase 3.7 for this diff, so `release_failed` must be read through `deploy-arm.sh`.
+
 ## Overview
 
 Prove at 390x844 that a workspace Owner can read the push and `gh` disclosures on Settings > Scope Grants and reach the
@@ -26,7 +46,7 @@ one Playwright spec.
 
 - #12605 is open with no closing PR. The only open change naming it is this branch's draft PR #13017 (`collision-precheck.sh`: `foreign=none`).
 - #12937 (Web Platform Release blocked at the registry bridge) is open, so the brief's `release_failed` branch is live.
-- PR #12567 merged 2026-11-10 and owed this check. PR #12704 merged 2026-11-18 and added the mock's `workspace_members` branch.
+- PR #12567 merged 2026-11-10 and owed this check. PR #12704 merged 2026-11-19 and added the mock's `workspace_members` branch.
 - **Stale in the issue:** "the mock has no `workspace_members` / workspace handlers". `mock-supabase.ts` has both, but they answer only `HELD_E2E_USERS`, and the membership row has no `role`, so the page's `membership?.role === "owner"` is false for every mock user.
 - **Missing from the issue:** a `web_egress` row is not enough. `resolveWebEgress` reads through `getFreshTenantClient`, whose mint path the mock does not serve, so the read fails closed to `false` whatever the row says.
 - No ADR rejects extending the offline mock. ADR-049 and ADR-064 mention it only as context.
@@ -71,7 +91,7 @@ Measured at 390x844 on the unmodified page: rightmost descendant of each surface
 1. The mock answers the page's membership read with an Owner row.
 2. The mock holds a workspace row with `web_egress` true and one with false, and the page reads each through the real resolver.
 3. At 390x844 the ON block, enable dialog and callout do not overflow horizontally.
-4. On each surface, each disclosure is its own paragraph.
+4. On each surface, each disclosure is its own visible paragraph.
 5. The dialog's confirm button is in the viewport after `scrollIntoViewIfNeeded()`.
 
 ### Cut List
@@ -104,7 +124,7 @@ Ruled by CTO agent, 2026-11-22. The table is mirrored in `knowledge-base/project
 
 ## Proposed Solution
 
-Two files, no production code.
+Two source files, no production code. The work phase also commits `mutation-results.md` as its evidence.
 
 ### Files to Edit
 
@@ -120,8 +140,9 @@ Two files, no production code.
 - Each fixture owns a solo workspace whose id is the user id. One table holds its row: `{ organization_id: null, name, web_egress }`. `user_session_state` returns that id as `current_workspace_id`.
 - `mintMockJwt` gains an optional `jti` argument. Existing tokens stay byte-identical because the claim is added only when the argument is passed.
 - Every new branch answers only for a fixture id. Anything else reaches the existing 404, so no other spec changes behaviour.
-- Add `notFound()`, used by both the catch-all and the new branches. It returns early if headers were sent, and prints one stderr line per distinct method and pathname (`[mock-supabase] unhandled POST /auth/v1/...`). The mock runs in the Playwright runner, so that line reaches the CI log, while the dev server's stdout does not.
-- Add `withJsonBody(req, res, handler)`: `void readBody(req).then((raw) => handler(JSON.parse(raw || "{}"))).catch(() => notFound())`. A handler declines by calling `notFound()`. Every body branch is written `return withJsonBody(...)`, because a missing synchronous `return` lets the catch-all write first and the late write throws `ERR_HTTP_HEADERS_SENT`.
+- Add `notFound()` beside `sendRows` inside the request handler, used by both the catch-all and the new branches. It returns early if headers were sent and keeps the catch-all body `{ error: "Not found", path: url.pathname }` verbatim. It prints one stderr line per distinct actor, method and pathname (`[mock-supabase] unhandled actor=<id> POST /auth/v1/...`), where actor is `eqParam(url, "user_id") ?? bearerSub(req.headers.authorization ?? "") ?? "-"`. The dedupe set, `const unhandled = new Set<string>()`, is declared in `startMockSupabase` above `http.createServer`. The mock runs in the Playwright runner, so that line reaches the CI log, while the dev server's stdout does not.
+- Add `withJsonBody(handler)` beside it: `void readBody(req).then((raw) => handler(JSON.parse(raw || "{}"))).catch(() => notFound())`. A handler declines by calling `notFound()`. Every body branch is written `return withJsonBody(...)`, because a missing synchronous `return` lets the catch-all write first and the late write throws `ERR_HTTP_HEADERS_SENT`.
+- Wire shapes, from auth-js 2.99.2: `generate_link` returns `hashed_token` flat at the top level with the user fields, not nested under `properties`. `verify` must include `access_token`, `refresh_token`, `expires_in` and `user`, or the SDK returns a null session.
 - Where the bearer `sub` or the URL identifies the fixture, gate on it synchronously and fall through for anything else, so only fixture requests go async.
 - `get_workspace_web_egress` picks the fixture by the bearer's `sub` and returns its row's `web_egress` only when `p_workspace_id` is its own workspace, else `null`, matching the real RPC's answer to a non-member.
 - `is_jti_denied` returns `false` for the two fixture `jti` values and sends anything else to `notFound()`.
@@ -135,14 +156,15 @@ Each test proves state before it measures:
 
 1. Sign in as the fixture with inline storage state and stub the shell routes. Collect `pageerror` events.
 2. Open `/dashboard/settings/scope-grants` at 390x844 with the transient-abort retry from `settings-kb-sync-held.e2e.ts`.
-3. Assert the switch's `aria-checked` and that it is enabled. The ON assertion carries a diagnostic message, because any mock fault otherwise reads only as `"false"`:
+3. Wait for the switch, then assert its `aria-checked` and that it is enabled. The ON assertion carries a diagnostic message, because any mock fault otherwise reads only as `"false"`:
 
    ```ts
-   await expect(toggle, "web_egress read fell closed to OFF. Check [mock-supabase] unhandled lines, then compare the mock's egress branches with mintFounderJwt in lib/supabase/tenant.ts.").toHaveAttribute("aria-checked", "true");
+   await expect(toggle).toBeVisible({ timeout: 90_000 }); // Cold compile, as in settings-kb-sync-held.e2e.ts.
+   await expect(toggle, "web_egress read fell closed to OFF. Check [mock-supabase] unhandled lines for this fixture's actor id and for actor=-, then compare the mock's egress branches with mintFounderJwt in lib/supabase/tenant.ts.").toHaveAttribute("aria-checked", "true");
    ```
 
-4. Wait for hydration. The OFF test proves it with the click retry. The ON test polls `toggle.evaluate((el) => Object.keys(el).some((k) => k.startsWith("__reactProps$")))`.
-5. Assert the render count of each disclosure, then hide `nextjs-portal`, which floats over content on the dev server only.
+4. Assert the render count of each disclosure for the first-rendered state (`n` is 2 when ON, 1 when OFF with the dialog closed), then hide `nextjs-portal`, which floats over content on the dev server only.
+5. Wait for hydration. The ON test polls `toggle.evaluate((el) => Object.keys(el).some((k) => k.startsWith("__reactProps$")))`. The OFF test proves it with the click retry that opens the dialog, then asserts the render count is 2.
 6. Run the surface and paragraph checks on each surface.
 7. End by asserting no "Something went wrong" heading and an empty `pageerror` list, as `settings-kb-sync-held.e2e.ts` does.
 
@@ -150,7 +172,7 @@ Each test proves state before it measures:
 // The shell's overflow-x-hidden makes the document check unable to fail, so each surface is also measured.
 // Range rects include text nodes, which element rects miss.
 async function expectFitsPhone(page: Page, surface: Locator): Promise<void> {
-  await expect(surface).toBeVisible(); // Fail fast: the config sets no actionTimeout.
+  await expect(surface).toBeVisible(); // Fail fast: expect defaults to 5 s, and Locator.evaluate below has no such bound.
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   const m = await surface.evaluate((el) => {
     const range = document.createRange();
@@ -191,16 +213,16 @@ const dialog = section.getByRole("alertdialog");
 const toggle = section.getByRole("switch");
 ```
 
-The paragraph check reads `surface.locator("p").allTextContents()`, trims each, and requires exactly one entry equal to `PUSH_DISCLOSURE` and exactly one equal to `GH_DISCLOSURE`, imported from `lib/web-egress-disclosure.ts`.
+The paragraph check reads only paragraphs the user can see, because `allTextContents()` and `getByText` both count hidden elements: `surface.locator("p").evaluateAll((ps) => ps.filter((p) => p.checkVisibility({ opacityProperty: true, visibilityProperty: true })).map((p) => p.textContent?.trim() ?? ""))`. It requires exactly one entry equal to `PUSH_DISCLOSURE` and exactly one equal to `GH_DISCLOSURE`, imported from `lib/web-egress-disclosure.ts`. TypeScript 5.9.3's `CheckVisibilityOptions` declares both option names, so this passes the `next build` type-check.
 
-The dialog opens with the `toPass` click retry. The confirm button then takes `scrollIntoViewIfNeeded()`, `toBeInViewport({ ratio: 1 })` and `click({ trial: true })`. The trial click proves nothing covers it and fires no handler. The spec never performs a real confirm.
+The dialog opens with the `toPass` click retry, bounded by `toPass({ timeout: 45_000 })` as in `openDisconnect`. The confirm button, located with `dialog.getByRole("button", { name: "I understand — turn it on" })`, then takes `toBeVisible()`, `scrollIntoViewIfNeeded({ timeout: 10_000 })`, `toBeInViewport({ ratio: 1 })` and `click({ trial: true, timeout: 10_000 })`. The config sets no `actionTimeout`, so without these bounds a missing or covered button waits out the 180-second test timeout on both CI attempts. The trial click proves nothing covers it and fires no handler. The spec never performs a real confirm.
 
-All of these assertions ran in the probe against the real page and passed. In the same probe, a 120-character unbroken token drove the surface check red on each surface.
+The locators, render counts, surface check and confirm-button checks ran in the probe against the real page and passed. In the same probe, a 120-character unbroken token drove the surface check red on each surface. The visible-paragraph filter has run only in real Chromium on a static copy of the markup, so mutation rows 13 and 14 are its first proof on the real page.
 
 ## Implementation Phases
 
 1. **RED.** Add the fixture constants to the mock, then write the spec. Run it: both tests fail on the state assertions, because no handler serves the fixtures yet.
-2. **GREEN.** Add the request branches. POST a non-JSON body and a non-fixture body to each body branch and expect the catch-all's 404 both times. Run the spec and the existing `settings-kb-sync-held` and `nav-states-inbox-legal` specs.
+2. **GREEN.** Add the request branches. POST a non-JSON body to each body branch and expect the catch-all's 404. POST a non-fixture body to each and expect the same 404, except `get_workspace_web_egress`: with a fixture bearer and another `p_workspace_id` it must return 200 with body `null`. Run the spec and the existing `settings-kb-sync-held` and `nav-states-inbox-legal` specs.
 3. **Mutation pass.** Commit, then apply each row of the Guard Contract as a temporary edit, confirm the expected result, and restore with `git restore`. Run every row from `apps/web-platform` on a fresh server with `CI=1 npx playwright test e2e/nav-states-scope-grants-web-egress.e2e.ts --project=authenticated --retries=0`: `CI=1` makes an occupied port a hard error instead of reusing another worktree's server, and a reused server would also keep its cached tenant client for 150 seconds. Do not use `git stash`. Record each row's mutation, expected result and observed result in `knowledge-base/project/specs/feat-one-shot-12605-scope-grants-phone-e2e/mutation-results.md` and commit it.
 4. **Ship.** CI is the test gate. After merge, follow the release branch in the Acceptance Criteria.
 
@@ -210,16 +232,51 @@ All of these assertions ran in the probe against the real page and passed. In th
 - Auditing `expectNoHorizontalScroll` in `settings-kb-sync-held.e2e.ts`. Recorded in #13018.
 - Testing the `collection === true` dialog copy. It needs a new env var on the shared e2e server, and its text is contained in the "unknown" copy this spec renders.
 - Proving tenant access. The mock does not enforce grants or RLS.
-- Vertical clipping (ruling F8). The spec would not catch a future `line-clamp` or `max-h` wrapper on a disclosure. The confirm button's `scrollIntoViewIfNeeded()` check has the same blind spot, because that call also scrolls `overflow: hidden` containers a phone user cannot scroll.
+- Vertical clipping (ruling F8). The spec would not catch a future `line-clamp` or `max-h` wrapper on a disclosure. The confirm button's `scrollIntoViewIfNeeded()` check has the same blind spot, because that call also scrolls `overflow: hidden` containers a phone user cannot scroll (reproduced by a reviewer in Chromium).
 - Any change to the approval-queue flag, production data, `docs/` or legal documents.
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** nothing directly, because only test code changes. A false-green spec would let a future change hide the push or `gh` disclosure from a workspace Owner on a phone before they turn on Agent web access.
-- **If this leaks, the user's data is exposed via:** no vector. The fixtures are synthesized, the mock binds only to the local e2e run, and no production code or credential is touched.
+- **If this lands broken, the user experiences:** nothing directly, because only test code changes and CI `tsc --noEmit` catches type errors before merge. The one production path is that `next build` type-checks `e2e/`, so a pruned-path import would stall the release. A false-green spec would let a future change hide the push or `gh` disclosure from a workspace Owner on a phone before they turn on Agent web access.
+- **If this leaks, the user's data is exposed via:** no vector. The fixtures are synthesized, and the mock holds no real credential or user data. The mock is not loopback-only: `server.listen(port)` binds all interfaces with wildcard CORS, so during a run another host or a web page could read its synthesized rows and mint-shaped responses. Those tokens are unsigned and name fixture users that exist only in this mock. No production code or credential is touched.
 - **Brand-survival threshold:** `none`
 - **Threshold decision (challengeable):** no shipped behaviour changes, so one failure cannot reach a user.
-- `threshold: none, reason: the diff touches only the offline Playwright mock and one spec, neither of which is bundled into or executed by the production app.`
+- `threshold: none, reason: the diff touches only the offline Playwright mock and one spec, neither of which is bundled into or executed by the production app. next build does type-check e2e/ inside the image (tsconfig **/*.ts, no .dockerignore line for e2e/), so both files import only node:*, @playwright/test, lib/ and ./mock-supabase, never @/test/... or other pruned paths (#7756).`
+
+## Observability
+
+This code runs only in the CI test job, so its signal is the required check and not a production monitor.
+
+```yaml
+liveness_signal:
+  what: the required e2e CI check, which runs this spec on PR and merge-group runs touching app paths
+  cadence: per PR push and per merge-group run
+  alert_target: GitHub required status check, which blocks the merge
+  configured_in: .github/workflows/ci.yml job e2e
+
+error_reporting:
+  destination: GitHub Actions e2e job log; no Sentry path, because this code never runs in production
+  fail_loud: the failed assertion's message, plus a "[mock-supabase] unhandled actor=<id> METHOD path" line on stderr
+
+failure_modes:
+  - mode: the mock drifts from mintFounderJwt, so the web_egress read falls closed to OFF
+    detection: the ON test's aria-checked assertion and its diagnostic message
+    alert_route: required e2e check on the PR that caused it (layer 6, workflow run log)
+  - mode: a disclosure surface overflows at 390 px
+    detection: expectFitsPhone on that surface
+    alert_route: required e2e check on the PR that caused it (layer 6, workflow run log)
+  - mode: a disclosure is merged, duplicated, hidden or removed
+    detection: the paragraph check and the getByText render count
+    alert_route: required e2e check on the PR that caused it (layer 6, workflow run log)
+
+logs:
+  where: GitHub Actions e2e job log, plus its test-results artifact, which uploads on failure only
+  retention: artifact kept 7 days (retention-days in the e2e job); job log per the repository's Actions retention
+
+discoverability_test:
+  command: grep -l EGRESS_E2E_USERS apps/web-platform/e2e/nav-states-scope-grants-web-egress.e2e.ts
+  expected_output: apps/web-platform/e2e/nav-states-scope-grants-web-egress.e2e.ts
+```
 
 ## Domain Review
 
@@ -240,15 +297,15 @@ None. No open `code-review` issue names `e2e/mock-supabase.ts`, `nav-states-` or
 
 ### Guard 1 — Scope Grants phone-width disclosure spec
 
-**Property.** At 390x844, for every surface that renders the web-egress disclosures from real server state, all text stays within the viewport, the surface does not overflow, each disclosure is exactly one paragraph, and the dialog's confirm button is fully in the viewport and unobstructed.
+**Property.** At 390x844, for every surface that renders the web-egress disclosures from real server state, all text stays within the viewport, the surface does not overflow, each disclosure is exactly one visible paragraph, and the dialog's confirm button is fully in the viewport and unobstructed.
 
-**Assembly.** The disclosure constants have three render sites: the ON block and enable dialog in `components/settings/web-egress-toggle.tsx`, and the callout in `app/(dashboard)/dashboard/settings/scope-grants/page.tsx`. Every surface flows through `expectFitsPhone` and the paragraph check in the spec. To catch a fourth render site on this page, each test asserts `getByText(<constant>, { exact: true })` has the expected count for both constants: 2 when ON, 1 when OFF with the dialog closed, and 2 when OFF with the dialog open. A render on another route is outside this guard. The state reaches the page only through the mint path and `get_workspace_web_egress`, which reads the fixture's workspace row.
+**Assembly.** The chokepoint is the pair of constants exported by `lib/web-egress-disclosure.ts`: every disclosure on this page renders one of them. Today they render at three sites: the ON block and enable dialog in `components/settings/web-egress-toggle.tsx`, and the callout in `app/(dashboard)/dashboard/settings/scope-grants/page.tsx`. Every surface flows through `expectFitsPhone` and the paragraph check in the spec. To catch a fourth render site on this page, each test asserts `getByText(<constant>, { exact: true })` has the expected count for both constants: 2 when ON, 1 when OFF with the dialog closed, and 2 when OFF with the dialog open. That count includes hidden elements, so the paragraph check is what proves each disclosure is visible. A render on another route is outside this guard. The state reaches the page only through the mint path and `get_workspace_web_egress`, which reads the fixture's workspace row.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Merge `PUSH_DISCLOSURE` and `GH_DISCLOSURE` into one `<p>` in the dialog | RED |
+| 1 | Merge `PUSH_DISCLOSURE` and `GH_DISCLOSURE` into one `<p>` in the dialog | RED on the render count |
 | 2 | Dispatch: delete the mock's `/auth/v1/verify` branch, so the mint fails and the read falls closed to OFF | RED on the ON test's `aria-checked`, never a pass on an absent block |
 | 3 | Second member: add `whitespace-nowrap` to `GH_DISCLOSURE` in the callout only, with the ON block compliant | RED, while the document check alone still reads 390 |
 | 4 | Add `whitespace-nowrap` to the ON block's `PUSH_DISCLOSURE` paragraph | RED |
@@ -260,6 +317,9 @@ None. No open `code-review` issue names `e2e/mock-supabase.ts`, `nav-states-` or
 | 10 | Flip the ON fixture's workspace row to `web_egress: false` | RED on `aria-checked` |
 | 11 | Harness: change the Range filter to `r.width < 0`, so no rect is measured | RED on `count > 0` |
 | 12 | Must pass: append a short extra `<p>` with unrelated text to the callout | GREEN, because the check does not pin the paragraph total |
+| 13 | Add `hidden md:block` to the callout's `GH_DISCLOSURE` paragraph | RED on the paragraph check, while the render count and `expectFitsPhone` stay green |
+| 14 | Change the dialog's `GH_DISCLOSURE` `<p>` to a `<div>` | RED on the paragraph check, while the render count stays correct |
+| 15 | Add `whitespace-nowrap` to the dialog's `GH_DISCLOSURE` paragraph | RED on `expectFitsPhone(page, dialog)`, while the document check still reads 390 |
 
 **Anchor.** No stored value is compared. Expected disclosure copy is imported from the module the components render, so a disclosure wording change cannot break this spec; the unit suite pins that wording. The confirm button's label is a literal, and a change to it fails fast on `toBeVisible`.
 
@@ -287,13 +347,14 @@ None. No open `code-review` issue names `e2e/mock-supabase.ts`, `nav-states-` or
 | `e2e/nav-states-scope-grants-web-egress.e2e.ts` | ask 2 | asked |
 | Per-surface text-rect check | — | inferred — justification: ask 2's document check cannot fail inside the clipping shell (measured), so the spec would otherwise pin nothing |
 | Disclosure render count (`getByText` exact) | — | inferred — justification: one line per constant keeps the spec honest if a fourth surface renders a disclosure it does not measure |
+| Visible-paragraph filter | — | inferred — justification: without it, a disclosure hidden on phones passes the paragraph check (reproduced in Chromium) |
 | `notFound` stderr line and `aria-checked` message | — | inferred — justification: a mock fault otherwise reads only as `"false"`, because the server's cause never reaches the CI log |
 | Follow-up issue #13018 | — | inferred — justification: `wg-when-an-audit-identifies-pre-existing` requires tracking the defect the probe found |
 
 ### Split Assessment
 
 - Subsystems touched: 1 — `apps/web-platform`
-- Planned files: 2 | Estimated changed lines: 200
+- Planned files: 3 (two source files and `mutation-results.md`) | Estimated changed lines: 200
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR
 
@@ -303,9 +364,10 @@ None. No open `code-review` issue names `e2e/mock-supabase.ts`, `nav-states-` or
 
 - [ ] `apps/web-platform/e2e/mock-supabase.ts` serves an Owner membership and workspace rows with `web_egress` true and false, for the two new fixture ids only.
 - [ ] `apps/web-platform/e2e/nav-states-scope-grants-web-egress.e2e.ts` carries a `pyramid-justified:` marker and runs in the `authenticated` project at 390x844.
-- [ ] The ON test asserts `aria-checked="true"` before measuring, then passes the document check, `expectFitsPhone` and the paragraph check for the ON block and callout.
+- [ ] The ON test asserts `aria-checked="true"` and an enabled switch before measuring, then passes the document check, `expectFitsPhone` and the paragraph check for the ON block and callout.
 - [ ] The OFF test asserts `aria-checked="false"` and an enabled switch, opens the dialog, then passes the same checks for the dialog and callout.
-- [ ] The confirm button passes `scrollIntoViewIfNeeded()`, `toBeInViewport({ ratio: 1 })` and `click({ trial: true })`.
+- [ ] The paragraph check counts only visible paragraphs, so a disclosure hidden at 390 px fails it.
+- [ ] The confirm button passes `toBeVisible()`, `scrollIntoViewIfNeeded()`, `toBeInViewport({ ratio: 1 })` and `click({ trial: true })`.
 - [ ] Neither test performs a real confirm, and each ends with no page error and no "Something went wrong" heading.
 - [ ] `knowledge-base/project/specs/feat-one-shot-12605-scope-grants-phone-e2e/mutation-results.md` has one row per Guard Contract mutation with its observed result, and `soleur:ship` copies that table into the final PR body.
 - [ ] `git diff --name-only origin/main...HEAD` lists no file under `docs/`, no legal document and no production source. `playwright.config.ts` and `FLAG_APPROVAL_QUEUE` are unchanged.
@@ -315,9 +377,13 @@ None. No open `code-review` issue names `e2e/mock-supabase.ts`, `nav-states-` or
 ### Post-merge
 
 - [ ] This merge triggers Web Platform Release, because its path filter includes `apps/web-platform/**`. Run `soleur:postmerge`, then read the deploy arm directly, because postmerge skips Phase 3.7 for this diff and its report would not print `release_failed`: run `bash plugins/soleur/scripts/deploy-arm.sh find --wait 25 <full-merge-sha>` and branch on its line:
-  - **`MATCH=exact DEPLOY=blocked`:** get the job id with `gh run view <ARM> --json jobs --jq '.jobs[] | select(.name=="resolve-target") | .databaseId'`, then read `gh api repos/jikig-ai/soleur/check-runs/<id>/annotations --jq '.[].message'`. If it contains `[skip_reason=release_failed]`, comment on #12937 with the run link and do not emit DONE.
-  - **`MATCH=descendant`:** do not attribute a failure to this PR or comment on #12937. Run `deploy-arm.sh served <full-merge-sha>` and report `CONTAINS` or `NOT_CONTAINED`. Do not emit DONE on `NOT_CONTAINED`.
-  - **`ARM=none`, or rc 2 or 3:** report could-not-measure and do not emit DONE.
+  - **`MATCH=exact DEPLOY=blocked`:** get the job id with `gh run view <ARM> --json jobs --jq '.jobs[] | select(.name=="resolve-target") | .databaseId'`, then read `gh api repos/jikig-ai/soleur/check-runs/<id>/annotations --jq '.[].message'`. If it contains `[skip_reason=release_failed]`, comment on #12937 with the run link and do not emit DONE, whatever `served` reads. If it contains `release_run_missing` or `github_api_unavailable`, run `gh run rerun <ARM> --failed` once and re-run `find --wait 25`; if it fails the same way, wait about 15 minutes and retry once more, then report it and do not emit DONE. On any other reason or none, do not comment on #12937 and apply the `served` rule.
+  - **`MATCH=exact` with `DEPLOY=success`, `failure` or `superseded`:** do not comment on #12937; apply the `served` rule.
+  - **`MATCH=exact DEPLOY=skipped`:** do not comment on #12937. If `CI=failure`, report CI red and do not emit DONE. Otherwise run `served`: on `UNRESOLVED` or `ERROR`, report could-not-measure and do not emit DONE; on anything else, report not deployed by design.
+  - **`MATCH=descendant`:** do not attribute a failure to this PR or comment on #12937; apply the `served` rule.
+  - **rc 2 (`ARM=none REASON=error`):** report could-not-measure with its `CAUSE` and do not emit DONE.
+  - **rc 3 `ARM=none`, including `timeout`:** do not comment on #12937; apply the `served` rule (`CONTAINS` means a later or manual deploy delivered this merge).
+  - **`served` rule:** run `bash plugins/soleur/scripts/deploy-arm.sh served <full-merge-sha>`. `CONTAINS`: report verified and name any failed deploy from the `find` line. `NOT_CONTAINED`: report the `find` line and do not emit DONE. `UNRESOLVED` or `ERROR`: report could-not-measure and do not emit DONE.
 
 ## Test Scenarios
 
@@ -327,6 +393,7 @@ All are `e2e` layer: jsdom cannot measure layout, and the unit suite already pin
 - Given an Owner with `web_egress` false, when they tap the switch, then the dialog opens, it and the callout fit, and the confirm button is fully in the viewport and unobstructed.
 - Given the mint path fails, when the page opens, then the ON test fails on `aria-checked` instead of passing on an absent block.
 - Given a surface gains an unbreakable long string, when the spec runs, then `expectFitsPhone` fails although the document's `scrollWidth` stays 390.
+- Given a disclosure is hidden at phone width, when the spec runs, then the paragraph check fails although the render count stays correct.
 
 ## Sharp Edges
 
@@ -335,8 +402,11 @@ All are `e2e` layer: jsdom cannot measure layout, and the unit suite already pin
 - Do not import `expectNoHorizontalScroll` from the held-files spec. It reads only the document's width.
 - Locally, `reuseExistingServer` adopts whatever already holds port 3100, including another worktree's server. Use the `CI=1` command in Phase 3 for any result you record.
 - A POST branch that has awaited its body cannot fall through to the catch-all. Use `withJsonBody` with a synchronous `return`, so a throw cannot hang the request until the 180-second test timeout.
+- `next build` type-checks `e2e/` inside the image (tsconfig `**/*.ts`, no `.dockerignore` line for `e2e/`). Both files import only `node:*`, `@playwright/test`, `lib/` and `./mock-supabase`, never `@/test/...` or other pruned paths (#7756).
+- `allTextContents()` and `getByText` count hidden elements. Use the visible-paragraph filter for any check that claims a user can read the text.
 
 ## References
 
 - Issue #12605, follow-up #13018, release blocker #12937, draft PR #13017
-- PR #12567 (owed this check), PR #12704 (added the mock's workspace branches)
+- PR #12465 (added `GH_DISCLOSURE`), PR #12567 (added `PUSH_DISCLOSURE` and owed this check), PR #12704 (added the mock's workspace branches)
+- `apps/web-platform/node_modules/playwright-core/types/types.d.ts` (`exact`, `trial`), `apps/web-platform/node_modules/playwright/types/test.d.ts` (`toBeInViewport` ratio, `toHaveCount`, expect timeout 5000 ms)
