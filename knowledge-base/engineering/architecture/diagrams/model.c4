@@ -3,7 +3,7 @@
 // C4 level (context / container / component) with clickable drill-down.
 // Migrated 1:1 from the former Mermaid C4 diagrams (system-context, container,
 // component-plugin) — union of all elements and relationships, nothing dropped.
-// last-verified: 2026-11-08
+// last-verified: 2026-11-22
 // 2026-10-18 audit: drift recorded as `//` comments next to the affected elements (api,
 // github -> tunnel, the L3 command components), NOT as description edits. Every
 // description/element change must ship with a regenerated model.likec4.json
@@ -21,6 +21,11 @@
 // match plugins/soleur/README.md. Every earlier DRIFT note still holds; the SSH-provisioner count
 // moved again (28 -> 30, #12167 PR-G nonlocal_bind_sysctl pair). One new stale claim on the Session
 // Router (placement is at first-message auth, not the WS upgrade): search "DRIFT (2026-11-08".
+// 2026-11-22 audit: skills 107 -> 108 (plugins/soleur/skills/*/SKILL.md, matching README.md), the
+// same same-length swap at all three occurrences (here + two in model.likec4.json). Agents (69) and
+// commands (4) still match. Every earlier DRIFT note was re-measured and still holds (the SSH-provisioner
+// count is unchanged at 32). One new uncovered Terraform root, the parked rundevoo.run Cloudflare zone,
+// is recorded as a comment: search "DRIFT (2026-11-22".
 model {
 
   codex = system "Codex" {
@@ -56,7 +61,7 @@ model {
   founder -> cursorCli "Runs Soleur from the local Cursor CLI"
   cursorCli -> platform.plugin "Loads generated skill and agent stubs from the plugin root" { technology "File I/O" }
 
-  // DRIFT (2026-10-25 audit, re-confirmed 2026-11-01 and 2026-11-08): two more harnesses load the plugin and have no element here.
+  // DRIFT (2026-10-25 audit, re-confirmed 2026-11-01, 2026-11-08 and 2026-11-22): two more harnesses load the plugin and have no element here.
   // (1) OpenCode V2 (ADR-291, accepted 2026-10-20, shipped v3.342.0 / PR #10571): `opencode` is a
   // member of the Harness union in plugins/soleur/lib/harness.ts; the adapter is
   // plugins/soleur/opencode/ (plugin.ts hook module binding the guards at permission.evaluate,
@@ -199,7 +204,7 @@ model {
 
       skills = container "Skills" {
         technology "Markdown SKILL.md"
-        description "107 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
+        description "108 workflow skills — brainstorm, plan, work, review, compound, cohort-status, etc."
       }
       agents = container "Agents" {
         technology "Markdown Agent Defs"
@@ -211,7 +216,7 @@ model {
       }
 
       // C4 L3 — components inside the Soleur Plugin
-      // DRIFT (2026-10-18 audit, re-confirmed 2026-10-25, 2026-11-01 and 2026-11-08): plugins/soleur/commands/ holds FOUR commands (go, sync, help,
+      // DRIFT (2026-10-18 audit, re-confirmed 2026-10-25, 2026-11-01, 2026-11-08 and 2026-11-22): plugins/soleur/commands/ holds FOUR commands (go, sync, help,
       // version); only three are drawn here. /soleur:version is the explicit, user-started
       // installed-vs-latest compare named on the `plugin -> github` edge (#10064). Add a
       // `version` component (and its views.c4 include) with a model.likec4.json regeneration.
@@ -376,7 +381,7 @@ model {
       // USER-STICKY (ADR-068 2026-07-01 amendment): a session routes to the host
       // holding that user's per-user worktree lease; control ops are sticky to
       // the owner (NO cross-host forwarding). Redis enters at Phase 4a. GA at P3.
-      // DRIFT (2026-11-08 audit): the description below says the owning host is resolved "at the
+      // DRIFT (2026-11-08 audit, re-confirmed 2026-11-22): the description below says the owning host is resolved "at the
       // WS-upgrade handshake", but apps/web-platform/server/session-router.ts takes the placement
       // decision at FIRST-MESSAGE AUTH, explicitly NOT at the raw upgrade (no userId exists there),
       // then relays the socket transparently. The relay transport is now concrete (#12167 PR-E/PR-G):
@@ -447,6 +452,14 @@ model {
     description "jikig-ai/soleur-marketplace — a public repo holding ONLY .claude-plugin/marketplace.json, README and LICENSE (~39 KB). Its single plugin entry is a keyless, unpinned git-subdir source pointing at plugins/soleur in the monorepo, so an install materialises the plugin subtree alone (~10 MiB) instead of the whole repository. Its contents are OWNED BY TERRAFORM (#7493): github_repository_file.marketplace_manifest publishes the manifest from infra/github/soleur-marketplace-manifest.json in the monorepo, so the artifact carries that repo's CI (the always-run marketplace-manifest-guard context), its required checks and the CODEOWNERS pin on /infra/github/. A default-branch ruleset requires a PR with one approval and blocks deletion and force-push, bypassed only by the org admin, the Admin repo role and the soleur-ai App. That removes the DIRECT unreviewed push path for the two other org-wide contents:write Apps (claude, entire); it does not close them — they could still collude via PR-and-approve, and the ruleset governs this repo only, so the manifest is additionally protected at apply time by a ref guard and a tree-equals-main assertion in apply-github-infra.yml. Superseded: this element previously stated it had no CI, no review and no CODEOWNERS, with scheduled-marketplace-drift.yml as its only control. Since #7490 the drift workflow carries a second job that installs the published plugin in CI and asserts delivered content (ADR-182 Decision 6). KNOWN GAP (#9360): the CI apply writes as the soleur-infra App (loader infra mode since #8209 O3), which is not a bypass actor, so a manifest write is refused (409) until #9361 swaps the App bypass actor to soleur-infra."
   }
 
+  // DRIFT (2026-11-22 audit): Terraform now manages a SECOND Cloudflare zone that this model does not
+  // mention. The new root infra/rundevoo-run (zone.tf, dns.tf; R2 state key rundevoo-run/terraform.tfstate)
+  // adopts the Registrar-created rundevoo.run zone in the "Soleur" Cloudflare account and gives it a
+  // safe-by-default posture: RFC 7505 null MX, v=spf1 -all, DMARC p=reject, DNSSEC. CI applies it through
+  // .github/workflows/apply-rundevoo-infra.yml with the zone-scoped CF_API_TOKEN_RUNDEVOO (#12971). It is
+  // parked: no site, app or mail surface (product shape deferred to #12972), so no new element is
+  // warranted. The cloudflare description below and the github -> cloudflare edge name only the
+  // soleur.ai zone. Naming the second zone is a description edit, so it needs a model.likec4.json regeneration.
   cloudflare = system "Cloudflare" {
     #external
     description "TWO ACCOUNTS, ONE VENDOR, ONE DPA (#12931, ADR-329): DNS, CDN, Pages, the zone and account rulesets, the zero-trust tunnel and Access live on the Soleur account (var.cf_account_id) once the migration completes - TRANSITIONAL until then: the zone, its records and the Pages project are there now, the rulesets and lists arrive with the redirects-dns phase and the tunnel and Access with the PR2 tunnel phase (the legacy-account tunnel lingers until cleanup); R2 (the Terraform state buckets, the LUKS header escrow, CLA evidence) stays on the legacy account (var.cf_r2_account_id). The soleur.ai zone runs on the Free plan, with DNSSEC gated off (cf_zone_dnssec_enabled=false, locked by validation; re-enable tracked by #12982). From #7640/ADR-194 it is also the HOST of the marketing/docs site, a role it did NOT carry before. A direct-upload `cloudflare_pages_project` (soleur-docs, production_branch=main, no `source` block so the Git integration is deliberately NOT used) with soleur.ai and www.soleur.ai attached as `cloudflare_pages_domain` custom domains; deploy-docs.yml publishes `_site` to it with a version-pinned `wrangler pages deploy` AFTER the same six build gates, so the gate chain stays authoritative over what is served. The point is structural, not vendor preference: Cloudflare serving the site means there is NO ORIGIN LEG and no origin certificate, which is the entire failure class the migration deletes (the apex was GitHub-Pages-hosted behind this same proxy, and GitHub refuses to issue a cert for a proxied host). Also owns the rebuilt `www -> apex` 301, as an ACCOUNT-LEVEL Bulk Redirect on the `http_request_redirect` phase with its own Free quota — NOT a rule in `cloudflare_ruleset.seo_page_redirects`, whose 10-rule Free cap and whose Rule 10 (HTTPS upgrade + its inline ACME carve-out clause) are untouched by this work. Cloudflare documents Bulk Redirects as running IN FRONT OF a Pages project, which is what lets www stay attached to the project rather than parked on a black-hole IP. No new vendor, no new bill and no DPA change: already a sub-processor, already the zone owner. From #11181/PR #11766 until #12931 it carried the GA LOAD BALANCER on app.soleur.ai (ADR-068 §(b)). Since #12931 the load balancer, its pool, monitor and health-alert policy are GATED OFF (cf_load_balancing_enabled=false, count 0; the Soleur account has no Load Balancing subscription, the flag is locked to false by validation, the purchase decision is #12983, and cf-lb-overlay.yml refuses while the flag is false): the proxied app A record serves app.soleur.ai from web-1 alone."
@@ -793,6 +806,7 @@ model {
   // Correct the count with a regeneration.
   // Re-measured at #12007 (PR review, 2026-11-08): server.tf now holds 28 SSH-connected terraform_data (27 plus web_1_host_key_probe; host_kernel_marker_install
   // and host_kernel_marker_install_web2 added, FLOOR_RESOURCES = 28), so the whole-root count above becomes 32 (server.tf 28, workspaces-luks.tf 3, ci-ssh-key.tf 1).
+  // Re-measured 2026-11-22 audit: unchanged at 32 (server.tf 28, workspaces-luks.tf 3, ci-ssh-key.tf 1).
   github -> tunnel "CI reaches the deny-all-public zot host to dual-push release images, and reaches web-1's shell for the 28 server.tf terraform_data SSH provisioners (27 plus the read-only web_1_host_key_probe, the count web-host-provisioner-parity.test.sh pins as FLOOR_RESOURCES; #12007 added host_kernel_marker_install and host_kernel_marker_install_web2, the latter reached by the same ssh -L forward through the pinned web-1 bastion as deploy_pipeline_fix_web2 with no new tunnel ingress, both operator-applied rather than delivered by the merge; #9151 added deploy_pipeline_fix_web2, which apply-deploy-pipeline-fix.yml reaches by an ssh -L 2223:<web-2-private>:22 forward THROUGH the pinned web-1 bastion plus a second OUTPUT REDIRECT — web-2's pinned host key on the connection block, no new tunnel ingress; #9534 added egress_gateway and egress_gateway_web2, both in apply-web-platform-infra.yml's SSH-stage target list, which opens no web-2 forward because the shared bridge redirects web-1 only) — both ONLY through this tunnel, via CF Access service tokens (separate tokens per route, so registry-write rotates independently of host-shell access). The ssh. hop also carries git-data-cutover.yml's jump to the git-data store (ADR-220). HOST KEY PINNED (ADR-237, #7226/#8125): web-1's ECDSA-P256 host key is a committed, reviewed pin (apps/web-platform/infra/web-1-ssh-host-key.pub, captured outside Cloudflare) that the bridge writes into a strict known_hosts for its bash callers and that every Terraform connection block sets as host_key, so neither the CF edge nor anything else can stand in for web-1; a mismatch fails closed. ACCESS AND TUNNEL ARE SEPARABLE AND THIS EDGE DEPENDS ON BOTH — a distinction this model otherwise elides (there is no distinct Access node; it lives only in edge descriptions like this one). ADMISSION is decided by CF Access at the edge; TRANSPORT is the tunnel. They fail independently, and the Access failure is the one that looks healthy: cloudflared connects, the local 127.0.0.1:2222 listener opens, and `nc -z` succeeds, because the service-token handshake is refused only when a connection is actually proxied. 2026-07-28 CAUSE CLASS (#7095), a SECOND instance of the token-rotation shape recorded on the registry. edge above but on the ssh. route: the ci_ssh Access service token was rotated out-of-band during incident response, and since Cloudflare returns client_secret ONLY at create, both Terraform state and Doppler went stale invisibly while `terraform plan` stayed clean. Run 30650564509 built this bridge, DESTROYED terraform_data.{infra_config_handler_bootstrap,deploy_pipeline_fix}, and only then failed on `ssh: handshake failed: connection reset by peer` — leaving state emptier than reality and production undeployable for 3 days on a host whose cx33 type had 0/6 datacenter stock, i.e. unreplaceable. GATED SINCE #7133 (ADR-154): the shared cf-tunnel-ssh-bridge composite's FINAL step asserts Access still admits the credential and fails with a named reason (ci_ssh_access_denied / ci_ssh_liveness_unverifiable / ci_ssh_liveness_unavailable) BEFORE any caller's terraform runs. Repair path is the ci-ssh-token-replace dispatch arm, never a host replace." { technology "cloudflared access tcp/ssh (CF Access service token; admission liveness-gated in-bridge since #7133)" }
   hetzner -> tunnel "ONE web host runs a cloudflared connector in prod: web-2 since ADR-304 (2026-10-27) — the role moved permanently off LUKS-pinned web-1, which cannot be re-imaged; the fsn1 web-2 was retired 2026-07-17 (#6538/#6463) and the current cattle web-2 (10.0.1.11, #6969, a scheduler-less standby (runs the #8495 watchdog dispatch clock) with web_colocate_inngest=false) carries the connector on its next replace. Historically TWO were live: the server.tf web_tunnel_connector gate (#6425) was meant to leave only web-1, but it lives at cloud-init create-time user_data and hcloud_server.web has ignore_changes=[user_data], so it never re-ran on web-2 (booted 2026-07-13, before the gate merged 2026-07-15). Registration is ALSO NIC-gated at first boot since #6441 (ADR-114 I1): runcmd waits for the host's expected private address before `cloudflared service install`, then defers rather than aborting — post-#6594 a connector without its private NIC serves NOTHING, since all three ingress services are private-IP-relative. Like the #6425 gate this is create-time user_data only, so NO gate re-runs on a host that is already up: web-1's LIVE registration is not NIC-gated and never will be by this mechanism. So ssh:// and deploy. ingress are NOT deterministic by one-connector — they are deterministic because #6594/PR-A made their services origin-relative to web-1 (ADR-114 I2 discharged). CF still picks a connector per edge colo; the origin-relative pin makes that choice irrelevant to correctness. NOTE: the 'in-band hostname tripwire' this edge previously credited to the SSH provisioners does NOT exist — measured 2026-07-17, zero host-identity assertions in the 12 connection{} inlines (ADR-068:413's claim is false). The only retained absorption layer is ADR-068's private-net fan-out (deploy only)." { technology "cloudflared (outbound QUIC; ONE connector live: web-2)" }
   hetzner -> claude "Hosts" { technology "Docker" }
@@ -834,7 +848,7 @@ model {
   // CI -> Hetzner Cloud API. Absent until the G3 generation anchor (2026-09-24), although several
   // workflows already call the API. This edge is the CONTROL-PLANE API, not the hosts: nothing here
   // reaches the dedicated host, which has no inbound path (ADR-225).
-  // DRIFT (2026-11-01 audit, re-confirmed 2026-11-08): the description below names "the single-use workspaces-plaintext-forget.yml"
+  // DRIFT (2026-11-01 audit, re-confirmed 2026-11-08 and 2026-11-22): the description below names "the single-use workspaces-plaintext-forget.yml"
   // in the present tense, but that workflow is gone from .github/workflows/: PR #9348 deleted it after its
   // one run from main (run 37803274724, 2026-10-08). ADR-241 now cites it at 59abf6a76c and the
   // destruction record is knowledge-base/legal/audits/workspaces-plaintext-destruction-record.md.
