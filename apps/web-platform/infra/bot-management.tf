@@ -55,6 +55,7 @@ resource "cloudflare_bot_management" "soleur_ai" {
   fight_mode         = false
   enable_js          = true
 
-  sbfm_definitely_automated = "allow"
-  sbfm_verified_bots        = "allow"
+  # Super Bot Fight Mode fields are Pro-only; null on the Free plan (#12931).
+  sbfm_definitely_automated = var.cf_zone_plan_pro ? "allow" : null
+  sbfm_verified_bots        = var.cf_zone_plan_pro ? "allow" : null
 }

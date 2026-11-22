@@ -53,7 +53,7 @@
 # the TF doppler provider; the R2 pair is the deferred mint, tracked on #9377).
 resource "cloudflare_r2_bucket" "workspaces_luks_header_web" {
   provider   = cloudflare.r2
-  account_id = var.cf_account_id
+  account_id = var.cf_r2_account_id
   name       = "soleur-workspaces-luks-header-web"
   # WEUR is a PLACEMENT HINT, not a jurisdiction (the workspaces-luks-header.tf paragraph, #7624): this
   # bucket sits on Cloudflare's `default` jurisdiction and custody by Cloudflare, Inc. (US) is a Chapter V

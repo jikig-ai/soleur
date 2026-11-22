@@ -27,9 +27,12 @@ at once — so the retained-scope probe is the load-bearing half, not the widen.
 
 ## Usage
 
-The deterministic core is a read-only probe script,
+The deterministic core is a probe script,
 [cf-token-scope.sh](./scripts/cf-token-scope.sh). It only ever probes — run it as
-often as needed; it mutates nothing.
+often as needed; it mutates nothing. The `rulesets` and `default-token` profiles
+send GETs only. The two account-migration profiles (`redirects-dns`, `zone-rest`)
+also send write verbs, but only with a fixed body that cannot validate (see
+[Migration profiles](#migration-profiles-12931)).
 
 ### Preflight: verify the plugin install before any snapshot
 
@@ -64,6 +67,11 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/cf-token-scope/scripts/cf-token-scope.sh" \
 
 # Print the probe commands without running them (token stays unexpanded):
 bash "${CLAUDE_PLUGIN_ROOT}/skills/cf-token-scope/scripts/cf-token-scope.sh" --dry-run
+
+# #12931 account migration: write-probe the NEW-account tokens once per phase,
+# before that phase's rehearsal. --staged reads the <KEY>_NEXT staging keys (Phase 0).
+bash "${CLAUDE_PLUGIN_ROOT}/skills/cf-token-scope/scripts/cf-token-scope.sh" --profile redirects-dns --staged
+bash "${CLAUDE_PLUGIN_ROOT}/skills/cf-token-scope/scripts/cf-token-scope.sh" --profile zone-rest --staged
 ```
 
 The token (`CF_API_TOKEN_RULESETS` or `CF_API_TOKEN`, resolved by `--profile`),
@@ -169,6 +177,47 @@ its own `TARGET_PRESENT` handling and never consults this classifier. The baseli
 summary's verbatim literal (a stable grep target for the data channel):
 `NOTE: LB scope not-yet-widened — expected BEFORE the #11181 widen; re-run with --expect-lb-scopes after it`.
 
+## Migration profiles (#12931)
+
+`redirects-dns` and `zone-rest` prove that the NEW-account tokens can WRITE what
+their migration phase applies. A GET proves read access only (the 2026-07-24
+config-rules scope-gap post-mortem). They follow CTO ruling L49:
+
+- **One fixed invalid body.** Every write sends `INVALID_BODY`, a literal that is
+  not JSON, so no endpoint can validate it. The script refuses to run if it ever
+  parses as JSON. It never sends an empty-rules ruleset: that body validates and
+  wipes a live entrypoint.
+- **Deny control first.** Each write row first sends the same body with a sibling
+  token that lacks the scope. That request must answer `403`. Only then does the
+  granted token's `400` count as `authorized`. If the denied token gets `400`, the
+  endpoint may check the body before authorization, so the row is `inconclusive`
+  and the grant token is not probed.
+- **Any `2xx` is fatal.** The run reads that endpoint back with the grant token,
+  prints a sanitized summary, prints `probe=<profile> verdict=fatal-mutation` and
+  exits `4`.
+- **Write verbs are PUT, POST and PATCH only.** DELETE is never sent.
+- **Known-present controls.** GET controls must return `success:true` with a parsed
+  `.result`. `redirects-dns` lists the new zone's and account's rulesets and reports
+  each phase entrypoint as `entrypoint-present id=<id>` (import it) or
+  `entrypoint-absent` (ADR-136 whole-list audit). It reads them from the parsed
+  list, never from a 404.
+- **Ids.** The NEW account and zone ids are built in. They are not read from
+  Doppler, because `CF_ZONE_ID`/`CF_ACCOUNT_ID` hold the old ids until the swap.
+  `--account-id`/`--zone-id` override them, and the OLD ids are refused.
+
+| profile | write row | grant token | deny control |
+|---|---|---|---|
+| redirects-dns | zone entrypoints `http_request_dynamic_redirect`, `http_response_headers_transform`, `http_config_settings`, `http_request_cache_settings`, `http_request_firewall_custom` (PUT) | `CF_API_TOKEN_RULESETS` | `CF_API_TOKEN_PAGES` |
+| redirects-dns | account entrypoint `http_request_redirect` (PUT), `rules/lists` (POST) | `CF_API_TOKEN_RULESETS` | `CF_API_TOKEN_PAGES` |
+| redirects-dns | `zones/<zone>/dns_records` (POST) | `CF_API_TOKEN` | `CF_API_TOKEN_PAGES` |
+| redirects-dns | `accounts/<acct>/pages/projects` (POST) | `CF_API_TOKEN_PAGES` | `CF_API_TOKEN_RULESETS` |
+| zone-rest | `zones/<zone>/settings` (PATCH) | `CF_API_TOKEN_ZONE_SETTINGS` | `CF_API_TOKEN_BOT_MANAGEMENT` |
+| zone-rest | `zones/<zone>/bot_management` (PUT) | `CF_API_TOKEN_BOT_MANAGEMENT` | `CF_API_TOKEN_ZONE_SETTINGS` |
+
+Doppler is not probed: it is not a Cloudflare scope. The last stdout line is
+`probe=<profile> verdict=pass|denied|inconclusive|fatal-mutation`. Record it in
+the PR thread. Any verdict other than `pass` blocks that phase's dispatch.
+
 ## Exit codes
 
 - `0` — every retained scope authorized (and, per profile: the rulesets target,
@@ -180,7 +229,10 @@ summary's verbatim literal (a stable grep target for the data channel):
   absent Doppler secret, or a refused internal table-integrity tripwire (source
   drift only, unreachable by argv; stderr-only and names the corruption).
 - `3` — probe failed: a scope was dropped, degraded, or denied (assert mode: an
-  LB row still `403` or anomalous).
+  LB row still `403` or anomalous; migration profiles: a write denied, or a
+  control not established).
+- `4` — migration profiles only: an invalid-body write probe answered `2xx`. The
+  endpoint was read back and the run aborted. Treat it as a possible mutation.
 - `78` — the script REFUSED to run under shell tracing (`-x`) — a refusal, not a
   probe verdict; see the STREAM CONTRACT in the script header (#7797).
 

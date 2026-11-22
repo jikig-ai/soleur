@@ -108,13 +108,33 @@
 #   invites a line deletion. See the inventory's own header, which states both jobs.
 #
 # COVERAGE
-#   CF_API_TOKEN*             Cloudflare API tokens (single value, Bearer-verified).
+#   CF_API_TOKEN*             Cloudflare API tokens (single value, Bearer-verified;
+#                             see ACCOUNT BINDING below for which account).
 #   *ACCESS_TOKEN_ID/_SECRET  Cloudflare ACCESS SERVICE TOKENS (client-id/secret pair,
 #                             verified against the Access-protected hostname). Added
 #                             2026-07-30: this family is the FIRST case the header above
 #                             cites, and the original enumeration regex could not match
 #                             it, so the script reported a clean bill of health for a
 #                             question it never asked.
+#
+# ACCOUNT BINDING (#12931, CTO F11 / L61 — Cloudflare account migration)
+#   Cloudflare has TWO token-verify endpoints. A USER-owned token verifies at
+#   /user/tokens/verify; an ACCOUNT-owned token is unknown there (it answers
+#   success:false) and verifies only at /accounts/<id>/tokens/verify. This script
+#   used to know only the first, which is account-agnostic and so carried no
+#   account at all. After the Soleur-account migration the non-R2 tokens are
+#   minted on the NEW account, and any of them minted account-owned would grade
+#   DEAD here: a false stale-token alert on a healthy credential, the exact
+#   "rotate a healthy token" misdirection this detector exists to prevent.
+#   So a value the user endpoint does not accept is re-asked at the account
+#   endpoint of the account its KEY belongs to:
+#     *R2* keys      -> the legacy account, where R2 stays (4d5ba6f096b2686fbdd404167dd4e125)
+#     every other    -> the Soleur account (66d4f93f7397f196544e9fe84c3557c2)
+#   Both are readonly literals, never env-settable: a credentialed request's destination
+#   is pinned (#7873), so the account arm is compared against them before it is sent.
+#   LIVE needs success:true from either endpoint; DEAD needs both to refuse. This
+#   only ever turns a false DEAD into LIVE: a revoked token is refused by both.
+#   Account ids are not secrets (the R2 endpoint literal carries the legacy one).
 #
 # EXIT CODES
 #   0  every token value resolves LIVE, and every enumerated token was verifiable
@@ -138,6 +158,9 @@ esac
 
 PROJECT="${DOPPLER_PROJECT:-soleur}"
 JSON_OUT=0
+# ACCOUNT BINDING (see header): literal, readonly, never taken from the environment.
+readonly CF_VERIFY_ACCOUNT="66d4f93f7397f196544e9fe84c3557c2"
+readonly CF_VERIFY_R2_ACCOUNT="4d5ba6f096b2686fbdd404167dd4e125"
 # --only <SUBSTRING> narrows the scan to keys containing SUBSTRING. It exists for the
 # release preflight, which cares about exactly one credential (the registry-push Access
 # token) and must not spend a full fleet-wide sweep — one curl per distinct value across
@@ -1039,27 +1062,51 @@ declare -A VERDICT=()   # token value -> LIVE|DEAD  (verify each distinct value 
 _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
 _cfg_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*|*'"'*|*\\*) return 1 ;; esac; }   # config-string guard: reject empty, control chars, quote, backslash
 
-# Sets REPLY, for the same subshell reason as verify_access_pair below: called as
-# `state=$(verify_value ...)` the VERDICT writes never reached the parent, so the
-# "verify each distinct value once" promise in the --only rationale was not being kept.
+# The account a key's token belongs to (ACCOUNT BINDING in the header). R2 did not move.
+verify_account_for() {
+  case "$1" in
+    *R2*) REPLY="$CF_VERIFY_R2_ACCOUNT" ;;
+    *)    REPLY="$CF_VERIFY_ACCOUNT" ;;
+  esac
+}
+
+# _verify_at <url> <value> — one Bearer verify; prints LIVE or DEAD. The bearer rides
+# curl's stdin config channel, never its argument list. `--disable` is first (no
+# ~/.curlrc) and `--noproxy '*'` (no proxy redirection of a bearer request).
+_verify_at() {
+  curl --disable --noproxy '*' -s --max-time 20 \
+    --config - "$1" \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$2") |
+    python3 -c 'import json,sys
+try: print("LIVE" if json.load(sys.stdin).get("success") else "DEAD")
+except Exception: print("DEAD")' 2>/dev/null
+}
+
+# verify_value <value> <key> — sets REPLY, for the same subshell reason as
+# verify_access_pair below: called as `state=$(verify_value ...)` the VERDICT writes never
+# reached the parent, so the "verify each distinct value once" promise in the --only
+# rationale was not being kept. Memoised per (value, account): the user endpoint is
+# account-agnostic, but the account fallback is not, so one value under an R2 key and a
+# non-R2 key is asked of both accounts.
 verify_value() {
-  local v="$1"
-  if [[ -z "${VERDICT[$v]:-}" ]]; then
+  local v="$1" key="${2:-}" acct ck
+  verify_account_for "$key"; acct="$REPLY"
+  ck="$v"$'\x1f'"$acct"
+  if [[ -z "${VERDICT[$ck]:-}" ]]; then
     local ok=""
     if _bearer_ok "$v"; then
-      # The bearer rides curl's stdin config channel, never its argument list. `--disable` is
-      # first (no ~/.curlrc) and `--noproxy '*'` (no proxy redirection of a bearer request).
-      ok=$(curl --disable --noproxy '*' -s --max-time 20 \
-        --config - "https://api.cloudflare.com/client/v4/user/tokens/verify" \
-        < <(printf 'header = "Authorization: Bearer %s"\n' "$v") |
-        python3 -c 'import json,sys
-try: print("LIVE" if json.load(sys.stdin).get("success") else "DEAD")
-except Exception: print("DEAD")' 2>/dev/null)
+      ok=$(_verify_at "https://api.cloudflare.com/client/v4/user/tokens/verify" "$v")
       PROBES_MADE=$((PROBES_MADE + 1))
+      # Not a live USER token: ask the owning account (an account-owned token). The
+      # destination is re-checked against the two pinned literals before the bearer is sent.
+      if [[ "$ok" != "LIVE" ]] && [[ "$acct" == "$CF_VERIFY_ACCOUNT" || "$acct" == "$CF_VERIFY_R2_ACCOUNT" ]]; then
+        ok=$(_verify_at "https://api.cloudflare.com/client/v4/accounts/${acct}/tokens/verify" "$v")
+        PROBES_MADE=$((PROBES_MADE + 1))
+      fi
     fi
-    VERDICT[$v]="${ok:-DEAD}"
+    VERDICT[$ck]="${ok:-DEAD}"
   fi
-  REPLY="${VERDICT[$v]}"
+  REPLY="${VERDICT[$ck]}"
 }
 
 # ── Cloudflare ACCESS SERVICE TOKENS ────────────────────────────────────────
@@ -1244,7 +1291,7 @@ for key in $(printf '%s\n' "${!KEYSET[@]}" | sort); do
   for cfg in ${CONFIG_NAMES[@]+"${CONFIG_NAMES[@]}"}; do
     val="${API_VALS["${key}"$'\x1f'"${cfg}"]:-}"
     [[ -z "$val" ]] && continue
-    verify_value "$val"; state="$REPLY"
+    verify_value "$val" "$key"; state="$REPLY"
     if [[ "$state" == "DEAD" ]]; then
       DEAD_N=$((DEAD_N + 1)); DEAD_ROWS+=("$key|$cfg")
     else

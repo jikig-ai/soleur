@@ -116,7 +116,7 @@ resource "doppler_environment" "infra_privileged_prd" {
 # The bucket NAME is in code because a bucket name is not a secret; the bucket-scoped
 # TOKEN is operator-minted and Tier-B only (ADR-130).
 resource "cloudflare_r2_bucket" "terraform_state_privileged" {
-  account_id = var.cf_account_id
+  account_id = var.cf_r2_account_id
   name       = "soleur-terraform-state-privileged"
   location   = "WEUR"
   provider   = cloudflare.r2

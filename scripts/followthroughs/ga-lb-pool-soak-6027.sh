@@ -26,7 +26,8 @@
 #   never a silent skip of a finding leg).
 #
 # RETIREMENT: retires when the #6027 tracker closes — nothing else consumes this
-# probe. `gh issue list --label follow-through` first; a closed-within-lookback
+# probe. Also RETIRED (NOT YET) while cf_load_balancing_enabled is false (#12931 LB
+# gate, below). `gh issue list --label follow-through` first; a closed-within-lookback
 # tracker still runs it.
 set -uo pipefail
 
@@ -73,6 +74,23 @@ _bearer_ok "${CF_API_TOKEN:-}" || transient "CF_API_TOKEN fails shape guard"
 # secret exits 3 TRANSIENT instead of unbound-exit-1 under set -u (rc 1 reopens a
 # closed tracker on a read fault).
 _bearer_ok "${BETTERSTACK_API_TOKEN:-}" || transient "BETTERSTACK_API_TOKEN unset/bad shape — the incident leg cannot be established"
+
+# ── LB gate (#12931) ──────────────────────────────────────────────────────────
+# Since the Soleur-account move the GA pool, monitor and LB are count = 0
+# (cf_load_balancing_enabled defaults false) and Load Balancing is deferred on the
+# new account, so leg (a) would read pools that no longer exist and red the tracker
+# every sweep. While the committed switch is off this soak is RETIRED: NOT YET (2),
+# never PASS (the soak never completed) and never FAIL (nothing regressed). It sits
+# after the secret gates so an env -i run still exits TRANSIENT first, and before
+# any network call. Same parser as cf-lb-overlay.yml's lb_enabled_gate job.
+_SOAK_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)" || transient "cannot resolve the repository root"
+_SOAK_VARS="${_SOAK_ROOT}/apps/web-platform/infra/variables.tf"
+[[ -r "$_SOAK_VARS" ]] || transient "cannot read ${_SOAK_VARS} — whether Load Balancing is enabled is unknown"
+# shellcheck source=tests/scripts/lib/cf-lb-overlay-gate.sh
+source "${_SOAK_ROOT}/tests/scripts/lib/cf-lb-overlay-gate.sh" 2>/dev/null || transient "cannot source the LB gate lib"
+if ! cf_lb_gate_lb_enabled "$_SOAK_VARS" >/dev/null 2>&1; then
+  notyet "Load Balancing is gated off (cf_load_balancing_enabled defaults false, #12931) — the GA pool this soak reads does not exist; retired until Load Balancing returns"
+fi
 
 # ── Deploy anchor ─────────────────────────────────────────────────────────────
 DEPLOY_TS_EPOCH="${DEPLOY_TS_EPOCH:-}"

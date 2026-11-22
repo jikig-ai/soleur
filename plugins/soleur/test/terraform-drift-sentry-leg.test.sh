@@ -181,6 +181,13 @@ if [[ "${MATRIX_DIR-}" == "apps/web-platform/infra/sentry" ]]; then
   exit 97
 fi
 { printf 'DOPPLER_ARGV'; printf ' %s' "$@"; printf '\n'; } >> "$STUB_LOG"
+# `doppler secrets get NAME --plain` (no `--`): the rundevoo arm pulls its zone
+# token this way. The conf carries the answer so rows can drive empty-token
+# and shape-fail arms; a set-but-empty STUB_DOPPLER_GET must stay empty.
+if [[ "${1-} ${2-}" == "secrets get" ]]; then
+  printf '%s\n' "${STUB_DOPPLER_GET-stub-cf-token}"
+  exit 0
+fi
 while [[ $# -gt 0 && "$1" != "--" ]]; do shift; done
 shift
 exec "$@"
@@ -320,19 +327,43 @@ PY
 }
 row S2 "the secret is bound once, exactly as the gated expression, and every branching step receives MATRIX_DIR" s2
 
+# arm <matrix-dir> — the plan-step slice of one MATRIX_DIR arm, comments
+# stripped. An arm ends at the NEXT arm boundary (`elif`/`else` at column 0 in
+# the extracted run block); inner `  else` lines are indented and never match.
+# Pinning the boundary at `^else` alone overruns into the next arm's text (the
+# rundevoo arm's `doppler secrets get` read as a sentry-arm doppler call).
+arm() {
+  awk -v d="$1" '
+    index($0, "\"$MATRIX_DIR\" == \"" d "\"") {on=1; print; next}
+    on && /^(elif|else)/ {exit}
+    on {print}
+  ' "$TMP/plan-step.sh" | grep -v '^[[:space:]]*#'
+}
+
 s3() {
-  local bad=0 arm
+  local bad=0 a
   if grep -v '^[[:space:]]*#' "$TMP/plan-step.sh" | grep -c >/dev/null -- '-target'; then
     echo "    plan step carries -target"; bad=1
   fi
-  arm=$(awk -v d="$SENTRY_DIR" 'index($0, "\"$MATRIX_DIR\" == \"" d "\"") {on=1} on && /^else$/ {exit} on' \
-    "$TMP/plan-step.sh" | grep -v '^[[:space:]]*#')
-  [[ -n "$arm" ]] || { echo "    no sentry arm in the plan step"; return 1; }
-  [[ "$arm" == *"-detailed-exitcode"* ]] || { echo "    sentry arm lacks -detailed-exitcode"; bad=1; }
-  [[ "$arm" != *doppler* ]] || { echo "    sentry arm invokes doppler"; bad=1; }
+  a=$(arm "$SENTRY_DIR")
+  [[ -n "$a" ]] || { echo "    no sentry arm in the plan step"; return 1; }
+  [[ "$a" == *"-detailed-exitcode"* ]] || { echo "    sentry arm lacks -detailed-exitcode"; bad=1; }
+  [[ "$a" != *doppler* ]] || { echo "    sentry arm invokes doppler"; bad=1; }
   return "$bad"
 }
 row S3 "no -target anywhere in the plan step; the sentry arm plans with -detailed-exitcode and no doppler" s3
+
+s6() {
+  local bad=0 a
+  a=$(arm "infra/rundevoo-run")
+  [[ -n "$a" ]] || { echo "    no rundevoo arm in the plan step"; return 1; }
+  [[ "$a" == *"-detailed-exitcode"* ]] || { echo "    rundevoo arm lacks -detailed-exitcode"; bad=1; }
+  [[ "$a" == *"env -i"* ]] || { echo "    rundevoo arm drops the env -i allowlist"; bad=1; }
+  [[ "$a" == *"secrets get CF_API_TOKEN_RUNDEVOO"* ]] || { echo "    rundevoo arm lost the zone-token pull"; bad=1; }
+  [[ "$a" != *"doppler run"* ]] || { echo "    rundevoo arm invokes doppler run"; bad=1; }
+  return "$bad"
+}
+row S6 "the rundevoo arm plans under env -i with -detailed-exitcode via secrets-get, never doppler run" s6
 
 s4() {
   local g
@@ -390,6 +421,41 @@ b5() {
   return "$bad"
 }
 row B5 "the main leg keeps its doppler tf-var plan; the github leg runs terraform directly (#9362); both keep their stack names" b5
+
+rundevoo_run() { # rundevoo_run <stub-settings> — the rundevoo arm under stubs
+  run_plan "$TMP/bin" "infra/rundevoo-run" "$REPO_ROOT/infra/rundevoo-run" "$1"
+}
+
+b10() {
+  local bad=0 envs
+  rundevoo_run "STUB_TF_RC=2"
+  [[ "$RUN_RC" -eq 0 ]] || { echo "    step rc=$RUN_RC"; bad=1; }
+  [[ "$(out_val exit_code)" == "2" ]] || { echo "    exit_code=$(out_val exit_code), want 2"; bad=1; }
+  # The token comes from `doppler secrets get`; `doppler run` must never appear.
+  grep -q '^DOPPLER_ARGV secrets get CF_API_TOKEN_RUNDEVOO --plain' "$RUN_LOG" \
+    || { echo "    the zone-token secrets-get path was not taken"; bad=1; }
+  grep -q '^DOPPLER_ARGV run ' "$RUN_LOG" && { echo "    doppler run was invoked"; bad=1; }
+  [[ "$(tf_calls)" -eq 1 ]] || { echo "    terraform calls=$(tf_calls), want 1"; bad=1; }
+  [[ "$(sed -n 's/^TF_ARGV //p' "$RUN_LOG" | head -1)" == "$EXACT_ARGV" ]] \
+    || { echo "    argv drift: $(sed -n 's/^TF_ARGV //p' "$RUN_LOG" | head -1)"; bad=1; }
+  # Exact env NAME set under env -i: the R2 pair, both token names, nothing else.
+  envs=$(sed -n 's/^ENV_NAMES //p' "$RUN_LOG" | head -1)
+  [[ "$envs" == "AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY CLOUDFLARE_API_TOKEN HOME PATH TF_VAR_cf_api_token_rundevoo" ]] \
+    || { echo "    terraform env='$envs'"; bad=1; }
+  return "$bad"
+}
+row B10 "rundevoo leg, stub rc 2: exit_code=2, exact argv, env -i allowlist only, secrets-get token, no doppler run" b10
+
+b11() {
+  local bad=0
+  rundevoo_run "STUB_TF_RC=0 STUB_DOPPLER_GET="
+  [[ "$RUN_RC" -eq 0 ]] || { echo "    step rc=$RUN_RC"; bad=1; }
+  [[ "$(out_val exit_code)" == "1" ]] || { echo "    exit_code=$(out_val exit_code), want 1"; bad=1; }
+  grep -q '::error::cf_token_rundevoo_absent' "$RUN_OUT" || { echo "    no ::error::cf_token_rundevoo_absent"; bad=1; }
+  [[ "$(tf_calls)" -eq 0 ]] || { echo "    terraform was invoked with an empty token"; bad=1; }
+  return "$bad"
+}
+row B11 "empty CF_API_TOKEN_RUNDEVOO: exit_code=1, named ::error::, terraform never invoked" b11
 
 b7() {
   run_plan "$TMP/bin" "$SENTRY_DIR" "$TMP" "STUB_TF_RC=0 EXPECT_SENTRY_TOKEN=iac-y" \
@@ -581,7 +647,7 @@ if [[ "$R_RAN" -eq 1 ]]; then echo "R-arms: ran (terraform $("$TF_REAL" version 
 echo "=== $PASS passed / $FAIL failed ==="
 # The exact row set, so deleting a row call (or an R row when terraform is present) is a
 # failure rather than a smaller green total.
-EXPECTED_ROWS="S1 S2 S3 S4 S5 B1 B2 B3 B4 B5 B7 B8 B9 H1 E1 E2 E3 E4 I1 I2"
+EXPECTED_ROWS="S1 S2 S3 S6 S4 S5 B1 B2 B3 B4 B5 B10 B11 B7 B8 B9 H1 E1 E2 E3 E4 I1 I2"
 [[ "$R_RAN" -eq 0 ]] || EXPECTED_ROWS="$EXPECTED_ROWS R1 R2 R3 R4"
 if [[ "${ROWS[*]}" != "$EXPECTED_ROWS" ]]; then
   printf 'FATAL: rows run: %s\n       expected: %s\n' "${ROWS[*]}" "$EXPECTED_ROWS"

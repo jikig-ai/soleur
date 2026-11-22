@@ -117,6 +117,11 @@ on:
       - ".github/workflows/cf-lb-overlay.yml"
       - "tests/scripts/lib/cf-lb-overlay-gate.sh"
       - "tests/scripts/test-cf-lb-overlay-gate.sh"
+      # (#12931) Same class for the Cloudflare account migration: its workflow, phase gate and scope suite.
+      - ".github/workflows/cf-account-migrate.yml"
+      - "tests/scripts/lib/cf-account-migrate-gate.sh"
+      - "tests/scripts/test-cf-account-migrate-gate.sh"
+      - "tests/scripts/test-cf-account-migration-scope.sh"
       - ".github/workflows/git-data-cutover.yml"
       - ".github/workflows/apply-web-platform-infra.yml"
       - ".github/workflows/scheduled-terraform-drift.yml"

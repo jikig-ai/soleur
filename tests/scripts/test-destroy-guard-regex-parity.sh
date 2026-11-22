@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Pins the [ack-destroy] regex across all seven sites where it lives — the
-# three apply-* workflows, the three destroy-guard test scripts that mirror
-# their control flow, AND the PR-time squash-ack detector (#6589).
+# Pins the [ack-destroy] regex across all ten sites where it lives — the four
+# apply-* workflows, the four destroy-guard test scripts that mirror their
+# control flow, AND the PR-time squash-ack detectors (#6589, #12971).
 #
 # The regex `(^|$'\n')\[ack-destroy\]($|$'\n')` is load-bearing across all
-# seven files: any drift silently breaks the operator-acknowledgement gate.
+# ten files: any drift silently breaks the operator-acknowledgement gate.
 # CODEOWNERS @deruelle gates approval but not content coherence — this
 # script is the deterministic coherence check.
 #
-# THE 7th SITE IS THE HIGHEST-STAKES ONE (#6589). scripts/sentry-squash-ack-detect.sh
-# answers the PR-time question "will a pre-staged [ack-destroy] satisfy the
+# THE SQUASH-ACK SITES ARE THE HIGHEST-STAKES ONES (#6589, #12971).
+# scripts/sentry-squash-ack-detect.sh and scripts/rundevoo-squash-ack-detect.sh
+# answer the PR-time question "will a pre-staged [ack-destroy] satisfy the
 # apply gate after squash?". Its verdict and the apply gate's verdict MUST agree.
 # If this file's regex drifts from apply-sentry-infra.yml's, the PR gate greens
 # and the post-merge apply reds — the resource stays live and billing, which is
@@ -17,13 +18,17 @@
 # between a predictor and the thing it predicts is invisible to review; it is
 # checked here mechanically instead.
 #
+# Deliberately ABSENT: the verdict scripts (rundevoo-destroy-gate-verdict.sh
+# and siblings) carry no copy of the regex — their allow-list is over
+# `needs.<job>.result` strings, not commit text — so they are not sites.
+#
 # Closes #4419 review-finding F2 (pattern-recognition-specialist).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$REPO_ROOT/.." && pwd)"
 
-# Byte-identical regex (with the bash $'\n' ANSI-C-quoting). All seven sites
+# Byte-identical regex (with the bash $'\n' ANSI-C-quoting). All ten sites
 # MUST contain a line matching this exact literal after the `=~` operator:
 #   (^|$'\n')\[ack-destroy\]($|$'\n')
 # The grep below uses `-F` (literal) to avoid regex-meta-on-regex confusion.
@@ -31,12 +36,16 @@ EXPECTED_SITES=(
   ".github/workflows/apply-github-infra.yml"
   ".github/workflows/apply-sentry-infra.yml"
   ".github/workflows/apply-web-platform-infra.yml"
+  ".github/workflows/apply-rundevoo-infra.yml"
   "tests/scripts/test-destroy-guard-counter.sh"
   "tests/scripts/test-destroy-guard-counter-sentry.sh"
   "tests/scripts/test-destroy-guard-counter-web-platform.sh"
+  "tests/scripts/test-destroy-guard-counter-rundevoo.sh"
   # #6589 — the PR-time predictor of the apply gate's verdict. Must agree with
   # apply-sentry-infra.yml or the PR greens while the apply reds (see header).
   "scripts/sentry-squash-ack-detect.sh"
+  # #12971 — the same predictor for the rundevoo root's apply gate.
+  "scripts/rundevoo-squash-ack-detect.sh"
 )
 
 fail=0
@@ -194,12 +203,13 @@ else
   echo "[ok] AC-B5 pre-#6538 bare steer removed from the web-platform apply"
 fi
 
-# SCOPE PIN. apply-github-infra.yml and apply-sentry-infra.yml carry the same
-# literal but NOT this hazard — neither has a volume that can strand behind a
-# scoped server destroy. They keep the original text deliberately. If a future
-# change propagates the web-platform wording to them, that is a signal the hazard
-# analysis was copied rather than re-derived; assert they are untouched.
-for sibling in .github/workflows/apply-github-infra.yml .github/workflows/apply-sentry-infra.yml; do
+# SCOPE PIN. apply-github-infra.yml, apply-sentry-infra.yml and
+# apply-rundevoo-infra.yml carry the same literal but NOT this hazard —
+# none has a volume that can strand behind a scoped server destroy. They keep
+# the original text deliberately. If a future change propagates the
+# web-platform wording to them, that is a signal the hazard analysis was
+# copied rather than re-derived; assert they are untouched.
+for sibling in .github/workflows/apply-github-infra.yml .github/workflows/apply-sentry-infra.yml .github/workflows/apply-rundevoo-infra.yml; do
   if grep -qF 'skip-web-platform-apply' "$REPO_ROOT/$sibling"; then
     echo "[FAIL] AC-B5 scope: $sibling mentions [skip-web-platform-apply] — that token is web-platform-only; these workflows carry no stranding hazard and must keep the original steer" >&2
     b5_fail=$((b5_fail + 1))

@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=4000
-# generated-at=2026-11-19T20:41:57Z
+# generated-at=2026-11-20T02:40:05Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --group infra --incremental --write   # suite added/removed; --group infra --runs 5 --write rebalances
 # runner: apps/web-platform/infra/run-registered-suites.sh manifest/hashing assignment (untabled labels hash-fallback)
@@ -19,6 +19,9 @@ apps/web-platform/infra/canary-bundle-claim-check.test.sh	4
 apps/web-platform/infra/cat-deploy-state.test.sh	1
 apps/web-platform/infra/cat-infra-config-state.test.sh	3
 apps/web-platform/infra/cat-inngest-verify-state.test.sh	3
+apps/web-platform/infra/cf-account-migrate-job.test.sh	1
+apps/web-platform/infra/cf-account-migration-complete.test.sh	2
+apps/web-platform/infra/cf-account-state-migrate.test.sh	1
 apps/web-platform/infra/ci-deploy-wrapper.test.sh	4
 apps/web-platform/infra/ci-deploy.test.sh	2
 apps/web-platform/infra/cloud-init-ghcr-seed-login.test.sh	3

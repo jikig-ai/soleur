@@ -1,0 +1,177 @@
+# cf-account-migrate.yml — the #12931 Cloudflare account migration dispatch (CTO L79).
+# Runbook: knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md.
+# Job logic: apps/web-platform/infra/scripts/cf-account-migrate-job.sh.
+
+name: CF account migrate (#12931)
+run-name: "CF account migrate (#12931): ${{ inputs.migrate_phase }} rehearsal=${{ inputs.rehearsal }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      migrate_phase:
+        description: "redirects-dns | zone-rest (the tunnel phase ships in PR2)"
+        required: true
+        type: choice
+        options:
+          - redirects-dns
+          - zone-rest
+      confirm:
+        description: "Typo-guard, NOT the authorization: MIGRATE-CF-<phase>"
+        required: true
+        type: string
+      rehearsal:
+        description: "true = plan on a local-backend scratch copy, write nothing (infra-privileged). false = apply (reviewer-gated web-platform-infra-apply)."
+        required: true
+        type: boolean
+        default: true
+      reason:
+        description: "Audit trail, required."
+        required: true
+        type: string
+      expected_in_state_updates:
+        description: "Apply only: the Terraform addresses (space- or comma-separated) the gate may admit as in-state updates, copied from the rehearsal's `in-state-updates admitted=` line. Empty = none (a first apply)."
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: terraform-apply-web-platform-host
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+  TF_VAR_terraform_version: "1.10.5"
+  INFRA_DIR: apps/web-platform/infra
+
+jobs:
+  # Two jobs, each with LITERAL environment and REHEARSAL values (CTO D7): which environment
+  # approves the run and whether it applies are one fact, so no expression renders either.
+  # tests/scripts/test-cf-account-migration-scope.sh (A4) pins both pairs exactly.
+  # rehearsal=true: plan on a local-backend scratch copy, write nothing (no-reviewer environment).
+  cf_account_migrate_rehearsal:
+    if: inputs.rehearsal
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: infra-privileged
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(timeout 30 doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || { echo "::error::AWS_ACCESS_KEY_ID missing"; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(timeout 30 doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || { echo "::error::AWS_SECRET_ACCESS_KEY missing"; exit 1; }
+          [[ -n "$KEY_ID" && -n "$SECRET" ]] || { echo "::error::empty R2 backend creds"; exit 1; }
+          printf '::add-mask::%s\n' "$KEY_ID"; printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+      - name: Migrate (rehearsal)
+        env:
+          MIGRATE_PHASE: ${{ inputs.migrate_phase }}
+          CONFIRM: ${{ inputs.confirm }}
+          REHEARSAL: "true"
+          REASON: ${{ inputs.reason }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: bash apps/web-platform/infra/scripts/cf-account-migrate-job.sh
+      - name: Remove runner copies of state and plan
+        if: always()
+        run: rm -rf "${RUNNER_TEMP}/cf-migrate"
+      - name: Email ops on failure or cancel
+        # cancelled() too: a timeout-minutes kill or a manual cancel concludes `cancelled`, which
+        # failure() does not see, and a cancel can land mid-apply or after the state forget.
+        if: failure() || cancelled()
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: "CF account migrate (#12931): ${{ inputs.migrate_phase }} rehearsal run did NOT complete"
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+          body: |
+            <p>The <strong>CF account migrate</strong> rehearsal run for phase
+            <code>${{ inputs.migrate_phase }}</code> did not complete (failed, or cancelled by
+            timeout-minutes=30 or by hand).
+            A <code>cf-account-migrate … verdict=refuse reason=…</code> line in the log names the cause.
+            A rehearsal writes nothing unless its refuse reason is remote-serial-changed or backup-written:
+            then stop and read the runbook Halt. Otherwise read its last refuse line, or re-dispatch. See the
+            runbook Halt section, knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md.</p>
+            <p>Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>
+
+  # rehearsal=false: forget, plan, gate, apply (reviewer-gated environment: the approval is the authorization).
+  cf_account_migrate_apply:
+    if: ${{ !inputs.rehearsal }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: web-platform-infra-apply
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(timeout 30 doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || { echo "::error::AWS_ACCESS_KEY_ID missing"; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(timeout 30 doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || { echo "::error::AWS_SECRET_ACCESS_KEY missing"; exit 1; }
+          [[ -n "$KEY_ID" && -n "$SECRET" ]] || { echo "::error::empty R2 backend creds"; exit 1; }
+          printf '::add-mask::%s\n' "$KEY_ID"; printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+      - name: Migrate (apply)
+        env:
+          MIGRATE_PHASE: ${{ inputs.migrate_phase }}
+          CONFIRM: ${{ inputs.confirm }}
+          REHEARSAL: "false"
+          REASON: ${{ inputs.reason }}
+          CFAM_EXPECTED_IN_STATE_UPDATES: ${{ inputs.expected_in_state_updates }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: bash apps/web-platform/infra/scripts/cf-account-migrate-job.sh
+      - name: Remove runner copies of state and plan
+        if: always()
+        run: rm -rf "${RUNNER_TEMP}/cf-migrate"
+      - name: Email ops on failure or cancel
+        # cancelled() too: a timeout-minutes kill or a manual cancel concludes `cancelled`, which
+        # failure() does not see, and a cancel can land mid-apply or after the state forget.
+        if: failure() || cancelled()
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: "CF account migrate (#12931): ${{ inputs.migrate_phase }} apply run did NOT complete"
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+          body: |
+            <p>The <strong>CF account migrate</strong> apply run for phase
+            <code>${{ inputs.migrate_phase }}</code> did not complete (failed, or cancelled by
+            timeout-minutes=30 or by hand).
+            A <code>cf-account-migrate … verdict=refuse reason=…</code> line in the log names the cause.
+            If the run printed <code>applying=true</code>, rules may have landed: run the runbook's local Verify
+            block first. Whether the state forget is committed is a cross-run fact, not a marker in this run:
+            check the backup-uri comment on #12931 and any <code>pre-cf-account-migration-*</code> object under
+            the R2 backups prefix. See the runbook Halt section,
+            knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md.</p>
+            <p>Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>
