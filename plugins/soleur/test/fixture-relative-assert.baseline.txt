@@ -176,7 +176,7 @@
 4	apps/web-platform/infra/arm-heartbeats.sh
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
-90	apps/web-platform/infra/cf-account-migrate-job.test.sh
+107	apps/web-platform/infra/cf-account-migrate-job.test.sh
 13	apps/web-platform/infra/cf-account-migration-complete.test.sh
 11	apps/web-platform/infra/cf-account-state-migrate.test.sh
 21	apps/web-platform/infra/ci-deploy.sh
@@ -250,7 +250,7 @@
 12	apps/web-platform/infra/resource-monitor.test.sh
 5	apps/web-platform/infra/run-registered-suites.sh
 1	apps/web-platform/infra/run-registered-suites.test.sh
-7	apps/web-platform/infra/scripts/cf-account-migrate-job.sh
+10	apps/web-platform/infra/scripts/cf-account-migrate-job.sh
 1	apps/web-platform/infra/scripts/cf-account-migration-complete.sh
 5	apps/web-platform/infra/scripts/cf-account-state-migrate.sh
 2	apps/web-platform/infra/scripts/gen-github-egress-cidr.sh

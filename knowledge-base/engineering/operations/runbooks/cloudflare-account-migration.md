@@ -329,8 +329,13 @@ names only) before re-running any stage: re-flipping `prd_terraform` cannot fix 
 
 Before rehearsing, note the 2026-11-19 zone hygiene: in the new zone, six TXT records created by the move's DNS scan
 were rewritten unquoted and the comments on three records added during the incident were cleared, so every
-`cloudflare_record` import plans as a pure no-op. If a rehearsal shows an import plus update on a TXT record or a
-`comment` diff, that record has drifted again: re-read it and fix the record or the pinned id, never widen the gate.
+record's live values match `dns.tf`. The provider's Read fills `content` only when it is already set, so each
+`cloudflare_record` import plans one update adding `allow_overwrite = false` and `content`, and the apply sends one
+same-value PATCH per record. The gate admits exactly that shape, logged as `import-normalize`, and only when a live
+read by the pinned id, taken after the plan, equals the planned record (ADR-329, CTO ruling 2026-11-22). Every other
+diff is still refused. A refusal naming a live field means that record has drifted: re-read it and fix the record or
+the pinned id. The gate's admitted shape is not changed to get past a refusal. Nobody edits this zone by hand during
+the apply: an edit landing between the read and a PATCH is overwritten, and the re-read then passes.
 
 `Operator-authorizes:` the rehearsal dispatch:
 
@@ -348,11 +353,19 @@ Expected in the run log:
   `doppler_secret.cf_zone_id_prd` add, minus any entrypoint the probe found, which becomes an import) and the imports
   are 26 records, the Pages project and 2 Pages domains. The cache rule
   `cache_shared_binaries` is not in this phase (CTO ruling D3). Compare nothing by eye;
+- `cf-account-migrate live-read records=26` on every `redirects-dns` run;
+- `cf-account-migrate import-normalize count=26` before the first apply. After an earlier `applying=true`, any count
+  from 0 to 26 is valid and the gate's `imports=` falls too, because a written record no longer shows a diff. Admitted records
+  never belong in `expected_in_state_updates`;
 - the entrypoint gate passing on the new zone.
 
 Any `cf_account_migrate_gate: … verdict=REFUSE` line (its `REFUSE <address> …` reason lines print above it), any
 `cf-account-migrate phase=<phase> verdict=refuse reason=<code>` line or `verdict=abort` stops the phase. Read the
 reason, fix forward in a PR, re-rehearse.
+
+Before the first `rehearsal=false` dispatch, the owner records on #12931 either "observe the first PATCH against the
+loopback mock first" or "accept the first PATCH unobserved". Without that comment, a rehearsal PASS authorizes nothing
+further.
 
 `Operator-authorizes:` the same dispatch with `rehearsal=false` (leave `expected_in_state_updates` empty: only a
 fix-forward re-dispatch sets it, Halt `verify-failed` step 4), then the person approves the
@@ -565,8 +578,8 @@ the PR thread, and its comment is the read-back.
 exception is a `gptbot=>403` from Bot Fight Mode, under `verify-failed` below). Read the refusal, fix in a PR,
 re-rehearse, re-dispatch. A re-dispatch after a committed forget is safe (CTO ruling D10): when only R2 and
 non-Cloudflare entries remain, state-migrate prints `cf-state-migrate verdict=ok removed=0` and takes no backup (a
-backup is taken only when something will be removed); the plan then skips imports already in state and covers only
-the remainder. An apply that fails after the forget says the same in its refusal line: fix forward and re-dispatch,
+backup is taken only when something will be removed); each import already in state then shows no diff, or the
+admitted `import-normalize` update if its earlier write failed, and the plan covers only the remainder. An apply that fails after the forget says the same in its refusal line: fix forward and re-dispatch,
 never restore from the backup.
 
 The off-by-default flags `cf_load_balancing_enabled`, `cf_zone_plan_pro`, `cf_zone_dnssec_enabled` and
@@ -630,8 +643,33 @@ validation (Load Balancing #12983, DNSSEC #12982).
   `pre-cf-account-migration-*` object appeared, so the rehearsal's forget escaped its scratch copy. Either way: no
   re-dispatch, no revert. `Agent:` post the run id and its refusal line on #12931, run the "Is the forget committed?"
   record above, and stop for an owner decision.
+- **A DNS record may hold a wrong value** (`import-normalize-reread-failed`, `apply-failed` with `reread=differs=`, or
+  `gate-refused` naming a `cloudflare_record` after an earlier `rehearsal=false` run printed `mode=apply applying=true`).
+  Treat it as live user impact and restore before any PR, in the order `api`, MX/SPF/DKIM/DMARC, then the rest. The
+  re-read detects a bad write and does not undo it: the wrong value stays live until restored and resolver caches expire.
+  - The expected value is the record's `dns.tf` block. For `pages_apex` and `www`, whose block is
+    `cloudflare_pages_project.docs.subdomain`, it is `result.subdomain` from a GET of
+    `accounts/<CFAM_NEW_ACCOUNT_ID>/pages/projects/soleur-docs` with `CF_API_TOKEN_PAGES`, requiring HTTP 200,
+    `success == true`, `result.name == "soleur-docs"` and a subdomain equal to `soleur-docs-40x.pages.dev`. A failed
+    read or a mismatch means no edit and a stop for an owner decision.
+  - `Operator-authorizes:` one edit of the named field on the NEW zone. A `settings` difference gets no edit: stop for
+    an owner decision.
+  - `<addr>:notfound`: a re-dispatch cannot repair a deleted record, because a recreated record has a new id.
+    `Operator-authorizes:` recreating it on the NEW zone from its `dns.tf` block (the same value source for `pages_apex`
+    and `www`) to restore service, post the new id on #12931, and stop for an owner decision. No `terraform state rm`,
+    `terraform import`, state push or lone literal edit: the path back into state needs a reviewed PR and a CTO ruling.
+  - A `proxied` refusal on `pages_apex` or `www` may be `cron-gh-pages-cert-reissue` mid-flip rather than drift, since
+    its old token is revoked only after this phase.
+  - `verify=skipped` means no public probe ran, so run the local Verify block. `verify=ok` does not clear this bullet,
+    because those probes read no mail record. Then rehearse, which reads all 26, and re-dispatch.
+- **No completed re-read** (`reread=unreadable=`, or a cancelled run with `mode=apply applying=true`): edit nothing and
+  dispatch a rehearsal, which reads all 26 even on an all-no-op plan. A refusal naming a record goes to the bullet above.
+- **`reason=apply-budget-exhausted`** (prints `applied=false` and `forget=committed`): nothing was applied. Re-rehearse
+  and re-dispatch once. On a second consecutive refusal, stop for an owner decision. `APPLY_DEADLINE` is never raised to
+  get past it.
 - **A stop before `applying=true`** (`gate-refused`, `entrypoint-gate-refused`, `state-migrate-failed`, any other
-  `verdict=refuse` line except the two rehearsal reasons above, or a cancelled run with no `mode=apply applying=true`):
+  `verdict=refuse` line except the two rehearsal reasons above, `import-normalize-reread-failed` and a refusal covered
+  by **A DNS record may hold a wrong value**, or a cancelled run with no `mode=apply applying=true`):
   this run applied nothing, so there is nothing to verify and no edited value to carry. Fix the refusal's cause (a reviewed PR when it is in code; nothing
   for a timeout), re-rehearse, re-dispatch. Whether the revert above is still allowed is the committed test, not this
   refusal.
