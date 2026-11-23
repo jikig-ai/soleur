@@ -36,13 +36,11 @@
 #
 # IMPORT-NORMALIZE (CTO ruling 2026-11-22, ADR-329). The provider's Read fills `content` only when it
 # is already set, so every cloudflare_record import plans ["update"] with `+ allow_overwrite = false`
-# and `+ content = <value>`. That one update is admitted for an import-class cloudflare_record only if
-# (a) its changed keys are exactly allow_overwrite (null to false) and content (null to a non-empty
-# string) with nothing unknown, (b) `before.id` is the record id pinned by the committed import literal
-# and, on a retry (importing null), the pre-plan state holds that id too, and (c) a live read of every
-# pinned record, taken after the plan and passed as the fourth argument, equals its planned `after`
-# (cfam_live_diff). One differing record, no-op or update, admits nothing. A fourth argument that is
-# not a usable read refuses the plan. On a PASS each admitted record prints
+# and `+ content = <value>`. That one update is admitted for an import-class cloudflare_record whose
+# shape and pin hold (_CFAM_NORMALIZE_JQ and the `why` field) and whose live read, taken after the plan
+# and passed as the fourth argument, matches its planned `after`. One record whose read is not clean
+# admits nothing, and only that record is named, so a failed read cannot look like 26 wrong values.
+# A fourth argument that is not a usable read refuses the plan. On a PASS each admitted record prints
 # `cf_account_migrate_gate: import-normalize <address>`, never `in-state-update`.
 #
 # The new ids are constants, not inputs (any other id, old or unknown, is refused): a mis-set Doppler value must not be able to
@@ -81,14 +79,17 @@
 #   cf_account_migrate_targets  <phase>                       # one -target=<addr> per line
 #   cf_account_migrate_replaces <phase>                       # one -replace=<addr> per line
 #   cf_account_migrate_gate     <phase> <plan.json> [<state.json> [<live.json>]]   # 0=PASS, 1=REFUSE
-#     Output: REFUSE reason lines (REFUSE only), or on a PASS any `cf_account_migrate_gate:
-#     in-state-update <address>` and `cf_account_migrate_gate: import-normalize <address>` lines; then
-#     ONE `cf_account_migrate_gate: phase=<p> verdict=PASS|REFUSE ...` line.
+#     <state.json> = `terraform show -json` of state BEFORE the plan; required for a phase with
+#     a replace set, and the only evidence that lets a create-class address plan as ["update"].
+#     <live.json> = the output of cf_account_migrate_live_collect.
+#     Output on a REFUSE: `REFUSE ...` lines, then any `cf_account_migrate_gate: import-normalize not
+#     admitted for <address> (<reasons>)` lines. On a PASS: any `cf_account_migrate_gate:
+#     in-state-update <address>` and `cf_account_migrate_gate: import-normalize <address>` lines.
+#     A graded plan ends with ONE `cf_account_migrate_gate: phase=<p> verdict=PASS|REFUSE ...` line.
+#     A refusal before grading, or a check that cannot be evaluated, prints its reason and no verdict line.
 #   cf_account_migrate_record_pins  <phase>                   # address<TAB>record-id, per pinned record
 #   cf_account_migrate_live_collect <phase> <dir>             # live.json from one response file per record
 #   cf_account_migrate_live_diff    <phase> <plan> <live>     # address<TAB>fields, per differing record
-#     <state.json> = `terraform show -json` of state BEFORE the plan; required for a phase with
-#     a replace set, and the only evidence that lets a create-class address plan as ["update"].
 
 if ! declare -F plan_gate_assert_readable >/dev/null 2>&1; then
   _CFAM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -261,10 +262,12 @@ def cfam_norm_shape:
 def cfam_fqdn: if . == "soleur.ai" or endswith(".soleur.ai") then . else . + ".soleur.ai" end;
 def cfam_empty: . == null or . == "";
 def cfam_unquote: if (type == "string") and length >= 2 and startswith("\"") and endswith("\"") then .[1:-1] else . end;
-def cfam_live_diff($after; $entry):
+def cfam_live_diff($after; $entry; $pin; $zone):
   if ($entry|type) != "object" then ["unreadable"]
   elif $entry.status == "notfound" then ["notfound"]
-  elif $entry.status != "ok" or ($entry.result|type) != "object" then ["unreadable"]
+  elif $entry.status != "ok" or ($entry.result|type) != "object"
+    or $entry.result.id != $pin
+    or ($entry.result.zone_id != null and $entry.result.zone_id != $zone) then ["unreadable"]
   elif ($after|type) != "object" then ["after"]
   else $entry.result as $r
     | [ (if $r.type != $after.type then "type" else empty end),
@@ -283,7 +286,8 @@ def cfam_live_diff($after; $entry):
             then empty else "comment" end),
         (if ($r.tags|type) == "array" and ($after.tags|type) == "array" and ($r.tags|unique) == ($after.tags|unique)
             then empty else "tags" end),
-        (if $r.settings == null or $r.settings == {} then empty else "settings" end)
+        (if $r.settings == null or $r.settings == {} then empty else "settings" end),
+        (if $r.data == null or $r.data == {} then empty else "data" end)
       ] as $f
     | $f + [
         (if ($f|index("content")) != null and ($r.content|type) == "string" and ($r.content != $after.content)
@@ -301,7 +305,8 @@ _cfam_pins_json() { jq -Rn '[inputs | split("\t") | select(length == 2) | {(.[0]
 
 # cf_account_migrate_record_pins <phase>: one `address<TAB>record-id` line per import-class
 # cloudflare_record, from the committed literals. A literal must be exactly <NEW zone>/<32 hex>. Fails
-# unless every such record has a pin, because _cfam_import_literals silently drops a block it cannot parse.
+# unless every such record has a pin of its own, because _cfam_import_literals silently drops a block it
+# cannot parse.
 cf_account_migrate_record_pins() {
   local spec lit
   spec="$(cf_account_migrate_phase_spec "${1-}")" || { echo "cf_account_migrate_record_pins: unknown phase '${1-}'" >&2; return 1; }
@@ -311,7 +316,9 @@ cf_account_migrate_record_pins() {
     | [$want[] | . as $a | (($l[$a] // "") | split("/")) as $p
        | select(($p | length) == 2 and $p[0] == $z and ($p[1] | test("^[0-9a-f]{32}$")))
        | "\($a)\t\($p[1])"] as $pins
-    | if ($pins | length) != ($want | length) then error("a record has no usable pin") else $pins[] end' 2>/dev/null
+    | if ($pins | length) != ($want | length)
+         or ($pins | map(split("\t")[1]) | unique | length) != ($pins | length)
+      then error("a record has no usable or unique pin") else $pins[] end' 2>/dev/null
 }
 
 # cf_account_migrate_live_collect <phase> <dir>: live.json {address: {status, result?}} from one raw
@@ -349,10 +356,10 @@ cf_account_migrate_live_diff() {
   pins_tsv="$(cf_account_migrate_record_pins "$phase")" || return 1
   [[ -n "$pins_tsv" && -r "$plan" && -r "$live" ]] || { echo "cf_account_migrate_live_diff: no pins, or the plan or live file is unreadable" >&2; return 1; }
   pins="$(_cfam_pins_json <<<"$pins_tsv")" || return 1
-  jq -r --argjson pins "$pins" --slurpfile lv "$live" "$_CFAM_NORMALIZE_JQ"'
+  jq -r --argjson pins "$pins" --arg z "$CFAM_NEW_ZONE_ID" --slurpfile lv "$live" "$_CFAM_NORMALIZE_JQ"'
     ([.resource_changes[] | {(.address): .change.after}] | add // {}) as $afters
     | $pins | keys_unsorted[] as $a
-    | cfam_live_diff($afters[$a]; $lv[0][$a]) as $d
+    | cfam_live_diff($afters[$a]; $lv[0][$a]; $pins[$a]; $z) as $d
     | select($d != [])
     | "\($a)\t\($d | join(","))"' "$plan"
 }
@@ -364,7 +371,7 @@ cf_account_migrate_gate() {
   local plan_json="${2-}"
   local state_json="${3-}"
   local spec literals want violations="" v creates imports destroys n_rep n_raw n_obj admitted gv_rc
-  local has_live=false live_json="" pins_tsv pins verdicts norm="[]" norm_why=""
+  local has_live=false live_json="" pins_tsv pins verdicts norm="[]" norm_why="" live_v="" exempt
 
   spec="$(cf_account_migrate_phase_spec "$phase")" || { echo "cf_account_migrate_gate: REFUSE — unknown phase '${phase}'"; return 1; }
   plan_gate_assert_readable     "cf_account_migrate_gate" "$plan_json" || return 1
@@ -410,10 +417,10 @@ cf_account_migrate_gate() {
   fi
 
   # IMPORT-NORMALIZE (header). One evaluation per pinned record, so the decision and its explanation
-  # cannot disagree. `norm` is the only thing the two import refusals below subtract.
+  # cannot disagree. `norm` is what a PASS admits; `exempt` is what the import refusals below subtract.
   pins_tsv="$(cf_account_migrate_record_pins "$phase")" || { echo "cf_account_migrate_gate: REFUSE — a record import has no usable pinned id"; return 1; }
   pins="$(_cfam_pins_json <<<"$pins_tsv")" || { _cfam_eval_fail; return 1; }
-  verdicts="$(jq -c --argjson pins "$pins" --argjson hl "$has_live" --slurpfile vst "${state_json:-/dev/null}" --slurpfile lv "${live_json:-/dev/null}" "$_CFAM_NORMALIZE_JQ"'
+  verdicts="$(jq -c --argjson pins "$pins" --argjson hl "$has_live" --arg z "$CFAM_NEW_ZONE_ID" --slurpfile vst "${state_json:-/dev/null}" --slurpfile lv "${live_json:-/dev/null}" "$_CFAM_NORMALIZE_JQ"'
     ([($vst[0].values // {}) | .. | objects | select(has("address") and has("values"))
       | select($pins[.address] != null) | {(.address): .values.id}] | add // {}) as $sids
     | [.resource_changes[] | select((.mode // "managed") == "managed") | select($pins[.address] != null)
@@ -424,14 +431,45 @@ cf_account_migrate_gate() {
                     (if (.change.before|type) == "object" and .change.before.id == $pin then empty else "pin" end),
                     (if .change.importing == null and $sids[$ad] != $pin then "state-id" else empty end) ]
                 else [] end),
-          live: (if $hl then cfam_live_diff(.change.after; $lv[0][$ad]) else [] end)}]' "$plan_json")" || { _cfam_eval_fail; return 1; }
-  norm="$(jq -c --argjson hl "$has_live" '. as $all
-    | if ($hl | not) or any(.[]; .live != []) then []
+          noop_id_ok: (.change.actions != ["no-op"]
+            or ((.change.before|type) == "object" and .change.before.id == $pin
+                and (.change.after|type) == "object" and .change.after.id == $pin)),
+          live: (if $hl then cfam_live_diff(.change.after; $lv[0][$ad]; $pin; $z) else [] end)}]' "$plan_json")" || { _cfam_eval_fail; return 1; }
+  norm="$(jq -c --argjson hl "$has_live" '
+    if ($hl | not) or any(.[]; .live != []) then []
       else [.[] | select(.action == ["update"] and .why == []) | .address] end' <<<"$verdicts")" || { _cfam_eval_fail; return 1; }
   norm_why="$(jq -r '.[] | select(.why != []) | "cf_account_migrate_gate: import-normalize not admitted for \(.address) (\(.why | join(",")))"' <<<"$verdicts")" || { _cfam_eval_fail; return 1; }
+  # Every pinned record, whatever its planned action: a drifted no-op blocks the phase too.
+  if [[ "$has_live" == true ]]; then
+    live_v="$(jq -r '.[] | select(.live != [])
+      | if .live == ["unreadable"] then "REFUSE \(.address) live record unreadable"
+        else "REFUSE \(.address) differs from the live record (\(.live | join(",")))" end' <<<"$verdicts")" || { _cfam_eval_fail; return 1; }
+  fi
+  # Beside a live refusal, a record whose shape and pin hold is named only by its own live line, if it
+  # has one. Keyed on the printed lines, so this exists only beside a REFUSE; `norm` is empty then, and
+  # nothing is admitted.
+  exempt="$norm"
+  if [[ -n "$live_v" ]]; then
+    exempt="$(jq -c '[.[] | select(.action == ["update"] and .why == []) | .address]' <<<"$verdicts")" || { _cfam_eval_fail; return 1; }
+  fi
 
   # Every check below appends violation lines; all are reported, then the verdict. Each check's
   # `v="$(jq` opener line is unique: the suite's mutation rows neuter a check there (`: jq`).
+  v="$(jq -r --argjson spec "$spec" '
+    [.resource_changes[] | select($spec[.address] != null)] | group_by(.address)[]
+    | select(length != 1 or ((.[0].mode // "managed") != "managed"))
+    | "REFUSE \(.[0].address) must appear exactly once as a managed resource in the plan"' "$plan_json")" || { _cfam_eval_fail; return 1; }
+  violations+="${v:+$v$'\n'}"
+
+  v="$(jq -r --argjson norm "$exempt" '.resource_changes[]
+    | select(.type == "cloudflare_record" and .change.actions != ["no-op"])
+    | select(.address as $a | ($norm | index($a)) == null)
+    | "REFUSE \(.address) is a cloudflare_record change outside import-normalize"' "$plan_json")" || { _cfam_eval_fail; return 1; }
+  violations+="${v:+$v$'\n'}"
+
+  v="$(jq -r '.[] | select(.noop_id_ok | not) | "REFUSE \(.address) is a no-op on a record id other than its pin"' <<<"$verdicts")" || { _cfam_eval_fail; return 1; }
+  violations+="${v:+$v$'\n'}"
+
   v="$(jq -r --argjson spec "$spec" '.resource_changes[] | select((.mode // "managed") == "managed")
     | select((.change.actions | index("forget")) or
              ((.change.actions | index("delete")) and ($spec[.address] != "replace")))
@@ -455,7 +493,7 @@ cf_account_migrate_gate() {
         ($cls == "import"  and .change.importing == null and .change.actions != ["no-op"] and (.address as $a | ($norm | index($a)) == null)) or
         ($cls == "mutable" and (.change.actions as $x | any([["update"],["no-op"],["create"]][]; . == $x) | not)) or
         ($cls == "replace" and .change.actions != ["delete","create"]))
-    | "REFUSE \(.address) (class \($cls)) planned with actions \(.change.actions | tostring)\(if .change.importing then " as an import" else "" end)"' --argjson norm "$norm" "$plan_json")" || { _cfam_eval_fail; return 1; }
+    | "REFUSE \(.address) (class \($cls)) planned with actions \(.change.actions | tostring)\(if .change.importing then " as an import" else "" end)"' --argjson norm "$exempt" "$plan_json")" || { _cfam_eval_fail; return 1; }
   # An import of a create-class address is reported by the literal check below, which names it.
   # grep -v exits 1 when every line was filtered (fine) and 2 on an error, which is a refusal:
   # a check that cannot be evaluated is a refusal, never "no violation lines".
@@ -506,14 +544,9 @@ cf_account_migrate_gate() {
 
   v="$(jq -r '.resource_changes[] | select(.change.importing != null) | select(.change.actions != ["no-op"])
     | select((.address as $a | ($norm | index($a))) == null)
-    | "REFUSE \(.address) is not a pure no-op import (actions \(.change.actions | tostring)): a mis-pinned import id writes to the zone under cover of an import"' --argjson norm "$norm" "$plan_json")" || { _cfam_eval_fail; return 1; }
+    | "REFUSE \(.address) is not a pure no-op import (actions \(.change.actions | tostring)): a mis-pinned import id writes to the zone under cover of an import"' --argjson norm "$exempt" "$plan_json")" || { _cfam_eval_fail; return 1; }
   violations+="${v:+$v$'\n'}"
-
-  # Every pinned record, whatever its planned action: a drifted no-op blocks the phase too.
-  if [[ "$has_live" == true ]]; then
-    v="$(jq -r '.[] | select(.live != []) | "REFUSE \(.address) differs from the live record (\(.live | join(",")))"' <<<"$verdicts")" || { _cfam_eval_fail; return 1; }
-    violations+="${v:+$v$'\n'}"
-  fi
+  violations+="${live_v:+$live_v$'\n'}"
 
   v="$(jq -r --argjson spec "$spec" --argjson lit "$literals" '
     .resource_changes[] | select(.change.importing != null)
