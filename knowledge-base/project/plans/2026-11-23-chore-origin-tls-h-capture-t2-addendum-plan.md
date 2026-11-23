@@ -64,7 +64,7 @@ Each row was measured against the kept file or the runbook on 2026-11-23.
 - `.claude/hooks/ship-runbook-ssh-gate.sh` checks added runbook lines at `gh pr ready`.
 - `scripts/markdown-lint.sh` needs blank lines around headings and tables and consistent table pipes.
 
-**What merging triggers.** The changed paths match no path-filtered `push` workflow, so no `apply-*` workflow fires and no release is published. The eight workflows with no path filter (`ci`, `codeql-main-alert-gate`, `merge-bypass-audit`, `secret-scan`, two skill scans, `tenant-integration`, `vendor-pin-verify`) contain no apply step. Merging needs none of the acts the standing limits reserve.
+**What merging triggers.** The changed paths match no path-filtered `push` workflow, so no `apply-*` workflow fires and no release is published. Of the eight workflows with no path filter (`ci`, `codeql-main-alert-gate`, `merge-bypass-audit`, `secret-scan`, two skill scans, `tenant-integration`, `vendor-pin-verify`), `tenant-integration` runs on a main push unless that push is a proven duplicate of the PR's green run. Its job seeds bot fixtures and runs `Apply migrations to dev` against the shared dev project. This PR adds no migration, and that step does not touch production. `Web Platform Release` also starts on every main CI completion through `workflow_run`; on a SHA that touches no deployable path, its release, migrate and deploy jobs are skipped. Merging needs none of the acts the standing limits reserve.
 
 **Closing #12846 does not break the probe.** `scripts/lib/trusted-verdict.sh` reads comments with `gh issue view --json comments`, with no state filter, so a marker posted on the closed issue still counts.
 
@@ -165,14 +165,15 @@ b=$(grep -nxF '#### What was NOT run before the flip' "$R" | cut -d: -f1)
 L=$(/usr/bin/env -i /usr/bin/jq -r -f <(awk '/^<!-- health-colo-r2-recipe:start -->$/ { f = 1; next } /^<!-- health-colo-r2-recipe:end -->$/ { f = 0 } f && /^```/ { g = !g; next } f && g { print }' "$R") "$F" | head -n 1)
 [ "$L" = 'inconclusive: positive-colo; null_colo_rows=0 null_colo_qualifying=0' ] \
   && grep -Fxq "Unverified: Cloudflare analytics-health-colo (H) #12846, $L" "$R" && echo RECORD-MATCHES
-# 3. The named suites.
-bash plugins/soleur/test/health-colo-falsification.test.sh | tail -n 1
-bash scripts/followthroughs/health-colo-capture-12846.test.sh | tail -n 1
+# 3. The named suites. The exit status is the verdict: a floor failure can still print "0 failed".
+for s in plugins/soleur/test/health-colo-falsification.test.sh scripts/followthroughs/health-colo-capture-12846.test.sh; do
+  o=$(bash "$s" 2>&1); rc=$?; printf '%s\n' "$o" | tail -n 1; [ "$rc" -eq 0 ] && echo "SUITE-OK $s"
+done
 # 4. The two kept files are unchanged since the capture commit, and nothing else is pending in that directory.
 git diff --quiet ee0e31379a -- "$F" "$E/analytics-health-colo-216h-end20261118T17Z.json" && [ -z "$(git status --porcelain -- "$E")" ] && echo EVIDENCE-UNCHANGED
 ```
 
-CI runs the other two runbook readers (`cloudflare-readonly.test.sh`, `components.test.ts`) through the affected-suite map.
+CI runs the other two runbook readers (`cloudflare-readonly.test.sh`, `components.test.ts`) in the full battery: the two `.json` evidence files are outside the docs-only oracle lane in `scripts/ci-oracle-lane.sh`, so the heavy legs are not skipped.
 
 ### Phase 3: ship
 
@@ -187,16 +188,18 @@ The body must also say, in prose:
 
 - The capture already ran, and the handoff loop must not be run again. The probe on #13003 keeps reporting ACTION REQUIRED until the marker exists.
 - The marker is not posted by this PR and needs the owner's typed go, so #13003 stays open.
-- Merging triggers no apply and no release.
+- Merging triggers no production apply and no release.
 
 Never put a closing keyword next to `#13003`, in the title, the body or any commit message, even in a negated sentence. After the last `gh pr edit` and the last commit, run:
 
 ```bash
 gh pr view 13016 --json closingIssuesReferences --jq '[.closingIssuesReferences[].number]'   # must print [12846]
 D=$(git diff --name-only origin/main...HEAD)
-allow='^knowledge-base/(engineering/operations/runbooks/(origin-tls-strict-flip\.md|evidence/analytics-health-colo-216h-end202611(12T12|18T17)Z\.json)|project/(plans/(archive/)?[^/]*chore-origin-tls-h-capture-t2-addendum-plan\.md|specs/(archive/[0-9-]+-)?chore-12846-h-capture-evidence/[^/]+|learnings/.+\.md))$'
+allow='^knowledge-base/(engineering/operations/runbooks/(origin-tls-strict-flip\.md|evidence/analytics-health-colo-216h-end202611(12T12|18T17)Z\.json)|project/(constitution\.md|glossary\.md|plans/(archive/)?[^/]*chore-origin-tls-h-capture-t2-addendum-plan\.md|specs/(archive/[0-9-]+-)?chore-12846-h-capture-evidence/[^/]+|learnings/.+\.md))$'
 printf '%s\n' "$D" | grep -qxF knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md && ! printf '%s\n' "$D" | grep -qvE "$allow" && echo SCOPE-OK
 ```
+
+`soleur:compound` can edit `plugins/soleur/{skills,agents,commands}/` on this branch. Never add those paths to `allow`: a `plugins/soleur/**` change outside `docs/` and `test/` makes the merge publish a release and deploy. If `SCOPE-OK` does not print, move the out-of-scope edit to its own PR from `origin/main`, drop it from this branch, and re-run this block.
 
 ## Files to Edit
 
@@ -261,7 +264,7 @@ threshold: none, reason: the diff is limited to an internal runbook, committed a
 
 - [x] Phase 2 prints `PURE-INSERT`.
 - [x] Phase 2 prints `RECORD-MATCHES`.
-- [x] `health-colo-falsification.test.sh` and `health-colo-capture-12846.test.sh` each report 0 failed.
+- [x] Phase 2 prints `SUITE-OK` for both named suites.
 - [x] Phase 2 prints `EVIDENCE-UNCHANGED`.
 - [ ] The `closingIssuesReferences` check in Phase 3 prints `[12846]`.
 - [ ] The PR body carries the three prose statements in Phase 3.
