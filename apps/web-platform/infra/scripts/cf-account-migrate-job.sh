@@ -39,26 +39,35 @@
 #
 # REFUSAL FIELDS (contract). On a redirects-dns apply (rehearsal=false) every refusal after the
 # state forget carries forget=committed (entrypoint-gate-refused, gate-refused,
-# in-state-updates-unexpected, apply-failed, verify-failed). state-migrate-failed carries
-# forget=committed when the forget's output holds its `backup=uploaded` marker (the write may have
-# started) or cannot be read, else forget=unknown. apply-failed also carries the result of the
-# best-effort probe of the partial apply (polled on a 60 s deadline): verify=ok, verify=skipped or
-# failing=<list>.
+# in-state-updates-unexpected, apply-budget-exhausted, setup when the apply's workflow-command token
+# cannot be created, apply-failed, import-normalize-reread-failed, verify-failed).
+# state-migrate-failed carries forget=committed when the forget's output holds its `backup=uploaded`
+# marker (the write may have started) or cannot be read, else forget=unknown. apply-failed and
+# import-normalize-reread-failed also carry the result of the best-effort public probe (polled on a
+# 60 s deadline) as their probe field: verify=ok, verify=skipped or failing=<list>. failing= is always
+# the last field and runs to the end of the line, because its list holds spaces.
 # `applying=true` is printed just before terraform apply. RESIDUAL: a cancel or a timeout-minutes
 # kill prints no refuse line at all; the log markers backup=uploaded, applying=true and applied=true
 # are then the test (runbook Halt).
 #
 # IMPORT-NORMALIZE (contract, ADR-329). Every redirects-dns plan reads all pinned DNS records after the
 # plan and before the phase gate, in a rehearsal and an apply, so the gate can admit the one provider
-# update (allow_overwrite and content) only against live values. When it admitted at least one
-# record, the apply gets one INT at APPLY_DEADLINE (1100 s of script time; none left refuses
-# apply-budget-exhausted applied=false before applying=true) and all records are read again after it,
-# on success and on failure. A difference or an unreadable record refuses
-# import-normalize-reread-failed applied=true forget=committed reread=<r> verify=<v>; an apply-failed
-# refusal carries forget=committed reread=<r> verify=<v> in that order. <r> is ok,
-# differs=<addr:field+field,...> (a 404 is <addr>:notfound) or unreadable=<addr,...>. A re-read detects
-# a bad write and does not undo it (runbook Halt, A DNS record may hold a wrong value). Only field
-# names are printed, never a record value. zone-rest has no pins, makes no read and keeps its apply argv.
+# update (allow_overwrite and content) only against live values. An apply whose phase has no replace
+# member (empty REPLACE_ARGS, so redirects-dns even with no admitted record) gets one INT
+# `APPLY_DEADLINE - SECONDS` seconds after `doppler run` hands off, so 1100 s of script time plus the
+# Doppler fetch (about 80 s worst case per request at CLI defaults). Fewer than APPLY_MIN_START
+# (300 s) left refuses apply-budget-exhausted applied=false before applying=true. When the gate
+# admitted at least one record, all records are read again after the apply, on success and on
+# failure. A difference or an unreadable record refuses import-normalize-reread-failed applied=true
+# forget=committed reread=<r> <probe>; an apply-failed refusal carries forget=committed reread=<r>
+# <probe> in that order, where <probe> is the probe field above. <r> is ok,
+# differs=<addr:field+field,...> (a 404 is <addr>:notfound), unreadable=<addr,...>, or for a mixed
+# result differs=<addr:field+field,...>;unreadable=<addr,...>. Any value containing differs= routes to
+# runbook Halt, A DNS record may hold a wrong value; an unreadable= value alone routes to No completed
+# re-read (halt_pointer). A re-read detects a bad write and does not undo it. The gate's and the
+# re-read's own lines print field names, never a record value; terraform's plan and apply output can
+# print values (see the last paragraph). zone-rest has no pins, makes no read, and its apply has no
+# bound: an INT between the delete and create of its replace would leave the prd secret deleted.
 #
 # Test seams of the sourced libraries (CFAM_IMPORTS_FILE) are unset before sourcing: the gate
 # compares imports against the COMMITTED file only.
@@ -72,7 +81,10 @@
 # whole-list entrypoint gate (ADR-136, CTO D2: a ruleset create is a whole-list PUT over the live
 # phase entrypoint), apply the graded tfplan only when both PASS, verify the live probes (both phases).
 #
-# Prints verdict lines and addresses only; terraform output goes through tf_redact_random_ids.
+# The job's own lines are verdicts and addresses. Terraform's plan and apply output can carry live
+# values, so it passes through tf_redact_random_ids and tf_line (every line starts `tf| `, a CR
+# becomes a space) inside a per-window ::stop-commands:: token: a live value cannot open a workflow
+# command. entrypoint_gate is outside any window because it emits its own ::notice and ::error.
 # Exit: 0 ok, 1 refused or failed, 2 setup error.
 set -uo pipefail
 case "$-" in
@@ -160,6 +172,11 @@ cleanup() { if [[ -n "$W" && -d "$W" ]]; then rm -rf "$W"; fi; }
 readonly TF_ENV=(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var --
   env -u TF_LOG -u TF_LOG_PATH -u TF_LOG_CORE -u TF_LOG_PROVIDER)
 tf_env() { "${TF_ENV[@]}" "$@"; }
+
+# cmd_token: a fresh 32-hex ::stop-commands:: token; non-zero when one cannot be read.
+cmd_token() { local t; t="$(LC_ALL=C od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"; [[ "$t" =~ ^[0-9a-f]{32}$ ]] && printf '%s' "$t"; }
+# tf_line (stdin -> stdout): the runner's reader also splits on CR, and a stopped command still prints.
+tf_line() { LC_ALL=C sed -e 's/\r/ /g' -e 's/^/tf| /'; }
 
 load_libs() {
   [[ -n "${GITHUB_WORKSPACE:-}" ]] || { printf '%s: GITHUB_WORKSPACE is not set\n' "$P" >&2; exit 2; }
@@ -384,11 +401,11 @@ entrypoint_gate() {
 LIVE_READ_SH="$(cat <<'LIVEREAD'
 t="${TF_VAR_cf_api_token:-}"
 case "$t" in ""|*[!A-Za-z0-9._~+/=-]*) exit 3 ;; esac
-d="$1"; z="$2"; shift 2
+b="$1"; d="$2"; z="$3"; shift 3
 for id in "$@"; do
   [ -e "$d/$id" ] && continue
   r="$(curl --disable --noproxy '*' -sS --max-time 5 -w '\n%{http_code}' --config - \
-       "https://api.cloudflare.com/client/v4/zones/$z/dns_records/$id" 2>/dev/null \
+       "$b/zones/$z/dns_records/$id" 2>/dev/null \
        < <(printf 'header = "Authorization: Bearer %s"\n' "$t"))" || continue
   code="${r##*$'\n'}"
   if [[ "$code" == 200 || "$code" == 404 ]]; then
@@ -398,12 +415,13 @@ done
 LIVEREAD
 )"
 readonly LIVE_READ_SH
-readonly LIVE_READ_DEADLINE=90 LIVE_READ_PASSES=3 APPLY_DEADLINE=1100
+readonly LIVE_READ_DEADLINE=90 LIVE_READ_PASSES=5 APPLY_DEADLINE=1100 APPLY_MIN_START=300
 
 # read_live_records <out>: live.json for every pinned record, from a directory no earlier read wrote.
 # One deadline spans all passes and is enforced outside doppler run, because a Doppler stall happens
-# before any inner timer starts. A record with no response by then is `unreadable` in <out>. Non-zero
-# means no usable <out>.
+# before any inner timer starts. The pause between passes starts at 5 s and doubles, cut short so the
+# next pass still fits the deadline. A record with no response by then is `unreadable` in <out>.
+# Non-zero means no usable <out>.
 read_live_records() {
   local out="$1" dir pins rc left id pending pass read_end pause=5
   local -a ids=()
@@ -416,12 +434,17 @@ read_live_records() {
   for ((pass = 1; pass <= LIVE_READ_PASSES; pass++)); do
     left=$((read_end - SECONDS)); ((left > 5)) || break
     rc=0
-    timeout -k 5 "$((left - 5))" "${TF_ENV[@]}" bash -c "$LIVE_READ_SH" _ "$dir" "$CFAM_NEW_ZONE_ID" "${ids[@]}" >/dev/null 2>&1 || rc=$?
+    timeout -k 5 "$((left - 5))" "${TF_ENV[@]}" bash -c "$LIVE_READ_SH" _ "$CF_API" "$dir" "$CFAM_NEW_ZONE_ID" "${ids[@]}" >/dev/null 2>&1 || rc=$?
     [[ "$rc" -ne 3 ]] || break
     pending=0
     for id in "${ids[@]}"; do [[ -e "$dir/$id" ]] || pending=1; done
     [[ "$pending" -eq 1 ]] || break
-    if ((pass < LIVE_READ_PASSES)); then sleep "$pause"; fi
+    if ((pass < LIVE_READ_PASSES)); then
+      # The loop's next pass needs left > 5, so a pause may use all but 6 s of what remains.
+      left=$((read_end - SECONDS - 6)); ((left > 0)) || break
+      sleep "$((pause < left ? pause : left))"
+      pause=$((pause * 2))
+    fi
   done
   cf_account_migrate_live_collect "$MIGRATE_PHASE" "$dir" >"$out.tmp" && mv "$out.tmp" "$out"
 }
@@ -430,7 +453,9 @@ read_live_records() {
 # Sets REREAD; returns 0 only when every record matches.
 reread_records() {
   local live="$W/live-reread.json" d a t unread="" differ="" pins all
-  pins="$(cf_account_migrate_record_pins "$MIGRATE_PHASE")"
+  # No pin list means no address to name, so the value is a fixed token in the unreadable= form.
+  pins="$(cf_account_migrate_record_pins "$MIGRATE_PHASE")" && [[ -n "$pins" ]] \
+    || { REREAD="unreadable=all-pinned-records"; return 1; }
   all="$(cut -f1 <<<"$pins" | paste -sd, -)"
   read_live_records "$live" || { REREAD="unreadable=$all"; return 1; }
   d="$(cf_account_migrate_live_diff "$MIGRATE_PHASE" "$W/tfplan.json" "$live")" || { REREAD="unreadable=$all"; return 1; }
@@ -439,12 +464,22 @@ reread_records() {
     if [[ "$t" == unreadable ]]; then unread+=",$a"; else differ+=",$a:${t//,/+}"; fi
   done <<<"$d" # every differing record
   if [[ -n "$differ" ]]; then
-    [[ -z "$unread" ]] || printf '%s import-normalize reread also-unreadable=%s\n' "$P" "${unread#,}"
-    REREAD="differs=${differ#,}"; return 1
+    REREAD="differs=${differ#,}${unread:+;unreadable=${unread#,}}"; return 1
   fi
   if [[ -n "$unread" ]]; then REREAD="unreadable=${unread#,}"; return 1; fi
   REREAD="ok"
   printf '%s import-normalize reread=ok records=%s\n' "$P" "$(grep -c . <<<"$pins")"
+}
+
+# halt_pointer <reread value, or empty> <probe field>: the runbook Halt sentences for a post-apply
+# refusal. Any value containing differs= is the wrong-value bullet, an unreadable= value alone is No
+# completed re-read, and failing=<list> adds the verify-failed steps.
+halt_pointer() {
+  case "$1" in
+    *differs=*) printf ' Runbook Halt: A DNS record may hold a wrong value.' ;;
+    *unreadable=*) printf ' Runbook Halt: No completed re-read.' ;;
+  esac
+  [[ "$2" != failing=* ]] || printf ' The runbook Halt verify-failed steps apply to those failing items (app-health first).'
 }
 
 # join_fields <field>...: the non-empty fields, space-separated, in order.
@@ -484,11 +519,14 @@ state_migrate() { # [--rehearsal --backup-dir <dir>]; runs in the current direct
 # plan_and_gate: in the current directory. Writes $W/tfplan; returns 0 only on phase-gate
 # verdict=PASS AND an entrypoint-gate PASS; 2 when the entrypoint gate refused, 1 otherwise.
 plan_and_gate() {
-  local rc out live="" n=0
+  local rc out live="" n=0 tok gc=0
   terraform show -json >"$W/pre-plan-state.json" 2>/dev/null || { printf '::error::terraform show -json (pre-plan state) failed\n'; return 1; }
+  tok="$(cmd_token)" || { printf '::error title=%s::cannot create the workflow-command token\n' "$P"; return 1; }
+  printf '::stop-commands::%s\n' "$tok"
   tf_env terraform plan -no-color -input=false -out="$W/tfplan" \
-    -var="ssh_key_path=$W/ci_ssh_key.pub" "${TARGET_ARGS[@]}" ${REPLACE_ARGS[@]+"${REPLACE_ARGS[@]}"} 2>&1 | tf_redact_random_ids
+    -var="ssh_key_path=$W/ci_ssh_key.pub" "${TARGET_ARGS[@]}" ${REPLACE_ARGS[@]+"${REPLACE_ARGS[@]}"} 2>&1 | tf_redact_random_ids | tf_line
   rc=${PIPESTATUS[0]}
+  printf '\n::%s::\n' "$tok"
   if [[ "$rc" -ne 0 ]]; then
     printf '::error title=%s::terraform plan failed (exit %s). If the output names cf_zone_id or cf_account_id, Doppler still holds an OLD id (Guard 4).\n' "$P" "$rc"
     return 1
@@ -510,7 +548,13 @@ plan_and_gate() {
   ADMITTED_ISU="$(sed -n 's/^cf_account_migrate_gate: in-state-update //p' <<<"$out" | LC_ALL=C sort -u)"
   printf '%s in-state-updates count=%s admitted=%s\n' "$P" "$(grep -c . <<<"$ADMITTED_ISU")" "$(isu_csv "$ADMITTED_ISU")"
   summary "in-state-updates admitted=$(isu_csv "$ADMITTED_ISU")"
-  NORM_COUNT="$(grep -c '^cf_account_migrate_gate: import-normalize ' <<<"$out")"
+  # grep -c exits 1 on zero matches (a real 0). Anything else leaves no count, and an empty one would
+  # silently skip the post-apply re-read, so it refuses.
+  NORM_COUNT="$(grep -c '^cf_account_migrate_gate: import-normalize ' <<<"$out")" || gc=$?
+  if ((gc > 1)) || [[ ! "$NORM_COUNT" =~ ^[0-9]+$ ]]; then
+    printf '::error title=%s::cannot count the import-normalize records (grep exit %s)\n' "$P" "$gc"
+    return 1
+  fi
   printf '%s import-normalize count=%s\n' "$P" "$NORM_COUNT"
   summary "import-normalize count=$NORM_COUNT"
   if ! entrypoint_gate; then
@@ -655,7 +699,7 @@ partial_apply_verdict() {
 }
 
 run_apply() {
-  local rc g fg="" fx="" vf="" rr="" msg remaining
+  local rc g fg="" fx="" vf="" rr="" msg remaining tok
   local -a bound=()
   cd "$ROOT" || refuse setup "cannot cd to the root"
   if [[ "$MIGRATE_PHASE" == redirects-dns ]]; then
@@ -683,35 +727,38 @@ run_apply() {
   [[ "$rc" -eq 0 ]] || refuse gate-refused "the plan did not reach gate verdict=PASS; nothing was applied.${fg}" "$fx"
   check_expected_isu "$fg" "$fx"
   # One INT, never a KILL, and --foreground so it reaches terraform once: a second INT makes it exit
-  # at once and can lose in-flight creates from state. `timeout 0` would disable the bound, so no
-  # budget refuses. Other applies keep their argv: an INT between the delete and create of the
-  # zone-rest token replace would leave the prd secret deleted.
-  if [[ "$NORM_COUNT" -gt 0 ]]; then # bound only an admitted apply
+  # at once and can lose in-flight creates from state. Keyed on an empty replace list, not the phase
+  # name: with no replace the gate admits no delete, so an INT has no delete-then-create to split
+  # (zone-rest's token replace would leave the prd secret deleted). A write started just before its
+  # INT guarantees a partial apply, so too little budget refuses; a refusal writes nothing.
+  if ((${#REPLACE_ARGS[@]} == 0)); then
     remaining=$((APPLY_DEADLINE - SECONDS))
-    ((remaining > 0)) || refuse apply-budget-exhausted "no apply budget is left (the ${APPLY_DEADLINE} s bound has passed); nothing was applied. Re-rehearse and re-dispatch once; on a second refusal stop for an owner decision.${fg}" "applied=false${fx:+ $fx}"
+    ((remaining >= APPLY_MIN_START)) || refuse apply-budget-exhausted "fewer than ${APPLY_MIN_START} s of the ${APPLY_DEADLINE} s apply budget remain; nothing was applied. Re-rehearse and re-dispatch once; on a second refusal stop for an owner decision.${fg}" "applied=false${fx:+ $fx}"
     bound=(timeout --foreground -s INT "$remaining")
   fi
+  tok="$(cmd_token)" || refuse setup "cannot create the workflow-command token; nothing was applied.${fg}" "applied=false${fx:+ $fx}"
   printf '%s phase=%s mode=apply applying=true\n' "$P" "$MIGRATE_PHASE"
-  tf_env ${bound[@]+"${bound[@]}"} terraform apply -no-color -input=false -auto-approve "$W/tfplan" 2>&1 | tf_redact_random_ids
+  printf '::stop-commands::%s\n' "$tok"
+  tf_env ${bound[@]+"${bound[@]}"} terraform apply -no-color -input=false -auto-approve "$W/tfplan" 2>&1 | tf_redact_random_ids | tf_line
   rc=${PIPESTATUS[0]}
+  printf '\n::%s::\n' "$tok"
   if [[ "$rc" -ne 0 ]]; then
     # apply-failed stays the reason; the result of the best-effort probe is a field.
     msg="terraform apply of the graded plan failed (exit $rc); state may hold a partial apply."
+    if ((rc == 124 && ${#bound[@]} > 0)); then msg+=" exit 124 is the apply's one INT at APPLY_DEADLINE firing."; fi
     [[ "$NORM_COUNT" -eq 0 ]] || { reread_records; rr="reread=$REREAD"; }
     partial_apply_verdict
     [[ -z "$rr" ]] || msg+=" Re-read of the DNS records: ${REREAD}."
-    [[ "$REREAD" == ok || -z "$rr" ]] || msg+=" Runbook Halt: A DNS record may hold a wrong value."
-    msg+=" Probe of the partial apply (polled on a 60 s deadline): ${vf}."
-    [[ "$vf" != failing=* ]] || msg+=" The runbook Halt verify-failed steps apply to those failing items (app-health first)."
+    msg+=" Probe of the partial apply (polled on a 60 s deadline): ${vf}.$(halt_pointer "$rr" "$vf")"
     msg+=" Fix forward (a reviewed PR if the cause is in code), then re-dispatch the same phase:"
-    [[ "$MIGRATE_PHASE" != redirects-dns ]] || msg+=" the forget then removes 0 (cf-state-migrate verdict=ok removed=0),"
-    refuse apply-failed "$msg each import already in state shows no diff, or the admitted import-normalize update if its write failed, and only the remainder is planned and gated." "$(join_fields "$fx" "$rr" "$vf")"
+    [[ "$MIGRATE_PHASE" != redirects-dns ]] || msg+=" the forget then removes 0 (cf-state-migrate verdict=ok removed=0), a record whose PATCH failed plans a no-op if live still matches, a record the apply never reached still plans the admitted import-normalize update, and"
+    refuse apply-failed "$msg only the remainder is planned and gated." "$(join_fields "$fx" "$rr" "$vf")"
   fi
   printf '%s phase=%s mode=apply applied=true\n' "$P" "$MIGRATE_PHASE"
   if [[ "$NORM_COUNT" -gt 0 ]]; then
     reread_records || {
       partial_apply_verdict
-      refuse import-normalize-reread-failed "the apply finished, but the re-read of the DNS records did not match the graded plan: ${REREAD}. Public probes: ${vf}. Runbook Halt: A DNS record may hold a wrong value." "$(join_fields "applied=true" "$fx" "reread=$REREAD" "$vf")"
+      refuse import-normalize-reread-failed "the apply finished, but the re-read of the DNS records did not match the graded plan: ${REREAD}. Public probes: ${vf}.$(halt_pointer "$REREAD" "$vf")" "$(join_fields "applied=true" "$fx" "reread=$REREAD" "$vf")"
     }
   fi
   local what="noindex/crawler/app-health" halt
