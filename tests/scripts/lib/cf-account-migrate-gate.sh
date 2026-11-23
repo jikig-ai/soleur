@@ -29,9 +29,11 @@
 #   mutable  a non-Cloudflare secret whose value follows the new ids: update, create or no-op.
 #   replace  passed as -replace: must be a replace with action_reason "replace_by_request" whose
 #            `before` physical id equals the pre-plan state id (Terraform drops a -replace outside
-#            the -target set without a warning; measured on 1.10.5). Delete-then-create ONLY: the one
-#            replace member, doppler_secret.cf_api_token_dns_edit, is keyed by project/config/name, so a
-#            create-before-destroy replace would delete the key it had just written.
+#            the -target set without a warning; measured on 1.10.5). Delete-then-create ONLY:
+#            doppler_secret.cf_api_token_dns_edit is keyed by project/config/name, so a
+#            create-before-destroy replace would delete the key it had just written. The other
+#            member, random_id.tunnel_secret (tunnel phase), has a physical id that IS its secret
+#            (base64url of the bytes), so a refusal never prints the id of a random_* address.
 #
 # The new ids are constants, not inputs (any other id, old or unknown, is refused): a mis-set Doppler value must not be able to
 # re-point what the gate accepts. Not secrets.
@@ -45,7 +47,11 @@
 #   github_actions_secret.cloudflare_api_token_pages (cf-pages.tf): repository soleur, secret_name
 #     CLOUDFLARE_API_TOKEN_PAGES (its plaintext_value is a token: not in the table);
 #   doppler_secret.cf_api_token_dns_edit (cf-cert-reissue-token.tf): project soleur, config prd, name
-#     CF_API_TOKEN_DNS_EDIT, visibility masked (its value is a token: not in the table).
+#     CF_API_TOKEN_DNS_EDIT, visibility masked (its value is a token: not in the table);
+#   doppler_secret.registry_push_access_token_id and _secret (tunnel.tf): project soleur, config prd,
+#     name REGISTRY_PUSH_ACCESS_TOKEN_ID / _SECRET, visibility masked (their value follows the token
+#     the same plan creates, known only after apply: not in the table);
+#   random_id.tunnel_secret (tunnel.tf): byte_length 32 (it has no value attribute).
 # Any planned action with a non-null `after` (create, update, no-op, and the create half of the
 # declared replace) must carry each attribute exactly: absent, another value, or known only after
 # apply (after_unknown) is refused. The check runs on the plan JSON, which holds a sensitive
@@ -64,6 +70,14 @@
 # SPEC SHAPE (contract). A phase spec is one flat JSON object naming each address once with a string
 # class: a value other than one of the four class strings (a nested object or array included) or a
 # key written twice refuses the phase before any plan entry is graded.
+#
+# DEPLOY POLICY (tunnel phase, contract). cloudflare_zero_trust_access_policy.deploy_service_token
+# guards the deploy webhook and its include is a committed local, so the plan alone cannot vouch for
+# it. The gate requires one plan entry whose `after` has decision non_identity and exactly one include
+# block holding exactly one non-nil service-token UUID and no other rule, and whose configuration
+# references the deploy Access application. The job then reads that token LIVE
+# (cf_account_migrate_deploy_token_id, cf_account_migrate_deploy_token_verdict): 200, the name
+# github-actions-deploy, about 8760h to expiry.
 # Usage:
 #   source tests/scripts/lib/cf-account-migrate-gate.sh
 #   cf_account_migrate_targets  <phase>                       # one -target=<addr> per line
@@ -118,7 +132,7 @@ if [[ -n "${CFAM_IMPORTS_FILE:-}" && -e "$_cfam_imports_default" && ! "$CFAM_IMP
 fi
 CFAM_IMPORTS_FILE="${CFAM_IMPORTS_FILE:-$_cfam_imports_default}"
 
-cf_account_migrate_phases() { printf '%s\n' redirects-dns zone-rest; }
+cf_account_migrate_phases() { printf '%s\n' redirects-dns zone-rest tunnel; }
 
 # cf_account_migrate_phase_spec <phase> — JSON object {address: class}. The ONE list.
 # cloudflare_ruleset.cache_shared_binaries is in NO phase (CTO ruling D3): caching /api/shared/*
@@ -181,6 +195,30 @@ JSON
 }
 JSON
       ;;
+    tunnel)
+      cat <<'JSON'
+{
+  "random_id.tunnel_secret": "replace",
+  "cloudflare_zero_trust_tunnel_cloudflared.web": "create",
+  "cloudflare_zero_trust_tunnel_cloudflared_config.web": "create",
+  "cloudflare_zero_trust_access_application.deploy": "create",
+  "cloudflare_zero_trust_access_application.ssh": "create",
+  "cloudflare_zero_trust_access_application.registry": "create",
+  "cloudflare_zero_trust_access_policy.deploy_service_token": "create",
+  "cloudflare_zero_trust_access_policy.ci_ssh_service_token": "create",
+  "cloudflare_zero_trust_access_policy.registry_push_service_token": "create",
+  "cloudflare_zero_trust_access_service_token.ci_ssh": "create",
+  "cloudflare_zero_trust_access_service_token.registry_push": "create",
+  "cloudflare_notification_policy.service_token_expiry": "create",
+  "cloudflare_record.deploy": "create",
+  "cloudflare_record.ssh": "create",
+  "cloudflare_record.registry": "create",
+  "cloudflare_record.app": "import",
+  "doppler_secret.registry_push_access_token_id": "mutable",
+  "doppler_secret.registry_push_access_token_secret": "mutable"
+}
+JSON
+      ;;
     *) return 1 ;;
   esac
 }
@@ -197,15 +235,18 @@ cf_account_migrate_replaces() {
   jq -r 'to_entries[] | select(.value=="replace") | "-replace=" + .key' <<<"$spec"
 }
 
-# _cfam_import_literals — JSON {address: id} from the imports file (plain import set only).
+# _cfam_import_literals [<phase>] — JSON {address: id} from the imports file: the plain import set,
+# plus the app-record block for the tunnel phase only (no other phase may import that address).
 _cfam_import_literals() {
+  local with_app=0
+  [[ "${1-}" != tunnel ]] || with_app=1
   [[ -r "$CFAM_IMPORTS_FILE" ]] || { echo "cf_account_migrate_gate: imports file unreadable: $CFAM_IMPORTS_FILE" >&2; return 1; }
-  awk '
+  awk -v with_app="$with_app" '
     /^import \{/ {inblk=1; to=""; id=""; app=0; next}
     inblk && /for_each/ {app=($0 ~ /cf_migration_import_app_set/)}
     inblk && /^[[:space:]]*to[[:space:]]*=/ {sub(/^[^=]*=[[:space:]]*/,""); sub(/[[:space:]]*(#.*)?$/,""); to=$0}
     inblk && /^[[:space:]]*id[[:space:]]*=/ {sub(/^[^=]*=[[:space:]]*"/,""); sub(/".*/,""); id=$0}
-    inblk && /^\}/ {if (!app && to != "" && id != "") print to "\t" id; inblk=0}
+    inblk && /^\}/ {if ((!app || with_app) && to != "" && id != "") print to "\t" id; inblk=0}
   ' "$CFAM_IMPORTS_FILE" | jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add // {}'
 }
 
@@ -217,7 +258,83 @@ _cfam_expected_values() {
     + {"github_actions_secret.cloudflare_account_id_pages": {repository: "soleur", secret_name: "CLOUDFLARE_ACCOUNT_ID_PAGES", plaintext_value: $a}}
     + {"github_actions_secret.cloudflare_api_token_pages": {repository: "soleur", secret_name: "CLOUDFLARE_API_TOKEN_PAGES"}}
     + {"doppler_secret.cf_api_token_dns_edit": {project: "soleur", config: "prd", name: "CF_API_TOKEN_DNS_EDIT", visibility: "masked"}}
+    + {"doppler_secret.registry_push_access_token_id": {project: "soleur", config: "prd", name: "REGISTRY_PUSH_ACCESS_TOKEN_ID", visibility: "masked"}}
+    + {"doppler_secret.registry_push_access_token_secret": {project: "soleur", config: "prd", name: "REGISTRY_PUSH_ACCESS_TOKEN_SECRET", visibility: "masked"}}
+    + {"random_id.tunnel_secret": {byte_length: 32}}
   '
+}
+
+# The deploy policy and the token it must admit (DEPLOY POLICY in the header).
+# Plain assignments, like the ids above: this library may be sourced more than once in one shell.
+CFAM_DEPLOY_POLICY_ADDR="cloudflare_zero_trust_access_policy.deploy_service_token"
+CFAM_DEPLOY_APP_REF="cloudflare_zero_trust_access_application.deploy.id"
+CFAM_DEPLOY_TOKEN_NAME="github-actions-deploy"
+# "About 8760h": at most one hour over a year, and at most 31 days under it (the mint precedes the
+# tunnel apply by the PR2 review and merge).
+CFAM_DEPLOY_TOKEN_MIN_H=8016
+CFAM_DEPLOY_TOKEN_MAX_H=8761
+CFAM_UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+CFAM_NIL_UUID="00000000-0000-0000-0000-000000000000"
+
+# _cfam_deploy_policy_violations <plan.json>: REFUSE lines naming attributes, never values.
+_cfam_deploy_policy_violations() {
+  jq -r --arg a "$CFAM_DEPLOY_POLICY_ADDR" --arg ref "$CFAM_DEPLOY_APP_REF" --arg re "$CFAM_UUID_RE" --arg nil "$CFAM_NIL_UUID" '
+    def blank: . == null or . == false or . == "" or . == [] or . == {};
+    . as $root | [.resource_changes[] | select(.address == $a)] as $rc
+    | if ($rc | length) != 1 then "REFUSE \($a) must appear exactly once in the plan (found \($rc | length))"
+      else ($rc[0].change.after) as $af
+      | if $af == null then "REFUSE \($a) has no planned value"
+        else
+          (if ($af | type) == "object" and $af.decision == "non_identity" then empty
+           else "REFUSE \($a) must plan decision non_identity" end),
+          ((if ($af | type) == "object" then $af.include else null end) as $inc
+           | if ($inc | type) != "array" or ($inc | length) != 1 then "REFUSE \($a) must plan exactly one include block"
+             elif ($inc[0] | type) != "object" then "REFUSE \($a) include is not an object"
+             else
+               ($inc[0].service_token) as $st
+               | (if ($st | type) != "array" or ($st | length) != 1 then "REFUSE \($a) include must hold exactly one service token"
+                  elif ($st[0] | type) != "string" or ($st[0] | test($re) | not) or $st[0] == $nil then "REFUSE \($a) include service token is not a non-nil UUID"
+                  else empty end),
+                 ($inc[0] | to_entries[] | select(.key != "service_token") | select(.value | blank | not)
+                  | "REFUSE \($a) include carries another rule (\(.key))")
+             end),
+          ([$root.configuration.root_module.resources[]? | select(.address == $a)
+            | .expressions.application_id.references[]?] as $refs
+           | if ($refs | index($ref)) != null then empty
+             else "REFUSE \($a) application_id does not reference the deploy Access application" end)
+        end
+      end' "$1"
+}
+
+# cf_account_migrate_deploy_token_id <plan.json>: the one service-token UUID the planned deploy policy
+# admits; rc 1 unless the plan names exactly one non-nil UUID.
+cf_account_migrate_deploy_token_id() {
+  local id
+  id="$(jq -r --arg a "$CFAM_DEPLOY_POLICY_ADDR" '
+    [.resource_changes[] | select(.address == $a) | .change.after.include[]?.service_token[]?]
+    | if length == 1 then .[0] else empty end' "${1-}" 2>/dev/null)" || return 1
+  [[ "$id" =~ $CFAM_UUID_RE && "$id" != "$CFAM_NIL_UUID" ]] || return 1
+  printf '%s\n' "$id"
+}
+
+# cf_account_migrate_deploy_token_verdict <uuid> <now-epoch> (API body on stdin): prints `ok` (rc 0)
+# or one reason token (rc 1). Prints no field of the body.
+cf_account_migrate_deploy_token_verdict() {
+  local v
+  v="$(jq -r --arg id "${1-}" --arg name "$CFAM_DEPLOY_TOKEN_NAME" --argjson now "${2:-0}" \
+      --argjson lo "$CFAM_DEPLOY_TOKEN_MIN_H" --argjson hi "$CFAM_DEPLOY_TOKEN_MAX_H" '
+    if (type != "object") or .success != true or ((.result | type) != "object") then "body-not-success"
+    elif .result.id != $id then "id-differs"
+    elif .result.name != $name then "name-differs"
+    elif (.result.expires_at | type) != "string" then "expiry-absent"
+    else ((try (.result.expires_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null)) as $e
+      | if $e == null then "expiry-unparseable"
+        elif (($e - $now) / 3600) < $lo or (($e - $now) / 3600) > $hi then "expiry-out-of-window"
+        else "ok" end
+    end' 2>/dev/null)" || { printf 'body-unparseable\n'; return 1; }
+  [[ -n "$v" ]] || { printf 'body-unparseable\n'; return 1; }
+  printf '%s\n' "$v"
+  [[ "$v" == ok ]]
 }
 
 # A check that cannot be evaluated is a refusal, never an empty violation list (an empty list
@@ -239,7 +356,7 @@ cf_account_migrate_gate() {
     echo "cf_account_migrate_gate: REFUSE — the plan has zero resource_changes (0 checked is not a pass)"
     return 1
   fi
-  literals="$(_cfam_import_literals)" || return 1
+  literals="$(_cfam_import_literals "$phase")" || return 1
   want="$(_cfam_expected_values)" || { _cfam_eval_fail; return 1; }
 
   # SPEC SHAPE (header). First the class: a value outside the four class strings (a typo, or a
@@ -397,7 +514,13 @@ cf_account_migrate_gate() {
       ([$st[0].values | .. | objects | select(has("address") and has("values")) | {(.address): .values.id}] | add // {}) as $ids
       | .resource_changes[] | select($spec[.address] == "replace")
       | select(.change.before.id == null or .change.before.id != $ids[.address])
-      | "REFUSE \(.address) replace targets physical id \(.change.before.id // "null") but pre-plan state holds \($ids[.address] // "null")"' "$plan_json")" || { _cfam_eval_fail; return 1; }
+      | if (.type | startswith("random_")) then "REFUSE \(.address) replace targets a physical id that differs from the pre-plan state (ids not printed: a random_* id is its secret)"
+        else "REFUSE \(.address) replace targets physical id \(.change.before.id // "null") but pre-plan state holds \($ids[.address] // "null")" end' "$plan_json")" || { _cfam_eval_fail; return 1; }
+    violations+="${v:+$v$'\n'}"
+  fi
+
+  if [[ "$phase" == tunnel ]]; then
+    v="$(_cfam_deploy_policy_violations "$plan_json")" || { _cfam_eval_fail; return 1; }
     violations+="${v:+$v$'\n'}"
   fi
 
@@ -425,6 +548,7 @@ cf_account_migrate_phase_tokens() {
   case "${1-}" in
     redirects-dns) printf '%s\n' cf_api_token cf_api_token_rulesets cf_api_token_pages ;;
     zone-rest) printf '%s\n' cf_api_token_zone_settings cf_api_token_bot_management ;;
+    tunnel) printf '%s\n' cf_api_token ;;
     *) return 1 ;;
   esac
 }

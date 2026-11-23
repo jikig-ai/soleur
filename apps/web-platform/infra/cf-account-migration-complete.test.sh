@@ -85,8 +85,9 @@ REQ="$WORK/required.json"
 ) > "$REQ" || { printf '[FATAL] could not derive the required set from %s\n' "$GATE" >&2; exit 2; }
 N_REQ="$(jq length "$REQ")"
 mapfile -t REQ_ADDRS < <(jq -r '.[]' "$REQ")
-if (( N_REQ >= 40 )) && jq -e 'index("cloudflare_record.www") and index("cloudflare_ruleset.bulk_redirects") and index("doppler_secret.cf_api_token_dns_edit") and index("cloudflare_pages_project.docs")' "$REQ" >/dev/null; then
-  ok "required set derived from the gate: ${N_REQ} addresses, literal sample present"
+if (( N_REQ == 60 )) && jq -e 'index("cloudflare_record.www") and index("cloudflare_ruleset.bulk_redirects") and index("doppler_secret.cf_api_token_dns_edit") and index("cloudflare_pages_project.docs")
+     and index("cloudflare_zero_trust_tunnel_cloudflared.web") and index("cloudflare_record.app") and index("random_id.tunnel_secret")' "$REQ" >/dev/null; then
+  ok "required set derived from the gate: ${N_REQ} addresses (37 + 5 + the 18 of the tunnel phase, CFAM_TUNNEL_ADDR among them), literal sample present"
 else
   no "required set derived from the gate looks shrunk (n=${N_REQ})"
 fi
@@ -103,8 +104,7 @@ jq -n --slurpfile r "$REQ" --arg nz "$NZ" --arg na "$NA" --arg oz "$OZ" --arg oa
    resources: (
      [ $r[0][] | split(".") as $p
        | res($p[0]; $p[1]; (if ($p[0] | startswith("cloudflare_")) then {zone_id: $nz, account_id: $na, content: $s} else {name: "x"} end)) ]
-     + [ res("cloudflare_zero_trust_tunnel_cloudflared"; "web"; {account_id: $na, name: "web", content: $s}),
-         res("cloudflare_r2_bucket"; "terraform_state_privileged"; {account_id: $oa, name: "b", content: $s}),
+     + [ res("cloudflare_r2_bucket"; "terraform_state_privileged"; {account_id: $oa, name: "b", content: $s}),
          res("hcloud_server"; "web"; {name: "web-9"}),
          {mode: "managed", type: "cloudflare_record", name: "indexed", instances: [
            {index_key: "a", attributes: {zone_id: $nz, content: $s}}, {index_key: "b", attributes: {zone_id: $nz, content: $s}}]},

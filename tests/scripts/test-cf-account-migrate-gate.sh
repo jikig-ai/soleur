@@ -430,7 +430,8 @@ gate_mutate_and_check "M-want-dns-edit: dropping the $DNE table entry admits T2"
 # EXPECTED VALUES closed set: every non-Cloudflare spec member is a table member; exactly the
 # token-valued members (a literal here, independent of the gate) are in the table WITHOUT a value
 # attribute, and every other member carries one; every table member is in a spec.
-TOKEN_VALUED=" doppler_secret.cf_api_token_dns_edit github_actions_secret.cloudflare_api_token_pages "
+# random_id.tunnel_secret has no value attribute at all; the two registry secrets follow a token.
+TOKEN_VALUED=" doppler_secret.cf_api_token_dns_edit github_actions_secret.cloudflare_api_token_pages doppler_secret.registry_push_access_token_id doppler_secret.registry_push_access_token_secret random_id.tunnel_secret "
 noncf_unclassified() { # <gate-file>: "unclassified|orphan|token-graded|value-ungraded <addr>" lines; empty when closed
   # shellcheck disable=SC2016 # expanded by the child bash
   bash -c 'source "$1"; source "$2"; tok="$3"
@@ -447,7 +448,7 @@ noncf_unclassified() { # <gate-file>: "unclassified|orphan|token-graded|value-un
 }
 ncu="$(noncf_unclassified "$GATE")"
 n_want="$(bash -c 'source "$1"; source "$2"; _cfam_expected_values | jq length' _ "$PREAMBLE" "$GATE")"
-if [[ -z "$ncu" && "$n_want" == 4 ]]; then pass "expected values: the table holds 4 members, each in a spec; every non-Cloudflare spec member is in it, the 2 token-valued ones without a value"
+if [[ -z "$ncu" && "$n_want" == 7 ]]; then pass "expected values: the table holds 7 members, each in a spec; every non-Cloudflare spec member is in it, the 5 with no gradable value without one"
 else fail "expected values: the closed set is broken (table size ${n_want})" 1 "$ncu"; fi
 sed 's|^  "github_actions_secret.cloudflare_api_token_pages": "mutable",$|&\n  "doppler_secret.some_new_id": "mutable",|' "$GATE" > "$TMP/ncu-mut.sh"
 ncu_mut="$(noncf_unclassified "$TMP/ncu-mut.sh")"
@@ -478,10 +479,14 @@ tf_table_parity() { # <gate-file> <infra-dir>: one line per drift; empty when th
               d += o - c }
       END { if (n != 1) print "BLOCKS " n }')"
     if grep -q '^BLOCKS ' <<<"$blk"; then echo "$a: $(grep '^BLOCKS ' <<<"$blk") resource blocks (want 1)"; continue; fi
-    lit="$(sed -nE 's/^([a-z_]+)[[:space:]]*=[[:space:]]*"([^"]*)"[[:space:]]*$/\1\t\2/p' <<<"$blk" | sort)"
+    # A literal is a quoted string or a bare integer (random_id's byte_length).
+    lit="$(sed -nE -e 's/^([a-z_]+)[[:space:]]*=[[:space:]]*"([^"]*)"[[:space:]]*$/\1\t\2/p' \
+      -e 's/^([a-z_]+)[[:space:]]*=[[:space:]]*([0-9]+)[[:space:]]*$/\1\t\2/p' <<<"$blk" | sort)"
     [[ "$lit" == "$(jq -r --arg a "$a" '.[$a] | to_entries[] | select(.key != "value" and .key != "plaintext_value") | "\(.key)\t\(.value)"' <<<"$want" | sort)" ]] \
       || echo "$a: .tf literals [$(tr '\t\n' '= ' <<<"$lit")] differ from the table"
-    [[ "$(sed -nE '/^[a-z_]+[[:space:]]*=[[:space:]]*"[^"]*"[[:space:]]*$/d; s/^([a-z_]+)[[:space:]]*=.*/\1/p' <<<"$blk" | tr '\n' ' ')" =~ ^(value|plaintext_value)\ $ ]] \
+    # At most one non-literal attribute, the value; a member with no value attribute has none.
+    [[ "$(sed -nE -e '/^[a-z_]+[[:space:]]*=[[:space:]]*"[^"]*"[[:space:]]*$/d' -e '/^[a-z_]+[[:space:]]*=[[:space:]]*[0-9]+[[:space:]]*$/d' \
+        -e 's/^([a-z_]+)[[:space:]]*=.*/\1/p' <<<"$blk" | tr '\n' ' ')" =~ ^((value|plaintext_value)\ )?$ ]] \
       || echo "$a: a non-literal attribute other than the one value"
   done < <(jq -r 'keys[]' <<<"$want")
 }
@@ -495,6 +500,126 @@ tfp_mut="$(tf_table_parity "$GATE" "$TMP/tfp")"
 if cmp -s "$TMP/tfp/cf-cert-reissue-token.tf" "$INFRA/cf-cert-reissue-token.tf"; then fail "M-tf-parity: the mutation did not land" 1 ""
 elif [[ "$tfp_mut" == "doppler_secret.cf_api_token_dns_edit: .tf literals"*"differ from the table" ]]; then pass "M-tf-parity: a .tf edit of a table member's destination (config dev) is caught (RED)"
 else fail "M-tf-parity: a .tf destination edit was not seen" 1 "$tfp_mut"; fi
+
+# ── tunnel ─────────────────────────────────────────────────────────────────────────────────
+# The expected counts are literals (14 creates, 1 import, the replace's one delete half), so a
+# spec that shrank cannot shrink this oracle with it.
+TUN_UUID="11111111-2222-4333-8444-555555555555"
+TUN_RND="SYNTHrandomPhysicalIdNotARealSecret"
+TUN_POL="cloudflare_zero_trust_access_policy.deploy_service_token"
+TUN_APP_ID="$NZ/f21d6911cdacb1e109ae31bcfb440e7d"
+tun_plan() { # <out>
+  jq -n --argjson spec "$(cf_account_migrate_phase_spec tunnel)" --arg nz "$NZ" --arg na "$NA" --arg u "$TUN_UUID" \
+    --arg r "$TUN_RND" --arg pol "$TUN_POL" --arg app "$TUN_APP_ID" '
+    def ids($t): if ($t | test("tunnel_cloudflared|access_service_token|notification_policy")) then {account_id: $na} else {zone_id: $nz} end;
+    def reg($a): {project: "soleur", config: "prd", visibility: "masked",
+                  name: (if ($a | endswith("_id")) then "REGISTRY_PUSH_ACCESS_TOKEN_ID" else "REGISTRY_PUSH_ACCESS_TOKEN_SECRET" end)};
+    {format_version: "1.2",
+     configuration: {root_module: {resources: [{address: $pol, expressions: {application_id: {references:
+       ["cloudflare_zero_trust_access_application.deploy.id", "cloudflare_zero_trust_access_application.deploy"]}}}]}},
+     resource_changes: [$spec | to_entries[] | .key as $a | .value as $c | ($a | split(".")[0]) as $t
+       | {address: $a, mode: "managed", type: $t, change: (
+           if $c == "create" then {actions: ["create"], before: null, after: (ids($t)
+             + (if $a == $pol then {decision: "non_identity", include: [{service_token: [$u], email: [], any_valid_service_token: false}]} else {} end))}
+           elif $c == "import" then {actions: ["no-op"], importing: {id: $app}, before: ids($t), after: ids($t)}
+           elif $c == "mutable" then {actions: ["update"], before: reg($a), after: reg($a), after_unknown: {value: true}}
+           else {actions: ["delete", "create"], before: {id: $r}, after: {byte_length: 32}} end)}
+         + (if $c == "replace" then {action_reason: "replace_by_request"} else {} end)]}' >"$1"
+}
+tun_state() { # <out> <random id>
+  jq -nc --arg id "$2" '{values:{root_module:{resources:[{address:"random_id.tunnel_secret",mode:"managed",type:"random_id",values:{id:$id}}]}}}' >"$1"
+}
+tun_plan "$TMP/tun.json"; tun_state "$TMP/tun-state.json" "$TUN_RND"
+tun_mut() { jq -c "$1" "$TMP/tun.json" >"$TMP/tm.json"; } # <jq filter>: the mutated plan is $TMP/tm.json
+tpol() { printf '(.resource_changes[] | select(.address=="%s") | .change.after) |= (%s)' "$TUN_POL" "$1"; }
+
+check "tunnel: the valid plan passes (14 creates, 1 import, the random_id replace's delete half)" 0 \
+  "verdict=PASS creates=14 imports=1 destroys=1" tunnel "$TMP/tun.json" "$TMP/tun-state.json"
+tg="$(cf_account_migrate_targets tunnel)"; rp="$(cf_account_migrate_replaces tunnel)"
+if [[ "$(grep -c '^-target=' <<<"$tg")" -eq 18 && "$rp" == "-replace=random_id.tunnel_secret" ]]; then
+  pass "tunnel: 18 -target args and exactly one -replace (random_id; the registry secrets update in place)"
+else fail "tunnel: -target/-replace generation" 1 "$tg / $rp"; fi
+if [[ "$(cf_account_migrate_phase_tokens tunnel)" == cf_api_token ]]; then pass "tunnel: its provider token list is cf_api_token"; else fail "tunnel: token list" 1 ""; fi
+if [[ "$(_cfam_import_literals tunnel | jq -r '.["cloudflare_record.app"]')" == "$TUN_APP_ID" ]] \
+   && [[ "$(_cfam_import_literals redirects-dns | jq -r '.["cloudflare_record.app"] // "absent"')" == absent ]] \
+   && [[ "$(_cfam_import_literals | jq -r '.["cloudflare_record.app"] // "absent"')" == absent ]]; then
+  pass "the app-record import literal is visible to the tunnel phase only"
+else fail "the app-record literal leaked outside the tunnel phase" 1 ""; fi
+jq -c '.resource_changes += [{address:"cloudflare_record.app",mode:"managed",type:"cloudflare_record",change:{actions:["no-op"],importing:{id:"'"$TUN_APP_ID"'"},before:{zone_id:"'"$NZ"'"},after:{zone_id:"'"$NZ"'"}}}]' "$VALID" >"$TMP/app-rd.json"
+check "redirects-dns: importing the app record is refused even with the committed id" 1 "cloudflare_record.app is outside the redirects-dns allow-set" redirects-dns "$TMP/app-rd.json"
+tun_mut '(.resource_changes[] | select(.address=="cloudflare_record.app") | .change) = {actions:["create"],before:null,after:{zone_id:"'"$NZ"'"}}'
+check "tunnel: the app record planned as a create (import switched off) is refused" 1 "cloudflare_record.app (class import) planned with actions" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_mut '(.resource_changes[] | select(.address=="cloudflare_record.app") | .change.actions) = ["update"]'
+check "tunnel: an app import that writes is refused" 1 "not a pure no-op import" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_mut '(.resource_changes[] | select(.address=="doppler_secret.registry_push_access_token_secret") | .change.actions) = ["delete","create"]'
+check "tunnel: a registry secret planned as a replace is refused (it updates in place)" 1 "REFUSE destroys or forgets doppler_secret.registry_push_access_token_secret" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_mut '(.resource_changes[] | select(.address=="doppler_secret.registry_push_access_token_id") | .change.after.config) = "dev"'
+check "tunnel: a registry secret written to another Doppler config is refused" 1 "doppler_secret.registry_push_access_token_id must plan its expected value (config differs" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_mut '(.resource_changes[] | select(.address=="random_id.tunnel_secret") | .change.after.byte_length) = 16'
+check "tunnel: a tunnel secret of another length is refused" 1 "random_id.tunnel_secret must plan its expected value (byte_length differs" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_mut 'del(.resource_changes[] | select(.address=="random_id.tunnel_secret") | .action_reason)'
+check "tunnel: a random_id replace without replace_by_request is refused" 1 "random_id.tunnel_secret is a declared -replace" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_mut '(.resource_changes[] | select(.address=="cloudflare_record.ssh") | .change.actions) = ["delete"]'
+check "tunnel: a delete of a created member is refused" 1 "REFUSE destroys or forgets cloudflare_record.ssh" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_state "$TMP/tun-state-other.json" "SYNTHotherPhysicalId"
+tun_out="$(cf_account_migrate_gate tunnel "$TMP/tun.json" "$TMP/tun-state-other.json" 2>&1)"; tun_rc=$?
+if [[ "$tun_rc" -eq 1 && "$tun_out" == *"random_id.tunnel_secret replace targets a physical id"* && "$tun_out" != *"$TUN_RND"* && "$tun_out" != *SYNTHotherPhysicalId* ]]; then
+  pass "tunnel: a random_id physical-id mismatch refuses and prints neither id (the id IS the secret)"
+else fail "tunnel: the random_id refusal printed an id or did not refuse" "$tun_rc" "$tun_out"; fi
+check "zone-rest: a non-random replace mismatch still names the ids" 1 "soleur.prd.SOMETHING_ELSE" zone-rest "$TMP/zr9c.json" "$TMP/zr-state.json"
+
+# The deploy policy: decision, one include, one real token, the deploy application.
+tun_mut "$(tpol '.decision = "allow"')"
+check "deploy policy: decision allow is refused" 1 "$TUN_POL must plan decision non_identity" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_mut "$(tpol '.include += [{service_token: ["'"$TUN_UUID"'"]}]')"
+check "deploy policy: two include blocks are refused" 1 "must plan exactly one include block" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_mut "$(tpol '.include[0].service_token += ["99999999-2222-4333-8444-555555555555"]')"
+check "deploy policy: two service tokens are refused" 1 "include must hold exactly one service token" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_mut "$(tpol '.include[0].service_token = ["00000000-0000-0000-0000-000000000000"]')"
+check "deploy policy: the nil placeholder is refused" 1 "include service token is not a non-nil UUID" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_mut "$(tpol '.include[0].email = ["someone@example.invalid"]')"
+check "deploy policy: an extra include rule (email) is refused" 1 "include carries another rule (email)" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_mut "$(tpol '.include[0].any_valid_service_token = true')"
+check "deploy policy: any_valid_service_token is refused" 1 "include carries another rule (any_valid_service_token)" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_mut '.configuration.root_module.resources[0].expressions.application_id.references = ["cloudflare_zero_trust_access_application.ssh.id"]'
+check "deploy policy: bound to another Access application is refused" 1 "application_id does not reference the deploy" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_mut 'del(.configuration)'
+check "deploy policy: a plan with no configuration block is refused (absence is not proof)" 1 "application_id does not reference the deploy" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_mut 'del(.resource_changes[] | select(.address=="'"$TUN_POL"'"))'
+check "deploy policy: absent from the plan is refused" 1 "must appear exactly once" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_mut "$(tpol '.decision = "allow"')"
+gate_mutate_and_check "M-deploy-policy: dropping the tunnel policy check admits decision allow" \
+  's|^  if \[\[ "\$phase" == tunnel \]\]; then$|  if false; then|' cf_account_migrate_gate tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+if [[ "$(cf_account_migrate_deploy_token_id "$TMP/tun.json")" == "$TUN_UUID" ]]; then pass "deploy_token_id: prints the one planned UUID"; else fail "deploy_token_id: wrong id" 1 ""; fi
+tun_mut "$(tpol '.include[0].service_token = ["00000000-0000-0000-0000-000000000000"]')"
+if cf_account_migrate_deploy_token_id "$TMP/tm.json" >/dev/null 2>&1; then fail "deploy_token_id: accepted the nil UUID" 0 ""; else pass "deploy_token_id: refuses the nil UUID"; fi
+tun_mut "$(tpol '.include[0].service_token += ["99999999-2222-4333-8444-555555555555"]')"
+if cf_account_migrate_deploy_token_id "$TMP/tm.json" >/dev/null 2>&1; then fail "deploy_token_id: accepted two tokens" 0 ""; else pass "deploy_token_id: refuses two tokens"; fi
+
+# The live verdict: 8040h to expiry is inside the band, the far edges are not.
+TV_NOW=1800000000
+tv_body() { # <name> <hours to expiry> [<id>]
+  jq -nc --arg id "${3:-$TUN_UUID}" --arg n "$1" --argjson e "$((TV_NOW + $2 * 3600))" \
+    '{success:true,result:{id:$id,name:$n,expires_at:($e|todate),client_id:"SYNTH-CLIENT-ID-NOT-PRINTED"}}'
+}
+tv() { # <label> <want> <body>
+  local got rc=0
+  got="$(cf_account_migrate_deploy_token_verdict "$TUN_UUID" "$TV_NOW" <<<"$3")" || rc=$?
+  if [[ "$got" == "$2" && ( "$2" == ok && "$rc" -eq 0 || "$2" != ok && "$rc" -eq 1 ) && "$got" != *SYNTH* ]]; then pass "deploy-token verdict: $1 -> $2"
+  else fail "deploy-token verdict: $1" "$rc" "got [$got], want [$2]"; fi
+}
+tv "8760h, the right name" ok "$(tv_body github-actions-deploy 8760)"
+tv "8040h (the mint preceded the merge by a month)" ok "$(tv_body github-actions-deploy 8040)"
+tv "fractional-second expiry" ok "$(tv_body github-actions-deploy 8760 | jq -c '.result.expires_at |= sub("Z$"; ".123456Z")')"
+tv "another token name" name-differs "$(tv_body github-actions-ci-ssh 8760)"
+tv "another token id" id-differs "$(tv_body github-actions-deploy 8760 99999999-2222-4333-8444-555555555555)"
+tv "a 30-day token" expiry-out-of-window "$(tv_body github-actions-deploy 720)"
+tv "a ten-year token" expiry-out-of-window "$(tv_body github-actions-deploy 87600)"
+tv "an expired token" expiry-out-of-window "$(tv_body github-actions-deploy -1)"
+tv "no expiry" expiry-absent "$(tv_body github-actions-deploy 8760 | jq -c 'del(.result.expires_at)')"
+tv "an unparseable expiry" expiry-unparseable "$(tv_body github-actions-deploy 8760 | jq -c '.result.expires_at = "soon"')"
+tv "success false" body-not-success '{"success":false,"result":null}'
+tv "not JSON" body-unparseable 'not-json'
 
 # ── -target / -replace generation from the single list ─────────────────────────────────────
 tg="$(cf_account_migrate_targets redirects-dns)"
@@ -708,7 +833,7 @@ sources_lib() {
 # The library's function names: every definition `name()` / `name ()` / `name(){` / `function name`,
 # at column 0 (the library defines all its functions there). The count is exact (review).
 LIB_FNS="$(sed -nE 's/^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\(\)[[:space:]]*(\{.*)?$/\1/p; s/^function[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\1/p' "$GATE" | sort -u)"
-LIB_FN_COUNT=11
+LIB_FN_COUNT=14
 # A definition may follow a command separator or a group opener on the same line (`:; f() {`,
 # `true && f() {`, `{ f() {`, `then f() {`), not only the start of the line.
 FN_PFX='(^|[;&|{(!]|(^|[[:space:]])(then|do|else|elif|time)[[:space:]])[[:space:]]*'
@@ -733,7 +858,7 @@ else fail "M-fn-nospace: a name(){ definition dropped out of the derived list" 1
 # ${N…}) is refused (assignment, declare/export/readonly/local, printf -v, read, unset, a nameref),
 # except one reviewed line: the predicate's indirect shape check of the four ids.
 LIB_VARS="$(sed -nE 's/^[[:space:]]*(CFAM_[A-Z0-9_]+)=.*/\1/p' "$GATE" | sort -u)"
-LIB_VAR_COUNT=8
+LIB_VAR_COUNT=15
 LIB_VAR_OK='  for v in CFAM_NEW_ZONE_ID CFAM_NEW_ACCOUNT_ID CFAM_OLD_ZONE_ID CFAM_OLD_ACCOUNT_ID; do'
 if [[ "$(grep -c . <<<"$LIB_VARS")" -eq "$LIB_VAR_COUNT" ]] && grep -qxF CFAM_NEW_ZONE_ID <<<"$LIB_VARS" && grep -qxF CFAM_R2_ENDPOINT <<<"$LIB_VARS"; then
   pass "one source: the library's constant names are derived (exactly $LIB_VAR_COUNT, CFAM_NEW_ZONE_ID and CFAM_R2_ENDPOINT among them)"
@@ -848,6 +973,6 @@ r2_mut "M-r2-bound: the 60 s bound dropped" 's|^  timeout 60 env |  env |' unbou
 
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 155 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 155)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 194 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 194)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]
