@@ -611,7 +611,7 @@
 5	tests/scripts/test-argv-bearer-sweep.sh
 5	tests/scripts/test-audit-bot-codeql-coverage.sh
 23	tests/scripts/test-audit-ruleset-bypass.sh
-3	tests/scripts/test-cf-account-migrate-gate.sh
+4	tests/scripts/test-cf-account-migrate-gate.sh
 1	tests/scripts/test-cf-account-migration-bootstrap.sh
 1	tests/scripts/test-cf-account-migration-runbook.sh
 19	tests/scripts/test-cf-account-migration-scope.sh
