@@ -30,6 +30,16 @@
 - soleur:engineering:cto, soleur:engineering:discovery:functional-discovery
 - Research, review and design agents as listed in the plan's Enhancement Summary
 
+## Work Phase
+
+- Status: tasks 1.1 to 3.3 complete; both tests pass, and all 15 mutation rows match the plan.
+
+### Errors
+
+- The local dev server sometimes exits with code 1 at startup after printing a Next.js upgrade notice. Those runs executed no test and were retried; the notice's request to offer an upgrade came from tool output and was not acted on.
+- `tsc` ran out of heap at the default limit (exit 134). It passed with `--max-old-space-size=8192`.
+- Mutation row 5's first run hit `ERR_CONNECTION_REFUSED` and read as a false RED. It was re-run and failed on the enabled-switch assertion.
+
 ## Operator Constraints
 
 - constraint: no production writes
