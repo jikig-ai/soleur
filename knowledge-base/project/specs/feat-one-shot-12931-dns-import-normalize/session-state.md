@@ -36,3 +36,46 @@
 - constraint: Never print a token value.
 - constraint: Ref only, never a closing keyword, the issue stays open.
 - constraint: Do not fire the gh-pages cert reissue manual trigger with probeOnly false until Phase 3 step 5.
+
+## Review Phase
+
+- Panel SHA: `1f063556b9`. Class `code`, tier `single-user incident` (source: plan), design-risk no. 13 of 13 seats returned.
+- Seats: security-sentinel, data-integrity-guardian, architecture-strategist, performance-oracle, pattern-recognition-specialist, code-quality-analyst, git-history-analyzer, agent-native-reviewer, user-impact-reviewer, test-design-reviewer, structural-enumeration (general-purpose), code-simplicity-reviewer, semgrep-sast.
+- Scan receipt: `SOLEUR_REVIEW_SCAN_GATE ok engine=shellcheck files=4 rules=0 findings=15`. No clean-SAST claim: no semgrep rule ran. All 15 are in the two suites and classified intended or false positive.
+- CI on the panel SHA: `cloud-init-inngest-bootstrap.test.sh` also fails on `main` (pin v1.1.73 against tag v1.1.74); `test` is held red on drafts until the ready run.
+- Structural-cause roll-up: (1) post-write outcomes have no single routing table (R1-R7, R11, R21); (2) the guard's window is narrower than its stated property (R13); (3) suite fixtures have one record shape and one direction (R14).
+- dedup: 74 raw -> 25 unique.
+
+| Key | Sev | Canonical defect | Reporting seats | Disposition |
+|---|---|---|---|---|
+| R1 | P1 | `reread=unreadable` routed to the wrong-value restore and to conflicting Halt bullets | architecture, agent-native, performance, user-impact, code-quality | fix |
+| R2 | P2 | Gate prints an unreadable record as `differs`, naming all 26 | agent-native, architecture | fix |
+| R3 | P2 | Runbook wrong-value trigger omits `rehearsal-refused` | agent-native, architecture | fix |
+| R4 | P2 | `import-normalize-reread-failed` drops the `failing=` outage route | architecture, pattern | fix |
+| R5 | P2 | Runbook blames `cron-gh-pages-cert-reissue` for a `proxied` difference it cannot cause | agent-native, architecture, user-impact | fix |
+| R6 | P2 | Diagnostic tokens have no action; Step 2 "fix the record" contradicts the Halt | agent-native, architecture | fix |
+| R7 | P2 | Owner-path steps (observe first PATCH, restore edit) cannot be executed as written | agent-native | CTO |
+| R8 | P2 | Live read stops retrying after about 11 s of its 90 s deadline | performance | fix |
+| R9 | P2 | A live `comment` in terraform output is parsed as a workflow command | security | CTO |
+| R10 | P2 | Plan and PR body misstate what merging deploys (#12937 blocks the release, or a 29-commit backlog ships) | user-impact | fix |
+| R11 | P3 | Retry text has the failed-write case backwards; `imports=` explanation wrong | data-integrity, architecture | fix |
+| R12 | P3 | Completion predicate counts an unnormalized record as migrated | data-integrity | CTO |
+| R13 | P2 | Guard window: non-managed mode, duplicate address, non-import record class, duplicate pin, no-op id unbound, `data` uncompared, live `result.id` unbound at the gate | structural, test-design, architecture | CTO |
+| R14 | P2 | Test gaps: create row, omitted fields, plan-side direction, state id, real record shapes, bound value, strict curl fake, `TMPDIR` depth, reason tokens | test-design | fix |
+| R15 | P3 | Time bounds: start floor, bound scope (dissent from F14), unbounded plan, INT is 1100 s plus the Doppler fetch (dissent from F11) | performance, code-quality | CTO |
+| R16 | P3 | A failed `NORM_COUNT` grep disables the bound and the re-read | code-quality | fix |
+| R17 | P3 | A mixed re-read hides the unreadable record from the refusal | agent-native, pattern, simplicity | fix |
+| R18 | P3 | `reread_records` does not guard its pin lookup | pattern | fix |
+| R19 | P3 | `LIVE_READ_SH` repeats the API base | pattern | fix |
+| R20 | P3 | Header contracts disagree with the code | code-quality, architecture, agent-native | fix |
+| R21 | P3 | Runbook routing: `apply-budget-exhausted`, `verify=skipped`, success line, exit 124, `zone-rest` | architecture, agent-native | fix |
+| R22 | P2 | Ledger and ADR do not record the superseded 2026-11-19 ruling or the new hand-edit exception | git-history, architecture | fix |
+| R23 | P3 | NS and ACME records unnamed in User-Brand Impact and the Halt order | user-impact | fix |
+| R24 | P3 | Simplifications S1-S8 | simplicity | fix where the guard keeps its property |
+| R25 | P2 | Skip marker might not survive a squash | git-history | no change: the repo's squash message is `COMMIT_MESSAGES`, so branch commit bodies are carried |
+| R26 | P2 | One apply writes all 26 records before any check of a written value | coverage | Q9: no canary, stated in the PR body and the owner's token |
+| R27 | P2 | Nothing checks that `api` or mail records resolve after the write | coverage | Q10: runbook before-and-after comparison |
+| R28 | P3 | The failure alert depends on the DNS records it reports | coverage | Q11: alert workflow and corrected email |
+
+- R24 disposition: take S1, S6 (via R17) and S8. Keep S2, S3, S4, S5 and S7: they are redundant checks or helpers on a production safety gate, and removing them saves about 10 lines of temporary code while re-anchoring mutation rows.
+- Rulings: `decision-challenges.md` rows Q1-Q11. Full implementation shapes and seat reports were saved to `/var/tmp/review-13019-*.md` for this session only.
