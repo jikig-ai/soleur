@@ -8,6 +8,32 @@ issue: 12937
 
 No `spec.md` exists for this branch (one-shot entry), so `lane: cross-domain` is the default.
 
+## Current sequence (CTO ruling, 2026-11-23)
+
+This list replaces the phases below, which stay as the record of the 2026-11-19 plan. "Operator go" means one explicit go per act.
+
+- [x] 1a Merge main and resolve the six conflicts.
+- [x] 1b Put the tunnel slice back on the existing `.web` addresses; drop every `_soleur` resource.
+- [x] 1c Re-key the policy gate, destroy filter, fixtures, workflows and suites.
+- [x] 1d Narrow ADR-330; update the token rotation and zot runbooks and the domain ledger.
+- [ ] 1e Add the `tunnel` phase, `cf-access-deploy-token-mint.sh`, `cf-tunnel-host-predelete.sh` and the staged-token probes.
+- [ ] 1f Update the migration runbook, including its registry `-replace` line.
+- [ ] 2 Run the tests and the scoped re-review, then compound and ship preflight.
+- [ ] 3 Operator go: mint the 0b tokens; run `prev-0a`, `flip-ids`, `swap-0a`, `branch-copies-zone-id`.
+- [ ] 4 Operator go: `redirects-dns` rehearsal plus staged Tunnel, Access and Zero Trust probes.
+- [ ] 5 Operator go: `redirects-dns` apply, only after 2 and 4 are clean. **This is the no-full-revert point.**
+- [ ] 6 Operator go: 0b swap, then `zone-rest` rehearsal and apply.
+- [ ] 7 Operator go: mint the deploy token and write all readers.
+- [ ] 8 Commit the token UUID over the nil placeholder.
+- [ ] 9 Operator go: merge with the apply kill switch in a branch commit body.
+- [ ] 10 Operator go: `tunnel` rehearsal, then apply.
+- [ ] 11 Read the LB and `app.` record, then operator go: `web-host-replace web-2` plan, then apply.
+- [ ] 12 Operator go: re-mint the Origin CA certificate.
+- [ ] 13 Verify the connector, ingress, SSH bridge and registry canary.
+- [ ] 14 Operator go: dispatch a fresh release, then `manual-rerun` apply; run postmerge for `5d4851f7af`; close #12937 once green.
+
+Stop and re-rule before step 5 if the rehearsal cannot plan clean or the staged token or Zero Trust probe fails.
+
 ## Phase 0: Preconditions
 
 - [ ] 0.1 Operator widens `CF_API_TOKEN` to the Soleur account and new zone (plan Phase 0.1).

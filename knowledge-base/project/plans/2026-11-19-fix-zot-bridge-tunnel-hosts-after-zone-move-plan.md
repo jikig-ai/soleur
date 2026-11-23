@@ -13,6 +13,29 @@ brand_survival_threshold: aggregate pattern
 
 # fix(infra): re-home the registry/deploy/ssh tunnel hosts into the Soleur Cloudflare account
 
+## Amendment — 2026-11-23 (CTO ruling; read this first)
+
+> **Superseded 2026-11-23.** Everything below that adds parallel `_soleur` addresses, widens `CF_API_TOKEN`, deletes the
+> scanner A records outside the apply, applies on merge, or re-runs the old push runs is kept as the record of the
+> 2026-11-19 plan and is no longer the work. PR #12932 merged ADR-329 meanwhile, and the two designs refuse each other.
+
+- **Ruling:** the last two rows of `knowledge-base/project/specs/feat-one-shot-12937-zot-bridge-handshake/decision-challenges.md`.
+- **Current sequence and status:** `knowledge-base/project/specs/feat-one-shot-12937-zot-bridge-handshake/tasks.md`.
+- **Procedure:** `knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md`, Phase 3.
+- **Kept from this plan:** the classifier causes, the `SOLEUR_ZOT_BRIDGE` and `SOLEUR_TUNNEL_VERIFY` markers, the verify step,
+  the zone-authority step, the Access policy gate and the in-place registry Doppler update (ADR-330).
+
+**Acceptance criteria replaced by this amendment** (the originals stay below, unticked):
+
+- [ ] `local.deploy_service_token_ids` holds the id minted by `cf-access-deploy-token-mint.sh`, replacing the nil placeholder.
+- [ ] The deploy pair is in every holder the mint lists, including the GitHub secrets `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`.
+- [ ] The `tunnel` rehearsal and apply are green, with 0 destroys and the registry Doppler pair updated in place.
+- [ ] The 6 scanner A records were removed by the pinned pre-delete inside the `tunnel` apply.
+- [ ] `web-host-replace web-2` is green and the new tunnel shows 1 connector from web-2.
+- [ ] The Origin CA certificate is re-minted from the new zone.
+- [ ] A fresh release (not a re-run of 44375972612 or 44427650817) mirrors through the bridge, and `deploy-arm.sh served <sha>` confirms it.
+- [ ] `manual-rerun` apply is green, `soleur:postmerge` is complete for `5d4851f7af`, and only then is #12937 closed.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-11-19. **Inputs:** plan-review (DHH, Kieran, code-simplicity, CTO devex), a
