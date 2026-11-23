@@ -1,0 +1,22 @@
+# Decision challenges: feat-one-shot-12931-dns-import-normalize
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| Admit the import-normalize update in the gate | technical | Ruled by CTO agent, 2026-11-22: admit `["update"]` only for an import-class `cloudflare_record` with the exact two-key diff and a matching live GET, retries included, logged as `import-normalize` - `ignore_changes`, a provider pin, state push and CLI import were each rejected |
+| F1 comment compare | technical | Ruled by CTO agent, 2026-11-23: strict everywhere except `comment`, where null, absent and `""` are one empty value, without jq `//` - plan JSON holds `""` while the API omits an empty comment, and a non-empty live comment must still differ so the PATCH cannot erase it |
+| F2 re-read reference | technical | Ruled by CTO agent, 2026-11-23: the graded plan's `after`, through the pre-apply comparator - a snapshot is a second reference with no added coverage |
+| F3 settings | technical | Ruled by CTO agent, 2026-11-23: exactly `{}`, null or absent; `{"flatten_cname":false}` refuses - the effect of PATCH `settings:{}` on a non-empty value is unobserved and a rehearsal refusal writes nothing |
+| F4 re-read failure | technical | Ruled by CTO agent, 2026-11-23: a difference or 404 halts at once; one 90 s deadline at 5 s per GET; the refusal keeps `forget=committed`; `apply-failed` carries a `reread=` field - the worst case must fit the job timeout |
+| F5 read set | technical | Ruled by CTO agent, 2026-11-23: all 26 before and after the apply, whatever the planned action - otherwise a drifted no-op record is blamed on a write that never touched it |
+| F6 retry binding | technical | Ruled by CTO agent, 2026-11-23: `before.id` and the pre-plan state's `values.id` both equal the pin, the literal's zone segment is the new zone, missing state refuses - address presence does not bind the id |
+| F7 ADR and doc sweep | technical | Ruled by CTO agent, 2026-11-23: amend ADR-329 in this PR and sweep the runbook, imports header, gate header and apply-failed text - the runbook otherwise calls this shape drift |
+| F8 degraded read | technical | Ruled by CTO agent, 2026-11-23: HTTP 200, `success == true`, object `result`, `result.id` equal to the pin; `result.zone_id` refuses only if present and different - the URL's zone comes from the constant |
+| F9 read placement | technical | Ruled by CTO agent, 2026-11-23: one read after the plan and immediately before the phase gate, in the same run - it catches a swapped id, which is static, and ADR-329 D2 fixes the gate order |
+| F10 live tags | technical | Ruled by CTO agent, 2026-11-23: strict array set-equality; an omitted `tags` refuses and names the field - nothing shows an omission means empty, and the PATCH's `"tags":[]` would erase what it hid |
+| Apply time bound (F11) | technical | Ruled by CTO agent, 2026-11-23: `tf_env timeout --foreground -s INT` at 1100 s of script time, routed to `apply-failed`, no SIGKILL, refuse when no budget remains; on failure the re-read runs first and the probe starts only if `SECONDS <= 1395`, else `verify=skipped` - a job killed at 30 minutes prints no refusal and runs no re-read, and a second INT makes Terraform exit at once |
+| F12 refusal diagnostics | technical | Ruled by CTO agent, 2026-11-23: field names plus a closed set of fixed tokens with no live-derived string - the first real comparator test is the next rehearsal, and the tokens are computed only after a refusal so they cannot change a verdict |
+| F13 read on every redirects-dns plan | technical | Ruled by CTO agent, 2026-11-23: read all 26 on every `redirects-dns` plan, refuse any non-empty diff, bind `after.hostname` to `after.name` with a dot-anchored suffix, refuse a live `content` ending in `.` - otherwise a re-dispatch reaches PASS with no record confirmed |
+| F14 apply bound scope | technical | Ruled by CTO agent, 2026-11-23: bound only an apply where the gate admitted a record - an INT between the delete and create of `doppler_secret.cf_api_token_dns_edit` in `zone-rest` leaves the `prd` secret deleted |
+| Observe the first PATCH before the first production apply | operator (production-mutating) | Open for the owner. The CTO agent recommended a `terraform apply` against the loopback mock with scratch state to capture the PATCH bodies and a failed update. The brief forbids running `terraform apply`, so it was not run; the first PATCH stays unobserved unless the owner lifts that bound |
