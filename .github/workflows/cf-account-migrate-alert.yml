@@ -1,0 +1,26 @@
+name: CF account migrate alert (#12931)
+on:
+  workflow_run:
+    workflows: ["CF account migrate (#12931)"]
+    types: [completed]
+permissions: {}
+jobs:
+  alert:
+    if: >-
+      github.event.workflow_run.event == 'workflow_dispatch'
+      && contains(fromJSON('["failure","cancelled","timed_out"]'), github.event.workflow_run.conclusion)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          n="$(gh api "repos/$GH_REPO/actions/runs/$RUN_ID/jobs" --jq '[.jobs[] | select(.name == "cf_account_migrate_apply" and .conclusion != "skipped")] | length')" || n=1
+          [ "$n" != 0 ] || exit 0
+          gh issue comment 12931 --body "CF migrate apply run did not complete: $RUN_URL. If a \`reread=\` value in its log contains \`differs=\`, go first to the runbook Halt bullet \"A DNS record may hold a wrong value\". A \`reread=unreadable=\` value with no \`differs=\` goes to \"No completed re-read\" and edits no record."
