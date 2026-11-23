@@ -56,7 +56,7 @@ export const MOCK_FOUNDER: MockUser = {
  * the edge decoder is `Unsafe` (no signature check); the test mock
  * trusts itself.
  */
-function mintMockJwt(nowSeconds: number, user: MockUser = MOCK_USER): string {
+function mintMockJwt(nowSeconds: number, user: MockUser = MOCK_USER, jti?: string): string {
   const b64url = (obj: object) =>
     Buffer.from(JSON.stringify(obj))
       .toString("base64")
@@ -70,6 +70,7 @@ function mintMockJwt(nowSeconds: number, user: MockUser = MOCK_USER): string {
     role: "authenticated",
     iat: nowSeconds,
     exp: nowSeconds + 86400,
+    ...(jti === undefined ? {} : { jti }),
   });
   return `${header}.${payload}.mock-signature`;
 }
@@ -167,6 +168,30 @@ export function heldSessionFor(userId: string) {
   };
 }
 
+/**
+ * #12605 Scope Grants web-egress disclosures (e2e/nav-states-scope-grants-web-egress.e2e.ts). Synthesized fixtures
+ * (cq-test-fixtures-synthesized-only), answered ONLY for these ids so no other spec sees them. Each is the Owner of a
+ * solo workspace whose id is its own, with a null organization so the dialog renders its longest ("unknown") copy.
+ * `jti` is the UUID the tenant mint requires in the minted token.
+ */
+export const EGRESS_E2E_USERS = {
+  on: { id: "00000000-0000-4000-8000-0000000012c1", jti: "00000000-0000-4000-8000-0000000012d1" },
+  off: { id: "00000000-0000-4000-8000-0000000012c2", jti: "00000000-0000-4000-8000-0000000012d2" },
+} as const;
+
+type EgressUserFixture = (typeof EGRESS_E2E_USERS)[keyof typeof EGRESS_E2E_USERS];
+
+const EGRESS_E2E_WORKSPACES: Readonly<
+  Record<string, { readonly organization_id: null; readonly name: string; readonly web_egress: boolean }>
+> = {
+  [EGRESS_E2E_USERS.on.id]: { organization_id: null, name: "Egress On Workspace", web_egress: true },
+  [EGRESS_E2E_USERS.off.id]: { organization_id: null, name: "Egress Off Workspace", web_egress: false },
+};
+
+const EGRESS_FIXTURES: readonly EgressUserFixture[] = Object.values(EGRESS_E2E_USERS);
+const EGRESS_USERS_BY_ID: ReadonlyMap<string, EgressUserFixture> = new Map(EGRESS_FIXTURES.map((u) => [u.id, u]));
+const egressHashedToken = (id: string) => `egress-hashed-token-${id}`;
+
 /** The `eq.` value of a PostgREST filter param, or null. */
 function eqParam(url: URL, col: string): string | null {
   const v = url.searchParams.get(col);
@@ -204,6 +229,8 @@ export const AUTH_COOKIE_NAME = "sb-localhost-auth-token";
 
 export function startMockSupabase(port: number): Promise<http.Server> {
   return new Promise((resolve, reject) => {
+    // One stderr line per distinct actor, method and path: the mock runs in the Playwright runner, so it reaches the CI log.
+    const unhandled = new Set<string>();
     const server = http.createServer((req, res) => {
       const url = new URL(req.url!, `http://localhost:${port}`);
       const accept = req.headers.accept ?? "";
@@ -228,6 +255,28 @@ export function startMockSupabase(port: number): Promise<http.Server> {
         res.end(JSON.stringify(wantsSingle ? rows[0] ?? {} : rows));
       }
 
+      function notFound() {
+        if (res.headersSent) return;
+        const actor = eqParam(url, "user_id") ?? bearerSub(req.headers.authorization ?? "") ?? "-";
+        const key = `${actor} ${req.method} ${url.pathname}`;
+        if (!unhandled.has(key)) {
+          unhandled.add(key);
+          process.stderr.write(`[mock-supabase] unhandled actor=${key}\n`);
+        }
+        res.writeHead(404);
+        res.end(JSON.stringify({ error: "Not found", path: url.pathname }));
+      }
+
+      /**
+       * Run a handler on the parsed JSON body; a handler declines with `notFound()`. Always call it as
+       * `return withJsonBody(...)`: without the synchronous return the catch-all writes first and the late write throws.
+       */
+      function withJsonBody(handler: (body: Record<string, unknown>) => void): void {
+        void readBody(req)
+          .then((raw) => handler(JSON.parse(raw || "{}") as Record<string, unknown>))
+          .catch(() => notFound());
+      }
+
       // ---- Auth endpoints ----
 
       if (url.pathname === "/auth/v1/user") {
@@ -246,7 +295,7 @@ export function startMockSupabase(port: number): Promise<http.Server> {
           JSON.stringify(
             sub === MOCK_FOUNDER.id
               ? MOCK_FOUNDER
-              : sub !== null && HELD_USERS_BY_ID.has(sub)
+              : sub !== null && (HELD_USERS_BY_ID.has(sub) || EGRESS_USERS_BY_ID.has(sub))
                 ? heldSessionFor(sub).user
                 : MOCK_USER,
           ),
@@ -303,11 +352,58 @@ export function startMockSupabase(port: number): Promise<http.Server> {
         return;
       }
 
+      // #12605: the tenant mint path (mintFounderJwt in lib/supabase/tenant.ts), for EGRESS_E2E_USERS only, so the page
+      // reads `web_egress` through the real fail-closed resolver. Anything else reaches the 404 it always did.
+      if (req.method === "GET" && url.pathname.startsWith("/auth/v1/admin/users/")) {
+        const id = url.pathname.slice("/auth/v1/admin/users/".length);
+        if (EGRESS_USERS_BY_ID.has(id)) {
+          res.writeHead(200);
+          res.end(JSON.stringify(heldSessionFor(id).user));
+          return;
+        }
+      }
+      if (req.method === "POST" && url.pathname === "/auth/v1/admin/generate_link") {
+        return withJsonBody((body) => {
+          const fixture = EGRESS_FIXTURES.find((u) => heldSessionFor(u.id).user.email === body.email);
+          if (!fixture) return notFound();
+          // auth-js reads hashed_token from the top level, alongside the user fields.
+          res.writeHead(200);
+          res.end(JSON.stringify({ ...heldSessionFor(fixture.id).user, hashed_token: egressHashedToken(fixture.id) }));
+        });
+      }
+      if (req.method === "POST" && url.pathname === "/auth/v1/verify") {
+        return withJsonBody((body) => {
+          const fixture = EGRESS_FIXTURES.find((u) => egressHashedToken(u.id) === body.token_hash);
+          if (!fixture) return notFound();
+          const session = heldSessionFor(fixture.id);
+          res.writeHead(200);
+          res.end(
+            JSON.stringify({
+              ...session,
+              access_token: mintMockJwt(Math.floor(Date.now() / 1000), session.user, fixture.jti),
+            }),
+          );
+        });
+      }
+
       // ---- PostgREST endpoints ----
+
+      if (req.method === "POST" && url.pathname === "/rest/v1/runtime_mint_intent") {
+        return withJsonBody((body) => {
+          if (typeof body.user_id !== "string" || !EGRESS_USERS_BY_ID.has(body.user_id)) return notFound();
+          res.writeHead(201);
+          res.end();
+        });
+      }
 
       // #12714 held-files fixtures (HELD_E2E_USERS): answered only when the filter names a fixture id, else falls
       // through to the defaults below (which 404 these tables), so no other spec changes behaviour.
       if (url.pathname === "/rest/v1/user_session_state") {
+        const egressFixture = EGRESS_USERS_BY_ID.get(eqParam(url, "user_id") ?? "");
+        if (egressFixture) {
+          sendRows([{ current_workspace_id: egressFixture.id, current_organization_id: null }]);
+          return;
+        }
         const fixture = HELD_USERS_BY_ID.get(eqParam(url, "user_id") ?? "");
         if (fixture) {
           sendRows(
@@ -319,6 +415,23 @@ export function startMockSupabase(port: number): Promise<http.Server> {
         }
       }
       if (url.pathname === "/rest/v1/workspace_members") {
+        const egressFixture = EGRESS_USERS_BY_ID.get(eqParam(url, "user_id") ?? "");
+        if (egressFixture) {
+          const ws = eqParam(url, "workspace_id");
+          sendRows(
+            ws === null || ws === egressFixture.id
+              ? [
+                  {
+                    user_id: egressFixture.id,
+                    workspace_id: egressFixture.id,
+                    role: "owner",
+                    workspaces: { organization_id: null },
+                  },
+                ]
+              : [],
+          );
+          return;
+        }
         const fixture = HELD_USERS_BY_ID.get(eqParam(url, "user_id") ?? "");
         if (fixture) {
           // The membership probe (workspace_id + user_id): a member row only for the fixture's own team workspace.
@@ -332,7 +445,8 @@ export function startMockSupabase(port: number): Promise<http.Server> {
         }
       }
       if (url.pathname === "/rest/v1/workspaces") {
-        const row = HELD_E2E_WORKSPACES[eqParam(url, "id") ?? ""];
+        const id = eqParam(url, "id") ?? "";
+        const row = HELD_E2E_WORKSPACES[id] ?? EGRESS_E2E_WORKSPACES[id];
         if (row) {
           sendRows([row]);
           return;
@@ -453,6 +567,28 @@ export function startMockSupabase(port: number): Promise<http.Server> {
         }
       }
 
+      // #12605: the mint's deny probe, for the fixtures' own jti values only.
+      if (req.method === "POST" && url.pathname === "/rest/v1/rpc/is_jti_denied") {
+        return withJsonBody((body) => {
+          if (!EGRESS_FIXTURES.some((u) => u.jti === body.p_jti)) return notFound();
+          res.writeHead(200);
+          res.end("false");
+        });
+      }
+
+      // #12605: the row's `web_egress` for the caller's own workspace, else null, as the real RPC answers a non-member.
+      if (req.method === "POST" && url.pathname === "/rest/v1/rpc/get_workspace_web_egress") {
+        const fixture = EGRESS_USERS_BY_ID.get(bearerSub(req.headers.authorization ?? "") ?? "");
+        if (fixture) {
+          return withJsonBody((body) => {
+            const webEgress =
+              body.p_workspace_id === fixture.id ? (EGRESS_E2E_WORKSPACES[fixture.id]?.web_egress ?? null) : null;
+            res.writeHead(200);
+            res.end(JSON.stringify(webEgress));
+          });
+        }
+      }
+
       // ---- Realtime (WebSocket upgrade attempt — reject gracefully) ----
 
       if (url.pathname.startsWith("/realtime/")) {
@@ -462,8 +598,7 @@ export function startMockSupabase(port: number): Promise<http.Server> {
       }
 
       // ---- Catch-all ----
-      res.writeHead(404);
-      res.end(JSON.stringify({ error: "Not found", path: url.pathname }));
+      notFound();
     });
 
     server.on("error", reject);
