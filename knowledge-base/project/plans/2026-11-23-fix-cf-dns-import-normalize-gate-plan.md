@@ -17,6 +17,32 @@ lane: cross-domain
 
 Ref #12931 (never a closing keyword: the issue stays open). PR #13019. Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-23
+
+**Review coverage:** CTO agent (rulings F1-F14), CPO, advisor, sharp-edges, DHH, Kieran, code-simplicity,
+architecture-strategist, spec-flow, security-sentinel and a negative-claim audit (23 confirmed, 0
+contradicted). The full all-agents fan-out was deliberately not run, because the brief asks for a
+proportionate plan for a narrow gate admission.
+
+**Key improvements:**
+
+- The admitted shape comes from a measured plan JSON (Terraform 1.10.5, provider 4.52.7, read-only
+  loopback mock, synthetic bodies), not from the rendered plan text, which shows `comment` differently.
+- Every `redirects-dns` plan reads all 26 records, so a re-dispatch cannot reach PASS with no record
+  confirmed (F13).
+- The apply is bounded only where the gate admitted a record, with one INT at 1100 s, so the re-read
+  still runs before the job's 30-minute limit, and `zone-rest` keeps today's argv (F11, F14).
+- The post-apply re-read compares against the graded plan's `after` with the same comparator, and any
+  difference halts with `forget=committed` (F2, F4).
+- ADR-329 is amended in this PR, because its Decision would otherwise contradict the shipped gate (F7).
+- The security review's four findings are fixed (S1-S4): a read can no longer reuse pre-write
+  responses, an unusable live file refuses, the read keeps the token-shape guard, and the restore
+  path has a checked value for `pages_apex` and `www`.
+- One owner decision stays open before the first `rehearsal=false` dispatch: observe the first PATCH
+  against the loopback mock, or accept it unobserved.
+
 ## Overview
 
 The `redirects-dns` phase gate of the Cloudflare account migration refused all 26 `cloudflare_record`
@@ -115,9 +141,6 @@ pushing every comparator and shape row down into the gate suite, which takes abo
 
 ### Gates that do not fire
 
-- **Encryption posture (Phase 2.11):** no new persistent store and no new connection. The one `.tf`
-  edit is a comment header, and the read uses the Cloudflare API host and token the job's preflight
-  already calls.
 - **Infrastructure as code (Phase 2.8):** no new resource. The 26 records are already declared in `dns.tf`.
 - **Task design (Phase 2.9.3):** no new workflow or scheduled surface.
 - **GDPR gate (Phase 2.7, run because of the `single-user incident` threshold):** advisory, not legal
@@ -193,7 +216,7 @@ New signature: `cf_account_migrate_gate <phase> <plan.json> [<state.json>] [<liv
 
    | Field | Rule |
    |---|---|
-   | entry status | `notfound` or `unreadable` is reported as that word |
+   | entry status | only exactly `ok` with an object `result` is compared; `notfound` is reported as that word; any other or absent status is `unreadable` (S2) |
    | `type`, `content`, `ttl`, `proxied`, `priority` | strict equality with `after` |
    | `content` trailing dot | a live `content` ending in `.` differs, because `suppressContent` hides that change from refresh (F13) |
    | `name` | live `name` equals `after.hostname`, **and** `after.hostname == (after.name \| cfam_fqdn)`, because `after.hostname` is refreshed from the same API (F13). The suffix is dot-anchored, so `evilsoleur.ai` is not in the zone |
@@ -217,7 +240,18 @@ New signature: `cf_account_migrate_gate <phase> <plan.json> [<state.json>] [<liv
    `not a pure no-op import` check. Pass `--argjson norm` **after** the filter, so the suite's
    anchors on those `v="$(jq` lines keep matching. Everything outside `norm` is refused exactly as
    today, with the same message.
-6. When `live.json` is supplied, one `v="$(jq` over `verdicts` refuses every record with a non-empty
+6. **A fourth argument must be a usable read (S2).** This check runs first, before step 4, on any plan
+   including an all-no-op one. Calls with 2 or 3 arguments keep today's behaviour and make no live
+   check, so the job's `redirects-dns` call always passes four:
+
+   ```bash
+   if (($# >= 4)); then
+     [[ -r "$4" ]] && jq -e 'type == "object" and length > 0' "$4" >/dev/null 2>&1 \
+       || { echo "cf_account_migrate_gate: REFUSE — the live read is missing or unusable"; return 1; }
+   fi
+   ```
+
+   With a usable file, one `v="$(jq` over `verdicts` refuses every record with a non-empty
    `live`, including a no-op (F13). The `why` reasons go into a separate `norm_why`, printed inside
    the refusal block after `violations` and never added to it, so the suite's `M-pure` row still
    admits row 9 when the pure-import check is neutered.
@@ -228,7 +262,9 @@ New signature: `cf_account_migrate_gate <phase> <plan.json> [<state.json>] [<liv
 
 1. **Pre-gate read.** In `plan_and_gate`, after `terraform show -json tfplan` and immediately before
    the phase gate, on **every `redirects-dns` plan**, rehearsal and apply, even an all-no-op plan:
-   read all 26 by pinned id into `$W/live-records.json` and pass it as the gate's fourth argument.
+   read all 26 by pinned id into `$W/live-records.json` and **always** call the gate with four
+   arguments. A failed read is non-fatal here and reaches the gate's one refusal through the existing
+   `gate-refused` path (S2): `read_live_records "$live" || live=""`, so a stale file is never graded.
    `zone-rest` has no pins and makes no read. A read is never carried between runs (F9, F13). Print
    `cf-account-migrate live-read records=<n>`.
 2. **`read_live_records <out>`.** A `LIVE_READ_SH` inner script under `TF_ENV` issues one GET per
@@ -244,6 +280,25 @@ New signature: `cf_account_migrate_gate <phase> <plan.json> [<state.json>] [<liv
    ```
 
    A record with no file at the deadline is `unreadable`.
+
+   Each call starts clean (S1): `rm -f "$out"`, then a new `mktemp -d "$W/live.XXXXXX"`, and retries
+   stay inside that directory. Each response is written to `<file>.tmp` and moved into place, and the
+   collect output goes through `$out.tmp` then `mv`. If `rm` or `mktemp` fails, the call returns
+   non-zero and all 26 count as `unreadable`.
+
+   `LIVE_READ_SH` opens with the `PREFLIGHT_SH` token-shape guard, because each `doppler run` fetches
+   the value again and the bearer is fed to `curl --config -`, where a quote and newline add directives
+   (S3). On the `legacy` credential path a branch actor can plant that value until operator step O11.
+   On `tier_b`, `--preserve-env` should make a planted value inert; this plan did not verify that for
+   this token, so the guard applies on both.
+
+   ```bash
+   t="${TF_VAR_cf_api_token:-}"
+   case "$t" in ""|*[!A-Za-z0-9._~+/=-]*) exit 3 ;; esac
+   ```
+
+   Exit 3 ends the retry loop at once, because a bad shape is not transient. No curl runs, all 26 stay
+   `unreadable`, and no part of the value is printed.
 3. **Bounded apply, only when the gate admitted at least one record** (F11 as narrowed by F14).
    Every other apply, including all of `zone-rest`, keeps today's argv, because an INT between the
    delete and create of `doppler_secret.cf_api_token_dns_edit` would leave the `prd` secret deleted.
@@ -258,22 +313,32 @@ New signature: `cf_account_migrate_gate <phase> <plan.json> [<state.json>] [<liv
    tf_env ${bound[@]+"${bound[@]}"} terraform apply -no-color -input=false -auto-approve "$W/tfplan" 2>&1 | tf_redact_random_ids
    ```
 
+   `NORM_COUNT` is the number of `import-normalize` lines in the gate output, set in `plan_and_gate`.
+   The budget check and its refusal run **before** the `applying=true` line is printed, so a refusal
+   never follows it; the `bound` array is built there and used by the apply line.
+
    Exit 124 follows the existing `apply-failed` path. No SIGKILL is sent to the apply. The no-budget
    refusal matters because `timeout 0` disables the bound. `--foreground` is load-bearing: plain
    `timeout -s INT` signals the child and its group, and although the delivered count is not stable
    (reviewers measured mostly 1, sometimes 2, on coreutils 9.12), a second INT makes Terraform exit
    at once, which can lose in-flight creates from state. The contract is "one INT sent at 1100 s",
    not "the apply ends by 1100 s": Terraform's graceful stop has no time limit.
-4. **Post-apply re-read, when the gate admitted at least one record.** Re-read all 26 and compare
-   each with the graded plan's `after`, through `cf_account_migrate_live_diff`:
+4. **Post-apply re-read, `reread_records <phase>`, when the gate admitted at least one record.** Re-read all 26 into
+   its own `$W/live-reread.json`, never `live-records.json` (S1), and compare each with the graded
+   plan's `after`, through `cf_account_migrate_live_diff`. A non-zero return from `read_live_records`
+   is `reread=unreadable=<all 26>`:
    - a difference halts at once; a 404 is `reread=differs=<addr>:notfound`;
    - `unreadable` gets up to 3 passes, 5 s apart (capped by `CFAM_VERIFY_SLEEP`), inside the 90 s deadline;
-   - on failure, refuse `import-normalize-reread-failed` with `applied=true`, `forget=committed` and
-     `reread=differs=<addr:field,...>` or `reread=unreadable=<addr,...>`;
+   - on failure, refuse `import-normalize-reread-failed` with the fields
+     `applied=true forget=committed reread=<r> verify=<v>`;
    - on `apply-failed` with an admitted record, the same re-read runs **first**; the field order is
-     `forget=committed reread=<r> verify=<v>`, and with no admitted record the field is omitted, so
+     `forget=committed reread=<r> verify=<v>`, and with no admitted record `reread=` is omitted, so
      the existing exact-line rows hold;
-   - on either failure, `partial_apply_verdict` starts the existing 60 s probe only if
+   - `<r>` is `ok`, `differs=<addr:field,...>` (a 404 is `differs=<addr>:notfound`) or
+     `unreadable=<addr,...>`; `<v>` is `ok`, `skipped`, or the existing `failing=<list>` form in
+     place of `verify=`;
+   - on either refusal (ruling F4 for the re-read failure, F11 for `apply-failed`), the new
+     `partial_apply_verdict` wraps `probe_partial_apply` and starts the existing 60 s probe only if
      `SECONDS <= 1395` (the last start that ends by the 1500 s verdict cap with a 105 s pass);
      otherwise it sets `verify=skipped`. An overrun then costs the probe, never the re-read or the
      refusal line.
@@ -309,13 +374,18 @@ is the documented no-refusal-line residual, covered by the runbook's cancelled-r
     `apply-failed` with `reread=differs=`, or `gate-refused` naming a `cloudflare_record` after an
     earlier `rehearsal=false` run printed `mode=apply applying=true`). Treat it as live user impact
     and restore before any PR, in the order `api`, MX/SPF/DKIM/DMARC, then the rest. The expected
-    value is the record's `dns.tf` block. `Operator-authorizes:` one edit of the named field on the
+    value is the record's `dns.tf` block. For `pages_apex` and `www`, whose block is
+    `cloudflare_pages_project.docs.subdomain`, it is `result.subdomain` from a GET of
+    `accounts/<CFAM_NEW_ACCOUNT_ID>/pages/projects/soleur-docs` with `CF_API_TOKEN_PAGES`, requiring
+    HTTP 200, `success == true`, `result.name == "soleur-docs"` and a subdomain equal to
+    `soleur-docs-40x.pages.dev`, the host the runbook already probes. A failed read or a mismatch
+    means no edit and a stop for an owner decision (S4). `Operator-authorizes:` one edit of the named field on the
     NEW zone. A `settings` difference gets no edit: stop for an owner decision (F3). `verify=skipped`
     means no public probe ran, so run the local Verify block. `verify=ok` does not clear this bullet,
     because those probes read no mail record. Then rehearse, which reads all 26, and re-dispatch.
   - In that bullet, **`<addr>:notfound`**: a re-dispatch cannot repair a deleted record, because a
     recreated record has a new id. `Operator-authorizes:` recreating it on the NEW zone from its
-    `dns.tf` block to restore service, post the new id on #12931, and stop for an owner decision. No
+    `dns.tf` block (the same value source for `pages_apex` and `www`) to restore service, post the new id on #12931, and stop for an owner decision. No
     `terraform state rm`, `terraform import`, state push or lone literal edit: the path back into
     state needs a reviewed PR and a CTO ruling.
   - In that bullet, a `proxied` refusal on `pages_apex` or `www` may be `cron-gh-pages-cert-reissue`
@@ -451,7 +521,7 @@ liveness_signal:
   configured_in: .github/workflows/cf-account-migrate.yml
 error_reporting:
   destination: GitHub Actions run log, a `::error` annotation and the step summary, through the job's `refuse`
-  fail_loud: "`cf-account-migrate phase=redirects-dns verdict=refuse reason=import-normalize-reread-failed applied=true`"
+  fail_loud: "`cf-account-migrate phase=redirects-dns verdict=refuse reason=import-normalize-reread-failed applied=true forget=committed reread=differs=<addr:field>`"
 failure_modes:
   - mode: an off-shape update or a live record that differs before apply
     detection: the gate prints `REFUSE <address>` naming the clause or field, then `reason=gate-refused`
@@ -469,8 +539,31 @@ logs:
   where: GitHub Actions run log of cf-account-migrate.yml
   retention: 90 days (repository Actions log retention, read from the API on 2026-11-23)
 discoverability_test:
-  command: grep -m1 -o "cf_account_migrate_gate. import-normalize" tests/scripts/lib/cf-account-migrate-gate.sh
-  expected_output: "cf_account_migrate_gate: import-normalize"
+  command: grep -m1 -o "import-normalize count=" apps/web-platform/infra/scripts/cf-account-migrate-job.sh
+  expected_output: "import-normalize count="
+```
+
+## Downtime & Cutover
+
+- **Operation and surface:** one in-place, same-value `PATCH` on each of the 26 records in the live zone (site, `api`, mail). No delete and no replace; the gate refuses both.
+- **Zero-downtime path, and the default:** an in-place update of an existing record id, with the value proven equal to the live record in the same run. There is no blue-green alternative for adopting a record that already serves traffic, and every rejected alternative (`ignore_changes`, state push, CLI import) is recorded in the Cut List.
+- **Per-stage verification:** the pre-gate read of all 26, then the post-apply re-read, then the existing live probes. Any difference halts, with the restore path in the runbook.
+- **Residual:** whether an identical PATCH causes any DNS answer gap is unverified (see the Unverified list). No maintenance window is declared; the owner's authorization of the `rehearsal=false` dispatch is the sign-off.
+- **Merge:** the routine `web-platform-release.yml` image deploy fires on merge and follows its existing deploy path.
+
+## Encryption Posture
+
+No new store and no new connection. The one `.tf` edit is a comment header. The row below records the existing connection the new read reuses.
+
+```yaml
+at_rest: []
+in_transit:
+  - connection: cf-account-migrate job -> api.cloudflare.com (DNS records GET)
+    enforced_at: apps/web-platform/infra/scripts/cf-account-migrate-job.sh:LIVE_READ_SH
+    tls: HTTPS, with no TLS override, so the minimum version is the runner's curl default
+    cert_verification: on
+    does_not_defend: a compromised runner, a leaked API token, or Cloudflare itself returning a wrong record
+    disclosed_as: not-publicly-claimed
 ```
 
 ## Guard Contract
@@ -505,6 +598,9 @@ discoverability_test:
 | 16 | Replace the dot-anchored suffix with `endswith("soleur.ai")`, admitting `evilsoleur.ai` | RED |
 | 17 | Drop the live trailing-dot refusal | RED |
 | 18 | Let a closed-set diagnostic token change a verdict | RED |
+| 19 | Treat an unusable fourth-argument file as not supplied, so an all-no-op plan passes (S2) | RED |
+| 20 | Compare an entry whose status is absent or unknown instead of reporting `unreadable` (S2) | RED |
+| 21 | Call the gate with three arguments on `redirects-dns` (S2) | RED |
 
 **Harness rows:**
 
@@ -537,6 +633,9 @@ discoverability_test:
 | 9 | Run the partial-apply probe before the re-read on `apply-failed` | RED |
 | 10 | Remove the no-budget refusal, so `timeout 0` runs an unbounded apply | RED |
 | 11 | Bound a `zone-rest` apply, whose argv must stay unchanged (F14) | RED |
+| 12 | Reuse the pre-gate directory or `live-records.json` for the re-read, so a Doppler failure passes on pre-write responses (S1) | RED |
+| 13 | Remove the token-shape guard from `LIVE_READ_SH` (S3) | RED |
+| 14 | Retry after the guard's `exit 3` (S3) | RED |
 
 **Harness rows:**
 
@@ -554,7 +653,7 @@ discoverability_test:
 | 1 | "admit the update narrowly in the gate and let apply send the 26 same-value writes" | Gate 4-6 | mapped |
 | 2 | "the changed keys are exactly allow_overwrite (null to false) and content (null to string), with nothing unknown" | `cfam_norm_shape` | mapped |
 | 3 | "a live GET by the pinned id, taken after the plan, matches `after` on type, hostname, content, ttl, proxied, priority, comment and tags, with empty settings" | `cfam_live_diff`, Job 1-2 | mapped |
-| 4 | "Admit the same shape with importing == null, for retries after a failed apply." | Gate 5, retry arm | mapped |
+| 4 | "Admit the same shape with importing == null, for retries after a failed apply." | Gate 4 (retry arm: `state-id`), Gate 5 | mapped |
 | 5 | "Log it as `import-normalize`, not `in-state-update`." | Gate 7, Job 5 | mapped |
 | 6 | "Re-read all 26 after apply; any difference halts." | Job 4 | mapped |
 | 7 | "its 'never widen the gate' note must describe this one admitted shape and keep refusing real drift" | Docs, runbook | mapped |
@@ -574,7 +673,7 @@ discoverability_test:
 | `cf-account-migration-imports.tf` header | "apps/web-platform/infra/cf-account-migration-imports.tf (header)" | asked |
 | Runbook | ask 7 | asked |
 | Both test suites | ask 8 | asked |
-| ADR-329 amendment | — | inferred — justification: the ADR's Decision states the opposite of the shipped gate, and plan Phase 2.10 makes the amendment a deliverable (CTO ruling F7) |
+| ADR-329 amendment | — | inferred — justification: the ADR's Decision states the opposite of the shipped gate, and plan Phase 4 makes the amendment a deliverable (CTO ruling F7) |
 | Bounded apply (`timeout -s INT`) | — | inferred — justification: safety dependency of ask 6, because a job killed by its 30-minute timeout runs no re-read (CTO missing item 1) |
 | `fixture-relative-assert.baseline.txt` | — | inferred — justification: the ratchet requires row equality in the same commit as the source edit |
 | `cfam_live_diff` closed diagnostic tokens | — | inferred — justification: the live response shape is unread, and a token separates a comparator correction from real drift without a second read (CTO ruling F12) |
@@ -582,10 +681,10 @@ discoverability_test:
 
 ### Split Assessment
 
-- Subsystems touched: 3 — `tests`, `apps/web-platform`, `knowledge-base`
-- Planned files: 8 | Estimated changed lines: 650
+- Subsystems touched: 4 — `tests`, `apps/web-platform`, `knowledge-base`, `plugins/soleur` (one regenerated baseline file)
+- Planned files: 8 | Estimated changed lines: 750
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: single PR
+- Recommendation: split — the only seam is docs (runbook, ADR) from code. Declined: the brief fixes "ONE PR", the baseline must move in the same commit as the source, and shipping the gate without its runbook restore path would leave a widened gate with no recovery text.
 
 ## Acceptance Criteria
 
@@ -595,7 +694,7 @@ discoverability_test:
 - [ ] AC2: the same shape with `importing == null` passes only when `before.id` and the pre-plan state id both equal the pin.
 - [ ] AC3: every off-shape row in Test Scenarios is refused, and row 9 still refuses with `not a pure no-op import`.
 - [ ] AC4: any live field difference, an omitted `tags`, non-empty `settings`, a 404, a degraded 200 or a missing read refuses with nothing applied, naming the address and field and printing no value.
-- [ ] AC5: on every `redirects-dns` plan, including an all-no-op one, the job reads all 26 after the plan and before the phase gate, in rehearsal and apply, with the bearer never in argv; `zone-rest` makes no read.
+- [ ] AC5: on every `redirects-dns` plan, including an all-no-op one, the job reads all 26 after the plan and before the phase gate, in rehearsal and apply, with the bearer never in argv, four gate arguments, a fresh directory per read and a separate re-read output file; a read that made no GET is `unreadable`, and a token failing the shape guard makes no curl call; `zone-rest` makes no read.
 - [ ] AC6: a post-apply difference refuses `import-normalize-reread-failed applied=true forget=committed`; when the gate admitted at least one record, an `apply-failed` refusal carries `reread=` in the order `forget=committed reread=<r> verify=<v>`, and otherwise omits it.
 - [ ] AC7: an apply with an admitted record runs as `tf_env timeout --foreground -s INT <n> terraform apply` with the INT at 1100 s of script time (asserted on the shim's argv), exit 124 reaches `apply-failed`, no budget refuses before `applying=true`, and `partial_apply_verdict` past 1395 s sets `verify=skipped` (a function-level test on the virtual clock). A `zone-rest` apply's argv is unchanged.
 - [ ] AC8: every Guard 1 and Guard 2 mutation row drives its suite red, and each must-PASS row passes.
@@ -642,7 +741,7 @@ All `unit` unless marked. Job cases are `integration` against the suite's PATH s
 
 **Gate, off-shape refusals (one row each):** extra changed key (`ttl`, `proxied`, `name`); `allow_overwrite` to true; `before.allow_overwrite` non-null; `before.content` non-null (real drift); `after.content` null, empty or non-string; `after_unknown` true at top level and nested; a non-record import planned `update` (Pages); a replace; a wrong import literal; retry with `before.id` off the pin; retry absent from state; retry with no state file; a literal whose zone segment is not the new zone.
 
-**Gate, live refusals:** no `live.json`; a missing address; each of the nine compared fields differing; a live `content` ending in `.`; `after.hostname` not matching `after.name`; a hostname of `evilsoleur.ai`; omitted `tags`; `settings` of `{"flatten_cname":false}`; a non-empty live comment; a `false` comment; a drifted no-op record alongside admitted updates; a compliant first record with an off-shape second.
+**Gate, live refusals:** no `live.json`; a missing address; each of the nine compared fields differing; a live `content` ending in `.`; `after.hostname` not matching `after.name`; a hostname of `evilsoleur.ai`; omitted `tags`; `settings` of `{"flatten_cname":false}`; a non-empty live comment; a `false` comment; a drifted no-op record alongside admitted updates; a compliant first record with an off-shape second; on an all-no-op plan, a fourth argument that is a missing file, an empty string, an empty file, `null` or `{}`; an entry with an absent or unknown status.
 
 **Collect:** HTTP 200 with `success:false`; a non-object `result`; `result.id` off the pin; a differing `result.zone_id`; an unparseable body; a 404 as `notfound`; a 429 and a 500 as `unreadable`.
 
@@ -653,6 +752,9 @@ All `unit` unless marked. Job cases are `integration` against the suite's PATH s
 - Read failure before apply: `gate-refused`, no apply.
 - Post-apply difference, post-apply 404, and unreadable-then-clean.
 - Unreadable through the deadline.
+- Doppler succeeds before the gate and fails on the re-read: `reread=unreadable=` names all 26 (S1).
+- A token failing the shape guard: zero curl calls, one attempt, all 26 `unreadable`, no part of the value printed (S3).
+- The `redirects-dns` gate call has four arguments, including after a failed read (S2).
 - `apply-failed` with each `reread=` value; apply exit 124; no budget left before apply; the `timeout` shim logs `--foreground -s INT <n> terraform apply`; `partial_apply_verdict` past 1395 s sets `verify=skipped` (function-level, virtual clock).
 - A pin list shorter than the spec's record count refuses.
 - Each closed-set token appears for its case (`tags:absent`, `content:quoted-equal`, `settings:only-flatten-false`, `settings:other`), with no record value in the output.

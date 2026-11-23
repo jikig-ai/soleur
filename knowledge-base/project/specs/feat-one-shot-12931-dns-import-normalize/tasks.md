@@ -25,19 +25,20 @@ Bounds for every task: no workflow dispatch, no Doppler write, no Cloudflare wri
 - [ ] 2.4 `cf_account_migrate_live_diff` entry point.
 - [ ] 2.5 One `verdicts` evaluation, `norm`, the two refusals subtracting it (`--argjson norm` after the filter), the live-diff refusal, `norm_why` outside `violations`.
 - [ ] 2.6 `import-normalize` lines on PASS only; update the header.
+- [ ] 2.7 Refuse an unusable fourth argument before any other check; compare only status `ok` with an object `result` (S2).
 
 ## 3. Job (`apps/web-platform/infra/scripts/cf-account-migrate-job.sh`)
 
-- [ ] 3.1 `read_live_records` with one `read_end` deadline enforced outside `doppler run`.
-- [ ] 3.2 Read all 26 on every `redirects-dns` plan, immediately before the phase gate.
+- [ ] 3.1 `read_live_records` with one `read_end` deadline enforced outside `doppler run`, a fresh directory per call, `.tmp` then `mv` (S1), and the token-shape guard whose `exit 3` ends retries (S3).
+- [ ] 3.2 Read all 26 on every `redirects-dns` plan, immediately before the phase gate, and always call the gate with four arguments (S2).
 - [ ] 3.3 Bounded apply only when a record was admitted: `tf_env timeout --foreground -s INT`, `apply-budget-exhausted`.
-- [ ] 3.4 Post-apply re-read, `partial_apply_verdict`, `import-normalize-reread-failed`, the `reread=` field.
+- [ ] 3.4 Post-apply `reread_records` into its own `$W/live-reread.json` (S1), the new `partial_apply_verdict`, `import-normalize-reread-failed`, and the `reread=` field (`ok`, `differs=<addr:field,...>`, `differs=<addr>:notfound`, `unreadable=<addr,...>`).
 - [ ] 3.5 `live-read records=` and `import-normalize count=` lines; correct the `apply-failed` text; extend the header contracts.
 
 ## 4. Docs
 
 - [ ] 4.1 Imports file header.
-- [ ] 4.2 Runbook: Step 2 note, expected log, refusal list, Halt bullets including the restore path.
+- [ ] 4.2 Runbook: Step 2 note, expected log, refusal list, Halt bullets including the restore path and the checked `pages_apex`/`www` value (S4).
 - [ ] 4.3 ADR-329: Decision bullet and Principle Alignment sentence.
 - [ ] 4.4 Regenerate `plugins/soleur/test/fixture-relative-assert.baseline.txt` in the same commit as the source edits.
 
