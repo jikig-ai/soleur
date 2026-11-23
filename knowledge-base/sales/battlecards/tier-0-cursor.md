@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-06-02
+last_updated: 2026-11-01
 last_reviewed: 2026-06-02
 review_cadence: monthly
 owner: CRO
@@ -7,10 +7,19 @@ depends_on:
   - knowledge-base/product/competitive-intelligence.md
 competitor: Cursor (Anysphere)
 tier: 0
-convergence_risk: High
+convergence_risk: Medium
 ---
 
 # Battlecard: Cursor
+
+> **[2026-11-01 Cascade sync, index alignment only, no new web facts]** Corrected this card where it contradicted the current CI index (Tier 0 data as of the 2026-06-08 scan):
+> 1. **`convergence_risk` lowered High to Medium** to match the index Tier 0 row (overlap Medium). The index's read: Cursor "dominates IDE-agent layer; no multi-domain business ambition"; "a founder running Soleur in Claude Code + Cursor in their IDE is a coherent stack, not a collision."
+> 2. **Plan prices filled in:** Hobby $0 / Pro $20 / Pro+ $60 / Ultra $200 / Teams $40/user (Premium seat $120) / Enterprise.
+> 3. **Composer 2.5 added** (shipped May 18, 2026).
+>
+> **Tier 0 facts were not re-verified on 2026-11-01** (scan web tools blocked) and are about 5 months old. The index specifically flags "Composer 2.5 as Cursor's latest model" as unconfirmed since June. ARR and valuation remain early-2026 figures.
+>
+> **Soleur-side caution:** the repo `LICENSE` is **Business Source License 1.1** (Soleur v3.1.0 and later; each version converts to Apache-2.0 four years after publication). Lines below that call Soleur "open source" are out of date. Say "source-available."
 
 > **[2026-06-02 Review note]** Pricing and agent capabilities updated against `knowledge-base/product/competitive-intelligence.md` (2026-05-30 scan): Cursor restructured to **six plans** (Hobby/Pro/Pro+/Ultra/Teams/Enterprise, $0–$200/mo individual, $40/seat Business) on a usage-based credit pool, and **background agents now run up to 8 in parallel in the cloud, delivering PRs on completion**. ARR/valuation figures ($1B+, $29.3B) are carried forward from the early-2026 scan and were **not re-verified** in the 2026-05-30 scan — treat as stale-but-directional.
 
@@ -19,7 +28,8 @@ convergence_risk: High
 | Field | Value |
 |-------|-------|
 | **Product** | Cursor -- AI-native code editor (IDE) evolving into an agent platform. VS Code fork with integrated AI capabilities, automations, and plugin marketplace. |
-| **Pricing** | Six plans: Hobby ($0), Pro, Pro+, Ultra ($200/mo individual ceiling), Teams ($40/seat Business), Enterprise. Usage-based credit pool tied to API cost; Auto mode unlimited. |
+| **Pricing** | Six plans: Hobby $0 / Pro $20 / Pro+ $60 / Ultra $200 / Teams $40/user (Premium seat $120) / Enterprise (per CI index, 2026-06-08). Usage-based credit pool tied to API cost; Auto mode unlimited. |
+| **Latest model** | **Composer 2.5 (May 18, 2026):** 79.8% SWE-Bench Multilingual, 63.2% CursorBench v3.1. The index reports it matching Claude Opus 4.7 / GPT-5.5 at about 1/10 the cost per token ($0.50/M in, $2.50/M out). Not re-confirmed since June. |
 | **ARR** | $1B+ (early-2026 scan; not re-verified 2026-05-30) |
 | **Valuation** | $29.3B (early-2026 scan; not re-verified 2026-05-30) |
 | **Domain Coverage** | Engineering-primary. Code editing, code review (Bugbot), cloud agents, CLI, planning. **NEW (March 2026):** 30+ marketplace plugins from Atlassian, Datadog, GitLab, Glean, Hugging Face, monday.com, PlanetScale expand into infrastructure + productivity domains. |
@@ -92,4 +102,4 @@ Review monthly. If any triggers fire, escalate to marketing strategy review.
 
 ---
 
-_Updated: 2026-06-02. Source: competitive-intelligence.md (2026-05-30)._
+_Updated: 2026-11-01 (downstream-sync cascade: convergence risk, plan prices, Composer 2.5 aligned to index; no new web facts). Previously 2026-06-02. Source: competitive-intelligence.md (2026-11-01 index; Tier 0 data as of 2026-06-08)._

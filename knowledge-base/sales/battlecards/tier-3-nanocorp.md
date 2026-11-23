@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-06-08
+last_updated: 2026-11-01
 last_reviewed: 2026-06-08
 review_cadence: monthly
 owner: CRO
@@ -11,6 +11,11 @@ convergence_risk: High
 ---
 
 # Battlecard: NanoCorp
+
+> **[2026-11-01 Cascade sync, index alignment only, no new web facts]** The facts below still match the current CI index and [NanoCorp shard](../../product/competitive-intelligence/tier-3-nanocorp.md) (NanoCorp data as of the 2026-06-08 scan): Phospho Inc./YC, ads "Coming Soon", contradictory ARR, and the 20% withdrawal fee. **They were not re-verified on 2026-11-01** (scan web tools blocked). The index's open item for the next scan is "NanoCorp's Google Search Ads status," so do not claim ads are still unshipped without re-checking. Rep cautions added this sync:
+> 1. "No 20% lock-in" still holds against NanoCorp. But founder-in-the-loop and no revenue cut are **not unique to Soleur** in Tier 3: Cofounder (rated Critical) matches both. See the [Cofounder battlecard](tier-3-cofounder.md).
+> 2. "You keep 100%" applies to Soleur's self-serve tiers only. Enterprise pricing includes a negotiated sliding revenue share per `pricing-strategy.md`.
+> 3. The "420+ PRs" proof point and the "Free OSS core" wording are older Soleur-side figures. The repo `LICENSE` is **Business Source License 1.1**, so say "source-available," not "OSS."
 
 > **[2026-06-08 Created via cascade]** New battlecard from the full six-tier scan. **Data-reconciliation warning for reps:** NanoCorp's metrics are marketing-only and mutually contradictory — do NOT quote a specific ARR. The marketing site lists Google Search Ads as "**Coming Soon**," so any pitch deck or comparison that says NanoCorp "runs your ads" is overstating shipped capability. Source: `knowledge-base/product/competitive-intelligence.md` (2026-06-08).
 
@@ -82,4 +87,4 @@ Review monthly. NanoCorp's closest analog is Polsia; watch both together.
 
 ---
 
-_Created: 2026-06-08 (cascade from full six-tier scan). Source: competitive-intelligence.md (2026-06-08)._
+_Created: 2026-06-08 (cascade from full six-tier scan). Updated: 2026-11-01 (downstream-sync cascade: dated note only; no new web facts). Source: competitive-intelligence.md (2026-11-01 index; NanoCorp data as of 2026-06-08)._

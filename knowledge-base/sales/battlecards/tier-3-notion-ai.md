@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-06-02
+last_updated: 2026-11-01
 last_reviewed: 2026-06-02
 review_cadence: monthly
 owner: CRO
@@ -7,10 +7,19 @@ depends_on:
   - knowledge-base/product/competitive-intelligence.md
 competitor: Notion AI (Custom Agents)
 tier: 3
-convergence_risk: Medium-High
+convergence_risk: High
 ---
 
 # Battlecard: Notion AI (Custom Agents)
+
+> **[2026-11-01 Cascade sync, index alignment only, no new web facts]** Corrected this card where it contradicted the current CI index (Notion data as of the 2026-06-08 scan):
+> 1. **`convergence_risk` raised Medium-High to High** to match the index Tier 3 row.
+> 2. **Notion is no longer "the highest convergence risk in Tier 3."** Cofounder (cofounder.co) is now rated Critical, the closest product match. See the [Cofounder battlecard](tier-3-cofounder.md).
+> 3. The pricing row now reflects the index: **Custom Agents are Business/Enterprise-only**, with Free and Plus excluded. They run on credits at $10 per 1,000 from May 4. The index frames this paywall as **an acquisition window**, because it removes the free/Plus solo-founder long tail, which is Soleur's exact ICP.
+>
+> Notion facts were **not re-verified on 2026-11-01** (scan web tools blocked). The index's open item for the next scan is "Notion Custom Agents paywall changes."
+>
+> **Soleur-side caution:** the repo `LICENSE` is **Business Source License 1.1** (Soleur v3.1.0 and later; each version converts to Apache-2.0 four years after publication). Lines below that call Soleur "Apache-2.0" or "open source" are out of date. Say "source-available" until CRO/CLO reconcile the wording.
 
 > **[2026-06-02 Review note]** Pricing status advanced past the beta window (per `knowledge-base/product/competitive-intelligence.md`, 2026-05-30 scan): the free Custom Agents beta **ended May 3, 2026**, and **credit-based pricing has been live since May 4**. Figures restated to past/active tense; the May-4 paywall transition is now an acquisition-monitoring window (watch whether agent seats drop post-paywall).
 
@@ -42,7 +51,7 @@ convergence_risk: Medium-High
 | **Knowledge architecture** | Workspace pages and databases. Unstructured. | Structured knowledge base: brand guide, competitive intelligence, legal documents, business validation, learnings, decision records. Cross-domain references. | Soleur |
 | **Workflow orchestration** | 20-minute autonomous sessions. Individual agent tasks. | Full business lifecycle: brainstorm-plan-implement-review-compound. Each stage has full domain context. | Soleur |
 | **Distribution** | 35M+ users. Built into Notion. | Early stage. Requires Claude Code installation. | Notion |
-| **Pricing** | $10/mo add-on | Free (open source) | Soleur |
+| **Pricing** | $10/mo AI add-on; **Custom Agents Business/Enterprise-only**, $10/1,000 credits (from May 4, 2026) | Plugin free (source-available). Hosted Solo $49/mo (`pricing-strategy.md`). | Soleur for solo founders priced out of Notion agents |
 | **Team collaboration** | Built in. Multi-user, shared workspace. | Solo-founder focused. Team features planned for paid tier. | Notion |
 | **Multi-model** | GPT-5.2, Claude Opus 4.5, Gemini 3 | Claude models (via Claude Code) | Notion (flexibility) |
 | **Autonomy** | Scheduled agents. 20-minute autonomous sessions. | Human-in-the-loop. Founder decides, agents execute. | Depends on preference |
@@ -72,11 +81,12 @@ convergence_risk: Medium-High
 |-----------|----------|
 | "I already use Notion for everything." | "Soleur is not replacing Notion. Notion is your workspace -- docs, projects, notes. Soleur is your AI organization -- agents that run your business. Use Notion for collaboration. Use Soleur for execution. They serve different functions." |
 | "Notion has scheduled agents. Soleur requires manual invocation." | "Scheduled agents are useful for routine tasks. Soleur's human-in-the-loop design is intentional: the founder decides, agents execute. For high-stakes decisions (legal review, pricing strategy, competitive positioning), you want oversight, not automation. The brainstorm-plan-implement-review-compound lifecycle keeps the founder in control at every stage." |
+| "I was using Notion agents on my Plus plan and lost access." *(added 2026-11-01 from index Tier 3 takeaway 4)* | "You're not alone. Since May 4, Custom Agents are Business/Enterprise-only and run on credits, so the solo-founder tier was priced out. Soleur is built for exactly that founder: agents across 8 departments working from a knowledge base you own in your own repo, on a flat Solo plan. You can keep Notion for docs and use Soleur to do the work." |
 | "Notion is $10/month. Soleur will cost more." | "Soleur's core is free and open source -- 63 agents, 62 skills, Apache-2.0. The planned paid tier ($49/month) covers hosted infrastructure and cloud-synced knowledge base. Compare $49/month for an AI organization running 8 business departments against the $790-2,790/month a solo founder typically spends on separate tools and services." |
 
 ## Convergence Watch
 
-Review monthly. Notion is the highest convergence risk in Tier 3. Monitor closely.
+Review monthly. Notion is a High convergence risk in Tier 3. *(Corrected 2026-11-01: an earlier version called Notion the highest; Cofounder is now rated Critical.)* Monitor closely.
 
 | Trigger | Current Status (2026-06-02) | Action if Triggered |
 |---------|---------------------------|-------------------|
@@ -89,4 +99,4 @@ Review monthly. Notion is the highest convergence risk in Tier 3. Monitor closel
 
 ---
 
-_Updated: 2026-06-02. Source: competitive-intelligence.md (2026-05-30)._
+_Updated: 2026-11-01 (downstream-sync cascade: convergence risk, Tier 3 ranking, paywall framing aligned to index; no new web facts). Previously 2026-06-02. Source: competitive-intelligence.md (2026-11-01 index; Notion data as of 2026-06-08)._
