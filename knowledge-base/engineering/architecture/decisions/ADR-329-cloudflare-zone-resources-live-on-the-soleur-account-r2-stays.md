@@ -72,11 +72,14 @@ Two facts shape the decision:
    - one atomic `terraform state rm` of every non-R2 `cloudflare_*` entry whose own `zone_id`/`account_id` is an old
      id, derived from state rather than a manifest, aborting with nothing removed on any unclassifiable entry;
    - per-phase `import {}` blocks for the hand-restored objects, each required to plan as a `["no-op"]` import, plus
-     creates for objects absent from the new zone. One exception (CTO ruling 2026-11-22): the provider's Read fills
-     `content` only when it is already set, so a `cloudflare_record` import plans an `["update"]` adding
+     creates for objects absent from the new zone. One exception (CTO ruling 2026-11-22, which supersedes for
+     `cloudflare_record` only the 2026-11-19 ratification "Import + update passes the gate", under which Guard 1
+     refused every import that was not a `["no-op"]`; every other resource type keeps that rule): the provider's Read
+     fills `content` only when it is already set, so a `cloudflare_record` import plans an `["update"]` adding
      `allow_overwrite = false` and `content`. The gate admits exactly that shape, bound to the pinned record id and to
-     a live read taken after the plan, and logs it as `import-normalize`. The job re-reads every record after the
-     apply and halts on any difference, which detects a bad write and does not undo it;
+     a live read taken after the plan, and logs it as `import-normalize`. After an apply that carried an admitted
+     record, the job re-reads every record and halts on any difference or unreadable record, which detects a bad write
+     and does not undo it;
    - a phase gate on `tfplan.json` (no destroys, allow-set only, new ids only, `-replace` honoured). A create-class
      address may plan an in-place `["update"]` only when it is already in pre-plan state and, for a Cloudflare object,
      its `before` carries the NEW zone or account id; the one Doppler member must plan exactly the new zone id (CTO
@@ -144,7 +147,7 @@ forget, never pushed back as state (D4); it holds the same secrets as live state
 
 ## Principle Alignment
 
-- AP-001 (Terraform-only): Aligned, with three recorded exceptions. Every hand-restored object is adopted by import;
+- AP-001 (Terraform-only): Aligned, with four recorded exceptions. Every hand-restored object is adopted by import;
   the dashboard acts are token mints and revokes, which have no API path for a Soleur token (ADR-130). The live-zone
   edits of 2026-11-19 (six TXT records rewritten unquoted and the comments on three incident-time records cleared, so
   every record's live values match `dns.tf`) were hand edits to records Terraform then adopts unchanged. Phase 0c, a
@@ -152,6 +155,12 @@ forget, never pushed back as state (D4); it holds the same secrets as live state
   The third exception (CTO ruling 2026-11-20) is a bounded break-glass: when the `redirects-dns` verify fails with
   the product down, the owner may make one dashboard edit of one Terraform-managed rule on the NEW zone only; the
   fix-forward PR carries that value and the next gated re-dispatch must plan that address as a no-op.
+  The fourth (CTO rulings S4 and F7, 2026-11-23) is a bounded hand edit of a DNS record: when a re-read or a gate
+  refusal names a live difference, the owner may authorize one edit of the named field on the NEW zone, to the value in
+  the record's `dns.tf` block. For `pages_apex` and `www` that value is the `soleur-docs` Pages project's `subdomain`,
+  read and checked per S4, and a failed read or a mismatch means no edit. A deleted record may be recreated the same
+  way, and its path back into state needs a reviewed PR and a CTO ruling. A `settings`, `tags:absent` or
+  `content:quoted-equal` difference gets no edit and stops for an owner decision.
 - AP-002 (No SSH state mutation): Aligned. The migration job uses only the Cloudflare API; the host change is an
   immutable replace.
 - AP-003 (R2 remote backend): Aligned. The backend and its endpoint are unchanged; ADR-006 stands.

@@ -40,8 +40,8 @@ proportionate plan for a narrow gate admission.
 - The security review's four findings are fixed (S1-S4): a read can no longer reuse pre-write
   responses, an unusable live file refuses, the read keeps the token-shape guard, and the restore
   path has a checked value for `pages_apex` and `www`.
-- One owner decision stays open before the first `rehearsal=false` dispatch: observe the first PATCH
-  against the loopback mock, or accept it unobserved.
+- One owner decision stays open before the first `rehearsal=false` dispatch, recorded on #12931 as
+  `CF-MIGRATE-FIRST-PATCH: accept-unobserved` or `CF-MIGRATE-FIRST-PATCH: observe-first` (ruling Q8).
 
 ## Overview
 
@@ -55,9 +55,12 @@ record taken in the same run, and re-reads all 26 after the apply. Any differenc
 
 **This PR widens a production safety gate. It stops at ready for the owner's review and is not
 merged by the pipeline.** Nothing in this work dispatches a workflow, writes Doppler, calls a
-Cloudflare write endpoint, runs `terraform apply` or opens an SSH session. Merging it later is not
-inert: `web-platform-release.yml` fires on `apps/web-platform/**` and deploys the image, while the
-infra apply is suppressed by the `[skip-web-platform-apply]` commit-body line.
+Cloudflare write endpoint, runs `terraform apply` or opens an SSH session. The diff changes nothing a
+running user sees: the infra apply is suppressed by the `[skip-web-platform-apply]` commit-body line,
+and the release is the only thing the merge starts. `web-platform-release.yml` fires on
+`apps/web-platform/**` and has two outcomes: it fails at the mirror step (#12937) and deploys nothing,
+or the bridge works and it ships the backlog since the last successful deploy. The owner checks
+#12937 immediately before merging.
 
 ## Research Insights
 
@@ -361,10 +364,11 @@ is the documented no-refusal-line residual, covered by the runbook's cancelled-r
     refusing every other diff.
   - Expected log: `live-read records=26` on every `redirects-dns` run. `import-normalize count=26`
     applies to the first apply only. After an earlier `applying=true`, any `count` from 0 to 26 is
-    valid and the gate's `imports=` falls too, because written records plan as no-op. Admitted
-    records never belong in `expected_in_state_updates`.
-  - Rewrite "the plan then skips imports already in state" to say each such import plans as a no-op,
-    or as the admitted import-normalize update if its earlier write failed.
+    valid: it counts the records the apply never reached. The gate's `imports=` falls when a record
+    enters state, whether or not its write succeeded. Admitted records never belong in
+    `expected_in_state_updates`.
+  - Rewrite "the plan then skips imports already in state" to say a record whose PATCH failed plans a
+    no-op if live still matches, and a record the apply never reached plans the admitted update.
   - Refusal list: add `import-normalize-reread-failed` and `apply-budget-exhausted`. The latter
     prints `applied=false` and `forget=committed`: re-rehearse and re-dispatch once; on a second
     consecutive refusal, stop for an owner decision. `APPLY_DEADLINE` is never raised to get past it.
@@ -388,8 +392,8 @@ is the documented no-refusal-line residual, covered by the runbook's cancelled-r
     `dns.tf` block (the same value source for `pages_apex` and `www`) to restore service, post the new id on #12931, and stop for an owner decision. No
     `terraform state rm`, `terraform import`, state push or lone literal edit: the path back into
     state needs a reviewed PR and a CTO ruling.
-  - In that bullet, a `proxied` refusal on `pages_apex` or `www` may be `cron-gh-pages-cert-reissue`
-    mid-flip rather than drift, since its old token is revoked only after this phase.
+  - A `proxied` difference on `pages_apex` or `www` is treated as drift. Review removed an earlier sentence blaming
+    `cron-gh-pages-cert-reissue`: that cron cannot write the new zone at this stage (R5).
   - **No completed re-read** (`reread=unreadable=`, or a cancelled run with `mode=apply applying=true`):
     edit nothing and dispatch a rehearsal, which reads all 26 even on an all-no-op plan. A refusal
     naming a record goes to the bullet above.
@@ -452,7 +456,7 @@ Edit the imports header, runbook and ADR-329.
    gh pr view 13019 --json commits --jq '[.commits[].messageBody | split("\n")[] | select(. == "[skip-web-platform-apply]")] | length'
    ```
 
-3. PR body, first line: `Merging this PR alone deploys production: web-platform-release.yml fires on apps/web-platform/** (the job script and the imports header sit under it) and releases and deploys the image. apply-web-platform-infra.yml is suppressed by the [skip-web-platform-apply] line in a branch commit body. No migration dispatch is fired by the merge.` Then `Ref #12931`, no closing keyword, the merge constraint above, and the Unverified list below.
+3. PR body, first line: `This diff changes nothing a running user sees. Merging fires web-platform-release.yml, which either fails at the mirror step (#12937) and deploys nothing, or ships the backlog since the last successful deploy, so the owner checks #12937 immediately before merging. apply-web-platform-infra.yml is suppressed by the [skip-web-platform-apply] line in a branch commit body. No migration dispatch is fired by the merge.` Then `Ref #12931`, no closing keyword, the merge constraint above, and the Unverified list below.
 4. Mark ready and **stop**. No auto-merge and no merge queue: the owner reviews a widened production gate.
 
 ### Unverified, carried into the PR body
@@ -465,6 +469,7 @@ Edit the imports header, runbook and ADR-329.
 - The live record response shape; a rehearsal that finds `tags` omitted refuses with nothing written (F10).
 - A dashboard edit landing between the read and a PATCH is overwritten, and the re-read then passes.
 - **A bad write is detected, not undone.** The re-read halts with the wrong value still live, and users stay affected until the value is restored and resolver caches expire.
+- **All 26 records are written in one apply, with no canary.** The first check of a written value is the re-read after the apply finishes. If the provider's PATCH changed values and still returned 200, `api`, MX, SPF, DKIM and DMARC could all be wrong at once. The job detects this and does not undo it; the values stay wrong until restored and resolver caches expire. The owner accepts or declines this through the `CF-MIGRATE-FIRST-PATCH` token.
 
 ### Out of scope
 
@@ -500,7 +505,10 @@ ADR-329 stays `adopting`; the amendment describes the gate as it will be once th
 - **If this lands broken, the user experiences:** sign-in and app data failing for every user while
   `app.soleur.ai` still loads, if the `api.soleur.ai` record is altered; `soleur.ai` or `www` not
   resolving; sign-in codes never arriving, because DMARC is `p=reject` and a broken SPF or DKIM record
-  can get them rejected; or mail to `@soleur.ai` bouncing or misrouting.
+  can get them rejected; or mail to `@soleur.ai` bouncing or misrouting. Two records fail with no
+  immediate symptom, and the public probes read neither: a wrong `buttondown_ns1` or `buttondown_ns2`
+  value redelegates `mail.soleur.ai`, and a wrong `supabase_acme_challenge` value can break `api`
+  certificate validation later. The runbook's Halt restore order names both.
 - **If this leaks, the user's workflow is exposed via:** a widened gate admitting a real drift or a
   swapped record id, which would write a wrong value into production DNS under cover of an import.
   The new read handles only public DNS data and logs addresses and field names; the token stays on
@@ -549,7 +557,7 @@ discoverability_test:
 - **Zero-downtime path, and the default:** an in-place update of an existing record id, with the value proven equal to the live record in the same run. There is no blue-green alternative for adopting a record that already serves traffic, and every rejected alternative (`ignore_changes`, state push, CLI import) is recorded in the Cut List.
 - **Per-stage verification:** the pre-gate read of all 26, then the post-apply re-read, then the existing live probes. Any difference halts, with the restore path in the runbook.
 - **Residual:** whether an identical PATCH causes any DNS answer gap is unverified (see the Unverified list). No maintenance window is declared; the owner's authorization of the `rehearsal=false` dispatch is the sign-off.
-- **Merge:** the routine `web-platform-release.yml` image deploy fires on merge and follows its existing deploy path.
+- **Merge:** the diff changes nothing a running user sees. `web-platform-release.yml` fires on merge and either fails at the mirror step (#12937) and deploys nothing, or ships the backlog since the last successful deploy. The owner checks #12937 immediately before merging.
 
 ## Encryption Posture
 
@@ -600,7 +608,14 @@ in_transit:
 | 18 | Let a closed-set diagnostic token change a verdict | RED |
 | 19 | Treat an unusable fourth-argument file as not supplied, so an all-no-op plan passes (S2) | RED |
 | 20 | Compare an entry whose status is absent or unknown instead of reporting `unreadable` (S2) | RED |
-| 21 | Call the gate with three arguments on `redirects-dns` (S2) | RED |
+| 21 | Call the gate with three arguments on `redirects-dns` (S2; U8 keeps this arity, pinned by a static suite row) | RED |
+| 22 | Drop the managed-mode clause of the exactly-once check, so a non-managed entry at a spec address passes (Q5 U1) | RED |
+| 23 | Drop the `length != 1` clause of the exactly-once check, so a duplicate address passes (Q5 U2) | RED |
+| 24 | Remove the refusal of a non-no-op `cloudflare_record` outside `norm`, so a create-class or mutable record update passes (Q5 U3) | RED |
+| 25 | Drop the unique-id check in `cf_account_migrate_record_pins`, so one record id pins two addresses (Q5 U4) | RED |
+| 26 | Drop `noop_id_ok`, so a no-op on a record id other than its pin passes (Q5 U5) | RED |
+| 27 | Drop the live `data` clause, so a non-empty live `data` passes (Q5 U6) | RED |
+| 28 | Drop the `result.id` or `result.zone_id` binding from `cfam_live_diff`, so a live entry for another record or zone passes (Q5 U7) | RED |
 
 **Harness rows:**
 
@@ -636,6 +651,7 @@ in_transit:
 | 12 | Reuse the pre-gate directory or `live-records.json` for the re-read, so a Doppler failure passes on pre-write responses (S1) | RED |
 | 13 | Remove the token-shape guard from `LIVE_READ_SH` (S3) | RED |
 | 14 | Retry after the guard's `exit 3` (S3) | RED |
+| 15 | Remove the `::stop-commands::` window or the `tf_line` filter from the plan or apply pipeline, so Terraform output can open a workflow command (Q7) | RED |
 
 **Harness rows:**
 
@@ -717,7 +733,7 @@ in_transit:
 `Operator-authorizes:` the `redirects-dns` rehearsal dispatch (`gh workflow run cf-account-migrate.yml --ref main -f migrate_phase=redirects-dns -f confirm=MIGRATE-CF-redirects-dns -f rehearsal=true -f reason='#12931 import-normalize rehearsal'`). An agent runs it once the owner types go naming it (`hr-menu-option-ack-not-prod-write-auth`). Tracked on #12931. This pipeline does not dispatch it.
 
 - [ ] The rehearsal prints `live-read records=26`, `import-normalize count=26` and `verdict=PASS`, or refuses naming a live field with nothing written.
-- [ ] Before the first `redirects-dns` `rehearsal=false` dispatch, the owner records on #12931 either "observe the first PATCH against the loopback mock first" or "accept the first PATCH unobserved". Without that comment, a rehearsal PASS authorizes nothing further.
+- [ ] Before the first `redirects-dns` `rehearsal=false` dispatch, the owner posts a comment on #12931 whose first line is exactly `CF-MIGRATE-FIRST-PATCH: accept-unobserved` or `CF-MIGRATE-FIRST-PATCH: observe-first`. The runbook's read command must print `accept-unobserved` for the dispatch to be proposed; empty, `edited` or `observe-first` holds it. `accept-unobserved` includes the one-run risk that all 26 records are written with no canary.
 
 ## Domain Review
 
