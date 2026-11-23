@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="{{ description or site.description }}">
   <link rel="canonical" href="{{ site.url }}{{ page.url }}">
+  {%- if noindex %}
+  <meta name="robots" content="noindex, follow">
+  {%- endif %}
   <meta property="og:title" content="{{ title }}{% if title != site.name and ('Soleur' not in title) %} - {{ site.name }}{% endif %}">
   <meta property="og:description" content="{{ description or site.description }}">
   <meta property="og:url" content="{{ site.url }}{{ page.url }}">
