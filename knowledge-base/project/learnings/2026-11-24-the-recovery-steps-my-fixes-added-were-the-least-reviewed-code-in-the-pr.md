@@ -68,6 +68,7 @@ matters. Three questions find most of these defects:
 15. **A session summary said the PR body was written, but it was still the placeholder.** Recovery: the QA acceptance read caught it. **Prevention:** read remote state back rather than trusting a summary across a compaction.
 16. **`gh run view --log-failed` returned an error while the run was in progress.** Recovery: read it after completion. **Prevention:** check the run's status first.
 17. **Review seats cannot save report files.** Recovery: the lead extracted each final message to `/var/tmp`. **Prevention:** do not rely on a seat-written file; persist the report from its returned message.
+18. **The new `workflow_run` alert had no row in the merge-effect classifier, and only the full CI run on the ready head showed it.** Recovery: added a `ci-only` row with its reason. **Prevention:** when a PR adds a workflow file, run `plugins/soleur/test/merge-effect-class-parity.test.sh` before marking it ready.
 
 ## Tags
 
