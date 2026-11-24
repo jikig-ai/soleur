@@ -79,3 +79,13 @@
 
 - R24 disposition: take S1, S6 (via R17) and S8. Keep S2, S3, S4, S5 and S7: they are redundant checks or helpers on a production safety gate, and removing them saves about 10 lines of temporary code while re-anchoring mutation rows.
 - Rulings: `decision-challenges.md` rows Q1-Q11. Full implementation shapes and seat reports were saved to `/var/tmp/review-13019-*.md` for this session only.
+
+### Fix Rounds
+
+- Round 1 (`1f063556b9..1a221b9493`) closed R1-R24, R26-R28 by ruling. Five targeted seats then reviewed it (security, architecture, data-integrity, agent-native, test-design; shellcheck run by the lead).
+- Round 2 (`1a221b9493..c4d703ebb7`) closed that round's findings: 1 rated P1 and P2 by two seats (a failed read could restore a superseded first-write decision), 8 further P2s and the P3s.
+- Verification seat at `c4d703ebb7`: every P1 and P2 closed, no new P1 or P2, four new P3s. Three fixed in `bcdf3e5bda`.
+- Declined: printing the recreated record's full id. The runbook limits printed ids to 8 characters; the full id is read from the zone by name and type.
+- Left as stated residuals: U9 (no digest binds the graded plan to the applied plan), the unbounded init, forget and plan stages (Q3), and the `%` encoding of `_err` in `preapply-entrypoint-gate.sh` (pre-existing; a live ruleset value can add lines to an annotation, and no command runs).
+- Never exercised against a real API or runner: the restore and recreate blocks, the first PATCH, the alert's `workflow_run` trigger, and the `completedAt` read.
+- Final local suites at `bcdf3e5bda`: gate 344, job 285, runbook 165, completion 119, scope 110, fixture-relative 63, workflow parity 415, pipe guard green.
