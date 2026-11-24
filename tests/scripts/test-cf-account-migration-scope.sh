@@ -1121,6 +1121,8 @@ n="$(alert_run "$STEP" "$A_J:failure" "$R_J:skipped")"
 if [[ "$n" == 1 ]]; then ok "alert: a failed apply posts one comment"; else no "alert: a failed apply posted $n"; fi
 if grep -qF 'knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md' "$ALERT_STUB/comments" \
   && grep -qF 'Otherwise, if the run printed `applying=true`, run the local Verify block first' "$ALERT_STUB/comments" \
+  && grep -qF 'A `REFUSE <addr> differs from the live record` line also goes first to the wrong-value bullet' "$ALERT_STUB/comments" \
+  && grep -qF 'differs from the live record</code>' "$MIGRATE" \
   && grep -qF 'https://example.invalid/run/1' "$ALERT_STUB/comments"; then
   ok "alert: the comment carries the run, the runbook path and the otherwise branch"
 else no "alert: the comment lacks the run, the runbook path or the otherwise branch"; fi

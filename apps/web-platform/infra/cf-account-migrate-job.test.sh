@@ -1350,7 +1350,7 @@ GR_BASE='::error title=cf-account-migrate::the plan did not reach gate verdict=P
 RH_BASE='::error title=cf-account-migrate::the rehearsal did not reach gate verdict=PASS (see above); nothing was written'
 FG_TXT='The state forget is committed (backup uri above); runbook Halt: fix forward and re-dispatch (the forget then removes 0); the _PREV id restore no longer applies.'
 FK_TXT='The state forget is committed (backup uri above); the _PREV id restore no longer applies.'
-HALT_E='Edit no DNS record and re-rehearse.'
+HALT_E='Edit no DNS record and re-rehearse once; a second consecutive refusal stops for an owner decision.'
 chk_next() { # <dir> <reason> <exact annotation> <yes|no: a fix-forward or re-dispatch sentence belongs>
   local m
   refused_for "$1" "$2" || { WHY="rc:$(rc_of "$1")"; return 1; }

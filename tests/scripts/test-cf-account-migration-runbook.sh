@@ -31,7 +31,7 @@
 #   M5 reintroduce `verdict=authorized`                        -> R5
 #   M6-M7 an undeclared stage -> R4; M8 the B line's stop no longer fails -> R7;
 #   M9-M21 one per Halt guard -> R8..R13 (M12 mutates a copy of bootstrap.sh, not the runbook).
-#   M22-M59 one per guard of the executable blocks and the text contract -> R14..R18;
+#   M22-M60 one per guard of the executable blocks and the text contract -> R14..R18;
 #   T1-T12 remove each R18 sentence in turn -> R18.
 #
 # EXECUTABLE BLOCKS (review fix round 2). R14..R17 extract the first-PATCH read, the restore block, the
@@ -640,6 +640,12 @@ row_r17() {
   fresh; base_comment 1 owner "$t1" "$t1" "$rows"; echo admin >"$CASE/perm.owner"; dns_prep "$1" "cfam_dns_save '$SB/snap1'"
   got="$(run_case)"; want 'a second save' baseline=exists "$got" || return 1
   [[ ! -e "$CASE/gh.posted" ]] || { echo "    a saved baseline was overwritten" >&2; return 1; }
+  fresh; base_comment 1 owner "$t1" "$t1" 'api.soleur.ai CNAME x'; echo admin >"$CASE/perm.owner"; dns_prep "$1" "cfam_dns_save '$SB/snap'"
+  got="$(run_case)"; want 'an existing baseline with too few rows' baseline=incomplete "$got" || return 1
+  [[ ! -e "$CASE/gh.posted" ]] || { echo "    posted over a short baseline" >&2; return 1; }
+  fresh; base_comment 1 owner "$t1" "$t1" "$(cat "$SB/snap1")"; echo admin >"$CASE/perm.owner"; dns_prep "$1" "cfam_dns_save '$SB/snap'"
+  got="$(run_case)"; want 'an existing baseline holding a NO-VERDICT' baseline=incomplete "$got" || return 1
+  [[ ! -e "$CASE/gh.posted" ]] || { echo "    posted over a NO-VERDICT baseline" >&2; return 1; }
   fresh; dns_prep "$1" "cfam_dns_save '$SB/snap1'"
   got="$(run_case)"; want 'saving an incomplete snapshot' snapshot=incomplete "$got" || return 1
   [[ ! -e "$CASE/gh.posted" ]] || { echo "    an incomplete snapshot was posted" >&2; return 1; }
@@ -1027,6 +1033,11 @@ s{if \[\[ "\$Z" =~ \^\[0-9a-f\]\{32\}\$ && "\$ID" =~ \^\[0-9a-f\]\{32\}\$ && "\$
 PERL
   expect_red "M59 (the restore block runs with no pin)" row_r15 "$SB/m59.md"
 fi
+if mutate M60 "$SB/m60.md" <<'PERL'; then
+s{echo baseline=incomplete; return 1; fi}{:; fi}
+PERL
+  expect_red "M60 (an unusable existing baseline passes as saved)" row_r17 "$SB/m60.md"
+fi
 # T1..T12: removing any one sentence of the R18 text contract turns R18 red (matched across line wraps).
 i=0
 for k in "${R18_NEEDLES[@]}"; do
@@ -1037,7 +1048,7 @@ for k in "${R18_NEEDLES[@]}"; do
   expect_red "T$i (the R18 sentence is removed: ${k:0:40})" row_r18 "$f"
 done
 
-TOTAL=$((PASS + FAIL)); FLOOR=163
+TOTAL=$((PASS + FAIL)); FLOOR=165
 if [[ "$TOTAL" -lt "$FLOOR" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$TOTAL" "$FLOOR" >&2
   echo "Total: ${TOTAL} assertions, $((FAIL + 1)) failed"; exit 1

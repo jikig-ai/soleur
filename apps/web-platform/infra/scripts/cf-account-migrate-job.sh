@@ -51,7 +51,7 @@
 # are then the test (runbook Halt).
 # The message follows the evidence. apply-failed prints its fix-forward sentence only with no reread=
 # field or with reread=ok. gate-refused and rehearsal-refused name the runbook's wrong-value bullet when
-# the gate output holds a `differs from the live record` line, say `Edit no DNS record and re-rehearse.`
+# the gate output holds a `differs from the live record` line, say `Edit no DNS record and re-rehearse once`
 # when every REFUSE line is `live record unreadable`, and keep their usual text for any other refusal.
 #
 # IMPORT-NORMALIZE (contract, ADR-329). Every redirects-dns plan reads all pinned DNS records after the
@@ -540,7 +540,7 @@ gate_refusal_rc() {
 gate_next() {
   case "$1" in
     3) printf '%s Runbook Halt: A DNS record may hold a wrong value.' "$3" ;;
-    4) printf '%s Edit no DNS record and re-rehearse.' "$3" ;;
+    4) printf '%s Edit no DNS record and re-rehearse once; a second consecutive refusal stops for an owner decision.' "$3" ;;
     *) printf '%s' "$2" ;;
   esac
 }

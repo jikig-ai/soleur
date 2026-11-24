@@ -174,7 +174,8 @@ jobs:
             If a <code>reread=</code> value in the log contains <code>differs=</code>, go first to the runbook Halt
             bullet "A DNS record may hold a wrong value", which puts a failing <code>app-health</code> first and then
             restores the record. A <code>reread=unreadable=</code> value with no <code>differs=</code> goes to
-            "No completed re-read" and edits no record. Otherwise, if the run printed
+            "No completed re-read" and edits no record. A <code>REFUSE &lt;addr&gt; differs from the live record</code>
+            line also goes first to the wrong-value bullet. Otherwise, if the run printed
             <code>applying=true</code>, run the local Verify block first. Whether the state forget is committed is a cross-run fact, not a marker in this run:
             check the backup-uri comment on #12931 and any <code>pre-cf-account-migration-*</code> object under
             the R2 backups prefix. See the runbook Halt section,

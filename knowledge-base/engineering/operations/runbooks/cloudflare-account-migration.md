@@ -498,6 +498,7 @@ cfam_dns_baseline() {
 # The one write. It posts only when no baseline exists and the snapshot file is complete.
 cfam_dns_save() {
   local have; have="$(cfam_dns_baseline)"
+  if [[ "$have" != baseline=* ]] && { [ "$(grep -c . <<<"$have")" -ne 19 ] || grep -q 'NO-VERDICT' <<<"$have"; }; then echo baseline=incomplete; return 1; fi
   case "$have" in
     baseline=none) ;;
     baseline=*) printf '%s\n' "$have"; return 1 ;;
@@ -520,7 +521,7 @@ Take the first row that matches. A real difference wins over `NO-VERDICT`.
 |---|---|---|
 | After the first rehearsal PASS, before the first `rehearsal=false` | `baseline=saved` or `baseline=exists` | Proceed to the dispatch |
 | Same | `snapshot=incomplete` | Retry from the repository root; do not dispatch without a saved baseline |
-| Same | `baseline=unreadable`, `baseline=edited` or `baseline=unsaved` | Stop for an owner decision before the dispatch |
+| Same | `baseline=unreadable`, `baseline=edited`, `baseline=incomplete` or `baseline=unsaved` | Stop for an owner decision before the dispatch |
 | At least 360 s after the apply job's `completedAt` | `cfam_dns_baseline` prints `baseline=none` or `baseline=edited`: the baseline is lost | A later snapshot would hold post-write answers, so save nothing. Post `dns-answers=unverified baseline-lost`, make no edit and stop for an owner decision |
 | Same | `baseline=unreadable` | Retry 3 times, 60 s apart. If it persists, stop for an owner decision |
 | Same | A row holds a real answer that differs from the baseline, including `NXDOMAIN`, whether or not another row is `NO-VERDICT` | Re-check twice, 60 s apart. If it persists, `Operator-authorizes:` a rehearsal. A refusal naming a record goes to the wrong-value bullet. If the rehearsal passes, make no edit and stop for an owner decision |
@@ -906,7 +907,8 @@ validation (Load Balancing #12983, DNSSEC #12982).
     fi
     ```
 
-    On `readback=ok`, post the address and `new_id` on #12931 and stop for an owner decision. Any other output means the
+    On `readback=ok`, post the address and `new_id` on #12931 and stop for an owner decision. `new_id` is the first 8
+    characters, per this runbook's id rule; the reviewed PR reads the full id from the zone by name and type. Any other output means the
     record is not confirmed: do not retry the POST, post the address and the output on #12931, and stop for an owner
     decision. No `terraform state rm`, `terraform import`, state push or lone literal edit: the path back into state
     needs a reviewed PR and a CTO ruling.
