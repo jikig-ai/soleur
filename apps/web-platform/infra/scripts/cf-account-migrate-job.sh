@@ -49,6 +49,10 @@
 # `applying=true` is printed just before terraform apply. RESIDUAL: a cancel or a timeout-minutes
 # kill prints no refuse line at all; the log markers backup=uploaded, applying=true and applied=true
 # are then the test (runbook Halt).
+# The message follows the evidence. apply-failed prints its fix-forward sentence only with no reread=
+# field or with reread=ok. gate-refused and rehearsal-refused name the runbook's wrong-value bullet when
+# the gate output holds a `differs from the live record` line, say `Edit no DNS record and re-rehearse.`
+# when every REFUSE line is `live record unreadable`, and keep their usual text for any other refusal.
 #
 # IMPORT-NORMALIZE (contract, ADR-329). Every redirects-dns plan reads all pinned DNS records after the
 # plan and before the phase gate, in a rehearsal and an apply, so the gate can admit the one provider
@@ -516,8 +520,34 @@ state_migrate() { # [--rehearsal --backup-dir <dir>]; runs in the current direct
     --new-zone "$CFAM_NEW_ZONE_ID" --new-account "$CFAM_NEW_ACCOUNT_ID" "$@"
 }
 
+# gate_refusal_rc <gate output>: plan_and_gate's code for a refused plan. 3 when a REFUSE line says a
+# record differs from its live read, 4 when every REFUSE line is `live record unreadable`, else 1.
+gate_refusal_rc() {
+  local l n=0 u=0 d=0
+  while IFS= read -r l; do
+    [[ "$l" == "REFUSE "* ]] || continue
+    n=$((n + 1))
+    if [[ "$l" == *" differs from the live record"* ]]; then d=1
+    elif [[ "$l" == *" live record unreadable" ]]; then u=$((u + 1)); fi
+  done <<<"$1"
+  ((d == 0)) || return 3
+  ((n == 0 || u != n)) || return 4
+  return 1
+}
+
+# gate_next <plan_and_gate rc> <text for any other refusal> <lead-in for rc 3 or 4>: how a gate
+# refusal's message ends. Neither 3 nor 4 carries a fix-forward or re-dispatch sentence.
+gate_next() {
+  case "$1" in
+    3) printf '%s Runbook Halt: A DNS record may hold a wrong value.' "$3" ;;
+    4) printf '%s Edit no DNS record and re-rehearse.' "$3" ;;
+    *) printf '%s' "$2" ;;
+  esac
+}
+
 # plan_and_gate: in the current directory. Writes $W/tfplan; returns 0 only on phase-gate
-# verdict=PASS AND an entrypoint-gate PASS; 2 when the entrypoint gate refused, 1 otherwise.
+# verdict=PASS AND an entrypoint-gate PASS; 2 when the entrypoint gate refused; 1, 3 or 4 when the
+# phase gate refused (gate_refusal_rc) or a step before it failed (1).
 plan_and_gate() {
   local rc out live="" n=0 tok gc=0
   terraform show -json >"$W/pre-plan-state.json" 2>/dev/null || { printf '::error::terraform show -json (pre-plan state) failed\n'; return 1; }
@@ -543,7 +573,9 @@ plan_and_gate() {
   fi
   printf '%s\n' "$out"
   summary "$(grep -E '^cf_account_migrate_gate: phase=' <<<"$out" | tail -n1)"
-  [[ "$rc" -eq 0 ]] && grep -qE "^cf_account_migrate_gate: phase=${MIGRATE_PHASE} verdict=PASS " <<<"$out" || return 1
+  if [[ "$rc" -ne 0 ]] || ! grep -qE "^cf_account_migrate_gate: phase=${MIGRATE_PHASE} verdict=PASS " <<<"$out"; then
+    gate_refusal_rc "$out"; return
+  fi
   # The set the apply compares with expected_in_state_updates; a rehearsal prints it to copy from.
   ADMITTED_ISU="$(sed -n 's/^cf_account_migrate_gate: in-state-update //p' <<<"$out" | LC_ALL=C sort -u)"
   printf '%s in-state-updates count=%s admitted=%s\n' "$P" "$(grep -c . <<<"$ADMITTED_ISU")" "$(isu_csv "$ADMITTED_ISU")"
@@ -595,7 +627,7 @@ run_rehearsal() {
   [[ "$b_after" == "$b_before" ]] || refuse backup-written "a new object appeared under $CFAM_BACKUP_PREFIX during a rehearsal"
   printf '%s rehearsal remote_serial=%s serial_unchanged=true backups_unchanged=true\n' "$P" "$before"
   [[ "$rc" -ne 2 ]] || refuse entrypoint-gate-refused "the whole-list entrypoint gate refused (a live phase entrypoint is populated, or its emptiness could not be proven); see the ::error lines above. Nothing was written."
-  [[ "$rc" -eq 0 ]] || refuse rehearsal-refused "the rehearsal did not reach gate verdict=PASS (see above); nothing was written"
+  [[ "$rc" -eq 0 ]] || refuse rehearsal-refused "the rehearsal did not reach gate verdict=PASS (see above); nothing was written$(gate_next "$rc" "" ".")"
   printf '%s phase=%s mode=rehearsal verdict=PASS applied=false\n' "$P" "$MIGRATE_PHASE"
   summary "verdict=PASS applied=false"
 }
@@ -699,7 +731,7 @@ partial_apply_verdict() {
 }
 
 run_apply() {
-  local rc g fg="" fx="" vf="" rr="" msg remaining tok
+  local rc g fg="" fk="" fx="" vf="" rr="" msg remaining tok
   local -a bound=()
   cd "$ROOT" || refuse setup "cannot cd to the root"
   if [[ "$MIGRATE_PHASE" == redirects-dns ]]; then
@@ -720,11 +752,12 @@ run_apply() {
     # _PREV id restore no longer applies. forget=committed is the field a reader of the verdict line
     # or the summary branches on; the prose says what to do.
     fg=" The state forget is committed (backup uri above); runbook Halt: fix forward and re-dispatch (the forget then removes 0); the _PREV id restore no longer applies."
+    fk=" The state forget is committed (backup uri above); the _PREV id restore no longer applies."
     fx="forget=committed"
   fi
   plan_and_gate; rc=$?
   [[ "$rc" -ne 2 ]] || refuse entrypoint-gate-refused "the whole-list entrypoint gate refused (a live phase entrypoint is populated, or its emptiness could not be proven); adopt it with the printed import block first. Nothing was applied.${fg}" "$fx"
-  [[ "$rc" -eq 0 ]] || refuse gate-refused "the plan did not reach gate verdict=PASS; nothing was applied.${fg}" "$fx"
+  [[ "$rc" -eq 0 ]] || refuse gate-refused "the plan did not reach gate verdict=PASS; nothing was applied.$(gate_next "$rc" "$fg" "$fk")" "$fx"
   check_expected_isu "$fg" "$fx"
   # One INT, never a KILL, and --foreground so it reaches terraform once: a second INT makes it exit
   # at once and can lose in-flight creates from state. Keyed on an empty replace list, not the phase
@@ -750,6 +783,10 @@ run_apply() {
     partial_apply_verdict
     [[ -z "$rr" ]] || msg+=" Re-read of the DNS records: ${REREAD}."
     msg+=" Probe of the partial apply (polled on a 60 s deadline): ${vf}.$(halt_pointer "$rr" "$vf")"
+    # A re-read that did not come back clean routes to its own Halt bullet, not to a re-dispatch.
+    if [[ -n "$rr" && "$rr" != reread=ok ]]; then
+      refuse apply-failed "$msg" "$(join_fields "$fx" "$rr" "$vf")"
+    fi
     msg+=" Fix forward (a reviewed PR if the cause is in code), then re-dispatch the same phase:"
     [[ "$MIGRATE_PHASE" != redirects-dns ]] || msg+=" the forget then removes 0 (cf-state-migrate verdict=ok removed=0), a record whose PATCH failed plans a no-op if live still matches, a record the apply never reached still plans the admitted import-normalize update, and"
     refuse apply-failed "$msg only the remainder is planned and gated." "$(join_fields "$fx" "$rr" "$vf")"

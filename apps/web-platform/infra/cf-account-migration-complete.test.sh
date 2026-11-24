@@ -326,6 +326,21 @@ row_missing_refused() {
   [[ $RC -eq 1 ]] && has "$WORK/a16" "missing cloudflare_record.spf_root"
 }
 check "A16b a removed required address (row form, for the mutation table) refuses" row_missing_refused "$SCRIPT"
+# A38: EVERY import-class record, from the script's own list (pinned at 26), nulled one at a time.
+row_unnorm_every_record() {
+  local recs a
+  recs="$(env -i PATH="$(dirname "$REAL_JQ"):/usr/bin:/bin" HOME="$WORK" TMPDIR="$WORK" \
+    bash -c 'source "$1"; _cfam_load_gate || exit $?; cfam_required_records' _ "$1" | jq -r '.[]')" || return 1
+  [[ "$(grep -c . <<<"$recs")" -eq 26 ]] || return 1
+  while IFS= read -r a; do
+    jq --arg t "${a%%.*}" --arg n "${a#*.}" \
+      '(.resources[] | select(.type == $t and .name == $n and (.module // "") == "") | .instances[0].attributes.content) = null' \
+      "$COMPLETE" > "$WORK/a38.json"
+    run_eval "$1" "$WORK/a38" "$WORK/a38.json"
+    [[ $RC -eq 1 ]] && grep -qE -- "unnormalized ${a//./\\.}( |\$)" "$WORK/a38.out" || return 1
+  done <<<"$recs"
+}
+check "A38 each of the 26 import-class records, with null content, refuses as unnormalized and is named" row_unnorm_every_record "$SCRIPT"
 # A17: an address present with ZERO instances is not "in state".
 mut_state "$WORK/a17.json" '(.resources[] | select(.type=="cloudflare_record" and .name=="dmarc") | .instances) = []'
 run_eval "$SCRIPT" "$WORK/a17" "$WORK/a17.json"
@@ -592,7 +607,9 @@ mut_row "non-string content accepted"             row_unnorm_nonstring         '
 mut_row "content check leaves the record list"    row_unnorm_out_of_scope      's/select\(\$recs \| index\(\$a\)\)/select(true)/'
 mut_row "record list keeps non-record imports"    row_unnorm_out_of_scope      's/ and \(\.key \| startswith\("cloudflare_record\."\)\)//'
 mut_row "record list keeps non-import classes"    row_unnorm_non_import_class  's/select\(\.value == "import" and /select(true and /'
-mut_row "record-list failure ignored"             row_recs_fail                's/recs="\$\(cfam_required_records\)" \|\| \{[^}]*\}/recs="$(cfam_required_records)" || recs="[]"/'
+mut_row "record list narrowed to two records"     row_unnorm_every_record      's/select\(\.value == "import" and \(\.key \| startswith\("cloudflare_record\."\)\)\)/select(.key == "cloudflare_record.www" or .key == "cloudflare_record.dkim_resend")/'
+mut_row "content check reads two records only"    row_unnorm_every_record      's/select\(\$recs \| index\(\$a\)\)/select($recs[:2] | index($a))/'
+mut_row "record-list failure ignored"            row_recs_fail                's/recs="\$\(cfam_required_records\)" \|\| \{[^}]*\}/recs="$(cfam_required_records)" || recs="[]"/'
 mut_row "empty record list accepted"              row_recs_empty               's/type == "array" and length > 0/true/'
 mut_row "non-array record list accepted"          row_recs_not_array           's/type == "array" and length > 0/length > 0/'
 mut_row "record list read in web2-replace"        row_web2_recs_fail           's/if \[\[ "\$mode" == full \]\]; then/if true; then/'
@@ -605,8 +622,8 @@ if (( PASS + FAIL != CASES )); then
   printf 'CONSERVATION FAILED: PASS(%s)+FAIL(%s) != CASES(%s) — a verdict was dropped or the helpers were neutered.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-# 116 rows ran when measured (2026-11-23, Q6); C14 may skip on a host whose aws sits beside jq.
-MIN_ASSERTIONS=115
+# 119 rows ran when measured (2026-11-24); C14 may skip on a host whose aws sits beside jq.
+MIN_ASSERTIONS=118
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s — rows were skipped, truncated, or the assertion machinery was neutered.\n' "$TOTAL" "$MIN_ASSERTIONS" >&2

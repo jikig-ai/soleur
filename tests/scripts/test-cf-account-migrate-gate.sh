@@ -1258,17 +1258,26 @@ GATE="$TMP/q-u3-gate.sh" gate_mutate_and_check "M-U3: dropping the record-change
 
 # Q5, U5: a pinned no-op carries the pin on both sides.
 Q_OTHER="ffffffffffffffffffffffffffffffff"; NOOP_PIN="REFUSE $NR is a no-op on a record id other than its pin"
-for side in both before after; do
-  case "$side" in
-    both) qf=".before.id = \"$Q_OTHER\" | .after.id = \"$Q_OTHER\"" ;;
-    *) qf=".$side.id = \"$Q_OTHER\"" ;;
-  esac
-  jq -c "$(nf "$NR") |= ($qf)" "$TMP/n-mixed.json" > "$TMP/q-noop-$side.json"
-  check "Q5-U5: a no-op whose $side id is off the pin is refused" 1 "$NOOP_PIN" redirects-dns "$TMP/q-noop-$side.json" "$TMP/norm-state.json" "$NLIVE"
-done
+noop_side_rows() { # <base plan> <file tag> <label> <state>
+  local side qf
+  for side in both before after; do
+    case "$side" in
+      both) qf=".before.id = \"$Q_OTHER\" | .after.id = \"$Q_OTHER\"" ;;
+      *) qf=".$side.id = \"$Q_OTHER\"" ;;
+    esac
+    jq -c "$(nf "$NR") |= ($qf)" "$1" > "$TMP/q-noop-$2$side.json"
+    check "Q5-U5: $3 no-op whose $side id is off the pin is refused" 1 "$NOOP_PIN" redirects-dns "$TMP/q-noop-$2$side.json" "$4" "$NLIVE"
+  done
+}
+noop_side_rows "$TMP/n-mixed.json" "" "a" "$TMP/norm-state.json"
+# The first dispatch's shape: `importing` set, before equal to after, no state entry.
+jq -c "$(nf "$NR") |= (.actions = [\"no-op\"] | .before = .after)" "$NORM" > "$TMP/q-noop-i.json"
+check "Q5-U5i: an import-shaped no-op on its pin passes" 0 "verdict=PASS" redirects-dns "$TMP/q-noop-i.json" "" "$NLIVE"
+noop_side_rows "$TMP/q-noop-i.json" "i-" "an import-shaped" ""
 # shellcheck disable=SC2016 # sed expressions match literal gate text
 {
   gm "M-U5: dropping the no-op binding admits it" 's/noop_id_ok: (\.change\.actions != \["no-op"\]/noop_id_ok: (true/' cf_account_migrate_gate redirects-dns "$TMP/q-noop-both.json" "$TMP/norm-state.json" "$NLIVE"
+  gm "M-U5-import: exempting a planned import admits an off-pin no-op" 's/noop_id_ok: (\.change\.actions != \["no-op"\]/noop_id_ok: (.change.actions != ["no-op"] or .change.importing != null/' cf_account_migrate_gate redirects-dns "$TMP/q-noop-i-both.json" "" "$NLIVE"
   gm "M-U5-before: dropping the before clause admits an off-pin before" 's/or ((\.change\.before|type) == "object" and \.change\.before\.id == \$pin/or (true/' cf_account_migrate_gate redirects-dns "$TMP/q-noop-before.json" "$TMP/norm-state.json" "$NLIVE"
   gm "M-U5-after: dropping the after clause admits an off-pin after" 's/and (\.change\.after|type) == "object" and \.change\.after\.id == \$pin))/))/' cf_account_migrate_gate redirects-dns "$TMP/q-noop-after.json" "$TMP/norm-state.json" "$NLIVE"
 }
@@ -1284,6 +1293,8 @@ jq -c --arg r "$NR" --arg z "$OZ" '.[$r].result.zone_id = $z' "$NLIVE" > "$TMP/q
 jq -c --arg r "$NR" 'del(.[$r].result.zone_id)' "$NLIVE" > "$TMP/q-nozone.json"
 only_line "Q5-U7a: a read of another record id is unreadable" "$UNREAD" redirects-dns "$NORM" "" "$TMP/q-id.json"
 only_line "Q5-U7b: a read from another zone is unreadable" "$UNREAD" redirects-dns "$NORM" "" "$TMP/q-zone.json"
+jq -c --arg r "$NR" 'del(.[$r].result.id)' "$NLIVE" > "$TMP/q-noid.json"
+only_line "Q5-U7e: a read with no id is unreadable (unlike zone_id, it may not be absent)" "$UNREAD" redirects-dns "$NORM" "" "$TMP/q-noid.json"
 check "Q5-U7c: a read with no zone_id still passes" 0 "verdict=PASS" redirects-dns "$NORM" "" "$TMP/q-nozone.json"
 for qf in id zone; do
   ld_q="$(cf_account_migrate_live_diff redirects-dns "$NORM" "$TMP/q-$qf.json")"
@@ -1293,6 +1304,7 @@ done
 # shellcheck disable=SC2016 # sed expressions match literal gate text
 {
   gm "M-U7-id: dropping the id clause admits another record's read" '/^    or \$entry\.result\.id != \$pin$/d' cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/q-id.json"
+  gm "M-U7-noid: filling a missing id with the pin admits the read" 's/^    or \$entry\.result\.id != \$pin$/    or ($entry.result.id \/\/ $pin) != $pin/' cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/q-noid.json"
   gm "M-U7-zone: dropping the zone clause admits another zone's read" 's/or (\$entry\.result\.zone_id != null and \$entry\.result\.zone_id != \$zone) then/then/' cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/q-zone.json"
   gm_refuses "M-U7-nozone: requiring a zone_id refuses a read that omits it" 's/(\$entry\.result\.zone_id != null and \$entry\.result\.zone_id != \$zone)/($entry.result.zone_id != $zone)/' redirects-dns "$NORM" "" "$TMP/q-nozone.json"
 }
@@ -1383,6 +1395,6 @@ gm_refuses "M-F11-tags: an order-sensitive compare refuses the reorder" 's/(\$r\
 
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 337 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 337)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 344 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 344)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

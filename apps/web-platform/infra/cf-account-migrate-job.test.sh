@@ -417,7 +417,7 @@ new_case() {
 }
 
 run_job() { # <dir> <script>; <dir>/env.extra holds extra KEY=VALUE lines (later wins)
-  local d="$1" extra=() t0=$SECONDS
+  local d="$1" extra=()
   if [[ -f "$d/env.extra" ]]; then mapfile -t extra <"$d/env.extra"; fi
   env -u TF_VAR_cf_zone_id -u TF_VAR_cf_account_id -u TF_LOG -u TF_LOG_PATH -u TF_LOG_CORE -u TF_LOG_PROVIDER \
     PATH="$SBX/bin:$PATH" STUB_DIR="$d" STUB_GATED="$GATED_FILE" STUB_NZ="$NZ" \
@@ -428,7 +428,6 @@ run_job() { # <dir> <script>; <dir>/env.extra holds extra KEY=VALUE lines (later
     ${extra[@]+"${extra[@]}"} bash "$2" >"$d/out.txt" 2>"$d/err.txt"
   printf '%s' "$?" >"$d/rc"
   printf '%s' "$2" >"$d/script"
-  printf '%s' "$((SECONDS - t0))" >"$d/elapsed"
 }
 
 rc_of() { cat "$1/rc"; }
@@ -1187,6 +1186,28 @@ setup_tok_plan() { new_case "tokplan-$1" redirects-dns false; printf '1' >"$LAST
 setup_tok_apply() { new_case "tokapply-$1" redirects-dns false; printf '2' >"$LAST_D/od.fail"; printf 'PATH=%s\n' "$SBX/bin-od:$SBX/bin:$PATH" >"$LAST_D/env.extra"; }
 setup_noop_clean() { new_case "noop-$1" redirects-dns false; }
 setup_noop_differs() { new_case "noopd-$1" redirects-dns false; printf '.result.content = "SYNTH-DRIFT"' >"$LAST_D/recfilter.pre.$REC_ID"; }
+# Near the floor on both sides, still far enough from 800 s for the clock to move during the run.
+setup_norm_s760() { norm_case "s760-$1" false; printf 'SECONDS=760\n' >"$LAST_D/env.extra"; }
+setup_norm_s840() { norm_case "s840-$1" false; printf 'SECONDS=840\n' >"$LAST_D/env.extra"; }
+# Output an INT cut mid-line: no trailing newline.
+setup_tf_cut() { new_case "tfcut-$1" redirects-dns false; printf 'Still creating' >"$LAST_D/tfout"; }
+setup_af_plain() { new_case "afplain-$1" redirects-dns false; printf '1' >"$LAST_D/mode.apply"; }
+# Gate-time reads: one record differs, one is unreadable, both, or unreadable beside another REFUSE.
+gr_differs() { printf '.result.ttl = 300' >"$LAST_D/recfilter.pre.$REC_ID"; }
+gr_unread() { printf '500' >"$LAST_D/reccode.pre.$REC_ID"; }
+gr_mixed() { gr_differs; printf '500' >"$LAST_D/reccode.pre.$REC2_ID"; }
+gr_other() {
+  gr_unread
+  jq --arg a "$REC2_ADDR" '(.resource_changes[] | select(.address == $a) | .change.after.ttl) = 300' \
+    "$LAST_D/plan.json" >"$LAST_D/p" && mv "$LAST_D/p" "$LAST_D/plan.json"
+}
+setup_gr_differs() { norm_case "grd-$1" false; gr_differs; }
+setup_gr_unread() { norm_case "gru-$1" false; gr_unread; }
+setup_gr_mixed() { norm_case "grm-$1" false; gr_mixed; }
+setup_gr_other() { norm_case "gro-$1" false; gr_other; }
+setup_rh_differs() { norm_case "rhd-$1" true; gr_differs; }
+setup_rh_unread() { norm_case "rhu-$1" true; gr_unread; }
+setup_rh_other() { norm_case "rho-$1" true; gr_other; }
 
 chk_norm_rehearsal() {
   [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
@@ -1276,6 +1297,12 @@ chk_norm_s700() { # Q2: inside the floor the apply runs, with what is left of th
   n="$(apply_bound "$1")"
   [[ "$n" =~ ^[0-9]+$ && "$n" -ge 300 && "$n" -le 400 ]] || { WHY="bound:$n"; return 1; }
 }
+chk_norm_s760() { # P3-3: close above the floor the apply still runs, on what is left of the budget
+  local n
+  [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
+  n="$(apply_bound "$1")"
+  [[ "$n" =~ ^[0-9]+$ && "$n" -ge 300 && "$n" -le 340 ]] || { WHY="bound:$n"; return 1; }
+}
 # Halt routing (R1, R4, R17). <route> holds W (wrong value), N (no completed re-read), F (verify-failed).
 HALT_W='Runbook Halt: A DNS record may hold a wrong value.'
 HALT_N='Runbook Halt: No completed re-read.'
@@ -1304,20 +1331,55 @@ chk_h_af_mixed() { chk_halt "$1" apply-failed "forget=committed reread=differs=$
 chk_h_af_diff_f() { chk_halt "$1" apply-failed "forget=committed reread=differs=$REC_ADDR:ttl failing=app-health=>526" WF; }
 chk_h_af_unread_f() { chk_halt "$1" apply-failed "forget=committed reread=unreadable=$REC_ADDR failing=app-health=>526" NF; }
 chk_h_af_ok() { chk_halt "$1" apply-failed "forget=committed reread=ok verify=ok" ""; }
+# Architecture F1: the sentence after the Halt pointer follows the same evidence.
+AF_TAIL='Fix forward (a reviewed PR if the cause is in code), then re-dispatch the same phase:'
+chk_af_tail() { # <dir> <fields> <route> <yes|no: the fix-forward sentence belongs>
+  local m
+  chk_halt "$1" apply-failed "$2" "$3" || return 1
+  m="$(grep '^::error title=cf-account-migrate::' "$1/out.txt")"
+  if [[ "$4" == yes ]]; then [[ "$m" == *"$AF_TAIL"* ]] || { WHY="no-tail"; return 1; }; return 0; fi
+  [[ "${m,,}" != *"fix forward"* ]] || { WHY="has-fix-forward"; return 1; }
+  [[ "$m" != *re-dispatch* ]] || { WHY="has-re-dispatch"; return 1; }
+}
+chk_t_none() { chk_af_tail "$1" "forget=committed verify=ok" "" yes; }
+chk_t_ok() { chk_af_tail "$1" "forget=committed reread=ok verify=ok" "" yes; }
+chk_t_diff() { chk_af_tail "$1" "forget=committed reread=differs=$REC_ADDR:ttl verify=ok" W no; }
+chk_t_unread() { chk_af_tail "$1" "forget=committed reread=unreadable=$REC_ADDR verify=ok" N no; }
+chk_t_mixed() { chk_af_tail "$1" "forget=committed reread=differs=$REC_ADDR:ttl;unreadable=$REC2_ADDR verify=ok" W no; }
+GR_BASE='::error title=cf-account-migrate::the plan did not reach gate verdict=PASS; nothing was applied.'
+RH_BASE='::error title=cf-account-migrate::the rehearsal did not reach gate verdict=PASS (see above); nothing was written'
+FG_TXT='The state forget is committed (backup uri above); runbook Halt: fix forward and re-dispatch (the forget then removes 0); the _PREV id restore no longer applies.'
+FK_TXT='The state forget is committed (backup uri above); the _PREV id restore no longer applies.'
+HALT_E='Edit no DNS record and re-rehearse.'
+chk_next() { # <dir> <reason> <exact annotation> <yes|no: a fix-forward or re-dispatch sentence belongs>
+  local m
+  refused_for "$1" "$2" || { WHY="rc:$(rc_of "$1")"; return 1; }
+  m="$(grep '^::error title=cf-account-migrate::' "$1/out.txt")"
+  if [[ "$4" == no ]]; then
+    [[ "${m,,}" != *"fix forward"* ]] || { WHY="has-fix-forward"; return 1; }
+    [[ "$m" != *re-dispatch* ]] || { WHY="has-re-dispatch"; return 1; }
+  fi
+  [[ "$m" == "$3" ]] || { WHY="msg"; return 1; }
+}
+chk_gr_differs() { chk_next "$1" gate-refused "$GR_BASE $FK_TXT $HALT_W" no && chk_forget_committed "$1" gate-refused; }
+chk_gr_unread() { chk_next "$1" gate-refused "$GR_BASE $FK_TXT $HALT_E" no && chk_forget_committed "$1" gate-refused; }
+chk_gr_today() { chk_next "$1" gate-refused "$GR_BASE $FG_TXT" yes && chk_forget_committed "$1" gate-refused; }
+chk_rh_differs() { chk_next "$1" rehearsal-refused "$RH_BASE. $HALT_W" no; }
+chk_rh_unread() { chk_next "$1" rehearsal-refused "$RH_BASE. $HALT_E" no; }
+chk_rh_today() { chk_next "$1" rehearsal-refused "$RH_BASE" yes; }
 chk_norm_grepfail() { # R16: a real grep failure on the count refuses instead of disabling the re-read
   chk_gate_refused_noapply "$1" || return 1
   grep -qF 'cannot count the import-normalize records (grep exit 2)' "$1/out.txt" || { WHY="no-count-error"; return 1; }
 }
-chk_norm_stall() { # F7: a Doppler stall is cut by the outer timeout and reads as unreadable
-  local e
+chk_norm_stall() { # F7: the read's `doppler run` starts under the outer timeout, so a stall reads as unreadable
   grep -q '^doppler-stall$' "$1/calls.log" || { WHY="no-stall"; return 1; }
-  e="$(cat "$1/elapsed")"
-  [[ "$e" -lt 30 ]] || { WHY="slow:$e"; return 1; }
+  grep -qE '^-k 5 [0-9]+ doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- env ' "$1/timeout.log" 2>/dev/null \
+    || { WHY="no-outer-timeout"; return 1; }
   chk_gate_refused_noapply "$1" || return 1
   grep -qF "REFUSE $REC_ADDR live record unreadable" "$1/out.txt" || { WHY="no-refuse-line"; return 1; }
 }
 # Q7: both terraform pipelines sit inside a matching token window, with every line prefixed.
-chk_tf_window() {
+chk_tf_windows() {
   local v
   [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
   if LC_ALL=C grep -q $'\r' "$1/out.txt"; then WHY="cr"; return 1; fi
@@ -1328,6 +1390,13 @@ chk_tf_window() {
     !open && /^tf\| / { bad = "outside" }
     END { if (open) bad = "unclosed"; print (bad != "" ? bad : "ok:" n) }' "$1/out.txt")"
   [[ "$v" == ok:2 ]] || { WHY="window:$v"; return 1; }
+}
+chk_tf_cut() { # P3-2: output cut mid-line keeps its text, and the closer still lands on its own line
+  chk_tf_windows "$1" || return 1
+  [[ "$(grep -cxF 'tf| Still creating' "$1/out.txt")" -eq 2 ]] || { WHY="no-cut-line"; return 1; }
+}
+chk_tf_window() {
+  chk_tf_windows "$1" || return 1
   [[ "$(grep -cxF 'tf| x ::add-mask::y' "$1/out.txt")" -eq 2 ]] || { WHY="no-mask-line"; return 1; }
   [[ "$(grep -cxF 'tf| ##[error]forged' "$1/out.txt")" -eq 2 ]] || { WHY="no-error-line"; return 1; }
   if grep -qE '^(::add-mask::|##\[error\])' "$1/out.txt"; then WHY="command-opener"; return 1; fi
@@ -1442,6 +1511,8 @@ norm_row "N20 (Q2) SECONDS=900 refuses apply-budget-exhausted before applying=tr
 norm_row "N21 (Q2) SECONDS=700 runs with a bound of at most 400" setup_norm_s700 chk_norm_s700
 norm_row "N22 (F6) SECONDS=1000 is inside the floor's refusal, so no apply starts with 100 s left" setup_norm_s1000 chk_norm_nobudget
 norm_row "N23 (R21) a zone-rest exit 124 is not called the INT: that apply has no bound" setup_zrest_124 chk_zrest_124
+norm_row "N24 (P3-3) SECONDS=760 still runs, with a bound of 300 to 340" setup_norm_s760 chk_norm_s760
+norm_row "N25 (P3-3) SECONDS=840 refuses apply-budget-exhausted before applying=true" setup_norm_s840 chk_norm_nobudget
 norm_row "H1 (R1) reread-failed, differs: the wrong-value bullet only" setup_norm_differs chk_h_rr_diff
 norm_row "H2 (R1) reread-failed, unreadable only: No completed re-read only" setup_norm_unread chk_h_rr_unread
 norm_row "H3 (R17) reread-failed, mixed: one field, routed as a difference" setup_norm_mixed chk_h_rr_mixed
@@ -1453,8 +1524,22 @@ norm_row "H8 (R17) apply-failed, mixed: one field, routed as a difference" setup
 norm_row "H9 apply-failed, differs with failing=: both sentences" setup_norm_af_differs_failing chk_h_af_diff_f
 norm_row "H10 apply-failed, unreadable with failing=: both sentences" setup_norm_af_unread_failing chk_h_af_unread_f
 norm_row "H11 apply-failed, reread=ok verify=ok: no Halt pointer" setup_norm_af chk_h_af_ok
+norm_row "T1 (F1) apply-failed with no reread= field keeps the fix-forward sentence" setup_af_plain chk_t_none
+norm_row "T2 (F1) apply-failed, reread=ok keeps the fix-forward sentence" setup_norm_af chk_t_ok
+norm_row "T3 (F1) apply-failed, differs: no fix-forward or re-dispatch sentence" setup_norm_af_differs chk_t_diff
+norm_row "T4 (F1) apply-failed, unreadable: no fix-forward or re-dispatch sentence" setup_norm_af_unread chk_t_unread
+norm_row "T5 (F1) apply-failed, mixed: no fix-forward or re-dispatch sentence" setup_norm_af_mixed chk_t_mixed
+norm_row "T6 (F1) gate-refused, differs: the wrong-value bullet, no re-dispatch" setup_gr_differs chk_gr_differs
+norm_row "T7 (F1) gate-refused, unreadable only: edit nothing and re-rehearse" setup_gr_unread chk_gr_unread
+norm_row "T8 (F1) gate-refused, differs and unreadable: the wrong-value bullet" setup_gr_mixed chk_gr_differs
+norm_row "T9 (F1) gate-refused, unreadable beside another REFUSE keeps today's text" setup_gr_other chk_gr_today
+norm_row "T10 (F1) gate-refused with no live-read line keeps today's text" setup_refuse_apply chk_gr_today
+norm_row "T11 (F1) rehearsal-refused, differs: the wrong-value bullet" setup_rh_differs chk_rh_differs
+norm_row "T12 (F1) rehearsal-refused, unreadable only: edit nothing and re-rehearse" setup_rh_unread chk_rh_unread
+norm_row "T13 (F1) rehearsal-refused, any other refusal keeps today's text" setup_rh_other chk_rh_today
 norm_row "R16 a real grep failure on the count refuses, with no apply" setup_norm_grepfail chk_norm_grepfail
 norm_row "Q7 both terraform pipelines are windowed and prefixed, with no CR" setup_tf_hostile chk_tf_window
+norm_row "Q7 (P3-2) output cut with no trailing newline still closes both windows" setup_tf_cut chk_tf_cut
 norm_row "Q7 no plan token: refused before terraform plan" setup_tok_plan chk_tok_plan
 norm_row "Q7 no apply token: refused setup applied=false before applying=true" setup_tok_apply chk_tok_apply
 r=1; v="$(fn_reread "$PRISTINE")"; [[ "$v" == "rc=1 reread=unreadable=all-pinned-records" ]] && r=0
@@ -1710,6 +1795,17 @@ F7T="$(mk_mutant read-no-outer-timeout 's/LIVE_READ_DEADLINE=90/LIVE_READ_DEADLI
 R12="$(mk_mutant reuse-read-dir 's/^  dir="\$(mktemp -d "\$W\/live\.XXXXXX")" || return 1$/  dir="$W\/live.fixed"; mkdir -p "$dir" || return 1/')"
 R13="$(mk_mutant no-token-guard '/^case "\$t" in ""|\*\[!A-Za-z0-9\._~+\/=-\]\*) exit 3 ;; esac$/d')"
 R14="$(mk_mutant retry-after-guard '/^    \[\[ "\$rc" -ne 3 \]\] || break$/d')"
+Q7H="$(mk_mutant apply-closer-no-newline '/terraform apply -no-color/,/^  printf .\\n::%s::\\n. "\$tok"$/s/^  printf .\\n::%s::\\n. "\$tok"$/  printf "::%s::\\n" "$tok"/')"
+Q2H="$(mk_mutant floor-350 's/APPLY_MIN_START=300/APPLY_MIN_START=350/')"
+Q2L="$(mk_mutant floor-200 's/APPLY_MIN_START=300/APPLY_MIN_START=200/')"
+TA="$(mk_mutant af-tail-always 's/^    if \[\[ -n "\$rr" && "\$rr" != reread=ok \]\]; then$/    if false; then/')"
+TB="$(mk_mutant af-tail-lost-on-ok 's/^    if \[\[ -n "\$rr" && "\$rr" != reread=ok \]\]; then$/    if [[ -n "$rr" ]]; then/')"
+TC="$(mk_mutant gate-differs-unclassed 's/^  ((d == 0)) || return 3$/  :/')"
+TD="$(mk_mutant gate-unread-unclassed 's/^  ((n == 0 || u != n)) || return 4$/  :/')"
+TE="$(mk_mutant gate-unread-any-line 's/^  ((n == 0 || u != n)) || return 4$/  ((u == 0)) || return 4/')"
+TF="$(mk_mutant gate-unread-first 's/^  ((d == 0)) || return 3$/  ((u == 0)) || return 4\n&/')"
+TG="$(mk_mutant gate-text-ignores-class 's/nothing was applied\.\$(gate_next "\$rc" "\$fg" "\$fk")/nothing was applied.${fg}/')"
+TH="$(mk_mutant rehearsal-text-ignores-class 's/nothing was written\$(gate_next "\$rc" "" ".")/nothing was written/')"
 }
 red "G1-13 the read moved before terraform plan" "$G13" chk_norm_rehearsal '^read-before-plan$' setup_norm_rehearsal
 red "G1-14 the read skipped on an all-no-op plan" "$G14" chk_noop_clean '^gets:0$' setup_noop_clean
@@ -1758,7 +1854,18 @@ red "F7a the record GET loses --noproxy" "$F7A" chk_norm_apply '^rc:1$' setup_no
 red "F7b the record GET loses --disable" "$F7B" chk_norm_apply '^rc:1$' setup_norm_apply
 red "F7c the record GET loses --max-time" "$F7C" chk_norm_apply '^rc:1$' setup_norm_apply
 red "F7d the record GET loses its status line" "$F7D" chk_norm_apply '^rc:1$' setup_norm_apply
-RED_BASE="$F7S" red "F7e a stalling Doppler is cut by the outer timeout" "$F7T" chk_norm_stall '^slow:' setup_norm_stall
+RED_BASE="$F7S" red "F7e the record read's doppler run starts under the outer timeout" "$F7T" chk_norm_stall '^no-outer-timeout$' setup_norm_stall
+red "Q7h the apply's closer loses its leading newline, so a cut line swallows it" "$Q7H" chk_tf_cut '^window:unclosed$' setup_tf_cut
+red "Q2h a 350 s floor refuses the 760 s row" "$Q2H" chk_norm_s760 '^rc:1$' setup_norm_s760
+red "Q2l a 200 s floor lets the 840 s row start" "$Q2L" chk_norm_nobudget '^(applied|applying-line|not-refused)$' setup_norm_s840
+red "T-a the fix-forward sentence printed on a differing re-read" "$TA" chk_t_diff '^has-fix-forward$' setup_norm_af_differs
+red "T-b the fix-forward sentence lost on reread=ok" "$TB" chk_t_ok '^no-tail$' setup_norm_af
+red "T-c a gate difference is not classed" "$TC" chk_gr_differs '^has-fix-forward$' setup_gr_differs
+red "T-d an unreadable-only gate refusal is not classed" "$TD" chk_gr_unread '^has-fix-forward$' setup_gr_unread
+red "T-e one unreadable line classes a refusal that has another REFUSE" "$TE" chk_gr_today '^msg$' setup_gr_other
+red "T-f unreadable outranks a difference" "$TF" chk_gr_differs '^msg$' setup_gr_mixed
+red "T-g the gate-refused text ignores the class" "$TG" chk_gr_differs '^has-fix-forward$' setup_gr_differs
+red "T-h the rehearsal-refused text ignores the class" "$TH" chk_rh_differs '^msg$' setup_rh_differs
 
 # --- Stub refusals ---------------------------------------------------------------
 # Every PATH fake refuses an unmodeled argv into refused.log. A pristine run must never trip one:
@@ -1774,7 +1881,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=258
+EXPECTED_CASES=285
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1
