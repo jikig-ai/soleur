@@ -145,7 +145,8 @@ pushing every comparator and shape row down into the gate suite, which takes abo
 ### Gates that do not fire
 
 - **Infrastructure as code (Phase 2.8):** no new resource. The 26 records are already declared in `dns.tf`.
-- **Task design (Phase 2.9.3):** no new workflow or scheduled surface.
+- **Task design (Phase 2.9.3):** no scheduled surface. Review added one event-triggered workflow,
+  `cf-account-migrate-alert.yml` (ruling Q11), because the failure email depends on the DNS records it reports.
 - **GDPR gate (Phase 2.7, run because of the `single-user incident` threshold):** advisory, not legal
   review. None of the eight planned files matches the canonical regulated-data path regex, and the
   plan adds no schema column, foreign key or vendor. The new log lines carry addresses and field
@@ -387,11 +388,17 @@ is the documented no-refusal-line residual, covered by the runbook's cancelled-r
     NEW zone. A `settings` difference gets no edit: stop for an owner decision (F3). `verify=skipped`
     means no public probe ran, so run the local Verify block. `verify=ok` does not clear this bullet,
     because those probes read no mail record. Then rehearse, which reads all 26, and re-dispatch.
+  - In that bullet, the restore block GETs the record first and requires the pin, sends the record's
+    own `type`, `name` and `ttl` plus the named field, and a separate GET must match the value on that
+    field and the first GET on the other seven compared fields. Outputs: `patch_http=<code>` and
+    `readback=ok|differs`; bad input or a read that is not the pin prints `input-refused`.
   - In that bullet, **`<addr>:notfound`**: a re-dispatch cannot repair a deleted record, because a
-    recreated record has a new id. `Operator-authorizes:` recreating it on the NEW zone from its
-    `dns.tf` block (the same value source for `pages_apex` and `www`) to restore service, post the new id on #12931, and stop for an owner decision. No
-    `terraform state rm`, `terraform import`, state push or lone literal edit: the path back into
-    state needs a reviewed PR and a CTO ruling.
+    recreated record has a new id. `Operator-authorizes:` the recreate block, which takes the fields
+    from the record's `dns.tf` block (the same value source for `pages_apex` and `www`), refuses unless
+    the pinned id answers 404, POSTs to the NEW zone and reads the returned id back on every field.
+    Outputs: `post_http=<code>`, `new_id=<first 8 chars>` and `readback=ok|differs`. Post the new id on
+    #12931 and stop for an owner decision. No `terraform state rm`, `terraform import`, state push or
+    lone literal edit: the path back into state needs a reviewed PR and a CTO ruling.
   - A `proxied` difference on `pages_apex` or `www` is treated as drift. Review removed an earlier sentence blaming
     `cron-gh-pages-cert-reissue`: that cron cannot write the new zone at this stage (R5).
   - **No completed re-read** (`reread=unreadable=`, or a cancelled run with `mode=apply applying=true`):
@@ -410,10 +417,14 @@ is the documented no-refusal-line residual, covered by the runbook's cancelled-r
 - `tests/scripts/test-cf-account-migrate-gate.sh`
 - `apps/web-platform/infra/cf-account-migrate-job.test.sh`
 - `plugins/soleur/test/fixture-relative-assert.baseline.txt` (exact-count rows for the job, its suite and the gate suite; regenerate with `bash plugins/soleur/test/fixture-relative-assert.test.sh --write-baseline` in the same commit as the source edits)
+- Added by review: `apps/web-platform/infra/scripts/cf-account-migration-complete.sh` and its suite (Q6),
+  `.github/workflows/cf-account-migrate.yml` (email text, Q11), `tests/scripts/test-cf-account-migration-runbook.sh` and
+  `tests/scripts/test-cf-account-migration-scope.sh` (offline rows for the runbook blocks and the alert), and
+  `.claude/hooks/grep-q-pipe-guard.test.sh` (one exempt row for the job suite's count-failure shim)
 
 ## Files to Create
 
-None.
+- Added by review: `.github/workflows/cf-account-migrate-alert.yml` (Q11).
 
 ## Open Code-Review Overlap
 
@@ -733,7 +744,8 @@ in_transit:
 `Operator-authorizes:` the `redirects-dns` rehearsal dispatch (`gh workflow run cf-account-migrate.yml --ref main -f migrate_phase=redirects-dns -f confirm=MIGRATE-CF-redirects-dns -f rehearsal=true -f reason='#12931 import-normalize rehearsal'`). An agent runs it once the owner types go naming it (`hr-menu-option-ack-not-prod-write-auth`). Tracked on #12931. This pipeline does not dispatch it.
 
 - [ ] The rehearsal prints `live-read records=26`, `import-normalize count=26` and `verdict=PASS`, or refuses naming a live field with nothing written.
-- [ ] Before the first `redirects-dns` `rehearsal=false` dispatch, the owner posts a comment on #12931 whose first line is exactly `CF-MIGRATE-FIRST-PATCH: accept-unobserved` or `CF-MIGRATE-FIRST-PATCH: observe-first`. The runbook's read command must print `accept-unobserved` for the dispatch to be proposed; empty, `edited` or `observe-first` holds it. `accept-unobserved` includes the one-run risk that all 26 records are written with no canary.
+- [ ] Before the first `redirects-dns` `rehearsal=false` dispatch, the owner posts a comment on #12931 whose first line is exactly `CF-MIGRATE-FIRST-PATCH: accept-unobserved` or `CF-MIGRATE-FIRST-PATCH: observe-first`. The runbook's read command must print `accept-unobserved` for the dispatch to be proposed; `observe-first`, `edited`, `unreadable` and empty all hold it. The check proves an admin account posted, not that a person did; the environment approval remains the human control. `accept-unobserved` includes the one-run risk that all 26 records are written with no canary.
+- [ ] Before that dispatch, the runbook's `cfam_dns_save` posts the pre-write public DNS baseline on #12931 once (19 rows, no `NO-VERDICT`). It is never overwritten, and a re-dispatch reuses it. After the run, the comparison waits 360 s from the apply job's completion, and a real difference wins over `NO-VERDICT`.
 
 ## Domain Review
 

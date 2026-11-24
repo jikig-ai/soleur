@@ -108,7 +108,9 @@ jobs:
             timeout-minutes=30 or by hand).
             A <code>cf-account-migrate … verdict=refuse reason=…</code> line in the log names the cause.
             A rehearsal writes nothing unless its refuse reason is remote-serial-changed or backup-written:
-            then stop and read the runbook Halt. Otherwise read its last refuse line, or re-dispatch. See the
+            then stop and read the runbook Halt. A <code>REFUSE &lt;addr&gt; differs from the live record</code> line
+            goes first to the runbook Halt bullet "A DNS record may hold a wrong value". Otherwise read its last
+            refuse line, or re-dispatch. See the
             runbook Halt section, knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md.</p>
             <p>Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>
 

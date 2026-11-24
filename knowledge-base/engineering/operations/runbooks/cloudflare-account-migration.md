@@ -123,7 +123,7 @@ re-dispatch:
 | Connector census in `scheduled-inngest-health.yml` red (no tunnel, then 0 connectors) | Phase 2 flip → web-2 replace | The census looks the tunnel up by name under the new `CF_ACCOUNT_ID`. |
 | `deploy.`/`ssh.`/`registry.` answer 530/1033 instead of Error 1000 | Tunnel apply → web-2 replace | The new tunnel exists with 0 connectors. Both states are down; nothing regresses. |
 | First CI-SSH token sync warns on an empty secret | First tunnel-phase apply | A freshly synced secret reads empty on the first run; expect one re-dispatch. |
-| The predicate prints `unnormalized <addr>` | A `redirects-dns` apply stopped before reaching `<addr>` → its re-dispatch | That record is in state with no `content`, so the routine apply must not take it over. `unnormalized <addr>`: rehearse, then re-dispatch `redirects-dns`. `cf-account-migrate.yml` is exempt from the predicate, so the red never blocks this fix. |
+| The predicate prints `unnormalized <addr>` | An apply stopped before reaching `<addr>` → its re-dispatch | That record is in state with no `content`, so the routine apply must not take it over. `unnormalized <addr>`: rehearse, then re-dispatch the phase whose spec lists `<addr>`. `cf-account-migrate.yml` is exempt from the predicate, so the red never blocks this fix. |
 
 ## Revoke recipe
 
@@ -393,20 +393,29 @@ line goes by the token table above. For any other reason, read it, fix forward i
 `Agent:` read the decision:
 
 ```bash
-gh api repos/jikig-ai/soleur/issues/12931/comments --paginate --jq '.[]
-  | (.body | split("\n")[0] | rtrimstr("\r")) as $l
-  | select($l | test("^CF-MIGRATE-FIRST-PATCH: (accept-unobserved|observe-first)$"))
-  | [.user.login, .created_at, .updated_at, ($l | split(": ")[1])] | @tsv' | tac |
-while IFS=$'\t' read -r login created updated value; do
-  [ "$(gh api "repos/jikig-ai/soleur/collaborators/$login/permission" --jq .permission 2>/dev/null)" = admin ] || continue
-  if [ "$created" = "$updated" ]; then printf '%s\n' "$value"; else echo edited; fi
-  break
-done
+(
+  rows="$(gh api repos/jikig-ai/soleur/issues/12931/comments --paginate --jq '.[]
+    | (.body | split("\n")[0] | rtrimstr("\r")) as $l
+    | select($l | test("^CF-MIGRATE-FIRST-PATCH: (accept-unobserved|observe-first)$"))
+    | [.user.login, .created_at, .updated_at, ($l | split(": ")[1])] | @tsv')" || { echo unreadable; exit 0; }
+  while IFS=$'\t' read -r login created updated value; do
+    [ -n "$login" ] || continue
+    if ! perm="$(gh api "repos/jikig-ai/soleur/collaborators/$login/permission" --jq .permission 2>&1 </dev/null)"; then
+      case "$perm" in *'(HTTP 404)'*) continue ;; *) echo unreadable; break ;; esac
+    fi
+    [ "$perm" = admin ] || continue
+    if [ "$created" = "$updated" ]; then printf '%s\n' "$value"; else echo edited; fi
+    break
+  done < <(tac <<<"$rows")
+)
 ```
 
-Output `accept-unobserved` passes. Empty, `edited` or `observe-first` holds.
+Output `accept-unobserved` passes. `observe-first`, `edited`, `unreadable` and empty all hold. Any failed read other than
+a 404 on the permission lookup prints `unreadable`, so a read error can never fall through to an older decision. The
+check proves an admin account posted, not that a person did; the environment approval remains the human control.
 
-`Agent:` after the rehearsal PASS, save the DNS baseline with the `cfam_dns_snapshot` block under **Verify** below.
+`Agent:` before the first `rehearsal=false` `redirects-dns` dispatch only, after its rehearsal PASS, save the pre-write
+DNS baseline once with the `cfam_dns_save` line under **Verify** below. A re-dispatch reuses that baseline.
 
 `Operator-authorizes:` the same dispatch with `rehearsal=false` (leave `expected_in_state_updates` empty: only a
 fix-forward re-dispatch sets it, Halt `verify-failed` step 4), then the person approves the
@@ -441,8 +450,9 @@ Expected: the four redirect monitors listed, each `up`, and the count line `4` (
 fewer; a `PAGINATED` line means the list did not fit one page of 50: read the next page before trusting the count).
 
 `Agent:` compare public DNS answers before and after the write, from the repository root. A shell function does not
-survive between agent tool calls, so define both functions in the call that runs `cfam_dns_snapshot`, and save its
-output to a scratchpad file:
+survive between agent tool calls, so define these functions in each call that uses them, and save each snapshot to a
+scratchpad file. These are public DNS answers, so the baseline is posted on #12931 as a comment whose first line is
+`CF-MIGRATE-DNS-BASELINE`. The oldest such comment from an admin is the baseline, and nothing replaces it:
 
 ```bash
 cfam_dns_names() {
@@ -464,15 +474,58 @@ cfam_dns_snapshot() {
     || echo "$fqdn $type NO-VERDICT"
   done < <(cfam_dns_names)
 }
+# Complete means exactly 19 rows and no NO-VERDICT. A run outside the repository root yields 0 rows.
+cfam_dns_complete() {
+  if [ "$(grep -c . "$1")" -eq 19 ] && ! grep -q 'NO-VERDICT' "$1"; then echo snapshot=complete; else echo snapshot=incomplete; fi
+}
+# Prints the saved baseline rows, or exactly one of baseline=none, baseline=edited, baseline=unreadable.
+cfam_dns_baseline() {
+  local rows login created updated body perm
+  rows="$(gh api repos/jikig-ai/soleur/issues/12931/comments --paginate --jq '.[]
+    | select((.body | split("\n")[0] | rtrimstr("\r")) == "CF-MIGRATE-DNS-BASELINE")
+    | [.user.login, .created_at, .updated_at, (.body | @base64)] | @tsv')" || { echo baseline=unreadable; return 0; }
+  while IFS=$'\t' read -r login created updated body; do
+    [ -n "$login" ] || continue
+    if ! perm="$(gh api "repos/jikig-ai/soleur/collaborators/$login/permission" --jq .permission 2>&1 </dev/null)"; then
+      case "$perm" in *'(HTTP 404)'*) continue ;; *) echo baseline=unreadable; return 0 ;; esac
+    fi
+    [ "$perm" = admin ] || continue
+    if [ "$created" = "$updated" ]; then printf '%s' "$body" | base64 -d | tail -n +2; else echo baseline=edited; fi
+    return 0
+  done <<<"$rows"
+  echo baseline=none
+}
+# The one write. It posts only when no baseline exists and the snapshot file is complete.
+cfam_dns_save() {
+  local have; have="$(cfam_dns_baseline)"
+  case "$have" in
+    baseline=none) ;;
+    baseline=*) printf '%s\n' "$have"; return 1 ;;
+    *) echo baseline=exists; return 0 ;;
+  esac
+  [ "$(cfam_dns_complete "$1")" = snapshot=complete ] || { echo snapshot=incomplete; return 1; }
+  { echo CF-MIGRATE-DNS-BASELINE; cat "$1"; } | gh issue comment 12931 --body-file - >/dev/null || { echo baseline=unsaved; return 1; }
+  echo baseline=saved
+}
 ```
+
+Save the baseline with `f=<scratchpad>/dns-baseline.txt; cfam_dns_snapshot >"$f"; cfam_dns_save "$f"`. For the comparison,
+write a new snapshot to its own file, run `cfam_dns_complete` on it, and compare it with `cfam_dns_baseline` output. The
+wait runs from the apply job's completion, whichever way it ended (`applied=true`, `apply-failed` or a cancel):
+`gh run view <run-id> --json jobs --jq '.jobs[] | select(.name == "cf_account_migrate_apply") | .completedAt'`.
+
+Take the first row that matches. A real difference wins over `NO-VERDICT`.
 
 | When | Result | Action |
 |---|---|---|
-| After rehearsal PASS, before the dispatch | Complete snapshot | Save as the baseline |
-| Same | Any `NO-VERDICT` | Retry; do not dispatch without a complete baseline |
-| At least 360 s after `applied=true` | Identical to baseline | Post `dns-answers=ok` on #12931 |
-| Same | Any `NO-VERDICT` | Retry 3 times, 60 s apart. If it persists, post `dns-answers=unverified <names>`. No refusal, no edit, no restore. The next phase waits for a clean snapshot |
-| Same | A real answer differs, including `NXDOMAIN` | Re-check twice, 60 s apart. If it persists, dispatch a rehearsal. A refusal naming a record goes to the wrong-value bullet. If the rehearsal passes, make no edit and stop for an owner decision |
+| After the first rehearsal PASS, before the first `rehearsal=false` | `baseline=saved` or `baseline=exists` | Proceed to the dispatch |
+| Same | `snapshot=incomplete` | Retry from the repository root; do not dispatch without a saved baseline |
+| Same | `baseline=unreadable`, `baseline=edited` or `baseline=unsaved` | Stop for an owner decision before the dispatch |
+| At least 360 s after the apply job's `completedAt` | `cfam_dns_baseline` prints `baseline=none` or `baseline=edited`: the baseline is lost | A later snapshot would hold post-write answers, so save nothing. Post `dns-answers=unverified baseline-lost`, make no edit and stop for an owner decision |
+| Same | `baseline=unreadable` | Retry 3 times, 60 s apart. If it persists, stop for an owner decision |
+| Same | A row holds a real answer that differs from the baseline, including `NXDOMAIN`, whether or not another row is `NO-VERDICT` | Re-check twice, 60 s apart. If it persists, `Operator-authorizes:` a rehearsal. A refusal naming a record goes to the wrong-value bullet. If the rehearsal passes, make no edit and stop for an owner decision |
+| Same | `snapshot=incomplete` and no real difference | Retry 3 times, 60 s apart. If it persists, post `dns-answers=unverified <names>`. No refusal, no edit, no restore. The next phase waits for a clean snapshot |
+| Same | `snapshot=complete` and identical to the baseline | Post `dns-answers=ok` on #12931 |
 
 Then revoke the three superseded 0a tokens with the revoke recipe, one
 go each, on `prd_terraform` `CF_API_TOKEN_PREV`, `CF_API_TOKEN_RULESETS_PREV` and `CF_API_TOKEN_PAGES_PREV` (the
@@ -557,12 +610,15 @@ on their `_PREV` keys.
    {`104.26.10.163`, `104.26.11.163`, `172.67.73.132`} in the new zone; one mismatch deletes none
    (`verdict=refuse`). Expected gate line: the tunnel, its config, 3 Access apps, 3 policies, 2 service tokens, the
    `service_token_expiry` notification policy and the `deploy`/`ssh`/`registry` CNAMEs created; `random_id.tunnel_secret`
-   and `doppler_secret.registry_push_access_token_id`/`_secret` replaced by request; `cloudflare_record.app` a pure
-   import; exactly one create of the deploy policy, whose service token the gate read live (`200`, name
+   and `doppler_secret.registry_push_access_token_id`/`_secret` replaced by request; `cloudflare_record.app` an
+   import that plans the admitted `import-normalize` update, as every record import does (ADR-329); exactly one create
+   of the deploy policy, whose service token the gate read live (`200`, name
    `github-actions-deploy`, about 8760h to expiry, `decision = "non_identity"`, a single include); destroys 0. The
    post-apply step syncs `CI_SSH_ACCESS_TOKEN_ID/_SECRET` (`apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh`
    logic); expect one re-dispatch on the first-run empty secret. After the apply, the new tunnel has 0 connectors (an
-   expected red).
+   expected red). **PR2 requirement:** the pin, the live read and the post-apply re-read exist only for `redirects-dns`
+   today, and the pin reader skips the `for_each` `app` import block. PR2 must extend all three to the `tunnel` phase
+   for `cloudflare_record.app`, or the gate refuses every tunnel plan.
 4. **Replace web-2** (the only path that delivers the new tunnel token: it reaches a host only through create-time
    user_data, ADR-304). `Operator-authorizes:` the rehearsal, then the same line with `plan_only=false`:
 
@@ -753,26 +809,40 @@ validation (Load Balancing #12983, DNSSEC #12982).
     read or a mismatch means no edit and a stop for an owner decision.
   - `Operator-authorizes:` one edit of the named field on the NEW zone, only for a record with no stop token. `Agent:`
     runs one block per field from the repository root. `VALUE` is the expected value as JSON (`"text"`, `300`, `true`);
-    for `name` it is the full hostname. The block takes the record id from the pin and the zone from the gate library,
-    and checks the result with a separate GET:
+    for `name` it is the full hostname. For a field the record's `dns.tf` block omits, `VALUE` is `null` for `comment`
+    and `priority`, `[]` for `tags`, and `false` for `proxied`. The block takes the record id from the pin and the zone
+    from the gate library, and GETs the record first: unless that read is the pinned record it prints `pin_http=<code>`
+    and `input-refused` and writes nothing. The PATCH sends the record's own `type`, `name` and `ttl` plus the named
+    field. A separate GET must then match `VALUE` on that field and the first GET on the other seven of `type`, `name`,
+    `content`, `ttl`, `proxied`, `priority`, `comment` and `tags`, with arrays sorted and `""` read as `null`:
 
     ```bash
     ADDR='<addr>'; FIELD='<field>'; VALUE='<json value>'
     GATE=tests/scripts/lib/cf-account-migrate-gate.sh
     Z="$(bash -c 'source "$1" && printf %s "$CFAM_NEW_ZONE_ID"' _ "$GATE")"
     ID="$(bash -c 'source "$1" && cf_account_migrate_record_pins redirects-dns' _ "$GATE" | awk -F'\t' -v a="$ADDR" '$1 == a {print $2}')"
+    IS_PIN='(.success == true) and (.result.id == $id) and (.result.zone_id == null or .result.zone_id == $z)'
+    BODY_OF='(.result | {type, name, ttl}) + {($f): $v}'
+    CHECK='def n: if type == "array" then sort elif . == "" then null else . end;
+      .result as $r | (.success == true) and ($r.id == $id) and (($r[$f] | n) == ($v | n))
+      and (["type","name","content","ttl","proxied","priority","comment","tags"] - [$f]
+           | all(. as $k | ($r[$k] | n) == ($b.result[$k] | n)))'
     if [[ "$Z" =~ ^[0-9a-f]{32}$ && "$ID" =~ ^[0-9a-f]{32}$ && "$FIELD" =~ ^(type|name|content|ttl|proxied|priority|comment|tags)$ ]] \
-      && BODY="$(jq -cn --arg f "$FIELD" --argjson v "$VALUE" '{($f): $v}')"; then
+      && jq -en --argjson v "$VALUE" 'true' >/dev/null 2>&1; then
       doppler run -p soleur -c prd_terraform -- bash -c '
         t="${CF_API_TOKEN:-}"; case "$t" in ""|*[!A-Za-z0-9._~+/=-]*) echo token-shape-refused; exit 3 ;; esac
         u="https://api.cloudflare.com/client/v4/zones/$1/dns_records/$2"
         api() { curl --disable --noproxy "*" -sS --max-time 10 --config - "$@" < <(printf "header = \"Authorization: Bearer %s\"\n" "$t"); }
-        code="$(api -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" --data-binary "$3" "$u")"
+        resp="$(api -w "\n%{http_code}" "$u")"; pin="$(printf "%s" "$resp" | tail -n1)"; first="$(printf "%s" "$resp" | sed \$d)"
+        if [ "$pin" != 200 ] || ! printf "%s" "$first" | jq -e --arg id "$2" --arg z "$1" "$5" >/dev/null 2>&1 \
+          || ! body="$(printf "%s" "$first" | jq -c --arg f "$3" --argjson v "$4" "$6")"; then
+          echo "pin_http=$pin"; echo input-refused; exit 0
+        fi
+        code="$(api -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" --data-binary "$body" "$u")"
         echo "patch_http=$code"
-        norm="if type == \"array\" then sort else . end"
-        if api "$u" | jq -e --arg id "$2" --arg f "$4" --argjson v "$5" "(.success == true) and (.result.id == \$id) and ((.result[\$f] | $norm) == (\$v | $norm))" >/dev/null
+        if api "$u" | jq -e --arg id "$2" --arg f "$3" --argjson v "$4" --argjson b "$first" "$7" >/dev/null 2>&1
         then echo readback=ok; else echo readback=differs; fi
-      ' _ "$Z" "$ID" "$BODY" "$FIELD" "$VALUE"
+      ' _ "$Z" "$ID" "$FIELD" "$VALUE" "$IS_PIN" "$BODY_OF" "$CHECK"
     else
       echo input-refused
     fi
@@ -781,9 +851,65 @@ validation (Load Balancing #12983, DNSSEC #12982).
     Continue only on `patch_http=200` and `readback=ok`. Any other output means the record's state is not confirmed: do
     not retry the write, post the address and the output on #12931, and stop for an owner decision.
   - `<addr>:notfound`: a re-dispatch cannot repair a deleted record, because a recreated record has a new id.
-    `Operator-authorizes:` recreating it on the NEW zone from its `dns.tf` block (the same value source for `pages_apex`
-    and `www`) to restore service, post the new id on #12931, and stop for an owner decision. No `terraform state rm`,
-    `terraform import`, state push or lone literal edit: the path back into state needs a reviewed PR and a CTO ruling.
+    `Operator-authorizes:` recreating it on the NEW zone from its `dns.tf` block, to restore service. `Agent:` runs this
+    block from the repository root. It reads `name`, `content`, `type`, `ttl`, `proxied` and `priority` from the block,
+    with `false` for an omitted `proxied`, `[]` for `tags` and no `comment`. For `pages_apex` and `www`, set
+    `PAGES_SUBDOMAIN` to the `result.subdomain` checked above; any other value is refused. Unless the pinned id
+    currently answers 404 it prints `pin_http=<code>` and `input-refused` and writes nothing. It POSTs to the new zone
+    and reads the returned id back on every field:
+
+    ```bash
+    ADDR='<addr>'; PAGES_SUBDOMAIN=''
+    GATE=tests/scripts/lib/cf-account-migrate-gate.sh; TF=apps/web-platform/infra/dns.tf
+    Z="$(bash -c 'source "$1" && printf %s "$CFAM_NEW_ZONE_ID"' _ "$GATE")"
+    ID="$(bash -c 'source "$1" && cf_account_migrate_record_pins redirects-dns' _ "$GATE" | awk -F'\t' -v a="$ADDR" '$1 == a {print $2}')"
+    FIELDS="$(awk -v r="${ADDR#cloudflare_record.}" '
+      $0 == "resource \"cloudflare_record\" \"" r "\" {" {on=1; next}
+      on && /^}/ {exit}
+      on && match($0, /^  (name|content|type|ttl|proxied|priority) *= */) {
+        k=$1; v=substr($0, RLENGTH+1)
+        if (match(v, /^"([^"\\]|\\.)*"/)) v=substr(v, 1, RLENGTH); else sub(/[[:space:]].*$/, "", v)
+        print k "\t" v
+      }' "$TF")"
+    BODY="$(printf '%s\n' "$FIELDS" | jq -Rnc --arg pages "$PAGES_SUBDOMAIN" '
+      [inputs | split("\t") | {(.[0]): (.[1]
+        | if . == "cloudflare_pages_project.docs.subdomain"
+          then (if $pages == "soleur-docs-40x.pages.dev" then $pages else error("pages") end)
+          elif test("[$%]\\{") then error("interpolation") else fromjson end)}] | add
+      | if (.type | type) != "string" or (.name | type) != "string" or (.content | type) != "string"
+           or .content == "" or (.ttl | type) != "number" then error("fields") else . end
+      | .name |= (if . == "soleur.ai" or endswith(".soleur.ai") then . else . + ".soleur.ai" end)
+      | {type, name, content, ttl, proxied: (if has("proxied") then .proxied else false end), tags: []}
+        + (if has("priority") then {priority} else {} end)' 2>/dev/null)"
+    NEW_ID='select(.success == true) | .result.id'
+    CHECK='def n: if type == "array" then sort elif . == "" then null else . end;
+      .result as $r | (.success == true) and ($r.id == $id) and ($r.zone_id == null or $r.zone_id == $z)
+      and (["type","name","content","ttl","proxied","priority","comment","tags"]
+           | all(. as $k | ($r[$k] | n) == ($want[$k] | n)))'
+    if [[ "$Z" =~ ^[0-9a-f]{32}$ && "$ID" =~ ^[0-9a-f]{32}$ && -n "$BODY" ]]; then
+      doppler run -p soleur -c prd_terraform -- bash -c '
+        t="${CF_API_TOKEN:-}"; case "$t" in ""|*[!A-Za-z0-9._~+/=-]*) echo token-shape-refused; exit 3 ;; esac
+        base="https://api.cloudflare.com/client/v4/zones/$1/dns_records"
+        api() { curl --disable --noproxy "*" -sS --max-time 10 --config - "$@" < <(printf "header = \"Authorization: Bearer %s\"\n" "$t"); }
+        pin="$(api -o /dev/null -w "%{http_code}" "$base/$2")"
+        if [ "$pin" != 404 ]; then echo "pin_http=$pin"; echo input-refused; exit 0; fi
+        resp="$(api -w "\n%{http_code}" -X POST -H "Content-Type: application/json" --data-binary "$3" "$base")"
+        echo "post_http=$(printf "%s" "$resp" | tail -n1)"
+        new="$(printf "%s" "$resp" | sed \$d | jq -r "$4" 2>/dev/null)"
+        if ! [[ "$new" =~ ^[0-9a-f]{32}$ ]]; then echo new_id=none; echo readback=differs; exit 0; fi
+        echo "new_id=${new:0:8}"
+        if api "$base/$new" | jq -e --arg id "$new" --arg z "$1" --argjson want "$3" "$5" >/dev/null 2>&1
+        then echo readback=ok; else echo readback=differs; fi
+      ' _ "$Z" "$ID" "$BODY" "$NEW_ID" "$CHECK"
+    else
+      echo input-refused
+    fi
+    ```
+
+    On `readback=ok`, post the address and `new_id` on #12931 and stop for an owner decision. Any other output means the
+    record is not confirmed: do not retry the POST, post the address and the output on #12931, and stop for an owner
+    decision. No `terraform state rm`, `terraform import`, state push or lone literal edit: the path back into state
+    needs a reviewed PR and a CTO ruling.
   - `verify=skipped` means no public probe ran, so run the local Verify block. `verify=ok` does not clear this bullet,
     because those probes read no mail record. Then `Operator-authorizes:` a rehearsal, which reads all 26, and the
     re-dispatch.
@@ -820,7 +946,7 @@ validation (Load Balancing #12983, DNSSEC #12982).
   1. `mode=apply applying=true` is present: a stop after `applying=true` (above), so Verify first.
   2. No `mode=apply applying=true`: a stop before `applying=true` (above). Whether the forget is committed is the
      committed test, never this log's `backup=uploaded` alone. A cancelled run showing `backup=uploaded` and no
-     `applying=true` wrote no DNS record. Re-dispatch the same phase.
+     `applying=true` wrote no DNS record. Re-rehearse, then re-dispatch the same phase.
 - **`reason=verify-failed applied=true`** (a `redirects-dns` or `zone-rest` apply landed and a post-apply probe
   failed; the `failing=` list names each item with what came back, `<item>=><code>+<location>`). CTO ruling
   2026-11-20:
