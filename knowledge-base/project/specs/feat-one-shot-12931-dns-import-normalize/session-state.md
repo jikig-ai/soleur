@@ -97,3 +97,10 @@
 - Route-to-definition: skipped for this PR. The brief scopes it to the DNS gate fix and it widens a production safety gate, so no skill file is edited here.
 - Residuals are recorded in the plan's `## Dependencies & Risks` instead of a new issue: the code is temporary, so a standalone issue fails the `wg-defer-only-after-inline-triage` test.
 - Archival is deferred to ship, which still reads this spec directory.
+
+## Ship Phase
+
+- Preflight on the merged tree: every check PASS or SKIP. Check 10 ran its probe in the sandbox and matched; no founder-stated check exists.
+- Completeness consult: `COMPLETE`, no path to a wrong DNS value or a wrong Halt bullet. It noted two wording mismatches, both confirmed and left unchanged because neither can cause a write: a local `read_live_records` failure before the gate prints the fix-forward text rather than `re-rehearse once`, and a token failing the shape guard is told to re-rehearse once although only an owner decision fixes it (the second refusal stops for that decision).
+- The broad `test-all --affected` run is replaced by the full CI battery on the ready head, at the owner's direction.
+- The owner-class first-PATCH row is tracked as a comment on the existing owner-decisions issue #12988 instead of a new issue.
