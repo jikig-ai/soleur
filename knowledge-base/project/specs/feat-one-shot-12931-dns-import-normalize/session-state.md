@@ -89,3 +89,11 @@
 - Left as stated residuals: U9 (no digest binds the graded plan to the applied plan), the unbounded init, forget and plan stages (Q3), and the `%` encoding of `_err` in `preapply-entrypoint-gate.sh` (pre-existing; a live ruleset value can add lines to an annotation, and no command runs).
 - Never exercised against a real API or runner: the restore and recreate blocks, the first PATCH, the alert's `workflow_run` trigger, and the `completedAt` read.
 - Final local suites at `bcdf3e5bda`: gate 344, job 285, runbook 165, completion 119, scope 110, fixture-relative 63, workflow parity 415, pipe guard green.
+
+## QA and Compound
+
+- QA: the plan's Test Scenarios carry no `Browser:`, `API verify:` or `Cleanup:` steps, so automated QA was skipped by design; the suites above cover them.
+- Compound: learning `2026-11-24-the-recovery-steps-my-fixes-added-were-the-least-reviewed-code-in-the-pr.md`, 17 session errors.
+- Route-to-definition: skipped for this PR. The brief scopes it to the DNS gate fix and it widens a production safety gate, so no skill file is edited here.
+- Residuals are recorded in the plan's `## Dependencies & Risks` instead of a new issue: the code is temporary, so a standalone issue fails the `wg-defer-only-after-inline-triage` test.
+- Archival is deferred to ship, which still reads this spec directory.

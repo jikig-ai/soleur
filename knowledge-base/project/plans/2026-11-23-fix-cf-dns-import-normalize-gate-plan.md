@@ -799,6 +799,9 @@ All `unit` unless marked. Job cases are `integration` against the suite's PATH s
 - **A bad write is detected, not undone.** The re-read halts with the wrong value still live, and users stay affected until the value is restored and resolver caches expire. A re-dispatch cannot repair it, because a record whose state already holds `content` is off-shape and refused. The runbook's Halt bullet therefore carries the restore path, and it must be merged before any `rehearsal=false` dispatch is authorized.
 - **Concurrent dashboard edit:** a residual the CTO accepted; the runbook says no hand edits during the apply.
 - **SIGINT stop:** a provider call that ignores cancellation can still run to the job's 30-minute kill, which prints no refusal. The runbook's cancelled-run Halt covers this.
+- **All 26 records are written in one apply, with no canary (Q9).** The owner accepts or declines this through the `CF-MIGRATE-FIRST-PATCH` token.
+- **Pre-existing residuals, tracked here (Q3, Q5).** This job is temporary and the cleanup PR under #12931 deletes it, so a standalone issue would outlive the code it describes. `terraform init`, the forget and the plan have no time bound; a stall writes no DNS and ends in the cancel email. No digest binds the graded `tfplan.json` to the applied `tfplan` (U9); only this job runs between them. `_err` in `tests/scripts/lib/preapply-entrypoint-gate.sh` does not encode `%`, so a live ruleset description can add lines to an `::error` annotation; no command runs and the real refusal still prints.
+- **Unrelated red check.** `deploy-script-tests (4/4)` fails on `cloud-init-inngest-bootstrap.test.sh` (pin v1.1.73 against tag v1.1.74). It is not a required check. PR #12985 carries the bump, and it needs zot confirmed to serve the v1.1.74 digest and the owner's merge-freeze call.
 
 ## References
 
