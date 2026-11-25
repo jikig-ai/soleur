@@ -108,8 +108,8 @@ re-dispatch:
   `tests/scripts/lib/cf-account-migrate-gate.sh` (every ruleset and list is `create` class, and the phase gate refuses
   an import of a create-class address, so the import block alone is refused one step later).
 - `predelete-refused` (tunnel): the pre-delete's pin list is not six record ids, or one pinned record failed its checks
-  (the verdict line names any record it deleted). Commit the six ids in a reviewed PR; a re-dispatch counts a record
-  already gone as done.
+  (the verdict line names any record it deleted). It runs only after every gate passed, so nothing was applied. Commit
+  the six ids in a reviewed PR; a re-dispatch counts a record already gone as done.
 - `token-scope-missing`: a staged token lacks a Tunnel, Access or service-token read scope; re-mint it with the scope.
 - `deploy-token-refused` (tunnel): the deploy policy's service token failed its live read; check the minted id in
   `local.deploy_service_token_ids`.
@@ -618,12 +618,14 @@ on their `_PREV` keys.
 2. `Operator-authorizes:` merge PR2, with the kill switch carried and checked exactly as in Phase 1 (a body line of a
    branch commit, confirmed with the same `gh pr view <PR2> --json commits` count before queueing).
 3. **Tunnel phase.** `Operator-authorizes:` the dispatch with `migrate_phase=tunnel -f confirm=MIGRATE-CF-tunnel`,
-   `rehearsal=true`, then `rehearsal=false`. The apply leg first runs the pinned six-record pre-delete
-   (`cf-tunnel-host-predelete.sh --apply`, never from the agent's machine): it GETs each pinned id and deletes all six
+   `rehearsal=true`, then `rehearsal=false`. Once every gate has passed, and just before `terraform apply`, the apply leg
+   runs the pinned six-record pre-delete (`cf-tunnel-host-predelete.sh --apply`, never from the agent's machine; CTO
+   ruling 2026-11-25, so a gate refusal deletes nothing): it GETs each pinned id and deletes all six
    only if every one is a proxied `A` record on `ssh.`/`registry.soleur.ai` with content in
    {`104.26.10.163`, `104.26.11.163`, `172.67.73.132`} in the new zone; one mismatch deletes none
    (`verdict=refuse`). The rehearsal refuses `predelete-refused` until the six ids are committed in
-   `apps/web-platform/infra/scripts/cf-tunnel-host-predelete.sh`. The gate grades the content of the three Access
+   `apps/web-platform/infra/scripts/cf-tunnel-host-predelete.sh`, and then dry-runs the pre-delete against the live
+   zone, deleting nothing. The gate grades the content of the three Access
    policies and apps it creates, and reads their include blocks in `apps/web-platform/infra/tunnel.tf`, so each block
    keeps `service_token = <its own token>` as its only statement. Expected gate line: the tunnel, its config, 3 Access apps, 3 policies, 2 service tokens, the
    `service_token_expiry` notification policy and the `deploy`/`ssh`/`registry` CNAMEs created; `random_id.tunnel_secret`

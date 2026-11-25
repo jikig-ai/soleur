@@ -1216,6 +1216,12 @@ if [[ "$pins_rc" -eq 0 && "$(grep -cE '^cloudflare_record\.[a-z0-9_]+'$'\t''[0-9
   pass "P1: the pin list is 26 address/record-id lines"
 else fail "P1: the pin list is wrong" "$pins_rc" "$pins_out"; fi
 if [[ -z "$(cf_account_migrate_record_pins zone-rest)" ]]; then pass "P2: zone-rest has no record pins"; else fail "P2: zone-rest has record pins" 1 ""; fi
+# CTO ruling 2026-11-25 (D9 amended for cf_migration_import_app): with no validation, what keeps a
+# Doppler CF_MIGRATION_IMPORT_APP key from importing the app record in a routine apply is the
+# migration-complete check, which needs cloudflare_record.app as an import-class tunnel member.
+if [[ "$(cf_account_migrate_phase_spec tunnel | jq -r '.["cloudflare_record.app"]')" == import ]]; then
+  pass "D9a: cloudflare_record.app stays import class in the tunnel spec (the complete check's hold on routine applies)"
+else fail "D9a: cloudflare_record.app is no longer import class in the tunnel spec" 1 ""; fi
 pins_t="$(cf_account_migrate_record_pins tunnel)"; pins_t_rc=$?
 if [[ "$pins_t_rc" -eq 0 && "$pins_t" == "cloudflare_record.app"$'\t'"f21d6911cdacb1e109ae31bcfb440e7d" ]]; then
   pass "P3: the tunnel pin list is the app record's import block alone"
@@ -1648,6 +1654,6 @@ gm_refuses "M-F11-tags: an order-sensitive compare refuses the reorder" 's/(\$r\
 
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 468 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 468)\n' "$TOTAL"; exit 466; fi
+if [[ "$TOTAL" -lt 469 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 469)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

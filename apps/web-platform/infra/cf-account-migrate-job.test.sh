@@ -1954,6 +1954,7 @@ D="${STUB_DIR:?}"
 b=none; [[ "${CF_API_TOKEN:-}" != tok-cf_api_token ]] || b=live
 printf 'predelete %s bearer=%s\n' "$*" "$b" >>"$D/calls.log"
 if [[ -f "$D/mode.predelete" ]]; then printf 'cf-tunnel-host-predelete verdict=refuse reason=record-mismatch\n'; exit 1; fi
+if [[ -f "$D/mode.predelete-dry" && "$#" -eq 0 ]]; then printf 'cf-tunnel-host-predelete verdict=refuse reason=record-mismatch\n'; exit 1; fi
 exit 0
 STUB
 chmod +x "$MT/apps/web-platform/infra/scripts/cf-tunnel-host-predelete.sh"
@@ -1990,8 +1991,10 @@ chk_rehearsal_clean "$D_T"; verdict "$?" "tunnel rehearsal: PASS, no apply, remo
 argv_matches "$D_T" local tunnel; verdict "$?" "tunnel rehearsal: plan -target/-replace argv equals the gate's tunnel lists"
 r=1; grep -qx -- '-var=cf_migration_import_app=true' "$D_T/plan_args.local" && r=0
 verdict "$r" "tunnel plan alone turns the app-record import on"
-r=1; grep -qx 'predelete --check-pins bearer=none' "$D_T/calls.log" && [[ "$(grep -c '^predelete ' "$D_T/calls.log")" -eq 1 ]] && r=0
-verdict "$r" "tunnel rehearsal grades the pin list only, with no token, and never runs the delete"
+r=1; grep -qx 'predelete --check-pins bearer=none' "$D_T/calls.log" && grep -qx 'predelete  bearer=live' "$D_T/calls.log" \
+  && [[ "$(grep -c '^predelete ' "$D_T/calls.log")" -eq 2 ]] && ! grep -q '^predelete --apply' "$D_T/calls.log" \
+  && before "$D_T" '^terraform\[local\] plan' '^predelete --check-pins' && before "$D_T" '^predelete --check-pins' '^predelete  bearer' && r=0
+verdict "$r" "tunnel rehearsal: after the gate, grades the pin list with no token, then dry-runs the pre-delete with the provider token, and never deletes"
 r=1; ! grep -q 'terraform\[[a-z]*\] state rm' "$D_T/calls.log" && r=0
 verdict "$r" "tunnel rehearsal forgets nothing"
 r=1; grep -qx "cf-account-migrate deploy-token id=$DT verdict=ok" "$D_T/out.txt" && no_leak "$D_T" && r=0
@@ -2011,14 +2014,19 @@ run_job "$LAST_D" "$PRISTINE"
 r=1; refused_for "$LAST_D" predelete-refused && grep -q 'cf-tunnel-host-predelete verdict=refuse reason=pins-missing' "$LAST_D/out.txt" \
   && grep -q 'phase=tunnel verdict=PASS' "$LAST_D/out.txt" && no_apply "$LAST_D" && r=0
 verdict "$r" "the committed empty pin list refuses the rehearsal, after showing the gate's PASS"
+tunnel_case rh-dry-refused true; tmark mode.predelete-dry; run_job "$LAST_D" "$PRISTINE"
+r=1; refused_for "$LAST_D" predelete-refused && grep -q '^::error title=cf-account-migrate::.*dry run' "$LAST_D/out.txt" \
+  && grep -qx 'predelete --check-pins bearer=none' "$LAST_D/calls.log" && no_apply "$LAST_D" && r=0
+verdict "$r" "tunnel rehearsal: a pre-delete dry run that refuses -> reason=predelete-refused, nothing written"
 
 tunnel_case apply false; run_job "$LAST_D" "$PRISTINE"; D_TA="$LAST_D"
 r=1; [[ "$(rc_of "$D_TA")" == 0 ]] && grep -qx 'cf-account-migrate phase=tunnel mode=apply verdict=PASS applied=true' "$D_TA/out.txt" && r=0
 verdict "$r" "tunnel apply: PASS"
 r=1; grep -qx 'predelete --apply bearer=live' "$D_TA/calls.log" \
-  && [[ "$(line_no "$D_TA" '^predelete --apply')" -lt "$(line_no "$D_TA" 'terraform\[remote\] plan')" ]] \
-  && [[ "$(line_no "$D_TA" 'terraform\[remote\] plan')" -lt "$(line_no "$D_TA" 'terraform\[remote\] apply')" ]] && r=0
-verdict "$r" "tunnel apply: the pre-delete runs with the provider token, before the plan, and the apply after it"
+  && [[ "$(grep -c '^predelete ' "$D_TA/calls.log")" -eq 1 ]] \
+  && [[ "$(line_no "$D_TA" 'terraform\[remote\] plan')" -lt "$(line_no "$D_TA" '^predelete --apply')" ]] \
+  && [[ "$(line_no "$D_TA" '^predelete --apply')" -lt "$(line_no "$D_TA" 'terraform\[remote\] apply')" ]] && r=0
+verdict "$r" "tunnel apply: the pre-delete runs with the provider token, after the plan and its gates, before the apply"
 r=1; ! grep -q 'terraform\[remote\] state rm' "$D_TA/calls.log" && r=0
 verdict "$r" "tunnel apply: no state forget"
 r=1; [[ "$(rec_gets "$D_TA" pre "$APP_REC_ID")" == 1 && "$(rec_gets "$D_TA" post "$APP_REC_ID")" == 1 ]] \
@@ -2040,9 +2048,12 @@ verdict "$r" "tunnel apply: an app record that differs after the apply -> import
 tunnel_case app-pre-differs false; tmark "recfilter.pre.$APP_REC_ID" '.result.ttl = 300'; run_job "$LAST_D" "$PRISTINE"
 r=1; refused_for "$LAST_D" gate-refused && grep -q 'REFUSE cloudflare_record.app differs from the live record' "$LAST_D/out.txt" && no_apply "$LAST_D" && r=0
 verdict "$r" "tunnel apply: an app record that differs before the apply -> gate-refused, nothing applied"
+r=1; ! grep -q '^predelete' "$LAST_D/calls.log" && r=0
+verdict "$r" "tunnel apply: a gate refusal deletes nothing (the pre-delete never runs)"
 tunnel_case predelete-refused false; tmark mode.predelete; run_job "$LAST_D" "$PRISTINE"
-r=1; refused_for "$LAST_D" predelete-refused && ! grep -q 'terraform\[remote\] plan' "$LAST_D/calls.log" && no_apply "$LAST_D" && r=0
-verdict "$r" "a refused pre-delete -> reason=predelete-refused, no plan and no apply"
+r=1; refused_for "$LAST_D" predelete-refused && grep -q 'terraform\[remote\] plan' "$LAST_D/calls.log" && no_apply "$LAST_D" \
+  && grep -q '^::error title=cf-account-migrate::.*nothing was applied' "$LAST_D/out.txt" && r=0
+verdict "$r" "a refused pre-delete -> reason=predelete-refused after the plan's gates, nothing applied"
 tunnel_case no-write false; tmark env.extra "GITHUB_WORKSPACE=$MT"$'\n'; run_job "$LAST_D" "$PRISTINE"
 r=1; refused_for "$LAST_D" doppler-write-token-missing && ! grep -q '^predelete' "$LAST_D/calls.log" && no_apply "$LAST_D" && r=0
 verdict "$r" "no DOPPLER_TOKEN_WRITE -> refused before the delete"
@@ -2053,8 +2064,9 @@ for spec in "404:github-actions-deploy:8700:http-404" "200:github-actions-ci-ssh
   r=1; refused_for "$LAST_D" deploy-token-refused && grep -q "deploy-token id=$DT verdict=refuse detail=$why" "$LAST_D/out.txt" && no_apply "$LAST_D" && no_leak "$LAST_D" && r=0
   verdict "$r" "rehearsal: deploy token $why -> reason=deploy-token-refused, its body not printed"
   tunnel_case "dt-app-$why" false; deploy_token_fixture "$LAST_D" "$c" "$nm" "$h"; run_job "$LAST_D" "$PRISTINE"
-  r=1; refused_for "$LAST_D" deploy-token-refused && no_apply "$LAST_D" && r=0
-  verdict "$r" "apply: deploy token $why -> reason=deploy-token-refused, nothing applied"
+  r=1; refused_for "$LAST_D" deploy-token-refused && no_apply "$LAST_D" && ! grep -q '^predelete' "$LAST_D/calls.log" \
+    && grep -q '^::error title=cf-account-migrate::.*Nothing was deleted or applied' "$LAST_D/out.txt" && r=0
+  verdict "$r" "apply: deploy token $why -> reason=deploy-token-refused, nothing deleted or applied"
 done
 
 for m in tfoutput-empty dopplerset dopplercorrupt; do
@@ -2144,7 +2156,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=327
+EXPECTED_CASES=329
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

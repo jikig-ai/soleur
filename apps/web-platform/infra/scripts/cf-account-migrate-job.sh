@@ -81,10 +81,12 @@
 #
 # TUNNEL PHASE (contract). No state forget. The plan alone sets cf_migration_import_app=true, and on
 # a gate PASS the job reads the deploy policy's service token live (deploy_token_check; a refusal is
-# deploy-token-refused; plan_and_gate rc 5). The rehearsal grades the pre-delete's pin list with no request and refuses
-# predelete-refused while it is not six ids. The apply leg runs cf-tunnel-host-predelete.sh --apply
-# BEFORE the plan (plan ruling F5), so a later gate refusal leaves those six records deleted; they
-# serve only Error 1000. After the apply it writes the CI-SSH pair to prd_terraform and verifies it
+# deploy-token-refused; plan_and_gate rc 5). After the gate the rehearsal grades the pre-delete's
+# pin list with no request, then dry-runs it with the provider token (it reads and grades the six live
+# records and deletes nothing); either refusal is predelete-refused. The apply leg runs
+# cf-tunnel-host-predelete.sh --apply AFTER every gate passes and just before terraform apply (CTO
+# ruling 2026-11-25, amending F5): the six A records are not in state, so the graded plan stays valid,
+# and a gate refusal deletes nothing. After the apply it writes the CI-SSH pair to prd_terraform and verifies it
 # by digest; a failed write refuses ci-ssh-sync-failed applied=true after the live probes have run.
 # A re-dispatch is safe: the pre-delete counts 404 as gone, every created address plans no-op, the
 # tunnel ignores its secret, and -replace rolls only random_id.tunnel_secret.
@@ -593,12 +595,17 @@ deploy_token_check() {
   printf '%s deploy-token id=%s verdict=ok\n' "$P" "$id"
 }
 
-# tunnel_predelete: the pinned six-record delete (TUNNEL PHASE in the header).
+# tunnel_predelete [--apply]: the pinned six-record pre-delete (TUNNEL PHASE in the header). With
+# --apply it deletes; without, it is the dry run: it reads and grades the six live records only.
 tunnel_predelete() {
   local rc=0
   # shellcheck disable=SC2016 # expanded by the inner bash, inside doppler run
-  tf_env bash -c 'CF_API_TOKEN="${TF_VAR_cf_api_token:-}" exec bash "$1" --apply' _ "$GITHUB_WORKSPACE/$PREDELETE_REL" 2>&1 || rc=$?
-  [[ "$rc" -eq 0 ]] || refuse predelete-refused "the pinned six-record pre-delete did not finish (see its verdict line above, which names any record it deleted); no plan ran and nothing was applied. A re-dispatch counts a record already gone as done."
+  tf_env bash -c 'CF_API_TOKEN="${TF_VAR_cf_api_token:-}" exec bash "$1" ${2:+"$2"}' _ "$GITHUB_WORKSPACE/$PREDELETE_REL" "${1-}" 2>&1 || rc=$?
+  if [[ "${1-}" != --apply ]]; then
+    [[ "$rc" -eq 0 ]] || refuse predelete-refused "the gate passed, but the pre-delete dry run refused (see its verdict line above): a pinned record no longer matches the live zone, so the apply leg would refuse. Nothing was written."
+    return 0
+  fi
+  [[ "$rc" -eq 0 ]] || refuse predelete-refused "the gates passed, but the pinned six-record pre-delete did not finish (see its verdict line above, which names any record it deleted); nothing was applied. A re-dispatch counts a record already gone as done."
 }
 
 # sync_ci_ssh: publish the new CI-SSH pair to prd_terraform on stdin and verify each by digest.
@@ -743,6 +750,7 @@ run_rehearsal() {
     # No token and no request: the apply leg must not be the first to learn the list is unusable.
     bash "$GITHUB_WORKSPACE/$PREDELETE_REL" --check-pins \
       || refuse predelete-refused "the gate passed, but the pre-delete's pin list is not six record ids, so the apply leg would refuse. Commit the six ids in a reviewed PR. Nothing was written."
+    tunnel_predelete
   fi
   printf '%s phase=%s mode=rehearsal verdict=PASS applied=false\n' "$P" "$MIGRATE_PHASE"
   summary "verdict=PASS applied=false"
@@ -853,7 +861,6 @@ run_apply() {
   if [[ "$MIGRATE_PHASE" == tunnel ]]; then
     # Checked before the delete: an apply that cannot publish the CI-SSH pair must not start.
     [[ -n "$DOPPLER_WRITE_VALUE" ]] || refuse doppler-write-token-missing "DOPPLER_TOKEN_WRITE is not set, so the post-apply CI-SSH sync could not run. Nothing was deleted or applied."
-    tunnel_predelete
   fi
   if [[ "$MIGRATE_PHASE" == redirects-dns ]]; then
     # The forget's stdout is kept: its backup=uploaded marker is printed after the backup reached R2
@@ -878,9 +885,11 @@ run_apply() {
   fi
   plan_and_gate; rc=$?
   [[ "$rc" -ne 2 ]] || refuse entrypoint-gate-refused "the whole-list entrypoint gate refused (a live phase entrypoint is populated, or its emptiness could not be proven); adopt it with the printed import block first. Nothing was applied.${fg}" "$fx"
-  [[ "$rc" -ne 5 ]] || refuse deploy-token-refused "the deploy policy's service token did not pass its live read (see the deploy-token line: 200, name github-actions-deploy, about 8760h to expiry). Nothing was applied; the pre-delete has already run."
+  [[ "$rc" -ne 5 ]] || refuse deploy-token-refused "the deploy policy's service token did not pass its live read (see the deploy-token line: 200, name github-actions-deploy, about 8760h to expiry). Nothing was deleted or applied."
   [[ "$rc" -eq 0 ]] || refuse gate-refused "the plan did not reach gate verdict=PASS; nothing was applied.$(gate_next "$rc" "$fg" "$fk")" "$fx"
   check_expected_isu "$fg" "$fx"
+  # Every gate has passed: only now may the six pinned A records go (TUNNEL PHASE in the header).
+  [[ "$MIGRATE_PHASE" != tunnel ]] || tunnel_predelete --apply
   # One INT, never a KILL, and --foreground so it reaches terraform once: a second INT makes it exit
   # at once and can lose in-flight creates from state. Keyed on an empty replace list, not the phase
   # name: with no replace the gate admits no delete, so an INT has no delete-then-create to split
