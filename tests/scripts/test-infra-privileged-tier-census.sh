@@ -641,17 +641,30 @@ tierb = [j for j in jobs if j.tier_b]
 print("IPT_TIERB=%s" % " ".join(sorted(j.id for j in tierb)), file=sys.stderr)
 
 # ── Guard 1 ────────────────────────────────────────────────────────────────────────
-no_env = [j.id for j in tierb if not j.has_env_key]
+# A local reusable-workflow CALLER (`uses: ./.github/workflows/<f>.yml`) cannot carry `environment:`
+# (GitHub rejects the key on a calling job), yet it MUST pass an environment secret by name: one the
+# caller does not pass resolves to "" in the called workflow, with no error (GitHub docs, "Reuse
+# workflows" -> using environment secrets; #12873 dropped it to satisfy this row, so the bastion
+# route read an empty token and HELD). Such a caller is covered when the called file is a
+# `workflow_call` workflow in this census and at least one of its jobs is Tier B, and every Tier-B
+# job there declares an `environment:` whose arms are all Tier-B environments: that environment
+# gates the run and supplies the secret's value. A remote `uses:` (`owner/repo/...@ref`) is never
+# covered, because its jobs are not in this census.
+REUSABLE_LOCAL = re.compile(r"^\./\.github/(workflows/[^/@\s]+\.ya?ml)$")
+def reusable_caller_covered(j):
+    m = REUSABLE_LOCAL.match(str(j.body.get("uses") or "").strip())
+    if not m:
+        return False
+    called = [c for c in jobs if c.rel == m.group(1)]
+    tb = [c for c in called if c.tier_b]
+    return (bool(called) and "workflow_call" in called[0].triggers and bool(tb)
+            and all(c.has_env_key and c.arms and all(a in TIER_B_ENVIRONMENTS for a in c.arms) for c in tb))
+no_env = [j.id for j in tierb if not j.has_env_key and not reusable_caller_covered(j)]
 check("G1b: every Tier-B job declares an `environment:` key (AC2b; a Tier-B job with none reads no "
-      "environment secret and fails closed the moment the legacy fallback goes) [%d Tier-B jobs]" % len(tierb),
-      not no_env,
-      # The remedy leads the detail (it is cut at 400 chars). A reusable-workflow CALLER
-      # (`uses: ./.github/workflows/...`) cannot carry `environment:`: there the fix is to stop
-      # passing the environment-only secret, which the CALLED job's own `environment:` supplies
-      # (#12873; GitHub uses the environment secret over a caller-passed one).
-      ("remedy: add `environment:` to the job, or, if it is a reusable-workflow caller, stop passing "
-       "the environment-only secret (the called job's `environment:` supplies it); jobs: %s" % no_env[:8])
-      if no_env else no_env[:8])
+      "environment secret and fails closed the moment the legacy fallback goes; a local reusable-workflow "
+      "caller, which cannot carry one, is covered when every Tier-B job it calls declares a Tier-B "
+      "environment) [%d Tier-B jobs]" % len(tierb),
+      not no_env, no_env[:8])
 
 # (#9755) An EMPTY arm (`|| ''` / `|| ""`) is a resolvable outcome but not an environment NAME:
 # it binds no environment, so no ENV-scoped secret resolves on it — a Tier-B job that lands on
@@ -2715,6 +2728,36 @@ jobs:
           bash scripts/tierb-helper.sh
 EOF
 
+# A local reusable-workflow pair (#12873): the caller passes the environment secret BY NAME and
+# carries no `environment:` (GitHub rejects one on a calling job); the called job declares it. G1b
+# must read this compliant, which makes the control (H0) the positive case for the caller rule.
+cat > "$FIX/tree/.github/workflows/tierb-reusable-caller.yml" <<'EOF'
+name: fixture tier-b reusable caller
+on: workflow_dispatch
+jobs:
+  call:
+    uses: ./.github/workflows/tierb-reusable-called.yml
+    secrets:
+      DOPPLER_TOKEN_INFRA_PRIVILEGED: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+EOF
+
+cat > "$FIX/tree/.github/workflows/tierb-reusable-called.yml" <<'EOF'
+name: fixture tier-b reusable called
+on:
+  workflow_call:
+    secrets:
+      DOPPLER_TOKEN_INFRA_PRIVILEGED:
+        required: true
+jobs:
+  work:
+    runs-on: ubuntu-24.04
+    environment: infra-privileged
+    steps:
+      - uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+EOF
+
 cat > "$FIX/tree/.github/workflows/tierb-mapping.yml" <<'EOF'
 name: fixture tier-b mapping form
 on: workflow_dispatch
@@ -3508,13 +3551,6 @@ printf 'name: zz\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\
 if fixture_written g1-1-lowercase-no-environment "$MUTDIR/tree/.github/workflows/zz-noenv.yml"; then
   fixcensus "$MUTDIR" "$T/mut/g1-1.tsv" ""
   mutant_red g1-1-lowercase-no-environment wf_row "$T/mut/g1-1.tsv" "G1b:"
-  # The G1b red's detail LEADS with its remedy (check() cuts the detail at 400 chars), and the
-  # remedy names the reusable-caller case: a `uses:` caller cannot carry `environment:` (#12873).
-  if awk -F'\t' 'index($2, "G1b:") == 1 && $1 != "ok" && index($3, "remedy:") == 1 && index($3, "reusable-workflow caller") > 0 { f = 1 } END { exit !f }' "$T/mut/g1-1.tsv"; then
-    pass "G1b red detail leads with the remedy and names the reusable-caller case"
-  else
-    fail "G1b red detail does not lead with the remedy naming the reusable-caller case" "$(grep -F 'G1b:' "$T/mut/g1-1.tsv" | cut -c1-300)"
-  fi
 fi
 # Row 2 — REORDER: a compliant first job, then a SECOND job in the same workflow whose
 # `environment:` expression resolves a NON-TIER-B result literal. The predicate operand
@@ -3645,6 +3681,27 @@ MUTDIR="$(fixcopy g1-8)"; assert_fixture_dir "$MUTDIR"
 if mutate g1-8-environment-deleted "$MUTDIR/tree/.github/workflows/apply-git-data-root-key.yml" 1 '/^    environment: web-platform-infra-apply$/d'; then
   fixcensus "$MUTDIR" "$T/mut/g1-8.tsv" ""
   mutant_red g1-8-environment-deleted wf_row "$T/mut/g1-8.tsv" "G1b:"
+fi
+# Rows 8b-8d (#12873) — the reusable-caller cover must not stretch. Each mutant makes the CALLER the
+# only uncovered job: the called workflow stays free of G1b reds of its own.
+# 8b: the called workflow has no Tier-B job, so no environment gates the secret it is handed.
+MUTDIR="$(fixcopy g1-8b)"; assert_fixture_dir "$MUTDIR"
+printf 'name: zz\non:\n  workflow_call:\n    secrets:\n      DOPPLER_TOKEN_INFRA_PRIVILEGED:\n        required: false\njobs:\n  work:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo x\n' > "$MUTDIR/tree/.github/workflows/tierb-reusable-called.yml"
+if fixture_written g1-8b-reusable-called-has-no-tierb-job "$MUTDIR/tree/.github/workflows/tierb-reusable-called.yml"; then
+  fixcensus "$MUTDIR" "$T/mut/g1-8b.tsv" ""
+  mutant_red g1-8b-reusable-called-has-no-tierb-job wf_row "$T/mut/g1-8b.tsv" "G1b:"
+fi
+# 8c: a REMOTE reusable workflow: its jobs are outside this census, so nothing proves an environment.
+MUTDIR="$(fixcopy g1-8c)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-8c-reusable-caller-remote "$MUTDIR/tree/.github/workflows/tierb-reusable-caller.yml" 2 's|^    uses: \./\.github/workflows/tierb-reusable-called\.yml$|    uses: other-org/other-repo/.github/workflows/tierb-reusable-called.yml@0123456789abcdef0123456789abcdef01234567|'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-8c.tsv" ""
+  mutant_red g1-8c-reusable-caller-remote wf_row "$T/mut/g1-8c.tsv" "G1b:"
+fi
+# 8d: the called file is not a `workflow_call` workflow, so it is not what the caller runs.
+MUTDIR="$(fixcopy g1-8d)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-8d-reusable-called-not-workflow-call "$MUTDIR/tree/.github/workflows/tierb-reusable-called.yml" 2 's/^  workflow_call:$/  workflow_dispatch:/'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-8d.tsv" ""
+  mutant_red g1-8d-reusable-called-not-workflow-call wf_row "$T/mut/g1-8d.tsv" "G1b:"
 fi
 # Row 9 (U5) — an environment OUTSIDE tier_b_environments: a name O3 never seeds, so GitHub
 # auto-creates it with no branch policy at all.
@@ -5446,7 +5503,7 @@ fi
 # 165 -> 171 (#12742 round 2, G2a fails closed on the prefix): g2-2c..g2-2g (timeout -k / --preserve-status / 1m30s,
 #   env -u, a quoted `$(timeout -k ...)`) and the g2-2h quoted-prose control; 1 landing each. Measured: 171 ran.
 # 181 + 7 -> 188 (main merge into #12876): main's #9294 rows and this PR's g2-2b..g2-2h rows are disjoint. Measured: 188 ran.
-MUTANT_FLOOR=188
+MUTANT_FLOOR=191  # 188 -> 191 (#12873 follow-up): g1-8b, g1-8c, g1-8d (the reusable-caller cover on G1b).
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1

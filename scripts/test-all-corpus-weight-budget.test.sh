@@ -136,7 +136,7 @@ check_corpus() {
   (( ${#noref[@]} ))    && { printf '    [check] exemption reason(s) without a #NNN ref: %s\n' "${noref[@]}" >&2; _rc=1; }
   (( ${#unexp[@]} ))    && { printf '    [check] registration(s) with no committed weight row: %s\n' "${unexp[@]}" >&2
                              printf '    remedy: python3 scripts/regenerate-shard-manifest.py --group <light|heavy|infra> --incremental --write\n' >&2
-                             printf '            (writes the weight row AND the shard placement that infra-suite-registration pairs it with;\n' >&2
+                             printf '            (writes the weight row AND its shard placement in one pass; the manifest checks pair the two,\n' >&2
                              printf '            a hand-added weight row has no placement, #12873)\n' >&2; _rc=1; }
   (( ${#stalea[@]} ))   && { printf '    [check] unmeasured-allowlist label(s) that gained a row: %s\n' "${stalea[@]}" >&2; _rc=1; }
   (( ${#departed[@]} )) && { printf '    [check] unmeasured-allowlist label(s) no longer registered: %s\n' "${departed[@]}" >&2; _rc=1; }
