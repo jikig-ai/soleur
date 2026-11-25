@@ -529,23 +529,39 @@ The ways the Hetzner read-only bearer can reach a process argument list from the
    exposure is the same as in runbook 6604 and is unchanged. The Phase 4 harness checks it: `command -V printf` in both
    shells, and argv-checking stubs on every external command the 5c line runs (ruling 8c).
 4. **curl reading `.curlrc` or a proxy.** Closed by `--disable` first and `--noproxy "*"`.
-5. **A line the census does not see, and an edited literal** (declared limits, narrowed by p3, rulings 8a, 9b, 11b,
-   12a and 12b). The census reads logical lines: `\` continuations are joined (the join stops at a code fence) and the
-   joined line is flagged by its Hetzner-specific arms, `api.hetzner.cloud` (p3) or a token name beside `curl` or
-   `Authorization` (p4). The residual is a logical line with no literal `api.hetzner.cloud` and no `curl` or
-   `Authorization` beside the token name: a renamed token, or the token name passed to another client (for example
-   `xh -A bearer -a "$HCLOUD_TOKEN_READONLY" "$U"`, which leaves the suite at 286/286; found in the final review pass, tracked in #12683). Every
-   literal-URL form is seen, on one line, split over `\` continuations, or with the host split inside its quotes across a
-   `\` continuation (g1r16), with any client (H18 rows g1r11 and g1r12), and so is the token on a continuation line with
-   the URL from a variable (g1r15). Known gaps inside that residual: same-line quote concatenation of the host (for
-   example `"https://api.hetzner"".cloud/..."` beside a renamed token, which leaves the census at `seen D=1 R=1`). The
-   remaining gap of the frozen literals: an edit to `N3B_FROZEN_D` or `N3B_FROZEN_R` (made together with the builders and
-   the document copies) is a reviewed change the suite cannot catch; only the defence lists still face it. Any such
+5. **A line the census does not see, and an edited literal** (declared limits, narrowed by p3 and p5, rulings 8a, 9b,
+   11b, 12a and 12b, and #12683 ruling (b)). The census reads logical lines: `\` continuations are joined (the join stops
+   at a code fence) and the joined line is flagged by its Hetzner-specific arms, `api.hetzner.cloud` (p3) or a token name
+   beside `curl` or `Authorization` (p4). Since #12683, arm p5 also flags any logical line holding one of five
+   case-sensitive token spellings, `$HCLOUD_TOKEN`, `${HCLOUD_TOKEN`, `--only-secrets HCLOUD`, `--only-secrets=HCLOUD` or
+   `secrets get HCLOUD`, so the token name passed to another client (for example
+   `xh -A bearer -a "$HCLOUD_TOKEN_READONLY" "$U"`, which left the suite at 286/286 before the fix) is red unless the line
+   equals D or R (H18 row g5r1; g5r2-g5r6 hold one spelling each, g5r8 one that exists only on the joined line). The bare
+   name `HCLOUD_TOKEN` stays legal, since the prose of both documents names it (g5s1). Every literal-URL form is seen, on
+   one line, split over `\` continuations, or with the host split inside its quotes across a `\` continuation (g1r16),
+   with any client (H18 rows g1r11 and g1r12), and so is the token on a continuation line with the URL from a variable
+   (g1r15). Known gaps that remain: a renamed token, including one injected under another name by
+   `doppler run --name-transformer` (`lower-snake`, `tf-var`; a p5 clause on that flag was rejected because runbook 6894's
+   `tf()` wrapper uses it); a token read by name without `$` or `${` (for example `printenv HCLOUD_TOKEN_READONLY | xh ...`);
+   any Doppler spelling other than the five exact needles (flag order, whitespace, quoting, comma lists, such as
+   `secrets get --plain HCLOUD_...`), and any Doppler read that names no secret (`secrets download`, `run` with no
+   `--only-secrets`); and same-line quote concatenation of the host (for example `"https://api.hetzner"".cloud/..."`
+   beside a renamed token, which leaves the census at `seen D=1 R=1`). The remaining gap of the frozen literals: an edit
+   to `N3B_FROZEN_D`, `N3B_FROZEN_R`, `N3B_FROZEN_V2`, `N3B_FROZEN_V3` or `N3B_FROZEN_V4` (made together with the builders
+   and the document copies) is a reviewed change the suite cannot catch; only the defence lists still face it. Any such
    construct would be new text in a reviewed diff.
-6. **Other documents.** Runbook 6604's lines are pinned by N3 to the suite's own builders, but only D and R are frozen as
-   literals and the defence lists run only on them: a second URL appended to a 6604 verify line in both the suite and the
-   runbook (for example after `servers/123931471`) stays green while `--config -` sends the bearer to both hosts. Tracked
-   in #12683. Other runbooks are out of scope.
+6. **Other documents.** Runbook 6604's lines are pinned by N3 to the suite's own builders. Since #12683, its three
+   "Verify the retired end state" lines V2-V4 are also frozen as literals (`N3B_FROZEN_V2`, `N3B_FROZEN_V3`,
+   `N3B_FROZEN_V4`, built by `rb_line_v2`/`rb_line_v3`/`rb_line_v4`, which `rb_expected` calls), and the four defence
+   lists run on each built line and each literal, with the curl-argv allow-list keyed per line kind: the kind's own URL
+   (V2 `servers/<digits>`, V3 exactly the quoted `volumes?name=` literal, V4 `volumes/<digits>`) must directly precede
+   ` | jq`, and only `--disable`, `-sS`, `--noproxy "*"`, `--config -` and `--max-time 30` may come before it. So a second
+   URL appended to a verify line (for example after `servers/123931471`) is red: in the builder alone it fails the frozen
+   equality (H18 row gVr1), and with the literal and runbook edited too it still fails curl-argv (gVr2). Remaining,
+   declared: a literal edited together with its builder and the runbook faces only the defence lists; the allow-list
+   permits `--disable`, `--noproxy "*"` and `--config -` but does not require them, for any kind (follow-up #12752); the
+   V tail after ` | jq` is pinned only by the frozen literal, since env-dump is an open word list; and runbook 6604's
+   prose outside its two pinned blocks is walked by neither N3 nor the census. Other runbooks are out of scope.
 7. **The Doppler fallback file** (a declared cross-runbook residual, ruling 8b). doppler CLI v3.77.1 `doppler run` writes
    an encrypted snapshot of the fetched secrets to disk after each successful fetch unless given `--no-fallback`
    (`doppler run --help`, checked 2026-11-11). With `--only-secrets` the snapshot holds only the read-only token, and
