@@ -6,11 +6,14 @@
 # forgets every old-id cloudflare_* entry from state (scripts/cf-account-state-migrate.sh),
 # then the `redirects-dns` phase imports these by their NEW ids.
 #
-# EVERY IMPORT MUST PLAN AS A PURE NO-OP. tests/scripts/lib/cf-account-migrate-gate.sh refuses
-# an import whose actions are anything but ["no-op"] (a mis-pinned id, e.g. two TXT records
-# swapped, plans as import + update) and one whose id differs from the literal below. On
-# 2026-11-19 six scan-created TXT records were unquoted and three incident comments cleared
-# in the live zone so they match dns.tf byte for byte.
+# WHAT AN IMPORT MAY PLAN. tests/scripts/lib/cf-account-migrate-gate.sh refuses an import whose
+# id differs from the literal below, and any action other than ["no-op"] with one exception.
+# The provider's Read fills `content` only when it is already set, so every cloudflare_record
+# import plans ["update"] adding allow_overwrite = false and content. The gate admits exactly
+# that shape, and only when a live read by the pinned id, taken after the plan, equals the
+# planned record (ADR-329, CTO ruling 2026-11-22). That read is what catches a swapped id, e.g.
+# two TXT records exchanged. On 2026-11-19 six scan-created TXT records were unquoted and three
+# incident comments cleared in the live zone so they match dns.tf byte for byte.
 #
 # NOT HERE: cloudflare_record.app (its content is web-1's IPv4 and hcloud_server.web renders
 # the tunnel token, so importing it pulls the tunnel into the plan; it rides the tunnel phase

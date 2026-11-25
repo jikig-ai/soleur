@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-10-28
+last_updated: 2026-11-23
 ---
 # Campaign Calendar
 
@@ -17,14 +17,10 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|--------------|----------|--------|
-| We Audited 102 Guardrails. Only Four Belong in Every Repository. | pillar | 2026-10-29 | x, bluesky, discord, linkedin-personal | scheduled |
-| The First Property Test We Wrote Found a Real Bug | pillar | 2026-11-03 | x, bluesky, discord, linkedin-personal | scheduled |
-| Before Your AI Team Takes a Recurring Job, It Answers Six Questions | spoke | 2026-11-04 | x, bluesky, discord, linkedin-personal | scheduled |
-| A Map That Can't Drift | pillar | 2026-11-05 | x, bluesky, discord, linkedin-personal | scheduled |
-| Test the Migration, Not Just the Schema | pillar | 2026-11-10 | x, bluesky, discord, linkedin-personal | scheduled |
-| The Map That Only Records What the Agent Saw | pillar | 2026-11-12 | x, bluesky, discord, linkedin-personal | scheduled |
-| A Flaky Test Passed on Retry and the Loop Called It Fixed | pillar | 2026-11-17 | x, bluesky, discord, linkedin-personal | scheduled |
+| A review can no longer pass a change as clean when the security scan never ran | feature-launch | 2026-11-26 | x, bluesky | scheduled |
+| Groundwork for scheduled agents that read GitHub text as data | feature-launch | 2026-12-01 | x, bluesky | scheduled |
 | Your Alarm Passed Every Rehearsal. In Real Life It Never Rings. | pillar | 2026-12-03 | x, bluesky, discord, linkedin-personal | scheduled |
+| An Approval Only Covers the Version It Saw | pillar | 2026-12-09 | x, bluesky, linkedin-personal, discord | scheduled |
 
 ## Stale Draft — needs approval
 
@@ -40,6 +36,9 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|--------------|----------|--------|
+| A Map That Can't Drift | pillar | 2026-11-05 | x, bluesky, discord, linkedin-personal | stale |
+| Launch readiness check can now file its gaps as GitHub tasks, opt-in | feature-launch | 2026-11-06 | x | stale |
+| Test the Migration, Not Just the Schema | pillar | 2026-11-10 | x, bluesky, discord, linkedin-personal | stale |
 | A 'healthy' server can lie — new deep-readiness check proves a host can actually serve you | feature-launch | 2026-08-25 | x, bluesky | stale |
 | AI Agents for Solo Founders: The Definitive Guide | pillar | 2026-09-08 | discord, x, bluesky, linkedin-company | stale |
 | Agents That Use APIs, Not Browsers | milestone-announcement | 2026-07-09 | discord, x, bluesky, linkedin-personal, linkedin-company | stale |
@@ -60,6 +59,11 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|--------------|----------|--------|
+| A Flaky Test Passed on Retry and the Loop Called It Fixed | pillar | 2026-11-17 | x, bluesky, discord, linkedin-personal | published |
+| The Map That Only Records What the Agent Saw | pillar | 2026-11-12 | x, bluesky, discord, linkedin-personal | published |
+| Before Your AI Team Takes a Recurring Job, It Answers Six Questions | spoke | 2026-11-04 | x, bluesky, discord, linkedin-personal | published |
+| The First Property Test We Wrote Found a Real Bug | pillar | 2026-11-03 | x, bluesky, discord, linkedin-personal | published |
+| We Audited 102 Guardrails. Only Four Belong in Every Repository. | pillar | 2026-10-29 | x, bluesky, discord, linkedin-personal | published |
 | Soleur on OpenCode: run your AI organization on open-weights models | feature-launch | 2026-10-28 | discord, linkedin-company | published |
 | A Property Test That Cannot Fail Teaches Nothing | pillar | 2026-10-28 | x, bluesky, discord, linkedin-personal | published |
 | Soleur on OpenCode: open-weights models, sovereign memory | feature-launch | 2026-10-27 | x, bluesky | published |

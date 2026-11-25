@@ -50,6 +50,11 @@
 #       Strings, comments and heredocs are blanked before the scan, so prose naming a provisioner
 #       is not one. RESIDUAL: a module call or a non-spec dependency's provisioner (the gate's
 #       allow-set refuses any non-no-op outside the spec, so it cannot run at apply).
+#  (10) cf-account-migrate-alert.yml, offline: its `workflows:` entry is the migrate workflow's
+#       `name:`, its job filter is that workflow's apply job key, each quoted Halt title is a runbook
+#       bullet, and its step body, run with a stub `gh`, comments on a failed or cancelled apply and
+#       on a jobs API failure and stays silent on a failed rehearsal. RESIDUAL: the `if:` expression
+#       and the real workflow_run trigger cannot run offline.
 #
 # The exempt workflow list, the plan-only subset and the exempt jobs are READ FROM THE SCRIPT
 # (sourced), never re-typed.
@@ -1048,13 +1053,127 @@ resource "cloudflare_ruleset" "seo_page_redirects" {\
 }'
 tf_mut 'a provisioner named only in a comment and a string of a spec member' OK seo-rulesets.tf 's#^resource "cloudflare_ruleset" "seo_page_redirects" \{$#&\n  \# provisioner "local-exec" { command = "x" }\n  description = "no provisioner \\"local-exec\\" {} here"#'
 
+# ── (10) the alert workflow (review fix round 2) ─────────────────────────────────────────────
+# workflow_run fires only from the default branch's copy, so these offline rows are the only check
+# before a real incident. The static rows read the three files; the behaviour rows run the step's
+# own run text with a stub `gh` (first on PATH), which reaches no network.
+ALERT="$WFDIR/cf-account-migrate-alert.yml"
+MIGRATE="$WFDIR/cf-account-migrate.yml"
+RUNBOOK="$REPO/knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md"
+ALERT_PY="$WORK/alert.py"
+cat > "$ALERT_PY" <<'PY'
+"""Prints `OK|RED <id> <msg>` for the alert's three static bindings, and writes its step body."""
+import re, sys
+import yaml
+
+alert_path, migrate_path, runbook_path, step_out = sys.argv[1:5]
+alert = yaml.safe_load(open(alert_path))
+migrate = yaml.safe_load(open(migrate_path))
+runbook = open(runbook_path).read()
+on = alert.get(True, alert.get("on")) or {}
+wanted = ((on.get("workflow_run") or {}).get("workflows")) or []
+print("%s alert-name workflows=%r migrate name=%r" % ("OK" if wanted == [migrate.get("name")] else "RED", wanted, migrate.get("name")))
+steps = alert["jobs"]["alert"]["steps"]
+run = steps[0]["run"] if len(steps) == 1 else ""
+open(step_out, "w").write(run)
+names = re.findall(r'select\(\.name == "([^"]+)"', run)
+jobs = migrate.get("jobs") or {}
+good = len(names) == 1 and names[0] in jobs and jobs[names[0]].get("environment") == "web-platform-infra-apply"
+print("%s alert-job-key filter=%r is%s the migrate workflow's apply job" % ("OK" if good else "RED", names, "" if good else " not"))
+titles = [t.replace("\\`", "`") for t in re.findall(r'\\"(.+?)\\"', run)]
+missing = [t for t in titles if ("- **%s**" % t) not in runbook]
+need = {"A DNS record may hold a wrong value", "No completed re-read"}
+good = bool(titles) and not missing and need <= set(titles)
+print("%s alert-titles %d quoted Halt bullets, missing=%r" % ("OK" if good else "RED", len(titles), missing))
+PY
+alert_static() { python3 "$ALERT_PY" "$1" "$2" "$3" "$WORK/alert-step.sh" 2>&1; } # <alert> <migrate> <runbook>
+ALERT_STUB="$WORK/alert-stub"; mkdir -p "$ALERT_STUB/bin"
+cat > "$ALERT_STUB/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+d="$ALERT_STUB"
+if [[ "$1 $2" == "issue comment" ]]; then printf '%s\n' "$*" >>"$d/comments"; exit 0; fi
+[[ "$1" == api && "$2" == repos/*/actions/runs/*/jobs && "$3" == --jq ]] || exit 64
+[[ ! -e "$d/api-fail" ]] || { echo 'gh: Bad Gateway (HTTP 502)' >&2; exit 1; }
+jq -r "$4" "$d/jobs.json"
+STUB
+chmod +x "$ALERT_STUB/bin/gh"
+# alert_run <step file> <job-name:conclusion ...|api-fail>: prints the number of comments posted.
+alert_run() {
+  local step="$1" pair; shift
+  rm -f "$ALERT_STUB/comments" "$ALERT_STUB/api-fail" "$ALERT_STUB/jobs.json"
+  if [[ "${1:-}" == api-fail ]]; then : > "$ALERT_STUB/api-fail"
+  else
+    for pair in "$@"; do jq -cn --arg n "${pair%%:*}" --arg c "${pair##*:}" '{name: $n, conclusion: $c}'; done \
+      | jq -s '{jobs: .}' > "$ALERT_STUB/jobs.json"
+  fi
+  PATH="$ALERT_STUB/bin:$PATH" ALERT_STUB="$ALERT_STUB" GH_TOKEN=stub GH_REPO=jikig-ai/soleur RUN_ID=1 RUN_URL=https://example.invalid/run/1 \
+    bash -e "$step" >/dev/null 2>&1
+  if [[ -e "$ALERT_STUB/comments" ]]; then wc -l < "$ALERT_STUB/comments" | tr -d ' '; else echo 0; fi
+}
+AOUT="$(alert_static "$ALERT" "$MIGRATE" "$RUNBOOK")"
+for id in alert-name alert-job-key alert-titles; do
+  if grep -q "^OK $id " <<<"$AOUT"; then ok "$(grep "^OK $id " <<<"$AOUT" | cut -d' ' -f2-)"; else no "$id on the real files: $(grep -E " $id |Error" <<<"$AOUT")"; fi
+done
+STEP="$WORK/alert-step.sh"
+if [[ -s "$STEP" ]]; then ok "alert: the step body was extracted"; else no "alert: no step body"; fi
+A_J=cf_account_migrate_apply R_J=cf_account_migrate_rehearsal
+n="$(alert_run "$STEP" "$A_J:failure" "$R_J:skipped")"
+if [[ "$n" == 1 ]]; then ok "alert: a failed apply posts one comment"; else no "alert: a failed apply posted $n"; fi
+if grep -qF 'knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md' "$ALERT_STUB/comments" \
+  && grep -qF 'Otherwise, if the run printed `applying=true`, run the local Verify block first' "$ALERT_STUB/comments" \
+  && grep -qF 'A `REFUSE <addr> differs from the live record` line also goes first to the wrong-value bullet' "$ALERT_STUB/comments" \
+  && grep -qF 'differs from the live record</code>' "$MIGRATE" \
+  && grep -qF 'https://example.invalid/run/1' "$ALERT_STUB/comments"; then
+  ok "alert: the comment carries the run, the runbook path and the otherwise branch"
+else no "alert: the comment lacks the run, the runbook path or the otherwise branch"; fi
+n="$(alert_run "$STEP" "$A_J:cancelled" "$R_J:skipped")"
+if [[ "$n" == 1 ]]; then ok "alert: a cancelled apply posts one comment"; else no "alert: a cancelled apply posted $n"; fi
+n="$(alert_run "$STEP" "$R_J:failure" "$A_J:skipped")"
+if [[ "$n" == 0 ]]; then ok "alert: a failed rehearsal posts nothing"; else no "alert: a failed rehearsal posted $n"; fi
+n="$(alert_run "$STEP" api-fail)"
+if [[ "$n" == 1 ]]; then ok "alert: a jobs API failure fails toward a comment"; else no "alert: a jobs API failure posted $n"; fi
+# alert_mut <label> <expect-RED id> <which: alert|migrate|runbook> <sed-expr>: one input mutated.
+alert_mut() {
+  local d="$WORK/alert-mut" a="$ALERT" m="$MIGRATE" r="$RUNBOOK" src o
+  mkdir -p "$d"
+  case "$3" in alert) src="$ALERT"; a="$d/f" ;; migrate) src="$MIGRATE"; m="$d/f" ;; runbook) src="$RUNBOOK"; r="$d/f" ;; esac
+  sed -E "$4" "$src" > "$d/f"
+  if cmp -s "$src" "$d/f"; then no "MUT alert $1: did not land"; return; fi
+  o="$(alert_static "$a" "$m" "$r")"
+  if grep -q "^RED $2 " <<<"$o"; then ok "MUT alert $1: $2 RED"; else no "MUT alert $1: $2 stayed green ($o)"; fi
+  python3 "$ALERT_PY" "$ALERT" "$MIGRATE" "$RUNBOOK" "$STEP" >/dev/null 2>&1
+}
+alert_mut 'the apply job is renamed in the migrate workflow' alert-job-key migrate 's/^  cf_account_migrate_apply:/  cf_account_migrate_write:/'
+alert_mut 'the filter names the rehearsal job' alert-job-key alert 's/select\(\.name == "cf_account_migrate_apply"/select(.name == "cf_account_migrate_rehearsal"/'
+alert_mut 'the migrate workflow is renamed' alert-name migrate 's/^name: CF account migrate \(#12931\)$/name: CF account migrate/'
+alert_mut 'the workflows entry drifts' alert-name alert 's/workflows: \["CF account migrate \(#12931\)"\]/workflows: ["CF migrate"]/'
+alert_mut 'a Halt bullet title is renamed in the runbook' alert-titles runbook 's/^- \*\*No completed re-read\*\*/- **No finished re-read**/'
+# alert_step_mut <label> <sed-expr> <expected comments> <job pairs...|api-fail>: a mutated step body.
+alert_step_mut() {
+  local label="$1" expr="$2" want="$3" f="$WORK/alert-step-mut.sh" got; shift 3
+  sed -E "$expr" "$STEP" > "$f"
+  if cmp -s "$STEP" "$f"; then no "MUT alert step $label: did not land"; return; fi
+  got="$(alert_run "$f" "$@")"
+  if [[ "$got" == "$want" ]]; then no "MUT alert step $label: the outcome row would stay green (posted $got)"; else ok "MUT alert step $label: the outcome row goes RED (posted $got)"; fi
+}
+alert_step_mut 'skipped jobs count as run' 's/ and \.conclusion != "skipped"//' 0 "$R_J:failure" "$A_J:skipped"
+alert_step_mut 'a jobs API failure reads as zero' 's/\|\| n=1$/|| n=0/' 1 api-fail
+alert_step_mut 'the zero-count exit is inverted' 's/\[ "\$n" != 0 \]/[ "$n" = 0 ]/' 1 "$A_J:failure" "$R_J:skipped"
+sed -E 's/ Otherwise, if the run printed.*"$/"/' "$STEP" > "$WORK/alert-step-mut.sh"
+if cmp -s "$STEP" "$WORK/alert-step-mut.sh"; then no "MUT alert step the otherwise branch is dropped: did not land"
+else
+  alert_run "$WORK/alert-step-mut.sh" "$A_J:failure" "$R_J:skipped" >/dev/null
+  if grep -qF 'Otherwise, if the run printed' "$ALERT_STUB/comments"; then no "MUT alert step the otherwise branch is dropped: still in the comment"
+  else ok "MUT alert step the otherwise branch is dropped: the comment row goes RED"; fi
+fi
+
 # ── verdict ────────────────────────────────────────────────────────────────────────────────
 printf '\ntest-cf-account-migration-scope.sh: %s passed, %s failed (%s cases)\n' "$PASS" "$FAIL" "$CASES"
 if (( PASS + FAIL != CASES )); then
   printf 'CONSERVATION FAILED: PASS(%s)+FAIL(%s) != CASES(%s)\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_ASSERTIONS=92
+MIN_ASSERTIONS=110
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
