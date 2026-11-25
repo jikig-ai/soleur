@@ -542,12 +542,24 @@ tun_plan() { # <out>
       elif polv[$a] != null then {actions: ["create"], before: null,
                             after: (ids($t) + {decision: "non_identity", include: [inc0]}),
                             after_unknown: {application_id: true, id: true, include: [blocks + {service_token: true}]}}
+      elif ($a | test("^cloudflare_record[.](deploy|ssh|registry)$")) then {actions: ["create"], before: null,
+        after: (ids($t) + {name: ($a | split(".")[1]), type: "CNAME", proxied: true, ttl: 1}),
+        after_unknown: {content: true, hostname: true, id: true}}
+      elif $a == "cloudflare_zero_trust_tunnel_cloudflared_config.web" then {actions: ["create"], before: null,
+        after: (ids($t) + {config: [{ingress_rule: [
+                   {hostname: "deploy.soleur.ai", service: "http://10.0.1.10:9000"},
+                   {hostname: "ssh.soleur.ai", service: "ssh://10.0.1.10:22"},
+                   {hostname: "registry.soleur.ai", service: "tcp://10.0.1.30:5000"},
+                   {hostname: null, service: "http_status:404"}]}]}), after_unknown: {tunnel_id: true, id: true}}
       else {actions: ["create"], before: null, after: ids($t)} end;
     {format_version: "1.2",
      configuration: {root_module: {resources: [polv | to_entries[] | {address: .key, expressions: {
        application_id: {references: [(.value.app + ".id"), .value.app]},
        decision: {constant_value: "non_identity"},
-       include: [{service_token: {references: .value.tok}}]}}]}},
+       include: [{service_token: {references: .value.tok}}]}}] + [("deploy", "ssh", "registry") | {address: ("cloudflare_record." + .), expressions: {content: {references:
+       ["cloudflare_zero_trust_tunnel_cloudflared.web.id", "cloudflare_zero_trust_tunnel_cloudflared.web"]}}}] + [{"doppler_secret.registry_push_access_token_id": "client_id", "doppler_secret.registry_push_access_token_secret": "client_secret"}
+       | to_entries[] | {address: .key, expressions: {value: {references:
+           [("cloudflare_zero_trust_access_service_token.registry_push." + .value), "cloudflare_zero_trust_access_service_token.registry_push"]}}}]}},
      resource_changes: [$spec | to_entries[] | .key as $a | .value as $c | ($a | split(".")[0]) as $t
        | {address: $a, mode: "managed", type: $t, change: (
            if $c == "create" then created($a; $t)
@@ -581,6 +593,10 @@ tun_mut '(.resource_changes[] | select(.address=="cloudflare_record.app") | .cha
 check "tunnel: the app record planned as a create (import switched off) is refused" 1 "cloudflare_record.app (class import) planned with actions" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
 tun_mut '(.resource_changes[] | select(.address=="cloudflare_record.ssh") | .change) |= (.actions = ["update"] | .before = .after)'
 check "tunnel: a created CNAME planned as an update is refused (only a plain create is exempt)" 1 "cloudflare_record.ssh is a cloudflare_record change outside import-normalize" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+for act in '["delete"]' '["delete","create"]'; do
+  tun_mut '(.resource_changes[] | select(.address=="cloudflare_record.ssh") | .change) |= (.actions = '"$act"' | .before = .after)'
+  check "tunnel: a created CNAME planned as $act is refused as a record change (the exemption is a plain create only)" 1 "cloudflare_record.ssh is a cloudflare_record change outside import-normalize" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+done
 tun_mut '(.resource_changes[] | select(.address=="cloudflare_record.app") | .change.actions) = ["update"]'
 check "tunnel: an app import that writes is refused" 1 "not a pure no-op import" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
 tun_mut '(.resource_changes[] | select(.address=="doppler_secret.registry_push_access_token_secret") | .change.actions) = ["delete","create"]'
@@ -616,7 +632,7 @@ tset "$TUN_APP.ssh" '.after.account_id = "'"$OA"'" | del(.after_unknown.account_
 tchk "B1-red-old-account: an app planned on the OLD account is refused" "$TUN_APP.ssh carries an id that is not the new"
 tset "$TUN_POL_SSH" '.after_unknown.account_id = true'
 tchk "B1-red-other-address-policy: a known-after-apply account_id on a policy is refused" "$TUN_POL_SSH carries an id that is not the new"
-tset "cloudflare_record.ssh" '.after_unknown = {account_id: true}'
+tset "cloudflare_record.ssh" '.after_unknown.account_id = true'
 tchk "B1-red-other-address-record: a known-after-apply account_id on a record is refused" "cloudflare_record.ssh carries an id that is not the new"
 gate_mutate_and_check "M-B1-address: dropping the address limit admits that record" \
   's/ and (\.address as \$x | \$zoned | index(\$x) != null)) as \$za/) as $za/' cf_account_migrate_gate tunnel "$TMP/tm.json" "$TMP/tun-state.json"
@@ -666,6 +682,42 @@ for pa in "$TUN_POL_SSH" "$TUN_POL_REG"; do
   tchk "B2-$s-redispatch-green: one known UUID passes" "verdict=PASS" 0
 done
 
+# B2: each registry-push Doppler secret takes its value from the registry_push token, so a plan
+# cannot put another token (the CI-SSH secret, say) into the prd runtime config.
+for spec in id:client_id secret:client_secret; do
+  ra="doppler_secret.registry_push_access_token_${spec%%:*}"
+  tcfg "$ra" '.value.references = ["'"$TUN_TOK"'.ci_ssh.'"${spec#*:}"'", "'"$TUN_TOK"'.ci_ssh"]'; tchk "B2-reg-$spec-other-token: refused" "$ra value is not $TUN_TOK.registry_push.${spec#*:}"
+  tcfg "$ra" 'del(.value)'; tchk "B2-reg-$spec-no-reference: refused" "$ra value is not $TUN_TOK.registry_push.${spec#*:}"
+done
+
+# B2: the tunnel config routes exactly the three gated hosts, in order, then the 404 catch-all, each
+# to its own scheme (security review 2026-11-25). Another hostname or service reaches the origin.
+TCF="cloudflare_zero_trust_tunnel_cloudflared_config.web"
+tset "$TCF" '.after.config[0].ingress_rule |= [.[0], {hostname: "admin.soleur.ai", service: "http://10.0.1.10:8080"}] + .[1:]'
+tchk "B2-ingress-extra-host: an extra hostname rule is refused" "$TCF must route exactly deploy., ssh. and registry.soleur.ai, then the catch-all"
+tset "$TCF" '.after.config[0].ingress_rule |= [.[1], .[0]] + .[2:]'
+tchk "B2-ingress-order: a reordered rule list is refused" "$TCF must route exactly deploy., ssh. and registry.soleur.ai, then the catch-all"
+tset "$TCF" '.after.config[0].ingress_rule[3].service = "ssh://10.0.1.10:22"'
+tchk "B2-ingress-catch-all: a catch-all that is not http_status:404 is refused" "$TCF ingress rule 4 must use http_status:404"
+tset "$TCF" '.after.config[0].ingress_rule[0].service = "ssh://10.0.1.10:22"'
+tchk "B2-ingress-scheme: deploy. on another scheme is refused" "$TCF ingress rule 1 must use http://"
+tset "$TCF" '.after.config[0].ingress_rule[2].service = null | .after_unknown.config = [{ingress_rule: [{}, {}, {service: true}, {}]}]'
+tchk "B2-ingress-unknown: a service known only after apply is refused" "$TCF ingress is known only after apply"
+tset "$TCF" '.after.config = []'
+tchk "B2-ingress-missing: a config with no ingress rules is refused" "$TCF must plan one config block"
+
+# B2: each gated host is a proxied CNAME to this tunnel (security review 2026-11-25): an unproxied
+# record, another type or another target would serve the origin with no Access app in front.
+for n in deploy ssh registry; do
+  ra="cloudflare_record.$n"
+  tset "$ra" '.after.proxied = false'; tchk "B2-cname-$n-unproxied: refused" "$ra must plan a proxied CNAME $n to the tunnel (proxied"
+  tset "$ra" '.after.type = "A" | .after.content = "135.181.45.178" | del(.after_unknown.content)'; tchk "B2-cname-$n-type: refused" "$ra must plan a proxied CNAME $n to the tunnel (type"
+  tset "$ra" '.after.name = "admin"'; tchk "B2-cname-$n-name: refused" "$ra must plan a proxied CNAME $n to the tunnel (name"
+  tset "$ra" '.after.content = "origin.example.com" | del(.after_unknown.content)'; tchk "B2-cname-$n-target: refused" "$ra must plan a proxied CNAME $n to the tunnel (content"
+  tset "$ra" '.after.content = "0b1c2d3e-aaaa-bbbb-cccc-0123456789ab.cfargotunnel.com" | del(.after_unknown.content)'; tchk "B2-cname-$n-known-tunnel: a known tunnel target passes (re-dispatch)" "verdict=PASS" 0
+  tcfg "$ra" '.content.references = ["var.origin_host"]'; tchk "B2-cname-$n-unknown-elsewhere: an unknown target that is not the tunnel is refused" "$ra must plan a proxied CNAME $n to the tunnel (content"
+done
+
 # B2: the three Access apps, one violated pin per row.
 for spec in deploy:24h ssh:15m registry:15m; do
   n="${spec%%:*}"; aa="$TUN_APP.$n"
@@ -674,7 +726,17 @@ for spec in deploy:24h ssh:15m registry:15m; do
   tset "$aa" '.after.type = "bookmark"'; tchk "B2-app-$n-type: refused" "$aa must plan its Access pin (type differs"
   tset "$aa" '.after.session_duration = "720h"'; tchk "B2-app-$n-session: refused" "$aa must plan its Access pin (session_duration differs"
   tset "$aa" '.after.zone_id = "'"$OZ"'"'; tchk "B2-app-$n-zone: refused" "$aa must plan its Access pin (zone_id differs"
+  # The routine gate's access_app_keys tail: each must plan blank, known or unknown (security review
+  # 2026-11-25). Any one of them can open the host while domain/type/session/zone stay pinned.
+  for kv in 'policies:["'"$OTHER_UUID"'"]' 'options_preflight_bypass:true' 'self_hosted_domains:["deploy.soleur.ai"]' \
+            'destinations:[{"type":"public","uri":"'"${n}"'.soleur.ai/hooks/x"}]' 'cors_headers:[{"allow_all_origins":true}]'; do
+    k="${kv%%:*}"; v="${kv#*:}"
+    tset "$aa" ".after.$k = $v"; tchk "B2-app-$n-$k: refused" "$aa must leave $k unset"
+    tset "$aa" ".after.$k = null | .after_unknown.$k = true"; tchk "B2-app-$n-$k-unknown: refused" "$aa must leave $k unset (known only after apply)"
+  done
 done
+tset "$TUN_APP.deploy" '.after.policies = ["'"$OTHER_UUID"'"] | .after.destinations = [{"type":"public","uri":"deploy.soleur.ai/hooks/x"}] | .after.options_preflight_bypass = true | .after.cors_headers = [{"allow_all_origins":true}]'
+tchk "B2-app-reported-plan: an app with a foreign policy, a path destination, preflight bypass and open CORS is refused" "$TUN_APP.deploy must leave policies unset"
 
 # B2: Terraform collapses a list holding one unknown element to wholly unknown (measured on provider
 # 4.52.7), so `[token.id, "<another uuid>"]` plans exactly like `[token.id]`. Only the committed
@@ -740,6 +802,11 @@ tv "another token id" id-differs "$(tv_body github-actions-deploy 8760 99999999-
 tv "a 30-day token" expiry-out-of-window "$(tv_body github-actions-deploy 720)"
 tv "a ten-year token" expiry-out-of-window "$(tv_body github-actions-deploy 87600)"
 tv "an expired token" expiry-out-of-window "$(tv_body github-actions-deploy -1)"
+# The band's edges are inclusive: pinned on both sides so neither bound can drift unnoticed.
+tv "exactly the 8016h floor" ok "$(tv_body github-actions-deploy 8016)"
+tv "one hour under the floor (8015h)" expiry-out-of-window "$(tv_body github-actions-deploy 8015)"
+tv "exactly the 8761h ceiling" ok "$(tv_body github-actions-deploy 8761)"
+tv "one hour over the ceiling (8762h)" expiry-out-of-window "$(tv_body github-actions-deploy 8762)"
 tv "no expiry" expiry-absent "$(tv_body github-actions-deploy 8760 | jq -c 'del(.result.expires_at)')"
 tv "an unparseable expiry" expiry-unparseable "$(tv_body github-actions-deploy 8760 | jq -c '.result.expires_at = "soon"')"
 tv "success false" body-not-success '{"success":false,"result":null}'
@@ -1654,6 +1721,6 @@ gm_refuses "M-F11-tags: an order-sensitive compare refuses the reorder" 's/(\$r\
 
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 469 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 469)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 534 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 534)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

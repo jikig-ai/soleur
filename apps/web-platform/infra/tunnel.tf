@@ -17,7 +17,9 @@ resource "cloudflare_zero_trust_tunnel_cloudflared" "web" {
   # secret: original b64 value is irrecoverable.
   # config_src: forces replacement on import; the live tunnel already
   #   uses remote config, so ignoring is safe (#967).
-  # TODO: remove ignore_changes after clean reprovisioning (import artifact)
+  # LOAD-BEARING during the #12931 migration: every tunnel-phase dispatch re-runs
+  # -replace=random_id.tunnel_secret, and without `secret` here each re-dispatch would replace the
+  # live tunnel. The Phase 5 cleanup PR removes this ignore together with that -replace.
   lifecycle {
     ignore_changes = [secret, config_src]
   }

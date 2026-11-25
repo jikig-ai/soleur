@@ -79,7 +79,8 @@ p_policy_local()  { grep -qE 'include[[:space:]]*\{[[:space:]]*service_token[[:s
 p_precondition()  { local b; b="$(block_of "$1" cloudflare_zero_trust_access_policy deploy_service_token)"; grep -qE '^[[:space:]]+precondition[[:space:]]*\{' <<<"$b" && grep -qF 'length(local.deploy_service_token_ids) > 0' <<<"$b" && grep -qF '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' <<<"$b"; }
 p_no_outputs()    { ! grep -qE '^output[[:space:]]+"access_service_token_client_(id|secret)"' <<<"$(eff "$1")"; }
 p_no_client_ref() { ! grep -qE 'access_service_token\.deploy\.client_' <<<"$(eff "$1")"; }
-p_locals_uuid()   { grep -qE "$UUID_RE" <<<"$(eff "$1" | tr -d '\n' | grep -oE 'locals[[:space:]]*\{[[:space:]]*deploy_service_token_ids[[:space:]]*=[[:space:]]*\[[^]]*\]')"; }
+# A non-nil UUID: the nil placeholder (FILL-AT-PHASE-3.1) is UUID-shaped and must not pass.
+p_locals_uuid()   { grep -oE "$UUID_RE" <<<"$(eff "$1" | tr -d '\n' | grep -oE 'locals[[:space:]]*\{[[:space:]]*deploy_service_token_ids[[:space:]]*=[[:space:]]*\[[^]]*\]')" | grep -qvxF '"00000000-0000-0000-0000-000000000000"'; }
 p_locals_once()   { [[ "$(eff "$1" | grep -cE '^[[:space:]]*deploy_service_token_ids[[:space:]]*=')" == "1" ]]; }
 # no `variable "deploy_service_token_ids"` in ANY .tf of the root dir (arg 1), and no override/JSON config that could re-add one
 p_no_variable()   { local f; for f in "$1"/*.tf; do if grep -qE '^variable[[:space:]]+"deploy_service_token_ids"' <<<"$(eff "$f")"; then return 1; fi; done; [[ "$(p_b4_no_override_files "$1")" == "1" ]]; }
@@ -95,7 +96,7 @@ check     "S5b: nothing in tunnel.tf reads .client_ of the deploy token" p_no_cl
 check     "S6: the id list is declared exactly once, as a local (a variable is overridable from prd_terraform through tf-var)" p_locals_once "$TF"
 check     "S6b: no variable of that name exists in any .tf of the root, and no override or JSON config could add one" p_no_variable "$INFRA"
 # OWNER (draft state): the constant is empty until the live token id (read-only state read, id line only) is committed.
-check     "S7: OWNER — local.deploy_service_token_ids holds at least one UUID-shaped id (CI cannot know the live id; this fails while it is empty)" p_locals_uuid "$TF"
+check     "S7: OWNER — local.deploy_service_token_ids holds at least one non-nil UUID (CI cannot know the live id; this fails while it is empty or the nil placeholder)" p_locals_uuid "$TF"
 
 # ── the -target line a removed block needs, on comment-stripped YAML ───────────────────────────────────────────────────
 yaml_code() { grep -vE '^[[:space:]]*#' "$1"; }

@@ -48,6 +48,16 @@ printf '%s\n' "$*" >>"$D/argv.log"
 [[ "$cfg" -eq 1 && "$wfmt" == '\n%{http_code}' ]] || no "$@"
 hdr="$(cat)"
 [[ "$hdr" == "header = \"Authorization: Bearer ${STUB_TOKEN:?}\"" ]] || no "(bad bearer)"
+if [[ "$method" == GET && "$url" =~ ^https://api\.cloudflare\.com/client/v4/zones/951ce525552201ec6c696b24251abed7/dns_records\?name=([a-z.]+)\&per_page=100$ ]]; then
+  n="${BASH_REMATCH[1]}"
+  printf 'LIST %s\n' "$n" >>"$D/calls.log"
+  if [[ -f "$D/listcode.$n" ]]; then printf '{"success":false}\n%s' "$(cat "$D/listcode.$n")"; exit 0; fi
+  extra=0; [[ -f "$D/listshort" ]] && extra=1
+  shopt -s nullglob
+  jq -sc --arg n "$n" --argjson x "$extra" '[.[] | .result | select(.name == $n)] as $r
+    | {success: true, result: $r, result_info: {total_count: (($r | length) + $x)}}' "$D"/rec.* "$D"/extra.* </dev/null
+  printf '200'; exit 0
+fi
 [[ "$url" =~ ^https://api\.cloudflare\.com/client/v4/zones/951ce525552201ec6c696b24251abed7/dns_records/([0-9a-f]{32})$ ]] || no "$@"
 id="${BASH_REMATCH[1]}"
 printf '%s %s\n' "$method" "$id" >>"$D/calls.log"
@@ -98,6 +108,7 @@ run() { # <script> [args...]; output in $D/out, rc in RC
   RC=$?
 }
 gets() { grep -c '^GET ' "$D/calls.log"; }
+lists() { grep -c '^LIST ' "$D/calls.log"; }
 dels() { grep -c '^DELETE ' "$D/calls.log"; }
 has() { grep -qF -- "$1" "$D/out"; }
 clean() { [[ ! -s "$D/refused.log" ]] && ! grep -qF -- "$TOKEN" "$D/out" "$D/argv.log"; }
@@ -118,7 +129,14 @@ if [[ "$n_pins" -eq 0 ]]; then
     check "$r" "the committed empty list refuses (${mode:-dry-run}) with no API call"
   done
 elif [[ "$n_pins" -eq 6 ]]; then
+  # The same three rows as the empty branch, so MIN_CASES holds on both sides of the pin commit.
   ok "the committed list holds six ids"
+  r=1; [[ "$(sed -n '/^readonly PINNED_IDS=($/,/^)$/p' "$SUT" | grep -E '^  [0-9a-f]{32}$' | sort -u | wc -l)" -eq 6 ]] && r=0
+  check "$r" "the six committed ids are distinct"
+  new_case real-check-pins; cp "$SUT" "$SBX/tree/apps/web-platform/infra/scripts/real.sh"
+  run "$SBX/tree/apps/web-platform/infra/scripts/real.sh" --check-pins
+  r=1; [[ "$RC" -eq 0 ]] && has 'verdict=pins-ok count=6' && [[ ! -s "$D/argv.log" ]] && r=0
+  check "$r" "the committed list passes --check-pins with no API call"
 else
   no "the committed list holds $n_pins ids, want 0 or 6"
 fi
@@ -142,6 +160,9 @@ printf '\n[dry run]\n'
 new_case dry; run "$PINNED"
 r=1; [[ "$RC" -eq 0 ]] && has 'verdict=dry-run would_delete=6 absent=0' && [[ "$(gets)" -eq 6 && "$(dels)" -eq 0 ]] && clean && r=0
 check "$r" "the default is a dry run: six GETs, zero DELETEs"
+r=1; [[ "$(lists)" -eq 3 ]] && grep -qx 'LIST deploy.soleur.ai' "$D/calls.log" && grep -qx 'LIST ssh.soleur.ai' "$D/calls.log" \
+  && grep -qx 'LIST registry.soleur.ai' "$D/calls.log" && r=0
+check "$r" "the dry run lists every record on the three CNAME names"
 
 printf '\n[apply]\n'
 new_case apply; run "$PINNED" --apply
@@ -177,6 +198,10 @@ new_case mm-resume; rm -f "$D/rec.${IDS[0]}"; rec "${IDS[5]}" registry.soleur.ai
 r=1; [[ "$RC" -eq 1 && "$(dels)" -eq 0 ]] && has 'reason=record-mismatch' && r=0
 check "$r" "one record gone and another mismatched -> zero deletes"
 
+new_case mm-and-unread; rec "${IDS[5]}" registry.soleur.ai A false 172.67.73.132 >"$D/rec.${IDS[5]}"; printf '500' >"$D/getcode.${IDS[3]}"; run "$PINNED" --apply
+r=1; [[ "$RC" -eq 1 && "$(dels)" -eq 0 ]] && has 'reason=record-mismatch' && ! has 'reason=record-unreadable' && r=0
+check "$r" "a mismatch and an unreadable record together -> record-mismatch wins, zero deletes"
+
 printf '\n[refusal] a read with no verdict deletes none\n'
 for c in 403 429 500; do
   new_case "get-$c"; printf '%s' "$c" >"$D/getcode.${IDS[3]}"; run "$PINNED" --apply
@@ -189,6 +214,44 @@ check "$r" "GET transport failure -> record-unreadable, zero deletes"
 new_case get-notjson; printf 'not-json' >"$D/rec.${IDS[3]}"; run "$PINNED" --apply
 r=1; [[ "$RC" -eq 1 && "$(dels)" -eq 0 ]] && has 'reason=record-mismatch' && r=0
 check "$r" "a 200 whose body is not JSON -> zero deletes"
+
+printf '\n[refusal] a record the CNAME create would collide with deletes none\n'
+foreign() { # <label> <file> <json>
+  new_case "fr-$1"; printf '%s' "$3" >"$D/extra.$2"; run "$PINNED" --apply
+  local r=1
+  [[ "$RC" -eq 1 && "$(dels)" -eq 0 ]] && has 'verdict=refuse reason=foreign-record' && clean && r=0
+  check "$r" "$1 -> reason=foreign-record, zero deletes"
+}
+foreign "a seventh A record on ssh." 7 "$(rec "$(printf '%032x' 7)" ssh.soleur.ai A true 104.26.10.163)"
+foreign "an AAAA on registry." aaaa "$(rec "$(printf '%032x' 8)" registry.soleur.ai AAAA true 2606:4700::6812:aa3)"
+foreign "an A record on deploy." dep "$(rec "$(printf '%032x' 9)" deploy.soleur.ai A false 135.181.45.178)"
+foreign "an unproxied tunnel CNAME on deploy." cn "$(rec "$(printf '%032x' 10)" deploy.soleur.ai CNAME false x.cfargotunnel.com)"
+foreign "a proxied CNAME elsewhere on ssh." cn2 "$(rec "$(printf '%032x' 11)" ssh.soleur.ai CNAME true other.example.com)"
+new_case fr-dry; printf '%s' "$(rec "$(printf '%032x' 7)" ssh.soleur.ai A true 104.26.10.163)" >"$D/extra.7"; run "$PINNED"
+r=1; [[ "$RC" -eq 1 && "$(dels)" -eq 0 ]] && has 'verdict=refuse reason=foreign-record' && r=0
+check "$r" "the dry run refuses a foreign record too, so the rehearsal sees the collision"
+new_case fr-tunnel-cname; printf '%s' "$(rec "$(printf '%032x' 12)" deploy.soleur.ai CNAME true 0b1c.cfargotunnel.com)" >"$D/extra.t"; run "$PINNED" --apply
+r=1; [[ "$RC" -eq 0 && "$(dels)" -eq 6 ]] && has 'verdict=ok deleted=6' && clean && r=0
+check "$r" "a proxied tunnel CNAME (an earlier apply) is not foreign: a re-dispatch still deletes the six"
+new_case fr-wrong-pins
+for id in "${IDS[@]}"; do jq -c --arg i "f${id:1}" '.result.id = $i' "$D/rec.$id" >"$D/extra.$id" && rm -f "$D/rec.$id"; done
+run "$PINNED" --apply
+r=1; [[ "$RC" -eq 1 && "$(dels)" -eq 0 ]] && has 'verdict=refuse reason=foreign-record' && ! has 'verdict=ok' && r=0
+check "$r" "six pinned ids that all answer 404 while the real A records stand under other ids -> foreign-record, not a false PASS"
+new_case fr-listed-after-404; rm -f "$D/rec.${IDS[0]}"; rec "${IDS[0]}" ssh.soleur.ai A true 104.26.10.163 >"$D/extra.${IDS[0]}"; run "$PINNED" --apply
+r=1; [[ "$RC" -eq 1 && "$(dels)" -eq 0 ]] && has 'reason=record-unreadable' && has 'list=listed-after-404' && r=0
+check "$r" "a pinned id that reads 404 but still lists -> record-unreadable, zero deletes"
+for n in deploy ssh registry; do
+  new_case "list-500-$n"; printf '500' >"$D/listcode.$n.soleur.ai"; run "$PINNED" --apply
+  r=1; [[ "$RC" -eq 1 && "$(dels)" -eq 0 ]] && has 'verdict=refuse reason=record-unreadable' && r=0
+  check "$r" "the $n. listing answers 500 -> record-unreadable, zero deletes"
+done
+new_case list-short; : >"$D/listshort"; run "$PINNED" --apply
+r=1; [[ "$RC" -eq 1 && "$(dels)" -eq 0 ]] && has 'reason=record-unreadable' && r=0
+check "$r" "a listing shorter than its total_count -> record-unreadable, zero deletes"
+new_case get-404-bare; printf '404' >"$D/getcode.${IDS[2]}"; run "$PINNED" --apply
+r=1; [[ "$RC" -eq 1 && "$(dels)" -eq 0 ]] && has 'reason=record-unreadable' && has "id=${IDS[2]} http=404" && r=0
+check "$r" "a 404 without Cloudflare's record-not-found code (81044) is unread, not gone"
 
 printf '\n[partial delete]\n'
 new_case del-fail; printf '500' >"$D/delcode.${IDS[2]}"; run "$PINNED" --apply
@@ -228,8 +291,10 @@ set_403() { new_case mut-403; printf '403' >"$D/getcode.${IDS[3]}"; }
 mutant "M-all-or-none" 's/^  \[\[ "\$bad" -eq 0 \]\] || refuse_checked$/  :/' set_cname
 mutant "M-content" 's/^    in_set "\${content:-}" "\${ALLOWED_CONTENT\[@\]}" || field="\${field:-content}"$/    :/' set_origin
 mutant "M-unreadable" 's/^  \[\[ "\$unread" -eq 0 \]\] || refuse_unread$/  :/' set_403
+set_foreign() { new_case mut-foreign; printf '%s' "$(rec "$(printf '%032x' 7)" ssh.soleur.ai A true 104.26.10.163)" >"$D/extra.7"; }
+mutant "M-foreign" 's/^  \[\[ "\$foreign" -eq 0 \]\] || refuse_foreign$/  :/' set_foreign
 
 printf '\ncf-tunnel-host-predelete: %d passed, %d failed\n' "$PASS" "$FAIL"
-MIN_CASES=35
+MIN_CASES=52
 if [[ "$((PASS + FAIL))" -lt "$MIN_CASES" ]]; then printf '[VACUITY] only %d cases ran, floor %d\n' "$((PASS + FAIL))" "$MIN_CASES" >&2; exit 1; fi
 [[ "$FAIL" -eq 0 ]] || exit 1

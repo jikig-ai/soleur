@@ -374,10 +374,17 @@ build_plan() {
     def pol($a): if $a == (ppol + ".deploy_service_token") then {decision: "non_identity", include: [{service_token: [$dt]}]}
                  elif polrefs[$a] != null then {decision: "non_identity", include: [{}]}
                  elif apppin[$a] != null then apppin[$a]
+                 elif ($a | test("^cloudflare_record[.](deploy|ssh|registry)$")) then {name: ($a | split(".")[1]), type: "CNAME", proxied: true, ttl: 1}
+                 elif $a == "cloudflare_zero_trust_tunnel_cloudflared_config.web" then {config: [{ingress_rule: [
+                   {hostname: "deploy.soleur.ai", service: "http://10.0.1.10:9000"},
+                   {hostname: "ssh.soleur.ai", service: "ssh://10.0.1.10:22"},
+                   {hostname: "registry.soleur.ai", service: "tcp://10.0.1.30:5000"},
+                   {hostname: null, service: "http_status:404"}]}]}
                  else {} end;
     def unk($a): if $a == (ppol + ".deploy_service_token") then {include: [{service_token: [false]}]}
                  elif polrefs[$a] != null then {include: [{service_token: true}]}
                  elif apppin[$a] != null then {account_id: true}
+                 elif ($a | test("^cloudflare_record[.](deploy|ssh|registry)$")) then {content: true}
                  else {} end;
     # Ruleset kind/phase, as the root declares them: the entrypoint gate builds its URLs from these.
     # A record carries the key set measured from a real plan (Terraform 1.10.5, provider 4.52.7),
@@ -396,7 +403,11 @@ build_plan() {
     {format_version: "1.2",
      configuration: {root_module: {resources: [polrefs | to_entries[] | {address: .key, expressions: {
        application_id: {references: [(.value.app + ".id"), .value.app]},
-       include: [{service_token: {references: .value.tok}}]}}]}},
+       include: [{service_token: {references: .value.tok}}]}}] + [("deploy", "ssh", "registry") | {address: ("cloudflare_record." + .), expressions: {content: {references:
+       ["cloudflare_zero_trust_tunnel_cloudflared.web.id", "cloudflare_zero_trust_tunnel_cloudflared.web"]}}}]
+       + [{"doppler_secret.registry_push_access_token_id": "client_id", "doppler_secret.registry_push_access_token_secret": "client_secret"}
+       | to_entries[] | {address: .key, expressions: {value: {references:
+           [("cloudflare_zero_trust_access_service_token.registry_push." + .value), "cloudflare_zero_trust_access_service_token.registry_push"]}}}]}},
      resource_changes: [
       $spec | to_entries[] | .key as $a | .value as $c
       | ({address: $a, mode: "managed", type: ($a | split(".")[0]), change: (
@@ -2050,6 +2061,13 @@ r=1; refused_for "$LAST_D" gate-refused && grep -q 'REFUSE cloudflare_record.app
 verdict "$r" "tunnel apply: an app record that differs before the apply -> gate-refused, nothing applied"
 r=1; ! grep -q '^predelete' "$LAST_D/calls.log" && r=0
 verdict "$r" "tunnel apply: a gate refusal deletes nothing (the pre-delete never runs)"
+# Every refusal before the delete keeps it from running, not only the phase gate's (test-design review).
+# The in-state-updates check is the last one before the delete, so a delete moved anywhere earlier
+# (into plan_and_gate, or above check_expected_isu) reds this row. The entrypoint gate cannot refuse
+# a tunnel plan: it grades rulesets, and this phase plans none.
+tunnel_case isu-refused false; printf 'CFAM_EXPECTED_IN_STATE_UPDATES=cloudflare_record.ssh\n' >>"$LAST_D/env.extra"; run_job "$LAST_D" "$PRISTINE"
+r=1; refused_for "$LAST_D" in-state-updates-unexpected && ! grep -q '^predelete' "$LAST_D/calls.log" && no_apply "$LAST_D" && r=0
+verdict "$r" "tunnel apply: an in-state-updates refusal deletes nothing (the pre-delete never runs)"
 tunnel_case predelete-refused false; tmark mode.predelete; run_job "$LAST_D" "$PRISTINE"
 r=1; refused_for "$LAST_D" predelete-refused && grep -q 'terraform\[remote\] plan' "$LAST_D/calls.log" && no_apply "$LAST_D" \
   && grep -q '^::error title=cf-account-migrate::.*nothing was applied' "$LAST_D/out.txt" && r=0
@@ -2151,12 +2169,19 @@ for d in "$SBX"/runs/*/; do
   if [[ -s "$d/refused.log" ]]; then r=1; bad+=" ${d%/}"; fi
 done
 verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ (refused in:${bad##*/})}"
+# No provider token (every fixture token is tok-cf_api_token<suffix>) reached any run's output or
+# step summary. The value prefix, not bare tok-: run directories named tok-<code> appear in paths.
+r=0; bad=""
+for d in "$SBX"/runs/*/; do
+  if grep -lF 'tok-cf_api_token' "$d/out.txt" "$d/err.txt" "$d/summary.md" >/dev/null 2>&1; then r=1; bad+=" ${d%/}"; fi
+done
+verdict "$r" "no run printed a provider token to its output or step summary${bad:+ (in:${bad##*/})}"
 
 # ---------------------------------------------------------------------------
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=329
+EXPECTED_CASES=331
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

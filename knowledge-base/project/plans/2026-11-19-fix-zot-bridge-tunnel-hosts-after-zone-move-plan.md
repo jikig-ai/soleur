@@ -28,8 +28,9 @@ brand_survival_threshold: aggregate pattern
 **Acceptance criteria replaced by this amendment** (the originals stay below, unticked):
 
 - [ ] `local.deploy_service_token_ids` holds the id minted by `cf-access-deploy-token-mint.sh`, replacing the nil placeholder.
+- [ ] The same pre-merge commit pins the six pre-delete record ids in `PINNED_IDS` of `cf-tunnel-host-predelete.sh` (`--check-pins` prints `verdict=pins-ok count=6`) and carries the `[skip-web-platform-apply]` kill switch in its body.
 - [ ] The deploy pair is in every holder the mint lists, including the GitHub secrets `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`.
-- [ ] The `tunnel` rehearsal and apply are green, with 0 destroys and the registry Doppler pair updated in place.
+- [ ] The `tunnel` rehearsal and apply are green, with `destroys=1` (the delete half of the `random_id.tunnel_secret` replace) and the registry Doppler pair updated in place.
 - [ ] The 6 scanner A records were removed by the pinned pre-delete inside the `tunnel` apply.
 - [ ] `web-host-replace web-2` is green and the new tunnel shows 1 connector from web-2.
 - [ ] The Origin CA certificate is re-minted from the new zone.
@@ -769,15 +770,29 @@ ADR-330 is authored now as `adopting`. It flips to `accepted` when the teardown 
 
 - **If this lands broken, the user experiences:** app.soleur.ai keeps serving the 2026-11-18 15:54Z
   build. Fixes merged since then (#12704 KB-only end-of-turn sync push, #12935, #12865, #12844) stay
-  undelivered, and every later merge is also blocked. Nothing user-visible regresses as long as web-1
-  serves users. One mode would reach users: destroying web-2 while a live pool still routes traffic to
-  it, which aborts its agent sessions and drops uncommitted worktrees. Phase 5.0 reads the
-  authoritative zone's pools first and drains under an operator go.
+  undelivered, and every later merge is also blocked. The app keeps serving as long as web-1 does, with
+  these degradations and risks (runbook `cloudflare-account-migration.md`, Expected reds and Phase 3):
+  - A share revoke answers a degraded-success `502 purge-failed` until the Phase 3 step 5 release
+    redeploy. The revoke is recorded; only the edge purge fails.
+  - Inngest liveness detection is blind from the zone move until step 5 proves `deploy.`:
+    `scheduled-inngest-health.yml` probes `deploy.soleur.ai/hooks/inngest-liveness`, reads
+    `probe_unavailable` and never restarts, and `restart-inngest-server.yml` cannot reach `deploy.`
+    either. An Inngest outage then stalls every user's scheduled work unseen. The recovery that avoids
+    the tunnel is an operator-authorized Hetzner API reboot of the Inngest host.
+  - The Origin CA re-mint must land before the release redeploy loads it. A wrong order or a bad pair
+    answers 526 to every user under `ssl=strict`; step 5's `/health` check (200) is the proof.
+  - Destroying web-2 while a live pool still routes traffic to it aborts its agent sessions and drops
+    uncommitted worktrees. Step 4 reads the authoritative zone's pools first and drains only under an
+    operator go.
 - **If this leaks, the user's workflow is exposed via:** a leaked new `registry_push` or `ci_ssh`
   service token admits a caller through the tunnel's Access gate. It is still bounded by the zot push
   htpasswd and the CI SSH key. A leaked deploy pair is still bounded by the webhook HMAC. An attacker
   holding both could trigger a deploy of an already-signed image, so a compromise would reach every
-  user at once. A hostname routed before its Access gate existed would expose the origin unauthenticated;
+  user at once. A leaked tunnel connector secret (`random_id.tunnel_secret`) lets a caller register a
+  connector on the tunnel and receive part of the `deploy.`, `ssh.` and `registry.` traffic. It is
+  rotated by a `-replace` of `random_id.tunnel_secret` plus a web-2 replace, and the job passes every
+  plan and apply line through `tf_redact_random_ids` so the value never reaches a log.
+  A hostname routed before its Access gate existed would expose the origin unauthenticated;
   each `_soleur` CNAME `depends_on` its own Access policy (rows Q10a-c), and the policy gate refuses any
   Access app or policy address outside the committed table.
 - **Brand-survival threshold:** `aggregate pattern`

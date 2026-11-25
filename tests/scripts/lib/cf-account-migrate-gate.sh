@@ -92,7 +92,13 @@
 # beside the imports file. The deploy token is a committed constant, so it must plan as one known
 # non-nil UUID; the job then reads it LIVE (cf_account_migrate_deploy_token_id,
 # cf_account_migrate_deploy_token_verdict): 200, the name github-actions-deploy, about 8760h to expiry.
-# The three Access apps (_cfam_access_apps) are pinned on domain, type, session_duration and zone_id.
+# The three Access apps (_cfam_access_apps) are pinned on domain, type, session_duration and zone_id,
+# and must leave policies, options_preflight_bypass, self_hosted_domains, destinations and
+# cors_headers unset, known or unknown (each can open the host while the four pins hold). The two
+# registry-push Doppler secrets must take their value from the registry_push token alone, and the
+# tunnel config must route exactly deploy., ssh. and registry.soleur.ai (http://, ssh://, tcp://)
+# then the http_status:404 catch-all, and each of those three records must plan a proxied CNAME to
+# the tunnel (its content referencing the tunnel id alone while unknown).
 #
 # ZONE-SCOPED APPS. Provider 4.52.7 plans a zone-scoped Access application's account_id as
 # known-after-apply, and may read it back empty. The new-id check admits that for exactly those three
@@ -329,7 +335,8 @@ _cfam_access_violations() {
   local pol apps
   pol="$(_cfam_access_policies)" || return 1
   apps="$(_cfam_access_apps)" || return 1
-  jq -r --argjson pol "$pol" --argjson apps "$apps" --arg re "$CFAM_UUID_RE" --arg nil "$CFAM_NIL_UUID" '
+  jq -r --argjson pol "$pol" --argjson apps "$apps" --arg re "$CFAM_UUID_RE" --arg nil "$CFAM_NIL_UUID" \
+    --argjson unset '["policies","options_preflight_bypass","self_hosted_domains","destinations","cors_headers"]' '
     def blank: . == null or . == false or . == "" or . == [] or . == {};
     def has_unknown: . == true or (type == "array" and any(.[]; . == true));
     . as $root
@@ -376,11 +383,69 @@ _cfam_access_violations() {
         elif ($rc[0].change.after | type) != "object" then "REFUSE \($a) has no planned value"
         else
           $rc[0].change.after as $af | ($rc[0].change.after_unknown // {}) as $u
-          | $e.value | to_entries[]
-          | if $u[.key] == true then "REFUSE \($a) must plan its Access pin (\(.key) known only after apply)"
-            elif $af[.key] != .value then "REFUSE \($a) must plan its Access pin (\(.key) differs)"
-            else empty end
+          | ($e.value | to_entries[]
+             | if $u[.key] == true then "REFUSE \($a) must plan its Access pin (\(.key) known only after apply)"
+               elif $af[.key] != .value then "REFUSE \($a) must plan its Access pin (\(.key) differs)"
+               else empty end),
+            # The tail of access_app_keys in the routine gate (destroy-guard-filter-web-platform.jq): a
+            # reusable policy, a path destination, a preflight bypass or open CORS each opens the host
+            # while the four pins above still hold, so each must plan blank, known or unknown.
+            ($unset[] as $k
+             | if ([$u[$k] | .. | select(. == true)] | length) > 0 then "REFUSE \($a) must leave \($k) unset (known only after apply)"
+               elif ($af[$k] | blank | not) then "REFUSE \($a) must leave \($k) unset"
+               else empty end)
         end
+    ), (
+      # Each gated host is a proxied CNAME to this tunnel: an unproxied record, another type or another
+      # target would serve the origin with no Access app in front. A first apply plans content unknown,
+      # so its configuration must reference the tunnel id alone; a re-dispatch plans it known.
+      ("deploy", "ssh", "registry") as $n | ("cloudflare_record." + $n) as $a
+      | "REFUSE \($a) must plan a proxied CNAME \($n) to the tunnel" as $m
+      | [$root.resource_changes[] | select(.address == $a)] as $rc
+      | if ($rc | length) != 1 then "REFUSE \($a) must appear exactly once in the plan (found \($rc | length))"
+        else $rc[0].change.after as $af | ($rc[0].change.after_unknown // {}) as $u
+          | (([$root.configuration.root_module.resources[]? | select(.address == $a) | .expressions.content.references][0]) // []) as $cr
+          | if ($af | type) != "object" then "\($m) (no planned value)"
+            elif ($u.type // false) == true or $af.type != "CNAME" then "\($m) (type)"
+            elif ($u.proxied // false) == true or $af.proxied != true then "\($m) (proxied)"
+            elif ($u.name // false) == true or ($af.name != $n and $af.name != ($n + ".soleur.ai")) then "\($m) (name)"
+            elif ($u.content // false) == true then
+              (if ($cr | sort) == (["cloudflare_zero_trust_tunnel_cloudflared.web", "cloudflare_zero_trust_tunnel_cloudflared.web.id"] | sort)
+               then empty else "\($m) (content)" end)
+            elif (($af.content // "") | test("^[0-9a-f-]+\\.cfargotunnel\\.com$")) then empty
+            else "\($m) (content)" end
+        end
+    ), (
+      # The tunnel routes exactly the three gated hosts, in order, then the 404 catch-all, each to its
+      # own scheme: another hostname or service would reach an origin no Access app gates.
+      "cloudflare_zero_trust_tunnel_cloudflared_config.web" as $a
+      | [$root.resource_changes[] | select(.address == $a)] as $rc
+      | if ($rc | length) != 1 then "REFUSE \($a) must appear exactly once in the plan (found \($rc | length))"
+        else ($rc[0].change.after.config // null) as $c | ($rc[0].change.after_unknown.config // []) as $cu
+          | if ($c | type) != "array" or ($c | length) != 1 or ($c[0].ingress_rule | type) != "array"
+            then "REFUSE \($a) must plan one config block with ingress rules"
+            elif ([$cu | .. | select(. == true)] | length) > 0 then "REFUSE \($a) ingress is known only after apply"
+            elif ([$c[0].ingress_rule[] | .hostname // ""]) != ["deploy.soleur.ai", "ssh.soleur.ai", "registry.soleur.ai", ""]
+            then "REFUSE \($a) must route exactly deploy., ssh. and registry.soleur.ai, then the catch-all"
+            else
+              (["http://", "ssh://", "tcp://"] | to_entries[]
+               | .key as $i | .value as $p
+               | if (($c[0].ingress_rule[$i].service // "") | startswith($p)) then empty
+                 else "REFUSE \($a) ingress rule \($i + 1) must use \($p)" end),
+              (if $c[0].ingress_rule[3].service == "http_status:404" then empty
+               else "REFUSE \($a) ingress rule 4 must use http_status:404" end)
+            end
+        end
+    ), (
+      # Each registry-push Doppler secret takes its value from the registry_push token alone, so a
+      # plan cannot route another token (the CI-SSH secret, say) into the prd runtime config.
+      {"doppler_secret.registry_push_access_token_id": "client_id",
+       "doppler_secret.registry_push_access_token_secret": "client_secret"}
+      | to_entries[] | .key as $a | .value as $f
+      | "cloudflare_zero_trust_access_service_token.registry_push" as $t
+      | (([$root.configuration.root_module.resources[]? | select(.address == $a) | .expressions.value.references][0]) // []) as $r
+      | if ($r | sort) == ([$t, ($t + "." + $f)] | sort) then empty
+        else "REFUSE \($a) value is not \($t).\($f)" end
     )' "$1"
 }
 

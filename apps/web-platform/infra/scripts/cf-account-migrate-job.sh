@@ -88,8 +88,11 @@
 # ruling 2026-11-25, amending F5): the six A records are not in state, so the graded plan stays valid,
 # and a gate refusal deletes nothing. After the apply it writes the CI-SSH pair to prd_terraform and verifies it
 # by digest; a failed write refuses ci-ssh-sync-failed applied=true after the live probes have run.
-# A re-dispatch is safe: the pre-delete counts 404 as gone, every created address plans no-op, the
-# tunnel ignores its secret, and -replace rolls only random_id.tunnel_secret.
+# A re-dispatch after a refusal or a failed apply is safe: the pre-delete counts a record-not-found
+# 404 as gone and admits the tunnel's own CNAMEs, every created address plans no-op, the tunnel
+# ignores its secret, and -replace rolls only random_id.tunnel_secret. NOT after a cancel or a
+# timeout kill: the tunnel apply has no INT bound (its replace list is not empty), so a create can
+# land in Cloudflare without reaching state; read the runbook's cancelled-run bullet first.
 #
 # Order: inputs -> no run in flight on any gated workflow -> the id preflight (CTO D8: Doppler
 # resolves the NEW zone/account ids and the legacy R2 account, and every phase token answers 200
@@ -888,8 +891,6 @@ run_apply() {
   [[ "$rc" -ne 5 ]] || refuse deploy-token-refused "the deploy policy's service token did not pass its live read (see the deploy-token line: 200, name github-actions-deploy, about 8760h to expiry). Nothing was deleted or applied."
   [[ "$rc" -eq 0 ]] || refuse gate-refused "the plan did not reach gate verdict=PASS; nothing was applied.$(gate_next "$rc" "$fg" "$fk")" "$fx"
   check_expected_isu "$fg" "$fx"
-  # Every gate has passed: only now may the six pinned A records go (TUNNEL PHASE in the header).
-  [[ "$MIGRATE_PHASE" != tunnel ]] || tunnel_predelete --apply
   # One INT, never a KILL, and --foreground so it reaches terraform once: a second INT makes it exit
   # at once and can lose in-flight creates from state. Keyed on an empty replace list, not the phase
   # name: with no replace the gate admits no delete, so an INT has no delete-then-create to split
@@ -901,6 +902,9 @@ run_apply() {
     bound=(timeout --foreground -s INT "$remaining")
   fi
   tok="$(cmd_token)" || refuse setup "cannot create the workflow-command token; nothing was applied.${fg}" "applied=false${fx:+ $fx}"
+  # Every gate has passed and nothing else can refuse before the apply: only now may the six pinned
+  # A records go (TUNNEL PHASE in the header). Every later refusal carries predelete=done.
+  if [[ "$MIGRATE_PHASE" == tunnel ]]; then tunnel_predelete --apply; fx="${fx:+$fx }predelete=done"; fi
   printf '%s phase=%s mode=apply applying=true\n' "$P" "$MIGRATE_PHASE"
   printf '::stop-commands::%s\n' "$tok"
   tf_env ${bound[@]+"${bound[@]}"} terraform apply -no-color -input=false -auto-approve "$W/tfplan" 2>&1 | tf_redact_random_ids | tf_line
@@ -937,7 +941,7 @@ run_apply() {
   # A failed sync does not skip the probes: the operator needs both results from this one run.
   if [[ "$MIGRATE_PHASE" == tunnel ]]; then sync_ci_ssh || sx="ci_ssh_sync=failed"; fi
   verify_live || refuse verify-failed "applied, but the ${what} probes did not all pass: ${VERIFY_FAILING}. Runbook Halt, verify-failed: ${halt}" "applied=true${fx:+ $fx}${sx:+ $sx} failing=${VERIFY_FAILING}"
-  [[ -z "$sx" ]] || refuse ci-ssh-sync-failed "applied and the live probes passed, but CI_SSH_ACCESS_TOKEN_ID/_SECRET did not reach prd_terraform (see the ci-ssh-sync line), so the CI SSH bridge still holds the old pair. Re-dispatch this phase: every created address plans no-op and the sync runs again." "applied=true"
+  [[ -z "$sx" ]] || refuse ci-ssh-sync-failed "applied and the live probes passed, but CI_SSH_ACCESS_TOKEN_ID/_SECRET did not reach prd_terraform (see the ci-ssh-sync line), so prd_terraform holds the old pair, or the new ID beside the old SECRET when the line names CI_SSH_ACCESS_TOKEN_SECRET; either way the CI SSH bridge cannot authenticate until the sync completes. Re-dispatch this phase: every created address plans no-op and the sync runs again." "applied=true${fx:+ $fx}"
   printf '%s phase=%s mode=apply verdict=PASS applied=true\n' "$P" "$MIGRATE_PHASE"
   summary "verdict=PASS applied=true"
 }

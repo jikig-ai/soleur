@@ -23,9 +23,15 @@ This list replaces the phases below, which stay as the record of the 2026-11-19 
 - [ ] 4 Operator go: `redirects-dns` rehearsal plus staged Tunnel, Access and Zero Trust probes.
 - [ ] 5 Operator go: `redirects-dns` apply, only after 2 and 4 are clean. **This is the no-full-revert point.**
 - [ ] 6 Operator go: 0b swap, then `zone-rest` rehearsal and apply.
-- [ ] 7 Operator go: mint the deploy token and write all readers.
-- [ ] 8 Commit the token UUID over the nil placeholder.
-- [ ] 9 Operator go: merge with the apply kill switch in a branch commit body.
+- [ ] 7 Operator go: mint the deploy token and write all readers (`cf-access-deploy-token-mint.sh --apply`; no
+      argument is a dry run). After its `verdict=ok`, revoke `CF_API_TOKEN_ACCESS_MINT` and record each
+      `CF_ACCOUNT_ID` holder decision on #12931 (runbook Phase 3 step 1). The tunnel rehearsal and apply must run
+      within 31 days of this mint.
+- [ ] 8 One branch commit, before the merge: the token UUID over the nil placeholder, the six pre-delete record ids
+      in `PINNED_IDS` of `cf-tunnel-host-predelete.sh` (read-only lookup in runbook Phase 3 step 2), and the
+      `[skip-web-platform-apply]` kill switch in its message body. `--check-pins` prints
+      `verdict=pins-ok count=6`. Without the ids the tunnel rehearsal refuses `pins-missing`.
+- [ ] 9 Operator go: merge, after checking the kill switch reaches the squash.
 - [ ] 10 Operator go: `tunnel` rehearsal, then apply.
 - [ ] 11 Read the LB and `app.` record, then operator go: `web-host-replace web-2` plan, then apply.
 - [ ] 12 Operator go: re-mint the Origin CA certificate.
