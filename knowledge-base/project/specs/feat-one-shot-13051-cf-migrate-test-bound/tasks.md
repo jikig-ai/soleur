@@ -36,7 +36,7 @@ Plan: `knowledge-base/project/plans/2026-11-25-fix-cf-migrate-job-suite-ci-bound
 - 4.1 Push. Download `suite-timings-infra-*` for this PR's runs (at least 2) and take the worst figure for this suite.
 - 4.2 If the worst figure is over 360000 ms, go to section 5. Otherwise, record that the gate passed and skip section 5.
 - 4.3 Edit only this suite's row in `apps/web-platform/infra/suite-durations.tsv` (`measured`).
-- 4.4 Run `regenerate-shard-manifest.py --group infra --durations apps/web-platform/infra/suite-durations.tsv` as a dry run. Paste the leg table into the PR body. Then run it with `--write --allow-growth` and state the reason.
+- 4.4 Run `regenerate-shard-manifest.py --group infra --durations apps/web-platform/infra/suite-durations.tsv` as a dry run. Paste the leg table into the PR body. Then run it with `--write --allow-growth` and state the reason. Expect about 11 moved suites; the deepen simulation put this suite on leg 2. Record the outcome; do not hand-pin.
 - 4.5 Rewrite the `_SUITE_BOUNDS` comment: worst figure, ratio, PR number, re-measure recipe, and both revisit triggers (AC8).
 - 4.6 Re-run the legs and record each leg's wall time in the PR body (recorded, not gated).
 

@@ -12,6 +12,36 @@ brand_survival_threshold: none
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-25
+**Sections enhanced:** 5 (Research Insights, Technical Approach Phase 1 and Phase 3, Dependencies & Risks, a new Network-Outage Deep-Dive)
+**Checks run:** deepen-plan halt gates 4.6-4.13 (all pass); live state of 14 cited issues and PRs; a
+parent/child repro of the trap semantics; a dry run and a scratch `--write` simulation of the infra
+manifest regen; a verify-the-negative sweep; a self-audit for symbols the plan review cut.
+
+### Key Improvements
+
+1. The trap fix and its self-test are now proven by a runnable repro (Phase 1, "Research Insights
+   (deepen)"). The new trap returns rc 143 in 3 ms with no resume and the sandbox gone. Today's trap
+   returns rc 0 and prints the resume marker and a FAIL row, both under a process-group TERM and under
+   the real `timeout`.
+2. The regen's real behaviour was measured. A dry run over today's committed table already moves 9
+   suites with no input change (weight drift). Seeding this suite at 400000 ms moves 11, and the
+   sticky packing puts this suite on leg 2 beside `ci-deploy` and `git-data-wipe-assert`, not on leg 3.
+   Phase 3 now says to expect that and record it.
+3. The committed weights predict about 2000 s of suite time per leg. Observed leg 1 summed 3165 s on
+   the failing main run. Other suites' weights are stale, so predicted leg balance is not observed leg
+   balance. That stays a Non-Goal with a follow-up, now with numbers.
+
+### New Considerations Discovered
+
+- The regen warns `13 registered label(s) have no measured timing — tabled at floor 4000ms`. With
+  `--durations`, floor rows stay at the floor. The "require `0 at floor`" learning applies to
+  `--timings-dir` regens, not to this one.
+- The network-outage keyword gate fired on the word `timeout`. Here it names the coreutils bounder,
+  not a network symptom (see the Network-Outage Deep-Dive section).
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -82,9 +112,12 @@ the vinngest pin lag tracked by #12506). It is out of scope here.
   54 inline `new_case ...; run_job ...; verdict` rows, plus the small loops.
 - A plain redirects-dns apply job takes about 2.1 s. An import-normalize (`norm_case`) job takes about
   2.9 s. An input-refusal job takes about 30 ms. `new_case` takes about 20 ms.
-- About 1.3 s of the plain 2.1 s is the SUT's in-flight check. `gated_workflows` greps every one of the
-  111 files under the real `.github/workflows/` and runs a fixed-point loop, because `run_job` passes
-  `GITHUB_WORKSPACE="$REPO"`. `refuse_inflight` then makes N_GATED x 5 `gh` stub calls.
+- About 1.3 s of the plain 2.1 s is the SUT's in-flight check, as measured under xtrace (which inflates
+  fork-heavy loops). `gated_workflows` greps every one of the 111 files under the real
+  `.github/workflows/` and runs a fixed-point loop, because `run_job` passes `GITHUB_WORKSPACE="$REPO"`
+  (xtrace: about 0.94 s). `refuse_inflight` then makes N_GATED x 5 `gh` stub calls (xtrace: about
+  0.38 s). Kieran's review re-timed `gated_workflows` without xtrace: 0.60 s over the real tree and
+  0.047 s over a mirror of the gated files.
 - The live record read (26 stubbed GETs, each a bash stub plus one `jq` over `plan.json`) costs about
   0.4 s per read. A norm apply job reads twice (52 GETs).
 - One row sleeps for real: `setup_norm_stall` makes the doppler stub `exec sleep 40` under the job's
@@ -308,6 +341,32 @@ A bounded pool of whole rows, as the advisor proposed and the CTO ruled:
 
 ## Technical Approach
 
+### Research Insights (deepen): the trap semantics, reproduced
+
+A 20-line parent/child pair in the session scratchpad reproduced both sides before any AC was committed
+to text. That follows the deepen-plan rule for process-group and trap ACs, and
+`knowledge-base/project/learnings/2026-05-12-pgid-inheritance-and-bash-trap-defer-on-foreground-commands.md`.
+The child installs the trap, prints `armed`, runs `bash -c 'sleep 30'` in the foreground, then prints
+`SIGTEST-RESUMED` and a FAIL row. The parent starts it with `set -m; bash child.sh & pid=$!; set +m`,
+waits for `armed`, and runs `kill -TERM -- -$pid`.
+
+| Trap | Delivery | rc | Time to exit | `[ABORTED]` | Resumed | Sandbox |
+|---|---|---|---|---|---|---|
+| New (EXIT cleans; TERM handler exits 143) | process-group TERM | 143 | 3 ms | 1 | 0 | removed |
+| Today's (`rm -rf` on EXIT INT TERM HUP) | process-group TERM | 0 | 4 ms | 0 | 1 | removed |
+| New | `timeout -s TERM -k 5 2` | 124 | 2 s | 1 | 0 | removed |
+| Today's | `timeout -s TERM -k 5 2` | 124 | 2 s | 0 | 1, plus 1 FAIL row | removed |
+
+The last row is #13051 in miniature. The group signal kills the foreground `sleep` at once, so the
+deferred trap runs immediately and the self-test costs milliseconds, not the fixture's 30 s. The
+discriminator is the resume marker (and rc 143 vs 0 under a direct group kill), not the sandbox. The
+old trap also removes the sandbox, so Guard 1 row 2 is a separate mutation (an EXIT trap that no longer
+cleans), not a property of the old trap.
+
+The precedent-diff for the trap shape is novel in this directory. None of the 18 sibling trap lines
+the survey found (17 suites) is a precedent for the exiting shape, and #13055 will use this suite's shape as
+the template.
+
 ### Phase 1 — Signal handling (tests first)
 
 1. Write the self-test before changing the trap, and confirm it goes RED against today's trap (Guard 1
@@ -362,7 +421,13 @@ A bounded pool of whole rows, as the advisor proposed and the CTO ruled:
 3. Edit only this suite's row of `apps/web-platform/infra/suite-durations.tsv`, setting it to the final
    worst figure in ms (`measured`).
 4. `python3 scripts/regenerate-shard-manifest.py --group infra --durations apps/web-platform/infra/suite-durations.tsv`
-   as a dry run. Paste the predicted per-leg totals into the PR body. Then add `--write --allow-growth`.
+   as a dry run. Measured during deepen: over today's unchanged table the dry run already reports
+   `vs incumbent: 9 moved` (drift in the committed weights). A scratch `--write` with this suite seeded
+   at 400000 ms (`--manifest`/`--durations-out` pointed at scratch copies) reported `11 moved` and put
+   this suite on leg 2 beside `ci-deploy.test.sh` and `git-data-wipe-assert.test.sh`, with
+   `web-host-provisioner-parity-mutation` and `infra-config-repush-mutation` on leg 1. Expect a similar
+   outcome and record it; the other suites' moves come from their own stale weights, not from this
+   change. Paste the predicted per-leg totals into the PR body. Then add `--write --allow-growth`.
    The committed-weight drift gate (#11662) refuses a row that grows past 1.5x and 10 s, and 106000 ms
    to about 300000+ ms is such a growth. `--allow-growth` records a `# growth-acked=` header line.
    State why in the PR body: the old weight predates #13019's import-normalize section. The `--write`
@@ -678,6 +743,18 @@ processing changes.
   become a `section` call.
 - **#12995** edits `run-registered-suites.sh` and `infra-validation.yml`. Whichever lands second
   re-runs the manifest regen dry run and re-checks the `_SUITE_BOUNDS` region.
+
+## Network-Outage Deep-Dive
+
+The deepen-plan keyword gate fired on `timeout`. In this plan the word names the coreutils per-suite
+bounder (`timeout -k 30 720` in `run-registered-suites.sh`), not a network symptom. No layer applies:
+
+| Layer | Status |
+|---|---|
+| L3 firewall allow-list | Not applicable. The suite makes no network call; `curl`, `gh`, `doppler` and `aws` are PATH stubs |
+| L3 DNS / routing | Not applicable, for the same reason |
+| L7 TLS / proxy | Not applicable. The curl stub refuses any argv it does not model |
+| L7 application | Not applicable. No SSH and no live service anywhere in the plan |
 
 ## Plan Review Revisions
 
