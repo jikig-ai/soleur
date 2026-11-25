@@ -38,7 +38,7 @@ Each row was measured against the kept file or the runbook on 2026-11-23.
 
 ## Research Insights
 
-**Premise Validation.** #12846, #13003 and #12931 are open, and draft PR #13016 is this PR. `collision-precheck.sh` reports #13016 alone for #12846 and nothing for #13003. `origin/main` is `6e491a9fd4`, and the wrapper is unchanged from it. Re-running the pinned four-line block on the kept main file printed the brief's line 1, 36 colos, 2 judged, and the SEA and IAD rows exactly. The file has 2264 rows, 216 hours, no null-colo row, and hours from 2026-11-03T12Z to 2026-11-12T11Z. The archival file has 2198 rows, `truncated: false`, on the same zone. Both named suites pass at baseline (96 and 63 cases). The read instants come from the `ee0e31379a` commit message and the brief, and the files themselves do not carry them.
+**Premise Validation.** #12846, #13003 and #12931 are open, and draft PR #13016 is this PR. `collision-precheck.sh` reports #13016 alone for #12846 and nothing for #13003. When this was measured on 2026-11-23, `origin/main` was `6e491a9fd4`, and the wrapper is unchanged from it. Re-running the pinned four-line block on the kept main file printed the brief's line 1, 36 colos, 2 judged, and the SEA and IAD rows exactly. The file has 2264 rows, 216 hours, no null-colo row, and hours from 2026-11-03T12Z to 2026-11-12T11Z. The archival file has 2198 rows, `truncated: false`, on the same zone. Both named suites pass at baseline (96 and 63 cases). The read instants come from the loop's printed `read at` lines, recorded in the `ee0e31379a` commit message and the brief, and the files themselves do not carry them.
 
 **Property List.**
 
@@ -64,7 +64,7 @@ Each row was measured against the kept file or the runbook on 2026-11-23.
 - `.claude/hooks/ship-runbook-ssh-gate.sh` checks added runbook lines at `gh pr ready`.
 - `scripts/markdown-lint.sh` needs blank lines around headings and tables and consistent table pipes.
 
-**What merging triggers.** The changed paths match no path-filtered `push` workflow, so no `apply-*` workflow fires and no release is published. Of the eight workflows with no path filter (`ci`, `codeql-main-alert-gate`, `merge-bypass-audit`, `secret-scan`, two skill scans, `tenant-integration`, `vendor-pin-verify`), `tenant-integration` runs on a main push unless that push is a proven duplicate of the PR's green run. Its job seeds bot fixtures and runs `Apply migrations to dev` against the shared dev project. This PR adds no migration, and that step does not touch production. `Web Platform Release` also starts on every main CI completion through `workflow_run`; on a SHA that touches no deployable path, its release, migrate and deploy jobs are skipped. Merging needs none of the acts the standing limits reserve.
+**What merging triggers.** The changed paths match no path-filtered `push` workflow, so no `apply-*` workflow fires and no release is published. Of the eight workflows with no path filter (`ci`, `codeql-main-alert-gate`, `merge-bypass-audit`, `secret-scan`, two skill scans, `tenant-integration`, `vendor-pin-verify`), `tenant-integration` runs on a main push unless that push is a proven duplicate of the PR's green run. Its job seeds bot fixtures and runs `Apply migrations to dev` against the shared dev project. This PR adds no migration, and that step does not touch production. `Web Platform Release` also starts on every main CI completion through `workflow_run`; on a SHA that touches no deployable path, its release, migrate and deploy jobs are skipped, while its `verify-doppler-secrets` job still runs a read-only check that the prd secrets exist. `Post-Merge Monitor` also starts on that CI completion and skips, because it acts only on `[bot-fix]` commits, and `image-cve-verdict` starts when Web Platform Release completes and only reports on the image prod already serves. Merging needs none of the acts the standing limits reserve.
 
 **Closing #12846 does not break the probe.** `scripts/lib/trusted-verdict.sh` reads comments with `gh issue view --json comments`, with no state filter, so a marker posted on the closed issue still counts.
 
@@ -127,12 +127,12 @@ Written 2026-11-23; records the 2026-11-22 reads. Additions-only: the addenda ab
 
 **The reads.** Both ran on 2026-11-22 through the H handoff loop in the 2026-11-19 addendum, from a fresh `origin/main` at `6e491a9fd4`. Both passed the loop's keep rules on zone `5af02a2f394e9ba6e0ea23c381a26b67`, each as one H=216 read, so no split was needed. The files are under `knowledge-base/engineering/operations/runbooks/evidence/`.
 
-| Read | Kept at | Evidence file | Window end E | Offset O | Hours | Rows | `truncated` |
+| Read | Read at | Evidence file | Window end E | Offset O | Hours | Rows | `truncated` |
 |---|---|---|---|---|---|---|---|
 | Main (the R1 window) | 2026-11-22T22:59:45Z | `analytics-health-colo-216h-end20261112T12Z.json` | 2026-11-12T12:00:00Z | 250 | 216 | 2264 | false |
 | Archival (never a verdict input) | 2026-11-22T22:59:47Z | `analytics-health-colo-216h-end20261118T17Z.json` | 2026-11-18T17:00:00Z | 101 | 216 | 2198 | false |
 
-R1 asks for E, O and the read instant. The loop does not print O, so both values above are derived: the kept time's hour (2026-11-22T22:00:00Z) minus E. The main read printed `null_colo_rows=0 null_colo_qualifying=0`.
+R1 asks for E, O and the read instant. The read instants are copied from the loop's `kept <file>, read at <time>` lines, because the files do not carry them. The loop does not print O, so both values above are derived: the read instant's hour (2026-11-22T22:00:00Z) minus E. The main read printed `null_colo_rows=0 null_colo_qualifying=0`.
 
 **The T2 outcome.** The pinned four-line block above ran on the main file only, and its hash check passed. The record, carrying the recipe's line 1 verbatim:
 
@@ -199,7 +199,7 @@ allow='^knowledge-base/(engineering/operations/runbooks/(origin-tls-strict-flip\
 printf '%s\n' "$D" | grep -qxF knowledge-base/engineering/operations/runbooks/origin-tls-strict-flip.md && ! printf '%s\n' "$D" | grep -qvE "$allow" && echo SCOPE-OK
 ```
 
-`soleur:compound` can edit `plugins/soleur/{skills,agents,commands}/` on this branch. Never add those paths to `allow`: a `plugins/soleur/**` change outside `docs/` and `test/` makes the merge publish a release and deploy. If `SCOPE-OK` does not print, move the out-of-scope edit to its own PR from `origin/main`, drop it from this branch, and re-run this block.
+`soleur:compound` can edit `plugins/soleur/{skills,agents,commands}/` on this branch. Never add those paths to `allow`: any `plugins/soleur/**` change makes the merge publish a plugin release (the `version-bump-and-release.yml` filter covers the whole tree, `docs/` and `test/` included), and a change outside `docs/` and `test/` also triggers a web-platform deploy. If `SCOPE-OK` does not print, move the out-of-scope edit to its own PR from `origin/main`, drop it from this branch, and re-run this block.
 
 ## Files to Edit
 
@@ -210,6 +210,7 @@ printf '%s\n' "$D" | grep -qxF knowledge-base/engineering/operations/runbooks/or
 - `knowledge-base/project/plans/2026-11-23-chore-origin-tls-h-capture-t2-addendum-plan.md`
 - `knowledge-base/project/specs/chore-12846-h-capture-evidence/tasks.md`
 - `knowledge-base/project/specs/chore-12846-h-capture-evidence/decision-challenges.md`
+- `knowledge-base/project/specs/chore-12846-h-capture-evidence/session-state.md`
 
 The two evidence files are already on the branch in `ee0e31379a`.
 
@@ -254,7 +255,7 @@ threshold: none, reason: the diff is limited to an internal runbook, committed a
 ### Split Assessment
 
 - Subsystems touched: 1 — `knowledge-base`
-- Planned files: 4 | Estimated changed lines: 300
+- Planned files: 5, plus the 2 evidence files already on the branch | Estimated changed lines: 380
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR
 

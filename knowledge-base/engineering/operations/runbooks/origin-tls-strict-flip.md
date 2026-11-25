@@ -639,12 +639,12 @@ Written 2026-11-23; records the 2026-11-22 reads. Additions-only: the addenda ab
 
 **The reads.** Both ran on 2026-11-22 through the H handoff loop in the 2026-11-19 addendum, from a fresh `origin/main` at `6e491a9fd4`. Both passed the loop's keep rules on zone `5af02a2f394e9ba6e0ea23c381a26b67`, each as one H=216 read, so no split was needed. The files are under `knowledge-base/engineering/operations/runbooks/evidence/`.
 
-| Read | Kept at | Evidence file | Window end E | Offset O | Hours | Rows | `truncated` |
+| Read | Read at | Evidence file | Window end E | Offset O | Hours | Rows | `truncated` |
 |---|---|---|---|---|---|---|---|
 | Main (the R1 window) | 2026-11-22T22:59:45Z | `analytics-health-colo-216h-end20261112T12Z.json` | 2026-11-12T12:00:00Z | 250 | 216 | 2264 | false |
 | Archival (never a verdict input) | 2026-11-22T22:59:47Z | `analytics-health-colo-216h-end20261118T17Z.json` | 2026-11-18T17:00:00Z | 101 | 216 | 2198 | false |
 
-R1 asks for E, O and the read instant. The loop does not print O, so both values above are derived: the kept time's hour (2026-11-22T22:00:00Z) minus E. The main read printed `null_colo_rows=0 null_colo_qualifying=0`.
+R1 asks for E, O and the read instant. The read instants are copied from the loop's `kept <file>, read at <time>` lines, because the files do not carry them. The loop does not print O, so both values above are derived: the read instant's hour (2026-11-22T22:00:00Z) minus E. The main read printed `null_colo_rows=0 null_colo_qualifying=0`.
 
 **The T2 outcome.** The pinned four-line block above ran on the main file only, and its hash check passed. The record, carrying the recipe's line 1 verbatim:
 
