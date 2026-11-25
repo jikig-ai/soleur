@@ -260,9 +260,12 @@ D="${STUB_DIR:?}"
 no() { printf 'gh %s\n' "$*" >>"$D/refused.log"; exit 64; }
 [[ $# -eq 12 && "$1 $2 $3 $5" == "run list --workflow --status" && "$7 $8 $9 ${10} ${11} ${12}" == "--limit 50 --json databaseId --jq length" ]] || no "$@"
 case "$6" in queued|in_progress|waiting|pending|requested) ;; *) no "$@" ;; esac
-grep -qxF -- "$4" "${STUB_GATED:?}" || no "$@"
+# A builtin lookup, not grep: this stub runs ~35 times per job, and its spawns were the cost (#13051).
+gated=1
+while IFS= read -r w || [[ -n "$w" ]]; do [[ "$w" == "$4" ]] && { gated=0; break; }; done <"${STUB_GATED:?}"
+[[ "$gated" -eq 0 ]] || no "$@"
 printf 'gh run list workflow=%s status=%s\n' "$4" "$6" >>"$D/calls.log"
-if [[ -f "$D/mode.gh" ]]; then rc="$(cat "$D/mode.gh")"; exit "${rc:-1}"; fi
+if [[ -f "$D/mode.gh" ]]; then rc="$(<"$D/mode.gh")"; exit "${rc:-1}"; fi
 if [[ -f "$D/gh.$4.$6" ]]; then cat "$D/gh.$4.$6"; else printf '0\n'; fi
 STUB
 # aws accepts exactly the job's listing (bucket, prefix, pinned endpoint, R2 env prefix) and the
@@ -569,19 +572,21 @@ assert_fixture_dir() {
 # calls it with POOL_IN_ROW set, which skips the flush.
 run_job() { [[ -n "${POOL_IN_ROW:-}" ]] || _pool_flush; _run_job_raw "$@"; }
 _run_job_raw() { # <dir> <script>; <dir>/env.extra holds extra KEY=VALUE lines (later wins)
-  local d="$1" extra=()
+  local d="$1" extra=() kv ws=""
   assert_fixture_dir "$d"
   if [[ -f "$d/env.extra" ]]; then mapfile -t extra <"$d/env.extra"; fi
   env -u TF_VAR_cf_zone_id -u TF_VAR_cf_account_id -u TF_LOG -u TF_LOG_PATH -u TF_LOG_CORE -u TF_LOG_PROVIDER \
     PATH="$SBX/bin:$PATH" STUB_DIR="$d" STUB_GATED="$GATED_FILE" STUB_NZ="$NZ" \
-    MIGRATE_PHASE="$(cat "$d/phase")" CONFIRM="$(cat "$d/confirm")" REHEARSAL="$(cat "$d/rehearsal")" \
-    REASON="$(cat "$d/reason")" GITHUB_WORKSPACE="$WS_DEFAULT" RUNNER_TEMP="$d/runner" INFRA_DIR="$d/root" \
+    MIGRATE_PHASE="$(<"$d/phase")" CONFIRM="$(<"$d/confirm")" REHEARSAL="$(<"$d/rehearsal")" \
+    REASON="$(<"$d/reason")" GITHUB_WORKSPACE="$WS_DEFAULT" RUNNER_TEMP="$d/runner" INFRA_DIR="$d/root" \
     GH_TOKEN=stub GH_REPO=o/r DOPPLER_TOKEN=stub \
     GITHUB_STEP_SUMMARY="$d/summary.md" CFAM_VERIFY_TRIES=2 CFAM_VERIFY_SLEEP=0 \
     ${extra[@]+"${extra[@]}"} bash "$2" >"$d/out.txt" 2>"$d/err.txt"
   printf '%s' "$?" >"$d/rc"
   printf '%s' "$2" >"$d/script"
-  ws="$(grep '^GITHUB_WORKSPACE=' "$d/env.extra" 2>/dev/null | tail -n1 || true)"; ws="${ws#GITHUB_WORKSPACE=}"
+  # The effective workspace: the last GITHUB_WORKSPACE= line of env.extra (later wins), read from the
+  # array already loaded rather than by a grep|tail pipeline per job.
+  for kv in ${extra[@]+"${extra[@]}"}; do [[ "$kv" == GITHUB_WORKSPACE=* ]] && ws="${kv#GITHUB_WORKSPACE=}"; done
   printf '%s' "${ws:-$WS_DEFAULT}" >"$d/workspace"
 }
 # real_tree: run this case's job against the real tree, not the slim default. Append AFTER setup,

@@ -680,9 +680,11 @@ missing flush, because both defer scoring the same way. The pooled run must matc
   instrument self-test's deliberate `FAIL arm records (EXPECTED, subtracted below)` line. The exact
   path printed on the run's `[sandbox]` stderr line is gone (`mktemp -t` follows `TMPDIR`, so never
   glob for it). Recorded once in the PR body as evidence.
-- [ ] AC4: The suite's worst `suite-timings-infra-*` value over at least two infra-validation runs of
-  this PR's final commit is at most 360000 ms, and the row is PASS. If Step A alone misses this, Step B
-  is built and this AC is re-read. If both miss it, stop and re-plan; do not widen the bound.
+- [ ] AC4: The suite's `suite-timings-infra-*` value over at least three infra-validation attempts of
+  this PR's final commit has a worst of at most 480000 ms and a median of at most 360000 ms, and the
+  row is PASS. The bound stays at 720 s. (Revised 2026-11-25 by CTO ruling after Steps A and B missed
+  the original 360000 ms worst-of-2 on runner-wide 2x variance; see decision-challenges.md. The
+  original wording: worst of at least two runs at most 360000 ms; if both steps miss, stop and re-plan.)
 - [ ] AC5: If Step B is built, the pooled run's ordered verdict labels equal the Step A golden list
   (the Phase 4 step 3 diff prints nothing beyond the listed pool self-test rows), and the run passes. If Step B is not built,
   `grep -c 'CFAM_MUT_JOBS' apps/web-platform/infra/cf-account-migrate-job.test.sh` prints `0`.
