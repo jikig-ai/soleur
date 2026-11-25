@@ -683,7 +683,10 @@ missing flush, because both defer scoring the same way. The pooled run must matc
   glob for it). Recorded once in the PR body as evidence.
 - [ ] AC4: The suite's `suite-timings-infra-*` value over at least three infra-validation attempts of
   this PR's final commit has a worst of at most 480000 ms and a median of at most 360000 ms, and the
-  row is PASS. The bound stays at 720 s. (Second revision 2026-11-25, CTO review-phase ruling: the median
+  row is PASS. The bound stays at 720 s. Each attempt records the leg's other suites, and the PR stops
+  if any suite is bound-killed or `run-registered-suites.test.sh` passes 486 s (third revision
+  2026-11-25, CTO, after serial measured 560 s on c684ba1f9d; the pool now runs 2 rows at once on a
+  4-core leg). (Second revision 2026-11-25, CTO review-phase ruling: the median
   clause is dropped, because with the pool off on CI the median measured the CPU the pool took from
   the leg's other suites; the worst <= 480000 ms clause stands. Revised 2026-11-25 by CTO ruling after Steps A and B missed
   the original 360000 ms worst-of-2 on runner-wide 2x variance; see decision-challenges.md. The

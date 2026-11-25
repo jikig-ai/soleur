@@ -756,11 +756,11 @@ _SUITE_BOUNDS=(
   "apps/web-platform/infra/key-rotate-workflow.test.sh=840"
   # #12931 / #13051 (PR #13052): the CF account migrate job battery runs the real gate and state forget
   # per case plus its sed mutants. It outgrew this bound once (killed at 720 s). #13052 cut its harness
-  # cost (slim workspace, per-job fork cuts) and added a row pool that is OFF on hosts under 8 cores, so
-  # a CI leg runs it serially: on CI the pool only moved CPU onto the leg's other suites (CTO ruling,
-  # decision-challenges.md). The weight row is the slim-workspace serial CI time, 396 s on 2825e1bc7e
-  # (before the fork cuts), so 720 is ~1.8x it, inside the ATTRIBUTION block's >=1.5x rule; the PR's
-  # AC4 attempts on the merged commit are in PR #13052's body. One commit has measured 267 s and 526 s
+  # cost (slim workspace, per-job fork cuts) and added a row pool that runs 2 rows at once on a 4-core CI
+  # leg (3 at 8+ cores): serial measured 560 s on an ordinary runner (c684ba1f9d), and 3 at once loaded
+  # the leg's other suites by +309 s (CTO rulings, decision-challenges.md). The weight row is 396 s
+  # (2825e1bc7e, a fast runner); the AC4 attempts that price it on the merged commit, with the leg's
+  # other suites beside them, are in PR #13052's body. One commit has measured 267 s and 526 s
   # on two runners (a1eb4e67b1, pooled), so read a figure next to its leg siblings, not alone.
   # Re-measure: download suite-timings-infra-* from >=3 infra-validation attempts, put the worst in
   # suite-durations.tsv, then `regenerate-shard-manifest.py --group infra --durations

@@ -25,8 +25,8 @@
 #   reachable: SIGKILL (the runner's `timeout -k 30`) leaves the sandbox, and the job's own
 #   non-foreground `timeout` calls (gh 30 s, doppler/backups 60 s) are their own groups, so a stub
 #   under one outlives a kill by at most that bound.
-# - CFAM_MUT_JOBS (1-8) sizes the row pool; unset, it is 3 on a host with 8+ cores and 1 otherwise,
-#   so a 4-core CI leg running other suites beside this one gets no extra jobs (#13051 CTO ruling).
+# - CFAM_MUT_JOBS (1-8) sizes the row pool; unset, it is 1 under 4 cores, 2 at 4-7 (a CI leg, which
+#   runs other suites beside this one) and 3 at 8+ (#13051 CTO rulings: serial measured 560 s on CI).
 # - ROW POOL contract (red, green_mut and norm_row queue their rows; see the ROW POOL block):
 #   * a section header goes through `section`, never a bare printf (it must print after queued rows);
 #   * inline code never reads a queued row's case dir, LAST_D or the counters before something
@@ -134,7 +134,10 @@ verdict() {
 # foreground, because its timing must not share the host with other jobs.
 if [[ -z "${CFAM_MUT_JOBS:-}" ]]; then
   _ncpu="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf 1)"
-  CFAM_MUT_JOBS=1; [[ "$_ncpu" =~ ^[0-9]+$ && "$_ncpu" -ge 8 ]] && CFAM_MUT_JOBS=3
+  CFAM_MUT_JOBS=1
+  if [[ "$_ncpu" =~ ^[0-9]+$ ]]; then
+    if [[ "$_ncpu" -ge 8 ]]; then CFAM_MUT_JOBS=3; elif [[ "$_ncpu" -ge 4 ]]; then CFAM_MUT_JOBS=2; fi
+  fi
 fi
 [[ "$CFAM_MUT_JOBS" =~ ^[1-8]$ ]] || { printf '[FATAL] CFAM_MUT_JOBS must be an integer 1-8\n' >&2; exit 2; }
 POOL_Q=(); POOL_N=0; POOL_IN_ROW=""; POOL_BATCHES=0; POOL_SNAP=""; POOL_SNAP_BAD=""
