@@ -908,9 +908,13 @@ fi
 # into the mutation children.
 if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
   REAL_DED="apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh"
-  _real_on_leg=""
+  # Each leg must PRINT its own execute-set header, or a leg that crashed or timed out with
+  # empty stdout would read as "absent" (the positive control T11k-a gets from _ded_loud).
+  _real_on_leg=""; _real_legs_listed=0
   for k in 1 2 3 4; do
-    if grep -qxF "  $REAL_DED" < <(SOLEUR_INFRA_SHARD=$k/4 timeout 60 bash "$SUT" --list 2>/dev/null \
+    _leg_lo="$(SOLEUR_INFRA_SHARD=$k/4 timeout 60 bash "$SUT" --list 2>/dev/null)" || true
+    grep -qE "^Shard $k/4 execute set" <<<"$_leg_lo" && _real_legs_listed=$(( _real_legs_listed + 1 ))
+    if grep -qxF "  $REAL_DED" < <(printf '%s\n' "$_leg_lo" \
          | awk '/^Shard [0-9]+\/[0-9]+ execute set/{f=1;next} /^$/{f=0} f'); then
       _real_on_leg="${_real_on_leg} $k/4"
     fi
@@ -924,14 +928,14 @@ if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
   _r_der=$(sed -nE 's/^Derived ([0-9]+) registered infra suite.*/\1/p' <<< "$_real_lo" | head -1)
   _r_exe=$(sed -nE 's/^Execute set: ([0-9]+) suite\(s\)$/\1/p' <<< "$_real_lo" | head -1)
   _r_skp=$(grep -cE '^  SKIP (privileged|dedicated): ' <<< "$_real_lo" || true)
-  if [[ -z "$_real_on_leg" ]] \
+  if [[ -z "$_real_on_leg" && "$_real_legs_listed" -eq 4 ]] \
      && grep -qF "  SKIP dedicated: $REAL_DED — owner: bastion-boot-rehearsal" <<<"$_real_lo" \
      && [[ -n "$_r_der" && -n "$_r_exe" ]] && (( _r_exe == _r_der - _r_skp )); then
     ok "T11k-g: $REAL_DED is on no real k/4 leg and absent from the real unsharded set (execute ${_r_exe} = derived ${_r_der} - ${_r_skp} skipped)"
   else
-    no "T11k-g: real tree: on leg(s):${_real_on_leg:- none}; unsharded SKIP line $(grep -cF "SKIP dedicated: $REAL_DED" <<< "$_real_lo") (want 1 — is the suite committed?); execute ${_r_exe:-?} vs derived ${_r_der:-?} - ${_r_skp} skipped"
+    no "T11k-g: real tree: on leg(s):${_real_on_leg:- none}; ${_real_legs_listed}/4 legs printed their execute set; unsharded SKIP line $(grep -cF "SKIP dedicated: $REAL_DED" <<< "$_real_lo") (want 1 — is the suite committed?); execute ${_r_exe:-?} vs derived ${_r_der:-?} - ${_r_skp} skipped"
   fi
-  unset REAL_DED _real_on_leg _real_lo _r_der _r_exe _r_skp
+  unset REAL_DED _real_on_leg _real_legs_listed _leg_lo _real_lo _r_der _r_exe _r_skp
 fi
 
 # ── T8: corpus-conformance — every registered suite's failure marker is readable ──
