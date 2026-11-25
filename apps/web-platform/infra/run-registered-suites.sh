@@ -55,6 +55,8 @@
 #   - cloud-init-inngest-provision-unit.test.sh  Tier B: systemd 255 as PID 1 in a
 #                                       privileged ubuntu:24.04 container (#8562); Tier A
 #                                       and the static rows need no docker
+#   (+ bastion-runcmd-rehearsal.test.sh, DEDICATED below: real cloud-init boots in privileged
+#    ubuntu:24.04 containers, ~5 min; CI runs it only in the bastion-boot-rehearsal job, #12941)
 #
 # On a non-CI host all six exit 0 when docker is missing or unreachable — the
 # first two skip the suite outright; the other four print a SKIP verdict and
@@ -189,8 +191,9 @@
 # orphan scan) is testable in under a second — a runner whose correctness could
 # only be checked by a 25-minute full run would not, in practice, be checked.
 # `--enumerate` prints `SUITE_REGISTRATION<TAB><path>` rows for the EXECUTE set
-# (privileged excluded) — it is shard-insensitive by design: the manifest
-# generator consumes the full set for its ⊆ lint.
+# (privileged and dedicated excluded — no leg times either) — it is
+# shard-insensitive by design: the manifest generator consumes the full set for
+# its ⊆ lint.
 #
 # EXIT CONTRACT — THE SHAPE OF THE NON-ZERO IS LOAD-BEARING (#7429).
 #
@@ -335,7 +338,7 @@ SOLEUR_INFRA_DIR="${SOLEUR_INFRA_DIR:-apps/web-platform/infra}"
 
 # Derivation is the FILESYSTEM GLOB, not a workflow `run: bash` scrape (ADR-252):
 # presence under SOLEUR_INFRA_DIR IS registration — a suite on disk is in the
-# execute set unless it carries a justified PRIVILEGED exclusion below. The scrape
+# execute set unless it carries a justified PRIVILEGED or DEDICATED exclusion below. The scrape
 # this replaced could not see subdirectory suites (its basename class excluded `/`)
 # and made registration a second thing to remember — the #7076 blind spot, nine
 # suites (6 subdir + 3 sudo) that CI ran but this runner never derived.
@@ -378,10 +381,11 @@ done
 
 # Two name-space invariants the machinery depends on, asserted once at derive
 # time rather than degenerating per-suite:
-#  (a) BASENAMES must be unique — PRIVILEGED_WHY is basename-keyed, so a second
-#      `workspaces-luks-loopback.test.sh` in a subdirectory would inherit the
-#      exclusion and run NOWHERE while the gate's sudo grep stayed satisfied by
-#      the original's step.
+#  (a) BASENAMES must be unique — PRIVILEGED_WHY and DEDICATED_JOB_WHY are both
+#      basename-keyed, so a second `workspaces-luks-loopback.test.sh` (or
+#      `bastion-runcmd-rehearsal.test.sh`) in a subdirectory would inherit the
+#      exclusion and run NOWHERE while the gate's invocation check stayed satisfied
+#      by the original's step.
 #  (b) LOG KEYS must be unique — the shim munges a path to `a_b.test.sh` for its
 #      .log/.meta/.trow files, so `infra/a/b.test.sh` and `infra/a_b.test.sh`
 #      share one key: interleaved capture, a lost kill-rc, a dropped timing row.
@@ -389,7 +393,7 @@ done
   _dup="$(printf '%s\n' "${ALL_SUITES[@]##*/}" | LC_ALL=C sort | uniq -d | head -1)"
   [[ -z "$_dup" ]] || {
     echo "FATAL: duplicate suite basename '$_dup' — basenames must be unique across" >&2
-    echo "       ${SOLEUR_INFRA_DIR} (PRIVILEGED_WHY and the registration gate key on them)." >&2
+    echo "       ${SOLEUR_INFRA_DIR} (PRIVILEGED_WHY, DEDICATED_JOB_WHY and the registration gate key on them)." >&2
     exit 2
   }
   _dup="$(printf '%s\n' "${ALL_SUITES[@]//\//_}" | LC_ALL=C sort | uniq -d | head -1)"
@@ -432,14 +436,57 @@ for _s in "${ALL_SUITES[@]}"; do
   fi
 done
 unset _s
-_EXECUTABLE_N=${#SUITES[@]}
+
+# DEDICATED — derived, never executed by this runner in any mode (sharded or
+# unsharded), exactly like PRIVILEGED (#12941, CTO rulings Q6/Q25). CI runs it in
+# the job its value names; locally, run it directly (`bash <path>`). A suite
+# lands here when it cannot ride a ship battery: the bastion rehearsal boots real
+# cloud-init 9 times in privileged systemd containers (~5 min). It is DERIVED
+# (presence = registration, ADR-252, so it stays counted and visible: `--list`
+# and every run print one `SKIP dedicated:` line naming the owning job and the
+# direct invocation) and omitted from `--enumerate`, so the shard manifest never
+# tables a row no leg can time. The value names the owning job as
+# `runs in the <job> job`; the registration gate
+# (.github/scripts/test/test-infra-suite-registration.sh) reads that name and
+# requires an unmasked `bash <path>` step in that job of infra-validation.yml —
+# the exclusion waives the legs, never the invocation.
+declare -A DEDICATED_JOB_WHY=(
+  [bastion-runcmd-rehearsal.test.sh]="real cloud-init boots, ~5 min; runs in the bastion-boot-rehearsal job (#12941)"
+)
+_dedicated_job() {  # $1 = basename -> the owning job named in its DEDICATED_JOB_WHY value
+  local _w="${DEDICATED_JOB_WHY[$1]-}"
+  if [[ "$_w" =~ runs\ in\ the\ ([A-Za-z0-9_-]+)\ job ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+  else
+    printf '%s' "<no job named>"
+  fi
+}
+DED_SUITES=()
+ENUM_SUITES=()
+for _s in "${SUITES[@]}"; do
+  if [[ -n "${DEDICATED_JOB_WHY[${_s##*/}]+x}" ]]; then
+    DED_SUITES+=("$_s")
+  else
+    ENUM_SUITES+=("$_s")
+  fi
+done
+unset _s
+SUITES=("${ENUM_SUITES[@]}")
+_ded_skip_lines() {  # one `SKIP dedicated:` line per DEDICATED suite (--list and every run)
+  local _s
+  for _s in "${DED_SUITES[@]}"; do
+    printf '  SKIP dedicated: %s — owner: %s — %s; run locally: bash %s\n' "$_s" \
+      "$(_dedicated_job "${_s##*/}")" "${DEDICATED_JOB_WHY[${_s##*/}]}" "$_s"
+  done
+}
 
 # SUITE_REGISTRATION enumerate — the machine-readable form the shard-manifest
 # generator (`regenerate-shard-manifest.py --group infra`) consumes for its ⊆
-# lint. Emits the EXECUTE set only: privileged suites are never timed by this
-# runner, so tabling them would red the lint on a row no leg can produce.
+# lint. Emits the LEG execute set only: privileged suites are never timed by this
+# runner, and dedicated suites are never timed by a leg, so tabling either would
+# red the lint on a row no leg can produce.
 if [[ "${1:-}" == "--enumerate" ]]; then
-  printf 'SUITE_REGISTRATION\t%s\n' "${SUITES[@]}"
+  printf 'SUITE_REGISTRATION\t%s\n' "${ENUM_SUITES[@]}"
   exit 0
 fi
 
@@ -472,6 +519,8 @@ if [[ -n "${SOLEUR_INFRA_SHARD+x}" ]]; then
   fi
   echo "[shard] SOLEUR_INFRA_SHARD resolved k/N = ${_SHARD_K}/${_SHARD_N}"
 fi
+
+_EXECUTABLE_N=${#SUITES[@]}
 
 # Shard-assignment manifest (ADR-240 pattern): the committed
 # apps/web-platform/infra/suite-shard-legs.tsv maps suite path -> leg from
@@ -826,6 +875,12 @@ if (( LIST_ONLY )); then
       printf '  SKIP privileged: %s — %s\n' "$_s" "${PRIVILEGED_WHY[${_s##*/}]}"
     done
   fi
+  if (( ${#DED_SUITES[@]} > 0 )); then
+    echo ""
+    echo "Dedicated — derived but NOT executed here, sharded or unsharded (${#DED_SUITES[@]}; CI runs"
+    echo "each in the job named below):"
+    _ded_skip_lines
+  fi
   if (( _SHARD_N > 0 )); then
     echo ""
     echo "Shard ${_SHARD_K}/${_SHARD_N} execute set: ${#SUITES[@]} of ${_EXECUTABLE_N} suite(s):"
@@ -951,6 +1006,11 @@ if (( ${#PRIV_SUITES[@]} > 0 )); then
   echo "(${#PRIV_SUITES[@]} privileged suite(s) derived but not executed — CI runs them"
   echo " via 'sudo bash' in deploy-script-tests-fixed.)"
 fi
+if (( ${#DED_SUITES[@]} > 0 )); then
+  echo "(${#DED_SUITES[@]} dedicated suite(s) derived but not executed — CI runs each in its own job:"
+  _ded_skip_lines
+  echo ")"
+fi
 
 # The child still emits `PASS <path>` / `RED  <path>` FIRST and in the same byte shape — every
 # downstream consumer anchors on it.
@@ -979,9 +1039,9 @@ fi
 # An EMPTY execute set must not reach xargs: `printf '%s\n' "${SUITES[@]}"` on an
 # empty array emits one newline, and `-I{}` would run the shim once with s=""
 # — a phantom suite with an empty log key. Reachable in fixtures where every
-# derived basename is privileged.
+# derived basename is privileged or dedicated.
 (( ${#SUITES[@]} > 0 )) || {
-  echo "FATAL: the execute set is empty — every derived suite is privileged." >&2
+  echo "FATAL: the execute set is empty — every derived suite is privileged (PRIVILEGED_WHY) or dedicated (DEDICATED_JOB_WHY)." >&2
   echo "       Dispatching would fabricate a phantom suite; refusing." >&2
   exit 2
 }
@@ -1324,7 +1384,7 @@ emit_unaccounted_names() {
 # each child's own `.trow` file, concatenated single-threaded strictly after
 # xargs — never appended by the children (a shared open file description is not
 # PIPE_BUF-atomic). UNACCOUNTED suites (shim killed, no .meta/.trow) and the
-# privileged set get explicit `skip=` rows so the feed names the gap rather than
+# privileged and dedicated sets get explicit `skip=` rows so the feed names the gap rather than
 # omitting it; the generator's skip=/FAIL exclusions drop them from the balance.
 # BEFORE the logdir reap below — the .trow files live under it.
 if [[ -n "${_TIMINGS_OUT:-}" ]]; then
@@ -1338,6 +1398,9 @@ if [[ -n "${_TIMINGS_OUT:-}" ]]; then
     fi
     if (( ${#PRIV_SUITES[@]} > 0 )); then
       for _s in "${PRIV_SUITES[@]}"; do printf '%s\t0\tskip=privileged\n' "$_s"; done
+    fi
+    if (( ${#DED_SUITES[@]} > 0 )); then
+      for _s in "${DED_SUITES[@]}"; do printf '%s\t0\tskip=dedicated\n' "$_s"; done
     fi
   } > "${_TIMINGS_OUT}" || \
     echo "WARNING: could not write timings feed to ${_TIMINGS_OUT}" >&2

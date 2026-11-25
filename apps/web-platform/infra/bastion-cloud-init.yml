@@ -6,6 +6,11 @@
 # then the public interface is filtered by neither; bootcmd masks ssh first, and root has only the CI key. Egress is an allowlist (bastion-egress.sh).
 # The apt and kernel-settle blocks below are the same bytes as cloud-init.yml's (Guard 3,
 # bastion.test.sh SETTLE). Changing anything here is a bastion-host-replace (#12879).
+# BOOT-REHEARSED by bastion-runcmd-rehearsal.test.sh (#12941): real cloud-init boots this render in the
+# pinned ubuntu:24.04 image. No-boot subset (still builds the fixture images, so needs the archive):
+# BRH_STATIC_ONLY=1 bash apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh.
+# Its mutation rows edit lines of this file by exact anchor (its ANCHORS block): if you reword one and it
+# prints BRH_ANCHOR_MISS, update the anchor there, unless the miss means the fix that row guards was reverted.
 
 # (F5) The host key is Terraform-minted (tls_private_key.bastion_host_ssh) and never rotates on a
 # replace. cc_ssh deletes the image's host keys and installs exactly this pair (no ssh_genkeytypes,
@@ -216,7 +221,7 @@ runcmd:
     STAGE=apt_update
     n=0; until timeout 240 apt-get update -o Acquire::Retries=3 -o DPkg::Lock::Timeout=300; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; sleep 10; done
     STAGE=apt_install
-    n=0; until timeout 300 apt-get install -y -o DPkg::Lock::Timeout=300 curl linux-image-generic nftables; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; timeout 120 dpkg --configure -a || :; sleep 10; done
+    n=0; until timeout 300 apt-get install -y -o DPkg::Lock::Timeout=300 curl linux-image-generic nftables systemd-timesyncd; do n=$((n+1)); [ "$n" -ge 2 ] && exit 1; timeout 120 dpkg --configure -a || :; sleep 10; done
   # ADR-326: one reboot onto the new kernel; runcmd re-runs.
   - |
     STAGE=kernel_settle; D=/run/soleur-stage-detail
@@ -239,10 +244,31 @@ runcmd:
     _emit "soleur-cloud-init boot stage" egress_load info
     install -m 0644 /etc/soleur/bastion-nftables.conf /etc/nftables.conf
     systemctl daemon-reload
-    systemctl enable --now nftables.service
+    # The fatal's detail names why the allowlist did not load, selected by content from BOTH units'
+    # journals for this boot: bastion-egress.sh's own `[bastion-egress] FAIL:` line (a failed lookup)
+    # or nft's `: Error: ` line (a refused rule, logged by nftables.service when its baseline names a
+    # user the host lacks). The last two such lines, cut to 180 bytes. With no such line, the two
+    # units' Result values, the egress script's exit status and its own last output line (60 bytes;
+    # _SYSTEMD_UNIT= selects the process's stdout/stderr, never PID 1's start/dependency boilerplate),
+    # cut to 180 bytes. `journalctl --sync` first, so the script's stderr is stored before it is read.
+    # Every read is bounded by `timeout 10` and falls back to `unread` (the last-line read tests
+    # journalctl's own status, not the pipeline's), so neither a stalled journald nor set -e can stop
+    # the fatal from being sent. The rehearsal pins this (rows F1 and FA, and its offline hang rows).
+    _egress_why() {
+      timeout 10 journalctl --sync 2>/dev/null || :
+      W=$(timeout 10 journalctl -b -u nftables.service -u bastion-egress.service --no-pager -o cat 2>/dev/null | grep -E '^\[bastion-egress\] FAIL:|: Error: ' | tail -2 | tr '\n' ' ' | head -c 180)
+      if [ -z "$W" ]; then
+        _ew_n=$(timeout 10 systemctl show -p Result --value nftables.service 2>/dev/null) || _ew_n=unread
+        _ew_e=$(timeout 10 systemctl show -p Result --value bastion-egress.service 2>/dev/null) || _ew_e=unread
+        _ew_s=$(timeout 10 systemctl show -p ExecMainStatus --value bastion-egress.service 2>/dev/null) || _ew_s=unread
+        _ew_l=$(timeout 10 journalctl -b _SYSTEMD_UNIT=bastion-egress.service --no-pager -o cat 2>/dev/null) && _ew_l=$(printf '%s' "$_ew_l" | tail -1 | tr -d '\n' | head -c 60) || _ew_l=unread
+        W=$(printf 'why=no_reason_line nft=%s egress=%s st=%s last=%s' "$_ew_n" "$_ew_e" "$_ew_s" "$_ew_l" | head -c 180)
+      fi
+      printf '%s' "$W" > $D
+    }
+    systemctl enable --now nftables.service || { _egress_why; exit 1; }
     systemctl enable bastion-egress.service
-    # The script's own reason (which lookup, or nft's refusal) goes into the fatal's detail field.
-    systemctl start bastion-egress.service || { journalctl -u bastion-egress.service -n 5 --no-pager -o cat 2>/dev/null | tr '\n' ' ' | tail -c 180 > $D; exit 1; }
+    systemctl start bastion-egress.service || { _egress_why; exit 1; }
     systemctl enable --now bastion-egress.timer
     nft list set inet soleur_bastion soleur_egress_allow >/dev/null
     # --error-on=any: a plain `apt-get update` exits 0 when every fetch is blocked.
