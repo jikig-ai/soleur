@@ -157,12 +157,15 @@ check_no_existing_token() {
 
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '=\n'; }
 build_app_jwt() {
-  local app_id pem now header payload unsigned sig dir="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}"
+  local app_id pem now header payload unsigned sig
+  # The key file goes on the per-user tmpfs where there is one.
+  if [[ "${XDG_RUNTIME_DIR:-}" == /* && -d "${XDG_RUNTIME_DIR:-}" ]]; then export TMPDIR="$XDG_RUNTIME_DIR"; fi
   app_id="$(plain_get "$APP_PROJECT" prd GITHUB_INFRA_APP_ID)" || app_id=""
   pem="$(plain_get "$APP_PROJECT" prd GITHUB_INFRA_APP_PRIVATE_KEY)" || pem=""
   [[ "$app_id" =~ ^[0-9]+$ && -n "$pem" ]] \
     || refuse github-app-unreadable "the infra GitHub App credentials are not readable from ${APP_PROJECT}/prd; nothing was minted."
-  PEM_FILE="$(mktemp "$dir/cf-mint-app.XXXXXXXX")" || refuse github-app-unreadable "cannot create a private key file; nothing was minted."
+  PEM_FILE="$(mktemp -t cf-mint-app.XXXXXXXX)" || refuse github-app-unreadable "cannot create a private key file; nothing was minted."
+  [[ "$PEM_FILE" == /* ]] || refuse github-app-unreadable "the private key file path is not absolute (TMPDIR is relative); nothing was minted."
   printf '%s\n' "$pem" >"$PEM_FILE"
   pem=""
   openssl pkey -in "$PEM_FILE" -noout >/dev/null 2>&1 \

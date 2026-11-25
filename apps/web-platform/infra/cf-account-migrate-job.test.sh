@@ -305,9 +305,24 @@ build_plan() {
   jq -n --argjson spec "$spec" --argjson lit "$lit" --arg s "$SENTINEL" --arg nz "$NZ" --arg na "$NA" --arg dt "$DT" '
     def ids($a): if ($a | test("^cloudflare_(list|pages_project|pages_domain|zero_trust_tunnel_cloudflared|zero_trust_tunnel_cloudflared_config|zero_trust_access_service_token|notification_policy)[.]")) or $a == "cloudflare_ruleset.bulk_redirects" then {account_id: $na}
                  elif ($a | startswith("cloudflare_")) then {zone_id: $nz} else {} end;
-    # The deploy policy the gate grades in the tunnel phase.
-    def pol($a): if $a == "cloudflare_zero_trust_access_policy.deploy_service_token"
-                 then {decision: "non_identity", include: [{service_token: [$dt]}]} else {} end;
+    # The Access content the gate grades in the tunnel phase, in the shape provider 4.52.7 plans it.
+    def papp: "cloudflare_zero_trust_access_application";
+    def ptok: "cloudflare_zero_trust_access_service_token";
+    def ppol: "cloudflare_zero_trust_access_policy";
+    def polrefs: {(ppol + ".deploy_service_token"): {app: (papp + ".deploy"), tok: ["local.deploy_service_token_ids"]},
+                  (ppol + ".ci_ssh_service_token"): {app: (papp + ".ssh"), tok: [(ptok + ".ci_ssh.id"), (ptok + ".ci_ssh")]},
+                  (ppol + ".registry_push_service_token"): {app: (papp + ".registry"), tok: [(ptok + ".registry_push.id"), (ptok + ".registry_push")]}};
+    def apppin: {(papp + ".deploy"): {domain: "deploy.soleur.ai", type: "self_hosted", session_duration: "24h"},
+                 (papp + ".ssh"): {domain: "ssh.soleur.ai", type: "self_hosted", session_duration: "15m"},
+                 (papp + ".registry"): {domain: "registry.soleur.ai", type: "self_hosted", session_duration: "15m"}};
+    def pol($a): if $a == (ppol + ".deploy_service_token") then {decision: "non_identity", include: [{service_token: [$dt]}]}
+                 elif polrefs[$a] != null then {decision: "non_identity", include: [{}]}
+                 elif apppin[$a] != null then apppin[$a]
+                 else {} end;
+    def unk($a): if $a == (ppol + ".deploy_service_token") then {include: [{service_token: [false]}]}
+                 elif polrefs[$a] != null then {include: [{service_token: true}]}
+                 elif apppin[$a] != null then {account_id: true}
+                 else {} end;
     # Ruleset kind/phase, as the root declares them: the entrypoint gate builds its URLs from these.
     def rs($a): {"cloudflare_ruleset.allowlist_ai_crawlers": {kind: "zone", phase: "http_request_firewall_custom"},
                  "cloudflare_ruleset.cache_shared_binaries": {kind: "zone", phase: "http_request_cache_settings"},
@@ -316,15 +331,17 @@ build_plan() {
                  "cloudflare_ruleset.seo_response_headers": {kind: "zone", phase: "http_response_headers_transform"},
                  "cloudflare_ruleset.bulk_redirects": {kind: "root", phase: "http_request_redirect"}}[$a] // {};
     {format_version: "1.2",
-     configuration: {root_module: {resources: [{address: "cloudflare_zero_trust_access_policy.deploy_service_token",
-       expressions: {application_id: {references: ["cloudflare_zero_trust_access_application.deploy.id", "cloudflare_zero_trust_access_application.deploy"]}}}]}},
+     configuration: {root_module: {resources: [polrefs | to_entries[] | {address: .key, expressions: {
+       application_id: {references: [(.value.app + ".id"), .value.app]},
+       include: [{service_token: {references: .value.tok}}]}}]}},
      resource_changes: [
       $spec | to_entries[] | .key as $a | .value as $c
       | ({address: $a, mode: "managed", type: ($a | split(".")[0]), change: (
             # The gate fixes the planned value of the runtime zone-id secret and of the Pages
             # account-id secret (its expected-values table): those carry it exactly.
             if $c == "create" then {actions: ["create"], before: null,
-                after: ((if $a == "doppler_secret.cf_zone_id_prd" then {project: "soleur", config: "prd", name: "CF_ZONE_ID", value: $nz} else {value: $s} end) + ids($a) + rs($a) + pol($a))}
+                after: ((if $a == "doppler_secret.cf_zone_id_prd" then {project: "soleur", config: "prd", name: "CF_ZONE_ID", value: $nz} else {value: $s} end) + ids($a) + rs($a) + pol($a)),
+                after_unknown: unk($a)}
             elif $c == "import" then {actions: ["no-op"], importing: {id: $lit[$a]}, before: ids($a), after: ids($a)}
             elif $c == "mutable" then {actions: ["update"], before: {},
                 after: (if $a == "github_actions_secret.cloudflare_account_id_pages"
@@ -1319,6 +1336,8 @@ mkdir -p "$MT/apps/web-platform/infra/scripts" || exit 2
 ln -s "$REPO/.github" "$MT/.github"; ln -s "$REPO/tests" "$MT/tests"
 ln -s "$HERE/scripts/cf-account-migration-complete.sh" "$MT/apps/web-platform/infra/scripts/cf-account-migration-complete.sh"
 ln -s "$HERE/cf-account-migration-imports.tf" "$MT/apps/web-platform/infra/cf-account-migration-imports.tf"
+# The gate reads the committed Access include blocks beside the imports file.
+ln -s "$HERE/tunnel.tf" "$MT/apps/web-platform/infra/tunnel.tf"
 cat >"$MT/apps/web-platform/infra/scripts/cf-tunnel-host-predelete.sh" <<'STUB'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -1418,6 +1437,26 @@ tunnel_case sync-and-verify false; tmark mode.dopplerset; tmark mode.health; run
 r=1; refused_for "$LAST_D" verify-failed && grep -q 'ci_ssh_sync=failed' "$LAST_D/out.txt" && r=0
 verdict "$r" "a failed sync AND a failed probe -> reason=verify-failed, carrying ci_ssh_sync=failed"
 
+printf '\n[forget] the redirects-dns forget, which is the only forget, removes the tunnel slice\n'
+# The tunnel phase runs no forget of its own: the real forget script classifies EVERY old-id
+# cloudflare_* entry, so the 15 Cloudflare members of the tunnel spec go with redirects-dns. The
+# random_id and the two Doppler secrets are not Cloudflare objects and stay, which is why the tunnel
+# phase replaces and updates them.
+new_case forget-tunnel-slice redirects-dns true
+TUN_CF="$(cf_account_migrate_phase_spec tunnel | jq -c '[keys[] | select(startswith("cloudflare_"))]')"
+tmark remote.tfstate "$(jq --argjson cf "$TUN_CF" --arg oz "$OZ" --arg oa "$OA" '.show.values.root_module.resources +=
+  ([$cf[] | {address: ., mode: "managed", type: split(".")[0], name: "n",
+    values: (if test("tunnel_cloudflared|access_service_token|notification_policy") then {account_id: $oa} else {zone_id: $oz} end)}]
+   + [{address: "doppler_secret.registry_push_access_token_id", mode: "managed", type: "doppler_secret", name: "n", values: {id: "d1"}},
+      {address: "doppler_secret.registry_push_access_token_secret", mode: "managed", type: "doppler_secret", name: "n", values: {id: "d2"}}])' \
+  "$LAST_D/remote.tfstate")"
+run_job "$LAST_D" "$PRISTINE"
+r=1; [[ "$(jq length <<<"$TUN_CF")" -eq 15 ]] && grep -q 'terraform\[local\] state rm argc=17' "$LAST_D/calls.log" && r=0
+for a in $(jq -r '.[]' <<<"$TUN_CF"); do grep -qxF "cf-state-migrate address=$a action=rm" "$LAST_D/out.txt" || r=1; done
+verdict "$r" "B3: the redirects-dns forget removes all 15 Cloudflare members of the tunnel spec (2 fixture entries + 15)"
+r=1; ! grep -qE 'cf-state-migrate address=(random_id|doppler_secret)' "$LAST_D/out.txt" && r=0
+verdict "$r" "B3: the forget leaves random_id.tunnel_secret and the registry Doppler secrets in state"
+
 printf '\n[scope probes] cf_api_token is read for the tunnel scopes before anything is written\n'
 SVC="accounts_${NA}_access_service_tokens?per_page=1"
 tunnel_case scope-paths true; run_job "$LAST_D" "$PRISTINE"
@@ -1475,7 +1514,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=208
+EXPECTED_CASES=210
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1
