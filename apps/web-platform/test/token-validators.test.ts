@@ -1,5 +1,10 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import { validateToken } from "../server/token-validators";
+import logger from "../server/logger";
+
+vi.mock("../server/logger", () => ({
+  default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 // Mock global fetch
 const mockFetch = vi.fn();
@@ -7,6 +12,7 @@ vi.stubGlobal("fetch", mockFetch);
 
 beforeEach(() => {
   mockFetch.mockReset();
+  vi.mocked(logger.warn).mockClear();
 });
 
 describe("validateToken", () => {
@@ -147,5 +153,99 @@ describe("validateToken", () => {
 
   test("returns false for unsupported provider (vertex)", async () => {
     expect(await validateToken("vertex", "gcp-key")).toBe(false);
+  });
+});
+
+const LI_USERINFO = "https://api.linkedin.com/v2/userinfo";
+const LI_ME = "https://api.linkedin.com/v2/me";
+const LI_ACLS =
+  "https://api.linkedin.com/v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED";
+
+describe("linkedin capability-aware probe chain (#9188)", () => {
+  // Per-URL verdict map: the chain asks each endpoint what THIS token can do —
+  // a pasted token's minting app is unknowable, so the probe order IS the
+  // assertion. A verdict-only test would pass with the fallback deleted.
+  const respond = (map: Record<string, { ok: boolean; status: number }>) =>
+    mockFetch.mockImplementation((url: string) =>
+      Promise.resolve(map[url] ?? { ok: false, status: 500 }),
+    );
+  const calledUrls = () => mockFetch.mock.calls.map((c) => c[0] as string);
+
+  test("Community-app org token (403 userinfo, 200 /v2/me) validates true", async () => {
+    respond({ [LI_USERINFO]: { ok: false, status: 403 }, [LI_ME]: { ok: true, status: 200 } });
+    expect(await validateToken("linkedin", "li-org-token")).toBe(true);
+    expect(calledUrls()).toEqual([LI_USERINFO, LI_ME]);
+  });
+
+  test("org-capable member-denied token (403/403, 200 ACLs) validates true", async () => {
+    respond({
+      [LI_USERINFO]: { ok: false, status: 403 },
+      [LI_ME]: { ok: false, status: 403 },
+      [LI_ACLS]: { ok: true, status: 200 },
+    });
+    expect(await validateToken("linkedin", "li-org-capable")).toBe(true);
+    expect(calledUrls()).toEqual([LI_USERINFO, LI_ME, LI_ACLS]);
+  });
+
+  test("scope-empty token (403 on all probes) validates false", async () => {
+    respond({
+      [LI_USERINFO]: { ok: false, status: 403 },
+      [LI_ME]: { ok: false, status: 403 },
+      [LI_ACLS]: { ok: false, status: 403 },
+    });
+    expect(await validateToken("linkedin", "li-scope-empty")).toBe(false);
+    expect(calledUrls()).toEqual([LI_USERINFO, LI_ME, LI_ACLS]);
+  });
+
+  test("dead token (401 on userinfo) validates false with NO fallback burn", async () => {
+    respond({ [LI_USERINFO]: { ok: false, status: 401 } });
+    expect(await validateToken("linkedin", "li-dead")).toBe(false);
+    expect(calledUrls()).toEqual([LI_USERINFO]);
+  });
+
+  test("OIDC token (200 on userinfo) resolves in exactly one probe", async () => {
+    respond({ [LI_USERINFO]: { ok: true, status: 200 } });
+    expect(await validateToken("linkedin", "li-oidc")).toBe(true);
+    expect(calledUrls()).toEqual([LI_USERINFO]);
+  });
+
+  test("unexpected status (500) stops the chain and validates false", async () => {
+    respond({ [LI_USERINFO]: { ok: false, status: 500 } });
+    expect(await validateToken("linkedin", "li-err")).toBe(false);
+    expect(calledUrls()).toEqual([LI_USERINFO]);
+  });
+
+  test("transport failure (fetch throws) validates false, no fallback burn", async () => {
+    mockFetch.mockRejectedValue(new Error("Network error"));
+    expect(await validateToken("linkedin", "li-net")).toBe(false);
+    expect(calledUrls()).toEqual([LI_USERINFO]);
+  });
+
+  test("every linkedin probe pins redirect: manual (no Bearer leak via redirect)", async () => {
+    respond({
+      [LI_USERINFO]: { ok: false, status: 403 },
+      [LI_ME]: { ok: false, status: 403 },
+      [LI_ACLS]: { ok: true, status: 200 },
+    });
+    expect(await validateToken("linkedin", "li-org-capable")).toBe(true);
+    for (const call of mockFetch.mock.calls) {
+      expect(call[1]).toEqual(expect.objectContaining({ redirect: "manual" }));
+    }
+  });
+
+  test("inconclusive linkedin outcome logs a warning (never the token)", async () => {
+    respond({ [LI_USERINFO]: { ok: false, status: 500 } });
+    expect(await validateToken("linkedin", "li-secret-token")).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "linkedin", status: 500 }),
+      expect.any(String),
+    );
+    expect(vi.mocked(logger.warn).mock.calls.flat().join(" ")).not.toContain("li-secret-token");
+  });
+
+  test("non-linkedin providers keep single-probe behavior (github 403)", async () => {
+    respond({ "https://api.github.com/user": { ok: false, status: 403 } });
+    expect(await validateToken("github", "ghp_x")).toBe(false);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });
