@@ -14,9 +14,17 @@
  *   `e2e/.auth/founder.json`). `/auth/v1/user` picks the user by the bearer JWT's
  *   `sub` claim; `/auth/v1/token` refresh picks the session by `refresh_token`
  *   and answers 400 for an unknown one, so a silent identity swap fails loudly.
+ *
+ * Fixture-only branches (answered only when the request names a fixture id, so no other spec changes):
+ * - HELD_E2E_USERS (#12714): the held-files Settings states.
+ * - EGRESS_E2E_USERS (#12605): the Scope Grants web-egress states, reached through the real tenant mint
+ *   (`mintFounderJwt` in lib/supabase/tenant.ts): admin getUserById, `runtime_mint_intent`, `generate_link`,
+ *   `verify`, the post-mint deny probe, then the `get_workspace_web_egress` read.
+ * Every other request gets a 404 and one `[mock-supabase] unhandled` stderr line per actor, method and path.
  */
 import http from "node:http";
 import { TC_VERSION } from "../lib/legal/tc-version";
+import { sanitizeForLog } from "../lib/log-sanitize";
 
 export const MOCK_USER = {
   id: "test-user-id",
@@ -155,7 +163,11 @@ const HELD_USERS_BY_ID: ReadonlyMap<string, HeldUserFixture> = new Map(
   Object.values(HELD_E2E_USERS).map((u) => [u.id, u]),
 );
 
-/** A signed-in session for a held-files fixture user (the spec builds its storage state from it). */
+/**
+ * A signed-in session for a fixture user (held-files or egress); each spec builds its storage state from it.
+ * `/auth/v1/token` refresh accepts held-files fixtures only. An egress fixture's session lasts 24 hours, well past
+ * one test, and a refresh would get a 400 and sign the test out loudly rather than pass (ruling R5).
+ */
 export function heldSessionFor(userId: string) {
   const user: MockUser = { ...MOCK_USER, id: userId, email: `held-${userId.slice(-4)}@example.com` };
   return {
@@ -261,7 +273,8 @@ export function startMockSupabase(port: number): Promise<http.Server> {
         const key = `${actor} ${req.method} ${url.pathname}`;
         if (!unhandled.has(key)) {
           unhandled.add(key);
-          process.stderr.write(`[mock-supabase] unhandled actor=${key}\n`);
+          // The key carries request-supplied text (query, bearer claim, path), so strip control characters first.
+          process.stderr.write(`[mock-supabase] unhandled actor=${sanitizeForLog(key, 300)}\n`);
         }
         res.writeHead(404);
         res.end(JSON.stringify({ error: "Not found", path: url.pathname }));
@@ -274,7 +287,16 @@ export function startMockSupabase(port: number): Promise<http.Server> {
       function withJsonBody(handler: (body: Record<string, unknown>) => void): void {
         void readBody(req)
           .then((raw) => handler(JSON.parse(raw || "{}") as Record<string, unknown>))
-          .catch(() => notFound());
+          .catch((err: unknown) => {
+            // A malformed body is a request the mock does not answer; anything else is a defect in the handler.
+            if (!(err instanceof SyntaxError)) {
+              process.stderr.write(
+                `[mock-supabase] handler error ${req.method} ${sanitizeForLog(url.pathname, 200)}: ${sanitizeForLog(String(err), 300)}\n`,
+              );
+            }
+            if (res.headersSent || res.destroyed) return;
+            notFound();
+          });
       }
 
       // ---- Auth endpoints ----
@@ -401,6 +423,8 @@ export function startMockSupabase(port: number): Promise<http.Server> {
       if (url.pathname === "/rest/v1/user_session_state") {
         const egressFixture = EGRESS_USERS_BY_ID.get(eqParam(url, "user_id") ?? "");
         if (egressFixture) {
+          // Mirrors the production read order; not load-bearing. Without it the 404 sends resolveCurrentWorkspaceId
+          // down its error fallback (reportSilentFallback, then userId), which lands on the same id (ruling R2).
           sendRows([{ current_workspace_id: egressFixture.id, current_organization_id: null }]);
           return;
         }
@@ -418,16 +442,10 @@ export function startMockSupabase(port: number): Promise<http.Server> {
         const egressFixture = EGRESS_USERS_BY_ID.get(eqParam(url, "user_id") ?? "");
         if (egressFixture) {
           const ws = eqParam(url, "workspace_id");
+          // Only the probe that names the fixture's own workspace gets a row; an unfiltered read gets none.
           sendRows(
-            ws === null || ws === egressFixture.id
-              ? [
-                  {
-                    user_id: egressFixture.id,
-                    workspace_id: egressFixture.id,
-                    role: "owner",
-                    workspaces: { organization_id: null },
-                  },
-                ]
+            ws === egressFixture.id
+              ? [{ user_id: egressFixture.id, workspace_id: egressFixture.id, role: "owner" }]
               : [],
           );
           return;
@@ -567,7 +585,7 @@ export function startMockSupabase(port: number): Promise<http.Server> {
         }
       }
 
-      // #12605: the mint's deny probe, for the fixtures' own jti values only.
+      // #12605: the post-mint deny probe (`denyProbe` in `getFreshTenantClient`), for the fixtures' own jti values only.
       if (req.method === "POST" && url.pathname === "/rest/v1/rpc/is_jti_denied") {
         return withJsonBody((body) => {
           if (!EGRESS_FIXTURES.some((u) => u.jti === body.p_jti)) return notFound();
