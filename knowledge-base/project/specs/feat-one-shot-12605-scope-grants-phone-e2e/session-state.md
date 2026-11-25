@@ -64,3 +64,9 @@
 - structural enumeration (general-purpose): assembly vs property, `isMobile`, card bound.
 - code-simplicity-reviewer: S1-S5 optional (declined, no defect), S6 rejected (the plan prescribes the overlay hide).
 - Fix commits `41a985ff0e` and `9952133f5a`. Fix-round seats: security-sentinel, code-quality-analyst, test-design-reviewer, semgrep-sast.
+
+### Review fix round 1 (2026-11-25)
+
+- Seats: security-sentinel, code-quality-analyst, test-design-reviewer and semgrep-sast, at `f44c23d684`. No P1 or P2 from security or code quality. Test design found two P2s (a paragraph partly hidden in a child, and vertical clipping) and two P3s (a covered switch, a surface box crossing the card).
+- The vertical clipping finding falls inside ruling F8's Non-Goal. It is stated in the spec's docblock and in mutation row 26, not re-ruled, because both CTO spawns allowed per pipeline are used.
+- All other findings are fixed in `6d21f6d864`. The measured rows are in the mutation-results fix-round addendum.

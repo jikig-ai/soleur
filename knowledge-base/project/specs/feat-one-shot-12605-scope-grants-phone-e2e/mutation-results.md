@@ -49,3 +49,27 @@ and `settings-kb-sync-held.e2e.ts` still passes 16 of 16 with the changed mock.
 
 Row 22 stays green by design: without the pointer, the workspace resolver's error fallback lands on the same id.
 The mutation no longer applies at its old anchor, because a comment was added there, so it was not re-run.
+
+## Addendum — 2026-11-25 (fix round, #12605)
+
+This corrects the addendum above.
+
+- That addendum's first sentence covers rows 16-20 only. Row 21 was not run at `4c78ef788c`, and row 22 is green by design.
+- In its `4c78ef788c` column, rows 3, 5, 11, 12 and 13 carry over the original `9f5edcfc29` runs. The diff `9f5edcfc29..4c78ef788c` touches knowledge-base files only.
+- Its list of re-run rows was incomplete. Rows 2, 4, 10, 14 and 15 also go through code that changed, and they are re-run below.
+
+Run against `6d21f6d864` with the same command, one row at a time. The unmutated spec passes 2 of 2, and `settings-kb-sync-held.e2e.ts` passes 16 of 16.
+
+| # | Mutation | Expected | Observed | Failing check |
+|---|---|---|---|---|
+| 23 | First 60 characters of the callout's `GH_DISCLOSURE` visible, the rest in a `hidden md:inline` span | RED | RED | visible-paragraph check (`innerText`) |
+| 24 | `-z-10` on the switch, so the section paints over it | RED | RED | switch trial click, both tests |
+| 25 | `-mr-7` on the callout, so its box crosses the card edge while its text stays inside | RED | RED | callout box right edge |
+| 26 | `line-clamp-2` on the callout's `GH_DISCLOSURE` | GREEN | GREEN | none; vertical clipping is the ruling F8 Non-Goal |
+| 2 | Remove the mock's `/auth/v1/verify` branch | RED | RED | ON test `aria-checked` |
+| 4 | `whitespace-nowrap` on the ON block's `PUSH_DISCLOSURE` | RED | RED | switch right edge (the switch check now runs first) |
+| 10 | ON fixture row has `web_egress: false` | RED | RED | ON test `aria-checked` |
+| 14 | Dialog `GH_DISCLOSURE` as a `<div>` | RED | RED | visible-paragraph check |
+| 15 | `whitespace-nowrap` on the dialog's `GH_DISCLOSURE` | RED | RED | dialog text right edge |
+
+Rows 1 and 6-9 were last run at `9f5edcfc29`. They go through the disclosure count and the confirm-button checks, which this review did not change.
