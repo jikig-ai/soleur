@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"codex-fixture-1"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","item_type":"reasoning","text":"planning the listing"}}
+{"type":"item.completed","item":{"id":"item_1","item_type":"agent_message","text":"Hello "}}
+{"type":"item.completed","item":{"id":"item_2","item_type":"agent_message","text":"world"}}
+{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":0,"output_tokens":30}}
