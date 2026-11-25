@@ -31,3 +31,8 @@
 - constraint: do not resolve review thread 1051496324
 - constraint: never read or print a secret
 - constraint: If merging this PR would need any of those, stop at the ready PR and say so.
+
+## Work Phase
+
+- Status: complete. Addendum inserted (PURE-INSERT, RECORD-MATCHES, SUITE-OK x2, EVIDENCE-UNCHANGED).
+- Affected gate 2026-11-25: 128 of 129 selected suites passed. The one failure is the terraform-gated cloud-init-user-data-size floor case, which fails identically on clean origin/main 1da76b3dcc and is tracked as issue 12850 (CI skips it: no terraform).
