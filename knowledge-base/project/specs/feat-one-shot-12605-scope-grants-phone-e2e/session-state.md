@@ -48,3 +48,10 @@
 - constraint: never ask the operator technical questions
 - constraint: CI is the test gate
 - ci-is-the-gate: CI is the test gate
+
+## Review Phase
+
+- Superseded 2026-11-25: the Plan Phase line "Not yet proven: the visible-paragraph filter has only run in Chromium on a static copy" is closed. Rows 13 and 14 ran on the real page in the work phase, and review rows 18 and 19 found two hiding shapes the filter missed. Both are now fixed (ruling R1).
+- Superseded 2026-11-25: "each required check has a mutation that isolates it" did not hold at `4c78ef788c`. Review rows 16-20 passed with the defect present. They fail at `41a985ff0e`. See the mutation-results addendum.
+- The interrupted lead probe left a mutated `page.tsx` in the worktree, and a routine cleanup deleted the scratchpad. The file was restored with `git restore --source=HEAD` before any commit, and the probe scripts were rewritten.
+- Rulings R1-R5 came from one batched CTO spawn and are recorded in decision-challenges.md and the plan.

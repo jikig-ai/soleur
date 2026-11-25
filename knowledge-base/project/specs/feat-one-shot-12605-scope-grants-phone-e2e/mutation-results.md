@@ -24,3 +24,28 @@ Each mutation was a temporary edit restored with `git restore`. The unmutated sp
 
 Row 5's first run failed with `ERR_CONNECTION_REFUSED` because the dev server had exited, so it proved nothing. It was
 re-run, and the table records the re-run.
+
+## Addendum — 2026-11-25 (review, #12605)
+
+The review panel predicted false greens. Each was first run against `4c78ef788c`, where the spec PASSED with the
+defect present. The fix commit `41a985ff0e` was then run with the same command, one row at a time. The rows above
+that touch changed code (3, 5, 11, 12, 13) were re-run against `41a985ff0e`. The unmutated spec passes 2 of 2,
+and `settings-kb-sync-held.e2e.ts` still passes 16 of 16 with the changed mock.
+
+| # | Mutation | At `4c78ef788c` | At `41a985ff0e` | Failing check |
+|---|---|---|---|---|
+| 16 | Remove the ON block from the DOM before measuring | GREEN (false) | RED | ON block is visible |
+| 17 | `w-[320px]` on the toggle's label, pushing the switch to x=393 | GREEN (false) | RED | switch right edge, both tests |
+| 18 | `h-0 overflow-hidden` on the callout's `GH_DISCLOSURE` | GREEN (false) | RED | visible-paragraph check |
+| 19 | Callout's `GH_DISCLOSURE` inside a `hidden md:inline` span | GREEN (false) | RED | visible-paragraph check |
+| 20 | The unknown recording notice never renders | GREEN (false) | RED | unknown notice visible |
+| 21 | `-mr-12` on the callout, so it escapes the card | not run | RED | callout text right edge vs card |
+| 22 | `user_session_state` pointer branch disabled | GREEN | not re-run | none; not load-bearing (ruling R2) |
+| 3 | `whitespace-nowrap` on the callout's `GH_DISCLOSURE` | RED | RED | callout text right edge vs card |
+| 5 | Fixture membership returns `role: "member"` | RED | RED | enabled switch, both tests |
+| 11 | Range filter `r.width < 0` | RED | RED | `count > 0` |
+| 12 | Short unrelated `<p>` in the callout (must pass) | GREEN | GREEN | none, 2 of 2 pass |
+| 13 | `hidden md:block` on the callout's `GH_DISCLOSURE` | RED | RED | visible-paragraph check |
+
+Row 22 stays green by design: without the pointer, the workspace resolver's error fallback lands on the same id.
+The mutation no longer applies at its old anchor, because a comment was added there, so it was not re-run.

@@ -121,6 +121,11 @@ Ruled by CTO agent, 2026-11-22. The table is mirrored in `knowledge-base/project
 | F6. How the ON state is reached (plan-review challenge) | Keep the mint path; do not click to ON against a stub | The issue names the `web_egress` true row and the click path would leave it unread, so dropping it is the operator's scope call |
 | F7. `user_session_state` branch | Keep the pointer and return the RPC value from the fixture's row after the `sub` and `p_workspace_id` checks, else `null` | Both row fields become load-bearing and the page does not render through a simulated read failure |
 | F8. Vertical clipping checks | Delete them and record the Non-Goal | They are outside the acceptance, and today's surfaces carry no vertical clip |
+| R1-r. Hidden disclosure text (review dissent on F8) | Amended (CTO agent, 2026-11-25) | a paragraph counts only with non-zero height and a visible text rect; two hiding mutations passed `checkVisibility` alone, and this is not F8's partial-clip check |
+| R2-r. Unknown-org notice and the pointer branch (review dissent on F4, F7) | Amended (CTO agent, 2026-11-25) | assert the unknown notice renders, since removing it passed; keep the pointer, which mirrors the production read order and is not load-bearing (the resolver's error fallback reaches the same id) |
+| R3-r. Switch position and the surface bound (review dissent on F2) | Amended (CTO agent, 2026-11-25) | bound text by the card and check the switch sits inside it; an off-screen switch passed, and the measured edges (281, 316, 320 against 350) leave the stricter bound stable |
+| R4-r. Mobile emulation | Amended (CTO agent, 2026-11-25) | add `isMobile` and `hasTouch`; one line, the baseline passes, and it is closer to the phone users the issue names |
+| R5-r. Refresh branch for egress fixtures (review dissent on the Cut List) | Upheld (CTO agent, 2026-11-25) | the session lasts 24 hours and a refresh would fail loudly with a 400; only the `heldSessionFor` docblock changes |
 
 ## Proposed Solution
 
