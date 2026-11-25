@@ -107,6 +107,16 @@ re-dispatch:
   in the same reviewed PR flip that address's spec class from `create` to `import` in
   `tests/scripts/lib/cf-account-migrate-gate.sh` (every ruleset and list is `create` class, and the phase gate refuses
   an import of a create-class address, so the import block alone is refused one step later).
+- `predelete-refused` (tunnel): the pre-delete's pin list is not six record ids, or one pinned record failed its checks
+  (the verdict line names any record it deleted). Commit the six ids in a reviewed PR; a re-dispatch counts a record
+  already gone as done.
+- `token-scope-missing`: a staged token lacks a Tunnel, Access or service-token read scope; re-mint it with the scope.
+- `deploy-token-refused` (tunnel): the deploy policy's service token failed its live read; check the minted id in
+  `local.deploy_service_token_ids`.
+- `doppler-write-token-missing` (tunnel): `DOPPLER_TOKEN_WRITE` is not set, so the post-apply CI-SSH sync could not run.
+  It refuses before the pre-delete, so nothing was deleted or applied.
+- `ci-ssh-sync-failed` (tunnel, `applied=true`): the apply and live probes passed but the CI-SSH pair did not reach
+  `prd_terraform`; re-dispatch the same phase.
 
 ## Expected reds (do not "fix" these mid-migration)
 
@@ -447,11 +457,13 @@ on their `_PREV` keys.
 
 ## Phase 3 — PR2: tunnel, Access and deploy hosts
 
-1. **Deploy Access service token.** Mint `CF_API_TOKEN_ACCESS_MINT` (Access: Service Tokens:Edit only, 7-day expiry)
-   with the Phase 0 hand-off. `Operator-authorizes:` run `apps/web-platform/infra/scripts/cf-access-deploy-token-mint.sh`.
+1. **Deploy Access service token.** Mint `CF_API_TOKEN_ACCESS_MINT` (Access: Service Tokens:Edit only, 7-day expiry;
+   the script also accepts it staged as `CF_API_TOKEN_ACCESS_MINT_NEXT`) with the Phase 0 hand-off. `Operator-authorizes:` run `apps/web-platform/infra/scripts/cf-access-deploy-token-mint.sh`.
    It writes `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` on stdin to `soleur-infra-privileged/prd`,
-   `soleur/prd_terraform`, every other holder the inventory stage lists, and the GitHub repository secrets of the same
-   names (through the infra GitHub App), and prints only the token UUID. That
+   `soleur/prd_terraform`, every other Doppler config that already holds both names (a config holding only one of them
+   refuses), and the GitHub repository secrets of the same names (through the infra GitHub App), and prints only the
+   token UUID. Doppler copies are checked by digest; GitHub cannot return a secret, so those are checked by their
+   `updated_at` moving. That
    UUID goes into `local.deploy_service_token_ids` in PR2. Then revoke `CF_API_TOKEN_ACCESS_MINT` with the revoke
    recipe. For each `CF_ACCOUNT_ID` holder the inventory stage lists outside `prd_terraform`, decide whether it is
    read for R2 (leave it, or move the reader to `CF_R2_ACCOUNT_ID`) or for zone and Access (write the new id after this
@@ -464,14 +476,17 @@ on their `_PREV` keys.
    (`cf-tunnel-host-predelete.sh --apply`, never from the agent's machine): it GETs each pinned id and deletes all six
    only if every one is a proxied `A` record on `ssh.`/`registry.soleur.ai` with content in
    {`104.26.10.163`, `104.26.11.163`, `172.67.73.132`} in the new zone; one mismatch deletes none
-   (`verdict=refuse`). Expected gate line: the tunnel, its config, 3 Access apps, 3 policies, 2 service tokens, the
+   (`verdict=refuse`). The rehearsal refuses `predelete-refused` until the six ids are committed in
+   `apps/web-platform/infra/scripts/cf-tunnel-host-predelete.sh`. The gate grades the content of the three Access
+   policies and apps it creates, and reads their include blocks in `apps/web-platform/infra/tunnel.tf`, so each block
+   keeps `service_token = <its own token>` as its only statement. Expected gate line: the tunnel, its config, 3 Access apps, 3 policies, 2 service tokens, the
    `service_token_expiry` notification policy and the `deploy`/`ssh`/`registry` CNAMEs created; `random_id.tunnel_secret`
    replaced by request; `doppler_secret.registry_push_access_token_id`/`_secret` updated in place (they carry no
    `ignore_changes`, ADR-330 Decision 3, so no `-replace` is needed); `cloudflare_record.app` a pure
    import; exactly one create of the deploy policy, whose service token the gate read live (`200`, name
-   `github-actions-deploy`, about 8760h to expiry, `decision = "non_identity"`, a single include); destroys 0. The
-   post-apply step syncs `CI_SSH_ACCESS_TOKEN_ID/_SECRET` (`apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh`
-   logic); expect one re-dispatch on the first-run empty secret. After the apply, the new tunnel has 0 connectors (an
+   `github-actions-deploy`, about 8760h to expiry, `decision = "non_identity"`, a single include); `destroys=1`, the delete half of the
+   `random_id.tunnel_secret` replace. The post-apply step syncs `CI_SSH_ACCESS_TOKEN_ID/_SECRET` to `prd_terraform` and
+   checks each by digest. After the apply, the new tunnel has 0 connectors (an
    expected red).
 4. **Replace web-2** (the only path that delivers the new tunnel token: it reaches a host only through create-time
    user_data, ADR-304). `Operator-authorizes:` the rehearsal, then the same line with `plan_only=false`:
@@ -571,8 +586,9 @@ backup is taken only when something will be removed); the plan then skips import
 the remainder. An apply that fails after the forget says the same in its refusal line: fix forward and re-dispatch,
 never restore from the backup.
 
-The off-by-default flags `cf_load_balancing_enabled`, `cf_zone_plan_pro`, `cf_zone_dnssec_enabled` and
-`cf_migration_import_app` are locked to `false` by `variables.tf` validations (CTO ruling D9), and `cf_r2_account_id`
+The off-by-default flags `cf_load_balancing_enabled`, `cf_zone_plan_pro` and `cf_zone_dnssec_enabled` are locked to
+`false` by `variables.tf` validations (CTO ruling D9). PR2 deleted the `cf_migration_import_app` validation by that same
+procedure; only the tunnel phase's plan passes `-var=cf_migration_import_app=true`, and `cf_r2_account_id`
 is pinned to the legacy account. Never fix a red by overriding one: turning a flag on is a reviewed PR that deletes its
 validation (Load Balancing #12983, DNSSEC #12982).
 

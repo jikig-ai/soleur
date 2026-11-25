@@ -88,6 +88,8 @@ Two facts shape the decision:
    which is deferred rather than enabled mid-cutover (#12982). Load Balancing on the new account is the operator
    decision tracked by #12983. These three flags and `cf_migration_import_app` are locked to `false` by `variables.tf`
    validations (CTO ruling D9): turning one on is a reviewed PR that deletes its validation, never a tfvar override.
+   > **Amended 2026-11-23 (#12937, PR2):** PR2 deleted the `cf_migration_import_app` validation by that procedure. Its
+   > default stays `false`, and only the tunnel phase's plan passes `-var=cf_migration_import_app=true`.
 5. **The tunnel is recreated, not moved.** A tunnel token reaches a host only through create-time user_data, so the
    new tunnel is created first and `web-host-replace web-2` delivers its token (ADR-304's mechanism). web-1 is not
    touched; `app.soleur.ai` serves from its plain proxied A record throughout.
