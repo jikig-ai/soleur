@@ -644,7 +644,14 @@ print("IPT_TIERB=%s" % " ".join(sorted(j.id for j in tierb)), file=sys.stderr)
 no_env = [j.id for j in tierb if not j.has_env_key]
 check("G1b: every Tier-B job declares an `environment:` key (AC2b; a Tier-B job with none reads no "
       "environment secret and fails closed the moment the legacy fallback goes) [%d Tier-B jobs]" % len(tierb),
-      not no_env, no_env[:8])
+      not no_env,
+      # The remedy leads the detail (it is cut at 400 chars). A reusable-workflow CALLER
+      # (`uses: ./.github/workflows/...`) cannot carry `environment:`: there the fix is to stop
+      # passing the environment-only secret, which the CALLED job's own `environment:` supplies
+      # (#12873; GitHub uses the environment secret over a caller-passed one).
+      ("remedy: add `environment:` to the job, or, if it is a reusable-workflow caller, stop passing "
+       "the environment-only secret (the called job's `environment:` supplies it); jobs: %s" % no_env[:8])
+      if no_env else no_env[:8])
 
 # (#9755) An EMPTY arm (`|| ''` / `|| ""`) is a resolvable outcome but not an environment NAME:
 # it binds no environment, so no ENV-scoped secret resolves on it — a Tier-B job that lands on
