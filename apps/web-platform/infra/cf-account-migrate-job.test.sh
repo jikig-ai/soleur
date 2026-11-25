@@ -22,9 +22,12 @@
 #   prints its path; every run prints it on stderr as `[sandbox] <path>`.
 # - TERM, INT and HUP end the run with exit 128+n and one [ABORTED] line; the [signal] rows prove it.
 #   The handler and the EXIT trap TERM every background job's process group and wait for it. Not
-#   reachable: SIGKILL (the runner's `timeout -k 30`) leaves the sandbox, and the job's own
-#   non-foreground `timeout` calls (gh 30 s, doppler/backups 60 s) are their own groups, so a stub
-#   under one outlives a kill by at most that bound.
+#   reachable: SIGKILL (the runner's `timeout -k 30`) leaves the sandbox, and because each pooled
+#   row runs in its own process group (set -m), outside the runner's group, the 1-3 rows running at
+#   that moment are orphaned and run on until their jobs end (each job is bounded by its stubs:
+#   the longest sleep is 12 s, and the job's own non-foreground `timeout` calls cap gh at 30 s and
+#   doppler/backups at 60 s; those calls are their own groups too, so a stub under one outlives
+#   any kill by at most that bound).
 # - CFAM_MUT_JOBS (1-8) sizes the row pool; unset, it is 1 under 4 cores, 2 at 4-7 (a CI leg, which
 #   runs other suites beside this one) and 3 at 8+ (#13051 CTO rulings: serial measured 560 s on CI).
 # - ROW POOL contract (red, green_mut and norm_row queue their rows; see the ROW POOL block):
@@ -1028,7 +1031,7 @@ verdict "$armed" "SIGTEST: the child armed within 20 s (else the rows below asse
 # pooled row's job, which only the handler can reach.
 set -m
 rm -f "$SIGT/job-termed"
-# CFAM_MUT_JOBS=2: at 1 (the CI default) the child's throttle would block on its one row and never arm.
+# CFAM_MUT_JOBS=2: at 1 (the default under 4 cores) the child's throttle would block on its one row and never arm.
 env -u CFAM_KEEP_SBX CFAM_MUT_JOBS=2 CFAM_JOB_SIGTEST=pool CFAM_SIGT_MARK="$SIGT/job-termed" bash "$HERE/${BASH_SOURCE[0]##*/}" >"$SIGT/pout" 2>"$SIGT/perr" &
 sig_pid=$!
 set +m
