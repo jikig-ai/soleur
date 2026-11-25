@@ -1,0 +1,12 @@
+# Decision Challenges — feat-one-shot-13056-cname-flatten-settings
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| Where to fix the six-CNAME `settings,settings:only-flatten-false` refusal (comparator vs `dns.tf`), and what compares equal | technical | Ruled by CTO agent, 2026-11-25: fix it in `cfam_live_diff` (`tests/scripts/lib/cf-account-migrate-gate.sh`), not in `dns.tf`. A live `settings` of exactly `{"flatten_cname":false}` compares equal only when both live and planned record are type `CNAME`. Every other `settings` value stays refused, and `cfam_norm_shape` stays byte-identical. Rationale: provider 4.52.7 has no `settings` attribute; cloudflare-go v0.116.0 sends `"settings":{}` (`omitempty` struct); Cloudflare's OpenAPI defaults `flatten_cname` to `false`; either PATCH outcome leaves it `false`. This supersedes F3 of the 2026-11-23 import-normalize spec. (Recorded from #13056 and not re-spawned.) |
+| Labels of the two new re-read rows: the issue says "D4 and D5", but `D4` already exists (`D4: live_diff refuses a missing live file`) | taste | D5 and D6, the next free labels. The content is exactly as the issue scoped it. |
+| Mutation rows limited to the two the issue names (`M-flatten-guard`, `M-flatten-after`) | taste | Follow the issue's closed scope. L11c–L11f witness the value conjunct directly (verified RED on the prototype). The live-type-only conjunct is disclosed as a residual in the plan's Guard Contract, because it changes the token list and not the verdict. |
+| D6 fixture shape. Plan review (DHH, Kieran and simplicity all agreed): an all-`{}` read is byte-identical to `$NLIVE` and only repeats D1 | technical | Mechanical, applied. D6 now uses a mixed read, with three CNAMEs at `{flatten_cname:false}` and three at `{}`, plus `cmp` guards against `$NLIVE` and `$FLAT_ALL`. This still covers the issue's "re-read with `{}`", now beside the default. With the change, D6 goes RED on the unfixed lib. |
+| Helper reuse. Plan review: `flat_admits` and `crow_s` were near-copies of `norm_admits` and `lrow` | taste | Mechanical, applied. `norm_admits` gains an optional live-file argument and `lrow` an optional address argument. Prototype: 356/0 GREEN, 350/6 RED. |
+| Named CEO/design/devex panel | taste | Not spawned. The plan has no UI, product, market or copy surface. The devex/CTO lens is already covered by the CTO ruling of 2026-11-25 on this exact change. |
