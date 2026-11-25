@@ -267,9 +267,9 @@ threshold: none, reason: the diff is limited to an internal runbook, committed a
 - [x] Phase 2 prints `RECORD-MATCHES`.
 - [x] Phase 2 prints `SUITE-OK` for both named suites.
 - [x] Phase 2 prints `EVIDENCE-UNCHANGED`.
-- [ ] The `closingIssuesReferences` check in Phase 3 prints `[12846]`.
-- [ ] The PR body carries the three prose statements in Phase 3.
-- [ ] Phase 3 prints `SCOPE-OK`.
+- [x] The `closingIssuesReferences` check in Phase 3 prints `[12846]`.
+- [x] The PR body carries the three prose statements in Phase 3.
+- [x] Phase 3 prints `SCOPE-OK`.
 
 ### Post-merge
 
