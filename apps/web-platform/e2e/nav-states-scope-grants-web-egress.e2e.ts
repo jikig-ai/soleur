@@ -145,9 +145,11 @@ async function expectSwitchInCard(toggle: Locator): Promise<void> {
 /**
  * Each disclosure is exactly one paragraph the user can see. `getByText` alone also counts hidden elements, and
  * `checkVisibility` alone passes a zero-height paragraph. The text is read with `innerText`, which drops text in
- * `display: none` descendants, so a paragraph that hides all or part of its disclosure fails (ruling R1-r).
- * Not checked: a paragraph clipped vertically while keeping its full text (`line-clamp`, an ancestor's `max-height`).
- * Vertical clipping is a recorded Non-Goal (ruling F8).
+ * `display: none` and `visibility: hidden` descendants, so a paragraph that hides all or part of its disclosure that
+ * way fails (ruling R1-r).
+ * Not checked: a paragraph clipped vertically while keeping its full text (`line-clamp`, an ancestor's `max-height`),
+ * which is a recorded Non-Goal (ruling F8); and a descendant hidden by `sr-only`, opacity or a transparent colour,
+ * which stays in `innerText`.
  */
 async function expectOwnVisibleParagraphs(name: string, surface: Locator): Promise<void> {
   const visible = await surface.locator("p").evaluateAll((ps) =>
