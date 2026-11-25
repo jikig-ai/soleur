@@ -8,6 +8,11 @@
 #           the baseline is not the nftables conffile; apt sources are preserved; the egress script
 #           never empties the set on a failed lookup and never loads a private answer.
 #   EMITTER the comment-stripped rendered runcmd sends fresh_boot_ready once, after its last check.
+#   EGRESS-WHY both egress_load failure sites call _egress_why exactly once, at the item's top level
+#           (a dead copy in a function or if does not count), no journalctl runs outside it, and
+#           each of its six reads begins `timeout 10 ` (FAULT-B, #12941, CTO Q29; without this a
+#           reverted site is green here and in the rehearsal's static arm, and only a ~5-min boot
+#           catches it).
 #   SETTLE  (Guard 3) the ADR-326 apt and kernel-settle blocks are cloud-init.yml's bytes.
 #   HOSTKEY (Guard 4) the only host key the render carries is the fixture Terraform key.
 #   BUDGET  (Guard 5) the render is non-empty and at most 32,768 bytes (Hetzner's user_data cap).
@@ -159,8 +164,9 @@ echo "SETTLE"
 SET_RED=()
 settle_row() { # <label> <want> <file-to-edit: web|bastion> <from> <to>
   local label="$1" want="$2" which="$3" from="$4" to="$5" w="$WEB_TPL" b="$TPL"
-  if [[ "$which" == web ]]; then w="$WORK/web.yml"; mutate "$WEB_TPL" "$w" "$from" "$to" >/dev/null || { cases=$((cases + 1)); fail "settle: $label (mutation did not land)"; return; }
-  else b="$WORK/bas.yml"; mutate "$TPL" "$b" "$from" "$to" >/dev/null || { cases=$((cases + 1)); fail "settle: $label (mutation did not land)"; return; }; fi
+  local miss="mutation did not land: the anchor line was reworded, or the fix this row guards was reverted"
+  if [[ "$which" == web ]]; then w="$WORK/web.yml"; mutate "$WEB_TPL" "$w" "$from" "$to" >/dev/null || { cases=$((cases + 1)); fail "settle: $label ($miss)"; return; }
+  else b="$WORK/bas.yml"; mutate "$TPL" "$b" "$from" "$to" >/dev/null || { cases=$((cases + 1)); fail "settle: $label ($miss)"; return; }; fi
   [[ "$want" == RED ]] && SET_RED+=("$w|$b")
   check "settle: $label" "$want" python3 "$LINT" settle "$w" "$b"
 }
@@ -174,7 +180,7 @@ settle_row "4: a second kernel-settle block is appended to the bastion file" RED
   - |
     fi
   # Post-settle pass:"
-settle_row "5: linux-image-generic dropped from the bastion package list" RED bastion 'curl linux-image-generic nftables;' 'curl nftables;'
+settle_row "5: linux-image-generic dropped from the bastion package list" RED bastion 'curl linux-image-generic nftables systemd-timesyncd;' 'curl nftables systemd-timesyncd;'
 settle_row "H2: the files differ only outside the markers" PASS bastion '  # Post-settle pass:' '  # a comment outside every marker
   # Post-settle pass:'
 h1="$(passes=0; fails=0; for r in "${SET_RED[@]}"; do check x RED true "${r%%|*}" "${r#*|}" >/dev/null; done; printf '%s %s' "$passes" "$fails")"
@@ -220,7 +226,7 @@ egress_row() { # <label> <want> <tpl|sh|tf> <from> <to> [expected-message]
     tpl) t="$WORK/eg$n.yml"; mutate "$TPL" "$t" "$from" "$to" >/dev/null ;;
     sh)  s="$WORK/eg$n.sh";  mutate "$EGRESS_SH" "$s" "$from" "$to" >/dev/null ;;
     tf)  tf="$WORK/eg$n.tf"; mutate "$TF" "$tf" "$from" "$to" >/dev/null ;;
-  esac || { cases=$((cases + 1)); fail "egress: $label (mutation did not land)"; return; }
+  esac || { cases=$((cases + 1)); fail "egress: $label (mutation did not land: the anchor line was reworded, or the fix this row guards was reverted)"; return; }
   render "$t" "$s" "$WORK/eg$n.raw"
   [[ "$want" == RED ]] && EG_RED+=("$WORK/eg$n.raw|$tf")
   EXPECT="$msg" check "egress: $label" "$want" python3 "$LINT" egress "$WORK/eg$n.raw" "$tf"
@@ -269,10 +275,23 @@ egress_row "20: ubuntu.sources written without preserve_sources_list" RED tpl 'a
 ' '' "preserve_sources_list"
 egress_row "22: bastion-egress.service removed while hostname rows remain" RED tpl '  - path: /etc/systemd/system/bastion-egress.service' '  - path: /etc/systemd/system/bastion-egress.service.off' "bastion-egress.service is not installed"
 egress_row "22: bastion-egress.sh carries no ALLOW list" RED sh "ALLOW='" "ALLOWED='" "carries no ALLOW list"
+# 23 (#12941 FAULT-A): every skuid user is IMAGE_ASSUMED or owned by an apt_install package. Red on
+# substance (the NTP row names systemd-timesync and nothing installs it), not on an anchor miss.
+egress_row "23: systemd-timesyncd dropped from apt_install (the NTP row's user is then the image's to ship)" RED tpl 'curl linux-image-generic nftables systemd-timesyncd;' 'curl linux-image-generic nftables;' "names user systemd-timesync, whose package systemd-timesyncd is not in the apt_install list"
+egress_row "23: a skuid row names a user no package or image contract provides" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output meta skuid chrony ip daddr 192.0.2.9 udp dport 123 accept comment "soleur-egress: cloud-init"')" "names user chrony, which is not in IMAGE_ASSUMED_USERS"
+# 23c-e: nft takes `skuid` without `meta`, and `skgid` resolves a group the same way; each spelling
+# refuses the whole ruleset on a host without the name, so each is traced (FAULT-A's class).
+egress_row "23c: a bare skuid (no meta) names a user no package or image contract provides" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output skuid chrony ip daddr 192.0.2.9 udp dport 123 accept comment "soleur-egress: cloud-init"')" "names user chrony, which is not in IMAGE_ASSUMED_USERS"
+egress_row "23d: a meta skgid row names a group no package or image contract provides" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output meta skgid chrony ip daddr 192.0.2.9 udp dport 123 accept comment "soleur-egress: cloud-init"')" "names group chrony, which is not in IMAGE_ASSUMED_GROUPS"
+egress_row "23e: a bare skgid row names a group no package or image contract provides" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output skgid chrony ip daddr 192.0.2.9 udp dport 123 accept comment "soleur-egress: cloud-init"')" "names group chrony, which is not in IMAGE_ASSUMED_GROUPS"
+# 23f: an apt_install package is a consumer only when it owns one (curl sends nothing by itself).
+egress_row "23f: a row cites the curl package as its consumer" RED tpl "$NTP_ROW" "$(add_row 'add rule inet soleur_bastion output ip daddr 192.0.2.9 tcp dport 443 accept comment "soleur-egress: curl"')" "cites 'curl', which the render does not install"
+# 23g: an apt-get install line in a shell comment installs nothing, so it cannot vouch for a user.
+egress_row "23g: the only apt_install line is commented out" RED tpl '    n=0; until timeout 300 apt-get install' '    # n=0; until timeout 300 apt-get install' "no single bounded apt_install line"
 egress_row "H2: a cited row with reordered match fields and extra spaces" PASS tpl "$NTP_ROW" 'add rule inet soleur_bastion output   meta skuid systemd-timesync   udp   dport 123    accept   comment "soleur-egress: systemd-timesyncd"'
 h1="$(passes=0; fails=0; for r in "${EG_RED[@]}"; do check x RED true "${r%%|*}" "${r#*|}" >/dev/null; done; printf '%s %s' "$passes" "$fails")"
 cases=$((cases + 1))
-if [[ "${#EG_RED[@]}" -eq 32 && "$h1" == "0 32" ]]; then pass "egress H1: all 32 RED rows fail against a lint replaced by true"; else fail "egress H1: rows=${#EG_RED[@]} neutered=$h1"; fi
+if [[ "${#EG_RED[@]}" -eq 39 && "$h1" == "0 39" ]]; then pass "egress H1: all 39 RED rows fail against a lint replaced by true"; else fail "egress H1: rows=${#EG_RED[@]} neutered=$h1"; fi
 # Zero-item floors: a check that examined nothing must fail, never pass vacuously.
 python3 - "$WORK/real.yml" "$WORK/zero.yml" <<'PY' || harness "could not build the zero-rule render"
 import base64, re, sys, yaml
@@ -405,6 +424,50 @@ $READY_EMIT" '    _emit "soleur-cloud-init boot stage" cloud_init_complete info
 ' > /dev/null && render "$WORK/em2b.yml" "$EGRESS_SH" "$WORK/em2.raw"
 EXPECT="before the last STAGE=" check "emitter: the ready call moved above the ssh_masked check" RED python3 "$LINT" emitter "$WORK/em2.raw"
 
+# ── EGRESS-WHY: both egress_load failure sites capture the reason (FAULT-B, #12941) ─────────────
+echo "EGRESS-WHY"
+EW_RED=()
+check "egress-why: the real render calls _egress_why at both sites and reads the journal nowhere else" PASS python3 "$LINT" egresswhy "$WORK/real.raw"
+ew_row() { # <label> <from> <to> <expected-message>
+  local n=$((cases + 1))
+  if ! mutate "$TPL" "$WORK/ew$n.yml" "$2" "$3" >/dev/null; then cases=$((cases + 1)); fail "egress-why: $1 (mutation did not land)"; return; fi
+  render "$WORK/ew$n.yml" "$EGRESS_SH" "$WORK/ew$n.raw"
+  EW_RED+=("$WORK/ew$n.raw")
+  EXPECT="$4" check "egress-why: $1" RED python3 "$LINT" egresswhy "$WORK/ew$n.raw"
+}
+EW_START='    systemctl start bastion-egress.service || { _egress_why; exit 1; }
+'
+ew_row "the bastion-egress start site reverted to the old journal tail" "$EW_START" "    systemctl start bastion-egress.service || { journalctl -u bastion-egress.service -n 5 --no-pager -o cat 2>/dev/null | tr '\\n' ' ' | tail -c 180 > \$D; exit 1; }
+" "0 copies of 'systemctl start bastion-egress.service"
+ew_row "the nftables.service enable site loses its capture" '    systemctl enable --now nftables.service || { _egress_why; exit 1; }
+' '    systemctl enable --now nftables.service
+' "0 copies of 'systemctl enable --now nftables.service"
+ew_row "a journal read added outside _egress_why" "$EW_START" "$EW_START    journalctl -b -n 5 --no-pager >/dev/null 2>&1 || :
+" "journalctl outside _egress_why"
+# A dead copy of a site must not satisfy the pin: the live site loses its capture, an exact copy sits
+# where it never runs on the failure path (CTO Q29 review, decoy shapes D03/D04).
+ew_row "the start site loses its capture; an exact copy sits in an unused function" "$EW_START" "    systemctl start bastion-egress.service || exit 1
+    _never() {
+$EW_START    }
+" "0 top-level copies of 'systemctl start bastion-egress.service"
+ew_row "the start site loses its capture; an exact copy sits in an if false branch" "$EW_START" "    systemctl start bastion-egress.service || exit 1
+    if false; then
+$EW_START    fi
+" "0 top-level copies of 'systemctl start bastion-egress.service"
+# CTO Q29: each of _egress_why's six reads is bounded; dropping `timeout 10 ` from any one is RED.
+for _ew in '      timeout 10 journalctl --sync|      journalctl --sync|the journalctl --sync' \
+           'W=$(timeout 10 journalctl -b -u|W=$(journalctl -b -u|the reason read' \
+           '_ew_n=$(timeout 10 systemctl|_ew_n=$(systemctl|the nftables Result read' \
+           '_ew_e=$(timeout 10 systemctl|_ew_e=$(systemctl|the egress Result read' \
+           '_ew_s=$(timeout 10 systemctl|_ew_s=$(systemctl|the ExecMainStatus read' \
+           '_ew_l=$(timeout 10 journalctl|_ew_l=$(journalctl|the unit last-line read'; do
+  IFS='|' read -r _ew_f _ew_t _ew_w <<<"$_ew"
+  ew_row "$_ew_w loses its timeout 10" "$_ew_f" "$_ew_t" "does not begin with \`timeout 10 \`"
+done
+h1="$(passes=0; fails=0; for r in "${EW_RED[@]}"; do check x RED true "$r" >/dev/null; done; printf '%s %s' "$passes" "$fails")"
+cases=$((cases + 1))
+if [[ "${#EW_RED[@]}" -eq 11 && "$h1" == "0 11" ]]; then pass "egress-why H1: all 11 RED rows fail against a lint replaced by true"; else fail "egress-why H1: rows=${#EW_RED[@]} neutered=$h1"; fi
+
 # ── HOSTKEY (Guard 4) ───────────────────────────────────────────────────────────────────────
 echo "HOSTKEY"
 HK_RED=()
@@ -471,11 +534,11 @@ cases=$((cases + 1))
 if ( wc() { echo 0; }; ! budget_ok "$WORK/real.yml" ); then pass "budget H1: a measurement that returns 0 is RED, never a pass"; else fail "budget H1: a zero measurement passed"; fi
 
 echo
-# 85 unconditional rows, plus row 7's two where an nft checker could prove it discriminates (a leg
+# 105 unconditional rows, plus row 7's two where an nft checker could prove it discriminates (a leg
 # without nft skips them loudly; a CI leg WITH an undiscriminating nft fails row 7 instead).
 # NFT_RAN is re-bound here so the floor block stands alone (guard-vacuity-floor mutates only this block).
 NFT_RAN="${NFT_RAN:-0}"
-MIN_CASES=$((85 + 2 * NFT_RAN))
+MIN_CASES=$((105 + 2 * NFT_RAN))
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf 'bastion: FAIL (only %d assertions ran; floor %d)\n' "$cases" "$MIN_CASES" >&2; exit 1
 fi
