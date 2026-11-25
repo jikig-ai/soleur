@@ -17,9 +17,10 @@
  *
  * Fixture-only branches (answered only when the request names a fixture id, so no other spec changes):
  * - HELD_E2E_USERS (#12714): the held-files Settings states.
- * - EGRESS_E2E_USERS (#12605): the Scope Grants web-egress states, reached through the real tenant mint
- *   (`mintFounderJwt` in lib/supabase/tenant.ts): admin getUserById, `runtime_mint_intent`, `generate_link`,
- *   `verify`, the post-mint deny probe, then the `get_workspace_web_egress` read.
+ * - EGRESS_E2E_USERS (#12605): the Scope Grants web-egress states. The page's own reads are `/auth/v1/user`,
+ *   `user_session_state`, `workspace_members` and `workspaces`. The tenant `web_egress` read goes through
+ *   `getFreshTenantClient` in lib/supabase/tenant.ts: `mintFounderJwt` (admin getUserById, `runtime_mint_intent`,
+ *   `generate_link`, `verify`), then `denyProbe` (`is_jti_denied`), then the `get_workspace_web_egress` RPC.
  * Every other request gets a 404 and one `[mock-supabase] unhandled` stderr line per actor, method and path.
  */
 import http from "node:http";
@@ -166,7 +167,7 @@ const HELD_USERS_BY_ID: ReadonlyMap<string, HeldUserFixture> = new Map(
 /**
  * A signed-in session for a fixture user (held-files or egress); each spec builds its storage state from it.
  * `/auth/v1/token` refresh accepts held-files fixtures only. An egress fixture's session lasts 24 hours, well past
- * one test, and a refresh would get a 400 and sign the test out loudly rather than pass (ruling R5).
+ * one test, and a refresh would get a 400 and sign the test out loudly rather than pass (ruling R5-r).
  */
 export function heldSessionFor(userId: string) {
   const user: MockUser = { ...MOCK_USER, id: userId, email: `held-${userId.slice(-4)}@example.com` };
@@ -286,16 +287,30 @@ export function startMockSupabase(port: number): Promise<http.Server> {
        */
       function withJsonBody(handler: (body: Record<string, unknown>) => void): void {
         void readBody(req)
-          .then((raw) => handler(JSON.parse(raw || "{}") as Record<string, unknown>))
-          .catch((err: unknown) => {
-            // A malformed body is a request the mock does not answer; anything else is a defect in the handler.
-            if (!(err instanceof SyntaxError)) {
-              process.stderr.write(
-                `[mock-supabase] handler error ${req.method} ${sanitizeForLog(url.pathname, 200)}: ${sanitizeForLog(String(err), 300)}\n`,
-              );
+          .then((raw) => {
+            // A body that is not a JSON object is a request the mock does not answer.
+            let body: unknown;
+            try {
+              body = JSON.parse(raw || "{}");
+            } catch {
+              return notFound();
             }
-            if (res.headersSent || res.destroyed) return;
-            notFound();
+            if (body === null || typeof body !== "object" || Array.isArray(body)) return notFound();
+            handler(body as Record<string, unknown>);
+          })
+          .catch((err: unknown) => {
+            // A handler or stream failure is a defect in the mock, not a missing branch: log it and answer 500, so the
+            // runner log does not point at an `unhandled` line for a branch that exists.
+            process.stderr.write(
+              `[mock-supabase] handler error ${req.method} ${sanitizeForLog(url.pathname, 200)}: ${sanitizeForLog(String(err), 300)}\n`,
+            );
+            if (res.destroyed) return;
+            if (res.headersSent) {
+              if (!res.writableEnded) res.end(); // writeHead ran before the throw; close the response so it cannot hang.
+              return;
+            }
+            res.writeHead(500);
+            res.end(JSON.stringify({ error: "mock handler error", path: url.pathname }));
           });
       }
 
@@ -423,8 +438,10 @@ export function startMockSupabase(port: number): Promise<http.Server> {
       if (url.pathname === "/rest/v1/user_session_state") {
         const egressFixture = EGRESS_USERS_BY_ID.get(eqParam(url, "user_id") ?? "");
         if (egressFixture) {
-          // Mirrors the production read order; not load-bearing. Without it the 404 sends resolveCurrentWorkspaceId
-          // down its error fallback (reportSilentFallback, then userId), which lands on the same id (ruling R2).
+          // Mirrors the production read order; not load-bearing for these null-org fixtures (ruling R2-r). Without it the
+          // 404 sends resolveCurrentWorkspaceId down its error fallback (reportSilentFallback, then userId), the same id,
+          // and the egress card's pointer read throws to `collection: "unknown"`, which equals the null-org result. A
+          // fixture with an organization_id would make this branch load-bearing.
           sendRows([{ current_workspace_id: egressFixture.id, current_organization_id: null }]);
           return;
         }
@@ -442,7 +459,7 @@ export function startMockSupabase(port: number): Promise<http.Server> {
         const egressFixture = EGRESS_USERS_BY_ID.get(eqParam(url, "user_id") ?? "");
         if (egressFixture) {
           const ws = eqParam(url, "workspace_id");
-          // Only the probe that names the fixture's own workspace gets a row; an unfiltered read gets none.
+          // Only the probe that names the fixture's own workspace gets a row; a read with no workspace_id filter gets none.
           sendRows(
             ws === egressFixture.id
               ? [{ user_id: egressFixture.id, workspace_id: egressFixture.id, role: "owner" }]

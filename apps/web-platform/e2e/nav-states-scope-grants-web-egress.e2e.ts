@@ -74,6 +74,12 @@ async function expectDisclosureCount(page: Page, n: number): Promise<void> {
   await expect(page.getByText(GH_DISCLOSURE, { exact: true })).toHaveCount(n);
 }
 
+const CARD = "#agent-web-access";
+const CRASH_HEADING = "Something went wrong";
+
+/** Collapse whitespace so rendered text compares equal to its source constant. */
+const norm = (text: string) => text.replace(/\s+/g, " ").trim();
+
 // The shell's overflow-x-hidden makes the document check unable to fail, so each surface is also measured.
 // Range rects include text nodes, which element rects miss.
 async function expectFitsPhone(page: Page, name: string, surface: Locator): Promise<void> {
@@ -84,45 +90,64 @@ async function expectFitsPhone(page: Page, name: string, surface: Locator): Prom
     await page.evaluate(() => document.documentElement.scrollWidth),
     "document scrollWidth",
   ).toBeLessThanOrEqual(PHONE.width);
-  const m = await surface.evaluate((el) => {
+  const m = await surface.evaluate((el, cardSelector) => {
     const range = document.createRange();
     range.selectNodeContents(el);
     const rects = [...range.getClientRects()].filter((r) => r.width > 0);
-    // The card's box, not the viewport, so text escaping the card's padding fails too (ruling R3).
-    const card = el.closest("#agent-web-access")!.getBoundingClientRect();
+    // Bounds are the card's border box, not the viewport, so a surface or its text crossing the card fails (ruling R3-r).
+    const card = el.closest(cardSelector)?.getBoundingClientRect() ?? null;
+    const box = el.getBoundingClientRect();
     return {
+      inCard: card !== null,
       count: rects.length,
       left: Math.min(...rects.map((r) => r.left)),
       right: Math.max(...rects.map((r) => r.right)),
-      cardLeft: card.left,
-      cardRight: card.right,
+      boxLeft: box.left,
+      boxRight: box.right,
+      cardLeft: card?.left ?? NaN,
+      cardRight: card?.right ?? NaN,
       scrollWidth: el.scrollWidth,
       clientWidth: el.clientWidth,
     };
-  });
+  }, CARD);
+  expect(m.inCard, `${name} sits inside ${CARD}`).toBe(true);
   expect(m.count, `${name} has rendered text`).toBeGreaterThan(0);
   expect(m.cardLeft, "card left edge").toBeGreaterThanOrEqual(0);
   expect(m.cardRight, "card right edge").toBeLessThanOrEqual(PHONE.width);
+  expect(m.boxLeft, `${name} box left edge`).toBeGreaterThanOrEqual(m.cardLeft);
+  expect(m.boxRight, `${name} box right edge`).toBeLessThanOrEqual(m.cardRight);
   expect(m.left, `${name} text left edge`).toBeGreaterThanOrEqual(m.cardLeft);
   expect(m.right, `${name} text right edge`).toBeLessThanOrEqual(m.cardRight);
   expect(m.scrollWidth, `${name} scrollWidth`).toBeLessThanOrEqual(m.clientWidth);
 }
 
-/** The switch opens the enable dialog, so it must sit inside the card where a phone user can tap it (ruling R3). */
+/** The switch opens the enable dialog, so it must sit inside the card where a phone user can tap it (ruling R3-r). */
 async function expectSwitchInCard(toggle: Locator): Promise<void> {
-  const m = await toggle.evaluate((el) => {
+  const m = await toggle.evaluate((el, cardSelector) => {
     const box = el.getBoundingClientRect();
-    const card = el.closest("#agent-web-access")!.getBoundingClientRect();
-    return { left: box.left, right: box.right, width: box.width, cardLeft: card.left, cardRight: card.right };
-  });
-  expect(m.width, "switch width").toBeGreaterThan(0);
-  expect(m.left, "switch left edge").toBeGreaterThanOrEqual(m.cardLeft);
-  expect(m.right, "switch right edge").toBeLessThanOrEqual(m.cardRight);
+    const card = el.closest(cardSelector)?.getBoundingClientRect() ?? null;
+    return {
+      inCard: card !== null,
+      box: { left: box.left, right: box.right, top: box.top, bottom: box.bottom, width: box.width },
+      card: { left: card?.left ?? NaN, right: card?.right ?? NaN, top: card?.top ?? NaN, bottom: card?.bottom ?? NaN },
+    };
+  }, CARD);
+  expect(m.inCard, `switch sits inside ${CARD}`).toBe(true);
+  expect(m.box.width, "switch width").toBeGreaterThan(0);
+  expect(m.box.left, "switch left edge").toBeGreaterThanOrEqual(m.card.left);
+  expect(m.box.right, "switch right edge").toBeLessThanOrEqual(m.card.right);
+  expect(m.box.top, "switch top edge").toBeGreaterThanOrEqual(m.card.top);
+  expect(m.box.bottom, "switch bottom edge").toBeLessThanOrEqual(m.card.bottom);
+  // A trial click runs Playwright's hit test and fires no handler, so a covered switch fails here.
+  await toggle.click({ trial: true, timeout: 10_000 });
 }
 
 /**
  * Each disclosure is exactly one paragraph the user can see. `getByText` alone also counts hidden elements, and
- * `checkVisibility` alone passes a zero-height paragraph and one whose text sits in a hidden child (ruling R1).
+ * `checkVisibility` alone passes a zero-height paragraph. The text is read with `innerText`, which drops text in
+ * `display: none` descendants, so a paragraph that hides all or part of its disclosure fails (ruling R1-r).
+ * Not checked: a paragraph clipped vertically while keeping its full text (`line-clamp`, an ancestor's `max-height`).
+ * Vertical clipping is a recorded Non-Goal (ruling F8).
  */
 async function expectOwnVisibleParagraphs(name: string, surface: Locator): Promise<void> {
   const visible = await surface.locator("p").evaluateAll((ps) =>
@@ -134,10 +159,11 @@ async function expectOwnVisibleParagraphs(name: string, surface: Locator): Promi
         range.selectNodeContents(p);
         return [...range.getClientRects()].some((r) => r.width > 0 && r.height > 0);
       })
-      .map((p) => p.textContent?.trim() ?? ""),
+      .map((p) => (p as HTMLElement).innerText),
   );
-  expect(visible.filter((text) => text === PUSH_DISCLOSURE), `${name}: push disclosure paragraphs`).toHaveLength(1);
-  expect(visible.filter((text) => text === GH_DISCLOSURE), `${name}: GitHub disclosure paragraphs`).toHaveLength(1);
+  const shown = visible.map(norm);
+  expect(shown.filter((text) => text === norm(PUSH_DISCLOSURE)), `${name}: push disclosure paragraphs`).toHaveLength(1);
+  expect(shown.filter((text) => text === norm(GH_DISCLOSURE)), `${name}: GitHub disclosure paragraphs`).toHaveLength(1);
 }
 
 async function expectSurface(page: Page, name: string, surface: Locator): Promise<void> {
@@ -147,13 +173,13 @@ async function expectSurface(page: Page, name: string, surface: Locator): Promis
 
 // Each surface is anchored on text only it carries, so a missing surface fails instead of resolving to another.
 function surfaces(page: Page) {
-  const section = page.locator("#agent-web-access");
+  const section = page.locator(CARD);
   return {
     toggle: section.getByRole("switch"),
     dialog: section.getByRole("alertdialog"),
     onBlock: section.locator("p", { hasText: "On. Applies to sessions started after enabling" }).locator("xpath=.."),
     callout: section.locator(":scope > div", { hasText: "Widens the security boundary." }),
-    crash: page.getByRole("heading", { name: "Something went wrong" }),
+    crash: page.getByRole("heading", { name: CRASH_HEADING }),
   };
 }
 
@@ -170,12 +196,12 @@ function collectPageErrors(page: Page): string[] {
 }
 
 async function expectNoRenderFailure(page: Page, pageErrors: string[]): Promise<void> {
-  await expect(page.getByRole("heading", { name: "Something went wrong" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: CRASH_HEADING })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 }
 
 test.describe("Scope Grants web-egress disclosures at 390x844", () => {
-  // Mobile emulation honours the meta viewport and touch input, as a phone does (ruling R4).
+  // Mobile emulation honours the meta viewport and touch input, as a phone does (ruling R4-r).
   test.use({ viewport: PHONE, isMobile: true, hasTouch: true });
 
   test.describe("web access on", () => {
@@ -232,7 +258,7 @@ test.describe("Scope Grants web-egress disclosures at 390x844", () => {
         await expect(dialog).toBeVisible({ timeout: 2_000 });
       }).toPass({ timeout: 45_000 });
       await expectDisclosureCount(page, 2);
-      // Both fixtures carry a null organization_id, so the longest "unknown" recording notice must render (ruling F4).
+      // Both fixtures carry a null organization_id, so the longest "unknown" recording notice must render (rulings F4, R2-r).
       // RECORDING_NOTICE_UNKNOWN in web-egress-toggle.tsx is not exported, so its opening sentence anchors it.
       await expect(dialog.getByText("We couldn't check whether recording is on for this workspace.")).toBeVisible();
 
