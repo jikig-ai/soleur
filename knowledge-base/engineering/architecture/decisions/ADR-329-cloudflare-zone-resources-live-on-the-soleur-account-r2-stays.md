@@ -161,8 +161,9 @@ forget, never pushed back as state (D4); it holds the same secrets as live state
   refusal names a live difference, the owner may authorize one edit of the named field on the NEW zone, to the value in
   the record's `dns.tf` block. For `pages_apex` and `www` that value is the `soleur-docs` Pages project's `subdomain`,
   read and checked per S4, and a failed read or a mismatch means no edit. A deleted record may be recreated the same
-  way, and its path back into state needs a reviewed PR and a CTO ruling. A `settings`, `data`, `after`, `tags:absent`
-  or `content:quoted-equal` difference gets no edit and stops for an owner decision.
+  way, and its path back into state needs a reviewed PR and a CTO ruling. A `settings` (other than a CNAME's
+  `{"flatten_cname":false}`, the API default, which is not a difference: CTO ruling 2026-11-25, #13056), `data`,
+  `after`, `tags:absent` or `content:quoted-equal` difference gets no edit and stops for an owner decision.
 - AP-002 (No SSH state mutation): Aligned. The migration job uses only the Cloudflare API; the host change is an
   immutable replace.
 - AP-003 (R2 remote backend): Aligned. The backend and its endpoint are unchanged; ADR-006 stands.

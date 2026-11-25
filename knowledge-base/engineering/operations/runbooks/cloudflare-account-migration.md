@@ -334,7 +334,9 @@ record's live values match `dns.tf`. The provider's Read fills `content` only wh
 `cloudflare_record` import plans one update adding `allow_overwrite = false` and `content`, and the apply sends one
 same-value PATCH per record. The gate admits exactly that shape, logged as `import-normalize`, and only when a live
 read by the pinned id, taken after the plan, equals the planned record (ADR-329, CTO ruling 2026-11-22). Every other
-diff is still refused. The gate's admitted shape is not changed to get past a refusal. Nobody edits this zone by hand
+diff is still refused. A CNAME whose live `settings` is exactly `{"flatten_cname":false}` is not a difference: that is
+the API default, and the PATCH leaves it `false` (CTO ruling 2026-11-25, #13056). The gate's admitted shape is not
+changed to get past a refusal. Nobody edits this zone by hand
 during the apply: an edit landing between the read and a PATCH is overwritten, and the re-read then passes.
 
 A refusal about a live record prints `REFUSE <addr> differs from the live record (<tokens>)` or
@@ -347,7 +349,7 @@ a stop token on a record wins over any other token on that record:
 |---|---|---|
 | `content:quoted-equal` | The live `content` equals the planned value once surrounding quotes are ignored | Stop token. No edit; stop for an owner decision |
 | `tags:absent` | The API response has no `tags` key, so no record edit can satisfy the compare | Stop token. No edit; stop for an owner decision |
-| `settings:only-flatten-false` | The live `settings` is exactly `{"flatten_cname":false}`, which the PATCH's empty `settings` could reset | Stop token. No edit; stop for an owner decision |
+| `settings:only-flatten-false` | The live `settings` is exactly `{"flatten_cname":false}` on a record that is not a CNAME in both the live read and the plan (on a CNAME it is the API default and compares equal, CTO ruling 2026-11-25) | Stop token. No edit; stop for an owner decision |
 | `settings:other` | The live `settings` holds any other non-empty value | Stop token. No edit; stop for an owner decision |
 | `data`, `after` | The live record holds a `data` value `dns.tf` does not declare, or the plan holds no record to compare | Stop token. No edit; stop for an owner decision |
 | `unreadable` | The read failed, so nothing is known about the record | Not a difference. No edit. After a re-read, follow Halt **No completed re-read**. After a gate refusal, `Operator-authorizes:` one more rehearsal; a second consecutive refusal stops for an owner decision |
