@@ -3508,6 +3508,13 @@ printf 'name: zz\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\
 if fixture_written g1-1-lowercase-no-environment "$MUTDIR/tree/.github/workflows/zz-noenv.yml"; then
   fixcensus "$MUTDIR" "$T/mut/g1-1.tsv" ""
   mutant_red g1-1-lowercase-no-environment wf_row "$T/mut/g1-1.tsv" "G1b:"
+  # The G1b red's detail LEADS with its remedy (check() cuts the detail at 400 chars), and the
+  # remedy names the reusable-caller case: a `uses:` caller cannot carry `environment:` (#12873).
+  if awk -F'\t' 'index($2, "G1b:") == 1 && $1 != "ok" && index($3, "remedy:") == 1 && index($3, "reusable-workflow caller") > 0 { f = 1 } END { exit !f }' "$T/mut/g1-1.tsv"; then
+    pass "G1b red detail leads with the remedy and names the reusable-caller case"
+  else
+    fail "G1b red detail does not lead with the remedy naming the reusable-caller case" "$(grep -F 'G1b:' "$T/mut/g1-1.tsv" | cut -c1-300)"
+  fi
 fi
 # Row 2 — REORDER: a compliant first job, then a SECOND job in the same workflow whose
 # `environment:` expression resolves a NON-TIER-B result literal. The predicate operand

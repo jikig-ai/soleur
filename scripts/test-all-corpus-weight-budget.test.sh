@@ -223,10 +223,18 @@ fi
 cases=$((cases + 1))
 printf 'a/big\t900000\tdeclared-big suite; #000\n' > "$FIX/ex.tsv"
 printf 'a/ghost\n' >> "$FIX/l.txt"
-if check_corpus "$FIX/d.tsv" "$FIX/dh.tsv" "$FIX/di.tsv" "$FIX/ex.tsv" "$FIX/l.txt" "$FIX/li.txt" none 2>/dev/null; then
+if check_corpus "$FIX/d.tsv" "$FIX/dh.tsv" "$FIX/di.tsv" "$FIX/ex.tsv" "$FIX/l.txt" "$FIX/li.txt" none 2>"$FIX/m4.err"; then
   fail "M4: an unmeasured registration stayed green"
 else
   pass "M4: unmeasured registration reddens"
+fi
+# M4b: the red names its remedy. A hand-added weight row has no shard placement, so the
+# fix is the generator, and the message is the only place an author learns that (#12873).
+cases=$((cases + 1))
+if grep -qF 'regenerate-shard-manifest.py' "$FIX/m4.err"; then
+  pass "M4b: the unmeasured-registration red names regenerate-shard-manifest.py"
+else
+  fail "M4b: the unmeasured-registration red does not name regenerate-shard-manifest.py"
 fi
 
 # M5: removing the ledger line while the suite stays at 700s reds (WORM).
