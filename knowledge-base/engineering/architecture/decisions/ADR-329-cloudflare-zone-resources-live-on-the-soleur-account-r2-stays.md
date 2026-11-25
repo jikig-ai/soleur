@@ -71,8 +71,15 @@ Two facts shape the decision:
    - a pre-migration `terraform state pull` backup to `web-platform/backups/` in the state bucket;
    - one atomic `terraform state rm` of every non-R2 `cloudflare_*` entry whose own `zone_id`/`account_id` is an old
      id, derived from state rather than a manifest, aborting with nothing removed on any unclassifiable entry;
-   - per-phase `import {}` blocks for the hand-restored objects, each required to plan as a pure `["no-op"]` import,
-     plus creates for objects absent from the new zone;
+   - per-phase `import {}` blocks for the hand-restored objects, each required to plan as a `["no-op"]` import, plus
+     creates for objects absent from the new zone. One exception (CTO ruling 2026-11-22, which supersedes for
+     `cloudflare_record` only the 2026-11-19 ratification "Import + update passes the gate", under which Guard 1
+     refused every import that was not a `["no-op"]`; every other resource type keeps that rule): the provider's Read
+     fills `content` only when it is already set, so a `cloudflare_record` import plans an `["update"]` adding
+     `allow_overwrite = false` and `content`. The gate admits exactly that shape, bound to the pinned record id and to
+     a live read taken after the plan, and logs it as `import-normalize`. After an apply that carried an admitted
+     record, the job re-reads every record and halts on any difference or unreadable record, which detects a bad write
+     and does not undo it;
    - a phase gate on `tfplan.json` (no destroys, allow-set only, new ids only, `-replace` honoured). A create-class
      address may plan an in-place `["update"]` only when it is already in pre-plan state and, for a Cloudflare object,
      its `before` carries the NEW zone or account id; the one Doppler member must plan exactly the new zone id (CTO
@@ -80,8 +87,10 @@ Two facts shape the decision:
    - a migration-in-progress predicate, the last step of `.github/actions/infra-credentials`, that is deny by
      default: every workflow loading those credentials is refused unless the predicate names it exempt (the plan-only
      and migrator workflows, and callers of other roots). It refuses until every phase address is in state, no
-     non-R2 entry carries an old id and the tunnel is in state on the new account; `web-host-replace web-2` is the one
-     exception once the tunnel is in state. A rehearsal (`rehearsal=true`) writes nothing to R2.
+     non-R2 entry carries an old id, no import-class `cloudflare_record` is `unnormalized` (in state without a non-empty
+     string `content`, which is what a stopped apply leaves on the records it did not reach) and the tunnel is in state
+     on the new account; `web-host-replace web-2` is the one exception once the tunnel is in state, and it checks the
+     tunnel alone. A rehearsal (`rehearsal=true`) writes nothing to R2.
 4. **Plan-tier gates.** `cf_zone_plan_pro` (default false) nulls the Super Bot Fight Mode fields;
    `cf_load_balancing_enabled` (default false) count-gates the load balancer, pool, monitor and health-alert policy,
    and `cf-lb-overlay.yml` refuses while it is false; `cf_zone_dnssec_enabled` (default false) count-gates DNSSEC,
@@ -142,14 +151,20 @@ forget, never pushed back as state (D4); it holds the same secrets as live state
 
 ## Principle Alignment
 
-- AP-001 (Terraform-only): Aligned, with three recorded exceptions. Every hand-restored object is adopted by import;
+- AP-001 (Terraform-only): Aligned, with four recorded exceptions. Every hand-restored object is adopted by import;
   the dashboard acts are token mints and revokes, which have no API path for a Soleur token (ADR-130). The live-zone
   edits of 2026-11-19 (six TXT records rewritten unquoted and the comments on three incident-time records cleared, so
-  every record import plans as a pure no-op) were hand edits to records Terraform then adopts unchanged. Phase 0c, a
+  every record's live values match `dns.tf`) were hand edits to records Terraform then adopts unchanged. Phase 0c, a
   hand-made noindex entrypoint, is no longer recommended (D2) and would be adopted by an import block if run.
   The third exception (CTO ruling 2026-11-20) is a bounded break-glass: when the `redirects-dns` verify fails with
   the product down, the owner may make one dashboard edit of one Terraform-managed rule on the NEW zone only; the
   fix-forward PR carries that value and the next gated re-dispatch must plan that address as a no-op.
+  The fourth (CTO rulings S4 and F7, 2026-11-23) is a bounded hand edit of a DNS record: when a re-read or a gate
+  refusal names a live difference, the owner may authorize one edit of the named field on the NEW zone, to the value in
+  the record's `dns.tf` block. For `pages_apex` and `www` that value is the `soleur-docs` Pages project's `subdomain`,
+  read and checked per S4, and a failed read or a mismatch means no edit. A deleted record may be recreated the same
+  way, and its path back into state needs a reviewed PR and a CTO ruling. A `settings`, `data`, `after`, `tags:absent`
+  or `content:quoted-equal` difference gets no edit and stops for an owner decision.
 - AP-002 (No SSH state mutation): Aligned. The migration job uses only the Cloudflare API; the host change is an
   immutable replace.
 - AP-003 (R2 remote backend): Aligned. The backend and its endpoint are unchanged; ADR-006 stands.

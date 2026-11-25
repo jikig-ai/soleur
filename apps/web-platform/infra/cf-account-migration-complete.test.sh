@@ -215,6 +215,68 @@ row_web2_tunnel_old_refused() {
   run_eval "$1" "$WORK/a15" --mode web2-replace "$WORK/a15.json"
   [[ $RC -eq 1 ]] && has "$WORK/a15" "tunnel-not-on-new-account" && has "$WORK/a15" "mode=web2-replace"
 }
+# Q6: an import-class cloudflare_record in state with no usable `content` was never normalized.
+WWW_SEL='.resources[] | select(.type=="cloudflare_record" and .name=="www") | .instances[0].attributes.content'
+row_unnorm_null() {
+  mut_state "$WORK/a28.json" "($WWW_SEL) = null"
+  run_eval "$1" "$WORK/a28" "$WORK/a28.json"
+  [[ $RC -eq 1 ]] && has "$WORK/a28" "unnormalized cloudflare_record.www" && has "$WORK/a28" "verdict=cf-account-migration-in-progress"
+}
+row_unnorm_empty() {
+  mut_state "$WORK/a29.json" "($WWW_SEL) = \"\""
+  run_eval "$1" "$WORK/a29" "$WORK/a29.json"
+  [[ $RC -eq 1 ]] && has "$WORK/a29" "unnormalized cloudflare_record.www"
+}
+row_unnorm_nonstring() {
+  mut_state "$WORK/a30.json" "($WWW_SEL) = 5"
+  run_eval "$1" "$WORK/a30" "$WORK/a30.json"
+  [[ $RC -eq 1 ]] && has "$WORK/a30" "unnormalized cloudflare_record.www"
+}
+# An import that is not a record, a create-class ruleset and a record outside the spec: all ignored.
+row_unnorm_out_of_scope() {
+  mut_state "$WORK/a31.json" '(.resources[] | select((.type=="cloudflare_pages_project" and .name=="docs") or (.type=="cloudflare_ruleset" and .name=="bulk_redirects") or (.type=="cloudflare_record" and .name=="indexed")) | .instances[].attributes.content) = null'
+  run_eval "$1" "$WORK/a31" "$WORK/a31.json"
+  [[ $RC -eq 0 ]] && has "$WORK/a31" "verdict=cf-account-migration-complete mode=full" && ! has "$WORK/a31" "unnormalized"
+}
+# The real spec has no non-import cloudflare_record, so a library copy flips one to create.
+CLASSLIB="$WORK/classlib"
+mkdir -p "$CLASSLIB/apps/web-platform/infra/scripts" "$CLASSLIB/tests/scripts/lib"
+cp "$REPO/tests/scripts/lib/plan-gate-preamble.sh" "$CLASSLIB/tests/scripts/lib/"
+sed 's/"cloudflare_record\.www": "import"/"cloudflare_record.www": "create"/' "$GATE" > "$CLASSLIB/tests/scripts/lib/cf-account-migrate-gate.sh"
+row_unnorm_non_import_class() {
+  cmp -s "$GATE" "$CLASSLIB/tests/scripts/lib/cf-account-migrate-gate.sh" && return 1
+  cp "$1" "$CLASSLIB/apps/web-platform/infra/scripts/cf-account-migration-complete.sh"
+  mut_state "$WORK/a32.json" "($WWW_SEL) = null"
+  run_eval "$CLASSLIB/apps/web-platform/infra/scripts/cf-account-migration-complete.sh" "$WORK/a32" "$WORK/a32.json"
+  [[ $RC -eq 0 ]] && has "$WORK/a32" "verdict=cf-account-migration-complete mode=full" && ! has "$WORK/a32" "unnormalized"
+}
+# run_eval_recs <script> <prefix> <mode> <state> <body>: evaluate with cfam_required_records replaced.
+run_eval_recs() {
+  env -i PATH="$(dirname "$REAL_JQ"):/usr/bin:/bin" HOME="$WORK" TMPDIR="$WORK" \
+    bash -c 'source "$1"; _cfam_load_gate || exit $?; eval "cfam_required_records() { $4; }"; cfam_evaluate "$2" "$3"' _ "$1" "$3" "$4" "$5" > "$2.out" 2>&1
+  RC=$?
+}
+row_recs_fail() {
+  run_eval_recs "$1" "$WORK/a33" full "$COMPLETE" 'return 1'
+  [[ $RC -eq 2 ]] && has "$WORK/a33" "verdict=cf-account-migration-state-unreadable reason=required-set-unavailable"
+}
+row_recs_empty() {
+  run_eval_recs "$1" "$WORK/a34" full "$COMPLETE" 'echo "[]"'
+  [[ $RC -eq 2 ]] && has "$WORK/a34" "verdict=cf-account-migration-state-unreadable reason=required-set-empty"
+}
+row_recs_not_array() {
+  run_eval_recs "$1" "$WORK/a35" full "$COMPLETE" 'echo "\"x\""'
+  [[ $RC -eq 2 ]] && has "$WORK/a35" "verdict=cf-account-migration-state-unreadable reason=required-set-empty"
+}
+row_web2_null_content() {
+  mut_state "$WORK/a36.json" "($WWW_SEL) = null"
+  run_eval "$1" "$WORK/a36" --mode web2-replace "$WORK/a36.json"
+  [[ $RC -eq 0 ]] && has "$WORK/a36" "verdict=cf-account-migration-complete mode=web2-replace" && ! has "$WORK/a36" "unnormalized"
+}
+row_web2_recs_fail() {
+  run_eval_recs "$1" "$WORK/a37" web2-replace "$COMPLETE" 'return 1'
+  [[ $RC -eq 0 ]] && has "$WORK/a37" "verdict=cf-account-migration-complete mode=web2-replace"
+}
 
 check "A1 complete state passes (R2 on the old account, data source on the old zone, module + indexed resources)" row_complete_passes "$SCRIPT"
 check "A2 old zone id on a cloudflare_record refuses and names it" row_old_zone_refused "$SCRIPT"
@@ -234,6 +296,16 @@ check "A12 non-JSON is unreadable (rc 2)" row_non_json_unreadable "$SCRIPT"
 check "A13 version != 4 is unreadable (rc 2)" row_version_unreadable "$SCRIPT"
 check "A14 web2-replace passes with the tunnel new and everything else old or missing" row_web2_tunnel_only_passes "$SCRIPT"
 check "A15 web2-replace refuses with the tunnel on the old account" row_web2_tunnel_old_refused "$SCRIPT"
+check "A28 an import record with null content refuses as unnormalized" row_unnorm_null "$SCRIPT"
+check "A29 an import record with empty-string content refuses as unnormalized" row_unnorm_empty "$SCRIPT"
+check "A30 an import record with non-string content refuses as unnormalized" row_unnorm_nonstring "$SCRIPT"
+check "A31 null content on a non-record import, a create-class ruleset or a record outside the spec is ignored" row_unnorm_out_of_scope "$SCRIPT"
+check "A32 null content on a cloudflare_record whose spec class is not import is ignored" row_unnorm_non_import_class "$SCRIPT"
+check "A33 a failed record list is unreadable (rc 2)" row_recs_fail "$SCRIPT"
+check "A34 an empty record list is unreadable (rc 2)" row_recs_empty "$SCRIPT"
+check "A35 a record list that is not an array is unreadable (rc 2)" row_recs_not_array "$SCRIPT"
+check "A36 web2-replace ignores null content on an import record" row_web2_null_content "$SCRIPT"
+check "A37 web2-replace never reads the record list, so its failure changes nothing" row_web2_recs_fail "$SCRIPT"
 
 # A16: EVERY required address, removed one at a time, refuses and names it.
 miss_ok=0; miss_bad=()
@@ -254,6 +326,22 @@ row_missing_refused() {
   [[ $RC -eq 1 ]] && has "$WORK/a16" "missing cloudflare_record.spf_root"
 }
 check "A16b a removed required address (row form, for the mutation table) refuses" row_missing_refused "$SCRIPT"
+# A38: EVERY import-class record, from the script's own list (pinned at 27: 26 redirects-dns records and
+# the tunnel phase's cloudflare_record.app), nulled one at a time.
+row_unnorm_every_record() {
+  local recs a
+  recs="$(env -i PATH="$(dirname "$REAL_JQ"):/usr/bin:/bin" HOME="$WORK" TMPDIR="$WORK" \
+    bash -c 'source "$1"; _cfam_load_gate || exit $?; cfam_required_records' _ "$1" | jq -r '.[]')" || return 1
+  [[ "$(grep -c . <<<"$recs")" -eq 27 ]] && grep -qx cloudflare_record.app <<<"$recs" || return 1
+  while IFS= read -r a; do
+    jq --arg t "${a%%.*}" --arg n "${a#*.}" \
+      '(.resources[] | select(.type == $t and .name == $n and (.module // "") == "") | .instances[0].attributes.content) = null' \
+      "$COMPLETE" > "$WORK/a38.json"
+    run_eval "$1" "$WORK/a38" "$WORK/a38.json"
+    [[ $RC -eq 1 ]] && grep -qE -- "unnormalized ${a//./\\.}( |\$)" "$WORK/a38.out" || return 1
+  done <<<"$recs"
+}
+check "A38 each of the 27 import-class records, with null content, refuses as unnormalized and is named" row_unnorm_every_record "$SCRIPT"
 # A17: an address present with ZERO instances is not "in state".
 mut_state "$WORK/a17.json" '(.resources[] | select(.type=="cloudflare_record" and .name=="dmarc") | .instances) = []'
 run_eval "$SCRIPT" "$WORK/a17" "$WORK/a17.json"
@@ -261,7 +349,7 @@ check "A17 a required address with zero instances counts as missing" eval '[[ $R
 
 # A18: output hygiene — no attribute value and no id ever printed, on pass or refuse.
 leak=0
-for pre in a1 a2 a3 a4 a8 a10 a14 a15 a24; do no_leak "$WORK/$pre" || leak=1; done
+for pre in a1 a2 a3 a4 a8 a10 a14 a15 a24 a28 a29 a30; do no_leak "$WORK/$pre" || leak=1; done
 if [[ $leak -eq 0 ]]; then ok "A18 no attribute value or id appears in any verdict output"; else no "A18 an attribute value or id leaked into a verdict output"; fi
 
 # A19-A21: unreadable / usage
@@ -513,6 +601,21 @@ mut_row "copy failure verdict masked"             row_wrap_copy_failure        '
 mut_row "work dir trap removed"                   row_wrap_tierb_complete      's/^  trap "rm -rf .*$/  :/'
 mut_row "key id echoed into the log"              row_wrap_tierb_complete      's/^  CFAM_KEY_ID="" CFAM_KEY_SECRET=""$/  echo "$CFAM_KEY_ID"; CFAM_KEY_ID="" CFAM_KEY_SECRET=""/'
 mut_row "aws argv grows a credential"             row_wrap_tierb_complete      's/--only-show-errors \\$/--only-show-errors --profile "$CFAM_KEY_ID" \\/'
+mut_row "unnormalized reason disarmed"            row_unnorm_null              's/"unnormalized " \+ iaddr\(\$a\)/empty/'
+mut_row "null content accepted"                   row_unnorm_null              's/\(\.attributes\.content \| type\) != "string" or //'
+mut_row "empty-string content accepted"           row_unnorm_empty             's/ or \.attributes\.content == ""//'
+mut_row "non-string content accepted"             row_unnorm_nonstring         's/\(\.attributes\.content \| type\) != "string"/.attributes.content == null/'
+mut_row "content check leaves the record list"    row_unnorm_out_of_scope      's/select\(\$recs \| index\(\$a\)\)/select(true)/'
+mut_row "record list keeps non-record imports"    row_unnorm_out_of_scope      's/ and \(\.key \| startswith\("cloudflare_record\."\)\)//'
+mut_row "record list keeps non-import classes"    row_unnorm_non_import_class  's/select\(\.value == "import" and /select(true and /'
+mut_row "record list narrowed to two records"     row_unnorm_every_record      's/select\(\.value == "import" and \(\.key \| startswith\("cloudflare_record\."\)\)\)/select(.key == "cloudflare_record.www" or .key == "cloudflare_record.dkim_resend")/'
+mut_row "content check reads two records only"    row_unnorm_every_record      's/select\(\$recs \| index\(\$a\)\)/select($recs[:2] | index($a))/'
+mut_row "record-list failure ignored"            row_recs_fail                's/recs="\$\(cfam_required_records\)" \|\| \{[^}]*\}/recs="$(cfam_required_records)" || recs="[]"/'
+mut_row "empty record list accepted"              row_recs_empty               's/type == "array" and length > 0/true/'
+mut_row "non-array record list accepted"          row_recs_not_array           's/type == "array" and length > 0/length > 0/'
+mut_row "record list read in web2-replace"        row_web2_recs_fail           's/if \[\[ "\$mode" == full \]\]; then/if true; then/'
+# Full-only has two layers (recs stays [] outside full, and the jq branch), so this mutant removes both.
+mut_row "content check runs in web2-replace"      row_web2_null_content        's/if \[\[ "\$mode" == full \]\]; then/if true; then/; s/if \$mode == "web2-replace" then \$tun_reasons\[\]/if false then $tun_reasons[]/'
 
 # ── verdict ────────────────────────────────────────────────────────────────────────────────
 printf '\ncf-account-migration-complete.test.sh: %s passed, %s failed (%s cases)\n' "$PASS" "$FAIL" "$CASES"
@@ -520,8 +623,8 @@ if (( PASS + FAIL != CASES )); then
   printf 'CONSERVATION FAILED: PASS(%s)+FAIL(%s) != CASES(%s) — a verdict was dropped or the helpers were neutered.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-# 94 rows ran when measured (2026-11-20, simplicity review); C14 may skip on a host whose aws sits beside jq.
-MIN_ASSERTIONS=93
+# 119 rows ran when measured (2026-11-24); C14 may skip on a host whose aws sits beside jq.
+MIN_ASSERTIONS=118
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s — rows were skipped, truncated, or the assertion machinery was neutered.\n' "$TOTAL" "$MIN_ASSERTIONS" >&2

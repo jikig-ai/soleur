@@ -25,7 +25,10 @@
 #     account id;
 #   - every address of every phase in tests/scripts/lib/cf-account-migrate-gate.sh is in state.
 #     That file is the ONE list (cf_account_migrate_phases / cf_account_migrate_phase_spec); this
-#     script sources it and never re-types an address.
+#     script sources it and never re-types an address;
+#   - every instance of every import-class cloudflare_record of those phases holds a non-empty
+#     string `content` ("unnormalized <addr>" otherwise): a stopped apply leaves the imports it did
+#     not reach in state with null content, so being in state does not prove normalization (Q6).
 # Mode web2-replace needs only the tunnel condition: it is the one exception, for
 # `web_host_replace` of web-2 once the tunnel phase has landed (plan Phase 1 item 11).
 #
@@ -106,10 +109,23 @@ cfam_required_addresses() {
   printf '%s\n' "$all"
 }
 
+# cfam_required_records — JSON array, every import-class cloudflare_record of every phase. From the
+# phase spec, not the imports file: the cleanup PR deletes that file.
+cfam_required_records() {
+  local phase spec all="[]"
+  while IFS= read -r phase; do
+    [[ -n "$phase" ]] || continue
+    spec="$(cf_account_migrate_phase_spec "$phase")" || return 1
+    all="$(jq -c --argjson s "$spec" '. + [$s | to_entries[]
+      | select(.value == "import" and (.key | startswith("cloudflare_record."))) | .key] | unique' <<<"$all")" || return 1
+  done < <(cf_account_migrate_phases)
+  printf '%s\n' "$all"
+}
+
 # cfam_evaluate <mode> <state.json> — 0 complete, 1 incomplete, 2 unreadable. Needs the gate
 # library loaded (_cfam_load_gate).
 cfam_evaluate() {
-  local mode="$1" state="$2" req n_req reasons
+  local mode="$1" state="$2" req n_req reasons recs="[]"
   case "$mode" in full|web2-replace) ;; *) echo "$P: unknown mode '$mode'" >&2; return 2 ;; esac
 
   [[ -f "$state" && -r "$state" ]] || { _cfam_unreadable state-file-unreadable "the state file is missing or unreadable"; return 2; }
@@ -127,12 +143,18 @@ cfam_evaluate() {
     _cfam_unreadable required-set-empty "the phase allow-set is empty"
     return 2
   fi
+  # Full mode only: the web-2 replace lane needs the tunnel condition and nothing else.
+  if [[ "$mode" == full ]]; then
+    recs="$(cfam_required_records)" || { _cfam_unreadable required-set-unavailable "the import-record list could not be read from $CFAM_GATE_LIB"; return 2; }
+    jq -e 'type == "array" and length > 0' <<<"$recs" >/dev/null 2>&1 \
+      || { _cfam_unreadable required-set-empty "the import-record list is empty"; return 2; }
+  fi
 
   # One jq pass. Each line is "<reason> <address>" (or a bare reason). A jq error is unreadable,
   # never an empty reason list (an empty list reads as complete).
   reasons="$(jq -r --arg oz "$CFAM_OLD_ZONE_ID" --arg oa "$CFAM_OLD_ACCOUNT_ID" \
       --arg na "$CFAM_NEW_ACCOUNT_ID" --arg nz "$CFAM_NEW_ZONE_ID" --arg tun "$CFAM_TUNNEL_ADDR" --arg mode "$mode" \
-      --argjson req "$req" '
+      --argjson req "$req" --argjson recs "$recs" '
     def raddr: (if (.module // "") != "" then .module + "." else "" end) + .type + "." + .name;
     def iaddr($a): $a + (if has("index_key") then "[" + (.index_key | tojson) + "]" else "" end);
     # Unbound = null, absent or "". Any other value must be the NEW id (allowlist).
@@ -156,6 +178,10 @@ cfam_evaluate() {
         + $tun_reasons
         + ( [ $m[] | select((.instances // []) | length > 0) | raddr ] as $have
             | [ $req[] | select(. as $r | $have | index($r) | not) | "missing " + . ] )
+        + [ $m[] | raddr as $a | select($recs | index($a)) | (.instances // [])[]
+            | select((.attributes | type) == "object"
+                     and ((.attributes.content | type) != "string" or .attributes.content == ""))
+            | "unnormalized " + iaddr($a) ]
         )[]
       end' "$state")" || { _cfam_unreadable eval-error "the state could not be evaluated (jq error)"; return 2; }
 

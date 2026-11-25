@@ -108,8 +108,9 @@ case "${1:-}" in
       printf '%s\n' "$a" >>"$D/plan_args.$L"
       [[ "$a" == -out=* ]] && : >"${a#-out=}"
     done
-    printf 'Plan: stub\n'; exit "$(mode plan)" ;;
-  apply) shift; log "apply $*"; exit "$(mode apply)" ;;
+    # tfout: what a hostile live value makes terraform print, on the plan and on the apply.
+    printf 'Plan: stub\n'; if [[ -f "$D/tfout" ]]; then cat "$D/tfout"; fi; exit "$(mode plan)" ;;
+  apply) shift; log "apply $*"; : >"$D/applied"; if [[ -f "$D/tfout" ]]; then cat "$D/tfout"; fi; exit "$(mode apply)" ;;
   output)
     [[ "$#" -eq 3 && "$2" == -raw ]] || { log "UNEXPECTED $*"; exit 64; }
     case "$3" in
@@ -150,6 +151,11 @@ fi
 [[ $# -gt 9 && "$1 $2 $3 $4 $5 $6 $7 $8 $9" == "run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var --" ]] \
   || { printf 'doppler %s\n' "$*" >>"$D/refused.log"; exit 64; }
 if [[ -f "$D/mode.doppler" ]]; then exit "$(cat "$D/mode.doppler")"; fi
+# mode.doppler_after_apply: Doppler answers until the apply has run, then fails (the re-read's fetch).
+if [[ -f "$D/mode.doppler_after_apply" && -f "$D/applied" ]]; then exit 1; fi
+# mode.doppler_stall: the record read's `doppler run` hangs before its command starts.
+if [[ -f "$D/mode.doppler_stall" && "$*" == *'/dns_records/'* ]]; then printf 'doppler-stall\n' >>"$D/calls.log"; exec sleep 40; fi
+[[ "$*" != *'/dns_records/'* ]] || printf 'doppler-live-read\n' >>"$D/calls.log"
 shift 9
 # A Doppler-side TF_LOG* (the stub injects what doppler.inject names) must still be stripped.
 if [[ -f "$D/doppler.inject" ]]; then while IFS= read -r kv; do export "${kv?}"; done <"$D/doppler.inject"; fi
@@ -160,6 +166,8 @@ export TF_VAR_cf_r2_account_id="${TF_VAR_cf_r2_account_id:-$(sed -n 3p "$D/ids")
 for t in cf_api_token cf_api_token_rulesets cf_api_token_pages cf_api_token_zone_settings cf_api_token_bot_management; do
   export "TF_VAR_$t=tok-$t"
 done
+# mode.badtoken: the value the record read fetches (the preflight fetched a clean one).
+if [[ -f "$D/mode.badtoken" && "$*" == *'/dns_records/'* ]]; then TF_VAR_cf_api_token="$(cat "$D/mode.badtoken")"; export TF_VAR_cf_api_token; fi
 exec "$@"
 STUB
 # gh accepts exactly the modeled argv: `run list --workflow <gated wf> --status <one of the five
@@ -224,6 +232,25 @@ if [[ "$url" == https://api.cloudflare.com/client/v4/* ]]; then
   tok="$(sed -n 's/^header = "Authorization: Bearer \(.*\)"$/\1/p')"
   name="${tok#tok-}"
   path="${url#https://api.cloudflare.com/client/v4/}"
+  # A record GET, answered from the planned `after` unless a rec* file overrides it. `when` is pre
+  # or post the apply. reconce.<when>.<id>: one 500; reccode.<when>[.<id>]: that code;
+  # recfilter.<when>.<id>: a jq filter over the response.
+  if [[ "$path" == zones/*/dns_records/* ]]; then
+    id="${path##*/}"; when=pre; [[ -f "$D/applied" ]] && when=post
+    printf 'cf-record-get %s token=%s when=%s\n' "$id" "$name" "$when" >>"$D/calls.log"
+    # Exactly the modeled GET: no proxy, no curlrc, a 5 s bound, the status line, the NEW zone.
+    want=(--disable --noproxy '*' -sS --max-time 5 -w '\n%{http_code}' --config - "https://api.cloudflare.com/client/v4/zones/${STUB_NZ:?}/dns_records/$id")
+    [[ "$#" -eq "${#want[@]}" && "$*" == "${want[*]}" ]] || { printf 'curl %s\n' "$*" >>"$D/refused.log"; exit 64; }
+    if [[ -f "$D/reconce.$when.$id" ]]; then rm -f "$D/reconce.$when.$id"; printf '{"success":false}\n500'; exit 0; fi
+    for c in "$D/reccode.$when.$id" "$D/reccode.$when"; do
+      if [[ -f "$c" ]]; then printf '{"success":false}\n%s' "$(cat "$c")"; exit 0; fi
+    done
+    body="$(jq -c --arg id "$id" 'first(.resource_changes[] | select(.change.after.id? == $id) | .change.after)
+      | {success: true, result: {id, zone_id, type, name: .hostname, content, ttl, proxied, priority, comment: null, tags, settings: {}}}' "$D/plan.json")"
+    if [[ -f "$D/recfilter.$when.$id" ]]; then body="$(jq -c "$(cat "$D/recfilter.$when.$id")" <<<"$body")"; fi
+    printf '%s\n200' "$body"
+    exit 0
+  fi
   if [[ "$nullout" -eq 1 ]]; then
     # D8 token preflight: -o /dev/null -w '%{http_code}'
     printf 'cf-api-probe %s token=%s\n' "$path" "$name" >>"$D/calls.log"
@@ -292,7 +319,34 @@ for a in "$@"; do [[ "$prev" == -f ]] && f="$a"; prev="$a"; done
 [[ -n "$f" ]] || exit 64
 : >"$f"; printf 'ssh-ed25519 AAAAstub test\n' >"$f.pub"
 STUB
+# timeout: logs its argv, then runs the real binary, so the apply's bound is asserted on what ran.
+REAL_TIMEOUT="$(command -v timeout)" || { printf '[FATAL] timeout is required\n' >&2; exit 2; }
+export REAL_TIMEOUT
+cat >"$SBX/bin/timeout" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${STUB_DIR:?}/timeout.log"
+exec "${REAL_TIMEOUT:?}" "$@"
+STUB
 chmod +x "$SBX/bin/"*
+# Fakes a case opts into through PATH in env.extra.
+# grep: the job's import-normalize count fails with a real error (exit 2).
+REAL_GREP="$(command -v grep)" || { printf '[FATAL] grep is required\n' >&2; exit 2; }
+# od: the call numbered in <case>/od.fail fails, so the plan's or the apply's token cannot be made.
+REAL_OD="$(command -v od)" || { printf '[FATAL] od is required\n' >&2; exit 2; }
+export REAL_GREP REAL_OD
+mkdir -p "$SBX/bin-grep" "$SBX/bin-od" || exit 2
+cat >"$SBX/bin-grep/grep" <<'STUB'
+#!/usr/bin/env bash
+[[ "$*" != "-c ^cf_account_migrate_gate: import-normalize " ]] || exit 2
+exec "${REAL_GREP:?}" "$@"
+STUB
+cat >"$SBX/bin-od/od" <<'STUB'
+#!/usr/bin/env bash
+n="$(cat "${STUB_DIR:?}/od.n" 2>/dev/null || printf 0)"; n=$((n + 1)); printf '%s' "$n" >"$STUB_DIR/od.n"
+[[ "$n" != "$(cat "$STUB_DIR/od.fail")" ]] || exit 1
+exec "${REAL_OD:?}" "$@"
+STUB
+chmod +x "$SBX/bin-grep/grep" "$SBX/bin-od/od"
 
 # ---------------------------------------------------------------------------
 # FIXTURES
@@ -303,8 +357,10 @@ build_plan() {
   spec="$(cf_account_migrate_phase_spec "$1")" || return 1
   lit="$(_cfam_import_literals "$1")" || return 1
   jq -n --argjson spec "$spec" --argjson lit "$lit" --arg s "$SENTINEL" --arg nz "$NZ" --arg na "$NA" --arg dt "$DT" '
-    def ids($a): if ($a | test("^cloudflare_(list|pages_project|pages_domain|zero_trust_tunnel_cloudflared|zero_trust_tunnel_cloudflared_config|zero_trust_access_service_token|notification_policy)[.]")) or $a == "cloudflare_ruleset.bulk_redirects" then {account_id: $na}
-                 elif ($a | startswith("cloudflare_")) then {zone_id: $nz} else {} end;
+    # An import-class member carries the id its committed literal ends in; a planned create has none.
+    def ids($a): (if ($lit[$a] | type) == "string" then {id: ($lit[$a] | split("/") | last)} else {} end)
+                 + (if ($a | test("^cloudflare_(list|pages_project|pages_domain|zero_trust_tunnel_cloudflared|zero_trust_tunnel_cloudflared_config|zero_trust_access_service_token|notification_policy)[.]")) or $a == "cloudflare_ruleset.bulk_redirects" then {account_id: $na}
+                    elif ($a | startswith("cloudflare_")) then {zone_id: $nz} else {} end);
     # The Access content the gate grades in the tunnel phase, in the shape provider 4.52.7 plans it.
     def papp: "cloudflare_zero_trust_access_application";
     def ptok: "cloudflare_zero_trust_access_service_token";
@@ -324,6 +380,13 @@ build_plan() {
                  elif apppin[$a] != null then {account_id: true}
                  else {} end;
     # Ruleset kind/phase, as the root declares them: the entrypoint gate builds its URLs from these.
+    # A record carries the key set measured from a real plan (Terraform 1.10.5, provider 4.52.7),
+    # with synthesized values: the job reads every record and compares it with this `after`.
+    def rec($a; $l): ($a | split(".")[1]) as $n
+      | {id: ($l | split("/")[1]), zone_id: $nz, name: $n, hostname: ($n + ".soleur.ai"), type: "TXT",
+         content: ("synthetic-" + $n), value: null, ttl: 1, proxied: false, proxiable: false, priority: null,
+         comment: "", tags: [], data: [], metadata: {}, created_on: "2026-11-19T00:00:00Z",
+         modified_on: "2026-11-19T00:00:00Z", timeouts: null, allow_overwrite: false};
     def rs($a): {"cloudflare_ruleset.allowlist_ai_crawlers": {kind: "zone", phase: "http_request_firewall_custom"},
                  "cloudflare_ruleset.cache_shared_binaries": {kind: "zone", phase: "http_request_cache_settings"},
                  "cloudflare_ruleset.seo_config_settings": {kind: "zone", phase: "http_config_settings"},
@@ -342,6 +405,8 @@ build_plan() {
             if $c == "create" then {actions: ["create"], before: null,
                 after: ((if $a == "doppler_secret.cf_zone_id_prd" then {project: "soleur", config: "prd", name: "CF_ZONE_ID", value: $nz} else {value: $s} end) + ids($a) + rs($a) + pol($a)),
                 after_unknown: unk($a)}
+            elif $c == "import" and ($a | startswith("cloudflare_record.")) then
+              {actions: ["no-op"], importing: {id: $lit[$a]}, before: rec($a; $lit[$a]), after: rec($a; $lit[$a]), after_unknown: {}}
             elif $c == "import" then {actions: ["no-op"], importing: {id: $lit[$a]}, before: ids($a), after: ids($a)}
             elif $c == "mutable" then {actions: ["update"], before: {},
                 after: (if $a == "github_actions_secret.cloudflare_account_id_pages"
@@ -420,7 +485,7 @@ run_job() { # <dir> <script>; <dir>/env.extra holds extra KEY=VALUE lines (later
   local d="$1" extra=()
   if [[ -f "$d/env.extra" ]]; then mapfile -t extra <"$d/env.extra"; fi
   env -u TF_VAR_cf_zone_id -u TF_VAR_cf_account_id -u TF_LOG -u TF_LOG_PATH -u TF_LOG_CORE -u TF_LOG_PROVIDER \
-    PATH="$SBX/bin:$PATH" STUB_DIR="$d" STUB_GATED="$GATED_FILE" \
+    PATH="$SBX/bin:$PATH" STUB_DIR="$d" STUB_GATED="$GATED_FILE" STUB_NZ="$NZ" \
     MIGRATE_PHASE="$(cat "$d/phase")" CONFIRM="$(cat "$d/confirm")" REHEARSAL="$(cat "$d/rehearsal")" \
     REASON="$(cat "$d/reason")" GITHUB_WORKSPACE="$REPO" RUNNER_TEMP="$d/runner" INFRA_DIR="$d/root" \
     GH_TOKEN=stub GH_REPO=o/r DOPPLER_TOKEN=stub \
@@ -518,7 +583,7 @@ chk_hostile_location() { # a network Location carrying %0A and :: stays inside O
 }
 chk_deadline() { # the deadline ends the verify after ONE pass (of TRIES=3), with its verdict line
   refused_for "$1" verify-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
-  grep -q '^cf-account-migrate verify=redirects-dns verdict=fail failing=' "$1/out.txt" || { WHY="no-verdict-line"; return 1; }
+  grep -q "^cf-account-migrate verify=$(cat "$1/phase") verdict=fail failing=" "$1/out.txt" || { WHY="no-verdict-line"; return 1; }
   [[ "$(grep -c '^curl https://app.soleur.ai/health$' "$1/calls.log")" -eq 1 ]] || { WHY="passes:$(grep -c '^curl https://app.soleur.ai/health$' "$1/calls.log")"; return 1; }
 }
 chk_retry() { # pass 1 fails, pass 2 passes: verdict ok after exactly two passes, applied, rc 0
@@ -638,9 +703,10 @@ setup_deadline() {
   printf 'CFAM_VERIFY_TRIES=3\nCFAM_VERIFY_SLEEP=0\nCFAM_VERIFY_DEADLINE=0\n' >"$LAST_D/env.extra"
 }
 # The clock placed past the cap (bash imports SECONDS from the environment): with DEADLINE=600 the
-# cap alone (1500 - 0 - 105 = 1395 s after the script start) ends the verify after ONE pass.
+# cap alone (1500 - 0 - 105 = 1395 s after the script start) ends the verify after ONE pass. On
+# zone-rest, whose apply has no start floor: a redirects-dns apply refuses this late.
 setup_cap() {
-  new_case "cap-$1" redirects-dns false; : >"$LAST_D/mode.verify"
+  new_case "cap-$1" zone-rest false; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; : >"$LAST_D/mode.verify"
   printf 'CFAM_VERIFY_TRIES=3\nCFAM_VERIFY_SLEEP=0\nCFAM_VERIFY_DEADLINE=600\nSECONDS=1400\n' >"$LAST_D/env.extra"
 }
 setup_retry() {
@@ -1130,6 +1196,430 @@ new_case applyfail-msg redirects-dns false; printf '1' >"$LAST_D/mode.apply"; ru
 r=1; grep -q 'Fix forward.*re-dispatch the same phase: the forget then removes 0' "$LAST_D/out.txt" && ! grep -q 'every phase is idempotent' "$LAST_D/out.txt" && r=0
 verdict "$r" "apply-failed names the fix-forward / re-dispatch path (removed=0 on the re-run)"
 
+# --- import-normalize (CTO ruling 2026-11-22) ------------------------------------------
+printf '\n[import-normalize] the live read, the bounded apply and the post-apply re-read\n'
+REC_ADDR=cloudflare_record.dkim_resend; REC2_ADDR=cloudflare_record.spf_send
+rec_id_of() { jq -r --arg a "$1" '.[$a]' <<<"$(_cfam_import_literals)" | cut -d/ -f2; }
+REC_ID="$(rec_id_of "$REC_ADDR")"; REC2_ID="$(rec_id_of "$REC2_ADDR")"
+[[ "$REC_ID" =~ ^[0-9a-f]{32}$ && "$REC2_ID" =~ ^[0-9a-f]{32}$ ]] || { printf '[FATAL] record pins unreadable\n' >&2; exit 2; }
+norm_case() { # <label> <rehearsal>: the plan the provider produces for all 26 records
+  new_case "norm-$1" redirects-dns "$2"
+  jq '(.resource_changes[] | select(.type == "cloudflare_record") | .change) |= (.actions = ["update"]
+        | .before = (.after + {allow_overwrite: null, content: null}) | .after_unknown = {})' \
+    "$LAST_D/plan.json" >"$LAST_D/p" && mv "$LAST_D/p" "$LAST_D/plan.json"
+}
+rec_gets() { # <dir> <when> [<record id>]
+  local n; n="$(grep -c "^cf-record-get ${3:-[0-9a-f]*} token=cf_api_token when=$2\$" "$1/calls.log")"; printf '%s' "${n:-0}"
+}
+before() { # <dir> <pattern-a> <pattern-b>: the first a precedes the first b
+  local a b; a="$(line_no "$1" "$2")"; b="$(line_no "$1" "$3")"
+  [[ -n "$a" && -n "$b" && "$a" -lt "$b" ]]
+}
+setup_norm_rehearsal() { norm_case "reh-$1" true; }
+setup_norm_apply() { norm_case "apply-$1" false; }
+setup_norm_preread() { norm_case "preread-$1" false; printf '500' >"$LAST_D/reccode.pre"; }
+setup_norm_differs() { norm_case "differs-$1" false; printf '.result.ttl = 300' >"$LAST_D/recfilter.post.$REC_ID"; }
+setup_norm_differs2() { setup_norm_differs "two-$1"; printf '.result.ttl = 300' >"$LAST_D/recfilter.post.$REC2_ID"; }
+setup_norm_404() { norm_case "nf-$1" false; printf '404' >"$LAST_D/reccode.post.$REC_ID"; }
+setup_norm_flaky() { norm_case "flaky-$1" false; : >"$LAST_D/reconce.post.$REC_ID"; }
+setup_norm_unread() { norm_case "unread-$1" false; printf '500' >"$LAST_D/reccode.post.$REC_ID"; }
+setup_norm_doppler() { norm_case "dopp-$1" false; : >"$LAST_D/mode.doppler_after_apply"; }
+setup_norm_badtoken() { norm_case "badtok-$1" false; printf 'bad"SENTINEL-TOK' >"$LAST_D/mode.badtoken"; }
+setup_norm_af() { norm_case "af-$1" false; printf '1' >"$LAST_D/mode.apply"; }
+setup_norm_af_differs() { setup_norm_af "d-$1"; printf '.result.ttl = 300' >"$LAST_D/recfilter.post.$REC_ID"; }
+setup_norm_af_unread() { setup_norm_af "u-$1"; printf '500' >"$LAST_D/reccode.post.$REC_ID"; }
+setup_norm_124() { norm_case "t124-$1" false; printf '124' >"$LAST_D/mode.apply"; }
+setup_norm_nobudget() { norm_case "nobudget-$1" false; printf 'SECONDS=1200\n' >"$LAST_D/env.extra"; }
+# Away from the 800 s boundary, because the clock moves while the job runs.
+setup_norm_s900() { norm_case "s900-$1" false; printf 'SECONDS=900\n' >"$LAST_D/env.extra"; }
+setup_norm_s700() { norm_case "s700-$1" false; printf 'SECONDS=700\n' >"$LAST_D/env.extra"; }
+setup_norm_s1000() { norm_case "s1000-$1" false; printf 'SECONDS=1000\n' >"$LAST_D/env.extra"; }
+# A redirects-dns apply cannot start this late (APPLY_MIN_START), so zone-rest reaches the skip.
+setup_skip_probe() {
+  new_case "skipprobe-$1" zone-rest false; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"
+  printf '1' >"$LAST_D/mode.apply"; printf 'SECONDS=1396\n' >"$LAST_D/env.extra"
+}
+setup_zrest_124() { new_case "zr124-$1" zone-rest false; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; printf '124' >"$LAST_D/mode.apply"; }
+reread_mixed() { printf '.result.ttl = 300' >"$LAST_D/recfilter.post.$REC_ID"; printf '500' >"$LAST_D/reccode.post.$REC2_ID"; }
+setup_norm_mixed() { norm_case "mixed-$1" false; reread_mixed; }
+setup_norm_af_mixed() { setup_norm_af "m-$1"; reread_mixed; }
+setup_norm_differs_failing() { setup_norm_differs "f-$1"; : >"$LAST_D/mode.health"; }
+setup_norm_unread_failing() { setup_norm_unread "f-$1"; : >"$LAST_D/mode.health"; }
+setup_norm_af_differs_failing() { setup_norm_af_differs "f-$1"; : >"$LAST_D/mode.health"; }
+setup_norm_af_unread_failing() { setup_norm_af_unread "f-$1"; : >"$LAST_D/mode.health"; }
+setup_norm_grepfail() { norm_case "grepfail-$1" false; printf 'PATH=%s\n' "$SBX/bin-grep:$SBX/bin:$PATH" >"$LAST_D/env.extra"; }
+setup_norm_stall() { norm_case "stall-$1" false; : >"$LAST_D/mode.doppler_stall"; }
+setup_tf_hostile() { new_case "tfhost-$1" redirects-dns false; printf 'x\r::add-mask::y\n##[error]forged\n' >"$LAST_D/tfout"; }
+setup_tok_plan() { new_case "tokplan-$1" redirects-dns false; printf '1' >"$LAST_D/od.fail"; printf 'PATH=%s\n' "$SBX/bin-od:$SBX/bin:$PATH" >"$LAST_D/env.extra"; }
+setup_tok_apply() { new_case "tokapply-$1" redirects-dns false; printf '2' >"$LAST_D/od.fail"; printf 'PATH=%s\n' "$SBX/bin-od:$SBX/bin:$PATH" >"$LAST_D/env.extra"; }
+setup_noop_clean() { new_case "noop-$1" redirects-dns false; }
+setup_noop_differs() { new_case "noopd-$1" redirects-dns false; printf '.result.content = "SYNTH-DRIFT"' >"$LAST_D/recfilter.pre.$REC_ID"; }
+# Near the floor on both sides, still far enough from 800 s for the clock to move during the run.
+setup_norm_s760() { norm_case "s760-$1" false; printf 'SECONDS=760\n' >"$LAST_D/env.extra"; }
+setup_norm_s840() { norm_case "s840-$1" false; printf 'SECONDS=840\n' >"$LAST_D/env.extra"; }
+# Output an INT cut mid-line: no trailing newline.
+setup_tf_cut() { new_case "tfcut-$1" redirects-dns false; printf 'Still creating' >"$LAST_D/tfout"; }
+setup_af_plain() { new_case "afplain-$1" redirects-dns false; printf '1' >"$LAST_D/mode.apply"; }
+# Gate-time reads: one record differs, one is unreadable, both, or unreadable beside another REFUSE.
+gr_differs() { printf '.result.ttl = 300' >"$LAST_D/recfilter.pre.$REC_ID"; }
+gr_unread() { printf '500' >"$LAST_D/reccode.pre.$REC_ID"; }
+gr_mixed() { gr_differs; printf '500' >"$LAST_D/reccode.pre.$REC2_ID"; }
+gr_other() {
+  gr_unread
+  jq --arg a "$REC2_ADDR" '(.resource_changes[] | select(.address == $a) | .change.after.ttl) = 300' \
+    "$LAST_D/plan.json" >"$LAST_D/p" && mv "$LAST_D/p" "$LAST_D/plan.json"
+}
+setup_gr_differs() { norm_case "grd-$1" false; gr_differs; }
+setup_gr_unread() { norm_case "gru-$1" false; gr_unread; }
+setup_gr_mixed() { norm_case "grm-$1" false; gr_mixed; }
+setup_gr_other() { norm_case "gro-$1" false; gr_other; }
+setup_rh_differs() { norm_case "rhd-$1" true; gr_differs; }
+setup_rh_unread() { norm_case "rhu-$1" true; gr_unread; }
+setup_rh_other() { norm_case "rho-$1" true; gr_other; }
+
+chk_norm_rehearsal() {
+  [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
+  grep -qx 'cf-account-migrate live-read records=26' "$1/out.txt" || { WHY="no-read-line"; return 1; }
+  grep -qx 'cf-account-migrate import-normalize count=26' "$1/out.txt" || { WHY="no-count-line"; return 1; }
+  [[ "$(rec_gets "$1" pre)" == 26 ]] || { WHY="gets:$(rec_gets "$1" pre)"; return 1; }
+  before "$1" '^terraform\[local\] plan' '^cf-record-get' || { WHY="read-before-plan"; return 1; }
+  if grep -q '^terraform\[[a-z]*\] apply' "$1/calls.log"; then WHY="applied"; return 1; fi
+  [[ "$(jq -r .serial "$1/remote.tfstate")" == 7 ]] || { WHY="serial"; return 1; }
+}
+chk_norm_apply() {
+  local n
+  [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
+  [[ "$(rec_gets "$1" pre)" == 26 ]] || { WHY="pre:$(rec_gets "$1" pre)"; return 1; }
+  [[ "$(rec_gets "$1" post)" == 26 ]] || { WHY="post:$(rec_gets "$1" post)"; return 1; }
+  before "$1" '^terraform\[remote\] plan' '^cf-record-get' || { WHY="read-before-plan"; return 1; }
+  before "$1" '^cf-record-get' "^cf-api-gate zones/$NZ/rulesets" || { WHY="read-after-gate"; return 1; }
+  before "$1" '^terraform\[remote\] apply' 'when=post$' || { WHY="reread-before-apply"; return 1; }
+  before "$1" 'when=post$' '^curl https://app.soleur.ai/health$' || { WHY="reread-after-verify"; return 1; }
+  grep -qx 'cf-account-migrate import-normalize reread=ok records=26' "$1/out.txt" || { WHY="no-reread-line"; return 1; }
+  grep -qx 'cf-account-migrate in-state-updates count=0 admitted=' "$1/out.txt" || { WHY="isu"; return 1; }
+  n="$(sed -nE 's/^--foreground -s INT ([0-9]+) terraform apply .*/\1/p' "$1/timeout.log" 2>/dev/null)"
+  [[ "$n" =~ ^[0-9]+$ && "$n" -gt 0 && "$n" -le 1100 ]] || { WHY="no-bound"; return 1; }
+  if grep -qF 'tok-cf_api_token' "$1/curl-argv.log"; then WHY="bearer-in-argv"; return 1; fi
+}
+chk_gate_refused_noapply() {
+  if grep -q '^terraform\[[a-z]*\] apply' "$1/calls.log"; then WHY="applied"; return 1; fi
+  refused_for "$1" gate-refused || { WHY="rc:$(rc_of "$1")"; return 1; }
+}
+chk_norm_preread() {
+  chk_gate_refused_noapply "$1" || return 1
+  grep -qF "REFUSE $REC_ADDR live record unreadable" "$1/out.txt" || { WHY="no-refuse-line"; return 1; }
+}
+chk_reread_fields() { # <dir> <reread value>
+  refused_for "$1" import-normalize-reread-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
+  chk_refuse_fields "$1" import-normalize-reread-failed "applied=true forget=committed reread=$2 verify=ok"
+}
+chk_norm_differs() { chk_reread_fields "$1" "differs=$REC_ADDR:ttl" || return 1; [[ "$(rec_gets "$1" post "$REC_ID")" == 1 ]] || { WHY="retried"; return 1; }; }
+chk_norm_differs2() {
+  refused_for "$1" import-normalize-reread-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
+  grep -qE "reread=differs=[^ ]*$REC_ADDR:ttl" "$1/out.txt" && grep -qE "reread=differs=[^ ]*$REC2_ADDR:ttl" "$1/out.txt" || { WHY="one-member"; return 1; }
+}
+chk_norm_404() { chk_reread_fields "$1" "differs=$REC_ADDR:notfound" || return 1; [[ "$(rec_gets "$1" post "$REC_ID")" == 1 ]] || { WHY="retried"; return 1; }; }
+chk_norm_flaky() {
+  [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
+  grep -qx 'cf-account-migrate import-normalize reread=ok records=26' "$1/out.txt" || { WHY="no-reread-line"; return 1; }
+  [[ "$(rec_gets "$1" post)" == 27 ]] || { WHY="post:$(rec_gets "$1" post)"; return 1; }
+}
+chk_norm_unread() { chk_reread_fields "$1" "unreadable=$REC_ADDR" || return 1; [[ "$(rec_gets "$1" post "$REC_ID")" == 5 ]] || { WHY="passes:$(rec_gets "$1" post "$REC_ID")"; return 1; }; }
+chk_norm_doppler() {
+  local f
+  refused_for "$1" import-normalize-reread-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
+  f="$(sed -nE 's/.*reason=import-normalize-reread-failed applied=true forget=committed reread=unreadable=([^ ]+) verify=ok$/\1/p' "$1/out.txt" | head -n1)"
+  [[ "$(tr ',' '\n' <<<"$f" | grep -c '^cloudflare_record\.')" == 26 ]] || { WHY="named:$f"; return 1; }
+}
+chk_norm_badtoken() {
+  if grep -q '^cf-record-get' "$1/calls.log"; then WHY="curl-called"; return 1; fi
+  chk_gate_refused_noapply "$1" || return 1
+  [[ "$(grep -c '^doppler-live-read$' "$1/calls.log")" == 1 ]] || { WHY="attempts:$(grep -c '^doppler-live-read$' "$1/calls.log")"; return 1; }
+  if grep -qF 'SENTINEL-TOK' "$1/out.txt" "$1/err.txt" "$1/summary.md"; then WHY="value-printed"; return 1; fi
+  grep -qF "REFUSE $REC_ADDR live record unreadable" "$1/out.txt" || { WHY="no-refuse-line"; return 1; }
+}
+chk_af_fields() { # <dir> <reread value>
+  refused_for "$1" apply-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
+  chk_refuse_fields "$1" apply-failed "forget=committed reread=$2 verify=ok" || return 1
+  before "$1" 'when=post$' '^curl https://app.soleur.ai/health$' || { WHY="probe-before-reread"; return 1; }
+}
+chk_norm_af() { chk_af_fields "$1" ok; }
+chk_norm_af_differs() { chk_af_fields "$1" "differs=$REC_ADDR:ttl"; }
+chk_norm_af_unread() { chk_af_fields "$1" "unreadable=$REC_ADDR"; }
+# R21: the runbook routes on this exact text.
+chk_norm_124() {
+  chk_norm_af "$1" || return 1
+  grep -qF 'terraform apply of the graded plan failed (exit 124)' "$1/out.txt" || { WHY="no-exit-124"; return 1; }
+  grep -qF "exit 124 is the apply's one INT at APPLY_DEADLINE firing." "$1/out.txt" || { WHY="no-int-text"; return 1; }
+}
+chk_zrest_124() { # no bound on zone-rest, so a 124 from terraform is not the INT
+  refused_for "$1" apply-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
+  grep -qF 'failed (exit 124)' "$1/out.txt" || { WHY="no-exit-124"; return 1; }
+  if grep -qF 'one INT at APPLY_DEADLINE' "$1/out.txt"; then WHY="claims-int"; return 1; fi
+}
+# apply_bound <dir>: the seconds of the apply's `timeout`, empty when it had none.
+apply_bound() { sed -nE 's/^--foreground -s INT ([0-9]+) terraform apply .*/\1/p' "$1/timeout.log" 2>/dev/null; }
+chk_norm_s700() { # Q2: inside the floor the apply runs, with what is left of the budget as its bound
+  local n
+  [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
+  n="$(apply_bound "$1")"
+  [[ "$n" =~ ^[0-9]+$ && "$n" -ge 300 && "$n" -le 400 ]] || { WHY="bound:$n"; return 1; }
+}
+chk_norm_s760() { # P3-3: close above the floor the apply still runs, on what is left of the budget
+  local n
+  [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
+  n="$(apply_bound "$1")"
+  [[ "$n" =~ ^[0-9]+$ && "$n" -ge 300 && "$n" -le 340 ]] || { WHY="bound:$n"; return 1; }
+}
+# Halt routing (R1, R4, R17). <route> holds W (wrong value), N (no completed re-read), F (verify-failed).
+HALT_W='Runbook Halt: A DNS record may hold a wrong value.'
+HALT_N='Runbook Halt: No completed re-read.'
+HALT_F='The runbook Halt verify-failed steps apply to those failing items (app-health first).'
+chk_halt() { # <dir> <reason> <fields> <route>
+  local m k s
+  refused_for "$1" "$2" || { WHY="rc:$(rc_of "$1")"; return 1; }
+  chk_refuse_fields "$1" "$2" "$3" || return 1
+  if grep -q 'also-unreadable' "$1/out.txt"; then WHY="also-unreadable-line"; return 1; fi
+  m="$(grep '^::error title=cf-account-migrate::' "$1/out.txt")"
+  for k in W N F; do
+    case "$k" in W) s="$HALT_W" ;; N) s="$HALT_N" ;; F) s="$HALT_F" ;; esac
+    if [[ "$4" == *"$k"* ]]; then [[ "$m" == *"$s"* ]] || { WHY="no-$k"; return 1; }
+    else [[ "$m" != *"$s"* ]] || { WHY="extra-$k"; return 1; }; fi
+  done
+}
+RR_F="applied=true forget=committed reread"
+chk_h_rr_diff() { chk_halt "$1" import-normalize-reread-failed "$RR_F=differs=$REC_ADDR:ttl verify=ok" W; }
+chk_h_rr_unread() { chk_halt "$1" import-normalize-reread-failed "$RR_F=unreadable=$REC_ADDR verify=ok" N; }
+chk_h_rr_mixed() { chk_halt "$1" import-normalize-reread-failed "$RR_F=differs=$REC_ADDR:ttl;unreadable=$REC2_ADDR verify=ok" W; }
+chk_h_rr_diff_f() { chk_halt "$1" import-normalize-reread-failed "$RR_F=differs=$REC_ADDR:ttl failing=app-health=>526" WF; }
+chk_h_rr_unread_f() { chk_halt "$1" import-normalize-reread-failed "$RR_F=unreadable=$REC_ADDR failing=app-health=>526" NF; }
+chk_h_af_diff() { chk_halt "$1" apply-failed "forget=committed reread=differs=$REC_ADDR:ttl verify=ok" W; }
+chk_h_af_unread() { chk_halt "$1" apply-failed "forget=committed reread=unreadable=$REC_ADDR verify=ok" N; }
+chk_h_af_mixed() { chk_halt "$1" apply-failed "forget=committed reread=differs=$REC_ADDR:ttl;unreadable=$REC2_ADDR verify=ok" W; }
+chk_h_af_diff_f() { chk_halt "$1" apply-failed "forget=committed reread=differs=$REC_ADDR:ttl failing=app-health=>526" WF; }
+chk_h_af_unread_f() { chk_halt "$1" apply-failed "forget=committed reread=unreadable=$REC_ADDR failing=app-health=>526" NF; }
+chk_h_af_ok() { chk_halt "$1" apply-failed "forget=committed reread=ok verify=ok" ""; }
+# Architecture F1: the sentence after the Halt pointer follows the same evidence.
+AF_TAIL='Fix forward (a reviewed PR if the cause is in code), then re-dispatch the same phase:'
+chk_af_tail() { # <dir> <fields> <route> <yes|no: the fix-forward sentence belongs>
+  local m
+  chk_halt "$1" apply-failed "$2" "$3" || return 1
+  m="$(grep '^::error title=cf-account-migrate::' "$1/out.txt")"
+  if [[ "$4" == yes ]]; then [[ "$m" == *"$AF_TAIL"* ]] || { WHY="no-tail"; return 1; }; return 0; fi
+  [[ "${m,,}" != *"fix forward"* ]] || { WHY="has-fix-forward"; return 1; }
+  [[ "$m" != *re-dispatch* ]] || { WHY="has-re-dispatch"; return 1; }
+}
+chk_t_none() { chk_af_tail "$1" "forget=committed verify=ok" "" yes; }
+chk_t_ok() { chk_af_tail "$1" "forget=committed reread=ok verify=ok" "" yes; }
+chk_t_diff() { chk_af_tail "$1" "forget=committed reread=differs=$REC_ADDR:ttl verify=ok" W no; }
+chk_t_unread() { chk_af_tail "$1" "forget=committed reread=unreadable=$REC_ADDR verify=ok" N no; }
+chk_t_mixed() { chk_af_tail "$1" "forget=committed reread=differs=$REC_ADDR:ttl;unreadable=$REC2_ADDR verify=ok" W no; }
+GR_BASE='::error title=cf-account-migrate::the plan did not reach gate verdict=PASS; nothing was applied.'
+RH_BASE='::error title=cf-account-migrate::the rehearsal did not reach gate verdict=PASS (see above); nothing was written'
+FG_TXT='The state forget is committed (backup uri above); runbook Halt: fix forward and re-dispatch (the forget then removes 0); the _PREV id restore no longer applies.'
+FK_TXT='The state forget is committed (backup uri above); the _PREV id restore no longer applies.'
+HALT_E='Edit no DNS record and re-rehearse once; a second consecutive refusal stops for an owner decision.'
+chk_next() { # <dir> <reason> <exact annotation> <yes|no: a fix-forward or re-dispatch sentence belongs>
+  local m
+  refused_for "$1" "$2" || { WHY="rc:$(rc_of "$1")"; return 1; }
+  m="$(grep '^::error title=cf-account-migrate::' "$1/out.txt")"
+  if [[ "$4" == no ]]; then
+    [[ "${m,,}" != *"fix forward"* ]] || { WHY="has-fix-forward"; return 1; }
+    [[ "$m" != *re-dispatch* ]] || { WHY="has-re-dispatch"; return 1; }
+  fi
+  [[ "$m" == "$3" ]] || { WHY="msg"; return 1; }
+}
+chk_gr_differs() { chk_next "$1" gate-refused "$GR_BASE $FK_TXT $HALT_W" no && chk_forget_committed "$1" gate-refused; }
+chk_gr_unread() { chk_next "$1" gate-refused "$GR_BASE $FK_TXT $HALT_E" no && chk_forget_committed "$1" gate-refused; }
+chk_gr_today() { chk_next "$1" gate-refused "$GR_BASE $FG_TXT" yes && chk_forget_committed "$1" gate-refused; }
+chk_rh_differs() { chk_next "$1" rehearsal-refused "$RH_BASE. $HALT_W" no; }
+chk_rh_unread() { chk_next "$1" rehearsal-refused "$RH_BASE. $HALT_E" no; }
+chk_rh_today() { chk_next "$1" rehearsal-refused "$RH_BASE" yes; }
+chk_norm_grepfail() { # R16: a real grep failure on the count refuses instead of disabling the re-read
+  chk_gate_refused_noapply "$1" || return 1
+  grep -qF 'cannot count the import-normalize records (grep exit 2)' "$1/out.txt" || { WHY="no-count-error"; return 1; }
+}
+chk_norm_stall() { # F7: the read's `doppler run` starts under the outer timeout, so a stall reads as unreadable
+  grep -q '^doppler-stall$' "$1/calls.log" || { WHY="no-stall"; return 1; }
+  grep -qE '^-k 5 [0-9]+ doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- env ' "$1/timeout.log" 2>/dev/null \
+    || { WHY="no-outer-timeout"; return 1; }
+  chk_gate_refused_noapply "$1" || return 1
+  grep -qF "REFUSE $REC_ADDR live record unreadable" "$1/out.txt" || { WHY="no-refuse-line"; return 1; }
+}
+# Q7: both terraform pipelines sit inside a matching token window, with every line prefixed.
+chk_tf_windows() {
+  local v
+  [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
+  if LC_ALL=C grep -q $'\r' "$1/out.txt"; then WHY="cr"; return 1; fi
+  v="$(awk '
+    /^::stop-commands::/ { if (open) bad = "nested"; tok = substr($0, 18); if (length(tok) != 32) bad = "token"; open = 1; n++; next }
+    open && $0 == "::" tok "::" { open = 0; next }
+    open && $0 != "" && $0 !~ /^tf\| / { bad = "unprefixed" }
+    !open && /^tf\| / { bad = "outside" }
+    END { if (open) bad = "unclosed"; print (bad != "" ? bad : "ok:" n) }' "$1/out.txt")"
+  [[ "$v" == ok:2 ]] || { WHY="window:$v"; return 1; }
+}
+chk_tf_cut() { # P3-2: output cut mid-line keeps its text, and the closer still lands on its own line
+  chk_tf_windows "$1" || return 1
+  [[ "$(grep -cxF 'tf| Still creating' "$1/out.txt")" -eq 2 ]] || { WHY="no-cut-line"; return 1; }
+}
+chk_tf_window() {
+  chk_tf_windows "$1" || return 1
+  [[ "$(grep -cxF 'tf| x ::add-mask::y' "$1/out.txt")" -eq 2 ]] || { WHY="no-mask-line"; return 1; }
+  [[ "$(grep -cxF 'tf| ##[error]forged' "$1/out.txt")" -eq 2 ]] || { WHY="no-error-line"; return 1; }
+  if grep -qE '^(::add-mask::|##\[error\])' "$1/out.txt"; then WHY="command-opener"; return 1; fi
+}
+chk_tok_plan() {
+  if grep -q '^terraform\[[a-z]*\] plan' "$1/calls.log"; then WHY="planned"; return 1; fi
+  chk_gate_refused_noapply "$1" || return 1
+  grep -qF 'cannot create the workflow-command token' "$1/out.txt" || { WHY="no-token-error"; return 1; }
+}
+chk_tok_apply() {
+  if grep -q '^terraform\[[a-z]*\] apply' "$1/calls.log"; then WHY="applied"; return 1; fi
+  if grep -q 'applying=true' "$1/out.txt"; then WHY="applying-line"; return 1; fi
+  chk_refuse_fields "$1" setup "applied=false forget=committed"
+}
+# fn_read <script> <virtual seconds per attempt>: read_live_records under production defaults on a
+# virtual clock. Prints "<pauses> attempts=<n> elapsed=<s>".
+fn_read() {
+  local lib wd
+  lib="$(mktemp "$SBX/fnlib.XXXXXX")" && wd="$(mktemp -d "$SBX/fnread.XXXXXX")" || return 2
+  sed '/^main "\$@"$/d' "$1" >"$lib"
+  # shellcheck disable=SC2016 # expanded by the child bash
+  env -u CFAM_VERIFY_SLEEP -u SECONDS MIGRATE_PHASE=redirects-dns FN_STEP="$2" FN_W="$wd" bash -c '
+    source "$1" || exit 2
+    W="$FN_W"; CFAM_NEW_ZONE_ID=z; pauses=""; n=0
+    cf_account_migrate_record_pins() { printf "cloudflare_record.a\tdeadbeef\n"; }
+    cf_account_migrate_live_collect() { printf "{}\n"; }
+    sleep() { pauses+="$1 "; SECONDS=$((SECONDS + $1)); }
+    timeout() { n=$((n + 1)); SECONDS=$((SECONDS + ($3 < FN_STEP ? $3 : FN_STEP))); return 124; }
+    read_live_records "$W/out.json" >/dev/null 2>&1
+    printf "%sattempts=%s elapsed=%s\n" "$pauses" "$n" "$SECONDS"' _ "$lib"
+}
+# fn_reread <script>: reread_records with a failing pin lookup. Prints "rc=<n> reread=<value>".
+fn_reread() {
+  local lib
+  lib="$(mktemp "$SBX/fnlib.XXXXXX")" || return 2
+  sed '/^main "\$@"$/d' "$1" >"$lib"
+  # shellcheck disable=SC2016 # expanded by the child bash
+  env MIGRATE_PHASE=redirects-dns bash -c '
+    source "$1" || exit 2
+    W="$(dirname "$1")"
+    cf_account_migrate_record_pins() { return 1; }
+    read_live_records() { return 1; }
+    reread_records >/dev/null 2>&1; rc=$?
+    printf "rc=%s reread=%s\n" "$rc" "$REREAD"' _ "$lib"
+}
+# gate_call_arity <script>: the argument count of the job's redirects-dns gate call, comments stripped.
+gate_call_arity() {
+  local call args
+  call="$(sed -n '/^plan_and_gate() {$/,/^}$/p' "$1" | sed -E -e '/^[[:space:]]*#/d' -e 's/[[:space:]]+#.*$//' \
+    | sed -n '/== redirects-dns || "\$MIGRATE_PHASE" == tunnel \]\]; then$/,/^  else$/p' | grep 'cf_account_migrate_gate ')" || return 1
+  [[ "$(grep -c . <<<"$call")" -eq 1 ]] || return 1
+  args="${call#*cf_account_migrate_gate }"; args="${args%%)*}"
+  grep -oE '"[^"]+"' <<<"$args" | grep -c .
+}
+chk_norm_nobudget() {
+  if grep -q '^terraform\[[a-z]*\] apply' "$1/calls.log"; then WHY="applied"; return 1; fi
+  if grep -q 'applying=true' "$1/out.txt"; then WHY="applying-line"; return 1; fi
+  refused_for "$1" apply-budget-exhausted || { WHY="not-refused"; return 1; }
+  chk_refuse_fields "$1" apply-budget-exhausted "applied=false forget=committed"
+}
+chk_skip_probe() {
+  refused_for "$1" apply-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
+  grep -qxF -- 'cf-account-migrate phase=zone-rest verdict=refuse reason=apply-failed verify=skipped' "$1/out.txt" || { WHY="no-field"; return 1; }
+  if grep -q '^curl https://app.soleur.ai/health$' "$1/calls.log"; then WHY="probed"; return 1; fi
+}
+chk_noop_clean() { # Q1: no replace in the phase, so the bound holds with no admitted record
+  local n
+  [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
+  [[ "$(rec_gets "$1" pre)" == 26 ]] || { WHY="gets:$(rec_gets "$1" pre)"; return 1; }
+  [[ "$(rec_gets "$1" post)" == 0 ]] || { WHY="reread"; return 1; }
+  grep -qx 'cf-account-migrate import-normalize count=0' "$1/out.txt" || { WHY="no-count-line"; return 1; }
+  n="$(apply_bound "$1")"
+  [[ "$n" =~ ^[0-9]+$ && "$n" -gt 0 && "$n" -le 1100 ]] || { WHY="unbounded"; return 1; }
+}
+chk_noop_differs() {
+  chk_gate_refused_noapply "$1" || return 1
+  grep -qF "REFUSE $REC_ADDR differs from the live record (content)" "$1/out.txt" || { WHY="no-refuse-line"; return 1; }
+  if grep -qF 'SYNTH-DRIFT' "$1/out.txt"; then WHY="value-printed"; return 1; fi
+}
+chk_zrest_noread() {
+  [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
+  if grep -qE '^(cf-record-get|doppler-live-read)' "$1/calls.log"; then WHY="record-read"; return 1; fi
+  # The log holds the job's other bounded calls, so an empty one would prove nothing.
+  [[ -s "$1/timeout.log" ]] || { WHY="no-timeout-log"; return 1; }
+  if grep -q 'terraform apply' "$1/timeout.log"; then WHY="bounded"; return 1; fi
+  grep -q '^terraform\[remote\] apply' "$1/calls.log" || { WHY="no-apply"; return 1; }
+}
+norm_row() { # <label> <setup> <check>
+  "$2" case; run_job "$LAST_D" "$PRISTINE"; WHY=""
+  if "$3" "$LAST_D"; then verdict 0 "$1"; else verdict 1 "$1 (WHY=$WHY)"; fi
+}
+norm_row "N1 a rehearsal reads all 26 after the plan, admits them and applies nothing" setup_norm_rehearsal chk_norm_rehearsal
+norm_row "N2 an apply runs plan, read, gates, a bounded apply, re-read, verify" setup_norm_apply chk_norm_apply
+norm_row "N3 a read failure before the apply refuses at the gate" setup_norm_preread chk_norm_preread
+norm_row "N4 a post-apply difference halts at once" setup_norm_differs chk_norm_differs
+norm_row "N5 every differing record is named" setup_norm_differs2 chk_norm_differs2
+norm_row "N6 a post-apply 404 halts without a retry" setup_norm_404 chk_norm_404
+norm_row "N7 (H2) one unreadable pass then a clean one passes" setup_norm_flaky chk_norm_flaky
+norm_row "N8 unreadable through every pass halts" setup_norm_unread chk_norm_unread
+norm_row "N9 (S1) Doppler failing on the re-read names all 26, never the pre-write responses" setup_norm_doppler chk_norm_doppler
+norm_row "N10 (S3) a token failing the shape guard makes no curl call and one attempt" setup_norm_badtoken chk_norm_badtoken
+norm_row "N11 apply-failed carries reread=ok before verify=" setup_norm_af chk_norm_af
+norm_row "N12 apply-failed carries reread=differs" setup_norm_af_differs chk_norm_af_differs
+norm_row "N13 apply-failed carries reread=unreadable" setup_norm_af_unread chk_norm_af_unread
+norm_row "N14 (R21) the bound's exit 124 reaches apply-failed and the message names the INT" setup_norm_124 chk_norm_124
+norm_row "N15 no apply budget refuses before applying=true" setup_norm_nobudget chk_norm_nobudget
+norm_row "N16 past 1395 s a failed (zone-rest) apply skips the probe and says so" setup_skip_probe chk_skip_probe
+norm_row "N17 (Q1) redirects-dns with NORM_COUNT=0 reads 26, is bounded and makes no re-read" setup_noop_clean chk_noop_clean
+norm_row "N18 an all-no-op plan refuses on a live difference, printing no value" setup_noop_differs chk_noop_differs
+norm_row "N19 (Q1) zone-rest makes no record read and its apply argv has no timeout" setup_zone_rest_apply chk_zrest_noread
+norm_row "N20 (Q2) SECONDS=900 refuses apply-budget-exhausted before applying=true" setup_norm_s900 chk_norm_nobudget
+norm_row "N21 (Q2) SECONDS=700 runs with a bound of at most 400" setup_norm_s700 chk_norm_s700
+norm_row "N22 (F6) SECONDS=1000 is inside the floor's refusal, so no apply starts with 100 s left" setup_norm_s1000 chk_norm_nobudget
+norm_row "N23 (R21) a zone-rest exit 124 is not called the INT: that apply has no bound" setup_zrest_124 chk_zrest_124
+norm_row "N24 (P3-3) SECONDS=760 still runs, with a bound of 300 to 340" setup_norm_s760 chk_norm_s760
+norm_row "N25 (P3-3) SECONDS=840 refuses apply-budget-exhausted before applying=true" setup_norm_s840 chk_norm_nobudget
+norm_row "H1 (R1) reread-failed, differs: the wrong-value bullet only" setup_norm_differs chk_h_rr_diff
+norm_row "H2 (R1) reread-failed, unreadable only: No completed re-read only" setup_norm_unread chk_h_rr_unread
+norm_row "H3 (R17) reread-failed, mixed: one field, routed as a difference" setup_norm_mixed chk_h_rr_mixed
+norm_row "H4 (R4) reread-failed, differs with failing=: both sentences" setup_norm_differs_failing chk_h_rr_diff_f
+norm_row "H5 (R4) reread-failed, unreadable with failing=: both sentences" setup_norm_unread_failing chk_h_rr_unread_f
+norm_row "H6 (R1) apply-failed, differs: the wrong-value bullet only" setup_norm_af_differs chk_h_af_diff
+norm_row "H7 (R1) apply-failed, unreadable only: No completed re-read only" setup_norm_af_unread chk_h_af_unread
+norm_row "H8 (R17) apply-failed, mixed: one field, routed as a difference" setup_norm_af_mixed chk_h_af_mixed
+norm_row "H9 apply-failed, differs with failing=: both sentences" setup_norm_af_differs_failing chk_h_af_diff_f
+norm_row "H10 apply-failed, unreadable with failing=: both sentences" setup_norm_af_unread_failing chk_h_af_unread_f
+norm_row "H11 apply-failed, reread=ok verify=ok: no Halt pointer" setup_norm_af chk_h_af_ok
+norm_row "T1 (F1) apply-failed with no reread= field keeps the fix-forward sentence" setup_af_plain chk_t_none
+norm_row "T2 (F1) apply-failed, reread=ok keeps the fix-forward sentence" setup_norm_af chk_t_ok
+norm_row "T3 (F1) apply-failed, differs: no fix-forward or re-dispatch sentence" setup_norm_af_differs chk_t_diff
+norm_row "T4 (F1) apply-failed, unreadable: no fix-forward or re-dispatch sentence" setup_norm_af_unread chk_t_unread
+norm_row "T5 (F1) apply-failed, mixed: no fix-forward or re-dispatch sentence" setup_norm_af_mixed chk_t_mixed
+norm_row "T6 (F1) gate-refused, differs: the wrong-value bullet, no re-dispatch" setup_gr_differs chk_gr_differs
+norm_row "T7 (F1) gate-refused, unreadable only: edit nothing and re-rehearse" setup_gr_unread chk_gr_unread
+norm_row "T8 (F1) gate-refused, differs and unreadable: the wrong-value bullet" setup_gr_mixed chk_gr_differs
+norm_row "T9 (F1) gate-refused, unreadable beside another REFUSE keeps today's text" setup_gr_other chk_gr_today
+norm_row "T10 (F1) gate-refused with no live-read line keeps today's text" setup_refuse_apply chk_gr_today
+norm_row "T11 (F1) rehearsal-refused, differs: the wrong-value bullet" setup_rh_differs chk_rh_differs
+norm_row "T12 (F1) rehearsal-refused, unreadable only: edit nothing and re-rehearse" setup_rh_unread chk_rh_unread
+norm_row "T13 (F1) rehearsal-refused, any other refusal keeps today's text" setup_rh_other chk_rh_today
+norm_row "R16 a real grep failure on the count refuses, with no apply" setup_norm_grepfail chk_norm_grepfail
+norm_row "Q7 both terraform pipelines are windowed and prefixed, with no CR" setup_tf_hostile chk_tf_window
+norm_row "Q7 (P3-2) output cut with no trailing newline still closes both windows" setup_tf_cut chk_tf_cut
+norm_row "Q7 no plan token: refused before terraform plan" setup_tok_plan chk_tok_plan
+norm_row "Q7 no apply token: refused setup applied=false before applying=true" setup_tok_apply chk_tok_apply
+r=1; v="$(fn_reread "$PRISTINE")"; [[ "$v" == "rc=1 reread=unreadable=all-pinned-records" ]] && r=0
+verdict "$r" "R18 a failed pin lookup in the re-read is unreadable= and returns 1 ($v)"
+r=1; v="$(fn_read "$PRISTINE" 0)"; [[ "$v" == "5 10 20 40 attempts=5 elapsed="* ]] && r=0
+verdict "$r" "R8 five passes with the pause doubling from 5 s ($v)"
+r=1; v="$(fn_read "$PRISTINE" 20)"; e="${v##*elapsed=}"; [[ "$e" =~ ^[0-9]+$ && "$e" -le 90 && "$v" != "5 10 20 40 "* ]] && r=0
+verdict "$r" "R8 slow passes cut the pauses and stay inside the 90 s deadline ($v)"
+# shellcheck disable=SC2016 # literal script text
+r=1; v="$(sed -n '/^LIVE_READ_SH=/,/^LIVEREAD$/p' "$PRISTINE")"; [[ "$v" != *api.cloudflare.com* && "$v" == *'"$b/zones/$z/dns_records/$id"'* ]] && r=0
+verdict "$r" "R19 the live-read script takes the API base as an argument and holds no copy of it"
+
 # --- Mutations ------------------------------------------------------------------------
 printf '\n[mutations] each refusal is load-bearing\n'
 M1="$(mk_mutant confirm 's/|| refuse bad-confirm/|| true/')"
@@ -1255,10 +1745,10 @@ red "V4 the deadline set to the verify's start (end=\$SECONDS) gives up after on
 V5="$(mk_mutant no-cap '/^  if ((cap < end)); then end=\$cap; fi$/d')"
 red "V5 the verify deadline without the script-start cap runs every pass past 1395 s" "$V5" chk_deadline '^passes:3$' setup_cap
 # shellcheck disable=SC2016 # sed expression matches literal script text
-V6="$(mk_mutant applyfail-no-probe 's/^    if probe_partial_apply; then vf="verify=ok"; else vf="failing=\${VERIFY_FAILING}"; fi$/    :/')"
+V6="$(mk_mutant applyfail-no-probe 's/^  if probe_partial_apply; then vf="verify=ok"; else vf="failing=\${VERIFY_FAILING}"; fi$/  :/')"
 red "V6 a failed apply is not probed (the partial apply's 526 is unreported)" "$V6" chk_applyfail_health '^no-field$' setup_applyfail_health
 # shellcheck disable=SC2016 # sed expression matches literal script text
-V7="$(mk_mutant applyfail-no-forget 's/ "\${fx}\${vf:+\${fx:+ }\$vf}"$/ "$vf"/')"
+V7="$(mk_mutant applyfail-no-forget 's/ "\$(join_fields "\$fx" "\$rr" "\$vf")"$/ "$vf"/')"
 red "V7 apply-failed without the forget=committed field" "$V7" chk_applyfail_health '^no-field$' setup_applyfail_health
 V8="$(mk_mutant no-applying-line '/mode=apply applying=true/d')"
 red "V8 no applying=true marker before terraform apply" "$V8" chk_applyfail_health '^no-applying-line$' setup_applyfail_health
@@ -1301,7 +1791,7 @@ red "V23 (D9) zone-rest apply-failed carries the redirects-dns forget sentence" 
 V24="$(mk_mutant zrest-no-verify 's/^  verify_live || refuse verify-failed/  [[ "$MIGRATE_PHASE" != redirects-dns ]] || verify_live || refuse verify-failed/')"
 red "V24 (D33) the post-apply live verify skipped for zone-rest (a 526 after it goes unreported)" "$V24" chk_zrest_health '^rc:0$' setup_zrest_health
 # shellcheck disable=SC2016 # sed expression matches literal script text
-V25="$(mk_mutant zrest-no-applyfail-probe 's/^    if probe_partial_apply; then vf=/    if [[ "$MIGRATE_PHASE" != redirects-dns ]]; then :; elif probe_partial_apply; then vf=/')"
+V25="$(mk_mutant zrest-no-applyfail-probe 's/^  if probe_partial_apply; then vf=/  if [[ "$MIGRATE_PHASE" != redirects-dns ]]; then :; elif probe_partial_apply; then vf=/')"
 red "V25 (D33) a failed zone-rest apply is not probed" "$V25" chk_zrest_applyfail '^fields$' setup_zrest_applyfail
 # shellcheck disable=SC2016 # sed expression matches literal script text
 V26="$(mk_mutant zrest-probes-pairs 's/^  \[\[ "\$ph" != redirects-dns \]\] || pairs=/  pairs=/')"
@@ -1325,6 +1815,125 @@ red "V13 obs_line without the printable-ASCII closed set" "$V13" chk_obs_ascii '
 # shellcheck disable=SC2016 # sed expression matches literal script text
 V3="$(mk_mutant no-forget-field 's/ "\$fx"$//')"
 red "V3 a post-forget gate refusal without the forget=committed field" "$V3" chk_gate_blocks_apply '^no-forget-field$' setup_refuse_apply
+
+# Guard 1 (job half) and Guard 2: each mutant of the read, the bound or the re-read reds its case.
+# shellcheck disable=SC2016 # sed expressions match literal script text
+{
+G13="$(mk_mutant read-before-plan 's/^  tf_env terraform plan /  read_live_records "$W\/live-records.json"\n&/' 's/^    read_live_records "\$live" || live=""$/    :/')"
+G14="$(mk_mutant skip-read-noop 's/^  if \[\[ "\$MIGRATE_PHASE" == redirects-dns || "\$MIGRATE_PHASE" == tunnel \]\]; then # read every pinned record$/  if [[ "$MIGRATE_PHASE" == redirects-dns || "$MIGRATE_PHASE" == tunnel ]] \&\& jq -e "any(.resource_changes[]; .change.actions == [\\"update\\"])" "$W\/tfplan.json" >\/dev\/null; then/')"
+G21="$(mk_mutant gate-three-args 's/ "\$W\/pre-plan-state.json" "\$live")"; rc=\$?$/ "$W\/pre-plan-state.json")"; rc=$?/')"
+R1="$(mk_mutant no-reread-ok 's/^    reread_records || {$/    true || {/')"
+R2="$(mk_mutant no-reread-af '/^    \[\[ "\$NORM_COUNT" -eq 0 \]\] || { reread_records/d')"
+R3="$(mk_mutant reread-unread-ok 's/^    if \[\[ "\$t" == unreadable \]\]; then unread+=",\$a"; else/    if [[ "$t" == unreadable ]]; then :; else/')"
+R4="$(mk_mutant reread-first-only 's/^  done <<<"\$d" # every differing record$/  break; done <<<"$d"/')"
+R5="$(mk_mutant notfound-retried 's/\[\[ "\$code" == 200 || "\$code" == 404 \]\]/[[ "$code" == 200 ]]/')"
+R6="$(mk_mutant reread-before-apply 's/^  printf .%s phase=%s mode=apply applying=true.n. "\$P" "\$MIGRATE_PHASE"$/  read_live_records "$W\/extra.json" || :\n&/')"
+R7="$(mk_mutant no-bound 's/^    bound=(timeout --foreground -s INT "\$remaining")$/    bound=()/')"
+R8="$(mk_mutant no-foreground 's/^    bound=(timeout --foreground -s INT /    bound=(timeout -s INT /')"
+R9="$(mk_mutant probe-before-reread 's/^    \[\[ "\$NORM_COUNT" -eq 0 \]\] || { reread_records/    probe_partial_apply || :\n&/')"
+R10="$(mk_mutant no-budget-refuse '/^    ((remaining >= APPLY_MIN_START)) || refuse apply-budget-exhausted/d')"
+R11="$(mk_mutant bound-zone-rest 's/^  if ((\${#REPLACE_ARGS\[@\]} == 0)); then$/  if true; then/')"
+Q1="$(mk_mutant bound-on-norm-count 's/^  if ((\${#REPLACE_ARGS\[@\]} == 0)); then$/  if [[ "$NORM_COUNT" -gt 0 ]]; then/')"
+Q2="$(mk_mutant no-start-floor 's/^    ((remaining >= APPLY_MIN_START)) ||/    ((remaining > 0)) ||/')"
+F6="$(mk_mutant bound-full-deadline 's/^    bound=(timeout --foreground -s INT "\$remaining")$/    bound=(timeout --foreground -s INT "$APPLY_DEADLINE")/')"
+R21M="$(mk_mutant no-int-text '/^    if ((rc == 124 && \${#bound\[@\]} > 0)); then msg+=/d')"
+HW="$(mk_mutant halt-no-wrong-value 's/^    \*differs=\*) printf .*$/    *differs=*) : ;;/')"
+HN="$(mk_mutant halt-no-unread 's/^    \*unreadable=\*) printf .*$/    *unreadable=*) : ;;/')"
+HF="$(mk_mutant halt-no-failing '/^  \[\[ "\$2" != failing=\* \]\] || printf /d')"
+HA="$(mk_mutant halt-af-no-reread 's/\$(halt_pointer "\$rr" "\$vf")/$(halt_pointer "" "$vf")/')"
+HR="$(mk_mutant halt-rr-no-reread 's/\$(halt_pointer "\$REREAD" "\$vf")/$(halt_pointer "" "$vf")/')"
+R17M="$(mk_mutant mixed-drops-unread 's/REREAD="differs=\${differ#,}\${unread:+;unreadable=\${unread#,}}"/REREAD="differs=${differ#,}"/')"
+R16M="$(mk_mutant count-failure-ignored 's/^  if ((gc > 1)) || \[\[ ! "\$NORM_COUNT" =~ \^\[0-9\]+\$ \]\]; then$/  if false; then/')"
+R18M="$(mk_mutant reread-pins-unguarded '/^    || { REREAD="unreadable=all-pinned-records"; return 1; }$/d' 's/^  pins="\$(cf_account_migrate_record_pins "\$MIGRATE_PHASE")" && \[\[ -n "\$pins" \]\] \\$/  pins="$(cf_account_migrate_record_pins "$MIGRATE_PHASE")"/')"
+R8D="$(mk_mutant pause-not-doubled '/^      pause=\$((pause \* 2))$/d')"
+R8C="$(mk_mutant pause-not-cut 's/^      sleep "\$((pause < left ? pause : left))"$/      sleep "$pause"/')"
+Q7A="$(mk_mutant plan-no-tf-line 's/"\${REPLACE_ARGS\[@\]}"} 2>&1 | tf_redact_random_ids | tf_line$/"${REPLACE_ARGS[@]}"} 2>\&1 | tf_redact_random_ids/')"
+Q7B="$(mk_mutant apply-no-tf-line 's#"\$W/tfplan" 2>&1 | tf_redact_random_ids | tf_line$#"$W/tfplan" 2>\&1 | tf_redact_random_ids#')"
+Q7C="$(mk_mutant plan-window-open '0,/^  printf .\\n::%s::\\n. "\$tok"$/{/^  printf .\\n::%s::\\n. "\$tok"$/d}')"
+Q7D="$(mk_mutant apply-window-closed-early 's/^  tf_env \${bound\[@\]+"\${bound\[@\]}"} terraform apply /  printf "::%s::\\n" "$tok"\n&/')"
+Q7E="$(mk_mutant tf-line-keeps-cr "s/-e 's.\\\\r. .g' //")"
+Q7F="$(mk_mutant plan-token-unchecked 's/^  tok="\$(cmd_token)" || { printf .*$/  tok="$(cmd_token)"/')"
+Q7G="$(mk_mutant apply-token-unchecked 's/^  tok="\$(cmd_token)" || refuse setup .*$/  tok="$(cmd_token)"/')"
+F7A="$(mk_mutant read-no-noproxy "s/^  r=\"\$(curl --disable --noproxy '\*' -sS --max-time 5/  r=\"\$(curl --disable -sS --max-time 5/")"
+F7B="$(mk_mutant read-no-disable 's/^  r="\$(curl --disable /  r="$(curl /')"
+F7C="$(mk_mutant read-no-max-time 's/ -sS --max-time 5 -w / -sS -w /')"
+F7D="$(mk_mutant read-no-status "s/ --max-time 5 -w '.n%{http_code}' --config - / --max-time 5 --config - /")"
+F7S="$(mk_mutant read-short-deadline 's/LIVE_READ_DEADLINE=90/LIVE_READ_DEADLINE=8/')"
+F7T="$(mk_mutant read-no-outer-timeout 's/LIVE_READ_DEADLINE=90/LIVE_READ_DEADLINE=8/' 's/^    timeout -k 5 "\$((left - 5))" "\${TF_ENV\[@\]}" bash -c /    "${TF_ENV[@]}" bash -c /')"
+R12="$(mk_mutant reuse-read-dir 's/^  dir="\$(mktemp -d "\$W\/live\.XXXXXX")" || return 1$/  dir="$W\/live.fixed"; mkdir -p "$dir" || return 1/')"
+R13="$(mk_mutant no-token-guard '/^case "\$t" in ""|\*\[!A-Za-z0-9\._~+\/=-\]\*) exit 3 ;; esac$/d')"
+R14="$(mk_mutant retry-after-guard '/^    \[\[ "\$rc" -ne 3 \]\] || break$/d')"
+Q7H="$(mk_mutant apply-closer-no-newline '/terraform apply -no-color/,/^  printf .\\n::%s::\\n. "\$tok"$/s/^  printf .\\n::%s::\\n. "\$tok"$/  printf "::%s::\\n" "$tok"/')"
+Q2H="$(mk_mutant floor-350 's/APPLY_MIN_START=300/APPLY_MIN_START=350/')"
+Q2L="$(mk_mutant floor-200 's/APPLY_MIN_START=300/APPLY_MIN_START=200/')"
+TA="$(mk_mutant af-tail-always 's/^    if \[\[ -n "\$rr" && "\$rr" != reread=ok \]\]; then$/    if false; then/')"
+TB="$(mk_mutant af-tail-lost-on-ok 's/^    if \[\[ -n "\$rr" && "\$rr" != reread=ok \]\]; then$/    if [[ -n "$rr" ]]; then/')"
+TC="$(mk_mutant gate-differs-unclassed 's/^  ((d == 0)) || return 3$/  :/')"
+TD="$(mk_mutant gate-unread-unclassed 's/^  ((n == 0 || u != n)) || return 4$/  :/')"
+TE="$(mk_mutant gate-unread-any-line 's/^  ((n == 0 || u != n)) || return 4$/  ((u == 0)) || return 4/')"
+TF="$(mk_mutant gate-unread-first 's/^  ((d == 0)) || return 3$/  ((u == 0)) || return 4\n&/')"
+TG="$(mk_mutant gate-text-ignores-class 's/nothing was applied\.\$(gate_next "\$rc" "\$fg" "\$fk")/nothing was applied.${fg}/')"
+TH="$(mk_mutant rehearsal-text-ignores-class 's/nothing was written\$(gate_next "\$rc" "" ".")/nothing was written/')"
+}
+red "G1-13 the read moved before terraform plan" "$G13" chk_norm_rehearsal '^read-before-plan$' setup_norm_rehearsal
+red "G1-14 the read skipped on an all-no-op plan" "$G14" chk_noop_clean '^gets:0$' setup_noop_clean
+red "G1-21 the gate called with three arguments" "$G21" chk_noop_differs '^applied$' setup_noop_differs
+red "G2-1 no re-read after a clean apply" "$R1" chk_norm_differs '^rc:0$' setup_norm_differs
+red "G2-2 no re-read on apply-failed" "$R2" chk_norm_af_differs '^no-field$' setup_norm_af_differs
+red "G2-3 an unread record reads as clean" "$R3" chk_norm_unread '^rc:0$' setup_norm_unread
+red "G2-4 the re-read stops at the first differing record" "$R4" chk_norm_differs2 '^one-member$' setup_norm_differs2
+red "G2-5 a 404 treated as retryable" "$R5" chk_norm_404 '^(no-field|retried)$' setup_norm_404
+red "G2-6 the re-read run before the apply" "$R6" chk_norm_apply '^pre:52$' setup_norm_apply
+red "G2-7 the apply bound removed" "$R7" chk_norm_apply '^no-bound$' setup_norm_apply
+red "G2-8 the bound without --foreground" "$R8" chk_norm_apply '^no-bound$' setup_norm_apply
+red "G2-9 the partial-apply probe before the re-read" "$R9" chk_norm_af '^probe-before-reread$' setup_norm_af
+red "G2-10 the no-budget refusal removed" "$R10" chk_norm_nobudget '^(applied|applying-line|not-refused)$' setup_norm_nobudget
+red "G2-11 a zone-rest apply bounded" "$R11" chk_zrest_noread '^bounded$' setup_zone_rest_apply
+red "G2-12 the re-read reuses the pre-gate responses" "$R12" chk_norm_doppler '^rc:0$' setup_norm_doppler
+red "G2-13 the token-shape guard removed" "$R13" chk_norm_badtoken '^curl-called$' setup_norm_badtoken
+red "G2-14 retrying after the guard's exit 3" "$R14" chk_norm_badtoken '^attempts:5$' setup_norm_badtoken
+red "Q1m the bound keyed on NORM_COUNT again leaves a no-record apply unbounded" "$Q1" chk_noop_clean '^unbounded$' setup_noop_clean
+red "Q2m the 300 s start floor removed" "$Q2" chk_norm_nobudget '^(applied|applying-line|not-refused)$' setup_norm_s900
+red "F6m the bound is the full deadline, not what is left of it" "$F6" chk_norm_s700 '^bound:1100$' setup_norm_s700
+red "R21m the message no longer names the INT" "$R21M" chk_norm_124 '^no-int-text$' setup_norm_124
+red "R1a a difference loses the wrong-value pointer" "$HW" chk_h_rr_diff '^no-W$' setup_norm_differs
+red "R1b an unreadable re-read loses the No completed re-read pointer" "$HN" chk_h_rr_unread '^no-N$' setup_norm_unread
+red "R4a failing= loses the verify-failed sentence" "$HF" chk_h_rr_diff_f '^no-F$' setup_norm_differs_failing
+red "R1c apply-failed does not pass its re-read to the pointer" "$HA" chk_h_af_diff '^no-W$' setup_norm_af_differs
+red "R4b reread-failed does not pass its re-read to the pointer" "$HR" chk_h_rr_unread '^no-N$' setup_norm_unread
+red "R17m a mixed re-read drops the unreadable record" "$R17M" chk_h_rr_mixed '^no-field$' setup_norm_mixed
+red "R16m a failed count is not refused (the re-read is silently off)" "$R16M" chk_norm_grepfail '^(applied|rc:0)$' setup_norm_grepfail
+r=1; v="$(fn_reread "$R18M")"; [[ "$v" == "rc=1 reread=unreadable=" ]] && r=0
+verdict "$r" "R18m the unguarded pin lookup yields an empty unreadable= list: RED as required ($v)"
+r=1; v="$(fn_read "$R8D" 0)"; [[ "$v" == "5 5 5 5 attempts=5 elapsed="* ]] && r=0
+verdict "$r" "R8m the pause no longer doubles: RED as required ($v)"
+r=1; v="$(fn_read "$R8C" 20)"; e="${v##*elapsed=}"; [[ "$e" =~ ^[0-9]+$ && "$e" -gt 90 ]] && r=0
+verdict "$r" "R8n the pause is not cut to the deadline, and the read overruns 90 s: RED as required ($v)"
+red "Q7a the plan pipeline loses tf_line" "$Q7A" chk_tf_window '^cr$' setup_tf_hostile
+red "Q7b the apply pipeline loses tf_line" "$Q7B" chk_tf_window '^cr$' setup_tf_hostile
+red "Q7c the plan's window is never closed" "$Q7C" chk_tf_window '^window:(nested|unclosed)$' setup_tf_hostile
+red "Q7d the apply's window closes before terraform apply" "$Q7D" chk_tf_window '^window:outside$' setup_tf_hostile
+red "Q7e tf_line keeps the CR" "$Q7E" chk_tf_window '^cr$' setup_tf_hostile
+red "Q7f the plan runs with no token" "$Q7F" chk_tok_plan '^planned$' setup_tok_plan
+red "Q7g the apply runs with no token" "$Q7G" chk_tok_apply '^(applied|applying-line)$' setup_tok_apply
+r=1; [[ "$(gate_call_arity "$PRISTINE")" == 4 && "$(gate_call_arity "$G21")" == 3 ]] && r=0
+verdict "$r" "U8 the job's redirects-dns/tunnel gate call passes four arguments (static, comments stripped; the three-argument mutant reads 3)"
+red "F7a the record GET loses --noproxy" "$F7A" chk_norm_apply '^rc:1$' setup_norm_apply
+red "F7b the record GET loses --disable" "$F7B" chk_norm_apply '^rc:1$' setup_norm_apply
+red "F7c the record GET loses --max-time" "$F7C" chk_norm_apply '^rc:1$' setup_norm_apply
+red "F7d the record GET loses its status line" "$F7D" chk_norm_apply '^rc:1$' setup_norm_apply
+RED_BASE="$F7S" red "F7e the record read's doppler run starts under the outer timeout" "$F7T" chk_norm_stall '^no-outer-timeout$' setup_norm_stall
+red "Q7h the apply's closer loses its leading newline, so a cut line swallows it" "$Q7H" chk_tf_cut '^window:unclosed$' setup_tf_cut
+red "Q2h a 350 s floor refuses the 760 s row" "$Q2H" chk_norm_s760 '^rc:1$' setup_norm_s760
+red "Q2l a 200 s floor lets the 840 s row start" "$Q2L" chk_norm_nobudget '^(applied|applying-line|not-refused)$' setup_norm_s840
+red "T-a the fix-forward sentence printed on a differing re-read" "$TA" chk_t_diff '^has-fix-forward$' setup_norm_af_differs
+red "T-b the fix-forward sentence lost on reread=ok" "$TB" chk_t_ok '^no-tail$' setup_norm_af
+red "T-c a gate difference is not classed" "$TC" chk_gr_differs '^has-fix-forward$' setup_gr_differs
+red "T-d an unreadable-only gate refusal is not classed" "$TD" chk_gr_unread '^has-fix-forward$' setup_gr_unread
+red "T-e one unreadable line classes a refusal that has another REFUSE" "$TE" chk_gr_today '^msg$' setup_gr_other
+red "T-f unreadable outranks a difference" "$TF" chk_gr_differs '^msg$' setup_gr_mixed
+red "T-g the gate-refused text ignores the class" "$TG" chk_gr_differs '^has-fix-forward$' setup_gr_differs
+red "T-h the rehearsal-refused text ignores the class" "$TH" chk_rh_differs '^msg$' setup_rh_differs
 
 # --- Stub refusals ---------------------------------------------------------------
 # --- Tunnel phase (PR2) ---------------------------------------------------------------
@@ -1365,7 +1974,12 @@ tunnel_case() { # <label> <rehearsal>
   remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"
   tmark env.extra "GITHUB_WORKSPACE=$MT"$'\n'"DOPPLER_TOKEN_WRITE=stub-write"$'\n'
   deploy_token_fixture "$LAST_D"
+  # The app record import plans the provider's import-normalize update, like every record import.
+  jq '(.resource_changes[] | select(.address == "cloudflare_record.app") | .change) |= (.actions = ["update"]
+        | .before = (.after + {allow_overwrite: null, content: null}) | .after_unknown = {})' \
+    "$LAST_D/plan.json" >"$LAST_D/p" && mv "$LAST_D/p" "$LAST_D/plan.json"
 }
+APP_REC_ID=f21d6911cdacb1e109ae31bcfb440e7d
 no_leak() { # <dir>: no fixture secret and no write token reached the job's output or terraform
   ! grep -qF "$SENTINEL" "$1/out.txt" "$1/err.txt" && ! grep -q '^WRITE-TOKEN-LEAK' "$1/calls.log" && ! grep -qF stub-write "$1/out.txt" "$1/err.txt"
 }
@@ -1382,6 +1996,11 @@ r=1; ! grep -q 'terraform\[[a-z]*\] state rm' "$D_T/calls.log" && r=0
 verdict "$r" "tunnel rehearsal forgets nothing"
 r=1; grep -qx "cf-account-migrate deploy-token id=$DT verdict=ok" "$D_T/out.txt" && no_leak "$D_T" && r=0
 verdict "$r" "tunnel rehearsal reads the deploy token live and prints only its UUID and verdict"
+r=1; grep -qx 'cf-account-migrate live-read records=1' "$D_T/out.txt" \
+  && grep -qx 'cf-account-migrate import-normalize count=1' "$D_T/out.txt" \
+  && [[ "$(rec_gets "$D_T" pre "$APP_REC_ID")" == 1 && "$(rec_gets "$D_T" pre)" == 1 ]] \
+  && before "$D_T" '^terraform\[local\] plan' '^cf-record-get' && r=0
+verdict "$r" "tunnel rehearsal: the app record is read live after the plan and admitted as its one import-normalize update"
 r=1; ! grep -q 'tok-' "$D_T/curl-argv.log" && r=0
 verdict "$r" "the deploy-token read carries its bearer on stdin config, never argv"
 r=1; ! grep -q -- 'cf_migration_import_app' "$D_REH/plan_args.local" && r=0
@@ -1402,6 +2021,10 @@ r=1; grep -qx 'predelete --apply bearer=live' "$D_TA/calls.log" \
 verdict "$r" "tunnel apply: the pre-delete runs with the provider token, before the plan, and the apply after it"
 r=1; ! grep -q 'terraform\[remote\] state rm' "$D_TA/calls.log" && r=0
 verdict "$r" "tunnel apply: no state forget"
+r=1; [[ "$(rec_gets "$D_TA" pre "$APP_REC_ID")" == 1 && "$(rec_gets "$D_TA" post "$APP_REC_ID")" == 1 ]] \
+  && grep -qx 'cf-account-migrate import-normalize reread=ok records=1' "$D_TA/out.txt" \
+  && before "$D_TA" '^terraform\[remote\] apply' 'when=post$' && r=0
+verdict "$r" "tunnel apply: the app record is re-read after the apply and matches the graded plan"
 r=1; [[ "$(cat "$D_TA/dstore.CI_SSH_ACCESS_TOKEN_ID")" == "$SENTINEL-ci_ssh_access_service_token_client_id" \
   && "$(cat "$D_TA/dstore.CI_SSH_ACCESS_TOKEN_SECRET")" == "$SENTINEL-ci_ssh_access_service_token_client_secret" ]] && r=0
 verdict "$r" "tunnel apply: both CI-SSH keys hold the new outputs, byte-exact"
@@ -1410,6 +2033,13 @@ r=1; [[ "$(line_no "$D_TA" 'terraform\[remote\] apply')" -lt "$(line_no "$D_TA" 
 verdict "$r" "tunnel apply: the sync runs after the apply and verifies both keys"
 no_leak "$D_TA"; verdict "$?" "tunnel apply: no secret value or write token in the output, and terraform never inherits the write token"
 
+tunnel_case app-differs false; tmark "recfilter.post.$APP_REC_ID" '.result.ttl = 300'; run_job "$LAST_D" "$PRISTINE"
+r=1; refused_for "$LAST_D" import-normalize-reread-failed \
+  && grep -qE "reason=import-normalize-reread-failed .*applied=true.* reread=differs=cloudflare_record\.app:ttl" "$LAST_D/out.txt" && r=0
+verdict "$r" "tunnel apply: an app record that differs after the apply -> import-normalize-reread-failed applied=true"
+tunnel_case app-pre-differs false; tmark "recfilter.pre.$APP_REC_ID" '.result.ttl = 300'; run_job "$LAST_D" "$PRISTINE"
+r=1; refused_for "$LAST_D" gate-refused && grep -q 'REFUSE cloudflare_record.app differs from the live record' "$LAST_D/out.txt" && no_apply "$LAST_D" && r=0
+verdict "$r" "tunnel apply: an app record that differs before the apply -> gate-refused, nothing applied"
 tunnel_case predelete-refused false; tmark mode.predelete; run_job "$LAST_D" "$PRISTINE"
 r=1; refused_for "$LAST_D" predelete-refused && ! grep -q 'terraform\[remote\] plan' "$LAST_D/calls.log" && no_apply "$LAST_D" && r=0
 verdict "$r" "a refused pre-delete -> reason=predelete-refused, no plan and no apply"
@@ -1498,7 +2128,7 @@ t_mut() { # <label> <sed-expr> <setup-fn>: the mutant must reach an apply the pr
 }
 set_dt_404() { tunnel_case mut-dt false; deploy_token_fixture "$LAST_D" 404; }
 set_pd_refused() { tunnel_case mut-pd false; tmark mode.predelete; }
-t_mut "M-deploy-token" 's/^    deploy_token_check || return 3$/    :/' set_dt_404
+t_mut "M-deploy-token" 's/^    deploy_token_check || return 5$/    :/' set_dt_404
 t_mut "M-predelete" 's/^  \[\[ "\$rc" -eq 0 \]\] || refuse predelete-refused .*$/  :/' set_pd_refused
 
 # Every PATH fake refuses an unmodeled argv into refused.log. A pristine run must never trip one:
@@ -1514,7 +2144,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=210
+EXPECTED_CASES=327
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

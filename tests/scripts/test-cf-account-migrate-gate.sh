@@ -101,7 +101,7 @@ entry_import() { # <address> <id>
   local a="$1" t="${1%%.*}" after
   case "$t" in
     cloudflare_pages_project|cloudflare_pages_domain) after="{\"account_id\":\"$NA\"}" ;;
-    *) after="{\"zone_id\":\"$NZ\"}" ;;
+    *) after="{\"zone_id\":\"$NZ\",\"id\":\"${2##*/}\"}" ;;   # a pinned no-op carries its record id (ruling U5)
   esac
   jq -nc --arg a "$a" --arg t "$t" --arg id "$2" --argjson after "$after" '{address:$a,mode:"managed",type:$t,change:{actions:["no-op"],importing:{id:$id},before:$after,after:$after}}'
 }
@@ -551,7 +551,7 @@ tun_plan() { # <out>
      resource_changes: [$spec | to_entries[] | .key as $a | .value as $c | ($a | split(".")[0]) as $t
        | {address: $a, mode: "managed", type: $t, change: (
            if $c == "create" then created($a; $t)
-           elif $c == "import" then {actions: ["no-op"], importing: {id: $app}, before: ids($t), after: ids($t)}
+           elif $c == "import" then {actions: ["no-op"], importing: {id: $app}, before: (ids($t) + {id: ($app | split("/") | last)}), after: (ids($t) + {id: ($app | split("/") | last)})}
            elif $c == "mutable" then {actions: ["update"], before: reg($a), after: reg($a), after_unknown: {value: true}}
            else {actions: ["delete", "create"], before: {id: $r}, after: {byte_length: 32}} end)}
          + (if $c == "replace" then {action_reason: "replace_by_request"} else {} end)]}' >"$1"
@@ -579,6 +579,8 @@ jq -c '.resource_changes += [{address:"cloudflare_record.app",mode:"managed",typ
 check "redirects-dns: importing the app record is refused even with the committed id" 1 "cloudflare_record.app is outside the redirects-dns allow-set" redirects-dns "$TMP/app-rd.json"
 tun_mut '(.resource_changes[] | select(.address=="cloudflare_record.app") | .change) = {actions:["create"],before:null,after:{zone_id:"'"$NZ"'"}}'
 check "tunnel: the app record planned as a create (import switched off) is refused" 1 "cloudflare_record.app (class import) planned with actions" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
+tun_mut '(.resource_changes[] | select(.address=="cloudflare_record.ssh") | .change) |= (.actions = ["update"] | .before = .after)'
+check "tunnel: a created CNAME planned as an update is refused (only a plain create is exempt)" 1 "cloudflare_record.ssh is a cloudflare_record change outside import-normalize" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
 tun_mut '(.resource_changes[] | select(.address=="cloudflare_record.app") | .change.actions) = ["update"]'
 check "tunnel: an app import that writes is refused" 1 "not a pure no-op import" tunnel "$TMP/tm.json" "$TMP/tun-state.json"
 tun_mut '(.resource_changes[] | select(.address=="doppler_secret.registry_push_access_token_secret") | .change.actions) = ["delete","create"]'
@@ -848,8 +850,10 @@ cp "$GATE" "$PREAMBLE" "$SEAM/tests/scripts/lib/"
 cp "$IMPORTS" "$SEAM/apps/web-platform/infra/cf-account-migration-imports.tf"
 first_id="$(head -1 "$imports_tsv" | cut -f2)"
 sed "s|\"${first_id}\"|\"${NZ}/ffffffffffffffffffffffffffffffff\"|" "$IMPORTS" > "$SEAM/forged/imports.tf"
+# Row 10 with the record's own id moved to the forged one too, so a honoured forgery satisfies the pin.
+mutate_plan "$TMP/r10.json" "$TMP/r10-seam.json" '(.resource_changes[] | select(.address=="'"$first_import"'") | .change) |= (.before.id = "ffffffffffffffffffffffffffffffff" | .after.id = "ffffffffffffffffffffffffffffffff")'
 seam_run() { # <gate-copy>: grade row 10 with CFAM_IMPORTS_FILE pointing at the forged file
-  CFAM_IMPORTS_FILE="$SEAM/forged/imports.tf" bash -c "source '$PREAMBLE'; source '$1'; cf_account_migrate_gate redirects-dns '$TMP/r10.json'" 2>&1
+  CFAM_IMPORTS_FILE="$SEAM/forged/imports.tf" bash -c "source '$PREAMBLE'; source '$1'; cf_account_migrate_gate redirects-dns '$TMP/r10-seam.json'" 2>&1
 }
 seam_out="$(seam_run "$SEAM/tests/scripts/lib/cf-account-migrate-gate.sh")"; seam_rc=$?
 if cmp -s "$SEAM/forged/imports.tf" "$IMPORTS"; then fail "imports seam: the forged file equals the committed one (fixture did not land)" 1 ""
@@ -862,9 +866,15 @@ seam_mut_out="$(seam_run "$SEAM/tests/scripts/lib/seam-mut.sh")"; seam_mut_rc=$?
 if cmp -s "$SEAM/tests/scripts/lib/seam-mut.sh" "$GATE"; then fail "M-imports-seam: the mutation did not land" 1 ""
 elif [[ "$seam_mut_rc" -eq 0 ]]; then pass "M-imports-seam: without the guard the forged literal passes row 10 (the guard is load-bearing)"
 else fail "M-imports-seam: removing the guard did not admit the forged literal" "$seam_mut_rc" "$seam_mut_out"; fi
+# A non-record import has no other guard. On a record the outside-import-normalize check also refuses.
+mutate_plan "$VALID" "$TMP/r9p.json" '(.resource_changes[] | select(.address=="cloudflare_pages_project.docs") | .change.actions) = ["update"]'
 # shellcheck disable=SC2016 # sed anchors match literal gate text
-gate_mutate_and_check "M-pure: neutering the pure-import check admits row 9" \
-  "$(neuter '^  v="\$(jq -r .\.resource_changes\[\] | select(\.change\.importing != null)')" cf_account_migrate_gate redirects-dns "$TMP/r9.json"
+gate_mutate_and_check "M-pure: neutering the pure-import check admits a Pages import planned as an update" \
+  "$(neuter '^  v="\$(jq -r .\.resource_changes\[\] | select(\.change\.importing != null)')" cf_account_migrate_gate redirects-dns "$TMP/r9p.json"
+# shellcheck disable=SC2016 # sed anchors match literal gate text
+gate_mutate_layered "M-pure-record: the pure-import check owns row 9; neutered it hands off to the record-change check" \
+  "$(neuter '^  v="\$(jq -r .\.resource_changes\[\] | select(\.change\.importing != null)')" \
+  "not a pure no-op import" "is a cloudflare_record change outside import-normalize" cf_account_migrate_gate redirects-dns "$TMP/r9.json"
 # shellcheck disable=SC2016 # sed anchors match literal gate text
 gate_mutate_and_check "M-literal: neutering the literal check admits row 10" \
   "$(neuter '--argjson lit "\$literals"')" cf_account_migrate_gate redirects-dns "$TMP/r10.json"
@@ -955,7 +965,7 @@ sources_lib() {
 # The library's function names: every definition `name()` / `name ()` / `name(){` / `function name`,
 # at column 0 (the library defines all its functions there). The count is exact (review).
 LIB_FNS="$(sed -nE 's/^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\(\)[[:space:]]*(\{.*)?$/\1/p; s/^function[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\1/p' "$GATE" | sort -u)"
-LIB_FN_COUNT=17
+LIB_FN_COUNT=21
 # A definition may follow a command separator or a group opener on the same line (`:; f() {`,
 # `true && f() {`, `{ f() {`, `then f() {`), not only the start of the line.
 FN_PFX='(^|[;&|{(!]|(^|[[:space:]])(then|do|else|elif|time)[[:space:]])[[:space:]]*'
@@ -1093,8 +1103,551 @@ r2_mut "M-r2-imds: AWS_EC2_METADATA_DISABLED dropped" 's| AWS_EC2_METADATA_DISAB
 r2_mut "M-r2-region: AWS_DEFAULT_REGION dropped" 's|^  timeout 60 env AWS_DEFAULT_REGION=auto |  timeout 60 env |' env-prefix
 r2_mut "M-r2-bound: the 60 s bound dropped" 's|^  timeout 60 env |  env |' unbounded
 
+# ── import-normalize (CTO ruling 2026-11-22): the one admitted update shape ──────────────────
+# The fixture carries the key set measured with Terraform 1.10.5 and provider 4.52.7. Each record's
+# name, type, ttl, proxied and priority come from its dns.tf block; `content` stays synthesized.
+# A hand-written {zone_id} stub would not exercise the comparator.
+NORM="$TMP/norm.json"; NLIVE="$TMP/norm-live.json"
+NR="cloudflare_record.dkim_resend"; NR2="cloudflare_record.spf_send"; MXR="cloudflare_record.mx_send"
+DNS_TF="$HERE/../../apps/web-platform/infra/dns.tf"
+# record_shapes: JSON {label: {name, type, ttl, proxied, priority}}, one per cloudflare_record block.
+record_shapes() {
+  awk '
+    /^resource "cloudflare_record" "/ { split($0, p, "\""); r = p[4]; n = ""; t = ""; ttl = ""; px = "false"; pr = "null"; next }
+    r != "" && /^}/ { printf "%s\t%s\t%s\t%s\t%s\t%s\n", r, n, t, ttl, px, pr; r = ""; next }
+    r != "" && $2 == "=" {
+      v = $3; gsub(/"/, "", v)
+      if ($1 == "name") n = v; else if ($1 == "type") t = v; else if ($1 == "ttl") ttl = v
+      else if ($1 == "proxied") px = v; else if ($1 == "priority") pr = v }
+  ' "$DNS_TF" | jq -Rn '[inputs | split("\t")
+    | {(.[0]): {name:.[1], type:.[2], ttl:(.[3] | tonumber), proxied:(.[4] == "true"), priority:(.[5] | fromjson)}}] | add'
+}
+jq -c --arg nz "$NZ" --argjson shapes "$(record_shapes)" '.resource_changes |= map(if .type == "cloudflare_record" then
+    (.change.importing.id | split("/")[1]) as $id | (.address | split(".")[1]) as $l | $shapes[$l] as $s
+    | {id:$id, zone_id:$nz, name:$s.name,
+       hostname:(if $s.name == "soleur.ai" then $s.name else $s.name + ".soleur.ai" end),
+       type:$s.type, content:null, value:null, ttl:$s.ttl,
+       proxied:$s.proxied, proxiable:false, priority:$s.priority, comment:"", tags:[], data:[], metadata:{},
+       created_on:"2026-11-19T00:00:00Z", modified_on:"2026-11-19T00:00:00Z", timeouts:null, allow_overwrite:null} as $b
+    | .change = {actions:["update"], importing:.change.importing, before:$b,
+                 after:($b + {allow_overwrite:false, content:("synthetic-" + $l)}), after_unknown:{}}
+  else . end)' "$VALID" > "$NORM"
+# The literals are this suite's own count of dns.tf, so a fixture that lost a shape cannot pass quietly.
+shape_counts="$(jq -r '[.resource_changes[] | select(.type == "cloudflare_record") | .change.after] as $r
+  | [($r | map(select(.name | type == "string" and length > 0)) | length),
+     ($r | map(select(.name == "soleur.ai")) | length),
+     ($r | map(select(.type == "MX" and (.priority | type) == "number")) | length),
+     ($r | map(select(.priority == 20)) | length),
+     ($r | map(select(.type == "NS")) | length),
+     ($r | map(select(.type == "CNAME" and .proxied == true)) | length),
+     ($r | map(select(.name != "soleur.ai" and (.name | contains(".")))) | length),
+     ($r | map(select(.ttl == 60)) | length)] | join(" ")' "$NORM")"
+if [[ "$shape_counts" == "26 6 6 1 2 2 11 2" ]]; then pass "F5: the fixture holds the dns.tf shapes (26 named, 6 apex, 6 MX with priority, one at 20, 2 NS, 2 proxied CNAME, 11 dotted, 2 at ttl 60)"
+else fail "F5: the fixture lost a real record shape" 1 "$shape_counts"; fi
+live_of() { # <plan> <out>: a live read that equals each record's planned `after`
+  jq -c '[.resource_changes[] | select(.type == "cloudflare_record") | .change.after as $x
+    | {(.address): {status:"ok", result:{id:$x.id, zone_id:$x.zone_id, type:$x.type, name:$x.hostname, content:$x.content,
+        ttl:$x.ttl, proxied:$x.proxied, priority:$x.priority, comment:null, tags:$x.tags, settings:{}}}}] | add' "$1" > "$2"
+}
+live_of "$NORM" "$NLIVE"
+n_nr="$(jq '[.resource_changes[] | select(.type == "cloudflare_record")] | length' "$NORM")"
+if [[ "$n_nr" -eq 26 ]]; then pass "import-normalize fixture holds 26 records"; else fail "import-normalize fixture record count" "$n_nr" "want 26"; fi
+# Retry state: every record in state on its pinned id.
+jq -c '{values:{root_module:{resources:[.resource_changes[] | select(.type == "cloudflare_record")
+  | {address, mode:"managed", type, values:{id:.change.before.id}}]}}}' "$NORM" > "$TMP/norm-state.json"
+nf() { printf '(.resource_changes[] | select(.address=="%s") | .change)' "$1"; }
+
+norm_admits() { # <gate-file>: empty when the canonical plan passes with 26 import-normalize lines and no in-state-update
+  local o rc
+  o="$(bash -c 'source "$1"; source "$2"; cf_account_migrate_gate redirects-dns "$3" "" "$4"' _ "$PREAMBLE" "$1" "$NORM" "$NLIVE" 2>&1)"; rc=$?
+  [[ "$rc" -eq 0 ]] || { echo "rc=$rc"; return; }
+  [[ "$(grep -c '^cf_account_migrate_gate: import-normalize cloudflare_record\.' <<<"$o")" -eq 26 ]] || { echo "lines"; return; }
+  ! grep -qF 'in-state-update' <<<"$o" || { echo "in-state-update"; return; }
+  grep -qxF 'cf_account_migrate_gate: phase=redirects-dns verdict=PASS creates=8 imports=29 destroys=0' <<<"$o" || echo "verdict"
+}
+na="$(norm_admits "$GATE")"
+if [[ -z "$na" ]]; then pass "N1: 26 measured-shape updates with a matching live read pass, 26 import-normalize lines, no in-state-update"
+else fail "N1: the canonical import-normalize plan did not pass" 1 "$na"; fi
+# The same shape as a retry (importing null) is bound to the pre-plan state id.
+jq -c '.resource_changes |= map(if .type == "cloudflare_record" then .change.importing = null else . end)' "$NORM" > "$TMP/n-retry.json"
+check "N2: the retry shape (importing null) passes when before.id and the state id equal the pin" 0 "verdict=PASS creates=8 imports=3 destroys=0" redirects-dns "$TMP/n-retry.json" "$TMP/norm-state.json" "$NLIVE"
+# H2: a retry plan mixing written records (no-op) with unwritten ones (update).
+jq -c --arg r "$NR" '.resource_changes |= map(if .address == $r then .change.actions = ["no-op"] | .change.before = .change.after else . end)' "$TMP/n-retry.json" > "$TMP/n-mixed.json"
+check "N3: a retry mixing no-op and update records passes" 0 "verdict=PASS" redirects-dns "$TMP/n-mixed.json" "$TMP/norm-state.json" "$NLIVE"
+for cv in 'del(.comment)' '.comment = null' '.comment = ""'; do
+  jq -c --arg r "$NR" "(.[\$r].result) |= ($cv)" "$NLIVE" > "$TMP/n-c.json"
+  check "N4: an empty live comment read as [$cv] passes" 0 "verdict=PASS" redirects-dns "$NORM" "" "$TMP/n-c.json"
+done
+
+# Off-shape: the live read follows the plan, so only the shape can refuse.
+nrow() { # <label> <needle> <plan-filter> [<state>]
+  jq -c "$3" "$NORM" > "$TMP/nr.json"; live_of "$TMP/nr.json" "$TMP/nr-live.json"
+  check "$1" 1 "$2" redirects-dns "$TMP/nr.json" "${4:-}" "$TMP/nr-live.json"
+}
+PURE="not a pure no-op import"
+for k in 'ttl = 300' 'proxied = true' 'name = "other"'; do
+  nrow "S1: an extra changed key ($k) is refused" "$NR is $PURE" "$(nf "$NR").after.$k"
+done
+nrow "S2: allow_overwrite to true is refused" "$NR is $PURE" "$(nf "$NR").after.allow_overwrite = true"
+nrow "S3: a non-null before.allow_overwrite is refused" "$NR is $PURE" "$(nf "$NR").before.allow_overwrite = false"
+nrow "S4: a non-null before.content (real drift) is refused" "$NR is $PURE" "$(nf "$NR").before.content = \"old\""
+for v in null '""' 7; do
+  nrow "S5: after.content of $v is refused" "$NR is $PURE" "$(nf "$NR").after.content = $v"
+done
+nrow "S6: after_unknown true at top level is refused" "$NR is $PURE" "$(nf "$NR").after_unknown = {content:true}"
+nrow "S7: after_unknown true nested is refused" "$NR is $PURE" "$(nf "$NR").after_unknown = {data:{x:true}}"
+nrow "S8: a non-record import planned update (Pages) is refused" "cloudflare_pages_project.docs is $PURE" "$(nf cloudflare_pages_project.docs).actions = [\"update\"]"
+nrow "S9: a record planned as a replace is refused" "$NR" "$(nf "$NR").actions = [\"delete\",\"create\"]"
+nrow "S10: a wrong import literal is refused" "differs from the committed literal" "$(nf "$NR").importing.id = \"$NZ/ffffffffffffffffffffffffffffffff\""
+nrow "S11: an import whose before.id is off the pin is refused" "$NR is $PURE" "$(nf "$NR").before.id = \"ffffffffffffffffffffffffffffffff\" | $(nf "$NR").after.id = \"ffffffffffffffffffffffffffffffff\""
+RET='.resource_changes |= map(if .type == "cloudflare_record" then .change.importing = null else . end)'
+CLS="$NR (class import) planned with actions"
+nrow "S12: a retry whose before.id is off the pin is refused" "$CLS" "$RET | $(nf "$NR").before.id = \"ffffffffffffffffffffffffffffffff\" | $(nf "$NR").after.id = \"ffffffffffffffffffffffffffffffff\"" "$TMP/norm-state.json"
+jq -c --arg r "$NR" '.values.root_module.resources |= map(select(.address != $r))' "$TMP/norm-state.json" > "$TMP/n-state-less.json"
+nrow "S13: a retry absent from the pre-plan state is refused" "$CLS" "$RET" "$TMP/n-state-less.json"
+nrow "S14: a retry with no state file is refused" "$CLS" "$RET"
+# Row 9's stub fixture stays off-shape whatever the live read says.
+live_of "$TMP/r9.json" "$TMP/r9-live.json"
+check "S15: row 9's stub update is refused even beside a matching live read" 1 "$PURE" redirects-dns "$TMP/r9.json" "" "$TMP/r9-live.json"
+
+# Pins come from the committed literals, and the zone segment must be the new zone.
+pins_out="$(cf_account_migrate_record_pins redirects-dns)"; pins_rc=$?
+if [[ "$pins_rc" -eq 0 && "$(grep -cE '^cloudflare_record\.[a-z0-9_]+'$'\t''[0-9a-f]{32}$' <<<"$pins_out")" -eq 26 && "$(grep -c . <<<"$pins_out")" -eq 26 ]]; then
+  pass "P1: the pin list is 26 address/record-id lines"
+else fail "P1: the pin list is wrong" "$pins_rc" "$pins_out"; fi
+if [[ -z "$(cf_account_migrate_record_pins zone-rest)" ]]; then pass "P2: zone-rest has no record pins"; else fail "P2: zone-rest has record pins" 1 ""; fi
+pins_t="$(cf_account_migrate_record_pins tunnel)"; pins_t_rc=$?
+if [[ "$pins_t_rc" -eq 0 && "$pins_t" == "cloudflare_record.app"$'\t'"f21d6911cdacb1e109ae31bcfb440e7d" ]]; then
+  pass "P3: the tunnel pin list is the app record's import block alone"
+else fail "P3: the tunnel pin list is wrong" "$pins_t_rc" "$pins_t"; fi
+# Three levels deep, so the library's ../../.. lookup stays inside $TMP wherever TMPDIR is and the
+# forged override below is always honoured.
+pin_lib="$TMP/pin-lib/x/y/z"; mkdir -p "$pin_lib"; cp "$GATE" "$PREAMBLE" "$pin_lib/"
+first_rid="$(jq -r --arg r "$NR" '.resource_changes[] | select(.address == $r) | .change.before.id' "$NORM")"
+second_rid="$(jq -r --arg r "$NR2" '.resource_changes[] | select(.address == $r) | .change.before.id' "$NORM")"
+pins_with() { # <imports-file> [<library-copy>]
+  CFAM_IMPORTS_FILE="$1" bash -c 'source "$1"; source "$2"; cf_account_migrate_record_pins redirects-dns' _ "$pin_lib/plan-gate-preamble.sh" "${2:-$pin_lib/cf-account-migrate-gate.sh}" 2>&1
+}
+sed "s|\"$NZ/$first_rid\"|\"$OZ/$first_rid\"|" "$IMPORTS" > "$TMP/forged-zone.tf"
+pz="$(pins_with "$TMP/forged-zone.tf")"; pz_rc=$?
+if cmp -s "$TMP/forged-zone.tf" "$IMPORTS"; then fail "P3: the forged zone did not land" 1 ""
+elif [[ "$pz_rc" -ne 0 && "$pz" != *"ignoring CFAM_IMPORTS_FILE"* ]]; then pass "P3: a literal whose zone segment is not the new zone fails the pin list"
+else fail "P3: a foreign-zone literal produced pins, or the override was ignored" "$pz_rc" "$pz"; fi
+sed "/\"$NZ\/$first_rid\"/d" "$IMPORTS" > "$TMP/forged-short.tf"
+ps="$(pins_with "$TMP/forged-short.tf")"; ps_rc=$?
+if cmp -s "$TMP/forged-short.tf" "$IMPORTS"; then fail "P4: the short list did not land" 1 ""
+elif [[ "$ps_rc" -ne 0 && "$ps" != *"ignoring CFAM_IMPORTS_FILE"* ]]; then pass "P4: a pin list shorter than the spec's record count fails"
+else fail "P4: a short pin list was accepted, or the override was ignored" "$ps_rc" "$ps"; fi
+# U4: one record id pinned to two addresses. F11: a pin that is not 32 hex characters.
+sed "s|\"$NZ/$second_rid\"|\"$NZ/$first_rid\"|" "$IMPORTS" > "$TMP/forged-dup.tf"
+pd="$(pins_with "$TMP/forged-dup.tf")"; pd_rc=$?
+if cmp -s "$TMP/forged-dup.tf" "$IMPORTS"; then fail "P5: the duplicate pin did not land" 1 ""
+elif [[ "$pd_rc" -ne 0 && "$pd" != *"ignoring CFAM_IMPORTS_FILE"* ]]; then pass "P5 (U4): one record id pinned to two addresses fails the pin list"
+else fail "P5 (U4): a duplicate pin was accepted" "$pd_rc" "$pd"; fi
+# shellcheck disable=SC2016 # sed expression matches literal gate text
+sed '/or (\$pins | map(split("\\t")\[1\]) | unique | length) != (\$pins | length)$/d' "$GATE" > "$pin_lib/m-unique.sh"
+pdm="$(pins_with "$TMP/forged-dup.tf" "$pin_lib/m-unique.sh")"; pdm_rc=$?
+if cmp -s "$pin_lib/m-unique.sh" "$GATE"; then fail "M-U4: the mutation did not land" 1 ""
+elif [[ "$pdm_rc" -eq 0 && "$(grep -c . <<<"$pdm")" -eq 26 ]]; then pass "M-U4: without the uniqueness clause the duplicate pin yields 26 pins (RED for P5)"
+else fail "M-U4: removing the uniqueness clause did not admit the duplicate" "$pdm_rc" "$pdm"; fi
+sed "s|\"$NZ/$first_rid\"|\"$NZ/${first_rid:0:31}g\"|" "$IMPORTS" > "$TMP/forged-hex.tf"
+ph="$(pins_with "$TMP/forged-hex.tf")"; ph_rc=$?
+if cmp -s "$TMP/forged-hex.tf" "$IMPORTS"; then fail "P6: the non-hex pin did not land" 1 ""
+elif [[ "$ph_rc" -ne 0 && "$ph" != *"ignoring CFAM_IMPORTS_FILE"* ]]; then pass "P6: a pin literal that is not 32 hex characters fails the pin list"
+else fail "P6: a non-hex pin was accepted" "$ph_rc" "$ph"; fi
+sed 's/test("^\[0-9a-f\]{32}\$")/test("^[0-9a-z]{32}$")/' "$GATE" > "$pin_lib/m-hex.sh"
+phm="$(pins_with "$TMP/forged-hex.tf" "$pin_lib/m-hex.sh")"; phm_rc=$?
+if cmp -s "$pin_lib/m-hex.sh" "$GATE"; then fail "M-pin-hex: the mutation did not land" 1 ""
+elif [[ "$phm_rc" -eq 0 ]]; then pass "M-pin-hex: a looser pin pattern admits the non-hex literal (RED for P6)"
+else fail "M-pin-hex: the looser pattern did not admit the literal" "$phm_rc" "$phm"; fi
+
+# Live refusals: the plan is canonical, so only the live read can refuse.
+lrow() { # <label> <tokens> <live-filter on the first record's entry>
+  jq -c --arg r "$NR" "(.[\$r]) |= ($3)" "$NLIVE" > "$TMP/lr.json"
+  check "$1" 1 "REFUSE $NR differs from the live record ($2)" redirects-dns "$NORM" "" "$TMP/lr.json"
+}
+lrow "L1: live type differs"     "type"     '.result.type = "CNAME"'
+lrow "L2: live name differs"     "name"     '.result.name = "other.soleur.ai"'
+lrow "L3: live content differs"  "content"  '.result.content = "other"'
+lrow "L4: live ttl differs"      "ttl"      '.result.ttl = 300'
+lrow "L5: live proxied differs"  "proxied"  '.result.proxied = true'
+lrow "L6: live priority differs" "priority" '.result.priority = 10'
+lrow "L7: a non-empty live comment differs" "comment" '.result.comment = "note"'
+lrow "L8: a false live comment differs" "comment" '.result.comment = false'
+lrow "L9: live tags differ" "tags" '.result.tags = ["t"]'
+lrow "L10: omitted live tags differ and name the field" "tags,tags:absent" 'del(.result.tags)'
+lrow "L11: live settings flatten_cname=false differ" "settings,settings:only-flatten-false" '.result.settings = {flatten_cname:false}'
+lrow "L12: other live settings differ" "settings,settings:other" '.result.settings = {ipv4_only:true}'
+lrow "L13: a false live settings differs" "settings,settings:other" '.result.settings = false'
+lrow "L14: a live content ending in a dot differs" "content" '.result.content += "."'
+lrow "L15: a quoted live content differs and says so" "content,content:quoted-equal" '.result.content = ("\"" + .result.content + "\"")'
+lrow "L16: a 404 reads notfound" "notfound" '{status:"notfound"}'
+UNREAD="REFUSE $NR live record unreadable"
+urow() { # <label> <live-filter on the first record's entry>
+  jq -c --arg r "$NR" "(.[\$r]) |= ($2)" "$NLIVE" > "$TMP/lr.json"
+  check "$1" 1 "$UNREAD" redirects-dns "$NORM" "" "$TMP/lr.json"
+}
+urow "L17: a failed read reads unreadable" '{status:"unreadable"}'
+urow "L18: an entry with no status is unreadable" 'del(.status)'
+urow "L19: an entry with an unknown status is unreadable" '.status = "stale"'
+urow "L20: an ok entry with a non-object result is unreadable" '.result = "x"'
+jq -c --arg r "$NR" 'del(.[$r])' "$NLIVE" > "$TMP/l-missing.json"
+check "L21: a record missing from the live read refuses" 1 "$UNREAD" redirects-dns "$NORM" "" "$TMP/l-missing.json"
+check "L22: no live read admits nothing" 1 "$NR is $PURE" redirects-dns "$NORM"
+# A trailing dot on BOTH sides is still refused (suppressContent hides that change from refresh).
+jq -c "$(nf "$NR").after.content = \"dotted.\"" "$NORM" > "$TMP/l-dot.json"; live_of "$TMP/l-dot.json" "$TMP/l-dot-live.json"
+check "L23: a trailing dot on both plan and live is refused" 1 "REFUSE $NR differs from the live record (content)" redirects-dns "$TMP/l-dot.json" "" "$TMP/l-dot-live.json"
+# after.hostname comes from the same API read, so it must also follow from after.name.
+jq -c "$(nf "$NR").before.hostname = \"x.soleur.ai\" | $(nf "$NR").after.hostname = \"x.soleur.ai\"" "$NORM" > "$TMP/l-host.json"; live_of "$TMP/l-host.json" "$TMP/l-host-live.json"
+check "L24: after.hostname not derived from after.name is refused" 1 "REFUSE $NR differs from the live record (name)" redirects-dns "$TMP/l-host.json" "" "$TMP/l-host-live.json"
+jq -c "$(nf "$NR").before += {name:\"evilsoleur.ai\",hostname:\"evilsoleur.ai\"} | $(nf "$NR").after += {name:\"evilsoleur.ai\",hostname:\"evilsoleur.ai\"}" "$NORM" > "$TMP/l-evil.json"; live_of "$TMP/l-evil.json" "$TMP/l-evil-live.json"
+check "L25: a hostname of evilsoleur.ai is not in the zone" 1 "REFUSE $NR differs from the live record (name)" redirects-dns "$TMP/l-evil.json" "" "$TMP/l-evil-live.json"
+# A drifted record that plans no-op still blocks the whole phase.
+jq -c --arg r "$NR" '(.[$r].result.content) = "drifted"' "$NLIVE" > "$TMP/l-drift.json"
+check "L26: a drifted no-op record beside admitted updates refuses" 1 "REFUSE $NR differs from the live record (content)" redirects-dns "$TMP/n-mixed.json" "$TMP/norm-state.json" "$TMP/l-drift.json"
+# A compliant first record with an off-shape second.
+nrow "L27: a compliant first record with an off-shape second refuses" "$NR2 is $PURE" "$(nf "$NR2").after.ttl = 300"
+# A refusal names fields only: no planned or live value reaches the output.
+jq -c --arg r "$NR" '(.[$r].result.content) = "SYNTH-LIVE-VALUE"' "$NLIVE" > "$TMP/l-val.json"
+lv_out="$(cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/l-val.json" 2>&1)"
+if ! grep -qE 'SYNTH-LIVE-VALUE|synthetic-' <<<"$lv_out"; then pass "L28: a live refusal prints no record value"; else fail "L28: a record value reached the output" 1 "$lv_out"; fi
+
+# S2: a fourth argument must be a usable read, on any plan, including an all-no-op one.
+ALLNOOP="$TMP/rerun.json"
+for bad in "$TMP/no-such-file" ""; do
+  check "U-live: an unusable fourth argument [${bad:-empty string}] refuses an all-no-op plan" 1 "the live read is missing or unusable" redirects-dns "$ALLNOOP" "" "$bad"
+done
+: > "$TMP/l-empty.json"; printf 'null' > "$TMP/l-null.json"; printf '{}' > "$TMP/l-obj.json"
+for f in l-empty l-null l-obj; do
+  check "U-live: a fourth argument holding $f refuses an all-no-op plan" 1 "the live read is missing or unusable" redirects-dns "$ALLNOOP" "" "$TMP/$f.json"
+done
+check "U-live: three arguments keep today's behaviour on an all-no-op plan" 0 "verdict=PASS" redirects-dns "$ALLNOOP"
+
+# Collect: only a clean 200 for the pinned id is evidence.
+coldir="$TMP/collect"; mkdir -p "$coldir"
+while IFS=$'\t' read -r _ rid; do
+  printf '{"success":true,"result":{"id":"%s","zone_id":"%s","type":"TXT"}}\n200' "$rid" "$NZ" > "$coldir/$rid"
+done <<<"$pins_out"
+col_st() { cf_account_migrate_live_collect redirects-dns "$coldir" | jq -r --arg r "$NR" '.[$r].status'; }
+if [[ "$(cf_account_migrate_live_collect redirects-dns "$coldir" | jq '[.[] | select(.status == "ok")] | length')" -eq 26 ]]; then pass "C0: 26 clean responses collect as ok"
+else fail "C0: clean responses did not collect" 1 ""; fi
+crow() { # <label> <want-status> <raw response>
+  local keep="$coldir/$first_rid.keep"; cp "$coldir/$first_rid" "$keep"
+  printf '%b' "$3" > "$coldir/$first_rid"
+  local got; got="$(col_st)"
+  mv "$keep" "$coldir/$first_rid"
+  if [[ "$got" == "$2" ]]; then pass "$1"; else fail "$1" 1 "got $got want $2"; fi
+}
+crow "C1: HTTP 200 with success:false is unreadable" unreadable "{\"success\":false,\"result\":{\"id\":\"$first_rid\"}}\n200"
+crow "C2: a non-object result is unreadable" unreadable '{"success":true,"result":[]}\n200'
+crow "C3: a result id off the pin is unreadable" unreadable '{"success":true,"result":{"id":"ffffffffffffffffffffffffffffffff"}}\n200'
+crow "C4: a differing result.zone_id is unreadable" unreadable "{\"success\":true,\"result\":{\"id\":\"$first_rid\",\"zone_id\":\"$OZ\"}}\n200"
+crow "C5: an unparseable body is unreadable" unreadable 'not json\n200'
+crow "C6: a 404 is notfound" notfound '{"success":false}\n404'
+crow "C7: a 429 is unreadable" unreadable '{"success":false}\n429'
+crow "C8: a 500 is unreadable" unreadable 'oops\n500'
+crow "C9: a response with no zone_id is ok" ok "{\"success\":true,\"result\":{\"id\":\"$first_rid\",\"type\":\"TXT\"}}\n200"
+mv "$coldir/$first_rid" "$coldir/$first_rid.gone"
+if [[ "$(col_st)" == unreadable ]]; then pass "C10: a record with no response file is unreadable"; else fail "C10: a missing response read as evidence" 1 "$(col_st)"; fi
+mv "$coldir/$first_rid.gone" "$coldir/$first_rid"
+
+# live_diff: the one entry point of the job's re-read.
+ld_out="$(cf_account_migrate_live_diff redirects-dns "$NORM" "$NLIVE")"; ld_rc=$?
+if [[ "$ld_rc" -eq 0 && -z "$ld_out" ]]; then pass "D1: live_diff is empty when all 26 match"; else fail "D1: live_diff on a clean read" "$ld_rc" "$ld_out"; fi
+jq -c --arg a "$NR" --arg b "$NR2" '.[$a].result.ttl = 300 | .[$b] = {status:"notfound"}' "$NLIVE" > "$TMP/d2-live.json"
+ld_two="$(cf_account_migrate_live_diff redirects-dns "$NORM" "$TMP/d2-live.json")"
+if grep -qxF "$NR"$'\t'"ttl" <<<"$ld_two" && grep -qxF "$NR2"$'\t'"notfound" <<<"$ld_two" && [[ "$(grep -c . <<<"$ld_two")" -eq 2 ]]; then
+  pass "D2: live_diff reports every differing record, by address and field"
+else fail "D2: live_diff did not report both records" 1 "$ld_two"; fi
+if cf_account_migrate_live_diff zone-rest "$NORM" "$NLIVE" >/dev/null 2>&1; then fail "D3: an empty pin list read as clean" 0 ""
+else pass "D3: live_diff refuses an empty pin list"; fi
+if cf_account_migrate_live_diff redirects-dns "$NORM" "$TMP/no-such-file" >/dev/null 2>&1; then fail "D4: a missing live file read as clean" 0 ""
+else pass "D4: live_diff refuses a missing live file"; fi
+
+# Guard 1 mutation matrix. Each mutant must let its bad fixture through.
+gm() { gate_mutate_and_check "$@"; }
+jq -c "$(nf "$NR").after.ttl = 300" "$NORM" > "$TMP/m-ttl.json"; live_of "$TMP/m-ttl.json" "$TMP/m-ttl-l.json"
+gm "G1-1: dropping cfam_changed admits a ttl change" '/and cfam_changed == \["allow_overwrite","content"\]/d' cf_account_migrate_gate redirects-dns "$TMP/m-ttl.json" "" "$TMP/m-ttl-l.json"
+jq -c "$(nf "$NR").before.content = \"old\"" "$NORM" > "$TMP/m-bc.json"; live_of "$TMP/m-bc.json" "$TMP/m-bc-l.json"
+gm "G1-2: dropping the before.content clause admits real drift" '/and \.change\.before\.content == null$/d' cf_account_migrate_gate redirects-dns "$TMP/m-bc.json" "" "$TMP/m-bc-l.json"
+jq -c "$(nf "$NR").after.allow_overwrite = true" "$NORM" > "$TMP/m-ao.json"; live_of "$TMP/m-ao.json" "$TMP/m-ao-l.json"
+gm "G1-3: dropping the allow_overwrite clause admits true" '/and \.change\.before\.allow_overwrite == null and/d' cf_account_migrate_gate redirects-dns "$TMP/m-ao.json" "" "$TMP/m-ao-l.json"
+jq -c "$(nf "$NR").after_unknown = {data:{x:true}}" "$NORM" > "$TMP/m-un.json"; live_of "$TMP/m-un.json" "$TMP/m-un-l.json"
+gm "G1-4: a top-level unknown scan admits a nested unknown" 's/\[\.change\.after_unknown|\.\.|booleans|select(\.)\]/[.change.after_unknown[]|booleans|select(.)]/' cf_account_migrate_gate redirects-dns "$TMP/m-un.json" "" "$TMP/m-un-l.json"
+jq -c "$(nf "$NR").before.id = \"ffffffffffffffffffffffffffffffff\" | $(nf "$NR").after.id = \"ffffffffffffffffffffffffffffffff\"" "$NORM" > "$TMP/m-pin.json"; cp "$NLIVE" "$TMP/m-pin-l.json"   # the read is of the pinned id
+gm "G1-5: dropping the before.id pin admits an off-pin record" 's/== \$pin then empty else "pin" end/== $pin then empty else empty end/' cf_account_migrate_gate redirects-dns "$TMP/m-pin.json" "" "$TMP/m-pin-l.json"
+gm "G1-6: dropping the state-id clause admits a retry absent from state" 's/then "state-id" else empty end/then empty else empty end/' cf_account_migrate_gate redirects-dns "$TMP/n-retry.json" "$TMP/n-state-less.json" "$NLIVE"
+for fld in type name content ttl proxied priority; do
+  case "$fld" in type) lf='.result.type = "CNAME"' ;; name) lf='.result.name = "other.soleur.ai"' ;; content) lf='.result.content = "other"' ;;
+    ttl) lf='.result.ttl = 300' ;; proxied) lf='.result.proxied = true' ;; priority) lf='.result.priority = 10' ;; esac
+  jq -c --arg r "$NR" "(.[\$r]) |= ($lf)" "$NLIVE" > "$TMP/m-f-$fld.json"
+  gm "G1-7: neutering the $fld compare admits a differing $fld" "s/then \"$fld\" else empty end/then empty else empty end/" cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/m-f-$fld.json"
+done
+for fld in comment tags settings; do
+  case "$fld" in comment) lf='.result.comment = "note"' ;; tags) lf='.result.tags = ["t"]' ;; settings) lf='.result.settings = {ipv4_only:true}' ;; esac
+  jq -c --arg r "$NR" "(.[\$r]) |= ($lf)" "$NLIVE" > "$TMP/m-f-$fld.json"
+  gm "G1-7: neutering the $fld compare admits a differing $fld" "s/else \"$fld\" end/else empty end/" cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/m-f-$fld.json"
+done
+jq -c --arg r "$NR" '.[$r].result.comment = false' "$NLIVE" > "$TMP/m-cf.json"
+# shellcheck disable=SC2016 # sed expressions match literal jq text
+gm "G1-8a: jq // on comment reads false as empty" 's/((\$r\.comment|cfam_empty) and (\$after\.comment|cfam_empty))/(($r.comment \/\/ "") == ($after.comment \/\/ ""))/' cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/m-cf.json"
+jq -c --arg r "$NR" '.[$r].result.settings = false' "$NLIVE" > "$TMP/m-sf.json"
+# shellcheck disable=SC2016 # sed expressions match literal jq text
+gm "G1-8b: jq // on settings reads false as empty" 's/if \$r\.settings == null or \$r\.settings == {} then/if ($r.settings \/\/ {}) == {} then/' cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/m-sf.json"
+# shellcheck disable=SC2016 # sed expression matches literal gate text
+gm "G1-9: admitting with no live read passes the canonical plan" 's/if (\$hl | not) or any/if any/' cf_account_migrate_gate redirects-dns "$NORM"
+jq -c "$(nf "$NR2").after.ttl = 300" "$NORM" > "$TMP/m-second.json"; live_of "$TMP/m-second.json" "$TMP/m-second-l.json"
+# shellcheck disable=SC2016 # sed expression matches literal gate text
+gm "G1-10: grading only the first record admits an off-shape second" 's/\[\.\[\] | select(\.action == \["update"\] and \.why == \[\]) | \.address\] end/(.[0].why as $w | [.[] | select(.action == ["update"] and $w == []) | .address]) end/' cf_account_migrate_gate redirects-dns "$TMP/m-second.json" "" "$TMP/m-second-l.json"
+# shellcheck disable=SC2016 # sed expression matches literal gate text
+gm "G1-11: comparing only planned updates admits a drifted no-op" 's/live: (if \$hl then/live: (if $hl and .change.actions == ["update"] then/' cf_account_migrate_gate redirects-dns "$TMP/n-mixed.json" "$TMP/norm-state.json" "$TMP/l-drift.json"
+sed 's/cf_account_migrate_gate: import-normalize /cf_account_migrate_gate: in-state-update /' "$GATE" > "$TMP/m-isu.sh"
+if cmp -s "$TMP/m-isu.sh" "$GATE"; then fail "G1-12: the mutation did not land" 1 ""
+elif [[ -n "$(norm_admits "$TMP/m-isu.sh")" ]]; then pass "G1-12: printing in-state-update for an admitted record is caught by N1"
+else fail "G1-12: N1 did not see the wrong log line" 1 ""; fi
+# shellcheck disable=SC2016 # sed expression matches literal jq text
+gm "G1-15: dropping the hostname-name binding admits L24" '/or \$after\.hostname != (\$after\.name|cfam_fqdn)$/d' cf_account_migrate_gate redirects-dns "$TMP/l-host.json" "" "$TMP/l-host-live.json"
+gm "G1-16: an undotted suffix admits evilsoleur.ai" 's/endswith("\.soleur\.ai")/endswith("soleur.ai")/' cf_account_migrate_gate redirects-dns "$TMP/l-evil.json" "" "$TMP/l-evil-live.json"
+# shellcheck disable=SC2016 # sed expression matches literal jq text
+gm "G1-17: dropping the trailing-dot refusal admits L23" '/or ((\$r\.content|type) == "string" and (\$r\.content|endswith(".")))$/d' cf_account_migrate_gate redirects-dns "$TMP/l-dot.json" "" "$TMP/l-dot-live.json"
+jq -c --arg r "$NR" '(.[$r].result.content) |= ("\"" + . + "\"")' "$NLIVE" > "$TMP/m-q.json"
+# shellcheck disable=SC2016 # sed expression matches literal jq text
+gm "G1-18: letting a diagnostic decide admits a quoted content" 's/if \$r\.content != \$after\.content$/if ($r.content|cfam_unquote) != ($after.content|cfam_unquote)/' cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/m-q.json"
+gm "G1-19: treating an unusable read as not supplied passes an all-no-op plan" \
+  's/{ echo "cf_account_migrate_gate: REFUSE — the live read is missing or unusable"; return 1; }/{ has_live=false; live_json=""; }/' \
+  cf_account_migrate_gate redirects-dns "$ALLNOOP" "" "$TMP/no-such-file"
+jq -c --arg r "$NR" 'del(.[$r].status)' "$NLIVE" > "$TMP/m-st.json"
+# shellcheck disable=SC2016 # sed expression matches literal jq text
+gm "G1-20: comparing an entry with no status admits it" 's/elif \$entry\.status != "ok" or (\$entry\.result|type) != "object"/elif ($entry.result|type) != "object"/' cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/m-st.json"
+# H1: a hand-written {zone_id} after cannot satisfy the admit path.
+jq -c '.resource_changes |= map(if .type == "cloudflare_record" then .change.actions = ["update"] else . end)' "$VALID" > "$TMP/h1-stub.json"
+live_of "$TMP/h1-stub.json" "$TMP/h1-stub-l.json"
+check "G1-H1: an update built from the {zone_id} stub is refused" 1 "$PURE" redirects-dns "$TMP/h1-stub.json" "" "$TMP/h1-stub-l.json"
+
+# gate_in <gate-file> <gate args...>: run a copy of the gate.
+gate_in() { bash -c 'source "$1"; source "$2"; shift 2; cf_account_migrate_gate "$@"' _ "$PREAMBLE" "$@" 2>&1; }
+# gm_lost <label> <sed> <needle> <gate args...>: the pristine gate prints <needle>, the mutant does not.
+gm_lost() {
+  local label="$1" ex="$2" needle="$3" base out; shift 3
+  sed "$ex" "$GATE" > "$TMP/m-lost.sh"
+  if cmp -s "$TMP/m-lost.sh" "$GATE"; then fail "$label: the mutation did not land" 1 ""; return; fi
+  base="$(cf_account_migrate_gate "$@" 2>&1)"; out="$(gate_in "$TMP/m-lost.sh" "$@")"
+  if [[ "$base" == *"$needle"* && "$out" != *"$needle"* ]]; then pass "$label (RED)"
+  else fail "$label: wanted [$needle] in the pristine output only" 1 "$out"; fi
+}
+# gm_refuses <label> <sed> <gate args...>: the pristine gate passes this plan, the mutant refuses it.
+gm_refuses() {
+  local label="$1" ex="$2" base_rc=0 rc=0 out; shift 2
+  sed "$ex" "$GATE" > "$TMP/m-refuses.sh"
+  if cmp -s "$TMP/m-refuses.sh" "$GATE"; then fail "$label: the mutation did not land" 1 ""; return; fi
+  cf_account_migrate_gate "$@" >/dev/null 2>&1 || base_rc=$?
+  out="$(gate_in "$TMP/m-refuses.sh" "$@")" || rc=$?
+  if [[ "$base_rc" -eq 0 && "$rc" -eq 1 ]]; then pass "$label (RED)"; else fail "$label" "$base_rc/$rc" "$out"; fi
+}
+# only_line <label> <line> <gate args...>: a REFUSE whose only REFUSE line is <line>, with nothing admitted.
+only_line() {
+  local label="$1" want="$2" out rc=0; shift 2
+  out="$(cf_account_migrate_gate "$@" 2>&1)" || rc=$?
+  if [[ "$rc" -eq 1 && "$(grep -c '^REFUSE ' <<<"$out")" -eq 1 ]] && grep -qxF -- "$want" <<<"$out" \
+     && ! grep -qE '^cf_account_migrate_gate: import-normalize cloudflare_record' <<<"$out"; then pass "$label"
+  else fail "$label" "$rc" "$out"; fi
+}
+
+# R2: a read that is not clean names its own record only, and still admits nothing.
+jq -c --arg r "$NR" '.[$r] = {status:"unreadable"}' "$NLIVE" > "$TMP/r2-one.json"
+only_line "R2-1: one unreadable record prints one line, naming it" "$UNREAD" redirects-dns "$NORM" "" "$TMP/r2-one.json"
+only_line "R2-2: the same on the retry shape" "$UNREAD" redirects-dns "$TMP/n-retry.json" "$TMP/norm-state.json" "$TMP/r2-one.json"
+jq -c --arg r "$NR" '.[$r].result.ttl = 300' "$NLIVE" > "$TMP/r2-diff.json"
+only_line "R2-3: one differing record prints one line, naming it" "REFUSE $NR differs from the live record (ttl)" redirects-dns "$NORM" "" "$TMP/r2-diff.json"
+jq -c 'map_values({status:"unreadable"})' "$NLIVE" > "$TMP/r2-all.json"
+r2_all="$(cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/r2-all.json" 2>&1)"; r2_all_rc=$?
+if [[ "$r2_all_rc" -eq 1 && "$(grep -cE '^REFUSE cloudflare_record\.[a-z0-9_]+ live record unreadable$' <<<"$r2_all")" -eq 26 && "$(grep -c '^REFUSE ' <<<"$r2_all")" -eq 26 ]]; then
+  pass "R2-4: an outage prints 26 unreadable lines and no difference"
+else fail "R2-4: an all-unreadable read" "$r2_all_rc" "$r2_all"; fi
+if ! grep -qF 'differs from the live record (unreadable)' <<<"$r2_all"; then pass "R2-5: the old differs-unreadable sentence is gone"
+else fail "R2-5: an unreadable read still prints as a difference" 1 "$r2_all"; fi
+# shellcheck disable=SC2016 # sed expressions match literal gate text
+{
+  gm_lost "M-R2-label: printing an unreadable read as a difference loses R2-1's line" \
+    's/if \.live == \["unreadable"\] then "REFUSE \\(\.address) live record unreadable" else //; s/(\\(\.live | join(",")))" end/(\\(.live | join(",")))"/' \
+    "$UNREAD" redirects-dns "$NORM" "" "$TMP/r2-one.json"
+  sed 's/^  if \[\[ -n "\$live_v" \]\]; then$/  if false; then/' "$GATE" > "$TMP/m-r2-held.sh"
+  r2_held="$(gate_in "$TMP/m-r2-held.sh" redirects-dns "$NORM" "" "$TMP/r2-one.json")"
+  if cmp -s "$TMP/m-r2-held.sh" "$GATE"; then fail "M-R2-held: the mutation did not land" 1 ""
+  elif [[ "$(grep -c '^REFUSE ' <<<"$r2_held")" -gt 1 ]]; then pass "M-R2-held: without the hold the other records are named again (RED for R2-1)"
+  else fail "M-R2-held: the hold is not what limits the output" 1 "$r2_held"; fi
+  # With its line gone the read still refuses, because the hold is built from that line.
+  gate_mutate_layered "M-R2-line: the live line owns the refusal; neutered, the import arms still refuse" \
+    's/live_v="\$(jq -r/live_v="$(: jq -r/' "$UNREAD" "$PURE" cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/r2-one.json"
+  # The `any` clause is what keeps `norm` empty: drop it as well as the line and the plan passes.
+  gm "M-R2-norm: admitting beside an unclean read passes once the live line is gone" \
+    's/live_v="\$(jq -r/live_v="$(: jq -r/; s/if (\$hl | not) or any(\.\[\]; \.live != \[\]) then \[\]/if ($hl | not) then []/' \
+    cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/r2-one.json"
+}
+
+# Q5, U1 and U2: each spec address appears once, as managed.
+ONCE="must appear exactly once as a managed resource in the plan"
+jq -c --arg r "$NR" '.resource_changes += [.resource_changes[] | select(.address == $r) | .change.after.allow_overwrite = true]' "$NORM" > "$TMP/q-twin.json"
+check "Q5-U2: a compliant update with an off-shape twin at its address is refused" 1 "REFUSE $NR $ONCE" redirects-dns "$TMP/q-twin.json" "" "$NLIVE"
+jq -c --arg r "$NR" '(.resource_changes[] | select(.address == $r) | .mode) = "data"' "$VALID" > "$TMP/q-data.json"
+check "Q5-U1: a spec address planned in another mode is refused" 1 "REFUSE $NR $ONCE" redirects-dns "$TMP/q-data.json"
+# shellcheck disable=SC2016 # sed expressions match literal gate text
+{
+  gm "M-U2: dropping the count clause admits the twin" 's/select(length != 1 or ((/select(false or ((/' cf_account_migrate_gate redirects-dns "$TMP/q-twin.json" "" "$NLIVE"
+  gm "M-U1: dropping the mode clause admits the other mode" 's/select(length != 1 or ((\.\[0\]\.mode \/\/ "managed") != "managed"))/select(length != 1)/' cf_account_migrate_gate redirects-dns "$TMP/q-data.json"
+}
+
+# Q5, U3: a record of another spec class cannot change. The copy reclasses one record as mutable, so
+# only this check stands between it and an arbitrary update.
+Q_REC="cloudflare_record.www"
+sed "s/\"$Q_REC\": \"import\"/\"$Q_REC\": \"mutable\"/" "$GATE" > "$TMP/q-u3-gate.sh"
+jq -c --arg r "$Q_REC" --arg z "$NZ" '(.resource_changes[] | select(.address == $r) | .change) = {actions:["update"], before:{zone_id:$z,id:"r"}, after:{zone_id:$z,id:"r",content:"changed"}, after_unknown:{}}' "$VALID" > "$TMP/q-u3.json"
+q3_out="$(gate_in "$TMP/q-u3-gate.sh" redirects-dns "$TMP/q-u3.json")"; q3_rc=$?
+if cmp -s "$TMP/q-u3-gate.sh" "$GATE"; then fail "Q5-U3: the reclass did not land" 1 ""
+elif [[ "$q3_rc" -eq 1 ]] && grep -qxF -- "REFUSE $Q_REC is a cloudflare_record change outside import-normalize" <<<"$q3_out"; then pass "Q5-U3: a mutable-class record planned as an update is refused"
+else fail "Q5-U3: a non-import record change was not refused" "$q3_rc" "$q3_out"; fi
+GATE="$TMP/q-u3-gate.sh" gate_mutate_and_check "M-U3: dropping the record-change check admits it" \
+  's/| select(\.type == "cloudflare_record" and \.change\.actions != \["no-op"\])/| select(false)/' cf_account_migrate_gate redirects-dns "$TMP/q-u3.json"
+
+# Q5, U5: a pinned no-op carries the pin on both sides.
+Q_OTHER="ffffffffffffffffffffffffffffffff"; NOOP_PIN="REFUSE $NR is a no-op on a record id other than its pin"
+noop_side_rows() { # <base plan> <file tag> <label> <state>
+  local side qf
+  for side in both before after; do
+    case "$side" in
+      both) qf=".before.id = \"$Q_OTHER\" | .after.id = \"$Q_OTHER\"" ;;
+      *) qf=".$side.id = \"$Q_OTHER\"" ;;
+    esac
+    jq -c "$(nf "$NR") |= ($qf)" "$1" > "$TMP/q-noop-$2$side.json"
+    check "Q5-U5: $3 no-op whose $side id is off the pin is refused" 1 "$NOOP_PIN" redirects-dns "$TMP/q-noop-$2$side.json" "$4" "$NLIVE"
+  done
+}
+noop_side_rows "$TMP/n-mixed.json" "" "a" "$TMP/norm-state.json"
+# The first dispatch's shape: `importing` set, before equal to after, no state entry.
+jq -c "$(nf "$NR") |= (.actions = [\"no-op\"] | .before = .after)" "$NORM" > "$TMP/q-noop-i.json"
+check "Q5-U5i: an import-shaped no-op on its pin passes" 0 "verdict=PASS" redirects-dns "$TMP/q-noop-i.json" "" "$NLIVE"
+noop_side_rows "$TMP/q-noop-i.json" "i-" "an import-shaped" ""
+# shellcheck disable=SC2016 # sed expressions match literal gate text
+{
+  gm "M-U5: dropping the no-op binding admits it" 's/noop_id_ok: (\.change\.actions != \["no-op"\]/noop_id_ok: (true/' cf_account_migrate_gate redirects-dns "$TMP/q-noop-both.json" "$TMP/norm-state.json" "$NLIVE"
+  gm "M-U5-import: exempting a planned import admits an off-pin no-op" 's/noop_id_ok: (\.change\.actions != \["no-op"\]/noop_id_ok: (.change.actions != ["no-op"] or .change.importing != null/' cf_account_migrate_gate redirects-dns "$TMP/q-noop-i-both.json" "" "$NLIVE"
+  gm "M-U5-before: dropping the before clause admits an off-pin before" 's/or ((\.change\.before|type) == "object" and \.change\.before\.id == \$pin/or (true/' cf_account_migrate_gate redirects-dns "$TMP/q-noop-before.json" "$TMP/norm-state.json" "$NLIVE"
+  gm "M-U5-after: dropping the after clause admits an off-pin after" 's/and (\.change\.after|type) == "object" and \.change\.after\.id == \$pin))/))/' cf_account_migrate_gate redirects-dns "$TMP/q-noop-after.json" "$TMP/norm-state.json" "$NLIVE"
+}
+
+# Q5, U6: a non-empty live `data` refuses.
+lrow "Q5-U6: a non-empty live data differs" "data" '.result.data = {flags:1}'
+jq -c --arg r "$NR" '.[$r].result.data = {flags:1}' "$NLIVE" > "$TMP/q-data-live.json"
+gm "M-U6: dropping the data clause admits it" 's/else "data" end/else empty end/' cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/q-data-live.json"
+
+# Q5, U7: the comparator binds the read to the pinned id and the new zone, at both call sites.
+jq -c --arg r "$NR" --arg o "$Q_OTHER" '.[$r].result.id = $o' "$NLIVE" > "$TMP/q-id.json"
+jq -c --arg r "$NR" --arg z "$OZ" '.[$r].result.zone_id = $z' "$NLIVE" > "$TMP/q-zone.json"
+jq -c --arg r "$NR" 'del(.[$r].result.zone_id)' "$NLIVE" > "$TMP/q-nozone.json"
+only_line "Q5-U7a: a read of another record id is unreadable" "$UNREAD" redirects-dns "$NORM" "" "$TMP/q-id.json"
+only_line "Q5-U7b: a read from another zone is unreadable" "$UNREAD" redirects-dns "$NORM" "" "$TMP/q-zone.json"
+jq -c --arg r "$NR" 'del(.[$r].result.id)' "$NLIVE" > "$TMP/q-noid.json"
+only_line "Q5-U7e: a read with no id is unreadable (unlike zone_id, it may not be absent)" "$UNREAD" redirects-dns "$NORM" "" "$TMP/q-noid.json"
+check "Q5-U7c: a read with no zone_id still passes" 0 "verdict=PASS" redirects-dns "$NORM" "" "$TMP/q-nozone.json"
+for qf in id zone; do
+  ld_q="$(cf_account_migrate_live_diff redirects-dns "$NORM" "$TMP/q-$qf.json")"
+  if [[ "$ld_q" == "$NR"$'\t'"unreadable" ]]; then pass "Q5-U7d: live_diff binds the read's $qf too"
+  else fail "Q5-U7d: live_diff did not bind the read's $qf" 1 "$ld_q"; fi
+done
+# shellcheck disable=SC2016 # sed expressions match literal gate text
+{
+  gm "M-U7-id: dropping the id clause admits another record's read" '/^    or \$entry\.result\.id != \$pin$/d' cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/q-id.json"
+  gm "M-U7-noid: filling a missing id with the pin admits the read" 's/^    or \$entry\.result\.id != \$pin$/    or ($entry.result.id \/\/ $pin) != $pin/' cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/q-noid.json"
+  gm "M-U7-zone: dropping the zone clause admits another zone's read" 's/or (\$entry\.result\.zone_id != null and \$entry\.result\.zone_id != \$zone) then/then/' cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/q-zone.json"
+  gm_refuses "M-U7-nozone: requiring a zone_id refuses a read that omits it" 's/(\$entry\.result\.zone_id != null and \$entry\.result\.zone_id != \$zone)/($entry.result.zone_id != $zone)/' redirects-dns "$NORM" "" "$TMP/q-nozone.json"
+}
+
+# F1: a record planned as a create, with a matching live read, must not reach `norm`.
+jq -c "$(nf "$NR") |= (.actions = [\"create\"] | .importing = null | .before = null)" "$NORM" > "$TMP/f1.json"
+live_of "$TMP/f1.json" "$TMP/f1-live.json"
+check "F1: a record create beside a matching live read is refused" 1 "$NR (class import) planned with actions [\"create\"]" redirects-dns "$TMP/f1.json" "" "$TMP/f1-live.json"
+gm "M-F1: admitting any non-no-op admits the create" 's/select(\.action == \["update"\] and \.why == \[\]) | \.address\] end/select(.action != ["no-op"] and .why == []) | .address] end/' cf_account_migrate_gate redirects-dns "$TMP/f1.json" "" "$TMP/f1-live.json"
+# R2: beside another record's unreadable read, only a clean-shaped update goes unnamed.
+jq -c --arg r "$NR2" '.[$r] = {status:"unreadable"}' "$NLIVE" > "$TMP/r2-two.json"
+R2_CREATE="$NR (class import) planned with actions [\"create\"]"
+check "R2-6: a record create beside another record's unreadable read is still named" 1 "$R2_CREATE" redirects-dns "$TMP/f1.json" "" "$TMP/r2-two.json"
+check "R2-7: an off-shape update beside another record's unreadable read is still named" 1 "$NR is $PURE" redirects-dns "$TMP/m-ttl.json" "" "$TMP/r2-two.json"
+# shellcheck disable=SC2016 # sed expressions match literal gate text
+{
+  gm_lost "M-R2-action: holding back any non-no-op hides the create" \
+    's/exempt="\$(jq -c .\[\.\[\] | select(\.action == \["update"\] and/exempt="$(jq -c \x27[.[] | select(.action != ["no-op"] and/' \
+    "$R2_CREATE" redirects-dns "$TMP/f1.json" "" "$TMP/r2-two.json"
+  gm_lost "M-R2-why: holding back an off-shape update hides it" \
+    's/exempt="\$(jq -c .\[\.\[\] | select(\.action == \["update"\] and \.why == \[\])/exempt="$(jq -c \x27[.[] | select(.action == ["update"])/' \
+    "$NR is $PURE" redirects-dns "$TMP/m-ttl.json" "" "$TMP/r2-two.json"
+}
+
+# F2: a 200 that omits a compared field is a difference. Priority uses an MX, whose plan sets one.
+for fld in type name content ttl proxied priority; do
+  rec="$NR"; [[ "$fld" != priority ]] || rec="$MXR"
+  jq -c --arg r "$rec" --arg f "$fld" 'del(.[$r].result[$f])' "$NLIVE" > "$TMP/f2-$fld.json"
+  check "F2: a live read omitting $fld refuses" 1 "REFUSE $rec differs from the live record ($fld)" redirects-dns "$NORM" "" "$TMP/f2-$fld.json"
+  # shellcheck disable=SC2016 # a sed expression over literal gate text
+  if [[ "$fld" == name ]]; then ex='s/or \$r\.name != \$after\.hostname$/or ($r.name != null and $r.name != $after.hostname)/'
+  else ex="s/if \\\$r\\.$fld != \\\$after\\.$fld/if \$r.$fld != null and \$r.$fld != \$after.$fld/"; fi
+  gm "M-F2-$fld: treating an omitted $fld as equal admits it" "$ex" cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/f2-$fld.json"
+done
+
+# F3: the same two fields with the value on the plan side.
+jq -c "$(nf "$NR") |= (.before.comment = \"note\" | .after.comment = \"note\")" "$NORM" > "$TMP/f3-c.json"
+jq -c "$(nf "$NR") |= (.before.tags = [\"t\"] | .after.tags = [\"t\"])" "$NORM" > "$TMP/f3-t.json"
+check "F3: a planned comment with an empty live comment refuses" 1 "REFUSE $NR differs from the live record (comment)" redirects-dns "$TMP/f3-c.json" "" "$NLIVE"
+check "F3: planned tags with empty live tags refuse" 1 "REFUSE $NR differs from the live record (tags)" redirects-dns "$TMP/f3-t.json" "" "$NLIVE"
+# shellcheck disable=SC2016 # sed expressions match literal gate text
+{
+  gm "M-F3-comment: a one-way comment compare admits it" 's/((\$r\.comment|cfam_empty) and (\$after\.comment|cfam_empty))/($r.comment|cfam_empty)/' cf_account_migrate_gate redirects-dns "$TMP/f3-c.json" "" "$NLIVE"
+  gm "M-F3-tags: a one-way tags compare admits it" 's/(\$r\.tags|unique) == (\$after\.tags|unique)/(($r.tags - $after.tags)|length) == 0/' cf_account_migrate_gate redirects-dns "$TMP/f3-t.json" "" "$NLIVE"
+}
+
+# F4: a retry whose pre-plan state holds another id for the address.
+jq -c --arg r "$NR" --arg o "$Q_OTHER" '(.values.root_module.resources[] | select(.address == $r) | .values.id) = $o' "$TMP/norm-state.json" > "$TMP/n-state-other.json"
+nrow "F4: a retry whose state holds another id is refused" "$CLS" "$RET" "$TMP/n-state-other.json"
+# shellcheck disable=SC2016 # sed expression matches literal gate text
+gm "M-F4: checking presence instead of the id admits it" 's/\$sids\[\$ad\] != \$pin/$sids[$ad] == null/' cf_account_migrate_gate redirects-dns "$TMP/n-retry.json" "$TMP/n-state-other.json" "$NLIVE"
+
+# F5: the apex name is admitted as itself. Dropping that arm refuses the six apex records.
+# shellcheck disable=SC2016 # sed expression matches literal gate text
+sed 's/def cfam_fqdn: if \. == "soleur\.ai" or endswith/def cfam_fqdn: if endswith/' "$GATE" > "$TMP/m-apex.sh"
+if cmp -s "$TMP/m-apex.sh" "$GATE"; then fail "M-F5-apex: the mutation did not land" 1 ""
+elif [[ -n "$(norm_admits "$TMP/m-apex.sh")" ]]; then pass "M-F5-apex: dropping the apex arm of cfam_fqdn refuses the real apex records (RED for N1)"
+else fail "M-F5-apex: N1 did not see the apex arm go" 1 ""; fi
+
+# F10: the not-admitted line names the reason.
+naw="import-normalize not admitted for $NR"
+nrow "F10-shape: the reason is shape" "$naw (shape)" "$(nf "$NR").before.content = \"old\""
+nrow "F10-pin: the reason is pin" "$naw (pin)" "$(nf "$NR").before.id = \"$Q_OTHER\" | $(nf "$NR").after.id = \"$Q_OTHER\""
+nrow "F10-state: the reason is state-id" "$naw (state-id)" "$RET" "$TMP/n-state-less.json"
+jq -c "$(nf "$NR").before.content = \"old\"" "$NORM" > "$TMP/f10-s.json"; live_of "$TMP/f10-s.json" "$TMP/f10-s-l.json"
+jq -c "$(nf "$NR").before.id = \"$Q_OTHER\" | $(nf "$NR").after.id = \"$Q_OTHER\"" "$NORM" > "$TMP/f10-p.json"
+# shellcheck disable=SC2016 # sed expressions match literal gate text
+{
+  gm_lost "M-F10-print: never printing the line loses the reason" 's/^    \[\[ -z "\$norm_why" \]\] || printf .*$/    :/' "$naw (shape)" redirects-dns "$TMP/f10-s.json" "" "$TMP/f10-s-l.json"
+  gm_lost "M-F10-shape: another label for shape loses it" 's/if cfam_norm_shape then empty else "shape" end/if cfam_norm_shape then empty else "pin" end/' "$naw (shape)" redirects-dns "$TMP/f10-s.json" "" "$TMP/f10-s-l.json"
+  gm_lost "M-F10-pin: another label for pin loses it" 's/then empty else "pin" end/then empty else "shape" end/' "$naw (pin)" redirects-dns "$TMP/f10-p.json" "" "$NLIVE"
+  gm_lost "M-F10-state: another label for state-id loses it" 's/then "state-id" else empty end/then "shape" else empty end/' "$naw (state-id)" redirects-dns "$TMP/n-retry.json" "$TMP/n-state-less.json" "$NLIVE"
+}
+
+# F11: the smaller survivors.
+nrow "F11: an absent after_unknown is refused" "$NR is $PURE" "$(nf "$NR") |= del(.after_unknown)"
+jq -c "$(nf "$NR") |= del(.after_unknown)" "$NORM" > "$TMP/f11-u.json"; live_of "$TMP/f11-u.json" "$TMP/f11-u-l.json"
+gm "M-F11-unknown: dropping the type clause admits it" '/and (\.change\.after_unknown|type) == "object"$/d' cf_account_migrate_gate redirects-dns "$TMP/f11-u.json" "" "$TMP/f11-u-l.json"
+nrow "F11: a key present only in before is refused" "$NR is $PURE" "$(nf "$NR") |= del(.after.proxiable)"
+jq -c "$(nf "$NR") |= del(.after.proxiable)" "$NORM" > "$TMP/f11-k.json"; live_of "$TMP/f11-k.json" "$TMP/f11-k-l.json"
+# shellcheck disable=SC2016 # sed expression matches literal gate text
+gm "M-F11-before: reading after-keys only admits it" 's/((\$c\.before|keys)+(\$c\.after|keys)|unique)/($c.after|keys)/' cf_account_migrate_gate redirects-dns "$TMP/f11-k.json" "" "$TMP/f11-k-l.json"
+jq -c "$(nf "$NR") |= (.before.tags = [\"a\",\"b\"] | .after.tags = [\"a\",\"b\"])" "$NORM" > "$TMP/f11-t.json"
+jq -c --arg r "$NR" '.[$r].result.tags = ["b","a"]' "$NLIVE" > "$TMP/f11-t-l.json"
+check "F11: tags reordered by the API still pass" 0 "verdict=PASS" redirects-dns "$TMP/f11-t.json" "" "$TMP/f11-t-l.json"
+# shellcheck disable=SC2016 # sed expression matches literal gate text
+gm_refuses "M-F11-tags: an order-sensitive compare refuses the reorder" 's/(\$r\.tags|unique) == (\$after\.tags|unique)/$r.tags == $after.tags/' redirects-dns "$TMP/f11-t.json" "" "$TMP/f11-t-l.json"
+
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 277 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 277)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 468 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 468)\n' "$TOTAL"; exit 466; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]
