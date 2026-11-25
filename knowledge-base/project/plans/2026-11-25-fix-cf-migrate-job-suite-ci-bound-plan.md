@@ -669,13 +669,13 @@ missing flush, because both defer scoring the same way. The pooled run must matc
 
 ## Acceptance Criteria
 
-- [ ] AC1: `bash apps/web-platform/infra/cf-account-migrate-job.test.sh` exits 0 and prints
+- [x] AC1: `bash apps/web-platform/infra/cf-account-migrate-job.test.sh` exits 0 and prints
   `cf-account-migrate-job: <N> passed, 0 failed (<N> cases)`, where N = 285 plus the verdicts this PR
   adds, and `EXPECTED_CASES` equals N.
-- [ ] AC2: Guard 1 mutation rows 1, 2 and 3 (and row 4 if Step B is built), each applied to a scratch
+- [x] AC2: Guard 1 mutation rows 1, 2 and 3 (and row 4 if Step B is built), each applied to a scratch
   copy of the suite, make that copy exit 1 with the named self-test row RED. The PR body records the
   command used for each.
-- [ ] AC3: Killing a real run mid-battery shows the fix.
+- [x] AC3: Killing a real run mid-battery shows the fix.
   `timeout -s TERM -k 30 60 bash apps/web-platform/infra/cf-account-migrate-job.test.sh` exits 124.
   Stderr carries exactly one `[ABORTED] signal TERM` line. Stdout has no `FAIL:` row other than the
   instrument self-test's deliberate `FAIL arm records (EXPECTED, subtracted below)` line. The exact
@@ -688,7 +688,7 @@ missing flush, because both defer scoring the same way. The pooled run must matc
   the leg's other suites; the worst <= 480000 ms clause stands. Revised 2026-11-25 by CTO ruling after Steps A and B missed
   the original 360000 ms worst-of-2 on runner-wide 2x variance; see decision-challenges.md. The
   original wording: worst of at least two runs at most 360000 ms; if both steps miss, stop and re-plan.)
-- [ ] AC5: If Step B is built, the pooled run's ordered verdict labels equal the Step A golden list
+- [x] AC5: If Step B is built, the pooled run's ordered verdict labels equal the Step A golden list
   (the Phase 4 step 3 diff prints nothing beyond the listed pool self-test rows), and the run passes. If Step B is not built,
   `grep -c 'CFAM_MUT_JOBS' apps/web-platform/infra/cf-account-migrate-job.test.sh` prints `0`.
 - [ ] AC6: `apps/web-platform/infra/suite-durations.tsv` carries this suite at the AC4 worst figure, in
@@ -698,7 +698,7 @@ missing flush, because both defer scoring the same way. The pooled run must matc
   `cron-egress-nftables.test.sh` are re-priced to their worst measured CI figures, 878000 and 483000,
   so the leg balance does not rest on known-stale weights; the grep prints `3`. This suite's row starts
   at the 396000 serial Step A figure and moves to the AC4 worst only if that is more than 10% above it.)
-- [ ] AC7: `suite-shard-legs.tsv` was produced by
+- [x] AC7: `suite-shard-legs.tsv` was produced by
   `regenerate-shard-manifest.py --group infra --durations apps/web-platform/infra/suite-durations.tsv --write`,
   and the dry-run leg table is in the PR body. The leg this suite lands on is recorded, whatever it is.
 - [ ] AC8: The `_SUITE_BOUNDS` entry still reads `cf-account-migrate-job.test.sh=720`. Its comment
@@ -707,7 +707,7 @@ missing flush, because both defer scoring the same way. The pooled run must matc
   triggers. Check with
   `grep -B12 'cf-account-migrate-job.test.sh=720' apps/web-platform/infra/run-registered-suites.sh | grep -cE 'suite-timings-infra|--durations|five post-fix|EXPECTED_CASES'`,
   which prints at least `4`.
-- [ ] AC9: No line the suite adds prints a token value or runs `ssh`.
+- [x] AC9: No line the suite adds prints a token value or runs `ssh`.
   `git diff origin/main -- apps/web-platform/infra/cf-account-migrate-job.test.sh | grep -cE '^\+.*(\bssh |echo .*TF_VAR_cf_api_token)'`
   prints `0`.
 - [ ] AC10: These all exit 0: `bash .github/scripts/test/test-infra-suite-registration.sh`,
@@ -715,6 +715,10 @@ missing flush, because both defer scoring the same way. The pooled run must matc
   `bash plugins/soleur/test/fixture-relative-assert.test.sh`,
   `bash .claude/hooks/grep-q-pipe-guard.test.sh`,
   `bash apps/web-platform/infra/run-registered-suites.test.sh`, and `bash scripts/test-all.sh --affected`.
+  (Status 2026-11-25 on c684ba1f9d: the five named suites exit 0. `--affected` exits 1 on suites this
+  diff does not reach: `cloud-init-strip-helpers-mutation` is red on main too (#12850),
+  `test-trio-baseline-census` passes alone (its A3 row saw a probe file another suite wrote mid-run),
+  and the web-platform likec4 sandbox rows are outside the diff.)
 
 ## Domain Review
 
