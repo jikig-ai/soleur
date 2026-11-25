@@ -13,7 +13,25 @@ brand_survival_threshold: aggregate pattern
 
 # fix: cf-account-migrate gate treats a CNAME's live settings {"flatten_cname":false} as the API default
 
-## Overview
+## Enhancement Summary
+
+**Deepened on:** 2026-11-25
+**Sections enhanced:** 5 (Phase 1 block, Guard Contract, Acceptance Criteria, Scope Check, Observability)
+**Agents used:** learnings-researcher (plan), dhh-rails-reviewer, kieran-rails-reviewer and code-simplicity-reviewer (plan-review), test-design-reviewer and security-sentinel (deepen). The deepen fan-out was kept to the two lenses that bear on a narrowed fail-closed comparator. It did not run every agent, because the design is CTO-ruled and the change is 4 files.
+
+### Key Improvements
+
+1. `M-flatten-after` is written inline so that it requires the mutant to still run and refuse on `type`. `gm_lost` would also pass a mutant whose jq fails to evaluate.
+2. `n_flat` count guards on L11a, L11b, D5 and D6, so no row can pass on an unchanged read. The `M-flatten-guard` fixture is checked against the pristine gate.
+3. AC2b makes the value conjunct's witnesses (L11c–L11f) reproducible. Prototype: `351 passed, 5 failed`.
+4. The Scope Check was rewritten to the canonical Ask Mapping / Provenance / Split schema (deepen §4.12).
+5. The Residual now states that both type conjuncts are diagnostic-only and that the `type` compare (`G1-7 type`) holds the verdict.
+
+### New Considerations Discovered
+
+- Security review found no bypass. jq `==` is strict and key-order-blind, and a `type` of `"cname"`/`"CNAME "` fails. Duplicate keys collapse once in `cf_account_migrate_live_collect`, so both conjuncts read the same `$r`. An absent `$after.type` is `null` and is refused. No new value-printing path exists.
+- Precedent (§4.4): the new `elif` follows the shape of the existing `comment` clause, which also admits an empty-equivalent live value (`cfam_empty` on both sides) before naming the field. It uses `==` only, per the header rule against jq `//`.
+- After the deepen edits, the prototype still gives GREEN `356 passed, 0 failed`, RED `350 passed, 6 failed`, and no new shellcheck findings.
 
 The `redirects-dns` rehearsal (run 45623876678, main @ `1da76b3dcc`, 2026-11-25) was refused before
 anything was written (`serial_unchanged=true backups_unchanged=true`). Six records printed
@@ -206,11 +224,12 @@ flat_live "$FLAT_ALL" $CNAMES
 flat_live "$TMP/flat-one.json" "$CN"
 # Either outcome of the PATCH: three still at the default, three reset to {} (live_of's value).
 flat_live "$FLAT_MIX" cloudflare_record.pages_apex cloudflare_record.protonmail_dkim_1 cloudflare_record.protonmail_dkim_2
+n_flat() { jq '[.[] | select(.result.settings == {flatten_cname:false})] | length' "$1"; }   # <live>: records at the default
 na="$(norm_admits "$GATE" "$TMP/flat-one.json")"
-if [[ -z "$na" ]]; then pass "L11a: one CNAME's live settings {flatten_cname:false} compares equal (26 import-normalize, PASS)"
+if [[ -z "$na" && "$(n_flat "$TMP/flat-one.json")" -eq 1 ]]; then pass "L11a: one CNAME's live settings {flatten_cname:false} compares equal (26 import-normalize, PASS)"
 else fail "L11a: a CNAME's flatten_cname=false default was refused" 1 "$na"; fi
 na="$(norm_admits "$GATE" "$FLAT_ALL")"
-if [[ -z "$na" ]]; then pass "L11b: all six CNAMEs at {flatten_cname:false} pass (the rehearsal's read)"
+if [[ -z "$na" && "$(n_flat "$FLAT_ALL")" -eq 6 ]]; then pass "L11b: all six CNAMEs at {flatten_cname:false} pass (the rehearsal's read)"
 else fail "L11b: the rehearsal's six-CNAME read was refused" 1 "$na"; fi
 lrow "L11c: a CNAME's flatten_cname=true differs" "settings,settings:other" '.result.settings = {flatten_cname:true}' "$CN"
 lrow "L11d: a CNAME's flatten_cname=false with an extra key differs" "settings,settings:other" '.result.settings = {flatten_cname:false, ipv4_only:true}' "$CN"
@@ -220,26 +239,38 @@ lrow "L11g: a live CNAME with flatten_cname=false against a planned TXT differs 
 L11G="REFUSE $NR differs from the live record (type,settings,settings:only-flatten-false)"
 cp "$TMP/lr.json" "$TMP/l11g.json"   # lrow's last read: L11g's
 d5="$(cf_account_migrate_live_diff redirects-dns "$NORM" "$FLAT_ALL")"; d5_rc=$?
-if [[ "$d5_rc" -eq 0 && -z "$d5" ]]; then pass "D5: the re-read with the six CNAMEs at {flatten_cname:false} is clean"
+if [[ "$d5_rc" -eq 0 && -z "$d5" && "$(n_flat "$FLAT_ALL")" -eq 6 ]]; then pass "D5: the re-read with the six CNAMEs at {flatten_cname:false} is clean"
 else fail "D5: the re-read refused the flatten_cname=false default" "$d5_rc" "$d5"; fi
 d6="$(cf_account_migrate_live_diff redirects-dns "$NORM" "$FLAT_MIX")"; d6_rc=$?
-if [[ "$d6_rc" -eq 0 && -z "$d6" ]] && ! cmp -s "$FLAT_MIX" "$NLIVE" && ! cmp -s "$FLAT_MIX" "$FLAT_ALL"; then
+if [[ "$d6_rc" -eq 0 && -z "$d6" && "$(n_flat "$FLAT_MIX")" -eq 3 ]] && ! cmp -s "$FLAT_MIX" "$NLIVE"; then
   pass "D6: a re-read with three CNAMEs at {flatten_cname:false} and three at {} (the PATCH reset) is clean"
 else fail "D6: the mixed re-read was refused, or the fixture is not mixed" "$d6_rc" "$d6"; fi
 jq -c --arg r "$NR" '.[$r].result.settings = {flatten_cname:false}' "$NLIVE" > "$TMP/m-flat-txt.json"
+# The pristine gate must refuse this fixture (L11's case), or the mutant passing it proves nothing.
+cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/m-flat-txt.json" >/dev/null 2>&1 && fail "M-flatten-guard: the pristine gate admits its own fixture" 0 ""
 # shellcheck disable=SC2016 # sed expression matches literal jq text
 gm "M-flatten-guard: dropping the CNAME type guard admits a TXT record's flatten_cname=false (L11)" \
   's/ and \$r\.type == "CNAME" and \$after\.type == "CNAME" then empty$/ then empty/' cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/m-flat-txt.json"
+# The mutant must still run and refuse on `type` alone: a mutant whose jq fails would also lose the needle.
 # shellcheck disable=SC2016 # sed expression matches literal jq text
-gm_lost "M-flatten-after: dropping the planned-type clause loses L11g's settings tokens" \
-  's/ and \$after\.type == "CNAME" then empty$/ then empty/' "$L11G" redirects-dns "$NORM" "" "$TMP/l11g.json"
+sed 's/ and \$after\.type == "CNAME" then empty$/ then empty/' "$GATE" > "$TMP/m-flat-after.sh"
+mfa="$(gate_in "$TMP/m-flat-after.sh" redirects-dns "$NORM" "" "$TMP/l11g.json")"
+if cmp -s "$TMP/m-flat-after.sh" "$GATE"; then fail "M-flatten-after: the mutation did not land" 1 ""
+elif grep -qxF "REFUSE $NR differs from the live record (type)" <<<"$mfa" && ! grep -qF "$L11G" <<<"$mfa"; then
+  pass "M-flatten-after: dropping the planned-type clause leaves L11g refused on type alone (RED)"
+else fail "M-flatten-after: the mutant did not refuse L11g on type alone" 1 "$mfa"; fi
 ```
 
 This adds 12 assertions: `F5-cname`, `L11a`, `L11b`, `L11c`–`L11f` (4), `L11g`, `D5`, `D6`,
 `M-flatten-guard` and `M-flatten-after`. 344 + 12 = 356. D6 uses a **mixed** read: three CNAMEs at
 `{flatten_cname:false}` and three at `{}`. That covers both outcomes of the PATCH. A read of all six
 at `{}` would be byte-identical to `$NLIVE`, because `live_of` writes `settings:{}`, and would only
-repeat D1. The two `cmp` guards keep D6 from collapsing back into the canonical read or into D5's.
+repeat D1. `n_flat` makes each of L11a, L11b, D5 and D6 prove that its fixture really holds 1, 6, 6
+or 3 records at the default, so none can pass on an unchanged read. Deepen-pass tightening: the
+`M-flatten-guard` fixture is checked against the pristine gate, which must refuse it. `M-flatten-after`
+is written inline rather than through `gm_lost`, because `gm_lost` would also pass on a mutant whose jq
+fails to evaluate. The inline row requires the mutant to still print
+`REFUSE <NR> differs from the live record (type)` as a whole line.
 
 ### Phase 2: GREEN (the comparator clause and one header sentence)
 
@@ -344,23 +375,39 @@ None. No open `code-review` issue (96 checked) names any of the four files or AD
 
 ## Scope Check
 
-| Ask (issue #13056 Scope) | Plan item | Provenance |
-|---|---|---|
-| `settings` clause of `cfam_live_diff` | Phase 2a | issue |
-| One header sentence citing the evidence | Phase 2b | issue |
-| L11 relabel only | Phase 1.3 | issue |
-| L11a, L11b: CNAME `{flatten_cname:false}` passes, one and all six | Phase 1 block | issue |
-| L11c–L11f: `true`, extra key, `"false"`, `null` refused as `settings:other` | Phase 1 block (`lrow` with the CNAME address) | issue |
-| L11g: live CNAME against planned TXT refused | Phase 1 block | issue |
-| D4 and D5: re-read with `{flatten_cname:false}` and `{}` | Phase 1 block as **D5/D6** (label collision); D6 is a mixed read so it is not a copy of D1 | issue (relabelled) |
-| M-flatten-guard, M-flatten-after | Phase 1 block | issue |
-| Fixture assertion: CNAME set in `$NORM` is exactly the six | Phase 1 block (`F5-cname`) | issue |
-| Runbook Step 2 token-table row and one sentence of prose | Phase 3a | issue |
-| ADR-329 `settings` sentence | Phase 3b | issue |
-| No change to dns.tf, the job script or `cfam_norm_shape` | Explicitly-not-edited list, AC4 | issue/invocation |
-| Anti-vacuity floor 344 → 356 | Phase 1.5 | inferred: the suite's own floor would otherwise under-count the new rows (ADR-193 floor discipline) |
+### Ask Mapping
 
-Split assessment: one PR. The four files are one change to one property.
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "[issue #13056] `tests/scripts/lib/cf-account-migrate-gate.sh`: the `settings` clause of `cfam_live_diff`, plus one header sentence citing the evidence." | Phase 2a, Phase 2b; Files to Edit entry 1 | mapped |
+| 2 | "[issue #13056] L11: relabel only." | Phase 1 item 3 | mapped |
+| 3 | "[issue #13056] L11a and L11b: CNAME `{flatten_cname:false}` passes, one record and all six." | Phase 1 block (`norm_admits` with a live file) | mapped |
+| 4 | "[issue #13056] L11c to L11f: `true`, an extra key, the string `\"false\"` and `null` are refused as `settings:other`." | Phase 1 block (`lrow` with the CNAME address) | mapped |
+| 5 | "[issue #13056] L11g: live CNAME against a planned TXT is refused." | Phase 1 block | mapped |
+| 6 | "[issue #13056] D4 and D5: the re-read with `{flatten_cname:false}` and with `{}`." | Phase 1 block as D5/D6 (D4 is taken). D6 is a mixed read | mapped |
+| 7 | "[issue #13056] Mutations M-flatten-guard and M-flatten-after." | Phase 1 block | mapped |
+| 8 | "[issue #13056] A fixture assertion that the CNAME set in `$NORM` is exactly these six." | Phase 1 block (`F5-cname`) | mapped |
+| 9 | "[issue #13056] The runbook's Step 2 token-table row and one sentence of prose, and the ADR-329 `settings` sentence." | Phase 3a, Phase 3b; Files to Edit entries 3-4 | mapped |
+| 10 | "[brief] No change to dns.tf, cf-account-migrate-job.sh or cfam_norm_shape." | Explicitly-not-edited list; AC4 | mapped |
+| 11 | "[brief] Do NOT dispatch any cf-account-migrate.yml workflow run (rehearsal or real)" | Phase 4; AC8; AC9 assigned to the parent session | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| `tests/scripts/lib/cf-account-migrate-gate.sh` (Phase 2a/2b) | ask 1 | asked |
+| `tests/scripts/test-cf-account-migrate-gate.sh` rows (Phase 1 block, L11 relabel) | asks 2-8 | asked |
+| `norm_admits` optional live argument, `lrow` optional address argument | — | inferred — justification: plan review found that the separate `flat_admits`/`crow_s` helpers duplicated these two, and two helpers with one contract drift. The extension is what lets asks 3-4 reuse the suite's verified assertions |
+| Anti-vacuity floor 344 → 356 | — | inferred — justification: the suite's ADR-193 floor sits at exactly 344 today. Leaving it there lets the 12 new assertions vanish silently, which is the enforcement contract the floor exists for |
+| Runbook + ADR-329 edits (Phase 3) | ask 9 | asked |
+| Phase 4 hand-off / AC8 | ask 11 | asked |
+
+### Split Assessment
+
+- Subsystems touched: 2 — `tests`, `knowledge-base`
+- Planned files: 4 | Estimated changed lines: about 75
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
 
 ## Guard Contract
 
@@ -385,8 +432,8 @@ No other code path compares `settings`. The job script (`reread_records`) only c
 | # | Edit (design-derived) | Must go RED | Witness |
 |---|---|---|---|
 | 1 | Drop the whole type guard (`and $r.type == "CNAME" and $after.type == "CNAME"`) | A TXT record's `{flatten_cname:false}` is admitted | `M-flatten-guard` (`gm`, mutant rc 0 on L11's fixture) |
-| 2 | Drop only the planned-type conjunct (`and $after.type == "CNAME"`) | L11g's REFUSE line loses `settings,settings:only-flatten-false` | `M-flatten-after` (`gm_lost`) |
-| 3 | Drop the value conjunct (admit any `settings` on a CNAME pair) | L11c–L11f PASS | L11c–L11f themselves (verified on the prototype: all four go RED) |
+| 2 | Drop only the planned-type conjunct (`and $after.type == "CNAME"`) | L11g's REFUSE line becomes exactly `(type)` | `M-flatten-after` (inline; requires the mutant to still run and refuse on `type`) |
+| 3 | Drop the value conjunct (admit any `settings` on a CNAME pair) | L11c–L11f PASS | L11c–L11f themselves. Reproduced by AC2b: the sandbox run ends `351 passed, 5 failed`, failing L11c, L11d, L11e, L11f and M-flatten-guard ("did not land", because its anchor sits on the mutated line) |
 | 4 | Revert the `elif` (today's code) | L11a, L11b, D5, D6 refuse | L11a, L11b, D5, D6 (the Phase 1 RED) |
 | 5 (dispatch) | Either caller stops reaching the carve-out (the gate's live compare or the re-read's `cf_account_migrate_live_diff`) | The other caller's rows stay green while this one's go red | L11a/L11b reach it through `cf_account_migrate_gate`; D5/D6 reach it through `cf_account_migrate_live_diff`. Existing `G1-9` covers the gate's live-read dispatch |
 | 6 (second member) | Admit only the first CNAME (a per-record short-circuit) | L11b (all six) refuses or prints fewer than 26 import-normalize lines | `L11b` via `norm_admits "$GATE" "$FLAT_ALL"` (counts 26 lines, exact verdict, no in-state-update) |
@@ -396,9 +443,10 @@ No other code path compares `settings`. The job script (`reread_records`) only c
 
 - RED on a suite edit: the `F5-cname` literal set. If the fixture loses or gains a CNAME (for example a
   `dns.tf` type edit), `F5-cname` fails before any L11a/L11b verdict can be read as meaningful.
-- Must-PASS non-canonical input: `D6`/`FLAT_MIX` (three CNAMEs at `{flatten_cname:false}`, three at
-  `{}`). Two `cmp` guards keep it differing from `$NLIVE` and from `$FLAT_ALL`. `L11a` (one CNAME
-  changed) is the second. Both differ from the canonical read in a way the contract permits. `G1-8b`
+- Must-PASS non-canonical inputs: `L11a` (one CNAME changed) and `D6`/`FLAT_MIX` (three CNAMEs at
+  `{flatten_cname:false}`, three at `{}`). `n_flat` guards each fixture's count. `cfam_live_diff`
+  compares record by record, so D6 adds no independent evidence beyond D5 and D1. It stays because the
+  issue asks for the `{}` re-read, and it documents that the PATCH's two outcomes can coexist. `G1-8b`
   stays as the `//`-on-false harness row.
 - The anti-vacuity floor (356) catches a block that silently stops running.
 
@@ -407,10 +455,15 @@ literals (`CNAMES`, `L11G`, the floor) live in the suite, and the RED/GREEN evid
 plan from a run on the unfixed lib. Weakening the clause needs a diff to both files, which a reviewer
 sees.
 
-**Residual.** Dropping only the live-type conjunct (`$r.type == "CNAME"`) has no dedicated witness. Its
-only observable effect is on a live TXT / planned CNAME pair, where the `type` field already refuses
-the record. The mutation changes the token list, not the verdict. The issue's closed scope names two
-mutations, so this one is disclosed and not added.
+**Residual.** The separate `type` compare already refuses every pair whose live and planned types
+differ, so dropping either type conjunct ALONE never changes the verdict. Only the diagnostic tokens
+change. `M-flatten-guard` is the verdict witness for the type guard as a whole. `M-flatten-after` is a
+diagnostic witness for the planned-type conjunct. The live-type conjunct (`$r.type == "CNAME"`) has no
+witness of its own: it would show only on a live TXT / planned CNAME pair. The verdict on such pairs is
+held by the `type` compare, whose mutation row is `G1-7: neutering the type compare admits a differing
+type`. If a later change loosens the `type` compare too, nothing in this block catches the live-type
+gap. The issue's closed scope names two mutations, so this is disclosed rather than added (security
+review proposed a row; recorded in `decision-challenges.md`).
 
 ## Acceptance Criteria
 
@@ -421,6 +474,10 @@ mutations, so this one is disclosed and not added.
 - [ ] AC2: the RED evidence is reproduced at work time. The Phase 1 edits run against the unfixed lib
   fail exactly `L11a`, `L11b`, `D5`, `D6`, `M-flatten-guard` and `M-flatten-after`. The output ends
   `350 passed, 6 failed`.
+- [ ] AC2b: the value conjunct's witnesses are reproduced. On a scratch copy of the fixed lib, apply
+  `sed 's/elif \$r\.settings == {"flatten_cname":false} and /elif /'` and run the suite against it.
+  It ends `351 passed, 5 failed`, failing exactly `L11c`, `L11d`, `L11e`, `L11f` and `M-flatten-guard`
+  ("mutation did not land"). The worktree lib is not left mutated.
 - [ ] AC3: the existing `L11` (tokens `settings,settings:only-flatten-false` on
   `cloudflare_record.dkim_resend`), `L12`, `L13`, `G1-7 settings` and `G1-8b` rows still pass
   unchanged, except for L11's label.
@@ -537,6 +594,11 @@ discoverability_test:
   command: grep -c 'and $after.type == "CNAME" then empty' tests/scripts/lib/cf-account-migrate-gate.sh
   expected_output: "1"
 ```
+
+The command's path contains `tests/`, which trips deepen-plan §4.7's suite-shape proxy. That hit is a
+false positive. The command is one `grep -c` over one library file and finishes in milliseconds, well
+inside Check 10's 15 s cap. `probe-verb-gate.sh` accepts it (rc 0). It prints `0` on `origin/main`
+today and `1` after the fix, so it can tell the two trees apart.
 
 ## Test Scenarios
 

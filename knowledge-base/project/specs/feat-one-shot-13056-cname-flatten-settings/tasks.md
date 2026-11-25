@@ -15,7 +15,7 @@ Cloudflare writes. Change nothing in `dns.tf`, `cf-account-migrate-job.sh` or `c
 
 - 2.0 Give `norm_admits` an optional `[<live>]` argument and `lrow` an optional `[<address>]` argument, as in plan Phase 1 items 1 and 2.
 - 2.1 Relabel `L11` to `L11: a non-CNAME record's live settings flatten_cname=false differ`. Leave its tokens and filter as they are.
-- 2.2 Insert the plan's Phase 1 block, verbatim, immediately before `# Anti-vacuity floor, reported outside pass()/fail() (ADR-193).`. The block holds F5-cname, L11a–L11g, D5, D6 (mixed read), M-flatten-guard and M-flatten-after.
+- 2.2 Insert the plan's Phase 1 block, verbatim, immediately before `# Anti-vacuity floor, reported outside pass()/fail() (ADR-193).`. The block holds F5-cname, L11a–L11g, D5, D6 (mixed read), the `n_flat` count guards, M-flatten-guard (with its pristine-refusal check) and the inline M-flatten-after.
 - 2.3 Raise the floor from 344 to 356, changing both the `-lt` and the message.
 - 2.4 Run the suite. It must fail exactly `L11a`, `L11b`, `D5`, `D6`, `M-flatten-guard` and `M-flatten-after`, ending `350 passed, 6 failed` (AC2).
 
@@ -25,6 +25,7 @@ Cloudflare writes. Change nothing in `dns.tf`, `cf-account-migrate-job.sh` or `c
 - 3.2 Append the four-line header sentence (CTO ruling 2026-11-25, #13056) to the IMPORT-NORMALIZE paragraph.
 - 3.3 Run the suite. It must print `356 passed, 0 failed` (AC1) and leave L11, L12, L13, G1-7 and G1-8b green (AC3).
 - 3.4 Run the `cfam_norm_shape` byte-identity diff (AC4) and shellcheck with no new findings (AC6).
+- 3.5 Run AC2b on a scratch copy of the lib, never the worktree file: apply the value-conjunct mutation and expect `351 passed, 5 failed` (L11c–L11f plus M-flatten-guard "did not land").
 
 ## 4. Docs
 
