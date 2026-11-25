@@ -1,9 +1,10 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=infra
-# generated-from-runs=40936377720,40883248903,40875701895,40836579393,40796005155,40944524196,40952456472,40964559289
+# generated-from-runs=durations:suite-durations.tsv
 # default-weight-ms=4000
-# generated-at=2026-11-20T02:40:05Z
+# generated-at=2026-11-25T17:02:15Z
 # generator=regenerate-shard-manifest.py v3
+# growth-acked=f71578b5097bac65b3250bc57060d0be83f688eff8088d775a5f9de983b9a20c
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	15000	measured
 apps/web-platform/infra/apex-single-node-replace.test.sh	500	measured
 apps/web-platform/infra/apt-bounded.test.sh	38500	measured
@@ -16,7 +17,7 @@ apps/web-platform/infra/canary-bundle-claim-check.test.sh	6000	measured
 apps/web-platform/infra/cat-deploy-state.test.sh	20500	measured
 apps/web-platform/infra/cat-infra-config-state.test.sh	0	measured
 apps/web-platform/infra/cat-inngest-verify-state.test.sh	0	measured
-apps/web-platform/infra/cf-account-migrate-job.test.sh	106000	measured
+apps/web-platform/infra/cf-account-migrate-job.test.sh	352000	measured
 apps/web-platform/infra/cf-account-migration-complete.test.sh	4000	floor
 apps/web-platform/infra/cf-account-state-migrate.test.sh	4000	floor
 apps/web-platform/infra/ci-deploy-wrapper.test.sh	1000	measured

@@ -754,10 +754,19 @@ _SUITE_BOUNDS=(
   # The weight row (suite-durations.tsv) is an ESTIMATE, never measured on CI: the first CI wall time of this suite's leg must be recorded
   # (ADR-317, the runbook residuals), and the suite moves to a lighter leg if the leg exceeds ~700 s.
   "apps/web-platform/infra/key-rotate-workflow.test.sh=840"
-  # #12931 (PR 12932 review): the CF account migrate job battery runs the real gate and state forget
-  # per case plus its sed mutants; its weight row is 106 s measured (suite-durations.tsv). Under -P 4
-  # contention (the ~2.5-3x #8688 multiplier) that nears the 360 s default, so pin at 720 per the
-  # ATTRIBUTION block's >=1.5x rule; a slow day renders as this suite's own RED, not a leg timeout.
+  # #12931 / #13051 (PR #13052): the CF account migrate job battery runs the real gate and state forget
+  # per case plus its sed mutants. It outgrew this bound once (killed at 720 s); after #13052's slim
+  # workspace, mutation-row pool and per-job fork cuts, three CI attempts of one commit measured
+  # 268/352/350 s (suite-timings-infra-*): worst 352 s, so 720 is ~2.0x the worst, inside the
+  # ATTRIBUTION block's >=1.5x rule, and the weight row is 352000 measured (suite-durations.tsv).
+  # The same commit has measured 267 s and 526 s on two runners (every large leg sibling slowed
+  # ~1.9x), so read a figure next to its leg siblings, not alone.
+  # Re-measure: download suite-timings-infra-* from >=3 infra-validation attempts, put the worst in
+  # suite-durations.tsv, then `regenerate-shard-manifest.py --group infra --durations
+  # apps/web-platform/infra/suite-durations.tsv --write --allow-growth`.
+  # Revisit when (a) five post-fix CI samples exist (the CTO ruling's re-check of the bound), or
+  # (b) the worst sample passes 480 s (720/1.5) or EXPECTED_CASES grows past ~330 (rows added since
+  # 295); then cut harness cost or split the file, never only raise the bound.
   "apps/web-platform/infra/cf-account-migrate-job.test.sh=720"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
