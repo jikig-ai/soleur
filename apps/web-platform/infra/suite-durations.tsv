@@ -2,9 +2,9 @@
 # group=infra
 # generated-from-runs=durations:suite-durations.tsv
 # default-weight-ms=4000
-# generated-at=2026-11-25T18:08:16Z
+# generated-at=2026-11-25T22:05:51Z
 # generator=regenerate-shard-manifest.py v3
-# growth-acked=340e9af074aacca04cb7b34af997f5ba23ca5091e2b5e2b7b73a5b433b93e446
+# growth-acked=a9e728441a89f73acb96597548e71659f68fa791c144a812f3902f15fc40a68e
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	15000	measured
 apps/web-platform/infra/apex-single-node-replace.test.sh	500	measured
 apps/web-platform/infra/apt-bounded.test.sh	38500	measured
@@ -17,7 +17,7 @@ apps/web-platform/infra/canary-bundle-claim-check.test.sh	6000	measured
 apps/web-platform/infra/cat-deploy-state.test.sh	20500	measured
 apps/web-platform/infra/cat-infra-config-state.test.sh	0	measured
 apps/web-platform/infra/cat-inngest-verify-state.test.sh	0	measured
-apps/web-platform/infra/cf-account-migrate-job.test.sh	396000	measured
+apps/web-platform/infra/cf-account-migrate-job.test.sh	525000	measured
 apps/web-platform/infra/cf-account-migration-complete.test.sh	4000	floor
 apps/web-platform/infra/cf-account-state-migrate.test.sh	4000	floor
 apps/web-platform/infra/ci-deploy-wrapper.test.sh	1000	measured
@@ -188,7 +188,7 @@ apps/web-platform/infra/web-private-nic-guard.test.sh	18000	measured
 apps/web-platform/infra/web-probes-token-rotation.test.sh	17000	measured
 apps/web-platform/infra/web-zot-consumer-probe.test.sh	13000	measured
 apps/web-platform/infra/webhook-doppler-token-reread.test.sh	1500	measured
-apps/web-platform/infra/workspaces-boot-unlock.test.sh	661500	measured
+apps/web-platform/infra/workspaces-boot-unlock.test.sh	808000	measured
 apps/web-platform/infra/workspaces-luks-cutover-workflow.test.sh	1000	measured
 apps/web-platform/infra/workspaces-luks-freeze.test.sh	58500	measured
 apps/web-platform/infra/workspaces-luks-fresh-boot.test.sh	2000	measured

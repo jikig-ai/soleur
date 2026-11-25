@@ -681,7 +681,9 @@ missing flush, because both defer scoring the same way. The pooled run must matc
   instrument self-test's deliberate `FAIL arm records (EXPECTED, subtracted below)` line. The exact
   path printed on the run's `[sandbox]` stderr line is gone (`mktemp -t` follows `TMPDIR`, so never
   glob for it). Recorded once in the PR body as evidence.
-- [ ] AC4: The suite's `suite-timings-infra-*` value over at least three infra-validation attempts of
+- [ ] AC4 (MISSED, fallback applied 2026-11-25 by CTO ruling: three attempts of 7282744c64 measured
+  290/525/521 s, worst 525 s; the 2-wide pool ships, the bound is 790 s = 1.5x 525, and the split
+  is #13064, blocked on #12958): The suite's `suite-timings-infra-*` value over at least three infra-validation attempts of
   this PR's final commit has a worst of at most 480000 ms and a median of at most 360000 ms, and the
   row is PASS. The bound stays at 720 s. Each attempt records the leg's other suites, and the PR stops
   if any suite is bound-killed or `run-registered-suites.test.sh` passes 486 s (third revision
@@ -699,12 +701,13 @@ missing flush, because both defer scoring the same way. The pooled run must matc
   change. `git diff origin/main -- apps/web-platform/infra/suite-durations.tsv | grep -cE '^\+[^#+]'`
   prints `1`. (Revised 2026-11-25, CTO review-phase ruling: `ci-deploy.test.sh` and
   `cron-egress-nftables.test.sh` are re-priced to their worst measured CI figures, 878000 and 483000,
-  so the leg balance does not rest on known-stale weights; the grep prints `3`. This suite's row starts
+  so the leg balance does not rest on known-stale weights; the grep prints `3`. A later ruling also
+  re-priced `workspaces-boot-unlock.test.sh` to its 808000 worst, so it prints `4`. This suite's row starts
   at the 396000 serial Step A figure and moves to the AC4 worst only if that is more than 10% above it.)
 - [x] AC7: `suite-shard-legs.tsv` was produced by
   `regenerate-shard-manifest.py --group infra --durations apps/web-platform/infra/suite-durations.tsv --write`,
   and the dry-run leg table is in the PR body. The leg this suite lands on is recorded, whatever it is.
-- [ ] AC8: The `_SUITE_BOUNDS` entry still reads `cf-account-migrate-job.test.sh=720`. Its comment
+- [ ] AC8: (Revised 2026-11-25 by CTO ruling: the entry reads `cf-account-migrate-job.test.sh=790`.) The `_SUITE_BOUNDS` entry still reads `cf-account-migrate-job.test.sh=720`. Its comment
   names the weight row's basis (revised 2026-11-25: commits after the AC4 measurement may not touch
   this file, so the measured attempts live in the PR body), the ratio, the PR number, the re-measure recipe and both revisit
   triggers. Check with

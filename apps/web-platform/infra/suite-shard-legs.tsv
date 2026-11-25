@@ -3,14 +3,14 @@
 # generated-from-run=durations:suite-durations.tsv
 # generated-from-runs=durations:suite-durations.tsv
 # default-weight-ms=4000
-# generated-at=2026-11-25T18:08:16Z
+# generated-at=2026-11-25T22:05:51Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --group infra --incremental --write   # suite added/removed; --group infra --runs 5 --write rebalances
 # runner: apps/web-platform/infra/run-registered-suites.sh manifest/hashing assignment (untabled labels hash-fallback)
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	2
 apps/web-platform/infra/apex-single-node-replace.test.sh	2
 apps/web-platform/infra/apt-bounded.test.sh	1
-apps/web-platform/infra/arm-heartbeats.test.sh	4
+apps/web-platform/infra/arm-heartbeats.test.sh	3
 apps/web-platform/infra/audit-bwrap-uid.test.sh	3
 apps/web-platform/infra/bastion.test.sh	1
 apps/web-platform/infra/betterstack-alert-structure.test.sh	2
@@ -19,7 +19,7 @@ apps/web-platform/infra/canary-bundle-claim-check.test.sh	4
 apps/web-platform/infra/cat-deploy-state.test.sh	1
 apps/web-platform/infra/cat-infra-config-state.test.sh	3
 apps/web-platform/infra/cat-inngest-verify-state.test.sh	3
-apps/web-platform/infra/cf-account-migrate-job.test.sh	4
+apps/web-platform/infra/cf-account-migrate-job.test.sh	1
 apps/web-platform/infra/cf-account-migration-complete.test.sh	2
 apps/web-platform/infra/cf-account-state-migrate.test.sh	1
 apps/web-platform/infra/ci-deploy-wrapper.test.sh	4
@@ -39,7 +39,7 @@ apps/web-platform/infra/cron-egress-enforce-probe.test.sh	3
 apps/web-platform/infra/cron-egress-firewall.test.sh	2
 apps/web-platform/infra/cron-egress-ghcr-probe.test.sh	2
 apps/web-platform/infra/cron-egress-metadata-endpoint.test.sh	1
-apps/web-platform/infra/cron-egress-nftables.test.sh	1
+apps/web-platform/infra/cron-egress-nftables.test.sh	3
 apps/web-platform/infra/cron-egress-self-heal.test.sh	1
 apps/web-platform/infra/cutover-inngest-workflow.test.sh	3
 apps/web-platform/infra/disk-monitor.test.sh	3
@@ -58,13 +58,13 @@ apps/web-platform/infra/git-data-cutover-access.test.sh	2
 apps/web-platform/infra/git-data-emit.test.sh	3
 apps/web-platform/infra/git-data-flag-precheck.test.sh	3
 apps/web-platform/infra/git-data-liveness.test.sh	3
-apps/web-platform/infra/git-data-luks-reopen.test.sh	4
+apps/web-platform/infra/git-data-luks-reopen.test.sh	2
 apps/web-platform/infra/git-data-luks.test.sh	4
 apps/web-platform/infra/git-data-nftables-syntax.test.sh	1
 apps/web-platform/infra/git-data-ownership.test.sh	1
 apps/web-platform/infra/git-data-pre-receive.test.sh	2
 apps/web-platform/infra/git-data-provision.test.sh	3
-apps/web-platform/infra/git-data-refs-assert.test.sh	3
+apps/web-platform/infra/git-data-refs-assert.test.sh	4
 apps/web-platform/infra/git-data-remove.test.sh	3
 apps/web-platform/infra/git-data-render-strip-parity.test.sh	4
 apps/web-platform/infra/git-data-root-key.test.sh	2
@@ -85,7 +85,7 @@ apps/web-platform/infra/infra-config-apply.test.sh	3
 apps/web-platform/infra/infra-config-gate.test.sh	4
 apps/web-platform/infra/infra-config-handler-bootstrap.test.sh	1
 apps/web-platform/infra/infra-config-install.test.sh	2
-apps/web-platform/infra/infra-config-repush-mutation.test.sh	3
+apps/web-platform/infra/infra-config-repush-mutation.test.sh	4
 apps/web-platform/infra/infra-config-verify.test.sh	4
 apps/web-platform/infra/inngest-boot-emitter.test.sh	1
 apps/web-platform/infra/inngest-bootstrap-mirror-only.test.sh	3
