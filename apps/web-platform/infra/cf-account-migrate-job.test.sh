@@ -32,6 +32,8 @@ grep -qx "CFAM_OLD_ZONE_ID=\"$OZ\"" "$REPO/tests/scripts/lib/cf-account-migrate-
   && grep -qx "CFAM_OLD_ACCOUNT_ID=\"$OA\"" "$REPO/tests/scripts/lib/cf-account-migrate-gate.sh" \
   || { printf '[FATAL] OLD ids in the gate library differ from the legacy account literals\n' >&2; exit 1; }
 SENTINEL="SENTINEL-SECRET-VALUE-DO-NOT-PRINT"
+# The deploy service token the tunnel fixture's policy admits (not a secret: a token UUID).
+DT="11111111-2222-4333-8444-555555555555"
 
 # shellcheck source=/dev/null
 source "$REPO/tests/scripts/lib/cf-account-migrate-gate.sh" || { printf '[FATAL] cannot source the gate\n' >&2; exit 2; }
@@ -77,6 +79,10 @@ log() { printf 'terraform[%s] %s\n' "$L" "$*" >>"$D/calls.log"; }
 for v in TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_PROVIDER; do
   [[ -n "${!v:-}" ]] && printf 'TFLOG-LEAK %s in terraform %s\n' "$v" "${1:-}" >>"$D/calls.log"
 done
+# The Doppler WRITE token belongs to the one sync call: terraform must never inherit it.
+if [[ -n "${DOPPLER_TOKEN_WRITE:-}" || "${DOPPLER_TOKEN:-}" == stub-write ]]; then
+  printf 'WRITE-TOKEN-LEAK in terraform %s\n' "${1:-}" >>"$D/calls.log"
+fi
 mode() { if [[ -f "$D/mode.$1" ]]; then cat "$D/mode.$1"; else printf '0'; fi; }
 case "${1:-}" in
   init)
@@ -104,15 +110,43 @@ case "${1:-}" in
     done
     printf 'Plan: stub\n'; exit "$(mode plan)" ;;
   apply) shift; log "apply $*"; exit "$(mode apply)" ;;
+  output)
+    [[ "$#" -eq 3 && "$2" == -raw ]] || { log "UNEXPECTED $*"; exit 64; }
+    case "$3" in
+      ci_ssh_access_service_token_client_id|ci_ssh_access_service_token_client_secret) ;;
+      *) log "UNEXPECTED $*"; exit 64 ;;
+    esac
+    log "output $3"
+    if [[ -f "$D/mode.tfoutput-empty" ]]; then exit 0; fi
+    printf 'SENTINEL-SECRET-VALUE-DO-NOT-PRINT-%s' "$3" ;;
   *) log "UNEXPECTED $*"; exit 64 ;;
 esac
 STUB
-# doppler accepts exactly `run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var --`.
+# doppler accepts exactly `run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var --`,
+# and the CI-SSH sync's stdin write and --plain read of its two keys, on the write token only.
 cat >"$SBX/bin/doppler" <<'STUB'
 #!/usr/bin/env bash
 set -uo pipefail
 D="${STUB_DIR:?}"
 printf 'doppler %s\n' "${1:-}" >>"$D/calls.log"
+if [[ "${1:-} ${2:-}" == "secrets set" || "${1:-} ${2:-}" == "secrets get" ]]; then
+  no() { printf 'doppler %s\n' "$*" >>"$D/refused.log"; exit 64; }
+  case "${3:-}" in CI_SSH_ACCESS_TOKEN_ID|CI_SSH_ACCESS_TOKEN_SECRET) ;; *) no "$@" ;; esac
+  [[ "${DOPPLER_TOKEN:-}" == stub-write ]] || no "(not the write token)" "$@"
+  if [[ "$2" == set ]]; then
+    [[ $# -eq 9 && "$4 $5 $6 $7 $8 $9" == "--silent --no-interactive -p soleur -c prd_terraform" ]] || no "$@"
+    v="$(cat)"
+    if [[ -f "$D/mode.dopplerset" ]]; then exit 1; fi
+    if [[ -f "$D/mode.dopplercorrupt" ]]; then v=corrupted; fi
+    printf '%s' "$v" >"$D/dstore.$3"
+    printf 'doppler-set %s\n' "$3" >>"$D/calls.log"
+  else
+    [[ $# -eq 8 && "$4 $5 $6 $7 $8" == "-p soleur -c prd_terraform --plain" ]] || no "$@"
+    [[ -f "$D/dstore.$3" ]] || exit 1
+    cat "$D/dstore.$3"; printf '\n'
+  fi
+  exit 0
+fi
 [[ $# -gt 9 && "$1 $2 $3 $4 $5 $6 $7 $8 $9" == "run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var --" ]] \
   || { printf 'doppler %s\n' "$*" >>"$D/refused.log"; exit 64; }
 if [[ -f "$D/mode.doppler" ]]; then exit "$(cat "$D/mode.doppler")"; fi
@@ -195,6 +229,8 @@ if [[ "$url" == https://api.cloudflare.com/client/v4/* ]]; then
     printf 'cf-api-probe %s token=%s\n' "$path" "$name" >>"$D/calls.log"
     # cfrc.<name>: curl itself fails (a transport fault) with that exit code; -w still prints 000.
     if [[ -f "$D/cfrc.$name" ]]; then printf '000'; exit "$(cat "$D/cfrc.$name")"; fi
+    # cfpath.<path with / -> _>: that one probe answers this code, whichever token asked.
+    if [[ -f "$D/cfpath.${path//\//_}" ]]; then cat "$D/cfpath.${path//\//_}"; exit 0; fi
     if [[ -f "$D/cfcode.$name" ]]; then cat "$D/cfcode.$name"; else printf '200'; fi
     exit 0
   fi
@@ -265,10 +301,28 @@ chmod +x "$SBX/bin/"*
 build_plan() {
   local spec lit
   spec="$(cf_account_migrate_phase_spec "$1")" || return 1
-  lit="$(_cfam_import_literals)" || return 1
-  jq -n --argjson spec "$spec" --argjson lit "$lit" --arg s "$SENTINEL" --arg nz "$NZ" --arg na "$NA" '
-    def ids($a): if ($a | test("^cloudflare_(list|pages_project|pages_domain)[.]")) or $a == "cloudflare_ruleset.bulk_redirects" then {account_id: $na}
+  lit="$(_cfam_import_literals "$1")" || return 1
+  jq -n --argjson spec "$spec" --argjson lit "$lit" --arg s "$SENTINEL" --arg nz "$NZ" --arg na "$NA" --arg dt "$DT" '
+    def ids($a): if ($a | test("^cloudflare_(list|pages_project|pages_domain|zero_trust_tunnel_cloudflared|zero_trust_tunnel_cloudflared_config|zero_trust_access_service_token|notification_policy)[.]")) or $a == "cloudflare_ruleset.bulk_redirects" then {account_id: $na}
                  elif ($a | startswith("cloudflare_")) then {zone_id: $nz} else {} end;
+    # The Access content the gate grades in the tunnel phase, in the shape provider 4.52.7 plans it.
+    def papp: "cloudflare_zero_trust_access_application";
+    def ptok: "cloudflare_zero_trust_access_service_token";
+    def ppol: "cloudflare_zero_trust_access_policy";
+    def polrefs: {(ppol + ".deploy_service_token"): {app: (papp + ".deploy"), tok: ["local.deploy_service_token_ids"]},
+                  (ppol + ".ci_ssh_service_token"): {app: (papp + ".ssh"), tok: [(ptok + ".ci_ssh.id"), (ptok + ".ci_ssh")]},
+                  (ppol + ".registry_push_service_token"): {app: (papp + ".registry"), tok: [(ptok + ".registry_push.id"), (ptok + ".registry_push")]}};
+    def apppin: {(papp + ".deploy"): {domain: "deploy.soleur.ai", type: "self_hosted", session_duration: "24h"},
+                 (papp + ".ssh"): {domain: "ssh.soleur.ai", type: "self_hosted", session_duration: "15m"},
+                 (papp + ".registry"): {domain: "registry.soleur.ai", type: "self_hosted", session_duration: "15m"}};
+    def pol($a): if $a == (ppol + ".deploy_service_token") then {decision: "non_identity", include: [{service_token: [$dt]}]}
+                 elif polrefs[$a] != null then {decision: "non_identity", include: [{}]}
+                 elif apppin[$a] != null then apppin[$a]
+                 else {} end;
+    def unk($a): if $a == (ppol + ".deploy_service_token") then {include: [{service_token: [false]}]}
+                 elif polrefs[$a] != null then {include: [{service_token: true}]}
+                 elif apppin[$a] != null then {account_id: true}
+                 else {} end;
     # Ruleset kind/phase, as the root declares them: the entrypoint gate builds its URLs from these.
     def rs($a): {"cloudflare_ruleset.allowlist_ai_crawlers": {kind: "zone", phase: "http_request_firewall_custom"},
                  "cloudflare_ruleset.cache_shared_binaries": {kind: "zone", phase: "http_request_cache_settings"},
@@ -276,18 +330,28 @@ build_plan() {
                  "cloudflare_ruleset.seo_page_redirects": {kind: "zone", phase: "http_request_dynamic_redirect"},
                  "cloudflare_ruleset.seo_response_headers": {kind: "zone", phase: "http_response_headers_transform"},
                  "cloudflare_ruleset.bulk_redirects": {kind: "root", phase: "http_request_redirect"}}[$a] // {};
-    {format_version: "1.2", resource_changes: [
+    {format_version: "1.2",
+     configuration: {root_module: {resources: [polrefs | to_entries[] | {address: .key, expressions: {
+       application_id: {references: [(.value.app + ".id"), .value.app]},
+       include: [{service_token: {references: .value.tok}}]}}]}},
+     resource_changes: [
       $spec | to_entries[] | .key as $a | .value as $c
       | ({address: $a, mode: "managed", type: ($a | split(".")[0]), change: (
             # The gate fixes the planned value of the runtime zone-id secret and of the Pages
             # account-id secret (its expected-values table): those carry it exactly.
             if $c == "create" then {actions: ["create"], before: null,
-                after: ((if $a == "doppler_secret.cf_zone_id_prd" then {project: "soleur", config: "prd", name: "CF_ZONE_ID", value: $nz} else {value: $s} end) + ids($a) + rs($a))}
+                after: ((if $a == "doppler_secret.cf_zone_id_prd" then {project: "soleur", config: "prd", name: "CF_ZONE_ID", value: $nz} else {value: $s} end) + ids($a) + rs($a) + pol($a)),
+                after_unknown: unk($a)}
             elif $c == "import" then {actions: ["no-op"], importing: {id: $lit[$a]}, before: ids($a), after: ids($a)}
             elif $c == "mutable" then {actions: ["update"], before: {},
                 after: (if $a == "github_actions_secret.cloudflare_account_id_pages"
                         then {repository: "soleur", secret_name: "CLOUDFLARE_ACCOUNT_ID_PAGES", plaintext_value: $na}
+                        elif $a == "doppler_secret.registry_push_access_token_id"
+                        then {project: "soleur", config: "prd", name: "REGISTRY_PUSH_ACCESS_TOKEN_ID", visibility: "masked", value: $s}
+                        elif $a == "doppler_secret.registry_push_access_token_secret"
+                        then {project: "soleur", config: "prd", name: "REGISTRY_PUSH_ACCESS_TOKEN_SECRET", visibility: "masked", value: $s}
                         else {repository: "soleur", secret_name: "CLOUDFLARE_API_TOKEN_PAGES", plaintext_value: $s} end)}
+            elif $a == "random_id.tunnel_secret" then {actions: ["delete", "create"], before: {id: "rnd-tunnel-id"}, after: {byte_length: 32}}
             else {actions: ["delete", "create"], before: {id: "tok-id-1"}, after: {project: "soleur", config: "prd", name: "CF_API_TOKEN_DNS_EDIT", visibility: "masked", value: $s}} end)}
          + (if $c == "replace" then {action_reason: "replace_by_request"} else {} end))
     ]}' >"$2"
@@ -302,7 +366,8 @@ remote_state() {
       r("cloudflare_record.dmarc"; "cloudflare_record"; {zone_id: $z, content: $s}),
       r("cloudflare_list.www_canonical"; "cloudflare_list"; {account_id: $a}),
       r("cloudflare_r2_bucket.luks"; "cloudflare_r2_bucket"; {account_id: $oa}),
-      r("doppler_secret.cf_api_token_dns_edit"; "doppler_secret"; {id: "tok-id-1", value: $s})
+      r("doppler_secret.cf_api_token_dns_edit"; "doppler_secret"; {id: "tok-id-1", value: $s}),
+      r("random_id.tunnel_secret"; "random_id"; {id: "rnd-tunnel-id"})
     ]}}}}' >"$1"
 }
 
@@ -680,7 +745,7 @@ chk_forget_unreadable() {
 
 printf 'cf-account-migrate-job: battery\n'
 cmp -s "$SUT" "$PRISTINE"; verdict "$?" "pristine copy equals the script under test"
-for p in redirects-dns zone-rest; do
+for p in redirects-dns zone-rest tunnel; do
   remote_state "$SBX/fx.tfstate" "$NZ" "$NA" && jq .show "$SBX/fx.tfstate" >"$SBX/fx-state.json" \
     && build_plan "$p" "$SBX/fx.json" && cf_account_migrate_gate "$p" "$SBX/fx.json" "$SBX/fx-state.json" >/dev/null
   verdict "$?" "fixture: the derived $p plan passes the real gate (else every PASS row is void)"
@@ -691,8 +756,8 @@ printf '\n[inputs] refused before any infra call\n'
 setup_bad_confirm c; run_job "$LAST_D" "$PRISTINE"; WHY=""
 chk_bad_confirm "$LAST_D"; verdict "$?" "confirm for another phase -> reason=bad-confirm, no terraform/doppler/aws call ($WHY)"
 new_case unknown redirects-dns true
-printf 'tunnel' >"$LAST_D/phase"; printf 'MIGRATE-CF-tunnel' >"$LAST_D/confirm"; run_job "$LAST_D" "$PRISTINE"; WHY=""
-chk_refused_early "$LAST_D" unknown-phase; verdict "$?" "phase=tunnel (PR2) -> reason=unknown-phase ($WHY)"
+printf 'tunnels' >"$LAST_D/phase"; printf 'MIGRATE-CF-tunnels' >"$LAST_D/confirm"; run_job "$LAST_D" "$PRISTINE"; WHY=""
+chk_refused_early "$LAST_D" unknown-phase; verdict "$?" "a phase the gate does not list -> reason=unknown-phase ($WHY)"
 new_case blank-reason redirects-dns true; printf '  ' >"$LAST_D/reason"; run_job "$LAST_D" "$PRISTINE"; WHY=""
 chk_refused_early "$LAST_D" no-reason; verdict "$?" "blank reason -> reason=no-reason ($WHY)"
 new_case bad-rehearsal redirects-dns yes; run_job "$LAST_D" "$PRISTINE"; WHY=""
@@ -775,8 +840,10 @@ new_case tok-paths redirects-dns true; run_job "$LAST_D" "$PRISTINE"
 r=1
 diff <(sed -n 's/^cf-api-probe \(.*\)$/\1/p' "$LAST_D/calls.log" | sort) <(printf '%s\n' \
   "zones/$NZ/dns_records?per_page=1 token=cf_api_token" "zones/$NZ/rulesets token=cf_api_token_rulesets" \
-  "accounts/$NA/pages/projects token=cf_api_token_pages" | sort) >/dev/null && r=0
-verdict "$r" "redirects-dns probes exactly its three tokens, each on the new zone/account"
+  "accounts/$NA/pages/projects token=cf_api_token_pages" \
+  "accounts/$NA/cfd_tunnel?per_page=1 token=cf_api_token" "zones/$NZ/access/apps?per_page=1 token=cf_api_token" \
+  "accounts/$NA/access/service_tokens?per_page=1 token=cf_api_token" "accounts/$NA/alerting/v3/policies token=cf_api_token" | sort) >/dev/null && r=0
+verdict "$r" "redirects-dns probes its three tokens and cf_api_token's four tunnel scopes, each on the new zone/account"
 r=1; [[ "$(cat "$LAST_D/rc")" == 0 ]] && ! grep -q 'tok-' "$LAST_D/curl-argv.log" && r=0
 verdict "$r" "no token value reaches curl's argv (stdin config only)"
 new_case tok-zrest zone-rest true; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; run_job "$LAST_D" "$PRISTINE"
@@ -785,8 +852,9 @@ diff <(sed -n 's/^cf-api-probe \(.*\)$/\1/p' "$LAST_D/calls.log" | sort) <(print
   "zones/$NZ/settings token=cf_api_token_zone_settings" "zones/$NZ/bot_management token=cf_api_token_bot_management" | sort) >/dev/null && r=0
 verdict "$r" "zone-rest probes exactly its two tokens (zone_settings, bot_management)"
 r=1; [[ "$(cf_account_migrate_phase_tokens redirects-dns | tr '\n' ' ')" == "cf_api_token cf_api_token_rulesets cf_api_token_pages " \
-  && "$(cf_account_migrate_phase_tokens zone-rest | tr '\n' ' ')" == "cf_api_token_zone_settings cf_api_token_bot_management " ]] \
-  && ! cf_account_migrate_phase_tokens tunnel >/dev/null 2>&1 && r=0
+  && "$(cf_account_migrate_phase_tokens zone-rest | tr '\n' ' ')" == "cf_api_token_zone_settings cf_api_token_bot_management " \
+  && "$(cf_account_migrate_phase_tokens tunnel | tr '\n' ' ')" == "cf_api_token " ]] \
+  && ! cf_account_migrate_phase_tokens tunnels >/dev/null 2>&1 && r=0
 verdict "$r" "cf_account_migrate_phase_tokens: the ruled token lists per phase, unknown phase fails"
 
 # --- Rehearsal --------------------------------------------------------------------
@@ -1195,7 +1263,7 @@ red "V7 apply-failed without the forget=committed field" "$V7" chk_applyfail_hea
 V8="$(mk_mutant no-applying-line '/mode=apply applying=true/d')"
 red "V8 no applying=true marker before terraform apply" "$V8" chk_applyfail_health '^no-applying-line$' setup_applyfail_health
 # shellcheck disable=SC2016 # sed expression matches literal script text
-V9="$(mk_mutant verify-no-forget 's/"applied=true\${fx:+ \$fx} failing=/"applied=true failing=/')"
+V9="$(mk_mutant verify-no-forget 's/"applied=true\${fx:+ \$fx}\${sx:+ \$sx} failing=/"applied=true${sx:+ $sx} failing=/')"
 red "V9 verify-failed without the forget=committed field" "$V9" chk_dest '^no-applied-summary$' setup_wrongdest
 # shellcheck disable=SC2016 # sed expression matches literal script text
 V10="$(mk_mutant forget-marker-ignored 's/^      if \[\[ "\$g" -ne 1 \]\]; then$/      if false; then/')"
@@ -1259,6 +1327,180 @@ V3="$(mk_mutant no-forget-field 's/ "\$fx"$//')"
 red "V3 a post-forget gate refusal without the forget=committed field" "$V3" chk_gate_blocks_apply '^no-forget-field$' setup_refuse_apply
 
 # --- Stub refusals ---------------------------------------------------------------
+# --- Tunnel phase (PR2) ---------------------------------------------------------------
+# The real gate and job over a mirror whose pre-delete is a contract stub: the real script's behaviour
+# is pinned in cf-tunnel-host-predelete.test.sh, and its committed pin list is empty.
+printf '\n[tunnel] pre-delete, plan, live deploy token, apply, CI-SSH sync\n'
+MT="$SBX/mirror-tunnel"
+mkdir -p "$MT/apps/web-platform/infra/scripts" || exit 2
+ln -s "$REPO/.github" "$MT/.github"; ln -s "$REPO/tests" "$MT/tests"
+ln -s "$HERE/scripts/cf-account-migration-complete.sh" "$MT/apps/web-platform/infra/scripts/cf-account-migration-complete.sh"
+ln -s "$HERE/cf-account-migration-imports.tf" "$MT/apps/web-platform/infra/cf-account-migration-imports.tf"
+# The gate reads the committed Access include blocks beside the imports file.
+ln -s "$HERE/tunnel.tf" "$MT/apps/web-platform/infra/tunnel.tf"
+cat >"$MT/apps/web-platform/infra/scripts/cf-tunnel-host-predelete.sh" <<'STUB'
+#!/usr/bin/env bash
+set -uo pipefail
+D="${STUB_DIR:?}"
+b=none; [[ "${CF_API_TOKEN:-}" != tok-cf_api_token ]] || b=live
+printf 'predelete %s bearer=%s\n' "$*" "$b" >>"$D/calls.log"
+if [[ -f "$D/mode.predelete" ]]; then printf 'cf-tunnel-host-predelete verdict=refuse reason=record-mismatch\n'; exit 1; fi
+exit 0
+STUB
+chmod +x "$MT/apps/web-platform/infra/scripts/cf-tunnel-host-predelete.sh"
+deploy_token_fixture() { # <dir> [<code>] [<name>] [<hours to expiry>]
+  local e; e="$(date -u -d "+${4:-8700} hours" +%Y-%m-%dT%H:%M:%SZ)"
+  { printf '%s\n' "${2:-200}"
+    jq -nc --arg id "$DT" --arg n "${3:-github-actions-deploy}" --arg e "$e" --arg s "$SENTINEL" \
+      '{success:true,result:{id:$id,name:$n,expires_at:$e,client_id:$s}}'
+  } >"$1/cf.accounts_${NA}_access_service_tokens_${DT}"
+}
+# tmark <file> [<content>]: write one mode or env file into the current case dir.
+tmark() {
+  local f="$SBX/runs/${LAST_D##*/}/$1"
+  printf '%s' "${2-}" >"$f"
+}
+tunnel_case() { # <label> <rehearsal>
+  new_case "tun-$1" tunnel "$2" || exit 2
+  remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"
+  tmark env.extra "GITHUB_WORKSPACE=$MT"$'\n'"DOPPLER_TOKEN_WRITE=stub-write"$'\n'
+  deploy_token_fixture "$LAST_D"
+}
+no_leak() { # <dir>: no fixture secret and no write token reached the job's output or terraform
+  ! grep -qF "$SENTINEL" "$1/out.txt" "$1/err.txt" && ! grep -q '^WRITE-TOKEN-LEAK' "$1/calls.log" && ! grep -qF stub-write "$1/out.txt" "$1/err.txt"
+}
+no_apply() { ! grep -q '^terraform\[[a-z]*\] apply' "$1/calls.log"; }
+
+tunnel_case rehearsal true; run_job "$LAST_D" "$PRISTINE"; D_T="$LAST_D"; WHY=""
+chk_rehearsal_clean "$D_T"; verdict "$?" "tunnel rehearsal: PASS, no apply, remote serial 7 ($WHY)"
+argv_matches "$D_T" local tunnel; verdict "$?" "tunnel rehearsal: plan -target/-replace argv equals the gate's tunnel lists"
+r=1; grep -qx -- '-var=cf_migration_import_app=true' "$D_T/plan_args.local" && r=0
+verdict "$r" "tunnel plan alone turns the app-record import on"
+r=1; grep -qx 'predelete --check-pins bearer=none' "$D_T/calls.log" && [[ "$(grep -c '^predelete ' "$D_T/calls.log")" -eq 1 ]] && r=0
+verdict "$r" "tunnel rehearsal grades the pin list only, with no token, and never runs the delete"
+r=1; ! grep -q 'terraform\[[a-z]*\] state rm' "$D_T/calls.log" && r=0
+verdict "$r" "tunnel rehearsal forgets nothing"
+r=1; grep -qx "cf-account-migrate deploy-token id=$DT verdict=ok" "$D_T/out.txt" && no_leak "$D_T" && r=0
+verdict "$r" "tunnel rehearsal reads the deploy token live and prints only its UUID and verdict"
+r=1; ! grep -q 'tok-' "$D_T/curl-argv.log" && r=0
+verdict "$r" "the deploy-token read carries its bearer on stdin config, never argv"
+r=1; ! grep -q -- 'cf_migration_import_app' "$D_REH/plan_args.local" && r=0
+verdict "$r" "a redirects-dns plan does not set the app-record import"
+
+new_case tun-real-pins tunnel true; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; deploy_token_fixture "$LAST_D"
+run_job "$LAST_D" "$PRISTINE"
+r=1; refused_for "$LAST_D" predelete-refused && grep -q 'cf-tunnel-host-predelete verdict=refuse reason=pins-missing' "$LAST_D/out.txt" \
+  && grep -q 'phase=tunnel verdict=PASS' "$LAST_D/out.txt" && no_apply "$LAST_D" && r=0
+verdict "$r" "the committed empty pin list refuses the rehearsal, after showing the gate's PASS"
+
+tunnel_case apply false; run_job "$LAST_D" "$PRISTINE"; D_TA="$LAST_D"
+r=1; [[ "$(rc_of "$D_TA")" == 0 ]] && grep -qx 'cf-account-migrate phase=tunnel mode=apply verdict=PASS applied=true' "$D_TA/out.txt" && r=0
+verdict "$r" "tunnel apply: PASS"
+r=1; grep -qx 'predelete --apply bearer=live' "$D_TA/calls.log" \
+  && [[ "$(line_no "$D_TA" '^predelete --apply')" -lt "$(line_no "$D_TA" 'terraform\[remote\] plan')" ]] \
+  && [[ "$(line_no "$D_TA" 'terraform\[remote\] plan')" -lt "$(line_no "$D_TA" 'terraform\[remote\] apply')" ]] && r=0
+verdict "$r" "tunnel apply: the pre-delete runs with the provider token, before the plan, and the apply after it"
+r=1; ! grep -q 'terraform\[remote\] state rm' "$D_TA/calls.log" && r=0
+verdict "$r" "tunnel apply: no state forget"
+r=1; [[ "$(cat "$D_TA/dstore.CI_SSH_ACCESS_TOKEN_ID")" == "$SENTINEL-ci_ssh_access_service_token_client_id" \
+  && "$(cat "$D_TA/dstore.CI_SSH_ACCESS_TOKEN_SECRET")" == "$SENTINEL-ci_ssh_access_service_token_client_secret" ]] && r=0
+verdict "$r" "tunnel apply: both CI-SSH keys hold the new outputs, byte-exact"
+r=1; [[ "$(line_no "$D_TA" 'terraform\[remote\] apply')" -lt "$(line_no "$D_TA" '^doppler-set CI_SSH_ACCESS_TOKEN_ID')" ]] \
+  && [[ "$(grep -c 'ci-ssh-sync key=.* verdict=ok' "$D_TA/out.txt")" -eq 2 ]] && r=0
+verdict "$r" "tunnel apply: the sync runs after the apply and verifies both keys"
+no_leak "$D_TA"; verdict "$?" "tunnel apply: no secret value or write token in the output, and terraform never inherits the write token"
+
+tunnel_case predelete-refused false; tmark mode.predelete; run_job "$LAST_D" "$PRISTINE"
+r=1; refused_for "$LAST_D" predelete-refused && ! grep -q 'terraform\[remote\] plan' "$LAST_D/calls.log" && no_apply "$LAST_D" && r=0
+verdict "$r" "a refused pre-delete -> reason=predelete-refused, no plan and no apply"
+tunnel_case no-write false; tmark env.extra "GITHUB_WORKSPACE=$MT"$'\n'; run_job "$LAST_D" "$PRISTINE"
+r=1; refused_for "$LAST_D" doppler-write-token-missing && ! grep -q '^predelete' "$LAST_D/calls.log" && no_apply "$LAST_D" && r=0
+verdict "$r" "no DOPPLER_TOKEN_WRITE -> refused before the delete"
+
+for spec in "404:github-actions-deploy:8700:http-404" "200:github-actions-ci-ssh:8700:name-differs" "200:github-actions-deploy:720:expiry-out-of-window"; do
+  IFS=: read -r c nm h why <<<"$spec"
+  tunnel_case "dt-reh-$why" true; deploy_token_fixture "$LAST_D" "$c" "$nm" "$h"; run_job "$LAST_D" "$PRISTINE"
+  r=1; refused_for "$LAST_D" deploy-token-refused && grep -q "deploy-token id=$DT verdict=refuse detail=$why" "$LAST_D/out.txt" && no_apply "$LAST_D" && no_leak "$LAST_D" && r=0
+  verdict "$r" "rehearsal: deploy token $why -> reason=deploy-token-refused, its body not printed"
+  tunnel_case "dt-app-$why" false; deploy_token_fixture "$LAST_D" "$c" "$nm" "$h"; run_job "$LAST_D" "$PRISTINE"
+  r=1; refused_for "$LAST_D" deploy-token-refused && no_apply "$LAST_D" && r=0
+  verdict "$r" "apply: deploy token $why -> reason=deploy-token-refused, nothing applied"
+done
+
+for m in tfoutput-empty dopplerset dopplercorrupt; do
+  tunnel_case "sync-$m" false; tmark "mode.$m"; run_job "$LAST_D" "$PRISTINE"
+  r=1; refused_for "$LAST_D" ci-ssh-sync-failed && grep -q 'reason=ci-ssh-sync-failed applied=true' "$LAST_D/out.txt" \
+    && grep -q 'verify=tunnel verdict=ok' "$LAST_D/out.txt" && no_leak "$LAST_D" && r=0
+  verdict "$r" "CI-SSH sync failure ($m) -> reason=ci-ssh-sync-failed applied=true, after the live probes ran"
+done
+tunnel_case sync-and-verify false; tmark mode.dopplerset; tmark mode.health; run_job "$LAST_D" "$PRISTINE"
+r=1; refused_for "$LAST_D" verify-failed && grep -q 'ci_ssh_sync=failed' "$LAST_D/out.txt" && r=0
+verdict "$r" "a failed sync AND a failed probe -> reason=verify-failed, carrying ci_ssh_sync=failed"
+
+printf '\n[forget] the redirects-dns forget, which is the only forget, removes the tunnel slice\n'
+# The tunnel phase runs no forget of its own: the real forget script classifies EVERY old-id
+# cloudflare_* entry, so the 15 Cloudflare members of the tunnel spec go with redirects-dns. The
+# random_id and the two Doppler secrets are not Cloudflare objects and stay, which is why the tunnel
+# phase replaces and updates them.
+new_case forget-tunnel-slice redirects-dns true
+TUN_CF="$(cf_account_migrate_phase_spec tunnel | jq -c '[keys[] | select(startswith("cloudflare_"))]')"
+tmark remote.tfstate "$(jq --argjson cf "$TUN_CF" --arg oz "$OZ" --arg oa "$OA" '.show.values.root_module.resources +=
+  ([$cf[] | {address: ., mode: "managed", type: split(".")[0], name: "n",
+    values: (if test("tunnel_cloudflared|access_service_token|notification_policy") then {account_id: $oa} else {zone_id: $oz} end)}]
+   + [{address: "doppler_secret.registry_push_access_token_id", mode: "managed", type: "doppler_secret", name: "n", values: {id: "d1"}},
+      {address: "doppler_secret.registry_push_access_token_secret", mode: "managed", type: "doppler_secret", name: "n", values: {id: "d2"}}])' \
+  "$LAST_D/remote.tfstate")"
+run_job "$LAST_D" "$PRISTINE"
+r=1; [[ "$(jq length <<<"$TUN_CF")" -eq 15 ]] && grep -q 'terraform\[local\] state rm argc=17' "$LAST_D/calls.log" && r=0
+for a in $(jq -r '.[]' <<<"$TUN_CF"); do grep -qxF "cf-state-migrate address=$a action=rm" "$LAST_D/out.txt" || r=1; done
+verdict "$r" "B3: the redirects-dns forget removes all 15 Cloudflare members of the tunnel spec (2 fixture entries + 15)"
+r=1; ! grep -qE 'cf-state-migrate address=(random_id|doppler_secret)' "$LAST_D/out.txt" && r=0
+verdict "$r" "B3: the forget leaves random_id.tunnel_secret and the registry Doppler secrets in state"
+
+printf '\n[scope probes] cf_api_token is read for the tunnel scopes before anything is written\n'
+SVC="accounts_${NA}_access_service_tokens?per_page=1"
+tunnel_case scope-paths true; run_job "$LAST_D" "$PRISTINE"
+r=1
+diff <(sed -n 's/^cf-api-probe \(.*\)$/\1/p' "$LAST_D/calls.log" | sort) <(printf '%s\n' \
+  "zones/$NZ/dns_records?per_page=1 token=cf_api_token" "accounts/$NA/cfd_tunnel?per_page=1 token=cf_api_token" \
+  "zones/$NZ/access/apps?per_page=1 token=cf_api_token" "accounts/$NA/access/service_tokens?per_page=1 token=cf_api_token" \
+  "accounts/$NA/alerting/v3/policies token=cf_api_token" | sort) >/dev/null \
+  && grep -qx 'cf-account-migrate preflight=ids verdict=ok tokens=1' "$LAST_D/out.txt" \
+  && grep -qx 'cf-account-migrate preflight=token name=cf_api_token@tunnel http=200 source=live' "$LAST_D/out.txt" && r=0
+verdict "$r" "tunnel probes its DNS read and the four scopes on the live token when none is staged"
+tunnel_case scope-staged true; tmark doppler.inject $'TF_VAR_cf_api_token_next=tok-cf_api_token_next\n'; run_job "$LAST_D" "$PRISTINE"
+r=1; [[ "$(grep -c '^cf-api-probe .* token=cf_api_token_next$' "$LAST_D/calls.log")" -eq 4 ]] \
+  && grep -q '^cf-api-probe zones/.*/dns_records?per_page=1 token=cf_api_token$' "$LAST_D/calls.log" \
+  && grep -qx 'cf-account-migrate preflight=token name=cf_api_token@service-tokens http=200 source=staged' "$LAST_D/out.txt" && r=0
+verdict "$r" "a staged CF_API_TOKEN_NEXT answers the four scope probes; the DNS probe stays on the live token"
+tunnel_case scope-403 true; tmark doppler.inject $'TF_VAR_cf_api_token_next=tok-cf_api_token_next\n'; tmark "cfpath.$SVC" 403; run_job "$LAST_D" "$PRISTINE"
+r=1; refused_for "$LAST_D" token-scope-missing && ! grep -q '^terraform' "$LAST_D/calls.log" \
+  && grep -qx 'cf-account-migrate preflight=token name=cf_api_token@service-tokens http=403 source=staged' "$LAST_D/out.txt" && r=0
+verdict "$r" "a staged token denied service tokens -> reason=token-scope-missing in the rehearsal, before any terraform call"
+new_case scope-rd-403 redirects-dns false; tmark "cfpath.$SVC" 403; run_job "$LAST_D" "$PRISTINE"
+r=1; refused_for "$LAST_D" token-scope-missing && ! grep -q 'terraform\[remote\] state rm' "$LAST_D/calls.log" && ! grep -q '^terraform' "$LAST_D/calls.log" && r=0
+verdict "$r" "redirects-dns refuses a token too narrow for the tunnel BEFORE its state forget"
+tunnel_case scope-503 true; tmark "cfpath.$SVC" 503; run_job "$LAST_D" "$PRISTINE"
+r=1; refused_for "$LAST_D" token-unreachable && r=0
+verdict "$r" "a scope probe answering 503 is no verdict -> reason=token-unreachable, never token-scope-missing"
+new_case scope-zrest zone-rest true; remote_state "$LAST_D/remote.tfstate" "$NZ" "$NA"; run_job "$LAST_D" "$PRISTINE"
+r=1; ! grep -q 'cf_api_token@' "$LAST_D/out.txt" && r=0
+verdict "$r" "zone-rest, which does not use cf_api_token, runs no scope probe"
+
+printf '\n[tunnel mutants] each new guard is load-bearing\n'
+t_mut() { # <label> <sed-expr> <setup-fn>: the mutant must reach an apply the pristine script refused
+  local m="$SBX/mut/tun-$CASES.sh"
+  sed -e "$2" "$PRISTINE" >"$m"
+  if cmp -s "$m" "$PRISTINE" || ! bash -n "$m"; then verdict 1 "$1: the mutation did not land or does not parse"; return; fi
+  "$3"; run_job "$LAST_D" "$m"
+  r=1; grep -q '^terraform\[remote\] apply' "$LAST_D/calls.log" && r=0
+  verdict "$r" "$1: RED without it (the mutant applied)"
+}
+set_dt_404() { tunnel_case mut-dt false; deploy_token_fixture "$LAST_D" 404; }
+set_pd_refused() { tunnel_case mut-pd false; tmark mode.predelete; }
+t_mut "M-deploy-token" 's/^    deploy_token_check || return 3$/    :/' set_dt_404
+t_mut "M-predelete" 's/^  \[\[ "\$rc" -eq 0 \]\] || refuse predelete-refused .*$/  :/' set_pd_refused
+
 # Every PATH fake refuses an unmodeled argv into refused.log. A pristine run must never trip one:
 # a drifted selector (bucket/prefix, Doppler config, status literal) shows up here, not as a pass.
 r=0; bad=""
@@ -1272,7 +1514,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=172
+EXPECTED_CASES=210
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

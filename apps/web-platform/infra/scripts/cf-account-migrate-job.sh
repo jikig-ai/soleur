@@ -9,6 +9,8 @@
 #   REASON          non-blank audit text
 #   GITHUB_WORKSPACE, RUNNER_TEMP, INFRA_DIR (absolute, or relative to the workspace)
 #   GH_TOKEN, GH_REPO   read of in-flight runs; DOPPLER_TOKEN   prd_terraform read for `doppler run`
+#   DOPPLER_TOKEN_WRITE  tunnel apply only: prd_terraform write for the CI-SSH pair. Moved to a shell
+#                   variable and unset first thing in main, so terraform and curl never inherit it.
 #   CFAM_VERIFY_TRIES, CFAM_VERIFY_SLEEP, CFAM_VERIFY_DEADLINE   optional post-apply probe budget:
 #                   at most TRIES passes (default 12) with a SLEEP pause between them (default 10 s).
 #                   Integers: tries 1-60, pause 0-60, deadline 0-1200; anything else refuses.
@@ -47,6 +49,16 @@
 # Test seams of the sourced libraries (CFAM_IMPORTS_FILE) are unset before sourcing: the gate
 # compares imports against the COMMITTED file only.
 #
+# TUNNEL PHASE (contract). No state forget. The plan alone sets cf_migration_import_app=true, and on
+# a gate PASS the job reads the deploy policy's service token live (deploy_token_check; a refusal is
+# deploy-token-refused). The rehearsal grades the pre-delete's pin list with no request and refuses
+# predelete-refused while it is not six ids. The apply leg runs cf-tunnel-host-predelete.sh --apply
+# BEFORE the plan (plan ruling F5), so a later gate refusal leaves those six records deleted; they
+# serve only Error 1000. After the apply it writes the CI-SSH pair to prd_terraform and verifies it
+# by digest; a failed write refuses ci-ssh-sync-failed applied=true after the live probes have run.
+# A re-dispatch is safe: the pre-delete counts 404 as gone, every created address plans no-op, the
+# tunnel ignores its secret, and -replace rolls only random_id.tunnel_secret.
+#
 # Order: inputs -> no run in flight on any gated workflow -> the id preflight (CTO D8: Doppler
 # resolves the NEW zone/account ids and the legacy R2 account, and every phase token answers 200
 # on the new zone/account) -> init. Rehearsal: a scratch copy of the root on a local backend runs
@@ -68,8 +80,10 @@ readonly P="cf-account-migrate"
 # The OLD ids, the state bucket and the backup prefix (CFAM_*), the R2 call (cfam_r2_aws) and
 # cfam_serial_of come from the phase-gate library (load_libs), shared with the state forget.
 readonly PREDICATE_REL="apps/web-platform/infra/scripts/cf-account-migration-complete.sh"
+readonly PREDELETE_REL="apps/web-platform/infra/scripts/cf-tunnel-host-predelete.sh"
 readonly LIVE_STATUSES=(queued in_progress waiting pending requested)
 
+DOPPLER_WRITE_VALUE=""   # main: moved out of the environment before anything else runs
 W=""
 ROOT=""
 VERIFY_FAILING=""
@@ -273,41 +287,69 @@ token_probe_path() {
     cf_api_token_pages) printf 'accounts/%s/pages/projects' "$CFAM_NEW_ACCOUNT_ID" ;;
     cf_api_token_zone_settings) printf 'zones/%s/settings' "$CFAM_NEW_ZONE_ID" ;;
     cf_api_token_bot_management) printf 'zones/%s/bot_management' "$CFAM_NEW_ZONE_ID" ;;
+    # The tunnel phase's scopes on the same token (CF_API_TOKEN_SCOPE_PROBES), read-only.
+    cf_api_token@tunnel) printf 'accounts/%s/cfd_tunnel?per_page=1' "$CFAM_NEW_ACCOUNT_ID" ;;
+    cf_api_token@access-apps) printf 'zones/%s/access/apps?per_page=1' "$CFAM_NEW_ZONE_ID" ;;
+    cf_api_token@service-tokens) printf 'accounts/%s/access/service_tokens?per_page=1' "$CFAM_NEW_ACCOUNT_ID" ;;
+    cf_api_token@notifications) printf 'accounts/%s/alerting/v3/policies' "$CFAM_NEW_ACCOUNT_ID" ;;
     *) return 1 ;;
   esac
 }
-# Runs INSIDE doppler run: prints zone, account, r2 account, then "tok <name> <http-code> <curl-rc>"
-# per <name> <url> pair. A token of an unusable shape (a quote or newline would inject a curl config
-# directive) is never sent and reads "bad". curl-rc non-zero is a transport failure (a timeout, 28;
-# a DNS or connect failure, 6/7): the API was not reached, which says nothing about the token.
+# Probed for every phase that uses cf_api_token, so redirects-dns refuses a token too narrow for the
+# tunnel phase BEFORE its state forget. Each reads CF_API_TOKEN_NEXT when one is staged, else the
+# live token (the line says source=staged or source=live).
+readonly CF_API_TOKEN_SCOPE_PROBES=(cf_api_token@tunnel cf_api_token@access-apps cf_api_token@service-tokens cf_api_token@notifications)
+# Runs INSIDE doppler run: prints zone, account, r2 account, then "tok <name> <http-code> <curl-rc>
+# <source>" per <name> <url> pair. A token of an unusable shape (a quote or newline would inject a
+# curl config directive) is never sent and reads "bad". curl-rc non-zero is a transport failure (a
+# timeout, 28; a DNS or connect failure, 6/7): the API was not reached, which says nothing about the token.
 # shellcheck disable=SC2016 # expanded by the inner bash
 PREFLIGHT_SH="$(cat <<'PREFLIGHT'
 printf "%s\n%s\n%s\n" "${TF_VAR_cf_zone_id:-}" "${TF_VAR_cf_account_id:-}" "${TF_VAR_cf_r2_account_id:-}"
 while [ "$#" -ge 2 ]; do
   n="$1"; u="$2"; shift 2
-  v="TF_VAR_$n"; t="${!v:-}"
-  case "$t" in ""|*[!A-Za-z0-9._~+/=-]*) printf "tok %s bad 0\n" "$n"; continue ;; esac
+  b="$n"; s=live
+  case "$n" in *@*)
+    b="${n%%@*}"; x="TF_VAR_${b}_next"
+    if [ -n "${!x:-}" ]; then b="${b}_next"; s=staged; fi ;;
+  esac
+  v="TF_VAR_$b"; t="${!v:-}"
+  case "$t" in ""|*[!A-Za-z0-9._~+/=-]*) printf "tok %s bad 0 %s\n" "$n" "$s"; continue ;; esac
   c="$(curl --disable --noproxy '*' -sS -o /dev/null --max-time 10 -w "%{http_code}" --config - "$u" 2>/dev/null \
        < <(printf "header = \"Authorization: Bearer %s\"\n" "$t"))"; e=$?
-  printf "tok %s %s %s\n" "$n" "${c:-000}" "$e"
+  printf "tok %s %s %s %s\n" "$n" "${c:-000}" "$e" "$s"
 done
 PREFLIGHT
 )"
 readonly PREFLIGHT_SH
+# Runs INSIDE doppler run: the one read of the deploy token (url in $1), the bearer on curl's stdin
+# config. Prints body, newline, http code; the caller prints neither the body nor any field of it.
+# shellcheck disable=SC2016 # expanded by the inner bash
+DEPLOY_TOKEN_SH="$(cat <<'DEPLOYTOKEN'
+t="${TF_VAR_cf_api_token:-}"
+case "$t" in ""|*[!A-Za-z0-9._~+/=-]*) exit 65 ;; esac
+curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' --config - "$1" 2>/dev/null \
+  < <(printf "header = \"Authorization: Bearer %s\"\n" "$t")
+DEPLOYTOKEN
+)"
+readonly DEPLOY_TOKEN_SH
 # Where a refused value comes from: doppler run --preserve-env keeps what the credential loader
 # already exported, so a TF_VAR_* the soleur-infra-privileged project carries wins over prd_terraform.
 readonly DOPPLER_SRC=" The value checked is the effective one: soleur/prd_terraform, unless the soleur-infra-privileged project (exported by the credential loader) carries the same name, whose value wins under doppler run --preserve-env. Check both before re-flipping."
 check_ids() {
-  local out zone acct r2 rc=0 tokens n path line code e bad=0 unreach=0
+  local out zone acct r2 rc=0 tokens labels n path line code e src note bad=0 unreach=0 scope=0
   local -a pairs=()
   tokens="$(cf_account_migrate_phase_tokens "$MIGRATE_PHASE")" || refuse no-tokens "the gate has no token list for $MIGRATE_PHASE"
   [[ -n "$tokens" ]] || refuse no-tokens "the gate's token list for $MIGRATE_PHASE is empty"
+  labels="$tokens"
+  if grep -qxF cf_api_token <<<"$tokens"; then labels+=$'\n'"$(printf '%s\n' "${CF_API_TOKEN_SCOPE_PROBES[@]}")"; fi
   while IFS= read -r n; do
     path="$(token_probe_path "$n")" || refuse no-tokens "no read probe is defined for token $n"
     pairs+=("$n" "$CF_API/$path")
-  done <<<"$tokens"
-  out="$(timeout 60 "${TF_ENV[@]}" bash -c "$PREFLIGHT_SH" _ "${pairs[@]}" 2>/dev/null)" || rc=$?
-  [[ "$rc" -ne 124 ]] || refuse ids-timeout "doppler run did not resolve the ids and token probes within 60 s"
+  done <<<"$labels"
+  # 90 s: up to seven probes of at most 10 s each, plus Doppler's own resolve.
+  out="$(timeout 90 "${TF_ENV[@]}" bash -c "$PREFLIGHT_SH" _ "${pairs[@]}" 2>/dev/null)" || rc=$?
+  [[ "$rc" -ne 124 ]] || refuse ids-timeout "doppler run did not resolve the ids and token probes within 90 s"
   [[ "$rc" -eq 0 ]] || refuse ids-unreadable "doppler run could not resolve cf_zone_id / cf_account_id"
   # Compared exactly as Terraform sees them: variables.tf's shape check is lowercase-only, so an
   # upper-case spelling is refused here, before the forget, not by the plan after it.
@@ -321,17 +363,30 @@ check_ids() {
   [[ "$r2" == "$CFAM_OLD_ACCOUNT_ID" ]] \
     || refuse r2-account-not-old "cf_r2_account_id does not resolve to the legacy account that holds R2 (ADR-329: R2 never moves).${DOPPLER_SRC} Nothing was written."
   while IFS= read -r n; do
-    line="$(awk -v n="$n" '$1 == "tok" && $2 == n {print $3, $4; exit}' <<<"$out")"
-    code="${line%% *}"; code="${code:-missing}"; e="${line#* }"
+    line="$(awk -v n="$n" '$1 == "tok" && $2 == n {print $3, $4, $5; exit}' <<<"$out")"
+    code=""; e=""; src=""
+    read -r code e src <<<"$line"
+    code="${code:-missing}"
     [[ "$e" =~ ^[0-9]{1,3}$ ]] || e=0
-    if [[ "$e" == 0 ]]; then printf '%s preflight=token name=%s http=%s\n' "$P" "$n" "$code"
-    else printf '%s preflight=token name=%s http=%s e=%s\n' "$P" "$n" "$code" "$e"; fi
+    note=""
+    if [[ "$n" == *@* ]]; then
+      case "$src" in staged|live) note=" source=$src" ;; *) note=" source=unknown" ;; esac
+    fi
+    if [[ "$e" == 0 ]]; then printf '%s preflight=token name=%s http=%s%s\n' "$P" "$n" "$code" "$note"
+    else printf '%s preflight=token name=%s http=%s e=%s%s\n' "$P" "$n" "$code" "$e" "$note"; fi
     # Only a DENIAL (400/401/403/404) or an unusable token shape (bad) is a token verdict. A transport
     # failure, a 429 or a 5xx is no verdict: retry, do not re-mint.
     if [[ "$e" != 0 ]]; then unreach=1
-    else case "$code" in 200) ;; 400|401|403|404|bad|missing) bad=1 ;; *) unreach=1 ;; esac; fi
-  done <<<"$tokens"
+    else
+      case "$code" in
+        200) ;;
+        400|401|403|404|bad|missing) if [[ "$n" == *@* ]]; then scope=1; else bad=1; fi ;;
+        *) unreach=1 ;;
+      esac
+    fi
+  done <<<"$labels"
   [[ "$bad" -eq 0 ]] || refuse token-not-new-zone "a provider token for $MIGRATE_PHASE did not answer 200 on the NEW zone/account (see the preflight=token lines): swap or re-mint it (runbook Phase 0/2).${DOPPLER_SRC} Nothing was written."
+  [[ "$scope" -eq 0 ]] || refuse token-scope-missing "cf_api_token (the staged CF_API_TOKEN_NEXT when one exists, see source= on the preflight=token lines) was denied a Tunnel, Access, service-token or notification read on the NEW account. Widen the token, or enable Zero Trust on the account if it is off (runbook Phase 0).${DOPPLER_SRC} Nothing was written."
   [[ "$unreach" -eq 0 ]] || refuse token-unreachable "the Cloudflare API gave no verdict on a token probe for $MIGRATE_PHASE (curl failed, or a 429 / 5xx answer: see the e= and http= on the preflight=token lines): not a token verdict. Re-dispatch; do not re-mint. Nothing was written."
   printf '%s preflight=ids verdict=ok tokens=%s\n' "$P" "$(grep -c . <<<"$tokens")"
 }
@@ -385,13 +440,64 @@ state_migrate() { # [--rehearsal --backup-dir <dir>]; runs in the current direct
     --new-zone "$CFAM_NEW_ZONE_ID" --new-account "$CFAM_NEW_ACCOUNT_ID" "$@"
 }
 
+# deploy_token_check: the live half of DEPLOY POLICY (gate header). Reads the one service token the
+# graded plan admits. Prints the token's UUID and a reason word, never the body or a field of it.
+deploy_token_check() {
+  local id out rc=0 code body v
+  id="$(cf_account_migrate_deploy_token_id "$W/tfplan.json")" || {
+    printf '%s deploy-token verdict=refuse detail=no-token-id\n' "$P"; return 1; }
+  out="$(timeout 40 "${TF_ENV[@]}" bash -c "$DEPLOY_TOKEN_SH" _ "$CF_API/accounts/$CFAM_NEW_ACCOUNT_ID/access/service_tokens/$id" 2>/dev/null)" || rc=$?
+  code="${out##*$'\n'}"; body="${out%$'\n'*}"
+  if [[ "$rc" -ne 0 || "$code" != 200 ]]; then
+    printf '%s deploy-token id=%s verdict=refuse detail=http-%s e=%s\n' "$P" "$id" "$(obs_line "${code:0:3}")" "$rc"
+    return 1
+  fi
+  v="$(cf_account_migrate_deploy_token_verdict "$id" "$(date +%s)" <<<"$body")" || {
+    printf '%s deploy-token id=%s verdict=refuse detail=%s\n' "$P" "$id" "$(obs_line "$v")"; return 1; }
+  printf '%s deploy-token id=%s verdict=ok\n' "$P" "$id"
+}
+
+# tunnel_predelete: the pinned six-record delete (TUNNEL PHASE in the header).
+tunnel_predelete() {
+  local rc=0
+  # shellcheck disable=SC2016 # expanded by the inner bash, inside doppler run
+  tf_env bash -c 'CF_API_TOKEN="${TF_VAR_cf_api_token:-}" exec bash "$1" --apply' _ "$GITHUB_WORKSPACE/$PREDELETE_REL" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] || refuse predelete-refused "the pinned six-record pre-delete did not finish (see its verdict line above, which names any record it deleted); no plan ran and nothing was applied. A re-dispatch counts a record already gone as done."
+}
+
+# sync_ci_ssh: publish the new CI-SSH pair to prd_terraform on stdin and verify each by digest.
+# Returns 1 on any failure, with the one key it stopped at; prints no value.
+sync_ci_ssh() {
+  local k o v want got
+  for k in CI_SSH_ACCESS_TOKEN_ID CI_SSH_ACCESS_TOKEN_SECRET; do
+    case "$k" in *_ID) o=ci_ssh_access_service_token_client_id ;; *) o=ci_ssh_access_service_token_client_secret ;; esac
+    v="$(terraform output -raw "$o" 2>/dev/null)" || v=""
+    if [[ -z "$v" ]]; then printf '%s ci-ssh-sync key=%s verdict=fail cause=output-empty\n' "$P" "$k"; return 1; fi
+    # 2>&1 too: Doppler prints the config table (#7133).
+    if ! printf '%s' "$v" | DOPPLER_TOKEN="$DOPPLER_WRITE_VALUE" doppler secrets set "$k" --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1; then
+      printf '%s ci-ssh-sync key=%s verdict=fail cause=write-refused\n' "$P" "$k"; return 1
+    fi
+    want="$(printf '%s' "$v" | sha256sum | cut -d' ' -f1)"
+    got="$(DOPPLER_TOKEN="$DOPPLER_WRITE_VALUE" doppler secrets get "$k" -p soleur -c prd_terraform --plain 2>/dev/null \
+      | LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' | sha256sum | cut -d' ' -f1)" || got=""
+    v=""
+    if [[ "$got" != "$want" ]]; then printf '%s ci-ssh-sync key=%s verdict=fail cause=digest-mismatch\n' "$P" "$k"; return 1; fi
+    printf '%s ci-ssh-sync key=%s verdict=ok\n' "$P" "$k"
+  done
+}
+
 # plan_and_gate: in the current directory. Writes $W/tfplan; returns 0 only on phase-gate
-# verdict=PASS AND an entrypoint-gate PASS; 2 when the entrypoint gate refused, 1 otherwise.
+# verdict=PASS AND an entrypoint-gate PASS AND (tunnel) a live deploy-token PASS; 2 when the
+# entrypoint gate refused, 3 when the deploy token was refused, 1 otherwise.
 plan_and_gate() {
   local rc out
+  local -a phase_vars=()
+  # The app-record import block is reachable only from this plan (variables.tf defaults it off).
+  [[ "$MIGRATE_PHASE" != tunnel ]] || phase_vars=(-var=cf_migration_import_app=true)
   terraform show -json >"$W/pre-plan-state.json" 2>/dev/null || { printf '::error::terraform show -json (pre-plan state) failed\n'; return 1; }
   tf_env terraform plan -no-color -input=false -out="$W/tfplan" \
-    -var="ssh_key_path=$W/ci_ssh_key.pub" "${TARGET_ARGS[@]}" ${REPLACE_ARGS[@]+"${REPLACE_ARGS[@]}"} 2>&1 | tf_redact_random_ids
+    -var="ssh_key_path=$W/ci_ssh_key.pub" ${phase_vars[@]+"${phase_vars[@]}"} \
+    "${TARGET_ARGS[@]}" ${REPLACE_ARGS[@]+"${REPLACE_ARGS[@]}"} 2>&1 | tf_redact_random_ids
   rc=${PIPESTATUS[0]}
   if [[ "$rc" -ne 0 ]]; then
     printf '::error title=%s::terraform plan failed (exit %s). If the output names cf_zone_id or cf_account_id, Doppler still holds an OLD id (Guard 4).\n' "$P" "$rc"
@@ -406,6 +512,9 @@ plan_and_gate() {
   ADMITTED_ISU="$(sed -n 's/^cf_account_migrate_gate: in-state-update //p' <<<"$out" | LC_ALL=C sort -u)"
   printf '%s in-state-updates count=%s admitted=%s\n' "$P" "$(grep -c . <<<"$ADMITTED_ISU")" "$(isu_csv "$ADMITTED_ISU")"
   summary "in-state-updates admitted=$(isu_csv "$ADMITTED_ISU")"
+  if [[ "$MIGRATE_PHASE" == tunnel ]]; then
+    deploy_token_check || return 3
+  fi
   if ! entrypoint_gate; then
     printf '%s entrypoint-gate verdict=refuse\n' "$P"
     return 2
@@ -444,7 +553,13 @@ run_rehearsal() {
   [[ "$b_after" == "$b_before" ]] || refuse backup-written "a new object appeared under $CFAM_BACKUP_PREFIX during a rehearsal"
   printf '%s rehearsal remote_serial=%s serial_unchanged=true backups_unchanged=true\n' "$P" "$before"
   [[ "$rc" -ne 2 ]] || refuse entrypoint-gate-refused "the whole-list entrypoint gate refused (a live phase entrypoint is populated, or its emptiness could not be proven); see the ::error lines above. Nothing was written."
+  [[ "$rc" -ne 3 ]] || refuse deploy-token-refused "the deploy policy's service token did not pass its live read (see the deploy-token line: 200, name github-actions-deploy, about 8760h to expiry). Nothing was written."
   [[ "$rc" -eq 0 ]] || refuse rehearsal-refused "the rehearsal did not reach gate verdict=PASS (see above); nothing was written"
+  if [[ "$MIGRATE_PHASE" == tunnel ]]; then
+    # No token and no request: the apply leg must not be the first to learn the list is unusable.
+    bash "$GITHUB_WORKSPACE/$PREDELETE_REL" --check-pins \
+      || refuse predelete-refused "the gate passed, but the pre-delete's pin list is not six record ids, so the apply leg would refuse. Commit the six ids in a reviewed PR. Nothing was written."
+  fi
   printf '%s phase=%s mode=rehearsal verdict=PASS applied=false\n' "$P" "$MIGRATE_PHASE"
   summary "verdict=PASS applied=false"
 }
@@ -540,8 +655,13 @@ verify_live() {
 probe_partial_apply() { verify_live 60; }
 
 run_apply() {
-  local rc g fg="" fx="" vf="" msg
+  local rc g fg="" fx="" vf="" sx="" msg
   cd "$ROOT" || refuse setup "cannot cd to the root"
+  if [[ "$MIGRATE_PHASE" == tunnel ]]; then
+    # Checked before the delete: an apply that cannot publish the CI-SSH pair must not start.
+    [[ -n "$DOPPLER_WRITE_VALUE" ]] || refuse doppler-write-token-missing "DOPPLER_TOKEN_WRITE is not set, so the post-apply CI-SSH sync could not run. Nothing was deleted or applied."
+    tunnel_predelete
+  fi
   if [[ "$MIGRATE_PHASE" == redirects-dns ]]; then
     # The forget's stdout is kept: its backup=uploaded marker is printed after the backup reached R2
     # and before the one state rm, so without it this run forgot nothing; with it the write may have
@@ -564,6 +684,7 @@ run_apply() {
   fi
   plan_and_gate; rc=$?
   [[ "$rc" -ne 2 ]] || refuse entrypoint-gate-refused "the whole-list entrypoint gate refused (a live phase entrypoint is populated, or its emptiness could not be proven); adopt it with the printed import block first. Nothing was applied.${fg}" "$fx"
+  [[ "$rc" -ne 3 ]] || refuse deploy-token-refused "the deploy policy's service token did not pass its live read (see the deploy-token line: 200, name github-actions-deploy, about 8760h to expiry). Nothing was applied; the pre-delete has already run."
   [[ "$rc" -eq 0 ]] || refuse gate-refused "the plan did not reach gate verdict=PASS; nothing was applied.${fg}" "$fx"
   check_expected_isu "$fg" "$fx"
   printf '%s phase=%s mode=apply applying=true\n' "$P" "$MIGRATE_PHASE"
@@ -585,7 +706,10 @@ run_apply() {
   # phase (the app's ssl configuration rule pins Strict whatever the zone-wide setting zone-rest writes).
   halt="act on each failing item by its code. app-health=>525/526: the owner may make one dashboard edit on the NEW zone only (the ssl rule, Strict to Full), then redeliver the window's failed GitHub webhook deliveries (Halt step 2). app-health 3xx whose Location equals a Terraform redirect target: the owner removes that one rule or list item on the NEW zone or account. app-health 000, any other app-health code, or a 3xx no Terraform target matches: no edit, stop for an owner decision. gptbot=>403 after redirects-dns with fight_mode recorded true: the runbook's one allowed next-phase start (run zone-rest). Any other gptbot, app-noindex or redirect-pair failure: no dashboard edit, fix forward. Then a fix-forward PR, a rehearsal, and a re-dispatch of this phase with expected_in_state_updates set to the rehearsal's admitted set (the dashboard-edited rule must plan as a no-op; only a rule nobody edited plans as an in-state update)."
   [[ "$MIGRATE_PHASE" != redirects-dns ]] || what="redirect/$what"
-  verify_live || refuse verify-failed "applied, but the ${what} probes did not all pass: ${VERIFY_FAILING}. Runbook Halt, verify-failed: ${halt}" "applied=true${fx:+ $fx} failing=${VERIFY_FAILING}"
+  # A failed sync does not skip the probes: the operator needs both results from this one run.
+  if [[ "$MIGRATE_PHASE" == tunnel ]]; then sync_ci_ssh || sx="ci_ssh_sync=failed"; fi
+  verify_live || refuse verify-failed "applied, but the ${what} probes did not all pass: ${VERIFY_FAILING}. Runbook Halt, verify-failed: ${halt}" "applied=true${fx:+ $fx}${sx:+ $sx} failing=${VERIFY_FAILING}"
+  [[ -z "$sx" ]] || refuse ci-ssh-sync-failed "applied and the live probes passed, but CI_SSH_ACCESS_TOKEN_ID/_SECRET did not reach prd_terraform (see the ci-ssh-sync line), so the CI SSH bridge still holds the old pair. Re-dispatch this phase: every created address plans no-op and the sync runs again." "applied=true"
   printf '%s phase=%s mode=apply verdict=PASS applied=true\n' "$P" "$MIGRATE_PHASE"
   summary "verdict=PASS applied=true"
 }
@@ -593,6 +717,9 @@ run_apply() {
 main() {
   # Provider / state debug logging prints secrets; nothing this job runs may inherit it.
   unset TF_LOG TF_LOG_PATH TF_LOG_CORE TF_LOG_PROVIDER
+  # A plain shell variable from here on: only sync_ci_ssh hands it to one doppler call.
+  DOPPLER_WRITE_VALUE="${DOPPLER_TOKEN_WRITE:-}"
+  unset DOPPLER_TOKEN_WRITE
   load_libs
   validate_inputs
   refuse_inflight

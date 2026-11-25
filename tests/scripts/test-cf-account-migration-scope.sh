@@ -490,7 +490,10 @@ STEP_ENV = {
     "GH_REPO": "${{ github.repository }}",
     "DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN }}",
 }
-APPLY_OPT_ENV = {"CFAM_EXPECTED_IN_STATE_UPDATES": "${{ inputs.expected_in_state_updates }}"}
+APPLY_OPT_ENV = {
+    "CFAM_EXPECTED_IN_STATE_UPDATES": "${{ inputs.expected_in_state_updates }}",
+    "DOPPLER_TOKEN_WRITE": "${{ secrets.DOPPLER_TOKEN_WRITE }}",  # the tunnel apply's CI-SSH sync
+}
 WF_ENV_KEYS = {"TERRAFORM_VERSION", "TF_VAR_terraform_version", "INFRA_DIR"}
 JOB_SCRIPT = "apps/web-platform/infra/scripts/cf-account-migrate-job.sh"
 PRE_STEPS_S = 300
