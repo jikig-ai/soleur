@@ -242,7 +242,7 @@ d5="$(cf_account_migrate_live_diff redirects-dns "$NORM" "$FLAT_ALL")"; d5_rc=$?
 if [[ "$d5_rc" -eq 0 && -z "$d5" && "$(n_flat "$FLAT_ALL")" -eq 6 ]]; then pass "D5: the re-read with the six CNAMEs at {flatten_cname:false} is clean"
 else fail "D5: the re-read refused the flatten_cname=false default" "$d5_rc" "$d5"; fi
 d6="$(cf_account_migrate_live_diff redirects-dns "$NORM" "$FLAT_MIX")"; d6_rc=$?
-if [[ "$d6_rc" -eq 0 && -z "$d6" && "$(n_flat "$FLAT_MIX")" -eq 3 ]] && ! cmp -s "$FLAT_MIX" "$NLIVE"; then
+if [[ "$d6_rc" -eq 0 && -z "$d6" && "$(n_flat "$FLAT_MIX")" -eq 3 ]] && ! cmp -s "$FLAT_MIX" "$NLIVE" && ! cmp -s "$FLAT_MIX" "$FLAT_ALL"; then
   pass "D6: a re-read with three CNAMEs at {flatten_cname:false} and three at {} (the PATCH reset) is clean"
 else fail "D6: the mixed re-read was refused, or the fixture is not mixed" "$d6_rc" "$d6"; fi
 jq -c --arg r "$NR" '.[$r].result.settings = {flatten_cname:false}' "$NLIVE" > "$TMP/m-flat-txt.json"
@@ -469,19 +469,19 @@ review proposed a row; recorded in `decision-challenges.md`).
 
 ### Pre-merge (this branch)
 
-- [ ] AC1: `bash tests/scripts/test-cf-account-migrate-gate.sh` exits 0 and its last line is
+- [x] AC1: `bash tests/scripts/test-cf-account-migrate-gate.sh` exits 0 and its last line is
   `356 passed, 0 failed`.
-- [ ] AC2: the RED evidence is reproduced at work time. The Phase 1 edits run against the unfixed lib
+- [x] AC2: the RED evidence is reproduced at work time. The Phase 1 edits run against the unfixed lib
   fail exactly `L11a`, `L11b`, `D5`, `D6`, `M-flatten-guard` and `M-flatten-after`. The output ends
   `350 passed, 6 failed`.
-- [ ] AC2b: the value conjunct's witnesses are reproduced. On a scratch copy of the fixed lib, apply
+- [x] AC2b: the value conjunct's witnesses are reproduced. On a scratch copy of the fixed lib, apply
   `sed 's/elif \$r\.settings == {"flatten_cname":false} and /elif /'` and run the suite against it.
   It ends `351 passed, 5 failed`, failing exactly `L11c`, `L11d`, `L11e`, `L11f` and `M-flatten-guard`
   ("mutation did not land"). The worktree lib is not left mutated.
-- [ ] AC3: the existing `L11` (tokens `settings,settings:only-flatten-false` on
+- [x] AC3: the existing `L11` (tokens `settings,settings:only-flatten-false` on
   `cloudflare_record.dkim_resend`), `L12`, `L13`, `G1-7 settings` and `G1-8b` rows still pass
   unchanged, except for L11's label.
-- [ ] AC4: `git diff --name-only origin/main...HEAD` lists only the four Files to Edit plus files
+- [x] AC4: `git diff --name-only origin/main...HEAD` lists only the four Files to Edit plus files
   the pipeline writes: this plan,
   `knowledge-base/project/specs/feat-one-shot-13056-cname-flatten-settings/**` (tasks.md,
   decision-challenges.md, session-state.md), and a regenerated `knowledge-base/INDEX.md` if the
@@ -492,18 +492,18 @@ review proposed a row; recorded in `decision-challenges.md`).
   tests/scripts/lib/cf-account-migrate-gate.sh)` prints nothing, and the base-side range is not empty:
   `git show origin/main:tests/scripts/lib/cf-account-migrate-gate.sh | sed -n '/^def cfam_norm_shape:/,/^def cfam_fqdn/p' | wc -l`
   prints `10`.
-- [ ] AC5: `bash tests/scripts/test-cf-account-migration-runbook.sh` and
+- [x] AC5: `bash tests/scripts/test-cf-account-migration-runbook.sh` and
   `bash tests/scripts/test-cf-account-migration-scope.sh` exit 0.
-- [ ] AC6: `shellcheck -x tests/scripts/test-cf-account-migrate-gate.sh tests/scripts/lib/cf-account-migrate-gate.sh`
+- [x] AC6: `shellcheck -x tests/scripts/test-cf-account-migrate-gate.sh tests/scripts/lib/cf-account-migrate-gate.sh`
   reports no finding that is not already on `origin/main`.
-- [ ] AC7: the edited lines themselves carry the carve-out, not only somewhere in each file.
+- [x] AC7: the edited lines themselves carry the carve-out, not only somewhere in each file.
   `grep -F '| \`settings:only-flatten-false\` |' knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md | grep -c 'compares equal, CTO ruling 2026-11-25'`
   prints `1`.
   `tr -s '\n ' '  ' < knowledge-base/engineering/architecture/decisions/ADR-329-*.md | grep -c 'the API default, which is not a difference: CTO ruling 2026-11-25'`
   prints `1`. The `tr` handles the bullet's line wrap. Table rows are single lines and need none.
-- [ ] AC7b: `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` exits 0. This
+- [x] AC7b: `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` exits 0. This
   is the same invocation CI uses for changed docs.
-- [ ] AC8: no `cf-account-migrate.yml` run is dispatched from this branch. Check with
+- [x] AC8: no `cf-account-migrate.yml` run is dispatched from this branch. Check with
   `gh run list --workflow cf-account-migrate.yml --branch feat-one-shot-13056-cname-flatten-settings --json databaseId --jq length`,
   which must print `0`.
 
