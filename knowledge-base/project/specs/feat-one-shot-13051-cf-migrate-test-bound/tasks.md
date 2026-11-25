@@ -12,7 +12,7 @@ Plan: `knowledge-base/project/plans/2026-11-25-fix-cf-migrate-job-suite-ci-bound
 - 2.1 Print `[sandbox] <path>` to stderr right after `mktemp`.
 - 2.2 Add the `CFAM_JOB_SIGTEST` seam right after the trap registration, before the instrument self-test.
 - 2.3 Add the self-test parent rows: start the child with `set -m`, poll for `armed` (max 20 s), send `kill -TERM -- -<pgid>`, then assert rc 143, one `[ABORTED]`, no `SIGTEST-RESUMED`, no `^  FAIL: SIGTEST` line, and the sandbox gone.
-- 2.4 Resolve `timeout`/`gtimeout`/`SOLEUR_TIMEOUT_BIN` for AC3. A missing binary fails under CI and is a counted SKIP elsewhere.
+- 2.4 (Dropped: AC3 is run once by hand under the real `timeout` and recorded in the PR body; the standing rows signal the child directly.)
 - 2.5 Confirm the self-test goes RED against today's trap (Guard 1 row 1).
 - 2.6 Replace the trap: the EXIT trap cleans; the TERM/INT/HUP handler prints `[ABORTED]` and exits 128+n.
 - 2.7 Run Guard 1 mutation rows 1-3 against scratch copies and record the commands (AC2).
@@ -20,7 +20,7 @@ Plan: `knowledge-base/project/plans/2026-11-25-fix-cf-migrate-job-suite-ci-bound
 
 ## 3. Slim workspace and stall cut (Phase 2)
 
-- 3.1 Add `derive_reach`, and leave `GATED_FILE` byte-identical.
+- 3.1 Give `derive_gated` an optional reach-set output, and leave `GATED_FILE` byte-identical.
 - 3.2 Build `$SBX/ws-slim`, with a `[FATAL]` exit when its workflow count differs from `|reach|` or is 0.
 - 3.3 Default `run_job`'s `GITHUB_WORKSPACE` to `ws-slim`, and record the workspace per case dir.
 - 3.4 Point `$MIRROR/.github` at `ws-slim/.github`.
@@ -33,8 +33,8 @@ Plan: `knowledge-base/project/plans/2026-11-25-fix-cf-migrate-job-suite-ci-bound
 
 ## 4. Measure and gate (Phase 3)
 
-- 4.1 Push. Download `suite-timings-infra-*` for this PR's runs (at least 2) and take the worst figure for this suite.
-- 4.2 If the worst figure is over 360000 ms, go to section 5. Otherwise, record that the gate passed and skip section 5.
+- 4.1 Push. Download `suite-timings-infra-*` for at least 3 attempts of the final commit and take the worst figure for this suite (AC4 as revised).
+- 4.2 The worst must be at most 480000 ms (AC4 as revised). If it is more than 10% above the weight row, update the row, regenerate once and take one more sample.
 - 4.3 Edit only this suite's row in `apps/web-platform/infra/suite-durations.tsv` (`measured`).
 - 4.4 Run `regenerate-shard-manifest.py --group infra --durations apps/web-platform/infra/suite-durations.tsv` as a dry run. Paste the leg table into the PR body. Then run it with `--write --allow-growth` and state the reason. Expect about 11 moved suites; the deepen simulation put this suite on leg 2. Record the outcome; do not hand-pin.
 - 4.5 Rewrite the `_SUITE_BOUNDS` comment: worst figure, ratio, PR number, re-measure recipe, and both revisit triggers (AC8).
@@ -43,7 +43,7 @@ Plan: `knowledge-base/project/plans/2026-11-25-fix-cf-migrate-job-suite-ci-bound
 ## 5. Row pool (Phase 4, only if the gate trips)
 
 - 5.1 Capture the golden label list from the Step A serial run.
-- 5.2 Write the pool-mode self-test first (a direct `kill -TERM <pid>` to the suite alone after `armed`, then `kill -0` on the recorded SUT PIDs).
+- 5.2 Write the pool-mode self-test first (a direct `kill -TERM <pid>` to the suite alone after `armed`, then a not-a-zombie check on the job PID the fixture records, and the child's sandbox removed).
 - 5.3 Build the whole-row subshell pool. Setups stay in the parent, rows write to a file, the flush drains every row and prints in order, `run_job` flushes first, `^SECONDS=` rows run in the foreground, `CFAM_MUT_JOBS` takes 1-8, and the `section` helper replaces the headers.
 - 5.4 Add the Guard 3 rows, including the comparison of `$SBX` top-level and `$SBX/bin` listings.
 - 5.5 Diff the pooled run against the golden list (AC5). Then return to 4.1.

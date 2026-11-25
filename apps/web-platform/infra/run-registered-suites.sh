@@ -755,18 +755,20 @@ _SUITE_BOUNDS=(
   # (ADR-317, the runbook residuals), and the suite moves to a lighter leg if the leg exceeds ~700 s.
   "apps/web-platform/infra/key-rotate-workflow.test.sh=840"
   # #12931 / #13051 (PR #13052): the CF account migrate job battery runs the real gate and state forget
-  # per case plus its sed mutants. It outgrew this bound once (killed at 720 s); after #13052's slim
-  # workspace, mutation-row pool and per-job fork cuts, three CI attempts of one commit measured
-  # 268/352/350 s (suite-timings-infra-*): worst 352 s, so 720 is ~2.0x the worst, inside the
-  # ATTRIBUTION block's >=1.5x rule, and the weight row is 352000 measured (suite-durations.tsv).
-  # The same commit has measured 267 s and 526 s on two runners (every large leg sibling slowed
-  # ~1.9x), so read a figure next to its leg siblings, not alone.
+  # per case plus its sed mutants. It outgrew this bound once (killed at 720 s). #13052 cut its harness
+  # cost (slim workspace, per-job fork cuts) and added a row pool that is OFF on hosts under 8 cores, so
+  # a CI leg runs it serially: on CI the pool only moved CPU onto the leg's other suites (CTO ruling,
+  # decision-challenges.md). The weight row is the slim-workspace serial CI time, 396 s on 2825e1bc7e
+  # (before the fork cuts), so 720 is ~1.8x it, inside the ATTRIBUTION block's >=1.5x rule; the PR's
+  # AC4 attempts on the merged commit are in PR #13052's body. One commit has measured 267 s and 526 s
+  # on two runners (a1eb4e67b1, pooled), so read a figure next to its leg siblings, not alone.
   # Re-measure: download suite-timings-infra-* from >=3 infra-validation attempts, put the worst in
   # suite-durations.tsv, then `regenerate-shard-manifest.py --group infra --durations
   # apps/web-platform/infra/suite-durations.tsv --write --allow-growth`.
-  # Revisit when (a) five post-fix CI samples exist (the CTO ruling's re-check of the bound), or
-  # (b) the worst sample passes 480 s (720/1.5) or EXPECTED_CASES grows past ~330 (rows added since
-  # 295); then cut harness cost or split the file, never only raise the bound.
+  # Revisit when (a) five post-fix CI samples (from #13052's merge on) exist (the CTO ruling's re-check of the
+  # bound; earlier samples predate the fork cuts), or (b) the worst sample passes 480 s (720/1.5) or
+  # EXPECTED_CASES grows past ~330 (it is 298; #12958's rebase adds ~44); then cut harness cost or
+  # split the file, never only raise the bound.
   "apps/web-platform/infra/cf-account-migrate-job.test.sh=720"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"

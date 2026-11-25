@@ -396,7 +396,8 @@ the template.
 
 ### Phase 2 — Slim workspace and the stall cut (lever b)
 
-1. Add `derive_reach` (the pre-exempt reach set) beside `derive_gated`, and leave `GATED_FILE`
+1. (As built: `derive_gated` takes an optional third argument that writes the reach set; no separate
+   `derive_reach` function.) Add `derive_reach` (the pre-exempt reach set) beside `derive_gated`, and leave `GATED_FILE`
    byte-identical.
 2. Build `$SBX/ws-slim` from it (Step A item 2). An empty mirror, or one whose workflow count differs
    from `|reach|`, exits 2 as `[FATAL]` before any row runs.
@@ -682,7 +683,9 @@ missing flush, because both defer scoring the same way. The pooled run must matc
   glob for it). Recorded once in the PR body as evidence.
 - [ ] AC4: The suite's `suite-timings-infra-*` value over at least three infra-validation attempts of
   this PR's final commit has a worst of at most 480000 ms and a median of at most 360000 ms, and the
-  row is PASS. The bound stays at 720 s. (Revised 2026-11-25 by CTO ruling after Steps A and B missed
+  row is PASS. The bound stays at 720 s. (Second revision 2026-11-25, CTO review-phase ruling: the median
+  clause is dropped, because with the pool off on CI the median measured the CPU the pool took from
+  the leg's other suites; the worst <= 480000 ms clause stands. Revised 2026-11-25 by CTO ruling after Steps A and B missed
   the original 360000 ms worst-of-2 on runner-wide 2x variance; see decision-challenges.md. The
   original wording: worst of at least two runs at most 360000 ms; if both steps miss, stop and re-plan.)
 - [ ] AC5: If Step B is built, the pooled run's ordered verdict labels equal the Step A golden list
@@ -691,12 +694,16 @@ missing flush, because both defer scoring the same way. The pooled run must matc
 - [ ] AC6: `apps/web-platform/infra/suite-durations.tsv` carries this suite at the AC4 worst figure, in
   ms, marked `measured`, and that is the only changed data row in the file. Header lines (`#`) may
   change. `git diff origin/main -- apps/web-platform/infra/suite-durations.tsv | grep -cE '^\+[^#+]'`
-  prints `1`.
+  prints `1`. (Revised 2026-11-25, CTO review-phase ruling: `ci-deploy.test.sh` and
+  `cron-egress-nftables.test.sh` are re-priced to their worst measured CI figures, 878000 and 483000,
+  so the leg balance does not rest on known-stale weights; the grep prints `3`. This suite's row starts
+  at the 396000 serial Step A figure and moves to the AC4 worst only if that is more than 10% above it.)
 - [ ] AC7: `suite-shard-legs.tsv` was produced by
   `regenerate-shard-manifest.py --group infra --durations apps/web-platform/infra/suite-durations.tsv --write`,
   and the dry-run leg table is in the PR body. The leg this suite lands on is recorded, whatever it is.
 - [ ] AC8: The `_SUITE_BOUNDS` entry still reads `cf-account-migrate-job.test.sh=720`. Its comment
-  names the post-fix worst figure, the ratio, the PR number, the re-measure recipe and both revisit
+  names the weight row's basis (revised 2026-11-25: commits after the AC4 measurement may not touch
+  this file, so the measured attempts live in the PR body), the ratio, the PR number, the re-measure recipe and both revisit
   triggers. Check with
   `grep -B12 'cf-account-migrate-job.test.sh=720' apps/web-platform/infra/run-registered-suites.sh | grep -cE 'suite-timings-infra|--durations|five post-fix|EXPECTED_CASES'`,
   which prints at least `4`.
@@ -802,7 +809,8 @@ the CTO re-ruling where a technical fork was re-opened:
   `timeout`), so a skip is never a silent pass.
 - Step B's `wait -n` needs bash 4.3 or later. Add an explicit `BASH_VERSINFO` check that exits 2 with
   a named message.
-- In Step B, identify pool children by recorded PIDs and process groups. A pattern-matching process
+- (As built: the handler and the EXIT trap reap from the shell's own job table, TERM each job's process
+  group, and poll the group empty; no PID list is kept.) In Step B, identify pool children by recorded PIDs and process groups. A pattern-matching process
   search from inside the Bash tool matches its own wrapper's command line.
 - `discoverability_test.command` must contain none of `|;&<>$` or a backtick (preflight Check 10's
   shell-active reject); the declared grep satisfies that.

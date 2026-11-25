@@ -2,9 +2,9 @@
 # group=infra
 # generated-from-runs=durations:suite-durations.tsv
 # default-weight-ms=4000
-# generated-at=2026-11-25T17:02:15Z
+# generated-at=2026-11-25T18:08:16Z
 # generator=regenerate-shard-manifest.py v3
-# growth-acked=f71578b5097bac65b3250bc57060d0be83f688eff8088d775a5f9de983b9a20c
+# growth-acked=340e9af074aacca04cb7b34af997f5ba23ca5091e2b5e2b7b73a5b433b93e446
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	15000	measured
 apps/web-platform/infra/apex-single-node-replace.test.sh	500	measured
 apps/web-platform/infra/apt-bounded.test.sh	38500	measured
@@ -17,11 +17,11 @@ apps/web-platform/infra/canary-bundle-claim-check.test.sh	6000	measured
 apps/web-platform/infra/cat-deploy-state.test.sh	20500	measured
 apps/web-platform/infra/cat-infra-config-state.test.sh	0	measured
 apps/web-platform/infra/cat-inngest-verify-state.test.sh	0	measured
-apps/web-platform/infra/cf-account-migrate-job.test.sh	352000	measured
+apps/web-platform/infra/cf-account-migrate-job.test.sh	396000	measured
 apps/web-platform/infra/cf-account-migration-complete.test.sh	4000	floor
 apps/web-platform/infra/cf-account-state-migrate.test.sh	4000	floor
 apps/web-platform/infra/ci-deploy-wrapper.test.sh	1000	measured
-apps/web-platform/infra/ci-deploy.test.sh	471500	measured
+apps/web-platform/infra/ci-deploy.test.sh	878000	measured
 apps/web-platform/infra/cloud-init-ghcr-seed-login.test.sh	32000	measured
 apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	5500	measured
 apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh	369500	measured
@@ -37,7 +37,7 @@ apps/web-platform/infra/cron-egress-enforce-probe.test.sh	9000	measured
 apps/web-platform/infra/cron-egress-firewall.test.sh	37500	measured
 apps/web-platform/infra/cron-egress-ghcr-probe.test.sh	5000	measured
 apps/web-platform/infra/cron-egress-metadata-endpoint.test.sh	1000	measured
-apps/web-platform/infra/cron-egress-nftables.test.sh	150500	measured
+apps/web-platform/infra/cron-egress-nftables.test.sh	483000	measured
 apps/web-platform/infra/cron-egress-self-heal.test.sh	11000	measured
 apps/web-platform/infra/cutover-inngest-workflow.test.sh	43500	measured
 apps/web-platform/infra/disk-monitor.test.sh	2000	measured
