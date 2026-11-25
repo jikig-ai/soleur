@@ -683,7 +683,8 @@ missing flush, because both defer scoring the same way. The pooled run must matc
   glob for it). Recorded once in the PR body as evidence.
 - [ ] AC4 (MISSED, fallback applied 2026-11-25 by CTO ruling: three attempts of 7282744c64 measured
   290/525/521 s, worst 525 s; the 2-wide pool ships, the bound is 790 s = 1.5x 525, and the split
-  is #13064, blocked on #12958): The suite's `suite-timings-infra-*` value over at least three infra-validation attempts of
+  is #13064, blocked on #12958; the post-regen confirmation sample on 6971f9f85c measured 458 s on
+  leg 1, no suite bound-killed, `run-registered-suites.test.sh` 352 s): The suite's `suite-timings-infra-*` value over at least three infra-validation attempts of
   this PR's final commit has a worst of at most 480000 ms and a median of at most 360000 ms, and the
   row is PASS. The bound stays at 720 s. Each attempt records the leg's other suites, and the PR stops
   if any suite is bound-killed or `run-registered-suites.test.sh` passes 486 s (third revision
@@ -696,7 +697,7 @@ missing flush, because both defer scoring the same way. The pooled run must matc
 - [x] AC5: If Step B is built, the pooled run's ordered verdict labels equal the Step A golden list
   (the Phase 4 step 3 diff prints nothing beyond the listed pool self-test rows), and the run passes. If Step B is not built,
   `grep -c 'CFAM_MUT_JOBS' apps/web-platform/infra/cf-account-migrate-job.test.sh` prints `0`.
-- [ ] AC6: `apps/web-platform/infra/suite-durations.tsv` carries this suite at the AC4 worst figure, in
+- [x] AC6: `apps/web-platform/infra/suite-durations.tsv` carries this suite at the AC4 worst figure, in
   ms, marked `measured`, and that is the only changed data row in the file. Header lines (`#`) may
   change. `git diff origin/main -- apps/web-platform/infra/suite-durations.tsv | grep -cE '^\+[^#+]'`
   prints `1`. (Revised 2026-11-25, CTO review-phase ruling: `ci-deploy.test.sh` and
@@ -707,7 +708,7 @@ missing flush, because both defer scoring the same way. The pooled run must matc
 - [x] AC7: `suite-shard-legs.tsv` was produced by
   `regenerate-shard-manifest.py --group infra --durations apps/web-platform/infra/suite-durations.tsv --write`,
   and the dry-run leg table is in the PR body. The leg this suite lands on is recorded, whatever it is.
-- [ ] AC8: (Revised 2026-11-25 by CTO ruling: the entry reads `cf-account-migrate-job.test.sh=790`.) The `_SUITE_BOUNDS` entry still reads `cf-account-migrate-job.test.sh=720`. Its comment
+- [x] AC8: (Revised 2026-11-25 by CTO ruling: the entry reads `cf-account-migrate-job.test.sh=790`.) The `_SUITE_BOUNDS` entry still reads `cf-account-migrate-job.test.sh=720`. Its comment
   names the weight row's basis (revised 2026-11-25: commits after the AC4 measurement may not touch
   this file, so the measured attempts live in the PR body), the ratio, the PR number, the re-measure recipe and both revisit
   triggers. Check with
@@ -716,7 +717,7 @@ missing flush, because both defer scoring the same way. The pooled run must matc
 - [x] AC9: No line the suite adds prints a token value or runs `ssh`.
   `git diff origin/main -- apps/web-platform/infra/cf-account-migrate-job.test.sh | grep -cE '^\+.*(\bssh |echo .*TF_VAR_cf_api_token)'`
   prints `0`.
-- [ ] AC10: These all exit 0: `bash .github/scripts/test/test-infra-suite-registration.sh`,
+- [x] AC10: These all exit 0: `bash .github/scripts/test/test-infra-suite-registration.sh`,
   `bash scripts/test-all-corpus-weight-budget.test.sh`,
   `bash plugins/soleur/test/fixture-relative-assert.test.sh`,
   `bash .claude/hooks/grep-q-pipe-guard.test.sh`,
