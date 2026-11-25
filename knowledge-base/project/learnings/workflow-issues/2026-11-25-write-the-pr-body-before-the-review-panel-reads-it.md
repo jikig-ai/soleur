@@ -18,15 +18,17 @@ statements, including "the marker is not posted by this PR". The pipeline runs
 review before ship, so the five-seat review panel read a draft whose body was
 still the auto-created placeholder.
 
-Three of the five seats independently reported the same P2: no closing
-reference, and `closingIssuesReferences` was `[]`. Two of them also had to work
-out for themselves where the plan's ruling D2 put the S1 marker status ("in the
-PR body"), because the body did not exist yet. None of this was a defect in the
-diff. It came only from the phase order.
+Two of the five seats (history and security) reported the same P2: the body
+was the placeholder, and `closingIssuesReferences` was `[]`. A third (pattern)
+noted the placeholder as informational. Two seats (history and pattern) also
+pointed out that the plan's ruling D2 puts the S1 marker status "in the PR
+body", which did not exist yet. None of this was a defect in the diff. It came
+only from the phase order.
 
 ## Solution
 
-I wrote the body during review, after the security seat had returned. Then I
+I wrote the body during review, after the history, security and simplicity
+seats had returned and while pattern and quality were still running. Then I
 polled `gh pr view --json closingIssuesReferences` until it printed `[12846]`.
 GitHub filled the field on the first poll after the edit. I recorded the
 duplicated P2 as resolved.
@@ -38,14 +40,15 @@ When a PR's correctness depends on its body, write the body before review:
 - a "not done by this PR" statement that a ruling relies on;
 - a negated reference that must not parse as a close.
 
-The body is part of what review judges. A placeholder body turns every seat
-that reads `gh pr view` into a reporter of the same missing-field finding.
+The body is part of what review judges. A placeholder body can make the seats
+that read `gh pr view` report the same missing-field finding, as two of five
+did here.
 
 For a docs-only PR the cost was small: one duplicated finding per seat. For a
 PR where a stray close keyword next to a tracker issue would close the tracker
 on merge, a review that ran against a placeholder never saw the text that
-matters. The panel's clean verdict on `closingIssuesReferences` would then be a
-verdict on an empty field.
+matters. A clean verdict on `closingIssuesReferences` would then be a verdict
+on an empty field.
 
 ## Session Errors
 
@@ -65,8 +68,9 @@ verdict on an empty field.
    **Prevention:** push after every commit on a long-running branch, so a
    restart loses only scratch state.
 5. **Stray `soleur-run.*` scratch directory created inside `.worktrees/`.**
-   Recovery: removed it. **Prevention:** pass an explicit `-p` under the session
-   scratchpad or `/var/tmp` to every `mktemp`, never a path relative to the
+   Recovery: removed it. The command that created it was not identified.
+   **Prevention:** pass an explicit `-p` under the session scratchpad or
+   `/var/tmp` to every `mktemp`, so no scratch path can resolve relative to the
    worktree parent.
 6. **Gate rc 1 from `cloud-init-user-data-size.test.ts` (floor-raise case).**
    Recovery: reproduced it on a clean `origin/main` worktree (same failure) and
@@ -77,7 +81,8 @@ verdict on an empty field.
    `scripts/followthroughs/…`.** The run exited 127. Recovery: resolved the path
    with `git ls-files '*<name>'`. **Prevention:** resolve a suite path with
    `git ls-files` before running it; never retype it from memory.
-8. **Three review seats reported the placeholder PR body as a P2.** Recovery:
+8. **Two review seats reported the placeholder PR body as a P2, and a third
+   noted it.** Recovery:
    wrote the body mid-review and verified `closingIssuesReferences == [12846]`.
    **Prevention:** write the body, with close and Ref lines, at the end of the
    work phase, before review (this learning).
