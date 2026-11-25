@@ -58,7 +58,11 @@ run. No dispatch had happened since the merge, so nothing showed it.
   the default branch and the main-only policy admits it. G1f reads only the called job's own
   `workflow_call` trigger, so a head-ref checkout there passed every row. The cover now refuses
   a caller on a pull-request trigger, and a "caller" that carries its own `steps:`, `runs-on:`
-  or `environment:`. Mutants g1-8e and g1-8f pin both refusals. Job triggers are now read from
+  or `environment:`. Mutants g1-8e and g1-8f pin both refusals. A second review round found the
+  same hole one level up: a `pull_request_target` workflow calling a `workflow_call` middle
+  caller. The cover now also refuses `workflow_call` and `workflow_run` callers (g1-8g, g1-8h),
+  so nested chains fail closed. The pre-existing G1f gap for direct `workflow_run` and
+  `issue_comment` jobs is #13058. Job triggers are now read from
   every `on:` form; the old mapping-only read left `on: [pull_request_target]` with no triggers
   at all. **Widening a security gate's accept set is a change to the gate's threat model**, so
   ask what context the newly accepted shape runs in, not only whether it is well formed.
