@@ -60,8 +60,10 @@ run. No dispatch had happened since the merge, so nothing showed it.
   a caller on a pull-request trigger, and a "caller" that carries its own `steps:`, `runs-on:`
   or `environment:`. Mutants g1-8e and g1-8f pin both refusals. A second review round found the
   same hole one level up: a `pull_request_target` workflow calling a `workflow_call` middle
-  caller. The cover now also refuses `workflow_call` and `workflow_run` callers (g1-8g, g1-8h),
-  so nested chains fail closed. The pre-existing G1f gap for direct `workflow_run` and
+  caller. A third round found `issue_comment` and `check_suite` callers still passed, because a
+  denylist misses the events nobody listed. The trigger check is now an **allowlist**: every
+  caller trigger must be `push`, `workflow_dispatch` or `schedule`. Mutants g1-8e to g1-8i pin
+  it, and nested chains fail closed. The pre-existing G1f gap for direct `workflow_run` and
   `issue_comment` jobs is #13058. Job triggers are now read from
   every `on:` form; the old mapping-only read left `on: [pull_request_target]` with no triggers
   at all. **Widening a security gate's accept set is a change to the gate's threat model**, so

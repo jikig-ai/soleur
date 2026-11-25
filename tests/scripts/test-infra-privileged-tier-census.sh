@@ -661,18 +661,18 @@ print("IPT_TIERB=%s" % " ".join(sorted(j.id for j in tierb)), file=sys.stderr)
 # `workflow_call` workflow in this census and at least one of its jobs is Tier B, and every Tier-B
 # job there declares an `environment:` whose arms are all Tier-B environments: that environment
 # gates the run and supplies the secret's value. A remote `uses:` (`owner/repo/...@ref`) is never
-# covered, because its jobs are not in this census. Two more refusals (#13054 security review):
-#   * a caller on a pull-request trigger: the called job runs with the CALLER's `github` context, so
-#     on `pull_request_target` its ref is the default branch and the main-only policy admits it, while
-#     G1f reads only the called job's own triggers (`workflow_call`) and never sees a head checkout;
-#     `workflow_run` is refused for the same reason: it runs in default-branch context and its
-#     `head_sha` can name a fork PR's code, which G1f does not model either;
-#   * a caller that is itself `workflow_call`: the whole chain runs in the TOP caller's context,
-#     which this row cannot see from the middle, so one level of indirection would carry a
-#     pull_request_target run past the refusal above (nested chains therefore fail closed);
+# covered, because its jobs are not in this census. Two more limits (#13054 security review, 3 rounds):
+#   * the caller's triggers must ALL be in an ALLOWLIST of events a third party cannot start with
+#     their own code in reach. The called job runs with the CALLER's `github` context, and G1f reads
+#     only the called job's own trigger (`workflow_call`), so it never sees a head checkout. Events
+#     that run on the DEFAULT-BRANCH ref while carrying PR or fork data (`pull_request_target`,
+#     `workflow_run`, `issue_comment`, `check_suite`, `issues`, ...) are admitted by the main-only
+#     policy. A caller that is itself `workflow_call` runs in its TOP caller's context, which this
+#     row cannot see from the middle, so nested chains fail closed. A denylist missed the events
+#     nobody listed, so this is an allowlist; widen it only with a reason per event;
 #   * a "caller" that also carries `steps:`, `runs-on:` or `environment:` is not a pure call (GitHub
 #     rejects one), so its own body must not ride on the callee's environment.
-REUSABLE_CALLER_REFUSED_TRIGGERS = {"pull_request", "pull_request_target", "workflow_run", "workflow_call"}
+REUSABLE_CALLER_ALLOWED_TRIGGERS = {"push", "workflow_dispatch", "schedule"}
 REUSABLE_LOCAL = re.compile(r"^\./\.github/(workflows/[^/@\s]+\.ya?ml)$")
 def reusable_caller_covered(j):
     m = REUSABLE_LOCAL.match(str(j.body.get("uses") or "").strip())
@@ -680,7 +680,7 @@ def reusable_caller_covered(j):
         return False
     if any(k in j.body for k in ("steps", "runs-on", "environment")):
         return False
-    if set(j.triggers) & REUSABLE_CALLER_REFUSED_TRIGGERS:
+    if not j.triggers or not set(j.triggers) <= REUSABLE_CALLER_ALLOWED_TRIGGERS:
         return False
     called = [c for c in jobs if c.rel == m.group(1)]
     tb = [c for c in called if c.tier_b]
@@ -3753,6 +3753,13 @@ if mutate g1-8h-reusable-caller-on-workflow-run "$MUTDIR/tree/.github/workflows/
   fixcensus "$MUTDIR" "$T/mut/g1-8h.tsv" ""
   mutant_red g1-8h-reusable-caller-on-workflow-run wf_row "$T/mut/g1-8h.tsv" "G1b:"
 fi
+# 8i (security review, round 3): `issue_comment` runs on the default-branch ref and anyone can comment
+# on a PR; no denylist named it, which is why the trigger check is an allowlist.
+MUTDIR="$(fixcopy g1-8i)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-8i-reusable-caller-on-issue-comment "$MUTDIR/tree/.github/workflows/tierb-reusable-caller.yml" 2 's/^on: workflow_dispatch$/on: [workflow_dispatch, issue_comment]/'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-8i.tsv" ""
+  mutant_red g1-8i-reusable-caller-on-issue-comment wf_row "$T/mut/g1-8i.tsv" "G1b:"
+fi
 # Row 9 (U5) — an environment OUTSIDE tier_b_environments: a name O3 never seeds, so GitHub
 # auto-creates it with no branch policy at all.
 MUTDIR="$(fixcopy g1-9)"; assert_fixture_dir "$MUTDIR"
@@ -5553,7 +5560,7 @@ fi
 # 165 -> 171 (#12742 round 2, G2a fails closed on the prefix): g2-2c..g2-2g (timeout -k / --preserve-status / 1m30s,
 #   env -u, a quoted `$(timeout -k ...)`) and the g2-2h quoted-prose control; 1 landing each. Measured: 171 ran.
 # 181 + 7 -> 188 (main merge into #12876): main's #9294 rows and this PR's g2-2b..g2-2h rows are disjoint. Measured: 188 ran.
-MUTANT_FLOOR=195  # 188 -> 195 (#12873 follow-up): g1-8b..g1-8h (the reusable-caller cover on G1b).
+MUTANT_FLOOR=196  # 188 -> 196 (#12873 follow-up): g1-8b..g1-8i (the reusable-caller cover on G1b).
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
