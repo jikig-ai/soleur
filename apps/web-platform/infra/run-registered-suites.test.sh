@@ -848,11 +848,10 @@ _ded_on_leg=""; _ded_loud=0
 for k in 1 2 3 4; do
   _lo="$(SOLEUR_INFRA_SHARD=$k/4 SOLEUR_INFRA_MANIFEST=off SOLEUR_INFRA_DIR="$FIXD" \
         bash "$SUT" --list 2>/dev/null)"
-  if printf '%s\n' "$_lo" | awk '/^Shard [0-9]+\/[0-9]+ execute set/{f=1;next} /^$/{f=0} f' \
-       | grep -qxF "  $DED_FIX"; then
+  if grep -qxF "  $DED_FIX" < <(printf '%s\n' "$_lo" | awk '/^Shard [0-9]+\/[0-9]+ execute set/{f=1;next} /^$/{f=0} f'); then
     _ded_on_leg="${_ded_on_leg} $k/4"
   fi
-  printf '%s\n' "$_lo" | grep -qF "  SKIP dedicated: $DED_FIX — owner: bastion-boot-rehearsal" \
+  grep -qF "  SKIP dedicated: $DED_FIX — owner: bastion-boot-rehearsal" <<<"$_lo" \
     && _ded_loud=$(( _ded_loud + 1 ))
 done
 if [[ -z "$_ded_on_leg" && "$_ded_loud" -eq 4 ]]; then
@@ -863,9 +862,9 @@ fi
 unset _lo _ded_on_leg _ded_loud
 
 _lo="$(SOLEUR_INFRA_DIR="$FIXD" bash "$SUT" --list 2>/dev/null)"
-if printf '%s\n' "$_lo" | grep -qF "  SKIP dedicated: $DED_FIX — owner: bastion-boot-rehearsal" \
-   && printf '%s\n' "$_lo" | grep -qF "run locally: bash $DED_FIX" \
-   && printf '%s\n' "$_lo" | grep -qxF "Execute set: 5 suite(s)"; then
+if grep -qF "  SKIP dedicated: $DED_FIX — owner: bastion-boot-rehearsal" <<<"$_lo" \
+   && grep -qF "run locally: bash $DED_FIX" <<<"$_lo" \
+   && grep -qxF "Execute set: 5 suite(s)" <<<"$_lo"; then
   ok "T11k-b: the plain unsharded set omits the dedicated suite too (SKIP, 5 of 6), naming its owner and the direct run"
 else
   no "T11k-b: the unsharded set would execute the dedicated suite: $(printf '%s\n' "$_lo" | grep -E 'dedicated:|^Execute set' | head -3)"
@@ -874,7 +873,7 @@ unset _lo
 
 ENUM_D="$(SOLEUR_INFRA_DIR="$FIXD" bash "$SUT" --enumerate 2>/dev/null)"
 if [[ "$(printf '%s\n' "$ENUM_D" | grep -cP '^SUITE_REGISTRATION\t\S*d[1-5]\.test\.sh$')" == 5 ]] \
-   && ! printf '%s\n' "$ENUM_D" | grep -qF 'bastion-runcmd-rehearsal'; then
+   && ! grep -qF 'bastion-runcmd-rehearsal' <<<"$ENUM_D"; then
   ok "T11k-d: --enumerate omits the dedicated suite (no leg times it, so no manifest row)"
 else
   no "T11k-d: --enumerate wrong: $(printf '%s' "$ENUM_D" | grep -c '' ) rows, bastion present=$(printf '%s' "$ENUM_D" | grep -c bastion)"
@@ -886,9 +885,9 @@ unset ENUM_D
 rm -f "$DED_RAN" "$TMP/ded-timings.tsv"
 _xo="$(SOLEUR_INFRA_DIR="$FIXD" SOLEUR_INFRA_TIMINGS="$TMP/ded-timings.tsv" timeout 60 bash "$SUT" 2>&1)"
 if [[ ! -e "$DED_RAN" ]] \
-   && ! printf '%s\n' "$_xo" | grep -qF "PASS $DED_FIX" \
-   && printf '%s\n' "$_xo" | grep -qF '5 passed, 0 failed' \
-   && printf '%s\n' "$_xo" | grep -qF "  SKIP dedicated: $DED_FIX — owner: bastion-boot-rehearsal"; then
+   && ! grep -qF "PASS $DED_FIX" <<<"$_xo" \
+   && grep -qF '5 passed, 0 failed' <<<"$_xo" \
+   && grep -qF "  SKIP dedicated: $DED_FIX — owner: bastion-boot-rehearsal" <<<"$_xo"; then
   ok "T11k-f: the unsharded run executes 5/5 and never the dedicated suite (named by its SKIP line)"
 else
   no "T11k-f: execution shape wrong: dedicated ran=$([[ -e "$DED_RAN" ]] && echo yes || echo no) [$(printf '%s\n' "$_xo" | grep -E 'passed|bastion' | tail -2 | tr '\n' '|')]"
@@ -911,9 +910,8 @@ if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
   REAL_DED="apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh"
   _real_on_leg=""
   for k in 1 2 3 4; do
-    if SOLEUR_INFRA_SHARD=$k/4 timeout 60 bash "$SUT" --list 2>/dev/null \
-         | awk '/^Shard [0-9]+\/[0-9]+ execute set/{f=1;next} /^$/{f=0} f' \
-         | grep -qxF "  $REAL_DED"; then
+    if grep -qxF "  $REAL_DED" < <(SOLEUR_INFRA_SHARD=$k/4 timeout 60 bash "$SUT" --list 2>/dev/null \
+         | awk '/^Shard [0-9]+\/[0-9]+ execute set/{f=1;next} /^$/{f=0} f'); then
       _real_on_leg="${_real_on_leg} $k/4"
     fi
   done
@@ -927,7 +925,7 @@ if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
   _r_exe=$(sed -nE 's/^Execute set: ([0-9]+) suite\(s\)$/\1/p' <<< "$_real_lo" | head -1)
   _r_skp=$(grep -cE '^  SKIP (privileged|dedicated): ' <<< "$_real_lo" || true)
   if [[ -z "$_real_on_leg" ]] \
-     && printf '%s\n' "$_real_lo" | grep -qF "  SKIP dedicated: $REAL_DED — owner: bastion-boot-rehearsal" \
+     && grep -qF "  SKIP dedicated: $REAL_DED — owner: bastion-boot-rehearsal" <<<"$_real_lo" \
      && [[ -n "$_r_der" && -n "$_r_exe" ]] && (( _r_exe == _r_der - _r_skp )); then
     ok "T11k-g: $REAL_DED is on no real k/4 leg and absent from the real unsharded set (execute ${_r_exe} = derived ${_r_der} - ${_r_skp} skipped)"
   else

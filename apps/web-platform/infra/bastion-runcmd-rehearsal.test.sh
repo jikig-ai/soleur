@@ -838,8 +838,8 @@ chk "verdict: SKIP fails on a gate event (dispatch, schedule, empty, or unset un
   "$([ "$_sk" = " none=no ci=yes gha=yes pr=no push=no dispatch=yes schedule=yes empty=yes" ]; echo $?)" "table:$_sk"
 _o="$(env -i PATH="$PATH" HOME="${HOME:-/tmp}" CI= GITHUB_ACTIONS=true BRH_STATIC_ONLY=1 BRH_REFUSAL_PROBE=1 timeout 60 bash "$SELF" 2>&1)"; _r=$?
 chk "CI refusals: GITHUB_ACTIONS=true with CI='' still refuses BRH_STATIC_ONLY (BRH_SUBSET_REFUSED, and its ::error annotation)" \
-  "$([ "$_r" -eq 1 ] && printf '%s' "$_o" | grep -q '^BRH_SUBSET_REFUSED: BRH_STATIC_ONLY' \
-    && printf '%s\n' "$_o" | grep -qx '::error title=bastion-boot-rehearsal::BRH_SUBSET_REFUSED: BRH_STATIC_ONLY under CI'; echo $?)" "rc=$_r $(head -c 400 <<<"$_o")"
+  "$([ "$_r" -eq 1 ] && grep -q '^BRH_SUBSET_REFUSED: BRH_STATIC_ONLY' <<<"$_o" \
+    && grep -qx '::error title=bastion-boot-rehearsal::BRH_SUBSET_REFUSED: BRH_STATIC_ONLY under CI' <<<"$_o"; echo $?)" "rc=$_r $(head -c 400 <<<"$_o")"
 # The annotation contract: a red exit with no failed assertion names its stored reason; failed
 # assertions get one each; nothing on rc 0 or outside GitHub Actions; `::` and `%` are defused.
 _r="$( GITHUB_ACTIONS=true; FAILURES=(); VERDICT_REASON='BRH_X: a::b 5%'; annotate 1; FAILURES=(f1 'f2::x'); annotate 1; annotate 0
@@ -880,9 +880,9 @@ if _vb="$(blk_extract 'if [ "${#SKIPPED_ROWS[@]}" -gt 0 ]; then' '^fi$' 20)"; th
     eval "$_vb" 2>&1 )"; _vdr=$?
   _vp="$( unset CI GITHUB_ACTIONS; export GITHUB_EVENT_NAME=pull_request; SKIPPED_ROWS=(B1); SELECTED=(B1); SKIPPED_ASSERTIONS=21
     eval "$_vb" 2>&1 )"; _vpr=$?
-  chk "$_lbl" "$([ "$_vdr" = 1 ] && printf '%s\n' "$_vd" | grep -qx 'BRH_SKIP_ON_GATE_EVENT: event=workflow_dispatch rows=B1' \
-    && [ "$_vpr" = 0 ] && printf '%s\n' "$_vp" | grep -q '^bastion-runcmd-rehearsal: SKIP (1 of 1 boot rows skipped: B1;' \
-    && ! printf '%s\n' "$_vp" | grep -q BRH_SKIP_ON_GATE_EVENT; echo $?)" "dispatch rc=$_vdr [$(head -c 300 <<<"$_vd")] pull_request rc=$_vpr [$(head -c 300 <<<"$_vp")]"
+  chk "$_lbl" "$([ "$_vdr" = 1 ] && grep -qx 'BRH_SKIP_ON_GATE_EVENT: event=workflow_dispatch rows=B1' <<<"$_vd" \
+    && [ "$_vpr" = 0 ] && grep -q '^bastion-runcmd-rehearsal: SKIP (1 of 1 boot rows skipped: B1;' <<<"$_vp" \
+    && ! grep -q BRH_SKIP_ON_GATE_EVENT <<<"$_vp"; echo $?)" "dispatch rc=$_vdr [$(head -c 300 <<<"$_vd")] pull_request rc=$_vpr [$(head -c 300 <<<"$_vp")]"
 else chk "$_lbl" 1 "$_vb"; fi
 
 # ── Offline predicate self-tests (no docker; run first) ────────────────────────────────────────
@@ -1067,7 +1067,7 @@ egress_why_test() {
     echo "$?" > "$w/rc"
     cat "$w/D" 2>/dev/null
   }
-  synced() { grep -n . "$d/log" | head -2 | tr '\n' ' ' | grep -qE '^1:journalctl --sync 2:journalctl -b '; }
+  synced() { grep -qE '^1:journalctl --sync 2:journalctl -b ' < <(grep -n . "$d/log" | head -2 | tr '\n' ' '); }
   printf '%s\n' 'Starting bastion-egress.service - soleur-bastion egress allowlist (#12866)...' \
     '[bastion-egress] FAIL: lookup failed for nx-ingest.invalid (cloud-init); the loaded ruleset is unchanged' \
     'bastion-egress.service: Main process exited, code=exited, status=1/FAILURE' \
@@ -1171,7 +1171,7 @@ egress_why_test() {
 ' '')"; then
     run_ew "$d/nosync.sh" "$d/j-fail" >/dev/null; rc=1
     # Red for its reason: the journal is read with no --sync before it.
-    ! synced && ! grep -q -e '--sync' "$d/log" && head -1 "$d/log" | grep -q '^journalctl -b -u ' && rc=0
+    ! synced && ! grep -q -e '--sync' "$d/log" && grep -q '^journalctl -b -u ' < <(head -1 "$d/log") && rc=0
     chk "_egress_why: mutation RED: --sync dropped" "$rc" "argv=$(tr '\n' '|' < "$d/log")"
   else chk "_egress_why: mutation RED: --sync dropped" 1 "$out"; fi
 }
@@ -1302,7 +1302,7 @@ if [ -z "$SKIP_ALL" ]; then
   # An absence proves nothing unless the probe ran to its end: no sentinel is its own failure.
   _min_rc=1; _min_tok=BRH_IMAGE_PROBE_NO_EVIDENCE
   if [ "$(_v BRH_PROBE_DONE)" = 1 ]; then _min_tok=BRH_BASELINE_NOT_MINIMAL
-    if ! _v TSD | grep -q 'install ok installed' && [ -z "$(_v TSU)" ]; then _min_rc=0; fi; fi
+    if ! grep -q 'install ok installed' < <(_v TSD) && [ -z "$(_v TSU)" ]; then _min_rc=0; fi; fi
   chk "image: the minimal fixture has no systemd-timesyncd package and no systemd-timesync user" "$_min_rc" "$_min_tok: TSD=[$(_v TSD)] TSU=[$(_v TSU)] probe=[$(head -c 300 <<<"$_o")]"
   if [ "$_min_rc" -ne 0 ]; then printf '%s\n' "$_min_tok" >&2; die_verdict "$_min_tok: FA and the FAULT-A claim are void"; fi
   _c="$(img_run "$IMG_CLOUD" "$WORK/static" 'dpkg-query -W -f="\${Package} \${Status}\n" nftables systemd-timesyncd 2>&1
@@ -1319,7 +1319,7 @@ if [ -z "$SKIP_ALL" ]; then
   chk "S0: cloud-init schema accepts the render" "$([ "$(_v S0_RC)" = 0 ]; echo $?)" "$(printf '%s\n' "$_o" | grep '^S0' | head -10)"
   chk "S1: the joined runcmd items pass dash -n" "$([ "$(_v S1_RC)" = 0 ]; echo $?)" "rc=$(_v S1_RC)"
   chk "S1 control: a copy with an unbalanced fi fails dash -n on that fi" \
-    "$({ [ "$(_v S1RED_RC)" = 2 ] || [ "$(_v S1RED_RC)" = 1 ]; } && _v S1RED_MSG | grep -qF 'Syntax error: "fi" unexpected'; echo $?)" "rc=$(_v S1RED_RC) $(_v S1RED_MSG)"
+    "$({ [ "$(_v S1RED_RC)" = 2 ] || [ "$(_v S1RED_RC)" = 1 ]; } && grep -qF 'Syntax error: "fi" unexpected' < <(_v S1RED_MSG); echo $?)" "rc=$(_v S1RED_RC) $(_v S1RED_MSG)"
 else
   printf 'SKIP (loud): S0/S1 and image checks: %s\n' "$SKIP_ALL"
   cases=$((cases + 6)); SKIPPED_ASSERTIONS=$((SKIPPED_ASSERTIONS + 6))
@@ -1477,7 +1477,7 @@ gather() { # <row>: boots the row and copies its evidence out; never a verdict (
     X systemctl restart nftables.service > "$RD/f/restart.out" 2>&1
     for i in $(seq 1 10); do
       inv1="$(X systemctl show -p InvocationID --value bastion-egress.service 2>/dev/null)"
-      if [ -n "$inv1" ] && [ "$inv1" != "$inv0" ] && X nft list set inet soleur_bastion soleur_egress_allow 2>/dev/null | grep -qF "$PFX.20"; then got=1; break; fi
+      if [ -n "$inv1" ] && [ "$inv1" != "$inv0" ] && grep -qF "$PFX.20" < <(X nft list set inet soleur_bastion soleur_egress_allow 2>/dev/null); then got=1; break; fi
       sleep 1
     done
     printf 'inv0=%s inv1=%s set_back=%s\n' "$inv0" "$inv1" "$got" > "$RD/f/partof.out"
@@ -1531,9 +1531,9 @@ fi
 # ── Row verdicts (serial, in registry order; helpers defined above the boots) ──────────────────
 selftest_rk() {
   local o; o="$(cat "$RD/f/selftest.out" 2>/dev/null)"; local rc=1 p
-  if printf '%s\n' "$o" | grep -qxE 'wrongpath 4[0-9][0-9]' && printf '%s\n' "$o" | grep -qxE 'noauth 4[0-9][0-9]' \
-     && printf '%s\n' "$o" | grep -qxE 'wrongkey 4[0-9][0-9]' && printf '%s\n' "$o" | grep -qxE 'get 4[0-9][0-9]' \
-     && printf '%s\n' "$o" | grep -qx 'good 200' && p="$(pred selftest "$RD/capture-boot.log" "$SRC")"; then rc=0; fi
+  if grep -qxE 'wrongpath 4[0-9][0-9]' <<<"$o" && grep -qxE 'noauth 4[0-9][0-9]' <<<"$o" \
+     && grep -qxE 'wrongkey 4[0-9][0-9]' <<<"$o" && grep -qxE 'get 4[0-9][0-9]' <<<"$o" \
+     && grep -qx 'good 200' <<<"$o" && p="$(pred selftest "$RD/capture-boot.log" "$SRC")"; then rc=0; fi
   rk "stub self-test: 4xx on the four bad requests, 200 on the good one, each logged" "$rc" "$o ${p:-}"
 }
 healthy_rk() { # the B1 check set, shared with B1-C (10 assertions)
@@ -1545,7 +1545,7 @@ healthy_rk() { # the B1 check set, shared with B1-C (10 assertions)
   out="$(pred datasource "$RD/f/status.json")"; rk "the datasource is NoCloud" $? "$out"
   out="$(pred sources_https "$RD/f/sources.out")"; rk "ubuntu.sources holds exactly the two https URIs and no other source file" $? "$out"
   rk "dpkg: curl, nftables and systemd-timesyncd installed" "$([ "$(grep -c ' install ok installed$' "$RD/f/pkgs.out" 2>/dev/null)" = 3 ]; echo $?)" "$(rf pkgs.out)"
-  rk "/etc/nftables.conf equals /etc/soleur/bastion-nftables.conf" "$(rf conf.rc | grep -qx 0; echo $?)" "$(rf conf.out)"
+  rk "/etc/nftables.conf equals /etc/soleur/bastion-nftables.conf" "$(grep -qx 0 < <(rf conf.rc); echo $?)" "$(rf conf.out)"
   rk "nftables, bastion-egress and bastion-egress.timer active and enabled" "$([ "$(grep -cE '^[^ ]+ active enabled$' "$RD/f/units.out" 2>/dev/null)" = 3 ]; echo $?)" "$(rf units.out)"
   rk "ssh.service and ssh.socket masked" "$([ "$(grep -cx masked "$RD/f/ssh.out" 2>/dev/null)" = 2 ]; echo $?)" "$(rf ssh.out)"
   rk "every user the rules or IMAGE_ASSUMED name resolves (getent), systemd-timesync included" \
