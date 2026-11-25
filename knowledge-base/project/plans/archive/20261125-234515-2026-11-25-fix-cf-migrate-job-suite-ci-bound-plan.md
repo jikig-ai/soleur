@@ -556,7 +556,7 @@ logs:
   where: the deploy-script-tests leg log, and the infra-suite-logs-N artifact on a failed leg
   retention: 14 days (retention-days in infra-validation.yml)
 discoverability_test:
-  command: grep -o -m1 cf-account-migrate-job.test.sh=790 apps/web-platform/infra/run-registered-suites.sh
+  command: grep -o -m1 -w cf-account-migrate-job.test.sh=790 apps/web-platform/infra/run-registered-suites.sh
   expected_output: "cf-account-migrate-job.test.sh=790"
 ```
 

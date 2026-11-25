@@ -23,11 +23,14 @@
 # - TERM, INT and HUP end the run with exit 128+n and one [ABORTED] line; the [signal] rows prove it.
 #   The handler and the EXIT trap TERM every background job's process group and wait for it. Not
 #   reachable: SIGKILL (the runner's `timeout -k 30`) leaves the sandbox, and because each pooled
-#   row runs in its own process group (set -m), outside the runner's group, the 1-3 rows running at
-#   that moment are orphaned and run on until their jobs end (each job is bounded by its stubs:
-#   the longest sleep is 12 s, and the job's own non-foreground `timeout` calls cap gh at 30 s and
-#   doppler/backups at 60 s; those calls are their own groups too, so a stub under one outlives
-#   any kill by at most that bound).
+#   row runs in its own process group (set -m), outside the runner's group, the up to
+#   CFAM_MUT_JOBS rows (1-3 when unset) running at that moment are orphaned and run on until
+#   their jobs end. Each job is bounded by its stubs (the longest sleep is 12 s) and by its own
+#   non-foreground `timeout` calls: gh 30 s, the id preflight and backups 60 s, the live read
+#   LIVE_READ_DEADLINE-5 = 85 s plus a 5 s kill. Those calls are their own groups too, so a stub
+#   under one outlives any kill by at most that bound. The [signal] rows' child suites are also
+#   their own groups (set -m) and run a 30 s fixture, so a SIGKILL during those rows orphans one
+#   for up to about 30 s; it exits through its own EXIT trap and removes its own sandbox.
 # - CFAM_MUT_JOBS (1-8) sizes the row pool; unset, it is 1 under 4 cores, 2 at 4-7 (a CI leg, which
 #   runs other suites beside this one) and 3 at 8+ (#13051 CTO rulings: serial measured 560 s on CI).
 # - ROW POOL contract (red, green_mut and norm_row queue their rows; see the ROW POOL block):
