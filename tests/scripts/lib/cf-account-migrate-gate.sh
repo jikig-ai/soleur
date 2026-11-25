@@ -42,6 +42,10 @@
 # admits nothing, and only that record is named, so a failed read cannot look like 26 wrong values.
 # A fourth argument that is not a usable read refuses the plan. On a PASS each admitted record prints
 # `cf_account_migrate_gate: import-normalize <address>`, never `in-state-update`.
+# A live CNAME's `settings` of exactly {"flatten_cname":false} compares equal to a planned CNAME
+# (CTO ruling 2026-11-25, #13056): provider 4.52.7 has no `settings` attribute, cloudflare-go v0.116.0
+# sends `"settings":{}` under `omitempty` and Cloudflare's OpenAPI defaults `flatten_cname` to false,
+# so either outcome of the PATCH leaves it false; every other `settings` value is still refused.
 #
 # The new ids are constants, not inputs (any other id, old or unknown, is refused): a mis-set Doppler value must not be able to
 # re-point what the gate accepts. Not secrets.
@@ -286,7 +290,9 @@ def cfam_live_diff($after; $entry; $pin; $zone):
             then empty else "comment" end),
         (if ($r.tags|type) == "array" and ($after.tags|type) == "array" and ($r.tags|unique) == ($after.tags|unique)
             then empty else "tags" end),
-        (if $r.settings == null or $r.settings == {} then empty else "settings" end),
+        (if $r.settings == null or $r.settings == {} then empty
+         elif $r.settings == {"flatten_cname":false} and $r.type == "CNAME" and $after.type == "CNAME" then empty
+         else "settings" end),
         (if $r.data == null or $r.data == {} then empty else "data" end)
       ] as $f
     | $f + [
