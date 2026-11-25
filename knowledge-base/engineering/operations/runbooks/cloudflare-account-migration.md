@@ -449,8 +449,9 @@ on their `_PREV` keys.
 
 1. **Deploy Access service token.** Mint `CF_API_TOKEN_ACCESS_MINT` (Access: Service Tokens:Edit only, 7-day expiry)
    with the Phase 0 hand-off. `Operator-authorizes:` run `apps/web-platform/infra/scripts/cf-access-deploy-token-mint.sh`.
-   It writes `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` on stdin to `soleur-infra-privileged/prd` and
-   `soleur/prd_terraform` (and to every other holder the inventory stage lists), and prints only the token UUID. That
+   It writes `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` on stdin to `soleur-infra-privileged/prd`,
+   `soleur/prd_terraform`, every other holder the inventory stage lists, and the GitHub repository secrets of the same
+   names (through the infra GitHub App), and prints only the token UUID. That
    UUID goes into `local.deploy_service_token_ids` in PR2. Then revoke `CF_API_TOKEN_ACCESS_MINT` with the revoke
    recipe. For each `CF_ACCOUNT_ID` holder the inventory stage lists outside `prd_terraform`, decide whether it is
    read for R2 (leave it, or move the reader to `CF_R2_ACCOUNT_ID`) or for zone and Access (write the new id after this
@@ -465,7 +466,8 @@ on their `_PREV` keys.
    {`104.26.10.163`, `104.26.11.163`, `172.67.73.132`} in the new zone; one mismatch deletes none
    (`verdict=refuse`). Expected gate line: the tunnel, its config, 3 Access apps, 3 policies, 2 service tokens, the
    `service_token_expiry` notification policy and the `deploy`/`ssh`/`registry` CNAMEs created; `random_id.tunnel_secret`
-   and `doppler_secret.registry_push_access_token_id`/`_secret` replaced by request; `cloudflare_record.app` a pure
+   replaced by request; `doppler_secret.registry_push_access_token_id`/`_secret` updated in place (they carry no
+   `ignore_changes`, ADR-330 Decision 3, so no `-replace` is needed); `cloudflare_record.app` a pure
    import; exactly one create of the deploy policy, whose service token the gate read live (`200`, name
    `github-actions-deploy`, about 8760h to expiry, `decision = "non_identity"`, a single include); destroys 0. The
    post-apply step syncs `CI_SSH_ACCESS_TOKEN_ID/_SECRET` (`apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh`
