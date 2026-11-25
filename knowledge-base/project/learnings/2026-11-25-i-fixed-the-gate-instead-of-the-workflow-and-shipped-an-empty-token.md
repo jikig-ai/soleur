@@ -53,6 +53,15 @@ run. No dispatch had happened since the merge, so nothing showed it.
   `environment:`. The compliant fixture gains a caller/callee pair, so control H0 proves the
   accepted shape. Three new mutants must still go red: a callee with no Tier-B job, a remote
   `uses:`, and a callee that is not `workflow_call`. With the cover removed, G1b and H0 go red.
+- The security review found that my first version of that cover opened a hole. A caller on
+  `pull_request_target` runs the called job with the caller's `github` context, so the ref is
+  the default branch and the main-only policy admits it. G1f reads only the called job's own
+  `workflow_call` trigger, so a head-ref checkout there passed every row. The cover now refuses
+  a caller on a pull-request trigger, and a "caller" that carries its own `steps:`, `runs-on:`
+  or `environment:`. Mutants g1-8e and g1-8f pin both refusals. Job triggers are now read from
+  every `on:` form; the old mapping-only read left `on: [pull_request_target]` with no triggers
+  at all. **Widening a security gate's accept set is a change to the gate's threat model**, so
+  ask what context the newly accepted shape runs in, not only whether it is well formed.
 
 **The general lesson:** when a gate rejects a change, check whether the gate's model is
 missing a case before changing the code to fit it. Here the gate had no notion of a reusable

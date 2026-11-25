@@ -459,6 +459,18 @@ def env_arms(raw):
 class Job(object):
     pass
 
+def wf_triggers(doc):
+    """A workflow's trigger NAMES, from every `on:` form: a scalar, a list or a mapping (#13054 review:
+    the mapping-only read left `on: [pull_request_target]` with no triggers, so G1f never looked)."""
+    on = doc.get("on") if "on" in doc else doc.get(True)
+    if isinstance(on, str):
+        return {on}
+    if isinstance(on, list):
+        return {str(x) for x in on}
+    if isinstance(on, dict):
+        return {str(k) for k in on}
+    return set()
+
 jobs = []
 for rel, (doc, text) in sorted(docs.items()):
     wenv = {k: str(v) for k, v in (doc.get("env") or {}).items()}
@@ -473,7 +485,7 @@ for rel, (doc, text) in sorted(docs.items()):
         j.arms = env_arms(body.get("environment"))
         j.steps = [s for s in (body.get("steps") or []) if isinstance(s, dict)]
         j.dump = jdump(body)
-        j.triggers = list((doc.get("on") or doc.get(True) or {}).keys()) if isinstance(doc.get("on") or doc.get(True), dict) else []
+        j.triggers = sorted(wf_triggers(doc))
         jobs.append(j)
 
 def resolve(j, s):
@@ -649,11 +661,21 @@ print("IPT_TIERB=%s" % " ".join(sorted(j.id for j in tierb)), file=sys.stderr)
 # `workflow_call` workflow in this census and at least one of its jobs is Tier B, and every Tier-B
 # job there declares an `environment:` whose arms are all Tier-B environments: that environment
 # gates the run and supplies the secret's value. A remote `uses:` (`owner/repo/...@ref`) is never
-# covered, because its jobs are not in this census.
+# covered, because its jobs are not in this census. Two more refusals (#13054 security review):
+#   * a caller on a pull-request trigger: the called job runs with the CALLER's `github` context, so
+#     on `pull_request_target` its ref is the default branch and the main-only policy admits it, while
+#     G1f reads only the called job's own triggers (`workflow_call`) and never sees a head checkout;
+#   * a "caller" that also carries `steps:`, `runs-on:` or `environment:` is not a pure call (GitHub
+#     rejects one), so its own body must not ride on the callee's environment.
+REUSABLE_CALLER_PR_TRIGGERS = {"pull_request", "pull_request_target"}
 REUSABLE_LOCAL = re.compile(r"^\./\.github/(workflows/[^/@\s]+\.ya?ml)$")
 def reusable_caller_covered(j):
     m = REUSABLE_LOCAL.match(str(j.body.get("uses") or "").strip())
     if not m:
+        return False
+    if any(k in j.body for k in ("steps", "runs-on", "environment")):
+        return False
+    if set(j.triggers) & REUSABLE_CALLER_PR_TRIGGERS:
         return False
     called = [c for c in jobs if c.rel == m.group(1)]
     tb = [c for c in called if c.tier_b]
@@ -1680,14 +1702,7 @@ G6_LOCK_REL = os.path.join("apps", "web-platform", "infra", ".terraform.lock.hcl
 G6_PR_TRIGGERS = {"pull_request", "pull_request_target"}
 
 def g6_triggers(doc):
-    on = doc.get("on") if "on" in doc else doc.get(True)
-    if isinstance(on, str):
-        return {on}
-    if isinstance(on, list):
-        return {str(x) for x in on}
-    if isinstance(on, dict):
-        return {str(k) for k in on}
-    return set()
+    return wf_triggers(doc)
 
 def g6_tier_b(j):
     """Main-only by construction: every `environment:` arm is a main-policied Tier-B environment
@@ -3703,6 +3718,21 @@ if mutate g1-8d-reusable-called-not-workflow-call "$MUTDIR/tree/.github/workflow
   fixcensus "$MUTDIR" "$T/mut/g1-8d.tsv" ""
   mutant_red g1-8d-reusable-called-not-workflow-call wf_row "$T/mut/g1-8d.tsv" "G1b:"
 fi
+# 8e (security review): a caller on `pull_request_target`. The called job runs with the caller's
+# context (default-branch ref, so the main-only policy admits it) and G1f reads only its own
+# `workflow_call` trigger, so a head checkout there would pass every row if this caller were covered.
+MUTDIR="$(fixcopy g1-8e)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-8e-reusable-caller-on-pull-request-target "$MUTDIR/tree/.github/workflows/tierb-reusable-caller.yml" 2 's/^on: workflow_dispatch$/on: [pull_request_target]/'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-8e.tsv" ""
+  mutant_red g1-8e-reusable-caller-on-pull-request-target wf_row "$T/mut/g1-8e.tsv" "G1b:"
+fi
+# 8f (security review): a "caller" that also carries its own `steps:` is not a pure call, so its body
+# must not ride on the callee's environment.
+MUTDIR="$(fixcopy g1-8f)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-8f-reusable-caller-with-steps "$MUTDIR/tree/.github/workflows/tierb-reusable-caller.yml" 2 '$a\    steps:\n      - run: echo x'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-8f.tsv" ""
+  mutant_red g1-8f-reusable-caller-with-steps wf_row "$T/mut/g1-8f.tsv" "G1b:"
+fi
 # Row 9 (U5) — an environment OUTSIDE tier_b_environments: a name O3 never seeds, so GitHub
 # auto-creates it with no branch policy at all.
 MUTDIR="$(fixcopy g1-9)"; assert_fixture_dir "$MUTDIR"
@@ -5503,7 +5533,7 @@ fi
 # 165 -> 171 (#12742 round 2, G2a fails closed on the prefix): g2-2c..g2-2g (timeout -k / --preserve-status / 1m30s,
 #   env -u, a quoted `$(timeout -k ...)`) and the g2-2h quoted-prose control; 1 landing each. Measured: 171 ran.
 # 181 + 7 -> 188 (main merge into #12876): main's #9294 rows and this PR's g2-2b..g2-2h rows are disjoint. Measured: 188 ran.
-MUTANT_FLOOR=191  # 188 -> 191 (#12873 follow-up): g1-8b, g1-8c, g1-8d (the reusable-caller cover on G1b).
+MUTANT_FLOOR=193  # 188 -> 193 (#12873 follow-up): g1-8b..g1-8f (the reusable-caller cover on G1b).
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
