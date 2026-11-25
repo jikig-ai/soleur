@@ -55,3 +55,12 @@
 - Superseded 2026-11-25: "each required check has a mutation that isolates it" did not hold at `4c78ef788c`. Review rows 16-20 passed with the defect present. They fail at `41a985ff0e`. See the mutation-results addendum.
 - The interrupted lead probe left a mutated `page.tsx` in the worktree, and a routine cleanup deleted the scratchpad. The file was restored with `git restore --source=HEAD` before any commit, and the probe scripts were rewritten.
 - Rulings R1-R5 came from one batched CTO spawn and are recorded in decision-challenges.md and the plan.
+
+### Review dedup ledger (panel at `4c78ef788c`, 9 seats)
+
+- test-design-reviewer: C1 positional locators, C2 unmeasured switch, C3/H1 hidden paragraphs, C4 crash wait, C5 fonts, C6 unknown notice and pointer branch.
+- security-sentinel: unsanitized stderr key, the `withJsonBody` catch.
+- code-quality-analyst: unfiltered `workspace_members` read (P2), stale session-state lines, comment and header drift.
+- structural enumeration (general-purpose): assembly vs property, `isMobile`, card bound.
+- code-simplicity-reviewer: S1-S5 optional (declined, no defect), S6 rejected (the plan prescribes the overlay hide).
+- Fix commits `41a985ff0e` and `9952133f5a`. Fix-round seats: security-sentinel, code-quality-analyst, test-design-reviewer, semgrep-sast.
