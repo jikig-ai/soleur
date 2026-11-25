@@ -14,6 +14,15 @@
 # - Refusals are proven load-bearing with sed mutants of a PRISTINE COPY: each mutant must differ
 #   (cmp), parse (bash -n), and turn a check that is GREEN on pristine RED for the named reason.
 # - Fixtures are synthesized; the OLD ids are literals, checked against the gate library.
+# - Jobs run against a SLIM default workspace ($WS_SLIM: the real tree minus every workflow outside
+#   the pre-exempt reach set). A row that tests the gated-workflow derivation itself calls
+#   real_tree after its setup; a row needing another tree sets GITHUB_WORKSPACE in env.extra. A
+#   failing row prints the workspace its job ran against.
+# - A setup writes only under its own $LAST_D. CFAM_KEEP_SBX=1 keeps the sandbox for debugging and
+#   prints its path; every run prints it on stderr as `[sandbox] <path>`.
+# - TERM, INT and HUP end the run with exit 128+n and one [ABORTED] line; the [signal] rows prove it.
+# - Re-measure: the CI time is the suite's row in the infra leg's suite-timings-infra-* artifact
+#   (see the cf-account-migrate-job.test.sh entry in run-registered-suites.sh).
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
@@ -38,7 +47,22 @@ source "$REPO/tests/scripts/lib/cf-account-migrate-gate.sh" || { printf '[FATAL]
 NZ="$CFAM_NEW_ZONE_ID"; NA="$CFAM_NEW_ACCOUNT_ID"
 
 SBX="$(mktemp -d -t cf-migrate-job.XXXXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
-trap 'rm -rf "$SBX"' EXIT INT TERM HUP
+printf '[sandbox] %s\n' "$SBX" >&2
+# A signal ENDS the run (#13051). The EXIT trap only cleans; TERM/INT/HUP print one [ABORTED] line and
+# exit 128+n, which runs the EXIT trap. A handler that cleaned and returned let bash resume, so every
+# row after the runner's bound-kill ran against a deleted sandbox and printed a false FAIL.
+_cfam_cleanup() {
+  if [[ -n "${CFAM_KEEP_SBX:-}" ]]; then printf '[sandbox] kept %s\n' "$SBX" >&2; else rm -rf "$SBX"; fi
+}
+_cfam_on_signal() { # <name> <rc>
+  trap - TERM INT HUP
+  printf '[ABORTED] signal %s after %s case(s); this run is void, not a verdict\n' "$1" "${CASES:-0}" >&2
+  exit "$2"
+}
+trap _cfam_cleanup EXIT
+trap '_cfam_on_signal TERM 143' TERM
+trap '_cfam_on_signal INT 130' INT
+trap '_cfam_on_signal HUP 129' HUP
 mkdir -p "$SBX/bin" "$SBX/runs" "$SBX/mut" || exit 2
 PRISTINE="$SBX/pristine.sh"
 cp "$SUT" "$PRISTINE" || exit 2
@@ -48,11 +72,23 @@ pass() { PASS=$((PASS + 1)); printf '  PASS: %s\n' "$1"; }
 fail() {
   FAIL=$((FAIL + 1)); printf '  FAIL: %s\n' "$1"
   if [[ -n "${LAST_D:-}" && -f "$LAST_D/out.txt" ]]; then
-    printf '    rc=%s; last output of %s:\n' "$(cat "$LAST_D/rc" 2>/dev/null)" "${LAST_D##*/}"
+    printf '    rc=%s; workspace=%s; last output of %s:\n' "$(cat "$LAST_D/rc" 2>/dev/null)" \
+      "$(cat "$LAST_D/workspace" 2>/dev/null)" "${LAST_D##*/}"
     tail -n 12 "$LAST_D/out.txt" "$LAST_D/err.txt" | sed 's/^/      /'
   fi
 }
 verdict() { CASES=$((CASES + 1)); if [[ "$1" == "0" ]]; then pass "$2"; else fail "$2"; fi; }
+
+# SIGNAL SEAM (the child half of the [signal] rows): arm, block in a FOREGROUND child exactly as
+# run_job does, and print a resume marker plus a FAIL row that only a returning handler reaches.
+if [[ -n "${CFAM_JOB_SIGTEST:-}" ]]; then
+  printf '#!/usr/bin/env bash\nexec sleep 30\n' >"$SBX/sigtest-fixture.sh" || exit 2
+  printf 'SIGTEST armed\n' >&2
+  bash "$SBX/sigtest-fixture.sh"
+  printf 'SIGTEST-RESUMED\n'
+  verdict 1 "SIGTEST row after the signal"
+  exit 0
+fi
 
 # INSTRUMENT SELF-TEST: both arms must move their counters, or every verdict below is decorative.
 _p0=$PASS; _f0=$FAIL; _c0=$CASES
@@ -119,8 +155,10 @@ printf 'doppler %s\n' "${1:-}" >>"$D/calls.log"
 if [[ -f "$D/mode.doppler" ]]; then exit "$(cat "$D/mode.doppler")"; fi
 # mode.doppler_after_apply: Doppler answers until the apply has run, then fails (the re-read's fetch).
 if [[ -f "$D/mode.doppler_after_apply" && -f "$D/applied" ]]; then exit 1; fi
-# mode.doppler_stall: the record read's `doppler run` hangs before its command starts.
-if [[ -f "$D/mode.doppler_stall" && "$*" == *'/dns_records/'* ]]; then printf 'doppler-stall\n' >>"$D/calls.log"; exec sleep 40; fi
+# mode.doppler_stall: the record read's `doppler run` hangs before its command starts. Only F7e uses
+# it, under the F7S/F7T mutants' LIVE_READ_DEADLINE=8: the stall must outlast that deadline (12 > 8),
+# and nothing reads its length, so it was cut from 40 s (#13051).
+if [[ -f "$D/mode.doppler_stall" && "$*" == *'/dns_records/'* ]]; then printf 'doppler-stall\n' >>"$D/calls.log"; exec sleep 12; fi
 [[ "$*" != *'/dns_records/'* ]] || printf 'doppler-live-read\n' >>"$D/calls.log"
 shift 9
 # A Doppler-side TF_LOG* (the stub injects what doppler.inject names) must still be stripped.
@@ -378,7 +416,7 @@ remote_state() {
 # shrinking the suite with it.
 EXEMPT_TXT="$(bash -c 'source "$1"; printf "%s\n" "${CFAM_EXEMPT_WORKFLOWS[@]}"' _ "$HERE/scripts/cf-account-migration-complete.sh")" \
   || { printf '[FATAL] cannot read the predicate exempt list\n' >&2; exit 2; }
-derive_gated() { # <workflows dir> <out file>
+derive_gated() { # <workflows dir> <out file> [<reach out file>: the pre-exempt reach set]
   local f reach callees n=-1 q="[\"']?"
   reach="$(awk -v q="$q" 'BEGIN { re = "^[ \t]*(-[ \t]+)?uses:[ \t]*" q "[.]/[.]github/actions/infra-credentials/?" q "[ \t]*(#.*)?$" }
     $0 ~ re { n = FILENAME; sub(/.*\//, "", n); print n }' "$1"/*.yml "$1"/*.yaml 2>/dev/null | sort -u)"
@@ -394,10 +432,35 @@ derive_gated() { # <workflows dir> <out file>
     done
   done
   grep -vxF -f <(printf '%s\n' "$EXEMPT_TXT") <<<"$reach" >"$2"
+  [[ -z "${3:-}" ]] || printf '%s\n' "$reach" >"$3"
 }
 GATED_FILE="$SBX/gated.txt"
-derive_gated "$REPO/.github/workflows" "$GATED_FILE"
+REACH_FILE="$SBX/reach.txt"
+derive_gated "$REPO/.github/workflows" "$GATED_FILE" "$REACH_FILE"
 N_GATED="$(grep -c . "$GATED_FILE")"
+
+# SLIM DEFAULT WORKSPACE (#13051): the real tree minus every workflow outside the pre-exempt reach
+# set. The job re-derives its gated set from every workflow file on every run, and that scan was
+# most of a plain job's time; over the reach set alone it derives the same set (every caller of a
+# reach file is itself in the reach set, and exempt files stay so the exemption is still exercised).
+# The [inflight] rows that test the derivation itself run against the real tree ($REPO).
+WS_SLIM="$SBX/ws-slim"
+mkdir -p "$WS_SLIM/.github/workflows" || exit 2
+ln -s "$REPO/tests" "$WS_SLIM/tests" && ln -s "$REPO/apps" "$WS_SLIM/apps" || exit 2
+for e in "$REPO"/.github/* "$REPO"/.github/.[!.]*; do
+  [[ -e "$e" && "${e##*/}" != workflows ]] || continue
+  ln -s "$e" "$WS_SLIM/.github/${e##*/}" || exit 2
+done
+while IFS= read -r w; do
+  [[ -n "$w" ]] || continue
+  ln -s "$REPO/.github/workflows/$w" "$WS_SLIM/.github/workflows/$w" || exit 2
+done <"$REACH_FILE"
+n_slim="$(find "$WS_SLIM/.github/workflows" -mindepth 1 -maxdepth 1 | wc -l)"
+n_reach="$(grep -c . "$REACH_FILE")"
+if [[ "$n_slim" -eq 0 || "$n_slim" -ne "$n_reach" ]]; then
+  printf '[FATAL] slim workspace holds %s workflow(s), the reach set %s\n' "$n_slim" "$n_reach" >&2; exit 2
+fi
+WS_DEFAULT="$WS_SLIM"
 LIVE="queued in_progress waiting pending requested"
 
 LAST_D=""
@@ -416,18 +479,37 @@ new_case() {
   LAST_D="$d"
 }
 
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 run_job() { # <dir> <script>; <dir>/env.extra holds extra KEY=VALUE lines (later wins)
   local d="$1" extra=()
+  assert_fixture_dir "$d"
   if [[ -f "$d/env.extra" ]]; then mapfile -t extra <"$d/env.extra"; fi
   env -u TF_VAR_cf_zone_id -u TF_VAR_cf_account_id -u TF_LOG -u TF_LOG_PATH -u TF_LOG_CORE -u TF_LOG_PROVIDER \
     PATH="$SBX/bin:$PATH" STUB_DIR="$d" STUB_GATED="$GATED_FILE" STUB_NZ="$NZ" \
     MIGRATE_PHASE="$(cat "$d/phase")" CONFIRM="$(cat "$d/confirm")" REHEARSAL="$(cat "$d/rehearsal")" \
-    REASON="$(cat "$d/reason")" GITHUB_WORKSPACE="$REPO" RUNNER_TEMP="$d/runner" INFRA_DIR="$d/root" \
+    REASON="$(cat "$d/reason")" GITHUB_WORKSPACE="$WS_DEFAULT" RUNNER_TEMP="$d/runner" INFRA_DIR="$d/root" \
     GH_TOKEN=stub GH_REPO=o/r DOPPLER_TOKEN=stub \
     GITHUB_STEP_SUMMARY="$d/summary.md" CFAM_VERIFY_TRIES=2 CFAM_VERIFY_SLEEP=0 \
     ${extra[@]+"${extra[@]}"} bash "$2" >"$d/out.txt" 2>"$d/err.txt"
   printf '%s' "$?" >"$d/rc"
   printf '%s' "$2" >"$d/script"
+  ws="$(grep '^GITHUB_WORKSPACE=' "$d/env.extra" 2>/dev/null | tail -n1 || true)"; ws="${ws#GITHUB_WORKSPACE=}"
+  printf '%s' "${ws:-$WS_DEFAULT}" >"$d/workspace"
+}
+# real_tree: run this case's job against the real tree, not the slim default. Append AFTER setup,
+# so a setup that rewrites env.extra cannot drop it.
+real_tree() {
+  assert_fixture_dir "$LAST_D"
+  printf 'GITHUB_WORKSPACE=%s\n' "$REPO" >>"$LAST_D/env.extra"
 }
 
 rc_of() { cat "$1/rc"; }
@@ -752,6 +834,31 @@ for p in redirects-dns zone-rest; do
   verdict "$?" "fixture: the derived $p plan passes the real gate (else every PASS row is void)"
 done
 
+# --- Signal handling (#13051) ---------------------------------------------------
+# The parent does what the runner's `timeout` does: the child is its own process group, and the
+# TERM goes to the whole group, so the foreground fixture dies and the deferred handler runs. The
+# signal is sent only after `armed`, so the child's setup time cannot race it.
+printf '\n[signal] a TERM to the process group ends the run, with no row after it\n'
+SIGT="$SBX/sigtest"; mkdir -p "$SIGT" || exit 2
+set -m
+CFAM_JOB_SIGTEST=1 bash "$HERE/${BASH_SOURCE[0]##*/}" >"$SIGT/out" 2>"$SIGT/err" &
+sig_pid=$!
+set +m
+armed=1
+for _ in $(seq 1 200); do grep -qx 'SIGTEST armed' "$SIGT/err" && { armed=0; break; }; sleep 0.1; done
+# TERM the group on both paths (a never-armed child still gets its own cleanup), then KILL after a
+# bounded grace so a child that ignores TERM cannot hang the parent.
+kill -TERM -- "-$sig_pid" 2>/dev/null
+for _ in $(seq 1 100); do kill -0 "$sig_pid" 2>/dev/null || break; sleep 0.1; done
+kill -KILL -- "-$sig_pid" 2>/dev/null
+wait "$sig_pid" 2>/dev/null; sig_rc=$?
+sig_sbx="$(sed -n 's/^\[sandbox\] //p' "$SIGT/err" | head -n1)"
+verdict "$armed" "SIGTEST: the child armed within 20 s (else the rows below assert on nothing)"
+[[ "$sig_rc" -eq 143 ]]; verdict "$?" "SIGTEST: a process-group TERM exits 143 (rc=$sig_rc)"
+[[ "$(grep -c '^\[ABORTED\] signal TERM ' "$SIGT/err")" -eq 1 ]]; verdict "$?" "SIGTEST: exactly one [ABORTED] signal TERM line on stderr"
+! grep -qE '^SIGTEST-RESUMED$|^  FAIL: SIGTEST' "$SIGT/out"; verdict "$?" "SIGTEST: no resume marker and no row after the signal"
+[[ -n "$sig_sbx" && ! -e "$sig_sbx" ]]; verdict "$?" "SIGTEST: the child's sandbox (${sig_sbx:-none printed}) is removed"
+
 # --- Input refusals -----------------------------------------------------------
 printf '\n[inputs] refused before any infra call\n'
 setup_bad_confirm c; run_job "$LAST_D" "$PRISTINE"; WHY=""
@@ -774,21 +881,24 @@ grep -qxF cf-account-migrate.yml "$GATED_FILE" && r=0
 grep -qxF scheduled-terraform-drift.yml "$GATED_FILE" && r=0
 [[ "$r" -eq 1 && "$N_GATED" -ge 5 ]]; verdict "$?" "derived gated set (${N_GATED}) holds the five root planners and neither plan-only exempt workflow"
 for spec in apply-web-platform-infra.yml:waiting apply-deploy-pipeline-fix.yml:queued cf-lb-overlay.yml:in_progress key-rotate.yml:pending inngest-key-rotate.yml:requested; do
-  new_case "inflight-${spec%%:*}" redirects-dns true; printf '1\n' >"$LAST_D/gh.${spec%%:*}.${spec#*:}"
+  new_case "inflight-${spec%%:*}" redirects-dns true; printf '1\n' >"$LAST_D/gh.${spec%%:*}.${spec#*:}"; real_tree
   run_job "$LAST_D" "$PRISTINE"; WHY=""
   chk_inflight "$LAST_D"; verdict "$?" "${spec#*:} run of ${spec%%:*} -> reason=run-in-flight ($WHY)"
 done
-new_case inflight-ghfail redirects-dns false; : >"$LAST_D/mode.gh"; run_job "$LAST_D" "$PRISTINE"; WHY=""
+new_case inflight-ghfail redirects-dns false; : >"$LAST_D/mode.gh"; real_tree; run_job "$LAST_D" "$PRISTINE"; WHY=""
 chk_refused_early "$LAST_D" runs-unreadable; verdict "$?" "gh run list failure -> reason=runs-unreadable, fail closed ($WHY)"
-new_case inflight-timeout redirects-dns false; printf '124' >"$LAST_D/mode.gh"; run_job "$LAST_D" "$PRISTINE"; WHY=""
+new_case inflight-timeout redirects-dns false; printf '124' >"$LAST_D/mode.gh"; real_tree; run_job "$LAST_D" "$PRISTINE"; WHY=""
 chk_refused_early "$LAST_D" runs-timeout; verdict "$?" "gh run list timing out (rc 124) -> reason=runs-timeout, fail closed ($WHY)"
-new_case inflight-all redirects-dns true; run_job "$LAST_D" "$PRISTINE"
+new_case inflight-all redirects-dns true; real_tree; run_job "$LAST_D" "$PRISTINE"
 r=1
 diff <(sed -n 's/^gh run list workflow=\([^ ]*\) status=\(.*\)$/\1 \2/p' "$LAST_D/calls.log" | sort) \
   <(while IFS= read -r w; do for st in $LIVE; do printf '%s %s\n' "$w" "$st"; done; done <"$GATED_FILE" | sort) >/dev/null && r=0
 verdict "$r" "the in-flight check reads every gated workflow (${N_GATED}) x the 5 live statuses, each pair exactly once"
 r=1; grep -qx "cf-account-migrate inflight=none workflows=${N_GATED}" "$LAST_D/out.txt" && r=0
 verdict "$r" "the in-flight line reports the derived gated count"
+new_case inflight-slim redirects-dns true; run_job "$LAST_D" "$PRISTINE"
+r=1; [[ "$(cat "$LAST_D/workspace")" == "$WS_SLIM" ]] && grep -qx "cf-account-migrate inflight=none workflows=${N_GATED}" "$LAST_D/out.txt" && r=0
+verdict "$r" "slim default workspace: the job derives the same gated count (${N_GATED}) as over the real tree"
 r=1; [[ "$(grep -c . "$GATED_WF")" -eq $((N_GATED + 3)) ]] && grep -qxF cfam-wf-top.yml "$GATED_WF" \
   && grep -qxF cfam-wf-mid.yml "$GATED_WF" && grep -qxF cfam-wf-callee.yml "$GATED_WF" && r=0
 verdict "$r" "suite derivation: a quoted loader line and a two-deep local reusable chain add callee, mid and top"
@@ -1053,7 +1163,7 @@ done
 printf '\n[re-dispatch] after a committed forget, the job reaches the plan\n'
 MIRROR="$SBX/mirror"
 mkdir -p "$MIRROR/apps/web-platform/infra/scripts" || exit 2
-ln -s "$REPO/.github" "$MIRROR/.github"; ln -s "$REPO/tests" "$MIRROR/tests"
+ln -s "$WS_SLIM/.github" "$MIRROR/.github"; ln -s "$REPO/tests" "$MIRROR/tests"
 ln -s "$HERE/scripts/cf-account-migration-complete.sh" "$MIRROR/apps/web-platform/infra/scripts/cf-account-migration-complete.sh"
 # The gate resolves the committed imports file relative to itself, so the mirror carries it too.
 ln -s "$HERE/cf-account-migration-imports.tf" "$MIRROR/apps/web-platform/infra/cf-account-migration-imports.tf"
@@ -1881,7 +1991,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ANTI-VACUITY FLOOR: printf + exit 1, never this suite's own fail.
 # ---------------------------------------------------------------------------
 printf '\n'
-EXPECTED_CASES=285
+EXPECTED_CASES=291
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1
