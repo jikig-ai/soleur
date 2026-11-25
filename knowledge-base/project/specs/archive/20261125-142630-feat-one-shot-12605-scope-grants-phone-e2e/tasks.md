@@ -28,6 +28,6 @@ Issue: #12605. Draft PR: #13017. Follow-up: #13018. Release blocker: #12937.
 
 ## 4. Ship
 
-- [ ] 4.1 Confirm the diff has no production source, `docs/`, legal document, `playwright.config.ts` or approval-queue flag change.
-- [ ] 4.2 PR body uses `Closes #12605`, links #13018, and carries the mutation results table. CI is the test gate.
+- [x] 4.1 Confirm the diff has no production source, `docs/`, legal document, `playwright.config.ts` or approval-queue flag change.
+- [x] 4.2 PR body uses `Closes #12605`, links #13018, and carries the mutation results table. CI is the test gate.
 - [ ] 4.3 After merge, run `soleur:postmerge`, then branch on `deploy-arm.sh find` as the plan's Post-merge criterion states. On `MATCH=exact DEPLOY=blocked` with `[skip_reason=release_failed]`, comment on #12937 and do not emit DONE, whatever `served` reads. Every other outcome follows the plan's `served` rule.
