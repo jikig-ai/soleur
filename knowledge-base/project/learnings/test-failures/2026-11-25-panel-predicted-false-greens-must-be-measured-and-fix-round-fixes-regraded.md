@@ -21,15 +21,19 @@ removed, and the pointer branch disabled. Each prediction read as plausible. Som
 
 - **Measure before ruling.** A probe script (`lead-probe.py`) applied each predicted mutation to the tree, ran
   the spec, then restored with `git restore --source=HEAD`. It refused to start on a dirty tree. All six
-  measured GREEN, so the CTO rulings R1-r to R4-r were made on measured results, not on the reviewers' arguments.
+  measured GREEN. Five were real gaps (mutation rows 16-20); the sixth, the disabled pointer branch (row 22), is
+  green by design because that branch is not load-bearing for the null-org fixtures (ruling R2-r). The CTO rulings
+  R1-r to R5-r were made on those measured results, not on the reviewers' arguments.
 - **Grade the fixes as a new change.** Fix round 1 seated test-design, security, code-quality and SAST against
-  the fix range only. They found four new gaps inside the fixes:
+  the fix range only. They found three new gaps inside the fixes, plus one finding that falls inside an earlier ruling:
   - A paragraph could hide part of its text in a `display:none` child. Fixed by comparing normalized `innerText`.
   - The switch could be covered by another element. Fixed with a `click({ trial: true })`.
   - A surface box could cross the card edge while its text stayed inside. Fixed with an element-box bound.
-  - Vertical clipping stays a recorded F8 residual.
+  - Vertical clipping was the fourth finding. It is the ruling-F8 Non-Goal, recorded before the panel ran, so it
+    stays a stated residual rather than a gap in the fixes.
 
-  Every new row was measured: 23 to 25 RED, 26 GREEN by design. Rows that the earlier addendum had carried
+  Every new row was measured: rows 23 to 25 RED, row 26 GREEN by design. Across all 26 rows, 23 are RED, row 12
+  is a control that must pass, and rows 22 and 26 are green by design. Rows that the earlier addendum had carried
   forward without running were re-run.
 - **The verifier found the docblock claimed more than the check does.** `innerText` still includes text hidden
   by `sr-only`, opacity or a transparent colour. The docblock now lists that under "Not checked".
@@ -38,7 +42,7 @@ removed, and the pointer branch disabled. Each prediction read as plausible. Som
 
 A reviewer's "this would pass" is a hypothesis that costs about one Playwright run to settle, so settle it
 before a ruling is made on it. And a fix for a false green is new test code with its own false greens. In this
-PR, every fix-round finding was a gap inside a panel fix.
+PR, three of the four fix-round findings were gaps inside the panel fixes; the fourth was the known F8 residual.
 
 ## Session Errors
 
