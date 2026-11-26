@@ -15,6 +15,18 @@ this page holds only the acts.
 
 The agent runs both dispatches below. Each needs the owner's typed go naming the exact command.
 
+**Pre-birth boot evidence.** `apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh` boots the rendered template under real cloud-init in the pinned `ubuntu:24.04` image. CI runs it as the `bastion-boot-rehearsal` job of `infra-validation.yml`; locally, `bash apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh` (needs Docker with `--privileged`, and terraform). The job is advisory on pull requests, so a red run can merge. #12942 will run the rehearsal inside the birth run and refuse the birth unless it succeeds; the suite exits 1 on a SKIP for `workflow_dispatch` (CTO Q28), so that job's `success` is enough there. Until it lands, the agent runs this check after the rehearsal (step 1 below) and before the real birth:
+
+- Dispatch the workflow on main: `gh workflow run infra-validation.yml --ref main`. Arm a watch on the run (hr-dispatch-async-must-arm-watch).
+- Pick the `workflow_dispatch` run created after the dispatch whose `headSha` equals the commit the plan_only run reports: `gh run list --workflow infra-validation.yml --event workflow_dispatch --branch main --json databaseId,headSha,createdAt`.
+- Require `gh run view <id> --json jobs --jq '.jobs[]|select(.name=="bastion-boot-rehearsal")|.conclusion'` to print exactly `success`. Read this job's conclusion, never the run's or `deploy-script-tests-done`'s: other legs of the run can fail for unrelated reasons.
+- Read the job id with `gh run view <id> --json jobs --jq '.jobs[]|select(.name=="bastion-boot-rehearsal")|.databaseId'`. Require `gh run view --job <job-id> --log | grep -cF 'bastion-runcmd-rehearsal: PASS ('` to print exactly `1`. A `SKIP (` or `PARTIAL (` verdict is not birth evidence: dispatch again (CTO Q7, Q28).
+- On any other result, diagnose from the evidence the run already holds before dispatching again: `gh run view <id> --log-failed | grep -E 'FAIL: |SKIP \(loud\)|BRH_|bastion-runcmd-rehearsal: |HARNESS: |FATAL: |INSTRUMENT: |unbound variable'` names the failed rows, their stage and the token (or the harness fault); if it prints nothing, read the last 40 lines of `gh run view --job <job-id> --log`. `gh run download <id> -n bastion-boot-rehearsal-workdir` fetches the kept work dir (journals, cloud-init-output logs, stub captures).
+- Do not substitute an existing check-run. Push runs are paths-filtered and duplicate-skipped, so the birth commit usually has none, and the suite installs from the live archive, so only a birth-day run speaks for birth day.
+- If main moves before the real birth run, dispatch again.
+
+This dispatch writes nothing, so it needs no owner go (unlike the two birth dispatches below).
+
 **Dispatch only when the owner can approve at once.** The run holds the shared `terraform-apply-web-platform-host` group while it waits for the environment reviewer, and GitHub keeps one pending run per group: a later queued run (a merge's apply, an `cf-lb-overlay` drain, a key rotation) cancels the one waiting behind it. Approve it promptly or cancel it.
 
 1. **Rehearsal.**
@@ -48,7 +60,7 @@ In 2a there is no in-repo exit from a powered-off bastion: the recovery is #1287
 
 If boot-verify could not power the server off (its `::error::` line says so), the agent powers it off through the Hetzner API, using the same lookup by name and the same `poweroff` action as `scripts/lib/bastion-boot-verify.sh`. If no token is reachable, the owner uses the console. Either way, record it on #12879.
 
-**DNS.** The baseline output chain admits DNS only to the Hetzner resolvers (185.12.64.1 and 185.12.64.2). If the host is handed other resolvers, the egress script's lookups fail and the boot dies at stage `egress_load`. The error trap flushes the ruleset before it reports, so `fresh_boot_not_ready_egress_load` reaches Sentry carrying the egress unit's last journal lines as its detail, and boot-verify powers the host off. A lookup that answers with a private or link-local address fails the same way. The fix is a `bastion-cloud-init.yml` edit, then the replace.
+**DNS.** The baseline output chain admits DNS only to the Hetzner resolvers (185.12.64.1 and 185.12.64.2). If the host is handed other resolvers, the egress script's lookups fail and the boot dies at stage `egress_load`. The error trap flushes the ruleset before it reports, so `fresh_boot_not_ready_egress_load` reaches Sentry carrying the failing reason line as its `detail` tag (the `[bastion-egress] FAIL:` line or a line containing nft's `: Error:`, or `why=no_reason_line nft=<Result> egress=<Result> st=<status> last=<line>` when there is none, with `unread` for a read that timed out), and boot-verify powers the host off. A lookup that answers with a private or link-local address fails the same way. The fix is a `bastion-cloud-init.yml` edit, then the replace.
 
 ## Late ready
 

@@ -833,7 +833,7 @@ rep(AFTER, "          fi\n    continue-on-error: true\n\n  # Aggregator (#8736):
   mutate red "HQ2 quoted header AND if: false on the job" iv \
     "$IV_PRE"'rep(HOSTH, HOSTH.replace("  deploy-script-tests-fixed:", "  " + DQ + "deploy-script-tests-fixed" + DQ + ":", 1).replace("!= " + Q + "true" + Q, "!= " + Q + "true" + Q + " && false", 1))'
   mutate red "A1 the aggregator no longer lists the hosting job in needs:" iv \
-    'rep("needs: [detect-changes, deploy-script-tests, deploy-script-tests-fixed]", "needs: [detect-changes, deploy-script-tests]")'
+    'rep("needs: [detect-changes, deploy-script-tests, deploy-script-tests-fixed,", "needs: [detect-changes, deploy-script-tests,")'
   mutate red "A2 the aggregator entries array drops the hosting job" iv \
     'rep(" " + DQ + "deploy-script-tests-fixed:$FIXED_RESULT" + DQ, "")'
   mutate red "A3 the aggregator no longer reads the hosting job's result" iv \

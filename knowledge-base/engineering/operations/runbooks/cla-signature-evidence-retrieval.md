@@ -222,7 +222,9 @@ operator's local shell.
 
    ```bash
    export CF_ADMIN_TOKEN="<paste from dashboard>"
-   export CF_ACCOUNT_ID="$(doppler secrets get CF_ACCOUNT_ID -p soleur -c prd_terraform --plain)"
+   # CF_R2_ACCOUNT_ID, not CF_ACCOUNT_ID: R2 stays on the legacy account (ADR-329, #12931),
+   # while CF_ACCOUNT_ID names the Soleur account once the migration flips it.
+   export CF_ACCOUNT_ID="$(doppler secrets get CF_R2_ACCOUNT_ID -p soleur -c prd_terraform --plain)"
    export R2_CLA_EVIDENCE_BUCKET="soleur-cla-evidence"
    export R2_CLA_EVIDENCE_ENDPOINT="https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com"
    export TARGET_KEY="signatures/<sha>.json"      # output of §7.2
@@ -419,6 +421,8 @@ Every operation against the bucket (read, write, delete, governance bypass) is r
 
 ```bash
 # Replace the placeholders. The token must have "Account Audit Logs: Read".
+# R2 events are on the legacy account: CF_ACCOUNT_ID here is the CF_R2_ACCOUNT_ID value
+# exported in §7.1 (ADR-329, #12931), never the prd_terraform CF_ACCOUNT_ID key.
 curl -sS \
   -H "Authorization: Bearer $CF_API_TOKEN" \
   "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/audit_logs?since=2026-01-01T00:00:00Z&before=2026-01-31T23:59:59Z&action.type=write&per_page=1000" \

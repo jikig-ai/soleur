@@ -414,8 +414,18 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Install Doppler CLI
-        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+      # The tiered loader installs the Doppler CLI itself (it REPLACES a
+      # DopplerHQ/cli-action step) and, when the privileged token resolves,
+      # exports the Tier-B read/write R2 pair as AWS_ACCESS_KEY_ID /
+      # AWS_SECRET_ACCESS_KEY. Without it the extract below falls through to
+      # prd_terraform's AWS_* pair — READ-ONLY after O5b — and the apply
+      # writes every resource live, then dies on S3 PutObject 403 (the
+      # merge-push run of #12971 did exactly this).
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Extract backend + zone credentials
         env:
@@ -424,9 +434,22 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
           KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain)}"
           SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)}"
           CF_TOKEN="${CLOUDFLARE_API_TOKEN:-$(doppler secrets get CF_API_TOKEN_RUNDEVOO --plain)}"
+          # Fail BEFORE any live write: if the Tier-B export above did not
+          # land, KEY_ID is prd_terraform's read-only Tier-A key and the apply
+          # would mutate the zone with no state write possible. Compared in
+          # shell, never printed.
+          TIER_A_ID="$(doppler secrets get AWS_ACCESS_KEY_ID --plain)"
+          if [[ "$KEY_ID" == "$TIER_A_ID" ]]; then
+            echo "::error::backend credentials resolved to the read-only Tier-A pair — the Tier-B loader did not export TF_STATE_AWS_* (privileged token missing or the pair unset). Refusing to apply live changes the state could not record."
+            exit 1
+          fi
           if [[ -z "$CF_TOKEN" ]]; then
             echo "::error::CF_API_TOKEN_RUNDEVOO is not configured in Doppler soleur/prd_terraform — run infra/rundevoo-run/bootstrap.sh."
             exit 1

@@ -615,3 +615,29 @@ runs:
         echo "::notice title=infra-privileged::source=tier_b exported=${n} git_data_root_state=$([[ "$bucket" == "$PRIV_BUCKET" ]] && echo privileged || echo legacy) github_app_runtime_token=${gar_state}"
         emit source "tier_b"
         emit git_data_root_state_bucket "$bucket"
+
+    # ---- #12931 / CTO L79: the Cloudflare account migration in-progress gate ------
+    #
+    # LAST, and its own step. Every Tier-B job that plans against the web-platform root reaches
+    # Terraform only through this action, so a refusal here stops each of them before its first
+    # plan without adding one byte to apply-web-platform-infra.yml (ADR-231's cap). The script
+    # owns the scope, deny by default (CTO D1): every workflow that calls this action is gated
+    # unless the script's CFAM_EXEMPT_WORKFLOWS names it (the migrator, the plan-only drift job,
+    # and callers that never touch the root).
+    #
+    # A SEPARATE step because the load step's $GITHUB_ENV exports (TF_STATE_AWS_*) are visible
+    # only to LATER steps. The script reads them, or the read-only AWS_* pair from prd_terraform
+    # through the legacy token when they are absent. Every value reaches the shell through
+    # `env:`, never `${{ }}` inside `run:`; github.event.inputs carries the dispatch input
+    # (a composite action's own `inputs` context cannot see the workflow's). No `if:`, no
+    # `continue-on-error`: tests/scripts/test-cf-account-migration-scope.sh asserts both.
+    # The Phase 5 cleanup PR deletes this step with the script.
+    - name: Cloudflare account migration in-progress gate (#12931)
+      shell: bash
+      env:
+        CFAM_WORKFLOW_REF: ${{ github.workflow_ref }}
+        CFAM_JOB: ${{ github.job }}
+        CFAM_EVENT_NAME: ${{ github.event_name }}
+        CFAM_WEB_HOST_KEY: ${{ github.event.inputs.web_host_key }}
+        CFAM_DOPPLER_TOKEN_LEGACY: ${{ inputs.doppler-token-legacy }}
+      run: bash "${GITHUB_ACTION_PATH}/../../../apps/web-platform/infra/scripts/cf-account-migration-complete.sh" --from-r2

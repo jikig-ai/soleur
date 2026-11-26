@@ -176,6 +176,9 @@
 4	apps/web-platform/infra/arm-heartbeats.sh
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
+127	apps/web-platform/infra/cf-account-migrate-job.test.sh
+17	apps/web-platform/infra/cf-account-migration-complete.test.sh
+11	apps/web-platform/infra/cf-account-state-migrate.test.sh
 21	apps/web-platform/infra/ci-deploy.sh
 29	apps/web-platform/infra/ci-deploy.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
@@ -247,6 +250,9 @@
 12	apps/web-platform/infra/resource-monitor.test.sh
 5	apps/web-platform/infra/run-registered-suites.sh
 1	apps/web-platform/infra/run-registered-suites.test.sh
+10	apps/web-platform/infra/scripts/cf-account-migrate-job.sh
+1	apps/web-platform/infra/scripts/cf-account-migration-complete.sh
+5	apps/web-platform/infra/scripts/cf-account-state-migrate.sh
 2	apps/web-platform/infra/scripts/gen-github-egress-cidr.sh
 1	apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh
 1	apps/web-platform/infra/ssl-full-mitigation-mutation.test.sh
@@ -605,11 +611,16 @@
 5	tests/scripts/test-argv-bearer-sweep.sh
 5	tests/scripts/test-audit-bot-codeql-coverage.sh
 23	tests/scripts/test-audit-ruleset-bypass.sh
+4	tests/scripts/test-cf-account-migrate-gate.sh
+1	tests/scripts/test-cf-account-migration-bootstrap.sh
+1	tests/scripts/test-cf-account-migration-runbook.sh
+26	tests/scripts/test-cf-account-migration-scope.sh
 2	tests/scripts/test-git-data-birth-readiness-gate.sh
 1	tests/scripts/test-inngest-host-dark-gate.sh
 20	tests/scripts/test-lint-supabase-deprecated-endpoints.sh
 1	tests/scripts/test-main-duplicate-skip.sh
 1	tests/scripts/test-plan-gate-preamble.sh
+1	tests/scripts/test-preapply-entrypoint-gate.sh
 2	tests/scripts/test-registry-heartbeat-poll.sh
 1	tests/scripts/test-registry-luks-recut-gate.sh
 3	tests/scripts/test-registry-pull-path-health.sh

@@ -49,6 +49,9 @@ const ACKS: Record<string, { reason: AckReason; lines: number }> = {
   ".claude/hooks/prod-write-defer-gate.test.sh|provision-hetzner": { reason: "doc-mention", lines: 1 },
   ".claude/hooks/prod-write-defer-gate.test.sh|user-set-role": { reason: "doc-mention", lines: 1 },
   "knowledge-base/engineering/operations/runbooks/admin-ip-drift.md|admin-ip-refresh": { reason: "operator-handoff", lines: 5 },
+  // #12931: the migration runbook names the script PATH to run with Bash (ADR-236 point 4: the
+  // axis governs the Skill tool, not a skill's scripts); it never asks for the skill itself.
+  "knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md|cf-token-scope": { reason: "doc-mention", lines: 1 },
   "knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md|admin-ip-refresh": { reason: "operator-handoff", lines: 1 },
   "knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md|admin-ip-refresh": { reason: "operator-handoff", lines: 1 },
   "knowledge-base/engineering/operations/runbooks/tenant-provisioning.md|provision-cloudflare": { reason: "operator-handoff", lines: 1 },

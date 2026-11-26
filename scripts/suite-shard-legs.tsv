@@ -687,6 +687,10 @@ tests/scripts/betterstack-ingest-probe	2
 tests/scripts/betterstack-query-archive	2
 tests/scripts/betterstack-read-classify	8
 tests/scripts/betterstack-roundtrip-latency	2
+tests/scripts/cf-account-migrate-gate	8
+tests/scripts/cf-account-migration-bootstrap	7
+tests/scripts/cf-account-migration-runbook	3
+tests/scripts/cf-account-migration-scope	8
 tests/scripts/cf-lb-overlay-gate	3
 tests/scripts/cleanup-merged-space	8
 tests/scripts/deploy-access-token-forget	5
