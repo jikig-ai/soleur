@@ -1079,7 +1079,7 @@ pricing ledger says "`suite-durations.tsv` is a CI-leg table and is not edited b
 carry one further exception, beside the `src=estimate` arm seed that ADR-313 already sanctions:
 re-seating one existing `src=measured` row to its CI `merge_group` median is a sanctioned hand
 edit when the drift gate accepts the edited table, outright or with a generator-stamped growth
-ack whose violations name only that row (its per-suite line, or the `total measured weight`
+ack whose violations name only that row (its per-suite line and/or the `total measured weight`
 line when that row is the only change). The first sentence's citation is also corrected.
 ADR-240 says a generated table is regenerated on conflict, never
 hand-merged (decision 5; its Context restating ADR-235's artifact rule); it does not say "never
@@ -1119,9 +1119,8 @@ ahead when every violation it prints names the re-seated row: the in-tree `--inc
 --allow-growth --write` then stamps a `# growth-acked=` header scoped to the digest of exactly
 those violations, so the acknowledgement is recorded, visible in the diff, and cannot carry over
 to different drift. A violation naming any other label stops the recipe and routes to the full
-`--timings-dir` regen. Nothing in CI re-runs this gate on the committed table; the reviewer
-reads the manifest's `generated-at` line, and on the growth path the `# growth-acked=` line, in
-the diff as evidence that the in-tree pass ran. The procedure is the "Re-price one row from
+`--timings-dir` regen. Nothing in CI re-runs this gate on the committed table; the evidence
+that the in-tree pass ran on the edited table is its stdout, pasted into the commit message. The procedure is the "Re-price one row from
 merge_group medians" recipe in `knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md`.
 
 Alternatives added by this amendment:

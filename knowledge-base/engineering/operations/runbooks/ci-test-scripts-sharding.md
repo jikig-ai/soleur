@@ -231,7 +231,7 @@ heavy table.
    Exit 0 with `0 moved` means accepted. The gate refuses (exit 2, `weight drift refusal`) a row
    that grows more than 1.5x and by more than 10000 ms, or a total measured growth above 10
    percent. If it refuses, read each violation line it prints. Go on only if every line is
-   about the row you re-seated (its `per-suite drift '<label>'` line, or the
+   about the row you re-seated (its `per-suite drift '<label>'` line and/or the
    `total measured weight` line when only your row changed), and then run step 4 with
    `--allow-growth` so the generator writes the `# growth-acked=` stamp into the in-tree table
    (never type the stamp by hand). Paste the violation lines into the commit message next to the
@@ -252,9 +252,10 @@ heavy table.
    full regen. The table's own headers stay as they were, so its `generated-from-runs` no longer
    covers the re-seated row; that is why the run ids go in the commit message. With
    `--allow-growth` it prints `wrote scripts/suite-durations.tsv (parity delta: +0 floor row(s),
-   -0 stale row(s); …)` and `drift gate: 1 violation(s) acknowledged (--allow-growth)` instead,
-   and the table's `# generated-at=` and `# growth-acked=` lines change too (the new stamp
-   replaces any existing one).
+   -0 stale row(s); …)` and `drift gate: N violation(s) acknowledged (--allow-growth)` instead
+   (N = the violation lines from step 3), and the table's `# generated-at=`,
+   `# default-weight-ms=` (when the measured median moved) and `# growth-acked=` lines change
+   too (the new stamp replaces any existing one).
 
 5. **Verify and commit.** Run the table's consumers, at least
    `bash plugins/soleur/test/scripts-shard-manifest.test.sh`,
@@ -264,9 +265,10 @@ heavy table.
    price that crosses the 600000 ms per-suite cap, or makes a `scripts/suite-weight-exemptions.tsv`
    row stale, reconciles that ledger in the same commit (#12419 deleted one). Commit the row, the
    manifest header lines and, on the `--allow-growth` path, the table's changed header lines
-   together, with the run ids and the step 1 per-run values in the commit message. Nothing in CI
-   re-runs the gate, so the manifest's `generated-at` line (and the `# growth-acked=` line, when
-   present) in the diff is the reviewer's evidence that step 4 ran.
+   together. The commit message carries the run ids, the step 1 per-run values and step 4's
+   stdout (its `drift gate:` lines and its `already in parity` or `wrote` line). Nothing in CI
+   re-runs the gate, so that pasted output is the reviewer's evidence that step 4 ran on the
+   edited table.
 
 ## The drift watch (`shard-balance-watch`, #11564)
 

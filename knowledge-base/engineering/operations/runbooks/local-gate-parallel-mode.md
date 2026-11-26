@@ -64,6 +64,7 @@ Four committed-weight guards keep the battery from silently regrowing:
 New suites get floor rows via `--incremental` (G1 reports count growth on
 the landing commit — floor rows are excluded from the drift predicates).
 `suite-durations*.tsv` and `suite-shard-legs.tsv` are generated artifacts —
-the one sanctioned hand edit is the one-row re-seat of an existing measured row
-(`ci-test-scripts-sharding.md`, ADR-242 amendment 2026-11-26); any other
+the sanctioned hand edits are the ADR-313 `src=estimate` arm seed and the
+one-row re-seat of an existing measured row (`ci-test-scripts-sharding.md`,
+ADR-242 amendment 2026-11-26); any other
 hand-edit is the accepted v1 hole ADR-312 names, rate-limited not prevented.

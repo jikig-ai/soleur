@@ -7,7 +7,7 @@ issue: 11662
 related: [11662, 11679, 9763]
 related_adrs: [ADR-240, ADR-242]
 amended_by:
-  - "ADR-242 amendment 2026-11-26 (#12780) — a one-row re-seat of a src=measured row that the drift gate accepts is a sanctioned hand edit, not the accepted v1 hole named in Consequences; that sentence stays as written"
+  - "ADR-242 amendment 2026-11-26 (#12780) — a one-row re-seat of a src=measured row that the drift gate accepts is a sanctioned hand edit, not the accepted v1 hole named in Consequences; that sentence stays as written; see ADR-242 ## Amendment — 2026-11-26 (#12780)"
 tags: [test-runner, durations, ratchet, ci]
 ---
 
