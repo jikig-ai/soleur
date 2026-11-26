@@ -5972,7 +5972,9 @@ if want_scripts; then
   # #9377: the web-host escrow-split contract (Guard 3 census: every web-class path selects
   # prd_workspaces_luks_web, web-1 keeps prd_workspaces_luks) plus its live-mode stub-doppler rows.
   # Registered explicitly: scripts/*.test.sh is NOT auto-globbed (the #5417 orphan class). The
-  # generated suite-shard-legs.tsv / suite-durations.tsv are NOT hand-edited.
+  # generated suite-shard-legs.tsv / suite-durations.tsv are regenerated, never hand-merged; the
+  # one hand edit sanctioned for an existing measured row is a one-row re-seat to its CI
+  # merge_group median that the drift gate accepts (the test-scripts sharding runbook, #12780).
   run_suite "scripts/check-web-host-escrow-config" bash scripts/check-web-host-escrow-config.test.sh
   # #9377: the fail-closed escrow preflight every web-host birth route runs (env token wins, one named fallback
   # read, empty token fails before the checker, no token bytes in output, xtrace refused). Registered explicitly
