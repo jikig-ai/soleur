@@ -824,7 +824,8 @@ while IFS='|' read -r c_label c_url c_key c_want; do
   else
     MIG_CTRL_OK=0; MIG_INCONCLUSIVE=1
     if [[ "$CODE" == "200" ]]; then mig_report "control: $c_label" "degraded (200 body not success/$c_want)"
-    else mig_report "control: $c_label" "denied ($CODE$(mig_errcode); re-mint $(mig_key "$c_key"))"; fi
+    elif [[ "$CODE" == 401 || "$CODE" == 403 ]]; then mig_report "control: $c_label" "denied ($CODE$(mig_errcode); re-mint $(mig_key "$c_key"))"
+    else mig_report "control: $c_label" "denied ($CODE$(mig_errcode))"; fi
   fi
 done < <(mig_ctrl_rows "$PROFILE")
 

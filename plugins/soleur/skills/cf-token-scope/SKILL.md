@@ -337,8 +337,8 @@ the PR thread. Any verdict other than `pass` blocks that phase's dispatch.
   is lost on that path. Every migration control, audit and write row is therefore
   also printed as `probe=<profile> row <label> -> <status>` (`mig_report`), so the
   row text the runbook routes on survives the wrapper. Split on the first ` -> `:
-  labels and statuses both contain `: `. A `denied` row names the key to re-mint
-  (`denied (<code>, err <n>; re-mint <KEY>)`). Test M5h reads the wrapper's filter
+  labels and statuses both contain `: `. A `denied` row on a 401 or 403 names the key to
+  re-mint (`denied (<code>, err <n>; re-mint <KEY>)`); other codes carry no re-mint advice. Test M5h reads the wrapper's filter
   from `bootstrap.sh` and refuses a bare `report` call in the migration block
   outside `mig_fatal`. See
   `knowledge-base/project/learnings/2026-11-26-the-review-fix-moved-evidence-off-the-channel-its-consumer-reads.md`.
