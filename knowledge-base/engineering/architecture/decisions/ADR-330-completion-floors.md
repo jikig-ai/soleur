@@ -1,4 +1,4 @@
-# ADR-329: Declarative Required-Artifact Completion Floors Per Pipeline Phase
+# ADR-330: Declarative Required-Artifact Completion Floors Per Pipeline Phase
 
 ## Status
 
