@@ -26,6 +26,10 @@ from real CI timings once green artifact runs existed.
    medians; commit via `--durations seed.tsv --write`. A full
    `--timings-dir --write` reds `test-all-fast-tier-budget` on the always-on
    drift #11648 tracks — the merge commit itself used the seed mechanism.
+   *Update 2026-11-26 (#12780):* the seed path re-aggregates the whole table and repacks the legs
+   (a one-row seed edit on 2026-11-26 re-derived 4 floor rows, rewrote 2 header lines and moved 14
+   manifest legs). To re-price one row, use the runbook's "Re-price one row from merge_group
+   medians" recipe.
 4. Verify: 5-suite lint set (shard-manifest, regen, totality,
    runtime-coverage, fast-tier-budget) all green; arms on distinct legs;
    non-arm measured rows byte-identical.

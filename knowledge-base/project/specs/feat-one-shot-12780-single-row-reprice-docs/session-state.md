@@ -22,3 +22,8 @@
 - constraint: no apply-web-platform-infra.yml dispatch before 12931 lands.
 - constraint: resolve 1051496324 only on its own owner go.
 - constraint: never read or print a secret.
+
+## Deepen Phase
+
+- Status: complete (inline). Architecture review found 2 P1, 2 P2, 4 P3 on the plan; all applied. CTO re-ruled the growth-ack fork (cto_spawns=2, the pipeline cap).
+- Post-planning re-probe: no linked or in-body PR on 12780 besides this one; overlap preflight exit 13 (name-only overlaps, 12964 runbook disjoint hunks).

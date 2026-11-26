@@ -5,6 +5,7 @@ date: 2026-09-18
 amends: ADR-181, ADR-183, ADR-196, ADR-133
 related_adrs: [ADR-181, ADR-183, ADR-196, ADR-133, ADR-177]
 amended_by:
+  - "#12780 (2026-11-26) — a one-row re-seat of an existing src=measured row to its CI merge_group median, accepted by the drift gate (outright, or with a generator-stamped growth ack whose violations name only that row), is a sanctioned hand edit of a committed durations table; corrects the ADR-240 citation (never hand-merged, not never hand-edited); see ## Amendment — 2026-11-26 (#12780)"
   - "#12247 (2026-11-07) — the ci-is-the-gate token is also honoured at work Phase 2, review's lead gate and the Grok pre-push gate through `battery-owed.sh --token-only` (wrapper `gate-or-skip.sh` for work and review, inline for Grok); see ## Amendment — 2026-11-07 (#12247)"
   - "#12246 (2026-11-06) — exit 42 of battery-owed.sh also means the operator declared CI the gate (session-state.md token); reconciled with ADR-196; see ## Amendment — 2026-11-06 (#12246)"
   - "#9552 (2026-10-05) — decision 20: a registration-only runner diff takes the bounded selection under branch scope (closed grammar, fail closed); the 2026-09-29 option-d rejection is reversed in part; see ## Amendment — 2026-10-05 (#9552)"
@@ -1068,3 +1069,55 @@ Decision 30's "Evidence and open residuals" bullet left two residuals: the pool-
 This supersedes, by name, five sentences that stay as written. "Running the `*` suites last is the next lever" (2026-11-06 #12013 amendment, Decision 29) is implemented by Decision 30. The others rank levers on premises the measurements cited below do not carry on the readings they cover (`replay-a` as the run's tail; and a re-split of the replay arms as a lever whose gain is robust, where the measured pole was the retired `row_ow_*` sites and the nominal-best re-splits failed the robustness check): "This is the next lever: start the longest suites first" (2026-11-05 amendment), "rebalancing the `--rows` split by weight is the next lever after that" and "The arms are also unbalanced (pooled 1513 s, 570 s and 530 s ...)" (2026-11-06 amendment, Known limits), and "#12231 is now the larger lever". On the t1 reading the pool ended on `approval-guard1-mutation`, 358 s after `replay-a`; on control2 the approval suite ended 293 s after `replay-a` and the run's last suite was `dev-ledger-parity` (1891 s), so whether #12263 is still a lever is read from `summary.txt` (about 300 s on one reading, not re-priced since the replay arms shrank), not from those sentences.
 
 What this does not claim: that the cold local gate is anywhere near the 600 s bar of #12013. It was not re-measured cold here. On the two archived readings, the packing floor plus the cold derive was about 1.6 to 1.7 ks; ordering the long suites first recovered about 300 s of it on paper, and the nominal-best re-splits of the replay arms did not survive the robustness check (no search was made for a modest but robust split). Those figures, the per-site measurement they rest on and the verdict are in `measurements/summary.txt` of the spec `feat-one-shot-12013-site-cost-measurement`, archived under `knowledge-base/project/specs/archive/<timestamp>-feat-one-shot-12013-site-cost-measurement/`. They describe the 602-site tree the readings were taken on; the observation-window retirement has since removed 129 of those sites, and the replay arms on main were not re-measured. The work-reduction levers named in #12013 are the open path.
+
+## Amendment — 2026-11-26 (#12780)
+
+Supersedes, by name, two sentences that stay as written. The 2026-10-11 (#9814) amendment says
+the drift detector's "committed weight row is written only by `regenerate-shard-manifest.py
+--incremental --write` (ADR-240: generated, never hand-edited)". The 2026-11-04 (#12013, #12025)
+pricing ledger says "`suite-durations.tsv` is a CI-leg table and is not edited by hand." Both now
+carry one further exception, beside the `src=estimate` arm seed that ADR-313 already sanctions:
+re-seating one existing `src=measured` row to its CI `merge_group` median is a sanctioned hand
+edit when the drift gate accepts the edited table, outright or with a generator-stamped growth
+ack whose violations name only that row. The first sentence's
+citation is also corrected. ADR-240 says a generated table is regenerated on conflict, never
+hand-merged (decision 5; its Context restating ADR-235's artifact rule); it does not say "never
+hand-edited". The 2026-11-04 sentence still holds for what it described: local standalone
+walls are not CI-leg medians and never go into the table.
+
+What stays absolute. A merge conflict on a shard TSV is resolved by regeneration, never by
+hand-merge (ADR-240 decision 5). A new row is written only by the generator: `--incremental
+--write` tables a new label at the floor together with its shard placement. A `floor` row
+becomes `measured` only through a real timings pass (ADR-240: `src=floor` is never laundered into
+a measurement), and so does an `estimate` row (ADR-313, Consequences).
+
+Why the exception exists. Every pricing mode of `regenerate-shard-manifest.py` re-aggregates the
+whole table and repacks the legs. On scratch copies during #12441 P.2 planning, the seed path
+`--durations seed --write` rewrote 140 floor rows and the headers and moved 45 manifest legs;
+re-measured on 2026-11-26 with a one-row edit of the current table (20 floor rows), it still
+re-derived 4 floor rows, rewrote 2 header lines and moved 14 manifest legs. `--incremental` pins
+incumbent rows verbatim and fetches no timings, so it cannot re-price a row. A stale price
+therefore had no generator path that leaves the rest of the table alone. #12419 already took the
+hand path for a `measured` row (replay-a, 1033094 → 160004 ms from three green merge_group runs).
+#12778 hand-edited `cloudflare-readonly` from `floor` 1261 to `measured` 155229 ms; that
+floor-to-measured flip is what this amendment now rules out.
+
+The bar is the drift gate, run before the row is committed against the merge-base table
+(`--baseline-durations`, writing to scratch only). A re-seat that trips the gate may still go
+ahead when every violation it prints names the re-seated row: the in-tree `--incremental
+--allow-growth --write` then stamps a `# growth-acked=` header scoped to the digest of exactly
+those violations, so the acknowledgement is recorded, visible in the diff, and cannot carry over
+to different drift. A violation naming any other label stops the recipe and routes to the full
+`--timings-dir` regen. The procedure is the "Re-price one row from merge_group medians" recipe in
+`knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md`: measure in scratch
+with the generator, edit the row, gate it, refresh the headers with an in-tree `--incremental
+--durations` pass, and run the table's consumers.
+
+Alternatives added by this amendment:
+
+| Alternative | Why not |
+|---|---|
+| Keep "never hand-edited" and re-price through a full regeneration | Re-aggregates every row and moves unrelated legs (45 on the measured run); sibling PRs then conflict on rows they never meant to change. |
+| Refuse every re-seat that trips the gate and send it to the full regen | The full regen re-derives unrelated rows and moves legs; the incremental write records the same scoped acknowledgement with a one-row diff. |
+| A generator mode that re-prices one label | Not needed: the scratch median plus the gate already verify a one-row edit offline, and a new mode is a code change to a generator that #12964 is changing now. |
+| Let a hand re-seat upgrade a `floor` or `estimate` row to `measured` | Contradicts ADR-240 (`src=floor` is never laundered into a measurement) and ADR-313 (an estimate upgrades only through a real timings pass); a flipped row would enter the measured-only floor median and drift accounting without one. |

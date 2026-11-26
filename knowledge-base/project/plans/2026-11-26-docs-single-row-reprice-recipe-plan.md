@@ -517,32 +517,32 @@ Let `RB=knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.
 `ADR=knowledge-base/engineering/architecture/decisions/ADR-242-the-local-gate-defaults-to-affected-suites-and-always-on-ratchets.md`,
 `MB=$(git merge-base HEAD origin/main)`.
 
-- [ ] AC1: `grep -c '^### Re-price one row from merge_group medians (#12780)$' "$RB"` prints `1`,
+- [x] AC1: `grep -c '^### Re-price one row from merge_group medians (#12780)$' "$RB"` prints `1`,
       and the section lists five numbered steps whose step 3 contains `--baseline-durations` and
       the word `required`.
-- [ ] AC2: the conflict rule is intact: `grep -c 'Merge conflict on the TSV → regenerate, never hand-merge' "$RB"` prints `1`,
+- [x] AC2: the conflict rule is intact: `grep -c 'Merge conflict on the TSV → regenerate, never hand-merge' "$RB"` prints `1`,
       and the new section's last paragraph contains `never by hand-merge`.
-- [ ] AC3: `grep -c 'To re-price by hand:' "$RB"` prints `0`, and
+- [x] AC3: `grep -c 'To re-price by hand:' "$RB"` prints `0`, and
       `grep -c '(#re-price-one-row-from-merge_group-medians-12780)' "$RB"` prints `1`.
-- [ ] AC4: `grep -c '^## Amendment — 2026-11-26 (#12780)$' "$ADR"` prints `1`; the first
+- [x] AC4: `grep -c '^## Amendment — 2026-11-26 (#12780)$' "$ADR"` prints `1`; the first
       `amended_by:` list item starts with `"#12780 (2026-11-26)`; the ADR diff is additions only,
       so both superseded sentences stay as written:
       `git diff "$MB" -- "$ADR" | grep -cE '^-[^-]'` prints `0`. (Each superseded sentence now
       occurs twice in the file: the original and the amendment's quotation of it.)
-- [ ] AC5: `grep -c 'suite-durations.tsv are NOT hand-edited' scripts/test-all.sh` prints `0`;
+- [x] AC5: `grep -c 'suite-durations.tsv are NOT hand-edited' scripts/test-all.sh` prints `0`;
       `bash -n scripts/test-all.sh` exits 0; the runner diff is comment-only:
       `git diff "$MB" -- scripts/test-all.sh | grep -E '^[+-][^+-]' | grep -vE '^[+-][[:space:]]*#'` prints nothing.
-- [ ] AC6: out-of-scope files unchanged:
+- [x] AC6: out-of-scope files unchanged:
       `git diff --quiet "$MB" -- scripts/regenerate-shard-manifest.py scripts/suite-durations.tsv scripts/suite-durations-heavy.tsv scripts/suite-shard-legs.tsv scripts/suite-shard-legs-heavy.tsv apps/web-platform/infra/suite-durations.tsv apps/web-platform/infra/suite-shard-legs.tsv knowledge-base/engineering/architecture/decisions/ADR-240-shard-assignment-is-checked-in-derived-data.md`
       exits 0.
-- [ ] AC7: the recipe's commands still behave as documented, re-run in a scratch dir with a
+- [x] AC7: the recipe's commands still behave as documented, re-run in a scratch dir with a
       positive and a negative control (no tracked file changes, `git status --short` lists only
       this branch's docs): a downward one-row edit through the step 3 command exits 0 with
       `0 moved`; a 3x upward edit of the same row exits 2 and prints `weight drift refusal`; the same
       3x edit re-run with `--allow-growth` exits 0, prints `violation(s) acknowledged` and writes a
       `# growth-acked=` line into the scratch output; a heavy-table row raised past the thresholds
       exits 2 only when `--group heavy` is passed (the recipe's heavy note).
-- [ ] AC8: wording sweep. Every remaining hit is inside ADR-242 (the originals kept as written
+- [x] AC8: wording sweep. Every remaining hit is inside ADR-242 (the originals kept as written
       plus the amendment quoting them):
       `git grep -n -E 'never hand-edited|NOT hand-edited|not edited by hand' -- scripts/ knowledge-base/engineering/ | grep -E 'durations|ADR-240' | grep -v '^knowledge-base/engineering/architecture/decisions/ADR-242-'`
       prints nothing. Positive control first (verified 2026-11-26): the first two stages run
@@ -550,14 +550,14 @@ Let `RB=knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.
       print three lines: ADR-242 at the #9814 parenthetical, ADR-242 at the #12025 ledger
       sentence, and `scripts/test-all.sh:5975`. The pipeline is live if the branch version drops
       exactly the `scripts/test-all.sh` line.
-- [ ] AC9: `bun test plugins/soleur/test/components.test.ts` passes
+- [x] AC9: `bun test plugins/soleur/test/components.test.ts` passes
       (the recipe's `gh run list` carries `-L 100`); `bash scripts/markdown-lint.sh "$RB" "$ADR"` exits 0 and does not print `nothing to lint`
       (both files are in lint scope; the learning is excluded by `.markdownlintignore`).
 - [ ] AC10: no closing reference to #12780 anywhere the PR carries:
       `gh pr view --json body --jq .body | grep -inE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]+#12780'`
       and `git log "$MB"..HEAD --format=%B | grep -inE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]+#12780'`
       both print nothing, and the PR body contains `Ref #12780`.
-- [ ] AC11: `bash plugins/soleur/test/c4-count-parity.test.sh` reports `Failed: 0`.
+- [x] AC11: `bash plugins/soleur/test/c4-count-parity.test.sh` reports `Failed: 0`.
 
 ## Domain Review
 
