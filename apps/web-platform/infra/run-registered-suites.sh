@@ -803,11 +803,20 @@ _SUITE_BOUNDS=(
   # The weight row (suite-durations.tsv) is an ESTIMATE, never measured on CI: the first CI wall time of this suite's leg must be recorded
   # (ADR-317, the runbook residuals), and the suite moves to a lighter leg if the leg exceeds ~700 s.
   "apps/web-platform/infra/key-rotate-workflow.test.sh=840"
-  # #12931 (PR 12932 review): the CF account migrate job battery runs the real gate and state forget
-  # per case plus its sed mutants; its weight row is 106 s measured (suite-durations.tsv). Under -P 4
-  # contention (the ~2.5-3x #8688 multiplier) that nears the 360 s default, so pin at 720 per the
-  # ATTRIBUTION block's >=1.5x rule; a slow day renders as this suite's own RED, not a leg timeout.
-  "apps/web-platform/infra/cf-account-migrate-job.test.sh=720"
+  # #12931 / #13051 (PR #13052): the CF account migrate job battery runs the real gate and state forget
+  # per case plus its sed mutants. It outgrew 720 s once (killed). #13052 cut its harness cost (slim
+  # workspace, per-job fork cuts) and runs 2 rows at once on a 4-core CI leg (3 at 8+ cores; serial
+  # measured 560 s, CTO rulings in decision-challenges.md). Three suite-timings-infra-* attempts of
+  # 7282744c64 measured 290/525/521 s (the last two on runners where every leg sibling ran ~1.27x
+  # slower), so the weight row is 525 s measured and the bound is 790 s, 1.5x that worst (the
+  # ATTRIBUTION block's rule), under the leg's ~840 s usable ceiling (900 s job cap minus setup).
+  # Re-measure: download suite-timings-infra-* from >=3 infra-validation attempts, put the worst in
+  # suite-durations.tsv, then `regenerate-shard-manifest.py --group infra --durations
+  # apps/web-platform/infra/suite-durations.tsv --write --allow-growth`.
+  # Revisit when (a) five post-fix CI samples (from #13052's merge on) exist, or (b) the worst sample
+  # passes 527 s (790/1.5) or EXPECTED_CASES grows past ~330 (it is 299; #12958's rebase adds ~44).
+  # The fix is the file split (#13064), not a higher bound: past ~840 s a bound kills the whole leg.
+  "apps/web-platform/infra/cf-account-migrate-job.test.sh=790"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT
