@@ -134,7 +134,10 @@ check_corpus() {
   (( ${#slack[@]} ))    && { printf '    [check] exemption slack over ~1.3x: %s\n' "${slack[@]}" >&2; _rc=1; }
   (( ${#stalek[@]} ))   && { printf '    [check] exemption row(s) keyed on absent label(s): %s\n' "${stalek[@]}" >&2; _rc=1; }
   (( ${#noref[@]} ))    && { printf '    [check] exemption reason(s) without a #NNN ref: %s\n' "${noref[@]}" >&2; _rc=1; }
-  (( ${#unexp[@]} ))    && { printf '    [check] registration(s) with no committed weight row: %s\n' "${unexp[@]}" >&2; _rc=1; }
+  (( ${#unexp[@]} ))    && { printf '    [check] registration(s) with no committed weight row: %s\n' "${unexp[@]}" >&2
+                             printf '    remedy: python3 scripts/regenerate-shard-manifest.py --group <light|heavy|infra> --incremental --write\n' >&2
+                             printf '            (writes the weight row AND its shard placement in one pass; the manifest checks pair the two,\n' >&2
+                             printf '            a hand-added weight row has no placement, #12873)\n' >&2; _rc=1; }
   (( ${#stalea[@]} ))   && { printf '    [check] unmeasured-allowlist label(s) that gained a row: %s\n' "${stalea[@]}" >&2; _rc=1; }
   (( ${#departed[@]} )) && { printf '    [check] unmeasured-allowlist label(s) no longer registered: %s\n' "${departed[@]}" >&2; _rc=1; }
   return $_rc
@@ -220,10 +223,18 @@ fi
 cases=$((cases + 1))
 printf 'a/big\t900000\tdeclared-big suite; #000\n' > "$FIX/ex.tsv"
 printf 'a/ghost\n' >> "$FIX/l.txt"
-if check_corpus "$FIX/d.tsv" "$FIX/dh.tsv" "$FIX/di.tsv" "$FIX/ex.tsv" "$FIX/l.txt" "$FIX/li.txt" none 2>/dev/null; then
+if check_corpus "$FIX/d.tsv" "$FIX/dh.tsv" "$FIX/di.tsv" "$FIX/ex.tsv" "$FIX/l.txt" "$FIX/li.txt" none 2>"$FIX/m4.err"; then
   fail "M4: an unmeasured registration stayed green"
 else
   pass "M4: unmeasured registration reddens"
+fi
+# M4b: the red names its remedy. A hand-added weight row has no shard placement, so the
+# fix is the generator, and the message is the only place an author learns that (#12873).
+cases=$((cases + 1))
+if grep -qF 'regenerate-shard-manifest.py' "$FIX/m4.err"; then
+  pass "M4b: the unmeasured-registration red names regenerate-shard-manifest.py"
+else
+  fail "M4b: the unmeasured-registration red does not name regenerate-shard-manifest.py"
 fi
 
 # M5: removing the ledger line while the suite stays at 700s reds (WORM).

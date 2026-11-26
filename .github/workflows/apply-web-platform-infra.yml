@@ -6129,6 +6129,7 @@ jobs:
       plan_only: ${{ inputs.plan_only }}
       reason: ${{ inputs.reason }}
     secrets:
+      DOPPLER_TOKEN_INFRA_PRIVILEGED: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
 
