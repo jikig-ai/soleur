@@ -142,9 +142,13 @@ mutates no zone.
    ```
 
 3. `Operator-authorizes:` delete it in the operator's signed-in dashboard session, the same `browser_run_code_unsafe`
-   session as the mints: the Node-side `page.evaluate` sends `DELETE /api/v4/user/tokens/<id>` with the session
-   `x-atok` and returns only the HTTP status and `success`. A `403` or `404` means the session's user does not own
-   that token: stop and report, never retry under another identity.
+   session as the mints. A `page.evaluate` reads the session `x-atok` (`window.bootstrap.atok`) and the full id from
+   `GET /api/v4/user/tokens` (after a fresh load of `/profile/api-tokens`: a page that has not reloaded since
+   sign-in lists the previous login's tokens). A Node-side `page.request.delete` then sends
+   `DELETE /api/v4/user/tokens/<id>` with that `x-atok` and returns only the HTTP status and `success`. An in-page
+   `fetch` DELETE gets an HTML `403` from the dashboard edge (measured 2026-11-26). That is not an ownership answer.
+   A JSON `403` or `404` means the session's user does not own that token: stop and report, never retry under
+   another identity.
 4. `Agent:` read back: re-run step 2. Expected: `.success` is `false` (the verify fails). Then
    `Operator-authorizes:` delete the key that held it, in the same act, so token-drift never grades a dead value:
    `doppler secrets delete <KEY> -p soleur -c <config> --yes > /dev/null`, and re-run the inventory stage
@@ -709,6 +713,19 @@ the PR thread, and its comment is the read-back.
   `.github/workflows/cf-account-migrate-alert.yml`, the gate and the bootstrap with its suite).
   Keep `cf-access-deploy-token-mint.sh` and the `cf-token-scope.sh` profiles.
 - Revoke `CF_API_TOKEN_SOLEUR_ACCT` (if not already) and any superseded old-zone token with the revoke recipe.
+  The old-account-owner login still holds old-zone tokens with live readers. The 2026-11-26 inventory mapped them by
+  `/user/tokens/verify` id:
+  - `CF_API_TOKEN_AUDIT` ("soleur-security-audit", `dd6d1427…`) in `dev`, `dev_personal`, `dev_scheduled` and
+    `prd_terraform`: re-mint read-only on the Soleur login, scoped to the new zone and account, and copy it into all
+    four configs. Then revoke the old token.
+  - `CF_API_TOKEN_ANALYTICS_READ` ("soleur-analytics-read-p90", `5993721f…`) in `prd_terraform`: the same
+    re-mint, swap and revoke.
+  - `CF_API_TOKEN_PAGERULES_READ` ("soleur-pagerules-read", `86aa993e…`) in `prd_terraform`: the new zone has no
+    page rules, so decide whether its reader is retired before re-minting it.
+  - `CF_API_TOKEN_PURGE_PREV` ("soleur-purge-shared-tokens", `9e4ce00e…`): revoke only after a web-platform deploy
+    has restarted the containers. Until then they purge with this token (swap-0b changed Doppler, not the running
+    env).
+  - The R2 token ("soleur-workspaces-luks-header-r2") stays, because the old account keeps R2.
 - `Operator-authorizes:` delete the old tunnel `fc4509ed…` in the legacy account once web-2's replace has dropped its
   connections. Read-back: the same account's tunnel list by that id shows it deleted.
 - `Operator-authorizes:` delete, one go each and by name, the legacy-account objects the forget left behind, listed from
