@@ -53,6 +53,26 @@ if (!BIN) {
   console.warn(`[c4-render-tenant-config] likec4 not found — skipping. Install: ${INSTALL_HINT}`);
 }
 
+// #12874: the render runs `node <realpath(BIN)>`, so a resolved binary is only
+// usable when that realpath is a node-runnable entry. A mise/asdf shim resolves
+// to the tool manager's own ELF (and here the backing install can be absent for
+// the active toolchain), which `node` cannot parse — the rows then fail exactly
+// like a missing install, so gate them the same way.
+const ENTRY_RUNS =
+  BIN !== null &&
+  spawnSync(process.execPath, [realpathSync(BIN), "--version"], { stdio: "ignore", timeout: 15_000 }).status === 0;
+if (BIN && !ENTRY_RUNS && process.env.LIKEC4_REQUIRED) {
+  throw new Error(
+    `LIKEC4_REQUIRED is set and ${BIN} resolves, but node cannot run its realpath ${realpathSync(BIN)} (a shim without a backing install?). Install: ${INSTALL_HINT}`,
+  );
+}
+if (BIN && !ENTRY_RUNS) {
+  console.warn(
+    `[c4-render-tenant-config] ${BIN} resolves to ${realpathSync(BIN)}, which node cannot run — skipping the render rows as if absent.`,
+  );
+}
+const LIKEC4_OK = BIN !== null && ENTRY_RUNS;
+
 // #8696: the render runs inside bwrap. "Available" means bwrap can actually
 // create the sandbox here (a runner can have the binary but block user
 // namespaces), not that it is on PATH. CI's test-webplat installs it and sets
@@ -200,7 +220,7 @@ function writeTree(tree: FakeTree): string {
   return root;
 }
 
-describe.skipIf(!BIN)("#8623 acceptance — a tenant likec4 config never executes on the server render", () => {
+describe.skipIf(!LIKEC4_OK)("#8623 acceptance — a tenant likec4 config never executes on the server render", () => {
   it("H1 control: the SAME fixture run IN PLACE (server argv + env) executes the config", () => {
     const s = sentinelPath();
     const dir = writeTree(fixture({ "likec4.config.mjs": configThatWrites(s) }));
@@ -269,7 +289,7 @@ describe.skipIf(!BIN)("#8623 acceptance — a tenant likec4 config never execute
   }, 90_000);
 });
 
-describe.skipIf(!BIN)("#8623 acceptance — inputs outside the working tree", () => {
+describe.skipIf(!LIKEC4_OK)("#8623 acceptance — inputs outside the working tree", () => {
   it("the config-name list matches the installed likec4 dist (a bump that adds a name reds here)", () => {
     // Walk up from the resolved binary to the likec4 package root. The chunk
     // layout changed at 1.60.0: `dist/_chunks/src.mjs` → `dist/chunks/filenames.mjs`.
@@ -458,7 +478,7 @@ s.on("error", (e) => { out.net = e.code; console.log(JSON.stringify(out)); });
     expect(r.stdout).toMatch(/no_new_privs:\s*1/i);
   }, 60_000);
 
-  it("a source with elements but no `views {}` block still renders at least the index view", async () => {
+  it.skipIf(!LIKEC4_OK)("a source with elements but no `views {}` block still renders at least the index view", async () => {
     const noViews = `specification {
   element actor
 }
