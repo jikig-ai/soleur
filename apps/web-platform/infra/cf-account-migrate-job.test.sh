@@ -1467,6 +1467,17 @@ setup_norm_preread() { norm_case "preread-$1" false; printf '500' >"$LAST_D/recc
 setup_norm_differs() { norm_case "differs-$1" false; printf '.result.ttl = 300' >"$LAST_D/recfilter.post.$REC_ID"; }
 setup_norm_differs2() { setup_norm_differs "two-$1"; printf '.result.ttl = 300' >"$LAST_D/recfilter.post.$REC2_ID"; }
 setup_norm_404() { norm_case "nf-$1" false; printf '404' >"$LAST_D/reccode.post.$REC_ID"; }
+# The CNAME default (#13056): the post-apply re-read of a CNAME at {flatten_cname:false} passes; true halts.
+# The synthetic plan types every record TXT, so the case plans $CN_ADDR as a CNAME (the reads follow the plan).
+CN_ADDR=cloudflare_record.www; CN_ID="$(rec_id_of "$CN_ADDR")"
+[[ "$CN_ID" =~ ^[0-9a-f]{32}$ ]] || { printf '[FATAL] CNAME pin unreadable\n' >&2; exit 2; }
+norm_cn_case() { # <label>
+  norm_case "$1" false
+  jq --arg a "$CN_ADDR" '(.resource_changes[] | select(.address == $a) | .change) |= (.after.type = "CNAME" | .before.type = "CNAME")' \
+    "$LAST_D/plan.json" >"$LAST_D/p" && mv "$LAST_D/p" "$LAST_D/plan.json"
+}
+setup_norm_cn_default() { norm_cn_case "cnd-$1"; printf '.result.settings = {flatten_cname:false}' >"$LAST_D/recfilter.post.$CN_ID"; }
+setup_norm_cn_true() { norm_cn_case "cnt-$1"; printf '.result.settings = {flatten_cname:true}' >"$LAST_D/recfilter.post.$CN_ID"; }
 setup_norm_flaky() { norm_case "flaky-$1" false; : >"$LAST_D/reconce.post.$REC_ID"; }
 setup_norm_unread() { norm_case "unread-$1" false; printf '500' >"$LAST_D/reccode.post.$REC_ID"; }
 setup_norm_doppler() { norm_case "dopp-$1" false; : >"$LAST_D/mode.doppler_after_apply"; }
@@ -1564,6 +1575,7 @@ chk_norm_differs2() {
   refused_for "$1" import-normalize-reread-failed || { WHY="rc:$(rc_of "$1")"; return 1; }
   grep -qE "reread=differs=[^ ]*$REC_ADDR:ttl" "$1/out.txt" && grep -qE "reread=differs=[^ ]*$REC2_ADDR:ttl" "$1/out.txt" || { WHY="one-member"; return 1; }
 }
+chk_norm_cn_true() { chk_reread_fields "$1" "differs=$CN_ADDR:settings+settings:other" || return 1; [[ "$(rec_gets "$1" post "$CN_ID")" == 1 ]] || { WHY="retried"; return 1; }; }
 chk_norm_404() { chk_reread_fields "$1" "differs=$REC_ADDR:notfound" || return 1; [[ "$(rec_gets "$1" post "$REC_ID")" == 1 ]] || { WHY="retried"; return 1; }; }
 chk_norm_flaky() {
   [[ "$(rc_of "$1")" == 0 ]] || { WHY="rc:$(rc_of "$1")"; return 1; }
@@ -1810,6 +1822,8 @@ norm_row "N5 every differing record is named" setup_norm_differs2 chk_norm_diffe
 norm_row "N6 a post-apply 404 halts without a retry" setup_norm_404 chk_norm_404
 norm_row "N7 (H2) one unreadable pass then a clean one passes" setup_norm_flaky chk_norm_flaky
 norm_row "N8 unreadable through every pass halts" setup_norm_unread chk_norm_unread
+norm_row "N-cn1 a CNAME re-read at {flatten_cname:false} passes (the PATCH left the default)" setup_norm_cn_default chk_norm_apply
+norm_row "N-cn2 a CNAME re-read at {flatten_cname:true} halts on settings:other" setup_norm_cn_true chk_norm_cn_true
 norm_row "N9 (S1) Doppler failing on the re-read names all 26, never the pre-write responses" setup_norm_doppler chk_norm_doppler
 norm_row "N10 (S3) a token failing the shape guard makes no curl call and one attempt" setup_norm_badtoken chk_norm_badtoken
 norm_row "N11 apply-failed carries reread=ok before verify=" setup_norm_af chk_norm_af
@@ -2212,7 +2226,7 @@ verdict "$r" "no PATH fake refused an unmodeled call in any pristine run${bad:+ 
 # ---------------------------------------------------------------------------
 _pool_flush
 printf '\n'
-EXPECTED_CASES=299
+EXPECTED_CASES=301
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d (a case was skipped, deleted or added without bumping the floor)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1
