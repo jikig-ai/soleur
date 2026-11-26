@@ -102,6 +102,7 @@ apps/web-platform/test/parse-gitleaks-allowlists	307	measured
 plugins/soleur/scripts/admin-merge-ready.test.sh	18232	measured
 plugins/soleur/scripts/affected-tests.test.sh	42106	measured
 plugins/soleur/scripts/alpha-metrics.test.sh	546	measured
+plugins/soleur/scripts/completion-floor.test.sh	100	measured
 plugins/soleur/scripts/delegation-verify.test.sh	160016	measured
 plugins/soleur/scripts/emit-decision.test.sh	443	measured
 plugins/soleur/scripts/merge-effect-class.test.sh	12213	measured
