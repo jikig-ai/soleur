@@ -529,7 +529,7 @@ authentication for every visitor.
 prints field names and closed tokens only (`L28` pins that no record value reaches the output), and this
 change adds no output path.
 
-**Brand-survival threshold:** aggregate pattern. A DNS mis-apply would hit every visitor at once rather
+- **Brand-survival threshold:** aggregate pattern. A DNS mis-apply would hit every visitor at once rather
 than leak one user's data. The change narrows a refusal to one value that the CTO ruled the API default
 and the PATCH preserves, with every other value still refused.
 
@@ -591,7 +591,7 @@ logs:
   where: GitHub Actions logs of cf-account-migrate.yml and infra-validation.yml
   retention: GitHub Actions default log retention for the repository
 discoverability_test:
-  command: grep -c 'and $after.type == "CNAME" then empty' tests/scripts/lib/cf-account-migrate-gate.sh
+  command: grep -cF 'settings == {"flatten_cname":false} and' tests/scripts/lib/cf-account-migrate-gate.sh
   expected_output: "1"
 ```
 
