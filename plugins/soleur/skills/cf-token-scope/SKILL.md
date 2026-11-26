@@ -196,8 +196,10 @@ config-rules scope-gap post-mortem). They follow CTO ruling L49:
     never see `403`. The body is JSON naming one setting id that does not exist,
     `cf_token_scope_probe_nonexistent_setting`. The grant token's `400` on it is
     expected but not yet measured, which is why a `2xx` stays fatal. A grant
-    `400` with code 6007 (malformed JSON) means the body was never parsed, so the
-    row reads `inconclusive`, not `authorized`.
+    `400` that lists code 6007 (malformed JSON) anywhere, or a reply that is not
+    one JSON document, means the body was never parsed, so the row reads
+    `inconclusive`, not `authorized`. A pass prints the grant's code:
+    `authorized (PATCH 400, err <code> after a 403 control)`.
 
   Three guards keep the JSON body from naming a real setting, each exiting `2`
   before the write it protects:
@@ -212,14 +214,16 @@ config-rules scope-gap post-mortem). They follow CTO ruling L49:
     array of `{id,value}` items with `cf_token_scope_probe_`-prefixed ids.
   - At the write boundary, `mig_req` refuses `settings-json` on any request that
     is not a PATCH to the zone settings URL.
-  - A collision guard reads the zone's own settings list from the authorized GET
-    control. The list must be one JSON document whose `.result` is a non-empty
-    array of objects with string ids. If it lists an id of the probe body (exact
-    match), the run prints `probe=zone-rest verdict=refused
-    reason=probe-id-collision` and exits `2`. If the list cannot be evaluated,
-    it prints `reason=settings-list-unevaluable` and exits `2`. If the control
-    did not pass, or its list is empty, the settings row is skipped as
-    `inconclusive` (exit `3`).
+  - A collision guard reads the zone's own settings list from the GET control.
+    The static guard requires exactly one settings control for a profile that
+    sends the JSON body. If the control is not one authorized `200` JSON
+    document, or its list is empty, the settings row is skipped as
+    `inconclusive` (exit `3`). Otherwise the list is read item by item. If it
+    lists an id of the probe body (exact match), the run prints
+    `probe=zone-rest verdict=refused reason=probe-id-collision` and exits `2`. If
+    an item is not an object with a string id, it prints
+    `reason=settings-list-unevaluable` and exits `2`. Both refusals also print a
+    `probe=zone-rest refused-detail …` line on stdout.
 
   The script never sends an empty-rules ruleset: that body validates and wipes a
   live entrypoint.
@@ -228,10 +232,14 @@ config-rules scope-gap post-mortem). They follow CTO ruling L49:
   granted token's `400` count as `authorized`. If the denied token gets `400`, the
   endpoint may check the body before authorization, so the row is `inconclusive`
   and the grant token is not probed.
-- **Any `2xx` is fatal.** The run prints a sanitized summary of the write
-  response and the Doppler key name of the token that got it (never its value),
-  reads that endpoint back with the grant token, prints a sanitized summary of
-  the read-back, prints `probe=<profile> verdict=fatal-mutation` and exits `4`.
+- **Any `2xx` is fatal.** The run prints `probe=<profile> fatal …` with the
+  Doppler key name of the token that got it (never its value), then
+  `probe=<profile> write-response …` with a summary of the write response, reads
+  that endpoint back with the grant token and prints `probe=<profile> read-back …`,
+  then prints `probe=<profile> verdict=fatal-mutation` and exits `4`. All of them
+  are `probe=` lines, so the swap-0b wrapper keeps them. A summary keeps only
+  short `[A-Za-z0-9_.:+-]` strings and keys (anything else is `<redacted>`), and
+  names an empty body or a multi-document body instead of summarizing it.
   For a list, each summary carries `probe_id_listed`: whether any listed id
   starts with `cf_token_scope_probe_`. That is the fact the CTO dissent needs
   if the settings grant ever answers `200`.
@@ -255,7 +263,8 @@ config-rules scope-gap post-mortem). They follow CTO ruling L49:
 | zone-rest | `zones/<zone>/bot_management` (PUT) | `CF_API_TOKEN_BOT_MANAGEMENT` | `CF_API_TOKEN_ZONE_SETTINGS` | `INVALID_BODY` |
 
 Doppler is not probed: it is not a Cloudflare scope. The last stdout line is
-`probe=<profile> verdict=pass|denied|inconclusive|refused|fatal-mutation`. Record it in
+`probe=<profile> verdict=pass|denied|inconclusive|refused|fatal-mutation`; a `refused` line ends
+with `reason=probe-id-collision` or `reason=settings-list-unevaluable`. Record it in
 the PR thread. Any verdict other than `pass` blocks that phase's dispatch.
 
 ## Exit codes
@@ -269,9 +278,9 @@ the PR thread. Any verdict other than `pass` blocks that phase's dispatch.
   absent Doppler secret, or a refused internal table-integrity tripwire (source
   drift only, unreachable by argv; stderr-only and names the corruption). For
   `zone-rest`, also a refusal caused by the live zone's settings list (it lists
-  a probe id, or it cannot be evaluated). That one prints
-  `probe=zone-rest verdict=refused reason=<…>` on stdout; post it on #12931 and
-  stop.
+  a probe id, or an item in it is not an object with a string id). That one
+  prints `probe=zone-rest verdict=refused reason=<…>` on stdout; post it on
+  #12931 and stop. Every other exit-2 case prints no `probe=` line.
 - `3` — probe failed: a scope was dropped, degraded, or denied (assert mode: an
   LB row still `403` or anomalous; migration profiles: a write denied, or a
   control not established).

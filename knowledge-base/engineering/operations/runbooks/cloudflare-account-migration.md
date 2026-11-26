@@ -216,8 +216,10 @@ does:
 - A write probe sends **one of two fixed body literals, each built to be rejected**: a non-JSON literal for every
   row except the zone settings PATCH, and for that row (whose endpoint parses JSON before it checks authorization) a
   JSON body naming one nonexistent `cf_token_scope_probe_`-prefixed setting id. A `2xx` to either is still fatal
-  (exit 4). If the zone already lists that id, or its settings list cannot be read, the run prints
-  `probe=zone-rest verdict=refused` and exits 2 before any settings write. Never `{"rules":[]}` (which would wipe a
+  (exit 4). Before any write the run reads the zone's settings list. If it lists that id, the run prints
+  `probe=zone-rest verdict=refused reason=probe-id-collision` and exits 2. If an item in it is not an object with a
+  string id, it prints `reason=settings-list-unevaluable` and exits 2. If the settings read fails, is not one JSON
+  document, or returns an empty list, the settings row is skipped and the run exits 3 (`inconclusive`). Never `{"rules":[]}` (which would wipe a
   live entrypoint), never a body naming a real setting. It never `DELETE`s.
 - The old account and zone ids are refused before any request (exit 2); every write row targets the new zone or
   account.
@@ -238,8 +240,8 @@ on Pages projects. It also prints a whole-list audit (each entrypoint present or
 no write profile; swap-0b checks them active through `/user/tokens/verify` instead.
 
 Expected per row: `authorized (PUT 400 after a 403 control)` (or `POST`/`PATCH`), and the run line
-`probe=<phase> verdict=pass` with exit 0. `probe=<phase> verdict=denied` or `verdict=inconclusive` (exit 3) blocks that
-phase's dispatch. An entrypoint the audit reports present is recorded by id and imported, never overwritten.
+`probe=<phase> verdict=pass` with exit 0. `probe=<phase> verdict=denied` or `verdict=inconclusive` (exit 3), or
+`verdict=refused` (exit 2), blocks that phase's dispatch. An entrypoint the audit reports present is recorded by id and imported, never overwritten.
 
 ### Pre-checks on the new zone (read-only, after the 0b mint)
 
@@ -1064,8 +1066,13 @@ validation (Load Balancing #12983, DNSSEC #12982).
     stage.
   - `SOLEUR_CFAM_PROBE profile=<phase> verdict=not-pass`: the staged scope probe did not pass, so the swap wrote
     nothing. Read the `probe=<phase> verdict=…` line it relayed: `denied` means re-mint that key with the plan's
-    permission groups; `inconclusive` means re-run the stage; `fatal-mutation` is the write-probe stop (post the
-    read-back on #12931 and stop).
+    permission groups; `inconclusive` means read the relayed row lines first. A failed or empty settings control
+    (`settings control not established`) means re-run the stage. A settings grant `400` that was not parsed
+    (`inconclusive (grant got 400`) or a deny control that got `400` (`got 400, not 403`) means post it on #12931
+    and stop for a CTO re-ruling. `refused` (exit 2) is the collision guard: post the `verdict=refused reason=…`
+    line and its `refused-detail` line on #12931 and stop. `fatal-mutation` is the write-probe stop: post the
+    relayed `probe=<phase> fatal`, `write-response` and `read-back` lines on #12931 and stop. A `not-pass` with no
+    relayed `probe=` line is a usage error or a missing `_NEXT` secret: run the probe directly and read stderr.
   - `SOLEUR_CFAM_COPY_MISMATCH`: the stage stopped before any delete; copy `<KEY>_PREV` over `<KEY>` with the stdin
     pipe form, read it back, and re-run.
   - `SOLEUR_CFAM_SWAP_MISMATCH name=<KEY> kept=<KEY>_NEXT`: the copy read back equal but a re-read before the delete

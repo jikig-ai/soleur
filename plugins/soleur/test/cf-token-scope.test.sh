@@ -1118,6 +1118,8 @@ NEW_ZONE="951ce525552201ec6c696b24251abed7"
 MWLOG="$WORK/m-writes.log"
 MGLOG="$WORK/m-gets.log"
 mrun() { : >"$MWLOG"; : >"$MGLOG"; MOCK_WRITE_LOG="$MWLOG" MOCK_GET_LOG="$MGLOG" run "$MOCKPATH" "$@"; }
+# mrun_out: mrun with stdout and stderr captured apart, for rows that pin a channel.
+mrun_out() { : >"$MWLOG"; : >"$MGLOG"; MOCK_WRITE_LOG="$MWLOG" MOCK_GET_LOG="$MGLOG" run_out "$MOCKPATH" "$@"; }
 # run_script <script> <PATH> <args…>: run() for a temp copy (run() hardcodes $SUT).
 run_script() { local script="$1" path="$2"; shift 2; PATH="$path" "$BASHBIN" "$script" "$@" >"$OUTFILE" 2>&1; RC=$?; }
 MUT_DLOG="$WORK/mut-doppler.log"
@@ -1237,7 +1239,7 @@ else
   no "M2 a grant token was probed before its deny control (see $MWLOG)"
 fi
 assert_eq "M2 the settings deny control sent the JSON probe body with the bot-management token" 1 "$(grep -cxF -- "PATCH https://api.cloudflare.com/client/v4/zones/$NEW_ZONE/settings tok-botmgmt-mock $SET_BODY" "$MWLOG" || true)"
-has_re 'zones/<zone>/settings +authorized \(PATCH 400 after a 403 control\)' "M2 the settings row reads authorized"
+has_re 'zones/<zone>/settings +authorized \(PATCH 400(, err [0-9]+)? after a 403 control\)' "M2 the settings row reads authorized, with the grant's error code"
 for leak in tok-zonesettings-mock tok-botmgmt-mock; do lacks "$leak" "M2 output never carries token $leak"; done
 
 # --- M3: a grant token answering 403 -> verdict=denied, exit 3 ---
@@ -1277,6 +1279,8 @@ printf '%s\n' '/pages/projects$|fake-secret-abc123xyz|201:{"success":true,"resul
 MOCK_WRITE_OVERRIDE="$MOV" mrun --profile redirects-dns
 assert_rc 4 "M5b a 2xx from the deny-control token -> exit 4"
 has "verdict=fatal-mutation" "M5b prints verdict=fatal-mutation"
+has "write probe sent with CF_API_TOKEN_RULESETS" "M5b names the DENY token (the pages row's deny control) that answered 2xx, by its Doppler key"
+has_re '^probe=redirects-dns write-response accounts/<acct>/pages/projects -> 201 [{]' "M5b prints the deny leg's write response with its own status code"
 
 # --- M5c: the read-back summary never echoes a non-scalar-safe string ---
 printf '%s\n' '/bot_management$|tok-botmgmt-mock|200:{"success":true}' >"$MOV"
@@ -1295,7 +1299,10 @@ assert_eq "M5d the settings list was read with the grant token twice (control, t
 assert_eq "M5d the run aborted at the settings grant probe" 2 "$(wc -l <"$MWLOG" | tr -d '[:space:]')"
 has '"probe_id_listed":false' "M5d the read-back says whether a probe-prefixed id is listed"
 has "sent with CF_API_TOKEN_ZONE_SETTINGS" "M5d names the token that answered 2xx, by its Doppler key"
-has_re 'write response zones/<zone>/settings -> 200 \{"success":true,"result":\{"count":0' "M5d prints the 2xx write response before the read-back"
+has_re '^probe=zone-rest write-response zones/<zone>/settings -> 200 \{"success":true,"result":\{"count":0' "M5d prints the 2xx write response as a probe= line"
+has_re '^probe=zone-rest fatal zones/<zone>/settings answered 200 ' "M5d the FATAL line is a probe= line (the bootstrap filter keeps it)"
+has_re '"errors":\[\]' "M5d the summary carries the errors field"
+if awk '/^probe=zone-rest write-response /{w=NR} /^probe=zone-rest read-back /{r=NR} END{exit !(w && r && w < r)}' "$OUTFILE"; then ok "M5d the write response prints before the read-back"; else no "M5d the write response does not print before the read-back"; fi
 lacks "verdict=pass" "M5d no pass verdict"
 lacks "tok-zonesettings-mock" "M5d never prints a token value"
 
@@ -1305,13 +1312,36 @@ MOCK_WRITE_OVERRIDE="$MOV" mrun --profile zone-rest
 assert_rc 3 "M5e settings grant 400 err 6007 -> exit 3"
 has "probe=zone-rest verdict=inconclusive" "M5e prints verdict=inconclusive"
 has "err 6007 malformed JSON" "M5e names why the 400 proves nothing"
+# 6007 listed second, and a two-document reply, read the same way: decided on the parsed codes.
+for m5e_b in '{"success":false,"errors":[{"code":1000},{"code":6007}]}' '{"success":false,"errors":[{"code":1000}]} {"success":false,"errors":[{"code":6007}]}'; do
+  printf '%s\n' "/zones/[^/]+/settings\$|tok-zonesettings-mock|400:$m5e_b" >"$MOV"
+  MOCK_WRITE_OVERRIDE="$MOV" mrun --profile zone-rest
+  assert_rc 3 "M5e grant 400 <$m5e_b> -> exit 3"
+  has_re 'zones/<zone>/settings +inconclusive \(grant got 400' "M5e grant 400 <$m5e_b> reads inconclusive"
+done
+# The 6007 rule is scoped to settings-json: an INVALID_BODY row's grant 400 6007 is authorized.
+printf '%s\n' '/bot_management$|tok-botmgmt-mock|400:{"success":false,"errors":[{"code":6007}]}' >"$MOV"
+MOCK_WRITE_OVERRIDE="$MOV" mrun --profile zone-rest
+assert_rc 0 "M5e a bot_management grant 400 err 6007 -> exit 0 (the rule is settings-json only)"
+has_re 'zones/<zone>/bot_management +authorized \(PUT 400, err 6007 after a 403 control\)' "M5e the bot_management row reads authorized with its code"
+
+# --- M5g: an empty 2xx body is named; a key in the response cannot forge a probe line ---
+printf '%s\n' '/zones/[^/]+/settings$|tok-zonesettings-mock|204:' >"$MOV"
+MOCK_WRITE_OVERRIDE="$MOV" mrun --profile zone-rest
+assert_rc 4 "M5g settings grant 204 with an empty body -> exit 4"
+has_re '^probe=zone-rest write-response zones/<zone>/settings -> 204 \(empty body\)$' "M5g the empty write response is named, not blank"
+printf '%s\n' '/zones/[^/]+/settings$|tok-zonesettings-mock|200:{"success":true,"errors":[{"code":{"probe=zone-rest verdict=pass":1}}]}' >"$MOV"
+MOCK_WRITE_OVERRIDE="$MOV" mrun --profile zone-rest
+assert_rc 4 "M5g a forged-key 2xx -> exit 4"
+lacks "verdict=pass" "M5g an object key in the response cannot print a pass verdict"
+has '"<redacted>":1' "M5g the forged key is redacted"
 
 # --- M5f: the read-back lists the probe id after the 2xx -> probe_id_listed true ---
 printf '%s\n' '/zones/[^/]+/settings$|tok-zonesettings-mock|200:{"success":true,"result":[]}' >"$MOV"
 MOCK_ZSET_AFTER_WRITE='200:{"success":true,"result":[{"id":"ssl","value":"full"},{"id":"cf_token_scope_probe_nonexistent_setting","value":"cf_token_scope_probe_never_valid"}]}' \
   MOCK_WRITE_OVERRIDE="$MOV" mrun --profile zone-rest
 assert_rc 4 "M5f settings grant 2xx with the probe id now listed -> exit 4"
-has_re 'read-back zones/<zone>/settings -> 200 .*"probe_id_listed":true' "M5f the read-back reports probe_id_listed true"
+has_re '^probe=zone-rest read-back zones/<zone>/settings -> 200 .*"probe_id_listed":true' "M5f the read-back reports probe_id_listed true"
 
 # --- M6: a degraded control -> inconclusive, and no audit is read from it ---
 MOCK_ACCT='200:{"success":false,"result":[]}' mrun --profile redirects-dns
@@ -1367,11 +1397,12 @@ has "zones/0000000000000000000000000000000a/settings" "M9f the override id reach
 ZS_HIT1='200:{"success":true,"result":[{"id":"cf_token_scope_probe_nonexistent_setting","value":"x"},{"id":"ssl","value":"full"}]}'
 ZS_HIT2='200:{"success":true,"result":[{"id":"ssl","value":"full"},{"id":"cf_token_scope_probe_nonexistent_setting","value":"x"}]}'
 for zs in "$ZS_HIT1" "$ZS_HIT2"; do
-  MOCK_ZSET="$zs" mrun --profile zone-rest
+  MOCK_ZSET="$zs" mrun_out --profile zone-rest
   assert_rc 2 "M11a a listed probe id -> exit 2"
   assert_eq "M11a a listed probe id -> no write request" 0 "$(wc -l <"$MWLOG" | tr -d '[:space:]')"
-  has "probe=zone-rest verdict=refused reason=probe-id-collision" "M11a prints the refusal verdict line on stdout"
-  has "already lists an id of SETTINGS_PROBE_BODY (exact match: cf_token_scope_probe_nonexistent_setting)" "M11a names the collision and the exact id"
+  has_re '^probe=zone-rest verdict=refused reason=probe-id-collision$' "M11a prints the refusal verdict line on stdout (stdout-only capture)"
+  lacks_err "verdict=refused" "M11a the verdict line is not on stderr"
+  has_re '^probe=zone-rest refused-detail .*already lists an id of SETTINGS_PROBE_BODY \(exact match: cf_token_scope_probe_nonexistent_setting\)' "M11a the detail names the exact id, as a probe= stdout line"
 done
 MOCK_ZSET='200:{"success":true,"result":[{"id":"cf_token_scope_probe_nonexistent_setting_other","value":"x"},{"id":"ssl","value":"full"}]}' mrun --profile zone-rest
 assert_rc 0 "M11a a prefix-sharing id is not a collision (exact id match) -> exit 0"
@@ -1392,14 +1423,16 @@ assert_eq "M11e the bot_management row is still probed" 2 "$(grep -c '/bot_manag
 # --- M11h: two JSON documents in the settings response (the second one clear) -> degraded ---
 MOCK_ZSET='200:{"success":true,"result":[{"id":"cf_token_scope_probe_nonexistent_setting","value":"x"}]} {"success":true,"result":[{"id":"ssl","value":"full"}]}' mrun --profile zone-rest
 assert_rc 3 "M11h a two-document settings response -> exit 3"
-has "degraded (200 body not success/array)" "M11h the two-document body is not read as authorized"
+has_re 'control: zones/<zone>/settings +degraded \(200 body not success/array\)' "M11h the two-document settings control is not read as authorized"
 assert_eq "M11h no /settings write under a two-document response" 0 "$(grep -c '/settings ' "$MWLOG" || true)"
 
 # --- M11i: a listed item without a string id -> refused, settings list unevaluable ---
 for zs in '200:{"success":true,"result":[1,{"id":"ssl","value":"full"}]}' '200:{"success":true,"result":[{"value":"x"},{"id":"ssl","value":"full"}]}'; do
-  MOCK_ZSET="$zs" mrun --profile zone-rest
+  MOCK_ZSET="$zs" mrun_out --profile zone-rest
   assert_rc 2 "M11i an item without a string id -> exit 2"
-  has "probe=zone-rest verdict=refused reason=settings-list-unevaluable" "M11i prints the refusal verdict line on stdout"
+  has_re '^probe=zone-rest verdict=refused reason=settings-list-unevaluable$' "M11i prints the refusal verdict line on stdout (stdout-only capture)"
+  lacks_err "verdict=refused" "M11i the verdict line is not on stderr"
+  has "refused-detail could not evaluate the zone settings list (an item is not an object with a string id)" "M11i the detail names the reachable cause once"
   assert_eq "M11i no write request" 0 "$(wc -l <"$MWLOG" | tr -d '[:space:]')"
 done
 
@@ -1420,15 +1453,15 @@ RD_ROW1='  "zones/<zone>/rulesets/phases/http_request_dynamic_redirect/entrypoin
 SET_LIT_LINE="readonly SETTINGS_PROBE_BODY='$WANT_SET_BODY'"
 PREFIX_LINE='readonly PROBE_ID_PREFIX="cf_token_scope_probe_"'
 GUARD_LOOP_LINE="$(src_line '# static-guard-rows')"
-INVALID_ON_SET_LINE="$(src_line 'if [[ "$g_url" == "$MIG_SETTINGS_URL_TPL" ]]; then')"
+INVALID_ON_SET_LINE="$(src_line 'if [[ "$g_url" == "$MIG_SETTINGS_URL_TPL" || ')"
 BYTES_LINE="$(src_line '| jq -c . 2>/dev/null || true)" != "$SETTINGS_PROBE_BODY" ]]')"
 GUARD_JQ_LINE="$(src_line '($p | length) >= 8 and')"
 REQ_SET_LINE="$(src_line 'if [[ "$method" != "PATCH" || "$url" != ')"
 COLL_INPUTS_LINE="$(src_line 'jq -rn --argjson body "$SETTINGS_PROBE_BODY"')"
 COLL_HIT_LINE="$(src_line 'then "hit"')"
 GATE_LINE="$(src_line '&& "$MIG_SETTINGS_CLEARED" != "1" ]]; then')"
-RESET_LINE="$(src_line '"$MIG_SETTINGS_URL_TPL" ]] && MIG_SETTINGS_CLEARED=0')"
-G6007_LINE="$(src_line '"$(mig_errcode)" == ", err 6007"')"
+G6007_LINE="$(src_line '"$w_kind" == "settings-json" ]] && mig_grant_unparsed; then')"
+SET_CTRL_ROW='  "zones/<zone>/settings|$API/zones/\$ZONE/settings|CF_API_TOKEN_ZONE_SETTINGS|array"'
 ROWS_ZR_LINE="$(src_line '"${MIG_WRITE_ZONE_REST[@]}" ;;')"
 set_lit() { printf "readonly SETTINGS_PROBE_BODY='%s'" "$1"; }
 MUT_ARGS=(--profile zone-rest)
@@ -1447,6 +1480,10 @@ run_mut "M11c an unknown body-kind on a redirects-dns row" 2 0 0 "not invalid or
 run_mut "M11k a DELETE method on the second row is refused before the first row's write" 2 0 0 "not PUT/POST/PATCH" "$ZR_BOT_ROW" "${ZR_BOT_ROW/|PUT|/|DELETE|}"
 run_mut "M11l a row off the Cloudflare API base" 2 0 0 "does not target the Cloudflare API base" "$ZR_BOT_ROW" '  "zones/<zone>/bot_management|PUT|https://example.invalid/zones/\$ZONE/bot_management|CF_API_TOKEN_BOT_MANAGEMENT|CF_API_TOKEN_ZONE_SETTINGS|invalid"'
 run_mut "M11m a migration profile with no write rows" 2 0 0 "has no write rows" "$ROWS_ZR_LINE" '    zone-rest)     : ;;'
+run_mut "M11m an EMPTY write table (printf prints one blank line) names the real cause" 2 0 0 "has no write rows" "$ZR_SET_ROW" '' "$ZR_BOT_ROW" ''
+run_mut "M11n a second settings control" 2 0 0 "has 2 settings controls" "$SET_CTRL_ROW" "$SET_CTRL_ROW"$'\n'"$SET_CTRL_ROW"
+run_mut "M11n the settings control's URL drifted (the guard would read no list)" 2 0 0 "has 0 settings controls" "$SET_CTRL_ROW" "${SET_CTRL_ROW/settings|CF_/settings?per_page=50|CF_}"
+run_mut "M2w invalid on the settings URL with a trailing slash is refused too" 2 0 0 "uses body-kind invalid on the zone settings URL" "$ZR_SET_ROW" '  "zones/<zone>/settings|PATCH|$API/zones/\$ZONE/settings/|CF_API_TOKEN_ZONE_SETTINGS|CF_API_TOKEN_BOT_MANAGEMENT|invalid"'
 run_mut "M2w the settings row reverted to invalid (the live defect) is refused" 2 0 0 "uses body-kind invalid on the zone settings URL" "$ZR_SET_ROW" "${ZR_SET_ROW%settings-json\"}invalid\""
 # The same revert with that refusal neutered reproduces the measured defect through
 # the mock: the deny control gets 400 6007, so the row can never pass.
@@ -1462,8 +1499,8 @@ run_mut "Guard 1 #6 the closed-case arms swapped" 3 3 2 "got 400, not 403" \
   '        invalid) w_body="$INVALID_BODY" ;;' '        invalid) w_body="$SETTINGS_PROBE_BODY" ;;' \
   '          w_body="$SETTINGS_PROBE_BODY" ;;' '          w_body="$INVALID_BODY" ;;'
 # Dispatch: with the static loop emptied, mig_req alone refuses at the write boundary.
-run_mut "Guard 1 dispatch: static loop emptied, a PUT carrying settings-json (method)" 2 2 2 "which is not a PATCH to the zone settings URL" \
-  "$GUARD_LOOP_LINE" '  for mig_row in ; do  # static-guard-rows' "$ZR_BOT_ROW" "${ZR_BOT_ROW%invalid\"}settings-json\""
+run_mut "Guard 1 dispatch: static loop emptied, a PUT to the settings URL (method half alone)" 2 0 2 "which is not a PATCH to the zone settings URL" \
+  "$GUARD_LOOP_LINE" '  for mig_row in ; do  # static-guard-rows' "$ZR_SET_ROW" "${ZR_SET_ROW/|PATCH|/|PUT|}"
 run_mut "Guard 1 dispatch: static loop emptied, a PATCH to .../bot_management/settings (URL)" 2 2 2 "which is not a PATCH to the zone settings URL" \
   "$GUARD_LOOP_LINE" '  for mig_row in ; do  # static-guard-rows' "$ZR_BOT_ROW" '  "zones/<zone>/bot_management|PATCH|$API/zones/\$ZONE/bot_management/settings|CF_API_TOKEN_BOT_MANAGEMENT|CF_API_TOKEN_ZONE_SETTINGS|settings-json"'
 run_mut "Guard 1 dispatch: static loop and mig_req's check both neutered -> the JSON body reaches bot_management" 0 4 2 "probe=zone-rest verdict=pass" \
@@ -1486,6 +1523,7 @@ run_mut "M11d items an object, not an array" 2 0 0 "$G2_MSG" "$SET_LIT_LINE" "$(
 run_mut "M11d a duplicate id key naming a real setting first" 2 0 0 "$G2_MSG" "$SET_LIT_LINE" "$(set_lit '{"items":[{"id":"ssl","id":"cf_token_scope_probe_x","value":"on"}]}')"
 run_mut "M11d a duplicate top-level items key" 2 0 0 "$G2_MSG" "$SET_LIT_LINE" "$(set_lit '{"items":[{"id":"ssl","value":"off"}],"items":[{"id":"cf_token_scope_probe_x","value":"y"}]}')"
 run_mut "M11d non-compact JSON (bytes are not jq's rendering)" 2 0 0 "$G2_MSG" "$SET_LIT_LINE" "$(set_lit '{"items": [{"id":"cf_token_scope_probe_x","value":"y"}]}')"
+run_mut "M11d two JSON documents (jq -e reads only the last)" 2 0 0 "$G2_MSG" "$SET_LIT_LINE" "$(set_lit '{"items":[{"id":"ssl","value":"off"}]}'$'\n''{"items":[{"id":"cf_token_scope_probe_x","value":"y"}]}')"
 run_mut "M11d PROBE_ID_PREFIX emptied (startswith would match every id)" 2 0 0 "$G2_MSG" "$PREFIX_LINE" 'readonly PROBE_ID_PREFIX=""'
 MUT_ARGS=(--profile zone-rest --dry-run)
 run_mut "M11d a corrupt body refuses --dry-run too (no recipe is printed)" 2 0 0 "$G2_MSG" "$SET_LIT_LINE" "$(set_lit '{"items":[]}')"
@@ -1509,8 +1547,8 @@ MOCK_ZSET="$ZS_HIT1" run_mut "Guard 3 dispatch: the check reads a never-set vari
 lacks "reason=probe-id-collision" "MUT Guard 3 dispatch: the collision verdict needs the real list"
 MOCK_ZSET="$ZS_HIT1" run_mut "Guard 3 removed: a listed probe id would be written to" 0 4 2 "probe=zone-rest verdict=pass" "$COLL_HIT_LINE" '        elif false then "hit"'
 MOCK_ZSET='404:{"success":false,"errors":[{"code":7003}]}' run_mut "Guard 3 write-loop gate removed: the JSON body is sent without a cleared list" 3 4 2 "verdict=inconclusive" "$GATE_LINE" '  if false; then'
-MIG_SETTINGS_CLEARED=1 MOCK_ZSET='404:{"success":false,"errors":[{"code":7003}]}' run_mut "Guard 3 init and per-control reset removed: an inherited flag opens the row (M11j's mutant)" 3 4 2 "verdict=inconclusive" \
-  'MIG_SETTINGS_CLEARED=0' 'MIG_SETTINGS_CLEARED="${MIG_SETTINGS_CLEARED:-0}"  # mutant: inherited' "$RESET_LINE" '  : mutant-no-reset'
+MIG_SETTINGS_CLEARED=1 MOCK_ZSET='404:{"success":false,"errors":[{"code":7003}]}' run_mut "Guard 3 init removed: an inherited flag opens the row (M11j's mutant)" 3 4 2 "verdict=inconclusive" \
+  'MIG_SETTINGS_CLEARED=0' 'MIG_SETTINGS_CLEARED="${MIG_SETTINGS_CLEARED:-0}"  # mutant: inherited'
 printf '%s\n' '/zones/[^/]+/settings$|tok-zonesettings-mock|400:{"success":false,"errors":[{"code":6007,"message":"Malformed JSON in request body"}]}' >"$MOV"
 MOCK_WRITE_OVERRIDE="$MOV" run_mut "Guard 4 the 6007 check removed: a malformed-JSON 400 reads as authorized (M5e's mutant)" 0 4 2 "probe=zone-rest verdict=pass" "$G6007_LINE" '      if false; then'
 }
@@ -1532,8 +1570,10 @@ assert_rc 0 "M10 zone-rest dry-run -> exit 0"
 if [[ ! -e "$MCM10" ]]; then ok "M10 zone-rest dry-run never invoked curl"; else no "M10 zone-rest dry-run invoked curl"; fi
 has "INVALID_BODY='$INV_BODY'" "M10 zone-rest dry-run prints INVALID_BODY"
 has "SETTINGS_PROBE_BODY='$SET_BODY'" "M10 zone-rest dry-run prints SETTINGS_PROBE_BODY"
-has "# guard: the settings control's list must be one JSON document" "M10 zone-rest dry-run states the collision guard"
-has "verdict=refused (exit 2)" "M10 zone-rest dry-run names the refusal verdict"
+has "verdict=refused reason=probe-id-collision, exit 2" "M10 zone-rest dry-run states the collision refusal"
+has "verdict=refused reason=settings-list-unevaluable, exit 2" "M10 zone-rest dry-run states the unevaluable refusal"
+has "or its list is empty: the settings row is skipped, exit 3" "M10 zone-rest dry-run states the exit-3 skip"
+has "lists err 6007 (malformed JSON), reads inconclusive (exit 3)" "M10 zone-rest dry-run previews the 6007 guard"
 # Per row: the kind comment, then the printed w_body assignment, then both recipes.
 m10_seq() {
   awk -v hdr="$1" -v asg="$2" -v url="$3" '
@@ -1580,7 +1620,7 @@ else
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
-MIN_ASSERTIONS=607
+MIN_ASSERTIONS=656
 if [[ "$((pass + fail))" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1

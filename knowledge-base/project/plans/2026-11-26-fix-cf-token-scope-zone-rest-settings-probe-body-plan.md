@@ -219,7 +219,9 @@ Revisions`).
    also refuses (exit 2) unless `"$url" == "$API/zones/$MIG_ZONE/settings"` (one line at the real write boundary).
    `w_body` is declared `local` with no initializer. The ONE write curl keeps its shape with
    `--data-binary "$w_body"`. `mig_req` stays called directly (never inside `$(…)`), so `exit 2` ends the script.
-5. **Collision guard, after the controls, before the first write.** Initialize `MIG_SETTINGS_LIST=""` and
+5. **Collision guard, after the controls, before the first write.** *(Superseded at review: the shipped guard runs
+   inside the settings control arm as `mig_settings_check`; see the note under Guard Contract.)* Initialize
+   `MIG_SETTINGS_LIST=""` and
    `MIG_SETTINGS_CTRL_OK=0` next to `MIG_CTRL_OK=1` (`set -u`, and an exported value must never be inherited). In
    the control loop's authorized arm, the `zones/*/settings)` case sets `MIG_SETTINGS_LIST="$BODY"` and
    `MIG_SETTINGS_CTRL_OK=1` only when `.result` is a NON-EMPTY array. A real zone always lists settings, so an
@@ -344,56 +346,28 @@ Run `bash plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh --profi
 `main` checkout and post the verdict lines on #12931, always including the settings row's grant status and error
 code. Route by outcome; in every branch `swap-0b` stays held until its own typed authorization:
 
+Read the exit code first, then the `probe=zone-rest verdict=` line, then the per-row report lines. When several
+exit-3 rows match, post all of them and take the first matching row below as the route. Each row is keyed on text the
+script prints.
+
 | Outcome | Action |
 |---|---|
-| exit 0, `verdict=pass` | Report swap-0b unblocked. If the grant's code differs from the mock's assumed 400 body, correct the mock in a follow-up PR |
-| exit 4, `verdict=fatal-mutation` | No re-run. Post the read-back; re-consult the CTO (recorded dissent: GET control plus a separate permission-group check) |
-| exit 3, deny control did not get 403 on the settings row | A different failure (bulk endpoint EOL, or the wrapper format): post it and re-consult the CTO |
-| exit 3, grant did not get 400 (or was denied) | Post it and re-consult the CTO |
-| exit 3, settings control inconclusive or degraded (not 200, or an empty list), settings row skipped | Post it; check the `CF_API_TOKEN_ZONE_SETTINGS` read scope, then re-run. No re-ruling needed |
-| exit 3, grant got 400 err 6007 on the settings row | The JSON body was not parsed: post it and re-consult the CTO |
-| exit 2, `verdict=refused reason=probe-id-collision` | Post the stdout line and the stderr; changing the probe id needs a re-ruling |
-| exit 2, `verdict=refused reason=settings-list-unevaluable` | Post it; the list shape changed. Re-consult the CTO before any re-run |
-
-## Files to Edit
-
-- `plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh` — Proposed Solution 1-8.
-- `plugins/soleur/test/cf-token-scope.test.sh` — mock fidelity, body constants at one site, D12c canon/allowlist/
-  anchors/assignment pin, new M-series cases, mutants, `MIN_ASSERTIONS`.
-- `plugins/soleur/skills/cf-token-scope/SKILL.md` — Usage intro, Migration profiles bullet + table, exit 4.
-- `knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md` — the L49 write-probe bullet.
-
-## Files to Create
-
-- `knowledge-base/project/specs/feat-one-shot-12931-zone-rest-settings-probe/decision-challenges.md` (the CTO
-  ruling row) and `tasks.md` (planning artifacts only).
-
-## Open Code-Review Overlap
-
-None. `gh issue list --label code-review --state open` (96 issues) was searched for all four planned paths and for
-`cf-token-scope`; no body matches.
-
-## User-Brand Impact
-
-- **If this lands broken, the user experiences:** nothing directly. The probe is an operator-run gate. A false
-  `inconclusive` keeps the docs-site zone migration blocked (today's state). A false `pass` would let `zone-rest`
-  apply with a token lacking Zone Settings:Edit, which fails at apply time and enters the runbook's Halt path,
-  delaying zone-settings parity (SSL mode, Bot Fight Mode off) on the new zone.
-- **If this leaks, the user's data / workflow / money is exposed via:** no user data is touched. The only secret
-  surface is the Cloudflare tokens, which the existing private-fd header and `lacks` checks keep off argv and
-  output; this change adds no output of token material.
-- **Brand-survival threshold:** `none`
-- **Threshold decision (challengeable):** a diagnostic with fail-closed verdicts, whose worst wrong answer
-  surfaces when the CI migration workflow runs the phase, under the runbook's existing Halt; the JSON body cannot
-  name a real setting, so no path mutates production zone settings.
-- `threshold: none, reason: the diff touches no sensitive path (plugins/soleur/skills/cf-token-scope/**, its test,
-  SKILL.md and a runbook) and changes only the request body of an operator-run probe.`
+| exit 0, `verdict=pass` | Report swap-0b unblocked. Post the settings row's `authorized (PATCH 400, err <code> after a 403 control)` line. If `<code>` differs from the mock's assumed 400 body, correct the mock in a follow-up PR |
+| exit 4, `verdict=fatal-mutation` | No re-run. Post the `probe=zone-rest fatal`, `write-response` and `read-back` lines (all `probe=` lines, so the swap-0b wrapper keeps them); re-consult the CTO (recorded dissent: GET control plus a separate permission-group check) |
+| exit 2, `verdict=refused reason=probe-id-collision` | Post it with its `probe=zone-rest refused-detail` line; changing the probe id needs a re-ruling |
+| exit 2, `verdict=refused reason=settings-list-unevaluable` | Post it with its `refused-detail` line; the list shape changed. Re-consult the CTO before any re-run |
+| exit 2, no `probe=` line | Not a probe verdict: a usage error, a missing `_NEXT` secret, or table corruption. Read stderr, fix that, re-run |
+| exit 3, `control: zones/<zone>/settings denied (…)` or `degraded (…)`, settings row `inconclusive (settings control not established` | The settings read failed or returned an empty list. Check the `CF_API_TOKEN_ZONE_SETTINGS` read scope, then re-run. No re-ruling needed |
+| exit 3, `zones/<zone>/settings inconclusive (grant got 400` | The JSON body was not parsed (err 6007, or not one JSON document): post it and re-consult the CTO |
+| exit 3, `zones/<zone>/settings inconclusive (… got 400, not 403` | The deny control did not get 403 on the settings row (bulk endpoint EOL, or the wrapper format): post it and re-consult the CTO |
+| exit 3, `zones/<zone>/settings denied (…)` | The grant token lacks Zone Settings Edit: post it and re-consult the CTO |
+| exit 3, any `zones/<zone>/bot_management` line not `authorized` | The bot_management row failed (its deny control or its grant): post it; re-mint `CF_API_TOKEN_BOT_MANAGEMENT_NEXT` only if its grant reads `denied` |
 
 ## Observability
 
 ```yaml
 liveness_signal:
-  what: the probe's last stdout line, probe=zone-rest verdict=pass|denied|inconclusive|fatal-mutation, plus its exit code (0/3/4, 2 for a refused table or body)
+  what: the probe's last stdout line, probe=zone-rest verdict=pass|denied|inconclusive|refused|fatal-mutation (refused carries reason=probe-id-collision|settings-list-unevaluable), plus its exit code (0/3/4; 2 for refused, or with no probe= line for a refused table or body)
   cadence: per run (before swap-0b, and once post-merge by the agent; swap-0b runs it itself)
   alert_target: the #12931 thread (the agent posts the verdict lines); swap-0b refuses on anything but exit 0 plus the exact verdict=pass line
   configured_in: plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh (verdict echo lines) and the bootstrap run_scope_probe consumer
@@ -432,6 +406,13 @@ The command sends nothing (dry-run exits before the prerequisite loop and every 
 under a second.
 
 ## Guard Contract
+
+> **Superseded in part 2026-11-26 (review and fix round, PR #13076):** the collision check now runs inside the
+> settings control arm (`mig_settings_check`), the write loop gates on `MIG_SETTINGS_CLEARED` (initialized 0, set
+> only by a clear list), `MIG_SETTINGS_LIST` and the separate collision step are gone, the static guard reads every
+> migration profile and requires exactly one settings control, and a hit or an unevaluable list prints
+> `probe=zone-rest verdict=refused reason=…`. The rows below record the planned contract; the shipped one is the
+> script plus its `M11*`/`Guard *` test rows.
 
 Every mutant below is one `run_mut` (or `d12c_mut`) line on a temp copy of the script, run through the mock; the
 live tree is never edited.
@@ -595,7 +576,7 @@ commit.
 - [ ] AC5. In the zone-rest happy path the write log holds exactly 4 lines: exactly 2 `/settings` PATCH lines carrying SET_BODY and exactly 2 `/bot_management` PUT lines carrying INV_BODY (counted, so an empty or short log fails); in redirects-dns all `2 * MW_RD_N` lines carry INV_BODY.
 - [ ] AC6. Each of: body not JSON / `{"items":[]}` / JSON array / a non-prefixed second item / unknown body-kind / `settings-json` on another URL (first or third row) → exit 2, empty write log, no Doppler read.
 - [ ] AC7. A settings list containing the probe id (first or second element) → exit 2 with an empty write log; a list with only prefix-sharing ids → exit 0.
-- [ ] AC8. Settings control 404 → no write to `/settings`, row reads `inconclusive (settings control not authorized`, exit 3, and the bot_management row is still probed.
+- [ ] AC8. Settings control 404 → no write to `/settings`, row reads `inconclusive (settings control not established`, exit 3, and the bot_management row is still probed.
 - [ ] AC9. A 200 to the settings grant probe → exit 4 and `verdict=fatal-mutation`; the GET log carries `GET …/zones/<new>/settings tok-zonesettings-mock` exactly twice (the control, then the read-back), and the write log stops at 2 lines.
 - [ ] AC10. `--profile zone-rest --dry-run` prints both literal lines, `(body-kind settings-json)` then a printed `w_body="$SETTINGS_PROBE_BODY"` line before the settings recipes and `(body-kind invalid)` then `w_body="$INVALID_BODY"` before the bot recipes, sends no curl, and leaks no token; D-pc recipe counts are unchanged.
 - [ ] AC11. `grep -rniE 'one fixed invalid|fixed-invalid-body|invalid-body' plugins/soleur/skills/cf-token-scope knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md` returns nothing, and the header, SKILL.md and runbook state the two-literal rule.

@@ -56,12 +56,15 @@
 #      methods; body-kinds; the settings URL; the body's exact bytes and shape),
 #      mig_req's method+URL refusal at the write boundary, and a collision guard
 #      on the zone's own settings list (the authorized GET control), which
-#      prints probe=<profile> verdict=refused on a hit. Never an empty-rules
+#      prints probe=<profile> verdict=refused reason=probe-id-collision on a
+#      hit and reason=settings-list-unevaluable on a list it cannot read item
+#      by item. Never an empty-rules
 #      ruleset body (that PUT validates and replaces a live entrypoint with
 #      nothing), never a body naming a real setting;
-#   2. any 2xx answer is a FATAL abort (exit 4) followed by an immediate GET
-#      read-back of that endpoint, so a mutation that should be impossible is
-#      surfaced with its evidence rather than discovered later;
+#   2. any 2xx answer is a FATAL abort (exit 4): the write response, then a GET
+#      read-back of that endpoint, are printed as probe= lines, so a mutation
+#      that should not happen is surfaced with its evidence rather than
+#      discovered later;
 #   3. every write row first sends the same body with a KNOWN-DENIED token (a
 #      sibling token that lacks the scope) and must see 403 before the granted
 #      token's 400 counts as "authorized" — otherwise the endpoint may be
@@ -266,9 +269,10 @@ Exit codes:
      missing prerequisite binary, absent Doppler secret, a refused internal
      table-integrity tripwire (source drift; stderr-only, names the corruption),
      or (zone-rest) a refusal on the live zone's settings list: it names the
-     probe id, or it cannot be evaluated. That refusal prints
+     probe id, or an item in it is not an object with a string id. That refusal prints
      probe=zone-rest verdict=refused reason=<probe-id-collision|settings-list-unevaluable>
-     on stdout; post it on #12931 and stop.
+     on stdout (with a probe=zone-rest refused-detail line); post it on #12931 and
+     stop. Every other exit-2 case prints no probe= line.
   3  probe failed — a scope was dropped, degraded, or denied (assert mode: an LB
      row still 403 or anomalous; migration profiles: a write denied, or a
      control not established, so a 400 could not be trusted)
@@ -367,7 +371,7 @@ fi
 
 # Runtime tripwire (L49): the write-probe body must never parse as JSON. Checked
 # before anything else runs so a source edit that made it valid can never send it.
-if command -v jq >/dev/null 2>&1 && printf '%s' "$INVALID_BODY" | jq -e . >/dev/null 2>&1; then
+if command -v jq >/dev/null 2>&1 && printf '%s' "$INVALID_BODY" | jq -n -e '[inputs] | length > 0' >/dev/null 2>&1; then
   echo "cf-token-scope: INVALID_BODY parses as JSON (table corruption — a write probe must never carry a body that can validate)" >&2
   exit 2
 fi
@@ -406,7 +410,9 @@ mig_uses_settings_json() {
 # refusing before the first write of ANY row.
 for mig_p in "${PROFILES[@]}"; do
   is_migration_profile "$mig_p" || continue
-  mapfile -t mig_rows < <(mig_write_rows "$mig_p")
+  # Blank lines are dropped: printf '%s\n' over an EMPTY array prints one.
+  mig_rows=()
+  while IFS= read -r mig_r; do [[ -n "$mig_r" ]] && mig_rows+=("$mig_r"); done < <(mig_write_rows "$mig_p")
   if [[ "${#mig_rows[@]}" -eq 0 ]]; then
     echo "cf-token-scope: migration profile '$mig_p' has no write rows (table corruption)" >&2
     exit 2
@@ -424,13 +430,13 @@ for mig_p in "${PROFILES[@]}"; do
     fi
     case "$g_kind" in
       invalid)
-        if [[ "$g_url" == "$MIG_SETTINGS_URL_TPL" ]]; then
+        if [[ "$g_url" == "$MIG_SETTINGS_URL_TPL" || "$g_url" == "$MIG_SETTINGS_URL_TPL"[/?#]* ]]; then
           echo "cf-token-scope: write row '$g_label' uses body-kind invalid on the zone settings URL (table corruption — that endpoint parses JSON before it authorizes, so INVALID_BODY gets 400 for every token and the deny control can never answer 403)" >&2
           exit 2
         fi ;;
       settings-json)
         if [[ "$g_method" != "PATCH" || "$g_url" != "$MIG_SETTINGS_URL_TPL" ]]; then
-          echo "cf-token-scope: write row '$g_label' uses body-kind settings-json off the zone settings PATCH (table corruption — SETTINGS_PROBE_BODY is sent to PATCH \$API/zones/\$ZONE/settings only)" >&2
+          echo "cf-token-scope: write row '$g_label' uses body-kind settings-json off the zone settings PATCH (table corruption — SETTINGS_PROBE_BODY is sent to PATCH $MIG_SETTINGS_URL_TPL only)" >&2
           exit 2
         fi ;;
       *)
@@ -438,19 +444,33 @@ for mig_p in "${PROFILES[@]}"; do
         exit 2 ;;
     esac
   done
+  # A profile that sends SETTINGS_PROBE_BODY reads exactly ONE settings control:
+  # the collision guard runs on that control's list, so a drifted control URL
+  # (or a second one) would leave the guard reading the wrong list, or none.
+  if mig_uses_settings_json "$mig_p"; then
+    mig_nc=0
+    while IFS='|' read -r _c_label c_url _c_key _c_want; do
+      [[ "$c_url" == "$MIG_SETTINGS_URL_TPL" ]] && mig_nc=$((mig_nc + 1))
+    done < <(mig_ctrl_rows "$mig_p")
+    if [[ "$mig_nc" -ne 1 ]]; then
+      echo "cf-token-scope: migration profile '$mig_p' sends SETTINGS_PROBE_BODY but has $mig_nc settings controls on $MIG_SETTINGS_URL_TPL, not exactly 1 (table corruption)" >&2
+      exit 2
+    fi
+  fi
 done
-unset mig_p mig_rows mig_row g_label g_method g_url _g_grant _g_deny g_kind
+unset mig_p mig_r mig_rows mig_row mig_nc g_label g_method g_url _g_grant _g_deny g_kind _c_label c_url _c_key _c_want
 # SETTINGS_PROBE_BODY: its bytes must be jq's own compact rendering of it (jq keeps
 # the LAST of two duplicate keys and drops the rest, so a body with a duplicate key
 # cannot round-trip), and its shape is an object whose only key is a non-empty
-# items array of exactly-{id,value} items with probe-prefixed string ids. Gated on
+# items array of exactly-{id,value} items with probe-prefixed string ids, in ONE
+# JSON document (jq -e takes its status from the last document). Gated on
 # jq as the INVALID_BODY tripwire is: without jq only --dry-run can run, and it
 # sends nothing.
 if command -v jq >/dev/null 2>&1; then
   if [[ "$(printf '%s' "$SETTINGS_PROBE_BODY" | jq -c . 2>/dev/null || true)" != "$SETTINGS_PROBE_BODY" ]] \
-     || ! printf '%s' "$SETTINGS_PROBE_BODY" | jq -e --arg p "$PROBE_ID_PREFIX" \
-       '($p | length) >= 8 and type == "object" and keys == ["items"] and (.items | type == "array" and length > 0) and all(.items[]; type == "object" and keys == ["id","value"] and (.id | type == "string" and startswith($p)))' >/dev/null 2>&1; then
-    echo "cf-token-scope: SETTINGS_PROBE_BODY is not probe-shaped (table corruption — it must be compact JSON with no duplicate key, an object whose only key is a non-empty items array of {id,value} items, every id starting $PROBE_ID_PREFIX)" >&2
+     || ! printf '%s' "$SETTINGS_PROBE_BODY" | jq -n -e --arg p "$PROBE_ID_PREFIX" \
+       '[inputs] | length == 1 and (.[0] | ($p | length) >= 8 and type == "object" and keys == ["items"] and (.items | type == "array" and length > 0) and all(.items[]; type == "object" and keys == ["id","value"] and (.id | type == "string" and startswith($p))))' >/dev/null 2>&1; then
+    echo "cf-token-scope: SETTINGS_PROBE_BODY is not probe-shaped (table corruption — it must be one compact JSON document with no duplicate key, an object whose only key is a non-empty items array of {id,value} items, every id starting $PROBE_ID_PREFIX)" >&2
     exit 2
   fi
 fi
@@ -467,7 +487,7 @@ if is_migration_profile "$PROFILE" && [[ "$DRY_RUN" -eq 1 ]]; then
     printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$$(mig_key "$c_key")\") $(mig_url "$c_url")"
   done < <(mig_ctrl_rows "$PROFILE")
   if [[ "$mig_dry_json" == "1" ]]; then
-    printf '%s\n' "# guard: the settings control's list must be one JSON document of {id,…} items, non-empty, and must not list an id of SETTINGS_PROBE_BODY (exact match); otherwise the run prints probe=$PROFILE verdict=refused (exit 2) or skips the settings row (exit 3), before any settings write"
+    printf '%s\n' "# guard: before any write, the settings control's list is read item by item. It lists an id of SETTINGS_PROBE_BODY (exact match): probe=$PROFILE verdict=refused reason=probe-id-collision, exit 2. An item is not an object with a string id: verdict=refused reason=settings-list-unevaluable, exit 2. The control is not one authorized 200 JSON document, or its list is empty: the settings row is skipped, exit 3"
   fi
   while IFS='|' read -r w_label w_method w_url w_grant w_deny w_kind; do
     [[ -n "$w_label" ]] || continue
@@ -477,6 +497,9 @@ if is_migration_profile "$PROFILE" && [[ "$DRY_RUN" -eq 1 ]]; then
       *) echo "cf-token-scope: write row '$w_label' has body-kind '$w_kind', not invalid or settings-json (table corruption)" >&2
          exit 2 ;;
     esac
+    if [[ "$w_kind" == "settings-json" ]]; then
+      printf '%s\n' "# guard: a grant 400 that is not one JSON document, or lists err 6007 (malformed JSON), reads inconclusive (exit 3): the body was not parsed"
+    fi
     printf '%s\n' "# write $w_label (body-kind $w_kind): deny control $(mig_key "$w_deny") must answer 403, then grant $(mig_key "$w_grant") must answer 400"
     printf '%s\n' "w_body=\"\$$w_name\""
     for w_key in "$w_deny" "$w_grant"; do
@@ -556,9 +579,9 @@ fi
 # omitted it derives from $2's scheme, so the rulesets call sites keep their exact
 # today's semantics (plan addendum 10: want_type is an ADDED parameter, never a
 # scheme replacement). CODE/BODY are published for classify_target (addendum 5);
-# verdict semantics stay byte-identical. Exactly ONE JSON document: jq -e takes its
-# exit status from the LAST document, so `{"success":false} {"success":true,…}`
-# would otherwise read as authorized.
+# one rule is stricter for EVERY profile (#12931 review): the body must be exactly
+# ONE JSON document. jq -e takes its exit status from the LAST document, so
+# `{"success":false} {"success":true,…}` used to read as authorized.
 authorized_body() {
   printf '%s' "$1" | jq -n -e --arg t "$2" '[inputs] | length == 1 and (.[0] | .success == true and (.result | type == $t))' >/dev/null 2>&1
 }
@@ -671,18 +694,35 @@ mig_errcode() {
   return 0
 }
 
-# mig_summary <body>: a sanitized one-line summary of a response body. An array
-# result also says whether any listed id is probe-prefixed (probe_id_listed), the
-# one fact a settings 2xx re-ruling needs.
+# mig_grant_unparsed: 0 when the current BODY says the request body was never
+# parsed — it is not exactly one JSON document, or ANY listed error is 6007
+# (the settings endpoint's "Malformed JSON"). Decided on the parsed codes, never
+# on mig_errcode's display text.
+mig_grant_unparsed() {
+  ! printf '%s' "$BODY" | jq -n -e '[inputs] | length == 1 and (any(.[0].errors[]?; .code? == 6007) | not)' >/dev/null 2>&1
+}
+
+# mig_summary <body>: a one-line summary of a response body, with no newline. Every
+# string AND every object key outside a short [A-Za-z0-9_.:+-] allowlist becomes
+# <redacted>, so a response cannot forge a probe= line, a U+2028/U+2029 or a
+# space-delimited token here. It is a shape filter, not a secret redactor. An
+# array result also says whether any listed id is probe-prefixed
+# (probe_id_listed), the one fact a settings 2xx re-ruling needs. An empty body or
+# more than one JSON document is named, not summarized.
 mig_summary() {
-  printf '%s' "$1" | jq -c --arg p "$PROBE_ID_PREFIX" '
-    def safe: walk(if type == "string" then (if test("^[A-Za-z0-9_.:+-]{0,64}$") then . else "<redacted>" end) else . end);
+  local s
+  s="$(printf '%s' "$1" | jq -n -r --arg p "$PROBE_ID_PREFIX" '
+    def ok: type == "string" and test("^[A-Za-z0-9_.:+-]{0,64}$");
+    def safe: walk(if type == "object" then with_entries(.key |= (if ok then . else "<redacted>" end))
+                   elif type == "string" then (if ok then . else "<redacted>" end) else . end);
+    [inputs] | if length == 0 then "(empty body)" elif length > 1 then "(\(length) JSON documents)" else .[0] |
     {success,
      result: (.result | if type == "array" then {count: length, ids: ([.[] | .id?] | .[:20]),
                                                  probe_id_listed: any(.[]; (.id? | type) == "string" and (.id | startswith($p)))}
                         elif type == "object" then {id, version, last_updated, rules: ((.rules // []) | length)}
                         else . end),
-     errors: ([.errors[]?.code?] | .[:5])} | safe' 2>/dev/null || printf '(unparseable body)'
+     errors: ([.errors[]?.code?] | .[:5])} | safe | tojson end' 2>/dev/null)" || s="(unparseable body)"
+  printf '%s' "$s"
 }
 
 # A 2xx to a probe body built to be rejected should not happen. Abort the whole
@@ -691,28 +731,32 @@ mig_summary() {
 mig_fatal() {
   local label="$1" url="$2" key="$3" code="$4" by="$5" wbody="$BODY"
   report "$label" "FATAL ($code to a write probe)"
-  echo "FATAL: $label answered $code to a write probe sent with $(mig_key "$by") — a mutation may have landed."
-  printf '  write response %s -> %s ' "$label" "$code"; mig_summary "$wbody"; printf '\n'
+  # probe= lines, so the bootstrap wrapper's stdout filter keeps the evidence.
+  echo "probe=$PROFILE fatal $label answered $code to a write probe sent with $(mig_key "$by") — a mutation may have landed"
+  printf 'probe=%s write-response %s -> %s %s\n' "$PROFILE" "$label" "$code" "$(mig_summary "$wbody")"
   mig_req GET "$url" "$key"
-  printf '  read-back %s -> %s ' "$label" "$CODE"; mig_summary "$BODY"; printf '\n'
+  printf 'probe=%s read-back %s -> %s %s\n' "$PROFILE" "$label" "$CODE" "$(mig_summary "$BODY")"
   echo "probe=$PROFILE verdict=fatal-mutation"
   exit 4
 }
 
 # mig_refuse <reason> <detail>: a refusal caused by the live zone, not by the
-# source. The detail goes to stderr; the verdict line goes to stdout, the channel a
-# consumer reads, so "refused" is never confused with a usage error. Exit 2.
+# source. Both lines go to stdout as probe= lines: the channel a consumer reads,
+# and the one the bootstrap wrapper keeps. A usage error prints no probe= line, so
+# "refused" is never confused with one. Exit 2.
 mig_refuse() {
-  echo "cf-token-scope: $2" >&2
+  echo "probe=$PROFILE refused-detail $2"
   echo "probe=$PROFILE verdict=refused reason=$1"
   exit 2
 }
 
 # mig_settings_check <settings-list-body> — the collision guard (CTO L49 rule 1).
-# Prints one word: clear | empty | hit | malformed (unevaluable if jq fails). The
-# list must be ONE JSON document whose .result is an array of objects each with a
-# string id; hit means it lists an id of SETTINGS_PROBE_BODY, by whole-id
-# equality, never a substring. The list rides stdin, never jq's argv (ps-visible,
+# Prints one word: clear | empty | hit | malformed (unevaluable if jq fails). It
+# runs only on a body authorized_body already accepted (one document, array
+# .result), so its document-count and result-type arms are backups, not the
+# check; the reachable "malformed" is an item that is not an object with a string
+# id. hit means it lists an id of SETTINGS_PROBE_BODY, by whole-id equality,
+# never a substring. The list rides stdin, never jq's argv (ps-visible,
 # E2BIG past 128 KiB).
 mig_settings_check() {
   local v
@@ -738,13 +782,14 @@ MIG_INCONCLUSIVE=0
 # 1. Known-present controls (GET, fail-closed body shape).
 MIG_CTRL_OK=1
 # Initialized here, never inherited: a settings-json row is sent only after THIS
-# run's settings control returned a list the collision guard read as clear.
+# run's settings control returned a list the collision guard read as clear. The
+# static guard allows exactly one settings control per profile, so nothing can
+# clear it twice.
 MIG_SETTINGS_CLEARED=0
 while IFS='|' read -r c_label c_url c_key c_want; do
   [[ -n "$c_label" ]] || continue
   url="$(mig_url "$c_url")"
   mig_req GET "$url" "$c_key"
-  [[ "$c_url" == "$MIG_SETTINGS_URL_TPL" ]] && MIG_SETTINGS_CLEARED=0
   if [[ "$CODE" == "200" ]] && authorized_body "$BODY" "$c_want"; then
     if [[ "$c_url" == "$MIG_SETTINGS_URL_TPL" ]]; then
       # The collision guard, before any write. A real zone always lists
@@ -757,8 +802,9 @@ while IFS='|' read -r c_label c_url c_key c_want; do
                report "control: $c_label" "degraded (200 settings list empty)" ;;
         hit)   report "control: $c_label" "lists a probe id (exact match)"
                mig_refuse probe-id-collision "the zone settings list already lists an id of SETTINGS_PROBE_BODY (exact match: $(printf '%s' "$SETTINGS_PROBE_BODY" | jq -r '[.items[].id] | join(",")' 2>/dev/null || true)); refusing to send a body that names it" ;;
-        *)     report "control: $c_label" "unevaluable ($mig_set_v)"
-               mig_refuse settings-list-unevaluable "could not evaluate the zone settings list ($mig_set_v: it must be one JSON document whose .result is an array of objects with string ids); refusing to send the JSON probe body" ;;
+        *)     if [[ "$mig_set_v" == "malformed" ]]; then mig_set_why="an item is not an object with a string id"; else mig_set_why="jq could not read it"; fi
+               report "control: $c_label" "unevaluable ($mig_set_why)"
+               mig_refuse settings-list-unevaluable "could not evaluate the zone settings list ($mig_set_why); refusing to send the JSON probe body" ;;
       esac
     else
       case "$c_label" in
@@ -817,12 +863,13 @@ while IFS='|' read -r w_label w_method w_url w_grant w_deny w_kind; do
   case "$CODE" in
     400)
       # 6007 is the endpoint's "Malformed JSON": the body was never parsed, so
-      # authorization was never reached and this 400 proves nothing.
-      if [[ "$w_kind" == "settings-json" && "$(mig_errcode)" == ", err 6007" ]]; then
+      # authorization was never reached and this 400 proves nothing. A reply that
+      # is not one JSON document cannot say otherwise, so it reads the same way.
+      if [[ "$w_kind" == "settings-json" ]] && mig_grant_unparsed; then
         MIG_INCONCLUSIVE=1
-        report "$w_label" "inconclusive (grant got 400, err 6007 malformed JSON — the body was not parsed, so this 400 says nothing about scope)"
+        report "$w_label" "inconclusive (grant got 400$(mig_errcode) — not one JSON document, or err 6007 malformed JSON: the body was not parsed, so this 400 says nothing about scope)"
       else
-        report "$w_label" "authorized ($w_method 400 after a 403 control)"
+        report "$w_label" "authorized ($w_method 400$(mig_errcode) after a 403 control)"
       fi ;;
     401|403) MIG_DENIED=1; report "$w_label" "denied ($CODE$(mig_errcode))" ;;
     *) MIG_INCONCLUSIVE=1; report "$w_label" "inconclusive ($w_method $CODE$(mig_errcode))" ;;
