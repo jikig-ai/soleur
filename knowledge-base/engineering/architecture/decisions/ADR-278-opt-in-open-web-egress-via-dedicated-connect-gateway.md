@@ -271,3 +271,67 @@ bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.325 --
 **Limits.** This measurement is off-production (developer host, scripted model stub, production pin unchanged at 0.3.321). It neither satisfies nor re-arms gate B-2 of the 2026-11-18 DPIA re-screen (`knowledge-base/legal/audits/2026-11-18-dpia-rescreen-egress-credential-injector.md`, PR #12900). B-2 is already unsatisfied, because the 0.3.321 pin fired the SDK-version trigger. Adopting any new Agent SDK or CLI version, 0.3.328 included, would fire the results note's SDK-version trigger, and the CLI-version trigger whenever the bundled CLI changes, and so would re-arm B-2 against the adopted versions.
 
 **Containment of this run.** Each harness ran in its own user, mount, network and pid namespace. A read-only tmpfs covered `$HOME` and `$XDG_RUNTIME_DIR`. All 120 `git worktree list` paths and the git common dir were remounted read-only, and a write probe confirmed it. Still exposed: `/tmp` outside the scratch root, and the rest of the user-writable filesystem. The app's package files and installed SDK hashed the same before and after the run.
+
+## Addendum — 2026-11-26 (#12906): per-host allow cache re-measured on Agent SDK 0.3.328
+
+**Command** (exit code 0).
+
+```text
+bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.328 --out <scratchpad>/verdict-0.3.328.json --markdown <scratchpad>/records-0.3.328
+```
+
+**Result.** `REMEASURE verdict=CACHES exit=0 reason=measured next=#12906 stays blocked; re-run on the next SDK bump`
+
+**Versions.**
+
+| | Baseline | Candidate |
+|---|---|---|
+| Requested | `0.3.321` | `0.3.328` |
+| Observed SDK | `0.3.321` | `0.3.328` |
+| Observed CLI | `2.1.321` | `2.1.328` |
+| Reading | `CACHES` | `CACHES` |
+
+**Host.**
+
+- startedAt: `2026-11-26T10:41:56Z`
+- endedAt: `2026-11-26T10:43:16Z`
+- requested: `0.3.328`
+- exactVersion: `0.3.328`
+- linuxX64Version: `0.3.328`
+- candidateIntegritySdk: `sha512-YcOWlpXVm7etPjPVrvSJEfynDksMiG11zvEybSBnk1EVWji6rSjU75HbbhJ8XPEB2ECEwRRP597Udu6IWMtsDw==`
+- candidateIntegrityLinuxX64: `sha512-saP4fWgVZj1n7MYCqvTKADHXIc/hIAMRDpLVpXD5xB0IT68vhWgIMkzIrsg5P02P6zA49TDuoijbP1YBUEXT4A==`
+- nodeVersion: `v26.12.0`
+- npmVersion: `11.20.0`
+- kernel: `7.2.15`
+- bwrap: `bubblewrap 0.13.1`
+- os: `omarchy`
+
+**Baseline per-arm outcome.**
+
+| Arm | SandboxNetworkAccess asks (in order) | Gateway lines | Decoy hits |
+|---|---|---|---|
+| `control` | `198.51.100.1, 127.0.0.2, 169.254.169.254` | `-` | `198.51.100.1:443, 198.51.100.1:80, 198.51.100.1:22, 127.0.0.2:35343, 127.0.0.2:35343, 169.254.169.254:80` |
+| `B` | `example.test, 198.51.100.1, 169.254.169.254, metadata.test` | `CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT 198.51.100.1:443 HTTP/1.1; GET http://example.test/ HTTP/1.1; CONNECT example.test:22 HTTP/1.1; CONNECT 198.51.100.1:22 HTTP/1.1; CONNECT 169.254.169.254:443 HTTP/1.1; CONNECT metadata.test:443 HTTP/1.1` | `-` |
+| `D` | `-` | `-` | `-` |
+| `E` | `198.51.100.1` | `-` | `-` |
+| `F` | `198.51.100.1` | `CONNECT 198.51.100.1:443 HTTP/1.1` | `-` |
+| `F2` | `198.51.100.1, example.test` | `CONNECT 198.51.100.1:443 HTTP/1.1` | `-` |
+
+**Candidate per-arm outcome.**
+
+| Arm | SandboxNetworkAccess asks (in order) | Gateway lines | Decoy hits |
+|---|---|---|---|
+| `control` | `198.51.100.1, 127.0.0.2, 169.254.169.254` | `-` | `198.51.100.1:443, 198.51.100.1:80, 198.51.100.1:22, 127.0.0.2:42115, 127.0.0.2:42115, 169.254.169.254:80` |
+| `B` | `example.test, 198.51.100.1, 169.254.169.254, metadata.test` | `CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT 198.51.100.1:443 HTTP/1.1; GET http://example.test/ HTTP/1.1; CONNECT example.test:22 HTTP/1.1; CONNECT 198.51.100.1:22 HTTP/1.1; CONNECT 169.254.169.254:443 HTTP/1.1; CONNECT metadata.test:443 HTTP/1.1` | `-` |
+| `D` | `-` | `-` | `-` |
+| `E` | `198.51.100.1` | `-` | `-` |
+| `F` | `198.51.100.1` | `CONNECT 198.51.100.1:443 HTTP/1.1` | `-` |
+| `F2` | `198.51.100.1, example.test` | `CONNECT 198.51.100.1:443 HTTP/1.1` | `-` |
+
+**What it means.** 0.3.328 reads the same as the pin and as the 2026-11-19 interim run on 0.3.325: within one session, F asked once for three requests to the same host, and F2 asked the allowed host once across two commands, then asked only for the new host. Both runs passed every precondition: versions, SDK entry, all arms present, the control arm's decoys, teardown, the post-teardown requests and asks recorded. The SDK still caches a per-host allow for the whole session, so a later deny for the same host would never be asked. #12906 stays blocked, and the next run happens on the next SDK bump (`sdk-bump-sandbox-gate.sh` prints the command). This closes #12977.
+
+**Newer versions.** npm `latest` was 0.3.332 when this ran. The script refused it, `REMEASURE verdict=REFUSED exit=3 reason=release-age-floor next=re-run after 2026-11-27T22:09:40Z`, so no newer version was measured.
+
+**Limits.** This measurement is off-production (developer host, scripted model stub, production pin unchanged at 0.3.321). It neither satisfies nor re-arms gate B-2 of the 2026-11-18 DPIA re-screen (`knowledge-base/legal/audits/2026-11-18-dpia-rescreen-egress-credential-injector.md`, PR #12900). B-2 is already unsatisfied, because the 0.3.321 pin fired the SDK-version trigger. Adopting any new Agent SDK or CLI version, 0.3.328 included, would fire the results note's SDK-version trigger, and the CLI-version trigger whenever the bundled CLI changes, and so would re-arm B-2 against the adopted versions.
+
+**Containment of this run.** Each harness ran in its own user, mount, network and pid namespace. A read-only tmpfs covered `$HOME` and `$XDG_RUNTIME_DIR`. All 131 `git worktree list` paths and the git common dir were remounted read-only, and a write probe confirmed it. Still exposed: `/tmp` outside the scratch root, and the rest of the user-writable filesystem. The app's package files and installed SDK hashed the same before and after the run.

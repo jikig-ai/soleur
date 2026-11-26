@@ -26,3 +26,8 @@
 - constraint: This is evidence-only, do NOT bump the production SDK pin in this PR, and run the measurement against 0.3.328 installed in an isolated harness directory.
 - constraint: Commit the harness invocation as a reusable script so the next SDK bump can re-run it in one command.
 cto_spawns=1
+
+## Measure Phase (resumed 2026-11-26)
+- 0.3.328 measured: `REMEASURE verdict=CACHES exit=0 reason=measured`; ADR-278 Addendum 2026-11-26 written; #12906 commented; #12977 closed.
+- npm latest 0.3.332 refused by the floor (`release-age-floor`, re-run after 2026-11-27T22:09:40Z); not measured.
+- CI: quality-guards failed on MD034 bare URLs in the 0.3.325 addendum gateway cells (fixed by code spans); `test` red is the draft-light "full battery owed at ready" sentinel, cleared by the ready run.

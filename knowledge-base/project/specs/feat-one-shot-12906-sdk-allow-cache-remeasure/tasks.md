@@ -53,10 +53,10 @@ Two stages: Build starts when #12897 has merged. Measure starts at the later of 
 
 ## Phase 5 — Measure (after 2026-11-21T23:14Z and #12897 merged)
 
-- [ ] 5.1 Run `bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.328 --out <scratchpad>/verdict-0.3.328.json --markdown <scratchpad>/records` via a run_in_background launch or Monitor (never sleep-poll).
-- [ ] 5.2 Branch on `verdict=`: CACHES / RE-ASKS-AFTER-TEARDOWN / MIXED / INCONCLUSIVE (one re-run) / UNVERIFIED / REFUSED / LEAK / ERROR, per plan Phase 5.
-- [ ] 5.3 Write `## Addendum — <run date> (#12906): ...` in ADR-278 with the CLO verbatim wording (AC8-AC10).
-- [ ] 5.4 Check the drafts against the redaction list, then `gh issue comment 12906 --body-file <file>` (AC11). File the conditional issues (AC12).
+- [x] 5.1 Run `bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.328 --out <scratchpad>/verdict-0.3.328.json --markdown <scratchpad>/records` via a run_in_background launch or Monitor (never sleep-poll).
+- [x] 5.2 Branch on `verdict=`: CACHES / RE-ASKS-AFTER-TEARDOWN / MIXED / INCONCLUSIVE (one re-run) / UNVERIFIED / REFUSED / LEAK / ERROR, per plan Phase 5.
+- [x] 5.3 Write `## Addendum — <run date> (#12906): ...` in ADR-278 with the CLO verbatim wording (AC8-AC10).
+- [x] 5.4 Check the drafts against the redaction list, then `gh issue comment 12906 --body-file <file>` (AC11). File the conditional issues (AC12).
 
 ## Phase 6 — Verification
 
