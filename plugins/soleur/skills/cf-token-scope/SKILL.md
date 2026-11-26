@@ -189,18 +189,20 @@ config-rules scope-gap post-mortem). They follow CTO ruling L49:
   literal:
   - `invalid` → `INVALID_BODY`, a literal that is not JSON, so no endpoint can
     validate it. Every row uses it except the zone settings PATCH. The script
-    refuses to run if it ever parses as JSON.
+    refuses to run if it ever parses as JSON. The bot_management grant's `400`
+    on it was measured on 2026-11-26 as code 10400.
   - `settings-json` → `SETTINGS_PROBE_BODY`, for the zone settings PATCH row
     only. That endpoint parses JSON before it checks authorization: a non-JSON
     body gets `400` (code 6007) for every token, so the deny control below could
     never see `403`. The body is JSON naming one setting id that does not exist,
     `cf_token_scope_probe_nonexistent_setting`. The grant token's `400` on it was
-    measured on 2026-11-26 as code 1006 (the bot_management grant answers
-    10400), and a `2xx` stays fatal. A grant
-    `400` that lists code 6007 (malformed JSON) anywhere, or a reply that is not
-    one JSON document, means the body was never parsed, so the row reads
-    `inconclusive`, not `authorized`. A pass prints the grant's code:
-    `authorized (PATCH 400, err <code> after a 403 control)`.
+    measured on 2026-11-26 as code 1006. A `2xx` stays fatal, because it means
+    a write landed. A grant `400` that lists code 6007 (malformed JSON) anywhere,
+    or a reply that is not one JSON document, means the body was never parsed,
+    so the row reads `inconclusive`, not `authorized`. A pass prints the grant's
+    code: `authorized (PATCH 400, err <code> after a 403 control)`. The printed
+    code is information, and the verdict line decides: a grant code other than
+    1006 or 10400 still passes, so post it on #12931 as endpoint drift.
 
   Three guards keep the JSON body from naming a real setting, each exiting `2`
   before the write it protects:

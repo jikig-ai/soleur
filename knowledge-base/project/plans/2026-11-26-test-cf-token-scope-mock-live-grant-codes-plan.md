@@ -114,8 +114,8 @@ scope row in `decision-challenges.md`, defaulting to no edit.
 - `plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh`: `mig_report()`
   (prints the `probe=<profile> row <label> -> <verdict>` line), `mig_errcode()`,
   `mig_grant_unparsed()`, the step-3 write loop. The one authorized-line source line,
-  `        mig_report "$w_label" "authorized ($w_method 400$(mig_errcode) after a 403 control)"`,
-  appears exactly once (`grep -cxF` = 1), so it is a valid whole-line anchor for the work-time
+  `mig_report "$w_label" "authorized ($w_method 400$(mig_errcode) after a 403 control)"`
+  (indented eight spaces), appears exactly once (`grep -cxF` = 1), so it is a valid whole-line anchor for the work-time
   matrix row 3 mutant.
 
 **Institutional learnings.**
@@ -391,3 +391,15 @@ All at the `unit` layer: `plugins/soleur/test/cf-token-scope.test.sh`, with curl
 - `count_f` reads `$OUTFILE`, which every `run`/`mrun`/`run_script` overwrites. Keep the two pins directly
   after `mrun --profile zone-rest` in M2. Harness row H1 is the mutation that moves them and reds.
 - A plan whose `## User-Brand Impact` section is empty, contains only placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6.
+
+## Addendum — 2026-11-26 (review of PR #13080)
+
+This addendum supersedes the scope lines above. The sections above are left as written.
+
+- **The pins are whole-line.** `count_f` is `grep -cF`, a substring count. Three review seats showed it passes a row with text appended after `control)`. The two M2 pins now use `grep -cxF -- "$M2_SET_LINE" "$OUTFILE" || true` inline, matching the decision-challenges ruling (`grep -cxF` equal to 1). "Use the existing `count_f`" in Phase 1, the Files list and tasks 2.1 is superseded.
+- **Pin placement.** The pins sit after M2's other assertions, not directly after `mrun`. None of those assertions overwrites `$OUTFILE`.
+- **M5e pins the displayed code.** For the two-error body, the row shows `, err 1000`, the first error's code. A reader of `.errors[-1]` showed 6007 and left the suite green before this pin. The two-document body shows no code. `MIN_ASSERTIONS` stays 681, because the M5e `has_re` was tightened, not added.
+- **Scope grew. AC6 is superseded.**
+  - The diff also changes `plugins/soleur/skills/cf-token-scope/SKILL.md` and the `cf-token-scope.sh` header comment (decision-challenges, scope row).
+  - It also changes `knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md`: the revoke-recipe DELETE form, the remaining-token list in Phase 5, and the expected `authorized` line (decision-challenges, runbook row).
+  - Line 63's "The probe script, SKILL.md and the M4 fixture do not change" now holds only for the probe logic and the M4 fixture.
