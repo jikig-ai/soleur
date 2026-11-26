@@ -339,9 +339,9 @@ the live compare, a record that is a CNAME both live and in the plan, whose plan
 `settings` is exactly `{"flatten_cname":false}`, is not a difference: that is the API default (CTO ruling 2026-11-25,
 #13056). That the PATCH leaves it `false` is inferred from the provider and cloudflare-go source, not observed; the
 post-apply re-read is what detects any other outcome. The job keeps no per-record `settings`: its
-`import-normalize reread=ok records=26` line is the evidence, and that line goes on #12931 after the first apply. A re-read `settings:other` on `supabase_custom_domain` or a `protonmail_dkim_*` record means sign-in or
-mail authentication may be degraded: that is the S4/F7 one-field edit back to `{"flatten_cname":false}`, owner
-authorized, not a wait. Nobody edits this zone by hand
+`import-normalize reread=ok records=26` line is the evidence, and that line goes on #12931 after the first apply. A re-read `settings:other` is a stop token like any other (no edit, owner decision), and on
+`supabase_custom_domain` or a `protonmail_dkim_*` record it is urgent: sign-in or mail authentication may be
+degraded, so post it on #12931 and ask for the decision at once. Nobody edits this zone by hand
 during the apply: an edit landing between the read and a PATCH is overwritten, and the re-read then passes.
 
 A refusal about a live record prints `REFUSE <addr> differs from the live record (<tokens>)` or

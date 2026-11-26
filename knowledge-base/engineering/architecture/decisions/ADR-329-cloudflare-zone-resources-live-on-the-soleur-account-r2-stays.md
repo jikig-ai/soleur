@@ -168,7 +168,8 @@ forget, never pushed back as state (D4); it holds the same secrets as live state
   `settings` of exactly `{"flatten_cname":false}` compares equal when the record is a CNAME both live and in the plan
   and the plan holds no `settings`. The safety basis is inferred from provider 4.52.7 and cloudflare-go v0.116.0
   source (the PATCH sends `"settings":{}`, and the API default is `false`), not observed; the post-apply re-read is
-  the detection, and a re-read `settings:other` on a DNS-only CNAME is a fourth-exception one-field edit.
+  the detection. A re-read `settings:other` stays a stop token with no edit; on a DNS-only CNAME it is an urgent
+  owner decision.
 - AP-002 (No SSH state mutation): Aligned. The migration job uses only the Cloudflare API; the host change is an
   immutable replace.
 - AP-003 (R2 remote backend): Aligned. The backend and its endpoint are unchanged; ADR-006 stands.
