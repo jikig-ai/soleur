@@ -1065,14 +1065,16 @@ validation (Load Balancing #12983, DNSSEC #12982).
     progress (or `gh` could not list the runs). Wait for that run to finish, read its verdict line, then re-run the
     stage.
   - `SOLEUR_CFAM_PROBE profile=<phase> verdict=not-pass`: the staged scope probe did not pass, so the swap wrote
-    nothing. Read the `probe=<phase> verdict=…` line it relayed: `denied` means re-mint that key with the plan's
-    permission groups; `inconclusive` means read the relayed `probe=<phase> row <label>: <status>` lines first. A failed or empty settings control
+    nothing. Read the `probe=<phase> verdict=…` line it relayed: `denied` means re-mint the key its relayed
+    `row … -> denied (…; re-mint <KEY>)` line names, with the plan's permission groups; `inconclusive` means read
+    the relayed `probe=<phase> row <label> -> <status>` lines first. A failed or empty settings control
     (`settings control not established`) means re-run the stage. A settings grant `400` that was not parsed
     (`inconclusive (grant got 400`) or a deny control that got `400` (`got 400, not 403`) means post it on #12931
     and stop for a CTO re-ruling. `refused` (exit 2) is the collision guard: post the `verdict=refused reason=…`
     line and its `refused-detail` line on #12931 and stop. `fatal-mutation` is the write-probe stop: post the
     relayed `probe=<phase> fatal`, `write-response` and `read-back` lines on #12931 and stop. A `not-pass` with no
-    relayed `probe=` line is a usage error or a missing `_NEXT` secret: run the probe directly and read stderr.
+    relayed `probe=<phase> verdict=` line is a usage error, a missing `_NEXT` secret or table corruption: run the
+    probe directly and read stderr.
   - `SOLEUR_CFAM_COPY_MISMATCH`: the stage stopped before any delete; copy `<KEY>_PREV` over `<KEY>` with the stdin
     pipe form, read it back, and re-run.
   - `SOLEUR_CFAM_SWAP_MISMATCH name=<KEY> kept=<KEY>_NEXT`: the copy read back equal but a re-read before the delete

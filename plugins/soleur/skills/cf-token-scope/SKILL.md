@@ -262,7 +262,7 @@ config-rules scope-gap post-mortem). They follow CTO ruling L49:
 | zone-rest | `zones/<zone>/settings` (PATCH) | `CF_API_TOKEN_ZONE_SETTINGS` | `CF_API_TOKEN_BOT_MANAGEMENT` | `SETTINGS_PROBE_BODY` |
 | zone-rest | `zones/<zone>/bot_management` (PUT) | `CF_API_TOKEN_BOT_MANAGEMENT` | `CF_API_TOKEN_ZONE_SETTINGS` | `INVALID_BODY` |
 
-Doppler is not probed: it is not a Cloudflare scope. The last stdout line is
+Doppler is not probed: it is not a Cloudflare scope. The verdict is the stdout line
 `probe=<profile> verdict=pass|denied|inconclusive|refused|fatal-mutation`; a `refused` line ends
 with `reason=probe-id-collision` or `reason=settings-list-unevaluable`. Record it in
 the PR thread. Any verdict other than `pass` blocks that phase's dispatch.
@@ -280,7 +280,8 @@ the PR thread. Any verdict other than `pass` blocks that phase's dispatch.
   `zone-rest`, also a refusal caused by the live zone's settings list (it lists
   a probe id, or an item in it is not an object with a string id). That one
   prints `probe=zone-rest verdict=refused reason=<…>` on stdout; post it on
-  #12931 and stop. Every other exit-2 case prints no `probe=` line.
+  #12931 and stop. Every other exit-2 case prints no `probe=<profile> verdict=` line
+  (row lines may precede it).
 - `3` — probe failed: a scope was dropped, degraded, or denied (assert mode: an
   LB row still `403` or anomalous; migration profiles: a write denied, or a
   control not established).
@@ -331,12 +332,15 @@ the PR thread. Any verdict other than `pass` blocks that phase's dispatch.
   phase, confirm its entrypoint is `404`/empty before any infra apply, or a
   whole-list ruleset create clobbers dashboard rules (ADR-130, ADR-136).
 - **Evidence an operator must post is a `probe=<profile> …` stdout line.** The
-  swap-0b wrapper (`run_scope_probe`) keeps only stdout lines matching
-  `^(probe=|cf-token-scope: migration)`, so an indented or stderr line is lost on
-  that path. Every migration control and write row is therefore also printed as
-  `probe=<profile> row <label>: <status>` (`mig_report`), so the row text the
-  runbook routes an `inconclusive` on survives the wrapper. Test a new evidence
-  line with the split capture (`mrun_out`), not the combined one. See
+  swap-0b wrapper (`run_scope_probe`) captures stdout and stderr together and keeps
+  only lines matching `^(probe=|cf-token-scope: migration)`, so an indented line
+  is lost on that path. Every migration control, audit and write row is therefore
+  also printed as `probe=<profile> row <label> -> <status>` (`mig_report`), so the
+  row text the runbook routes on survives the wrapper. Split on the first ` -> `:
+  labels and statuses both contain `: `. A `denied` row names the key to re-mint
+  (`denied (<code>, err <n>; re-mint <KEY>)`). Test M5h reads the wrapper's filter
+  from `bootstrap.sh` and refuses a bare `report` call in the migration block
+  outside `mig_fatal`. See
   `knowledge-base/project/learnings/2026-11-26-the-review-fix-moved-evidence-off-the-channel-its-consumer-reads.md`.
 
 ## Related

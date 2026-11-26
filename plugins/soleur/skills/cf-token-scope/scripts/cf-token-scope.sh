@@ -623,11 +623,14 @@ check() {
 }
 
 report() { printf '  %-42s %s\n' "$1" "$2"; }
-# Migration rows: the indented line, plus a probe=<profile> row line. The swap-0b
-# wrapper (run_scope_probe) keeps only ^(probe=|cf-token-scope: migration) stdout
-# lines, and the runbook routes a not-pass on this row text. "row" never reads as
-# the wrapper's whole-line `probe=<p> verdict=pass` match.
-mig_report() { report "$1" "$2"; printf 'probe=%s row %s: %s\n' "$PROFILE" "$1" "$2"; }
+# Migration rows: the indented line, plus `probe=<profile> row <label> -> <status>`.
+# The swap-0b wrapper (run_scope_probe) captures both streams and keeps only lines
+# matching ^(probe=|cf-token-scope: migration); the runbook routes a not-pass on
+# this row text. " -> " is the separator because labels and statuses both contain
+# ": ". "row" never reads as the wrapper's whole-line `probe=<p> verdict=pass`.
+# Every migration row goes through here: a test refuses a bare report call in the
+# migration block outside mig_fatal.
+mig_report() { report "$1" "$2"; printf 'probe=%s row %s -> %s\n' "$PROFILE" "$1" "$2"; }
 
 # ============================================================================
 # Migration profiles (#12931, CTO L49) — run path. Exits; never falls through to
@@ -821,7 +824,7 @@ while IFS='|' read -r c_label c_url c_key c_want; do
   else
     MIG_CTRL_OK=0; MIG_INCONCLUSIVE=1
     if [[ "$CODE" == "200" ]]; then mig_report "control: $c_label" "degraded (200 body not success/$c_want)"
-    else mig_report "control: $c_label" "denied ($CODE$(mig_errcode))"; fi
+    else mig_report "control: $c_label" "denied ($CODE$(mig_errcode); re-mint $(mig_key "$c_key"))"; fi
   fi
 done < <(mig_ctrl_rows "$PROFILE")
 
@@ -876,7 +879,7 @@ while IFS='|' read -r w_label w_method w_url w_grant w_deny w_kind; do
       else
         mig_report "$w_label" "authorized ($w_method 400$(mig_errcode) after a 403 control)"
       fi ;;
-    401|403) MIG_DENIED=1; mig_report "$w_label" "denied ($CODE$(mig_errcode))" ;;
+    401|403) MIG_DENIED=1; mig_report "$w_label" "denied ($CODE$(mig_errcode); re-mint $(mig_key "$w_grant"))" ;;
     *) MIG_INCONCLUSIVE=1; mig_report "$w_label" "inconclusive ($w_method $CODE$(mig_errcode))" ;;
   esac
 done < <(mig_write_rows "$PROFILE")

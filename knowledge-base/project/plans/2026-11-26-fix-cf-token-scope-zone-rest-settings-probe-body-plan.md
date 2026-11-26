@@ -350,18 +350,20 @@ Read the exit code first, then the `probe=zone-rest verdict=` line, then the per
 exit-3 rows match, post all of them and take the first matching row below as the route. Each row is keyed on text the
 script prints.
 
+Match the relayed `probe=zone-rest row <label> -> <status>` lines; split on the first ` -> `.
+
 | Outcome | Action |
 |---|---|
-| exit 0, `verdict=pass` | Report swap-0b unblocked. Post the settings row's `authorized (PATCH 400, err <code> after a 403 control)` line. If `<code>` differs from the mock's assumed 400 body, correct the mock in a follow-up PR |
+| exit 0, `verdict=pass` | Report swap-0b unblocked. Post the settings row line `row zones/<zone>/settings -> authorized (PATCH 400, err <code> after a 403 control)`. If `<code>` differs from the mock's assumed 400 body, correct the mock in a follow-up PR |
 | exit 4, `verdict=fatal-mutation` | No re-run. Post the `probe=zone-rest fatal`, `write-response` and `read-back` lines (all `probe=` lines, so the swap-0b wrapper keeps them); re-consult the CTO (recorded dissent: GET control plus a separate permission-group check) |
 | exit 2, `verdict=refused reason=probe-id-collision` | Post it with its `probe=zone-rest refused-detail` line; changing the probe id needs a re-ruling |
 | exit 2, `verdict=refused reason=settings-list-unevaluable` | Post it with its `refused-detail` line; the list shape changed. Re-consult the CTO before any re-run |
-| exit 2, no `probe=` line | Not a probe verdict: a usage error, a missing `_NEXT` secret, or table corruption. Read stderr, fix that, re-run |
-| exit 3, `control: zones/<zone>/settings denied (…)` or `degraded (…)`, settings row `inconclusive (settings control not established` | The settings read failed or returned an empty list. Check the `CF_API_TOKEN_ZONE_SETTINGS` read scope, then re-run. No re-ruling needed |
-| exit 3, `zones/<zone>/settings inconclusive (grant got 400` | The JSON body was not parsed (err 6007, or not one JSON document): post it and re-consult the CTO |
-| exit 3, `zones/<zone>/settings inconclusive (… got 400, not 403` | The deny control did not get 403 on the settings row (bulk endpoint EOL, or the wrapper format): post it and re-consult the CTO |
-| exit 3, `zones/<zone>/settings denied (…)` | The grant token lacks Zone Settings Edit: post it and re-consult the CTO |
-| exit 3, any `zones/<zone>/bot_management` line not `authorized` | The bot_management row failed (its deny control or its grant): post it; re-mint `CF_API_TOKEN_BOT_MANAGEMENT_NEXT` only if its grant reads `denied` |
+| exit 2, no `probe=zone-rest verdict=` line (row lines may precede it) | Not a probe verdict: a usage error, a missing `_NEXT` secret, or table corruption. Read stderr, fix that, re-run |
+| exit 3, `row control: zones/<zone>/settings -> denied (…)` or `-> degraded (…)`, then `row zones/<zone>/settings -> inconclusive (settings control not established` | The settings read failed or returned an empty list. Check the `CF_API_TOKEN_ZONE_SETTINGS` read scope, then re-run. No re-ruling needed |
+| exit 3, `row zones/<zone>/settings -> inconclusive (grant got 400` | The JSON body was not parsed (err 6007, or not one JSON document): post it and re-consult the CTO |
+| exit 3, `row zones/<zone>/settings -> inconclusive (… got 400, not 403` | The deny control did not get 403 on the settings row (bulk endpoint EOL, or the wrapper format): post it and re-consult the CTO |
+| exit 3, `row zones/<zone>/settings -> denied (…; re-mint <KEY>)` | The grant token lacks Zone Settings Edit: post it and re-consult the CTO |
+| exit 3, any `row zones/<zone>/bot_management -> …` line not `authorized` | The bot_management row failed (its deny control or its grant): post it; re-mint `CF_API_TOKEN_BOT_MANAGEMENT_NEXT` only if its grant reads `denied` |
 
 ## Observability
 
