@@ -506,6 +506,9 @@ describe("Guard 1 — likec4 child launch, mount, env and namespace closure", ()
     // /usr/bin/node resolves to the 1-component prefix /usr.
     expect(mod.installPrefixBinds("/usr/bin/node", "/usr/local/lib/node_modules/likec4/bin/likec4.mjs")).toEqual([]);
     expect(mod.installPrefixBinds("/opt/n/bin/node", "/x/likec4")).toBeNull();
+    // The skip must not swallow a needed bind: a /usr-resident node with the
+    // entry outside /usr still binds that entry's prefix.
+    expect(mod.installPrefixBinds("/usr/bin/node", "/opt/l/lib/node_modules/likec4/bin/likec4.mjs")).toEqual(["/opt/l/lib/node_modules/likec4"]);
   });
 
   it("binaries are resolved lazily and only a successful resolution is memoized", async () => {
