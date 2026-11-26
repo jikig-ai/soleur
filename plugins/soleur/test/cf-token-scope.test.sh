@@ -1325,6 +1325,29 @@ MOCK_WRITE_OVERRIDE="$MOV" mrun --profile zone-rest
 assert_rc 0 "M5e a bot_management grant 400 err 6007 -> exit 0 (the rule is settings-json only)"
 has_re 'zones/<zone>/bot_management +authorized \(PUT 400, err 6007 after a 403 control\)' "M5e the bot_management row reads authorized with its code"
 
+# --- M5h: the row text the runbook routes on survives the swap-0b wrapper's filter ---
+# run_scope_probe keeps only stdout lines matching ^(probe=|cf-token-scope: migration),
+# so each row is also a probe=<profile> row line; stdout only (mrun_out), filtered here.
+m5h_wrap() { grep -E '^(probe=|cf-token-scope: migration)' "$OUTFILE" || true; }
+printf '%s\n' '/zones/[^/]+/settings$|tok-zonesettings-mock|400:{"success":false,"errors":[{"code":6007}]}' >"$MOV"
+MOCK_WRITE_OVERRIDE="$MOV" mrun_out --profile zone-rest
+assert_rc 3 "M5h grant 400 err 6007 -> exit 3"
+if m5h_wrap | grep -qF 'probe=zone-rest row zones/<zone>/settings: inconclusive (grant got 400, err 6007'; then ok "M5h the unparsed-grant row survives the wrapper filter"; else no "M5h the unparsed-grant row is dropped by the wrapper filter"; fi
+printf '%s\n' '/zones/[^/]+/settings$|tok-botmgmt-mock|400:{"success":false,"errors":[{"code":10000}]}' >"$MOV"
+MOCK_WRITE_OVERRIDE="$MOV" mrun_out --profile zone-rest
+assert_rc 3 "M5h deny control 400 -> exit 3"
+if m5h_wrap | grep -qF 'probe=zone-rest row zones/<zone>/settings: inconclusive (deny control CF_API_TOKEN_BOT_MANAGEMENT got 400, not 403'; then ok "M5h the deny-400 row survives the wrapper filter"; else no "M5h the deny-400 row is dropped by the wrapper filter"; fi
+MOCK_ZSET='404:{"success":false,"errors":[{"code":7003}]}' mrun_out --profile zone-rest
+assert_rc 3 "M5h settings control 404 -> exit 3"
+if m5h_wrap | grep -qF 'probe=zone-rest row zones/<zone>/settings: inconclusive (settings control not established'; then ok "M5h the no-control row survives the wrapper filter"; else no "M5h the no-control row is dropped by the wrapper filter"; fi
+if m5h_wrap | grep -qF 'probe=zone-rest row control: zones/<zone>/settings: denied (404, err 7003)'; then ok "M5h the failed control row survives the wrapper filter"; else no "M5h the failed control row is dropped by the wrapper filter"; fi
+# A row line can never read as the wrapper's whole-line pass match.
+mrun_out --profile zone-rest
+assert_rc 0 "M5h happy path -> exit 0"
+assert_eq "M5h exactly one whole-line pass verdict, never forged by a row line" 1 "$(m5h_wrap | grep -cx 'probe=zone-rest verdict=pass' || true)"
+assert_eq "M5h every write row and control row is relayed (1 control + 2 write rows)" 3 "$(m5h_wrap | grep -c '^probe=zone-rest row ' || true)"
+lacks_err "probe=zone-rest row " "M5h row lines are stdout only"
+
 # --- M5g: an empty 2xx body is named; a key in the response cannot forge a probe line ---
 printf '%s\n' '/zones/[^/]+/settings$|tok-zonesettings-mock|204:' >"$MOV"
 MOCK_WRITE_OVERRIDE="$MOV" mrun --profile zone-rest
@@ -1620,7 +1643,7 @@ else
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
-MIN_ASSERTIONS=656
+MIN_ASSERTIONS=667
 if [[ "$((pass + fail))" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1

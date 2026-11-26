@@ -623,6 +623,11 @@ check() {
 }
 
 report() { printf '  %-42s %s\n' "$1" "$2"; }
+# Migration rows: the indented line, plus a probe=<profile> row line. The swap-0b
+# wrapper (run_scope_probe) keeps only ^(probe=|cf-token-scope: migration) stdout
+# lines, and the runbook routes a not-pass on this row text. "row" never reads as
+# the wrapper's whole-line `probe=<p> verdict=pass` match.
+mig_report() { report "$1" "$2"; printf 'probe=%s row %s: %s\n' "$PROFILE" "$1" "$2"; }
 
 # ============================================================================
 # Migration profiles (#12931, CTO L49) — run path. Exits; never falls through to
@@ -797,13 +802,13 @@ while IFS='|' read -r c_label c_url c_key c_want; do
       # vacuously.
       mig_set_v="$(mig_settings_check "$BODY")"
       case "$mig_set_v" in
-        clear) report "control: $c_label" "authorized (200)"; MIG_SETTINGS_CLEARED=1 ;;
+        clear) mig_report "control: $c_label" "authorized (200)"; MIG_SETTINGS_CLEARED=1 ;;
         empty) MIG_CTRL_OK=0; MIG_INCONCLUSIVE=1
-               report "control: $c_label" "degraded (200 settings list empty)" ;;
-        hit)   report "control: $c_label" "lists a probe id (exact match)"
+               mig_report "control: $c_label" "degraded (200 settings list empty)" ;;
+        hit)   mig_report "control: $c_label" "lists a probe id (exact match)"
                mig_refuse probe-id-collision "the zone settings list already lists an id of SETTINGS_PROBE_BODY (exact match: $(printf '%s' "$SETTINGS_PROBE_BODY" | jq -r '[.items[].id] | join(",")' 2>/dev/null || true)); refusing to send a body that names it" ;;
         *)     if [[ "$mig_set_v" == "malformed" ]]; then mig_set_why="an item is not an object with a string id"; else mig_set_why="jq could not read it"; fi
-               report "control: $c_label" "unevaluable ($mig_set_why)"
+               mig_report "control: $c_label" "unevaluable ($mig_set_why)"
                mig_refuse settings-list-unevaluable "could not evaluate the zone settings list ($mig_set_why); refusing to send the JSON probe body" ;;
       esac
     else
@@ -811,12 +816,12 @@ while IFS='|' read -r c_label c_url c_key c_want; do
         zones/*/rulesets)    MIG_ZONE_LIST="$BODY" ;;
         accounts/*/rulesets) MIG_ACCT_LIST="$BODY" ;;
       esac
-      report "control: $c_label" "authorized (200)"
+      mig_report "control: $c_label" "authorized (200)"
     fi
   else
     MIG_CTRL_OK=0; MIG_INCONCLUSIVE=1
-    if [[ "$CODE" == "200" ]]; then report "control: $c_label" "degraded (200 body not success/$c_want)"
-    else report "control: $c_label" "denied ($CODE$(mig_errcode))"; fi
+    if [[ "$CODE" == "200" ]]; then mig_report "control: $c_label" "degraded (200 body not success/$c_want)"
+    else mig_report "control: $c_label" "denied ($CODE$(mig_errcode))"; fi
   fi
 done < <(mig_ctrl_rows "$PROFILE")
 
@@ -827,9 +832,9 @@ if [[ "$PROFILE" == "redirects-dns" && "$MIG_CTRL_OK" == "1" ]]; then
     local list="$1" kind="$2" phase="$3" id
     id="$(printf '%s' "$list" | jq -r --arg k "$kind" --arg p "$phase" \
       '[.result[] | select(.kind == $k and .phase == $p) | .id] | first // empty' 2>/dev/null || true)"
-    if [[ -z "$id" ]]; then report "audit: $phase" "entrypoint-absent"
-    elif [[ "$id" =~ ^[0-9a-f]{32}$ ]]; then report "audit: $phase" "entrypoint-present id=$id (import it, never overwrite)"
-    else report "audit: $phase" "entrypoint-present id=<malformed>"; fi
+    if [[ -z "$id" ]]; then mig_report "audit: $phase" "entrypoint-absent"
+    elif [[ "$id" =~ ^[0-9a-f]{32}$ ]]; then mig_report "audit: $phase" "entrypoint-present id=$id (import it, never overwrite)"
+    else mig_report "audit: $phase" "entrypoint-present id=<malformed>"; fi
   }
   for ph in "${MIG_AUDIT_ZONE_PHASES[@]}"; do mig_audit "${MIG_ZONE_LIST:-}" zone "$ph"; done
   for ph in "${MIG_AUDIT_ACCT_PHASES[@]}"; do mig_audit "${MIG_ACCT_LIST:-}" root "$ph"; done
@@ -844,7 +849,7 @@ while IFS='|' read -r w_label w_method w_url w_grant w_deny w_kind; do
   url="$(mig_url "$w_url")"
   if [[ "$w_kind" == "settings-json" && "$MIG_SETTINGS_CLEARED" != "1" ]]; then
     MIG_INCONCLUSIVE=1
-    report "$w_label" "inconclusive (settings control not established — the JSON probe body is sent only after this run reads the zone settings list and it lists no probe id)"
+    mig_report "$w_label" "inconclusive (settings control not established — the JSON probe body is sent only after this run reads the zone settings list and it lists no probe id)"
     continue
   fi
   mig_req "$w_method" "$url" "$w_deny" "$w_kind"
@@ -852,9 +857,9 @@ while IFS='|' read -r w_label w_method w_url w_grant w_deny w_kind; do
   if [[ "$CODE" != "403" ]]; then
     MIG_INCONCLUSIVE=1
     if [[ "$CODE" == "400" ]]; then
-      report "$w_label" "inconclusive (deny control $(mig_key "$w_deny") got 400, not 403 — a 400 cannot prove scope here)"
+      mig_report "$w_label" "inconclusive (deny control $(mig_key "$w_deny") got 400, not 403 — a 400 cannot prove scope here)"
     else
-      report "$w_label" "inconclusive (deny control $(mig_key "$w_deny") got $CODE$(mig_errcode), not 403)"
+      mig_report "$w_label" "inconclusive (deny control $(mig_key "$w_deny") got $CODE$(mig_errcode), not 403)"
     fi
     continue
   fi
@@ -867,12 +872,12 @@ while IFS='|' read -r w_label w_method w_url w_grant w_deny w_kind; do
       # is not one JSON document cannot say otherwise, so it reads the same way.
       if [[ "$w_kind" == "settings-json" ]] && mig_grant_unparsed; then
         MIG_INCONCLUSIVE=1
-        report "$w_label" "inconclusive (grant got 400$(mig_errcode) — not one JSON document, or err 6007 malformed JSON: the body was not parsed, so this 400 says nothing about scope)"
+        mig_report "$w_label" "inconclusive (grant got 400$(mig_errcode) — not one JSON document, or err 6007 malformed JSON: the body was not parsed, so this 400 says nothing about scope)"
       else
-        report "$w_label" "authorized ($w_method 400$(mig_errcode) after a 403 control)"
+        mig_report "$w_label" "authorized ($w_method 400$(mig_errcode) after a 403 control)"
       fi ;;
-    401|403) MIG_DENIED=1; report "$w_label" "denied ($CODE$(mig_errcode))" ;;
-    *) MIG_INCONCLUSIVE=1; report "$w_label" "inconclusive ($w_method $CODE$(mig_errcode))" ;;
+    401|403) MIG_DENIED=1; mig_report "$w_label" "denied ($CODE$(mig_errcode))" ;;
+    *) MIG_INCONCLUSIVE=1; mig_report "$w_label" "inconclusive ($w_method $CODE$(mig_errcode))" ;;
   esac
 done < <(mig_write_rows "$PROFILE")
 

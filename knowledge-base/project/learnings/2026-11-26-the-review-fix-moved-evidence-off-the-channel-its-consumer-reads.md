@@ -91,6 +91,14 @@ first fix had added.
     Paused line. **Prevention:** end a turn that waits on background agents with `Paused:` and no promise.
 12. **Three automatic context compactions in one session.** Recovery: continued from the summaries.
     **Prevention:** move ship/postmerge to a fresh session through the resume prompt.
+13. **The fix round fixed the instance, not the class.** It moved the fatal and refusal evidence onto `probe=`
+    lines, but the inconclusive ROW text (`grant got 400, err 6007`, `got 400, not 403`, `settings control not
+    established`), which the runbook says to "read first", stayed indented and was still dropped by the
+    wrapper. The ship-time advisor consult found it. Recovery: `mig_report` prints every migration row as
+    `probe=<profile> row <label>: <status>` too; M5h filters stdout through the wrapper's own grep.
+    **Prevention:** for a channel fix, grep every doc sentence that tells the operator to read output
+    ("read the relayed …") and check each named text against the consumer's filter, not only the lines the
+    finding named.
 
 ## Tags
 

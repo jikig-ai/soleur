@@ -333,8 +333,10 @@ the PR thread. Any verdict other than `pass` blocks that phase's dispatch.
 - **Evidence an operator must post is a `probe=<profile> …` stdout line.** The
   swap-0b wrapper (`run_scope_probe`) keeps only stdout lines matching
   `^(probe=|cf-token-scope: migration)`, so an indented or stderr line is lost on
-  that path. Test a new evidence line with the split capture (`mrun_out`), not
-  the combined one. See
+  that path. Every migration control and write row is therefore also printed as
+  `probe=<profile> row <label>: <status>` (`mig_report`), so the row text the
+  runbook routes an `inconclusive` on survives the wrapper. Test a new evidence
+  line with the split capture (`mrun_out`), not the combined one. See
   `knowledge-base/project/learnings/2026-11-26-the-review-fix-moved-evidence-off-the-channel-its-consumer-reads.md`.
 
 ## Related
