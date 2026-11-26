@@ -60,6 +60,6 @@ Two stages: Build starts when #12897 has merged. Measure starts at the later of 
 
 ## Phase 6 — Verification
 
-- [ ] 6.1 Both vitest suites; both `.test.sh` suites; `tsc --noEmit`.
-- [ ] 6.2 `git diff --quiet origin/main...HEAD -- apps/web-platform/package.json apps/web-platform/package-lock.json` (AC6); pin and `MEASURED_BASELINE.version` still 0.3.321 (AC13).
-- [ ] 6.3 `python3 scripts/lint-guard-contract.py <plan>`.
+- [x] 6.1 Both vitest suites; both `.test.sh` suites; `tsc --noEmit`.
+- [x] 6.2 `git diff --quiet origin/main...HEAD -- apps/web-platform/package.json apps/web-platform/package-lock.json` (AC6); pin and `MEASURED_BASELINE.version` still 0.3.321 (AC13).
+- [x] 6.3 `python3 scripts/lint-guard-contract.py <plan>`.
