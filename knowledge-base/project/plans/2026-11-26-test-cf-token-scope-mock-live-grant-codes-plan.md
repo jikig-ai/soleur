@@ -394,7 +394,7 @@ All at the `unit` layer: `plugins/soleur/test/cf-token-scope.test.sh`, with curl
 
 ## Addendum — 2026-11-26 (review of PR #13080)
 
-This addendum supersedes the scope lines above. The sections above are left as written.
+This addendum supersedes the scope lines above, the "never measured" wording in the Overview and Phase 2, and the M5e "unchanged" entry in Test Scenarios. The sections above are left as written.
 
 - **The pins are whole-line.** `count_f` is `grep -cF`, a substring count. Three review seats showed it passes a row with text appended after `control)`. The two M2 pins now use `grep -cxF -- "$M2_SET_LINE" "$OUTFILE" || true` inline, matching the decision-challenges ruling (`grep -cxF` equal to 1). "Use the existing `count_f`" in Phase 1, the Files list and tasks 2.1 is superseded.
 - **Pin placement.** The pins sit after M2's other assertions, not directly after `mrun`. None of those assertions overwrites `$OUTFILE`.
@@ -403,3 +403,4 @@ This addendum supersedes the scope lines above. The sections above are left as w
   - The diff also changes `plugins/soleur/skills/cf-token-scope/SKILL.md` and the `cf-token-scope.sh` header comment (decision-challenges, scope row).
   - It also changes `knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md`: the revoke-recipe DELETE form, the remaining-token list in Phase 5, and the expected `authorized` line (decision-challenges, runbook row).
   - Line 63's "The probe script, SKILL.md and the M4 fixture do not change" now holds only for the probe logic and the M4 fixture.
+- **Mock comment wording.** The mock no longer says 10026 was "never measured live" for the redirects-dns rows. It says no #12931 comment records 10026 for the rulesets, lists, dns_records and pages grants (the record shows no live code for them). Decision-challenges row 1 keeps the original wording as the ruling record.

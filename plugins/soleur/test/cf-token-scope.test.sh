@@ -1324,14 +1324,15 @@ assert_rc 3 "M5e settings grant 400 err 6007 -> exit 3"
 has "probe=zone-rest verdict=inconclusive" "M5e prints verdict=inconclusive"
 has "err 6007 malformed JSON" "M5e names why the 400 proves nothing"
 # 6007 listed second, and a two-document reply, read the same way: decided on the parsed codes.
-# The text after the final '|' is the code the row displays: the FIRST listed error's
-# code for one document (so a reader of .errors[-1] shows 6007 and reds), none for two.
+# The text after the final '|' is the ", err <code>" fragment the row must display: the
+# FIRST listed error's code for one document (a reader of .errors[-1] shows 6007 and reds),
+# and nothing for two documents.
 for m5e_case in '{"success":false,"errors":[{"code":1000},{"code":6007}]}|, err 1000' '{"success":false,"errors":[{"code":1000}]} {"success":false,"errors":[{"code":6007}]}|'; do
   m5e_b="${m5e_case%|*}"; m5e_code="${m5e_case##*|}"
   printf '%s\n' "/zones/[^/]+/settings\$|tok-zonesettings-mock|400:$m5e_b" >"$MOV"
   MOCK_WRITE_OVERRIDE="$MOV" mrun --profile zone-rest
   assert_rc 3 "M5e grant 400 <$m5e_b> -> exit 3"
-  has_re "zones/<zone>/settings +inconclusive \\(grant got 400${m5e_code} — " "M5e grant 400 <$m5e_b> reads inconclusive with its first code shown"
+  has_re "zones/<zone>/settings +inconclusive \\(grant got 400${m5e_code} — " "M5e grant 400 <$m5e_b> reads inconclusive and displays <${m5e_code:-no code}>"
 done
 # The 6007 rule is scoped to settings-json: an INVALID_BODY row's grant 400 6007 is authorized.
 printf '%s\n' '/bot_management$|tok-botmgmt-mock|400:{"success":false,"errors":[{"code":6007}]}' >"$MOV"

@@ -12,7 +12,7 @@ None (collision pre-check flagged draft #12958, no file overlap).
 
 ### Decisions
 
-- Only the shared authorized-grant default models zone-rest; mock answers per URL (settings 1006, bot_management 10400), redirects-dns rows keep 10026 with an unmeasured note.
+- Only the shared authorized-grant default models zone-rest; mock answers per URL (settings 1006, bot_management 10400), redirects-dns rows keep 10026, noted as recorded by no #12931 comment.
 - Probe script unchanged: any non-6007 400 already classifies as authorized.
 - M2 tightened to two whole-line pins; MIN_ASSERTIONS 680 -> 681.
 - CTO cut the committed mutation row; a scratch-copy mutation check runs at work time.

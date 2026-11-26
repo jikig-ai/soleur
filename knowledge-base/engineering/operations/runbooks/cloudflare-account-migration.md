@@ -142,22 +142,26 @@ mutates no zone.
    ```
 
 3. `Operator-authorizes:` delete it in the operator's signed-in dashboard session, signed in as the login that owns
-   the token: the mints' login for new-account tokens, and the login Phase 5 names for the rest. Run it as ONE
-   `browser_run_code_unsafe` body whose tool result is only `{status, contentType, success}` or `{error: e.name}`.
-   Never return the `x-atok`, the full id or `e.message`, because a thrown request error carries its request headers.
+   the token (the 2026-11-26 0b revokes were owned by the old-account-owner login). Run it as ONE
+   `browser_run_code_unsafe` body. Its tool result is only one of `{atok: false}`, `{matches: <n>}`,
+   `{status, contentType, success}` or `{error: e.name}`. Never return the `x-atok`, the full id or `e.message`: a
+   thrown request error may carry the request it was sending.
    1. `page.goto('https://dash.cloudflare.com/profile/api-tokens')` first. A page not reloaded since sign-in can show
       a stale token list (observed 2026-11-26: it listed 0 tokens).
-   2. One `page.evaluate` reads `window.bootstrap.atok` and `GET /api/v4/user/tokens`, and hands back the atok and
-      the one id whose prefix equals step 2's, kept in Node-local variables. Zero or several matches means this login
-      does not own it: stop. The agent never switches logins; it asks the operator to sign in as the owner.
-   3. `page.request.delete('https://dash.cloudflare.com/api/v4/user/tokens/<id>')` with headers `x-atok` and
-      `x-cross-site-security: dash`, inside `try`/`catch`. The DELETE is Node-side because an in-page `fetch` DELETE
-      gets an HTML `403` from the dashboard edge (measured 2026-11-26).
+   2. One `page.evaluate` reads `window.bootstrap.atok` and `GET /api/v4/user/tokens`, and keeps the atok and the id
+      whose prefix equals step 2's in Node-local variables. No atok: return `{atok: false}` (the page is signed out).
+      Zero matches: return `{matches: 0}`; this login does not own it, and the agent asks the operator to sign in as
+      the owner, never switching logins itself. Several matches: return `{matches: <n>}` and stop.
+   3. `page.request.delete('https://dash.cloudflare.com/api/v4/user/tokens/<id>')` inside `try`/`catch`. The
+      2026-11-26 deletes that returned `200` sent the headers `x-atok` and `x-cross-site-security: dash`; whether
+      the second is required was not tested. The DELETE is Node-side because an in-page `fetch` DELETE got an HTML
+      `403` from the dashboard edge (measured 2026-11-26), while the in-page mint POST did not.
 
-   A JSON `403` or `404` from the DELETE is an ownership or session refusal: stop and report. A non-JSON `403`, a
-   thrown error, or any status other than `200`: stop, post the status and content type on #12931, and do not
-   retry without a fresh authorization.
-4. `Agent:` read back: re-run step 2. Expected: `.success` is `false` (the verify fails). Then
+   Only `200` with `success: true` is a revoke. A JSON `403` or `404` is an ownership or session refusal: stop and
+   report. Anything else (a non-JSON reply, `success: false`, a thrown error, another status): stop, post what the
+   result shows on #12931, and do not retry without a fresh authorization.
+4. `Agent:` read back: re-run step 2. Expected: `.success` is `false` (the verify fails). If it prints
+   `success=true`, the token is still live: stop and post, and keep the key. Otherwise
    `Operator-authorizes:` delete the key that held it, in the same act, so token-drift never grades a dead value:
    `doppler secrets delete <KEY> -p soleur -c <config> --yes > /dev/null`, and re-run the inventory stage
    (expected: no row for that key). Post the four results (id prefix, delete status, verify `false`, key gone) on
@@ -722,22 +726,25 @@ the PR thread, and its comment is the read-back.
   `.github/workflows/cf-account-migrate-alert.yml`, the gate and the bootstrap with its suite).
   Keep `cf-access-deploy-token-mint.sh` and the `cf-token-scope.sh` profiles.
 - Revoke `CF_API_TOKEN_SOLEUR_ACCT` (if not already) and any superseded old-zone token with the revoke recipe.
-  Six tokens remain on the old-account-owner login. #12931 comment 7205049710 maps each one's id prefix to its
-  Doppler holders: `CF_API_TOKEN_AUDIT`, `CF_API_TOKEN_ANALYTICS_READ`, `CF_API_TOKEN_PAGERULES_READ`,
-  `CF_API_TOKEN_PURGE_PREV`, an Origin CA token and the R2 token, the last two with no Doppler holder found. Their zone
-  scopes were not read, so read a token's scope before calling it old-zone. To replace a token that has a holder:
-  1. Copy the old value to `<KEY>_PREV` in `prd_terraform`. Then mint the replacement on the Soleur login and write
-     it over `<KEY>` in every config that holds `<KEY>` (the staging pattern of 0a and 0b).
-  2. Run the revoke recipe on `prd_terraform/<KEY>_PREV`, signed in as the old-account-owner login. Recipe step 2's id
-     prefix must equal the mapped one; stop on any other.
-  3. The bootstrap inventory's `WATCHED` list does not cover these keys, and the inventory stage goes away with the
-     machinery above. For recipe steps 1 and 4, list holders by name instead
-     (`doppler secrets --only-names --json -p soleur -c <config>` per config).
+  Six tokens remain on the old-account-owner login, measured 2026-11-26. #12931 comment 7205049710 lists them by id
+  prefix with the holders a search found. These are inputs for the cleanup PR, not a procedure. That PR writes the
+  replacement steps, under its own review, before any of these is revoked.
+  - Holders found in `soleur`: `CF_API_TOKEN_AUDIT` (`dev`, `dev_personal`, `dev_scheduled`, `prd_terraform`),
+    and `CF_API_TOKEN_ANALYTICS_READ`, `CF_API_TOKEN_PAGERULES_READ` and `CF_API_TOKEN_PURGE_PREV` (all
+    `prd_terraform`).
+  - Not yet located: the search covered only `CF_*TOKEN*` keys in project `soleur`. So it could not find the Origin
+    CA token's documented holder, `CF_API_TOKEN_ORIGIN_CA` in `soleur-infra-privileged/prd` (Phase 3 step 4,
+    `origin-tls-mint.md`), or an R2 token's S3 key pair.
+  - Not yet read: each token's zone and account scope.
 
-  `CF_API_TOKEN_PAGERULES_READ` is read by `cloudflare-readonly.sh pagerules-ssl`, a standing-delegation read pinned
-  in `components.test.ts`. Whether the new zone has page rules was not measured: run that read on the new zone before
-  retiring the reader or re-minting its token. `CF_API_TOKEN_PURGE_PREV` is revoked at Phase 3 step 5; do it there if
-  that step has not run. The R2 token stays, because the old account keeps R2.
+  Constraints the cleanup PR's procedure must meet:
+  - Stage the old value as `<KEY>_PREV` before overwriting `<KEY>`, so the revoke recipe reads the old id.
+  - Check by digest or verify id, never by key name, that no config's `<KEY>` still holds the old value.
+  - Treat `CF_API_TOKEN_ANALYTICS_READ` as an owner mint (`origin-tls-strict-flip.md`).
+  - Run `cloudflare-readonly.sh pagerules-ssl` on the new zone before deciding the fate of
+    `CF_API_TOKEN_PAGERULES_READ`. That read is pinned in `components.test.ts`.
+
+  `CF_API_TOKEN_PURGE_PREV` is revoked at Phase 3 step 5. The R2 token stays, because the old account keeps R2.
 - `Operator-authorizes:` delete the old tunnel `fc4509ed…` in the legacy account once web-2's replace has dropped its
   connections. Read-back: the same account's tunnel list by that id shows it deleted.
 - `Operator-authorizes:` delete, one go each and by name, the legacy-account objects the forget left behind, listed from
