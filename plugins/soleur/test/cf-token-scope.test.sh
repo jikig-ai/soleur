@@ -145,8 +145,8 @@ if [[ "$method" != "GET" ]]; then
   # PATCH /zones/<z>/settings parses JSON BEFORE it checks authorization
   # (measured 2026-11-26, #12931 comment 7193905571): a non-JSON body gets 400
   # code 6007 for EVERY token, and valid JSON from a denied token gets 403 code
-  # 9109. The grant token's 400 on the JSON probe body is ASSUMED here: it is not
-  # measured until the post-merge staged run records it.
+  # 9109. The grant token's answer to the JSON probe body, 400 code 1006, was
+  # measured on 2026-11-26 (#12931 comment 7201789881).
   if [[ -z "$spec" && "$url" =~ /zones/[^/]+/settings$ ]] && ! printf '%s' "$body_arg" | jq -e . >/dev/null 2>&1; then
     spec='400:{"success":false,"errors":[{"code":6007,"message":"Malformed JSON in request body"}]}'
   fi
@@ -160,7 +160,14 @@ if [[ "$method" != "GET" ]]; then
       tok-zonesettings-mock) [[ "$url" =~ /zones/[^/]+/settings$ ]] && granted=1 ;;
       tok-botmgmt-mock)      [[ "$url" =~ /bot_management$ ]] && granted=1 ;;
     esac
-    if [[ "$granted" == 1 ]]; then spec='400:{"success":false,"errors":[{"code":10026,"message":"invalid json"}]}'
+    # A granted token's 400, by URL. 1006 (zone settings PATCH) and 10400 (bot
+    # management PUT) were measured live on 2026-11-26 (#12931 comment 7201789881).
+    # 10026 for the redirects-dns rows was never measured live. The script reads
+    # only .errors[0].code, so the message strings are synthetic.
+    if [[ "$granted" == 1 ]]; then
+      if [[ "$url" =~ /zones/[^/]+/settings$ ]]; then spec='400:{"success":false,"errors":[{"code":1006,"message":"mock: settings grant rejected the probe body"}]}'
+      elif [[ "$url" =~ /bot_management$ ]]; then spec='400:{"success":false,"errors":[{"code":10400,"message":"mock: bot management grant rejected the probe body"}]}'
+      else spec='400:{"success":false,"errors":[{"code":10026,"message":"invalid json"}]}'; fi
     elif [[ "$url" =~ /zones/[^/]+/settings$ ]]; then spec='403:{"success":false,"errors":[{"code":9109,"message":"Unauthorized to access requested resource"}]}'
     else spec='403:{"success":false,"errors":[{"code":10000,"message":"Authentication error"}]}'; fi
   fi
@@ -1239,7 +1246,10 @@ else
   no "M2 a grant token was probed before its deny control (see $MWLOG)"
 fi
 assert_eq "M2 the settings deny control sent the JSON probe body with the bot-management token" 1 "$(grep -cxF -- "PATCH https://api.cloudflare.com/client/v4/zones/$NEW_ZONE/settings tok-botmgmt-mock $SET_BODY" "$MWLOG" || true)"
-has_re 'zones/<zone>/settings +authorized \(PATCH 400(, err [0-9]+)? after a 403 control\)' "M2 the settings row reads authorized, with the grant's error code"
+M2_SET_LINE='probe=zone-rest row zones/<zone>/settings -> authorized (PATCH 400, err 1006 after a 403 control)'
+M2_BOT_LINE='probe=zone-rest row zones/<zone>/bot_management -> authorized (PUT 400, err 10400 after a 403 control)'
+assert_eq "M2 the settings row reads authorized with its live code (1006, measured 2026-11-26)" 1 "$(count_f "$M2_SET_LINE")"
+assert_eq "M2 the bot_management row reads authorized with its live code (10400, measured 2026-11-26)" 1 "$(count_f "$M2_BOT_LINE")"
 for leak in tok-zonesettings-mock tok-botmgmt-mock; do lacks "$leak" "M2 output never carries token $leak"; done
 
 # --- M3: a grant token answering 403 -> verdict=denied, exit 3 ---
@@ -1670,7 +1680,7 @@ else
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
-MIN_ASSERTIONS=680
+MIN_ASSERTIONS=681
 if [[ "$((pass + fail))" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1
