@@ -56,7 +56,7 @@ for this branch; the change touches one domain, engineering docs).
 | ADR-240 may carry the same wording | It does not. ADR-240 says "committed, regenerated on conflict, never hand-merged" (Context) and "resolves by regeneration, not hand-merge" (decision 5). ADR-242's parenthetical "(ADR-240: generated, never hand-edited)" misattributes the wording. | ADR-240 untouched (CTO ruling); the ADR-242 amendment corrects the citation. |
 | "Edit the one row by hand" is the whole recipe | ADR-313 and runbook arm-split item 6 already sanction one other hand edit: seeding an arm price as `src=estimate`. Learning 2026-11-25 shows a hand-ADDED row breaks `infra-suite-registration` (no shard placement). | The recipe covers existing `src=measured` rows only, ms field only (CTO ruling). |
 | Drift-gate confirm is optional | CTO ruling: mandatory. It is the only check on drift; `scripts-shard-manifest.test.sh` checks shape only. | Step 3 of the recipe is mandatory. |
-| The seed path is the single-row tool (learning `workflow-patterns/2026-10-31-shard-reprice-checkpoint-mechanics.md` step 3) | #12780 measured that `--durations seed --write` re-aggregates the whole table (140 floor rows plus headers rewritten, 45 manifest legs moved). Re-measured 2026-11-26 on the current table (20 floor rows) with a one-row edit: 4 floor rows re-derived (1800 → 1802 ms), 2 header lines, 14 legs moved. | Add a one-line dated pointer to that learning (inferred scope, see Scope Check). |
+| The seed path is the single-row tool (learning `workflow-patterns/2026-10-31-shard-reprice-checkpoint-mechanics.md` step 3) | #12778's planning (plan archive 20261115-233154) measured that `--durations seed --write` re-aggregates the whole table (140 floor rows plus headers rewritten, 45 manifest legs moved). Re-measured 2026-11-26 on the current table (20 floor rows) with a one-row edit: 4 floor rows re-derived (1800 → 1802 ms), 2 header lines, 14 legs moved. | Add a one-line dated pointer to that learning (inferred scope, see Scope Check). |
 | A runbook `gh run list` command is free text | `plugins/soleur/test/components.test.ts` "unbounded gh enumerations carry an explicit sufficient bound (#8593)" scans this runbook; a consumed `gh run list` needs `-L`/`--limit` of at least 100 or `--paginate`. | The recipe's `gh run list` carries `-L 100`. |
 
 ## Research Insights
@@ -189,7 +189,7 @@ Sources: issue #12780 body ("Proposed change") and the operator's 2026-11-26 bri
 | Phase 2 ADR-242 amendment, first sentence (#9814 parenthetical) | "Amend ADR-242's wording through `soleur:architecture`." | asked |
 | Phase 2 ADR-242 amendment, second sentence (2026-11-04 ledger "not edited by hand") | none | inferred — justification: found by the operator-asked grep (ask 8); leaving it would contradict the new amendment in the same file |
 | Phase 3 `scripts/test-all.sh` comment | "the scripts/test-all.sh run_suite comments saying \"suite-durations.tsv are NOT hand-edited\"" | asked |
-| Phase 4 learning pointer | none | inferred — justification: that learning prescribes the seed path for a row re-price, which #12780 measured as a whole-table rewrite; a re-pricer following it reproduces the churn this recipe avoids |
+| Phase 4 learning pointer | none | inferred — justification: that learning prescribes the seed path for a row re-price, which #12778's planning measured as a whole-table rewrite; a re-pricer following it reproduces the churn this recipe avoids |
 
 ### Split Assessment
 

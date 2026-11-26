@@ -159,25 +159,22 @@ resolver cannot supply — this path stays manual.
 
 ### Re-price one row from merge_group medians (#12780)
 
-Use this to re-price ONE existing `src=measured` row of a committed durations table
-(`scripts/suite-durations.tsv`, `scripts/suite-durations-heavy.tsv`) to its CI `merge_group`
-median. It is a sanctioned hand edit only when the drift gate accepts the edited table (step 3),
-either outright or with a generator-stamped growth ack whose violations name only this row. Why
-by hand: every pricing mode of the generator re-aggregates the
-whole table and repacks the legs, and `--incremental` pins incumbent rows verbatim and fetches
-no timings, so neither can re-price one row. On a one-row edit of the 2026-11-26 table the seed
-path `--durations seed --write` also re-derived 4 floor rows, rewrote 2 header lines and moved 14
-manifest legs; during #12441 P.2 planning, on an older table, it rewrote 140 floor rows and moved 45. Precedent: #12419 (replay-a, `measured` 1033094 → 160004 ms
-from three green merge_group runs). Decision record: ADR-242, amendment 2026-11-26.
+Use this to re-price ONE existing `src=measured` row of `scripts/suite-durations.tsv` or
+`scripts/suite-durations-heavy.tsv` to its CI `merge_group` median, ms field only. Every
+generator pricing mode re-aggregates the whole table, and `--incremental` fetches no timings,
+so a one-row re-price is a hand edit. Why that edit is sanctioned, and its bounds: ADR-242,
+amendment 2026-11-26. Precedent: #12419 (replay-a, `measured` 1033094 → 160004 ms from three
+green merge_group runs; it predates this recipe and ran no drift gate).
 
-Out of bounds for this recipe, use the generator instead: adding a row (`--incremental --write`
-tables it with its shard placement), upgrading a `floor` row to `measured` (ADR-240: `src=floor`
-is never laundered into a measurement; see the floor rule above) or an `estimate` row (ADR-313
-Consequences: only a real timings pass upgrades it), and any re-price the drift gate refuses.
+Out of bounds for this recipe, use the generator instead: adding a row, turning a `floor` or
+`estimate` row into `measured`, and any re-price whose gate violations name another label. The
+infra table (`apps/web-platform/infra/suite-durations.tsv`) is out of scope too; its re-measure
+path is in `run-registered-suites.sh` beside its bound.
 
 **Heavy table.** The commands below are for the light table. For
 `scripts/suite-durations-heavy.tsv`, change every step: download `-p 'suite-timings-scripts-heavy-*'`,
-copy `scripts/suite-shard-legs-heavy.tsv` wherever the light legs file is copied, use
+read per-run values from `suite-timings-scripts-heavy-[0-9]*`, copy
+`scripts/suite-shard-legs-heavy.tsv` wherever the light legs file is copied, use
 `scripts/suite-durations-heavy.tsv` wherever the light table is named (including the `git show`
 in step 3), and pass `--group heavy` to every generator call in steps 1, 3 and 4. Leaving out
 `--group heavy` is not harmless: step 3 then gates the light set and passes a heavy edit it
@@ -186,11 +183,12 @@ heavy table.
 
 1. **Measure in scratch.** List green merge_group runs, download each run's timings into its own
    dir, and keep the newest 5 that received artifacts (at least 3; artifacts live 14 days). Then
-   let the generator take the median, writing to scratch only, and read the one row (repeat
-   `--timings-dir` once per kept run):
+   let the generator take the median, writing to scratch only, and read the one row by exact
+   label (repeat `--timings-dir` once per kept run). Later steps reuse `$WORK`; if your shell
+   does not keep variables between commands, re-set `WORK=<the printed path>` first.
 
    ```bash
-   WORK="$(mktemp -d)"
+   WORK="$(mktemp -d)"; echo "$WORK"
    gh run list -R jikig-ai/soleur --workflow ci.yml --event merge_group \
      --status success -L 100 --json databaseId --jq '.[].databaseId'
    # per run id, newest first:
@@ -199,20 +197,30 @@ heavy table.
    python3 scripts/regenerate-shard-manifest.py \
      --timings-dir "$WORK/r<id1>" --timings-dir "$WORK/r<id2>" --timings-dir "$WORK/r<id3>" \
      --manifest "$WORK/legs.tsv" --durations-out "$WORK/fresh.tsv" --write
-   grep -F "<label>" "$WORK/fresh.tsv"
+   awk -F'\t' -v l='<label>' '$1 == l' "$WORK/fresh.tsv"
+   # per-run values (max across legs, failed and skipped rows dropped; 0 = not timed):
+   for d in "$WORK"/r*; do
+     printf '%s\t' "${d##*/r}"
+     cat "$d"/suite-timings-scripts-[0-9]*/suite-timings.tsv | awk -F'\t' -v l='<label>' \
+       '$1 == l && $3 !~ /^(FAIL|KILLED|TRIPWIRE|skip=)/ { if ($2 + 0 > m) m = $2 + 0 } END { print m + 0 }'
+   done
    ```
 
-   The generator's median skips `FAIL`, `KILLED`,
-   `TRIPWIRE` and `skip=` rows and takes the max across legs within a run, so do not compute
-   the median by hand.
+   Go on only if the `fresh.tsv` row's third field is `measured` and the per-run list shows a
+   non-zero value in at least 3 kept runs. Otherwise stop: the runs carry no measurement for
+   this label, and the row's value would be a floor. Take the median from the generator, not
+   by hand.
 
 2. **Edit the one row.** In the committed table, replace only the ms field of
    `<label><TAB><ms><TAB>measured` with the median from step 1. Leave the label, `src`, row
-   order, headers and every other row as they are.
+   order, headers and every other row as they are. Then confirm the edited row is the measured
+   one: `diff <(awk -F'\t' -v l='<label>' '$1 == l' "$WORK/fresh.tsv") <(awk -F'\t' -v l='<label>' '$1 == l' scripts/suite-durations.tsv)`
+   must print nothing. The gate in step 3 bounds growth only; a decrease of any size passes it.
 
 3. **Gate it (required, scratch only).**
 
    ```bash
+   : "${WORK:?set WORK to the step 1 path}"
    git show "$(git merge-base HEAD origin/main)":scripts/suite-durations.tsv > "$WORK/base.tsv"
    cp scripts/suite-shard-legs.tsv "$WORK/gate-legs.tsv"
    python3 scripts/regenerate-shard-manifest.py --incremental \
@@ -222,22 +230,31 @@ heavy table.
 
    Exit 0 with `0 moved` means accepted. The gate refuses (exit 2, `weight drift refusal`) a row
    that grows more than 1.5x and by more than 10000 ms, or a total measured growth above 10
-   percent; a decrease never trips it. If it refuses, read each violation line it prints. Go on
-   only if every line is about the row you re-seated (its `per-suite drift '<label>'` line, or
-   the `total measured weight` line when only your row changed). Then re-run this step with
-   `--allow-growth`, run step 4 as `--incremental --allow-growth --write` so the generator
-   writes the `# growth-acked=` stamp into the in-tree table (never type the stamp by hand), and
-   paste the violation lines into the commit message next to the run ids. If any line names
-   another label, stop: this recipe does not acknowledge that growth, so use the full
-   `--timings-dir … --write` regen instead.
+   percent. If it refuses, read each violation line it prints. Go on only if every line is
+   about the row you re-seated (its `per-suite drift '<label>'` line, or the
+   `total measured weight` line when only your row changed), and then run step 4 with
+   `--allow-growth` so the generator writes the `# growth-acked=` stamp into the in-tree table
+   (never type the stamp by hand). Paste the violation lines into the commit message next to the
+   run ids. If any line names another label, stop: this recipe does not acknowledge that
+   growth, so use the full `--timings-dir … --write` regen instead.
 
-4. **Refresh the manifest's provenance headers in the tree.**
-   `python3 scripts/regenerate-shard-manifest.py --incremental --durations scripts/suite-durations.tsv --write`
-   must print `already in parity — untouched` for the durations table and `0 moved`; the
-   manifest diff is header lines only (`generated-at`, and `default-weight-ms` when the measured
-   median moved). The table's own headers stay as they were, so its `generated-from-runs` no
-   longer covers the re-seated row; that is why the run ids go in the commit message. This
-   committed write runs the same drift gate against the merge-base.
+4. **Refresh the provenance headers in the tree.** This committed write runs the same drift gate
+   against the merge-base:
+
+   ```bash
+   python3 scripts/regenerate-shard-manifest.py --incremental \
+     --durations scripts/suite-durations.tsv --write   # add --allow-growth on the step 3 refusal path
+   ```
+
+   Without `--allow-growth` it must print `already in parity — untouched` for the durations
+   table and `0 moved`. The manifest diff is header lines only: `generated-at`, `default-weight-ms`
+   when the measured median moved, and `generated-from-run(s)` if the manifest last came from a
+   full regen. The table's own headers stay as they were, so its `generated-from-runs` no longer
+   covers the re-seated row; that is why the run ids go in the commit message. With
+   `--allow-growth` it prints `wrote scripts/suite-durations.tsv (parity delta: +0 floor row(s),
+   -0 stale row(s); …)` and `drift gate: 1 violation(s) acknowledged (--allow-growth)` instead,
+   and the table's `# generated-at=` and `# growth-acked=` lines change too (the new stamp
+   replaces any existing one).
 
 5. **Verify and commit.** Run the table's consumers, at least
    `bash plugins/soleur/test/scripts-shard-manifest.test.sh`,
@@ -245,11 +262,11 @@ heavy table.
    `bash scripts/test-all-fast-tier-budget.test.sh`
    (`grep -l 'suite-durations' scripts/*.test.sh plugins/soleur/test/*.sh` lists the rest). A
    price that crosses the 600000 ms per-suite cap, or makes a `scripts/suite-weight-exemptions.tsv`
-   row stale, reconciles that ledger in the same commit (#12419 deleted one). Commit the row and
-   the manifest header lines together, with the run ids and per-run values in the commit message.
-
-This does not loosen the conflict rule above: a merge conflict on these rows is still resolved by
-regeneration, never by hand-merge. A re-seat is a deliberate edit on your own branch.
+   row stale, reconciles that ledger in the same commit (#12419 deleted one). Commit the row, the
+   manifest header lines and, on the `--allow-growth` path, the table's changed header lines
+   together, with the run ids and the step 1 per-run values in the commit message. Nothing in CI
+   re-runs the gate, so the manifest's `generated-at` line (and the `# growth-acked=` line, when
+   present) in the diff is the reviewer's evidence that step 4 ran.
 
 ## The drift watch (`shard-balance-watch`, #11564)
 
@@ -278,9 +295,9 @@ live 14 days. To re-price the whole table from the probe's population:
 per run, then `--timings-dir <dir> … --write` (without `--drift-report`; the
 probe's measurement path and the regen path are one generator). That
 re-aggregates every row. To re-price one row, use
-[the one-row recipe](#re-price-one-row-from-merge_group-medians-12780) instead:
-a hand edit of that row, sanctioned only when the drift gate accepts it. `bash scripts/watch-shard-balance-11564.sh --dry-run`
-prints findings and posts nothing; `--print-report` prints the raw rows.
+[the one-row recipe](#re-price-one-row-from-merge_group-medians-12780)
+instead. `bash scripts/watch-shard-balance-11564.sh --dry-run` prints
+findings and posts nothing; `--print-report` prints the raw rows.
 Retirement checklist: the workflow header.
 
 ## The wall-clock ratchet (`wallclock-p90-watch`, #11774)
