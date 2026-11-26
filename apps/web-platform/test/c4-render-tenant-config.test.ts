@@ -8,9 +8,10 @@
 // were all RED; the render now takes no workspace path, so those "untracked"
 // rows are replaced by the structural test (c4-render-boundary.test.ts).
 //
-// Binary: $LIKEC4_BIN, else `likec4` on PATH. Absent → skip locally with the
-// install command, but FAIL when LIKEC4_REQUIRED is set (CI's test-webplat sets
-// it), so a missing binary can never read as a pass.
+// Binary: $LIKEC4_BIN, else `likec4` on PATH. Absent — or resolved but unrunnable
+// by node (a shim realpathing to an ELF) → skip locally with the install command,
+// but FAIL when LIKEC4_REQUIRED is set (CI's test-webplat sets it), so a missing
+// or broken binary can never read as a pass.
 import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
 import {
@@ -52,6 +53,27 @@ if (!BIN && process.env.LIKEC4_REQUIRED) {
 if (!BIN) {
   console.warn(`[c4-render-tenant-config] likec4 not found — skipping. Install: ${INSTALL_HINT}`);
 }
+
+// #12874: the render runs `node <realpath(BIN)>`, so a resolved binary is only
+// usable when that realpath is a node-runnable entry. A mise/asdf shim resolves
+// to the tool manager's own ELF (and here the backing install can be absent for
+// the active toolchain), which `node` cannot parse — the rows then fail exactly
+// like a missing install, so gate them the same way.
+const RESOLVED_BIN = BIN !== null ? realpathSync(BIN) : null;
+const ENTRY_RUNS =
+  RESOLVED_BIN !== null &&
+  spawnSync(process.execPath, [RESOLVED_BIN, "--version"], { stdio: "ignore", timeout: 15_000 }).status === 0;
+if (RESOLVED_BIN && !ENTRY_RUNS && process.env.LIKEC4_REQUIRED) {
+  throw new Error(
+    `LIKEC4_REQUIRED is set and ${BIN} resolves, but node cannot run its realpath ${RESOLVED_BIN} (a shim without a backing install?). Install: ${INSTALL_HINT}`,
+  );
+}
+if (RESOLVED_BIN && !ENTRY_RUNS) {
+  console.warn(
+    `[c4-render-tenant-config] ${BIN} resolves to ${RESOLVED_BIN}, which node cannot run (a shim without a backing install?) — skipping the render rows as if absent. Install: ${INSTALL_HINT}`,
+  );
+}
+const LIKEC4_OK = ENTRY_RUNS;
 
 // #8696: the render runs inside bwrap. "Available" means bwrap can actually
 // create the sandbox here (a runner can have the binary but block user
@@ -131,6 +153,8 @@ let stageMod: StageMod;
 let stagingRoot: string;
 
 beforeAll(async () => {
+  // !BIN, not !LIKEC4_OK: the #8696 describe needs renderMod loaded even when
+  // likec4 resolves-but-can't-run (its launch() only needs the binary's path).
   if (!BIN) return;
   stagingRoot = tmp("c4-staging-root-");
   vi.stubEnv("LIKEC4_BIN", BIN);
@@ -200,7 +224,7 @@ function writeTree(tree: FakeTree): string {
   return root;
 }
 
-describe.skipIf(!BIN)("#8623 acceptance — a tenant likec4 config never executes on the server render", () => {
+describe.skipIf(!LIKEC4_OK)("#8623 acceptance — a tenant likec4 config never executes on the server render", () => {
   it("H1 control: the SAME fixture run IN PLACE (server argv + env) executes the config", () => {
     const s = sentinelPath();
     const dir = writeTree(fixture({ "likec4.config.mjs": configThatWrites(s) }));
@@ -269,7 +293,7 @@ describe.skipIf(!BIN)("#8623 acceptance — a tenant likec4 config never execute
   }, 90_000);
 });
 
-describe.skipIf(!BIN)("#8623 acceptance — inputs outside the working tree", () => {
+describe.skipIf(!LIKEC4_OK)("#8623 acceptance — inputs outside the working tree", () => {
   it("the config-name list matches the installed likec4 dist (a bump that adds a name reds here)", () => {
     // Walk up from the resolved binary to the likec4 package root. The chunk
     // layout changed at 1.60.0: `dist/_chunks/src.mjs` → `dist/chunks/filenames.mjs`.
@@ -317,6 +341,9 @@ describe.skipIf(!BIN)("#8623 acceptance — inputs outside the working tree", ()
 // `command` swapped, from the test's FULL env, and each negative is paired with
 // a positive control showing the thing exists and is reachable OUTSIDE the
 // sandbox (so "unreachable" cannot pass vacuously).
+// Gate is !BIN, not !LIKEC4_OK: these rows never execute likec4 — launch() only
+// needs realpathSync(BIN) for the bind computation. The one row that runs a real
+// render carries its own it.skipIf(!LIKEC4_OK).
 describe.skipIf(!BIN || !BWRAP_OK)("#8696 — the render sandbox, measured with real bwrap", () => {
   function launch(stageDir: string, command: string[]) {
     const nodeBin = realpathSync(process.execPath);
@@ -458,7 +485,7 @@ s.on("error", (e) => { out.net = e.code; console.log(JSON.stringify(out)); });
     expect(r.stdout).toMatch(/no_new_privs:\s*1/i);
   }, 60_000);
 
-  it("a source with elements but no `views {}` block still renders at least the index view", async () => {
+  it.skipIf(!LIKEC4_OK)("a source with elements but no `views {}` block still renders at least the index view", async () => {
     const noViews = `specification {
   element actor
 }
@@ -494,5 +521,26 @@ describe.skipIf(!!process.env.C4_ACCEPTANCE_CHILD)("#8623 acceptance — harness
     );
     expect(r.status).toBe(1);
     expect(`${r.stdout}${r.stderr}`).toContain("LIKEC4_REQUIRED is set but no likec4 binary resolves");
+  }, 150_000);
+
+  it("H2b: LIKEC4_REQUIRED with a binary node cannot run fails the suite", () => {
+    const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const r = spawnSync(
+      join(appRoot, "node_modules", ".bin", "vitest"),
+      ["run", "test/c4-render-tenant-config.test.ts"],
+      {
+        cwd: appRoot,
+        env: {
+          ...process.env,
+          LIKEC4_BIN: "/usr/bin/true",
+          LIKEC4_REQUIRED: "1",
+          C4_ACCEPTANCE_CHILD: "1",
+        },
+        encoding: "utf8",
+        timeout: 120_000,
+      },
+    );
+    expect(r.status).toBe(1);
+    expect(`${r.stdout}${r.stderr}`).toContain("node cannot run its realpath");
   }, 150_000);
 });
