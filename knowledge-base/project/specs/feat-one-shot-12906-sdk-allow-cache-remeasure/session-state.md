@@ -31,3 +31,4 @@ cto_spawns=1
 - 0.3.328 measured: `REMEASURE verdict=CACHES exit=0 reason=measured`; ADR-278 Addendum 2026-11-26 written; #12906 commented; #12977 closed.
 - npm latest 0.3.332 refused by the floor (`release-age-floor`, re-run after 2026-11-27T22:09:40Z); not measured.
 - CI: quality-guards failed on MD034 bare URLs in the 0.3.325 addendum gateway cells (fixed by code spans); `test` red is the draft-light "full battery owed at ready" sentinel, cleared by the ready run.
+- Fix round (CTO ruling 28): every seat finding fixed inline in e096f85b54; 0.3.328 re-run at 11:42Z on the hardened script: `REMEASURE verdict=CACHES exit=0 reason=measured`, zero `<invalid>` fields; the ADR-278 2026-11-26 addendum now carries this record and marks the 10:41Z run superseded.

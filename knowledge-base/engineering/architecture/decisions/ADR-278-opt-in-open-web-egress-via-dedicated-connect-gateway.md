@@ -212,10 +212,10 @@ Measurement 4 above records that `NO_PROXY` is not honored by the SDK's API path
 
 ## Addendum — 2026-11-26 (#12906): per-host allow cache re-measured on Agent SDK 0.3.328
 
-**Command** (exit code 0).
+**Command** (exit code 0; the 11:42Z re-run on the script as hardened by CTO ruling 28).
 
 ```text
-bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.328 --out <scratchpad>/verdict-0.3.328.json --markdown <scratchpad>/records-0.3.328
+bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.328 --out <out> --markdown <dir>
 ```
 
 **Result.** `REMEASURE verdict=CACHES exit=0 reason=measured next=#12906 stays blocked; re-run on the next SDK bump`
@@ -231,8 +231,8 @@ bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.328 --
 
 **Host.**
 
-- startedAt: `2026-11-26T10:41:56Z`
-- endedAt: `2026-11-26T10:43:16Z`
+- startedAt: `2026-11-26T11:42:06Z`
+- endedAt: `2026-11-26T11:43:22Z`
 - requested: `0.3.328`
 - exactVersion: `0.3.328`
 - linuxX64Version: `0.3.328`
@@ -248,7 +248,7 @@ bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.328 --
 
 | Arm | SandboxNetworkAccess asks (in order) | Gateway lines | Decoy hits |
 |---|---|---|---|
-| `control` | `198.51.100.1, 127.0.0.2, 169.254.169.254` | `-` | `198.51.100.1:443, 198.51.100.1:80, 198.51.100.1:22, 127.0.0.2:35343, 127.0.0.2:35343, 169.254.169.254:80` |
+| `control` | `198.51.100.1, 127.0.0.2, 169.254.169.254` | `-` | `198.51.100.1:443, 198.51.100.1:80, 198.51.100.1:22, 127.0.0.2:46525, 127.0.0.2:46525, 169.254.169.254:80` |
 | `B` | `example.test, 198.51.100.1, 169.254.169.254, metadata.test` | `CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT 198.51.100.1:443 HTTP/1.1; GET http://example.test/ HTTP/1.1; CONNECT example.test:22 HTTP/1.1; CONNECT 198.51.100.1:22 HTTP/1.1; CONNECT 169.254.169.254:443 HTTP/1.1; CONNECT metadata.test:443 HTTP/1.1` | `-` |
 | `D` | `-` | `-` | `-` |
 | `E` | `198.51.100.1` | `-` | `-` |
@@ -259,7 +259,7 @@ bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.328 --
 
 | Arm | SandboxNetworkAccess asks (in order) | Gateway lines | Decoy hits |
 |---|---|---|---|
-| `control` | `198.51.100.1, 127.0.0.2, 169.254.169.254` | `-` | `198.51.100.1:443, 198.51.100.1:80, 198.51.100.1:22, 127.0.0.2:42115, 127.0.0.2:42115, 169.254.169.254:80` |
+| `control` | `198.51.100.1, 127.0.0.2, 169.254.169.254` | `-` | `198.51.100.1:443, 198.51.100.1:80, 198.51.100.1:22, 127.0.0.2:34887, 127.0.0.2:34887, 169.254.169.254:80` |
 | `B` | `example.test, 198.51.100.1, 169.254.169.254, metadata.test` | `CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT 198.51.100.1:443 HTTP/1.1; GET http://example.test/ HTTP/1.1; CONNECT example.test:22 HTTP/1.1; CONNECT 198.51.100.1:22 HTTP/1.1; CONNECT 169.254.169.254:443 HTTP/1.1; CONNECT metadata.test:443 HTTP/1.1` | `-` |
 | `D` | `-` | `-` | `-` |
 | `E` | `198.51.100.1` | `-` | `-` |
@@ -268,10 +268,21 @@ bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.328 --
 
 **What it means.** 0.3.328 reads the same as the pin: within one session, F asked once for three requests to the same host, and F2 asked the allowed host once across two commands, then asked only for the new host. Both runs passed every precondition: versions, SDK entry, all arms present, the control arm's decoys, teardown, the post-teardown requests and asks recorded. The SDK still caches a per-host allow for the whole session, so a later deny for the same host would never be asked. #12906 stays blocked, and the next run happens on the next SDK bump (`sdk-bump-sandbox-gate.sh` prints the command). This closes #12977.
 
-**Earlier run not cited.** This record replaces, in place, the interim record of 2026-11-19 on Agent SDK 0.3.325 (also `CACHES`). That run is not cited as evidence: it ran under the first containment, which review found could be undone from inside the namespace and which left repos outside `$HOME` and outside `git worktree list` writable. The script was fixed before this run (CTO rulings 22 to 25 in the PR's `decision-challenges.md`). The #12906 comment that reported the 0.3.325 run is left as posted.
+**Earlier runs superseded or not cited.** This record replaces, in place, the first 0.3.328 run of the same day (10:41Z to 10:43Z, also `CACHES`, same per-arm outcome). That run is superseded, not contradicted: it ran before the fixes of CTO ruling 28 (a minimal `/dev`, an IPC namespace, closed inherited fds, closed-shape records, the npm floor read back), so its containment was weaker than the one described below. The interim record of 2026-11-19 on Agent SDK 0.3.325 (also `CACHES`) is not cited as evidence: it ran under the first containment, which review found could be undone from inside the namespace and which left repos outside `$HOME` and outside `git worktree list` writable (CTO rulings 22 to 25 in the PR's `decision-challenges.md`). The #12906 comment that reported the 0.3.325 run is left as posted.
 
-**Newer versions.** npm `latest` was 0.3.332 when this ran. The script refused it, `REMEASURE verdict=REFUSED exit=3 reason=release-age-floor next=re-run after 2026-11-27T22:09:40Z`, so no newer version was measured. 0.3.329 to 0.3.331 were not measured either.
+**Newer versions.** npm `latest` was 0.3.332 when this ran. The script refused it, `REMEASURE verdict=REFUSED exit=3 reason=release-age-floor next=re-run after 2026-11-27T22:09:40Z`, so no newer version was measured. 0.3.329 and 0.3.330 are past the floor, and 0.3.331 clears it on 2026-11-26T18:35Z; none of them is npm `latest`, and none was measured.
 
 **Limits.** This measurement is off-production (developer host, scripted model stub, production pin unchanged at 0.3.321). It neither satisfies nor re-arms gate B-2 of the 2026-11-18 DPIA re-screen (`knowledge-base/legal/audits/2026-11-18-dpia-rescreen-egress-credential-injector.md`, PR #12900). B-2 is already unsatisfied, because the 0.3.321 pin fired the SDK-version trigger. Adopting any new Agent SDK or CLI version, 0.3.328 included, would fire the results note's SDK-version trigger, and the CLI-version trigger whenever the bundled CLI changes, and so would re-arm B-2 against the adopted versions.
 
-**Containment of this run.** Each harness ran in its own user, mount, network and pid namespace. A read-only tmpfs covered `$HOME` and `$XDG_RUNTIME_DIR`. The whole mount tree was remounted read-only (`ro=recursive /`). A tmpfs covered `/run` (`/var/run` is a symlink to it on this host), and private tmpfs mounts covered `/tmp` and `/dev/shm`. Only the run's home and scratch directories were bound back read-write. The tree was then locked in a nested user and mount namespace and probed before the harness started. Remounts, unmounts, writes to every worktree, the git common dir and `$HOME`, and connects to the docker and session-bus sockets all had to fail, and they did. Accepted residual: filesystem sockets outside the masked paths stay connectable with the invoking user's uid and groups, and the filesystem stays readable. The app's package files and installed SDK hashed the same before and after the run.
+**Containment of this run.** Each harness ran in its own user, mount, network, pid and IPC namespace, with stdin `/dev/null` and every inherited fd above 2 closed. Before tsx started, the script built this tree:
+
+- A read-only tmpfs over `$HOME` and `$XDG_RUNTIME_DIR`.
+- A minimal `/dev`, built on a tmpfs and moved over the host's: `null`, `zero`, `full`, `random`, `urandom` and `tty` bound from the host, a private devpts instance (no host pty is reachable), and the `/proc/self/fd` links.
+- The whole mount tree remounted read-only (`ro=recursive /`), except `/proc` (the run's own pid-namespace proc), which stays read-write so the nested `unshare -r` can write its uid map.
+- A tmpfs over `/run`, read-only once the `/etc` mountpoints the harness binds were made (`/var/run` is a symlink to `/run` on this host).
+- A private tmpfs over `/tmp` (512 MiB) and `/dev/shm` (64 MiB), and files capped at 1 GiB.
+- Only the run's home and scratch directories bound back read-write.
+
+The tree was then locked in a nested user, mount and network namespace and probed before the harness started. These all had to fail, and they did: a read-write remount of `/` or of the git common dir; unmounting `/run`, `/proc`, `/dev`, `/tmp`, `/dev/shm`, `$HOME` or `$XDG_RUNTIME_DIR`; a write to every worktree, the git common dir, `$HOME`, the scratch root and the run dir; and a connect to `/run/docker.sock`, `/var/run/docker.sock` and the session bus. `/dev` had to list only the names above, `/dev/pts` only `ptmx`, and only fds 0 to 2 could be open.
+
+Accepted residual: filesystem sockets, FIFOs and device nodes outside `/run`, `/var/run`, `/tmp`, `/dev`, `$HOME` and `$XDG_RUNTIME_DIR` stay reachable with the invoking user's uid and groups; the whole filesystem stays readable; and the runtime suite itself still runs uncontained (#12969). The app's package files and installed SDK hashed the same before and after the run.
