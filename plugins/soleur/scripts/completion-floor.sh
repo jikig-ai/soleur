@@ -106,7 +106,8 @@ check_review() {
     add_missing "no-open-code-review-issues"
   fi
   # attestation-trailers
-  if ! git log -1 --format='%B' 2>/dev/null | grep -qi 'Provenance:\|Reviewed-Coverage:\|Attestation:' ; then
+  last_commit_msg="$(git log -1 --format='%B')"
+  if ! grep -qi 'Provenance:\|Reviewed-Coverage:\|Attestation:' <<< "$last_commit_msg" ; then
     add_missing "attestation-trailers"
   fi
 }
