@@ -149,7 +149,7 @@ forget, never pushed back as state (D4); it holds the same secrets as live state
 
 ## Principle Alignment
 
-- AP-001 (Terraform-only): Aligned, with four recorded exceptions. Every hand-restored object is adopted by import;
+- AP-001 (Terraform-only): Aligned, with five recorded exceptions. Every hand-restored object is adopted by import;
   the dashboard acts are token mints and revokes, which have no API path for a Soleur token (ADR-130). The live-zone
   edits of 2026-11-19 (six TXT records rewritten unquoted and the comments on three incident-time records cleared, so
   every record's live values match `dns.tf`) were hand edits to records Terraform then adopts unchanged. Phase 0c, a

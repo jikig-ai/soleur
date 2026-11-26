@@ -341,7 +341,8 @@ the live compare, a record that is a CNAME both live and in the plan, whose plan
 post-apply re-read is what detects any other outcome. The job keeps no per-record `settings`: its
 `import-normalize reread=ok records=26` line is the evidence, and that line goes on #12931 after the first apply. A re-read `settings:other` is a stop token like any other (no edit, owner decision), and on
 `supabase_custom_domain` or a `protonmail_dkim_*` record it is urgent: sign-in or mail authentication may be
-degraded, so post it on #12931 and ask for the decision at once. Nobody edits this zone by hand
+degraded, so post it on #12931 with the first line `URGENT reread=differs=<addr>:settings+settings:other`, then
+the re-read line exactly as printed. Nobody edits this zone by hand
 during the apply: an edit landing between the read and a PATCH is overwritten, and the re-read then passes.
 
 A refusal about a live record prints `REFUSE <addr> differs from the live record (<tokens>)` or
@@ -355,7 +356,7 @@ a stop token on a record wins over any other token on that record:
 | `content:quoted-equal` | The live `content` equals the planned value once surrounding quotes are ignored | Stop token. No edit; stop for an owner decision |
 | `tags:absent` | The API response has no `tags` key, so no record edit can satisfy the compare | Stop token. No edit; stop for an owner decision |
 | `settings:only-flatten-false` | The live `settings` is exactly `{"flatten_cname":false}` unless the record is a CNAME in both the live read and the plan and the plan holds no `settings` (then it is the API default and compares equal, CTO ruling 2026-11-25). Not expected in normal operation | Stop token. No edit; stop for an owner decision |
-| `settings:other` | The live `settings` holds any other non-empty value | Stop token. No edit; stop for an owner decision |
+| `settings:other` | The live `settings` holds any other non-empty value | Stop token. No edit; stop for an owner decision. On `supabase_custom_domain` or a `protonmail_dkim_*` re-read it is urgent: post the `URGENT` comment on #12931 (Step 2) while the other records are restored |
 | `data`, `after` | The live record holds a `data` value `dns.tf` does not declare, or the plan holds no record to compare | Stop token. No edit; stop for an owner decision |
 | `unreadable` | The read failed, so nothing is known about the record | Not a difference. No edit. After a re-read, follow Halt **No completed re-read**. After a gate refusal, `Operator-authorizes:` one more rehearsal; a second consecutive refusal stops for an owner decision |
 | `notfound` | The record id answers 404 | Halt **A DNS record may hold a wrong value**, its `<addr>:notfound` step |

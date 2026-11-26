@@ -24,7 +24,7 @@ post-apply re-read. Two review seats (security, structural enumeration) found it
 ## Solution
 
 - The carve-out now also requires `$after.settings == null`. A plan that carries `settings` is
-  refused, not assumed equal. The fixture confirms no planned record has the key today, so the
+  refused, not assumed equal. L11b and D6 passing show that no planned CNAME carries `settings` today, so the
   extra condition changes nothing now and fails closed later.
 - D7 and M-flatten-plan pin the new condition.
 - L11d runs once per settings key. A `del(.ipv6_only)` mutant survived the single-key row.
