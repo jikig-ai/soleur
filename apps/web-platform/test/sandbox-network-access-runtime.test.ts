@@ -24,13 +24,27 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
+import {
+  CACHES_MODEL,
+  CONTROL_DECOYS,
+  DEAD_FORWARDER,
+  decoyKey,
+  MEASURED_BASELINE,
+  MOVE_RULE,
+  TEARDOWN_GATEWAY,
+  result,
+} from "@/scripts/lib/sandbox-network-cache-verdict";
 
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const HARNESS = join(APP_ROOT, "test", "helpers", "netns-egress-harness.mts");
 const TSX = join(APP_ROOT, "node_modules", ".bin", "tsx");
 
-// The SDK version the measurements below were taken on (CTO T16).
-const MEASURED_ON_SDK = "0.3.321";
+// The SDK version the measurements below were taken on (CTO T16). Single-sourced with the re-measure classifier
+// (#12906 PR-1b). It moves only per the classifier's MOVE_RULE.
+// The F/F2 host assertions read CACHES_MODEL (the classifier's invariant CACHES model), guarded by the pinned reading.
+const MEASURED_ON_SDK = MEASURED_BASELINE.version;
+const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
+const REMEASURE_CMD = "bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh";
 
 const has = (cmd: string) => spawnSync("sh", ["-c", `command -v ${cmd}`], { stdio: "ignore" }).status === 0;
 const UNSHARE_OK =
@@ -58,6 +72,7 @@ interface Call {
 }
 interface ArmRecord {
   arm: string;
+  initClaudeCodeVersion?: string | null;
   tap: string;
   entitled: boolean;
   thrown: string;
@@ -98,7 +113,7 @@ function runHarness(tap: "allow-all" | "production", arms: string[]): { step0: R
 
 const net = (a: ArmRecord) => a.calls.filter((c) => c.tool === "SandboxNetworkAccess");
 const hosts = (a: ArmRecord) => net(a).map((c) => String(c.input?.host));
-const result = (a: ArmRecord, label: string) => a.toolResult?.match(new RegExp(`^R ${label} (.*)$`, "m"))?.[1] ?? "<missing>";
+// result() (the `R <label> <value>` line of an arm's tool result) is imported from the classifier: one copy.
 
 /** The invariants every arm holds whatever it returned: no decoy hit, every gateway connection carries the credential. */
 function assertNoLeak(a: ArmRecord) {
@@ -117,7 +132,7 @@ function assertAsked(a: ArmRecord) {
 // sandbox proxy accepted the tunnel request and its dial to the dead forwarder failed). Local runs show the first and CI
 // runners the second (PR #12897, run 44322968227). The no-leak and empty-gateway assertions in each arm prove that
 // nothing got out; this only pins that the request itself failed, and in no other way.
-const DEAD_FORWARDER = /^rc=7 |^rc=56 out=curl: \(56\) CONNECT tunnel failed, response 502 /;
+// DEAD_FORWARDER is imported from the classifier, so the suite and the re-measure share one copy.
 const ARMS_RUN = new Set<string>();
 
 describe("installed SDK matches the measured one (CTO T16)", () => {
@@ -125,10 +140,17 @@ describe("installed SDK matches the measured one (CTO T16)", () => {
     const pkg = JSON.parse(readFileSync(join(APP_ROOT, "node_modules", "@anthropic-ai", "claude-agent-sdk", "package.json"), "utf8"));
     expect(
       pkg.version,
-      "The SDK changed: re-run this suite's MEASUREMENT arms (B, D, E, F, F2), update the ADR-278 addendum, then bump MEASURED_ON_SDK",
+      `The SDK changed: installed ${pkg.version}, measured ${MEASURED_ON_SDK}. Run \`${REMEASURE_CMD} ${pkg.version}\` ` +
+        "(it installs both into scratch dirs and measures them side by side) and record the result in ADR-278. " +
+        `MEASURED_BASELINE is in scripts/lib/sandbox-network-cache-verdict.ts. ${MOVE_RULE}`,
     ).toBe(MEASURED_ON_SDK);
   });
+  it("the classifier's CACHES model is the F/F2 sequence measured on 0.3.321 (one literal copy, PR #12897)", () => {
+    expect(CACHES_MODEL).toEqual({ fHosts: ["198.51.100.1"], f2Hosts: ["198.51.100.1", "example.test"] });
+  });
 });
+
+const READING_MSG = `a pin whose reading is not CACHES needs #12906's allow-arm PR, which replaces these assertions. ${MOVE_RULE}`;
 
 describe.skipIf(!UNSHARE_OK)("MEASUREMENT: the SDK's routing after an allow (allow-all tap, plan Phase 1a)", () => {
   let run: ReturnType<typeof runHarness>;
@@ -143,14 +165,22 @@ describe.skipIf(!UNSHARE_OK)("MEASUREMENT: the SDK's routing after an allow (all
 
   it("step 0: loopback aliases, hermetic name resolution, nested bwrap (with --proc) and the production imports", () => {
     expect(run.step0).toMatchObject({ ok: true, loUp: true, nestedBwrap: true, shimBwrap: true, imports: true });
+    // #12906: the harness reports what it measured. Shape first, so two failed probes cannot pass as null === null.
+    expect(String(run.step0.sdkVersion)).toMatch(SEMVER);
+    expect(String(run.step0.cliVersion)).toMatch(SEMVER);
+    expect(run.step0.sdkVersion).toBe(MEASURED_ON_SDK);
+    for (const a of run.arms.values()) {
+      expect(String(a.initClaudeCodeVersion), `${a.arm}: no system/init claude_code_version`).toMatch(SEMVER);
+      expect(a.initClaudeCodeVersion, `${a.arm}: the CLI the SDK spawned is not the one step 0 probed`).toBe(run.step0.cliVersion);
+    }
     ARMS_RUN.add("m-step0");
   });
 
   it("control: with no egress env an allowed request goes direct and hits EVERY decoy the silence checks rely on", () => {
     const a = arm("control");
     expect(a.thrown).toBe("");
-    const hit = new Set(a.decoys.map((d) => `${d.addr}:${d.addr.startsWith("127.") ? "p" : d.port}`));
-    for (const d of ["198.51.100.1:443", "198.51.100.1:80", "198.51.100.1:22", "127.0.0.2:p", "169.254.169.254:80"]) {
+    const hit = new Set(a.decoys.map((d) => decoyKey(d)));
+    for (const d of CONTROL_DECOYS) {
       expect(hit, `decoy ${d} was not reached: the sensor is blind`).toContain(d);
     }
     expect(a.gateway).toEqual([]);
@@ -204,8 +234,9 @@ describe.skipIf(!UNSHARE_OK)("MEASUREMENT: the SDK's routing after an allow (all
     assertNoLeak(a);
     expect(a).toMatchObject({ fStep1: true, fTornDown: true, fPortClosed: true });
     expect(result(a, "f-barrier")).toBe("seen=yes");
-    expect(hosts(a)).toEqual(["198.51.100.1"]); // asked once, for three requests
-    expect(a.gateway.map((g) => g.line)).toEqual(["CONNECT 198.51.100.1:443 HTTP/1.1"]); // only the pre-teardown one
+    expect(MEASURED_BASELINE.reading, READING_MSG).toBe("CACHES");
+    expect(hosts(a)).toEqual([...CACHES_MODEL.fHosts]); // asked once, for three requests
+    expect(a.gateway.map((g) => g.line)).toEqual([...TEARDOWN_GATEWAY]); // only the pre-teardown one
     expect(result(a, "f-3")).toMatch(DEAD_FORWARDER);
     ARMS_RUN.add("m-F");
   });
@@ -214,8 +245,9 @@ describe.skipIf(!UNSHARE_OK)("MEASUREMENT: the SDK's routing after an allow (all
     const a = arm("F2");
     assertNoLeak(a);
     expect(a).toMatchObject({ fStep1: true, fTornDown: true, fPortClosed: true });
-    expect(hosts(a)).toEqual(["198.51.100.1", "example.test"]);
-    expect(a.gateway.map((g) => g.line)).toEqual(["CONNECT 198.51.100.1:443 HTTP/1.1"]); // only the pre-teardown one
+    expect(MEASURED_BASELINE.reading, READING_MSG).toBe("CACHES");
+    expect(hosts(a)).toEqual([...CACHES_MODEL.f2Hosts]);
+    expect(a.gateway.map((g) => g.line)).toEqual([...TEARDOWN_GATEWAY]); // only the pre-teardown one
     expect(net(a).length).toBe(2);
     expect(result(a, "f2-2")).toMatch(DEAD_FORWARDER);
     ARMS_RUN.add("m-F2");

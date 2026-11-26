@@ -19,7 +19,10 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import net from "node:net";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { DECOY, SENTINEL, step0Ok } from "@/scripts/lib/sandbox-network-cache-verdict";
 
 type Tap = "allow-all" | "production";
 interface Spec {
@@ -44,7 +47,19 @@ interface DecoyHit {
   port: number;
 }
 
-const spec: Spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
+
+// #12906 PR-1b: NETNS_SDK_ENTRY points at another install's sdk.mjs (remeasure-sdk-sandbox-network-cache.sh installs the
+// baseline and the candidate into scratch prefixes), so the measured SDK is never the app's own node_modules copy. Unset,
+// the app's pinned SDK is measured, as the runtime suite does.
+// Importing this module has no side effects (main() runs only when it is the entry point), so the unit suite can pin
+// these two seams: loadSdk imports exactly the path resolveSdkEntry returned.
+export function resolveSdkEntry(env: Record<string, string | undefined>): string {
+  return env.NETNS_SDK_ENTRY ? realpathSync(env.NETNS_SDK_ENTRY) : fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk"));
+}
+export const loadSdk = (entry: string) => import(pathToFileURL(entry).href) as Promise<typeof import("@anthropic-ai/claude-agent-sdk")>;
+// Set by main() before anything reads them.
+let spec: Spec;
+let SDK_ENTRY: string;
 const emit = (kind: "NETNS_STEP0" | "NETNS_ARM", o: unknown) => process.stdout.write(`\n${kind} ${JSON.stringify(o)}\n`);
 const sh = (cmd: string, args: string[]) => {
   const r = spawnSync(cmd, args, { encoding: "utf8", timeout: 20_000 });
@@ -55,7 +70,7 @@ const sh = (cmd: string, args: string[]) => {
 // 198.51.100.1 (TEST-NET-2) is the "open web" decoy: the SDK sets the SANDBOXED command's NO_PROXY to loopback plus every
 // RFC 1918 and link-local range (measured on 0.3.321), so a decoy on 10.0.0.1 would only be reached by a command that
 // bypasses the proxy, never by the proxy's own direct route. 10.0.0.2 hosts arm D's stub (the CLI's env, not the sandbox's).
-const DECOY_IP = "198.51.100.1";
+const DECOY_IP = DECOY;
 const ALIASES = [`${DECOY_IP}/32`, "10.0.0.2/32", "169.254.169.254/32"];
 const step0: Record<string, unknown> = { ok: false };
 async function setupNamespace(): Promise<boolean> {
@@ -96,6 +111,21 @@ async function setupNamespace(): Promise<boolean> {
     },
   );
   step0.shimBwrap = viaShim.status === 0;
+  // What is actually measured (observed, never a constant): the SDK entry and version, and the native CLI it will spawn.
+  step0.sdkEntry = SDK_ENTRY;
+  try {
+    const req = createRequire(SDK_ENTRY);
+    step0.sdkVersion = JSON.parse(readFileSync(join(dirname(SDK_ENTRY), "package.json"), "utf8")).version ?? null;
+    const cliPath = join(dirname(req.resolve("@anthropic-ai/claude-agent-sdk-linux-x64/package.json")), "claude");
+    step0.cliPath = cliPath;
+    const v = sh(cliPath, ["--version"]);
+    step0.cliVersion = v.status === 0 ? (v.out.match(/\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/)?.[1] ?? null) : null;
+  } catch (e) {
+    step0.sdkVersion ??= null;
+    step0.cliPath ??= null;
+    step0.cliVersion = null;
+    step0.sdkProbeError = String(e).slice(0, 300);
+  }
   // The child must import the production modules it measures (CTO D6).
   try {
     await import("@/server/permission-callback");
@@ -105,9 +135,8 @@ async function setupNamespace(): Promise<boolean> {
     step0.imports = false;
     step0.importError = String(e).slice(0, 300);
   }
-  const allAliases = (step0.aliases as { ok: boolean }[]).every((a) => a.ok);
-  const allMounts = (step0.mounts as { ok: boolean }[]).every((m) => m.ok);
-  step0.ok = step0.loUp === true && allAliases && allMounts && step0.nestedBwrap === true && step0.shimBwrap === true && step0.imports === true;
+  // The classifier's STEP0_PROBES decide ok: one list for the harness, the UNVERIFIED reason and the recorded summary.
+  step0.ok = step0Ok(step0);
   return step0.ok as boolean;
 }
 
@@ -208,7 +237,7 @@ async function runArm(arm: ArmCtx, shimDir: string, gwPort: number, decoyPorts: 
   const { buildAgentEnv } = await import("@/server/agent-env");
   const { buildAgentSandboxConfig } = await import("@/server/agent-runner-sandbox-config");
   const fwd = await import("@/server/egress-forwarder");
-  const { query } = await import("@anthropic-ai/claude-agent-sdk");
+  const { query } = await loadSdk(SDK_ENTRY);
 
   const own = join(spec.scratch, `ws-${arm.name}`);
   mkdirSync(own, { recursive: true });
@@ -226,6 +255,7 @@ async function runArm(arm: ArmCtx, shimDir: string, gwPort: number, decoyPorts: 
   });
   let toolResult: string | null = null;
   let thrown = "";
+  let initClaudeCodeVersion: string | null = null;
   try {
     if (arm.entitled) {
       forwarder = await fwd.spawnEgressForwarder(conversationId, WORKSPACE_ID);
@@ -233,7 +263,7 @@ async function runArm(arm: ArmCtx, shimDir: string, gwPort: number, decoyPorts: 
     }
     if (arm.beforeTurn && forwarder) Object.assign(extra, await arm.beforeTurn({ conversationId, port: forwarder.port, pid: forwarder.pid }));
     const baseEnv = buildAgentEnv(
-      { value: "decoy-api-key-sentinel", scheme: "api_key" },
+      { value: SENTINEL, scheme: "api_key" },
       {},
       forwarder ? { egressProxy: { workspaceId: WORKSPACE_ID, token: forwarder.token, port: forwarder.port } } : {},
     );
@@ -308,6 +338,9 @@ async function runArm(arm: ArmCtx, shimDir: string, gwPort: number, decoyPorts: 
         },
       });
       for await (const msg of q as AsyncIterable<any>) {
+        if (msg.type === "system" && msg.subtype === "init" && initClaudeCodeVersion === null) {
+          initClaudeCodeVersion = typeof msg.claude_code_version === "string" ? msg.claude_code_version : null;
+        }
         if (msg.type !== "user") continue;
         const content = msg.message?.content;
         if (!Array.isArray(content)) continue;
@@ -343,6 +376,7 @@ async function runArm(arm: ArmCtx, shimDir: string, gwPort: number, decoyPorts: 
     entitled: arm.entitled,
     wallMs: Date.now() - t0,
     thrown,
+    initClaudeCodeVersion,
     toolResult: toolResult === null ? null : String(toolResult).slice(0, 4000),
     calls: tap.map((c) => ({ tool: c.tool, input: c.tool === "SandboxNetworkAccess" ? c.input : undefined, keys: c.input && typeof c.input === "object" ? Object.keys(c.input as object).sort() : [], behavior: c.behavior, message: c.message, agentID: c.agentID ?? null })),
     gateway: gw,
@@ -490,6 +524,8 @@ function arms(decoyPorts: Record<string, number>): Record<string, ArmCtx> {
 }
 
 async function main() {
+  spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
+  SDK_ENTRY = resolveSdkEntry(process.env);
   const ok = await setupNamespace();
   emit("NETNS_STEP0", step0);
   if (!ok) process.exit(0);
@@ -515,7 +551,16 @@ async function main() {
   process.exit(0);
 }
 
-main().catch((e) => {
-  emit("NETNS_ARM", { arm: "__harness__", thrown: String(e?.stack ?? e).slice(0, 800) });
-  process.exit(1);
-});
+const isEntry = (() => {
+  try {
+    return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
+if (isEntry) {
+  main().catch((e) => {
+    emit("NETNS_ARM", { arm: "__harness__", thrown: String(e?.stack ?? e).slice(0, 800) });
+    process.exit(1);
+  });
+}
