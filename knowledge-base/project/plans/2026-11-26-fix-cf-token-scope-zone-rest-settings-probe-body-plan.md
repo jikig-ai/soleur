@@ -18,6 +18,40 @@ Ref #12931 (epic stays open; the PR body uses `Ref #12931`, never `Closes`).
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-26
+**Sections enhanced:** Proposed Solution (steps 3, 5, 6, 7), Implementation Phases (Phase 1 step 1, 3; Phase 3
+step 4), Guard Contract (Guards 2, 3), Acceptance Criteria (AC5, AC10, AC12), Test Scenarios, Research Insights.
+**Agents used:** `soleur:engineering:review:security-sentinel`, `soleur:engineering:review:test-design-reviewer`,
+`soleur:engineering:review:architecture-strategist`, and a verify-the-negative sweep (standard tier). It confirmed
+all 10 current-code claims and found no stale references to items cut at plan review. Gates 4.6, 4.7, 4.8, 4.11
+and 4.12 pass; 4.5, 4.55, 4.9, 4.10 and 4.13 do not trigger. All cited rule ids, PRs and the issue were verified
+live. This is a proportionate fan-out rather than every agent: the plan-review panel (DHH, Kieran,
+code-simplicity, CTO) had already run on the same text.
+
+### Key Improvements
+
+1. **The collision guard no longer passes on an empty list** (security). An authorized settings control with an
+   empty `result` is degraded and makes the run inconclusive. The list reaches jq on stdin, not argv. The mock's
+   GET default becomes a realistic non-empty list.
+2. **The mutant helper cannot pass on a broken mutant** (test-design). `run_mut` checks the copy with `bash -n`,
+   applies each replacement exactly once, accepts several anchor/replacement pairs, and asserts the guard's own
+   refusal message. M11a asserts the collision message, so the fail-closed exit 2 cannot stand in for it.
+3. **The dry-run output stays copy-pasteable** (architecture). Each write row prints its
+   `w_body="$INVALID_BODY"` or `w_body="$SETTINGS_PROBE_BODY"` line before its recipes.
+4. **Tighter static guard.** The settings-json row must use `PATCH`. The body may carry no keys besides
+   `items` and `id`/`value`. The guard is unconditional on profile, which the plan now states.
+5. **Counted, not vacuous, checks.** Per-URL body counts are exact (2 and 2). AC2 gets its own test row. The
+   `w_body` backstop is a closed set over write forms. All rows are labelled `unit`. The `MIN_ASSERTIONS` rule
+   is stated.
+
+### New Considerations Discovered
+
+- `mig_fatal`'s read-back prints `probe_id_listed` for an array result, the one fact a CTO re-ruling needs after a
+  settings 2xx.
+- `MIG_SETTINGS_CTRL_OK` is a separate flag, so one variable does not carry both "list" and "control passed".
+
 ## Overview
 
 The `zone-rest` migration profile of the cf-token-scope probe returns `verdict=inconclusive`, because the
@@ -86,7 +120,9 @@ on it, not a replacement.
   (pins `echo "probe=$PROFILE verdict=pass"` exactly and `--staged`/profile names, which survive),
   `tests/scripts/test-cf-account-migration-bootstrap.sh` (stubs the tool), `tests/scripts/test-argv-bearer-sweep.sh`.
 - Consumer: the bootstrap's `run_scope_probe` (swap-0b) runs `bash "$tool" --profile zone-rest --staged` and
-  requires exit 0 AND `grep -qx "probe=zone-rest verdict=pass"`. Neither the exit codes nor that line change.
+  requires exit 0 AND `grep -qx "probe=zone-rest verdict=pass"`. Only the archived copy is tracked here
+  (`knowledge-base/project/specs/archive/20261120-013510-feat-one-shot-12931-cf-account-migration/bootstrap.sh`,
+  `run_scope_probe`); the live copy is untracked. Neither the exit codes nor that line change.
 - CI: `scripts/suite-shard-legs.tsv` puts the suite in shard 3 of `test-scripts`; `scripts/test-all.sh` discovers
   `plugins/soleur/test/*.test.sh`. Local: `bash plugins/soleur/test/cf-token-scope.test.sh` (needs bash >= 5.2
   and jq).
@@ -161,15 +197,18 @@ Revisions`).
    is above `mig_write_rows()`, and a `< <(mig_write_rows …)` there fails inside the process substitution without
    tripping `set -e`, so the loop would see zero rows and pass silently. Loop over the two arrays directly
    (`for row in "${MIG_WRITE_REDIRECTS_DNS[@]}" "${MIG_WRITE_ZONE_REST[@]}"`), unconditional on profile because the
-   tables are global. Exit 2, stderr, naming the corruption, when:
+   tables are global: a corrupt migration table also refuses the `rulesets` and `default-token` profiles, as the
+   INVALID_BODY tripwire does; do not narrow it to migration profiles. Exit 2, stderr, naming the corruption, when:
    - any write row has a body-kind outside `{invalid, settings-json}` (always checked, jq not needed);
    - any `settings-json` row's url-template is not exactly the literal string `$API/zones/\$ZONE/settings` (rows
-     store a literal `$ZONE`; always checked);
+     store a literal `$ZONE`), or its method is not `PATCH` (always checked);
    - `SETTINGS_PROBE_BODY` fails (`jq -e … >/dev/null`, any non-zero rc is a refusal; only this check is gated on
      `command -v jq`, as the INVALID_BODY tripwire is)
-     `type == "object" and (.items | type == "array" and length > 0) and all(.items[]; (.id | type == "string" and startswith("cf_token_scope_probe_")))`.
-     One expression covers "parses as JSON", "object, not array/scalar", "items non-empty" (the rejected no-op
-     body) and "every id is probe-prefixed". `startswith` must apply to `.id`, not to the item object. Verified
+     `type == "object" and keys == ["items"] and (.items | type == "array" and length > 0) and all(.items[]; type == "object" and keys == ["id","value"] and (.id | type == "string" and startswith("cf_token_scope_probe_")))`.
+     One expression covers "parses as JSON", "object, not array/scalar", "no keys besides `items` and
+     `id`/`value`" (the endpoint parses arbitrary object keys, so an extra `"ssl":"off"` must never ride along),
+     "items non-empty" (the rejected no-op body) and "every id is probe-prefixed". Verified 2026-11-26: an extra
+     top-level `"ssl"` key → rc 1; an extra item key → rc 1. `startswith` must apply to `.id`, not to the item object. Verified
      2026-11-26 with jq: canonical body → `true`; `{"items":[]}`, `[]` and a second item `{"id":"ssl"}` → `false`.
    Without jq the JSON check is skipped and the run path exits 2 at the prerequisite loop before any request, so
    only `--dry-run` runs without it, and it sends nothing.
@@ -180,28 +219,38 @@ Revisions`).
    also refuses (exit 2) unless `"$url" == "$API/zones/$MIG_ZONE/settings"` (one line at the real write boundary).
    `w_body` is declared `local` with no initializer. The ONE write curl keeps its shape with
    `--data-binary "$w_body"`. `mig_req` stays called directly (never inside `$(…)`), so `exit 2` ends the script.
-5. **Collision guard, after the controls, before the first write.** Initialize `MIG_SETTINGS_LIST=""` next to
-   `MIG_CTRL_OK=1` (`set -u`, and an exported value must never be inherited). The control loop's authorized arm adds
-   `zones/*/settings) MIG_SETTINGS_LIST="$BODY"`. Before the write loop, when any write row of the profile is
-   `settings-json` and `MIG_SETTINGS_LIST` is non-empty:
-   `rc=0; jq -n -e --argjson body "$SETTINGS_PROBE_BODY" --argjson list "$MIG_SETTINGS_LIST" 'any($body.items[].id; . as $i | any($list.result[]?; .id? == $i))' >/dev/null 2>&1 || rc=$?`
+5. **Collision guard, after the controls, before the first write.** Initialize `MIG_SETTINGS_LIST=""` and
+   `MIG_SETTINGS_CTRL_OK=0` next to `MIG_CTRL_OK=1` (`set -u`, and an exported value must never be inherited). In
+   the control loop's authorized arm, the `zones/*/settings)` case sets `MIG_SETTINGS_LIST="$BODY"` and
+   `MIG_SETTINGS_CTRL_OK=1` only when `.result` is a NON-EMPTY array. A real zone always lists settings, so an
+   authorized empty list is degraded: report the control `degraded (200 settings list empty)` and set
+   `MIG_CTRL_OK=0; MIG_INCONCLUSIVE=1` (deepen security review: otherwise an empty list passes the collision check
+   vacuously). Before the write loop, when any write row of the profile is `settings-json` and
+   `MIG_SETTINGS_CTRL_OK=1`, pipe the list on stdin, never `--argjson list` (that would put the Cloudflare response
+   on jq's argv, visible to `ps`, and fail with E2BIG past 128 KiB):
+   `rc=0; printf '%s' "$MIG_SETTINGS_LIST" | jq -e --argjson body "$SETTINGS_PROBE_BODY" '. as $list | any($body.items[].id; . as $i | any($list.result[]?; .id? == $i))' >/dev/null 2>&1 || rc=$?`
    (stdout is the data channel, so jq's `true`/`false` must not reach it). rc 0 (a hit) → exit 2 with zero writes
-   ("a setting named like the probe id exists on this zone; refusing to send a body that names it"); rc 1 →
-   proceed; any other rc → exit 2, fail-closed. Verified 2026-11-26: probe id as the list's second element → rc 0;
-   `cf_token_scope_probe_nonexistent_setting_other` plus `ssl` → rc 1; empty list → rc 1. In the write loop a
-   `settings-json` row with an empty `MIG_SETTINGS_LIST` (the control did not pass) reports `inconclusive (settings
-   control not authorized — the JSON probe body is only sent under a parsed settings list)`, sets
-   `MIG_INCONCLUSIVE=1` and `continue`s with no request. Other rows are unchanged.
+   and the message `a setting named like the probe id exists on this zone; refusing to send a body that names it`;
+   rc 1 → proceed; any other rc → exit 2 (`could not evaluate the settings list`), fail-closed. Verified
+   2026-11-26: probe id listed (second element) → rc 0; `[{"id":"ssl"}]` → rc 1; unparsable input → rc 5. In the
+   write loop a `settings-json` row with `MIG_SETTINGS_CTRL_OK=0` reports `inconclusive (settings control not
+   authorized — the JSON probe body is only sent under a parsed settings list)`, sets `MIG_INCONCLUSIVE=1` and
+   `continue`s with no request. Other rows are unchanged.
 6. **Write loop.** Passes `w_kind` to both `mig_req` calls (deny, grant). Verdict logic unchanged: 2xx → `mig_fatal`
    (exit 4 after the read-back), deny non-403 → inconclusive, grant 400 → authorized, 401/403 → denied, other →
-   inconclusive.
-7. **Dry-run.** No second kind→name map. Print both literals (`INVALID_BODY='…'`, `SETTINGS_PROBE_BODY='…'`), one
-   legend line `# body-kind invalid sends INVALID_BODY; body-kind settings-json sends SETTINGS_PROBE_BODY`, and per
-   write row the existing comment extended with its kind (`# write <label> (body-kind <kind>): deny control …`),
-   then the two recipes with `--data-binary \"\$w_body\"`. The second banner line changes from "write probes send
-   ONLY the invalid body" to "write probes send ONLY the two fixed never-valid bodies; any 2xx aborts (exit 4) after
-   a read-back". None of the new printed or stderr text may contain the substring `curl` (D12c (I) flags any parse
-   line naming it) or `curl --disable` (D-pc counts it).
+   inconclusive. `mig_fatal`'s array read-back summary also prints `probe_id_listed: true|false` (whether any
+   listed id starts with `cf_token_scope_probe_`), so a settings 2xx (the CTO dissent) carries the one fact the
+   re-ruling needs; every string still passes `safe()`.
+7. **Dry-run.** Print both literals (`INVALID_BODY='…'`, `SETTINGS_PROBE_BODY='…'`), and per write row the existing
+   comment extended with its kind (`# write <label> (body-kind <kind>): deny control …`), then a printed assignment
+   line `w_body="$INVALID_BODY"` or `w_body="$SETTINGS_PROBE_BODY"`, then the two recipes with
+   `--data-binary \"\$w_body\"`. The printed assignment keeps the output copy-pasteable; without it a pasted recipe
+   sends an empty body (deepen architecture review). The dry-run picks the name with its own two-arm closed case (an
+   unknown kind cannot reach it: the static guard ran first); M10's per-row line and M2's per-row body pin it to the
+   run-path map. Those parse lines start with `printf`, so the Phase 3 step 4 set is unaffected. The second banner
+   line changes from "write probes send ONLY the invalid body" to "write probes send ONLY the two fixed never-valid
+   bodies; any 2xx aborts (exit 4) after a read-back". None of the new printed or stderr text may contain the
+   substring `curl` (D12c (I) flags any parse line naming it) or `curl --disable` (D-pc counts it).
 8. **Prose.** Rewrite header invariant 1 to name both literals and their guards; update the top summary ("one fixed
    invalid body that can never validate"), the `INVALID_BODY` comment ("The ONE write-probe body"), `mig_req`'s
    comment, `usage()` (lines with "fixed-invalid-body" / "invalid-body WRITE probes" and the exit-4 line),
@@ -236,16 +285,23 @@ Revisions`).
 1. Mock write branch, in this order: `MOCK_WRITE_OVERRIDE` first (explicit answers, e.g. M5d's 200); then, for a
    URL matching `/zones/[^/]+/settings$` whose `$body_arg` fails `jq -e .`, answer
    `400:{"success":false,"errors":[{"code":6007,"message":"Malformed JSON in request body"}]}` for every token; then
-   the token default (granted → 400, others → 403; for the settings URL use code 9109, as measured). A comment
+   the token default (granted → 400, others → 403; for the settings URL use code 9109, as measured). The GET
+   `*/settings` default (`MOCK_ZSET`) becomes a realistic non-empty list (`[{"id":"ssl","value":"full"},
+   {"id":"always_use_https","value":"on"}]`), because an empty list is now a degraded control. A comment
    beside the settings branch states that the grant's 400 is ASSUMED until Phase 5 measures it.
 2. One preamble block above the D12c single-site assertion (today near line 937) holds: `INV_BODY` (moved up from
    the M-series preamble), `SET_BODY="$(sed -n "s/^readonly SETTINGS_PROBE_BODY='\(.*\)'$/\1/p" "$SUT" | head -1)"`,
    the hardcoded `WANT_SET_BODY` (the CTO literal byte-for-byte; the one anchor that does not come from the
    script), and `D12C_WRITE_ANCHOR`. M1/M2 read `INV_BODY`/`SET_BODY`; D12c reads `D12C_WRITE_ANCHOR`.
 3. A table-driven temp-copy helper next to `d12c_mut`:
-   `run_mut <label> <anchor> <replacement> <want-exit> <want-writes> <want-doppler-reads>` copies the script, refuses
-   a vacuous mutant whose anchor is missing (same rule as `d12c_mut`), RUNS the copy through the mock with fresh
-   write/GET/Doppler logs, and asserts the three expectations. Each mutant row is one line.
+   `run_mut <label> <want-exit> <want-writes> <want-doppler-reads> <want-message> <anchor> <replacement> [<anchor> <replacement>…]`.
+   For each pair it refuses a vacuous mutant whose anchor is missing, anchors on a full line, and asserts the
+   replacement occurs exactly once in the copy; it runs `bash -n` on the copy and fails if it does not parse (bash
+   exits 2 on a syntax error, which would otherwise satisfy every exit-2 row with zero writes and zero Doppler
+   reads); it RUNS the copy through the mock with fresh write/GET/Doppler logs via a `run_script <script> <PATH>
+   <args…>` sibling of `run()` (which hardcodes `$SUT`); and it asserts exit code, write count, Doppler-read count
+   and that `<want-message>` (the guard's own refusal text) appears in the output. It emits the same number of
+   assertions on every path, so `MIN_ASSERTIONS` still catches a block that stops running.
 4. Add the new assertions (Test Scenarios). Run the suite on the unmodified script: M2 must fail
    (`verdict=inconclusive`, exit 3), proving the mock reproduces the live defect.
 
@@ -260,9 +316,13 @@ Implement Proposed Solution steps 1-8 in `cf-token-scope.sh`.
 2. `D12C_FLAGS` (F): `--data-binary` must be followed by exactly `"$w_body"` (the run line and, after the awk's
    `\"`/`\$` unescape, the dry-run line). `"$INVALID_BODY"` is no longer admitted at a curl site.
 3. `D12C_WRITE_ANCHOR='--data-binary "$w_body"'`; the single-site count is `grep -cF -- "$D12C_WRITE_ANCHOR"` = 1.
-4. Body-assignment count over the same parse: exactly two trimmed parse lines start with `w_body=`, and they are
-   `w_body="$INVALID_BODY"` and `w_body="$SETTINGS_PROBE_BODY"`. The behavioral per-row body checks in M1/M2 are
-   the primary guard; this count is the cheap structural backstop.
+4. Body-variable WRITE-form closed set over the same parse: the trimmed parse lines that write `w_body`
+   (matching `local[^;]*\bw_body\b`, `^w_body\+?=`, `read[^;]*\bw_body\b`, `printf -v w_body`, `declare[^;]*\bw_body\b`)
+   are exactly three: the `local` declaration with no initializer, `w_body="$INVALID_BODY"` and
+   `w_body="$SETTINGS_PROBE_BODY"`. Dry-run print lines start with `printf '%s\n'` and match none of these. The
+   behavioral per-row body checks in M1/M2 are the primary guard; this set is the cheap structural backstop (a
+   narrower form than the cut whole-multiset canon, kept after the deepen test-design review showed a plain
+   `^w_body=` count misses `local w_body=…`, `read`, `printf -v` and `+=`).
 5. Update the D12c header comment (CONTRACT and (F) text): the one body variable is `$w_body`, set only from the
    two readonly literals by `mig_req`'s closed case.
 
@@ -423,6 +483,7 @@ tests), so the source pin does not depend on the runtime check running.
 | 2 | `{"items":[]}` (the rejected no-op) | RED: exit 2 |
 | 3 | `[{"id":"cf_token_scope_probe_x","value":"y"}]` (JSON non-object, rejected by the ruling) | RED: exit 2 |
 | 4 | second member: a compliant first item then `{"id":"ssl","value":"off"}` | RED: exit 2 |
+| 4b | an extra top-level key beside `items` (`"ssl":"off"`) | RED: exit 2 |
 | 5 | dispatch: the static guard's jq expression replaced by `true`, combined with mutant 1's literal | RED: the run no longer exits 2 before Doppler, so M11d's assertion fails (rows 1-4 test the runtime check, not only the source literal) |
 
 **Harness rows.**
@@ -448,7 +509,8 @@ element.
 |---|---|---|
 | 1 | `MOCK_ZSET` list contains `cf_token_scope_probe_nonexistent_setting` | RED: exit 2, write log empty |
 | 2 | second member: list `[{"id":"ssl"},{"id":"cf_token_scope_probe_nonexistent_setting"}]` | RED: exit 2, write log empty |
-| 3 | dispatch: the check reads a different (never-set) variable, with input 1 | RED: input 1 no longer exits 2 (exit code differs), so M11a's exit-2 assertion fails |
+| 3 | dispatch: the `printf '%s' "$MIG_SETTINGS_LIST"` feeding the collision jq reads a different (never-set) variable, with input 1 | RED: jq gets empty input, so the run takes the fail-closed `could not evaluate` exit 2 and NOT the collision message; M11a asserts the collision message text, so it reds |
+| 3b | an authorized control with an EMPTY `result` | the settings control reads `degraded (200 settings list empty)`, no `/settings` write, exit 3 (security review: an empty list must not pass the check vacuously) |
 | 4 | reorder: collision check moved after the write loop | RED: write log non-empty on input 1 |
 | 5 | settings control 404 (`MOCK_ZSET`) | row skipped: no `/settings` write, `inconclusive (settings control not authorized`, exit 3; bot row still probed |
 
@@ -528,14 +590,14 @@ commit.
 - [ ] AC2. Every write row in both tables has exactly 6 `|`-separated fields; exactly one row ends `|settings-json` and its url-template is `$API/zones/\$ZONE/settings`; all others end `|invalid`.
 - [ ] AC3. `bash --pretty-print` of the script shows exactly one curl line containing `--data-binary`, with the body word `"$w_body"`, and exactly two lines starting with `w_body=`: `w_body="$INVALID_BODY"` and `w_body="$SETTINGS_PROBE_BODY"`.
 - [ ] AC4. With the mock modeling JSON-first parsing, a temp copy with the settings row set to `invalid` reads `probe=zone-rest verdict=inconclusive` (M2w), and the fixed script reads `probe=zone-rest verdict=pass`, exit 0.
-- [ ] AC5. In the zone-rest happy path the write log holds 4 lines: both `/settings` PATCH lines carry SET_BODY, both `/bot_management` PUT lines carry INV_BODY; in redirects-dns every line carries INV_BODY.
+- [ ] AC5. In the zone-rest happy path the write log holds exactly 4 lines: exactly 2 `/settings` PATCH lines carrying SET_BODY and exactly 2 `/bot_management` PUT lines carrying INV_BODY (counted, so an empty or short log fails); in redirects-dns all `2 * MW_RD_N` lines carry INV_BODY.
 - [ ] AC6. Each of: body not JSON / `{"items":[]}` / JSON array / a non-prefixed second item / unknown body-kind / `settings-json` on another URL (first or third row) → exit 2, empty write log, no Doppler read.
 - [ ] AC7. A settings list containing the probe id (first or second element) → exit 2 with an empty write log; a list with only prefix-sharing ids → exit 0.
 - [ ] AC8. Settings control 404 → no write to `/settings`, row reads `inconclusive (settings control not authorized`, exit 3, and the bot_management row is still probed.
 - [ ] AC9. A 200 to the settings grant probe → exit 4 and `verdict=fatal-mutation`; the GET log carries `GET …/zones/<new>/settings tok-zonesettings-mock` exactly twice (the control, then the read-back), and the write log stops at 2 lines.
-- [ ] AC10. `--profile zone-rest --dry-run` prints both literal lines, the body-kind legend, `(body-kind settings-json)` on the settings row comment and `(body-kind invalid)` on the bot row, sends no curl, and leaks no token; D-pc recipe counts are unchanged.
+- [ ] AC10. `--profile zone-rest --dry-run` prints both literal lines, `(body-kind settings-json)` then a printed `w_body="$SETTINGS_PROBE_BODY"` line before the settings recipes and `(body-kind invalid)` then `w_body="$INVALID_BODY"` before the bot recipes, sends no curl, and leaks no token; D-pc recipe counts are unchanged.
 - [ ] AC11. `grep -rniE 'one fixed invalid|fixed-invalid-body|invalid-body' plugins/soleur/skills/cf-token-scope knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md` returns nothing, and the header, SKILL.md and runbook state the two-literal rule.
-- [ ] AC12. `bash plugins/soleur/test/cf-token-scope.test.sh` exits 0 with `MIN_ASSERTIONS` raised to the new total; `bash tests/scripts/test-cf-account-migration-runbook.sh` and `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` exit 0; `shellcheck` on both bash files is clean.
+- [ ] AC12. `bash plugins/soleur/test/cf-token-scope.test.sh` exits 0 and `MIN_ASSERTIONS` equals the measured GREEN total, which the PR body states as `320 + <number of new assertions>`; `bash tests/scripts/test-cf-account-migration-runbook.sh` and `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` exit 0; `shellcheck` on both bash files is clean.
 - [ ] AC13. No token value appears in any suite output (existing `lacks` rows plus one for the zone-rest JSON path).
 - [ ] AC14. The PR body says `Ref #12931` and carries no `Closes`/`Fixes` for it.
 
@@ -561,30 +623,36 @@ connection, no new autonomous task.
 
 ## Test Scenarios
 
-All `unit`/`integration` layer, in `plugins/soleur/test/cf-token-scope.test.sh`, mocked curl and doppler, no
+All `unit` layer (a `*.test.sh` suite with mocked curl and doppler; deepen test-design review), in `plugins/soleur/test/cf-token-scope.test.sh`, mocked curl and doppler, no
 network. Temp-copy cases use `run_mut`.
 
 - **M0s** (unit, asked): `SET_BODY` parsed from source is non-empty (positive control); it parses as JSON; every
   `.items[].id` starts with `cf_token_scope_probe_`; it carries no `"rules"` key.
 - **M0h** (unit): `SET_BODY == WANT_SET_BODY`.
-- **M1** (integration): redirects-dns happy path, every write line's body equals `INV_BODY`, line count `2 * MW_RD_N`.
-- **M2** (integration): zone-rest happy path, exit 0, `verdict=pass`; per-URL body (`/settings` → `SET_BODY`,
-  `/bot_management` → `INV_BODY`); deny-first order on both rows; the settings deny control is logged with
+- **M1** (unit): redirects-dns happy path, every write line's body equals `INV_BODY`, line count `2 * MW_RD_N`.
+- **M2** (unit): zone-rest happy path, exit 0, `verdict=pass`; exactly 2 `/settings` lines with `SET_BODY` and exactly
+  2 `/bot_management` lines with `INV_BODY`; deny-first order on both rows; the settings deny control is logged with
   `tok-botmgmt-mock` and the SET body.
-- **M2w** (integration, temp copy): settings row set back to `invalid` → `verdict=inconclusive`, `got 400` on the
+- **M2w** (unit, temp copy): settings row set back to `invalid` → `verdict=inconclusive`, `got 400` on the
   settings row, grant never probed.
-- **M5d** (integration): `MOCK_WRITE_OVERRIDE` makes `/settings` + `tok-zonesettings-mock` answer `200` → exit 4,
+- **M5d** (unit): `MOCK_WRITE_OVERRIDE` makes `/settings` + `tok-zonesettings-mock` answer `200` → exit 4,
   `verdict=fatal-mutation`, the settings GET line for the grant token appears exactly twice, write log stops at 2.
-- **M11a** (integration, asked): `MOCK_ZSET` list contains the probe id (first, then second element) → exit 2,
-  write log empty; prefix-sharing ids → exit 0.
-- **M11b** (integration, temp copy, asked): bot row → `settings-json` → exit 2, write log and Doppler log empty;
+- **M11a** (unit, asked): `MOCK_ZSET` list contains the probe id (first, then second element) → exit 2, write log
+  empty, and the output carries the collision message `a setting named like the probe id exists`; prefix-sharing
+  ids → exit 0.
+- **M11g** (unit): an authorized settings control with an empty `result` → `degraded (200 settings list empty)`,
+  no `/settings` write, exit 3.
+- **D-rows** (unit, AC2): every line of both write tables has exactly 6 `|`-separated fields; exactly one row's 6th
+  field is `settings-json`, with method `PATCH` and url-template `$API/zones/\$ZONE/settings`; every other row's is
+  `invalid`.
+- **M11b** (unit, temp copy, asked): bot row → `settings-json` → exit 2, write log and Doppler log empty;
   same with a third `settings-json` row appended after the compliant one.
-- **M11c** (integration, temp copy): unknown body-kind → exit 2 before Doppler.
-- **M11d** (integration, temp copies): Guard 2 mutants 1-4 → exit 2 before Doppler; the two-compliant-items
+- **M11c** (unit, temp copy): unknown body-kind → exit 2 before Doppler.
+- **M11d** (unit, temp copies): Guard 2 mutants 1-4 → exit 2 before Doppler; the two-compliant-items
   variant → dry-run exit 0.
-- **M11e** (integration): settings control 404 → no `/settings` write, row inconclusive, bot row probed, exit 3.
-- **M10** (integration): zone-rest dry-run prints both literals, the legend and the per-row body-kind; recipe count
-  still `MC_ZR_N + 2 * MW_ZR_N` (D-pc); no curl; no token.
+- **M11e** (unit): settings control 404 → no `/settings` write, row inconclusive, bot row probed, exit 3.
+- **M10** (unit): zone-rest dry-run prints both literals and, per row, the body-kind comment and the printed
+  `w_body=` line for that kind; recipe count still `MC_ZR_N + 2 * MW_ZR_N` (D-pc); no curl; no token.
 - **D12c** (unit): canon multiset equality (I, S), (F) lint admits only `"$w_body"`, single-site count via
   `D12C_WRITE_ANCHOR`, the `w_body=` count, Guard 1 mutants 7-8.
 - **Regression**: every existing C/D/M/U row stays green.
@@ -633,7 +701,7 @@ Mechanical (eng-panel correctness or simplification of plan-inferred items; none
 - **Simplification (DHH and code-simplicity both fired, so delete over fix):** cut the `PROBE_ID_PREFIX` constant
   (prefix inline in jq) and `WANT_PROBE_PREFIX`; cut the `D12C_WBODY_CANON` multiset pin (replaced by a two-line
   `w_body=` count; M1/M2 behavioral checks are primary); cut the chokepoint-reachability mutants (old Guard 1 rows
-  10-13, M11f); cut the dry-run's second kind→name map (print the 6th field and a legend); trimmed the Guard
+  10-13, M11f); cut the dry-run's second kind→name map (print the 6th field and a legend; superseded at deepen: the printed `w_body=` assignment is reinstated so recipes stay copy-pasteable); trimmed the Guard
   Contract to one dispatch and one second-member row per guard plus minimal harness rows (the plan skill requires
   both).
 - **Kept against a cut:** M0s shape checks (DHH proposed cutting them as redundant with `WANT_SET_BODY`; they are
