@@ -49,7 +49,7 @@ and the planned record are type `CNAME`. Every other `settings` value is still r
 Ruled by CTO agent, 2026-11-25 (recorded on #13056 and copied here, not re-ruled): the comparator
 changes and `dns.tf` does not. Rationale: provider cloudflare 4.52.7 (the lock file) has no `settings`
 attribute, so `dns.tf` cannot declare one. cloudflare-go v0.116.0 `UpdateDNSRecordParams.Settings` is a
-struct tagged `omitempty`, so the PATCH carries `"settings":{}`. Cloudflare's OpenAPI gives
+non-pointer struct, which `omitempty` does not drop, so the PATCH carries `"settings":{}`. Cloudflare's OpenAPI gives
 `flatten_cname` a default of `false`. Either outcome of the PATCH leaves the value at `false`. This
 supersedes ruling F3 of the 2026-11-23 import-normalize spec, which refused the case because nobody had
 observed the effect.

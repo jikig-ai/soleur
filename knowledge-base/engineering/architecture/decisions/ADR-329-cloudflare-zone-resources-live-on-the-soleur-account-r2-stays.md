@@ -161,9 +161,14 @@ forget, never pushed back as state (D4); it holds the same secrets as live state
   refusal names a live difference, the owner may authorize one edit of the named field on the NEW zone, to the value in
   the record's `dns.tf` block. For `pages_apex` and `www` that value is the `soleur-docs` Pages project's `subdomain`,
   read and checked per S4, and a failed read or a mismatch means no edit. A deleted record may be recreated the same
-  way, and its path back into state needs a reviewed PR and a CTO ruling. A `settings` (other than a CNAME's
-  `{"flatten_cname":false}`, the API default, which is not a difference: CTO ruling 2026-11-25, #13056), `data`,
+  way, and its path back into state needs a reviewed PR and a CTO ruling. A `settings` (other than `{"flatten_cname":false}` on a
+  record that is a CNAME in both the live read and the plan, see the fifth below), `data`,
   `after`, `tags:absent` or `content:quoted-equal` difference gets no edit and stops for an owner decision.
+  The fifth (CTO ruling 2026-11-25, #13056, superseding F3 of 2026-11-23 for one value) is the CNAME default: a live
+  `settings` of exactly `{"flatten_cname":false}` compares equal when the record is a CNAME both live and in the plan
+  and the plan holds no `settings`. The safety basis is inferred from provider 4.52.7 and cloudflare-go v0.116.0
+  source (the PATCH sends `"settings":{}`, and the API default is `false`), not observed; the post-apply re-read is
+  the detection, and a re-read `settings:other` on a DNS-only CNAME is a fourth-exception one-field edit.
 - AP-002 (No SSH state mutation): Aligned. The migration job uses only the Cloudflare API; the host change is an
   immutable replace.
 - AP-003 (R2 remote backend): Aligned. The backend and its endpoint are unchanged; ADR-006 stands.
