@@ -102,7 +102,7 @@ first fix had added.
 14. **The class fix was pinned by sample, and its doc misread the consumer.** The fix-round panel on f0664a11c6
     found that 11 of the 17 `mig_report` call sites could revert to `report` with the suite green (M5h checked
     6 example rows, and none on redirects-dns), that the wrapper captures `2>&1` (SKILL.md said stderr was
-    lost), and that `<label>: <status>` cannot be split because labels and statuses both contain `: `.
+    lost), and that `<label>: <status>` cannot be split because labels and statuses both contain a colon and a space.
     Recovery: a source pin (exactly one bare `report` in the migration block, inside `mig_fatal`), exact
     happy-path row lists for both profiles, the wrapper filter read from `bootstrap.sh`, a ` -> ` separator,
     and `denied` rows naming the key to re-mint. **Prevention:** pin a "route everything through X" fix with a
