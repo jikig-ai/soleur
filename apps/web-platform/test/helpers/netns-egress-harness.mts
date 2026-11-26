@@ -22,7 +22,7 @@ import net from "node:net";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { SENTINEL } from "@/scripts/lib/sandbox-network-cache-verdict";
+import { DECOY, SENTINEL, step0Ok } from "@/scripts/lib/sandbox-network-cache-verdict";
 
 type Tap = "allow-all" | "production";
 interface Spec {
@@ -70,7 +70,7 @@ const sh = (cmd: string, args: string[]) => {
 // 198.51.100.1 (TEST-NET-2) is the "open web" decoy: the SDK sets the SANDBOXED command's NO_PROXY to loopback plus every
 // RFC 1918 and link-local range (measured on 0.3.321), so a decoy on 10.0.0.1 would only be reached by a command that
 // bypasses the proxy, never by the proxy's own direct route. 10.0.0.2 hosts arm D's stub (the CLI's env, not the sandbox's).
-const DECOY_IP = "198.51.100.1";
+const DECOY_IP = DECOY;
 const ALIASES = [`${DECOY_IP}/32`, "10.0.0.2/32", "169.254.169.254/32"];
 const step0: Record<string, unknown> = { ok: false };
 async function setupNamespace(): Promise<boolean> {
@@ -135,9 +135,8 @@ async function setupNamespace(): Promise<boolean> {
     step0.imports = false;
     step0.importError = String(e).slice(0, 300);
   }
-  const allAliases = (step0.aliases as { ok: boolean }[]).every((a) => a.ok);
-  const allMounts = (step0.mounts as { ok: boolean }[]).every((m) => m.ok);
-  step0.ok = step0.loUp === true && allAliases && allMounts && step0.nestedBwrap === true && step0.shimBwrap === true && step0.imports === true;
+  // The classifier's STEP0_PROBES decide ok: one list for the harness, the UNVERIFIED reason and the recorded summary.
+  step0.ok = step0Ok(step0);
   return step0.ok as boolean;
 }
 

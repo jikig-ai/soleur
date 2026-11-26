@@ -28,7 +28,9 @@ import {
   CACHES_MODEL,
   CONTROL_DECOYS,
   DEAD_FORWARDER,
+  decoyKey,
   MEASURED_BASELINE,
+  MOVE_RULE,
   TEARDOWN_GATEWAY,
   result,
 } from "@/scripts/lib/sandbox-network-cache-verdict";
@@ -38,10 +40,9 @@ const HARNESS = join(APP_ROOT, "test", "helpers", "netns-egress-harness.mts");
 const TSX = join(APP_ROOT, "node_modules", ".bin", "tsx");
 
 // The SDK version the measurements below were taken on (CTO T16). Single-sourced with the re-measure classifier
-// (#12906 PR-1b). MEASURED_BASELINE moves only with a recorded re-measure verdict on the new version and an ADR-278 addendum in the same PR; a move to a version whose reading is not CACHES happens only in #12906's allow-arm PR, which replaces the runtime suite's F/F2 assertions in the same PR.
+// (#12906 PR-1b). It moves only per the classifier's MOVE_RULE.
 // The F/F2 host assertions read CACHES_MODEL (the classifier's invariant CACHES model), guarded by the pinned reading.
 const MEASURED_ON_SDK = MEASURED_BASELINE.version;
-const MOVE_RULE = "MEASURED_BASELINE moves only with a recorded re-measure verdict on the new version and an ADR-278 addendum in the same PR; a move to a version whose reading is not CACHES happens only in #12906's allow-arm PR, which replaces the runtime suite's F/F2 assertions in the same PR.";
 const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 const REMEASURE_CMD = "bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh";
 
@@ -178,7 +179,7 @@ describe.skipIf(!UNSHARE_OK)("MEASUREMENT: the SDK's routing after an allow (all
   it("control: with no egress env an allowed request goes direct and hits EVERY decoy the silence checks rely on", () => {
     const a = arm("control");
     expect(a.thrown).toBe("");
-    const hit = new Set(a.decoys.map((d) => `${d.addr}:${d.addr.startsWith("127.") ? "p" : d.port}`));
+    const hit = new Set(a.decoys.map((d) => decoyKey(d)));
     for (const d of CONTROL_DECOYS) {
       expect(hit, `decoy ${d} was not reached: the sensor is blind`).toContain(d);
     }

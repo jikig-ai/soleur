@@ -5,13 +5,17 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   ARMS,
   CACHES_MODEL,
   CONTROL_DECOYS,
   DEAD_FORWARDER,
+  EXIT,
+  KNOWN_HOSTS,
   MEASURED_BASELINE,
+  MOVE_RULE,
   NEXT,
   PRECONDITIONS,
   SENTINEL,
@@ -26,7 +30,11 @@ import {
   remeasureLine,
   renderDrafts,
   result,
+  safeGatewayLine,
   safeHost,
+  safeVersion,
+  step0Ok,
+  stripControl,
   type ClassifyInput,
 } from "@/scripts/lib/sandbox-network-cache-verdict";
 import { loadSdk, resolveSdkEntry } from "./helpers/netns-egress-harness.mjs";
@@ -339,16 +347,18 @@ describe("INCONCLUSIVE: one case per precondition (one-field change, exact reaso
     ["a missing arm record", (_s, a) => a.delete("E"), "candidate:arms-present"],
     ["a thrown value", (_s, a) => (a.get("D")!.thrown = "Error: boom"), "candidate:arms-present"],
     ["observed sdkVersion is the baseline 0.3.321", (s) => (s.sdkVersion = "0.3.321"), "candidate:versions"],
-    ["cliVersion 2.1.326 vs expected 2.1.32 (exact token)", () => undefined, "candidate:versions"],
     ["one arm's initClaudeCodeVersion differs", (_s, a) => (a.get("F2")!.initClaudeCodeVersion = "2.1.321"), "candidate:versions"],
     ["an arm's initClaudeCodeVersion missing", (_s, a) => delete a.get("B")!.initClaudeCodeVersion, "candidate:versions"],
   ];
   for (const [name, mut, reason] of cases) {
     it(name, () => {
-      const i = name.startsWith("cliVersion") ? { ...input(), candidate: { ...input().candidate, expectedCli: "2.1.32" } } : cand({ mut });
-      expect(classify(i)).toMatchObject({ verdict: "INCONCLUSIVE", exit: 2, reason });
+      expect(classify(cand({ mut }))).toMatchObject({ verdict: "INCONCLUSIVE", exit: 2, reason });
     });
   }
+  it("cliVersion 2.1.326 vs expected 2.1.32 (exact token)", () => {
+    const i = { ...input(), candidate: { ...input().candidate, expectedCli: "2.1.32" } };
+    expect(classify(i)).toMatchObject({ verdict: "INCONCLUSIVE", exit: 2, reason: "candidate:versions" });
+  });
   it("baseline: the baseline reading RE-ASKS-AFTER-TEARDOWN is INCONCLUSIVE (baseline)", () => {
     const b = harnessRun({ sdk: "0.3.321", cli: "2.1.321", entry: BASE_ENTRY, fHosts: [DECOY, DECOY], f2Hosts: [DECOY, DECOY, "example.test"] });
     const v = classify(input({ baseline: b }));
@@ -384,6 +394,12 @@ describe("LEAK (exit 4) and precedence", () => {
     it(`a decoy hit in arm ${n} is LEAK`, () => {
       const v = classify(cand({ mut: (_s, a) => a.get(n)!.decoys.push({ addr: DECOY, port: 443 }) }));
       expect(v).toMatchObject({ verdict: "LEAK", exit: 4, reason: `candidate:${n}:decoy` });
+    });
+  }
+  for (const n of ["F", "F2"]) {
+    it(`the teardown CONNECT in arm ${n} without the credential is LEAK (leakIn runs before the teardown precondition)`, () => {
+      const v = classify(cand({ mut: (_s, a) => (a.get(n)!.gateway[0].authOk = false) }));
+      expect(v).toMatchObject({ verdict: "LEAK", exit: 4, reason: `candidate:${n}:gateway-auth` });
     });
   }
   it("authOk false in arm E", () => {
@@ -523,7 +539,11 @@ describe("CLI: --out, --markdown and sentinel redaction", () => {
     const v = JSON.parse(json);
     expect(v.requested).toBe("latest");
     expect(v.env).toEqual(ENV_ROWS);
-    expect(v.candidate.step0.sdkEntry).toBe("<scratch>/candidate/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs");
+    // step0 is reduced to booleans and validated versions: no path the harness reported reaches the record.
+    expect(v.candidate.step0.sdkEntryMatches).toBe(true);
+    expect(v.candidate.step0).not.toHaveProperty("sdkEntry");
+    expect(v.candidate.step0).not.toHaveProperty("cliPath");
+    expect(json).not.toContain(ROOT);
     expect(add).toContain("bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh latest");
     expect(add).toContain(`\`${CAND_SDK}\``);
     expect(add).toContain("| `F2` |");
@@ -556,7 +576,7 @@ describe("CLI: --out, --markdown and sentinel redaction", () => {
   });
   it("a USER that appears in the output is refused before anything is written", async () => {
     vi.stubEnv("USER", "zzfixtureuser");
-    const { code, stdout } = await runMain(harnessRun({ mut: (_s, a) => (a.get("B")!.gateway[0].line = "CONNECT zzfixtureuser.test:443 HTTP/1.1") }));
+    const { code, stdout } = await runMain(harnessRun(), { env: { ...ENV_ROWS, bwrap: "bubblewrap 0.13.1 zzfixtureuser" } });
     expect(code).toBe(1);
     expect(stdout).toMatch(/^REMEASURE verdict=ERROR exit=1 reason=redaction-refused:user /m);
     expect(existsSync(join(dir, "verdict.json"))).toBe(false);
@@ -564,21 +584,42 @@ describe("CLI: --out, --markdown and sentinel redaction", () => {
   it("the real home passed as REMEASURE_IDENTITY_HOME is refused even when HOME is the scratch npm-home", async () => {
     vi.stubEnv("HOME", "/var/tmp/zzscratch/npm-home");
     vi.stubEnv("REMEASURE_IDENTITY_HOME", "/home/zzfixturehome");
-    const { code, stdout } = await runMain(harnessRun({ mut: (_s, a) => (a.get("B")!.gateway[0].line = "CONNECT /home/zzfixturehome/x HTTP/1.1") }));
+    const { code, stdout } = await runMain(harnessRun(), { env: { ...ENV_ROWS, bwrap: "bubblewrap /home/zzfixturehome/x" } });
     expect(code).toBe(1);
     expect(stdout).toMatch(/^REMEASURE verdict=ERROR exit=1 reason=redaction-refused:home /m);
     expect(existsSync(join(dir, "verdict.json"))).toBe(false);
+  });
+  it("the physical home passed as REMEASURE_IDENTITY_HOME_REAL is refused too", async () => {
+    vi.stubEnv("HOME", "/var/tmp/zzscratch/npm-home");
+    vi.stubEnv("REMEASURE_IDENTITY_HOME", "/home/zzlink");
+    vi.stubEnv("REMEASURE_IDENTITY_HOME_REAL", "/data/zzrealhome");
+    const { code, stdout } = await runMain(harnessRun(), { env: { ...ENV_ROWS, bwrap: "bubblewrap /data/zzrealhome/x" } });
+    expect(code).toBe(1);
+    expect(stdout).toMatch(/^REMEASURE verdict=ERROR exit=1 reason=redaction-refused:home /m);
+  });
+  it("a candidate string carrying the operator's USER never reaches the record: the closed shapes drop it first", async () => {
+    vi.stubEnv("USER", "zzfixtureuser");
+    const { code } = await runMain(harnessRun({ mut: (_s, a) => (a.get("B")!.gateway[0].line = "CONNECT zzfixtureuser.test:443 HTTP/1.1") }));
+    expect(code).toBe(0);
+    const json = readFileSync(join(dir, "verdict.json"), "utf8");
+    expect(json).not.toContain("zzfixtureuser");
+    expect(json).toContain("<invalid>");
   });
   it("table prints one `<VERDICT>\\t<next>` line per verdict, in precedence order, from NEXT", async () => {
     const out: string[] = [];
     expect(await main(["table"], (s) => out.push(s))).toBe(0);
     const rows = out.join("").trimEnd().split("\n").map((l) => l.split("\t"));
-    expect(rows.map((r) => r[0])).toEqual(["ERROR", "LEAK", "UNVERIFIED", "INCONCLUSIVE", "CACHES", "RE-ASKS-AFTER-TEARDOWN", "MIXED"]);
+    expect(rows.map((r) => r[0])).toEqual(["ERROR", "LEAK", "UNVERIFIED", "INCONCLUSIVE", "CACHES", "RE-ASKS-AFTER-TEARDOWN", "MIXED", "REFUSED"]);
     expect(rows.map((r) => r[0])).toEqual([...VERDICTS]);
     for (const [v, next] of rows) expect(next).toBe(NEXT[v as keyof typeof NEXT]);
     expect(NEXT.CACHES).toBe("#12906 stays blocked; re-run on the next SDK bump");
     expect(NEXT["RE-ASKS-AFTER-TEARDOWN"]).toContain("it is not proof that an allow is revocable");
     expect(NEXT.ERROR).toContain("app-mutated also files a bug");
+  });
+  it("EXIT is the verdict-to-exit-code map and every classify() verdict carries it", () => {
+    expect(EXIT).toEqual({ ERROR: 1, LEAK: 4, UNVERIFIED: 3, INCONCLUSIVE: 2, CACHES: 0, "RE-ASKS-AFTER-TEARDOWN": 0, MIXED: 0, REFUSED: 3 });
+    expect(Object.keys(EXIT)).toEqual([...VERDICTS]);
+    for (const v of [classify(input()), classify(cand({ fHosts: [DECOY, DECOY] }))]) expect(v.exit).toBe(EXIT[v.verdict]);
   });
   it("baseline-json carries the pin, the arm list and the sentinel", async () => {
     const out: string[] = [];
@@ -589,7 +630,7 @@ describe("CLI: --out, --markdown and sentinel redaction", () => {
 });
 
 describe("identityLeak: one case per branch", () => {
-  const id = { home: "/home/zzfixture", user: "zzuser", logname: "zzlogin", host: "zzhost" };
+  const id = { homes: ["/home/zzfixture"], user: "zzuser", logname: "zzlogin", host: "zzhost" };
   const cases: [string, string, string | null][] = [
     ["sentinel", `x ${SENTINEL} y`, "stub-sentinel"],
     ["home path", "cwd /home/zzfixture/repo", "home"],
@@ -622,9 +663,51 @@ describe("Markdown drafts: candidate strings are inert", () => {
     expect(mdCell("l1\nl2")).toBe("`l1 l2`");
     expect(mdCell("")).toBe("`-`");
   });
-  it("safeHost keeps hostnames and IP literals, anything else is <invalid>", () => {
-    for (const h of ["example.test", DECOY, "::1", "LOCALHOST.", "x.supabase.co"]) expect(safeHost(h)).toBe(h);
-    for (const h of ["a|b", "x](http://evil)", "<img>", "a b", "", 7, null]) expect(safeHost(h)).toBe("<invalid>");
+  it("safeHost keeps IP literals and KNOWN_HOSTS, anything else is <invalid>", () => {
+    for (const h of [...KNOWN_HOSTS, DECOY, "::1", "169.254.169.254"]) expect(safeHost(h)).toBe(h);
+    for (const h of ["LOCALHOST.", "x.supabase.co", "jdoe-laptop", "a|b", "x](http://evil)", "<img>", "a b", "", 7, null]) expect(safeHost(h)).toBe("<invalid>");
+  });
+  it("safeGatewayLine keeps the two request grammars over safe hosts and ports, anything else is <invalid>", () => {
+    for (const l of [CONNECT, "CONNECT example.test:22 HTTP/1.1", "CONNECT [::1]:443 HTTP/1.1", "GET http://example.test/ HTTP/1.1", "GET http://example.test:8080/ HTTP/1.1"])
+      expect(safeGatewayLine(l)).toBe(l);
+    for (const l of ["CONNECT jdoe.local:443 HTTP/1.1", "CONNECT example.test:0 HTTP/1.1", "CONNECT example.test:99999 HTTP/1.1", "GET http://example.test/home/x HTTP/1.1",
+      "GET https://example.test/ HTTP/1.1", "CONNECT example.test:443 HTTP/1.1 extra", "", 7, null])
+      expect(safeGatewayLine(l)).toBe("<invalid>");
+  });
+  it("safeVersion keeps semver only", () => {
+    for (const v of ["0.3.328", "2.1.328", "1.0.0-rc.1"]) expect(safeVersion(v)).toBe(v);
+    for (const v of ["0.3", "v0.3.328", "0.3.328 | @x", "/home/x", `${"9".repeat(70)}.0.0`, 3, null]) expect(safeVersion(v)).toBe("<invalid>");
+  });
+  it("stripControl removes C0 and C1 controls and keeps tab and newline", () => {
+    expect(stripControl("a\u001b]52;c;x\u0007b\u009bc\u007fd\te\nf")).toBe("a]52;c;xbcd\te\nf");
+  });
+  it("step0Ok: every probe true (a probe list must be non-empty and all ok)", () => {
+    const s = { loUp: true, aliases: [{ ok: true }], mounts: [{ ok: true }], nestedBwrap: true, shimBwrap: true, imports: true };
+    expect(step0Ok(s)).toBe(true);
+    expect(step0Ok({ ...s, aliases: [] })).toBe(false);
+    expect(step0Ok({ ...s, mounts: [{ ok: true }, { ok: false }] })).toBe(false);
+    const { imports: _drop, ...noImports } = s;
+    expect(step0Ok(noImports)).toBe(false);
+  });
+  it("recorded fields are rebuilt from closed shapes: decoys, inputShapeChanged keys, initClaudeCodeVersion, unknown arms", () => {
+    const v = classify(
+      cand({
+        mut: (s, a) => {
+          s.cliPath = "/home/zzop/.local/bin/claude";
+          a.get("B")!.decoys.push({ addr: "jdoe.local", port: 443 });
+          a.get("E")!.calls[1].keys = ["host", "port", "jdoe"];
+          a.get("D")!.initClaudeCodeVersion = "2.1.326 /home/zzop";
+          a.set("zz-extra", { arm: "zz-extra", thrown: "", calls: [], gateway: [], decoys: [] });
+        },
+      }),
+    );
+    const r = v.candidate!;
+    expect(r.arms.B.decoys).toContain("<invalid>");
+    expect(r.arms.E.inputShapeChanged).toEqual(["host", "port", "<other>"]);
+    expect(r.arms.D.initClaudeCodeVersion).toBe("<invalid>");
+    expect(Object.keys(r.arms)).toEqual([...ARMS]);
+    expect(JSON.stringify(v)).not.toContain("zzop");
+    expect(JSON.stringify(v)).not.toContain("jdoe");
   });
   it("an injected host, gateway line and version render only as code spans", () => {
     const v = classify(
@@ -640,13 +723,31 @@ describe("Markdown drafts: candidate strings are inert", () => {
     expect(md).not.toContain("@");
     expect(md).not.toContain("](http://evil)");
     expect(md).toContain("`<invalid>, 198.51.100.1`");
-    expect(md).toContain("`CONNECT 'a'\\|<b>c HTTP/1.1; CONNECT 198.51.100.1:443 HTTP/1.1`");
-    expect(md).toContain("`0.3.326 \\| owner`");
+    expect(md).toContain("`<invalid>; CONNECT 198.51.100.1:443 HTTP/1.1`");
+    expect(md).toContain("| Observed SDK | `0.3.321` | `<invalid>` |");
     // Every data row of every table has exactly its column count of unescaped pipes.
     for (const row of md.split("\n").filter((l) => l.startsWith("| ") && !l.startsWith("| Arm") && !l.startsWith("| |"))) {
       const pipes = row.replace(/\\./g, "").split("|").length - 1;
       expect([4, 5], row).toContain(pipes);
     }
+  });
+});
+
+describe("single sources the other files read", () => {
+  const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+  it("ADR-278 carries MOVE_RULE verbatim", () => {
+    const adr = readFileSync(
+      join(REPO, "knowledge-base/engineering/architecture/decisions/ADR-278-opt-in-open-web-egress-via-dedicated-connect-gateway.md"),
+      "utf8",
+    );
+    expect(adr).toContain(MOVE_RULE);
+  });
+  it("the harness computes step0.ok with step0Ok and its decoy is DECOY (no restated probe list or address)", () => {
+    const src = readFileSync(join(REPO, "apps/web-platform/test/helpers/netns-egress-harness.mts"), "utf8");
+    expect(src).toMatch(/^import \{ DECOY, SENTINEL, step0Ok \} from "@\/scripts\/lib\/sandbox-network-cache-verdict";$/m);
+    expect(src).toMatch(/^  step0\.ok = step0Ok\(step0\);$/m);
+    expect(src).toMatch(/^const DECOY_IP = DECOY;$/m);
+    expect(src).not.toContain('"198.51.100.1"');
   });
 });
 

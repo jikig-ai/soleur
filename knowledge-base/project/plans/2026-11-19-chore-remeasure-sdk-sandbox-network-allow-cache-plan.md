@@ -53,6 +53,8 @@ The work splits into two stages with different start conditions (CTO items 1 and
 
 CTO item 21 replaced the earlier "stay draft and end with a resume prompt" rule: this PR merges with an interim measurement, labelled as such, and the 0.3.328 run is tracked in a follow-up issue filed before merge. No UNVERIFIED token is recorded for the floor, because the harness can run here.
 
+**Status, 2026-11-26.** Superseded for the Measure stage: the interim 0.3.325 run is not cited (CTO item 25), and this PR now records the 0.3.328 run itself, made after the floor passed; #12977 is closed by it. See the note after item 26 in `knowledge-base/project/specs/feat-one-shot-12906-sdk-allow-cache-remeasure/decision-challenges.md`. The table above and AC8 below are kept as planned.
+
 ## Research Insights
 
 **Premise Validation (Phase 0.6).**
@@ -577,7 +579,7 @@ Build stage:
 
 Measure stage:
 
-- **AC8** (CTO item 21) The script ran for real against the interim version (0.3.326 or 0.3.325, past the floor). The addendum quotes the exact command, the exit code and the final `REMEASURE` line, labelled "interim version, not 0.3.328". The follow-up issue for the 0.3.328 run exists, carries `Ref #12906`, the exact command and the not-before time 2026-11-21T23:14Z, and holds the 0.3.328 form of this criterion.
+- **AC8** (CTO item 21; superseded 2026-11-26 by the 0.3.328 run, see the status note under the stage table) The script ran for real against the interim version (0.3.326 or 0.3.325, past the floor). The addendum quotes the exact command, the exit code and the final `REMEASURE` line, labelled "interim version, not 0.3.328". The follow-up issue for the 0.3.328 run exists, carries `Ref #12906`, the exact command and the not-before time 2026-11-21T23:14Z, and holds the 0.3.328 form of this criterion.
 - **AC8b** (CTO item 21) The offline `.test.sh` has a row with a two-worktree fixture whose sibling worktree stays writable; it exits 3 `containment-unavailable`.
 - **AC9** The ADR-278 addendum `## Addendum — <run date> (#12906): ...` records:
   - the requested and exact versions;

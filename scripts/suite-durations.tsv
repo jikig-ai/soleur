@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
 # default-weight-ms=1802
-# generated-at=2026-11-20T19:19:54Z
+# generated-at=2026-11-26T11:31:34Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7d0cd2b5340986989503a52b56d26678f0e677e02dc0e30d7950aea5d95d712f
 .claude/hooks/agent-token-tee.test.sh	7099	measured
@@ -90,6 +90,7 @@ apps/web-platform/scripts/lint-migration-immutability.test.sh	1536	measured
 apps/web-platform/scripts/postgrest-reload-schema.test.sh	502	measured
 apps/web-platform/scripts/preflight-worm-cascade-contradiction.test.sh	154	measured
 apps/web-platform/scripts/real-sdk-ask-probe.test.sh	8697	measured
+apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.test.sh	1802	floor
 apps/web-platform/scripts/run-migrations-schema-probe.test.sh	5001	measured
 apps/web-platform/scripts/sandbox-canary-regression.test.sh	86	measured
 apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	575	measured

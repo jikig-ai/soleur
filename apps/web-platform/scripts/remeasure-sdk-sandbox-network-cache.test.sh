@@ -3,8 +3,8 @@
 # script-to-classifier wiring).
 #
 # Run via:  bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.test.sh
-# No network and (except the one real-kernel row) no namespaces: `npm`, `unshare`, `timeout`, `uname`, `getconf`, `df`,
-# `mount`, `umount` and a `node` wrapper are stubs that come first on PATH and EXIT 64 on any argv the script is not
+# No network and (except the one real-kernel row) no namespaces: `npm`, `unshare`, `timeout`, `uname`, `getconf`, `df`, `ls`,
+# `bwrap`, `mount`, `umount` and `node`, `git` and `date` wrappers are stubs that come first on PATH and EXIT 64 on any argv the script is not
 # supposed to send (logged to a refusal file every row asserts empty; the hygiene row proves a refusal reaches it).
 # Each row copies the script and the REAL classifier into a fixture app tree inside a fixture git repo (with a sibling
 # worktree) under this suite's own `mktemp -d`; the fixture links the real tsx, and a fixture harness prints synthesized
@@ -23,6 +23,9 @@ SUT_SRC="$SCRIPT_DIR/remeasure-sdk-sandbox-network-cache.sh"
 CLASSIFIER_SRC="$SCRIPT_DIR/lib/sandbox-network-cache-verdict.ts"
 REAL_TSX="$REAL_APP/node_modules/.bin/tsx"
 REAL_NODE="$(command -v node)"
+REAL_GIT="$(command -v git)"
+REAL_LS="$(command -v ls)"
+REAL_DATE="$(command -v date)"
 
 if [[ ! -f "$SUT_SRC" ]]; then
   echo "ERROR: $SUT_SRC not found (RED: the script does not exist yet)" >&2
@@ -58,7 +61,8 @@ T="$(mktemp -d -t soleur-remeasure.$$.XXXXXXXX)"
 T="$(cd "$T" && pwd -P)"
 RK_BASE="" # the real-kernel row's fixture base, outside /tmp (see that row)
 RK_RAN=0
-trap 'chmod -R u+w "$T" ${RK_BASE:+"$RK_BASE"} 2>/dev/null; rm -rf "$T" ${RK_BASE:+"$RK_BASE"}' EXIT
+live_pid=""
+trap '[[ -n "$live_pid" ]] && kill "$live_pid" 2>/dev/null; chmod -R u+w "$T" ${RK_BASE:+"$RK_BASE"} 2>/dev/null; rm -rf "$T" ${RK_BASE:+"$RK_BASE"}' EXIT
 assert_fixture_dir "$T"
 
 PASS=0
@@ -100,7 +104,9 @@ eq "FLOOR_DAYS equals min-release-age in apps/web-platform/.npmrc" \
   "$(sed -n 's/^min-release-age=//p' "$REAL_APP/.npmrc")" "$(sed -n 's/^FLOOR_DAYS=//p' "$SUT_SRC")"
 CAND_V="0.3.325"
 LATEST_V="0.3.330"
-iso_ago() { date -u -d "@$(( $(date -u +%s) - $1 ))" +%FT%T.000Z; } # seconds ago
+# One clock for the whole suite: the stub `date -u +%s` answers NOW0, so the floor rows have no wall-clock margin.
+NOW0="$(date -u +%s)"
+iso_ago() { date -u -d "@$(( NOW0 - $1 ))" +%FT%T.000Z; } # seconds before NOW0
 OLD_TS="$(iso_ago $((30 * 86400)))"
 
 # ---------------------------------------------------------------------------------------------------------------------------------
@@ -162,10 +168,11 @@ import { readFileSync, writeFileSync, existsSync, appendFileSync } from "node:fs
 import { join } from "node:path";
 const entry = process.env.NETNS_SDK_ENTRY ?? "";
 const label = entry.includes("/baseline/") ? "baseline" : entry.includes("/candidate/") ? "candidate" : "none";
-writeFileSync("$F/cfg/env-" + label + ".json", JSON.stringify({ keys: Object.keys(process.env).sort(), env: process.env, argv: process.argv.slice(2), cwd: process.cwd() }));
+writeFileSync("$F/cfg/env-" + label + ".json", JSON.stringify({ keys: Object.keys(process.env).sort(), env: process.env, argv: process.argv.slice(2), cwd: process.cwd(), fd99: existsSync("/proc/self/fd/99") }));
 const spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
 writeFileSync("$F/cfg/spec-" + label + ".json", JSON.stringify(spec));
-process.stderr.write("harness stderr ${SENTINEL}\n");
+process.stderr.write("harness stderr ${SENTINEL} \u001b]52;c;zzctl\u0007 \u009b31m home=$F/home\n");
+if (existsSync("$F/cfg/harness-marker")) { process.stderr.write("remeasure-containment: forged by the harness\n"); process.exit(1); }
 if (label === "candidate" && existsSync("$F/cfg/tamper-baseline")) appendFileSync(join(spec.scratch, "../../run-baseline/stdout"), "NETNS_TAMPER\\n");
 // step0.sdkEntry is what the harness imported: the classifier's sdk-entry precondition realpaths it to the expected entry.
 process.stdout.write(readFileSync("$F/cfg/out-" + label, "utf8").replace('"sdkEntry":"x"', '"sdkEntry":' + JSON.stringify(entry)));
@@ -182,6 +189,7 @@ HARN
   : >"$F/cfg/mount.log"
   : >"$F/cfg/sock.log"
   : >"$F/cfg/chmod-undo"
+  echo "$NOW0" >"$F/cfg/now"
   write_stubs
 }
 
@@ -193,9 +201,11 @@ write_stubs() {
 C="$C"; A="$A"; BI_SDK="$BASE_INT_SDK"; BI_X64="$BASE_INT_X64"
 refuse() { printf 'npm %s | %s\n' "\$*" "\$1" >>"\$C/refusals"; exit 64; }
 printf '%s\n' "\$*" >>"\$C/npm.log"
-keys="\$(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' | grep -vxE 'PWD|SHLVL|_|OLDPWD' | sort | paste -sd, -)"
-[[ "\$keys" == "HOME,PATH,npm_config_cache,npm_config_globalconfig,npm_config_registry,npm_config_userconfig" ]] || refuse "env-keys:\$keys"
+keys="\$(env | sed -n 's/^\([A-Za-z_@][A-Za-z0-9_@:-]*\)=.*/\1/p' | grep -vxE 'PWD|SHLVL|_|OLDPWD' | sort | paste -sd, -)"
+[[ "\$keys" == "HOME,PATH,npm_config_@anthropic-ai:registry,npm_config_cache,npm_config_globalconfig,npm_config_prefix,npm_config_registry,npm_config_userconfig" ]] || refuse "env-keys:\$keys"
 [[ "\$npm_config_registry" == "https://registry.npmjs.org/" ]] || refuse "registry"
+[[ "\$(env | sed -n 's/^npm_config_@anthropic-ai:registry=//p')" == "https://registry.npmjs.org/" ]] || refuse "scoped-registry"
+[[ "\$npm_config_prefix" == */npm-home ]] || refuse "prefix"
 [[ "\$npm_config_userconfig" == */npm-home/user.npmrc && "\$npm_config_globalconfig" == */npm-home/global.npmrc ]] || refuse "rc-paths"
 [[ -f "\$npm_config_userconfig" && ! -s "\$npm_config_userconfig" && -f "\$npm_config_globalconfig" && ! -s "\$npm_config_globalconfig" ]] || refuse "rc-not-empty"
 [[ "\$HOME" == */npm-home && "\$npm_config_cache" == */npm-cache ]] || refuse "home-cache"
@@ -204,6 +214,9 @@ P=@anthropic-ai/claude-agent-sdk; X=@anthropic-ai/claude-agent-sdk-linux-x64
 semver='^[0-9]+\.[0-9]+\.[0-9]+\$'
 case "\$*" in
   "--version") echo 11.0.0-fixture ;;
+  "config get min-release-age --min-release-age=3")
+    [[ -f "\$C/npm-no-mra" ]] && echo 'npm warn Unknown cli config "--min-release-age". This will stop working in the next major version of npm.' >&2
+    echo 3 ;;
   "view \$P@latest version") echo "$LATEST_V" ;;
   "view \$P@"*" version")
     v="\${2#\$P@}"; [[ "\$v" =~ \$semver && \$# -eq 3 ]] || refuse "view-version"; echo "\$v" ;;
@@ -220,8 +233,10 @@ case "\$*" in
     printf '{"name":"%s","version":"%s","claudeCodeVersion":"2.1.%s"}\n' "\$P" "\$v" "\${v##*.}" >"\$t/node_modules/\$P/package.json"
     echo "export const query = 1;" >"\$t/node_modules/\$P/sdk.mjs"
     printf '#!/bin/sh\necho %s\n' "\$v" >"\$t/node_modules/\$X/claude"; chmod +x "\$t/node_modules/\$X/claude"
+    xv="\$v"; [[ "\$v" != "$BASE_V" && -f "\$C/x64-version-mismatch" ]] && xv="9.9.9"
+    printf '{"name":"%s","version":"%s"}\n' "\$X" "\$xv" >"\$t/node_modules/\$X/package.json"
     if [[ "\$v" == "$BASE_V" ]]; then
-      is="\$BI_SDK"; ix="\$BI_X64"; [[ -f "\$C/bad-baseline-integrity" ]] && is="sha512-tampered=="
+      is="\$BI_SDK"; ix="\$BI_X64"; [[ -f "\$C/bad-baseline-integrity" ]] && is="sha512-tampered=="; [[ -f "\$C/bad-baseline-integrity-x64" ]] && ix="sha512-tampered=="
     else is="sha512-candidatesdk=="; ix="sha512-candidatex64=="; fi
     printf '{"packages":{"node_modules/%s":{"integrity":"%s"},"node_modules/%s":{"integrity":"%s"}}}\n' "\$P" "\$is" "\$X" "\$ix" >"\$t/package-lock.json"
     [[ "\$v" != "$BASE_V" && -f "\$C/mutate-lock" ]] && echo " " >>"\$A/package-lock.json"
@@ -239,14 +254,14 @@ STUB
   cat >"$F/bin/unshare" <<STUB
 #!/usr/bin/env bash
 C="$C"
-if [[ "\$*" == "-rnm --fork --pid --mount-proc --kill-child true" ]]; then [[ -f "\$C/no-userns" ]] && exit 1; exit 0; fi
-if [[ "\${1-} \${2-} \${3-} \${4-} \${5-}" == "-rnm --fork --pid --mount-proc --kill-child" ]]; then
-  shift 5; "\$@"; rc=\$?
+if [[ "\$*" == "-rnm --ipc --fork --pid --mount-proc --kill-child true" ]]; then [[ -f "\$C/no-userns" ]] && exit 1; exit 0; fi
+if [[ "\${1-} \${2-} \${3-} \${4-} \${5-} \${6-}" == "-rnm --ipc --fork --pid --mount-proc --kill-child" ]]; then
+  shift 6; "\$@"; rc=\$?
   while IFS= read -r p; do chmod u+w "\$p" 2>/dev/null; done <"\$C/chmod-undo"
   : >"\$C/chmod-undo"; rm -f "\$C/locked"
   exit "\$rc"
 fi
-if [[ "\${1-} \${2-} \${3-} \${4-}" == "-U -r -n -m" ]]; then : >"\$C/locked"; shift 4; exec "\$@"; fi
+if [[ "\${1-} \${2-} \${3-} \${4-}" == "-U -r -n -m" ]]; then [[ -f "\$C/no-nested" ]] && exit 1; : >"\$C/locked"; shift 4; exec "\$@"; fi
 printf 'unshare %s\n' "\$*" >>"\$C/refusals"; exit 64
 STUB
   cat >"$F/bin/timeout" <<STUB
@@ -279,8 +294,9 @@ echo "fixturefs 99999999 1 \$(cat "$C/free-kb" 2>/dev/null || echo 99999999) 1% 
 STUB
   # mount: a read-only tmpfs over a fixture path, and ro=recursive / over the fixture's protected paths and scratch
   # dirs, are modelled as chmod a-w (a path listed in cfg/mount-skip is left writable); a read-write rebind is chmod
-  # u+w; the system mounts (/proc, /run, /var/run, /tmp, /dev/shm) are no-ops. Locked: only the probe's bind of the
-  # common dir succeeds, and its read-write remount succeeds only with cfg/permit-remount.
+  # u+w; the system mounts (/proc, /run, /var/run, /tmp, /dev/shm) and the minimal /dev's mounts (built under the run
+  # dir, then moved) are no-ops. Locked: only the probe's bind of the common dir succeeds (unless cfg/deny-common-bind),
+  # and its read-write remount succeeds only with cfg/permit-remount.
   cat >"$F/bin/mount" <<STUB
 #!/usr/bin/env bash
 C="$C"; F="$F"
@@ -298,36 +314,74 @@ skip() {
 ro() { skip "\$1" && return 0; chmod a-w "\$1" && printf '%s\n' "\$1" >>"\$C/chmod-undo"; }
 refuse() { printf 'mount %s\n' "\$*" >>"\$C/refusals"; exit 64; }
 if [[ -f "\$C/locked" ]]; then
-  [[ "\$*" == "-o remount,bind,rw /" ]] && exit 32
-  [[ \$# -eq 3 && "\$1" == --bind && "\$2" == "\$3" && "\$2" == "\$F/repo/.git" ]] && exit 0
-  [[ \$# -eq 3 && "\$1" == -o && "\$2" == remount,bind,rw && "\$3" == "\$F/repo/.git" ]] || refuse "\$@"
+  [[ "\$*" == "--options-source=disable -o remount,bind,rw /" ]] && { [[ -f "\$C/permit-remount-root" ]] && exit 0; exit 32; }
+  [[ \$# -eq 3 && "\$1" == --bind && "\$2" == "\$3" && "\$2" == "\$F/repo/.git" ]] && { [[ -f "\$C/deny-common-bind" ]] && exit 32; exit 0; }
+  [[ "\$*" == "--options-source=disable -o remount,bind,rw \$F/repo/.git" ]] || refuse "\$@"
   [[ -f "\$C/permit-remount" ]] && exit 0
   exit 32
 fi
 case "\$*" in
   "-t tmpfs -o ro,size=64k,mode=0555 remeasure-home "*|"-t tmpfs -o ro,size=64k,mode=0555 remeasure-xdg "*)
     [[ \$# -eq 6 ]] || refuse "\$@"; ro "\$6"; exit 0 ;;
-  "-o remount,bind,ro=recursive /")
+  "--options-source=disable -o remount,bind,ro=recursive /")
     for p in "\$F/repo" "\$F/repo/.git" "\$F/sib"; do ro "\$p"; done
     while IFS= read -r -d '' p; do ro "\$p"; done < <(find "\$TMPDIR"/remeasure-sdk.* -type d -print0 2>/dev/null)
     exit 0 ;;
-  "-o remount,bind,rw /proc"|"-t tmpfs -o rw,nosuid,nodev,size=1m,mode=0755 remeasure-run /run"|"-o remount,bind,ro /run"|\
-  "-t tmpfs -o ro,size=64k,mode=0555 remeasure-varrun /var/run"|\
-  "-t tmpfs -o rw,nosuid,nodev,mode=1777 remeasure-tmp /tmp"|"-t tmpfs -o rw,nosuid,nodev,mode=1777 remeasure-shm /dev/shm")
+  "--options-source=disable -o remount,bind,rw /proc"|"-t tmpfs -o rw,nosuid,nodev,size=1m,mode=0755 remeasure-run /run"|\
+  "--options-source=disable -o remount,bind,ro /run"|"-t tmpfs -o ro,size=64k,mode=0555 remeasure-varrun /var/run"|\
+  "-t tmpfs -o rw,nosuid,nodev,size=512m,mode=1777 remeasure-tmp /tmp"|"-t tmpfs -o rw,nosuid,nodev,size=64m,mode=1777 remeasure-shm /dev/shm")
     exit 0 ;;
 esac
+# indev <path> <suffix>: path is <scratch>/run-<label>/dev<suffix> (the minimal /dev's build dir).
+indev() { local s; for s in "\$TMPDIR"/remeasure-sdk.*/run-baseline/dev "\$TMPDIR"/remeasure-sdk.*/run-candidate/dev; do [[ "\$1" == "\$s\$2" ]] && return 0; done; return 1; }
+if [[ \$# -eq 6 && "\$1 \$2 \$3 \$4 \$5" == "-t tmpfs -o rw,nosuid,nodev,noexec,size=64k,mode=0755 remeasure-dev" ]] && indev "\$6" ""; then exit 0; fi
+if [[ \$# -eq 3 && "\$1" == --bind && "\$2" =~ ^/dev/(null|zero|full|random|urandom|tty)\$ ]] && indev "\$3" "/\${2#/dev/}"; then exit 0; fi
+if [[ \$# -eq 6 && "\$1 \$2 \$3 \$4 \$5" == "-t devpts -o newinstance,ptmxmode=0666,mode=0620 remeasure-devpts" ]] && indev "\$6" /pts; then exit 0; fi
+if [[ \$# -eq 3 && "\$1" == --move && "\$3" == /dev ]] && indev "\$2" ""; then exit 0; fi
 if [[ \$# -eq 3 && "\$1" == --bind && "\$2" == "\$3" && "\$2" == "\$TMPDIR"/remeasure-sdk.*/run-*/* ]]; then exit 0; fi
-if [[ \$# -eq 3 && "\$1" == -o && "\$2" == remount,bind,rw && "\$3" == "\$TMPDIR"/remeasure-sdk.*/run-*/* ]]; then
-  skip "\$3" || chmod u+w "\$3"; exit 0
+if [[ \$# -eq 4 && "\$1 \$2 \$3" == "--options-source=disable -o remount,bind,rw" && "\$4" == "\$TMPDIR"/remeasure-sdk.*/run-*/* ]]; then
+  skip "\$4" || chmod u+w "\$4"; exit 0
 fi
 refuse "\$@"
 STUB
-  # umount: the probe's two attempts, refused as a locked mount refuses them.
+  # umount: the probe's attempts, refused as a locked mount refuses them (cfg/permit-umount-<basename> allows one).
   cat >"$F/bin/umount" <<STUB
 #!/usr/bin/env bash
-C="$C"
-[[ -f "\$C/locked" && \$# -eq 1 && ( "\$1" == /run || "\$1" == /proc ) ]] || { printf 'umount %s\n' "\$*" >>"\$C/refusals"; exit 64; }
+C="$C"; F="$F"
+case "\${1-}" in /run|/proc|/dev|/tmp|/dev/shm|"\$F/home"|"\$F/homelink"|"\$F/xdg") ok=1 ;; *) ok=0 ;; esac
+[[ -f "\$C/locked" && \$# -eq 1 && "\$ok" == 1 ]] || { printf 'umount %s\n' "\$*" >>"\$C/refusals"; exit 64; }
+printf '%s\n' "\$1" >>"\$C/umount.log"
+[[ -f "\$C/permit-umount-\${1##*/}" ]] && exit 0
 exit 32
+STUB
+  # ls: the probe's two listings answer the minimal /dev (cfg/dev-extra or cfg/pts-extra adds a name); the rest is real.
+  cat >"$F/bin/ls" <<STUB
+#!/usr/bin/env bash
+C="$C"
+if [[ "\$*" == "-A /dev" ]]; then printf '%s\n' fd full null ptmx pts random shm stderr stdin stdout tty urandom zero; cat "\$C/dev-extra" 2>/dev/null; exit 0; fi
+if [[ "\$*" == "-A /dev/pts" ]]; then cat "\$C/pts-extra" 2>/dev/null; echo ptmx; exit 0; fi
+exec "$REAL_LS" "\$@"
+STUB
+  # git: real, except cfg/git-common-missing (the common dir is not a directory) and cfg/git-wt-omit-own (the worktree
+  # list leaves out the app's own checkout).
+  cat >"$F/bin/git" <<STUB
+#!/usr/bin/env bash
+C="$C"; F="$F"
+if [[ -f "\$C/git-common-missing" && "\$*" == *--git-common-dir* ]]; then echo "\$F/no-such-common-dir"; exit 0; fi
+if [[ -f "\$C/git-wt-omit-own" && "\$*" == *"worktree list --porcelain -z"* ]]; then printf 'worktree %s\0HEAD 0000000000000000000000000000000000000000\0branch refs/heads/sib\0\0' "\$F/sib"; exit 0; fi
+exec "$REAL_GIT" "\$@"
+STUB
+  # date: `date -u +%s` is the suite's clock (cfg/now); every other form is the real date.
+  cat >"$F/bin/date" <<STUB
+#!/usr/bin/env bash
+if [[ "\$*" == "-u +%s" && -s "$C/now" ]]; then cat "$C/now"; exit 0; fi
+exec "$REAL_DATE" "\$@"
+STUB
+  # bwrap: the env row's version string; cfg/bwrap-suffix appends text (an identity the classifier must refuse).
+  cat >"$F/bin/bwrap" <<STUB
+#!/usr/bin/env bash
+[[ "\$*" == --version ]] || { printf 'bwrap %s\n' "\$*" >>"$C/refusals"; exit 64; }
+echo "bubblewrap 0.0.0-fixture\$(cat "$C/bwrap-suffix" 2>/dev/null)"
 STUB
   # node: every call goes to the real node except the probe's socket connect, answered from cfg/connectable.
   cat >"$F/bin/node" <<STUB
@@ -336,6 +390,7 @@ C="$C"
 if [[ "\${1-}" == -e && "\${2-}" == *remeasure-socket-probe* ]]; then
   [[ \$# -eq 3 ]] || { printf 'node socket-probe %s\n' "\$3" >>"\$C/refusals"; exit 64; }
   printf '%s\n' "\$3" >>"\$C/sock.log"
+  [[ -f "\$C/sock-probe-broken" ]] && exit 2
   grep -qxF -- "\$3" "\$C/connectable" 2>/dev/null && exit 0
   exit 1
 fi
@@ -351,8 +406,9 @@ run_row() {
   local sut="$A/scripts/remeasure-sdk-sandbox-network-cache.sh"
   case "$sut" in "$T"/*|"${RK_BASE:-$T}"/*) : ;; *) bad "$ROW: the script under test is not under the suite's mktemp dirs ($sut)"; return ;; esac
   local xdg=(XDG_RUNTIME_DIR="$F/xdg"); [[ -n "${ROW_NO_XDG:-}" ]] && xdg=()
-  (cd "${ROW_CWD:-$F}" && env -i PATH="$F/bin:/usr/bin:/bin" HOME="$F/home" TMPDIR="${ROW_TMPDIR:-$F/tmp}" "${xdg[@]}" \
-    USER=zzfixtureuser LANG=C.UTF-8 bash "$sut" "$@") >"$F/out" 2>"$F/err"
+  (if [[ -n "${ROW_FD99:-}" ]]; then exec 99<"$F/cfg/now"; fi
+   cd "${ROW_CWD:-$F}" && env -i PATH="${ROW_PATH_EXTRA:+$ROW_PATH_EXTRA:}$F/bin:/usr/bin:/bin" HOME="${ROW_HOME:-$F/home}" \
+    TMPDIR="${ROW_TMPDIR:-$F/tmp}" "${xdg[@]}" USER=zzfixtureuser LANG=C.UTF-8 bash "${ROW_SUT:-$sut}" "$@") >"$F/out" 2>"$F/err"
   RC=$?
   local last; last="$(tail -n1 "$F/out")"
   check "$ROW: last stdout line is the REMEASURE line" grep -qE '^REMEASURE verdict=\S+ exit=[0-9] reason=\S+ next=' <<<"$last"
@@ -364,6 +420,7 @@ run_row() {
     eq "$ROW: the scratch dir is gone" "" "$(scratch_left "$F/tmp")"
   fi
   check "$ROW: no output carries the stub sentinel" bash -c '! grep -q "$0" "$1" "$2"' "$SENTINEL" "$F/out" "$F/err"
+  check "$ROW: no output carries an ESC or C1 control byte" bash -c '! LC_ALL=C grep -qP "\\x1b|\\xc2[\\x80-\\x9f]" "$0" "$1"' "$F/out" "$F/err"
 }
 # The script's scratch roots only (tsx keeps its own compile cache in TMPDIR, which is not the script's).
 scratch_left() { find "$1" -maxdepth 1 -name 'remeasure-sdk.*' 2>/dev/null; }
@@ -377,7 +434,7 @@ app_untouched_lock() { [[ "$(cat "$A/package-lock.json")" == '{"lockfileVersion"
 # ---------------------------------------------------------------------------------------------------------------------------------
 echo "--- CACHES: the full path, wiring and environment"
 mkfix
-run_row caches "$CAND_V" --out "$F/verdict.json" --markdown "$F/md"
+ROW_FD99=1 run_row caches "$CAND_V" --out "$F/verdict.json" --markdown "$F/md"
 eq "caches: exit 0" 0 "$RC"
 eq "caches: verdict CACHES" CACHES "$(verdict)"
 eq "caches: reason measured" measured "$(reason)"
@@ -395,20 +452,36 @@ eq "caches: spec arms and tap" 'allow-all|control,B,D,E,F,F2' "$(node -p 'const 
 eq "caches: install argv for both prefixes carries the floor flag and --ignore-scripts" 2 "$(grep -c -- '--ignore-scripts --no-audit --no-fund --save-exact --min-release-age=3 @anthropic-ai/claude-agent-sdk@' "$F/cfg/npm.log")"
 eq "caches: npm audit signatures ran once per prefix" 2 "$(grep -c '^audit signatures --prefix ' "$F/cfg/npm.log")"
 ml() { grep -cxF -- "$1" "$F/cfg/mount.log"; }
-eq "caches: the whole tree was remounted read-only once per run" 2 "$(ml "-o remount,bind,ro=recursive /")"
-eq "caches: /proc was made read-write once per run (the nested unshare -r writes uid_map)" 2 "$(ml "-o remount,bind,rw /proc")"
+eq "caches: the whole tree was remounted read-only once per run" 2 "$(ml "--options-source=disable -o remount,bind,ro=recursive /")"
+eq "caches: /proc was made read-write once per run (the nested unshare -r writes uid_map)" 2 "$(ml "--options-source=disable -o remount,bind,rw /proc")"
 eq "caches: a tmpfs went over /run, then read-only, once per run" "2 2" \
-  "$(ml "-t tmpfs -o rw,nosuid,nodev,size=1m,mode=0755 remeasure-run /run") $(ml "-o remount,bind,ro /run")"
+  "$(ml "-t tmpfs -o rw,nosuid,nodev,size=1m,mode=0755 remeasure-run /run") $(ml "--options-source=disable -o remount,bind,ro /run")"
+eq "caches: the /var/run mask runs once per run only where /var/run is a real dir on this host" \
+  "$([[ -d /var/run && ! -L /var/run ]] && echo 2 || echo 0)" "$(ml "-t tmpfs -o ro,size=64k,mode=0555 remeasure-varrun /var/run")"
 eq "caches: private tmpfs over /tmp and /dev/shm once per run" "2 2" \
-  "$(ml "-t tmpfs -o rw,nosuid,nodev,mode=1777 remeasure-tmp /tmp") $(ml "-t tmpfs -o rw,nosuid,nodev,mode=1777 remeasure-shm /dev/shm")"
+  "$(ml "-t tmpfs -o rw,nosuid,nodev,size=512m,mode=1777 remeasure-tmp /tmp") $(ml "-t tmpfs -o rw,nosuid,nodev,size=64m,mode=1777 remeasure-shm /dev/shm")"
 eq "caches: exactly two dirs per run bound back read-write (home, scratch)" "2 4" \
-  "$(grep -cE -- '^-o remount,bind,rw .*/run-baseline/(home|scratch)$' "$F/cfg/mount.log") $(grep -c -- '^-o remount,bind,rw .*/run-' "$F/cfg/mount.log")"
+  "$(grep -cE -- '^--options-source=disable -o remount,bind,rw .*/run-baseline/(home|scratch)$' "$F/cfg/mount.log") $(grep -c -- '^--options-source=disable -o remount,bind,rw .*/run-' "$F/cfg/mount.log")"
 check "caches: the mount order is masks, ro=recursive, /run, /tmp, binds (first run)" bash -c '
   n() { grep -nxF -- "$1" "$0" | head -n1 | cut -d: -f1; }
   b="$(grep -nE -- "^--bind .*/run-baseline/home " "$0" | head -n1 | cut -d: -f1)"
   h="$(grep -nE -- "^-t tmpfs -o ro,size=64k,mode=0555 remeasure-home " "$0" | head -n1 | cut -d: -f1)"
-  [[ -n "$b" && -n "$h" ]] && (( h < $(n "-o remount,bind,ro=recursive /") && $(n "-o remount,bind,ro=recursive /") < $(n "-o remount,bind,ro /run") && $(n "-o remount,bind,ro /run") < $(n "-t tmpfs -o rw,nosuid,nodev,mode=1777 remeasure-tmp /tmp") && $(n "-t tmpfs -o rw,nosuid,nodev,mode=1777 remeasure-tmp /tmp") < b ))' "$F/cfg/mount.log"
-eq "caches: the post-lock probe tried the read-write remount of the git common dir once per run" 2 "$(ml "-o remount,bind,rw $F/repo/.git")"
+  [[ -n "$b" && -n "$h" ]] && (( h < $(n "--options-source=disable -o remount,bind,ro=recursive /") && $(n "--options-source=disable -o remount,bind,ro=recursive /") < $(n "--options-source=disable -o remount,bind,ro /run") && $(n "--options-source=disable -o remount,bind,ro /run") < $(n "-t tmpfs -o rw,nosuid,nodev,size=512m,mode=1777 remeasure-tmp /tmp") && $(n "-t tmpfs -o rw,nosuid,nodev,size=512m,mode=1777 remeasure-tmp /tmp") < b ))' "$F/cfg/mount.log"
+eq "caches: the post-lock probe tried the read-write remount of the git common dir once per run" 2 "$(ml "--options-source=disable -o remount,bind,rw $F/repo/.git")"
+eq "caches: the probe tried to remount / read-write once per run" 2 "$(ml "--options-source=disable -o remount,bind,rw /")"
+eq "caches: the minimal /dev: a tmpfs, six device binds, a private devpts and one move per run" "2 12 2 2" \
+  "$(grep -c -- '^-t tmpfs -o rw,nosuid,nodev,noexec,size=64k,mode=0755 remeasure-dev .*/run-[a-z]*/dev$' "$F/cfg/mount.log") $(grep -cE -- '^--bind /dev/(null|zero|full|random|urandom|tty) .*/run-[a-z]*/dev/' "$F/cfg/mount.log") $(grep -c -- '^-t devpts -o newinstance,ptmxmode=0666,mode=0620 remeasure-devpts .*/dev/pts$' "$F/cfg/mount.log") $(grep -c -- '^--move .*/run-[a-z]*/dev /dev$' "$F/cfg/mount.log")"
+check "caches: the /dev move comes before the ro=recursive remount (first run)" bash -c '
+  a="$(grep -n -- "^--move .*/run-baseline/dev /dev$" "$0" | head -n1 | cut -d: -f1)"
+  b="$(grep -nxF -- "--options-source=disable -o remount,bind,ro=recursive /" "$0" | head -n1 | cut -d: -f1)"
+  [[ -n "$a" && -n "$b" ]] && (( a < b ))' "$F/cfg/mount.log"
+eq "caches: the probe tried to unmount /run, /proc, /dev, /tmp, /dev/shm, HOME and XDG once per run" \
+  "/run /proc /dev /tmp /dev/shm $F/home $F/xdg /run /proc /dev /tmp /dev/shm $F/home $F/xdg" "$(paste -sd' ' "$F/cfg/umount.log")"
+eq "caches: the harness inherited no fd 99 from the caller (INNER closes every fd above 2)" "false false" \
+  "$(node -p 'require(process.argv[1]).fd99' "$F/cfg/env-baseline.json") $(node -p 'require(process.argv[1]).fd99' "$F/cfg/env-candidate.json")"
+check "caches: the recorded command carries the version and placeholders, never the caller's paths" grep -qxF -- \
+  "bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh $CAND_V --out <out> --markdown <dir>" "$F/md/addendum.md"
+check "caches: npm was asked to read min-release-age back" grep -qxF -- "config get min-release-age --min-release-age=3" "$F/cfg/npm.log"
 eq "caches: the probe tried docker.sock, /var/run/docker.sock and the session bus once per run" \
   "/run/docker.sock /var/run/docker.sock /run/user/$(id -u)/bus /run/docker.sock /var/run/docker.sock /run/user/$(id -u)/bus" \
   "$(paste -sd' ' "$F/cfg/sock.log")"
@@ -475,6 +548,10 @@ run_row integrity "$CAND_V"
 eq "integrity: exit 3 baseline-integrity-mismatch" "3 baseline-integrity-mismatch" "$RC $(reason)"
 eq "integrity: no candidate install" 0 "$(grep -c "@anthropic-ai/claude-agent-sdk@$CAND_V\$" "$F/cfg/npm.log")"
 check "integrity: no harness run" no_harness
+mkfix; : >"$F/cfg/bad-baseline-integrity-x64"
+run_row integrity-x64 "$CAND_V"
+eq "integrity-x64: a tampered linux-x64 baseline integrity is exit 3 baseline-integrity-mismatch" "3 baseline-integrity-mismatch" "$RC $(reason)"
+check "integrity-x64: no harness run" no_harness
 
 echo "--- UNVERIFIED: host limits"
 mkfix; : >"$F/cfg/no-userns"
@@ -503,6 +580,71 @@ run_row contain-remount "$CAND_V"
 eq "contain-remount: a post-lock read-write remount that succeeds is exit 3 containment-unavailable" "3 containment-unavailable" "$RC $(reason)"
 check "contain-remount: the marker line reached stderr" grep -q 'remeasure-containment: the git common dir can be remounted read-write' "$F/err"
 check "contain-remount: no harness started" no_harness
+for flag in permit-remount-root:"/ can be remounted read-write" permit-umount-run:"/run can be unmounted" permit-umount-proc:"/proc can be unmounted" \
+  permit-umount-dev:"/dev can be unmounted" permit-umount-tmp:"/tmp can be unmounted" permit-umount-shm:"/dev/shm can be unmounted" \
+  permit-umount-home:"can be unmounted" permit-umount-xdg:"can be unmounted" deny-common-bind:"probe: cannot bind the git common dir onto itself" \
+  dev-extra:"/dev lists more than the minimal set" pts-extra:"/dev/pts lists a pty (a host devpts is reachable)" \
+  no-nested:"cannot build the nested lock namespace"; do
+  mkfix; : >"$F/cfg/${flag%%:*}"
+  msg="${flag#*:}"
+  case "${flag%%:*}" in
+    dev-extra) echo kvm >"$F/cfg/dev-extra" ;;
+    pts-extra) echo 0 >"$F/cfg/pts-extra" ;;
+    permit-umount-home) msg="<home> can be unmounted" ;; # the stderr tail redacts the operator's home
+    permit-umount-xdg) msg="$F/xdg can be unmounted" ;;
+  esac
+  run_row "contain-${flag%%:*}" "$CAND_V"
+  eq "contain-${flag%%:*}: a post-lock escape that succeeds is exit 3 containment-unavailable" "3 containment-unavailable" "$RC $(reason)"
+  check "contain-${flag%%:*}: the probe named it" grep -qF "remeasure-containment: $msg" "$F/err"
+  check "contain-${flag%%:*}: no harness started" no_harness
+done
+mkfix; echo 1 >"$F/cfg/harness-marker"
+run_row marker-not-83 "$CAND_V"
+eq "marker-not-83: a containment marker with an exit other than 83 is harness-crash, not containment" "1 harness-crash" "$RC $(reason)"
+mkfix; mkdir -p "$F/sib/tmp"
+ROW_TMPDIR="$F/sib/tmp" run_row scratch-in-worktree "$CAND_V"
+eq "scratch-in-worktree: a TMPDIR inside a worktree is exit 3 scratch-inside-protected-path" "3 scratch-inside-protected-path" "$RC $(reason)"
+mkfix; mkdir -p "$T/elsewhere"
+ROW_HOME="$F" ROW_TMPDIR="$T/elsewhere" run_row app-under-home "$CAND_V"
+eq "app-under-home: an app checkout under HOME is exit 3 containment-unavailable" "3 containment-unavailable" "$RC $(reason)"
+check "app-under-home: it names the reason" grep -q 'next=the app checkout lives under \$HOME' "$F/out"
+mkfix; : >"$F/cfg/git-common-missing"
+run_row git-common-missing "$CAND_V"
+eq "git-common-missing: a git common dir that is not a directory is exit 3 containment-unavailable" "3 containment-unavailable" "$RC $(reason)"
+check "git-common-missing: it names the reason" grep -q 'next=the git common dir .* is not a directory' "$F/out"
+mkfix; : >"$F/cfg/git-wt-omit-own"
+run_row git-wt-omit-own "$CAND_V"
+eq "git-wt-omit-own: a worktree list without the app's checkout is exit 3 containment-unavailable" "3 containment-unavailable" "$RC $(reason)"
+check "git-wt-omit-own: it names the reason" grep -q "next=git worktree list does not include the app's own checkout" "$F/out"
+mkfix; mkdir -p "$F/home/bin"
+ROW_PATH_EXTRA="$F/home/bin" run_row hpath "$CAND_V"
+eq "hpath: exit 0" 0 "$RC"
+eq "hpath: the harness PATH drops every entry under the masked HOME" 0 \
+  "$(node -p 'Number(require(process.argv[1]).env.PATH.split(":").includes(process.argv[2]))' "$F/cfg/env-baseline.json" "$F/home/bin")"
+echo "--- identity redaction through the script's env -i (the classifier sees the operator's home and USER)"
+mkfix; echo " $F/home/zz" >"$F/cfg/bwrap-suffix"
+run_row leak-home "$CAND_V" --out "$F/verdict.json"
+eq "leak-home: the operator's home in a recorded host row is exit 1 redaction-refused:home" "1 redaction-refused:home" "$RC $(reason)"
+check "leak-home: no verdict.json written" test ! -e "$F/verdict.json"
+mkfix; echo " zzfixtureuser" >"$F/cfg/bwrap-suffix"
+run_row leak-user "$CAND_V" --out "$F/verdict.json"
+eq "leak-user: the operator's USER in a recorded host row is exit 1 redaction-refused:user" "1 redaction-refused:user" "$RC $(reason)"
+mkfix; ln -s "$F/home" "$F/homelink"; echo " $F/home/zz" >"$F/cfg/bwrap-suffix"
+ROW_HOME="$F/homelink" run_row leak-home-real "$CAND_V"
+eq "leak-home-real: the physical home is refused when HOME is a symlink to it" "1 redaction-refused:home" "$RC $(reason)"
+echo "--- npm floor and the linux-x64 install"
+mkfix; : >"$F/cfg/npm-no-mra"
+run_row npm-no-mra "$CAND_V"
+eq "npm-no-mra: an npm that does not know min-release-age is exit 1 setup-missing" "1 setup-missing" "$RC $(reason)"
+check "npm-no-mra: no install" no_install
+mkfix; : >"$F/cfg/x64-version-mismatch"
+run_row x64-mismatch "$CAND_V"
+eq "x64-mismatch: an installed linux-x64 version other than the pinned one is exit 1 version-mismatch" "1 version-mismatch" "$RC $(reason)"
+check "x64-mismatch: no harness run" no_harness
+mkfix; echo "$F/xdg" >"$F/cfg/mount-skip"
+run_row contain-xdg "$CAND_V"
+eq "contain-xdg: a writable XDG_RUNTIME_DIR is exit 3 containment-unavailable" "3 containment-unavailable" "$RC $(reason)"
+check "contain-xdg: the probe named it" grep -qF "remeasure-containment: XDG_RUNTIME_DIR is writable" "$F/err"
 mkfix; echo scratch >"$F/cfg/mount-skip"
 run_row contain-scratch-root "$CAND_V"
 eq "contain-scratch-root: a writable scratch root is exit 3 containment-unavailable" "3 containment-unavailable" "$RC $(reason)"
@@ -528,6 +670,11 @@ check "contain-docker: no harness started" no_harness
 mkfix; echo "/run/user/$(id -u)/bus" >"$F/cfg/connectable"
 run_row contain-bus "$CAND_V"
 eq "contain-bus: a connectable session bus is exit 3 containment-unavailable" "3 containment-unavailable" "$RC $(reason)"
+mkfix; : >"$F/cfg/sock-probe-broken"
+run_row contain-sock-broken "$CAND_V"
+eq "contain-sock-broken: a socket probe that cannot run (exit 2) is exit 3 containment-unavailable" "3 containment-unavailable" "$RC $(reason)"
+check "contain-sock-broken: the probe named it" grep -qF "remeasure-containment: the socket probe could not run for /run/docker.sock" "$F/err"
+check "contain-sock-broken: no harness started" no_harness
 mkfix; : >"$F/cfg/tamper-baseline"
 run_row contain-breach "$CAND_V"
 eq "contain-breach: the baseline stdout changed between runs is exit 3 containment-breached" "3 containment-breached" "$RC $(reason)"
@@ -574,6 +721,7 @@ mkfix; : >"$F/cfg/timeout-124"
 run_row timeout "$CAND_V"
 eq "timeout: exit 1 harness-crash" "1 harness-crash" "$RC $(reason)"
 check "timeout: the stderr tail was printed, redacted" grep -q 'harness stderr <redacted>' "$F/err"
+check "timeout: the operator's home in the tail is <home>" bash -c 'grep -q "home=<home>" "$1" && ! grep -qF "$0" "$1"' "$F/home" "$F/err"
 mkfix; echo 1 >"$F/cfg/harness-exit-candidate"
 run_row harness-nonzero "$CAND_V"
 eq "harness-nonzero: exit 1 harness-crash" "1 harness-crash" "$RC $(reason)"
@@ -600,6 +748,24 @@ mkfix; echo stale >"$F/verdict.json"; mkdir -p "$F/md"; echo stale >"$F/md/adden
 run_row stale-out "$CAND_V" --out "$F/verdict.json" --markdown "$F/md"
 eq "stale-out: an early exit" "3 no-userns" "$RC $(reason)"
 check "stale-out: the stale --out and drafts from before were removed" test ! -e "$F/verdict.json" -a ! -e "$F/md/addendum.md" -a ! -e "$F/md/issue-comment.md"
+
+mkfix; mkdir -p "$F/ro"; chmod a-w "$F/ro"
+run_row publish-fail "$CAND_V" --out "$F/ro/verdict.json"
+eq "publish-fail: an unwritable --out on a measured run is exit 1 publish-failed" "1 publish-failed" "$RC $(reason)"
+check "publish-fail: no record left behind" test ! -e "$F/ro/verdict.json"
+mkfix; mkdir -p "$F/ro"; chmod a-w "$F/ro"; cp "$T/outs/cand-leak" "$F/cfg/out-candidate"
+run_row publish-fail-leak "$CAND_V" --out "$F/ro/verdict.json"
+eq "publish-fail-leak: an unwritable --out never hides a LEAK (exit 4 stays)" "4 LEAK candidate:B:decoy" "$RC $(verdict) $(reason)"
+check "publish-fail-leak: the write failure is named on stderr" grep -q 'the verdict below stands (publish-failed)' "$F/err"
+check "publish-fail-leak: no record left behind" test ! -e "$F/ro/verdict.json"
+
+echo "--- the verdict-to-exit map: every finish call in the script matches the classifier's EXIT"
+EXIT_JSON="$(cd "$REAL_APP" && "$REAL_TSX" -e 'import("'"$CLASSIFIER_SRC"'").then((m) => process.stdout.write(JSON.stringify(m.EXIT)))')"
+fin="$(grep -oE 'finish [A-Z-]+ [0-9]' "$SUT_SRC" | sort -u)"
+eq "exit-map: the script's finish calls cover ERROR, UNVERIFIED and REFUSED" "ERROR UNVERIFIED REFUSED" \
+  "$(for v in ERROR UNVERIFIED REFUSED; do grep -q "^finish $v " <<<"$fin" && printf '%s ' "$v"; done | sed 's/ $//')"
+eq "exit-map: no finish call disagrees with EXIT" "" "$(while read -r _ v n; do
+  [[ "$(node -p 'JSON.parse(process.argv[1])[process.argv[2]]' "$EXIT_JSON" "$v")" == "$n" ]] || printf '%s=%s ' "$v" "$n"; done <<<"$fin")"
 
 echo "--- --help"
 mkfix
@@ -638,16 +804,27 @@ else
   mkfix "$RK_BASE"
   RK_TMP="$T/rk-tmp"; mkdir -p "$RK_TMP"
   # Real unshare, mount, umount, setsid and node; npm, uname, getconf, df and timeout stay stubs (no network).
-  rm -f "$F/bin/unshare" "$F/bin/mount" "$F/bin/umount" "$F/bin/node"
+  rm -f "$F/bin/unshare" "$F/bin/mount" "$F/bin/umount" "$F/bin/node" "$F/bin/ls"
+  HOST_IPC="$(readlink /proc/self/ns/ipc)"
   # A live socket under the operator-side XDG dir: it exists on the host, so only the masks can make it unreachable.
   LIVE_SOCK="$F/xdg/live.sock"
   "$REAL_NODE" -e 'require("net").createServer(c=>c.end()).listen(process.argv[1])' "$LIVE_SOCK" & live_pid=$!
   for _ in $(seq 50); do [[ -S "$LIVE_SOCK" ]] && break; sleep 0.1; done
   check "real-kernel: the live control socket listens before the run" test -S "$LIVE_SOCK"
+  # The PROBE's own socket check, extracted from the script and run outside any namespace: it must say "connected" (0)
+  # for a live socket and "refused or absent" (1) for a missing path and a regular file.
+  sock_src="$(sed -n '/^sock_js="\/\* remeasure-socket-probe/,/^setTimeout.*;"$/p' "$SUT_SRC")"
+  check "real-kernel: the script's socket probe source was extracted" grep -q 'remeasure-socket-probe' <<<"$sock_src"
+  sock_js=""; eval "$sock_src"
+  : >"$F/cfg/plain-file"
+  "$REAL_NODE" -e "$sock_js" "$LIVE_SOCK"; s_live=$?
+  "$REAL_NODE" -e "$sock_js" "$F/cfg/no-such.sock"; s_missing=$?
+  "$REAL_NODE" -e "$sock_js" "$F/cfg/plain-file"; s_file=$?
+  eq "real-kernel: the socket probe answers live=0, missing=1, regular file=1" "0 1 1" "$s_live $s_missing $s_file"
   cat >"$A/test/helpers/netns-egress-harness.mts" <<HARN
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, readlinkSync, statfsSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { connect } from "node:net";
+import { connect, createServer } from "node:net";
 import { join, dirname } from "node:path";
 const spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const entry = process.env.NETNS_SDK_ENTRY ?? "";
@@ -671,6 +848,19 @@ for (const [n, d] of [["write-app", "$A"], ["write-common", "$F/repo/.git"], ["w
   refused(n, !write(d));
 }
 for (const p of ["/run/docker.sock", "/var/run/docker.sock", "/run/user/$(id -u)/bus", "$LIVE_SOCK"]) refused("connect " + p, !(await conn(p)));
+refused("write-dev", !write("/dev"));
+refused("umount-dev", !sh("umount", ["/dev"]));
+refused("dev-minimal", readdirSync("/dev").sort().join(",") === "fd,full,null,ptmx,pts,random,shm,stderr,stdin,stdout,tty,urandom,zero");
+refused("no-host-pty", readdirSync("/dev/pts").join(",") === "ptmx");
+refused("own-ipc-ns", readlinkSync("/proc/self/ns/ipc") !== "$HOST_IPC");
+refused("no-inherited-fd-99", !existsSync("/proc/self/fd/99"));
+allowed("write-dev-null", (() => { try { writeFileSync("/dev/null", "x"); return true; } catch { return false; } })());
+allowed("tmp-size-capped", (() => { const s = statfsSync("/tmp"); return s.bsize * s.blocks <= 512 * 1024 * 1024; })());
+const own = join(spec.scratch, "own.sock");
+const srv = createServer((c) => c.end());
+await new Promise<void>((res) => srv.listen(own, () => res()));
+allowed("connect-own-socket", await conn(own));
+srv.close();
 allowed("write-run-home", write(process.env.HOME ?? "/nonexistent"));
 allowed("write-run-scratch", write(spec.scratch));
 allowed("write-private-tmp", write("/tmp"));
@@ -681,7 +871,7 @@ writeFileSync(join(spec.scratch, "report.json"), JSON.stringify(report));
 if (Object.values(report).some((v) => v === "BREACH" || v === "BROKEN")) { process.stderr.write(JSON.stringify(report) + "\n"); process.exit(1); }
 process.stdout.write(readFileSync("$F/cfg/out-" + label, "utf8").replace('"sdkEntry":"x"', '"sdkEntry":' + JSON.stringify(entry)));
 HARN
-  EXPECT_KEPT=1 ROW_TMPDIR="$RK_TMP" run_row real-kernel "$CAND_V" --keep-scratch
+  ROW_FD99=1 EXPECT_KEPT=1 ROW_TMPDIR="$RK_TMP" run_row real-kernel "$CAND_V" --keep-scratch
   kill "$live_pid" 2>/dev/null; wait "$live_pid" 2>/dev/null
   eq "real-kernel: every attack refused, the run classifies (exit 0 CACHES)" "0 CACHES" "$RC $(verdict)"
   [[ "$RC" == 0 ]] || { echo "  real-kernel stderr tail:"; tail -n 15 "$F/err" | sed 's/^/    /'; }
@@ -690,9 +880,9 @@ HARN
     check "real-kernel: the $lbl fake harness wrote its report" test -s "$rep"
     eq "real-kernel: $lbl attacks refused (2 remounts, 2 umounts, 7 or 8 writes, 4 connects)" "" \
       "$(node -e 'const r=require(process.argv[1]);const bad=Object.entries(r).filter(([k,v])=>v!=="refused"&&v!=="allowed");process.stdout.write(bad.map(x=>x.join("=")).join(","))' "$rep" 2>/dev/null || echo unreadable)"
-    eq "real-kernel: $lbl attack count" "$([[ $lbl == baseline ]] && echo 15 || echo 16)" \
+    eq "real-kernel: $lbl attack count" "$([[ $lbl == baseline ]] && echo 21 || echo 22)" \
       "$(node -e 'const r=require(process.argv[1]);process.stdout.write(String(Object.values(r).filter(v=>v==="refused").length))' "$rep" 2>/dev/null)"
-    eq "real-kernel: $lbl positive controls (run home, run scratch, private /tmp, /etc binds)" 5 \
+    eq "real-kernel: $lbl positive controls (own socket, run home, run scratch, private /tmp, /etc binds, /dev/null, /tmp cap)" 8 \
       "$(node -e 'const r=require(process.argv[1]);process.stdout.write(String(Object.values(r).filter(v=>v==="allowed").length))' "$rep" 2>/dev/null)"
   done
   check "real-kernel: no attack file landed in the fixture tree" bash -c '! find "$0" -name .attack -print -quit | grep -q .' "$F"
@@ -704,8 +894,8 @@ echo
 echo "remeasure-sdk-sandbox-network-cache.test.sh: $PASS passed, $FAIL failed"
 # Anti-vacuity floor: a LOWER BOUND on the assertions that ran (the measured count at the last edit). Reported with printf + exit, not
 # through eq/check, so it does not route through the helpers it backstops. Raise it with a new row. The real-kernel row adds its
-# own 17 only where it ran (a SKIP lowers the floor by exactly that row, never more).
-MIN_ASSERTIONS=$((345 + RK_RAN * 17))
+# own 20 only where it ran (a SKIP lowers the floor by exactly that row, never more).
+MIN_ASSERTIONS=$((631 + ${RK_RAN:-0} * 20))
 if [[ $((PASS + FAIL)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1

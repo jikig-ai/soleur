@@ -8,8 +8,8 @@
 //
 // and exits with <n>. Importing it has no side effects (the CLI entry at the bottom is guarded); classify() only reads the
 // filesystem to realpath the two SDK entries (precondition sdk-entry). The runtime suite and the harness import
-// MEASURED_BASELINE, CACHES_MODEL, DEAD_FORWARDER, CONTROL_DECOYS, TEARDOWN_GATEWAY, SENTINEL and result() from here, so
-// none of them is restated.
+// MEASURED_BASELINE, MOVE_RULE, CACHES_MODEL, DEAD_FORWARDER, CONTROL_DECOYS, TEARDOWN_GATEWAY, DECOY, decoyKey,
+// step0Ok, SENTINEL and result() from here. The two suites still state CACHES_MODEL's literal hosts as expected values.
 //
 // Precedence (fixed; the combine step evaluates it top to bottom):
 //   1 ERROR         exit 1  unparseable output, no NETNS_STEP0, a duplicate NETNS_STEP0 or NETNS_ARM, a __harness__ crash
@@ -21,18 +21,23 @@
 //   6 INCONCLUSIVE  exit 2  the candidate's F/F2 sequence fits no cache model (incl. incoherent-f-f2, unknown-tool)
 //   7 CACHES | RE-ASKS-AFTER-TEARDOWN | MIXED  exit 0
 //
-// Actions per verdict: NEXT below is the only live copy (`... sandbox-network-cache-verdict.ts table` prints it).
+// Actions per verdict: NEXT below is the only live copy (`... sandbox-network-cache-verdict.ts table` prints it); EXIT is
+// the only verdict-to-exit-code map (the script's `finish` calls are checked against it by its .test.sh).
+//
+// Recorded fields are rebuilt from closed shapes (versions match SEMVER, hosts are IP literals or KNOWN_HOSTS, gateway
+// lines and decoys match their fixed grammar, step0 is reduced to booleans): the candidate SDK and CLI are untrusted
+// code, so nothing they emit reaches verdict.json or the drafts verbatim. identityLeak stays as a second layer.
 
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
-/** The answer measured on the production pin (PR #12897, ADR-278 addendum 2026-11-18). MEASURED_BASELINE moves only with
- * a recorded re-measure verdict on the new version and an ADR-278 addendum in the same PR; a move to a version whose
- * reading is not CACHES happens only in #12906's allow-arm PR, which replaces the runtime suite's F/F2 assertions in the
- * same PR. */
+/** When MEASURED_BASELINE may move (CTO ruling 24); the runtime suite's failure message quotes it. */
+export const MOVE_RULE =
+  "MEASURED_BASELINE moves only with a recorded re-measure verdict on the new version and an ADR-278 addendum in the same PR; a move to a version whose reading is not CACHES happens only in #12906's allow-arm PR, which replaces the runtime suite's F/F2 assertions in the same PR.";
+/** The answer measured on the production pin (PR #12897, ADR-278 addendum 2026-11-18). It moves only per MOVE_RULE. */
 export const MEASURED_BASELINE = {
   version: "0.3.321",
   reading: "CACHES",
@@ -42,17 +47,22 @@ export const MEASURED_BASELINE = {
   },
 } as const;
 
+/** The "open web" decoy the harness listens on (TEST-NET-2) and the new host arm F2 asks for after the allow. */
+export const DECOY = "198.51.100.1";
+const NEW_HOST = "example.test";
 /** What a caching SDK asks in arms F and F2. This is the CACHES model itself, invariant whatever version is pinned:
  * readCache compares against it and never against MEASURED_BASELINE. */
-export const CACHES_MODEL = { fHosts: ["198.51.100.1"], f2Hosts: ["198.51.100.1", "example.test"] } as const;
+export const CACHES_MODEL = { fHosts: [DECOY], f2Hosts: [DECOY, NEW_HOST] } as const;
+/** The hostnames the harness's arms request (every other recorded host must be an IP literal). */
+export const KNOWN_HOSTS = ["example.test", "metadata.test", "api.anthropic.com"] as const;
 
 // A request routed at a dead forwarder fails in one of two measured shapes (rc=7 locally, rc=56 + 502 on CI runners).
 export const DEAD_FORWARDER = /^rc=7 |^rc=56 out=curl: \(56\) CONNECT tunnel failed, response 502 /;
 
 export const ARMS = ["control", "B", "D", "E", "F", "F2"] as const;
-export const CONTROL_DECOYS = ["198.51.100.1:443", "198.51.100.1:80", "198.51.100.1:22", "127.0.0.2:p", "169.254.169.254:80"];
-const DECOY = "198.51.100.1";
-const NEW_HOST = "example.test";
+export const CONTROL_DECOYS = [`${DECOY}:443`, `${DECOY}:80`, `${DECOY}:22`, "127.0.0.2:p", "169.254.169.254:80"];
+/** A decoy hit as CONTROL_DECOYS names it: the loopback decoy listens on an ephemeral port, recorded as `p`. */
+export const decoyKey = (d: { addr?: unknown; port?: unknown }): string => `${d.addr}:${String(d.addr).startsWith("127.") ? "p" : d.port}`;
 /** The one gateway line F and F2 each make before teardown. */
 export const TEARDOWN_GATEWAY = [`CONNECT ${DECOY}:443 HTTP/1.1`] as const;
 /** The decoy credential the harness hands the forwarder; no record may carry it. */
@@ -159,7 +169,7 @@ export const PRECONDITIONS: Precondition[] = [
     check: ({ run }) => {
       const c = run.arms.get("control");
       if (!c || !Array.isArray(c.decoys)) return false;
-      const hit = new Set(c.decoys.map((d: Rec) => `${d.addr}:${String(d.addr).startsWith("127.") ? "p" : d.port}`));
+      const hit = new Set(c.decoys.map((d: Rec) => decoyKey(d)));
       return CONTROL_DECOYS.every((d) => hit.has(d)) && Array.isArray(c.gateway) && c.gateway.length === 0;
     },
   },
@@ -227,7 +237,7 @@ function leakIn(run: ParsedRun): string | null {
 }
 
 export interface ArmSummary {
-  askedHosts: unknown[];
+  askedHosts: string[];
   inputShapeChanged?: string[];
   gateway: string[];
   decoys: string[];
@@ -240,10 +250,23 @@ export interface RunSummary {
   readingWhy?: string;
   arms: Record<string, ArmSummary>;
 }
-/** Verdict words in classify-precedence order (the `table` subcommand prints them in this order). */
-export const VERDICTS = ["ERROR", "LEAK", "UNVERIFIED", "INCONCLUSIVE", "CACHES", "RE-ASKS-AFTER-TEARDOWN", "MIXED"] as const;
+/** Verdict words in classify-precedence order (the `table` subcommand prints them in this order). REFUSED, last, is
+ * emitted only by the script (release-age floor, signatures, baseline integrity): classify() never returns it. */
+export const VERDICTS = ["ERROR", "LEAK", "UNVERIFIED", "INCONCLUSIVE", "CACHES", "RE-ASKS-AFTER-TEARDOWN", "MIXED", "REFUSED"] as const;
+export type VerdictWord = (typeof VERDICTS)[number];
+/** The only verdict-to-exit-code map. */
+export const EXIT: Record<VerdictWord, 0 | 1 | 2 | 3 | 4> = {
+  ERROR: 1,
+  LEAK: 4,
+  UNVERIFIED: 3,
+  INCONCLUSIVE: 2,
+  CACHES: 0,
+  "RE-ASKS-AFTER-TEARDOWN": 0,
+  MIXED: 0,
+  REFUSED: 3,
+};
 export interface Verdict {
-  verdict: (typeof VERDICTS)[number];
+  verdict: VerdictWord;
   exit: 0 | 1 | 2 | 3 | 4;
   reason: string;
   next: string;
@@ -262,22 +285,55 @@ export interface ClassifyInput {
   candidate: RunInput;
 }
 
-// The step0 probes that decide step0.ok (each is a boolean or a list of { ok }), and the summary fields: the probes plus
-// what was measured. One list, so the UNVERIFIED reason and the recorded summary name the same probes.
-const STEP0_PROBES = ["loUp", "aliases", "mounts", "nestedBwrap", "shimBwrap", "imports"];
-const STEP0_FIELDS = ["ok", ...STEP0_PROBES, "sdkEntry", "sdkVersion", "cliPath", "cliVersion"];
+// The step0 probes that decide step0.ok (each is a boolean or a list of { ok }). One list: the harness computes step0.ok
+// with step0Ok, and the UNVERIFIED reason and the recorded summary name the same probes.
+export const STEP0_PROBES = ["loUp", "aliases", "mounts", "nestedBwrap", "shimBwrap", "imports"] as const;
+const probeOk = (v: unknown): boolean => (Array.isArray(v) ? v.length > 0 && v.every((x: Rec) => x?.ok === true) : v === true);
+export const step0Ok = (s0: Rec): boolean => STEP0_PROBES.every((k) => probeOk(s0[k]));
+
+// ---- closed shapes for every recorded field ----
+const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/;
+const PORT = /^[0-9]{1,5}$/;
+const INVALID = "<invalid>";
+export const safeVersion = (v: unknown): string => (typeof v === "string" && v.length <= 64 && SEMVER.test(v) ? v : INVALID);
+/** A recorded host: an IP literal or one of KNOWN_HOSTS, else `<invalid>`. */
+export const safeHost = (h: unknown): string =>
+  typeof h === "string" && (isIP(h) !== 0 || (KNOWN_HOSTS as readonly string[]).includes(h)) ? h : INVALID;
+const okPort = (p: unknown): boolean => PORT.test(String(p)) && Number(p) >= 1 && Number(p) <= 65535;
+/** A gateway request line: `CONNECT <host>:<port> HTTP/1.1` or `GET http://<host>[:<port>]/ HTTP/1.1`, else `<invalid>`. */
+export function safeGatewayLine(line: unknown): string {
+  if (typeof line !== "string") return INVALID;
+  let m = /^CONNECT ([^ :]+|\[[0-9A-Fa-f:.]+\]):([0-9]+) HTTP\/1\.1$/.exec(line);
+  if (m) return safeHost(m[1].replace(/^\[|\]$/g, "")) !== INVALID && okPort(m[2]) ? line : INVALID;
+  m = /^GET http:\/\/([^ /:]+)(?::([0-9]+))?\/ HTTP\/1\.1$/.exec(line);
+  if (m) return safeHost(m[1]) !== INVALID && (m[2] === undefined || okPort(m[2])) ? line : INVALID;
+  return INVALID;
+}
+const safeDecoy = (d: Rec): string => (isIP(String(d?.addr)) !== 0 && okPort(d?.port) ? `${d.addr}:${d.port}` : INVALID);
+/** Strip C0 and C1 control characters (keeps tab and newline) before anything reaches a terminal or a record. */
+export const stripControl = (s: string): string => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
+
 function summarize(c: Ctx): RunSummary {
-  const step0: Rec = {};
-  for (const k of STEP0_FIELDS) if (k in c.run.step0) step0[k] = c.run.step0[k];
+  // step0 reduced to booleans and validated versions: the paths it carries (sdkEntry, cliPath) are replaced by the
+  // sdk-entry precondition's answer.
+  const s0 = c.run.step0;
+  const step0: Rec = { ok: s0.ok === true };
+  for (const k of STEP0_PROBES) if (k in s0) step0[k] = probeOk(s0[k]);
+  step0.sdkEntryMatches = PRECONDITIONS.find((p) => p.name === "sdk-entry")!.check(c);
+  step0.sdkVersion = safeVersion(s0.sdkVersion);
+  step0.cliVersion = safeVersion(s0.cliVersion);
   const arms: Record<string, ArmSummary> = {};
   for (const [name, a] of c.run.arms) {
+    if (!(ARMS as readonly string[]).includes(name)) continue;
     const changed = netCalls(a).find((x) => !(Array.isArray(x.keys) && x.keys.length === 1 && x.keys[0] === "host"));
     arms[name] = {
-      askedHosts: hostsOf(a),
-      ...(changed ? { inputShapeChanged: Array.isArray(changed.keys) ? changed.keys.map(String) : [] } : {}),
-      gateway: (Array.isArray(a.gateway) ? a.gateway : []).map((g: Rec) => `${g.line}${g.authOk === true ? "" : " (no credential)"}`),
-      decoys: (Array.isArray(a.decoys) ? a.decoys : []).map((d: Rec) => `${d.addr}:${d.port}`),
-      initClaudeCodeVersion: a.initClaudeCodeVersion ?? null,
+      askedHosts: hostsOf(a).map(safeHost),
+      ...(changed
+        ? { inputShapeChanged: Array.isArray(changed.keys) ? changed.keys.map((k: unknown) => (k === "host" || k === "port" ? k : "<other>")) : [] }
+        : {}),
+      gateway: (Array.isArray(a.gateway) ? a.gateway : []).map((g: Rec) => `${safeGatewayLine(g?.line)}${g?.authOk === true ? "" : " (no credential)"}`),
+      decoys: (Array.isArray(a.decoys) ? a.decoys : []).map(safeDecoy),
+      initClaudeCodeVersion: a.initClaudeCodeVersion == null ? null : safeVersion(a.initClaudeCodeVersion),
     };
   }
   const r = readCache(c.run);
@@ -300,13 +356,14 @@ export const NEXT: Record<Verdict["verdict"], string> = {
   "RE-ASKS-AFTER-TEARDOWN":
     "record the run; it triggers #12906's allow-arm build and its live-forwarder deny-flip arm; it is not proof that an allow is revocable",
   MIXED: "record the run; a #12906 trigger like RE-ASKS-AFTER-TEARDOWN (most consistent with a per-command cache)",
+  REFUSED: "no finding; wait for the floor (release-age), or file a security issue (signatures, baseline integrity)",
 };
 
 export function classify(input: ClassifyInput): Verdict {
   const parsed = { baseline: parseHarnessOutput(input.baseline.stdout), candidate: parseHarnessOutput(input.candidate.stdout) };
-  const mk = (verdict: Verdict["verdict"], exit: Verdict["exit"], reason: string, s?: { baseline: RunSummary; candidate: RunSummary }): Verdict => ({
+  const mk = (verdict: Verdict["verdict"], reason: string, s?: { baseline: RunSummary; candidate: RunSummary }): Verdict => ({
     verdict,
-    exit,
+    exit: EXIT[verdict],
     reason,
     next: NEXT[verdict],
     baseline: s?.baseline ?? null,
@@ -315,7 +372,7 @@ export function classify(input: ClassifyInput): Verdict {
   // 1 ERROR
   for (const which of ["baseline", "candidate"] as const) {
     const p = parsed[which];
-    if (!p.ok) return mk("ERROR", 1, `${which}:${p.reason}`);
+    if (!p.ok) return mk("ERROR", `${which}:${p.reason}`);
   }
   const ctxOf = (which: "baseline" | "candidate"): Ctx => ({ run: (parsed[which] as { run: ParsedRun }).run, ...input[which] });
   const ctx = { baseline: ctxOf("baseline"), candidate: ctxOf("candidate") };
@@ -323,29 +380,26 @@ export function classify(input: ClassifyInput): Verdict {
   // 2 LEAK
   for (const which of ["candidate", "baseline"] as const) {
     const l = leakIn(ctx[which].run);
-    if (l) return mk("LEAK", 4, `${which}:${l}`, sum);
+    if (l) return mk("LEAK", `${which}:${l}`, sum);
   }
   // 3 UNVERIFIED
   for (const which of ["baseline", "candidate"] as const) {
     const s0 = ctx[which].run.step0;
     if (s0.ok !== true) {
-      const failed = STEP0_PROBES.filter((k) => k in s0).filter((k) => {
-        const v = s0[k];
-        return Array.isArray(v) ? !v.every((x: Rec) => x?.ok === true) : v !== true;
-      });
-      return mk("UNVERIFIED", 3, `step0:${which}:${failed.join(",") || "unknown"}`, sum);
+      const failed = STEP0_PROBES.filter((k) => k in s0 && !probeOk(s0[k]));
+      return mk("UNVERIFIED", `step0:${which}:${failed.join(",") || "unknown"}`, sum);
     }
   }
   // 4 baseline
   const bFail = sum.baseline.preconditions.find((p) => !p.ok);
-  if (bFail) return mk("INCONCLUSIVE", 2, `baseline:${bFail.name}`, sum);
-  if (sum.baseline.reading !== MEASURED_BASELINE.reading) return mk("INCONCLUSIVE", 2, "baseline:reading", sum);
+  if (bFail) return mk("INCONCLUSIVE", `baseline:${bFail.name}`, sum);
+  if (sum.baseline.reading !== MEASURED_BASELINE.reading) return mk("INCONCLUSIVE", "baseline:reading", sum);
   // 5 candidate
   const cFail = sum.candidate.preconditions.find((p) => !p.ok);
-  if (cFail) return mk("INCONCLUSIVE", 2, `candidate:${cFail.name}`, sum);
+  if (cFail) return mk("INCONCLUSIVE", `candidate:${cFail.name}`, sum);
   // 6 / 7
-  if (sum.candidate.reading === "INCONCLUSIVE") return mk("INCONCLUSIVE", 2, `candidate-reading:${sum.candidate.readingWhy}`, sum);
-  return mk(sum.candidate.reading, 0, "measured", sum);
+  if (sum.candidate.reading === "INCONCLUSIVE") return mk("INCONCLUSIVE", `candidate-reading:${sum.candidate.readingWhy}`, sum);
+  return mk(sum.candidate.reading, "measured", sum);
 }
 
 export function remeasureLine(v: Pick<Verdict, "verdict" | "exit" | "reason" | "next">): string {
@@ -354,26 +408,32 @@ export function remeasureLine(v: Pick<Verdict, "verdict" | "exit" | "reason" | "
 
 // ---- output: redaction and drafts ------------------------------------------------------------------------------------
 
-/** Rewrite absolute paths to relative forms. identityLeak then refuses output that still carries an identity. */
-export function redact(text: string, roots: { scratch?: string; app?: string }): string {
+/** Rewrite absolute paths to relative forms (each root in every form given, logical and physical). identityLeak then
+ * refuses output that still carries an identity. */
+export function redact(text: string, roots: { scratch?: string | string[]; app?: string | string[] }): string {
   let t = text;
-  if (roots.scratch) t = t.split(roots.scratch).join("<scratch>");
-  if (roots.app) t = t.split(roots.app).join("<app>");
+  const forms = (r: string | string[] | undefined) => (Array.isArray(r) ? r : r ? [r] : []).filter((x) => x.length > 1).sort((a, b) => b.length - a.length);
+  for (const s of forms(roots.scratch)) t = t.split(s).join("<scratch>");
+  for (const a of forms(roots.app)) t = t.split(a).join("<app>");
   return t;
 }
 
 export interface Identity {
-  home?: string;
+  /** Every form of the operator's home (logical and physical). */
+  homes?: string[];
   user?: string;
   logname?: string;
   host?: string;
 }
 /**
  * The operator's identity. The script runs this module under `env -i` with HOME pointed at a scratch dir, so it passes
- * the real home as REMEASURE_IDENTITY_HOME; without it the home-path check would compare against the scratch HOME.
+ * the operator's home as REMEASURE_IDENTITY_HOME (logical) and REMEASURE_IDENTITY_HOME_REAL (physical); without them the
+ * home-path check would compare against the scratch HOME.
  */
 export const currentIdentity = (): Identity => ({
-  home: process.env.REMEASURE_IDENTITY_HOME || process.env.HOME,
+  homes: [process.env.REMEASURE_IDENTITY_HOME || process.env.HOME, process.env.REMEASURE_IDENTITY_HOME_REAL].filter(
+    (h): h is string => !!h,
+  ),
   user: process.env.USER,
   logname: process.env.LOGNAME,
   host: hostname(),
@@ -396,7 +456,7 @@ function hasWord(text: string, w: string): boolean {
  */
 export function identityLeak(text: string, id: Identity = currentIdentity(), benign: readonly string[] = []): string | null {
   if (text.includes(SENTINEL)) return "stub-sentinel";
-  if (id.home && id.home.length > 1 && text.includes(id.home)) return "home";
+  if ((id.homes ?? []).some((h) => h.length > 1 && text.includes(h))) return "home";
   const isBenign = (w: string) => benign.some((b) => b.toLowerCase() === w.toLowerCase());
   const word = (w: string | undefined) => !!w && w.length >= 3 && !isBenign(w) && hasWord(text, w);
   if (word(id.user)) return "user";
@@ -412,9 +472,6 @@ export interface RecordMeta {
   env?: Rec;
 }
 
-const HOSTNAME = /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?$/;
-/** A host the candidate's CLI asked for, as recorded: a hostname, IPv4 or IPv6 literal, else `<invalid>`. */
-export const safeHost = (h: unknown): string => (typeof h === "string" && (isIP(h) !== 0 || HOSTNAME.test(h)) ? h : "<invalid>");
 /**
  * One Markdown table cell as an inert code span: line breaks become spaces, a backtick (which would close the span; a
  * backslash cannot escape it inside one) becomes `'`, backslashes and `|` are escaped for the GFM row splitter, and `@`
@@ -534,7 +591,8 @@ export async function main(argv: string[], write: (s: string) => void = (s) => p
     }
   }
   const meta: RecordMeta = { requested: arg(argv, "--requested")!, command: arg(argv, "--command")!, env };
-  const roots = { scratch: arg(argv, "--scratch-root"), app: arg(argv, "--app-root") };
+  const all = (name: string) => argv.flatMap((x, i) => (x === name && argv[i + 1] !== undefined ? [argv[i + 1]] : []));
+  const roots = { scratch: all("--scratch-root"), app: all("--app-root") };
   const out = redact(
     JSON.stringify({ requested: meta.requested, command: meta.command, env: meta.env ?? null, ...v }, null, 2),
     roots,
@@ -554,7 +612,7 @@ export async function main(argv: string[], write: (s: string) => void = (s) => p
     lines.push(`${which}: reading=${r.reading} preconditions=${r.preconditions.map((p) => `${p.name}:${p.ok ? "ok" : "FAIL"}`).join(",")}`);
     for (const n of ARMS) {
       const a = r.arms[n];
-      if (a) lines.push(`  ${n}: asks=[${a.askedHosts.map(String).join(",")}] gateway=${a.gateway.length} decoys=${a.decoys.length}${a.inputShapeChanged ? ` WARN inputShapeChanged=${a.inputShapeChanged.join(",")}` : ""}`);
+      if (a) lines.push(`  ${n}: asks=[${a.askedHosts.join(",")}] gateway=${a.gateway.length} decoys=${a.decoys.length}${a.inputShapeChanged ? ` WARN inputShapeChanged=${a.inputShapeChanged.join(",")}` : ""}`);
     }
   }
   const outPath = arg(argv, "--out");
@@ -564,11 +622,18 @@ export async function main(argv: string[], write: (s: string) => void = (s) => p
     mkdirSync(md, { recursive: true });
     for (const f of ["addendum.md", "issue-comment.md"]) writeFileSync(join(md, f), draft);
   }
-  write(`${redact(lines.join("\n"), roots)}\n${line}\n`);
+  write(`${stripControl(redact(lines.join("\n"), roots))}\n${line}\n`);
   return v.exit;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+const isEntry = (() => {
+  try {
+    return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
+if (isEntry) {
   main(process.argv.slice(2)).then(
     (code) => process.exit(code),
     (e) => {

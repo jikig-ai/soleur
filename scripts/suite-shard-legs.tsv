@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1802
-# generated-at=2026-11-20T19:19:54Z
+# generated-at=2026-11-26T11:31:34Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -92,6 +92,7 @@ apps/web-platform/scripts/lint-migration-immutability.test.sh	1
 apps/web-platform/scripts/postgrest-reload-schema.test.sh	2
 apps/web-platform/scripts/preflight-worm-cascade-contradiction.test.sh	6
 apps/web-platform/scripts/real-sdk-ask-probe.test.sh	3
+apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.test.sh	7
 apps/web-platform/scripts/run-migrations-schema-probe.test.sh	5
 apps/web-platform/scripts/sandbox-canary-regression.test.sh	2
 apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	7
