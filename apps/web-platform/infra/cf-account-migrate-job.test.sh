@@ -1473,11 +1473,12 @@ CN_ADDR=cloudflare_record.www; CN_ID="$(rec_id_of "$CN_ADDR")"
 [[ "$CN_ID" =~ ^[0-9a-f]{32}$ ]] || { printf '[FATAL] CNAME pin unreadable\n' >&2; exit 2; }
 norm_cn_case() { # <label>
   norm_case "$1" false
+  assert_fixture_dir "$LAST_D"
   jq --arg a "$CN_ADDR" '(.resource_changes[] | select(.address == $a) | .change) |= (.after.type = "CNAME" | .before.type = "CNAME")' \
     "$LAST_D/plan.json" >"$LAST_D/p" && mv "$LAST_D/p" "$LAST_D/plan.json"
 }
-setup_norm_cn_default() { norm_cn_case "cnd-$1"; printf '.result.settings = {flatten_cname:false}' >"$LAST_D/recfilter.post.$CN_ID"; }
-setup_norm_cn_true() { norm_cn_case "cnt-$1"; printf '.result.settings = {flatten_cname:true}' >"$LAST_D/recfilter.post.$CN_ID"; }
+setup_norm_cn_default() { norm_cn_case "cnd-$1"; assert_fixture_dir "$LAST_D"; printf '.result.settings = {flatten_cname:false}' >"$LAST_D/recfilter.post.$CN_ID"; }
+setup_norm_cn_true() { norm_cn_case "cnt-$1"; assert_fixture_dir "$LAST_D"; printf '.result.settings = {flatten_cname:true}' >"$LAST_D/recfilter.post.$CN_ID"; }
 setup_norm_flaky() { norm_case "flaky-$1" false; : >"$LAST_D/reconce.post.$REC_ID"; }
 setup_norm_unread() { norm_case "unread-$1" false; printf '500' >"$LAST_D/reccode.post.$REC_ID"; }
 setup_norm_doppler() { norm_case "dopp-$1" false; : >"$LAST_D/mode.doppler_after_apply"; }

@@ -1404,6 +1404,7 @@ else fail "L11-fixture: the fixture's CNAME set drifted" 1 "$got_cn"; fi
 # flat_live <out> <address...>: $NLIVE with each named record's live settings at {flatten_cname:false}.
 flat_live() {
   local out="$1"; shift
+  assert_fixture_dir "$out"
   jq -c --arg c "$*" '($c | split(" ")) as $cs | with_entries(if (.key | IN($cs[])) then .value.result.settings = {flatten_cname:false} else . end)' "$NLIVE" > "$out"
 }
 FLAT_ALL="$TMP/flat-all.json"; FLAT_MIX="$TMP/flat-mix.json"
