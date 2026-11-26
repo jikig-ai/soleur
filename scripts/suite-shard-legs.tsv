@@ -1,12 +1,12 @@
-# suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
-# n=8
-# generated-from-run=incremental
-# generated-from-runs=incremental
 # default-weight-ms=1802
 # generated-at=2026-11-20T19:19:54Z
+# generated-from-run=incremental
+# generated-from-runs=incremental
 # generator=regenerate-shard-manifest.py v3
+# n=8
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
+# suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 .claude/hooks/agent-token-tee.test.sh	3
 .claude/hooks/background-poll-prefer-monitor.test.sh	7
 .claude/hooks/bare-head-self-heal.test.sh	1
@@ -103,6 +103,7 @@ apps/web-platform/test/parse-gitleaks-allowlists	2
 plugins/soleur/scripts/admin-merge-ready.test.sh	3
 plugins/soleur/scripts/affected-tests.test.sh	8
 plugins/soleur/scripts/alpha-metrics.test.sh	5
+plugins/soleur/scripts/completion-floor.test.sh	4
 plugins/soleur/scripts/delegation-verify.test.sh	6
 plugins/soleur/scripts/emit-decision.test.sh	8
 plugins/soleur/scripts/merge-effect-class.test.sh	1

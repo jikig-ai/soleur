@@ -107,9 +107,9 @@ uncommitted tree rather than by any suite. See
 
 Execute a work plan efficiently while maintaining quality and finishing features.
 
-## Introduction
+**Completion floor (12527):** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/completion-floor.sh" --phase work`; on failure parse `missing=`, retry once, halt `SOLEUR_FLOOR_HALT`.
 
-This command takes a work document (plan, specification, or todo file) and executes it systematically. The focus is on **shipping complete features** by understanding requirements quickly, following existing patterns, and maintaining quality throughout.
+Executes a work plan systematically, following existing patterns.
 
 ## Headless Mode Detection
 
