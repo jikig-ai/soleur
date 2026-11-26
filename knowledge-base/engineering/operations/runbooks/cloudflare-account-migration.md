@@ -213,10 +213,12 @@ bash "$S" --profile zone-rest --staged       # before swap-0b
 the live keys. The swap stages run the same staged probe themselves and refuse to swap unless it passes. What the tool
 does:
 
-- A write probe sends **one of two fixed body literals that can never validate**: a non-JSON literal for every row
-  except the zone settings PATCH, and for that row (whose endpoint parses JSON before it checks authorization) a JSON
-  body naming one nonexistent `cf_token_scope_probe_`-prefixed setting id, refused if the zone lists that id. Never
-  `{"rules":[]}` (which would wipe a live entrypoint), never a body naming a real setting. It never `DELETE`s.
+- A write probe sends **one of two fixed body literals, each built to be rejected**: a non-JSON literal for every
+  row except the zone settings PATCH, and for that row (whose endpoint parses JSON before it checks authorization) a
+  JSON body naming one nonexistent `cf_token_scope_probe_`-prefixed setting id. A `2xx` to either is still fatal
+  (exit 4). If the zone already lists that id, or its settings list cannot be read, the run prints
+  `probe=zone-rest verdict=refused` and exits 2 before any settings write. Never `{"rules":[]}` (which would wipe a
+  live entrypoint), never a body naming a real setting. It never `DELETE`s.
 - The old account and zone ids are refused before any request (exit 2); every write row targets the new zone or
   account.
 - Each write row first sends the same request with a sibling token that must not hold the scope (`CF_API_TOKEN_PAGES`

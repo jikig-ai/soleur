@@ -350,8 +350,10 @@ code. Route by outcome; in every branch `swap-0b` stays held until its own typed
 | exit 4, `verdict=fatal-mutation` | No re-run. Post the read-back; re-consult the CTO (recorded dissent: GET control plus a separate permission-group check) |
 | exit 3, deny control did not get 403 on the settings row | A different failure (bulk endpoint EOL, or the wrapper format): post it and re-consult the CTO |
 | exit 3, grant did not get 400 (or was denied) | Post it and re-consult the CTO |
-| exit 2 from the collision guard | Post the stderr; changing the probe id needs a re-ruling |
-
+| exit 3, settings control inconclusive or degraded (not 200, or an empty list), settings row skipped | Post it; check the `CF_API_TOKEN_ZONE_SETTINGS` read scope, then re-run. No re-ruling needed |
+| exit 3, grant got 400 err 6007 on the settings row | The JSON body was not parsed: post it and re-consult the CTO |
+| exit 2, `verdict=refused reason=probe-id-collision` | Post the stdout line and the stderr; changing the probe id needs a re-ruling |
+| exit 2, `verdict=refused reason=settings-list-unevaluable` | Post it; the list shape changed. Re-consult the CTO before any re-run |
 
 ## Files to Edit
 

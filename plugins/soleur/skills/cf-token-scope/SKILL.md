@@ -31,8 +31,9 @@ The deterministic core is a probe script,
 [cf-token-scope.sh](./scripts/cf-token-scope.sh). It only ever probes — run it as
 often as needed; it mutates nothing. The `rulesets` and `default-token` profiles
 send GETs only. The two account-migration profiles (`redirects-dns`, `zone-rest`)
-also send write verbs, but only with one of two fixed bodies that cannot
-validate (see [Migration profiles](#migration-profiles-12931)).
+also send write verbs, but only with one of two fixed bodies built to be
+rejected (see [Migration profiles](#migration-profiles-12931)). A `2xx` to either
+is still treated as a possible mutation.
 
 ### Preflight: verify the plugin install before any snapshot
 
@@ -183,7 +184,7 @@ summary's verbatim literal (a stable grep target for the data channel):
 their migration phase applies. A GET proves read access only (the 2026-07-24
 config-rules scope-gap post-mortem). They follow CTO ruling L49:
 
-- **Two fixed never-valid bodies.** Each write row names its body in a sixth
+- **Two fixed probe bodies, each built to be rejected.** Each write row names its body in a sixth
   field, `body-kind`, and one closed case in the script maps it to a readonly
   literal:
   - `invalid` → `INVALID_BODY`, a literal that is not JSON, so no endpoint can
@@ -193,27 +194,47 @@ config-rules scope-gap post-mortem). They follow CTO ruling L49:
     only. That endpoint parses JSON before it checks authorization: a non-JSON
     body gets `400` (code 6007) for every token, so the deny control below could
     never see `403`. The body is JSON naming one setting id that does not exist,
-    `cf_token_scope_probe_nonexistent_setting`.
+    `cf_token_scope_probe_nonexistent_setting`. The grant token's `400` on it is
+    expected but not yet measured, which is why a `2xx` stays fatal. A grant
+    `400` with code 6007 (malformed JSON) means the body was never parsed, so the
+    row reads `inconclusive`, not `authorized`.
 
   Three guards keep the JSON body from naming a real setting, each exiting `2`
-  before the write it protects. A static table guard runs at startup, before any
-  secret read: the body must be an object whose only key is a non-empty `items`
-  array of `{id,value}` items with `cf_token_scope_probe_`-prefixed ids, every
-  `body-kind` must be `invalid` or `settings-json`, and `settings-json` is allowed
-  only on `PATCH $API/zones/$ZONE/settings`. At the write boundary, `mig_req`
-  refuses `settings-json` on any other URL. A collision guard refuses when the
-  zone's own settings list, read by the authorized GET control, names a probe id.
-  If that control did not pass, or its list is empty, the row is skipped as
-  `inconclusive`. The script never sends an empty-rules ruleset: that body
-  validates and wipes a live entrypoint.
+  before the write it protects:
+  - A static table guard runs at startup, before any secret read, for every
+    profile. It reads every migration profile's rows and refuses a profile with
+    none. Every row's method must be PUT, POST or PATCH and its URL must start at
+    the Cloudflare API base. Every `body-kind` must be `invalid` or
+    `settings-json`. `invalid` is refused on the zone settings URL, and
+    `settings-json` is allowed only on `PATCH $API/zones/$ZONE/settings`. The
+    body must be byte-identical to its compact JSON rendering, so a duplicate
+    key is refused. It must be an object whose only key is a non-empty `items`
+    array of `{id,value}` items with `cf_token_scope_probe_`-prefixed ids.
+  - At the write boundary, `mig_req` refuses `settings-json` on any request that
+    is not a PATCH to the zone settings URL.
+  - A collision guard reads the zone's own settings list from the authorized GET
+    control. The list must be one JSON document whose `.result` is a non-empty
+    array of objects with string ids. If it lists an id of the probe body (exact
+    match), the run prints `probe=zone-rest verdict=refused
+    reason=probe-id-collision` and exits `2`. If the list cannot be evaluated,
+    it prints `reason=settings-list-unevaluable` and exits `2`. If the control
+    did not pass, or its list is empty, the settings row is skipped as
+    `inconclusive` (exit `3`).
+
+  The script never sends an empty-rules ruleset: that body validates and wipes a
+  live entrypoint.
 - **Deny control first.** Each write row first sends the same body with a sibling
   token that lacks the scope. That request must answer `403`. Only then does the
   granted token's `400` count as `authorized`. If the denied token gets `400`, the
   endpoint may check the body before authorization, so the row is `inconclusive`
   and the grant token is not probed.
-- **Any `2xx` is fatal.** The run reads that endpoint back with the grant token,
-  prints a sanitized summary, prints `probe=<profile> verdict=fatal-mutation` and
-  exits `4`.
+- **Any `2xx` is fatal.** The run prints a sanitized summary of the write
+  response and the Doppler key name of the token that got it (never its value),
+  reads that endpoint back with the grant token, prints a sanitized summary of
+  the read-back, prints `probe=<profile> verdict=fatal-mutation` and exits `4`.
+  For a list, each summary carries `probe_id_listed`: whether any listed id
+  starts with `cf_token_scope_probe_`. That is the fact the CTO dissent needs
+  if the settings grant ever answers `200`.
 - **Write verbs are PUT, POST and PATCH only.** DELETE is never sent.
 - **Known-present controls.** GET controls must return `success:true` with a parsed
   `.result`. `redirects-dns` lists the new zone's and account's rulesets and reports
@@ -234,7 +255,7 @@ config-rules scope-gap post-mortem). They follow CTO ruling L49:
 | zone-rest | `zones/<zone>/bot_management` (PUT) | `CF_API_TOKEN_BOT_MANAGEMENT` | `CF_API_TOKEN_ZONE_SETTINGS` | `INVALID_BODY` |
 
 Doppler is not probed: it is not a Cloudflare scope. The last stdout line is
-`probe=<profile> verdict=pass|denied|inconclusive|fatal-mutation`. Record it in
+`probe=<profile> verdict=pass|denied|inconclusive|refused|fatal-mutation`. Record it in
 the PR thread. Any verdict other than `pass` blocks that phase's dispatch.
 
 ## Exit codes
@@ -246,12 +267,17 @@ the PR thread. Any verdict other than `pass` blocks that phase's dispatch.
   wrong profile, and a malformed `--target-entrypoint` phase name — all raised
   before any secret read), missing prerequisite (`curl` / `doppler` / `jq`), an
   absent Doppler secret, or a refused internal table-integrity tripwire (source
-  drift only, unreachable by argv; stderr-only and names the corruption).
+  drift only, unreachable by argv; stderr-only and names the corruption). For
+  `zone-rest`, also a refusal caused by the live zone's settings list (it lists
+  a probe id, or it cannot be evaluated). That one prints
+  `probe=zone-rest verdict=refused reason=<…>` on stdout; post it on #12931 and
+  stop.
 - `3` — probe failed: a scope was dropped, degraded, or denied (assert mode: an
   LB row still `403` or anomalous; migration profiles: a write denied, or a
   control not established).
-- `4` — migration profiles only: a write probe answered `2xx`. The endpoint was
-  read back and the run aborted. Treat it as a possible mutation.
+- `4` — migration profiles only: a write probe answered `2xx`. The write
+  response and a read-back of the endpoint were printed and the run aborted.
+  Treat it as a possible mutation.
 - `78` — the script REFUSED to run under shell tracing (`-x`) — a refusal, not a
   probe verdict; see the STREAM CONTRACT in the script header (#7797).
 
