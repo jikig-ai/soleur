@@ -30,4 +30,4 @@ Docs half of #12780 only. Use `Ref #12780` everywhere; never a closing verb next
   tracked table change).
 - [x] 3.3 AC9: `bun test plugins/soleur/test/components.test.ts`; `bash scripts/markdown-lint.sh` on the runbook and ADR-242; `bash -n scripts/test-all.sh`.
 - [x] 3.4 AC11: `bash plugins/soleur/test/c4-count-parity.test.sh`.
-- [ ] 3.5 AC10 at ship time: PR body and commit messages carry `Ref #12780` and no closing reference.
+- [x] 3.5 AC10 at ship time: PR body and commit messages carry `Ref #12780` and no closing reference.

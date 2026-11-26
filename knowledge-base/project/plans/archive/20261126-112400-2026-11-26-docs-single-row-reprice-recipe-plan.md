@@ -553,7 +553,7 @@ Let `RB=knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.
 - [x] AC9: `bun test plugins/soleur/test/components.test.ts` passes
       (the recipe's `gh run list` carries `-L 100`); `bash scripts/markdown-lint.sh "$RB" "$ADR"` exits 0 and does not print `nothing to lint`
       (both files are in lint scope; the learning is excluded by `.markdownlintignore`).
-- [ ] AC10: no closing reference to #12780 anywhere the PR carries:
+- [x] AC10: no closing reference to #12780 anywhere the PR carries:
       `gh pr view --json body --jq .body | grep -inE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]+#12780'`
       and `git log "$MB"..HEAD --format=%B | grep -inE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]+#12780'`
       both print nothing, and the PR body contains `Ref #12780`.
