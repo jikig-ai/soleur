@@ -330,6 +330,12 @@ the PR thread. Any verdict other than `pass` blocks that phase's dispatch.
 - **New phase → enumerate before apply.** If the widen enables a *new* ruleset
   phase, confirm its entrypoint is `404`/empty before any infra apply, or a
   whole-list ruleset create clobbers dashboard rules (ADR-130, ADR-136).
+- **Evidence an operator must post is a `probe=<profile> …` stdout line.** The
+  swap-0b wrapper (`run_scope_probe`) keeps only stdout lines matching
+  `^(probe=|cf-token-scope: migration)`, so an indented or stderr line is lost on
+  that path. Test a new evidence line with the split capture (`mrun_out`), not
+  the combined one. See
+  `knowledge-base/project/learnings/2026-11-26-the-review-fix-moved-evidence-off-the-channel-its-consumer-reads.md`.
 
 ## Related
 
