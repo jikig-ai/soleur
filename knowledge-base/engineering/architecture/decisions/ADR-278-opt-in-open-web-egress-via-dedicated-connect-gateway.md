@@ -249,7 +249,7 @@ bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.325 --
 | Arm | SandboxNetworkAccess asks (in order) | Gateway lines | Decoy hits |
 |---|---|---|---|
 | control | 198.51.100.1, 127.0.0.2, 169.254.169.254 | - | 198.51.100.1:443, 198.51.100.1:80, 198.51.100.1:22, 127.0.0.2:38913, 127.0.0.2:38913, 169.254.169.254:80 |
-| B | example.test, 198.51.100.1, 169.254.169.254, metadata.test | CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT 198.51.100.1:443 HTTP/1.1; GET http://example.test/ HTTP/1.1; CONNECT example.test:22 HTTP/1.1; CONNECT 198.51.100.1:22 HTTP/1.1; CONNECT 169.254.169.254:443 HTTP/1.1; CONNECT metadata.test:443 HTTP/1.1 | - |
+| B | example.test, 198.51.100.1, 169.254.169.254, metadata.test | CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT 198.51.100.1:443 HTTP/1.1; `GET http://example.test/ HTTP/1.1`; CONNECT example.test:22 HTTP/1.1; CONNECT 198.51.100.1:22 HTTP/1.1; CONNECT 169.254.169.254:443 HTTP/1.1; CONNECT metadata.test:443 HTTP/1.1 | - |
 | D | - | - | - |
 | E | 198.51.100.1 | - | - |
 | F | 198.51.100.1 | CONNECT 198.51.100.1:443 HTTP/1.1 | - |
@@ -260,7 +260,7 @@ bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.325 --
 | Arm | SandboxNetworkAccess asks (in order) | Gateway lines | Decoy hits |
 |---|---|---|---|
 | control | 198.51.100.1, 127.0.0.2, 169.254.169.254 | - | 198.51.100.1:443, 198.51.100.1:80, 198.51.100.1:22, 127.0.0.2:43929, 127.0.0.2:43929, 169.254.169.254:80 |
-| B | example.test, 198.51.100.1, 169.254.169.254, metadata.test | CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT 198.51.100.1:443 HTTP/1.1; GET http://example.test/ HTTP/1.1; CONNECT example.test:22 HTTP/1.1; CONNECT 198.51.100.1:22 HTTP/1.1; CONNECT 169.254.169.254:443 HTTP/1.1; CONNECT metadata.test:443 HTTP/1.1 | - |
+| B | example.test, 198.51.100.1, 169.254.169.254, metadata.test | CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT 198.51.100.1:443 HTTP/1.1; `GET http://example.test/ HTTP/1.1`; CONNECT example.test:22 HTTP/1.1; CONNECT 198.51.100.1:22 HTTP/1.1; CONNECT 169.254.169.254:443 HTTP/1.1; CONNECT metadata.test:443 HTTP/1.1 | - |
 | D | - | - | - |
 | E | 198.51.100.1 | - | - |
 | F | 198.51.100.1 | CONNECT 198.51.100.1:443 HTTP/1.1 | - |
