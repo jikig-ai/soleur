@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1802
-# generated-at=2026-11-16T22:24:55Z
+# generated-at=2026-11-20T19:19:54Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -110,6 +110,7 @@ plugins/soleur/scripts/pipeline-tally.test.sh	4
 plugins/soleur/scripts/precommit-guard.test.sh	2
 plugins/soleur/scripts/required-set-report.test.sh	2
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	6
+plugins/soleur/scripts/retry-budget-ruling.test.sh	3
 plugins/soleur/scripts/run-health-emit.test.sh	2
 plugins/soleur/scripts/run-in-pid-namespace.test.sh	3
 plugins/soleur/scripts/scan-ancestor-signal-helpers.test.sh	8
@@ -247,6 +248,7 @@ plugins/soleur/test/go-hold-routing.test.sh	5
 plugins/soleur/test/go-routing-table-parity.test.sh	1
 plugins/soleur/test/go-session-gates.test.sh	5
 plugins/soleur/test/harvest-debt.test.sh	2
+plugins/soleur/test/health-colo-falsification.test.sh	3
 plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh	6
 plugins/soleur/test/hold-gate-eval.test.sh	6
 plugins/soleur/test/hook-git-env-coverage.test.sh	6
@@ -457,6 +459,7 @@ scripts/git-data-reboot-evidence-landed-8210	6
 scripts/git-data-rehearsal-evidence-8211	1
 scripts/git-data-replication-signal-11704	3
 scripts/guard-vacuity-floor	7
+scripts/health-colo-capture-12846	8
 scripts/host-kernel-cadence-12008	2
 scripts/host-tcp-exposure	2
 scripts/hosted-destroy-ask-window-9776	8
@@ -676,15 +679,22 @@ tests/scripts/argv-bearer-sweep	7
 tests/scripts/assert-dev-doppler-scope-wiring	3
 tests/scripts/audit-bot-codeql-coverage	8
 tests/scripts/audit-ruleset-bypass	4
+tests/scripts/bastion-boot-verify	3
+tests/scripts/bastion-host-birth-gate	7
 tests/scripts/betterstack-absence-classifier	8
 tests/scripts/betterstack-ingest-probe	2
 tests/scripts/betterstack-query-archive	2
 tests/scripts/betterstack-read-classify	8
 tests/scripts/betterstack-roundtrip-latency	2
+tests/scripts/cf-account-migrate-gate	8
+tests/scripts/cf-account-migration-bootstrap	7
+tests/scripts/cf-account-migration-runbook	3
+tests/scripts/cf-account-migration-scope	8
 tests/scripts/cf-lb-overlay-gate	3
 tests/scripts/cleanup-merged-space	8
 tests/scripts/deploy-access-token-forget	5
 tests/scripts/destroy-guard-counter-github	4
+tests/scripts/destroy-guard-counter-rundevoo	7
 tests/scripts/destroy-guard-counter-sentry	7
 tests/scripts/destroy-guard-counter-web-platform	5
 tests/scripts/destroy-guard-regex-parity	2
@@ -731,6 +741,9 @@ tests/scripts/registry-restore-from-ghcr	3
 tests/scripts/relay-inngest-write-token-12158	5
 tests/scripts/rule-id-regex-parity	3
 tests/scripts/rule-metrics-aggregate	8
+tests/scripts/rundevoo-destroy-gate-verdict	3
+tests/scripts/rundevoo-dns-set-equality	8
+tests/scripts/rundevoo-squash-ack-detect	7
 tests/scripts/scratch-residue	8
 tests/scripts/scratch-session	7
 tests/scripts/sentry-ac17-derived-counts	1

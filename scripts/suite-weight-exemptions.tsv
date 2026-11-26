@@ -6,3 +6,4 @@
 scripts/test-all-affected-c	794024	atomic --affected battery shard; weight amortization tracked in #11679 (re-priced over the default cap by the #11556 Lever-A 5-run medians)
 scripts/test-all-affected-d	794024	atomic --affected battery shard; weight amortization tracked in #11679
 apps/web-platform/infra/workspaces-boot-unlock.test.sh	859950	infra workspaces boot+unlock provision rehearsal; reduction tracked in #11679
+apps/web-platform/infra/ci-deploy.test.sh	900000	infra ci-deploy battery, re-priced to its 878 s worst CI sample by #13052; split tracked in #13062

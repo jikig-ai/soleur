@@ -219,9 +219,10 @@ DOPPLER_RUN = re.compile(r"doppler\s+run\b")
 # `doppler run` wrapper fail-closes" is a sentence, not an invocation. A census anchored on the bare
 # token scores every one of those, so the anchor is SYNTACTIC: the token must sit where a command
 # can start (line start, or after `|`, `;`, `&&`, `||`, `(`, `$(`, `{`, `!`, `then`, `do`, `else`,
-# optionally behind VAR=value prefixes), on a line that is not a shell comment.
+# optionally behind VAR=value prefixes and one `timeout N[smhd]` prefix, #12742 R3), on a line that is not a shell comment.
+# Guard 2's `doppler run` census does not rely on this list: it counts every hit in shell code (in_code), see invocations().
 CMD_POS = re.compile(r"(?:^|[|;&({!]|\$\(|&&|\|\||\bthen\b|\bdo\b|\belse\b)\s*"
-                     r"(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+)*$")
+                     r"(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+)*(?:timeout\s+[0-9]+[smhd]?\s+)?$")
 
 HEREDOC_OPEN = re.compile(r"<<-?\s*[\"\']?([A-Za-z_][A-Za-z0-9_]*)[\"\']?")
 
@@ -249,9 +250,39 @@ def in_quotes(line, idx):
         i += 1
     return sq or dq
 
-def cmd_sites(body, pat):
+def in_code(line, idx):
+    """True when `idx` is in shell CODE: outside every quoted span, or inside a `$( )` command
+    substitution (which re-opens code even inside double quotes: `OUT="$(doppler run ...)"`).
+    A stack scanner, unlike in_quotes, because the substitution nests."""
+    st = ["c"]
+    i = 0
+    while i < idx and i < len(line):
+        c, top = line[i], st[-1]
+        if c == "\\" and top != "s":
+            i += 2
+            continue
+        if top == "s":
+            if c == "'":
+                st.pop()
+        elif c == "$" and line[i + 1:i + 2] == "(":
+            st.append("p")
+            i += 1
+        elif top == "d":
+            if c == '"':
+                st.pop()
+        elif c == "'":
+            st.append("s")
+        elif c == '"':
+            st.append("d")
+        elif c == ")" and top == "p":
+            st.pop()
+        i += 1
+    return st[-1] in ("c", "p")
+
+def cmd_sites(body, pat, any_pos=False):
     """(line, match) for every `pat` hit that sits in command position on a non-comment,
-    non-HEREDOC line.
+    non-HEREDOC line. With any_pos, a hit in shell CODE (in_code) counts whatever precedes it;
+    only a hit inside a quoted string still needs CMD_POS (Guard 2's fail-closed census).
 
     The heredoc skip is load-bearing, not tidiness. This repo's workflows print operator
     instructions out of heredocs and `echo` bodies -- "re-run wrapped in `doppler run -p
@@ -296,7 +327,7 @@ def cmd_sites(body, pat):
             # census to exactly those.
             if printing and in_quotes(line, m.start()):
                 continue
-            if CMD_POS.search(line[:m.start()]):
+            if CMD_POS.search(line[:m.start()]) or (any_pos and in_code(line, m.start())):
                 yield line, m
         if h:
             pending = h.group(1)
@@ -428,6 +459,18 @@ def env_arms(raw):
 class Job(object):
     pass
 
+def wf_triggers(doc):
+    """A workflow's trigger NAMES, from every `on:` form: a scalar, a list or a mapping (#13054 review:
+    the mapping-only read left `on: [pull_request_target]` with no triggers, so G1f never looked)."""
+    on = doc.get("on") if "on" in doc else doc.get(True)
+    if isinstance(on, str):
+        return {on}
+    if isinstance(on, list):
+        return {str(x) for x in on}
+    if isinstance(on, dict):
+        return {str(k) for k in on}
+    return set()
+
 jobs = []
 for rel, (doc, text) in sorted(docs.items()):
     wenv = {k: str(v) for k, v in (doc.get("env") or {}).items()}
@@ -442,7 +485,7 @@ for rel, (doc, text) in sorted(docs.items()):
         j.arms = env_arms(body.get("environment"))
         j.steps = [s for s in (body.get("steps") or []) if isinstance(s, dict)]
         j.dump = jdump(body)
-        j.triggers = list((doc.get("on") or doc.get(True) or {}).keys()) if isinstance(doc.get("on") or doc.get(True), dict) else []
+        j.triggers = sorted(wf_triggers(doc))
         jobs.append(j)
 
 def resolve(j, s):
@@ -610,9 +653,44 @@ tierb = [j for j in jobs if j.tier_b]
 print("IPT_TIERB=%s" % " ".join(sorted(j.id for j in tierb)), file=sys.stderr)
 
 # ── Guard 1 ────────────────────────────────────────────────────────────────────────
-no_env = [j.id for j in tierb if not j.has_env_key]
+# A local reusable-workflow CALLER (`uses: ./.github/workflows/<f>.yml`) cannot carry `environment:`
+# (GitHub rejects the key on a calling job), yet it MUST pass an environment secret by name: one the
+# caller does not pass resolves to "" in the called workflow, with no error (GitHub docs, "Reuse
+# workflows" -> using environment secrets; #12873 dropped it to satisfy this row, so the bastion
+# route read an empty token and HELD). Such a caller is covered when the called file is a
+# `workflow_call` workflow in this census and at least one of its jobs is Tier B, and every Tier-B
+# job there declares an `environment:` whose arms are all Tier-B environments: that environment
+# gates the run and supplies the secret's value. A remote `uses:` (`owner/repo/...@ref`) is never
+# covered, because its jobs are not in this census. Two more limits (#13054 security review, 3 rounds):
+#   * the caller's triggers must ALL be in an ALLOWLIST of events a third party cannot start with
+#     their own code in reach. The called job runs with the CALLER's `github` context, and G1f reads
+#     only the called job's own trigger (`workflow_call`), so it never sees a head checkout. Events
+#     that run on the DEFAULT-BRANCH ref while carrying PR or fork data (`pull_request_target`,
+#     `workflow_run`, `issue_comment`, `check_suite`, `issues`, ...) are admitted by the main-only
+#     policy. A caller that is itself `workflow_call` runs in its TOP caller's context, which this
+#     row cannot see from the middle, so nested chains fail closed. A denylist missed the events
+#     nobody listed, so this is an allowlist; widen it only with a reason per event;
+#   * a "caller" that also carries `steps:`, `runs-on:` or `environment:` is not a pure call (GitHub
+#     rejects one), so its own body must not ride on the callee's environment.
+REUSABLE_CALLER_ALLOWED_TRIGGERS = {"push", "workflow_dispatch", "schedule"}
+REUSABLE_LOCAL = re.compile(r"^\./\.github/(workflows/[^/@\s]+\.ya?ml)$")
+def reusable_caller_covered(j):
+    m = REUSABLE_LOCAL.match(str(j.body.get("uses") or "").strip())
+    if not m:
+        return False
+    if any(k in j.body for k in ("steps", "runs-on", "environment")):
+        return False
+    if not j.triggers or not set(j.triggers) <= REUSABLE_CALLER_ALLOWED_TRIGGERS:
+        return False
+    called = [c for c in jobs if c.rel == m.group(1)]
+    tb = [c for c in called if c.tier_b]
+    return (bool(called) and "workflow_call" in called[0].triggers and bool(tb)
+            and all(c.has_env_key and c.arms and all(a in TIER_B_ENVIRONMENTS for a in c.arms) for c in tb))
+no_env = [j.id for j in tierb if not j.has_env_key and not reusable_caller_covered(j)]
 check("G1b: every Tier-B job declares an `environment:` key (AC2b; a Tier-B job with none reads no "
-      "environment secret and fails closed the moment the legacy fallback goes) [%d Tier-B jobs]" % len(tierb),
+      "environment secret and fails closed the moment the legacy fallback goes; a local reusable-workflow "
+      "caller, which cannot carry one, is covered when every Tier-B job it calls declares a Tier-B "
+      "environment) [%d Tier-B jobs]" % len(tierb),
       not no_env, no_env[:8])
 
 # (#9755) An EMPTY arm (`|| ''` / `|| ""`) is a resolvable outcome but not an environment NAME:
@@ -1108,8 +1186,15 @@ def invocations(body):
     """Each `doppler run` invocation's own argument text: from the token up to the ` -- ` separator
     or the end of its (continuation-joined) line. `[^\\n]` in an ERE is a bracket expression
     excluding backslash and the letter n, not "any char but newline", so the slice is taken by
-    index rather than by a negated class."""
-    for line, m in cmd_sites(body, DOPPLER_RUN):
+    index rather than by a negated class.
+
+    FAIL CLOSED ON THE PREFIX (#12742 round 2): every `doppler run` in shell code is an invocation,
+    whatever precedes it (`timeout -k 5 90`, `timeout 1m30s`, `env -u X`, `nice`, `exec`), so a
+    wrapper prefix CMD_POS does not list cannot hide a flagless leg. Only a comment, a heredoc
+    body, an echo/printf argument, or a quoted string not in command position is data.
+    RESIDUAL: a quoted `sh -c 'exec doppler run ...'` behind a non-CMD_POS word is still read as
+    data (the operator prose in quoted messages is indistinguishable from it statically)."""
+    for line, m in cmd_sites(body, DOPPLER_RUN, any_pos=True):
         rest = line[m.end():]
         k = rest.find(" -- ")
         yield line[m.start():m.end() + (k if k != -1 else len(rest))]
@@ -1622,14 +1707,7 @@ G6_LOCK_REL = os.path.join("apps", "web-platform", "infra", ".terraform.lock.hcl
 G6_PR_TRIGGERS = {"pull_request", "pull_request_target"}
 
 def g6_triggers(doc):
-    on = doc.get("on") if "on" in doc else doc.get(True)
-    if isinstance(on, str):
-        return {on}
-    if isinstance(on, list):
-        return {str(x) for x in on}
-    if isinstance(on, dict):
-        return {str(k) for k in on}
-    return set()
+    return wf_triggers(doc)
 
 def g6_tier_b(j):
     """Main-only by construction: every `environment:` arm is a main-policied Tier-B environment
@@ -2670,6 +2748,36 @@ jobs:
           bash scripts/tierb-helper.sh
 EOF
 
+# A local reusable-workflow pair (#12873): the caller passes the environment secret BY NAME and
+# carries no `environment:` (GitHub rejects one on a calling job); the called job declares it. G1b
+# must read this compliant, which makes the control (H0) the positive case for the caller rule.
+cat > "$FIX/tree/.github/workflows/tierb-reusable-caller.yml" <<'EOF'
+name: fixture tier-b reusable caller
+on: workflow_dispatch
+jobs:
+  call:
+    uses: ./.github/workflows/tierb-reusable-called.yml
+    secrets:
+      DOPPLER_TOKEN_INFRA_PRIVILEGED: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+EOF
+
+cat > "$FIX/tree/.github/workflows/tierb-reusable-called.yml" <<'EOF'
+name: fixture tier-b reusable called
+on:
+  workflow_call:
+    secrets:
+      DOPPLER_TOKEN_INFRA_PRIVILEGED:
+        required: true
+jobs:
+  work:
+    runs-on: ubuntu-24.04
+    environment: infra-privileged
+    steps:
+      - uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+EOF
+
 cat > "$FIX/tree/.github/workflows/tierb-mapping.yml" <<'EOF'
 name: fixture tier-b mapping form
 on: workflow_dispatch
@@ -3594,6 +3702,64 @@ if mutate g1-8-environment-deleted "$MUTDIR/tree/.github/workflows/apply-git-dat
   fixcensus "$MUTDIR" "$T/mut/g1-8.tsv" ""
   mutant_red g1-8-environment-deleted wf_row "$T/mut/g1-8.tsv" "G1b:"
 fi
+# Rows 8b-8d (#12873) — the reusable-caller cover must not stretch. Each mutant makes the CALLER the
+# only uncovered job: the called workflow stays free of G1b reds of its own.
+# 8b: the called workflow has no Tier-B job, so no environment gates the secret it is handed.
+MUTDIR="$(fixcopy g1-8b)"; assert_fixture_dir "$MUTDIR"
+printf 'name: zz\non:\n  workflow_call:\n    secrets:\n      DOPPLER_TOKEN_INFRA_PRIVILEGED:\n        required: false\njobs:\n  work:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo x\n' > "$MUTDIR/tree/.github/workflows/tierb-reusable-called.yml"
+if fixture_written g1-8b-reusable-called-has-no-tierb-job "$MUTDIR/tree/.github/workflows/tierb-reusable-called.yml"; then
+  fixcensus "$MUTDIR" "$T/mut/g1-8b.tsv" ""
+  mutant_red g1-8b-reusable-called-has-no-tierb-job wf_row "$T/mut/g1-8b.tsv" "G1b:"
+fi
+# 8c: a REMOTE reusable workflow: its jobs are outside this census, so nothing proves an environment.
+MUTDIR="$(fixcopy g1-8c)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-8c-reusable-caller-remote "$MUTDIR/tree/.github/workflows/tierb-reusable-caller.yml" 2 's|^    uses: \./\.github/workflows/tierb-reusable-called\.yml$|    uses: other-org/other-repo/.github/workflows/tierb-reusable-called.yml@0123456789abcdef0123456789abcdef01234567|'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-8c.tsv" ""
+  mutant_red g1-8c-reusable-caller-remote wf_row "$T/mut/g1-8c.tsv" "G1b:"
+fi
+# 8d: the called file is not a `workflow_call` workflow, so it is not what the caller runs.
+MUTDIR="$(fixcopy g1-8d)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-8d-reusable-called-not-workflow-call "$MUTDIR/tree/.github/workflows/tierb-reusable-called.yml" 2 's/^  workflow_call:$/  workflow_dispatch:/'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-8d.tsv" ""
+  mutant_red g1-8d-reusable-called-not-workflow-call wf_row "$T/mut/g1-8d.tsv" "G1b:"
+fi
+# 8e (security review): a caller on `pull_request_target`. The called job runs with the caller's
+# context (default-branch ref, so the main-only policy admits it) and G1f reads only its own
+# `workflow_call` trigger, so a head checkout there would pass every row if this caller were covered.
+MUTDIR="$(fixcopy g1-8e)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-8e-reusable-caller-on-pull-request-target "$MUTDIR/tree/.github/workflows/tierb-reusable-caller.yml" 2 's/^on: workflow_dispatch$/on: [pull_request_target]/'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-8e.tsv" ""
+  mutant_red g1-8e-reusable-caller-on-pull-request-target wf_row "$T/mut/g1-8e.tsv" "G1b:"
+fi
+# 8f (security review): a "caller" that also carries its own `steps:` is not a pure call, so its body
+# must not ride on the callee's environment.
+MUTDIR="$(fixcopy g1-8f)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-8f-reusable-caller-with-steps "$MUTDIR/tree/.github/workflows/tierb-reusable-caller.yml" 2 '$a\    steps:\n      - run: echo x'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-8f.tsv" ""
+  mutant_red g1-8f-reusable-caller-with-steps wf_row "$T/mut/g1-8f.tsv" "G1b:"
+fi
+# 8g (security review, round 2): one level of indirection. A pull_request_target workflow calls the
+# caller, which is now `workflow_call` and forwards the secret; every job runs in the TOP context.
+MUTDIR="$(fixcopy g1-8g)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-8g-reusable-caller-is-itself-workflow-call "$MUTDIR/tree/.github/workflows/tierb-reusable-caller.yml" 2 's/^on: workflow_dispatch$/on: workflow_call/'; then
+  printf 'name: zz\non: pull_request_target\njobs:\n  top:\n    uses: ./.github/workflows/tierb-reusable-caller.yml\n' > "$MUTDIR/tree/.github/workflows/zz-top.yml"
+  fixcensus "$MUTDIR" "$T/mut/g1-8g.tsv" ""
+  mutant_red g1-8g-reusable-caller-is-itself-workflow-call wf_row "$T/mut/g1-8g.tsv" "G1b:"
+fi
+# 8h (security review, round 2): a `workflow_run` caller: default-branch context, and its head_sha
+# can name a fork PR's code.
+MUTDIR="$(fixcopy g1-8h)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-8h-reusable-caller-on-workflow-run "$MUTDIR/tree/.github/workflows/tierb-reusable-caller.yml" 2 's/^on: workflow_dispatch$/on: workflow_run/'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-8h.tsv" ""
+  mutant_red g1-8h-reusable-caller-on-workflow-run wf_row "$T/mut/g1-8h.tsv" "G1b:"
+fi
+# 8i (security review, round 3): `issue_comment` runs on the default-branch ref and anyone can comment
+# on a PR; no denylist named it, which is why the trigger check is an allowlist.
+MUTDIR="$(fixcopy g1-8i)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-8i-reusable-caller-on-issue-comment "$MUTDIR/tree/.github/workflows/tierb-reusable-caller.yml" 2 's/^on: workflow_dispatch$/on: [workflow_dispatch, issue_comment]/'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-8i.tsv" ""
+  mutant_red g1-8i-reusable-caller-on-issue-comment wf_row "$T/mut/g1-8i.tsv" "G1b:"
+fi
 # Row 9 (U5) — an environment OUTSIDE tier_b_environments: a name O3 never seeds, so GitHub
 # auto-creates it with no branch policy at all.
 MUTDIR="$(fixcopy g1-9)"; assert_fixture_dir "$MUTDIR"
@@ -3940,6 +4106,39 @@ MUTDIR="$(fixcopy g2-2)"; assert_fixture_dir "$MUTDIR"
 if mutate g2-2-second-run-no-flag "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 1 '/^          bash scripts\/tierb-helper\.sh$/a\          doppler run -p soleur -c prd_terraform -- terraform output -raw x'; then
   fixcensus "$MUTDIR" "$T/mut/g2-2.tsv" ""
   mutant_red g2-2-second-run-no-flag wf_row "$T/mut/g2-2.tsv" "G2a:"
+fi
+# Row 2b (#12742 R3) — a SECOND `doppler run` behind a `timeout N` prefix, without the flag. CMD_POS must
+# read `timeout 90 doppler run` as a command, or every time-bounded leg escapes the census.
+MUTDIR="$(fixcopy g2-2b)"; assert_fixture_dir "$MUTDIR"
+if mutate g2-2b-timeout-prefixed-run-no-flag "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 1 '/^          bash scripts\/tierb-helper\.sh$/a\          OUT="$(timeout 90 doppler run -p soleur -c prd_terraform -- terraform output -raw x)"'; then
+  fixcensus "$MUTDIR" "$T/mut/g2-2b.tsv" ""
+  mutant_red g2-2b-timeout-prefixed-run-no-flag wf_row "$T/mut/g2-2b.tsv" "G2a:"
+fi
+# Rows 2c-2g (#12742 round 2) — G2a fails closed on the PREFIX: a flagless `doppler run` behind any wrapper CMD_POS
+# does not list (timeout options, a unit-suffixed duration, `env -u`, a quoted command substitution) still reds.
+g2_prefix_row() { # <name> <the added run line>
+  MUTDIR="$(fixcopy "$1")"; assert_fixture_dir "$MUTDIR"
+  if mutate "$1" "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 1 "/^          bash scripts\/tierb-helper\.sh\$/a\\          $2"; then
+    fixcensus "$MUTDIR" "$T/mut/$1.tsv" ""
+    mutant_red "$1" wf_row "$T/mut/$1.tsv" "G2a:"
+  fi
+}
+g2_prefix_row g2-2c-timeout-kill-after-no-flag 'timeout -k 5 90 doppler run -p soleur -c prd_terraform -- terraform output -raw x'
+g2_prefix_row g2-2d-timeout-preserve-status-no-flag 'timeout --preserve-status 90 doppler run -p soleur -c prd_terraform -- terraform output -raw x'
+g2_prefix_row g2-2e-timeout-1m30s-no-flag 'timeout 1m30s doppler run -p soleur -c prd_terraform -- terraform output -raw x'
+g2_prefix_row g2-2f-env-unset-no-flag 'env -u X doppler run -p soleur -c prd_terraform -- terraform output -raw x'
+g2_prefix_row g2-2g-quoted-substitution-no-flag 'OUT="$(timeout -k 5 90 doppler run -p soleur -c prd_terraform -- terraform output -raw x)"'
+# Row 2h (control, must stay GREEN): `doppler run` inside quoted operator prose (a message variable, a case-arm echo)
+# is data, so the fail-closed prefix rule neither reds G2a nor counts it as an invocation.
+MUTDIR="$(fixcopy g2-2h)"; assert_fixture_dir "$MUTDIR"
+if mutate g2-2h-quoted-prose-stays-data "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 2 '/^          bash scripts\/tierb-helper\.sh$/a\          LEVER="route back: doppler run -p soleur -c prd_terraform -- terraform output -raw x"\n          case 1 in 5) echo "read '"'"'doppler run -p soleur -c prd -- y'"'"' first" ;; esac'; then
+  fixcensus "$MUTDIR" "$T/mut/g2-2h.tsv" ""
+  _g2n() { grep -oE '^ok	G2a: .*\[[0-9]+ invocations' "$1" | grep -oE '[0-9]+ invocations'; }
+  if [ -n "$(_g2n "$T/control.tsv")" ] && [ "$(_g2n "$T/mut/g2-2h.tsv")" = "$(_g2n "$T/control.tsv")" ]; then
+    pass "M-g2-2h-quoted-prose: quoted operator prose naming \`doppler run\` stays data (G2a green, invocation count unchanged)"
+  else
+    fail "M-g2-2h-quoted-prose: G2a read quoted prose as an invocation" "$(grep G2a "$T/mut/g2-2h.tsv" | cut -c1-240)"
+  fi
 fi
 # Row 3 — the flag removed from a `doppler run` inside the script a Tier-B job invokes by
 # `bash scripts/<x>.sh`. A census that skips script indirection stays green here.
@@ -5357,7 +5556,11 @@ fi
 # 180 -> 181: g7c2-redeploy-exclusion (must-pass fixture: an alphanumeric-prefixed
 #   `redeploy-channel` mention in a secret body must NOT red — pins the exclusion side
 #   of the lookbehind). 1 landing. Measured: 181 ran.
-MUTANT_FLOOR=181
+# 164 -> 165 (#12742 R3): g2-2b (a `timeout 90 doppler run` without --preserve-env); 1 landing.
+# 165 -> 171 (#12742 round 2, G2a fails closed on the prefix): g2-2c..g2-2g (timeout -k / --preserve-status / 1m30s,
+#   env -u, a quoted `$(timeout -k ...)`) and the g2-2h quoted-prose control; 1 landing each. Measured: 171 ran.
+# 181 + 7 -> 188 (main merge into #12876): main's #9294 rows and this PR's g2-2b..g2-2h rows are disjoint. Measured: 188 ran.
+MUTANT_FLOOR=196  # 188 -> 196 (#12873 follow-up): g1-8b..g1-8i (the reusable-caller cover on G1b).
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -5436,7 +5639,11 @@ _ran=$((passes + fails))
 #   match without reding the suite. Measured: 459 ran.
 # 459 -> 460 (main merge): main added the G1k check for the env-scoped
 #   DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE (#9927 D2-2 / #12158). Measured: 460 ran.
-FLOOR=460
+# 422 -> 424 (#12742 R3): g2-2b (1 landing + 1 verdict). Measured: 425 ran (the floor sat one below).
+# 425 -> 437 (#12742 round 2): g2-2c..g2-2g (5 landings + 5 verdicts), g2-2h (1 landing + 1 must-stay-green). Measured: 437 ran.
+# 460 + 14 -> 474 (main merge into #12876): this PR's 15 rows above were measured on a base that already ran
+#   G1k (its 425, one over the 424 floor), and main counts G1k in its 459 -> 460 step. Measured: 474 ran.
+FLOOR=474
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

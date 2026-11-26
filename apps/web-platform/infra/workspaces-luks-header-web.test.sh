@@ -85,7 +85,7 @@ p_bucket_shape() {
   local b; b="$(block_of "$1" cloudflare_r2_bucket workspaces_luks_header_web)"
   [ -n "$b" ] || { echo 0; return; }
   [ "$(attr "$b" provider)" = 'cloudflare.r2' ] || { echo 0; return; }
-  [ "$(attr "$b" account_id)" = 'var.cf_account_id' ] || { echo 0; return; }
+  [ "$(attr "$b" account_id)" = 'var.cf_r2_account_id' ] || { echo 0; return; }
   [ "$(attr "$b" name)" = '"soleur-workspaces-luks-header-web"' ] || { echo 0; return; }
   [ "$(attr "$b" location)" = '"WEUR"' ] || { echo 0; return; }
   [ "$(attr "$b" prevent_destroy)" = 'true' ] || { echo 0; return; }
@@ -125,7 +125,7 @@ p_no_laundering_resource() {
   [ "$(printf '%s\n' "$code" | grep -Ec '^resource "doppler_secret"')" = "3" ] || { echo 0; return; }
   if grep -Eq '^variable ' <<<"$code"; then echo 0; return; fi
   if grep -Eq '^(output|module|data|locals|provider|terraform|import|moved|removed)[[:space:]{"]' <<<"$code"; then echo 0; return; fi
-  if grep -Eq '(^|[^A-Za-z0-9_.])var\.[a-z_]' <<<"$(grep -vE '^[[:space:]]*account_id[[:space:]]*=[[:space:]]*var\.cf_account_id[[:space:]]*$' <<<"$code")"; then echo 0; return; fi
+  if grep -Eq '(^|[^A-Za-z0-9_.])var\.[a-z_]' <<<"$(grep -vE '^[[:space:]]*account_id[[:space:]]*=[[:space:]]*var\.cf_r2_account_id[[:space:]]*$' <<<"$code")"; then echo 0; return; fi
   echo 1
 }
 

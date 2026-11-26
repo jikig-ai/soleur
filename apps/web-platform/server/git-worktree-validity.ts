@@ -103,6 +103,17 @@ export interface GitWorktreeShape {
   gitdirTarget?: string;
   /** True when the gitdir target resolves OUTSIDE `workspacePath`. */
   gitdirEscapesWorkspace?: boolean;
+  /**
+   * Kind `"other"` only: the `open(O_NOFOLLOW)` error code that put `.git` in
+   * that bucket (`ELOOP` for a symlink, `EACCES`, `EMFILE`, `EIO`, ...), so a
+   * caller can tell a transient descriptor/IO blip from a structural shape
+   * (cc-dispatcher's post-heal self-stop skips the transient ones). It is
+   * `undefined` when the open succeeded but `fstat` found neither a file nor a
+   * directory (socket / fifo / device): no syscall failed, so there is no errno to
+   * carry. Never set for any other kind. A `fstat` failure on the open fd is not
+   * caught here (it propagates, as before).
+   */
+  errno?: string;
 }
 
 export function probeGitWorktreeShape(workspacePath: string): GitWorktreeShape {
@@ -117,10 +128,10 @@ export function probeGitWorktreeShape(workspacePath: string): GitWorktreeShape {
   } catch (err) {
     // ENOENT → genuinely absent; ELOOP (symlink) / EACCES / other → an
     // unusable plain `.git`, conservatively bucketed `"other"` (not ready,
-    // never destructively healed).
-    return (err as NodeJS.ErrnoException).code === "ENOENT"
-      ? { kind: "absent" }
-      : { kind: "other" };
+    // never destructively healed). The code rides along as `errno`.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { kind: "absent" };
+    return typeof code === "string" ? { kind: "other", errno: code } : { kind: "other" };
   }
   try {
     const st = fstatSync(fd);
@@ -149,7 +160,8 @@ export function probeGitWorktreeShape(workspacePath: string): GitWorktreeShape {
         kind: isValidGitWorkTree(workspacePath) ? "dir-valid" : "dir-invalid",
       };
     }
-    return { kind: "other" }; // socket / fifo / etc. — never the file-pointer path
+    // socket / fifo / etc. — never the file-pointer path. No errno: nothing failed.
+    return { kind: "other" };
   } finally {
     closeSync(fd);
   }

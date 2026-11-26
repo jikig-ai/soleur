@@ -43,6 +43,7 @@
   "cloudflare_load_balancer",
   "cloudflare_load_balancer_monitor",
   "cloudflare_load_balancer_pool",
+  "cloudflare_zone",
   "cloudflare_zone_dnssec",
   "cloudflare_zone_settings_override",
   "doppler_config",
@@ -404,6 +405,24 @@
      "expires_on": "2026-12-31"
     }
    }
+  },
+  {
+   "store": "bastion.baked_credentials_on_host",
+   "kind": "secret-store",
+   "at_rest": {
+    "mechanism": "plaintext-exception",
+    "evidence": "apps/web-platform/infra/bastion-cloud-init.yml: ssh_keys (ed25519_private/ed25519_public from tls_private_key.bastion_host_ssh, bastion.tf) written by cloud-init to /etc/ssh at 0600 root, and the Sentry DSN baked into the runcmd _emit helper. No volume, no LUKS; the root disk holds the OS, journald and cloud-init's own copies of user_data (/var/lib/cloud/instance/user-data.txt and cloud-config.txt hold the host private key; /var/lib/cloud/instance/scripts/runcmd holds the DSN), all root-only. Both values also sit in hcloud_server.bastion.user_data and in Terraform state (the EXPOSURE note in bastion.tf).",
+    "defends_against": "nothing at rest; there is no user data on this disk to protect",
+    "does_not_defend": "a seized or RMA'd root disk, or any root on the host (user_data is readable from the metadata endpoint), yields the host private key and the Sentry DSN; a reader of main-root Terraform state reads the same key in clear",
+    "disclosed_as": "not-publicly-claimed",
+    "live_verification": "unavailable:no inbound path to the bastion in step 2a (sshd masked, zero-rule Hetzner firewall); the host is not yet born (post-merge bastion-host-create, #12866)",
+    "exception": {
+     "justification": "the bastion root disk holds no user data; LUKS would need an unlock secret at boot on a host whose only secret is its own host key, so it would move the plaintext rather than remove it",
+     "tracking_issue": "#12867",
+     "reevaluate_when": "the bastion stores anything beyond the OS, its host key and journald (for example a cached credential in ADR-327 step 3)",
+     "expires_on": "2027-02-15"
+    }
+   }
   }
  ],
  "connections": [
@@ -542,6 +561,26 @@
     "tls": "SSH-2 over the Hetzner private network; git-data authenticated by its Terraform-minted ED25519 host key (GIT_DATA_SSH_HOST_KEY), pinned on every dial; an absent or malformed pin refuses. Unpinned fallback arm deleted by PR #9096, #5914; ADR-237 Addendum",
     "cert_verification": "on",
     "does_not_defend": "a reader of main-root Terraform state (the host private key lives there and in user_data) who also holds a private-network position (#8209); a writer of Doppler prd who replaces GIT_DATA_SSH_HOST_KEY with their own key and holds a private-network position (the app then pins the impersonator; detected only after the fact by scheduled-terraform-drift.yml); a rooted web-1, which holds the transport, provision and remove keys; a rooted git-data answering falsely under its own key",
+    "disclosed_as": "not-publicly-claimed"
+   }
+  },
+  {
+   "connection": "bastion -> Sentry ingest (birth readiness and fatal boot events)",
+   "enforced_at": "apps/web-platform/infra/bastion-cloud-init.yml runcmd _emit (curl --proto =https over the nftables egress allowlist in bastion-egress.sh)",
+   "in_transit": {
+    "tls": "https / TLS 1.2+",
+    "cert_verification": "on",
+    "does_not_defend": "a compromised bastion sending false readiness events under its own DSN; a leaked DSN letting a third party post events tagged host_name=soleur-bastion",
+    "disclosed_as": "not-publicly-claimed"
+   }
+  },
+  {
+   "connection": "bastion -> Ubuntu apt mirrors (archive.ubuntu.com, security.ubuntu.com)",
+   "enforced_at": "apps/web-platform/infra/bastion-cloud-init.yml write_files /etc/apt/sources.list.d/ubuntu.sources (https URIs) and the bastion-egress.sh allowlist (tcp/443 only)",
+   "in_transit": {
+    "tls": "https / TLS 1.2+; package integrity by apt's signed InRelease",
+    "cert_verification": "on",
+    "does_not_defend": "a compromised mirror serving packages signed by a compromised Ubuntu archive key",
     "disclosed_as": "not-publicly-claimed"
    }
   }

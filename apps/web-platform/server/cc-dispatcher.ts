@@ -155,6 +155,7 @@ import {
   probeGitWorktreeShape,
   evaluateAgentReadiness,
   isLstatValidKind,
+  isStrandingFilePointer,
 } from "./git-worktree-validity";
 // #5394 — Concierge dispatch readiness gate. Block a dispatch whose active
 // workspace repo is still `cloning` or whose setup `error`'d, BEFORE spawning
@@ -298,6 +299,21 @@ const log = createChildLogger("cc-dispatcher");
 // outlast a long interactive agent turn so `gh` doesn't fail mid-conversation
 // on an expired token. Mirrors the cron's TOKEN_MIN_LIFETIME_MS (~60 min).
 const GH_TOKEN_MIN_LIFETIME_MS = 60 * 60 * 1000;
+
+// #12910 (CTO ruling Q5) — `.git` open() errnos that say "this process is short
+// of descriptors / memory, or the IO blipped", not "this `.git` is a strand".
+// The post-heal self-stop skips a kind-`other` shape carrying one of these BEFORE
+// reportAgentReadinessSelfStop, so the blip neither reports a false strand nor
+// spends the per-process dedupe slot a real strand (ELOOP / EACCES / EPERM / a
+// fifo) for the same workspace needs. An unknown errno still emits.
+const TRANSIENT_GIT_OPEN_ERRNOS: ReadonlySet<string> = new Set([
+  "EMFILE",
+  "ENFILE",
+  "EIO",
+  "EAGAIN",
+  "EINTR",
+  "ENOMEM",
+]);
 
 // Non-routable internal leader id reserved for cc-soleur-go path
 // audit-log attribution. Used by `createCanUseTool` (R-AC14), the WS
@@ -592,6 +608,26 @@ const WEB_EGRESS_PROMPT_ADDENDUM =
   "retry them and do not promise the user a retry. If `WebFetch` fails with a " +
   "proxy/connection error mid-session, report it rather than retrying in a " +
   "loop — the session's web access may have been revoked.";
+
+// #12598 — appended ONLY to a Command Center session whose workspace grant is on but which has no live forwarder (the
+// spawn failed). The session then runs as if Agent web access were off, and without this line the prompt says nothing
+// about it, so the agent cannot explain why WebFetch is missing and retries or mis-states what it can do. The line
+// itself makes no GitHub claim (GitHub access differs between the repo-token and no-repo cases, and
+// GH_NO_NETWORK_PROMPT_ADDENDUM covers the latter).
+const WEB_EGRESS_START_FAILED_PROMPT_LINE =
+  "## Web access unavailable in this session\n" +
+  "Your workspace owner enabled Agent web access, but it failed to start for this session, so this " +
+  "session runs as if it were off: `WebFetch` is unavailable and you have no general web access. Do not " +
+  "retry web fetches, and do not try to reach other websites from shell commands (for example with curl). " +
+  "If the user asks for something that needs the web, tell them web access failed to start for this " +
+  "session and that starting a new conversation may restore it, or ask them to paste what you need.";
+
+// #12598 — appended to the line above only when the GitHub read tools are registered (`readRegistration.registered`).
+// Those tools run server-side with the installation token, so a failed forwarder does not affect them. No `gh` claim:
+// `registered` does not prove a sandbox token was minted.
+const WEB_EGRESS_START_FAILED_GITHUB_READ_CLAUSE =
+  "Your read-only GitHub tools (the `github_read_*` and `github_list_*` tools in your tool list) are not affected: " +
+  "use them for questions about the connected repository.";
 
 // feat-reasoning-chat-boxes (#5370) — instructs the Concierge to drive the
 // always-registered narrate/summarize tools. Appended UNCONDITIONALLY (the
@@ -2464,9 +2500,9 @@ export const realSdkQueryFactory: QueryFactory = async (
     // #5862 → constant parent deny). The prompt-driven
     // `/soleur:go` Step 0.0 then self-stops with NO server event — the dark
     // surface all three prior fixes missed. One `probeGitWorktreeShape` (sync
-    // lstat(s); a small pointer-body read only when `.git` is a FILE) drives BOTH
-    // the SYNC readiness decision and the observability emit here — no re-lstat on
-    // the sync path. The common dir-valid case pays this single cheap probe here;
+    // lstat(s); a small pointer-body read only when `.git` is a FILE) drives the
+    // SYNC readiness decision here; the observability emit re-probes once after
+    // the heal (#12910, below). The common dir-valid case pays this cheap probe;
     // the additive host `rev-parse` confirm below (#5733 deliverable A) then
     // re-probes ONLY that dir-valid slice the lstat verdict greenlights but the
     // agent can still strand on (detailed in the note immediately following).
@@ -2483,24 +2519,6 @@ export const realSdkQueryFactory: QueryFactory = async (
       gitShape.kind === "dir-valid" ||
       (gitShape.kind === "file-pointer" &&
         gitShape.gitdirEscapesWorkspace === false);
-    // #5733 Phase 1b — emit the agent-readiness self-stop for ANY connected,
-    // DB-ready workspace whose on-disk `.git` is NOT rev-parse-ready (escaping
-    // pointer / corrupt dir / absent). The agent self-stops on its in-bwrap `git
-    // rev-parse` for ALL of these, and Phase 0 could not confirm WHICH shape prod
-    // has — so the one queryable event must cover them all (`gitKind`
-    // distinguishes). Excludes a legitimately repo-less workspace (no `repoUrl`)
-    // and a cloning/error status (the honest RepoNotReadyError owns those). Fires
-    // BEFORE the heal so the strand is queryable on this very dispatch.
-    if (repoReadiness.ok && repoUrl && !gitReady) {
-      reportAgentReadinessSelfStop({
-        userId: args.userId,
-        activeWorkspaceId,
-        // lstat-validity (the FILE-pointer trap) — derived from the same probe.
-        gitValid: isLstatValidKind(gitShape.kind),
-        gitKind: gitShape.kind,
-        gitdirEscapesWorkspace: gitShape.gitdirEscapesWorkspace,
-      });
-    }
     // `gitReady` treats an escaping pointer / corrupt dir as NOT ready, so it
     // falls through to the self-heal. `gitDirValid` (the seam consumed by
     // resolveRepoReadinessWithSelfHeal) uses the same `isReadyGitWorkTree`
@@ -2695,6 +2713,42 @@ export const realSdkQueryFactory: QueryFactory = async (
           "Your workspace's repository couldn't be set up — the automatic clone failed. Please re-connect the repository in Settings → Repository.",
           "repo_setup_failed",
         );
+      }
+    }
+
+    // #5733 Phase 1b, moved after the heal by #12910 (CTO rulings T8, T8a) — the
+    // agent-readiness self-stop for the strands the post-heal gate below cannot
+    // see, because evaluateAgentReadiness returns "ready" for every kind other
+    // than dir-valid: a `.git` FILE whose `gitdir:` escapes the workspace or cannot
+    // be read (isStrandingFilePointer; host `rev-parse` follows an escaping pointer,
+    // but the agent's in-bwrap rev-parse cannot read sibling workspaces), and a
+    // `.git` of kind `other` (symlink, EACCES, fifo; a transient open() errno in
+    // TRANSIENT_GIT_OPEN_ERRNOS is skipped, see there). Emit only, never a block. It
+    // is a re-probe AFTER the heal and the dispatch clone, so a shape the heal
+    // fixed is not reported (the false `gitKind=absent` stop of #12910); an absent
+    // or corrupt `.git` that survives the heal is the post-heal gate's to emit and
+    // block. `confirmDbReady` is always true here (a failed heal threw above); it
+    // stays as the guard the post-heal gate also takes. The `source` stays
+    // `host-pre-heal`, now a legacy name: renaming it would break the existing
+    // Sentry queries. The fingerprint carries `gitKind`, so it never collides with
+    // the post-heal absent emit.
+    if (mode.runRepoLifecycle && confirmDbReady && repoUrl) {
+      const postHealShape = probeGitWorktreeShape(workspacePath);
+      const transientOpenError =
+        postHealShape.kind === "other" &&
+        postHealShape.errno !== undefined &&
+        TRANSIENT_GIT_OPEN_ERRNOS.has(postHealShape.errno);
+      if (
+        !transientOpenError &&
+        (isStrandingFilePointer(postHealShape) || postHealShape.kind === "other")
+      ) {
+        reportAgentReadinessSelfStop({
+          userId: args.userId,
+          activeWorkspaceId,
+          gitValid: isLstatValidKind(postHealShape.kind),
+          gitKind: postHealShape.kind,
+          gitdirEscapesWorkspace: postHealShape.gitdirEscapesWorkspace,
+        });
       }
     }
 
@@ -3584,8 +3638,9 @@ export const realSdkQueryFactory: QueryFactory = async (
     // before sdkQuery: on ANY failure (token write, bind, gateway-side
     // start) the session degrades to zero-egress (`webEgress` stays
     // undefined → no proxy env, WebFetch stays disallowed, no credential
-    // census change) + Sentry — a dead forwarder must never produce a
-    // session whose CLI env proxies to a refused listener.
+    // census change) + Sentry, plus the failed-to-start prompt line (#12598)
+    // — a dead forwarder must never produce a session whose CLI env proxies
+    // to a refused listener.
     let webEgress:
       | { workspaceId: string; token: string; port: number }
       | undefined;
@@ -3628,6 +3683,10 @@ export const realSdkQueryFactory: QueryFactory = async (
         });
       }
     }
+    // #12598: the grant is on but this session has no live forwarder. Derived from `webEgress` (not set in the catch) so
+    // it can never coexist with the "Web access enabled" addendum, which gates on the same handle.
+    const webEgressStartFailed =
+      webEgressEntitled && mode.runRepoLifecycle && webEgress === undefined;
 
     // #12585 — the handle the SandboxNetworkAccess liveness probe closes over (a const: no later reassignment leaks in).
     const liveEgress = webEgress;
@@ -3676,6 +3735,11 @@ export const realSdkQueryFactory: QueryFactory = async (
         if (text) githubReadPromptSuffix = `\n\n${text}`;
       }
     }
+    // #12598: the failed-to-start line, plus the read-tools clause when those tools are registered.
+    const startFailedSuffix = webEgressStartFailed
+      ? `\n\n${WEB_EGRESS_START_FAILED_PROMPT_LINE}` +
+        (readRegistration?.registered ? ` ${WEB_EGRESS_START_FAILED_GITHUB_READ_CLAUSE}` : "")
+      : "";
 
     let authProbe: AgentAuthFailureProbe = NOOP_AGENT_AUTH_PROBE;
     try {
@@ -3715,11 +3779,15 @@ export const realSdkQueryFactory: QueryFactory = async (
         // feat-open-web-egress (#9534): the honest-capability addendum is
         // gated on the LIVE forwarder handle, not the resolved entitlement —
         // a spawn-degraded session keeps WebFetch disallowed and gets no
-        // addendum claiming egress.
+        // addendum claiming egress, plus the failed-to-start prompt line
+        // (#12598). That line and githubReadPromptSuffix never both appear
+        // (the suffix needs a live forwarder, the line a missing one); it is
+        // a separate term only to keep the #12469 adjacency pin green.
         systemPrompt:
           effectiveSystemPrompt +
           (webEgress ? `\n\n${WEB_EGRESS_PROMPT_ADDENDUM}` : "") +
-          githubReadPromptSuffix,
+          githubReadPromptSuffix +
+          startFailedSuffix,
         resumeSessionId: safeResumeSessionId,
         // feat-open-web-egress (#9534) — live forwarder handle. Presence IS
         // the entitlement+spawn-verified condition (fail-closed: undefined

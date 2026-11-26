@@ -168,6 +168,17 @@ reset_fx; rdy $((4 * D)) "luks_arm=opened" | ready; soak_probes $((4 * D)) | pro
 run 0 PASS "T04g luks_arm=opened (a fresh host that opened the existing volume) meets the soak"
 reset_fx; { rdy $((5 * D)) "luks_arm=noop"; rdy $((4 * D)); } | ready; soak_probes $((4 * D)) | probe
 run 0 PASS "T04h an older noop row and a NEWER formatted row: the newest readiness row decides"
+# The serve arm's stricter rule (W2L_REQUIRE_BOOT_JOIN=1, Ruled by CTO agent 2026-11-19, PR #12934 R2): one known boot_id
+# across the readiness row and the newest probe row. The #6931 sweep (no join) is unchanged: T04-T04e still PASS.
+reset_fx; rdy $((4 * D)) | ready; { row $H "$(okmsg crypto_LUKS ok $UA)"; row $((H + D)) "$(okmsg crypto_LUKS ok $UA)"; row $((H + 2 * D)) "$(okmsg crypto_LUKS ok $UA)"; } | probe
+run 0 PASS "T04j boot join on: the readiness row and every probe row carry one known boot_id" W2L_REQUIRE_BOOT_JOIN=1
+reset_fx; rdy $((4 * D)) | ready; soak_probes $((4 * D)) | probe
+run 2 "NOT YET" "T04k boot join on: the newest probe row's boot_id differs from the readiness row's (a reboot or replace)" W2L_REQUIRE_BOOT_JOIN=1
+said "T04k the reason names the boot mismatch and the replace remedy" 'are not one known boot'
+reset_fx; rdy $((4 * D)) "boot_id=unknown" | ready; { row $H "$(okmsg crypto_LUKS ok unknown)"; row $((H + D)) "$(okmsg crypto_LUKS ok unknown)"; row $((H + 2 * D)) "$(okmsg crypto_LUKS ok unknown)"; } | probe
+run 2 "NOT YET" "T04l boot join on: an unknown boot_id on both sides is never one known boot" W2L_REQUIRE_BOOT_JOIN=1
+reset_fx; rdy $((4 * D)) | ready; soak_probes $((4 * D)) | probe
+run 0 PASS "T04m boot join off (the #6931 sweep): the same mismatched fixture still PASSes" W2L_REQUIRE_BOOT_JOIN=0
 
 reset_fx; rdy $((30 * D)) | ready; soak_probes $((30 * D)) | probe
 run 0 PASS "T05 a readiness row 30 days old: the probe lookback is capped at 504 h and the soak is still graded"
@@ -274,7 +285,7 @@ leak_out="$(env -i PATH="$BIN:/usr/bin:/bin" HOME="$WORK" FX="$WORK/fx" CALLS="$
 expect "T41 w2l_query withholds every secret-shaped variable but the three Better Stack values (the stub refuses on any)" test "$leak_out" = "rc=0"
 
 # --- the scenario set is REGISTERED: deleting one reds the suite by name ------------------------------------------
-EXPECTED_IDS="T01 T02 T03 T04 T04b T04c T04d T04e T04f T04g T04h T05 T06 T07 T08 T09 T10 T11 T12 T13 T14 T15 T16 T17 T18 T19 T20 T21 T22 T23 T24 T25 T26 T27 T28 T29 T30 T31 T32 T33 T34 T35 T36 T37 T38 T39 T40 T41"
+EXPECTED_IDS="T01 T02 T03 T04 T04b T04c T04d T04e T04f T04g T04h T04j T04k T04l T04m T05 T06 T07 T08 T09 T10 T11 T12 T13 T14 T15 T16 T17 T18 T19 T20 T21 T22 T23 T24 T25 T26 T27 T28 T29 T30 T31 T32 T33 T34 T35 T36 T37 T38 T39 T40 T41"
 got_ids="$(printf '%s\n' "${IDS[@]}" | sort -u | tr '\n' ' ')"
 want_ids="$(tr ' ' '\n' <<<"$EXPECTED_IDS" | sort -u | tr '\n' ' ')"
 if [ "$got_ids" = "$want_ids" ]; then ok "the registered scenario set ran exactly (48 ids)"; else no "the scenario set drifted: ran [$got_ids] expected [$want_ids]"; fi
@@ -378,6 +389,6 @@ if [ "$MUTANT_RED" -eq 0 ]; then ok "mutation harmless variant (a trailing comme
 echo
 echo "web2-luks-live-6931.test.sh: $pass passed, $fail failed"
 # Non-degeneracy floor: EXACT (the green count of this suite; deleting an arm or a mutation row must red it).
-FLOOR=86
+FLOOR=91 # 86 -> 91: T04j-T04m (#12849 R2)
 [ "$((pass + fail))" -ge "$FLOOR" ] || { echo "FAIL: only $((pass + fail)) assertions ran (<$FLOOR) — the harness did not execute fully" >&2; exit 1; }
 [ "$fail" -eq 0 ]

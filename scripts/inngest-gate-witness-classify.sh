@@ -57,6 +57,14 @@ inngest_gate_witness_classify() {
     # The lib's refusal vocabulary, spelled out token-by-token so the suite's
     # `_ihdg_verdict` census pins an arm for every literal the lib can emit —
     # an added lib token lands UNLISTED and the census reddens.
+    # #12742 (CTO ruling 2026-11-17): `stale_schema` stays `refusal` DELIBERATELY. The witness
+    # measures execute-gate satisfiability, not host darkness — and during the schema-10
+    # merge→owner-replace window the gate IS unsatisfiable by design. Mapping the token to
+    # alive/not-dark (`suppressed`/`satisfy`) would forgive a STUCK replace past the
+    # 2026-12-10 ledger limit (ledger row 6; the 2026-11-20 one is superseded). The accepted
+    # cost of keeping that alarm armed: once the refusal streak reaches 8 (~2h of 15-minute
+    # runs) scheduled-inngest-health.yml files one deduped action-required issue, then comments
+    # on that open issue on EVERY further refusing run until the replace clears the streak.
     unreadable|silent|wrong_host|stale_row|stale_schema|host_serving|flag_unreadable|fsm_unreadable|fsm_silent)
                       echo "refusal" ;;
     *)                echo "refusal" ;;

@@ -1,22 +1,27 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=infra
-# generated-from-runs=40936377720,40883248903,40875701895,40836579393,40796005155,40944524196,40952456472,40964559289
+# generated-from-runs=durations:suite-durations.tsv
 # default-weight-ms=4000
-# generated-at=2026-11-10T20:52:15Z
+# generated-at=2026-11-25T22:05:51Z
 # generator=regenerate-shard-manifest.py v3
+# growth-acked=a9e728441a89f73acb96597548e71659f68fa791c144a812f3902f15fc40a68e
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	15000	measured
 apps/web-platform/infra/apex-single-node-replace.test.sh	500	measured
 apps/web-platform/infra/apt-bounded.test.sh	38500	measured
 apps/web-platform/infra/arm-heartbeats.test.sh	127000	measured
 apps/web-platform/infra/audit-bwrap-uid.test.sh	500	measured
+apps/web-platform/infra/bastion.test.sh	4000	floor
 apps/web-platform/infra/betterstack-alert-structure.test.sh	350000	measured
 apps/web-platform/infra/bwrap-userns-sysctl.test.sh	0	measured
 apps/web-platform/infra/canary-bundle-claim-check.test.sh	6000	measured
 apps/web-platform/infra/cat-deploy-state.test.sh	20500	measured
 apps/web-platform/infra/cat-infra-config-state.test.sh	0	measured
 apps/web-platform/infra/cat-inngest-verify-state.test.sh	0	measured
+apps/web-platform/infra/cf-account-migrate-job.test.sh	525000	measured
+apps/web-platform/infra/cf-account-migration-complete.test.sh	4000	floor
+apps/web-platform/infra/cf-account-state-migrate.test.sh	4000	floor
 apps/web-platform/infra/ci-deploy-wrapper.test.sh	1000	measured
-apps/web-platform/infra/ci-deploy.test.sh	471500	measured
+apps/web-platform/infra/ci-deploy.test.sh	878000	measured
 apps/web-platform/infra/cloud-init-ghcr-seed-login.test.sh	32000	measured
 apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh	5500	measured
 apps/web-platform/infra/cloud-init-inngest-provision-unit.test.sh	369500	measured
@@ -32,7 +37,7 @@ apps/web-platform/infra/cron-egress-enforce-probe.test.sh	9000	measured
 apps/web-platform/infra/cron-egress-firewall.test.sh	37500	measured
 apps/web-platform/infra/cron-egress-ghcr-probe.test.sh	5000	measured
 apps/web-platform/infra/cron-egress-metadata-endpoint.test.sh	1000	measured
-apps/web-platform/infra/cron-egress-nftables.test.sh	150500	measured
+apps/web-platform/infra/cron-egress-nftables.test.sh	483000	measured
 apps/web-platform/infra/cron-egress-self-heal.test.sh	11000	measured
 apps/web-platform/infra/cutover-inngest-workflow.test.sh	43500	measured
 apps/web-platform/infra/disk-monitor.test.sh	2000	measured
@@ -44,6 +49,7 @@ apps/web-platform/infra/egress-gw-image-staleness.test.sh	0	measured
 apps/web-platform/infra/firewall-9000-deny.test.sh	0	measured
 apps/web-platform/infra/fresh-boot-parity.test.sh	5000	measured
 apps/web-platform/infra/fresh-boot-ready.test.sh	11000	measured
+apps/web-platform/infra/fresh-host-boot-trail.test.sh	4000	floor
 apps/web-platform/infra/generate-apex-rollback-pr.test.sh	0	measured
 apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh	46500	measured
 apps/web-platform/infra/git-data-cutover-access.test.sh	226500	measured
@@ -95,8 +101,8 @@ apps/web-platform/infra/inngest-doublefire-probe.test.sh	4000	measured
 apps/web-platform/infra/inngest-enumerate-reminders.test.sh	1500	measured
 apps/web-platform/infra/inngest-flip-token.test.sh	10000	measured
 apps/web-platform/infra/inngest-gate-witness-classify.test.sh	1000	measured
-apps/web-platform/infra/inngest-host-replace-preflight.test.sh	4000	floor
 apps/web-platform/infra/inngest-host-replace-liveness-gate.test.sh	1500	measured
+apps/web-platform/infra/inngest-host-replace-preflight.test.sh	4000	floor
 apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh	8000	measured
 apps/web-platform/infra/inngest-host.test.sh	7000	measured
 apps/web-platform/infra/inngest-inventory.test.sh	8000	measured
@@ -182,7 +188,7 @@ apps/web-platform/infra/web-private-nic-guard.test.sh	18000	measured
 apps/web-platform/infra/web-probes-token-rotation.test.sh	17000	measured
 apps/web-platform/infra/web-zot-consumer-probe.test.sh	13000	measured
 apps/web-platform/infra/webhook-doppler-token-reread.test.sh	1500	measured
-apps/web-platform/infra/workspaces-boot-unlock.test.sh	661500	measured
+apps/web-platform/infra/workspaces-boot-unlock.test.sh	808000	measured
 apps/web-platform/infra/workspaces-luks-cutover-workflow.test.sh	1000	measured
 apps/web-platform/infra/workspaces-luks-freeze.test.sh	58500	measured
 apps/web-platform/infra/workspaces-luks-fresh-boot.test.sh	2000	measured

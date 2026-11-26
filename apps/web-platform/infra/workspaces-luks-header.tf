@@ -25,11 +25,11 @@
 
 locals {
   # Path-style R2 S3 endpoint (account-root; the bucket goes in the S3 PATH, not a host
-  # suffix). Derived from var.cf_account_id rather than re-hardcoding the account hash — the SAME
+  # suffix). Derived from var.cf_r2_account_id (R2 stays on the legacy account, ADR-329) rather than re-hardcoding the account hash — the SAME
   # account owns the tfstate backend (main.tf's `backend "s3"` block hardcodes the hash because a
   # backend cannot interpolate vars/locals), so deriving here avoids ADDING a second literal that
   # could drift; the one backend literal is an unavoidable backend-config constraint, not a drift risk.
-  r2_s3_endpoint = "https://${var.cf_account_id}.r2.cloudflarestorage.com"
+  r2_s3_endpoint = "https://${var.cf_r2_account_id}.r2.cloudflarestorage.com"
 }
 
 # The default cf_api_token is scoped "Tunnel, Access, DNS, Notifications" and lacks Workers
@@ -39,7 +39,7 @@ locals {
 # prd_terraform BEFORE merge (ADR-065: an unprovisioned no-default var fails the whole apply).
 resource "cloudflare_r2_bucket" "workspaces_luks_header" {
   provider   = cloudflare.r2
-  account_id = var.cf_account_id
+  account_id = var.cf_r2_account_id
   name       = "soleur-workspaces-luks-header"
   # cloudflare/cloudflare v4.x: `location` (renamed from `location_hint`). WEUR is a PLACEMENT
   # HINT, not a jurisdiction: this bucket sits on Cloudflare's `default` (non-EU-tier)

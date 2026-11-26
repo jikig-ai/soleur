@@ -54,6 +54,7 @@ reset_def() {
     [WORKSPACES_LUKS_MARKER_HOST]='web-2'
     [WORKSPACES_LUKS_SOAK_DAYS]='3'
   )
+  DEF[SOLEUR_WEB_HOSTS]="${DEF[SOLEUR_HOST_ROSTER]}"  # #12910: the committed var.web_hosts the default roster matches
 }
 
 GATE_OUT=""
@@ -79,9 +80,13 @@ assert_nonzero() { if [[ "$GATE_RC" -ne 0 ]]; then pass "$1"; else fail "$1"; fi
 assert_stdout_contains() {
   if [[ "$GATE_OUT" == *"$2"* ]]; then pass "$1"; else fail "$1 — stdout missing '$2'"; fi
 }
+# has_gate_fail <stderr-text> <id> — 0 iff a WHOLE line of the text is `gate_fail sub_condition=<id>` (#12849). The
+# SOLEUR_SOAK_EVIDENCE line also carries `sub_condition=<id>`, so a substring check could pass on the evidence line
+# alone; `^gate_fail sub_condition=` is the only refusal contract (the evidence line is non-authoritative).
+has_gate_fail() { [[ $'\n'"$1"$'\n' == *$'\n'"gate_fail sub_condition=$2"$'\n'* ]]; }
 assert_stderr_contains() {
-  if [[ "$GATE_ERR" == *"sub_condition=$2"* ]]; then pass "$1"
-  else fail "$1 — stderr missing 'sub_condition=$2' (got: ${GATE_ERR})"; fi
+  if has_gate_fail "$GATE_ERR" "$2"; then pass "$1"
+  else fail "$1 — stderr has no whole line 'gate_fail sub_condition=$2' (got: ${GATE_ERR})"; fi
 }
 assert_rejects_with() {
   assert_nonzero "$1"
@@ -147,17 +152,60 @@ assert_rejects_with "third key: web-3 in rotation, absent from roster -> refused
 # web-3 pooled with a roster + allowlist naming it -> the authorized-flip pass, keyed on web-3 not web-2.
 # The workspaces LUKS marker is unkeyed and attests only its writer's host (web-2): web-3 cannot inherit it.
 R13='{"web-1":"10.0.1.10","web-3":"10.0.1.12"}'
-reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$R13"; run_with_def
+# #12910: a roster naming web-3 needs a committed var.web_hosts naming it (deliberate fixture edit, not a weakening).
+reset_def; W123="$(jq -c '. + {"web-3": "10.0.1.12"}' <<<"${DEF[SOLEUR_HOST_ROSTER]}")"
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$R13"; DEF[SOLEUR_WEB_HOSTS]="$W123"; run_with_def
 assert_rejects_with "third key: web-3 pooled on web-2's LUKS marker -> refused" "B_workspaces_luks_marker_other_host"
 reset_def; unset 'DEF[WORKSPACES_LUKS_MARKER_HOST]'; run_with_def
 assert_rejects_with "marker host unset (marker present) -> refused, never assumed" "B_workspaces_luks_marker_other_host"
 # Same web-3 config with a marker that attests web-3 -> the authorized-flip pass, keyed on web-3 not web-2.
-reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[WORKSPACES_LUKS_MARKER_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$R13"; run_with_def
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[WORKSPACES_LUKS_MARKER_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$R13"; DEF[SOLEUR_WEB_HOSTS]="$W123"; run_with_def
 assert_zero "third key: web-3 pooled, in roster, addr allowlisted, marker attests web-3 -> authorized"
 assert_stdout_contains "third key: authorized branch prints the flip marker" "requires_runtime_bind_probe=true"
 # web-3 pooled, roster has it but its address is not allowlisted (web-2's is) -> refused on web-3's address.
-reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10","web-2":"10.0.1.11","web-3":"10.0.1.12"}'; run_with_def
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10","web-2":"10.0.1.11","web-3":"10.0.1.12"}'; DEF[SOLEUR_WEB_HOSTS]="$W123"; run_with_def
 assert_rejects_with "third key: web-3 address not in the allowlist -> refused" "A_web2_addr_not_in_allowlist"
+# --- #12910 Guard 1: A.3 tests the RUNTIME shape. Every roster key is a committed var.web_hosts key
+# at its committed private_ip (SOLEUR_WEB_HOSTS), and every rotation member is in the roster. Each row
+# edits ONE field of the default (valid) roster, so the row's input differs from a passing one by that edit.
+g1_roster() { reset_def; DEF[SOLEUR_HOST_ROSTER]="$(G1_GATED="${DEF[SOLEUR_GATED_HOST]}" jq -c "$1" <<<"${DEF[SOLEUR_HOST_ROSTER]}")"; }
+g1_roster '. + {"hetzner-176328334": .[env.G1_GATED]}'
+G1_ONE="${DEF[SOLEUR_HOST_ROSTER]}"; run_with_def
+assert_rejects_with "G1-1 an instance-id roster key the runtime never writes -> refused" "A_roster_key_not_web_host"
+g1_roster '. + {"web-9": "10.0.1.19"}'; run_with_def
+assert_rejects_with "G1-3 a non-var.web_hosts key after compliant ones -> refused" "A_roster_key_not_web_host"
+g1_roster '(keys - [env.G1_GATED])[0] as $peer | .[$peer] = "10.0.1.99"'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]+=',10.0.1.99'; run_with_def
+assert_rejects_with "G1-4 a NON-gated key at the wrong address -> refused" "A_roster_addr_mismatch"
+g1_roster '(keys - [env.G1_GATED])[0] as $peer | .[env.G1_GATED] = .[$peer]'
+DEF[SOLEUR_PROXY_PEER_ALLOWLIST]="$(G1_GATED="${DEF[SOLEUR_GATED_HOST]}" jq -r '.[env.G1_GATED]' <<<"${DEF[SOLEUR_HOST_ROSTER]}")"; run_with_def
+assert_rejects_with "G1-5 the gated key at a peer's address -> refused" "A_roster_addr_mismatch"
+reset_def; DEF[SOLEUR_SERVING_ROTATION]+=',web-3'; run_with_def
+assert_rejects_with "G1-6 a rotation member absent from the roster -> refused" "A_rotation_member_not_in_roster"
+reset_def; unset 'DEF[SOLEUR_WEB_HOSTS]'; run_with_def
+assert_rejects_with "G1-7 SOLEUR_WEB_HOSTS unset (the wrapper stopped deriving it) -> refused" "A_web_hosts_absent"
+for g1_bad in '' '{}' '[]' 'not json' '{"web-2":""}' '{"web-2":10}'; do
+  reset_def; DEF[SOLEUR_WEB_HOSTS]="$g1_bad"; run_with_def
+  assert_rejects_with "G1-7 SOLEUR_WEB_HOSTS='${g1_bad}' -> refused" "A_web_hosts_absent"
+done
+unset g1_bad
+reset_def; DEF[SOLEUR_WEB2_SERVING_WEIGHT]='0'; DEF[SOLEUR_SERVING_ROTATION]="${DEF[SOLEUR_SERVING_ROTATION]%%,*}"; unset 'DEF[SOLEUR_WEB_HOSTS]'; run_with_def
+assert_zero "G1-8 standby with SOLEUR_WEB_HOSTS unset -> standby pass (#6575 cannot return)"
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[WORKSPACES_LUKS_MARKER_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]+=',web-3'
+DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$W123"; DEF[SOLEUR_WEB_HOSTS]="$W123"; run_with_def
+assert_zero "G1 must-PASS: a three-key roster at committed addresses, web-3 gated -> authorized"
+# G1-2: the check's own dispatch. A gate whose A_roster_key_not_web_host check never fails must let
+# G1-1's input through (so the suite above would go RED), proving the row is not vacuous.
+G1_MUT="$(mktemp "${TMPDIR:-/var/tmp}/g1mut.XXXXXX")"
+sed 's/|| fail "A_roster_key_not_web_host"/|| true/' "$GATE" > "$G1_MUT"
+G1_SAVED="$GATE"; GATE="$G1_MUT"
+reset_def; DEF[SOLEUR_HOST_ROSTER]="$G1_ONE"; run_with_def
+GATE="$G1_SAVED"
+if ! cmp -s "$G1_SAVED" "$G1_MUT" && [[ "$GATE_ERR" != *A_roster_key_not_web_host* ]]; then
+  pass "G1-2 mutant (key check disarmed) lets G1-1's roster past that check -> the G1-1 row is load-bearing"
+else
+  fail "G1-2 mutant did not change the gate, or still emitted A_roster_key_not_web_host"
+fi
+rm -f "$G1_MUT"; unset G1_MUT G1_SAVED G1_ONE; unset -f g1_roster
 # The gate's code lines name no host key (comments may cite history).
 TOTAL=$((TOTAL + 1))
 if [[ "$(grep -vE '^[[:space:]]*#' "$GATE" | grep -cE 'web-[0-9]' || true)" -eq 0 ]]; then
@@ -300,6 +348,7 @@ reset_def; DEF[GIT_DATA_LUKS_CUTOVER_AT]="$BOUNDARY_CUTOVER"; DEF[WORKSPACES_LUK
 assert_zero "soak boundary (markers exactly 3d old) → exit 0"
 reset_def
 DEF[SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10","web-2":"10.0.1.11","web-3":"10.0.1.12"}'
+DEF[SOLEUR_WEB_HOSTS]="$W123"
 DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.10,10.0.1.11'
 run_with_def
 assert_zero "roster with extra host + allowlist all-in-roster (web-2 addr present) → exit 0"
@@ -1134,7 +1183,7 @@ a1_row_ok() {
   if [[ "$4" == "OK" ]]; then
     [[ "$GATE_RC" -eq 0 && "$GATE_OUT" == *"requires_runtime_bind_probe=true"* ]]
   else
-    [[ "$GATE_RC" -ne 0 && "$GATE_ERR" == *"sub_condition=$4"* ]]
+    [[ "$GATE_RC" -ne 0 ]] && has_gate_fail "$GATE_ERR" "$4"
   fi
 }
 # a1_matrix_mismatches — how many matrix rows the current $GATE fails (silent)
@@ -1206,8 +1255,846 @@ a1_mutate "bind-keyed exit-0 bypass" '[[ -z "${SOLEUR_PROXY_BIND-}" ]] || { echo
 a1_mutate "unprefixed PROXY_BIND read" '[[ -n "${PROXY_BIND-}" ]] || fail "A_unprefixed_bind"' static
 GATE="$GATE_PRISTINE"
 
+# =============================================================================
+# §SK — #12849: the soak floor (Guard 1), the soak evidence line (Guard 2), the per-instance grader precondition
+#        in the serve arm (Guard 3) and the gate-chain summary mirror + anti-vacuity check (Guard 4).
+#   The grammar exists ONCE, as SOAK_EV_RE / INSTANCE_EV_RE in scripts/lib/serve-soak-evidence.sh (G4): this suite
+#   SOURCES it, so the producer rows (the real gate's stderr) and the consumer rows (the helper's mirror and pass
+#   re-check) are graded by the same text. Rows marked "committed mutation" mutate a sandbox copy of the workflow
+#   (textual YAML pins only, G5); behaviour mutations are run by hand once and recorded in the PR body.
+#   Each subsection declares its row count and a counter refuses a subsection whose rows did not all execute.
+# =============================================================================
+SSE_LIB="$REPO_ROOT/scripts/lib/serve-soak-evidence.sh"
+SSE_PROBE="$REPO_ROOT/scripts/serve-soak-evidence-last.sh"
+GRADER_FILE="$REPO_ROOT/scripts/followthroughs/web2-luks-live-6931.sh"
+WRAPPER_FILE="$SCRIPT_DIR/lb-weight-gate-with-marker.sh"
+ROWS_LIB_FILE="$REPO_ROOT/scripts/lib/web2-luks-rows.sh"
+BASH_BIN="$(command -v bash)"
+SK_WORK="$(mktemp -d)"
+trap 'rm -rf "$A1_TMP" "${R_WORK:-}" "${SK_WORK:-}"' EXIT
+SSE_LOADED=0
+if [[ -f "$SSE_LIB" ]]; then
+  # shellcheck source=scripts/lib/serve-soak-evidence.sh
+  if source "$SSE_LIB" && [[ -n "${SOAK_EV_RE:-}" && -n "${INSTANCE_EV_RE:-}" && -n "${SOAK_FLOOR_S:-}" ]]; then SSE_LOADED=1; fi
+fi
+if [[ "$SSE_LOADED" -ne 1 ]]; then SOAK_EV_RE='SSE_HELPER_NOT_LOADED'; INSTANCE_EV_RE='SSE_HELPER_NOT_LOADED'; SOAK_FLOOR_S=0; fi
+
+SEC_NAME=""; SEC_DECL=0; SEC_RAN=0
+sec_open() { SEC_NAME="$1"; SEC_DECL="$2"; SEC_RAN=0; }
+srow() { # <desc> <1|0> — one reported row of the current subsection
+  SEC_RAN=$((SEC_RAN + 1)); TOTAL=$((TOTAL + 1))
+  if [[ "$2" == 1 ]]; then PASS=$((PASS + 1)); echo "  PASS: $1"; else FAIL=$((FAIL + 1)); echo "  FAIL: $1"; fi
+}
+sk_check() { # <desc> <predicate...> — runs the predicate in THIS shell (never inside $( )) and reports one row
+  local d="$1"; shift
+  if "$@"; then srow "$d" 1; else srow "$d" 0; fi
+}
+sk_instrument() { # srow and sk_check must be able to report a FAIL; graded and reported without srow itself (test-design P1)
+  local out
+  out="$(PASS=0; FAIL=0; TOTAL=0; SEC_RAN=0; srow instr-a 0; srow instr-b 1; sk_check instr-c false; sk_check instr-d true; echo "P=$PASS F=$FAIL")"
+  TOTAL=$((TOTAL + 1))
+  if [[ "$out" == *"FAIL: instr-a"*"PASS: instr-b"*"FAIL: instr-c"*"PASS: instr-d"*"P=2 F=2" ]]; then PASS=$((PASS + 1)); echo "  PASS: §SK instrument: srow and sk_check report both verdicts"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: §SK instrument: srow/sk_check cannot report a failure (${out//$'\n'/ | })"; fi
+}
+sec_close() { # the subsection's own-dispatch guard: every declared row executed, no more, no fewer
+  TOTAL=$((TOTAL + 1))
+  if [[ "$SEC_RAN" -eq "$SEC_DECL" ]]; then PASS=$((PASS + 1)); echo "  PASS: §SK-${SEC_NAME}: ${SEC_RAN} of ${SEC_DECL} declared rows executed"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: §SK-${SEC_NAME}: ${SEC_RAN} rows executed, ${SEC_DECL} declared (a row was skipped or added without its count)"; fi
+}
+
+# --- evidence-line readers over $GATE_ERR (set by run_with_def; these only read it) -----------------------------
+ev_lines() { # <kind|any> -> the lines of $GATE_ERR that FULLY match the grammar (of that kind)
+  local l re="^${SOAK_EV_RE}\$"
+  while IFS= read -r l; do
+    [[ "$l" =~ $re ]] || continue
+    if [[ "$1" == any || "$l" == "SOLEUR_SOAK_EVIDENCE kind=$1 "* ]]; then printf '%s\n' "$l"; fi
+  done <<<"$GATE_ERR"
+  return 0
+}
+raw_ev_n() { # <kind|any> -> how many lines START with the evidence prefix (of that kind), well-formed or not
+  local l n=0
+  while IFS= read -r l; do
+    if [[ "$l" == "SOLEUR_SOAK_EVIDENCE "* ]] && [[ "$1" == any || "$l" == "SOLEUR_SOAK_EVIDENCE kind=$1 "* ]]; then n=$((n + 1)); fi
+  done <<<"$GATE_ERR"
+  echo "$n"
+}
+ev_field() { # <line> <name> -> the value of one field, anchored on (^| )name=([^ ]+)( |$)
+  local re="(^| )$2=([^ ]+)( |\$)"
+  if [[ "$1" =~ $re ]]; then printf '%s' "${BASH_REMATCH[2]}"; fi
+}
+p_refuses() { if [[ "$GATE_RC" -eq 1 ]] && has_gate_fail "$GATE_ERR" "$1"; then return 0; fi; return 1; }
+p_passes() { [[ "$GATE_RC" -eq 0 && "$GATE_OUT" == *requires_runtime_bind_probe=true* ]]; }
+p_ev() { # <kind> <field=value>... — exactly one line of that kind, it matches the grammar, every named field equals
+  local kind="$1" line kv; shift
+  [[ "$(raw_ev_n "$kind")" -eq 1 ]] || return 1
+  line="$(ev_lines "$kind")"
+  [[ -n "$line" && "$line" != *$'\n'* ]] || return 1
+  for kv in "$@"; do [[ "$(ev_field "$line" "${kv%%=*}")" == "${kv#*=}" ]] || return 1; done
+  return 0
+}
+p_ev_none() { [[ "$(raw_ev_n "$1")" -eq 0 ]]; }
+p_ev_age() { # <kind> <expected-seconds> — age_s within [expected, expected + elapsed-since-NOW + 120]
+  # NOW is taken once at suite start and the markers are built from it, so the slack is the real time elapsed since
+  # then plus 120 s: a contended host (the suite reaching §SK minutes after NOW) is not a soak-age defect.
+  local a slack; a="$(ev_field "$(ev_lines "$1")" age_s)"; slack=$(( $(date -u +%s) - NOW + 120 ))
+  if [[ "$a" =~ ^-?[0-9]+$ ]] && (( a >= $2 && a <= $2 + slack )); then return 0; fi
+  return 1
+}
+p_one_verdict() { # <kind> — the raw line of that kind carries exactly one ` verdict=` token
+  local l t
+  while IFS= read -r l; do
+    if [[ "$l" == "SOLEUR_SOAK_EVIDENCE kind=$1 "* ]]; then t="${l// verdict=/}"; (( (${#l} - ${#t}) == 9 )) || return 1; fi
+  done <<<"$GATE_ERR"
+  return 0
+}
+
+TWO_D_CUTOVER=$(ISO "$(( NOW - 2 * 86400 ))")
+SIX_D_CUTOVER=$(ISO "$(( NOW - 6 * 86400 ))")
+TEN_D_CUTOVER=$(ISO "$(( NOW - 10 * 86400 ))")
+K1000_D_CUTOVER=$(ISO "$(( NOW - 1000 * 86400 ))")
+SPACE_CUTOVER="$(date -u -d "@$(( NOW - 4 * 86400 ))" '+%Y-%m-%d %H:%M:%S')"
+
+# -----------------------------------------------------------------------------------------------------------------
+# §SK-floor — Guard 1: SOAK_FLOOR_DAYS=3; 1 and 2 refuse *_below_floor; 3, 5, 999 accept; 0, leading zeros, text,
+#   a forged field, more than 3 digits and arithmetic-wrapping values refuse *_invalid (G1, F10); unset/empty = 3.
+# -----------------------------------------------------------------------------------------------------------------
+sk_instrument
+sec_open floor 89
+for sk_kn in git ws; do
+  if [[ "$sk_kn" == git ]]; then
+    KNOB=GIT_DATA_LUKS_SOAK_DAYS; MK=GIT_DATA_LUKS_CUTOVER_AT; KIND=git_data; PFX=B_luks
+  else
+    KNOB=WORKSPACES_LUKS_SOAK_DAYS; MK=WORKSPACES_LUKS_CUTOVER_AT; KIND=workspaces_luks; PFX=B_workspaces_luks
+  fi
+  for v in 1 2; do
+    reset_def; DEF[$KNOB]="$v"; run_with_def
+    sk_check "G1: $KNOB=$v (4-day markers) refuses ${PFX}_soak_days_below_floor (the whole gate_fail line)" p_refuses "${PFX}_soak_days_below_floor"
+    sk_check "G1: $KNOB=$v: one $KIND line soak_days=$v source=env floor_days=3 required_s=none verdict=fail sub_condition=${PFX}_soak_days_below_floor" \
+      p_ev "$KIND" "soak_days=$v" source=env floor_days=3 marker_at=none age_s=none required_s=none verdict=fail "sub_condition=${PFX}_soak_days_below_floor"
+  done
+  if [[ "$sk_kn" == git ]]; then sk_check "G1: a git-data refusal yields NO workspaces_luks line" p_ev_none workspaces_luks; fi
+  reset_def; DEF[$KNOB]='3'; run_with_def
+  sk_check "G1: $KNOB=3 with 4-day markers passes" p_passes
+  sk_check "G1: $KNOB=3: $KIND line soak_days=3 source=env required_s=259200 verdict=pass sub_condition=none" p_ev "$KIND" soak_days=3 source=env required_s=259200 verdict=pass sub_condition=none
+  reset_def; DEF[$KNOB]='5'; DEF[$MK]="$SIX_D_CUTOVER"; run_with_def
+  sk_check "G1 H2: $KNOB=5 with a 6-day marker passes (a value may lengthen the soak)" p_passes
+  sk_check "G1 H2: $KNOB=5: required_s=432000 source=env verdict=pass" p_ev "$KIND" soak_days=5 source=env required_s=432000 verdict=pass
+  sk_check "G1 H2: $KNOB=5: age_s is the 6-day marker's age" p_ev_age "$KIND" $(( 6 * 86400 ))
+  reset_def; DEF[$KNOB]='5'; run_with_def
+  sk_check "G1 H2: $KNOB=5 with 4-day markers refuses ${PFX}_soak_not_elapsed (the lengthened soak is enforced)" p_refuses "${PFX}_soak_not_elapsed"
+  sk_check "G1 H2: $KNOB=5 with 4-day markers: required_s=432000 verdict=fail" p_ev "$KIND" soak_days=5 required_s=432000 verdict=fail "sub_condition=${PFX}_soak_not_elapsed"
+  reset_def; DEF[$KNOB]='999'; DEF[$MK]="$K1000_D_CUTOVER"; run_with_def
+  sk_check "G1 H2: $KNOB=999 with a 1000-day marker passes (the 3-digit cap still allows any real lengthening)" p_passes
+  sk_check "G1 H2: $KNOB=999: required_s=86313600 verdict=pass" p_ev "$KIND" soak_days=999 required_s=86313600 verdict=pass
+  for v in 0 010 08 abc '1 verdict=pass' 1000 200000000000000 18446744073709551619; do
+    reset_def; DEF[$KNOB]="$v"; run_with_def
+    sk_check "G1: $KNOB='$v' refuses ${PFX}_soak_days_invalid" p_refuses "${PFX}_soak_days_invalid"
+    sk_check "G1: $KNOB='$v': soak_days=invalid source=env required_s=none verdict=fail (the raw value is never printed)" \
+      p_ev "$KIND" soak_days=invalid source=env required_s=none verdict=fail "sub_condition=${PFX}_soak_days_invalid"
+    sk_check "G1: $KNOB='$v': the $KIND line carries exactly one verdict= token" p_one_verdict "$KIND"
+  done
+  reset_def; unset "DEF[$KNOB]"; run_with_def
+  sk_check "G1: $KNOB unset passes with 4-day markers" p_passes
+  sk_check "G1: $KNOB unset: source=default soak_days=3 required_s=259200" p_ev "$KIND" soak_days=3 source=default required_s=259200 verdict=pass
+  reset_def; DEF[$KNOB]=''; run_with_def
+  sk_check "G1: $KNOB empty passes with 4-day markers" p_passes
+  sk_check "G1: $KNOB empty: source=default soak_days=3" p_ev "$KIND" soak_days=3 source=default required_s=259200 verdict=pass
+  reset_def; unset "DEF[$KNOB]"; DEF[$MK]="$TWO_D_CUTOVER"; run_with_def
+  sk_check "G1: $KNOB unset with a 2-day marker refuses ${PFX}_soak_not_elapsed (the default is the floor, never 1)" p_refuses "${PFX}_soak_not_elapsed"
+  sk_check "G1: $KNOB unset with a 2-day marker: source=default soak_days=3 required_s=259200" p_ev "$KIND" soak_days=3 source=default required_s=259200 verdict=fail "sub_condition=${PFX}_soak_not_elapsed"
+done
+sk_floor_static() { # SOAK_FLOOR_DAYS=3 once, plain NAME= form, never read through an expansion that could take it from the env
+  local nc; nc="$(grep -vE '^[[:space:]]*#' "$GATE" || true)"
+  [[ "$(grep -cE '^SOAK_FLOOR_DAYS=3$' <<<"$nc" || true)" -eq 1 ]] || return 1
+  ! grep -qE '\{SOAK_FLOOR_DAYS(:?[-=?+])' <<<"$nc"
+}
+sk_check "G1: the gate assigns the floor exactly once, in plain NAME= form (SOAK_FLOOR_DAYS=3; never a := expansion)" sk_floor_static
+sk_knob_default() { # both knob reads default to the floor constant, never to a literal
+  [[ "$(grep -cF 'SOAK_DAYS="${GIT_DATA_LUKS_SOAK_DAYS:-$SOAK_FLOOR_DAYS}"' "$GATE" || true)" -eq 1 ]] || return 1
+  [[ "$(grep -cF 'WS_SOAK_DAYS="${WORKSPACES_LUKS_SOAK_DAYS:-$SOAK_FLOOR_DAYS}"' "$GATE" || true)" -eq 1 ]] || return 1
+  return 0
+}
+sk_check "G1: both knob reads default to the floor (\${KNOB:-\$SOAK_FLOOR_DAYS}), never to a literal" sk_knob_default
+sec_close
+
+# -----------------------------------------------------------------------------------------------------------------
+# §SK-evidence — Guard 2: one well-formed line per kind whose evaluation started; verdict and sub_condition equal
+#   the gate's decision; zero lines on the standby branch, Condition A, B.1 and TOP refusals; no raw env text.
+# -----------------------------------------------------------------------------------------------------------------
+sec_open evidence 65
+reset_def; run_with_def
+sk_check "G2: full pass exits 0 with the flip marker" p_passes
+sk_check "G2: full pass prints exactly two evidence lines" eval '[[ "$(raw_ev_n any)" -eq 2 && "$(ev_lines any | grep -c .)" -eq 2 ]]'
+sk_check "G2: full pass: git_data line host=web-2 soak_days=3 source=env floor_days=3 marker_at=<the marker> required_s=259200 verdict=pass sub_condition=none" \
+  p_ev git_data host=web-2 soak_days=3 source=env floor_days=3 "marker_at=$ELAPSED_CUTOVER" required_s=259200 verdict=pass sub_condition=none
+sk_check "G2: full pass: workspaces_luks line, same shape" \
+  p_ev workspaces_luks host=web-2 soak_days=3 source=env floor_days=3 "marker_at=$ELAPSED_CUTOVER" required_s=259200 verdict=pass sub_condition=none
+sk_check "G2: full pass: git_data age_s is the marker age (4 d, within 120 s)" p_ev_age git_data $(( 4 * 86400 ))
+sk_check "G2: full pass: workspaces_luks age_s is the marker age (4 d, within 120 s)" p_ev_age workspaces_luks $(( 4 * 86400 ))
+sk_check "G2: the evidence goes to stderr, never stdout (stdout stays the flip marker + banner)" eval '[[ "$GATE_OUT" != *SOLEUR_SOAK_EVIDENCE* ]]'
+# every refusal id in B.3-B.5 (git data; B.2's are in §SK-floor): exactly one git_data fail line, no workspaces line
+for row in "B_luks_cutover_marker_absent|__UNSET__|none|none" \
+           "B_luks_cutover_marker_unparseable|not-a-timestamp|unparseable|none" \
+           "B_luks_cutover_marker_unparseable|2026-13-45T99:99:99Z|unparseable|none" \
+           "B_luks_cutover_marker_pre_epoch|1960-01-01|1960-01-01T00:00:00Z|none" \
+           "B_luks_cutover_marker_future|$FUTURE_CUTOVER|$FUTURE_CUTOVER|-" \
+           "B_luks_soak_not_elapsed|$FRESH_CUTOVER|$FRESH_CUTOVER|-"; do
+  IFS='|' read -r rid rval rmark rage <<<"$row"
+  reset_def; if [[ "$rval" == __UNSET__ ]]; then unset 'DEF[GIT_DATA_LUKS_CUTOVER_AT]'; else DEF[GIT_DATA_LUKS_CUTOVER_AT]="$rval"; fi; run_with_def
+  sk_check "G2: $rid ($rval) refuses with that id" p_refuses "$rid"
+  if [[ "$rage" == none ]]; then
+    sk_check "G2: $rid: one git_data line verdict=fail sub_condition=$rid marker_at=$rmark age_s=none required_s=259200" \
+      p_ev git_data verdict=fail "sub_condition=$rid" "marker_at=$rmark" age_s=none required_s=259200
+  else
+    sk_check "G2: $rid: one git_data line verdict=fail sub_condition=$rid marker_at=$rmark required_s=259200" \
+      p_ev git_data verdict=fail "sub_condition=$rid" "marker_at=$rmark" required_s=259200
+  fi
+  sk_check "G2: $rid: no workspaces_luks line (its evaluation never started)" p_ev_none workspaces_luks
+done
+reset_def; DEF[GIT_DATA_LUKS_CUTOVER_AT]="$FUTURE_CUTOVER"; run_with_def
+sk_check "G2: B_luks_cutover_marker_future: age_s is the negative delta (-2 d, within 120 s)" p_ev_age git_data $(( -2 * 86400 ))
+reset_def; DEF[GIT_DATA_LUKS_CUTOVER_AT]="$FRESH_CUTOVER"; run_with_def
+sk_check "G2: B_luks_soak_not_elapsed: age_s is the marker age (1 d, within 120 s)" p_ev_age git_data 86400
+# every refusal id in B.6-B.10 (workspaces; B.6's own are in §SK-floor): one workspaces fail line after one git pass line
+for row in "B_workspaces_luks_marker_absent|WORKSPACES_LUKS_CUTOVER_AT|__UNSET__|none|none" \
+           "B_workspaces_luks_marker_other_host|WORKSPACES_LUKS_MARKER_HOST|__UNSET__|none|none" \
+           "B_workspaces_luks_marker_unparseable|WORKSPACES_LUKS_CUTOVER_AT|not-a-timestamp|unparseable|none" \
+           "B_workspaces_luks_marker_unparseable|WORKSPACES_LUKS_CUTOVER_AT|2026-13-45T99:99:99Z|unparseable|none" \
+           "B_workspaces_luks_marker_pre_epoch|WORKSPACES_LUKS_CUTOVER_AT|1960-01-01|1960-01-01T00:00:00Z|none" \
+           "B_workspaces_luks_marker_future|WORKSPACES_LUKS_CUTOVER_AT|$FUTURE_CUTOVER|$FUTURE_CUTOVER|-" \
+           "B_workspaces_luks_soak_not_elapsed|WORKSPACES_LUKS_CUTOVER_AT|$FRESH_CUTOVER|$FRESH_CUTOVER|-"; do
+  IFS='|' read -r rid rvar rval rmark rage <<<"$row"
+  reset_def; if [[ "$rval" == __UNSET__ ]]; then unset "DEF[$rvar]"; else DEF[$rvar]="$rval"; fi; run_with_def
+  sk_check "G2: $rid ($rvar=$rval) refuses with that id" p_refuses "$rid"
+  if [[ "$rage" == none ]]; then
+    sk_check "G2: $rid: one workspaces_luks line verdict=fail sub_condition=$rid marker_at=$rmark age_s=none required_s=259200" \
+      p_ev workspaces_luks verdict=fail "sub_condition=$rid" "marker_at=$rmark" age_s=none required_s=259200
+  else
+    sk_check "G2: $rid: one workspaces_luks line verdict=fail sub_condition=$rid marker_at=$rmark required_s=259200" \
+      p_ev workspaces_luks verdict=fail "sub_condition=$rid" "marker_at=$rmark" required_s=259200
+  fi
+  sk_check "G2: $rid: exactly one git_data line, verdict=pass sub_condition=none (the git-data soak was met first)" p_ev git_data verdict=pass sub_condition=none
+done
+reset_def; DEF[WORKSPACES_LUKS_CUTOVER_AT]="$FUTURE_CUTOVER"; run_with_def
+sk_check "G2: B_workspaces_luks_marker_future: age_s is the negative delta" p_ev_age workspaces_luks $(( -2 * 86400 ))
+# zero lines where no soak kind's evaluation started
+reset_def; DEF[SOLEUR_WEB2_SERVING_WEIGHT]='0'; DEF[SOLEUR_SERVING_ROTATION]='web-1'; run_with_def
+sk_check "G2: the weight-0 standby pass prints ZERO evidence lines" eval '[[ "$GATE_RC" -eq 0 && "$(raw_ev_n any)" -eq 0 ]]'
+reset_def; DEF[SOLEUR_HOST_ROSTER]='{"web-9":"10.0.1.99"}'; run_with_def
+sk_check "G2: a Condition A refusal (A_web2_not_in_roster) prints its gate_fail line and ZERO evidence lines" eval 'p_refuses A_web2_not_in_roster && [[ "$(raw_ev_n any)" -eq 0 ]]'
+reset_def; DEF[GIT_DATA_STORE_ENABLED]='false'; run_with_def
+sk_check "G2: a B.1 refusal (B_git_data_store_disabled) prints its gate_fail line and ZERO evidence lines" eval 'p_refuses B_git_data_store_disabled && [[ "$(raw_ev_n any)" -eq 0 ]]'
+reset_def; unset 'DEF[SOLEUR_GATED_HOST]'; run_with_def
+sk_check "G2: a TOP refusal (TOP_gated_host_absent) still prints its gate_fail line under set -u (EV_KIND is initialised before fail()) and ZERO evidence lines" eval 'p_refuses TOP_gated_host_absent && [[ "$(raw_ev_n any)" -eq 0 ]]'
+# no raw environment text: offset and space-separated markers come back as the epoch-rebuilt Z form
+reset_def; DEF[GIT_DATA_LUKS_CUTOVER_AT]="$TZOFFSET_CUTOVER"; DEF[WORKSPACES_LUKS_CUTOVER_AT]="$TZOFFSET_CUTOVER"; run_with_def
+sk_check "G2: a +02:00 git-data marker is printed as its Z-form rebuild" p_ev git_data "marker_at=$ELAPSED_CUTOVER" verdict=pass
+sk_check "G2: a +02:00 workspaces marker is printed as its Z-form rebuild" p_ev workspaces_luks "marker_at=$ELAPSED_CUTOVER" verdict=pass
+reset_def; DEF[GIT_DATA_LUKS_CUTOVER_AT]="$SPACE_CUTOVER"; DEF[WORKSPACES_LUKS_CUTOVER_AT]="$SPACE_CUTOVER"; run_with_def
+sk_check "G2: a space-separated git-data marker still yields a grammar-matching Z-form line" p_ev git_data "marker_at=$ELAPSED_CUTOVER" verdict=pass
+sk_check "G2: a space-separated workspaces marker still yields a grammar-matching Z-form line" p_ev workspaces_luks "marker_at=$ELAPSED_CUTOVER" verdict=pass
+# the age window is per kind: markers 6 days apart
+reset_def; DEF[WORKSPACES_LUKS_CUTOVER_AT]="$TEN_D_CUTOVER"; run_with_def
+sk_check "G2: per-kind age: the git_data line reads the git-data marker (4 d)" p_ev_age git_data $(( 4 * 86400 ))
+sk_check "G2: per-kind age: the workspaces_luks line reads the workspaces marker (10 d), not the git-data one" p_ev_age workspaces_luks $(( 10 * 86400 ))
+sk_check "G2: per-kind marker: the workspaces_luks line prints its own marker" p_ev workspaces_luks "marker_at=$TEN_D_CUTOVER"
+# H2: the host is not hardcoded — web-3 pooled on web-2's marker
+reset_def; DEF[SOLEUR_GATED_HOST]='web-3'; DEF[SOLEUR_SERVING_ROTATION]='web-1,web-3'; DEF[SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.12'; DEF[SOLEUR_HOST_ROSTER]="$R13"; DEF[SOLEUR_WEB_HOSTS]="$W123"; run_with_def
+sk_check "G2 H2: web-3 on web-2's marker refuses B_workspaces_luks_marker_other_host" p_refuses B_workspaces_luks_marker_other_host
+sk_check "G2 H2: web-3: the git_data line says host=web-3 verdict=pass" p_ev git_data host=web-3 verdict=pass sub_condition=none
+sk_check "G2 H2: web-3: the workspaces_luks line says host=web-3 marker_at=none sub_condition=B_workspaces_luks_marker_other_host" \
+  p_ev workspaces_luks host=web-3 marker_at=none age_s=none verdict=fail sub_condition=B_workspaces_luks_marker_other_host
+sk_check "G2: the gate names the grammar's one copy (SOAK_EV_RE in scripts/lib/serve-soak-evidence.sh) at its emit site" \
+  eval 'grep -qF "SOAK_EV_RE" "$GATE" && grep -qF "scripts/lib/serve-soak-evidence.sh" "$GATE"'
+sk_check "G2: the gate header records ^gate_fail sub_condition= as the only refusal contract (the evidence line is non-authoritative)" \
+  eval 'grep -qE "^#.*\\^gate_fail sub_condition=.*only refusal contract" "$GATE"'
+sec_close
+
+# -----------------------------------------------------------------------------------------------------------------
+# §SK-grammar — G4: the ONE grammar copy, its positive and negative fixtures, and the F8/G8 parity rows.
+# -----------------------------------------------------------------------------------------------------------------
+sec_open grammar 26
+sk_check "G4: scripts/lib/serve-soak-evidence.sh loads and defines SOAK_EV_RE, INSTANCE_EV_RE and SOAK_FLOOR_S" eval '[[ "$SSE_LOADED" -eq 1 ]]'
+re_full() { local re="^$1\$"; [[ "$2" =~ $re ]]; }
+EVP='SOLEUR_SOAK_EVIDENCE kind=git_data host=web-2 soak_days=3 source=default floor_days=3 marker_at=2026-11-17T12:18:54Z age_s=87883 required_s=259200 verdict=pass sub_condition=none'
+for fx in "$EVP" \
+  'SOLEUR_SOAK_EVIDENCE kind=workspaces_luks host=web-2 soak_days=1 source=env floor_days=3 marker_at=2026-11-17T12:18:54Z age_s=87883 required_s=none verdict=fail sub_condition=B_workspaces_luks_soak_days_below_floor' \
+  'SOLEUR_SOAK_EVIDENCE kind=git_data host=web-3 soak_days=invalid source=env floor_days=3 marker_at=none age_s=none required_s=none verdict=fail sub_condition=B_luks_soak_days_invalid' \
+  'SOLEUR_SOAK_EVIDENCE kind=git_data host=web-2 soak_days=3 source=default floor_days=3 marker_at=unparseable age_s=none required_s=259200 verdict=fail sub_condition=B_luks_cutover_marker_unparseable' \
+  'SOLEUR_SOAK_EVIDENCE kind=workspaces_luks host=web-2 soak_days=3 source=default floor_days=3 marker_at=2026-11-20T12:18:54Z age_s=-172800 required_s=259200 verdict=fail sub_condition=B_workspaces_luks_marker_future'; do
+  sk_check "G4 positive fixture matches SOAK_EV_RE: ${fx:21:60}..." re_full "$SOAK_EV_RE" "$fx"
+done
+for fx in "$EVP extra=1" \
+  "${EVP/ source=default/}" \
+  "${EVP/soak_days=3 source=default/source=default soak_days=3}" \
+  "${EVP/soak_days=3/soak_days=1 verdict=pass}" \
+  "${EVP/verdict=pass/verdict=pass verdict=fail}" \
+  "${EVP/kind=git_data/kind=other}" \
+  "${EVP/soak_days=3/soak_days=010}" \
+  "${EVP/soak_days=3/soak_days=1000}" \
+  "${EVP/marker_at=2026-11-17T12:18:54Z/marker_at=2026-11-17 12:18:54}" \
+  "${EVP/sub_condition=none/sub_condition=none\`}" \
+  "x$EVP"; do
+  sk_check "G4 negative fixture does NOT match SOAK_EV_RE: ...${fx: -50}" eval '! re_full "$SOAK_EV_RE" "$fx"'
+done
+sk_check "G4: INSTANCE_EV_RE matches the PASS line and the host=invalid rc=none CANNOT_ESTABLISH line" \
+  eval 're_full "$INSTANCE_EV_RE" "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=0 verdict=PASS" && re_full "$INSTANCE_EV_RE" "SOLEUR_INSTANCE_SOAK host=invalid grader=web2-luks-live-6931 rc=none verdict=CANNOT_ESTABLISH"'
+sk_check "G4: INSTANCE_EV_RE refuses an unknown verdict word, a trailing field and a NOT YET with a space" \
+  eval '! re_full "$INSTANCE_EV_RE" "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=0 verdict=OK" && ! re_full "$INSTANCE_EV_RE" "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=0 verdict=PASS x=1" && ! re_full "$INSTANCE_EV_RE" "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=2 verdict=NOT YET"'
+sk_check "R9: INSTANCE_EV_RE matches the rc=interrupted line (a cancel/timeout, distinct from rc=none)" \
+  eval 're_full "$INSTANCE_EV_RE" "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=interrupted verdict=CANNOT_ESTABLISH"'
+sk_check "GRADE_TEXT_RE accepts a verdict-shaped line and refuses a backtick (fence break-out) or a workflow command" \
+  eval '[[ "PASS: ok — 3 days" =~ $GRADE_TEXT_RE && ! "NOT YET: x \`\`\`" =~ $GRADE_TEXT_RE && ! "::error::x" =~ $GRADE_TEXT_RE ]]'
+sk_check "test-design P3: has_gate_fail is whole-line anchored (an evidence line ending sub_condition=X is not a gate_fail line)" \
+  eval '! has_gate_fail "SOLEUR_SOAK_EVIDENCE kind=git_data verdict=fail sub_condition=B_luks_soak_not_elapsed" B_luks_soak_not_elapsed && has_gate_fail "gate_fail sub_condition=B_luks_soak_not_elapsed" B_luks_soak_not_elapsed'
+sk_one_grammar() { # the grammar is assigned in exactly one non-test file of the tree: the helper
+  local got
+  got="$(cd "$REPO_ROOT" && grep -rlE --exclude-dir=node_modules '^(readonly[[:space:]]+)?SOAK_EV_RE=' apps scripts .github tests plugins 2>/dev/null | grep -v '\.test\.' | LC_ALL=C sort | tr '\n' ' ' || true)"
+  [[ "$got" == "scripts/lib/serve-soak-evidence.sh " ]]
+}
+sk_check "G4: SOAK_EV_RE is defined in exactly one non-test file of the tree (the helper)" sk_one_grammar
+sk_parity() { # F8/G8: grader SOAK_DAYS == gate SOAK_FLOOR_DAYS (both non-empty); helper SOAK_FLOOR_S == both * 86400
+  local g f s
+  g="$(sed -nE 's/^SOAK_DAYS=([0-9]+)$/\1/p' "$GRADER_FILE")"; f="$(sed -nE 's/^SOAK_FLOOR_DAYS=([0-9]+)$/\1/p' "$GATE")"
+  s="$(sed -nE 's/^readonly SOAK_FLOOR_S=([0-9]+)$/\1/p' "$SSE_LIB" 2>/dev/null)"
+  [[ -n "$g" && -n "$f" && -n "$s" && "$g" != *$'\n'* && "$f" != *$'\n'* && "$s" != *$'\n'* ]] || return 1
+  [[ "$g" == "$f" && "$s" -eq $(( f * 86400 )) && "$s" -eq $(( g * 86400 )) && "$SOAK_FLOOR_S" == "$s" ]]
+}
+sk_check "F8/G8 parity: grader SOAK_DAYS = gate SOAK_FLOOR_DAYS, and the helper's SOAK_FLOOR_S = both x 86400" sk_parity
+sk_check "F8: the grader's comment above SOAK_DAYS=3 names SOAK_FLOOR_DAYS and the parity row" \
+  eval '[[ "$(grep -B1 -E "^SOAK_DAYS=3\$" "$GRADER_FILE" | head -1)" == *SOAK_FLOOR_DAYS* && "$(grep -B1 -E "^SOAK_DAYS=3\$" "$GRADER_FILE" | head -1)" == *parity* ]]'
+sk_census_substring() { # every sub_condition= check in both gate suites is anchored on the whole gate_fail line
+  local needle='*"''sub_condition=' f n=0
+  for f in "$SCRIPT_DIR/lb-weight-gate.test.sh" "$SCRIPT_DIR/lb-weight-gate-with-marker.test.sh"; do
+    n=$(( n + $(grep -vE '^[[:space:]]*#' "$f" | grep -cF -- "$needle" || true) ))
+  done
+  [[ "$n" -eq 0 ]]
+}
+sk_check "census: no sub_condition= substring check remains in either gate suite (all anchored on the whole gate_fail line)" sk_census_substring
+sec_close
+
+# -----------------------------------------------------------------------------------------------------------------
+# §SK-wiring — Guard 3 / Guard 4 YAML wiring + host parity + knob census, each with committed mutation rows (G5).
+# -----------------------------------------------------------------------------------------------------------------
+sk_job() { awk '/^  ga_pool_update:/ {on=1; print; next} on && /^  [A-Za-z0-9_-]+:/ {exit} on {print}' "$1" 2>/dev/null || true; }
+sk_step() { # <job-text> <ERE on the - name: line>
+  PAT="$2" awk '/^      - / { if (on) exit; if ($0 ~ /^      - name:/ && $0 ~ ENVIRON["PAT"]) on = 1 } on { print }' <<<"$1"
+}
+sk_line() { local n; n="$(grep -nE "^      - name:.*($2)" <<<"$1" | head -1 | cut -d: -f1 || true)"; echo "${n:-0}"; }
+sk_run() { awk '/^        run: \|[[:space:]]*$/ {on=1; next} on {print}' <<<"$1" | sed -E 's/^          //'; }
+sk_nc() { grep -vE '^[[:space:]]*#' <<<"$1" || true; }
+SK_GRADER_CALL='sse_instance_soak "$SOLEUR_GATED_HOST" "${GITHUB_WORKSPACE}/scripts/followthroughs/web2-luks-live-6931.sh"'
+SK_LOAD_GRADER='source "$sse_f" && declare -F sse_instance_soak >/dev/null || { echo "::error::serve-soak-evidence helper not loaded ($sse_f) - wiring defect, do not re-dispatch"; exit 1; }'
+SK_LOAD_GATE='source "$sse_f" && declare -F sse_gate_chain_mirror >/dev/null && declare -F sse_gate_chain_verify >/dev/null || { echo "::error::serve-soak-evidence helper not loaded ($sse_f) - wiring defect, do not re-dispatch"; exit 1; }'
+SK_SSE_F='sse_f="${GITHUB_WORKSPACE}/scripts/lib/serve-soak-evidence.sh"'
+SK_MIRROR='sse_gate_chain_mirror "${RUNNER_TEMP}/lb-gate.stderr" "$SOLEUR_GATED_HOST" "$gate_rc"'
+SK_BACKSTOP='[[ "$gate_rc" -eq 0 ]] || exit 1'
+SK_VERIFY='sse_gate_chain_verify "${RUNNER_TEMP}/lb-gate.stderr" "$SOLEUR_GATED_HOST"'
+SK_TRAP="trap 'cat \"\${RUNNER_TEMP}/lb-gate.stderr\" >&2; rm -f \"\${RUNNER_TEMP}/lb-gate.stderr\"' EXIT"
+SK_INNER_ENV='env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \'
+
+sk_grader_ok() { # <workflow> -> 0 iff the grader step is wired as Guard 3 requires (AC8)
+  local job st nc run runnc keys envs want ga gr he pl
+  job="$(sk_job "$1")"; [[ -n "$job" ]] || return 1
+  [[ "$(grep -cE '^      - name: per-instance soak grader \(serve only\)[[:space:]]*$' <<<"$job" || true)" -eq 1 ]] || return 1
+  st="$(sk_step "$job" 'per-instance soak grader \(serve only\)')"; nc="$(sk_nc "$st")"
+  keys="$(sed -nE 's/^      - (name):.*/\1/p; s/^        ([A-Za-z_-]+):.*/\1/p' <<<"$nc" | tr '\n' ',')"
+  [[ "$keys" == "name,if,env,run," ]] || return 1
+  grep -qxE "        if: inputs\.mode == 'serve'" <<<"$nc" || return 1
+  envs="$(awk '/^        env:/ {on=1; next} /^        [A-Za-z]/ {on=0} on' <<<"$nc" | LC_ALL=C sort | tr '\n' '|')"
+  want="$(printf '%s\n' '          SOLEUR_GATED_HOST: web-2' \
+    '          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}' \
+    '          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}' \
+    '          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}' | LC_ALL=C sort | tr '\n' '|')"
+  [[ "$envs" == "$want" ]] || return 1
+  run="$(sk_run "$st")"; runnc="$(sk_nc "$run")"
+  [[ "$(head -1 <<<"$runnc")" == "set -euo pipefail" ]] || return 1
+  ! grep -qF 'secrets.' <<<"$runnc" || return 1
+  ! grep -qE 'continue-on-error|\|\|[[:space:]]*true|set[[:space:]]+\+e|^[[:space:]]*shell:' <<<"$nc" || return 1
+  ! grep -qE '^    defaults:' <<<"$job" || return 1
+  # the helper owns this step's traps (R7): any trap here (an ERR trap that exits 0) could turn its refusal green
+  ! grep -qE '(^|[;&|[:space:]])trap([[:space:]]|$)' <<<"$runnc" || return 1
+  grep -qxF '# shellcheck source=scripts/lib/serve-soak-evidence.sh' <<<"$run" || return 1
+  grep -qxF -- "$SK_SSE_F" <<<"$runnc" || return 1
+  [[ "$(grep -cxF -- "$SK_LOAD_GRADER" <<<"$runnc" || true)" -eq 1 ]] || return 1
+  [[ "$(grep -cxF -- "$SK_GRADER_CALL" <<<"$runnc" || true)" -eq 1 ]] || return 1
+  [[ "$(grep -c 'sse_instance_soak' <<<"$runnc" || true)" -eq 2 ]] || return 1
+  # the whole non-comment body, line for line (test-design P2: `set +o errexit` / `exit 0` slip past any denylist)
+  [[ "$(grep -v '^[[:space:]]*$' <<<"$runnc")" == "$(printf '%s\n' 'set -euo pipefail' "$SK_SSE_F" "$SK_LOAD_GRADER" "$SK_GRADER_CALL")" ]] || return 1
+  ga="$(sk_line "$job" '§\(c\) gate chain')"; gr="$(sk_line "$job" 'per-instance soak grader \(serve only\)')"
+  he="$(sk_line "$job" 'web-2 health precondition')"; pl="$(sk_line "$job" 'Terraform plan \(GA pool')"
+  [[ "$ga" -gt 0 && "$gr" -gt "$ga" && "$he" -gt "$gr" && "$pl" -gt "$gr" ]] || return 1
+  return 0
+}
+# the gate step's whole non-comment run body, line for line (fix round, test-design P2: `exit "0"` / `exit 00` slip
+# past any errexit denylist; the flip-marker `if` line is pinned by the same snapshot)
+SK_GATE_BODY="$(cat <<'SKGATEBODY'
+set -euo pipefail
+GATE_OUT=""
+gate_rc=0
+: >"${RUNNER_TEMP}/lb-gate.stderr"
+trap 'cat "${RUNNER_TEMP}/lb-gate.stderr" >&2; rm -f "${RUNNER_TEMP}/lb-gate.stderr"' EXIT
+GATE_OUT="$(env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler run --preserve-env -p soleur -c prd -- \
+  env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \
+    SOLEUR_WEB2_SERVING_WEIGHT="$WEB2_LB_WEIGHT" SOLEUR_GATED_HOST="web-2" \
+    SOLEUR_SERVING_ROTATION="web-1,web-2" \
+  bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh" 2>"${RUNNER_TEMP}/lb-gate.stderr")" || gate_rc=$?
+sse_f="${GITHUB_WORKSPACE}/scripts/lib/serve-soak-evidence.sh"
+source "$sse_f" && declare -F sse_gate_chain_mirror >/dev/null && declare -F sse_gate_chain_verify >/dev/null || { echo "::error::serve-soak-evidence helper not loaded ($sse_f) - wiring defect, do not re-dispatch"; exit 1; }
+sse_gate_chain_mirror "${RUNNER_TEMP}/lb-gate.stderr" "$SOLEUR_GATED_HOST" "$gate_rc"
+[[ "$gate_rc" -eq 0 ]] || exit 1
+printf '%s\n' "$GATE_OUT"
+if ! grep -q 'requires_runtime_bind_probe=true' <<<"$GATE_OUT"; then
+  echo "::error::§(c) gate chain exited 0 WITHOUT the flip-authorization marker (requires_runtime_bind_probe=true) — the standby branch passed vacuously and Conditions A/B were never evaluated; web-2 is NOT authorized to serve. NOTHING planned, NOTHING applied."
+  exit 1
+fi
+sse_gate_chain_verify "${RUNNER_TEMP}/lb-gate.stderr" "$SOLEUR_GATED_HOST"
+SKGATEBODY
+)"
+sk_gate_ok() { # <workflow> -> 0 iff the gate chain step captures, replays, mirrors, backstops and re-checks (Guard 4)
+  local job st nc run runnc a b c d m keys
+  job="$(sk_job "$1")"; st="$(sk_step "$job" '§\(c\) gate chain')"; [[ -n "$st" ]] || return 1
+  nc="$(sk_nc "$st")"; run="$(sk_run "$st")"; runnc="$(sk_nc "$run")"
+  keys="$(sed -nE 's/^      - (name):.*/\1/p; s/^        ([A-Za-z_-]+):.*/\1/p' <<<"$nc" | tr '\n' ',')"
+  [[ "$keys" == "name,if,env,run," ]] || return 1
+  ! grep -qE '^    defaults:' <<<"$job" || return 1
+  [[ "$(grep -cE '(^|[;&|[:space:]])trap([[:space:]]|$)' <<<"$runnc" || true)" -eq 1 ]] || return 1
+  [[ "$(grep -cxF -- "            $SK_INNER_ENV" <<<"$nc" || true)" -eq 1 ]] || return 1
+  grep -qxF '          SOLEUR_GATED_HOST: web-2' <<<"$nc" || return 1
+  [[ "$(head -1 <<<"$runnc")" == "set -euo pipefail" ]] || return 1
+  a="$(grep -nxF 'gate_rc=0' <<<"$runnc" | head -1 | cut -d: -f1 || true)"; b="$(grep -nxF ': >"${RUNNER_TEMP}/lb-gate.stderr"' <<<"$runnc" | head -1 | cut -d: -f1 || true)"
+  c="$(grep -nxF -- "$SK_TRAP" <<<"$runnc" | head -1 | cut -d: -f1 || true)"; d="$(grep -nE '^GATE_OUT="\$\(env DOPPLER_TOKEN=' <<<"$runnc" | head -1 | cut -d: -f1 || true)"
+  [[ -n "$a" && -n "$b" && -n "$c" && -n "$d" && "$a" -lt "$d" && "$b" -lt "$d" && "$c" -lt "$d" ]] || return 1
+  [[ "$(grep -cF 'lb-weight-gate-with-marker.sh" 2>"${RUNNER_TEMP}/lb-gate.stderr")" || gate_rc=$?' <<<"$runnc" || true)" -eq 1 ]] || return 1
+  grep -qxF '# shellcheck source=scripts/lib/serve-soak-evidence.sh' <<<"$run" || return 1
+  grep -qxF -- "$SK_SSE_F" <<<"$runnc" || return 1
+  [[ "$(grep -cxF -- "$SK_LOAD_GATE" <<<"$runnc" || true)" -eq 1 ]] || return 1
+  [[ "$(grep -cxF -- "$SK_MIRROR" <<<"$runnc" || true)" -eq 1 && "$(grep -c 'sse_gate_chain_mirror' <<<"$runnc" || true)" -eq 2 ]] || return 1
+  m="$(grep -nxF -- "$SK_MIRROR" <<<"$runnc" | cut -d: -f1 || true)"
+  [[ "$(sed -n "$((m + 1))p" <<<"$runnc")" == "$SK_BACKSTOP" ]] || return 1
+  [[ "$(grep -cxF -- "$SK_VERIFY" <<<"$runnc" || true)" -eq 1 && "$(grep -c 'sse_gate_chain_verify' <<<"$runnc" || true)" -eq 2 ]] || return 1
+  [[ "$(grep -nxF -- "$SK_VERIFY" <<<"$runnc" | cut -d: -f1)" -gt "$(grep -nF "grep -q 'requires_runtime_bind_probe=true'" <<<"$runnc" | head -1 | cut -d: -f1)" ]] || return 1
+  ! grep -qE 'continue-on-error|\|\|[[:space:]]*true|set[[:space:]]+\+e' <<<"$nc" || return 1
+  ! grep -qE 'set[[:space:]]+\+o|errexit|(^|[;&|[:space:]])exit[[:space:]]+0([;[:space:]]|$)' <<<"$runnc" || return 1
+  # comment lines are dropped only when they do not sit inside a backslash continuation (fix round 2, P3: a
+  # comment there ends the command early); blank lines are dropped as before
+  [[ "$(awk '/^[[:space:]]*#/ && prev !~ /\\$/ {next} /^[[:space:]]*$/ {next} {print; prev=$0}' <<<"$run")" == "$SK_GATE_BODY" ]] || return 1
+  return 0
+}
+# every step from the gate chain on carries no if:, or exactly the serve condition (test-design P2: `if: always()` on
+# plan/apply would let a refused gate or grader step reach apply)
+sk_downstream_if_ok() {
+  local job; job="$(sk_job "$1")"; [[ -n "$job" ]] || return 1
+  local ifs # both YAML spellings: `        if:` after `- name:`, and `      - if:` as the step's first key (fix round)
+  ifs="$(awk '/^(      - |        )name: §\(c\) gate chain/ {on=1} on && /^(      - |        )if:/ {sub(/^      - if:/, "        if:"); print}' <<<"$job")"
+  ! grep -q . < <(grep -vxF "        if: inputs.mode == 'serve'" <<<"$ifs") || return 1
+  [[ "$(grep -c . <<<"$ifs" || true)" -ge 4 ]]
+}
+# R4 class (fix round): the health step's doppler-run shell unsets every bash startup variable a prd_terraform
+# secret could plant (BASH_ENV/ENV run a file; SHELLOPTS=xtrace + PS4='$(cmd)' runs a command) - exactly once
+sk_health_env_ok() {
+  local job st nc; job="$(sk_job "$1")"; st="$(sk_step "$job" 'web-2 health precondition')"; nc="$(sk_nc "$(sk_run "$st")")"
+  [[ "$(grep -cF -- "-c prd_terraform -- env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 bash -c '" <<<"$nc" || true)" -eq 1 ]] \
+    && [[ "$(grep -c 'doppler run' <<<"$nc" || true)" -eq 1 ]]
+}
+# Fix round 2 (test-design P2): the step-key checks read the PARSED job, so a quoted or spaced key (`"if":`,
+# `if :`, `"shell":`) - the same key to a YAML parser - cannot slip past a text match on `if:` / `shell:`.
+# Gate and grader steps: exactly {name, if, env, run}. Every step from the gate on: no shell, no
+# continue-on-error, and no `if` or exactly the serve condition. At least 4 steps from the gate on carry it.
+sk_yaml_ok() {
+  SK_YF="$1" python3 - <<'SKYAML' 2>/dev/null
+import os, sys, yaml
+try:
+    wf = yaml.safe_load(open(os.environ["SK_YF"]))
+    steps = wf["jobs"]["ga_pool_update"]["steps"]
+except Exception:
+    sys.exit(1)
+names = [str(st.get("name", "")) for st in steps]
+gi = [i for i, n in enumerate(names) if n.startswith("§(c) gate chain")]
+ri = [i for i, n in enumerate(names) if n.startswith("per-instance soak grader")]
+if len(gi) != 1 or len(ri) != 1 or ri[0] < gi[0]:
+    sys.exit(1)
+serve = "inputs.mode == 'serve'"
+for i in (gi[0], ri[0]):
+    if set(steps[i].keys()) != {"name", "if", "env", "run"} or steps[i]["if"] != serve:
+        sys.exit(1)
+gated = 0
+for st in steps[gi[0]:]:
+    if "shell" in st or "continue-on-error" in st:
+        sys.exit(1)
+    if "if" in st:
+        if st["if"] != serve:
+            sys.exit(1)
+        gated += 1
+sys.exit(0 if gated >= 4 else 1)
+SKYAML
+}
+sk_host_parity_ok() { # <workflow> -> the five web-2 literal sites agree (the #12869 un-keying list)
+  local job gs gr inner step_gate step_grader wrap rows helper
+  job="$(sk_job "$1")"; gs="$(sk_nc "$(sk_step "$job" '§\(c\) gate chain')")"; gr="$(sk_nc "$(sk_step "$job" 'per-instance soak grader \(serve only\)')")"
+  step_gate="$(sed -nE 's/^          SOLEUR_GATED_HOST: ([a-z0-9-]+)[[:space:]]*$/\1/p' <<<"$gs")"
+  inner="$(grep -oE 'SOLEUR_GATED_HOST="[^"]+"' <<<"$gs" | sed -E 's/^SOLEUR_GATED_HOST="(.*)"$/\1/' || true)"
+  step_grader="$(sed -nE 's/^          SOLEUR_GATED_HOST: ([a-z0-9-]+)[[:space:]]*$/\1/p' <<<"$gr")"
+  wrap="$(sed -nE 's/^MARKER_HOST="([^"]+)".*/\1/p' "$WRAPPER_FILE")"
+  rows="$(sed -nE 's/^W2L_HOST_NAME="soleur-([^"]+)".*/\1/p' "$ROWS_LIB_FILE")"
+  helper="$(sed -nE 's/^readonly SSE_GRADED_HOST="([^"]+)".*/\1/p' "$SSE_LIB" 2>/dev/null)"
+  [[ -n "$step_gate" && "$step_gate" != *$'\n'* ]] || return 1
+  [[ "$inner" == "$step_gate" && "$step_grader" == "$step_gate" && "$wrap" == "$step_gate" && "$rows" == "$step_gate" && "$helper" == "$step_gate" ]]
+}
+sk_knob_census_ok() { local nc; nc="$(grep -vE '^[[:space:]]*#' "$1" || true)"; ! grep -qE '(GIT_DATA|WORKSPACES)_LUKS_SOAK_DAYS' <<<"$nc"; }
+sk_no_marker_name() { ! grep -qiE 'workspaces_luks_cutover_at' "$1"; }
+sk_grader_name_ok() { # the helper's grader= value is the basename of the grader the step hands it
+  [[ "${SSE_GRADER_NAME:-}" == web2-luks-live-6931 ]] && grep -qF "scripts/followthroughs/${SSE_GRADER_NAME}.sh\"" <<<"$(sk_job "$1")"
+}
+sec_open wiring 48
+sk_check "G3/AC8: ga_pool_update has exactly one 'per-instance soak grader (serve only)' step: keys name/if/env/run, serve-gated, env exactly SOLEUR_GATED_HOST + the three BETTERSTACK_QUERY_* secrets, no tolerance, guarded helper load, one bare sse_instance_soak call, gate < grader < health < plan" sk_grader_ok "$WF"
+sk_check "G4: the gate chain step: step-level SOLEUR_GATED_HOST, gate_rc=0, the stderr file truncated, the EXIT replay trap, the redirect after the wrapper path with || gate_rc=\$?, a guarded helper load, the bare mirror call followed by the inline backstop, and the re-check after the flip-marker check" sk_gate_ok "$WF"
+sk_check "G3/F5: the web-2 literal agrees at all five sites (gate step env, the inner literal, grader step env, the wrapper's MARKER_HOST, the rows library's W2L_HOST_NAME, the helper's SSE_GRADED_HOST) — the #12869 un-keying list" sk_host_parity_ok "$WF"
+sk_check "G1 row 11: no (GIT_DATA|WORKSPACES)_LUKS_SOAK_DAYS on any non-comment line of cf-lb-overlay.yml (doppler run --preserve-env would let an ambient value win)" sk_knob_census_ok "$WF"
+sk_check "AC19: cf-lb-overlay.yml never names the soak marker's Doppler name, in any case, not even in a comment" sk_no_marker_name "$WF"
+sk_check "G3: the helper's grader= value (SSE_GRADER_NAME) is the basename of the grader the step hands it" sk_grader_name_ok "$WF"
+sk_check "test-design P2: every ga_pool_update step from the gate chain on has no if: or exactly inputs.mode == 'serve' (a refusal cannot reach apply)" sk_downstream_if_ok "$WF"
+sk_check "fix round 2: the PARSED job agrees - gate/grader keys {name,if,env,run}, no shell/continue-on-error and only the serve if: from the gate on" sk_yaml_ok "$WF"
+sk_check "R4 class: the health step's doppler-run shell unsets BASH_ENV, ENV, SHELLOPTS, BASHOPTS and PS4" sk_health_env_ok "$WF"
+sk_check "R2 parity: the knob the helper sets (W2L_REQUIRE_BOOT_JOIN=1) is the one the grader reads, once each, outside comments" \
+  eval '[[ "$(grep -vE "^[[:space:]]*#" "$SSE_LIB" | grep -cF "W2L_REQUIRE_BOOT_JOIN=1" || true)" -eq 1 && "$(grep -vE "^[[:space:]]*#" "$REPO_ROOT/scripts/followthroughs/web2-luks-live-6931.sh" | grep -cF "\"\${W2L_REQUIRE_BOOT_JOIN:-}\" == 1" || true)" -eq 1 ]]'
+SKW="$SK_WORK/wf"; mkdir -p "$SKW"
+skmut() { # <label> <guard-fn> <awk-program> — committed mutation: it must LAND and the guard must go RED
+  local f="$SKW/m.yml"
+  awk "$3" "$WF" > "$f"
+  if cmp -s "$WF" "$f"; then srow "$1: the mutation did not land (copy identical to pristine)" 0; return; fi
+  if "$2" "$f"; then srow "$1 stayed GREEN" 0; else srow "$1 -> RED" 1; fi
+}
+SK_IN_GRADER='/^      - name: per-instance soak grader/ {g=1; print; next} /^      - / {g=0}'
+SK_IN_GATE='/^      - name: §\(c\) gate chain/ {g=1; print; next} /^      - / {g=0}'
+skmut "G3-1a committed mutant: the grader step's if: becomes false" sk_grader_ok "$SK_IN_GRADER"' g && /^        if: / {print "        if: false"; next} {print}'
+skmut "G3-1b committed mutant: the grader step's serve condition is removed" sk_grader_ok "$SK_IN_GRADER"' g && /^        if: / {next} {print}'
+skmut "G3-2 committed mutant: the grader step moves after the Terraform plan step" sk_grader_ok '/^      - name: per-instance soak grader/ {buf=1} buf && /^      - / && !/per-instance soak grader/ {buf=0} buf {held = held $0 "\n"; next} /^      - name: Plan gate \(updates/ {printf "%s", held} {print}'
+skmut "G3-3a committed mutant: continue-on-error: true on the grader step" sk_grader_ok "$SK_IN_GRADER"' g && /^        if: / {print; print "        continue-on-error: true"; next} {print}'
+skmut "G3-3b committed mutant: || true after the helper call" sk_grader_ok '{ if ($0 ~ /^          sse_instance_soak "\$SOLEUR_GATED_HOST"/) print $0 " || true"; else print }'
+skmut "G3-4 committed mutant: a shell: key on the grader step" sk_grader_ok "$SK_IN_GRADER"' g && /^        if: / {print; print "        shell: bash"; next} {print}'
+skmut "G3-4c committed mutant: a job-level defaults: block" sk_grader_ok '{print} /^  ga_pool_update:/ {inj=1} inj && /^    timeout-minutes:/ {print "    defaults:"; print "      run:"; print "        shell: bash"; inj=0}'
+skmut "G3-4d committed mutant: the grader step's helper load is unguarded (a bare source)" sk_grader_ok "$SK_IN_GRADER"' g && /^          source "\$sse_f" && declare -F sse_instance_soak/ {print "          source \"$sse_f\""; next} {print}'
+skmut "G3-4e committed mutant: the grader step names a credential through secrets. in its run body" sk_grader_ok '{print} /^          sse_instance_soak "\$SOLEUR_GATED_HOST"/ {print "          echo \"${{ secrets.BETTERSTACK_QUERY_PASSWORD }}\" >/dev/null"}'
+skmut "G3-4b1 committed mutant: the gate step's inline backstop is deleted" sk_gate_ok '!/^          \[\[ "\$gate_rc" -eq 0 \]\] \|\| exit 1$/ {print}'
+skmut "G3-4b2 committed mutant: the mirror call is wrapped in if (errexit off for it)" sk_gate_ok '{ if ($0 ~ /^          sse_gate_chain_mirror /) print "          if " substr($0, 11) "; then :; fi"; else print }'
+skmut "G3-4b3 committed mutant: the pass re-check is dropped" sk_gate_ok '!/^          sse_gate_chain_verify / {print}'
+skmut "G3-4b4 committed mutant: the gate rc is swallowed (|| true instead of || gate_rc=\$?)" sk_gate_ok '{ sub(/ \|\| gate_rc=\$\?$/, " || true"); print }'
+skmut "G4-3 committed mutant: the EXIT replay trap is dropped" sk_gate_ok '!/^          trap .cat "\$\{RUNNER_TEMP\}\/lb-gate.stderr" >&2; rm -f "\$\{RUNNER_TEMP\}\/lb-gate.stderr". EXIT$/ {print}'
+skmut "G4-3b committed mutant: the stderr capture moves outside the substitution (2> after the closing paren)" sk_gate_ok '{ if ($0 ~ /lb-weight-gate-with-marker.sh" 2>"\$\{RUNNER_TEMP\}\/lb-gate.stderr"\)" \|\| gate_rc=\$\?$/) sub(/" 2>"\$\{RUNNER_TEMP\}\/lb-gate.stderr"\)"/, "\")\" 2>\"${RUNNER_TEMP}/lb-gate.stderr\""); print }'
+skmut "R7 committed mutant: trap 'exit 0' ERR before the bare sse_instance_soak call" sk_grader_ok '/^          sse_instance_soak "\$SOLEUR_GATED_HOST"/ {print "          trap '"'"'exit 0'"'"' ERR"} {print}'
+skmut "R7 committed mutant: a second trap (ERR, exit 0) in the gate step" sk_gate_ok '{print} /^          trap .cat "\$\{RUNNER_TEMP\}\/lb-gate.stderr" >&2; rm -f/ {print "          trap '"'"'exit 0'"'"' ERR"}'
+skmut "R7 committed mutant: a shell: key on the gate step" sk_gate_ok "$SK_IN_GATE"' g && /^        if: / {print; print "        shell: bash"; next} {print}'
+skmut "R4 class committed mutant: the gate step's inner env keeps BASH_ENV/ENV out but lets SHELLOPTS in" sk_gate_ok '{ sub(/ -u SHELLOPTS -u BASHOPTS -u PS4 DOPPLER_TOKEN=/, " DOPPLER_TOKEN="); print }'
+skmut "R4 class committed mutant: the health step's shell lets SHELLOPTS/PS4 in" sk_health_env_ok '{ sub(/-- env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 bash -c/, "-- env -u BASH_ENV -u ENV bash -c"); print }'
+skmut "R4 committed mutant: the gate step's inner env no longer unsets BASH_ENV/ENV" sk_gate_ok '{ sub(/env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 DOPPLER_TOKEN="\$DOPPLER_TOKEN_LUKS_MARKER"/, "env DOPPLER_TOKEN=\"$DOPPLER_TOKEN_LUKS_MARKER\""); print }'
+skmut "test-design P2 committed mutant: set +o errexit + exit 0 in the grader step" sk_grader_ok "$SK_IN_GRADER"' g && /^          set -euo pipefail$/ {print; print "          set +o errexit"; next} {print} /^          sse_instance_soak "\$SOLEUR_GATED_HOST"/ {print "          exit 0"}'
+skmut "test-design P2 committed mutant: set +o errexit before the gate step's re-check" sk_gate_ok '/^          sse_gate_chain_verify / {print "          set +o errexit"} {print}'
+skmut "fix round 2 committed mutant: a quoted \"if\": always() on the apply step" sk_yaml_ok '{print} /^      - name: Terraform apply \(the graded tfplan\)/ {print "        \"if\": always()"}'
+skmut "fix round 2 committed mutant: a spaced 'if :' always() on the apply step" sk_yaml_ok '{print} /^      - name: Terraform apply \(the graded tfplan\)/ {print "        if : always()"}'
+skmut "fix round 2 committed mutant: a quoted \"shell\": on the grader step" sk_yaml_ok '{print} /^      - name: per-instance soak grader/ {print "        \"shell\": bash -c '"'"'exit 0'"'"' {0}"}'
+skmut "fix round 2 committed mutant: a quoted \"shell\": on the gate step" sk_yaml_ok '{print} /^      - name: §\(c\) gate chain/ {print "        \"shell\": bash -c '"'"'exit 0'"'"' {0}"}'
+skmut "fix round 2 committed mutant: a comment inside the gate step's backslash continuation" sk_gate_ok '{print} /^            env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 DOPPLER_TOKEN=/ {print "            # inner env hands the wrapper its token"}'
+skmut "fix-round committed mutant: '- if: always()' as the apply step's first key" sk_downstream_if_ok '/^      - name: Terraform apply \(the graded tfplan\)/ {print "      - if: always()"; sub(/^      - name:/, "        name:")} {print}'
+skmut "fix-round committed mutant: exit \"0\" right after set -euo pipefail in the gate step" sk_gate_ok "$SK_IN_GATE"' g && /^          set -euo pipefail$/ {print; print "          exit \"0\""; next} {print}'
+skmut "test-design P2 committed mutant: if: always() on the Terraform apply step" sk_downstream_if_ok '{print} /^      - name: Terraform apply \(the graded tfplan\)/ {print "        if: always()"}'
+skmut "G3-5 committed mutant: the grader step's host becomes web-3 while the gate step keeps web-2" sk_host_parity_ok "$SK_IN_GRADER"' g && /^          SOLEUR_GATED_HOST: web-2$/ {print "          SOLEUR_GATED_HOST: web-3"; next} {print}'
+skmut "G3-5b committed mutant: the gate step's step-level host becomes web-3 while the inner literal keeps web-2" sk_host_parity_ok "$SK_IN_GATE"' g && /^          SOLEUR_GATED_HOST: web-2$/ {print "          SOLEUR_GATED_HOST: web-3"; next} {print}'
+skmut "G1-11a committed mutant: a soak knob in the gate step's env:" sk_knob_census_ok "$SK_IN_GATE"' g && /^          DOPPLER_TOKEN_LUKS_MARKER:/ {print; print "          WORKSPACES_LUKS_SOAK_DAYS: \"1\""; next} {print}'
+skmut "G1-11b committed mutant: a soak knob in the job's env:" sk_knob_census_ok '{print} /^  ga_pool_update:/ {inj=1} inj && /^    timeout-minutes:/ {print "    env:"; print "      GIT_DATA_LUKS_SOAK_DAYS: \"1\""; inj=0}'
+skmut "G1-11c committed mutant: an earlier step exports a soak knob to GITHUB_ENV" sk_knob_census_ok '{print} /^          echo "WEB2_LB_WEIGHT=\$\{WEB2_LB_WEIGHT\}" >> "\$GITHUB_ENV"/ {print "          echo \"WORKSPACES_LUKS_SOAK_DAYS=1\" >> \"$GITHUB_ENV\""}'
+P_WORK="$SK_WORK/p"; mkdir -p "$P_WORK"
+skmut "G1-10 committed mutant: WORKSPACES_LUKS_SOAK_DAYS=3 pinned in the gate step's inner env (p_guard C.4-P1)" p_guard '{print} /^              SOLEUR_SERVING_ROTATION="web-1,web-2" \\$/ {print "              WORKSPACES_LUKS_SOAK_DAYS=\"3\" \\"}'
+# the trap line, EXECUTED: on any exit it replays every captured line (evidence and gate_fail) to the log
+sk_trap_exec() {
+  local st run line out
+  st="$(sk_step "$(sk_job "$WF")" '§\(c\) gate chain')"; run="$(sk_nc "$(sk_run "$st")")"
+  line="$(grep -xF -- "$SK_TRAP" <<<"$run" | head -1)"; [[ -n "$line" ]] || return 1
+  mkdir -p "$SK_WORK/rt"
+  local want; want="$(printf '%s\n' "$EVP" 'a Doppler notice' 'gate_fail sub_condition=B_luks_soak_not_elapsed')"
+  printf '%s\n' "$want" > "$SK_WORK/rt/lb-gate.stderr"
+  out="$(env -i PATH=/usr/bin:/bin RUNNER_TEMP="$SK_WORK/rt" "$BASH_BIN" --norc -c "set -e; $line; exit 1" 2>&1 >/dev/null </dev/null || true)"
+  [[ "$out" == "$want" && ! -e "$SK_WORK/rt/lb-gate.stderr" ]]
+}
+sk_check "G4 executed: the gate step's EXIT trap replays the captured stderr (evidence + gate_fail lines) on a refusal exit, then removes the file" sk_trap_exec
+sec_close
+
+# -----------------------------------------------------------------------------------------------------------------
+# §SK-instance — Guard 3 executed rows on sse_instance_soak (a stub grader records its calls, env and clock).
+# -----------------------------------------------------------------------------------------------------------------
+SKI="$SK_WORK/inst"; mkdir -p "$SKI/home" "$SKI/rt"
+cat > "$SKI/grader.sh" <<EOF
+#!$BASH_BIN
+printf 'x\n' >> "$SKI/calls"
+env > "$SKI/env"
+printf '%s' "\${SOLEUR_FT_EARLIEST-__UNSET__}" > "$SKI/ft"
+if [ -f "$SKI/term" ]; then printf '%s' "\$\$" > "$SKI/pid"; exec sleep 30; fi
+cat "$SKI/text" 2>/dev/null
+exit "\$(cat "$SKI/rc" 2>/dev/null || echo 0)"
+EOF
+chmod +x "$SKI/grader.sh"
+SKI_RC=0; SKI_OUT=""; SKI_ERR=""
+# shellcheck disable=SC2034 # read inside the eval'd row predicates
+ski_run() { # <host> <stub-rc> <stub-text> [ENV=VAL ...] [-- shell-opts] — runs the helper in a clean env, as the step does
+  local host="$1" src="$2" txt="$3"; shift 3
+  : > "$SKI/calls"; rm -f "$SKI/env" "$SKI/ft"; : > "$SKI/summary"
+  printf '%s' "$src" > "$SKI/rc"; printf '%b' "$txt" > "$SKI/text"
+  env -i PATH="/usr/bin:/bin" HOME="$SKI/home" RUNNER_TEMP="$SKI/rt" GITHUB_STEP_SUMMARY="$SKI/summary" \
+    BETTERSTACK_QUERY_HOST=fixture-connect.betterstackdata.com BETTERSTACK_QUERY_USERNAME=fixture-user BETTERSTACK_QUERY_PASSWORD=fixture-pass \
+    "$@" "$BASH_BIN" -c "set ${SKI_OPTS:--euo} pipefail; source \"\$1\"; sse_instance_soak \"\$2\" \"\$3\"" _ "$SSE_LIB" "$host" "$SKI/grader.sh" \
+    >"$SKI/out" 2>"$SKI/err" && SKI_RC=0 || SKI_RC=$?
+  SKI_OUT="$(cat "$SKI/out")"; SKI_ERR="$(cat "$SKI/err")"
+}
+fenced() { # <file> <heading-prefix> -> the lines inside the ```text fence under the first heading with that prefix
+  awk -v h="$2" 'index($0, h) == 1 {seen = 1; next} seen && $0 == "```text" {on = 1; next} on && $0 == "```" {exit} on {print}' "$1"
+}
+ski_line_ok() { # <expected line> — exactly once on stderr, and the summary fence holds exactly it
+  local n; n="$(grep -cxF -- "$1" <<<"$SKI_ERR" || true)"
+  [[ "$n" -eq 1 && "$(fenced "$SKI/summary" '### per-instance soak grader (serve only)')" == "$1" ]] && re_full "$INSTANCE_EV_RE" "$1"
+}
+ski_calls() { [[ "$(grep -c . "$SKI/calls" || true)" -eq "$1" ]]; }
+sec_open instance 50
+for row in "0|PASS|PASS: the soak is met" "1|FAIL|FAIL: a non-green probe row" "2|NOT_YET|NOT YET: the soak is still running" \
+           "3|CANNOT_ESTABLISH|CANNOT ESTABLISH: BETTERSTACK_QUERY_HOST is not injected" "78|CANNOT_ESTABLISH|" "126|CANNOT_ESTABLISH|" "127|CANNOT_ESTABLISH|"; do
+  IFS='|' read -r src sv stxt <<<"$row"
+  ski_run web-2 "$src" "$stxt"
+  want="SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=${src} verdict=${sv}"
+  if [[ "$src" -eq 0 ]]; then
+    sk_check "G3 executed: grader rc 0 -> return 0 and '$want' on stderr and fenced in the summary" eval '[[ "$SKI_RC" -eq 0 ]] && ski_line_ok "$want"'
+    sk_check "G3 executed: grader rc 0 -> no ::error:: line" eval '[[ "$SKI_OUT$SKI_ERR" != *"::error::"* ]]'
+  else
+    sk_check "G3 executed: grader rc $src -> return 1 and '$want' on stderr and fenced in the summary" eval '[[ "$SKI_RC" -eq 1 ]] && ski_line_ok "$want"'
+    sk_check "G3 executed: grader rc $src -> an ::error:: naming verdict=$sv and NOTHING planned" eval '[[ "$SKI_OUT" == *"::error::per-instance soak grader verdict=${sv} rc=${src}"* && "$SKI_OUT" == *"NOTHING planned, NOTHING applied"* ]]'
+  fi
+  sk_check "G3 executed: grader rc $src -> the stub grader was called exactly once" ski_calls 1
+done
+ski_run web-2 2 'NOT YET: x' SOLEUR_FT_EARLIEST=2020-01-01T00:00:00Z
+sk_check "G3 executed: an ambient SOLEUR_FT_EARLIEST reaches the grader as EMPTY (no clock: an unmet soak is NOT YET, never a window FAIL)" eval '[[ -f "$SKI/ft" && "$(cat "$SKI/ft")" == "" ]]'
+ski_run web-2 0 'PASS: ok' HCLOUD_TOKEN=decoy-hcloud TF_VAR_github_app_runtime_doppler_token=decoy-tfvar DOPPLER_TOKEN=decoy-doppler AWS_SECRET_ACCESS_KEY=decoy-aws
+sk_check "G10 executed: the grader's environment is exactly the env -i allowlist (PATH HOME TMPDIR, the three BETTERSTACK_QUERY_*, SOLEUR_FT_EARLIEST) plus bash's own PWD/SHLVL/_" \
+  eval '[[ "$(sed -nE "s/^([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p" "$SKI/env" | LC_ALL=C sort | tr "\n" ",")" == "BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_PASSWORD,BETTERSTACK_QUERY_USERNAME,HOME,PATH,PWD,SHLVL,SOLEUR_FT_EARLIEST,TMPDIR,W2L_REQUIRE_BOOT_JOIN,_," ]]'
+sk_check "G10 executed: no planted decoy credential value (HCLOUD_TOKEN, TF_VAR_github_app_runtime_doppler_token, DOPPLER_TOKEN, AWS_SECRET_ACCESS_KEY) reached the grader" eval '! grep -q "decoy-" "$SKI/env"'
+sk_check "G10 executed: TMPDIR is RUNNER_TEMP" eval 'grep -qxF "TMPDIR=$SKI/rt" "$SKI/env"'
+sk_check "R10 executed: the grader's HOME is a fresh scratch dir under RUNNER_TEMP (never the job HOME, where ~/.jq could be planted), removed after the run" \
+  eval 'h="$(sed -n "s/^HOME=//p" "$SKI/env")"; [[ "$h" == "$SKI/rt/sse-grader-home."* && ! -e "$h" ]]'
+sk_check "R10 executed: the grader's PATH is pinned to /usr/bin:/bin" eval 'grep -qxF "PATH=/usr/bin:/bin" "$SKI/env"'
+sk_check "R2 executed: the serve arm asks the grader for the boot_id join (W2L_REQUIRE_BOOT_JOIN=1)" eval 'grep -qxF "W2L_REQUIRE_BOOT_JOIN=1" "$SKI/env"'
+ski_run web-3 0 'PASS: ok'
+sk_check "F5/G7 executed: gated host web-3 -> return 1 with 'SOLEUR_INSTANCE_SOAK host=web-3 ... rc=none verdict=CANNOT_ESTABLISH' (until #12869)" eval '[[ "$SKI_RC" -eq 1 ]] && ski_line_ok "SOLEUR_INSTANCE_SOAK host=web-3 grader=web2-luks-live-6931 rc=none verdict=CANNOT_ESTABLISH"'
+sk_check "F5/G7 executed: gated host web-3 -> the grader is never called, and an ::error:: says why" eval 'ski_calls 0 && [[ "$SKI_OUT" == *"::error::"*"web-2"* ]]'
+ski_run '' 0 'PASS: ok'
+sk_check "G7 executed: an empty gated host prints host=invalid rc=none verdict=CANNOT_ESTABLISH and never calls the grader" eval '[[ "$SKI_RC" -eq 1 ]] && ski_line_ok "SOLEUR_INSTANCE_SOAK host=invalid grader=web2-luks-live-6931 rc=none verdict=CANNOT_ESTABLISH" && ski_calls 0'
+ski_run 'Web 2;x' 0 'PASS: ok'
+sk_check "G7 executed: a malformed gated host prints host=invalid (never the raw text)" eval '[[ "$SKI_RC" -eq 1 && "$SKI_ERR" != *"Web 2"* ]] && ski_line_ok "SOLEUR_INSTANCE_SOAK host=invalid grader=web2-luks-live-6931 rc=none verdict=CANNOT_ESTABLISH"'
+ski_run web-2 2 'NOT YET: no GREEN web-2 readiness row opens the soak (RED none); web-2 has not been (re)born onto LUKS, or its probe/readiness telemetry is dark.'
+sk_check "G12 executed: NOT YET with no GREEN readiness row -> the grader's line is in the log" eval '[[ "$SKI_RC" -eq 1 && "$SKI_OUT$SKI_ERR" == *"NOT YET: no GREEN web-2 readiness row opens the soak"* ]]'
+sk_check "G12 executed: ...and the ::error:: names the 90-day replace next step (web-host-replace.md, the 3-day soak)" eval '[[ "$SKI_OUT" == *"::error::"*"90 days"*"web-host-replace.md"*"3-day soak"* ]]'
+ski_run web-2 1 'FAIL: spoiled'
+sk_check "G3 executed: FAIL -> the ::error:: says the soak is spoiled and a replace is the repair" eval '[[ "$SKI_OUT" == *"::error::"*"spoiled"*"replace is the repair"* ]]'
+sk_check "user-impact 1 executed: FAIL -> the ::error:: says to drain first if web-2 is serving" eval '[[ "$SKI_OUT" == *"::error::"*"mode=drain first"* ]]'
+sk_check "agent-native 1 executed: the grader's first line is in the summary as grade_text= (its own fence, after the verdict fence)" eval 'grep -qxF "grade_text=FAIL: spoiled" "$SKI/summary" && [[ "$(fenced "$SKI/summary" "### per-instance soak grader (serve only)")" == "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=1 verdict=FAIL" ]]'
+ski_run web-2 0 ''
+sk_check "R1 executed: rc 0 with no first line (an empty grader) -> verdict=CANNOT_ESTABLISH rc=0, return 1, never PASS" eval '[[ "$SKI_RC" -eq 1 ]] && ski_line_ok "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=0 verdict=CANNOT_ESTABLISH" && [[ "$SKI_OUT" == *"::error::"*"disagree"*"do not re-dispatch"* ]]'
+ski_run web-2 0 'FAIL: but exited 0'
+sk_check "R1 executed: rc 0 with a FAIL: first line -> CANNOT_ESTABLISH, return 1" eval '[[ "$SKI_RC" -eq 1 ]] && ski_line_ok "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=0 verdict=CANNOT_ESTABLISH"'
+ski_run web-2 1 ''
+sk_check "R1 executed: rc 1 with no line (a bash abort) -> CANNOT_ESTABLISH, never the 'replace is the repair' FAIL advice" eval '[[ "$SKI_RC" -eq 1 && "$SKI_OUT" != *"replace is the repair"* ]] && ski_line_ok "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=1 verdict=CANNOT_ESTABLISH"'
+ski_run web-2 3 'PASS: but exited 3'
+sk_check "R1 / test-design P3 executed: rc 3 with a PASS: first line never serves (CANNOT_ESTABLISH, return 1)" eval '[[ "$SKI_RC" -eq 1 ]] && ski_line_ok "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=3 verdict=CANNOT_ESTABLISH"'
+ski_run web-2 2 'PASS: but exited 2'
+sk_check "R1 executed: rc 2 with a PASS: first line -> CANNOT_ESTABLISH" eval '[[ "$SKI_RC" -eq 1 ]] && ski_line_ok "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=2 verdict=CANNOT_ESTABLISH"'
+sk_check "test-design P3: ski_line_ok refuses a line that is not on stderr (the predicate can say no)" eval '! ski_line_ok "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=0 verdict=PASS"'
+ski_run web-2 3 'CANNOT ESTABLISH: x'
+sk_check "G3 executed: CANNOT_ESTABLISH rc 3 -> the ::error:: says the Better Stack credentials or the shared helper are missing" eval '[[ "$SKI_OUT" == *"::error::"*"Better Stack credentials or the shared helper are missing"* ]]'
+ski_run web-2 127 ''
+sk_check "G3 executed: rc 127 -> the ::error:: says a code or wiring defect, do not re-dispatch" eval '[[ "$SKI_OUT" == *"::error::"*"code or wiring defect"*"do not re-dispatch"* ]]'
+ski_run web-2 2 '::error::forged by the grader'
+sk_check "infra-security 3 executed: grader text that is not a verdict line is never echoed (no forged workflow command), grade_text=unprintable instead" \
+  eval '! grep -qE "^::error::forged" <<<"$SKI_OUT$SKI_ERR" && [[ "$SKI_OUT$SKI_ERR" == *"grade_text=unprintable"* ]]'
+ski_run web-2 2 'NOT YET: fine\n::warning::second line'
+sk_check "infra-security 3 executed: a multi-line grader text never echoes its later lines" eval '! grep -qE "^::warning::second line" <<<"$SKI_OUT$SKI_ERR"'
+ski_run web-2 2 'NOT YET: waiting'
+sk_check "G3 executed: a verdict-shaped grader line is echoed to the log as grade_text=<line>" eval '[[ "$SKI_ERR" == *"grade_text=NOT YET: waiting"* ]]'
+SKI_OPTS='-euxo'; ski_run web-2 0 'PASS: ok'; SKI_OPTS=''
+sk_check "G3 executed: under xtrace the helper refuses with 78 before any credential is used (grader never called)" eval '[[ "$SKI_RC" -eq 78 ]] && ski_calls 0'
+ski_term() { # TERM the helper while the grader runs: the trap still leaves exactly one verdict line
+  local pid spid
+  : > "$SKI/calls"; : > "$SKI/summary"; rm -f "$SKI/pid"; : > "$SKI/term"; printf 0 > "$SKI/rc"; : > "$SKI/text"
+  env -i PATH="/usr/bin:/bin" HOME="$SKI/home" RUNNER_TEMP="$SKI/rt" GITHUB_STEP_SUMMARY="$SKI/summary" \
+    BETTERSTACK_QUERY_HOST=h BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p \
+    "$BASH_BIN" -c 'set -euo pipefail; source "$1"; sse_instance_soak "$2" "$3"' _ "$SSE_LIB" web-2 "$SKI/grader.sh" >"$SKI/out" 2>"$SKI/err" &
+  pid=$!
+  for _ in $(seq 1 100); do [[ -s "$SKI/pid" ]] && break; sleep 0.1; done
+  spid="$(cat "$SKI/pid" 2>/dev/null || true)"
+  kill -TERM "$pid" 2>/dev/null || true
+  [[ -n "$spid" ]] && kill -TERM "$spid" 2>/dev/null
+  wait "$pid" 2>/dev/null && SKI_RC=0 || SKI_RC=$?
+  rm -f "$SKI/term"; SKI_ERR="$(cat "$SKI/err")"
+  if [[ -n "$spid" && "$SKI_RC" -ne 0 ]] && ski_line_ok "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=interrupted verdict=CANNOT_ESTABLISH"; then return 0; fi
+  return 1
+}
+sk_check "observability 3 / R9 executed: a TERM while the grader runs still leaves exactly one 'rc=interrupted verdict=CANNOT_ESTABLISH' line (EXIT/TERM trap), distinct from the wrong-host rc=none" ski_term
+sec_close
+
+# -----------------------------------------------------------------------------------------------------------------
+# §SK-chain — Guard 4 executed rows on sse_gate_chain_mirror / _verify / _check (stub stderr files).
+# -----------------------------------------------------------------------------------------------------------------
+SKG="$SK_WORK/chain"; mkdir -p "$SKG"
+SKG_RC=0; SKG_OUT=""
+# shellcheck disable=SC2034 # read inside the eval'd row predicates
+skg_run() { # <fn> <args...> — the helper in a clean env under set -euo pipefail, as the step runs it
+  : > "$SKG/summary"
+  env -i PATH="/usr/bin:/bin" GITHUB_STEP_SUMMARY="$SKG/summary" "$BASH_BIN" -c 'set -euo pipefail; source "$1"; shift; "$@"' _ "$SSE_LIB" "$@" \
+    >"$SKG/out" 2>"$SKG/err" && SKG_RC=0 || SKG_RC=$?
+  SKG_OUT="$(cat "$SKG/out" "$SKG/err")"
+}
+evl() { # <kind> <host> <days> <src> <marker> <age> <req> <verdict> <sub>
+  printf 'SOLEUR_SOAK_EVIDENCE kind=%s host=%s soak_days=%s source=%s floor_days=3 marker_at=%s age_s=%s required_s=%s verdict=%s sub_condition=%s\n' "$@"
+}
+SKG_GP="$(evl git_data web-2 3 default 2026-11-10T00:00:00Z 400000 259200 pass none)"
+SKG_WP="$(evl workspaces_luks web-2 3 default 2026-11-10T00:00:00Z 400000 259200 pass none)"
+SKG_WF="$(evl workspaces_luks web-2 1 env 2026-11-17T12:18:54Z 87883 none fail B_workspaces_luks_soak_days_below_floor)"
+printf '%s\n' 'Doppler notice: fetching secrets' "$SKG_GP" "$SKG_WF" "$SKG_WF extra=forged" 'gate_fail sub_condition=B_workspaces_luks_soak_days_below_floor' > "$SKG/refuse"
+printf '%s\n' 'Doppler notice: fetching secrets' "$SKG_GP" "$SKG_WP" "${SKG_WP/verdict=pass/verdict=pass verdict=pass}" > "$SKG/pass"
+skg_fence() { fenced "$SKG/summary" '### §(c) gate chain soak evidence'; }
+sec_open chain 27
+skg_run sse_gate_chain_mirror "$SKG/refuse" web-2 1
+sk_check "G4 executed: a refusal (rc 1) returns 1" eval '[[ "$SKG_RC" -eq 1 ]]'
+sk_check "G4 executed: the refusal's fenced summary holds exactly the two grammar lines (the forged line and the Doppler notice stay out)" eval '[[ "$(skg_fence)" == "$(printf "%s\n%s" "$SKG_GP" "$SKG_WF")" ]]'
+sk_check "G4 executed: the refusal heading repeats the refusing id" eval 'grep -qxF "### §(c) gate chain soak evidence (refused: sub_condition=B_workspaces_luks_soak_days_below_floor)" "$SKG/summary"'
+sk_check "G4/AC17 executed: the ::error:: names the refusing id" eval '[[ "$SKG_OUT" == *"::error::§(c) gate chain refused the flip (sub_condition=B_workspaces_luks_soak_days_below_floor)"* ]]'
+sk_check "G4 executed: a below_floor refusal's ::error:: names the 3-day floor, #12933 and 'values may only lengthen it'" eval '[[ "$SKG_OUT" == *"below the 3-day floor"*"#12933"*"values may only lengthen it"* ]]'
+sk_check "spec-flow 5 executed: a refusal records 'per-instance soak grader: NOT RUN (gate refused)' in the summary" eval 'grep -qF -- "per-instance soak grader: NOT RUN (gate refused)" "$SKG/summary"'
+sk_check "user-impact executed: the refusal's ::error:: says a refused serve never drains and names mode=drain" eval '[[ "$SKG_OUT" == *"A refused serve never drains"*"mode=drain"* ]]'
+printf '%s\n' 'gate_fail sub_condition=A_web2_not_in_roster' > "$SKG/conda"
+skg_run sse_gate_chain_mirror "$SKG/conda" web-2 1
+sk_check "G4-7 executed: a zero-line Condition A refusal still prints its ::error:: (the no-match grep is guarded under set -e) and an empty fence" eval '[[ "$SKG_RC" -eq 1 && "$SKG_OUT" == *"::error::§(c) gate chain refused the flip (sub_condition=A_web2_not_in_roster)"* && -z "$(skg_fence)" ]] && grep -qxF "\`\`\`text" "$SKG/summary"'
+printf '%s\n' 'marker_source_fail class=names_rc_1 marker=X config=Y gate_not_run=true' > "$SKG/wrap"
+skg_run sse_gate_chain_mirror "$SKG/wrap" web-2 3
+sk_check "G4 executed: a wrapper/Doppler failure before the gate ran names the refusing id gate_not_run_<class> (never the marker key)" eval '[[ "$SKG_RC" -eq 1 && "$SKG_OUT" == *"::error::§(c) gate chain refused the flip (sub_condition=gate_not_run_names_rc_1)"* && "$SKG_OUT" != *"marker=X"* ]]'
+printf '%s\n' 'some other stderr' > "$SKG/none"
+skg_run sse_gate_chain_mirror "$SKG/none" web-2 3
+sk_check "G4 executed: a refusal with neither a gate_fail nor a marker_source_fail line names the id 'none'" eval '[[ "$SKG_RC" -eq 1 && "$SKG_OUT" == *"(sub_condition=none)"* ]]'
+skg_run sse_gate_chain_mirror "$SKG/pass" web-2 0
+sk_check "G4 executed: a pass (rc 0) mirror returns 0 and writes no ::error::" eval '[[ "$SKG_RC" -eq 0 && "$SKG_OUT" != *"::error::"* ]]'
+sk_check "G4-8 executed: the pass fence holds exactly the two pass lines (a doubled-verdict forgery and the Doppler notice stay out)" eval '[[ "$(skg_fence)" == "$(printf "%s\n%s" "$SKG_GP" "$SKG_WP")" ]]'
+printf '%s\n' 'Doppler notice: fetching secrets' "$SKG_GP" 'another notice' "$SKG_WP" > "$SKG/pass-clean"
+skg_run sse_gate_chain_verify "$SKG/pass-clean" web-2
+sk_check "G4 H2 executed: the pass re-check accepts one well-formed pass line per kind with interleaved non-evidence stderr" eval '[[ "$SKG_RC" -eq 0 && "$SKG_OUT" != *"::error::"* ]]'
+skg_run sse_gate_chain_verify "$SKG/pass" web-2
+sk_check "data-integrity 2 executed: a near-miss evidence line (doubled verdict) next to two good pass lines refuses (never skipped)" eval '[[ "$SKG_RC" -eq 1 && "$SKG_OUT" == *"malformed soak evidence line"* ]]'
+skg_vrefuses() { # <desc> <file-content...> — the pass re-check must return 1 with the anti-vacuity message
+  printf '%s\n' "${@:2}" > "$SKG/v"
+  skg_run sse_gate_chain_verify "$SKG/v" web-2
+  sk_check "$1" eval '[[ "$SKG_RC" -eq 1 && "$SKG_OUT" == *"::error::§(c) gate chain: gate passed but soak evidence for kind="*" is missing or malformed - a code defect, not a soak wait; do not re-dispatch"* ]]'
+}
+skg_vrefuses "G4-4 executed: a pass with no workspaces_luks line refuses (anti-vacuity, second member)" "$SKG_GP"
+skg_vrefuses "G4 executed: a pass with no git_data line refuses" "$SKG_WP"
+skg_vrefuses "G4 executed: a pass with zero evidence lines refuses" 'Doppler notice'
+skg_vrefuses "G8/G4-5 executed: a pass line with none fields refuses" "$SKG_GP" "$(evl workspaces_luks web-2 3 default none none none pass none)"
+skg_vrefuses "G8/G4-5 executed: a pass line with required_s=86400 (below SOAK_FLOOR_S) refuses" "$SKG_GP" "$(evl workspaces_luks web-2 1 env 2026-11-17T12:18:54Z 87883 86400 pass none)"
+skg_vrefuses "G8 executed: a pass line whose age_s is below its required_s refuses" "$SKG_GP" "$(evl workspaces_luks web-2 3 default 2026-11-17T12:18:54Z 87883 259200 pass none)"
+skg_vrefuses "G4-6 executed: pass lines for a different host refuse" "$(evl git_data web-3 3 default 2026-11-10T00:00:00Z 400000 259200 pass none)" "$(evl workspaces_luks web-3 3 default 2026-11-10T00:00:00Z 400000 259200 pass none)"
+skg_vrefuses "G4 executed: two pass lines for one kind refuse (exactly one per kind)" "$SKG_GP" "$SKG_GP" "$SKG_WP"
+skg_vrefuses "design P2 executed: a 13-digit age_s on a pass line refuses (no arithmetic on an unbounded field)" "$SKG_GP" "$(evl workspaces_luks web-2 3 default 2026-11-10T00:00:00Z 1234567890123 259200 pass none)"
+skg_vrefuses "G4 executed: a verdict=fail line for a kind on a passing gate refuses" "$SKG_GP" "$(evl workspaces_luks web-2 3 default 2026-11-10T00:00:00Z 400000 259200 fail B_workspaces_luks_soak_not_elapsed)"
+# F11: the REAL gate's stderr is what the consumer accepts (producer and consumer graded by the one grammar)
+reset_def; run_with_def; printf '%s\n' "$GATE_ERR" > "$SKG/real-pass"
+skg_run sse_gate_chain_verify "$SKG/real-pass" web-2
+sk_check "F11 executed: the real gate's pass stderr satisfies the helper's pass re-check" eval '[[ "$SKG_RC" -eq 0 ]]'
+reset_def; DEF[WORKSPACES_LUKS_SOAK_DAYS]='1'; run_with_def; printf '%s\n' "$GATE_ERR" > "$SKG/real-refuse"
+skg_run sse_gate_chain_mirror "$SKG/real-refuse" web-2 1
+sk_check "F11 executed: the real gate's below_floor refusal is mirrored line for line (git pass + workspaces fail) and named in the ::error:: (run 44304068922 regression)" \
+  eval '[[ "$SKG_RC" -eq 1 && "$(skg_fence | grep -c .)" -eq 2 && "$SKG_OUT" == *"(sub_condition=B_workspaces_luks_soak_days_below_floor)"* ]]'
+skg_run sse_gate_chain_verify "$SKG/pass-clean" 'web 2'
+sk_check "G4 executed: a malformed gated host is refused by the re-check, never interpolated into a pattern" eval '[[ "$SKG_RC" -eq 1 ]]'
+sec_close
+
+# -----------------------------------------------------------------------------------------------------------------
+# §SK-probe — G11 executed rows on scripts/serve-soak-evidence-last.sh with a stub gh in the real log format.
+# -----------------------------------------------------------------------------------------------------------------
+SKP="$SK_WORK/probe"; mkdir -p "$SKP/bin"
+cat > "$SKP/bin/gh" <<EOF
+#!$BASH_BIN
+printf '%s\n' "\$*" >> "$SKP/argv"
+case "\$1 \$2" in
+  "run list") cat "$SKP/list.json" ;;
+  "run view") [ -f "$SKP/log.\$3" ] && cat "$SKP/log.\$3" || exit 1 ;;
+  *) exit 64 ;;
+esac
+EOF
+chmod +x "$SKP/bin/gh"
+SKP_RC=0; SKP_OUT=""
+# shellcheck disable=SC2034 # read inside the eval'd row predicates
+skp_run() { : > "$SKP/argv"; SKP_OUT="$(cd "$SKP" && env -i PATH="$SKP/bin:/usr/bin:/bin" HOME="$SKP" "$BASH_BIN" "$SSE_PROBE" "$@" 2>/dev/null)" && SKP_RC=0 || SKP_RC=$?; }
+skp_log() { # <id> <lines...> — a `gh run view --log` body: <job>\t<step>\t<timestamp> <text>
+  local id="$1" l; shift; : > "$SKP/log.$id"
+  for l in "$@"; do printf 'ga_pool_update\t§(c) gate chain (serve mode only — fail-closed BEFORE plan)\t2026-11-18T12:43:37.1234567Z %s\n' "$l" >> "$SKP/log.$id"; done
+}
+SKP_I='SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=2 verdict=NOT_YET'
+skp_list() { # <id:status:conclusion> ... -> the gh run list body, newest first
+  local e out="" id st co; for e in "$@"; do IFS=: read -r id st co <<<"$e"
+    out="${out:+$out,}{\"databaseId\":$id,\"headBranch\":\"main\",\"headSha\":\"$(printf '%040d' "$id")\",\"status\":\"$st\",\"conclusion\":\"$co\"}"; done
+  printf '[%s]\n' "$out" > "$SKP/list.json"
+}
+skp_list 303:completed:success 302:completed:failure 301:completed:success
+rm -f "$SKP"/log.*
+skp_log 303 'Run terraform plan' 'no evidence here'
+skp_log 302 'Doppler notice' "$SKG_GP" "$SKG_WF extra=forged" "$SKG_WF" 'gate_fail sub_condition=B_workspaces_luks_soak_days_below_floor' "$SKP_I" 'grade_text=NOT YET: waiting'
+skp_log 301 "$SKG_GP" "$SKG_WP"
+sec_open probe 15
+skp_run
+sk_check "G11 executed: the probe prints the newest run holding evidence with its branch, sha and conclusion, then its matched lines (soak, gate_fail, instance, grade_text), prefix stripped (exit 0)" \
+  eval '[[ "$SKP_RC" -eq 0 && "$SKP_OUT" == "$(printf "%s\n%s\n%s\n%s\n%s\n%s" "run=302 branch=main sha=$(printf %040d 302) conclusion=failure" "$SKG_GP" "$SKG_WF" "gate_fail sub_condition=B_workspaces_luks_soak_days_below_floor" "$SKP_I" "grade_text=NOT YET: waiting")" ]]'
+sk_check "G11 executed: the run list is the main branch of cf-lb-overlay.yml, limit 50, with status and conclusion (the older run is never read)" \
+  eval 'grep -qE "^run list .*--workflow cf-lb-overlay\.yml" "$SKP/argv" && grep -qE "^run list .*--branch main" "$SKP/argv" && grep -qE "^run list .*--limit 50( |$)" "$SKP/argv" && grep -qE "^run list .*status,conclusion" "$SKP/argv" && ! grep -qE "^run view 301" "$SKP/argv"'
+skp_log 302 "$SKG_GP" "$SKG_GP" "$SKG_WP" "$SKG_WP" "$SKG_WF" "$SKP_I" "$SKP_I"
+skp_run
+sk_check "G11 executed: at most 2 SOLEUR_SOAK_EVIDENCE lines (one per kind) and 1 SOLEUR_INSTANCE_SOAK line are printed" \
+  eval '[[ "$SKP_RC" -eq 0 && "$(grep -c "^SOLEUR_SOAK_EVIDENCE " <<<"$SKP_OUT")" -eq 2 && "$(grep -c "^SOLEUR_INSTANCE_SOAK " <<<"$SKP_OUT")" -eq 1 ]]'
+sk_check "fix round executed: the two soak lines are one per KIND (git_data and workspaces_luks once each, not the first two lines)" \
+  eval '[[ "$(grep -c "^SOLEUR_SOAK_EVIDENCE kind=git_data " <<<"$SKP_OUT")" -eq 1 && "$(grep -c "^SOLEUR_SOAK_EVIDENCE kind=workspaces_luks " <<<"$SKP_OUT")" -eq 1 ]]'
+skp_log 302 "$SKG_GP" "SOLEUR_INSTANCE_SOAK host=web-2 grader=web2-luks-live-6931 rc=0 verdict=PASS" 'grade_text=PASS: early' "$SKP_I" 'grade_text=NOT YET: waiting'
+skp_run
+sk_check "security fix round executed: the LAST instance and grade_text lines win (an earlier well-formed line in the step is not the verdict)" \
+  eval '[[ "$SKP_RC" -eq 0 && "$SKP_OUT" == *"$SKP_I"* && "$SKP_OUT" == *"grade_text=NOT YET: waiting" && "$SKP_OUT" != *"verdict=PASS"* && "$SKP_OUT" != *"PASS: early"* ]]'
+skp_log 302 'Run gate' 'gate_fail sub_condition=B_top_not_authorized'
+skp_run
+sk_check "code-quality fix round executed: a refused run with only a gate_fail line is a hit (it answers why), not passed over" \
+  eval '[[ "$SKP_RC" -eq 0 && "$SKP_OUT" == "$(printf "%s\n%s" "run=302 branch=main sha=$(printf %040d 302) conclusion=failure" "gate_fail sub_condition=B_top_not_authorized")" ]]'
+skp_list 304:in_progress: 303:completed:success 302:completed:failure
+skp_log 304 "$SKG_GP"
+skp_run
+sk_check "R8 executed: a newer run still in progress is skipped (never read), the newest completed run with evidence is printed" eval '[[ "$SKP_RC" -eq 0 && "$SKP_OUT" == "run=302 "* ]] && ! grep -qE "^run view 304" "$SKP/argv"'
+skp_list 305:completed:cancelled 302:completed:failure
+skp_run
+sk_check "R8 executed: a completed run whose log cannot be read (cancelled with no log) is skipped, not a read fault" eval '[[ "$SKP_RC" -eq 0 && "$SKP_OUT" == "run=302 "* ]] && grep -qE "^run view 305" "$SKP/argv"'
+skp_list 305:completed:cancelled 306:completed:cancelled
+skp_run
+sk_check "R8 executed: no run log readable at all exits 3 (a read fault, not 'no evidence')" eval '[[ "$SKP_RC" -eq 3 ]]'
+skp_list 307:completed:success
+: > "$SKP/log.307"; printf 'staging_record\tsome step\t2026-11-18T12:43:37.1234567Z %s\n' "$SKG_GP" "$SKP_I" >> "$SKP/log.307"
+skp_run
+sk_check "security P3-b executed: a grammar-shaped line from another job is never printed (only ga_pool_update's two evidence steps are read)" eval '[[ "$SKP_RC" -eq 2 && "$SKP_OUT" != *SOLEUR_* ]]'
+skp_list 303:completed:success 302:completed:failure 301:completed:success
+skp_log 302 'nothing' ; skp_log 301 'nothing either'
+skp_run
+sk_check "G11 executed: a window with no evidence exits 2 with one line that carries neither token" \
+  eval '[[ "$SKP_RC" -eq 2 && "$SKP_OUT" == "no soak evidence in the last 3 runs" && "$SKP_OUT" != *SOLEUR_* ]]'
+skp_run --limit 2
+sk_check "G11 executed: --limit narrows the window (2) and the no-match line names it" eval '[[ "$SKP_RC" -eq 2 && "$SKP_OUT" == "no soak evidence in the last 2 runs" ]] && grep -qE "^run list .*--limit 2( |$)" "$SKP/argv"'
+skp_run --limit 51
+sk_check "G11 executed: a --limit above 50 is refused (exit 64), nothing listed" eval '[[ "$SKP_RC" -eq 64 && ! -s "$SKP/argv" ]]'
+printf 'not json' > "$SKP/list.json"; skp_run
+sk_check "G11 executed: an unreadable run list exits 3 (a read fault is not 'no evidence')" eval '[[ "$SKP_RC" -eq 3 ]]'
+skp_list 308:completed:success; skp_log 308 "$SKG_GP" 'grade_text=::error::forged' 'gate_fail sub_condition=x;y'
+skp_run
+sk_check "R8 executed: a grade_text line that is not verdict-shaped and a malformed gate_fail line are never printed" eval '[[ "$SKP_RC" -eq 0 && "$SKP_OUT" != *"::error::"* && "$SKP_OUT" != *"x;y"* ]]'
+sec_close
+
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=330
+# #12910 Guard 1: +27 (G1-1..G1-8, the six malformed SOLEUR_WEB_HOSTS shapes, the must-PASS three-key row, the G1-2 mutant).
+MIN_CASES=685 # 330 -> 658 (#12849 §SK rows, #12934 review fixes and fix rounds) + 27 (#12910 Guard 1); summed at the #12918 merge, measured
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
