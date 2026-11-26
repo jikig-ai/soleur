@@ -210,68 +210,6 @@ Measurement 4 above records that `NO_PROXY` is not honored by the SDK's API path
 >
 > Adopting any new SDK or bundled CLI re-arms CLO gate B-2, whatever the verdict.
 
-## Addendum — 2026-11-19 (#12906): per-host allow cache re-measured on Agent SDK 0.3.325 (interim version, not 0.3.328)
-
-**Command** (exit code 0).
-
-```text
-bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.325 --out <scratchpad>/verdict.json --markdown <scratchpad>/records
-```
-
-**Result.** `REMEASURE verdict=CACHES exit=0 reason=measured next=record the run in ADR-278 and on #12906; #12906 stays blocked until the next SDK bump's run`
-
-**Versions.**
-
-| | Baseline | Candidate |
-|---|---|---|
-| Requested | 0.3.321 | 0.3.325 |
-| Observed SDK | 0.3.321 | 0.3.325 |
-| Observed CLI | 2.1.321 | 2.1.325 |
-| Reading | CACHES | CACHES |
-
-**Host.**
-
-- startedAt: 2026-11-19T15:30:27Z
-- endedAt: 2026-11-19T15:33:49Z
-- requested: 0.3.325
-- exactVersion: 0.3.325
-- linuxX64Version: 0.3.325
-- candidateIntegritySdk: sha512-MhSm2Fhk3DA/hhjdCKXDZWlnykpPWJjX42SogllAHMplY9ZKT+Ltb8QPtQxpe225Imfs4A8IKaNE4biivA+fHg==
-- candidateIntegrityLinuxX64: sha512-wXEWbDmNYiorY5EKASYjvQct8zHShUPmAS9N/IAsgPA/cx2vsOFqPQw8jRQKeaW6AmFgx7k/Wf7THalNXbMEkQ==
-- node: v26.12.0
-- npm: 11.20.0
-- kernel: 7.2.15-1-omarchy
-- bwrap: bubblewrap 0.13.1
-- os: Omarchy
-
-**Baseline per-arm outcome.**
-
-| Arm | SandboxNetworkAccess asks (in order) | Gateway lines | Decoy hits |
-|---|---|---|---|
-| control | 198.51.100.1, 127.0.0.2, 169.254.169.254 | - | 198.51.100.1:443, 198.51.100.1:80, 198.51.100.1:22, 127.0.0.2:38913, 127.0.0.2:38913, 169.254.169.254:80 |
-| B | example.test, 198.51.100.1, 169.254.169.254, metadata.test | CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT 198.51.100.1:443 HTTP/1.1; `GET http://example.test/ HTTP/1.1`; CONNECT example.test:22 HTTP/1.1; CONNECT 198.51.100.1:22 HTTP/1.1; CONNECT 169.254.169.254:443 HTTP/1.1; CONNECT metadata.test:443 HTTP/1.1 | - |
-| D | - | - | - |
-| E | 198.51.100.1 | - | - |
-| F | 198.51.100.1 | CONNECT 198.51.100.1:443 HTTP/1.1 | - |
-| F2 | 198.51.100.1, example.test | CONNECT 198.51.100.1:443 HTTP/1.1 | - |
-
-**Candidate per-arm outcome.**
-
-| Arm | SandboxNetworkAccess asks (in order) | Gateway lines | Decoy hits |
-|---|---|---|---|
-| control | 198.51.100.1, 127.0.0.2, 169.254.169.254 | - | 198.51.100.1:443, 198.51.100.1:80, 198.51.100.1:22, 127.0.0.2:43929, 127.0.0.2:43929, 169.254.169.254:80 |
-| B | example.test, 198.51.100.1, 169.254.169.254, metadata.test | CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT example.test:443 HTTP/1.1; CONNECT 198.51.100.1:443 HTTP/1.1; `GET http://example.test/ HTTP/1.1`; CONNECT example.test:22 HTTP/1.1; CONNECT 198.51.100.1:22 HTTP/1.1; CONNECT 169.254.169.254:443 HTTP/1.1; CONNECT metadata.test:443 HTTP/1.1 | - |
-| D | - | - | - |
-| E | 198.51.100.1 | - | - |
-| F | 198.51.100.1 | CONNECT 198.51.100.1:443 HTTP/1.1 | - |
-| F2 | 198.51.100.1, example.test | CONNECT 198.51.100.1:443 HTTP/1.1 | - |
-
-**What it means.** The interim candidate reads the same as the pin: within one session, F asked once for three requests to the same host, and F2 asked the allowed host once across two commands, then asked only for the new host. Both runs passed every precondition: versions, all arms present, the control arm's five decoys, teardown, the post-teardown requests and asks recorded. #12906 stays blocked. 0.3.325 is an interim version, not 0.3.328. The 0.3.328 measurement is pending the ADR-191 release-age floor, not before 2026-11-21T23:14Z, and is tracked in #12977.
-
-**Limits.** This measurement is off-production (developer host, scripted model stub, production pin unchanged at 0.3.321). It neither satisfies nor re-arms gate B-2 of the 2026-11-18 DPIA re-screen (`knowledge-base/legal/audits/2026-11-18-dpia-rescreen-egress-credential-injector.md`, PR #12900). B-2 is already unsatisfied, because the 0.3.321 pin fired the SDK-version trigger. Adopting any new Agent SDK or CLI version, 0.3.328 included, would fire the results note's SDK-version trigger, and the CLI-version trigger whenever the bundled CLI changes, and so would re-arm B-2 against the adopted versions.
-
-**Containment of this run.** Each harness ran in its own user, mount, network and pid namespace. A read-only tmpfs covered `$HOME` and `$XDG_RUNTIME_DIR`. All 120 `git worktree list` paths and the git common dir were remounted read-only, and a write probe confirmed it. Still exposed: `/tmp` outside the scratch root, and the rest of the user-writable filesystem. The app's package files and installed SDK hashed the same before and after the run.
-
 ## Addendum — 2026-11-26 (#12906): per-host allow cache re-measured on Agent SDK 0.3.328
 
 **Command** (exit code 0).
@@ -328,10 +266,12 @@ bash apps/web-platform/scripts/remeasure-sdk-sandbox-network-cache.sh 0.3.328 --
 | `F` | `198.51.100.1` | `CONNECT 198.51.100.1:443 HTTP/1.1` | `-` |
 | `F2` | `198.51.100.1, example.test` | `CONNECT 198.51.100.1:443 HTTP/1.1` | `-` |
 
-**What it means.** 0.3.328 reads the same as the pin and as the 2026-11-19 interim run on 0.3.325: within one session, F asked once for three requests to the same host, and F2 asked the allowed host once across two commands, then asked only for the new host. Both runs passed every precondition: versions, SDK entry, all arms present, the control arm's decoys, teardown, the post-teardown requests and asks recorded. The SDK still caches a per-host allow for the whole session, so a later deny for the same host would never be asked. #12906 stays blocked, and the next run happens on the next SDK bump (`sdk-bump-sandbox-gate.sh` prints the command). This closes #12977.
+**What it means.** 0.3.328 reads the same as the pin: within one session, F asked once for three requests to the same host, and F2 asked the allowed host once across two commands, then asked only for the new host. Both runs passed every precondition: versions, SDK entry, all arms present, the control arm's decoys, teardown, the post-teardown requests and asks recorded. The SDK still caches a per-host allow for the whole session, so a later deny for the same host would never be asked. #12906 stays blocked, and the next run happens on the next SDK bump (`sdk-bump-sandbox-gate.sh` prints the command). This closes #12977.
 
-**Newer versions.** npm `latest` was 0.3.332 when this ran. The script refused it, `REMEASURE verdict=REFUSED exit=3 reason=release-age-floor next=re-run after 2026-11-27T22:09:40Z`, so no newer version was measured.
+**Earlier run not cited.** This record replaces, in place, the interim record of 2026-11-19 on Agent SDK 0.3.325 (also `CACHES`). That run is not cited as evidence: it ran under the first containment, which review found could be undone from inside the namespace and which left repos outside `$HOME` and outside `git worktree list` writable. The script was fixed before this run (CTO rulings 22 to 25 in the PR's `decision-challenges.md`). The #12906 comment that reported the 0.3.325 run is left as posted.
+
+**Newer versions.** npm `latest` was 0.3.332 when this ran. The script refused it, `REMEASURE verdict=REFUSED exit=3 reason=release-age-floor next=re-run after 2026-11-27T22:09:40Z`, so no newer version was measured. 0.3.329 to 0.3.331 were not measured either.
 
 **Limits.** This measurement is off-production (developer host, scripted model stub, production pin unchanged at 0.3.321). It neither satisfies nor re-arms gate B-2 of the 2026-11-18 DPIA re-screen (`knowledge-base/legal/audits/2026-11-18-dpia-rescreen-egress-credential-injector.md`, PR #12900). B-2 is already unsatisfied, because the 0.3.321 pin fired the SDK-version trigger. Adopting any new Agent SDK or CLI version, 0.3.328 included, would fire the results note's SDK-version trigger, and the CLI-version trigger whenever the bundled CLI changes, and so would re-arm B-2 against the adopted versions.
 
-**Containment of this run.** Each harness ran in its own user, mount, network and pid namespace. A read-only tmpfs covered `$HOME` and `$XDG_RUNTIME_DIR`. All 131 `git worktree list` paths and the git common dir were remounted read-only, and a write probe confirmed it. Still exposed: `/tmp` outside the scratch root, and the rest of the user-writable filesystem. The app's package files and installed SDK hashed the same before and after the run.
+**Containment of this run.** Each harness ran in its own user, mount, network and pid namespace. A read-only tmpfs covered `$HOME` and `$XDG_RUNTIME_DIR`. The whole mount tree was remounted read-only (`ro=recursive /`). A tmpfs covered `/run` (`/var/run` is a symlink to it on this host), and private tmpfs mounts covered `/tmp` and `/dev/shm`. Only the run's home and scratch directories were bound back read-write. The tree was then locked in a nested user and mount namespace and probed before the harness started. Remounts, unmounts, writes to every worktree, the git common dir and `$HOME`, and connects to the docker and session-bus sockets all had to fail, and they did. Accepted residual: filesystem sockets outside the masked paths stay connectable with the operator's uid and groups, and the filesystem stays readable. The app's package files and installed SDK hashed the same before and after the run.
