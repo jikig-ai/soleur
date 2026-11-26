@@ -143,25 +143,27 @@ mutates no zone.
 
 3. `Operator-authorizes:` delete it in the operator's signed-in dashboard session, signed in as the login that owns
    the token (the 2026-11-26 0b revokes were owned by the old-account-owner login). Run it as ONE
-   `browser_run_code_unsafe` body. Its tool result is only one of `{atok: false}`, `{matches: <n>}`,
-   `{status, contentType, success}` or `{error: e.name}`. Never return the `x-atok`, the full id or `e.message`: a
-   thrown request error may carry the request it was sending.
+   `browser_run_code_unsafe` body, with all three sub-steps inside one `try`/`catch`. Its tool result is only one
+   of `{atok: false}`, `{matches: <n>}`, `{status, contentType, success}` or `{error: e.name}`. Never return the
+   `x-atok`, the full id or `e.message`: a thrown request error may carry the request it was sending.
    1. `page.goto('https://dash.cloudflare.com/profile/api-tokens')` first. A page not reloaded since sign-in can show
       a stale token list (observed 2026-11-26: it listed 0 tokens).
    2. One `page.evaluate` reads `window.bootstrap.atok` and `GET /api/v4/user/tokens`, and keeps the atok and the id
       whose prefix equals step 2's in Node-local variables. No atok: return `{atok: false}` (the page is signed out).
       Zero matches: return `{matches: 0}`; this login does not own it, and the agent asks the operator to sign in as
       the owner, never switching logins itself. Several matches: return `{matches: <n>}` and stop.
-   3. `page.request.delete('https://dash.cloudflare.com/api/v4/user/tokens/<id>')` inside `try`/`catch`. The
-      2026-11-26 deletes that returned `200` sent the headers `x-atok` and `x-cross-site-security: dash`; whether
-      the second is required was not tested. The DELETE is Node-side because an in-page `fetch` DELETE got an HTML
+   3. `page.request.delete('https://dash.cloudflare.com/api/v4/user/tokens/<id>')`. The 2026-11-26 deletes that
+      returned `200` (#12931 comment 7203873359) sent the headers `x-atok` and `x-cross-site-security: dash`; the
+      second is recorded from that session's browser code, not the comment, and whether it is required was not
+      tested. The DELETE is Node-side because an in-page `fetch` DELETE got an HTML
       `403` from the dashboard edge (measured 2026-11-26), while the in-page mint POST did not.
 
    Only `200` with `success: true` is a revoke. A JSON `403` or `404` is an ownership or session refusal: stop and
    report. Anything else (a non-JSON reply, `success: false`, a thrown error, another status): stop, post what the
    result shows on #12931, and do not retry without a fresh authorization.
-4. `Agent:` read back: re-run step 2. Expected: `.success` is `false` (the verify fails). If it prints
-   `success=true`, the token is still live: stop and post, and keep the key. Otherwise
+4. `Agent:` read back: re-run step 2. Expected: `.success` is `false`, printed as a line that starts
+   `success=false`. Any other output (`success=true`, `success=null`, an empty line, an error) means the revoke is
+   unconfirmed: stop, post it, and keep the key, since it is the only way to re-read the id. Only on `success=false`,
    `Operator-authorizes:` delete the key that held it, in the same act, so token-drift never grades a dead value:
    `doppler secrets delete <KEY> -p soleur -c <config> --yes > /dev/null`, and re-run the inventory stage
    (expected: no row for that key). Post the four results (id prefix, delete status, verify `false`, key gone) on
@@ -742,7 +744,8 @@ the PR thread, and its comment is the read-back.
   - Check by digest or verify id, never by key name, that no config's `<KEY>` still holds the old value.
   - Treat `CF_API_TOKEN_ANALYTICS_READ` as an owner mint (`origin-tls-strict-flip.md`).
   - Run `cloudflare-readonly.sh pagerules-ssl` on the new zone before deciding the fate of
-    `CF_API_TOKEN_PAGERULES_READ`. That read is pinned in `components.test.ts`.
+    `CF_API_TOKEN_PAGERULES_READ`. That read is pinned in `components.test.ts`. If the token is scoped to the
+    old zone, the read fails with a scope or zone-access error; that means "unknown", not "no page rules".
 
   `CF_API_TOKEN_PURGE_PREV` is revoked at Phase 3 step 5. The R2 token stays, because the old account keeps R2.
 - `Operator-authorizes:` delete the old tunnel `fc4509ed…` in the legacy account once web-2's replace has dropped its

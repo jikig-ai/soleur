@@ -202,8 +202,8 @@ config-rules scope-gap post-mortem). They follow CTO ruling L49:
     parsed, so the row reads `inconclusive`, not `authorized`. A pass prints the
     grant's code: `authorized (PATCH 400, err <code> after a 403 control)`. The
     printed code is information, and the verdict line decides. On a `zone-rest`
-    run, a settings row code other than 1006, or a bot_management row code other
-    than 10400, still passes: post it on #12931 as endpoint drift. The
+    run, a settings row code other than 1006 (and not 6007), or a bot_management
+    row code other than 10400, still passes: post it on #12931 as endpoint drift. The
     `redirects-dns` grant codes were never recorded, so they carry no
     expectation.
 
