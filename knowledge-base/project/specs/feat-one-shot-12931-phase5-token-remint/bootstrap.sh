@@ -69,6 +69,9 @@ set -f
 # P5-MANIFEST CF_API_TOKEN_AUDIT             | dd6d1427      | soleur/prd_terraform soleur/dev
 # P5-MANIFEST CF_API_TOKEN_ANALYTICS_READ    | 5993721f      | soleur/prd_terraform
 # P5-MANIFEST CF_API_TOKEN_PAGERULES_READ    | 86aa993e      | soleur/prd_terraform
+# The census floor (CTO D2): the Doppler projects the operator identity listed on 2026-11-27. A listing
+# without any of them is census-blind; the soleur configs come from the tracked inventory file.
+# P5-PROJECT-FLOOR soleur soleur-infra-privileged soleur-inngest soleur-registry soleur-deploy-channel soleur-infra-app soleur-github-app soleur-git-data-root
 
 # --- the stage table ---------------------------------------------------------
 # ONE source of truth: --list prints it, the dispatcher validates `--stage`
@@ -349,7 +352,11 @@ trap on_exit EXIT
 #   - the reference is chosen by the pinned id the vendor answers, never by a key name;
 #   - the census lists names first and reads only a listed name: a failed list, or a failed get of a
 #     listed name, is SOLEUR_P5_UNREADABLE, never absent; it quantifies over the LIVE project and
-#     config listing, with a floor (soleur must list every manifest config);
+#     config listing, with a committed floor (CTO D2: every `# P5-PROJECT-FLOOR` project, every soleur
+#     config of the tracked inventory file, every manifest config) that a narrowed listing fails;
+#   - REVOKE_READY needs, per key: <KEY> active and not the pin, no _NEXT, _PREV verifying the pin with
+#     status active, the key's own consumer read, the floor, no unreadable read, exactly one old copy
+#     (at prd_terraform <KEY>_PREV) and every other manifest holder reading value=new;
 #   - no value, digest, length or value prefix is ever printed: holders are classes, ids are 8
 #     characters, consumer reads print their first verdict line only.
 # RESIDUALS (stated, not closed here):
@@ -367,6 +374,8 @@ readonly ACCT_VERIFY_URL="${CF_API}/accounts/${NEW_ACCT}/tokens/verify"
 readonly USER_VERIFY_URL="${CF_API}/user/tokens/verify"
 readonly GQL_URL="${CF_API}/graphql"
 readonly READONLY_REL="plugins/soleur/scripts/cloudflare-readonly.sh"
+readonly INVENTORY_REL="apps/web-platform/infra/doppler-config-inventory.txt"
+readonly FLOOR_TAG='# P5-PROJECT-FLOOR '
 readonly MANIFEST_TAG='# P5-MANIFEST '
 readonly NAME_RE='^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$'
 EMPTY_SHA="$(printf '' | soleur_approval_sha256)"
@@ -561,21 +570,22 @@ require_tf_names() {
 # --- the reference (which prd_terraform copy holds the pinned old token) ---------
 # reference_of <key> <pin> — prd_terraform <KEY>_PREV if it verifies the pinned id, else <KEY> if it
 # does, else none. Prints SOLEUR_P5_REFERENCE key= source=PREV|KEY|none (or unknown, rc 3, when an
-# identity read got no verdict). Sets REF_SRC, REF_ID (8), REF_D (the old value's digest) and NEW_D
-# (the digest the census calls `new`: <KEY> once swapped, <KEY>_NEXT while staged).
-REF_SRC=""; REF_ID=""; REF_D=""; NEW_D=""
+# identity read got no verdict). Sets REF_SRC, REF_ID (8), REF_ST (the reference token's status),
+# REF_D (the old value's digest) and NEW_D (the digest the census calls `new`: <KEY> once swapped,
+# <KEY>_NEXT while staged).
+REF_SRC=""; REF_ID=""; REF_ST=""; REF_D=""; NEW_D=""
 reference_of() {
   local k="$1" pin="$2" a
-  REF_SRC=none; REF_ID=""; REF_D=""; NEW_D=""
+  REF_SRC=none; REF_ID=""; REF_ST=""; REF_D=""; NEW_D=""
   if in_names "${k}_PREV" "$TF_NAMES"; then
     a=0; token_ident "$PROJ" "$TFC" "${k}_PREV" || a=$?
     if [[ "$a" -eq 3 ]]; then printf 'SOLEUR_P5_REFERENCE key=%s source=unknown\n' "$k"; return 3; fi
-    if [[ "$a" -eq 0 && "$IDENT_ID" == "$pin" ]]; then REF_SRC=PREV; REF_ID="$IDENT_ID"; fi
+    if [[ "$a" -eq 0 && "$IDENT_ID" == "$pin" ]]; then REF_SRC=PREV; REF_ID="$IDENT_ID"; REF_ST="$IDENT_STATUS"; fi
   fi
   if [[ "$REF_SRC" == none ]] && in_names "$k" "$TF_NAMES"; then
     a=0; token_ident "$PROJ" "$TFC" "$k" || a=$?
     if [[ "$a" -eq 3 ]]; then printf 'SOLEUR_P5_REFERENCE key=%s source=unknown\n' "$k"; return 3; fi
-    if [[ "$a" -eq 0 && "$IDENT_ID" == "$pin" ]]; then REF_SRC=KEY; REF_ID="$IDENT_ID"; fi
+    if [[ "$a" -eq 0 && "$IDENT_ID" == "$pin" ]]; then REF_SRC=KEY; REF_ID="$IDENT_ID"; REF_ST="$IDENT_STATUS"; fi
   fi
   case "$REF_SRC" in
     PREV) REF_D="$(digest_of "$PROJ" "$TFC" "${k}_PREV" || true)"; NEW_D="$(digest_of "$PROJ" "$TFC" "$k" || true)" ;;
@@ -588,12 +598,23 @@ reference_of() {
 
 # --- the census ------------------------------------------------------------------
 # load_targets — the LIVE listing: every config of every project `doppler projects` returns. Sets CT
-# ("project/config" lines), CT_BAD (listings that failed, printed as UNREADABLE) and CT_FLOOR_OK (1 when
-# project soleur is listed and lists every config the manifest names). Called once per invocation.
-CT=(); CT_BAD=(); CT_FLOOR_OK=0
+# ("project/config" lines), CT_BAD (listings that failed, printed as UNREADABLE), CT_MISSING (the
+# committed floor's members the listing lacks) and CT_FLOOR_OK. Called once per invocation.
+#
+# THE FLOOR (CTO D2): the census quantifies over what the credential LISTS, and a narrowed credential
+# lists less without failing. So the listing must contain every project of the `# P5-PROJECT-FLOOR`
+# line (measured 2026-11-27), every soleur config of the tracked inventory file (read, never copied)
+# and every config the manifest names. A superset passes; each member it lacks is one
+# SOLEUR_P5_FLOOR_MISSING line, and verify then fails reason=census-floor.
+CT=(); CT_BAD=(); CT_FLOOR_OK=0; CT_MISSING=()
+ct_missing() {
+  local m
+  for m in ${CT_MISSING[@]+"${CT_MISSING[@]}"}; do [[ "$m" != "$1" ]] || return 0; done
+  CT_MISSING[${#CT_MISSING[@]}]="$1"
+}
 load_targets() {
-  local raw projects p cfgs c i h soleur_cfgs="" missing=0
-  CT=(); CT_BAD=(); CT_FLOOR_OK=0
+  local raw projects p cfgs c i h soleur_cfgs="" floor="" inv="" invf
+  CT=(); CT_BAD=(); CT_FLOOR_OK=0; CT_MISSING=()
   if ! raw="$(doppler projects --json 2>/dev/null)" \
      || ! projects="$(jq -r --arg re "$NAME_RE" 'if type == "array" and all(.[]; type == "object" and (.name | type) == "string" and (.name | test($re))) then .[].name else error("not a project list") end' <<<"$raw" 2>/dev/null)"; then
     CT_BAD[${#CT_BAD[@]}]="-/-"
@@ -608,25 +629,34 @@ load_targets() {
     for c in $cfgs; do CT[${#CT[@]}]="${p}/${c}"; done
     [[ "$p" == "$PROJ" ]] && soleur_cfgs="$cfgs"
   done
+  if [[ "$(grep -ac "^${FLOOR_TAG}" "${BASH_SOURCE[0]}")" -eq 1 ]]; then
+    floor="$(grep -a "^${FLOOR_TAG}" "${BASH_SOURCE[0]}")"; floor="${floor#"$FLOOR_TAG"}"
+  fi
+  [[ "$floor" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*(\ [A-Za-z0-9][A-Za-z0-9_.-]*)*$ ]] || { floor=""; ct_missing project-floor-line; }
+  if invf="$(tracked_file "$INVENTORY_REL")"; then inv="$(grep -E '^[a-z0-9_]+$' "$invf" | sort -u || true)"; fi
+  [[ -n "$inv" ]] || ct_missing "inventory:${INVENTORY_REL}"
+  for p in $floor; do in_names "$p" "$projects" || ct_missing "$p"; done
+  for c in $inv; do in_names "$c" "$soleur_cfgs" || ct_missing "${PROJ}/${c}"; done
   for i in "${!MKEYS[@]}"; do
-    for h in ${MHOLD[i]}; do in_names "${h#*/}" "$soleur_cfgs" || missing=1; done
+    for h in ${MHOLD[i]}; do in_names "${h#*/}" "$soleur_cfgs" || ct_missing "$h"; done
   done
-  if [[ -n "$soleur_cfgs" && "$missing" -eq 0 ]]; then CT_FLOOR_OK=1; fi
+  if [[ -n "$soleur_cfgs" && "${#CT_MISSING[@]}" -eq 0 ]]; then CT_FLOOR_OK=1; fi
 }
 
 # census_key <key> — classify the key's own name in every listed config (plus
 # <KEY>_PREV in soleur/prd_terraform) against REF_D (old) and NEW_D (new). Prints one
 # SOLEUR_P5_HOLDER row per read, SOLEUR_P5_UNREADABLE per failed read, and SOLEUR_P5_CENSUS. Sets
-# C_READ, C_OLD, C_UNREAD, C_PREV_OLD (1 when the old copy at prd_terraform <KEY>_PREV was seen) and
-# C_ELSEWHERE (every other old holder, "project/config/name").
-C_READ=0; C_OLD=0; C_UNREAD=0; C_PREV_OLD=0; C_ELSEWHERE=()
+# C_READ, C_OLD, C_UNREAD, C_PREV_OLD (1 when the old copy at prd_terraform <KEY>_PREV was seen),
+# C_ELSEWHERE (every other old holder, "project/config/name") and C_HT / C_HV (each read
+# "project/config/name" and its class: old, new, other, absent or unreadable).
+C_READ=0; C_OLD=0; C_UNREAD=0; C_PREV_OLD=0; C_ELSEWHERE=(); C_HT=(); C_HV=()
 census_key() {
   local k="$1" t p c n v ns
-  C_READ=0; C_OLD=0; C_UNREAD=0; C_PREV_OLD=0; C_ELSEWHERE=()
+  C_READ=0; C_OLD=0; C_UNREAD=0; C_PREV_OLD=0; C_ELSEWHERE=(); C_HT=(); C_HV=()
   for t in ${CT[@]+"${CT[@]}"}; do
     p="${t%%/*}"; c="${t#*/}"
     if ! names_cached "$p" "$c"; then
-      printf 'SOLEUR_P5_UNREADABLE project=%s config=%s\n' "$p" "$c"; C_UNREAD=$((C_UNREAD + 1)); continue
+      printf 'SOLEUR_P5_UNREADABLE project=%s config=%s\n' "$p" "$c"; C_HT[${#C_HT[@]}]="$t/$k"; C_HV[${#C_HV[@]}]=unreadable; C_UNREAD=$((C_UNREAD + 1)); continue
     fi
     C_READ=$((C_READ + 1))
     ns="$k"; [[ "$t" == "${PROJ}/${TFC}" ]] && ns="$k ${k}_PREV"
@@ -637,9 +667,10 @@ census_key() {
         if [[ -n "$REF_D" && "$HD" == "$REF_D" ]]; then v=old
         elif [[ -n "$NEW_D" && "$HD" == "$NEW_D" ]]; then v=new
         else v=other; fi
-      else printf 'SOLEUR_P5_UNREADABLE project=%s config=%s name=%s\n' "$p" "$c" "$n"; C_UNREAD=$((C_UNREAD + 1)); continue
+      else printf 'SOLEUR_P5_UNREADABLE project=%s config=%s name=%s\n' "$p" "$c" "$n"; C_HT[${#C_HT[@]}]="$t/$n"; C_HV[${#C_HV[@]}]=unreadable; C_UNREAD=$((C_UNREAD + 1)); continue
       fi
       printf 'SOLEUR_P5_HOLDER project=%s config=%s key=%s value=%s\n' "$p" "$c" "$n" "$v"
+      C_HT[${#C_HT[@]}]="$t/$n"; C_HV[${#C_HV[@]}]="$v"
       if [[ "$v" == old ]]; then
         C_OLD=$((C_OLD + 1))
         if [[ "$t/$n" == "${PROJ}/${TFC}/${k}_PREV" ]]; then C_PREV_OLD=1; else C_ELSEWHERE[${#C_ELSEWHERE[@]}]="$t/$n"; fi
@@ -651,9 +682,8 @@ census_key() {
 print_target_failures() {
   local b
   for b in ${CT_BAD[@]+"${CT_BAD[@]}"}; do printf 'SOLEUR_P5_UNREADABLE project=%s config=%s\n' "${b%%/*}" "${b#*/}"; done
-  if [[ "$CT_FLOOR_OK" -ne 1 ]]; then
-    printf 'SOLEUR_P5_CENSUS_FLOOR verdict=fail reason=%s\n' "project ${PROJ} is not listed or lists fewer configs than the manifest names"
-  fi
+  for b in ${CT_MISSING[@]+"${CT_MISSING[@]}"}; do printf 'SOLEUR_P5_FLOOR_MISSING name=%s\n' "$b"; done
+  if [[ "$CT_FLOOR_OK" -ne 1 ]]; then printf 'SOLEUR_P5_CENSUS_FLOOR verdict=fail reason=floor-missing\n'; fi
 }
 
 # --- inventory (read) ---------------------------------------------------------
@@ -671,6 +701,9 @@ read_inventory() {
       "$(in_names "${k}_NEXT" "$TF_NAMES" && echo present || echo absent)" "$(in_names "${k}_PREV" "$TF_NAMES" && echo present || echo absent)"
     rr=0; reference_of "$k" "${MPIN[i]}" || rr=$?
     if [[ "$rr" -ne 0 ]]; then bad=1; continue; fi
+    # A reference whose value cannot be read leaves the census unable to call anything old: that is
+    # census-blind (exit non-zero), never old_hits=0.
+    if [[ "$REF_SRC" != none && -z "$REF_D" ]]; then printf 'SOLEUR_P5_CENSUS_BLIND key=%s source=%s\n' "$k" "$REF_SRC"; bad=1; continue; fi
     census_key "$k"
     [[ "$C_UNREAD" -eq 0 ]] || bad=1
   done
@@ -819,17 +852,22 @@ apply_swap() {
 
 # --- holder-copies (write) ----------------------------------------------------------
 HC_K=(); HC_C=(); SW_DP=""
-# require_swapped <key> <pin> — the swap's work, re-proved: <KEY>_PREV verifies the pinned id and
-# <KEY> verifies a different, active id. Sets SW_DP (the old value's digest) or refuses need=swap.
+# require_swapped <key> <pin> — the swap's work, re-proved for EVERY key before any holder is classified:
+# <KEY> verifies an active id that is not the pin (else need=swap: nothing is reported as already done
+# before a swap). Sets SW_DP to the old value's digest when <KEY>_PREV verifies the pinned id; after the
+# revoke (the old token denied, or its _PREV deleted) SW_DP stays empty, so no holder can classify as
+# old and a holder that is not new refuses the stage.
 require_swapped() {
   local k="$1" pin="$2" a=0 b=0
   SW_DP=""
-  in_names "${k}_PREV" "$TF_NAMES" && token_ident "$PROJ" "$TFC" "${k}_PREV" || a=$?
-  if [[ "$a" -eq 3 ]]; then soleur_op_precondition_failed holder-copies inventory "A verify read of ${TFC}/${k}_PREV got no verdict, so nothing is decided. Run this stage again later; nothing was changed."; fi
-  [[ "$a" -eq 0 && "$IDENT_ID" == "$pin" ]] || soleur_op_precondition_failed holder-copies swap "${TFC}/${k}_PREV does not verify the pinned old id ${pin}, so nothing proves which value a holder holds. Run the swap stage first; nothing was changed."
   token_ident "$PROJ" "$TFC" "$k" || b=$?
   [[ "$b" -ne 3 ]] || soleur_op_precondition_failed holder-copies inventory "The verify read of ${TFC}/${k} got no verdict, so nothing is decided. Run this stage again later; nothing was changed."
   [[ "$b" -eq 0 && "$IDENT_STATUS" == active && "$IDENT_ID" != "$pin" ]] || soleur_op_precondition_failed holder-copies swap "${TFC}/${k} does not verify as an active new token. Run the swap stage first; nothing was changed."
+  in_names "${k}_PREV" "$TF_NAMES" || return 0
+  token_ident "$PROJ" "$TFC" "${k}_PREV" || a=$?
+  [[ "$a" -ne 3 ]] || soleur_op_precondition_failed holder-copies inventory "A verify read of ${TFC}/${k}_PREV got no verdict, so nothing is decided. Run this stage again later; nothing was changed."
+  [[ "$a" -ne 1 ]] || return 0
+  [[ "$a" -eq 0 && "$IDENT_ID" == "$pin" ]] || soleur_op_precondition_failed holder-copies swap "${TFC}/${k}_PREV does not verify the pinned old id ${pin}, so nothing proves which value a holder holds. Run the swap stage first; nothing was changed."
   SW_DP="$(digest_of "$PROJ" "$TFC" "${k}_PREV")" || soleur_op_precondition_failed holder-copies inventory "${TFC}/${k}_PREV is unreadable. Nothing was changed."
 }
 plan_holder_copies() {
@@ -840,8 +878,10 @@ plan_holder_copies() {
   for i in "${!MKEYS[@]}"; do
     k="${MKEYS[i]}"; pin="${MPIN[i]}"
     if in_names "${k}_NEXT" "$TF_NAMES"; then soleur_op_precondition_failed holder-copies swap "${TFC}/${k}_NEXT is still staged, so ${TFC}/${k} may still hold the old token and a copy would spread it. Run the swap stage first; nothing was changed."; fi
+    # The swap's work is re-proved for every key first, so nothing is ever classified (or reported as
+    # already done) before a swap: dp is the old value's digest, from a _PREV that verifies the pin.
+    require_swapped "$k" "$pin"; dp="$SW_DP"
     dk="$(digest_of "$PROJ" "$TFC" "$k")" || soleur_op_precondition_failed holder-copies inventory "${TFC}/${k} is unreadable or empty. Nothing was changed."
-    dp=""
     # The full classification pass: every holder is decided on its own digest BEFORE any write.
     for h in ${MHOLD[i]}; do
       [[ "$h" != "${PROJ}/${TFC}" ]] || continue
@@ -850,9 +890,8 @@ plan_holder_copies() {
       elif ! in_names "$k" "$NAMES"; then HCLS=absent
       elif ! holder_digest "$PROJ" "$c" "$k"; then HCLS=unreadable
       elif [[ "$HD" == "$dk" ]]; then HCLS=new
-      else
-        if [[ -z "$dp" ]]; then require_swapped "$k" "$pin"; dp="$SW_DP"; fi
-        if [[ "$HD" == "$dp" ]]; then HCLS=old; else HCLS=other; fi
+      elif [[ -n "$dp" && "$HD" == "$dp" ]]; then HCLS=old
+      else HCLS=other
       fi
       printf 'SOLEUR_P5_HOLDER_COPY key=%s holder=%s value=%s\n' "$k" "$h" "$HCLS"
       case "$HCLS" in
@@ -926,7 +965,7 @@ consumer_read() {
 
 # verify_key <manifest-index> — one key's verdict. The first failing check is the reason.
 verify_key() {
-  local i="$1" k pin rc o
+  local i="$1" k pin rc o h hv j hbad
   k="${MKEYS[i]}"; pin="${MPIN[i]}"
   rc=0; token_ident "$PROJ" "$TFC" "$k" || rc=$?
   case "$rc" in
@@ -944,6 +983,7 @@ verify_key() {
   rc=0; reference_of "$k" "$pin" || rc=$?
   [[ "$rc" -eq 0 ]] || { vfail "$k" unreachable; return 0; }
   [[ "$REF_SRC" == PREV ]] || { vfail "$k" no-reference; return 0; }
+  [[ "$REF_ST" == active ]] || { vfail "$k" prev-not-active; return 0; }
   [[ "$TARGETS_NEW" -eq 1 ]] || { vfail "$k" target-ids-not-new; return 0; }
   consumer_read "$k" || { vfail "$k" consumer-read; return 0; }
   census_key "$k"
@@ -956,6 +996,17 @@ verify_key() {
   # Exactly one old copy, at prd_terraform <KEY>_PREV (old copies elsewhere were refused above); zero
   # old copies means the census cannot see the old value at all, which proves nothing.
   [[ "$C_OLD" -eq 1 && "$C_PREV_OLD" -eq 1 ]] || { vfail "$k" census-blind; return 0; }
+  # "No old copy elsewhere" is not "every holder has the new one": each manifest holder other than
+  # prd_terraform must read value=new (its digest equals prd_terraform <KEY>'s), or the revoke would
+  # leave that consumer with no working token.
+  hbad=0
+  for h in ${MHOLD[i]}; do
+    [[ "$h" != "${PROJ}/${TFC}" ]] || continue
+    hv=unlisted
+    for j in ${C_HT[@]+"${!C_HT[@]}"}; do [[ "${C_HT[j]}" != "$h/$k" ]] || hv="${C_HV[j]}"; done
+    [[ "$hv" == new ]] || { printf 'SOLEUR_P5_HOLDER_NOT_NEW key=%s holder=%s value=%s\n' "$k" "$h" "$hv"; hbad=1; }
+  done
+  [[ "$hbad" -eq 0 ]] || { vfail "$k" holder-not-new; return 0; }
   printf 'SOLEUR_P5_VERIFY key=%s verdict=ok\n' "$k"
   printf 'SOLEUR_P5_REVOKE_READY key=%s old_id=%s new_id=%s owner=%s\n' "$k" "$REF_ID" "$key_id" "$key_owner"
 }

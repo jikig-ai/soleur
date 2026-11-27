@@ -81,6 +81,7 @@ ALL_OUT="$SB/all-output.log"; : > "$ALL_OUT"
 
 readonly NZ=951ce525552201ec6c696b24251abed7 NA=66d4f93f7397f196544e9fe84c3557c2
 readonly OZ=5af02a2f394e9ba6e0ea23c381a26b67
+readonly OA=0123456789abcdef0123456789abcdef   # synthesized: any account id but the new one
 readonly TFC=prd_terraform
 # The keys and their pinned old-id prefixes come from the script's own `# P5-MANIFEST` lines (a rotation edits only
 # that block, CTO F18); the stubs read them from STUB_PINS. KA / KN / KP name the three consumers this suite models.
@@ -93,6 +94,12 @@ readonly KEYS STUB_PINS
 pin_of() { local e; for e in $STUB_PINS; do [[ "${e%%=*}" != "$1" ]] || { printf '%s\n' "${e#*=}"; return 0; }; done; return 1; }
 readonly KA=CF_API_TOKEN_AUDIT KN=CF_API_TOKEN_ANALYTICS_READ KP=CF_API_TOKEN_PAGERULES_READ
 for _k in "$KA" "$KN" "$KP"; do pin_of "$_k" >/dev/null || { printf 'HARNESS: the manifest has no %s line\n' "$_k" >&2; exit 2; }; done
+# The census floor the bootstrap reads: its `# P5-PROJECT-FLOOR` line and the tracked soleur inventory file.
+readonly INV_REL=apps/web-platform/infra/doppler-config-inventory.txt
+FLOOR_PROJECTS=(); INV_CFGS=()
+for _p in $(sed -n 's/^# P5-PROJECT-FLOOR //p' "$SCRIPT_SRC"); do FLOOR_PROJECTS[${#FLOOR_PROJECTS[@]}]="$_p"; done
+while IFS= read -r _c; do INV_CFGS[${#INV_CFGS[@]}]="$_c"; done < <(grep -E '^[a-z0-9_]+$' "${REPO_ROOT}/${INV_REL}" | sort -u)
+[[ "${#FLOOR_PROJECTS[@]}" -gt 0 && "${#INV_CFGS[@]}" -gt 0 ]] || { printf 'HARNESS: no census floor (project line or inventory) to model\n' >&2; exit 2; }
 tok() { printf 'SYNTH-%s-%s-SENTINEL' "$1" "$2"; }   # tok <KIND> <KEY>
 
 # --- stubs ----------------------------------------------------------------------
@@ -106,6 +113,10 @@ write_stubs() { # <bin-dir>
 #   get-fails.<p>.<c>.<NAME>                a get of that (listed) name fails
 #   corrupt.<p>.<c>.<NAME>                  a set of that name stores a DIFFERENT value
 #   get-fails-after.<p>.<c>.<NAME>          holds N: every get of that name after the N-th (counted from the flag) fails
+#   get-fail-nth.<p>.<c>.<NAME>             holds N: only the N-th get of that name fails
+#   hide-project.<p> / hide-config.<p>.<c>  the listing silently omits that project / config (a narrowed credential)
+#   configs-fail.<p>                        `doppler configs -p <p>` fails
+#   names-array.<p>.<c>                     the names listing of <p>/<c> answers a JSON ARRAY of names
 #   delete-noop                             a delete answers 0 and removes nothing
 #   get-empty                               HARNESS H1: every get answers an empty value
 #   get-as-prev                             HARNESS H3: a get of soleur/<c>/<NAME> (c != prd_terraform) serves
@@ -128,16 +139,17 @@ case "${1:-} ${2:-}" in
     log read "projects"
     [[ ! -e "$F/projects-fail" ]] || exit 1
     if [[ -e "$F/projects-empty" ]]; then echo '[]'; exit 0; fi
-    ls -1 "$STUB_D" | jq -R -s -c 'split("\n") | map(select(length > 0)) | map({id: ., name: .})'; exit 0 ;;
+    for e in $(ls -1 "$STUB_D"); do [[ -e "$F/hide-project.$e" ]] || echo "$e"; done | jq -R -s -c 'split("\n") | map(select(length > 0)) | map({id: ., name: .})'; exit 0 ;;
   "configs -p")
     log read "configs $proj"
     [[ " $* " == *" --json "* ]] || exit 64
-    [[ -n "$proj" && -d "$STUB_D/$proj" ]] || exit 1
-    ls -1 "$STUB_D/$proj" | jq -R -s -c 'split("\n") | map(select(length > 0)) | map({name: ., root: false})'; exit 0 ;;
+    [[ -n "$proj" && -d "$STUB_D/$proj" && ! -e "$F/configs-fail.$proj" ]] || exit 1
+    for e in $(ls -1 "$STUB_D/$proj"); do [[ -e "$F/hide-config.$proj.$e" ]] || echo "$e"; done | jq -R -s -c 'split("\n") | map(select(length > 0)) | map({name: ., root: false})'; exit 0 ;;
   "secrets --only-names")
     log read "list $proj/$cfg"
     [[ " $* " == *" --json "* ]] || exit 64
     [[ -n "$proj" && -n "$cfg" && -d "$D" && ! -e "$F/unreadable.$proj.$cfg" ]] || exit 1
+    if [[ -e "$F/names-array.$proj.$cfg" ]]; then ls -1 "$D" | jq -R -s -c 'split("\n") | map(select(length > 0))'; exit 0; fi
     ls -1 "$D" | jq -R -s -c 'split("\n") | map(select(length > 0)) | map({(.): {}}) | add // {}'; exit 0 ;;
   "secrets get")
     n="$3"; log read "get $proj/$cfg/$n"
@@ -146,6 +158,10 @@ case "${1:-} ${2:-}" in
     if [[ -e "$F/get-fails-after.$proj.$cfg.$n" ]]; then
       printf 'x' >> "$F/get-count.$proj.$cfg.$n"
       [[ "$(wc -c < "$F/get-count.$proj.$cfg.$n")" -le "$(cat "$F/get-fails-after.$proj.$cfg.$n")" ]] || exit 1
+    fi
+    if [[ -e "$F/get-fail-nth.$proj.$cfg.$n" ]]; then
+      printf 'x' >> "$F/get-nth.$proj.$cfg.$n"
+      [[ "$(wc -c < "$F/get-nth.$proj.$cfg.$n")" -ne "$(cat "$F/get-fail-nth.$proj.$cfg.$n")" ]] || exit 1
     fi
     if [[ -e "$F/get-empty" ]]; then printf '\n'; exit 0; fi
     if [[ -e "$F/get-as-prev" && "$proj" == soleur && "$cfg" != prd_terraform && -f "$STUB_D/soleur/prd_terraform/${n}_PREV" && ! -e "$F/set-seen.$proj.$cfg.$n" ]]; then
@@ -187,6 +203,9 @@ DOPPLER
 #   curl-429 / curl-503  every verify read answers 429 JSON success:false / 503 HTML (no verdict)
 #   curl-down    every request is a transport failure (exit 7)
 #   graphql-mismatch     the GraphQL answer names no zone and carries one error
+#   graphql-errors       the GraphQL answer names the new zone AND carries one error
+#   curl-403-html        every verify read answers 403 with an HTML body (no verdict)
+# Kind OLDEXP answers the key's pinned id with status expired (an expired old token).
 #   old-denied-after-prev-set / old-unreachable-after-prev-set  once any *_PREV was set, every OLD token is
 #                        denied (401 JSON) / answers 503 HTML: the old token dies inside the swap window
 # The argv must be EXACTLY the bootstrap's (`--disable` first, no proxy, a time and redirect cap, the status
@@ -220,11 +239,12 @@ kre='^SYNTH-([A-Z0-9]+)-(CF_API_TOKEN_[A-Z_]+)-SENTINEL$'
 kind=""; key=""
 if [[ "$tok" =~ $kre ]]; then kind="${BASH_REMATCH[1]}"; key="${BASH_REMATCH[2]}"; fi
 pin() { local e; for e in ${STUB_PINS:-}; do [[ "${e%%=*}" != "$1" ]] || { echo "${e#*=}"; return; }; done; echo 0000ffff; }
-tid() { if [[ "$kind" == OLD ]]; then printf '%s000000000000000000000000' "$(pin "$key")"; else printf '%s' "$tok" | sha256sum | cut -c1-32; fi; }
+tid() { if [[ "$kind" == OLD || "$kind" == OLDEXP ]]; then printf '%s000000000000000000000000' "$(pin "$key")"; else printf '%s' "$tok" | sha256sum | cut -c1-32; fi; }
 case "$u" in
   "$api/accounts/66d4f93f7397f196544e9fe84c3557c2/tokens/verify"|"$api/user/tokens/verify")
     [[ ! -e "$F/curl-429" ]] || reply 429 '{"success":false,"errors":[{"code":971,"message":"Please wait and consider throttling your request speed"}]}'
     [[ ! -e "$F/curl-503" ]] || reply 503 '<html><body>503 Service Unavailable</body></html>'
+    [[ ! -e "$F/curl-403-html" ]] || reply 403 '<html><body>403 Forbidden</body></html>'
     [[ -n "$kind" ]] || deny
     [[ "$kind" != OLD || ! -e "$F/revoked-old" ]] || deny
     if [[ "$kind" == OLD && -e "$F/prev-set-seen" ]]; then
@@ -233,10 +253,13 @@ case "$u" in
     fi
     acct=0; [[ "$kind" == ACCT ]] && acct=1
     if [[ "$u" == */accounts/* ]]; then [[ "$acct" -eq 1 ]] || deny; else [[ "$acct" -eq 0 ]] || deny; fi
-    st=active; [[ "$kind" == EXPIRED ]] && st=expired
+    st=active; [[ "$kind" == EXPIRED || "$kind" == OLDEXP ]] && st=expired
     reply 200 "{\"success\":true,\"result\":{\"id\":\"$(tid)\",\"status\":\"${st}\",\"expires_on\":\"2027-02-20T00:00:00Z\"}}" ;;
   "$api/graphql")
     [[ "$data" -eq 1 && "$ct" -eq 1 ]] || exit 64
+    if [[ "$key" == CF_API_TOKEN_ANALYTICS_READ && "$kind" =~ ^(NEW[0-9]*|ACCT)$ && -e "$F/graphql-errors" ]]; then
+      reply 200 '{"data":{"viewer":{"zones":[{"zoneTag":"951ce525552201ec6c696b24251abed7"}]}},"errors":[{"message":"partial"}]}'
+    fi
     if [[ "$key" == CF_API_TOKEN_ANALYTICS_READ && "$kind" =~ ^(NEW[0-9]*|ACCT)$ && ! -e "$F/graphql-mismatch" ]]; then
       reply 200 '{"data":{"viewer":{"zones":[{"zoneTag":"951ce525552201ec6c696b24251abed7"}]}},"errors":null}'
     fi
@@ -257,8 +280,9 @@ GH
 # make_repo <dir> <bootstrap-src> — a fixture repository tracking the script and the two tool stubs.
 make_repo() {
   local r="$1" src="$2"; assert_fixture_dir "$r"
-  mkdir -p "$r/$(dirname "$REL")" "$r/plugins/soleur/scripts"
+  mkdir -p "$r/$(dirname "$REL")" "$r/plugins/soleur/scripts" "$r/$(dirname "$INV_REL")"
   cp "$src" "$r/$REL"
+  cp "${REPO_ROOT}/${INV_REL}" "$r/$INV_REL"
   cat > "$r/plugins/soleur/scripts/cloudflare-readonly.sh" <<'RO'
 #!/usr/bin/env bash
 # Stand-in for the consumer wrapper: refuses outside soleur/prd_terraform, reads only its bound variable,
@@ -273,6 +297,7 @@ case "$sub" in
     if [[ -e "$STUB_D/.flags/analytics-api-error" ]]; then echo "cloudflare-readonly: analytics-health unverified - api-error (graphql: quantile fields are not available on this plan)"; exit 14; fi ;;
   *) exit 64 ;;
 esac
+[[ ! -e "$STUB_D/.flags/consumer-fail.$sub" ]] || { echo "cloudflare-readonly: ${sub} unverified - token-lacks-scope"; exit 11; }
 if [[ "$v" =~ ^SYNTH-(NEW[0-9]*|ACCT|EXPIRED)-${k}-SENTINEL$ ]]; then
   echo "cloudflare-readonly: ${sub} ok"; echo '{"count":2,"actor":"synth-actor@example.invalid","ip":"192.0.2.7"}'; exit 0
 fi
@@ -306,6 +331,10 @@ world() {
   sv other ci OTHER_KEY unrelated
   sv soleur-infra-privileged prd CF_API_TOKEN_ORIGIN_CA "SYNTH-PRIV-ORIGIN-SENTINEL"
   sv soleur-infra-privileged prd CF_API_TOKEN_R2 "SYNTH-PRIV-R2-SENTINEL"
+  # The committed census floor: every inventory config of soleur, and one config of every floor project.
+  local fc fp
+  for fc in "${INV_CFGS[@]}"; do [[ -d "$STUB_D/soleur/$fc" ]] || sv soleur "$fc" OTHER_KEY unrelated; done
+  for fp in "${FLOOR_PROJECTS[@]}"; do [[ -d "$STUB_D/$fp" ]] || sv "$fp" prd OTHER_KEY unrelated; done
   CHILD_ENV=("PATH=$W/bin:$PATH" "SOLEUR_OP_LIB=$LIB" "ENV_FILE=$W/xdg/.env" "SOLEUR_BOOTSTRAP_LEDGER=$W/ledger.jsonl"
              "STUB_D=$STUB_D" "STUB_LOG=$STUB_LOG" "STUB_PINS=$STUB_PINS" "XDG_STATE_HOME=$W/xdg"
              "GIT_CEILING_DIRECTORIES=$SB")   # a TMPDIR inside some work tree must not leak that tree into a fixture
@@ -339,7 +368,7 @@ done
 # observe — after every child: WHY is the reasons and markers the run printed (killed() names the one a mutant
 # must produce), and a READ stage that made any mutating doppler call is forced red (rc 97, why read-stage-wrote).
 observe() { # <mutating-calls-before> <read-stage 0|1>
-  WHY="rc=${RC} $(grep -oE '^SOLEUR_[A-Z0-9_]+|reason=[a-z-]+' <<<"$OUT" | sort -u | tr '\n' ' ')"
+  WHY="rc=${RC} $(grep -oE '^SOLEUR_[A-Z0-9_]+|reason=[a-z-]+|need=[a-z-]+' <<<"$OUT" | sort -u | tr '\n' ' ')"
   if [[ "$2" -eq 1 && "$(mut)" -gt "$1" ]]; then RC=97; WHY="read-stage-wrote ${WHY}"; OUT="read-stage-wrote: ${OUT}"; fi
   printf '%s\n' "$OUT" >> "$ALL_OUT"
 }
@@ -486,7 +515,72 @@ row_g1_mustpass() { # <src> — other/ci holds the NEW value and soleur/prd lack
   for k in "${KEYS[@]}"; do vok "$k" && ready "$k" || return 1; done
   has_line "SOLEUR_P5_HOLDER project=soleur config=prd key=${KA} value=absent" \
     && has_line "SOLEUR_P5_HOLDER project=other config=ci key=${KA} value=new" \
-    && has_line "SOLEUR_P5_CENSUS key=${KA} configs_read=7 old_hits=1"
+    && has_line "SOLEUR_P5_CENSUS key=${KA} configs_read=$(find "$STUB_D" -mindepth 2 -maxdepth 2 -type d | wc -l) old_hits=1" || return 1
+  at consumers
+  has_line "SOLEUR_P5_CONSUMER key=${KA} sub=change-history gating=yes rc=0 line=cloudflare-readonly: change-history ok" \
+    && has_line "SOLEUR_P5_CONSUMER key=${KP} sub=pagerules-ssl gating=yes rc=0 line=cloudflare-readonly: pagerules-ssl ok" \
+    && has_line "SOLEUR_P5_CONSUMER key=${KN} sub=analytics-health gating=no rc=0 line=cloudflare-readonly: analytics-health ok"
+}
+
+row_g1_8_hidden_holder() { # <src> — AUDIT's manifest names soleur/dev_hidden, a config the listing does not show
+  local b="$SB/hidden-$RANDOM.sh"
+  at setup
+  copy_with "$1" "$b" <<'PERL' || return 1
+s{(# P5-MANIFEST CF_API_TOKEN_AUDIT +\| [0-9a-f]{8} +\| soleur/prd_terraform soleur/dev)\n}{$1 soleur/dev_hidden\n}
+PERL
+  world g1-8 "$b"; seed_swapped
+  at verdict
+  run --stage verify
+  [[ "$RC" -eq 1 ]] && has_line 'SOLEUR_P5_FLOOR_MISSING name=soleur/dev_hidden' && vfail_is "$KA" census-floor && noready "$KA"
+}
+row_g1_9_names_unreadable() { # <src> — other/ci holds the old value and its names listing fails
+  world g1-9 "$1"; seed_swapped; sv other ci "$KA" "$(tok OLD "$KA")"; flag unreadable.other.ci
+  at verdict
+  run --stage verify
+  [[ "$RC" -eq 1 ]] && has_line 'SOLEUR_P5_UNREADABLE project=other config=ci' && vfail_is "$KA" census-unreadable && noready "$KA"
+}
+row_g1_10_configs_unreadable() { # <src> — project other (outside the floor) holds the old value and its configs listing fails
+  local k
+  world g1-10 "$1"; seed_swapped; sv other ci "$KA" "$(tok OLD "$KA")"; flag configs-fail.other
+  at verdict
+  run --stage verify
+  [[ "$RC" -eq 1 ]] && has_line 'SOLEUR_P5_UNREADABLE project=other config=-' || return 1
+  for k in "${KEYS[@]}"; do vfail_is "$k" census-unreadable && noready "$k" || return 1; done
+}
+row_g1_11_next_staged() { # <src> — swapped, but a second new token is staged as AUDIT_NEXT
+  world g1-11 "$1"; seed_swapped; sv soleur "$TFC" "${KA}_NEXT" "$(tok NEW2 "$KA")"
+  at verdict
+  run --stage verify
+  [[ "$RC" -eq 1 ]] && vfail_is "$KA" next-staged && noready "$KA"
+}
+row_g1_12_names_array() { # <src> — other/ci holds the old value and its names listing answers an ARRAY
+  world g1-12 "$1"; seed_swapped; sv other ci "$KA" "$(tok OLD "$KA")"; flag names-array.other.ci
+  at verdict
+  run --stage verify
+  [[ "$RC" -eq 1 ]] && has_line 'SOLEUR_P5_UNREADABLE project=other config=ci' && vfail_is "$KA" census-unreadable && noready "$KA"
+}
+row_g1_13_floor() { # <src> <project|config> — the listing silently drops soleur-infra-privileged, or soleur/dev_personal
+  local k want
+  world "g1-13-$2" "$1"; seed_swapped
+  if [[ "$2" == project ]]; then flag hide-project.soleur-infra-privileged; want=soleur-infra-privileged
+  else flag hide-config.soleur.dev_personal; want=soleur/dev_personal; fi
+  at verdict
+  run --stage verify
+  [[ "$RC" -eq 1 ]] && has_line "SOLEUR_P5_FLOOR_MISSING name=${want}" && has_line 'SOLEUR_P5_CENSUS_FLOOR verdict=fail reason=floor-missing' || return 1
+  for k in "${KEYS[@]}"; do vfail_is "$k" census-floor && noready "$k" || return 1; done
+}
+row_g1_14_holder_not_new() { # <src> <absent|other> — dev (AUDIT's manifest holder) lacks the key, or holds a third value
+  world "g1-14-$2" "$1"; seed_swapped
+  if [[ "$2" == absent ]]; then rmv soleur dev "$KA"; else sv soleur dev "$KA" "$(tok THIRD "$KA")"; fi
+  at verdict
+  run --stage verify
+  [[ "$RC" -eq 1 ]] && has_line "SOLEUR_P5_HOLDER_NOT_NEW key=${KA} holder=soleur/dev value=$2" && vfail_is "$KA" holder-not-new && noready "$KA" && vok "$KN"
+}
+row_g1_15_prev_expired() { # <src> — _PREV verifies the pinned id, but with status expired (CTO F13 needs it active)
+  world g1-15 "$1"; seed_swapped; sv soleur "$TFC" "${KA}_PREV" "$(tok OLDEXP "$KA")"
+  at verdict
+  run --stage verify
+  [[ "$RC" -eq 1 ]] && has_line "SOLEUR_P5_REFERENCE key=${KA} source=PREV" && vfail_is "$KA" prev-not-active && noready "$KA"
 }
 
 # ==================================================================================================
@@ -678,7 +772,7 @@ row_g2_r2_resume_after_key() { # <src> — an earlier run stopped after AUDIT's 
 # edits only the manifest block, so this is a legitimate input world).
 two_holders() {
   copy_with "$1" "$2" <<'PERL'
-s{(# P5-MANIFEST CF_API_TOKEN_AUDIT +\| dd6d1427 +\| soleur/prd_terraform) soleur/dev\n}{$1 soleur/dev_personal soleur/dev\n}
+s{(# P5-MANIFEST CF_API_TOKEN_AUDIT +\| [0-9a-f]{8} +\| soleur/prd_terraform) soleur/dev\n}{$1 soleur/dev_personal soleur/dev\n}
 PERL
 }
 row_g3_1_last_holder_bad() { # <src> <third|absent>
@@ -740,6 +834,26 @@ row_g3_6_source_unreadable_at_copy() { # <src> — prd_terraform <KEY> stops rea
   [[ "$(set_lines dev "$KA")" -eq 0 ]] || return 1
   at stops
   [[ "$RC" -ne 0 && "$(val soleur dev "$KA")" == "$(tok OLD "$KA")" ]] && has_line 'SOLEUR_BOOTSTRAP_STAGE_FAILED stage=holder-copies rc=1'
+}
+
+row_g3_4_nothing_swapped() { # <src> — nothing staged and no swap yet (<KEY> and dev still old, no _PREV): refuse need=swap
+  local k
+  world g3-4 "$1"
+  for k in "${KEYS[@]}"; do sv soleur "$TFC" "$k" "$(tok OLD "$k")"; done
+  sv soleur dev "$KA" "$(tok OLD "$KA")"
+  at need-swap
+  : > "$STUB_LOG"; run --stage holder-copies
+  [[ "$RC" -eq 1 && -z "$(digest)" ]] && has_line 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=holder-copies need=swap' && ! grep -q '^SOLEUR_P5_HOLDER_COPY ' <<<"$OUT" || return 1
+  at zero-writes
+  [[ "$(mut)" -eq 0 ]]
+}
+row_i1_reference_unreadable() { # <src> — AUDIT_PREV verifies the pin, then its one value read fails: census-blind, never old_hits=0
+  world i-1 "$1"; seed_swapped
+  printf '4' > "$STUB_D/.flags/get-fail-nth.soleur.${TFC}.${KA}_PREV"   # reads 1-3: the shape pass and both verify endpoints
+  at verdict
+  run --stage inventory
+  [[ "$RC" -ne 0 ]] && has_line "SOLEUR_P5_REFERENCE key=${KA} source=PREV" && has_line "SOLEUR_P5_CENSUS_BLIND key=${KA} source=PREV" \
+    && ! grep -q "^SOLEUR_P5_CENSUS key=${KA} " <<<"$OUT"
 }
 
 # ==================================================================================================
@@ -832,20 +946,36 @@ row_s6_analytics_api_error() { # <src> — the zone-tag query passes and analyti
   [[ "$RC" -eq 0 ]] && vok "$KN" && ready "$KN" && has_line "SOLEUR_P5_GRAPHQL key=${KN} zone_tag=match errors=0" \
     && grep -qE "^SOLEUR_P5_CONSUMER key=${KN} sub=analytics-health gating=no rc=14 line=cloudflare-readonly: analytics-health unverified - api-error \(graphql: " <<<"$OUT"
 }
-row_s7_graphql_mismatch() { # <src>
-  world s7 "$1"; seed_swapped; flag graphql-mismatch
+row_s7_graphql() { # <src> <mismatch|errors> — no new zone tag, or the new zone tag with an error
+  local zt=mismatch; [[ "$2" == errors ]] && zt=match
+  world "s7-$2" "$1"; seed_swapped; flag "graphql-$2"
   at verdict
   run --stage verify
-  [[ "$RC" -eq 1 ]] && vfail_is "$KN" consumer-read && noready "$KN" && has_line "SOLEUR_P5_GRAPHQL key=${KN} zone_tag=mismatch errors=1" && vok "$KA"
+  [[ "$RC" -eq 1 ]] && vfail_is "$KN" consumer-read && noready "$KN" && has_line "SOLEUR_P5_GRAPHQL key=${KN} zone_tag=${zt} errors=1" && vok "$KA"
 }
-row_s8_old_target_ids() { # <src> — prd_terraform still names the old zone: refused as a target
+row_s8_old_target_ids() { # <src> <zone|account> — prd_terraform still names the old zone, or an account that is not the new one
   local k
-  world s8 "$1"; seed_swapped; sv soleur "$TFC" CF_ZONE_ID "$OZ"
+  world "s8-$2" "$1"; seed_swapped
+  if [[ "$2" == zone ]]; then sv soleur "$TFC" CF_ZONE_ID "$OZ"; else sv soleur "$TFC" CF_ACCOUNT_ID "$OA"; fi
   at verdict
   run --stage verify
   [[ "$RC" -eq 1 ]] || return 1
   for k in "${KEYS[@]}"; do vfail_is "$k" target-ids-not-new && noready "$k" || return 1; done
   ! logged 'consumer '
+}
+
+row_s9_consumer_fails() { # <src> — AUDIT's own consumer read answers unverified: only AUDIT fails
+  world s9 "$1"; seed_swapped; flag consumer-fail.change-history
+  at verdict
+  run --stage verify
+  [[ "$RC" -eq 1 ]] && vfail_is "$KA" consumer-read && noready "$KA" && vok "$KN" && vok "$KP" \
+    && has_line "SOLEUR_P5_CONSUMER key=${KA} sub=change-history gating=yes rc=11 line=cloudflare-readonly: change-history unverified - token-lacks-scope"
+}
+row_s3c_403_html() { # <src> — a 403 with an HTML body is no verdict (only a JSON success:false is a denial)
+  world s3c "$1"; seed_swapped; flag curl-403-html
+  at verdict
+  run --stage verify
+  [[ "$RC" -eq 1 ]] && has_line "SOLEUR_P5_TOKEN_UNREACHABLE name=soleur/${TFC}/${KA} http=403" && vfail_is "$KA" unreachable && ! grep -q '^SOLEUR_P5_REVOKE_READY ' <<<"$OUT"
 }
 
 # ==================================================================================================
@@ -890,7 +1020,17 @@ if [[ "$MODE" == full ]]; then
   row_g1_5_expired "$SCRIPT_SRC"; check "G1-5 <KEY> verifies a new id with status=expired: fail reason=key-not-active" $?
   row_g1_6_prev_new "$SCRIPT_SRC"; check "G1-6 <KEY>_PREV holds the new value: source=none, no REVOKE_READY" $?
   row_g1_7_get_error "$SCRIPT_SRC"; check "G1-7 a failed get of a listed name: UNREADABLE, fail reason=census-unreadable" $?
-  row_g1_mustpass "$SCRIPT_SRC"; check "G1 must-PASS: other/ci new and soleur/prd absent: ok plus REVOKE_READY for all three keys" $?
+  row_g1_mustpass "$SCRIPT_SRC"; check "G1 must-PASS: other/ci new and soleur/prd absent: ok plus REVOKE_READY for all three keys, each key's own consumer" $?
+  row_g1_8_hidden_holder "$SCRIPT_SRC"; check "G1-8 a manifest holder config the listing hides: FLOOR_MISSING naming it, census-floor" $?
+  row_g1_9_names_unreadable "$SCRIPT_SRC"; check "G1-9 a config whose names listing fails: UNREADABLE, census-unreadable" $?
+  row_g1_10_configs_unreadable "$SCRIPT_SRC"; check "G1-10 a project whose configs listing fails: UNREADABLE config=-, census-unreadable" $?
+  row_g1_11_next_staged "$SCRIPT_SRC"; check "G1-11 a _NEXT still staged at verify: fail reason=next-staged" $?
+  row_g1_12_names_array "$SCRIPT_SRC"; check "G1-12 a names listing answered as an array: UNREADABLE, census-unreadable" $?
+  row_g1_13_floor "$SCRIPT_SRC" project; check "G1-13 the listing drops soleur-infra-privileged: FLOOR_MISSING, census-floor, no REVOKE_READY" $?
+  row_g1_13_floor "$SCRIPT_SRC" config; check "G1-13 the listing drops soleur/dev_personal: FLOOR_MISSING, census-floor, no REVOKE_READY" $?
+  row_g1_14_holder_not_new "$SCRIPT_SRC" absent; check "G1-14 the manifest holder dev lacks the key: HOLDER_NOT_NEW, fail reason=holder-not-new" $?
+  row_g1_14_holder_not_new "$SCRIPT_SRC" other; check "G1-14 the manifest holder dev holds a third value: HOLDER_NOT_NEW, fail reason=holder-not-new" $?
+  row_g1_15_prev_expired "$SCRIPT_SRC"; check "G1-15 _PREV verifies the pin with status expired: fail reason=prev-not-active" $?
 
   echo "== Guard 2: swap =="
   row_g2_1_key_not_pinned "$SCRIPT_SRC"; check "G2-1 <KEY> not the pinned id, no _PREV: refuse with the named sentence, zero writes" $?
@@ -917,6 +1057,7 @@ if [[ "$MODE" == full ]]; then
   row_g3_1_last_holder_bad "$SCRIPT_SRC" absent; check "G3-1 the last holder (dev) lacks the key: refuse naming it, zero writes" $?
   row_g3_2_second_already_new "$SCRIPT_SRC"; check "G3-2 first holder old, second already new: writes only the first" $?
   row_g3_3_before_swap "$SCRIPT_SRC"; check "G3-3 run before swap: PRECONDITION_FAILED need=swap" $?
+  row_g3_4_nothing_swapped "$SCRIPT_SRC"; check "G3-4 nothing staged and no swap: need=swap, no holder classified as already done" $?
   row_g3_r1_resume_after_first_holder "$SCRIPT_SRC"; check "G3-R1 re-run after the first holder was copied: writes the second only" $?
   row_g3_6_source_unreadable_at_copy "$SCRIPT_SRC"; check "G3-6 the copy source stops reading after the plan: no holder write, stage fails" $?
 
@@ -928,8 +1069,13 @@ if [[ "$MODE" == full ]]; then
   row_s5_malformed_next "$SCRIPT_SRC" quote; check "S5 a staged value with a quote is refused before any curl call" $?
   row_s5_malformed_next "$SCRIPT_SRC" newline; check "S5 a staged value with an embedded newline is refused before any curl call" $?
   row_s6_analytics_api_error "$SCRIPT_SRC"; check "S6 ANALYTICS: zone-tag match plus an analytics-health api-error still reads ok" $?
-  row_s7_graphql_mismatch "$SCRIPT_SRC"; check "S7 ANALYTICS: a GraphQL answer without the new zone tag fails reason=consumer-read" $?
-  row_s8_old_target_ids "$SCRIPT_SRC"; check "S8 prd_terraform still on the old zone id: target-ids-not-new, no consumer read" $?
+  row_s7_graphql "$SCRIPT_SRC" mismatch; check "S7 ANALYTICS: a GraphQL answer without the new zone tag fails reason=consumer-read" $?
+  row_s7_graphql "$SCRIPT_SRC" errors; check "S7 ANALYTICS: the new zone tag WITH a GraphQL error fails reason=consumer-read" $?
+  row_s8_old_target_ids "$SCRIPT_SRC" zone; check "S8 prd_terraform still on the old zone id: target-ids-not-new, no consumer read" $?
+  row_s8_old_target_ids "$SCRIPT_SRC" account; check "S8 prd_terraform on an account id that is not the new one: target-ids-not-new" $?
+  row_s9_consumer_fails "$SCRIPT_SRC"; check "S9 one key's own consumer read fails: that key fails reason=consumer-read, the others stay ok" $?
+  row_s3c_403_html "$SCRIPT_SRC"; check "S3 a 403 with an HTML body is TOKEN_UNREACHABLE http=403, never a denial" $?
+  row_i1_reference_unreadable "$SCRIPT_SRC"; check "I-1 inventory: a reference that verifies but cannot be read is CENSUS_BLIND, exit non-zero" $?
 
   echo "== P-leak: no synthesized value, digest or full id in any output =="
   ! grep -qE 'SYNTH-|synth-actor|192\.0\.2\.7|injected\.invalid' "$ALL_OUT"
@@ -1073,7 +1219,7 @@ fi
 if mutate G3M3 "$SB/g3m3.sh" <<'PERL'; then
 s{    if in_names "\$\{k\}_NEXT" "\$TF_NAMES"; then soleur_op_precondition_failed holder-copies swap [^\n]*\n}{}
 PERL
-  mkill "G3M3 (the need=swap precondition deleted)" row_g3_3_before_swap "$SB/g3m3.sh" need-swap 'SOLEUR_BOOTSTRAP_STAGE_OK '
+  mkill "G3M3 (the need=swap precondition deleted)" row_g3_3_before_swap "$SB/g3m3.sh" need-swap 'need=swap'
 fi
 if mutate S2M "$SB/s2m.sh" <<'PERL'; then
 s{  verify_at "\$1" "\$2" "\$3" "\$ACCT_VERIFY_URL" \|\| a=\$\?\n}{  a=1\n}
@@ -1158,6 +1304,92 @@ PERL
   mkill "C1M (curl's redirect cap dropped)" row_g1_mustpass "$SB/c1m.sh" verdict 'reason=key-malformed'
 fi
 
+if mutate G1M8 "$SB/g1m8.sh" <<'PERL'; then
+s{in_names "\$\{h#\*/\}" "\$soleur_cfgs" \|\| ct_missing "\$h"}{true}
+PERL
+  mkill "G1M8 (a manifest holder config may be missing from the listing)" row_g1_8_hidden_holder "$SB/g1m8.sh" verdict 'reason=holder-not-new'
+fi
+if mutate G1M9 "$SB/g1m9.sh" <<'PERL'; then
+s{(    if ! names_cached "\$p" "\$c"; then\n)[^\n]*\n}{$1      continue\n}
+PERL
+  mkill "G1M9 (a failed names listing skipped silently)" row_g1_9_names_unreadable "$SB/g1m9.sh" verdict 'SOLEUR_P5_REVOKE_READY '
+fi
+if mutate G1M10 "$SB/g1m10.sh" <<'PERL'; then
+s{ && "\$\{#CT_BAD\[\@\]\}" -eq 0 \]\] \|\| \{ vfail "\$k" census-unreadable}{ ]] || \{ vfail "\$k" census-unreadable}
+PERL
+  mkill "G1M10 (a failed configs listing ignored by verify)" row_g1_10_configs_unreadable "$SB/g1m10.sh" verdict 'SOLEUR_P5_REVOKE_READY '
+fi
+if mutate G1M11 "$SB/g1m11.sh" <<'PERL'; then
+s{  if in_names "\$\{k\}_NEXT" "\$TF_NAMES"; then vfail "\$k" next-staged; return 0; fi\n}{}
+PERL
+  mkill "G1M11 (verify's next-staged check deleted)" row_g1_11_next_staged "$SB/g1m11.sh" verdict 'SOLEUR_P5_REVOKE_READY '
+fi
+if mutate G1M12 "$SB/g1m12.sh" <<'PERL'; then
+s{jq -er 'if type == "object" and length > 0 [^']*'}{jq -er 'keys[]'}
+PERL
+  mkill "G1M12 (the names listing accepted in any shape)" row_g1_12_names_array "$SB/g1m12.sh" verdict 'SOLEUR_P5_REVOKE_READY '
+fi
+if mutate G1M13 "$SB/g1m13.sh" <<'PERL'; then
+s{  for p in \$floor; do [^\n]*\n}{}
+PERL
+  mkill "G1M13 (the committed project floor ignored)" row_g1_13_floor "$SB/g1m13.sh" verdict 'SOLEUR_P5_REVOKE_READY ' project
+fi
+if mutate G1M14 "$SB/g1m14.sh" <<'PERL'; then
+s{  for c in \$inv; do [^\n]*\n}{}
+PERL
+  mkill "G1M14 (the inventory config floor ignored)" row_g1_13_floor "$SB/g1m14.sh" verdict 'SOLEUR_P5_REVOKE_READY ' config
+fi
+if mutate G1M15 "$SB/g1m15.sh" <<'PERL'; then
+s{  \[\[ "\$hbad" -eq 0 \]\] \|\| \{ vfail "\$k" holder-not-new; return 0; \}\n}{}
+PERL
+  mkill "G1M15 (a manifest holder without the new token accepted)" row_g1_14_holder_not_new "$SB/g1m15.sh" verdict 'SOLEUR_P5_REVOKE_READY ' absent
+fi
+if mutate G1M16 "$SB/g1m16.sh" <<'PERL'; then
+s{  \[\[ "\$REF_ST" == active \]\] \|\| \{ vfail "\$k" prev-not-active; return 0; \}\n}{}
+PERL
+  mkill "G1M16 (verify accepts an expired _PREV)" row_g1_15_prev_expired "$SB/g1m16.sh" verdict 'SOLEUR_P5_REVOKE_READY '
+fi
+if mutate G1M17 "$SB/g1m17.sh" <<'PERL'; then
+s{CF_API_TOKEN_AUDIT\) run_readonly "\$k" change-history yes}{CF_API_TOKEN_AUDIT) run_readonly "\$k" pagerules-ssl yes}
+PERL
+  mkill "G1M17 (AUDIT checked by another key's consumer)" row_g1_mustpass "$SB/g1m17.sh" consumers 'rc=0 '
+fi
+if mutate RW1 "$SB/rw1.sh" <<'PERL'; then
+s{(  printf 'SOLEUR_P5_VERIFY key=%s verdict=ok\\n' "\$k"\n)}{  doppler secrets delete "\$\{k\}_PREV" -p "\$PROJ" -c "\$TFC" --yes >/dev/null 2>&1 || true\n$1}
+PERL
+  mkill "RW1 (a delete hidden in the verify read stage)" row_g1_mustpass "$SB/rw1.sh" verdict 'read-stage-wrote'
+fi
+if mutate G3M5 "$SB/g3m5.sh" <<'PERL'; then
+s{    require_swapped "\$k" "\$pin"; dp="\$SW_DP"\n}{    dp="\$SW_DP"\n}
+PERL
+  mkill "G3M5 (holder-copies classifies before re-proving the swap)" row_g3_4_nothing_swapped "$SB/g3m5.sh" need-swap 'SOLEUR_BOOTSTRAP_STAGE_OK '
+fi
+if mutate I1M "$SB/i1m.sh" <<'PERL'; then
+s{    if \[\[ "\$REF_SRC" != none && -z "\$REF_D" \]\]; then [^\n]*\n}{}
+PERL
+  mkill "I1M (inventory reports old_hits=0 for an unreadable reference)" row_i1_reference_unreadable "$SB/i1m.sh" verdict 'rc=0 '
+fi
+if mutate S9M "$SB/s9m.sh" <<'PERL'; then
+s{(  printf 'SOLEUR_P5_CONSUMER key=%s sub=%s gating=%s rc=%s line=%s\\n' [^\n]*\n)  return "\$rc"\n}{$1  return 0\n}
+PERL
+  mkill "S9M (a failed consumer read reported as passing)" row_s9_consumer_fails "$SB/s9m.sh" verdict 'rc=0 '
+fi
+if mutate S7M "$SB/s7m.sh" <<'PERL'; then
+s{  \[\[ "\$verdict" == "match 0" \]\]\n}{  [[ "\$verdict" == match\\ * ]]\n}
+PERL
+  mkill "S7M (a GraphQL error ignored when the zone matches)" row_s7_graphql "$SB/s7m.sh" verdict 'rc=0 ' errors
+fi
+if mutate S8M "$SB/s8m.sh" <<'PERL'; then
+s{\[\[ "\$z" == "\$NEW_ZONE" && "\$a" == "\$NEW_ACCT" \]\]}{[[ "\$z" == "\$NEW_ZONE" ]]}
+PERL
+  mkill "S8M (the account half of the target check dropped)" row_s8_old_target_ids "$SB/s8m.sh" verdict 'SOLEUR_P5_REVOKE_READY ' account
+fi
+if mutate S3M2 "$SB/s3m2.sh" <<'PERL'; then
+s{        400\|401\|403\|404\) jq -e '\.success == false' >/dev/null 2>&1 <<<"\$body" && return 1 ;;\n}{        400|401|403|404) return 1 ;;\n}
+PERL
+  mkill "S3M2 (any 4xx read as a denial)" row_s3c_403_html "$SB/s3m2.sh" verdict 'reason=key-not-verified'
+fi
+
 echo "== harness rows (the instrument must be able to go red) =="
 hred() { # <label> <step> <why-ere> <flag> <row-fn> [<row-args>...] — the row on the REAL script under a broken stub
   local label="$1" step="$2" why="$3" fl="$4" fn="$5" r; shift 5
@@ -1175,7 +1407,7 @@ hred "H3 (every holder get returns the _PREV value)" only-first 'SOLEUR_P5_COPIE
 # --- anti-vacuity floor (reported directly, never through fail()) -----------------
 # The subtrahend is the instrument self-test's one counted pass; the bound is exact for each mode.
 TOTAL=$((PASS + FAIL)); SELFTEST_PASSES=1
-case "$MODE" in full) MIN_ASSERTIONS=129 ;; *) MIN_ASSERTIONS=77 ;; esac
+case "$MODE" in full) MIN_ASSERTIONS=179 ;; *) MIN_ASSERTIONS=111 ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -lt "$MIN_ASSERTIONS" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran in %s mode, floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$MIN_ASSERTIONS" >&2
   printf 'Total: %s assertions, %s failed\n' "$TOTAL" "$((FAIL + 1))"
