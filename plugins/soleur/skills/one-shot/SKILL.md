@@ -266,8 +266,6 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
 **Tally:** before steps 3, 4, 5.5, 7: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" show` + `gate agent_rounds`; `incr agent_rounds` per child; `grep -q budget-capped` its session-state.md. Read [retry-budget-ruling.md](${CLAUDE_PLUGIN_ROOT}/skills/one-shot/references/retry-budget-ruling.md).
 
-**Slice 2 coverage (goto map):** the ruling's `goto` targets now cover the loop skills that own their own iteration/fix-round surfaces — `test-fix-loop` (Phase 1 of that skill), `review` (fix-rounds, per [risk-tier-and-fix-rounds.md](../review/references/risk-tier-and-fix-rounds.md)), and `qa` (step 5.5). Each target skill documents its own trigger + apply-verb mapping and links back to this reference; the script's `phase`/`goto` allow-lists already include `qa` and `test-fix-loop`. No second spawn after `ruling_spawn: used`.
-
 3. **Claude:** Skill tool `skill: soleur:work`. **Grok:** Read `plugins/soleur/skills/work/SKILL.md` in this process (`soleur:work`), args: "<plan_file_path>". Work handles implementation only (Phases 0-3). It does NOT invoke ship -- one-shot controls the full lifecycle below.
 
 > **CONTINUATION GATE**: When work outputs `## Work Phase Complete`, that is your signal to continue. Do NOT end your turn. Do NOT treat "Implementation complete" or similar phrases as a stopping point. Immediately proceed to step 4 in the same response.

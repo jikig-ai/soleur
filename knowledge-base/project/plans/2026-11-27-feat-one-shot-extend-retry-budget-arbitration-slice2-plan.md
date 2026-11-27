@@ -45,8 +45,8 @@ The mechanism is already self-contained: `plugins/soleur/scripts/retry-budget-ru
 - `plugins/soleur/skills/test-fix-loop/SKILL.md` — add a "Retry-budget ruling" subsection in Phase 1 pointing at the reference and defining the trigger (per-iteration `STOP` on `fix_rounds`) and the apply-verb mapping; keep existing reset semantics on `fail`/`continue`.
 - `plugins/soleur/skills/review/SKILL.md` — add the same wiring to the fix-rounds section (trigger: classified-stop on `seats`); add reference link.
 - `plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md` — add the ruling trigger + apply-verb note next to the tally bullet.
-- `plugins/soleur/skills/qa/SKILL.md` — add a "Retry-budget ruling" section documenting halt handling when invoked under a capped parent (`--phase qa`), and the not-earlier goto rule.
-- `plugins/soleur/skills/one-shot/SKILL.md` — already references the ruling; add a cross-reference line noting slice 2 coverage (test-fix-loop/review/qa) so the goto map stays consistent. (Minor.)
+- `plugins/soleur/skills/qa/SKILL.md` — add a "Retry-budget ruling" section documenting halt handling when invoked under a capped parent (`--phase qa`), and the not-earlier goto rule; tighten two verbose notes so `qa/SKILL.md` stays within its 37,000-byte lifecycle ceiling (`lint-skill-body-budget.py`).
+- `plugins/soleur/skills/one-shot/references/retry-budget-ruling.md` — note slice 2 callers (`test-fix-loop`, `review` fix-rounds, `qa`) in the opening trigger sentence (`one-shot/SKILL.md` already carries both canonical cues at 51,999 / 52,000 bytes from slice 1 and is left byte-unchanged).
 
 ## Files to Create
 
@@ -72,18 +72,25 @@ The mechanism is already self-contained: `plugins/soleur/scripts/retry-budget-ru
 3. Link to canonical reference.
 
 ### Phase D — consistency
-1. Update one-shot SKILL.md's goto map note to include slice-2 coverage.
-2. Run `bun test plugins/soleur/test/components.test.ts` (description budget) — no description changes expected; verify no regression.
+1. Update `one-shot/references/retry-budget-ruling.md` trigger header to include slice-2 callers (`test-fix-loop`, `review` fix-rounds, `qa`), keeping `one-shot/SKILL.md` within its 52,000-byte ceiling (`python3 scripts/lint-skill-body-budget.py --base origin/main`).
+2. Run `bun test plugins/soleur/test/components.test.ts` (description budget) and `bash plugins/soleur/scripts/retry-budget-ruling.test.sh` — verify no regression.
 3. Verify `phase_stored_ok`/goto allow-list already include needed tokens (done in premise validation).
+
+## Test Scenarios
+
+- integration: Given the updated skill files (`test-fix-loop/SKILL.md`, `review/SKILL.md`, `review/references/risk-tier-and-fix-rounds.md`, `qa/SKILL.md`), when `grep -l "retry-budget-ruling"` and `python3 scripts/lint-skill-body-budget.py --base origin/main` run, then all four files reference `[retry-budget-ruling.md](${CLAUDE_PLUGIN_ROOT}/skills/one-shot/references/retry-budget-ruling.md)` and all 10 lifecycle skills pass their byte ceilings.
+- unit: Given `plugins/soleur/scripts/retry-budget-ruling.test.sh`, when the test suite runs, then all 495 assertions pass and `retry-budget-ruling.sh` is unmodified.
+
+No end-to-end browser scenario (no UI surface; `no-test-scenarios` for Browser/API steps).
 
 ## Acceptance Criteria
 
-- [ ] `test-fix-loop/SKILL.md` contains a "Retry-budget ruling" section referencing the canonical reference and defining the trigger + apply-verb mapping.
-- [ ] `review/SKILL.md` and `review/references/risk-tier-and-fix-rounds.md` contain the same wiring for fix-rounds.
-- [ ] `qa/SKILL.md` contains a "Retry-budget ruling" section for the qa step.
-- [ ] No change to `retry-budget-ruling.sh` (verify via git diff).
-- [ ] `bun test plugins/soleur/test/components.test.ts` passes.
-- [ ] Each skill's existing termination/reset behavior is preserved (no removal of reset rules).
+- [x] `test-fix-loop/SKILL.md` contains a "Retry-budget ruling" section referencing the canonical reference and defining the trigger + apply-verb mapping.
+- [x] `review/SKILL.md` and `review/references/risk-tier-and-fix-rounds.md` contain the same wiring for fix-rounds.
+- [x] `qa/SKILL.md` contains a "Retry-budget ruling" section for the qa step.
+- [x] No change to `retry-budget-ruling.sh` (verify via git diff).
+- [x] `bun test plugins/soleur/test/components.test.ts` and `python3 scripts/lint-skill-body-budget.py --base origin/main` pass.
+- [x] Each skill's existing termination/reset behavior is preserved (no removal of reset rules).
 
 ## Domain Review
 
