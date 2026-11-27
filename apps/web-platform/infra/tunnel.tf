@@ -189,7 +189,7 @@ locals {
   # #12931 tunnel phase (ADR-329): this policy is recreated on the Soleur account, where the legacy
   # id (d9204def-…) does not exist. cf-access-deploy-token-mint.sh mints the new token, and its id
   # replaces this nil placeholder before merge. The policy's precondition refuses the placeholder.
-  deploy_service_token_ids = ["00000000-0000-0000-0000-000000000000"] # FILL-AT-PHASE-3.1: replace with the minted deploy token id before merge
+  deploy_service_token_ids = ["1755f023-7f9b-456b-90ca-97ce27d3420e"]
 }
 
 resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {

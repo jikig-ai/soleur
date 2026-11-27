@@ -43,6 +43,12 @@ readonly CF_API="https://api.cloudflare.com/client/v4"
 # archive of this repository, so the script refuses (reason=pins-missing) until a reviewed PR commits
 # them here, one bare 32-hex id per line.
 readonly PINNED_IDS=(
+  89f2875b134d12c916955d5532d3e901
+  df74c6f17036e183cdc4563206a46574
+  3059a58be467d8ce060f12eb2d667b6b
+  8115ab71390b8a8318a941770d982d81
+  589bd6ed2ed9a0bbf790021fce457409
+  485b0a5c3c52ffc218c19b45c2761523
 )
 readonly ALLOWED_NAMES=(ssh.soleur.ai registry.soleur.ai)
 readonly CENSUS_NAMES=(deploy.soleur.ai ssh.soleur.ai registry.soleur.ai)
