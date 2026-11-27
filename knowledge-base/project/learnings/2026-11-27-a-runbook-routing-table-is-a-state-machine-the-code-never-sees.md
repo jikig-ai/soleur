@@ -71,7 +71,7 @@ after every fix round, because a fix that adds a state (a rollback, a new refusa
     Prevention: rulings that prescribe a command line get run before they are written into a brief.
 13. **Exact mutants floor refused 66 vs 65 after adding a row that runs in both modes** — Recovery: floor raised. —
     Prevention: raise both floors in the edit that adds a shared-section row.
-14. **Assumed CI would run the suites; a draft PR skips every test leg** ("full battery owed at ready") — Recovery:
+14. **Assumed CI would run the suites; with `CI_DRAFT_LIGHT` on, a draft PR skips the heavy test families** ("full battery owed at ready") — Recovery:
     local full and mutant runs are the evidence until ready. — Prevention: documented in ship's
     `ci-run-diagnosis.md`; routed a bullet to the fix-round reference.
 15. **Fix round 1 introduced a P2 (no route after the rollback)** — Recovery: verification seat found it; fixed. —

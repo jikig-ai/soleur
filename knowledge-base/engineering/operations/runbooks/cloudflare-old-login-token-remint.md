@@ -56,8 +56,8 @@ Start here in a fresh session.
 
    | Inventory shows (per key) | Next step |
    |---|---|
-   | `SOLEUR_P5_REFERENCE source=KEY`, `SOLEUR_P5_STAGED next=absent` and `SOLEUR_P5_PREV state=absent` | Section 4 scope, then the section 5 mint |
-   | `source=KEY` and `SOLEUR_P5_PREV state=` anything but `absent`, or `denied` with a `P5-REVOKED` record for its id | stop: `_PREV` holds something the next swap would overwrite; see section 12. (A `denied` `_PREV` that a record explains is an earlier rotation's revoked token; `swap` overwrites it, CTO D6.) |
+   | `SOLEUR_P5_REFERENCE source=KEY`, `SOLEUR_P5_STAGED next=absent`, and `SOLEUR_P5_PREV state=absent` or `state=denied` with a `P5-REVOKED` record for its id | Section 4 scope, then the section 5 mint |
+   | `source=KEY` and `SOLEUR_P5_PREV state=` anything else (not `absent`, and not `denied` with a `P5-REVOKED` record for its id) | stop: `_PREV` holds something the next swap would overwrite; see section 12. (A `denied` `_PREV` that a record explains is an earlier rotation's revoked token; `swap` overwrites it, CTO D6.) |
    | `source=KEY` and `SOLEUR_P5_STAGED next=present` | `swap` |
    | `source=PREV` and `SOLEUR_P5_STAGED next=present` (an interrupted swap) | `swap` again: it finishes the copy or only deletes `_NEXT` |
    | `CF_API_TOKEN_AUDIT` row `SOLEUR_P5_HOLDER project=soleur config=dev_personal` or `config=dev_scheduled` `value=old` | the two AUDIT delete holds |
