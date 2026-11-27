@@ -62,8 +62,8 @@ Start here in a fresh session.
    | `source=PREV` and `SOLEUR_P5_STAGED next=present` (an interrupted swap) | `swap` again: it finishes the copy or only deletes `_NEXT` |
    | `CF_API_TOKEN_AUDIT` row `SOLEUR_P5_HOLDER project=soleur config=dev_personal` or `config=dev_scheduled` `value=old` | the two AUDIT delete holds |
    | `source=PREV`, `SOLEUR_P5_STAGED next=absent`, and the prd_terraform `<KEY>` row `value=old` (after a section 12 rollback) | Section 5 mint for that key, then `swap` |
-   | `source=PREV` and a manifest holder row `value=old` outside prd_terraform | `holder-copies` |
-   | `source=PREV` and every manifest holder `value=new` | `verify` |
+   | `source=PREV`, the prd_terraform `<KEY>` row `value=new`, and a manifest holder row `value=old` outside prd_terraform | `holder-copies` |
+   | `source=PREV`, every manifest holder `value=new`, and no `SOLEUR_P5_REVOKE_READY` for that key yet in this sitting | `verify` |
    | `verify` printed `SOLEUR_P5_REVOKE_READY key=<KEY>` in this sitting | section 7 revoke |
    | `source=none`, `SOLEUR_P5_PREV state=denied`, and a `P5-REVOKED` record for that key and old id (section 7 lookup) | that key's `_PREV` delete hold (section 7 step 6). The prd_terraform `<KEY>_PREV` row then reads `value=revoked` and `verify` prints `verdict=revoked`: both expected (CTO D6) |
    | `source=none`, `SOLEUR_P5_PREV state=denied`, and no `P5-REVOKED` record for that key and old id | stop: something outside this runbook revoked the old token (a leak auto-revoke, say); post it on #12931 |
