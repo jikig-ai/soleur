@@ -318,15 +318,17 @@ trap on_exit EXIT
 # suite pins it). Nothing above reads Doppler, calls the vendor
 # or runs a tracked tool, so this still refuses before any credential read (exit 64). HONEST LIMIT: the
 # library resolution and the .env ignore probe above already ran under the inherited environment (neither
-# reads a credential), so a variable that also misleads that probe can refuse there first
-# (SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED, also exit 64, nothing read). Refused by CLASS, never by a name list:
+# reads a credential), so a variable or an exported function (git, readlink, dirname) that also misleads that
+# probe runs or refuses there first (SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED, also exit 64, nothing read), and so does
+# the library's --reset path, which rewrites .env and the ledger. Refused by CLASS, never by a name list:
 #   - every exported GIT_* variable (a location, injected config, an exec path), except the five git never
 #     consults for the reads this script runs (rev-parse, ls-files, hash-object, check-ignore): GIT_EDITOR
 #     and GIT_SEQUENCE_EDITOR (harnesses set GIT_EDITOR; only commit and rebase run an editor), GIT_PAGER (no
 #     read here pages), GIT_TERMINAL_PROMPT (credential prompts only) and GIT_CEILING_DIRECTORIES (it can only
 #     stop discovery, and tracked_file then refuses);
 #   - BASH_ENV and ENV (a file every bash or sh child sources first, the consumer wrapper included);
-#   - DOPPLER_API_HOST (it re-points every Doppler read and write);
+#   - DOPPLER_API_HOST, DOPPLER_CONFIG_DIR, the proxy variables (HTTPS_PROXY, HTTP_PROXY, ALL_PROXY, either case) and
+#     SSL_CERT_FILE / SSL_CERT_DIR (each re-points or intercepts every Doppler read and write);
 #   - ANY exported shell function (it replaces the command of that name here and in every bash child),
 #     enumerated with `declare -Fx`, never by asking `type` about a fixed list of names.
 env_refused() { # <name> <sentence>
@@ -339,6 +341,8 @@ for v in $(compgen -e); do
     GIT_EDITOR|GIT_SEQUENCE_EDITOR|GIT_PAGER|GIT_TERMINAL_PROMPT|GIT_CEILING_DIRECTORIES) ;;
     GIT_*|BASH_ENV|ENV|DOPPLER_API_HOST)
       env_refused "$v" "This script will not run with ${v} set: it would redirect what git, Doppler or a bash child reads, runs or writes." ;;
+    DOPPLER_CONFIG_DIR|HTTPS_PROXY|https_proxy|HTTP_PROXY|http_proxy|ALL_PROXY|all_proxy|SSL_CERT_FILE|SSL_CERT_DIR)
+      env_refused "$v" "This script will not run with ${v} set: it would re-point or intercept every Doppler read and write." ;;
   esac
 done
 while read -r _ _ v; do

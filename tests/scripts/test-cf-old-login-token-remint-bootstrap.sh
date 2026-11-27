@@ -379,6 +379,7 @@ OUT=""; RC=0; WHY=""
 UNSET_ENV=()
 for _v in CLAUDE_PLUGIN_ROOT CLAUDE_CODE_ENTRYPOINT CLAUDECODE OPENCODE SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK \
           DOPPLER_TOKEN DOPPLER_PROJECT DOPPLER_CONFIG DOPPLER_ENVIRONMENT DOPPLER_API_HOST BASH_ENV ENV "${GIT_LOCATION_VARS[@]}" \
+          DOPPLER_CONFIG_DIR HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY all_proxy SSL_CERT_FILE SSL_CERT_DIR \
           $(compgen -e | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)$/\1/p'); do
   UNSET_ENV+=(-u "$_v")
 done
@@ -1041,7 +1042,9 @@ row_s3c_403_html() { # <src> — a 403 with an HTML body is no verdict (only a J
 # a run that ignores them would otherwise succeed.
 E1_VARS=(GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_NAMESPACE
          GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
-         GIT_EXEC_PATH GIT_SYNTH_UNLISTED BASH_ENV ENV DOPPLER_API_HOST)
+         GIT_EXEC_PATH GIT_SYNTH_UNLISTED BASH_ENV ENV DOPPLER_API_HOST
+         DOPPLER_CONFIG_DIR HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY all_proxy SSL_CERT_FILE SSL_CERT_DIR)
+E1_NET=(DOPPLER_CONFIG_DIR HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY all_proxy SSL_CERT_FILE SSL_CERT_DIR)
 E1_FUNCS=(doppler curl git jq sed synth_unlisted_fn)
 row_e1_env_refused() { # <src> <var|function> <name> — an inherited variable or exported function is refused by class
   local want ex
@@ -1742,6 +1745,11 @@ s{done < <\(declare -Fx\)\n}{done < <(declare -Fx | sed -n '/ \\(doppler\\|curl\
 PERL
   for _m in sed synth_unlisted_fn; do mkill "ENV4M (the function refusal narrowed to doppler/curl/git/jq)" row_e1_env_refused "$SB/env4m.sh" refuse 'rc=[01] ' function "$_m"; done
 fi
+if mutate ENV5M "$SB/env5m.sh" <<'PERL'; then
+s{    DOPPLER_CONFIG_DIR\|HTTPS_PROXY[^\n]*\)\n[^\n]*\n}{}
+PERL
+  for _m in "${E1_NET[@]}"; do mkill "ENV5M (the Doppler re-point and proxy refusal deleted)" row_e1_env_refused "$SB/env5m.sh" refuse 'rc=[01] ' var "$_m"; done
+fi
 if mutate EXM "$SB/exm.sh" <<'PERL'; then
 s{    GIT_EDITOR\|GIT_SEQUENCE_EDITOR\|GIT_PAGER\|GIT_TERMINAL_PROMPT\|GIT_CEILING_DIRECTORIES\) ;;\n}{}
 PERL
@@ -1913,7 +1921,7 @@ scored_section
 # --- anti-vacuity floor (reported directly, never through fail()) -----------------
 # The subtrahend is the instrument self-test's one counted pass; the bound is exact for each mode.
 TOTAL=$((PASS + FAIL)); SELFTEST_PASSES=1
-case "$MODE" in full) MIN_ASSERTIONS=329 ;; *) MIN_ASSERTIONS=206 ;; esac
+case "$MODE" in full) MIN_ASSERTIONS=357 ;; *) MIN_ASSERTIONS=225 ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -lt "$MIN_ASSERTIONS" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran in %s mode, floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$MIN_ASSERTIONS" >&2
   printf 'Total: %s assertions, %s failed\n' "$TOTAL" "$((FAIL + 1))"

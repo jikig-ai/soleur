@@ -57,14 +57,15 @@ Start here in a fresh session.
    | Inventory shows (per key) | Next step |
    |---|---|
    | `SOLEUR_P5_REFERENCE source=KEY`, `SOLEUR_P5_STAGED next=absent` and `SOLEUR_P5_PREV state=absent` | Section 4 scope, then the section 5 mint |
-   | `source=KEY` and `SOLEUR_P5_PREV state=` anything but `absent` or `pinned` | stop: `_PREV` holds something the next swap would overwrite; see section 12 |
+   | `source=KEY` and `SOLEUR_P5_PREV state=` anything but `absent`, or `denied` with a `P5-REVOKED` record for its id | stop: `_PREV` holds something the next swap would overwrite; see section 12. (A `denied` `_PREV` that a record explains is an earlier rotation's revoked token; `swap` overwrites it, CTO D6.) |
    | `source=KEY` and `SOLEUR_P5_STAGED next=present` | `swap` |
    | `source=PREV` and `SOLEUR_P5_STAGED next=present` (an interrupted swap) | `swap` again: it finishes the copy or only deletes `_NEXT` |
    | `CF_API_TOKEN_AUDIT` row `SOLEUR_P5_HOLDER project=soleur config=dev_personal` or `config=dev_scheduled` `value=old` | the two AUDIT delete holds |
+   | `source=PREV`, `SOLEUR_P5_STAGED next=absent`, and the prd_terraform `<KEY>` row `value=old` (after a section 12 rollback) | Section 5 mint for that key, then `swap` |
    | `source=PREV` and a manifest holder row `value=old` outside prd_terraform | `holder-copies` |
    | `source=PREV` and every manifest holder `value=new` | `verify` |
    | `verify` printed `SOLEUR_P5_REVOKE_READY key=<KEY>` in this sitting | section 7 revoke |
-   | `source=none`, `SOLEUR_P5_PREV state=denied`, and a `P5-REVOKED` record for that key and old id (section 7 lookup), or a `REVOKE_READY` for that key earlier in this sitting | that key's `_PREV` delete hold (section 7 step 6). The prd_terraform `<KEY>_PREV` row then reads `value=revoked` and `verify` prints `verdict=revoked`: both expected (CTO D6) |
+   | `source=none`, `SOLEUR_P5_PREV state=denied`, and a `P5-REVOKED` record for that key and old id (section 7 lookup) | that key's `_PREV` delete hold (section 7 step 6). The prd_terraform `<KEY>_PREV` row then reads `value=revoked` and `verify` prints `verdict=revoked`: both expected (CTO D6) |
    | `source=none` and `SOLEUR_P5_PREV state=denied` with neither | stop: something outside this runbook revoked the old token (a leak auto-revoke, say); post it on #12931 |
    | `source=none` and `SOLEUR_P5_PREV state=` `other`, `malformed`, `unreadable` or `unreachable` | `unreachable` or `unreadable`: re-run inventory. Otherwise stop; see section 12 |
    | `source=none`, `SOLEUR_P5_STAGED next=absent prev=absent` | done; run the section 7 closing check |
@@ -187,7 +188,7 @@ go on. Then it builds the run file. The argument is passed as a JSON string that
 be data (CTO D9):
 
 ```bash
-set -o pipefail; D="$(dirname <B>)"; A="$(jq -ce 'if type=="object" then . else error("not an object") end' <<<'<ARGS-JSON>' | jq -Rs .)" && mkdir -p "<repo>/.playwright-mcp" && { printf '('; cat "$D/<body>"; printf ')(JSON.parse(%s))\n' "$A"; } > "<repo>/.playwright-mcp/p5-<x>.run.js"
+set -o pipefail; D="$(dirname <B>)"; A="$(jq -sce 'if length==1 and (.[0]|type)=="object" then .[0] else error("not one object") end' <<<'<ARGS-JSON>' | jq -Rs .)" && mkdir -p "<repo>/.playwright-mcp" && { printf '('; cat "$D/<body>"; printf ')(JSON.parse(%s))\n' "$A"; } > "<repo>/.playwright-mcp/p5-<x>.run.js"
 ```
 
 Each shell call is separate, so each line sets `D` itself. It runs the run file with Playwright MCP `browser_run_code_unsafe` (`filename:` the run file). `<repo>` is the
@@ -233,8 +234,8 @@ endpoint). `verdict=no-read`, or no `success=true` line: stop; the read decided 
 tokens, and can grant only permissions they hold. The docs do not say whether zone groups are selectable on an
 account token, or whether GraphQL accepts one. The permission-group read and the post-swap zone-tag query settle both.
 A key whose group the account list lacks is minted user-owned and recorded on #12931. A GraphQL refusal on the
-account-owned ANALYTICS token (`verify` `reason=consumer-read` with `SOLEUR_P5_GRAPHQL ... errors=` non-zero) re-mints
-that key user-owned. The user-owned mint is the same `p5-mint.js` with `"owner":"user"` and
+account-owned ANALYTICS token (`verify` `reason=consumer-read` with `SOLEUR_P5_GRAPHQL ... errors=` non-zero) means the
+section 12 bad-token rollback, then a user-owned re-mint of that key. The user-owned mint is the same `p5-mint.js` with `"owner":"user"` and
 `"refuse_ids":["86aa993e","dd6d1427","5993721f"]`: it lists the signed-in login's own tokens first and refuses
 `old-owner-login` if any starts with a pin, so it can never run as the old-account owner (CTO D7, amending F17 and
 F21). It is its own hold, recorded on #12931; with no other login available it stays a hold.
@@ -381,12 +382,14 @@ Placeholders, each filled before the go and quoted in it:
 - `<zone groups>` and `<account groups>`: the two JSON arrays on that key's `P5-SCOPE` line, copied as written.
 - `<expiry>`: the `expires_on` read in section 5. `<sink>`: the `url=` the sink printed for that key.
 - `<new_id>`, `<new_name>`: the `id8=` and `name=` on that key's `P5-MINTED` record (section 7 lookup).
-- `<old_id>`, `<old_owner>`: from that key's same-sitting `SOLEUR_P5_REVOKE_READY` line.
+- `<old_id>`, `<old_owner>`, `<owner>`: from that key's same-sitting `SOLEUR_P5_REVOKE_READY` line (`owner=` is the
+  new token's owner, `old_owner=` the old token's).
 - A revoke hold's `pin` is the key's pinned id in the bootstrap's `# P5-MANIFEST` block (today `86aa993e`,
   `dd6d1427`, `5993721f`).
 
 Each `_NEXT` write runs only after that key's mint returned `success:true` with an `id8` and its sink printed
-`result=written`; the `[ -s ... ]` test refuses a missing or empty `.tok`. Each mint go cites the #12931 `P5-SCOPE`
+`result=written`, and after a same-sitting inventory printed `SOLEUR_P5_STAGED key=<KEY> next=absent` (so it never
+overwrites the only copy of an earlier minted token); the `[ -s ... ]` test refuses a missing or empty `.tok`. Each mint go cites the #12931 `P5-SCOPE`
 comment. The swap go quotes, per key, the `new_id=` and `owner=` on the plan's `copy-staged-token` operation line,
 which must equal that key's `P5-MINTED` `id8=` and `owner=` (CTO D5, D9); a key whose plan has no
 `copy-staged-token` line (an interrupted swap that only deletes `_NEXT`) has nothing to quote. In order:
@@ -394,7 +397,7 @@ which must equal that key's `P5-MINTED` `id8=` and `owner=` (CTO D5, D9); a key 
 - Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_PAGERULES_READ`: `p5-mint.js` (sha256=ca7847bb90fffbe7fb5a7ca24e029bc2e4188c8dc14ad1406e7d359cd03617e2) with `{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_pagerules_read-soleur-<YYYYMMDD>","zone_groups":<zone groups>,"account_groups":[],"expires_on":"<expiry>","sink_url":"<sink>"}`, then `[ -s "<scratchpad>/cf_api_token_pagerules_read.tok" ] && LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_pagerules_read.tok" | doppler secrets set CF_API_TOKEN_PAGERULES_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
 - Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_AUDIT`: `p5-mint.js` (same sha256) with `{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_audit-soleur-<YYYYMMDD>","zone_groups":<zone groups>,"account_groups":<account groups>,"expires_on":"<expiry>","sink_url":"<sink>"}`, then `[ -s "<scratchpad>/cf_api_token_audit.tok" ] && LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_audit.tok" | doppler secrets set CF_API_TOKEN_AUDIT_NEXT -p soleur -c prd_terraform --silent > /dev/null`
 - Hold: Operator-authorizes: owner mint of `CF_API_TOKEN_ANALYTICS_READ` (account-owned): `p5-mint.js` (same sha256) with `{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_analytics_read-soleur-<YYYYMMDD>","zone_groups":<zone groups>,"account_groups":[],"expires_on":"<expiry>","sink_url":"<sink>"}`, then `[ -s "<scratchpad>/cf_api_token_analytics_read.tok" ] && LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_analytics_read.tok" | doppler secrets set CF_API_TOKEN_ANALYTICS_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
-- Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_AUDIT -p soleur -c dev_personal --yes > /dev/null` (CTO F20), only after a `bash <B> --stage inventory` run in this sitting printed `SOLEUR_P5_HOLDER project=soleur config=dev_personal key=CF_API_TOKEN_AUDIT value=old`. Rollback (that row proved the deleted value is the old token), with `<src>` = `CF_API_TOKEN_AUDIT_PREV` when that inventory printed `SOLEUR_P5_STAGED key=CF_API_TOKEN_AUDIT ... prev=present`, else `CF_API_TOKEN_AUDIT`: `set -o pipefail; doppler secrets get <src> -p soleur -c prd_terraform --plain | LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' | doppler secrets set CF_API_TOKEN_AUDIT -p soleur -c dev_personal --silent > /dev/null`, then a same-sitting inventory that must print that config's row `value=old`
+- Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_AUDIT -p soleur -c dev_personal --yes > /dev/null` (CTO F20), only after a `bash <B> --stage inventory` run in this sitting printed `SOLEUR_P5_HOLDER project=soleur config=dev_personal key=CF_API_TOKEN_AUDIT value=old`. Rollback (that row proved the deleted value is the old token), with `<src>` = `CF_API_TOKEN_AUDIT_PREV` when that inventory printed `SOLEUR_P5_REFERENCE key=CF_API_TOKEN_AUDIT source=PREV`, else `CF_API_TOKEN_AUDIT`: `set -o pipefail; doppler secrets get <src> -p soleur -c prd_terraform --plain | LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' | doppler secrets set CF_API_TOKEN_AUDIT -p soleur -c dev_personal --silent > /dev/null`, then a same-sitting inventory that must print that config's row `value=old`
 - Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_AUDIT -p soleur -c dev_scheduled --yes > /dev/null`, only after a same-sitting row `SOLEUR_P5_HOLDER project=soleur config=dev_scheduled key=CF_API_TOKEN_AUDIT value=old`; rollback as above with `-c dev_scheduled`
 - Hold: Operator-authorizes: `bash <B> --stage swap --apply --plan-digest <D>` (the printed apply command)
 - Hold: Operator-authorizes: `bash <B> --stage holder-copies --apply --plan-digest <D>` (the printed apply command)
@@ -438,7 +441,7 @@ user-endpoint read is not used here: it answers `success=false` for an account-o
 4. `Agent:` straight away, post on #12931 one comment per key whose first line is
    `P5-REVOKED key=<KEY> old_id=<old_id> new_id=<new_id> new_name=<new_name> owner=<owner>`, then the revoke result and
    the `state=denied` line. This record is what routes the `_PREV` delete in a later session (section 1), and the next
-   rotation reads `new_id` and `owner` from it.
+   rotation reads `new_id` and `owner` from it. No later step for that key runs until this record is posted.
 5. Between a key's revoke and its `_PREV` delete, `inventory` shows `source=none`, `SOLEUR_P5_PREV state=denied`,
    the prd_terraform `<KEY>_PREV` row `value=revoked`, and `verify` prints `verdict=revoked`: all expected, routed by
    the section 1 table.
@@ -533,6 +536,8 @@ minted user-owned under the F17 fallback keeps the user forms.
      `{"mode":"retire","pin":"<bad id8>","retire_name":"<its name>","scope":"<owner>"}` (plus `"account_id"` for
      `account`). It deletes only the one token with that id prefix and that exact name, and refuses any of the old
      pins. The value also stays in Doppler version history, which is why the token itself must go.
+  5. Re-mint that key (section 5; the user-owned form when the fault was a GraphQL refusal), then `swap`: it resumes
+     from `source=PREV` with `<KEY>` back on the old token.
   After the revoke the old token is dead: fix forward.
 - A mint result whose row in the section 5 browser returns table says a token may exist: list it by name and retire
   it as in step 4 before any re-mint; a same-day re-mint otherwise refuses `name-exists`.
