@@ -1064,6 +1064,17 @@ else
   bad_cite=1
 fi
 [[ "$bad_cite" -eq 0 ]]; check "the runbook is readable and its ${cites} sha256 citations (>= 5, both forms) each equal the file's sha256" $?
+# The plan's Operator Holds list is the approved list ship reads; it must be the runbook's section 6 holds verbatim.
+PLAN_FILE="$(find "${REPO_ROOT}/knowledge-base/project/plans" -name '*2026-11-27-chore-cf-phase5-old-login-token-remint-plan.md' | head -1)"
+OUT="plan unreadable: ${PLAN_FILE:-none}"
+if [[ -r "$PLAN_FILE" && -r "$RUNBOOK" ]]; then
+  ph="$(grep -a '^- Hold:' "$PLAN_FILE" || true)"; rh="$(grep -a '^- Hold:' "$RUNBOOK" || true)"
+  OUT="plan holds=$(grep -c . <<<"$ph") runbook holds=$(grep -c . <<<"$rh")"
+  [[ -n "$rh" && "$ph" == "$rh" ]]
+else
+  false
+fi
+check "the plan's Operator Holds lines equal the runbook's section 6 hold lines (${OUT})" $?
 for f in "$MINT" "$REVOKE" "$READ"; do
   OUT="$(tail -c 2 "$f" | od -An -c | tr -d ' ')"
   [[ "$OUT" == '}\n' ]]; check "$(basename "$f") ends in the function's closing brace (no trailing ;) for the composition line" $?
@@ -1217,7 +1228,7 @@ sink_mut XS2 "sink keeps a partial file on a failed fsync" 'os.unlink(out)' 'pas
 # --- anti-vacuity floor: EXACT counts (reported directly, never through fail()) -----------------
 TOTAL=$((PASS + FAIL))
 SELFTEST_PASSES=1
-EXPECT_FULL=218
+EXPECT_FULL=219
 EXPECT_MUTANTS=65
 case "$MODE" in full) want_n="$EXPECT_FULL" ;; *) want_n="$EXPECT_MUTANTS" ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -ne "$want_n" ]]; then

@@ -334,7 +334,7 @@ then deletes `<KEY>_NEXT`. `holder-copies` writes prd_terraform `<KEY>` to each 
 old value. `verify` prints `SOLEUR_P5_VERIFY key=<KEY> verdict=ok|fail reason=<r>` and, on `ok`,
 `SOLEUR_P5_REVOKE_READY key=<KEY> old_id=<pinned> new_id=<8> owner=<account|user>`. No stage calls the dashboard,
 deletes a token, or writes `soleur-infra-privileged`. The bootstrap runs only committed helper bytes (a working-tree
-edit to a tool it runs is `SOLEUR_P5_UNTRUSTED_FILE`), and refuses a redirecting environment (any `GIT_*` variable,
+edit to a tool it runs is `SOLEUR_P5_UNTRUSTED_FILE`), and refuses a redirecting environment (any `GIT_*` variable other than the editor, pager, prompt and ceiling ones,
 `BASH_ENV` or `ENV`, `DOPPLER_API_HOST`, or any exported function: `SOLEUR_P5_ENV_REFUSED`, exit 64).
 
 ### Markers
@@ -500,7 +500,7 @@ token on the new account. That is a precondition of #12983 (marker `P5-GH-SECRET
 ## 11. Rotation
 
 The bootstrap stays as the rotation tool; the migration runbook's Phase 5 cleanup does not delete it (CTO D4). A
-rotation edits the manifest block at the top of the script (key, pinned old id, holders) and regenerates this
+rotation edits the `# P5-MANIFEST` block just below the script's `# STAGES` banner (key, pinned old id, holders) and regenerates this
 runbook's section 2 facts and the section 6 hold lines (their `pin` values and names), then runs sections 4 to 7
 again. The new pins are the `new_id` values on the `P5-REVOKED` records. All three tokens share the 0a/0b expiry,
 so rotate 0a/0b first (migration runbook) and read the new expiry from `CF_API_TOKEN_PURGE` at whichever verify
@@ -549,6 +549,9 @@ minted user-owned under the F17 fallback keeps the user forms.
   variable or function. Never commit a local edit to make the check pass.
 - `SOLEUR_P5_PREV_LIVE` (a `_PREV` that holds a live token other than the pinned one, a previous rotation's revoke
   skipped) or `SOLEUR_P5_KEY_UNEXPECTED`: stop and post it on #12931; never overwrite it.
+- A `swap` refusal that names prd_terraform `<KEY>_PREV` or says a value "could not be read": re-run the stage. One
+  that says `_PREV` holds a value that is not a well-formed token, or a token that is not the pinned old id: stop, post
+  it on #12931 and decide it; never overwrite it.
 - `SOLEUR_P5_NEXT_NOT_DISTINCT`: the staged value equals another `CF_API_TOKEN*` key; re-stage the right `.tok`.
 - `429`, `5xx` or a transport failure on a verify read (`SOLEUR_P5_TOKEN_UNREACHABLE`, `reason=unreachable`) is never
   a verdict. Re-run the read; never re-mint on it alone.
