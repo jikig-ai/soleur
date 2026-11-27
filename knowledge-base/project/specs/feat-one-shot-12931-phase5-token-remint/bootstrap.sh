@@ -175,6 +175,27 @@ declare -F soleur_op_stage_gate >/dev/null 2>&1 || {
   exit 64
 }
 
+# --- the inherited environment: refused, never scrubbed ---------------------------
+# A git location variable re-points repo_root and tracked_file at another repository (so an untracked
+# tool would run under credentials), DOPPLER_API_HOST re-points every Doppler read and write, and an
+# exported shell function named doppler, curl, git or jq replaces the binary this script runs. None has
+# a use here; each one refuses before any read (exit 64).
+for v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_NAMESPACE GIT_ALTERNATE_OBJECT_DIRECTORIES DOPPLER_API_HOST; do
+  if [[ -n "${!v+x}" ]]; then
+    printf 'SOLEUR_P5_ENV_REFUSED name=%s\n' "$v"
+    printf 'This script will not run with %s set: it would redirect what git or Doppler reads and writes. Unset it and run again; nothing was changed.\n' "$v"
+    exit 64
+  fi
+done
+for v in doppler curl git jq; do
+  if [[ "$(type -t "$v")" == function ]]; then
+    printf 'SOLEUR_P5_ENV_REFUSED name=function:%s\n' "$v"
+    printf 'This script will not run while %s is a shell function: it would not be the binary this script means to run. Remove the exported function and run again; nothing was changed.\n' "$v"
+    exit 64
+  fi
+done
+unset v
+
 # --- configuration -----------------------------------------------------------
 ENV_FILE="${ENV_FILE:-${SCRIPT_DIR}/.env}"
 : "${SOLEUR_BOOTSTRAP_LEDGER:=${SCRIPT_DIR}/bootstrap-runs.jsonl}"
@@ -357,6 +378,11 @@ trap on_exit EXIT
 #   - REVOKE_READY needs, per key: <KEY> active and not the pin, no _NEXT, _PREV verifying the pin with
 #     status active, the key's own consumer read, the floor, no unreadable read, exactly one old copy
 #     (at prd_terraform <KEY>_PREV) and every other manifest holder reading value=new;
+#   - a tool run or a file read under credentials is byte-identical to its committed HEAD blob
+#     (tracked_file); a git location variable, DOPPLER_API_HOST or an exported doppler/curl/git/jq
+#     function refuses the run; the wrapper gets only the names it reads (`doppler run --no-fallback
+#     --only-secrets ...`);
+#   - every manifest line is parsed or refused, never skipped (SOLEUR_P5_MANIFEST_INVALID line= reason=);
 #   - no value, digest, length or value prefix is ever printed: holders are classes, ids are 8
 #     characters, consumer reads print their first verdict line only.
 # RESIDUALS (stated, not closed here):
@@ -376,27 +402,37 @@ readonly GQL_URL="${CF_API}/graphql"
 readonly READONLY_REL="plugins/soleur/scripts/cloudflare-readonly.sh"
 readonly INVENTORY_REL="apps/web-platform/infra/doppler-config-inventory.txt"
 readonly FLOOR_TAG='# P5-PROJECT-FLOOR '
-readonly MANIFEST_TAG='# P5-MANIFEST '
+# The manifest's tag word, spelled in two pieces so that this line is not a line the parser refuses.
+readonly MANIFEST_WORD="P5-MANI""FEST"
 readonly NAME_RE='^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$'
 EMPTY_SHA="$(printf '' | soleur_approval_sha256)"
 readonly EMPTY_SHA
 
 # --- manifest -------------------------------------------------------------------
 MKEYS=(); MPIN=(); MHOLD=()
-# load_manifest — parses the MANIFEST block of THIS file into MKEYS / MPIN / MHOLD. rc 1 (marker
-# printed) on a malformed line or on zero keys: an empty manifest would make every stage vacuous.
+# load_manifest — parses the MANIFEST block of THIS file into MKEYS / MPIN / MHOLD. EVERY line that
+# contains the tag word must be exactly `# <tag> <KEY> | <pin8> | soleur/prd_terraform [soleur/<cfg>...]`
+# (one space after the tag, three fields, prd_terraform first and exact): a near-miss spelling, a
+# fourth field, a duplicate key or holder, or a key ending _PREV / _NEXT is never skipped silently but
+# refused, SOLEUR_P5_MANIFEST_INVALID line=<file line> reason=<shape|suffix|duplicate-key|duplicate-holder>.
+# Zero keys is SOLEUR_P5_MANIFEST_EMPTY: an empty manifest would make every stage vacuous.
 load_manifest() {
-  local n=0 k pin holders h
+  local ln line k pin holders h re seen_k=" " seen_h
   MKEYS=(); MPIN=(); MHOLD=()
-  while IFS=$'\t' read -r k pin holders; do
-    n=$((n + 1))
-    [[ "$k" =~ ^CF_API_TOKEN_[A-Z0-9_]+$ && "$pin" =~ ^[0-9a-f]{8}$ && "$holders" == "${PROJ}/${TFC}"* ]] \
-      || { printf 'SOLEUR_P5_MANIFEST_INVALID line=%s\n' "$n"; return 1; }
+  re="^# ${MANIFEST_WORD} (CF_API_TOKEN_[A-Z0-9_]+) +\\| ([0-9a-f]{8}) +\\| (${PROJ}/${TFC}( ${PROJ}/[a-z0-9_]+)*)\$"
+  while IFS= read -r line; do
+    ln="${line%%:*}"; line="${line#*:}"
+    [[ "$line" =~ $re ]] || { printf 'SOLEUR_P5_MANIFEST_INVALID line=%s reason=shape\n' "$ln"; return 1; }
+    k="${BASH_REMATCH[1]}"; pin="${BASH_REMATCH[2]}"; holders="${BASH_REMATCH[3]}"
+    [[ "$k" != *_PREV && "$k" != *_NEXT ]] || { printf 'SOLEUR_P5_MANIFEST_INVALID line=%s reason=suffix\n' "$ln"; return 1; }
+    [[ "$seen_k" != *" $k "* ]] || { printf 'SOLEUR_P5_MANIFEST_INVALID line=%s reason=duplicate-key\n' "$ln"; return 1; }
+    seen_k="${seen_k}${k} "; seen_h=" "
     for h in $holders; do
-      [[ "$h" =~ ^soleur/[a-z0-9_]+$ ]] || { printf 'SOLEUR_P5_MANIFEST_INVALID line=%s holder=%s\n' "$n" "$h"; return 1; }
+      [[ "$seen_h" != *" $h "* ]] || { printf 'SOLEUR_P5_MANIFEST_INVALID line=%s reason=duplicate-holder\n' "$ln"; return 1; }
+      seen_h="${seen_h}${h} "
     done
     MKEYS[${#MKEYS[@]}]="$k"; MPIN[${#MPIN[@]}]="$pin"; MHOLD[${#MHOLD[@]}]="$holders"
-  done < <(grep -a "^${MANIFEST_TAG}" "${BASH_SOURCE[0]}" | LC_ALL=C awk -F'|' '{ for (i = 1; i <= 3; i++) { gsub(/^[ \t]+|[ \t]+$/, "", $i) } sub(/^# P5-MANIFEST[ \t]+/, "", $1); print $1 "\t" $2 "\t" $3 }')
+  done < <(grep -n -a -F -- "$MANIFEST_WORD" "${BASH_SOURCE[0]}")
   [[ "${#MKEYS[@]}" -gt 0 ]] || { printf 'SOLEUR_P5_MANIFEST_EMPTY\n'; return 1; }
 }
 
@@ -406,12 +442,19 @@ load_manifest() {
 # moves the spec directory one level deeper). rc 1 when it cannot be resolved.
 repo_root() { git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null; }
 
-# tracked_file <rel> — the absolute path of a file the root TRACKS, or rc 1. A stage runs nothing
-# under credentials that the repository does not track.
+# tracked_file <rel> — the absolute path of a file the root TRACKS whose working-tree bytes are exactly
+# the committed HEAD blob, or rc 1. A stage runs or reads nothing under credentials that is not what the
+# repository committed: an untracked file, or a tracked one with an uncommitted edit, is refused
+# (`hash-object` reads the bytes, so assume-unchanged and skip-worktree cannot hide an edit). It prints
+# nothing: callers capture it, and print SOLEUR_P5_UNTRUSTED_FILE themselves.
 tracked_file() {
-  local root; root="$(repo_root)" || return 1
+  local root wb hb
+  root="$(repo_root)" || return 1
   git -C "$root" ls-files --error-unmatch -- "$1" >/dev/null 2>&1 || return 1
   [[ -r "$root/$1" ]] || return 1
+  wb="$(git -C "$root" hash-object -- "$1" 2>/dev/null)" || return 1
+  hb="$(git -C "$root" rev-parse -q --verify "HEAD:$1" 2>/dev/null)" || return 1
+  [[ -n "$wb" && "$wb" == "$hb" ]] || return 1
   printf '%s/%s' "$root" "$1"
 }
 
@@ -633,7 +676,8 @@ load_targets() {
     floor="$(grep -a "^${FLOOR_TAG}" "${BASH_SOURCE[0]}")"; floor="${floor#"$FLOOR_TAG"}"
   fi
   [[ "$floor" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*(\ [A-Za-z0-9][A-Za-z0-9_.-]*)*$ ]] || { floor=""; ct_missing project-floor-line; }
-  if invf="$(tracked_file "$INVENTORY_REL")"; then inv="$(grep -E '^[a-z0-9_]+$' "$invf" | sort -u || true)"; fi
+  if invf="$(tracked_file "$INVENTORY_REL")"; then inv="$(grep -E '^[a-z0-9_]+$' "$invf" | sort -u || true)"
+  else printf 'SOLEUR_P5_UNTRUSTED_FILE path=%s\n' "$INVENTORY_REL"; fi
   [[ -n "$inv" ]] || ct_missing "inventory:${INVENTORY_REL}"
   for p in $floor; do in_names "$p" "$projects" || ct_missing "$p"; done
   for c in $inv; do in_names "$c" "$soleur_cfgs" || ct_missing "${PROJ}/${c}"; done
@@ -916,12 +960,17 @@ VBAD=0
 vfail() { printf 'SOLEUR_P5_VERIFY key=%s verdict=fail reason=%s\n' "$1" "$2"; VBAD=1; }
 
 # run_readonly <key> <subcommand> <gating yes|no> [args] — the REAL consumer wrapper, run the way its
-# header documents (direct exec under `doppler run -p soleur -c prd_terraform`). Only its first stdout
-# line is kept, and only when it has the wrapper's verdict shape; the body is discarded.
+# header documents (direct exec under `doppler run -p soleur -c prd_terraform`). `--no-fallback` keeps
+# Doppler from writing a snapshot of the whole config to disk, and `--only-secrets` injects exactly the
+# names the wrapper reads (its closed-environment allowlist): the Doppler source pair, the zone and
+# account ids, and the key itself. Only its first stdout line is kept, and only when it has the
+# wrapper's verdict shape; the body is discarded.
 RO_TOOL=""
 run_readonly() {
-  local k="$1" sub="$2" gating="$3" out rc=0 first; shift 3
-  out="$(doppler run -p "$PROJ" -c "$TFC" -- "$RO_TOOL" "$sub" "$@" </dev/null 2>/dev/null)" || rc=$?
+  local k="$1" sub="$2" gating="$3" out rc=0 first n; shift 3
+  local -a only=()
+  for n in DOPPLER_PROJECT DOPPLER_CONFIG CF_ZONE_ID CF_ACCOUNT_ID "$k"; do only+=(--only-secrets "$n"); done
+  out="$(doppler run --no-fallback "${only[@]}" -p "$PROJ" -c "$TFC" -- "$RO_TOOL" "$sub" "$@" </dev/null 2>/dev/null)" || rc=$?
   first="${out%%$'\n'*}"
   [[ "$first" =~ ^cloudflare-readonly:\ [a-z-]+\ (ok|unverified\ -\ [A-Za-z0-9\ ._:\'\"\(\)-]{1,200})$ ]] || first="(unrecognized)"
   printf 'SOLEUR_P5_CONSUMER key=%s sub=%s gating=%s rc=%s line=%s\n' "$k" "$sub" "$gating" "$rc" "$first"
@@ -1022,7 +1071,9 @@ read_verify() {
   # The consumers read the zone and account from prd_terraform: an old id there is refused as a target.
   z="$(id_of "$PROJ" "$TFC" CF_ZONE_ID || true)"; a="$(id_of "$PROJ" "$TFC" CF_ACCOUNT_ID || true)"
   TARGETS_NEW=0; [[ "$z" == "$NEW_ZONE" && "$a" == "$NEW_ACCT" ]] && TARGETS_NEW=1
-  RO_TOOL="$(tracked_file "$READONLY_REL")" || RO_TOOL="/nonexistent/${READONLY_REL}"
+  if ! RO_TOOL="$(tracked_file "$READONLY_REL")"; then
+    printf 'SOLEUR_P5_UNTRUSTED_FILE path=%s\n' "$READONLY_REL"; RO_TOOL="/nonexistent/${READONLY_REL}"
+  fi
   load_targets
   print_target_failures
   for i in "${!MKEYS[@]}"; do verify_key "$i"; done

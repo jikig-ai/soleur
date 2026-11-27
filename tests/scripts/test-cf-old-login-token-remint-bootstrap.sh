@@ -123,12 +123,14 @@ write_stubs() { # <bin-dir>
 #                                           prd_terraform's <NAME>_PREV until that name is first set (the
 #                                           classification reads are poisoned, the post-write read-back is not)
 log() { printf '%s\t%s\n' "$1" "$2" >> "$STUB_LOG"; }
-args=("$@"); proj=""; cfg=""; i=0; dd=-1
+args=("$@"); proj=""; cfg=""; i=0; dd=-1; nofb=0; only=()
 while (( i < ${#args[@]} )); do
   case "${args[i]}" in
     --) dd=$i; break ;;
     -p) proj="${args[i+1]:-}"; i=$((i+2)) ;;
     -c) cfg="${args[i+1]:-}"; i=$((i+2)) ;;
+    --no-fallback) nofb=1; i=$((i+1)) ;;
+    --only-secrets) only+=("${args[i+1]:-}"); i=$((i+2)) ;;
     *) i=$((i+1)) ;;
   esac
 done
@@ -179,11 +181,18 @@ case "${1:-} ${2:-}" in
     n="$3"; log mutating "delete $proj/$cfg/$n"
     [[ " $* " == *" --yes "* ]] || exit 64
     [[ -e "$F/delete-noop" ]] || rm -f "$D/$n"; exit 0 ;;
-  "run -p")
-    log read "run $proj/$cfg"
-    [[ "$dd" -ge 0 && -d "$D" ]] || exit 64
-    envs=("DOPPLER_PROJECT=$proj" "DOPPLER_CONFIG=$cfg" "DOPPLER_ENVIRONMENT=$cfg")
-    for f in "$D"/*; do [[ -f "$f" ]] && envs+=("$(basename "$f")=$(cat "$f")"); done
+  "run "*)
+    # The real CLI: without --only-secrets every secret of the config (and the DOPPLER_* source names)
+    # is injected; with it, only the named ones. Without --no-fallback it would write a snapshot of the
+    # whole config to disk, so the stub refuses that call.
+    log read "run $proj/$cfg only=$(IFS=,; printf '%s' "${only[*]}") nofallback=$nofb"
+    [[ "$dd" -ge 0 && -d "$D" && "$nofb" -eq 1 ]] || exit 64
+    keep() { local o; [[ "${#only[@]}" -gt 0 ]] || return 0; for o in "${only[@]}"; do [[ "$o" != "$1" ]] || return 0; done; return 1; }
+    envs=()
+    keep DOPPLER_PROJECT && envs+=("DOPPLER_PROJECT=$proj")
+    keep DOPPLER_CONFIG && envs+=("DOPPLER_CONFIG=$cfg")
+    keep DOPPLER_ENVIRONMENT && envs+=("DOPPLER_ENVIRONMENT=$cfg")
+    for f in "$D"/*; do [[ -f "$f" ]] && keep "$(basename "$f")" && envs+=("$(basename "$f")=$(cat "$f")"); done
     exec env "${envs[@]}" "${args[@]:dd+1}" ;;
 esac
 log mutating "UNMODELLED $*"
@@ -297,6 +306,7 @@ case "$sub" in
     if [[ -e "$STUB_D/.flags/analytics-api-error" ]]; then echo "cloudflare-readonly: analytics-health unverified - api-error (graphql: quantile fields are not available on this plan)"; exit 14; fi ;;
   *) exit 64 ;;
 esac
+for e in $(compgen -e); do case "$e" in CF_API_TOKEN*) [[ "$e" == "$k" ]] || { echo "cloudflare-readonly: ${sub} unverified - env-too-wide"; exit 11; } ;; esac; done
 [[ ! -e "$STUB_D/.flags/consumer-fail.$sub" ]] || { echo "cloudflare-readonly: ${sub} unverified - token-lacks-scope"; exit 11; }
 if [[ "$v" =~ ^SYNTH-(NEW[0-9]*|ACCT|EXPIRED)-${k}-SENTINEL$ ]]; then
   echo "cloudflare-readonly: ${sub} ok"; echo '{"count":2,"actor":"synth-actor@example.invalid","ip":"192.0.2.7"}'; exit 0
@@ -377,6 +387,13 @@ run() {
   [[ " $* " == *" --stage verify "* || " $* " == *" --stage inventory "* ]] && rs=1
   OUT="$(env "${UNSET_ENV[@]}" "${CHILD_ENV[@]}" timeout 120 bash "$S" "$@" </dev/null 2>&1)"; RC=$?
   observe "$before" "$rs"
+}
+run_with() { # <VAR=value>... -- <bootstrap args> — run() with extra environment for the child
+  local -a extra=(); local before
+  while [[ "$1" != -- ]]; do extra+=("$1"); shift; done; shift
+  before="$(mut)"
+  OUT="$(env "${UNSET_ENV[@]}" "${CHILD_ENV[@]}" "${extra[@]}" timeout 120 bash "$S" "$@" </dev/null 2>&1)"; RC=$?
+  observe "$before" 0
 }
 digest() { sed -n 's/^SOLEUR_BOOTSTRAP_PLAN stage=[^ ]* operations=[0-9]* digest=\([0-9a-f]*\)$/\1/p' <<<"$OUT"; }
 ops() { sed -n 's/^SOLEUR_BOOTSTRAP_PLAN stage=[^ ]* operations=\([0-9]*\) digest=.*$/\1/p' <<<"$OUT"; }
@@ -519,7 +536,8 @@ row_g1_mustpass() { # <src> — other/ci holds the NEW value and soleur/prd lack
   at consumers
   has_line "SOLEUR_P5_CONSUMER key=${KA} sub=change-history gating=yes rc=0 line=cloudflare-readonly: change-history ok" \
     && has_line "SOLEUR_P5_CONSUMER key=${KP} sub=pagerules-ssl gating=yes rc=0 line=cloudflare-readonly: pagerules-ssl ok" \
-    && has_line "SOLEUR_P5_CONSUMER key=${KN} sub=analytics-health gating=no rc=0 line=cloudflare-readonly: analytics-health ok"
+    && has_line "SOLEUR_P5_CONSUMER key=${KN} sub=analytics-health gating=no rc=0 line=cloudflare-readonly: analytics-health ok" \
+    && logged "^read	run soleur/${TFC} only=DOPPLER_PROJECT,DOPPLER_CONFIG,CF_ZONE_ID,CF_ACCOUNT_ID,${KA} nofallback=1$"
 }
 
 row_g1_8_hidden_holder() { # <src> — AUDIT's manifest names soleur/dev_hidden, a config the listing does not show
@@ -978,6 +996,54 @@ row_s3c_403_html() { # <src> — a 403 with an HTML body is no verdict (only a J
   [[ "$RC" -eq 1 ]] && has_line "SOLEUR_P5_TOKEN_UNREACHABLE name=soleur/${TFC}/${KA} http=403" && vfail_is "$KA" unreachable && ! grep -q '^SOLEUR_P5_REVOKE_READY ' <<<"$OUT"
 }
 
+row_e1_env_refused() { # <src> <git|api|function> — an inherited variable that would redirect git, Doppler or a binary
+  local want ex
+  world "e1-$2" "$1"; seed_swapped
+  case "$2" in
+    git) ex="GIT_DIR=$W/repo/.git"; want=GIT_DIR ;;
+    api) ex="DOPPLER_API_HOST=https://doppler.invalid"; want=DOPPLER_API_HOST ;;
+    *) ex='BASH_FUNC_curl%%=() { command curl "$@"; }'; want=function:curl ;;
+  esac
+  at refuse
+  : > "$STUB_LOG"; run_with "$ex" -- --stage verify
+  [[ "$RC" -eq 64 && ! -s "$STUB_LOG" ]] && has_line "SOLEUR_P5_ENV_REFUSED name=${want}"
+}
+row_t1_dirty_file() { # <src> <tool|inventory> — an UNCOMMITTED edit to a tracked file the bootstrap runs or reads
+  world "t1-$2" "$1"; seed_swapped
+  at verdict
+  if [[ "$2" == tool ]]; then
+    printf '\n# an uncommitted edit\n' >> "$W/repo/plugins/soleur/scripts/cloudflare-readonly.sh"
+    : > "$STUB_LOG"; run --stage verify
+    [[ "$RC" -eq 1 ]] && has_line "SOLEUR_P5_UNTRUSTED_FILE path=plugins/soleur/scripts/cloudflare-readonly.sh" && ! logged '^read	consumer ' \
+      && vfail_is "$KA" consumer-read && noready "$KA" && noready "$KP"
+  else
+    printf 'an_uncommitted_config\n' >> "$W/repo/$INV_REL"
+    : > "$STUB_LOG"; run --stage verify
+    [[ "$RC" -eq 1 ]] && has_line "SOLEUR_P5_UNTRUSTED_FILE path=${INV_REL}" && has_line "SOLEUR_P5_FLOOR_MISSING name=inventory:${INV_REL}" \
+      && vfail_is "$KA" census-floor && noready "$KA"
+  fi
+}
+row_m1_manifest_invalid() { # <src> <variant> — one manifest line the parser must refuse (with its file line), never skip
+  local b="$SB/mf-$2-$RANDOM.sh" want=shape ln prog
+  case "$2" in
+    tab)       prog='s{^# P5-MANIFEST (CF_API_TOKEN_ANALYTICS_READ)}{# P5-MANIFEST\t$1}m' ;;
+    indent)    prog='s{^(# P5-MANIFEST CF_API_TOKEN_ANALYTICS_READ)}{ $1}m' ;;
+    nospace)   prog='s{^# P5-MANIFEST (CF_API_TOKEN_ANALYTICS_READ)}{#P5-MANIFEST $1}m' ;;
+    fourth)    prog='s{^(# P5-MANIFEST CF_API_TOKEN_ANALYTICS_READ[^\n]*)$}{$1 | soleur/dev}m' ;;
+    prefix)    prog='s{^(# P5-MANIFEST CF_API_TOKEN_ANALYTICS_READ +\| [0-9a-f]{8} +\| )soleur/prd_terraform$}{${1}soleur/prd_terraform_x}m' ;;
+    dupkey)    prog="s{^# P5-MANIFEST CF_API_TOKEN_ANALYTICS_READ [^\\n]*\$}{# P5-MANIFEST ${KA} | $(pin_of "$KA") | soleur/prd_terraform}m"; want=duplicate-key ;;
+    suffix)    prog='s{^(# P5-MANIFEST CF_API_TOKEN_ANALYTICS_READ)( +\|)}{${1}_PREV$2}m'; want=suffix ;;
+    dupholder) prog='s{^(# P5-MANIFEST CF_API_TOKEN_ANALYTICS_READ[^\n]*)$}{$1 soleur/dev soleur/dev}m'; want=duplicate-holder ;;
+  esac
+  ln="$(grep -n '^# P5-MANIFEST CF_API_TOKEN_ANALYTICS_READ ' "$1" | cut -d: -f1)"
+  at setup
+  [[ -n "$ln" ]] && copy_with "$1" "$b" <<<"$prog" || return 1
+  world "m1-$2" "$b"; seed_staged
+  at refuse
+  : > "$STUB_LOG"; run --stage swap
+  [[ "$RC" -ne 0 && -z "$(digest)" && "$(mut)" -eq 0 ]] && has_line "SOLEUR_P5_MANIFEST_INVALID line=${ln} reason=${want}"
+}
+
 # ==================================================================================================
 # The rows on the real script (full mode)
 # ==================================================================================================
@@ -1001,6 +1067,22 @@ if [[ "$MODE" == full ]]; then
   check "the .env probe through the on_exit trap is byte-identical to the operator-bootstrap template (comments included)" $?
   ! grep -nE 'soleur-infra-privileged' <(grep -v '^#' "$SCRIPT_SRC" | grep -vE '^[[:space:]]*#')
   check "no executable line names soleur-infra-privileged (no stage writes there)" $?
+  # The REAL consumer wrapper's contract, read from its code (comments stripped): the verdict lines the
+  # bootstrap parses, the three subcommands and the key each binds, the environment allowlist the
+  # bootstrap's --only-secrets names mirror, and the source guard. A change to any of these reds here.
+  RO_CODE="$(grep -vE '^[[:space:]]*#' "${REPO_ROOT}/plugins/soleur/scripts/cloudflare-readonly.sh")"
+  r=0
+  while IFS= read -r _pat; do grep -qF -- "$_pat" <<<"$RO_CODE" || { r=1; printf '    contract line missing from cloudflare-readonly.sh: %s\n' "$_pat"; }; done <<'CONTRACT'
+printf 'cloudflare-readonly: %s ok\n%s\n' "$SUB"
+printf 'cloudflare-readonly: %s unverified - %s\n' "$SUB" "$1"
+pagerules-ssl) TOKVAR=CF_API_TOKEN_PAGERULES_READ; load_credential zone;
+change-history) TOKVAR=CF_API_TOKEN_AUDIT; load_credential account;
+analytics-health) need_hours "$@"; TOKVAR=CF_API_TOKEN_ANALYTICS_READ; load_credential zone;
+DOPPLER_PROJECT | DOPPLER_CONFIG | CF_ZONE_ID | CF_ACCOUNT_ID
+if [ "${DOPPLER_PROJECT:-}" != soleur ] || [ "${DOPPLER_CONFIG:-}" != prd_terraform ]; then
+CONTRACT
+  for _s in pagerules-ssl change-history analytics-health; do grep -qE "^SUBCOMMANDS=\\(([^)]* )?${_s}( [^)]*)?\\)$" <<<"$RO_CODE" || r=1; done
+  check "the real cloudflare-readonly.sh still has the verdict lines, subcommands, key bindings, allowlist and source guard the bootstrap relies on" "$r"
   world static
   run --stage no-such-stage
   [[ "$RC" -eq 64 ]] && has_line 'SOLEUR_BOOTSTRAP_UNKNOWN_STAGE stage=no-such-stage'
@@ -1076,6 +1158,21 @@ if [[ "$MODE" == full ]]; then
   row_s9_consumer_fails "$SCRIPT_SRC"; check "S9 one key's own consumer read fails: that key fails reason=consumer-read, the others stay ok" $?
   row_s3c_403_html "$SCRIPT_SRC"; check "S3 a 403 with an HTML body is TOKEN_UNREACHABLE http=403, never a denial" $?
   row_i1_reference_unreadable "$SCRIPT_SRC"; check "I-1 inventory: a reference that verifies but cannot be read is CENSUS_BLIND, exit non-zero" $?
+
+  echo "== the environment, the trusted files and the manifest parser =="
+  row_e1_env_refused "$SCRIPT_SRC" git; check "E1 GIT_DIR set: ENV_REFUSED exit 64 before any doppler call" $?
+  row_e1_env_refused "$SCRIPT_SRC" api; check "E1 DOPPLER_API_HOST set: ENV_REFUSED exit 64 before any doppler call" $?
+  row_e1_env_refused "$SCRIPT_SRC" function; check "E1 curl exported as a shell function: ENV_REFUSED exit 64 before any call" $?
+  row_t1_dirty_file "$SCRIPT_SRC" tool; check "T1 an uncommitted edit to cloudflare-readonly.sh: UNTRUSTED_FILE, the wrapper never runs, no REVOKE_READY" $?
+  row_t1_dirty_file "$SCRIPT_SRC" inventory; check "T1 an uncommitted edit to the inventory file: UNTRUSTED_FILE, FLOOR_MISSING, census-floor" $?
+  row_m1_manifest_invalid "$SCRIPT_SRC" tab; check "M1 a manifest line with a tab after the tag: MANIFEST_INVALID naming its file line, zero writes" $?
+  row_m1_manifest_invalid "$SCRIPT_SRC" indent; check "M1 a manifest line with an indented line: MANIFEST_INVALID naming its file line, zero writes" $?
+  row_m1_manifest_invalid "$SCRIPT_SRC" nospace; check "M1 a manifest line with #P5-MANIFEST without a space: MANIFEST_INVALID naming its file line, zero writes" $?
+  row_m1_manifest_invalid "$SCRIPT_SRC" fourth; check "M1 a manifest line with a fourth field: MANIFEST_INVALID naming its file line, zero writes" $?
+  row_m1_manifest_invalid "$SCRIPT_SRC" prefix; check "M1 a manifest line with a first holder soleur/prd_terraform_x: MANIFEST_INVALID naming its file line, zero writes" $?
+  row_m1_manifest_invalid "$SCRIPT_SRC" dupkey; check "M1 a manifest line with a duplicate key: MANIFEST_INVALID naming its file line, zero writes" $?
+  row_m1_manifest_invalid "$SCRIPT_SRC" suffix; check "M1 a manifest line with a key ending _PREV: MANIFEST_INVALID naming its file line, zero writes" $?
+  row_m1_manifest_invalid "$SCRIPT_SRC" dupholder; check "M1 a manifest line with a duplicate holder: MANIFEST_INVALID naming its file line, zero writes" $?
 
   echo "== P-leak: no synthesized value, digest or full id in any output =="
   ! grep -qE 'SYNTH-|synth-actor|192\.0\.2\.7|injected\.invalid' "$ALL_OUT"
@@ -1352,7 +1449,8 @@ fi
 if mutate G1M17 "$SB/g1m17.sh" <<'PERL'; then
 s{CF_API_TOKEN_AUDIT\) run_readonly "\$k" change-history yes}{CF_API_TOKEN_AUDIT) run_readonly "\$k" pagerules-ssl yes}
 PERL
-  mkill "G1M17 (AUDIT checked by another key's consumer)" row_g1_mustpass "$SB/g1m17.sh" consumers 'rc=0 '
+  # The wrapper then reads PAGERULES while only AUDIT is injected (--only-secrets): unverified, consumer-read.
+  mkill "G1M17 (AUDIT checked by another key's consumer)" row_g1_mustpass "$SB/g1m17.sh" verdict 'reason=consumer-read'
 fi
 if mutate RW1 "$SB/rw1.sh" <<'PERL'; then
 s{(  printf 'SOLEUR_P5_VERIFY key=%s verdict=ok\\n' "\$k"\n)}{  doppler secrets delete "\$\{k\}_PREV" -p "\$PROJ" -c "\$TFC" --yes >/dev/null 2>&1 || true\n$1}
@@ -1390,6 +1488,39 @@ PERL
   mkill "S3M2 (any 4xx read as a denial)" row_s3c_403_html "$SB/s3m2.sh" verdict 'reason=key-not-verified'
 fi
 
+if mutate ENV1M "$SB/env1m.sh" <<'PERL'; then
+s{for v in GIT_DIR [^\n]*\n.*?\ndone\n}{}s
+PERL
+  # Without the refusal, GIT_DIR re-points the .env ignore probe at another repository's rules.
+  mkill "ENV1M (the git and Doppler location refusal deleted)" row_e1_env_refused "$SB/env1m.sh" refuse 'SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED ' git
+  mkill "ENV1M (the git and Doppler location refusal deleted)" row_e1_env_refused "$SB/env1m.sh" refuse 'SOLEUR_P5_REVOKE_READY ' api
+fi
+if mutate ENV2M "$SB/env2m.sh" <<'PERL'; then
+s{for v in doppler curl git jq; do\n.*?\ndone\n}{}s
+PERL
+  mkill "ENV2M (the exported-function refusal deleted)" row_e1_env_refused "$SB/env2m.sh" refuse 'SOLEUR_P5_REVOKE_READY ' function
+fi
+if mutate TF1M "$SB/tf1m.sh" <<'PERL'; then
+s{  \[\[ -n "\$wb" && "\$wb" == "\$hb" \]\] \|\| return 1\n}{}
+PERL
+  mkill "TF1M (tracked_file accepts an uncommitted edit)" row_t1_dirty_file "$SB/tf1m.sh" verdict 'SOLEUR_P5_REVOKE_READY ' tool
+fi
+if mutate RO1M "$SB/ro1m.sh" <<'PERL'; then
+s{doppler run --no-fallback "\$\{only\[\@\]\}"}{doppler run}
+PERL
+  mkill "RO1M (doppler run without --no-fallback and --only-secrets)" row_g1_mustpass "$SB/ro1m.sh" verdict 'reason=consumer-read'
+fi
+if mutate MF1M "$SB/mf1m.sh" <<'PERL'; then
+s{    \[\[ "\$seen_k" != \*" \$k "\* \]\] \|\| [^\n]*\n}{}
+PERL
+  mkill "MF1M (a duplicate manifest key accepted)" row_m1_manifest_invalid "$SB/mf1m.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN ' dupkey
+fi
+if mutate MF2M "$SB/mf2m.sh" <<'PERL'; then
+s{grep -n -a -F -- "\$MANIFEST_WORD"}{grep -n -a -- "^# \$\{MANIFEST_WORD\} "}
+PERL
+  mkill "MF2M (a near-miss manifest spelling skipped silently)" row_m1_manifest_invalid "$SB/mf2m.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN ' tab
+fi
+
 echo "== harness rows (the instrument must be able to go red) =="
 hred() { # <label> <step> <why-ere> <flag> <row-fn> [<row-args>...] — the row on the REAL script under a broken stub
   local label="$1" step="$2" why="$3" fl="$4" fn="$5" r; shift 5
@@ -1407,7 +1538,7 @@ hred "H3 (every holder get returns the _PREV value)" only-first 'SOLEUR_P5_COPIE
 # --- anti-vacuity floor (reported directly, never through fail()) -----------------
 # The subtrahend is the instrument self-test's one counted pass; the bound is exact for each mode.
 TOTAL=$((PASS + FAIL)); SELFTEST_PASSES=1
-case "$MODE" in full) MIN_ASSERTIONS=179 ;; *) MIN_ASSERTIONS=111 ;; esac
+case "$MODE" in full) MIN_ASSERTIONS=206 ;; *) MIN_ASSERTIONS=124 ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -lt "$MIN_ASSERTIONS" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran in %s mode, floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$MIN_ASSERTIONS" >&2
   printf 'Total: %s assertions, %s failed\n' "$TOTAL" "$((FAIL + 1))"
