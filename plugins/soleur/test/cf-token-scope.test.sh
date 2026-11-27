@@ -145,8 +145,8 @@ if [[ "$method" != "GET" ]]; then
   # PATCH /zones/<z>/settings parses JSON BEFORE it checks authorization
   # (measured 2026-11-26, #12931 comment 7193905571): a non-JSON body gets 400
   # code 6007 for EVERY token, and valid JSON from a denied token gets 403 code
-  # 9109. The grant token's 400 on the JSON probe body is ASSUMED here: it is not
-  # measured until the post-merge staged run records it.
+  # 9109. The grant token's answer to the JSON probe body, 400 code 1006, was
+  # measured on 2026-11-26 (#12931 comment 7201789881).
   if [[ -z "$spec" && "$url" =~ /zones/[^/]+/settings$ ]] && ! printf '%s' "$body_arg" | jq -e . >/dev/null 2>&1; then
     spec='400:{"success":false,"errors":[{"code":6007,"message":"Malformed JSON in request body"}]}'
   fi
@@ -160,7 +160,15 @@ if [[ "$method" != "GET" ]]; then
       tok-zonesettings-mock) [[ "$url" =~ /zones/[^/]+/settings$ ]] && granted=1 ;;
       tok-botmgmt-mock)      [[ "$url" =~ /bot_management$ ]] && granted=1 ;;
     esac
-    if [[ "$granted" == 1 ]]; then spec='400:{"success":false,"errors":[{"code":10026,"message":"invalid json"}]}'
+    # A granted token's 400, by URL. 1006 (zone settings PATCH) and 10400 (bot
+    # management PUT) were measured live on 2026-11-26 (#12931 comment 7201789881).
+    # Every other granted URL (rulesets, lists, dns_records, pages) gets 10026,
+    # a code no #12931 comment records for those rows. The script never reads
+    # .message, so the message strings are synthetic.
+    if [[ "$granted" == 1 ]]; then
+      if [[ "$url" =~ /zones/[^/]+/settings$ ]]; then spec='400:{"success":false,"errors":[{"code":1006,"message":"mock: settings grant rejected the probe body"}]}'
+      elif [[ "$url" =~ /bot_management$ ]]; then spec='400:{"success":false,"errors":[{"code":10400,"message":"mock: bot management grant rejected the probe body"}]}'
+      else spec='400:{"success":false,"errors":[{"code":10026,"message":"invalid json"}]}'; fi
     elif [[ "$url" =~ /zones/[^/]+/settings$ ]]; then spec='403:{"success":false,"errors":[{"code":9109,"message":"Unauthorized to access requested resource"}]}'
     else spec='403:{"success":false,"errors":[{"code":10000,"message":"Authentication error"}]}'; fi
   fi
@@ -1239,7 +1247,10 @@ else
   no "M2 a grant token was probed before its deny control (see $MWLOG)"
 fi
 assert_eq "M2 the settings deny control sent the JSON probe body with the bot-management token" 1 "$(grep -cxF -- "PATCH https://api.cloudflare.com/client/v4/zones/$NEW_ZONE/settings tok-botmgmt-mock $SET_BODY" "$MWLOG" || true)"
-has_re 'zones/<zone>/settings +authorized \(PATCH 400(, err [0-9]+)? after a 403 control\)' "M2 the settings row reads authorized, with the grant's error code"
+M2_SET_LINE='probe=zone-rest row zones/<zone>/settings -> authorized (PATCH 400, err 1006 after a 403 control)'
+M2_BOT_LINE='probe=zone-rest row zones/<zone>/bot_management -> authorized (PUT 400, err 10400 after a 403 control)'
+assert_eq "M2 the settings row reads authorized with its live code (1006, measured 2026-11-26)" 1 "$(grep -cxF -- "$M2_SET_LINE" "$OUTFILE" || true)"
+assert_eq "M2 the bot_management row reads authorized with its live code (10400, measured 2026-11-26)" 1 "$(grep -cxF -- "$M2_BOT_LINE" "$OUTFILE" || true)"
 for leak in tok-zonesettings-mock tok-botmgmt-mock; do lacks "$leak" "M2 output never carries token $leak"; done
 
 # --- M3: a grant token answering 403 -> verdict=denied, exit 3 ---
@@ -1313,11 +1324,15 @@ assert_rc 3 "M5e settings grant 400 err 6007 -> exit 3"
 has "probe=zone-rest verdict=inconclusive" "M5e prints verdict=inconclusive"
 has "err 6007 malformed JSON" "M5e names why the 400 proves nothing"
 # 6007 listed second, and a two-document reply, read the same way: decided on the parsed codes.
-for m5e_b in '{"success":false,"errors":[{"code":1000},{"code":6007}]}' '{"success":false,"errors":[{"code":1000}]} {"success":false,"errors":[{"code":6007}]}'; do
+# The text after the final '|' is the ", err <code>" fragment the row must display: the
+# FIRST listed error's code for one document (a reader of .errors[-1] shows 6007 and reds),
+# and nothing for two documents.
+for m5e_case in '{"success":false,"errors":[{"code":1000},{"code":6007}]}|, err 1000' '{"success":false,"errors":[{"code":1000}]} {"success":false,"errors":[{"code":6007}]}|'; do
+  m5e_b="${m5e_case%|*}"; m5e_code="${m5e_case##*|}"
   printf '%s\n' "/zones/[^/]+/settings\$|tok-zonesettings-mock|400:$m5e_b" >"$MOV"
   MOCK_WRITE_OVERRIDE="$MOV" mrun --profile zone-rest
   assert_rc 3 "M5e grant 400 <$m5e_b> -> exit 3"
-  has_re 'zones/<zone>/settings +inconclusive \(grant got 400' "M5e grant 400 <$m5e_b> reads inconclusive"
+  has_re "zones/<zone>/settings +inconclusive \\(grant got 400${m5e_code} — " "M5e grant 400 <$m5e_b> reads inconclusive and displays <${m5e_code:-no code}>"
 done
 # The 6007 rule is scoped to settings-json: an INVALID_BODY row's grant 400 6007 is authorized.
 printf '%s\n' '/bot_management$|tok-botmgmt-mock|400:{"success":false,"errors":[{"code":6007}]}' >"$MOV"
@@ -1670,7 +1685,7 @@ else
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
-MIN_ASSERTIONS=680
+MIN_ASSERTIONS=681
 if [[ "$((pass + fail))" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s assertions ran, floor is %s\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1

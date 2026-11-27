@@ -50,9 +50,10 @@
 #      non-JSON body gets 400 for every token, so the 403 control below cannot
 #      be established with it). SETTINGS_PROBE_BODY is valid JSON naming one
 #      setting id that does not exist (prefix PROBE_ID_PREFIX); the grant
-#      token's 400 on it is expected, not yet measured, which is why a 2xx stays
-#      fatal. Guards, all exit 2 before the write they protect: a static table
-#      guard at startup, before any secret read (every migration profile's rows;
+#      token's 400 on it was measured 2026-11-26 as code 1006 (#12931 comment
+#      7201789881); a 2xx stays fatal, since a write may have landed. Guards,
+#      all exit 2 before the write they protect: a static table guard at
+#      startup, before any secret read (every migration profile's rows;
 #      methods; body-kinds; the settings URL; the body's exact bytes and shape),
 #      mig_req's method+URL refusal at the write boundary, and a collision guard
 #      on the zone's own settings list (the authorized GET control), which
