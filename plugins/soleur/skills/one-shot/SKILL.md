@@ -196,6 +196,7 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 ## Plan Phase
 - Plan file: <path from subagent>
 - Status: complete
+- run_health_dir: <RUN_DIR>
 
 ### Errors
 <errors from subagent output>

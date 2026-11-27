@@ -34,10 +34,10 @@ After the test command is known, set `RUN_DIR=".soleur/runs/<branch>-tfl-<utc>"`
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-health-emit.sh" --run-dir "$RUN_DIR" --phase 0 --status started --prompt-file "$STEP_INVOCATION"
 ```
 
-At each iteration boundary use the same helper with `--phase iter-N-parse`, `--phase iter-N-fix`, or `--phase terminate`. Before the diagnostic report, emit phase `exit`, then seal once. Use `completed`, `failed`, or `budget-capped`:
+At each iteration boundary use the same helper with `--phase iter-N-parse`, `--phase iter-N-fix`, or `--phase terminate`. Before the diagnostic report, emit phase `exit`. Before every return after `RUN_DIR` is set — the already-pass exit, the tally `STOP`, and the diagnostic report — seal once. Set `RUN_HEALTH_STATUS` to `completed` when Result is SUCCESS or the suite already passed, to `budget-capped` on tally STOP, and to `failed` for every other Result.
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-health-emit.sh" --run-dir "$RUN_DIR" --status completed --seal --import-tally
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-health-emit.sh" --run-dir "$RUN_DIR" --status "$RUN_HEALTH_STATUS" --seal --import-tally
 ```
 
 ## Phase 0: Detect and Confirm

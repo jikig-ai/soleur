@@ -141,8 +141,8 @@ None.
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** a pipeline run whose later forensic read finds no sealed `run_health.json`, so the only account of the failure is the session that produced it.
-- **If this leaks, the user's workflow is exposed via:** prompt text under `.soleur/runs/<run-id>/phase_prompts/` entering git history if the ignore is dropped, or remaining readable on the machine that ran the pipeline.
+- **If this lands broken, the user experiences:** a pipeline run whose later forensic read finds no sealed `run_health.json`, so the only account of the failure is the session that produced it. A fail-open exit 0 does not abort that run. The stderr line is the signal.
+- **If this leaks, the user's workflow is exposed via:** prompt text under `.soleur/runs/<run-id>/phase_prompts/` entering git history if the ignore is dropped, or remaining readable on the machine that ran the pipeline. A mode-0600 copy stays readable by the operator account until the worktree is removed. The commit control is the `.gitignore` entry `.soleur/`.
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** one committed prompt snapshot exposes one person's session text. The bytes are local, not a hosted multi-tenant store, so the tier is not `aggregate pattern`. The gitignore does not lower the tier. `requires_cpo_signoff` stays true. `soleur:engineering:review:user-impact-reviewer` runs at review time. Live CPO spawn was not available in this process (see Domain Review).
 

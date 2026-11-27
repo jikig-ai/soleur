@@ -31,6 +31,13 @@ IMPORT_TALLY=0
 SESSION_STATE=""
 DISCOVER=0
 
+say() {
+  python3 -c 'import sys; s=sys.argv[1]
+for ch in ("\n","\r","\u2028","\u2029"):
+    s=s.replace(ch,"")
+sys.stderr.write("run-health-emit: %s\n" % s)' "$1"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --run-dir) [[ $# -ge 2 ]] || { echo "run-health-emit: --run-dir requires a value" >&2; exit 0; }; RUN_DIR="$2"; shift 2 ;;
@@ -47,7 +54,7 @@ while [[ $# -gt 0 ]]; do
     --seal) SEAL=1; shift ;;
     --import-tally) IMPORT_TALLY=1; shift ;;
     --discover) DISCOVER=1; shift ;;
-    *) echo "run-health-emit: unknown arg $1" >&2; shift ;;
+    *) say "unknown arg $1"; shift ;;
   esac
 done
 
@@ -67,6 +74,7 @@ except Exception:
     sys.exit(1)
 ok = (
     data.get("sealed") is True
+    and type(data.get("schema_version")) is int
     and data.get("schema_version") == 1
     and len(data.get("phases") or []) == 1
 )
@@ -84,7 +92,7 @@ fi
 # Refuse before mkdir. A Python-only check would already have created the directory,
 # and the heredoc discards Python stderr.
 if [[ -n "$PHASE" ]]; then
-  if [[ "$PHASE" == "." || "$PHASE" == ".." || "$PHASE" == *..* || ! "$PHASE" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  if [[ "$PHASE" == "." || "$PHASE" == ".." || "$PHASE" == *..* || "$PHASE" == *.attempt-* || ! "$PHASE" =~ ^[A-Za-z0-9._-]+$ ]]; then
     echo "run-health-emit: refused phase token" >&2
     exit 0
   fi
@@ -100,14 +108,27 @@ elif [[ -z "$RUN_DIR" || -z "$PHASE" || -z "$STATUS" ]]; then
   exit 0
 fi
 
+if [[ -L "$RUN_DIR" ]]; then
+  echo "run-health-emit: refused symlink run-dir" >&2
+  exit 0
+fi
+
 TALLY_SHOW=""
 if [[ "$IMPORT_TALLY" == "1" ]]; then
   # A stub earlier on PATH still wins. The sibling script is the fallback.
   _tally_dir="$(cd "$(dirname "$0")" && pwd)"
-  TALLY_SHOW="$(PATH="${PATH}:${_tally_dir}" pipeline-tally.sh show 2>/dev/null)" || TALLY_SHOW=""
+  if ! TALLY_SHOW="$(PATH="${PATH}:${_tally_dir}" pipeline-tally.sh show 2>/dev/null)"; then
+    echo "run-health-emit: tally show failed" >&2
+    TALLY_SHOW=""
+  fi
 fi
 
-mkdir -p "$RUN_DIR/phase_prompts" 2>/dev/null || { echo "run-health-emit: cannot create $RUN_DIR" >&2; exit 0; }
+if [[ -n "$SESSION_STATE" && ! -f "$SESSION_STATE" ]]; then
+  echo "run-health-emit: session-state missing" >&2
+fi
+
+mkdir -p "$RUN_DIR/phase_prompts" 2>/dev/null || { say "cannot create $RUN_DIR"; exit 0; }
+chmod 700 "$RUN_DIR" "$RUN_DIR/phase_prompts" 2>/dev/null || true
 
 HEALTH="$RUN_DIR/run_health.json"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -127,7 +148,7 @@ SOLEUR_RUN_HEALTH_SESSION_STATE="$SESSION_STATE" \
 SOLEUR_RUN_HEALTH_IMPORT_TALLY="$IMPORT_TALLY" \
 SOLEUR_RUN_HEALTH_TALLY_SHOW="$TALLY_SHOW" \
 python3 - "$HEALTH" "$RUN_ID" "$ISSUE" "$BRANCH" "$HARNESS" "$PHASE" "$STATUS" "$NOW" "$ERROR_MSG" "$REVIEWED_COVERAGE" "$PROMPT_FILE" "$RUN_DIR" <<'PY' 2>/dev/null || echo "run-health-emit: python write failed (non-fatal)" >&2
-import json, os, sys, shutil
+import json, os, sys
 
 (health, run_id, issue, branch, harness, phase, status, now, err, rcov, prompt_file, run_dir) = sys.argv[1:13]
 seal = os.environ.get("SOLEUR_RUN_HEALTH_SEAL", "") == "1"
@@ -150,12 +171,16 @@ def goto_count(path):
     return n
 
 data = {}
+if os.path.islink(health):
+    sys.exit(2)
 if os.path.exists(health):
     try:
         with open(health) as f:
             data = json.load(f)
     except Exception:
-        data = {}
+        sys.exit(2)
+if not isinstance(data, dict):
+    sys.exit(2)
 
 was_sealed = bool(data.get("sealed"))
 saved_status = data.get("status")
@@ -185,44 +210,66 @@ if phase:
     entry["status"] = status
     if status in terminal:
         entry["ended_at"] = now
-    elif "started_at" not in entry:
-        entry["started_at"] = now
+    else:
+        entry.pop("ended_at", None)
+        if "started_at" not in entry:
+            entry["started_at"] = now
     if err:
         entry.setdefault("errors", []).append({"at": now, "msg": err})
         data["errors"].append({"phase": phase, "at": now, "msg": err})
-    if prompt_file and os.path.exists(prompt_file):
+    if prompt_file and os.path.isfile(prompt_file) and not os.path.islink(prompt_file):
         pp_dir = os.path.join(run_dir, "phase_prompts")
         os.makedirs(pp_dir, exist_ok=True)
+        try:
+            os.chmod(pp_dir, 0o700)
+        except OSError:
+            pass
         base = os.path.join(pp_dir, "%s.md" % phase)
+        if os.path.islink(base):
+            sys.exit(2)
         if os.path.exists(base):
             n = 2
-            while os.path.exists(os.path.join(pp_dir, "%s.attempt-%d.md" % (phase, n))):
+            while True:
+                dest = os.path.join(pp_dir, "%s.attempt-%d.md" % (phase, n))
+                if os.path.islink(dest):
+                    sys.exit(2)
+                if not os.path.exists(dest):
+                    break
                 n += 1
-            dest = os.path.join(pp_dir, "%s.attempt-%d.md" % (phase, n))
         else:
             dest = base
-        shutil.copyfile(prompt_file, dest)
+        with open(prompt_file, "rb") as src:
+            blob = src.read()
+        try:
+            fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        except OSError:
+            sys.exit(2)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(blob)
         entry["prompt_snapshot"] = os.path.relpath(dest, run_dir)
 
 if (not was_sealed) and seal and status in terminal:
     data["sealed"] = True
     data["completed_at"] = now
     data["status"] = status
+    data["goto_count"] = goto_count(session_state)
+    if import_tally:
+        data["tally_show"] = tally_show
 if was_sealed:
     data["sealed"] = True
     if saved_completed is not None:
         data["completed_at"] = saved_completed
     if saved_status is not None:
         data["status"] = saved_status
-if seal:
-    data["goto_count"] = goto_count(session_state)
-    if import_tally:
-        data["tally_show"] = tally_show
 
 tmp = health + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
+try:
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+except OSError:
+    sys.exit(2)
+with os.fdopen(fd, "w") as handle:
+    json.dump(data, handle, indent=2)
+    handle.write("\n")
 os.replace(tmp, health)
 PY
 

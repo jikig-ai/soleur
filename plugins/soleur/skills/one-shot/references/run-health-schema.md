@@ -12,7 +12,7 @@
 - `completed_at` — set in the same write as `sealed`
 - `phases` — phase rows. `--seal` without `--phase` does not append one.
 - `errors` — error rows
-- `goto_count` — at `--seal`, the count of full lines `verb: goto` in the session-state file passed with `--session-state`. A prose mention of `verb=goto` does not count. A missing file yields `0` and the helper still exits 0.
+- `goto_count` — at `--seal`, the count of full lines `verb: goto` in the session-state file passed with `--session-state`. A prose mention of `verb=goto` does not count. A missing file prints `run-health-emit:` on stderr, yields `0`, and the helper still exits 0. A later `--seal` does not replace `goto_count` or `tally_show`.
 - `tally_show` — at `--seal` with `--import-tally`, the full stdout of `pipeline-tally.sh show`. One measured shape is `tally: seats=0 ci_cycles=0 fix_rounds=0 agent_rounds=1 ci_wall_s=unmeasured`.
 
 ## Seal rule
@@ -31,15 +31,13 @@ Snapshot the step invocation (step id, child skill, args) to a file. Do not snap
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-health-emit.sh" --run-dir "$RUN_DIR" --phase 0d --status started --prompt-file "$STEP_INVOCATION"
 ```
 
-Use the step id as `--phase` (`1-2`, `3`, `4`, `5`, `5.5`, `6`, `7`, `8`). On every return path, including abort and budget-capped, seal before returning. Do not pass `--phase` on the seal:
+Use the step id as `--phase` (`1-2`, `3`, `4`, `5`, `5.5`, `6`, `7`, `8`). On every return path after step 0d, including abort and budget-capped, seal once before returning. Do not pass `--phase` on the seal. Set `RUN_HEALTH_STATUS` to `completed` only when the completion promise is true, to `budget-capped` on a tally stop, and to `failed` on every other return.
 
 ```bash
 SESSION_STATE="knowledge-base/project/specs/<branch>/session-state.md"
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-health-emit.sh" --run-dir "$RUN_DIR" --status failed --seal --session-state "$SESSION_STATE" --import-tally
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-health-emit.sh" --run-dir "$RUN_DIR" --status "$RUN_HEALTH_STATUS" --seal --session-state "$SESSION_STATE" --import-tally
 ```
-
-Step 8 uses `--status completed` only when the completion promise is true. Otherwise use `--status failed`. A budget cap uses `--status budget-capped`.
 
 ## test-fix-loop calls
 
-Phase ids stay `0`, `iter-N-parse`, `iter-N-fix`, `terminate`, and `exit`. Seal once, on the way to the diagnostic report, with `completed`, `failed`, or `budget-capped`. The consumer is `plugins/soleur/agents/engineering/review/session-forensics-analyst.md`.
+Phase ids stay `0`, `iter-N-parse`, `iter-N-fix`, `terminate`, and `exit`. Seal once on every return after `RUN_DIR` is set, including the already-pass exit, a tally stop, and the diagnostic report. Set `RUN_HEALTH_STATUS` to `completed` when Result is SUCCESS or the suite already passed, to `budget-capped` on tally STOP, and to `failed` for every other Result. The consumer is `plugins/soleur/agents/engineering/review/session-forensics-analyst.md`.

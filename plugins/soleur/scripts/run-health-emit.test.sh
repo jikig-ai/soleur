@@ -28,8 +28,8 @@ instrument_self_test() {
 }
 instrument_self_test || { echo "instrument self-test failed" >&2; exit 1; }
 
-# A producer call is one line that runs bash on run-health-emit.sh and passes --seal.
-# A sentence that only names the tokens is not a call. An empty list is not a call.
+# A producer call is a command-position bash line: optional indent, the script
+# name, and a --seal token. A prose sentence that names those words is not a call.
 producer_call() {
   local -a files=("$@")
   local f line found
@@ -38,7 +38,9 @@ producer_call() {
     [[ -f "$f" ]] || return 1
     found=0
     while IFS= read -r line || [[ -n "$line" ]]; do
-      if [[ "$line" == *bash* && "$line" == *run-health-emit.sh* && "$line" == *--seal* ]]; then
+      if [[ "$line" =~ ^[[:space:]]*bash[[:space:]] ]] \
+        && [[ "$line" == *run-health-emit.sh* ]] \
+        && [[ "$line" =~ (^|[[:space:]])--seal([[:space:]]|$) ]]; then
         found=1
         break
       fi
@@ -52,7 +54,7 @@ producer_call() {
 RD="$TMP/run1"
 printf 'prompt text' > "$TMP/p.md"
 bash "$SUT" --run-dir "$RD" --run-id r1 --issue 12573 --branch b --harness opencode --phase 0 --status started --prompt-file "$TMP/p.md"
-if [[ -f "$RD/run_health.json" ]] && python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get('schema_version')==1 and d['run_id']=='r1' and d['issue']=='12573' and len(d['phases'])==1 else 1)" "$RD/run_health.json"; then
+if [[ -f "$RD/run_health.json" ]] && python3 -c "import json,sys; d=json.load(open(sys.argv[1])); v=d.get('schema_version'); sys.exit(0 if type(v) is int and v==1 and d['run_id']=='r1' and d['issue']=='12573' and len(d['phases'])==1 else 1)" "$RD/run_health.json"; then
   pass "creates run_health.json with schema_version 1"
 else
   fail "creates run_health.json with schema_version 1"
@@ -126,8 +128,8 @@ printf '%s\n' 'verb: goto' 'the compact marker is verb=goto and does not count' 
 S10="$TMP/run-goto"
 bash "$SUT" --run-dir "$S10" --status completed --seal --session-state "$TMP/session-state.md" 2>/dev/null
 S10b="$TMP/run-goto-missing"
-bash "$SUT" --run-dir "$S10b" --status completed --seal --session-state "$TMP/no-such-session-state.md" 2>/dev/null; rc=$?
-if [[ "$rc" == "0" ]] && python3 -c "import json,sys; a=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2])); sys.exit(0 if a.get('goto_count')==2 and b.get('goto_count')==0 else 1)" "$S10/run_health.json" "$S10b/run_health.json" 2>/dev/null; then
+bash "$SUT" --run-dir "$S10b" --status completed --seal --session-state "$TMP/no-such-session-state.md" >"$TMP/goto-missing.out" 2>"$TMP/goto-missing.err"; rc=$?
+if [[ "$rc" == "0" ]] && grep -q 'run-health-emit:' "$TMP/goto-missing.err" && python3 -c "import json,sys; a=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2])); sys.exit(0 if a.get('goto_count')==2 and b.get('goto_count')==0 else 1)" "$S10/run_health.json" "$S10b/run_health.json" 2>/dev/null; then
   pass "goto_count counts full verb: goto lines"
 else
   fail "goto_count counts full verb: goto lines"
@@ -170,7 +172,7 @@ refuse_phase 'a/b' 'slash'
 # Case 13: producer skills. Empty list and a prose sentence are not calls.
 REPO="$(git -C "$DIR" rev-parse --show-toplevel)"
 PROSE="$TMP/prose-skill.md"
-printf '%s\n' 'This sentence names run-health-emit.sh and --seal but does not run them.' > "$PROSE"
+printf '%s\n' '**Run health.** After step 0d and on every return path, read the schema and run its `bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-health-emit.sh"` lines, including `--seal`.' > "$PROSE"
 CALL="$TMP/call-skill.md"
 # shellcheck disable=SC2016 # the fixture line is literal text, not this shell's expansion
 printf '%s\n' 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-health-emit.sh" --status completed --seal' > "$CALL"
@@ -190,18 +192,27 @@ else
   fail "bash line with --seal is a producer call"
 fi
 SCHEMA="$REPO/plugins/soleur/skills/one-shot/references/run-health-schema.md"
-if producer_call \
-  "$REPO/plugins/soleur/skills/one-shot/SKILL.md" \
-  "$REPO/plugins/soleur/skills/test-fix-loop/SKILL.md" \
-  "$SCHEMA"; then
+TFL="$REPO/plugins/soleur/skills/test-fix-loop/SKILL.md"
+if producer_call "$TFL" "$SCHEMA" \
+  && grep -F 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-health-emit.sh" --run-dir "$RUN_DIR" --status "$RUN_HEALTH_STATUS" --seal --import-tally' "$TFL" >/dev/null \
+  && grep -F 'Set `RUN_HEALTH_STATUS` to `completed` when Result is SUCCESS or the suite already passed, to `budget-capped` on tally STOP, and to `failed` for every other Result.' "$TFL" >/dev/null; then
   pass "producer skills call run-health-emit.sh with --seal"
 else
   fail "producer skills call run-health-emit.sh with --seal"
 fi
+if producer_call "$REPO/plugins/soleur/skills/one-shot/SKILL.md"; then
+  fail "one-shot pointer sentence is not a producer call"
+else
+  pass "one-shot pointer sentence is not a producer call"
+fi
 # shellcheck disable=SC2016 # the schema sentence is literal text, not this shell's expansion
+# A "Do not Append \`run_health_dir:\`" line contains the restore sentence and must not pass.
 if grep -F 'SESSION_STATE="knowledge-base/project/specs/<branch>/session-state.md"' "$SCHEMA" >/dev/null \
-  && grep -F 'Append `run_health_dir:` again after that rewrite' "$SCHEMA" >/dev/null \
-  && grep -F 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-health-emit.sh" --run-dir "$RUN_DIR" --status failed --seal --session-state "$SESSION_STATE" --import-tally' "$SCHEMA" >/dev/null; then
+  && grep -F 'Append `run_health_dir:` again after that rewrite' "$SCHEMA" \
+    | grep -Ev '(^|[^[:alnum:]_])([Dd]o not|[Nn]ever|[Dd]on'\''t) Append' >/dev/null \
+  && grep -F 'Set `RUN_HEALTH_STATUS` to `completed` only when the completion promise is true, to `budget-capped` on a tally stop, and to `failed` on every other return.' "$SCHEMA" >/dev/null \
+  && grep -F 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-health-emit.sh" --run-dir "$RUN_DIR" --status "$RUN_HEALTH_STATUS" --seal --session-state "$SESSION_STATE" --import-tally' "$SCHEMA" >/dev/null \
+  && grep -F -- '- run_health_dir: <RUN_DIR>' "$REPO/plugins/soleur/skills/one-shot/SKILL.md" >/dev/null; then
   pass "schema binds session-state and restores run_health_dir"
 else
   fail "schema binds session-state and restores run_health_dir"
@@ -215,15 +226,14 @@ else
   fail "gitignore covers run_health.json and phase_prompts"
 fi
 
-# Case 15: --discover prints ok and does not write under the repo
-before="$(find "$REPO/.soleur/runs" -type f 2>/dev/null | wc -l | tr -d ' ')"
+# Case 15: --discover prints ok. Do not count the live repo tree; another
+# writer in .soleur/runs flips that comparison.
 disc="$(bash "$SUT" --discover 2>"$TMP/discover.err")"
 rc=$?
-after="$(find "$REPO/.soleur/runs" -type f 2>/dev/null | wc -l | tr -d ' ')"
-if [[ "$rc" == "0" && "$disc" == *ok* && "$before" == "$after" ]]; then
+if [[ "$rc" == "0" && "$disc" == "ok" ]] && ! grep -q 'discover failed' "$TMP/discover.err"; then
   pass "discover prints ok without a repo run file"
 else
-  fail "discover prints ok without a repo run file" "rc=$rc before=$before after=$after out=$disc"
+  fail "discover prints ok without a repo run file" "rc=$rc out=$disc"
 fi
 
 # Case 16: --seal with started does not set sealed
@@ -259,15 +269,104 @@ else
   fail "missing flag value exits 0" "rc=$rc"
 fi
 
-# Case 19: budget-capped seals, and a later seal does not replace the terminal status.
+# Case 19: a later seal keeps the terminal status and the first goto_count.
 S19="$TMP/run-reseal"
-bash "$SUT" --run-dir "$S19" --status budget-capped --seal 2>/dev/null
+bash "$SUT" --run-dir "$S19" --status budget-capped --seal --session-state "$TMP/session-state.md" 2>/dev/null
 bash "$SUT" --run-dir "$S19" --status completed --seal 2>/dev/null
-if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get('sealed') is True and d.get('status')=='budget-capped' and d.get('completed_at') else 1)" "$S19/run_health.json" 2>/dev/null; then
+if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get('sealed') is True and d.get('status')=='budget-capped' and d.get('completed_at') and d.get('goto_count')==2 else 1)" "$S19/run_health.json" 2>/dev/null; then
   pass "later seal keeps budget-capped"
 else
   fail "later seal keeps budget-capped"
 fi
 
+# Case 20: a ledger that does not parse is left in place.
+S20="$TMP/run-corrupt"
+mkdir -p "$S20"
+printf 'not-json' > "$S20/run_health.json"
+bash "$SUT" --run-dir "$S20" --status completed --seal >"$TMP/corrupt.out" 2>"$TMP/corrupt.err"; rc=$?
+if [[ "$rc" == "0" && "$(cat "$S20/run_health.json")" == "not-json" ]] && grep -q 'run-health-emit:' "$TMP/corrupt.err"; then
+  pass "unreadable ledger is left in place"
+else
+  fail "unreadable ledger is left in place" "rc=$rc body=$(cat "$S20/run_health.json" 2>/dev/null)"
+fi
+
+# Case 21: a symlink prompt is not followed.
+printf 'secret-bytes' > "$TMP/secret.txt"
+chmod 600 "$TMP/secret.txt"
+ln -s "$TMP/secret.txt" "$TMP/prompt-link"
+S21="$TMP/run-link-prompt"
+bash "$SUT" --run-dir "$S21" --phase 0 --status started --prompt-file "$TMP/prompt-link" 2>"$TMP/linkp.err"; rc=$?
+if [[ "$rc" == "0" && ! -e "$S21/phase_prompts/0.md" ]] && ! grep -R -q 'secret-bytes' "$S21" 2>/dev/null; then
+  pass "symlink prompt is not copied"
+else
+  fail "symlink prompt is not copied" "rc=$rc"
+fi
+
+# Case 22: a symlink run-dir is not written through.
+mkdir -p "$TMP/link-target"
+ln -s "$TMP/link-target" "$TMP/run-link-dir"
+bash "$SUT" --run-dir "$TMP/run-link-dir" --phase 0 --status started >"$TMP/linkd.out" 2>"$TMP/linkd.err"; rc=$?
+if [[ "$rc" == "0" && ! -e "$TMP/link-target/run_health.json" && ! -e "$TMP/link-target/phase_prompts" ]] && grep -q 'run-health-emit:' "$TMP/linkd.err"; then
+  pass "symlink run-dir is refused"
+else
+  fail "symlink run-dir is refused" "rc=$rc"
+fi
+
+# Case 23: a symlink ledger is not replaced.
+S23="$TMP/run-link-health"
+mkdir -p "$S23"
+printf '%s\n' '{"sealed":true,"status":"failed"}' > "$TMP/real-health.json"
+ln -s "$TMP/real-health.json" "$S23/run_health.json"
+bash "$SUT" --run-dir "$S23" --status completed --seal >"$TMP/linkh.out" 2>"$TMP/linkh.err"; rc=$?
+if [[ "$rc" == "0" && -L "$S23/run_health.json" && "$(cat "$TMP/real-health.json")" == '{"sealed":true,"status":"failed"}' ]] && grep -q 'run-health-emit:' "$TMP/linkh.err"; then
+  pass "symlink ledger is left in place"
+else
+  fail "symlink ledger is left in place" "rc=$rc"
+fi
+
+# Case 24: new ledger and prompt files are mode 0600.
+S24="$TMP/run-mode"
+bash "$SUT" --run-dir "$S24" --phase 0 --status started --prompt-file "$TMP/p.md" 2>/dev/null
+json_mode="$(stat -c %a "$S24/run_health.json" 2>/dev/null || true)"
+prompt_mode="$(stat -c %a "$S24/phase_prompts/0.md" 2>/dev/null || true)"
+if [[ "$json_mode" == "600" && "$prompt_mode" == "600" ]]; then
+  pass "ledger and prompt are mode 0600"
+else
+  fail "ledger and prompt are mode 0600" "json=$json_mode prompt=$prompt_mode"
+fi
+
+# Case 25: a non-terminal upsert clears ended_at.
+S25="$TMP/run-ended"
+bash "$SUT" --run-dir "$S25" --phase 0 --status completed 2>/dev/null
+bash "$SUT" --run-dir "$S25" --phase 0 --status started 2>/dev/null
+if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); p=d['phases'][0]; sys.exit(0 if p.get('status')=='started' and 'ended_at' not in p else 1)" "$S25/run_health.json" 2>/dev/null; then
+  pass "non-terminal status clears ended_at"
+else
+  fail "non-terminal status clears ended_at"
+fi
+
+# Case 26: a phase token that is an attempt filename is refused.
+refuse_phase '0.attempt-2' 'attempt-name'
+
+# Case 27: a failing tally show is not stored as a silent empty measurement.
+BIN2="$TMP/bin-fail"
+mkdir -p "$BIN2"
+cat > "$BIN2/pipeline-tally.sh" <<'EOF'
+#!/usr/bin/env bash
+echo 'tally exploded' >&2
+exit 1
+EOF
+chmod +x "$BIN2/pipeline-tally.sh"
+S27="$TMP/run-tally-fail"
+PATH="$BIN2:/usr/bin:/bin" bash "$SUT" --run-dir "$S27" --status completed --seal --import-tally >"$TMP/tally-fail.out" 2>"$TMP/tally-fail.err"; rc=$?
+if [[ "$rc" == "0" ]] && grep -q 'run-health-emit: tally show failed' "$TMP/tally-fail.err" && python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get('tally_show')=='' else 1)" "$S27/run_health.json" 2>/dev/null; then
+  pass "failed tally show is reported"
+else
+  fail "failed tally show is reported" "rc=$rc"
+fi
+
 echo "passes=$passes fails=$fails"
+# 36 is every pass() that remains after instrument_self_test restores its
+# counters: 6 refuse_phase labels plus 30 other sites. Deleting a site fails.
+[[ "$passes" -eq 36 ]]
 [[ "$fails" -eq 0 ]]
