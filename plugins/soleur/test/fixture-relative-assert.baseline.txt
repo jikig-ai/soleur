@@ -456,7 +456,7 @@
 4	plugins/soleur/test/proc.test.sh
 2	plugins/soleur/test/pr-overlap-preflight.test.sh
 1	plugins/soleur/test/ralph-loop.test.sh
-54	plugins/soleur/test/regenerate-shard-manifest.test.sh
+56	plugins/soleur/test/regenerate-shard-manifest.test.sh
 1	plugins/soleur/test/required-checks-canonical-parity.test.sh
 1	plugins/soleur/test/resolve-debt.test.sh
 13	plugins/soleur/test/scripts-shard-totality-mutations.sh

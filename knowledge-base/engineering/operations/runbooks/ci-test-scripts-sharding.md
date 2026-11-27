@@ -16,7 +16,7 @@ n-mismatched table degrades to the old positional round-robin — coverage
 never depends on the table. The three heaviest suites live in the dedicated
 `test-scripts-heavy` matrix (#8006) with their own manifest
 `scripts/suite-shard-legs-heavy.tsv` under the identical contract; the
-light group runs K=8. Regenerate the manifests when legs skew or when
+light group runs K=12. Regenerate the manifests when legs skew or when
 `scripts-shard-manifest.test.sh` reds. For a suite add/remove use
 `python3 scripts/regenerate-shard-manifest.py --incremental --write`
 (`--group heavy` for the heavy table) — incumbent rows pin verbatim and only
@@ -28,7 +28,7 @@ rows; for leg-balance corrections use the full
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the atomic mega-suites register as `--rows` arms: `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26). The replay triple's arms retired with S4 on 2026-11-09. |
+| `test-scripts` | K=12 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the atomic mega-suites register as `--rows` arms: `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26). The replay triple's arms retired with S4 on 2026-11-09. |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 3 | battery rows split `--rows 1-14` / `15-28` / `29-42` | ~6 min each + setup |
 
@@ -74,16 +74,28 @@ benchmark the lookup, not the parse.
 # timing fetch; the durations table takes only the parity delta (stale rows
 # out, new labels in at floor with src=floor; measured rows byte-identical) —
 # the manifest diff is exactly the added/removed rows. Refuses
-# --run/--runs/--timings-dir.
+# --run/--runs/--timings-dir/--event.
 python3 scripts/regenerate-shard-manifest.py --incremental --write
 python3 scripts/regenerate-shard-manifest.py --group heavy --incremental --write
-# Full regen — the balance-correction path; median over the last 5 green main
-# runs. This is the only mode that rebalances incumbents and the only one that
-# re-aggregates the durations tables from fresh measurements.
+# Full regen — the balance-correction path; median over the last 5 green
+# merge_group runs of ci.yml (the ci.yml groups default --event to
+# merge_group: only queue runs carry the full required battery — push runs on
+# main are selection-reduced and ship no suite-timings artifacts. Override
+# with --event {auto,push,merge_group}; infra-validation keeps its
+# main-branch population). This is the only mode that rebalances incumbents
+# and the only one that re-aggregates the durations tables from fresh
+# measurements. A committed --write whose sample contains ZERO measured rows
+# is refused (exit 2) — pass --allow-all-floor only when an all-floor rewrite
+# is genuinely intended.
 python3 scripts/regenerate-shard-manifest.py --runs 5 --write
 python3 scripts/regenerate-shard-manifest.py --run <green-ci-run-id> --write   # single-run override
 python3 scripts/regenerate-shard-manifest.py --group heavy --runs 5 --write
-# With --timings-dir (offline inputs) re-list the newest green main runs right
+# Changing K itself is a bigger sweep than the matrix literal: grep the repo
+# for RESTATED copies of the count (`eight legs`, `K=8`, `range(8)`, `x8`,
+# `legs=18`, `/18`, `scripts-7`-adjacent lists) across workflows, tests,
+# fixture censuses (EXPECTED_LEGS and its mirrors), and this file — a guard
+# that restates the count stays green on the stale value (#12964 review).
+# With --timings-dir (offline inputs) re-list the newest green merge_group runs right
 # before --write and require "0 at floor" in the dry-run summary: a suite that
 # landed after your staged runs is priced at the floor until a run carries its
 # timing, and the leg it shares then looks lighter than it is (#9449).
@@ -96,7 +108,9 @@ python3 scripts/regenerate-shard-manifest.py --group infra --runs 5 --write
 ```
 
 Without `--write` it prints predicted per-leg totals and the incumbent diff.
-`--runs N` (default 5) aggregates the N most recent green main runs by
+`--runs N` (default 5) aggregates the N most recent green runs in the
+resolved `--event` population (merge_group for the ci.yml groups, main-branch
+runs for infra) by
 **median** per label — a sustained drift moves a weight, a one-run contention
 spike does not; `--timings-dir` (repeatable — one run per dir) reads local
 `suite-timings.tsv` files instead. Sticky-LPT keeps incumbent legs within 5%
@@ -111,7 +125,11 @@ problem.
 **Floor rule (#9232).** A registered label absent from every timing input is
 still tabled — at `floor_ms`, the median of the group's measured labels, or
 `DEFAULT_SUITE_MS = 60000` when nothing measured at all (an all-floor,
-count-balanced manifest with a WARN — never a die). Floor rows carry
+count-balanced manifest with a WARN). One bound: a *committed* `--write`
+whose sample carries zero `src=measured` rows refuses outright — an all-floor
+rewrite of committed prices was exactly what a battery-less `--runs` sample
+produced; `--allow-all-floor` acknowledges the intent (redirected emissions
+stay ungated — fixtures and local packs). Floor rows carry
 `src=floor` in the durations table so a later aggregation re-derives the
 estimate rather than entrenching it as a measurement.
 
@@ -441,7 +459,7 @@ span to the NEXT registered mark.
   records per-row elapsed seconds in its replay table so the next boundary
   choice is a data lookup.
 
-- **2026-10-03 K=7→K=8 bump (#9307):** a K=7 dry-run on the five newest main
+- **2026-10-03 K=7→K=8 bump (#9449, umbrella #9307):** a K=7 dry-run on the five newest main
   runs (37111686980, 37112007418, 37116885720, 37130724002, 37148301745)
   predicts every leg at 651.0-657.7 s of suite time (10.9-11.0 min), above
   the ~10-min target, so the matrix moved to K=8 and the manifest was
@@ -596,6 +614,55 @@ span to the NEXT registered mark.
   its execution is sub-30 s. Committed bounds 180/120 (next-minute
   ceilings) at margin 0.30 — comfortably inside the epic goals
   (PR ≤ 1200 s / MQ ≤ 900 s).
+- **2026-11-19 K=8→K=12 light-matrix reprice (#12964):** five green
+  `merge_group` runs — 44422317370, 44367783886, 44361074603,
+  44341020337, 44334556285 — each carrying 762 timed labels over 8
+  light + 3 heavy artifact dirs (a sixth green run, 44485722708, was a
+  reduced 25-job battery with no timing artifacts and was excluded).
+  Motivation: median `test` umbrella wall ~37 min — critical path was a
+  light leg (run 44422317370's `test-scripts (5/8)` at ~37.7 min).
+  Fresh-median simulation: K=8 repacks to ~26.6 min/leg (the serial-work
+  floor itself, not balance, was the binding constraint); K=10 worst leg
+  1,506 s; K=14 ~911.9 s. Chosen **K=12**: all 12 legs 1,028.8–1,082.0 s
+  (~17.1–18.0 min) of predicted suite time, spread 53.2 s — inside the
+  <30-min target with headroom, while K=14 buys ~2.5 min more for +2
+  runners/run. `--write --allow-growth` (4 violations acknowledged, the
+  gate's recorded channel): 758 tabled, 758 measured, 0 at floor
+  (1,520 ms), total measured weight 12,765,937 ms, 246 rows re-seated.
+  Heavy group repriced from the same runs: 0 moved (three atomic legs —
+  `tests/scripts/registry-gate-mutation-battery` median 744.9 s binds
+  the heavy wall at ~12.4 min, under the K=12 light wall; the observed
+  1,133 s on run 44422317370 was a spike, range 731–1,133 s). Both
+  matrix consumers moved in lockstep: `ci.yml` `test-scripts` and
+  `main-health-monitor.yml` `test-scripts`. Same-diff generator
+  hardening: `--event {auto,push,merge_group}` (ci.yml groups now
+  default --runs to merge_group — push runs carry no suite-timings
+  artifacts) and a committed-write refusal on zero `src=measured` rows
+  (ack: `--allow-all-floor`).
+- **2026-11-19 `tenant-integration-required` PR bound re-seed:** the
+  300 s bound mis-seeded a bimodal population — probe dry-run
+  2026-11-19T11:02Z (755 qualifying samples, 0 failed check-runs reads;
+  sentinel `drift=46676c5b…`): PR p90 **915 s** (n=26, p50 51, p90 dur 21)
+  / merge_group p90 **70 s** (n=30, p50 50, p90 dur 21). 23/26 PR
+  samples sat at 11–76 s; the 3-sample slow mode at 915–970 s
+  (2026-11-18T14:52Z, 14:56Z, 23:08Z) is the path-gated
+  tenant-integration suite's own needs-chain — the heavy suite ran
+  ~835–910 s and the aggregator completed ~20 s later. Discriminator:
+  same-run *independent* sibling checks stayed ≤~355 s while the
+  needs-chain umbrellas ran longer inside their own bounds
+  (`quality-guards` ~478–556 s, `test` ~2228 s), so this is leg
+  serialization, not queue congestion; p90 dur 21 s rules out an
+  aggregator execution regression. NOSAMPLE classes: 3 earlier-batch
+  exclusions (check completed before the sampled run's `created_at`) +
+  1 suite cancelled mid-flight on 2026-11-18T11:45Z (trigger
+  unattributed — the job was executing, so not the third-arrival
+  pending-entry eviction arm; recorded as an accepted residual). The
+  2026-11-13 breach (~900 s) was the same slow mode rolling through the
+  window, not a transient. Re-seeded to 960/180 (next-minute ceiling of
+  p90; margin 0.30 unchanged) — `merge_group` emits `tenant=false` and
+  skips the heavy suite, so the MQ bound stays 180. Headroom is thin
+  (~50 s of margin-adjusted cover vs the suite's 19-min cap); #12905's
+  test-set narrowing is the structural follow-up.
 
 ## Runner-availability data (why extra legs are not free)
 
