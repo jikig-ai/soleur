@@ -106,9 +106,14 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# Completed push runs on main, newest first. `created_at` is what the issue
-# timestamps describe; compare epochs, not strings.
-RUNS="$(gh api "repos/$REPO/actions/workflows/$WORKFLOW/runs?branch=main&event=push&status=completed&per_page=30" \
+# Completed merge_group runs, newest first — the population that actually
+# carries the full battery's suite-timings-* artifacts. Push runs on main are
+# selection-reduced by push-dedupe (test-scripts is elided when a merge_group
+# twin exists, ADR-276), so a `branch=main&event=push` sample can never reach
+# the narts == EXPECTED gate and the probe starves to NOT YET forever.
+# `created_at` is what the issue timestamps describe; compare epochs, not
+# strings. No branch filter: queue runs carry headBranch gh-readonly-queue/*.
+RUNS="$(gh api "repos/$REPO/actions/workflows/$WORKFLOW/runs?event=merge_group&status=completed&per_page=30" \
         --jq '.workflow_runs[] | select(.conclusion == "success") | [.id, .created_at] | @tsv')" \
   || { echo "CANNOT ESTABLISH: gh api runs list failed" >&2; exit 3; }
 

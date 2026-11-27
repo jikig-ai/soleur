@@ -20,7 +20,9 @@ generated artifact that lands on every sibling PR.
 
 AGGREGATION + FLOOR (#9232)
 ---------------------------
-Weights aggregate across the last N green main runs by MEDIAN per label — a
+Weights aggregate across the last N green runs of the --event-resolved
+population (merge_group for the ci.yml matrices, main pushes for infra) by
+MEDIAN per label — a
 sustained drift moves a weight; a one-run spike does not. A registered label
 absent from every timing input is still tabled, at the floor weight
 (median of the group's measured labels, else DEFAULT_SUITE_MS), marked
@@ -167,22 +169,38 @@ def gh(args, **kw):
     return p.stdout
 
 
-def green_main_runs(workflow="ci.yml", n=5):
-    """The N most recent successful main runs of WORKFLOW, newest first.
+def green_main_runs(workflow="ci.yml", n=5, event="main"):
+    """The N most recent successful runs of WORKFLOW in EVENT's population,
+    newest first. EVENT populations:
+      merge_group — merge-queue runs (`--event merge_group` only; NO --branch —
+                    queue runs carry headBranch gh-readonly-queue/..., so a
+                    --branch main filter would empty the sample while still
+                    succeeding). The full required battery runs here —
+                    the ci.yml groups must price off this population.
+      push        — push events on main (--branch main --event push). Push
+                    runs are selection-reduced (no suite-timings artifacts),
+                    so this population is for diagnosis, never repricing.
+      main        — every main-branch run (push+schedule+dispatch) — the
+                    legacy infra-validation source.
     Uses `gh run list` rather than the REST runs-list endpoint — the latter
     answers 404 for some credential shapes while run-list and the per-run
     artifacts endpoint both work."""
-    p = subprocess.run(
-        ["gh", "run", "list", "--workflow", workflow, "--branch", "main",
-         "--status", "success", "-L", str(n), "--json", "databaseId",
-         "--jq", ".[].databaseId"],
-        capture_output=True, text=True)
+    argv = ["gh", "run", "list", "--workflow", workflow,
+            "--status", "success", "-L", str(n), "--json", "databaseId",
+            "--jq", ".[].databaseId"]
+    if event == "merge_group":
+        argv += ["--event", "merge_group"]
+    elif event == "push":
+        argv += ["--branch", "main", "--event", "push"]
+    else:
+        argv += ["--branch", "main"]
+    p = subprocess.run(argv, capture_output=True, text=True)
     if p.returncode != 0:
         die(f"gh run list --workflow {workflow} failed: {p.stderr.strip()}")
     runs = [int(x) for x in p.stdout.split() if x and x != "null"]
     if not runs:
-        die(f"no successful {workflow} runs on main found; pass --run or "
-            f"--timings-dir/--durations explicitly")
+        die(f"no successful {workflow} runs in the {event} population; "
+            f"pass --run or --timings-dir/--durations explicitly")
     return runs
 
 
@@ -249,12 +267,15 @@ def fetch_timings_from_run(run_id, artifact_re, expected_legs=None, allow_empty=
     with tempfile.TemporaryDirectory() as td:
         for a in names:
             # Binary payload — capture_output bytes, not the text-mode gh() helper.
+            # int() pins the id into the URL and zip filename — a non-numeric
+            # API id could otherwise escape `td` via os.path.join.
+            aid = int(a["id"])
             p = subprocess.run(
-                ["gh", "api", f"repos/{REPO}/actions/artifacts/{a['id']}/zip"],
+                ["gh", "api", f"repos/{REPO}/actions/artifacts/{aid}/zip"],
                 capture_output=True)
             if p.returncode != 0:
-                die(f"artifact {a['id']} download failed")
-            zpath = os.path.join(td, f"{a['id']}.zip")
+                die(f"artifact {aid} download failed")
+            zpath = os.path.join(td, f"{aid}.zip")
             with open(zpath, "wb") as f:
                 f.write(p.stdout)
             with zipfile.ZipFile(zpath) as z:
@@ -882,9 +903,10 @@ def main():
                     help="CI run id to read timings from (explicit single-run "
                          "override; equivalent to --runs 1 over that run)")
     ap.add_argument("--runs", type=int, default=None,
-                    help="aggregate timings over the N most recent green main "
-                         "runs of the group's workflow by per-label median "
-                         "(default: 5)")
+                    help="aggregate timings over the N most recent green runs "
+                         "of the group's --event-resolved population "
+                         "(merge_group for the ci.yml matrices, main pushes "
+                         "for infra) by per-label median (default: 5)")
     ap.add_argument("--timings-dir", action="append", default=None,
                     help="read suite-timings.tsv files from a local dir instead "
                          "of gh; repeatable — each dir is one run's artifact set")
@@ -922,7 +944,8 @@ def main():
                          "emit DRIFT_ROW / FLOOR_UNMEASURED / LEG_PREDICTED / "
                          "LEG_OBSERVED / BOUND_PERFECT rows; writes nothing, "
                          "exits 0 on findings; refuses --write/--incremental/"
-                         "--legs/--run/--runs/--durations-out/--registered-file")
+                         "--legs/--run/--runs/--durations-out/"
+                         "--registered-file/--event")
     ap.add_argument("--manifest", default=None,
                     help="manifest path (default: the group's committed manifest)")
     ap.add_argument("--registered-file", default=None,
@@ -938,6 +961,22 @@ def main():
                          "committed suite-durations.tsv). Supplying it also "
                          "arms the gate on redirected --manifest/"
                          "--durations-out emissions — the fixture seam")
+    ap.add_argument("--event", choices=("auto", "push", "merge_group"),
+                    default="auto",
+                    help="event population that --runs samples "
+                         "from (default auto: merge_group for the ci.yml test "
+                         "matrices — push runs on main carry no suite-timings "
+                         "artifacts — and every main-branch run for "
+                         "infra-validation). Refused under --incremental/"
+                         "--drift-report (no fetch); ignored with a WARN "
+                         "under --durations/--timings-dir/--run")
+    ap.add_argument("--allow-all-floor", action="store_true",
+                    help="acknowledge a committed --write whose sample "
+                         "contains zero measured rows — an all-floor "
+                         "count-balanced table replacing committed prices. "
+                         "Refused by default: a battery-less population "
+                         "(push runs on main ship no suite-timings "
+                         "artifacts) silently zeroes the sample")
     args = ap.parse_args()
 
     if args.legs is not None and args.legs < 1:
@@ -957,6 +996,10 @@ def main():
         if args.run is not None or args.runs is not None:
             die("--drift-report reads local artifact dirs only — refusing "
                 "--run/--runs (download runs to per-run dirs first)")
+        if args.event != "auto":
+            die("--drift-report reads local artifact dirs only — refusing "
+                "--event (it selects the gh run population a fetch would "
+                "sample, and report mode fetches nothing)")
         if args.durations_out is not None:
             die("--drift-report writes nothing — refusing --durations-out "
                 "(the comparison base is --durations or the committed table)")
@@ -973,6 +1016,9 @@ def main():
         die("--incremental cannot be combined with --run/--runs/--timings-dir — "
             "incremental mode fetches no timings (incumbent rows pin verbatim; "
             "new labels price at the durations-table floor)")
+    if args.incremental and args.event != "auto":
+        die("--incremental fetches no timings — refusing --event (it selects "
+            "the gh run population a fetch would sample)")
 
     if args.group == "heavy":
         job, group, artifact_re = "test-scripts-heavy", "scripts-heavy", HEAVY_ARTIFACT
@@ -989,6 +1035,13 @@ def main():
         default_manifest = MANIFEST
         default_durations = DURATIONS
         workflow, key = CI_YML, "shard"
+    # --event resolution: the ci.yml test matrices price off merge_group runs
+    # — the full required battery; push runs on main are selection-reduced and
+    # ship no suite-timings artifacts (the zero-measured footgun the committed
+    # --write refusal below guards). infra-validation keeps its main-branch
+    # population.
+    event = args.event if args.event != "auto" else (
+        "merge_group" if args.group in ("light", "heavy") else "main")
     manifest_path = args.manifest if args.manifest else default_manifest
     if args.durations_out:
         durations_path = args.durations_out
@@ -1187,6 +1240,9 @@ def main():
 
     # Input-source precedence mirrors the file's pairing rule: whichever source
     # actually fed stamps the provenance. --durations > --timings-dir > gh.
+    if args.event != "auto" and (args.durations or args.timings_dir or args.run):
+        print("WARN: --event selects the gh run population — it has no "
+              "effect with --durations/--timings-dir/--run", file=sys.stderr)
     floor_inputs = set()
     est_inputs = set()
     run_ids = []
@@ -1215,7 +1271,8 @@ def main():
         if args.run:
             run_ids = [args.run]
         else:
-            run_ids = green_main_runs(os.path.basename(workflow), args.runs or 5)
+            run_ids = green_main_runs(os.path.basename(workflow),
+                                      args.runs or 5, event)
         for r in run_ids:
             per_run.append((f"run:{r}",
                             fetch_timings_from_run(
@@ -1316,6 +1373,31 @@ def main():
         new_rows = {l: (timings[l], src_map[l]) for l in timings}
         committed_write = (
             os.path.abspath(durations_path) == os.path.abspath(default_durations))
+        committed_manifest = (
+            os.path.abspath(manifest_path) == os.path.abspath(default_manifest))
+        # Zero-measured refusal BEFORE the gate and the opens: a committed
+        # write whose sample carries no measured rows replaces every committed
+        # price with an all-floor count-balanced table — the exact output a
+        # battery-less --runs population (push runs on main ship no
+        # suite-timings artifacts) or an all-floor --durations input produces.
+        # The conjunct covers EITHER committed artifact: --durations-out can
+        # redirect the durations file while the committed manifest still takes
+        # the same all-floor packing. Redirected emissions stay writable
+        # (fixtures, local packs), and --allow-all-floor acknowledges an
+        # intentional floor rewrite.
+        measured_n = sum(1 for s in src_map.values() if s == "measured")
+        if (committed_write or committed_manifest) and measured_n == 0 \
+                and not args.allow_all_floor:
+            names = ([os.path.basename(durations_path)] if committed_write
+                     else []) + \
+                    ([os.path.basename(manifest_path)] if committed_manifest
+                     else [])
+            die(f"refusing to write {' and '.join(names)}: the "
+                f"sample has zero measured rows — an all-floor count-balanced "
+                f"table would replace the committed prices. Feed measured "
+                f"input (--timings-dir, or --run/--runs over the merge_group "
+                f"population), or acknowledge an intentional floor rewrite "
+                f"with --allow-all-floor")
         growth_ack = drift_gate(new_rows, args, args.baseline_durations,
                                 committed_write, durations_path)
         # Provenance follows the SOURCE the timings actually came from — a
