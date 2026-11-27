@@ -13,7 +13,9 @@
 # a committed stub of cloudflare-readonly.sh (the bootstrap runs only TRACKED files). PATH-stubbed `doppler` keeps state in $STUB_D/<project>/<config>/<NAME> files: `get
 # --plain` prints the value plus ONE newline (the real CLI), `set` stores stdin exactly and logs
 # `set <p>/<c>/<NAME> prev=<class of <NAME>_PREV at that moment>` (Guard 2's in-window order witness),
-# `projects` / `configs` / `--only-names` list the state, `run` execs with the config's values exported.
+# `projects` / `configs` / `--only-names` list the state, `run` requires --no-fallback and execs with the
+# --only-secrets names exported. The world holds the committed census floor (every soleur config of the real
+# inventory file, which the fixture repo tracks, and every `# P5-PROJECT-FLOOR` project).
 # PATH-stubbed `curl` answers both verify endpoints and GraphQL from the token's sentinel KIND; `gh` is
 # stubbed and must never be called. Nothing reaches a network. Values are synthesized sentinels
 # (cq-test-fixtures-synthesized-only); the ids are the public account/zone ids of the runbook id table.
@@ -839,6 +841,20 @@ row_g3_r1_resume_after_first_holder() { # <src> — an earlier run wrote dev_per
   at applied
   [[ "$RC" -eq 0 && "$(val soleur dev "$KA")" == "$(tok NEW "$KA")" ]]
 }
+row_g3_5_copy_mismatch() { # <src> — two old holders; the first copy does not read back equal: the second is never written
+  local b="$SB/twoh-$RANDOM.sh"
+  at setup
+  two_holders "$1" "$b" || return 1
+  world g3-5 "$b"; seed_swapped; sv soleur dev_personal "$KA" "$(tok OLD "$KA")"; sv soleur dev "$KA" "$(tok OLD "$KA")"
+  flag "corrupt.soleur.dev_personal.${KA}"
+  : > "$STUB_LOG"; approve holder-copies
+  at mismatch
+  has_line "SOLEUR_P5_COPY_MISMATCH src=${TFC}/${KA} dst=dev_personal/${KA}" || return 1
+  at no-later-write
+  [[ "$(set_lines dev "$KA")" -eq 0 && "$(val soleur dev "$KA")" == "$(tok OLD "$KA")" ]] || return 1
+  at stops
+  [[ "$RC" -ne 0 ]] && has_line 'SOLEUR_BOOTSTRAP_STAGE_FAILED stage=holder-copies rc=1'
+}
 row_g3_6_source_unreadable_at_copy() { # <src> — prd_terraform <KEY> stops reading after the plan: the copy refuses before any write
   local g
   world g3-6 "$1"; seed_swapped; sv soleur dev "$KA" "$(tok OLD "$KA")"
@@ -1141,6 +1157,7 @@ CONTRACT
   row_g3_3_before_swap "$SCRIPT_SRC"; check "G3-3 run before swap: PRECONDITION_FAILED need=swap" $?
   row_g3_4_nothing_swapped "$SCRIPT_SRC"; check "G3-4 nothing staged and no swap: need=swap, no holder classified as already done" $?
   row_g3_r1_resume_after_first_holder "$SCRIPT_SRC"; check "G3-R1 re-run after the first holder was copied: writes the second only" $?
+  row_g3_5_copy_mismatch "$SCRIPT_SRC"; check "G3-5 the first holder copy does not read back equal: COPY_MISMATCH, the second holder untouched, stage fails" $?
   row_g3_6_source_unreadable_at_copy "$SCRIPT_SRC"; check "G3-6 the copy source stops reading after the plan: no holder write, stage fails" $?
 
   echo "== Test Scenarios =="
@@ -1389,6 +1406,11 @@ s{      if \[\[ -n "\$dk" && "\$dk" == "\$dn" \]\]; then mode=delete\n}{      if
 PERL
   mkill "G2M16 (the delete-only resume mode removed)" row_g2_r2_resume_after_key "$SB/g2m16.sh" plan 'SOLEUR_P5_KEY_UNEXPECTED '
 fi
+if mutate G3M6 "$SB/g3m6.sh" <<'PERL'; then
+s{(    copy_secret "\$TFC" "\$\{HC_K\[i\]\}" "\$\{HC_C\[i\]\}" "\$\{HC_K\[i\]\}") \|\| return 1\n}{$1 || true\n}
+PERL
+  mkill "G3M6 (holder-copies runs on after a failed copy)" row_g3_5_copy_mismatch "$SB/g3m6.sh" no-later-write 'SOLEUR_P5_COPIED '
+fi
 if mutate G3M4 "$SB/g3m4.sh" <<'PERL'; then
 s{(  s="\$\(digest_of "\$PROJ" "\$1" "\$2"\)" [^\n]*\n)(  \( set -o pipefail\n[^\n]*\n[^\n]*\n)}{$2$1}
 PERL
@@ -1538,7 +1560,7 @@ hred "H3 (every holder get returns the _PREV value)" only-first 'SOLEUR_P5_COPIE
 # --- anti-vacuity floor (reported directly, never through fail()) -----------------
 # The subtrahend is the instrument self-test's one counted pass; the bound is exact for each mode.
 TOTAL=$((PASS + FAIL)); SELFTEST_PASSES=1
-case "$MODE" in full) MIN_ASSERTIONS=206 ;; *) MIN_ASSERTIONS=124 ;; esac
+case "$MODE" in full) MIN_ASSERTIONS=209 ;; *) MIN_ASSERTIONS=126 ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -lt "$MIN_ASSERTIONS" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran in %s mode, floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$MIN_ASSERTIONS" >&2
   printf 'Total: %s assertions, %s failed\n' "$TOTAL" "$((FAIL + 1))"
