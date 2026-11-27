@@ -59,3 +59,26 @@
 - Pin drift absorbed: cherry-picked #12985's 4-line pin bump (v1.1.73 -> v1.1.74, soleur-infra[bot] 50e8a2d391). This PR now carries the bump; #12985 becomes redundant on merge. NOTE for the operator: merging this PR bumps the main pin to v1.1.74 before the mirror backfill has the digest in zot — the same window #12985's merge was withheld for. Sequence the merge after the bridge apply + a green mirror_only backfill, or accept the provisioning window (see resume prompt).
 - Verified locally: cfamj suite green (pool batch integrity 14 batches, only expected instrument FAIL), gate 549/0, web-hosts-generic green, cloud-init-inngest-bootstrap 297/297, argv-bearer sweep 832/0, lint-infra-no-human-steps --changed clean.
 - Still expected-red by design: `validate (apps/web-platform/infra)` + `infra-validate-required` (FILL-AT-PHASE-3.1); `test` (draft-mode verdict, clears on ready).
+
+## 2026-11-27 — compound + ship preflight (still operator-gated)
+
+- `soleur:compound` complete: learning filed
+  (`learnings/test-failures/2026-11-27-five-ci-red-classes-surfaced-by-one-merge-jq17-pool-flush-literal-names.md`);
+  route-to-definition issue #13097 opened (bc_curl non-literal name escapes the
+  sweep's structural checks; deferred-scope-out + meta/machinery).
+  Rule budget: [WARN] B_ALWAYS=44479>=44000; constitution 322/300 warn.
+  Auto-consolidation deferred — spec dir stays live until ship Phase 6.45.
+- `soleur:ship` Phase 5.4 preflight: PASS across the board —
+  Not-Bare-Repo PASS; Check 2 headers PASS (CSP strict-dynamic+nonce, XFO DENY,
+  XCTO nosniff, HSTS preload on app.soleur.ai); Check 6 PASS (User-Brand Impact,
+  threshold `aggregate pattern`); Check 9 PASS; Check 10 PASS
+  (`SOLEUR_ZOT_BRIDGE` discovered); Check 12 PASS (informational: in_transit
+  exception expires 2026-12-10, tracking #12742); Checks 1/3/4/5/7/8/11 SKIP
+  (path-gated or Doppler project scope); Check 13 no founder block.
+  Probe-residue gate clean; undeferred operator-step gate not triggered
+  (operator steps live in tasks.md, not the PR body).
+- Ship halts at the operator boundary per plan: Phase 3.1 must mint the deploy
+  service token into `deploy_service_token_ids` in `tunnel.tf` (FILL-AT-PHASE-3.1)
+  before `validate`/`infra-validate-required` can go green and the PR can be
+  readied. CI steady state on run 46068009302: every heavy leg green; only the
+  by-design reds remain (validate pair + DRAFT_LIGHT test verdict).
