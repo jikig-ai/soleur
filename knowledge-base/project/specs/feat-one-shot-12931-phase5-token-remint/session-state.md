@@ -47,3 +47,4 @@
 - Ruled by CTO agent (D5): swap op line binds `new_id`/`owner`; `_NEXT` equal to another CF_API_TOKEN* key refused.
 - Suites: bootstrap 210/0 full, 127/0 mutants; browser 101/0 full, 25/0 mutants.
 - Floor gap from the fix agent (8 of 9 projects) closed with a names-only `doppler projects` read (`example-project`).
+- Review-round gate (`gate-or-skip.sh`): rc=1, ended `failed-before-budget`. Real red `lint-shell-capture-exit-live` (bootstrap floor capture) fixed; re-run 0 new findings. `apps/web-platform [unit]` reds (`agent-auth-failure-matcher`, `sandbox-network-access-runtime`) 60/60 in isolation (contention). Unmeasured suites covering this diff run directly: `test-affected-kb-consumers` 31/31, `test-affected-derive` 139/139, `lint-orphan-test-suites` clean.
