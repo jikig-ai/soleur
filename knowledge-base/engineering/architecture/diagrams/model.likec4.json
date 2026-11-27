@@ -2544,6 +2544,17 @@
 "id": "2tzw0ohvagdkt",
 "title": "Relays JSON-RPC lines; appends --snapshot-mode none (and, opt-in via --chromium-fallback, --browser chromium --sandbox); refuses filename"
 },
+"2vms8gcsqv0xs": {
+"technology": "doppler CLI (project-scoped read service token, delivered as a main-only GitHub environment secret)",
+"source": {
+"model": "github"
+},
+"target": {
+"model": "doppler"
+},
+"id": "2vms8gcsqv0xs",
+"title": "Tier-B Terraform credentials (#8209, ADR-241 D2/D3): a Tier-B job loads the WHOLE soleur-infra-privileged/prd project through .github/actions/infra-credentials, using a read service token that is a GitHub ENVIRONMENT secret (DOPPLER_TOKEN_INFRA_PRIVILEGED) on an environment whose deployment-branch policy admits `main` ONLY — infra-privileged (no reviewers, for the unattended apply-on-merge and drift paths and, since #9262, the inngest pin bump and auto-mint, and, since #9454 item 4, the weekly weakness-digest PR author), web-platform-infra-apply, inngest-cutover and workspaces-luks-cutover; since #9294 PR-B deploy-channel joins the same main-only set, served by the NARROW arm on the next edge (DOPPLER_TOKEN_DEPLOY_CHANNEL), never by this whole-project arm. Since #10138 the `wipe` job of git-data-cutover.yml (environment web-platform-infra-apply) is a loader consumer too, and the first one in that workflow: it calls the loader once, with only the Tier-B token (no legacy token), and every step after the loader runs under an exec env -i allow-list (ADR-241 amendment 2026-10-14). Since #10540 inngest-key-rotate.yml (environment infra-privileged, dispatch-only, ADR-307) is a loader consumer in its apply1, apply2 and reboot jobs; its guard job holds the Tier-A token only, and its redeploy job reads the deploy webhook credentials through the narrow deploy-channel arm (the next edge). Since #11294 key-rotate.yml (environment infra-privileged, dispatch-only, ADR-317) is a loader consumer in its apply and clear jobs: its guard, redeploy and notify jobs hold no whole-project Doppler credential (the guard reads the GitHub API only, the redeploy job reads the deploy webhook credentials through the narrow deploy-channel arm in one step, the notify job holds the issues scope). The boundary is the BRANCH POLICY, not the reviewer gate: GitHub evaluates it before the job starts and before the secret is materialized, which is the one thing a repo secret cannot do (any workflow on any branch of this PUBLIC repo can name a repo secret, and that is how DOPPLER_TOKEN_TF, HCLOUD_TOKEN, CF_API_TOKEN_R2 and a soleur-ai App key became branch-reachable). A PROJECT, never a prd_* branch config: a branch config resolves its root's secrets, which is how prd_terraform inherited prd. Terraform declares the project and its environment and mints NOTHING into them — the web-platform root's state is Tier-A readable, so a doppler_secret or doppler_service_token declared there would land in exactly the tier this edge exists to evict it from; the containers are IaC, the values are supplied out of band. Every doppler run in a Tier-B job carries --preserve-env, so a value planted in the Tier-A-writable prd_terraform can never shadow a loaded Tier-B value (doppler run OVERRIDES the environment by default; the flag is what makes precedence a property of the code). Enforced on every PR by tests/scripts/test-infra-privileged-tier-census.sh, which derives the Tier-B job set from references to the secret and the environment set from what those jobs declare, never from a hand-kept list. NOMINAL UNTIL R1: a holder of a prd repo-secret token still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can therefore rewrite the branch policy this edge rests on — which is why ADR-241 D2 is `proposed`, not `accepted`. SINCE #8609 (ADR-241 D10) the project also carries GITHUB_APP_RUNTIME_DOPPLER_TOKEN, the web host's read token for the isolated soleur-github-app project (see the doppler -> hetzner edge). It is operator-minted into Tier B, never Terraform-minted (ADR-241 D3). The loader always exports its TF_VAR_ name and fills it only for the jobs that opt in (the deploy-pipeline push and the web-host create/replace jobs), so the Tier-A prd_terraform arm can never supply it. R1 is CLOSING with this mechanism; the NOMINAL clause above holds until the old key's JWT gets 401 (runbook R7) and D2 flips. SINCE #9262 two unattended App-token consumers on infra-privileged — build-inngest-bootstrap-image.yml's bump-cloud-init-pin and mint-inngest-bootstrap-tag.yml's mint — and, since #9454 item 4 (ADR-285), a third, weakness-miner.yml's open-pr, which mints a contents+pull_requests token to author, push and arm the weekly digest PR as the App, do NOT load the project through infra-credentials: the ./.github/actions/mint-infra-app-token composite makes a single-key read of GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY (doppler secrets get with --project and --config prd in argv, the project one of two validated names). SINCE #9321 (ADR-241 D11) those consumers read the NARROW Doppler project soleur-infra-app/prd, which holds a copy of only the two App values (Terraform declares the empty project; an operator-run script copies the values and mints its read token) and is reached with a read token that is the environment secret DOPPLER_TOKEN_INFRA_APP, so none of those jobs holds the whole-project token or can reach GITHUB_APP_RUNTIME_DOPPLER_TOKEN. The composite's one broad-source caller, apply-github-infra.yml, names the whole project explicitly and keeps DOPPLER_TOKEN_INFRA_PRIVILEGED, which it already holds for Terraform. The narrowing is least privilege by reference under the main-only policy, not a boundary against a change merged to main"
+},
 "2wrdz1wmqfsvp": {
 "technology": "JS snippet",
 "source": {
@@ -2653,6 +2664,17 @@
 },
 "id": "33oelk4lvl3u7",
 "title": "Git operations"
+},
+"34d7zguvzk8er": {
+"technology": "doppler CLI (project-scoped read service token, delivered as a main-only GitHub environment secret)",
+"source": {
+"model": "github"
+},
+"target": {
+"model": "doppler"
+},
+"id": "34d7zguvzk8er",
+"title": "Deploy-channel credentials (#9294, ADR-241 D10/D11): .github/actions/infra-credentials gains a NARROW arm for the soleur-deploy-channel/prd project, selected by doppler-project=soleur-deploy-channel and reaching Doppler with a read service token that is the environment secret DOPPLER_TOKEN_DEPLOY_CHANNEL on the deploy-channel environment — a deployment-branch policy admitting `main` ONLY and an empty reviewer set BY DESIGN (the branch policy is the boundary, as on infra-privileged; a reviewer gate on an environment used for unattended applies is dead weight). The narrow arm reads ONLY that project/config: an empty token is the named no_credential_source refusal BEFORE any Doppler call, never a legacy prd_terraform fallback and never a silent widen to soleur-infra-privileged, and the loader's two-literal case dispatch refuses any other project name by name. The carrier file (apps/web-platform/infra/deploy-channel-environment.tf) declares containers only — github_repository_environment + github_repository_environment_deployment_policy (branch_pattern=main) and doppler_project + doppler_environment — no doppler_secret, doppler_service_token or data source, because this root's state is readable by the very Tier-A credentials the move evicts. STATUS (Phase 2, PR-B): the consumers are migrated — the release chain (web-platform-release.yml, canary-status.yml), the inngest set (deploy-inngest-image.yml, restart-inngest-server.yml, scheduled-inngest-health.yml), every non-gated op arm of cutover-inngest.yml and the key-rotation redeploy jobs call this arm and read the trio as ordinary env vars (the WEBHOOK_DEPLOY_{SECRET} + CF_ACCESS_CLIENT_{ID,SECRET} triple — brace-folded so the generated, censused JSON never holds a literal trio name); the Terraform-fed group reads the trio through soleur-infra-privileged, the source of truth this project is a one-way copy of. No secrets.<trio> bind remains under .github/ (census G1l). The prd_terraform and repo-level copies are deleted only in the operator-named tail after canaries run green on source=tier_b_deploy_channel, and the trio's rotation is owner-reserved — until then this edge is a live read over a still-duplicated value"
 },
 "351viohfkymya": {
 "technology": "cloudflared access tcp → raw TCP over WebSocket (tcp://, NOT http:// — #6122)",
@@ -3194,17 +3216,6 @@
 "id": "8p9oloc4osac",
 "title": "Phase 0.5 assessment"
 },
-"9kpu4xmy19ky": {
-"technology": "doppler CLI (project-scoped read service token, delivered as a main-only GitHub environment secret)",
-"source": {
-"model": "github"
-},
-"target": {
-"model": "doppler"
-},
-"id": "9kpu4xmy19ky",
-"title": "Tier-B Terraform credentials (#8209, ADR-241 D2/D3): a Tier-B job loads the WHOLE soleur-infra-privileged/prd project through .github/actions/infra-credentials, using a read service token that is a GitHub ENVIRONMENT secret (DOPPLER_TOKEN_INFRA_PRIVILEGED) on an environment whose deployment-branch policy admits `main` ONLY — infra-privileged (no reviewers, for the unattended apply-on-merge and drift paths and, since #9262, the inngest pin bump and auto-mint, and, since #9454 item 4, the weekly weakness-digest PR author), web-platform-infra-apply, inngest-cutover and workspaces-luks-cutover. Since #10138 the `wipe` job of git-data-cutover.yml (environment web-platform-infra-apply) is a loader consumer too, and the first one in that workflow: it calls the loader once, with only the Tier-B token (no legacy token), and every step after the loader runs under an exec env -i allow-list (ADR-241 amendment 2026-10-14). Since #10540 inngest-key-rotate.yml (environment infra-privileged, dispatch-only, ADR-307) is a loader consumer in its apply1, apply2 and reboot jobs; its guard job holds the Tier-A token only, and its redeploy job holds the deploy webhook credentials only. Since #11294 key-rotate.yml (environment infra-privileged, dispatch-only, ADR-317) is a loader consumer in its apply and clear jobs: its guard, redeploy and notify jobs hold no Doppler credential (the guard reads the GitHub API only, the redeploy job names the deploy webhook credentials in one step, the notify job holds the issues scope). The boundary is the BRANCH POLICY, not the reviewer gate: GitHub evaluates it before the job starts and before the secret is materialized, which is the one thing a repo secret cannot do (any workflow on any branch of this PUBLIC repo can name a repo secret, and that is how DOPPLER_TOKEN_TF, HCLOUD_TOKEN, CF_API_TOKEN_R2 and a soleur-ai App key became branch-reachable). A PROJECT, never a prd_* branch config: a branch config resolves its root's secrets, which is how prd_terraform inherited prd. Terraform declares the project and its environment and mints NOTHING into them — the web-platform root's state is Tier-A readable, so a doppler_secret or doppler_service_token declared there would land in exactly the tier this edge exists to evict it from; the containers are IaC, the values are supplied out of band. Every doppler run in a Tier-B job carries --preserve-env, so a value planted in the Tier-A-writable prd_terraform can never shadow a loaded Tier-B value (doppler run OVERRIDES the environment by default; the flag is what makes precedence a property of the code). Enforced on every PR by tests/scripts/test-infra-privileged-tier-census.sh, which derives the Tier-B job set from references to the secret and the environment set from what those jobs declare, never from a hand-kept list. NOMINAL UNTIL R1: a holder of a prd repo-secret token still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can therefore rewrite the branch policy this edge rests on — which is why ADR-241 D2 is `proposed`, not `accepted`. SINCE #8609 (ADR-241 D10) the project also carries GITHUB_APP_RUNTIME_DOPPLER_TOKEN, the web host's read token for the isolated soleur-github-app project (see the doppler -> hetzner edge). It is operator-minted into Tier B, never Terraform-minted (ADR-241 D3). The loader always exports its TF_VAR_ name and fills it only for the jobs that opt in (the deploy-pipeline push and the web-host create/replace jobs), so the Tier-A prd_terraform arm can never supply it. R1 is CLOSING with this mechanism; the NOMINAL clause above holds until the old key's JWT gets 401 (runbook R7) and D2 flips. SINCE #9262 two unattended App-token consumers on infra-privileged — build-inngest-bootstrap-image.yml's bump-cloud-init-pin and mint-inngest-bootstrap-tag.yml's mint — and, since #9454 item 4 (ADR-285), a third, weakness-miner.yml's open-pr, which mints a contents+pull_requests token to author, push and arm the weekly digest PR as the App, do NOT load the project through infra-credentials: the ./.github/actions/mint-infra-app-token composite makes a single-key read of GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY (doppler secrets get with --project and --config prd in argv, the project one of two validated names). SINCE #9321 (ADR-241 D11) those consumers read the NARROW Doppler project soleur-infra-app/prd, which holds a copy of only the two App values (Terraform declares the empty project; an operator-run script copies the values and mints its read token) and is reached with a read token that is the environment secret DOPPLER_TOKEN_INFRA_APP, so none of those jobs holds the whole-project token or can reach GITHUB_APP_RUNTIME_DOPPLER_TOKEN. The composite's one broad-source caller, apply-github-infra.yml, names the whole project explicitly and keeps DOPPLER_TOKEN_INFRA_PRIVILEGED, which it already holds for Terraform. The narrowing is least privilege by reference under the main-only policy, not a boundary against a change merged to main"
-},
 "ajv7s70947f": {
 "technology": "Slack push",
 "source": {
@@ -3269,17 +3280,6 @@
 },
 "id": "de9r7gnfj59q",
 "title": "CONSUMER reachability probe (#6548): web-git-data-probe.sh does a bounded SSH connect-and-close to 10.0.1.20:22 over the private net and pings the git_data_prd heartbeat on success. Fail-soft (connect-and-close, not a git ls-remote — the accepted reachability-vs-serviceability tradeoff for a v1 overlay); this is what finally FEEDS git_data_prd, previously unfed. The target host is born (ADR-149); its store is empty until the LUKS cutover (#5274)"
-},
-"drlfjmzmvkq4": {
-"technology": "doppler CLI (project-scoped read service token, delivered as a main-only GitHub environment secret)",
-"source": {
-"model": "github"
-},
-"target": {
-"model": "doppler"
-},
-"id": "drlfjmzmvkq4",
-"title": "Deploy-channel credentials (#9294, ADR-241 D10/D11): .github/actions/infra-credentials gains a NARROW arm for the soleur-deploy-channel/prd project, selected by doppler-project=soleur-deploy-channel and reaching Doppler with a read service token that is the environment secret DOPPLER_TOKEN_DEPLOY_CHANNEL on the deploy-channel environment — a deployment-branch policy admitting `main` ONLY and an empty reviewer set BY DESIGN (the branch policy is the boundary, as on infra-privileged; a reviewer gate on an environment used for unattended applies is dead weight). The narrow arm reads ONLY that project/config: an empty token is the named no_credential_source refusal BEFORE any Doppler call, never a legacy prd_terraform fallback and never a silent widen to soleur-infra-privileged, and the loader's two-literal case dispatch refuses any other project name by name. The carrier file (apps/web-platform/infra/deploy-channel-environment.tf) declares containers only — github_repository_environment + github_repository_environment_deployment_policy (branch_pattern=main) and doppler_project + doppler_environment — no doppler_secret, doppler_service_token or data source, because this root's state is readable by the very Tier-A credentials the move evicts. STATUS (Phase 1): the environment, the project and the loader arm exist and are pinned by the tier census (G7c/G7d/G7e widened to the second project; G7i on the arm's shape) and by the loader suite's dc1-dc6 fixtures; NO consumer job references DOPPLER_TOKEN_DEPLOY_CHANNEL or names the narrow project yet — the /hooks/infra-config and /hooks/deploy-status consumers migrate in Phase 2, and the prd_terraform copies are deleted only in the operator-named Phase 3 tail, so until then this edge is the carrier, not a live credential read"
 },
 "dzi0y2l27gzq": {
 "source": {
@@ -9187,11 +9187,11 @@
 },
 "parent": null,
 "relations": [
+"2vms8gcsqv0xs",
 "32q0mefae0wq7",
+"34d7zguvzk8er",
 "3j05altb1wez",
-"9kpu4xmy19ky",
-"b5wqsiskal5e",
-"drlfjmzmvkq4"
+"b5wqsiskal5e"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14639,11 +14639,11 @@
 },
 "parent": null,
 "relations": [
+"2vms8gcsqv0xs",
 "32q0mefae0wq7",
+"34d7zguvzk8er",
 "3j05altb1wez",
-"9kpu4xmy19ky",
-"b5wqsiskal5e",
-"drlfjmzmvkq4"
+"b5wqsiskal5e"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24567,11 +24567,11 @@
 },
 "parent": null,
 "relations": [
+"2vms8gcsqv0xs",
 "32q0mefae0wq7",
+"34d7zguvzk8er",
 "3j05altb1wez",
-"9kpu4xmy19ky",
-"b5wqsiskal5e",
-"drlfjmzmvkq4"
+"b5wqsiskal5e"
 ],
 "color": "gray",
 "line": "dashed",

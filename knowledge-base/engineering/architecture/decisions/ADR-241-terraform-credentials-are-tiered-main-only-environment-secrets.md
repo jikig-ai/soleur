@@ -1293,9 +1293,18 @@ CTO rulings: `knowledge-base/project/plans/2026-11-20-feat-deploy-trio-consumer-
   out of this PR's scope, so the 2026-10-23 accepted residual (the whole-project export into that job's env)
   stands and its "move the job to the narrow carrier" follow-up remains open.
 - **Census end-state.** `tests/scripts/trio-baseline.tsv` re-derives clean: 18 `tier-b` rows (the migrated
-  workflow consumers) and 52 `sink` rows; **zero `tier-a` rows and zero new `Allow:`/`Reclass:`/`Re-date:`
-  requirements** — no trio name-reference moved to or stayed Tier A. The anti-vacuity floor ratchets to the
-  realized count (619 assertions). The name census remains a where-the-names-are-written ratchet, not a
+  workflow consumers), 52 `sink` rows, and a **residual of 3 `tier-a` rows, all on
+  `tests/scripts/test-argv-bearer-sweep.sh`** (expiry 2026-11-30), with zero new `Allow:`/`Reclass:`/`Re-date:`
+  requirements — no trio name-reference moved to Tier A. The residual is structural, not a migration
+  remainder: that suite is the anti-bearer fixture monolith whose purpose is holding trio names and
+  `doppler` command shapes as byte-exact test fixtures (~170 sites), and the scanner is syntactic — it
+  cannot prove a fixture never executes against a real store. De-shaping it (split literals at every
+  fixture site, the technique the census suite uses on itself) was scoped out of this PR: each fixture is
+  byte-load-bearing to the mutation harness, the file is the one shellcheck cannot parse (#13098/#13099),
+  and the change belongs in a focused PR with its own review, tracked in #13102. Past the
+  2026-11-30 expiry the rows red hard on any diff touching the file, the baseline or this ADR — the fuse
+  this follow-up must defuse, by de-shape or by a ruled `Re-date:` in a baseline/ADR-only change. The
+  anti-vacuity floor ratchets to the realized count (619 assertions). The name census remains a where-the-names-are-written ratchet, not a
   proof that no job can reach the values; that limb still closes with the deletions below.
 - **D-2 scanner refinement, recorded.** `test-trio-baseline-census.sh` counts two read shapes inside files
   that already name the trio: (a) `doppler secrets get <LITERAL>` counts only when the literal matches the

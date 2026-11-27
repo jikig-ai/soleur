@@ -500,11 +500,9 @@ merge proves nothing about it. Otherwise record `Sole-copy read-back: SKIPPED (n
    `failure` or no run within the bound mean **not delivered or superseded**: read back anyway (a merge-SHA run can be
    `cancelled` by the shared concurrency group and still have delivered); the read-back is the arbiter.
 3. **Run the read-back** from runbook `knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md` §5c
-   (read-only, token on stdin, one word). Run exactly:
-
-```bash
-t=$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain 2>/dev/null); [ -n "$t" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$t" | curl --disable --noproxy "*" -sS --config - --max-time 30 -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/106903269) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
-```
+   (read-only, token on stdin, one word). Run exactly the pinned command block of that section (the volume-106903269
+   read-back), copied from the runbook itself — it is the single source of truth for the byte-pinned line
+   (sole-copy-drift-check N3b), never re-typed or re-wrapped here.
 
 4. **Route on the word, compared with the expected one.** `protected` / `not-protected` equal to the expected word passes;
    a mismatch is red. `volume-gone` (HTTP 404) is not a read problem, nor proof of a loss: a token from
