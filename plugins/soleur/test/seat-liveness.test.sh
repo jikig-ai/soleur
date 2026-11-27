@@ -9,7 +9,7 @@ SUITE_TMP=$(mktemp -d)
 trap 'rm -rf "$SUITE_TMP"' EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./test-helpers.sh
+# shellcheck source=/dev/null
 source "$SCRIPT_DIR/test-helpers.sh"
 
 assert_fixture_dir "$SUITE_TMP"

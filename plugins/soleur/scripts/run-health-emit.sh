@@ -172,4 +172,3 @@ os.replace(tmp, health)
 PY
 
 exit 0
-PY
