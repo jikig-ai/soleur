@@ -52,28 +52,31 @@ Start here in a fresh session.
    `SOLEUR_BOOTSTRAP_APPLY_COMMAND`. Relay the impact and rollback lines verbatim, and issue that printed command
    verbatim at the hold; `<D>` is its `--plan-digest` value. A plan that says `operations=0` is already done.
    `PRECONDITION_FAILED need=<stage>` means run that stage first.
-3. `Agent:` map the inventory rows to the next step, per key:
+3. `Agent:` map the inventory rows to the next step, per key. Read the rows top to bottom and take the **first**
+   row whose conditions all hold; the last row catches every other state. Conditions read that key's lines from this
+   sitting's inventory and the records the section 7 lookup finds. "The pin" is the key's old id in section 2.
 
-   | Inventory shows (per key) | Next step |
-   |---|---|
-   | `SOLEUR_P5_REFERENCE source=KEY`, `SOLEUR_P5_STAGED next=absent`, and `SOLEUR_P5_PREV state=absent` or `state=denied` with a `P5-REVOKED` record for its id | Section 4 scope, then the section 5 mint |
-   | `source=KEY` and `SOLEUR_P5_PREV state=` anything else (not `absent`, and not `denied` with a `P5-REVOKED` record for its id) | stop: `_PREV` holds something the next swap would overwrite; see section 12. (A `denied` `_PREV` that a record explains is an earlier rotation's revoked token; `swap` overwrites it, CTO D6.) |
-   | `source=KEY` and `SOLEUR_P5_STAGED next=present` | `swap` |
-   | `source=PREV` and `SOLEUR_P5_STAGED next=present` (an interrupted swap) | `swap` again: it finishes the copy or only deletes `_NEXT` |
-   | `CF_API_TOKEN_AUDIT` row `SOLEUR_P5_HOLDER project=soleur config=dev_personal` or `config=dev_scheduled` `value=old` | the two AUDIT delete holds |
-   | `source=PREV`, `SOLEUR_P5_STAGED next=absent`, and the prd_terraform `<KEY>` row `value=old` (after a section 12 rollback) | Section 5 mint for that key, then `swap` |
-   | `source=PREV`, the prd_terraform `<KEY>` row `value=new`, and a manifest holder row `value=old` outside prd_terraform | `holder-copies` |
-   | `source=PREV`, every manifest holder `value=new`, and no `SOLEUR_P5_REVOKE_READY` for that key yet in this sitting | `verify` |
-   | `verify` printed `SOLEUR_P5_REVOKE_READY key=<KEY>` in this sitting | section 7 revoke |
-   | `source=none`, `SOLEUR_P5_PREV state=denied`, and a `P5-REVOKED` record for that key and old id (section 7 lookup) | that key's `_PREV` delete hold (section 7 step 6). The prd_terraform `<KEY>_PREV` row then reads `value=revoked` and `verify` prints `verdict=revoked`: both expected (CTO D6) |
-   | `source=none`, `SOLEUR_P5_PREV state=denied`, and no `P5-REVOKED` record for that key and old id | stop: something outside this runbook revoked the old token (a leak auto-revoke, say); post it on #12931 |
-   | `source=none` and `SOLEUR_P5_PREV state=` `other`, `malformed`, `unreadable` or `unreachable` | `unreachable` or `unreadable`: re-run inventory. Otherwise stop; see section 12 |
-   | `source=none`, `SOLEUR_P5_STAGED next=absent prev=absent` | done; run the section 7 closing check |
-   | `source=none` and `SOLEUR_P5_STAGED next=present` | stop: a staged token no manifest pin tracks; post it on #12931 |
-   | `SOLEUR_P5_UNREADABLE`, `SOLEUR_P5_CENSUS_BLIND`, `SOLEUR_P5_FLOOR_MISSING`, `SOLEUR_P5_REFERENCE source=unknown`, or a holder row `value=other` other than the revoked-`_PREV` row above | stop; see section 12 |
+   | # | Inventory shows (per key) | Next step |
+   |---|---|---|
+   | 1 | `SOLEUR_P5_UNREADABLE`, `SOLEUR_P5_CENSUS_BLIND`, `SOLEUR_P5_FLOOR_MISSING`, `SOLEUR_P5_REFERENCE source=unknown`, a manifest holder row `value=other` or `value=absent` (except the prd_terraform `<KEY>_PREV` row `value=revoked` of row 13), or a non-manifest config `value=old` other than the two AUDIT rows of row 3 | stop; see section 12 |
+   | 2 | a `P5-ROLLBACK-START` record for the key with no later `P5-ROLLBACK-DONE` record | resume the section 12 rollback from its step 1 (each step is safe to repeat) |
+   | 3 | `CF_API_TOKEN_AUDIT` row `SOLEUR_P5_HOLDER project=soleur config=dev_personal` or `config=dev_scheduled` `value=old` | the two AUDIT delete holds, before any other AUDIT step |
+   | 4 | `source=PREV` and `SOLEUR_P5_STAGED next=present` (an interrupted swap) | `swap` again: it finishes the copy or only deletes `_NEXT` |
+   | 5 | `source=KEY` and `SOLEUR_P5_PREV state=` anything but `absent` or an earlier rotation's revoked token (`denied`, with a `P5-REVOKED` record for that key whose `new_id` is the pin; `swap` overwrites it, CTO D6) | stop: `_PREV` holds something the next swap would overwrite; see section 12 |
+   | 6 | `source=KEY` and `SOLEUR_P5_STAGED next=present` | `swap` |
+   | 7 | `source=KEY` | Section 4 scope, then the section 5 mint |
+   | 8 | `source=PREV` and the prd_terraform `<KEY>` row `value=old` (after a finished section 12 rollback) | Section 5 mint for that key, then `swap` |
+   | 9 | `source=PREV` and a manifest holder row `value=old` | `holder-copies` |
+   | 10 | `source=PREV` and `verify` printed `SOLEUR_P5_REVOKE_READY key=<KEY>` in this sitting | section 7 revoke |
+   | 11 | `source=PREV` | `verify` |
+   | 12 | `source=none` and `SOLEUR_P5_STAGED next=present` | stop: a staged token no manifest pin tracks; post it on #12931 |
+   | 13 | `source=none`, `SOLEUR_P5_PREV state=denied`, and a `P5-REVOKED` record for that key whose `old_id` is the pin | that key's `_PREV` delete hold (section 7 step 6). The prd_terraform `<KEY>_PREV` row then reads `value=revoked` and `verify` prints `verdict=revoked`: both expected (CTO D6) |
+   | 14 | `source=none` and `SOLEUR_P5_PREV state=unreadable` | re-run inventory |
+   | 15 | `source=none` and `SOLEUR_P5_STAGED next=absent prev=absent` | done; run the section 7 closing check |
+   | 16 | anything else, for example `source=none` with `state=denied` and no record (something outside this runbook revoked the old token, a leak auto-revoke say) | stop; post it on #12931 |
 
-   When two rows match, the first stop row wins over any step row. Re-read a row's precondition in the same sitting
-   before acting on it.
+   A row that names a step only routes to it: re-read that step's own precondition in the same sitting before
+   acting on it.
 
 4. Logins, in three sittings. A person signs in because each login needs its own password and second factor, which
    the agent never holds:
@@ -468,7 +471,7 @@ Closing check, `Agent:`
 Finding the records from a fresh session (only unedited comments by the operator's own login, newest first; CTO D9):
 
 ```bash
-me="$(gh api user --jq .login)" && gh api --paginate repos/jikig-ai/soleur/issues/12931/comments --jq ".[] | select(.user.login == \"$me\" and .created_at == .updated_at) | select(.body | test(\"^P5-(SCOPE|MINTED|REVOKED|PAGERULES-FATE|TOKEN-FACTS|BOOTSTRAP-POINTER)\"; \"m\")) | [.created_at, .html_url, (.body | split(\"\n\")[0])] | @tsv" | sort -r
+me="$(gh api user --jq .login)" && gh api --paginate repos/jikig-ai/soleur/issues/12931/comments --jq ".[] | select(.user.login == \"$me\" and .created_at == .updated_at) | select(.body | test(\"^P5-(SCOPE|MINTED|REVOKED|ROLLBACK-START|ROLLBACK-DONE|PAGERULES-FATE|TOKEN-FACTS|BOOTSTRAP-POINTER)\"; \"m\")) | [.created_at, .html_url, (.body | split(\"\n\")[0])] | @tsv" | sort -r
 ```
 
 Take the newest record per key. Two `P5-SCOPE` comments that disagree, a `P5-MINTED` whose `id8` differs from the
@@ -523,7 +526,9 @@ minted user-owned under the F17 fallback keeps the user forms.
 - Never revoke without a `SOLEUR_P5_REVOKE_READY` line from the same sitting.
 - A partial swap has no rollback: re-run `swap`, which resumes every partial state (CTO D8).
 - A completed swap whose new token is bad (for example `verify` `reason=consumer-read`), before the old token is
-  revoked:
+  revoked. `Agent:` first post on #12931 one comment whose first line is
+  `P5-ROLLBACK-START key=<KEY> bad_id8=<bad id8>`; section 1 row 2 routes a later session back here until the
+  `P5-ROLLBACK-DONE` record of step 4 exists.
   1. Undo `holder-copies`: for each manifest holder it wrote, the AUDIT rollback form in section 6 with
      `<src>` = `<KEY>_PREV` and that holder's config.
   2. `Agent:` run `bash <B> --stage inventory` and `bash <B> --stage verify`. Go on only when this sitting shows
@@ -535,7 +540,9 @@ minted user-owned under the F17 fallback keeps the user forms.
   4. Operator-authorizes: retire the bad token with `p5-revoke.js` (sha256=5a980691360666193bf4bbca8fda6e24fa781bb96a5ea06ad88f8cf52b2681da) and
      `{"mode":"retire","pin":"<bad id8>","retire_name":"<its name>","scope":"<owner>"}` (plus `"account_id"` for
      `account`). It deletes only the one token with that id prefix and that exact name, and refuses any of the old
-     pins. The value also stays in Doppler version history, which is why the token itself must go.
+     pins. The value also stays in Doppler version history, which is why the token itself must go. On a repeat run,
+     `{matches:0}` under the owning login means the retire already ran. Then `Agent:` post on #12931 one comment
+     whose first line is `P5-ROLLBACK-DONE key=<KEY> bad_id8=<bad id8>`.
   5. Re-mint that key (section 5; the user-owned form when the fault was a GraphQL refusal), then `swap`: it resumes
      from `source=PREV` with `<KEY>` back on the old token.
   After the revoke the old token is dead: fix forward.
