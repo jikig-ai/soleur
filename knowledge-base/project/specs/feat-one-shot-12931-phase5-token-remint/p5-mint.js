@@ -1,33 +1,45 @@
-// p5-mint.js — #12931 Phase 5 token slice: ONE account-owned Cloudflare token mint, run in the operator's
-// signed-in dashboard session (runbook cloudflare-old-login-token-remint.md section 5; CTO ruling D1).
-// Permission-group read, account-owned token POST, policy read-back and the hand-off to the 127.0.0.1 sink
-// (p5-sink.py) run in this one body. Nothing is edited into this file: its sha256 is pinned in
-// p5-browser.sha256, and every per-mint value arrives in the single JSON argument object below.
+// p5-mint.js — #12931 Phase 5 token slice: ONE Cloudflare token mint, run in the operator's signed-in dashboard
+// session (runbook cloudflare-old-login-token-remint.md section 5; CTO rulings D1, D7, D9). Permission-group
+// read, token POST, policy read-back and the hand-off to the 127.0.0.1 sink (p5-sink.py) run in this one body.
+// Nothing is edited into this file: its sha256 is pinned in p5-browser.sha256, and every per-mint value arrives
+// in the single JSON argument object below.
 //
-// SHAPE. This file is ONE function expression `(args) => async (page) => {...}` with no trailing semicolon.
-// Compose the run file (sha check first), then pass it to Playwright MCP `browser_run_code_unsafe`:
-//   { printf '('; cat p5-mint.js; printf ')(%s)\n' '<ARGS-JSON>'; } > <run-file>
-// `browser_run_code_unsafe` evaluates `(<run-file>)` to the inner `async (page) => ...` and calls it with the
-// current tab's page. The tool echoes the code it ran, so ARGS carries no secret: ids, names, a sink URL.
+// SHAPE. This file is ONE function expression `(args) => async (page) => {...}` with no trailing semicolon. The
+// run file is `(<this file>)(JSON.parse(<string>))`, where <string> is the argument object re-encoded as ONE JSON
+// string literal (`jq -c . | jq -Rs .`, after `jq -e 'type=="object"'` passes; CTO D9), so the argument is data
+// and never JavaScript. Compose it with the runbook's section 5 line (sha check first), then pass it to
+// Playwright MCP `browser_run_code_unsafe`, which evaluates `(<run-file>)` to the inner `async (page) => ...` and
+// calls it with the current tab's page. The tool echoes the code it ran, so ARGS carries no secret.
 //
-// ARGS (all required; any missing/malformed field refuses before any request):
-//   account_id      32-hex account id the token is owned by and whose permission groups are read
-//   zone_id         32-hex zone id; zone groups are granted on exactly this zone
-//   name            token name, /^cf_api_token_[a-z0-9_]+-soleur-\d{8}$/ (runbook: <key>-soleur-<YYYYMMDD>)
-//   zone_groups     array of exact permission-group names (the P5-SCOPE set), each ending in " Read"
-//   account_groups  array (may be empty; AUDIT only) of exact account-scope group names, each ending " Read"
-//   expires_on      "YYYY-MM-DDTHH:MM:SSZ", equal to the 0a/0b expiry
-//   sink_url        "http://127.0.0.1:<port>/<nonce>" exactly as p5-sink.py printed it
+// ARGS (any missing, malformed or unknown field refuses before any request):
+//   owner           required: "account" -> list/POST/GET/DELETE at /accounts/<account_id>/tokens[...]
+//                             "user"    -> list/POST/GET/DELETE at /user/tokens[...] (the D7 user-owned fallback)
+//   account_id      required: 32-hex account id; its permission groups are read, and (owner account) it owns
+//   zone_id         required: 32-hex zone id; zone groups are granted on exactly this zone
+//   name            required: token name, /^cf_api_token_[a-z0-9_]+-soleur-\d{8}$/ (<key>-soleur-<YYYYMMDD>)
+//   zone_groups     required: array of 1..20 exact permission-group names (the P5-SCOPE set), each ending " Read"
+//   account_groups  required: array of 0..20 (AUDIT only) exact account-scope group names, each ending " Read"
+//   expires_on      required: "YYYY-MM-DDTHH:MM:SSZ", the 0a/0b expiry, no earlier than now + 30 days
+//   sink_url        required: "http://127.0.0.1:<port>/<nonce>" exactly as p5-sink.py printed it
+//   refuse_ids      owner "user": REQUIRED array of 1..20 8-hex old-token pins; if any token the signed-in login
+//                   lists starts with one, the body refuses (it never mints under the old owner's login).
+//                   owner "account": must be absent.
 //
 // FLOW. goto https://dash.cloudflare.com/profile/api-tokens (a fresh window.bootstrap.atok); in-page GET
 // /api/v4/accounts/<acct>/tokens/permission_groups and resolve each name to exactly ONE selectable group whose
-// `scopes` holds the expected scope; in-page list of /api/v4/accounts/<acct>/tokens (refuse a same-name token:
-// one token per key); in-page POST /api/v4/accounts/<acct>/tokens; in-page GET of the new token and the
-// read-back (every resource key exactly com.cloudflare.api.account.zone.<zone> or, for account groups only,
-// com.cloudflare.api.account.<acct>; value "*"; no "*" in a key; effect allow; group set == the resolved set;
-// name, expires_on and status active as asked); only then a Node-side `fetch` POST of the value to sink_url.
-// Any failure after the POST deletes the new token (Node-side page.request.delete, account endpoint) before the
-// value goes anywhere: nothing reaches the sink or Doppler first (runbook section 5).
+// `scopes` holds the expected scope; in-page list of every page of the owner's token list (a page shorter than
+// per_page ends it, unless result_info.total_count says more; 20 pages without an end refuses `listing`); refuse
+// an old-owner pin (owner user) and a same-name token (one token per exact name); in-page POST; in-page GET of
+// the new token and the read-back (every resource key exactly com.cloudflare.api.account.zone.<zone> or, for
+// account groups only, com.cloudflare.api.account.<acct>; value "*"; no "*" in a key; effect allow; group set ==
+// the resolved set; name, expires_on and status active as asked); only then a Node-side `fetch` POST of the
+// value to sink_url with `redirect: "error"` (a redirect never carries the value on).
+// CLEANUP. Once the POST was sent, every path but the handed-off one (an error answer, a non-JSON answer, an id
+// that is not 32-hex, a missing value, a read-back or sink failure, a throw) re-lists the owner's tokens, DELETEs
+// every token carrying exactly `name` or the id the POST answered (Node-side page.request.delete), and re-lists
+// again. A POST answer proves nothing about whether a token was stored, so only that re-list does.
+// `success:true` on a refused/error return means: every DELETE answered JSON success:true AND the re-list shows
+// no token with that name or id.
 // In-page requests carry `x-atok` (window.bootstrap.atok) and `x-cross-site-security: dash`, the headers the
 // 2026-11-26 0a/0b session sent (cloudflare-account-migration.md "Revoke recipe" step 3). The DELETE is
 // Node-side because an in-page fetch DELETE got an HTML 403 from the dashboard edge (same section).
@@ -38,28 +50,52 @@
 //   POST   /accounts/{account_id}/tokens                    developers.cloudflare.com/api/resources/accounts/subresources/tokens/methods/create/
 //   GET    /accounts/{account_id}/tokens/{token_id}         developers.cloudflare.com/api/resources/accounts/subresources/tokens/methods/get/
 //   DELETE /accounts/{account_id}/tokens/{token_id}         developers.cloudflare.com/api/resources/accounts/subresources/tokens/methods/delete/
+//   GET    /user/tokens                                     developers.cloudflare.com/api/resources/user/subresources/tokens/methods/list/
+//   POST   /user/tokens                                     developers.cloudflare.com/api/resources/user/subresources/tokens/methods/create/
+//   GET    /user/tokens/{token_id}                          developers.cloudflare.com/api/resources/user/subresources/tokens/methods/get/
+//   DELETE /user/tokens/{token_id}                          developers.cloudflare.com/api/resources/user/subresources/tokens/methods/delete/
 //
-// RETURN. Only these keys ever appear: atok, matches, refused, status, contentType, success, error, id8.
+// RETURN. Only these keys ever appear: atok, matches, refused, status, contentType, success, error, id8,
+// del_status, del_contentType.
+//   BEFORE THE POST (no token can exist from this run):
 //   {atok:false}                               the page is signed out (no window.bootstrap.atok)
-//   {refused:<reason>}                         before any write; reason one of args:<field>, origin
+//   {refused:"args:<field>"}                   a bad argument (field object, unknown, or the field's name)
+//   {refused:"origin"}                         the page is not on https://dash.cloudflare.com
 //   {refused:"groups", matches:<n>}            only n of the asked names resolved to exactly one group
-//   {refused:"name-exists", matches:<n>}       n account tokens already carry this name; nothing minted
-//   {status, contentType, success:false}       a read or the POST answered no usable result; nothing minted
-//   {status, contentType, success:true, id8}   MINTED: POST status, read-back passed, sink answered 200
-//   {refused:"readback"|"sink"|"mint-shape", id8, status, contentType, success}
-//                                              a token WAS created and failed; status/contentType/success
-//                                              describe its cleanup DELETE (success:true = it is deleted)
-//   {error:<e.name>[, id8, status, contentType, success]}  a thrown error; with id8, the cleanup as above
-// id8 is the new token's 8-hex id prefix. Never returned or logged: the token value, the atok, a full id,
-// e.message. A final guard drops any return that breaks this allowlist to {error:"ShapeError"}.
+//   {refused:"listing"}                        the token list did not end within 20 pages
+//   {refused:"old-owner-login", matches:<n>}   owner user: n listed tokens start with a refuse_ids pin
+//   {refused:"name-exists", matches:<n>}       n tokens already carry this exact name
+//   {status, contentType, success:false}       the group read or the list answered no usable result
+//   AFTER THE POST (a token MAY have been stored; the cleanup ran):
+//   {status, contentType, success:true, id8}   MINTED and handed off: POST status, read-back passed, sink 200 "ok"
+//   {refused:"mint"|"mint-shape"|"readback"|"sink", [id8], status, contentType, success, [matches],
+//    [del_status, del_contentType]}
+//     mint        the POST answered no JSON success:true (an error, or a non-JSON body)
+//     mint-shape  the POST answered success but no 32-hex id or no value
+//     readback    the stored token's policy/name/expiry/status differs from the request
+//     sink        the sink did not answer 200 "ok" (down, refused, redirected, timed out)
+//     status/contentType: the POST's answer. id8: present when the POST answered a 32-hex id.
+//     success: the cleanup verdict (true = every DELETE answered JSON success and the re-list shows none).
+//     matches: tokens with that name (or id) the re-list still shows (absent when the re-list could not run).
+//     del_status/del_contentType: the first DELETE that did not answer JSON success (absent if none).
+//     success:false: a token with this name (or id) MAY still exist; read the list before any re-mint.
+//   {error:<e.name>}                           a thrown error before the POST was sent
+//   {error:<e.name>, [id8, status, contentType], success, [matches, del_status, del_contentType]}
+//                                              a thrown error after the POST was sent; the cleanup as above
+// Never returned or logged: the token value, the atok, a full id, e.message. A final guard drops any return
+// that breaks this allowlist to {error:"ShapeError"}.
 (args) => async (page) => {
   const DASH = 'https://dash.cloudflare.com';
   const HEX8 = /^[0-9a-f]{8}$/;
   const HEX32 = /^[0-9a-f]{32}$/;
-  const KEYS = ['atok', 'matches', 'refused', 'status', 'contentType', 'success', 'error', 'id8'];
-  const REFUSALS = ['args:object', 'args:account_id', 'args:zone_id', 'args:name', 'args:zone_groups',
-    'args:account_groups', 'args:expires_on', 'args:sink_url', 'origin', 'groups', 'name-exists',
-    'readback', 'sink', 'mint-shape'];
+  const PER = 50;
+  const PAGES = 20;
+  const KEYS = ['atok', 'matches', 'refused', 'status', 'contentType', 'success', 'error', 'id8', 'del_status',
+    'del_contentType'];
+  const ARG_KEYS = ['owner', 'account_id', 'zone_id', 'name', 'zone_groups', 'account_groups', 'expires_on',
+    'sink_url', 'refuse_ids'];
+  const REFUSALS = ['args:object', 'args:unknown', ...ARG_KEYS.map((k) => `args:${k}`), 'origin', 'groups',
+    'listing', 'old-owner-login', 'name-exists', 'mint', 'mint-shape', 'readback', 'sink'];
 
   const safe = (r) => {
     if (!r || typeof r !== 'object') return { error: 'ShapeError' };
@@ -68,8 +104,8 @@
       const ok = (k === 'atok' && v === false)
         || (k === 'matches' && Number.isInteger(v) && v >= 0 && v < 100000)
         || (k === 'refused' && REFUSALS.includes(v))
-        || (k === 'status' && Number.isInteger(v) && v >= 0 && v < 1000)
-        || (k === 'contentType' && typeof v === 'string' && /^[a-z0-9.+\/-]{0,64}$/.test(v))
+        || ((k === 'status' || k === 'del_status') && Number.isInteger(v) && v >= 0 && v < 1000)
+        || ((k === 'contentType' || k === 'del_contentType') && typeof v === 'string' && /^[a-z0-9.+\/-]{0,64}$/.test(v))
         || (k === 'success' && typeof v === 'boolean')
         || (k === 'error' && typeof v === 'string' && /^[A-Za-z][A-Za-z0-9]{0,39}$/.test(v))
         || (k === 'id8' && typeof v === 'string' && HEX8.test(v));
@@ -90,6 +126,8 @@
   // ---- arguments ------------------------------------------------------------------------------------------
   const a = args;
   if (!a || typeof a !== 'object' || Array.isArray(a)) return safe({ refused: 'args:object' });
+  if (Object.keys(a).some((k) => !ARG_KEYS.includes(k))) return safe({ refused: 'args:unknown' });
+  if (a.owner !== 'account' && a.owner !== 'user') return safe({ refused: 'args:owner' });
   if (typeof a.account_id !== 'string' || !HEX32.test(a.account_id)) return safe({ refused: 'args:account_id' });
   if (typeof a.zone_id !== 'string' || !HEX32.test(a.zone_id)) return safe({ refused: 'args:zone_id' });
   if (typeof a.name !== 'string' || !/^cf_api_token_[a-z0-9_]+-soleur-\d{8}$/.test(a.name)) {
@@ -101,13 +139,20 @@
   if (!groupList(a.zone_groups, 1)) return safe({ refused: 'args:zone_groups' });
   if (!groupList(a.account_groups, 0)) return safe({ refused: 'args:account_groups' });
   if (typeof a.expires_on !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(a.expires_on)
-    || Number.isNaN(Date.parse(a.expires_on))) {
+    || Number.isNaN(Date.parse(a.expires_on)) || Date.parse(a.expires_on) < Date.now() + 30 * 86400000) {
     return safe({ refused: 'args:expires_on' });
   }
   if (typeof a.sink_url !== 'string' || !/^http:\/\/127\.0\.0\.1:[0-9]{1,5}\/[A-Za-z0-9_-]{16,128}$/.test(a.sink_url)) {
     return safe({ refused: 'args:sink_url' });
   }
+  if (a.owner === 'user') {
+    if (!Array.isArray(a.refuse_ids) || a.refuse_ids.length < 1 || a.refuse_ids.length > 20
+      || !a.refuse_ids.every((p) => typeof p === 'string' && HEX8.test(p))) {
+      return safe({ refused: 'args:refuse_ids' });
+    }
+  } else if (a.refuse_ids !== undefined) return safe({ refused: 'args:refuse_ids' });
   const acct = a.account_id;
+  const base = a.owner === 'account' ? `/api/v4/accounts/${acct}/tokens` : '/api/v4/user/tokens';
   const ZONE_SCOPE = 'com.cloudflare.api.account.zone';
   const ACCT_SCOPE = 'com.cloudflare.api.account';
   const zoneKey = `${ZONE_SCOPE}.${a.zone_id}`;
@@ -134,18 +179,62 @@
   const notOk = (r) => r.status !== 200 || !r.json || r.json.success !== true;
   const statusOf = (r) => ({ status: r.status, contentType: ctOf(r.contentType), success: false });
 
-  // Node-side DELETE of the token this body minted (account endpoint). The atok is Node-local.
-  const cleanup = async (id) => {
-    const atok = await page.evaluate(() => (location.origin === 'https://dash.cloudflare.com'
-      && window.bootstrap && window.bootstrap.atok) || null);
-    if (!atok) return { atok: false };
-    const r = await page.request.delete(`${DASH}/api/v4/accounts/${acct}/tokens/${id}`, {
-      headers: { 'x-atok': atok, 'x-cross-site-security': 'dash' },
-    });
-    const contentType = ctOf(r.headers()['content-type']);
-    let success = false;
-    if (/json/.test(contentType)) { try { const j = await r.json(); success = !!j && j.success === true; } catch (e) { success = false; } }
-    return { status: r.status(), contentType, success };
+  // Every page of the owner's token list -> {tokens} or {stop:<return>}. A page shorter than per_page ends the
+  // list unless result_info.total_count says more were listed; no end within PAGES pages refuses `listing`.
+  const listAll = async () => {
+    const tokens = [];
+    for (let n = 1; n <= PAGES; n += 1) {
+      const lr = await call('GET', `${base}?page=${n}&per_page=${PER}`);
+      if (lr.atok === false) return { stop: { atok: false } };
+      if (lr.origin === false) return { stop: { refused: 'origin' } };
+      if (notOk(lr) || !Array.isArray(lr.json.result)) return { stop: statusOf(lr) };
+      tokens.push(...lr.json.result);
+      const ri = lr.json.result_info || {};
+      const per = Number.isInteger(ri.per_page) && ri.per_page > 0 && ri.per_page <= PER ? ri.per_page : PER;
+      const more = Number.isInteger(ri.total_count) && tokens.length < ri.total_count;
+      if (lr.json.result.length < per && !more) return { tokens };
+    }
+    return { stop: { refused: 'listing' } };
+  };
+
+  // The cleanup: DELETE (Node-side, owner endpoint) every listed token carrying exactly a.name or the id the POST
+  // answered (a stored name may drift from the request), then re-list.
+  // Returns {success[, matches, del_status, del_contentType]}; success is true only on a verified-clean re-list.
+  const cleanup = async () => {
+    const out = { success: false };
+    const ours = (t) => !!t && (t.name === a.name || (id !== null && t.id === id));
+    try {
+      const atok = await page.evaluate(() => (location.origin === 'https://dash.cloudflare.com'
+        && window.bootstrap && window.bootstrap.atok) || null);
+      if (!atok) return out;
+      const before = await listAll();
+      if (!before.tokens) return out;
+      let allDeleted = true;
+      for (const t of before.tokens) {
+        if (!ours(t)) continue;
+        if (typeof t.id !== 'string' || !HEX32.test(t.id)) { allDeleted = false; continue; }
+        const r = await page.request.delete(`${DASH}${base}/${t.id}`, {
+          headers: { 'x-atok': atok, 'x-cross-site-security': 'dash' },
+        });
+        const contentType = ctOf(r.headers()['content-type']);
+        let ok = false;
+        if (/json/.test(contentType)) {
+          try { const j = await r.json(); ok = r.status() === 200 && !!j && j.success === true; } catch (e) { ok = false; }
+        }
+        if (!ok) {
+          allDeleted = false;
+          if (out.del_status === undefined) { out.del_status = r.status(); out.del_contentType = contentType; }
+        }
+      }
+      const after = await listAll();
+      if (!after.tokens) return out;
+      out.matches = after.tokens.filter(ours).length;
+      out.success = allDeleted && out.matches === 0;
+      return out;
+    } catch (e) {
+      out.success = false;
+      return out;
+    }
   };
 
   const eqSet = (x, y) => x.size === y.size && [...x].every((v) => y.has(v));
@@ -178,7 +267,13 @@
 
   let id = null;
   let secret = null;
+  let posted = false;
   let handed = false;
+  let postInfo = {};
+  const failAfterPost = async (reason) => {
+    secret = null;
+    return safe({ refused: reason, ...(id !== null ? { id8: id.slice(0, 8) } : {}), ...postInfo, ...(await cleanup()) });
+  };
   try {
     await page.goto(`${DASH}/profile/api-tokens`, { waitUntil: 'domcontentloaded' });
 
@@ -201,69 +296,61 @@
     const zoneIds = new Set(zoneRes);
     const acctIds = new Set(acctRes);
 
-    // 2. one token per key: no account token already carries this name.
-    let same = 0;
-    let seen = 0;
-    for (let n = 1; n <= 20; n += 1) {
-      const lr = await call('GET', `/api/v4/accounts/${acct}/tokens?page=${n}&per_page=50`);
-      if (lr.atok === false) return safe({ atok: false });
-      if (lr.origin === false) return safe({ refused: 'origin' });
-      if (notOk(lr) || !Array.isArray(lr.json.result)) return safe(statusOf(lr));
-      same += lr.json.result.filter((t) => t && t.name === a.name).length;
-      seen += lr.json.result.length;
-      const total = lr.json.result_info && Number.isInteger(lr.json.result_info.total_count)
-        ? lr.json.result_info.total_count : seen;
-      if (lr.json.result.length === 0 || seen >= total) break;
+    // 2. the owner's token list: never under the old owner's login (owner user); one token per exact name.
+    const listed = await listAll();
+    if (!listed.tokens) return safe(listed.stop);
+    if (a.owner === 'user') {
+      const old = listed.tokens.filter((t) => t && typeof t.id === 'string'
+        && a.refuse_ids.some((p) => t.id.startsWith(p))).length;
+      if (old !== 0) return safe({ refused: 'old-owner-login', matches: old });
     }
+    const same = listed.tokens.filter((t) => t && t.name === a.name).length;
     if (same !== 0) return safe({ refused: 'name-exists', matches: same });
 
-    // 3. the mint.
+    // 3. the mint. From here on every non-handed-off path runs the cleanup.
     const policies = [{
       effect: 'allow', permission_groups: [...zoneIds].map((g) => ({ id: g })), resources: { [zoneKey]: '*' },
     }];
     if (acctIds.size > 0) {
       policies.push({ effect: 'allow', permission_groups: [...acctIds].map((g) => ({ id: g })), resources: { [acctKey]: '*' } });
     }
-    const mr = await call('POST', `/api/v4/accounts/${acct}/tokens`, { name: a.name, policies, expires_on: a.expires_on });
+    posted = true;
+    const mr = await call('POST', base, { name: a.name, policies, expires_on: a.expires_on });
+    // atok/origin false: the in-page helper returned before its fetch, so no POST left the page.
     if (mr.atok === false) return safe({ atok: false });
     if (mr.origin === false) return safe({ refused: 'origin' });
+    postInfo = { status: mr.status, contentType: ctOf(mr.contentType) };
     const res = mr.json && mr.json.result;
     if (res && typeof res.id === 'string' && HEX32.test(res.id)) id = res.id;
     if (res && typeof res.value === 'string') secret = res.value;
     if (res) { delete res.value; }
-    const mintStatus = { status: mr.status, contentType: ctOf(mr.contentType) };
-    if (id === null) return safe({ ...mintStatus, success: false });
-    if (notOk(mr) || secret === null || secret.length < 20) {
-      return safe({ refused: 'mint-shape', id8: id.slice(0, 8), ...(await cleanup(id)) });
-    }
+    if (notOk(mr)) return await failAfterPost('mint');
+    if (id === null || secret === null || secret.length < 20) return await failAfterPost('mint-shape');
 
     // 4. the policy read-back, from a fresh GET of the stored token.
-    const rb = await call('GET', `/api/v4/accounts/${acct}/tokens/${id}`);
-    if (notOk(rb) || !readbackPasses(rb.json.result, zoneIds, acctIds)) {
-      secret = null;
-      return safe({ refused: 'readback', id8: id.slice(0, 8), ...(await cleanup(id)) });
-    }
+    const rb = await call('GET', `${base}/${id}`);
+    if (notOk(rb) || !readbackPasses(rb.json.result, zoneIds, acctIds)) return await failAfterPost('readback');
 
-    // 5. the hand-off: Node-side fetch to the one-shot 127.0.0.1 sink. The value goes nowhere else.
+    // 5. the hand-off: Node-side fetch to the one-shot 127.0.0.1 sink, no redirect followed. The value goes
+    //    nowhere else.
     let sinkOk = false;
     try {
       const sr = await fetch(a.sink_url, {
-        method: 'POST', headers: { 'content-type': 'text/plain' }, body: secret, signal: AbortSignal.timeout(15000),
+        method: 'POST', headers: { 'content-type': 'text/plain' }, body: secret, redirect: 'error',
+        signal: AbortSignal.timeout(15000),
       });
       sinkOk = sr.status === 200 && (await sr.text()) === 'ok';
     } catch (e) {
       sinkOk = false;
     }
     secret = null;
-    if (!sinkOk) return safe({ refused: 'sink', id8: id.slice(0, 8), ...(await cleanup(id)) });
+    if (!sinkOk) return await failAfterPost('sink');
     handed = true;
-    return safe({ ...mintStatus, success: true, id8: id.slice(0, 8) });
+    return safe({ ...postInfo, success: true, id8: id.slice(0, 8) });
   } catch (e) {
     secret = null;
-    if (id !== null && !handed) {
-      let del = { success: false };
-      try { del = await cleanup(id); } catch (e2) { del = { success: false }; }
-      return safe({ error: errName(e), id8: id.slice(0, 8), ...del });
+    if (posted && !handed) {
+      return safe({ error: errName(e), ...(id !== null ? { id8: id.slice(0, 8) } : {}), ...postInfo, ...(await cleanup()) });
     }
     return safe({ error: errName(e) });
   } finally {

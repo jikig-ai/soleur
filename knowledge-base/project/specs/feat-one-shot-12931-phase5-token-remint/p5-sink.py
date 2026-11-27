@@ -17,7 +17,8 @@ it); a Content-Length of 20..1024 bytes of token characters. The body is the tok
 with O_CREAT|O_EXCL|O_NOFOLLOW at mode 0600. Any other first request is refused and still ends the sink (fail
 closed: the mint then deletes its new token). --out must be absolute, must not exist, and must sit outside
 every git work tree (runbook: the session scratchpad). Refusal reasons: peer, method, path, origin, length,
-body, write, malformed; for --out: out-relative, out-exists, out-parent, out-in-git.
+body, write (the create, a write or the fsync failed; a partial file is unlinked), malformed; for --out:
+out-relative, out-exists, out-parent, out-in-git.
 """
 import argparse
 import hmac
@@ -121,14 +122,29 @@ def main():
                 return self.refuse(500, "write")
             finally:
                 os.umask(old)
+            # A failed write or fsync leaves no partial file: unlink it, refuse `write` (the mint then deletes
+            # its new token).
+            written = False
             try:
                 os.fchmod(fd, 0o600)
                 view = memoryview(body)
                 while view:
                     view = view[os.write(fd, view):]
                 os.fsync(fd)
+                written = True
+            except OSError:
+                written = False
             finally:
-                os.close(fd)
+                try:
+                    os.close(fd)
+                except OSError:
+                    written = False
+            if not written:
+                try:
+                    os.unlink(out)
+                except OSError:
+                    pass
+                return self.refuse(500, "write")
             outcome["line"] = "result=written"
             outcome["code"] = 0
             self.send_response(200)
