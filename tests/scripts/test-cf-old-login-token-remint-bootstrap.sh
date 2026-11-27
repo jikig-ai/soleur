@@ -10,8 +10,7 @@
 # row asserts the refusal TEXT or marker, never only an exit code.
 #
 # ASSEMBLY. A fixture git repository per world holds a copy of bootstrap.sh at its real relative path plus
-# committed stubs of cloudflare-readonly.sh and check-cloudflare-token-drift.sh (the bootstrap runs only
-# TRACKED files). PATH-stubbed `doppler` keeps state in $STUB_D/<project>/<config>/<NAME> files: `get
+# a committed stub of cloudflare-readonly.sh (the bootstrap runs only TRACKED files). PATH-stubbed `doppler` keeps state in $STUB_D/<project>/<config>/<NAME> files: `get
 # --plain` prints the value plus ONE newline (the real CLI), `set` stores stdin exactly and logs
 # `set <p>/<c>/<NAME> prev=<class of <NAME>_PREV at that moment>` (Guard 2's in-window order witness),
 # `projects` / `configs` / `--only-names` list the state, `run` execs with the config's values exported.
@@ -241,7 +240,7 @@ GH
 # make_repo <dir> <bootstrap-src> — a fixture repository tracking the script and the two tool stubs.
 make_repo() {
   local r="$1" src="$2"; assert_fixture_dir "$r"
-  mkdir -p "$r/$(dirname "$REL")" "$r/plugins/soleur/scripts" "$r/scripts"
+  mkdir -p "$r/$(dirname "$REL")" "$r/plugins/soleur/scripts"
   cp "$src" "$r/$REL"
   cat > "$r/plugins/soleur/scripts/cloudflare-readonly.sh" <<'RO'
 #!/usr/bin/env bash
@@ -262,14 +261,7 @@ if [[ "$v" =~ ^SYNTH-(NEW[0-9]*|ACCT|EXPIRED)-${k}-SENTINEL$ ]]; then
 fi
 echo "cloudflare-readonly: ${sub} unverified - token-lacks-scope"; exit 11
 RO
-  cat > "$r/scripts/check-cloudflare-token-drift.sh" <<'DRIFT'
-#!/usr/bin/env bash
-printf 'read\tdrift %s\n' "$*" >> "$STUB_LOG"
-echo "drift stand-in: names only"
-[[ ! -e "$STUB_D/.flags/drift-fail" ]] || exit 1
-exit 0
-DRIFT
-  chmod +x "$r/plugins/soleur/scripts/cloudflare-readonly.sh" "$r/scripts/check-cloudflare-token-drift.sh"
+  chmod +x "$r/plugins/soleur/scripts/cloudflare-readonly.sh"
   printf '.env\n.env.tmp.*\nbootstrap-runs.jsonl\n' > "$r/.gitignore"
   (
     git_fixture_env "$r" || exit 1
@@ -630,7 +622,7 @@ row_s1_happy_path() { # <src>
   at verify
   run --stage verify
   [[ "$RC" -eq 0 ]] && has_line 'SOLEUR_P5_VERIFY verdict=ok' && has_line "SOLEUR_P5_GRAPHQL key=${KN} zone_tag=match errors=0" || return 1
-  for k in "${KEYS[@]}"; do vok "$k" && ready "$k" && has_line "SOLEUR_P5_DRIFT key=${k} rc=0" || return 1; done
+  for k in "${KEYS[@]}"; do vok "$k" && ready "$k" || return 1; done
   ! grep -qE '"count"|synth-actor|192\.0\.2\.7' <<<"$OUT" || return 1
   at revoke
   flag revoked-old
@@ -716,14 +708,6 @@ row_s8_old_target_ids() { # <src> — prd_terraform still names the old zone: re
   for k in "${KEYS[@]}"; do vfail_is "$k" target-ids-not-new && noready "$k" || return 1; done
   ! logged 'consumer '
 }
-row_s9_drift_fails() { # <src>
-  local k
-  world s9 "$1"; seed_swapped; flag drift-fail
-  at verdict
-  run --stage verify
-  [[ "$RC" -eq 1 ]] || return 1
-  for k in "${KEYS[@]}"; do vfail_is "$k" drift && has_line "SOLEUR_P5_DRIFT key=${k} rc=1" && noready "$k" || return 1; done
-}
 
 # ==================================================================================================
 # The rows on the real script (full mode)
@@ -740,6 +724,9 @@ if [[ "$MODE" == full ]]; then
     && grep -qE '^# P5-MANIFEST CF_API_TOKEN_ANALYTICS_READ +\| 5993721f +\| soleur/prd_terraform$' "$SCRIPT_SRC" \
     && grep -qE '^# P5-MANIFEST CF_API_TOKEN_PAGERULES_READ +\| 86aa993e +\| soleur/prd_terraform$' "$SCRIPT_SRC"
   check "the manifest block holds the three keys, their pinned ids and holders (plan Phase 3)" $?
+  _treg() { awk '/^# --- the credentials file must be ignored by git/{on=1} on{print} /^trap on_exit EXIT$/{exit}' "$1"; }
+  [[ -n "$(_treg "$SCRIPT_SRC")" ]] && cmp -s <(_treg "${REPO_ROOT}/plugins/soleur/skills/operator-bootstrap/template.sh") <(_treg "$SCRIPT_SRC")
+  check "the .env probe through the on_exit trap is byte-identical to the operator-bootstrap template (comments included)" $?
   ! grep -nE 'soleur-infra-privileged' <(grep -v '^#' "$SCRIPT_SRC" | grep -vE '^[[:space:]]*#')
   check "no executable line names soleur-infra-privileged (no stage writes there)" $?
   world static
@@ -788,7 +775,6 @@ if [[ "$MODE" == full ]]; then
   row_s6_analytics_api_error "$SCRIPT_SRC"; check "S6 ANALYTICS: zone-tag match plus an analytics-health api-error still reads ok" $?
   row_s7_graphql_mismatch "$SCRIPT_SRC"; check "S7 ANALYTICS: a GraphQL answer without the new zone tag fails reason=consumer-read" $?
   row_s8_old_target_ids "$SCRIPT_SRC"; check "S8 prd_terraform still on the old zone id: target-ids-not-new, no consumer read" $?
-  row_s9_drift_fails "$SCRIPT_SRC"; check "S9 a failing drift check fails reason=drift" $?
 
   echo "== P-leak: no synthesized value, digest or full id in any output =="
   ! grep -qE 'SYNTH-|synth-actor|192\.0\.2\.7|injected\.invalid' "$ALL_OUT"
@@ -869,7 +855,7 @@ PERL
   mkill "G1M3 (census break after the first compliant holder)" row_g1_3_second_member "$SB/g1m3.sh" verdict 'reason=census-blind'
 fi
 if mutate G1M4 "$SB/g1m4.sh" <<'PERL'; then
-s{  for t in \$\{CT\[\@\]\+"\$\{CT\[\@\]\}"\}; do\n}{  for t in \$\{MHOLD[\$ci]\}; do\n}
+s{  for t in \$\{CT\[\@\]\+"\$\{CT\[\@\]\}"\}; do\n}{  for t in \$\{MHOLD[\$i]\}; do\n}
 PERL
   mkill "G1M4 (census over manifest holders only)" row_g1_4_unlisted_project "$SB/g1m4.sh" verdict 'SOLEUR_P5_REVOKE_READY '
 fi
@@ -950,7 +936,7 @@ PERL
   mkill "S5M (the staged-value shape pre-pass deleted)" row_s5_malformed_next "$SB/s5m.sh" no-curl 'SOLEUR_P5_TOKEN_MALFORMED ' quote
 fi
 if mutate S6M "$SB/s6m.sh" <<'PERL'; then
-s{      return 0 ;;  # analytics-health never gates[^\n]*\n}{      return "\$r" ;;\n}
+s{(      run_readonly "\$k" analytics-health no 1) \|\| true[^\n]*\n}{$1 || return 1\n}
 PERL
   mkill "S6M (analytics-health made gating)" row_s6_analytics_api_error "$SB/s6m.sh" verdict 'reason=consumer-read'
 fi

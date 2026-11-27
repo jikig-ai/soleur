@@ -11,6 +11,8 @@
 # knowledge-base/engineering/operations/runbooks/cloudflare-old-login-token-remint.md.
 # Suite: tests/scripts/test-cf-old-login-token-remint-bootstrap.sh (stub doppler and curl, real approval hook).
 # It stays as the rotation tool (CTO F18): a rotation edits only the MANIFEST block below.
+# The bootstrap the migration runbook's Phase 5 deletes is the archived cf-account-migration bootstrap; this
+# bootstrap.sh is the standing rotation tool (CTO F18) and is never deleted by that cleanup.
 #
 # This header marker identifies the file as a generated operator script. It does
 # NOT pin a byte-identical library region: there is one distribution mode and the
@@ -239,8 +241,12 @@ done
 #
 # PROBE THE RESOLVED PATH — the writer does. `soleur_op_env_upsert` and
 # `soleur_op_env_reset` both `readlink -f` before writing, so probing the link
-# NAME asks git about a file the write never touches. The `.tmp.XXXXXX` sibling is
-# created beside the RESOLVED file too, so it is derived from the resolved path.
+# NAME asks git about a file the write never touches: a founder who symlinks
+# .env at a shared credentials file gets an ignored name, a passing probe, and
+# the value written to a target git reports as untracked-and-not-ignored. The
+# `.tmp.XXXXXX` sibling is created beside the RESOLVED file too, so it is
+# derived from the resolved path rather than from $ENV_FILE. Confirmed against
+# a fixture; Guard 7's symlink rows pin it.
 env_not_ignored() {
   local dir; dir="$(dirname "$1")"
   git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
@@ -291,6 +297,10 @@ on_exit() {
     return 0
   fi
   printf 'SOLEUR_BOOTSTRAP_STAGE_FAILED stage=%s rc=%s\n' "$CURRENT_STAGE_NAME" "$rc"
+  # "Nothing else was changed" is FALSE on one path the library documents: a
+  # secret whose write returned 0 and whose read-back did not confirm it may be
+  # live (SOLEUR_BOOTSTRAP_SECRET_VERIFY_FAILED). The library raises a flag and
+  # this sentence defers to it.
   if [[ -n "${SOLEUR_OP_WRITE_MAY_HAVE_LANDED:-}" ]]; then
     printf 'Stopped during stage %s. A credential may already have been written — check it and revoke it if you did not mean to. Run the stage again to see where it stands: bash %s --stage %s\n' \
       "$CURRENT_STAGE_NAME" "$SCRIPT_PATH" "$CURRENT_STAGE_NAME"
@@ -320,8 +330,9 @@ trap on_exit EXIT
 #                         gets <KEY>; a holder with a third value, no key, or no read refuses the stage
 #                         before any write;
 #   verify         read   per key: <KEY> active and not the pinned id, the consumer read, the census
-#                         (exactly one old copy, at prd_terraform <KEY>_PREV), the drift check; on ok
-#                         with source=PREV it prints SOLEUR_P5_REVOKE_READY (CTO F13).
+#                         (exactly one old copy, at prd_terraform <KEY>_PREV); on ok with source=PREV it
+#                         prints SOLEUR_P5_REVOKE_READY (CTO F13). The standalone drift run is the
+#                         runbook's, not a verify gate (CTO D3).
 # No stage calls the dashboard, deletes a token, writes outside the manifest holders, or writes
 # soleur-infra-privileged (a manifest holder outside project soleur is refused at parse time).
 #
@@ -345,10 +356,7 @@ trap on_exit EXIT
 #   - the census reads only the key's own name: a copy of an old value under another name is unseen
 #     (CTO F2' dissent: the token is dead after the revoke, and the full drift run closes the scan);
 #   - REVOKE_READY is valid only in the sitting that printed it, with nothing written since; this
-#     script cannot see a write made after it exits (the runbook's revoke body re-checks the ids);
-#   - the drift gate runs scripts/check-cloudflare-token-drift.sh with this process's environment, so
-#     it needs that script's own credential (DOPPLER_TOKEN); without one it exits non-zero and verify
-#     fails reason=drift, never ok.
+#     script cannot see a write made after it exits (the runbook's revoke body re-checks the ids).
 
 readonly PROJ="soleur"
 readonly TFC="prd_terraform"
@@ -359,7 +367,6 @@ readonly ACCT_VERIFY_URL="${CF_API}/accounts/${NEW_ACCT}/tokens/verify"
 readonly USER_VERIFY_URL="${CF_API}/user/tokens/verify"
 readonly GQL_URL="${CF_API}/graphql"
 readonly READONLY_REL="plugins/soleur/scripts/cloudflare-readonly.sh"
-readonly DRIFT_REL="scripts/check-cloudflare-token-drift.sh"
 readonly MANIFEST_TAG='# P5-MANIFEST '
 readonly NAME_RE='^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$'
 EMPTY_SHA="$(printf '' | soleur_approval_sha256)"
@@ -481,12 +488,15 @@ token_chars_ok() {
   return "$rc"
 }
 
-# bearer_get <project> <config> <name> <url> — GET <url> with the key's value as the bearer; the body
-# on stdout, then a last line holding the HTTP status. The bearer rides curl's stdin config, never argv.
+# bearer_get <project> <config> <name> <url> [<config-line>...] — one request to <url> with the key's
+# value as the bearer (a GET, or a POST when the extra config lines carry a `data` line); the body on
+# stdout, then a last line holding the HTTP status. The bearer rides curl's stdin config, never argv. The
+# producer exits before any extra line when the value is malformed, so curl then gets no URL at all.
 # rc 0 answered; rc 1 unreadable; rc 2 malformed; rc 100+<curl rc> a transport failure.
 bearer_get() {
   local -a ps=()
-  { bearer_config "$1" "$2" "$3" "$4" | curl --disable --noproxy '*' -sS --max-time 30 --max-redirs 0 -w '\n%{http_code}' --config - 2>/dev/null
+  { ( bearer_config "$1" "$2" "$3" "$4" || exit $?; [[ $# -le 4 ]] || printf '%s\n' "${@:5}" ) \
+      | curl --disable --noproxy '*' -sS --max-time 30 --max-redirs 0 -w '\n%{http_code}' --config - 2>/dev/null
     ps=("${PIPESTATUS[@]}"); } || true
   [[ "${ps[0]:-1}" -eq 0 ]] || return "${ps[0]:-1}"
   [[ "${ps[1]:-1}" -eq 0 ]] || return $((100 + ps[1]))
@@ -580,11 +590,10 @@ reference_of() {
 # load_targets — the LIVE listing: every config of every project `doppler projects` returns. Sets CT
 # ("project/config" lines), CT_BAD (listings that failed, printed as UNREADABLE) and CT_FLOOR_OK (1 when
 # project soleur is listed and lists every config the manifest names). Called once per invocation.
-CT=(); CT_BAD=(); CT_FLOOR_OK=0; CT_LOADED=0
+CT=(); CT_BAD=(); CT_FLOOR_OK=0
 load_targets() {
   local raw projects p cfgs c i h soleur_cfgs="" missing=0
-  [[ "$CT_LOADED" -eq 0 ]] || return 0
-  CT_LOADED=1; CT=(); CT_BAD=(); CT_FLOOR_OK=0
+  CT=(); CT_BAD=(); CT_FLOOR_OK=0
   if ! raw="$(doppler projects --json 2>/dev/null)" \
      || ! projects="$(jq -r --arg re "$NAME_RE" 'if type == "array" and all(.[]; type == "object" and (.name | type) == "string" and (.name | test($re))) then .[].name else error("not a project list") end' <<<"$raw" 2>/dev/null)"; then
     CT_BAD[${#CT_BAD[@]}]="-/-"
@@ -605,14 +614,14 @@ load_targets() {
   if [[ -n "$soleur_cfgs" && "$missing" -eq 0 ]]; then CT_FLOOR_OK=1; fi
 }
 
-# census_key <manifest-index> <key> — classify the key's own name in every listed config (plus
+# census_key <key> — classify the key's own name in every listed config (plus
 # <KEY>_PREV in soleur/prd_terraform) against REF_D (old) and NEW_D (new). Prints one
 # SOLEUR_P5_HOLDER row per read, SOLEUR_P5_UNREADABLE per failed read, and SOLEUR_P5_CENSUS. Sets
 # C_READ, C_OLD, C_UNREAD, C_PREV_OLD (1 when the old copy at prd_terraform <KEY>_PREV was seen) and
 # C_ELSEWHERE (every other old holder, "project/config/name").
 C_READ=0; C_OLD=0; C_UNREAD=0; C_PREV_OLD=0; C_ELSEWHERE=()
 census_key() {
-  local ci="$1" k="$2" t p c n v ns
+  local k="$1" t p c n v ns
   C_READ=0; C_OLD=0; C_UNREAD=0; C_PREV_OLD=0; C_ELSEWHERE=()
   for t in ${CT[@]+"${CT[@]}"}; do
     p="${t%%/*}"; c="${t#*/}"
@@ -637,7 +646,6 @@ census_key() {
       fi
     done
   done
-  : "$ci"
   printf 'SOLEUR_P5_CENSUS key=%s configs_read=%s old_hits=%s\n' "$k" "$C_READ" "$C_OLD"
 }
 print_target_failures() {
@@ -663,7 +671,7 @@ read_inventory() {
       "$(in_names "${k}_NEXT" "$TF_NAMES" && echo present || echo absent)" "$(in_names "${k}_PREV" "$TF_NAMES" && echo present || echo absent)"
     rr=0; reference_of "$k" "${MPIN[i]}" || rr=$?
     if [[ "$rr" -ne 0 ]]; then bad=1; continue; fi
-    census_key "$i" "$k"
+    census_key "$k"
     [[ "$C_UNREAD" -eq 0 ]] || bad=1
   done
   [[ "$bad" -eq 0 ]]
@@ -785,7 +793,7 @@ require_swapped() {
   local k="$1" pin="$2" a=0 b=0
   SW_DP=""
   in_names "${k}_PREV" "$TF_NAMES" && token_ident "$PROJ" "$TFC" "${k}_PREV" || a=$?
-  if [[ "$a" -eq 3 || "$b" -eq 3 ]]; then soleur_op_precondition_failed holder-copies inventory "A verify read of ${TFC}/${k}_PREV got no verdict, so nothing is decided. Run this stage again later; nothing was changed."; fi
+  if [[ "$a" -eq 3 ]]; then soleur_op_precondition_failed holder-copies inventory "A verify read of ${TFC}/${k}_PREV got no verdict, so nothing is decided. Run this stage again later; nothing was changed."; fi
   [[ "$a" -eq 0 && "$IDENT_ID" == "$pin" ]] || soleur_op_precondition_failed holder-copies swap "${TFC}/${k}_PREV does not verify the pinned old id ${pin}, so nothing proves which value a holder holds. Run the swap stage first; nothing was changed."
   token_ident "$PROJ" "$TFC" "$k" || b=$?
   [[ "$b" -ne 3 ]] || soleur_op_precondition_failed holder-copies inventory "The verify read of ${TFC}/${k} got no verdict, so nothing is decided. Run this stage again later; nothing was changed."
@@ -854,21 +862,11 @@ run_readonly() {
 # SOLEUR_P5_GRAPHQL key= zone_tag=match|mismatch errors=<n>; the body is discarded after jq.
 readonly GQL_CT_LINE='header = "Content-Type: application/json"'
 # shellcheck disable=SC2016  # $z is a GraphQL variable, never a shell expansion
-readonly GQL_DATA_LINE='data = "{\"query\":\"query($z: String!) { viewer { zones(filter: {zoneTag: $z}) { zoneTag } } }\",\"variables\":{\"z\":\"951ce525552201ec6c696b24251abed7\"}}"'
-# gql_post <key> — the one POST: the bearer config (ONE read, emitted only when well-formed), then the
-# fixed Content-Type and data lines, all on curl's stdin config. A malformed value exits the producer
-# before the data line, so curl gets no URL. rc as bearer_get.
-gql_post() {
-  local -a ps=()
-  { ( bearer_config "$PROJ" "$TFC" "$1" "$GQL_URL" || exit $?; printf '%s\n' "$GQL_CT_LINE" "$GQL_DATA_LINE" ) \
-      | curl --disable --noproxy '*' -sS --max-time 30 --max-redirs 0 -w '\n%{http_code}' --config - 2>/dev/null
-    ps=("${PIPESTATUS[@]}"); } || true
-  [[ "${ps[0]:-1}" -eq 0 ]] || return "${ps[0]:-1}"
-  [[ "${ps[1]:-1}" -eq 0 ]] || return $((100 + ps[1]))
-}
+GQL_DATA_LINE="$(printf 'data = "{\\"query\\":\\"query($z: String!) { viewer { zones(filter: {zoneTag: $z}) { zoneTag } } }\\",\\"variables\\":{\\"z\\":\\"%s\\"}}"' "$NEW_ZONE")"
+readonly GQL_DATA_LINE
 graphql_gate() {
   local k="$1" out code body verdict rc=0
-  out="$(gql_post "$k")" || rc=$?
+  out="$(bearer_get "$PROJ" "$TFC" "$k" "$GQL_URL" "$GQL_CT_LINE" "$GQL_DATA_LINE")" || rc=$?
   code="${out##*$'\n'}"; body="${out%$'\n'*}"
   if [[ "$rc" -ne 0 || "$code" != 200 || "$out" != *$'\n'* ]]; then
     printf 'SOLEUR_P5_GRAPHQL key=%s zone_tag=unknown rc=%s\n' "$k" "$rc"; return 1
@@ -882,22 +880,21 @@ graphql_gate() {
 # consumer_read <key> — the key's own consumer read, which must exit 0. ANALYTICS gates on the
 # zone-tag query; analytics-health runs after it as a non-gating line (Free-plan quantile limits).
 consumer_read() {
-  local k="$1" r=0
+  local k="$1"
   case "$k" in
     CF_API_TOKEN_PAGERULES_READ) run_readonly "$k" pagerules-ssl yes ;;
     CF_API_TOKEN_AUDIT) run_readonly "$k" change-history yes ;;
     CF_API_TOKEN_ANALYTICS_READ)
       graphql_gate "$k" || return 1
-      run_readonly "$k" analytics-health no 1 || r=$?
-      return 0 ;;  # analytics-health never gates (a plan limit is recorded, not a failure)
+      run_readonly "$k" analytics-health no 1 || true  # never gates: a Free-plan limit is recorded, not a failure
+      ;;
     *) printf 'SOLEUR_P5_CONSUMER key=%s sub=none gating=yes rc=1 line=(no consumer read is defined for this key)\n' "$k"; return 1 ;;
   esac
-  : "$r"
 }
 
 # verify_key <manifest-index> — one key's verdict. The first failing check is the reason.
 verify_key() {
-  local i="$1" k pin rc drift drc=0 o
+  local i="$1" k pin rc o
   k="${MKEYS[i]}"; pin="${MPIN[i]}"
   rc=0; token_ident "$PROJ" "$TFC" "$k" || rc=$?
   case "$rc" in
@@ -917,7 +914,7 @@ verify_key() {
   [[ "$REF_SRC" == PREV ]] || { vfail "$k" no-reference; return 0; }
   [[ "$TARGETS_NEW" -eq 1 ]] || { vfail "$k" target-ids-not-new; return 0; }
   consumer_read "$k" || { vfail "$k" consumer-read; return 0; }
-  census_key "$i" "$k"
+  census_key "$k"
   [[ "$CT_FLOOR_OK" -eq 1 ]] || { vfail "$k" census-floor; return 0; }
   [[ "$C_UNREAD" -eq 0 && "${#CT_BAD[@]}" -eq 0 ]] || { vfail "$k" census-unreadable; return 0; }
   if [[ "${#C_ELSEWHERE[@]}" -gt 0 ]]; then
@@ -927,10 +924,6 @@ verify_key() {
   # Exactly one old copy, at prd_terraform <KEY>_PREV (old copies elsewhere were refused above); zero
   # old copies means the census cannot see the old value at all, which proves nothing.
   [[ "$C_OLD" -eq 1 && "$C_PREV_OLD" -eq 1 ]] || { vfail "$k" census-blind; return 0; }
-  drift="$(tracked_file "$DRIFT_REL")" || { vfail "$k" drift; return 0; }
-  bash "$drift" --only "$k" </dev/null >/dev/null 2>&1 || drc=$?
-  printf 'SOLEUR_P5_DRIFT key=%s rc=%s\n' "$k" "$drc"
-  [[ "$drc" -eq 0 ]] || { vfail "$k" drift; return 0; }
   printf 'SOLEUR_P5_VERIFY key=%s verdict=ok\n' "$k"
   printf 'SOLEUR_P5_REVOKE_READY key=%s old_id=%s new_id=%s\n' "$k" "$REF_ID" "$key_id"
 }
