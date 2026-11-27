@@ -62,6 +62,89 @@ export interface AgentSpawn {
   instruction: string;
 }
 
+/**
+ * Per-harness spawned-agent liveness and recovery capability descriptor (#12524, ADR-332).
+ */
+export interface LivenessCapabilities {
+  harness: Harness;
+  /** Whether the parent can nudge or resume an in-flight subagent in-band without a full respawn. */
+  inBandNudge: boolean;
+  /** Whether the harness exposes an async/background wait primitive for subagent turns. */
+  asyncWait: boolean;
+  /** Whether spawned subagents can reliably write on-disk progress heartbeats by default. */
+  childDiskHeartbeat: boolean;
+  /** Whether the harness fires SubagentStart/SubagentStop lifecycle hooks. */
+  subagentHooks: boolean;
+}
+
+const LIVENESS_CAPABILITIES: Record<Harness, LivenessCapabilities> = {
+  claude: {
+    harness: "claude",
+    inBandNudge: true,
+    asyncWait: true,
+    childDiskHeartbeat: true,
+    subagentHooks: true,
+  },
+  codex: {
+    harness: "codex",
+    inBandNudge: true,
+    asyncWait: true,
+    childDiskHeartbeat: true,
+    subagentHooks: false,
+  },
+  antigravity: {
+    harness: "antigravity",
+    inBandNudge: true,
+    asyncWait: true,
+    childDiskHeartbeat: true,
+    subagentHooks: false,
+  },
+  grok: {
+    harness: "grok",
+    inBandNudge: false,
+    asyncWait: true,
+    childDiskHeartbeat: true,
+    subagentHooks: false,
+  },
+  opencode: {
+    harness: "opencode",
+    inBandNudge: false,
+    asyncWait: true,
+    childDiskHeartbeat: true,
+    subagentHooks: false,
+  },
+  devin: {
+    harness: "devin",
+    inBandNudge: false,
+    asyncWait: true,
+    childDiskHeartbeat: false,
+    subagentHooks: false,
+  },
+  cursor: {
+    harness: "cursor",
+    inBandNudge: false,
+    asyncWait: false,
+    childDiskHeartbeat: false,
+    subagentHooks: false,
+  },
+  unknown: {
+    harness: "unknown",
+    inBandNudge: false,
+    asyncWait: false,
+    childDiskHeartbeat: false,
+    subagentHooks: false,
+  },
+};
+
+/**
+ * Return the liveness and recovery capability flags for the given harness (#12524).
+ */
+export function getLivenessCapabilities(
+  harness: Harness = detectHarness(),
+): LivenessCapabilities {
+  return LIVENESS_CAPABILITIES[harness] ?? LIVENESS_CAPABILITIES.unknown;
+}
+
 /** Strip `soleur:` prefix; Grok exposes bare skill names as slash commands. */
 export function normalizeSkillName(skill: string): string {
   return skill.replace(/^soleur:/, "");

@@ -2,9 +2,9 @@
 
 ## Phase 1: Capability Matrix, Metadata Schema & ADR
 
-- [ ] 1.1 RED(unit): Write failing unit tests in `plugins/soleur/test/agent-liveness.test.ts` for `getLivenessCapabilities()`, `classifySeatSilence()`, `decideSeatRecovery()`, and metadata-only seat state schema
-- [ ] 1.2 GREEN: Implement `LivenessCapabilities` and `getLivenessCapabilities()` in `plugins/soleur/lib/harness.ts` and create `plugins/soleur/lib/agent-liveness.ts` (blockedBy: 1.1)
-- [ ] 1.3 Author `knowledge-base/engineering/architecture/decisions/ADR-332-cross-harness-agent-liveness.md` documenting the cross-harness liveness and bounded-recovery contract
+- [x] 1.1 RED(unit): Write failing unit tests in `plugins/soleur/test/agent-liveness.test.ts` for `getLivenessCapabilities()`, `classifySeatSilence()`, `decideSeatRecovery()`, and metadata-only seat state schema
+- [x] 1.2 GREEN: Implement `LivenessCapabilities` and `getLivenessCapabilities()` in `plugins/soleur/lib/harness.ts` and create `plugins/soleur/lib/agent-liveness.ts` (blockedBy: 1.1)
+- [x] 1.3 Author `knowledge-base/engineering/architecture/decisions/ADR-332-cross-harness-agent-liveness.md` documenting the cross-harness liveness and bounded-recovery contract
 
 ## Phase 2: Ephemeral Seat State CLI & `run-health-emit.sh` Integration
 
