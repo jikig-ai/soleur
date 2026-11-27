@@ -327,6 +327,23 @@ function isWorkflowSaturationError(err) {
 // <!-- harness-model-map:end -->
 // ---------------------------------------------------------------------------
 
+// Spawned-agent seat liveness & dirty-diff guard (#12524, ADR-332).
+// Writable resolver seats must never blindly auto-respawn over uncommitted diffs;
+// a dead resolver emits SOLEUR_SEAT_LIVENESS and escalates for on-disk verification.
+const escalatedSeats = []
+async function runWritableResolverSeat(seatId, thunk) {
+  let res = null
+  try {
+    res = await thunk()
+  } catch (_err) {
+    res = null
+  }
+  if (res) return res
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=crash action=verify_disk attempt=0 reviewed_coverage=degraded`)
+  escalatedSeats.push(seatId)
+  return null
+}
+
 phase('Analyze')
 log('tier pins: analyze→standard, commit→standard (mechanical steps per ADR-053; plan + resolvers inherit the session model)')
 // Pinned 'standard': TODO inventory extraction is mechanical (ADR-053).
@@ -404,12 +421,14 @@ for (let ti = 0; ti < tiers.length; ti++) {
             filesTouched: [],
           })
         }
-        return agent(resolvePrompt(item, ti, tiers.length), {
-          label: `resolve:t${ti + 1}:${item.id}`,
-          phase: 'Implement',
-          schema: RESOLVE_SCHEMA,
-          agentType: RESOLVER_AGENT_TYPE,
-        })
+        return runWritableResolverSeat(`resolve:t${ti + 1}:${item.id}`, () =>
+          agent(resolvePrompt(item, ti, tiers.length), {
+            label: `resolve:t${ti + 1}:${item.id}`,
+            phase: 'Implement',
+            schema: RESOLVE_SCHEMA,
+            agentType: RESOLVER_AGENT_TYPE,
+          }),
+        )
       }),
     )
   ).filter(Boolean)
@@ -460,6 +479,8 @@ return {
     droppedForBudget: droppedResolution.length,
   },
   budget: { total: budget.total, spent: budget.spent(), droppedResolution },
+  escalatedSeats,
+  reviewedCoverage: escalatedSeats.length ? 'degraded' : 'full',
   commit: {
     committed: !!commit.committed,
     pushed: !!commit.pushed,

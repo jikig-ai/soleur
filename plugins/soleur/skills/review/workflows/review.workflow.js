@@ -562,6 +562,33 @@ function isWorkflowSaturationError(err) {
 // <!-- harness-model-map:end -->
 // ---------------------------------------------------------------------------
 
+// Spawned-agent seat liveness & bounded 1x recovery (#12524, ADR-332).
+const escalatedSeats = []
+const recoveredSeats = []
+async function runReviewSeat(dim, thunk) {
+  const seatId = `review:${dim}`
+  let res = null
+  try {
+    res = await thunk()
+  } catch (_err) {
+    res = null
+  }
+  if (res && Array.isArray(res.findings)) return res
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=crash action=respawn attempt=1`)
+  try {
+    res = await thunk()
+  } catch (_err) {
+    res = null
+  }
+  if (res && Array.isArray(res.findings)) {
+    recoveredSeats.push(seatId)
+    return res
+  }
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=crash action=escalate attempt=1 reviewed_coverage=degraded`)
+  escalatedSeats.push(seatId)
+  return { findings: [] }
+}
+
 phase('Classify')
 log('tier pins: classify→standard, file→cheap (mechanical steps per ADR-053; judgment steps inherit the session model)')
 // Pinned 'standard': schema-constrained diff-class classification is mechanical (ADR-053).
@@ -599,12 +626,14 @@ log(
 const perDimension = await pipeline(
   dims,
   (dim) =>
-    agent(DIMENSIONS[dim].prompt ? DIMENSIONS[dim].prompt() : reviewPrompt(dim), {
-      label: `review:${dim}`,
-      phase: 'Review',
-      schema: FINDINGS_SCHEMA,
-      agentType: DIMENSIONS[dim].agentType, // undefined for tool/skill dims → default agent
-    }),
+    runReviewSeat(dim, () =>
+      agent(DIMENSIONS[dim].prompt ? DIMENSIONS[dim].prompt() : reviewPrompt(dim), {
+        label: `review:${dim}`,
+        phase: 'Review',
+        schema: FINDINGS_SCHEMA,
+        agentType: DIMENSIONS[dim].agentType, // undefined for tool/skill dims → default agent
+      }),
+    ),
   (review, dim) =>
     parallel((review?.findings || []).map((f) => () => (DIMENSIONS[dim].deterministic ? Promise.resolve(autoConfirm(f, dim)) : verifyFinding(f, dim)))),
 )
@@ -684,6 +713,9 @@ const report = {
   tierSource,
   tierMismatch,
   seatsSpawned: dims.length,
+  recoveredSeats,
+  escalatedSeats,
+  reviewedCoverage: escalatedSeats.length ? 'degraded' : 'full',
   dimensionsRun: { alwaysOn, conditional },
   // #9403: pipeline-tally bridge — invoking prose posts `counts.seats` via
   // `pipeline-tally.sh incr seats <n>`. seats = dimension agents spawned

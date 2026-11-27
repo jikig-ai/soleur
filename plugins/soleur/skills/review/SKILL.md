@@ -186,6 +186,8 @@ Before spawning review agents, classify the PR to right-size the panel.
 
 **Seat tally:** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` before ANY seat spawn (design-pass included — when `design-risk` is set it precedes this step, so init belongs at skill start). `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate seats <N>` before each spawn batch (`<N>` = its width — design-pass seats count too); `STOP` → write `specs/<feature>/session-state.md` (`status: budget-capped` + `budget-capped: seats=<n>/<cap>` + resume) and exit; `WARN`/`UNKNOWN` → continue; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr seats <N>` after each batch.
 
+**Seat liveness & bounded recovery (#12524, ADR-332):** Register each spawned review seat with `bash "${CLAUDE_PLUGIN_ROOT}/scripts/seat-liveness.sh" init --run-dir ".soleur/runs/${RUN_ID:-default}" --seat "<seat-id>" --role "<agent-id>"`, run `seat-liveness.sh sweep` + `decide` when the batch returns (at most 1 nudge or tier-fallback respawn on `rate_limit`/`truncated`/`crash`), and record `Reviewed-Coverage: degraded` via `run-health-emit.sh` if any seat escalates after 1 retry.
+
 **Seat dissent from a ruling.** Before spawning any seat (design-pass included), collect the recorded `Ruled by C[TL]` lines and pass them to every seat as settled decisions, to be reported anyway if contradicted; the orchestrator compares raw findings against them at synthesis, and every contradicting dissent (or doubtful match) goes to its owner (CTO; legal: CLO) in ONE batched spawn to uphold or amend, never to the operator. Procedure: [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md) section 8.2.
 
 #### Parallel Agents to review the PR:

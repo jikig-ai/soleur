@@ -187,17 +187,17 @@ discoverability_test:
 
 ### Functional Requirements
 
-- [ ] `plugins/soleur/lib/harness.ts` exports `getLivenessCapabilities(harness)` covering all 8 `Harness` values (`claude`, `grok`, `codex`, `devin`, `cursor`, `opencode`, `antigravity`, `unknown`).
-- [ ] `plugins/soleur/lib/agent-liveness.ts` and `plugins/soleur/scripts/seat-liveness.sh` manage ephemeral metadata-only seat state under `.soleur/runs/<run-id>/seats/` with 24h TTL cleanup and zero raw transcript/prompt/secret persistence.
-- [ ] `classifySeatSilence()` deterministically classifies `alive`, `legit_long_turn`, `rate_limit`, `truncated`, `hook_deferred`, and `crash`, enforcing an absolute turn cap that progress heartbeats cannot reset.
-- [ ] `decideSeatRecovery()` enforces max 1 recovery attempt, inspects on-disk diffs/artifacts first, blocks auto-respawn on `side_effecting` or dirty-diff `writable` seats, and emits honest escalation status.
-- [ ] All 6 fan-out workflows (`one-shot`, `review`, `resolve-parallel`, `resolve-pr-parallel`, `resolve-todo-parallel`, `drain-labeled-backlog`) wire seat liveness registration, sweep, and bounded recovery.
+- [x] `plugins/soleur/lib/harness.ts` exports `getLivenessCapabilities(harness)` covering all 8 `Harness` values (`claude`, `grok`, `codex`, `devin`, `cursor`, `opencode`, `antigravity`, `unknown`).
+- [x] `plugins/soleur/lib/agent-liveness.ts` and `plugins/soleur/scripts/seat-liveness.sh` manage ephemeral metadata-only seat state under `.soleur/runs/<run-id>/seats/` with 24h TTL cleanup and zero raw transcript/prompt/secret persistence.
+- [x] `classifySeatSilence()` deterministically classifies `alive`, `legit_long_turn`, `rate_limit`, `truncated`, `hook_deferred`, and `crash`, enforcing an absolute turn cap that progress heartbeats cannot reset.
+- [x] `decideSeatRecovery()` enforces max 1 recovery attempt, inspects on-disk diffs/artifacts first, blocks auto-respawn on `side_effecting` or dirty-diff `writable` seats, and emits honest escalation status.
+- [x] All 6 fan-out workflows (`one-shot`, `review`, `resolve-parallel`, `resolve-pr-parallel`, `resolve-todo-parallel`, `drain-labeled-backlog`) wire seat liveness registration, sweep, and bounded recovery.
 
 ### Quality Gates
 
-- [ ] `bun test plugins/soleur/test/agent-liveness.test.ts` passes.
-- [ ] `bash plugins/soleur/test/seat-liveness.test.sh` passes with live, slow-progress, and dead/zombie controls.
-- [ ] Existing harness parity tests (`bun test plugins/soleur/test/harness.test.ts`) pass.
+- [x] `bun test plugins/soleur/test/agent-liveness.test.ts` passes.
+- [x] `bash plugins/soleur/test/seat-liveness.test.sh` passes with live, slow-progress, and dead/zombie controls.
+- [x] Existing harness parity tests (`bun test plugins/soleur/test/harness.test.ts`) pass.
 
 ## Test Scenarios
 

@@ -298,3 +298,51 @@ describe("decideSeatRecovery (FR4 & FR5)", () => {
     expect(decision.marker).toContain("action=escalate");
   });
 });
+
+describe("fan-out workflow integration (FR6)", () => {
+  const { readFileSync } = require("node:fs");
+  const { resolve } = require("node:path");
+  const skillsRoot = resolve(import.meta.dir, "../skills");
+
+  const fanoutSkills = [
+    "one-shot",
+    "review",
+    "resolve-parallel",
+    "resolve-pr-parallel",
+    "resolve-todo-parallel",
+    "drain-labeled-backlog",
+  ] as const;
+
+  test("all 6 fan-out SKILL.md files reference seat-liveness.sh and ADR-332", () => {
+    for (const s of fanoutSkills) {
+      const md = readFileSync(resolve(skillsRoot, s, "SKILL.md"), "utf-8");
+      expect(md, `${s}/SKILL.md should wire seat-liveness.sh`).toContain(
+        "seat-liveness.sh",
+      );
+      expect(md, `${s}/SKILL.md should cite ADR-332`).toContain("ADR-332");
+    }
+  });
+
+  test("all 5 fan-out .workflow.js scripts wire SOLEUR_SEAT_LIVENESS and reviewedCoverage", () => {
+    const workflowSkills = [
+      "review",
+      "resolve-parallel",
+      "resolve-pr-parallel",
+      "resolve-todo-parallel",
+      "drain-labeled-backlog",
+    ] as const;
+    for (const s of workflowSkills) {
+      const wf = readFileSync(
+        resolve(skillsRoot, s, "workflows", `${s}.workflow.js`),
+        "utf-8",
+      );
+      expect(wf, `${s}.workflow.js should emit SOLEUR_SEAT_LIVENESS`).toContain(
+        "SOLEUR_SEAT_LIVENESS",
+      );
+      expect(wf, `${s}.workflow.js should report reviewedCoverage`).toContain(
+        "reviewedCoverage",
+      );
+    }
+  });
+});
+

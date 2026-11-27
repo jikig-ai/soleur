@@ -13,9 +13,9 @@
 
 ## Phase 3: Fan-Out Workflow Integration
 
-- [ ] 3.1 Wire seat liveness registration, sweep, dirty-diff verification, and bounded recovery into `plugins/soleur/skills/one-shot/SKILL.md` and `plugins/soleur/skills/review/{SKILL.md,workflows/review.workflow.js}` (blockedBy: 1.2, 2.2)
-- [ ] 3.2 Wire seat liveness registration, sweep, dirty-diff verification, and bounded recovery into `plugins/soleur/skills/{resolve-parallel,resolve-pr-parallel,resolve-todo-parallel,drain-labeled-backlog}/{SKILL.md,workflows/*.workflow.js}` (blockedBy: 1.2, 2.2)
+- [x] 3.1 Wire seat liveness registration, sweep, dirty-diff verification, and bounded recovery into `plugins/soleur/skills/one-shot/SKILL.md` and `plugins/soleur/skills/review/{SKILL.md,workflows/review.workflow.js}` (blockedBy: 1.2, 2.2)
+- [x] 3.2 Wire seat liveness registration, sweep, dirty-diff verification, and bounded recovery into `plugins/soleur/skills/{resolve-parallel,resolve-pr-parallel,resolve-todo-parallel,drain-labeled-backlog}/{SKILL.md,workflows/*.workflow.js}` (blockedBy: 1.2, 2.2)
 
 ## Phase 4: Verification & Quality Gates
 
-- [ ] 4.1 Run the touched-file suites (`agent-liveness.test.ts`, `seat-liveness.test.sh`, `harness.test.ts`), affected gate, and lint checks (blockedBy: 1.2, 1.3, 2.2, 3.1, 3.2)
+- [x] 4.1 Run the touched-file suites (`agent-liveness.test.ts`, `seat-liveness.test.sh`, `harness.test.ts`), affected gate, and lint checks (blockedBy: 1.2, 1.3, 2.2, 3.1, 3.2)

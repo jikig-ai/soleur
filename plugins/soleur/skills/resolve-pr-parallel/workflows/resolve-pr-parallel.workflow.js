@@ -311,6 +311,21 @@ function isWorkflowSaturationError(err) {
 // <!-- harness-model-map:end -->
 // ---------------------------------------------------------------------------
 
+// Spawned-agent seat liveness & dirty-diff guard (#12524, ADR-332).
+const escalatedSeats = []
+async function runWritablePrResolverSeat(seatId, thunk) {
+  let res = null
+  try {
+    res = await thunk()
+  } catch (_err) {
+    res = null
+  }
+  if (res) return res
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=crash action=verify_disk attempt=0 reviewed_coverage=degraded`)
+  escalatedSeats.push(seatId)
+  return null
+}
+
 const rounds = []
 let prNumber = prSelector ? Number(prSelector) : null
 let stopReason = null
@@ -376,12 +391,14 @@ for (let round = 1; round <= maxRounds; round++) {
   const resolutions = (
     await parallel(
       threads.map((t, i) => () =>
-        agent(resolvePrompt(t, i, round), {
-          label: `resolve:round-${round}:${i + 1}`,
-          phase: 'Resolve',
-          schema: RESOLVE_SCHEMA,
-          agentType: RESOLVER_AGENT_TYPE,
-        }),
+        runWritablePrResolverSeat(`resolve:round-${round}:${i + 1}`, () =>
+          agent(resolvePrompt(t, i, round), {
+            label: `resolve:round-${round}:${i + 1}`,
+            phase: 'Resolve',
+            schema: RESOLVE_SCHEMA,
+            agentType: RESOLVER_AGENT_TYPE,
+          }),
+        ),
       ),
     )
   ).filter(Boolean)
@@ -447,6 +464,8 @@ const report = {
   maxRounds,
   fanOutCap: maxComments,
   confirmed,
+  escalatedSeats,
+  reviewedCoverage: escalatedSeats.length ? 'degraded' : 'full',
   budget: { total: budget.total, spent: budget.spent() },
   // #9403: pipeline-tally bridge — invoking prose posts these via
   // `pipeline-tally.sh incr <dim> <n>`. agent_rounds = resolver agents actually

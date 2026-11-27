@@ -320,6 +320,21 @@ function isWorkflowSaturationError(err) {
 // <!-- harness-model-map:end -->
 // ---------------------------------------------------------------------------
 
+// Spawned-agent seat liveness & dirty-diff guard (#12524, ADR-332).
+const escalatedSeats = []
+async function runWritableTodoResolverSeat(seatId, thunk) {
+  let res = null
+  try {
+    res = await thunk()
+  } catch (_err) {
+    res = null
+  }
+  if (res) return res
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=crash action=verify_disk attempt=0 reviewed_coverage=degraded`)
+  escalatedSeats.push(seatId)
+  return null
+}
+
 phase('Analyze')
 log('tier pins: analyze→standard, commit→standard (mechanical steps per ADR-053; resolvers inherit the session model)')
 // Pinned 'standard': todo inventory extraction is mechanical (ADR-053).
@@ -380,7 +395,11 @@ for (let i = 0; i < tiers.length; i++) {
   resolversSpawned += tier.length // #9403: pipeline-tally `counts` surface
   const tierResults = (
     await parallel(
-      tier.map((t) => () => agent(resolvePrompt(t, i), { label: `resolve:${t.issueId}`, phase: 'Resolve', schema: RESOLVE_SCHEMA })),
+      tier.map((t) => () =>
+        runWritableTodoResolverSeat(`resolve:${t.issueId}`, () =>
+          agent(resolvePrompt(t, i), { label: `resolve:${t.issueId}`, phase: 'Resolve', schema: RESOLVE_SCHEMA }),
+        ),
+      ),
     )
   ).filter(Boolean)
   results.push(...tierResults)
@@ -423,6 +442,8 @@ const report = {
   tiers: tiers.length,
   tierPlan: tiers.map((tier, i) => ({ tier: i, ids: tier.map((t) => t.issueId) })),
   fanOutAgents: todos.length,
+  escalatedSeats,
+  reviewedCoverage: escalatedSeats.length ? 'degraded' : 'full',
   // #9403: pipeline-tally bridge — invoking prose posts these via
   // `pipeline-tally.sh incr <dim> <n>`. agent_rounds = resolver agents actually
   // spawned (tiers skipped by the budget floor never dispatched — not counted).
