@@ -619,35 +619,35 @@ decided on its own digest.
 
 ### Pre-merge (work phase)
 
-- [ ] AC1 `knowledge-base/engineering/operations/runbooks/cloudflare-old-login-token-remint.md` exists with the twelve
+- [x] AC1 `knowledge-base/engineering/operations/runbooks/cloudflare-old-login-token-remint.md` exists with the twelve
   sections of Phase 2; its facts table names all six id prefixes (`dd6d1427`, `5993721f`, `86aa993e`, `9e4ce00e`,
   `34acd675`, `bb4a334a`) with a disposition each. `grep -oE '[A-Za-z0-9_-]{33,}' <runbook> | grep -vE '^[A-Z0-9_]+$' | grep -c '[A-Z]'`
   prints `0` (all-caps key names such as `CF_API_TOKEN_ANALYTICS_READ_PREV` are excluded), and the same command on a scratch copy carrying a synthesized 40-character mixed-case sentinel prints
   `1` (control).
-- [ ] AC2 `bash knowledge-base/project/specs/feat-one-shot-12931-phase5-token-remint/bootstrap.sh --list` prints four
+- [x] AC2 `bash knowledge-base/project/specs/feat-one-shot-12931-phase5-token-remint/bootstrap.sh --list` prints four
   `SOLEUR_BOOTSTRAP_STAGE_DECL` lines in table order: `stage=inventory class=read`, `stage=swap class=write`,
   `stage=holder-copies class=write`, `stage=verify class=read`; line 2 is `# SOLEUR-GENERATED-OPERATOR-SCRIPT v2`.
-- [ ] AC3 `bash tests/scripts/test-cf-old-login-token-remint-bootstrap.sh` passes, and
+- [x] AC3 `bash tests/scripts/test-cf-old-login-token-remint-bootstrap.sh` passes, and
   `bash tests/scripts/test-cf-old-login-token-remint-bootstrap.sh --mutants` shows every Guard 1-3 row and harness
   row red at its named step (each mutant `cmp`-differs from the control).
-- [ ] AC4 `grep -cE '5af02a2f|4d5ba6f0' plugins/soleur/agents/engineering/infra/infra-security.md` prints `0`; both
+- [x] AC4 `grep -cE '5af02a2f|4d5ba6f0' plugins/soleur/agents/engineering/infra/infra-security.md` prints `0`; both
   new ids appear; `grep -c 'apps/web-platform/infra/main.tf'` on it prints `0`; `grep -c 'Ids (not secrets)'` and
   `grep -c 'tokens/verify'` on it each print at least `1`, the latter including an `/accounts/` form. The same
   `grep -cE '5af02a2f|4d5ba6f0'` prints `0` on each of the three generated copies, and the three sync scripts' `--check`
   runs exit 0.
-- [ ] AC5 `grep -c '2027-02-07' plugins/soleur/scripts/cloudflare-readonly.sh` prints `0` and
+- [x] AC5 `grep -c '2027-02-07' plugins/soleur/scripts/cloudflare-readonly.sh` prints `0` and
   `grep -c 'expires_on' plugins/soleur/scripts/cloudflare-readonly.sh` prints at least `2`;
   `bash plugins/soleur/test/cloudflare-readonly.test.sh` and `bun test plugins/soleur/test/components.test.ts` pass.
-- [ ] AC6 `grep -cE 'GH secrets do$|^ *# not exist yet' .github/workflows/scheduled-followthrough-sweeper.yml` prints
+- [x] AC6 `grep -cE 'GH secrets do$|^ *# not exist yet' .github/workflows/scheduled-followthrough-sweeper.yml` prints
   `0` (it prints `2` on `main` today); `grep -c '#12983'` and `grep -c '2026-11-02'` on it each print at least `1`;
   `actionlint .github/workflows/scheduled-followthrough-sweeper.yml` is clean.
-- [ ] AC7 `bash scripts/lint-orphan-test-suites.sh` passes with the new suite registered;
+- [x] AC7 `bash scripts/lint-orphan-test-suites.sh` passes with the new suite registered;
   `git diff --quiet origin/main...HEAD -- knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md`
   exits 0.
 - [ ] AC8 `gh issue view 12931 --comments | grep -c P5-TOKEN-FACTS` and
   `gh issue view 12983 --comments | grep -c P5-GH-SECRET` each print at least `1`; the PR body carries
   `Ref #12931` and `Ref #12937` and no `Closes`/`Fixes` of either.
-- [ ] AC9 `find <scratchpad> -name '*.tok' | wc -l` prints `0`, and
+- [x] AC9 `find <scratchpad> -name '*.tok' | wc -l` prints `0`, and
   `git status --porcelain --ignored | grep -c '\.tok$'` prints `0` in this worktree and in the main checkout.
 
 ### Post-merge (each after its hold's typed go)
