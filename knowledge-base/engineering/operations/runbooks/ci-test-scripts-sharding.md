@@ -90,6 +90,11 @@ python3 scripts/regenerate-shard-manifest.py --group heavy --incremental --write
 python3 scripts/regenerate-shard-manifest.py --runs 5 --write
 python3 scripts/regenerate-shard-manifest.py --run <green-ci-run-id> --write   # single-run override
 python3 scripts/regenerate-shard-manifest.py --group heavy --runs 5 --write
+# Changing K itself is a bigger sweep than the matrix literal: grep the repo
+# for RESTATED copies of the count (`eight legs`, `K=8`, `range(8)`, `x8`,
+# `legs=18`, `/18`, `scripts-7`-adjacent lists) across workflows, tests,
+# fixture censuses (EXPECTED_LEGS and its mirrors), and this file — a guard
+# that restates the count stays green on the stale value (#12964 review).
 # With --timings-dir (offline inputs) re-list the newest green merge_group runs right
 # before --write and require "0 at floor" in the dry-run summary: a suite that
 # landed after your staged runs is priced at the floor until a run carries its
