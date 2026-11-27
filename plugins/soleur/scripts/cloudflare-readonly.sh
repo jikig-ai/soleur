@@ -32,7 +32,8 @@
 #   CF_API_TOKEN_RULESETS, which returned 403 on /pagerules, and no fallback to any other token)
 #   change-history -> CF_API_TOKEN_AUDIT plus CF_ACCOUNT_ID       the others also need CF_ZONE_ID
 #   analytics-health, analytics-edge-errors, analytics-health-colo -> CF_API_TOKEN_ANALYTICS_READ (Analytics:Read on the zone soleur.ai only; read-only;
-#   expires on the date its verify answer reports as `expires_on`, after which a 401 records `token-invalid`; no fallback to
+#   expires on the date its verify answer reports as `expires_on` (`/accounts/<id>/tokens/verify` for an account-owned token;
+#   `/user/tokens/verify` answers only for a user token), after which a 401 records `token-invalid`; no fallback to
 #   any other token). Nothing else reads it.
 # CF_API_TOKEN_ZONE_SETTINGS and CF_API_TOKEN_RULESETS are Terraform-scoped and write-capable (no read-only equivalent exists
 # yet); that exception is removable when read-only equivalents are minted, which is a credential change and the owner's.

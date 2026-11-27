@@ -42,7 +42,7 @@ When auditing a domain's security posture, check these areas and report findings
 
 **API token checks** (require `CF_API_TOKEN_AUDIT` in Doppler `dev` config):
 
-When MCP OAuth is unavailable (CI, headless mode, or auth errors), use the dedicated read-only audit token. Retrieve it via `doppler secrets get CF_API_TOKEN_AUDIT -p soleur -c dev --plain`.
+When MCP OAuth is unavailable (CI, headless mode, or auth errors), use the dedicated read-only audit token. Retrieve it via `doppler secrets get CF_API_TOKEN_AUDIT -p soleur -c dev --plain`. Until the re-mint in `knowledge-base/engineering/operations/runbooks/cloudflare-old-login-token-remint.md` has run, `dev` still holds the old-login token, which answers `token-lacks-scope` on the new account; a 403 there is that state, not a fault in this check.
 
 Zone and account IDs (canonical source: the `### Ids (not secrets)` table in `knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md`). Since the 2026-11-18 registration move the zone lives on the Soleur account, on the Free plan; the old zone is `status=moved` and is never queried here.
 
