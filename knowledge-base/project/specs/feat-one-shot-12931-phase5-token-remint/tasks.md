@@ -26,7 +26,8 @@ The work phase runs only reads and repository edits; every production act is an 
 - [ ] 3.2 Write `knowledge-base/engineering/operations/runbooks/cloudflare-old-login-token-remint.md` (twelve
   sections, hold lines verbatim, Orient step first).
 - [ ] 3.3 Edit `plugins/soleur/agents/engineering/infra/infra-security.md` (new ids, source line, account verify
-  fallback).
+  fallback), then regenerate its three harness copies with `sync-grok-agent-compat.ts`, `sync-cursor-name-map.ts`
+  and `sync-opencode-adapter.ts` (each then `--check`); never hand-edit the copies.
 - [ ] 3.4 Edit the `cloudflare-readonly.sh` header (drop `2027-02-07`, name `expires_on`).
 - [ ] 3.5 Edit the `scheduled-followthrough-sweeper.yml` comment (measured fact plus the #12983 precondition).
 
@@ -39,9 +40,11 @@ The work phase runs only reads and repository edits; every production act is an 
 
 ## Phase 5: Post-merge (operator holds; each on its own typed go, except the batched mint go)
 
-- [ ] 5.1 Mint sitting: read permission groups and old policies, post `P5-SCOPE`, mint the three tokens
-  account-owned, read their policies back, stage `_NEXT`.
-- [ ] 5.2 `swap`, `holder-copies`, `verify` (three `REVOKE_READY` lines).
+- [ ] 5.1 Mint sitting: confirm no Playwright capture flags, read permission groups and old policies, post
+  `P5-SCOPE`, mint the three tokens account-owned and named `<key>-soleur-<YYYYMMDD>`, read their policies back
+  (exact resource keys), stage `_NEXT`.
+- [ ] 5.2 Delete the old `CF_API_TOKEN_AUDIT` copies in `dev_personal` and `dev_scheduled` (CTO F20), then `swap`,
+  `holder-copies`, `verify` (three `REVOKE_READY` lines).
 - [ ] 5.3 Revoke sitting (old-account-owner login): three revokes, then the three `_PREV` deletes, then the full drift
   run; post `P5-REVOKED` and `P5-PAGERULES-FATE`.
 - [ ] 5.4 At migration runbook Phase 3 step 5 (after #12937 clears): the `CF_API_TOKEN_PURGE_PREV` revoke and delete.

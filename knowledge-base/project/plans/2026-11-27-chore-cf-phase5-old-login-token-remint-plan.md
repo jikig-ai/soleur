@@ -16,6 +16,37 @@ Ref #12931 (epic stays open; never `Closes`). Ref #12937 (release deploys blocke
 revoke). Draft PR #13084. Follow-ups filed at plan time: #13085 (rotate before the ~2027-02-20 expiry), #13086
 (`expires_on` warning in the drift script).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-27
+**Sections enhanced:** 9 (Runbook mint and revoke, Bootstrap identity and census, Operator Holds, Files to Edit, Guard
+Contract, Acceptance Criteria, Observability, Scope table, Tasks)
+**Agents used:** `soleur:engineering:review:security-sentinel`, `soleur:engineering:review:test-design-reviewer`,
+`soleur:engineering:research:best-practices-researcher` (Cloudflare account-owned tokens, official docs), a
+`standard`-tier verify-the-negative and attribution pass, `soleur:engineering:cto` (rulings F20, F21).
+
+### Key Improvements
+
+1. Policy read-back now accepts only exact resource keys (`com.cloudflare.api.account.zone.951ce525...` for zone
+   groups, `com.cloudflare.api.account.66d4f93f...` for account groups), so an account-wide zone grant fails.
+2. Every browser body returns only names, prefixes, counts and statuses; no trace/HAR/session capture flags; digests
+   are compared, never printed.
+3. AUDIT lives only where a consumer reads it (prd_terraform, dev); its other two old copies are deleted by hold
+   (CTO F20). New tokens are named `<key>-soleur-<YYYYMMDD>` and the revoke refuses a name match (CTO F21).
+4. The infra-security agent has three generated harness copies; the work phase regenerates them with the three sync
+   scripts and checks them with `--check`.
+5. The Guard Contract rows now name the code mutant each kills and assert refusal text; the `swap` order is observed
+   inside the write window by a logging stub.
+
+### New Considerations Discovered
+
+- Cloudflare docs list the account-token endpoints, `expires_on` and IP conditions, and open account-token creation
+  to API Token Provisioning members since 2026-10-01; they do not say whether zone groups are selectable on an
+  account token or whether GraphQL accepts one. The mint sitting's permission-group read and the post-swap
+  zone-tag query settle both.
+- The audit-log endpoints accept Account Settings Read, per the Cloudflare permissions reference.
+- Every cited issue, PR, rule id, learning path and label resolved live (verify pass, 2026-11-27).
+
 ## Overview
 
 Epic #12931 moved the soleur.ai zone to the Soleur Cloudflare account. Six user tokens owned by the old-account
@@ -200,19 +231,46 @@ Sections, in this order:
    final groups on #12931 (marker `P5-SCOPE`) before minting.
    - `CF_API_TOKEN_AUDIT`: account `GET /accounts/<acct>/logs/audit`, `/accounts/<acct>/audit_logs`,
      `/accounts/<acct>`, `/accounts/<acct>/alerting/v3/policies`; zone `settings`, `dns_records`,
-     `ssl/certificate_packs`, `firewall/rules`.
-   - `CF_API_TOKEN_ANALYTICS_READ`: `POST /graphql` (`httpRequestsAdaptiveGroups` on the zone). Owner mint.
-   - `CF_API_TOKEN_PAGERULES_READ`: `GET /zones/<zone>/pagerules?status=active`.
+     `ssl/certificate_packs`, `firewall/rules`. Candidate groups (Cloudflare permissions reference): account
+     Account Settings Read (the audit-log endpoints accept it) and Notifications Read; zone Zone Settings Read,
+     DNS Read, SSL and Certificates Read, Firewall Services Read.
+   - `CF_API_TOKEN_ANALYTICS_READ`: `POST /graphql` (`httpRequestsAdaptiveGroups` on the zone). Candidate group: zone
+     Analytics Read. Owner mint.
+   - `CF_API_TOKEN_PAGERULES_READ`: `GET /zones/<zone>/pagerules?status=active`. Candidate group: zone Page Rules
+     Read.
+   - The `P5-SCOPE` group set is an allowlist built from this table, never the old token's policies with groups
+     trimmed off; the old policies are read only to surface a consumer this table missed. Every group is a Read
+     group.
 5. **Mint** - account-owned on the Soleur account (`page.evaluate` POST `/api/v4/accounts/66d4f93f.../tokens` with
-   the session `x-atok`, the hand-off sink unchanged); a key whose group is missing for account tokens is minted
-   user-owned, recorded on #12931. After each mint, read the new token's policies back in the session: resources
-   name only `66d4f93f`/`951ce525` and the groups equal the `P5-SCOPE` comment, else delete that new token and
-   re-mint (CTO F9'). Then the hand-off's `_NEXT` write, digest compare, verify `true`/`active` (account endpoint
-   first), `shred`, `git status --porcelain` clean.
+   the session `x-atok`, the hand-off sink unchanged), named `<key>-soleur-<YYYYMMDD>`, `expires_on` equal to the
+   0a/0b expiry. A key whose group the account permission-group list lacks is minted user-owned, recorded on
+   #12931. Account-owned creation is open to API Token Provisioning members since Cloudflare's 2026-10-01 change,
+   who can grant only permissions they hold; whether zone groups are selectable on an account token and whether
+   GraphQL accepts one are unverified in the docs, so the permission-group read and the post-swap zone-tag query
+   settle them (a GraphQL refusal on the account-owned ANALYTICS token re-mints that key user-owned).
+   **Policy read-back** (CTO F9', tightened by the security review): pass only if every resource key is exactly
+   `com.cloudflare.api.account.zone.951ce525552201ec6c696b24251abed7` (zone groups) or
+   `com.cloudflare.api.account.66d4f93f7397f196544e9fe84c3557c2` (account groups, AUDIT only), with value `"*"` and
+   no `*` inside a key; every policy `effect=allow`; the group set equals `P5-SCOPE`. An account-scope resource
+   carrying zone groups (every zone in the account, including future ones) fails. On failure, delete that new token
+   and re-mint. **Browser bodies:** every `browser_run_code_unsafe` body returns only names, 8-character prefixes,
+   counts, statuses and `e.name`; the POST response, `result.value`, `x-atok` and the full id stay Node-local; mint
+   and policy read-back run in one body. Before the sitting, confirm the Playwright MCP config carries none of
+   `--save-trace`, `--save-har`, `--save-session`, `--save-video`; during it, call no `browser_network_request(s)`,
+   `browser_console_messages`, snapshot or screenshot. Then the hand-off's `_NEXT` write, a digest compare printed
+   as `digest=equal|differ` only (never the `sha256sum` output), verify `true`/`active` (account endpoint first),
+   `shred`, `git status --porcelain` clean. The owner's paste fallback for ANALYTICS is typed in the owner's own
+   terminal: `read -rs v; printf '%s' "$v" | doppler secrets set CF_API_TOKEN_ANALYTICS_READ_NEXT -p soleur -c prd_terraform --silent >/dev/null; unset v`
+   (never the `!` prefix, the chat or argv).
 6. **Stages and holds** - the hold lines below, verbatim, in order.
 7. **Revoke** - migration runbook revoke recipe steps 2-4 on prd_terraform `<KEY>_PREV`, run only on a `verify`
    line `SOLEUR_P5_REVOKE_READY key=<KEY>` printed in the same sitting with nothing written to that key since (CTO
-   F13). Step 4's key delete runs once per key after all three revokes (CTO F14). Closing check: the full
+   F13). The revoke body takes the pinned prefix, the `REVOKE_READY` `old_id` and `new_id` as literals, refuses
+   unless the first two are equal and differ from `new_id`, and refuses a dashboard match whose name equals the new
+   token's `<key>-soleur-<YYYYMMDD>` name (CTO F21). A user-owned fallback mint uses a login other than the
+   old-account owner; with none available, that mint stays a hold recorded on #12931 (CTO F21). Step 4's key delete
+   runs once per key after all three revokes (CTO F14). A later rotation of an account-owned token revokes it with
+   `DELETE /accounts/66d4f93f.../tokens/<id>`. Closing check: the full
    `bash scripts/check-cloudflare-token-drift.sh` run reports no DEAD `CF_API_TOKEN*` value; a DEAD row names a copy
    to delete, never a rotation. For PAGERULES, post the post-swap `pagerules-ssl` rule counts on #12931 (marker
    `P5-PAGERULES-FATE`): the deferred fate read.
@@ -237,16 +295,28 @@ the top holds everything a rotation changes (CTO F18):
 
 ```text
 # key                          | pinned old id | holders (project/config)
-CF_API_TOKEN_AUDIT             | dd6d1427      | soleur/prd_terraform soleur/dev soleur/dev_personal soleur/dev_scheduled
+CF_API_TOKEN_AUDIT             | dd6d1427      | soleur/prd_terraform soleur/dev
 CF_API_TOKEN_ANALYTICS_READ    | 5993721f      | soleur/prd_terraform
 CF_API_TOKEN_PAGERULES_READ    | 86aa993e      | soleur/prd_terraform
 ```
 
-Ids are non-secret 8-character prefixes. New account `66d4f93f7397f196544e9fe84c3557c2`, new zone
+Ids are non-secret 8-character prefixes. AUDIT's holders are only the configs with a named consumer (CTO F20):
+`prd_terraform` (`cloudflare-readonly.sh change-history`) and `dev` (`infra-security.md`); its old copies in
+`dev_personal` and `dev_scheduled` are deleted by hold before `verify`, so the census still finds exactly one old
+copy. New account `66d4f93f7397f196544e9fe84c3557c2`, new zone
 `951ce525552201ec6c696b24251abed7`; the old ids are refused as targets. Token identity helper: verify at
 `/accounts/66d4f93f.../tokens/verify` first, `/user/tokens/verify` as the fallback; a reply counts as a denial only
 when it is a JSON 400/401/403/404 with `success:false` (precedent `token_read`); `429`, `5xx` and transport failure
 are `unreachable`, never a verdict. Values pass `token_chars_ok` before any request and ride curl's stdin config.
+The prologue keeps the precedent's xtrace refusal (exit 78) and TLS-subversion `unset` line above the library
+`source`. Writes reuse the precedent `copy_secret` shape (source digest, stdin pipe into `doppler secrets set
+--silent`, destination digest, compare, `COPIED ... verified=digest` or `COPY_MISMATCH`). Census reads: list names
+with `doppler secrets --only-names` per config first, then `get` only a listed name; a failed list, or a failed get
+on a listed name, is `UNREADABLE`; `absent` means only a successful list without the name. No digest, length or
+prefix of a value is printed. Consumer reads print only their first verdict line, and the GraphQL zone-tag gate
+reuses the precedent `bearer_config` with a `data =` line and `--max-redirs 0`, discards the body after `jq`, and
+prints only `zone_tag=match|mismatch errors=<n>`, so no actor, IP or rule text reaches stdout or the gitignored
+`bootstrap-runs.jsonl`.
 
 | Stage | Class | Does | Satisfied when |
 |---|---|---|---|
@@ -301,6 +371,8 @@ verbatim with its `SOLEUR_BOOTSTRAP_IMPACT`/`ROLLBACK` lines. The `_NEXT` writes
 - Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_PAGERULES_READ` (groups per the `P5-SCOPE` comment, zone `951ce525` only, expiry equal to the 0a/0b expiry) in the signed-in dashboard session, then `LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_pagerules_read.tok" | doppler secrets set CF_API_TOKEN_PAGERULES_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
 - Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_AUDIT` (groups per the `P5-SCOPE` comment, account `66d4f93f` and zone `951ce525` only, same expiry), then `LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_audit.tok" | doppler secrets set CF_API_TOKEN_AUDIT_NEXT -p soleur -c prd_terraform --silent > /dev/null`
 - Hold: Operator-authorizes: owner mint of `CF_API_TOKEN_ANALYTICS_READ` (account-owned, groups per the `P5-SCOPE` comment, zone `951ce525` only, same expiry) through the hand-off or the owner's paste, then `LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_analytics_read.tok" | doppler secrets set CF_API_TOKEN_ANALYTICS_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
+- Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_AUDIT -p soleur -c dev_personal --yes > /dev/null` (CTO F20; rollback: copy prd_terraform `CF_API_TOKEN_AUDIT` back with the precedent `copy_secret` form)
+- Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_AUDIT -p soleur -c dev_scheduled --yes > /dev/null` (same)
 - Hold: Operator-authorizes: `bash <B> --stage swap --apply --plan-digest <D>`
 - Hold: Operator-authorizes: `bash <B> --stage holder-copies --apply --plan-digest <D>`
 - Hold: Operator-authorizes: revoke `CF_API_TOKEN_PAGERULES_READ` old id `86aa993e` by the revoke recipe step 3 `page.request.delete('https://dash.cloudflare.com/api/v4/user/tokens/<id>')`, signed in as the old-account-owner login, only after `bash <B> --stage verify` printed `SOLEUR_P5_REVOKE_READY key=CF_API_TOKEN_PAGERULES_READ old_id=86aa993e` in the same sitting
@@ -326,6 +398,12 @@ any gh-pages cert reissue, any old-zone write.
 ## Files to Edit
 
 - `plugins/soleur/agents/engineering/infra/infra-security.md` (ids, source line, verify fallback)
+- Generated copies of that agent, never hand-edited: `.grok/agents/soleur-engineering-infra-infra-security.md`,
+  `plugins/soleur/cursor/agents/soleur-engineering-infra-infra-security.md`,
+  `plugins/soleur/opencode/agents/engineering/infra/infra-security.md`, regenerated with
+  `bun plugins/soleur/scripts/sync-grok-agent-compat.ts`, `bun plugins/soleur/scripts/sync-cursor-name-map.ts` and
+  `bun plugins/soleur/scripts/sync-opencode-adapter.ts`, then each run again with `--check` (deepen pass: the
+  verify agent found the three copies)
 - `plugins/soleur/scripts/cloudflare-readonly.sh` (header comment only: expiry date)
 - `.github/workflows/scheduled-followthrough-sweeper.yml` (comment only)
 - `scripts/test-all.sh`, `scripts/lib/test-affected-paths.sh`, `scripts/suite-durations.tsv`,
@@ -407,10 +485,14 @@ logs:
   retention: "git history and the GitHub issue (indefinite)"
 discoverability_test:
   command: "bash knowledge-base/project/specs/feat-one-shot-12931-phase5-token-remint/bootstrap.sh --list"
-  expected_output: "stage=verify class=read"
+  expected_output: "stage=verify"
 ```
 
 ## Guard Contract
+
+Each matrix row names the input world and the code mutant it kills; a row passes on a correct bootstrap (the stage
+refuses with the named reason text) and goes red when its mutant is applied (`--mutants`). Every refusal asserts its
+message text, not only the exit code (test-design review, deepen pass).
 
 ### Guard 1 - the revoke never sees a live holder of the old value (`verify`'s census and `REVOKE_READY`)
 
@@ -420,25 +502,26 @@ the old value under that key's name except prd_terraform `<KEY>_PREV`.
 
 **Assembly.** One census function that `inventory` and `verify` call. It quantifies over (a) every config of every
 project the live `doppler projects`/`doppler configs` listing returns, never only the manifest or the inventory file,
-with a floor: `soleur` must list at least the manifest's configs; (b) the key's own name in each config; (c) the
-reference digest from the `SOLEUR_P5_REFERENCE` rule, recomputed at call time. A config that fails to list or read is
-`UNREADABLE`, never empty. Positive count: exactly one old hit, at `_PREV`.
+with a floor: `soleur` must list at least the manifest's configs; (b) the key's own name in each config, read
+list-then-get; (c) the reference digest from the `SOLEUR_P5_REFERENCE` rule, recomputed at call time. A failed list
+or a failed get of a listed name is `UNREADABLE`, never `absent`. Positive count: exactly one old hit, at `_PREV`.
 
 **Mutation matrix.**
 
-| # | Edit | Must |
-|---|---|---|
-| 1 | Config listing returns `[]` | `verify` fails (floor), no `REVOKE_READY` (own-dispatch vacuity) |
-| 2 | Every read returns nothing (`old_hits=0`) | `fail reason=census-blind` |
-| 3 | `dev` updated, `dev_scheduled` still old (second member after a compliant first) | `verify` fails naming `dev_scheduled` |
-| 4 | A non-manifest config (`soleur/prd_scheduled`) holds the old value under the key's name | `verify` fails naming it |
-| 5 | `swap` skipped: prd_terraform `<KEY>` still old | `verify` fails |
-| 6 | `<KEY>_PREV` overwritten with the new value (the #13080 order) | `source=none`, no `REVOKE_READY` |
-| 7 | One config's read errors | `UNREADABLE`, `verify` fails |
+| # | Input world | Must | Mutant killed |
+|---|---|---|---|
+| 1 | `doppler projects` answers `[]` | `fail reason=census-floor`, no `REVOKE_READY` | floor check deleted (own-dispatch vacuity) |
+| 2 | Compliant world; mutant hashes raw `get --plain` output (newline kept) | `fail reason=census-blind` | `old_hits==0` check deleted |
+| 3 | `dev` new, `dev_personal` still holds the old value (second member after a compliant first) | fail naming `soleur/dev_personal` | census `break` after the first compliant holder |
+| 4 | Project `other`, config `ci` (in no manifest) holds the old value under the key's name | fail naming `other/ci`; `holder-copies` writes nothing there | census loops over manifest configs only |
+| 5 | Compliant except `<KEY>` verifies a new id with `status=expired` | `fail reason=key-not-active` | active-status check dropped |
+| 6 | `<KEY>_PREV` holds the new value (the #13080 order) | `source=none`, no `REVOKE_READY` | reference taken from `_PREV` by name, not by pinned id |
+| 7 | One config's get on a listed name errors | `UNREADABLE`, fail | read error treated as `absent` |
 
-**Harness rows.** RED: a suite edit whose `doppler` stub answers every read with an empty value must red rows 2-4.
-Must-PASS (non-canonical): `dev_personal` already holding the new value before `holder-copies` (no write planned for
-it) plus an unrelated `CF_API_TOKEN_DNS_EDIT` in `dev`, reads `ok` with `REVOKE_READY`.
+**Harness rows.** RED: a suite edit whose `doppler` stub answers every `get` with an empty value must red rows 3 and
+4 (the refusal no longer names `soleur/dev_personal` / `other/ci`) and the must-PASS row. Must-PASS (non-canonical):
+`other/ci` holds the NEW value and one `soleur` config lacks the key (`absent`, not `UNREADABLE`): `ok` plus
+`REVOKE_READY`.
 
 **Anchor.** The pinned old id prefixes are committed literals answered by the vendor's verify endpoint, so a PR that
 edits both a reference and a holder cannot make an old value read as new.
@@ -448,38 +531,41 @@ edits both a reference and a holder cannot make an old value read as new.
 **Property.** `swap` never writes `<KEY>` unless, at that moment, `<KEY>_PREV` verifies the pinned old id.
 
 **Assembly.** One per-key write path inside `swap`; the `_PREV` check sits between the `_PREV` copy and the `<KEY>`
-write, and runs for every key of the manifest that has a `_NEXT`.
+write, and runs for every manifest key that has a `_NEXT`. The `doppler` stub logs each `set <KEY>` with
+`prev=<class of the _PREV value at that moment>`, so an order defect is observable inside the window.
 
 **Mutation matrix.**
 
-| # | Edit | Must |
-|---|---|---|
-| 1 | `<KEY>` is not the pinned old id and no `_PREV` exists | refuses, zero writes |
-| 2 | The `_PREV` copy does not read back equal | stops before the `<KEY>` write, `_NEXT` kept |
-| 3 | First key swaps, second key's `_PREV` copy fails (second member) | second key untouched, `_NEXT` kept |
-| 4 | Reorder: `<KEY>` write moved above the `_PREV` check | a case observing the store between the two writes reds |
-| 5 | Manifest parsed to zero keys | refuses (own-dispatch vacuity) |
+| # | Input world | Must | Mutant killed |
+|---|---|---|---|
+| 1 | `<KEY>` not the pinned id, no `_PREV` | refuse, zero writes | precondition check deleted |
+| 2 | `_PREV` exists holding a non-pinned value, `<KEY>` not pinned (value, not name) | refuse, zero writes | `_PREV` accepted by name |
+| 3 | The `_PREV` copy does not read back equal | stop before the `<KEY>` write, `_NEXT` kept | read-back compare deleted |
+| 4 | First key swaps, second key's `_PREV` copy fails (second member) | second key untouched, `_NEXT` kept | loop continues after a failed key |
+| 5 | Any swap | every `set <KEY>` log line reads `prev=old` | `<KEY>` write moved above the `_PREV` check (reorder) |
+| 6 | Manifest parsed to zero keys | refuse | empty-manifest pass (own-dispatch vacuity) |
 
-**Harness rows.** RED: a stub `set` that silently drops writes must red row 2. Must-PASS: a re-run after a completed
-swap plans `operations=0`.
+**Harness rows.** RED: a stub that corrupts the `<KEY>` write (not `_PREV`) must red row 3, because a `<KEY>` set
+appears in the log. Must-PASS: key 1 swapped in an earlier sitting, key 2 staged: writes key 2 only and key 1's
+`_PREV` is unchanged.
 
 ### Guard 3 - `holder-copies` writes only manifest holders that held the old value
 
-**Property.** `holder-copies` writes a holder only when that holder's value digest equals `<KEY>_PREV`'s.
+**Property.** `holder-copies` writes a holder only when that holder's value digest equals `<KEY>_PREV`'s, and refuses
+the whole stage before any write when a holder holds a third value or lacks the key.
 
-**Assembly.** One loop over the manifest holders of each key; each holder decided on its own digest.
+**Assembly.** One loop over the manifest holders of each key, preceded by a full classification pass; each holder is
+decided on its own digest.
 
 **Mutation matrix.**
 
-| # | Edit | Must |
-|---|---|---|
-| 1 | A holder holds a third value | refuses naming it, zero writes |
-| 2 | First holder old, second already new (second member) | writes only the first |
-| 3 | Run before `swap` | `PRECONDITION_FAILED need=swap` |
-| 4 | A holder absent | refuses naming it |
+| # | Input world | Must | Mutant killed |
+|---|---|---|---|
+| 1 | The last holder (`dev`) holds a third value, or lacks the key (parametrized) | refuse naming it, zero writes | write-as-you-go (no up-front classification) |
+| 2 | First holder old, second already new (second member) | writes only the first | write without the per-holder digest compare |
+| 3 | Run before `swap` | `PRECONDITION_FAILED need=swap` | precondition deleted |
 
-**Harness rows.** RED: a stub `get` that returns the `_PREV` value for every holder must red row 2's "already new"
-case. Must-PASS: every holder already new plans `operations=0`.
+**Harness rows.** RED: a stub `get` that returns the `_PREV` value for every holder must red row 2.
 
 ## Scope Check
 
@@ -535,7 +621,9 @@ case. Must-PASS: every holder already new plans `operations=0`.
   row red at its named step (each mutant `cmp`-differs from the control).
 - [ ] AC4 `grep -cE '5af02a2f|4d5ba6f0' plugins/soleur/agents/engineering/infra/infra-security.md` prints `0`; both
   new ids appear; `grep -c 'apps/web-platform/infra/main.tf'` on it prints `0`; `grep -c 'Ids (not secrets)'` and
-  `grep -c 'tokens/verify'` on it each print at least `1`, the latter including an `/accounts/` form.
+  `grep -c 'tokens/verify'` on it each print at least `1`, the latter including an `/accounts/` form. The same
+  `grep -cE '5af02a2f|4d5ba6f0'` prints `0` on each of the three generated copies, and the three sync scripts' `--check`
+  runs exit 0.
 - [ ] AC5 `grep -c '2027-02-07' plugins/soleur/scripts/cloudflare-readonly.sh` prints `0` and
   `grep -c 'expires_on' plugins/soleur/scripts/cloudflare-readonly.sh` prints at least `2`;
   `bash plugins/soleur/test/cloudflare-readonly.test.sh` and `bun test plugins/soleur/test/components.test.ts` pass.
