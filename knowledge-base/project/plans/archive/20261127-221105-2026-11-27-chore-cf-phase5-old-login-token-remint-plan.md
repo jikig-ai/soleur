@@ -644,7 +644,7 @@ decided on its own digest.
 - [x] AC7 `bash scripts/lint-orphan-test-suites.sh` passes with the new suite registered;
   `git diff --quiet origin/main...HEAD -- knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md`
   exits 0.
-- [ ] AC8 `gh issue view 12931 --comments | grep -c P5-TOKEN-FACTS` and
+- [x] AC8 `gh issue view 12931 --comments | grep -c P5-TOKEN-FACTS` and
   `gh issue view 12983 --comments | grep -c P5-GH-SECRET` each print at least `1`; the PR body carries
   `Ref #12931` and `Ref #12937` and no `Closes`/`Fixes` of either.
 - [x] AC9 `find <scratchpad> -name '*.tok' | wc -l` prints `0`, and
@@ -654,9 +654,10 @@ decided on its own digest.
 
 - [ ] AC10 Per key: `bash <B> --stage verify` prints `SOLEUR_P5_VERIFY key=<KEY> verdict=ok` and
   `SOLEUR_P5_REVOKE_READY key=<KEY>`. (No drift run here: CTO D3 moved the only drift run to AC11, after the revoke.)
-- [ ] AC11 Per old id: the revoke recipe read-back starts `success=false`; after the key delete, `--stage inventory`
-  shows no `<KEY>_PREV`; the full drift run exits 0; `gh issue view 12931 --comments | grep -c P5-REVOKED` prints at
-  least `1`.
+- [ ] AC11 Per old id: the runbook section 7 step 3 read-back prints `SOLEUR_P5_PREV key=<KEY> state=denied` (the
+  recipe's user-endpoint `success=false` read is not used, CTO D6); after the key delete, `--stage inventory` shows no
+  `<KEY>_PREV`; the full drift run exits 0; `gh issue view 12931 --comments | grep -c P5-REVOKED` prints at least `3`
+  (one per key).
 - [ ] AC12 `gh issue view 12931 --comments | grep -c P5-PAGERULES-FATE` prints at least `1` (the post-swap
   `pagerules-ssl` rule counts).
 - [ ] AC13 `CF_API_TOKEN_PURGE_PREV` is revoked only after Phase 3 step 5's share-revoke `200`, then its key deleted.

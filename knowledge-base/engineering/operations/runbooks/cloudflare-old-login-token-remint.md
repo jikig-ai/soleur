@@ -31,6 +31,13 @@ the stdin pipe form and the one-newline strip `LC_ALL=C awk 'NR>1{printf "\n"} {
 `Operator-authorizes:` marks a production act; it runs only on a typed go that names the exact command
 (`hr-menu-option-ack-not-prod-write-auth`). `Agent:` marks a read-only step the agent runs unprompted.
 
+Residuals (CTO ruling, fix round 4). A rollback, a revoke and its `P5-REVOKED` post, and a retire and its
+`P5-RETIRED` post each run start to finish in one sitting; a session that ends inside one stops that key until a
+CTO ruling (section 12 "Interrupted states"). A mint body interrupted before it returns (browser closed) can leave a
+token with no `P5-MINTED`: a same-day re-mint refuses `name-exists`, a mint on another day does not see it. A
+`.tok` left in an earlier session's scratchpad is outside the closing check. The author filter proves a record came
+from an operator-login session, not that a person typed it.
+
 ## 1. Orient
 
 Start here in a fresh session.
@@ -52,28 +59,43 @@ Start here in a fresh session.
    `SOLEUR_BOOTSTRAP_APPLY_COMMAND`. Relay the impact and rollback lines verbatim, and issue that printed command
    verbatim at the hold; `<D>` is its `--plan-digest` value. A plan that says `operations=0` is already done.
    `PRECONDITION_FAILED need=<stage>` means run that stage first.
-3. `Agent:` map the inventory rows to the next step, per key. Read the rows top to bottom and take the **first**
-   row whose conditions all hold; the last row catches every other state. Conditions read that key's lines from this
-   sitting's inventory and the records the section 7 lookup finds. "The pin" is the key's old id in section 2.
+3. `Agent:` map the inventory rows to the next step, per key. Read rows only from a run that printed
+   `SOLEUR_BOOTSTRAP_STAGE_OK stage=inventory`. Re-run inventory once in the same sitting when a run printed
+   `SOLEUR_BOOTSTRAP_STAGE_FAILED` (a `source=unknown`, `SOLEUR_P5_UNREADABLE`, `SOLEUR_P5_CENSUS_BLIND` or
+   `SOLEUR_P5_FLOOR_MISSING` line ends a run that way), or when a `STAGE_OK` run printed
+   `SOLEUR_P5_PREV key=<KEY> state=unreadable`; the same again: stop and post its marker lines on #12931 (section 12).
+   Then take the **first** row whose conditions all hold; the last row catches every other state.
+
+   Terms:
+   - The pin: the key's pinned id on its `# P5-MANIFEST` line in `<B>`. Section 2 and the section 6 hold lines
+     mirror it; a disagreement is a row 1 stop.
+   - KEY rows: the `SOLEUR_P5_HOLDER ... key=<KEY>` rows. The table never reads the `key=<KEY>_PREV` row; `_PREV` is
+     read only through `SOLEUR_P5_PREV`. TF: the prd_terraform KEY row. Manifest rows: the KEY rows of the configs
+     on the key's manifest line.
+   - Records: the section 7 lookup, keeping only `key=<KEY> pin=<the pin>` (`P5-REVOKED`: `old_id=<the pin>`). A
+     record without `pin=` is not a record.
+   - Open rollback: the newest `P5-ROLLBACK-START` with no `P5-RETIRED` whose `id8` is its `bad_id8`.
+   - Unheld mint: the newest `P5-MINTED` with no `P5-RETIRED` carrying its `id8`.
 
    | # | Inventory shows (per key) | Next step |
    |---|---|---|
-   | 1 | `SOLEUR_P5_UNREADABLE`, `SOLEUR_P5_CENSUS_BLIND`, `SOLEUR_P5_FLOOR_MISSING`, `SOLEUR_P5_REFERENCE source=unknown`, a manifest holder row `value=other` or `value=absent` (except the prd_terraform `<KEY>_PREV` row `value=revoked` of row 13), or a non-manifest config `value=old` other than the two AUDIT rows of row 3 | stop; see section 12 |
-   | 2 | a `P5-ROLLBACK-START` record for the key with no later `P5-ROLLBACK-DONE` record | resume the section 12 rollback from its step 1 (each step is safe to repeat) |
-   | 3 | `CF_API_TOKEN_AUDIT` row `SOLEUR_P5_HOLDER project=soleur config=dev_personal` or `config=dev_scheduled` `value=old` | the two AUDIT delete holds, before any other AUDIT step |
+   | 1 | a manifest row `value=other` or `value=absent`; `SOLEUR_P5_PREV state=malformed`; a non-manifest KEY row `value=old` other than the two AUDIT rows of row 3; or the pin in `<B>` differs from section 2 | stop; see section 12 |
+   | 2 | an open rollback | stop; section 12 "Interrupted states" |
+   | 3 | `CF_API_TOKEN_AUDIT` row `SOLEUR_P5_HOLDER project=soleur config=dev_personal` or `config=dev_scheduled` `value=old` | the two AUDIT delete holds |
    | 4 | `source=PREV` and `SOLEUR_P5_STAGED next=present` (an interrupted swap) | `swap` again: it finishes the copy or only deletes `_NEXT` |
-   | 5 | `source=KEY` and `SOLEUR_P5_PREV state=` anything but `absent` or an earlier rotation's revoked token (`denied`, with a `P5-REVOKED` record for that key whose `new_id` is the pin; `swap` overwrites it, CTO D6) | stop: `_PREV` holds something the next swap would overwrite; see section 12 |
-   | 6 | `source=KEY` and `SOLEUR_P5_STAGED next=present` | `swap` |
-   | 7 | `source=KEY` | Section 4 scope, then the section 5 mint |
-   | 8 | `source=PREV` and the prd_terraform `<KEY>` row `value=old` (after a finished section 12 rollback) | Section 5 mint for that key, then `swap` |
-   | 9 | `source=PREV` and a manifest holder row `value=old` | `holder-copies` |
-   | 10 | `source=PREV` and `verify` printed `SOLEUR_P5_REVOKE_READY key=<KEY>` in this sitting | section 7 revoke |
-   | 11 | `source=PREV` | `verify` |
-   | 12 | `source=none` and `SOLEUR_P5_STAGED next=present` | stop: a staged token no manifest pin tracks; post it on #12931 |
-   | 13 | `source=none`, `SOLEUR_P5_PREV state=denied`, and a `P5-REVOKED` record for that key whose `old_id` is the pin | that key's `_PREV` delete hold (section 7 step 6). The prd_terraform `<KEY>_PREV` row then reads `value=revoked` and `verify` prints `verdict=revoked`: both expected (CTO D6) |
-   | 14 | `source=none` and `SOLEUR_P5_PREV state=unreadable` | re-run inventory |
-   | 15 | `source=none` and `SOLEUR_P5_STAGED next=absent prev=absent` | done; run the section 7 closing check |
-   | 16 | anything else, for example `source=none` with `state=denied` and no record (something outside this runbook revoked the old token, a leak auto-revoke say) | stop; post it on #12931 |
+   | 5 | `SOLEUR_P5_STAGED next=absent`, TF `value=old`, and an unheld mint | section 12 "Unheld mint" |
+   | 6 | `source=KEY` and `SOLEUR_P5_PREV state=` anything but `absent`, or `denied` with a `P5-REVOKED` record for that key whose `new_id` is the pin (an earlier rotation's revoked token, which `swap` overwrites, CTO D6) | stop; see section 12 |
+   | 7 | `source=KEY` and `SOLEUR_P5_STAGED next=present` | `swap` |
+   | 8 | `source=KEY` | Section 4 scope, then the section 5 mint |
+   | 9 | `source=PREV`, TF `value=old`, and the newest `P5-ROLLBACK-START` has a `P5-RETIRED` with its `bad_id8` | Section 5 mint for that key, then `swap` |
+   | 10 | `source=PREV` and TF `value=old` | stop; section 12 "Interrupted states" (a lost or edited START) |
+   | 11 | `source=PREV` and a manifest row other than TF `value=old` | `holder-copies` |
+   | 12 | `source=PREV` and `verify` printed `SOLEUR_P5_REVOKE_READY key=<KEY>` in this sitting | section 7 revoke |
+   | 13 | `source=PREV` | `verify` |
+   | 14 | `source=none` and `SOLEUR_P5_STAGED next=present` | stop: a staged token no manifest pin tracks; post it on #12931 |
+   | 15 | `source=none`, `SOLEUR_P5_PREV state=denied`, and a `P5-REVOKED` record | that key's `_PREV` delete hold (section 7 step 6). The prd_terraform `<KEY>_PREV` row then reads `value=revoked` and `verify` prints `verdict=revoked`: both expected (CTO D6) |
+   | 16 | `source=none`, `SOLEUR_P5_STAGED next=absent prev=absent`, and a `P5-REVOKED` record | done; run the section 7 closing check |
+   | 17 | anything else, for example `source=none` with `state=denied` and no `P5-REVOKED` (a revoke this runbook ran whose record was never posted, or an outside revocation; inventory cannot tell them apart) | stop; section 12 "Interrupted states" |
 
    A row that names a step only routes to it: re-read that step's own precondition in the same sitting before
    acting on it.
@@ -230,7 +252,8 @@ endpoint). `verdict=no-read`, or no `success=true` line: stop; the read decided 
    or HAR records it). Any failure after the POST deletes every token of that name in the same body. It returns only
    the shapes in the browser returns table below: never the value, the atok or a full id.
 3. `Agent:` on `success:true` with an `id8`, and the sink's `result=written`, post on #12931 one comment whose first
-   line is `P5-MINTED key=<KEY> id8=<id8> name=<name> owner=<account|user>` (CTO D9). The swap go and the revoke
+   line is `P5-MINTED key=<KEY> pin=<the pin> id8=<id8> name=<name> owner=<account|user>` (CTO D9), before the
+   `_NEXT` write. The swap go and the revoke
    argument read the id and name from that record, not from memory.
 
 **Account-owned limits.** Since Cloudflare's 2026-10-01 change, API Token Provisioning members can create account
@@ -301,7 +324,7 @@ exist means a live token nothing holds: list it by name and delete it in the sam
 | `{refused:"groups",matches:<n>}` | only n of the asked names resolved to exactly one selectable group | re-read the groups (section 4); a group the account list lacks is the user-owned fallback |
 | `{refused:"listing"}` | the token list did not end within 20 pages | stop; post it on #12931 |
 | `{refused:"old-owner-login",matches:<n>}` | a user mint run under the old-account-owner login | sign in as another login |
-| `{refused:"name-exists",matches:<n>}` | a token with this exact name exists | list it by name; retire it (section 12) or mint on another day's name |
+| `{refused:"name-exists",matches:<n>}` | a token with this exact name exists | list it by name and retire it (section 12 "Unheld mint" form) |
 | `{status,contentType,success:false}` (no `id8`, no `refused`) | the groups read or the list failed | re-run with a new sink |
 | `{error:<name>}` | a throw before the POST | re-run with a new sink |
 
@@ -309,7 +332,7 @@ exist means a live token nothing holds: list it by name and delete it in the sam
 
 | Return | Meaning | Next |
 |---|---|---|
-| `{status,contentType,success:true,id8}` | minted, read-back passed, the sink answered `ok` | the `_NEXT` write, then post `P5-MINTED` |
+| `{status,contentType,success:true,id8}` | minted, read-back passed, the sink answered `ok` | post `P5-MINTED`, then the `_NEXT` write |
 | `{refused:"mint"\|"mint-shape"\|"readback"\|"sink",...,success:true,matches:0}` | the POST failed, gave no id or value, the stored policy differs, or the hand-off failed; the cleanup deleted every token of that name and id | new sink, re-mint |
 | the same with `success:false` | the cleanup could not prove the token gone: a token MAY exist that nothing holds | stop the mint; list it by name and retire it (section 12) before any re-mint |
 | `{error:<name>,...,success:true}` / `success:false` | a throw after the POST, cleanup as above | as the two rows above |
@@ -471,10 +494,10 @@ Closing check, `Agent:`
 Finding the records from a fresh session (only unedited comments by the operator's own login, newest first; CTO D9):
 
 ```bash
-me="$(gh api user --jq .login)" && gh api --paginate repos/jikig-ai/soleur/issues/12931/comments --jq ".[] | select(.user.login == \"$me\" and .created_at == .updated_at) | select(.body | test(\"^P5-(SCOPE|MINTED|REVOKED|ROLLBACK-START|ROLLBACK-DONE|PAGERULES-FATE|TOKEN-FACTS|BOOTSTRAP-POINTER)\"; \"m\")) | [.created_at, .html_url, (.body | split(\"\n\")[0])] | @tsv" | sort -r
+set -o pipefail; me="$(gh api user --jq .login)" && gh api --paginate repos/jikig-ai/soleur/issues/12931/comments --jq ".[] | select(.user.login == \"$me\" and .created_at == .updated_at) | select(.body | test(\"^P5-(SCOPE|MINTED|REVOKED|ROLLBACK-START|RETIRED|PAGERULES-FATE|TOKEN-FACTS|BOOTSTRAP-POINTER)\"; \"m\")) | [.created_at, .html_url, (.body | split(\"\n\")[0])] | @tsv" | sort -r
 ```
 
-Take the newest record per key. Two `P5-SCOPE` comments that disagree, a `P5-MINTED` whose `id8` differs from the
+Take the newest record per record type, key and pin. Two `P5-SCOPE` comments that disagree, a `P5-MINTED` whose `id8` differs from the
 swap plan's `new_id`, or no record where a step needs one: stop.
 
 ## 8. `CF_API_TOKEN_PURGE_PREV`
@@ -526,28 +549,40 @@ minted user-owned under the F17 fallback keeps the user forms.
 - Never revoke without a `SOLEUR_P5_REVOKE_READY` line from the same sitting.
 - A partial swap has no rollback: re-run `swap`, which resumes every partial state (CTO D8).
 - A completed swap whose new token is bad (for example `verify` `reason=consumer-read`), before the old token is
-  revoked. `Agent:` first post on #12931 one comment whose first line is
-  `P5-ROLLBACK-START key=<KEY> bad_id8=<bad id8>`; section 1 row 2 routes a later session back here until the
-  `P5-ROLLBACK-DONE` record of step 4 exists.
-  1. Undo `holder-copies`: for each manifest holder it wrote, the AUDIT rollback form in section 6 with
-     `<src>` = `<KEY>_PREV` and that holder's config.
+  revoked. It runs start to finish in one sitting. `Agent:` once this sitting's `verify` printed
+  `SOLEUR_P5_KEY key=<KEY> id=<id8>` for the newest `P5-MINTED`'s `id8`, post on #12931 one comment whose first line
+  is `P5-ROLLBACK-START key=<KEY> pin=<the pin> bad_id8=<id8> bad_name=<name> owner=<account|user>`, copied from that
+  `P5-MINTED`. Section 1 rows 2 and 10 stop a later session until step 4's `P5-RETIRED` exists.
+  1. Operator-authorizes, one go per holder write: undo `holder-copies` with, for each manifest holder it wrote, the
+     AUDIT rollback form in section 6 with `<src>` = `<KEY>_PREV` and that holder's config.
   2. `Agent:` run `bash <B> --stage inventory` and `bash <B> --stage verify`. Go on only when this sitting shows
      `source=PREV`, `SOLEUR_P5_STAGED key=<KEY> next=absent`, `SOLEUR_P5_PREV key=<KEY> state=pinned` and
-     `SOLEUR_P5_KEY key=<KEY> id=<the plan's new_id>`.
+     `SOLEUR_P5_KEY key=<KEY> id=<the START's bad_id8>`.
   3. Operator-authorizes: `set -o pipefail; doppler secrets get <KEY>_PREV -p soleur -c prd_terraform --plain | LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' | doppler secrets set <KEY> -p soleur -c prd_terraform --silent > /dev/null`,
      then `Agent:` the section 5 digest compare with `<KEY>` and `<KEY>_PREV` as the two reads; it must print
      `digest=equal`.
   4. Operator-authorizes: retire the bad token with `p5-revoke.js` (sha256=5a980691360666193bf4bbca8fda6e24fa781bb96a5ea06ad88f8cf52b2681da) and
-     `{"mode":"retire","pin":"<bad id8>","retire_name":"<its name>","scope":"<owner>"}` (plus `"account_id"` for
-     `account`). It deletes only the one token with that id prefix and that exact name, and refuses any of the old
-     pins. The value also stays in Doppler version history, which is why the token itself must go. On a repeat run,
-     `{matches:0}` under the owning login means the retire already ran. Then `Agent:` post on #12931 one comment
-     whose first line is `P5-ROLLBACK-DONE key=<KEY> bad_id8=<bad id8>`.
+     `{"mode":"retire","pin":"<bad_id8>","retire_name":"<bad_name>","scope":"<owner>"}` from the START record (plus
+     `"account_id"` for `account`). It deletes only the one token with that id prefix and that exact name, and
+     refuses any of the old pins. The value also stays in Doppler version history, which is why the token itself
+     must go. Only on `{status:200,...,success:true}` from that delete, `Agent:` post on #12931 one comment whose
+     first line is `P5-RETIRED key=<KEY> pin=<the pin> id8=<bad_id8>`. `{matches:0}` means the wrong login: sign in
+     as the owning login (the minting login for `user`; a login that lists account tokens for `account`) and re-run;
+     never close on `matches:0`. `success:false` or an error: stop.
   5. Re-mint that key (section 5; the user-owned form when the fault was a GraphQL refusal), then `swap`: it resumes
      from `source=PREV` with `<KEY>` back on the old token.
   After the revoke the old token is dead: fix forward.
 - A mint result whose row in the section 5 browser returns table says a token may exist: list it by name and retire
   it as in step 4 before any re-mint; a same-day re-mint otherwise refuses `name-exists`.
+- Unheld mint (section 1 row 5), in one sitting: Operator-authorizes: the `p5-revoke.js` (same sha256) retire
+  `{"mode":"retire","pin":"<id8>","retire_name":"<name>","scope":"<owner>"}` (plus `"account_id"` for `account`),
+  with the newest `P5-MINTED`'s fields. Only on `success:true`, `Agent:` post
+  `P5-RETIRED key=<KEY> pin=<the pin> id8=<id8>`. On `{matches:0}`, the owning login re-runs it; never close. Then
+  run the section 5 `.tok` closing check, re-run inventory and route again (section 1 row 8 or 9).
+- Interrupted states (section 1 rows 2, 10 and 17, and a second failed inventory run): stop. Post on #12931 the key's
+  inventory marker lines and the links to the relevant records. The next step is a reviewed change ruled by the CTO
+  agent: it either posts the missing closing record with a link to its decision-challenges row, or changes this
+  runbook. The operator is never asked which step ran; any act the ruling names still takes its typed go.
 - `verify` `reason=census-blind`, `census-unreadable` or `census-floor`, or any `SOLEUR_P5_UNREADABLE`,
   `SOLEUR_P5_CENSUS_BLIND` or `SOLEUR_P5_FLOOR_MISSING` line: stop. The census cannot see everything; do not revoke.
   A `FLOOR_MISSING` usually means the Doppler identity lists less than the one that measured the floor (a narrowed

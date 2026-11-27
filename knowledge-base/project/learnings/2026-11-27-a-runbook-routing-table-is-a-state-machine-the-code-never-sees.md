@@ -32,7 +32,14 @@ still found the defects in the seam between them:
 - Make every record a later session needs a posted, author-filtered GitHub comment (`P5-MINTED`, per-key
   `P5-REVOKED` posted before the next step), never a value held in an earlier tool result.
 - Walk the table as a state machine in review: list every reachable state (including each partial-failure and
-  each post-rollback state) and the row it matches; a state with no row or two contradicting rows is a finding.
+  each post-rollback state) and the row it matches.
+- After three fix rounds each found a new tie or gap, the class fix was an ordered first-match list ending in a
+  catch-all stop. Overlapping rows are then intended; the walk checks that each state's *first* match is the right
+  step and looks for a broad early row that hides later ones (round 4 found two: a holder row that, read to include
+  the `<KEY>_PREV` row, stopped the start state and looped every post-swap state).
+- Do not build cross-sitting resume logic into the table. A procedure that cannot prove its own closing state from
+  vendor evidence (a rollback, a revoke and its record) runs start to finish in one sitting; a later session that
+  finds it half-done stops for a ruling.
 - Pin duplicated lists with a parity row (plan holds == runbook holds), and pin committed browser bodies by HEAD blob
   equality, not by a hash file in the same directory.
 
@@ -41,6 +48,8 @@ still found the defects in the seam between them:
 When the code and the runbook are two halves, the suites test the code half and nothing tests the table. A routing
 table keyed on marker lines is a state machine: review it by enumerating states, not by reading rows, and re-walk it
 after every fix round, because a fix that adds a state (a rollback, a new refusal) adds a row the table may lack.
+Each record a row reads needs a closing record and a rotation marker (`pin=`), or a stale record from an earlier
+cycle captures every later one.
 
 ## Session Errors
 
@@ -84,6 +93,13 @@ after every fix round, because a fix that adds a state (a rollback, a new refusa
 18. **The verification pass's local affected-gate run was not completed** — Recovery: stopped by choice; CI's
     ready-run full battery is the gate, as agreed in-session. — Prevention: the fix-round reference now names the
     draft-light condition and the local runs owed before a PR is marked ready.
+19. **Fix round 3's first-match rewrite dropped "outside prd_terraform" from the holder-copies row and added
+    `value=absent` to the stop row**, so the always-printed `<KEY>_PREV` holder row stopped the start and looped
+    every post-swap state — Recovery: escalated 5-seat panel found it; a defined term (KEY rows only) fixed it. —
+    Prevention: a routing table defines the row set it reads before its first row.
+20. **The rollback-resume route added in round 3 could not pass its own step 2 gate after step 3** — Recovery: CTO
+    ruling B confined the rollback to one sitting. — Prevention: a resume route is walked from each intermediate
+    step, not only from step 1.
 
 ## Tags
 

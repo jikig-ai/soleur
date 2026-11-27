@@ -38,7 +38,7 @@ The work phase runs only reads and repository edits; every production act is an 
 - [x] 4.1 Run AC1-AC9 commands; run `cloudflare-readonly.test.sh`, `components.test.ts`, the new suite and its
   `--mutants`, `lint-orphan-test-suites.sh`, `actionlint`, markdownlint on every edited `.md`.
 - [x] 4.2 Confirm the migration runbook is untouched (`git diff --quiet origin/main...HEAD -- <runbook>`).
-- [ ] 4.3 PR body: `Ref #12931`, `Ref #12937`, the `## Operator Holds` list, follow-ups #13085 and #13086.
+- [x] 4.3 PR body: `Ref #12931`, `Ref #12937`, the `## Operator Holds` list, follow-ups #13085 and #13086.
 
 ## Phase 5: Post-merge (operator holds; each on its own typed go, except the batched mint go)
 
