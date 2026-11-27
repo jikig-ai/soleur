@@ -81,8 +81,9 @@ after every fix round, because a fix that adds a state (a rollback, a new refusa
     environment, not only a scrubbed one.
 17. **Plan Operator Holds drifted from runbook section 6 with no check** — Recovery: verbatim copy plus a parity row.
     — Prevention: any list that exists in two files gets a parity row in the same PR.
-18. **Nearly skipped the verification pass's affected-gate run** — Recovery: ran `gate-or-skip.sh`. — Prevention:
-    the fix-round reference names it; routed a reminder bullet.
+18. **The verification pass's local affected-gate run was not completed** — Recovery: stopped by choice; CI's
+    ready-run full battery is the gate, as agreed in-session. — Prevention: the fix-round reference now names the
+    draft-light condition and the local runs owed before a PR is marked ready.
 
 ## Tags
 

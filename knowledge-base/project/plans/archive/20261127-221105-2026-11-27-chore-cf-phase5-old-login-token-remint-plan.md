@@ -471,7 +471,7 @@ liveness_signal:
   what: "bootstrap verify line SOLEUR_P5_VERIFY key=<KEY> verdict=ok, plus the consumer read exit 0"
   cadence: "once per sitting, after swap and holder-copies; the daily scheduled-terraform-drift token_drift step then grades every CF_API_TOKEN* key"
   alert_target: "#12931 comment per sitting; token-drift DEAD-credential issue from scheduled-terraform-drift.yml"
-  configured_in: "knowledge-base/project/specs/feat-one-shot-12931-phase5-token-remint/bootstrap.sh; .github/workflows/scheduled-terraform-drift.yml"
+  configured_in: "knowledge-base/project/specs/archive/20261127-221105-feat-one-shot-12931-phase5-token-remint/bootstrap.sh; .github/workflows/scheduled-terraform-drift.yml"
 error_reporting:
   destination: "stage stdout markers SOLEUR_BOOTSTRAP_STAGE_FAILED / PRECONDITION_FAILED / SOLEUR_P5_VERIFY verdict=fail, and the run ledger bootstrap-runs.jsonl"
   fail_loud: "non-zero exit on every refusal; no stage exits 0 on an unreadable config, an unreachable verify or a census with zero hits"
@@ -495,7 +495,7 @@ logs:
   where: "bootstrap-runs.jsonl beside the script; #12931 comments"
   retention: "git history and the GitHub issue (indefinite)"
 discoverability_test:
-  command: "bash knowledge-base/project/specs/feat-one-shot-12931-phase5-token-remint/bootstrap.sh --list"
+  command: "bash knowledge-base/project/specs/archive/20261127-221105-feat-one-shot-12931-phase5-token-remint/bootstrap.sh --list"
   expected_output: "stage=verify"
 ```
 

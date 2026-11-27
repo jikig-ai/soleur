@@ -66,7 +66,7 @@ Start here in a fresh session.
    | `source=PREV` and every manifest holder `value=new` | `verify` |
    | `verify` printed `SOLEUR_P5_REVOKE_READY key=<KEY>` in this sitting | section 7 revoke |
    | `source=none`, `SOLEUR_P5_PREV state=denied`, and a `P5-REVOKED` record for that key and old id (section 7 lookup) | that key's `_PREV` delete hold (section 7 step 6). The prd_terraform `<KEY>_PREV` row then reads `value=revoked` and `verify` prints `verdict=revoked`: both expected (CTO D6) |
-   | `source=none` and `SOLEUR_P5_PREV state=denied` with neither | stop: something outside this runbook revoked the old token (a leak auto-revoke, say); post it on #12931 |
+   | `source=none`, `SOLEUR_P5_PREV state=denied`, and no `P5-REVOKED` record for that key and old id | stop: something outside this runbook revoked the old token (a leak auto-revoke, say); post it on #12931 |
    | `source=none` and `SOLEUR_P5_PREV state=` `other`, `malformed`, `unreadable` or `unreachable` | `unreachable` or `unreadable`: re-run inventory. Otherwise stop; see section 12 |
    | `source=none`, `SOLEUR_P5_STAGED next=absent prev=absent` | done; run the section 7 closing check |
    | `source=none` and `SOLEUR_P5_STAGED next=present` | stop: a staged token no manifest pin tracks; post it on #12931 |
