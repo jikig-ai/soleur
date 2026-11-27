@@ -405,7 +405,7 @@ _pbg_w_esc() {
 # `_diff_touches --pr-gated` arm), as ci-battery-gate-replay.sh derives its battery list — a new gated battery is
 # priced without any edit here. ART_READ_CAP bounds artifact reads inside the sweeper's hourly token budget, preflighted
 # by a rate_limit read. The whole-run mean and the queue-wait mean are printed, informational only.
-ART_READ_CAP=260   # ~= 20 qualifying runs x 13 artifact reads (1 listing + ~12 suite-timings-* zips); the old 60-read cap let only ~5 runs evidence, a structural NOT YET
+ART_READ_CAP=320   # ~= 20 qualifying runs x 16 artifact reads (1 listing + ~15 suite-timings-* zips at K=12+3); the old 60-read cap let only ~5 runs evidence, a structural NOT YET
 GATED_SUITES="$({ sed 's/[[:space:]]*#.*$//' "$HERE/../test-all.sh" | grep -oE 'skip_suite "[^"]+" "relevance"' | sed 's/skip_suite "//;s/" "relevance"//'; } | LC_ALL=C sort -u)" \
   || { echo "CANNOT ESTABLISH: no skip_suite relevance call sites in test-all.sh"; exit 3; }
 [ -n "$GATED_SUITES" ] || { echo "CANNOT ESTABLISH: no skip_suite relevance call sites in test-all.sh"; exit 3; }
