@@ -48,3 +48,12 @@
 - Suites: bootstrap 210/0 full, 127/0 mutants; browser 101/0 full, 25/0 mutants.
 - Floor gap from the fix agent (8 of 9 projects) closed with a names-only `doppler projects` read (`example-project`).
 - Review-round gate (`gate-or-skip.sh`): rc=1, ended `failed-before-budget`. Real red `lint-shell-capture-exit-live` (bootstrap floor capture) fixed; re-run 0 new findings. `apps/web-platform [unit]` reds (`agent-auth-failure-matcher`, `sandbox-network-access-runtime`) 60/60 in isolation (contention). Unmeasured suites covering this diff run directly: `test-affected-kb-consumers` 31/31, `test-affected-derive` 139/139, `lint-orphan-test-suites` clean.
+
+## Fix Round 1
+- Seats (report-only, at fd7b14bbb7): security, data-integrity, test-design, architecture, code-quality, pattern, agent-native. One P1 (post-revoke routing), the rest P2/P3; all fixed inline.
+- Ruled by CTO agent (D6): `SOLEUR_P5_PREV state=` from the two-endpoint read; `denied` is revoked only after a same-sitting `REVOKE_READY` or a `P5-REVOKED` record; swap refuses any `_PREV` that is not pinned, denied or absent.
+- Ruled by CTO agent (D7): `p5-mint.js` `owner` with `refuse_ids` for user mints; committed `p5-read.js`; paste fallback dropped.
+- Ruled by CTO agent (D8): no rollback for a partial swap; guarded `_PREV` over `<KEY>` copy plus `p5-revoke.js` `mode:"retire"` for a completed swap with a bad token.
+- Ruled by CTO agent (D9): `P5-MINTED` record; author-filtered, unedited-only lookups (REST `created_at == updated_at`, a verified field, in place of the unverified GraphQL one); data-only `JSON.parse` arguments.
+- Exemptions from the class env refusal: `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`, `GIT_PAGER`, `GIT_TERMINAL_PROMPT`, `GIT_CEILING_DIRECTORIES` (the agent session exports one; none affects the git reads).
+- Browser suite 220/0 full, 66/0 mutants (25 mutants killed); plan holds now a verbatim copy of runbook section 6 with a parity row.
