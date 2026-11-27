@@ -13,14 +13,18 @@ triggers:
 
 # Runbook: re-mint the old-login Cloudflare read tokens on the Soleur account
 
-Epic: #12931 (Ref only; this runbook never closes it). Plan:
-`knowledge-base/project/plans/2026-11-27-chore-cf-phase5-old-login-token-remint-plan.md`. Rulings:
-`knowledge-base/project/specs/feat-one-shot-12931-phase5-token-remint/decision-challenges.md`.
+Epic: #12931 (Ref only; this runbook never closes it). Plan: the file matching
+`knowledge-base/project/plans/**/*2026-11-27-chore-cf-phase5-old-login-token-remint-plan.md`. Rulings: the
+`decision-challenges.md` beside the bootstrap (section 1 resolves its directory; archive-kb moves both under
+`archive/`, so match by glob, never by a fixed path).
 
 This is the token slice of `## Phase 5 — cleanup PR (after Phase 3 verification)` in
 `cloudflare-account-migration.md` (the migration runbook). It replaces three read tokens that the old-account-owner
 login still owns. It also records where the other three old-login tokens live and when each one goes. The rest of
 Phase 5 waits for Phase 3 (tunnel re-home, #12958) and the release redeploy that #12937 blocks.
+
+The bootstrap the migration runbook's Phase 5 deletes is the archived cf-account-migration bootstrap; this runbook's
+`bootstrap.sh` is the standing rotation tool (CTO F18) and is never deleted by that cleanup (CTO D4).
 
 This runbook uses the migration runbook's `## Conventions` unchanged: the owner markers, no SSH, no secret on screen,
 the stdin pipe form and the one-newline strip `LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}'`.
@@ -40,27 +44,38 @@ Start here in a fresh session.
 
    On `verdict=stop`, stop. A shell variable does not survive between agent tool calls. Write the printed absolute
    path literally wherever a later line says `<B>`.
-2. `Agent:` run `bash <B> --list`, then `bash <B> --stage inventory`. Run each write stage per the
-   `soleur:operator-bootstrap` protocol: the plan run prints a digest `<D>` and the `SOLEUR_BOOTSTRAP_IMPACT` and
-   `SOLEUR_BOOTSTRAP_ROLLBACK` lines; relay them verbatim. A plan that says `operations=0` is already done.
+2. `Agent:` run `bash <B> --list`, then `bash <B> --stage inventory`. Read an inventory row only after the run
+   printed `SOLEUR_BOOTSTRAP_STAGE_OK stage=inventory`; a run that ends without it decided nothing, and a key with no
+   row is not `none`. Run each write stage per the `soleur:operator-bootstrap` protocol: the plan run (`bash <B>
+   --stage <stage>`) prints `SOLEUR_BOOTSTRAP_PLAN stage=<s> operations=<n> digest=<D>`, the
+   `SOLEUR_BOOTSTRAP_IMPACT` and `SOLEUR_BOOTSTRAP_ROLLBACK` lines, and the exact apply command on the line after
+   `SOLEUR_BOOTSTRAP_APPLY_COMMAND`. Relay the impact and rollback lines verbatim, and issue that printed command
+   verbatim at the hold; `<D>` is its `--plan-digest` value. A plan that says `operations=0` is already done.
    `PRECONDITION_FAILED need=<stage>` means run that stage first.
 3. `Agent:` map the inventory rows to the next step, per key:
 
-   | Inventory shows | Next step |
+   | Inventory shows (per key) | Next step |
    |---|---|
-   | `SOLEUR_P5_REFERENCE source=KEY` and the `swap` plan run shows nothing staged | Section 4 scope, then the section 5 mint |
-   | `source=KEY` and the `swap` plan run shows a staged `<KEY>_NEXT` | `swap` |
-   | `CF_API_TOKEN_AUDIT` row `value=old` in `soleur/dev_personal` or `soleur/dev_scheduled` | the two AUDIT delete holds |
+   | `SOLEUR_P5_REFERENCE source=KEY` and `SOLEUR_P5_STAGED next=absent` | Section 4 scope, then the section 5 mint |
+   | `source=KEY` and `SOLEUR_P5_STAGED next=present` | `swap` |
+   | `source=PREV` and `SOLEUR_P5_STAGED next=present` (an interrupted swap) | `swap` again: it finishes the copy or only deletes `_NEXT` |
+   | `CF_API_TOKEN_AUDIT` row `SOLEUR_P5_HOLDER project=soleur config=dev_personal` or `config=dev_scheduled` `value=old` | the two AUDIT delete holds |
    | `source=PREV` and a manifest holder row `value=old` outside prd_terraform | `holder-copies` |
    | `source=PREV` and every manifest holder `value=new` | `verify` |
    | `verify` printed `SOLEUR_P5_REVOKE_READY key=<KEY>` in this sitting | section 7 revoke |
-   | `source=none` and no `<KEY>_PREV` row | done; run the section 7 closing check |
-   | `source=none` and a `<KEY>_PREV` row | stop: `_PREV` does not hold the pinned old id; post it on #12931 |
-   | `SOLEUR_P5_UNREADABLE` or a holder row `value=other` | stop; see section 12 |
+   | `source=none`, `SOLEUR_P5_STAGED prev=present`, and that key's revoke read-back started `success=false` | that key's `_PREV` delete hold (section 7 step 5) |
+   | `source=none` and `SOLEUR_P5_STAGED prev=present`, with no `success=false` read-back on record | stop: `_PREV` does not verify the pinned old id and no revoke explains it; post it on #12931 |
+   | `source=none` and `SOLEUR_P5_STAGED prev=absent` | done; run the section 7 closing check |
+   | `SOLEUR_P5_UNREADABLE`, `SOLEUR_P5_CENSUS_BLIND`, `SOLEUR_P5_FLOOR_MISSING`, `SOLEUR_P5_REFERENCE source=unknown` or a holder row `value=other` | stop; see section 12 |
 
-4. Logins. The mint sitting needs a login that can mint account-owned tokens on the Soleur account. The revoke sitting
-   needs the old-account-owner login, which owns all six old tokens. The agent asks for the right login. It never
-   switches logins itself.
+4. Logins, in three sittings. A person signs in because each login needs its own password and second factor, which
+   the agent never holds:
+   1. Old-account-owner login: the section 4 read of the old tokens' policies (only the owning login lists them).
+   2. A login that can mint account-owned tokens on the Soleur account: the section 4 permission-group read, the
+      section 5 mints and the policy read-back.
+   3. Old-account-owner login again: the section 7 revokes.
+
+   The agent asks for the right login at each sitting. It never switches logins itself.
 
 ## 2. Facts
 
@@ -109,14 +124,16 @@ Also:
 | Key | Consumer | Endpoints read | Candidate permission groups |
 |---|---|---|---|
 | `CF_API_TOKEN_AUDIT` | `cloudflare-readonly.sh change-history`; the infra-security agent | Account: `GET /accounts/<acct>/logs/audit`, `/accounts/<acct>/audit_logs`, `/accounts/<acct>`, `/accounts/<acct>/alerting/v3/policies`. Zone: `settings`, `dns_records`, `ssl/certificate_packs`, `firewall/rules` | Account: Account Settings Read (the audit-log endpoints accept it), Notifications Read. Zone: Zone Settings Read, DNS Read, SSL and Certificates Read, Firewall Services Read |
-| `CF_API_TOKEN_ANALYTICS_READ` | `cloudflare-readonly.sh analytics-*` | `POST /graphql` (`httpRequestsAdaptiveGroups` on the zone) | Zone: Analytics Read. Owner mint. |
+| `CF_API_TOKEN_ANALYTICS_READ` | `cloudflare-readonly.sh analytics-*` | `POST /graphql` (`httpRequestsAdaptiveGroups` on the zone) | Zone: Analytics Read, plus Zone Read when the old token's policies carry it (`origin-tls-strict-flip.md` records the original grant as Analytics Read and Zone Read). Owner mint. |
 | `CF_API_TOKEN_PAGERULES_READ` | `cloudflare-readonly.sh pagerules-ssl` | `GET /zones/<zone>/pagerules?status=active` | Zone: Page Rules Read |
 
 Reconcile rule, at the mint sitting, before any mint:
 
 1. `Agent:` in the signed-in dashboard session, read the live account permission groups
    (`GET /api/v4/accounts/66d4f93f7397f196544e9fe84c3557c2/tokens/permission_groups`). Return names and 8-character
-   id prefixes only. Never type a group name from memory.
+   id prefixes only. Never type a group name from memory. The mint body (`p5-mint.js`) resolves each name to its full
+   id itself and refuses a name that matches no selectable group or more than one, so the prefixes are for the
+   record only.
 2. `Agent:` read the old token's policies (`GET /api/v4/user/tokens`). This lists only the signed-in login's own
    tokens, so it needs the old-account-owner login. Return group names and resource counts only.
 3. Re-scope to the new account and zone. Trim to the endpoints in this table.
@@ -129,18 +146,55 @@ off. The old policies are read only to surface a consumer this table missed. Eve
 
 Each mint is a hold in section 6. These are the rules every mint follows.
 
-**Before the sitting.** `Agent:` confirm the Playwright MCP config carries none of `--save-trace`, `--save-har`,
-`--save-session`, `--save-video`. During the sitting, call no `browser_network_request`, `browser_network_requests`,
-`browser_console_messages`, snapshot or screenshot.
+**Committed bodies (CTO D1).** The dashboard steps run committed code, never code written at the hold. Beside `<B>`:
+`p5-mint.js` (permission-group resolve, account-token POST, policy read-back, sink hand-off), `p5-revoke.js` (the
+guarded delete, section 7) and `p5-sink.py` (the 127.0.0.1 receiver), pinned by `p5-browser.sha256`:
+
+```text
+p5-mint.js sha256=d358583ec1db78adb924cc797cb63a5976c4d3f67a5ae940c158231049398b87
+p5-revoke.js sha256=be0159a2326912e50077cd06c76e6be0e4eb6275105e59d8969fc5035fe86d2b
+p5-sink.py sha256=288afd38c1374c1d9863c8689dabede606153d09a2e19ae111da6c561b02cdf8
+```
+
+Each JS file is one expression `(args) => async (page) => {...}` that takes a single JSON argument object. The
+agent never edits it: it checks the pins, wraps the file with the argument literal the hold names, and runs the
+result with Playwright MCP `browser_run_code_unsafe` (`filename:` the run file):
+
+```bash
+D="$(dirname <B>)"; (cd "$D" && sha256sum -c --quiet p5-browser.sha256) && mkdir -p "<repo>/.playwright-mcp" && { printf '('; cat "$D/p5-<x>.js"; printf ')(%s)\n' '<ARGS-JSON>'; } > "<repo>/.playwright-mcp/p5-<x>.run.js"
+```
+
+`<repo>` is the checkout root; `.playwright-mcp/` is gitignored. The tool echoes the code it ran, so an argument
+object carries only ids, names, dates and the sink URL, never a secret. Placeholders: `<YYYYMMDD>` is the mint date
+(UTC); `<scratchpad>` is the absolute path of this session's scratchpad directory.
+
+**Before the sitting.** `Agent:` confirm the Playwright MCP server the session uses carries none of `--save-trace`,
+`--save-har`, `--save-session`, `--save-video`: run `claude mcp get playwright` (and `claude mcp get
+plugin:soleur:playwright` for the plugin server) and read its args. During the sitting, call no
+`browser_network_request`, `browser_network_requests`, `browser_console_messages`, snapshot or screenshot.
 
 **Owner and name.** Account-owned on the Soleur account. Name `<key>-soleur-<YYYYMMDD>`, with `<key>` the lowercase key
-name (for example `cf_api_token_audit-soleur-20261204`). `expires_on` equal to the 0a/0b expiry.
+name (for example `cf_api_token_audit-soleur-20261204`). `expires_on` equal to the 0a/0b expiry, read with:
 
-**Form.** The migration runbook's `### 0a and 0b: mint the new-account tokens` hand-off, with one change: the
-`page.evaluate` POST goes to `/api/v4/accounts/66d4f93f7397f196544e9fe84c3557c2/tokens` with the session `x-atok`. The
-`page.request.post` sink to `127.0.0.1` and its mode-0600 file in the session scratchpad stay unchanged. Mint and
-policy read-back run in one `browser_run_code_unsafe` body. The body returns only names, 8-character prefixes, counts,
-statuses and `e.name`. The POST response, `result.value`, `x-atok` and the full id stay Node-local.
+```bash
+doppler run -p soleur -c prd_terraform --no-fallback --only-secrets CF_API_TOKEN_PURGE -- bash -c '(LC_ALL=C; case "$CF_API_TOKEN_PURGE" in ""|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "refused: bad shape"; exit 1; }; printf "header = \"Authorization: Bearer %s\"\n" "$CF_API_TOKEN_PURGE" | curl --disable --noproxy "*" -sS --max-time 30 --config - https://api.cloudflare.com/client/v4/user/tokens/verify' | jq -r '"success=\(.success) expires_on=\(.result.expires_on // "none")"'
+```
+
+It prints only `success=` and `expires_on=` for the 0b `CF_API_TOKEN_PURGE` (a user token, so the user endpoint).
+
+**Form.** Per key, in the mint sitting:
+
+1. `Agent:` start the sink in the background, before the mint:
+   `python3 -I "$(dirname <B>)/p5-sink.py" --out "<scratchpad>/<key>.tok"`. It prints
+   `SOLEUR_P5_SINK url=http://127.0.0.1:<port>/<nonce>`, then exactly one result line: `result=written` (exit 0),
+   `result=refused reason=<r>` (exit 1 or 2) or `result=timeout` (exit 3). It accepts one POST from 127.0.0.1 with
+   no `Origin` header, writes the value to a new mode-0600 file and never prints it.
+2. The mint hold (section 6) runs `p5-mint.js` with the argument object the hold names. The body reads the permission
+   groups, refuses an existing token of the same name, POSTs the token with the session `x-atok`, reads the stored
+   policy back, and only then hands the value to the sink by a Node-side `fetch` (never `page.request`, so no trace
+   or HAR records it). Any failure after the POST deletes the new token in the same body. It returns only
+   `{atok:false}`, `{refused:<r>[,matches]}`, `{status,contentType,success[,id8]}` or `{error:<name>[,...]}`: never
+   the value, the atok or a full id.
 
 **Account-owned limits.** Since Cloudflare's 2026-10-01 change, API Token Provisioning members can create account
 tokens, and can grant only permissions they hold. The docs do not say whether zone groups are selectable on an
@@ -149,38 +203,40 @@ A key whose group the account list lacks is minted user-owned and recorded on #1
 account-owned ANALYTICS token re-mints that key user-owned. A user-owned fallback uses a login other than the
 old-account owner; with none available, that mint stays a hold, recorded on #12931 (CTO F21).
 
-**Policy read-back** (CTO F9'). Pass only if all of these hold:
+**Policy read-back** (CTO F9'), checked inside `p5-mint.js`. It passes only if all of these hold:
 
 - every resource key is exactly `com.cloudflare.api.account.zone.951ce525552201ec6c696b24251abed7` (zone groups) or
   `com.cloudflare.api.account.66d4f93f7397f196544e9fe84c3557c2` (account groups, AUDIT only);
 - every resource value is `"*"`, and no key contains `*`;
 - every policy has `effect=allow`;
-- the group set equals the `P5-SCOPE` set for that key.
+- the group set equals the `P5-SCOPE` set for that key, and the name, expiry and status read back as sent.
 
 An account-scope resource that carries zone groups fails: it grants every zone in the account, including future ones.
-On any failure, delete that new token in the same session and re-mint. Nothing reaches Doppler first.
+On any failure the body deletes the new token and returns `refused:"readback"`; re-mint. Nothing reaches Doppler first.
 
 **After the mint.** The `_NEXT` write is the hold's own command. Then, `Agent:`
 
-1. Compare digests, printing only the verdict:
+1. Compare digests, printing only the verdict. Both reads must succeed and be non-empty:
 
    ```bash
-   a="$(doppler secrets get <KEY>_NEXT -p soleur -c prd_terraform --plain | LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' | sha256sum)"; b="$(LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/<key>.tok" | sha256sum)"; if [[ "$a" == "$b" ]]; then echo digest=equal; else echo digest=differ; fi; unset a b
+   set -o pipefail; e="$(printf '' | sha256sum)"; a="$(doppler secrets get <KEY>_NEXT -p soleur -c prd_terraform --plain | LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' | sha256sum)" || a=fail; b="$(LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/<key>.tok" | sha256sum)" || b=fail; if [[ "$a" == fail || "$b" == fail || "$a" == "$e" || "$b" == "$e" ]]; then echo digest=unreadable; elif [[ "$a" == "$b" ]]; then echo digest=equal; else echo digest=differ; fi; unset a b e
    ```
 
-   Expected: `digest=equal`. Never print the `sha256sum` output.
-2. Verify the token at the account endpoint first (the user endpoint only for a user-owned fallback):
+   Expected: `digest=equal`. `unreadable` or `differ`: stop. Never print the `sha256sum` output.
+2. Verify the token at the account endpoint first (the user endpoint only for a user-owned fallback). The value is
+   shape-checked before it reaches a header:
 
    ```bash
-   doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer %s\n" "$<KEY>_NEXT" \
-     | curl --disable --noproxy "*" -sS --max-time 30 --header @- https://api.cloudflare.com/client/v4/accounts/66d4f93f7397f196544e9fe84c3557c2/tokens/verify' \
-     | jq -r '"success=\(.success) status=\(.result.status // "none")"'
+   doppler run -p soleur -c prd_terraform --no-fallback --only-secrets <KEY>_NEXT -- bash -c 'v="$<KEY>_NEXT"; (LC_ALL=C; case "$v" in ""|*[!A-Za-z0-9._~+/=-]*) exit 1;; esac) || { echo "refused: bad shape"; exit 1; }; printf "header = \"Authorization: Bearer %s\"\n" "$v" | curl --disable --noproxy "*" -sS --max-time 30 --config - https://api.cloudflare.com/client/v4/accounts/66d4f93f7397f196544e9fe84c3557c2/tokens/verify' | jq -r '"success=\(.success) status=\(.result.status // "none")"'
    ```
 
    Expected: `success=true status=active`. An account-owned token is unknown to `/user/tokens/verify`; never read that
    alone as dead.
-3. `shred -u "<scratchpad>/<key>.tok"`.
-4. `git status --porcelain` in the main checkout and in the worktree. Expected: no new untracked file.
+3. Delete the `.tok` file on EVERY path, the stop paths included (a refused digest, a failed verify, a refused
+   read-back): `shred -u "<scratchpad>/<key>.tok" 2>/dev/null || rm -P "<scratchpad>/<key>.tok" 2>/dev/null || rm -f "<scratchpad>/<key>.tok"`
+   (stock macOS has no `shred`).
+4. Closing check of the sitting: `find "<scratchpad>" -name '*.tok' | grep -c .` prints `0`, and
+   `git status --porcelain --ignored | grep -c '\.tok$'` prints `0` in the main checkout and in the worktree.
 
 **ANALYTICS paste fallback.** If the hand-off fails for the owner mint, the owner types the value in the owner's own
 terminal, never in the chat, never with the `!` prefix and never in argv. The ANALYTICS mint hold covers it:
@@ -195,29 +251,66 @@ The bootstrap's stages are `inventory` (read), `swap` (write), `holder-copies` (
 copies `<KEY>` to `<KEY>_PREV`, reads it back by digest, then copies `<KEY>_NEXT` to `<KEY>`, reads it back, and only
 then deletes `<KEY>_NEXT`. `holder-copies` writes prd_terraform `<KEY>` to each manifest holder that still holds the
 old value. `verify` prints `SOLEUR_P5_VERIFY key=<KEY> verdict=ok|fail reason=<r>` and, on `ok`,
-`SOLEUR_P5_REVOKE_READY key=<KEY> old_id=<pinned> new_id=<8>`. No stage calls the dashboard, deletes a token, or writes
-`soleur-infra-privileged`.
+`SOLEUR_P5_REVOKE_READY key=<KEY> old_id=<pinned> new_id=<8> owner=<account|user>`. No stage calls the dashboard,
+deletes a token, or writes `soleur-infra-privileged`. The bootstrap runs only committed helper bytes (a working-tree
+edit to a tool it runs is `SOLEUR_P5_UNTRUSTED_FILE`), and refuses a redirecting environment (a git location
+variable, `DOPPLER_API_HOST`, or an exported function named like a tool it calls: `SOLEUR_P5_ENV_REFUSED`, exit 64).
+
+### Markers
+
+Names, 8-character ids, classes and exit codes only; never a value or a digest.
+
+| Marker | Stage | Meaning |
+|---|---|---|
+| `SOLEUR_P5_REFERENCE key= source=KEY\|PREV\|none\|unknown` | inventory, verify | where the pinned old id was found; `unknown` = no verdict, re-run |
+| `SOLEUR_P5_STAGED key= next= prev=` | inventory | whether `<KEY>_NEXT` and `<KEY>_PREV` exist (`present`/`absent`) |
+| `SOLEUR_P5_HOLDER project= config= key= value=old\|new\|other\|absent` | inventory, verify | one census row per config holding the key name |
+| `SOLEUR_P5_CENSUS key= configs_read= old_hits=` | inventory, verify | census totals |
+| `SOLEUR_P5_CENSUS_BLIND key= source=` | inventory | the reference could not be read, so the census decided nothing |
+| `SOLEUR_P5_FLOOR_MISSING name=` / `SOLEUR_P5_CENSUS_FLOOR verdict=fail reason=floor-missing` | inventory, verify | the listing lacks a project or config of the committed floor (CTO D2) |
+| `SOLEUR_P5_UNREADABLE project= config= [name=]` | inventory, verify | a listed config or name could not be read; never `absent` |
+| `SOLEUR_P5_KEY key= id= status= owner=` | verify | the current `<KEY>` token's identity |
+| `SOLEUR_P5_CONSUMER key= sub= gating= rc= line=` / `SOLEUR_P5_GRAPHQL key= zone_tag= errors=` | verify | the consumer read and the ANALYTICS zone-tag gate |
+| `SOLEUR_P5_HOLDER_NOT_NEW key= holder= value=` | verify | a manifest holder does not hold the new value |
+| `SOLEUR_P5_OLD_HOLDER key= holder=` | verify | a config other than prd_terraform `_PREV` still holds the old value |
+| `SOLEUR_P5_VERIFY key= verdict=ok\|fail reason=` | verify | per-key verdict; a final `SOLEUR_P5_VERIFY verdict=` line covers all keys |
+| `SOLEUR_P5_REVOKE_READY key= old_id= new_id= owner=` | verify | the only line that admits a revoke, in the same sitting |
+| `SOLEUR_P5_SWAPPED key= staging=deleted verified=digest` | swap | the key holds the new token and `_NEXT` is gone |
+| `SOLEUR_P5_PREV_NOT_PINNED`, `SOLEUR_P5_PREV_LIVE`, `SOLEUR_P5_KEY_UNEXPECTED`, `SOLEUR_P5_NEXT_NOT_DISTINCT`, `SOLEUR_P5_SWAP_MISMATCH`, `SOLEUR_P5_DELETE_NOT_CONFIRMED` | swap | refusals: `_PREV` not the old token; `_PREV` holds a live non-pinned token; `<KEY>` neither old nor staged; `_NEXT` equals another `CF_API_TOKEN*` key; a copy did not read back; a delete did not take |
+| `SOLEUR_P5_COPIED` / `SOLEUR_P5_COPY_MISMATCH` / `SOLEUR_P5_HOLDER_COPY` / `SOLEUR_P5_HOLDER_REFUSED` | swap, holder-copies | a digest-verified copy, a failed one, a planned holder copy, a holder not written |
+| `SOLEUR_P5_TOKEN_MALFORMED` / `SOLEUR_P5_TOKEN_UNREACHABLE` | any | a value that is not a token shape; a verify read with no verdict (429, 5xx, transport): re-run, never re-mint |
+| `SOLEUR_P5_MANIFEST_INVALID line= reason=` / `SOLEUR_P5_MANIFEST_EMPTY` | any | the manifest block does not parse; fix it in a reviewed PR |
+
+`verify` `reason=` values, in the order it checks them: `unreachable` (re-run), `key-malformed`, `key-unreadable`,
+`key-not-verified`, `key-not-active`, `key-is-old` (the swap has not run), `next-staged` (run `swap`), `no-reference`,
+`prev-not-active`, `target-ids-not-new`, `consumer-read`, `census-floor`, `census-unreadable`, `old-holder` (run
+`holder-copies`, or decide that holder), `census-blind`, `holder-not-new` (run `holder-copies`). Every reason other
+than `unreachable` and the three that name a stage to run is a stop: see section 12.
 
 Each line below runs only after the operator's typed go naming that exact command in the session
 (`hr-menu-option-ack-not-prod-write-auth`). One typed go may quote all three mint commands together, each named in
 full; every other line takes its own go. Bootstrap applies run from a `main` checkout after merge. `<B>` is the path
-section 1 printed. `<D>` is the digest the stage's plan run prints, relayed verbatim with its `SOLEUR_BOOTSTRAP_IMPACT`
-and `SOLEUR_BOOTSTRAP_ROLLBACK` lines. The `_NEXT` writes are the migration runbook's `### 0a and 0b` hand-off step 2
-command with `<KEY>` substituted. Each mint go cites the #12931 `P5-SCOPE` comment. In order:
+section 1 printed. A bootstrap apply is the command its plan run printed after `SOLEUR_BOOTSTRAP_APPLY_COMMAND` in
+this sitting, issued verbatim, with the `SOLEUR_BOOTSTRAP_IMPACT` and `SOLEUR_BOOTSTRAP_ROLLBACK` lines relayed first.
+A mint hold names the `p5-mint.js` argument object in full; `<groups>` is that key's `P5-SCOPE` list, `<expiry>` the
+`expires_on` read in section 5, and `<sink>` the `SOLEUR_P5_SINK url=` the sink printed. Each mint go cites the
+#12931 `P5-SCOPE` comment. The swap go quotes, per key, the `new_id=` and `owner=` on the plan's
+`copy-staged-token` operation line; they must equal the `id8` the mint returned (CTO D5). A revoke hold's `pin` is the
+key's pinned id in the bootstrap's `# P5-MANIFEST` block (today `86aa993e`, `dd6d1427`, `5993721f`). In order:
 
-- Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_PAGERULES_READ` (groups per the `P5-SCOPE` comment, zone `951ce525` only, expiry equal to the 0a/0b expiry) in the signed-in dashboard session, then `LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_pagerules_read.tok" | doppler secrets set CF_API_TOKEN_PAGERULES_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
-- Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_AUDIT` (groups per the `P5-SCOPE` comment, account `66d4f93f` and zone `951ce525` only, same expiry), then `LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_audit.tok" | doppler secrets set CF_API_TOKEN_AUDIT_NEXT -p soleur -c prd_terraform --silent > /dev/null`
-- Hold: Operator-authorizes: owner mint of `CF_API_TOKEN_ANALYTICS_READ` (account-owned, groups per the `P5-SCOPE` comment, zone `951ce525` only, same expiry) through the hand-off or the owner's paste, then `LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_analytics_read.tok" | doppler secrets set CF_API_TOKEN_ANALYTICS_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
-- Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_AUDIT -p soleur -c dev_personal --yes > /dev/null` (CTO F20; rollback: copy prd_terraform `CF_API_TOKEN_AUDIT` back with the precedent `copy_secret` form)
-- Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_AUDIT -p soleur -c dev_scheduled --yes > /dev/null` (same)
-- Hold: Operator-authorizes: `bash <B> --stage swap --apply --plan-digest <D>`
-- Hold: Operator-authorizes: `bash <B> --stage holder-copies --apply --plan-digest <D>`
-- Hold: Operator-authorizes: revoke `CF_API_TOKEN_PAGERULES_READ` old id `86aa993e` by the revoke recipe step 3 `page.request.delete('https://dash.cloudflare.com/api/v4/user/tokens/<id>')`, signed in as the old-account-owner login, only after `bash <B> --stage verify` printed `SOLEUR_P5_REVOKE_READY key=CF_API_TOKEN_PAGERULES_READ old_id=86aa993e` in the same sitting
-- Hold: Operator-authorizes: revoke `CF_API_TOKEN_AUDIT` old id `dd6d1427` by `page.request.delete('https://dash.cloudflare.com/api/v4/user/tokens/<id>')`, only after a same-sitting `SOLEUR_P5_REVOKE_READY key=CF_API_TOKEN_AUDIT old_id=dd6d1427`
-- Hold: Operator-authorizes: revoke `CF_API_TOKEN_ANALYTICS_READ` old id `5993721f` by `page.request.delete('https://dash.cloudflare.com/api/v4/user/tokens/<id>')`, only after a same-sitting `SOLEUR_P5_REVOKE_READY key=CF_API_TOKEN_ANALYTICS_READ old_id=5993721f`
-- Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_PAGERULES_READ_PREV -p soleur -c prd_terraform --yes > /dev/null` (revoke recipe step 4, only on a read-back that starts `success=false`)
-- Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_AUDIT_PREV -p soleur -c prd_terraform --yes > /dev/null` (same condition)
-- Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_ANALYTICS_READ_PREV -p soleur -c prd_terraform --yes > /dev/null` (same condition)
+- Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_PAGERULES_READ`: `p5-mint.js` (sha256=d358583ec1db78adb924cc797cb63a5976c4d3f67a5ae940c158231049398b87) with `{"account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_pagerules_read-soleur-<YYYYMMDD>","zone_groups":<groups>,"account_groups":[],"expires_on":"<expiry>","sink_url":"<sink>"}`, then `LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_pagerules_read.tok" | doppler secrets set CF_API_TOKEN_PAGERULES_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
+- Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_AUDIT`: `p5-mint.js` (same sha256) with `{"account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_audit-soleur-<YYYYMMDD>","zone_groups":<zone groups>,"account_groups":<account groups>,"expires_on":"<expiry>","sink_url":"<sink>"}`, then `LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_audit.tok" | doppler secrets set CF_API_TOKEN_AUDIT_NEXT -p soleur -c prd_terraform --silent > /dev/null`
+- Hold: Operator-authorizes: owner mint of `CF_API_TOKEN_ANALYTICS_READ` (account-owned): `p5-mint.js` (same sha256) with `{"account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_analytics_read-soleur-<YYYYMMDD>","zone_groups":<groups>,"account_groups":[],"expires_on":"<expiry>","sink_url":"<sink>"}` or the owner's paste (section 5), then `LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_analytics_read.tok" | doppler secrets set CF_API_TOKEN_ANALYTICS_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
+- Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_AUDIT -p soleur -c dev_personal --yes > /dev/null` (CTO F20), only after a `bash <B> --stage inventory` run in this sitting printed `SOLEUR_P5_HOLDER project=soleur config=dev_personal key=CF_API_TOKEN_AUDIT value=old`. Rollback (that row proved the deleted value is the old token): `doppler secrets get CF_API_TOKEN_AUDIT -p soleur -c prd_terraform --plain | LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' | doppler secrets set CF_API_TOKEN_AUDIT -p soleur -c dev_personal --silent > /dev/null` before the swap, or the same with `CF_API_TOKEN_AUDIT_PREV` as the source after it
+- Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_AUDIT -p soleur -c dev_scheduled --yes > /dev/null`, only after a same-sitting row `SOLEUR_P5_HOLDER project=soleur config=dev_scheduled key=CF_API_TOKEN_AUDIT value=old`; rollback as above with `-c dev_scheduled`
+- Hold: Operator-authorizes: `bash <B> --stage swap --apply --plan-digest <D>` (the printed apply command)
+- Hold: Operator-authorizes: `bash <B> --stage holder-copies --apply --plan-digest <D>` (the printed apply command)
+- Hold: Operator-authorizes: revoke `CF_API_TOKEN_PAGERULES_READ` old id `86aa993e`: `p5-revoke.js` (sha256=be0159a2326912e50077cd06c76e6be0e4eb6275105e59d8969fc5035fe86d2b) with `{"pin":"86aa993e","old_id":"<old_id>","new_id":"<new_id>","new_name":"cf_api_token_pagerules_read-soleur-<YYYYMMDD>","scope":"user"}`, signed in as the old-account-owner login, only after `bash <B> --stage verify` printed `SOLEUR_P5_REVOKE_READY key=CF_API_TOKEN_PAGERULES_READ old_id=86aa993e` in the same sitting (`<old_id>` and `<new_id>` copied from that line)
+- Hold: Operator-authorizes: revoke `CF_API_TOKEN_AUDIT` old id `dd6d1427`: `p5-revoke.js` (same sha256) with `{"pin":"dd6d1427","old_id":"<old_id>","new_id":"<new_id>","new_name":"cf_api_token_audit-soleur-<YYYYMMDD>","scope":"user"}`, only after a same-sitting `SOLEUR_P5_REVOKE_READY key=CF_API_TOKEN_AUDIT old_id=dd6d1427`
+- Hold: Operator-authorizes: revoke `CF_API_TOKEN_ANALYTICS_READ` old id `5993721f`: `p5-revoke.js` (same sha256) with `{"pin":"5993721f","old_id":"<old_id>","new_id":"<new_id>","new_name":"cf_api_token_analytics_read-soleur-<YYYYMMDD>","scope":"user"}`, only after a same-sitting `SOLEUR_P5_REVOKE_READY key=CF_API_TOKEN_ANALYTICS_READ old_id=5993721f`
+- Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_PAGERULES_READ_PREV -p soleur -c prd_terraform --yes > /dev/null` (only after that key's revoke read-back, section 7 step 4, started `success=false`)
+- Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_AUDIT_PREV -p soleur -c prd_terraform --yes > /dev/null` (same condition, for that key)
+- Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_ANALYTICS_READ_PREV -p soleur -c prd_terraform --yes > /dev/null` (same condition, for that key)
 - Hold: Operator-authorizes: revoke `CF_API_TOKEN_PURGE_PREV` (`9e4ce00e`) with the migration runbook revoke recipe on prd_terraform `CF_API_TOKEN_PURGE_PREV`, at its Phase 3 step 5 only (after the release redeploy that #12937 blocks and a share revoke answering `200`), then `doppler secrets delete CF_API_TOKEN_PURGE_PREV -p soleur -c prd_terraform --yes > /dev/null` on a `success=false` read-back
 
 Not holds (`Agent:`, read-only or GitHub record): every `inventory` and `verify` run, the plan run of each write
@@ -231,37 +324,43 @@ block the ANALYTICS revoke.
 
 ## 7. Revoke
 
-Use the migration runbook's `## Revoke recipe`, steps 2 to 4, on prd_terraform `<KEY>_PREV`. Its step 1 inventory is
-replaced here by this bootstrap's `verify` (CTO F13):
+Use the migration runbook's `## Revoke recipe` read steps (**recipe step 2**, the `_PREV` id read, and **recipe step
+4**, the read-back) on prd_terraform `<KEY>_PREV`. Its step 1 inventory is replaced here by this bootstrap's `verify`
+(CTO F13), and its step 3 delete body by `p5-revoke.js` (CTO D1):
 
-1. `Agent:` run `DOPPLER_TOKEN="$(doppler configure get token --plain)" bash <B> --stage verify` in the revoke
-   sitting. `verify` runs `scripts/check-cloudflare-token-drift.sh --only <KEY>`, which reads only `DOPPLER_TOKEN`
-   (it snapshots and unsets it); without it `verify` fails `reason=drift` and never reads ok. The token goes into
-   the environment, never argv or the screen. Go on only for a key with a line `SOLEUR_P5_REVOKE_READY key=<KEY>`
-   printed in this sitting, with nothing written to that key since.
-2. `Agent:` recipe step 2 on prd_terraform `<KEY>_PREV`. Its id prefix must equal the pinned prefix.
-3. Recipe step 3 is the revoke hold. Sign in as the old-account-owner login and reload `/profile/api-tokens` first
-   (a page not reloaded since sign-in showed 0 tokens on 2026-11-26). The body takes three literals: the pinned
-   prefix, the `REVOKE_READY` `old_id` and the `new_id`. It refuses unless the first two are equal and differ from
-   `new_id`. It also refuses a dashboard match whose name equals the new token's `<key>-soleur-<YYYYMMDD>` name
-   (CTO F21). It returns only `{atok: false}`, `{matches: <n>}`, `{refused: <reason>}`,
-   `{status, contentType, success}` or `{error: e.name}`.
+1. `Agent:` run `bash <B> --stage verify` in the revoke sitting. Go on only for a key with a line
+   `SOLEUR_P5_REVOKE_READY key=<KEY> old_id=<8> new_id=<8> owner=<account|user>` printed in this sitting, with
+   nothing written to that key since. Match the line by its leading `SOLEUR_P5_REVOKE_READY key=<KEY>` plus one space, and read the
+   fields from it.
+2. `Agent:` recipe step 2 on prd_terraform `<KEY>_PREV`. Its id prefix must equal the pinned prefix. The old tokens
+   are user tokens, so `/user/tokens/verify` answers for them.
+3. The revoke hold. Sign in as the old-account-owner login and reload `/profile/api-tokens` first (a page not reloaded
+   since sign-in showed 0 tokens on 2026-11-26). Run `p5-revoke.js` with the hold's argument object. Before any
+   request it refuses `pin` unless the pin equals `old_id`, and `same-id` when `old_id` equals `new_id`. It then lists
+   every page of the login's tokens, needs exactly one id starting with `old_id` (else `{matches:<n>}`), and refuses
+   `name` when that token's name equals the new token's `<key>-soleur-<YYYYMMDD>` name (CTO F21). It returns only
+   `{atok:false}`, `{refused:<reason>}`, `{matches:<n>}`, `{status,contentType,success}` or `{error:<name>}`.
 4. Recipe step 4 read-back: re-run recipe step 2. Only a line that starts `success=false` confirms the revoke. Any
    other output: stop, post it on #12931, keep the key.
-5. The `_PREV` key delete holds run once per key, after all three revokes (CTO F14). Then `Agent:` re-run
-   `bash <B> --stage inventory`. Expected: `source=none` and no `<KEY>_PREV` row.
+5. The `_PREV` key delete holds run once per key, after all three revokes (CTO F14). Between a key's revoke and its
+   `_PREV` delete, `inventory` shows `SOLEUR_P5_REFERENCE key=<KEY> source=none` with
+   `SOLEUR_P5_STAGED key=<KEY> next=absent prev=present`: that is the expected state, routed by the section 1 table.
+   After the delete, `Agent:` re-run `bash <B> --stage inventory`. Expected: `source=none` and
+   `SOLEUR_P5_STAGED key=<KEY> next=absent prev=absent`.
 6. `Agent:` post on #12931, marker line `P5-REVOKED`: per key, the id prefix, the revoke status, the
    `success=false` read-back and the key gone.
 
 Closing check, `Agent:`
 
-- Run the full `bash scripts/check-cloudflare-token-drift.sh`. Expected: no DEAD `CF_API_TOKEN*` value. A DEAD row
-  names a copy to delete, never a rotation.
+- Run the full drift check, with the personal Doppler token set for that one process only (CTO D3: this is the only
+  drift run): `DOPPLER_TOKEN="$(doppler configure get token --plain)" bash scripts/check-cloudflare-token-drift.sh`.
+  Run it from the directory where `doppler login` was done (`configure get` resolves by directory scope; an empty
+  token fails closed). Expected: no DEAD `CF_API_TOKEN*` value. A DEAD row names a copy to delete, never a rotation.
 - Post the post-swap `cloudflare-readonly.sh pagerules-ssl` rule counts on #12931, marker line `P5-PAGERULES-FATE`.
   That is the deferred fate read for `CF_API_TOKEN_PAGERULES_READ`.
 
-A later rotation of an account-owned token revokes it with
-`DELETE /accounts/66d4f93f7397f196544e9fe84c3557c2/tokens/<id>`, not the user-token path.
+Finding the records from a fresh session: `gh issue view 12931 --comments --json comments --jq '.comments[] |
+select(.body | test("^P5-(SCOPE|REVOKED|PAGERULES-FATE|TOKEN-FACTS|BOOTSTRAP-POINTER)"; "m")) | .url'`.
 
 ## 8. `CF_API_TOKEN_PURGE_PREV`
 
@@ -291,22 +390,45 @@ token on the new account. That is a precondition of #12983 (marker `P5-GH-SECRET
 
 ## 11. Rotation
 
-The bootstrap stays as the rotation tool. The Phase 5 cleanup PR does not delete it. A rotation edits only the
-manifest block at the top of the script (key, pinned old id, holders), then runs sections 4 to 7 again. All three
-tokens share the 0a/0b expiry, so one sitting rotates them all. Reminder: #13085 (rotate before the ~2027-02-20
-expiry). The drift-script expiry warning is #13086.
+The bootstrap stays as the rotation tool; the migration runbook's Phase 5 cleanup does not delete it (CTO D4). A
+rotation edits the manifest block at the top of the script (key, pinned old id, holders) and regenerates this
+runbook's section 2 facts and the section 6 hold lines (their `pin` values and names), then runs sections 4 to 7
+again. All three tokens share the 0a/0b expiry, so one sitting rotates them all. Reminder: #13085 (rotate before the
+~2027-02-20 expiry). The drift-script expiry warning is #13086.
+
+The tokens this runbook mints are account-owned, so a rotation's `_PREV` is account-owned too:
+
+- its id read (recipe step 2) and read-back (recipe step 4) use `/accounts/66d4f93f7397f196544e9fe84c3557c2/tokens/verify`,
+  never `/user/tokens/verify`, which answers `success=false` for an account-owned token and would read as a revoke
+  that never happened;
+- its revoke runs `p5-revoke.js` with `"scope":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2"`, which lists
+  and deletes at `/accounts/<acct>/tokens[/<id>]`;
+- a key minted user-owned under the F17 fallback keeps the user-token forms.
 
 ## 12. Halt
 
 - Fix forward. Stop at the last verified step, fix in a reviewed PR, re-run.
 - A copy that does not read back equal stops the stage. Later keys stay untouched and `<KEY>_NEXT` is kept.
 - Never revoke without a `SOLEUR_P5_REVOKE_READY` line from the same sitting.
-- `verify` `fail reason=census-blind` (zero old hits) or `SOLEUR_P5_UNREADABLE`: stop. The census cannot see; do not
-  revoke.
+- Swap rollback, before the old token is revoked: first copy prd_terraform `<KEY>` back to `<KEY>_NEXT`, then copy
+  `<KEY>_PREV` over `<KEY>`; a re-run of `swap` re-applies. Copying `_PREV` over `<KEY>` first would destroy the only
+  copy of the new token. After the revoke the old token is dead: fix forward.
+- `verify` `reason=census-blind`, `census-unreadable` or `census-floor`, or any `SOLEUR_P5_UNREADABLE`,
+  `SOLEUR_P5_CENSUS_BLIND` or `SOLEUR_P5_FLOOR_MISSING` line: stop. The census cannot see everything; do not revoke.
+  A `FLOOR_MISSING` usually means the Doppler identity lists less than the one that measured the floor (a narrowed
+  role): sign in with the identity that lists every floor project, or update the floor in a reviewed PR when a
+  project was really removed.
 - A holder with `value=other`, or a non-manifest config with `value=old`: stop, post it on #12931, decide that holder
   first.
 - A `soleur-infra-privileged` holder of an old value is a stop. No stage writes there. Post it on #12931 and decide it
   in a reviewed change.
-- `429`, `5xx` or a transport failure on a verify read is `unreachable`, never a verdict. Re-run the read; never
-  re-mint on it alone.
-- A failed policy read-back: delete the new token and re-mint before any Doppler write.
+- `SOLEUR_P5_UNTRUSTED_FILE` or `SOLEUR_P5_ENV_REFUSED`: run from a clean `main` checkout in a shell without the named
+  variable or function. Never commit a local edit to make the check pass.
+- `SOLEUR_P5_PREV_LIVE` (a `_PREV` that holds a live token other than the pinned one, a previous rotation's revoke
+  skipped) or `SOLEUR_P5_KEY_UNEXPECTED`: stop and post it on #12931; never overwrite it.
+- `SOLEUR_P5_NEXT_NOT_DISTINCT`: the staged value equals another `CF_API_TOKEN*` key; re-stage the right `.tok`.
+- `429`, `5xx` or a transport failure on a verify read (`SOLEUR_P5_TOKEN_UNREACHABLE`, `reason=unreachable`) is never
+  a verdict. Re-run the read; never re-mint on it alone.
+- A refused policy read-back: `p5-mint.js` already deleted the new token; re-mint before any Doppler write.
+- `SOLEUR_BOOTSTRAP_PLAN_DRIFT` at an apply: the state changed since the plan run (for example a re-staged `_NEXT`,
+  which changes the swap op line's `new_id`, CTO D5). Re-run the plan run and take a new go.
