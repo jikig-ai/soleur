@@ -36,7 +36,9 @@ Residuals (CTO ruling, fix round 4). A rollback, a revoke and its `P5-REVOKED` p
 CTO ruling (section 12 "Interrupted states"). A mint body interrupted before it returns (browser closed) can leave a
 token with no `P5-MINTED`: a same-day re-mint refuses `name-exists`, a mint on another day does not see it. A
 `.tok` left in an earlier session's scratchpad is outside the closing check. The author filter proves a record came
-from an operator-login session, not that a person typed it.
+from an operator-login session, not that a person typed it. A rollback START edited after its read-back, in a
+session that ends after step 1, routes the next session to `holder-copies`, which copies the bad token back; its
+`verify` then fails again into section 12, and nothing is revoked.
 
 ## 1. Orient
 
@@ -72,8 +74,9 @@ Start here in a fresh session.
    - KEY rows: the `SOLEUR_P5_HOLDER ... key=<KEY>` rows. The table never reads the `key=<KEY>_PREV` row; `_PREV` is
      read only through `SOLEUR_P5_PREV`. TF: the prd_terraform KEY row. Manifest rows: the KEY rows of the configs
      on the key's manifest line.
-   - Records: the section 7 lookup, keeping only `key=<KEY> pin=<the pin>` (`P5-REVOKED`: `old_id=<the pin>`). A
-     record without `pin=` is not a record.
+   - Records: the section 7 lookup's `P5-MINTED`, `P5-ROLLBACK-START`, `P5-RETIRED` and `P5-REVOKED` comments,
+     keeping only `key=<KEY> pin=<the pin>` (`P5-REVOKED`: `old_id=<the pin>`); one of these four without `pin=` is
+     not a record. `P5-SCOPE` and the other types keep their own format (section 7).
    - Open rollback: the newest `P5-ROLLBACK-START` with no `P5-RETIRED` whose `id8` is its `bad_id8`.
    - Unheld mint: the newest `P5-MINTED` with no `P5-RETIRED` carrying its `id8`.
 
@@ -324,7 +327,7 @@ exist means a live token nothing holds: list it by name and delete it in the sam
 | `{refused:"groups",matches:<n>}` | only n of the asked names resolved to exactly one selectable group | re-read the groups (section 4); a group the account list lacks is the user-owned fallback |
 | `{refused:"listing"}` | the token list did not end within 20 pages | stop; post it on #12931 |
 | `{refused:"old-owner-login",matches:<n>}` | a user mint run under the old-account-owner login | sign in as another login |
-| `{refused:"name-exists",matches:<n>}` | a token with this exact name exists | list it by name and retire it (section 12 "Unheld mint" form) |
+| `{refused:"name-exists",matches:<n>}` | a token with this exact name exists | list it by name and retire it with the listed token's `id8` and name (section 12 "Unheld mint" form) |
 | `{status,contentType,success:false}` (no `id8`, no `refused`) | the groups read or the list failed | re-run with a new sink |
 | `{error:<name>}` | a throw before the POST | re-run with a new sink |
 
@@ -414,7 +417,7 @@ Placeholders, each filled before the go and quoted in it:
   `dd6d1427`, `5993721f`).
 
 Each `_NEXT` write runs only after that key's mint returned `success:true` with an `id8` and its sink printed
-`result=written`, and after a same-sitting inventory printed `SOLEUR_P5_STAGED key=<KEY> next=absent` (so it never
+`result=written`, after its `P5-MINTED` record is posted (section 5 step 3), and after a same-sitting inventory printed `SOLEUR_P5_STAGED key=<KEY> next=absent` (so it never
 overwrites the only copy of an earlier minted token); the `[ -s ... ]` test refuses a missing or empty `.tok`. Each mint go cites the #12931 `P5-SCOPE`
 comment. The swap go quotes, per key, the `new_id=` and `owner=` on the plan's `copy-staged-token` operation line,
 which must equal that key's `P5-MINTED` `id8=` and `owner=` (CTO D5, D9); a key whose plan has no
@@ -569,7 +572,8 @@ minted user-owned under the F17 fallback keeps the user forms.
      must go. Only on `{status:200,...,success:true}` from that delete, `Agent:` post on #12931 one comment whose
      first line is `P5-RETIRED key=<KEY> pin=<the pin> id8=<bad_id8>`. `{matches:0}` means the wrong login: sign in
      as the owning login (the minting login for `user`; a login that lists account tokens for `account`) and re-run;
-     never close on `matches:0`. `success:false` or an error: stop.
+     never close on `matches:0`; `{matches:0}` again under the owning login: "Interrupted states". `success:false`
+     or an error: stop.
   5. Re-mint that key (section 5; the user-owned form when the fault was a GraphQL refusal), then `swap`: it resumes
      from `source=PREV` with `<KEY>` back on the old token.
   After the revoke the old token is dead: fix forward.
@@ -577,10 +581,13 @@ minted user-owned under the F17 fallback keeps the user forms.
   it as in step 4 before any re-mint; a same-day re-mint otherwise refuses `name-exists`.
 - Unheld mint (section 1 row 5), in one sitting: Operator-authorizes: the `p5-revoke.js` (same sha256) retire
   `{"mode":"retire","pin":"<id8>","retire_name":"<name>","scope":"<owner>"}` (plus `"account_id"` for `account`),
-  with the newest `P5-MINTED`'s fields. Only on `success:true`, `Agent:` post
-  `P5-RETIRED key=<KEY> pin=<the pin> id8=<id8>`. On `{matches:0}`, the owning login re-runs it; never close. Then
+  with the newest `P5-MINTED`'s fields (a `name-exists` token with no `P5-MINTED`: the listed token's `id8` and name,
+  and no `P5-RETIRED` post). Only on `success:true`, `Agent:` post `P5-RETIRED key=<KEY> pin=<the pin> id8=<id8>`.
+  On `{matches:0}`, the owning login re-runs it; never close; `{matches:0}` again under the owning login (a delete
+  whose `P5-RETIRED` was never posted, or a token already gone): "Interrupted states". Then
   run the section 5 `.tok` closing check, re-run inventory and route again (section 1 row 8 or 9).
-- Interrupted states (section 1 rows 2, 10 and 17, and a second failed inventory run): stop. Post on #12931 the key's
+- Interrupted states (section 1 rows 2, 10 and 17, a retire that answers `{matches:0}` under the owning login, and a
+  second failed inventory run): stop. Post on #12931 the key's
   inventory marker lines and the links to the relevant records. The next step is a reviewed change ruled by the CTO
   agent: it either posts the missing closing record with a link to its decision-challenges row, or changes this
   runbook. The operator is never asked which step ran; any act the ruling names still takes its typed go.
