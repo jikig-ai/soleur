@@ -944,7 +944,8 @@ def main():
                          "emit DRIFT_ROW / FLOOR_UNMEASURED / LEG_PREDICTED / "
                          "LEG_OBSERVED / BOUND_PERFECT rows; writes nothing, "
                          "exits 0 on findings; refuses --write/--incremental/"
-                         "--legs/--run/--runs/--durations-out/--registered-file")
+                         "--legs/--run/--runs/--durations-out/"
+                         "--registered-file/--event")
     ap.add_argument("--manifest", default=None,
                     help="manifest path (default: the group's committed manifest)")
     ap.add_argument("--registered-file", default=None,
@@ -1387,9 +1388,11 @@ def main():
         measured_n = sum(1 for s in src_map.values() if s == "measured")
         if (committed_write or committed_manifest) and measured_n == 0 \
                 and not args.allow_all_floor:
-            target = (os.path.basename(durations_path) if committed_write
-                      else os.path.basename(manifest_path))
-            die(f"refusing to write {target}: the "
+            names = ([os.path.basename(durations_path)] if committed_write
+                     else []) + \
+                    ([os.path.basename(manifest_path)] if committed_manifest
+                     else [])
+            die(f"refusing to write {' and '.join(names)}: the "
                 f"sample has zero measured rows — an all-floor count-balanced "
                 f"table would replace the committed prices. Feed measured "
                 f"input (--timings-dir, or --run/--runs over the merge_group "

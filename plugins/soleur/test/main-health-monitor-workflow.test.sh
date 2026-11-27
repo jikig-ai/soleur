@@ -1407,12 +1407,19 @@ _leak_tail() { local i; for i in 1 2 3 4 5 6; do echo "SOLEUR| leaked per-suite 
 B_RC=0
 # The filer now reads leg artifact dirs, not two /tmp files: $1 (tests fixture)
 # becomes monitor-leg-scripts-0's capture and $4 (infra fixture) becomes
-# monitor-leg-infra's. The other 17 legs report outcome=success with no
+# monitor-leg-infra's. The other legs report outcome=success with no
 # capture, so their sections are skipped — the two-capture quantification the
 # B16/B23/B24 rows need is still exercised. `outcome=` empty in status.env is
 # the harness's "the step never ran" marker; an absent status.env would mean
 # "no leg report" instead (see the B26a row).
-EXPECTED_LEGS_FULL="webplat-0 webplat-1 mut-approval-guard1-mutation mut-destroy-ask-mutation mut-home-census-mutations bun scripts-0 scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 scripts-8 scripts-9 scripts-10 scripts-11 heavy-0 heavy-1 heavy-2 infra"
+# The census comes from the workflow's own EXPECTED_LEGS literal — a restated
+# copy here would silently agree with a stale yml on the next K bump, the same
+# drift class S4 exists to catch (a guard cannot pin what it restates).
+EXPECTED_LEGS_FULL="$(sed -n 's/^      EXPECTED_LEGS: "\(.*\)"$/\1/p' "$WF")"
+if [[ -z "$EXPECTED_LEGS_FULL" ]]; then
+  echo "  [FATAL] EXPECTED_LEGS literal not extractable from $WF" >&2
+  exit 1
+fi
 _leg_dir() { # $1 leg id, $2 outcome, $3 elapsed-or-empty, $4 fixture-or-empty
   local d="$BEHAVE_DIR/run/leg-reports/monitor-leg-$1"
   mkdir -p "$d"
@@ -1431,7 +1438,9 @@ run_filer() {
   [[ "$_io" == "-" ]] && _io=""
   _leg_dir scripts-0 "$_to" "${B_TESTS_ELAPSED_S:-}" "$1"
   _leg_dir infra "$_io" "${B_INFRA_ELAPSED_S:-}" "${4:-}"
-  for _l in webplat-0 webplat-1 mut-approval-guard1-mutation mut-destroy-ask-mutation mut-home-census-mutations bun scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 scripts-8 scripts-9 scripts-10 scripts-11 heavy-0 heavy-1 heavy-2; do
+  # shellcheck disable=SC2086
+  for _l in $EXPECTED_LEGS_FULL; do
+    [[ "$_l" == "scripts-0" || "$_l" == "infra" ]] && continue
     _leg_dir "$_l" success "" ""
   done
   # shellcheck disable=SC2086
@@ -1863,15 +1872,17 @@ rec() { # $1 number of status.env legs to stage -> the ::notice line
       bash --noprofile --norc -e "$BEHAVE_DIR/record.sh" 2>&1 | grep -a '^::notice' | head -1
 }
 _N='::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH webplat=success mut=success bun=success scripts=failure heavy=success infra=success mint=green'
+# shellcheck disable=SC2086
+_NLEGS=$(wc -w <<<"$EXPECTED_LEGS_FULL")
 CASES=$((CASES + 1))
-row "(R1) a full 22-leg report reaches the ::notice annotation" "got: $(rec 22)" \
-  "$([[ "$(rec 22)" == "$_N legs=22/22" ]]; echo $?)"
+row "(R1) a full ${_NLEGS}-leg report reaches the ::notice annotation" "got: $(rec "$_NLEGS")" \
+  "$([[ "$(rec "$_NLEGS")" == "$_N legs=${_NLEGS}/${_NLEGS}" ]]; echo $?)"
 CASES=$((CASES + 1))
 row "(R2) a partial report counts only staged legs" "got: $(rec 3)" \
-  "$([[ "$(rec 3)" == "$_N legs=3/22" ]]; echo $?)"
+  "$([[ "$(rec 3)" == "$_N legs=3/${_NLEGS}" ]]; echo $?)"
 CASES=$((CASES + 1))
-row "(R3) no leg reports still emits the annotation with legs=0/22" "got: $(rec 0)" \
-  "$([[ "$(rec 0)" == "$_N legs=0/22" ]]; echo $?)"
+row "(R3) no leg reports still emits the annotation with legs=0/${_NLEGS}" "got: $(rec 0)" \
+  "$([[ "$(rec 0)" == "$_N legs=0/${_NLEGS}" ]]; echo $?)"
 
 # ── (MWd) the mintwatch step body, EXECUTED (#9082) ────────────────────────────
 #

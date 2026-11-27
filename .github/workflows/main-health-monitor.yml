@@ -789,8 +789,8 @@ jobs:
     env:
       # The leg ids the reporter expects artifacts for — one per matrix leg plus
       # the two singleton legs. The static guard derives this list from the
-      # matrix literals and the fixed legs; a matrix resize without an update
-      # here is a RED, not a drift.
+      # committed manifests' n= lines, the mut matrix literals, and the fixed
+      # legs; a matrix resize without an update here is a RED, not a drift.
       EXPECTED_LEGS: "webplat-0 webplat-1 mut-approval-guard1-mutation mut-destroy-ask-mutation mut-home-census-mutations bun scripts-0 scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 scripts-8 scripts-9 scripts-10 scripts-11 heavy-0 heavy-1 heavy-2 infra"
     steps:
       # `actions/checkout` is required ONLY for the sentry-heartbeat composite —
