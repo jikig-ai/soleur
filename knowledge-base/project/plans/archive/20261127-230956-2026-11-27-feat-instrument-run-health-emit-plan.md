@@ -311,7 +311,7 @@ The reviewer panel was not spawned. This process has no spawn tool (`search_tool
 - Issue titles for #12573, #12532, #12575, #12576, #12577, and #12578, and pull request #12996, were re-read with `gh` on 2026-11-27.
 - `bash plugins/soleur/scripts/run-health-emit.sh --discover` printed `ok` and exited 0. The command has no shell-active token.
 - `bash plugins/soleur/scripts/run-health-emit.test.sh` exited 0 (27 passes). From `apps/web-platform`, the W4a/W4b vitest filter reported 2 passed.
-- No taste item is left for the operator. The vehicle ruling is already recorded for `knowledge-base/project/specs/feat-one-shot-12573-run-health-emit/decision-challenges.md`.
+- No taste item is left for the operator. The vehicle ruling is already recorded for `knowledge-base/project/specs/archive/20261127-230956-feat-one-shot-12573-run-health-emit/decision-challenges.md`.
 
 ## Sharp Edges
 

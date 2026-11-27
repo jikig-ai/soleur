@@ -1,6 +1,6 @@
 # Tasks: instrument run-health emit on the existing pull request
 
-Derived from `knowledge-base/project/plans/2026-11-27-feat-instrument-run-health-emit-plan.md`. Do not redesign the emitter. Do not open a second pull request. Do not start `scripts/test-all.sh`.
+Derived from `knowledge-base/project/plans/archive/20261127-230956-2026-11-27-feat-instrument-run-health-emit-plan.md`. Do not redesign the emitter. Do not open a second pull request. Do not start `scripts/test-all.sh`.
 
 ## Phase 1: Setup
 

@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-12573-run-health-emit/knowledge-base/project/plans/2026-11-27-feat-instrument-run-health-emit-plan.md
+- Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-12573-run-health-emit/knowledge-base/project/plans/archive/20261127-230956-2026-11-27-feat-instrument-run-health-emit-plan.md
 - Status: complete
 
 ### Errors
