@@ -21,7 +21,8 @@
 # (cq-test-fixtures-synthesized-only); the ids are the public account/zone ids of the runbook id table.
 #
 # MUTATIONS (--mutants, and the tail of a full run): each `mkill` label names its mutant, row, step and the
-# reason the row must observe (killed() rejects a red anywhere else, or for another reason). HARNESS rows (`hred`)
+# reason the row must observe (killed() rejects a red anywhere else, or for another reason). --mutants first runs the
+# pristine arm of EVERY scored row on the unmutated script (exit 2 when any is red). HARNESS rows (`hred`)
 # run a row on the REAL script under a deliberately broken stub and must go red the same way.
 #
 # LOCATION: this suite lives in tests/scripts and finds bootstrap.sh by glob, so an archive-kb move of the
@@ -85,8 +86,8 @@ readonly NZ=951ce525552201ec6c696b24251abed7 NA=66d4f93f7397f196544e9fe84c3557c2
 readonly OZ=5af02a2f394e9ba6e0ea23c381a26b67
 readonly OA=0123456789abcdef0123456789abcdef   # synthesized: any account id but the new one
 readonly TFC=prd_terraform
-# The keys and their pinned old-id prefixes come from the script's own `# P5-MANIFEST` lines (a rotation edits only
-# that block, CTO F18); the stubs read them from STUB_PINS. KA / KN / KP name the three consumers this suite models.
+# The keys and their pinned old-id prefixes come from the script's own `# P5-MANIFEST` lines (in the script a rotation
+# edits only that block, CTO F18); the stubs read them from STUB_PINS. KA / KN / KP name the three consumers this suite models.
 KEYS=(); STUB_PINS=""
 while IFS='|' read -r _k _p _h; do
   _k="${_k#\# P5-MANIFEST }"; _k="${_k//[[:space:]]/}"; _p="${_p//[[:space:]]/}"
@@ -372,9 +373,13 @@ seed_swapped() {
 OUT=""; RC=0; WHY=""
 # Every child runs with the session and approval-hook variables and the git location variables removed, so a
 # developer shell, a harness session or a linked worktree changes nothing about what a row observes.
+# The bootstrap refuses EVERY exported GIT_* variable (bar five inert ones), BASH_ENV and ENV by class, so the
+# scrub is by prefix too: an inherited GIT_PAGER or GIT_SSH_COMMAND in a developer shell must not red every row
+# (the rows that model an inherited variable add it back with run_with).
 UNSET_ENV=()
 for _v in CLAUDE_PLUGIN_ROOT CLAUDE_CODE_ENTRYPOINT CLAUDECODE OPENCODE SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK \
-          DOPPLER_TOKEN DOPPLER_PROJECT DOPPLER_CONFIG DOPPLER_ENVIRONMENT DOPPLER_API_HOST "${GIT_LOCATION_VARS[@]}"; do
+          DOPPLER_TOKEN DOPPLER_PROJECT DOPPLER_CONFIG DOPPLER_ENVIRONMENT DOPPLER_API_HOST BASH_ENV ENV "${GIT_LOCATION_VARS[@]}" \
+          $(compgen -e | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)$/\1/p'); do
   UNSET_ENV+=(-u "$_v")
 done
 # observe — after every child: WHY is the reasons and markers the run printed (killed() names the one a mutant
@@ -443,7 +448,14 @@ copy_with() {
 has_line() { grep -qxF -- "$1" <<<"$OUT"; }
 vok() { has_line "SOLEUR_P5_VERIFY key=$1 verdict=ok"; }
 vfail_is() { has_line "SOLEUR_P5_VERIFY key=$1 verdict=fail reason=$2"; }
-ready() { grep -qE "^SOLEUR_P5_REVOKE_READY key=$1 old_id=$(pin_of "$1") new_id=[0-9a-f]{8} owner=${2:-user}$" <<<"$OUT"; }
+# new_id_of <KIND> <KEY> — the 8-character id the curl stub answers for a non-OLD token: sha256 of the value.
+new_id_of() { printf '%s' "$(tok "$1" "$2")" | sha256sum | cut -c1-8; }
+# ready <key> [owner] — the exact REVOKE_READY line: the pinned old id, the NEW token's own id (kind ACCT when
+# account-owned, else NEW), its owner, and the old token's owner (every OLD sentinel is user-owned).
+ready() {
+  local o="${2:-user}" kind=NEW; [[ "$o" == account ]] && kind=ACCT
+  has_line "SOLEUR_P5_REVOKE_READY key=$1 old_id=$(pin_of "$1") new_id=$(new_id_of "$kind" "$1") owner=${o} old_owner=user"
+}
 noready() { ! grep -q "^SOLEUR_P5_REVOKE_READY key=$1 " <<<"$OUT"; }
 logged() { grep -qE -- "$1" "$STUB_LOG"; }
 set_lines() { grep -cE "^mutating	set soleur/${1}/${2} prev=" "$STUB_LOG" || true; }   # <cfg> <NAME>
@@ -742,11 +754,15 @@ row_g2_12_delete_unconfirmed() { # <src> — the stub's delete answers 0 and rem
   at stops
   [[ "$RC" -ne 0 ]] && ! logged "^mutating	set soleur/${TFC}/${KN}"
 }
-row_g2_13_next_not_distinct() { # <src> — the staged PAGERULES value is the token prd_terraform holds as CF_API_TOKEN
-  world g2-13 "$1"; seed_staged; sv soleur "$TFC" CF_API_TOKEN "$(tok NEW "$KP")"
+row_g2_13_next_not_distinct() { # <src> [write|managed] — the staged PAGERULES value is the token prd_terraform holds as
+  # CF_API_TOKEN (write), or as ANOTHER managed key, CF_API_TOKEN_AUDIT (managed)
+  local eq=CF_API_TOKEN
+  world "g2-13-${2:-write}" "$1"; seed_staged
+  if [[ "${2:-write}" == managed ]]; then sv soleur "$TFC" "${KP}_NEXT" "$(val soleur "$TFC" "$KA")"; eq="$KA"
+  else sv soleur "$TFC" CF_API_TOKEN "$(tok NEW "$KP")"; fi
   at refuse
   : > "$STUB_LOG"; run --stage swap
-  [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && has_line "SOLEUR_P5_NEXT_NOT_DISTINCT key=${KP} equals=CF_API_TOKEN" \
+  [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && has_line "SOLEUR_P5_NEXT_NOT_DISTINCT key=${KP} equals=${eq}" \
     && has_line 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=swap need=inventory'
 }
 row_g2_14_restaged_after_plan() { # <src> — the plan names each staged token's id: a re-stage before the apply is a drift
@@ -755,7 +771,7 @@ row_g2_14_restaged_after_plan() { # <src> — the plan names each staged token's
   at plan-names-token
   run --stage swap; d="$(digest)"
   [[ -n "$d" ]] || return 1
-  for k in "${KEYS[@]}"; do grep -qE "^SOLEUR_BOOTSTRAP_PLAN_OP stage=swap op=copy-staged-token target=${TFC}/${k}_NEXT->${k} new_id=[0-9a-f]{8} owner=user$" <<<"$OUT" || return 1; done
+  for k in "${KEYS[@]}"; do has_line "SOLEUR_BOOTSTRAP_PLAN_OP stage=swap op=copy-staged-token target=${TFC}/${k}_NEXT->${k} new_id=$(new_id_of NEW "$k") owner=user" || return 1; done
   sv soleur "$TFC" "${KP}_NEXT" "$(tok NEW2 "$KP")"
   at drift
   : > "$STUB_LOG"; apply_with_receipt swap "$d"
@@ -913,11 +929,18 @@ row_s1_happy_path() { # <src>
   ! grep -qE '"count"|synth-actor|192\.0\.2\.7' <<<"$OUT" || return 1
   at revoke
   flag revoked-old
+  run --stage verify   # the same-sitting read-back after the revoke (CTO D6): revoked, never a failure or a REVOKE_READY
+  [[ "$RC" -eq 0 ]] && has_line 'SOLEUR_P5_VERIFY verdict=ok' || return 1
+  for k in "${KEYS[@]}"; do
+    has_line "SOLEUR_P5_VERIFY key=${k} verdict=revoked" && has_line "SOLEUR_P5_PREV key=${k} state=denied" && noready "$k" \
+      && has_line "SOLEUR_P5_HOLDER project=soleur config=${TFC} key=${k}_PREV value=revoked" || return 1
+  done
   for k in "${KEYS[@]}"; do rmv soleur "$TFC" "${k}_PREV"; done    # the revoke recipe's step-4 key delete (a hold)
   run --stage inventory
   [[ "$RC" -eq 0 ]] || return 1
   for k in "${KEYS[@]}"; do
     has_line "SOLEUR_P5_REFERENCE key=${k} source=none" && has_line "SOLEUR_P5_STAGED key=${k} next=absent prev=absent" \
+      && has_line "SOLEUR_P5_PREV key=${k} state=absent" \
       && has_line "SOLEUR_P5_HOLDER project=soleur config=${TFC} key=${k}_PREV value=absent" || return 1
   done
   at satisfied
@@ -1012,23 +1035,57 @@ row_s3c_403_html() { # <src> — a 403 with an HTML body is no verdict (only a J
   [[ "$RC" -eq 1 ]] && has_line "SOLEUR_P5_TOKEN_UNREACHABLE name=soleur/${TFC}/${KA} http=403" && vfail_is "$KA" unreachable && ! grep -q '^SOLEUR_P5_REVOKE_READY ' <<<"$OUT"
 }
 
-row_e1_env_refused() { # <src> <git|api|function> — an inherited variable that would redirect git, Doppler or a binary
+# The refusal lists, one member per E1 row (security N6, testdesign S15). Each variable's value is chosen so that
+# it does not also mislead the template's .env ignore probe (which runs first and would refuse with its own marker):
+# the row isolates the class refusal. E1_FUNCS are exported shell functions that delegate to the real command, so
+# a run that ignores them would otherwise succeed.
+E1_VARS=(GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_NAMESPACE
+         GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+         GIT_EXEC_PATH GIT_SYNTH_UNLISTED BASH_ENV ENV DOPPLER_API_HOST)
+E1_FUNCS=(doppler curl git jq sed synth_unlisted_fn)
+row_e1_env_refused() { # <src> <var|function> <name> — an inherited variable or exported function is refused by class
   local want ex
-  world "e1-$2" "$1"; seed_swapped
-  case "$2" in
-    git) ex="GIT_DIR=$W/repo/.git"; want=GIT_DIR ;;
-    api) ex="DOPPLER_API_HOST=https://doppler.invalid"; want=DOPPLER_API_HOST ;;
-    *) ex='BASH_FUNC_curl%%=() { command curl "$@"; }'; want=function:curl ;;
-  esac
+  world "e1-$2-$3" "$1"; seed_swapped
+  if [[ "$2" == function ]]; then
+    want="function:$3"
+    if [[ "$3" == synth_unlisted_fn ]]; then ex="BASH_FUNC_$3%%=() { :; }"; else ex="BASH_FUNC_$3%%=() { command $3 \"\$@\"; }"; fi
+  else
+    want="$3"
+    case "$3" in
+      GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM|BASH_ENV|ENV) ex="$3=/dev/null" ;;
+      GIT_CONFIG_COUNT) ex="$3=0" ;;
+      GIT_CONFIG_PARAMETERS) ex="$3='synth.unlisted'='1'" ;;
+      GIT_NAMESPACE|GIT_SYNTH_UNLISTED) ex="$3=synth" ;;
+      DOPPLER_API_HOST) ex="$3=https://doppler.invalid" ;;
+      *) ex="$3=$W/no-such-git-location" ;;
+    esac
+  fi
   at refuse
   : > "$STUB_LOG"; run_with "$ex" -- --stage verify
   [[ "$RC" -eq 64 && ! -s "$STUB_LOG" ]] && has_line "SOLEUR_P5_ENV_REFUSED name=${want}"
 }
+row_e1_env_inert() { # <src> — the five GIT_* variables git never consults for these reads do not refuse (harnesses set GIT_EDITOR)
+  local k
+  world e1-inert "$1"; seed_swapped
+  at verdict
+  run_with GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true GIT_PAGER=cat GIT_TERMINAL_PROMPT=0 "GIT_CEILING_DIRECTORIES=$SB" -- --stage verify
+  [[ "$RC" -eq 0 ]] && ! grep -q '^SOLEUR_P5_ENV_REFUSED ' <<<"$OUT" || return 1
+  for k in "${KEYS[@]}"; do ready "$k" || return 1; done
+}
 row_t1_dirty_file() { # <src> <tool|inventory> — an UNCOMMITTED edit to a tracked file the bootstrap runs or reads
   world "t1-$2" "$1"; seed_swapped
   at verdict
-  if [[ "$2" == tool ]]; then
-    printf '\n# an uncommitted edit\n' >> "$W/repo/plugins/soleur/scripts/cloudflare-readonly.sh"
+  if [[ "$2" == tool || "$2" == filter ]]; then
+    if [[ "$2" == filter ]]; then
+      # A clean filter that strips the edit makes a FILTERED hash-object equal the HEAD blob: only the raw
+      # bytes (--no-filters) show the edit. The filter and its attribute live in the fixture's .git, untracked.
+      mkdir -p "$W/repo/.git/info"
+      printf '[filter "p5strip"]\n\tclean = sed -e /p5-uncommitted-edit/d\n' >> "$W/repo/.git/config"
+      printf 'plugins/soleur/scripts/cloudflare-readonly.sh filter=p5strip\n' > "$W/repo/.git/info/attributes"
+      printf '# p5-uncommitted-edit\n' >> "$W/repo/plugins/soleur/scripts/cloudflare-readonly.sh"
+    else
+      printf '\n# an uncommitted edit\n' >> "$W/repo/plugins/soleur/scripts/cloudflare-readonly.sh"
+    fi
     : > "$STUB_LOG"; run --stage verify
     [[ "$RC" -eq 1 ]] && has_line "SOLEUR_P5_UNTRUSTED_FILE path=plugins/soleur/scripts/cloudflare-readonly.sh" && ! logged '^read	consumer ' \
       && vfail_is "$KA" consumer-read && noready "$KA" && noready "$KP"
@@ -1059,6 +1116,106 @@ row_m1_manifest_invalid() { # <src> <variant> — one manifest line the parser m
   : > "$STUB_LOG"; run --stage swap
   [[ "$RC" -ne 0 && -z "$(digest)" && "$(mut)" -eq 0 ]] && has_line "SOLEUR_P5_MANIFEST_INVALID line=${ln} reason=${want}"
 }
+row_f1_floor_line() { # <src> <removed|duplicated|malformed> — the `# P5-PROJECT-FLOOR` line is not exactly one well-formed line
+  local k b="$SB/fl-$2-$RANDOM.sh" prog
+  case "$2" in
+    removed)    prog='s{^# P5-PROJECT-FLOOR [^\n]*\n}{}m' ;;
+    duplicated) prog='s{^(# P5-PROJECT-FLOOR [^\n]*\n)}{$1$1}m' ;;
+    malformed)  prog='s{^(# P5-PROJECT-FLOOR [^\n]*)$}{$1 not/a-project}m' ;;
+  esac
+  at setup
+  copy_with "$1" "$b" <<<"$prog" || return 1
+  world "f1-$2" "$b"; seed_swapped
+  at verdict
+  run --stage verify
+  [[ "$RC" -eq 1 ]] && has_line 'SOLEUR_P5_FLOOR_MISSING name=project-floor-line' || return 1
+  for k in "${KEYS[@]}"; do vfail_is "$k" census-floor && noready "$k" || return 1; done
+}
+
+# ==================================================================================================
+# The _PREV state (CTO D6): one row per state, printed by inventory AND verify
+# ==================================================================================================
+DEAD_TOKEN_KIND=DEAD   # a well-formed value the curl stub denies at both endpoints (no -SENTINEL suffix): a revoked token
+dead_tok() { printf 'SYNTH-%s-%s' "$DEAD_TOKEN_KIND" "$1"; }
+row_p1_prev_state() { # <src> <pinned|denied|other|malformed|unreadable|unreachable|absent>
+  local want="SOLEUR_P5_PREV key=${KA} state=$2" st
+  world "p1-$2" "$1"
+  case "$2" in
+    absent)      seed_staged ;;
+    pinned)      seed_swapped; want="${want} id=$(pin_of "$KA") owner=user" ;;
+    denied)      seed_swapped; sv soleur "$TFC" "${KA}_PREV" "$(dead_tok "$KA")" ;;
+    other)       seed_swapped; sv soleur "$TFC" "${KA}_PREV" "$(tok THIRD "$KA")"; want="${want} id=$(new_id_of THIRD "$KA") owner=user" ;;
+    malformed)   seed_swapped; sv soleur "$TFC" "${KA}_PREV" 'SYNTH-BAD"QUOTE-SENTINEL' ;;
+    unreadable)  seed_swapped; flag "get-fails.soleur.${TFC}.${KA}_PREV" ;;
+    unreachable) seed_swapped; flag curl-503 ;;
+  esac
+  for st in inventory verify; do
+    at "$st"
+    run --stage "$st"
+    has_line "$want" && [[ "$(grep -c "^SOLEUR_P5_PREV key=${KA} " <<<"$OUT")" -eq 1 ]] || return 1
+  done
+}
+row_v1_revoked() { # <src> — AUDIT's old token is revoked (its _PREV denied at both endpoints); the other two keys are not yet
+  world v1 "$1"; seed_swapped; sv soleur "$TFC" "${KA}_PREV" "$(dead_tok "$KA")"
+  at verdict
+  run --stage verify
+  [[ "$RC" -eq 0 ]] && has_line "SOLEUR_P5_VERIFY key=${KA} verdict=revoked" && noready "$KA" && has_line 'SOLEUR_P5_VERIFY verdict=ok' \
+    && has_line "SOLEUR_P5_PREV key=${KA} state=denied" && has_line "SOLEUR_P5_REFERENCE key=${KA} source=none" \
+    && ! grep -q "^SOLEUR_P5_VERIFY key=${KA} verdict=fail" <<<"$OUT" || return 1
+  at others
+  vok "$KN" && ready "$KN" && vok "$KP" && ready "$KP" || return 1
+  at census-row
+  has_line "SOLEUR_P5_HOLDER project=soleur config=${TFC} key=${KA}_PREV value=revoked" || return 1
+  at inventory-row
+  run --stage inventory
+  [[ "$RC" -eq 0 ]] && has_line "SOLEUR_P5_HOLDER project=soleur config=${TFC} key=${KA}_PREV value=revoked" || return 1
+  at checks-still-run
+  sv soleur dev "$KA" "$(tok THIRD "$KA")"
+  run --stage verify
+  [[ "$RC" -eq 1 ]] && vfail_is "$KA" holder-not-new && ! grep -q "^SOLEUR_P5_VERIFY key=${KA} verdict=revoked" <<<"$OUT"
+}
+
+# ==================================================================================================
+# Swap and the _PREV it may overwrite (dataint N3): only absent, denied, or the pinned old token
+# ==================================================================================================
+row_g2_15_prev_refused() { # <src> <unreadable|malformed|expired> — _PREV cannot be read, is not a token, or is another token
+  local want st
+  # Only AUDIT is staged: another staged key's distinctness pass reads AUDIT_PREV too, and would refuse an
+  # unreadable one first, so the row isolates AUDIT's own _PREV check.
+  world "g2-15-$2" "$1"; seed_staged; rmv soleur "$TFC" "${KN}_NEXT"; rmv soleur "$TFC" "${KP}_NEXT"
+  case "$2" in
+    unreadable) sv soleur "$TFC" "${KA}_PREV" "$(tok OLD "$KA")"; flag "get-fails.soleur.${TFC}.${KA}_PREV"; st=unreadable
+                want="${TFC}/${KA}_PREV is listed but could not be read, so nothing is decided. Run this stage again." ;;
+    malformed)  sv soleur "$TFC" "${KA}_PREV" 'SYNTH-BAD"QUOTE-SENTINEL'; st=malformed
+                want="${TFC}/${KA}_PREV holds a value that is not a well-formed token, so nothing proves which token a copy over it would lose." ;;
+    expired)    sv soleur "$TFC" "${KA}_PREV" "$(tok EXPIRED "$KA")"; st="other id=$(new_id_of EXPIRED "$KA") owner=user"
+                want="${TFC}/${KA}_PREV holds a token (id $(new_id_of EXPIRED "$KA"), status expired) that is not the pinned old id $(pin_of "$KA"), so copying ${KA} over it" ;;
+  esac
+  at refuse
+  : > "$STUB_LOG"; run --stage swap
+  [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && has_line "SOLEUR_P5_PREV key=${KA} state=${st}" && grep -qF "$want" <<<"$OUT" \
+    && has_line 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=swap need=inventory' || return 1
+  at prev-kept
+  [[ "$(val soleur "$TFC" "${KA}_NEXT")" == "$(tok NEW "$KA")" ]] && has soleur "$TFC" "${KA}_PREV"
+}
+row_g2_16_denied_prev_overwritten() { # <src> — the next rotation: _PREV holds the earlier, revoked token, <KEY> the pinned one
+  world g2-16 "$1"; seed_staged; sv soleur "$TFC" "${KA}_PREV" "$(dead_tok "$KA")"
+  at plan
+  run --stage swap
+  [[ "$RC" -eq 0 ]] && has_line "SOLEUR_P5_PREV key=${KA} state=denied" \
+    && has_line "SOLEUR_BOOTSTRAP_PLAN_OP stage=swap op=copy-old-token-to-revert-key target=${TFC}/${KA}->${KA}_PREV" || return 1
+  at applied
+  : > "$STUB_LOG"; approve swap
+  [[ "$RC" -eq 0 && "$(val soleur "$TFC" "${KA}_PREV")" == "$(tok OLD "$KA")" && "$(val soleur "$TFC" "$KA")" == "$(tok NEW "$KA")" ]]
+}
+row_g2_17_key_unreadable_on_resume() { # <src> — _PREV pinned (an interrupted swap) and the value read of <KEY> fails
+  world g2-17 "$1"; seed_staged; sv soleur "$TFC" "${KA}_PREV" "$(tok OLD "$KA")"; flag "get-fails.soleur.${TFC}.${KA}"
+  at refuse
+  : > "$STUB_LOG"; run --stage swap
+  [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && has_line "SOLEUR_P5_UNREADABLE project=soleur config=${TFC} name=${KA}" \
+    && grep -qF "${TFC}/${KA} could not be read (or is empty), so nothing proves which value ${TFC}/${KA} holds. Run this stage again." <<<"$OUT" \
+    && ! grep -q '^SOLEUR_P5_KEY_UNEXPECTED ' <<<"$OUT"
+}
 
 # ==================================================================================================
 # The rows on the real script (full mode)
@@ -1075,9 +1232,29 @@ if [[ "$MODE" == full ]]; then
     && grep -qE '^# P5-MANIFEST CF_API_TOKEN_ANALYTICS_READ +\| 5993721f +\| soleur/prd_terraform$' "$SCRIPT_SRC" \
     && grep -qE '^# P5-MANIFEST CF_API_TOKEN_PAGERULES_READ +\| 86aa993e +\| soleur/prd_terraform$' "$SCRIPT_SRC"
   check "the manifest block holds the three keys, their pinned ids and holders (plan Phase 3)" $?
+  [[ "$(grep -c '^# P5-PROJECT-FLOOR ' "$SCRIPT_SRC")" -eq 1 ]] \
+    && grep -qxF '# P5-PROJECT-FLOOR soleur soleur-infra-privileged soleur-inngest soleur-registry soleur-deploy-channel soleur-infra-app soleur-github-app soleur-git-data-root example-project' "$SCRIPT_SRC"
+  check "the census floor line names exactly the nine projects measured 2026-11-27 (CTO D2), once" $?
   r=1; awk -F'|' '$1 == "# SOLEUR-STAGE swap" { print NF; print $4 }' "$SCRIPT_SRC" > "$SB/swap-rollback.txt"
-  [[ "$(sed -n 1p "$SB/swap-rollback.txt")" == 4 ]] && grep -qE 'first copy prd_terraform KEY back to KEY_NEXT .*, then copy KEY_PREV over KEY, and a re-run of swap re-applies' "$SB/swap-rollback.txt" && r=0
-  check "the swap rollback keeps the new token: KEY back to KEY_NEXT first, then KEY_PREV over KEY (one sentence, no |)" "$r"
+  [[ "$(sed -n 1p "$SB/swap-rollback.txt")" == 4 \
+     && "$(sed -n 2p "$SB/swap-rollback.txt")" == "A partial swap has no rollback: re-run swap, which resumes every partial state. A completed swap whose new token is bad: first undo holder-copies, then the runbook's guarded _PREV-over-KEY copy (section 12), then retire the bad token." ]] \
+    && ! grep -qF 'back to KEY_NEXT' "$SCRIPT_SRC" && r=0
+  check "the swap rollback is the CTO D8 text exactly (no |), and the withdrawn 'back to KEY_NEXT' recipe is gone from the script" "$r"
+  ! grep -nE '(^|[^*])feat-one-shot-12931-phase5-token-remint/decision-challenges\.md' "$SCRIPT_SRC" \
+    && grep -qF '`knowledge-base/project/specs/**/*feat-one-shot-12931-phase5-token-remint/decision-challenges.md`' "$SCRIPT_SRC" \
+    && grep -qF 'In THIS file a rotation edits only the MANIFEST block' "$SCRIPT_SRC" && grep -qF '(runbook section 11)' "$SCRIPT_SRC" \
+    && ! grep -qF 'a rotation edits only the MANIFEST block below.' "$SCRIPT_SRC"
+  check "the header cites the rulings by glob (never the live spec path) and names what else a rotation regenerates" $?
+  # The template's contract region: everything between `set -euo pipefail` and the STAGES banner is the template's,
+  # but the stage-table lines, the baked library path, the shellcheck source path and the SLUG line.
+  _ttop() {
+    awk '/^# STAGES/{exit} f{print} /^set -euo pipefail$/{f=1}' "$1" | sed -e '/^# SOLEUR-STAGE /d' -e '/^SLUG=/d' \
+      -e 's/^SOLEUR_OP_LIB_BAKED=.*/SOLEUR_OP_LIB_BAKED=<baked>/' -e 's/^# shellcheck source=[^ ]* /# shellcheck source=<path> /' \
+      -e 's/ Replace the two examples\.$//'
+  }
+  [[ -n "$(_ttop "$SCRIPT_SRC")" ]] && cmp -s <(_ttop "${REPO_ROOT}/plugins/soleur/skills/operator-bootstrap/template.sh") <(_ttop "$SCRIPT_SRC") \
+    && [[ "$(grep -n 'SOLEUR_P5_ENV_REFUSED' "$SCRIPT_SRC" | head -1 | cut -d: -f1)" -gt "$(grep -n '^# STAGES' "$SCRIPT_SRC" | cut -d: -f1)" ]]
+  check "above the STAGES banner the script is the template but the stage table, baked path, shellcheck path and SLUG (the env refusal and manifest sit below)" $?
   _treg() { awk '/^# --- the credentials file must be ignored by git/{on=1} on{print} /^trap on_exit EXIT$/{exit}' "$1"; }
   [[ -n "$(_treg "$SCRIPT_SRC")" ]] && cmp -s <(_treg "${REPO_ROOT}/plugins/soleur/skills/operator-bootstrap/template.sh") <(_treg "$SCRIPT_SRC")
   check "the .env probe through the on_exit trap is byte-identical to the operator-bootstrap template (comments included)" $?
@@ -1145,8 +1322,14 @@ CONTRACT
   row_g2_10_next_bad "$SCRIPT_SRC" expired; check "G2-10 a staged _NEXT with status expired: refused, zero writes" $?
   row_g2_10_next_bad "$SCRIPT_SRC" old; check "G2-10 the pinned old token staged as _NEXT: refused, zero writes" $?
   row_g2_12_delete_unconfirmed "$SCRIPT_SRC"; check "G2-12 a delete the listing does not confirm: DELETE_NOT_CONFIRMED, no SWAPPED, stage stops" $?
-  row_g2_13_next_not_distinct "$SCRIPT_SRC"; check "G2-13 a staged _NEXT equal to prd_terraform CF_API_TOKEN: NEXT_NOT_DISTINCT refusal, zero writes" $?
-  row_g2_14_restaged_after_plan "$SCRIPT_SRC"; check "G2-14 the plan names new_id and owner; a _NEXT re-staged after the plan is PLAN_DRIFT 75, zero writes" $?
+  row_g2_13_next_not_distinct "$SCRIPT_SRC" write; check "G2-13 a staged _NEXT equal to prd_terraform CF_API_TOKEN: NEXT_NOT_DISTINCT refusal, zero writes" $?
+  row_g2_13_next_not_distinct "$SCRIPT_SRC" managed; check "G2-13 a staged _NEXT equal to another managed key (CF_API_TOKEN_AUDIT): NEXT_NOT_DISTINCT refusal, zero writes" $?
+  row_g2_14_restaged_after_plan "$SCRIPT_SRC"; check "G2-14 the plan names the exact new_id and owner; a _NEXT re-staged after the plan is PLAN_DRIFT 75, zero writes" $?
+  row_g2_15_prev_refused "$SCRIPT_SRC" unreadable; check "G2-15 a _PREV whose read fails (rc 4): state=unreadable, re-run refusal, zero writes" $?
+  row_g2_15_prev_refused "$SCRIPT_SRC" malformed; check "G2-15 a malformed _PREV (rc 2): state=malformed, refusal, zero writes" $?
+  row_g2_15_prev_refused "$SCRIPT_SRC" expired; check "G2-15 a _PREV holding a non-pinned EXPIRED token: refused whatever its status, zero writes" $?
+  row_g2_16_denied_prev_overwritten "$SCRIPT_SRC"; check "G2-16 a _PREV both endpoints deny (an earlier revoked token): state=denied, the swap keeps the old token there" $?
+  row_g2_17_key_unreadable_on_resume "$SCRIPT_SRC"; check "G2-17 _PREV pinned and the <KEY> read fails: UNREADABLE re-run refusal, never KEY_UNEXPECTED" $?
   row_g2_r1_resume_after_prev "$SCRIPT_SRC"; check "G2-R1 re-run after the _PREV copy: copy-staged-token + delete only, no _PREV write, SWAPPED" $?
   row_g2_r2_resume_after_key "$SCRIPT_SRC"; check "G2-R2 re-run after the <KEY> write: delete-staging-key only, no write, SWAPPED" $?
 
@@ -1177,10 +1360,15 @@ CONTRACT
   row_i1_reference_unreadable "$SCRIPT_SRC"; check "I-1 inventory: a reference that verifies but cannot be read is CENSUS_BLIND, exit non-zero" $?
 
   echo "== the environment, the trusted files and the manifest parser =="
-  row_e1_env_refused "$SCRIPT_SRC" git; check "E1 GIT_DIR set: ENV_REFUSED exit 64 before any doppler call" $?
-  row_e1_env_refused "$SCRIPT_SRC" api; check "E1 DOPPLER_API_HOST set: ENV_REFUSED exit 64 before any doppler call" $?
-  row_e1_env_refused "$SCRIPT_SRC" function; check "E1 curl exported as a shell function: ENV_REFUSED exit 64 before any call" $?
+  for _m in "${E1_VARS[@]}"; do
+    row_e1_env_refused "$SCRIPT_SRC" var "$_m"; check "E1 ${_m} inherited: ENV_REFUSED name=${_m}, exit 64 before any doppler or curl call" $?
+  done
+  for _m in "${E1_FUNCS[@]}"; do
+    row_e1_env_refused "$SCRIPT_SRC" function "$_m"; check "E1 ${_m} an exported shell function: ENV_REFUSED name=function:${_m}, exit 64 before any call" $?
+  done
+  row_e1_env_inert "$SCRIPT_SRC"; check "E1 GIT_EDITOR, GIT_SEQUENCE_EDITOR, GIT_PAGER, GIT_TERMINAL_PROMPT and GIT_CEILING_DIRECTORIES are not refused: verify ok" $?
   row_t1_dirty_file "$SCRIPT_SRC" tool; check "T1 an uncommitted edit to cloudflare-readonly.sh: UNTRUSTED_FILE, the wrapper never runs, no REVOKE_READY" $?
+  row_t1_dirty_file "$SCRIPT_SRC" filter; check "T1 an edit a clean filter hides from a filtered hash: UNTRUSTED_FILE (hash-object --no-filters), no REVOKE_READY" $?
   row_t1_dirty_file "$SCRIPT_SRC" inventory; check "T1 an uncommitted edit to the inventory file: UNTRUSTED_FILE, FLOOR_MISSING, census-floor" $?
   row_m1_manifest_invalid "$SCRIPT_SRC" tab; check "M1 a manifest line with a tab after the tag: MANIFEST_INVALID naming its file line, zero writes" $?
   row_m1_manifest_invalid "$SCRIPT_SRC" indent; check "M1 a manifest line with an indented line: MANIFEST_INVALID naming its file line, zero writes" $?
@@ -1190,6 +1378,15 @@ CONTRACT
   row_m1_manifest_invalid "$SCRIPT_SRC" dupkey; check "M1 a manifest line with a duplicate key: MANIFEST_INVALID naming its file line, zero writes" $?
   row_m1_manifest_invalid "$SCRIPT_SRC" suffix; check "M1 a manifest line with a key ending _PREV: MANIFEST_INVALID naming its file line, zero writes" $?
   row_m1_manifest_invalid "$SCRIPT_SRC" dupholder; check "M1 a manifest line with a duplicate holder: MANIFEST_INVALID naming its file line, zero writes" $?
+  for _m in removed duplicated malformed; do
+    row_f1_floor_line "$SCRIPT_SRC" "$_m"; check "F1 the P5-PROJECT-FLOOR line ${_m}: FLOOR_MISSING name=project-floor-line, census-floor, no REVOKE_READY" $?
+  done
+
+  echo "== the _PREV state and the revoked verdict (CTO D6) =="
+  for _m in pinned denied other malformed unreadable unreachable absent; do
+    row_p1_prev_state "$SCRIPT_SRC" "$_m"; check "P1 inventory and verify each print SOLEUR_P5_PREV key=${KA} state=${_m} exactly once" $?
+  done
+  row_v1_revoked "$SCRIPT_SRC"; check "V1 AUDIT revoked (no reference, _PREV denied): verdict=revoked, census value=revoked, no REVOKE_READY, the others still REVOKE_READY, its other checks still run" $?
 
   echo "== P-leak: no synthesized value, digest or full id in any output =="
   ! grep -qE 'SYNTH-|synth-actor|192\.0\.2\.7|injected\.invalid' "$ALL_OUT"
@@ -1212,8 +1409,20 @@ leak_scan "$LEAK_CLEAN"
 check "control: the same log whose only 64-hex line is an exact SOLEUR_BOOTSTRAP_PLAN line passes the leak scan" $?
 
 # score <row-fn> <src> <step> <why-ere> [<row-args>...] — rc 0 when the row went red as named (killed()).
+# PRISTINE=1 (the --mutants pre-pass, testdesign S16): score runs the row's pristine arm instead, on the UNMUTATED
+# script with no harness flag, once per distinct row and arguments, and records a red one; nothing is counted.
+PRISTINE=0; PRISTINE_SEEN=" "; PRISTINE_RED=""; PRISTINE_N=0
 score() {
   local fn="$1" src="$2" step="$3" why="$4" r; shift 4
+  if [[ "$PRISTINE" -eq 1 ]]; then
+    local id="${fn} $*" hf="$HARNESS_FLAG"
+    [[ "$fn" != ctl_row && "$PRISTINE_SEEN" != *" ${id// /:} "* ]] || return 0
+    PRISTINE_SEEN="${PRISTINE_SEEN}${id// /:} "
+    HARNESS_FLAG=""; "$fn" "$SCRIPT_SRC" "$@" >/dev/null 2>&1; r=$?; HARNESS_FLAG="$hf"
+    PRISTINE_N=$((PRISTINE_N + 1))
+    [[ "$r" -eq 0 ]] || PRISTINE_RED="${PRISTINE_RED}    ${id} (step ${STEP}; ${WHY})"$'\n'
+    return 0
+  fi
   "$fn" "$src" "$@"; r=$?
   killed "$r" "$step" "$why"
 }
@@ -1228,18 +1437,13 @@ check "control: the scorer rejects a row that went red at the named step for ano
 score ctl_row - named 'reason=wanted' named 'rc=1 reason=wanted ' 1 >/dev/null
 check "control: the scorer accepts a row that went red at the named step with the named reason" $?
 
-if [[ "$MODE" == mutants ]]; then
-  # The pristine pass: on the UNMUTATED script these rows must be green, or every "killed" below is noise.
-  row_g1_mustpass "$SCRIPT_SRC" && row_g2_5_order_in_window "$SCRIPT_SRC" \
-    || { printf 'HARNESS: a pristine row is red on the unmutated script (step %s; %s), so no mutant verdict means anything\n' "$STEP" "$WHY" >&2; exit 2; }
-fi
-
 # ==================================================================================================
-# Mutations and harness rows (full mode tail, and --mutants)
+# Mutations and harness rows (full mode tail, and --mutants). ONE function, run twice under --mutants: first as
+# the pristine pass (PRISTINE=1: every scored row's arm on the unmutated script, nothing counted), then scored.
 # ==================================================================================================
-echo "== mutations =="
 mutate() { # <label> <dst> — perl program on stdin, applied to the real script by copy_with(); proves it landed
   local label="$1" dst="$2" r=0
+  [[ "$PRISTINE" -eq 0 ]] || return 0
   copy_with "$SCRIPT_SRC" "$dst" || r=$?
   case "$r" in
     0) pass "mutation ${label} landed (differs from the source, bash -n clean)" ;;
@@ -1248,7 +1452,9 @@ mutate() { # <label> <dst> — perl program on stdin, applied to the real script
   esac
 }
 # mkill <label> <row-fn> <src> <step> <why-ere> [<row-args>...] — the row must go red AT <step> for <why>.
-mkill() { local label="$1"; shift; score "$@"; check "${label} turns ${1#row_} RED at step ${3} (/${4}/)" $?; }
+mkill() { local label="$1" r; shift; score "$@"; r=$?; [[ "$PRISTINE" -eq 1 ]] || check "${label} turns ${1#row_} RED at step ${3} (/${4}/)" "$r"; }
+scored_section() {
+echo "== mutations =="
 
 if mutate G1M1 "$SB/g1m1.sh" <<'PERL'; then
 s{  \[\[ "\$CT_FLOOR_OK" -eq 1 \]\] \|\| \{ vfail "\$k" census-floor; return 0; \}\n}{}
@@ -1256,11 +1462,13 @@ PERL
   mkill "G1M1 (census floor deleted)" row_g1_1_floor "$SB/g1m1.sh" verdict 'reason=census-blind'
   # The scorer's no-network control: the same mutant under a curl that never connects reds the same row at the
   # same step, but for another reason, and must NOT count as killed.
-  HARNESS_FLAG=curl-down; ! score row_g1_1_floor "$SB/g1m1.sh" verdict 'reason=census-blind' >/dev/null; r=$?; HARNESS_FLAG=""
-  check "control: G1M1 under a curl that never connects is NOT scored as killed (red for another reason)" "$r"
+  if [[ "$PRISTINE" -eq 0 ]]; then
+    HARNESS_FLAG=curl-down; ! score row_g1_1_floor "$SB/g1m1.sh" verdict 'reason=census-blind' >/dev/null; r=$?; HARNESS_FLAG=""
+    check "control: G1M1 under a curl that never connects is NOT scored as killed (red for another reason)" "$r"
+  fi
 fi
 if mutate G1M2 "$SB/g1m2.sh" <<'PERL'; then
-s{  \[\[ "\$C_OLD" -eq 1 && "\$C_PREV_OLD" -eq 1 \]\] \|\| \{ vfail "\$k" census-blind; return 0; \}\n}{}
+s{  \[\[ "\$revoked" -eq 1 \]\] \|\| \[\[ "\$C_OLD" -eq 1 && "\$C_PREV_OLD" -eq 1 \]\] \|\| \{ vfail "\$k" census-blind; return 0; \}\n}{}
 PERL
   mkill "G1M2 (old_hits check deleted)" row_g1_2_blind "$SB/g1m2.sh" verdict 'SOLEUR_P5_REVOKE_READY '
 fi
@@ -1280,7 +1488,7 @@ PERL
   mkill "G1M5 (active-status check dropped)" row_g1_5_expired "$SB/g1m5.sh" verdict 'SOLEUR_P5_REVOKE_READY '
 fi
 if mutate G1M6 "$SB/g1m6.sh" <<'PERL'; then
-s{if \[\[ "\$a" -eq 0 && "\$IDENT_ID" == "\$pin" \]\]; then REF_SRC=PREV;}{if true; then REF_SRC=PREV;}
+s{if \[\[ "\$PREV_STATE" == pinned \]\]; then REF_SRC=PREV;}{if in_names "\$\{k\}_PREV" "\$TF_NAMES"; then REF_SRC=PREV;}
 PERL
   mkill "G1M6 (reference taken from _PREV by name)" row_g1_6_prev_new "$SB/g1m6.sh" source 'reason=old-holder'
 fi
@@ -1295,7 +1503,7 @@ PERL
   mkill "G2M1 (swap precondition deleted)" row_g2_1_key_not_pinned "$SB/g2m1.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN '
 fi
 if mutate G2M2 "$SB/g2m2.sh" <<'PERL'; then
-s{      if \[\[ "\$a" -eq 0 && "\$IDENT_ID" == "\$pin" \]\]; then prev_ok=1; fi\n}{      prev_ok=1\n}
+s{      pinned\) prev_ok=1 ;;\n      absent\|denied\) ;;\n}{      absent) ;;\n      *) prev_ok=1 ;;\n}
 PERL
   mkill "G2M2 (an existing _PREV accepted by name)" row_g2_2_prev_by_name "$SB/g2m2.sh" refuse 'SOLEUR_P5_KEY_UNEXPECTED '
 fi
@@ -1367,12 +1575,12 @@ PERL
   mkill "G2M8 (a no-verdict re-check reported as not pinned)" row_g2_7_window "$SB/g2m8.sh" marker 'SOLEUR_P5_PREV_NOT_PINNED ' unreachable
 fi
 if mutate G2M9 "$SB/g2m9.sh" <<'PERL'; then
-s{      elif \[\[ -n "\$dk" && "\$dk" == "\$dp" \]\]; then mode=swap\n}{      elif true; then mode=swap\n}
+s{      elif \[\[ "\$dk" == "\$dp" \]\]; then mode=swap\n}{      elif true; then mode=swap\n}
 PERL
   mkill "G2M9 (prev_ok mode overwrites <KEY> whatever it holds)" row_g2_8_key_unexpected "$SB/g2m9.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN '
 fi
 if mutate G2M10 "$SB/g2m10.sh" <<'PERL'; then
-s{      if \[\[ "\$prev_ok" -eq 0 && "\$a" -eq 0 && "\$IDENT_STATUS" == active \]\]; then\n}{      if false; then\n}
+s{      other\)\n}{      other) ;;\n      other-unreachable)\n}
 PERL
   mkill "G2M10 (a live non-pinned _PREV overwritten)" row_g2_9_prev_live "$SB/g2m10.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN '
 fi
@@ -1402,7 +1610,7 @@ PERL
   mkill "G2M15 (the plan op no longer names the staged token)" row_g2_14_restaged_after_plan "$SB/g2m15.sh" plan-names-token 'SOLEUR_BOOTSTRAP_PLAN '
 fi
 if mutate G2M16 "$SB/g2m16.sh" <<'PERL'; then
-s{      if \[\[ -n "\$dk" && "\$dk" == "\$dn" \]\]; then mode=delete\n}{      if false; then mode=delete\n}
+s{      if \[\[ "\$dk" == "\$dn" \]\]; then mode=delete\n}{      if false; then mode=delete\n}
 PERL
   mkill "G2M16 (the delete-only resume mode removed)" row_g2_r2_resume_after_key "$SB/g2m16.sh" plan 'SOLEUR_P5_KEY_UNEXPECTED '
 fi
@@ -1464,7 +1672,7 @@ PERL
   mkill "G1M15 (a manifest holder without the new token accepted)" row_g1_14_holder_not_new "$SB/g1m15.sh" verdict 'SOLEUR_P5_REVOKE_READY ' absent
 fi
 if mutate G1M16 "$SB/g1m16.sh" <<'PERL'; then
-s{  \[\[ "\$REF_ST" == active \]\] \|\| \{ vfail "\$k" prev-not-active; return 0; \}\n}{}
+s{  \[\[ "\$revoked" -eq 1 \|\| "\$REF_ST" == active \]\] \|\| \{ vfail "\$k" prev-not-active; return 0; \}\n}{}
 PERL
   mkill "G1M16 (verify accepts an expired _PREV)" row_g1_15_prev_expired "$SB/g1m16.sh" verdict 'SOLEUR_P5_REVOKE_READY '
 fi
@@ -1511,16 +1719,33 @@ PERL
 fi
 
 if mutate ENV1M "$SB/env1m.sh" <<'PERL'; then
-s{for v in GIT_DIR [^\n]*\n.*?\ndone\n}{}s
+s{for v in \$\(compgen -e\); do\n.*?\ndone\n}{}s
 PERL
-  # Without the refusal, GIT_DIR re-points the .env ignore probe at another repository's rules.
-  mkill "ENV1M (the git and Doppler location refusal deleted)" row_e1_env_refused "$SB/env1m.sh" refuse 'SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED ' git
-  mkill "ENV1M (the git and Doppler location refusal deleted)" row_e1_env_refused "$SB/env1m.sh" refuse 'SOLEUR_P5_REVOKE_READY ' api
+  # Without the refusal the run goes on to a verdict (rc 0 or 1) instead of exiting 64.
+  for _m in "${E1_VARS[@]}"; do mkill "ENV1M (the variable class refusal deleted)" row_e1_env_refused "$SB/env1m.sh" refuse 'rc=[01] ' var "$_m"; done
 fi
 if mutate ENV2M "$SB/env2m.sh" <<'PERL'; then
-s{for v in doppler curl git jq; do\n.*?\ndone\n}{}s
+s{while read -r _ _ v; do\n.*?\ndone < <\(declare -Fx\)\n}{}s
 PERL
-  mkill "ENV2M (the exported-function refusal deleted)" row_e1_env_refused "$SB/env2m.sh" refuse 'SOLEUR_P5_REVOKE_READY ' function
+  for _m in "${E1_FUNCS[@]}"; do mkill "ENV2M (the exported-function refusal deleted)" row_e1_env_refused "$SB/env2m.sh" refuse 'rc=[01] ' function "$_m"; done
+fi
+if mutate ENV3M "$SB/env3m.sh" <<'PERL'; then
+s{    GIT_\*\|BASH_ENV\|ENV\|DOPPLER_API_HOST\)\n}{    GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_COMMON_DIR|GIT_NAMESPACE|GIT_ALTERNATE_OBJECT_DIRECTORIES|DOPPLER_API_HOST)\n}
+PERL
+  # The old NAMED list: every member outside it must now die.
+  for _m in GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_EXEC_PATH GIT_SYNTH_UNLISTED BASH_ENV ENV; do
+    mkill "ENV3M (the GIT_* class narrowed back to a name list)" row_e1_env_refused "$SB/env3m.sh" refuse 'rc=[01] ' var "$_m"
+  done
+fi
+if mutate ENV4M "$SB/env4m.sh" <<'PERL'; then
+s{done < <\(declare -Fx\)\n}{done < <(declare -Fx | sed -n '/ \\(doppler\\|curl\\|git\\|jq\\)\$/p')\n}
+PERL
+  for _m in sed synth_unlisted_fn; do mkill "ENV4M (the function refusal narrowed to doppler/curl/git/jq)" row_e1_env_refused "$SB/env4m.sh" refuse 'rc=[01] ' function "$_m"; done
+fi
+if mutate EXM "$SB/exm.sh" <<'PERL'; then
+s{    GIT_EDITOR\|GIT_SEQUENCE_EDITOR\|GIT_PAGER\|GIT_TERMINAL_PROMPT\|GIT_CEILING_DIRECTORIES\) ;;\n}{}
+PERL
+  mkill "EXM (the five inert GIT_* variables refused too: every harness run stops)" row_e1_env_inert "$SB/exm.sh" verdict 'SOLEUR_P5_ENV_REFUSED'
 fi
 if mutate TF1M "$SB/tf1m.sh" <<'PERL'; then
 s{  \[\[ -n "\$wb" && "\$wb" == "\$hb" \]\] \|\| return 1\n}{}
@@ -1542,25 +1767,153 @@ s{grep -n -a -F -- "\$MANIFEST_WORD"}{grep -n -a -- "^# \$\{MANIFEST_WORD\} "}
 PERL
   mkill "MF2M (a near-miss manifest spelling skipped silently)" row_m1_manifest_invalid "$SB/mf2m.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN ' tab
 fi
+if mutate TF2M "$SB/tf2m.sh" <<'PERL'; then
+s{hash-object --no-filters -- }{hash-object -- }
+PERL
+  mkill "TF2M (tracked_file hashes through the clean filter)" row_t1_dirty_file "$SB/tf2m.sh" verdict 'SOLEUR_P5_REVOKE_READY ' filter
+fi
+if mutate FLM "$SB/flm.sh" <<'PERL'; then
+s{\{ floor=""; ct_missing project-floor-line; \}}{{ floor=""; }}
+PERL
+  for _m in removed duplicated malformed; do mkill "FLM (a bad floor line no longer reported)" row_f1_floor_line "$SB/flm.sh" verdict 'SOLEUR_P5_REVOKE_READY ' "$_m"; done
+fi
+if mutate RRM "$SB/rrm.sh" <<'PERL'; then
+s{old_owner=%s\\n' "\$k" "\$REF_ID" "\$key_id"}{old_owner=%s\\n' "\$k" "\$REF_ID" "\$REF_ID"}
+PERL
+  mkill "RRM (REVOKE_READY new_id is the old id)" row_g1_mustpass "$SB/rrm.sh" verdict 'SOLEUR_P5_REVOKE_READY '
+fi
+if mutate OOM "$SB/oom.sh" <<'PERL'; then
+s{"\$key_owner" "\$REF_OWNER"\n}{"\$key_owner" "\$key_owner"\n}
+PERL
+  mkill "OOM (REVOKE_READY old_owner is the new token's owner)" row_s2_account_owned "$SB/oom.sh" verdict 'SOLEUR_P5_REVOKE_READY '
+fi
+if mutate NDM "$SB/ndm.sh" <<'PERL'; then
+s{    case "\$n" in CF_API_TOKEN\*\) ;;}{    case "\$n" in CF_API_TOKEN) ;;}
+PERL
+  mkill "NDM (distinctness checked against CF_API_TOKEN only)" row_g2_13_next_not_distinct "$SB/ndm.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN ' managed
+fi
+# The _PREV state, one mutant per state (CTO D6).
+if mutate PSM1 "$SB/psm1.sh" <<'PERL'; then
+s{then PREV_STATE=pinned; else PREV_STATE=other; fi}{then PREV_STATE=other; else PREV_STATE=other; fi}
+PERL
+  mkill "PSM1 (a pinned _PREV reported as other)" row_p1_prev_state "$SB/psm1.sh" inventory 'SOLEUR_P5_PREV ' pinned
+fi
+if mutate PSM2 "$SB/psm2.sh" <<'PERL'; then
+s{then PREV_STATE=pinned; else PREV_STATE=other; fi}{then PREV_STATE=pinned; else PREV_STATE=pinned; fi}
+PERL
+  mkill "PSM2 (a non-pinned _PREV reported as pinned)" row_p1_prev_state "$SB/psm2.sh" inventory 'SOLEUR_P5_PREV ' other
+fi
+if mutate PSM3 "$SB/psm3.sh" <<'PERL'; then
+s{      1\) PREV_STATE=denied ;;\n}{      1) PREV_STATE=other ;;\n}
+PERL
+  mkill "PSM3 (a denied _PREV reported as other)" row_p1_prev_state "$SB/psm3.sh" inventory 'SOLEUR_P5_PREV ' denied
+fi
+if mutate PSM4 "$SB/psm4.sh" <<'PERL'; then
+s{      2\) PREV_STATE=malformed ;;\n}{      2) PREV_STATE=unreadable ;;\n}
+PERL
+  mkill "PSM4 (a malformed _PREV reported as unreadable)" row_p1_prev_state "$SB/psm4.sh" inventory 'SOLEUR_P5_PREV ' malformed
+fi
+if mutate PSM5 "$SB/psm5.sh" <<'PERL'; then
+s{      3\) PREV_STATE=unreachable ;;\n}{      3) PREV_STATE=denied ;;\n}
+PERL
+  mkill "PSM5 (a no-verdict _PREV reported as denied)" row_p1_prev_state "$SB/psm5.sh" inventory 'SOLEUR_P5_PREV ' unreachable
+fi
+if mutate PSM6 "$SB/psm6.sh" <<'PERL'; then
+s{      \*\) PREV_STATE=unreadable ;;\n}{      *) PREV_STATE=absent ;;\n}
+PERL
+  mkill "PSM6 (an unreadable _PREV reported as absent)" row_p1_prev_state "$SB/psm6.sh" inventory 'SOLEUR_P5_PREV ' unreadable
+fi
+if mutate PSM7 "$SB/psm7.sh" <<'PERL'; then
+s{PREV_KEY="\$k"; PREV_STATE=absent;}{PREV_KEY="\$k"; PREV_STATE=none;}
+PERL
+  mkill "PSM7 (an absent _PREV not reported as absent)" row_p1_prev_state "$SB/psm7.sh" inventory 'SOLEUR_P5_PREV ' absent
+fi
+if mutate PSM8 "$SB/psm8.sh" <<'PERL'; then
+s{state=%s id=%s owner=%s\\n' "\$k" "\$PREV_STATE" "\$PREV_ID" "\$PREV_OWNER"}{state=%s id=%s\\n' "\$k" "\$PREV_STATE" "\$PREV_ID"}
+PERL
+  mkill "PSM8 (the _PREV owner dropped from the line)" row_p1_prev_state "$SB/psm8.sh" inventory 'SOLEUR_P5_PREV ' other
+fi
+# The revoked verdict (CTO D6).
+if mutate RVM1 "$SB/rvm1.sh" <<'PERL'; then
+s{  if \[\[ "\$REF_SRC" == none && "\$PREV_STATE" == denied \]\]; then revoked=1; fi\n}{}
+PERL
+  mkill "RVM1 (no revoked state: a revoked key fails no-reference)" row_v1_revoked "$SB/rvm1.sh" verdict 'reason=no-reference'
+fi
+if mutate RVM2 "$SB/rvm2.sh" <<'PERL'; then
+s{ && "\$PREV_STATE" == denied \]\]; then v=revoked; fi}{ && "\$PREV_STATE" == nothing ]]; then v=revoked; fi}
+PERL
+  mkill "RVM2 (the revoked _PREV census row printed as other)" row_v1_revoked "$SB/rvm2.sh" census-row 'rc=0 '
+fi
+if mutate RVM3 "$SB/rvm3.sh" <<'PERL'; then
+s{then printf 'SOLEUR_P5_VERIFY key=%s verdict=revoked\\n' "\$k"; return 0; fi}{then vfail "\$k" revoked; return 0; fi}
+PERL
+  mkill "RVM3 (a revoked key counted as a verify failure)" row_v1_revoked "$SB/rvm3.sh" verdict 'reason=revoked'
+fi
+if mutate RVM4 "$SB/rvm4.sh" <<'PERL'; then
+s{\n(  hbad=0\n)}{\n  if [[ "\$revoked" -eq 1 ]]; then printf 'SOLEUR_P5_VERIFY key=%s verdict=revoked\\n' "\$k"; return 0; fi\n$1}
+PERL
+  mkill "RVM4 (revoked short-circuits the manifest-holder check)" row_v1_revoked "$SB/rvm4.sh" checks-still-run 'rc=0 '
+fi
+# The _PREV a swap may overwrite (dataint N3).
+if mutate PRM1 "$SB/prm1.sh" <<'PERL'; then
+s{      unreadable\) swap_refuse [^\n]*\n}{      unreadable) ;;\n}
+PERL
+  mkill "PRM1 (an unreadable _PREV treated as absent)" row_g2_15_prev_refused "$SB/prm1.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN ' unreadable
+fi
+if mutate PRM2 "$SB/prm2.sh" <<'PERL'; then
+s{      malformed\) swap_refuse [^\n]*\n}{      malformed) ;;\n}
+PERL
+  mkill "PRM2 (a malformed _PREV overwritten)" row_g2_15_prev_refused "$SB/prm2.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN ' malformed
+fi
+if mutate PRM3 "$SB/prm3.sh" <<'PERL'; then
+s{        swap_refuse "\$\{TFC\}/\$\{k\}_PREV holds a token \(id [^\n]*\n}{        ;;\n}
+PERL
+  mkill "PRM3 (only a LIVE non-pinned _PREV refused, as before)" row_g2_15_prev_refused "$SB/prm3.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN ' expired
+fi
+if mutate PRM4 "$SB/prm4.sh" <<'PERL'; then
+s{      absent\|denied\) ;;\n}{      absent) ;;\n}
+PERL
+  mkill "PRM4 (a revoked _PREV no longer overwritable: the next rotation stops)" row_g2_16_denied_prev_overwritten "$SB/prm4.sh" plan 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED'
+fi
+if mutate KUM "$SB/kum.sh" <<'PERL'; then
+s{        d="\$\(digest_of "\$PROJ" "\$TFC" "\$n"\)" \|\| \{\n.*?\n        \}\n}{        d="\$(digest_of "\$PROJ" "\$TFC" "\$n" || true)"\n}s
+PERL
+  mkill "KUM (a failed <KEY> read on resume reported as KEY_UNEXPECTED)" row_g2_17_key_unreadable_on_resume "$SB/kum.sh" refuse 'SOLEUR_P5_KEY_UNEXPECTED'
+fi
 
 echo "== harness rows (the instrument must be able to go red) =="
 hred() { # <label> <step> <why-ere> <flag> <row-fn> [<row-args>...] — the row on the REAL script under a broken stub
   local label="$1" step="$2" why="$3" fl="$4" fn="$5" r; shift 5
   HARNESS_FLAG="$fl"; score "$fn" "$SCRIPT_SRC" "$step" "$why" "$@"; r=$?
   HARNESS_FLAG=""
-  check "${label} turns ${fn#row_} RED at step ${step} (/${why}/)" "$r"
+  [[ "$PRISTINE" -eq 1 ]] || check "${label} turns ${fn#row_} RED at step ${step} (/${why}/)" "$r"
 }
 hred "H1 (every doppler get answers an empty value)" verdict 'reason=key-malformed' get-empty row_g1_3_second_member
 hred "H1 (every doppler get answers an empty value)" verdict 'reason=key-malformed' get-empty row_g1_4_unlisted_project
 hred "H1 (every doppler get answers an empty value)" verdict 'reason=key-malformed' get-empty row_g1_mustpass
-score row_g2_3_prev_copy_mismatch "$SCRIPT_SRC" no-key-write 'SOLEUR_P5_COPY_MISMATCH ' KEY
-check "H2 (the stub corrupts the <KEY> write, not _PREV) turns g2_3_prev_copy_mismatch RED at step no-key-write" $?
+# H2's pristine arm is the row's default (PREV) arm: its KEY arm is red on the real script by design.
+if [[ "$PRISTINE" -eq 1 ]]; then score row_g2_3_prev_copy_mismatch "$SCRIPT_SRC" - -
+else
+  score row_g2_3_prev_copy_mismatch "$SCRIPT_SRC" no-key-write 'SOLEUR_P5_COPY_MISMATCH ' KEY
+  check "H2 (the stub corrupts the <KEY> write, not _PREV) turns g2_3_prev_copy_mismatch RED at step no-key-write" $?
+fi
 hred "H3 (every holder get returns the _PREV value)" only-first 'SOLEUR_P5_COPIED ' get-as-prev row_g3_2_second_already_new
+}   # scored_section
+
+if [[ "$MODE" == mutants ]]; then
+  PRISTINE=1; scored_section > "$SB/pristine-pass.log" 2>&1; PRISTINE=0
+  if [[ -n "$PRISTINE_RED" || "$PRISTINE_N" -eq 0 ]]; then
+    printf 'HARNESS: the pristine arm of %s scored row(s) ran; these are red on the unmutated script, so no mutant verdict means anything:\n%s' "$PRISTINE_N" "$PRISTINE_RED" >&2
+    exit 2
+  fi
+  pass "pristine pass: all ${PRISTINE_N} distinct scored rows are green on the unmutated script, with no harness flag"
+fi
+scored_section
 
 # --- anti-vacuity floor (reported directly, never through fail()) -----------------
 # The subtrahend is the instrument self-test's one counted pass; the bound is exact for each mode.
 TOTAL=$((PASS + FAIL)); SELFTEST_PASSES=1
-case "$MODE" in full) MIN_ASSERTIONS=209 ;; *) MIN_ASSERTIONS=126 ;; esac
+case "$MODE" in full) MIN_ASSERTIONS=329 ;; *) MIN_ASSERTIONS=206 ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -lt "$MIN_ASSERTIONS" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran in %s mode, floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$MIN_ASSERTIONS" >&2
   printf 'Total: %s assertions, %s failed\n' "$TOTAL" "$((FAIL + 1))"
