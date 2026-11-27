@@ -71,7 +71,7 @@ set -f
 # P5-MANIFEST CF_API_TOKEN_PAGERULES_READ    | 86aa993e      | soleur/prd_terraform
 # The census floor (CTO D2): the Doppler projects the operator identity listed on 2026-11-27. A listing
 # without any of them is census-blind; the soleur configs come from the tracked inventory file.
-# P5-PROJECT-FLOOR soleur soleur-infra-privileged soleur-inngest soleur-registry soleur-deploy-channel soleur-infra-app soleur-github-app soleur-git-data-root
+# P5-PROJECT-FLOOR soleur soleur-infra-privileged soleur-inngest soleur-registry soleur-deploy-channel soleur-infra-app soleur-github-app soleur-git-data-root example-project
 
 # --- the stage table ---------------------------------------------------------
 # ONE source of truth: --list prints it, the dispatcher validates `--stage`
