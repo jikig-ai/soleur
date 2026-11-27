@@ -1178,7 +1178,7 @@ VTIO="$INFRA_SCRIPTS/verify-tunnel-ingress-origin.sh"
 [[ -f "$FHBT" && -f "$VTIO" ]] || fatal "stage 3: the live-in-apply scripts are missing ($FHBT, $VTIO)"
 printf '%s' '[]' > "$BODIES/empty_array.json"
 printf '%s' '{"data":[{"timestamp":"2026-10-01T00:00:00+00:00","stage":"app_zot","host_name":"soleur-web-9","detail":"synthetic"}]}' > "$BODIES/origin_event.json"
-printf '%s' '{"success":true,"result":{"config":{"ingress":[{"hostname":"deploy.soleur.example","service":"http://10.0.1.10:9000"},{"hostname":"ssh.soleur.example","service":"ssh://10.0.1.10:22"},{"hostname":"registry.soleur.example","service":"tcp://10.0.1.30:5000"},{"service":"http_status:404"}]}}}' > "$BODIES/cf_tunnel_cfg.json"
+printf '%s' '{"success":true,"result":{"config":{"ingress":[{"hostname":"deploy.soleur.example","service":"http://10.0.1.12:9000"},{"hostname":"ssh.soleur.example","service":"ssh://10.0.1.12:22"},{"hostname":"registry.soleur.example","service":"tcp://10.0.1.30:5000"},{"service":"http_status:404"}]}}}' > "$BODIES/cf_tunnel_cfg.json"
 
 # mutated_copy <script> <outfile> <from-literal> <to-literal>: a copy with ONE literal replaced;
 # FATAL if the literal is absent (a mutation that does not land reports the baseline, which is
@@ -1268,7 +1268,7 @@ cat > "$VT_STUBS/doppler" <<'VT_DOPPLER'
 set -u
 case "${1:-}" in
   # The console session answers two expressions, one per line: web-1's private IP, then local.registry_endpoint.
-  run) printf '"10.0.1.10"\n"10.0.1.30:5000"\n' ;;
+  run) printf '"10.0.1.12"\n"10.0.1.30:5000"\n' ;;
   secrets)
     case "${3:-}" in
       CF_API_TOKEN) printf '%s' "${VT_CF_API_TOKEN:-}" ;;
@@ -4349,7 +4349,7 @@ else row "S4 parity population: a Markdown file teaches a divergent or unlisted 
 # first bc_* use; no credential header literal inside a bc_curl statement; no stderr discard on one; no branch on rc == 2; the marker
 # names the file).
 # =====================================================================================
-S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/probe-github-app-mint.sh apps/web-platform/infra/git-data-wipe.sh scripts/inngest-link-flip.sh scripts/inngest-key-rotate.sh scripts/key-rotate.sh scripts/followthroughs/git-data-rehearsal-evidence.sh | sort)"
+S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/probe-github-app-mint.sh apps/web-platform/infra/git-data-wipe.sh scripts/inngest-link-flip.sh scripts/inngest-key-rotate.sh scripts/key-rotate.sh scripts/followthroughs/git-data-rehearsal-evidence.sh apps/web-platform/infra/scripts/cf-access-deploy-token-mint.sh apps/web-platform/infra/scripts/cf-tunnel-host-predelete.sh | sort)"
 S4_SCRIPT_POP="$(cd "$REPO_ROOT" && git grep -lE '^[[:space:]]*(source|\.)[[:space:]].*scripts/lib/bearer-curl\.sh' -- '*.sh' ':!*.test.sh' ':!tests' ':!scripts/lib' | sort)"
 S4_SU="$(comm -23 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
 S4_SS="$(comm -13 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
@@ -4387,8 +4387,8 @@ done
 [[ -z "$S4_RC2_BAD" ]] && row "S4 structure: no script branches on rc == 2 (the marker is the discriminator)" ok || row "S4 structure: a script branches on rc 2" fail "$S4_RC2_BAD"
 [[ -z "$S4_NAME_BAD" ]] && row "S4 structure: every bc_curl / bc_refuse in a script names its own file in the marker" ok || row "S4 structure: a script's marker names another file" fail "$S4_NAME_BAD"
 [[ -z "$S4_HMAC_SCRIPT_BAD" ]] && row "S4 structure: no library-user script computes an HMAC with the key on openssl's argv" ok || row "S4 structure: openssl -hmac in a library-user script" fail "$S4_HMAC_SCRIPT_BAD"
-# The floor is the realized count (13 bc_curl statements: track.sh x2, push-infra-config x1, github-app-key-status x1, probe-github-app-mint x1, git-data-wipe x2 (the read and the write wrapper), git-data-rehearsal-evidence x1, inngest-link-flip x2 (flip_webhook's POST and GET arms), inngest-key-rotate x1 (kr_hz, the Hetzner read), key-rotate x2 (the deploy-status GET and the vector-restart POST)). BOTH operands are literals above the `if`.
-S4_SCALLS_FLOOR=13
+# The floor is the realized count (16 bc_curl statements: track.sh x2, push-infra-config x1, github-app-key-status x1, probe-github-app-mint x1, git-data-wipe x2 (the read and the write wrapper), git-data-rehearsal-evidence x1, inngest-link-flip x2 (flip_webhook's POST and GET arms), inngest-key-rotate x1 (kr_hz, the Hetzner read), key-rotate x2 (the deploy-status GET and the vector-restart POST), cf-access-deploy-token-mint x2 (the cleanup DELETE and http), cf-tunnel-host-predelete x1 (api)). BOTH operands are literals above the `if`.
+S4_SCALLS_FLOOR=16
 if [[ "$S4_SCALLS" -ge "$S4_SCALLS_FLOOR" ]]; then row "S4 structure: the library-user scripts hold $S4_SCALLS bc_curl statements (anti-vacuity floor $S4_SCALLS_FLOOR)" ok
 else row "S4 structure: the script population floor" fail "only $S4_SCALLS bc_curl statements derived (floor $S4_SCALLS_FLOOR)"; fi
 # The lint's SCRIPT-CONSUMER derivation (scripts/lint-workflow-local-action-checkout.py, SCRIPT CONSUMERS) runs its `git ls-files` arm on the REAL tree only here
@@ -5479,7 +5479,7 @@ for f in sys.argv[2:]:
 print(n)
 '
 S4_RP="$S4/replay"; assert_fixture_dir "$S4_RP"; mkdir -p "$S4_RP"
-S4_REPLAY_FILES=".github/actions/dispatch-web-redeploy/track.sh .github/actions/mint-infra-app-token/action.yml .github/workflows/apply-deploy-pipeline-fix.yml .github/workflows/apply-github-infra.yml .github/workflows/apply-inngest-rls.yml .github/workflows/restart-inngest-server.yml .github/workflows/scheduled-inngest-health.yml apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/key-rotate.sh"
+S4_REPLAY_FILES=".github/actions/dispatch-web-redeploy/track.sh .github/actions/mint-infra-app-token/action.yml .github/workflows/apply-deploy-pipeline-fix.yml .github/workflows/apply-github-infra.yml .github/workflows/apply-inngest-rls.yml .github/workflows/restart-inngest-server.yml .github/workflows/scheduled-inngest-health.yml apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/key-rotate.sh apps/web-platform/infra/scripts/cf-access-deploy-token-mint.sh apps/web-platform/infra/scripts/cf-tunnel-host-predelete.sh"
 S4_RP_N="$(cd "$REPO_ROOT" && python3 -I -c "$s4_replay_py" "$S4_RP" $S4_REPLAY_FILES)"
 S4_RP_OK=0; S4_RP_BAD=""
 for stm in "$S4_RP"/*.stm; do
@@ -5491,8 +5491,8 @@ for stm in "$S4_RP"/*.stm; do
   res="$(grep -cx OK "$stm.out" || true)"; [[ "$(grep -c REFUSED "$stm.out" || true)" == 0 ]] || res=0
   [[ "$res" -ge 1 ]] && S4_RP_OK=$((S4_RP_OK + 1)) || S4_RP_BAD+=" $(basename "$stm")"
 done
-# BOTH operands are literals on the lines IMMEDIATELY above the `if`: 26 bc_curl statements in the ten files.
-S4_REPLAY_FLOOR=26
+# BOTH operands are literals on the lines IMMEDIATELY above the `if`: 29 bc_curl statements in the twelve files.
+S4_REPLAY_FLOOR=29
 if [[ -z "$S4_RP_BAD" && "$S4_RP_OK" == "$S4_RP_N" && "$S4_RP_OK" -ge "$S4_REPLAY_FLOOR" ]]; then row "S4 replay (static): all $S4_RP_OK converted bc_curl statements hand an argument list the library's own _bc_tail_ok accepts (zero refusals; anti-vacuity floor $S4_REPLAY_FLOOR)" ok
 else row "S4 replay (static): a converted call's argument list is refused or does not parse" fail "ok=$S4_RP_OK of $S4_RP_N bad:$S4_RP_BAD"; fi
 s4_tail_probe() { # <argv file>: the recorded call minus the library's own prefix and the config channel, judged by _bc_tail_ok

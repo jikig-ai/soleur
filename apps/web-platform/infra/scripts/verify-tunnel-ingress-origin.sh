@@ -49,7 +49,7 @@ cd "$INFRA_DIR"
 
 DOPPLER_ARGS=(--project soleur --config prd_terraform)
 
-# --- Expected origins: canonical sources, never a hardcoded 10.0.1.10 / 10.0.1.30 ------
+# --- Expected origins: canonical sources, never a hardcoded private IP literal ------
 # ONE console session, two expressions, one answer per line: web-1's private IP (deploy./ssh.)
 # and the zot endpoint (registry., zot-registry.tf local.registry_endpoint).
 CONSOLE_OUT=$(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \

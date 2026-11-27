@@ -48,3 +48,14 @@
 - Suites green at 4a865f919c: gate 534/0, job 331/331, pre-delete 52/0, completion, runbook, scope, mint. Token-forget fails only S7 and Q8, the expected owner rows until the deploy token is minted.
 - Scan gate: ok files=30 findings=341 over 62 of 63 paths. tests/scripts/test-argv-bearer-sweep.sh (8,270 lines) was excluded: shellcheck exhausted memory on it.
 - Next: soleur:compound, then soleur:ship from Phase 5.4 (preflight); stop at the first operator go (step 3, minting the 0b tokens). No operator go has been given.
+
+## CI Repair Round (2026-11-25, after merging origin/main at 96e83b380e)
+
+- Merged origin/main (15 commits; carries cf-account-migrate bounds 3dfc0f9502, flatten_cname gate 27e84d0b4f, cf-token-scope probes 6baae09683/1ec95e1664, and main's pooled execution rewrite of cf-account-migrate-job.test.sh). Conflicts kept both sides; merged gate floor recounted 549/0.
+- jq 1.7.1 incompatibility fixed: `[gen] + [gen]` concatenations inside an object literal need parentheses (CI runner jq is 1.7.1; local 1.8.2 parses both). Program line ~48 of build_plan().
+- Pool-snapshot race fixed: the four [tunnel]-block headers used bare `printf`, so top-level `$SBX/mirror-tunnel` creation raced queued `red` rows -> POOL_SNAP_BAD. Converted to `section` (flushes first).
+- web-1 private-IP ratchet: branch's new tunnel fixtures swapped to the #12910 convention (web-3 / 10.0.1.12; one comment literal dropped from verify-tunnel-ingress-origin.sh). IP_CEIL re-baselined 318 -> 314 (measured 314).
+- argv-bearer sweep S4: the two new scripts joined S4_SCRIPT_MANIFEST + S4_REPLAY_FILES (floors 13->16, 26->29); `bc_curl` name args must be LITERAL script names (the suite's counts and name checks ignore `"$P"`); `source` hoisted textually before the first bc_* line; `2>/dev/null`/`>&1` discards removed from bc_curl calls (the refusal marker rides stderr).
+- Pin drift absorbed: cherry-picked #12985's 4-line pin bump (v1.1.73 -> v1.1.74, soleur-infra[bot] 50e8a2d391). This PR now carries the bump; #12985 becomes redundant on merge. NOTE for the operator: merging this PR bumps the main pin to v1.1.74 before the mirror backfill has the digest in zot — the same window #12985's merge was withheld for. Sequence the merge after the bridge apply + a green mirror_only backfill, or accept the provisioning window (see resume prompt).
+- Verified locally: cfamj suite green (pool batch integrity 14 batches, only expected instrument FAIL), gate 549/0, web-hosts-generic green, cloud-init-inngest-bootstrap 297/297, argv-bearer sweep 832/0, lint-infra-no-human-steps --changed clean.
+- Still expected-red by design: `validate (apps/web-platform/infra)` + `infra-validate-required` (FILL-AT-PHASE-3.1); `test` (draft-mode verdict, clears on ready).

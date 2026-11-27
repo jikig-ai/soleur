@@ -777,8 +777,10 @@ ADR-330 is authored now as `adopting`. It flips to `accepted` when the teardown 
   - Inngest liveness detection is blind from the zone move until step 5 proves `deploy.`:
     `scheduled-inngest-health.yml` probes `deploy.soleur.ai/hooks/inngest-liveness`, reads
     `probe_unavailable` and never restarts, and `restart-inngest-server.yml` cannot reach `deploy.`
-    either. An Inngest outage then stalls every user's scheduled work unseen. The recovery that avoids
-    the tunnel is an operator-authorized Hetzner API reboot of the Inngest host.
+    either. An Inngest outage then stalls every user's scheduled work unseen.
+    <!-- lint-infra-ignore start: deferred orchestrator prose, not a step in this plan's flow. It names the one recovery that works while `deploy.` has no route, gated on operator authorization (hr-menu-option-ack-not-prod-write-auth); the agent surfaces it, the operator says go. -->
+    The recovery that avoids the tunnel is an operator-authorized Hetzner API reboot of the Inngest host.
+    <!-- lint-infra-ignore end -->
   - The Origin CA re-mint must land before the release redeploy loads it. A wrong order or a bad pair
     answers 526 to every user under `ssl=strict`; step 5's `/health` check (200) is the proof.
   - Destroying web-2 while a live pool still routes traffic to it aborts its agent sessions and drops

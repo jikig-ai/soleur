@@ -60,6 +60,10 @@ in_set() { # <value> <member>...
 }
 csv() { local IFS=,; printf '%s' "$*"; }
 
+self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || refuse setup "cannot resolve the script directory"
+# shellcheck source=/dev/null
+source "$self/../../../../scripts/lib/bearer-curl.sh" || refuse setup "cannot load scripts/lib/bearer-curl.sh"
+
 check_pins() {
   local id
   local -A seen=()
@@ -76,8 +80,8 @@ API_RC=0 API_CODE="" API_BODY=""
 api() { # <GET|DELETE> <id> | GET ?name=<fqdn>&per_page=100
   local out rc=0 sfx="/$2"
   [[ "$2" == '?'* ]] && sfx="$2"
-  out="$(bc_curl "$P" 'Authorization:Bearer :CF_API_TOKEN' -- \
-    -sS --max-time 15 -X "$1" -w '\n%{http_code}' "$CF_API/zones/$ZONE_ID/dns_records$sfx" 2>/dev/null)" || rc=$?
+  out="$(bc_curl cf-tunnel-host-predelete 'Authorization:Bearer :CF_API_TOKEN' -- \
+    -sS --max-time 15 -X "$1" -w '\n%{http_code}' "$CF_API/zones/$ZONE_ID/dns_records$sfx")" || rc=$?
   API_RC="$rc"
   API_CODE="${out##*$'\n'}"
   API_BODY="${out%$'\n'*}"
@@ -198,10 +202,6 @@ main() {
   if [[ "$mode" == pins ]]; then printf '%s verdict=pins-ok count=%s\n' "$P" "${#PINNED_IDS[@]}"; return 0; fi
   [[ -n "${CF_API_TOKEN:-}" ]] || refuse no-token "CF_API_TOKEN is not set; nothing was read or deleted."
   command -v jq >/dev/null 2>&1 || refuse no-jq "jq is required; nothing was read or deleted."
-  local self
-  self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || refuse setup "cannot resolve the script directory"
-  # shellcheck source=/dev/null
-  source "$self/../../../../scripts/lib/bearer-curl.sh" || refuse setup "cannot load scripts/lib/bearer-curl.sh"
   grade_all
   if [[ "$mode" == dry ]]; then
     printf '%s verdict=dry-run would_delete=%s absent=%s\n' "$P" "${#PRESENT[@]}" "${#ABSENT[@]}"

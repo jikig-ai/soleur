@@ -570,8 +570,8 @@ build_plan() {
                  elif apppin[$a] != null then apppin[$a]
                  elif ($a | test("^cloudflare_record[.](deploy|ssh|registry)$")) then {name: ($a | split(".")[1]), type: "CNAME", proxied: true, ttl: 1}
                  elif $a == "cloudflare_zero_trust_tunnel_cloudflared_config.web" then {config: [{ingress_rule: [
-                   {hostname: "deploy.soleur.ai", service: "http://10.0.1.10:9000"},
-                   {hostname: "ssh.soleur.ai", service: "ssh://10.0.1.10:22"},
+                   {hostname: "deploy.soleur.ai", service: "http://10.0.1.12:9000"},
+                   {hostname: "ssh.soleur.ai", service: "ssh://10.0.1.12:22"},
                    {hostname: "registry.soleur.ai", service: "tcp://10.0.1.30:5000"},
                    {hostname: null, service: "http_status:404"}]}]}
                  else {} end;
@@ -595,13 +595,13 @@ build_plan() {
                  "cloudflare_ruleset.seo_response_headers": {kind: "zone", phase: "http_response_headers_transform"},
                  "cloudflare_ruleset.bulk_redirects": {kind: "root", phase: "http_request_redirect"}}[$a] // {};
     {format_version: "1.2",
-     configuration: {root_module: {resources: [polrefs | to_entries[] | {address: .key, expressions: {
+     configuration: {root_module: {resources: ([polrefs | to_entries[] | {address: .key, expressions: {
        application_id: {references: [(.value.app + ".id"), .value.app]},
        include: [{service_token: {references: .value.tok}}]}}] + [("deploy", "ssh", "registry") | {address: ("cloudflare_record." + .), expressions: {content: {references:
        ["cloudflare_zero_trust_tunnel_cloudflared.web.id", "cloudflare_zero_trust_tunnel_cloudflared.web"]}}}]
        + [{"doppler_secret.registry_push_access_token_id": "client_id", "doppler_secret.registry_push_access_token_secret": "client_secret"}
        | to_entries[] | {address: .key, expressions: {value: {references:
-           [("cloudflare_zero_trust_access_service_token.registry_push." + .value), "cloudflare_zero_trust_access_service_token.registry_push"]}}}]}},
+           [("cloudflare_zero_trust_access_service_token.registry_push." + .value), "cloudflare_zero_trust_access_service_token.registry_push"]}}}])}},
      resource_changes: [
       $spec | to_entries[] | .key as $a | .value as $c
       | ({address: $a, mode: "managed", type: ($a | split(".")[0]), change: (
@@ -2283,7 +2283,7 @@ red "T-h the rehearsal-refused text ignores the class" "$TH" chk_rh_differs '^ms
 # --- Tunnel phase (PR2) ---------------------------------------------------------------
 # The real gate and job over a mirror whose pre-delete is a contract stub: the real script's behaviour
 # is pinned in cf-tunnel-host-predelete.test.sh, and its committed pin list is empty.
-printf '\n[tunnel] pre-delete, plan, live deploy token, apply, CI-SSH sync\n'
+section '\n[tunnel] pre-delete, plan, live deploy token, apply, CI-SSH sync\n'
 MT="$SBX/mirror-tunnel"
 mkdir -p "$MT/apps/web-platform/infra/scripts" || exit 2
 ln -s "$REPO/.github" "$MT/.github"; ln -s "$REPO/tests" "$MT/tests"
@@ -2430,7 +2430,7 @@ tunnel_case sync-and-verify false; tmark mode.dopplerset; tmark mode.health; run
 r=1; refused_for "$LAST_D" verify-failed && grep -q 'ci_ssh_sync=failed' "$LAST_D/out.txt" && r=0
 verdict "$r" "a failed sync AND a failed probe -> reason=verify-failed, carrying ci_ssh_sync=failed"
 
-printf '\n[forget] the redirects-dns forget, which is the only forget, removes the tunnel slice\n'
+section '\n[forget] the redirects-dns forget, which is the only forget, removes the tunnel slice\n'
 # The tunnel phase runs no forget of its own: the real forget script classifies EVERY old-id
 # cloudflare_* entry, so the 15 Cloudflare members of the tunnel spec go with redirects-dns. The
 # random_id and the two Doppler secrets are not Cloudflare objects and stay, which is why the tunnel
@@ -2450,7 +2450,7 @@ verdict "$r" "B3: the redirects-dns forget removes all 15 Cloudflare members of 
 r=1; ! grep -qE 'cf-state-migrate address=(random_id|doppler_secret)' "$LAST_D/out.txt" && r=0
 verdict "$r" "B3: the forget leaves random_id.tunnel_secret and the registry Doppler secrets in state"
 
-printf '\n[scope probes] cf_api_token is read for the tunnel scopes before anything is written\n'
+section '\n[scope probes] cf_api_token is read for the tunnel scopes before anything is written\n'
 SVC="accounts_${NA}_access_service_tokens?per_page=1"
 tunnel_case scope-paths true; run_job "$LAST_D" "$PRISTINE"
 r=1
@@ -2480,7 +2480,7 @@ new_case scope-zrest zone-rest true; remote_state "$LAST_D/remote.tfstate" "$NZ"
 r=1; ! grep -q 'cf_api_token@' "$LAST_D/out.txt" && r=0
 verdict "$r" "zone-rest, which does not use cf_api_token, runs no scope probe"
 
-printf '\n[tunnel mutants] each new guard is load-bearing\n'
+section '\n[tunnel mutants] each new guard is load-bearing\n'
 t_mut() { # <label> <sed-expr> <setup-fn>: the mutant must reach an apply the pristine script refused
   local m="$SBX/mut/tun-$CASES.sh"
   sed -e "$2" "$PRISTINE" >"$m"

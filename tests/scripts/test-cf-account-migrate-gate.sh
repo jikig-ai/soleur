@@ -547,8 +547,8 @@ tun_plan() { # <out>
         after_unknown: {content: true, hostname: true, id: true}}
       elif $a == "cloudflare_zero_trust_tunnel_cloudflared_config.web" then {actions: ["create"], before: null,
         after: (ids($t) + {config: [{ingress_rule: [
-                   {hostname: "deploy.soleur.ai", service: "http://10.0.1.10:9000"},
-                   {hostname: "ssh.soleur.ai", service: "ssh://10.0.1.10:22"},
+                   {hostname: "deploy.soleur.ai", service: "http://10.0.1.12:9000"},
+                   {hostname: "ssh.soleur.ai", service: "ssh://10.0.1.12:22"},
                    {hostname: "registry.soleur.ai", service: "tcp://10.0.1.30:5000"},
                    {hostname: null, service: "http_status:404"}]}]}), after_unknown: {tunnel_id: true, id: true}}
       else {actions: ["create"], before: null, after: ids($t)} end;
@@ -693,13 +693,13 @@ done
 # B2: the tunnel config routes exactly the three gated hosts, in order, then the 404 catch-all, each
 # to its own scheme (security review 2026-11-25). Another hostname or service reaches the origin.
 TCF="cloudflare_zero_trust_tunnel_cloudflared_config.web"
-tset "$TCF" '.after.config[0].ingress_rule |= [.[0], {hostname: "admin.soleur.ai", service: "http://10.0.1.10:8080"}] + .[1:]'
+tset "$TCF" '.after.config[0].ingress_rule |= [.[0], {hostname: "admin.soleur.ai", service: "http://10.0.1.12:8080"}] + .[1:]'
 tchk "B2-ingress-extra-host: an extra hostname rule is refused" "$TCF must route exactly deploy., ssh. and registry.soleur.ai, then the catch-all"
 tset "$TCF" '.after.config[0].ingress_rule |= [.[1], .[0]] + .[2:]'
 tchk "B2-ingress-order: a reordered rule list is refused" "$TCF must route exactly deploy., ssh. and registry.soleur.ai, then the catch-all"
-tset "$TCF" '.after.config[0].ingress_rule[3].service = "ssh://10.0.1.10:22"'
+tset "$TCF" '.after.config[0].ingress_rule[3].service = "ssh://10.0.1.12:22"'
 tchk "B2-ingress-catch-all: a catch-all that is not http_status:404 is refused" "$TCF ingress rule 4 must use http_status:404"
-tset "$TCF" '.after.config[0].ingress_rule[0].service = "ssh://10.0.1.10:22"'
+tset "$TCF" '.after.config[0].ingress_rule[0].service = "ssh://10.0.1.12:22"'
 tchk "B2-ingress-scheme: deploy. on another scheme is refused" "$TCF ingress rule 1 must use http://"
 tset "$TCF" '.after.config[0].ingress_rule[2].service = null | .after_unknown.config = [{ingress_rule: [{}, {}, {service: true}, {}]}]'
 tchk "B2-ingress-unknown: a service known only after apply is refused" "$TCF ingress is known only after apply"

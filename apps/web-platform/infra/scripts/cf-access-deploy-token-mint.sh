@@ -58,15 +58,6 @@ HTTP_RC=0 HTTP_CODE="" HTTP_BODY=""
 HOLDERS=()
 TOKEN_UUID=""
 
-cleanup() {
-  if [[ -n "$INSTALL_TOKEN" ]]; then
-    bc_curl "$P" 'Authorization:Bearer :INSTALL_TOKEN' -- -sS --max-time 10 -X DELETE \
-      -H 'Accept: application/vnd.github+json' -o /dev/null "$GH_API/installation/token" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "$PEM_FILE" ]]; then rm -f -- "$PEM_FILE"; fi
-  MINT_TOKEN="" JWT="" INSTALL_TOKEN="" MINTED_ID="" MINTED_SECRET="" HTTP_BODY=""
-}
-
 refuse() { # <reason> <message> [<extra fields>]
   printf '%s verdict=refuse reason=%s%s\n' "$P" "$1" "${3:+ $3}"
   printf '::error title=%s::%s\n' "$P" "$2"
@@ -74,13 +65,26 @@ refuse() { # <reason> <message> [<extra fields>]
 }
 csv() { local IFS=,; printf '%s' "$*"; }
 
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || refuse setup "cannot resolve the script directory"
+# shellcheck source=/dev/null
+source "$SELF/../../../../scripts/lib/bearer-curl.sh" || refuse setup "cannot load scripts/lib/bearer-curl.sh"
+
+cleanup() {
+  if [[ -n "$INSTALL_TOKEN" ]]; then
+    bc_curl cf-access-deploy-token-mint 'Authorization:Bearer :INSTALL_TOKEN' -- -sS --max-time 10 -X DELETE \
+      -H 'Accept: application/vnd.github+json' -o /dev/null "$GH_API/installation/token" >/dev/null || true
+  fi
+  if [[ -n "$PEM_FILE" ]]; then rm -f -- "$PEM_FILE"; fi
+  MINT_TOKEN="" JWT="" INSTALL_TOKEN="" MINTED_ID="" MINTED_SECRET="" HTTP_BODY=""
+}
+
 # http <token-variable-name> <method> <url> [<json body>]: sets HTTP_RC, HTTP_CODE, HTTP_BODY.
 http() {
   local out rc=0
   local -a data=()
   if [[ -n "${4:-}" ]]; then data=(-H 'Content-Type: application/json' -d "$4"); fi
-  out="$(bc_curl "$P" "Authorization:Bearer :$1" -- -sS --max-time 30 -X "$2" \
-    -H 'Accept: application/json' ${data[@]+"${data[@]}"} -w '\n%{http_code}' "$3" 2>/dev/null)" || rc=$?
+  out="$(bc_curl cf-access-deploy-token-mint "Authorization:Bearer :$1" -- -sS --max-time 30 -X "$2" \
+    -H 'Accept: application/json' ${data[@]+"${data[@]}"} -w '\n%{http_code}' "$3")" || rc=$?
   HTTP_RC="$rc"
   HTTP_CODE="${out##*$'\n'}"
   HTTP_BODY="${out%$'\n'*}"
@@ -286,9 +290,6 @@ main() {
   for c in doppler gh jq openssl curl sha256sum; do
     command -v "$c" >/dev/null 2>&1 || refuse missing-tool "$c is required; nothing was minted."
   done
-  SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || refuse setup "cannot resolve the script directory"
-  # shellcheck source=/dev/null
-  source "$SELF/../../../../scripts/lib/bearer-curl.sh" || refuse setup "cannot load scripts/lib/bearer-curl.sh"
   trap cleanup EXIT
   discover_holders
   read_mint_token
