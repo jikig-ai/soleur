@@ -13,10 +13,12 @@
 #   - Authorization: `environment: web-platform-infra-apply` is set HERE, on the job that applies
 #     (the calling job cannot carry `environment:`). Secrets are declared under workflow_call.secrets
 #     and passed BY NAME, never `secrets: inherit` (the git-data root-token census allows inherit only
-#     on the release callers). The caller passes DOPPLER_TOKEN and SENTRY_ACTIONS_RO_TOKEN; it does NOT
-#     pass DOPPLER_TOKEN_INFRA_PRIVILEGED, an environment secret its job (no `environment:`) cannot
-#     read and that the Tier-B census forbids a job without `environment:` to name. This job's own
-#     `environment:` supplies it; if it did not, the Tier-B check below stops the run before any plan.
+#     on the release callers). The caller passes all three, DOPPLER_TOKEN_INFRA_PRIVILEGED included:
+#     GitHub resolves an environment secret the caller does not pass to "" here, with no error, and
+#     this job's `environment:` supplies the value only for a secret the caller passes by name (#12873
+#     shipped the omission, so the route read an empty token and HELD). It is `required: true` so a
+#     caller that drops it fails at call time. The Tier-B census (G1b) covers the caller through this
+#     job's `environment:`; if the value is still empty, the Tier-B check below stops before any plan.
 #     The environment's required reviewer and its main-only branch policy gate this job.
 #   - Identity: the `github` context (event_name, sha, ref) is the CALLER's, so the plan summary's
 #     commit is the dispatched commit. Workflow-level `env` is NOT propagated, so it is redeclared
@@ -49,7 +51,7 @@ on:
     # root-token census allows inherit only on the release callers). The job asserts what it needs.
     secrets:
       DOPPLER_TOKEN_INFRA_PRIVILEGED:
-        required: false
+        required: true
       DOPPLER_TOKEN:
         required: false
       SENTRY_ACTIONS_RO_TOKEN:

@@ -166,14 +166,32 @@ mutates no zone.
    ```bash
    doppler run -p soleur -c <config> -- bash -c 'printf "Authorization: Bearer %s\n" "$<KEY>" \
      | curl --disable --noproxy "*" -sS --max-time 30 --header @- https://api.cloudflare.com/client/v4/user/tokens/verify' \
-     | jq -r '.result.id, .result.status'
+     | jq -r '"success=\(.success) id=\((.result.id // "none")[0:8]) status=\(.result.status // "none")"'
    ```
 
-3. `Operator-authorizes:` delete it in the operator's signed-in dashboard session, the same `browser_run_code_unsafe`
-   session as the mints: the Node-side `page.evaluate` sends `DELETE /api/v4/user/tokens/<id>` with the session
-   `x-atok` and returns only the HTTP status and `success`. A `403` or `404` means the session's user does not own
-   that token: stop and report, never retry under another identity.
-4. `Agent:` read back: re-run step 2. Expected: `.success` is `false` (the verify fails). Then
+3. `Operator-authorizes:` delete it in the operator's signed-in dashboard session, signed in as the login that owns
+   the token (the 2026-11-26 0b revokes were owned by the old-account-owner login). Run it as ONE
+   `browser_run_code_unsafe` body, with all three sub-steps inside one `try`/`catch`. Its tool result is only one
+   of `{atok: false}`, `{matches: <n>}`, `{status, contentType, success}` or `{error: e.name}`. Never return the
+   `x-atok`, the full id or `e.message`: a thrown request error may carry the request it was sending.
+   1. `page.goto('https://dash.cloudflare.com/profile/api-tokens')` first. A page not reloaded since sign-in can show
+      a stale token list (observed 2026-11-26: it listed 0 tokens).
+   2. One `page.evaluate` reads `window.bootstrap.atok` and `GET /api/v4/user/tokens`, and keeps the atok and the id
+      whose prefix equals step 2's in Node-local variables. No atok: return `{atok: false}` (the page is signed out).
+      Zero matches: return `{matches: 0}`; this login does not own it, and the agent asks the operator to sign in as
+      the owner, never switching logins itself. Several matches: return `{matches: <n>}` and stop.
+   3. `page.request.delete('https://dash.cloudflare.com/api/v4/user/tokens/<id>')`. The 2026-11-26 deletes that
+      returned `200` (#12931 comment 7203873359) sent the headers `x-atok` and `x-cross-site-security: dash`; the
+      second is recorded from that session's browser code, not the comment, and whether it is required was not
+      tested. The DELETE is Node-side because an in-page `fetch` DELETE got an HTML
+      `403` from the dashboard edge (measured 2026-11-26), while the in-page mint POST did not.
+
+   Only `200` with `success: true` is a revoke. A JSON `403` or `404` is an ownership or session refusal: stop and
+   report. Anything else (a non-JSON reply, `success: false`, a thrown error, another status): stop, post what the
+   result shows on #12931, and do not retry without a fresh authorization.
+4. `Agent:` read back: re-run step 2. Expected: `.success` is `false`, printed as a line that starts
+   `success=false`. Any other output (`success=true`, `success=null`, an empty line, an error) means the revoke is
+   unconfirmed: stop, post it, and keep the key, since it is the only way to re-read the id. Only on `success=false`,
    `Operator-authorizes:` delete the key that held it, in the same act, so token-drift never grades a dead value:
    `doppler secrets delete <KEY> -p soleur -c <config> --yes > /dev/null`, and re-run the inventory stage
    (expected: no row for that key). Post the four results (id prefix, delete status, verify `false`, key gone) on
@@ -192,7 +210,7 @@ permission groups per key are the plan's Phase 0 table; one token per key, scope
 
 **Hand-off (CTO L75).** For each token:
 
-1. Mint with `browser_run_code_unsafe`: the Node-side `page.evaluate` creates the token through
+1. Mint with `browser_run_code_unsafe`: a `page.evaluate` (it runs in the page, not in Node) creates the token through
    `/api/v4/user/tokens` (session `x-atok`), and `page.request.post` hands the value to a one-shot python sink bound to
    `127.0.0.1` that writes a mode-0600 file in the session scratchpad, outside every git work tree. The tool result
    prints only the token id, the sink status and the length.
@@ -241,8 +259,14 @@ bash "$S" --profile zone-rest --staged       # before swap-0b
 the live keys. The swap stages run the same staged probe themselves and refuse to swap unless it passes. What the tool
 does:
 
-- A write probe sends **one fixed invalid body literal that can never validate**, never `{"rules":[]}` (which would
-  wipe a live entrypoint) and never a valid body. It never `DELETE`s.
+- A write probe sends **one of two fixed body literals, each built to be rejected**: a non-JSON literal for every
+  row except the zone settings PATCH, and for that row (whose endpoint parses JSON before it checks authorization) a
+  JSON body naming one nonexistent `cf_token_scope_probe_`-prefixed setting id. A `2xx` to either is still fatal
+  (exit 4). Before any write the run reads the zone's settings list. If it lists that id, the run prints
+  `probe=zone-rest verdict=refused reason=probe-id-collision` and exits 2. If an item in it is not an object with a
+  string id, it prints `reason=settings-list-unevaluable` and exits 2. If the settings read fails, is not one JSON
+  document, or returns an empty list, the settings row is skipped and the run exits 3 (`inconclusive`). Never `{"rules":[]}` (which would wipe a
+  live entrypoint), never a body naming a real setting. It never `DELETE`s.
 - The old account and zone ids are refused before any request (exit 2); every write row targets the new zone or
   account.
 - Each write row first sends the same request with a sibling token that must not hold the scope (`CF_API_TOKEN_PAGES`
@@ -261,9 +285,10 @@ on Pages projects. It also prints a whole-list audit (each entrypoint present or
 `CF_API_TOKEN_ZONE_SETTINGS` and `CF_API_TOKEN_BOT_MANAGEMENT`. `CF_API_TOKEN_DNS_EDIT` and `CF_API_TOKEN_PURGE` have
 no write profile; swap-0b checks them active through `/user/tokens/verify` instead.
 
-Expected per row: `authorized (PUT 400 after a 403 control)` (or `POST`/`PATCH`), and the run line
-`probe=<phase> verdict=pass` with exit 0. `probe=<phase> verdict=denied` or `verdict=inconclusive` (exit 3) blocks that
-phase's dispatch. An entrypoint the audit reports present is recorded by id and imported, never overwritten.
+Expected per row: `authorized (PUT 400, err <code> after a 403 control)` (or `POST`/`PATCH`; the `, err <code>` part
+appears when the reply carries a numeric code), and the run line
+`probe=<phase> verdict=pass` with exit 0. `probe=<phase> verdict=denied` or `verdict=inconclusive` (exit 3), or
+`verdict=refused` (exit 2), blocks that phase's dispatch. An entrypoint the audit reports present is recorded by id and imported, never overwritten.
 
 ### Pre-checks on the new zone (read-only, after the 0b mint)
 
@@ -360,9 +385,17 @@ Before rehearsing, note the 2026-11-19 zone hygiene: in the new zone, six TXT re
 were rewritten unquoted and the comments on three records added during the incident were cleared, so every
 record's live values match `dns.tf`. The provider's Read fills `content` only when it is already set, so each
 `cloudflare_record` import plans one update adding `allow_overwrite = false` and `content`, and the apply sends one
-same-value PATCH per record. The gate admits exactly that shape, logged as `import-normalize`, and only when a live
+same-value PATCH per record (same value on every compared field; a CNAME's `settings` may read back as `{}`). The gate admits exactly that shape, logged as `import-normalize`, and only when a live
 read by the pinned id, taken after the plan, equals the planned record (ADR-329, CTO ruling 2026-11-22). Every other
-diff is still refused. The gate's admitted shape is not changed to get past a refusal. Nobody edits this zone by hand
+diff is still refused. The gate's admitted plan shape (`cfam_norm_shape`) is not changed to get past a refusal. In
+the live compare, a record that is a CNAME both live and in the plan, whose plan holds no `settings` and whose live
+`settings` is exactly `{"flatten_cname":false}`, is not a difference: that is the API default (CTO ruling 2026-11-25,
+#13056). That the PATCH leaves it `false` is inferred from the provider and cloudflare-go source, not observed; the
+post-apply re-read is what detects any other outcome. The job keeps no per-record `settings`: its
+`import-normalize reread=ok records=26` line is the evidence, and that line goes on #12931 after the first apply. A re-read `settings:other` is a stop token like any other (no edit, owner decision), and on
+`supabase_custom_domain` or a `protonmail_dkim_*` record it is urgent: sign-in or mail authentication may be
+degraded, so post it on #12931 with the first line `URGENT reread=differs=<addr>:settings+settings:other`, then
+the re-read line exactly as printed. Nobody edits this zone by hand
 during the apply: an edit landing between the read and a PATCH is overwritten, and the re-read then passes.
 
 A refusal about a live record prints `REFUSE <addr> differs from the live record (<tokens>)` or
@@ -375,8 +408,8 @@ a stop token on a record wins over any other token on that record:
 |---|---|---|
 | `content:quoted-equal` | The live `content` equals the planned value once surrounding quotes are ignored | Stop token. No edit; stop for an owner decision |
 | `tags:absent` | The API response has no `tags` key, so no record edit can satisfy the compare | Stop token. No edit; stop for an owner decision |
-| `settings:only-flatten-false` | The live `settings` is exactly `{"flatten_cname":false}`, which the PATCH's empty `settings` could reset | Stop token. No edit; stop for an owner decision |
-| `settings:other` | The live `settings` holds any other non-empty value | Stop token. No edit; stop for an owner decision |
+| `settings:only-flatten-false` | The live `settings` is exactly `{"flatten_cname":false}` unless the record is a CNAME in both the live read and the plan and the plan holds no `settings` (then it is the API default and compares equal, CTO ruling 2026-11-25). Not expected in normal operation | Stop token. No edit; stop for an owner decision |
+| `settings:other` | The live `settings` holds any other non-empty value | Stop token. No edit; stop for an owner decision. On `supabase_custom_domain` or a `protonmail_dkim_*` re-read it is urgent: post the `URGENT` comment on #12931 (Step 2) while the other records are restored |
 | `data`, `after` | The live record holds a `data` value `dns.tf` does not declare, or the plan holds no record to compare | Stop token. No edit; stop for an owner decision |
 | `unreadable` | The read failed, so nothing is known about the record | Not a difference. No edit. After a re-read, follow Halt **No completed re-read**. After a gate refusal, `Operator-authorizes:` one more rehearsal; a second consecutive refusal stops for an owner decision |
 | `notfound` | The record id answers 404 | Halt **A DNS record may hold a wrong value**, its `<addr>:notfound` step |
@@ -814,6 +847,26 @@ the PR thread, and its comment is the read-back.
   `.github/workflows/cf-account-migrate-alert.yml`, the gate and the bootstrap with its suite).
   Keep `cf-access-deploy-token-mint.sh` and the `cf-token-scope.sh` profiles.
 - Revoke `CF_API_TOKEN_SOLEUR_ACCT` (if not already) and any superseded old-zone token with the revoke recipe.
+  Six tokens remain on the old-account-owner login, measured 2026-11-26. #12931 comment 7205049710 lists them by id
+  prefix with the holders a search found. These are inputs for the cleanup PR, not a procedure. That PR writes the
+  replacement steps, under its own review, before any of these is revoked.
+  - Holders found in `soleur`: `CF_API_TOKEN_AUDIT` (`dev`, `dev_personal`, `dev_scheduled`, `prd_terraform`),
+    and `CF_API_TOKEN_ANALYTICS_READ`, `CF_API_TOKEN_PAGERULES_READ` and `CF_API_TOKEN_PURGE_PREV` (all
+    `prd_terraform`).
+  - Not yet located: the search covered only `CF_*TOKEN*` keys in project `soleur`. So it could not find the Origin
+    CA token's documented holder, `CF_API_TOKEN_ORIGIN_CA` in `soleur-infra-privileged/prd` (Phase 3 step 4,
+    `origin-tls-mint.md`), or an R2 token's S3 key pair.
+  - Not yet read: each token's zone and account scope.
+
+  Constraints the cleanup PR's procedure must meet:
+  - Stage the old value as `<KEY>_PREV` before overwriting `<KEY>`, so the revoke recipe reads the old id.
+  - Check by digest or verify id, never by key name, that no config's `<KEY>` still holds the old value.
+  - Treat `CF_API_TOKEN_ANALYTICS_READ` as an owner mint (`origin-tls-strict-flip.md`).
+  - Run `cloudflare-readonly.sh pagerules-ssl` on the new zone before deciding the fate of
+    `CF_API_TOKEN_PAGERULES_READ`. That read is pinned in `components.test.ts`. If the token is scoped to the
+    old zone, the read fails with a scope or zone-access error; that means "unknown", not "no page rules".
+
+  `CF_API_TOKEN_PURGE_PREV` is revoked at Phase 3 step 5. The R2 token stays, because the old account keeps R2.
 - `Operator-authorizes:` delete the old tunnel `fc4509ed…` in the legacy account once web-2's replace has dropped its
   connections. Read-back: the same account's tunnel list by that id shows it deleted.
 - `Operator-authorizes:` delete, one go each and by name, the legacy-account objects the forget left behind, listed from
@@ -1191,9 +1244,16 @@ validation (Load Balancing #12983, DNSSEC #12982).
     progress (or `gh` could not list the runs). Wait for that run to finish, read its verdict line, then re-run the
     stage.
   - `SOLEUR_CFAM_PROBE profile=<phase> verdict=not-pass`: the staged scope probe did not pass, so the swap wrote
-    nothing. Read the `probe=<phase> verdict=…` line it relayed: `denied` means re-mint that key with the plan's
-    permission groups; `inconclusive` means re-run the stage; `fatal-mutation` is the write-probe stop (post the
-    read-back on #12931 and stop).
+    nothing. Read the `probe=<phase> verdict=…` line it relayed: `denied` means re-mint the key its relayed
+    `row … -> denied (…; re-mint <KEY>)` line names, with the plan's permission groups; `inconclusive` means read
+    the relayed `probe=<phase> row <label> -> <status>` lines first. A failed or empty settings control
+    (`settings control not established`) means re-run the stage. A settings grant `400` that was not parsed
+    (`inconclusive (grant got 400`) or a deny control that got `400` (`got 400, not 403`) means post it on #12931
+    and stop for a CTO re-ruling. `refused` (exit 2) is the collision guard: post the `verdict=refused reason=…`
+    line and its `refused-detail` line on #12931 and stop. `fatal-mutation` is the write-probe stop: post the
+    relayed `probe=<phase> fatal`, `write-response` and `read-back` lines on #12931 and stop. A `not-pass` with no
+    relayed `probe=<phase> verdict=` line is a usage error, a missing `_NEXT` secret or table corruption: run the
+    probe directly and read stderr.
   - `SOLEUR_CFAM_COPY_MISMATCH`: the stage stopped before any delete; copy `<KEY>_PREV` over `<KEY>` with the stdin
     pipe form, read it back, and re-run.
   - `SOLEUR_CFAM_SWAP_MISMATCH name=<KEY> kept=<KEY>_NEXT`: the copy read back equal but a re-read before the delete

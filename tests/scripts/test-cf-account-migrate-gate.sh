@@ -1224,9 +1224,9 @@ jq -c '{values:{root_module:{resources:[.resource_changes[] | select(.type == "c
   | {address, mode:"managed", type, values:{id:.change.before.id}}]}}}' "$NORM" > "$TMP/norm-state.json"
 nf() { printf '(.resource_changes[] | select(.address=="%s") | .change)' "$1"; }
 
-norm_admits() { # <gate-file>: empty when the canonical plan passes with 26 import-normalize lines and no in-state-update
-  local o rc
-  o="$(bash -c 'source "$1"; source "$2"; cf_account_migrate_gate redirects-dns "$3" "" "$4"' _ "$PREAMBLE" "$1" "$NORM" "$NLIVE" 2>&1)"; rc=$?
+norm_admits() { # <gate-file> [<live>]: empty when the canonical plan passes with 26 import-normalize lines and no in-state-update
+  local o rc live="${2:-$NLIVE}"
+  o="$(bash -c 'source "$1"; source "$2"; cf_account_migrate_gate redirects-dns "$3" "" "$4"' _ "$PREAMBLE" "$1" "$NORM" "$live" 2>&1)"; rc=$?
   [[ "$rc" -eq 0 ]] || { echo "rc=$rc"; return; }
   [[ "$(grep -c '^cf_account_migrate_gate: import-normalize cloudflare_record\.' <<<"$o")" -eq 26 ]] || { echo "lines"; return; }
   ! grep -qF 'in-state-update' <<<"$o" || { echo "in-state-update"; return; }
@@ -1335,9 +1335,10 @@ elif [[ "$phm_rc" -eq 0 ]]; then pass "M-pin-hex: a looser pin pattern admits th
 else fail "M-pin-hex: the looser pattern did not admit the literal" "$phm_rc" "$phm"; fi
 
 # Live refusals: the plan is canonical, so only the live read can refuse.
-lrow() { # <label> <tokens> <live-filter on the first record's entry>
-  jq -c --arg r "$NR" "(.[\$r]) |= ($3)" "$NLIVE" > "$TMP/lr.json"
-  check "$1" 1 "REFUSE $NR differs from the live record ($2)" redirects-dns "$NORM" "" "$TMP/lr.json"
+lrow() { # <label> <tokens> <live-filter on the record's entry> [<address>, default the first record]
+  local r="${4:-$NR}"
+  jq -c --arg r "$r" "(.[\$r]) |= ($3)" "$NLIVE" > "$TMP/lr.json"
+  check "$1" 1 "REFUSE $r differs from the live record ($2)" redirects-dns "$NORM" "" "$TMP/lr.json"
 }
 lrow "L1: live type differs"     "type"     '.result.type = "CNAME"'
 lrow "L2: live name differs"     "name"     '.result.name = "other.soleur.ai"'
@@ -1349,7 +1350,7 @@ lrow "L7: a non-empty live comment differs" "comment" '.result.comment = "note"'
 lrow "L8: a false live comment differs" "comment" '.result.comment = false'
 lrow "L9: live tags differ" "tags" '.result.tags = ["t"]'
 lrow "L10: omitted live tags differ and name the field" "tags,tags:absent" 'del(.result.tags)'
-lrow "L11: live settings flatten_cname=false differ" "settings,settings:only-flatten-false" '.result.settings = {flatten_cname:false}'
+lrow "L11: a non-CNAME record's live settings flatten_cname=false differ" "settings,settings:only-flatten-false" '.result.settings = {flatten_cname:false}'
 lrow "L12: other live settings differ" "settings,settings:other" '.result.settings = {ipv4_only:true}'
 lrow "L13: a false live settings differs" "settings,settings:other" '.result.settings = false'
 lrow "L14: a live content ending in a dot differs" "content" '.result.content += "."'
@@ -1719,8 +1720,72 @@ check "F11: tags reordered by the API still pass" 0 "verdict=PASS" redirects-dns
 # shellcheck disable=SC2016 # sed expression matches literal gate text
 gm_refuses "M-F11-tags: an order-sensitive compare refuses the reorder" 's/(\$r\.tags|unique) == (\$after\.tags|unique)/$r.tags == $after.tags/' redirects-dns "$TMP/f11-t.json" "" "$TMP/f11-t-l.json"
 
+# ── CNAME flatten_cname default (CTO ruling 2026-11-25, #13056) ─────────────────────────────
+# The fixture's CNAMEs are exactly the six the redirects-dns rehearsal refused.
+CNAMES="cloudflare_record.pages_apex cloudflare_record.protonmail_dkim_1 cloudflare_record.protonmail_dkim_2 cloudflare_record.protonmail_dkim_3 cloudflare_record.supabase_custom_domain cloudflare_record.www"
+CN="cloudflare_record.www"
+got_cn="$(jq -r '[.resource_changes[] | select(.type == "cloudflare_record" and .change.after.type == "CNAME") | .address] | sort | join(" ")' "$NORM")"
+if [[ "$got_cn" == "$CNAMES" ]]; then pass "L11-fixture: the fixture's CNAME set is exactly the six rehearsal-refused records"
+else fail "L11-fixture: the fixture's CNAME set drifted" 1 "$got_cn"; fi
+# flat_live <out> <address...>: $NLIVE with each named record's live settings at {flatten_cname:false}.
+flat_live() {
+  local out="$1"; shift
+  assert_fixture_dir "$out"
+  jq -c --arg c "$*" '($c | split(" ")) as $cs | with_entries(if (.key | IN($cs[])) then .value.result.settings = {flatten_cname:false} else . end)' "$NLIVE" > "$out"
+}
+FLAT_ALL="$TMP/flat-all.json"; FLAT_MIX="$TMP/flat-mix.json"
+# shellcheck disable=SC2086 # CNAMES is a word list
+flat_live "$FLAT_ALL" $CNAMES
+# Either outcome of the PATCH: three still at the default, three reset to {}.
+flat_live "$FLAT_MIX" cloudflare_record.pages_apex cloudflare_record.protonmail_dkim_1 cloudflare_record.protonmail_dkim_2
+n_set() { jq --argjson s "$2" '[.[] | select(.result.settings == $s)] | length' "$1"; }   # <live> <settings>: records holding exactly <settings>
+# The fixtures are checked on their own, so a drifted fixture never reads as a gate refusal.
+fx="$(n_set "$FLAT_ALL" '{"flatten_cname":false}')/$(n_set "$FLAT_MIX" '{"flatten_cname":false}')/$(n_set "$FLAT_MIX" '{}')"
+if [[ "$fx" == "6/3/23" ]]; then pass "L11-fixture-flat: six CNAMEs at the default; the mixed read holds three at the default and the rest at {}"
+else fail "L11-fixture-flat: the flatten fixtures drifted (want default/mixed-default/mixed-{} = 6/3/23)" 1 "$fx"; fi
+na="$(norm_admits "$GATE" "$FLAT_ALL")"
+if [[ -z "$na" ]]; then pass "L11b: all six CNAMEs at {flatten_cname:false} pass (the rehearsal's read)"
+else fail "L11b: the gate refused the rehearsal's six-CNAME read" 1 "$na"; fi
+lrow "L11c: a CNAME's flatten_cname=true differs" "settings,settings:other" '.result.settings = {flatten_cname:true}' "$CN"
+lrow "L11d: a CNAME's flatten_cname=false with ipv4_only differs" "settings,settings:other" '.result.settings = {flatten_cname:false, ipv4_only:true}' "$CN"
+lrow "L11d: a CNAME's flatten_cname=false with ipv6_only differs" "settings,settings:other" '.result.settings = {flatten_cname:false, ipv6_only:true}' "$CN"
+lrow "L11d: a CNAME's flatten_cname=false with an unknown key differs" "settings,settings:other" '.result.settings = {flatten_cname:false, future_key:false}' "$CN"
+lrow "L11e: a CNAME's flatten_cname string \"false\" differs" "settings,settings:other" '.result.settings = {flatten_cname:"false"}' "$CN"
+lrow "L11f: a CNAME's flatten_cname null differs" "settings,settings:other" '.result.settings = {flatten_cname:null}' "$CN"
+L11G_FILTER='.result.type = "CNAME" | .result.settings = {flatten_cname:false}'
+lrow "L11g: a live CNAME with flatten_cname=false against a planned TXT differs on type and settings" "type,settings,settings:only-flatten-false" "$L11G_FILTER"
+jq -c --arg r "$NR" "(.[\$r]) |= ($L11G_FILTER)" "$NLIVE" > "$TMP/l11g.json"
+d6="$(cf_account_migrate_live_diff redirects-dns "$NORM" "$FLAT_MIX")"; d6_rc=$?
+if [[ "$d6_rc" -eq 0 && -z "$d6" ]]; then pass "D6: a re-read with three CNAMEs at {flatten_cname:false} and the rest at {} (the PATCH reset) is clean"
+else fail "D6: the re-read refused a mixed default read" "$d6_rc" "$d6"; fi
+# A plan that carries `settings` (a later provider) is refused, never assumed equal to the live default.
+jq -c "$(nf "$CN").after.settings = {flatten_cname:true}" "$NORM" > "$TMP/plan-settings.json"
+D7_WANT="$(printf '%s\tsettings,settings:only-flatten-false' "$CN")"
+d7="$(cf_account_migrate_live_diff redirects-dns "$TMP/plan-settings.json" "$FLAT_ALL")"
+if [[ "$d7" == "$D7_WANT" ]]; then pass "D7: a planned settings block against a live default differs on settings"
+else fail "D7: a planned settings block compared equal to the live default" 1 "$d7"; fi
+# shellcheck disable=SC2016 # sed expression matches literal jq text
+sed 's/elif \$after\.settings == null and \$r\.settings == /elif $r.settings == /' "$GATE" > "$TMP/m-flat-plan.sh"
+mfp="$(bash -c 'source "$1"; source "$2"; cf_account_migrate_live_diff redirects-dns "$3" "$4"' _ "$PREAMBLE" "$TMP/m-flat-plan.sh" "$TMP/plan-settings.json" "$FLAT_ALL" 2>&1)"
+if cmp -s "$TMP/m-flat-plan.sh" "$GATE"; then fail "M-flatten-plan: the mutation did not land" 1 ""
+elif [[ -z "$mfp" ]]; then pass "M-flatten-plan: dropping the planned-settings clause admits D7's plan (RED)"
+else fail "M-flatten-plan: the mutant still refused D7's plan" 1 "$mfp"; fi
+jq -c --arg r "$NR" '.[$r].result.settings = {flatten_cname:false}' "$NLIVE" > "$TMP/m-flat-txt.json"
+# The pristine gate must refuse this fixture (L11's case), or the mutant passing it proves nothing.
+cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/m-flat-txt.json" >/dev/null 2>&1 && fail "M-flatten-guard: the pristine gate admits its own fixture" 0 ""
+# shellcheck disable=SC2016 # sed expression matches literal jq text
+gm "M-flatten-guard: dropping the CNAME type guard admits a TXT record's flatten_cname=false (L11)" \
+  's/ and \$r\.type == "CNAME" and \$after\.type == "CNAME" then empty$/ then empty/' cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/m-flat-txt.json"
+# Wording check, not a verdict check: the separate `type` compare refuses any type mismatch, so
+# neither CNAME conjunct alone changes a verdict. What dropping the planned-type conjunct changes
+# is the stop token: L11g loses `settings:only-flatten-false` and is refused on `type` alone.
+# shellcheck disable=SC2016 # sed expression matches literal jq text
+gate_mutate_layered "M-flatten-after: dropping the planned-type clause leaves L11g refused on type alone (wording)" \
+  's/ and \$after\.type == "CNAME" then empty$/ then empty/' "(type,settings,settings:only-flatten-false)" \
+  "REFUSE $NR differs from the live record (type)" cf_account_migrate_gate redirects-dns "$NORM" "" "$TMP/l11g.json"
+
 # Anti-vacuity floor, reported outside pass()/fail() (ADR-193).
 TOTAL=$((passes + fails))
-if [[ "$TOTAL" -lt 534 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 534)\n' "$TOTAL"; exit 1; fi
+if [[ "$TOTAL" -lt 549 ]]; then printf 'FAIL ANTI-VACUITY: only %s assertions ran (floor 549)\n' "$TOTAL"; exit 1; fi
 printf '%s passed, %s failed\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

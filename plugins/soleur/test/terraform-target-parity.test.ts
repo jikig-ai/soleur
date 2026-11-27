@@ -11666,13 +11666,13 @@ describe("bastion: one resource list, pinned to the birth job and the exclusions
   const job = extractJobBlock(bwfText, "bastion_host_create");
   const caller = extractJobBlock(wf, "bastion_host_create");
 
-  test("the caller job dispatches the reusable body with the birth inputs and every declared secret but the environment-only one", () => {
+  test("the caller job dispatches the reusable body with the birth inputs and every declared secret, the environment-only one included", () => {
     const c = stripComments(caller);
     expect(c).toMatch(/^\s*if: github\.event_name == 'workflow_dispatch' && inputs\.apply_target == 'bastion-host-create'\s*$/m);
     expect(c).toMatch(/^\s*uses: \.\/\.github\/workflows\/bastion-host-create\.yml\s*$/m);
     for (const k of ["confirm", "plan_only", "reason"]) expect(c).toMatch(new RegExp(`^\\s*${k}: \\$\\{\\{ inputs\\.${k} \\}\\}\\s*$`, "m"));
     // Secrets by name, never `secrets: inherit` (the git-data root-token census allows inherit only on
-    // the release callers): every secret the callee declares except the environment-only one.
+    // the release callers): every secret the callee declares, the environment-only one included.
     expect(c).not.toMatch(/^\s*secrets: inherit\s*$/m);
     // Three sets: the secrets the caller passes, the ones the callee declares, and the
     // ones its body reads. YAML comments are `#` only (a `//` in a URL is not one), and a bracket
@@ -11689,12 +11689,16 @@ describe("bastion: one resource list, pinned to the birth job and the exclusions
     const read = [...new Set([...body.matchAll(/secrets\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))].sort();
     expect(read).toEqual(["DOPPLER_TOKEN", "DOPPLER_TOKEN_INFRA_PRIVILEGED", "SENTRY_ACTIONS_RO_TOKEN"]);
     expect(declared).toEqual(read);
-    // The caller passes every declared secret EXCEPT the environment secret: its job carries no
-    // `environment:` (a reusable caller cannot), so its copy is empty, and the Tier-B census
-    // (G1b) forbids a job without `environment:` to name it. The callee's `environment:` supplies it.
-    const ENV_ONLY = ["DOPPLER_TOKEN_INFRA_PRIVILEGED"];
-    for (const k of ENV_ONLY) expect(declared).toContain(k); // a renamed secret must not empty the filter silently
-    expect(passed).toEqual(declared.filter((k) => !ENV_ONLY.includes(k)));
+    // The caller passes EVERY declared secret, the environment secret included. GitHub resolves an
+    // environment secret the caller does not pass to "" in the called workflow, with no error; the
+    // callee's `environment:` supplies the value only for a secret the caller passes by name (GitHub
+    // docs, "Reuse workflows"). #12873 shipped the omission, so the route read an empty token and
+    // HELD. The Tier-B census (G1b) covers this caller through the callee's Tier-B `environment:`.
+    expect(passed).toEqual(declared);
+    // ...and the callee requires it, so a caller that drops it fails at call time instead of
+    // resolving it to "" (required: true checks that it is passed, not that it has a value).
+    const decl = (parseYaml(bwfText) as { on: { workflow_call: { secrets: Record<string, { required?: boolean }> } } }).on.workflow_call.secrets;
+    expect(decl.DOPPLER_TOKEN_INFRA_PRIVILEGED?.required).toBe(true);
     expect(c).toMatch(/^\s*issues: write\s*$/m);
     // The body runs inside the caller's run, which holds the workflow-level lock: a second group
     // of the same name in the callee would only risk cancelling the caller.
