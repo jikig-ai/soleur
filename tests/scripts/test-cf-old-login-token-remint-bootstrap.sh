@@ -105,6 +105,8 @@ write_stubs() { # <bin-dir>
 #   unreadable.<p>.<c>                      the names listing of <p>/<c> fails
 #   get-fails.<p>.<c>.<NAME>                a get of that (listed) name fails
 #   corrupt.<p>.<c>.<NAME>                  a set of that name stores a DIFFERENT value
+#   get-fails-after.<p>.<c>.<NAME>          holds N: every get of that name after the N-th (counted from the flag) fails
+#   delete-noop                             a delete answers 0 and removes nothing
 #   get-empty                               HARNESS H1: every get answers an empty value
 #   get-as-prev                             HARNESS H3: a get of soleur/<c>/<NAME> (c != prd_terraform) serves
 #                                           prd_terraform's <NAME>_PREV until that name is first set (the
@@ -141,6 +143,10 @@ case "${1:-} ${2:-}" in
     n="$3"; log read "get $proj/$cfg/$n"
     [[ " $* " == *" --plain "* ]] || exit 64
     [[ -f "$D/$n" && ! -e "$F/get-fails.$proj.$cfg.$n" ]] || exit 1
+    if [[ -e "$F/get-fails-after.$proj.$cfg.$n" ]]; then
+      printf 'x' >> "$F/get-count.$proj.$cfg.$n"
+      [[ "$(wc -c < "$F/get-count.$proj.$cfg.$n")" -le "$(cat "$F/get-fails-after.$proj.$cfg.$n")" ]] || exit 1
+    fi
     if [[ -e "$F/get-empty" ]]; then printf '\n'; exit 0; fi
     if [[ -e "$F/get-as-prev" && "$proj" == soleur && "$cfg" != prd_terraform && -f "$STUB_D/soleur/prd_terraform/${n}_PREV" && ! -e "$F/set-seen.$proj.$cfg.$n" ]]; then
       cat "$STUB_D/soleur/prd_terraform/${n}_PREV"; printf '\n'; exit 0
@@ -148,6 +154,7 @@ case "${1:-} ${2:-}" in
     cat "$D/$n"; printf '\n'; exit 0 ;;
   "secrets set")
     n="$3"; log mutating "set $proj/$cfg/$n prev=$(cls "$D/${n}_PREV")"; : > "$F/set-seen.$proj.$cfg.$n"
+    [[ "$n" != *_PREV ]] || : > "$F/prev-set-seen"
     [[ " $* " == *" --silent "* ]] || exit 64
     mkdir -p "$D"
     if [[ -e "$F/corrupt.$proj.$cfg.$n" ]]; then { cat; printf 'CORRUPTED'; } > "$D/$n"; else cat > "$D/$n"; fi
@@ -155,7 +162,7 @@ case "${1:-} ${2:-}" in
   "secrets delete")
     n="$3"; log mutating "delete $proj/$cfg/$n"
     [[ " $* " == *" --yes "* ]] || exit 64
-    rm -f "$D/$n"; exit 0 ;;
+    [[ -e "$F/delete-noop" ]] || rm -f "$D/$n"; exit 0 ;;
   "run -p")
     log read "run $proj/$cfg"
     [[ "$dd" -ge 0 && -d "$D" ]] || exit 64
@@ -180,12 +187,18 @@ DOPPLER
 #   curl-429 / curl-503  every verify read answers 429 JSON success:false / 503 HTML (no verdict)
 #   curl-down    every request is a transport failure (exit 7)
 #   graphql-mismatch     the GraphQL answer names no zone and carries one error
+#   old-denied-after-prev-set / old-unreachable-after-prev-set  once any *_PREV was set, every OLD token is
+#                        denied (401 JSON) / answers 503 HTML: the old token dies inside the swap window
+# The argv must be EXACTLY the bootstrap's (`--disable` first, no proxy, a time and redirect cap, the status
+# line, the config on stdin); any other argv is `curl-argv-bad`, exit 64, no request.
 # GraphQL: an ANALYTICS token of kind NEW* or ACCT gets the new zone tag and errors:null.
 set -f
 F="$STUB_D/.flags"
 urls=(); tok=""; extra=0; data=0; ct=0
 hre='^header = "Authorization: Bearer ([^"]*)"$'; ure='^url = "([^"]*)"$'
 for a in "$@"; do case "$a" in https://*) urls+=("$a") ;; esac; done
+want=(--disable --noproxy '*' -sS --max-time 30 --max-redirs 0 -w '\n%{http_code}' --config -)
+[[ "$*" == "${want[*]}" ]] || { printf 'read\tcurl-argv-bad\n' >> "$STUB_LOG"; exit 64; }
 while IFS= read -r line; do
   if [[ "$line" =~ $hre ]]; then tok="${BASH_REMATCH[1]}"
   elif [[ "$line" =~ $ure ]]; then [[ -z "${BASH_REMATCH[1]}" ]] || urls+=("${BASH_REMATCH[1]}")
@@ -214,12 +227,16 @@ case "$u" in
     [[ ! -e "$F/curl-503" ]] || reply 503 '<html><body>503 Service Unavailable</body></html>'
     [[ -n "$kind" ]] || deny
     [[ "$kind" != OLD || ! -e "$F/revoked-old" ]] || deny
+    if [[ "$kind" == OLD && -e "$F/prev-set-seen" ]]; then
+      [[ ! -e "$F/old-denied-after-prev-set" ]] || deny
+      [[ ! -e "$F/old-unreachable-after-prev-set" ]] || reply 503 '<html><body>503 Service Unavailable</body></html>'
+    fi
     acct=0; [[ "$kind" == ACCT ]] && acct=1
     if [[ "$u" == */accounts/* ]]; then [[ "$acct" -eq 1 ]] || deny; else [[ "$acct" -eq 0 ]] || deny; fi
     st=active; [[ "$kind" == EXPIRED ]] && st=expired
     reply 200 "{\"success\":true,\"result\":{\"id\":\"$(tid)\",\"status\":\"${st}\",\"expires_on\":\"2027-02-20T00:00:00Z\"}}" ;;
   "$api/graphql")
-    [[ "$data" -eq 1 && "$ct" -eq 1 && " $* " == *" --max-redirs 0 "* ]] || exit 64
+    [[ "$data" -eq 1 && "$ct" -eq 1 ]] || exit 64
     if [[ "$key" == CF_API_TOKEN_ANALYTICS_READ && "$kind" =~ ^(NEW[0-9]*|ACCT)$ && ! -e "$F/graphql-mismatch" ]]; then
       reply 200 '{"data":{"viewer":{"zones":[{"zoneTag":"951ce525552201ec6c696b24251abed7"}]}},"errors":null}'
     fi
@@ -281,6 +298,7 @@ world() {
   STUB_D="$W/state"; STUB_LOG="$W/calls.log"; : > "$STUB_LOG"
   [[ -z "$HARNESS_FLAG" ]] || : > "$STUB_D/.flags/$HARNESS_FLAG"
   sv soleur "$TFC" CF_ZONE_ID "$NZ"; sv soleur "$TFC" CF_ACCOUNT_ID "$NA"; sv soleur "$TFC" OTHER_KEY unrelated
+  sv soleur "$TFC" CF_API_TOKEN "SYNTH-WRITE-CAPABLE-SENTINEL"   # a write-capable token the read keys must never equal
   sv soleur dev CF_ZONE_ID "$NZ"; sv soleur dev OTHER_KEY unrelated
   sv soleur dev_personal OTHER_KEY unrelated     # its CF_API_TOKEN_AUDIT copy was deleted by hold (CTO F20)
   sv soleur dev_scheduled OTHER_KEY unrelated    # same
@@ -348,10 +366,15 @@ killed() {
 # approve <stage>: plan, the REAL hook mints a receipt for the exact apply command, then the rewritten
 # command runs as the harness would run it. Leaves OUT/RC of the apply.
 approve() {
-  local stage="$1" d cmd in newc
+  local stage="$1" d
   run --stage "$stage"
   d="$(digest)"
   [[ -n "$d" && "$(ops)" -gt 0 ]] || { OUT="approve(): no plan with operations for ${stage}: ${OUT}"; RC=99; WHY="approve-no-plan ${WHY}"; return; }
+  apply_with_receipt "$stage" "$d"
+}
+# apply_with_receipt <stage> <digest>: the REAL hook mints a receipt for that exact apply command, which then runs.
+apply_with_receipt() {
+  local stage="$1" d="$2" cmd in newc
   cmd="bash $S --stage $stage --apply --plan-digest $d"
   in="$(jq -nc --arg c "$cmd" '{tool_name:"Bash",tool_input:{command:$c},permission_mode:"default",session_id:"s",cwd:"/",hook_event_name:"PreToolUse"}')"
   newc="$(printf '%s' "$in" | env "${UNSET_ENV[@]}" "XDG_STATE_HOME=$W/xdg" CLAUDE_CODE_ENTRYPOINT=cli bash "$HOOK" | jq -r '.hookSpecificOutput.updatedInput.command // empty')"
@@ -372,7 +395,7 @@ copy_with() {
 has_line() { grep -qxF -- "$1" <<<"$OUT"; }
 vok() { has_line "SOLEUR_P5_VERIFY key=$1 verdict=ok"; }
 vfail_is() { has_line "SOLEUR_P5_VERIFY key=$1 verdict=fail reason=$2"; }
-ready() { grep -qE "^SOLEUR_P5_REVOKE_READY key=$1 old_id=$(pin_of "$1") new_id=[0-9a-f]{8}$" <<<"$OUT"; }
+ready() { grep -qE "^SOLEUR_P5_REVOKE_READY key=$1 old_id=$(pin_of "$1") new_id=[0-9a-f]{8} owner=${2:-user}$" <<<"$OUT"; }
 noready() { ! grep -q "^SOLEUR_P5_REVOKE_READY key=$1 " <<<"$OUT"; }
 logged() { grep -qE -- "$1" "$STUB_LOG"; }
 set_lines() { grep -cE "^mutating	set soleur/${1}/${2} prev=" "$STUB_LOG" || true; }   # <cfg> <NAME>
@@ -484,7 +507,7 @@ row_g2_2_prev_by_name() { # <src> — a _PREV exists holding a non-pinned value,
   sv soleur "$TFC" "${KA}_PREV" "$(tok THIRD "$KA")"; sv soleur "$TFC" "$KA" "$(tok NEW2 "$KA")"
   at refuse
   : > "$STUB_LOG"; run --stage swap
-  [[ "$RC" -eq 1 && -z "$(digest)" ]] && has_line 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=swap need=inventory' && grep -qF "$REFUSE_PIN" <<<"$OUT" || return 1
+  [[ "$RC" -eq 1 && -z "$(digest)" ]] && has_line 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=swap need=inventory' && grep -qE "^SOLEUR_P5_PREV_LIVE key=${KA} id=[0-9a-f]{8}$" <<<"$OUT" || return 1
   at zero-writes
   approve swap
   [[ "$(mut)" -eq 0 && "$(val soleur "$TFC" "${KA}_PREV")" == "$(tok THIRD "$KA")" ]]
@@ -558,6 +581,96 @@ row_g2_mustpass() { # <src> — key 1 swapped in an earlier sitting, key 2 stage
   cmp -s "$W/audit-prev.before" "$STUB_D/soleur/$TFC/${KA}_PREV" && [[ "$(val soleur "$TFC" "$KP")" == "$(tok OLD "$KP")" ]]
 }
 
+row_g2_7_window() { # <src> <denied|unreachable> — the old token stops verifying between the _PREV copy and the <KEY> write
+  local how="$2"
+  world "g2-7-$how" "$1"; seed_staged; flag "old-${how}-after-prev-set"
+  : > "$STUB_LOG"; approve swap
+  at no-key-write
+  [[ "$(set_lines "$TFC" "$KA")" -eq 0 ]] && ! logged "^mutating	set soleur/${TFC}/(${KN}|${KP})" || return 1
+  at marker
+  if [[ "$how" == denied ]]; then has_line "SOLEUR_P5_PREV_NOT_PINNED key=${KA}" || return 1
+  else has_line "SOLEUR_P5_TOKEN_UNREACHABLE name=soleur/${TFC}/${KA}_PREV http=503" && ! grep -q '^SOLEUR_P5_PREV_NOT_PINNED ' <<<"$OUT" || return 1; fi
+  at next-kept
+  [[ "$RC" -ne 0 && "$(val soleur "$TFC" "${KA}_NEXT")" == "$(tok NEW "$KA")" ]] && has_line "SOLEUR_BOOTSTRAP_STAGE_FAILED stage=swap rc=1"
+}
+row_g2_8_key_unexpected() { # <src> — _PREV old (pinned), <KEY> an already-propagated new token, a second new token staged
+  world g2-8 "$1"; seed_staged
+  sv soleur "$TFC" "${KA}_PREV" "$(tok OLD "$KA")"; sv soleur "$TFC" "$KA" "$(tok NEW1 "$KA")"; sv soleur "$TFC" "${KA}_NEXT" "$(tok NEW2 "$KA")"
+  at refuse
+  : > "$STUB_LOG"; run --stage swap
+  [[ "$RC" -eq 1 && -z "$(digest)" ]] && has_line "SOLEUR_P5_KEY_UNEXPECTED key=${KA}" && has_line 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=swap need=inventory' || return 1
+  at zero-writes
+  [[ "$(mut)" -eq 0 && "$(val soleur "$TFC" "$KA")" == "$(tok NEW1 "$KA")" ]]
+}
+row_g2_9_prev_live() { # <src> — _PREV holds a live token that is not the pin (a skipped revoke), <KEY> the pinned old one
+  world g2-9 "$1"; seed_staged; sv soleur "$TFC" "${KA}_PREV" "$(tok THIRD "$KA")"
+  at refuse
+  : > "$STUB_LOG"; run --stage swap
+  [[ "$RC" -eq 1 && -z "$(digest)" ]] && grep -qE "^SOLEUR_P5_PREV_LIVE key=${KA} id=[0-9a-f]{8}$" <<<"$OUT" \
+    && grep -qF "is not the pinned old id $(pin_of "$KA"), so copying ${KA} over it" <<<"$OUT" || return 1
+  at zero-writes
+  [[ "$(mut)" -eq 0 && "$(val soleur "$TFC" "${KA}_PREV")" == "$(tok THIRD "$KA")" ]]
+}
+row_g2_10_next_bad() { # <src> <expired|old> — the staged value is an expired token, or the pinned old one
+  local want
+  world "g2-10-$2" "$1"; seed_staged
+  if [[ "$2" == expired ]]; then sv soleur "$TFC" "${KA}_NEXT" "$(tok EXPIRED "$KA")"; want="verifies with status expired, not active"
+  else sv soleur "$TFC" "${KA}_NEXT" "$(tok OLD "$KA")"; want="verifies the pinned OLD id $(pin_of "$KA"), so it is not a new token"; fi
+  at refuse
+  : > "$STUB_LOG"; run --stage swap
+  [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && grep -qF "$want" <<<"$OUT" && has_line 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=swap need=inventory'
+}
+row_g2_12_delete_unconfirmed() { # <src> — the stub's delete answers 0 and removes nothing
+  world g2-12 "$1"; seed_staged; flag delete-noop
+  : > "$STUB_LOG"; approve swap
+  at marker
+  has_line "SOLEUR_P5_DELETE_NOT_CONFIRMED name=${KA}_NEXT" && ! has_line "SOLEUR_P5_SWAPPED key=${KA} staging=deleted verified=digest" || return 1
+  at stops
+  [[ "$RC" -ne 0 ]] && ! logged "^mutating	set soleur/${TFC}/${KN}"
+}
+row_g2_13_next_not_distinct() { # <src> — the staged PAGERULES value is the token prd_terraform holds as CF_API_TOKEN
+  world g2-13 "$1"; seed_staged; sv soleur "$TFC" CF_API_TOKEN "$(tok NEW "$KP")"
+  at refuse
+  : > "$STUB_LOG"; run --stage swap
+  [[ "$RC" -eq 1 && -z "$(digest)" && "$(mut)" -eq 0 ]] && has_line "SOLEUR_P5_NEXT_NOT_DISTINCT key=${KP} equals=CF_API_TOKEN" \
+    && has_line 'SOLEUR_BOOTSTRAP_PRECONDITION_FAILED stage=swap need=inventory'
+}
+row_g2_14_restaged_after_plan() { # <src> — the plan names each staged token's id: a re-stage before the apply is a drift
+  local d k
+  world g2-14 "$1"; seed_staged
+  at plan-names-token
+  run --stage swap; d="$(digest)"
+  [[ -n "$d" ]] || return 1
+  for k in "${KEYS[@]}"; do grep -qE "^SOLEUR_BOOTSTRAP_PLAN_OP stage=swap op=copy-staged-token target=${TFC}/${k}_NEXT->${k} new_id=[0-9a-f]{8} owner=user$" <<<"$OUT" || return 1; done
+  sv soleur "$TFC" "${KP}_NEXT" "$(tok NEW2 "$KP")"
+  at drift
+  : > "$STUB_LOG"; apply_with_receipt swap "$d"
+  [[ "$RC" -eq 75 && "$(mut)" -eq 0 ]] && has_line 'SOLEUR_BOOTSTRAP_PLAN_DRIFT stage=swap'
+}
+row_g2_r1_resume_after_prev() { # <src> — an earlier run stopped after AUDIT's _PREV copy: the re-run copies the staged token only
+  world g2-r1 "$1"; seed_staged; sv soleur "$TFC" "${KA}_PREV" "$(tok OLD "$KA")"
+  at plan
+  run --stage swap
+  [[ "$RC" -eq 0 ]] && grep -q "op=copy-staged-token target=${TFC}/${KA}_NEXT->${KA} " <<<"$OUT" \
+    && has_line "SOLEUR_BOOTSTRAP_PLAN_OP stage=swap op=delete-staging-key target=${TFC}/${KA}_NEXT" \
+    && ! grep -q "op=copy-old-token-to-revert-key target=${TFC}/${KA}->" <<<"$OUT" || return 1
+  at applied
+  : > "$STUB_LOG"; approve swap
+  [[ "$RC" -eq 0 && "$(set_lines "$TFC" "${KA}_PREV")" -eq 0 && "$(val soleur "$TFC" "$KA")" == "$(tok NEW "$KA")" ]] \
+    && ! has soleur "$TFC" "${KA}_NEXT" && has_line "SOLEUR_P5_SWAPPED key=${KA} staging=deleted verified=digest"
+}
+row_g2_r2_resume_after_key() { # <src> — an earlier run stopped after AUDIT's <KEY> write: the re-run only deletes the staging key
+  world g2-r2 "$1"; seed_staged; sv soleur "$TFC" "${KA}_PREV" "$(tok OLD "$KA")"; sv soleur "$TFC" "$KA" "$(tok NEW "$KA")"
+  at plan
+  run --stage swap
+  [[ "$RC" -eq 0 ]] && has_line "SOLEUR_BOOTSTRAP_PLAN_OP stage=swap op=delete-staging-key target=${TFC}/${KA}_NEXT" \
+    && ! grep -qE "op=copy-[a-z-]+ target=${TFC}/${KA}(_NEXT)?->" <<<"$OUT" || return 1
+  at applied
+  : > "$STUB_LOG"; approve swap
+  [[ "$RC" -eq 0 && "$(set_lines "$TFC" "$KA")" -eq 0 && "$(set_lines "$TFC" "${KA}_PREV")" -eq 0 ]] \
+    && ! has soleur "$TFC" "${KA}_NEXT" && has_line "SOLEUR_P5_SWAPPED key=${KA} staging=deleted verified=digest"
+}
+
 # ==================================================================================================
 # Guard 3 rows — holder-copies (world: seed_swapped with AUDIT's holders still old)
 # ==================================================================================================
@@ -603,6 +716,32 @@ row_g3_3_before_swap() { # <src>
   [[ "$(mut)" -eq 0 ]]
 }
 
+row_g3_r1_resume_after_first_holder() { # <src> — an earlier run wrote dev_personal, then stopped: the re-run writes dev only
+  local b="$SB/twoh-$RANDOM.sh"
+  at setup
+  two_holders "$1" "$b" || return 1
+  world g3-r1 "$b"; seed_swapped; sv soleur dev_personal "$KA" "$(tok NEW "$KA")"; sv soleur dev "$KA" "$(tok OLD "$KA")"
+  : > "$STUB_LOG"; approve holder-copies
+  at only-second
+  [[ "$(set_lines dev_personal "$KA")" -eq 0 && "$(set_lines dev "$KA")" -eq 1 ]] || return 1
+  at applied
+  [[ "$RC" -eq 0 && "$(val soleur dev "$KA")" == "$(tok NEW "$KA")" ]]
+}
+row_g3_6_source_unreadable_at_copy() { # <src> — prd_terraform <KEY> stops reading after the plan: the copy refuses before any write
+  local g
+  world g3-6 "$1"; seed_swapped; sv soleur dev "$KA" "$(tok OLD "$KA")"
+  at setup
+  : > "$STUB_LOG"; run --stage holder-copies
+  g="$(grep -c "^read	get soleur/${TFC}/${KA}$" "$STUB_LOG")"
+  [[ "$g" -gt 0 && "$(ops)" == 1 ]] || return 1
+  printf '%s' "$((2 * g))" > "$STUB_D/.flags/get-fails-after.soleur.${TFC}.${KA}"   # the plan run and the apply's re-plan read it
+  : > "$STUB_LOG"; approve holder-copies
+  at no-write
+  [[ "$(set_lines dev "$KA")" -eq 0 ]] || return 1
+  at stops
+  [[ "$RC" -ne 0 && "$(val soleur dev "$KA")" == "$(tok OLD "$KA")" ]] && has_line 'SOLEUR_BOOTSTRAP_STAGE_FAILED stage=holder-copies rc=1'
+}
+
 # ==================================================================================================
 # Scenario rows
 # ==================================================================================================
@@ -645,7 +784,7 @@ row_s2_account_owned() { # <src> — /user/tokens/verify refuses, the account en
   world s2 "$1"; seed_swapped; sv soleur "$TFC" "$KA" "$(tok ACCT "$KA")"; sv soleur dev "$KA" "$(tok ACCT "$KA")"
   at verdict
   : > "$STUB_LOG"; run --stage verify
-  [[ "$RC" -eq 0 ]] && vok "$KA" && ready "$KA" && grep -qE "^SOLEUR_P5_KEY key=${KA} id=[0-9a-f]{8} status=active owner=account$" <<<"$OUT"
+  [[ "$RC" -eq 0 ]] && vok "$KA" && ready "$KA" account && grep -qE "^SOLEUR_P5_KEY key=${KA} id=[0-9a-f]{8} status=active owner=account$" <<<"$OUT"
 }
 row_s3_unreachable() { # <src> — 429 on verify reads in verify, 503 in the swap plan: no verdict either way
   world s3a "$1"; seed_swapped; flag curl-429
@@ -724,6 +863,9 @@ if [[ "$MODE" == full ]]; then
     && grep -qE '^# P5-MANIFEST CF_API_TOKEN_ANALYTICS_READ +\| 5993721f +\| soleur/prd_terraform$' "$SCRIPT_SRC" \
     && grep -qE '^# P5-MANIFEST CF_API_TOKEN_PAGERULES_READ +\| 86aa993e +\| soleur/prd_terraform$' "$SCRIPT_SRC"
   check "the manifest block holds the three keys, their pinned ids and holders (plan Phase 3)" $?
+  r=1; awk -F'|' '$1 == "# SOLEUR-STAGE swap" { print NF; print $4 }' "$SCRIPT_SRC" > "$SB/swap-rollback.txt"
+  [[ "$(sed -n 1p "$SB/swap-rollback.txt")" == 4 ]] && grep -qE 'first copy prd_terraform KEY back to KEY_NEXT .*, then copy KEY_PREV over KEY, and a re-run of swap re-applies' "$SB/swap-rollback.txt" && r=0
+  check "the swap rollback keeps the new token: KEY back to KEY_NEXT first, then KEY_PREV over KEY (one sentence, no |)" "$r"
   _treg() { awk '/^# --- the credentials file must be ignored by git/{on=1} on{print} /^trap on_exit EXIT$/{exit}' "$1"; }
   [[ -n "$(_treg "$SCRIPT_SRC")" ]] && cmp -s <(_treg "${REPO_ROOT}/plugins/soleur/skills/operator-bootstrap/template.sh") <(_treg "$SCRIPT_SRC")
   check "the .env probe through the on_exit trap is byte-identical to the operator-bootstrap template (comments included)" $?
@@ -758,12 +900,25 @@ if [[ "$MODE" == full ]]; then
   row_g2_5_order_in_window "$SCRIPT_SRC"; check "G2-5 every set <KEY> is logged prev=old (the order observed inside the write window)" $?
   row_g2_6_empty_manifest "$SCRIPT_SRC"; check "G2-6 a manifest that parses to zero keys: MANIFEST_EMPTY refusal, zero writes" $?
   row_g2_mustpass "$SCRIPT_SRC"; check "G2 must-PASS: key 1 swapped earlier, key 2 staged: writes key 2 only, key 1's _PREV unchanged" $?
+  row_g2_7_window "$SCRIPT_SRC" denied; check "G2-7 the old token is denied after the _PREV copy: PREV_NOT_PINNED, no <KEY> write, _NEXT kept" $?
+  row_g2_7_window "$SCRIPT_SRC" unreachable; check "G2-7 the _PREV re-check gets no verdict: TOKEN_UNREACHABLE (never PREV_NOT_PINNED), no <KEY> write" $?
+  row_g2_8_key_unexpected "$SCRIPT_SRC"; check "G2-8 _PREV pinned but <KEY> holds a third (propagated) token: KEY_UNEXPECTED refusal, zero writes" $?
+  row_g2_9_prev_live "$SCRIPT_SRC"; check "G2-9 a live non-pinned _PREV (a skipped revoke): PREV_LIVE refusal, _PREV kept" $?
+  row_g2_10_next_bad "$SCRIPT_SRC" expired; check "G2-10 a staged _NEXT with status expired: refused, zero writes" $?
+  row_g2_10_next_bad "$SCRIPT_SRC" old; check "G2-10 the pinned old token staged as _NEXT: refused, zero writes" $?
+  row_g2_12_delete_unconfirmed "$SCRIPT_SRC"; check "G2-12 a delete the listing does not confirm: DELETE_NOT_CONFIRMED, no SWAPPED, stage stops" $?
+  row_g2_13_next_not_distinct "$SCRIPT_SRC"; check "G2-13 a staged _NEXT equal to prd_terraform CF_API_TOKEN: NEXT_NOT_DISTINCT refusal, zero writes" $?
+  row_g2_14_restaged_after_plan "$SCRIPT_SRC"; check "G2-14 the plan names new_id and owner; a _NEXT re-staged after the plan is PLAN_DRIFT 75, zero writes" $?
+  row_g2_r1_resume_after_prev "$SCRIPT_SRC"; check "G2-R1 re-run after the _PREV copy: copy-staged-token + delete only, no _PREV write, SWAPPED" $?
+  row_g2_r2_resume_after_key "$SCRIPT_SRC"; check "G2-R2 re-run after the <KEY> write: delete-staging-key only, no write, SWAPPED" $?
 
   echo "== Guard 3: holder-copies =="
   row_g3_1_last_holder_bad "$SCRIPT_SRC" third; check "G3-1 the last holder (dev) holds a third value: refuse naming it, zero writes" $?
   row_g3_1_last_holder_bad "$SCRIPT_SRC" absent; check "G3-1 the last holder (dev) lacks the key: refuse naming it, zero writes" $?
   row_g3_2_second_already_new "$SCRIPT_SRC"; check "G3-2 first holder old, second already new: writes only the first" $?
   row_g3_3_before_swap "$SCRIPT_SRC"; check "G3-3 run before swap: PRECONDITION_FAILED need=swap" $?
+  row_g3_r1_resume_after_first_holder "$SCRIPT_SRC"; check "G3-R1 re-run after the first holder was copied: writes the second only" $?
+  row_g3_6_source_unreadable_at_copy "$SCRIPT_SRC"; check "G3-6 the copy source stops reading after the plan: no holder write, stage fails" $?
 
   echo "== Test Scenarios =="
   row_s1_happy_path "$SCRIPT_SRC"; check "S1 happy path: swap, holder-copies, verify ok with three REVOKE_READY, revoke, inventory source=none, every write stage satisfied, no GitHub call" $?
@@ -882,7 +1037,7 @@ fi
 if mutate G2M2 "$SB/g2m2.sh" <<'PERL'; then
 s{      if \[\[ "\$a" -eq 0 && "\$IDENT_ID" == "\$pin" \]\]; then prev_ok=1; fi\n}{      prev_ok=1\n}
 PERL
-  mkill "G2M2 (an existing _PREV accepted by name)" row_g2_2_prev_by_name "$SB/g2m2.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN '
+  mkill "G2M2 (an existing _PREV accepted by name)" row_g2_2_prev_by_name "$SB/g2m2.sh" refuse 'SOLEUR_P5_KEY_UNEXPECTED '
 fi
 if mutate G2M3 "$SB/g2m3.sh" <<'PERL'; then
 s{  \[\[ "\$d" == "\$s" \]\] \|\| \{ printf 'SOLEUR_P5_COPY_MISMATCH [^\n]*\n}{}
@@ -941,6 +1096,68 @@ PERL
   mkill "S6M (analytics-health made gating)" row_s6_analytics_api_error "$SB/s6m.sh" verdict 'reason=consumer-read'
 fi
 
+if mutate G2M7 "$SB/g2m7.sh" <<'PERL'; then
+s{    prev_pinned_now "\$k" "\$pin" \|\| return 1\n}{}
+PERL
+  mkill "G2M7 (the in-window _PREV re-check deleted)" row_g2_7_window "$SB/g2m7.sh" no-key-write 'SOLEUR_P5_SWAPPED ' denied
+fi
+if mutate G2M8 "$SB/g2m8.sh" <<'PERL'; then
+s{  \[\[ "\$a" -eq 3 \]\] \|\| printf 'SOLEUR_P5_PREV_NOT_PINNED}{  printf 'SOLEUR_P5_PREV_NOT_PINNED}
+PERL
+  mkill "G2M8 (a no-verdict re-check reported as not pinned)" row_g2_7_window "$SB/g2m8.sh" marker 'SOLEUR_P5_PREV_NOT_PINNED ' unreachable
+fi
+if mutate G2M9 "$SB/g2m9.sh" <<'PERL'; then
+s{      elif \[\[ -n "\$dk" && "\$dk" == "\$dp" \]\]; then mode=swap\n}{      elif true; then mode=swap\n}
+PERL
+  mkill "G2M9 (prev_ok mode overwrites <KEY> whatever it holds)" row_g2_8_key_unexpected "$SB/g2m9.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN '
+fi
+if mutate G2M10 "$SB/g2m10.sh" <<'PERL'; then
+s{      if \[\[ "\$prev_ok" -eq 0 && "\$a" -eq 0 && "\$IDENT_STATUS" == active \]\]; then\n}{      if false; then\n}
+PERL
+  mkill "G2M10 (a live non-pinned _PREV overwritten)" row_g2_9_prev_live "$SB/g2m10.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN '
+fi
+if mutate G2M11 "$SB/g2m11.sh" <<'PERL'; then
+s{    \[\[ "\$IDENT_STATUS" == active \]\] \|\| swap_refuse "\$\{TFC\}/\$\{k\}_NEXT verifies with status[^\n]*\n}{}
+PERL
+  mkill "G2M11 (the _NEXT active-status refusal deleted)" row_g2_10_next_bad "$SB/g2m11.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN ' expired
+fi
+if mutate G2M12 "$SB/g2m12.sh" <<'PERL'; then
+s{    \[\[ "\$IDENT_ID" != "\$pin" \]\] \|\| swap_refuse "\$\{TFC\}/\$\{k\}_NEXT verifies the pinned OLD id[^\n]*\n}{}
+PERL
+  mkill "G2M12 (the old-token-staged-as-_NEXT refusal deleted)" row_g2_10_next_bad "$SB/g2m12.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN ' old
+fi
+if mutate G2M13 "$SB/g2m13.sh" <<'PERL'; then
+s{  if ! names_fresh "\$PROJ" "\$TFC" \|\| in_names "\$\{k\}_NEXT" "\$NAMES"; then\n[^\n]*\n  fi\n}{}
+PERL
+  mkill "G2M13 (the delete's re-list confirm deleted)" row_g2_12_delete_unconfirmed "$SB/g2m13.sh" marker 'SOLEUR_P5_SWAPPED '
+fi
+if mutate G2M14 "$SB/g2m14.sh" <<'PERL'; then
+s{    next_distinct "\$k"\n}{}
+PERL
+  mkill "G2M14 (the _NEXT distinctness refusal deleted)" row_g2_13_next_not_distinct "$SB/g2m14.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN '
+fi
+if mutate G2M15 "$SB/g2m15.sh" <<'PERL'; then
+s{copy-staged-token "\$\{TFC\}/\$\{k\}_NEXT->\$\{k\} new_id=\$\{nid\} owner=\$\{nown\}"}{copy-staged-token "\$\{TFC\}/\$\{k\}_NEXT->\$\{k\}"}
+PERL
+  mkill "G2M15 (the plan op no longer names the staged token)" row_g2_14_restaged_after_plan "$SB/g2m15.sh" plan-names-token 'SOLEUR_BOOTSTRAP_PLAN '
+fi
+if mutate G2M16 "$SB/g2m16.sh" <<'PERL'; then
+s{      if \[\[ -n "\$dk" && "\$dk" == "\$dn" \]\]; then mode=delete\n}{      if false; then mode=delete\n}
+PERL
+  mkill "G2M16 (the delete-only resume mode removed)" row_g2_r2_resume_after_key "$SB/g2m16.sh" plan 'SOLEUR_P5_KEY_UNEXPECTED '
+fi
+if mutate G3M4 "$SB/g3m4.sh" <<'PERL'; then
+s{(  s="\$\(digest_of "\$PROJ" "\$1" "\$2"\)" [^\n]*\n)(  \( set -o pipefail\n[^\n]*\n[^\n]*\n)}{$2$1}
+PERL
+  mkill "G3M4 (the copy writes before it confirms the source reads)" row_g3_6_source_unreadable_at_copy "$SB/g3m4.sh" no-write 'SOLEUR_BOOTSTRAP_STAGE_FAILED '
+fi
+if mutate C1M "$SB/c1m.sh" <<'PERL'; then
+s{ --max-time 30 --max-redirs 0 -w}{ --max-time 30 -w}
+PERL
+  # The stub refuses the argv before reading its config, so the producer's awk dies on SIGPIPE: key-malformed.
+  mkill "C1M (curl's redirect cap dropped)" row_g1_mustpass "$SB/c1m.sh" verdict 'reason=key-malformed'
+fi
+
 echo "== harness rows (the instrument must be able to go red) =="
 hred() { # <label> <step> <why-ere> <flag> <row-fn> [<row-args>...] — the row on the REAL script under a broken stub
   local label="$1" step="$2" why="$3" fl="$4" fn="$5" r; shift 5
@@ -958,7 +1175,7 @@ hred "H3 (every holder get returns the _PREV value)" only-first 'SOLEUR_P5_COPIE
 # --- anti-vacuity floor (reported directly, never through fail()) -----------------
 # The subtrahend is the instrument self-test's one counted pass; the bound is exact for each mode.
 TOTAL=$((PASS + FAIL)); SELFTEST_PASSES=1
-case "$MODE" in full) MIN_ASSERTIONS=91 ;; *) MIN_ASSERTIONS=53 ;; esac
+case "$MODE" in full) MIN_ASSERTIONS=129 ;; *) MIN_ASSERTIONS=77 ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -lt "$MIN_ASSERTIONS" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran in %s mode, floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$MIN_ASSERTIONS" >&2
   printf 'Total: %s assertions, %s failed\n' "$TOTAL" "$((FAIL + 1))"

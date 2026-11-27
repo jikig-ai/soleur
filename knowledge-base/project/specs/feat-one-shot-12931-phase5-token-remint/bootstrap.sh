@@ -79,7 +79,7 @@ set -f
 # founder, with no `|` in them.
 #
 # SOLEUR-STAGE inventory|read|Nothing changes: this reports, by name and as old, new, other or absent only, which Doppler configs hold each manifest key.|None needed.
-# SOLEUR-STAGE swap|write|For each key with a staged KEY_NEXT, Doppler prd_terraform first keeps the old token in KEY_PREV, then KEY takes the new token and KEY_NEXT is deleted, so the read-only diagnostics use the new token from then on.|Until the old token is revoked, copy KEY_PREV back over KEY in Doppler prd_terraform; after that revoke the old token is dead, so fix forward.
+# SOLEUR-STAGE swap|write|For each key with a staged KEY_NEXT, Doppler prd_terraform first keeps the old token in KEY_PREV, then KEY takes the new token and KEY_NEXT is deleted, so the read-only diagnostics use the new token from then on.|Until the old token is revoked, first copy prd_terraform KEY back to KEY_NEXT (it is the only copy of the new token), then copy KEY_PREV over KEY, and a re-run of swap re-applies; after that revoke the old token is dead, so fix forward.
 # SOLEUR-STAGE holder-copies|write|Every other Doppler config the manifest names that still holds the old token gets the new token copied from prd_terraform.|Until the old token is revoked, copy prd_terraform KEY_PREV back into that config; after that revoke, fix forward.
 # SOLEUR-STAGE verify|read|Nothing changes: this checks each key's token, its consumer read and every holder by name and verdict only, and prints REVOKE_READY when the old token can be revoked.|None needed.
 
@@ -696,8 +696,24 @@ copy_secret() {
 # --- swap (write) -----------------------------------------------------------------
 SWAP_KEYS=(); SWAP_MODE=(); SWAP_PIN=()
 swap_refuse() { soleur_op_precondition_failed swap inventory "$1 Nothing was changed."; }
+# next_distinct <key> — the staged value is not a copy of any OTHER CF_API_TOKEN* key of prd_terraform
+# (the key's own <KEY> and <KEY>_PREV excluded): a write-capable token staged by mistake under a read
+# key's name refuses before any write (CTO D5). Compared by digest; only the other key's NAME is printed.
+next_distinct() {
+  local k="$1" dn n
+  dn="$(digest_of "$PROJ" "$TFC" "${k}_NEXT")" || swap_refuse "${TFC}/${k}_NEXT is unreadable or empty."
+  while IFS= read -r n; do
+    case "$n" in CF_API_TOKEN*) ;; *) continue ;; esac
+    [[ "$n" != "$k" && "$n" != "${k}_PREV" && "$n" != "${k}_NEXT" ]] || continue
+    holder_digest "$PROJ" "$TFC" "$n" || swap_refuse "${TFC}/${n} is listed but unreadable, so nothing proves ${k}_NEXT is not a copy of it."
+    if [[ "$HD" == "$dn" ]]; then
+      printf 'SOLEUR_P5_NEXT_NOT_DISTINCT key=%s equals=%s\n' "$k" "$n"
+      swap_refuse "${TFC}/${k}_NEXT holds the same token as ${TFC}/${n}, so it is not a token minted for ${k}. Re-mint it and re-stage it with the runbook hand-off."
+    fi
+  done <<<"$TF_NAMES"
+}
 plan_swap() {
-  local i k pin a b rc prev_ok dk dn
+  local i k pin a b rc prev_ok dk dn dp mode nid nown
   SWAP_KEYS=(); SWAP_MODE=(); SWAP_PIN=()
   load_manifest || swap_refuse "The manifest block of this script parsed to no valid key, so there is nothing a swap could prove; fix the manifest block."
   require_tf_names swap
@@ -714,40 +730,56 @@ plan_swap() {
     esac
     [[ "$IDENT_STATUS" == active ]] || swap_refuse "${TFC}/${k}_NEXT verifies with status ${IDENT_STATUS}, not active. Re-mint it."
     [[ "$IDENT_ID" != "$pin" ]] || swap_refuse "${TFC}/${k}_NEXT verifies the pinned OLD id ${pin}, so it is not a new token."
+    nid="$IDENT_ID"; nown="$IDENT_OWNER"
+    next_distinct "$k"
     prev_ok=0
     if in_names "${k}_PREV" "$TF_NAMES"; then
       a=0; token_ident "$PROJ" "$TFC" "${k}_PREV" || a=$?
       [[ "$a" -ne 3 ]] || swap_refuse "The verify read of ${TFC}/${k}_PREV got no verdict, so nothing is decided. Run this stage again later."
       if [[ "$a" -eq 0 && "$IDENT_ID" == "$pin" ]]; then prev_ok=1; fi
+      if [[ "$prev_ok" -eq 0 && "$a" -eq 0 && "$IDENT_STATUS" == active ]]; then
+        printf 'SOLEUR_P5_PREV_LIVE key=%s id=%s\n' "$k" "$IDENT_ID"
+        swap_refuse "${TFC}/${k}_PREV holds a live token (id ${IDENT_ID}) that is not the pinned old id ${pin}, so copying ${k} over it would lose the only pointer to that token (an earlier rotation's revoke was skipped). Revoke or record it first (runbook Halt)."
+      fi
     fi
     if [[ "$prev_ok" -eq 1 ]]; then
+      # An earlier run was interrupted after the _PREV copy: <KEY> holds either the staged value (only the
+      # delete is left) or still the old one (the copy is left). Anything else is a value nothing else holds.
       dk="$(digest_of "$PROJ" "$TFC" "$k" || true)"; dn="$(digest_of "$PROJ" "$TFC" "${k}_NEXT" || true)"
-      if [[ -n "$dk" && "$dk" == "$dn" ]]; then
-        soleur_op_plan_op delete-staging-key "${TFC}/${k}_NEXT"      # an earlier interrupted run copied it
-        SWAP_KEYS[${#SWAP_KEYS[@]}]="$k"; SWAP_MODE[${#SWAP_MODE[@]}]=delete; SWAP_PIN[${#SWAP_PIN[@]}]="$pin"
-        continue
+      dp="$(digest_of "$PROJ" "$TFC" "${k}_PREV" || true)"
+      if [[ -n "$dk" && "$dk" == "$dn" ]]; then mode=delete
+      elif [[ -n "$dk" && "$dk" == "$dp" ]]; then mode=swap
+      else
+        printf 'SOLEUR_P5_KEY_UNEXPECTED key=%s\n' "$k"
+        swap_refuse "${TFC}/${k} holds neither the old token (${k}_PREV) nor the staged ${k}_NEXT, so a swap would overwrite a value no other key holds. Revoke or record it first (runbook Halt)."
       fi
-      SWAP_MODE[${#SWAP_MODE[@]}]=swap
     else
       in_names "$k" "$TF_NAMES" || swap_refuse "${TFC} has no ${k} and no ${k}_PREV that verifies the pinned id ${pin}, so the old token cannot be kept."
       b=0; token_ident "$PROJ" "$TFC" "$k" || b=$?
       [[ "$b" -ne 3 ]] || swap_refuse "The verify read of ${TFC}/${k} got no verdict, so nothing is decided. Run this stage again later."
       [[ "$b" -eq 0 && "$IDENT_ID" == "$pin" ]] || swap_refuse "${TFC}/${k}_PREV does not hold the old token and ${TFC}/${k} does not verify the pinned id ${pin}, so a swap would lose the only copy the revoke reads. Find the old token (runbook Halt) before any write."
-      soleur_op_plan_op copy-old-token-to-revert-key "${TFC}/${k}->${k}_PREV"
-      SWAP_MODE[${#SWAP_MODE[@]}]=prev+swap
+      mode=prev+swap
     fi
-    soleur_op_plan_op copy-staged-token "${TFC}/${k}_NEXT->${k}"
-    soleur_op_plan_op delete-staging-key "${TFC}/${k}_NEXT"
-    SWAP_KEYS[${#SWAP_KEYS[@]}]="$k"; SWAP_PIN[${#SWAP_PIN[@]}]="$pin"
+    # The plan names the staged token's id and owner, so the approved digest binds WHICH token goes in: a
+    # _NEXT re-staged between the plan and the apply is a plan drift (exit 75), never a silent swap.
+    case "$mode" in
+      delete) soleur_op_plan_op delete-staging-key "${TFC}/${k}_NEXT" ;;
+      *)
+        [[ "$mode" != prev+swap ]] || soleur_op_plan_op copy-old-token-to-revert-key "${TFC}/${k}->${k}_PREV"
+        soleur_op_plan_op copy-staged-token "${TFC}/${k}_NEXT->${k} new_id=${nid} owner=${nown}"
+        soleur_op_plan_op delete-staging-key "${TFC}/${k}_NEXT" ;;
+    esac
+    SWAP_KEYS[${#SWAP_KEYS[@]}]="$k"; SWAP_MODE[${#SWAP_MODE[@]}]="$mode"; SWAP_PIN[${#SWAP_PIN[@]}]="$pin"
   done
 }
 # prev_pinned_now <key> <pin> — at THIS moment <KEY>_PREV verifies the pinned old id (the check
-# between the _PREV copy and the <KEY> write, Guard 2).
+# between the _PREV copy and the <KEY> write, Guard 2). A read with no verdict is reported as
+# SOLEUR_P5_TOKEN_UNREACHABLE (by token_ident; re-run), never as "not pinned".
 prev_pinned_now() {
   local a=0
   token_ident "$PROJ" "$TFC" "${1}_PREV" || a=$?
   [[ "$a" -eq 0 && "$IDENT_ID" == "$2" ]] && return 0
-  printf 'SOLEUR_P5_PREV_NOT_PINNED key=%s\n' "$1"
+  [[ "$a" -eq 3 ]] || printf 'SOLEUR_P5_PREV_NOT_PINNED key=%s\n' "$1"
   return 1
 }
 # delete_next_if_equal <key> — delete <KEY>_NEXT ONLY after <KEY> provably holds the same value, then
@@ -904,7 +936,7 @@ verify_key() {
     4) vfail "$k" key-unreadable; return 0 ;;
     *) vfail "$k" key-not-verified; return 0 ;;
   esac
-  local key_id="$IDENT_ID"
+  local key_id="$IDENT_ID" key_owner="$IDENT_OWNER"
   printf 'SOLEUR_P5_KEY key=%s id=%s status=%s owner=%s\n' "$k" "$key_id" "$IDENT_STATUS" "$IDENT_OWNER"
   [[ "$IDENT_STATUS" == active ]] || { vfail "$k" key-not-active; return 0; }
   [[ "$key_id" != "$pin" ]] || { vfail "$k" key-is-old; return 0; }
@@ -925,7 +957,7 @@ verify_key() {
   # old copies means the census cannot see the old value at all, which proves nothing.
   [[ "$C_OLD" -eq 1 && "$C_PREV_OLD" -eq 1 ]] || { vfail "$k" census-blind; return 0; }
   printf 'SOLEUR_P5_VERIFY key=%s verdict=ok\n' "$k"
-  printf 'SOLEUR_P5_REVOKE_READY key=%s old_id=%s new_id=%s\n' "$k" "$REF_ID" "$key_id"
+  printf 'SOLEUR_P5_REVOKE_READY key=%s old_id=%s new_id=%s owner=%s\n' "$k" "$REF_ID" "$key_id" "$key_owner"
 }
 TARGETS_NEW=0
 read_verify() {
