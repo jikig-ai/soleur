@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:r43138951876,r43185108804,r43278615612,r43286327218,r43308874521
 # default-weight-ms=1800
-# generated-at=2026-11-27T15:10:11Z
+# generated-at=2026-11-27T17:23:19Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7d0cd2b5340986989503a52b56d26678f0e677e02dc0e30d7950aea5d95d712f
 .claude/hooks/agent-token-tee.test.sh	7099	measured
@@ -691,6 +691,7 @@ tests/scripts/cf-account-migration-runbook	1802	floor
 tests/scripts/cf-account-migration-scope	1802	floor
 tests/scripts/cf-lb-overlay-gate	5411	measured
 tests/scripts/cf-old-login-token-remint-bootstrap	1800	floor
+tests/scripts/cf-old-login-token-remint-browser	1800	floor
 tests/scripts/cleanup-merged-space	9477	measured
 tests/scripts/deploy-access-token-forget	1460	measured
 tests/scripts/destroy-guard-counter-github	116	measured

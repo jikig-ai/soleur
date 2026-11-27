@@ -6800,6 +6800,10 @@ if want_scripts; then
   # and curl, real approval hook; it finds bootstrap.sh in the spec directory by glob, before and after
   # archive-kb). `--mutants` runs its mutation section alone; the default run includes it.
   run_suite "tests/scripts/cf-old-login-token-remint-bootstrap" bash tests/scripts/test-cf-old-login-token-remint-bootstrap.sh
+  # (#12931 Phase 5 token slice, CTO ruling D1) The committed dashboard browser bodies beside that
+  # bootstrap (p5-mint.js, p5-revoke.js under a browser_run_code_unsafe emulation in stock node, and the
+  # one-shot 127.0.0.1 sink p5-sink.py) plus their p5-browser.sha256 pin; found by glob like its sibling.
+  run_suite "tests/scripts/cf-old-login-token-remint-browser" bash tests/scripts/test-cf-old-login-token-remint-browser.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
   # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
   # host-key option anywhere in the tree), its mutation harness, and the track.sh
