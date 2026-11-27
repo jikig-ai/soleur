@@ -56,14 +56,14 @@ The mechanism is already self-contained: `plugins/soleur/scripts/retry-budget-ru
 ## Implementation Phases
 
 ### Phase A — test-fix-loop wiring
-1. Read the canonical reference path resolution header; add a "Retry-budget ruling (on budget-capped halt)" block after the Phase 1 tally bullet.
-2. Define trigger: the existing per-iteration `STOP` on `fix_rounds`. Instead of immediate exit, run the ruling procedure with `--phase test-fix-loop` (the child's halt boundary is the loop itself; `goto` targets must be earlier — for test-fix-loop, only `goto test-fix-loop` is "earlier-or-equal" and re-runs the loop; `goto plan`/`work`/`review`/`qa` are not earlier and halt).
-3. Apply verb: `continue` → run no unit, preserve commits, later halt is spent; `goto test-fix-loop` → re-run the loop (sticky capped line does not re-trigger until the action starts); `fail` → today's halt with existing reset rules.
+1. Read the canonical reference path resolution header; add a "Retry-budget ruling (on a budget-capped halt)" block after the Phase 1 tally bullet.
+2. Define trigger: the existing per-iteration `STOP` on `fix_rounds`. Under parent `one-shot`, exit after writing `budget-capped` so the parent runs the ruling once (`--phase test-fix-loop`); standalone, run the ruling procedure with `--phase test-fix-loop` to record the ruling ledger before halting. Per the canonical phase order (`plan` < `work` < `review` < `qa` < `test-fix-loop`), `goto` targets must be strictly earlier than the halt boundary: under parent `one-shot`, `plan`/`work`/`review`/`qa` are earlier while `goto test-fix-loop` is not earlier and halts (`capped=fix_rounds` stays set); in a standalone `test-fix-loop` run with no parent pipeline, any `goto` halts because no earlier phase exists in-process.
+3. Apply verb: `continue` → run no unit, preserve commits, later halt is spent; `goto <earlier-phase>` → parent `one-shot` re-enters that earlier phase (sticky capped line does not re-trigger until the action starts); `fail` → today's halt with existing reset rules.
 4. Keep existing termination/reset semantics (Max iterations, Regression, etc.) untouched when ruling resolves to `fail`/`continue`.
 
 ### Phase B — review fix-rounds wiring
-1. In `risk-tier-and-fix-rounds.md` §3, after the classified-stop path, invoke the ruling with `--phase review`.
-2. `goto` targets earlier than a review fix-round halt: `plan`/`work` are earlier; `review` re-enters review; `test-fix-loop`/`qa` are not earlier (halt). Document.
+1. In `risk-tier-and-fix-rounds.md` §3 and `review/SKILL.md`, after the classified-stop path (`STOP` on `seats`), wire the ruling with `--phase review` (under parent `one-shot`, return after writing `budget-capped` so the parent evaluates the single ruling once; standalone, run the ruling to record the ledger before halting).
+2. `goto` targets strictly earlier than a `--phase review` halt: `plan`/`work` are earlier (under a parent pipeline; standalone halts on any `goto`); `review`, `qa`, and `test-fix-loop` are not earlier (halt, since `capped=seats` stays set). Document.
 3. `continue`/`fail` as above; fix-round seats tally unchanged.
 
 ### Phase C — qa wiring
@@ -78,7 +78,7 @@ The mechanism is already self-contained: `plugins/soleur/scripts/retry-budget-ru
 
 ## Test Scenarios
 
-- integration: Given the updated skill files (`test-fix-loop/SKILL.md`, `review/SKILL.md`, `review/references/risk-tier-and-fix-rounds.md`, `qa/SKILL.md`), when `grep -l "retry-budget-ruling"` and `python3 scripts/lint-skill-body-budget.py --base origin/main` run, then all four files reference `[retry-budget-ruling.md](${CLAUDE_PLUGIN_ROOT}/skills/one-shot/references/retry-budget-ruling.md)` and all 10 lifecycle skills pass their byte ceilings.
+- integration: Given the updated skill files (`test-fix-loop/SKILL.md`, `review/SKILL.md`, `review/references/risk-tier-and-fix-rounds.md`, `qa/SKILL.md`), when `grep -l "retry-budget-ruling"` and `python3 scripts/lint-skill-body-budget.py --base origin/main` run, then all four files match `retry-budget-ruling` (the three `SKILL.md` files carry `[retry-budget-ruling.md](${CLAUDE_PLUGIN_ROOT}/skills/one-shot/references/retry-budget-ruling.md)` and `review/references/risk-tier-and-fix-rounds.md` delegates via `review/SKILL.md` to preserve W4a/W4b non-Read-surface status) and all 10 lifecycle skills pass their byte ceilings.
 - unit: Given `plugins/soleur/scripts/retry-budget-ruling.test.sh`, when the test suite runs, then all 495 assertions pass and `retry-budget-ruling.sh` is unmodified.
 
 No end-to-end browser scenario (no UI surface; `no-test-scenarios` for Browser/API steps).

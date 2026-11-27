@@ -19,3 +19,14 @@ None
 - `soleur:plan`
 - `soleur:deepen-plan`
 - `soleur:work`
+- `soleur:review`
+
+## Review Dedup Ledger (PR #13092)
+
+`dedup: 7 raw → 2 unique` (`structural-cause roll-up: test-fix-loop and review self-goto + parent-vs-standalone arbitration ownership rolled into one defect key`)
+
+| raw finding | canonical defect key | reporting seat(s) | planned fix commit |
+|---|---|---|---|
+| Self-phase `goto` (`goto test-fix-loop` at `--phase test-fix-loop`, `goto review` at `--phase review`), inverted `test-fix-loop` phase order, and child pre-spending `ruling_spawn: used` under parent `one-shot` | `goto-strictly-earlier-and-parent-vs-standalone-ruling-ownership` | `security-sentinel`, `pattern-recognition-specialist`, `code-quality-analyst`, `git-history-analyzer` | fix-inline (P1) |
+| Plan `## Test Scenarios` line 81 claims `grep -l "retry-budget-ruling"` matches all four files including `risk-tier-and-fix-rounds.md` while `risk-tier-and-fix-rounds.md` omitted the hyphenated token | `plan-test-scenario-and-risk-tier-reference-token-alignment` | `security-sentinel`, `pattern-recognition-specialist`, `code-quality-analyst`, `git-history-analyzer` | fix-inline (P2) |
+
