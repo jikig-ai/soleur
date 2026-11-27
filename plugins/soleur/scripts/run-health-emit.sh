@@ -126,6 +126,43 @@ if prompt_file and os.path.exists(prompt_file):
     shutil.copyfile(prompt_file, dest)
     entry["prompt_snapshot"] = os.path.relpath(dest, run_dir)
 
+# Summarize per-seat liveness records when <run_dir>/seats/*.json exist (#12524).
+seats_dir = os.path.join(run_dir, "seats")
+if os.path.isdir(seats_dir):
+    total = 0
+    active = 0
+    completed = 0
+    recovered = 0
+    escalated = 0
+    for name in sorted(os.listdir(seats_dir)):
+        if not name.endswith(".json"):
+            continue
+        sp = os.path.join(seats_dir, name)
+        try:
+            with open(sp) as sf:
+                srec = json.load(sf)
+            total += 1
+            st = srec.get("status", "running")
+            if st == "running":
+                active += 1
+            elif st == "completed":
+                completed += 1
+            elif st == "recovered":
+                recovered += 1
+            elif st == "escalated":
+                escalated += 1
+        except Exception:
+            continue
+    data["seats_summary"] = {
+        "total": total,
+        "active": active,
+        "completed": completed,
+        "recovered": recovered,
+        "escalated": escalated,
+    }
+    if escalated > 0 and not rcov and "reviewed_coverage" not in data:
+        data["reviewed_coverage"] = "degraded"
+
 # Write atomically.
 tmp = health + ".tmp"
 with open(tmp, "w") as f:

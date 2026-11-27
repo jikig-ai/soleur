@@ -8,8 +8,8 @@
 
 ## Phase 2: Ephemeral Seat State CLI & `run-health-emit.sh` Integration
 
-- [ ] 2.1 RED(integration): Write failing integration tests in `plugins/soleur/test/seat-liveness.test.sh` with live, slow-progress, rate-limited, truncated, dead/zombie, and 24h TTL cleanup controls
-- [ ] 2.2 GREEN: Create `plugins/soleur/scripts/seat-liveness.sh` (`init`, `heartbeat`, `sweep`, `decide`, `cleanup`, `--self-test`) and extend `plugins/soleur/scripts/run-health-emit.sh` with seat-liveness summary counts (blockedBy: 2.1)
+- [x] 2.1 RED(integration): Write failing integration tests in `plugins/soleur/test/seat-liveness.test.sh` with live, slow-progress, rate-limited, truncated, dead/zombie, and 24h TTL cleanup controls
+- [x] 2.2 GREEN: Create `plugins/soleur/scripts/seat-liveness.sh` (`init`, `heartbeat`, `sweep`, `decide`, `cleanup`, `--self-test`) and extend `plugins/soleur/scripts/run-health-emit.sh` with seat-liveness summary counts (blockedBy: 2.1)
 
 ## Phase 3: Fan-Out Workflow Integration
 
