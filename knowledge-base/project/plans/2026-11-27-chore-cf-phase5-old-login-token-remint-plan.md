@@ -18,11 +18,14 @@ revoke). Draft PR #13084. Follow-ups filed at plan time: #13085 (rotate before t
 
 ## Review Amendments (2026-11-27)
 
-The review round on PR #13084 produced five CTO rulings, recorded as D1-D5 in
-`knowledge-base/project/specs/feat-one-shot-12931-phase5-token-remint/decision-challenges.md`. Where this plan says
-otherwise, those rows win: D1 adds the committed browser bodies (`p5-mint.js`, `p5-revoke.js`, `p5-sink.py`) and their
+The review round and fix round 1 on PR #13084 produced nine CTO rulings, recorded as D1-D9 in the
+`decision-challenges.md` beside the bootstrap (match it by glob,
+`knowledge-base/project/specs/**/feat-one-shot-12931-phase5-token-remint/decision-challenges.md`, because archive-kb
+moves the directory). Where this plan says otherwise, those rows win: D1 adds the committed browser bodies and their
 suite; D2 adds the census floor; D3 removes the drift gate from `verify`; D4 keeps the migration runbook untouched; D5
-binds the `_NEXT` token's id and owner into the approved swap plan.
+binds the `_NEXT` token's id and owner into the approved swap plan; D6 routes the state between a revoke and the
+`_PREV` delete; D7 adds the user-owned mint and `p5-read.js` and drops the paste fallback; D8 replaces the swap
+rollback; D9 adds the `P5-MINTED` record, author-filtered lookups and data-only arguments.
 
 ## Enhancement Summary
 
@@ -183,7 +186,7 @@ lines from #12958's hunks, measured by the CTO with `gh pr diff 12958`, ruling F
   "unknown"; a probe that answers the same for every input (the Origin CA list, a 403 on a moved zone) measures
   nothing.
 - `2026-05-19-playwright-click-navigate-auto-snapshot-leaks-modal-tokens.md`: no snapshot or screenshot after
-  "Create Token"; the hand-off's `page.evaluate` + `page.request.post` sink is the only mint form.
+  "Create Token"; the committed `p5-mint.js` (D1) is the only mint form; it hands the value to the local sink by a Node-side `fetch` and returns only names, prefixes and verdicts.
 - `2026-04-19-menu-option-ack-not-authorization-for-prod-writes.md`: a menu ack is not a go.
 - `2026-03-21-cloudflare-api-token-permission-editing.md`: editing a token's permissions does not rotate its value.
 
@@ -328,7 +331,7 @@ prints only `zone_tag=match|mismatch errors=<n>`, so no actor, IP or rule text r
 
 | Stage | Class | Does | Satisfied when |
 |---|---|---|---|
-| `inventory` | read | Reference per key: prd_terraform `<KEY>_PREV` if it verifies the pinned id, else prd_terraform `<KEY>` if it does, else `none`; prints `SOLEUR_P5_REFERENCE key= source=PREV\|KEY\|none`. Narrow census: the live config list of every project (`doppler projects`, `doppler configs`), failing if `soleur` lists fewer configs than the manifest names; in each config, the key's own name only; prints `SOLEUR_P5_HOLDER project= config= key= value=old\|new\|other\|absent`, `SOLEUR_P5_UNREADABLE project= config=`, `SOLEUR_P5_CENSUS configs_read=<n> old_hits=<n>`. | - |
+| `inventory` | read | Reference per key: prd_terraform `<KEY>_PREV` if it verifies the pinned id, else prd_terraform `<KEY>` if it does, else `none`; prints `SOLEUR_P5_REFERENCE key= source=PREV\|KEY\|none`. Narrow census: the live config list of every project (`doppler projects`, `doppler configs`), which must contain the committed floor (D2: the `P5-PROJECT-FLOOR` projects, the tracked soleur config inventory and every manifest config); in each config, the key's own name only; prints `SOLEUR_P5_HOLDER project= config= key= value=old\|new\|other\|absent`, `SOLEUR_P5_UNREADABLE project= config=`, `SOLEUR_P5_CENSUS configs_read=<n> old_hits=<n>`. | - |
 | `swap` | write | Per manifest key with prd_terraform `<KEY>_NEXT` staged (well-formed, verifies active, id not the pinned one): if no `<KEY>_PREV` verifies the pinned id, refuse unless `<KEY>` verifies it, then copy `<KEY>` -> `<KEY>_PREV` and read back by digest; then copy `<KEY>_NEXT` -> `<KEY>`, read back; delete `<KEY>_NEXT` only after an equal digest. A failed read-back stops the stage, later keys untouched, `_NEXT` kept. | `<KEY>_PREV` verifies the pinned id, `<KEY>` verifies a different active id, no `<KEY>_NEXT` |
 | `holder-copies` | write | Every manifest holder other than prd_terraform: value digest equals `<KEY>_PREV`'s -> copy prd_terraform `<KEY>` there, read back; equal to `<KEY>`'s -> no operation; any third value or absent -> refuse naming the holder. Needs `swap` (`PRECONDITION_FAILED need=swap`). | every manifest holder's digest equals prd_terraform `<KEY>`'s |
 | `verify` | read | Per key: prd_terraform `<KEY>` verifies active with an id that is not the pinned one; consumer read exits 0 (`cloudflare-readonly.sh pagerules-ssl`, `change-history`; ANALYTICS gates on a minimal zone-tag GraphQL query that must return the new zone tag with no `errors`, and prints `analytics-health 1` as a non-gating line); census: `old_hits` is exactly 1, at prd_terraform `<KEY>_PREV` (zero is `fail reason=census-blind`), zero `UNREADABLE`, no `_NEXT`; every manifest holder reads the new value; the D2 census floor holds. Prints `SOLEUR_P5_VERIFY key= verdict=ok\|fail reason=` and, on `ok` with `source=PREV`, `SOLEUR_P5_REVOKE_READY key= old_id=<pinned> new_id=<8> owner=<account|user>`. | - |
