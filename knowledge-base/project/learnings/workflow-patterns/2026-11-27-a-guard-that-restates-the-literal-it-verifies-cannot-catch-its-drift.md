@@ -93,6 +93,14 @@ as in code.
 7. **EXPECTED_LEGS + fixture census missed the K bump** (the P1 above).
    **Prevention:** the subject-grep sweep described under Key Insight —
    run it at plan time, not just implementation time.
+8. **`ART_READ_CAP` 260→320 broke three restated expectations** in
+   `pr-battery-gate-saving-9323.test.sh` (11-artifact shape, cap-math
+   literal, and dedupe-union prices derived from the committed durations
+   TSV) — caught only by CI leg 9, not by the local sentinel sweep that
+   omitted this suite. **Prevention:** when a PR changes a constant or a
+   committed data file, grep that constant's dependents' *test* files for
+   restated values (the cap, the artifact count, the priced literals) —
+   and run the dependents' suites, not only the suites named in the plan.
 
 ## Tags
 
