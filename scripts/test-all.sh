@@ -6796,6 +6796,10 @@ if want_scripts; then
   # archive-kb) and the runbook's text contract.
   run_suite "tests/scripts/cf-account-migration-bootstrap" bash tests/scripts/test-cf-account-migration-bootstrap.sh
   run_suite "tests/scripts/cf-account-migration-runbook" bash tests/scripts/test-cf-account-migration-runbook.sh
+  # (#12931 Phase 5 token slice, CTO ruling F11) The old-login token re-mint bootstrap suite (stub doppler
+  # and curl, real approval hook; it finds bootstrap.sh in the spec directory by glob, before and after
+  # archive-kb). `--mutants` runs its mutation section alone; the default run includes it.
+  run_suite "tests/scripts/cf-old-login-token-remint-bootstrap" bash tests/scripts/test-cf-old-login-token-remint-bootstrap.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
   # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
   # host-key option anywhere in the tree), its mutation harness, and the track.sh

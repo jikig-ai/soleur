@@ -5254,6 +5254,16 @@ AFFECTED_TESTS_SCRIPTS_CF_ACCOUNT_MIGRATION_BOOTSTRAP_PATHS=(
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-cf-account-migration-bootstrap.sh"
 )
+# tests/scripts/cf-old-login-token-remint-bootstrap — the #12931 Phase 5 token-slice bootstrap suite, which finds
+# bootstrap.sh by glob (CTO ruling F11); the glob also matches the spec directory after archive-kb moves it.
+AFFECTED_TESTS_SCRIPTS_CF_OLD_LOGIN_TOKEN_REMINT_BOOTSTRAP_PATHS=(
+  "glob:knowledge-base/project/specs/*feat-one-shot-12931-phase5-token-remint/bootstrap.sh"  # real read: the script under test
+  "plugins/soleur/scripts/lib/operator-script.sh"
+  "plugins/soleur/hooks/operator-stage-approval.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-cf-old-login-token-remint-bootstrap.sh"
+)
 # tests/scripts/cf-account-migration-runbook — runbook-content assertions for #12931 (CTO rulings D4, D5).
 AFFECTED_TESTS_SCRIPTS_CF_ACCOUNT_MIGRATION_RUNBOOK_PATHS=(
   "knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md"  # real read: the runbook text

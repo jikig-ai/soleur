@@ -6,30 +6,32 @@ The work phase runs only reads and repository edits; every production act is an 
 
 ## Phase 1: Setup and evidence (read-only)
 
-- [ ] 1.1 Re-run the facts reads: verify id prefixes of every holder, the three `cloudflare-readonly.sh` reads on the
+- [x] 1.1 Re-run the facts reads: verify id prefixes of every holder, the three `cloudflare-readonly.sh` reads on the
   new zone, the names-only census of all Doppler projects (never print a value).
-- [ ] 1.2 Post the `P5-TOKEN-FACTS` comment on #12931 (Ref only; each search's scope named).
-- [ ] 1.3 Post the `P5-GH-SECRET` comment on #12983 (repoint the repo secrets to a least-privilege Load Balancing
+- [x] 1.2 Post the `P5-TOKEN-FACTS` comment on #12931 (Ref only; each search's scope named).
+- [x] 1.3 Post the `P5-GH-SECRET` comment on #12983 (repoint the repo secrets to a least-privilege Load Balancing
   read token before Load Balancing returns).
 
 ## Phase 2: Tests first
 
-- [ ] 2.1 Write `tests/scripts/test-cf-old-login-token-remint-bootstrap.sh` (fixture repo, PATH-stubbed `doppler`,
+- [x] 2.1 Write `tests/scripts/test-cf-old-login-token-remint-bootstrap.sh` (fixture repo, PATH-stubbed `doppler`,
   `curl`, `gh`; synthesized sentinels) with the Guard 1-3 rows, harness rows and Test Scenarios; a `--mutants` mode.
-- [ ] 2.2 Register it: `scripts/test-all.sh`, `scripts/lib/test-affected-paths.sh` (glob edge), then
+- [x] 2.2 Register it: `scripts/test-all.sh`, `scripts/lib/test-affected-paths.sh` (glob edge), then
   `python3 scripts/regenerate-shard-manifest.py --incremental --write` for both TSVs.
 
 ## Phase 3: Core implementation
 
-- [ ] 3.1 Generate `bootstrap.sh` with `soleur:operator-bootstrap` (template, v2 header, manifest block, four stages
+- [x] 3.1 Generate `bootstrap.sh` with `soleur:operator-bootstrap` (template, v2 header, manifest block, four stages
   `inventory`, `swap`, `holder-copies`, `verify`; account-then-user verify; `SOLEUR_P5_*` markers; `REVOKE_READY`).
-- [ ] 3.2 Write `knowledge-base/engineering/operations/runbooks/cloudflare-old-login-token-remint.md` (twelve
+- [x] 3.2 Write `knowledge-base/engineering/operations/runbooks/cloudflare-old-login-token-remint.md` (twelve
   sections, hold lines verbatim, Orient step first).
-- [ ] 3.3 Edit `plugins/soleur/agents/engineering/infra/infra-security.md` (new ids, source line, account verify
+- [x] 3.3 Edit `plugins/soleur/agents/engineering/infra/infra-security.md` (new ids, source line, account verify
   fallback), then regenerate its three harness copies with `sync-grok-agent-compat.ts`, `sync-cursor-name-map.ts`
   and `sync-opencode-adapter.ts` (each then `--check`); never hand-edit the copies.
-- [ ] 3.4 Edit the `cloudflare-readonly.sh` header (drop `2027-02-07`, name `expires_on`).
-- [ ] 3.5 Edit the `scheduled-followthrough-sweeper.yml` comment (measured fact plus the #12983 precondition).
+  Measured at work time: the three copies are pointer stubs that carry no ids; all three `--check` runs exit 0 with
+  no regenerated change.
+- [x] 3.4 Edit the `cloudflare-readonly.sh` header (drop `2027-02-07`, name `expires_on`).
+- [x] 3.5 Edit the `scheduled-followthrough-sweeper.yml` comment (measured fact plus the #12983 precondition).
 
 ## Phase 4: Verification
 

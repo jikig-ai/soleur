@@ -1,12 +1,12 @@
-# default-weight-ms=1802
-# generated-at=2026-11-20T19:19:54Z
+# suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
+# n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
+# default-weight-ms=1800
+# generated-at=2026-11-27T15:10:11Z
 # generator=regenerate-shard-manifest.py v3
-# n=8
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
-# suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 .claude/hooks/agent-token-tee.test.sh	3
 .claude/hooks/background-poll-prefer-monitor.test.sh	7
 .claude/hooks/bare-head-self-heal.test.sh	1
@@ -692,6 +692,7 @@ tests/scripts/cf-account-migration-bootstrap	7
 tests/scripts/cf-account-migration-runbook	3
 tests/scripts/cf-account-migration-scope	8
 tests/scripts/cf-lb-overlay-gate	3
+tests/scripts/cf-old-login-token-remint-bootstrap	7
 tests/scripts/cleanup-merged-space	8
 tests/scripts/deploy-access-token-forget	5
 tests/scripts/destroy-guard-counter-github	4

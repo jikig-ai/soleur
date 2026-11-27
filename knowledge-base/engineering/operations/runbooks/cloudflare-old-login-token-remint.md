@@ -234,8 +234,11 @@ block the ANALYTICS revoke.
 Use the migration runbook's `## Revoke recipe`, steps 2 to 4, on prd_terraform `<KEY>_PREV`. Its step 1 inventory is
 replaced here by this bootstrap's `verify` (CTO F13):
 
-1. `Agent:` run `bash <B> --stage verify` in the revoke sitting. Go on only for a key with a line
-   `SOLEUR_P5_REVOKE_READY key=<KEY>` printed in this sitting, with nothing written to that key since.
+1. `Agent:` run `DOPPLER_TOKEN="$(doppler configure get token --plain)" bash <B> --stage verify` in the revoke
+   sitting. `verify` runs `scripts/check-cloudflare-token-drift.sh --only <KEY>`, which reads only `DOPPLER_TOKEN`
+   (it snapshots and unsets it); without it `verify` fails `reason=drift` and never reads ok. The token goes into
+   the environment, never argv or the screen. Go on only for a key with a line `SOLEUR_P5_REVOKE_READY key=<KEY>`
+   printed in this sitting, with nothing written to that key since.
 2. `Agent:` recipe step 2 on prd_terraform `<KEY>_PREV`. Its id prefix must equal the pinned prefix.
 3. Recipe step 3 is the revoke hold. Sign in as the old-account-owner login and reload `/profile/api-tokens` first
    (a page not reloaded since sign-in showed 0 tokens on 2026-11-26). The body takes three literals: the pinned
