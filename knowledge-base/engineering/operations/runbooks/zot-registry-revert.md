@@ -154,7 +154,7 @@ gh run view <id> --log-failed | grep -E 'SOLEUR_(ZOT_BRIDGE|TUNNEL_VERIFY)'
 
 `cause=host-nxdomain` and `cause=edge-error-1000` were the 2026-11-18 shapes: the zone that answers for
 `soleur.ai` had moved account, and the tunnel hostnames had no working records in it. The detection is in
-[ADR-330](../../architecture/decisions/ADR-330-tunnel-and-access-gate-live-in-the-zone-owning-account.md),
+[ADR-331](../../architecture/decisions/ADR-331-tunnel-and-access-gate-live-in-the-zone-owning-account.md),
 and the move itself is the `tunnel` phase of `cloudflare-account-migration.md`.
 The scheduled zone-authority check files `ci/tunnel-zone-authority` when it happens again.
 
@@ -197,7 +197,7 @@ route around it:
    config, so setting root alone leaves every other stale copy in place and looks completely
    successful. (Corrected 2026-11-19, #12937: the two `REGISTRY_PUSH_ACCESS_TOKEN_*` resources no
    longer carry `ignore_changes`, because they follow the `registry_push` token;
-   see ADR-330 Decision 3. The `ignore_changes` sentence above no longer describes those two
+   see ADR-331 Decision 3. The `ignore_changes` sentence above no longer describes those two
    resources. The detector still names each config to set.) (The detector's own header records the 2026-08-02 measurement behind this;
    the count is not re-derivable from a default run, which reads one config — so treat the
    detector's output, not a remembered number, as the list of configs to fix.) The script itself calls the old "branch configs inherit it" advice

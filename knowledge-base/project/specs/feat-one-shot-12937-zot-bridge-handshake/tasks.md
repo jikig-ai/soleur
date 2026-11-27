@@ -15,7 +15,7 @@ This list replaces the phases below, which stay as the record of the 2026-11-19 
 - [x] 1a Merge main and resolve the six conflicts.
 - [x] 1b Put the tunnel slice back on the existing `.web` addresses; drop every `_soleur` resource.
 - [x] 1c Re-key the policy gate, destroy filter, fixtures, workflows and suites.
-- [x] 1d Narrow ADR-330; update the token rotation and zot runbooks and the domain ledger.
+- [x] 1d Narrow ADR-331; update the token rotation and zot runbooks and the domain ledger.
 - [ ] 1e Add the `tunnel` phase, `cf-access-deploy-token-mint.sh`, `cf-tunnel-host-predelete.sh` and the staged-token probes.
 - [ ] 1f Update the migration runbook, including its registry `-replace` line.
 - [ ] 2 Run the tests and the scoped re-review, then compound and ship preflight.
@@ -77,7 +77,7 @@ Stop and re-rule before step 5 if the rehearsal cannot plan clean or the staged 
 
 ## Phase 2b: Docs
 
-- [x] ADR-330 (renumbered from ADR-329, which two local branches already hold; re-check the ordinal across all `origin/*` refs before merge). ADR-304 addendum dropped (decision-challenges: one record).
+- [x] ADR-331 (renumbered from ADR-329, which two local branches already hold; re-check the ordinal across all `origin/*` refs before merge). ADR-304 addendum dropped (decision-challenges: one record).
 - [x] `model.c4` descriptions; run the C4 tests.
 - [x] Runbooks, `expenses.md`, `domains.md`.
 

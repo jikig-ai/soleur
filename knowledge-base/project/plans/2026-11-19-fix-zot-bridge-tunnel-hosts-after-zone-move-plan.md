@@ -23,7 +23,7 @@ brand_survival_threshold: aggregate pattern
 - **Current sequence and status:** `knowledge-base/project/specs/feat-one-shot-12937-zot-bridge-handshake/tasks.md`.
 - **Procedure:** `knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md`, Phase 3.
 - **Kept from this plan:** the classifier causes, the `SOLEUR_ZOT_BRIDGE` and `SOLEUR_TUNNEL_VERIFY` markers, the verify step,
-  the zone-authority step, the Access policy gate and the in-place registry Doppler update (ADR-330).
+  the zone-authority step, the Access policy gate and the in-place registry Doppler update (ADR-331).
 
 **Acceptance criteria replaced by this amendment** (the originals stay below, unticked):
 
@@ -43,7 +43,7 @@ brand_survival_threshold: aggregate pattern
 scoped advisor consult with two CTO rulings, and a deepen fan-out (architecture-strategist,
 security-sentinel, observability-coverage-reviewer, terraform-architect against the pinned 4.52.7
 provider schema and source, spec-flow-analyzer, a verify-the-negative grep pass). Halt gates 4.5, 4.55,
-4.6, 4.7, 4.8, 4.10, 4.11 and 4.12 pass; ADR-329 was free on `origin/main` and every pushed branch at deepen time; at work time two local branches (#12931's PR #12932 and `pr9051-isolated-20261106`) already held ADR-329, so the record is ADR-330.
+4.6, 4.7, 4.8, 4.10, 4.11 and 4.12 pass; ADR-329 was free on `origin/main` and every pushed branch at deepen time; at work time two local branches (#12931's PR #12932 and `pr9051-isolated-20261106`) already held ADR-329, so the record is ADR-331.
 
 ### Key Improvements
 
@@ -490,7 +490,7 @@ does; sha256 digests are compared, never printed.
       `service_token_expiry`, 3 records) and the hand-minted old deploy token;
     - `local.deploy_service_token_ids` (old) and the old registry rows in `OPERATOR_APPLIED_EXCLUSIONS`;
     - whether the `_soleur` suffix is dropped via `moved {}` blocks or kept on purpose;
-    - flipping ADR-330 to `accepted`;
+    - flipping ADR-331 to `accepted`;
     - teaching the `cf-token-scope` skill (`ACCT_SECRET="CF_ACCOUNT_ID"`) to check the Soleur account's
       grants, so a later token trim that drops them is caught before an apply 403s;
     - repointing the backup expiry monitor (`event-cf-token-expiry-check`, which lists tokens in Doppler
@@ -560,7 +560,7 @@ does; sha256 digests are compared, never printed.
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-330-tunnel-and-access-gate-live-in-the-zone-owning-account.md` (ordinal re-checked at work time; ship's ADR-ordinal gate re-checks)
+- `knowledge-base/engineering/architecture/decisions/ADR-331-tunnel-and-access-gate-live-in-the-zone-owning-account.md` (ordinal re-checked at work time; ship's ADR-ordinal gate re-checks)
 
 ## Research Insights
 
@@ -724,14 +724,14 @@ input line and adds no `count`/`for_each`.
 
 ### ADR
 
-- Create **ADR-330** (renumbered from the provisional ADR-329): "The tunnel and its Access gate live in the account that
+- Create **ADR-331** (renumbered from the provisional ADR-329): "The tunnel and its Access gate live in the account that
   owns the zone".
   - Decision: tunnel + Access + tunnel CNAMEs are addressed by committed account/zone locals,
     independent of `var.cf_zone_id`, during the #12931 interim.
   - Alternatives: cross-account CNAME (refuted by docs), WARP private routing, full migration first,
     provider alias on the temp token.
   - Status `adopting` until the teardown follow-up lands.
-- No ADR-304 addendum: one record (ADR-330) covers the interim; it cites ADR-304 for the re-bake path
+- No ADR-304 addendum: one record (ADR-331) covers the interim; it cites ADR-304 for the re-bake path
   (plan review: two records for one interim state).
 - ADR-114's I1/I2 invariants are unchanged.
 
@@ -750,7 +750,7 @@ input line and adds no `count`/`for_each`.
 
 ### Sequencing
 
-ADR-330 is authored now as `adopting`. It flips to `accepted` when the teardown follow-up merges.
+ADR-331 is authored now as `adopting`. It flips to `accepted` when the teardown follow-up merges.
 
 ## Technical Considerations
 
@@ -1025,7 +1025,7 @@ path.
 | `verify-tunnel-ingress-origin.sh` + test | "Fix the root cause" | inferred — justification: without the repoint the post-apply gate verifies the old tunnel and can never prove the fix (CTO Item 2 amendment) |
 | `check-cloudflare-token-drift.sh` + test, `zot-mirror-diagnosis.sh` + test, bridge action, `reusable-release.yml` | "add a SOLEUR_* marker if the bridge failure cause is not visible in telemetry" | asked |
 | `scheduled-terraform-drift.yml` zone-authority step | — | inferred — justification: the root cause was a zone-authority change nothing detected; without it the next move fails releases silently again (CTO Item 4) |
-| ADR-330, ADR-304 addendum, `model.c4` | — | inferred — justification: plan Phase 2.10 makes the ADR/C4 update a deliverable of an architecture change (tunnel moves trust boundary to another account) |
+| ADR-331, ADR-304 addendum, `model.c4` | — | inferred — justification: plan Phase 2.10 makes the ADR/C4 update a deliverable of an architecture change (tunnel moves trust boundary to another account) |
 | Runbook edits, `expenses.md`, `domains.md` | — | inferred — justification: the runbooks name the copy list and causes operators follow; the ledgers would state a false zone/account (COO) |
 | `SOLEUR_TUNNEL_VERIFY` + step summary, CI-SSH sync move + fail-on-empty (Phases 1.8-1.9) | "Fix the root cause" | inferred — justification: CTO ruling on advisor fork 1; without the move the merge run leaves the old-account CI-SSH pair in Doppler with nothing red, and the named cause separates the expected red from a real one |
 | Tunnel-connector census repoint, `ci_ssh_token_replace` repoint | "Fix the root cause" | inferred — justification: plan review found both still bound to the old tunnel/token; left alone, the census pages `zero_connectors` every run after Phase 5 |

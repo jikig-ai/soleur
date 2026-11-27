@@ -36,7 +36,7 @@ last_updated: 2026-11-19
 > **Added 2026-11-19, updated 2026-11-23 (#12937).** The three rows above are the target state. The ADR-329 `tunnel`
 > phase creates them in the Soleur-account zone (`951ce525…`) through `var.cf_zone_id`. Until it runs, `registry.` and
 > `ssh.` in that zone are scanner A records and `deploy.` is absent. See
-> [ADR-330](../engineering/architecture/decisions/ADR-330-tunnel-and-access-gate-live-in-the-zone-owning-account.md).
+> [ADR-331](../engineering/architecture/decisions/ADR-331-tunnel-and-access-gate-live-in-the-zone-owning-account.md).
 
 ## Security Configuration (soleur.ai)
 

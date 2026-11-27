@@ -742,7 +742,7 @@ on their `_PREV` keys.
    `cors_headers` unset. Expected gate line: the tunnel, its config, 3 Access apps, 3 policies, 2 service tokens, the
    `service_token_expiry` notification policy and the `deploy`/`ssh`/`registry` CNAMEs created; `random_id.tunnel_secret`
    replaced by request; `doppler_secret.registry_push_access_token_id`/`_secret` updated in place (they carry no
-   `ignore_changes`, ADR-330 Decision 3, so no `-replace` is needed); `cloudflare_record.app` an import that plans the
+   `ignore_changes`, ADR-331 Decision 3, so no `-replace` is needed); `cloudflare_record.app` an import that plans the
    admitted `import-normalize` update, as every record import does (ADR-329), pinned, read live after the plan and
    re-read after the apply exactly as the `redirects-dns` records are; exactly one create of the deploy policy, whose
    service token the gate read live (`200`, name `github-actions-deploy`, 8016 to 8761 h to expiry,

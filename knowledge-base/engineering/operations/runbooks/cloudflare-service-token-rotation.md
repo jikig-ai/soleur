@@ -48,7 +48,7 @@ targeted apply (the apply job warns when they do — treat the old token as expo
 
 The ADR-329 `tunnel` phase recreates the tunnel's Access gate on the Soleur Cloudflare account that owns the `soleur.ai` zone, at the
 existing Terraform addresses; the sequence is in `cloudflare-account-migration.md`, and the gates and detection are in
-[ADR-330](../../architecture/decisions/ADR-330-tunnel-and-access-gate-live-in-the-zone-owning-account.md). Ref #12937.
+[ADR-331](../../architecture/decisions/ADR-331-tunnel-and-access-gate-live-in-the-zone-owning-account.md). Ref #12937.
 
 **Deploy pair (minted outside Terraform).** The first mint on the Soleur account is
 `apps/web-platform/infra/scripts/cf-access-deploy-token-mint.sh`, with `CF_API_TOKEN_ACCESS_MINT` (Access: Service Tokens Edit only). It

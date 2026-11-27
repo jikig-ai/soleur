@@ -12,7 +12,7 @@ pr: 12958
 
 ## Problem
 
-After the soleur.ai zone moved to another Cloudflare account, the tunnel and its Access gate stayed in the old account. cfargotunnel CNAMEs route only within one account, so the CI zot bridge failed with `websocket: bad handshake`. The fix (ADR-330) re-homes the tunnel slice under new `_soleur` Terraform addresses. It also extends the deploy-policy gate, which refuses an unacknowledged Access policy change in the unattended merge apply.
+After the soleur.ai zone moved to another Cloudflare account, the tunnel and its Access gate stayed in the old account. cfargotunnel CNAMEs route only within one account, so the CI zot bridge failed with `websocket: bad handshake`. The fix (ADR-331) re-homes the tunnel slice under new `_soleur` Terraform addresses. It also extends the deploy-policy gate, which refuses an unacknowledged Access policy change in the unattended merge apply.
 
 Review found two gate defects:
 

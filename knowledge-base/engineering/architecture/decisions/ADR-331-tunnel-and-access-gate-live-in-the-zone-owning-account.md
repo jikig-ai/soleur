@@ -12,7 +12,7 @@ related_runbooks:
   - knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md
 ---
 
-# ADR-330: The tunnel and its Access gate live in the account that owns the zone
+# ADR-331: The tunnel and its Access gate live in the account that owns the zone
 
 Plan: `knowledge-base/project/plans/2026-11-19-fix-zot-bridge-tunnel-hosts-after-zone-move-plan.md`.
 Rulings: `knowledge-base/project/specs/feat-one-shot-12937-zot-bridge-handshake/decision-challenges.md`.
