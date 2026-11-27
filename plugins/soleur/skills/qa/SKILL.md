@@ -222,6 +222,10 @@ If the dev server was started in Step 1.5 (a background PID was recorded), kill 
 
 This step runs regardless of whether scenarios passed or failed.
 
+## Retry-budget ruling (on a budget-capped halt at the qa step)
+
+`qa` owns no tally dimension (pipeline-tally dimensions are `seats`/`ci_cycles`/`fix_rounds`/`agent_rounds`); its budget surface is the caller's. When `qa` runs under a capped parent and halts at the qa step, the parent invokes the arbitration procedure instead of terminating outright — matching `soleur:one-shot`. Read the canonical reference at `${CLAUDE_PLUGIN_ROOT}/skills/one-shot/references/retry-budget-ruling.md` (resolved per its header) and run its procedure with `--phase qa`. `goto` targets earlier than a qa halt: `plan`/`work`/`review` are earlier; `test-fix-loop` and `qa` are not earlier (halt). `continue` runs no unit; `fail` keeps the halt. `ruling_spawn: used` is spent — no second spawn. qa's existing scenario pass/fail semantics are unchanged when the ruling resolves to `fail` or `continue`. The canonical reference is the single source of truth; this skill does not duplicate it.
+
 ## Graceful Degradation
 
 The skill handles missing prerequisites without blocking the pipeline:
