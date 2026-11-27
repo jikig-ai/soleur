@@ -296,10 +296,16 @@ chmod 600 "$TMP/secret.txt"
 ln -s "$TMP/secret.txt" "$TMP/prompt-link"
 S21="$TMP/run-link-prompt"
 bash "$SUT" --run-dir "$S21" --phase 0 --status started --prompt-file "$TMP/prompt-link" 2>"$TMP/linkp.err"; rc=$?
-if [[ "$rc" == "0" && ! -e "$S21/phase_prompts/0.md" ]] && ! grep -R -q 'secret-bytes' "$S21" 2>/dev/null; then
+secret_copied=0
+if [[ -d "$S21" ]]; then
+  while IFS= read -r -d '' leaked; do
+    if grep -q 'secret-bytes' "$leaked"; then secret_copied=1; break; fi
+  done < <(find "$S21" -type f -print0)
+fi
+if [[ "$rc" == "0" && ! -e "$S21/phase_prompts/0.md" && "$secret_copied" == "0" ]]; then
   pass "symlink prompt is not copied"
 else
-  fail "symlink prompt is not copied" "rc=$rc"
+  fail "symlink prompt is not copied" "rc=$rc copied=$secret_copied"
 fi
 
 # Case 22: a symlink run-dir is not written through.
