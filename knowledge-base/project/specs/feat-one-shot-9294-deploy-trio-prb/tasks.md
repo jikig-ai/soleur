@@ -67,4 +67,4 @@ consumer edits, baseline regeneration last.
 
 - [x] 9.1 Full sweep: `git grep -nE 'secrets\.(WEBHOOK_DEPLOY_SECRET|CF_ACCESS_CLIENT_ID|CF_ACCESS_CLIENT_SECRET)' -- .github/workflows/` returns zero; every naming job binds a literal Tier-B env.
 - [x] 9.2 Run touched test shards + the two census suites + sweeper tests green. — same caveat as 8.2: T4 red until the @allow reservation lands at merge-base.
-- [ ] 9.3 Record the post-merge postcondition in the PR body slot the D1 amendment names (owner-named tail: Tier-A copy deletion after green `source=tier_b_deploy_channel` canaries; rotation machinery untouched).
+- [x] 9.3 Record the post-merge postcondition in the PR body slot the D1 amendment names (owner-named tail: Tier-A copy deletion after green `source=tier_b_deploy_channel` canaries; rotation machinery untouched). — written into the PR #13006 body (operator-reserved post-merge tail).
