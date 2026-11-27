@@ -5262,7 +5262,7 @@ AFFECTED_TESTS_SCRIPTS_CF_OLD_LOGIN_TOKEN_REMINT_BOOTSTRAP_PATHS=(
   "plugins/soleur/hooks/operator-stage-approval.sh"
   "plugins/soleur/test/lib/git-fixture-env.sh"
   "plugins/soleur/scripts/cloudflare-readonly.sh"  # real read: its first-line message format and subcommand names
-  "scripts/check-cloudflare-token-drift.sh"  # real read: its --only flag and exit codes
+  "apps/web-platform/infra/doppler-config-inventory.txt"  # real read: the D2 census floor (B load_targets; S INV_CFGS)
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-cf-old-login-token-remint-bootstrap.sh"
 )
