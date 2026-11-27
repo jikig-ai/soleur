@@ -1229,7 +1229,7 @@ sink_mut XS2 "sink keeps a partial file on a failed fsync" 'os.unlink(out)' 'pas
 TOTAL=$((PASS + FAIL))
 SELFTEST_PASSES=1
 EXPECT_FULL=219
-EXPECT_MUTANTS=65
+EXPECT_MUTANTS=66
 case "$MODE" in full) want_n="$EXPECT_FULL" ;; *) want_n="$EXPECT_MUTANTS" ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -ne "$want_n" ]]; then
   printf '  [FAIL] anti-vacuity floor: %s assertions ran in %s mode, the exact floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$want_n" >&2
