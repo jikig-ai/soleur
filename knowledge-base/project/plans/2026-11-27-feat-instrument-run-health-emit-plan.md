@@ -234,15 +234,15 @@ The branch diff against `origin/main` is already about 1123 lines inside #12996.
 
 ## Acceptance Criteria
 
-- [ ] `plugins/soleur/skills/one-shot/references/run-health-schema.md` states that schema_version is the integer 1. Verification: `grep -nF 'is the integer' plugins/soleur/skills/one-shot/references/run-health-schema.md` prints that line. Ran on 2026-11-27 and printed the schema line.
-- [ ] `plugins/soleur/scripts/run-health-emit.sh` creates `phase_prompts` under the run directory before copying a prompt. Verification: `grep -nF 'mkdir -p "$RUN_DIR/phase_prompts"' plugins/soleur/scripts/run-health-emit.sh` prints that mkdir line. Ran on 2026-11-27 and printed it.
-- [ ] The schema file's seal rule says a terminal status passed with `--seal` sets `sealed`. Verification: `grep -nF 'and a terminal' plugins/soleur/skills/one-shot/references/run-health-schema.md` prints the seal rule line.
-- [ ] `.gitignore` contains a line `.soleur/`. Verification: `grep -n '^\.soleur/$' .gitignore` prints that line.
-- [ ] `bash plugins/soleur/scripts/run-health-emit.test.sh` exits 0.
-- [ ] From `apps/web-platform`, `bun x vitest run test/plugin-root-anchoring.test.ts -t "W4a:|W4b:"` reports 2 passed.
-- [ ] `wc -c plugins/soleur/skills/one-shot/SKILL.md` prints a number at most 51950. That is 50 bytes under the `one-shot` ceiling 52000. HEAD measured 51630 on 2026-11-27. The clean merge-file result against `origin/main` measured 51634 the same day.
-- [ ] `git diff --name-only origin/main...HEAD | grep -Ei 'triage-agent|redaction-gate|proposal-queue|session-end-trigger'` prints nothing. Ran on 2026-11-27 and printed nothing. That is the file-name check that #12575, #12576, #12577, and #12578 stay out of this branch.
-- [ ] `git status --short` does not show `scripts/.h1probe.6G3BHeem.sh` as staged. The untracked file may remain.
+- [x] `plugins/soleur/skills/one-shot/references/run-health-schema.md` states that schema_version is the integer 1. Verification: `grep -nF 'is the integer' plugins/soleur/skills/one-shot/references/run-health-schema.md` prints that line. Ran on 2026-11-27 and printed the schema line.
+- [x] `plugins/soleur/scripts/run-health-emit.sh` creates `phase_prompts` under the run directory before copying a prompt. Verification: `grep -nF 'mkdir -p "$RUN_DIR/phase_prompts"' plugins/soleur/scripts/run-health-emit.sh` prints that mkdir line. Ran on 2026-11-27 and printed it.
+- [x] The schema file's seal rule says a terminal status passed with `--seal` sets `sealed`. Verification: `grep -nF 'and a terminal' plugins/soleur/skills/one-shot/references/run-health-schema.md` prints the seal rule line.
+- [x] `.gitignore` contains a line `.soleur/`. Verification: `grep -n '^\.soleur/$' .gitignore` prints that line.
+- [x] `bash plugins/soleur/scripts/run-health-emit.test.sh` exits 0.
+- [x] From `apps/web-platform`, `bun x vitest run test/plugin-root-anchoring.test.ts -t "W4a:|W4b:"` reports 2 passed.
+- [x] `wc -c plugins/soleur/skills/one-shot/SKILL.md` prints a number at most 51950. That is 50 bytes under the `one-shot` ceiling 52000. HEAD measured 51630 on 2026-11-27. The clean merge-file result against `origin/main` measured 51634 the same day.
+- [x] `git diff --name-only origin/main...HEAD | grep -Ei 'triage-agent|redaction-gate|proposal-queue|session-end-trigger'` prints nothing. Ran on 2026-11-27 and printed nothing. That is the file-name check that #12575, #12576, #12577, and #12578 stay out of this branch.
+- [x] `git status --short` does not show `scripts/.h1probe.6G3BHeem.sh` as staged. The untracked file may remain.
 
 ## Domain Review
 
