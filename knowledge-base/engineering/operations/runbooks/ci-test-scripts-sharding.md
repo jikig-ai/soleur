@@ -596,6 +596,30 @@ span to the NEXT registered mark.
   its execution is sub-30 s. Committed bounds 180/120 (next-minute
   ceilings) at margin 0.30 — comfortably inside the epic goals
   (PR ≤ 1200 s / MQ ≤ 900 s).
+- **2026-11-19 `tenant-integration-required` PR bound re-seed:** the
+  300 s bound mis-seeded a bimodal population — probe dry-run
+  2026-11-19T11:02Z (755 qualifying samples, 0 failed check-runs reads;
+  sentinel `drift=46676c5b…`): PR p90 **915 s** (n=26, p50 51, p90 dur 21)
+  / merge_group p90 **70 s** (n=30, p50 50, p90 dur 21). 23/26 PR
+  samples sat at 11–76 s; the 3-sample slow mode at 915–970 s
+  (2026-11-18T14:52Z, 14:56Z, 23:08Z) is the path-gated
+  tenant-integration suite's own needs-chain — the heavy suite ran
+  ~835–910 s and the aggregator completed ~20 s later. Discriminator:
+  same-run *independent* sibling checks stayed ≤~355 s while the
+  needs-chain umbrellas ran longer inside their own bounds
+  (`quality-guards` ~478–556 s, `test` ~2228 s), so this is leg
+  serialization, not queue congestion; p90 dur 21 s rules out an
+  aggregator execution regression. NOSAMPLE classes: 3 earlier-batch
+  exclusions (check completed before the sampled run's `created_at`) +
+  1 suite cancelled mid-flight on 2026-11-18T11:45Z (trigger
+  unattributed — the job was executing, so not the third-arrival
+  pending-entry eviction arm; recorded as an accepted residual). The
+  2026-11-13 breach (~900 s) was the same slow mode rolling through the
+  window, not a transient. Re-seeded to 960/180 (next-minute ceiling of
+  p90; margin 0.30 unchanged) — `merge_group` emits `tenant=false` and
+  skips the heavy suite, so the MQ bound stays 180. Headroom is thin
+  (~50 s of margin-adjusted cover vs the suite's 19-min cap); #12905's
+  test-set narrowing is the structural follow-up.
 
 ## Runner-availability data (why extra legs are not free)
 
