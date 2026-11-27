@@ -14,7 +14,9 @@
 #   get  <project> <config> <name>   the value itself on stdout (--plain).
 #   tf   <terraform args...>         terraform under the prd_terraform tf-var
 #                                  injection (the caller's env wins under
-#                                  --preserve-env).
+#                                  --preserve-env); cds to the web-platform
+#                                  root first, so the lever is spelled
+#                                  root-relative like the other modes.
 #   bs   <command> [args...]         run <command> with BETTERSTACK_QUERY_{HOST,
 #                                  USERNAME,PASSWORD} injected from soleur/
 #                                  prd_terraform via three targeted gets — the
@@ -36,6 +38,7 @@ case "${1:-}" in
     ;;
   tf)
     shift
+    cd "$(dirname "$0")/../../apps/web-platform/infra"
     exec doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform "$@"
     ;;
   bs)
@@ -48,7 +51,7 @@ case "${1:-}" in
   run)
     shift
     _p="$1"; _c="$2"; shift 2
-    exec doppler run -p "$_p" -c "$_c" -- "$@"
+    exec doppler run --preserve-env -p "$_p" -c "$_c" -- "$@"
     ;;
   *)
     printf 'doppler-read.sh: unknown mode %s\n' "${1:-<none>}" >&2

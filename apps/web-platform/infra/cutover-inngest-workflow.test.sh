@@ -1427,7 +1427,7 @@ _probe_arms_code_raw_of() {  # $1 = arms file → stdout: comment-stripped, echo
 # itself: the S2-A parity rows of tests/scripts/test-argv-bearer-sweep.sh (19 byte-identical copies, zero -hmac operands) and
 # bc_hmac_sha256_hex in scripts/lib/bearer-curl.sh.
 _PROBE_CANON_A="$(cat <<'PROBE_CANON_EOF'
-SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+SIG=$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
 PROBE_CANON_EOF
 )"
 _PROBE_CANON_B="$_PROBE_CANON_A || SIG=\"\""

@@ -4268,7 +4268,6 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "scripts/followthroughs/image-cve-scan-window-9826.sh"
   "scripts/followthroughs/inngest-private-nic-8539.sh"  # ./scripts/followthroughs/inngest-provision-unit-8562.sh:4
   "scripts/followthroughs/inngest-provision-unit-8562.sh"
-  "scripts/followthroughs/inngest-soak-6178.sh"  # AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS
   "scripts/followthroughs/inngest-tls-soak-10136.sh"
   "scripts/followthroughs/inngest-watchdog-functions-query-6407.sh"
   "scripts/followthroughs/inngest-zot-boot-7462.sh"
@@ -4315,7 +4314,6 @@ AFFECTED_SCRIPTS_BETTERSTACK_EMITTER_READ_PATHS=(
   "apps/web-platform/infra/server.tf"  # check-deploy-script-parity.sh:113 assert_host_name_mapping_stable
   "apps/web-platform/infra/variables.tf"  # check-deploy-script-parity.sh:112 parse_host_keys
   "apps/web-platform/infra/zot-registry.tf"  # registry-replace-preflight.sh:142 [[ -r ]]; :147 grep -E
-  "scripts/followthroughs/inngest-soak-6178.function-ids.txt"  # inngest-soak-6178.sh:248 [[ -r ]]; :249 grep -vE
   "scripts/inngest-dedicated-host-classify.sh"  # inngest-probe-heartbeat-feeder.sh:166 source _ic_lib
   "scripts/lib/inngest-probe-row.sh"  # inngest-probe-heartbeat-feeder.sh:150 source _ipr_lib
   "glob:.github/workflows/*apply-deploy-pipeline-fix.yml"  # names-as-data mention; anchor scripts/lint-betterstack-emitter-read.sh churned 16 commits/90d — accept row refused, declared-not-scanned

@@ -119,7 +119,6 @@ declare -A ALLOW=(
   [".github/workflows/build-inngest-bootstrap-image.yml"]="hint-only: _ptr evidence strings embed the query recipe for the operator (:741,:743)"
   [".github/workflows/scheduled-zot-restart-loop.yml"]="hint-only: references live in remediation printf blocks; BETTERSTACK_QUERY_* env there feeds betterstack-ingest-probe.sh (the write probe) and, since #7521, the fill-rate probe step, which reads rows only through scripts/followthroughs/zot-fill-rate-7341.sh (envelope-anchored, its own entry below)"
   ["scripts/registry-heartbeat-poll.sh"]="hint-only: the reference sits inside a diagnostic heredoc listing reproduce commands (:203)"
-  ["scripts/followthroughs/inngest-soak-6178.sh"]="hint-only: BETTERSTACK_HINT (:196) is an operator-facing recipe string interpolated into error text; the probe reads Sentry/issue state, never query rows"
   ["scripts/followthroughs/l3-probe-armed-6438.sh"]="hint-only: 'Diagnose:' echo string (:125); the probe reads the Better Stack REST API, not query output"
   ["scripts/followthroughs/web2-standby-soak-6459.sh"]="hint-only: 'Diagnose:' echo string (:156); the soak reads the Better Stack REST API status, not query output"
   ["scripts/followthroughs/zot-soak-6122.sh"]="hint-only: references are FAIL/PASS echo text embedding the query recipe (:479,:695)"

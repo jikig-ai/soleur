@@ -5,6 +5,22 @@
 - Status: complete
 - Plan artifact: complete (selector=branch; planning subagent f123c22b, sequential-fallback deepen-plan)
 
+### Resume 2026-11-27 (second session)
+- Picked up abandoned: worktree cold since 2026-11-20, PR #13006 still WIP draft, 5 real commits unpushed; WIP preserved as checkpoint 2fc97d058e.
+- Verified committed state: zero `secrets.<trio>` binds under .github/; all consumers bind `environment: deploy-channel` + narrow loader; probe retirement + doc de-shapes landed.
+- Fixed two self-inflicted census failures: doppler-read.sh `run` mode gained --preserve-env (G2a); 4 lever prose lines reverted to main's `doppler run --name-transformer tf-var` form (G2b — `bash <path>` inside quoted prose counts as an invocation).
+- argv-bearer-sweep migrated to the canonical `WEBHOOK_DEPLOY_SECRET` spelling (HM_CANON→deploy spelling, HM_PFX_LEGACY for the two host-side infra scripts, per-target S4 prefixes); stale inngest-soak-6178 refs removed (HMAC_MANIFEST row, lint-betterstack entry, 2 test-affected-paths rows, TSV regen).
+- Trio-baseline end state: 18 tier-b + 52 sink + 5 @allow rows, zero tier-a; floor 603→619.
+- ADR-241 amendment + index bullet appended (2026-11-27); model.c4 STATUS clause + env enumeration + consumer wording refreshed.
+- Remaining: argv-sweep green confirmation, commit+push, PR body postcondition slot (task 9.3), ready for review.
+
+### Resume 2026-11-27 (argv-sweep failure round, third session)
+- argv-bearer-sweep 784/41 -> **825/0 green** (floor re-pinned 832->825 with the history comment).
+- Fixes: s4_decl_py models the narrow loader (jobs calling infra-credentials with doppler-project=soleur-deploy-channel declare the trio, like HCLOUD_TOKEN for the broad arm); s4_b7_py ambient-trio + de-shaped trim judgement (dcanon lines in s4_trim_py; ambient names count only when the step body uses them — the RESEND-only email step); s4_b7_mut per-name pair rewrites; VTIO mutants redirect the $INFRA_DIR-relative doppler-read.sh call to the stub `doppler run` form; _bs_read_remedy rc1 arm text updated; S7 exec blocks get a $S7_X/scripts/lib/doppler-read.sh stub; HM5 census audited set += cutover-inngest.sh (its 19-copy audit, not hm5_audit); S4_INLINE_FILES += the two HM5 scripts (7 files).
+- trio-baseline.tsv: restored the 3 tier-a rows for tests/scripts/test-argv-bearer-sweep.sh (the checkpoint regen had dropped them; the suite file names the trio).
+- trio-census 618/1 — sole failure is T4 `scripts/cutover-inngest.sh WEBHOOK_DEPLOY_SECRET` (new key, needs the spent @allow at merge-base): PR #13087 (@allow reservation, ready-for-review, CI green) must merge, then PR-B rebases.
+- Lever fix verified via tier-census: doppler-read.sh tf mode self-locates (cd apps/web-platform/infra); the 4 levers rewritten to root-relative `bash scripts/lib/doppler-read.sh tf ...` form.
+
 ### Errors
 - Collision detector exit=10: PR #13006 is this branch's own WIP draft; two `test-all.sh` PIDs in sibling worktree feat-one-shot-12931-cf-account-migration. Recorded as decision row D-7; no action.
 - `gh pr view --json merged` field rejection; corrected via mergeCommit/mergedAt — #12810 confirmed MERGED (squash 9cfcc7f47).

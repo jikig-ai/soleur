@@ -2007,44 +2007,44 @@ prep m28b
 printf 'doppler run -p soleur -c prd_terraform -- true\n' >> "$D/fx/scripts/host-user.sh"
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 3 tier-a
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 4 2026-11-30
-commit_all; landed_dir; mutant m28b T4 "N1: class sink -> tier-a (an unrelated doppler call appended to a sink file) with no Reclass line is RED, and the message names the lane" "needs an ADR-241 line 'Reclass:"
+commit_all; landed_dir; mutant m28b T4 "N1: class sink -> tier-a (a trio-config doppler call appended to a sink file) with no Reclass line is RED, and the message names the lane" "needs an ADR-241 line 'Reclass:"
 prep c28g
-printf 'doppler run -p other -c prd -- true\n' >> "$D/fx/scripts/host-user.sh"
+printf 'doppler run -p soleur -c prd_terraform -- true\n' >> "$D/fx/scripts/host-user.sh"
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 3 tier-a
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 4 2026-11-30
-adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET an unrelated doppler call joined a sink file. Ruled by CTO'
+adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET a trio-config doppler call joined a sink file. Ruled by CTO'
 commit_all; landed_dir; green c28g "N1: the same sink -> tier-a move with its ADR-241 Reclass line, in a diff of the baseline, the ADR and the moved key's own file, is green"
 prep c28h
-printf 'doppler run -p other -c prd -- true\n' >> "$D/fx/scripts/host-user.sh"
-printf 'doppler secrets get OTHER --plain\n' >> "$D/fx/apps/web-platform/infra/variables.tf"
+printf 'doppler run -p soleur -c prd_terraform -- true\n' >> "$D/fx/scripts/host-user.sh"
+printf 'doppler secrets get WEBHOOK_DEPLOY_SECRET --plain\n' >> "$D/fx/apps/web-platform/infra/variables.tf"
 for _rk in scripts/host-user.sh apps/web-platform/infra/variables.tf; do bl_set "$_rk" WEBHOOK_DEPLOY_SECRET 3 tier-a; bl_set "$_rk" WEBHOOK_DEPLOY_SECRET 4 2026-11-30; done
-adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET an unrelated doppler call joined a sink file. Ruled by CTO'
-adr_add 'Reclass: apps/web-platform/infra/variables.tf WEBHOOK_DEPLOY_SECRET a doppler call joined a sink file. Ruled by CTO'
+adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET a trio-config doppler call joined a sink file. Ruled by CTO'
+adr_add 'Reclass: apps/web-platform/infra/variables.tf WEBHOOK_DEPLOY_SECRET a trio-config doppler call joined a sink file. Ruled by CTO'
 commit_all; landed_dir; green c28h "N1: two moved keys, each ruled in the ADR, are green"
 prep m28g
-printf 'doppler run -p other -c prd -- true\n' >> "$D/fx/scripts/host-user.sh"
+printf 'doppler run -p soleur -c prd_terraform -- true\n' >> "$D/fx/scripts/host-user.sh"
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 3 tier-a
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 4 2026-11-30
-adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET an unrelated doppler call joined a sink file. Ruled by CTO'
+adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET a trio-config doppler call joined a sink file. Ruled by CTO'
 printf 'unrelated\n' > "$D/fx/README.md"
 commit_all; landed_dir; mutant m28g T4 "N1: the Reclass line in a diff that also touches an unrelated file is RED (the lane is the baseline, the ADR and the moved key's own file)" "needs an ADR-241 line 'Reclass:"
 prep m28h
-printf 'doppler run -p other -c prd -- true\n' >> "$D/fx/scripts/host-user.sh"
+printf 'doppler run -p soleur -c prd_terraform -- true\n' >> "$D/fx/scripts/host-user.sh"
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 3 tier-a
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 4 2026-11-30
 adr_add 'Reclass: scripts/other.sh WEBHOOK_DEPLOY_SECRET a different file joined the lane. Ruled by CTO'
 commit_all; landed_dir; mutant m28h T4 "N1: a Reclass line for a DIFFERENT (file, name) does not authorize the move" "needs an ADR-241 line 'Reclass:"
 prep m28i
-printf 'doppler run -p other -c prd -- true\n' >> "$D/fx/scripts/host-user.sh"
+printf 'doppler run -p soleur -c prd_terraform -- true\n' >> "$D/fx/scripts/host-user.sh"
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 3 tier-a
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 4 2026-11-30
-adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET an unrelated doppler call joined a sink file, no owner named.'
+adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET a trio-config doppler call joined a sink file, no owner named.'
 commit_all; landed_dir; mutant m28i T4 "N1: a Reclass line without 'Ruled by <owner>' is not a ruling" "needs an ADR-241 line 'Reclass:"
 prep m28j
-printf 'doppler run -p other -c prd -- true\n' >> "$D/fx/scripts/host-user.sh"
-printf 'doppler secrets get OTHER --plain\n' >> "$D/fx/apps/web-platform/infra/variables.tf"
+printf 'doppler run -p soleur -c prd_terraform -- true\n' >> "$D/fx/scripts/host-user.sh"
+printf 'doppler secrets get WEBHOOK_DEPLOY_SECRET --plain\n' >> "$D/fx/apps/web-platform/infra/variables.tf"
 for _rk in scripts/host-user.sh apps/web-platform/infra/variables.tf; do bl_set "$_rk" WEBHOOK_DEPLOY_SECRET 3 tier-a; bl_set "$_rk" WEBHOOK_DEPLOY_SECRET 4 2026-11-30; done
-adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET an unrelated doppler call joined a sink file. Ruled by CTO'
+adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET a trio-config doppler call joined a sink file. Ruled by CTO'
 commit_all; landed_dir; mutant m28j T4 "N1: two moved keys with only one ruled (every moved key needs its own ruling)" "needs an ADR-241 line 'Reclass:"
 prep m28k
 bl_set .github/workflows/deploy-chan.yml WEBHOOK_DEPLOY_SECRET 3 tier-a
@@ -2230,7 +2230,7 @@ prep c36d
 printf '#!/usr/bin/env bash\necho "${WEBHOOK_DEPLOY_SECRET_NEXT:-}"\ndoppler run -- true\n' > "$D/fx/apps/web-platform/infra/soleur-host-bootstrap.sh"
 bl_add apps/web-platform/infra/soleur-host-bootstrap.sh WEBHOOK_DEPLOY_SECRET_NEXT tier-a 2026-11-30 '#9294:PR-2'
 bl_allow_del apps/web-platform/infra/soleur-host-bootstrap.sh WEBHOOK_DEPLOY_SECRET_NEXT
-commit_all; landed_dir; green c36d "D2/E7: the soleur-host-bootstrap.sh @allow member (tier-a through an unrelated doppler call, as on the live tree) spends into a tier-a row at its max-expiry 2026-11-30"
+commit_all; landed_dir; green c36d "D2/E7: the soleur-host-bootstrap.sh @allow member (tier-a through a bare doppler run) spends into a tier-a row at its max-expiry 2026-11-30"
 prep m36e
 printf '#!/usr/bin/env bash\necho "${WEBHOOK_DEPLOY_SECRET_NEXT:-}"\ndoppler run -- true\n' > "$D/fx/apps/web-platform/infra/soleur-host-bootstrap.sh"
 bl_add apps/web-platform/infra/soleur-host-bootstrap.sh WEBHOOK_DEPLOY_SECRET_NEXT tier-a 2026-12-15 '#9294:PR-2'
@@ -3308,7 +3308,7 @@ if [ "$MUTANTS_RUN" -gt "$MUTANT_FLOOR" ]; then
 fi
 # Assertion FLOOR (exact), equal to the number of assertions this suite makes.
 _ran=$((passes + fails))
-FLOOR=603
+FLOOR=619
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s -- cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

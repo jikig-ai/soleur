@@ -980,8 +980,7 @@ egress-gw-probe-silent-12180|scripts/followthroughs/egress-gw-probe-silent-12180
 # body columns are reserved and stay empty (the loop below still reads them). `delegated` probes keep their own suite, and the delegation row asserts that the suite RECORDS stdin and asserts the three header lines (a probe cannot
 # pass while sending no credential). The `dynamic` kind (no owning suite, run under the `hmac-cf` shim profile) was retired with the
 # last probe that used it (G1 PR-4a, #10937; history in git).
-HMAC_MANIFEST='inngest-soak-6178|delegated|||none|scripts/followthroughs/inngest-soak-6178.test.sh
-sdk-bash-smoke-verdict-10548|delegated|||none|scripts/followthroughs/sdk-bash-smoke-verdict-10548.test.sh'
+HMAC_MANIFEST='sdk-bash-smoke-verdict-10548|delegated|||none|scripts/followthroughs/sdk-bash-smoke-verdict-10548.test.sh'
 
 # --- the DERIVED population: tracked followthrough probes holding a credentialed curl ---------
 derive_population() {
@@ -1350,13 +1349,18 @@ for mode in env flag; do
   else row "verify-tunnel-ingress-origin: refuses xtrace ($mode form): rc 78, zero calls, no token on output" fail "$XT_DETAIL"; fi
   RUN_EXTRA_PATH=""
 done
-# mutations: argv restored on the second call; guards removed
+# mutations: argv restored on the second call; guards removed. A mutated copy lives outside the infra
+# directory, so its $INFRA_DIR-relative call to the tf-var wrapper (#9294) would not resolve — redirect it
+# to the stub-answered `doppler run ... terraform` call the wrapper runs (the stub ignores the arguments).
+vt_lib_stub() { mutated_copy "$1" "$1" 'bash "$INFRA_DIR/../../../scripts/lib/doppler-read.sh" tf' 'doppler run --preserve-env -- terraform'; }
 mutated_copy "$VTIO" "$SYN/vtio-argv.sh" '< <(printf '"'"'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n'"'"' \
           "$HMAC" "$CF_ACCESS_ID" "$CF_ACCESS_SECRET")' '-H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}"'
+vt_lib_stub "$SYN/vtio-argv.sh"
 vt_run v5-argv "$SYN/vtio-argv.sh"
 if vt_argv_has v5-argv cfsecret0001; then row "verify-tunnel-ingress-origin: restoring a CF Access header on argv is RED (the credential shows in a recorded argv)" ok
 else row "verify-tunnel-ingress-origin: restoring a CF Access header on argv is RED (the credential shows in a recorded argv)" fail "the mutant's credential did not reach argv"; fi
 mutated_copy "$VTIO" "$SYN/vtio-noguard.sh" '_cfg_ok() { local LC_ALL=C; case "${1:-}" in '"''"'|*'"'"'"'"'"'*|*'"'"'\'"'"'*|*[[:cntrl:]]*) return 1 ;; esac; }' '_cfg_ok() { return 0; }'
+vt_lib_stub "$SYN/vtio-noguard.sh"
 vt_run v6-noguard "$SYN/vtio-noguard.sh" 'VT_CF_ACCESS_SECRET=SYNTHMARK0001"x'
 v6_inj=0; for f in "$ROWS"/v6-noguard/shim/calls/*.injected; do [[ -s "$f" ]] && v6_inj=1; done
 if [[ "$v6_inj" -eq 1 ]]; then row "verify-tunnel-ingress-origin: removing the header-value guard is RED (the shim records the injected config line)" ok
@@ -1787,6 +1791,11 @@ HM_CANON="$(cat <<'HM_EOF'
 HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())'
 HM_EOF
 )"
+# The snippet's environment name is a pinned pair, not a free variable: the CI jobs that read the loader
+# export spell it WEBHOOK_DEPLOY_SECRET (#9294), the host-side scripts keep WEBHOOK_SECRET. Both spellings
+# are admitted as copies; each is normalized to the canonical form for the byte compare below.
+HM_CANON_DEPLOY="${HM_CANON/WEBHOOK_SECRET/WEBHOOK_DEPLOY_SECRET}"
+HM_NAME_ERE='HMAC_KEY="[$]WEBHOOK_(DEPLOY_)?SECRET" python3'
 PYDIR="$TMPD/pybin"; HMBIN="$TMPD/hmbin"
 for d in "$PYDIR" "$HMBIN"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
 REAL_PY="$(type -P python3 || true)"; REAL_OSSL="$(type -P openssl || true)"
@@ -1874,7 +1883,7 @@ hm_audit() {
   mapfile -t L < "$f"
   for n in "${!L[@]}"; do
     ln="${L[n]}"
-    [[ "$ln" == *'HMAC_KEY="$WEBHOOK_SECRET" python3'* ]] || continue
+    grep -qE "$HM_NAME_ERE" <<<"$ln" || continue
     i=$((i + 1)); shape=0
     # the assigned variable and the fail-safe fallback `|| VAR=""` (an empty WEBHOOK_SECRET or a missing python3 must leave VAR empty so
     # _sig_curl's _bearer_ok refuses with the marker, instead of `set -e` aborting the whole script at the assignment, mute)
@@ -1899,12 +1908,13 @@ hm_audit() {
       empty) [[ "$ln" =~ $HM_RE_EMPTY ]] && shape=1 ;;
       payload) [[ "$ln" =~ $HM_RE_PAYLOAD ]] && shape=1 ;;
     esac
+    seg="${seg/HMAC_KEY=\"\$WEBHOOK_DEPLOY_SECRET\"/HMAC_KEY=\"\$WEBHOOK_SECRET\"}"
     [[ "$seg" == "$HM_CANON" && "$shape" == 1 ]] || HM_BAD+=" $i"
   done
   HM_NCOPY=$i
   HM_NOLD="$(grep -cF -e '-hmac' "$f" || true)"
-  HM_RP="$(hm_arm_count '^[[:space:]]+registry-probe[)]$' '^[[:space:]]+doublefire-probe[)]$' 'openssl dgst -sha256 -hmac "[$]WEBHOOK_SECRET"' "$f")"
-  HM_DP="$(hm_arm_count '^[[:space:]]+doublefire-probe[)]$' '^[[:space:]]+rearm[)]$' 'openssl dgst -sha256 -hmac "[$]WEBHOOK_SECRET"' "$f")"
+  HM_RP="$(hm_arm_count '^[[:space:]]+registry-probe[)]$' '^[[:space:]]+doublefire-probe[)]$' 'openssl dgst -sha256 -hmac "[$]WEBHOOK_(DEPLOY_)?SECRET"' "$f")"
+  HM_DP="$(hm_arm_count '^[[:space:]]+doublefire-probe[)]$' '^[[:space:]]+rearm[)]$' 'openssl dgst -sha256 -hmac "[$]WEBHOOK_(DEPLOY_)?SECRET"' "$f")"
   HM_PYARMS="$(hm_arm_count '^[[:space:]]+registry-probe[)]$' '^[[:space:]]+rearm[)]$' 'python3' "$f")"
 }
 # hm_audit_ok: the whole parity contract at once (19 identical copies, no -hmac operand anywhere, exactly the two canonical python3 lines in the probe-arm range).
@@ -1935,26 +1945,27 @@ for _ in range(n):
 open(out, "w").write(s[:i] + repl + s[i + len(needle):])
 ' "$1" "$2" "$3" "$4" "$5"
 }
-HM_PFX='HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c'
+HM_PFX='HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c'      # the CI spelling (cutover, the two workflows)
+HM_PFX_LEGACY='HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c'      # the host-side spelling (the two infra scripts)
 # hm_touched <original> <mutant>: the changed line RANGES of the mutant (diff normal format, e.g. "1328c1328"); a mutant must touch
 # exactly the line it claims to, so a mutation that landed somewhere else cannot satisfy its row.
 hm_touched() { diff "$1" "$2" | grep -E '^[0-9,]+c[0-9,]+$' | paste -sd' ' -; }
-hm_nth_line() { grep -n -F -e "$3" "$2" | sed -n "${1}p" | cut -d: -f1; } # <n> <file> <literal> -> line number of the n-th match
+hm_nth_line() { grep -n -E -e "$3" "$2" | sed -n "${1}p" | cut -d: -f1; } # <n> <file> <ere> -> line number of the n-th match
 for idx in $(seq 1 19); do
-  nth_replace "$CUT" "$BKDIR/hm-mut-$idx.sh" "$HM_PFX" 'HMAC_KEY="$WEBHOOK_SECRET" python3 -c' "$idx" || fatal "parity mutation $idx did not land"
-  hm_audit "$BKDIR/hm-mut-$idx.sh"; hm_ln="$(hm_nth_line "$idx" "$CUT" 'HMAC_KEY="$WEBHOOK_SECRET" python3')"
+  nth_replace "$CUT" "$BKDIR/hm-mut-$idx.sh" "$HM_PFX" "${HM_PFX/ -I -c/ -c}" "$idx" || fatal "parity mutation $idx did not land"
+  hm_audit "$BKDIR/hm-mut-$idx.sh"; hm_ln="$(hm_nth_line "$idx" "$CUT" "$HM_NAME_ERE")"
   if [[ "$HM_BAD" == " $idx" && "$(hm_touched "$CUT" "$BKDIR/hm-mut-$idx.sh")" == "${hm_ln}c${hm_ln}" ]] && ! hm_audit_ok; then row "mutation: dropping -I from copy $idx alone (line $hm_ln only) is caught as exactly copy $idx (parity is per copy, not first copy)" ok
   else row "mutation: dropping -I from copy $idx alone (line $hm_ln only) is caught as exactly copy $idx (parity is per copy, not first copy)" fail "bad:$HM_BAD touched:$(hm_touched "$CUT" "$BKDIR/hm-mut-$idx.sh") want:${hm_ln}c${hm_ln}"; fi
 done
 nth_replace "$CUT" "$BKDIR/hm-mut-emptykey.sh" 'k or sys.exit(1);' '' 7 || fatal "parity mutation emptykey did not land"
-hm_audit "$BKDIR/hm-mut-emptykey.sh"; hm_ln="$(hm_nth_line 7 "$CUT" 'HMAC_KEY="$WEBHOOK_SECRET" python3')"
+hm_audit "$BKDIR/hm-mut-emptykey.sh"; hm_ln="$(hm_nth_line 7 "$CUT" "$HM_NAME_ERE")"
 if [[ "$HM_BAD" == " 7" && "$(hm_touched "$CUT" "$BKDIR/hm-mut-emptykey.sh")" == "${hm_ln}c${hm_ln}" ]]; then row "mutation: dropping the empty-key exit from copy 7 alone (line $hm_ln only) is caught as exactly copy 7" ok
 else row "mutation: dropping the empty-key exit from copy 7 alone (line $hm_ln only) is caught as exactly copy 7" fail "bad:$HM_BAD touched:$(hm_touched "$CUT" "$BKDIR/hm-mut-emptykey.sh")"; fi
-nth_replace "$CUT" "$BKDIR/hm-mut-argvback.sh" "$HM_CANON" "openssl dgst -sha256 -hmac \"\$WEBHOOK_SECRET\" | sed 's/.*= //'" 5 || fatal "parity mutation argvback did not land"
+nth_replace "$CUT" "$BKDIR/hm-mut-argvback.sh" "$HM_CANON_DEPLOY" "openssl dgst -sha256 -hmac \"\$WEBHOOK_DEPLOY_SECRET\" | sed 's/.*= //'" 5 || fatal "parity mutation argvback did not land"
 hm_audit "$BKDIR/hm-mut-argvback.sh"
 if [[ "$HM_NCOPY" == 18 && "$HM_NOLD" == 1 ]] && ! hm_audit_ok; then row "mutation: the key put back on openssl's argv in copy 5 is caught (18 copies, a -hmac operand where the script has none)" ok
 else row "mutation: the key put back on openssl's argv in copy 5 is caught (18 copies, a -hmac operand where the script has none)" fail "copies=$HM_NCOPY -hmac=$HM_NOLD"; fi
-{ cat "$CUT"; printf '%s\n' "    SIGX=\$(printf '' | ${HM_CANON/sha256/sha1})"; } > "$BKDIR/hm-mut-extra.sh"
+{ cat "$CUT"; printf '%s\n' "    SIGX=\$(printf '' | ${HM_CANON_DEPLOY/sha256/sha1})"; } > "$BKDIR/hm-mut-extra.sh"
 hm_audit "$BKDIR/hm-mut-extra.sh"
 if [[ "$HM_NCOPY" == 20 && " $HM_BAD " == *" 20 "* ]] && ! hm_audit_ok; then row "mutation: a 20th inline copy that differs by one byte is caught (copy count and byte comparison)" ok
 else row "mutation: a 20th inline copy that differs by one byte is caught (copy count and byte comparison)" fail "copies=$HM_NCOPY bad:$HM_BAD"; fi
@@ -1962,8 +1973,8 @@ else row "mutation: a 20th inline copy that differs by one byte is caught (copy 
 # (the allow-list is empty), pinned to its own arm anchor. The two mutants live on in $BKDIR for the census rows in stage S4.
 for hm_rv in "revert1:2:1:0:registry-probe)" "revert2:3:0:1:doublefire-probe)"; do
   IFS=: read -r hm_rvn hm_rvi hm_rvrp hm_rvdp hm_rvarm <<< "$hm_rv"
-  nth_replace "$CUT" "$BKDIR/hm-mut-$hm_rvn.sh" "$HM_CANON" "openssl dgst -sha256 -hmac \"\$WEBHOOK_SECRET\" | sed 's/.*= //'" "$hm_rvi" || fatal "parity mutation $hm_rvn did not land"
-  hm_audit "$BKDIR/hm-mut-$hm_rvn.sh"; hm_ln="$(hm_nth_line "$hm_rvi" "$CUT" 'HMAC_KEY="$WEBHOOK_SECRET" python3')"
+  nth_replace "$CUT" "$BKDIR/hm-mut-$hm_rvn.sh" "$HM_CANON_DEPLOY" "openssl dgst -sha256 -hmac \"\$WEBHOOK_DEPLOY_SECRET\" | sed 's/.*= //'" "$hm_rvi" || fatal "parity mutation $hm_rvn did not land"
+  hm_audit "$BKDIR/hm-mut-$hm_rvn.sh"; hm_ln="$(hm_nth_line "$hm_rvi" "$CUT" "$HM_NAME_ERE")"
   if [[ "$HM_NCOPY" == 18 && "$HM_NOLD" == 1 && "$HM_RP" == "$hm_rvrp" && "$HM_DP" == "$hm_rvdp" && "$HM_PYARMS" == 1 && "$(hm_touched "$CUT" "$BKDIR/hm-mut-$hm_rvn.sh")" == "${hm_ln}c${hm_ln}" ]] && ! hm_audit_ok; then row "mutation: reverting the $hm_rvarm site to openssl dgst -hmac (line $hm_ln only) is caught, pinned by its arm anchor (registry-probe) count $hm_rvrp, doublefire-probe) count $hm_rvdp)" ok
   else row "mutation: reverting the $hm_rvarm site to openssl dgst -hmac (line $hm_ln only) is caught, pinned by its arm anchor (registry-probe) count $hm_rvrp, doublefire-probe) count $hm_rvdp)" fail "copies=$HM_NCOPY -hmac=$HM_NOLD registry-probe=$HM_RP doublefire-probe=$HM_DP python3-in-arms=$HM_PYARMS touched:$(hm_touched "$CUT" "$BKDIR/hm-mut-$hm_rvn.sh") want:${hm_ln}c${hm_ln}"; fi
 done
@@ -1979,7 +1990,7 @@ hm_site_mut() { # <idx> <out> <kind: nofallback|wrongvar|body-empty|body-payload
   pe="printf '' |"; pp="printf '%s' \"\$PAYLOAD\" |"
   for i in "${!lines[@]}"; do
     ln="${lines[i]}"
-    [[ "$ln" == *'HMAC_KEY="$WEBHOOK_SECRET" python3'* ]] || continue
+    [[ "$ln" == *'HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3'* ]] || continue
     n=$((n + 1)); [[ "$n" == "$idx" ]] || continue
     HM_MUT_LN=$((i + 1))
     case "$kind" in
@@ -1993,7 +2004,7 @@ hm_site_mut() { # <idx> <out> <kind: nofallback|wrongvar|body-empty|body-payload
 }
 hm_first_idx() { # <file> <literal> -> the index, among the converted copies, of the first one whose line holds <literal> (empty when none)
   local n=0 ln
-  while IFS= read -r ln; do n=$((n + 1)); [[ "$ln" == *"$2"* ]] && { printf '%s' "$n"; return 0; }; done < <(grep -F 'HMAC_KEY="$WEBHOOK_SECRET" python3' "$1")
+  while IFS= read -r ln; do n=$((n + 1)); [[ "$ln" == *"$2"* ]] && { printf '%s' "$n"; return 0; }; done < <(grep -E "$HM_NAME_ERE" "$1")
   return 0
 }
 hm_audit "$CUT"; hm_last="$HM_NCOPY"
@@ -2056,9 +2067,9 @@ printf '%s' '{not json' > "$BODIES/enum_malformed.json"
 HM_WH="whcanary-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
 HM_CFID="cfid-canary-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
 HM_CFSEC="cfsec-canary-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
-cs_run() { # <rowname> <SHIM_MODE> <SHIM_STATUS or empty> <bodyfile> [NAME=value ...: environment that wins over the defaults; CS_PATH overrides the PATH; CS_NOWH=1 leaves WEBHOOK_SECRET out of the environment altogether]
+cs_run() { # <rowname> <SHIM_MODE> <SHIM_STATUS or empty> <bodyfile> [NAME=value ...: environment that wins over the defaults; CS_PATH overrides the PATH; CS_NOWH=1 leaves WEBHOOK_DEPLOY_SECRET out of the environment altogether]
   local row="$ROWS/$1" mode="$2" status="$3" body="$4"; shift 4
-  local -a wh=("WEBHOOK_SECRET=$HM_WH")
+  local -a wh=("WEBHOOK_DEPLOY_SECRET=$HM_WH")
   [[ "${CS_NOWH:-}" == 1 ]] && wh=()
   assert_fixture_dir "$row"; mkdir -p "$row/home" "$row/tmp" "$row/shim"
   ( cd "$row" && env -i PATH="${CS_PATH-$HMBIN:$SHIMDIR:$REALBIN:$PYDIR}" HOME="$row/home" TMPDIR="$row/tmp" SHIM_DIR="$row/shim" BK_SHIM="$row/shim" SHIM_FIXTURE_TOKEN="none" \
@@ -2100,7 +2111,7 @@ cs_bad=""
 [[ -n "$(cs_leaks cs-fail7)" ]] && cs_bad+=" leak:$(cs_leaks cs-fail7)"
 if [[ -z "$cs_bad" ]]; then row "canary sweep op=enumerate, shim transport failure (curl exit 7): the script fails closed (rc 1) with no canary in any argv or output" ok
 else row "canary sweep op=enumerate, shim transport failure (curl exit 7): the script fails closed (rc 1) with no canary in any argv or output" fail "$cs_bad"; fi
-# --- the FAILURE MODE of the converted sites, driven at the call site: an empty WEBHOOK_SECRET, a missing python3 ----------------
+# --- the FAILURE MODE of the converted sites, driven at the call site: an empty WEBHOOK_DEPLOY_SECRET, a missing python3 ----------------
 # `SIG=$(... python3 ... k or sys.exit(1) ...)` under the script's `set -euo pipefail` ABORTS THE WHOLE SCRIPT SILENTLY when the substitution
 # fails: no ::error::, no marker, only "Process completed with exit code 1" (measured; the #5492 class, and the old `openssl dgst -hmac ""` path
 # printed a digest and an HTTP 401/403 diagnosis instead). Every site therefore ends `|| VAR=""`, so _sig_curl's _bearer_ok refuses WITH the
@@ -2109,7 +2120,7 @@ else row "canary sweep op=enumerate, shim transport failure (curl exit 7): the s
 hf_drv() { # <idx> <out>: the idx-th converted site line verbatim, then a call that uses its variable
   local idx="$1" out="$2" n=0 ln="" var
   assert_fixture_dir "$out"
-  while IFS= read -r ln; do n=$((n + 1)); [[ "$n" == "$idx" ]] && break; done < <(grep -F 'HMAC_KEY="$WEBHOOK_SECRET" python3' "$CUT")
+  while IFS= read -r ln; do n=$((n + 1)); [[ "$n" == "$idx" ]] && break; done < <(grep -F 'HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3' "$CUT")
   var="${ln%%=*}"; var="${var#"${var%%[![:space:]]*}"}"
   {
     printf 'set -euo pipefail\n'
@@ -2123,9 +2134,9 @@ hf_drv() { # <idx> <out>: the idx-th converted site line verbatim, then a call t
 HF_RC=0
 hf_run() { # <rowname> <driver> <mode: ok|empty|unset|nopy> [the HTTP status the recording curl answers with, default 200]
   local row="$ROWS/$1" drv="$2" mode="$3" pth="$BKBIN:$REALBIN:$PYDIR" status="${4:-200}"
-  local -a wh=("WEBHOOK_SECRET=$HM_WH")
+  local -a wh=("WEBHOOK_DEPLOY_SECRET=$HM_WH")
   [[ "$mode" == nopy ]] && pth="$BKBIN:$REALBIN"
-  [[ "$mode" == empty ]] && wh=("WEBHOOK_SECRET=")
+  [[ "$mode" == empty ]] && wh=("WEBHOOK_DEPLOY_SECRET=")
   [[ "$mode" == unset ]] && wh=()   # the variable is ABSENT from the environment (set -u), a third state next to empty and python3-absent
   assert_fixture_dir "$row"; mkdir -p "$row/shim" "$row/tmp"
   ( cd "$row" && env -i PATH="$pth" BK_SHIM="$row/shim" BK_TMP="$row/tmp" BK_HTTP_STATUS="$status" ${wh[@]+"${wh[@]}"} PAYLOAD='{"x":1}' CF_ACCESS_CLIENT_ID="$HM_CFID" CF_ACCESS_CLIENT_SECRET="$HM_CFSEC" \
@@ -2159,8 +2170,8 @@ for hf_mode in ok empty unset nopy; do
   [[ "$hf_n" -ge 1 && "$hf_n" == "$hm_last" ]] || hf_bad+=" [drivers=$hf_n of $hm_last]"
   case "$hf_mode" in
     ok)    hf_label="control: with a valid key and python3 present every one of the converted sites runs under set -euo pipefail, reaches its request (one recorded call) and prints no marker" ;;
-    empty) hf_label="an EMPTY WEBHOOK_SECRET at every converted site does not abort the script at the assignment: the site's variable is left empty and _sig_curl refuses with rc 2, the marker once, zero requests, no secret in the output" ;;
-    unset) hf_label="an UNSET WEBHOOK_SECRET (absent from the environment under set -u, not merely empty) at every converted site does not abort the script at the assignment: the site's variable is left empty and _sig_curl refuses with rc 2, the marker once, zero requests, no secret in the output" ;;
+    empty) hf_label="an EMPTY WEBHOOK_DEPLOY_SECRET at every converted site does not abort the script at the assignment: the site's variable is left empty and _sig_curl refuses with rc 2, the marker once, zero requests, no secret in the output" ;;
+    unset) hf_label="an UNSET WEBHOOK_DEPLOY_SECRET (absent from the environment under set -u, not merely empty) at every converted site does not abort the script at the assignment: the site's variable is left empty and _sig_curl refuses with rc 2, the marker once, zero requests, no secret in the output" ;;
     nopy)  hf_label="a MISSING python3 at every converted site does not abort the script at the assignment: the site's variable is left empty and _sig_curl refuses with rc 2, the marker once, zero requests, no secret in the output" ;;
   esac
   if [[ -z "$hf_bad" ]]; then row "$hf_label" ok
@@ -2185,7 +2196,7 @@ hfa_drv() { # <idx> <out> -> prints the HTTP status the arm expects on success; 
   local -a L
   mapfile -t L < "$CUT"
   for i in "${!L[@]}"; do
-    [[ "${L[i]}" == *'HMAC_KEY="$WEBHOOK_SECRET" python3'* ]] || continue
+    [[ "${L[i]}" == *'HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3'* ]] || continue
     n=$((n + 1)); [[ "$n" == "$idx" ]] || continue
     for ((j = i + 1; j < i + 21 && j < ${#L[@]}; j++)); do
       [[ "${L[j]}" == '    done' || "${L[j]}" == '    fi' ]] && break
@@ -2226,7 +2237,7 @@ hfa_check() { # <rowname> <mode> -> HFA_BAD (empty = held)
   fi
   # a bash diagnostic ("...: line N: ...") other than the CAUSE the mode itself creates (the unbound variable, the missing interpreter) is the script dying
   # inside the arm, which is what a `CAUSE="$(tr ... < file)"` on a never-written file did under set -e before the arm's own line could print
-  case "$mode" in unset) cause='WEBHOOK_SECRET: unbound variable' ;; nopy) cause='python3: command not found' ;; *) cause='@@no-expected-diagnostic@@' ;; esac
+  case "$mode" in unset) cause='WEBHOOK_DEPLOY_SECRET: unbound variable' ;; nopy) cause='python3: command not found' ;; *) cause='@@no-expected-diagnostic@@' ;; esac
   [[ "$(grep -F ': line ' "$row/stderr" | grep -cvF -- "$cause" || true)" == 0 ]] || HFA_BAD+=" bash-error"
   [[ "$(bk_count "$row/stdout" "$HM_WH")$(bk_count "$row/stderr" "$HM_WH")$(bk_count "$row/stdout" "$HM_CFSEC")$(bk_count "$row/stderr" "$HM_CFSEC")" == 0000 ]] || HFA_BAD+=" secret-in-output"
 }
@@ -2245,8 +2256,8 @@ for hf_mode in ok empty unset nopy; do
   done
   case "$hf_mode" in
     ok)    hfa_label="control: with a valid key every single-request arm (site line plus its own status test, taken verbatim) completes: one recorded call, no marker, no ::error:: line" ;;
-    empty) hfa_label="an EMPTY WEBHOOK_SECRET at every single-request arm ends in the arm's own ::error:: line naming HTTP 000 and exit 1: the marker once, zero requests, no bash error, no secret in the output" ;;
-    unset) hfa_label="an UNSET WEBHOOK_SECRET (absent from the environment) at every single-request arm ends in the arm's own ::error:: line naming HTTP 000 and exit 1: the marker once, zero requests, no bash error, no secret in the output" ;;
+    empty) hfa_label="an EMPTY WEBHOOK_DEPLOY_SECRET at every single-request arm ends in the arm's own ::error:: line naming HTTP 000 and exit 1: the marker once, zero requests, no bash error, no secret in the output" ;;
+    unset) hfa_label="an UNSET WEBHOOK_DEPLOY_SECRET (absent from the environment) at every single-request arm ends in the arm's own ::error:: line naming HTTP 000 and exit 1: the marker once, zero requests, no bash error, no secret in the output" ;;
     nopy)  hfa_label="a MISSING python3 at every single-request arm ends in the arm's own ::error:: line naming HTTP 000 and exit 1: the marker once, zero requests, no bash error, no secret in the output" ;;
   esac
   if [[ -z "$hfa_bad" ]]; then row "$hfa_label" ok
@@ -2284,7 +2295,7 @@ hfac_mk() { # <variant> <mode: ok|empty|unset|nopy> -> HFAC_ROW (name under $ROW
     HF_RC=1
     printf '::error::the deploy hook returned HTTP 000\n' > "$d/stdout"; printf '%s\n' "$SC_MARK" > "$d/stderr"
     case "$mode" in
-      unset) printf 'x.sh: line 9: WEBHOOK_SECRET: unbound variable\n' >> "$d/stderr" ;;
+      unset) printf 'x.sh: line 9: WEBHOOK_DEPLOY_SECRET: unbound variable\n' >> "$d/stderr" ;;
       nopy)  printf 'x.sh: line 9: python3: command not found\n' >> "$d/stderr" ;;
     esac
   fi
@@ -2345,12 +2356,12 @@ cs_arm_check() { # <rowname> -> cs_bad
   [[ "$(bk_count "$row/stdout" '::error::enumerate returned HTTP')" == 1 ]] || cs_bad+=" no-arm-error-line"
   [[ -z "$(cs_leaks "$1")" ]] || cs_bad+=" leak:$(cs_leaks "$1")"
 }
-cs_run cs-emptykey noauth "" "$BODIES/enum_array.json" WEBHOOK_SECRET=; cs_arm_check cs-emptykey
-if [[ -z "$cs_bad" ]]; then row "canary sweep op=enumerate with an empty WEBHOOK_SECRET: non-zero rc, the arm's own ::error:: line, the marker once, zero requests, no canary in any output (not a silent abort)" ok
-else row "canary sweep op=enumerate with an empty WEBHOOK_SECRET: non-zero rc, the arm's own ::error:: line, the marker once, zero requests, no canary in any output (not a silent abort)" fail "$cs_bad"; fi
+cs_run cs-emptykey noauth "" "$BODIES/enum_array.json" WEBHOOK_DEPLOY_SECRET=; cs_arm_check cs-emptykey
+if [[ -z "$cs_bad" ]]; then row "canary sweep op=enumerate with an empty WEBHOOK_DEPLOY_SECRET: non-zero rc, the arm's own ::error:: line, the marker once, zero requests, no canary in any output (not a silent abort)" ok
+else row "canary sweep op=enumerate with an empty WEBHOOK_DEPLOY_SECRET: non-zero rc, the arm's own ::error:: line, the marker once, zero requests, no canary in any output (not a silent abort)" fail "$cs_bad"; fi
 CS_NOWH=1 cs_run cs-unsetkey noauth "" "$BODIES/enum_array.json"; cs_arm_check cs-unsetkey
-if [[ -z "$cs_bad" ]]; then row "canary sweep op=enumerate with WEBHOOK_SECRET UNSET (absent from the environment, not merely empty): non-zero rc, the arm's own ::error:: line, the marker once, zero requests, no canary in any output (not a silent abort)" ok
-else row "canary sweep op=enumerate with WEBHOOK_SECRET UNSET (absent from the environment, not merely empty): non-zero rc, the arm's own ::error:: line, the marker once, zero requests, no canary in any output (not a silent abort)" fail "$cs_bad"; fi
+if [[ -z "$cs_bad" ]]; then row "canary sweep op=enumerate with WEBHOOK_DEPLOY_SECRET UNSET (absent from the environment, not merely empty): non-zero rc, the arm's own ::error:: line, the marker once, zero requests, no canary in any output (not a silent abort)" ok
+else row "canary sweep op=enumerate with WEBHOOK_DEPLOY_SECRET UNSET (absent from the environment, not merely empty): non-zero rc, the arm's own ::error:: line, the marker once, zero requests, no canary in any output (not a silent abort)" fail "$cs_bad"; fi
 CS_PATH="$SHIMDIR:$REALBIN" cs_run cs-nopython noauth "" "$BODIES/enum_array.json"; cs_arm_check cs-nopython
 if [[ -z "$cs_bad" ]]; then row "canary sweep op=enumerate with python3 absent from PATH: non-zero rc, the arm's own ::error:: line, the marker once, zero requests, no canary in any output (not a silent abort)" ok
 else row "canary sweep op=enumerate with python3 absent from PATH: non-zero rc, the arm's own ::error:: line, the marker once, zero requests, no canary in any output (not a silent abort)" fail "$cs_bad"; fi
@@ -2405,7 +2416,7 @@ for br_rc in 3 1 99; do
   [[ "$BR_RC" -eq 0 && "$br_arm" != *'credential shape'* && "$br_arm" != *SOLEUR_CREDENTIAL_REFUSED* ]] || br_bad+=" [rc $br_rc printed the credential-shape arm]"
 done
 [[ "$(head -n1 "$ROWS/br-ctl3/stdout")" == *'not injected'* ]] || br_bad+=" [rc 3 lost its credentials-absent arm]"
-[[ "$(head -n1 "$ROWS/br-ctl1/stdout")" == *'dop''pler run or the reader exited 1'* ]] || br_bad+=" [rc 1 lost its dop''pler arm]"
+[[ "$(head -n1 "$ROWS/br-ctl1/stdout")" == *'Dop''pler injection or the reader exited 1'* ]] || br_bad+=" [rc 1 lost its dop''pler arm]"
 [[ "$(head -n1 "$ROWS/br-ctl99/stdout")" == *'(unclassified)'* ]] || br_bad+=" [rc 99 lost its unclassified arm]"
 if [[ -z "$br_bad" ]]; then row "cutover _bs_read_remedy control: rc 3, rc 1 and an unknown rc each print their own arm and none of them the credential-shape text or the marker name" ok
 else row "cutover _bs_read_remedy control: rc 3, rc 1 and an unknown rc each print their own arm and none of them the credential-shape text or the marker name" fail "$br_bad"; fi
@@ -3187,8 +3198,12 @@ done <<< "$HM5_FILES"
 # the files that hold the canonical HMAC program (outside *.test.sh) must be exactly the audited set: a probe classified into another manifest, or moved
 # out of this one, would otherwise leave the audit green with that probe unaudited
 HM5_HOLDERS="$(git ls-files 'scripts/*.sh' 'scripts/followthroughs/*.sh' | grep -v '\.test\.sh$' | xargs grep -lF 'HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3' | sort)"
-if [[ -n "$HM5_HOLDERS" && "$HM5_HOLDERS" == "$(printf '%s\n' "$HM5_FILES" | sort)" ]]; then row "census: the files holding the canonical HMAC program are exactly the audited set (the parity script and every HMAC_MANIFEST probe)" ok
-else row "census: the files holding the canonical HMAC program are exactly the audited set (the parity script and every HMAC_MANIFEST probe)" fail "holders='${HM5_HOLDERS//$'\n'/,}' audited='${HM5_FILES//$'\n'/,}'"; fi
+# the audited set is HM5_FILES plus scripts/cutover-inngest.sh: the parity block above audits its 19
+# copies under its own per-copy facets, which the single-copy hm5_audit below does not model (#9294)
+HM5_AUDITED="scripts/cutover-inngest.sh
+$HM5_FILES"
+if [[ -n "$HM5_HOLDERS" && "$HM5_HOLDERS" == "$(printf '%s\n' "$HM5_AUDITED" | sort)" ]]; then row "census: the files holding the canonical HMAC program are exactly the audited set (the parity script, the cutover script's 19-copy audit and every HMAC_MANIFEST probe)" ok
+else row "census: the files holding the canonical HMAC program are exactly the audited set (the parity script, the cutover script's 19-copy audit and every HMAC_MANIFEST probe)" fail "holders='${HM5_HOLDERS//$'\n'/,}' audited='${HM5_AUDITED//$'\n'/,}'"; fi
 while IFS= read -r hf; do
   hm5_audit "$hf"
   if [[ -z "$HM5_BAD" ]]; then row "$hf: the canonical HMAC program with the deploy key (guarded, 64-hex checked), _bearer_ok on both Cloudflare Access values, curl --disable --noproxy '*' with the three header lines on a process substitution, no openssl, xtrace refusal" ok
@@ -3861,7 +3876,7 @@ for rel in sys.stdin.read().split():
     for l in open(sys.argv[1] + "/" + rel):
         if not l.lstrip().startswith("#") and re.search(r"openssl\b.*-(hmac|macopt)\b", l): sys.exit(0)
 sys.exit(1)' "$REPO_ROOT" \
-   && grep -qF 'bc_hmac_sha256_hex WEBHOOK_SECRET' "$REPO_ROOT/.github/workflows/scheduled-inngest-health.yml"; then
+   && grep -qF 'bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET' "$REPO_ROOT/.github/workflows/scheduled-inngest-health.yml"; then
   row "S3 held-back: the inngest-health probe step left its held-back state (no argv HMAC; the signature comes from bc_hmac_sha256_hex) and S3 declares no exception any more" ok
 else row "S3 held-back: the inngest-health probe step carries an argv HMAC again, or no longer signs through the library" fail "restore bc_hmac_sha256_hex or re-declare the exception with its reason"; fi
 
@@ -4086,10 +4101,15 @@ for job, steps in groups:
             if job: add(job.get("env"))
             add(s.get("env"))
             for o in steps:
-                if isinstance(o, dict) and isinstance(o.get("run"), str):
-                    for line in o["run"].split("\n"):
-                        m = re.match(r"^\s*echo\s+[\"\x27]?([A-Za-z_][A-Za-z0-9_]*)=.*>>\s*[\"\x27]?\$\{?GITHUB_ENV", line)
-                        if m: names.add(m.group(1))
+                if isinstance(o, dict):
+                    # the infra-credentials composite narrow arm exports the deploy-channel trio into
+                    # $GITHUB_ENV (#9294): names a step cannot declare in YAML any other way
+                    if "infra-credentials" in str(o.get("uses", "")) and (o.get("with") or {}).get("doppler-project") == "soleur-deploy-channel":
+                        names.update(["WEBHOOK_DEPLOY_SECRET", "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"])
+                    if isinstance(o.get("run"), str):
+                        for line in o["run"].split("\n"):
+                            m = re.match(r"^\s*echo\s+[\"\x27]?([A-Za-z_][A-Za-z0-9_]*)=.*>>\s*[\"\x27]?\$\{?GITHUB_ENV", line)
+                            if m: names.add(m.group(1))
             print("\n".join(sorted(names))); sys.exit(0)
 sys.exit(3)
 '
@@ -4326,14 +4346,14 @@ for rv in revert1 revert2; do
 done
 [[ -z "$S4_RV_BAD" ]] && row "S4 HMAC census mutation: either probe arm of the cutover script reverted to openssl dgst -hmac is RED against the empty allow-list, with exactly one hit named" ok || row "S4 HMAC census mutation: a reverted probe arm is accepted by the census" fail "$S4_RV_BAD"
 # The inline copies of the canonical snippet are a DERIVED population too: every tracked non-test file holding it is in this explicit set.
-S4_INLINE_FILES="$(printf '%s\n' .github/workflows/deploy-inngest-image.yml .github/workflows/web-platform-release.yml apps/web-platform/infra/infra-config-verify.sh apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh scripts/cutover-inngest.sh | sort)"
-S4_INLINE_DERIVED="$(cd "$REPO_ROOT" && git grep -lF 'HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c' -- . ':!tests' ':!knowledge-base' ':!*.test.sh' ':!*.md' | sort)"
-if [[ "$S4_INLINE_DERIVED" == "$S4_INLINE_FILES" ]]; then row "S4 parity population: the files holding the canonical inline HMAC snippet are exactly the cutover script and the four S4 inline files (derived by git grep, never counted; Markdown is judged by the next row)" ok
+S4_INLINE_FILES="$(printf '%s\n' .github/workflows/deploy-inngest-image.yml .github/workflows/web-platform-release.yml apps/web-platform/infra/infra-config-verify.sh apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh scripts/check-deploy-script-parity.sh scripts/cutover-inngest.sh scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh | sort)"
+S4_INLINE_DERIVED="$(cd "$REPO_ROOT" && git grep -lE 'HMAC_KEY="[$]WEBHOOK_(DEPLOY_)?SECRET" python3 -I -c' -- . ':!tests' ':!knowledge-base' ':!*.test.sh' ':!*.md' | sort)"
+if [[ "$S4_INLINE_DERIVED" == "$S4_INLINE_FILES" ]]; then row "S4 parity population: the files holding the canonical inline HMAC snippet are exactly the cutover script, the four S4 inline files and the two HM5-audited scripts (derived by git grep, never counted; Markdown is judged by the next row)" ok
 else row "S4 parity population: a file holds the canonical inline HMAC snippet that no audit judges" fail "derived='${S4_INLINE_DERIVED//$'\n'/,}'"; fi
 # The agent-executed Markdown teaches the SAME snippet (the argv `openssl -hmac` form it used to teach is gone, see the census above): the set of Markdown files that
 # carry it is exactly these two, and each carries the canonical snippet BYTE FOR BYTE (a doc that drifted would teach an operator a divergent signer).
 S4_MD_CANON_FILES="$(printf '%s\n' plugins/soleur/skills/postmerge/references/deploy-status-debugging.md plugins/soleur/skills/ship/SKILL.md)"
-S4_MD_CANON_DERIVED="$(cd "$REPO_ROOT" && git grep -lF 'HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c' -- '*.md' ':!knowledge-base' | sort)"
+S4_MD_CANON_DERIVED="$(cd "$REPO_ROOT" && git grep -lE 'HMAC_KEY="[$]WEBHOOK_(DEPLOY_)?SECRET" python3 -I -c' -- '*.md' ':!knowledge-base' | sort)"
 S4_MD_CANON_BAD=""
 for f in $S4_MD_CANON_DERIVED; do [[ "$(grep -cF -- "$HM_CANON" "$REPO_ROOT/$f" || true)" -ge 1 ]] || S4_MD_CANON_BAD+=" $f"; done
 if [[ "$S4_MD_CANON_DERIVED" == "$S4_MD_CANON_FILES" && -z "$S4_MD_CANON_BAD" ]]; then row "S4 parity population: the Markdown files that teach the canonical inline HMAC snippet are exactly ship/SKILL.md and postmerge/references/deploy-status-debugging.md, and each carries it byte for byte" ok
@@ -4444,8 +4464,9 @@ for spec in $S4_HM_SPEC; do
   IFS=: read -r hf hn hd <<< "$spec"
   for ((hi = 1; hi <= hn; hi++)); do
     mf="$BKDIR/hm-s4-$(basename "$hf")-$hi"; assert_fixture_dir "$mf"
-    nth_replace "$REPO_ROOT/$hf" "$mf" "$HM_PFX" 'HMAC_KEY="$WEBHOOK_SECRET" python3 -c' "$hi" || fatal "S4 parity mutation $hf#$hi did not land"
-    hm_audit "$mf" "$hd"; hm_ln="$(hm_nth_line "$hi" "$REPO_ROOT/$hf" 'HMAC_KEY="$WEBHOOK_SECRET" python3')"
+    hm_pfx="$HM_PFX"; grep -qF "$HM_PFX" "$REPO_ROOT/$hf" || hm_pfx="$HM_PFX_LEGACY"
+    nth_replace "$REPO_ROOT/$hf" "$mf" "$hm_pfx" "${hm_pfx/ -I -c/ -c}" "$hi" || fatal "S4 parity mutation $hf#$hi did not land"
+    hm_audit "$mf" "$hd"; hm_ln="$(hm_nth_line "$hi" "$REPO_ROOT/$hf" "$HM_NAME_ERE")"
     if [[ "$HM_BAD" == " $hi" && "$(hm_touched "$REPO_ROOT/$hf" "$mf")" == "${hm_ln}c${hm_ln}" ]]; then row "mutation: dropping -I from the inline copy $(basename "$hf")#$hi alone (line $hm_ln only) is caught as exactly that copy" ok
     else row "mutation: dropping -I from the inline copy $(basename "$hf")#$hi alone (line $hm_ln only) is caught as exactly that copy" fail "bad:$HM_BAD touched:$(hm_touched "$REPO_ROOT/$hf" "$mf") want:${hm_ln}c${hm_ln}"; fi
   done
@@ -4453,7 +4474,7 @@ done
 # The fail-safe fallback and the signed body are per-site facets too: the empty-key abort (a mute `set -e` exit) and a POST signed over nothing.
 mf="$BKDIR/hm-s4-nofallback"; assert_fixture_dir "$mf"
 { mapfile -t _ml < "$REPO_ROOT/.github/workflows/web-platform-release.yml"; _mi=0
-  for _mn in "${!_ml[@]}"; do [[ "${_ml[_mn]}" == *'HMAC_KEY="$WEBHOOK_SECRET" python3'* ]] || continue; _mi=$((_mi + 1)); [[ "$_mi" == 2 ]] && _ml[_mn]="${_ml[_mn]% || *}"; done
+  for _mn in "${!_ml[@]}"; do [[ "${_ml[_mn]}" == *'HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3'* ]] || continue; _mi=$((_mi + 1)); [[ "$_mi" == 2 ]] && _ml[_mn]="${_ml[_mn]% || *}"; done
   printf '%s\n' "${_ml[@]}"; } > "$mf"
 hm_audit "$mf" ""
 if [[ "$HM_BAD" == " 2" ]]; then row "mutation: dropping the || SIG=\"\" fallback from the web-platform-release Deploy-via-webhook copy is caught as exactly that copy (an empty key would abort the step mute)" ok
@@ -4639,7 +4660,7 @@ s4_wh_ok() {
     && s4_tool_ran python3
 }
 S4_NOW="$(date +%s)"
-S4_WH_BASE=(WEBHOOK_SECRET="$S4_KEY" CF_ACCESS_CLIENT_ID="$S4_CFID" CF_ACCESS_CLIENT_SECRET="$S4_CFSEC" SHIM_PROFILE=webhook)
+S4_WH_BASE=(WEBHOOK_DEPLOY_SECRET="$S4_KEY" CF_ACCESS_CLIENT_ID="$S4_CFID" CF_ACCESS_CLIENT_SECRET="$S4_CFSEC" SHIM_PROFILE=webhook)
 S4_DOP_BASE=(D_WEBHOOK_DEPLOY_SECRET="$S4_KEY" D_CF_ACCESS_CLIENT_ID="$S4_CFID" D_CF_ACCESS_CLIENT_SECRET="$S4_CFSEC" SHIM_PROFILE=webhook)
 
 # ---- row 1 and row 2: restart-inngest-server (library; the poll loop, the lock_contention final re-read and the liveness read) ----
@@ -4657,7 +4678,7 @@ else row "S4 row 1 restart trigger: well-formed run" fail "rc=$S4_RC calls=$(s4_
 S4_FAILMSG_REFUSED='If a SOLEUR_CREDENTIAL_REFUSED line is printed above, the credential was refused before any request was made and nothing was sent; otherwise the request may have reached the host'
 s4_failmsg() { s4_said "::error::$1 webhook call failed (rc=$2). $S4_FAILMSG_REFUSED"; }
 s4_v_r1() { [[ "$S4_RC" != 0 && "$(s4_markers)" == 1 ]] && ! s4_said 'Restart initiated' && ! s4_said 'Restart webhook rejected' && s4_failmsg Restart 2 && [[ "$S4_RC" == 2 ]]; }
-s4_sweep r1 "$S4/b-r1.sh" "$S4/real" s4_v_r1 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_SECRET"
+s4_sweep r1 "$S4/b-r1.sh" "$S4/real" s4_v_r1 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_DEPLOY_SECRET"
 s4_sweep_row "S4 row 1 restart trigger: an empty, unset or hostile credential is RED (rc 2 aborts under set -e) with ONE marker, zero requests, no 'rejected' line and the canary absent"
 s4_nopy_row "S4 row 1 restart trigger (library HMAC site): python3 absent is RED with the marker and zero requests, never a mute abort" "$S4/b-r1.sh" s4_v_r1
 S4_SHIM="$S4/shimreal"; s4_run r1-transport "$S4/b-r1.sh" "$S4/real" "${S4_BASE[@]}"; S4_SHIM="$S4/shim"
@@ -4676,7 +4697,7 @@ if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 5 && "$S4_LOCK_OK" == 1 && "$(s4_marker
 else row "S4 row 2 restart verify: lock_contention path" fail "rc=$S4_RC calls=$(s4_ncalls) ok=$S4_LOCK_OK"; fi
 s4_v_r2() { [[ "$S4_RC" != 0 && "$(s4_markers)" == 3 ]] && s4_said '::error::Restart did not complete within the' && ! s4_said 'Inngest restart completed'; }
 S4_BASE=("${S4_WH_BASE[@]}" TRIGGER_TS="$S4_NOW" SHIM_STATUS_BODY="$s4_frame_ok")
-s4_sweep r2 "$S4/b-r2.sh" "$S4/real" s4_v_r2 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_SECRET"
+s4_sweep r2 "$S4/b-r2.sh" "$S4/real" s4_v_r2 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_DEPLOY_SECRET"
 s4_sweep_row "S4 row 2 restart verify: an empty, unset or hostile credential is the poll loop's old terminal RED with ONE marker per attempt (3 here), zero requests and the canary absent"
 s4_nopy_row "S4 row 2 restart verify (library HMAC site): python3 absent reaches the same terminal red with the marker per attempt, never a mute abort" "$S4/b-r2.sh" s4_v_r2
 
@@ -4731,7 +4752,7 @@ if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 ]] && s4_calls_ok 3 && s4_wh_ok "$S4_
   row "S4 row 9 release deploy (inline): a well-formed run signs the body it sends (independent openssl digest over the recorded bytes) and carries the pair on stdin, none on argv" ok
 else row "S4 row 9 release deploy (inline): well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
 s4_v_r9() { [[ "$S4_RC" != 0 && "$(s4_markers)" == 1 ]] && ! s4_said 'Deploy initiated' && ! s4_said 'Deploy webhook rejected' && s4_failmsg Deploy 2 && [[ "$S4_RC" == 2 ]]; }
-s4_sweep r9 "$S4/b-r9.sh" "$S4/real" s4_v_r9 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_SECRET"
+s4_sweep r9 "$S4/b-r9.sh" "$S4/real" s4_v_r9 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_DEPLOY_SECRET"
 s4_sweep_row "S4 row 9 release deploy (inline, red class): an empty, unset or hostile credential aborts the step RED before any request (production stays on the previous build) with ONE marker and the canary absent"
 s4_nopy_row "S4 row 9 release deploy (inline HMAC site): python3 absent is RED with the marker and zero requests, never a mute abort" "$S4/b-r9.sh" s4_v_r9
 S4_SHIM="$S4/shimreal"; s4_run r9-transport "$S4/b-r9.sh" "$S4/real" "${S4_BASE[@]}"; S4_SHIM="$S4/shim"
@@ -4754,7 +4775,7 @@ if [[ "$S4_SA_RED" == 1 && "$S4_EX_RED" == 1 ]]; then row "S4 row 9 release depl
 else row "S4 row 9 release deploy control: a silent or exit-swallowing handler is not judged red" fail "built=$S4_SA_BUILT/$S4_EX_BUILT red=$S4_SA_RED/$S4_EX_RED"; fi
 # CONTROL (the key must be on NO tool's argument list, not only curl's): the same step with the key moved onto python3's argv (an `-X` option python ignores, so the
 # signature stays VALID and curl's argv stays clean) is judged RED by the very predicate the HMAC rows use, and only by its python3 clause.
-S4_PY_BUILT=0; s4_body_try "$REPO_ROOT/$S4_WFR" "Deploy via webhook" "$S4/b-r9-pyargv.sh" 'python3 -I -c' 'python3 -I -X "k=$WEBHOOK_SECRET" -c' && S4_PY_BUILT=1
+S4_PY_BUILT=0; s4_body_try "$REPO_ROOT/$S4_WFR" "Deploy via webhook" "$S4/b-r9-pyargv.sh" 'python3 -I -c' 'python3 -I -X "k=$WEBHOOK_DEPLOY_SECRET" -c' && S4_PY_BUILT=1
 if [[ "$S4_PY_BUILT" == 1 ]]; then s4_run ctl-r9-pyargv "$S4/b-r9-pyargv.sh" "$S4/real" "${S4_BASE[@]}"; fi
 if [[ "$S4_PY_BUILT" == 1 && "$S4_RC" == 0 && "$(s4_ncalls)" == 1 ]] && s4_calls_ok 3 && ! s4_argv_has "$S4_KEY" && s4_tool_argv_has python3 "$S4_KEY" && ! s4_wh_ok "$S4_ROW/calls/1.body" 1; then
   row "S4 HMAC control: a signer that puts the key on python3's argument list (signature still valid, curl's argv clean) is judged RED by the HMAC rows' predicate" ok
@@ -4766,7 +4787,7 @@ if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 ]] && s4_calls_ok 3 && s4_wh_ok "$S4/
   row "S4 row 10 release verify (inline): a well-formed poll carries the digest over the empty body and the pair on stdin and reads the completion" ok
 else row "S4 row 10 release verify (inline): well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
 s4_v_r10() { [[ "$S4_RC" != 0 && "$(s4_markers)" == 3 ]] && s4_said '::error::ci-deploy.sh did not report completion for v1.2.3'; }
-s4_sweep r10 "$S4/b-r10.sh" "$S4/real" s4_v_r10 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_SECRET"
+s4_sweep r10 "$S4/b-r10.sh" "$S4/real" s4_v_r10 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_DEPLOY_SECRET"
 s4_sweep_row "S4 row 10 release verify (inline): an empty, unset or hostile credential is the poll's old terminal RED with ONE marker per attempt, zero requests and the canary absent"
 s4_nopy_row "S4 row 10 release verify (inline HMAC site): python3 absent reaches the terminal red with the marker per attempt" "$S4/b-r10.sh" s4_v_r10
 # row 8 (soft class): the pre-rerun lock probe is DEGRADED-PERMISSIVE: a refusal proceeds, with the marker visible
@@ -4776,7 +4797,7 @@ if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 ]] && s4_calls_ok 3 && s4_wh_ok "$S4/
   row "S4 row 8 release lock probe (inline): a well-formed run reads the idle state through the digest and the pair on stdin" ok
 else row "S4 row 8 release lock probe (inline): well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
 s4_v_r8() { [[ "$S4_RC" == 0 && "$(s4_markers)" == 1 ]] && s4_said 'Pre-rerun probe: non-JSON or empty body (HTTP 000) — proceeding (degraded-permissive)' && ! s4_said 'Prior deploy'; }
-s4_sweep r8 "$S4/b-r8.sh" "$S4/real" s4_v_r8 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_SECRET"
+s4_sweep r8 "$S4/b-r8.sh" "$S4/real" s4_v_r8 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_DEPLOY_SECRET"
 s4_sweep_row "S4 row 8 release lock probe (inline, soft class): an empty, unset or hostile credential PROCEEDS (exit 0, degraded-permissive) with the marker visible once, zero requests and the canary absent"
 S4_SHIM="$S4/shimreal"; s4_run r8-transport "$S4/b-r8.sh" "$S4/real" "${S4_BASE[@]}"; S4_SHIM="$S4/shim"
 if [[ "$S4_RC" == 0 && "$(s4_markers)" == 0 ]] && s4_said 'Pre-rerun probe: non-JSON or empty body (HTTP 000000)'; then row "S4 row 8 release lock probe: a REAL transport failure keeps the documented 000000 quirk and proceeds, with no marker" ok
@@ -4869,7 +4890,7 @@ if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(s4_markers)" == 0 ]] && s4_call
 else row "S4 row 18 inngest-health probe: well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls) gho=$(tr '\n' ' ' < "$S4_ROW/gho")"; fi
 s4_v_r18() { [[ "$S4_RC" == 0 ]] && s4_gho_has 'failure_mode=secret_unset' && ! grep -qE '^failure_mode=(inngest_down|inngest_unhealthy|probe_unavailable|functions_query_degraded)$' "$S4_ROW/gho" || return 1
   case "$2" in hostile-*|absent) [[ "$(s4_markers)" -ge 1 ]] ;; *) [[ "$(s4_markers)" == 0 ]] ;; esac; }
-s4_sweep r18 "$S4/b-r18.sh" "$S4/real" s4_v_r18 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_SECRET"
+s4_sweep r18 "$S4/b-r18.sh" "$S4/real" s4_v_r18 "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_DEPLOY_SECRET"
 s4_sweep_row "S4 row 18 inngest-health probe: an empty, unset or hostile credential records failure_mode=secret_unset (liveness-probe class, NO restart verdict, never inngest_down), exits 0, makes zero requests"
 s4_nopy_row "S4 row 18 inngest-health probe (library HMAC site): python3 absent records secret_unset with the marker and zero requests (the restart path is never reached)" "$S4/b-r18.sh" s4_v_r18
 S4_SHIM="$S4/shimreal"; s4_run r18-transport "$S4/b-r18.sh" "$S4/real" "${S4_BASE[@]}"; S4_SHIM="$S4/shim"
@@ -5115,7 +5136,7 @@ if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(s4_markers)" == 0 ]] && s4_call
 else row "S4 row 3 deploy-inngest-image trigger (inline): well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
 s4_v_r3t() { [[ "$S4_RC" != 0 && "$(s4_markers)" == 1 ]] && ! s4_said 'Deploy webhook rejected' && ! s4_said 'initiated (HTTP' && ! grep -q '^TRIGGER_TS=' "$S4_ROW/genv" \
   && s4_failmsg Deploy 2 && [[ "$S4_RC" == 2 ]]; }
-s4_sweep r3t "$S4/b-r3t.sh" "$S4/real" s4_v_r3t "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_SECRET"
+s4_sweep r3t "$S4/b-r3t.sh" "$S4/real" s4_v_r3t "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_DEPLOY_SECRET"
 s4_sweep_row "S4 row 3 deploy-inngest-image trigger (inline, red class): an empty, unset or hostile credential is a RED step with ONE marker and zero requests, never the 'Deploy webhook rejected (HTTP 000)' sentence, with no TRIGGER_TS written and the canary absent"
 s4_nopy_row "S4 row 3 deploy-inngest-image trigger (inline HMAC site): python3 absent is RED with the marker and zero requests, never the 'rejected (HTTP 000)' sentence" "$S4/b-r3t.sh" s4_v_r3t
 S4_SHIM="$S4/shimreal"; s4_run r3t-transport "$S4/b-r3t.sh" "$S4/real" "${S4_BASE[@]}"; S4_SHIM="$S4/shim"
@@ -5133,7 +5154,7 @@ if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 && "$(s4_markers)" == 0 ]] && s4_call
   row "S4 row 3 deploy-inngest-image verify (inline): a well-formed poll carries the digest over the empty body and the pair on stdin and reads this run's success frame" ok
 else row "S4 row 3 deploy-inngest-image verify (inline): well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls) markers=$(s4_markers)"; fi
 s4_v_r3v() { [[ "$S4_RC" != 0 && "$(s4_markers)" == 3 ]] && s4_said '::error::Deploy verify timed out after 15s' && ! s4_said 'completed (reason'; }
-s4_sweep r3v "$S4/b-r3v.sh" "$S4/real" s4_v_r3v "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_SECRET"
+s4_sweep r3v "$S4/b-r3v.sh" "$S4/real" s4_v_r3v "CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET" "WEBHOOK_DEPLOY_SECRET"
 s4_sweep_row "S4 row 3 deploy-inngest-image verify (inline): an empty, unset or hostile credential is the poll's old terminal RED (timed out) with ONE marker per attempt (3 here), zero requests and the canary absent"
 s4_nopy_row "S4 row 3 deploy-inngest-image verify (inline HMAC site): python3 absent reaches the same terminal red with the marker per attempt" "$S4/b-r3v.sh" s4_v_r3v
 S4_FABRICATE=">/dev/null || printf '%s' '{\"exit_code\":0,\"component\":\"inngest\",\"reason\":\"success\",\"start_ts\":9999999999}' > /tmp/status-body"
@@ -5155,9 +5176,16 @@ lead = '_t="${_t#"${_t%%[!' + WS + ']*}"}"; '
 trail = '_t="${_t%"${_t##*[!' + WS + ']}"}"; '
 llead = '_t="${_t#"${_t%%[![:space:]]*}"}"; '
 ltrail = '_t="${_t%"${_t##*[![:space:]]}"}"; '
+# #9294 PR-B: the CF-pair loops were de-shaped to explicit per-name expansions (the ${!_v} indirect form
+# is gone); a kind prefixed with `d` prints one expansion line per name instead of the loop.
+dmode = kind.startswith("d")
 body = {"canon": lead + trail, "lead": lead, "trail": trail, "locale": llead + ltrail,
-        "stripall": '_t="${_t//[' + WS + ']/}"; ', "remove": ""}[kind]
-print('for _v in ' + names + '; do _t="${!_v:-}"; ' + body + 'printf -v "$_v" \'%s\' "$_t"; done')
+        "stripall": '_t="${_t//[' + WS + ']/}"; ', "remove": ""}[kind[1:] if dmode else kind]
+if dmode:
+    for n in names.split():
+        print('_t="${' + n + ':-}"; ' + body + n + '="$_t"')
+else:
+    print('for _v in ' + names + '; do _t="${!_v:-}"; ' + body + 'printf -v "$_v" \'%s\' "$_t"; done')
 PY
 # The derived population: workflow steps whose run body defines the inline `_bearer_ok() {` and whose effective env (workflow, job, step) declares a `secrets.` value for one of the
 # three names. scan <root> prints "<file>\t<job>\t<step name>\t<step id>\t<names>\t<ok|BAD>" (ok: exactly one `for _v in` line precedes the definition and it IS the canonical loop for
@@ -5169,6 +5197,8 @@ TV = ["CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET", "RESEND_API_KEY"]
 trim_py = os.environ["S4_TRIM_PY"]
 def canon(names):
     return subprocess.run([sys.executable, "-I", "-c", trim_py, "canon", names], capture_output=True, text=True, check=True).stdout.strip()
+def dline(name):
+    return subprocess.run([sys.executable, "-I", "-c", trim_py, "dcanon", name], capture_output=True, text=True, check=True).stdout.strip()
 rows = []
 for path in sorted(glob.glob(os.path.join(root, ".github", "workflows", "*.yml"))):
     rel = os.path.relpath(path, root)
@@ -5178,6 +5208,12 @@ for path in sorted(glob.glob(os.path.join(root, ".github", "workflows", "*.yml")
     for jid, j in (d.get("jobs") or {}).items():
         if not isinstance(j, dict): continue
         jenv = j.get("env") if isinstance(j.get("env"), dict) else {}
+        # the infra-credentials composite's narrow arm exports the deploy-channel trio into $GITHUB_ENV
+        # (#9294): those names are ambient for the job's steps and count as declared
+        ambient = set()
+        for o in (j.get("steps") or []):
+            if isinstance(o, dict) and "infra-credentials" in str(o.get("uses", "")) and (o.get("with") or {}).get("doppler-project") == "soleur-deploy-channel":
+                ambient.update(["WEBHOOK_DEPLOY_SECRET", "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"])
         for idx, s in enumerate(j.get("steps") or []):
             if not isinstance(s, dict) or not isinstance(s.get("run"), str): continue
             lines = [l.strip() for l in s["run"].split("\n")]
@@ -5185,10 +5221,11 @@ for path in sorted(glob.glob(os.path.join(root, ".github", "workflows", "*.yml")
             if di is None: continue
             env = {}
             for e in (wenv, jenv, s.get("env") if isinstance(s.get("env"), dict) else {}): env.update(e)
-            vs = [v for v in TV if "secrets." in str(env.get(v, ""))]
+            vs = [v for v in TV if "secrets." in str(env.get(v, "")) or (v in ambient and v in s["run"])]
             if not vs: continue
             loops = [l for l in lines[:di] if l.startswith("for _v in ")]
-            ok = loops == [canon(" ".join(vs))]
+            tri = [l for l in lines[:di] if l.startswith('_t="${')]
+            ok = loops == [canon(" ".join(vs))] or tri == [dline(v) for v in vs]
             rows.append((rel, jid, str(s.get("name") or ""), str(s.get("id") or ""), ",".join(vs), "ok" if ok else "BAD"))
 if mode == "scan":
     for r in rows: print("\t".join(r))
@@ -5254,7 +5291,7 @@ s4_b7_bad() {
         s4_b7_refused "b7-$tag-ctl-u2003t" "$body" "$said" "$mode" "${base[@]}" LC_ALL=C.UTF-8 "CF_ACCESS_CLIENT_ID=${S4_CFID}${S4_U2003}" || S4_B7_BAD+=" u2003-trailing(calls=$(s4_ncalls) markers=$(s4_markers))"
         s4_b7_refused "b7-$tag-ctl-u2003l" "$body" "$said" "$mode" "${base[@]}" LC_ALL=C.UTF-8 "CF_ACCESS_CLIENT_SECRET=${S4_U2003}${S4_CFSEC}" || S4_B7_BAD+=" u2003-leading(calls=$(s4_ncalls) markers=$(s4_markers))" ;;
       wh-*:key)
-        s4_run "b7-$tag-key" "$body" "$S4/real" "${base[@]}" "WEBHOOK_SECRET=$S4_B7_KEY_NL"
+        s4_run "b7-$tag-key" "$body" "$S4/real" "${base[@]}" "WEBHOOK_DEPLOY_SECRET=$S4_B7_KEY_NL"
         f="$S4/bodies/empty"; [[ "$mode" == wh-post ]] && f="$S4_ROW/calls/1.body"
         want="$(s4_oracle "$S4_B7_KEY_NL" "$f")"; got="$(s4_oracle "$S4_KEY" "$f")"
         { [[ "$(s4_ncalls)" == 1 && "$(s4_markers)" == 0 && -n "$want" && "$want" != "$got" && "$(s4_stdin_line 1 1)" == "header = \"X-Signature-256: sha256=$want\"" ]] && s4_nowhere_on_argv "$want"; } || S4_B7_BAD+=" key-not-trimmed(calls=$(s4_ncalls) markers=$(s4_markers))" ;;
@@ -5350,10 +5387,19 @@ else row "S4 inline trim population control: the derivation is blind to a missin
 # a NAMED scenario and stay green on the ones it still satisfies (a trim that handles only one end, one that strips interior whitespace too, one that follows the runner locale, and
 # the loop applied to the HMAC key).
 s4_b7_mut() { # <kind> "<scenarios>" "<must be red>" "<must stay green>" [key]
-  local kind="$1" scen="$2" red="$3" green="$4" key="${5:-}" wvars='CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET' tok miss="" canon mut
-  canon="$(python3 -I -c "$s4_trim_py" canon "$wvars")"
-  if [[ -n "$key" ]]; then mut="$(python3 -I -c "$s4_trim_py" canon "$wvars WEBHOOK_SECRET")"; else mut="$(python3 -I -c "$s4_trim_py" "$kind" "$wvars")"; fi
-  if s4_body_try "$REPO_ROOT/$S4_WFR" "Deploy via webhook" "$S4/b-ctl-b7-$kind.sh" "$canon" "$mut"; then
+  local kind="$1" scen="$2" red="$3" green="$4" key="${5:-}" wvars='CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET' tok miss="" canon mut nm
+  # #9294 PR-B: the wh step's CF-pair trim is de-shaped to one expansion line per name; each pair below
+  # rewrites one of those lines (the `key` variant appends a WEBHOOK_DEPLOY_SECRET line to the id's).
+  local -a whpairs=()
+  for nm in $wvars; do
+    whpairs+=("$(python3 -I -c "$s4_trim_py" dcanon "$nm")" "$(python3 -I -c "$s4_trim_py" "d$kind" "$nm" 2>/dev/null)")
+  done
+  if [[ -n "$key" ]]; then
+    whpairs[1]="$(python3 -I -c "$s4_trim_py" dcanon "${wvars%% *}")
+          $(python3 -I -c "$s4_trim_py" dcanon WEBHOOK_DEPLOY_SECRET)"
+    whpairs[3]="$(python3 -I -c "$s4_trim_py" dcanon "${wvars##* }")"
+  fi
+  if s4_body_try "$REPO_ROOT/$S4_WFR" "Deploy via webhook" "$S4/b-ctl-b7-$kind.sh" "${whpairs[@]}"; then
     s4_b7_bad "ctl-$kind-wh" "$S4/b-ctl-b7-$kind.sh" wh-post 'Deploy initiated (HTTP 202)' "$scen" "${S4_B7_BASE_DEPLOY[@]}"
     for tok in $red; do [[ "$S4_B7_BAD" == *"$tok"* ]] || miss+=" wh:$tok-not-red"; done
     for tok in $green; do [[ "$S4_B7_BAD" != *"$tok"* ]] || miss+=" wh:$tok-red"; done
@@ -7163,7 +7209,17 @@ case "${3:-}" in
 esac
 S7X_STUB
 printf '#!/usr/bin/env bash\ncat\n' > "$S7_X/bin/jq"
-chmod +x "$S7_X/bin/curl" "$S7_X/bin/doppler" "$S7_X/bin/jq"
+# The ship/postmerge deploy-status blocks read the trio via `bash scripts/lib/doppler-read.sh get <project> <config> <NAME>`
+# (#9294): the block runs from $S7_X, so the stub lives at that relative path and answers `get` like the doppler stub above.
+mkdir -p "$S7_X/scripts/lib"
+cat > "$S7_X/scripts/lib/doppler-read.sh" <<'S7X_STUB'
+#!/usr/bin/env bash
+[[ "${1:-}" == get ]] || exit 1
+nm="${4:-}"
+[[ -n "${S7X_BADNAME:-}" && "$nm" == "$S7X_BADNAME" ]] && { printf 'bad val'; exit 0; }
+printf '%s-%s' "${S7X_TOKEN:-}" "$nm"
+S7X_STUB
+chmod +x "$S7_X/bin/curl" "$S7_X/bin/doppler" "$S7_X/bin/jq" "$S7_X/scripts/lib/doppler-read.sh"
 S7X_GOOD="synthtok0123.ab_c~d+e/f=g-h"; S7X_BAD="bad val"
 S7X_PYDIR="$(dirname "$(type -P python3)")"
 # s7x_block <file> <marker>... -> the ONE fenced block of that file holding `--config -` and every marker (a count other than 1 is a failure, never a pass)
@@ -8252,7 +8308,9 @@ SELFTEST_PASSES=0
 # 830 -> 837 at the #11572 review rounds (2026-10-30): the pin is "first statement after set -uo pipefail" (1 row), plus the run-time fd 0 row, the canonical-layout control, four refused-layout controls (late, nested, conditional, a quoted `set` above the real one) and one altered-exec-line control: measured (837 passed, 0 failed).
 # 837 -> 831 at #9927 item 8 (this PR): lead (b), the op=arm mask battery (the G2/G3 control, hostile and empty drives, the G3.5 control, hostile and empty drives, and the
 #   mutants row: seven rows), left with op=arm; the tree measured 838 rows before (floor 837, one row of slack) and 831 after (831 passed, 0 failed), so the floor is now the exact measured count.
-EXPECTED_TESTS=832
+# 832 -> 825 at #9294 PR-B: the retired inngest-soak-6178 probe takes its delegated manifest rows and hm5 audit/mutation rows with it; the migration rows it drove are gone and the
+#   remaining groups were re-pinned in place (no row count change from the trio rename or the de-shaped trim): measured (825 passed, 0 failed).
+EXPECTED_TESTS=825
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
