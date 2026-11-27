@@ -84,7 +84,7 @@ Start here in a fresh session.
    | 3 | `CF_API_TOKEN_AUDIT` row `SOLEUR_P5_HOLDER project=soleur config=dev_personal` or `config=dev_scheduled` `value=old` | the two AUDIT delete holds |
    | 4 | `source=PREV` and `SOLEUR_P5_STAGED next=present` (an interrupted swap) | `swap` again: it finishes the copy or only deletes `_NEXT` |
    | 5 | `SOLEUR_P5_STAGED next=absent`, TF `value=old`, and an unheld mint | section 12 "Unheld mint" |
-   | 6 | `source=KEY` and `SOLEUR_P5_PREV state=` anything but `absent`, or `denied` with a `P5-REVOKED` record for that key whose `new_id` is the pin (an earlier rotation's revoked token, which `swap` overwrites, CTO D6) | stop; see section 12 |
+   | 6 | `source=KEY` and `SOLEUR_P5_PREV state=` anything but `absent`, unless it is `denied` and a `P5-REVOKED` comment for that key has `new_id=` the pin (an earlier rotation's revoked token, which `swap` overwrites, CTO D6; this one match reads the section 7 lookup without the pin filter) | stop; see section 12 |
    | 7 | `source=KEY` and `SOLEUR_P5_STAGED next=present` | `swap` |
    | 8 | `source=KEY` | Section 4 scope, then the section 5 mint |
    | 9 | `source=PREV`, TF `value=old`, and the newest `P5-ROLLBACK-START` has a `P5-RETIRED` with its `bad_id8` | Section 5 mint for that key, then `swap` |
@@ -552,7 +552,8 @@ minted user-owned under the F17 fallback keeps the user forms.
   revoked. It runs start to finish in one sitting. `Agent:` once this sitting's `verify` printed
   `SOLEUR_P5_KEY key=<KEY> id=<id8>` for the newest `P5-MINTED`'s `id8`, post on #12931 one comment whose first line
   is `P5-ROLLBACK-START key=<KEY> pin=<the pin> bad_id8=<id8> bad_name=<name> owner=<account|user>`, copied from that
-  `P5-MINTED`. Section 1 rows 2 and 10 stop a later session until step 4's `P5-RETIRED` exists.
+  `P5-MINTED`, and read it back through the section 7 lookup before step 1 (no START in the lookup: stop). Section
+  1 rows 2 and 10 stop a later session until step 4's `P5-RETIRED` exists.
   1. Operator-authorizes, one go per holder write: undo `holder-copies` with, for each manifest holder it wrote, the
      AUDIT rollback form in section 6 with `<src>` = `<KEY>_PREV` and that holder's config.
   2. `Agent:` run `bash <B> --stage inventory` and `bash <B> --stage verify`. Go on only when this sitting shows
