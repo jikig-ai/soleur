@@ -16,6 +16,14 @@ Ref #12931 (epic stays open; never `Closes`). Ref #12937 (release deploys blocke
 revoke). Draft PR #13084. Follow-ups filed at plan time: #13085 (rotate before the ~2027-02-20 expiry), #13086
 (`expires_on` warning in the drift script).
 
+## Review Amendments (2026-11-27)
+
+The review round on PR #13084 produced five CTO rulings, recorded as D1-D5 in
+`knowledge-base/project/specs/feat-one-shot-12931-phase5-token-remint/decision-challenges.md`. Where this plan says
+otherwise, those rows win: D1 adds the committed browser bodies (`p5-mint.js`, `p5-revoke.js`, `p5-sink.py`) and their
+suite; D2 adds the census floor; D3 removes the drift gate from `verify`; D4 keeps the migration runbook untouched; D5
+binds the `_NEXT` token's id and owner into the approved swap plan.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-11-27
@@ -323,7 +331,7 @@ prints only `zone_tag=match|mismatch errors=<n>`, so no actor, IP or rule text r
 | `inventory` | read | Reference per key: prd_terraform `<KEY>_PREV` if it verifies the pinned id, else prd_terraform `<KEY>` if it does, else `none`; prints `SOLEUR_P5_REFERENCE key= source=PREV\|KEY\|none`. Narrow census: the live config list of every project (`doppler projects`, `doppler configs`), failing if `soleur` lists fewer configs than the manifest names; in each config, the key's own name only; prints `SOLEUR_P5_HOLDER project= config= key= value=old\|new\|other\|absent`, `SOLEUR_P5_UNREADABLE project= config=`, `SOLEUR_P5_CENSUS configs_read=<n> old_hits=<n>`. | - |
 | `swap` | write | Per manifest key with prd_terraform `<KEY>_NEXT` staged (well-formed, verifies active, id not the pinned one): if no `<KEY>_PREV` verifies the pinned id, refuse unless `<KEY>` verifies it, then copy `<KEY>` -> `<KEY>_PREV` and read back by digest; then copy `<KEY>_NEXT` -> `<KEY>`, read back; delete `<KEY>_NEXT` only after an equal digest. A failed read-back stops the stage, later keys untouched, `_NEXT` kept. | `<KEY>_PREV` verifies the pinned id, `<KEY>` verifies a different active id, no `<KEY>_NEXT` |
 | `holder-copies` | write | Every manifest holder other than prd_terraform: value digest equals `<KEY>_PREV`'s -> copy prd_terraform `<KEY>` there, read back; equal to `<KEY>`'s -> no operation; any third value or absent -> refuse naming the holder. Needs `swap` (`PRECONDITION_FAILED need=swap`). | every manifest holder's digest equals prd_terraform `<KEY>`'s |
-| `verify` | read | Per key: prd_terraform `<KEY>` verifies active with an id that is not the pinned one; consumer read exits 0 (`cloudflare-readonly.sh pagerules-ssl`, `change-history`; ANALYTICS gates on a minimal zone-tag GraphQL query that must return the new zone tag with no `errors`, and prints `analytics-health 1` as a non-gating line); census: `old_hits` is exactly 1, at prd_terraform `<KEY>_PREV` (zero is `fail reason=census-blind`), zero `UNREADABLE`, no `_NEXT`; `check-cloudflare-token-drift.sh --only <KEY>` exits 0. Prints `SOLEUR_P5_VERIFY key= verdict=ok\|fail reason=` and, on `ok` with `source=PREV`, `SOLEUR_P5_REVOKE_READY key= old_id=<pinned> new_id=<8>`. | - |
+| `verify` | read | Per key: prd_terraform `<KEY>` verifies active with an id that is not the pinned one; consumer read exits 0 (`cloudflare-readonly.sh pagerules-ssl`, `change-history`; ANALYTICS gates on a minimal zone-tag GraphQL query that must return the new zone tag with no `errors`, and prints `analytics-health 1` as a non-gating line); census: `old_hits` is exactly 1, at prd_terraform `<KEY>_PREV` (zero is `fail reason=census-blind`), zero `UNREADABLE`, no `_NEXT`; every manifest holder reads the new value; the D2 census floor holds. Prints `SOLEUR_P5_VERIFY key= verdict=ok\|fail reason=` and, on `ok` with `source=PREV`, `SOLEUR_P5_REVOKE_READY key= old_id=<pinned> new_id=<8> owner=<account|user>`. | - |
 
 No stage calls the dashboard, deletes a token, writes outside the manifest holders, or writes
 `soleur-infra-privileged`.
@@ -337,7 +345,7 @@ No stage calls the dashboard, deletes a token, writes outside the manifest holde
 2. `plugins/soleur/scripts/cloudflare-readonly.sh` header (token-binding block and the `token-invalid` interpretation
    row): drop the `2027-02-07` date; say the expiry is the verify answer's `expires_on`.
 3. `.github/workflows/scheduled-followthrough-sweeper.yml`: replace the "These GH secrets do / not exist yet"
-   comment with the measured fact (both exist since 2026-11-02, pre-move values) and the #12983 precondition.
+   comment with the measured fact (both exist, last set 2026-11-02, pre-move values) and the #12983 precondition.
    Comment only.
 4. Registration (CTO F11): `scripts/test-all.sh` `run_suite` line beside the precedent;
    `AFFECTED_TESTS_SCRIPTS_CF_OLD_LOGIN_TOKEN_REMINT_BOOTSTRAP_PATHS` in `scripts/lib/test-affected-paths.sh` beside
@@ -642,7 +650,7 @@ decided on its own digest.
 ### Post-merge (each after its hold's typed go)
 
 - [ ] AC10 Per key: `bash <B> --stage verify` prints `SOLEUR_P5_VERIFY key=<KEY> verdict=ok` and
-  `SOLEUR_P5_REVOKE_READY key=<KEY>`; `bash scripts/check-cloudflare-token-drift.sh --only <KEY>` exits 0.
+  `SOLEUR_P5_REVOKE_READY key=<KEY>`. (No drift run here: CTO D3 moved the only drift run to AC11, after the revoke.)
 - [ ] AC11 Per old id: the revoke recipe read-back starts `success=false`; after the key delete, `--stage inventory`
   shows no `<KEY>_PREV`; the full drift run exits 0; `gh issue view 12931 --comments | grep -c P5-REVOKED` prints at
   least `1`.
