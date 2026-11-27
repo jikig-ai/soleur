@@ -1500,7 +1500,7 @@ else
   check fail "EV: --runs refused: $(tail -2 "$FEV/auto-err.txt")"
 fi
 if grep -q 'run list.*--event merge_group' "$FEV/calls.log" \
-   && ! grep 'run list' "$FEV/calls.log" | grep -q -- '--branch'; then
+   && ! grep -q -- '--branch' < <(grep 'run list' "$FEV/calls.log"); then
   check pass "EV: a light group's default --runs samples merge_group (no --branch filter)"
 else
   check fail "EV: default run-list argv did not select merge_group: $(grep 'run list' "$FEV/calls.log")"
@@ -1508,15 +1508,15 @@ fi
 # --event push: main-branch push runs (the legacy population, narrowed to
 # push events only).
 ev_run push --event push --runs 2 || true
-if grep 'run list' "$FEV/calls.log" | grep -q -- '--event push' \
-   && grep 'run list' "$FEV/calls.log" | grep -q -- '--branch main'; then
+if grep -q -- '--event push' < <(grep 'run list' "$FEV/calls.log") \
+   && grep -q -- '--branch main' < <(grep 'run list' "$FEV/calls.log"); then
   check pass "EV: --event push scopes the sample to main-branch push runs"
 else
   check fail "EV: --event push argv wrong or the flag is missing: $(grep 'run list' "$FEV/calls.log")"
 fi
 ev_run mq --event merge_group --runs 2 || true
-if grep 'run list' "$FEV/calls.log" | grep -q -- '--event merge_group' \
-   && ! grep 'run list' "$FEV/calls.log" | grep -q -- '--branch'; then
+if grep -q -- '--event merge_group' < <(grep 'run list' "$FEV/calls.log") \
+   && ! grep -q -- '--branch' < <(grep 'run list' "$FEV/calls.log"); then
   check pass "EV: --event merge_group samples queue runs without a branch filter"
 else
   check fail "EV: --event merge_group argv wrong or the flag is missing: $(grep 'run list' "$FEV/calls.log")"
@@ -1524,15 +1524,15 @@ fi
 # auto resolves per group: heavy also prices off merge_group; infra keeps the
 # legacy all-events main-branch population (its workflow never runs queue).
 ev_run heavy --group heavy --runs 2 || true
-if grep 'run list' "$FEV/calls.log" | grep -q -- '--event merge_group' \
-   && ! grep 'run list' "$FEV/calls.log" | grep -q -- '--branch'; then
+if grep -q -- '--event merge_group' < <(grep 'run list' "$FEV/calls.log") \
+   && ! grep -q -- '--branch' < <(grep 'run list' "$FEV/calls.log"); then
   check pass "EV: heavy group auto-resolves to merge_group too"
 else
   check fail "EV: heavy group did not auto-resolve to merge_group: $(grep 'run list' "$FEV/calls.log")"
 fi
 ev_run infra --group infra --runs 2 || true
-if grep 'run list' "$FEV/calls.log" | grep -q -- '--branch main' \
-   && ! grep 'run list' "$FEV/calls.log" | grep -q -- '--event'; then
+if grep -q -- '--branch main' < <(grep 'run list' "$FEV/calls.log") \
+   && ! grep -q -- '--event' < <(grep 'run list' "$FEV/calls.log"); then
   check pass "EV: infra group keeps the main-branch population under auto"
 else
   check fail "EV: infra group auto-resolution wrong: $(grep 'run list' "$FEV/calls.log")"
