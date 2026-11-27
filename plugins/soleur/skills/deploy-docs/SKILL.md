@@ -89,7 +89,7 @@ OK CNAME and sitemap present
 > served by Cloudflare Pages and DOES advance with these deploys — verify at the
 > apex, not at `pages.dev`. Until PR4b this block said the opposite and sent the
 > operator to the `pages.dev` hostname; that was correct then and is misdirection
-> now. `soleur-docs.pages.dev` still resolves and is still a useful
+> now. `soleur-docs-40x.pages.dev` (the Soleur-account project since #12931) is a useful
 > origin-vs-edge discriminator, but it is not where a deploy is confirmed. See
 > `knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md`.
 ```

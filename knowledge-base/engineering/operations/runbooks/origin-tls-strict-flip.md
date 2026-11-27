@@ -633,6 +633,34 @@ Keep rules (CTO T3): rc 0, line 1 exactly `cloudflare-readonly: analytics-health
 
 Unverified: Cloudflare analytics-health (F) #12441, premise read for #12846, run 2026-11-19T10:03:19Z through `doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh analytics-health 216`: `ok`, 199 contiguous hourly rows, 2026-11-10T10Z to 2026-11-18T16Z, and no rows after them (inferred, not printed: F prints no zone, and the series ending at the 2026-11-18 move is taken to mean the configured zone was the old zone). Evidence file `knowledge-base/engineering/operations/runbooks/evidence/2026-11-19-analytics-health-216h.json`. The window starts 2026-11-10T10Z, so no pre-flip hour is in it and it adds nothing to the flip comparison. Every figure in it is a sampled estimate.
 
+##### Addendum 2026-11-22: the H capture and the T2 outcome (Ref #12846)
+
+Written 2026-11-23; records the 2026-11-22 reads. Additions-only: the addenda above, the recipe block and its sha256 are left as written. The durations and the request counts behind them are sampled estimates.
+
+**The reads.** Both ran on 2026-11-22 through the H handoff loop in the 2026-11-19 addendum, from a fresh `origin/main` at `6e491a9fd4`. Both passed the loop's keep rules on zone `5af02a2f394e9ba6e0ea23c381a26b67`, each as one H=216 read, so no split was needed. The files are under `knowledge-base/engineering/operations/runbooks/evidence/`.
+
+| Read | Read at | Evidence file | Window end E | Offset O | Hours | Rows | `truncated` |
+|---|---|---|---|---|---|---|---|
+| Main (the R1 window) | 2026-11-22T22:59:45Z | `analytics-health-colo-216h-end20261112T12Z.json` | 2026-11-12T12:00:00Z | 250 | 216 | 2264 | false |
+| Archival (never a verdict input) | 2026-11-22T22:59:47Z | `analytics-health-colo-216h-end20261118T17Z.json` | 2026-11-18T17:00:00Z | 101 | 216 | 2198 | false |
+
+R1 asks for E, O and the read instant. The read instants are copied from the loop's `kept <file>, read at <time>` lines, because the files do not carry them. The loop does not print O, so both values above are derived: the read instant's hour (2026-11-22T22:00:00Z) minus E. The main read printed `null_colo_rows=0 null_colo_qualifying=0`.
+
+**The T2 outcome.** The pinned four-line block above ran on the main file only, and its hash check passed. The record, carrying the recipe's line 1 verbatim:
+
+Unverified: Cloudflare analytics-health-colo (H) #12846, inconclusive: positive-colo; null_colo_rows=0 null_colo_qualifying=0
+
+The file holds 36 colos: 2 judged and 34 not judged. The two judged colos:
+
+| Colo | Qualifying hours before | Qualifying hours after | Baseline max (ms) | Change point | Positive | Late run |
+|---|---|---|---|---|---|---|
+| SEA | 29 | 27 | 514 | 2026-11-08T00:00:00Z | true | null (not scanned) |
+| IAD | 49 | 45 | 342 | 2026-11-08T14:00:00Z | false | null |
+
+**What this does and does not show.** SEA is positive. IAD is not, and has no sustained run from 01Z on, so the outcome is `positive-colo`. SEA's `null` means the recipe does not scan a positive colo, not that SEA has no late run. IAD is not flat: by a direct count from the file, not a recipe output, 25 of its 45 qualifying after-hours are above its baseline max, the first at 14Z. A per-colo shape cannot separate the flip from the v0.395.7 release deploy in the same hour, so this is still not "supported". The label on the p90 step stays "provisionally attributed", because every `inconclusive:` outcome leaves it in place. The evidence bar for "attributed" (CTO ruling, 2026-11-16) is not met: the window holds the other origin-path changes listed under "Other events in the window" in the 2026-11-19 addendum, and this runbook names no read as the matching mechanism read. No cause is claimed.
+
+**Not run.** The 2026-11-19 addendum's "check the zone's status before the read" was not run, because the wrapper has no zone-status subcommand. The read's own `zone` field and the keep predicate are what showed the old zone was still readable at the read. They do not show the zone's Cloudflare status.
+
 #### What was NOT run before the flip
 
 - The local read-only plan (Act 0): not run. The flip plan itself (1 change) was read after the fact in the apply log.

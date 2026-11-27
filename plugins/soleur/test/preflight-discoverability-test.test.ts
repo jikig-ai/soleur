@@ -3155,7 +3155,7 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // (`bash scripts/serve-soak-evidence-last.sh`, expecting `SOLEUR_SOAK_EVIDENCE`) reads cf-lb-overlay.yml run logs through
   // `gh run list` / `gh run view --log` with the operator's GitHub repository read (gh auth). NO SUBSTITUTE: Actions run logs
   // are served only to an authenticated reader; there is no unauthenticated endpoint for them. Genuine.
-  const BASELINE_DECLARED_PROBES = 100;
+  const BASELINE_DECLARED_PROBES = 101;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

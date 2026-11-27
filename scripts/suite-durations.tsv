@@ -101,6 +101,7 @@ apps/web-platform/test/parse-gitleaks-allowlists	307	measured
 plugins/soleur/scripts/admin-merge-ready.test.sh	18232	measured
 plugins/soleur/scripts/affected-tests.test.sh	42106	measured
 plugins/soleur/scripts/alpha-metrics.test.sh	546	measured
+plugins/soleur/scripts/completion-floor.test.sh	100	measured
 plugins/soleur/scripts/delegation-verify.test.sh	160016	measured
 plugins/soleur/scripts/emit-decision.test.sh	443	measured
 plugins/soleur/scripts/merge-effect-class.test.sh	12213	measured
@@ -684,6 +685,10 @@ tests/scripts/betterstack-ingest-probe	110	measured
 tests/scripts/betterstack-query-archive	178	measured
 tests/scripts/betterstack-read-classify	219	measured
 tests/scripts/betterstack-roundtrip-latency	166467	measured
+tests/scripts/cf-account-migrate-gate	1802	floor
+tests/scripts/cf-account-migration-bootstrap	1802	floor
+tests/scripts/cf-account-migration-runbook	1802	floor
+tests/scripts/cf-account-migration-scope	1802	floor
 tests/scripts/cf-lb-overlay-gate	5411	measured
 tests/scripts/cleanup-merged-space	9477	measured
 tests/scripts/deploy-access-token-forget	1460	measured

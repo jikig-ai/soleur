@@ -5972,7 +5972,9 @@ if want_scripts; then
   # #9377: the web-host escrow-split contract (Guard 3 census: every web-class path selects
   # prd_workspaces_luks_web, web-1 keeps prd_workspaces_luks) plus its live-mode stub-doppler rows.
   # Registered explicitly: scripts/*.test.sh is NOT auto-globbed (the #5417 orphan class). The
-  # generated suite-shard-legs.tsv / suite-durations.tsv are NOT hand-edited.
+  # generated suite-shard-legs.tsv / suite-durations.tsv are regenerated, never hand-merged; the
+  # one hand edit sanctioned for an existing measured row is a one-row re-seat to its CI
+  # merge_group median that the drift gate accepts (the test-scripts sharding runbook, #12780).
   run_suite "scripts/check-web-host-escrow-config" bash scripts/check-web-host-escrow-config.test.sh
   # #9377: the fail-closed escrow preflight every web-host birth route runs (env token wins, one named fallback
   # read, empty token fails before the checker, no token bytes in output, xtrace refused). Registered explicitly
@@ -6787,6 +6789,13 @@ if want_scripts; then
   # allow-sets fail closed). Registered HERE for the same reason as the rung2 and
   # inngest-provision entries above: nothing auto-discovers tests/scripts/.
   run_suite "tests/scripts/cf-lb-overlay-gate" bash tests/scripts/test-cf-lb-overlay-gate.sh
+  run_suite "tests/scripts/cf-account-migrate-gate" bash tests/scripts/test-cf-account-migrate-gate.sh
+  run_suite "tests/scripts/cf-account-migration-scope" bash tests/scripts/test-cf-account-migration-scope.sh
+  # (#12931, CTO rulings D11, D3-D5) The migration's Doppler bootstrap suite (stub doppler, real
+  # approval hook; it finds bootstrap.sh in the spec directory by glob, before and after
+  # archive-kb) and the runbook's text contract.
+  run_suite "tests/scripts/cf-account-migration-bootstrap" bash tests/scripts/test-cf-account-migration-bootstrap.sh
+  run_suite "tests/scripts/cf-account-migration-runbook" bash tests/scripts/test-cf-account-migration-runbook.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
   # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
   # host-key option anywhere in the tree), its mutation harness, and the track.sh

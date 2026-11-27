@@ -117,6 +117,11 @@ on:
       - ".github/workflows/cf-lb-overlay.yml"
       - "tests/scripts/lib/cf-lb-overlay-gate.sh"
       - "tests/scripts/test-cf-lb-overlay-gate.sh"
+      # (#12931) Same class for the Cloudflare account migration: its workflow, phase gate and scope suite.
+      - ".github/workflows/cf-account-migrate.yml"
+      - "tests/scripts/lib/cf-account-migrate-gate.sh"
+      - "tests/scripts/test-cf-account-migrate-gate.sh"
+      - "tests/scripts/test-cf-account-migration-scope.sh"
       - ".github/workflows/git-data-cutover.yml"
       - ".github/workflows/apply-web-platform-infra.yml"
       - ".github/workflows/scheduled-terraform-drift.yml"
@@ -520,7 +525,7 @@ jobs:
           fi
           bash scripts/main-push-duplicate-skip.sh \
             infra-validation.yml "$MERGE_SHA" \
-            validate deploy-script-tests deploy-script-tests-fixed \
+            validate deploy-script-tests deploy-script-tests-fixed bastion-boot-rehearsal \
             >> "$GITHUB_OUTPUT"
 
   validate:
@@ -1436,7 +1441,7 @@ jobs:
   # `timeout-minutes` reads `cancelled`/`failure` identically to a superseded run —
   # the classifier below names which shape it saw instead of guessing.
   deploy-script-tests-done:
-    needs: [detect-changes, deploy-script-tests, deploy-script-tests-fixed]
+    needs: [detect-changes, deploy-script-tests, deploy-script-tests-fixed, bastion-boot-rehearsal]
     # always() so upstream FAILURES still surface; the conjunct only drops the
     # aggregator when the whole push run is a proven duplicate (#8919).
     if: always() && needs.detect-changes.outputs.pr_duplicate != 'true'
@@ -1447,6 +1452,7 @@ jobs:
         env:
           MATRIX_RESULT: ${{ needs.deploy-script-tests.result }}
           FIXED_RESULT: ${{ needs.deploy-script-tests-fixed.result }}
+          BASTION_REHEARSAL_RESULT: ${{ needs.bastion-boot-rehearsal.result }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
           # deploy-script-tests is a MATRIX — its result rolls four legs into one
@@ -1455,7 +1461,7 @@ jobs:
           # `test` aggregator carries: supersession cancels the WHOLE run (all legs
           # cancelled), a timeout-minutes kill stops ONE leg while siblings conclude.
           fail=0
-          entries=( "deploy-script-tests:$MATRIX_RESULT" "deploy-script-tests-fixed:$FIXED_RESULT" )
+          entries=( "deploy-script-tests:$MATRIX_RESULT" "deploy-script-tests-fixed:$FIXED_RESULT" "bastion-boot-rehearsal:$BASTION_REHEARSAL_RESULT" )
           for entry in "${entries[@]}"; do
             shard="${entry%%:*}"
             result="${entry#*:}"
@@ -1475,26 +1481,34 @@ jobs:
                 echo "$shard: SKIPPED — the job did not run" >&2
                 ;;
               cancelled)
-                other_result=""
+                # Order-free over ANY number of siblings (#12941 made it three): supersession
+                # cancels EVERY job of the run, a timeout-minutes kill stops one job while its
+                # siblings conclude. So classify on "any sibling concluded" vs "all cancelled" —
+                # never on one picked sibling, whose verdict would then depend on entry order.
+                concluded=""
                 for other in "${entries[@]}"; do
                   [[ "${other%%:*}" == "$shard" ]] && continue
-                  other_result="${other#*:}"
+                  if [[ "${other#*:}" != "cancelled" ]]; then
+                    concluded="${other%%:*}='${other#*:}'"
+                    break
+                  fi
                 done
-                if [[ "$other_result" == "cancelled" ]]; then
+                if [[ -z "$concluded" ]]; then
                   if [[ "$EVENT_NAME" == "pull_request" ]]; then
-                    # NOTE: this workflow carries no `concurrency:` block, so an
-                    # intra-workflow supersession cannot occur here — a both-
-                    # cancelled pull_request pair is an external actor: the
-                    # GitHub reaper cancelling a superseded queued run (the
-                    # same supersession class ci.yml's concurrency produces
-                    # in-workflow), or a manual cancel. Name the class, not a
-                    # mechanism this file does not have.
-                    echo "$shard: SUPERSEDED-CLASS — the run was cancelled on pull_request (the GitHub reaper retiring a superseded queued run, or a manual cancel — this workflow has no concurrency block of its own)" >&2
+                    # Every sibling cancelled on pull_request: this workflow's own
+                    # concurrency block (cancel-in-progress on pull_request) retiring a
+                    # superseded run, the GitHub reaper retiring a superseded queued run, or
+                    # a manual cancel. Name the class, not one mechanism.
+                    echo "$shard: SUPERSEDED-CLASS — every job was cancelled on pull_request (a newer push superseding this run via cancel-in-progress, or a manual cancel)" >&2
                   else
                     echo "$shard: CANCELLED — the whole run was cancelled on a '$EVENT_NAME' event; supersession cannot occur here (cancel-in-progress is pull_request-only), so this is a manual or infra cancellation" >&2
                   fi
+                elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+                  # On pull_request a sibling that concluded before a cancel-in-progress
+                  # supersession is indistinguishable here from a timeout-minutes kill.
+                  echo "$shard: CANCELLED while sibling $concluded concluded — timeout-minutes or supersession (cancel-in-progress); check the job annotation" >&2
                 else
-                  echo "$shard: CANCELLED while its sibling concluded '$other_result' — the usual cause is its own declared timeout-minutes" >&2
+                  echo "$shard: CANCELLED while sibling $concluded concluded — the usual cause is its own declared timeout-minutes" >&2
                 fi
                 ;;
               *)
@@ -1505,8 +1519,76 @@ jobs:
           if [[ $fail -ne 0 ]]; then
             exit 1
           fi
-          echo "deploy-script-tests: matrix + fixed legs all succeeded"
+          echo "deploy-script-tests: matrix + fixed legs + bastion-boot-rehearsal all succeeded"
 
+
+  # Bastion first-boot rehearsal (#12941; CTO rulings Q6, Q14, Q21, Q22, Q25, Q26). The suite boots the
+  # rendered bastion user-data under REAL cloud-init with systemd as PID 1 in privileged
+  # containers from the pinned ubuntu:24.04 image (9 boots in three waves of up to three, ~5 min),
+  # so a matrix leg cannot absorb it: run-registered-suites.sh lists it in DEDICATED_JOB_WHY, never
+  # executes it, sharded or unsharded, and omits it from --enumerate (CTO Q25), and this job is its
+  # only CI invocation (.github/scripts/test/test-infra-suite-registration.sh pins that: the step below
+  # exists, is unmasked, sits in this job on a hosted runner with contents: read and no secret).
+  #
+  # ADVISORY, not a merge gate (CTO Q22): neither this job nor deploy-script-tests-done is a
+  # required context in infra/github/ruleset-ci-required.tf (#6480 owns why this paths-filtered
+  # workflow cannot be required), so a red run can merge. #12942 will gate the birth by running
+  # the rehearsal inside the birth run and requiring success (CTO Q26); until it lands, the
+  # runbook's dispatched check is the only gate: the agent dispatches this workflow on main and
+  # requires THIS job's conclusion = success on a run whose head SHA is the birth commit (never
+  # an existing check-run: push runs are paths-filtered and duplicate-skipped, so the birth SHA
+  # usually has none). A red run on main still alerts, through deploy-script-tests-done ->
+  # notify-main-failure, which names this job's result.
+  #
+  # NO CREDENTIALS. No Hetzner, Doppler or Sentry secret is bound (the suite's Sentry is a local
+  # stub with a synthesized DSN), and checkout sets persist-credentials: false so no GITHUB_TOKEN
+  # sits in .git/config on a disk a privileged container could read.
+  bastion-boot-rehearsal:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.pr_duplicate != 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    # 18 min, DERIVED (CTO Q14), not measured yet: the suite computes its own deadline from its
+    # constants — image-build cap 180 s + the worst row of each of the three boot waves
+    # (boots x the 150 s per-boot cap: 300 + 150 + 150) = 780 s = 13 min — and reports a row the
+    # deadline cuts by name. 18 min = 13 + ~3 min of setup (checkout, setup-terraform, failure
+    # upload) + ~2 min margin, so this ceiling never pre-empts the suite's own
+    # verdict. Record the first CI wall time in the PR body (#12941 task 5.5) and re-derive from
+    # it; a job-timeout kill here reads as `cancelled` in deploy-script-tests-done.
+    timeout-minutes: 18
+    steps:
+      # Same pin as the legs. Default fetch depth: the suite reads only working-tree files (the
+      # template, the egress script, the pinned image digest in git-data-runcmd-rehearsal.test.sh).
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      # The suite renders the template through `terraform console` (templatefile), so the wrapper
+      # must be off for byte-clean stdout and the version pinned to the one every leg uses.
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Rehearse the bastion first boot (real cloud-init, pinned ubuntu:24.04)
+        run: bash apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh
+
+      # On failure the suite keeps its work dir (renders, stub captures, each container's
+      # cloud-init-output.log and journal) after deleting every private key and the seed
+      # user-data that embeds the synthesized host key; everything left is a per-run fixture.
+      # Only `brh.*` paths are uploaded, under both TMPDIR homes the suite can use. `cancelled()`
+      # too: a timeout-minutes kill cancels the job, and that run has the least log context.
+      - name: Upload kept rehearsal work dir
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bastion-boot-rehearsal-workdir
+          path: |
+            ${{ runner.temp }}/brh.*
+            /var/tmp/brh.*
+          if-no-files-found: ignore
+          retention-days: 14
 
   # Registry user_data byte budget (#7282). Its OWN job, deliberately, for two reasons.
   #
@@ -1894,7 +1976,7 @@ jobs:
     # used to fall through this notification entirely). A non-success aggregator
     # result — failure OR cancelled — is alertable on push: supersession cannot
     # occur on push (cancel-in-progress is pull_request-only).
-    needs: [detect-changes, validate, deploy-script-tests-done, registry-userdata-budget, inngest-userdata-budget, infra-validate-required]
+    needs: [detect-changes, validate, deploy-script-tests-done, bastion-boot-rehearsal, registry-userdata-budget, inngest-userdata-budget, infra-validate-required]
     if: |
       always() && github.event_name == 'push' &&
       needs.detect-changes.outputs.pr_duplicate != 'true' &&
@@ -1912,5 +1994,5 @@ jobs:
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[ALERT] Infra Validation failed on main'
-          body: '<p><strong>Infra Validation failed on a push to main.</strong></p><p>Commit: <code>${{ github.sha }}</code></p><p>validate=${{ needs.validate.result }} · deploy-script-tests-done=${{ needs.deploy-script-tests-done.result }} · registry-userdata-budget=${{ needs.registry-userdata-budget.result }} · inngest-userdata-budget=${{ needs.inngest-userdata-budget.result }} · infra-validate-required=${{ needs.infra-validate-required.result }}</p><p>A red infra gate on main means the merged state was never validated by a PR run of this workflow — an admin/force merge, or two individually-green PRs whose merge order produced an untested state.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          body: '<p><strong>Infra Validation failed on a push to main.</strong></p><p>Commit: <code>${{ github.sha }}</code></p><p>validate=${{ needs.validate.result }} · deploy-script-tests-done=${{ needs.deploy-script-tests-done.result }} · bastion-boot-rehearsal=${{ needs.bastion-boot-rehearsal.result }} · registry-userdata-budget=${{ needs.registry-userdata-budget.result }} · inngest-userdata-budget=${{ needs.inngest-userdata-budget.result }} · infra-validate-required=${{ needs.infra-validate-required.result }}</p><p>A red infra gate on main means the merged state was never validated by a PR run of this workflow — an admin/force merge, or two individually-green PRs whose merge order produced an untested state.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}

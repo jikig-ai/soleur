@@ -67,7 +67,7 @@ const ADOPTED_MONITOR_ID = '"4226366"';
  * row would keep passing while silently testing the other half, or nothing. `requireBoolDefault`
  * below makes that precondition fail loudly instead. Do not swap in a name without re-checking it.
  */
-const TRUE_DEFAULT_VARIABLE = "adopt_seo_config_entrypoint";
+const TRUE_DEFAULT_VARIABLE = "host_proxy_tls_enabled";
 const FALSE_DEFAULT_VARIABLE = "betterstack_paid_tier";
 
 interface Violation {

@@ -85,3 +85,48 @@ acts are in `knowledge-base/engineering/operations/runbooks/bastion-host.md`.
   `user_data` as the metadata endpoint serves it to root on the host) stays valid until a deliberate rotation, which the runbook defines.
 - **Cost.** The bastion is EUR 5.99 per month (cx23 plus its primary IPv4), not the EUR 4–5 above.
   The owner's go on the real birth accepts it; the ledger rows land in this PR.
+
+## Addendum — 2026-11-20 (#12941, first-boot rehearsal)
+
+The byte pins in `apps/web-platform/infra/bastion.test.sh` passed a template whose boot depends on the image
+shipping `systemd-timesyncd`. The public noble cloud image ships it; Hetzner's image is unverified. Step 2a
+therefore also needs a runtime rehearsal of the first boot. `apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh`
+boots the rendered `bastion-cloud-init.yml` under real cloud-init, with systemd as PID 1, in privileged
+containers on the pinned `ubuntu:24.04` image. It runs in the `bastion-boot-rehearsal` job of
+`infra-validation.yml`. The plan is `knowledge-base/project/plans/archive/20261123-002149-2026-11-20-feat-bastion-runcmd-rehearsal-plan.md`.
+
+- **The template installs every user its nftables rules name.** The `skuid` rows name `systemd-timesync`.
+  The template did not install `systemd-timesyncd`, which owns that user, so its boot depended on the image
+  shipping it. This is latent image-dependency hardening, not a live fault. The apt line now names it, and
+  the suite checks every named user exists.
+- **`IMAGE_ASSUMED` in the suite is the declared contract with the image.** A container is not Hetzner's
+  image. The suite therefore boots a minimal baseline for every row and adds one boot on a package set
+  copied from the noble cloud-image manifest. The minimal boot proves the template installs what it needs;
+  the cloud-faithful boot proves the template survives the cloud image's copies of the 10 packages it
+  touches (`CLOUD_IMAGE_PKGS`), not the rest of the manifest. The suite header lists where the
+  container differs from the real host.
+- **A failed egress load reports its real reason.** This was a reporting defect, not a boot failure. The
+  fatal's `detail` tag now carries the failing lines from both units' journals, or
+  `why=no_reason_line` with both units' `Result` values, and no longer systemd boilerplate.
+- **The job is advisory on pull requests.** It is not a required check, so a red run can merge. #12942 will
+  gate the birth by running the rehearsal inside the birth run and requiring success. Until it lands, the
+  runbook's dispatched check is the only gate (`bastion-host.md`, "Pre-birth boot evidence"). Neither reads
+  an existing check-run: push runs are paths-filtered and duplicate-skipped, so the birth SHA usually has none.
+- **The local runner never executes the suite.** `run-registered-suites.sh` lists it in `DEDICATED_JOB_WHY`
+  and treats it like a privileged suite: derived, never executed, sharded or unsharded. Locally, run it
+  directly with `bash apps/web-platform/infra/bastion-runcmd-rehearsal.test.sh`.
+- **Alternative rejected for now: boot the real Ubuntu cloud image under QEMU/KVM with a NoCloud seed.**
+  It would still not be Hetzner's image, costs about 600 MB per run, and `/dev/kvm` is unverified on the
+  runner class. It reopens on a fault the container provably cannot reproduce, or once `/dev/kvm` is
+  confirmed on `ubuntu-24.04` runners with a cached image.
+- **Review round, 2026-11-20 (CTO Q27-Q29).** Appended; the bullets above stand as written.
+  - *Q27:* both fixture images mask `getty@.service`, `console-getty.service` and `getty.target`. Under
+    `--privileged` an unmasked getty would own the developer host's tty1. The suite refuses an image
+    without the masks (`BRH_GETTY_UNMASKED`) before any boot.
+  - *Q28:* a SKIP verdict exits 0 only on `pull_request` and `push`. On any other event, or none under
+    CI, it fails (`BRH_SKIP_ON_GATE_EVENT`), so a dispatched birth-gate run reds on a skipped row. The
+    runbook's pre-birth check also requires exactly one `bastion-runcmd-rehearsal: PASS (` line.
+  - *Q29:* with no reason line, the fatal's `detail` is `why=no_reason_line nft=<Result> egress=<Result>
+    st=<ExecMainStatus> last=<the unit's last output line>`, at most 180 bytes. Every journal and
+    systemctl read in `_egress_why` is bounded by `timeout 10`, so a stalled journald cannot stop the
+    fatal. The bastion ships no journal, so this tag is the only remote signal.

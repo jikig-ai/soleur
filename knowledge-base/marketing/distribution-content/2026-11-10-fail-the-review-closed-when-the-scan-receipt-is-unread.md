@@ -3,7 +3,7 @@ title: "A review can no longer pass a change as clean when the security scan nev
 type: feature-launch
 publish_date: 2026-11-26
 channels: x, bluesky
-status: scheduled
+status: published
 pr_reference: "#12566"
 issue_reference: "#12530"
 ---

@@ -501,6 +501,14 @@ describe("Guard 1 — likec4 child launch, mount, env and namespace closure", ()
     expect(spawnMock).not.toHaveBeenCalled();
     expect(mod.installPrefixBinds("/x/node", "/usr/local/lib/node_modules/likec4/bin/likec4.mjs")).toBeNull();
     expect(mod.installPrefixBinds("/opt/n/bin/node", "/opt/n/lib/node_modules/likec4/bin/likec4.mjs")).toEqual(["/opt/n"]);
+    // #12874: a prefix under /usr is already covered by the argv's `--ro-bind
+    // /usr /usr` and must not hit the shallow-prefix refusal — a distro node at
+    // /usr/bin/node resolves to the 1-component prefix /usr.
+    expect(mod.installPrefixBinds("/usr/bin/node", "/usr/local/lib/node_modules/likec4/bin/likec4.mjs")).toEqual([]);
+    expect(mod.installPrefixBinds("/opt/n/bin/node", "/x/likec4")).toBeNull();
+    // The skip must not swallow a needed bind: a /usr-resident node with the
+    // entry outside /usr still binds that entry's prefix.
+    expect(mod.installPrefixBinds("/usr/bin/node", "/opt/l/lib/node_modules/likec4/bin/likec4.mjs")).toEqual(["/opt/l/lib/node_modules/likec4"]);
   });
 
   it("binaries are resolved lazily and only a successful resolution is memoized", async () => {

@@ -359,70 +359,36 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
     }
   });
 
-  // Without a REACHABLE import block Terraform CREATES this resource, and
-  // creating a zone entrypoint that already exists replaces its whole rule list.
-  //
-  // Every assertion here is mutation-motivated: an earlier version checked only
-  // that an `import {` block existed mentioning the resource, plus that the
-  // ruleset ID appeared somewhere in the file. Three independent reviewers
-  // showed that version stayed 10/10 green while the import was disabled
-  // (`for_each = toset([])`), inverted, stripped of its `provider`, or switched
-  // to the v5 `zones/` prefix — i.e. it pinned the block's EXISTENCE and never
-  // its EFFECT.
-  test("the import block is present, reachable, and correctly addressed", () => {
-    const body = importBlockBody();
-    expect(body, "no import block found in seo-config-rules.tf").toBeTruthy();
-
-    // Addressed at this resource.
-    expect(body).toMatch(
-      new RegExp(`to\\s*=\\s*${escapeRegExp(RESOURCE_ADDRESS)}`),
-    );
-
-    // REACHABLE: the gate must actually consume the variable, and the truthy
-    // branch must be the non-empty set. `for_each = toset([])` is the mutation
-    // that silently restores the create-instead-of-import path.
-    expect(
-      body,
-      "for_each must consume var.adopt_seo_config_entrypoint",
-    ).toMatch(/for_each\s*=\s*var\.adopt_seo_config_entrypoint\s*\?/);
-    expect(
-      body,
-      'the truthy branch must be the NON-empty set (toset(["adopt"]))',
-    ).toMatch(
-      /var\.adopt_seo_config_entrypoint\s*\?\s*toset\(\[\s*"adopt"\s*\]\)\s*:\s*toset\(\[\s*\]\)/,
-    );
-
-    // Explicit provider. Not required — an import block inherits its target
-    // resource's provider (measured: with this line removed and the default
-    // provider's token replaced by garbage, the plan still reported `1 to
-    // import`) — but pinned so it cannot be dropped silently.
-    expect(body).toMatch(/provider\s*=\s*cloudflare\.rulesets/);
-
-    // SINGULAR `zone/`. The v5/plural `zones/` form is what the provider's
-    // published docs show, and on v4 it silently routes to the ACCOUNT path and
-    // reports `Authentication error (10000)` — an error that names
-    // authentication and sends you re-probing a credential that is fine.
-    expect(body, "import ID must use the v4 singular `zone/` prefix").toMatch(
-      new RegExp(
-        `id\\s*=\\s*"zone/\\$\\{var\\.cf_zone_id\\}/${ADOPTED_RULESET_ID}"`,
-      ),
-    );
+  // #12931 (ADR-329): the entrypoint this resource used to ADOPT (a21ac79d…) lives in the OLD
+  // zone, which moved to the Soleur account on 2026-11-18. An import of it now reads an id that
+  // the new zone does not have, so the block is gone: Terraform CREATES the entrypoint in the new
+  // zone in the cf-account-migrate `redirects-dns` phase. These are tombstones — each fails if
+  // the old-zone adoption comes back in any form.
+  test("no import block remains in seo-config-rules.tf (the adopted entrypoint was old-zone)", () => {
+    expect(importBlockBody(), "an import block reappeared in seo-config-rules.tf").toBeNull();
   });
 
-  // The gate exists so the credential-free `terraform test` leg can opt out —
-  // `mock_provider` does NOT mock import blocks, so Terraform issues a real API
-  // read even under test. That escape hatch is only safe while the default is
-  // true. Declared in variables.tf, not here (50 of 51 root vars live there).
-  test("entrypoint adoption defaults to true", () => {
+  test("the old-zone entrypoint id appears in no live HCL under apps/web-platform/infra/", () => {
+    const hits = infraTerraformFiles().filter((f) =>
+      stripHclComments(readFileSync(f, "utf-8")).includes(ADOPTED_RULESET_ID),
+    );
+    expect(hits, "the old-zone ruleset id is referenced outside comments").toEqual([]);
+  });
+
+  test("the adopt_seo_config_entrypoint gate is not declared", () => {
     const vars = stripHclComments(readFileSync(VARIABLES_PATH, "utf-8"));
-    const block = vars.match(
-      /variable\s+"adopt_seo_config_entrypoint"\s*\{[^}]*\}/,
-    )?.[0];
-    expect(
-      block,
-      "adopt_seo_config_entrypoint must be declared in variables.tf",
-    ).toBeTruthy();
-    expect(block).toMatch(/default\s*=\s*true/);
+    expect(vars).not.toMatch(/variable\s+"adopt_seo_config_entrypoint"/);
+  });
+
+  // The create is gated by the phase gate's allow-set; pin that the address is there as a
+  // create, so a later edit cannot quietly drop it from the redirects-dns phase.
+  test("the ruleset is a create in the cf-account-migrate redirects-dns allow-set", () => {
+    const gate = readFileSync(
+      path.join(REPO_ROOT, "tests/scripts/lib/cf-account-migrate-gate.sh"),
+      "utf-8",
+    );
+    const redirects = gate.slice(gate.indexOf("    redirects-dns)"), gate.indexOf("    zone-rest)"));
+    expect(redirects).toContain(`"${RESOURCE_ADDRESS}": "create"`);
   });
 
   // Secondary assertions: strictly weaker than the exact-equality test above,

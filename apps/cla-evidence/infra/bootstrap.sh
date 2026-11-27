@@ -121,7 +121,10 @@ step "[1/${TOTAL_STEPS}] terraform apply (R2 bucket + CF Lock Rules + 2 scoped t
 
 # Pull supporting values from prd_terraform (existing config — no admin scope
 # needed for these specific values).
-CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID -p soleur -c prd_terraform --plain)
+# CF_R2_ACCOUNT_ID, not CF_ACCOUNT_ID: since #12931 (ADR-329) the zone-scoped resources live on the
+# Soleur account while every R2 bucket, this one included, stays on the legacy account.
+# CF_ACCOUNT_ID now names the Soleur account and would point every R2 call here at the wrong one.
+CF_ACCOUNT_ID=$(doppler secrets get CF_R2_ACCOUNT_ID -p soleur -c prd_terraform --plain)
 # State-backend creds: the soleur-terraform-state R2 bucket's READ/WRITE pair
 # lives in Tier B (soleur-infra-privileged/prd) as TF_STATE_AWS_* — the
 # prd_terraform AWS_* pair is read-only since O5b (#8209/ADR-241) and 403s the
