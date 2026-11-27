@@ -305,6 +305,10 @@ must not undo:
   re-running a stage the resume mechanism. This is a rule for the author, not a feature of the library.
 - **A stage failed (`STAGE_FAILED`, exit 1).** Run the `verify` or a read stage to see what changed.
   Never re-apply blindly: the failure sentence says whether production may already have changed.
+- **A runbook routes on the script's marker lines.** That routing table is a state machine no suite runs. List
+  every reachable state (each partial failure, each post-rollback state) and the row it matches; a state with no row
+  or two contradicting rows is a defect, and each fix round that adds a state re-walks the table. See
+  `knowledge-base/project/learnings/2026-11-27-a-runbook-routing-table-is-a-state-machine-the-code-never-sees.md`.
 
 An interruption leaves a state byte-identical to a crash, and the ledger's completed-set-versus-declared
 comparison detects both. What every non-zero exit *inside a stage* gets is the template's single `EXIT`
