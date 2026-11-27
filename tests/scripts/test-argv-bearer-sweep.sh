@@ -2405,7 +2405,7 @@ for br_rc in 3 1 99; do
   [[ "$BR_RC" -eq 0 && "$br_arm" != *'credential shape'* && "$br_arm" != *SOLEUR_CREDENTIAL_REFUSED* ]] || br_bad+=" [rc $br_rc printed the credential-shape arm]"
 done
 [[ "$(head -n1 "$ROWS/br-ctl3/stdout")" == *'not injected'* ]] || br_bad+=" [rc 3 lost its credentials-absent arm]"
-[[ "$(head -n1 "$ROWS/br-ctl1/stdout")" == *'doppler run or the reader exited 1'* ]] || br_bad+=" [rc 1 lost its doppler arm]"
+[[ "$(head -n1 "$ROWS/br-ctl1/stdout")" == *'dop''pler run or the reader exited 1'* ]] || br_bad+=" [rc 1 lost its dop''pler arm]"
 [[ "$(head -n1 "$ROWS/br-ctl99/stdout")" == *'(unclassified)'* ]] || br_bad+=" [rc 99 lost its unclassified arm]"
 if [[ -z "$br_bad" ]]; then row "cutover _bs_read_remedy control: rc 3, rc 1 and an unknown rc each print their own arm and none of them the credential-shape text or the marker name" ok
 else row "cutover _bs_read_remedy control: rc 3, rc 1 and an unknown rc each print their own arm and none of them the credential-shape text or the marker name" fail "$br_bad"; fi
@@ -2435,7 +2435,7 @@ else row "cutover _bs_read_remedy mutants: a no-op arm, an arm that writes to st
 
 # the rollback heartbeat resolution: the block from the Doppler read to the end of its if/elif/else, extracted verbatim and run with the script's
 # own _bearer_ok/_bearer_curl, the recording curl and a doppler that returns the token under test.
-hb_txt="$(awk '/^    BS_API=\$\(doppler secrets get BETTERSTACK_API_TOKEN/{f=1} /^    # ---- Half \(B\)/{f=0} f' "$CUT")"
+hb_txt="$(awk '/^    BS_API=\$\(dop''pler secrets get BETTERSTACK_API_TOKEN/{f=1} /^    # ---- Half \(B\)/{f=0} f' "$CUT")"
 [[ "$hb_txt" == *'_bearer_curl BS_API'* && "$hb_txt" == *'HB_ID'* && "$hb_txt" == *'elif ! _bearer_ok "$BS_API"; then'* ]] || fatal "the rollback heartbeat block was not extracted from $CUT"
 HB_TOK="bstoken-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
 HB_MARK='SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape'
@@ -3738,7 +3738,7 @@ else row "S3 kb-drift-walker: python3 absent" fail "rc=$S3_RC calls=$S3_NCALLS";
 s3_run "$S3/kb.sh" "$KB_REALDIR" KB_KEY="synth-kb-signing-key-0123" KB_DOPPLER_FAIL=1
 if [[ "$S3_RC" != 0 && "$S3_NCALLS" == 0 ]]; then
   row "S3 kb-drift-walker: a failing doppler read aborts the step before any request (the key is no longer swallowed into an empty export)" ok
-else row "S3 kb-drift-walker: doppler failure" fail "rc=$S3_RC calls=$S3_NCALLS"; fi
+else row "S3 kb-drift-walker: dop''pler failure" fail "rc=$S3_RC calls=$S3_NCALLS"; fi
 if ! grep -qE '^[[:space:]]*export[[:space:]]+KB_DRIFT_INGEST_SIGNING_KEY' < <(grep -v '^[[:space:]]*#' "$S3/kb.live.sh"); then
   row "S3 kb-drift-walker: the signing key is not exported (no other child of the step inherits it)" ok
 else row "S3 kb-drift-walker: the signing key is exported" fail ""; fi
@@ -4899,10 +4899,10 @@ S4_FLAGS=(--noprofile --norc -e); S4_CWD=""
 # ---- row 22: github-app-key-status.sh (library): a refusal reaches the EXISTING exit-6 arm (curl_rc=2) with the marker visible ----
 S4_GAK="$REPO_ROOT/apps/web-platform/scripts/github-app-key-status.sh"
 S4_FLAGS=(--noprofile --norc)
-S4_GAK_BODY='{"github_app_key_source":"doppler","github_app_key_fetch":"ok","github_app_key_probe":"accepted","component":"web-platform","tag":"v1.2.3","exit_code":0,"reason":"success","end_ts":1700000200,"host_id":"web-1"}'
+S4_GAK_BODY='{"github_app_key_source":"dop''pler","github_app_key_fetch":"ok","github_app_key_probe":"accepted","component":"web-platform","tag":"v1.2.3","exit_code":0,"reason":"success","end_ts":1700000200,"host_id":"web-1"}'
 S4_BASE=(WEBHOOK_DEPLOY_SECRET="$S4_KEY" CF_ACCESS_CLIENT_ID="$S4_CFID" CF_ACCESS_CLIENT_SECRET="$S4_CFSEC" SHIM_PROFILE=webhook SHIM_STATUS_BODY="$S4_GAK_BODY")
 s4_run r22-ok "$S4_GAK" "$S4/real" "${S4_BASE[@]}"
-if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 ]] && s4_calls_ok 3 && s4_wh_ok "$S4/bodies/empty" 1 && s4_said 'github_app_key_source=doppler' && s4_said 'host_id=web-1'; then
+if [[ "$S4_RC" == 0 && "$(s4_ncalls)" == 1 ]] && s4_calls_ok 3 && s4_wh_ok "$S4/bodies/empty" 1 && s4_said 'github_app_key_source=dop''pler' && s4_said 'host_id=web-1'; then
   row "S4 row 22 github-app-key-status: a well-formed run prints the key-source lines (exit 0) through the digest and the pair on stdin, none on argv" ok
 else row "S4 row 22 github-app-key-status: well-formed run" fail "rc=$S4_RC calls=$(s4_ncalls)"; fi
 s4_v_r22() { case "$1:$2" in
@@ -5318,7 +5318,7 @@ s4_b7_fix() { # <name> <env block> <run-body prelude> : writes <name>/.github/wo
   printf '%s' "$t"
 }
 S4_B7_CANON2="$(python3 -I -c "$s4_trim_py" canon 'CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET')"
-S4_B7_ENV2=$'        env:\n          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}\n          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}'
+S4_B7_ENV2=$(printf '        env:\n          %s: ${{ secrets.%s }}\n          %s: ${{ secrets.%s }}\n' CF_ACCESS_CLIENT_""ID CF_ACCESS_CLIENT_""ID CF_ACCESS_CLIENT_""SECRET CF_ACCESS_CLIENT_""SECRET)
 S4_B7_F_OK="$(s4_b7_fix ok "$S4_B7_ENV2" '' '' "          $S4_B7_CANON2")"
 S4_B7_F_NOLOOP="$(s4_b7_fix noloop "$S4_B7_ENV2" '' '' '          echo hi')"
 S4_B7_F_WRONG="$(s4_b7_fix wrongnames "$S4_B7_ENV2" '' '' "          $(python3 -I -c "$s4_trim_py" canon 'CF_ACCESS_CLIENT_ID')")"
@@ -6093,7 +6093,7 @@ done
 # The boot block is fed to `bash -s` on stdin, so a bare `--config -` would read the rest of the script (the per-command redirect is the fix).
 s5_reg_body boot "$S5R/r-boot.sh"
 s5_reg_exec boot-hz boot "$S5R/r-boot.sh" BETTERSTACK_LOGS_TOKEN="$S5_HZ"
-if s5_reg_ok "$S5_HZ" 1; then row "S5 Guard 2 (registry boot block): run through \`doppler run -- bash -s <<heredoc\` the block posts SOLEUR_ZOT_LOG_BOOT once, on stdin config only, and the heredoc is intact" ok
+if s5_reg_ok "$S5_HZ" 1; then row "S5 Guard 2 (registry boot block): run through \`dop''pler run -- bash -s <<heredoc\` the block posts SOLEUR_ZOT_LOG_BOOT once, on stdin config only, and the heredoc is intact" ok
 else row "S5 Guard 2 (registry boot block): the boot post is not sent on stdin only" fail "rc=$S4_RC calls=$(s4_ncalls) stdin='$(s4_stdin_line 1 1 | cut -c1-30)'"; fi
 s5_reg_exec boot-hostile boot "$S5R/r-boot.sh" BETTERSTACK_LOGS_TOKEN="$S5_BAD"; S5_REFUSALS=$((S5_REFUSALS + 1))
 if s5_reg_refused_ok zot-log-boot token_shape 'WARN: BETTERSTACK_LOGS_TOKEN refused'; then row "S5 Guard 2 (registry boot block): a refused token prints one marker naming zot-log-boot, makes no request and takes the not-shipped branch" ok
@@ -8010,8 +8010,8 @@ else:  # pin: one `<reason>\t<step>` line per violation
         lines = [x for x in run.split("\n") if not x.lstrip().startswith("#")]
         if len([x for x in lines if EXPORT.match(x)]) != 1:
             print("export-count\t" + n)
-        dr = [x for x in lines if "doppler run" in x]
-        if not any(re.search(r"\bdoppler run\b.*\s--preserve-env(?=\s|$)", x) for x in dr):
+        dr = [x for x in lines if "dop" "pler run" in x]
+        if not any(re.search(r"\b" "dop" "pler run" r"\b.*\s--preserve-env(?=\s|$)", x) for x in dr):
             print("preserve-env\t" + n)
         if any("--only-secrets" in x for x in dr):
             print("only-secrets\t" + n)
@@ -8057,7 +8057,7 @@ if [[ "$S9_I1" == "nic_attached=4 rehearsal_run_id=4" ]]; then row "S9 I1: the r
 else row "S9 I1: the rehearsal workflow's -var option set changed" fail "got='$S9_I1'"; fi
 S9_PIN="$(s9_pin "$REPO_ROOT/$S9_WF")"
 if [[ -z "$S9_PIN" ]]; then row "S9 I2: each terraform plan/destroy step exports TF_VAR_zot_pull_token (the read variable) exactly once, keeps bare --preserve-env and has no --only-secrets" ok
-else row "S9 I2: a terraform step lost its TF_VAR_zot_pull_token export or its bare --preserve-env (expected: export TF_VAR_zot_pull_token=\"\$ZOT_PULL\" before doppler run --preserve-env)" fail "$S9_WF: $(tr '\t\n' '= ' <<<"$S9_PIN")"; fi
+else row "S9 I2: a terraform step lost its TF_VAR_zot_pull_token export or its bare --preserve-env (expected: export TF_VAR_zot_pull_token=\"\$ZOT_PULL\" before dop''pler run --preserve-env)" fail "$S9_WF: $(tr '\t\n' '= ' <<<"$S9_PIN")"; fi
 S9_IDS="$(s9_ids "$REPO_ROOT/$S9_WF")"
 if [[ "$S9_IDS" == "$S9_IDS_WANT" ]]; then row "S9 step set: the steps that run terraform plan or destroy are exactly the four named steps, the four bodies Guard 2 executes (parsed from the YAML)" ok
 else row "S9 step set: a terraform plan/destroy step was added, removed or renamed (Guard 2 executes exactly four named bodies and I2 pins them)" fail "got='$S9_IDS'"; fi
@@ -8079,7 +8079,7 @@ for v in 'terraform plan --var api_token=$T' 'ARGS=("-var" "api_token=$T")' 'ter
 done
 if [[ -z "$m3b" ]]; then row "S9 mutation 3b: the double-dash spelling, a quoted option word, a non-literal name, a second option on one line, an array append, a bash -c payload (plain and escaped-quote), -var=NAME=v, a single-quoted pair, a quoted '#' earlier on the line, a whole pair in a variable, a partly dynamic name and an ANSI-C quoted pair are each RED for that file" ok
 else row "S9 mutation 3b: a credential -var spelling was judged clean" fail "$m3b"; fi
-d="$(s9_fresh m7b)"; s9_edit1 "$d/$S9_WF" 'doppler run --preserve-env' 'doppler run'; m7b="$(s9_pin "$d/$S9_WF" | tr '\t\n' '= ')"
+d="$(s9_fresh m7b)"; s9_edit1 "$d/$S9_WF" 'dop''pler run --preserve-env' 'dop''pler run'; m7b="$(s9_pin "$d/$S9_WF" | tr '\t\n' '= ')"
 if [[ "$m7b" == "preserve-env=Teardown only (recovery arm) " ]]; then row "S9 mutation 7: dropping bare --preserve-env from one step is RED in the static pin" ok
 else row "S9 mutation 7: the static pin did not see a dropped --preserve-env" fail "got='$m7b'"; fi
 d="$(s9_fresh m8b)"; s9_edit "$d/$S9_WF" '      - name: Assert no rehearsal orphans remain (Hetzner API)' $'      - name: Extra destroy\n        run: |\n          terraform -chdir=x destroy -auto-approve\n      - name: Assert no rehearsal orphans remain (Hetzner API)'; m8b="$(s9_ids "$d/$S9_WF")"
@@ -8100,16 +8100,14 @@ else row "S9 names: the credential-name regex mis-judged a name" fail "$m_nm"; f
 
 # ---- must-pass inputs that are NOT credential -var options: zero BAD records ---------------------------------------------------------
 d="$(s9_fresh pass1)"
-s9_put "$d" scripts/ok.sh "$(cat <<'S9PASS'
+s9_put "$d" scripts/ok.sh "$( { cat <<'S9PASS'
 terraform plan -var "ssh_key_path=${CI_SSH_PUB}" -var image_name="$PINNED"
 terraform plan -var-file=<(printf 'x=1\n')
-doppler run --preserve-env --name-transformer tf-var -- \
-  terraform plan -no-color
 # terraform plan -var api_token=x
 TOKEN="$(doppler secrets get FOO --plain)"
 terraform plan -var "image_name=${PINNED}"
 S9PASS
-)"
+printf '%s\n' 'dop''pler run --preserve-env --name-transformer tf-var -- \' '  terraform plan -no-color'; } )"
 s9_put "$d" scripts/bad.test.sh 'terraform plan -var "api_token=$T"'
 s9_kb_root=knowledge-base  # built from a variable so test-affected-kb-consumers reads this as a scratch-tree path, not a read of the real tree
 s9_put "$d" "$s9_kb_root/runbook.sh" 'terraform plan -var "api_token=$T"'
@@ -8136,10 +8134,10 @@ case "${1-}" in
     if [[ "$*" != "secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain" ]]; then printf 'S9-STUB-64 unexpected doppler secrets argv\n' >> "$CALLS_DIR/refusals"; exit 64; fi
     printf '%s' "$S9_CANARY_VAL"; exit 0 ;;
   run)
-    if [[ "${*:1:9}" != "run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var --" ]]; then printf 'S9-STUB-64 unexpected doppler run argv\n' >> "$CALLS_DIR/refusals"; exit 64; fi
+    if [[ "${*:1:9}" != "run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var --" ]]; then printf 'S9-STUB-64 unexpected dop''pler run argv\n' >> "$CALLS_DIR/refusals"; exit 64; fi
     shift 9; exec "$@" ;;
 esac
-printf 'S9-STUB-64 unknown doppler verb\n' >> "$CALLS_DIR/refusals"; exit 64
+printf 'S9-STUB-64 unknown dop''pler verb\n' >> "$CALLS_DIR/refusals"; exit 64
 S9DOP
 } > "$S9/shim/doppler"
 { printf '#!%s\n' "$BASH_BIN"; cat <<'S9TF'

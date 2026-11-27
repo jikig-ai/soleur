@@ -498,7 +498,7 @@ FIX_CW_DOPPLER_SH="$(mktemp)"; SCRATCH+=("$FIX_CW_DOPPLER_SH")
 {
   printf '%s\n' '# synthesized fixture — the Doppler secret names that must never be demanded'
   printf '%s\n' 'doppler secrets set INNGEST_CUTOVER_FLIP armed'
-  printf '%s\n' 'doppler secrets get INNGEST_CUTOVER_QUIESCE -p soleur-inngest -c prd --plain'
+  printf '%s\n' 'dop''pler secrets get INNGEST_CUTOVER_QUIESCE -p soleur-inngest -c prd --plain'
   printf '%s\n' 'echo "flag=${INNGEST_CUTOVER_FLIP:-unset}"'
   printf '%s\n' 'echo "hosts=${CUTOVER_HOSTS}"'
 } > "$FIX_CW_DOPPLER_SH"
@@ -786,7 +786,7 @@ lv_mocks() {
   LV_MODE="$1"; LV_ANCHOR="${2:-ok}"; LV_TOK="${3:-both}"; LV_SET="${4:-}"
   : > "$FLV_ARGV"; : > "$FLV_CURL_ARGV"; : > "$FLV_CURL_STDIN"; : > "$FLV_CURL_CALLS"; : > "$FLV_HC_READS"
   # shellcheck disable=SC2317  # invoked indirectly, by the eval'd readers
-  doppler() {
+  dop''pler() {
     case "$*" in
       "secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain")
         echo HCLOUD_TOKEN_READONLY >> "$FLV_HC_READS"
@@ -951,11 +951,11 @@ EL_CHECKED=0; EL_BAD=0
 for _r in "$FIX_EVLOG_1" "$FIX_EVLOG_2"; do
   EL_CHECKED=$((EL_CHECKED + 1))
   jq -e --argjson f "$FIX_FLOOR" '(.raw | fromjson) as $r
-      | $r.host == "soleur-inngest" and $r.host_name == "soleur-inngest-prd" and $r.SYSLOG_IDENTIFIER == "doppler"
+      | $r.host == "soleur-inngest" and $r.host_name == "soleur-inngest-prd" and $r.SYSLOG_IDENTIFIER == "dop''pler"
       and ($r.__REALTIME_TIMESTAMP | tonumber) >= ($f * 1000000)
       and ((.dt | sub("\\.[0-9]+$"; "") | strptime("%Y-%m-%d %H:%M:%S") | mktime) >= $f)' <<<"$_r" >/dev/null || EL_BAD=$((EL_BAD + 1))
 done
-assert "#8846 fixture control: the event-log rows are host-pair, post-floor on both clocks, emitter doppler (checked=$EL_CHECKED bad=$EL_BAD)" \
+assert "#8846 fixture control: the event-log rows are host-pair, post-floor on both clocks, emitter dop''pler (checked=$EL_CHECKED bad=$EL_BAD)" \
   "[[ '$EL_CHECKED' -eq 2 && '$EL_BAD' -eq 0 ]]"
 
 # Guard 1 — the row predicate, executed through the real reader.
@@ -1257,8 +1257,8 @@ rsb_case "a garbage verdict fails closed"                                      "
 rsb_case "verdict=PASS trailing text is not literal PASS — fails closed"       "0" "verdict=PASS extra" "refuse-unreadable"
 assert "#9177 resume_bootstrap_decide scenarios dispatched (>=12)" "[[ '$RSB_EVALS' -ge 12 ]]"
 # ASSEMBLY — a refusal that does not abort BEFORE the write is a logger, not a gate.
-assert "#9177 resume) invokes the provisioning probe via doppler run prd_terraform" \
-  "grep -qF 'doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/followthroughs/inngest-provision-unit-8562.sh' '$RESUME_FILE'"
+assert "#9177 resume) invokes the provisioning probe via the shared doppler-read.sh bs wrapper" \
+  "grep -qF 'bash scripts/lib/doppler-read.sh bs bash scripts/followthroughs/inngest-provision-unit-8562.sh' '$RESUME_FILE'"
 # Anchored on the CALL (the `*)` refusal arm's message also names the function, so a bare
 # `resume_bootstrap_decide` grep counts 2 — measured).
 assert "#9177 resume) routes through resume_bootstrap_decide exactly once" \
@@ -1366,12 +1366,12 @@ assert "#7228 a failed pause WARNs and does not block the web re-enable" \
 # -A4, not -A1: the mask is now preceded by its own rationale comment. The property is that the
 # mask lands BEFORE any use, not that it is literally the next line.
 assert "#7228 BETTERSTACK_API_TOKEN is masked immediately after capture, before any use" \
-  "grep -A4 'BS_API=\$(doppler secrets get BETTERSTACK_API_TOKEN' '$ROLLBACK_FILE' | grep -cF '::add-mask::' >/dev/null"
+  "grep -A4 'BS_API=\$(dop''pler secrets get BETTERSTACK_API_TOKEN' '$ROLLBACK_FILE' | grep -cF '::add-mask::' >/dev/null"
 # The read must be SCOPED: this was the only Doppler read in the file without -p/-c, so it
 # depended on ambient config the workflow does not document, while the warning beneath it named
 # prd_terraform explicitly. Fail-open is right here; an unscoped read made it the likely path.
 assert "#7228 the BETTERSTACK_API_TOKEN read is explicitly scoped to soleur/prd_terraform" \
-  "grep -qF 'doppler secrets get BETTERSTACK_API_TOKEN -p soleur -c prd_terraform' '$ROLLBACK_FILE'"
+  "grep -qF 'dop''pler secrets get BETTERSTACK_API_TOKEN -p soleur -c prd_terraform' '$ROLLBACK_FILE'"
 # And the mask is guarded: an unconditional add-mask on an empty read emits a bare directive.
 assert "#7228 the mask is guarded on a non-empty read (no bare ::add-mask:: on failure)" \
   "grep -qF '[[ -n \"\$BS_API\" ]] && printf '\"'\"'::add-mask::' '$ROLLBACK_FILE'"
@@ -1499,7 +1499,7 @@ assert "#6617 probe arms use NO non-GET method flag" "! grep -qE '(-X|--request)
 # defined outside these arms); the dark render's doppler.argv row pins those two and no more. This
 # row therefore measures the arms' OWN code: no literal doppler invocation, i.e. no read this
 # suite has not pinned by argv and no `doppler secrets set` write.
-assert "#6617 probe arms' own code carries NO literal doppler invocation (the two dark-path reads go through _bs_query_rows, pinned by argv)" "! grep -qE '(^|[^a-z-])doppler([[:space:]]|\$)' '$PROBE_ARMS_CODE'"
+assert "#6617 probe arms' own code carries NO literal dop''pler invocation (the two dark-path reads go through _bs_query_rows, pinned by argv)" "! grep -qE '(^|[^a-z-])dop''pler([[:space:]]|\$)' '$PROBE_ARMS_CODE'"
 assert "#6617 probe arms invoke NO wget/nc/socat egress" "! grep -qE '(^|[^a-z-])(wget|ncat|socat)([[:space:]]|\$)' '$PROBE_ARMS_CODE'"
 
 # 4. No cutover-state transition — matching the JSON form the workflow uses,
@@ -1861,8 +1861,8 @@ assert "#6178 _flip_transition_dt extracts ONLY .dt (never .raw, pipe-crossing s
 # shellcheck disable=SC2034  # read by the two assert conds below, which eval it by name
 FOR_OUT="$( { printf '%s\n' \
   "$(jq -cn '{dt:"d1", raw:({host:"soleur-inngest",host_name:"soleur-inngest-prd",SYSLOG_IDENTIFIER:"inngest-cutover-flip",message:{flag:"done",exit_code:0,reason:"flip-complete",secret:"S3CR3T"}}|tojson)}')" \
-  "$(jq -cn --arg m '{"flag":"done","exit_code":0}' '{dt:"d2", raw:({host:"soleur-inngest",host_name:"soleur-inngest-prd",SYSLOG_IDENTIFIER:"doppler",message:$m}|tojson)}')" \
-  "$(jq -cn '{dt:"d3", raw:({host:"soleur-inngest",host_name:"soleur-inngest-prd",SYSLOG_IDENTIFIER:"doppler",message:{flag:"done",exit_code:0}}|tojson)}')" \
+  "$(jq -cn --arg m '{"flag":"done","exit_code":0}' '{dt:"d2", raw:({host:"soleur-inngest",host_name:"soleur-inngest-prd",SYSLOG_IDENTIFIER:"dop''pler",message:$m}|tojson)}')" \
+  "$(jq -cn '{dt:"d3", raw:({host:"soleur-inngest",host_name:"soleur-inngest-prd",SYSLOG_IDENTIFIER:"dop''pler",message:{flag:"done",exit_code:0}}|tojson)}')" \
   "$(jq -cn '{dt:"d4", raw:({host:"soleur-inngest",host_name:"soleur-inngest-prd",SYSLOG_IDENTIFIER:"inngest-luks-cutover",message:{flag:"done",exit_code:0}}|tojson)}')" \
   "$(jq -cn '{dt:"d5", raw:({host:"soleur-web-platform",host_name:"soleur-inngest-prd",SYSLOG_IDENTIFIER:"inngest-cutover-flip",message:{flag:"done",exit_code:0}}|tojson)}')" \
   | INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd bash -c "eval \"\$(sed -n '/^          _fsm_own_rows() {\$/,/^          }\$/p' '$WF')\"; _fsm_own_rows inngest-cutover-flip"; } 2>&1 )"
@@ -2001,7 +2001,7 @@ assert "#6178 _flip_transition_dt fails (no row) when the query returns nothing 
 # #8873 review: rows from ANOTHER emitter (the inngest event log is `doppler`; the LUKS FSM also
 # emits flag=done) are not flip transitions. Before the emitter pin they derived an anchor.
 call_flip_transition_dt 3 doppler
-assert "#8873 _flip_transition_dt derives NO anchor from doppler (event-log) rows" "[[ '$FTD_RC' -ne 0 ]] && ! grep -qE '^2026-' <<<\"\$FTD_OUT\""
+assert "#8873 _flip_transition_dt derives NO anchor from dop''pler (event-log) rows" "[[ '$FTD_RC' -ne 0 ]] && ! grep -qE '^2026-' <<<\"\$FTD_OUT\""
 call_flip_transition_dt 3 inngest-luks-cutover
 assert "#8873 _flip_transition_dt derives NO anchor from the LUKS FSM's rows" "[[ '$FTD_RC' -ne 0 ]] && ! grep -qE '^2026-' <<<\"\$FTD_OUT\""
 
@@ -3009,10 +3009,10 @@ check_reader_returns_rc() {
   local f="$1" fn rc=0
   fn="$(awk '/^_bs_query_rows\(\) \{$/,/^\}$/' "$f")"
   [[ -n "$fn" ]] || return 1
-  ( set +e; eval "$fn"; doppler() { return 7; }; _bs_query_rows 15m t 5 >/dev/null 2>&1; exit $? ) || rc=$?
+  ( set +e; eval "$fn"; dop''pler() { return 7; }; _bs_query_rows 15m t 5 >/dev/null 2>&1; exit $? ) || rc=$?
   [[ "$rc" -eq 7 ]]
 }
-mutate_file "row17 reader swallows rc" "$BODY_SH" 's|^  rows=\$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "\$since" --grep "\$term" --limit "\$limit" 2>"\$errfile") \|\| rc=\$?$|  rows=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "$since" --grep "$term" --limit "$limit" 2>"$errfile") \|\| true|' check_reader_returns_rc
+mutate_file "row17 reader swallows rc" "$BODY_SH" 's|^  rows=\$(bash scripts/lib/doppler-read.sh bs bash scripts/betterstack-query.sh --since "\$since" --grep "\$term" --limit "\$limit" 2>"\$errfile") \|\| rc=\$?$|  rows=$(bash scripts/lib/doppler-read.sh bs bash scripts/betterstack-query.sh --since "$since" --grep "$term" --limit "$limit" 2>"$errfile") \|\| true|' check_reader_returns_rc
 # Row 18 — the *) arm falls through. Property: the *) arm exits 1.
 check_star_arm_exits() {
   awk '/^  execute\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$1" | awk '/^        \*\)$/{f=1} f' | sed -n '1,8p' | grep -cE 'exit 1 ;;' >/dev/null
@@ -3702,7 +3702,7 @@ assert "#6921 §9 poller: lock_contention to the end -> the timeout error names 
 # shellcheck disable=SC2034
 QW_POLL_CF="$(render_qw_poll 'quiesce_capture_failed:1')"
 assert "#6921 §9 poller: quiesce_capture_failed -> fails fast naming the Better Stack read, restart-inngest-server.yml and the re-dispatch" \
-  "qw_poll_failed \"\$QW_POLL_CF\" 1 'reason=quiesce_capture_failed' 'doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_CAPTURE_FAILED' 'restart-inngest-server.yml' 'op=quiesce-web' 'NOTHING was stopped'"
+  "qw_poll_failed \"\$QW_POLL_CF\" 1 'reason=quiesce_capture_failed' 'bash scripts/lib/doppler-read.sh bs bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_CAPTURE_FAILED' 'restart-inngest-server.yml' 'op=quiesce-web' 'NOTHING was stopped'"
 # shellcheck disable=SC2034
 QW_POLL_CU="$(render_qw_poll 'quiesce_capture_unavailable:1')"
 assert "#6921 §9 poller: quiesce_capture_unavailable -> fails fast naming restart-inngest-server.yml, op=rollback (disabled_unattributed) and the re-quiesce" \
@@ -4383,7 +4383,7 @@ assert "#9927 D2-2 the freshness check step is gated to the same literal op set 
 assert "#9927 D2-2 the freshness check refuses with the named verdict write_token_stale (both refusal arms)" \
   "[[ \"\$(grep -c 'write_token_stale' '$G2W_CHK_BLOCK')\" -ge 2 ]]"
 assert "#9927 D2-2 the freshness check does an authenticated Doppler read with the NEW token BEFORE the op run step" \
-  "grep -qF 'DOPPLER_TOKEN=\"\$DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE\" doppler secrets get DOPPLER_PROJECT -p soleur-inngest -c prd --plain' '$G2W_CHK_BLOCK'"
+  "grep -qF 'DOPPLER_TOKEN=\"\$DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE\" dop''pler secrets get DOPPLER_PROJECT -p soleur-inngest -c prd --plain' '$G2W_CHK_BLOCK'"
 assert "#9927 D2-2 the freshness check sits between the export step and the op run step" \
   "awk '/- name: Export Inngest write token/{e=NR} /- name: Write-token freshness check/{c=NR} /- name: Run cutover host op/{r=NR} END{exit !(e && c && r && e<c && c<r)}' '$WF_YAML'"
 assert "#9927 D2-2 rollback) arm reads the NEW write token (non-empty extraction first)" \

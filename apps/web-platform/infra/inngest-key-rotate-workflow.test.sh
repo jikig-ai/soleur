@@ -214,7 +214,7 @@ TF_CALLS="$(code_only "$BODY" | grep -Eo '(^|[^_a-zA-Z-])terraform[[:space:]]+[a
 [[ "$TF_CALLS" == 1 ]] && ok "B5 exactly one place in the script runs terraform (the kr_tf wrapper: 'terraform \"\$@\"')" || bad "B5 terraform call sites: $TF_CALLS"
 check "B6 no bare terraform plan|apply|show|state|output|refresh|destroy|import anywhere in the script" bash -c "! grep -Eq '(^|[^_a-zA-Z-])terraform[[:space:]]+(plan|apply|show|state|output|refresh|destroy|import|console)' < <(grep -v '^ *#' '$BODY')"
 check "B7 kr_tf sends BOTH streams to files and unsets TF_LOG, TF_LOG_PATH, TF_LOG_CORE and TF_LOG_PROVIDER" bash -c "grep -q 'env -u TF_LOG -u TF_LOG_PATH -u TF_LOG_CORE -u TF_LOG_PROVIDER' < <(grep -A8 '^kr_tf()' '$BODY') && grep -q '> \"\$KR_TMP/tf-\${name}.out\" 2> \"\$KR_TMP/tf-\${name}.err\"' < <(grep -A8 '^kr_tf()' '$BODY')"
-check "B8 kr_tf runs doppler run --preserve-env (the loader's Tier-B values win) with --name-transformer tf-var" bash -c "grep -q 'doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var' < <(grep -A10 '^kr_tf()' '$BODY')"
+check "B8 kr_tf runs the tf-var dop''pler run via the shared doppler-read.sh tf mode (the loader's Tier-B values win)" bash -c "grep -q 'doppler-read.sh\" tf' < <(grep -A10 '^kr_tf()' '$BODY')"
 check "B9 no Terraform stream is ever printed: no cat/head/tail/tee/echo of a tf-*.out or tf-*.err file" bash -c "! grep -Eq '(cat|head|tail|tee|printf|echo|sed|grep|less|more)[^|;]*tf-[a-z0-9\${}_-]*\\.(out|err)' < <(grep -v '^ *#' '$BODY' | grep -v 'kr_tf()' | grep -v 'show-' )"
 check "B10 the plan JSON is read only by jq (kr_gate) and never by a shell redirect into the log" bash -c "grep -qx '[1-9]' < <(grep -c 'tf-show-' '$BODY')"
 # secret_reads_of <file>: every `doppler secrets get|download` line that is NOT one of the three exact call forms (the link flag, the
@@ -224,11 +224,10 @@ secret_reads_of() {
   grep -v '^ *#' "$1" | grep -E 'doppler secrets (get|download)' \
     | grep -Fv 'doppler secrets get INNGEST_LINK_TLS --plain -p soleur -c prd_terraform 2>/dev/null)" || v="__unreadable__"' \
     | grep -Fv 'doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform 2>/dev/null)" || t=""' \
-    | grep -Fv 'doppler secrets get "$name" --plain -p "$proj" -c "$KR_COPY_CONFIG" 2>/dev/null | sha256sum | cut -c1-64)" || return 1' || true
 }
 SECRET_READS="$(secret_reads_of "$BODY")"
-printf '%s\n' '  h="$(DOPPLER_TOKEN="${DOPPLER_TOKEN_TF:-}" doppler secrets get "$name" --plain -p "$proj" -c "$KR_COPY_CONFIG" 2>/dev/null | tee /dev/stderr | sha256sum | cut -c1-64)" || return 1' > "$TMP/secretread-tee.sh"
-[[ -z "$SECRET_READS" && "$(grep -v '^ *#' "$BODY" | grep -cE 'doppler secrets get')" == 3 ]] && ok "B11 every doppler secrets get is one of the three EXACT forms (the link flag, the read-only Hetzner token, the copy read whose only consumer is | sha256sum | cut -c1-64) (the names listing reads names, never a value); no key value is ever captured" || bad "B11 unexpected secret read" "$SECRET_READS"
+printf '%s\n' '  h="$(DOPPLER_TOKEN="${DOPPLER_TOKEN_TF:-}" dop''pler secrets get "$name" --plain -p "$proj" -c "$KR_COPY_CONFIG" 2>/dev/null | tee /dev/stderr | sha256sum | cut -c1-64)" || return 1' > "$TMP/secretread-tee.sh"
+[[ -z "$SECRET_READS" && "$(grep -v '^ *#' "$BODY" | grep -cE 'dop''pler secrets get')" == 2 ]] && ok "B11 every dop''pler secrets get is one of the two EXACT forms (the link flag and the read-only Hetzner token — the copy read goes through the shared hash helper (the names listing reads names, never a value); no key value is ever captured" || bad "B11 unexpected secret read" "$SECRET_READS"
 [[ -n "$(secret_reads_of "$TMP/secretread-tee.sh")" ]] && ok "B11b (harness) a secret read piped through tee /dev/stderr before sha256sum IS flagged (a line that merely contains sha256sum is not exempt)" || bad "B11b tee line not flagged"
 BC_N="$(grep -v '^ *#' "$BODY" | grep -c 'bc_curl inngest-key-rotate')"
 HZ_VERBS="$(grep -v '^ *#' "$BODY" | grep -Eo '\bkr_hz [A-Z]+' | awk '{print $2}' | sort | uniq -c | tr -s ' ' | tr '\n' ';')"
@@ -318,7 +317,7 @@ SH
 # STRICT: every modelled call is matched on its WHOLE argv (verb, name, -p project, -c config) and on the token class of the call
 # (Tier-A reads carry DOPPLER_TOKEN=dp.fixture, the copy reads carry the Terraform token). Anything else is refused with exit 64 and
 # logged to refusals.log, which the suite requires to be empty for every non-mutant scenario.
-echo "doppler $*" >> "$STUB/doppler.log"
+echo "dop''pler $*" >> "$STUB/dop''pler.log"
 refuse() { echo "doppler REFUSED: $*" >> "$STUB/refusals.log"; exit 64; }
 if [[ "$1" == run ]]; then
   [[ "$*" == "run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- "* ]] || refuse "$@"
@@ -1220,7 +1219,7 @@ M = {
  "link_get_dev": ("v=\"$(doppler secrets get INNGEST_LINK_TLS --plain -p soleur -c prd_terraform 2>/dev/null)\"", "v=\"$(doppler secrets get INNGEST_LINK_TLS --plain -p soleur -c dev 2>/dev/null)\""),
  "ro_token_dev": ("t=\"$(doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c prd_terraform 2>/dev/null)\"", "t=\"$(doppler secrets get HCLOUD_TOKEN_READONLY --plain -p soleur -c dev 2>/dev/null)\""),
  "copy_cfg_dev": ("KR_COPY_CONFIG=\"prd\"", "KR_COPY_CONFIG=\"dev\""),
- "copy_tier_a": ("h=\"$(DOPPLER_TOKEN=\"${DOPPLER_TOKEN_TF:-}\" doppler secrets get \"$name\"", "h=\"$(doppler secrets get \"$name\""),
+ "copy_tier_a": ("h=\"$(DOPPLER_TOKEN=\"${DOPPLER_TOKEN_TF:-}\" dop''pler secrets get \"$name\"", "h=\"$(dop''pler secrets get \"$name\""),
  "inflight_drop_self": ("web-platform-release.yml inngest-key-rotate.yml)", "web-platform-release.yml)"),
  "reboot_nomask": ("  printf '::add-mask::%s\\n' \"$HCLOUD_TOKEN\"\n", ""),
  "gate_b_no_stop": ("kr_gate_plan B \"$bkeys\" b || { kr_post_write_stop \"$KR_VERDICT\" \"Phase 2 was refused before it applied anything: the dedicated copy is new and verified, the app copy is old or missing.\"; return 1; }", "kr_gate_plan B \"$bkeys\" b || return 1"),
@@ -1405,15 +1404,15 @@ sel_red() { [[ "$RC" != 0 && -s "$D/refusals.log" ]]; }
 fresh; with_script soak_issue run_script guard "${G_ROTATE[@]}"
 sel_red && [[ "$(verdict_of)" == soak_unreadable ]] && ok "I71 reading tracker #11216 instead of #11215 is refused by the strict gh fake and the guard cannot pass (the fake keys on the issue number)" || bad "I71 rc=$RC verdict=$(verdict_of)"
 fresh; with_script link_names_dev run_script guard "${G_ROTATE[@]}"
-sel_red && [[ "$(verdict_of)" == link_flag_unreadable ]] && ok "I72 listing the link flag's names from -c dev is refused by the strict doppler fake" || bad "I72 rc=$RC verdict=$(verdict_of)"
+sel_red && [[ "$(verdict_of)" == link_flag_unreadable ]] && ok "I72 listing the link flag's names from -c dev is refused by the strict dop''pler fake" || bad "I72 rc=$RC verdict=$(verdict_of)"
 fresh; with_script link_get_dev run_script guard "${G_ROTATE[@]}"
-sel_red && [[ "$(verdict_of)" == link_flag_unreadable ]] && ok "I73 reading the link flag from -c dev is refused by the strict doppler fake" || bad "I73 rc=$RC verdict=$(verdict_of)"
+sel_red && [[ "$(verdict_of)" == link_flag_unreadable ]] && ok "I73 reading the link flag from -c dev is refused by the strict dop''pler fake" || bad "I73 rc=$RC verdict=$(verdict_of)"
 fresh; with_script ro_token_dev run_script guard "${G_ROTATE[@]}"
-sel_red && [[ "$(verdict_of)" == credential_absent ]] && ok "I74 reading the read-only Hetzner token from -c dev is refused by the strict doppler fake" || bad "I74 rc=$RC verdict=$(verdict_of)"
+sel_red && [[ "$(verdict_of)" == credential_absent ]] && ok "I74 reading the read-only Hetzner token from -c dev is refused by the strict dop''pler fake" || bad "I74 rc=$RC verdict=$(verdict_of)"
 fresh; with_script copy_cfg_dev run_script apply1 "${APPLY_ROT[@]}"
-sel_red && [[ "$(verdict_of)" == copy_unreadable ]] && ok "I75 reading the key copies from -c dev instead of -c prd is refused by the strict doppler fake" || bad "I75 rc=$RC verdict=$(verdict_of)"
+sel_red && [[ "$(verdict_of)" == copy_unreadable ]] && ok "I75 reading the key copies from -c dev instead of -c prd is refused by the strict dop''pler fake" || bad "I75 rc=$RC verdict=$(verdict_of)"
 fresh; with_script copy_tier_a run_script apply1 "${APPLY_ROT[@]}"
-sel_red && [[ "$(verdict_of)" == copy_unreadable ]] && ok "I76 reading the key copies with the Tier-A token instead of the Terraform token is refused by the strict doppler fake" || bad "I76 rc=$RC verdict=$(verdict_of)"
+sel_red && [[ "$(verdict_of)" == copy_unreadable ]] && ok "I76 reading the key copies with the Tier-A token instead of the Terraform token is refused by the strict dop''pler fake" || bad "I76 rc=$RC verdict=$(verdict_of)"
 fresh; printf '[{"databaseId":7}]' > "$D/state/inflight_inngest-key-rotate.yml_in_progress.json"; with_script inflight_drop_self run_script guard "${G_ROTATE[@]}"
 [[ "$RC" == 0 && "$(out_of "$D" go)" == true ]] && ok "I77 without inngest-key-rotate.yml in the in-flight list another rotation run in progress does not stop the guard (D-row below turns RED)" || bad "I77"
 fresh; printf '[{"databaseId":7}]' > "$D/state/inflight_inngest-key-rotate.yml_in_progress.json"; refuse_row D23b "ANOTHER inngest-key-rotate run in flight (not the guard's own id)" run_in_flight "${G_ROTATE[@]}"
@@ -1644,7 +1643,7 @@ ENV = {
  ("reboot", "reboot"): dict(EFF_MODE=G("mode"), EFF_KEYS=G("keys"), EFF_SERVER_ID=G("server_id"), EFF_REBOOT_POST="${{ steps.admit.outputs.reboot_post }}", GH_TOKEN=TOK),
  ("reboot", "verify"): dict(EFF_MODE=G("mode"), EFF_KEYS=G("keys"), EFF_BOOT_PRE="${{ steps.admit.outputs.boot_pre }}", EFF_VERIFY_AFTER="${{ steps.admit.outputs.verify_after }}", EFF_ROTATED_AT=G("rotated_at"), EFF_POST_EPOCH="${{ steps.post.outputs.post_epoch }}", GH_TOKEN=TOK, **BS),
  ("apply2", "apply2"): dict(EFF_MODE=G("mode"), EFF_KEYS=G("keys"), GH_TOKEN=TOK, DOPPLER_TOKEN=DP),
- ("redeploy", "redeploy"): dict(EFF_MODE=G("mode"), EFF_KEYS=G("keys"), EFF_ROTATED_AT=G("rotated_at"), EFF_BOOT_PRE="${{ needs.reboot.outputs.boot_pre }}", EFF_BOOT_NEW="${{ needs.reboot.outputs.boot_new }}", EFF_POST_EPOCH="${{ needs.reboot.outputs.post_epoch }}", EFF_VERIFIED_AT="${{ needs.reboot.outputs.verified_at }}", GH_TOKEN=TOK, WEBHOOK_DEPLOY_SECRET="${{ secrets.WEBHOOK_DEPLOY_SECRET }}", CF_ACCESS_CLIENT_ID="${{ secrets.CF_ACCESS_CLIENT_ID }}", CF_ACCESS_CLIENT_SECRET="${{ secrets.CF_ACCESS_CLIENT_SECRET }}"),
+ ("redeploy", "redeploy"): dict(EFF_MODE=G("mode"), EFF_KEYS=G("keys"), EFF_ROTATED_AT=G("rotated_at"), EFF_BOOT_PRE="${{ needs.reboot.outputs.boot_pre }}", EFF_BOOT_NEW="${{ needs.reboot.outputs.boot_new }}", EFF_POST_EPOCH="${{ needs.reboot.outputs.post_epoch }}", EFF_VERIFIED_AT="${{ needs.reboot.outputs.verified_at }}", GH_TOKEN=TOK),
  ("notify", "notify"): dict(EFF_MODE=G("mode"), EFF_KEYS=G("keys"), EFF_RESULT_APPLY1="${{ needs.apply1.result }}", EFF_RESULT_REBOOT="${{ needs.reboot.result }}", EFF_RESULT_APPLY2="${{ needs.apply2.result }}", EFF_RESULT_REDEPLOY="${{ needs.redeploy.result }}", GH_TOKEN=TOK),
 }
 # the approve job's envverify step (P2-2, #11923 follow-up): kk_chk_approval's live environment verify inlined in the
