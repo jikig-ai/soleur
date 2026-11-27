@@ -399,42 +399,6 @@ variable "cf_api_token_rulesets" {
   sensitive   = true
 }
 
-# Gates the `import` block in seo-config-rules.tf. Production default is `true`.
-#
-# It exists solely because `mock_provider` does NOT mock `import` blocks —
-# Terraform performs the import read against the REAL provider even under
-# `terraform test`, so the credential-free leg in infra-validation.yml dies with
-# `Authentication error (10000)` before any of its own assertions run.
-# tests/web-hosts-eu-pin.tftest.hcl sets this `false` for that reason alone.
-#
-# At `false` the import block disappears and Terraform plans a CREATE against a
-# live, populated entrypoint. Because seo-config-rules.tf reproduces the adopted
-# rule verbatim, that create converges on the same two-rule end state rather
-# than dropping a rule — so this is a DRIFT-OVERWRITE hazard (any dashboard edit
-# diverging from the reproduction is silently overwritten), not the outage the
-# single-rule version of this resource would have caused. It is still wrong, and
-# it is invisible: the destroy-guard cannot see it either, because on a create
-# `change.before` is null so its `before.rules - after.rules` count goes
-# negative and is filtered out.
-#
-# Two things hold the line, neither of them this default alone:
-#   - test/seo-config-rules.test.ts pins the default AND pins that the import
-#     block's `for_each` actually consumes this variable (pinning only the
-#     default was insufficient: `for_each = toset([])` left the whole suite
-#     green while silently disabling the import);
-#   - the adopted rule is reproduced in config and pinned by two tests, which is
-#     what downgrades a flip from rule-loss to drift-overwrite.
-#
-# Not covered: `-var`, `*.auto.tfvars`, or `TF_VAR_adopt_seo_config_entrypoint`
-# — and the apply runs under `doppler run --name-transformer tf-var`, so a
-# Doppler secret named ADOPT_SEO_CONFIG_ENTRYPOINT would override this silently.
-# No such secret exists; recorded because it is the fail-open shape, not a live
-# misconfiguration.
-variable "adopt_seo_config_entrypoint" {
-  type    = bool
-  default = true
-}
-
 variable "cf_api_token_bot_management" {
   description = "Cloudflare API token narrowed to Bot Management:Edit on soleur.ai (cloudflare_bot_management resource; see bot-management.tf)"
   type        = string
@@ -509,9 +473,24 @@ variable "cf_api_token_dns_edit" {
   sensitive   = true
 }
 
+# The OLD ids are refused (#12931, ADR-329). The soleur.ai registration moved to the
+# Soleur account on 2026-11-18 and the old zone is in Cloudflare's "moved" state: any plan
+# against it would try to write a zone that no longer serves. The shape check comes first
+# (32 lowercase hex): a padded or upper-case paste is refused as malformed instead of reaching
+# the provider, and the old-id comparison then needs no lower().
 variable "cf_zone_id" {
-  description = "Cloudflare zone ID for soleur.ai"
+  description = "Cloudflare zone ID for soleur.ai (the Soleur-account zone since #12931)"
   type        = string
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{32}$", var.cf_zone_id))
+    error_message = "cf_zone_id must be a 32-character lowercase hex Cloudflare zone id (no padding, no upper case)."
+  }
+
+  validation {
+    condition     = var.cf_zone_id != "5af02a2f394e9ba6e0ea23c381a26b67"
+    error_message = "cf_zone_id is the OLD soleur.ai zone (moved 2026-11-18). Set Doppler prd_terraform CF_ZONE_ID to the Soleur-account zone; see #12931 and knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md."
+  }
 }
 
 variable "app_domain" {
@@ -521,8 +500,106 @@ variable "app_domain" {
 }
 
 variable "cf_account_id" {
-  description = "Cloudflare account ID (required for Zero Trust tunnel resources)"
+  description = "Cloudflare account that homes every zone-bound resource (DNS, rulesets, lists, Pages, tunnel, Access, notifications). The Soleur account since #12931. R2 is NOT on this account: see cf_r2_account_id."
   type        = string
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{32}$", var.cf_account_id))
+    error_message = "cf_account_id must be a 32-character lowercase hex Cloudflare account id (no padding, no upper case)."
+  }
+
+  validation {
+    condition     = var.cf_account_id != "4d5ba6f096b2686fbdd404167dd4e125"
+    error_message = "cf_account_id is the LEGACY account, which now homes only R2. Set Doppler prd_terraform CF_ACCOUNT_ID to the Soleur account and keep the legacy id in CF_R2_ACCOUNT_ID; see #12931 and knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md."
+  }
+}
+
+# R2 stays on the legacy account (ADR-329): the Terraform state buckets, the LUKS header
+# escrow buckets and the privileged state bucket live there, and moving them buys nothing.
+# No default (ADR-065 sequencing): Doppler prd_terraform CF_R2_ACCOUNT_ID must exist before
+# this lands, or every plan of this root fails at variable resolution.
+# PINNED to the legacy account (CTO ruling D8): this id also builds the LUKS header escrow
+# endpoint (workspaces-luks-header*.tf), so a copy-paste of the Soleur account id here would
+# re-point header escrow at an account with no such bucket. Moving R2 is a reviewed PR that
+# edits this literal.
+variable "cf_r2_account_id" {
+  description = "Cloudflare account that homes R2 (legacy account, ADR-329). Value from Doppler prd_terraform CF_R2_ACCOUNT_ID."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{32}$", var.cf_r2_account_id))
+    error_message = "cf_r2_account_id must be a 32-character lowercase hex Cloudflare account id."
+  }
+
+  validation {
+    condition     = lower(var.cf_r2_account_id) == "4d5ba6f096b2686fbdd404167dd4e125"
+    error_message = "cf_r2_account_id must be the legacy account 4d5ba6f096b2686fbdd404167dd4e125, where R2 stays (ADR-329). Set Doppler prd_terraform CF_R2_ACCOUNT_ID to it; see #12931."
+  }
+}
+
+# Plan-tier gates (#12931). The new zone runs on the Free plan and the Soleur account has
+# no Load Balancing subscription; both are operator money decisions recorded in
+# knowledge-base/project/specs/archive/20261120-013510-feat-one-shot-12931-cf-account-migration/decision-challenges.md.
+#
+# LOCKED OFF (CTO ruling D9). Every root job runs `doppler run --name-transformer tf-var`, so a
+# stray Doppler key (CF_LOAD_BALANCING_ENABLED=true, ...) would otherwise override the committed
+# default on the next routine apply with no reviewed change. Each gate below carries a
+# validation that refuses `true`: turning one on is a reviewed PR that deletes its validation.
+variable "cf_load_balancing_enabled" {
+  description = "Create the app.soleur.ai load balancer, pool, monitor and health notification (cloudflare-lb.tf). Needs a Load Balancing subscription on cf_account_id. Off since #12931: app.soleur.ai serves from the proxied A record. Purchase decision: #12983."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = var.cf_load_balancing_enabled == false
+    error_message = "cf_load_balancing_enabled is locked off (#12931, decision #12983). Turning it on is a reviewed PR that deletes this validation; a Doppler TF_VAR cannot."
+  }
+}
+
+variable "cf_zone_plan_pro" {
+  description = "The soleur.ai zone is on the Pro plan. Gates the Pro-only Super Bot Fight Mode fields in bot-management.tf. False since #12931 (new zone on Free)."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = var.cf_zone_plan_pro == false
+    error_message = "cf_zone_plan_pro is locked off (#12931: the zone is on the Free plan). Turning it on is a reviewed PR that deletes this validation; a Doppler TF_VAR cannot."
+  }
+}
+
+variable "cf_zone_dnssec_enabled" {
+  description = "Manage DNSSEC on soleur.ai (dns.tf). Off during the #12931 cutover: enabling it mid-migration adds a whole-domain failure mode. Re-enable tracked in #12982."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = var.cf_zone_dnssec_enabled == false
+    error_message = "cf_zone_dnssec_enabled is locked off (#12931, re-enable tracked in #12982). Turning it on is a reviewed PR that deletes this validation; a Doppler TF_VAR cannot."
+  }
+}
+
+# Gates the import blocks in cf-account-migration-imports.tf. Production default is true.
+# It exists because mock_provider does NOT mock `import`: Terraform performs the import
+# read against the real provider even under `terraform test`, so the tftest sets it false
+# (the same reason the retired adopt_seo_config_entrypoint existed).
+variable "cf_migration_imports_enabled" {
+  description = "Enable the #12931 import blocks (cf-account-migration-imports.tf). Tests set false; production keeps true until the cleanup PR deletes the file."
+  type        = bool
+  default     = true
+}
+
+# The app record's import pulls the tunnel into the plan (its content is web-1's IPv4 and
+# hcloud_server.web renders the tunnel token), so it belongs to the tunnel phase (PR2).
+variable "cf_migration_import_app" {
+  description = "Enable the cloudflare_record.app import (tunnel phase of #12931). False until PR2."
+  type        = bool
+  default     = false
+
+  # Locked off (CTO ruling D9): PR2 deletes this validation in the reviewed diff that flips it.
+  validation {
+    condition     = var.cf_migration_import_app == false
+    error_message = "cf_migration_import_app is locked off until the #12931 tunnel phase (PR2). Turning it on is a reviewed PR that deletes this validation; a Doppler TF_VAR cannot."
+  }
 }
 
 variable "webhook_deploy_secret" {

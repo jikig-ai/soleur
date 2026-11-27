@@ -25,7 +25,7 @@ and recorded in the comment's `domain-ruling` field:
 
 A commit trailer is invisible to a reader of `gh pr merge`, so post one PR comment after the trailer. A comment is
 not a push, so it is also safe on a PR already in the merge queue. State what actually ran, never more, and fill
-every placeholder from the review you ran, deriving each value with a command in the same call that posts it (`git rev-parse --short HEAD` for the head; a sha typed from memory shipped wrong on #12307) (do not post the template as written):
+every placeholder from the review you ran, deriving each value with a command in the same call that posts it (`git rev-parse --short HEAD` for the head; a sha typed from memory shipped wrong on #12307) — and `seats=`, the one value no command prints, from this session's own spawn records: an agent seat by the `subagent_type` of a call that returned substantive output, a skill-level or deterministic seat (the no-agent-id seats in `fix-round-seats.sh`) by its seat name, never from the planned roster; seats that returned nothing go in `missing=`, and the count must equal the `--agents-ran` passed to `emit-review-trailer.sh` (#13017 named three seats that never ran) (do not post the template as written):
 
 ```bash
 gh pr comment <number> --body "Review-Evidence: head=<short sha reviewed>; soleur:review ran; coverage=<full|degraded|partial-by-ruling>; tier=<resolved tier>; seats=<agents that returned>; missing=<names or none>; domain-ruling=<none|CLO|CTO>; unresolved-P1-P2=<n>; merge gate = agent review + green CI; no human approval required for non-production-mutating changes"
@@ -43,6 +43,9 @@ run `gh pr merge <number> --disable-auto` before pushing a fix. **Why:** #12518 
 the queue past the evidence head, and their P3 findings had to be fixed forward in #12633.
 
 ## Arm check
+
+A delegated `gh pr merge ... --auto` (standing-delegation envelope) requires this check's first statement in its
+`Verification` section; see `standing-delegation.md` §"Review-Evidence arm check for delegated auto-merge".
 
 Ship's arm and CI-fix re-arm, merge-pr's merge gate, drain-prs §4's arm, product-roadmap's locked arm,
 merge-queue-dequeue.md's step 3 re-arm and settle-then-admin-merge.md's step 2 run this one check, and the

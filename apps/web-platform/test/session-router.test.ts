@@ -20,15 +20,23 @@ vi.mock("@/server/worktree-write-lease", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/worktree-write-lease")>()),
   readWorktreeLeaseHolder: readHolderMock,
 }));
-const { reportSilentFallbackMock } = vi.hoisted(() => ({ reportSilentFallbackMock: vi.fn() }));
-vi.mock("@/server/observability", () => ({ reportSilentFallback: reportSilentFallbackMock }));
+const { reportSilentFallbackMock, mirrorWithDebounceMock } = vi.hoisted(() => {
+  const report = vi.fn();
+  // Pass-through: rows assert on the emitted event; the debounce key is asserted separately.
+  const mirror = vi.fn((err: unknown, ctx: unknown) => report(err, ctx));
+  return { reportSilentFallbackMock: report, mirrorWithDebounceMock: mirror };
+});
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: reportSilentFallbackMock,
+  mirrorWithDebounce: mirrorWithDebounceMock,
+}));
 
 import {
   resolveSessionRoute,
   verifyProxiedSessionMembership,
-  loadHostRoster,
   resolveHostAddress,
 } from "@/server/session-router";
+import { loadHostRoster } from "@/server/host-roster";
 import { resolveWorktreeId } from "@/server/worktree-write-lease";
 
 const WS = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
@@ -44,8 +52,10 @@ function holder(hostId: string) {
 beforeEach(() => {
   readHolderMock.mockReset();
   reportSilentFallbackMock.mockReset();
+  mirrorWithDebounceMock.mockClear(); // clear, not reset: keep the pass-through
   vi.unstubAllEnvs();
   vi.stubEnv("SOLEUR_HOST_ROSTER", "");
+  vi.stubEnv("SOLEUR_HOST_PRIVATE_IP", "");
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -78,6 +88,60 @@ describe("resolveSessionRoute — user-sticky placement", () => {
       "control_plane_route",
     );
   });
+
+  test("the owner maps to THIS host's own address → owner-unresolved, never a proxy to self (#12910)", async () => {
+    vi.stubEnv("SOLEUR_HOST_ROSTER", JSON.stringify({ [HOST_2]: "10.0.1.12" }));
+    vi.stubEnv("SOLEUR_HOST_PRIVATE_IP", "10.0.1.12");
+    readHolderMock.mockResolvedValue(holder(HOST_2));
+    const r = await resolveSessionRoute({ workspaceId: WS, userId: USER_A, myHostId: HOST_1 });
+    expect(r).toEqual({ decision: "owner-unresolved", ownerHostId: HOST_2 });
+    expect(reportSilentFallbackMock).toHaveBeenCalledTimes(1);
+    expect((reportSilentFallbackMock.mock.calls[0][1] as { op: string }).op).toBe(
+      "resolveSessionRoute.owner-is-self",
+    );
+    // Debounced per workspace: every reconnect of the session reaches this branch.
+    expect(mirrorWithDebounceMock).toHaveBeenCalledTimes(1);
+    expect(mirrorWithDebounceMock.mock.calls[0].slice(2)).toEqual([WS, "owner-is-self"]);
+  });
+
+  // Owner-is-self guard mutants (#12910 review): the guard must compare the OWNER's
+  // address to OUR address, not merely check that we know an address, nor that our
+  // address appears anywhere in the roster.
+  test("a KNOWN private IP that differs from the owner's address still proxies (kills `ip !== null` mutant)", async () => {
+    vi.stubEnv("SOLEUR_HOST_ROSTER", JSON.stringify({ [HOST_2]: "10.0.1.12" }));
+    vi.stubEnv("SOLEUR_HOST_PRIVATE_IP", "10.0.1.11");
+    readHolderMock.mockResolvedValue(holder(HOST_2));
+    const r = await resolveSessionRoute({ workspaceId: WS, userId: USER_A, myHostId: HOST_1 });
+    expect(r).toEqual({ decision: "proxy", ownerHostId: HOST_2, ownerAddress: "10.0.1.12" });
+    expect(reportSilentFallbackMock).not.toHaveBeenCalled();
+  });
+
+  test("my IP is IN the roster (as my own key) but the owner is a peer → proxy to the peer (kills `my IP ∈ roster values` mutant)", async () => {
+    vi.stubEnv("SOLEUR_HOST_ROSTER", JSON.stringify({ "web-3": "10.0.1.12", "web-2": "10.0.1.11" }));
+    vi.stubEnv("SOLEUR_HOST_PRIVATE_IP", "10.0.1.12");
+    readHolderMock.mockResolvedValue(holder("web-2"));
+    const r = await resolveSessionRoute({ workspaceId: WS, userId: USER_A, myHostId: "web-3" });
+    expect(r).toEqual({ decision: "proxy", ownerHostId: "web-2", ownerAddress: "10.0.1.11" });
+    expect(reportSilentFallbackMock).not.toHaveBeenCalled();
+  });
+
+  // CTO ruling Q2 — PINNED CURRENT BEHAVIOUR, intentional: with no private IP the
+  // owner-is-self guard cannot fire, so a lease this host took under its key
+  // (web-1) while it now resolves to its instance id (hetzner-1) routes as a proxy.
+  // That prod shape is caught upstream (ci-deploy pre-canary key_unverifiable
+  // check + the boot `resolveHostId.key-fallback` Sentry report), not here.
+  test.each(["", "0.0.0.0"])(
+    "null private IP %j: a self-owned lease under the old key still routes as proxy (pinned, CTO Q2)",
+    async (ip) => {
+      vi.stubEnv("SOLEUR_HOST_ROSTER", JSON.stringify({ "web-3": "10.0.1.12" }));
+      vi.stubEnv("SOLEUR_HOST_PRIVATE_IP", ip);
+      vi.stubEnv("SOLEUR_HOST_KEY", "web-3");
+      readHolderMock.mockResolvedValue(holder("web-3"));
+      const r = await resolveSessionRoute({ workspaceId: WS, userId: USER_A, myHostId: "hetzner-1" });
+      expect(r).toEqual({ decision: "proxy", ownerHostId: "web-3", ownerAddress: "10.0.1.12" });
+      expect(reportSilentFallbackMock).not.toHaveBeenCalled();
+    },
+  );
 
   test("keys the lease read on the PER-USER worktree id — two users → distinct keys (D0)", async () => {
     readHolderMock.mockResolvedValue(null);
@@ -114,6 +178,31 @@ describe("loadHostRoster / resolveHostAddress", () => {
     vi.stubEnv("SOLEUR_HOST_ROSTER", JSON.stringify({ [HOST_1]: "10.0.1.11", [HOST_2]: "10.0.1.12" }));
     expect(resolveHostAddress(HOST_2)).toBe("10.0.1.12");
     expect(resolveHostAddress("host-unknown")).toBeNull();
+  });
+});
+
+describe("production roster shape (#12910: keyed by var.web_hosts key)", () => {
+  const WEB_1 = "web-1";
+  const PROD_ROSTER = JSON.stringify({ [WEB_1]: "10.0.1.10", "web-2": "10.0.1.11" });
+
+  test("a web-2 holder seen from web-1 proxies to web-2's private IP", async () => {
+    vi.stubEnv("SOLEUR_HOST_ROSTER", PROD_ROSTER);
+    readHolderMock.mockResolvedValue(holder("web-2"));
+    const r = await resolveSessionRoute({ workspaceId: WS, userId: USER_A, myHostId: WEB_1 });
+    expect(r).toEqual({ decision: "proxy", ownerHostId: "web-2", ownerAddress: "10.0.1.11" });
+  });
+
+  test("an instance-id holder is not in a key-shaped roster (owner-unresolved)", async () => {
+    vi.stubEnv("SOLEUR_HOST_ROSTER", PROD_ROSTER);
+    readHolderMock.mockResolvedValue(holder("hetzner-176328334"));
+    const r = await resolveSessionRoute({ workspaceId: WS, userId: USER_A, myHostId: WEB_1 });
+    expect(r).toEqual({ decision: "owner-unresolved", ownerHostId: "hetzner-176328334" });
+  });
+
+  test("loadHostRoster accepts an explicit env (hermetic callers)", () => {
+    expect(loadHostRoster({ NODE_ENV: "test", SOLEUR_HOST_ROSTER: PROD_ROSTER })).toEqual(
+      JSON.parse(PROD_ROSTER),
+    );
   });
 });
 

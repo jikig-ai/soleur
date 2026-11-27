@@ -99,3 +99,7 @@ private IPs, which web-2 routes over the shared 10.0.1.0/24.
   apply; "no cloudflared on the registry host" unchanged.
 - **ADR-143** — web-2's role expands from pure standby to standby + connector; the
   D1 sizing (cpx22, measured web-1 usage) still holds — cloudflared is ~50 MB RAM.
+
+## Addendum — 2026-11-19 (#12931)
+
+Cross-reference only: ADR-329 recreates the tunnel on the Soleur Cloudflare account, and because the token reaches a host only through create-time user_data, delivering it is a mandatory `web-host-replace web-2`, the replaceable-connector mechanism this ADR established.

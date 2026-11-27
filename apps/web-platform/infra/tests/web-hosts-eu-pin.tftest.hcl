@@ -50,6 +50,15 @@ mock_provider "hcloud" {
       architecture = "x86"
     }
   }
+
+  # #12866: bastion.tf carries the same x86 precondition, so it is the THIRD mocked STRING
+  # assertion. CI failed on it exactly as #7309 predicts ("Hetzner reports architecture=mg989s7r").
+  override_data {
+    target = data.hcloud_server_type.bastion
+    values = {
+      architecture = "x86"
+    }
+  }
 }
 mock_provider "random" {}
 mock_provider "doppler" {}
@@ -89,20 +98,13 @@ mock_provider "supabase" {
 variables {
   admin_ips = ["203.0.113.1"]
 
-  # Opt this credential-free test OUT of the seo_config_settings entrypoint
-  # adoption. `mock_provider` does NOT mock `import` blocks — Terraform performs
-  # the import read against the REAL provider even under `terraform test`, so
-  # leaving this at its production default (`true`) fails the whole file with
-  # `error reading ruleset ID ... Authentication error (10000)` before any
-  # var.web_hosts validation runs. That is a credential error in a job whose
-  # entire premise is running without credentials.
-  #
-  # The default stays `true` so production adopts rather than clobbers; only
-  # this test opts out. seo-config-rules.tf explains what the adoption is for,
-  # and test/seo-config-rules.test.ts pins that the default is `true` — because
-  # flipping it to `false` silently restores the whole-list clobber (#6767).
-  adopt_seo_config_entrypoint = false
-  betterstack_api_token       = "dummy"
+  # mock_provider does not mock `import` blocks: Terraform performs the import read against
+  # the REAL provider even under `terraform test`, so the #12931 import blocks
+  # (cf-account-migration-imports.tf) are switched off here. Production keeps the default.
+  cf_migration_imports_enabled = false
+  # Pinned to the legacy account by variables.tf (CTO ruling D8): any other value fails every run.
+  cf_r2_account_id      = "4d5ba6f096b2686fbdd404167dd4e125"
+  betterstack_api_token = "dummy"
   # Length-bearing, not "dummy": modules/git-data-userdata/variables.tf validates this is a
   # real ingest token, because an empty or stub value renders `BETTERSTACK_LOGS_TOKEN=` and
   # darkens eight of the nine git-data boot stages on a HASH-VALID boot (#7460).
@@ -185,4 +187,107 @@ run "reject_non_sk_ant_ci_key" {
     anthropic_api_key_ci = "not-an-anthropic-key"
   }
   expect_failures = [var.anthropic_api_key_ci]
+}
+
+# #12931 / ADR-329 Guard 4: the OLD zone and account ids are refused before any refresh.
+run "reject_old_zone_id" {
+  command = plan
+  variables {
+    cf_zone_id = "5af02a2f394e9ba6e0ea23c381a26b67"
+  }
+  expect_failures = [var.cf_zone_id]
+}
+
+# Upper case fails the 32-lowercase-hex shape check, so an upper-case paste of the old id is still refused.
+run "reject_old_zone_id_upper_case" {
+  command = plan
+  variables {
+    cf_zone_id = "5AF02A2F394E9BA6E0EA23C381A26B67"
+  }
+  expect_failures = [var.cf_zone_id]
+}
+
+run "reject_old_account_id" {
+  command = plan
+  variables {
+    cf_account_id = "4d5ba6f096b2686fbdd404167dd4e125"
+  }
+  expect_failures = [var.cf_account_id]
+}
+
+run "reject_short_r2_account_id" {
+  command = plan
+  variables {
+    cf_r2_account_id = "4d5ba6f096b2686fbdd404167dd4e12"
+  }
+  expect_failures = [var.cf_r2_account_id]
+}
+
+run "reject_empty_r2_account_id" {
+  command = plan
+  variables {
+    cf_r2_account_id = ""
+  }
+  expect_failures = [var.cf_r2_account_id]
+}
+
+# A padded or otherwise malformed id is refused as malformed before any provider call
+# (#12931 review, security P3: Guard 4 is only as strong as this check).
+run "reject_padded_zone_id" {
+  command = plan
+  variables {
+    cf_zone_id = " 0123456789abcdef0123456789abcdef"
+  }
+  expect_failures = [var.cf_zone_id]
+}
+
+run "reject_padded_account_id" {
+  command = plan
+  variables {
+    cf_account_id = "0123456789abcdef0123456789abcdef "
+  }
+  expect_failures = [var.cf_account_id]
+}
+
+# CTO ruling D8: R2 stays on the legacy account. The Soleur account id (or any other) is refused.
+run "reject_new_account_as_r2_account" {
+  command = plan
+  variables {
+    cf_r2_account_id = "66d4f93f7397f196544e9fe84c3557c2"
+  }
+  expect_failures = [var.cf_r2_account_id]
+}
+
+# CTO ruling D9: the plan-tier gates are locked off. A Doppler TF_VAR cannot turn one on; a
+# reviewed PR deletes the validation. One run block per gate.
+run "reject_load_balancing_enabled" {
+  command = plan
+  variables {
+    cf_load_balancing_enabled = true
+  }
+  expect_failures = [var.cf_load_balancing_enabled]
+}
+
+run "reject_zone_plan_pro" {
+  command = plan
+  variables {
+    cf_zone_plan_pro = true
+  }
+  expect_failures = [var.cf_zone_plan_pro]
+}
+
+run "reject_zone_dnssec_enabled" {
+  command = plan
+  variables {
+    cf_zone_dnssec_enabled = true
+  }
+  expect_failures = [var.cf_zone_dnssec_enabled]
+}
+
+run "reject_migration_import_app" {
+  command = plan
+  variables {
+    cf_migration_import_app = true
+  }
+  expect_failures = [var.cf_migration_import_app]
 }

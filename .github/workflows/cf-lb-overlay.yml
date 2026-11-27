@@ -26,6 +26,12 @@
 #                     weight 1 (the 0→1 flip, or a no-op re-proof against live {1,1}) and
 #                     runs the §(c) gate chain fail-closed BEFORE plan
 #
+# LB GATE (#12931). Every arm `needs: lb_enabled_gate`, which refuses with ::error:: —
+# before any credential, terraform or Cloudflare call — while cf_load_balancing_enabled
+# defaults to false in apps/web-platform/infra/variables.tf (cf_lb_gate_lb_enabled in
+# tests/scripts/lib/cf-lb-overlay-gate.sh). Since the Soleur-account move the GA addresses
+# are count = 0 and Load Balancing is deferred on that account.
+#
 # Authorization model: per-command operator go-ahead at dispatch (the epic's fresh
 # named authorization), plus per-arm confirm literals (typo-guards, NOT the
 # authorization) and `environment:` gates (infra-privileged = main-only; the GA arm
@@ -53,7 +59,7 @@ on:
         required: true
         type: string
       mode:
-        description: "ga-pool-update only: drain = web-2 set to weight 0 (explicit); serve = grade and apply web-2 weight 1 behind the §(c) gate chain (already 1 after the 2026-11-08 serve flip, so a re-run is a no-op re-proof)"
+        description: "ga-pool-update only: drain = web-2 set to weight 0 (explicit); serve = grade and apply web-2 weight 1 behind the §(c) gate chain and the per-instance soak grader (a refused serve changes no weight and never drains)"
         required: false
         type: choice
         options:
@@ -85,9 +91,26 @@ env:
   PROBE_LOG: /tmp/lb-staging-continuity.log
 
 jobs:
+  # LB GATE (#12931): runs first on every dispatch and refuses while Load Balancing is gated
+  # off. No secrets, no environment, no terraform: the refusal costs nothing and needs no
+  # approval, and a refused dispatch never reaches an arm's environment gate.
+  lb_enabled_gate:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Refuse while Load Balancing is gated off (cf_load_balancing_enabled)
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/cf-lb-overlay-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/cf-lb-overlay-gate.sh"
+          cf_lb_gate_lb_enabled "${INFRA_DIR}/variables.tf"
+
   # Staging arms after #10479 get HTTP 526 on lb-staging.soleur.ai: see "EDGE TLS FOR THIS HOST" in apps/web-platform/infra/lb-staging/main.tf.
   staging_record:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'staging-record'
+    needs: lb_enabled_gate
     runs-on: ubuntu-24.04
     timeout-minutes: 20  # worst case ≈17min: ~5min init+plan+apply + 60×(5s curl+10s) settle ≤ ~12min
     environment: infra-privileged
@@ -190,6 +213,7 @@ jobs:
 
   staging_overlay:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'staging-overlay'
+    needs: lb_enabled_gate
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: infra-privileged
@@ -334,6 +358,7 @@ jobs:
 
   staging_teardown:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'staging-teardown'
+    needs: lb_enabled_gate
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: infra-privileged
@@ -443,6 +468,7 @@ jobs:
 
   ga_overlay:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-overlay'
+    needs: lb_enabled_gate
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # REVIEWER-GATED — same environment the rung2 dispatch and vector-redeliver ride:
@@ -558,6 +584,7 @@ jobs:
 
   ga_monitor_fix:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-monitor-fix'
+    needs: lb_enabled_gate
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # REVIEWER-GATED like ga-overlay: an update on the LIVE monitor is a prod write.
@@ -699,6 +726,7 @@ jobs:
 
   ga_monitor_https:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-monitor-https'
+    needs: lb_enabled_gate
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # REVIEWER-GATED like ga-overlay: an update on the LIVE monitor is a prod write. ADR-321 R7 (#10479): moves the
@@ -878,13 +906,25 @@ jobs:
 
   ga_pool_update:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-pool-update'
+    needs: lb_enabled_gate
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Worst case ~28 min (Ruled by CTO agent, 2026-11-19, PR #12934 R6): setup + gate ~3, per-instance grader
+    # 2 x 120 s, relay bind probe 3 x 120 s, init/plan/apply ~5, post-apply continuity 90 x (5 s curl + 1 s) = 9.
+    # The cap must not cut the continuity check off after the weight is applied.
+    timeout-minutes: 35
     # REVIEWER-GATED like ga-overlay. mode=drain lands the drained shape (web-2 at
     # weight 0, health-monitored; an explicit -var, the variable's default is 1).
     # mode=serve grades web-2 at weight 1 (the 0→1 flip, or a no-op re-proof against live)
     # and runs the §(c) gate chain (lb-weight-gate-with-marker.sh) fail-closed
-    # BEFORE plan, so an unauthorized flip never reaches a grader.
+    # BEFORE plan, so an unauthorized flip never reaches a grader. Right after it, the
+    # per-instance soak grader (scripts/followthroughs/web2-luks-live-6931.sh, via
+    # scripts/lib/serve-soak-evidence.sh) must say PASS: the gate reads Doppler marker
+    # TIMES, the grader reads web-2's readiness and probe rows and requires one boot_id across
+    # them, so a replaced web-2 whose probe rows ship but whose readiness row does not reads NOT YET (#12849).
+    # Residual: a replaced web-2 whose telemetry is fully dark grades on its predecessor's rows for up to 26 h
+    # (the probe-row freshness bound); the generation anchor is #12869.
+    # A replace keeps the pool weight it found and is not gated here (#12939). Both self-report their soak evidence
+    # (SOLEUR_SOAK_EVIDENCE / SOLEUR_INSTANCE_SOAK) to the log and the step summary.
     environment: web-platform-infra-apply
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -933,9 +973,13 @@ jobs:
           #     the prd_workspaces_luks_marker WRITE token (no read-only token exists on
           #     that config — lb-weight-gate-with-marker.sh:15) and it reaches the
           #     wrapper ONLY via env DOPPLER_TOKEN.
-          # Tokens ride env assignments ONLY — argv must never carry one.
+          # Tokens ride env assignments only, never a command-line flag; `env NAME=value` does hold
+          # them in env's own argv until it execs (same-user readable for that instant, accepted).
           DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
           DOPPLER_TOKEN_LUKS_MARKER: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}
+          # The gated host, for the soak evidence helper below (#12849). The inner env's
+          # SOLEUR_GATED_HOST="web-2" stays the gate's own input; a parity row pins the two equal.
+          SOLEUR_GATED_HOST: web-2
         run: |
           set -euo pipefail
           # The wrapper reads the WORKSPACES_LUKS marker from its dedicated config via
@@ -951,6 +995,10 @@ jobs:
           # it (names_rc_127, gate never ran). The inner env overrides anything `prd`
           # injected; the wrapper accepts ONLY that exact path and fails closed
           # (exit 3, bad_doppler_bin) on anything else -- it never falls back to PATH.
+          # `-u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4`: bash reads these at startup, before the
+          # wrapper's first line (BASH_ENV/ENV run a file; SHELLOPTS=xtrace with PS4='$(cmd)' runs a command), so a
+          # prd secret of any of these names would run before the wrapper's own unset
+          # (Ruled by CTO agent, 2026-11-19, PR #12934 R4; the other doppler-run sites: #12970).
           #
           # TWO gate inputs are not in Doppler prd and are injected by the inner `env`
           # (after `doppler run`, so they override any ambient value):
@@ -968,20 +1016,57 @@ jobs:
           # `requires_runtime_bind_probe=true` is emitted on stdout ONLY by the
           # Conditions A+B pass branch — it is the non-empty pass message this
           # step must see.
+          #
+          # SOAK EVIDENCE (#12849). The wrapper's stderr (the gate's SOLEUR_SOAK_EVIDENCE
+          # lines, its gate_fail line, Doppler's own notices) is captured to a file; the
+          # EXIT trap replays it to the log on every exit path (refusal, timeout, cancel).
+          # The helper mirrors the grammar-matching lines into the step summary and names
+          # the refusing id; on a pass it re-checks one well-formed pass line per soak kind
+          # (a pass with no evidence is a code defect, not a soak wait). Its calls are bare
+          # statements: inside if/||/&& bash would switch errexit off for them. The inline
+          # gate_rc backstop fails the step on a refusal even if the helper returned 0.
           GATE_OUT=""
+          gate_rc=0
+          : >"${RUNNER_TEMP}/lb-gate.stderr"
+          trap 'cat "${RUNNER_TEMP}/lb-gate.stderr" >&2; rm -f "${RUNNER_TEMP}/lb-gate.stderr"' EXIT
           GATE_OUT="$(env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler run --preserve-env -p soleur -c prd -- \
-            env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \
+            env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \
               SOLEUR_WEB2_SERVING_WEIGHT="$WEB2_LB_WEIGHT" SOLEUR_GATED_HOST="web-2" \
               SOLEUR_SERVING_ROTATION="web-1,web-2" \
-            bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh")" || {
-            echo "::error::§(c) gate chain refused the flip — the preconditions are not met (or could not be proven). NOTHING planned, NOTHING applied."
-            exit 1
-          }
+            bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh" 2>"${RUNNER_TEMP}/lb-gate.stderr")" || gate_rc=$?
+          sse_f="${GITHUB_WORKSPACE}/scripts/lib/serve-soak-evidence.sh"
+          # shellcheck source=scripts/lib/serve-soak-evidence.sh
+          # shellcheck disable=SC2015 # A && B || C is intended: any failed load step reaches the exit
+          source "$sse_f" && declare -F sse_gate_chain_mirror >/dev/null && declare -F sse_gate_chain_verify >/dev/null || { echo "::error::serve-soak-evidence helper not loaded ($sse_f) - wiring defect, do not re-dispatch"; exit 1; }
+          sse_gate_chain_mirror "${RUNNER_TEMP}/lb-gate.stderr" "$SOLEUR_GATED_HOST" "$gate_rc"
+          [[ "$gate_rc" -eq 0 ]] || exit 1
           printf '%s\n' "$GATE_OUT"
           if ! grep -q 'requires_runtime_bind_probe=true' <<<"$GATE_OUT"; then
             echo "::error::§(c) gate chain exited 0 WITHOUT the flip-authorization marker (requires_runtime_bind_probe=true) — the standby branch passed vacuously and Conditions A/B were never evaluated; web-2 is NOT authorized to serve. NOTHING planned, NOTHING applied."
             exit 1
           fi
+          sse_gate_chain_verify "${RUNNER_TEMP}/lb-gate.stderr" "$SOLEUR_GATED_HOST"
+      - name: per-instance soak grader (serve only)
+        if: inputs.mode == 'serve'
+        env:
+          # until #12869 the grader reads only web-2's probe rows; the helper refuses any other host.
+          SOLEUR_GATED_HOST: web-2
+          # Read-only Better Stack query credentials, the same secrets the relay bind probe binds.
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # The gate above proves the soak MARKER TIMES; this proves the instance's soak from
+          # web-2's readiness and probe rows on one boot_id (#12849, ADR-263). Exit 0 only on PASS: NOT_YET, FAIL and
+          # CANNOT_ESTABLISH all stop the arm before any plan, each with its next step in the
+          # ::error:: line. The helper runs the grader under env -i with only the names it reads
+          # (this job's GITHUB_ENV holds Terraform and Doppler credentials).
+          sse_f="${GITHUB_WORKSPACE}/scripts/lib/serve-soak-evidence.sh"
+          # shellcheck source=scripts/lib/serve-soak-evidence.sh
+          # shellcheck disable=SC2015 # A && B || C is intended: any failed load step reaches the exit
+          source "$sse_f" && declare -F sse_instance_soak >/dev/null || { echo "::error::serve-soak-evidence helper not loaded ($sse_f) - wiring defect, do not re-dispatch"; exit 1; }
+          sse_instance_soak "$SOLEUR_GATED_HOST" "${GITHUB_WORKSPACE}/scripts/followthroughs/web2-luks-live-6931.sh"
       - name: web-2 health precondition (serve mode only)
         if: inputs.mode == 'serve'
         env:
@@ -997,7 +1082,8 @@ jobs:
           # MEMBERSHIP FLOOR: the pooled set is {web-1, web-2} — a read carrying ONE
           # record (or zero) is missing web-2's own record, and an absent record must
           # never grade as healthy:true. Require n>=2 AND every record healthy.
-          W2_HEALTH=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash -c '
+          # env -u BASH_ENV ... -u PS4: a prd_terraform secret of a bash startup name must not run before the script (R4).
+          W2_HEALTH=$(doppler run --preserve-env -p soleur -c prd_terraform -- env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 bash -c '
             POOL_ID=$(curl --disable --noproxy "*" -s --max-time 10 \
               "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/load_balancers/pools" \
               --config - < <(printf "header = \"Authorization: Bearer %s\"\n" "${CF_API_TOKEN}") \

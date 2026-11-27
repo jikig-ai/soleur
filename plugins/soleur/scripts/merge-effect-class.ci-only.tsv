@@ -28,3 +28,4 @@ npm-publish.yml	fires on release publication and after Version Bump and Release,
 board-status-sync.yml	moves a project-board card when a pull request closes; bookkeeping, fires on every close, deploys nothing
 cleanup-unmerged-bot-branches.yml	deletes the head ref of a closed unmerged bot pull request; repository hygiene, deploys nothing
 dev-ledger-reconcile.yml	discards a closed pull request's applied-but-unmerged migrations from the dev ledger only; production is not touched
+cf-account-migrate-alert.yml	comments on issue 12931 when a dispatched CF account migrate run stops; its only parent is workflow_dispatch-only, so no merge's file list can fire it, and it deploys and applies nothing

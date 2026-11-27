@@ -123,7 +123,7 @@ wl_probe_http() {
 # classification lands it in the not-ready arm, which pages "the container is serving an EMPTY
 # /workspaces": a confidently-wrong sole-copy DATA-LOSS verdict for what is actually a routing bug.
 #
-# #6807 CORRECTION vs the plan's classifier table, verified against server/readiness.ts:119
+# #6807 CORRECTION vs the plan's classifier table, verified against server/readiness.ts (the ready:false -> 503 branch of the readyz handler)
 # (`res.writeHead(readiness.ready ? 200 : 503)`): a NOT-ready host answers **503**, not
 # `200 + ready:false`. 503 sits in wl_http_class's generic retryable set — correct for /health (a
 # booting container) and WRONG here, because for readyz it is a DETERMINATE answer. Retrying it

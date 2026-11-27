@@ -5972,7 +5972,9 @@ if want_scripts; then
   # #9377: the web-host escrow-split contract (Guard 3 census: every web-class path selects
   # prd_workspaces_luks_web, web-1 keeps prd_workspaces_luks) plus its live-mode stub-doppler rows.
   # Registered explicitly: scripts/*.test.sh is NOT auto-globbed (the #5417 orphan class). The
-  # generated suite-shard-legs.tsv / suite-durations.tsv are NOT hand-edited.
+  # generated suite-shard-legs.tsv / suite-durations.tsv are regenerated, never hand-merged; the
+  # one hand edit sanctioned for an existing measured row is a one-row re-seat to its CI
+  # merge_group median that the drift gate accepts (the test-scripts sharding runbook, #12780).
   run_suite "scripts/check-web-host-escrow-config" bash scripts/check-web-host-escrow-config.test.sh
   # #9377: the fail-closed escrow preflight every web-host birth route runs (env token wins, one named fallback
   # read, empty token fails before the checker, no token bytes in output, xtrace refused). Registered explicitly
@@ -6557,6 +6559,11 @@ if want_scripts; then
   # decision table through a gh shim and the REAL trusted-verdict and relayed-verdict libs (untrusted-author, fenced-anchor and
   # RELAYED-record rows included; the relayed-verdict lib has no suite of its own, this one drives it).
   run_suite "scripts/inngest-a5-a6-owner-ask-10136" bash scripts/followthroughs/inngest-a5-a6-owner-ask-10136.test.sh
+  # #12846 per-colo H capture probe (CTO Q10). Never exits 1: closes (0) on a trusted S1-HEALTHCOLO-CAPTURED: line with a
+  # real UTC time, else ACTION REQUIRED (5) with a before/after-2026-11-25 ask; a failed read is 3. Drives the REAL
+  # trusted-verdict lib through a gh shim on a curated PATH (untrusted, fenced and HTML-commented marker rows), plus six
+  # anchored mutants of a probe copy that must each turn a named row red.
+  run_suite "scripts/health-colo-capture-12846" bash scripts/followthroughs/health-colo-capture-12846.test.sh
   # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
   # verdict out of free text a human typed, so the suite pins the two properties that decide
   # whether it can be trusted: the verdict is anchored at line start (an unanchored grep closes
@@ -6749,6 +6756,10 @@ if want_scripts; then
   run_suite "tests/scripts/git-data-host-birth-gate" bash tests/scripts/test-git-data-host-birth-gate.sh
   run_suite "tests/scripts/betterstack-read-classify" bash tests/scripts/test-betterstack-read-classify.sh
   run_suite "tests/scripts/git-data-boot-signal-poll" bash tests/scripts/test-git-data-boot-signal-poll.sh
+  # #12866 (ADR-327 step 2a): the bastion birth gate and its boot-verify decision; same
+  # registration reason as the three above (tests/scripts/ is outside both auto-globs).
+  run_suite "tests/scripts/bastion-host-birth-gate" bash tests/scripts/test-bastion-host-birth-gate.sh
+  run_suite "tests/scripts/bastion-boot-verify" bash tests/scripts/test-bastion-boot-verify.sh
   # #9340 / ADR-262 (2026-11-12 addendum): --pr-gated — closed
   # GIT_DATA_BIRTH_READINESS_GATE_PATHS edge set; counted [skip] on the else arm.
   if _diff_touches --pr-gated "${GIT_DATA_BIRTH_READINESS_GATE_PATHS[@]}"; then
@@ -6778,6 +6789,13 @@ if want_scripts; then
   # allow-sets fail closed). Registered HERE for the same reason as the rung2 and
   # inngest-provision entries above: nothing auto-discovers tests/scripts/.
   run_suite "tests/scripts/cf-lb-overlay-gate" bash tests/scripts/test-cf-lb-overlay-gate.sh
+  run_suite "tests/scripts/cf-account-migrate-gate" bash tests/scripts/test-cf-account-migrate-gate.sh
+  run_suite "tests/scripts/cf-account-migration-scope" bash tests/scripts/test-cf-account-migration-scope.sh
+  # (#12931, CTO rulings D11, D3-D5) The migration's Doppler bootstrap suite (stub doppler, real
+  # approval hook; it finds bootstrap.sh in the spec directory by glob, before and after
+  # archive-kb) and the runbook's text contract.
+  run_suite "tests/scripts/cf-account-migration-bootstrap" bash tests/scripts/test-cf-account-migration-bootstrap.sh
+  run_suite "tests/scripts/cf-account-migration-runbook" bash tests/scripts/test-cf-account-migration-runbook.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
   # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
   # host-key option anywhere in the tree), its mutation harness, and the track.sh
@@ -7074,6 +7092,14 @@ if want_scripts; then
   run_suite "tests/scripts/sentry-full-root-apply" bash tests/scripts/test-sentry-full-root-apply.sh
   run_suite "tests/scripts/sentry-destroy-gate-verdict" bash tests/scripts/test-sentry-destroy-gate-verdict.sh
   run_suite "tests/scripts/sentry-squash-ack-detect" bash tests/scripts/test-sentry-squash-ack-detect.sh
+  # #12971 — the rundevoo.run destroy-guard set: full-root delete/forget
+  # counting, the fail-closed aggregator verdict, the squash-body emulation,
+  # and the whole-list DNS set-equality probe (the only mechanism that sees
+  # out-of-band-added records; nothing under tests/scripts/ is auto-discovered).
+  run_suite "tests/scripts/destroy-guard-counter-rundevoo" bash tests/scripts/test-destroy-guard-counter-rundevoo.sh
+  run_suite "tests/scripts/rundevoo-destroy-gate-verdict" bash tests/scripts/test-rundevoo-destroy-gate-verdict.sh
+  run_suite "tests/scripts/rundevoo-squash-ack-detect" bash tests/scripts/test-rundevoo-squash-ack-detect.sh
+  run_suite "tests/scripts/rundevoo-dns-set-equality" bash tests/scripts/test-rundevoo-dns-set-equality.sh
   run_suite "tests/scripts/sentry-create-gate" bash tests/scripts/test-sentry-create-gate.sh
   # #7650 Phase 2 — Guard A (create protection, now wired into BOTH workflow jobs)
   # and Guard B (the forget<->import bijection) for the sentry_alert adoption.

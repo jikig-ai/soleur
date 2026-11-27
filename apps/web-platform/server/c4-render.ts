@@ -354,13 +354,17 @@ let binaries: Binaries | null = null;
 
 /** The install prefixes of node and the likec4 package, to bind read-only when
  *  they are not under /usr (a CI runner's node lives under /opt/hostedtoolcache).
- *  Null when a prefix is too shallow to bind safely (e.g. `/`, which would bind
- *  the whole host): the render then refuses rather than widening the sandbox. */
+ *  A prefix under /usr needs no extra bind — the argv already mounts /usr
+ *  read-only — so the coverage check runs before the depth refusal (a distro
+ *  node at /usr/bin/node resolves to the 1-component prefix /usr). Null when a
+ *  still-needed prefix is too shallow to bind safely (e.g. `/`, which would
+ *  bind the whole host): the render then refuses rather than widening the
+ *  sandbox. */
 export function installPrefixBinds(nodeBin: string, likec4Entry: string): string[] | null {
   const extra: string[] = [];
   for (const p of [dirname(dirname(nodeBin)), dirname(dirname(likec4Entry))]) {
-    if (p.split("/").filter(Boolean).length < 2) return null;
     if (underUsr(p) || extra.some((e) => p === e || p.startsWith(`${e}/`))) continue;
+    if (p.split("/").filter(Boolean).length < 2) return null;
     extra.push(p);
   }
   return extra;

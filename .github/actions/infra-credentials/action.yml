@@ -3,7 +3,9 @@ description: >-
   #8209 / ADR-241. Loads the Tier-B privileged credential set from the
   soleur-infra-privileged Doppler project and exports it as TF_VAR_* plus the plain
   names, falling back to the legacy prd_terraform path while the operator sequence is
-  still in flight. Replaces the bare DopplerHQ/cli-action step in every Tier-B job.
+  still in flight. A third arm (`source=tier_b_deploy_channel`, #9294) serves the
+  narrow soleur-deploy-channel project. Replaces the bare DopplerHQ/cli-action step in
+  every Tier-B job.
 
 # WHY THIS ACTION EXISTS, and why it REPLACES the Doppler install step rather than
 # sitting beside it.
@@ -78,17 +80,38 @@ inputs:
       Every other job gets the name exported EMPTY, never absent (see the load step).
     required: false
     default: "false"
+  doppler-project:
+    description: >-
+      #9294 / ADR-241. The Doppler project this loader reads. Exactly two values are
+      admitted: `soleur-infra-privileged` (the broad Tier-B project; the default,
+      which preserves every existing caller) and `soleur-deploy-channel` (the narrow
+      project holding the deploy-channel family). Anything else is refused by name
+      BEFORE any Doppler call, so a typo or an attacker-chosen name cannot redirect
+      the read at another project.
+    required: false
+    default: "soleur-infra-privileged"
+  doppler-token-deploy-channel:
+    description: >-
+      `secrets.DOPPLER_TOKEN_DEPLOY_CHANNEL` — the read token for the narrow
+      `soleur-deploy-channel` project, an environment secret on an environment whose
+      deployment-branch policy admits `main` only. Required when `doppler-project` is
+      `soleur-deploy-channel`; an empty value there is a named refusal
+      (`no_credential_source`), NEVER a legacy fallback — a fallback would read the
+      family from the branch-reachable config this move exists to evict it from.
+    required: false
+    default: ""
 
 outputs:
   source:
-    description: "`tier_b` when the privileged project was loaded, `legacy` otherwise. Jobs and the census read this."
+    description: "`tier_b` when the privileged project was loaded, `tier_b_deploy_channel` for the narrow deploy-channel project, `legacy` otherwise. Jobs and the census read this."
     value: ${{ steps.load.outputs.source }}
   git-data-root-state-bucket:
     description: >-
       The R2 bucket the git-data-root-key root must `terraform init
       -backend-config=bucket=…` against: `soleur-terraform-state-privileged` once the
       Tier-B state key pair is present, and the legacy `soleur-terraform-state` before
-      that. Empty string when the loader REFUSED (see `git_data_root_state_legacy_after_migration`).
+      that. Empty string when the loader REFUSED (see `git_data_root_state_legacy_after_migration`),
+      and empty when the narrow `soleur-deploy-channel` arm ran — that arm owns no state bucket.
     value: ${{ steps.load.outputs.git_data_root_state_bucket }}
 
 runs:
@@ -127,6 +150,8 @@ runs:
       env:
         DP_INFRA: ${{ inputs.doppler-token-infra-privileged }}
         DP_LEGACY: ${{ inputs.doppler-token-legacy }}
+        DP_PROJECT: ${{ inputs.doppler-project }}
+        DP_DEPLOY_CHANNEL: ${{ inputs.doppler-token-deploy-channel }}
         GIT_DATA_ROOT_STATE_MIGRATED: ${{ inputs.git-data-root-state-migrated }}
         GITHUB_APP_RUNTIME_OPT_IN: ${{ inputs.github-app-runtime-token }}
       run: |
@@ -140,6 +165,42 @@ runs:
         readonly LEGACY_BUCKET="soleur-terraform-state"
 
         emit() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+
+        # A caller-side DOPPLER_API_HOST or DOPPLER_VERIFY_TLS would steer EVERY authenticated
+        # Doppler call this step makes — a token-exfil channel, not configuration. The job may
+        # set neither; presence is a named refusal, never a warning.
+        if [[ -n "${DOPPLER_API_HOST:-}" || -n "${DOPPLER_VERIFY_TLS:-}" ]]; then
+          echo "::error title=infra-privileged::verdict=doppler_cli_env_refused — DOPPLER_API_HOST/DOPPLER_VERIFY_TLS set by the job would steer every authenticated call. Refused."
+          exit 1
+        fi
+
+        # ---- #9294 / ADR-241: the project allowlist ----------------------------
+        #
+        # BEFORE any Doppler call and before the arm split. Exactly two project names
+        # exist; a third -- typo'd or attacker-chosen through a workflow input -- is
+        # refused by name rather than aimed at a project no caller audited. An empty
+        # input is the composite default, not a third value. (`mint-infra-app` pins
+        # the same case-dispatch shape for its two names.)
+        # The default is normalized ONCE here so the allowlist and the arm selection
+        # cannot disagree about which input they read.
+        PROJECT="${DP_PROJECT:-soleur-infra-privileged}"
+        case "$PROJECT" in
+          soleur-infra-privileged|soleur-deploy-channel) ;;
+          *)
+            echo "::error title=infra-privileged::verdict=doppler_project_refused — doppler-project must be soleur-infra-privileged or soleur-deploy-channel; got '${DP_PROJECT}'. Refused before any Doppler call."
+            exit 1
+            ;;
+        esac
+
+        # The metadata filter's DEFINITIONS live here, before the arm split, because
+        # both the narrow deploy-channel arm and the broad Tier-B arm run the filter.
+        # The why -- exact names not a prefix; DOPPLER_TOKEN_TF is a real secret and
+        # survives; single-sourced rather than duplicated per arm -- is the long
+        # comment above the broad arm. The text did not change; the site did.
+        readonly META_NAMES='"DOPPLER_PROJECT","DOPPLER_CONFIG","DOPPLER_ENVIRONMENT","DOPPLER_TOKEN","DOPPLER_API_HOST","DOPPLER_DASHBOARD_HOST","DOPPLER_VERIFY_TLS"'
+        readonly META_FILTER="to_entries
+          | map(select(.key | IN(${META_NAMES}) | not))
+          | from_entries"
 
         # ---- #8609: the runtime App key's read token, ALWAYS exported ---------
         #
@@ -165,6 +226,103 @@ runs:
         # "true", which is exactly the job whose plan must fail after PR-B. Guard 8 row 8.6.
         if [[ "${GITHUB_APP_RUNTIME_OPT_IN:-false}" == "true" ]]; then gar_delivered=true; else gar_delivered=false; fi
         printf 'TF_VAR_github_app_runtime_token_delivered=%s\n' "$gar_delivered" >> "$GITHUB_ENV"
+
+        # ---- Arm N: the narrow deploy-channel project (#9294 / ADR-241) --------
+        #
+        # A caller that names doppler-project=soleur-deploy-channel gets THIS arm and
+        # no other. Three deliberate absences, each for a different reason:
+        #
+        #   NO LEGACY FALLBACK. The family this project holds is the one being evicted
+        #   from the branch-reachable config; a fallback there would reintroduce the
+        #   reach the move removes, silently. An empty token is a named refusal.
+        #   NO prd_terraform READ AT ALL, for the same reason.
+        #   NO state-bucket aliasing and NO App-runtime opt-in. Those pairs live in the
+        #   BROAD project; the narrow project holds only the deploy-channel family, so
+        #   an absent pair here is not a half-set pair -- it is the design. The pre-split
+        #   TF_VAR_github_app_runtime_token_delivered flag is forced back to false inside
+        #   the arm (below), so an opted-in caller still cannot deliver the name.
+        if [[ "$PROJECT" == "soleur-deploy-channel" ]]; then
+          # Broad-mode inputs set alongside the narrow project are IGNORED, not merged:
+          # a job that passed doppler-token-infra-privileged must not believe its
+          # privileged token served. Say so, then refuse nothing -- the arm stands alone.
+          if [[ -n "${DP_INFRA:-}" || -n "${DP_LEGACY:-}" ]]; then
+            echo "::notice title=infra-privileged::doppler-project=soleur-deploy-channel selects the narrow arm; doppler-token-infra-privileged and doppler-token-legacy are set but ignored."
+          fi
+          if [[ -z "${DP_DEPLOY_CHANNEL:-}" ]]; then
+            # The shared verdict word: the job has no credential source, and the fix is
+            # an environment secret, not a retry.
+            echo "::error title=infra-privileged::verdict=no_credential_source — doppler-project=soleur-deploy-channel needs DOPPLER_TOKEN_DEPLOY_CHANNEL and it is empty. There is no fallback for this arm by design; bind a main-only environment that holds it."
+            exit 1
+          fi
+          # The explicit -p/-c pair is the ADR-168 property again: a service token
+          # errors LOUDLY on a project/config mismatch, so a mis-bound token becomes
+          # the named failure below instead of a silent read of a config it can reach.
+          # stderr goes to a file, never the log -- a Doppler auth error can quote the
+          # token prefix (the legacy arm's err-file precedent).
+          rc=0
+          payload="$(DOPPLER_TOKEN="$DP_DEPLOY_CHANNEL" doppler secrets download \
+            --no-file --format json -p soleur-deploy-channel -c prd \
+            2>"${RUNNER_TEMP:-/tmp}/deploy-channel-download.err")" || rc=$?
+          if [[ "$rc" -ne 0 || -z "$payload" ]]; then
+            echo "::error title=infra-privileged::verdict=deploy_channel_read_failed rc=${rc} — the deploy-channel token could not read soleur-deploy-channel/prd. The token is bound to a project and config; a mismatch fails closed here rather than serving another config."
+            exit 1
+          fi
+
+          # The same staleness probe and the same filter as the broad arm: a name list
+          # is a claim about the vendor, so an unknown DOPPLER_-prefixed key says so
+          # rather than being exported quietly.
+          unknown="$(printf '%s' "$payload" | jq -r "
+            keys[] | select(startswith(\"DOPPLER_\"))
+                   | select(IN(${META_NAMES}) | not)" | paste -sd, -)"
+          if [[ -n "$unknown" ]]; then
+            echo "::notice title=infra-privileged::exporting DOPPLER_-prefixed keys as SECRETS (not CLI config): ${unknown}. If Doppler has added a new CLI configuration variable, add it to META_FILTER in .github/actions/infra-credentials/action.yml."
+          fi
+          payload="$(printf '%s' "$payload" | jq -c "$META_FILTER")"
+
+          # Mask every line of every value before anything else can echo one; a PEM is
+          # multi-line and ::add-mask:: matches a single line at a time.
+          while IFS= read -r line; do
+            [[ -n "$line" ]] && printf '::add-mask::%s\n' "$line"
+          done < <(printf '%s' "$payload" | jq -r '.[] | select(type == "string")' | sed 's/\r$//')
+
+          # The same plain + TF_VAR_ pairing loop as the broad arm, kept byte-similar
+          # so the two arms share one export shape (the mechanism is copy-parity,
+          # pinned by the dc3/dc4 loader rows). The GAR_NAME skip is kept for
+          # uniformity even though the narrow project never holds that name.
+          n=0
+          while IFS= read -r k; do
+            [[ -n "$k" ]] || continue
+            [[ "$k" == "$GAR_NAME" ]] && continue
+            v="$(printf '%s' "$payload" | jq -r --arg k "$k" '.[$k]')"
+            delim="SOLEUR_EOF_$(openssl rand -hex 12)"
+            { printf '%s<<%s\n' "$k" "$delim"
+              printf '%s\n' "$v"
+              printf '%s\n' "$delim"
+            } >> "$GITHUB_ENV"
+            tfk="TF_VAR_$(printf '%s' "$k" | tr '[:upper:]' '[:lower:]')"
+            { printf '%s<<%s\n' "$tfk" "$delim"
+              printf '%s\n' "$v"
+              printf '%s\n' "$delim"
+            } >> "$GITHUB_ENV"
+            n=$((n + 1))
+          done < <(printf '%s' "$payload" | jq -r 'keys[]')
+
+          # The same anti-vacuity floor as the broad arm, named for this project: an
+          # empty export looks exactly like a healthy run and is the worst outcome.
+          MIN_EXPORTED=1
+          if [[ "$n" -lt "$MIN_EXPORTED" ]]; then
+            printf '::error title=infra-privileged::verdict=deploy_channel_empty exported=%s — soleur-deploy-channel/prd returned no usable keys. A job that exports nothing silently degrades to whatever its own doppler run supplies.\n' "$n"
+            exit 1
+          fi
+
+          # Later $GITHUB_ENV lines win: the narrow arm NEVER delivers the App-runtime
+          # token, so the pre-split delivered flag is pinned back to false.
+          printf 'TF_VAR_github_app_runtime_token_delivered=false\n' >> "$GITHUB_ENV"
+          echo "::notice title=infra-privileged::source=tier_b_deploy_channel exported=${n}"
+          emit source "tier_b_deploy_channel"
+          emit git_data_root_state_bucket ""
+          exit 0
+        fi
 
         # ---- Arm 1: legacy ---------------------------------------------------
         #
@@ -319,10 +477,10 @@ runs:
         # same shape as the DOPPLER_TOKEN gap fixed one round earlier. DASHBOARD_HOST and
         # VERIFY_TLS complete the CLI's documented configuration surface (VERIFY_TLS=false
         # turns the redirect above into an undetectable one).
-        readonly META_NAMES='"DOPPLER_PROJECT","DOPPLER_CONFIG","DOPPLER_ENVIRONMENT","DOPPLER_TOKEN","DOPPLER_API_HOST","DOPPLER_DASHBOARD_HOST","DOPPLER_VERIFY_TLS"'
-        readonly META_FILTER="to_entries
-          | map(select(.key | IN(${META_NAMES}) | not))
-          | from_entries"
+        #
+        # The `readonly META_NAMES`/`readonly META_FILTER` definitions moved ABOVE the
+        # arm split (#9294) so the narrow deploy-channel arm shares them — SINGLE-SOURCED
+        # above still means one site, just an earlier one.
         # Staleness backstop: a name list is a claim about the vendor, so if Doppler
         # ever adds a config variable this filter does not know, SAY SO rather than
         # silently exporting it. A warning is the right level — the greedy alternative
@@ -457,3 +615,29 @@ runs:
         echo "::notice title=infra-privileged::source=tier_b exported=${n} git_data_root_state=$([[ "$bucket" == "$PRIV_BUCKET" ]] && echo privileged || echo legacy) github_app_runtime_token=${gar_state}"
         emit source "tier_b"
         emit git_data_root_state_bucket "$bucket"
+
+    # ---- #12931 / CTO L79: the Cloudflare account migration in-progress gate ------
+    #
+    # LAST, and its own step. Every Tier-B job that plans against the web-platform root reaches
+    # Terraform only through this action, so a refusal here stops each of them before its first
+    # plan without adding one byte to apply-web-platform-infra.yml (ADR-231's cap). The script
+    # owns the scope, deny by default (CTO D1): every workflow that calls this action is gated
+    # unless the script's CFAM_EXEMPT_WORKFLOWS names it (the migrator, the plan-only drift job,
+    # and callers that never touch the root).
+    #
+    # A SEPARATE step because the load step's $GITHUB_ENV exports (TF_STATE_AWS_*) are visible
+    # only to LATER steps. The script reads them, or the read-only AWS_* pair from prd_terraform
+    # through the legacy token when they are absent. Every value reaches the shell through
+    # `env:`, never `${{ }}` inside `run:`; github.event.inputs carries the dispatch input
+    # (a composite action's own `inputs` context cannot see the workflow's). No `if:`, no
+    # `continue-on-error`: tests/scripts/test-cf-account-migration-scope.sh asserts both.
+    # The Phase 5 cleanup PR deletes this step with the script.
+    - name: Cloudflare account migration in-progress gate (#12931)
+      shell: bash
+      env:
+        CFAM_WORKFLOW_REF: ${{ github.workflow_ref }}
+        CFAM_JOB: ${{ github.job }}
+        CFAM_EVENT_NAME: ${{ github.event_name }}
+        CFAM_WEB_HOST_KEY: ${{ github.event.inputs.web_host_key }}
+        CFAM_DOPPLER_TOKEN_LEGACY: ${{ inputs.doppler-token-legacy }}
+      run: bash "${GITHUB_ACTION_PATH}/../../../apps/web-platform/infra/scripts/cf-account-migration-complete.sh" --from-r2

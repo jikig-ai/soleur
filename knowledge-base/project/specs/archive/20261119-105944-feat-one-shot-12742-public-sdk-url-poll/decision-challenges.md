@@ -1,0 +1,60 @@
+# Decision Challenges — feat-one-shot-12742-public-sdk-url-poll (#12742 item 1)
+
+All ten technical forks were ruled by a batched `soleur:engineering:cto` spawn on
+2026-11-17 (one spawn; `cto_spawns=1` in session-state.md). The planning session's
+assumed defaults appear under each row's fork text where they were consulted; the
+Ruling cell is authoritative. Items 4 and 5 differ from the assumed default — the
+plan and tasks.md were amended to match (see `## Amendments` below).
+
+| Item | Class | Ruling |
+|------|-------|--------|
+| 1. Sync-evidence mechanism: `apps { url error }` GQL + `sdk_sync`/`sdk_app_url` fields vs alternatives (deploys query, functions-derived signal, external ping) | technical | Ruled by CTO agent, 2026-11-17: emit `sdk_sync`/`sdk_app_url` from a second loopback GQL `query SdkSyncProbe { apps { url error } }` - `Query.apps` and `App.url`/`App.error` verified in the pinned inngest v1.45.1 schema; pollSDKs sets `app.Error` every 60 s cycle and `register()` clears it on success, so `ok` proves the last attempt succeeded; no `deploys`/`latestSync` surface exists in the dev-server schema. Dissent: a ping that succeeds but whose register fails is under-covered; `sdk_app_url` + `registry_fns` co-evidence discriminates it — revisit if a later Inngest bump adds `latestSync.error`. |
+| 2. F4(ii) remedy: sanitize `image_ref`/`cli_version` vs `countMatches(msg,' registry_fns=') != 1` alert predicate | technical | Ruled by CTO agent, 2026-11-17: sanitize `image_ref`/`cli_version` at bind to charset `[A-Za-z0-9_:.@/+-]` (mapped to `_`) via the in-file `tr` shape - a space-bearing free-text value injects a decoy ` registry_fns= ` token for every `key=value` consumer (alert SQL, `inngest-host-state.sh`, heartbeat classifier, greps); the alert predicate protects only the one alert; `tr` precedent at inngest-bootstrap.sh:1184. Dissent: none. |
+| 3. Extend registry-empty alert to page on `sdk_sync=error` now vs defer | technical | Ruled by CTO agent, 2026-11-17: defer the `sdk_sync=error` paging extension and record the deferral as a comment on #12742 during this PR's ship step - the field has no production history until the owner's replace; tuning a new page pre-data on the most sensitive alert surface risks fatigue; responder-visible evidence ships in the same row. Dissent: one merged-PR window where a post-replace sync failure is responder-visible but not paged; the tracking comment must name "page on `sdk_sync=error` post-measurement" explicitly. |
+| 4. Preflight shape: new `tests/scripts/lib/inngest-public-sdk-url-preflight.sh` invoking `doppler run -- cloudflare-readonly.sh config-entrypoint`, judging the JSON projection, after credential load in both jobs | technical | Ruled by CTO agent, 2026-11-17: ratified shape, pass predicate strengthened - pass iff output ends `... ok` + parseable projection AND at least one enabled `mentions_app_host` rule AND the last enabled app-host rule with non-null `ssl` is `strict` AND no enabled rule positioned after it carries `ssl` in `{off, flexible}`; the trailing clause closes the documented wildcard evasion (`ends_with(http.host,".soleur.ai")` / `true` expressions overriding strict undetected); verified against the live ruleset (3 rules, app strict first, trailing rules null + full). Dissent: a trailing `full` wildcard is undetectable from the projection (expressions are never printed) — documented, not silently accepted. |
+| 5. `probe_schema` 9->10 bump forces `stale_schema` refusals on the current host until the owner's replace; whether the #8080 witness needs an alive/not-dark mapping | technical | Ruled by CTO agent, 2026-11-17: keep `stale_schema` -> `refusal` in the witness classifier (OVERTURNS the assumed conditional mapping); add only a `#12742` comment at the arm recording the deliberate choice - the witness measures execute-gate satisfiability, not host darkness; during the merge-to-replace window the gate IS unsatisfiable by design and `refusal` is truthful; `suppressed` would forgive a stuck replace past ledger row 6's 2026-11-20 expiry. T2a audit discharged by this ruling: it counts, and counting is correct. Dissent: one deduped `action-required` issue files ~2h post-merge on a designed-for state; accepted because its remedy line is already correct and the alternative forfeits the stuck-state alarm. |
+| 6. Preflight vacates the old gate's "before any credential" property | technical | Ruled by CTO agent, 2026-11-17: vacating "before any credential" is inherent to a live-mode check; the B10 successor pin asserts the new property - step sits immediately after `Load infra credentials (tiered)` and before `Terraform init`, unconditional, fail-closed; "no terraform step runs unless the live read passed" is the protected property; `firstCred+1` is the strictest slot (before `Extract backend credentials` adds more secret material). Dissent: the runbook's documented "before any credential loads" property must be restated in the same diff — task T12 already carries it. |
+| 7. Item-9 carrier-comment scope tension: brief excludes items 2-9, but item 9 says refresh "the next time that file changes for a real reason" | technical | Ruled by CTO agent, 2026-11-17: refresh the stale "co-located web-platform" carrier comment (inngest-bootstrap.sh:1612) in this diff - item 9's verbatim trigger fires on this PR, so the refresh IS item 9's own specification, not scope creep; a known-wrong comment inside an edited file teaches a false topology. Dissent: refresh limited to that comment's accuracy (now the public serve URL); no other item-9-class commentary edits. |
+| 8. Byte budget: workflow is 5 B under the 490,000-B gate | technical | Ruled by CTO agent, 2026-11-17: the edit must be net-negative or net-zero bytes; verify `wc -c` at PR time; rationale prose relocates to `apply-web-platform-infra-job-rationale.md` - workflow is 489,995 B, exactly 5 B under `WORKFLOW_FILE_GATE_BYTES`; removing both confirm steps (~660 B) funds two ~5-line preflight steps; one-line comments required, not optional; the gate itself prescribes the relocation. Dissent: none. |
+| 9. `sdk_sync` enum cardinality: `ok/error/no_apps` plus sentinels `n/a/__UNREADABLE__` vs richer states | technical | Ruled by CTO agent, 2026-11-17: `sdk_sync` in `{ok, error, no_apps}` plus sentinels `{n/a, __UNREADABLE__}`; no per-app detail - five values discriminate all four post-replace shapes; `sdk_app_url` already carries per-app granularity; both new fields must land in both lists to keep `FIELDS-NEVER_ZERO == 4` and `wc -l == 8` invariants (inngest.test.sh:2393,2406). Dissent: none. |
+| 10. Workflow `confirm:` input retained vs removed | technical | Ruled by CTO agent, 2026-11-17: keep the `confirm:` workflow_dispatch input and all non-inngest consumers untouched; only the two inngest jobs stop consuming it - `confirm:` feeds ~10 other targets as their own typo-guards; removing it is an unrelated breaking dispatch-API change inside a safety PR; the B10 successor asserts both inngest jobs stop consuming `inputs.confirm` and zero live recipes carry `confirm=PUBLIC-SDK-URL*`, with the inverted sweep keeping the 6-recipe non-vacuity floor via `apply_target=inngest-host[-replace]` matching. Dissent: none. |
+
+## Amendments (rulings that differ from the assumed default)
+
+- **Item 4 (strengthened):** the preflight's pass predicate gains the trailing-rule
+  clause — refuse if any enabled rule positioned after the last strict app-host rule
+  carries `ssl` in `{off, flexible}`. Plan section and tasks T-preflight updated.
+- **Item 5 (overturned):** no alive/not-dark mapping is added to the witness
+  classifier; `stale_schema` stays `refusal`. T2a's deliverable is now only the
+  `#12742` comment at the classify arm recording the deliberate choice.
+- **Item 3 (addendum):** ship step posts a comment on #12742 recording the deferred
+  `sdk_sync=error` paging decision (explicit wording: "page on `sdk_sync=error`
+  post-measurement").
+
+## Cross-cutting notes
+
+- `#10538` is **OPEN** — the issue body says "closed by #12737" but a later comment corrects it;
+  do not restate it as closed in code comments or PR text.
+- The issue's owner-dispatch preconditions (#10479 closed, #12726 resolved, `INNGEST_CUTOVER_FLIP`
+  handled, fresh strict rule read, zot mirror pin, idle concurrency group) are item-2 scope and
+  remain the owner's checklist, not this PR's.
+
+## Review-round rulings (CTO agent, 2026-11-18)
+
+The PR #12876 review panel raised findings that dissent from rulings 4, 9 and 10. The CTO agent ruled each; all land in this PR.
+
+| Fork | Ruling | Rationale |
+|---|---|---|
+| R1 (dissents 4): a trailing enabled `full` rule passes `trailing-weak` | New per-rule wrapper projection field `host_literal_only` (expression is exactly `(http.host eq "<h>")` or `(http.host in {"<h>" ...})`). After the last strict app rule, refuse any enabled non-null-ssl rule unless `host_literal_only and (mentions_app_host\|not)`. Tag stays `trailing-weak`. | Equals the guard's property; the live third rule (`soleur.ai`/`www.soleur.ai`, `full`) still passes; no ruleset reorder. Unverified: Cloudflare returns the expression byte-for-byte (fails closed if not). |
+| R2 (dissents 4): the strict rule's own scope is unchecked (negated / path-narrowed) | The last enabled app rule with non-null ssl must also be `host_literal_only`; else `[strict-not-host-wide]`. No zone (A) / page-rule (C) backstop; residual written in script header + runbook. | A host-literal rule covers every request to the host; Cloudflare docs: Rules take precedence over Page Rules. |
+| R3: Doppler env isolation | `timeout 90 doppler run --preserve-env --only-secrets CF_ZONE_ID,CF_API_TOKEN_RULESETS,DOPPLER_PROJECT,DOPPLER_CONFIG -p soleur -c prd_terraform -- wrapper`; refuse `[ruleset-id]` unless projection `.id` is the repo's entrypoint ruleset id (seo-config-rules.tf import). Census `CMD_POS` accepts a `timeout N` prefix; `--preserve-env` added at the replace job's liveness gate. | Blocks planted BASH_ENV/LD_PRELOAD; keeps Tier-B precedence (ADR-241 D6); a forged zone/token cannot return the pinned ruleset id. |
+| R4 (dissents 9): aggregate `sdk_sync` cannot say whether the PUBLIC poll works | Keep aggregate `sdk_sync`; `sdk_app_url` entries become `<url>!<ok\|error>` joined by `,`; strip userinfo and query/fragment in jq; charset keeps `,` and `!`; cap at an entry boundary (lead set 160 B on review: the other fields measure ~795 B against logger's 1024 B) with `,+<n>`; schema stays 10. Item-4 pass: the public entry is `!ok` and no other entry exists. | One row answers "public poll works" and "private row gone". |
+| R5 (partly reverses 10 for replace): typed intent on the destructive replace | `inngest_host_replace` requires `confirm=REPLACE-INNGEST-HOST` (a typo-guard, not authorization), checked at the top of its preflight step; birth stays token-free. | `infra-privileged` has no reviewers; matches the other destroying targets. |
+| R6: retry the live read | No retry; runbook refusal-tag table, `wrapper-unverified (upstream-error)` = re-dispatch once. | Re-dispatch is free; a retry adds untested gate code. |
+
+Post-merge, before the replace dispatch: one read-only `config-entrypoint` read (R1/R2 expression normalisation) and one run of R3's exact `doppler run` line. Both fail closed if wrong.
+
+> **Amendment 2026-11-19 (review fix round 2, A4):** R5's check is no longer "at the top of its preflight step". It is
+> its own step, `Validate typed confirm (inngest-host-replace)`, placed immediately before `Load infra credentials
+> (tiered)`, so a mistyped token loads no Tier-B secret. The ruling's substance (exact token, typo-guard, birth
+> token-free) is unchanged. B10 of `plugins/soleur/test/terraform-target-parity.test.ts` pins the position.

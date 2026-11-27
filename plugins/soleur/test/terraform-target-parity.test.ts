@@ -1286,12 +1286,15 @@ function stripDispatchJobs(workflowText: string): string {
   // doppler_secret.inngest_link_tls, an OPERATOR_APPLIED_EXCLUSION on purpose: a merge must never flip the
   // production Inngest URL. Stripped so the dispatch job's target cannot masquerade as per-merge coverage
   // (the per-merge list is asserted below NOT to contain it).
+  // bastion_host_create (#12866, ADR-327 step 2a): the dispatch-only bastion BIRTH path. Every one
+  // of its -targets is an OPERATOR_APPLIED_EXCLUSION, so folding them in would assert per-merge
+  // coverage for a host the per-merge apply must never touch (the bastion describe block pins it).
   //
   // NOTE for whoever edits this function next: the guard above extracts EVERY
   // "[a-z0-9_]+" string literal in this body and requires each to name a real top-level
   // job. Adding any other lowercase quoted literal here — even in a helper call — makes
   // that guard treat it as a job name and go red. Comments are fine; literals are not.
-  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create"), "inngest_link_flag");
+  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create"), "inngest_link_flag"), "bastion_host_create");
 }
 
 /** Inverse of stripJob: return ONLY the named job's block (header → next job/EOF). */
@@ -1636,6 +1639,16 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_server.grok_dogfood",
   "hcloud_firewall.grok_dogfood",
   "hcloud_firewall_attachment.grok_dogfood",
+  // #12866 (ADR-327 step 2a) — the dedicated bastion. Born only by the bastion_host_create dispatch,
+  // replaced only by bastion-host-replace (#12879); a per-PR -target would birth or mutate a host the
+  // HALT forbids. The host key never rotates on a replace (F5), so no routine apply may touch it.
+  // tests/scripts/lib/bastion-resources.txt is the one list; the bastion describe block below
+  // asserts every entry is here and equals the job's -target lines.
+  "tls_private_key.bastion_host_ssh",
+  "hcloud_firewall.bastion",
+  "hcloud_server.bastion",
+  "hcloud_server_network.bastion",
+  "hcloud_firewall_attachment.bastion",
 ]);
 // Operator-applied doppler_service_token exceptions to the "every token is CI-targeted"
 // assertion (#5566). A token belongs here ONLY when it is minted into an operator-created
@@ -3358,8 +3371,11 @@ const MAIN_ROOT_TF_WORKFLOWS = [
   "apply-web-platform-infra.yml",
   "apply-deploy-pipeline-fix.yml",
   "cf-lb-overlay.yml",
+  "cf-account-migrate.yml",
   "scheduled-terraform-drift.yml",
   "infra-validation.yml",
+  // #12866: the reusable body of apply-web-platform-infra's bastion_host_create caller job.
+  "bastion-host-create.yml",
 ];
 
 describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)", () => {
@@ -3484,11 +3500,97 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
         return plans && MAIN_ROOT_FORMS.some((re) => re.test(t));
       })
       .sort();
-    // Exact: infra-validation.yml is the one planner the census cannot see (its matrix is
-    // computed at runtime from a changed-files job), so it is listed by hand; every other
-    // entry must be found, and nothing else may be.
-    expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => f !== "infra-validation.yml").sort());
-    expect(found.length).toBe(4);
+    // Exact: two planners are invisible to this YAML census and listed by hand —
+    // infra-validation.yml (its matrix is computed at runtime from a changed-files job) and
+    // cf-account-migrate.yml (#12931: it plans through apps/web-platform/infra/scripts/
+    // cf-account-migrate-job.sh, not inline YAML). Every other entry must be found, and nothing
+    // else may be.
+    const HAND_LISTED = ["infra-validation.yml", "cf-account-migrate.yml"];
+    // One equality: a hand-listed name missing from the list, or one the census also finds (it
+    // would appear twice), both red. A missing file throws in the parity loops' readFileSync.
+    expect([...found, ...HAND_LISTED].sort()).toEqual([...MAIN_ROOT_TF_WORKFLOWS].sort());
+    // Independent of HAND_LISTED, so deleting a name from both lists still reds: a workflow that
+    // runs a repo script which itself plans or applies the root must be in the list.
+    // A repo script is reached from a workflow by:
+    //   - an interpreter (`bash`/`sh`, any flags before the path, e.g. `bash -e`, `bash -euo pipefail`),
+    //     also by an absolute path (`/bin/bash`, `/usr/bin/env bash`), or by `source` / `.`;
+    //   - directly as a command word: first on a `run:` line or block-scalar line (`run: ./apps/x.sh`,
+    //     `apps/x.sh …`), or after `&&`, `||`, `|`, `;`, `then`, `do` or `else`;
+    //   - in both shapes, after leading prefix words: `FOO=1`, `timeout [-flags] 600`, `env`, `exec`,
+    //     `sudo`, `nohup`, `time`, `command`;
+    // with an optional `./`, `${{ github.workspace }}/`, `$GITHUB_WORKSPACE/` or `${GITHUB_WORKSPACE}/`
+    // prefix (quoted or not). A YAML list item (`- apps/x.sh`, an on.push.paths filter) is not a call,
+    // `.sh ` in `bash a.sh b.sh` is not the `sh` interpreter, and `done. x.sh` is not `.`.
+    // A sourced library (tests/scripts/lib/*.sh) is read like any other script; it is not a planner
+    // unless it runs terraform plan/apply itself, so the planner check below still decides.
+    // RESIDUALS, not seen by this census: (1) a script reached THROUGH another script (only the
+    // script the workflow names is read, never what it runs or sources in turn); (2) a call inside
+    // `$( … )` or backticks, through xargs / find -exec / `bash -c "…"`, or through a variable
+    // (`"$SCRIPT"`); (3) a script outside apps/ scripts/ tests/ plugins/, or not named `*.sh`;
+    // (4) another interpreter (zsh, dash, python …) or a prefix word not listed above; (5) a
+    // planner phrase in a comment the line stripper keeps (stripLineComment tracks only double
+    // quotes, so a `#` after an unbalanced `"` survives) is matched: an over-count that reds loudly,
+    // never a miss; (6) a script that spells the terraform call other than `terraform [-chdir=…]
+    // plan|apply` is not a planner here: through a variable (`"$TF" plan`, `"${TF_BIN:-terraform}"
+    // apply`) or with the subcommand passed in (`terraform "$@"`, the shape the scope suite's A6
+    // `x-root.yml` row treats as a planner). cf-account-migrate.yml is pinned by name below
+    // whichever way its script spells it.
+    const PFX = String.raw`["']?(?:\$\{\{\s*github\.workspace\s*\}\}\/|\$\{?GITHUB_WORKSPACE\}?\/|\.\/)?`;
+    const REL = String.raw`((?:apps|scripts|tests|plugins)\/[\w./-]+\.sh)`;
+    const PREFIX_WORDS = String.raw`(?:(?:[A-Za-z_]\w*=\S*|timeout(?:[ \t]+-\S+)*[ \t]+\S+|env|exec|sudo|nohup|time|command)[ \t]+)*`;
+    const INTERP_CALL = new RegExp(
+      String.raw`(?<![\w./-])(?:(?:\/[\w.-]+)*\/)?(?:env[ \t]+(?:-\S+[ \t]+|[A-Za-z_]\w*=\S*[ \t]+)*)?(?:bash|sh|source|\.)[ \t]+(?:-[\w-]*o[ \t]+\w+[ \t]+|-[\w-]+[ \t]+)*` + PFX + REL,
+      "g",
+    );
+    const DIRECT_CALL = new RegExp(
+      String.raw`(?:^[ \t]*(?:(?:-[ \t]+)?run:[ \t]*)?|(?:&&|\|\|?|;|\b(?:then|do|else)\b)[ \t]*)` + PREFIX_WORDS + PFX + REL,
+      "gm",
+    );
+    const scriptCalls = (t: string): string[] =>
+      [...new Set([...t.matchAll(INTERP_CALL), ...t.matchAll(DIRECT_CALL)].map(([, rel]) => rel))];
+    // Non-vacuity: every accepted spelling is seen, and the near-misses are not.
+    expect(scriptCalls("run: bash apps/a.sh")).toEqual(["apps/a.sh"]);
+    expect(scriptCalls("run: bash -e apps/a.sh")).toEqual(["apps/a.sh"]);
+    expect(scriptCalls("run: bash -euo pipefail ./scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: bash -o pipefail scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: sh ./scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("      - run: ./apps/a.sh --phase x")).toEqual(["apps/a.sh"]);
+    expect(scriptCalls("        apps/web-platform/infra/scripts/a.sh plan")).toEqual(["apps/web-platform/infra/scripts/a.sh"]);
+    expect(scriptCalls('run: bash "$GITHUB_WORKSPACE/apps/a.sh"')).toEqual(["apps/a.sh"]);
+    expect(scriptCalls('      - run: "${GITHUB_WORKSPACE}/tests/a.sh"')).toEqual(["tests/a.sh"]);
+    expect(scriptCalls("run: bash ${{ github.workspace }}/plugins/a.sh")).toEqual(["plugins/a.sh"]);
+    expect(scriptCalls("run: /bin/bash scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: /usr/bin/env bash -e scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: source scripts/lib.sh")).toEqual(["scripts/lib.sh"]);
+    expect(scriptCalls('          source "${GITHUB_WORKSPACE}/tests/scripts/lib/gate.sh"')).toEqual(["tests/scripts/lib/gate.sh"]);
+    expect(scriptCalls("          . ./scripts/lib.sh")).toEqual(["scripts/lib.sh"]);
+    expect(scriptCalls("run: FOO=1 ./scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: FOO=1 BAR=x timeout 600 ./scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: timeout -k 5 600 bash scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: cd x && ./scripts/a.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: true; apps/a.sh")).toEqual(["apps/a.sh"]);
+    expect(scriptCalls("run: if true; then FOO=1 apps/a.sh; fi")).toEqual(["apps/a.sh"]);
+    expect(scriptCalls("      - apps/a.sh")).toEqual([]);
+    expect(scriptCalls("run: bash scripts/a.sh apps/b.sh")).toEqual(["scripts/a.sh"]);
+    expect(scriptCalls("run: echo done. scripts/a.sh")).toEqual([]);
+    expect(scriptCalls("run: x/bin/bash scripts/a.sh")).toEqual([]);
+    const scriptPlanners = readdirSync(dir)
+      .filter((f) => f.endsWith(".yml"))
+      .filter((f) => {
+        const t = stripComments(readFileSync(join(dir, f), "utf8"));
+        const rootInWorkflow = MAIN_ROOT_FORMS.some((re) => re.test(t));
+        return scriptCalls(t).some((rel) => {
+          const sp = join(REPO_ROOT, rel);
+          if (!existsSync(sp)) return false;
+          const st = stripComments(readFileSync(sp, "utf8"));
+          // The root may be named by the workflow (INFRA_DIR), the script, or the script's own home.
+          const namesRoot = rootInWorkflow || rel.startsWith("apps/web-platform/infra/")
+            || /apps\/web-platform\/infra(?![\w\/-])/.test(st);
+          return /terraform\s+(-chdir=\S+\s+)?(plan|apply)\b/.test(st) && namesRoot;
+        });
+      });
+    for (const f of scriptPlanners) expect(MAIN_ROOT_TF_WORKFLOWS).toContain(f);
+    expect(scriptPlanners).toContain("cf-account-migrate.yml");
   });
 
   // ─── Inline pin-load arm (follower retired, #8211 PR2 / ADR-237 D6 amendment) ───────
@@ -4318,6 +4420,10 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
   const REVIEWER_LESS_RATCHET = new Set([
     "infra_privileged",
     "release_publish",
+    // #9294 — the deploy-channel carrier. Unattended from birth by design (the
+    // deploy-trigger consumers it will admit run with no human in the loop);
+    // a reviewers block would deadlock them, exactly like release_publish.
+    "deploy_channel",
   ]);
 
   test("every cutover-gate environment in the infra root gates on ≥1 reviewer", () => {
@@ -4371,6 +4477,10 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     // population for the same reason: deleting release-publish-environment.tf would
     // silently drop the reviewer-less limb's second member with the suite still green.
     expect(names).toContain("release_publish");
+    // (#9294) The reviewer-less deploy-channel carrier must be IN the population —
+    // the same reason as release_publish: deleting deploy-channel-environment.tf
+    // would silently drop the ratchet member with the suite still green.
+    expect(names).toContain("deploy_channel");
     // (#11923) The rotation-approval environment must be IN the population — its
     // ratchet membership is only load-bearing if the extractor actually sees it.
     expect(names).toContain("key_rotate_approval");
@@ -5178,16 +5288,40 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     expect(extractAllTargets(extractJobBlock(wf, "inngest_host")).has("hcloud_volume_attachment.inngest_redis")).toBe(false);
   });
 
-  // #10538 CTO D2 + fix-round F1: BOTH jobs that boot hcloud_server.inngest from the public-sdk_url user_data (the
-  // replace and the birth) must type a distinct token before any credential loads, until #12742 item 1 replaces the
-  // gate with a live-mode preflight. B10 pins the PROPERTY, not the text: the step is the one right after checkout,
-  // ahead of every credential step, cannot be tolerated (no continue-on-error / shell override at step, job or
-  // workflow level), runs the shared script with the job's own token, and the script refuses every wrong input.
-  const CONFIRM_LIB = "tests/scripts/lib/inngest-public-sdk-url-confirm.sh";
-  test.each([
-    ["inngest_host_replace", "PUBLIC-SDK-URL"],
-    ["inngest_host", "PUBLIC-SDK-URL-BIRTH"],
-  ])("B10: %s gates on its own %s confirm token right after checkout (#10538, #12742)", (job, token) => {
+  // #12742 item 1 (CTO rulings 4, 6, 10, 2026-11-17; review rulings R1-R5, 2026-11-18): BOTH jobs that boot
+  // hcloud_server.inngest from the public-sdk_url user_data (the replace and the birth) run a fail-closed LIVE read of the
+  // Cloudflare config-settings entrypoint before any terraform step. B10 pins the PROPERTY: the preflight is the step
+  // immediately after `Load infra credentials (tiered)`, ahead of every terraform step, cannot be tolerated (no
+  // continue-on-error / shell override at step, job or workflow level), runs the shared script with DOPPLER_TOKEN, the
+  // replace job checks the exact REPLACE-INNGEST-HOST typo-guard in its own step BEFORE the credential load (R5; a typo
+  // loads no Tier-B secret; the birth reads no confirm), and the script refuses every projection but a strict, host-wide
+  // last app-host rule that no later ssl rule can override.
+  const PREFLIGHT_LIB = "tests/scripts/lib/inngest-public-sdk-url-preflight.sh";
+  const REPLACE_CONFIRM_RUN = [
+    'if [[ "$CONFIRM" != "REPLACE-INNGEST-HOST" ]]; then',
+    '  echo "::error::[confirm] the Inngest host replace requires confirm=REPLACE-INNGEST-HOST (typo-guard). This DESTROYS and recreates hcloud_server.inngest."',
+    "  exit 1",
+    "fi",
+  ];
+  // A later step whose `if:` can run on a FAILED job. ALLOWLIST, not a denylist: an `if:` that names a status function
+  // (case-insensitive) is safe only as exactly `success()` or a `success() && <no status function, no ||>` conjunction;
+  // every other form (`success() == false`, `!(success())`, `success() != true`, `always()`, an OR) is a reopen. An `if:`
+  // with no status function carries GitHub's implicit success().
+  const reopensAfterFailure = (cond: string) => {
+    const c = cond.trim().replace(/^\$\{\{([\s\S]*)\}\}$/, "$1").trim();
+    if (!/\b(?:success|failure|always|cancelled)\s*\(/i.test(c)) return false;
+    const m = /^success\s*\(\s*\)(?:\s*&&([\s\S]*))?$/i.exec(c);
+    return !(m && (m[1] === undefined || !/\b(?:success|failure|always|cancelled)\s*\(|\|\|/i.test(m[1])));
+  };
+  test("B10: the post-gate status-function predicate denies every form that runs on a failed job", () => {
+    for (const c of ["always()", "failure()", "cancelled()", "Always()", "FAILURE()", "${{ !success() }}", "! Success()", "success() || inputs.x == 'y'", "inputs.x || success()", "success() == false", "${{ success() == false }}", "!(success())", "${{ !(success()) }}", "success() != true", "${{ success() != true }}", "success() && inputs.x || always()", "success() && !cancelled()", "(success())", "inputs.x && success()"]) {
+      expect(reopensAfterFailure(c), c).toBe(true);
+    }
+    for (const c of ["", "success()", "${{ success() }}", "SUCCESS()", "success() && inputs.plan_only != true", "${{ success() && inputs.plan_only != true }}", "success() && !inputs.x", "inputs.apply_target == 'inngest-host-replace'"]) {
+      expect(reopensAfterFailure(c), c).toBe(false);
+    }
+  });
+  test.each(["inngest_host_replace", "inngest_host"])("B10: %s runs the strict-SSL preflight right after the credential load (#12742)", (job) => {
     const parsed = parseYaml(wf) as {
       defaults?: unknown;
       jobs: Record<string, { steps: Array<Record<string, unknown>>; defaults?: unknown } & Record<string, unknown>>;
@@ -5195,105 +5329,277 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
     const j = parsed.jobs[job];
     const steps = j.steps;
     expect(String(steps[0].uses)).toMatch(/^actions\/checkout@/);
-    const gate = steps[1];
-    expect(String(gate.name)).toContain(`${token} confirm token`);
-    for (const k of ["if", "continue-on-error", "shell", "working-directory"]) expect(k in gate, `step key ${k}`).toBe(false);
-    expect((gate.env as Record<string, string>).CONFIRM_RAW).toBe("${{ inputs.confirm }}");
-    expect(String(gate.run).trim()).toBe(`bash ${CONFIRM_LIB} ${token}`);
+    const cred = steps.findIndex((s) => s.name === "Load infra credentials (tiered)");
+    expect(cred, `${job} has the credential step`).toBeGreaterThan(0);
+    const gi = cred + 1;
+    const gate = steps[gi];
+    expect(String(gate.name)).toContain("strict-SSL preflight");
+    for (const k of ["if", "continue-on-error", "shell", "working-directory", "uses", "with"]) expect(k in gate, `step key ${k}`).toBe(false);
+    expect(gate.env).toEqual({ DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" });
+    expect(String(gate.run).trim()).toBe(`bash ${PREFLIGHT_LIB}`);
+    // The first step that must not re-open on a failed job: the confirm step for the replace, the preflight for the birth.
+    let guardFrom = gi;
+    if (job === "inngest_host_replace") {
+      // R5: the exact typo-guard token, in its own unconditional step BEFORE the credential load (a typo loads no
+      // Tier-B secret), with no secret in its env.
+      const ci = steps.findIndex((s) => s.name === "Validate typed confirm (inngest-host-replace)");
+      expect(ci, `${job} has the confirm step before the credential load`).toBeGreaterThan(0);
+      expect(ci, `${job} confirm step is immediately before the credential load`).toBe(cred - 1);
+      guardFrom = ci;
+      const confirm = steps[ci];
+      for (const k of ["if", "continue-on-error", "shell", "working-directory", "uses", "with"]) expect(k in confirm, `confirm step key ${k}`).toBe(false);
+      expect(confirm.env).toEqual({ CONFIRM: "${{ inputs.confirm }}" });
+      expect(String(confirm.run).trim().split("\n")).toEqual(REPLACE_CONFIRM_RUN);
+      for (const [v, rc] of [["REPLACE-INNGEST-HOST", 0], ["", 1], ["replace-inngest-host", 1], ["REPLACE-INNGEST-HOST ", 1], ["PUBLIC-SDK-URL", 1]] as const) {
+        const r = spawnSync("bash", ["-e", "-c", String(confirm.run)], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", CONFIRM: v }, encoding: "utf8" });
+        expect(`${JSON.stringify(v)} -> ${r.status}`).toBe(`${JSON.stringify(v)} -> ${rc}`);
+        if (rc === 1) expect(r.stdout).toContain("::error::[confirm]");
+      }
+      expect(JSON.stringify(j).split("inputs.confirm").length - 1, `${job} reads inputs.confirm only in the confirm step`).toBe(1);
+      // The post-replace liveness read injects only the three Better Stack query keys (a planted BASH_ENV or BS_TABLE in
+      // prd_terraform never reaches inngest-host-state.sh's bash), like git-data-boot-signal-poll.sh's read.
+      const live = steps.find((s) => String(s.name).startsWith("Post-replace liveness gate"));
+      const runs = String(live?.run ?? "").split("\n").filter((l) => /doppler run/.test(l) && !/^\s*echo\b/.test(l)).map((l) => l.trim());
+      expect(runs, "the liveness gate's doppler legs").toEqual([
+        "timeout 90 doppler run --preserve-env -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -- \\",
+      ]);
+    } else {
+      // CTO ruling 10: the birth stays token-free.
+      expect(JSON.stringify(j), `${job} reads inputs.confirm`).not.toContain("inputs.confirm");
+    }
+    const firstTf = steps.findIndex((s) => /terraform/i.test(`${s.name ?? ""} ${s.run ?? ""}`) && !/setup-terraform/.test(String(s.uses ?? "")));
+    expect(firstTf, `${job} has a terraform step after the preflight`).toBeGreaterThan(gi);
     expect("continue-on-error" in j, `${job} job-level continue-on-error`).toBe(false);
     expect(j.defaults, `${job} job-level defaults`).toBeUndefined();
     expect(parsed.defaults, "workflow-level defaults").toBeUndefined();
-    const firstCred = steps.findIndex((s) => /credential|doppler/i.test(`${s.name ?? ""} ${s.uses ?? ""}`));
-    expect(firstCred, `${job} has a credential step`).toBeGreaterThan(1);
-    // Verifier round: nothing may run past a refused gate or pre-arm it. No later step re-opens on a failed job
-    // (a status function in `if:`) unless it is secret-free and touches no credential, terraform or Doppler; the job
-    // carries no env (a job-level secret would reach the gate step); checkout takes no `with` (a `ref` input would
-    // swap the script the gate runs).
+    // Nothing may run past a refused confirm or preflight: no later step re-opens on a failed job (a status function in `if:`)
+    // unless it is secret-free and touches no credential, terraform or Doppler; the job carries no env; checkout takes
+    // no `with` (a `ref` input would swap the script the preflight runs).
     for (const [i, st] of steps.entries()) {
-      if (i < 2 || !/always\(|failure\(|cancelled\(/.test(String(st.if ?? ""))) continue;
-      expect(JSON.stringify(st), `${job} step ${i} (${st.name}) runs after a refused gate`).not.toMatch(/secrets\.|terraform|doppler|infra-credentials/i);
+      if (i <= guardFrom || !reopensAfterFailure(String(st.if ?? ""))) continue;
+      expect(JSON.stringify(st), `${job} step ${i} (${st.name}) runs after a refused confirm or preflight`).not.toMatch(/secrets\.|terraform|doppler|infra-credentials/i);
     }
     expect(j.env, `${job} job-level env`).toBeUndefined();
     expect(steps[0].with, `${job} checkout with`).toBeUndefined();
   });
 
-  test("B10: the birth and replace tokens are distinct, and the confirm description does not print either", () => {
-    expect("PUBLIC-SDK-URL").not.toBe("PUBLIC-SDK-URL-BIRTH");
-    const parsed = parseYaml(wf) as { on: { workflow_dispatch: { inputs: { confirm: { description: string } } } } };
-    expect(parsed.on.workflow_dispatch.inputs.confirm.description).not.toContain("PUBLIC-SDK-URL");
-  });
-
-  // Fix-round sweep (data-integrity / agent-native / user-impact seats): a recovery command that tells an operator or
-  // agent to dispatch either job without its token is refused at step 2, mid-incident. Every copy-paste recipe
-  // (`-f`/`-F`/`--field`/`--raw-field apply_target=inngest-host[-replace]`, bare or quoted) in scripts, skills,
-  // workflows and runbooks carries its own token. Exempt: a recipe that sits inside the same backtick span as a
-  // `**done YYYY-MM-DD` marker earlier on its line (a past run), and prose that only NAMES the selector (the flag
-  // closed by a backtick right after the target, e.g. "selected by `-f apply_target=inngest-host-replace`").
-  test("B10: every live dispatch recipe for the two public-sdk_url jobs carries its confirm token", () => {
-    const ls = spawnSync("git", ["-C", REPO_ROOT, "ls-files", "-z", "scripts", "tests/scripts/lib", "apps/web-platform/infra", ".github/workflows", "knowledge-base/engineering/operations/runbooks", "plugins/soleur/skills"], {
+  // Recipe sweep (R5): every copy-paste recipe (`-f`/`-F`/`--field`/`--raw-field apply_target=inngest-host[-replace]`,
+  // bare or quoted) in scripts, skills, workflows and runbooks is checked against the job it dispatches. A replace recipe
+  // carries `confirm=REPLACE-INNGEST-HOST` as the very next field (the job refuses without it); a birth recipe carries no
+  // confirm at all (ruling 10). No live file in those trees may name the retired PUBLIC-SDK-URL token or the retired script.
+  // Exempt as before: a past-run `**done YYYY-MM-DD` record, and prose that only NAMES the selector.
+  test("B10: every live inngest-host-replace recipe carries the REPLACE-INNGEST-HOST confirm, birth recipes carry none, and nothing names the retired token", () => {
+    const ls = spawnSync("git", ["-C", REPO_ROOT, "ls-files", "-z", "scripts", "tests/scripts/lib", "apps/web-platform/infra", ".github", "knowledge-base/engineering/operations/runbooks", "plugins/soleur/skills"], {
       encoding: "utf8",
       env: gitCleanEnv(),
     });
     expect(ls.status).toBe(0);
-    const files = ls.stdout.split("\0").filter((f) => /\.(sh|ya?ml|md|tf)$/.test(f));
+    const files = ls.stdout.split("\0").filter((f) => /\.(sh|ya?ml|md|tf)$/.test(f) || f === ".github/CODEOWNERS");
     expect(files.length).toBeGreaterThan(100);
     const offenders: string[] = [];
+    const carriers: string[] = [];
     let recipes = 0;
+    let replaceRecipes = 0;
     for (const f of files) {
       readFileSync(join(REPO_ROOT, f), "utf-8").split("\n").forEach((line, i) => {
+        if (/PUBLIC-SDK-URL|inngest-public-sdk-url-confirm/.test(line)) carriers.push(`${f}:${i + 1}`);
         const FLAG = String.raw`(?:-f|-F|--field|--raw-field)[ =]`;
         const re = new RegExp(String.raw`(?<flag>${FLAG})(?<q>["']?)apply_target=(?<q2>["']?)(?<t>inngest-host-replace|inngest-host)(?![-\w])\k<q2>\k<q>`, "g");
         for (const m of line.matchAll(re)) {
-          const t = m.groups!.t;
-          const want = t === "inngest-host" ? "PUBLIC-SDK-URL-BIRTH" : "PUBLIC-SDK-URL";
           const tail = line.slice(m.index! + m[0].length);
           if (tail.startsWith("`") && line[m.index! - 1] === "`") continue;
-          const head = line.slice(0, m.index!);
-          // A past-run record: a `**done YYYY-MM-DD` marker before the recipe on its line (a table row's status cell).
-          if (/\*\*done \d{4}-\d{2}-\d{2}/.test(head)) continue;
+          if (/\*\*done \d{4}-\d{2}-\d{2}/.test(line.slice(0, m.index!))) continue;
           recipes++;
-          if (!new RegExp(String.raw`^\s+${FLAG}["']?confirm=["']?${want}(?![-\w])`).test(tail)) offenders.push(`${f}:${i + 1}`);
+          if (m.groups!.t === "inngest-host-replace") {
+            replaceRecipes++;
+            if (!new RegExp(String.raw`^\s+${FLAG}(["']?)confirm=REPLACE-INNGEST-HOST\1(?![-\w])`).test(tail)) offenders.push(`${f}:${i + 1} (replace recipe without -f confirm=REPLACE-INNGEST-HOST)`);
+          } else if (new RegExp(String.raw`^\s+${FLAG}["']?confirm=`).test(tail)) offenders.push(`${f}:${i + 1} (birth recipe with a confirm)`);
         }
       });
     }
     expect(recipes, "non-vacuity: the sweep found recipes").toBeGreaterThanOrEqual(6);
+    expect(replaceRecipes, "non-vacuity: the sweep found replace recipes").toBeGreaterThanOrEqual(4);
     expect(offenders).toEqual([]);
+    expect(carriers).toEqual([]);
+    expect(existsSync(join(REPO_ROOT, "tests/scripts/lib/inngest-public-sdk-url-confirm.sh")), "retired confirm script").toBe(false);
   });
 
-  test("B10: the shared confirm script refuses every input but the exact token, and never echoes the input", () => {
-    const lib = join(REPO_ROOT, CONFIRM_LIB);
-    const run = (args: string[], confirm: string | undefined) =>
-      spawnSync("bash", [lib, ...args], {
-        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", ...ciEnv, ...(confirm === undefined ? {} : { CONFIRM_RAW: confirm }) },
-        encoding: "utf8",
+  // The behaviour table runs the `--from-file` seam over synthesized wrapper outputs, and the live path runs against a
+  // PATH-fake `doppler` that accepts ONLY the exact R3 argv (anything else is logged to a refusal file, asserted empty).
+  // Rule shape mirrors cloudflare-readonly.sh's config-entrypoint projection. Each refusal prints exactly one ::error::
+  // line led by its bracketed tag, and no fixture byte outside the fixed tags reaches stdout/stderr.
+  const SEO_RULESET_ID = "a21ac79d368f425a95c895c43a090d57";
+  // #12931 (ADR-329): seo-config-rules.tf no longer imports this entrypoint; it lives in the moved legacy zone and
+  // the migration CREATES the new zone's entrypoint (a new id). Until PR2 re-pins RULESET_ID to that id, the pin stays the
+  // legacy id, so after the CF_ZONE_ID flip the preflight refuses [ruleset-id] (fail closed). The runbook owns the re-pin.
+  test("B10: the preflight's pinned ruleset id is the legacy entrypoint until the #12931 re-pin, and the runbook owns it", () => {
+    const tf = readFileSync(join(REPO_ROOT, "apps/web-platform/infra/seo-config-rules.tf"), "utf8");
+    const imp = /^import \{\n(?:.*\n)*?\s*to\s*=\s*cloudflare_ruleset\.seo_config_settings\n(?:.*\n)*?\s*id\s*=\s*"zone\/\$\{var\.cf_zone_id\}\/([0-9a-f]{32})"/m.exec(tf);
+    const libId = /^RULESET_ID="([0-9a-f]{32})"$/m.exec(readFileSync(join(REPO_ROOT, PREFLIGHT_LIB), "utf8"));
+    const runbook = readFileSync(join(REPO_ROOT, "knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md"), "utf8");
+    // An import block, if one returns, must carry the pinned id (the pre-#12931 property).
+    if (imp) expect(imp[1], "the seo-config-rules.tf import id").toBe(libId?.[1]);
+    expect(libId?.[1], "the preflight's RULESET_ID").toBe(SEO_RULESET_ID);
+    expect(runbook, "the runbook re-pin step names the preflight lib").toContain("tests/scripts/lib/inngest-public-sdk-url-preflight.sh");
+    expect(runbook, "the runbook re-pin step names RULESET_ID").toMatch(/re-pin[^\n]*`RULESET_ID`|`RULESET_ID`[^\n]*re-pin/);
+  });
+  test("B10: the preflight passes only a strict host-wide last app-host rule no later ssl rule can override, and names each refusal", () => {
+    const lib = join(REPO_ROOT, PREFLIGHT_LIB);
+    const dir = mkdtempSync(join(tmpdir(), "b10-preflight-"));
+    // hl = host_literal_only (the wrapper's whole-expression `(http.host eq|in ...)` boolean); default true.
+    type R = { enabled: boolean; ssl: string | null; app: boolean; hl?: boolean };
+    const proj = (rules: R[], extra: Record<string, unknown> = {}) =>
+      JSON.stringify({
+        subcommand: "config-entrypoint",
+        id: SEO_RULESET_ID,
+        version: "9",
+        last_updated: "2026-11-16T13:12:15.428474Z",
+        rule_count: rules.length,
+        enabled_ssl_rules: rules.filter((r) => r.enabled && r.ssl !== null).length,
+        rules: rules.map((r, i) => ({ ref: `canaryref${i}`, enabled: r.enabled, ssl: r.ssl, mentions_app_host: r.app, mentions_lb_staging_host: false, host_literal_only: r.hl ?? true })),
+        ...extra,
       });
-    const table: Array<[string[], string | undefined, number]> = [
-      [["PUBLIC-SDK-URL"], "PUBLIC-SDK-URL", 0],
-      [["PUBLIC-SDK-URL"], undefined, 1],
-      [["PUBLIC-SDK-URL"], "", 1],
-      [["PUBLIC-SDK-URL"], "public-sdk-url", 1],
-      [["PUBLIC-SDK-URL"], "PUBLIC-SDK-URL ", 1],
-      [["PUBLIC-SDK-URL"], "PUBLIC-SDK-URL-BIRTH", 1],
-      [["PUBLIC-SDK-URL-BIRTH"], "PUBLIC-SDK-URL", 1],
-      [["PUBLIC-SDK-URL-BIRTH"], "PUBLIC-SDK-URL-BIRTH", 0],
-      [["PUBLIC-SDK-URL"], "PUBLIC-SDK-URL*", 1],
-      [[], "PUBLIC-SDK-URL", 64],
-      [[""], "", 64],
+    const OK = "cloudflare-readonly: config-entrypoint ok";
+    const UNV = "cloudflare-readonly: config-entrypoint unverified - ";
+    // seo-config-rules.tf today: `(http.host eq "app.soleur.ai")` strict, an email-obfuscation rule (no ssl), then
+    // `(http.host in {"soleur.ai" "www.soleur.ai"})` full. All three are host-literal.
+    const LIVE: R[] = [
+      { enabled: true, ssl: "strict", app: true },
+      { enabled: true, ssl: null, app: false },
+      { enabled: true, ssl: "full", app: false },
     ];
-    // Run the table twice: bare, and with the env a GitHub runner sets (a branch keyed on it must not open the gate).
-    let ciEnv: Record<string, string> = {};
-    for (const env of [{}, { GITHUB_ACTIONS: "true", CI: "true", RUNNER_OS: "Linux" }]) {
-    ciEnv = env;
-    for (const [args, confirm, rc] of table) {
-      const r = run(args, confirm);
-      expect(`${JSON.stringify(args)}/${JSON.stringify(confirm)} -> rc=${r.status}`).toBe(
-        `${JSON.stringify(args)}/${JSON.stringify(confirm)} -> rc=${rc}`,
-      );
-      if (rc === 1) expect(r.stdout).toContain("#12742");
+    const WILD = { enabled: true, app: false, hl: false }; // a wildcard / `true` expression: may match app.soleur.ai
+    const table: Array<[string, string | null, number, string]> = [
+      ["live-shape", `${OK}\n${proj(LIVE)}\n`, 0, "preflight passed"],
+      ["weak-app-then-strict-app", `${OK}\n${proj([{ enabled: true, ssl: "full", app: true }, ...LIVE])}\n`, 0, "preflight passed"],
+      ["leading-non-app-flexible", `${OK}\n${proj([{ ...WILD, ssl: "flexible" }, ...LIVE])}\n`, 0, "preflight passed"],
+      ["trailing-full-host-literal-non-app", `${OK}\n${proj([...LIVE, { enabled: true, ssl: "full", app: false }])}\n`, 0, "preflight passed"],
+      ["disabled-trailing-flexible-ignored", `${OK}\n${proj([...LIVE, { ...WILD, enabled: false, ssl: "flexible" }])}\n`, 0, "preflight passed"],
+      ["flexible-last", `${OK}\n${proj([{ enabled: true, ssl: "strict", app: true }, { enabled: true, ssl: "flexible", app: true }])}\n`, 1, "[last-not-strict]"],
+      ["other-last", `${OK}\n${proj([{ enabled: true, ssl: "other", app: true }])}\n`, 1, "[last-not-strict]"],
+      ["negated-strict", `${OK}\n${proj([{ enabled: true, ssl: "strict", app: true, hl: false }, ...LIVE.slice(1)])}\n`, 1, "[strict-not-host-wide]"],
+      // The LAST app rule is judged for host-wideness, not the first and not any (a host-literal weak rule before it).
+      ["host-literal-full-then-non-literal-strict", `${OK}\n${proj([{ enabled: true, ssl: "full", app: true, hl: true }, { enabled: true, ssl: "strict", app: true, hl: false }])}\n`, 1, "[strict-not-host-wide]"],
+      // A trailing wildcard rule with NO ssl setting cannot override L's ssl.
+      ["trailing-wildcard-without-ssl", `${OK}\n${proj([...LIVE, { ...WILD, ssl: null }])}\n`, 0, "preflight passed"],
+      ["all-disabled", `${OK}\n${proj([{ enabled: false, ssl: "strict", app: true }, { enabled: true, ssl: "full", app: false }])}\n`, 1, "[all-disabled]"],
+      ["no-match", `${OK}\n${proj([{ enabled: true, ssl: "full", app: false }])}\n`, 1, "[no-match]"],
+      ["app-rule-without-ssl", `${OK}\n${proj([{ enabled: true, ssl: null, app: true }])}\n`, 1, "[no-match]"],
+      ["strict-then-trailing-flexible", `${OK}\n${proj([...LIVE, { ...WILD, ssl: "flexible" }])}\n`, 1, "[trailing-weak]"],
+      ["strict-then-trailing-off", `${OK}\n${proj([...LIVE, { ...WILD, ssl: "off" }])}\n`, 1, "[trailing-weak]"],
+      ["strict-then-trailing-other", `${OK}\n${proj([...LIVE, { ...WILD, ssl: "other" }])}\n`, 1, "[trailing-weak]"],
+      ["strict-then-trailing-full-true", `${OK}\n${proj([...LIVE, { ...WILD, ssl: "full" }])}\n`, 1, "[trailing-weak]"],
+      ["strict-then-trailing-strict-true", `${OK}\n${proj([...LIVE, { ...WILD, ssl: "strict" }])}\n`, 1, "[trailing-weak]"],
+      ["ruleset-id-mismatch", `${OK}\n${proj(LIVE, { id: "canaryid7f3e" })}\n`, 1, "[ruleset-id]"],
+      ["ruleset-id-missing", `${OK}\n${proj(LIVE, { id: null })}\n`, 1, "[shape]"],
+      ["unverified", `${UNV}token-lacks-scope\n`, 1, "[wrapper-unverified]"],
+      ["unverified-uppercase-reason", `${UNV}no-credential (CF_API_TOKEN_RULESETS)\n`, 1, "(no-credential (CF_API_TOKEN_RULESETS))"],
+      ["unverified-reason-with-equals", `${UNV}canary=7f3e\n`, 1, "[malformed]"],
+      ["unverified-reason-with-slash", `${UNV}canary/7f3e\n`, 1, "[malformed]"],
+      ["unverified-reason-81-chars", `${UNV}canary${"x".repeat(75)}\n`, 1, "[malformed]"],
+      ["unverified-reason-with-at", `${UNV}canary@7f3e\n`, 1, "[malformed]"],
+      ["other-subcommand-ok-line", `cloudflare-readonly: ssl-mode ok\n${proj(LIVE)}\n`, 1, "[malformed]"],
+      ["malformed-json", `${OK}\n{"rules":[canary-7f3e\n`, 1, "[malformed]"],
+      ["no-projection-line", `${OK}\n`, 1, "[malformed]"],
+      ["extra-line", `${OK}\n${proj(LIVE)}\n${proj(LIVE)}\n`, 1, "[malformed]"],
+      ["two-json-values-one-line", `${OK}\n${proj(LIVE)} ${proj(LIVE)}\n`, 1, "[malformed]"],
+      ["wrong-subcommand", `${OK}\n${proj(LIVE, { subcommand: "ssl-mode" })}\n`, 1, "[shape]"],
+      ["rules-not-array", `${OK}\n${proj(LIVE, { rules: { a: 1 } })}\n`, 1, "[shape]"],
+      ["enabled-not-boolean", `${OK}\n${proj(LIVE).replace('"enabled":true', '"enabled":"yes"')}\n`, 1, "[shape]"],
+      ["host-literal-missing", `${OK}\n${proj(LIVE).replace(',"host_literal_only":true}', "}")}\n`, 1, "[shape]"],
+      ["empty-file", "", 1, "[empty-read] public sdk_url boot refused (#12742): the read printed nothing; see its exit code"],
+      ["newlines-only-file", "\n\n", 1, "[empty-read]"],
+      ["missing-file", null, 1, "[no-input]"],
+    ];
+    const outs: string[] = [];
+    const PATH0 = process.env.PATH ?? "/usr/bin:/bin";
+    const CIS: Array<Record<string, string>> = [{}, { GITHUB_ACTIONS: "true", CI: "true", RUNNER_OS: "Linux" }];
+    // The live path's fake doppler: exact argv or a logged refusal; on a match it replays a canned output and rc.
+    const fake = join(dir, "bin");
+    mkdirSync(fake);
+    const wrapper = join(REPO_ROOT, "plugins/soleur/scripts/cloudflare-readonly.sh");
+    const want = ["run", "--preserve-env", "--only-secrets", "CF_ZONE_ID,CF_API_TOKEN_RULESETS,DOPPLER_PROJECT,DOPPLER_CONFIG", "-p", "soleur", "-c", "prd_terraform", "--", wrapper, "config-entrypoint"];
+    const refusals = join(dir, "refusals.log");
+    const calls = join(dir, "calls.log");
+    writeFileSync(
+      join(fake, "doppler"),
+      [
+        "#!/bin/bash",
+        `want=(${want.map((a) => `'${a}'`).join(" ")})`,
+        'if [ "$#" -ne "${#want[@]}" ]; then printf "%q " "$@" >> ' + `'${refusals}'` + "; echo >> " + `'${refusals}'` + "; exit 97; fi",
+        'i=0; for a in "$@"; do if [ "$a" != "${want[$i]}" ]; then printf "%q " "$@" >> ' + `'${refusals}'` + "; echo >> " + `'${refusals}'` + "; exit 97; fi; i=$((i+1)); done",
+        `echo call >> '${calls}'`,
+        `cat '${join(dir, "live.out")}'`,
+        `exit "$(cat '${join(dir, "live.rc")}')"`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    // The bound is part of the R3 argv: a fake `timeout` that accepts only `90 doppler ...` and then runs the fake doppler.
+    const tcalls = join(dir, "timeout-calls.log");
+    writeFileSync(
+      join(fake, "timeout"),
+      [
+        "#!/bin/bash",
+        'if [ "$#" -lt 2 ] || [ "$1" != 90 ] || [ "$2" != doppler ]; then printf "timeout %q " "$@" >> ' + `'${refusals}'` + "; echo >> " + `'${refusals}'` + "; exit 97; fi",
+        `echo call >> '${tcalls}'`,
+        'shift; exec "$@"',
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const live: Array<[string, string, number, number, string]> = [
+      ["live-ok", `${OK}\n${proj(LIVE)}\n`, 0, 0, "preflight passed"],
+      ["live-nonzero-rc", "", 14, 1, "[wrapper-rc]"],
+      ["live-empty-rc0", "", 0, 1, "[empty-read]"],
+      ["live-unverified-uppercase", `${UNV}no-credential (CF_API_TOKEN_RULESETS)\n`, 10, 1, "[wrapper-unverified] public sdk_url boot refused (#12742): the live read did not verify (no-credential (CF_API_TOKEN_RULESETS))"],
+      ["live-ruleset-id-mismatch", `${OK}\n${proj(LIVE, { id: "canaryid7f3e" })}\n`, 0, 1, "[ruleset-id]"],
+    ];
+    let liveRuns = 0;
+    try {
+      // Run twice: bare, and with the env a GitHub runner sets (a branch keyed on it must not open the gate).
+      for (const ci of CIS) {
+        for (const [name, body, rc, tag] of table) {
+          const p = join(dir, `${name}.txt`);
+          if (body !== null) writeFileSync(p, body);
+          const r = spawnSync("bash", [lib, "--from-file", p], { env: { PATH: PATH0, ...ci }, encoding: "utf8" });
+          expect(`${name} -> rc=${r.status}`).toBe(`${name} -> rc=${rc}`);
+          expect(r.stdout, `${name} tag`).toContain(tag);
+          if (rc === 1) expect(r.stdout, `${name} names #12742`).toContain("#12742");
+          outs.push(r.stdout + r.stderr);
+        }
+        for (const [name, body, wrc, rc, tag] of live) {
+          writeFileSync(join(dir, "live.out"), body);
+          writeFileSync(join(dir, "live.rc"), String(wrc));
+          const r = spawnSync("bash", [lib], { env: { PATH: `${fake}:${PATH0}`, DOPPLER_TOKEN: "dp.st.canary7f3e", ...ci }, encoding: "utf8" });
+          liveRuns++;
+          expect(`${name} -> rc=${r.status}`).toBe(`${name} -> rc=${rc}`);
+          expect(r.stdout, `${name} tag`).toContain(tag);
+          outs.push(r.stdout + r.stderr);
+        }
+        // xtrace: refused in live mode before DOPPLER_TOKEN is expanded; the from-file seam holds no credential and runs.
+        const xt = spawnSync("bash", ["-x", lib], { env: { PATH: `${fake}:${PATH0}`, DOPPLER_TOKEN: "dp.st.canary7f3e", ...ci }, encoding: "utf8" });
+        expect(xt.status).toBe(1);
+        expect(xt.stdout).toContain("[xtrace]");
+        outs.push(xt.stdout + xt.stderr);
+        const xf = spawnSync("bash", ["-x", lib, "--from-file", join(dir, "live-shape.txt")], { env: { PATH: PATH0, ...ci }, encoding: "utf8" });
+        expect(xf.status, "bash -x --from-file is not refused").toBe(0);
+      }
+      expect(existsSync(refusals) ? readFileSync(refusals, "utf8") : "", "the fake doppler saw a non-R3 argv").toBe("");
+      expect(readFileSync(calls, "utf8").split("\n").filter(Boolean).length, "non-vacuity: every live run reached the fake doppler").toBe(liveRuns);
+      expect(readFileSync(tcalls, "utf8").split("\n").filter(Boolean).length, "every live run went through `timeout 90`").toBe(liveRuns);
+      // Usage: the live mode takes no positional argument; the seam takes exactly one path.
+      for (const args of [["extra"], ["--from-file"], ["--from-file", "a", "b"]]) {
+        expect(spawnSync("bash", [lib, ...args], { env: { PATH: PATH0 }, encoding: "utf8" }).status, JSON.stringify(args)).toBe(64);
+      }
+      // Live mode without a token refuses before any network or Doppler call.
+      const nt = spawnSync("bash", [lib], { env: { PATH: `${fake}:${PATH0}` }, encoding: "utf8" });
+      expect(nt.status).toBe(1);
+      expect(nt.stdout).toContain("[no-token]");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
-    }
-    const echoed = run(["PUBLIC-SDK-URL"], "canary-7f3e");
-    expect(echoed.stdout + echoed.stderr).not.toContain("canary-7f3e");
+    for (const o of outs) expect(o).not.toMatch(/canary/);
   });
 
   test("B5: the LUKS passphrase pair is in the PER-MERGE -target list, not the inngest_host job's", () => {
@@ -6779,11 +7085,13 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(allTf).not.toMatch(/from\s*=\s*doppler_secret\.zot_heartbeat_url_prd\b/);
   });
 
-  test("bot management declares the live SBFM values and does not ignore them", () => {
+  // #12931 (ADR-329): SBFM fields are Pro-only and the Soleur-account zone is Free, so each is
+  // "allow" exactly when var.cf_zone_plan_pro and null otherwise — still declared, never ignored.
+  test("bot management declares the live SBFM values (Pro-gated) and does not ignore them", () => {
     const res = block(tf("bot-management.tf"), /^resource\s+"cloudflare_bot_management"\s+"soleur_ai"\s*\{/m);
     expect(res).toMatch(/^\s*fight_mode\s*=\s*false\s*$/m); // non-vacuity
-    expect(res).toMatch(/^\s*sbfm_definitely_automated\s*=\s*"allow"\s*$/m);
-    expect(res).toMatch(/^\s*sbfm_verified_bots\s*=\s*"allow"\s*$/m);
+    expect(res).toMatch(/^\s*sbfm_definitely_automated\s*=\s*var\.cf_zone_plan_pro\s*\?\s*"allow"\s*:\s*null\s*$/m);
+    expect(res).toMatch(/^\s*sbfm_verified_bots\s*=\s*var\.cf_zone_plan_pro\s*\?\s*"allow"\s*:\s*null\s*$/m);
     // Declared, not ignored: a dashboard flip to "block" must stay visible as drift.
     expect(res).not.toMatch(/ignore_changes/);
   });
@@ -11233,5 +11541,99 @@ describe("this suite itself cannot be silently narrowed", () => {
     // deleting a test on purpose should cost one deliberate edit here.
     const declared = selfText.match(/^\s*test\(/gm)?.length ?? 0;
     expect(declared).toBeGreaterThanOrEqual(TEST_FLOOR);
+  });
+});
+
+// #12866 (ADR-327 step 2a): tests/scripts/lib/bastion-resources.txt is the ONE bastion address list.
+// The birth gate reads it as its allow-set; this block pins the other two consumers to it, so 2b and
+// steps 3-4 widen one file instead of three hand-synced ones (git-data carries three).
+describe("bastion: one resource list, pinned to the birth job and the exclusions (#12866)", () => {
+  const list = readFileSync(resolve(REPO_ROOT, "tests/scripts/lib/bastion-resources.txt"), "utf8")
+    .split("\n")
+    .map((l) => l.replace(/#.*/, "").trim())
+    .filter(Boolean);
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  // The job body lives in the reusable bastion-host-create.yml (the caller stays in wf: size gate, #8361).
+  const bwfText = readFileSync(resolve(REPO_ROOT, ".github/workflows/bastion-host-create.yml"), "utf8");
+  const job = extractJobBlock(bwfText, "bastion_host_create");
+  const caller = extractJobBlock(wf, "bastion_host_create");
+
+  test("the caller job dispatches the reusable body with the birth inputs and every declared secret, the environment-only one included", () => {
+    const c = stripComments(caller);
+    expect(c).toMatch(/^\s*if: github\.event_name == 'workflow_dispatch' && inputs\.apply_target == 'bastion-host-create'\s*$/m);
+    expect(c).toMatch(/^\s*uses: \.\/\.github\/workflows\/bastion-host-create\.yml\s*$/m);
+    for (const k of ["confirm", "plan_only", "reason"]) expect(c).toMatch(new RegExp(`^\\s*${k}: \\$\\{\\{ inputs\\.${k} \\}\\}\\s*$`, "m"));
+    // Secrets by name, never `secrets: inherit` (the git-data root-token census allows inherit only on
+    // the release callers): every secret the callee declares, the environment-only one included.
+    expect(c).not.toMatch(/^\s*secrets: inherit\s*$/m);
+    // Three sets: the secrets the caller passes, the ones the callee declares, and the
+    // ones its body reads. YAML comments are `#` only (a `//` in a URL is not one), and a bracket
+    // read is refused outright because the name scan cannot see it.
+    const passedMap = (parseYaml(wf) as { jobs: Record<string, { secrets?: unknown }> }).jobs.bastion_host_create.secrets;
+    expect(typeof passedMap).toBe("object");
+    for (const [k, v] of Object.entries(passedMap as Record<string, string>)) expect([k, v]).toEqual([k, `\${{ secrets.${k} }}`]);
+    const passed = Object.keys(passedMap as Record<string, string>).sort();
+    const declared = Object.keys(
+      ((parseYaml(bwfText) as { on: { workflow_call: { secrets?: Record<string, unknown> } } }).on.workflow_call.secrets) ?? {},
+    ).sort();
+    const body = bwfText.split("\n").map((l) => l.replace(/(^|\s)#.*$/, "")).join("\n");
+    expect(body).not.toMatch(/secrets\s*\[/i);
+    const read = [...new Set([...body.matchAll(/secrets\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))].sort();
+    expect(read).toEqual(["DOPPLER_TOKEN", "DOPPLER_TOKEN_INFRA_PRIVILEGED", "SENTRY_ACTIONS_RO_TOKEN"]);
+    expect(declared).toEqual(read);
+    // The caller passes EVERY declared secret, the environment secret included. GitHub resolves an
+    // environment secret the caller does not pass to "" in the called workflow, with no error; the
+    // callee's `environment:` supplies the value only for a secret the caller passes by name (GitHub
+    // docs, "Reuse workflows"). #12873 shipped the omission, so the route read an empty token and
+    // HELD. The Tier-B census (G1b) covers this caller through the callee's Tier-B `environment:`.
+    expect(passed).toEqual(declared);
+    // ...and the callee requires it, so a caller that drops it fails at call time instead of
+    // resolving it to "" (required: true checks that it is passed, not that it has a value).
+    const decl = (parseYaml(bwfText) as { on: { workflow_call: { secrets: Record<string, { required?: boolean }> } } }).on.workflow_call.secrets;
+    expect(decl.DOPPLER_TOKEN_INFRA_PRIVILEGED?.required).toBe(true);
+    expect(c).toMatch(/^\s*issues: write\s*$/m);
+    // The body runs inside the caller's run, which holds the workflow-level lock: a second group
+    // of the same name in the callee would only risk cancelling the caller.
+    expect((parseYaml(bwfText) as { concurrency?: unknown }).concurrency).toBeUndefined();
+    // W15 (caller side): a job-level group on the caller would split it from the per-merge apply
+    // (the R2 backend has no state lock).
+    expect(c).not.toMatch(/^\s*concurrency:/m);
+    expect((parseYaml(wf) as { concurrency?: { group?: string } }).concurrency?.group).toBe("terraform-apply-web-platform-host");
+    expect(stripComments(job)).toMatch(/^\s*environment: web-platform-infra-apply\s*$/m);
+  });
+
+  test("the reusable body redeclares the caller's Terraform env (workflow env is not propagated)", () => {
+    const callee = (parseYaml(bwfText) as { env: Record<string, string> }).env;
+    const callerEnv = (parseYaml(wf) as { env: Record<string, string> }).env;
+    for (const k of ["TERRAFORM_VERSION", "TF_VAR_terraform_version", "INFRA_DIR"]) expect([k, callee[k]]).toEqual([k, callerEnv[k]]);
+  });
+
+  test("the list parses, holds the server, and has no duplicates (non-vacuity)", () => {
+    expect(list.length).toBeGreaterThanOrEqual(5);
+    expect(list).toContain("hcloud_server.bastion");
+    expect(new Set(list).size).toBe(list.length);
+  });
+
+  test("bastion.tf declares exactly the listed resources (a resource missing from the list is never born)", () => {
+    const tf = stripComments(readFileSync(resolve(INFRA_DIR, "bastion.tf"), "utf8"));
+    const declared = [...tf.matchAll(/^resource\s+"(\w+)"\s+"(\w+)"/gm)].map((m) => `${m[1]}.${m[2]}`);
+    expect(declared.length).toBeGreaterThanOrEqual(5);
+    expect([...declared].sort()).toEqual([...list].sort());
+  });
+
+  test("the bastion_host_create job's -target lines equal the list (as a multiset)", () => {
+    expect(job.length).toBeGreaterThan(0);
+    expect([...extractTargetsWithKeys(job)].sort()).toEqual([...list].sort());
+  });
+
+  test("every list entry is an OPERATOR_APPLIED_EXCLUSION", () => {
+    expect(list.filter((a) => !OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
+  });
+
+  test("no main-root workflow -targets a bastion address outside the stripped dispatch jobs", () => {
+    for (const f of MAIN_ROOT_TF_WORKFLOWS) {
+      const t = extractAllTargets(stripDispatchJobs(readFileSync(resolve(REPO_ROOT, ".github/workflows", f), "utf8")));
+      expect([f, list.filter((a) => t.has(a))]).toEqual([f, []]);
+    }
   });
 });

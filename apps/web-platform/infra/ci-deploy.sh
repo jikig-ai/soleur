@@ -289,9 +289,9 @@ PLUGIN_MOUNT_DIR="${PLUGIN_MOUNT_DIR:-/mnt/data/plugins/soleur}"
 # Host identity (#5274 Phase 3, ADR-068)
 # -----------------------------------------------------------------------------
 # Each web host injects its OWN stable infra id into the container as
-# SOLEUR_HOST_ID — the per-user worktree write-lease's placement authority
-# (host-identity.ts:resolveHostId, which fail-loud-THROWS in prod when the git-data
-# flag is on and this is unset). Resolved ON-HOST from the Hetzner metadata service
+# SOLEUR_HOST_ID — since #12910 the per-user worktree write-lease's FALLBACK placement
+# id (used when SOLEUR_HOST_KEY below does not verify; host-identity.ts:resolveHostId
+# fail-loud-THROWS in prod when neither is usable) and the host's telemetry id. Resolved ON-HOST from the Hetzner metadata service
 # (the hcloud_server id — the SAME value terraform knows), with /etc/machine-id as
 # a reboot-stable fallback; NEVER a per-container hostname (that would self-lock
 # each recreate-deploy out of its own worktree). Best-effort: at flag-off the
@@ -305,7 +305,7 @@ resolve_host_id() {
   fi
   local url="${SOLEUR_HOST_ID_METADATA_URL:-http://169.254.169.254/hetzner/v1/metadata/instance-id}"
   local id
-  id=$(curl -sf --max-time 3 "$url" 2>/dev/null || true)
+  id=$(curl --disable --noproxy '*' -sf --max-time 3 "$url" 2>/dev/null || true)
   if [[ "$id" =~ ^[0-9]+$ ]]; then
     printf 'hetzner-%s' "$id"
     return 0
@@ -325,6 +325,177 @@ resolve_host_id() {
 }
 HOST_ID="$(resolve_host_id || true)"
 readonly HOST_ID
+
+# SOLEUR_HOST_KEY (#12910) — the host's var.web_hosts key (`web-1`, `web-2`), the
+# id the worktree write-lease places this host under and the key SOLEUR_HOST_ROSTER
+# is keyed by. HOST_ID above is now the FALLBACK lease id (used when the key does not
+# verify) and telemetry: the Hetzner instance id changes on every replace, so keying
+# the lease by it split the roster key from the lease id.
+# Derived from the metadata `hostname` (the Terraform `name`) by inverting server.tf's
+# `each.key == <the special key, today web-1> ? "soleur-web-platform" : "soleur-${each.key}"`
+# exactly: soleur-web-platform -> web-1; soleur-web-1 is never web-1's name; any other
+# soleur-<k> -> <k>; anything else is unmapped. The result must match the key regex.
+# web-hosts-generic.test.sh C8 round-trips every var.web_hosts key through this body.
+# The app accepts the key only when the roster maps it to its own private IP
+# (host-identity.ts describeHostIdentity, CTO ruling T1), so a wrong key degrades
+# to HOST_ID, never to a peer's key. Tests point SOLEUR_HOST_KEY_METADATA_URL at a
+# file:// fixture and SOLEUR_HOST_KEY_RETRY_SLEEP at 0.
+# Prints the key (rc 0) or nothing with a reason rc: 1 metadata_unreachable (3 failed
+# reads), 2 name_unmapped (incl. an answered empty body), 3 name_reserved
+# (soleur-web-1), 4 key_malformed. host_key_fallback_reason maps the rc.
+resolve_host_key() {
+  local url="${SOLEUR_HOST_KEY_METADATA_URL:-http://169.254.169.254/hetzner/v1/metadata/hostname}"
+  local name="" key="" try read_ok=0
+  # Retry only a FAILED read (transient metadata outage); an answered empty body is final.
+  # --disable --noproxy '*' (ADR-280): no ~/.curlrc and no ambient proxy may answer the
+  # link-local metadata read.
+  for try in 1 2 3; do
+    if name="$(curl --disable --noproxy '*' -sf --max-time 3 "$url" 2>/dev/null)"; then read_ok=1; break; fi
+    name=""
+    if [[ "$try" -lt 3 ]]; then sleep "${SOLEUR_HOST_KEY_RETRY_SLEEP:-1}"; fi
+  done
+  [[ "$read_ok" -eq 1 ]] || return 1
+  name="$(printf '%s' "$name" | tr -d '[:space:]')"
+  case "$name" in
+    soleur-web-platform) key="web-1" ;;
+    soleur-web-1) return 3 ;;
+    soleur-?*) key="${name#soleur-}" ;;
+    *) return 2 ;;
+  esac
+  [[ "$key" =~ ^[a-z][a-z0-9-]{0,30}$ ]] || return 4
+  printf '%s' "$key"
+}
+host_key_fallback_reason() { # <resolve_host_key rc> -> a closed reason token
+  case "$1" in
+    1) printf 'metadata_unreachable' ;;
+    2) printf 'name_unmapped' ;;
+    3) printf 'name_reserved' ;;
+    4) printf 'key_malformed' ;;
+    *) printf 'unknown' ;;
+  esac
+}
+HOST_KEY_RC=0
+HOST_KEY="$(resolve_host_key)" || HOST_KEY_RC=$?
+readonly HOST_KEY HOST_KEY_RC
+
+# The key the RUNNING container had VERIFIED, from its `docker inspect` Config.Env JSON
+# array on stdin (CTO ruling T3a). Mirrors the host-identity.ts describeHostIdentity rule
+# (last entry wins, as at process start): a trimmed SOLEUR_HOST_KEY matching HOST_KEY_RE
+# whose SOLEUR_HOST_ROSTER entry (a JSON object, non-empty string values) equals the
+# trimmed SOLEUR_HOST_PRIVATE_IP (not empty, not 0.0.0.0, as readHostPrivateIp). Prints
+# that key or nothing. Three places where jq and JavaScript differ by default are pinned
+# to the JS side:
+# - `ws` is String.prototype.trim's set (WhiteSpace + LineTerminator), not jq's `\s`, which
+#   adds U+0085 and drops U+FEFF.
+# - A null Env reads as no key, not as a jq error.
+# - The roster must be text JSON.parse accepts: fromjson also admits NaN, Infinity and
+#   leading zeros, which JSON.parse rejects for the whole roster. A roster both reject
+#   (e.g. a trailing comma) reads as {} through the `try`, never a jq error.
+# One known difference is left: a string holding a lone-surrogate escape (\ud800) is
+# accepted by JSON.parse and refused here. It fails safe (a deploy of a verified host aborts
+# key_unverifiable) and needs a roster no one writes: the values are hand-kept IPs.
+# The key regex here is the fifth copy of the var.web_hosts key shape (web-hosts-generic.test.sh
+# C8 pins all five). test/fixtures/host-key-verify-cases.json drives both this body
+# (ci-deploy.test.sh HKV rows, graded on output AND exit status) and the TypeScript rules
+# (host-identity.test.ts), so the tabled cases cannot drift apart.
+host_key_running_verified() {
+  jq -r '
+    def ws: "[\u0009-\u000d    -     　﻿]";
+    def trim: sub("^" + ws + "+"; "") | sub(ws + "+$"; "");
+    def lastv($n): [ (. // [])[] | select(type == "string" and startswith($n + "=")) ] | last
+      | if . == null then "" else .[($n | length) + 1:] end;
+    def jsonparse_ok: gsub("\"([^\"\\\\]|\\\\.)*\""; "")
+      | test("^([ \t\n\r{}\\[\\]:,]|true|false|null|-?(0(?![0-9])|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?)*$");
+    (lastv("SOLEUR_HOST_KEY") | trim) as $k
+    | (lastv("SOLEUR_HOST_PRIVATE_IP") | trim) as $ip
+    | (lastv("SOLEUR_HOST_ROSTER") | trim) as $raw
+    | (if $raw == "" or ($raw | jsonparse_ok | not) then {} else (try ($raw | fromjson) catch {}) end) as $parsed
+    | (if ($parsed | type) == "object" then $parsed else {} end) as $roster
+    | if ($k | test("^[a-z][a-z0-9-]{0,30}$")) and $ip != "" and $ip != "0.0.0.0"
+         and (($roster[$k] | type) == "string") and ($roster[$k] | length) > 0
+         and $roster[$k] == $ip
+      then $k else "" end'
+}
+
+# T3 / T3a stickiness (#12910): a host whose running prod container had VERIFIED a key
+# must deploy under the SAME key. A metadata outage or a rename would otherwise move
+# every live lease to a new id mid-life (the incident this key exists to end). The
+# running container is the last-good record: no on-host state file, nothing to go stale
+# across a replace (a replaced host has no running container). Only a VERIFIED running
+# key pins: Config.Env merges the Doppler --env-file entries with the -e ones, so a
+# container started without our -e (every pre-#12910 container, the cloud-init
+# first-boot one) could otherwise show a stray fleet-wide Doppler SOLEUR_HOST_KEY as
+# its key and lock every later deploy out; and a key the app rejected never placed a
+# lease, so blocking on it would only remove the agent-runnable recovery (fix the
+# roster, redeploy). Call directly (never as `x=$(...)`): it sets HOST_KEY_RUNNING.
+# rc 0 continue; abort before the canary on 1 key_change (verified running key, new
+# key differs), 2 key_lost (verified running key, new key empty), 3 inspect_failed (a
+# docker error other than "no such container": never read as "no container").
+# host_key_abort_reason maps the rc. Only stdout is parsed: a docker CLI warning on a
+# SUCCESSFUL inspect (e.g. "WARNING: Error loading config file") goes to stderr and must
+# not reach jq, or every deploy on the host would abort inspect_failed. stderr is read
+# only on failure, by a second identical inspect, and matched case-insensitively. No
+# mktemp (see this file's WHY NO `mktemp` note). `200>&-` closes the FD-200
+# deploy lock (#5062); like every other inspect in this script it has no timeout.
+host_key_sticky_check() {
+  local out="" err="" rc=0
+  HOST_KEY_RUNNING=""
+  out="$(docker inspect --type container --format '{{json .Config.Env}}' soleur-web-platform 2>/dev/null 200>&-)" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    err="$(docker inspect --type container --format '{{json .Config.Env}}' soleur-web-platform 2>&1 >/dev/null 200>&-)" || true
+    case "${err,,}" in
+      *"no such container"* | *"no such object"*) return 0 ;;
+    esac
+    return 3
+  fi
+  HOST_KEY_RUNNING="$(host_key_running_verified <<<"$out" 2>/dev/null)" || { HOST_KEY_RUNNING=""; return 3; }
+  [[ -n "$HOST_KEY_RUNNING" ]] || return 0
+  [[ -n "$HOST_KEY" ]] || return 2
+  [[ "$HOST_KEY_RUNNING" == "$HOST_KEY" ]] || return 1
+  return 0
+}
+host_key_abort_reason() { # <host_key_sticky_check rc> -> key_change | key_lost | inspect_failed
+  case "$1" in
+    1) printf 'key_change' ;;
+    2) printf 'key_lost' ;;
+    *) printf 'inspect_failed' ;;
+  esac
+}
+
+# CTO ruling (#12910 round 2, Q1): the sticky check above compares key STRINGS, but the lease id
+# is the key only if the NEW container can verify it. A late private NIC (PROXY_BIND empty) or a
+# drifted Doppler roster would keep the string and still move every live lease to HOST_ID. So,
+# after the env-file is final and before the canary, the next prod container's env is synthesized
+# in the prod run's order (the --env-file lines, then the prod `-e SOLEUR_HOST_KEY=$HOST_KEY` and
+# `-e SOLEUR_HOST_PRIVATE_IP=$PROXY_BIND`; last entry wins, as in docker) and put through the same
+# host_key_running_verified rule. The env holds prd secrets: it is only ever piped, never printed,
+# logged or traced. ci-deploy.test.sh pins the two `-e` tokens to the prod run's lines.
+host_key_next_env_json() { # <env-file> -> the next prod container's env as a JSON array (stdout)
+  { grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$1" || true
+    printf 'SOLEUR_HOST_KEY=%s\n' "$HOST_KEY"
+    printf 'SOLEUR_HOST_PRIVATE_IP=%s\n' "$PROXY_BIND"
+  } | jq -R -s -c 'split("\n") | map(select(length > 0))'
+}
+# rc 0 continue (no verified running key, or the next env verifies the same key); 1 abort
+# key_unverifiable (the next env would not verify the running key, including a jq failure:
+# fail closed, the old container keeps serving). Uses HOST_KEY_RUNNING from host_key_sticky_check.
+host_key_next_check() { # <env-file>
+  local next="" rc=0
+  [[ -n "${HOST_KEY_RUNNING:-}" ]] || return 0
+  next="$(host_key_next_env_json "$1" | host_key_running_verified 2>/dev/null)" || rc=$?
+  [[ "$rc" -eq 0 && "$next" == "$HOST_KEY_RUNNING" ]] || return 1
+  return 0
+}
+
+# Closed-grammar lines, keys and fixed tokens only (never the raw metadata hostname). One
+# per deploy: `host_key resolved=<key>`, `host_key fallback reason=<token>`
+# (host_key_fallback_reason), or `host_key abort reason=<key_change|key_lost|inspect_failed|
+# key_unverifiable>[ running=<key>][ new=<key> (key_change)][ cause=<fallback token> (key_lost)]`;
+# a key_unverifiable abort follows that deploy's resolved= line. `fallback` and `abort` are verbs,
+# not values, so a host named soleur-fallback cannot read as a fallback.
+log_host_key() {
+  logger -t "$LOG_TAG" "host_key $1" || true
+}
 
 # Per-host owner-side relay bind (ADR-068 §(a), item 2). SOLEUR_PROXY_BIND is the
 # host's OWN private-net IP; it cannot be a fleet-wide Doppler value (two hosts
@@ -5146,6 +5317,31 @@ zot_gate_and_login
 # Component-specific deploy logic
 case "$COMPONENT" in
   web-platform)
+    # #12910 T3/T3a: refuse a key change on a host whose running container verified its key,
+    # first, before any prune, pull or container. A stray fleet-wide SOLEUR_HOST_KEY in the Doppler
+    # env-file can neither move a lease (the app verifies the key against the roster and its own
+    # private IP) nor pin this check (only a key the running container verified pins).
+    HK_STICKY_RC=0
+    host_key_sticky_check || HK_STICKY_RC=$?
+    if [[ "$HK_STICKY_RC" -ne 0 ]]; then
+      HK_ABORT="$(host_key_abort_reason "$HK_STICKY_RC")"
+      # The abort line carries what an operator needs without a second line: the new key on a
+      # change, and on a loss WHY the key did not resolve (metadata_unreachable re-runs; the
+      # rest need a naming fix). This deploy writes no `fallback reason=` line.
+      HK_DETAIL=""
+      case "$HK_ABORT" in
+        key_change) HK_DETAIL=" new=${HOST_KEY}" ;;
+        key_lost) HK_DETAIL=" cause=$(host_key_fallback_reason "$HOST_KEY_RC")" ;;
+      esac
+      log_host_key "abort reason=${HK_ABORT}${HOST_KEY_RUNNING:+ running=${HOST_KEY_RUNNING}}${HK_DETAIL}"
+      final_write_state 1 "host_key_${HK_ABORT#key_}"
+      exit 1
+    fi
+    if [[ -n "$HOST_KEY" ]]; then
+      log_host_key "resolved=${HOST_KEY}"
+    else
+      log_host_key "fallback reason=$(host_key_fallback_reason "$HOST_KEY_RC")"
+    fi
     echo "Pruning unused Docker images..."
     # `200>&-` closes the FD-200 advisory lock for these long-running docker
     # children (#5062). Without it, a `docker pull` blocked on a network syscall
@@ -5375,6 +5571,14 @@ case "$COMPONENT" in
       exit 1
     fi
 
+    # #12910 round 2 (CTO Q1): the env-file is final (overlay + scrub above). Refuse a deploy whose
+    # next prod container could not verify the key the running one verified (host_key_next_check).
+    if ! host_key_next_check "$ENV_FILE"; then
+      log_host_key "abort reason=key_unverifiable running=${HOST_KEY_RUNNING}"
+      final_write_state 1 host_key_unverifiable
+      exit 1
+    fi
+
     # The container's NODE_OPTIONS is ours alone: the heap cap via `-e NODE_OPTIONS=` below. The
     # #5417 lever (append the cap to an operator-set NODE_OPTIONS from the Doppler env-file) is
     # retired under #8609: the overlay above refuses any prd env carrying a NODE_* name other than
@@ -5413,6 +5617,7 @@ case "$COMPONENT" in
       -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
       -e CRON_WORKSPACE_ROOT=/workspaces \
       -e SOLEUR_HOST_ID="$HOST_ID" \
+      -e SOLEUR_HOST_KEY= \
       -e SOLEUR_PROXY_BIND= \
       -e SOLEUR_HOST_PRIVATE_IP= \
       -e NODE_OPTIONS="$CANARY_NODE_OPTIONS" \
@@ -5783,6 +5988,10 @@ case "$COMPONENT" in
       # and a canary reaper would revoke live tokens. lib/docker-run-tuple.py pins both
       # halves of the ARGV; env injected through --env-file (Doppler prd) or
       # EGRESS_TOKEN_DIR is a stated residual there.
+      # `-e SOLEUR_PROXY_BIND=0.0.0.0` is also the app's prod-container marker (#12910): the
+      # host-identity.ts boot report sends the resolveHostId.key-fallback Sentry event only
+      # when it reads exactly this value, so changing it darkens that alarm. host-identity.test.ts
+      # pins the app literal to docker-run-tuple.py's RELAY_PROD_ENV.
       if docker run -d \
         --name soleur-web-platform \
         --log-driver journald \
@@ -5799,6 +6008,7 @@ case "$COMPONENT" in
         -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
         -e CRON_WORKSPACE_ROOT=/workspaces \
         -e SOLEUR_HOST_ID="$HOST_ID" \
+        -e SOLEUR_HOST_KEY="$HOST_KEY" \
         -e SOLEUR_HOST_PRIVATE_IP="$PROXY_BIND" \
         -e SOLEUR_PROXY_BIND=0.0.0.0 \
         -e SOLEUR_PROXY_PORT=8443 \

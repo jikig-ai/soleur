@@ -41,6 +41,7 @@ on:
       - "apps/web-platform/infra/egress-gw-image.provenance.md"
       - "apps/web-platform/server/agent-env.ts"
       - "apps/web-platform/server/agent-runner-sandbox-config.ts"
+      - "apps/web-platform/server/sandbox-network-access.ts"
       - "apps/web-platform/server/sandbox.ts"
       - "apps/web-platform/server/tool-path-checker.ts"
       - "apps/web-platform/server/tool-pattern-checker.ts"

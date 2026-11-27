@@ -39,6 +39,14 @@
 # MODES:
 #   --gate <plan.json>   Runs in the apply job. Reads a `terraform show -json`
 #                        plan document; fail-closes an apply that would clobber.
+#                        PREAPPLY_CONTROL=zone-list (opt-in; default unchanged)
+#                        swaps the control probe for one that works on an EMPTY
+#                        zone (the #12931 migrate job, new zone): GET
+#                        zones/<zone>/rulesets must be 200 with a .result array,
+#                        and a target 404 then PASSES only if that list (or, for
+#                        kind=root, the account list) holds no ruleset of the
+#                        row's kind for the row's phase. A 404 the list
+#                        contradicts fails closed.
 #   --audit [--live]     Retrospective drift audit. Static (default) enumerates
 #                        declared rulesets from *.tf and prints a parity table;
 #                        --live (CI, needs token) additionally GETs each live
@@ -201,6 +209,11 @@ run_gate() {
   echo "::notice::preapply-entrypoint-gate: ${matched_count} create-from-absent cloudflare_ruleset row(s) matched; enumerating live entrypoints (1 control probe + ${matched_count} target probe(s))."
 
   local fetch="${PREAPPLY_ENTRYPOINT_FETCH:-_default_curl}"
+  local control_mode="${PREAPPLY_CONTROL:-}" zone_list_body=""
+  case "$control_mode" in
+    ''|zone-list) ;;
+    *) _err "gate environment invalid: PREAPPLY_CONTROL='${control_mode}' (only zone-list, or unset). NOT a target finding."; return 1 ;;
+  esac
 
   # 4. CONTROL PROBE (once, only because ≥1 matched row). A non-200 here means
   #    the gate environment is invalid (token scope / URL scheme / network) —
@@ -212,10 +225,33 @@ run_gate() {
     _err "gate environment invalid: PREAPPLY_CF_ZONE_ID is empty — cannot run the control probe. NOT a target finding."
     return 1
   fi
-  if ! control_out=$("$fetch" "zones/${control_zone}/rulesets/phases/${CONTROL_PHASE}/entrypoint" 2>/dev/null); then
+  if [[ "$control_mode" == zone-list ]]; then
+    # 4'. ZONE-LIST CONTROL (works on an empty zone, where no phase is known-populated): the
+    #     zone ruleset LIST must be a 200 with a .result array. It both proves token scope /
+    #     URL scheme / network and becomes the witness every target 404 is checked against.
+    if ! control_out=$("$fetch" "zones/${control_zone}/rulesets" 2>/dev/null); then
+      _err "gate environment invalid: zone-list control probe fetch failed to execute. NOT a target finding."
+      return 1
+    fi
+    control_code=$(head -n1 <<<"$control_out")
+    if [[ "$control_code" != "200" ]]; then
+      _err "gate environment invalid: zone-list control probe (zones/<zone>/rulesets) returned HTTP '${control_code}' (expected 200) — token scope / URL scheme / network problem, NOT a target finding. Refusing to trust any target 404 as 'empty'."
+      return 1
+    fi
+    zone_list_body=$(tail -n +2 <<<"$control_out")
+    if ! jq -e '.result | type == "array"' <<<"$zone_list_body" >/dev/null 2>&1; then
+      _err "gate environment invalid: zone-list control probe returned 200 but .result is not an array (degraded/error body) — NOT a target finding. Refusing to trust any target read as 'empty'."
+      return 1
+    fi
+    echo "::notice::preapply-entrypoint-gate: zone-list control probe → 200 with $(jq '.result | length' <<<"$zone_list_body") zone ruleset(s)."
+  fi
+  if [[ "$control_mode" == zone-list ]]; then
+    :
+  elif ! control_out=$("$fetch" "zones/${control_zone}/rulesets/phases/${CONTROL_PHASE}/entrypoint" 2>/dev/null); then
     _err "gate environment invalid: control probe fetch failed to execute. NOT a target finding."
     return 1
   fi
+  if [[ "$control_mode" != zone-list ]]; then
   control_code=$(head -n1 <<<"$control_out")
   if [[ "$control_code" != "200" ]]; then
     _err "gate environment invalid: control probe on known-populated phase '${CONTROL_PHASE}' returned HTTP '${control_code}' (expected 200) — token scope / URL scheme / network problem, NOT a target finding. Refusing to trust any target 404 as 'empty'."
@@ -236,6 +272,7 @@ run_gate() {
     _err "gate environment invalid: control probe on known-populated phase '${CONTROL_PHASE}' returned 200 with 0 rules — a KNOWN-populated phase must return rules, so this is a degraded body, not an empty phase. NOT a target finding. Refusing to trust any target 404/200-empty as 'empty'."
     return 1
   fi
+  fi
 
   # 5-6. Per matched row: build the endpoint URL (kind allowlist), probe it,
   #      apply DEFAULT-DENY HTTP handling. Aggregate a `fail` sentinel across
@@ -246,7 +283,7 @@ run_gate() {
   # at most once per distinct account_id: "ok" (a 200 LIST proved account scope)
   # or "fail" (non-200 → the accounts/ surface is invalid; every kind=root row
   # on it fail-closes). P1-A.
-  local -A acct_control_memo=()
+  local -A acct_control_memo=() acct_list_memo=()
   local row addr kind phase zone_id account_id url out code body
   while IFS= read -r row; do
     [[ -z "$row" ]] && continue
@@ -308,6 +345,7 @@ run_gate() {
             continue
           fi
           acct_control_memo["$account_id"]="ok"
+          acct_list_memo["$account_id"]=$(tail -n +2 <<<"$acc_out")
         fi
         url="accounts/${account_id}/rulesets/phases/${phase}/entrypoint"
         ;;
@@ -360,6 +398,32 @@ run_gate() {
       echo "::notice::preapply-entrypoint-gate: '${addr}' → phase '${phase}' entrypoint is 200/empty — safe to create."
       continue
     elif [[ "$code" == "404" ]]; then
+      if [[ "$control_mode" == zone-list ]]; then
+        # A 404 is trusted only when the LIST agrees: no ruleset of this kind for this phase.
+        local witness="" n_same
+        if [[ "$kind" == "zone" ]]; then
+          if [[ "$zone_id" != "$control_zone" ]]; then
+            fail=1
+            _err "row '${addr}': zone-list mode, but the row's zone_id is not PREAPPLY_CF_ZONE_ID — the list proves nothing about that zone, so its 404 cannot be trusted. Fail-closed."
+            continue
+          fi
+          witness="$zone_list_body"
+        else
+          witness="${acct_list_memo[$account_id]:-}"
+        fi
+        if ! n_same=$(jq -e --arg k "$kind" --arg p "$phase" '.result | if type == "array" then [.[] | select(.kind == $k and .phase == $p)] | length else error("no list") end' <<<"$witness" 2>/dev/null); then
+          fail=1
+          _err "row '${addr}': zone-list mode, but the ${kind} ruleset list is unreadable — cannot corroborate the 404. Fail-closed."
+          continue
+        fi
+        if [[ "$n_same" -ne 0 ]]; then
+          fail=1
+          _err "row '${addr}': entrypoint returned 404 but the ${kind} ruleset list holds ${n_same} kind=${kind} ruleset(s) for phase '${phase}' — the 404 disagrees with the list. Fail-closed."
+          continue
+        fi
+        echo "::notice::preapply-entrypoint-gate: '${addr}' → phase '${phase}' entrypoint is 404 and the ${kind} ruleset list holds none for it — safe to create."
+        continue
+      fi
       # 404 → phase exists, no ruleset yet → proven-empty → PASS this row.
       echo "::notice::preapply-entrypoint-gate: '${addr}' → phase '${phase}' entrypoint is 404 (empty phase) — safe to create."
       continue
