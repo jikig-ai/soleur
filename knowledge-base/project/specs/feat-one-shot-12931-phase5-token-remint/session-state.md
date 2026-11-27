@@ -37,3 +37,13 @@
   - `destructive-command-guard-mutation`: 84/84, one mutant run timed out (rc=3 UNRESOLVED, wall-time over budget).
 - New suite `tests/scripts/test-cf-old-login-token-remint-bootstrap.sh`: 85/0 (full), 47/0 (--mutants), 21 mutants killed.
 - Plan correction: the three generated infra-security copies are pointer stubs with no ids; sync `--check` clean, nothing regenerated.
+
+## Review Phase
+- Panel: 10 seats (security, structural, test-design, data-integrity, architecture, quality, pattern, agent-native, simplicity, git-history); all findings pr-introduced, fixed inline.
+- Ruled by CTO agent (D1): dashboard bodies committed as tested, sha256-pinned `p5-mint.js`, `p5-revoke.js`, `p5-sink.py` with their own suite.
+- Ruled by CTO agent (D2): committed census floor (`# P5-PROJECT-FLOOR`, nine projects, plus the tracked soleur config inventory).
+- Ruled by CTO agent (D3): drift gate removed from `verify`; one post-revoke drift run with DOPPLER_TOKEN scoped to that process.
+- Ruled by CTO agent (D4): migration runbook untouched; pointer sentence in this runbook and the bootstrap header; comments on #12931 and #12958.
+- Ruled by CTO agent (D5): swap op line binds `new_id`/`owner`; `_NEXT` equal to another CF_API_TOKEN* key refused.
+- Suites: bootstrap 210/0 full, 127/0 mutants; browser 101/0 full, 25/0 mutants.
+- Floor gap from the fix agent (8 of 9 projects) closed with a names-only `doppler projects` read (`example-project`).
