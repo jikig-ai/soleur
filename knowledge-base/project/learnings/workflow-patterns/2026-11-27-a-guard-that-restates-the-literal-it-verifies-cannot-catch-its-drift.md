@@ -97,10 +97,25 @@ as in code.
    `pr-battery-gate-saving-9323.test.sh` (11-artifact shape, cap-math
    literal, and dedupe-union prices derived from the committed durations
    TSV) — caught only by CI leg 9, not by the local sentinel sweep that
-   omitted this suite. **Prevention:** when a PR changes a constant or a
-   committed data file, grep that constant's dependents' *test* files for
-   restated values (the cap, the artifact count, the priced literals) —
-   and run the dependents' suites, not only the suites named in the plan.
+   omitted this suite. Same class, two more surfaces: the reprice moved
+   `suite-weight-exemptions.tsv` rows stale in both directions
+   (`test-all-affected-c/d` dropped under the 600 s cap while
+   `test-all-infra-coverage-notice` and `registry-gate-mutation-battery`
+   repriced over it), and the `fixture-relative-assert` baseline needed
+   `+2` rows for the new EV/Z9 sites. **Prevention:** when a PR changes a
+   constant or a committed data file, grep that constant's dependents'
+   *test* files for restated values (the cap, the artifact count, the
+   priced literals) — and run the dependents' suites, not only the
+   suites named in the plan. A committed-TSV reprice is a data change:
+   every guard that joins the tables (weight budget, baseline censuses)
+   is a blast-radius surface too.
+9. **`cmd | tail` masked a failing sweep's verdict locally** — two
+   "passed locally" reads of `grep-q-pipe-guard.test.sh` were pipelines
+   whose `$?` came from `tail`, hiding both the FAIL lines and the
+   nonzero exit; CI leg 12 caught 9 `producer | grep -q` sites my EV
+   arms had added (the #9217 pipefail class). **Prevention:** never pipe
+   a test runner's output for display and read the pipeline's status —
+   redirect to a file and check `$?` + `grep FAIL` on the file.
 
 ## Tags
 
