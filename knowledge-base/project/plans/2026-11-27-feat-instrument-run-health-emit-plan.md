@@ -17,9 +17,29 @@ requires_cpo_signoff: true
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed). No `spec.md` exists at `knowledge-base/project/specs/feat-one-shot-12573-run-health-emit/spec.md`. The parent spec `knowledge-base/project/specs/feat-12532-degraded-run-forensics/spec.md` carries `lane: cross-domain`, which matches the fail-closed default.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-27
+**Sections enhanced:** 4 attribution sentences (Overview, Local research, Split Assessment, Dependencies). No new research subsections.
+**Research agents used:** none. `spawn_subagent` is not available in this process. Reviewed-Coverage: sequential-fallback. This pass is not an independent review.
+
+### Key Improvements
+
+1. Gates 4.5, 4.55, 4.6, 4.7, 4.8, 4.9, 4.10, 4.11, 4.12, and 4.13 were run in-process against the committed plan. 4.5 and 4.55 do not fire. 4.6, 4.7, 4.8, 4.11, and 4.12 pass. 4.9, 4.10, and 4.13 skip. No telemetry: none of those gates halted.
+2. The only prose change is the stale "unpushed" label on `1fbfbca547`. That commit is the parent of docs commit `cf7d17e120` and is on `origin/feat-one-shot-12573-run-health-emit`. The branch at `cf7d17e120` is 26 behind `origin/main` and 20 ahead. This summary commit adds one docs commit and does not change the product diff.
+3. `tasks.md` is unchanged. No design correction landed. The emitter, the seal rule, and the schema stay as they are on the branch.
+
+### New Considerations Discovered
+
+- Phase 4.4: no new SQL, lock, RPC, pool, or circuit-breaker. The helper's existing same-directory replace is a 2026-11-20 ruling. This pass does not reopen it and does not add a precedent diff.
+- Phase 4.10 word hits are not a store this slice creates. The Scope Check sibling filter names `proposal-queue`. Dependencies names the existing `plugins/soleur/test/cloud-init-user-data-size.test.ts` from `48f2d6761c`. Files to Edit stay the three skill markdown files. No Encryption Posture section.
+- Phase 4.45: the plan body has no `NEVER`, `MUST NOT`, `does not reach`, `cannot leak`, or `is not exposed` claim. Local read of `plugins/soleur/scripts/run-health-emit.sh` confirms discover writes the fixture into a temp prompt file, prints `ok` on stdout, and sends `run-health-emit:` diagnostics to stderr.
+- The CMO skip sentence in Domain Review is the body of `256418635b`, an ancestor of HEAD. No CPO sign-off is claimed. `requires_cpo_signoff` stays true.
+- Phase 4.13 does not fire: Files to Create is None, and the edits are three skill markdown files, not a new workflow, cron, or host scheduler.
+
 ## Overview
 
-Issue #12573 is still open. Open pull request #12996 already wires `plugins/soleur/scripts/run-health-emit.sh` into one-shot and test-fix-loop on this branch. This plan does not redesign that helper. It records the remaining work that lets #12996 merge: the read-surface failure that reddened CI on 2026-11-21, already addressed in unpushed commit `1fbfbca547`, and the 26 commits on `origin/main` that this branch does not yet contain.
+Issue #12573 is still open. Open pull request #12996 already wires `plugins/soleur/scripts/run-health-emit.sh` into one-shot and test-fix-loop on this branch. This plan does not redesign that helper. It records the remaining work that lets #12996 merge: the read-surface failure that reddened CI on 2026-11-21, already addressed in commit `1fbfbca547` (on this branch's remote as the parent of `cf7d17e120`), and the 26 commits on `origin/main` that this branch does not yet contain.
 
 "Run-health ledger" in this plan means the `run_health.json` file the helper writes. `knowledge-base/project/glossary.md` has no entry for that term.
 
@@ -62,7 +82,7 @@ Repo paths that matter:
 - `.gitignore` — `.soleur/` at the line that ignores that directory.
 - `apps/web-platform/test/plugin-root-anchoring.test.ts` — `W4a` and `W4b`.
 
-`bun x vitest run test/plugin-root-anchoring.test.ts -t "W4a:|W4b:"` from `apps/web-platform` on 2026-11-27: 2 passed, 45 skipped. That tree includes unpushed `1fbfbca547`.
+`bun x vitest run test/plugin-root-anchoring.test.ts -t "W4a:|W4b:"` from `apps/web-platform` on 2026-11-27: 2 passed, 45 skipped. That tree includes `1fbfbca547`, which is now on this branch's remote.
 
 Learnings that apply: `knowledge-base/project/learnings/2026-11-20-run-health-emit-must-seal-with-a-real-call.md` (seal is a real call). `knowledge-base/project/learnings/2026-11-08-a-credentialed-helper-must-run-its-verified-copy-and-a-refactor-strands-the-batteries-that-guard-it.md` (read each suite's own exit code; a trailing command is not the verdict). `knowledge-base/project/learnings/best-practices/2026-10-20-copied-template-links-and-coverage-negative-controls.md` (token-form links for Read-surface docs). ADR-179 is the anchoring contract. No external research: the codebase already contains the helper, the failing assertions, and the fix commit.
 
@@ -206,7 +226,7 @@ Must-PASS, not the canonical tree: a reference doc that does not contain the plu
 ### Split Assessment
 
 - Subsystems touched: 1 — `plugins/soleur`
-- Planned files: 3 | Estimated changed lines: 40 (the unpushed commit is +4/−2; the rest is merge-conflict slack)
+- Planned files: 3 | Estimated changed lines: 40 (the read-surface commit is +4/−2; the rest is merge-conflict slack)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR
 
@@ -263,7 +283,7 @@ No page, component, or flow. The user-facing artifact is a missing forensic file
 
 ## Dependencies & Risks
 
-- #12996 is 26 commits behind `origin/main` and 19 ahead, re-read on 2026-11-27 (`git rev-list --left-right --count origin/main...HEAD`). A merge can move `READ_SURFACE_NOTICE_HEAD`. Phase 3 re-measures the anchoring tests and the one-shot byte spare. `plugins/soleur/test/cloud-init-user-data-size.test.ts` and `scripts/test-affected-kb-consumers.baseline.txt` are already on this branch (`48f2d6761c`, the spec-mention floor). They are not a remaining edit and they are not #12575–#12578.
+- At `cf7d17e120` on 2026-11-27, #12996 is 26 commits behind `origin/main` and 20 ahead (`git rev-list --left-right --count origin/main...HEAD` printed `26` then `20`). The same-day count before the plan docs commit was 19 ahead. The Enhancement Summary commit adds one docs commit on top of that 20 and does not change the product diff. A merge can move `READ_SURFACE_NOTICE_HEAD`. Phase 3 re-measures the anchoring tests and the one-shot byte spare. `plugins/soleur/test/cloud-init-user-data-size.test.ts` and `scripts/test-affected-kb-consumers.baseline.txt` are already on this branch (`48f2d6761c`, the spec-mention floor). They are not a remaining edit and they are not #12575–#12578.
 - Foreign `test-all.sh` processes are running in another worktree. Do not start `scripts/test-all.sh` from this plan.
 - Untracked `scripts/.h1probe.6G3BHeem.sh` must stay unstaged. A directory `git add` would sweep it in.
 - Out of scope: #12575, #12576, #12577, #12578, Article 30, and any edit whose purpose is a new emission design.
