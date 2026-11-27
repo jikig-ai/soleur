@@ -16,7 +16,7 @@ n-mismatched table degrades to the old positional round-robin — coverage
 never depends on the table. The three heaviest suites live in the dedicated
 `test-scripts-heavy` matrix (#8006) with their own manifest
 `scripts/suite-shard-legs-heavy.tsv` under the identical contract; the
-light group runs K=8. Regenerate the manifests when legs skew or when
+light group runs K=12. Regenerate the manifests when legs skew or when
 `scripts-shard-manifest.test.sh` reds. For a suite add/remove use
 `python3 scripts/regenerate-shard-manifest.py --incremental --write`
 (`--group heavy` for the heavy table) — incumbent rows pin verbatim and only
@@ -28,7 +28,7 @@ rows; for leg-balance corrections use the full
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the atomic mega-suites register as `--rows` arms: `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26). The replay triple's arms retired with S4 on 2026-11-09. |
+| `test-scripts` | K=12 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the atomic mega-suites register as `--rows` arms: `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26). The replay triple's arms retired with S4 on 2026-11-09. |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 3 | battery rows split `--rows 1-14` / `15-28` / `29-42` | ~6 min each + setup |
 
@@ -338,7 +338,7 @@ span to the NEXT registered mark.
   records per-row elapsed seconds in its replay table so the next boundary
   choice is a data lookup.
 
-- **2026-10-03 K=7→K=8 bump (#9307):** a K=7 dry-run on the five newest main
+- **2026-10-03 K=7→K=8 bump (#9449, umbrella #9307):** a K=7 dry-run on the five newest main
   runs (37111686980, 37112007418, 37116885720, 37130724002, 37148301745)
   predicts every leg at 651.0-657.7 s of suite time (10.9-11.0 min), above
   the ~10-min target, so the matrix moved to K=8 and the manifest was

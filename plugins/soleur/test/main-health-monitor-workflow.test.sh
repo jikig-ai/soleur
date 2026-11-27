@@ -763,9 +763,11 @@ def _job_matrix(job):
     _m = re.search(r'^        shard:\s*\[(?P<l>[^\]]*)\]', _b, re.M)
     return [x.strip().strip('"\'') for x in (_m.group("l").split(",") if _m else [])]
 _s1p = []
+_n_by_group = {}
 for _job, _mf in (("test-scripts", "suite-shard-legs.tsv"),
                   ("test-scripts-heavy", "suite-shard-legs-heavy.tsv")):
     _n = _manifest_n(manifest_dir + "/" + _mf)
+    _n_by_group[_job] = _n
     _sh = _job_matrix(_job)
     _want = [f"{i}/{_n}" for i in range(1, (_n or 0) + 1)]
     if _n is None:
@@ -777,7 +779,9 @@ if _job_matrix("test-webplat") != ["1/2", "2/2"]:
 if _s1p:
     bad("(S1) shard matrices match the ADR-240 manifests", "; ".join(_s1p))
 else:
-    ok("(S1) shard matrices match the ADR-240 manifests (light=8, heavy=3, webplat=2)")
+    ok(f"(S1) shard matrices match the ADR-240 manifests "
+       f"(light={_n_by_group['test-scripts']}, "
+       f"heavy={_n_by_group['test-scripts-heavy']}, webplat=2)")
 
 # ---- (S2) SCRIPTS_SHARD is bound to matrix.shard on the two scripts jobs ------
 _s2p = []
@@ -818,9 +822,15 @@ else:
     ok("(S3) one monitor-leg-* artifact per leg job and a patterned download")
 
 # EXPECTED_LEGS must equal the derived set: webplat x2 + mut x3 + bun +
-# scripts x8 + heavy x3 + infra = 18 (#12626). The mut-* leg ids are derived
+# scripts xN + heavy xM + infra (#12626). The mut-* leg ids are derived
 # from the job's own matrix.battery literals and its LEG_ID prefix, so a stem
-# dropped from the matrix OR a LEG_ID rename reds here.
+# dropped from the matrix OR a LEG_ID rename reds here. The scripts/heavy
+# counts come from the committed manifests' `# n=` lines — restating them as
+# literals here is exactly the drift this guard exists to catch (a K bump that
+# updates the matrix but not EXPECTED_LEGS must go RED, and a restated
+# literal would silently agree with the stale yml).
+_light_n = _manifest_n(manifest_dir + "/suite-shard-legs.tsv") or 0
+_heavy_n = _manifest_n(manifest_dir + "/suite-shard-legs-heavy.tsv") or 0
 _mut_b = _jobs_blocks.get("test-webplat-mutations", "")
 _mut_list = re.search(r'^        battery:\s*\[(?P<l>[^\]]*)\]', _mut_b, re.M)
 _mut_bats = [x.strip().strip('"\'') for x in (_mut_list.group("l").split(",") if _mut_list else [])]
@@ -830,8 +840,8 @@ _exp = re.search(r'^      EXPECTED_LEGS:\s*"([^"]+)"', stripped, re.M)
 _exp_legs = _exp.group(1).split() if _exp else []
 _derived = (["webplat-0", "webplat-1", "bun"] +
             [f"{_mut_pref}{b}" for b in _mut_bats] +
-            [f"scripts-{i}" for i in range(8)] +
-            [f"heavy-{i}" for i in range(3)] +
+            [f"scripts-{i}" for i in range(_light_n)] +
+            [f"heavy-{i}" for i in range(_heavy_n)] +
             ["infra"])
 if sorted(_exp_legs) == sorted(_derived) and _mut_bats and _mut_pref:
     ok(f"(S4) EXPECTED_LEGS enumerates all {len(_derived)} legs")
@@ -1397,12 +1407,12 @@ _leak_tail() { local i; for i in 1 2 3 4 5 6; do echo "SOLEUR| leaked per-suite 
 B_RC=0
 # The filer now reads leg artifact dirs, not two /tmp files: $1 (tests fixture)
 # becomes monitor-leg-scripts-0's capture and $4 (infra fixture) becomes
-# monitor-leg-infra's. The other 13 legs report outcome=success with no
+# monitor-leg-infra's. The other 17 legs report outcome=success with no
 # capture, so their sections are skipped — the two-capture quantification the
 # B16/B23/B24 rows need is still exercised. `outcome=` empty in status.env is
 # the harness's "the step never ran" marker; an absent status.env would mean
 # "no leg report" instead (see the B26a row).
-EXPECTED_LEGS_FULL="webplat-0 webplat-1 mut-approval-guard1-mutation mut-destroy-ask-mutation mut-home-census-mutations bun scripts-0 scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 heavy-0 heavy-1 heavy-2 infra"
+EXPECTED_LEGS_FULL="webplat-0 webplat-1 mut-approval-guard1-mutation mut-destroy-ask-mutation mut-home-census-mutations bun scripts-0 scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 scripts-8 scripts-9 scripts-10 scripts-11 heavy-0 heavy-1 heavy-2 infra"
 _leg_dir() { # $1 leg id, $2 outcome, $3 elapsed-or-empty, $4 fixture-or-empty
   local d="$BEHAVE_DIR/run/leg-reports/monitor-leg-$1"
   mkdir -p "$d"
@@ -1421,7 +1431,7 @@ run_filer() {
   [[ "$_io" == "-" ]] && _io=""
   _leg_dir scripts-0 "$_to" "${B_TESTS_ELAPSED_S:-}" "$1"
   _leg_dir infra "$_io" "${B_INFRA_ELAPSED_S:-}" "${4:-}"
-  for _l in webplat-0 webplat-1 mut-approval-guard1-mutation mut-destroy-ask-mutation mut-home-census-mutations bun scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 heavy-0 heavy-1 heavy-2; do
+  for _l in webplat-0 webplat-1 mut-approval-guard1-mutation mut-destroy-ask-mutation mut-home-census-mutations bun scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 scripts-8 scripts-9 scripts-10 scripts-11 heavy-0 heavy-1 heavy-2; do
     _leg_dir "$_l" success "" ""
   done
   # shellcheck disable=SC2086
@@ -1854,14 +1864,14 @@ rec() { # $1 number of status.env legs to stage -> the ::notice line
 }
 _N='::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH webplat=success mut=success bun=success scripts=failure heavy=success infra=success mint=green'
 CASES=$((CASES + 1))
-row "(R1) a full 18-leg report reaches the ::notice annotation" "got: $(rec 18)" \
-  "$([[ "$(rec 18)" == "$_N legs=18/18" ]]; echo $?)"
+row "(R1) a full 22-leg report reaches the ::notice annotation" "got: $(rec 22)" \
+  "$([[ "$(rec 22)" == "$_N legs=22/22" ]]; echo $?)"
 CASES=$((CASES + 1))
 row "(R2) a partial report counts only staged legs" "got: $(rec 3)" \
-  "$([[ "$(rec 3)" == "$_N legs=3/18" ]]; echo $?)"
+  "$([[ "$(rec 3)" == "$_N legs=3/22" ]]; echo $?)"
 CASES=$((CASES + 1))
-row "(R3) no leg reports still emits the annotation with legs=0/18" "got: $(rec 0)" \
-  "$([[ "$(rec 0)" == "$_N legs=0/18" ]]; echo $?)"
+row "(R3) no leg reports still emits the annotation with legs=0/22" "got: $(rec 0)" \
+  "$([[ "$(rec 0)" == "$_N legs=0/22" ]]; echo $?)"
 
 # ── (MWd) the mintwatch step body, EXECUTED (#9082) ────────────────────────────
 #

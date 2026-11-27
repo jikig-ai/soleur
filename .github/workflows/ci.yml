@@ -1776,8 +1776,8 @@ jobs:
     needs: [push-dedupe, draft-light, oracle-selection]
     if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',test-scripts,')) }}
     runs-on: ubuntu-24.04
-    # MATRIX SHARDED (#7902), K=8 after the heavy carve-out (#8006 phase 2) and
-    # the K=6 -> K=7 -> K=8 rebalances (history and measurements: the runbook
+    # MATRIX SHARDED (#7902), K=12 after the heavy carve-out (#8006 phase 2) and
+    # the K=6 -> K=7 -> K=8 -> K=12 rebalances (history and measurements: the runbook
     # named below). The three cost-heaviest registrations moved to
     # `test-scripts-heavy` below; what is left is the light suite pool — per-leg
     # predicted suite time lives in the committed manifest and the runbook
@@ -1785,7 +1785,7 @@ jobs:
     # the ~9.5-min figure this comment once carried measured 54.9 min on the
     # worst leg by #11562). The atomic mega-suites were split via in-runner
     # --rows arms (#8864, #11562); the duration-aware manifest keeps assignment
-    # balanced as suites drift. Cost of the 8th leg: one more job competing for the runner pool
+    # balanced as suites drift. Cost of the 9th-12th legs: four more jobs competing for the runner pool
     # (see the concurrency note near the top of this file and the runbook).
     #
     # Leg membership is NOT positional: `scripts/suite-shard-legs.tsv` pins each
@@ -1828,7 +1828,7 @@ jobs:
     #     5.7x off the worst measured leg). No light suite carries a
     #     declared `_suite_budget_ms` — the only declaration (the battery's 41.67 min)
     #     moved to test-scripts-heavy, whose own derivation sits on that job.
-    #   -> 60 stays as the hang cap; it is ~6x the nominal leg, not a leg estimate.
+    #   -> 60 stays as the hang cap; it is ~3.3x the nominal leg, not a leg estimate.
     #
     # An earlier revision of this file set 30, sized against the leg's NOMINAL value. That
     # was a new silent-kill path: the battery measures 14.3-27.9 min and its own budget
@@ -2003,7 +2003,7 @@ jobs:
   # (~6 min) from sharing a leg — on the measured order they DID share one,
   # which is where the 31-39 min long pole came from. A dedicated 3-leg
   # matrix over `want_scripts_heavy` gives each its own leg; the light group
-  # fans out to eight legs above.
+  # fans out to twelve legs above.
   #
   # TOOLCHAIN PARITY IS ASSERTED, NOT ASSUMED. scripts-shard-runtime-coverage.test.sh
   # extracts BOTH job blocks and requires every runtime a scripts-group suite

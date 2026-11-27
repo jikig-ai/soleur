@@ -1521,6 +1521,22 @@ if grep 'run list' "$FEV/calls.log" | grep -q -- '--event merge_group' \
 else
   check fail "EV: --event merge_group argv wrong or the flag is missing: $(grep 'run list' "$FEV/calls.log")"
 fi
+# auto resolves per group: heavy also prices off merge_group; infra keeps the
+# legacy all-events main-branch population (its workflow never runs queue).
+ev_run heavy --group heavy --runs 2 || true
+if grep 'run list' "$FEV/calls.log" | grep -q -- '--event merge_group' \
+   && ! grep 'run list' "$FEV/calls.log" | grep -q -- '--branch'; then
+  check pass "EV: heavy group auto-resolves to merge_group too"
+else
+  check fail "EV: heavy group did not auto-resolve to merge_group: $(grep 'run list' "$FEV/calls.log")"
+fi
+ev_run infra --group infra --runs 2 || true
+if grep 'run list' "$FEV/calls.log" | grep -q -- '--branch main' \
+   && ! grep 'run list' "$FEV/calls.log" | grep -q -- '--event'; then
+  check pass "EV: infra group keeps the main-branch population under auto"
+else
+  check fail "EV: infra group auto-resolution wrong: $(grep 'run list' "$FEV/calls.log")"
+fi
 if ev_run bogus --event bogus --runs 2; then
   check fail "EV: an out-of-domain --event value was accepted"
 elif grep -qi 'invalid choice\|bogus' "$FEV/bogus-err.txt"; then
@@ -1540,6 +1556,15 @@ if grep -qiE 'event.{0,60}(no effect|ignored)' "$FEV/warn-err.txt"; then
   check pass "EV: the ignored --event under a local source is warned, not silent"
 else
   check fail "EV: --event silently ignored with --timings-dir: $(cat "$FEV/warn-err.txt")"
+fi
+# Same warn under --durations — the condition covers every local source, not
+# just --timings-dir.
+printf 'ev-a\t100\tmeasured\nev-b\t200\tmeasured\n' > "$FEV/d.tsv"
+ev_run dwarn --event merge_group --durations "$FEV/d.tsv" || true
+if grep -qiE 'event.{0,60}(no effect|ignored)' "$FEV/dwarn-err.txt"; then
+  check pass "EV: the ignored --event under --durations is warned, not silent"
+else
+  check fail "EV: --event silently ignored with --durations: $(cat "$FEV/dwarn-err.txt")"
 fi
 # Mode refusals: --event only shapes a gh fetch — the no-fetch modes refuse it.
 if python3 "$GEN" --incremental --event merge_group \
@@ -1630,6 +1655,11 @@ if python3 "$FZ9/repo/scripts/regenerate-shard-manifest.py" \
 else
   check fail "Z9c: a measured committed --write refused: $(tail -2 "$FZ9/c-err.txt")"
 fi
+if grep -qF $'z9-a\t500\tmeasured' "$FZ9/repo/scripts/suite-durations.tsv"; then
+  check pass "Z9c: the committed table carries the measured row content"
+else
+  check fail "Z9c: wrote but the measured row is wrong: $(cat "$FZ9/repo/scripts/suite-durations.tsv")"
+fi
 # --incremental fetches no timings — the zero-measured refusal must NOT arm
 # its write path at all.
 printf 'z9-a\t500\tmeasured\n' > "$FZ9/repo/scripts/suite-durations.tsv"
@@ -1653,6 +1683,49 @@ elif grep -qiE 'refus.{0,80}zero measured|zero measured.{0,80}refus' "$FZ9/e-err
 else
   check fail "Z9e: refused but not by the zero-measured guard: $(tail -1 "$FZ9/e-err.txt")"
 fi
+# --durations-out redirects the prices while the committed MANIFEST still
+# takes the same all-floor packing: the refusal covers either committed
+# artifact, not just the durations target.
+printf 'z9-a\t500\tmeasured\n' > "$FZ9/repo/scripts/suite-durations.tsv"
+sha256sum "$FZ9/repo/scripts/suite-shard-legs.tsv" > "$FZ9/f-before.sha"
+if python3 "$FZ9/repo/scripts/regenerate-shard-manifest.py" \
+     --timings-dir "$FZ9/run" --registered-file "$FZ9/registered.txt" \
+     --durations-out "$FZ9/redirected-durations.tsv" \
+     --write > "$FZ9/f-out.txt" 2> "$FZ9/f-err.txt"; then
+  check fail "Z9f: a zero-measured write with redirected --durations-out still touched the committed manifest"
+elif grep -qiE 'refus.{0,80}zero measured|zero measured.{0,80}refus' "$FZ9/f-err.txt"; then
+  check pass "Z9f: the refusal covers the committed manifest under --durations-out redirect"
+else
+  check fail "Z9f: refused but not by the zero-measured guard: $(tail -1 "$FZ9/f-err.txt")"
+fi
+if sha256sum -c "$FZ9/f-before.sha" > /dev/null 2>&1; then
+  check pass "Z9f: the committed manifest stayed byte-identical"
+else
+  check fail "Z9f: committed manifest modified despite the refusal"
+fi
+# --event is inert under --run too (the explicit run id bypasses the
+# population query): the ignored-event WARN must name that source as well.
+# rc is ignored — the WARN precedes the gh fetch, which has no stub here.
+python3 "$FZ9/repo/scripts/regenerate-shard-manifest.py" \
+  --run 1 --event push --registered-file "$FZ9/registered.txt" \
+  > "$FZ9/g-out.txt" 2> "$FZ9/g-err.txt" || true
+if grep -qiE 'no effect.{0,60}--run' "$FZ9/g-err.txt"; then
+  check pass "Z9g: --event under --run warns it has no effect"
+else
+  check fail "Z9g: no ignored-event warn under --run: $(tail -1 "$FZ9/g-err.txt")"
+fi
+# src=estimate rows carry weights but are not measurements: an est-only
+# committed input is zero measured rows and refuses identically.
+printf 'z9-a\t500\testimate\n' > "$FZ9/estonly.tsv"
+if python3 "$FZ9/repo/scripts/regenerate-shard-manifest.py" \
+     --durations "$FZ9/estonly.tsv" --registered-file "$FZ9/registered.txt" \
+     --write > "$FZ9/h-out.txt" 2> "$FZ9/h-err.txt"; then
+  check fail "Z9h: an est-only committed --write was accepted"
+elif grep -qiE 'refus.{0,80}zero measured|zero measured.{0,80}refus' "$FZ9/h-err.txt"; then
+  check pass "Z9h: the refusal counts only src=measured, not src=estimate"
+else
+  check fail "Z9h: refused but not by the zero-measured guard: $(tail -1 "$FZ9/h-err.txt")"
+fi
 
 # --- Accounting conservation (ADR-193) -----------------------------------------------------
 # Ordered BEFORE the floor — a neutered helper deflates the verdict counters, and this
@@ -1667,7 +1740,7 @@ fi
 # --- ASSERTION FLOOR (ADR-193) -------------------------------------------------------------
 # printf + exit, NEVER through fail(). MIN_CASES sits on the line directly above its
 # `if` so guard-vacuity-floor's backward slice-widening binds it.
-MIN_CASES=61
+MIN_CASES=169
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d check(s) ran, expected >= %d. The suite did not run to completion.\n' "$cases" "$MIN_CASES" >&2
   exit 1

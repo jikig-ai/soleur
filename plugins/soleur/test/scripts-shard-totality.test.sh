@@ -237,7 +237,7 @@ if (( LEGS_N >= 1 )); then
 
   # --- The union ----------------------------------------------------------------------------
   # Fan out one child per declared leg (this batch is the matrix leg count itself —
-  # bounded by ci.yml, ~10 at most), then collect rc per-pid and evaluate in order.
+  # bounded by ci.yml, ~a dozen at most), then collect rc per-pid and evaluate in order.
   declare -a _leg_pids=()
   _leg_i=0
   while IFS= read -r spec; do

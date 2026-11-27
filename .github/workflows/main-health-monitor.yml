@@ -471,7 +471,7 @@ jobs:
   # LEGS: the light scripts group, 12-way on the ADR-240 manifest.
   # Leg membership comes from scripts/suite-shard-legs.tsv (n=12), not from
   # position — the same manifest ci.yml's test-scripts consumes. Every leg under
-  # ~1100 s of predicted suite time (K=12 reprice, 2026-11; #9307 was the K=8
+  # ~1100 s of predicted suite time (K=12 reprice, 2026-11; #9449 was the K=8
   # bump); untabled labels hash-fallback.
   # ---------------------------------------------------------------------------
   test-scripts:
@@ -519,6 +519,8 @@ jobs:
       # 60-min step ceiling: measured leg_max ~37.6 min (uncensored ci.yml run
       # 41408788451, scripts shard 5/8 — legs were being killed at the old
       # 15-min ceiling, #9457) x1.5 = 56.4 -> roundup5 60; job = step + 20 = 80.
+      # Post-K=12 the light legs pack to ~18 min, so the ceiling's headroom
+      # grew — the 37.6-min measurement stays as the derivation record.
       - name: Run test suite
         id: suite
         timeout-minutes: 60
@@ -789,7 +791,7 @@ jobs:
       # the two singleton legs. The static guard derives this list from the
       # matrix literals and the fixed legs; a matrix resize without an update
       # here is a RED, not a drift.
-      EXPECTED_LEGS: "webplat-0 webplat-1 mut-approval-guard1-mutation mut-destroy-ask-mutation mut-home-census-mutations bun scripts-0 scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 heavy-0 heavy-1 heavy-2 infra"
+      EXPECTED_LEGS: "webplat-0 webplat-1 mut-approval-guard1-mutation mut-destroy-ask-mutation mut-home-census-mutations bun scripts-0 scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 scripts-8 scripts-9 scripts-10 scripts-11 heavy-0 heavy-1 heavy-2 infra"
     steps:
       # `actions/checkout` is required ONLY for the sentry-heartbeat composite —
       # a local `uses: ./` action resolves from the runner's workspace, which a

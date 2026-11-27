@@ -20,7 +20,9 @@ generated artifact that lands on every sibling PR.
 
 AGGREGATION + FLOOR (#9232)
 ---------------------------
-Weights aggregate across the last N green main runs by MEDIAN per label — a
+Weights aggregate across the last N green runs of the --event-resolved
+population (merge_group for the ci.yml matrices, main pushes for infra) by
+MEDIAN per label — a
 sustained drift moves a weight; a one-run spike does not. A registered label
 absent from every timing input is still tabled, at the floor weight
 (median of the group's measured labels, else DEFAULT_SUITE_MS), marked
@@ -265,12 +267,15 @@ def fetch_timings_from_run(run_id, artifact_re, expected_legs=None, allow_empty=
     with tempfile.TemporaryDirectory() as td:
         for a in names:
             # Binary payload — capture_output bytes, not the text-mode gh() helper.
+            # int() pins the id into the URL and zip filename — a non-numeric
+            # API id could otherwise escape `td` via os.path.join.
+            aid = int(a["id"])
             p = subprocess.run(
-                ["gh", "api", f"repos/{REPO}/actions/artifacts/{a['id']}/zip"],
+                ["gh", "api", f"repos/{REPO}/actions/artifacts/{aid}/zip"],
                 capture_output=True)
             if p.returncode != 0:
-                die(f"artifact {a['id']} download failed")
-            zpath = os.path.join(td, f"{a['id']}.zip")
+                die(f"artifact {aid} download failed")
+            zpath = os.path.join(td, f"{aid}.zip")
             with open(zpath, "wb") as f:
                 f.write(p.stdout)
             with zipfile.ZipFile(zpath) as z:
@@ -898,9 +903,10 @@ def main():
                     help="CI run id to read timings from (explicit single-run "
                          "override; equivalent to --runs 1 over that run)")
     ap.add_argument("--runs", type=int, default=None,
-                    help="aggregate timings over the N most recent green main "
-                         "runs of the group's workflow by per-label median "
-                         "(default: 5)")
+                    help="aggregate timings over the N most recent green runs "
+                         "of the group's --event-resolved population "
+                         "(merge_group for the ci.yml matrices, main pushes "
+                         "for infra) by per-label median (default: 5)")
     ap.add_argument("--timings-dir", action="append", default=None,
                     help="read suite-timings.tsv files from a local dir instead "
                          "of gh; repeatable — each dir is one run's artifact set")
@@ -956,13 +962,13 @@ def main():
                          "--durations-out emissions — the fixture seam")
     ap.add_argument("--event", choices=("auto", "push", "merge_group"),
                     default="auto",
-                    help="event population --runs/--run-default sampling draws "
+                    help="event population that --runs samples "
                          "from (default auto: merge_group for the ci.yml test "
                          "matrices — push runs on main carry no suite-timings "
                          "artifacts — and every main-branch run for "
                          "infra-validation). Refused under --incremental/"
                          "--drift-report (no fetch); ignored with a WARN "
-                         "under --durations/--timings-dir")
+                         "under --durations/--timings-dir/--run")
     ap.add_argument("--allow-all-floor", action="store_true",
                     help="acknowledge a committed --write whose sample "
                          "contains zero measured rows — an all-floor "
@@ -1233,9 +1239,9 @@ def main():
 
     # Input-source precedence mirrors the file's pairing rule: whichever source
     # actually fed stamps the provenance. --durations > --timings-dir > gh.
-    if args.event != "auto" and (args.durations or args.timings_dir):
+    if args.event != "auto" and (args.durations or args.timings_dir or args.run):
         print("WARN: --event selects the gh run population — it has no "
-              "effect with --durations/--timings-dir", file=sys.stderr)
+              "effect with --durations/--timings-dir/--run", file=sys.stderr)
     floor_inputs = set()
     est_inputs = set()
     run_ids = []
@@ -1366,16 +1372,24 @@ def main():
         new_rows = {l: (timings[l], src_map[l]) for l in timings}
         committed_write = (
             os.path.abspath(durations_path) == os.path.abspath(default_durations))
+        committed_manifest = (
+            os.path.abspath(manifest_path) == os.path.abspath(default_manifest))
         # Zero-measured refusal BEFORE the gate and the opens: a committed
         # write whose sample carries no measured rows replaces every committed
         # price with an all-floor count-balanced table — the exact output a
         # battery-less --runs population (push runs on main ship no
         # suite-timings artifacts) or an all-floor --durations input produces.
-        # Redirected emissions stay writable (fixtures, local packs), and
-        # --allow-all-floor acknowledges an intentional floor rewrite.
+        # The conjunct covers EITHER committed artifact: --durations-out can
+        # redirect the durations file while the committed manifest still takes
+        # the same all-floor packing. Redirected emissions stay writable
+        # (fixtures, local packs), and --allow-all-floor acknowledges an
+        # intentional floor rewrite.
         measured_n = sum(1 for s in src_map.values() if s == "measured")
-        if committed_write and measured_n == 0 and not args.allow_all_floor:
-            die(f"refusing to write {os.path.basename(durations_path)}: the "
+        if (committed_write or committed_manifest) and measured_n == 0 \
+                and not args.allow_all_floor:
+            target = (os.path.basename(durations_path) if committed_write
+                      else os.path.basename(manifest_path))
+            die(f"refusing to write {target}: the "
                 f"sample has zero measured rows — an all-floor count-balanced "
                 f"table would replace the committed prices. Feed measured "
                 f"input (--timings-dir, or --run/--runs over the merge_group "
