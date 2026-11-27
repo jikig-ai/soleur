@@ -672,8 +672,10 @@ load_targets() {
     for c in $cfgs; do CT[${#CT[@]}]="${p}/${c}"; done
     [[ "$p" == "$PROJ" ]] && soleur_cfgs="$cfgs"
   done
-  if [[ "$(grep -ac "^${FLOOR_TAG}" "${BASH_SOURCE[0]}")" -eq 1 ]]; then
-    floor="$(grep -a "^${FLOOR_TAG}" "${BASH_SOURCE[0]}")"; floor="${floor#"$FLOOR_TAG"}"
+  # Exactly one floor line, else the floor stays empty and the shape check below reports it.
+  if [[ "$(grep -ac "^${FLOOR_TAG}" "${BASH_SOURCE[0]}" || true)" -eq 1 ]] \
+     && floor="$(grep -a "^${FLOOR_TAG}" "${BASH_SOURCE[0]}")"; then
+    floor="${floor#"$FLOOR_TAG"}"
   fi
   [[ "$floor" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*(\ [A-Za-z0-9][A-Za-z0-9_.-]*)*$ ]] || { floor=""; ct_missing project-floor-line; }
   if invf="$(tracked_file "$INVENTORY_REL")"; then inv="$(grep -E '^[a-z0-9_]+$' "$invf" | sort -u || true)"
