@@ -6,18 +6,8 @@
 #   bash tests/scripts/test-cf-old-login-token-remint-bootstrap.sh            every row, then every mutant
 #   bash tests/scripts/test-cf-old-login-token-remint-bootstrap.sh --mutants  the mutation section only
 #
-# PROPERTIES (each row asserts the refusal TEXT, never only an exit code)
-#   Guard 1 (verify's census and REVOKE_READY): REVOKE_READY only when prd_terraform <KEY>_PREV verifies the
-#     pinned old id, <KEY> verifies a different active id, and no listed config of any listed project holds
-#     the old value under the key's name except prd_terraform <KEY>_PREV. Rows G1-1..G1-7 + must-PASS.
-#   Guard 2 (swap): <KEY> is never written unless, at that moment, <KEY>_PREV verifies the pinned id; a
-#     failed key stops the stage; an empty manifest refuses. Rows G2-1..G2-6 + must-PASS.
-#   Guard 3 (holder-copies): a holder is written only when its digest equals <KEY>_PREV's; a third value or
-#     a missing key refuses the whole stage before any write; before swap it refuses need=swap. Rows G3-1..G3-3.
-#   Scenarios S1..S9: the happy path to the post-revoke inventory, an account-owned token, 429/503 as
-#     unreachable, no receipt -> 75, a malformed staged value before any curl, the non-gating
-#     analytics-health line, a GraphQL zone mismatch, old target ids, a failing drift check. No synthesized
-#     value, digest or full id reaches stdout or stderr (P-leak).
+# Properties: the plan's "## Guard Contract" (rows G1-*, G2-*, G3-*) and "## Test Scenarios" (rows S*); each
+# row asserts the refusal TEXT or marker, never only an exit code.
 #
 # ASSEMBLY. A fixture git repository per world holds a copy of bootstrap.sh at its real relative path plus
 # committed stubs of cloudflare-readonly.sh and check-cloudflare-token-drift.sh (the bootstrap runs only
@@ -29,31 +19,9 @@
 # stubbed and must never be called. Nothing reaches a network. Values are synthesized sentinels
 # (cq-test-fixtures-synthesized-only); the ids are the public account/zone ids of the runbook id table.
 #
-# MUTATIONS (--mutants, and the tail of a full run). Each is proven to land (cmp differs, bash -n clean)
-# and must turn its row RED AT the named step (killed() rejects a red anywhere else):
-#   G1M1 census floor check deleted                     -> G1-1 @verdict
-#   G1M2 old_hits==1-at-_PREV (census-blind) deleted     -> G1-2 @verdict
-#   G1M3 census `break` after the first compliant row    -> G1-3 @verdict
-#   G1M4 census over manifest holders only               -> G1-4 @verdict
-#   G1M5 active-status check dropped                     -> G1-5 @verdict
-#   G1M6 reference taken from _PREV by name              -> G1-6 @source
-#   G1M7 a failed get of a listed name read as absent    -> G1-7 @verdict
-#   G2M1 swap's "<KEY> verifies the pinned id" dropped   -> G2-1 @refuse
-#   G2M2 an existing _PREV accepted by name              -> G2-2 @refuse
-#   G2M3 copy_secret's read-back compare deleted         -> G2-3 @mismatch
-#   G2M4 the key loop runs on after a failed key         -> G2-4 @no-later-write
-#   G2M5 the <KEY> write moved above the _PREV copy      -> G2-5 @prev-old
-#   G2M6 the empty-manifest refusal deleted              -> G2-6 @refuse
-#   G3M1 the up-front refusal dropped (write-as-you-go)  -> G3-1 third, absent @refuse
-#   G3M2 the per-holder digest compare bypassed          -> G3-2 @only-first
-#   G3M3 the "_NEXT still staged" precondition deleted   -> G3-3 @need-swap
-#   S2M  the account verify endpoint dropped             -> S2 @verdict
-#   S3M  a no-verdict answer read as a denial            -> S3 @verify-unreachable
-#   S5M  the staged-value shape pre-pass deleted         -> S5 quote @no-curl
-#   S6M  analytics-health made gating                    -> S6 @verdict
-# HARNESS rows (the instrument itself): H1 a doppler stub whose every get is empty reds G1-3, G1-4 and the
-# G1 must-PASS; H2 a stub corrupting the <KEY> write (not _PREV) reds G2-3 @no-key-write; H3 a stub whose
-# holder get returns the _PREV value reds G3-2 @only-first.
+# MUTATIONS (--mutants, and the tail of a full run): each `mkill` label names its mutant, row, step and the
+# reason the row must observe (killed() rejects a red anywhere else, or for another reason). HARNESS rows (`hred`)
+# run a row on the REAL script under a deliberately broken stub and must go red the same way.
 #
 # LOCATION: this suite lives in tests/scripts and finds bootstrap.sh by glob, so an archive-kb move of the
 # spec directory breaks nothing; exactly one match is required, else exit 2.
@@ -71,7 +39,8 @@ esac
 
 SUITE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git -C "$SUITE_DIR" rev-parse --show-toplevel 2>/dev/null)" || { printf 'HARNESS: not in a git work tree\n' >&2; exit 2; }
-mapfile -t _found < <(git -C "$REPO_ROOT" ls-files --cached --others --exclude-standard --full-name \
+_found=()   # a read loop, not mapfile: the suite stays runnable on bash 3.2
+while IFS= read -r _f; do _found[${#_found[@]}]="$_f"; done < <(git -C "$REPO_ROOT" ls-files --cached --others --exclude-standard --full-name \
   '*feat-one-shot-12931-phase5-token-remint/bootstrap.sh')
 [[ "${#_found[@]}" -eq 1 ]] || { printf 'HARNESS: expected exactly one phase5 token-remint bootstrap.sh, found %s\n' "${#_found[@]}" >&2; exit 2; }
 SCRIPT_SRC="${REPO_ROOT}/${_found[0]}"
@@ -114,9 +83,17 @@ ALL_OUT="$SB/all-output.log"; : > "$ALL_OUT"
 readonly NZ=951ce525552201ec6c696b24251abed7 NA=66d4f93f7397f196544e9fe84c3557c2
 readonly OZ=5af02a2f394e9ba6e0ea23c381a26b67
 readonly TFC=prd_terraform
+# The keys and their pinned old-id prefixes come from the script's own `# P5-MANIFEST` lines (a rotation edits only
+# that block, CTO F18); the stubs read them from STUB_PINS. KA / KN / KP name the three consumers this suite models.
+KEYS=(); STUB_PINS=""
+while IFS='|' read -r _k _p _h; do
+  _k="${_k#\# P5-MANIFEST }"; _k="${_k//[[:space:]]/}"; _p="${_p//[[:space:]]/}"
+  KEYS[${#KEYS[@]}]="$_k"; STUB_PINS="${STUB_PINS:+$STUB_PINS }${_k}=${_p}"
+done < <(grep -a '^# P5-MANIFEST ' "$SCRIPT_SRC")
+readonly KEYS STUB_PINS
+pin_of() { local e; for e in $STUB_PINS; do [[ "${e%%=*}" != "$1" ]] || { printf '%s\n' "${e#*=}"; return 0; }; done; return 1; }
 readonly KA=CF_API_TOKEN_AUDIT KN=CF_API_TOKEN_ANALYTICS_READ KP=CF_API_TOKEN_PAGERULES_READ
-readonly KEYS=("$KA" "$KN" "$KP")
-pin_of() { case "$1" in "$KA") echo dd6d1427 ;; "$KN") echo 5993721f ;; "$KP") echo 86aa993e ;; esac; }
+for _k in "$KA" "$KN" "$KP"; do pin_of "$_k" >/dev/null || { printf 'HARNESS: the manifest has no %s line\n' "$_k" >&2; exit 2; }; done
 tok() { printf 'SYNTH-%s-%s-SENTINEL' "$1" "$2"; }   # tok <KIND> <KEY>
 
 # --- stubs ----------------------------------------------------------------------
@@ -230,7 +207,7 @@ deny() { reply 401 '{"success":false,"errors":[{"code":1000,"message":"Invalid A
 kre='^SYNTH-([A-Z0-9]+)-(CF_API_TOKEN_[A-Z_]+)-SENTINEL$'
 kind=""; key=""
 if [[ "$tok" =~ $kre ]]; then kind="${BASH_REMATCH[1]}"; key="${BASH_REMATCH[2]}"; fi
-pin() { case "$1" in CF_API_TOKEN_AUDIT) echo dd6d1427 ;; CF_API_TOKEN_ANALYTICS_READ) echo 5993721f ;; CF_API_TOKEN_PAGERULES_READ) echo 86aa993e ;; *) echo 0000ffff ;; esac; }
+pin() { local e; for e in ${STUB_PINS:-}; do [[ "${e%%=*}" != "$1" ]] || { echo "${e#*=}"; return; }; done; echo 0000ffff; }
 tid() { if [[ "$kind" == OLD ]]; then printf '%s000000000000000000000000' "$(pin "$key")"; else printf '%s' "$tok" | sha256sum | cut -c1-32; fi; }
 case "$u" in
   "$api/accounts/66d4f93f7397f196544e9fe84c3557c2/tokens/verify"|"$api/user/tokens/verify")
@@ -320,7 +297,8 @@ world() {
   sv soleur-infra-privileged prd CF_API_TOKEN_ORIGIN_CA "SYNTH-PRIV-ORIGIN-SENTINEL"
   sv soleur-infra-privileged prd CF_API_TOKEN_R2 "SYNTH-PRIV-R2-SENTINEL"
   CHILD_ENV=("PATH=$W/bin:$PATH" "SOLEUR_OP_LIB=$LIB" "ENV_FILE=$W/xdg/.env" "SOLEUR_BOOTSTRAP_LEDGER=$W/ledger.jsonl"
-             "STUB_D=$STUB_D" "STUB_LOG=$STUB_LOG" "XDG_STATE_HOME=$W/xdg")
+             "STUB_D=$STUB_D" "STUB_LOG=$STUB_LOG" "STUB_PINS=$STUB_PINS" "XDG_STATE_HOME=$W/xdg"
+             "GIT_CEILING_DIRECTORIES=$SB")   # a TMPDIR inside some work tree must not leak that tree into a fixture
 }
 sv() { mkdir -p "$STUB_D/$1/$2"; printf '%s' "$4" > "$STUB_D/$1/$2/$3"; }   # sv <proj> <cfg> <NAME> <value>
 rmv() { rm -f "$STUB_D/$1/$2/$3"; }
@@ -340,10 +318,26 @@ seed_swapped() {
   sv soleur dev "$KA" "$(tok NEW "$KA")"
 }
 
-OUT=""; RC=0
-run() {
-  OUT="$(env -u CLAUDE_PLUGIN_ROOT -u CLAUDE_CODE_ENTRYPOINT -u DOPPLER_TOKEN "${CHILD_ENV[@]}" timeout 120 bash "$S" "$@" </dev/null 2>&1)"; RC=$?
+OUT=""; RC=0; WHY=""
+# Every child runs with the session and approval-hook variables and the git location variables removed, so a
+# developer shell, a harness session or a linked worktree changes nothing about what a row observes.
+UNSET_ENV=()
+for _v in CLAUDE_PLUGIN_ROOT CLAUDE_CODE_ENTRYPOINT CLAUDECODE OPENCODE SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK \
+          DOPPLER_TOKEN DOPPLER_PROJECT DOPPLER_CONFIG DOPPLER_ENVIRONMENT DOPPLER_API_HOST "${GIT_LOCATION_VARS[@]}"; do
+  UNSET_ENV+=(-u "$_v")
+done
+# observe — after every child: WHY is the reasons and markers the run printed (killed() names the one a mutant
+# must produce), and a READ stage that made any mutating doppler call is forced red (rc 97, why read-stage-wrote).
+observe() { # <mutating-calls-before> <read-stage 0|1>
+  WHY="rc=${RC} $(grep -oE '^SOLEUR_[A-Z0-9_]+|reason=[a-z-]+' <<<"$OUT" | sort -u | tr '\n' ' ')"
+  if [[ "$2" -eq 1 && "$(mut)" -gt "$1" ]]; then RC=97; WHY="read-stage-wrote ${WHY}"; OUT="read-stage-wrote: ${OUT}"; fi
   printf '%s\n' "$OUT" >> "$ALL_OUT"
+}
+run() {
+  local before rs=0; before="$(mut)"
+  [[ " $* " == *" --stage verify "* || " $* " == *" --stage inventory "* ]] && rs=1
+  OUT="$(env "${UNSET_ENV[@]}" "${CHILD_ENV[@]}" timeout 120 bash "$S" "$@" </dev/null 2>&1)"; RC=$?
+  observe "$before" "$rs"
 }
 digest() { sed -n 's/^SOLEUR_BOOTSTRAP_PLAN stage=[^ ]* operations=[0-9]* digest=\([0-9a-f]*\)$/\1/p' <<<"$OUT"; }
 ops() { sed -n 's/^SOLEUR_BOOTSTRAP_PLAN stage=[^ ]* operations=\([0-9]*\) digest=.*$/\1/p' <<<"$OUT"; }
@@ -353,27 +347,35 @@ mut() { grep -c "^mutating" "$STUB_LOG" || true; }
 # red AT the step its header names, never during setup.
 STEP=""
 at() { STEP="$1"; }
-killed() { [[ "$1" -ne 0 && "$STEP" == "$2" ]] || { echo "    row rc=$1 stopped at step '${STEP}', want '$2'"; return 1; }; }
+# killed <rc> <step> <why-ere> — red, AT the named step, and the last run printed the named reason (an ERE over
+# WHY). Any red is not enough: a stub with no network reds most rows at their step for another reason.
+killed() {
+  [[ "$1" -ne 0 && "$STEP" == "$2" ]] || { echo "    row rc=$1 stopped at step '${STEP}', want '$2'"; return 1; }
+  grep -qE -- "$3" <<<"$WHY" || { echo "    row red at '${STEP}' but its last run printed '${WHY}', want /$3/"; return 1; }
+}
 # approve <stage>: plan, the REAL hook mints a receipt for the exact apply command, then the rewritten
 # command runs as the harness would run it. Leaves OUT/RC of the apply.
 approve() {
   local stage="$1" d cmd in newc
   run --stage "$stage"
   d="$(digest)"
-  [[ -n "$d" && "$(ops)" -gt 0 ]] || { OUT="approve(): no plan with operations for ${stage}: ${OUT}"; RC=99; return; }
+  [[ -n "$d" && "$(ops)" -gt 0 ]] || { OUT="approve(): no plan with operations for ${stage}: ${OUT}"; RC=99; WHY="approve-no-plan ${WHY}"; return; }
   cmd="bash $S --stage $stage --apply --plan-digest $d"
   in="$(jq -nc --arg c "$cmd" '{tool_name:"Bash",tool_input:{command:$c},permission_mode:"default",session_id:"s",cwd:"/",hook_event_name:"PreToolUse"}')"
-  newc="$(printf '%s' "$in" | env "XDG_STATE_HOME=$W/xdg" CLAUDE_CODE_ENTRYPOINT=cli bash "$HOOK" | jq -r '.hookSpecificOutput.updatedInput.command // empty')"
-  [[ -n "$newc" ]] || { OUT="approve(): the hook minted nothing for: ${cmd}"; RC=98; return; }
-  OUT="$(env -u CLAUDE_PLUGIN_ROOT -u DOPPLER_TOKEN "${CHILD_ENV[@]}" timeout 120 bash -c "$newc" </dev/null 2>&1)"; RC=$?
-  printf '%s\n' "$OUT" >> "$ALL_OUT"
+  newc="$(printf '%s' "$in" | env "${UNSET_ENV[@]}" "XDG_STATE_HOME=$W/xdg" CLAUDE_CODE_ENTRYPOINT=cli bash "$HOOK" | jq -r '.hookSpecificOutput.updatedInput.command // empty')"
+  [[ -n "$newc" ]] || { OUT="approve(): the hook minted nothing for: ${cmd}"; RC=98; WHY="approve-no-receipt"; return; }
+  local before; before="$(mut)"
+  OUT="$(env "${UNSET_ENV[@]}" "${CHILD_ENV[@]}" timeout 120 bash -c "$newc" </dev/null 2>&1)"; RC=$?
+  observe "$before" 0
 }
-# copy_with <src> <dst> — a copy of the script with a perl edit (stdin) that must land; rc 1 otherwise.
+# copy_with <src> <dst> — a copy of the script with a perl edit (stdin) that must land; rc 1 when it did not land
+# (the copy equals the source), rc 2 when the copy does not parse.
 copy_with() {
   local src="$1" dst="$2" prog; prog="$(cat)"
   assert_fixture_dir "$dst"
   cp "$src" "$dst"; perl -0777 -pi -e "$prog" "$dst"
-  ! cmp -s "$dst" "$src" && bash -n "$dst" 2>/dev/null
+  ! cmp -s "$dst" "$src" || return 1
+  bash -n "$dst" 2>/dev/null || return 2
 }
 has_line() { grep -qxF -- "$1" <<<"$OUT"; }
 vok() { has_line "SOLEUR_P5_VERIFY key=$1 verdict=ok"; }
@@ -382,6 +384,22 @@ ready() { grep -qE "^SOLEUR_P5_REVOKE_READY key=$1 old_id=$(pin_of "$1") new_id=
 noready() { ! grep -q "^SOLEUR_P5_REVOKE_READY key=$1 " <<<"$OUT"; }
 logged() { grep -qE -- "$1" "$STUB_LOG"; }
 set_lines() { grep -cE "^mutating	set soleur/${1}/${2} prev=" "$STUB_LOG" || true; }   # <cfg> <NAME>
+# leak_scan <file> — rc 0 when no line carries 24+ consecutive lowercase hex characters, except a line that is
+# EXACTLY one of the library's approval lines: the plan line, the apply-command line, the apply command itself and
+# the approval-required line. Their hex is a hash of operation names or of the command text, never of a value.
+# ONE awk process reads the whole file: a `grep -v | grep -q` pipeline under pipefail reports a leak as a pass on
+# SIGPIPE. Only the line number and the first word of a hit are printed, never the hex.
+leak_scan() {
+  local h64; h64="$(printf '[0-9a-f]%.0s' $(seq 1 64))"
+  LC_ALL=C awk -v hex="$(printf '[0-9a-f]%.0s' $(seq 1 24))" \
+    -v e1="^SOLEUR_BOOTSTRAP_PLAN stage=[^ ]+ operations=[0-9]+ digest=${h64}\$" \
+    -v e2="^SOLEUR_BOOTSTRAP_APPLY_COMMAND stage=[^ ]+ approval_digest=${h64}\$" \
+    -v e3="^  bash [^ ]+ --stage [^ ]+ --apply --plan-digest ${h64}\$" \
+    -v e4="^SOLEUR_BOOTSTRAP_APPROVAL_REQUIRED stage=[^ ]+ approval_digest=${h64} surface=[a-z-]+\$" '
+    $0 ~ e1 || $0 ~ e2 || $0 ~ e3 || $0 ~ e4 { next }
+    $0 ~ hex { bad = 1; if (shown++ < 3) printf "    leak: line %d of %s (first word %s)\n", NR, FILENAME, $1 > "/dev/stderr" }
+    END { exit bad }' "$1"
+}
 
 # ==================================================================================================
 # Guard 1 rows — verify's census and REVOKE_READY (world: seed_swapped, a compliant post-swap state)
@@ -731,7 +749,7 @@ if [[ "$MODE" == full ]]; then
   run
   [[ "$RC" -eq 64 ]] && has_line 'SOLEUR_BOOTSTRAP_STAGE_REQUIRED'
   check "no --stage exits 64 STAGE_REQUIRED (no run-all mode)" $?
-  OUT="$(env "${CHILD_ENV[@]}" bash -x "$S" --stage inventory </dev/null 2>&1)"; RC=$?
+  OUT="$(env "${UNSET_ENV[@]}" "${CHILD_ENV[@]}" bash -x "$S" --stage inventory </dev/null 2>&1)"; RC=$?
   [[ "$RC" -eq 78 ]] && grep -qF '[FATAL] refusing to run under xtrace' <<<"$OUT"
   check "a run under xtrace is refused with exit 78" $?
 
@@ -775,160 +793,188 @@ if [[ "$MODE" == full ]]; then
   echo "== P-leak: no synthesized value, digest or full id in any output =="
   ! grep -qE 'SYNTH-|synth-actor|192\.0\.2\.7|injected\.invalid' "$ALL_OUT"
   check "no SYNTH-* value, consumer body field or injected URL appears in any stdout/stderr" $?
-  ! grep -vE 'digest' "$ALL_OUT" | grep -qE '[0-9a-f]{24,}'
-  check "no digest or full id (24+ hex) appears outside the plan-digest lines" $?
+  leak_scan "$ALL_OUT"
+  check "no digest or full id (24+ hex) appears on any line but the exact SOLEUR_BOOTSTRAP_PLAN digest line" $?
+fi
+
+# ==================================================================================================
+# The instrument: the leak scanner and the mutant scorer must each be able to say no
+# ==================================================================================================
+echo "== instrument controls =="
+LEAK_PLANT="$SB/leak-plant.log"; LEAK_CLEAN="$SB/leak-clean.log"
+{ printf 'SOLEUR_P5_READBACK digest-check=%s\n' "$(printf 'plant' | sha256sum | cut -c1-64)"
+  for _i in $(seq 1 3000); do printf 'SOLEUR_P5_HOLDER project=soleur config=dev key=CF_API_TOKEN_AUDIT value=new %s\n' "$_i"; done; } > "$LEAK_PLANT"
+{ printf 'SOLEUR_BOOTSTRAP_PLAN stage=swap operations=3 digest=%s\n' "$(printf 'plan' | sha256sum | cut -c1-64)"; tail -n +2 "$LEAK_PLANT"; } > "$LEAK_CLEAN"
+r=1; [[ "$(wc -c < "$LEAK_PLANT")" -gt 102400 ]] && ! leak_scan "$LEAK_PLANT" && r=0
+check "control: a 64-hex line planted FIRST in a >100 KB log turns the leak scan red" "$r"
+leak_scan "$LEAK_CLEAN"
+check "control: the same log whose only 64-hex line is an exact SOLEUR_BOOTSTRAP_PLAN line passes the leak scan" $?
+
+# score <row-fn> <src> <step> <why-ere> [<row-args>...] — rc 0 when the row went red as named (killed()).
+score() {
+  local fn="$1" src="$2" step="$3" why="$4" r; shift 4
+  "$fn" "$src" "$@"; r=$?
+  killed "$r" "$step" "$why"
+}
+# ctl_row <src> <step> <why> <rc> — a printf-and-exit stand-in for a row, for the scorer controls.
+ctl_row() { at "$2"; WHY="$3"; printf '    control row: step=%s why=%s rc=%s\n' "$2" "$3" "$4"; return "$4"; }
+! score ctl_row - named 'reason=wanted' named 'rc=0 reason=wanted ' 0 >/dev/null
+check "control: the scorer rejects a row that stayed green (rc 0)" $?
+! score ctl_row - named 'reason=wanted' elsewhere 'rc=1 reason=wanted ' 1 >/dev/null
+check "control: the scorer rejects a row that went red at another step" $?
+! score ctl_row - named 'reason=wanted' named 'rc=1 reason=other ' 1 >/dev/null
+check "control: the scorer rejects a row that went red at the named step for another reason" $?
+score ctl_row - named 'reason=wanted' named 'rc=1 reason=wanted ' 1 >/dev/null
+check "control: the scorer accepts a row that went red at the named step with the named reason" $?
+
+if [[ "$MODE" == mutants ]]; then
+  # The pristine pass: on the UNMUTATED script these rows must be green, or every "killed" below is noise.
+  row_g1_mustpass "$SCRIPT_SRC" && row_g2_5_order_in_window "$SCRIPT_SRC" \
+    || { printf 'HARNESS: a pristine row is red on the unmutated script (step %s; %s), so no mutant verdict means anything\n' "$STEP" "$WHY" >&2; exit 2; }
 fi
 
 # ==================================================================================================
 # Mutations and harness rows (full mode tail, and --mutants)
 # ==================================================================================================
 echo "== mutations =="
-mutate() { # <label> <dst> — perl program on stdin; proves it landed
-  local label="$1" dst="$2" prog; prog="$(cat)"
-  assert_fixture_dir "$dst"
-  cp "$SCRIPT_SRC" "$dst"; perl -0777 -pi -e "$prog" "$dst"
-  if cmp -s "$dst" "$SCRIPT_SRC"; then fail "mutation ${label} did not land"; return 1; fi
-  bash -n "$dst" 2>/dev/null || { fail "mutation ${label} does not parse"; return 1; }
-  pass "mutation ${label} landed (differs from the source, bash -n clean)"
+mutate() { # <label> <dst> — perl program on stdin, applied to the real script by copy_with(); proves it landed
+  local label="$1" dst="$2" r=0
+  copy_with "$SCRIPT_SRC" "$dst" || r=$?
+  case "$r" in
+    0) pass "mutation ${label} landed (differs from the source, bash -n clean)" ;;
+    1) fail "mutation ${label} did not land"; return 1 ;;
+    *) fail "mutation ${label} does not parse"; return 1 ;;
+  esac
 }
-# mkill <label> <row-fn> <src> <step> [<row-arg>] — the row must go red AT <step> (killed()).
-mkill() {
-  local label="$1" fn="$2" src="$3" step="$4" r; shift 4
-  "$fn" "$src" "$@"; r=$?
-  killed "$r" "$step"; check "${label} turns ${fn#row_} RED at step ${step}" $?
-}
+# mkill <label> <row-fn> <src> <step> <why-ere> [<row-args>...] — the row must go red AT <step> for <why>.
+mkill() { local label="$1"; shift; score "$@"; check "${label} turns ${1#row_} RED at step ${3} (/${4}/)" $?; }
 
 if mutate G1M1 "$SB/g1m1.sh" <<'PERL'; then
 s{  \[\[ "\$CT_FLOOR_OK" -eq 1 \]\] \|\| \{ vfail "\$k" census-floor; return 0; \}\n}{}
 PERL
-  mkill "G1M1 (census floor deleted)" row_g1_1_floor "$SB/g1m1.sh" verdict
+  mkill "G1M1 (census floor deleted)" row_g1_1_floor "$SB/g1m1.sh" verdict 'reason=census-blind'
+  # The scorer's no-network control: the same mutant under a curl that never connects reds the same row at the
+  # same step, but for another reason, and must NOT count as killed.
+  HARNESS_FLAG=curl-down; ! score row_g1_1_floor "$SB/g1m1.sh" verdict 'reason=census-blind' >/dev/null; r=$?; HARNESS_FLAG=""
+  check "control: G1M1 under a curl that never connects is NOT scored as killed (red for another reason)" "$r"
 fi
 if mutate G1M2 "$SB/g1m2.sh" <<'PERL'; then
 s{  \[\[ "\$C_OLD" -eq 1 && "\$C_PREV_OLD" -eq 1 \]\] \|\| \{ vfail "\$k" census-blind; return 0; \}\n}{}
 PERL
-  mkill "G1M2 (old_hits check deleted)" row_g1_2_blind "$SB/g1m2.sh" verdict
+  mkill "G1M2 (old_hits check deleted)" row_g1_2_blind "$SB/g1m2.sh" verdict 'SOLEUR_P5_REVOKE_READY '
 fi
 if mutate G1M3 "$SB/g1m3.sh" <<'PERL'; then
 s{(      printf 'SOLEUR_P5_HOLDER project=%s config=%s key=%s value=%s\\n' "\$p" "\$c" "\$n" "\$v"\n)}{$1      [[ "\$v" == old ]] || break 2\n}
 PERL
-  mkill "G1M3 (census break after the first compliant holder)" row_g1_3_second_member "$SB/g1m3.sh" verdict
+  mkill "G1M3 (census break after the first compliant holder)" row_g1_3_second_member "$SB/g1m3.sh" verdict 'reason=census-blind'
 fi
 if mutate G1M4 "$SB/g1m4.sh" <<'PERL'; then
 s{  for t in \$\{CT\[\@\]\+"\$\{CT\[\@\]\}"\}; do\n}{  for t in \$\{MHOLD[\$ci]\}; do\n}
 PERL
-  mkill "G1M4 (census over manifest holders only)" row_g1_4_unlisted_project "$SB/g1m4.sh" verdict
+  mkill "G1M4 (census over manifest holders only)" row_g1_4_unlisted_project "$SB/g1m4.sh" verdict 'SOLEUR_P5_REVOKE_READY '
 fi
 if mutate G1M5 "$SB/g1m5.sh" <<'PERL'; then
 s{  \[\[ "\$IDENT_STATUS" == active \]\] \|\| \{ vfail "\$k" key-not-active; return 0; \}\n}{}
 PERL
-  mkill "G1M5 (active-status check dropped)" row_g1_5_expired "$SB/g1m5.sh" verdict
+  mkill "G1M5 (active-status check dropped)" row_g1_5_expired "$SB/g1m5.sh" verdict 'SOLEUR_P5_REVOKE_READY '
 fi
 if mutate G1M6 "$SB/g1m6.sh" <<'PERL'; then
 s{if \[\[ "\$a" -eq 0 && "\$IDENT_ID" == "\$pin" \]\]; then REF_SRC=PREV;}{if true; then REF_SRC=PREV;}
 PERL
-  mkill "G1M6 (reference taken from _PREV by name)" row_g1_6_prev_new "$SB/g1m6.sh" source
+  mkill "G1M6 (reference taken from _PREV by name)" row_g1_6_prev_new "$SB/g1m6.sh" source 'reason=old-holder'
 fi
 if mutate G1M7 "$SB/g1m7.sh" <<'PERL'; then
 s{C_UNREAD=\$\(\(C_UNREAD \+ 1\)\); continue\n      fi\n}{v=absent\n      fi\n}
 PERL
-  mkill "G1M7 (a read error treated as absent)" row_g1_7_get_error "$SB/g1m7.sh" verdict
+  mkill "G1M7 (a read error treated as absent)" row_g1_7_get_error "$SB/g1m7.sh" verdict 'SOLEUR_P5_REVOKE_READY '
 fi
 if mutate G2M1 "$SB/g2m1.sh" <<'PERL'; then
 s{      \[\[ "\$b" -eq 0 && "\$IDENT_ID" == "\$pin" \]\] \|\| swap_refuse [^\n]*\n}{}
 PERL
-  mkill "G2M1 (swap precondition deleted)" row_g2_1_key_not_pinned "$SB/g2m1.sh" refuse
+  mkill "G2M1 (swap precondition deleted)" row_g2_1_key_not_pinned "$SB/g2m1.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN '
 fi
 if mutate G2M2 "$SB/g2m2.sh" <<'PERL'; then
 s{      if \[\[ "\$a" -eq 0 && "\$IDENT_ID" == "\$pin" \]\]; then prev_ok=1; fi\n}{      prev_ok=1\n}
 PERL
-  mkill "G2M2 (an existing _PREV accepted by name)" row_g2_2_prev_by_name "$SB/g2m2.sh" refuse
+  mkill "G2M2 (an existing _PREV accepted by name)" row_g2_2_prev_by_name "$SB/g2m2.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN '
 fi
 if mutate G2M3 "$SB/g2m3.sh" <<'PERL'; then
 s{  \[\[ "\$d" == "\$s" \]\] \|\| \{ printf 'SOLEUR_P5_COPY_MISMATCH [^\n]*\n}{}
 PERL
-  mkill "G2M3 (read-back compare deleted)" row_g2_3_prev_copy_mismatch "$SB/g2m3.sh" mismatch
+  mkill "G2M3 (read-back compare deleted)" row_g2_3_prev_copy_mismatch "$SB/g2m3.sh" mismatch 'SOLEUR_P5_PREV_NOT_PINNED '
 fi
 if mutate G2M4 "$SB/g2m4.sh" <<'PERL'; then
 s{(    swap_one [^\n]*) \|\| return 1\n}{$1 || true\n}
 PERL
-  mkill "G2M4 (the key loop continues after a failed key)" row_g2_4_second_key_fails "$SB/g2m4.sh" no-later-write
+  mkill "G2M4 (the key loop continues after a failed key)" row_g2_4_second_key_fails "$SB/g2m4.sh" no-later-write 'SOLEUR_P5_COPY_MISMATCH '
 fi
 if mutate G2M5 "$SB/g2m5.sh" <<'PERL'; then
 s{(  if \[\[ "\$mode" != delete \]\]; then\n)(.*?)(    copy_secret "\$TFC" "\$\{k\}_NEXT" "\$TFC" "\$k" \|\| return 1\n)}{$1$3$2}s
 PERL
-  mkill "G2M5 (the <KEY> write moved above the _PREV copy and check)" row_g2_5_order_in_window "$SB/g2m5.sh" prev-old
+  mkill "G2M5 (the <KEY> write moved above the _PREV copy and check)" row_g2_5_order_in_window "$SB/g2m5.sh" prev-old 'SOLEUR_P5_PREV_NOT_PINNED '
 fi
 if mutate G2M6 "$SB/g2m6.sh" <<'PERL'; then
 s{  \[\[ "\$\{#MKEYS\[\@\]\}" -gt 0 \]\] \|\| \{ printf 'SOLEUR_P5_MANIFEST_EMPTY\\n'; return 1; \}\n}{}
 PERL
-  mkill "G2M6 (the empty-manifest refusal deleted)" row_g2_6_empty_manifest "$SB/g2m6.sh" refuse
+  mkill "G2M6 (the empty-manifest refusal deleted)" row_g2_6_empty_manifest "$SB/g2m6.sh" refuse 'SOLEUR_BOOTSTRAP_STAGE_OK '
 fi
 if mutate G3M1 "$SB/g3m1.sh" <<'PERL'; then
 s{  \[\[ "\$bad" -eq 0 \]\] \|\| soleur_op_precondition_failed holder-copies [^\n]*\n}{}
 PERL
-  mkill "G3M1 (write-as-you-go, dev holds a third value)" row_g3_1_last_holder_bad "$SB/g3m1.sh" refuse third
-  mkill "G3M1 (write-as-you-go, dev lacks the key)" row_g3_1_last_holder_bad "$SB/g3m1.sh" refuse absent
+  mkill "G3M1 (write-as-you-go, dev holds a third value)" row_g3_1_last_holder_bad "$SB/g3m1.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN ' third
+  mkill "G3M1 (write-as-you-go, dev lacks the key)" row_g3_1_last_holder_bad "$SB/g3m1.sh" refuse 'SOLEUR_BOOTSTRAP_PLAN ' absent
 fi
 if mutate G3M2 "$SB/g3m2.sh" <<'PERL'; then
 s{(      printf 'SOLEUR_P5_HOLDER_COPY )}{      HCLS=old\n$1}
 PERL
-  mkill "G3M2 (a holder written without its own digest compare)" row_g3_2_second_already_new "$SB/g3m2.sh" only-first
+  mkill "G3M2 (a holder written without its own digest compare)" row_g3_2_second_already_new "$SB/g3m2.sh" only-first 'SOLEUR_P5_COPIED '
 fi
 if mutate G3M3 "$SB/g3m3.sh" <<'PERL'; then
 s{    if in_names "\$\{k\}_NEXT" "\$TF_NAMES"; then soleur_op_precondition_failed holder-copies swap [^\n]*\n}{}
 PERL
-  mkill "G3M3 (the need=swap precondition deleted)" row_g3_3_before_swap "$SB/g3m3.sh" need-swap
+  mkill "G3M3 (the need=swap precondition deleted)" row_g3_3_before_swap "$SB/g3m3.sh" need-swap 'SOLEUR_BOOTSTRAP_STAGE_OK '
 fi
 if mutate S2M "$SB/s2m.sh" <<'PERL'; then
 s{  verify_at "\$1" "\$2" "\$3" "\$ACCT_VERIFY_URL" \|\| a=\$\?\n}{  a=1\n}
 PERL
-  mkill "S2M (the account verify endpoint dropped)" row_s2_account_owned "$SB/s2m.sh" verdict
+  mkill "S2M (the account verify endpoint dropped)" row_s2_account_owned "$SB/s2m.sh" verdict 'reason=key-not-verified'
 fi
 if mutate S3M "$SB/s3m.sh" <<'PERL'; then
 s{      UNREACH_NOTE="http=\$\{code\}"; return 3 ;;\n}{      return 1 ;;\n}
 PERL
-  mkill "S3M (an answer with no verdict read as a denial)" row_s3_unreachable "$SB/s3m.sh" verify-unreachable
+  mkill "S3M (an answer with no verdict read as a denial)" row_s3_unreachable "$SB/s3m.sh" verify-unreachable 'reason=key-not-verified'
 fi
 if mutate S5M "$SB/s5m.sh" <<'PERL'; then
 s{  for k in "\$\{MKEYS\[\@\]\}"; do if in_names [^\n]*\n}{}
 PERL
-  mkill "S5M (the staged-value shape pre-pass deleted)" row_s5_malformed_next "$SB/s5m.sh" no-curl quote
+  mkill "S5M (the staged-value shape pre-pass deleted)" row_s5_malformed_next "$SB/s5m.sh" no-curl 'SOLEUR_P5_TOKEN_MALFORMED ' quote
 fi
 if mutate S6M "$SB/s6m.sh" <<'PERL'; then
 s{      return 0 ;;  # analytics-health never gates[^\n]*\n}{      return "\$r" ;;\n}
 PERL
-  mkill "S6M (analytics-health made gating)" row_s6_analytics_api_error "$SB/s6m.sh" verdict
+  mkill "S6M (analytics-health made gating)" row_s6_analytics_api_error "$SB/s6m.sh" verdict 'reason=consumer-read'
 fi
 
 echo "== harness rows (the instrument must be able to go red) =="
-hred() { # <label> <step> <flag> <row-fn> [<row-args>...] — the row on the REAL script under a broken stub
-  local label="$1" step="$2" fl="$3" fn="$4" r; shift 4
-  HARNESS_FLAG="$fl" "$fn" "$SCRIPT_SRC" "$@"; r=$?
+hred() { # <label> <step> <why-ere> <flag> <row-fn> [<row-args>...] — the row on the REAL script under a broken stub
+  local label="$1" step="$2" why="$3" fl="$4" fn="$5" r; shift 5
+  HARNESS_FLAG="$fl"; score "$fn" "$SCRIPT_SRC" "$step" "$why" "$@"; r=$?
   HARNESS_FLAG=""
-  killed "$r" "$step"; check "${label} turns ${fn#row_} RED at step ${step}" $?
+  check "${label} turns ${fn#row_} RED at step ${step} (/${why}/)" "$r"
 }
-hred "H1 (every doppler get answers an empty value)" verdict get-empty row_g1_3_second_member
-hred "H1 (every doppler get answers an empty value)" verdict get-empty row_g1_4_unlisted_project
-hred "H1 (every doppler get answers an empty value)" verdict get-empty row_g1_mustpass
-row_g2_3_prev_copy_mismatch "$SCRIPT_SRC" KEY; r=$?
-killed "$r" no-key-write; check "H2 (the stub corrupts the <KEY> write, not _PREV) turns g2_3_prev_copy_mismatch RED at step no-key-write" $?
-hred "H3 (every holder get returns the _PREV value)" only-first get-as-prev row_g3_2_second_already_new
+hred "H1 (every doppler get answers an empty value)" verdict 'reason=key-malformed' get-empty row_g1_3_second_member
+hred "H1 (every doppler get answers an empty value)" verdict 'reason=key-malformed' get-empty row_g1_4_unlisted_project
+hred "H1 (every doppler get answers an empty value)" verdict 'reason=key-malformed' get-empty row_g1_mustpass
+score row_g2_3_prev_copy_mismatch "$SCRIPT_SRC" no-key-write 'SOLEUR_P5_COPY_MISMATCH ' KEY
+check "H2 (the stub corrupts the <KEY> write, not _PREV) turns g2_3_prev_copy_mismatch RED at step no-key-write" $?
+hred "H3 (every holder get returns the _PREV value)" only-first 'SOLEUR_P5_COPIED ' get-as-prev row_g3_2_second_already_new
 
 # --- anti-vacuity floor (reported directly, never through fail()) -----------------
-# One literal bound per mode, each on the lines directly above its `if`; the subtrahend is the instrument
-# self-test's one counted pass.
-TOTAL=$((PASS + FAIL))
-SELFTEST_PASSES=1
-MIN_ASSERTIONS_FULL=84
-if [[ "$MODE" == full && $((TOTAL - SELFTEST_PASSES)) -lt "$MIN_ASSERTIONS_FULL" ]]; then
-  printf '  [FAIL] anti-vacuity floor: only %s assertions ran in full mode, floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MIN_ASSERTIONS_FULL" >&2
-  printf 'Total: %s assertions, %s failed\n' "$TOTAL" "$((FAIL + 1))"
-  exit 1
-fi
-SELFTEST_PASSES=1
-MIN_ASSERTIONS_MUTANTS=46
-if [[ "$MODE" == mutants && $((TOTAL - SELFTEST_PASSES)) -lt "$MIN_ASSERTIONS_MUTANTS" ]]; then
-  printf '  [FAIL] anti-vacuity floor: only %s assertions ran in --mutants mode, floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MIN_ASSERTIONS_MUTANTS" >&2
+# The subtrahend is the instrument self-test's one counted pass; the bound is exact for each mode.
+TOTAL=$((PASS + FAIL)); SELFTEST_PASSES=1
+case "$MODE" in full) MIN_ASSERTIONS=91 ;; *) MIN_ASSERTIONS=53 ;; esac
+if [[ $((TOTAL - SELFTEST_PASSES)) -lt "$MIN_ASSERTIONS" ]]; then
+  printf '  [FAIL] anti-vacuity floor: only %s assertions ran in %s mode, floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$MIN_ASSERTIONS" >&2
   printf 'Total: %s assertions, %s failed\n' "$TOTAL" "$((FAIL + 1))"
   exit 1
 fi
