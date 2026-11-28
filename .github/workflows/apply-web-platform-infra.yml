@@ -4922,7 +4922,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         # The pinned digest's baked /opt/soleur/host-scripts MUST recompute to the applied
-        # local.host_scripts_content_hash. If they diverge, the born host aborts cloud-init
+        # local.host_scripts_boot_hash. If they diverge, the born host aborts cloud-init
         # at stage=verify — no cloudflared, no deploy webhook, no monitors — and runcmd is
         # once-per-instance, so nothing repairs it but replacement. Catching it here means
         # the host is never created at all. The WANT hash comes from `terraform console`
@@ -4931,9 +4931,9 @@ jobs:
         run: |
           set -euo pipefail
           WANT=$(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform console -input=false <<<'local.host_scripts_content_hash' | tr -d '"')
+            terraform console -input=false -var "image_name=${PINNED}" <<<'local.host_scripts_boot_hash' | tr -d '"')
           if [[ -z "$WANT" ]]; then
-            echo "::error::terraform console returned an empty local.host_scripts_content_hash — the preflight cannot compare against nothing. Fail-closed: an unknown WANT hash is not a match."
+            echo "::error::terraform console returned an empty local.host_scripts_boot_hash — the preflight cannot compare against nothing. Fail-closed: an unknown WANT hash is not a match."
             exit 1
           fi
           HOST_SCRIPTS_WANT_HASH="$WANT" PINNED="$PINNED" INFRA_DIR="$PWD" \
@@ -5335,7 +5335,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         # The pinned digest's baked /opt/soleur/host-scripts MUST recompute to the applied
-        # local.host_scripts_content_hash. If they diverge the replacement aborts cloud-init
+        # local.host_scripts_boot_hash. If they diverge the replacement aborts cloud-init
         # at stage=verify — no cloudflared, no deploy webhook, no monitors — and runcmd is
         # once-per-instance, so nothing repairs it but another replacement. On a REPLACE that
         # is strictly worse than on a birth: the previous host has already been destroyed, so
@@ -5344,9 +5344,9 @@ jobs:
         run: |
           set -euo pipefail
           WANT=$(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform console -input=false <<<'local.host_scripts_content_hash' | tr -d '"')
+            terraform console -input=false -var "image_name=${PINNED}" <<<'local.host_scripts_boot_hash' | tr -d '"')
           if [[ -z "$WANT" ]]; then
-            echo "::error::terraform console returned an empty local.host_scripts_content_hash — the preflight cannot compare against nothing. Fail-closed: an unknown WANT hash is not a match."
+            echo "::error::terraform console returned an empty local.host_scripts_boot_hash — the preflight cannot compare against nothing. Fail-closed: an unknown WANT hash is not a match."
             exit 1
           fi
           HOST_SCRIPTS_WANT_HASH="$WANT" PINNED="$PINNED" INFRA_DIR="$PWD" \
