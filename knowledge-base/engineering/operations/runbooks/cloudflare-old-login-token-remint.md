@@ -196,7 +196,7 @@ sink hand-off), `p5-revoke.js` (the guarded delete, section 7, and the `retire` 
 
 ```text
 p5-read.js sha256=fbcab106aec79f28883a04d2dbf00dd0d933ff832001b09aecd17b7ed2ded5ad
-p5-mint.js sha256=9c9bf619a9c66cfddff7077b17da94d5d7b93f2deda736931657c1f72fc41d3d
+p5-mint.js sha256=e1134192ddd7bd774e31279327df93b51a671164654050b8341ea353ea09e95c
 p5-revoke.js sha256=950193b2afd3af7acf5fbb34792f918df64a086bf9e928dae407eece62eec2c3
 p5-sink.py sha256=86791b8f5f8249997b3893276c4c7d45600a92c551208e6004f7d59549e43c25
 ```
@@ -254,9 +254,11 @@ endpoint). `verdict=no-read`, or no `success=true` line: stop; the read decided 
    no `Origin` header, writes the value to a new mode-0600 file and never prints it.
 2. The mint hold (section 6) runs `p5-mint.js` with the argument object the hold names. The body reads the permission
    groups, refuses an existing token of the same name, POSTs the token with the session `x-atok`, reads the stored
-   policy back, and only then hands the value to the sink by a Node-side `fetch` (never `page.request`, so no trace
-   or HAR records it). Any failure after the POST deletes every token of that name in the same body. It returns only
-   the shapes in the browser returns table below: never the value, the atok or a full id.
+   policy back, and only then hands the value to the sink by a Node-side `page.request.post` (no redirect followed; the
+   `browser_run_code_unsafe` context has no global `fetch`, measured 2026-11-28, and no trace, HAR, video or session saving
+   is configured on either Playwright server, CTO ruling S1). Any failure after the POST deletes every token of
+   that name in the same body. It returns only the shapes in the browser returns table below: never the value, the
+   atok or a full id.
 3. `Agent:` on `success:true` with an `id8`, and the sink's `result=written`, post on #12931 one comment whose first
    line is `P5-MINTED key=<KEY> pin=<the pin> id8=<id8> name=<name> owner=<account|user>` (CTO D9), before the
    `_NEXT` write. The swap go and the revoke
@@ -428,7 +430,7 @@ comment. The swap go quotes, per key, the `new_id=` and `owner=` on the plan's `
 which must equal that key's `P5-MINTED` `id8=` and `owner=` (CTO D5, D9); a key whose plan has no
 `copy-staged-token` line (an interrupted swap that only deletes `_NEXT`) has nothing to quote. In order:
 
-- Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_PAGERULES_READ`: `p5-mint.js` (sha256=9c9bf619a9c66cfddff7077b17da94d5d7b93f2deda736931657c1f72fc41d3d) with `{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_pagerules_read-soleur-<YYYYMMDD>","zone_groups":<zone groups>,"account_groups":[],"expires_on":"<expiry>","sink_url":"<sink>"}`, then `[ -s "<scratchpad>/cf_api_token_pagerules_read.tok" ] && LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_pagerules_read.tok" | doppler secrets set CF_API_TOKEN_PAGERULES_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
+- Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_PAGERULES_READ`: `p5-mint.js` (sha256=e1134192ddd7bd774e31279327df93b51a671164654050b8341ea353ea09e95c) with `{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_pagerules_read-soleur-<YYYYMMDD>","zone_groups":<zone groups>,"account_groups":[],"expires_on":"<expiry>","sink_url":"<sink>"}`, then `[ -s "<scratchpad>/cf_api_token_pagerules_read.tok" ] && LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_pagerules_read.tok" | doppler secrets set CF_API_TOKEN_PAGERULES_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
 - Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_AUDIT`: `p5-mint.js` (same sha256) with `{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_audit-soleur-<YYYYMMDD>","zone_groups":<zone groups>,"account_groups":<account groups>,"expires_on":"<expiry>","sink_url":"<sink>"}`, then `[ -s "<scratchpad>/cf_api_token_audit.tok" ] && LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_audit.tok" | doppler secrets set CF_API_TOKEN_AUDIT_NEXT -p soleur -c prd_terraform --silent > /dev/null`
 - Hold: Operator-authorizes: owner mint of `CF_API_TOKEN_ANALYTICS_READ` (account-owned): `p5-mint.js` (same sha256) with `{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_analytics_read-soleur-<YYYYMMDD>","zone_groups":<zone groups>,"account_groups":[],"expires_on":"<expiry>","sink_url":"<sink>"}`, then `[ -s "<scratchpad>/cf_api_token_analytics_read.tok" ] && LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_analytics_read.tok" | doppler secrets set CF_API_TOKEN_ANALYTICS_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
 - Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_AUDIT -p soleur -c dev_personal --yes > /dev/null` (CTO F20), only after a `bash <B> --stage inventory` run in this sitting printed `SOLEUR_P5_HOLDER project=soleur config=dev_personal key=CF_API_TOKEN_AUDIT value=old`. Rollback (that row proved the deleted value is the old token), with `<src>` = `CF_API_TOKEN_AUDIT_PREV` when that inventory printed `SOLEUR_P5_REFERENCE key=CF_API_TOKEN_AUDIT source=PREV`, else `CF_API_TOKEN_AUDIT`: `set -o pipefail; doppler secrets get <src> -p soleur -c prd_terraform --plain | LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' | doppler secrets set CF_API_TOKEN_AUDIT -p soleur -c dev_personal --silent > /dev/null`, then a same-sitting inventory that must print that config's row `value=old`

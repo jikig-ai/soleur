@@ -34,8 +34,11 @@
 // (page.request.post, the atok read from the page just before it, no redirect followed); in-page GET of
 // the new token and the read-back (every resource key exactly com.cloudflare.api.account.zone.<zone> or, for
 // account groups only, com.cloudflare.api.account.<acct>; value "*"; no "*" in a key; effect allow; group set ==
-// the resolved set; name, expires_on and status active as asked); only then a Node-side `fetch` POST of the
-// value to sink_url with `redirect: "error"` (a redirect never carries the value on).
+// the resolved set; name, expires_on and status active as asked); only then a Node-side `page.request.post` of
+// the value to sink_url with `maxRedirects: 0` (a redirect never carries the value on). The browser_run_code
+// context of @playwright/mcp 0.0.78 has no global `fetch` or `AbortSignal` (measured 2026-11-28: a bare fetch
+// threw ReferenceError, so the hand-off failed and the cleanup deleted a good token), so no Node-side step here
+// may use a bare Node global; page.request reached a 127.0.0.1 listener in the same context.
 // CLEANUP. Once the POST was sent, every path but the handed-off one (an error answer, a non-JSON answer, an id
 // that is not 32-hex, a missing value, a read-back or sink failure, a throw) re-lists the owner's tokens, DELETEs
 // every token carrying exactly `name` or the id the POST answered (Node-side page.request.delete), and re-lists
@@ -360,15 +363,19 @@
     const rb = await call('GET', `${base}/${id}`);
     if (notOk(rb) || !readbackPasses(rb.json.result, zoneIds, acctIds)) return await failAfterPost('readback');
 
-    // 5. the hand-off: Node-side fetch to the one-shot 127.0.0.1 sink, no redirect followed. The value goes
-    //    nowhere else.
+    // 5. the hand-off: Node-side page.request.post to the one-shot 127.0.0.1 sink, no redirect followed. The
+    //    value goes nowhere else. The sink answers exactly "ok" (no secret), so its answer is read with text().
     let sinkOk = false;
     try {
-      const sr = await fetch(a.sink_url, {
-        method: 'POST', headers: { 'content-type': 'text/plain' }, body: secret, redirect: 'error',
-        signal: AbortSignal.timeout(15000),
+      const sr = await page.request.post(a.sink_url, {
+        headers: { 'content-type': 'text/plain' }, data: secret, maxRedirects: 0, failOnStatusCode: false,
+        timeout: 15000,
       });
-      sinkOk = sr.status === 200 && (await sr.text()) === 'ok';
+      try {
+        sinkOk = sr.status() === 200 && (await sr.text()) === 'ok';
+      } finally {
+        await sr.dispose().catch(() => {});
+      }
     } catch (e) {
       sinkOk = false;
     }
