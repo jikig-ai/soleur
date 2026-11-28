@@ -299,6 +299,18 @@ row "Q-R1: recovery arm, before.label_selectors an object" RED \
   "$(mk "$V" "$SET"' set('"$ATT"'; .change.before.label_selectors = {})')" none "$A0" "ATTACHMENT BEFORE UNREADABLE"
 ATT_CREATE_BEFORE="$(mk "$R" "$SET"' set('"$ATT"'; .change.actions = ["create"])')"
 row "Q-R2: replace arm, an attachment create that carries a before" RED "$ATT_CREATE_BEFORE" "$PIN" "$A1" "ATTACHMENT BEFORE UNREADABLE"
+# The attachment's before.firewall_id, when present, is hcloud_firewall.bastion's id (string-compared).
+row "Q-R1: replace arm, before.firewall_id the firewall's id as a string passes" PASS \
+  "$(mk "$R" "$SET"' set('"$ATT"'; .change.before.firewall_id = "9001")')" "$PIN" "$A1"
+row "Q-R1: replace arm, an update whose before has no firewall_id passes" PASS \
+  "$(mk "$R" "$SET"' set('"$ATT"'; .change.before |= del(.firewall_id))')" "$PIN" "$A1"
+row "Q-R1: recovery arm, before.firewall_id the firewall's id passes" PASS "$V" none "$A0"
+ATT_REP_FW="$(mk "$R" "$SET"' set('"$ATT"'; .change.before.firewall_id = 12345)')"
+row "Q-R1: replace arm, before.firewall_id another firewall refuses" RED "$ATT_REP_FW" "$PIN" "$A1" "ATTACHMENT BEFORE FIREWALL"
+row "Q-R1: recovery arm, before.firewall_id another firewall refuses" RED \
+  "$(mk "$V" "$SET"' set('"$ATT"'; .change.before.firewall_id = 12345)')" none "$A0" "ATTACHMENT BEFORE FIREWALL"
+row "Q-R1: replace arm, before.firewall_id present but the firewall's id unknown refuses" RED \
+  "$(mk "$R" "$SET"' set("hcloud_firewall.bastion"; .change.after |= del(.id))')" "$PIN" "$A1" "ATTACHMENT BEFORE FIREWALL"
 echo "B5 / B6: arms the first battery did not pin"
 KEY_TWICE="$(mk "$R" "$ADD add({address: \"tls_private_key.bastion_host_ssh\", type: \"tls_private_key\", deposed: \"00000001\", change: {actions: [\"delete\",\"create\"], before: {algorithm: \"ED25519\"}, after: {algorithm: \"ED25519\"}, after_unknown: {}}})")"
 row "B5: a second host-key entry (deposed-shaped delete-and-create) refuses: listed exactly once" RED "$KEY_TWICE" "$PIN" "$A1" "is not in the plan exactly once"
@@ -359,8 +371,8 @@ else
   fail "BASTION_RESOURCES_FILE in the environment does not redirect the gate"
 fi
 
-# ── The identity function the TOCTOU step re-runs on a fresh read ─────────────────────────────
-echo "TOCTOU identity (bastion_replace_identity <pin> <doc> <before-id>)"
+# ── The identity function the gate runs on the saved read (the TOCTOU step does not call it) ──
+echo "identity (bastion_replace_identity <pin> <doc> <before-id>)"
 irow() { # <label> <want-rc> <substring> <pin> <doc> <before>
   local o r=0
   cases=$((cases + 1))
@@ -487,6 +499,10 @@ gmrow "M18 the [pin] leg opened to the recovery arm (Q-R1)" '($arm == "replace" 
   "$ATT_REC_NONE" none "$A0" "ATTACHMENT BEFORE PIN"
 gmrow "M19 the create's before==null leg dropped (Q-R2)" '(.change.actions == ["create"] and .change.before == null)' '(.change.actions == ["create"])' \
   "$ATT_CREATE_BEFORE" "$PIN" "$A1" "ATTACHMENT BEFORE UNREADABLE"
+gmrow "M26 the before.firewall_id leg dropped (security P3)" ' and (.change.before.firewall_id as $b | $b == null or ($fw != null and ($b | tostring) == $fw))' '' \
+  "$ATT_REP_FW" "$PIN" "$A1" "ATTACHMENT BEFORE FIREWALL"
+gmrow "M27 the FIREWALL message folded into PIN" '    elif [[ "$att_before_fw" -ne 0 ]]; then' '    elif false; then' \
+  "$ATT_REP_FW" "$PIN" "$A1" "ATTACHMENT BEFORE FIREWALL"
 gmrow "M20 the UNREADABLE message folded into PIN" '    if [[ "$att_before_unreadable" -ne 0 ]]; then' '    if false; then' \
   "$ATT_NO_SIDS" "$PIN" "$A1" "ATTACHMENT BEFORE UNREADABLE"
 gmrow "M21 the LABEL BINDING message folded into PIN" '    elif [[ "$att_before_labels" -ne 0 ]]; then' '    elif false; then' \
@@ -521,7 +537,7 @@ h1_replay() {
 # h1_ok <passes-fails>: the H1 verdict, every RED row failed and the floor is met.
 h1_ok() { [[ "${#RED_ROWS[@]}" -ge "$MIN_RED" && "$1" == "0 ${#RED_ROWS[@]}" ]]; }
 h1="$(h1_replay neutered)"
-MIN_RED=73  # measured 2026-11-28 (review: 58 -> 73, Q-R1/Q-R2/B5/B6): the literal RED-row count (H3), never derived from the table
+MIN_RED=76  # measured 2026-11-28 (review: 58 -> 73, Q-R1/Q-R2/B5/B6; round 2: 76, the before.firewall_id rows): the literal RED-row count (H3), never derived from the table
 cases=$((cases + 1))
 if h1_ok "$h1"; then
   pass "H1: all ${#RED_ROWS[@]} RED rows fail against a neutered gate"
@@ -560,7 +576,7 @@ if h1_ok "$(h1_replay "$GATE_FN")"; then
 fi
 
 echo
-MIN_CASES=136  # measured 2026-11-28 (H3; review: 121 -> 136, the Guard 2 grep rows moved to the workflow suite, Q-R1/Q-R2/B5/B6 rows and mutations added)
+MIN_CASES=144  # measured 2026-11-28 (H3; review: 121 -> 136, the Guard 2 grep rows moved to the workflow suite, Q-R1/Q-R2/B5/B6 rows and mutations added; round 2: 144, the before.firewall_id rows and M26/M27)
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf 'test-bastion-host-replace-gate: FAIL (only %d assertions ran; floor %d)\n' "$cases" "$MIN_CASES" >&2
   exit 1

@@ -24,7 +24,8 @@
 # before.server_ids and before.label_selectors must both be present, each an array or null, and
 # label_selectors empty: an update away from any other binding strips the deny-all firewall from
 # another server; an update from an empty binding removes nothing. A missing before, a missing key or
-# a value that is neither an array nor null is ATTACHMENT BEFORE UNREADABLE, never a pass.
+# a value that is neither an array nor null is ATTACHMENT BEFORE UNREADABLE, never a pass. A present
+# before.firewall_id must be hcloud_firewall.bastion's id (ATTACHMENT BEFORE FIREWALL).
 #
 # On BOTH arms: the host key and the firewall are exactly no-op (a key rotation is #13116), every other
 # bastion-resources.txt member is exactly no-op (so an address step 3 or #13113 adds is never
@@ -75,8 +76,9 @@ _bhrg_abort() { echo "${1}: ABORT — ${2} ${_BHRG_TAIL}"; }
 _bhrg_pin_ok() { local LC_ALL=C; [[ "${1:-}" =~ ^([1-9][0-9]{0,11}|none)$ ]]; }
 
 # bastion_replace_identity <pin|none> <servers-doc> <before-id|none> [gate-name]
-# The identity both the gate and the TOCTOU step check: count 1, the exact name, role bastion, and
-# id == pin == before.id; or count 0 and no before for `none`. Any unreadable document refuses.
+# The identity the gate checks on the saved server read: count 1, the exact name, role bastion, and
+# id == pin == before.id; or count 0 and no before for `none`. Any unreadable document refuses. (The
+# TOCTOU step does not call it: its fresh read must project-equal this graded document.)
 bastion_replace_identity() {
   local pin="${1:-}" doc="${2:-}" before="${3:-}" g="${4:-bastion_replace_identity}" n ids
   if ! _bhrg_pin_ok "$pin"; then
@@ -131,7 +133,7 @@ bastion_replace_identity() {
 bastion_host_replace_gate() {
   local plan_json="${1:-}" pin="${2-}" doc="${3:-}" g="bastion_host_replace_gate"
   local allow_json arm before_id prior_has out_of_scope bad_actions missing nic_before_ok att_before_ok
-  local att_before_unreadable att_before_labels att_rebound shape_type shape_name shape_role offenders api_ids
+  local att_before_unreadable att_before_labels att_before_fw att_rebound shape_type shape_name shape_role offenders api_ids
   local srv="$_BGC_WANT_ADDR" key="$_BGC_KEY_ADDR" nic="$_BGC_NIC_ADDR" att="$_BGC_ATT_ADDR" ip="$_BGC_NIC_IP"
   if ! _bhrg_pin_ok "$pin"; then
     _bhrg_abort "$g" "pin argument malformed: it must be a Hetzner server id (^[1-9][0-9]{0,11}\$) or the literal none."
@@ -168,15 +170,24 @@ bastion_host_replace_gate() {
           or (((.change.before.server_id? // null) | tostring) == $pin and (.change.before.ip? // null) == $ip))] | length' < "$plan_json" 2>/dev/null)
   # Both arms (Q-R1, Q-R2): the attachment's BEFORE, ONE counter (att_before_ok, required == 1). A bare
   # create carries no before; an update's before names both keys, label_selectors [] or null, and
-  # server_ids [] or null or, on the replace arm only, exactly [pin]. The two counters after it only
-  # choose the ABORT message (UNREADABLE, LABEL BINDING, else PIN); they never pass a plan.
-  att_before_ok=$(jq --arg pin "$pin" --arg arm "$arm" --arg t "$att" '[.resource_changes[] | select(.address == $t)
+  # server_ids [] or null or, on the replace arm only, exactly [pin], and a before.firewall_id, when
+  # present, equal to hcloud_firewall.bastion's id (as strings: the firewall the TOCTOU step re-reads).
+  # The three counters after it only choose the ABORT message (UNREADABLE, LABEL BINDING, FIREWALL, else
+  # PIN); they never pass a plan.
+  att_before_ok=$(jq --arg pin "$pin" --arg arm "$arm" --arg t "$att" --arg f "$_BGC_FW_ADDR" '
+    ([.resource_changes[] | select(.address == $f) | .change.after.id | select(. != null) | tostring][0] // null) as $fw
+    | [.resource_changes[] | select(.address == $t)
     | select((.change.actions == ["create"] and .change.before == null)
           or (.change.actions == ["update"] and (.change.before | type) == "object"
               and (.change.before | has("server_ids") and has("label_selectors"))
               and (.change.before.label_selectors | . == null or . == [])
+              and (.change.before.firewall_id as $b | $b == null or ($fw != null and ($b | tostring) == $fw))
               and (.change.before.server_ids | . == null or . == []
                    or ($arm == "replace" and type == "array" and map(tostring) == [$pin]))))] | length' < "$plan_json" 2>/dev/null)
+  att_before_fw=$(jq --arg t "$att" --arg f "$_BGC_FW_ADDR" '
+    ([.resource_changes[] | select(.address == $f) | .change.after.id | select(. != null) | tostring][0] // null) as $fw
+    | [.resource_changes[] | select(.address == $t) | select(.change.actions == ["update"])
+    | select((.change.before | type) == "object") | select(.change.before.firewall_id as $b | $b != null and ($fw == null or ($b | tostring) != $fw))] | length' < "$plan_json" 2>/dev/null)
   att_before_unreadable=$(jq --arg t "$att" '[.resource_changes[] | select(.address == $t)
     | select((.change.actions == ["create"] and .change.before != null)
           or (.change.actions == ["update"] and (.change.before
@@ -196,11 +207,11 @@ bastion_host_replace_gate() {
 
   plan_gate_assert_numeric "$g" "prior_has=${prior_has}" "out_of_scope=${out_of_scope}" "nic_before_ok=${nic_before_ok}" \
     "att_before_ok=${att_before_ok}" "att_before_unreadable=${att_before_unreadable}" "att_before_labels=${att_before_labels}" \
-    "att_rebound=${att_rebound}" "shape_type=${shape_type}" "shape_name=${shape_name}" \
+    "att_before_fw=${att_before_fw}" "att_rebound=${att_rebound}" "shape_type=${shape_type}" "shape_name=${shape_name}" \
     "shape_role=${shape_role}" || { _bhrg_abort "$g" "a counter did not evaluate (the line above)."; return 1; }
 
   api_ids=$(jq -r '[.servers[]? | (.id | tostring) | if test("^[0-9]+$") then . else "<non-numeric>" end] | join(",")' < "$doc" 2>/dev/null) || api_ids=unread
-  echo "${g}: arm=${arm} pin=${pin} api_ids=${api_ids:-none} before.id=${before_id} prior_has=${prior_has} out_of_scope=${out_of_scope} nic_before_ok=${nic_before_ok} att_before_ok=${att_before_ok} att_before_unreadable=${att_before_unreadable} att_before_labels=${att_before_labels} att_rebound=${att_rebound} shape=${shape_type}/${shape_name}/${shape_role} nic_ip_ok=${BGC_NIC_IP_OK} fw_rules=${BGC_FW_RULES} fw_unreadable=${BGC_FW_UNREADABLE} fw_apply_to=${BGC_FW_APPLY_TO} att_labels=${BGC_ATT_LABELS} inline_fw=${BGC_INLINE_FW} att_ok=${BGC_ATT_OK}"
+  echo "${g}: arm=${arm} pin=${pin} api_ids=${api_ids:-none} before.id=${before_id} prior_has=${prior_has} out_of_scope=${out_of_scope} nic_before_ok=${nic_before_ok} att_before_ok=${att_before_ok} att_before_unreadable=${att_before_unreadable} att_before_labels=${att_before_labels} att_before_fw=${att_before_fw} att_rebound=${att_rebound} shape=${shape_type}/${shape_name}/${shape_role} nic_ip_ok=${BGC_NIC_IP_OK} fw_rules=${BGC_FW_RULES} fw_unreadable=${BGC_FW_UNREADABLE} fw_apply_to=${BGC_FW_APPLY_TO} att_labels=${BGC_ATT_LABELS} inline_fw=${BGC_INLINE_FW} att_ok=${BGC_ATT_OK}"
 
   bastion_replace_identity "$pin" "$doc" "$before_id" "$g" || return 1
   if [[ "$arm" == recovery ]]; then
@@ -239,6 +250,8 @@ bastion_host_replace_gate() {
       _bhrg_abort "$g" "ATTACHMENT BEFORE UNREADABLE: ${att}'s update carries no before object, lacks before.server_ids or before.label_selectors, or holds a value that is neither an array nor null (or a create carries a before). A before the gate cannot read is not evidence of an empty binding."
     elif [[ "$att_before_labels" -ne 0 ]]; then
       _bhrg_abort "$g" "ATTACHMENT BEFORE LABEL BINDING: ${att}'s before.label_selectors is not empty. The update would remove that selector and strip the deny-all firewall from every server carrying the label."
+    elif [[ "$att_before_fw" -ne 0 ]]; then
+      _bhrg_abort "$g" "ATTACHMENT BEFORE FIREWALL: ${att}'s before.firewall_id is not ${_BGC_FW_ADDR}'s id (compared as strings). The update would re-bind another firewall's attachment, which the TOCTOU firewall re-read does not cover."
     elif [[ "$arm" == replace ]]; then
       _bhrg_abort "$g" "ATTACHMENT BEFORE PIN: ${att}'s before.server_ids is not [${pin}], [] or null. An attachment mapped onto another server would strip that server's firewall binding."
     else
