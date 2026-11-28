@@ -17,7 +17,9 @@ resource "cloudflare_zero_trust_tunnel_cloudflared" "web" {
   # secret: original b64 value is irrecoverable.
   # config_src: forces replacement on import; the live tunnel already
   #   uses remote config, so ignoring is safe (#967).
-  # TODO: remove ignore_changes after clean reprovisioning (import artifact)
+  # LOAD-BEARING during the #12931 migration: every tunnel-phase dispatch re-runs
+  # -replace=random_id.tunnel_secret, and without `secret` here each re-dispatch would replace the
+  # live tunnel. The Phase 5 cleanup PR removes this ignore together with that -replace.
   lifecycle {
     ignore_changes = [secret, config_src]
   }
@@ -183,7 +185,11 @@ locals {
   # this applies. NOTE for the next rotation: deploy_policy_gate wants the
   # [ack-deploy-policy] token alone on its own line in a push commit message —
   # inline in the squash title does not satisfy it.
-  deploy_service_token_ids = ["d9204def-4154-4fea-b9ee-d419d8d665f7"]
+  #
+  # #12931 tunnel phase (ADR-329): this policy is recreated on the Soleur account, where the legacy
+  # id (d9204def-…) does not exist. cf-access-deploy-token-mint.sh mints the new token, and its id
+  # replaces this nil placeholder before merge. The policy's precondition refuses the placeholder.
+  deploy_service_token_ids = ["1755f023-7f9b-456b-90ca-97ce27d3420e"]
 }
 
 resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
@@ -199,8 +205,8 @@ resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
 
   lifecycle {
     precondition {
-      condition     = length(local.deploy_service_token_ids) > 0 && alltrue([for id in local.deploy_service_token_ids : can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", id))])
-      error_message = "local.deploy_service_token_ids must be a non-empty list of Cloudflare service-token ids (UUIDs). An empty include would lock the deploy webhook out."
+      condition     = length(local.deploy_service_token_ids) > 0 && alltrue([for id in local.deploy_service_token_ids : can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", id)) && id != "00000000-0000-0000-0000-000000000000"])
+      error_message = "local.deploy_service_token_ids must be a non-empty list of Cloudflare service-token ids (UUIDs), not the nil placeholder (FILL-AT-PHASE-3.1). An empty include would lock the deploy webhook out."
     }
   }
 }
@@ -311,22 +317,33 @@ resource "cloudflare_zero_trust_access_policy" "registry_push_service_token" {
 # The earlier `like CI_SSH_ACCESS_TOKEN` analogy was the trap — CI_SSH runs under a
 # prd_terraform-capable workflow token; the release workflow does not.
 #
-# WRITE-ONCE (ignore_changes=[value]): cloudflare_zero_trust_access_service_token.client_secret
-# is populated ONLY at create and reads EMPTY on subsequent `terraform refresh` (#4492→#4494
-# learning). Because this stack is OPERATOR-applied (no CI post-apply output-sync step like
-# ci_ssh has), TF writes Doppler directly on the operator's full apply; ignore_changes prevents
-# a later refresh from clobbering the live Doppler value with the empty state read. client_id is
-# stable, but ignore_changes on both keeps the write-once semantics symmetric. Rotate via
-# `terraform apply -replace=cloudflare_zero_trust_access_service_token.registry_push` (which
-# re-creates the token → new client_secret → this re-writes Doppler on that apply).
+# FOLLOWS ITS SOURCE (#12937; Ruled by CTO agent, 2026-11-19). These two secrets used to carry
+# `ignore_changes = [value]` on the claim that client_secret "reads EMPTY on refresh" (#4492). That
+# is true ONLY for an IMPORTED token: provider 4.52.7's Read never touches client_secret, so a
+# Terraform-CREATED token keeps its secret in state across every refresh. The write-once lifecycle
+# would have broken the account move: the tunnel phase (ADR-329) recreates `.registry_push` on the
+# Soleur account, and the old lifecycle would have planned nothing for `value`, leaving the dead
+# old-account pair in Doppler `prd` with `verdict=stale` the only clue. So the lifecycle is gone:
+# the tunnel-phase apply updates both secrets IN PLACE (no destroy, no `-replace`).
+#   - NEVER adopt this token with `import {}`: an imported token's client_secret IS empty in state,
+#     and this secret would then write "" over the live Doppler value.
+#   - `replace_triggered_by` is not used: it fires on update/replace of the referenced resource,
+#     never on its create, so it could not have carried the first value either.
+#   - Rotate by bumping `client_secret_version` on `.registry_push` (an in-place update that returns
+#     a new client_secret); this secret follows on the same apply.
 resource "doppler_secret" "registry_push_access_token_id" {
   project    = "soleur"
   config     = "prd"
   name       = "REGISTRY_PUSH_ACCESS_TOKEN_ID"
   value      = cloudflare_zero_trust_access_service_token.registry_push.client_id
   visibility = "masked"
+
+  # A state value that reads empty must not overwrite prd.
   lifecycle {
-    ignore_changes = [value]
+    precondition {
+      condition     = cloudflare_zero_trust_access_service_token.registry_push.client_id != ""
+      error_message = "registry_push.client_id is empty in state; refusing to blank Doppler prd."
+    }
   }
 }
 
@@ -336,8 +353,13 @@ resource "doppler_secret" "registry_push_access_token_secret" {
   name       = "REGISTRY_PUSH_ACCESS_TOKEN_SECRET"
   value      = cloudflare_zero_trust_access_service_token.registry_push.client_secret
   visibility = "masked"
+
+  # A state value that reads empty must not overwrite prd.
   lifecycle {
-    ignore_changes = [value]
+    precondition {
+      condition     = nonsensitive(cloudflare_zero_trust_access_service_token.registry_push.client_secret != "")
+      error_message = "registry_push.client_secret is empty in state; refusing to blank Doppler prd."
+    }
   }
 }
 
@@ -373,4 +395,21 @@ output "ci_ssh_access_service_token_client_id" {
 output "ci_ssh_access_service_token_client_secret" {
   value     = cloudflare_zero_trust_access_service_token.ci_ssh.client_secret
   sensitive = true
+}
+
+# Read by apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh (Guard 3): the tunnel the
+# CNAMEs point at, and its account. The account output reads the RESOURCE attribute, not the bare
+# variable: a constant-valued output depends on no targeted resource, so a `-target` apply may never
+# write it to state.
+output "cf_tunnel_id" {
+  value = cloudflare_zero_trust_tunnel_cloudflared.web.id
+}
+
+output "cf_tunnel_account_id" {
+  value = cloudflare_zero_trust_tunnel_cloudflared.web.account_id
+}
+
+# The zone the tunnel CNAMEs live in (read by the tunnel-zone authority drift step).
+output "cf_tunnel_zone_id" {
+  value = cloudflare_record.deploy.zone_id
 }

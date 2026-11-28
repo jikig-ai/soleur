@@ -443,7 +443,7 @@ jobs:
           # inside a YAML block scalar puts its body at column 0, which ends the scalar and
           # makes the whole workflow unparseable. (Measured — the first version of this did
           # exactly that.) Parsing stays in python; the DECISION stays in bash, below.
-          # `causes` rides along because UNVERIFIABLE has TEN disjoint causes with
+          # `causes` rides along because UNVERIFIABLE has several disjoint causes with
           # different remedies, and this step previously collapsed them into one email that
           # said "add a hostname mapping to access_hostname_for()". That is correct for
           # exactly one cause; for the others the mapping already exists, so the instruction
@@ -506,7 +506,7 @@ jobs:
           # heredoc mangled), an empty string would match no consumer condition and the run
           # would report nothing at all. Empty is unavailable.
           [[ -n "$verdict" ]] || verdict=unavailable
-          # Closed vocabulary (the ten causes the detector emits, plus `unknown` for a
+          # Closed vocabulary (the causes the detector emits, plus `unknown` for a
           # row with no cause field), comma-joined — no newlines, so it cannot
           # break the $GITHUB_OUTPUT key=value framing.
           # A NON-EMPTY GUARD ON EVERY FIELD, new ones included. An empty value would
@@ -643,7 +643,7 @@ jobs:
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[TOKEN DRIFT] A Cloudflare token rotation did not propagate to Doppler'
-          body: '<p><strong>At least one Cloudflare token value in Doppler is no longer accepted by Cloudflare.</strong></p><p>Terraform will NOT fix this on its own: the <code>doppler_secret</code> resources carry <code>lifecycle.ignore_changes = [value]</code>, so <code>terraform apply</code> reports "No changes" while the stale value keeps being served. Set the live value in <strong>every config the run names</strong> — a Doppler config does NOT inherit a value from its environment root, so setting <code>prd</code> root alone repairs nothing but <code>prd</code> root. Measured 2026-08-02: <code>CF_API_TOKEN_DNS_EDIT</code> is carried independently by 7 configs, and <code>prd_terraform</code> does not carry the <code>REGISTRY_PUSH_ACCESS_TOKEN_*</code> pair that <code>prd</code> root does.</p><p>This matters for releases: the registry-push Access service token is what lets CI reach the zot registry, and zot is the only registry production can pull from. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> to see which key in which config is stale.</p><p>Additional finding(s) from this same run that are NOT about a stale value: <code>${{ steps.token_drift.outputs.causes }}</code> (<code>-</code> means none). The verdict ladder reports one headline state; these are the others.</p><p><em>Scan coverage: <code>${{ steps.token_drift.outputs.coverage }}</code> at <code>${{ steps.token_drift.outputs.coverage_ratio }}</code> — ${{ steps.token_drift.outputs.configs }} of the ${{ steps.token_drift.outputs.configs_expected }} Doppler configs the committed inventory names were READ, against a declared floor of <code>${{ steps.token_drift.outputs.configs_floor }}</code>. Configs not read: <code>${{ steps.token_drift.outputs.configs_unread }}</code> (<code>-</code> means none). Denominator caveat: <code>${{ steps.token_drift.outputs.coverage_caveat }}</code> (<code>-</code> means none — otherwise the committed inventory is missing, unparseable, or over 90 days old, so the DENOMINATOR in this ratio may not describe the project any more; the gate is the count against the floor, which the inventory never touches). The count is of configs whose secret-NAME listing SUCCEEDED — a config whose <code>doppler secrets --only-names</code> read failed is excluded from it and named in the unread list above. It is NOT a count of value reads, so a role that can list names but cannot read values still counts here; that case is caught separately, by the non-vacuity gate in the detector — it exits 2 with <code>verdict: unavailable</code> when it enumerated keys and probed zero values — and the issue close arm is gated on <code>verdict != unavailable</code> so it cannot fire on such a run. The ratio REPORTS and gates nothing: the gate is the count against the floor, so <code>degraded</code> means the credential is absent, revoked or narrowed, and <code>at-floor</code> means it reached at least every config this scan demanded.</em></p>'
+          body: '<p><strong>At least one Cloudflare token value in Doppler is no longer accepted by Cloudflare.</strong></p><p>For <code>REGISTRY_PUSH_ACCESS_TOKEN_*</code> in <code>prd</code>, Terraform writes the value: bump <code>client_secret_version</code> on <code>registry_push</code> in a PR and apply. For every other row Terraform will NOT fix this on its own: the <code>doppler_secret</code> resources carry <code>lifecycle.ignore_changes = [value]</code>, so <code>terraform apply</code> reports "No changes" while the stale value keeps being served. Set the live value in <strong>every config the run names</strong> — a Doppler config does NOT inherit a value from its environment root, so setting <code>prd</code> root alone repairs nothing but <code>prd</code> root. Measured 2026-08-02: <code>CF_API_TOKEN_DNS_EDIT</code> is carried independently by 7 configs, and <code>prd_terraform</code> does not carry the <code>REGISTRY_PUSH_ACCESS_TOKEN_*</code> pair that <code>prd</code> root does.</p><p>This matters for releases: the registry-push Access service token is what lets CI reach the zot registry, and zot is the only registry production can pull from. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> to see which key in which config is stale.</p><p>Additional finding(s) from this same run that are NOT about a stale value: <code>${{ steps.token_drift.outputs.causes }}</code> (<code>-</code> means none). The verdict ladder reports one headline state; these are the others.</p><p><em>Scan coverage: <code>${{ steps.token_drift.outputs.coverage }}</code> at <code>${{ steps.token_drift.outputs.coverage_ratio }}</code> — ${{ steps.token_drift.outputs.configs }} of the ${{ steps.token_drift.outputs.configs_expected }} Doppler configs the committed inventory names were READ, against a declared floor of <code>${{ steps.token_drift.outputs.configs_floor }}</code>. Configs not read: <code>${{ steps.token_drift.outputs.configs_unread }}</code> (<code>-</code> means none). Denominator caveat: <code>${{ steps.token_drift.outputs.coverage_caveat }}</code> (<code>-</code> means none — otherwise the committed inventory is missing, unparseable, or over 90 days old, so the DENOMINATOR in this ratio may not describe the project any more; the gate is the count against the floor, which the inventory never touches). The count is of configs whose secret-NAME listing SUCCEEDED — a config whose <code>doppler secrets --only-names</code> read failed is excluded from it and named in the unread list above. It is NOT a count of value reads, so a role that can list names but cannot read values still counts here; that case is caught separately, by the non-vacuity gate in the detector — it exits 2 with <code>verdict: unavailable</code> when it enumerated keys and probed zero values — and the issue close arm is gated on <code>verdict != unavailable</code> so it cannot fire on such a run. The ratio REPORTS and gates nothing: the gate is the count against the floor, so <code>degraded</code> means the credential is absent, revoked or narrowed, and <code>at-floor</code> means it reached at least every config this scan demanded.</em></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       # Fires on `causes`, NOT on `verdict`, and therefore independently of the first-match
@@ -1267,7 +1267,7 @@ jobs:
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[TOKEN DRIFT] No conclusion could be drawn about at least one token'
-          body: '<p><strong>No token was found stale, but at least one enumerated token could not be verified at all</strong>, so this run cannot claim the fleet is clean — and it is NOT claiming anything is broken.</p><p><strong>Do not rotate anything on the strength of this email.</strong></p><p>Reported cause(s): <code>${{ steps.token_drift.outputs.causes }}</code>. What each one means:</p><ul><li><code>no-probe-configured</code> — the detector has no hostname mapping for that key. Fix the DETECTOR: add one to <code>access_hostname_for()</code> in <code>scripts/check-cloudflare-token-drift.sh</code>.</li><li><code>gate-absent</code> — an UNCREDENTIALED request to the host was not refused by Cloudflare Access. Nothing is gating that hostname. This is a GATE finding, not a credential finding: check the Access application and policy. Rotating the token changes nothing.</li><li><code>host-unreachable</code> / <code>probe-failed</code> — the probe got no answer (timeout, DNS, TLS). Nothing was measured. Re-run.</li><li><code>unknown</code> — a row arrived with no <code>cause</code> field. That is a detector/consumer contract break, not a credential finding: report it rather than acting on it.</li><li><code>gate-indeterminate</code> — the host answered an anonymous request without an Access stamp and without succeeding (a 530 tunnel outage looks like this). Neither a gate nor its absence was established. Re-run.</li><li><code>control-blocked</code> — Cloudflare itself blocked or challenged the anonymous probe, so it never reached Access. Check the WAF / rate-limit / bot-fight rules for the host.</li><li><code>stamped-non-refusal</code> — the host returned an Access-stamped response that is not a refusal. Not evidence the credential was rejected; investigate the Access application.</li><li><code>unexpected-status</code> — no Access stamp and no success. LIVE requires positive proof of admission, so nothing was certified — and nothing is claimed stale either.</li><li><code>detector-env</code> — a LOCAL fault on the runner (could not allocate a temp file). No request was sent; nothing about the credential or the host is implied.</li><li><code>refused-unstamped</code> — something in FRONT of Access refused the probe (WAF rule, IP access rule, bot-fight). Check the rule set for the host, not the credential.</li></ul><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> for the exact keys and the reason each was skipped.</p><p><em>Scan coverage: <code>${{ steps.token_drift.outputs.coverage }}</code> at <code>${{ steps.token_drift.outputs.coverage_ratio }}</code> — ${{ steps.token_drift.outputs.configs }} of the ${{ steps.token_drift.outputs.configs_expected }} Doppler configs the committed inventory names were READ, against a declared floor of <code>${{ steps.token_drift.outputs.configs_floor }}</code>. Configs not read: <code>${{ steps.token_drift.outputs.configs_unread }}</code> (<code>-</code> means none). Denominator caveat: <code>${{ steps.token_drift.outputs.coverage_caveat }}</code> (<code>-</code> means none — otherwise the committed inventory is missing, unparseable, or over 90 days old, so the DENOMINATOR in this ratio may not describe the project any more; the gate is the count against the floor, which the inventory never touches). The count is of configs whose secret-NAME listing SUCCEEDED — a config whose <code>doppler secrets --only-names</code> read failed is excluded from it and named in the unread list above. It is NOT a count of value reads, so a role that can list names but cannot read values still counts here; that case is caught separately, by the non-vacuity gate in the detector — it exits 2 with <code>verdict: unavailable</code> when it enumerated keys and probed zero values — and the issue close arm is gated on <code>verdict != unavailable</code> so it cannot fire on such a run. The ratio REPORTS and gates nothing: the gate is the count against the floor, so <code>degraded</code> means the credential is absent, revoked or narrowed, and <code>at-floor</code> means it reached at least every config this scan demanded.</em></p>'
+          body: '<p><strong>No token was found stale, but at least one enumerated token could not be verified at all</strong>, so this run cannot claim the fleet is clean — and it is NOT claiming anything is broken.</p><p><strong>Do not rotate anything on the strength of this email.</strong></p><p>Reported cause(s): <code>${{ steps.token_drift.outputs.causes }}</code>. What each one means:</p><ul><li><code>no-probe-configured</code> — the detector has no hostname mapping for that key. Fix the DETECTOR: add one to <code>access_hostname_for()</code> in <code>scripts/check-cloudflare-token-drift.sh</code>.</li><li><code>gate-absent</code> — an UNCREDENTIALED request to the host was not refused by Cloudflare Access. Nothing is gating that hostname. This is a GATE finding, not a credential finding: check the Access application and policy. Rotating the token changes nothing.</li><li><code>host-unreachable</code> / <code>probe-failed</code> — the probe got no answer (timeout, DNS, TLS). Nothing was measured. Re-run.</li><li><code>unknown</code> — a row arrived with no <code>cause</code> field. That is a detector/consumer contract break, not a credential finding: report it rather than acting on it.</li><li><code>gate-indeterminate</code> — the host answered an anonymous request without an Access stamp, without succeeding, and without a Cloudflare error code to name. Neither a gate nor its absence was established. Re-run.</li><li><code>host-nxdomain</code> / <code>edge-error-1000</code> — the hostname did not resolve (NXDOMAIN, or the runner''s resolver failed), or Cloudflare answered with its own Error 1000 page before Access: check the tunnel hostname''s DNS record in the zone that is authoritative for the base domain (compare public NS with the Terraform zone, #12931). Other <code>edge-error-&lt;code&gt;</code> values name the Cloudflare 1xxx error page received.</li><li><code>tunnel-down</code> — Cloudflare answered 530 / error 1033: the tunnel has no healthy connector. Check the connector host.</li><li><code>control-blocked</code> — Cloudflare itself blocked or challenged the anonymous probe, so it never reached Access. Check the WAF / rate-limit / bot-fight rules for the host.</li><li><code>stamped-non-refusal</code> — the host returned an Access-stamped response that is not a refusal. Not evidence the credential was rejected; investigate the Access application.</li><li><code>unexpected-status</code> — no Access stamp and no success. LIVE requires positive proof of admission, so nothing was certified — and nothing is claimed stale either.</li><li><code>detector-env</code> — a LOCAL fault on the runner (could not allocate a temp file). No request was sent; nothing about the credential or the host is implied.</li><li><code>refused-unstamped</code> — something in FRONT of Access refused the probe (WAF rule, IP access rule, bot-fight). Check the rule set for the host, not the credential.</li></ul><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> for the exact keys and the reason each was skipped.</p><p><em>Scan coverage: <code>${{ steps.token_drift.outputs.coverage }}</code> at <code>${{ steps.token_drift.outputs.coverage_ratio }}</code> — ${{ steps.token_drift.outputs.configs }} of the ${{ steps.token_drift.outputs.configs_expected }} Doppler configs the committed inventory names were READ, against a declared floor of <code>${{ steps.token_drift.outputs.configs_floor }}</code>. Configs not read: <code>${{ steps.token_drift.outputs.configs_unread }}</code> (<code>-</code> means none). Denominator caveat: <code>${{ steps.token_drift.outputs.coverage_caveat }}</code> (<code>-</code> means none — otherwise the committed inventory is missing, unparseable, or over 90 days old, so the DENOMINATOR in this ratio may not describe the project any more; the gate is the count against the floor, which the inventory never touches). The count is of configs whose secret-NAME listing SUCCEEDED — a config whose <code>doppler secrets --only-names</code> read failed is excluded from it and named in the unread list above. It is NOT a count of value reads, so a role that can list names but cannot read values still counts here; that case is caught separately, by the non-vacuity gate in the detector — it exits 2 with <code>verdict: unavailable</code> when it enumerated keys and probed zero values — and the issue close arm is gated on <code>verdict != unavailable</code> so it cannot fire on such a run. The ratio REPORTS and gates nothing: the gate is the count against the floor, so <code>degraded</code> means the credential is absent, revoked or narrowed, and <code>at-floor</code> means it reached at least every config this scan demanded.</em></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       - name: Email notification (token drift — detector could not run)
@@ -1277,6 +1277,214 @@ jobs:
         with:
           subject: '[TOKEN DRIFT] The Cloudflare token detector could not run'
           body: '<p><strong>The token-drift detector did not complete, so no conclusion was drawn about any credential.</strong> This is not a claim that anything is stale.</p><p>Likely causes: a missing prerequisite on the runner (doppler CLI, curl, python3), a Doppler token that cannot enumerate the project, a filter that matched no keys, or a Doppler token that can read secret NAMES but not their VALUES — in which case the detector ran to completion and measured nothing. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> — the detector prints the specific reason it could not conclude.</p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
+      # GUARD 4 (#12937) — TUNNEL-ZONE AUTHORITY. The registry/deploy/ssh tunnel CNAMEs live in
+      # the zone `cf_tunnel_zone_id` names (the Soleur-account zone since #12937). On 2026-11-18
+      # a registrar move made a DIFFERENT zone authoritative for soleur.ai: the Terraform zone
+      # went `status: moved`, public NS stopped matching it, and every tunnel hostname broke
+      # (Error 1000 / NXDOMAIN) while every apply stayed green. Nothing watched for that.
+      #
+      # An ALERTING step, not an apply precondition: refusing applies on this would block every
+      # apply until #12931 finishes the zone migration. One step, one filing site, one deduped
+      # `ci/tunnel-zone-authority` issue whose body is REWRITTEN each run, a close arm when the
+      # zone is healthy again, and an `unavailable` state (zone id unreadable, the token cannot
+      # read the zone, or DoH fails) that files under the same label rather than going nowhere
+      # — "could not check" is never "clean". The OLD `var.cf_zone_id` mismatch stays #12931's.
+      #
+      # Compares sets, never an empty one: an empty zone id, an empty `name_servers` or an
+      # empty DoH answer is `unavailable`. Secrets ride curl's stdin config, never argv.
+      # Pinned by plugins/soleur/test/terraform-drift-tunnel-zone-authority.test.sh, which runs
+      # this body under the runner's own shell with every external command stubbed.
+      - name: Tunnel-zone authority (the zone carrying the tunnel CNAMEs)
+        id: tunnel_zone
+        if: always() && matrix.directory == 'apps/web-platform/infra'
+        continue-on-error: true
+        timeout-minutes: 3
+        working-directory: apps/web-platform/infra
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -uo pipefail
+          LABEL="ci/tunnel-zone-authority"
+          RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+          STATE="healthy"; WHY=""
+          ZONE_ID=""; ZONE_NAME=""; ZONE_STATUS=""; ZONE_NS=""; PUBLIC_NS=""
+          unavailable() { STATE="unavailable"; WHY="$1"; echo "::warning::tunnel_zone_unavailable — $1"; }
+
+          # 1. The zone id, from the committed local through the TF output (never Doppler).
+          rc=0
+          ZONE_ID="$(terraform output -raw cf_tunnel_zone_id 2>/dev/null)" || rc=$?
+          if (( rc != 0 )) || [[ ! "$ZONE_ID" =~ ^[0-9a-f]{32}$ ]]; then
+            ZONE_ID=""
+            unavailable "terraform output cf_tunnel_zone_id did not yield a 32-hex zone id (rc=${rc}); refusing to compare against an empty set."
+          fi
+
+          # 2. The Cloudflare API token: the tiered loader's plain name, else prd_terraform.
+          CF_TOKEN="${CF_API_TOKEN:-}"
+          if [[ "$STATE" == healthy && -z "$CF_TOKEN" ]]; then
+            rc=0
+            CF_TOKEN="$(doppler secrets get CF_API_TOKEN --plain 2>/dev/null)" || rc=$?
+            (( rc == 0 )) || CF_TOKEN=""
+          fi
+          if [[ "$STATE" == healthy ]]; then
+            if [[ -z "$CF_TOKEN" || "$CF_TOKEN" == *[[:cntrl:]\"\\]* ]]; then
+              unavailable "no usable CF_API_TOKEN in this job, so the zone could not be read."
+            else
+              printf '::add-mask::%s\n' "$CF_TOKEN"
+            fi
+          fi
+
+          # 3. The zone object (status, name, name_servers). The bearer rides stdin.
+          if [[ "$STATE" == healthy ]]; then
+            ZJSON="${RUNNER_TEMP:-/tmp}/tunnel-zone.json"
+            rc=0
+            curl --disable --noproxy '*' -sS --max-time 20 --config - -o "$ZJSON" \
+              "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}" \
+              < <(printf 'header = "Authorization: Bearer %s"\n' "$CF_TOKEN") || rc=$?
+            if (( rc != 0 )); then
+              unavailable "the Cloudflare zone read failed (curl rc=${rc})."
+            else
+              rc=0
+              ZLINE="$(python3 -I -c '
+          import json, re, sys
+          d = json.load(open(sys.argv[1]))
+          if not d.get("success"):
+              raise SystemExit(3)
+          r = d.get("result") or {}
+          name, status = str(r.get("name", "")), str(r.get("status", ""))
+          ns = sorted({str(n).lower().rstrip(".") for n in (r.get("name_servers") or [])})
+          tok = re.compile(r"^[a-z0-9.-]{1,253}$")
+          if not tok.match(name) or not re.match(r"^[a-z_]{1,32}$", status) or not ns or not all(tok.match(n) for n in ns):
+              raise SystemExit(4)
+          print(name, status, ",".join(ns))
+          ' "$ZJSON" 2>/dev/null)" || rc=$?
+              rm -f "$ZJSON"
+              if (( rc != 0 )); then
+                unavailable "the token could not read zone ${ZONE_ID}, or the answer lacked a name, status or name_servers (parse rc=${rc})."
+              else
+                read -r ZONE_NAME ZONE_STATUS ZONE_NS <<< "$ZLINE"
+              fi
+            fi
+          fi
+
+          # 4. Public NS for the zone's name, from 1.1.1.1 over DoH.
+          if [[ "$STATE" == healthy ]]; then
+            rc=0
+            DOH="$(curl --disable --noproxy '*' -sS --max-time 15 -H 'accept: application/dns-json' \
+              "https://1.1.1.1/dns-query?name=${ZONE_NAME}&type=NS")" || rc=$?
+            if (( rc != 0 )); then
+              unavailable "the DoH query to 1.1.1.1 for ${ZONE_NAME} NS failed (curl rc=${rc})."
+            else
+              rc=0
+              PUBLIC_NS="$(python3 -I -c '
+          import json, re, sys
+          d = json.loads(sys.stdin.read())
+          if d.get("Status") != 0:
+              raise SystemExit(3)
+          ns = sorted({str(a.get("data", "")).lower().rstrip(".") for a in (d.get("Answer") or []) if a.get("type") == 2})
+          if not ns or not all(re.match(r"^[a-z0-9.-]{1,253}$", n) for n in ns):
+              raise SystemExit(4)
+          print(",".join(ns))
+          ' <<< "$DOH" 2>/dev/null)" || rc=$?
+              (( rc == 0 )) || { PUBLIC_NS=""; unavailable "the DoH answer for ${ZONE_NAME} NS carried no usable NS records (parse rc=${rc})."; }
+            fi
+          fi
+
+          # 5. The comparison.
+          if [[ "$STATE" == healthy ]]; then
+            if [[ "$ZONE_STATUS" != active ]]; then
+              STATE="drift"; WHY="zone ${ZONE_NAME} (${ZONE_ID}) has status '${ZONE_STATUS}', not 'active'."
+            elif [[ "$PUBLIC_NS" != "$ZONE_NS" ]]; then
+              STATE="drift"; WHY="public NS for ${ZONE_NAME} (${PUBLIC_NS}) differ from the zone's name_servers (${ZONE_NS}), so a different zone is authoritative."
+            fi
+          fi
+          printf 'state=%s\n' "$STATE" >> "$GITHUB_OUTPUT"
+          echo "tunnel-zone authority: state=${STATE} zone=${ZONE_ID:-none} status=${ZONE_STATUS:-unread} zone_ns=${ZONE_NS:-unread} public_ns=${PUBLIC_NS:-unread}"
+          if [[ "$STATE" == drift ]]; then echo "::error::tunnel_zone_drift — ${WHY}"; fi
+          # escalation=ok|failed: did the issue channel accept this run's state? The email step below reads it.
+          escalation() { printf 'escalation=%s\n' "$1" >> "$GITHUB_OUTPUT"; }
+
+          # 6. The one filing site.
+          LIST_RC=0
+          # dedupe: fail-closed — deliberate LIST_RC: an unreadable list declines to create a possible duplicate; the standing condition re-files within 12h.
+          EXISTING=$(gh issue list --label "$LABEL" --state open -L 5 --json number --jq '.[0].number // empty') || LIST_RC=$?
+          if (( LIST_RC != 0 )); then
+            echo "::error::tunnel_zone_list_failed — could not query open ${LABEL} issues (gh exit ${LIST_RC}); state '${STATE}' reached no issue channel this run."
+            escalation failed
+            exit 0
+          fi
+          if [[ "$STATE" == healthy ]]; then
+            [[ -n "$EXISTING" ]] || { echo "tunnel zone healthy; no open ${LABEL} issue."; escalation ok; exit 0; }
+            if gh issue close "$EXISTING" --comment "Healthy again: run ${RUN_URL} read zone ${ZONE_NAME} (${ZONE_ID}) as \`active\` with public NS equal to its name_servers (${ZONE_NS}). Auto-closed."; then
+              echo "Closed ${LABEL} issue #${EXISTING}."; escalation ok
+            else
+              echo "::error::tunnel_zone_close_failed — the zone is healthy but issue #${EXISTING} could not be closed."; escalation failed
+            fi
+            exit 0
+          fi
+          # An unmeasured run must not overwrite a standing drift finding: comment, keep the title and body.
+          if [[ "$STATE" == unavailable && -n "$EXISTING" ]]; then
+            if gh issue comment "$EXISTING" --body "state=unavailable — run ${RUN_URL} could not measure the zone: ${WHY} The title and body above are from the last measured run."; then
+              echo "Commented on ${LABEL} issue #${EXISTING} (unavailable)."; escalation ok
+            else
+              echo "::error::tunnel_zone_update_failed — gh issue comment could not reach issue #${EXISTING} (state 'unavailable')."; escalation failed
+            fi
+            exit 0
+          fi
+          gh label create "$LABEL" --description "The zone carrying the tunnel hostnames is not authoritative" --color "B60205" 2>/dev/null || true
+          if [[ "$STATE" == unavailable ]]; then
+            TITLE="[TUNNEL ZONE] Could not verify the zone that carries the tunnel hostnames"
+            LEAD="**state=unavailable — the tunnel-zone authority check could not measure the zone this run.** ${WHY} This is NOT a claim that the zone is healthy, and not a claim that it is broken."
+          else
+            TITLE="[TUNNEL ZONE] The zone carrying registry/deploy/ssh is not authoritative"
+            LEAD="**state=drift — ${WHY}** The tunnel CNAMEs for registry., deploy. and ssh. live in this zone, so while it is not authoritative those hostnames answer Cloudflare Error 1000 or NXDOMAIN and the zot bridge, the deploy webhook and CI SSH fail. Compare the registrar's NS with the zone's name_servers (#12931)."
+          fi
+          BODY="${RUNNER_TEMP:-/tmp}/tunnel-zone-issue.md"
+          {
+            echo "$LEAD"
+            echo ""
+            echo "state=${STATE}  •  zone: \`${ZONE_ID:-unread}\` (\`${ZONE_NAME:-unread}\`)  •  status: \`${ZONE_STATUS:-unread}\`  •  zone NS: \`${ZONE_NS:-unread}\`  •  public NS (1.1.1.1): \`${PUBLIC_NS:-unread}\`  •  Run: ${RUN_URL}"
+            echo ""
+            echo "The release job's SOLEUR_ZOT_BRIDGE line names the edge cause (host-nxdomain / edge-error-1000) when this breaks the bridge; see knowledge-base/engineering/operations/runbooks/zot-registry-revert.md."
+            echo ""
+            echo "Rewritten on every drift run; closed automatically when a run reads the zone \`active\` with matching NS. An \`unavailable\` run never closes it."
+          } > "$BODY"
+          if [[ -n "$EXISTING" ]]; then
+            if gh issue edit "$EXISTING" --title "$TITLE" --body-file "$BODY"; then
+              echo "Rewrote ${LABEL} issue #${EXISTING} for state '${STATE}'."; escalation ok
+            else
+              echo "::error::tunnel_zone_update_failed — gh issue edit could not rewrite issue #${EXISTING} (state '${STATE}')."; escalation failed
+            fi
+            gh issue edit "$EXISTING" --add-label action-required --add-label priority/p1-high --add-label "$LABEL" >/dev/null 2>&1 || true
+          elif gh issue create --title "$TITLE" --body-file "$BODY" \
+                 --label "$LABEL" --label action-required --label priority/p1-high \
+                 --milestone "Post-MVP / Later"; then
+            echo "Filed a ${LABEL} issue for state '${STATE}'."; escalation ok
+          else
+            echo "::error::tunnel_zone_escalation_failed — gh issue create did not succeed; state '${STATE}' reached no issue channel this run."; escalation failed
+          fi
+          rm -f "$BODY"
+
+      # The issue is the tunnel_zone step's only other channel, and that step is continue-on-error, so a drift,
+      # a refused issue write, or a crashed/timed-out step (no outputs; `outcome` is set) also emails ops.
+      - name: Email notification (tunnel zone — drift, or the issue channel is unreachable)
+        if: >-
+          always()
+          && (steps.tunnel_zone.outputs.state == 'drift'
+              || steps.tunnel_zone.outputs.escalation == 'failed'
+              || steps.tunnel_zone.outcome == 'failure')
+        continue-on-error: true
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[TUNNEL ZONE] The zone carrying registry/deploy/ssh needs attention'
+          body: '<p><strong>The tunnel-zone authority check measured state <code>${{ steps.tunnel_zone.outputs.state }}</code>; issue channel <code>${{ steps.tunnel_zone.outputs.escalation }}</code> (step outcome <code>${{ steps.tunnel_zone.outcome }}</code>).</strong></p><p><code>drift</code> means the zone holding the tunnel CNAMEs is not active or is not the authoritative one, so registry., deploy. and ssh. are down. An empty state or <code>failed</code> channel means the check crashed or its <code>ci/tunnel-zone-authority</code> issue could not be written; the run is green either way.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the <code>tunnel_zone_</code> annotation.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       # The four reporting steps below are INDEPENDENT emitters, not a pipeline. Moving the

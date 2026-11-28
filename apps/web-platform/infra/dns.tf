@@ -38,6 +38,9 @@ resource "cloudflare_record" "deploy" {
   type    = "CNAME"
   proxied = true
   ttl     = 1
+
+  # A failed Access create leaves the hostname unrouted instead of reachable without a gate (#12937).
+  depends_on = [cloudflare_zero_trust_access_policy.deploy_service_token]
 }
 
 # SSH ingress for CI runner via Cloudflare Tunnel (see #4177).
@@ -50,6 +53,9 @@ resource "cloudflare_record" "ssh" {
   type    = "CNAME"
   proxied = true
   ttl     = 1
+
+  # A failed Access create leaves the hostname unrouted instead of reachable without a gate (#12937).
+  depends_on = [cloudflare_zero_trust_access_policy.ci_ssh_service_token]
 }
 
 # #6122 (ADR-096) — registry PUSH ingress for CI via Cloudflare Tunnel (CTO ruling).
@@ -66,6 +72,9 @@ resource "cloudflare_record" "registry" {
   type    = "CNAME"
   proxied = true
   ttl     = 1
+
+  # A failed Access create leaves the hostname unrouted instead of reachable without a gate (#12937).
+  depends_on = [cloudflare_zero_trust_access_policy.registry_push_service_token]
 }
 
 # Email authentication records for Resend SMTP (sends via Amazon SES, eu-west-1)

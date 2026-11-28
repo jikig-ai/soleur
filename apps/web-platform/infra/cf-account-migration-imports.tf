@@ -206,7 +206,7 @@ import {
   id       = "66d4f93f7397f196544e9fe84c3557c2/soleur-docs/www.soleur.ai"
 }
 
-# Tunnel phase only (PR2 flips var.cf_migration_import_app).
+# Tunnel phase only: its plan passes -var=cf_migration_import_app=true (cf-account-migrate-job.sh).
 import {
   for_each = local.cf_migration_import_app_set
   to       = cloudflare_record.app

@@ -85,8 +85,9 @@ REQ="$WORK/required.json"
 ) > "$REQ" || { printf '[FATAL] could not derive the required set from %s\n' "$GATE" >&2; exit 2; }
 N_REQ="$(jq length "$REQ")"
 mapfile -t REQ_ADDRS < <(jq -r '.[]' "$REQ")
-if (( N_REQ >= 40 )) && jq -e 'index("cloudflare_record.www") and index("cloudflare_ruleset.bulk_redirects") and index("doppler_secret.cf_api_token_dns_edit") and index("cloudflare_pages_project.docs")' "$REQ" >/dev/null; then
-  ok "required set derived from the gate: ${N_REQ} addresses, literal sample present"
+if (( N_REQ == 60 )) && jq -e 'index("cloudflare_record.www") and index("cloudflare_ruleset.bulk_redirects") and index("doppler_secret.cf_api_token_dns_edit") and index("cloudflare_pages_project.docs")
+     and index("cloudflare_zero_trust_tunnel_cloudflared.web") and index("cloudflare_record.app") and index("random_id.tunnel_secret")' "$REQ" >/dev/null; then
+  ok "required set derived from the gate: ${N_REQ} addresses (37 + 5 + the 18 of the tunnel phase, CFAM_TUNNEL_ADDR among them), literal sample present"
 else
   no "required set derived from the gate looks shrunk (n=${N_REQ})"
 fi
@@ -103,8 +104,7 @@ jq -n --slurpfile r "$REQ" --arg nz "$NZ" --arg na "$NA" --arg oz "$OZ" --arg oa
    resources: (
      [ $r[0][] | split(".") as $p
        | res($p[0]; $p[1]; (if ($p[0] | startswith("cloudflare_")) then {zone_id: $nz, account_id: $na, content: $s} else {name: "x"} end)) ]
-     + [ res("cloudflare_zero_trust_tunnel_cloudflared"; "web"; {account_id: $na, name: "web", content: $s}),
-         res("cloudflare_r2_bucket"; "terraform_state_privileged"; {account_id: $oa, name: "b", content: $s}),
+     + [ res("cloudflare_r2_bucket"; "terraform_state_privileged"; {account_id: $oa, name: "b", content: $s}),
          res("hcloud_server"; "web"; {name: "web-9"}),
          {mode: "managed", type: "cloudflare_record", name: "indexed", instances: [
            {index_key: "a", attributes: {zone_id: $nz, content: $s}}, {index_key: "b", attributes: {zone_id: $nz, content: $s}}]},
@@ -326,12 +326,13 @@ row_missing_refused() {
   [[ $RC -eq 1 ]] && has "$WORK/a16" "missing cloudflare_record.spf_root"
 }
 check "A16b a removed required address (row form, for the mutation table) refuses" row_missing_refused "$SCRIPT"
-# A38: EVERY import-class record, from the script's own list (pinned at 26), nulled one at a time.
+# A38: EVERY import-class record, from the script's own list (pinned at 27: 26 redirects-dns records and
+# the tunnel phase's cloudflare_record.app), nulled one at a time.
 row_unnorm_every_record() {
   local recs a
   recs="$(env -i PATH="$(dirname "$REAL_JQ"):/usr/bin:/bin" HOME="$WORK" TMPDIR="$WORK" \
     bash -c 'source "$1"; _cfam_load_gate || exit $?; cfam_required_records' _ "$1" | jq -r '.[]')" || return 1
-  [[ "$(grep -c . <<<"$recs")" -eq 26 ]] || return 1
+  [[ "$(grep -c . <<<"$recs")" -eq 27 ]] && grep -qx cloudflare_record.app <<<"$recs" || return 1
   while IFS= read -r a; do
     jq --arg t "${a%%.*}" --arg n "${a#*.}" \
       '(.resources[] | select(.type == $t and .name == $n and (.module // "") == "") | .instances[0].attributes.content) = null' \
@@ -340,7 +341,7 @@ row_unnorm_every_record() {
     [[ $RC -eq 1 ]] && grep -qE -- "unnormalized ${a//./\\.}( |\$)" "$WORK/a38.out" || return 1
   done <<<"$recs"
 }
-check "A38 each of the 26 import-class records, with null content, refuses as unnormalized and is named" row_unnorm_every_record "$SCRIPT"
+check "A38 each of the 27 import-class records, with null content, refuses as unnormalized and is named" row_unnorm_every_record "$SCRIPT"
 # A17: an address present with ZERO instances is not "in state".
 mut_state "$WORK/a17.json" '(.resources[] | select(.type=="cloudflare_record" and .name=="dmarc") | .instances) = []'
 run_eval "$SCRIPT" "$WORK/a17" "$WORK/a17.json"

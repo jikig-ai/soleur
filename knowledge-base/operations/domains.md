@@ -29,6 +29,14 @@ last_updated: 2026-11-19
 | A | soleur.ai | 185.199.108.153 | Yes | GitHub Pages — the ONE surviving apex origin after #7640 PR4a |
 | CNAME | <www.soleur.ai> | jikig-ai.github.io | Yes | GitHub Pages |
 | TXT | _github-pages-challenge-jikig-ai.soleur.ai | 8fcc2ac37a5abcac6cd2c71556053f | No | Domain verification |
+| CNAME | deploy.soleur.ai | `<cloudflare_zero_trust_tunnel_cloudflared.web id>.cfargotunnel.com` | Yes | Tunnel host, `cloudflare_record.deploy`. Deploy webhook behind CF Access (#12937) |
+| CNAME | ssh.soleur.ai | `<cloudflare_zero_trust_tunnel_cloudflared.web id>.cfargotunnel.com` | Yes | Tunnel host, `cloudflare_record.ssh`. CI SSH behind CF Access (#12937) |
+| CNAME | registry.soleur.ai | `<cloudflare_zero_trust_tunnel_cloudflared.web id>.cfargotunnel.com` | Yes | Tunnel host, `cloudflare_record.registry`. CI registry push behind CF Access (#12937) |
+
+> **Added 2026-11-19, updated 2026-11-23 (#12937).** The three rows above are the target state. The ADR-329 `tunnel`
+> phase creates them in the Soleur-account zone (`951ce525…`) through `var.cf_zone_id`. Until it runs, `registry.` and
+> `ssh.` in that zone are scanner A records and `deploy.` is absent. See
+> [ADR-331](../engineering/architecture/decisions/ADR-331-tunnel-and-access-gate-live-in-the-zone-owning-account.md).
 
 ## Security Configuration (soleur.ai)
 

@@ -340,6 +340,7 @@ plugins/soleur/test/technical-ruling-gate.test.sh	8
 plugins/soleur/test/technical-ruling-owner-list.test.sh	4
 plugins/soleur/test/terraform-drift-sentry-leg.test.sh	12
 plugins/soleur/test/terraform-drift-step-order.test.sh	6
+plugins/soleur/test/terraform-drift-tunnel-zone-authority.test.sh	11
 plugins/soleur/test/test-pyramid-fixtures.test.sh	12
 plugins/soleur/test/ticket-triage-clauses.test.sh	5
 plugins/soleur/test/token-drift-workflow-causes.test.sh	6
@@ -365,6 +366,7 @@ plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh	4
 plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh	3
 plugins/soleur/test/worktree-manager-sandbox-tmp-sweep.test.sh	10
 plugins/soleur/test/worktree-manager-stale-lock-diag.test.sh	1
+plugins/soleur/test/zot-bridge-marker-emission.test.sh	10
 plugins/soleur/test/zot-http-deadlines-required.test.sh	3
 plugins/soleur/test/zot-image-mirror-publish.test.sh	8
 scripts/actions-queue-health	6

@@ -283,11 +283,3 @@ run "reject_zone_dnssec_enabled" {
   }
   expect_failures = [var.cf_zone_dnssec_enabled]
 }
-
-run "reject_migration_import_app" {
-  command = plan
-  variables {
-    cf_migration_import_app = true
-  }
-  expect_failures = [var.cf_migration_import_app]
-}

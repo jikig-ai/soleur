@@ -53,6 +53,15 @@
 #                         silently pass on a broken guard
 set -euo pipefail
 
+# The Cloudflare account the `soleur-web-platform` tunnel lives on once ADR-329's tunnel phase has run
+# (#12937): the zone-owning Soleur account. It is a literal and not Doppler's CF_ACCOUNT_ID because that
+# value flips on its own schedule (#12931). The scheduled census step reads it after sourcing this file, and
+# apps/web-platform/infra/tunnel-origin-relative-ingress.test.sh (AC5) asserts it equals CFAM_NEW_ACCOUNT_ID in
+# tests/scripts/lib/cf-account-migrate-gate.sh, the migration's committed target. Until the phase has run the
+# lookup finds no tunnel here and the census reads census_unavailable (soft, never a page). Not a secret.
+# shellcheck disable=SC2034  # read by the sourcing workflow step, not here
+CF_TUNNEL_ACCOUNT_ID="66d4f93f7397f196544e9fe84c3557c2"
+
 # Advisory floor: cloudflared < 2026.10.2 trusts the compromised eMudhra (emSign)
 # intermediates. Comparisons MUST be field-wise numeric — lexical order lies
 # ("2026.9.0" > "2026.10.2" as strings). A malformed constant must fail LOUD
