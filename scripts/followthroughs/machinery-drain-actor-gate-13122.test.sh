@@ -96,7 +96,7 @@ write_logs() {
     printf '%s ##[start-action display=Run Claude Code Action;id=drain.run]\n' "$TS"
     if [[ "$drain_mode" != "refusal" && "$drain_mode" != "pregate-error" ]]; then
       printf '%s Actor type: Bot\n' "$TS"
-      printf '%s Actor soleur-ai is in allowed_bots list, skipping human actor check\n' "$TS"
+      printf '%s Actor soleur-ai[bot] is in allowed_bots list, skipping human actor check\n' "$TS"
     fi
     case "$drain_mode" in
       refusal)
@@ -211,7 +211,7 @@ write_world pass; sed -i 's/2026-11-30T09:03:54Z/2026-11-30T08:20:54Z/' "$FX/run
 write_world pass; : > "$FX/log_777_5.txt"; expect 'empty Drain step log -> 3' 3 "$(run_probe)"
 write_world pass; sed -i '/allowed_bots: soleur-ai\[bot\]/d' "$FX/log_777_5.txt"; expect 'missing fixed-input control -> 3' 3 "$(run_probe)"
 write_world pass; write_logs pregate-error 0; sed -i 's/before=363 after=360 closed=3 floor=20/before=363 after=363 closed=0 floor=20/' "$FX/comments.json"; expect 'pre-gate OIDC failure is not actor-gate evidence -> 3' 3 "$(run_probe)"
-write_world pass; sed -i '/Actor soleur-ai is in allowed_bots list/d' "$FX/log_777_5.txt"; expect 'missing post-gate admission evidence -> 3' 3 "$(run_probe)"
+write_world pass; sed -i '/Actor soleur-ai\[bot\] is in allowed_bots list/d' "$FX/log_777_5.txt"; expect 'missing post-gate admission evidence -> 3' 3 "$(run_probe)"
 write_world pass; sed -i '/end-action id=drain\.run/d' "$FX/log_777_5.txt"; expect 'truncated Drain step log -> 3' 3 "$(run_probe)"
 write_world pass; write_jobs 111 skipped skipped; expect 'skipped Drain step execution state -> 3' 3 "$(run_probe)"
 write_world pass; printf '\357\273\277' | cat - "$FX/log_777_5.txt" > "$FX/bom.tmp" && mv "$FX/bom.tmp" "$FX/log_777_5.txt"; expect 'BOM-prefixed step log -> 0' 0 "$(run_probe)"
@@ -258,6 +258,10 @@ elif mode == 'write-shaped-gh':
     needle = 'timeout 60 gh api "$@" 2>/dev/null'
     assert needle in text
     text = text.replace(needle, 'timeout 60 gh api "$@" --method POST 2>/dev/null', 1)
+elif mode == 'drop-postgate-bot-suffix':
+    needle = 'Actor soleur-ai\\[bot\\] is'
+    assert needle in text
+    text = text.replace(needle, 'Actor soleur-ai is', 1)
 elif mode == 'drop-escape-flag':
     needle = 'ghx --allow-escape-sequences'
     assert needle in text
@@ -321,6 +325,9 @@ expect_mutant_detected 'mutation M5 loosening the Update marker is caught by wro
 write_world pass
 make_mutant drop-escape-flag "$ROOT/mutant-drop-escape.sh"
 expect_mutant_detected 'mutation M6 dropping allow-escape-sequences is caught by escape-bearing logs' 0 "$(run_file "$ROOT/mutant-drop-escape.sh")"
+write_world pass
+make_mutant drop-postgate-bot-suffix "$ROOT/mutant-drop-postgate-suffix.sh"
+expect_mutant_detected 'mutation M7 dropping the post-gate [bot] suffix is caught by producer-accurate logs' 0 "$(run_file "$ROOT/mutant-drop-postgate-suffix.sh")"
 
 write_world pass
 printf '%s

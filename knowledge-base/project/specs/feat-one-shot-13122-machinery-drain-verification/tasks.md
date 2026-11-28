@@ -26,6 +26,6 @@ Plan: `knowledge-base/project/plans/2026-11-28-chore-machinery-drain-verificatio
 
 ## Phase 4 — post-merge enrollment
 
-- [ ] 4.1 After merge, create the new tracker issue with label `follow-through` and the exact unfenced column-0 directive.
-- [ ] 4.2 Verify the tracker issue body and labels with `gh issue view`.
+- [ ] 4.1 After merge, create the new tracker issue with labels `follow-through` and `meta/machinery`, milestone `Post-MVP / Later`, and the exact unfenced column-0 directive copied from the archived spec/plan.
+- [ ] 4.2 Verify the tracker issue body, labels, and milestone with `gh issue view`.
 - [ ] 4.3 Close #13122 with a comment naming the tracker and dry-run evidence; leave the new tracker open for the probe to close on PASS.

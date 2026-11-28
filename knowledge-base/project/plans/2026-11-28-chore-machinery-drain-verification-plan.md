@@ -101,17 +101,17 @@ Credential posture: requires `GH_TOKEN` with the sweeper's existing `actions: re
 1. Query `repos/jikig-ai/soleur/actions/workflows/scheduled-machinery-drain.yml/runs` with `per_page=100`, `actor=soleur-ai%5Bbot%5D`, `status=completed`, `event=workflow_dispatch`, and `created=>=2026-11-28T12:57:15Z`. Validate shape and require `total_count <= per_page` (a deeper first page cannot establish the FIRST run; otherwise exit 3 rather than silently select the newest page). Re-filter rows locally on `triggering_actor.login == "soleur-ai[bot]"`, `event`, `status`, `head_branch == "main"`, and `created_at >= cutoff`. Sort ascending by `created_at`.
 2. If no row exists, print `NOT YET` and exit 2. Skip rows whose conclusion is `cancelled` or `skipped` because they cannot measure the drain; record that they were skipped. Select the first remaining completed run. This is a bounded technical ruling: a cancelled/skipped run is not evidence about the actor gate and must not permanently wedge verification behind a non-measurement.
 3. Read `repos/.../actions/runs/<run-id>/jobs`; require exactly the job `measure-and-drain` with numbered steps `Drain the machinery ledger` and `Update the standing measurement issue`. Missing API data, missing steps, or a non-cancelled run whose drain step did not execute exits 3.
-4. Download `repos/.../actions/jobs/<job-id>/steps/<drain-step-number>/logs` via `gh api --allow-escape-sequences`. Empty or unreadable logs exit 3.
+4. Download `repos/.../actions/jobs/<job-id>/steps/<drain-step-number>/logs` via `gh api --allow-escape-sequences`. Empty or unreadable logs exit 3. Before any PASS, require positive completeness evidence in that same log: the fixed `allowed_bots: soleur-ai[bot]` input echo, the drain.run start/end action markers, and ordered post-gate evidence that `Actor soleur-ai[bot] is in allowed_bots list, skipping human actor check` follows `Actor type: Bot`. Missing controls exit 3 because absence of the refusal is not proof that the gate was reached and passed.
 5. Detect the actor refusal only as an emitted runtime line anchored after the timestamp: `##[error]Action failed with error: Workflow initiated by non-human actor: soleur-ai (type: Bot).` Do not strip ANSI before matching and never match the bare sentence. Fixture rows cover colourised or indented echoed `run:` source. If this line is present, print the run URL and exit 1 immediately.
 6. Establish drain outcome evidence independently of step conclusion. A substantive non-actor diagnosis is an emitted `##[error]` line inside the Drain step log that is neither the actor refusal nor the generic `Process completed with exit code` line. `drain.run` success needs no diagnosis. `drain.run` failure with only the generic process line is not "clearly diagnosed" and exits 3.
-7. Download the Update step log and require the emitted end-anchored line `updated standing issue #9508` (echoed `echo "updated standing issue..."` source must not count). Then read `repos/.../issues/9508/comments?since=<run-created-at>&per_page=100`; sort matching comments client-side by `created_at` and accept only a `github-actions[bot]` comment created within `[run.created_at, run.updated_at + 900s]`, containing `Machinery drain outcome:` and a parseable `before=<n> after=<n> closed=<N> floor=<n>` line. Missing, stale, wrong-author, or unparseable evidence exits 3.
-8. Exit 0 only when the actor refusal is absent AND the correlated comment evidence exists AND one of these holds: `closed>0`; or `closed=0` with a substantive non-actor Drain-step diagnosis printed by the probe; or `closed=0` with an explicit `WAIVED-EMPTY`/`WAIVED-SUPPLY` verdict (a diagnosed non-actor outcome, not a drain failure). Otherwise exit 3 with the missing evidence named. Exit 2 is reserved for no qualifying completed measurement yet.
+7. Download the Update step log and require the emitted end-anchored line `updated standing issue #9508` (echoed `echo "updated standing issue..."` source must not count). Then read `repos/.../issues/9508/comments?since=<run-created-at>&per_page=100`; sort matching comments client-side by `created_at` and accept only a `github-actions[bot]` comment created within `[run.created_at, emitted-update timestamp + 900s]`, containing `Machinery drain outcome:` and a parseable `before=<n> after=<n> closed=<N> floor=<n>` line. Missing, stale, wrong-author, or unparseable evidence exits 3.
+8. Exit 0 only when the actor refusal is absent, positive post-gate execution evidence exists, the correlated comment evidence exists, AND one of these holds: `closed>0`; or `closed=0` with a substantive non-actor Drain-step diagnosis detected by the probe; or `closed=0` with an explicit `WAIVED-EMPTY`/`WAIVED-SUPPLY` verdict (a diagnosed non-actor outcome, not a drain failure). The probe prints fixed-vocabulary identifiers and never republishes raw log text. Otherwise exit 3 with the missing evidence named. Exit 2 is reserved for no qualifying completed measurement yet.
 
 Cost is bounded at roughly five authenticated reads for the normal path (run list, jobs, two step logs, comments) and below 30s healthy time, far under the sweeper's 300s per-probe cap. Every `gh` invocation gets a bounded timeout; malformed JSON is an exit-3 input failure.
 
 ### Enrollment
 
-Post-merge, create a new tracker issue titled `follow-through: weekly machinery-drain actor-gate verification` with label `follow-through`, close criteria in prose, and this unfenced column-0 directive:
+Post-merge, create a new tracker issue titled `follow-through: weekly machinery-drain actor-gate verification` with labels `follow-through` and `meta/machinery`, milestone `Post-MVP / Later`, close criteria in prose, and this unfenced column-0 directive:
 
 ```html
 <!-- soleur:followthrough
@@ -121,7 +121,7 @@ secrets=GH_TOKEN
 -->
 ```
 
-`2026-11-30T18:00:00Z` is the first scheduled sweeper slot after the first expected Monday 09:00 UTC drain. This is a technical ruling, not operator scope: it avoids nine daily NOT-YET comments before evidence can exist while leaving the script's own exit-2 gate as the real availability test. After creating the tracker, close #13122 with a comment naming the tracker and the branch dry-run evidence. The PR body must use `Ref #13122`, not `Closes #13122`, because the issue closes only after enrollment.
+`2026-11-30T18:00:00Z` is the first scheduled sweeper slot after the first expected Monday 09:00 UTC drain. This is a technical ruling, not operator scope: it avoids nine daily NOT-YET comments before evidence can exist while leaving the script's own exit-2 gate as the real availability test. The directive is archived with this spec/plan in the PR; after merge, read it from the archived spec directory or copy the directive block above rather than relying on the pre-archive live path. After creating the tracker, close #13122 with a comment naming the tracker and the branch dry-run evidence. The PR body must use `Ref #13122`, not `Closes #13122`, because the issue closes only after enrollment.
 
 Before PR-ready, run the read-only branch dry run prescribed by the convention: `gh workflow run scheduled-followthrough-sweeper.yml --ref feat-one-shot-13122-machinery-drain-verification -f dry_run=true`, then read the run log for this probe's parse/exit line. This is not the forbidden machinery-drain manual trigger and posts nothing.
 
@@ -267,7 +267,7 @@ discoverability_test:
 - **Unit:** Given a completed run whose Drain log contains the emitted actor refusal, when scanned, then it exits 1 even if jobs/run conclusions are success.
 - **Unit:** Given only colourised/indented echoed source containing the refusal sentence, when scanned with otherwise clean evidence, then it does not exit 1 and may pass.
 - **Unit:** Given clean Drain evidence and a correlated comment with `closed=3`, when all reads succeed, then it exits 0.
-- **Unit:** Given clean actor evidence, `closed=0`, and a substantive non-actor `##[error]` diagnosis, when correlated comment evidence exists, then it exits 0 and prints the diagnosis.
+- **Unit:** Given clean actor evidence, `closed=0`, and a substantive non-actor `##[error]` diagnosis, when correlated comment evidence exists, then it exits 0 and prints fixed-vocabulary evidence identifiers without republishing raw log text.
 - **Unit:** Given `closed=0` with only the generic process-exit line or an unexplained BREACH, when evaluated, then it exits 3.
 - **Unit:** Given a WAIVED-SUPPLY or WAIVED-EMPTY verdict with `closed=0`, when actor evidence is clean, then it exits 0.
 - **Unit:** Given missing GH_TOKEN, malformed run/jobs JSON, missing Drain/Update steps, unreadable logs, missing update emission, stale/wrong-author/unparseable comment evidence, or a gh failure, when encountered, then the probe exits 3.
@@ -292,7 +292,7 @@ discoverability_test:
 
 ### Phase 3 — Post-merge enrollment
 
-1. Create the new tracker issue with label `follow-through` and the directive exactly as specified.
+1. Create the new tracker issue with labels `follow-through` and `meta/machinery`, milestone `Post-MVP / Later`, and the directive exactly as specified.
 2. Verify `gh issue view <tracker> --json labels,body` shows label + unfenced column-0 directive.
 3. Close #13122 with a comment naming the tracker and dry-run evidence. Do not close the new tracker; the probe closes it only on PASS.
 

@@ -55,7 +55,8 @@ REPO='jikig-ai/soleur'
 WF='scheduled-machinery-drain.yml'
 CUTOFF='2026-11-28T12:57:15Z'
 PER_PAGE=100
-RUNS_ENDPOINT="repos/${REPO}/actions/workflows/${WF}/runs?actor=soleur-ai%5Bbot%5D&status=completed&event=workflow_dispatch&created=%3E%3D2026-11-28T12%3A57%3A15Z&per_page=100"
+CUTOFF_ENC="${CUTOFF//:/%3A}"
+RUNS_ENDPOINT="repos/${REPO}/actions/workflows/${WF}/runs?actor=soleur-ai%5Bbot%5D&status=completed&event=workflow_dispatch&created=%3E%3D${CUTOFF_ENC}&per_page=${PER_PAGE}"
 ISSUE=9508
 
 if [[ -z "${GH_TOKEN:-}" ]]; then
@@ -117,7 +118,7 @@ if [[ -z "$run_id" ]]; then
   exit 2
 fi
 
-jobs_json="$(ghx "repos/${REPO}/actions/runs/${run_id}/jobs?per_page=100&filter=latest")" \
+jobs_json="$(ghx "repos/${REPO}/actions/runs/${run_id}/jobs?per_page=${PER_PAGE}&filter=latest")" \
   || cannot "reading jobs for run ${run_id} failed"
 printf '%s' "$jobs_json" | jq -e 'type == "object" and (.total_count | type == "number") and (.jobs | type == "array")' >/dev/null 2>&1 \
   || cannot "the jobs response for run ${run_id} has an unexpected shape"
@@ -198,7 +199,7 @@ grep -aEq "$END_RE" "$DRAIN_LOG.clean" \
   || cannot "run ${run_id} Drain step log is truncated before the drain.run end marker"
 
 ACTOR_TYPE_RE="^${TS_RE} Actor type: Bot[[:space:]]*$"
-POSTGATE_RE="^${TS_RE} Actor soleur-ai is in allowed_bots list, skipping human actor check[[:space:]]*$"
+POSTGATE_RE="^${TS_RE} Actor soleur-ai\[bot\] is in allowed_bots list, skipping human actor check[[:space:]]*$"
 actor_ln="$(grep -anE "$ACTOR_TYPE_RE" "$DRAIN_LOG.clean" | sed -n '1s/:.*//p')"
 postgate_ln="$(grep -anE "$POSTGATE_RE" "$DRAIN_LOG.clean" | sed -n '1s/:.*//p')"
 if ! [[ "$actor_ln" =~ ^[0-9]+$ && "$postgate_ln" =~ ^[0-9]+$ ]] || (( postgate_ln <= actor_ln )); then
@@ -220,7 +221,7 @@ since_enc="${run_created//:/%3A}"
 comment_json=''
 comment_scan_incomplete=0
 for page in {1..10}; do
-  page_json="$(ghx "repos/${REPO}/issues/${ISSUE}/comments?since=${since_enc}&per_page=100&page=${page}")" \
+  page_json="$(ghx "repos/${REPO}/issues/${ISSUE}/comments?since=${since_enc}&per_page=${PER_PAGE}&page=${page}")" \
     || cannot "reading comments page ${page} on #${ISSUE} failed"
   printf '%s' "$page_json" | jq -e 'type == "array"' >/dev/null 2>&1 \
     || cannot "the comments page ${page} response for #${ISSUE} has an unexpected shape"
