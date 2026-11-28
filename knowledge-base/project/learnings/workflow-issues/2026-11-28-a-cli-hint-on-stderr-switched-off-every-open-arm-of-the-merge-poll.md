@@ -16,9 +16,13 @@ see the problem, and the documented way to arm the merge was refused.
 
 ## 1. Folding stderr into a parsed value breaks the day the CLI adds a hint
 
-`gh` 2.106.0 (2026-11-25) prints an 8-line "use `gh event listen` instead of polling" hint on
-**stderr** for every `gh pr view` (and `gh run view` of a PR run). Exit code stays 0, and the hint
-is written **before** stdout. No env var or config turns it off.
+`gh` 2.106.0 (measured 2026-11-25) prints an 8-line "use `gh event listen` instead of polling"
+hint on **stderr** for `gh pr view` of an OPEN PR, `gh run view` of an in-progress `pull_request`
+run, and `gh api repos/O/R/pulls/<N>` with every sub-path in any PR state. A merged PR's view and a
+completed run's view print none, and so do `gh pr checks/list/status/diff`, `gh issue view`, `gh
+run list` and other `gh api` endpoints. Exit code stays 0, and the hint is written **before**
+stdout (a failing read, such as `--jq 'error("boom")'` on an open PR, prints it before its own
+error). No documented env var or config key turns it off (8 env vars and 5 config keys tried).
 
 The Phase 7 poll captured `s=$(gh pr view … 2>&1)`. The captured state therefore began with
 `hint:`, and every exact comparison died:
@@ -41,7 +45,10 @@ unreadable answer fell to the fail-closed hold.
 file, and use the file only on the failure path (`fetch-error: <first non-hint line>`). A
 `2>"${GH_ERR:-/dev/null}"` default keeps `gh` running if the temp file cannot be made (an empty
 `2>""` redirect fails and `gh` never runs). A scan in `plugins/soleur/test/pr-merge-poll.test.ts`
-now fails CI on any new `$(gh … 2>&1)` capture outside a shrink-only exclusion list.
+now fails CI on any new `gh` capture that merges stderr (`2>&1`, `2>& 1`, `|&`, `&>`,
+`2>/dev/stdout`, in `$(…)` or an assignment's backticks) in a tracked non-test file under `plugins/` or
+`.claude/hooks/`, outside a pinned shrink-only exclusion list. Files elsewhere in the repo
+(`scripts/`, `.github/`, `apps/`) are not scanned.
 
 ## 2. The missing-required-check arm already existed, and defect 1 hid it
 
@@ -79,7 +86,10 @@ the PR number next to `--match-head-commit` drew the "extra operands" deny. Agen
 documented form fell back to the flag-only form, which keeps the lock only if they remember it.
 
 `--match-head-commit` can only restrict a merge, so every newly admitted command merges nothing
-that `gh pr merge <N> --squash --auto` did not already admit. The same change closed two older
+the same command without `--match-head-commit` did not already admit. The baseline is that same
+command, not the plain `--auto` arm: `gh pr merge 5 --squash --admin --match-head-commit "$SHA"`
+can merge what `gh pr merge 5 --squash --auto` cannot, but nothing `gh pr merge 5 --squash
+--admin` cannot. The same change closed two older
 fail-opens on the paths the new rules feed: the census read died silently under `set -eo
 pipefail` when `ls-remote` failed (G2), and the foreign-repo exit fired on text that pointed `gh`
 nowhere, such as `; : GH_HOST=…` (G1).

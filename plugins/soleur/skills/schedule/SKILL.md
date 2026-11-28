@@ -738,8 +738,9 @@ RUN_ID=$(gh run list --workflow=scheduled-<NAME>.yml --limit=1 --json databaseId
 
 ```bash
 # Monitor command — emits each status transition, exits on a terminal state.
-# Read stdout only: gh prints a multi-line `hint:` block on stderr (gh 2.106), so a `2>&1` capture never starts with
-# `completed`. Stderr goes to a per-poll file; a failed read names its first line that is not the hint, else rc=<rc>.
+# Read stdout only, stderr to a per-poll file (never `2>&1`). Hygiene, not a timeout fix: gh 2.106.0 prints its `hint:`
+# block only for an in-progress PR run, and the line-wise `^completed` grep would match under `2>&1` too; the file keeps
+# gh's stderr out of the Monitor lines. A failed read names its first line that is not the hint, else rc=<rc>.
 prev=""; i=0; e="$(mktemp 2>/dev/null)" || e=""; trap 'rm -f ${e:+"$e"}' EXIT
 while true; do
   i=$((i+1))
