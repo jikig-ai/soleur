@@ -729,6 +729,7 @@ rc="$LR_RC"; head_ref="$LR_OUT"; head_err="$LR_ERR"
 if [[ "$rc" -ne 0 ]]; then tag gh "$rc" "gh pr view failed: $(printf '%s' "$head_err" | qb_clean)"; exit 4; fi
 if qb_match "$head_ref" '^[^[:space:]]+ [^[:space:]]*$'; then read -r head_ref LOOP_BASEREF <<<"$head_ref"; fi
 if [[ "$head_ref" != "$BRANCH" ]]; then
+  # `| head -c 200` is safe here and at the post-sync echo: stdout only (no hint), inside a tag ARGUMENT, so set -e never sees a SIGPIPE rc (sdisp's is an assignment).
   tag wrong_branch 12 "PR #$PR's head branch is '$(printf '%s' "$head_ref" | head -c 200 | qb_clean)' but this worktree is on '$BRANCH' — cd to that PR's worktree (or pass the right PR number); not syncing."
   exit 12
 fi
@@ -801,6 +802,7 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
   loop_read --json state,mergeStateStatus --jq '"\(.state) \(.mergeStateStatus)"'
   rc="$LR_RC"; state_line="$LR_OUT"; state_err="$LR_ERR"
   if [[ "$rc" -ne 0 ]]; then tag gh "$rc" "post-push gh pr view failed: $(printf '%s' "$state_err" | qb_clean)"; exit 4; fi
+  # stdout only, a tag argument: `| head -c` is safe here (the wrong_branch comment).
   tag state 0 "post-sync state: $(printf '%s' "$state_line" | head -c 200 | qb_clean)"
 
   if [[ "$state_line" != *BEHIND* ]]; then

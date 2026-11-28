@@ -493,6 +493,16 @@ CURPR=HINT:99; PARKED_COUNT=1; FORBID="pr list --label parked --state open --jso
 h "REAL hook: a bare merge whose current-branch read prints gh's hint on stderr (rc 0) reads the number from stdout and is allowed while another PR is parked" allow "$CLEAN" 'gh pr merge --squash' "pr view --json number --jq .number" "pr view 99 --json labels --jq .labels[].name"
 CURPR=HINTNONE; PARKED_COUNT=1; FORBID="pr list --label parked --state open --json number --jq length"
 h "REAL hook: a branch with NO pull request whose stderr carries the hint and then 'no pull requests found' is allowed while another PR is parked (the test reads stderr)" allow "$CLEAN" 'gh pr merge --squash' "pr view --json number --jq .number"
+# The current-branch read's stderr file is removed before the hook returns (no trap owns it): TMPDIR points at a per-row empty directory,
+# and after a flag-only merge that read the hint-bearing stderr that directory is empty again.
+PERR_DIR=$(mktemp -d "$STUB_DIR/perr.XXXXXX")
+CURPR=HINT:99; PARKED_COUNT=1; FORBID="pr list --label parked --state open --json number --jq length"; HOOK_ENV="TMPDIR=$PERR_DIR"
+h "REAL hook: a flag-only merge with TMPDIR at an empty directory (control for the temp-file row below)" allow "$CLEAN" 'gh pr merge --squash' "pr view --json number --jq .number" "pr view 99 --json labels --jq .labels[].name"
+TOTAL=$((TOTAL + 1))
+PERR_LEFT=$(find "$PERR_DIR" -mindepth 1 -print 2>/dev/null || true)
+if [[ -d "$PERR_DIR" && -z "$PERR_LEFT" ]]; then PASS=$((PASS + 1)); echo "PASS: the current-branch read's stderr temp file is removed before the hook returns (TMPDIR is empty again)"
+else FAIL=$((FAIL + 1)); echo "FAIL: the hook left a file in its TMPDIR after a flag-only merge: ${PERR_LEFT:-<the directory is gone>}"; fi
+rm -rf "$PERR_DIR"
 # gh api: label writes, issue writes and GraphQL, one probe per name
 LABELS=$PL; h "REAL hook: parked: 'gh api --method DELETE .../issues/7/labels/parked' is denied, stub never called" deny "$CLEAN" 'gh api --method DELETE repos/o/r/issues/7/labels/parked' --none
 LABELS=$PL; h "REAL hook: parked: 'gh api -X PATCH .../issues/7/labels' (replaces the label set) is denied" deny "$CLEAN" "gh api -X PATCH repos/o/r/issues/7/labels -f 'labels[]=bug'" "$LABELS_CALL"
@@ -590,8 +600,8 @@ echo "=== $PASS/$TOTAL pass ($FAIL fail) ==="
 
 # Anti-vacuity floor: a suite that silently stops running rows (a sourced helper that
 # exits early, a deleted block) must not read as green. Raise this whenever rows are
-# added, derived from a green run's TOTAL (41 at the second-round review edit, 59 after the first parked barrier, 102 after review round 1, 157 after the fix round, 197 after the final bounded patch, 199 after the gh 2.106 hint rows).
-ROW_FLOOR=199
+# added, derived from a green run's TOTAL (41 at the second-round review edit, 59 after the first parked barrier, 102 after review round 1, 157 after the fix round, 197 after the final bounded patch, 199 after the gh 2.106 hint rows, 201 after the stderr temp-file row and its control).
+ROW_FLOOR=201
 if (( TOTAL < ROW_FLOOR )); then
   echo "FAIL: only $TOTAL rows ran; the floor is $ROW_FLOOR (rows were dropped or never ran)"
   exit 1

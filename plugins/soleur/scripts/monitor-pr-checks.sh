@@ -293,6 +293,20 @@ _ctx_lib="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)/lib/c
 [[ -r "$_ctx_lib" ]] && source "$_ctx_lib" 2>/dev/null
 declare -F soleur_ctx_sanitize_nl >/dev/null 2>&1 \
   || soleur_ctx_sanitize_nl() { LC_ALL=C tr -d '\000-\011\013-\037\177'; }
+# gh_err_line <rc> — the cause a gh probe reports, read from $ERRTMP: the first line that is non-empty and starts with neither `hint:` nor
+# whitespace (gh 2.106 prints an 8-line `hint: … gh event listen …` block on stderr for every `gh pr view`, rc 0, and its 7 continuation lines
+# are indented, so a `head -c 160` of the file reported the hint, not the error), cut to 160 characters by substring (never `| head -c`, which
+# SIGPIPEs the writer under pipefail); with no such line, `rc=<rc>`. The same filter as sync-pr-behind.sh gh_err_line. RAW: callers sanitise.
+gh_err_line() {
+  local e=""
+  if [[ -r "$ERRTMP" ]]; then
+    while IFS= read -r e || [[ -n "$e" ]]; do
+      if [[ -n "$e" && "$e" != hint:* && "$e" != [[:space:]]* ]]; then break; fi
+      e=""
+    done < "$ERRTMP"
+  fi
+  if [[ -n "$e" ]]; then printf '%s' "${e:0:160}"; else printf 'rc=%s' "$1"; fi
+}
 ci_verdict() {
   local m
   V_STATE=""; V_WHY=""
@@ -376,16 +390,18 @@ while :; do
   # nor why, so a recurring failure cannot be diagnosed from the transcript afterwards — which is
   # the same "a signal that does not say what it means" problem this script exists to fix, one
   # level in. `|| true` keeps a failure from killing the loop.
-  view_err=""
+  # The cause is gh_err_line's (the hint block is skipped), with control characters made spaces before it reaches the stream.
+  view_err=""; view_rc=0
   view="$(gh pr view "$PR" "${REPO_ARG[@]}" --json state,mergeStateStatus,autoMergeRequest \
-           --jq '"\(.state)|\(.mergeStateStatus)|\(.autoMergeRequest != null)"' 2>"$ERRTMP" || true)"
-  view_err="$(head -c 160 "$ERRTMP" 2>/dev/null | tr '\n' ' ')"
+           --jq '"\(.state)|\(.mergeStateStatus)|\(.autoMergeRequest != null)"' 2>"$ERRTMP")" || view_rc=$?
+  view_err="$(gh_err_line "$view_rc" | tr '[:cntrl:]' ' ')"
   probe_ok=1; failed_probe=""; view_fail_err=""; checks_fail_err=""
   [[ -n "$view" ]] || { view="UNKNOWN|UNKNOWN|false"; probe_ok=0; failed_probe="pr view"; view_fail_err="$view_err"; }
   IFS='|' read -r state mergestate automerge <<<"$view"
 
-  checks="$(gh pr checks "$PR" "${REPO_ARG[@]}" --json name,bucket 2>"$ERRTMP" || true)"
-  checks_err="$(head -c 160 "$ERRTMP" 2>/dev/null | tr '\n' ' ')"
+  checks_rc=0
+  checks="$(gh pr checks "$PR" "${REPO_ARG[@]}" --json name,bucket 2>"$ERRTMP")" || checks_rc=$?
+  checks_err="$(gh_err_line "$checks_rc" | tr '[:cntrl:]' ' ')"
   [[ -n "$checks" ]] || { checks='[]'; probe_ok=0; failed_probe="${failed_probe:+$failed_probe + }pr checks"; checks_fail_err="$checks_err"; }
 
   # A red `test` row on a PR whose ready run is pending (or missing) is the DRAFT run's row: report it PENDING under a

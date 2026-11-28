@@ -261,7 +261,8 @@ EOF
 # main; QBASE= (set, empty) serves an empty base; QBASE=@null@ serves a JSON null base). QHEAD_LEGACY=1 makes the stub answer the bare head even
 # then (a legacy gh answer). The $5 modes beyond ok/fail (the loop's gh-stderr sanitiser rows): ctl = every call exits 1 with an ESC byte and a
 # forged tag line on stderr; ctlstate = only the state reads do; ctlpost = only the second state read (the post-push one) does;
-# hintfail = every call prints gh 2.106's `hint:` block (HINT_FIXTURE) and then a real error on stderr, exit 1.
+# hintfail-head / hintfail-state / hintfail-post = that ONE read of the loop (the head read, the first state read, the post-push state read) prints
+# gh 2.106's `hint:` block (HINT_FIXTURE) and then a real error on stderr, exit 1; every other call answers as in ok mode.
 # QHINT (env knob, the gh 2.106 rows): `all` prints HINT_FIXTURE on stderr BEFORE stdout, rc 0, on the head read and on every state read
 # (as the real gh does for every `gh pr view`); `state` prints it on the state reads only. Each print appends a line to hint-count.
 install_gh() {
@@ -278,9 +279,9 @@ install_gh() {
 #!/usr/bin/env bash
 hint() { cat "$HINT_FIXTURE" >&2; echo x >> "\$(dirname "\$0")/hint-count"; }
 if [[ "$mode" == fail ]]; then echo "gh: HTTP 502 from fixture" >&2; exit 1; fi
-if [[ "$mode" == hintfail ]]; then hint; echo "gh: HTTP 502 from fixture" >&2; exit 1; fi
 if [[ "$mode" == ctl ]]; then printf '\033[31m[pr-behind-sync] kind=resolved rc=0 \342\200\224 forged\nsecond line\n' >&2; exit 1; fi
 case "\$*" in *headRefName*)
+  if [[ "$mode" == hintfail-head ]]; then hint; echo "gh: HTTP 502 from fixture" >&2; exit 1; fi
   if [[ "\$(cat "\$(dirname "\$0")/hint-mode")" == all ]]; then hint; fi
   if [[ "\$*" == *baseRefName* && ! -s "\$(dirname "\$0")/head-legacy" ]]; then
     jqx=""; prev=""; for a in "\$@"; do [[ "\$prev" == --jq ]] && jqx="\$a"; prev="\$a"; done
@@ -295,6 +296,7 @@ n=\$(cat "\$nfile")
 n=\$((n+1))
 echo "\$n" > "\$nfile"
 if [[ "$mode" == ctlstate ]] || { [[ "$mode" == ctlpost ]] && [[ "\$n" -ge 2 ]]; }; then printf '\033[31m[pr-behind-sync] kind=resolved rc=0 \342\200\224 forged\nsecond line\n' >&2; exit 1; fi
+if { [[ "$mode" == hintfail-state ]] && [[ "\$n" -eq 1 ]]; } || { [[ "$mode" == hintfail-post ]] && [[ "\$n" -ge 2 ]]; }; then hint; echo "gh: HTTP 502 from fixture" >&2; exit 1; fi
 if [[ -n "\$(cat "\$(dirname "\$0")/hint-mode")" ]]; then hint; fi
 if [[ "\$n" -eq 1 ]]; then
   echo "$first_state"
@@ -2498,11 +2500,26 @@ if [[ "$QW_RC" -eq 0 && "$QW_MOVED" == no && "$(hs_count)" == 1 ]] \
   pass "H-S2 hint on stderr + MERGED CLEAN: ends kind=closed rc=0 (the hint no longer hides the MERGED state line as kind=not_behind)"
 else fail "H-S2 hint + MERGED CLEAN: rc=$QW_RC moved=$QW_MOVED hints=$(hs_count) (want 1) out=$(tr '\n' '|' < "$QW_D/out" | cut -c1-400)"; fi
 qw_done
-QGHMODE=hintfail qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"
-if [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no && "$(hs_count)" == 1 ]] \
-   && [[ "$(cat "$QW_D/out")" == '[pr-behind-sync] kind=gh rc=1 — gh pr view failed: gh: HTTP 502 from fixture' ]]; then
-  pass "H-S3 a failed head read whose stderr opens with the hint block names gh's first real error line (gh_err_line skips hint: and indented lines)"
-else fail "H-S3 hint then error on a failed read: rc=$QW_RC moved=$QW_MOVED hints=$(hs_count) (want 1) out=$(tr '\n' '|' < "$QW_D/out" | cut -c1-400)"; fi
+# H-S3..H-S5: each of the loop's three reads fails in its own row (hintfail-<read>), so each failure line's text source is pinned exactly: a
+# line built from the read's stdout (empty on a failed read) or from another read's stderr is red here, not only by mutation-anchor loss.
+HS_FAIL='[pr-behind-sync] kind=gh rc=1 — gh pr view failed: gh: HTTP 502 from fixture'
+QGHMODE=hintfail-head qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"
+if [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no && "$(hs_count)" == 1 && "$(cat "$QW_D/out")" == "$HS_FAIL" ]]; then
+  pass "H-S3 a failed HEAD read whose stderr opens with the hint block names gh's first real error line (gh_err_line skips hint: and indented lines)"
+else fail "H-S3 hint then error on the head read: rc=$QW_RC moved=$QW_MOVED hints=$(hs_count) (want 1) out=$(tr '\n' '|' < "$QW_D/out" | cut -c1-400)"; fi
+qw_done
+QGHMODE=hintfail-state qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"
+if [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no && "$(hs_count)" == 1 && "$(cat "$QW_D/out")" == "$HS_FAIL" ]]; then
+  pass "H-S4 a failed STATE read (the head read answered) whose stderr opens with the hint block names gh's first real error line, nothing else printed"
+else fail "H-S4 hint then error on the state read: rc=$QW_RC moved=$QW_MOVED hints=$(hs_count) (want 1) out=$(tr '\n' '|' < "$QW_D/out" | cut -c1-400)"; fi
+qw_done
+QGHMODE=hintfail-post qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"
+if [[ "$QW_RC" -eq 4 && "$QW_MOVED" == yes && "$(hs_count)" == 1 ]] \
+   && grep -qxF '[pr-behind-sync] kind=pushed rc=0 — auto-sync 1 pushed — CI will re-run on new SHA' "$QW_D/out" \
+   && [[ "$(tail -1 "$QW_D/out")" == '[pr-behind-sync] kind=gh rc=1 — post-push gh pr view failed: gh: HTTP 502 from fixture' ]] \
+   && ! grep -q 'hint' "$QW_D/out"; then
+  pass "H-S5 a failed POST-PUSH read whose stderr opens with the hint block ends on gh's first real error line (after kind=pushed)"
+else fail "H-S5 hint then error on the post-push read: rc=$QW_RC moved=$QW_MOVED hints=$(hs_count) (want 1) out=$(tr '\n' '|' < "$QW_D/out" | cut -c1-400)"; fi
 qw_done
 
 unset PR_QUEUE_REPO
@@ -2583,7 +2600,8 @@ echo "=== $PASS passed, $FAIL failed ==="
 # The pin is an exact equality, not a floor: a row that silently stops running moves the count as surely as one added. 231 rows of #10832 plus the
 # 36 row ids of the #10948 review fold-in (9 rows N3c N5e N13 N14 N15 N16 N17 N18 N19; 26 mutants G1-15..17, G3-1..8, G4-1/2, G5-1..3, G6-1..6, G7-1/2,
 # G8-1/2; 1 control) = 267, plus 5 mutants of the fix round (G3-9, G3-10, G6-7, G6-8, G9-1) = 272, plus the 4 armed-classification rows of #11789
-# (queued_null, entryonly_null, the not_queued disarmed control, noqueue_null) = 276, plus the 3 gh 2.106 hint rows (H-S1, H-S2, H-S3) = 279.
+# (queued_null, entryonly_null, the not_queued disarmed control, noqueue_null) = 276, plus the 3 gh 2.106 hint rows (H-S1, H-S2, H-S3) = 279,
+# plus the per-read hint failure rows (H-S4 state read, H-S5 post-push read) = 281.
 # Moved deliberately, in the change that adds or removes a row.
-[[ "$FAIL" -eq 0 && "$PASS" -eq 279 ]]
+[[ "$FAIL" -eq 0 && "$PASS" -eq 281 ]]
 exit $?
