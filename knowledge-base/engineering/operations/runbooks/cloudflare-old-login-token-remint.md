@@ -234,7 +234,8 @@ launched it refuses, at start, every setting that could proxy, record or MITM th
 `--save-session`; the proxy refuses the other names anyway), their `PLAYWRIGHT_MCP_*` env twins, `NODE_OPTIONS`,
 `NODE_EXTRA_CA_CERTS`, `NODE_TLS_REJECT_UNAUTHORIZED`, an `.ini` config, and config `proxy`, `recordHar`,
 `extraHTTPHeaders`, `ignoreHTTPSErrors` under `contextOptions` or `launchOptions` (CTO S1, R1). Then confirm it:
-`claude mcp get playwright` (read the args), `env | grep -E '^(PLAYWRIGHT_MCP_|NODE_OPTIONS|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED)='`
+`claude mcp get playwright` (read the args; they must not contain `--allow-proxy-and-node-env`, which turns the
+proxy and `NODE_*` refusals off and belongs to the plugin `plugin:soleur:playwright` server only, CTO U1), `env | grep -E '^(PLAYWRIGHT_MCP_|NODE_OPTIONS|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED)='`
 (expect only `PLAYWRIGHT_MCP_PING_TIMEOUT_MS`) and the `--config` file it names. The restart also gives a fresh
 browser, so no earlier `browser_run_code_unsafe` call left a trace running or `page.request` patched (CTO R2; the
 mint body also stops a trace and refuses `tampered`). During the sitting, call no `browser_run_code_unsafe` other than
@@ -356,6 +357,7 @@ exist means a live token nothing holds: list it by name and delete it in the sam
 | `{refused:"mint",status:403,contentType:"text/html",success:true,matches:0}` | the dashboard edge refused the write. Up to sha `6a8a8999` the body sent the token POST in-page, and the edge refused that in-page write (measured 2026-11-28, twice); this body sends it Node-side, as the cleanup DELETE always was, so an HTML 403 here means the edge refused that too. The cleanup proved nothing stored | stop the mint: post `status`, `contentType` and the cleanup verdict on #12931; no re-mint in this sitting |
 | `{refused:"mint",status:403,contentType:"application/json",...}` | the API refused the signed-in login (role or permission) | stop the mint; sign in as a login that can create this owner's tokens, under a fresh go |
 | `{refused:"mint"\|"mint-shape"\|"readback"\|"sink",...,success:true,matches:0}` (any other `status`) | the POST failed, gave no id or value, the stored policy differs, or the hand-off failed; the cleanup deleted every token of that name and id | new sink, re-mint |
+| `{refused:"sink",...,success:true}` while the sink printed `result=written` | the sink wrote the file but its answer did not reach the body as the printed `<answer>` (a mismatch or a read error); the cleanup deleted the token, so the `.tok` holds a dead value | never stage it: shred the `.tok` (`shred -u`), then a new sink and a new go |
 | the same with `success:false` | the cleanup could not prove the token gone: a token MAY exist that nothing holds | stop the mint; list it by name and retire it (section 12) before any re-mint |
 | `{error:<name>,...,success:true}` / `success:false` | a throw after the POST, cleanup as above | as the two rows above |
 
@@ -436,7 +438,7 @@ Placeholders, each filled before the go and quoted in it:
   `dd6d1427`, `5993721f`).
 
 Each `_NEXT` write runs only after that key's mint returned `success:true` with an `id8` and its sink printed
-`result=written`, after its `P5-MINTED` record is posted (section 5 step 3), and after a same-sitting inventory printed `SOLEUR_P5_STAGED key=<KEY> next=absent` (so it never
+`result=written` (never on a `refused:"sink"`, even when the sink wrote the file), after its `P5-MINTED` record is posted (section 5 step 3), and after a same-sitting inventory printed `SOLEUR_P5_STAGED key=<KEY> next=absent` (so it never
 overwrites the only copy of an earlier minted token); the `[ -s ... ]` test refuses a missing or empty `.tok`. Each mint go cites the #12931 `P5-SCOPE`
 comment. The swap go quotes, per key, the `new_id=` and `owner=` on the plan's `copy-staged-token` operation line,
 which must equal that key's `P5-MINTED` `id8=` and `owner=` (CTO D5, D9); a key whose plan has no

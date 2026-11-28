@@ -441,7 +441,8 @@ registers `playwright` with `python3` running
 in front of `npx @playwright/mcp@0.0.78`, so on Claude Code its tools arrive as
 `mcp__plugin_soleur_playwright__*` — already wrapped, no customer
 configuration. The registration passes
-`--user-data-dir-name soleur-playwright-mcp-profile` and `--chromium-fallback`, so the wrapped browser
+`--user-data-dir-name soleur-playwright-mcp-profile`, `--chromium-fallback` and
+`--allow-proxy-and-node-env` (see the startup refusals below), so the wrapped browser
 runs on its own profile under `$XDG_CACHE_HOME` (default `~/.cache`), separate
 from any `playwright` registration the customer configured themselves. On a
 registration routed through the proxy, every `tools/call` result is rewritten
@@ -579,7 +580,15 @@ string: an old-string session holds no `flock`, so also require that `readlink
    bare basename (a separator or `..`), is combined with an explicit
    `--user-data-dir` in the server argv, or resolves under a relative
    `XDG_CACHE_HOME` / an unset `HOME`. The reason names the setting, never its
-   value.
+   value, and ends with a `To fix:` remedy (remove the flag or key, or unset
+   the variable in the shell that starts Claude Code). The proxy flag
+   `--allow-proxy-and-node-env` (before `--`) turns off exactly the
+   `--proxy-server` / `--proxy-bypass` rows, their env twins, the three `NODE_*`
+   rows and the config `proxy` key; every other refusal stays. The plugin
+   registration passes it, so a host behind a corporate proxy or an extra CA
+   still browses; the repo `.mcp.json` registration does not, and the
+   Cloudflare re-mint sitting (`cloudflare-old-login-token-remint.md`) runs on
+   that one.
 
 2. **Per call** — it appends `--snapshot-mode none` to the child so no action
    tool writes a tree to disk, and refuses, before the server sees it, a

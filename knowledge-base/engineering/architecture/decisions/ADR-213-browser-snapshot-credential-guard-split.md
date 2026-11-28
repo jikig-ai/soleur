@@ -654,5 +654,11 @@ check (i) grows to cover what can proxy, record or MITM `page.request`. The new 
   launches with `{...launchOptions, ...contextOptions}` (`createPersistentBrowser`, 0.0.78), so a context key placed
   under `launchOptions` takes effect.
 
-The CTO rulings are S1 and R1 in
+A proxy flag before `--`, `--allow-proxy-and-node-env`, turns off exactly the proxy argv/env rows, the three `NODE_*`
+rows and the config `proxy` key; every other refusal stays. The plugin registration (`plugins/soleur/.mcp.json`)
+passes it, so a host behind a corporate proxy or an extra CA still browses; the repo `.mcp.json` registration does not,
+and the Phase 5 sitting runs on that one and checks its args. Each startup refusal on a setting now ends with a
+`To fix:` remedy.
+
+The CTO rulings are S1, R1, U1 and U2 in
 `knowledge-base/project/specs/feat-one-shot-p5-mint-sink-page-request/decision-challenges.md`.
