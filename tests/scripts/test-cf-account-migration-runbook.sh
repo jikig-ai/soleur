@@ -680,7 +680,7 @@ R18_NEEDLES=(
   'Re-rehearse, then re-dispatch the same phase.'
   '`unnormalized <addr>`: rehearse, then re-dispatch the phase whose spec lists `<addr>`.'
   '`cloudflare_record.app` an import that plans the admitted `import-normalize` update'
-  'PR2 must extend all three to the `tunnel` phase'
+  'pinned, read live after the plan and re-read after the apply exactly as the `redirects-dns` records are'
 )
 row_r18() {
   local j k bad=0
@@ -717,7 +717,7 @@ row_r14 "$RUNBOOK"; check "R14 the first-PATCH read holds on any read failure bu
 row_r15 "$RUNBOOK"; check "R15 the restore block: pin first, one PATCH, eight-field read-back (run verbatim)" $?
 row_r16 "$RUNBOOK"; check "R16 the recreate block: dns.tf fields, pin 404, one POST, read-back (run verbatim)" $?
 row_r17 "$RUNBOOK"; check "R17 the DNS snapshot is 19 rows or incomplete; the baseline is saved once (run verbatim)" $?
-row_r18 "$RUNBOOK"; check "R18 the hold list, wait anchor, precedence, owner labels and PR2 requirement" $?
+row_r18 "$RUNBOOK"; check "R18 the hold list, wait anchor, precedence, owner labels and the tunnel-phase app-record read" $?
 
 echo "== mutations =="
 mutate() { # <label> <dst> — perl program on stdin

@@ -121,6 +121,8 @@ Pull `## Problem`, `## Proposed Fix`, and `Location:` / file paths from each iss
 
 `soleur:one-shot` handles worktree creation, plan, deepen, work, review, QA, compound, and ship. This skill does NOT run any lifecycle phases itself — it only assembles scope.
 
+**Seat liveness & side-effecting guard (#12524, ADR-332):** Register each delegated cluster seat via `bash "${CLAUDE_PLUGIN_ROOT}/scripts/seat-liveness.sh" init --run-dir ".soleur/runs/${RUN_ID:-default}" --seat "drain-<area>" --writable true --side-effecting true`. On completion or stall, run `seat-liveness.sh sweep` + `decide`: because a delegated `one-shot` creates branches/PRs (`--side-effecting true`), never blindly auto-respawn a dead cluster seat — verify worktree/PR state on disk first and escalate with `Reviewed-Coverage: degraded`.
+
 ### 7. Report backlog delta
 
 After `one-shot` returns (PR merged), re-query the milestone using the same label:

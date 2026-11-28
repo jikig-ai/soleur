@@ -310,6 +310,9 @@ jobs:
     # security benefit (a leaked PAT with `contents:write` can also
     # bypass the env gate by submitting a workflow change).
 
+    outputs:
+      tunnel_verify_cause: ${{ steps.tunnel_verify.outputs.cause }}
+
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -466,10 +469,16 @@ jobs:
               -target=cloudflare_zero_trust_access_service_token.ci_ssh \
               -target=cloudflare_zero_trust_access_policy.ci_ssh_service_token \
               -target=cloudflare_notification_policy.service_token_expiry \
+              -target=cloudflare_zero_trust_access_application.registry \
+              -target=cloudflare_zero_trust_access_service_token.registry_push \
+              -target=cloudflare_zero_trust_access_policy.registry_push_service_token \
+              -target=doppler_secret.registry_push_access_token_id \
+              -target=doppler_secret.registry_push_access_token_secret \
               -target=cloudflare_zone_settings_override.soleur_ai \
               -target=cloudflare_record.app \
               -target=cloudflare_record.deploy \
               -target=cloudflare_record.ssh \
+              -target=cloudflare_record.registry \
               -target=cloudflare_record.dkim_resend \
               -target=cloudflare_record.spf_send \
               -target=cloudflare_record.mx_send \
@@ -852,7 +861,8 @@ jobs:
           ALL_MSGS="$HEAD_MSG"
           more_msgs="$(jq -r 'join("\n")' <<<"${EVENT_MSGS_JSON:-null}" 2>/dev/null || true)"
           [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && ALL_MSGS="${ALL_MSGS}"$'\n'"${more_msgs}"
-          deploy_policy_gate "$counts" "$ALL_MSGS" || exit 1
+          policy_counts="$(deploy_policy_counts tfplan.json "${GITHUB_WORKSPACE}/apps/web-platform/infra/tunnel.tf" "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq")" || exit 1
+          deploy_policy_gate "$policy_counts" "$ALL_MSGS" || exit 1
           destroy_count=$((resource_deletes + nested_deletes + reboot_updates))
           # Anchor `[ack-destroy]` to its own line: a mid-line or `>`-quoted
           # token does not fire; a bare fenced line DOES.
@@ -956,6 +966,48 @@ jobs:
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan 2>&1 | tf_redact_random_ids
 
+      # Before the tunnel verify, so its red cannot skip the sync. Bootstrap-cycle guard (#4195): re-fire `apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun`.
+      - name: Verify DOPPLER_TOKEN_WRITE present
+        id: doppler_write_check
+        env:
+          DOPPLER_TOKEN_WRITE_CHECK: ${{ secrets.DOPPLER_TOKEN_WRITE }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_WRITE_CHECK" ]]; then
+            echo "::warning::DOPPLER_TOKEN_WRITE not yet present — expected on the first apply that creates it; if seen again, re-fire one apply."
+            echo "skip_sync=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip_sync=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync CF Access CI-SSH service token to Doppler
+        # Publishes the ci_ssh outputs to Doppler (#4177) with the write token.
+        if: steps.doppler_write_check.outputs.skip_sync != 'true'
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WRITE }}
+        run: |
+          set -euo pipefail
+          CLIENT_ID=$(terraform output -raw ci_ssh_access_service_token_client_id 2>/dev/null || true)
+          CLIENT_SECRET=$(terraform output -raw ci_ssh_access_service_token_client_secret 2>/dev/null || true)
+          if [[ -z "$CLIENT_ID" || -z "$CLIENT_SECRET" ]]; then
+            minted=$(jq '[.resource_changes[]? | select(.address | startswith("cloudflare_zero_trust_access_service_token.ci_ssh")) | select((.change.actions // []) | index("create"))] | length' tfplan.json 2>/dev/null || echo unreadable)
+            if [[ "$minted" != "0" ]]; then
+              echo "::error::ci_ssh outputs are empty but this plan mints a ci_ssh Access token (minted=${minted}); the new pair would never reach Doppler. Re-run with apply_target=manual-rerun."
+              exit 1
+            fi
+            echo "::warning::ci_ssh_access_service_token outputs empty and this plan minted no ci_ssh token (a -target= run); nothing to sync."
+            exit 0
+          fi
+          printf '::add-mask::%s\n' "$CLIENT_ID"
+          printf '::add-mask::%s\n' "$CLIENT_SECRET"
+          # 2>&1 too: Doppler prints the config table (#7133); a refusal surfaces as ::error:: (#4195).
+          pub() { doppler secrets set "$1" --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1 || { echo "::error::Doppler refused the $1 write (stderr dropped: it prints the config table)"; exit 1; }; }
+          printf '%s' "$CLIENT_ID" | pub CI_SSH_ACCESS_TOKEN_ID
+          printf '%s' "$CLIENT_SECRET" | pub CI_SSH_ACCESS_TOKEN_SECRET
+          unset CLIENT_ID CLIENT_SECRET
+          echo "Synced CI_SSH_ACCESS_TOKEN_ID/_SECRET to Doppler prd_terraform."
+
       # #9294 PR-2 (Ruled by CTO agent, 2026-10-23): the apply is `-target`ed, and a targeted plan does not prune the
       # two deleted deploy-token root outputs, so their stored values may stay in state. Observe only (boolean, no
       # values, never fails the job): if they persist, the old Access token is treated as exposed and rotated first.
@@ -987,6 +1039,7 @@ jobs:
           esac
 
       - name: Verify tunnel ingress origins are live and origin-relative
+        id: tunnel_verify
         if: success()
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -994,72 +1047,6 @@ jobs:
         run: |
           set -euo pipefail
           bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh"
-
-      # Bootstrap-cycle guard (#4195): on the FIRST apply that creates
-      # `github_actions_secret.doppler_token_write`, the runner started
-      # before the secret existed — interpolation returns empty for
-      # that one run because GH Actions resolves secrets at job-start,
-      # not step-start. The warning is non-fatal; the operator re-fires
-      # the workflow once after first merge via `gh workflow run
-      # apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun`
-      # (either form works — `apply_target` declares `default: manual-rerun`, which
-      # already satisfies the job's `inputs.apply_target == 'manual-rerun'` gate.
-      # Passing it explicitly is self-documenting, not required. #7539 briefly
-      # asserted the bare form does not run the job; that was false.)
-      # The local-fallback script
-      # `apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh`
-      # remains available as backup. Operator follow-through obligation
-      # is tracked separately as a `follow-through` GH issue per
-      # `wg-block-pr-ready-on-undeferred-operator-steps`.
-      - name: Verify DOPPLER_TOKEN_WRITE present
-        id: doppler_write_check
-        env:
-          DOPPLER_TOKEN_WRITE_CHECK: ${{ secrets.DOPPLER_TOKEN_WRITE }}
-        run: |
-          set -euo pipefail
-          if [[ -z "$DOPPLER_TOKEN_WRITE_CHECK" ]]; then
-            echo "::warning::DOPPLER_TOKEN_WRITE not yet present — this is expected on the first apply that creates it. Subsequent applies will use the synced token. If you see this on the second+ run, manually trigger one more apply via gh workflow run."
-            echo "skip_sync=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip_sync=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Sync CF Access CI-SSH service token to Doppler
-        # Reads the new sensitive outputs produced by the
-        # `cloudflare_zero_trust_access_service_token.ci_ssh` resource
-        # and writes them into Doppler prd_terraform so the sibling
-        # `apply-deploy-pipeline-fix.yml` workflow can pull them at run
-        # time without an operator handoff step (closes #4177 P1).
-        # Idempotent — doppler-secrets-set overwrites in place.
-        # Uses the in-band-minted write-capable service token (post-#4195
-        # — see apps/web-platform/infra/doppler-write-token.tf) — every
-        # other step in this workflow consumes the existing read-only
-        # token.
-        if: steps.doppler_write_check.outputs.skip_sync != 'true'
-        working-directory: ${{ env.INFRA_DIR }}
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WRITE }}
-        run: |
-          set -euo pipefail
-          CLIENT_ID=$(terraform output -raw ci_ssh_access_service_token_client_id 2>/dev/null || true)
-          CLIENT_SECRET=$(terraform output -raw ci_ssh_access_service_token_client_secret 2>/dev/null || true)
-          if [[ -z "$CLIENT_ID" || -z "$CLIENT_SECRET" ]]; then
-            echo "::warning::ci_ssh_access_service_token outputs missing or empty — likely a -target= run that skipped the SSH-access resources. Falling back to operator sync."
-            exit 0
-          fi
-          printf '::add-mask::%s\n' "$CLIENT_ID"
-          printf '::add-mask::%s\n' "$CLIENT_SECRET"
-          # `--silent` suppresses doppler's success-path value-echo;
-          # stderr is intentionally NOT redirected so permission-denied
-          # / quota / network errors surface in the GH Actions log (the
-          # original #4195 failure was masked by a `>/dev/null 2>&1`
-          # redirect on these two lines).
-          printf '%s' "$CLIENT_ID" \
-            | doppler secrets set CI_SSH_ACCESS_TOKEN_ID --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
-          printf '%s' "$CLIENT_SECRET" \
-            | doppler secrets set CI_SSH_ACCESS_TOKEN_SECRET --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
-          unset CLIENT_ID CLIENT_SECRET
-          echo "Synced CI_SSH_ACCESS_TOKEN_ID/_SECRET to Doppler prd_terraform."
 
       # --- #4844: token-gated SSH apply of the SSH-provisioned server.tf set ---
       # Runs AFTER the post-apply token sync above (shape B) so a from-scratch
@@ -1535,9 +1522,7 @@ jobs:
           # diagnosis, silently unreachable, which is the defect class this job exists to end.
           set +e
 
-          # The `apply` job declares no `outputs:`, and on the CANCELLED path — the path this job
-          # exists for — job outputs would be unreliable even if it did. So everything below comes
-          # from the jobs API under `actions: read`, which is the only channel that works there.
+          # Job outputs are unreliable on the CANCELLED path, so all but the tunnel-cause `case` come from the jobs API.
           resp="$RUNNER_TEMP/apply-jobs.json"
           # --paginate: a first-page-only read would silently drop the `apply`
           # job and degrade the email's step name to "unresolved" (#9245 sweep).
@@ -1615,6 +1600,19 @@ jobs:
           else
             action_msg='this run FAILED on the step named above. Read the run first: a re-dispatch will most likely fail in the same place, so the command below is a retry, not a diagnosis.'
           fi
+          # The cause picks a sentence; never interpolated.
+          case "${TUNNEL_VERIFY_CAUSE:-}" in
+            no-connector)
+              action_msg="${action_msg} <strong>Cause: no-connector.</strong> 0 tunnel connections, so deploy./ssh./registry. are dark; the change applied. Expected on the first apply after the tunnel moved; otherwise the connector is down." ;;
+            origin-not-serving)
+              action_msg="${action_msg} <strong>Cause: origin-not-serving.</strong> The tunnel has a connector, but web-1's webhook (:9000) did not answer 200." ;;
+            connections-unreadable)
+              action_msg="${action_msg} <strong>Cause: connections-unreadable.</strong> deploy-status failed and the connection count could not be read." ;;
+            access-refused)
+              action_msg="${action_msg} <strong>Cause: access-refused.</strong> deploy-status got Access's refusal (stamp or login redirect); origin not reached." ;;
+            origin-refused)
+              action_msg="${action_msg} <strong>Cause: origin-refused.</strong> deploy-status got an unstamped 403: web-1's webhook refused the HMAC; check the webhook secret's parity." ;;
+          esac
 
           # A RANDOM heredoc delimiter: a fixed one is forgeable by a value that contains it.
           delim="cause-$(openssl rand -hex 12 2>/dev/null || printf '%s' "${GITHUB_RUN_ID}${RANDOM}")"
@@ -1635,6 +1633,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PREFLIGHT_RESULT: ${{ needs.preflight.result }}
           APPLY_RESULT: ${{ needs.apply.result }}
+          TUNNEL_VERIFY_CAUSE: ${{ needs.apply.outputs.tunnel_verify_cause }}
 
       - name: Email ops on a non-green apply run
         # `always()`, for the same reason the `cause` step carries it (#7654 A1). Without it this
@@ -6295,20 +6294,12 @@ jobs:
           # Enumerate what the plan will actually CHANGE. `-target` is transitive on
           # dependencies, so the flag list above is a request; this is the proof.
           # A no-op resource carries actions == ["no-op"] and is not a change.
-          # The heredoc body is indented INTO the YAML block scalar on purpose. YAML
-          # strips the block's common indentation before bash ever sees it, so the
-          # `PY` terminator lands at column 0 as an unindented heredoc requires. A
-          # body written flush-left here would instead END the block scalar and break
-          # the workflow's YAML parse — a failure that looks nothing like its cause.
+          # The heredoc body is indented on purpose: YAML strips it, so `PY` lands at column 0.
           python3 - "$RUNNER_TEMP/ci-ssh-plan.json" <<'PY'
           import json, sys
 
           plan = json.load(open(sys.argv[1]))
-          # `["read"]` is a deferred DATA-SOURCE read, not a mutation. Filtering only
-          # no-op would fail this gate on a plan that merely resolves a data source —
-          # bricking the ONE in-band recovery arm at the moment it is needed. The root
-          # has data sources (git-data.tf, zot-registry.tf) that -target prunes today,
-          # so this is one `data` block away from mattering.
+          # `["read"]` is a deferred data-source read, not a mutation; refusing it would brick this arm.
           changes = [
               (c["address"], c["change"]["actions"])
               for c in plan.get("resource_changes", [])
@@ -6316,21 +6307,8 @@ jobs:
           ]
 
           REPLACE_TARGET = "cloudflare_zero_trust_access_service_token.ci_ssh"
-          # A WHITELIST, deliberately — and it is the whole reason the -target set has to
-          # stay fixed. A general -replace input would force this down to a blacklist,
-          # which is the weaker construct: a prefix list misses `module.x.hcloud_server.web`
-          # (it does not start with "hcloud_"), while an allowlist catches every address
-          # it does not name, module-nested or otherwise. The earlier draft carried BOTH
-          # an allowlist and a FORBIDDEN_PREFIXES list; the prefix list was strictly
-          # subsumed — every address it caught, the allowlist caught too — so it bought a
-          # different error string and an illusion of depth. Removed.
-          #
-          # `access_application.ssh` is here because -target is transitive on
-          # DEPENDENCIES: the policy's include references the application's id
-          # (tunnel.tf), so any drift on it (a dashboard edit to session_duration — and
-          # note this credential was itself rotated by hand in that dashboard) puts it in
-          # the plan. Omitting it made the gate fail CLOSED on the remedy, which is the
-          # "a gate that always fails is an outage, not a tripwire" shape.
+          # An allowlist (a prefix blacklist misses module-nested addresses). The ssh app is listed because
+          # -target pulls it in transitively (the policy references it); omitting it fails the remedy closed.
           ALLOWED = {
               REPLACE_TARGET,
               "cloudflare_zero_trust_access_policy.ci_ssh_service_token",
@@ -6352,22 +6330,30 @@ jobs:
                         "ci_ssh token may be replaced.".format(addr, ",".join(actions)))
                   failed = True
 
-          # The token must actually be replaced. A plan with zero replaces means the
-          # -replace silently did nothing — applying it would report success and repair
-          # nothing, which is the failure shape this whole issue is about.
-          token = "cloudflare_zero_trust_access_service_token.ci_ssh"
+          # The token must actually be replaced: zero replaces means -replace did nothing, and the apply would repair nothing.
+          token = REPLACE_TARGET
           token_actions = [a for addr, a in changes if addr == token]
           if not token_actions:
               print("::error::blast-radius gate: {} is absent from the plan — nothing would "
                     "be re-minted. Is it in state?".format(token))
               failed = True
           elif sorted(token_actions[0]) != ["create", "delete"]:
-              # sorted() normalizes both orders: create_before_destroy = true yields
-              # ["create","delete"], a plain replace yields ["delete","create"]. Either is
-              # a replace; anything else (a bare update, a lone create) is not.
+              # sorted(): create_before_destroy and a plain replace order the pair differently; both are a replace.
               print("::error::blast-radius gate: expected the token to be replaced "
                     "(create+delete), got {}.".format(token_actions[0]))
               failed = True
+          # The policy may only re-point its one token (one include, no other key known or unknown); the app may not change.
+          L = lambda v: [x if isinstance(x, dict) else {"?": 1} for x in (v if isinstance(v, list) else [v] if v else [])]
+          for c in plan.get("resource_changes", []):
+              a, b, u = (c["change"].get(k) or {} for k in ("after", "before", "after_unknown"))
+              i, ui = L(a.get("include")), L(u.get("include"))
+              if c["address"] in ALLOWED and (c["type"].endswith("policy") and (a.get("decision") != "non_identity"
+                      or len(i) != 1 or len(ui) > 1 or any(v for x in i + ui for k, v in x.items() if k != "service_token")
+                      or not (len(i[0].get("service_token") or []) == 1 or ui and ui[0].get("service_token") is True))
+                      or c["type"].endswith("application") and any(a.get(k) != b.get(k) or u.get(k) for k in
+                      ("type", "domain", "policies", "options_preflight_bypass", "session_duration"))):
+                  print("::error::blast-radius gate: {} widens past its token.".format(c["address"]))
+                  failed = True
 
           if failed:
               sys.exit(1)
@@ -6387,14 +6373,8 @@ jobs:
             terraform apply -no-color -input=false -auto-approve tfplan 2>&1 | tf_redact_random_ids
 
       - name: Sync the new CI-SSH service token to Doppler
-        # WITHOUT THIS THE ARM IS A NO-OP THAT LOOKS LIKE A FIX: the freshly minted
-        # secret exists only in Cloudflare and in terraform state until it is
-        # published to Doppler, which is where every consumer reads it from. Mirrors
-        # the `apply` job's sync step, but is NOT allowed to `exit 0` on empty output
-        # the way that one does — there the warning covers a legitimate -target run
-        # that skipped these resources; here they are the entire point, so empty
-        # outputs mean the replace did not produce a credential and the operator must
-        # not be told it succeeded.
+        # Without this the arm is a no-op that looks like a fix: the minted secret is only in Cloudflare
+        # and state until published. Unlike the `apply` job's sync, empty outputs always fail here.
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WRITE }}
@@ -6410,17 +6390,14 @@ jobs:
             echo "::error::ci_ssh_access_service_token outputs are empty after the replace. Cloudflare returns client_secret ONLY at create, so a plain re-apply cannot re-derive it — re-dispatch this arm to mint again."
             exit 1
           fi
-          # RECOVERY NOTE for a failure BELOW this point (the two publish calls): the new
-          # secret is already in Terraform state, so the cheap fix is to re-run the publish
-          # — `apply_target=manual-rerun` re-syncs the same value via the `apply` job's own
-          # sync step. Do NOT re-dispatch this arm: that destroys a working credential to
-          # recover from a failed write. The earlier draft's message said the opposite.
+          # A failure BELOW this point: the new secret is in state, so `apply_target=manual-rerun` re-syncs
+          # it. Do NOT re-dispatch this arm (it destroys a working credential to recover from a failed write).
           printf '::add-mask::%s\n' "$CLIENT_ID"
           printf '::add-mask::%s\n' "$CLIENT_SECRET"
-          printf '%s' "$CLIENT_ID" \
-            | doppler secrets set CI_SSH_ACCESS_TOKEN_ID --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
-          printf '%s' "$CLIENT_SECRET" \
-            | doppler secrets set CI_SSH_ACCESS_TOKEN_SECRET --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1
+          # 2>&1 too: Doppler prints the config table (#7133); a refusal surfaces as ::error:: (#4195).
+          pub() { doppler secrets set "$1" --silent --no-interactive -p soleur -c prd_terraform >/dev/null 2>&1 || { echo "::error::Doppler refused the $1 write (stderr dropped: it prints the config table)"; exit 1; }; }
+          printf '%s' "$CLIENT_ID" | pub CI_SSH_ACCESS_TOKEN_ID
+          printf '%s' "$CLIENT_SECRET" | pub CI_SSH_ACCESS_TOKEN_SECRET
           unset CLIENT_ID CLIENT_SECRET
           echo "Published CI_SSH_ACCESS_TOKEN_ID/_SECRET to Doppler prd_terraform."
 

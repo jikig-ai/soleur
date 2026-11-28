@@ -562,6 +562,51 @@ function isWorkflowSaturationError(err) {
 // <!-- harness-model-map:end -->
 // ---------------------------------------------------------------------------
 
+// Spawned-agent seat liveness & bounded 1x recovery (#12524, ADR-332).
+const escalatedSeats = []
+const recoveredSeats = []
+function safeSeatId(raw) {
+  return String(raw).replace(/[^A-Za-z0-9:._-]/g, '_').slice(0, 128) || 'seat'
+}
+function classifySeatError(err) {
+  if (!err) return 'truncated'
+  return isWorkflowSaturationError(err) ? 'rate_limit' : 'crash'
+}
+async function runReviewSeat(dim, thunk) {
+  const seatId = safeSeatId(`review:${dim}`)
+  let res = null
+  let lastErr = null
+  try {
+    res = await thunk()
+  } catch (err) {
+    lastErr = err
+    res = null
+  }
+  if (res && Array.isArray(res.findings)) return res
+  const cls1 = classifySeatError(lastErr)
+  if (!budgetOk()) {
+    log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls1} action=escalate attempt=0 fallback_tier=none reviewed_coverage=degraded`)
+    escalatedSeats.push(seatId)
+    return { findings: [] }
+  }
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls1} action=respawn attempt=1 fallback_tier=same reviewed_coverage=full`)
+  lastErr = null
+  try {
+    res = await thunk()
+  } catch (err) {
+    lastErr = err
+    res = null
+  }
+  if (res && Array.isArray(res.findings)) {
+    recoveredSeats.push(seatId)
+    return res
+  }
+  const cls2 = classifySeatError(lastErr)
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls2} action=escalate attempt=1 fallback_tier=none reviewed_coverage=degraded`)
+  escalatedSeats.push(seatId)
+  return { findings: [] }
+}
+
 phase('Classify')
 log('tier pins: classify→standard, file→cheap (mechanical steps per ADR-053; judgment steps inherit the session model)')
 // Pinned 'standard': schema-constrained diff-class classification is mechanical (ADR-053).
@@ -599,12 +644,14 @@ log(
 const perDimension = await pipeline(
   dims,
   (dim) =>
-    agent(DIMENSIONS[dim].prompt ? DIMENSIONS[dim].prompt() : reviewPrompt(dim), {
-      label: `review:${dim}`,
-      phase: 'Review',
-      schema: FINDINGS_SCHEMA,
-      agentType: DIMENSIONS[dim].agentType, // undefined for tool/skill dims → default agent
-    }),
+    runReviewSeat(dim, () =>
+      agent(DIMENSIONS[dim].prompt ? DIMENSIONS[dim].prompt() : reviewPrompt(dim), {
+        label: `review:${dim}`,
+        phase: 'Review',
+        schema: FINDINGS_SCHEMA,
+        agentType: DIMENSIONS[dim].agentType, // undefined for tool/skill dims → default agent
+      }),
+    ),
   (review, dim) =>
     parallel((review?.findings || []).map((f) => () => (DIMENSIONS[dim].deterministic ? Promise.resolve(autoConfirm(f, dim)) : verifyFinding(f, dim)))),
 )
@@ -683,13 +730,16 @@ const report = {
   riskTier,
   tierSource,
   tierMismatch,
-  seatsSpawned: dims.length,
+  seatsSpawned: dims.length + recoveredSeats.length + escalatedSeats.length,
+  recoveredSeats,
+  escalatedSeats,
+  reviewedCoverage: escalatedSeats.length ? 'degraded' : 'full',
   dimensionsRun: { alwaysOn, conditional },
   // #9403: pipeline-tally bridge — invoking prose posts `counts.seats` via
   // `pipeline-tally.sh incr seats <n>`. seats = dimension agents spawned
-  // (alwaysOn + conditional); skeptic verifiers are per-finding sub-checks,
-  // not seats.
-  counts: { seats: alwaysOn.length + conditional.length },
+  // (alwaysOn + conditional + 1x recovery attempts); skeptic verifiers are
+  // per-finding sub-checks, not seats.
+  counts: { seats: alwaysOn.length + conditional.length + recoveredSeats.length + escalatedSeats.length },
   skepticsPerFinding: SKEPTICS,
   budget: { total: budget.total, spent: budget.spent(), droppedVerification },
   totals: {

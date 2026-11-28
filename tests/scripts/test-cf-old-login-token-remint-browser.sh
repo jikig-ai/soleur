@@ -27,12 +27,22 @@
 #             and sink failures (down, refused, not "ok", redirected) run the cleanup and never reach the sink;
 #             the cleanup re-lists by name after ANY post-POST failure (error, non-JSON, bad id, throw) and
 #             reports success:true only on a verified-clean re-list; the happy path hands the value off once.
+#             The token POST is ONE Node-side page.request.post (JSON body, maxRedirects 0, failOnStatusCode
+#             false, answer never read as text, disposed); the stub answers an in-page POST or DELETE with the
+#             dashboard edge's HTML 403 (measured 2026-11-26 and 2026-11-28), so an in-page write cannot pass.
 #   P-read    p5-read.js: groups (account and user scope), policies (names, counts, key kinds only), every
 #             refusal, GET only.
 #   P-sink    binds 127.0.0.1 only; serves one request then no listener; refuses a 127.0.0.2 peer, a wrong
 #             path, an Origin header, a GET, a short Content-Length, a bad body; times out; a failed fsync
 #             unlinks the file and refuses `write`; writes mode 0600; refuses an --out that exists, is
 #             relative, has no parent, or sits in a git work tree (a .git directory or a .git FILE).
+#   P-wait    each body waits once, after its last goto, for window.bootstrap.atok (set ~283 ms after
+#             DOMContentLoaded, measured 2026-11-28, recorded in
+#             knowledge-base/project/plans/archive/20261128-131628-2026-11-28-fix-p5-browser-bodies-wait-for-atok-plan.md) with a
+#             timeout in [1000, 30000] ms, interval polling below it, and a condition that is true only when
+#             the atok is set (L1-L3); a signed-out page still returns {atok:false} (M3, R6, D7).
+#   P-holds   the archived plan's Operator Holds equal the runbook's section 6 holds, modulo an exact
+#             sha256=<64 hex> value (CTO F5; the archived plan is never edited on a re-pin).
 #   P-compose the runbook's section 5 composition line (read from the runbook, placeholders filled) yields a
 #             run file that the browser_run_code_unsafe wrapping runs, byte-equal to
 #             `(<body>)(JSON.parse(<json string>))`; a JavaScript-expression argument is DATA: refused at jq
@@ -61,6 +71,15 @@
 #   XM9 old-owner-login refusal deleted -> M18b         XM10 owner user posts to the account endpoint -> M18a
 #   XM11 the cleanup ignores the answered id (a drifted stored name survives) -> M7h
 #   XS1 sink peer check deleted -> S2b                  XS2 sink keeps a partial file on a failed fsync -> S8
+#   XW1 the read wait deleted -> L1     XW2 the mint wait deleted -> L2     XW3 the revoke wait deleted -> L3
+#   XW4 the read wait's .catch dropped -> D7 ({error:TimeoutError})
+#   XW5 the read wait moved above its goto -> L1   XW6 a second goto after the revoke wait -> L3
+#   XW7 the read wait timeout 15 ms -> L1          XW8 the read wait polls 'raf' -> L1
+#   XW9 the read wait called with two arguments (no options) -> L1
+#   XW10 the read wait condition true before the atok (!!window.bootstrap) -> L1
+#   XW11 the mint wait's .catch dropped -> M3      XW12 the revoke wait's .catch dropped -> R6
+#   XH1 wording after the sha on a sha-bearing runbook hold edited -> the sha-normalized hold compare
+#   XC1 a runbook sha written outside the <body> (sha256=<hex>) form -> the runbook citation check
 #   Instrument: XL1 a revoke return that bypasses the guard and carries the atok -> R1 (P-shape);
 #               XL2 an in-page function closing over a Node-side variable -> R1 (page serialization);
 #               XL3 a read return that bypasses the guard with resource keys -> D5 (P-shape)
@@ -218,7 +237,7 @@ function makeWorld(over = {}) {
     ],
     pageCap: 5, noTotal: false, endless: false, log: [], gotos: [], deletes: [], sinkCalls: [], pageConsole: [],
     mintResp: null, mutateStored: null, sinkMode: 'ok', deleteResp: null, listFail: false, throwOnReadback: false,
-    onGetToken: null, win: null,
+    onGetToken: null, onList: null, win: null, lateAtok: false, waits: [], postText: 0, postDisposed: 0,
     ...over,
   };
 }
@@ -232,6 +251,7 @@ function page(world) {
     const src = world.endless ? Array.from({ length: per }, (_, i) => ({ id: OTHER[i % OTHER.length], name: `endless-${i}` })) : arr;
     const slice = (world.endless ? src : src.slice((pg - 1) * per, pg * per)).map(({ value, ...t }) => t);
     const info = { page: pg, per_page: per, count: slice.length };
+    if (world.onList) world.onList(world, !world.endless && pg * per >= arr.length);   // (world, last page)
     if (!world.noTotal && !world.endless) info.total_count = arr.length;
     return json(200, { success: true, result: slice, result_info: info });
   };
@@ -252,21 +272,18 @@ function page(world) {
     const u = new URL(path, DASH);
     const method = (opts.method || 'GET').toUpperCase();
     const h = opts.headers || {};
-    world.log.push({ method, path: u.pathname, xatok: h['x-atok'] === world.atok, xcss: h['x-cross-site-security'] === 'dash', body: opts.body });
+    world.log.push({ method, path: u.pathname, xatok: h['x-atok'] === world.atok, xcss: h['x-cross-site-security'] === 'dash', body: opts.body, via: 'page' });
     if (u.origin !== DASH) throw new TypeError('cross-origin');
     if (h['x-atok'] !== world.atok) return json(403, { success: false, errors: [{ code: 10000 }] });
-    if (method === 'DELETE') return html(403);
+    // The dashboard edge answers an in-page write with an HTML 403 (DELETE measured 2026-11-26, the account
+    // token POST 2026-11-28); only the page's request context (page.request) gets through.
+    if (method !== 'GET') return html(403);
     const p = u.pathname;
     if (world.listFail && method === 'GET' && /\/tokens$/.test(p)) return json(403, { success: false, errors: [{ code: 9109 }] });
     if (method === 'GET' && p === `/api/v4/accounts/${NA}/tokens/permission_groups`) return json(200, { success: true, result: world.groups });
     if (method === 'GET' && p === '/api/v4/user/tokens/permission_groups') return json(200, { success: true, result: world.userGroups || world.groups });
     if (method === 'GET' && p === `/api/v4/accounts/${NA}/tokens`) return paged(world.acctTokens, u);
     if (method === 'GET' && p === '/api/v4/user/tokens') return paged(world.userTokens, u);
-    if (method === 'POST' && (p === `/api/v4/accounts/${NA}/tokens` || p === '/api/v4/user/tokens')) {
-      const b = JSON.parse(opts.body);
-      if (world.mintResp) return world.mintResp(() => create(p, b));
-      return create(p, b);
-    }
     const m = p.match(new RegExp(`^/api/v4/(?:accounts/${NA}|user)/tokens/([0-9a-f]{32})$`));
     if (method === 'GET' && m) {
       if (world.onGetToken) world.onGetToken(world);
@@ -276,18 +293,64 @@ function page(world) {
     }
     return json(404, { success: false });
   };
-  const win = { bootstrap: world.atok ? { atok: world.atok } : {} };
+  // lateAtok: the page loads with no window.bootstrap at all; the dashboard sets it only after
+  // DOMContentLoaded (measured 2026-11-28: ~283 ms later). Only waitForFunction installs it, after its first
+  // falsy poll, and every goto drops it again (a navigation is a new page), so a body that reads the atok
+  // without waiting, waits before its goto, navigates again after the wait, or waits on an unguarded
+  // condition (it throws on the missing key) cannot pass by accident.
+  const win = world.lateAtok ? {} : { bootstrap: world.atok ? { atok: world.atok } : {} };
   world.win = win;
   const pctx = vm.createContext({ window: win, location: { origin: world.origin }, fetch: dashFetch, console: rec, Headers, URL, JSON, Response });
   return {
-    async goto(url) { world.gotos.push(url); },
+    async goto(url) { world.gotos.push(url); if (world.lateAtok) delete win.bootstrap; },
     async evaluate(fn, arg) {
       if (typeof fn !== 'function') throw new TypeError('evaluate(fn)');
       const f = vm.runInContext(`(${fn.toString()})`, pctx);
       const r = await f(arg === undefined ? undefined : JSON.parse(JSON.stringify(arg)));
       return r === undefined ? undefined : JSON.parse(JSON.stringify(r));
     },
+    // Playwright's signature: waitForFunction(pageFunction, arg, options). Options are read from the THIRD
+    // parameter only, as Playwright does; a two-argument call records an undefined timeout and fails the L rows.
+    async waitForFunction(fn, arg, opts) {
+      if (typeof fn !== 'function') throw new TypeError('waitForFunction(fn)');
+      const f = vm.runInContext(`(${fn.toString()})`, pctx);
+      const wrec = { timeout: opts && opts.timeout, polling: opts && opts.polling, resolved: false,
+        src: fn.toString(), arg };
+      world.waits.push(wrec);
+      for (let i = 0; i < 3; i += 1) {
+        if (await f(arg === undefined ? undefined : JSON.parse(JSON.stringify(arg)))) { wrec.resolved = true; return true; }
+        if (i === 0 && world.lateAtok) win.bootstrap = { atok: world.atok };
+      }
+      const e = new Error('waitForFunction: timeout'); e.name = 'TimeoutError';
+      throw e;
+    },
     request: {
+      // The Node-side token POST. Records the request (in world.log, in order with the in-page calls) and answers
+      // a Playwright APIResponse; text() and dispose() are counted so a row can see a body read as text.
+      async post(url, opts = {}) {
+        const h = (opts && opts.headers) || {};
+        const u = new URL(url);
+        const data = opts.data === undefined ? undefined : JSON.parse(JSON.stringify(opts.data));
+        world.log.push({ method: 'POST', path: u.pathname, xatok: h['x-atok'] === world.atok,
+          xcss: h['x-cross-site-security'] === 'dash', ctJson: h['content-type'] === 'application/json',
+          body: JSON.stringify(data), via: 'node', maxRedirects: opts.maxRedirects, failOnStatusCode: opts.failOnStatusCode });
+        // As Playwright does, a disposed response's body can no longer be read.
+        const api = async (resp) => {
+          const body = await resp.text();
+          let disposed = false;
+          const live = () => { if (disposed) throw new Error('Response has been disposed'); };
+          return { status: () => resp.status, headers: () => ({ 'content-type': resp.headers.get('content-type') || '' }),
+            json: async () => { live(); return JSON.parse(body); }, text: async () => { live(); world.postText += 1; return body; },
+            body: async () => { live(); world.postText += 1; return Buffer.from(body); },
+            dispose: async () => { world.postDisposed += 1; disposed = true; } };
+        };
+        if (u.origin !== DASH) throw new TypeError('cross-origin');
+        if (h['x-atok'] !== world.atok) return api(json(403, { success: false, errors: [{ code: 10000 }] }));
+        const p = u.pathname;
+        if (!(p === `/api/v4/accounts/${NA}/tokens` || p === '/api/v4/user/tokens')) return api(json(404, { success: false }));
+        if (world.mintResp) return api(await world.mintResp(() => create(p, data)));
+        return api(create(p, data));
+      },
       async delete(url, opts = {}) {
         const h = (opts && opts.headers) || {};
         const u = new URL(url);
@@ -387,6 +450,20 @@ const must = (cond, why) => { if (!cond) throw new Error(why); };
 const want = (r, w) => must(eq(r, w), `want ${canon(w)} got ${canon(r)}`);
 const nothingSent = (w) => must(w.gotos.length === 0 && w.log.length === 0 && w.deletes.length === 0 && w.sinkCalls.length === 0, 'a request was made before the refusal');
 const listed = (list, name) => list.filter((t) => t.name === name).length;
+// The late-atok rows: one bounded, interval-polled wait on the atok itself. Its position after the last goto is
+// pinned by the stub (a goto drops the atok) and mutants XW5/XW6, not by an assertion here.
+const waitedOnce = (w) => {
+  must(w.waits.length === 1, `waitForFunction calls: ${w.waits.length}`);
+  const x = w.waits[0];
+  must(x.resolved === true, 'the wait condition never resolved (resolved:false)');
+  // Bounded, not pinned: a timeout near the measured ~283 ms delay would bring the false {atok:false} back.
+  must(Number.isFinite(x.timeout) && x.timeout >= 1000 && x.timeout <= 30000, `wait timeout ${x.timeout} is not in [1000, 30000] ms`);
+  must(typeof x.polling === 'number' && x.polling > 0 && x.polling < x.timeout, `wait polling ${x.polling} is not an interval below the timeout`);
+  // The condition itself, on fresh pages: false with no atok (a throw counts as false, as Playwright rejects), true with one.
+  const holds = (win) => { try { return !!vm.runInContext(`(${x.src})`, vm.createContext({ window: win }))(x.arg === undefined ? undefined : JSON.parse(JSON.stringify(x.arg))); } catch { return false; } };
+  must(!holds({}) && !holds({ bootstrap: {} }) && !holds({ bootstrap: { atok: '' } }) && holds({ bootstrap: { atok: 'x' } }),
+    'the wait condition is not "window.bootstrap.atok is set"');
+};
 
 // ---- p5-mint.js --------------------------------------------------------------------------------------------
 const MINT_P = { owner: 'account', account_id: NA, zone_id: NZ, name: 'cf_api_token_pagerules_read-soleur-20261204',
@@ -399,6 +476,17 @@ const MINT_U = { ...MINT_P, owner: 'user', refuse_ids: ['86aa993e', 'dd6d1427', 
 const ID8 = NEW_FULL.slice(0, 8);
 const JS = 'application/json';
 const posts = (w) => w.log.filter((l) => l.method === 'POST');
+// The token POST went through page.request (the edge refuses an in-page write, 2026-11-28), exactly once, with a
+// JSON body, no redirect followed and no throw on a 4xx; its answer was never read as text and was disposed.
+const nodeSidePost = (w) => {
+  must(!w.log.some((l) => l.method === 'POST' && l.via === 'page'), 'an in-page POST');
+  const p = posts(w);
+  must(p.length === 1 && p[0].via === 'node' && p[0].ctJson, 'the token POST is not one Node-side JSON POST');
+  must(p[0].maxRedirects === 0, `the token POST maxRedirects is ${p[0].maxRedirects}, not 0`);
+  must(p[0].failOnStatusCode === false, 'the token POST does not set failOnStatusCode:false');
+  must(w.postText === 0, 'the token POST answer was read as text');
+  must(w.postDisposed === 1, 'the token POST answer was not disposed');
+};
 const userLogin = () => makeWorld({ userTokens: OTHER.slice(0, 7).map((id, i) => ({ id, name: `other-${i}`, status: 'active' })) });
 
 row('M1 pagerules mint: one zone policy on the zone key, scope-resolved group (decoy listed first), value to the sink once', async () => {
@@ -408,6 +496,7 @@ row('M1 pagerules mint: one zone policy on the zone key, scope-resolved group (d
   want(r, { status: 200, contentType: JS, success: true, id8: ID8 });
   must(w.gotos[0] === `${DASH}/profile/api-tokens`, 'no goto to /profile/api-tokens first');
   const p = posts(w); must(p.length === 1 && p[0].xatok && p[0].xcss && p[0].path === `/api/v4/accounts/${NA}/tokens`, 'POST count, path or headers');
+  nodeSidePost(w);
   const b = JSON.parse(p[0].body);
   must(eq(b.policies, [{ effect: 'allow', permission_groups: [{ id: G.pagerules }], resources: { [ZK]: '*' } }]), 'policies');
   must(b.expires_on === MINT_P.expires_on && b.name === MINT_P.name, 'name/expiry');
@@ -517,6 +606,19 @@ row('M10 the POST answers a JSON 403 and stores nothing -> {refused:mint, status
   const i = w.log.findIndex((l) => l.method === 'POST');
   must(w.log.slice(i + 1).some((l) => l.method === 'GET' && l.path === `/api/v4/accounts/${NA}/tokens`), 'no re-list after the POST');
   must(w.deletes.length === 0 && w.sinkCalls.length === 0, 'cleanup DELETE or sink');
+  nodeSidePost(w);
+});
+row('M10b the Node-side POST answers an HTML 403 (the edge refusal, measured in-page 2026-11-28) -> {refused:mint, 403 text/html}, re-list clean', async () => {
+  const w = makeWorld({ mintResp: () => html(403) });
+  const r = await exec('mint', MINT_P, w);
+  want(r, { refused: 'mint', status: 403, contentType: 'text/html', matches: 0, success: true });
+  must(w.deletes.length === 0 && w.sinkCalls.length === 0, 'cleanup DELETE or sink');
+  nodeSidePost(w);
+});
+row('M19 the atok is gone just before the POST -> {atok:false}, no POST sent', async () => {
+  const w = makeWorld({ onList: (x, last) => { if (last) x.win.bootstrap = {}; } });
+  const r = await exec('mint', MINT_P, w);
+  want(r, { atok: false }); must(posts(w).length === 0 && w.deletes.length === 0 && w.sinkCalls.length === 0, 'a POST, DELETE or sink call');
 });
 row('M11 a POST that stores the token but answers no value -> {refused:mint-shape}, deleted by name', async () => {
   const w = makeWorld({ mintResp: (create) => { create(); return json(200, { success: true, result: { id: NEW_FULL, name: MINT_P.name } }); } });
@@ -604,6 +706,7 @@ row('M18a owner user: list, POST, read-back at /user/tokens; account groups keep
   const r = await exec('mint', { ...MINT_A, owner: 'user', refuse_ids: MINT_U.refuse_ids }, w);
   want(r, { status: 200, contentType: JS, success: true, id8: ID8 });
   const p = posts(w); must(p.length === 1 && p[0].path === '/api/v4/user/tokens', 'POST path');
+  nodeSidePost(w);
   must(w.userTokens.some((t) => t.id === NEW_FULL) && !w.acctTokens.some((t) => t.id === NEW_FULL), 'stored under the wrong owner');
   must(w.log.some((l) => l.method === 'GET' && l.path === `/api/v4/user/tokens/${NEW_FULL}`), 'no user read-back');
   must(!w.log.some((l) => l.path === `/api/v4/accounts/${NA}/tokens` || l.path.startsWith(`/api/v4/accounts/${NA}/tokens/${ID8}`)), 'touched the account token endpoints');
@@ -839,6 +942,25 @@ row('D7 read: signed out -> {atok:false}; off-origin -> {refused:origin}; list 4
   w = makeWorld({ origin: 'https://evil.example' }); want(await exec('read', { what: 'policies', scope: 'user', pin: PIN_P }, w), { refused: 'origin' });
   w = makeWorld({ listFail: true }); want(await exec('read', { what: 'policies', scope: 'user', pin: PIN_P }, w), { status: 403, contentType: JS, success: false });
 });
+// ---- the late atok (2026-11-28): window.bootstrap.atok is set ~283 ms after DOMContentLoaded --------------
+row('L1 read groups, atok set only after DOMContentLoaded -> the normal groups answer, not {atok:false}', async () => {
+  const w = makeWorld({ lateAtok: true }); const r = await exec('read', { what: 'groups', scope: 'account', acct: NA }, w);
+  must(r.success === true, `got ${canon(r)}`); // short: the full want below is longer than the 400-char FAIL text
+  want(r, { success: true, groups: GROUPS_OUT, skipped: 0 });
+  waitedOnce(w);
+});
+row('L2 mint, atok set only after DOMContentLoaded -> minted, value to the sink once', async () => {
+  const w = makeWorld({ lateAtok: true }); const r = await exec('mint', MINT_P, w);
+  want(r, { status: 200, contentType: JS, success: true, id8: ID8 });
+  must(w.sinkCalls.length === 1 && w.sinkCalls[0].body === VALUE, 'sink hand-off');
+  waitedOnce(w);
+});
+row('L3 revoke, atok set only after DOMContentLoaded -> the one match deleted', async () => {
+  const w = makeWorld({ lateAtok: true }); const r = await exec('revoke', REV, w);
+  want(r, DEL_OK);
+  must(w.deletes.length === 1 && w.deletes[0].okHdr && w.deletes[0].path === `/api/v4/user/tokens/${OLD_P}`, 'delete');
+  waitedOnce(w);
+});
 [['object', null], ['unknown', { what: 'groups', scope: 'user', extra: 1 }], ['what', { what: 'tokens', scope: 'user' }],
   ['scope', { what: 'groups', scope: 'zone' }], ['acct', { what: 'groups', scope: 'account' }], ['acct', { what: 'groups', scope: 'user', acct: NA }],
   ['pin', { what: 'groups', scope: 'user', pin: PIN_P }], ['scope', { what: 'policies', scope: 'account', pin: PIN_P }],
@@ -1053,24 +1175,34 @@ OUT="$(cd "$MDIR" && sha256sum -c p5-browser.sha256 2>&1)"; check "p5-browser.sh
 OUT="$(awk '{print $2}' "$MANIFEST" | sort | tr '\n' ' ')"
 [[ "$OUT" == "p5-mint.js p5-read.js p5-revoke.js p5-sink.py " ]]; check "the manifest lists exactly p5-mint.js, p5-read.js, p5-revoke.js, p5-sink.py" $?
 [[ "$(awk 'NF!=2 || $1 !~ /^[0-9a-f]{64}$/' "$MANIFEST" | wc -l)" -eq 0 ]]; check "every manifest line is <sha256>  <file>" $?
-cites=0; bad_cite=0; OUT="runbook unreadable: $RUNBOOK"
-if [[ -r "$RUNBOOK" ]]; then
-  OUT=""
-  while read -r f h; do
-    cites=$((cites + 1))
-    have="$(sha256sum "$MDIR/$f" 2>/dev/null | awk '{print $1}')"
-    [[ -n "$have" && "$h" == "$have" ]] || { bad_cite=1; OUT="runbook cites $f sha256=$h, the file is $have"; }
-  done < <(perl -ne 'while (/\b(p5-(?:mint\.js|revoke\.js|read\.js|sink\.py))`?\s+\(?sha256=([0-9a-f]{64})\b/g) { print "$1 $2\n" }' "$RUNBOOK")
-  [[ "$cites" -ge 5 ]] || { bad_cite=1; OUT="only ${cites} sha256 citations in the runbook (floor 5)"; }
-else
-  bad_cite=1
-fi
-[[ "$bad_cite" -eq 0 ]]; check "the runbook is readable and its ${cites} sha256 citations (>= 5, both forms) each equal the file's sha256" $?
-# The plan's Operator Holds list is the approved list ship reads; it must be the runbook's section 6 holds verbatim.
+cite_check() { # <runbook>: sets cites, bad_cite, OUT
+  local rb="$1" f h have all64
+  cites=0; bad_cite=0; OUT="runbook unreadable: $rb"
+  if [[ -r "$rb" ]]; then
+    OUT=""
+    while read -r f h; do
+      cites=$((cites + 1))
+      have="$(sha256sum "$MDIR/$f" 2>/dev/null | awk '{print $1}')"
+      [[ -n "$have" && "$h" == "$have" ]] || { bad_cite=1; OUT="runbook cites $f sha256=$h, the file is $have"; }
+    done < <(perl -ne 'while (/\b(p5-(?:mint\.js|revoke\.js|read\.js|sink\.py))`?\s+\(?sha256=([0-9a-f]{64})\b/g) { print "$1 $2\n" }' "$rb")
+    # Every 64-hex value in the runbook must be such a citation, so none can sit outside the check.
+    all64="$(grep -aoE '[0-9a-f]{64}' "$rb" | wc -l)"
+    [[ "$cites" -eq "$all64" ]] || { bad_cite=1; OUT="the runbook carries ${all64} 64-hex values, ${cites} of them <body> sha256=<hex> citations"; }
+    [[ "$cites" -ge 5 ]] || { bad_cite=1; OUT="only ${cites} sha256 citations in the runbook (floor 5)"; }
+  else
+    bad_cite=1
+  fi
+}
+cite_check "$RUNBOOK"
+[[ "$bad_cite" -eq 0 ]]; check "the runbook is readable and its ${cites} sha256 citations (>= 5, both forms, every 64-hex value) each equal the file's sha256" $?
+# The archived plan's Operator Holds must keep the runbook's section 6 hold wording verbatim, except for an exact
+# sha256=<64 hex> value (CTO F5): the archived plan is never edited, so a body re-pin leaves it quoting a superseded
+# sha. The runbook's sha values are checked against the files by the citation check above; the plan's are not.
+holds_norm() { grep -a '^- Hold:' "$1" | sed -E 's/sha256=[0-9a-f]{64}/sha256=<pinned>/g'; }
 PLAN_FILE="$(find "${REPO_ROOT}/knowledge-base/project/plans" -name '*2026-11-27-chore-cf-phase5-old-login-token-remint-plan.md' | head -1)"
 OUT="plan unreadable: ${PLAN_FILE:-none}"
 if [[ -r "$PLAN_FILE" && -r "$RUNBOOK" ]]; then
-  ph="$(grep -a '^- Hold:' "$PLAN_FILE" || true)"; rh="$(grep -a '^- Hold:' "$RUNBOOK" || true)"
+  ph="$(holds_norm "$PLAN_FILE" || true)"; rh="$(holds_norm "$RUNBOOK" || true)"
   OUT="plan holds=$(grep -c . <<<"$ph") runbook holds=$(grep -c . <<<"$rh")"
   [[ -n "$rh" && "$ph" == "$rh" ]]
 else
@@ -1176,9 +1308,9 @@ killed_row() { # <mint> <revoke> <read> <row> <expected text>: the row is RED an
   fl="$(grep "^FAIL $4 " "$H_OUT" || true)"
   grep -qF -- "$5" <<<"$fl"
 }
-SCORED="R1,R1b,R2,R3,R4,R4c,R7b,R8u,R13c,R13d,M6,M6c,M7a,M7h,M9c,M16a,M16c,M16f,M17,M18a,M18b,D5"
+SCORED="R1,R1b,R2,R3,R4,R4c,R7b,R8u,R13c,R13d,M1,M6,M6c,M7a,M7h,M9c,M16a,M16c,M16f,M17,M18a,M18b,M19,D5,L1,L2,L3,D7,M3,R6"
 harness "$MINT" "$REVOKE" "$READ" P5_ONLY="$SCORED"
-if [[ "$(grep -c '^ok ' "$H_OUT")" -ne 22 ]] || grep -q '^FAIL ' "$H_OUT"; then
+if [[ "$(grep -c '^ok ' "$H_OUT")" -ne 30 ]] || grep -q '^FAIL ' "$H_OUT"; then
   printf 'HARNESS: a scored row is RED on the pristine bodies:\n' >&2; grep -v '^ok ' "$H_OUT" | cut -c1-300 >&2; exit 2
 fi
 SINK_PRISTINE="$SB/sink-pristine.err"
@@ -1215,10 +1347,50 @@ mut XM8 "30-day expiry floor deleted" mint "|| Date.parse(a.expires_on) < Date.n
 mut XM9 "old-owner-login refusal deleted" mint "if (old !== 0) return safe({ refused: 'old-owner-login', matches: old });" "" M18b '"refused":"old-owner-login"'
 mut XM10 "owner user posts to the account endpoint" mint "const base = a.owner === 'account' ?" "const base = a.owner ?" M18a 'want {"contentType":"application/json","id8":"c0ffee12","status":200,"success":true}'
 mut XM11 "cleanup by name only, not the answered id" mint "const ours = (t) => !!t && (t.name === a.name || (id !== null && t.id === id));" "const ours = (t) => !!t && t.name === a.name;" M7h 'cleanup DELETE'
+# The Node-side token POST (2026-11-28): the dashboard edge answers an in-page write with an HTML 403.
+mut XM12 "the token POST sent in-page again" mint "const mr = await postNode(base, {" "const mr = await call('POST', base, {" M1 'want {"contentType":"application/json","id8":"c0ffee12","status":200,"success":true}'
+mut XM13 "the token POST follows redirects" mint "data: body, failOnStatusCode: false, maxRedirects: 0," "data: body, failOnStatusCode: false," M1 'maxRedirects is undefined'
+mut XM14 "the token POST answer read as text" mint "parsed = await r.json();" "parsed = JSON.parse(await r.text());" M1 'read as text'
+mut XM15 "the token POST's own atok guard deleted" mint "if (!pgs.atok) return { atok: false };" "" M19 'want {"atok":false}'
+mut XM16 "the token POST answer disposed before it is read" mint "      const contentType = r.headers()['content-type'] || '';
+      let parsed" "      await r.dispose();
+      const contentType = r.headers()['content-type'] || '';
+      let parsed" M1 'want {"contentType":"application/json","id8":"c0ffee12","status":200,"success":true}'
 # Instrument rows: the P-shape/P-leak check and the page-serialization emulation must each catch a real slip.
 mut XL1 "a revoke return bypasses the guard and carries the atok" revoke "return safe({ status: r.status(), contentType, success });" "return { status: r.status(), contentType, success, atok: l.atok };" R1 'P-shape'
 mut XL2 "an in-page function closes over a Node-side variable" revoke "if (t.id.startsWith(prefix)) hits.push" "if (t.id.startsWith(a.pin)) hits.push" R1 'ReferenceError'
 mut XL3 "a read return bypasses the guard with resource keys" read "return safe({ success: true, policies, skipped });" "return { success: true, policies, skipped, keys: t.policies.map((p) => Object.keys(p.resources)) };" D5 'P-shape'
+# The late-atok wait (2026-11-28): each body's wait is load-bearing, and its .catch keeps signed-out a refusal.
+WAIT_LINE="    await page.waitForFunction(() => !!(window.bootstrap && window.bootstrap.atok), null, { timeout: 15000, polling: 100 }).catch(() => {});
+"
+mut XW1 "the read wait deleted" read "$WAIT_LINE" "" L1 '"atok":false'
+mut XW2 "the mint wait deleted" mint "$WAIT_LINE" "" L2 '"atok":false'
+mut XW3 "the revoke wait deleted" revoke "$WAIT_LINE" "" L3 '"atok":false'
+mut XW4 "the read wait's .catch dropped" read "polling: 100 }).catch(() => {});" "polling: 100 });" D7 '"error":"TimeoutError"'
+GOTO_LINE="    await page.goto(\`\${DASH}/profile/api-tokens\`, { waitUntil: 'domcontentloaded' });
+"
+mut XW5 "the read wait moved above its goto" read "$GOTO_LINE$WAIT_LINE" "$WAIT_LINE$GOTO_LINE" L1 '"atok":false'
+mut XW6 "a second goto after the revoke wait" revoke "$WAIT_LINE" "$WAIT_LINE$GOTO_LINE" L3 '"atok":false'
+mut XW7 "the read wait timeout 15 ms" read "timeout: 15000, polling: 100" "timeout: 15, polling: 100" L1 'wait timeout 15 '
+mut XW8 "the read wait polls 'raf'" read "timeout: 15000, polling: 100" "timeout: 15000, polling: 'raf'" L1 'wait polling raf'
+mut XW9 "the read wait called with two arguments" read "window.bootstrap.atok), null, { timeout" "window.bootstrap.atok), { timeout" L1 'wait timeout undefined'
+mut XW10 "the read wait condition true before the atok" read "() => !!(window.bootstrap && window.bootstrap.atok), null" "() => !!window.bootstrap, null" L1 'the wait condition is not'
+mut XW11 "the mint wait's .catch dropped" mint "polling: 100 }).catch(() => {});" "polling: 100 });" M3 '"error":"TimeoutError"'
+mut XW12 "the revoke wait's .catch dropped" revoke "polling: 100 }).catch(() => {});" "polling: 100 });" R6 '"error":"TimeoutError"'
+# Hold-wording parity (CTO F5): the sha-normalized compare still sees an edit AFTER the sha on a sha-bearing hold,
+# so a normalization that ate the rest of the line would be RED here.
+cp "$RUNBOOK" "$M/XH1.md"
+FROM=', signed in as the old-account-owner login, only after' TO=', only after' perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/' "$M/XH1.md"
+! cmp -s "$RUNBOOK" "$M/XH1.md"; check "XH1 lands" $?
+OUT="plan holds vs mutated runbook holds"
+[[ -r "$PLAN_FILE" && "$(holds_norm "$PLAN_FILE")" != "$(holds_norm "$M/XH1.md")" ]]
+check "XH1 (a runbook hold's wording edited) turns the hold compare RED" $?
+# Citation coverage: a sha written outside the <body> (sha256=<hex>) form is not silently uncited.
+cp "$RUNBOOK" "$M/XC1.md"
+FROM='retire the bad token with `p5-revoke.js` (sha256=' TO='retire the bad token with `p5-revoke.js` at sha256=' perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/' "$M/XC1.md"
+! cmp -s "$RUNBOOK" "$M/XC1.md"; check "XC1 lands" $?
+cite_check "$M/XC1.md"
+[[ "$bad_cite" -ne 0 && "$OUT" == *"64-hex values"* ]]; check "XC1 (a runbook sha outside the citation form) turns the citation check RED" $?
 # Sink mutants: scored only when the named row's FAIL line appears.
 sink_mut() { # <id> <label> <from> <to> <row FAIL prefix>
   local err="$M/$1.err"
@@ -1233,8 +1405,8 @@ sink_mut XS2 "sink keeps a partial file on a failed fsync" 'os.unlink(out)' 'pas
 # --- anti-vacuity floor: EXACT counts (reported directly, never through fail()) -----------------
 TOTAL=$((PASS + FAIL))
 SELFTEST_PASSES=1
-EXPECT_FULL=219
-EXPECT_MUTANTS=66
+EXPECT_FULL=262
+EXPECT_MUTANTS=104
 case "$MODE" in full) want_n="$EXPECT_FULL" ;; *) want_n="$EXPECT_MUTANTS" ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -ne "$want_n" ]]; then
   printf '  [FAIL] anti-vacuity floor: %s assertions ran in %s mode, the exact floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$want_n" >&2

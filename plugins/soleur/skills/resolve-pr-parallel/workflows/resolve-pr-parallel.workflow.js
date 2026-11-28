@@ -311,6 +311,32 @@ function isWorkflowSaturationError(err) {
 // <!-- harness-model-map:end -->
 // ---------------------------------------------------------------------------
 
+// Spawned-agent seat liveness & dirty-diff guard (#12524, ADR-332).
+const escalatedSeats = []
+function safeSeatId(raw) {
+  return String(raw).replace(/[^A-Za-z0-9:._-]/g, '_').slice(0, 128) || 'seat'
+}
+function classifySeatError(err) {
+  if (!err) return 'truncated'
+  return isWorkflowSaturationError(err) ? 'rate_limit' : 'crash'
+}
+async function runWritablePrResolverSeat(rawSeatId, thunk) {
+  const seatId = safeSeatId(rawSeatId)
+  let res = null
+  let lastErr = null
+  try {
+    res = await thunk()
+  } catch (err) {
+    lastErr = err
+    res = null
+  }
+  if (res) return res
+  const cls = classifySeatError(lastErr)
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls} action=verify_disk attempt=0 fallback_tier=none reviewed_coverage=degraded`)
+  escalatedSeats.push(seatId)
+  return null
+}
+
 const rounds = []
 let prNumber = prSelector ? Number(prSelector) : null
 let stopReason = null
@@ -376,12 +402,14 @@ for (let round = 1; round <= maxRounds; round++) {
   const resolutions = (
     await parallel(
       threads.map((t, i) => () =>
-        agent(resolvePrompt(t, i, round), {
-          label: `resolve:round-${round}:${i + 1}`,
-          phase: 'Resolve',
-          schema: RESOLVE_SCHEMA,
-          agentType: RESOLVER_AGENT_TYPE,
-        }),
+        runWritablePrResolverSeat(`resolve:round-${round}:${i + 1}`, () =>
+          agent(resolvePrompt(t, i, round), {
+            label: `resolve:round-${round}:${i + 1}`,
+            phase: 'Resolve',
+            schema: RESOLVE_SCHEMA,
+            agentType: RESOLVER_AGENT_TYPE,
+          }),
+        ),
       ),
     )
   ).filter(Boolean)
@@ -390,12 +418,11 @@ for (let round = 1; round <= maxRounds; round++) {
   // thread and is reused for the blocked-thread derivation below.
   const byThread = new Map(resolutions.map((r) => [safeThreadId(r.threadId), r]))
 
-  // Resolve threads that the resolver did not flag as blocked. A cannot-resolve
-  // thread stays open (so it re-surfaces next round / for a human); changed and
-  // no-change-needed both mean the reviewer's point is addressed.
+  // Resolve threads that the resolver did not flag as blocked and that did not crash.
+  // A crashed or cannot-resolve thread stays open (so it re-surfaces next round / for a human).
   const toResolve = threads.filter((t) => {
     const r = byThread.get(t.threadId)
-    return !r || r.status !== 'cannot-resolve'
+    return Boolean(r) && r.status !== 'cannot-resolve'
   })
 
   // --- Commit / resolve threads / push (serialized; one agent owns the index).
@@ -447,6 +474,8 @@ const report = {
   maxRounds,
   fanOutCap: maxComments,
   confirmed,
+  escalatedSeats,
+  reviewedCoverage: escalatedSeats.length ? 'degraded' : 'full',
   budget: { total: budget.total, spent: budget.spent() },
   // #9403: pipeline-tally bridge — invoking prose posts these via
   // `pipeline-tally.sh incr <dim> <n>`. agent_rounds = resolver agents actually

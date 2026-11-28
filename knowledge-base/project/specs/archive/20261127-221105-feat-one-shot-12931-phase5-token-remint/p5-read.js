@@ -16,7 +16,8 @@
 //                                                          GET /user/tokens/<id> of the ONE token whose id
 //                                                          starts with pin (the signed-in login's own tokens)
 //
-// FLOW. goto https://dash.cloudflare.com/profile/api-tokens (a fresh window.bootstrap.atok); in-page GETs with
+// FLOW. goto https://dash.cloudflare.com/profile/api-tokens (a fresh window.bootstrap.atok), then wait up to 15 s
+// for window.bootstrap.atok, which the dashboard sets after DOMContentLoaded (measured 2026-11-28); in-page GETs with
 // `x-atok` and `x-cross-site-security: dash` (the 2026-11-26 headers). The list ends on a page shorter than
 // per_page unless result_info.total_count says more; 20 pages without an end refuses `listing`.
 //
@@ -143,6 +144,7 @@
 
   try {
     await page.goto(`${DASH}/profile/api-tokens`, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => !!(window.bootstrap && window.bootstrap.atok), null, { timeout: 15000, polling: 100 }).catch(() => {});
 
     if (a.what === 'groups') {
       const r = await get(a.scope === 'account' ? `/api/v4/accounts/${a.acct}/tokens/permission_groups`

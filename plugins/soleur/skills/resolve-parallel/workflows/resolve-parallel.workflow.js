@@ -327,6 +327,33 @@ function isWorkflowSaturationError(err) {
 // <!-- harness-model-map:end -->
 // ---------------------------------------------------------------------------
 
+// Spawned-agent seat liveness & dirty-diff guard (#12524, ADR-332).
+// Writable resolver seats must never blindly auto-respawn over uncommitted diffs.
+const escalatedSeats = []
+function safeSeatId(raw) {
+  return String(raw).replace(/[^A-Za-z0-9:._-]/g, '_').slice(0, 128) || 'seat'
+}
+function classifySeatError(err) {
+  if (!err) return 'truncated'
+  return isWorkflowSaturationError(err) ? 'rate_limit' : 'crash'
+}
+async function runWritableResolverSeat(rawSeatId, thunk) {
+  const seatId = safeSeatId(rawSeatId)
+  let res = null
+  let lastErr = null
+  try {
+    res = await thunk()
+  } catch (err) {
+    lastErr = err
+    res = null
+  }
+  if (res) return res
+  const cls = classifySeatError(lastErr)
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls} action=verify_disk attempt=0 fallback_tier=none reviewed_coverage=degraded`)
+  escalatedSeats.push(seatId)
+  return null
+}
+
 phase('Analyze')
 log('tier pins: analyze→standard, commit→standard (mechanical steps per ADR-053; plan + resolvers inherit the session model)')
 // Pinned 'standard': TODO inventory extraction is mechanical (ADR-053).
@@ -404,12 +431,14 @@ for (let ti = 0; ti < tiers.length; ti++) {
             filesTouched: [],
           })
         }
-        return agent(resolvePrompt(item, ti, tiers.length), {
-          label: `resolve:t${ti + 1}:${item.id}`,
-          phase: 'Implement',
-          schema: RESOLVE_SCHEMA,
-          agentType: RESOLVER_AGENT_TYPE,
-        })
+        return runWritableResolverSeat(`resolve:t${ti + 1}:${item.id}`, () =>
+          agent(resolvePrompt(item, ti, tiers.length), {
+            label: `resolve:t${ti + 1}:${item.id}`,
+            phase: 'Implement',
+            schema: RESOLVE_SCHEMA,
+            agentType: RESOLVER_AGENT_TYPE,
+          }),
+        )
       }),
     )
   ).filter(Boolean)
@@ -460,6 +489,8 @@ return {
     droppedForBudget: droppedResolution.length,
   },
   budget: { total: budget.total, spent: budget.spent(), droppedResolution },
+  escalatedSeats,
+  reviewedCoverage: escalatedSeats.length ? 'degraded' : 'full',
   commit: {
     committed: !!commit.committed,
     pushed: !!commit.pushed,

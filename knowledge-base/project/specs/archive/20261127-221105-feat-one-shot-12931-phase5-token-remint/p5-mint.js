@@ -25,11 +25,13 @@
 //                   lists starts with one, the body refuses (it never mints under the old owner's login).
 //                   owner "account": must be absent.
 //
-// FLOW. goto https://dash.cloudflare.com/profile/api-tokens (a fresh window.bootstrap.atok); in-page GET
+// FLOW. goto https://dash.cloudflare.com/profile/api-tokens (a fresh window.bootstrap.atok), then wait up to 15 s
+// for window.bootstrap.atok, which the dashboard sets after DOMContentLoaded (measured 2026-11-28); in-page GET
 // /api/v4/accounts/<acct>/tokens/permission_groups and resolve each name to exactly ONE selectable group whose
 // `scopes` holds the expected scope; in-page list of every page of the owner's token list (a page shorter than
 // per_page ends it, unless result_info.total_count says more; 20 pages without an end refuses `listing`); refuse
-// an old-owner pin (owner user) and a same-name token (one token per exact name); in-page POST; in-page GET of
+// an old-owner pin (owner user) and a same-name token (one token per exact name); the token POST, Node-side
+// (page.request.post, the atok read from the page just before it, no redirect followed); in-page GET of
 // the new token and the read-back (every resource key exactly com.cloudflare.api.account.zone.<zone> or, for
 // account groups only, com.cloudflare.api.account.<acct>; value "*"; no "*" in a key; effect allow; group set ==
 // the resolved set; name, expires_on and status active as asked); only then a Node-side `fetch` POST of the
@@ -40,9 +42,13 @@
 // again. A POST answer proves nothing about whether a token was stored, so only that re-list does.
 // `success:true` on a refused/error return means: every DELETE answered JSON success:true AND the re-list shows
 // no token with that name or id.
-// In-page requests carry `x-atok` (window.bootstrap.atok) and `x-cross-site-security: dash`, the headers the
-// 2026-11-26 0a/0b session sent (cloudflare-account-migration.md "Revoke recipe" step 3). The DELETE is
-// Node-side because an in-page fetch DELETE got an HTML 403 from the dashboard edge (same section).
+// Every request carries `x-atok` (window.bootstrap.atok) and `x-cross-site-security: dash`, the headers the
+// 2026-11-26 0a/0b session sent (cloudflare-account-migration.md "Revoke recipe" step 3). The writes (the token
+// POST and the cleanup DELETE) are Node-side, through the page's request context: an in-page fetch DELETE got an
+// HTML 403 from the dashboard edge on 2026-11-26 (same section), and an in-page fetch POST to
+// /accounts/<acct>/tokens got one on 2026-11-28, twice, while the in-page GETs of the same run answered JSON.
+// The reads stay in-page. The token POST's answer (which carries the value) is read with json() only, never
+// text(), and only when its content-type is JSON.
 //
 // ENDPOINTS (dash.cloudflare.com/api/v4 proxies the public v4 API with the session):
 //   GET    /accounts/{account_id}/tokens/permission_groups  developers.cloudflare.com/api/resources/accounts/subresources/tokens/subresources/permission_groups/methods/list/
@@ -70,7 +76,8 @@
 //   {status, contentType, success:true, id8}   MINTED and handed off: POST status, read-back passed, sink 200 "ok"
 //   {refused:"mint"|"mint-shape"|"readback"|"sink", [id8], status, contentType, success, [matches],
 //    [del_status, del_contentType]}
-//     mint        the POST answered no JSON success:true (an error, or a non-JSON body)
+//     mint        the POST answered no JSON success:true (an error, or a non-JSON body; an HTML 403 is the
+//                 dashboard edge refusing the write)
 //     mint-shape  the POST answered success but no 32-hex id or no value
 //     readback    the stored token's policy/name/expiry/status differs from the request
 //     sink        the sink did not answer 200 "ok" (down, refused, redirected, timed out)
@@ -176,6 +183,27 @@
     return { status: r.status, contentType, json };
   };
   const call = (method, path, body) => page.evaluate(inPage, { method, path, body });
+  // Runs NODE-SIDE: the token POST, through the page's request context (cookies included). The origin and the
+  // atok are read from the page first, as inPage reads them; same return shape as inPage. maxRedirects 0: a
+  // redirect never carries the atok on or turns the POST into a GET.
+  const postNode = async (path, body) => {
+    const pgs = await page.evaluate(() => ({ origin: location.origin === 'https://dash.cloudflare.com',
+      atok: (window.bootstrap && window.bootstrap.atok) || null }));
+    if (!pgs.origin) return { origin: false };
+    if (!pgs.atok) return { atok: false };
+    const r = await page.request.post(`${DASH}${path}`, {
+      headers: { 'x-atok': pgs.atok, 'x-cross-site-security': 'dash', 'content-type': 'application/json' },
+      data: body, failOnStatusCode: false, maxRedirects: 0, timeout: 30000,
+    });
+    try {
+      const contentType = r.headers()['content-type'] || '';
+      let parsed = null;
+      if (/json/i.test(contentType)) { try { parsed = await r.json(); } catch (e) { parsed = null; } }
+      return { status: r.status(), contentType, json: parsed };
+    } finally {
+      await r.dispose().catch(() => {});
+    }
+  };
   const notOk = (r) => r.status !== 200 || !r.json || r.json.success !== true;
   const statusOf = (r) => ({ status: r.status, contentType: ctOf(r.contentType), success: false });
 
@@ -214,7 +242,7 @@
         if (!ours(t)) continue;
         if (typeof t.id !== 'string' || !HEX32.test(t.id)) { allDeleted = false; continue; }
         const r = await page.request.delete(`${DASH}${base}/${t.id}`, {
-          headers: { 'x-atok': atok, 'x-cross-site-security': 'dash' },
+          headers: { 'x-atok': atok, 'x-cross-site-security': 'dash' }, failOnStatusCode: false, maxRedirects: 0,
         });
         const contentType = ctOf(r.headers()['content-type']);
         let ok = false;
@@ -276,6 +304,7 @@
   };
   try {
     await page.goto(`${DASH}/profile/api-tokens`, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => !!(window.bootstrap && window.bootstrap.atok), null, { timeout: 15000, polling: 100 }).catch(() => {});
 
     // 1. permission groups: each asked name -> exactly one selectable group carrying the expected scope.
     const pg = await call('GET', `/api/v4/accounts/${acct}/tokens/permission_groups`);
@@ -315,8 +344,8 @@
       policies.push({ effect: 'allow', permission_groups: [...acctIds].map((g) => ({ id: g })), resources: { [acctKey]: '*' } });
     }
     posted = true;
-    const mr = await call('POST', base, { name: a.name, policies, expires_on: a.expires_on });
-    // atok/origin false: the in-page helper returned before its fetch, so no POST left the page.
+    const mr = await postNode(base, { name: a.name, policies, expires_on: a.expires_on });
+    // atok/origin false: postNode returned before its request, so no POST was sent.
     if (mr.atok === false) return safe({ atok: false });
     if (mr.origin === false) return safe({ refused: 'origin' });
     postInfo = { status: mr.status, contentType: ctOf(mr.contentType) };

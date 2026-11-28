@@ -2626,6 +2626,32 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_ZOT_MIRROR_RETRY_TEST_SH_PATHS=(
   "scripts/betterstack-query.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/zot-mirror-diagnosis.test.sh"
+  "knowledge-base/engineering/operations/runbooks/zot-registry-revert.md"  # one hop: scripts/zot-mirror-diagnosis.test.sh pins the marker's runbook= pointer (#12937)
+)
+
+# plugins/soleur/test/zot-bridge-marker-emission.test.sh — derived edges reach only the suite and plugins/soleur/
+# (its subjects are named through $REPO_ROOT/... variables); declared from the repo paths its suite file names (#12937).
+AFFECTED_PLUGINS_SOLEUR_TEST_ZOT_BRIDGE_MARKER_EMISSION_TEST_SH_PATHS=(
+  ".github/actions/cf-tunnel-registry-bridge/action.yml"
+  ".github/workflows/reusable-release.yml"
+  "plugins/soleur/test/zot-bridge-marker-emission.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/zot-mirror-diagnosis.sh"
+  "knowledge-base/engineering/operations/runbooks/zot-registry-revert.md"  # the marker's runbook= pointer (plugins/soleur/test/zot-bridge-marker-emission.test.sh RUNBOOK=)
+  # The dir ref is the oracle's tracked-prefix trim of the validator regex's `zot-registry-revert\.md` spelling in
+  # scripts/zot-mirror-diagnosis.sh (one hop); only the dir prefix covers it. Cost: a ~2 s suite on runbook diffs.
+  "knowledge-base/engineering/operations/runbooks/"
+)
+
+# scripts/zot-mirror-diagnosis — the derive reaches the lib and its suite; declared to add the runbook the marker
+# points at (scripts/zot-mirror-diagnosis.test.sh RUNBOOK_SUFFIX= pins the runbook= pointer, #12937). The dir entry
+# covers the oracle's tracked-prefix trim of the lib's validator regex (`zot-registry-revert\.md`); a ~0.5 s suite.
+AFFECTED_SCRIPTS_ZOT_MIRROR_DIAGNOSIS_PATHS=(
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/zot-mirror-diagnosis.sh"
+  "scripts/zot-mirror-diagnosis.test.sh"
+  "knowledge-base/engineering/operations/runbooks/zot-registry-revert.md"
+  "knowledge-base/engineering/operations/runbooks/"
 )
 
 # plugins/soleur/test/inngest-config-bundle-mirror.test.sh — executes the mirror step body extracted from the bundle
@@ -5282,4 +5308,16 @@ AFFECTED_TESTS_SCRIPTS_CF_ACCOUNT_MIGRATION_RUNBOOK_PATHS=(
   "plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh"
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-cf-account-migration-runbook.sh"
+)
+
+# plugins/soleur/test/seat-liveness.test.sh (#12524) — carries "liveness" in its label, so the
+# live-scanner census requires an explicit declared edge set covering its SUTs and helpers.
+AFFECTED_PLUGINS_SOLEUR_TEST_SEAT_LIVENESS_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/seat-liveness.sh"
+  "plugins/soleur/scripts/run-health-emit.sh"
+  "plugins/soleur/test/seat-liveness.test.sh"
+  "plugins/soleur/test/test-helpers.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/scratch-root.sh"
+  "scripts/lib/test-affected-paths.sh"
 )
