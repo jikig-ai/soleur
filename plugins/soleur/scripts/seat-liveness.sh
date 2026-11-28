@@ -52,7 +52,7 @@ EXIT_CODE="0"
 ERROR_MSG=""
 HOOK_DEFERRED="false"
 FLOOR_PASSED=""
-DIRTY_DIFF="false"
+DIRTY_DIFF=""
 DIFF_VERIFIED=""
 ARTIFACT_VERIFIED=""
 TTL_MS="86400000"
@@ -100,6 +100,14 @@ fi
 SEATS_DIR="$RUN_DIR/seats"
 mkdir -p "$SEATS_DIR"
 
+if [[ "$SUBCMD" == "decide" && -z "$DIRTY_DIFF" ]]; then
+  if git -C "$RUN_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 && [[ -n "$(git -C "$RUN_DIR" status --porcelain --untracked-files=no 2>/dev/null || true)" ]]; then
+    DIRTY_DIFF="true"
+  else
+    DIRTY_DIFF="false"
+  fi
+fi
+
 python3 - "$SUBCMD" "$SEATS_DIR" "$SEAT_ID" "$HARNESS" "$ROLE" "$TIER" "$WRITABLE" "$SIDE_EFFECTING" \
   "$IDLE_TIMEOUT_MS" "$DEADLINE_MS" "$ARTIFACT_PATH" "$NOW_MS" "$EXITED" "$EXIT_CODE" "$ERROR_MSG" \
   "$HOOK_DEFERRED" "$FLOOR_PASSED" "$DIRTY_DIFF" "$DIFF_VERIFIED" "$ARTIFACT_VERIFIED" "$TTL_MS" <<'PY'
@@ -134,15 +142,20 @@ import sys
 ) = sys.argv[1:22]
 
 now_ms = int(now_s)
+ttl_ms = int(ttl_s)
+SEAT_ID_RE = re.compile(r"^[A-Za-z0-9:._-]{1,128}$")
+LINE_BREAK_RE = re.compile(r"[\r\n\u2028\u2029]")
 SECRET_RE = re.compile(
     r"BEGIN [A-Z ]*PRIVATE KEY|sk-ant-[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9_]{16,}|"
     r"github_pat_[A-Za-z0-9_]{16,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|"
     r"dp\.(?:pt|st|sa|ct)\.[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}"
 )
 SATURATION_RE = re.compile(
-    r"\b(?:429|529|503)\b|rate[-_ ]?limit|resource[-_ ]?exhausted|overloaded|quota[-_ ]?exceeded|capacity|too many requests",
+    r"\b(?:429|529|503)\b|rate[-_ ]?limit|resource[-_ ]?exhausted|overloaded|quota[-_ ]?exceeded|capacity|too many requests|usage limit",
     re.IGNORECASE,
 )
+VALID_HARNESSES = {"claude", "grok", "codex", "devin", "cursor", "opencode", "antigravity", "unknown"}
+VALID_TIERS = {"cheap", "standard", "strong", "advisor", "inherit"}
 IN_BAND_NUDGE_HARNESSES = {"claude", "codex", "antigravity"}
 FALLBACK_GRAPH = {
     "cheap": None,
@@ -152,39 +165,122 @@ FALLBACK_GRAPH = {
     "inherit": None,
 }
 
-for val in (seat_id, role, artifact_path):
-    if val and SECRET_RE.search(val):
-        sys.stderr.write("seat-liveness: secret redaction violation in metadata field\n")
+for field_name, val in (
+    ("seat_id", seat_id),
+    ("harness", harness),
+    ("role", role),
+    ("tier", tier),
+    ("artifact_path", artifact_path),
+    ("error", error_msg),
+):
+    if not val:
+        continue
+    if SECRET_RE.search(val):
+        sys.stderr.write(f"seat-liveness: secret redaction violation in metadata field '{field_name}'\n")
         sys.exit(2)
+    if field_name != "error" and (len(val) > 512 or LINE_BREAK_RE.search(val)):
+        sys.stderr.write(f"seat-liveness: metadata-only violation in '{field_name}' (length or newline constraint)\n")
+        sys.exit(2)
+
+if artifact_path and re.search(r"(?:^|[\\/])\.\.(?:[\\/]|$)", artifact_path):
+    sys.stderr.write("seat-liveness: invalid --artifact-path (path traversal prohibited)\n")
+    sys.exit(2)
+
+
+def validate_seat_id(sid: str) -> str:
+    if not sid or not SEAT_ID_RE.match(sid) or sid in (".", "..") or sid.startswith("-"):
+        sys.stderr.write("seat-liveness: invalid --seat id (must match /^[A-Za-z0-9:._-]{1,128}$/)\n")
+        sys.exit(2)
+    return sid
 
 
 def safe_seat_file(sid: str) -> str:
-    clean = re.sub(r"[^A-Za-z0-9._-]", "_", sid)
-    if not clean:
-        sys.stderr.write("seat-liveness: invalid --seat id\n")
-        sys.exit(2)
+    valid = validate_seat_id(sid)
+    clean = re.sub(r"[^A-Za-z0-9._-]", "_", valid)
     return os.path.join(seats_dir, f"{clean}.json")
 
 
 def write_seat(path: str, data: dict) -> None:
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
-    os.replace(tmp, path)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 
 def read_seat(path: str) -> dict:
+    if os.path.islink(path):
+        raise ValueError("refusing symlinked seat file")
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("seat file is not a JSON object")
+    return data
+
+
+def sweep_ttl(now_val: int, ttl_val: int) -> tuple[int, int]:
+    removed = 0
+    retained = 0
+    for tmp_p in glob.glob(os.path.join(seats_dir, "*.tmp")):
+        try:
+            if os.path.islink(tmp_p) or (now_val - int(os.path.getmtime(tmp_p) * 1000) > ttl_val):
+                os.remove(tmp_p)
+        except OSError:
+            pass
+    for p in sorted(glob.glob(os.path.join(seats_dir, "*.json"))):
+        if os.path.islink(p):
+            try:
+                os.remove(p)
+                removed += 1
+            except OSError:
+                pass
+            continue
+        try:
+            rec = read_seat(p)
+            last_ts = int(rec.get("last_progress_at") or rec.get("started_at") or 0)
+        except Exception:
+            try:
+                last_ts = int(os.path.getmtime(p) * 1000)
+            except OSError:
+                last_ts = 0
+        if now_val - last_ts > ttl_ms:
+            try:
+                os.remove(p)
+                removed += 1
+            except OSError:
+                retained += 1
+        else:
+            retained += 1
+    return removed, retained
 
 
 if subcmd == "init":
-    if not seat_id:
-        sys.stderr.write("seat-liveness init: --seat required\n")
+    validate_seat_id(seat_id)
+    if harness not in VALID_HARNESSES:
+        harness = "unknown"
+    if tier not in VALID_TIERS:
+        sys.stderr.write(f"seat-liveness init: invalid --tier '{tier}'\n")
         sys.exit(2)
+    # Automatic 24h TTL sweep on init so stale seats never pollute `.soleur/runs/default/seats/`.
+    sweep_ttl(now_ms, ttl_ms)
     idle_ms = int(idle_timeout_s)
     deadline_delta = int(deadline_s)
+    seat_path = safe_seat_file(seat_id)
+    prior_attempt = 0
+    if os.path.exists(seat_path) and not os.path.islink(seat_path):
+        try:
+            prior_rec = read_seat(seat_path)
+            if prior_rec.get("status") not in ("completed", "recovered", "escalated"):
+                prior_attempt = int(prior_rec.get("attempt", 0))
+        except Exception:
+            prior_attempt = 0
     record = {
         "seat_id": seat_id,
         "harness": harness,
@@ -196,19 +292,16 @@ if subcmd == "init":
         "last_progress_at": now_ms,
         "deadline_at": now_ms + deadline_delta,
         "idle_timeout_ms": idle_ms,
-        "attempt": 0,
+        "attempt": prior_attempt,
         "status": "running",
         "classification": "alive",
         "artifact_path": artifact_path,
         "updated_at": now_ms,
     }
-    write_seat(safe_seat_file(seat_id), record)
+    write_seat(seat_path, record)
     print(f"SOLEUR_SEAT_LIVENESS seat={seat_id} status=alive action=init")
 
 elif subcmd == "heartbeat":
-    if not seat_id:
-        sys.stderr.write("seat-liveness heartbeat: --seat required\n")
-        sys.exit(2)
     p = safe_seat_file(seat_id)
     rec = read_seat(p)
     rec["last_progress_at"] = max(int(rec.get("last_progress_at", now_ms)), now_ms)
@@ -223,17 +316,20 @@ elif subcmd == "sweep":
     hook_deferred = hook_deferred_s.lower() == "true"
 
     for p in paths:
-        if not os.path.exists(p):
+        if not os.path.exists(p) or os.path.islink(p):
             continue
         rec = read_seat(p)
-        sid = rec["seat_id"]
+        if not seat_id and rec.get("status") in ("completed", "recovered", "escalated"):
+            continue
+        sid = validate_seat_id(str(rec.get("seat_id", "")))
         art = rec.get("artifact_path", "")
         art_ok = True
         if art:
-            art_ok = os.path.isfile(art) and os.path.getsize(art) > 0
+            art_ok = (not os.path.islink(art)) and os.path.isfile(art) and os.path.getsize(art) > 0
         floor_ok = True if floor_passed_s == "" else (floor_passed_s.lower() == "true")
 
         clean_done = exited and exit_code == 0 and art_ok and floor_ok
+        attempt = int(rec.get("attempt", 0))
 
         if hook_deferred:
             cls = "hook_deferred"
@@ -248,7 +344,8 @@ elif subcmd == "sweep":
                 cls = "truncated"
             else:
                 cls = "alive"
-                rec["status"] = "completed"
+                rec["status"] = "recovered" if attempt > 0 else "completed"
+                rec["reviewed_coverage"] = "full"
         else:
             idle_elapsed = now_ms - int(rec["last_progress_at"])
             total_elapsed = now_ms - int(rec["started_at"])
@@ -266,12 +363,9 @@ elif subcmd == "sweep":
         print(f"SOLEUR_SEAT_LIVENESS seat={sid} status={cls} action=sweep")
 
 elif subcmd == "decide":
-    if not seat_id:
-        sys.stderr.write("seat-liveness decide: --seat required\n")
-        sys.exit(2)
     p = safe_seat_file(seat_id)
     rec = read_seat(p)
-    sid = rec["seat_id"]
+    sid = validate_seat_id(str(rec.get("seat_id", "")))
     cls = rec.get("classification", "alive")
     writable = bool(rec.get("writable", False))
     side_fx = bool(rec.get("side_effecting", False))
@@ -279,7 +373,7 @@ elif subcmd == "decide":
     h = rec.get("harness", "unknown")
     t = rec.get("tier", "inherit")
 
-    dirty_diff = dirty_diff_s.lower() == "true"
+    dirty_diff = dirty_diff_s.lower() == "true" if dirty_diff_s != "" else False
     diff_verified = None if diff_verified_s == "" else (diff_verified_s.lower() == "true")
     art_verified = artifact_verified_s.lower() == "true"
 
@@ -290,18 +384,23 @@ elif subcmd == "decide":
     if cls in ("alive", "legit_long_turn"):
         action = "none"
         rcov = "full"
-    elif art_verified or (writable and dirty_diff and diff_verified is True):
-        action = "accept"
-        rec["status"] = "recovered"
-        rcov = "full"
     elif writable and dirty_diff:
-        if diff_verified is None:
+        if diff_verified is True:
+            action = "accept"
+            rec["status"] = "recovered"
+            rcov = "full"
+        elif diff_verified is None:
             action = "verify_disk"
+            rec["status"] = "escalated"
             rcov = "degraded"
         else:
             action = "escalate"
             rec["status"] = "escalated"
             rcov = "degraded"
+    elif art_verified:
+        action = "accept"
+        rec["status"] = "recovered"
+        rcov = "full"
     elif side_fx:
         action = "escalate"
         rec["status"] = "escalated"
@@ -311,17 +410,21 @@ elif subcmd == "decide":
         rec["status"] = "escalated"
         rcov = "degraded"
     else:
+        duration_budget = max(int(rec.get("deadline_at", now_ms)) - int(rec.get("started_at", now_ms)), int(rec.get("idle_timeout_ms", 120000)))
         if h in IN_BAND_NUDGE_HARNESSES and cls in ("hook_deferred", "truncated"):
             action = "nudge"
             attempt += 1
             rec["attempt"] = attempt
-            rec["status"] = "recovered"
+            rec["status"] = "running"
+            rec["last_progress_at"] = now_ms
             rcov = "full"
         else:
             action = "respawn"
             attempt += 1
             rec["attempt"] = attempt
-            rec["status"] = "recovered"
+            rec["status"] = "running"
+            rec["last_progress_at"] = now_ms
+            rec["deadline_at"] = now_ms + duration_budget
             if cls == "rate_limit":
                 fb_tier = FALLBACK_GRAPH.get(t) or "same"
             else:
@@ -339,20 +442,7 @@ elif subcmd == "decide":
     )
 
 elif subcmd == "cleanup":
-    ttl_ms = int(ttl_s)
-    removed = 0
-    retained = 0
-    for p in sorted(glob.glob(os.path.join(seats_dir, "*.json"))):
-        try:
-            rec = read_seat(p)
-            last_ts = int(rec.get("last_progress_at") or rec.get("started_at") or 0)
-            if now_ms - last_ts > ttl_ms:
-                os.remove(p)
-                removed += 1
-            else:
-                retained += 1
-        except Exception:
-            retained += 1
+    removed, retained = sweep_ttl(now_ms, ttl_ms)
     print(f"SOLEUR_SEAT_LIVENESS_CLEANUP removed={removed} retained={retained}")
 
 else:

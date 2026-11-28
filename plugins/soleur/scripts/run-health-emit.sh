@@ -49,7 +49,7 @@ NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # Resolve run metadata: prefer existing file, then args, then defaults.
 if [[ -z "$RUN_ID" ]]; then
   if [[ -f "$HEALTH" ]]; then
-    RUN_ID="$(python3 -c "import json,sys;print(json.load(open('$HEALTH')).get('run_id',''))" 2>/dev/null)"
+    RUN_ID="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("run_id",""))' "$HEALTH" 2>/dev/null)"
   fi
   [[ -z "$RUN_ID" ]] && RUN_ID="$(basename "$RUN_DIR")"
 fi
@@ -57,15 +57,23 @@ fi
 [[ -z "$ISSUE" ]] && ISSUE=""
 
 python3 - "$HEALTH" "$RUN_ID" "$ISSUE" "$BRANCH" "$HARNESS" "$PHASE" "$STATUS" "$NOW" "$ERROR_MSG" "$REVIEWED_COVERAGE" "$PROMPT_FILE" "$RUN_DIR" <<'PY' 2>/dev/null || echo "run-health-emit: python write failed (non-fatal)" >&2
-import json, os, sys, shutil
+import json, os, re, sys, shutil
 
 (health, run_id, issue, branch, harness, phase, status, now, err, rcov, prompt_file, run_dir) = sys.argv[1:13]
 
+SECRET_RE = re.compile(
+    r"BEGIN [A-Z ]*PRIVATE KEY|sk-ant-[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9_]{16,}|"
+    r"github_pat_[A-Za-z0-9_]{16,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|"
+    r"dp\.(?:pt|st|sa|ct)\.[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}"
+)
+
 data = {}
-if os.path.exists(health):
+if os.path.exists(health) and not os.path.islink(health):
     try:
         with open(health) as f:
-            data = json.load(f)
+            loaded = json.load(f)
+            if isinstance(loaded, dict):
+                data = loaded
     except Exception:
         data = {}
 
@@ -96,31 +104,28 @@ elif "started_at" not in entry:
     entry["started_at"] = now
 
 if err:
-    entry.setdefault("errors", []).append({"at": now, "msg": err})
-    data["errors"].append({"phase": phase, "at": now, "msg": err})
-
-if status in ("completed", "failed", "budget-capped") and not data.get("completed_at"):
-    # only seal completed_at when terminal status on the final phase; leave open otherwise
-    pass
+    clean_err = SECRET_RE.sub("[REDACTED]", err)
+    clean_err = re.sub(r"[\x00-\x1f\x7f\u2028\u2029]", " ", clean_err)[:512]
+    entry.setdefault("errors", []).append({"at": now, "msg": clean_err})
+    data["errors"].append({"phase": phase, "at": now, "msg": clean_err})
 
 # Seal completed_at only when status is a terminal run status.
 if status in ("completed", "failed", "budget-capped"):
-    # heuristic: seal if phase looks like a finalizer name
     if phase.lower() in ("8", "ship", "done", "final", "exit", "terminate"):
         data["completed_at"] = now
         data["status"] = status
 
 # Snapshot prompt file (append-only per attempt).
-if prompt_file and os.path.exists(prompt_file):
+if prompt_file and os.path.exists(prompt_file) and not os.path.islink(prompt_file):
     pp_dir = os.path.join(run_dir, "phase_prompts")
     os.makedirs(pp_dir, exist_ok=True)
-    base = os.path.join(pp_dir, f"{phase}.md")
+    safe_phase = re.sub(r"[^A-Za-z0-9._-]", "_", phase) or "phase"
+    base = os.path.join(pp_dir, f"{safe_phase}.md")
     if os.path.exists(base):
-        # find next attempt number
         n = 2
-        while os.path.exists(os.path.join(pp_dir, f"{phase}.attempt-{n}.md")):
+        while os.path.exists(os.path.join(pp_dir, f"{safe_phase}.attempt-{n}.md")):
             n += 1
-        dest = os.path.join(pp_dir, f"{phase}.attempt-{n}.md")
+        dest = os.path.join(pp_dir, f"{safe_phase}.attempt-{n}.md")
     else:
         dest = base
     shutil.copyfile(prompt_file, dest)
@@ -128,29 +133,39 @@ if prompt_file and os.path.exists(prompt_file):
 
 # Summarize per-seat liveness records when <run_dir>/seats/*.json exist (#12524).
 seats_dir = os.path.join(run_dir, "seats")
-if os.path.isdir(seats_dir):
+if os.path.isdir(seats_dir) and not os.path.islink(seats_dir):
     total = 0
     active = 0
     completed = 0
     recovered = 0
     escalated = 0
+    degraded = 0
     for name in sorted(os.listdir(seats_dir)):
         if not name.endswith(".json"):
             continue
         sp = os.path.join(seats_dir, name)
+        if os.path.islink(sp):
+            continue
         try:
             with open(sp) as sf:
                 srec = json.load(sf)
+            if not isinstance(srec, dict):
+                continue
             total += 1
             st = srec.get("status", "running")
             if st == "running":
-                active += 1
+                if srec.get("recovery_action") in ("nudge", "respawn"):
+                    recovered += 1
+                else:
+                    active += 1
             elif st == "completed":
                 completed += 1
             elif st == "recovered":
                 recovered += 1
             elif st == "escalated":
                 escalated += 1
+            if srec.get("reviewed_coverage") == "degraded":
+                degraded += 1
         except Exception:
             continue
     data["seats_summary"] = {
@@ -160,15 +175,22 @@ if os.path.isdir(seats_dir):
         "recovered": recovered,
         "escalated": escalated,
     }
-    if escalated > 0 and not rcov and "reviewed_coverage" not in data:
+    if (escalated > 0 or degraded > 0) and not rcov and data.get("reviewed_coverage") in (None, "", "full"):
         data["reviewed_coverage"] = "degraded"
 
-# Write atomically.
-tmp = health + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-os.replace(tmp, health)
+# Write atomically with PID-scoped temp file.
+tmp = f"{health}.{os.getpid()}.tmp"
+try:
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, health)
+finally:
+    if os.path.exists(tmp):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 PY
 
 exit 0

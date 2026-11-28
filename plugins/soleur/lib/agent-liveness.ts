@@ -98,12 +98,27 @@ const ALLOWED_SEAT_KEYS: ReadonlySet<string> = new Set([
   "updated_at",
 ]);
 
+const SEAT_ID_PATTERN = /^[A-Za-z0-9:._-]{1,128}$/;
+const LINE_BREAK_PATTERN = /[\r\n\u2028\u2029]/;
+const MAX_METADATA_STRING_LEN = 512;
+
 const SECRET_VALUE_PATTERN =
   /BEGIN [A-Z ]*PRIVATE KEY|sk-ant-[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|dp\.(?:pt|st|sa|ct)\.[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}/;
 
 /**
+ * Sanitize a seat identifier before embedding in log markers (CWE-117).
+ */
+export function sanitizeSeatIdForMarker(seatId: string): string {
+  const cleaned = String(seatId)
+    .replace(/[\x00-\x1f\x7f\u2028\u2029\s=]/g, "_")
+    .replace(/[^A-Za-z0-9:._-]/g, "_")
+    .slice(0, 128);
+  return cleaned || "unknown-seat";
+}
+
+/**
  * Validate that a seat record conforms to the closed metadata-only field allowlist
- * and carries no raw prompt, transcript, or secret-shaped values (FR2).
+ * and carries no raw prompt, transcript, non-primitive nested payloads, or secret-shaped values (FR2).
  */
 export function validateSeatMetadata(
   raw: Record<string, unknown>,
@@ -119,15 +134,45 @@ export function validateSeatMetadata(
       );
     }
     const val = raw[key];
-    if (typeof val === "string" && SECRET_VALUE_PATTERN.test(val)) {
+    if (
+      val !== undefined &&
+      val !== null &&
+      typeof val !== "string" &&
+      typeof val !== "number" &&
+      typeof val !== "boolean"
+    ) {
       throw new Error(
-        `secret redaction violation: field '${key}' contains a credential-shaped token`,
+        `metadata-only violation: field '${key}' must be a primitive metadata value`,
       );
+    }
+    if (typeof val === "string") {
+      if (val.length > MAX_METADATA_STRING_LEN || LINE_BREAK_PATTERN.test(val)) {
+        throw new Error(
+          `metadata-only violation: field '${key}' exceeds metadata length or single-line constraint`,
+        );
+      }
+      if (SECRET_VALUE_PATTERN.test(val)) {
+        throw new Error(
+          `secret redaction violation: field '${key}' contains a credential-shaped token`,
+        );
+      }
     }
   }
 
-  if (typeof raw.seat_id !== "string" || raw.seat_id.trim() === "") {
-    throw new Error("invalid seat metadata: seat_id must be a non-empty string");
+  if (
+    typeof raw.seat_id !== "string" ||
+    !SEAT_ID_PATTERN.test(raw.seat_id) ||
+    raw.seat_id === "." ||
+    raw.seat_id === ".." ||
+    raw.seat_id.startsWith("-")
+  ) {
+    throw new Error(
+      "invalid seat metadata: seat_id must match /^[A-Za-z0-9:._-]{1,128}$/ without leading '-' or dot-segment traversal",
+    );
+  }
+
+  if (typeof raw.artifact_path === "string" && /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(raw.artifact_path)) {
+    throw new Error("invalid seat metadata: artifact_path must not contain '..' traversal");
   }
 
   return raw as unknown as SeatMetadata;
@@ -208,8 +253,14 @@ function formatLivenessMarker(
   seatId: string,
   classification: SeatClassification,
   action: RecoveryAction,
+  attempt: number,
+  fallbackTier: SemanticTier | null,
+  reviewedCoverage: "full" | "degraded" | "sequential-fallback",
 ): string {
-  return `SOLEUR_SEAT_LIVENESS seat=${seatId} status=${classification} action=${action}`;
+  const safeId = sanitizeSeatIdForMarker(seatId);
+  const fb =
+    action === "respawn" ? (fallbackTier ?? "same") : "none";
+  return `SOLEUR_SEAT_LIVENESS seat=${safeId} status=${classification} action=${action} attempt=${attempt} fallback_tier=${fb} reviewed_coverage=${reviewedCoverage}`;
 }
 
 /**
@@ -230,29 +281,38 @@ export function decideSeatRecovery(
       fallbackTier: null,
       nextAttempt: seat.attempt,
       reviewedCoverage: "full",
-      marker: formatLivenessMarker(seat.seat_id, seat.classification, "none"),
+      marker: formatLivenessMarker(
+        seat.seat_id,
+        seat.classification,
+        "none",
+        seat.attempt,
+        null,
+        "full",
+      ),
       reason: "seat is healthy or making progress within absolute turn cap",
     };
   }
 
-  // On-disk verification first: if the expected artifact or diff is already valid on disk,
-  // accept the work rather than wasting a respawn (2026-11-02 & 2026-05-15 learnings).
-  if (
-    diskState.artifactVerified === true ||
-    (seat.writable && diskState.dirtyDiff === true && diskState.diffVerified === true)
-  ) {
-    return {
-      action: "accept",
-      fallbackTier: null,
-      nextAttempt: seat.attempt,
-      reviewedCoverage: "full",
-      marker: formatLivenessMarker(seat.seat_id, seat.classification, "accept"),
-      reason: "on-disk artifact or diff verified complete",
-    };
-  }
-
-  // Writable seat with dirty worktree diff: never blindly spawn a second writer over uncommitted diffs.
+  // Writable seat with dirty worktree diff: evaluate dirty-diff verification BEFORE artifactVerified
+  // so an unverified or failed worktree diff can never be masked by an artifact check.
   if (seat.writable && diskState.dirtyDiff === true) {
+    if (diskState.diffVerified === true) {
+      return {
+        action: "accept",
+        fallbackTier: null,
+        nextAttempt: seat.attempt,
+        reviewedCoverage: "full",
+        marker: formatLivenessMarker(
+          seat.seat_id,
+          seat.classification,
+          "accept",
+          seat.attempt,
+          null,
+          "full",
+        ),
+        reason: "on-disk dirty diff verified complete",
+      };
+    }
     if (diskState.diffVerified === undefined) {
       return {
         action: "verify_disk",
@@ -263,6 +323,9 @@ export function decideSeatRecovery(
           seat.seat_id,
           seat.classification,
           "verify_disk",
+          seat.attempt,
+          null,
+          "degraded",
         ),
         reason: "writable seat left dirty diff; verify git diff before deciding recovery",
       };
@@ -272,8 +335,34 @@ export function decideSeatRecovery(
       fallbackTier: null,
       nextAttempt: seat.attempt,
       reviewedCoverage: "degraded",
-      marker: formatLivenessMarker(seat.seat_id, seat.classification, "escalate"),
+      marker: formatLivenessMarker(
+        seat.seat_id,
+        seat.classification,
+        "escalate",
+        seat.attempt,
+        null,
+        "degraded",
+      ),
       reason: "writable seat left unverified dirty diff; refusing blind respawn over uncommitted changes",
+    };
+  }
+
+  // Read-only or clean-diff seat whose expected artifact is verified complete on disk.
+  if (diskState.artifactVerified === true) {
+    return {
+      action: "accept",
+      fallbackTier: null,
+      nextAttempt: seat.attempt,
+      reviewedCoverage: "full",
+      marker: formatLivenessMarker(
+        seat.seat_id,
+        seat.classification,
+        "accept",
+        seat.attempt,
+        null,
+        "full",
+      ),
+      reason: "on-disk artifact verified complete",
     };
   }
 
@@ -284,7 +373,14 @@ export function decideSeatRecovery(
       fallbackTier: null,
       nextAttempt: seat.attempt,
       reviewedCoverage: "degraded",
-      marker: formatLivenessMarker(seat.seat_id, seat.classification, "escalate"),
+      marker: formatLivenessMarker(
+        seat.seat_id,
+        seat.classification,
+        "escalate",
+        seat.attempt,
+        null,
+        "degraded",
+      ),
       reason: "side-effecting seat cannot be safely auto-restarted",
     };
   }
@@ -296,7 +392,14 @@ export function decideSeatRecovery(
       fallbackTier: null,
       nextAttempt: seat.attempt,
       reviewedCoverage: "degraded",
-      marker: formatLivenessMarker(seat.seat_id, seat.classification, "escalate"),
+      marker: formatLivenessMarker(
+        seat.seat_id,
+        seat.classification,
+        "escalate",
+        seat.attempt,
+        null,
+        "degraded",
+      ),
       reason: "recovery cap reached (max 1 attempt); escalating with degraded coverage",
     };
   }
@@ -308,12 +411,20 @@ export function decideSeatRecovery(
     (seat.classification === "hook_deferred" ||
       seat.classification === "truncated")
   ) {
+    const nextAttempt = seat.attempt + 1;
     return {
       action: "nudge",
       fallbackTier: null,
-      nextAttempt: seat.attempt + 1,
+      nextAttempt,
       reviewedCoverage: "full",
-      marker: formatLivenessMarker(seat.seat_id, seat.classification, "nudge"),
+      marker: formatLivenessMarker(
+        seat.seat_id,
+        seat.classification,
+        "nudge",
+        nextAttempt,
+        null,
+        "full",
+      ),
       reason: "in-band nudge supported for paused or truncated seat",
     };
   }
@@ -321,13 +432,21 @@ export function decideSeatRecovery(
   const tier: SemanticTier = seat.tier ?? "inherit";
   const fallbackTier =
     seat.classification === "rate_limit" ? resolveFallbackTier(tier) : null;
+  const nextAttempt = seat.attempt + 1;
 
   return {
     action: "respawn",
     fallbackTier,
-    nextAttempt: seat.attempt + 1,
+    nextAttempt,
     reviewedCoverage: "full",
-    marker: formatLivenessMarker(seat.seat_id, seat.classification, "respawn"),
+    marker: formatLivenessMarker(
+      seat.seat_id,
+      seat.classification,
+      "respawn",
+      nextAttempt,
+      fallbackTier,
+      "full",
+    ),
     reason:
       seat.classification === "rate_limit"
         ? `rate-limited seat respawning once (fallbackTier=${fallbackTier ?? "same"})`

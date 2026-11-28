@@ -322,7 +322,11 @@ function isWorkflowSaturationError(err) {
 
 // Spawned-agent seat liveness & dirty-diff guard (#12524, ADR-332).
 const escalatedSeats = []
-async function runWritableTodoResolverSeat(seatId, thunk) {
+function safeSeatId(raw) {
+  return String(raw).replace(/[^A-Za-z0-9:._-]/g, '_').slice(0, 128) || 'seat'
+}
+async function runWritableTodoResolverSeat(rawSeatId, thunk) {
+  const seatId = safeSeatId(rawSeatId)
   let res = null
   try {
     res = await thunk()

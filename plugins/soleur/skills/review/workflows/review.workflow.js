@@ -565,8 +565,11 @@ function isWorkflowSaturationError(err) {
 // Spawned-agent seat liveness & bounded 1x recovery (#12524, ADR-332).
 const escalatedSeats = []
 const recoveredSeats = []
+function safeSeatId(raw) {
+  return String(raw).replace(/[^A-Za-z0-9:._-]/g, '_').slice(0, 128) || 'seat'
+}
 async function runReviewSeat(dim, thunk) {
-  const seatId = `review:${dim}`
+  const seatId = safeSeatId(`review:${dim}`)
   let res = null
   try {
     res = await thunk()

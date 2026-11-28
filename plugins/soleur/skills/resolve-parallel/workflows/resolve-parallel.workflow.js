@@ -328,10 +328,13 @@ function isWorkflowSaturationError(err) {
 // ---------------------------------------------------------------------------
 
 // Spawned-agent seat liveness & dirty-diff guard (#12524, ADR-332).
-// Writable resolver seats must never blindly auto-respawn over uncommitted diffs;
-// a dead resolver emits SOLEUR_SEAT_LIVENESS and escalates for on-disk verification.
+// Writable resolver seats must never blindly auto-respawn over uncommitted diffs.
 const escalatedSeats = []
-async function runWritableResolverSeat(seatId, thunk) {
+function safeSeatId(raw) {
+  return String(raw).replace(/[^A-Za-z0-9:._-]/g, '_').slice(0, 128) || 'seat'
+}
+async function runWritableResolverSeat(rawSeatId, thunk) {
+  const seatId = safeSeatId(rawSeatId)
   let res = null
   try {
     res = await thunk()
