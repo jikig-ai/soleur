@@ -111,6 +111,21 @@ healthy and the documented recovery was refused.
 - **The brief asked for a detector that already existed.** Recovery: the plan traced the existing
   #11544 arm and found it unreachable rather than missing. Prevention: grep the detector's marker
   family before adding a new arm.
+- **The plan missed a pin on the doc text it edited.** `arm-check-sites.test.sh` hard-codes the
+  dequeue arm (`DQ_ARM='gh pr merge "$N" …'`), so the planned `<pr-number>` edit made its mutation
+  rows fatal. Recovery: the lead updated the pin in the same batch. Prevention: before editing doc
+  text, `git grep -lF` the exact old string across `*.test.*`, not only the file's basename.
+- **Parallel agents crossed a repo-global ratchet.** One agent's new unguarded fixture writes moved
+  `fixture-relative-assert`'s P1a count, and two other agents reported it as a red they did not own.
+  Recovery: the owning agent added `assert_fixture_dir`. Prevention: the fan-out brief already
+  lists the ratchets; each agent should re-run them after its last edit, not only mid-task.
+- **Two delegates parked on their own background watchers** and reported "waiting" for many rounds.
+  Recovery: a `SendMessage` asking for a foreground run and a final report. Prevention: the spawn
+  prompt said "foreground"; a long suite pushed to the background by the harness still needs the
+  delegate to block on it rather than end its turn.
+- **The lead bulk-toggled `tasks.md` checkboxes**, marking the PR-body and arm tasks done before
+  they ran. Recovery: unmarked them immediately. Prevention: tick each box only when its own command
+  has run.
 
 ## Tags
 
