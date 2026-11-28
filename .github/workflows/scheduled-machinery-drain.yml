@@ -88,15 +88,15 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # The weekly dispatch comes from Inngest (cron-machinery-drain.ts)
-          # through a GitHub App installation token, so triggering_actor is
-          # soleur-ai[bot] -- and the action's actor gate refused it ~1.7 s
-          # into this step on every run since 2026-10-12 (closed=0 on all of
-          # them; #13095, recurrence after the id-token fix #9537). The
-          # explicit login, never '*': the repo is public and the action's
-          # own allowed_bots doc warns that '*' lets any external App invoke
-          # it with prompts it controls. isAllowedBot strips a trailing
-          # '[bot]' on both sides, so either spelling matches; the [bot]
-          # form is the login GitHub reports.
+          # through a GitHub App installation token, so the run's github.actor
+          # -- what the action's actor gate reads -- is soleur-ai[bot], and
+          # the gate refused it on every weekly run since 2026-10-12 (#13095,
+          # recurrence after the id-token fix #9537). The explicit login,
+          # never '*': the repo is public and the action's own allowed_bots
+          # doc warns that '*' lets any external App invoke it with prompts
+          # it controls. isAllowedBot strips a trailing '[bot]' on both
+          # sides, so either spelling matches; the [bot] form is the login
+          # GitHub reports.
           allowed_bots: "soleur-ai[bot]"
           # `--headless` is load-bearing, not decoration: without it the skill
           # takes its interactive branch and waits to confirm a cluster with a

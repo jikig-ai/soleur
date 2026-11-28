@@ -1,5 +1,5 @@
 ---
-title: "ci: scheduled-machinery-drain agent has never run — bot-actor refusal after id-token fix, closed=0 on every run"
+title: "ci: scheduled-machinery-drain agent has never run on a weekly dispatch — bot-actor refusal after id-token fix, closed=0 on every run"
 type: fix
 date: 2026-11-27
 slug: scheduled-machinery-drain-allowed-bots
@@ -12,7 +12,7 @@ brand_survival_threshold: none
 lane: cross-domain
 ---
 
-# ci: scheduled-machinery-drain agent has never run — bot-actor refusal after id-token fix, closed=0 on every run
+# ci: scheduled-machinery-drain agent has never run on a weekly dispatch — bot-actor refusal after id-token fix, closed=0 on every run
 
 ## Enhancement Summary
 
@@ -79,21 +79,28 @@ $ gh run view 45143702615 --log | grep -n "non-human actor\|Drain the machinery"
 
 `scheduled-machinery-drain.yml` is a `workflow_dispatch`-only workflow whose
 weekly run is dispatched by the Inngest function `cron-machinery-drain.ts`
-through a GitHub App installation token, so every run's `triggering_actor` is
-the bot `soleur-ai[bot]`. The `Drain the machinery ledger` step invokes
+through a GitHub App installation token, so every weekly run's
+`github.actor` — the value the action's actor gate reads — is the bot
+`soleur-ai[bot]`. The `Drain the machinery ledger` step invokes
 `anthropics/claude-code-action` (pinned to the annotated tag object of
 v1.0.263), whose actor gate refuses non-human initiators unless they appear
 in the action's `allowed_bots` input. The step carries no `allowed_bots`
-entry, so since 2026-10-12 every weekly run has died ~1.7 s into the drain
-step; `continue-on-error: true` masks the death and the closing floor then
-reports BREACH with `closed=0` (issue #13095, standing issue #9508).
+entry, so since 2026-10-12 every weekly run has died ~1.7 s into the
+action's inner `Run Claude Code Action` substep; `continue-on-error: true`
+masks the death and the closing floor then reports BREACH with `closed=0`
+(issue #13095, standing issue #9508). One post-merge human-dispatched
+verification run (2026-10-05, actor `deruelle`) did execute the agent — the
+only completed execution on record — and still reported `closed=0`; no
+weekly bot dispatch has ever run it.
 
 The fix is one input on the existing step: add
 `allowed_bots: "soleur-ai[bot]"` to the `with:` block, with an explanatory
 comment matching the file's comment conventions. The sibling
 `claude-code-action` consumers (`fix-constraints-stage-a.yml`,
-`claude-code-review.yml`, `test-pretooluse-hooks.yml`) trigger on human
-actors and need no change. Verification is post-merge only: the action
+`claude-code-review.yml`, `test-pretooluse-hooks.yml`) need no change today —
+but not because their triggers are human-only: `pull_request` is
+actor-agnostic (a bot-authored PR runs as `soleur-ai[bot]`, e.g. #13083's
+checks). The accurate per-consumer rationale is in the audit table below. Verification is post-merge only: the action
 validates the dispatched workflow file against default-branch content, so a
 branch dispatch can never exercise the agent; the bot-actor path is exercised
 by the weekly Inngest dispatch (or the allowlisted
@@ -188,9 +195,9 @@ The ask restated as observable properties:
 | Workflow | `uses:` pin | Trigger set | Actor on dispatch | `allowed_bots` needed? |
 |---|---|---|---|---|
 | `scheduled-machinery-drain.yml` | `@3b7e1a45… # v1.0.263` | `workflow_dispatch` only, fired by Inngest via App token | `soleur-ai[bot]` | **yes — this fix** |
-| `claude-code-review.yml` | same pair | `pull_request` | the PR author's actor (human or bot-authored PR handled by the action's own rules) | no |
-| `fix-constraints-stage-a.yml` | same pair | `pull_request` + `workflow_dispatch` for human re-dispatch | human | no |
-| `test-pretooluse-hooks.yml` | same pair | `workflow_dispatch` only, manual-only by design ("avoid recurring API costs") | human | no |
+| `claude-code-review.yml` | same pair | `pull_request` | actor-agnostic — the PR author's actor, `soleur-ai[bot]` on bot-authored PRs (measured: #13083's check runs) | not today — the workflow is disabled (`scripts/pr-fanout-ledger.txt`); re-enabling it must revisit this input |
+| `fix-constraints-stage-a.yml` | same pair | path-filtered `pull_request` + `workflow_dispatch` | actor-agnostic; the agent step fires only when the constraint gate is red on a filtered PR — no observed bot-authored instance | not today — latent; if the refusal ever fires it is the same loud error with this same one-line remedy, and an unexercised input is unverifiable surface. Any future edit must mirror the Stage-A template carrier |
+| `test-pretooluse-hooks.yml` | same pair | `workflow_dispatch` only, manual-only by design ("avoid recurring API costs"); no in-repo automated dispatcher | human | no |
 
 The four consumers are pinned in lockstep by
 `apps/web-platform/test/claude-pin-lockstep.test.ts` (`EXPECTED_CARRIERS`,
@@ -281,13 +288,13 @@ discoverability_test:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # The weekly dispatch comes from Inngest (cron-machinery-drain.ts)
-          # through a GitHub App installation token, so triggering_actor is
-          # soleur-ai[bot] -- and the action's actor gate refused it ~1.7 s
-          # into this step on every run since 2026-10-12 (closed=0 on all of
-          # them; #13095, recurrence after the id-token fix #9537). The
-          # explicit login, never '*': the repo is public and the action's
-          # own allowed_bots doc warns that '*' lets any external App invoke
-          # it with prompts it controls. isAllowedBot strips a trailing
+          # through a GitHub App installation token, so the run's github.actor
+          # -- what the action's actor gate reads -- is soleur-ai[bot], and
+          # the gate refused it on every weekly run since 2026-10-12 (#13095,
+          # recurrence after the id-token fix #9537). The explicit login,
+          # never '*': the repo is public and the action's own allowed_bots
+          # doc warns that '*' lets any external App invoke it with prompts
+          # it controls. isAllowedBot strips a trailing
           # '[bot]' on both sides, so either spelling matches; the [bot]
           # form is the login GitHub reports.
           allowed_bots: "soleur-ai[bot]"
@@ -442,8 +449,9 @@ Verification paths, ranked:
 
 3. **Human `gh workflow run` (supplementary only).** A human-dispatched run
    passes the actor gate trivially — it CANNOT prove `allowed_bots` works,
-   but it does prove the drain pipeline end-to-end on a surface that has
-   never completed (useful secondary evidence if path 1 is slow):
+   but it does exercise the drain pipeline end-to-end on a surface whose
+   only completed execution (the 2026-10-05 human verification run) still
+   ended `closed=0` (useful secondary evidence if path 1 is slow):
 
    ```bash
    gh workflow run scheduled-machinery-drain.yml
@@ -514,7 +522,10 @@ frontmatter; the actual fan-out was scoped by the semantic sweep.
 ## Context
 
 - Pool trajectory (issue): 16 → **363** open `meta/machinery` issues since
-  2026-09-14; 10 consecutive weekly BREACH verdicts on #9508.
+  2026-09-14; nine weekly BREACH runs 2026-09-21 → 2026-11-23 (no 2026-11-02
+  dispatch — the sequence is not consecutive; the first two verdicts landed
+  on the duplicate standing issues #8482/#9132 before #9508 existed, the
+  rest on #9508).
 - The pool queues epic #11556 items #12885 and #12905 — the "as scheduled"
   path is dead until this lands.
 - `closes: 13095` is in frontmatter; the issue auto-closes on merge while

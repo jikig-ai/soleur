@@ -4,7 +4,7 @@ Derived from `knowledge-base/project/plans/2026-11-27-fix-scheduled-machinery-dr
 
 ## Phase 1: Implementation
 
-- [ ] 1.1 Edit `.github/workflows/scheduled-machinery-drain.yml` — in the
+- [x] 1.1 Edit `.github/workflows/scheduled-machinery-drain.yml` — in the
       `with:` block of the `Drain the machinery ledger` step, add
       `allowed_bots: "soleur-ai[bot]"` immediately after the
       `anthropic_api_key:` line, preceded by the explanatory comment drafted
@@ -14,19 +14,19 @@ Derived from `knowledge-base/project/plans/2026-11-27-fix-scheduled-machinery-dr
 
 ## Phase 2: Local verification
 
-- [ ] 2.1 YAML parses and the input is present (selects the step by name,
+- [x] 2.1 YAML parses and the input is present (selects the step by name,
       not position):
       `python3 -c 'import yaml; d=yaml.safe_load(open(".github/workflows/scheduled-machinery-drain.yml")); s=[x for x in d["jobs"]["measure-and-drain"]["steps"] if x.get("name")=="Drain the machinery ledger"][0]; print(s["with"]["allowed_bots"])'`
       prints `soleur-ai[bot]`.
-- [ ] 2.2 `bash plugins/soleur/test/machinery-drain-floor.test.sh` — green.
-- [ ] 2.3 `bash plugins/soleur/test/claude-code-action-auth.test.sh` —
+- [x] 2.2 `bash plugins/soleur/test/machinery-drain-floor.test.sh` — green.
+- [x] 2.3 `bash plugins/soleur/test/claude-code-action-auth.test.sh` —
       green (job-level `id-token: write` still resolves the step).
-- [ ] 2.4 `bun test apps/web-platform/test/claude-pin-lockstep.test.ts` —
+- [x] 2.4 `bun test apps/web-platform/test/claude-pin-lockstep.test.ts` —
       green (`uses:` SHA→tag pair unchanged).
-- [ ] 2.5 `bash scripts/lint-scheduled-show-full-output.sh
+- [x] 2.5 `bash scripts/lint-scheduled-show-full-output.sh
       .github/workflows/scheduled-machinery-drain.yml` — green (no
       `show_full_output` added).
-- [ ] 2.6 `python3 scripts/lint-infra-no-human-steps.py
+- [x] 2.6 `python3 scripts/lint-infra-no-human-steps.py
       knowledge-base/project/plans/2026-11-27-fix-scheduled-machinery-drain-allowed-bots-plan.md`
       — clean.
 
