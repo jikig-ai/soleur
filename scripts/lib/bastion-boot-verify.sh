@@ -7,14 +7,14 @@
 #
 #   bastion_boot_verify <boot-trail-since-epoch> <apply-outcome> <dispatch-label> <pre-ids>   # 0 ready, 1 not
 #     dispatch-label: the apply_target name used in prose and in the reader's summary
-#                     (bastion-host-create or bastion-host-replace; default bastion-host-create)
+#                     (bastion-host-create or bastion-host-replace)
 #     pre-ids:        the PRE-APPLY ID SET: every soleur-bastion id the job read from the API before the
 #                     apply, space-separated, or the literal `none`. A server whose id is in it is NEVER
 #                     read or powered off: if the apply failed before the destroy (or a birth's create
 #                     failed on a live bastion after lost state), the healthy old server is left alone and
-#                     the result is poweroff_result=old_untouched. Missing or malformed on the replace
-#                     label, it fails closed (poweroff_result=refused_no_preids). Omitted on the create
-#                     label, the 2a behaviour holds (an empty set).
+#                     the result is poweroff_result=old_untouched. REQUIRED on every label (Q-R8): missing,
+#                     empty or malformed, the trail is not read and the power-off fails closed
+#                     (poweroff_result=refused_no_preids). There is no 3-argument form.
 #
 # READY ONLY ON A POSITIVE VERDICT. Runs fresh-host-boot-trail.sh in strict mode for soleur-bastion;
 # ready means the reader printed exactly one line `verdict=ready` AND exited 0. The reader's web-mode
@@ -43,19 +43,24 @@
 #   $GITHUB_STEP_SUMMARY  one line stating what actually happened to the host (never a claim the
 #                         power-off arm did not achieve)
 #
-# _bbv_poweroff [pre-ids] (also called on its own by the job's cancelled-path step): powers off the one
+# _bbv_poweroff <pre-ids> (also called on its own by the job's cancelled-path step): powers off the one
 # soleur-bastion OUTSIDE the pre-apply id set; sets _BBV_POWEROFF=powered_off|absent|old_untouched|
-# refused_no_preids|failed; returns 0 unless it failed or refused. With NO argument it keeps the 2a
-# behaviour; an argument that is empty or malformed refuses (the guard lives at this lowest level, so
-# the cancel step and the failed-apply path cannot skip it).
+# refused_no_preids|failed; returns 0 unless it failed or refused. The set is REQUIRED (Q-R8): no
+# argument, an empty one or a malformed one refuses with refused_no_preids (the guard lives at this
+# lowest level, so the cancel step and the failed-apply path cannot skip it).
 #
-# _bbv_servers_doc <out-file>: the replace route's one Hetzner reader (the step-6 read, the TOCTOU
-# re-read and the summary's next-dispatch read). HTTP 200 exactly and a `.servers` array, or non-zero
-# with http=<code> and .error.code only (never the body).
+# _bbv_servers_doc <out-file>: GET /v1/servers?name=soleur-bastion into a file. Both routes' pre-apply
+# id reads and the replace route's plan-time read, TOCTOU re-read and next-dispatch read use it (the
+# power-off's own lookup is _bbv_lookup). HTTP 200 exactly and a `.servers` array, or non-zero with
+# http=<code> and .error.code only (never the body).
+#
+# _bbv_dispatch_line <id>: the ONE copy of the bastion-host-replace dispatch command (plan_only=true);
+# the replace gate's next-dispatch line prints it too.
 #
 # Inputs (environment): HCLOUD_TOKEN (Hetzner API, sent on curl's stdin config via bc_curl),
 # GH_TOKEN (the issue comment; skipped by name when absent), RUN_URL, SENTRY_ACTIONS_RO_TOKEN (read by
-# the reader). BASTION_BOOT_TRAIL overrides the reader path for the suite.
+# the reader). BASTION_BOOT_TRAIL overrides the reader path for the SUITE ONLY: set while
+# GITHUB_ACTIONS=true it is refused as HELD (Q-R10), the trail is not read and the host is powered off.
 
 _BBV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/bearer-curl.sh
@@ -111,16 +116,13 @@ _bbv_lookup() {
   _BBV_SERVER_ID="$id"
 }
 
-_bbv_poweroff() {  # [pre-ids]: power off the one soleur-bastion outside the pre-apply set; never guesses between two
-  local resp code lrc=0 pre=""
+_bbv_poweroff() {  # <pre-ids>: power off the one soleur-bastion outside the pre-apply set; never guesses between two
+  local resp code lrc=0 pre="${1:-}"
   _BBV_POWEROFF=failed
-  if [[ $# -ge 1 ]]; then
-    if ! _bbv_preids_ok "${1:-}"; then
-      echo "::error::bastion-boot-verify: the pre-apply id set is missing or malformed, so NOTHING was powered off: a server that existed before the apply must never be touched, and without the set this run cannot tell it from the new one. Confirm in the Hetzner console which soleur-bastion is this run's."
-      _BBV_POWEROFF=refused_no_preids
-      return 1
-    fi
-    pre="$1"
+  if ! _bbv_preids_ok "$pre"; then
+    echo "::error::bastion-boot-verify: the pre-apply id set is missing or malformed, so NOTHING was powered off: a server that existed before the apply must never be touched, and without the set this run cannot tell it from the new one. Confirm in the Hetzner console which soleur-bastion is this run's."
+    _BBV_POWEROFF=refused_no_preids
+    return 1
   fi
   _bbv_lookup "$pre" || lrc=$?
   if [[ "$lrc" -eq 3 && "${_BBV_PRE_PRESENT:-0}" -gt 0 ]]; then
@@ -179,9 +181,10 @@ _bbv_record_comment() {  # <comment_result> <summary line>
   [[ -z "${GITHUB_STEP_SUMMARY:-}" ]] || printf '%s\n' "$2" >> "$GITHUB_STEP_SUMMARY"
 }
 
-# _bbv_dispatch_line <expected_bastion_server_id>: the ready-to-run replace dispatch (rehearsal first).
+# _bbv_dispatch_line <expected_bastion_server_id>: the ready-to-run replace dispatch, a plan_only=true
+# rehearsal. The one copy: bastion_replace_next_dispatch (the replace gate) prints it too.
 _bbv_dispatch_line() {
-  printf "gh workflow run apply-web-platform-infra.yml -f apply_target=bastion-host-replace -f confirm=REPLACE-bastion -f expected_bastion_server_id=%s -f plan_only=true -f reason='<why>' (rehearse, then re-run without plan_only)" "$1"
+  printf "gh workflow run apply-web-platform-infra.yml -f apply_target=bastion-host-replace -f confirm=REPLACE-bastion -f expected_bastion_server_id=%s -f plan_only=true -f reason='<why>'" "$1"
 }
 
 # _bbv_servers_doc <out-file>: GET /v1/servers?name=soleur-bastion into <out-file>; 0 only on HTTP 200
@@ -209,14 +212,17 @@ _bbv_servers_doc() {
 }
 
 bastion_boot_verify() {
-  local since="${1:-}" apply_outcome="${2:-}" label="${3:-bastion-host-create}"
-  local job_status=failure reader out rc=0 verdicts host_id="" lrc=0 reason="" pre_given=0 pre=""
+  local since="${1:-}" apply_outcome="${2:-}" label="${3:-bastion-host-create}" pre="${4:-}"
+  local job_status=failure reader out rc=0 verdicts host_id="" lrc=0 reason=""
   [[ "$label" =~ ^[a-z0-9-]+$ ]] || label=bastion-host-create
-  # The pre-apply id set: passed (4th argument), or required (the replace label fails closed without it).
-  if [[ $# -ge 4 ]]; then pre_given=1; pre="${4:-}"; fi
-  [[ "$label" == bastion-host-replace && "$pre_given" -eq 0 ]] && pre_given=1
-  if [[ "$pre_given" -eq 1 ]] && ! _bbv_preids_ok "$pre"; then
+  # The pre-apply id set (4th argument) is required on every label: absent, it is empty and refuses.
+  if ! _bbv_preids_ok "$pre"; then
     reason="the pre-apply id set is missing or malformed"
+  fi
+  # The reader override is a test-only seam (Q-R10): never honoured in a workflow run.
+  if [[ -z "$reason" && -n "${BASTION_BOOT_TRAIL+set}" && "${GITHUB_ACTIONS:-}" == true ]]; then
+    echo "::error::${label} is HELD: BASTION_BOOT_TRAIL is a test-only override of the boot-trail reader and is never honoured in a workflow run. The trail is not read; the host is treated as not ready."
+    reason="BASTION_BOOT_TRAIL is a test-only override"
   fi
   reader="${BASTION_BOOT_TRAIL:-${_BBV_DIR}/../../apps/web-platform/infra/scripts/fresh-host-boot-trail.sh}"
   [[ "$apply_outcome" == success ]] && job_status=success
@@ -261,7 +267,7 @@ bastion_boot_verify() {
   fi
   echo "::error::bastion-boot-verify: soleur-bastion is NOT ready (reader exit ${rc}; verdict lines: '${verdicts//$'\n'/ | }'; apply ${apply_outcome}). Powering it off."
   local poweroff_note next_id="<read the id from a plan_only run's summary>"
-  if [[ "$pre_given" -eq 1 ]]; then _bbv_poweroff "$pre" || true; else _bbv_poweroff || true; fi
+  _bbv_poweroff "$pre" || true
   case "$_BBV_POWEROFF" in
     powered_off) poweroff_note="soleur-bastion powered off, disk kept"; next_id="$_BBV_SERVER_ID"
       _bbv_record powered_off "- boot-verify: **NOT READY** — soleur-bastion (server ${_BBV_SERVER_ID}) was powered off; its disk is kept." ;;
@@ -276,9 +282,9 @@ bastion_boot_verify() {
   esac
   local recovery
   if [[ "$_BBV_POWEROFF" == old_untouched ]]; then
-    recovery="::error::Recovery: the apply did not replace the pre-apply soleur-bastion ${_BBV_PRE_ID}; it is untouched and still the live bastion. Read the apply log above, then re-dispatch with the same pin: $(_bbv_dispatch_line "$next_id")"
+    recovery="::error::Recovery: the apply did not replace the pre-apply soleur-bastion ${_BBV_PRE_ID}; it is untouched and still the live bastion. Read the apply log above, then re-dispatch with the same pin: $(_bbv_dispatch_line "$next_id") (rehearse, then re-run without plan_only)"
   else
-    recovery="::error::Recovery: read the boot-trail stage above, fix bastion-cloud-init.yml if it is a template fault, then replace (this destroys the kept disk): $(_bbv_dispatch_line "$next_id")"
+    recovery="::error::Recovery: read the boot-trail stage above, fix bastion-cloud-init.yml if it is a template fault, then replace (this destroys the kept disk): $(_bbv_dispatch_line "$next_id") (rehearse, then re-run without plan_only)"
   fi
   [[ "$label" == bastion-host-create ]] && recovery="${recovery} Do not re-run bastion-host-create: the server exists, so its gate refuses."
   echo "$recovery"

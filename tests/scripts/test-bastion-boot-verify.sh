@@ -39,6 +39,10 @@ WORK="$(mktemp -d "${TMPDIR}/bbv.XXXXXXXX")" || harness "mktemp failed"
 case "$WORK" in /*/bbv.*) : ;; *) harness "mktemp returned '$WORK'" ;; esac
 trap 'rm -rf "${WORK:?}"' EXIT
 BIN="$WORK/bin"; mkdir -p "$BIN"
+# Every mutant of the library is written to $WORK/mut<N>.sh and sources bearer-curl.sh from its own
+# directory: without this copy each mutant fails to load (exit 98) and every mutation row would be
+# "caught" by a library that never ran. MUT_LOADED below proves the copies load.
+cp "$ROOT/scripts/lib/bearer-curl.sh" "$WORK/bearer-curl.sh" || harness "cannot stage bearer-curl.sh beside the mutants"
 
 # Reader stub: prints $BBV_READER_OUT and exits $BBV_READER_RC; records its env.
 cat > "$WORK/reader.sh" <<'STUB'
@@ -86,8 +90,8 @@ STUB
 chmod +x "$WORK/reader.sh" "$BIN/curl" "$BIN/gh"
 
 LIB_UNDER_TEST="$LIB"
-LABEL_ARG=""   # set for one row to pass bastion_boot_verify's optional 3rd argument
-PRE_ARG="__unset__"  # bastion_boot_verify's 4th argument (the pre-apply id set); __unset__ omits it
+LABEL_ARG=""   # bastion_boot_verify's 3rd argument (the dispatch label); empty = bastion-host-create
+PRE_ARG=none   # bastion_boot_verify's 4th argument (the pre-apply id set, required, Q-R8); __unset__ omits it
 # run <case> <reader-out> <reader-rc> <apply-outcome> [VAR=value...] -> RC, OUT, PO (poweroff_result),
 # SUM (step summary), logs in $WORK/<case>/
 run() {
@@ -97,7 +101,7 @@ run() {
   OUT="$(env -i PATH="$BIN:/usr/bin:/bin" HOME="$WORK" TMPDIR="$TMPDIR" BBV_LOG="$log" BBV_READER_OUT="$rout" BBV_READER_RC="$rrc" \
     BASTION_BOOT_TRAIL="$WORK/reader.sh" HCLOUD_TOKEN=hcloudtok123 GH_TOKEN=ghtok RUN_URL="https://github.com/o/r/actions/runs/1" \
     GITHUB_OUTPUT="$log/out" GITHUB_STEP_SUMMARY="$log/sum" \
-    "$@" bash -c 'source "$1" || exit 98; if [[ "$4" == __unset__ ]]; then bastion_boot_verify 1790000000 "$2" ${3:+"$3"}; else bastion_boot_verify 1790000000 "$2" "${3:-bastion-host-create}" "$4"; fi' _ "$LIB_UNDER_TEST" "$apply" "$LABEL_ARG" "$PRE_ARG" 2>&1)" || RC=$?
+    "$@" bash -c 'source "$1" || exit 98; if [[ "$4" == __unset__ ]]; then bastion_boot_verify 1790000000 "$2" "${3:-bastion-host-create}"; else bastion_boot_verify 1790000000 "$2" "${3:-bastion-host-create}" "$4"; fi' _ "$LIB_UNDER_TEST" "$apply" "$LABEL_ARG" "$PRE_ARG" 2>&1)" || RC=$?
   CURL="$(cat "$log/curl.log")"; GH="$(cat "$log/gh.log")"; CFG="$(cat "$log/curl.cfg")"; RENV="$(cat "$log/reader.env" 2>/dev/null)"
   PO="$(sed -n 's/^poweroff_result=//p' "$log/out")"; SUM="$(cat "$log/sum")"; CR="$(sed -n 's/^comment_result=//p' "$log/out")"
 }
@@ -147,7 +151,7 @@ run lookupblip 'verdict=ready\n' 0 success BBV_LOOKUP_CODE=503
 t "a failed pre-read lookup is named and the read proceeds bound by host_name only" "$([[ "$RC" -eq 0 && "$RENV" == *"HID= "* && "$OUT" == *"bound by host_name only"* ]]; echo $?)"
 LABEL_ARG=bastion-host-replace PRE_ARG=4343   # the replace label requires the pre-apply id set (#12879)
 run replacelabel 'verdict=not_ready\n' 1 success
-LABEL_ARG="" PRE_ARG="__unset__"
+LABEL_ARG="" PRE_ARG=none
 t "a dispatch label reaches the reader and the comment, and the create-only advice is dropped" \
   "$([[ "$RENV" == *"LABEL=bastion-host-replace"* && "$GH" == *"bastion-host-replace did not reach ready"* && "$OUT" != *"Do not re-run bastion-host-create"* ]]; echo $?)"
 # The library's DEFAULT reader path (no override) reaches the real strict reader: an unbound Sentry
@@ -176,7 +180,7 @@ stream_row() {
   env -i PATH="$BIN:/usr/bin:/bin" HOME="$WORK" TMPDIR="$TMPDIR" BBV_LOG="$log" BBV_STDOUT="$log/stdout" \
     BASTION_BOOT_TRAIL="$WORK/reader-stream.sh" HCLOUD_TOKEN=hcloudtok123 GH_TOKEN=ghtok RUN_URL="https://github.com/o/r/actions/runs/1" \
     GITHUB_OUTPUT="$log/out" GITHUB_STEP_SUMMARY="$log/sum" \
-    bash -c 'source "$1" || exit 98; echo BEFORE-CALL; bastion_boot_verify 1790000000 success' _ "$LIB_UNDER_TEST" > "$log/stdout" 2>&1 || RC=$?
+    bash -c 'source "$1" || exit 98; echo BEFORE-CALL; bastion_boot_verify 1790000000 success bastion-host-create none' _ "$LIB_UNDER_TEST" > "$log/stdout" 2>&1 || RC=$?
   STREAMED="$(cat "$log/streamed" 2>/dev/null)"; OUT="$(tr -d '\000' < "$log/stdout")"; CURL="$(cat "$log/curl.log")"; GH="$(cat "$log/gh.log")"
 }
 stream_shape() { [[ "$RC" -eq 0 && "$STREAMED" == yes && "$(grep -cx 'BEFORE-CALL' <<<"$OUT")" -eq 1 && "$(grep -cx 'boot-trail: stage1' <<<"$OUT")" -eq 1 && "$OUT" == *"READY"* ]]; }
@@ -197,6 +201,7 @@ PY2
   LIB_UNDER_TEST="$WORK/mut$MUT.sh" stream_row; local after=1; stream_shape && after=0
   LIB_UNDER_TEST="$LIB"
   cases=$((cases + 1))
+  if [[ "$RC" -eq 98 ]]; then fail "mutant did not load (exit 98): $label"; return; fi
   if [[ "$before" -eq 0 && "$after" -ne 0 ]]; then pass "mutation caught: $label"; else fail "mutation SURVIVED: $label (predicate before=$before after=$after)"; fi
 }
 MUT=0
@@ -233,6 +238,15 @@ run nogh 'verdict=not_ready\n' 1 success GH_TOKEN=
 t "no GH_TOKEN: the comment is skipped by name, the power-off still happens" "$(nogh_shape; echo $?)"
 
 echo "mutation rows"
+# MUT_LOADED (harness): a byte-different but behaviour-identical copy of the library, staged exactly as
+# every mutant is, loads and still yields the not-ready power-off. Reported by printf + exit, never pass().
+printf '\n# mutant-load control\n' | cat "$LIB" - > "$WORK/mut-control.sh"
+LIB_UNDER_TEST="$WORK/mut-control.sh" run mutcontrol 'verdict=not_ready\n' 1 success
+LIB_UNDER_TEST="$LIB"
+if [[ "$RC" -eq 98 ]] || ! not_ready_shape; then
+  printf 'test-bastion-boot-verify: FAIL (MUT_LOADED: a staged library copy does not load or behave, rc=%s; every mutation row would be vacuous)\n' "$RC" >&2
+  exit 1
+fi
 mrow() { # <label> <from> <to> <predicate> <case-args...>: the predicate holds on the real library and fails on the mutant
   local label="$1" from="$2" to="$3" pred="$4"; shift 4
   MUT=$((MUT + 1))
@@ -247,6 +261,7 @@ PY
   LIB_UNDER_TEST="$WORK/mut$MUT.sh" run "$@"; local after=1; "$pred" && after=0
   LIB_UNDER_TEST="$LIB"
   cases=$((cases + 1))
+  if [[ "$RC" -eq 98 ]]; then fail "mutant did not load (exit 98): $label"; return; fi
   if [[ "$before" -eq 0 && "$after" -ne 0 ]]; then pass "mutation caught: $label"; else fail "mutation SURVIVED: $label (predicate before=$before after=$after)"; fi
 }
 mrow "skipped accepted as ready" '[[ "$verdicts" == "verdict=ready" && "$rc" -eq 0 ]]' '[[ ( "$verdicts" == "verdict=ready" || "$verdicts" == "verdict=skipped" ) ]]' not_ready_shape skipped 'verdict=skipped\n' 2 success
@@ -266,7 +281,7 @@ mrow "the lookup takes the first of two servers" '  if [[ "$n" -ne 1 ]]; then' '
 echo "the replace label (#12879)"
 LABEL_ARG=bastion-host-replace PRE_ARG=4343
 run replacenr 'verdict=not_ready\n' 1 success
-LABEL_ARG="" PRE_ARG="__unset__"
+LABEL_ARG="" PRE_ARG=none
 t "replace label, not ready: powers off the new server and prints the ready-to-run replace dispatch for it" \
   "$([[ "$RC" -eq 1 && "$CURL" == *"$POWEROFF"* && "$OUT" == *"gh workflow run apply-web-platform-infra.yml -f apply_target=bastion-host-replace -f confirm=REPLACE-bastion -f expected_bastion_server_id=4242"* ]]; echo $?)"
 t "replace label: never 'not yet available', never 'Do not re-run bastion-host-create'" \
@@ -278,42 +293,42 @@ echo "the pre-apply id set (4th argument; _bbv_poweroff [pre-ids])"
 old_untouched_shape() { [[ "$RC" -eq 1 && "$CURL" != *POST* && "$PO" == old_untouched && "$SUM" == *"pre-apply"* && "$SUM" == *"untouched"* && "$GH" == *"untouched"* ]]; }
 LABEL_ARG=bastion-host-replace PRE_ARG=4242
 run preapplyfail 'verdict=not_ready\n' 1 failure
-LABEL_ARG="" PRE_ARG="__unset__"
+LABEL_ARG="" PRE_ARG=none
 t "failed-apply path: a pre-apply id is never powered off (poweroff_result=old_untouched, its own summary and comment)" "$(old_untouched_shape; echo $?)"
 t "failed-apply path: the old_untouched recovery keeps the same pin" "$([[ "$OUT" == *"expected_bastion_server_id=4242"* ]]; echo $?)"
 LABEL_ARG=bastion-host-replace PRE_ARG=4242
 run preapplyok 'verdict=ready\n' 0 success
-LABEL_ARG="" PRE_ARG="__unset__"
+LABEL_ARG="" PRE_ARG=none
 t "a successful apply whose API still shows only the pre-apply id is not ready, and nothing is powered off" \
   "$([[ "$RC" -eq 1 && "$CURL" != *POST* && -z "$RENV" && "$PO" == old_untouched ]]; echo $?)"
 # Positive control: a DIFFERENT id that is not ready IS powered off (the curl fake logs the id in the URL).
 LABEL_ARG=bastion-host-replace PRE_ARG=4343
 run precontrol 'verdict=not_ready\n' 1 failure
-LABEL_ARG="" PRE_ARG="__unset__"
+LABEL_ARG="" PRE_ARG=none
 t "positive control: a server outside the pre-apply set (4242, set 4343) IS powered off" "$([[ "$RC" -eq 1 && "$CURL" == *"POST https://api.hetzner.cloud/v1/servers/4242/actions/poweroff"* && "$PO" == powered_off ]]; echo $?)"
 # Both the old (pre-apply) and the new server exist: only the new one is read and powered off.
 BOTH='{"servers":[{"id":4242,"name":"soleur-bastion"},{"id":5555,"name":"soleur-bastion"}]}'
 LABEL_ARG=bastion-host-replace PRE_ARG=4242
 run preboth 'verdict=not_ready\n' 1 success "BBV_LOOKUP_BODY=$BOTH"
-LABEL_ARG="" PRE_ARG="__unset__"
+LABEL_ARG="" PRE_ARG=none
 t "old and new both present: the new one (5555) is powered off, the pre-apply one (4242) never" \
   "$([[ "$CURL" == *"POST https://api.hetzner.cloud/v1/servers/5555/actions/poweroff"* && "$CURL" != *"servers/4242/actions"* && "$RENV" == *"HID=5555"* ]]; echo $?)"
 LABEL_ARG=bastion-host-replace PRE_ARG=none
 run prenone 'verdict=not_ready\n' 1 success
-LABEL_ARG="" PRE_ARG="__unset__"
+LABEL_ARG="" PRE_ARG=none
 t "an empty set (none, the recovery arm) behaves exactly as today" "$([[ "$RC" -eq 1 && "$CURL" == *"$POWEROFF"* && "$PO" == powered_off ]]; echo $?)"
 LABEL_ARG=bastion-host-replace PRE_ARG=""
 run premissing 'verdict=not_ready\n' 1 success
-LABEL_ARG="" PRE_ARG="__unset__"
+LABEL_ARG="" PRE_ARG=none
 refused_shape() { [[ "$RC" -eq 1 && "$CURL" != *POST* && "$PO" == refused_no_preids && "$OUT" == *"pre-apply id set"* ]]; }
 t "a missing set on the replace label fails closed (refused_no_preids, nothing powered off)" "$(refused_shape; echo $?)"
 LABEL_ARG=bastion-host-replace PRE_ARG="4242;rm"
 run premalformed 'verdict=not_ready\n' 1 success
-LABEL_ARG="" PRE_ARG="__unset__"
+LABEL_ARG="" PRE_ARG=none
 t "a malformed set fails closed (refused_no_preids)" "$(refused_shape; echo $?)"
 LABEL_ARG=bastion-host-create PRE_ARG=4242
 run precreate 'verdict=not_ready\n' 1 failure
-LABEL_ARG="" PRE_ARG="__unset__"
+LABEL_ARG="" PRE_ARG=none
 t "the birth route passes the set too: a live bastion that predates a failed birth is never powered off" "$([[ "$CURL" != *POST* && "$PO" == old_untouched ]]; echo $?)"
 # The cancel path calls _bbv_poweroff directly.
 run_po() { # <case> <args...>: sources the library, calls _bbv_poweroff with the args -> RC OUT CURL POR
@@ -331,14 +346,26 @@ t "cancel path control: an id outside the set is powered off" "$([[ "$RC" -eq 0 
 run_po cancelempty ""
 t "cancel path: an explicitly empty set refuses (refused_no_preids)" "$([[ "$RC" -ne 0 && "$CURL" != *POST* && "$POR" == refused_no_preids ]]; echo $?)"
 run_po cancellegacy
-t "cancel path: no argument at all keeps the 2a behaviour (powers off the one soleur-bastion)" "$([[ "$RC" -eq 0 && "$CURL" == *"$POWEROFF"* && "$POR" == powered_off ]]; echo $?)"
+t "cancel path: no argument at all refuses (refused_no_preids, Q-R8: there is no 2a no-arg form)" "$([[ "$RC" -ne 0 && "$CURL" != *POST* && "$POR" == refused_no_preids ]]; echo $?)"
+run_po cancelnone none
+t "cancel path: the empty set spelled none powers off the one soleur-bastion (the birth's case)" "$([[ "$RC" -eq 0 && "$CURL" == *"$POWEROFF"* && "$POR" == powered_off ]]; echo $?)"
+# No 3-argument form on ANY label (Q-R8): the trail is not read and the power-off refuses.
+refused_top_shape() { [[ "$RC" -eq 1 && -z "$RENV" && "$CURL" != *POST* && "$PO" == refused_no_preids && "$OUT" == *"pre-apply id set is missing or malformed; the boot trail was not read"* ]]; }
+LABEL_ARG=bastion-host-create PRE_ARG="__unset__"
+run createnoset 'verdict=ready\n' 0 success
+LABEL_ARG="" PRE_ARG=none
+t "the create label with no 4th argument is refused: the trail is not read and nothing is powered off" "$(refused_top_shape; echo $?)"
+LABEL_ARG=bastion-host-replace PRE_ARG="__unset__"
+run replacenoset 'verdict=ready\n' 0 success
+LABEL_ARG="" PRE_ARG=none
+t "the replace label with no 4th argument is refused the same way" "$(refused_top_shape; echo $?)"
 
 echo "comment_result"
 run cmtfailed 'verdict=not_ready\n' 1 success BBV_GH_RC=1
 t "a failed comment on the create label: comment_result=failed and a ::warning::" "$([[ "$CR" == failed && "$OUT" == *"::warning::bastion-boot-verify: the comment on #9421 FAILED"* ]]; echo $?)"
 LABEL_ARG=bastion-host-replace PRE_ARG=4343
 run cmtfailedr 'verdict=not_ready\n' 1 success BBV_GH_RC=1
-LABEL_ARG="" PRE_ARG="__unset__"
+LABEL_ARG="" PRE_ARG=none
 t "a failed comment on the replace label: comment_result=failed and an ::error::" "$([[ "$CR" == failed && "$OUT" == *"::error::bastion-boot-verify: the comment on #9421 FAILED"* ]]; echo $?)"
 t "a failed comment: the summary never claims the comment posted" "$([[ "$SUM" != *"commented on #9421"* && "$SUM" == *"did NOT post"* ]]; echo $?)"
 run cmtnotoken 'verdict=not_ready\n' 1 success GH_TOKEN=
@@ -368,11 +395,29 @@ RLIB="${ROOT}/scripts/lib/bastion-birth-readiness.sh"
 t "the readiness library exists at scripts/lib/bastion-birth-readiness.sh" "$([[ -s "$RLIB" ]]; echo $?)"
 GOOD_CI="$WORK/ci-good.yml"; printf 'runcmd:\n  - echo fresh_boot_ready\n  - echo fresh_boot_not_ready_x\n  - echo cloud_init_complete\n' > "$GOOD_CI"
 COMMENT_CI="$WORK/ci-comment.yml"; printf 'runcmd:\n  - echo fresh_boot_ready\n  # fresh_boot_not_ready_x only in a comment\n  - echo cloud_init_complete\n' > "$COMMENT_CI"
-run_rd() { # <label> <cloud-init> [VAR=value...] -> RC OUT
+RLIB_UNDER_TEST="$RLIB"
+run_rd() { # <label> <cloud-init> [VAR=value...] -> RC OUT. Runs under -e -o pipefail, as a workflow step does.
   local label="$1" ci="$2"; shift 2
   RC=0
   OUT="$(env -i PATH="/usr/bin:/bin" HOME="$WORK" BASTION_CLOUD_INIT="$ci" SENTRY_ACTIONS_RO_TOKEN=sntryu_abc123 "$@" \
-    bash -c 'source "$1" || exit 98; bastion_birth_readiness "$2"' _ "$RLIB" "$label" 2>&1)" || RC=$?
+    bash -eo pipefail -c 'source "$1" || exit 98; bastion_birth_readiness "$2"' _ "$RLIB_UNDER_TEST" "$label" 2>&1)" || RC=$?
+}
+# rdrow <label> <from> <to> <predicate> <run_rd-args...>: the predicate holds on the real readiness library and fails on the mutant.
+rdrow() {
+  local label="$1" from="$2" to="$3" pred="$4" before=1 after=1; shift 4
+  MUT=$((MUT + 1))
+  python3 - "$RLIB" "$WORK/mut$MUT.sh" "$from" "$to" <<'PY4' || { cases=$((cases + 1)); fail "mutation $label did not land"; return; }
+import sys
+s, d, a, b = sys.argv[1:]
+t = open(s).read()
+if t.count(a) != 1: sys.exit(1)
+open(d, "w").write(t.replace(a, b))
+PY4
+  run_rd "$@"; "$pred" && before=0
+  RLIB_UNDER_TEST="$WORK/mut$MUT.sh" run_rd "$@"; "$pred" && after=0
+  RLIB_UNDER_TEST="$RLIB"
+  cases=$((cases + 1))
+  if [[ "$before" -eq 0 && "$after" -ne 0 ]]; then pass "mutation caught: $label"; else fail "mutation SURVIVED: $label (predicate before=$before after=$after)"; fi
 }
 run_rd bastion-host-replace "$GOOD_CI"
 t "readiness passes on a good emitter and a well-formed token" "$([[ "$RC" -eq 0 && "$OUT" == *"PASSED"* ]]; echo $?)"
@@ -388,6 +433,15 @@ run_rd bastion-host-replace "$WORK/no-such-ci.yml"
 t "an unreadable cloud-init is HELD, never a pass" "$([[ "$RC" -ne 0 && "$OUT" == *"is HELD"* ]]; echo $?)"
 run_rd 'x;y' "$GOOD_CI"
 t "a malformed label is refused" "$([[ "$RC" -ne 0 ]]; echo $?)"
+ONLYCOMMENT_CI="$WORK/ci-onlycomment.yml"; printf '# fresh_boot_ready\n# fresh_boot_not_ready_x\n# cloud_init_complete\n' > "$ONLYCOMMENT_CI"
+onlycomment_shape() { [[ "$RC" -ne 0 && "$OUT" == *"::error::bastion-host-replace is HELD: bastion-cloud-init.yml at"*"holds no line outside a comment"* ]]; }
+run_rd bastion-host-replace "$ONLYCOMMENT_CI"
+t "a comment-only template under set -e -o pipefail is a named HELD, never a silent exit" "$(onlycomment_shape; echo $?)"
+rdrow "the comment-only template read back as a bare assignment (dies silently under set -e)" '  if ! body="$(grep -vE '"'"'^[[:space:]]*#'"'"' "$ci")"; then' '  body="$(grep -vE '"'"'^[[:space:]]*#'"'"' "$ci")"; if false; then' onlycomment_shape bastion-host-replace "$ONLYCOMMENT_CI"
+cinit_held_shape() { [[ "$RC" -ne 0 && "$OUT" == *"::error::bastion-host-replace is HELD: BASTION_CLOUD_INIT is a test-only override"* && "$OUT" != *"PASSED"* ]]; }
+run_rd bastion-host-replace "$GOOD_CI" GITHUB_ACTIONS=true
+t "BASTION_CLOUD_INIT set under GITHUB_ACTIONS=true: HELD, even on a good template" "$(cinit_held_shape; echo $?)"
+rdrow "the BASTION_CLOUD_INIT guard dropped" '-n "${BASTION_CLOUD_INIT+set}" && "${GITHUB_ACTIONS:-}" == true' '-n "${BASTION_CLOUD_INIT+set}" && "${GITHUB_ACTIONS:-}" == never' cinit_held_shape bastion-host-replace "$GOOD_CI" GITHUB_ACTIONS=true
 
 echo "mutation rows (#12879: the pre-apply id set and comment_result)"
 LABEL_ARG=bastion-host-replace PRE_ARG=4242
@@ -395,16 +449,48 @@ mrow "the pre-apply exclusion dropped from the lookup" '  if [[ -n "$pre" ]]; th
     _BBV_PRE_PRESENT=' '  if false; then
     _BBV_PRE_PRESENT=' old_untouched_shape preapplyfail 'verdict=not_ready\n' 1 failure
 LABEL_ARG=bastion-host-replace PRE_ARG=""
-mrow "the pre-id check dropped from _bbv_poweroff (the lowest level)" '    if ! _bbv_preids_ok "${1:-}"; then' '    if false; then' refused_shape premissing 'verdict=not_ready\n' 1 success
-LABEL_ARG=bastion-host-replace PRE_ARG="__unset__"
-mrow "the replace label's required set dropped" '  [[ "$label" == bastion-host-replace && "$pre_given" -eq 0 ]] && pre_given=1' '  :' refused_shape repnoset 'verdict=not_ready\n' 1 success
+mrow "the pre-id check dropped from _bbv_poweroff (the lowest level)" '  if ! _bbv_preids_ok "$pre"; then
+    echo "::error::bastion-boot-verify: the pre-apply id set' '  if false; then
+    echo "::error::bastion-boot-verify: the pre-apply id set' refused_shape premissing 'verdict=not_ready\n' 1 success
+LABEL_ARG=bastion-host-create PRE_ARG="__unset__"
+mrow "the required set dropped from bastion_boot_verify (the 3-argument create form restored)" '  if ! _bbv_preids_ok "$pre"; then
+    reason=' '  if [[ $# -ge 4 ]] && ! _bbv_preids_ok "$pre"; then
+    reason=' refused_top_shape createnoset 'verdict=ready\n' 0 success
+LABEL_ARG="" PRE_ARG=none
+# porow <label> <from> <to>: _bbv_poweroff with NO argument refuses on the real library and powers off on the mutant.
+porow() {
+  local label="$1" from="$2" to="$3" before=1 after=1
+  MUT=$((MUT + 1))
+  python3 - "$LIB" "$WORK/mut$MUT.sh" "$from" "$to" <<'PY3' || { cases=$((cases + 1)); fail "mutation $label did not land"; return; }
+import sys
+s, d, a, b = sys.argv[1:]
+t = open(s).read()
+if t.count(a) != 1: sys.exit(1)
+open(d, "w").write(t.replace(a, b))
+PY3
+  run_po po_before; [[ "$POR" == refused_no_preids && "$CURL" != *POST* ]] && before=0
+  LIB_UNDER_TEST="$WORK/mut$MUT.sh" run_po po_after; [[ "$POR" == refused_no_preids && "$CURL" != *POST* ]] && after=0
+  LIB_UNDER_TEST="$LIB"
+  cases=$((cases + 1))
+  if [[ "$RC" -eq 98 ]]; then fail "mutant did not load (exit 98): $label"; return; fi
+  if [[ "$before" -eq 0 && "$after" -ne 0 ]]; then pass "mutation caught: $label"; else fail "mutation SURVIVED: $label (predicate before=$before after=$after)"; fi
+}
+porow "the no-argument _bbv_poweroff form restored (2a behaviour)" '  if ! _bbv_preids_ok "$pre"; then
+    echo "::error::bastion-boot-verify: the pre-apply id set' '  if [[ $# -ge 1 ]] && ! _bbv_preids_ok "$pre"; then
+    echo "::error::bastion-boot-verify: the pre-apply id set'
+
+echo "test-only seams under GITHUB_ACTIONS=true (Q-R10)"
+seam_held_shape() { [[ "$RC" -eq 1 && -z "$RENV" && "$OUT" == *"::error::bastion-host-create is HELD: BASTION_BOOT_TRAIL is a test-only override"* && "$CURL" == *"$POWEROFF"* && "$PO" == powered_off ]]; }
+run seamheld 'verdict=ready\n' 0 success GITHUB_ACTIONS=true
+t "BASTION_BOOT_TRAIL set under GITHUB_ACTIONS=true: HELD, the override is not run, the host is powered off as not ready" "$(seam_held_shape; echo $?)"
+mrow "the BASTION_BOOT_TRAIL guard dropped" '-n "${BASTION_BOOT_TRAIL+set}" && "${GITHUB_ACTIONS:-}" == true' '-n "${BASTION_BOOT_TRAIL+set}" && "${GITHUB_ACTIONS:-}" == never' seam_held_shape seamheld 'verdict=ready\n' 0 success GITHUB_ACTIONS=true
 LABEL_ARG=bastion-host-replace PRE_ARG=4343
 cmt_failed_shape() { [[ "$CR" == failed && "$SUM" == *"did NOT post"* ]]; }
 mrow "a failed comment recorded as posted" '      _bbv_record_comment failed "- boot-verify: the #9421 comment did NOT post; post the run URL there by hand."' '      _bbv_record_comment posted "- boot-verify: the run URL was commented on #9421."' cmt_failed_shape cmtfailedr 'verdict=not_ready\n' 1 success BBV_GH_RC=1
-LABEL_ARG="" PRE_ARG="__unset__"
+LABEL_ARG="" PRE_ARG=none
 
 echo
-MIN_CASES=88  # measured 2026-11-28 (#12879: 47 -> 88, the replace label, pre-apply set, comment_result, _bbv_servers_doc and readiness rows)
+MIN_CASES=98  # measured 2026-11-28 (#12879: 47 -> 88; review: 88 -> 98, Q-R8 no-arg refusals, Q-R10 seams, the comment-only template)
 if [[ "$cases" -lt "$MIN_CASES" ]]; then printf 'test-bastion-boot-verify: FAIL (only %d assertions ran; floor %d)\n' "$cases" "$MIN_CASES" >&2; exit 1; fi
 if [[ $((passes + fails)) -ne "$cases" ]]; then printf 'test-bastion-boot-verify: FAIL (accounting: passes+fails=%d != cases=%d)\n' "$((passes + fails))" "$cases" >&2; exit 1; fi
 if [[ "$fails" -gt 0 ]]; then printf 'test-bastion-boot-verify: FAIL (%d of %d assertions failed)\n' "$fails" "$cases" >&2; exit 1; fi

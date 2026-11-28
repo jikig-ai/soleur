@@ -11,7 +11,8 @@
 # replaced by the label, so a replace never prints "bastion-host-create is HELD".
 #
 # Inputs (environment): SENTRY_ACTIONS_RO_TOKEN (the boot-trail reader's token; never printed).
-# BASTION_CLOUD_INIT overrides the template path for the suite (tests/scripts/test-bastion-boot-verify.sh).
+# BASTION_CLOUD_INIT overrides the template path for the SUITE ONLY (tests/scripts/test-bastion-boot-verify.sh):
+# set while GITHUB_ACTIONS=true it is refused as HELD, never silently honoured or ignored (Q-R10).
 
 _BBR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -21,13 +22,21 @@ bastion_birth_readiness() {
     echo "::error::bastion_birth_readiness: unknown dispatch label '${label}'. Nothing was planned or created."
     return 1
   }
+  if [[ -n "${BASTION_CLOUD_INIT+set}" && "${GITHUB_ACTIONS:-}" == true ]]; then
+    echo "::error::${label} is HELD: BASTION_CLOUD_INIT is a test-only override of the cloud-init template path and is never honoured in a workflow run. Nothing was planned or created."
+    return 1
+  fi
   ci="${BASTION_CLOUD_INIT:-${_BBR_DIR}/../../apps/web-platform/infra/bastion-cloud-init.yml}"
   if [[ ! -r "$ci" ]]; then
     echo "::error::${label} is HELD: bastion-cloud-init.yml could not be read at ${ci}, so the boot could not be verified. Nothing was planned or created."
     return 1
   fi
-  # Comment lines stripped first: a literal that survives only in a comment emits nothing.
-  body="$(grep -vE '^[[:space:]]*#' "$ci")"
+  # Comment lines stripped first: a literal that survives only in a comment emits nothing. grep exits 1
+  # when every line is a comment; inside `if !` that is a named refusal, never a silent set -e exit.
+  if ! body="$(grep -vE '^[[:space:]]*#' "$ci")"; then
+    echo "::error::${label} is HELD: bastion-cloud-init.yml at ${ci} holds no line outside a comment, so it emits nothing and the boot could not be verified. Nothing was planned or created."
+    return 1
+  fi
   for lit in fresh_boot_ready fresh_boot_not_ready_ cloud_init_complete; do
     if ! grep -qF "$lit" <<<"$body"; then
       echo "::error::${label} is HELD: bastion-cloud-init.yml does not emit '${lit}', so the boot could not be verified. Nothing was planned or created."

@@ -65,6 +65,8 @@ fi
 # shellcheck source=tests/scripts/lib/bastion-gate-common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bastion-gate-common.sh"
 _BHRG_LIST="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bastion-resources.txt"
+# The one copy of the dispatch command template (_bbv_dispatch_line), loaded by next_dispatch only.
+_BHRG_BBV="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../../scripts/lib/bastion-boot-verify.sh"
 _BHRG_TAIL="NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Next: dispatch with plan_only=true and read the summary's live-id and next-dispatch lines."
 
 _bhrg_abort() { echo "${1}: ABORT — ${2} ${_BHRG_TAIL}"; }
@@ -307,7 +309,11 @@ bastion_replace_next_dispatch() {
     echo "next dispatch: ${n} soleur-bastion servers exist; refusing to guess, no line to copy"
     return 0
   fi
-  line="gh workflow run apply-web-platform-infra.yml -f apply_target=bastion-host-replace -f confirm=REPLACE-bastion -f expected_bastion_server_id=${id} -f plan_only=true -f reason='<why>'"
+  if ! declare -F _bbv_dispatch_line >/dev/null 2>&1 && ! source "$_BHRG_BBV" >/dev/null 2>&1; then
+    echo "next dispatch: the dispatch template (scripts/lib/bastion-boot-verify.sh) did not load; no line to copy"
+    return 0
+  fi
+  line="$(_bbv_dispatch_line "$id")"
   if [[ "$id" != none && " ${pre} " == *" ${id} "* ]]; then
     echo "next dispatch (the pre-apply server ${id} is still the live one; same pin; rehearse, then re-run without plan_only): ${line}"
   elif [[ "$id" == none ]]; then
