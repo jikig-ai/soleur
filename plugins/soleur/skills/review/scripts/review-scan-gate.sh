@@ -7,17 +7,36 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
 ENSURE="$SCRIPT_DIR/ensure-semgrep.sh"
-TMP="$(mktemp -d)"
+if ! TMP="$(mktemp -d)"; then
+  echo "SOLEUR_REVIEW_SCAN_GATE refuse engine=none files=0 rules=0 findings=0"
+  exit 1
+fi
 
-# The EXIT/INT/TERM trap below is the only caller. Shellcheck does not count a trap as a call.
+# The EXIT trap below is the only cleanup caller. Shellcheck does not count a trap as a call.
 # shellcheck disable=SC2329
 cleanup() {
   rm -rf "$TMP"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+scanned=0
+unscannable=0
+unscannable_rows=()
 
 refuse() {
-  echo "SOLEUR_REVIEW_SCAN_GATE refuse engine=${1:-none} files=${2:-0} rules=${3:-0} findings=${4:-0}"
+  if [ "${#shells[@]}" -gt 0 ]; then
+    echo "SOLEUR_REVIEW_SCAN_GATE refuse engine=${1:-none} files=${2:-0} rules=${3:-0} findings=${4:-0} scanned=${scanned} unscannable=${unscannable}"
+  else
+    echo "SOLEUR_REVIEW_SCAN_GATE refuse engine=${1:-none} files=${2:-0} rules=${3:-0} findings=${4:-0}"
+  fi
+  if [ "${#unscannable_rows[@]}" -gt 0 ]; then
+    printf '%s\n' "${unscannable_rows[@]}"
+  fi
+  if [ "${#finding_lines[@]}" -gt 0 ]; then
+    printf '%s\n' "${finding_lines[@]}"
+  fi
   exit 1
 }
 
@@ -114,7 +133,6 @@ else
   engine="shellcheck"
 fi
 
-TMP="$(mktemp -d)"
 rules=0
 findings=0
 finding_lines=()
@@ -241,17 +259,49 @@ fi
 
 if [ "${#shells[@]}" -gt 0 ]; then
   if ! command -v shellcheck >/dev/null 2>&1; then
+    for sh_file in "${shells[@]}"; do
+      unscannable=$((unscannable + 1))
+      unscannable_rows+=("$sh_file:0 unscannable-shellcheck-binary-missing")
+    done
     refuse "$engine" "$files" "$rules" 0
   fi
-  sh_out="$TMP/sh.json"
-  sh_err="$TMP/sh.err"
-  shellcheck -f json "${shells[@]}" >"$sh_out" 2>"$sh_err"
-  sh_rc=$?
-  if [ "$sh_rc" -ne 0 ] && [ "$sh_rc" -ne 1 ]; then
-    refuse "$engine" "$files" "$rules" 0
+  # Per-file bounded scanning (ADR-324 as amended): every classified shell input is
+  # attempted under `timeout -k 5s 30s` with full default analysis — never a degraded
+  # --extended-analysis=false pass, and no byte-size prefilter, because size proved a
+  # false nontermination proxy. rc 0/1 mean the scan COMPLETED (1 carries findings);
+  # timeout statuses 124/137, malformed JSON, a missing timeout or scanner binary, or any other
+  # scanner status make the input unscannable, and any unscannable input fails the
+  # gate closed: an ok receipt may never certify coverage ShellCheck did not complete.
+  TIMEOUT_BIN=""
+  if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT_BIN="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_BIN="gtimeout"
   fi
   sh_parsed="$TMP/sh-parsed.txt"
-  if ! python3 - "$sh_out" >"$sh_parsed" <<'PY'
+  if [ -z "$TIMEOUT_BIN" ]; then
+    for sh_file in "${shells[@]}"; do
+      unscannable=$((unscannable + 1))
+      unscannable_rows+=("$sh_file:0 unscannable-timeout-binary-missing")
+    done
+  else
+    for sh_file in "${shells[@]}"; do
+      sh_out="$TMP/sh-one.json"
+      sh_err="$TMP/sh-one.err"
+      "$TIMEOUT_BIN" -k 5s 30s shellcheck -f json -- "$sh_file" >"$sh_out" 2>"$sh_err"
+      sh_rc=$?
+      if [ "$sh_rc" -eq 124 ] || [ "$sh_rc" -eq 137 ]; then
+        unscannable=$((unscannable + 1))
+        unscannable_rows+=("$sh_file:0 unscannable-timeout")
+        continue
+      fi
+      if [ "$sh_rc" -ne 0 ] && [ "$sh_rc" -ne 1 ]; then
+        unscannable=$((unscannable + 1))
+        unscannable_rows+=("$sh_file:0 unscannable-scanner-status")
+        continue
+      fi
+      : >"$sh_parsed"
+      if ! python3 - "$sh_out" >"$sh_parsed" 2>/dev/null <<'PY'
 import json, sys
 rows = json.load(open(sys.argv[1]))
 for row in rows:
@@ -259,17 +309,29 @@ for row in rows:
     rule = f"SC{code}" if isinstance(code, int) else str(code)
     print(f"{row.get('file')}:{row.get('line')} {rule}")
 PY
-  then
-    refuse "$engine" "$files" "$rules" 0
+      then
+        unscannable=$((unscannable + 1))
+        unscannable_rows+=("$sh_file:0 unscannable-malformed-json")
+        continue
+      fi
+      scanned=$((scanned + 1))
+      while IFS= read -r row || [ -n "$row" ]; do
+        [ -n "$row" ] || continue
+        finding_lines+=("$row")
+        findings=$((findings + 1))
+      done <"$sh_parsed"
+    done
   fi
-  while IFS= read -r row || [ -n "$row" ]; do
-    [ -n "$row" ] || continue
-    finding_lines+=("$row")
-    findings=$((findings + 1))
-  done <"$sh_parsed"
+  if [ "$unscannable" -gt 0 ]; then
+    refuse "$engine" "$files" "$rules" "$findings"
+  fi
 fi
 
-echo "SOLEUR_REVIEW_SCAN_GATE ok engine=${engine} files=${files} rules=${rules} findings=${findings}"
+if [ "${#shells[@]}" -gt 0 ]; then
+  echo "SOLEUR_REVIEW_SCAN_GATE ok engine=${engine} files=${files} rules=${rules} findings=${findings} scanned=${scanned} unscannable=${unscannable}"
+else
+  echo "SOLEUR_REVIEW_SCAN_GATE ok engine=${engine} files=${files} rules=${rules} findings=${findings}"
+fi
 if [ "${#finding_lines[@]}" -gt 0 ]; then
   printf '%s\n' "${finding_lines[@]}"
 fi

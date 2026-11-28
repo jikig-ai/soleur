@@ -154,21 +154,126 @@ EOF
 }
 
 write_shellcheck() {
-  local arm="$1"
+  local arm="$1" mode="${2:-clean}"
   assert_fixture_dir "$arm"
   cat >"$arm/bin/shellcheck" <<EOF
 #!/bin/sh
 printf '%s\\n' "\$*" >>"$arm/shellcheck.args"
-printf '[]\\n'
-exit 0
+mode="$mode"
+case "\$mode" in
+  clean)
+    printf '[]\\n'
+    exit 0
+    ;;
+  hang)
+    exec python3 -c 'import time; time.sleep(120)'
+    ;;
+  malformed)
+    printf 'this is not a json array\\n'
+    exit 0
+    ;;
+  emptyout)
+    exit 0
+    ;;
+  exit3)
+    printf '[]\\n'
+    exit 3
+    ;;
+  finding-b)
+    last=""
+    for a in "\$@"; do last="\$a"; done
+    case "\$last" in
+      *b.sh*)
+        printf '[{"file":"%s","line":4,"endLine":4,"column":10,"endColumn":12,"level":"warning","code":2086,"message":"Double quote to prevent globbing."}]\\n' "\$last"
+        exit 1
+        ;;
+      *)
+        printf '[]\\n'
+        exit 0
+        ;;
+    esac
+    ;;
+  *)
+    printf 'unhandled shellcheck stub mode\\n' >&2
+    exit 2
+    ;;
+esac
 EOF
   chmod +x "$arm/bin/shellcheck"
 }
 
+# A hermetic stand-in for GNU timeout: parses `-k <grace> <duration> <cmd...>`,
+# forwards the command's exit status when it completes, and kills the command
+# then exits 124 when the command outlives the stub's short internal deadline
+# (~1.5s, independent of the requested duration so the suite stays fast). Every
+# invocation's argv is appended to timeout.args so tests can pin the exact
+# `-k 5s 30s` envelope the gate is contractually required to use.
+write_timeout() {
+  local arm="$1" name="${2:-timeout}"
+  assert_fixture_dir "$arm"
+  cat >"$arm/bin/$name" <<EOF
+#!/usr/bin/env python3
+import subprocess, sys
+
+LOG = "$arm/timeout.args"
+DEADLINE = 1.5
+
+argv = sys.argv[1:]
+with open(LOG, "a") as fh:
+    fh.write(" ".join(argv) + "\\n")
+
+i = 0
+while i < len(argv):
+    a = argv[i]
+    if a in ("-k", "--kill-after"):
+        i += 2
+    elif a.startswith("--kill-after="):
+        i += 1
+    elif a.startswith("-"):
+        i += 1
+    else:
+        break
+rest = argv[i:]
+if len(rest) < 2:
+    sys.stderr.write("timeout stub: bad argv\\n")
+    sys.exit(2)
+cmd = rest[1:]
+try:
+    proc = subprocess.Popen(cmd)
+except FileNotFoundError:
+    sys.exit(127)
+except PermissionError:
+    sys.exit(126)
+try:
+    rc = proc.wait(timeout=DEADLINE)
+    if rc < 0:
+        rc = 128 - rc
+    sys.exit(rc)
+except subprocess.TimeoutExpired:
+    proc.terminate()
+    try:
+        proc.wait(timeout=0.5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    sys.exit(124)
+EOF
+  chmod +x "$arm/bin/$name"
+}
+
+# The host's real timeout binary bounds every gate invocation from OUTSIDE the
+# hermetic PATH: a gate that wedges on a pathological input (the defect this
+# suite exists to prevent) is a slow RED, never an infinite hang of the suite.
+REAL_TIMEOUT="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+
 run_gate() {
   local arm="$1"
   shift
-  env -i PATH="$arm/bin" HOME="$arm" /bin/bash "$SUT" "$@"
+  if [ -n "$REAL_TIMEOUT" ]; then
+    "$REAL_TIMEOUT" -k 5s 30s env -i PATH="$arm/bin" HOME="$arm" /bin/bash "$SUT" "$@"
+  else
+    env -i PATH="$arm/bin" HOME="$arm" /bin/bash "$SUT" "$@"
+  fi
 }
 
 # --- script source uses the echo form the drift guard can see ---
@@ -416,13 +521,85 @@ printf 'echo hi\n' >"$arm/work/a.sh"
 out="$(run_gate "$arm" "$arm/work/a.sh")"
 rc=$?
 first="$(printf '%s\n' "$out" | head -n 1)"
-if [ "$rc" -eq 1 ] && grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse ' <<<"$first"; then
+second="$(printf '%s\n' "$out" | sed -n '2p')"
+if [ "$rc" -eq 1 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE refuse engine=shellcheck files=1 rules=0 findings=0 scanned=0 unscannable=1" ] && [ "$second" = "$arm/work/a.sh:0 unscannable-shellcheck-binary-missing" ]; then
   ok "shell-only without shellcheck refuses"
 else
-  no "shell-only without shellcheck refuses (rc=$rc line=$first)"
+  no "shell-only without shellcheck refuses (rc=$rc line=$first second=$second)"
 fi
 
 # --- shellcheck executed receipts ok rules=0 ---
+arm="$(new_arm)"
+DIRS+=("$arm")
+write_shellcheck "$arm"
+write_timeout "$arm"
+printf 'echo hi\n' >"$arm/work/a.sh"
+out="$(run_gate "$arm" "$arm/work/a.sh")"
+rc=$?
+first="$(printf '%s\n' "$out" | head -n 1)"
+if [ "$rc" -eq 0 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE ok engine=shellcheck files=1 rules=0 findings=0 scanned=1 unscannable=0" ] && grep -q "$arm/work/a.sh" "$arm/shellcheck.args"; then
+  ok "shellcheck argv includes the shell target"
+else
+  no "shellcheck argv includes the shell target (rc=$rc line=$first)"
+fi
+
+# --- per-file invocation: two shell files, one invocation each, in order, under the timeout envelope ---
+arm="$(new_arm)"
+DIRS+=("$arm")
+write_shellcheck "$arm"
+write_timeout "$arm"
+printf 'echo a\n' >"$arm/work/a.sh"
+printf 'echo b\n' >"$arm/work/b.sh"
+out="$(run_gate "$arm" "$arm/work/a.sh" "$arm/work/b.sh")"
+rc=$?
+first="$(printf '%s\n' "$out" | head -n 1)"
+invocations="$(grep -c . "$arm/shellcheck.args" 2>/dev/null || true)"
+line1="$(sed -n '1p' "$arm/shellcheck.args" 2>/dev/null)"
+line2="$(sed -n '2p' "$arm/shellcheck.args" 2>/dev/null)"
+if [ "$rc" -eq 0 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE ok engine=shellcheck files=2 rules=0 findings=0 scanned=2 unscannable=0" ] \
+  && [ "$invocations" -eq 2 ] \
+  && [ "$line1" = "-f json -- $arm/work/a.sh" ] && [ "$line2" = "-f json -- $arm/work/b.sh" ] \
+  && grep -q -- '-k 5s 30s shellcheck' "$arm/timeout.args" \
+  && [ "$(grep -c . "$arm/timeout.args")" -eq 2 ]; then
+  ok "per-file invocation order, one bounded invocation each"
+else
+  no "per-file invocation order, one bounded invocation each (rc=$rc line=$first invocations=$invocations l1=$line1 l2=$line2 timeout=$(cat "$arm/timeout.args" 2>/dev/null | tr '\n' '|'))"
+fi
+
+# --- findings aggregate across two files in input order ---
+arm="$(new_arm)"
+DIRS+=("$arm")
+write_shellcheck "$arm" finding-b
+write_timeout "$arm"
+printf 'echo a\n' >"$arm/work/a.sh"
+printf 'echo b\n' >"$arm/work/b.sh"
+out="$(run_gate "$arm" "$arm/work/a.sh" "$arm/work/b.sh")"
+rc=$?
+first="$(printf '%s\n' "$out" | head -n 1)"
+second="$(printf '%s\n' "$out" | sed -n '2p')"
+if [ "$rc" -eq 0 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE ok engine=shellcheck files=2 rules=0 findings=1 scanned=2 unscannable=0" ] && [ "$second" = "$arm/work/b.sh:4 SC2086" ]; then
+  ok "a finding in the second file survives per-file aggregation"
+else
+  no "a finding in the second file survives per-file aggregation (rc=$rc first=$first second=$second)"
+fi
+
+# --- hanging shellcheck is a bounded unscannable-timeout refusal, not a wedge ---
+arm="$(new_arm)"
+DIRS+=("$arm")
+write_shellcheck "$arm" hang
+write_timeout "$arm"
+printf 'echo hi\n' >"$arm/work/a.sh"
+out="$(run_gate "$arm" "$arm/work/a.sh")"
+rc=$?
+first="$(printf '%s\n' "$out" | head -n 1)"
+second="$(printf '%s\n' "$out" | sed -n '2p')"
+if [ "$rc" -eq 1 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE refuse engine=shellcheck files=1 rules=0 findings=0 scanned=0 unscannable=1" ] && [ "$second" = "$arm/work/a.sh:0 unscannable-timeout" ]; then
+  ok "a hanging shellcheck refuses as unscannable-timeout"
+else
+  no "a hanging shellcheck refuses as unscannable-timeout (rc=$rc first=$first second=$second)"
+fi
+
+# --- no timeout binary on PATH refuses before scanning ---
 arm="$(new_arm)"
 DIRS+=("$arm")
 write_shellcheck "$arm"
@@ -430,10 +607,142 @@ printf 'echo hi\n' >"$arm/work/a.sh"
 out="$(run_gate "$arm" "$arm/work/a.sh")"
 rc=$?
 first="$(printf '%s\n' "$out" | head -n 1)"
-if [ "$rc" -eq 0 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE ok engine=shellcheck files=1 rules=0 findings=0" ] && grep -q "$arm/work/a.sh" "$arm/shellcheck.args"; then
-  ok "shellcheck argv includes the shell target"
+second="$(printf '%s\n' "$out" | sed -n '2p')"
+if [ "$rc" -eq 1 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE refuse engine=shellcheck files=1 rules=0 findings=0 scanned=0 unscannable=1" ] && [ "$second" = "$arm/work/a.sh:0 unscannable-timeout-binary-missing" ]; then
+  ok "missing timeout binary refuses as unscannable-timeout-binary-missing"
 else
-  no "shellcheck argv includes the shell target (rc=$rc line=$first)"
+  no "missing timeout binary refuses as unscannable-timeout-binary-missing (rc=$rc first=$first second=$second)"
+fi
+if [ -s "$arm/shellcheck.args" ]; then
+  no "a missing timeout binary must not invoke shellcheck unbounded"
+else
+  ok "a missing timeout binary must not invoke shellcheck unbounded"
+fi
+
+# --- gtimeout fallback when timeout is absent ---
+arm="$(new_arm)"
+DIRS+=("$arm")
+write_shellcheck "$arm"
+write_timeout "$arm" gtimeout
+printf 'echo hi\n' >"$arm/work/a.sh"
+out="$(run_gate "$arm" "$arm/work/a.sh")"
+rc=$?
+first="$(printf '%s\n' "$out" | head -n 1)"
+if [ "$rc" -eq 0 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE ok engine=shellcheck files=1 rules=0 findings=0 scanned=1 unscannable=0" ] && grep -q 'shellcheck' "$arm/timeout.args"; then
+  ok "gtimeout is the fallback timeout binary"
+else
+  no "gtimeout is the fallback timeout binary (rc=$rc first=$first)"
+fi
+
+# --- malformed scanner JSON refuses rather than reading as zero findings ---
+arm="$(new_arm)"
+DIRS+=("$arm")
+write_shellcheck "$arm" malformed
+write_timeout "$arm"
+printf 'echo hi\n' >"$arm/work/a.sh"
+out="$(run_gate "$arm" "$arm/work/a.sh")"
+rc=$?
+first="$(printf '%s\n' "$out" | head -n 1)"
+second="$(printf '%s\n' "$out" | sed -n '2p')"
+if [ "$rc" -eq 1 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE refuse engine=shellcheck files=1 rules=0 findings=0 scanned=0 unscannable=1" ] && [ "$second" = "$arm/work/a.sh:0 unscannable-malformed-json" ]; then
+  ok "malformed scanner output refuses as unscannable-malformed-json"
+else
+  no "malformed scanner output refuses as unscannable-malformed-json (rc=$rc first=$first second=$second)"
+fi
+
+# --- empty scanner output is malformed, not zero findings ---
+arm="$(new_arm)"
+DIRS+=("$arm")
+write_shellcheck "$arm" emptyout
+write_timeout "$arm"
+printf 'echo hi\n' >"$arm/work/a.sh"
+out="$(run_gate "$arm" "$arm/work/a.sh")"
+rc=$?
+first="$(printf '%s\n' "$out" | head -n 1)"
+if [ "$rc" -eq 1 ] && grep -q 'unscannable-malformed-json' <<<"$out"; then
+  ok "empty scanner output refuses as unscannable-malformed-json"
+else
+  no "empty scanner output refuses as unscannable-malformed-json (rc=$rc first=$first)"
+fi
+
+# --- unexpected scanner status refuses as unscannable-scanner-status ---
+arm="$(new_arm)"
+DIRS+=("$arm")
+write_shellcheck "$arm" exit3
+write_timeout "$arm"
+printf 'echo hi\n' >"$arm/work/a.sh"
+out="$(run_gate "$arm" "$arm/work/a.sh")"
+rc=$?
+first="$(printf '%s\n' "$out" | head -n 1)"
+second="$(printf '%s\n' "$out" | sed -n '2p')"
+if [ "$rc" -eq 1 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE refuse engine=shellcheck files=1 rules=0 findings=0 scanned=0 unscannable=1" ] && [ "$second" = "$arm/work/a.sh:0 unscannable-scanner-status" ]; then
+  ok "an unexpected scanner status refuses as unscannable-scanner-status"
+else
+  no "an unexpected scanner status refuses as unscannable-scanner-status (rc=$rc first=$first second=$second)"
+fi
+
+# --- ok is impossible when any input is unscannable even if another scanned clean ---
+arm="$(new_arm)"
+DIRS+=("$arm")
+cat >"$arm/bin/shellcheck" <<EOF
+#!/bin/sh
+printf '%s\\n' "\$*" >>"$arm/shellcheck.args"
+last=""
+for a in "\$@"; do last="\$a"; done
+case "\$last" in
+  *b.sh*) printf 'not json\\n'; exit 0 ;;
+  *) printf '[{"file":"%s","line":2,"endLine":2,"column":1,"endColumn":3,"level":"warning","code":2086,"message":"Double quote."}]\\n' "\$last"; exit 1 ;;
+esac
+EOF
+chmod +x "$arm/bin/shellcheck"
+write_timeout "$arm"
+printf 'echo a\n' >"$arm/work/a.sh"
+printf 'echo b\n' >"$arm/work/b.sh"
+out="$(run_gate "$arm" "$arm/work/a.sh" "$arm/work/b.sh")"
+rc=$?
+first="$(printf '%s\n' "$out" | head -n 1)"
+second="$(printf '%s\n' "$out" | sed -n '2p')"
+third="$(printf '%s\n' "$out" | sed -n '3p')"
+if [ "$rc" -eq 1 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE refuse engine=shellcheck files=2 rules=0 findings=1 scanned=1 unscannable=1" ] && [ "$second" = "$arm/work/b.sh:0 unscannable-malformed-json" ] && [ "$third" = "$arm/work/a.sh:2 SC2086" ]; then
+  ok "one completed scan cannot ok while another input is unscannable"
+else
+  no "one completed scan cannot ok while another input is unscannable (rc=$rc first=$first second=$second third=$third)"
+fi
+
+# --- leading-dash filename still scans because of the -- separator ---
+arm="$(new_arm)"
+DIRS+=("$arm")
+write_shellcheck "$arm"
+write_timeout "$arm"
+printf 'echo hi\n' >"$arm/work/-x.sh"
+out="$(cd "$arm/work" && run_gate "$arm" "-x.sh")"
+rc=$?
+first="$(printf '%s\n' "$out" | head -n 1)"
+if [ "$rc" -eq 0 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE ok engine=shellcheck files=1 rules=0 findings=0 scanned=1 unscannable=0" ] && grep -q -- '-- -x.sh' "$arm/shellcheck.args"; then
+  ok "a leading-dash filename is scanned behind the -- separator"
+else
+  no "a leading-dash filename is scanned behind the -- separator (rc=$rc first=$first args=$(cat "$arm/shellcheck.args" 2>/dev/null))"
+fi
+
+# --- no byte-size prefilter: a >512KiB shell input is still attempted ---
+arm="$(new_arm)"
+DIRS+=("$arm")
+write_shellcheck "$arm"
+write_timeout "$arm"
+python3 -c '
+with open("'"$arm"'/work/big.sh", "w") as fh:
+    fh.write("#!/bin/sh\necho hi\n")
+    pad = "#" * 1000 + "\n"
+    while fh.tell() < 600000:
+        fh.write(pad)
+'
+out="$(run_gate "$arm" "$arm/work/big.sh")"
+rc=$?
+first="$(printf '%s\n' "$out" | head -n 1)"
+if [ "$rc" -eq 0 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE ok engine=shellcheck files=1 rules=0 findings=0 scanned=1 unscannable=0" ] && grep -q 'big.sh' "$arm/shellcheck.args"; then
+  ok "a 600KB shell input is scanned (no byte-size prefilter)"
+else
+  no "a 600KB shell input is scanned (no byte-size prefilter) (rc=$rc first=$first)"
 fi
 
 # --- mixed without shellcheck refuses ---
@@ -445,10 +754,11 @@ printf 'echo hi\n' >"$arm/work/a.sh"
 out="$(run_gate "$arm" "$arm/work/a.ts" "$arm/work/a.sh")"
 rc=$?
 first="$(printf '%s\n' "$out" | head -n 1)"
-if [ "$rc" -eq 1 ] && grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse ' <<<"$first"; then
+second="$(printf '%s\n' "$out" | sed -n '2p')"
+if [ "$rc" -eq 1 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE refuse engine=mixed files=2 rules=2 findings=0 scanned=0 unscannable=1" ] && [ "$second" = "$arm/work/a.sh:0 unscannable-shellcheck-binary-missing" ]; then
   ok "mixed range without shellcheck refuses"
 else
-  no "mixed range without shellcheck refuses (rc=$rc line=$first)"
+  no "mixed range without shellcheck refuses (rc=$rc line=$first second=$second)"
 fi
 
 # --- skill command order ---

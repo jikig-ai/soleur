@@ -191,6 +191,8 @@ scripts/inngest-link-flip.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
 scripts/key-rotate.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
 scripts/key-rotate.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
 scripts/key-rotate.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
-tests/scripts/test-argv-bearer-sweep.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
-tests/scripts/test-argv-bearer-sweep.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
-tests/scripts/test-argv-bearer-sweep.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2
+tests/scripts/argv-bearer-sweep/02-s2a-hmac.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+tests/scripts/argv-bearer-sweep/02-s2a-hmac.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+tests/scripts/argv-bearer-sweep/06-s4-guard2-rows13-24.sh	CF_ACCESS_CLIENT_ID	tier-a	2026-11-30	#9294:PR-2
+tests/scripts/argv-bearer-sweep/06-s4-guard2-rows13-24.sh	CF_ACCESS_CLIENT_SECRET	tier-a	2026-11-30	#9294:PR-2
+tests/scripts/argv-bearer-sweep/06-s4-guard2-rows13-24.sh	WEBHOOK_DEPLOY_SECRET	tier-a	2026-11-30	#9294:PR-2

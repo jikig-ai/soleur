@@ -1842,6 +1842,10 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   # S5 Guard 1: the census ceiling table is read for the row-identity comparison.
   "scripts/fixtures/shell-trace-refusal/rule-e-census-ceiling.tsv"
   "scripts/followthroughs/"
+  # The suite is a split driver (#13099): the assertions live in the sourced fragments, so an edit to
+  # any fragment must select the suite. The edge is the directory prefix, never a member list, because
+  # the fragment population is derived by the driver's structural preamble, not fixed.
+  "tests/scripts/argv-bearer-sweep/"
   # G1 PR-4a (#10937): the parity script is the one HMAC surface this suite still EXECUTES directly under the shim
   # (live status arm, hostile-credential, xtrace, big-secret and mutant rows); it used to be reached only through the retired probes.
   "scripts/check-deploy-script-parity.sh"
@@ -1899,11 +1903,12 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   "apps/web-platform/infra/seccomp-bwrap.json"
   "scripts/inngest-liveness-classify.sh"
   "scripts/inngest-restart-poll-classify.sh"
-  # S4 manifest member (test-argv-bearer-sweep.sh:4336,5466): the stage names the script in S4_SCRIPT_MANIFEST /
+  # S4 manifest member (the S4_SCRIPT_MANIFEST assignment in tests/scripts/argv-bearer-sweep/05-s4-through-guard2-row12.sh
+  # and the S4_REPLAY_FILES assignment in 06-s4-guard2-rows13-24.sh): the stage names the script in S4_SCRIPT_MANIFEST /
   # S4_REPLAY_FILES and executes/scans its real content under the recording curl.
   "scripts/key-rotate.sh"
   # Real reads: the S4/HMAC census and Rule-E sweep grep the CONTENT of every `git ls-files 'scripts/*.sh'`
-  # member (test-argv-bearer-sweep.sh:3288,4264) — an edit to any of these changes the derived set the census compares.
+  # member (the HM5_HOLDERS census derivation in tests/scripts/argv-bearer-sweep/03-s2b-s2c.sh and the s4_file_has_argv_hmac sweeps in 05-s4-through-guard2-row12.sh) — an edit to any of these changes the derived set the census compares.
   "scripts/betterstack-ingest-probe.sh"
   "scripts/ensure-doppler.sh"
   "scripts/kb-drift-walker.sh"
