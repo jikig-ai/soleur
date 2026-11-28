@@ -116,7 +116,7 @@ build_fx() {
     # suite-timings-(scripts|scripts-heavy)-N artifacts (the strict selector the probe shares with watch-shard-balance)
     local aj="" an anm
     for ((an = 1; an <= arts_n; an++)); do
-      anm="suite-timings-scripts-$an"; (( an > 8 )) && anm="suite-timings-scripts-heavy-$((an - 8))"
+      anm="suite-timings-scripts-$an"; (( an > 12 )) && anm="suite-timings-scripts-heavy-$((an - 12))"
       aj="${aj:+$aj,}{\"id\":$((5000 + i * 100 + an)),\"name\":\"$anm\"}"
     done
     [ "$tsv_mode" != none ] && aj="[$aj]" || aj="[]"
@@ -352,13 +352,13 @@ if grep -qE 'page=[2-9]' "$TMP/s1/requests.log"; then fail "a short page 1 must 
 build_fx "$TMP/q1" 25 40; printf '{"resources":{"core":{"remaining":5}}}' > "$TMP/q1/rate_limit.json"
                                     expect "quota cut: remaining=5 under the floor is NOT YET, never a failed read" 2 "NOT YET" "$TMP/q1"
 build_fx "$TMP/e1" 25 40 0 0 "" none; expect "missing suite-timings artifact evidence is NOT YET, never FAIL" 2 "NOT YET" "$TMP/e1"
-# --- the review-round rows: the real ~11-artifact run shape, cross-artifact dedupe, transport-vs-absent, the
+# --- the review-round rows: the real ~15-artifact run shape at K=12+3, cross-artifact dedupe, transport-vs-absent, the
 # strict name selector, the hostile branch, the unpriced gated label, the wall deadline ---------------------
-build_fx "$TMP/m11" 25 40 0 0 "" full 11
-                                    expect "11 suite-timings artifacts per run (the real shape, 12 reads/run): 21 fully evidenced under the 260 cap — the old 60 cap starved this to ~5" 0 "qualifying_runs=25 evidenced_runs=21" "$TMP/m11"
+build_fx "$TMP/m11" 25 40 0 0 "" full 15
+                                    expect "15 suite-timings artifacts per run (the real shape at K=12+3, 16 reads/run): 20 fully evidenced under the 320 cap — the old 60 cap starved this to ~5" 0 "qualifying_runs=25 evidenced_runs=20" "$TMP/m11"
 out="$(env FX="$TMP/m11" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
-if [[ "$rc" == 0 && "$out" == *"realized_saving_min=61.1"* && "$out" == *"unpriced=apps/web-platform [unit]"* ]]; then
-  pass "11-artifact fixture: cross-artifact dedupe holds (61.1 suite-min, not ~670) and the unpriced gated label is named on the status line"
+if [[ "$rc" == 0 && "$out" == *"realized_saving_min=62.4"* && "$out" == *"unpriced=apps/web-platform [unit]"* ]]; then
+  pass "15-artifact fixture: cross-artifact dedupe holds (62.4 suite-min, not ~670) and the unpriced gated label is named on the status line"
 else fail "multi-artifact dedupe/unpriced: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 build_fx "$TMP/dx" 25 40 0 0 "" full 2
 mkdir -p "$TMP/dx/zd1" "$TMP/dx/zd2"
@@ -370,7 +370,7 @@ for i in $(seq 1 25); do
   ( cd "$TMP/dx/zd1" && zip -q "$TMP/dx/art-$((5000 + i * 100 + 1)).zip" suite-timings.tsv )
   ( cd "$TMP/dx/zd2" && zip -q "$TMP/dx/art-$((5000 + i * 100 + 2)).zip" suite-timings.tsv )
 done
-expect "a skip=relevance row priced in two of a run's artifacts (or twice in one) counts once" 0 "realized_saving_min=32.1" "$TMP/dx"
+expect "a skip=relevance row priced in two of a run's artifacts (or twice in one) counts once" 0 "realized_saving_min=24.6" "$TMP/dx"
 build_fx "$TMP/t1" 25 40; rm -f "$TMP/t1/arts-1.json"
                                     expect "a failed artifact LISTING is CANNOT ESTABLISH, never folded into evidence_absent" 3 "CANNOT ESTABLISH" "$TMP/t1"
 build_fx "$TMP/n1" 25 40; for i in $(seq 1 25); do printf '{"artifacts":[{"id":%s,"name":"suite-timings-ts"}]}' "$((5000 + i))" > "$TMP/n1/arts-$i.json"; done

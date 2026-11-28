@@ -305,7 +305,7 @@ done
 | `unverified - not-found` or plain `unverified - bad-response` | HTTP 404, or a non-numeric status | re-run once; if it repeats record `other: not-found` or `other: bad-response`; not a fix PR |
 | `unverified - token-lacks-scope` | HTTP 403: the token lacks the zone scope | the owner's credential change; record `other: token-lacks-scope`; never answer with another token |
 | `unverified - no-zone-access` | the zone is not visible to the token, or the zone id is wrong (not told apart) | check the zone id and the token's zone |
-| `unverified - token-invalid` | the token is expired or revoked (it expires 2027-02-07) | rotation is the owner's credential change |
+| `unverified - token-invalid` | the token is expired or revoked (it was rotated or passed the `expires_on` its verify answer reports) | rotation is the owner's credential change |
 | `unverified - no-credential (<name>)` | the Doppler config lacks that variable | add it to the config; never borrow another token |
 | `unverified - no-tool (jq or date)` | the host lacks the tool | record `no-tool` |
 | no wrapper line on stdout | the wrapper wrote one fixed line to stderr only (exit 64 or 78), or doppler itself failed | read the printed `stderr line 1` and `rc`: rc 64 with a refused source or token shape is `other: refused-source` (a usage error records nothing, re-run correctly); rc 78 is `other: xtrace`; a doppler login or config error is `Unverified: no-credential` |

@@ -64,7 +64,7 @@
 #   test-webplat        matrix 1/2..2/2  VITEST_SHARD   (vitest native shard)
 #   test-webplat-mutations  matrix x3 battery stems  direct battery invocation (#12626)
 #   test-bun            1 leg            TEST_GROUP=bun
-#   test-scripts        matrix 1/8..8/8  SCRIPTS_SHARD  (ADR-240 manifest, n=8)
+#   test-scripts        matrix 1/12..12/12  SCRIPTS_SHARD  (ADR-240 manifest, n=12)
 #   test-scripts-heavy  matrix 1/3..3/3  SCRIPTS_SHARD  (ADR-240 manifest, n=3)
 #   test-infra          1 leg            TEST_GROUP=infra (default -P width)
 #   report              needs all six    tracker + mintwatch + Sentry check-in
@@ -468,10 +468,11 @@ jobs:
           retention-days: 14
 
   # ---------------------------------------------------------------------------
-  # LEGS: the light scripts group, 8-way on the ADR-240 manifest.
-  # Leg membership comes from scripts/suite-shard-legs.tsv (n=8), not from
+  # LEGS: the light scripts group, 12-way on the ADR-240 manifest.
+  # Leg membership comes from scripts/suite-shard-legs.tsv (n=12), not from
   # position — the same manifest ci.yml's test-scripts consumes. Every leg under
-  # ~600 s of predicted suite time (#9307); untabled labels hash-fallback.
+  # ~1100 s of predicted suite time (K=12 reprice, 2026-11; #9449 was the K=8
+  # bump); untabled labels hash-fallback.
   # ---------------------------------------------------------------------------
   test-scripts:
     runs-on: ubuntu-24.04
@@ -479,7 +480,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"]
+        shard: ["1/12", "2/12", "3/12", "4/12", "5/12", "6/12", "7/12", "8/12", "9/12", "10/12", "11/12", "12/12"]
     env:
       # Same two-channel shape as ci.yml: TEST_GROUP is a step env naming WHICH
       # suites exist, SCRIPTS_SHARD is a job env naming WHICH SLICE this leg
@@ -518,6 +519,8 @@ jobs:
       # 60-min step ceiling: measured leg_max ~37.6 min (uncensored ci.yml run
       # 41408788451, scripts shard 5/8 — legs were being killed at the old
       # 15-min ceiling, #9457) x1.5 = 56.4 -> roundup5 60; job = step + 20 = 80.
+      # Post-K=12 the light legs pack to ~18 min, so the ceiling's headroom
+      # grew — the 37.6-min measurement stays as the derivation record.
       - name: Run test suite
         id: suite
         timeout-minutes: 60
@@ -786,9 +789,9 @@ jobs:
     env:
       # The leg ids the reporter expects artifacts for — one per matrix leg plus
       # the two singleton legs. The static guard derives this list from the
-      # matrix literals and the fixed legs; a matrix resize without an update
-      # here is a RED, not a drift.
-      EXPECTED_LEGS: "webplat-0 webplat-1 mut-approval-guard1-mutation mut-destroy-ask-mutation mut-home-census-mutations bun scripts-0 scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 heavy-0 heavy-1 heavy-2 infra"
+      # committed manifests' n= lines, the mut matrix literals, and the fixed
+      # legs; a matrix resize without an update here is a RED, not a drift.
+      EXPECTED_LEGS: "webplat-0 webplat-1 mut-approval-guard1-mutation mut-destroy-ask-mutation mut-home-census-mutations bun scripts-0 scripts-1 scripts-2 scripts-3 scripts-4 scripts-5 scripts-6 scripts-7 scripts-8 scripts-9 scripts-10 scripts-11 heavy-0 heavy-1 heavy-2 infra"
     steps:
       # `actions/checkout` is required ONLY for the sentry-heartbeat composite —
       # a local `uses: ./` action resolves from the runner's workspace, which a

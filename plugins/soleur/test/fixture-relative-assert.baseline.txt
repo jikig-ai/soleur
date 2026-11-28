@@ -456,7 +456,7 @@
 4	plugins/soleur/test/proc.test.sh
 2	plugins/soleur/test/pr-overlap-preflight.test.sh
 1	plugins/soleur/test/ralph-loop.test.sh
-54	plugins/soleur/test/regenerate-shard-manifest.test.sh
+56	plugins/soleur/test/regenerate-shard-manifest.test.sh
 1	plugins/soleur/test/required-checks-canonical-parity.test.sh
 1	plugins/soleur/test/resolve-debt.test.sh
 13	plugins/soleur/test/scripts-shard-totality-mutations.sh
@@ -615,6 +615,7 @@
 1	tests/scripts/test-cf-account-migration-bootstrap.sh
 1	tests/scripts/test-cf-account-migration-runbook.sh
 26	tests/scripts/test-cf-account-migration-scope.sh
+1	tests/scripts/test-cf-old-login-token-remint-browser.sh
 2	tests/scripts/test-git-data-birth-readiness-gate.sh
 1	tests/scripts/test-inngest-host-dark-gate.sh
 20	tests/scripts/test-lint-supabase-deprecated-endpoints.sh

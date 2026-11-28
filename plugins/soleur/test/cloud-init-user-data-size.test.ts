@@ -2353,9 +2353,15 @@ describe("inngest-userdata-budget.sh: stub entropy and the cap-headroom floor (f
         expect(r.status).toBe(0);
         expect(lastJson(r.stdout).floor).toBe(FLOOR);
       }
-      const raised = runBudget(["--json"], "400");
+      // Raise to the measured headroom. A literal above it fails when the payload
+      // grows while the 384 floor still holds. -lt means a floor equal to headroom exits 0.
+      const measured = runBudget(["--json"], "");
+      expect(measured.status).toBe(0);
+      const headroom = lastJson(measured.stdout).headroom;
+      expect(headroom).toBeGreaterThanOrEqual(FLOOR);
+      const raised = runBudget(["--json"], String(headroom));
       expect(raised.status).toBe(0);
-      expect(lastJson(raised.stdout).floor).toBe(400);
+      expect(lastJson(raised.stdout).floor).toBe(headroom);
     },
     600_000,
   );
