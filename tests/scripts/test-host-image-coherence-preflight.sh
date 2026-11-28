@@ -128,7 +128,7 @@ t_recovery_shim_wired() {
   local image='ghcr.io/jikig-ai/soleur-web-platform@sha256:bc3e411c3c3a857a2db107f6e588ac5fd5ee5108aaced73fe24f948f642ccb4b'
   local hash='8b7b79ba551310b835469e73d1d24945f360ceff35d8d749498a5245dda521a8'
   local console_count
-  console_count=$(grep -F 'terraform console -input=false -var "image_name=${PINNED}"' "$workflow" | grep -c 'local.host_scripts_boot_hash' || true)
+  console_count=$(grep -F "terraform console -input=false -var \"image_name=\${PINNED}\"" "$workflow" | grep -c 'local.host_scripts_boot_hash' || true)
   if grep -Fq "$image" "$server_tf" \
     && grep -Fq "$hash" "$server_tf" \
     && grep -Fq 'host_scripts_content_hash = local.host_scripts_boot_hash' "$server_tf" \
