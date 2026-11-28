@@ -2257,7 +2257,7 @@ fi
 # Read once in a `set +u` subshell: a nounset host shell must not die on an unset root.
 SYNC_ROOT="$(set +u; printf '%s' "${CLAUDE_PLUGIN_ROOT}")"
 SYNC_SH="$SYNC_ROOT/scripts/sync-pr-behind.sh"; SYNC_SNAP=""; GH_ERR=""
-# gh hints on stderr: stdout only, stderr to GH_ERR (never 2>&1), printable-only; substring cut (`head -c` SIGPIPEs).
+# Read gh stdout only, never 2>&1 (monitor-hygiene.md).
 trap 'rm -f "$SYNC_SNAP" ${GH_ERR:+"$GH_ERR"}' EXIT
 GH_ERR="$(mktemp 2>/dev/null)" || GH_ERR=""
 gh_err_line() { local e; e="$(grep -m1 -vE '^(hint:|[[:space:]]|$)' <(LC_ALL=C tr -cd '[:print:]\t\n' 2>/dev/null <"$GH_ERR"))" || e=""; [[ -n "$e" ]] && echo "${e:0:200}" || echo "rc=$1"; }
