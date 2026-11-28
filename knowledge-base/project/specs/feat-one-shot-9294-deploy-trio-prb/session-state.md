@@ -189,3 +189,39 @@ over 329d32ddc7..HEAD, then qa, then ship → merge #13006.
 4. Then: `--fix-round` review per risk-tier-and-fix-rounds.md on the fix range (seats re-review delta), fresh scan receipt, then synthesis → trailer (Reviewed-Risk-Tier: aggregate pattern) → CTO domain-ruling → evidence comment → merge.
 5. Census/correctness verification commands: `bash tests/scripts/test-trio-baseline-census.sh` (619/0 green at d1d41f413e), `bash plugins/soleur/test/sole-copy-drift-check.test.sh` (286/0), `bash plugins/soleur/test/c4-model-freshness.test.sh`.
 6. EXPIRY FUSE: tier-a rows expire 2026-11-30 — 3 days. If merge slips past, need ruled Re-date in separate baseline/ADR-only PR (#13102 tracks).
+
+## Fix-round progress checkpoint 3 (commit e1b43b7f06)
+
+CLOSED since checkpoint 2:
+- #6 Guard-2 sweeper partition tests DONE (e1b43b7f06): T18-T33, 42 assertions, plan matrix rows 1-4 all
+  covered including the T33 overlap-mutation. SUITE GREEN PASS=377 FAIL=0, floor 334->377.
+- REGRESSION FOUND+FIXED in the same commit: the partition's load_trio_set killed every pre-existing
+  G3-M/G4 e2e row (78 failures) because tmpdirs lack tests/scripts/trio-baseline.tsv — the suite has
+  been red since the partition landed, exactly the silent-breakage class the missing-tests finding
+  predicted. Both harness drivers now carry TRIO_BASELINE_TSV.
+
+VALIDATION IN FLIGHT at this checkpoint:
+- argv-bearer rerun3 (/tmp/argv-rerun3.log) — validates the APP_DOMAIN_BASE harness env propagation
+  (vt_run + S4 r21 sentinel). Target 825 passed/0 failed. rerun2 died silently mid-run (machine load).
+- After green: commit any remaining diff, run all three census suites once more, push, then:
+
+REMAINING BEFORE FIX-ROUND (priority order):
+1. Wrapper-relay census visibility DESIGN DECISION (user-impact P1 / arch P2-2): doppler-read.sh is
+   glued-suffix-excluded from the census scan. Full visibility flips web-platform-release.yml
+   tier-b→tier-a which has NO ratchet lane. Recommended disposition: document as accepted residual
+   in ADR-241 (the read limb closes with the Tier-A deletion postcondition) + file follow-up issue
+   for post-deletion pinned-set shrink (only the two surviving carriers stay pinned) — do NOT implement
+   visibility in this PR (ratchet impossibility). Verify the ADR wording covers it; amend if not.
+2. P2 quadratic scanner (perf): segment-once tokenization in _dop_read_counted.
+3. P3 batch: fetch-depth:0 in sweep-deploy-channel; infra-config-verify.sh:497 half-prose;
+   TIER_B_NAMES[-3:] positional fragility (tdr — make the pin name-keyed); jq reparse; phantom
+   _NOT_SET keys (user-impact F4 — verify whether baseline rows carry _NOT_SET artifacts);
+   data-integrity P2 tail-gate wording (PR-body/operator-tail guidance); seeding-order wording (verify).
+4. THEN: ADR-267 fix-round review over 329d32ddc7..HEAD, soleur:qa, soleur:ship, merge #13006.
+
+KEY FACTS for continuation:
+- infra-tier census GREEN 507/0 with floor 507 exact-measured; trio census GREEN 624/0 floor exact;
+  sweep suite GREEN 377/0 floor exact.
+- enum seat's fenced-block/whitespace claims partially WRONG: fenced directives ARE skipped by the
+  parser (comment at sweep-followthroughs.sh:197); whitespace-only tokens handled (proven T25).
+- Do not re-litigate D-1..D-8. The 3-row argv-bearer tier-a residual is deliberately scoped to #13102.
