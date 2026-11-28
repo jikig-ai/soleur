@@ -935,7 +935,7 @@ _wt_top=$(git -C "$WORK_DIR" rev-parse --show-toplevel 2>/dev/null || true)
 # PR-number path chains up to three reads, and a timed-out one denies at once,
 # so the worst case is two slow successes plus one kill: 3 x 15 + 2 = 47 s,
 # inside a conservative 60 s budget where 20 s (62 s) is not. settings.json
-# sets no timeout for this hook; T93 pins the budget against this line.
+# sets no timeout for this hook; T93 pins the budget against both lines below.
 _NET_TO=()
 if command -v timeout >/dev/null 2>&1; then _NET_TO=(timeout -k 2 15)
 elif command -v gtimeout >/dev/null 2>&1; then _NET_TO=(gtimeout -k 2 15); fi

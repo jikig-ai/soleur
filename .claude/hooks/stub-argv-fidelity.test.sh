@@ -26,9 +26,9 @@
 # literal `<dir>/<cmd>` path. Two things it does NOT see: a stub written via
 # `printf`/`tee`/`install`, and one written to a VARIABLE path (`cat > "$STUB"`).
 # The pinned cardinality below catches these ONLY when an already-detected stub
-# DRIFTS into an undetected shape (checked drops 4→3, pin fails). It does NOT
+# DRIFTS into an undetected shape (checked drops N→N-1, pin fails). It does NOT
 # catch a brand-NEW blind stub written in an undetected shape — that keeps the
-# count at 4 and ships. So the guarantee is: "every heredoc-written CLI stub
+# count at N and ships. So the guarantee is: "every heredoc-written CLI stub
 # references argv, and no detected stub may silently convert away." A new stub
 # added the normal way (heredoc) bumps the count and forces the author to look;
 # adding one via printf/variable-path bypasses the check, which is a known

@@ -105,13 +105,15 @@ check_review() {
   # unscoped count read every open code-review issue in the repo, so it could
   # never pass. A cite is `#N` or a `/pull/N` URL, from any repository —
   # a deliberately wider cite pattern than ship Phase 5.5's
-  # `(Ref|Closes|Fixes) #N` (the issue sets differ: this reads code-review-
-  # labelled issues, Phase 5.5 reads `review:`-titled ones). Scope-outs (deferred-scope-out) stay open by
-  # design and synthetic-test issues are fixtures; both are excluded, as ship
-  # Phase 5.5's merge gate excludes them. Fail-closed: an unresolved PR, a
-  # failed read, or a full page (the PR's issue may sit past it) is
-  # "missing". stdout only —
-  # gh's stderr hint must not reach a parsed value (#12697).
+  # `(Ref|Closes|Fixes) #N`. The issue sets differ too: this reads
+  # code-review-labelled issues; Phase 5.5 reads open issues titled with a
+  # review-origin prefix (`review:`, `Code review #`, `Refactor:`, `arch:`,
+  # `compound:`, `follow-through:`), any label. Scope-outs
+  # (deferred-scope-out) stay open by design and synthetic-test issues are
+  # fixtures; both are excluded, as ship Phase 5.5's merge gate excludes them.
+  # Fail-closed: an unresolved PR, a failed read, or a full page (the PR's
+  # issue may sit past it) is "missing". stdout only — gh's stderr hint must
+  # not reach a parsed value (#12697).
   pr="$(gh pr view --json number --jq .number 2>/dev/null)" || pr=""
   if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
     add_missing "no-open-code-review-issues"

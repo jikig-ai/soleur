@@ -181,6 +181,18 @@ healthy and the documented recovery was refused.
 - **Two plan sentences tripped ship's incident and enrollment scanners** ("outage", "soak") and
   the CMO filing hit the issue-filing gate three times before it carried `Mandated-By:`. Recovery:
   reworded (5360b5d73e) and re-filed (#13130). Prevention: none needed; the gates worked.
+- **Three repo meta-gates first ran on this PR at ready, not at draft.** The draft-light aggregate
+  defers the full battery, so `grep-q-pipe-guard` (a `tr | grep -q` pipe in the nameref check),
+  `stub-argv-fidelity` (T93's git shim made 10 stubs, pin 9) and `guard-vacuity-floor` (the new
+  completion floor was not mutant-constructible) all went red only after `gh pr ready`, after auto-merge
+  was armed. Recovery: eb4c64d2ea. Prevention: before marking a PR ready, run the repo meta-gates
+  that scan the diff (`guard-vacuity-floor`, `stub-argv-fidelity`, `grep-q-pipe-guard`), because an
+  affected-suite run does not select them.
+- **Dropping a conservation check left the verdict helpers unguarded.** The meta-guard refused a
+  case counter incremented inside a helper, so the check was removed with nothing in its place; a
+  neutered `fail+=1` plus a real cite-regex defect then exited 0. Recovery: a helper self-test that
+  drives each helper to a known pass and fail, by printf + exit. Prevention: when a gate forces a
+  check out, name what still catches the class before committing.
 
 ## Tags
 

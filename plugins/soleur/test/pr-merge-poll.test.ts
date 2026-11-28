@@ -563,7 +563,7 @@ const GH_PREFIX = new RegExp(
     "|[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|\"[^\"]*\"|[^\\s'\"]*)(?=\\s)" +
     "|\"\\$\\{[^\"}]*\\}\"(?=\\s)|\"\\$[A-Za-z_][A-Za-z0-9_]*\"(?=\\s)|\\$\\{[^}\\s]*\\}(?=\\s)" +
     "|(?:command|env|builtin|nohup)(?=\\s)" +
-    "|timeout(?:\\s+-[A-Za-z-]+(?:\\s+[^\\s-]\\S*)?)*\\s+[0-9.]+[smhd]?(?=\\s))",
+    "|timeout(?:\\s+-\\S+(?:\\s+[^\\s-]\\S*)?)*\\s+[0-9.]+[smhd]?(?=\\s))",
 );
 const GH_WORD = /^(?:gh|[A-Za-z0-9_]*_gh)(?=[\s)])/;
 
@@ -707,6 +707,8 @@ describe("Guard 2: no gh capture merges stderr into its value", () => {
       `x=$("\${to[@]}" gh pr view "$PR" --json state ${MERGE})`,
       `x=$(timeout 30 gh pr view "$PR" --json state ${MERGE})`,
       `x=$(timeout -k 5 30s gh pr view "$PR" ${MERGE})`,
+      `x=$(timeout -v -k5 30 gh pr view "$PR" ${MERGE})`,
+      `x=$(timeout --foreground --kill-after=2 30 gh pr view "$PR" ${MERGE})`,
       `x=$(command gh pr view "$PR" ${MERGE})`,
       `x=$(GH_PAGER= GH_HOST="github.com" gh pr view "$PR" ${MERGE})`,
       `x=$(env GH_PAGER=cat gh pr view "$PR" ${MERGE})`,

@@ -58,6 +58,21 @@ assert_review() { # <label> <want: pass|missing> ; env carries the case
   local got=pass; [[ "$out" == *"no-open-code-review-issues"* ]] && got=missing
   if [[ "$got" == "$2" ]]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $1: want $2, got: $out"; fi
 }
+# Helper self-test: drive each verdict helper once to a known pass and once to
+# a known fail (floor_review stubbed, so this does not depend on the SUT), then
+# unwind. A helper that can no longer conclude either way is a FATAL by
+# printf + exit, never through the helpers under test.
+_st_p=$pass; _st_f=$fail; _st_t=$total
+assert_exit 0 true >/dev/null; assert_exit 0 false >/dev/null
+_st_real="$(declare -f floor_review)"
+floor_review() { printf 'SOLEUR_FLOOR_GATE phase=review status=fail missing=no-open-code-review-issues\n'; }
+assert_review "self-test hit" missing >/dev/null; assert_review "self-test miss" pass >/dev/null
+eval "$_st_real"
+if [[ "$pass" -ne $((_st_p + 2)) || "$fail" -ne $((_st_f + 2)) ]]; then
+  printf '[FATAL] helper self-test: verdict helpers cannot conclude (pass +%d, fail +%d; want +2/+2)\n' "$((pass - _st_p))" "$((fail - _st_f))" >&2
+  exit 1
+fi
+pass=$_st_p; fail=$_st_f; total=$_st_t
 UNREL='[{"number":1,"body":"Ref #131120"},{"number":2,"body":"PR #999"},{"number":3,"body":null}]'
 FLOOR_PR=13112 FLOOR_ISSUES="$UNREL" assert_review "unrelated open code-review issues do not block" pass
 FLOOR_PR=13112 FLOOR_ISSUES='[{"number":4,"body":"Ref #13112"}]' assert_review "an issue citing this PR blocks" missing
@@ -79,7 +94,7 @@ FLOOR_PR=13112 FLOOR_ISSUES="$(jq -cn '[range(1000) | {number: ., body: "x"}]')"
 # it backstops — a dropped row is a FATAL.
 MIN_ASSERTIONS=14
 if [[ "$total" -lt "$MIN_ASSERTIONS" ]]; then
-  printf '[FATAL] vacuity floor: only %d assertions ran (floor %d) — the suite did not execute\n' "$total" "$MIN_ASSERTIONS" >&2
+  printf '[FATAL] vacuity floor: only %d of %d assertions ran — rows were dropped or the suite stopped early\n' "$total" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
 
