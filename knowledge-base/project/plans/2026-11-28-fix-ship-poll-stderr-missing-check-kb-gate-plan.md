@@ -20,7 +20,8 @@ lane: cross-domain
 **Sections enhanced:** 9 (Proposed Solution defects 1–3, Guard Contract, Observability, Acceptance
 Criteria, Files to Edit, Dependencies & Risks, Scope Check provenance)
 **Agents used:** kieran-rails-reviewer, security-sentinel, test-design-reviewer, a verify-the-negative
-and self-audit pass (standard tier), and the CTO agent (rulings Fork A and Fork B)
+and self-audit pass (standard tier), and the CTO agent (rulings Fork A and Fork B). The test-design
+findings are bound as Phase 1 "Test-harness requirements" 1–8.
 
 ### Key Improvements
 
@@ -42,9 +43,12 @@ and self-audit pass (standard tier), and the CTO agent (rulings Fork A and Fork 
 - The `--step --fence` path makes no `gh pr view` read at all, so it never had hint exposure.
 - `monitor-pr-checks.sh` measured that an empty `2>"$ERRTMP"` silently stops gh from running. The
   fence's `${GH_ERR:-/dev/null}` is the guard against that (precedent table in Dependencies & Risks).
-- Three merge hooks (`post-dispatch-watch-gate.sh`, `guardrails.sh`,
-  `background-poll-prefer-monitor.sh`) were not run against the documented block. Task 3.4 runs them
-  before arming.
+- The security review found two pre-existing fail-opens on the paths rule (i) and (ii) feed: the
+  census dies silently when ls-remote fails (G2), and the proven-foreign exit fires on text that points
+  gh nowhere (G1). The CTO ruled both fixed here; rows 14–19 pin them and the tightened operand rules.
+- Three more hooks that match `gh pr merge` (`post-dispatch-watch-gate.sh`, `guardrails.sh`,
+  `background-poll-prefer-monitor.sh`) were probed with the documented block: none denies it, so
+  `ship-kb-archive-gate.sh` is the only blocker.
 
 ## Overview
 
@@ -125,8 +129,8 @@ document is refused by the KB-archive merge gate. This plan fixes all three and 
   `if/else`. Every other merge hook run at plan time (pre-merge-rebase, operator-step, unpushed-commits,
   auto-close-scan, cla, net-issue-flow, soak, cmo, runbook-ssh) accepts the block.
   `post-dispatch-watch-gate.sh` (it matches `gh pr merge[^|;&]*--auto`), `guardrails.sh` and
-  `background-poll-prefer-monitor.sh` were not run; Phase 4 runs the documented block through them
-  before arming. pre-merge-rebase's deny on this WIP
+  `background-poll-prefer-monitor.sh` were run at deepen time on the documented if/else block (PR 4387):
+  all three exit 0 with no deny (`background-poll-prefer-monitor.sh` returns an explicit `allow`). pre-merge-rebase's deny on this WIP
   branch is a legitimate "no review evidence" one.
 - **Existing tracking:** #12697 (P2, open) and #12963 (P3, open) describe defect 3 exactly, with the same
   two candidate shapes. #12697 recommends the hook-side shape. This plan closes both.
@@ -372,10 +376,21 @@ the `_tok_scan != _tok_cmd` and operand-loss denies, which still run first for e
   `--match-head-commit`:
   - a literal 40-hex operand → `TARGET_KIND=sha`, as today;
   - an operand whose **raw** text (quotes kept, read from `_cmd_args`) is exactly one double-quoted
-    simple expansion, `"$NAME"`, `"${NAME}"` or `"${NAME:?msg}"`, where `msg` contains none of `$`, a
-    backtick, `(`, `)`, `\` or `"` → `TARGET_KIND=pr` with that number (the head is censused by number);
+    simple expansion, `"$NAME"`, `"${NAME}"` or `"${NAME:?msg}"`, where `NAME` matches `^[A-Za-z_][A-Za-z0-9_]*$` (so no `!`, `#`, `[`, `@`, `*` or special parameter)
+    and `msg` contains none of `$`, a backtick, `(`, `)`, `\`, `"`, `}` or a newline → `TARGET_KIND=pr`
+    with that number (the head is censused by number). When rule (i) fires and the command contains
+    `declare -n`, `local -n` or `typeset -n`, deny: a nameref makes a plain `"$H"` run its subscript's
+    command substitution (security review, measured for both a nameref and `"${!N}"`);
   - anything else still denies: `"${H:-…}"`, `$(…)`, single quotes, an unquoted `$H` (already the
-    operand-loss deny), a second positional, a second SHA.
+    operand-loss deny), multi-word expansions (`"$@"`, `"$*"`, `"${A[@]}"`, `"${!A[@]}"`, which inject
+    flags and break the restrict-only argument), a second positional, a second SHA.
+  - **The operand is read at the invocation's own offset,** not at the first `--match-head-commit` in
+    `$CMD`: an `echo --match-head-commit "$H"` decoy or a `#` comment must not supply it. Locate each
+    invocation with `grep -bo` on the same match the residues use, read the operand after it, and require
+    the comment-free raw count of `--match-head-commit` to equal the invocation count.
+  - **No positional may follow the operand.** In `$SCAN` the flag must be followed only by the blanked
+    quote span; `... --match-head-commit "$H" 6` denies with a second-positional reason instead of the
+    existing "extra operands" sed eating the `6` as the flag's value.
 - **Where rule (i) reads the operand (measured).** `_merge_args` builds residues with the class
   ``[^;&|$`()]*``, which **stops at `$`**. For the documented arm both `_scan_args` and `_cmd_args` end
   `--match-head-commit "`, and the operand never appears in either. Rule (i) therefore needs its own
@@ -383,7 +398,28 @@ the `_tok_scan != _tok_cmd` and operand-loss denies, which still run first for e
   shell word, with quote awareness. That text is matched against the three allowed expansion shapes
   anchored at both ends. Do not try to widen `_merge_args`'s class. Every existing deny (operand-loss,
   `xargs`, the multi-invocation count) is calibrated on it.
-- **(ii) Several identical invocations.** More than one `gh pr merge` invocation is accepted only when
+- **Pre-existing fail-opens closed in this PR (CTO rulings G1, G2).** The security review reproduced
+  both against today's hook with an offline fixture. Rules (i) and (ii) send more traffic through both
+  paths, so they are fixed here, and each fix only turns an exit 0 into a deny:
+  - **G2, census fail-open.** In the `TARGET_KIND == pr` branch,
+    `HEAD_OID=$(git … ls-remote origin "refs/pull/${PR_HEAD_NUMBER}/head" … | awk …)` runs under
+    `set -eo pipefail`. When ls-remote fails it kills the hook silently, the harness treats that as
+    non-blocking, and the merge proceeds. Append `|| HEAD_OID=""` so the existing fail-closed deny is
+    reached.
+  - **G1, foreign exit reachable from non-pointer text.** The pointer sighting greps `GH_(REPO|HOST)=`
+    anywhere in `$SCAN_NOCOMMENT`, so `gh pr merge 5 --squash --auto; : GH_HOST=evil.example`,
+    `… && echo GH_REPO=o/r` and `… --body -Ro/r` all exit 0 through the proven-foreign arm. Fix the
+    sighting and gathering inputs only: (a) with more than one invocation, never take the foreign exit
+    (this is the rule (ii) prefix rule above); (b) count an env pointer only in an invocation's own
+    prefix; (c) do not count `-R` when it is the value of `-t/-b/-F/-A/--subject/--body/--body-file/--author-email`.
+    Leave the body of `_repo_pointers_same_repo` byte-equal so the T43 parity pin with
+    `pre-merge-rebase.sh` holds.
+- **(ii) Several identical invocations.** With more than one invocation the proven-foreign exit is
+  never taken: if `_REPO_PTR == 1 && _REPO_SAME != 1`, deny. The text before each invocation must be
+  `bash "$SS_LIB" with_lock merge-main <N> --` or nothing (after `then`/`else`), so an env-assignment
+  prefix (`GH_REPO=o/r`, `GH_HOST=`, `GIT_DIR=`, `env -C`), which the residues cannot see, cannot make
+  two invocations look identical (security review: `GH_REPO=o/r gh pr merge 5 … || gh pr merge 5 …`
+  would otherwise exit 0 through the foreign arm). More than one `gh pr merge` invocation is accepted only when
   every raw invocation residue (`_cmd_args`, quotes kept, after `_strip_repo_flags`) is byte-identical,
   every quote-stripped residue (`_scan_args`) is identical, **and** every invocation's raw
   `--match-head-commit` operand (read as in rule (i)) is byte-identical. The operand check is needed
@@ -601,6 +637,12 @@ the one consumer, and an accepted shape must reach it.
 | 9 | Delete rule (i); the admin-hatch span from `settle-then-admin-merge.md` (LINK_ONLY), on an archived KB | RED (denied), because its own row asserts allowed |
 | 11 | Rule (ii) compares residues only (they are cut at `$`); input: branch A `... --match-head-commit "${H:?x}"`, branch B `... --match-head-commit "${G:?x}"` | RED (denied: operands differ) |
 | 12 | Rule (i) reads the operand from `_cmd_args` instead of the raw extractor | RED: the documented block is still denied (`names no 40-hex sha`), because row 8 asserts allowed |
+| 14 | Move rule (ii) below the proven-foreign exit; input: `GH_REPO=o/r gh pr merge 5 --squash --auto --match-head-commit "$H" \|\| gh pr merge 5 --squash --auto --match-head-commit "$H"` | RED (denied: foreign pointer with several invocations) |
+| 15 | Loosen NAME to any `${…}` body; inputs, one row each: `"$@"`, `"$*"`, `"${A[@]}"`, `"${!N}"`, and `declare -n H='x[$(id)]'; gh pr merge 5 … "$H"` | RED (each denied) |
+| 16 | Read the operand from the first `--match-head-commit` in `$CMD`; input: `echo --match-head-commit "$H"; gh pr merge 5 --squash --auto --match-head-commit "$@"`, and the same with the decoy in a `#` comment | RED (denied) |
+| 17 | Reuse the "extra operands" sed for rule (i); input: `gh pr merge 5 --squash --auto --match-head-commit "$H" 6` | RED (denied: second positional) |
+| 18 | Drop the G2 `\|\| HEAD_OID=""`; input: the documented block with `origin` pointing at an unreachable remote | RED (the hook dies with no JSON; the row asserts a deny) |
+| 19 | Revert G1 (b)/(c); inputs, one row each: `gh pr merge 5 --squash --auto; : GH_HOST=evil.example`, `gh pr merge 5 --squash --auto && echo GH_REPO=o/r`, `gh pr merge 5 --squash --auto --body -Ro/r`, each with PR 5 carrying an unarchived KB | RED (each must deny via the census) |
 | 13 | Admit only the lock block; input: the composite one-call form (the arm check's first statement, then the lock block, in one command) on an archived KB | RED (denied), because its row asserts allowed, the same verdict as the lock block alone (measured) |
 | 10 | Revert the `merge-queue-dequeue.md` doc edit (`gh pr merge "$N"`) | RED: that site's extracted span is denied (operand-loss), so a variable PR number stays outside the accept set |
 
@@ -743,7 +785,7 @@ test the fix, and the wrong one to discover its signal (deepen-plan Phase 4.7).
 | Fence + mirror stdout-only reads, combined trap | "separate stderr from stdout in the fence" | asked |
 | `pr-merge-poll.ts` helper + instruction sentences, `harness.ts` sentence | "and in pr-merge-poll.ts" | asked |
 | `pr-merge-poll.test.ts` helper tests | "a test pinning that a stderr hint cannot alter the parsed state" | asked |
-| Fixture rows H1–H6 + `WANTH` + parity tokens | asks 2–3 | asked |
+| Fixture rows H1, H1f, H2–H4, H4b, H6 + `WANTH` + parity tokens | asks 2–3 | asked |
 | `sync-pr-behind.sh` 3 standalone reads + `sync-pr-behind.test.sh` row | — | inferred — justification: same defect, same poll family; the fence prints this standalone command as the manual recovery on `behind_no_sync`, and it exits 12 under the hint (CTO ruling F1) |
 | `ship-operator-step-gate.sh` read + test row | — | inferred — justification: same capture defect in a merge-gate hook; it yields a spurious fail-closed hold on a flag-only merge while any PR is parked (CTO ruling F1) |
 | `gh run view` poll snippets (ship post-merge poll, `schedule/SKILL.md`, ship "Why this pattern" prose), same stderr-file form | — | inferred — justification: they print no hint today (main runs carry no PR), but the same snippet on a PR run would, and they are the copy future authors paste. CTO ruling F1, reaffirmed by the CTO devex seat. DHH/simplicity dissent recorded in decision-challenges.md |
@@ -754,17 +796,21 @@ test the fix, and the wrong one to discover its signal (deepen-plan Phase 4.7).
 | Guard 1 rows (extracted blocks) | "a test exercising the documented form verbatim" | asked |
 | Learning file + follow-up line in the 2026-11-25 learning | "Capture a learning file for all three" | asked (the follow-up line is inferred — justification: that learning's §3 recommends the flag-only form this PR makes unnecessary; a reader of it would otherwise drop the lock) |
 | #13115 tracking issue (filed at plan time) | — | inferred — justification: `wg-when-deferring-a-capability-create-a`; the CTO ruled the cla-evidence concurrency root cause out of this PR |
+| Gate hardening G1 (foreign exit from non-pointer text) and G2 (silent census fail-open) | — | inferred — justification: safety; rule (i)/(ii) widen the accept set onto both fail-open paths, and rule (ii) itself creates a G1 bypass. CTO rulings G1/G2 in decision-challenges.md |
 
 ### Split Assessment
 
 - Subsystems touched: 3 — `plugins/soleur`, `.claude`, `knowledge-base`
-- Planned files: 17 | Estimated changed lines: ~760 (tests ~520, code/text ~150, learning ~90). The H5
-  fold-in and the dropped tautological TS case offset the Guard 2 exclusion list and the admin-hatch row.
+- Planned files: 18 (16 to edit, 2 to create) | Estimated changed lines: ~950 (tests ~680, code/text
+  ~190, learning ~90). The deepen pass added Guard 1 rows 11–19, test-harness requirements 1–8, the G1/G2
+  hook hardening and the `parsePrPollRead` cases.
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: single PR. The three defects interlock: defect 2's proof (H1) needs defect 1's fix,
-  and all three share the incident and the learning. The estimate sits near the line threshold. If the
-  hook test rows push past 800, the fallback seam is "defect 3 (hook + Guard 1) as a second PR". That
-  seam is recorded here and not pre-split.
+- Recommendation: split — defect 3 (hook + Guard 1) as a second PR.
+- Overridden: single PR — ruled by CTO agent, 2026-11-28. About 72% of the lines are tests and code/text
+  is ~190 lines; every item is asked for in the brief (no invented scope); a split buys no safety because
+  this PR's own arm step runs on pre-fix hooks either way; and defect 3 shares the incident and the
+  learning. Re-split at the recorded seam if code/text passes ~300 lines or review asks for a separate
+  cycle on the G1/G2 hardening.
 
 ## Acceptance Criteria
 
