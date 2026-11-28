@@ -6,9 +6,10 @@
 - cto_spawns=1
 
 ### Errors
-None blocking. One hook cwd/path-resolution false positive was encountered by the planning subagent; the manual guard passed and the commit succeeded with an explicit `git -C` path.
+None blocking. During review-fix validation an attempted source-override execution hook changed `declare` scope inside fragments and red the suite; it was reverted under the later CTO ruling rather than shipped. One hook cwd/path-resolution false positive was encountered by the planning subagent; the manual guard passed and the commit succeeded with an explicit `git -C` path.
 
 ### Decisions
+- CTO ruling addendum: static contiguous set/order plus exact runtime count is sufficient; no source override, parser, or sentinel machinery.
 - Keep full default ShellCheck analysis; do not silently use `--extended-analysis=false`.
 - Provisionally retain the 30s/5s timeout and 512 KiB prefilter pending CTO ruling because of the measured false-positive cost.
 - Use a stable argv-bearer driver plus ten sourced fragments, with a driver-embedded structural set/order guard and directory-prefix affected-test edge.

@@ -23,7 +23,7 @@ Ordering note: write failing contracts first. Keep the scan-gate change and the 
 ## Phase 3 — mechanical argv-bearer split
 
 - [ ] 3.1 Mechanically extract the ten fragments under `tests/scripts/argv-bearer-sweep/` using the contiguous ranges in the plan after re-verifying boundary text post-rebase; prepend only `# shellcheck shell=bash` and the sourced-fragment header.
-- [ ] 3.2 Rewrite `tests/scripts/test-argv-bearer-sweep.sh` as the stable driver retaining core harness/prelude, final verdict/floor, and unconditional ordered source statements.
+- [ ] 3.2 Rewrite `tests/scripts/test-argv-bearer-sweep.sh` as the stable driver retaining core harness/prelude, final verdict/floor, and canonical contiguous ordered source statements.
 - [ ] 3.3 Compare extracted content to the pre-split `HEAD` ranges with only the documented normalization; investigate any semantic difference before proceeding.
 - [ ] 3.4 Update `scripts/lib/test-affected-paths.sh` with the fragment directory prefix `tests/scripts/argv-bearer-sweep/` (not a static ten-member list) and re-anchor stale line-number comments to content anchors.
 - [ ] 3.5 Update `tests/scripts/trio-baseline.tsv` and `plugins/soleur/test/fixture-relative-assert.baseline.txt` only where the owning checks require it, using their committed regeneration commands and reviewing the resulting diff row by row.
@@ -33,7 +33,7 @@ Ordering note: write failing contracts first. Keep the scan-gate change and the 
 ## Phase 4 — verification
 
 - [ ] 4.1 Run `bash plugins/soleur/skills/review/test/review-scan-gate.test.sh` green.
-- [ ] 4.2 Verify the structural preamble indirectly through `bash tests/scripts/test-argv-bearer-sweep.sh` and directly in scratch mutants.
+- [ ] 4.2 Verify the structural preamble indirectly through `bash tests/scripts/test-argv-bearer-sweep.sh` and through static scratch mutants where cheap, with conditional execution covered by exact runtime row-count equality.
 - [ ] 4.3 Run `bash tests/scripts/test-argv-bearer-sweep.sh` green at the same measured row count as the pre-split oracle (currently 832 unless implementation evidence proves otherwise).
 - [ ] 4.4 Run a bounded full-analysis ShellCheck probe over driver plus all ten fragments; completion is required, warning findings are disclosed rather than silently rewritten away.
 - [ ] 4.5 Exercise the Guard 2 mutation rows in scratch copies.

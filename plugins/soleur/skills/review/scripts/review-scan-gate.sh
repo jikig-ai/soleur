@@ -7,14 +7,19 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
 ENSURE="$SCRIPT_DIR/ensure-semgrep.sh"
-TMP="$(mktemp -d)"
+if ! TMP="$(mktemp -d)"; then
+  echo "SOLEUR_REVIEW_SCAN_GATE refuse engine=none files=0 rules=0 findings=0"
+  exit 1
+fi
 
-# The EXIT/INT/TERM trap below is the only caller. Shellcheck does not count a trap as a call.
+# The EXIT trap below is the only cleanup caller. Shellcheck does not count a trap as a call.
 # shellcheck disable=SC2329
 cleanup() {
   rm -rf "$TMP"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 scanned=0
 unscannable=0
@@ -28,6 +33,9 @@ refuse() {
   fi
   if [ "${#unscannable_rows[@]}" -gt 0 ]; then
     printf '%s\n' "${unscannable_rows[@]}"
+  fi
+  if [ "${#finding_lines[@]}" -gt 0 ]; then
+    printf '%s\n' "${finding_lines[@]}"
   fi
   exit 1
 }
@@ -251,13 +259,17 @@ fi
 
 if [ "${#shells[@]}" -gt 0 ]; then
   if ! command -v shellcheck >/dev/null 2>&1; then
+    for sh_file in "${shells[@]}"; do
+      unscannable=$((unscannable + 1))
+      unscannable_rows+=("$sh_file:0 unscannable-shellcheck-binary-missing")
+    done
     refuse "$engine" "$files" "$rules" 0
   fi
   # Per-file bounded scanning (ADR-324 as amended): every classified shell input is
   # attempted under `timeout -k 5s 30s` with full default analysis — never a degraded
   # --extended-analysis=false pass, and no byte-size prefilter, because size proved a
   # false nontermination proxy. rc 0/1 mean the scan COMPLETED (1 carries findings);
-  # timeout statuses 124/137, malformed JSON, a missing timeout binary, or any other
+  # timeout statuses 124/137, malformed JSON, a missing timeout or scanner binary, or any other
   # scanner status make the input unscannable, and any unscannable input fails the
   # gate closed: an ok receipt may never certify coverage ShellCheck did not complete.
   TIMEOUT_BIN=""

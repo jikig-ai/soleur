@@ -521,10 +521,11 @@ printf 'echo hi\n' >"$arm/work/a.sh"
 out="$(run_gate "$arm" "$arm/work/a.sh")"
 rc=$?
 first="$(printf '%s\n' "$out" | head -n 1)"
-if [ "$rc" -eq 1 ] && grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse ' <<<"$first"; then
+second="$(printf '%s\n' "$out" | sed -n '2p')"
+if [ "$rc" -eq 1 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE refuse engine=shellcheck files=1 rules=0 findings=0 scanned=0 unscannable=1" ] && [ "$second" = "$arm/work/a.sh:0 unscannable-shellcheck-binary-missing" ]; then
   ok "shell-only without shellcheck refuses"
 else
-  no "shell-only without shellcheck refuses (rc=$rc line=$first)"
+  no "shell-only without shellcheck refuses (rc=$rc line=$first second=$second)"
 fi
 
 # --- shellcheck executed receipts ok rules=0 ---
@@ -690,7 +691,7 @@ last=""
 for a in "\$@"; do last="\$a"; done
 case "\$last" in
   *b.sh*) printf 'not json\\n'; exit 0 ;;
-  *) printf '[]\\n'; exit 0 ;;
+  *) printf '[{"file":"%s","line":2,"endLine":2,"column":1,"endColumn":3,"level":"warning","code":2086,"message":"Double quote."}]\\n' "\$last"; exit 1 ;;
 esac
 EOF
 chmod +x "$arm/bin/shellcheck"
@@ -700,10 +701,12 @@ printf 'echo b\n' >"$arm/work/b.sh"
 out="$(run_gate "$arm" "$arm/work/a.sh" "$arm/work/b.sh")"
 rc=$?
 first="$(printf '%s\n' "$out" | head -n 1)"
-if [ "$rc" -eq 1 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE refuse engine=shellcheck files=2 rules=0 findings=0 scanned=1 unscannable=1" ]; then
+second="$(printf '%s\n' "$out" | sed -n '2p')"
+third="$(printf '%s\n' "$out" | sed -n '3p')"
+if [ "$rc" -eq 1 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE refuse engine=shellcheck files=2 rules=0 findings=1 scanned=1 unscannable=1" ] && [ "$second" = "$arm/work/b.sh:0 unscannable-malformed-json" ] && [ "$third" = "$arm/work/a.sh:2 SC2086" ]; then
   ok "one completed scan cannot ok while another input is unscannable"
 else
-  no "one completed scan cannot ok while another input is unscannable (rc=$rc first=$first)"
+  no "one completed scan cannot ok while another input is unscannable (rc=$rc first=$first second=$second third=$third)"
 fi
 
 # --- leading-dash filename still scans because of the -- separator ---
@@ -751,10 +754,11 @@ printf 'echo hi\n' >"$arm/work/a.sh"
 out="$(run_gate "$arm" "$arm/work/a.ts" "$arm/work/a.sh")"
 rc=$?
 first="$(printf '%s\n' "$out" | head -n 1)"
-if [ "$rc" -eq 1 ] && grep -q '^SOLEUR_REVIEW_SCAN_GATE refuse ' <<<"$first"; then
+second="$(printf '%s\n' "$out" | sed -n '2p')"
+if [ "$rc" -eq 1 ] && [ "$first" = "SOLEUR_REVIEW_SCAN_GATE refuse engine=mixed files=2 rules=2 findings=0 scanned=0 unscannable=1" ] && [ "$second" = "$arm/work/a.sh:0 unscannable-shellcheck-binary-missing" ]; then
   ok "mixed range without shellcheck refuses"
 else
-  no "mixed range without shellcheck refuses (rc=$rc line=$first)"
+  no "mixed range without shellcheck refuses (rc=$rc line=$first second=$second)"
 fi
 
 # --- skill command order ---

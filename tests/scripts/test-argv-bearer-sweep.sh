@@ -600,42 +600,51 @@ printf '%s' '{"data":[{"attributes":{"name":"soleur-web-zot-consumer-web-1","sta
 # STRUCTURAL PREAMBLE (#13099): the split-driver invariant. The fragments under
 # tests/scripts/argv-bearer-sweep/ are SOURCED by this driver and share this process's
 # counters, scratch root, shim and helpers; they are NOT independently runnable. The
-# population is DERIVED (git ls-files), never counted by hand: the exact set AND order
-# of the unconditional, column-0 `source` statements below must equal the tracked
-# fragment list or the suite reds before any fragment runs. The check is embedded here
-# rather than registered as a separate suite so the manifest check cannot drift from
-# the only supported entry point and no second runner surface can be omitted, misregistered
-# or bypassed. A conditionally sourced fragment is caught two ways: indented (or otherwise
-# non-canonical) source lines are absent from the static manifest, and a fragment skipped
-# at run time drops the row count below the exact EXPECTED_TESTS floor.
+# population is DERIVED (git ls-files), never counted by hand: the canonical physical
+# block below must contain exactly that fragment set, once each, contiguously and in
+# order, or the suite reds before any fragment runs. The static guard proves inventory,
+# spelling, adjacency and order of that block; it deliberately does NOT claim a lexical
+# proof of unconditional shell execution, because a flush-left line can still sit inside
+# shell control flow. This execution is instead pinned by the exact EXPECTED_TESTS
+# equality and pass+fail/CASES conservation below: a skipped, duplicated or truncated
+# fragment moves the measured row count. The check is embedded here rather than registered
+# as a separate suite so the manifest check cannot drift from the only supported entry
+# point and no second runner surface can be omitted, misregistered or bypassed.
 _structural_fragments=()
 while IFS= read -r _structural_f; do
   _structural_fragments+=("$_structural_f")
 done < <(git ls-files 'tests/scripts/argv-bearer-sweep/*.sh')
 _structural_sources=()
-while IFS= read -r _structural_f; do
+_structural_source_lines=()
+while IFS=$'\t' read -r _structural_line_no _structural_f; do
+  _structural_source_lines+=("$_structural_line_no")
   _structural_sources+=("$_structural_f")
-done < <(awk '$0 ~ /^source / && NF == 2 && $2 ~ /^tests\/scripts\/argv-bearer-sweep\/[^[:space:]]+\.sh$/ { print $2 }' "${BASH_SOURCE[0]}")
+done < <(awk '$0 ~ /^source / && NF == 2 && $2 ~ /^tests\/scripts\/argv-bearer-sweep\/[^[:space:]]+\.sh$/ { print NR "\t" $2 }' "${BASH_SOURCE[0]}")
 _structural_mismatch=""
 if [[ "${#_structural_fragments[@]}" -eq 0 ]]; then
   _structural_mismatch="the tracked fragment population is empty"
 elif [[ "${#_structural_fragments[@]}" -ne "${#_structural_sources[@]}" ]]; then
-  _structural_mismatch="${#_structural_sources[@]} unconditional sources for ${#_structural_fragments[@]} tracked fragments"
+  _structural_mismatch="${#_structural_sources[@]} canonical sources for ${#_structural_fragments[@]} tracked fragments"
 else
   for (( _structural_i = 0; _structural_i < ${#_structural_fragments[@]}; _structural_i++ )); do
     if [[ "${_structural_sources[$_structural_i]}" != "${_structural_fragments[$_structural_i]}" ]]; then
       _structural_mismatch="position $((_structural_i + 1)): source '${_structural_sources[$_structural_i]}' != tracked '${_structural_fragments[$_structural_i]}'"
       break
     fi
+    _structural_expected_line=$(( _structural_source_lines[0] + _structural_i ))
+    if [[ "${_structural_source_lines[$_structural_i]}" -ne "$_structural_expected_line" ]]; then
+      _structural_mismatch="position $((_structural_i + 1)): canonical source line ${_structural_source_lines[$_structural_i]} is not contiguous with first line ${_structural_source_lines[0]}"
+      break
+    fi
   done
 fi
 if [[ -n "$_structural_mismatch" ]]; then
-  row "structure: the driver sources exactly the tracked fragment set, once each, unconditionally and in order" fail "$_structural_mismatch"
+  row "structure: the driver physically contains exactly the tracked fragment set, once each, contiguously and in canonical order" fail "$_structural_mismatch"
   printf 'FATAL: structural fragment mismatch: %s\n' "$_structural_mismatch" >&2
   exit 2
 fi
-row "structure: the driver sources exactly the tracked fragment set, once each, unconditionally and in order" ok
-unset _structural_fragments _structural_sources _structural_mismatch _structural_f _structural_i
+row "structure: the driver physically contains exactly the tracked fragment set, once each, contiguously and in canonical order" ok
+unset _structural_fragments _structural_sources _structural_source_lines _structural_mismatch _structural_f _structural_i _structural_line_no _structural_expected_line
 
 source tests/scripts/argv-bearer-sweep/01-controls-stages-2-4-s2a-backup.sh
 source tests/scripts/argv-bearer-sweep/02-s2a-hmac.sh
@@ -698,8 +707,8 @@ SELFTEST_PASSES=0
 # 830 -> 837 at the #11572 review rounds (2026-10-30): the pin is "first statement after set -uo pipefail" (1 row), plus the run-time fd 0 row, the canonical-layout control, four refused-layout controls (late, nested, conditional, a quoted `set` above the real one) and one altered-exec-line control: measured (837 passed, 0 failed).
 # 837 -> 831 at #9927 item 8 (this PR): lead (b), the op=arm mask battery (the G2/G3 control, hostile and empty drives, the G3.5 control, hostile and empty drives, and the
 #   mutants row: seven rows), left with op=arm; the tree measured 838 rows before (floor 837, one row of slack) and 831 after (831 passed, 0 failed), so the floor is now the exact measured count.
-# 832 -> 833 at #13099 (the split): one structural row (the driver sources exactly the tracked fragment set, once each, unconditionally and in
-#   order). The 832 pre-split rows moved byte-for-byte into the ten sourced fragments; the split itself adds no assertion rows. Measured post-split (833 passed, 0 failed).
+# 832 -> 833 at #13099 (the split): one structural row (the driver physically contains exactly the tracked fragment set, once each,
+#   contiguously and in canonical order). The 832 pre-split rows moved byte-for-byte into the ten sourced fragments; the split itself adds no assertion rows. Measured post-split (833 passed, 0 failed).
 EXPECTED_TESTS=833
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then

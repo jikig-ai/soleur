@@ -148,7 +148,7 @@ The argv-bearer conversion battery is the known pathological input. It is a 729,
 1. Change the ShellCheck arm of `review-scan-gate.sh` from one unbounded multi-file invocation to a per-file bounded loop. Each shell file is scanned with full default analysis via `timeout -k 5s 30s shellcheck -f json -- <file>` (or `gtimeout` on hosts where that is the coreutils binary). No byte-size prefilter is used. A timeout, malformed scanner output, missing timeout binary, or unexpected scanner status makes the gate emit `refuse` with trailing `scanned=<n> unscannable=<n>` fields and a `file:0 unscannable-timeout`, `file:0 unscannable-malformed-json`, `file:0 unscannable-timeout-binary-missing`, or `file:0 unscannable-scanner-status` evidence row. `files=` remains the classified target count; `scanned=` counts shell files ShellCheck actually completed on. Shell-involving `ok` receipts carry the same two fields so consumers can audit coverage directly; `ok` is possible only when every classified shell file was scanned and `unscannable=0`.
 2. Preserve scan findings as non-blocking `file:line rule-id` rows. Real ShellCheck findings still do not stop review; unscannable inputs do stop review because coverage evidence would otherwise be false.
 3. Rewrite `tests/scripts/test-argv-bearer-sweep.sh` as the stable driver for the same suite registration. The driver keeps the core harness/prelude and final verdict inline, sources ten fragments in exact original order, and preserves the global `pass`/`fail`/`CASES` counters and reporting helpers by sourcing in one shell process.
-4. Embed a small structural preamble in the driver proving that it sources every tracked fragment exactly once, in dependency order, and that no source statement is conditional. Keeping this check inside the already-registered suite avoids editing the oversize `scripts/test-all.sh` runner in the same PR that makes the scan gate refuse oversize shell inputs. The exact row-count floor remains the behavioral anti-truncation guard.
+4. Embed a small structural preamble in the driver proving that its canonical physical source block contains every tracked fragment exactly once, contiguously and in dependency order. The static guard does not claim a lexical proof of unconditional execution; the exact row-count floor is the runtime anti-skip control. Keeping this check inside the already-registered suite avoids editing the oversize `scripts/test-all.sh` runner in the same PR that makes the scan gate refuse oversize shell inputs. The exact row-count floor remains the behavioral anti-truncation guard.
 5. Amend ADR-324 in the same PR because the execution evidence changes from one argv containing every shell target to a per-file completion set whose receipt accounts for `scanned` and `unscannable`.
 
 ## Technical Approach
@@ -187,7 +187,7 @@ Each fragment begins with `# shellcheck shell=bash` and a comment stating that i
 
 ### Structural verification
 
-Embed the structural preamble in `tests/scripts/test-argv-bearer-sweep.sh` before the first fragment source. It derives the tracked fragment population with `git ls-files 'tests/scripts/argv-bearer-sweep/*.sh'`, parses the driver's unconditional `source` statements, and asserts exact set-and-order equality. Its mutation matrix covers a missing fragment, an extra fragment, a reorder, a conditional source, and a second source of one fragment. It is deliberately not a separate `test-*.sh` suite: registering one would add a second runner surface that could itself be omitted, misregistered, or bypassed when the driver is invoked directly. Running the structural check inside the existing argv-bearer suite keeps exact set/order validation adjacent to the only supported entry point.
+Embed the structural preamble in `tests/scripts/test-argv-bearer-sweep.sh` before the first fragment source. It derives the tracked fragment population with `git ls-files 'tests/scripts/argv-bearer-sweep/*.sh'`, parses the driver's canonical column-0 `source` statements, and asserts exact contiguous set-and-order equality. Its static mutation coverage is a missing fragment, an extra fragment, a reorder, a non-contiguous block, and a second source of one fragment; conditional execution is covered by the exact runtime row-count equality rather than a false lexical claim. It is deliberately not a separate `test-*.sh` suite: registering one would add a second runner surface that could itself be omitted, misregistered, or bypassed when the driver is invoked directly. Running the structural check inside the existing argv-bearer suite keeps exact set/order validation adjacent to the only supported entry point.
 
 ## Implementation Phases
 
@@ -207,7 +207,7 @@ Embed the structural preamble in `tests/scripts/test-argv-bearer-sweep.sh` befor
 ### Phase 3: Mechanically split the argv-bearer suite
 
 - Extract the ten fragments from the current monolith using exact contiguous line ranges, with no assertion rewrite.
-- Rewrite the monolith path as driver retaining core harness/prelude plus verdict/floor and unconditional source statements.
+- Rewrite the monolith path as driver retaining core harness/prelude plus verdict/floor and canonical contiguous ordered source statements.
 - Update affected-test edge declarations with the fragment directory prefix `tests/scripts/argv-bearer-sweep/` rather than a static list of today's ten members, update the trio baseline keys that move with fragment content, and update any fixture-relative baseline rows measured by the committed regeneration command.
 - Success criteria: structural extraction comparison passes; `bash tests/scripts/test-argv-bearer-sweep.sh` prints the same `=== 832 passed, 0 failed ===` row count as the pre-split oracle; `EXPECTED_TESTS=832` remains exact.
 
@@ -331,7 +331,7 @@ The ADR amendment lands in the same commit series as the scan-gate contract chan
 
 ### Guard 2 — argv-bearer split driver completeness
 
-**Property.** The stable driver sources exactly the tracked argv-bearer fragment set once each, unconditionally and in dependency order, while preserving one shared counter/verdict process and the exact test-count floor.
+**Property.** The stable driver physically contains exactly the tracked argv-bearer fragment set once each, contiguously and in canonical dependency order, while preserving one shared counter/verdict process and the exact test-count floor. Static structure and runtime count are separate controls.
 
 **Assembly.** The chokepoints are the driver `tests/scripts/test-argv-bearer-sweep.sh` (the only suite entry point), the structural preamble in that driver, the source manifest in that driver, the tracked fragment glob `tests/scripts/argv-bearer-sweep/*.sh`, and the final `EXPECTED_TESTS` verdict. There is intentionally no second registered suite because the driver is already the only supported suite entry point and a second registration surface adds drift without strengthening the invariant.
 
@@ -394,6 +394,9 @@ None. The deepen pass re-ran the prescribed two-stage open `code-review` issue q
 
 ## Acceptance Criteria
 
+*2026-11-28 implementation ruling addendum:* the structural guard proves inventory, exact spelling, adjacency and order of the canonical physical block; it does not claim parser-level proof of unconditional shell execution. Runtime execution is pinned by exact `EXPECTED_TESTS` equality and `pass + fail == CASES` conservation. An attempted `source`-override execution hook was rejected because it changes `declare`/scope semantics inside sourced fragments. Ruled by CTO agent, 2026-11-28.
+
+
 ### Functional Requirements
 
 - [ ] FR-1. `review-scan-gate.sh` invokes ShellCheck at most once per shell input, with a 30-second timeout and 5-second kill grace via `timeout` or `gtimeout`; no single input can prevent receipt emission.
@@ -403,7 +406,7 @@ None. The deepen pass re-ran the prescribed two-stage open `code-review` issue q
 - [ ] FR-5. The split is mechanically faithful: apart from driver source statements and fragment header comments, extracted fragment content matches the pre-split contiguous ranges; no assertion body is rewritten intentionally.
 - [ ] FR-6. `EXPECTED_TESTS` remains exact for the measured post-split row count (currently 832 unless implementation evidence proves a harness-only count change), and the floor-history comment gains this PR's measured entry.
 - [ ] FR-7. `shellcheck` completes under a bounded timeout on the driver and every fragment; completion is required even when pre-existing warning/style findings remain disclosed.
-- [ ] FR-8. The driver-embedded structural preamble derives the tracked fragment population and verifies exact set/order/unconditional sourcing before the first fragment executes.
+- [ ] FR-8. The driver-embedded structural preamble derives the tracked fragment population and verifies exact contiguous set/order of the canonical physical source block before the first fragment executes; exact runtime row-count equality is the anti-skip control.
 - [ ] FR-9. ADR-324 is amended in the same PR and no C4 model edit is made unless implementation discovers a modeled external actor/system relationship that planning missed.
 - [ ] FR-10. `plugins/soleur/skills/review/SKILL.md`, `plugins/soleur/agents/engineering/review/semgrep-sast.md`, and `plugins/soleur/agents/engineering/review/security-sentinel.md` document unscannable semantics, and zero-finding SAST claims require an `ok` receipt with both `findings=0` and `unscannable=0`.
 
@@ -434,7 +437,7 @@ None. The deepen pass re-ran the prescribed two-stage open `code-review` issue q
 - Given `timeout` absent but a working `gtimeout` on PATH, when a shell input is present, then the gate uses `gtimeout` and records the same bounded receipt contract. [unit]
 - Given a shell filename beginning with `-`, when the gate invokes ShellCheck, then the `--` separator prevents option injection and the file is still scanned or explicitly refused. [unit]
 - Given the real split tree, when the argv-bearer driver starts, then its structural preamble proves the source list exactly equals the tracked fragment glob in order. [integration]
-- Given one deleted source statement, one extra unsourced fragment, one reorder, and one conditional source mutation, when each mutant is evaluated in a scratch copy, then the driver structural preamble is RED. [unit]
+- Given one deleted source statement, one extra unsourced fragment, one reorder, and one non-contiguous source-block mutation, when each static mutant is evaluated in a scratch copy, then the driver structural preamble is RED; a conditional execution skip is RED through exact runtime row-count inequality. [unit]
 
 ### Regression Tests
 
