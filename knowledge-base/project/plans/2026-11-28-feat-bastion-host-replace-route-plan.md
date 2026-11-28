@@ -14,6 +14,40 @@ brand_survival_threshold: none
 
 # infra: web-1 retirement step 2b — bastion replace route (ADR-327)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-28
+**Sections enhanced:** Proposed Solution, Implementation Phases, Guard Contract (Guards 1-3), Observability,
+User-Brand Impact, Encryption Posture, Architecture Decision, Files to Edit, Acceptance Criteria. New
+sections: Downtime & Cutover, Network-Outage Deep-Dive, and Deepen-Plan Research Insights.
+**Agents used:** security-sentinel, architecture-strategist, spec-flow-analyzer, test-design-reviewer,
+observability-coverage-reviewer, framework-docs-researcher, and a verify-the-negative sweep. The CTO
+re-ruled Q4b and R3b.
+
+### Key Improvements
+
+1. The id pin now covers every bastion record a replace deletes or updates: the NIC's
+   `before.server_id` and the attachment's `before.server_ids`. Allowed actions are a per-address
+   table, so a future list member is no-op-only by default.
+2. Boot-verify and `_bbv_poweroff` refuse any server id that existed before the apply, on both
+   routes. This closes two holes: a healthy bastion powered off after a failed or cancelled replace,
+   and a birth dispatched into a lost-state project.
+3. The plan JSON now carries the host private key in clear text on a replace. The route writes it
+   under `umask 077` in `$RUNNER_TEMP`, masks it, never prints values, and deletes it on `always()`.
+4. Hetzner reads go through one `bc_curl` helper (ADR-280). The TOCTOU step re-checks identity
+   rather than comparing documents.
+5. Q4b: this PR is #8385's first slice. ADR-231 gets an addendum. The relocation keeps first lines,
+   and its byte math is measured (3,375 B freed, net about 487,100).
+6. The plan-JSON shapes behind H1 are confirmed from Terraform v1.10.5 and hcloud v1.63.0 source.
+   The limit of 25 `workflow_dispatch` inputs is confirmed.
+
+### New Considerations Discovered
+
+- R3b: extracting the shared checks needs a harness change in the birth suite (the `gmut` target
+  file and `scratch_gate`). The CTO ruled that allowed, with two conditions.
+- **Operator item:** schedule #8385 (split the apply workflow) before the next route that adds to it.
+  Its own trigger has fired.
+
 ## Overview
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
@@ -169,9 +203,16 @@ In short (R1-R5 came after plan review and amend the earlier rows where they say
   Hetzner API (exactly one `soleur-bastion` with label `role=bastion`), and the plan's `before.id`.
   The values are compared as strings (`tostring`), because the API id is a number and the other two
   are strings. The recovery arm requires the literal `none`. The job re-reads the API before the apply.
-- **Q4.** `apply-web-platform-infra.yml` is at most **488,000** bytes after the rebase. The bytes come
-  from verbatim comment relocation, done as its own commit. The PR does not start #8385 and does not
-  count on #12958.
+- **Q4, amended by Q4b.** `apply-web-platform-infra.yml` is at most **488,000** bytes, measured with
+  `wc -c` after the rebase. This PR is **#8385's first slice**. The bastion routes are per-target
+  callees with thin callers. The relocation frees only what the caller needs, in ADR-231's format:
+  each block keeps its first line, its test-anchored lines and the `# Rationale:` pointer. It is its
+  own commit.
+
+  An ADR-231 addendum records four things: the routes are the first slice; the relocation is the
+  minimum and is not a substitute for the split; the counter has tripped (489,485 ≥ 485,000); and the
+  next PR that adds caller bytes must take the split. A comment on #8385 records the trip. The plan
+  does not count on #12958.
 - **Q5.** The arms are Guard 1. Plan review added one accepted shape: on the replace arm, the NIC may
   be `["create"]` (with the 10.0.1.70 pin), because a re-dispatch after a partial replace plans it that
   way. There is still no third arm.
@@ -219,8 +260,10 @@ In short (R1-R5 came after plan review and amend the earlier rows where they say
   - `hcloud_server.bastion`: `["delete","create"]`.
   - `hcloud_server_network.bastion`: `["delete","create"]` (`server_id` is ForceNew).
   - `hcloud_firewall_attachment.bastion`: `["update"]`, whose `server_ids` holds one unknown element.
-    In plan JSON, `after_unknown.server_ids` may render as `[true]` (per element) or as `true`, so
-    the gate reads it with the `has_unknown` helper. Fixtures cover both renderings.
+    Plan JSON renders that as `after.server_ids = [null]` and `after_unknown.server_ids = [true]`.
+    This is confirmed from Terraform v1.10.5 source (see the Verified facts table). A wholly unknown
+    set, `true` with `after` omitted, is unreachable for this configuration. The fixtures cover both
+    renderings anyway.
   - `hcloud_firewall.bastion` and `tls_private_key.bastion_host_ssh`: `["no-op"]`.
 
   `before.id` is a string in plan JSON, and the Hetzner API's `.servers[].id` is a number. The fixtures
@@ -319,10 +362,24 @@ Flow inside `bastion-host-replace.yml`, job `bastion_host_replace` (environment
    | `image_tag` | 436 |
    | **Sum** | **4,729** |
 
-   Six pointer lines cost about 720 B, so moving all six frees about 4,000 B. The additions cost about
-   990 B: the caller (about 600 B), the input (about 250 B), the option (33 B) and three description
-   entries (about 70 B together). The net is 489,485 - 4,000 + 990, which is about 486,500 B, about
-   1,500 B under the 488,000 ceiling.
+   **Measured on 2026-11-28, keeping each block's first line plus a full-path pointer line (Q4b):**
+
+   | Block | Freed |
+   |---|---|
+   | `manual-rerun` | 1,127 |
+   | `expected_registry_store_volume_id` | 721 |
+   | `web_host_key` | 567 |
+   | `apply_target` field label | 409 |
+   | `expected_luks_volume_id` | 328 |
+   | `image_tag` | 223 |
+   | **Total** | **3,375** |
+
+   The additions cost about 990 B: the caller (about 600 B), the input (about 250 B), the option (33 B)
+   and three description entries (about 70 B together). The net is 489,485 - 3,375 + 990, which is about
+   487,100 B, about 900 B under the 488,000 ceiling. This is an estimate until `wc -c` measures it, and
+   AC1 is the measurement. If the measured net misses the ceiling, the PR stops and reports. It does
+   not open a further relocation round (Q4b). Any anchored line that must stay reduces the freed bytes
+   by its length.
 
    For each block, grep `plugins/ tests/ apps/ scripts/` for its distinctive phrases first. A phrase
    that a suite anchors on stays in the workflow. Confirm each anchor by deleting the phrase and
@@ -406,8 +463,13 @@ Flow inside `bastion-host-replace.yml`, job `bastion_host_replace` (environment
    - Add it to the `plan_only` target list and to the reviewer-gated list in the `confirm` description.
    - Add the thin `bastion_host_replace` caller job immediately after `bastion_host_create`. It passes
      the four inputs and the three secrets by name, with `permissions: contents: read, issues: write`.
-3. `.github/workflows/bastion-host-create.yml`: the interlock step becomes a source-and-call (F1). No
-   other step changes.
+3. `.github/workflows/bastion-host-create.yml` gets four edits:
+   - The interlock step becomes a source-and-call (F1).
+   - The pre-apply id set is passed to boot-verify and the cancel power-off.
+   - The summary branches on `comment_result` and names #9421 and #13113.
+   - The pin read-back prints the server id.
+
+   These follow Deepen-Plan Research Insights.
 
 ### Phase 5 — Census, registration and records
 
@@ -478,6 +540,254 @@ Flow inside `bastion-host-replace.yml`, job `bastion_host_replace` (environment
   It needs the owner's typed go naming the exact command. Its PASS satisfies #12879's done-when 2, and
   #12879 closes then.
 
+## Deepen-Plan Research Insights (2026-11-28)
+
+These amend the sections above. Where they conflict, this section wins. `tasks.md` carries the same
+amendments.
+
+### Boot-verify never touches a server that existed before the apply (spec-flow row 1, Kieran #5)
+
+- The old-id argument becomes a **pre-apply id set**. Before the apply, the job records every
+  `soleur-bastion` id from the API. Boot-verify (`bastion_boot_verify <since> <outcome> <label> <pre-ids>`)
+  refuses to read or power off any server whose id is in that set. It decides only on a server whose
+  id is not in it. If no such server exists, it records the new result `poweroff_result=old_untouched`
+  (or `absent`). The summary prints a re-dispatch line that keeps the same pin.
+- **Both routes pass the set.** The birth body passes it too (the F1 edit already touches that
+  file). If state is lost while the bastion is live, the birth route's create fails on the duplicate
+  name. Without the set, birth boot-verify would power off the healthy live server. With the set, it
+  touches nothing.
+- The runbook's "Lost state" section says not to use the birth route either. Until #13117 lands,
+  there is no safe in-repo action, so the ABORT text says exactly that.
+- Rows in `test-bastion-boot-verify.sh`:
+  - a pre-apply id is never powered off (the curl fake asserts the id in the POST URL);
+  - a positive control: a different id that is not ready IS powered off;
+  - an empty set behaves exactly as today;
+  - `old_untouched` produces its own summary and comment text.
+
+### Every exit prints its next action (spec-flow rows 2-4, 6-7, 9; CTO devex #3)
+
+- **The next dispatch is computed in the always-run summary.** It comes from a fresh API read and
+  `terraform state list`, so it is not limited to the apply-failure branch. It is one ready-to-run
+  `gh workflow run ...` line. The pin is chosen like this:
+
+  | State after the run | Pin printed |
+  |---|---|
+  | no server | `none` |
+  | only a new id exists | the new id |
+  | only the pre-apply id exists (apply failed before the destroy, or only the NIC was deleted) | the same pin |
+
+  If the read itself fails, the summary prints `next dispatch: unread (API read failed); no line to
+  copy`, never a guessed line.
+- **TOCTOU mismatch:** "the live bastion changed since the plan: re-run `plan_only` and read the id
+  from its summary". The comparison also includes `status`.
+- **Not ready:** the recovery line reads "read the boot-trail stage above, fix `bastion-cloud-init.yml`
+  if it is a template fault, then replace (this destroys the kept disk)".
+- **Server id in the summary:** the "Record the bastion pin" step prints the server id beside the
+  fingerprint and IP, in both bodies. A first rehearsal against a born bastion can then read the id
+  from the last birth's summary. The API listing in step 6 gives it on any `plan_only` run, refused
+  or not.
+- **Same-SHA rehearsal:** the runbook says to dispatch the `plan_only` run and the real run at the
+  same commit, and to compare the two summaries' commit lines. #12942 adds the mechanical check for
+  this.
+- **Waiting for approval:** the runbook says the run holds the shared concurrency group while it waits
+  for the reviewer, so approve or cancel promptly. It also says to confirm a re-dispatch was not
+  superseded with `gh run list --workflow apply-web-platform-infra.yml -L 3 --json databaseId,status,conclusion`.
+
+### Boot-verify reports truthfully (observability #2-#4)
+
+- `bastion_boot_verify` records `comment_result=posted|failed|no_token`, and both summaries branch on
+  it. The summaries never claim a comment that did not post. The birth summary's "#12879" and "no
+  heartbeat until #12879" become #9421 and #13113. `bastion-host-create.yml`'s dispatch-summary step is
+  therefore also edited.
+- New failure modes, each with its own `::error::` literal. The response body is never printed, only
+  the HTTP code and `.error.code`:
+  - `bastion-host-replace: Hetzner server read FAILED (http=<code>)`, at step 6, before any plan;
+  - `bastion-host-replace: TOCTOU re-read FAILED (http=<code>); nothing applied`;
+  - `bastion-host-replace: post-failure state read FAILED; no next dispatch`;
+  - `bastion-boot-verify: the comment on #9421 FAILED`. This changes `::warning::` to `::error::` on
+    the replace label only. Birth keeps its `::warning::`, because its suite pins that string.
+- The not-ready failure mode's alert route names its layer. It is the workflow run log line
+  `::error::bastion-boot-verify: soleur-bastion is NOT ready` (layer 6), plus the power-off and the
+  #9421 comment.
+
+### Guard 1 matrix additions (test-design #2-#6; R3b)
+
+- **Split row 1** into rows 1, 1b and 1c in the Guard 1 table:
+  - `[null]`/`[true]` is canonical and PASS;
+  - `true` with `after` omitted is PASS;
+  - `[true]` with `after` omitted is RED.
+
+  The common attachment check is extracted word for word. The replace gate adds its stricter
+  `["update"]` requirement on top of it, and the common check is not edited.
+- **Fixture type self-check.** Beside the base-fixture check, assert the
+  `prior_state ... hcloud_server.bastion` `values.id` type is `string`, the `.servers[0].id` type is
+  `number`, and the attachment's `before.server_ids` is `[<number>]`.
+- **Three-way pin rows, one mismatch each.**
+  - pin≠API, with API = `before.id`
+  - pin = API, with API ≠ `before.id`
+  - pin = `before.id`, with API ≠ the others
+- **More RED rows.**
+  - an attachment `["update"]` whose known `after.server_ids` is still the old id;
+  - the server `["delete"]` with no create;
+  - the NIC `["delete"]` with no create;
+  - the server `["create","delete"]` (no `create_before_destroy` is declared);
+  - each "or" in rows 8, 14, 16 and 21 split into its own row.
+- **Message substrings.** Every RED row names its ABORT message substring, as the birth suite does.
+- **Gate-mutation rows** (`gmut`-style exact-once replacements on the replace gate):
+  - drop `tostring`;
+  - drop the API count check;
+  - drop the role check;
+  - drop the recovery arm's `prior_state` check;
+  - drop the attachment update-binding check;
+  - drop each `after`-value check;
+  - delete the call into `bastion-gate-common.sh` (R3b's call-site row).
+- **Behaviour rows (R3b).** One synthesized plan per shared check, each going RED with the common
+  message.
+- **H2 is dropped.** The PASS rows already need exit 0. H3 keeps a literal `MIN_CASES` floor and a
+  literal minimum RED count, as the birth suite does, not a count derived from the table.
+- **R3b harness change in the birth suite.** The `gmut` helper takes a target file, and
+  `scratch_gate` also copies `bastion-gate-common.sh`. Both gates source the common file from their own
+  directory (the `_BHBG_DIR` pattern). `GMUT` stays at 11.
+
+### Guard 2 additions (test-design #7-#8)
+
+- **Order rows**, one for each adjacent swap. Each one must red:
+  - interlock after the plan;
+  - stock preflight before the gate;
+  - TOCTOU before the preflight;
+  - TOCTOU after the apply.
+- **Wiring rows:**
+  - the birth suite's "no `terraform plan` after the gate" row, with its re-plan mutation;
+  - the gate call missing `hetzner-servers.json`;
+  - the `replace_args` assignment outside the `!= none` block.
+- **Placement.** The plan-chain rows (apply consumes `tfplan`, the order rows, the re-plan row) live
+  in `test-bastion-host-replace-gate.sh`, as the birth suite's do. The parity-shaped rows (the `on`
+  keys, the confirm literal, the caller secrets) stay in `terraform-target-parity.test.ts`.
+
+### Guard 3 additions (test-design #8)
+
+- A trailing comment (`foo # -replace='hcloud_server.x'`) is RED.
+- `[[ ${#a[@]} -gt 0 ]] && x=(-replace='hcloud_server.x')` is PASS. The `#` inside `${#` must not
+  start a comment.
+
+### The pin covers every bastion record a replace deletes or updates (security #1, architecture #1)
+
+- On the replace arm, the NIC delete requires `before.server_id|tostring == pin` and
+  `before.ip == "10.0.1.70"`. The attachment update requires `before.server_ids|map(tostring) == [pin]`.
+  Without these two checks, a state that maps the NIC or the attachment onto web-1 would detach web-1
+  from the private network, or strip its firewall binding, while the server pin passes.
+- The allow-set becomes **a per-address table of allowed actions**, inside the replace gate:
+
+  | Address | Allowed actions |
+  |---|---|
+  | `hcloud_server.bastion` | replace arm: `["delete","create"]`; recovery arm: `["create"]` |
+  | `hcloud_server_network.bastion` | replace arm: `["delete","create"]` or `["create"]`; recovery arm: `["create"]` |
+  | `hcloud_firewall_attachment.bastion` | replace arm: `["update"]`; recovery arm: `["update"]` or `["create"]` |
+  | `tls_private_key.bastion_host_ssh`, `hcloud_firewall.bastion` | `["no-op"]` |
+  | any other `bastion-resources.txt` member | `["no-op"]` |
+
+  An address that step 3 (#12867) or #13113 adds to the list is therefore never destroy-eligible by
+  default. Matrix rows:
+  - a new list member planned `["update"]` is RED;
+  - `tls_private_key` planned `["create"]` (a key regenerated after lost state) is RED;
+  - the NIC `before.server_id` ≠ pin is RED;
+  - the attachment `before.server_ids` ≠ `[pin]` is RED;
+  - an API server whose `name` ≠ `soleur-bastion` is RED (the name is checked exactly, not trusted to
+    the `?name=` filter).
+
+### One Hetzner reader, through `bc_curl` (security #4-#5, architecture #5)
+
+- Add one helper, `_bbv_servers_doc <out-file>`, in `scripts/lib/bastion-boot-verify.sh`, next to
+  `_bbv_lookup`. It calls `bc_curl bastion 'Authorization:Bearer :HCLOUD_TOKEN' -- -sS --max-time 20 -o "$out" -w '%{http_code}' "https://api.hetzner.cloud/v1/servers?name=soleur-bastion"`
+  (ADR-280's `scripts/lib/bearer-curl.sh`). It requires HTTP 200 exactly and a `.servers|arrays`
+  body. Any other result returns non-zero, with `http=<code>` and `.error.code` only.
+- The step-6 read, the TOCTOU re-read and the post-failure next-dispatch read all use it.
+  `_bbv_lookup` keeps its own call, because the birth suite pins it.
+- **The TOCTOU re-read re-checks identity; it does not compare documents.** The fresh document goes
+  back through the gate's identity function, which is exported as
+  `bastion_replace_identity <pin> <doc> <before-id>` from the replace gate. The check is count 1,
+  name exact, role `bastion`, and `id == pin == before.id`, or count 0 for `none`. Any read error
+  fails closed.
+- The pin is re-validated under `LC_ALL=C` inside the gate and inside the boot-verify library. It
+  reaches jq only through `--arg`, never inside the program text. API ids must match `^[0-9]+$`
+  before they are printed into a summary or a `gh workflow run` line. API string fields are printed
+  through `@json`, so they cannot inject `::` workflow commands.
+- F1 moves the interlock's inline `_bearer_ok` into the library. The repo-wide count of definitions
+  stays the same, because one leaves the workflow and one enters the library. Re-run
+  `test-argv-bearer-sweep.sh` anyway.
+
+### Power-off refuses pre-apply ids at the lowest level (security #2, architecture #7)
+
+- The guard lives in `_bbv_poweroff [pre-ids]`, not only in `bastion_boot_verify`. Both the cancel
+  step (which calls `_bbv_poweroff` directly) and the failed-apply path go through it.
+- For the label `bastion-host-replace`, a missing or malformed pre-id set fails closed: nothing is
+  powered off, and the result is `poweroff_result=refused_no_preids`. Rows cover:
+  - the cancel path with a pre-apply id;
+  - the failed-apply path with a pre-apply id;
+  - a missing set on the replace label.
+
+### The plan JSON now carries the host private key (security #3)
+
+- On a replace the key is a no-op, so the plan JSON's `prior_state` and the key's `change.before` and
+  `change.after` hold `private_key_openssh` in clear text. At birth it was unknown at plan time. This
+  is a **new** exposure, and the User-Brand Impact section is amended to say so.
+- Mitigations in the replace body:
+  - write `tfplan`, `tfplan.json` and `hetzner-servers.json` under `umask 077` into a `mktemp -d`
+    under `$RUNNER_TEMP`;
+  - mask each line of the key before any step can print it: read
+    `jq -r '..|.private_key_openssh? // empty'` and `::add-mask::` each line;
+  - the gate and the summaries print only addresses, actions, ids and attribute names, never values;
+  - an `if: always()` final step deletes the directory.
+- Matrix row: a fixture whose key fields hold a synthetic marker (`SYNTHETIC-KEY-MARKER`) must not
+  appear in any gate output, ABORT line or summary text the suite captures.
+- `tfplan.txt` (from `terraform show -no-color`) renders sensitive values as `(sensitive value)`, so
+  the existing `grep` excerpt on ABORT stays safe.
+
+### Branch and push cannot reach the destroy (security #7)
+
+- Guard 2 adds two rows. One asserts both clauses of the caller's `if:` (`github.event_name == 'workflow_dispatch'`
+  and the `apply_target` match). The other asserts a callee job-level
+  `if: github.ref == 'refs/heads/main'`. That second check is defence in depth behind the
+  environment's main-only branch policy (`web-host-birth-environment.tf`). The callee has no byte
+  limit, so the check is free.
+- The reviewer gate on `web-platform-infra-apply` is the owner's own approval (one required reviewer,
+  user 54279), not a second person. The ADR-327 addendum states this, as the 2a addendum did for
+  birth.
+
+### Precedent departures, now named (architecture #2, #8)
+
+- **The recovery arm admits a bare create.** `web-host-replace-gate.sh` refuses one and routes it to
+  the birth route. The bastion admits it here because the issue requires it, and because only this
+  gate checks the API for zero servers. The ADR-327 addendum names the departure.
+- **ABORT lines follow the sibling convention.** Each ends "NOTHING HAS BEEN DESTROYED — this gate runs
+  before the apply." followed by the specific next action, which comes from the summary's
+  next-dispatch line.
+- **`git_data_host_post_apply_assert`** (#10137) is a post-apply backstop. It is not adopted here,
+  because boot-verify's strict verdict plus the pin read-back covers this host's post-apply truth.
+- **The shared checks** follow the `git-data-root-key-arm-gate.sh` sourced-sub-gate precedent: a
+  `declare -F` idempotent guard, a 127-on-failed-source note, and functions that take a gate label so
+  messages name the calling gate. The birth gate's `creates`, `destroys` and `key_touched` arms stay in
+  the birth gate.
+
+### Verified facts (framework-docs research, pinned Terraform 1.10.5 and hcloud provider 1.63.0)
+
+| Claim | Verdict | Source |
+|---|---|---|
+| `server_ids = [hcloud_server.bastion.id]` on a replace is a known one-element set with an unknown element: `after.server_ids = [null]`, `after_unknown.server_ids = [true]` (a wholly unknown set would be `true` and omitted from `after`) | confirmed (source) | terraform `internal/command/jsonplan/plan.go` `unknownAsBool`, `omitUnknowns` at v1.10.5 |
+| `hcloud_server` `before.id` is a string | confirmed | hcloud `internal/server/resource.go` v1.63.0 (`d.SetId(util.FormatID(...))`) |
+| Hetzner `servers[].id` is an integer, and `name` is an exact filter | confirmed | Hetzner Cloud OpenAPI spec |
+| `hcloud_server_network.server_id` is RequiresReplace; `hcloud_firewall_attachment.server_ids` updates in place (only `firewall_id` is ForceNew) | confirmed | hcloud `internal/server/resource_network.go`, `internal/firewall/attachment_resource.go` v1.63.0 |
+| `prior_state` under `-target` is complete, and is the refreshed state | confirmed | terraform `internal/command/jsonplan/values.go` |
+| `workflow_dispatch` allows 25 inputs (was 10) | confirmed | <https://github.blog/changelog/2025-12-04-actions-workflow-dispatch-workflows-now-support-25-inputs/> |
+| `-replace` naming an address absent from state is silent: the plan just creates it | confirmed (source) | terraform `internal/terraform/node_resource_plan_instance.go` v1.10.5. F4 stays for clarity, not necessity. |
+| The empty-result shape is `{"servers": [], "meta": {...}}` | unverified | The gate requires only `.servers|arrays`, which holds either way. |
+
+H1 is therefore confirmed by source, not only assumed. The canonical replace fixture uses
+`after.server_ids=[null]` and `after_unknown.server_ids=[true]`. The birth gate's word-for-word
+`att_ok` passes it through `(.change.after.server_ids|length)==1`, so the extraction needs no new arm
+for this shape. The `[true]`-with-`after`-absent row (1c) is kept as a RED row, because that shape is
+unreachable for this configuration.
+
 ## Files to Create
 
 - `.github/workflows/bastion-host-replace.yml`
@@ -490,12 +800,17 @@ Flow inside `bastion-host-replace.yml`, job `bastion_host_replace` (environment
 
 - `.github/workflows/apply-web-platform-infra.yml`: the input, the option, three descriptions, the
   caller, and the comment relocations.
-- `.github/workflows/bastion-host-create.yml`: the interlock becomes a source-and-call (F1).
+- `.github/workflows/bastion-host-create.yml`: four edits.
+  - The interlock becomes a source-and-call (F1).
+  - The pre-apply id set is passed to boot-verify and the cancel power-off.
+  - The summary branches on `comment_result` and names #9421 and #13113.
+  - The pin read-back prints the server id.
 - `tests/scripts/lib/bastion-host-birth-gate.sh`: sources the common checks (R3).
 - `tests/scripts/test-bastion-host-birth-gate.sh`: only if sourcing changes; no assertion changes (R3).
 - `knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md`
 - `knowledge-base/engineering/operations/runbooks/bastion-host.md`
 - `knowledge-base/engineering/architecture/decisions/ADR-327-dedicated-bastion-web-hosts-are-identical-cattle.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-231-workflow-files-are-byte-budgeted-and-rationale-relocates-to-a-runbook.md` (Q4b addendum)
 - `knowledge-base/engineering/architecture/diagrams/model.c4`
 - `scripts/lib/bastion-boot-verify.sh`
 - `scripts/test-all.sh`
@@ -537,7 +852,10 @@ a plan whose `hcloud_server.bastion` address maps onto another physical server, 
 would destroy a production host that serves every user's workspace. The three-way id pin and the
 out-of-scope arm exist for this. A second exposure is the bastion host key's private half. It sits in
 Terraform state and in the runner-local plan file (the ADR-327 residual). This route never changes the
-key and never uploads the plan file as an artifact.
+key and never uploads the plan file as an artifact. A replace adds a **new** exposure that birth did
+not have: the key is a no-op, so the plan JSON's `prior_state` holds `private_key_openssh` in clear
+text. Deepen-Plan Research Insights prescribes the mitigation: `umask 077` in `$RUNNER_TEMP`, a mask
+for every line, no value printing, and an `always()` delete.
 
 **Brand-survival threshold:** none
 
@@ -571,7 +889,13 @@ failure_modes:
     alert_route: "the run's ::error:: text names the recovery dispatch (none, or the new id)"
   - mode: "the replacement booted not-ready"
     detection: "bastion_boot_verify strict verdict from the Sentry boot trail"
-    alert_route: "power-off (disk kept), a comment on #9421, and the summary line with the next dispatch"
+    alert_route: "workflow run log ::error::bastion-boot-verify: soleur-bastion is NOT ready (layer 6), plus power-off (disk kept), the #9421 comment and the summary next-dispatch line"
+  - mode: "the Hetzner server read fails (step 6, the TOCTOU re-read, or the post-failure read)"
+    detection: "_bbv_servers_doc returns non-zero; the step prints http=<code> and .error.code only"
+    alert_route: "workflow run log ::error:: (layer 6); nothing is planned or applied, and the summary prints next dispatch: unread"
+  - mode: "boot-verify's comment on #9421 fails"
+    detection: "comment_result=failed recorded by bastion_boot_verify"
+    alert_route: "workflow run log ::error:: on the replace label (layer 6), and the summary says the comment did not post"
   - mode: "the apply failed before the old server was deleted"
     detection: "boot-verify's old-id argument: the API still shows only the pinned old id"
     alert_route: "the run's ::error:: line; the old bastion is never powered off"
@@ -582,6 +906,47 @@ discoverability_test:
   command: "grep -c -e '^bastion_host_replace_gate() {' tests/scripts/lib/bastion-host-replace-gate.sh"
   expected_output: "1"
 ```
+
+## Downtime & Cutover
+
+- **Operation.** `terraform apply` of a `-replace='hcloud_server.bastion'` plan. Hetzner destroys
+  `soleur-bastion` and then creates it. The bastion has no `create_before_destroy`, so its fixed name
+  and its fixed private IP (10.0.1.70) are freed first.
+- **Surface affected.** The management-plane bastion only. In step 2 it serves nothing: sshd is
+  masked, nothing dials it, and no user request crosses it. No user-facing or serving surface goes
+  offline.
+- **Zero-downtime path evaluated:**
+  - *Blue-green* (birth a second bastion, cut over, retire the old one) is not available here. The
+    name `soleur-bastion` and the IP 10.0.1.70 are literals in `bastion.tf`, and the bastion's own gate
+    and boot-verify both refuse two servers with that name.
+  - *Rolling* has one member.
+  - *A state-only re-address* does not deliver a new boot.
+
+  So the residual downtime is the bastion's own boot: about 2 minutes for create plus the
+  cloud-init settle, bounded by the job's `timeout-minutes`.
+- **Justification and sign-off.** The downtime is accepted because no consumer exists until step 3
+  (#12867), which this route blocks. The window is the job's run. The owner's typed go on the real
+  dispatch is the sign-off.
+- **Revisit.** Step 3 (#12867) gives the bastion consumers and must re-evaluate this. That means
+  either a blue-green design with a second name and IP, or a drain-then-replace with a bounded window.
+  The ADR-327 addendum records that obligation.
+
+## Network-Outage Deep-Dive
+
+This is not a connectivity fix. The words "firewall" and "timeout" appear here only as resource
+and step names. The layers are:
+
+- **L3 firewall allow-list.** CI never connects to the bastion, so no SSH and no allow-list are
+  involved. The bastion's Hetzner firewall stays zero-rule, and the gate enforces it.
+- **L3 DNS/routing.** Only `api.hetzner.cloud` is reached, over HTTPS from a GitHub-hosted runner.
+  `stock-preflight-gate.sh` and the birth route's power-off already use the same path.
+- **L7 TLS.** curl with default certificate verification. The Encryption Posture `in_transit` row
+  covers it.
+- **L7 application.** A non-2xx response or a non-JSON body from the API fails the read step closed
+  before any plan.
+
+There is no `terraform_data` SSH provisioner in the `-target` set, so the resource-shape trigger does
+not apply.
 
 ## Infrastructure (IaC)
 
@@ -629,7 +994,7 @@ at_rest:
     mechanism: "plaintext-exception"
     evidence: "apps/web-platform/infra/bastion.tf declares no hcloud_volume; the host keeps no data beyond cloud-init output"
     defends_against: "nothing at rest; the disk carries no user data, only the OS, the egress rules and the host key"
-    does_not_defend: "a Hetzner-side read of the disk or of the metadata endpoint exposes the bastion host key's private half (ADR-327 residual)"
+    does_not_defend: "a Hetzner-side read of the disk or of the metadata endpoint exposes the bastion host key's private half (ADR-327 residual); nor the replace run's runner-local plan JSON, which holds the key in clear text until the always() delete step removes it"
     disclosed_as: "not-publicly-claimed"
     live_verification: "unavailable: the bastion is not born"
 in_transit:
@@ -694,8 +1059,9 @@ marked PASS. The fixtures use a string `before.id` and a numeric API id.
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | canonical replace plan with the attachment's `after_unknown.server_ids` as `[true]`, and API 1 server (id = pin, role=bastion) | PASS |
-| 1b | row 1 with `after_unknown.server_ids` as `true` | PASS |
+| 1 | canonical replace plan with the attachment's `after.server_ids` `[null]` and `after_unknown.server_ids` `[true]`, and API 1 server (id = pin, role=bastion) | PASS |
+| 1b | row 1 with `after_unknown.server_ids` as `true` and `after.server_ids` omitted (wholly unknown; tolerated by the word-for-word common check) | PASS |
+| 1c | row 1 with `after_unknown.server_ids` `[true]` and `after.server_ids` omitted (inconsistent shape) | RED |
 | 2 | canonical recovery plan, pin `none`, API 0 servers | PASS |
 | 3 | canonical replace plan with `resource_changes[]` in reverse order (a permitted variant) | PASS |
 | 3a | replace arm with the NIC `["create"]` at 10.0.1.70, the partial-replace re-dispatch (H3) | PASS |
@@ -821,7 +1187,21 @@ Amend **ADR-327** with an addendum dated 2026-11-28 (#12879, step 2b). It covers
 - `Ref #12879` until the post-birth `plan_only` proof;
 - the shared readiness library (F1).
 
-This is an extension of ADR-327, so no new ADR is created.
+- the two refused cases (#13116, #13117);
+- the shared libraries (F1, R3);
+- the pre-apply id set that boot-verify honours on both routes;
+- the reviewer gate, which is the owner's own approval;
+- that step 3 (#12867) must revisit the replace downtime and draining its consumer.
+
+Amend **ADR-231** with an addendum dated 2026-11-28 (Q4b). It covers:
+
+- the bastion routes as #8385-shape callees, the first slice of the split;
+- this PR's relocation as the minimum the thin caller needs, not a substitute for the split;
+- the #8385 counter, which has tripped (489,485 ≥ 485,000);
+- the next PR that adds caller bytes to `apply-web-platform-infra.yml`, which must take the split
+  with no further relocation round.
+
+Both are amendments to existing ADRs, so no new ADR is created.
 
 ### C4 views
 
@@ -864,6 +1244,8 @@ processing is added.
 
 - **No production dispatch from this PR.** That includes the issue's `plan_only` run against the real
   bastion. It needs a born bastion, and the owner's typed go naming the exact command.
+- **Operator item (priority/schedule):** schedule #8385 (split the apply workflow) before the next
+  route that adds to it. Its own trigger has fired (489,485 ≥ 485,000). This PR is its first slice (Q4b).
 - The PR body says `Ref #12879`, `Ref #9421` and `Ref #12008`. It never says `Closes` for #9421 or #12008.
 - **What the merge triggers.** This was derived from every workflow whose `on.push.paths` matches the
   planned files (measured 2026-11-28):
@@ -967,6 +1349,11 @@ processing is added.
 - [ ] AC11. The ADR-327 addendum, `bastion-host.md` and `model.c4` no longer describe the replace route
   as pending. `bastion-host.md` names #13116 and #13117 for the two refused cases, and the C4 suites
   pass.
+- [ ] AC11b. The ADR-231 addendum (Q4b) exists and states the four points.
+- [ ] AC11c. `test-bastion-host-replace-gate.sh` runs a fixture whose key fields hold
+  `SYNTHETIC-KEY-MARKER`, and that string appears in none of the gate output it captures.
+  `test-bastion-boot-verify.sh` shows that a pre-apply id is never powered off, on the cancel path
+  and on the failed-apply path.
 - [ ] AC12. The PR body says `Ref #12879`, `Ref #9421` and `Ref #12008`. It carries the done-when
   checklist with item 2 unchecked as an Operator Hold, and it lists each workflow the merge triggers
   and what that workflow will do.
