@@ -4,10 +4,11 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERIFIER="${SCRIPT_DIR}/completion-floor.sh"
 
-pass=0; fail=0
+pass=0; fail=0; total=0
 run() { "$@"; }
 assert_exit() {
   local expected="$1"; shift
+  total=$((total+1))
   "$@" >/dev/null 2>&1
   local rc=$?
   if [[ "$rc" -eq "$expected" ]]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: expected exit $expected got $rc for: $*"; fi
@@ -52,6 +53,7 @@ chmod +x "$T/bin/gh"
   || { echo "FATAL: fixture repo setup failed" >&2; exit 2; }
 floor_review() { ( git_fixture_env "$T/repo" >/dev/null 2>&1 && PATH="$T/bin:$PATH" "$VERIFIER" --phase review --root "$T/repo" 2>/dev/null ); }
 assert_review() { # <label> <want: pass|missing> ; env carries the case
+  total=$((total+1))
   local out; out="$(floor_review)"
   local got=pass; [[ "$out" == *"no-open-code-review-issues"* ]] && got=missing
   if [[ "$got" == "$2" ]]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: $1: want $2, got: $out"; fi
@@ -72,9 +74,14 @@ FLOOR_PR=13112 FLOOR_ISSUES='[{"number":8,"body":"Ref #13112","labels":[{"name":
   assert_review "a labelled (non-scope-out) issue citing this PR blocks" missing
 FLOOR_PR=13112 FLOOR_ISSUES="$(jq -cn '[range(1000) | {number: ., body: "x"}]')" \
   assert_review "a full 1000-issue page fails closed" missing
-# Anti-vacuity: the exact measured total (14), reported by printf, not through
-# the assertion helpers it backstops — a dropped row is a FATAL.
-if [[ $((pass + fail)) -lt 14 ]]; then printf '[FATAL] only %d assertions ran (floor 14)\n' "$((pass + fail))"; exit 1; fi
+# Anti-vacuity: the exact measured total, counted on entry to each assertion
+# helper (not by pass/fail) and reported by printf, never through the helpers
+# it backstops — a dropped row is a FATAL.
+MIN_ASSERTIONS=14
+if [[ "$total" -lt "$MIN_ASSERTIONS" ]]; then
+  printf '[FATAL] vacuity floor: only %d assertions ran (floor %d) — the suite did not execute\n' "$total" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
 
 echo "PASS=$pass FAIL=$fail"
 [[ "$fail" -eq 0 ]]

@@ -805,8 +805,8 @@ if [[ -z "$MERGE_TARGET_WHY" ]]; then
     # `declare${IFS}-n`, `declare -[n]`) are closed by the second test: on
     # this path any unquoted declare/local/typeset word denies — no
     # documented arm block uses one.
-    elif tr -d "\"'\\\\" <<<"$CMD" \
-         | grep -qE '(^|[^A-Za-z0-9_])(declare|local|typeset)[[:space:]]+([^;&|]*[[:space:]])?(-[A-Za-z]*n|\$)' \
+    elif grep -qE '(^|[^A-Za-z0-9_])(declare|local|typeset)[[:space:]]+([^;&|]*[[:space:]])?(-[A-Za-z]*n|\$)' \
+           <<<"$(tr -d "\"'\\\\" <<<"$CMD")" \
          || grep -qE '(^|[^A-Za-z0-9_])(declare|local|typeset)([^A-Za-z0-9_]|$)' <<<"$SCAN_NOCOMMENT"; then
       MERGE_TARGET_WHY="the command declares a nameref (declare/local/typeset -n, or an option word the hook cannot read), which can make the --match-head-commit variable run code"
     else
