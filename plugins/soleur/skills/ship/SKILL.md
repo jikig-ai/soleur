@@ -2257,10 +2257,10 @@ fi
 # Read once in a `set +u` subshell: a nounset host shell must not die on an unset root.
 SYNC_ROOT="$(set +u; printf '%s' "${CLAUDE_PLUGIN_ROOT}")"
 SYNC_SH="$SYNC_ROOT/scripts/sync-pr-behind.sh"; SYNC_SNAP=""; GH_ERR=""
-# gh 2.106 prints a hint on stderr: read stdout only, stderr to GH_ERR (never 2>&1). A substring cut: `head -c` SIGPIPEs.
+# gh hints on stderr: stdout only, stderr to GH_ERR (never 2>&1), printable-only; substring cut (`head -c` SIGPIPEs).
 trap 'rm -f "$SYNC_SNAP" ${GH_ERR:+"$GH_ERR"}' EXIT
 GH_ERR="$(mktemp 2>/dev/null)" || GH_ERR=""
-gh_err_line() { local e; e="$(grep -m1 -vE '^(hint:|[[:space:]]|$)' "$GH_ERR" 2>/dev/null)" || e=""; [[ -n "$e" ]] && echo "${e:0:200}" || echo "rc=$1"; }
+gh_err_line() { local e; e="$(grep -m1 -vE '^(hint:|[[:space:]]|$)' <(LC_ALL=C tr -cd '[:print:]\t\n' 2>/dev/null <"$GH_ERR"))" || e=""; [[ -n "$e" ]] && echo "${e:0:200}" || echo "rc=$1"; }
 if [[ "$sync_ok" -eq 1 ]]; then
   why=""
   if [[ -z "$SYNC_ROOT" ]]; then why="CLAUDE_PLUGIN_ROOT is unset (Claude Code/Grok: this fence was taken from disk — stop this Monitor, then re-arm with the quoted root from a soleur skill's Base directory line cut at its last /skills/, never a path built from the working directory)"
@@ -2512,7 +2512,7 @@ while true; do
     if (( fetch_failures == MAX_BEHIND_SYNCS )); then
       echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s (fetch_failures=${fetch_failures}/${MAX_BEHIND_SYNCS}). Every attempt failed at git fetch — a network/credential outage, not main moving. Check connectivity and credentials, then re-arm the poll."
     else
-      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s (fetch_failures=${fetch_failures}/${MAX_BEHIND_SYNCS}; attempts that failed at fetch never synced). origin/main is moving faster than this PR's CI cycle. Recommendation: for a zero-conflict-surface change, use the settle-then-admin-merge escape hatch (admin-merge-ready.sh <PR> <sha> must exit 0, then gh pr merge --squash --admin --match-head-commit <sha> — full procedure: ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md); else merge during a quieter window."
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s (fetch_failures=${fetch_failures}/${MAX_BEHIND_SYNCS}; attempts that failed at fetch never synced). origin/main is moving faster than this PR's CI cycle. Recommendation: for a zero-conflict-surface change, use the settle-then-admin-merge escape hatch (admin-merge-ready.sh <PR> <sha> must exit 0, then gh pr merge <PR> --squash --admin --match-head-commit <sha> — full procedure: ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md); else merge during a quieter window."
     fi
     behind_warned=1
   fi
@@ -2664,7 +2664,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    while true; do
      i=$((i+1))
      r=$(gh run view <id> --json status,conclusion --jq '"\(.status) \(.conclusion // "-")"' 2>"${e:-/dev/null}") || {
-       rc=$?; m="$(grep -m1 -vE '^(hint:|[[:space:]]|$)' "$e" 2>/dev/null)" || m=""; r="fetch-error: ${m:-rc=$rc}"; }
+       rc=$?; m="$(grep -m1 -vE '^(hint:|[[:space:]]|$)' "$e" 2>/dev/null)" || m=""; m="${m:0:200}"; r="fetch-error: ${m:-rc=$rc}"; }
      if [[ "$r" != "$prev" ]] || (( i % 6 == 1 )); then
        echo "$(date +%H:%M:%S) [${i}/40] run=<id> ${r}"
        prev="$r"

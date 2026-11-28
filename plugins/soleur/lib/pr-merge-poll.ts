@@ -31,7 +31,7 @@ export const PR_VIEW_POLL_JQ =
  * in harness.ts carries it (pr-merge-poll.test.ts iterates the `Harness` union).
  */
 export const GH_STDOUT_ONLY_READ =
-  "Read `gh` stdout only; send stderr to a file, never `2>&1`: gh 2.106+ prints a `hint:` block on stderr for every `gh pr view` (rc 0), so a merged capture's first line is not the state.";
+  "Read `gh` stdout only; send stderr to a file, never `2>&1`: gh 2.106.0 (measured 2026-11-25) prints a `hint:` block on stderr, rc 0, for `gh pr view` of an open PR, `gh run view` of an in-progress PR run and `gh api …/pulls/<N>`, so a merged capture's first line is not the state.";
 
 /** Longest stderr line a `fetch-error:` carries — the fence's `gh_err_line` cut, `${e:0:200}`. */
 export const GH_ERR_LINE_MAX = 200;
@@ -41,24 +41,27 @@ const POLL_STATE_LINE = /^(OPEN|MERGED|CLOSED) [A-Z_]+$/;
 /**
  * The poll read, as a pure function: stdout is the answer, stderr is only the diagnostic (#12697).
  *
- * gh 2.106.0 prints an 8-line `hint: … gh event listen …` block on STDERR for every `gh pr view`, with rc 0, before stdout.
- * A `2>&1` capture's first line is then that hint, and every OPEN branch of the poll misreads the state.
+ * gh 2.106.0 (measured 2026-11-25) prints an 8-line `hint: … gh event listen …` block on STDERR, with rc 0, before stdout,
+ * for `gh pr view` of an OPEN PR (a merged PR prints none), `gh run view` of an in-progress pull_request run, and
+ * `gh api repos/O/R/pulls/<N>` (every sub-path, any PR state). No documented env var or config key turns it off (8 env vars
+ * and 5 config keys tried). A `2>&1` capture's first line is then that hint, and every OPEN branch of the poll misreads it.
  *
  * Portable spec only: nothing calls this at runtime. The executing copy is the ship Phase 7 fence (and the merge-pr mirror),
- * whose `gh_err_line <rc>` is the SAME rule as the rc != 0 arm here: the first stderr line that is non-empty and starts with
- * neither `hint:` nor whitespace, cut to {@link GH_ERR_LINE_MAX}; `rc=<rc>` when there is none.
+ * whose `gh_err_line <rc>` is the SAME rule as the rc != 0 arm here, in the same order: drop every byte outside printable
+ * ASCII, tab and newline (`LC_ALL=C tr -cd '[:print:]\t\n'`), THEN take the first line that is non-empty and starts with
+ * neither `hint:` nor whitespace, cut to {@link GH_ERR_LINE_MAX}; `rc=<rc>` when there is none. pr-merge-poll.test.ts runs
+ * the fence's own `gh_err_line`, extracted verbatim from ship/SKILL.md, against this function over one table.
  *
- * - `rc !== 0` → always `fetch-error: <that line>` (non-printable characters dropped) or `fetch-error: rc=<rc>`, even when
- *   stdout looks like a valid state.
+ * - `rc !== 0` → always `fetch-error: <that line>` or `fetch-error: rc=<rc>`, even when stdout looks like a valid state.
  * - `rc === 0` → the trimmed stdout when it is exactly one `^(OPEN|MERGED|CLOSED) [A-Z_]+$` line (the {@link PR_VIEW_POLL_JQ}
  *   shape), else `null`, so a merged stream is refused instead of misread. stderr is ignored.
  */
 export function parsePrPollRead(r: { rc: number; stdout: string; stderr: string }): string | null {
   if (r.rc !== 0) {
     for (const raw of r.stderr.split("\n")) {
-      if (raw === "" || raw.startsWith("hint:") || /^\s/.test(raw)) continue;
-      const line = raw.replace(/[^\x20-\x7E]/g, ""); // printable ASCII only (LC_ALL=C [:print:])
-      if (line !== "") return `fetch-error: ${line.slice(0, GH_ERR_LINE_MAX)}`;
+      const line = raw.replace(/[^\x20-\x7E\t]/g, ""); // strip FIRST, as the fence's `tr` runs before its `grep`
+      if (line === "" || line.startsWith("hint:") || /^\s/.test(line)) continue;
+      return `fetch-error: ${line.slice(0, GH_ERR_LINE_MAX)}`;
     }
     return `fetch-error: rc=${r.rc}`;
   }
