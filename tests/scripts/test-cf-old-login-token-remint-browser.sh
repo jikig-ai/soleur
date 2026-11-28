@@ -33,6 +33,11 @@
 #             path, an Origin header, a GET, a short Content-Length, a bad body; times out; a failed fsync
 #             unlinks the file and refuses `write`; writes mode 0600; refuses an --out that exists, is
 #             relative, has no parent, or sits in a git work tree (a .git directory or a .git FILE).
+#   P-wait    each body waits once, after its goto, for window.bootstrap.atok (set ~283 ms after
+#             DOMContentLoaded, measured 2026-11-28) with a finite timeout and interval polling, and its own
+#             condition resolves (L1-L3); a signed-out page still returns {atok:false} (M3, R6, D7).
+#   P-holds   the archived plan's Operator Holds equal the runbook's section 6 holds, modulo an exact
+#             sha256=<64 hex> value (CTO F5; the archived plan is never edited on a re-pin).
 #   P-compose the runbook's section 5 composition line (read from the runbook, placeholders filled) yields a
 #             run file that the browser_run_code_unsafe wrapping runs, byte-equal to
 #             `(<body>)(JSON.parse(<json string>))`; a JavaScript-expression argument is DATA: refused at jq
@@ -61,6 +66,9 @@
 #   XM9 old-owner-login refusal deleted -> M18b         XM10 owner user posts to the account endpoint -> M18a
 #   XM11 the cleanup ignores the answered id (a drifted stored name survives) -> M7h
 #   XS1 sink peer check deleted -> S2b                  XS2 sink keeps a partial file on a failed fsync -> S8
+#   XW1 the read wait deleted -> L1     XW2 the mint wait deleted -> L2     XW3 the revoke wait deleted -> L3
+#   XW4 the read wait's .catch dropped -> D7 ({error:TimeoutError})
+#   XH1 a runbook hold's wording edited -> the sha-normalized hold compare
 #   Instrument: XL1 a revoke return that bypasses the guard and carries the atok -> R1 (P-shape);
 #               XL2 an in-page function closing over a Node-side variable -> R1 (page serialization);
 #               XL3 a read return that bypasses the guard with resource keys -> D5 (P-shape)
@@ -218,7 +226,7 @@ function makeWorld(over = {}) {
     ],
     pageCap: 5, noTotal: false, endless: false, log: [], gotos: [], deletes: [], sinkCalls: [], pageConsole: [],
     mintResp: null, mutateStored: null, sinkMode: 'ok', deleteResp: null, listFail: false, throwOnReadback: false,
-    onGetToken: null, win: null,
+    onGetToken: null, win: null, lateAtok: false, waits: [],
     ...over,
   };
 }
@@ -276,7 +284,10 @@ function page(world) {
     }
     return json(404, { success: false });
   };
-  const win = { bootstrap: world.atok ? { atok: world.atok } : {} };
+  // lateAtok: the page loads with no atok; the dashboard sets it only after DOMContentLoaded (measured
+  // 2026-11-28: ~283 ms later). Only waitForFunction installs it, after its first falsy poll, so a body that
+  // reads the atok without waiting, or waits on a condition true too early, cannot pass by accident.
+  const win = { bootstrap: world.atok && !world.lateAtok ? { atok: world.atok } : {} };
   world.win = win;
   const pctx = vm.createContext({ window: win, location: { origin: world.origin }, fetch: dashFetch, console: rec, Headers, URL, JSON, Response });
   return {
@@ -286,6 +297,20 @@ function page(world) {
       const f = vm.runInContext(`(${fn.toString()})`, pctx);
       const r = await f(arg === undefined ? undefined : JSON.parse(JSON.stringify(arg)));
       return r === undefined ? undefined : JSON.parse(JSON.stringify(r));
+    },
+    // Playwright's signature: waitForFunction(pageFunction, arg, options). Options are read from the THIRD
+    // parameter only, as Playwright does; a two-argument call records an undefined timeout and fails the L rows.
+    async waitForFunction(fn, arg, opts) {
+      if (typeof fn !== 'function') throw new TypeError('waitForFunction(fn)');
+      const f = vm.runInContext(`(${fn.toString()})`, pctx);
+      const rec = { timeout: opts && opts.timeout, polling: opts && opts.polling, resolved: false };
+      world.waits.push(rec);
+      for (let i = 0; i < 3; i += 1) {
+        if (await f(arg === undefined ? undefined : JSON.parse(JSON.stringify(arg)))) { rec.resolved = true; return true; }
+        if (i === 0 && world.lateAtok) win.bootstrap.atok = world.atok;
+      }
+      const e = new Error('waitForFunction: timeout'); e.name = 'TimeoutError';
+      throw e;
     },
     request: {
       async delete(url, opts = {}) {
@@ -387,6 +412,14 @@ const must = (cond, why) => { if (!cond) throw new Error(why); };
 const want = (r, w) => must(eq(r, w), `want ${canon(w)} got ${canon(r)}`);
 const nothingSent = (w) => must(w.gotos.length === 0 && w.log.length === 0 && w.deletes.length === 0 && w.sinkCalls.length === 0, 'a request was made before the refusal');
 const listed = (list, name) => list.filter((t) => t.name === name).length;
+// The late-atok rows: one bounded, interval-polled wait whose own condition resolved.
+const waitedOnce = (w) => {
+  must(w.waits.length === 1, `waitForFunction calls: ${w.waits.length}`);
+  const x = w.waits[0];
+  must(x.resolved === true, 'the wait condition never resolved (resolved:false)');
+  must(Number.isFinite(x.timeout) && x.timeout > 0 && x.timeout <= 30000, `wait timeout ${x.timeout} is not finite in (0, 30000]`);
+  must(typeof x.polling === 'number', `wait polling ${x.polling} is not an interval`);
+};
 
 // ---- p5-mint.js --------------------------------------------------------------------------------------------
 const MINT_P = { owner: 'account', account_id: NA, zone_id: NZ, name: 'cf_api_token_pagerules_read-soleur-20261204',
@@ -839,6 +872,25 @@ row('D7 read: signed out -> {atok:false}; off-origin -> {refused:origin}; list 4
   w = makeWorld({ origin: 'https://evil.example' }); want(await exec('read', { what: 'policies', scope: 'user', pin: PIN_P }, w), { refused: 'origin' });
   w = makeWorld({ listFail: true }); want(await exec('read', { what: 'policies', scope: 'user', pin: PIN_P }, w), { status: 403, contentType: JS, success: false });
 });
+// ---- the late atok (2026-11-28): window.bootstrap.atok is set ~283 ms after DOMContentLoaded --------------
+row('L1 read groups, atok set only after DOMContentLoaded -> the normal groups answer, not {atok:false}', async () => {
+  const w = makeWorld({ lateAtok: true }); const r = await exec('read', { what: 'groups', scope: 'account', acct: NA }, w);
+  must(r.success === true, `got ${canon(r)}`); // short: the full want below is longer than the 400-char FAIL text
+  want(r, { success: true, groups: GROUPS_OUT, skipped: 0 });
+  waitedOnce(w);
+});
+row('L2 mint, atok set only after DOMContentLoaded -> minted, value to the sink once', async () => {
+  const w = makeWorld({ lateAtok: true }); const r = await exec('mint', MINT_P, w);
+  want(r, { status: 200, contentType: JS, success: true, id8: ID8 });
+  must(w.sinkCalls.length === 1 && w.sinkCalls[0].body === VALUE, 'sink hand-off');
+  waitedOnce(w);
+});
+row('L3 revoke, atok set only after DOMContentLoaded -> the one match deleted', async () => {
+  const w = makeWorld({ lateAtok: true }); const r = await exec('revoke', REV, w);
+  want(r, DEL_OK);
+  must(w.deletes.length === 1 && w.deletes[0].okHdr && w.deletes[0].path === `/api/v4/user/tokens/${OLD_P}`, 'delete');
+  waitedOnce(w);
+});
 [['object', null], ['unknown', { what: 'groups', scope: 'user', extra: 1 }], ['what', { what: 'tokens', scope: 'user' }],
   ['scope', { what: 'groups', scope: 'zone' }], ['acct', { what: 'groups', scope: 'account' }], ['acct', { what: 'groups', scope: 'user', acct: NA }],
   ['pin', { what: 'groups', scope: 'user', pin: PIN_P }], ['scope', { what: 'policies', scope: 'account', pin: PIN_P }],
@@ -1066,11 +1118,14 @@ else
   bad_cite=1
 fi
 [[ "$bad_cite" -eq 0 ]]; check "the runbook is readable and its ${cites} sha256 citations (>= 5, both forms) each equal the file's sha256" $?
-# The plan's Operator Holds list is the approved list ship reads; it must be the runbook's section 6 holds verbatim.
+# The plan's Operator Holds list is the approved list ship reads; it must be the runbook's section 6 holds verbatim,
+# except for an exact sha256=<64 hex> value (CTO F5): the archived plan is never edited, so a body re-pin leaves it
+# quoting a superseded sha. The sha values themselves are checked against the files by the citation check above.
+holds_norm() { grep -a '^- Hold:' "$1" | sed -E 's/sha256=[0-9a-f]{64}/sha256=<pinned>/g'; }
 PLAN_FILE="$(find "${REPO_ROOT}/knowledge-base/project/plans" -name '*2026-11-27-chore-cf-phase5-old-login-token-remint-plan.md' | head -1)"
 OUT="plan unreadable: ${PLAN_FILE:-none}"
 if [[ -r "$PLAN_FILE" && -r "$RUNBOOK" ]]; then
-  ph="$(grep -a '^- Hold:' "$PLAN_FILE" || true)"; rh="$(grep -a '^- Hold:' "$RUNBOOK" || true)"
+  ph="$(holds_norm "$PLAN_FILE" || true)"; rh="$(holds_norm "$RUNBOOK" || true)"
   OUT="plan holds=$(grep -c . <<<"$ph") runbook holds=$(grep -c . <<<"$rh")"
   [[ -n "$rh" && "$ph" == "$rh" ]]
 else
@@ -1176,9 +1231,9 @@ killed_row() { # <mint> <revoke> <read> <row> <expected text>: the row is RED an
   fl="$(grep "^FAIL $4 " "$H_OUT" || true)"
   grep -qF -- "$5" <<<"$fl"
 }
-SCORED="R1,R1b,R2,R3,R4,R4c,R7b,R8u,R13c,R13d,M6,M6c,M7a,M7h,M9c,M16a,M16c,M16f,M17,M18a,M18b,D5"
+SCORED="R1,R1b,R2,R3,R4,R4c,R7b,R8u,R13c,R13d,M6,M6c,M7a,M7h,M9c,M16a,M16c,M16f,M17,M18a,M18b,D5,L1,L2,L3,D7"
 harness "$MINT" "$REVOKE" "$READ" P5_ONLY="$SCORED"
-if [[ "$(grep -c '^ok ' "$H_OUT")" -ne 22 ]] || grep -q '^FAIL ' "$H_OUT"; then
+if [[ "$(grep -c '^ok ' "$H_OUT")" -ne 26 ]] || grep -q '^FAIL ' "$H_OUT"; then
   printf 'HARNESS: a scored row is RED on the pristine bodies:\n' >&2; grep -v '^ok ' "$H_OUT" | cut -c1-300 >&2; exit 2
 fi
 SINK_PRISTINE="$SB/sink-pristine.err"
@@ -1219,6 +1274,20 @@ mut XM11 "cleanup by name only, not the answered id" mint "const ours = (t) => !
 mut XL1 "a revoke return bypasses the guard and carries the atok" revoke "return safe({ status: r.status(), contentType, success });" "return { status: r.status(), contentType, success, atok: l.atok };" R1 'P-shape'
 mut XL2 "an in-page function closes over a Node-side variable" revoke "if (t.id.startsWith(prefix)) hits.push" "if (t.id.startsWith(a.pin)) hits.push" R1 'ReferenceError'
 mut XL3 "a read return bypasses the guard with resource keys" read "return safe({ success: true, policies, skipped });" "return { success: true, policies, skipped, keys: t.policies.map((p) => Object.keys(p.resources)) };" D5 'P-shape'
+# The late-atok wait (2026-11-28): each body's wait is load-bearing, and its .catch keeps signed-out a refusal.
+WAIT_LINE="    await page.waitForFunction(() => !!(window.bootstrap && window.bootstrap.atok), null, { timeout: 15000, polling: 100 }).catch(() => {});
+"
+mut XW1 "the read wait deleted" read "$WAIT_LINE" "" L1 '"atok":false'
+mut XW2 "the mint wait deleted" mint "$WAIT_LINE" "" L2 '"atok":false'
+mut XW3 "the revoke wait deleted" revoke "$WAIT_LINE" "" L3 '"atok":false'
+mut XW4 "the read wait's .catch dropped" read "polling: 100 }).catch(() => {});" "polling: 100 });" D7 '"error":"TimeoutError"'
+# Hold-wording parity (CTO F5): the sha-normalized compare still sees a one-word edit to a runbook hold.
+cp "$RUNBOOK" "$M/XH1.md"
+FROM='(CTO F20), only after' TO='(CTO F20), after' perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/' "$M/XH1.md"
+! cmp -s "$RUNBOOK" "$M/XH1.md"; check "XH1 lands" $?
+OUT="plan holds vs mutated runbook holds"
+[[ -r "$PLAN_FILE" && "$(holds_norm "$PLAN_FILE")" != "$(holds_norm "$M/XH1.md")" ]]
+check "XH1 (a runbook hold's wording edited) turns the hold compare RED" $?
 # Sink mutants: scored only when the named row's FAIL line appears.
 sink_mut() { # <id> <label> <from> <to> <row FAIL prefix>
   local err="$M/$1.err"
@@ -1233,8 +1302,8 @@ sink_mut XS2 "sink keeps a partial file on a failed fsync" 'os.unlink(out)' 'pas
 # --- anti-vacuity floor: EXACT counts (reported directly, never through fail()) -----------------
 TOTAL=$((PASS + FAIL))
 SELFTEST_PASSES=1
-EXPECT_FULL=219
-EXPECT_MUTANTS=66
+EXPECT_FULL=232
+EXPECT_MUTANTS=76
 case "$MODE" in full) want_n="$EXPECT_FULL" ;; *) want_n="$EXPECT_MUTANTS" ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -ne "$want_n" ]]; then
   printf '  [FAIL] anti-vacuity floor: %s assertions ran in %s mode, the exact floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$want_n" >&2

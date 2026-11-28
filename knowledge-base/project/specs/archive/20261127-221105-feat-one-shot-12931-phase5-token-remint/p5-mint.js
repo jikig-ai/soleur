@@ -25,7 +25,8 @@
 //                   lists starts with one, the body refuses (it never mints under the old owner's login).
 //                   owner "account": must be absent.
 //
-// FLOW. goto https://dash.cloudflare.com/profile/api-tokens (a fresh window.bootstrap.atok); in-page GET
+// FLOW. goto https://dash.cloudflare.com/profile/api-tokens (a fresh window.bootstrap.atok), then wait up to 15 s
+// for window.bootstrap.atok, which the dashboard sets after DOMContentLoaded (measured 2026-11-28); in-page GET
 // /api/v4/accounts/<acct>/tokens/permission_groups and resolve each name to exactly ONE selectable group whose
 // `scopes` holds the expected scope; in-page list of every page of the owner's token list (a page shorter than
 // per_page ends it, unless result_info.total_count says more; 20 pages without an end refuses `listing`); refuse
@@ -276,6 +277,7 @@
   };
   try {
     await page.goto(`${DASH}/profile/api-tokens`, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => !!(window.bootstrap && window.bootstrap.atok), null, { timeout: 15000, polling: 100 }).catch(() => {});
 
     // 1. permission groups: each asked name -> exactly one selectable group carrying the expected scope.
     const pg = await call('GET', `/api/v4/accounts/${acct}/tokens/permission_groups`);
