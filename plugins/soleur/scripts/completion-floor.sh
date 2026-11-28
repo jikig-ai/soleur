@@ -100,10 +100,20 @@ check_work() {
 
 # --- review phase checks ---
 check_review() {
-  # no-open-code-review-issues
-  open_issues="$(gh issue list --label code-review --state open -L 200 2>/dev/null | wc -l)" || open_issues=0
-  if [[ "$open_issues" -gt 0 ]]; then
+  # no-open-code-review-issues — scoped to THIS PR (completion-floors.ts:
+  # "for this PR"): an open code-review issue whose body cites #<PR>. The
+  # unscoped count read every open code-review issue in the repo, so it could
+  # never pass. Fail-closed: an unresolved PR or a failed read is "missing".
+  # stdout only — gh's stderr hint must not reach a parsed value (#12697).
+  pr="$(gh pr view --json number --jq .number 2>/dev/null)" || pr=""
+  if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
     add_missing "no-open-code-review-issues"
+  else
+    open_issues="$(gh issue list --label code-review --state open -L 200 --json number,body \
+      --jq "[.[] | select((.body // \"\") | test(\"#${pr}([^0-9]|\$)\"))] | length" 2>/dev/null)" || open_issues=""
+    if [[ ! "$open_issues" =~ ^[0-9]+$ || "$open_issues" -gt 0 ]]; then
+      add_missing "no-open-code-review-issues"
+    fi
   fi
   # attestation-trailers
   last_commit_msg="$(git log -1 --format='%B')"
