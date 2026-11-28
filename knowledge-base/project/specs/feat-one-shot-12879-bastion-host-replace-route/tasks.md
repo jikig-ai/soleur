@@ -92,7 +92,7 @@ rotation), #13117 (lost-state recovery).
     power-off, pin read-back, then the dispatch summary;
   - [ ] every mutating step guarded with `inputs.plan_only != true`;
   - [ ] a job-level `if: github.ref == 'refs/heads/main'`;
-  - [ ] the plan files written under `umask 077` in a `$RUNNER_TEMP` mktemp directory, each key line
+  - [ ] the plan files written under `umask 077` in a `$RUNNER_TEMP` mktemp directory, each line of every `private_key_*` field (openssh, pem, pem_pkcs8)
     masked, and the directory deleted on `always()`;
   - [ ] TOCTOU re-checks identity through `bastion_replace_identity`;
   - [ ] the always-run summary computes the next-dispatch line (`none`, the new id, the same pin, or unread).

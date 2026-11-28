@@ -324,13 +324,13 @@ Flow inside `bastion-host-replace.yml`, job `bastion_host_replace` (environment
       runs. The step then re-reads the API and state and prints one ready-to-run `gh workflow run ...`
       line, with `expected_bastion_server_id=none` when no server exists and `=<new id>` when a new
       server exists (H3).
-11. **Boot verify.** `bastion_boot_verify "$since" "$apply_outcome" bastion-host-replace "$OLD_ID"`.
+11. **Boot verify.** `bastion_boot_verify "$since" "$apply_outcome" bastion-host-replace "$PRE_IDS"` (the pre-apply id set; CTO amendment 2026-11-28: this and `_bbv_poweroff [pre-ids]` are the only signatures, no single `$OLD_ID` form).
     The new optional fourth argument is the pinned old id (`none` on the recovery arm). Boot-verify
     refuses to read or power off a server whose id equals it. It decides only when the API shows a
     `soleur-bastion` whose id differs from the old pin. If the apply failed before the old server was
     deleted, the old server is never touched. A server that is not ready is powered off with its disk
     kept, and the run URL is commented on #9421 (R4). The cancel power-off step copies the birth body's
-    `if:`, adds the `plan_only` guard, and passes the same old id.
+    `if:`, adds the `plan_only` guard, and passes the same pre-apply id set (`_bbv_poweroff [pre-ids]`).
 12. **Record the bastion pin.** The fingerprint and private IP read-back, unchanged from the birth body.
 13. **Dispatch summary**, using the outcome-pair logic copied from the birth body. For a not-ready
     replacement it prints the powered-off server's id and the ready-to-run replace dispatch line. The
@@ -729,16 +729,16 @@ amendments.
 ### The plan JSON now carries the host private key (security #3)
 
 - On a replace the key is a no-op, so the plan JSON's `prior_state` and the key's `change.before` and
-  `change.after` hold `private_key_openssh` in clear text. At birth it was unknown at plan time. This
+  `change.after` hold `private_key_openssh`, `private_key_pem` and `private_key_pem_pkcs8` in clear text (tls provider 4.3.0, ED25519). At birth it was unknown at plan time. This
   is a **new** exposure, and the User-Brand Impact section is amended to say so.
 - Mitigations in the replace body:
   - write `tfplan`, `tfplan.json` and `hetzner-servers.json` under `umask 077` into a `mktemp -d`
     under `$RUNNER_TEMP`;
   - mask each line of the key before any step can print it: read
-    `jq -r '..|.private_key_openssh? // empty'` and `::add-mask::` each line;
+    `jq -r '.. | objects | to_entries[] | select(.key|startswith("private_key_")) | .value | strings'` and `::add-mask::` each line (CTO amendment 2026-11-28: every `private_key_*` field, not only `private_key_openssh`);
   - the gate and the summaries print only addresses, actions, ids and attribute names, never values;
   - an `if: always()` final step deletes the directory.
-- Matrix row: a fixture whose key fields hold a synthetic marker (`SYNTHETIC-KEY-MARKER`) must not
+- Matrix row: a fixture whose three key fields (`private_key_openssh`, `private_key_pem`, `private_key_pem_pkcs8`) all hold a synthetic marker (`SYNTHETIC-KEY-MARKER`) must not
   appear in any gate output, ABORT line or summary text the suite captures.
 - `tfplan.txt` (from `terraform show -no-color`) renders sensitive values as `(sensitive value)`, so
   the existing `grep` excerpt on ABORT stays safe.
