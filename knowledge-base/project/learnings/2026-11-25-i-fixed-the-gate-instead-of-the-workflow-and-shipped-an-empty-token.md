@@ -109,6 +109,11 @@ the lock-wrapped, flag-only form with the SHA written out**; dropping the lock l
 serialisation of parallel auto-merge arming. The doc/hook mismatch is tracked in #12963 and
 #12697.
 
+> **Follow-up 2026-11-28:** the gate now accepts the documented block (a bare PR number beside one
+> `--match-head-commit "${H:?…}"`, and identical locked/degrade-open invocations), so the flag-only
+> workaround above is no longer needed once that fix is installed. See
+> [the 2026-11-28 learning](workflow-issues/2026-11-28-a-cli-hint-on-stderr-switched-off-every-open-arm-of-the-merge-poll.md).
+
 ## 4. Editing the PR body during CI cancels quality-guards
 
 `pr-quality-guards.yml` triggers on `pull_request: types: [… edited]`. Its concurrency group

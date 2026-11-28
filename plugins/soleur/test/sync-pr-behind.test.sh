@@ -44,6 +44,9 @@ set +e -uo pipefail
 export PR_QUEUE_RETRY_SLEEP=0
 # The queue rows use a PR number other than 1 so a hardcoded `-F number=1` cannot pass.
 QUEUE_PR=4242
+# gh 2.106.0 prints this 8-line block on STDERR for `gh pr view` of an open PR, rc 0, before stdout (the shared fixture; synthesized PR number).
+HINT_FIXTURE="$REPO_ROOT/plugins/soleur/test/fixtures/gh-pr-view-hint.txt"
+[[ "$(head -1 "$HINT_FIXTURE" 2>/dev/null)" == hint:* && "$(grep -c . "$HINT_FIXTURE")" -eq 8 ]] || { echo "FATAL: $HINT_FIXTURE is missing or not the 8-line hint block" >&2; exit 2; }
 
 PASS=0; FAIL=0
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
@@ -257,7 +260,11 @@ EOF
 # the raw JSON {headRefName, baseRefName} run through the --jq the SUT passed (base from the pr-base file, env knob QBASE, default
 # main; QBASE= (set, empty) serves an empty base; QBASE=@null@ serves a JSON null base). QHEAD_LEGACY=1 makes the stub answer the bare head even
 # then (a legacy gh answer). The $5 modes beyond ok/fail (the loop's gh-stderr sanitiser rows): ctl = every call exits 1 with an ESC byte and a
-# forged tag line on stderr; ctlstate = only the state reads do; ctlpost = only the second state read (the post-push one) does.
+# forged tag line on stderr; ctlstate = only the state reads do; ctlpost = only the second state read (the post-push one) does;
+# hintfail-head / hintfail-state / hintfail-post = that ONE read of the loop (the head read, the first state read, the post-push state read) prints
+# gh 2.106's `hint:` block (HINT_FIXTURE) and then a real error on stderr, exit 1; every other call answers as in ok mode.
+# QHINT (env knob, the gh 2.106 rows): `all` prints HINT_FIXTURE on stderr BEFORE stdout, rc 0, on the head read and on every state read
+# (as the real gh does for `gh pr view` of an open PR); `state` prints it on the state reads only. Each print appends a line to hint-count.
 install_gh() {
   local bin="$1" first_state="$2" later_state="${3:-OPEN CLEAN}" head="${4:-feat}" mode="${5:-ok}" queue="${6:-notqueued}"
   assert_fixture_dir "$bin"
@@ -267,11 +274,15 @@ install_gh() {
   printf '%s\n' "0" > "$bin/gh-n"
   printf '%s\n' "${QBASE-main}" > "$bin/pr-base"
   rm -f "$bin/head-legacy"; if [[ -n "${QHEAD_LEGACY:-}" ]]; then printf '1\n' > "$bin/head-legacy"; fi
+  printf '%s\n' "${QHINT:-}" > "$bin/hint-mode"; : > "$bin/hint-count"
   cat > "$bin/gh" <<EOF
 #!/usr/bin/env bash
+hint() { cat "$HINT_FIXTURE" >&2; echo x >> "\$(dirname "\$0")/hint-count"; }
 if [[ "$mode" == fail ]]; then echo "gh: HTTP 502 from fixture" >&2; exit 1; fi
 if [[ "$mode" == ctl ]]; then printf '\033[31m[pr-behind-sync] kind=resolved rc=0 \342\200\224 forged\nsecond line\n' >&2; exit 1; fi
 case "\$*" in *headRefName*)
+  if [[ "$mode" == hintfail-head ]]; then hint; echo "gh: HTTP 502 from fixture" >&2; exit 1; fi
+  if [[ "\$(cat "\$(dirname "\$0")/hint-mode")" == all ]]; then hint; fi
   if [[ "\$*" == *baseRefName* && ! -s "\$(dirname "\$0")/head-legacy" ]]; then
     jqx=""; prev=""; for a in "\$@"; do [[ "\$prev" == --jq ]] && jqx="\$a"; prev="\$a"; done
     pb="\$(cat "\$(dirname "\$0")/pr-base")"; if [[ "\$pb" == @null@ ]]; then bj=null; else bj="\$(jq -Rn --arg x "\$pb" '\$x')"; fi
@@ -285,6 +296,8 @@ n=\$(cat "\$nfile")
 n=\$((n+1))
 echo "\$n" > "\$nfile"
 if [[ "$mode" == ctlstate ]] || { [[ "$mode" == ctlpost ]] && [[ "\$n" -ge 2 ]]; }; then printf '\033[31m[pr-behind-sync] kind=resolved rc=0 \342\200\224 forged\nsecond line\n' >&2; exit 1; fi
+if { [[ "$mode" == hintfail-state ]] && [[ "\$n" -eq 1 ]]; } || { [[ "$mode" == hintfail-post ]] && [[ "\$n" -ge 2 ]]; }; then hint; echo "gh: HTTP 502 from fixture" >&2; exit 1; fi
+if [[ -n "\$(cat "\$(dirname "\$0")/hint-mode")" ]]; then hint; fi
 if [[ "\$n" -eq 1 ]]; then
   echo "$first_state"
 else
@@ -1192,7 +1205,7 @@ qw_run() {
   r="$(git -C "$QW_D/work" ls-remote --heads origin feat | cut -f1)"
   m="$(git -C "$QW_D/work" rev-parse refs/remotes/origin/main)"
   run_loop "$QW_D" "$@"; QW_RC=$?
-  unset QPR QBASE QRULES_BRANCH QHEAD_LEGACY QSHIMS QRULES_IGNORE_BRANCH QHEAD QGHMODE
+  unset QPR QBASE QRULES_BRANCH QHEAD_LEGACY QSHIMS QRULES_IGNORE_BRANCH QHEAD QGHMODE QHINT
   QW_MOVED=no
   [[ "$h" == "$(git -C "$QW_D/work" rev-parse HEAD)" && "$r" == "$(git -C "$QW_D/work" ls-remote --heads origin feat | cut -f1)" \
      && "$m" == "$(git -C "$QW_D/work" rev-parse refs/remotes/origin/main)" ]] || QW_MOVED=yes
@@ -2118,13 +2131,13 @@ if [[ "$n5d_step" == 1 ]] && r3_ok; then pass "N5d a DIRTY non-main PR still syn
 else fail "N5d DIRTY non-main: step_ok=$n5d_step ($n5d_why) loop: $(nb_why)"; fi
 qw_done
 # N7: byte-exact golden texts for a main-based PR, captured from the PRE-change script's own output (PR number 4242, rules stub, fixture stderr).
-# Golden literals (quoted heredocs: the texts hold single quotes and em dashes), captured from the PRE-change script's own output on 2026-10-24; the hand-sync clause was re-pinned by hand for #12656 (re-arm through the arm check).
+# Golden literals (quoted heredocs: the texts hold single quotes and em dashes), captured from the PRE-change script's own output on 2026-10-24; the hand-sync clause was re-pinned by hand for #12656 (re-arm through the arm check), and the rules-read cause for the gh 2.106 hint fix (gh_err_line's first stderr line: the old `tr '\n' ' '` left a trailing space before the closing parenthesis).
 GOLD_REFUSAL="$(cat <<'GOLD_EOF'
 PR #4242 is BEHIND, auto-merge is armed (not in the queue yet) and main has a merge queue: not syncing — a resync alone restarts every required check and the queue makes the PR current. Wait for MERGED or a dequeue; with no poll running, re-arm the Phase 7 poll with CLAUDE_PLUGIN_ROOT exported — its expiry fallback after 6 idle ticks is the sanctioned sync. Red required check? Push the fix itself, not a resync. Truly need a hand sync? Disarm first (gh pr merge 4242 --disable-auto), sync, then re-arm through plugins/soleur/skills/review/references/review-evidence-comment.md#arm-check. Green and never enqueued? Follow plugins/soleur/skills/ship/references/merge-queue-dequeue.md ('Armed and green but never enqueued').
 GOLD_EOF
 )"
 GOLD_UNREADABLE_LINE="$(cat <<'GOLD_EOF'
-[pr-behind-sync] kind=gh rc=4 — merge-queue rule read failed after 2 attempt(s) (rc=1 answered= gh: HTTP 502 from fixture ?rules? ) — not syncing: that read decides whether this armed BEHIND PR may be resynced and an unknown answer is not a yes. Retry the poll; a persistent failure means the token cannot read repository rules (raise PR_QUEUE_ATTEMPTS, or resync by hand only after confirming main has no merge queue).
+[pr-behind-sync] kind=gh rc=4 — merge-queue rule read failed after 2 attempt(s) (rc=1 answered= gh: HTTP 502 from fixture ?rules?) — not syncing: that read decides whether this armed BEHIND PR may be resynced and an unknown answer is not a yes. Retry the poll; a persistent failure means the token cannot read repository rules (raise PR_QUEUE_ATTEMPTS, or resync by hand only after confirming main has no merge queue).
 GOLD_EOF
 )"
 qw_run queue notqueued "OPEN BEHIND" "OPEN BEHIND"
@@ -2283,8 +2296,9 @@ bog_text() { grep -qE "^\[pr-behind-sync\] kind=gh rc=4 — NOT A TRANSIENT ERRO
 bogs_ok() { [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && bog_text && ! qw_wrote && nb_gitrec && nb_noesc; }
 bogw_ok() { [[ "$QW_RC" -eq 0 && "$(cat "$QW_D/out")" == queue_wait && ! -s "$QW_D/err" && "$(fw_n '^pr view')" == 1 ]]; }
 bogl_ok() { [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && bog_text && ! qw_wrote && nb_gitrec && ! grep -q 'auto-sync [0-9]* pushed' "$QW_D/out"; }
-# N19: every echo of gh's `2>&1` output in the standalone loop is sanitised (head read, wrong_branch, state read, state echo and its closed line, post-push
-# read, post-sync echo): one tagged line, no ESC byte, no forged tag line, the right prefix.
+# N19: every echo of gh output in the standalone loop is sanitised (the answer on stdout: head read, wrong_branch, state echo and its closed line,
+# post-sync echo; the failure text gh_err_line takes from stderr: head read, state read, post-push read): one tagged line, no ESC byte, no forged
+# tag line, the right prefix. lsa/lsc/lse put the junk on a FAILED read's stderr (the only stderr the loop echoes); the rest put it on stdout.
 lsan_clean() { ! grep -q $'\033' "$QW_D/out" "$QW_D/err" && ! grep -qE '^\[pr-behind-sync\] kind=resolved rc=0 — forged' "$QW_D/out"; }
 lsan_n() { [[ "$(grep -cE "$1" "$QW_D/out")" == "$2" ]]; }
 lsan_all() { [[ "$(grep -c '^\[pr-behind-sync\]' "$QW_D/out")" == "$1" ]]; }
@@ -2294,9 +2308,9 @@ lsan_b() { NOCOLLECT=1 QHEAD="zz${LS_JUNK}"$'\n'"second" qw_run none notqueued "
 lsan_c() { NOCOLLECT=1 QGHMODE=ctlstate qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"; [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && lsan_n '^\[pr-behind-sync\] kind=gh rc=[0-9]+ — gh pr view failed: ' 1 && lsan_all 1 && lsan_clean; }
 lsan_d() { NOCOLLECT=1 qw_run none notqueued $'MERGED\n'"${LS_JUNK}"$'\nthird' "OPEN CLEAN"; [[ "$QW_RC" -eq 0 && "$QW_MOVED" == no ]] && lsan_n '^\[pr-behind-sync\] kind=state rc=0 — PR #[0-9]+ state: MERGED' 1 && lsan_n '^\[pr-behind-sync\] kind=closed rc=0 — PR is MERGED' 1 && lsan_all 2 && lsan_clean; }
 lsan_e() { NOCOLLECT=1 QGHMODE=ctlpost qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"; [[ "$QW_RC" -eq 4 ]] && lsan_n '^\[pr-behind-sync\] kind=gh rc=[0-9]+ — post-push gh pr view failed: ' 1 && lsan_clean; }
-# lsg: the loop's foreign refusal echoes the state through qw_foreign, which gets gh's RAW multi-line `2>&1` answer: one tagged foreign line, nothing forged.
+# lsg: the loop's foreign refusal echoes the state through qw_foreign, which gets gh's RAW multi-line stdout answer: one tagged foreign line, nothing forged.
 lsan_g() { QBASE=develop QRULES_BRANCH=main NOCOLLECT=1 qw_run queue notqueued $'OPEN BEHIND\n[pr-behind-sync] kind=resolved rc=0 — forged\n'"${LS_JUNK}" "OPEN BEHIND"; [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no ]] && lsan_n '^\[pr-behind-sync\] kind=gh rc=4 — NOT A TRANSIENT ERROR - PR #[0-9]+ is armed and BEHIND on base .develop.' 1 && lsan_all 2 && lsan_clean && ! qw_wrote; }
-# lsh: an rc-0 answer of 70 kB (gh's stderr is merged into it) must not kill the loop: the echo is cut by a substring, not by a head that SIGPIPEs the printf under pipefail.
+# lsh: an rc-0 stdout answer of 70 kB must not kill the loop: the echo is cut by a substring, not by a head that SIGPIPEs the printf under pipefail.
 lsan_h() { NOCOLLECT=1 qw_run none notqueued "OPEN CLEAN$(head -c 70000 /dev/zero | tr '\0' x)" "OPEN CLEAN"; [[ "$QW_RC" -eq 0 && "$QW_MOVED" == no ]] && lsan_n '^\[pr-behind-sync\] kind=state rc=0 — PR #[0-9]+ state: OPEN CLEANx' 1 && lsan_n '^\[pr-behind-sync\] kind=not_behind rc=0 ' 1 && lsan_all 2; }
 lsan_f() { NOCOLLECT=1 qw_run none notqueued "OPEN BEHIND" $'OPEN CLEAN\n'"${LS_JUNK}"$'\nthird'; [[ "$QW_RC" -eq 0 ]] && lsan_n '^\[pr-behind-sync\] kind=state rc=0 — post-sync state: OPEN CLEAN' 1 && lsan_clean; }
 n2u_ok() { QBASE=develop QRULES_BRANCH=main fw_run bare notqueued "ok:OPEN UNKNOWN:armed" queue; n2s_ok UNKNOWN; }
@@ -2405,9 +2419,9 @@ else fail "G1-H1 harness: n2s must hold with the real stub and fail when the stu
 # Guard 2: single bounds helper and single sanitiser
 qw_mutant_multi "G2-1 an inline copy of the three env reads is pasted back into queue_wait_eval" s1 'queue_wait_eval() {' 'queue_wait_eval() { : "${PR_QUEUE_TIMEOUT:-10}${PR_QUEUE_ATTEMPTS:-2}${PR_QUEUE_RETRY_SLEEP:-2}";'
 qw_mutant_multi "G2-3 a fourth function reads PR_QUEUE_TIMEOUT directly" s1 'qb_clean() {' $'extra_reader() { printf \'%s\' "${PR_QUEUE_TIMEOUT:-10}"; }\nqb_clean() {'
-qw_mutant_multi "G2-4 the sanitiser is dropped at the queue_state_read site" ctlq 'head -c 200 "$errf")" | qb_clean)"' 'head -c 200 "$errf")")"'
+qw_mutant_multi "G2-4 the sanitiser is dropped at the queue_state_read site" ctlq '"rc=$rc $(gh_err_line "$rc" "$errf" no-rc)" | qb_clean)"' '"rc=$rc $(gh_err_line "$rc" "$errf" no-rc)")"'
 qw_mutant_multi "G2-5 the sanitiser is dropped at the queue_wait_eval site" ctl $'detail="$(printf \'%s\' "$detail" | qb_clean)"' $'detail="$(printf \'%s\' "$detail")"'
-qw_mutant_multi "G2-6 the sanitiser is dropped at the qw_snapshot site" f5ctl 'head -c 160 "$errf")" | qb_clean)"' 'head -c 160 "$errf")")"'
+qw_mutant_multi "G2-6 the sanitiser is dropped at the qw_snapshot site" f5ctl 'answered=${out:0:40} $(gh_err_line "$rc" "$errf" no-rc)" | qb_clean)"' 'answered=${out:0:40} $(gh_err_line "$rc" "$errf" no-rc)")"'
 qw_mutfile "G2-7 the qb_bounds call is deleted from queue_wait_eval" s1 '/^queue_wait_eval\(\) \{/,/^\}/ s/qb_bounds/:/'
 if [[ "$CHAR_OK" -ne 1 ]]; then pass "G2-8 SKIPPED (no timeout/gtimeout): the nap characterization cannot run"
 else qw_mutfile "G2-8 queue_read_settled reads the raw env nap instead of QB_NAP" c7 '/^queue_read_settled\(\) \{/,/^\}/ s/\$\{?QB_NAP\}?/${PR_QUEUE_RETRY_SLEEP:-2}/g'; fi
@@ -2449,11 +2463,11 @@ qw_mutfile "G5-1 step_guard's unknown-verdict arm is deleted" bogs '/^step_guard
 qw_mutfile "G5-2 queue_wait_gate's unknown-verdict arm is deleted" bogl '/^queue_wait_gate\(\) \{/,/^\}/ { /^    \*\) /d; }'
 qw_mutant_multi "G5-3 the --queue-wait mode's unknown-verdict arm is deleted" bogw $'    *) echo queue_wait; exit 0 ;;\n' ''
 # Guard 6: each echo of gh output in the loop is sanitised
-qw_mutant_multi "G6-1 the head read's failure text is unsanitised" lsa 'gh pr view failed: $(printf '"'"'%s'"'"' "$head_ref" | head -c 200 | qb_clean)"' 'gh pr view failed: $(printf '"'"'%s'"'"' "$head_ref" | head -c 200)"'
+qw_mutant_multi "G6-1 the head read's failure text is unsanitised" lsa 'gh pr view failed: $(printf '"'"'%s'"'"' "$head_err" | qb_clean)"' 'gh pr view failed: $head_err"'
 qw_mutant_multi "G6-2 the wrong_branch line echoes the head unsanitised" lsb "head branch is '\$(printf '%s' \"\$head_ref\" | head -c 200 | qb_clean)'" "head branch is '\$head_ref'"
-qw_mutant_multi "G6-3 the state read's failure text is unsanitised" lsc 'tag gh "$rc" "gh pr view failed: $(printf '"'"'%s'"'"' "$state_line" | head -c 200 | qb_clean)"' 'tag gh "$rc" "gh pr view failed: $(printf '"'"'%s'"'"' "$state_line" | head -c 200)"'
+qw_mutant_multi "G6-3 the state read's failure text is unsanitised" lsc 'tag gh "$rc" "gh pr view failed: $(printf '"'"'%s'"'"' "$state_err" | qb_clean)"' 'tag gh "$rc" "gh pr view failed: $state_err"'
 qw_mutant_multi "G6-4 the state echo (and the closed line built from it) is unsanitised" lsd 'sdisp="$(printf '"'"'%s'"'"' "${state_line:0:200}" | qb_clean)"' 'sdisp="$state_line"'
-qw_mutant_multi "G6-5 the post-push read's failure text is unsanitised" lse 'post-push gh pr view failed: $(printf '"'"'%s'"'"' "$state_line" | head -c 200 | qb_clean)"' 'post-push gh pr view failed: $(printf '"'"'%s'"'"' "$state_line" | head -c 200)"'
+qw_mutant_multi "G6-5 the post-push read's failure text is unsanitised" lse 'post-push gh pr view failed: $(printf '"'"'%s'"'"' "$state_err" | qb_clean)"' 'post-push gh pr view failed: $state_err"'
 qw_mutant_multi "G6-6 the post-sync state echo is unsanitised" lsf 'post-sync state: $(printf '"'"'%s'"'"' "$state_line" | head -c 200 | qb_clean)"' 'post-sync state: $state_line"'
 qw_mutant_multi "G6-7 qw_foreign echoes the loop's raw state answer unsanitised" lsg 'sl="${1%%$'"'"'\n'"'"'*}"; sl="$(printf '"'"'%s'"'"' "${sl:0:60}" | qb_clean)"' 'sl="$1"'
 qw_mutant_multi "G6-8 the loop's state echo cut by a head pipe again (SIGPIPE on a long answer)" lsh 'sdisp="$(printf '"'"'%s'"'"' "${state_line:0:200}" | qb_clean)"' 'sdisp="$(printf '"'"'%s'"'"' "$state_line" | head -c 200 | qb_clean)"'
@@ -2463,6 +2477,50 @@ qw_mutant_multi "G7-2 the foreign predicate treats a main* glob as main (D2)" n1
 # Guard 8: a JSON-null base is the empty base (the jq default), at both reads
 qw_mutant_multi "G8-1 the snapshot's jq drops the empty default for a null base" n14s '\(.baseRefName // "")"'"'"' "$repo_arg"' '\(.baseRefName)"'"'"' "$repo_arg"'
 qw_mutant_multi "G8-2 the head read's jq drops the empty default for a null base" n14l '\(.headRefName) \(.baseRefName // "")' '\(.headRefName) \(.baseRefName)'
+
+# --- gh 2.106 hint rows (H-S1..H-S3): gh prints an 8-line `hint: … gh event listen …` block on STDERR for `gh pr view` of an open PR, rc 0, before
+# stdout. The standalone loop reads stdout only (stderr goes to a per-read file), so the hint can neither turn the head read into a multi-line
+# answer (kind=wrong_branch, exit 12) nor hide a MERGED state line, and a failed read names gh's first real stderr line, never `hint:`. Each row
+# ends on a positive tag, and hint-count proves the stub printed the block on every read it was meant to.
+hs_count() { grep -c . "$QW_D/bin/hint-count" 2>/dev/null || true; }
+QHINT=all qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"
+if [[ "$QW_RC" -eq 0 && "$QW_MOVED" == yes && "$(hs_count)" == 3 ]] \
+   && grep -qxF "[pr-behind-sync] kind=state rc=0 — PR #$QUEUE_PR state: OPEN BEHIND (branch: feat)" "$QW_D/out" \
+   && grep -qxF '[pr-behind-sync] kind=state rc=0 — post-sync state: OPEN CLEAN' "$QW_D/out" \
+   && [[ "$(tail -1 "$QW_D/out")" == '[pr-behind-sync] kind=resolved rc=0 — BEHIND resolved: branch caught up to main' ]] \
+   && ! grep -qE 'kind=wrong_branch|hint' "$QW_D/out"; then
+  pass "H-S1 hint on stderr for every pr view, right branch: synced and pushed, ends kind=resolved rc=0 (no kind=wrong_branch, no hint text echoed)"
+else fail "H-S1 hint on every pr view: rc=$QW_RC moved=$QW_MOVED hints=$(hs_count) (want 3) out=$(tr '\n' '|' < "$QW_D/out" | cut -c1-400)"; fi
+qw_done
+QHINT=state qw_run none notqueued "MERGED CLEAN" "OPEN CLEAN"
+if [[ "$QW_RC" -eq 0 && "$QW_MOVED" == no && "$(hs_count)" == 1 ]] \
+   && grep -qxF "[pr-behind-sync] kind=state rc=0 — PR #$QUEUE_PR state: MERGED CLEAN (branch: feat)" "$QW_D/out" \
+   && [[ "$(tail -1 "$QW_D/out")" == '[pr-behind-sync] kind=closed rc=0 — PR is MERGED — no sync needed' ]] \
+   && ! grep -q 'kind=not_behind' "$QW_D/out"; then
+  pass "H-S2 hint on stderr + MERGED CLEAN: ends kind=closed rc=0 (the hint no longer hides the MERGED state line as kind=not_behind)"
+else fail "H-S2 hint + MERGED CLEAN: rc=$QW_RC moved=$QW_MOVED hints=$(hs_count) (want 1) out=$(tr '\n' '|' < "$QW_D/out" | cut -c1-400)"; fi
+qw_done
+# H-S3..H-S5: each of the loop's three reads fails in its own row (hintfail-<read>), so each failure line's text source is pinned exactly: a
+# line built from the read's stdout (empty on a failed read) or from another read's stderr is red here, not only by mutation-anchor loss.
+HS_FAIL='[pr-behind-sync] kind=gh rc=1 — gh pr view failed: gh: HTTP 502 from fixture'
+QGHMODE=hintfail-head qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"
+if [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no && "$(hs_count)" == 1 && "$(cat "$QW_D/out")" == "$HS_FAIL" ]]; then
+  pass "H-S3 a failed HEAD read whose stderr opens with the hint block names gh's first real error line (gh_err_line skips hint: and indented lines)"
+else fail "H-S3 hint then error on the head read: rc=$QW_RC moved=$QW_MOVED hints=$(hs_count) (want 1) out=$(tr '\n' '|' < "$QW_D/out" | cut -c1-400)"; fi
+qw_done
+QGHMODE=hintfail-state qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"
+if [[ "$QW_RC" -eq 4 && "$QW_MOVED" == no && "$(hs_count)" == 1 && "$(cat "$QW_D/out")" == "$HS_FAIL" ]]; then
+  pass "H-S4 a failed STATE read (the head read answered) whose stderr opens with the hint block names gh's first real error line, nothing else printed"
+else fail "H-S4 hint then error on the state read: rc=$QW_RC moved=$QW_MOVED hints=$(hs_count) (want 1) out=$(tr '\n' '|' < "$QW_D/out" | cut -c1-400)"; fi
+qw_done
+QGHMODE=hintfail-post qw_run none notqueued "OPEN BEHIND" "OPEN CLEAN"
+if [[ "$QW_RC" -eq 4 && "$QW_MOVED" == yes && "$(hs_count)" == 1 ]] \
+   && grep -qxF '[pr-behind-sync] kind=pushed rc=0 — auto-sync 1 pushed — CI will re-run on new SHA' "$QW_D/out" \
+   && [[ "$(tail -1 "$QW_D/out")" == '[pr-behind-sync] kind=gh rc=1 — post-push gh pr view failed: gh: HTTP 502 from fixture' ]] \
+   && ! grep -q 'hint' "$QW_D/out"; then
+  pass "H-S5 a failed POST-PUSH read whose stderr opens with the hint block ends on gh's first real error line (after kind=pushed)"
+else fail "H-S5 hint then error on the post-push read: rc=$QW_RC moved=$QW_MOVED hints=$(hs_count) (want 1) out=$(tr '\n' '|' < "$QW_D/out" | cut -c1-400)"; fi
+qw_done
 
 unset PR_QUEUE_REPO
 
@@ -2542,6 +2600,8 @@ echo "=== $PASS passed, $FAIL failed ==="
 # The pin is an exact equality, not a floor: a row that silently stops running moves the count as surely as one added. 231 rows of #10832 plus the
 # 36 row ids of the #10948 review fold-in (9 rows N3c N5e N13 N14 N15 N16 N17 N18 N19; 26 mutants G1-15..17, G3-1..8, G4-1/2, G5-1..3, G6-1..6, G7-1/2,
 # G8-1/2; 1 control) = 267, plus 5 mutants of the fix round (G3-9, G3-10, G6-7, G6-8, G9-1) = 272, plus the 4 armed-classification rows of #11789
-# (queued_null, entryonly_null, the not_queued disarmed control, noqueue_null) = 276. Moved deliberately, in the change that adds or removes a row.
-[[ "$FAIL" -eq 0 && "$PASS" -eq 276 ]]
+# (queued_null, entryonly_null, the not_queued disarmed control, noqueue_null) = 276, plus the 3 gh 2.106 hint rows (H-S1, H-S2, H-S3) = 279,
+# plus the per-read hint failure rows (H-S4 state read, H-S5 post-push read) = 281.
+# Moved deliberately, in the change that adds or removes a row.
+[[ "$FAIL" -eq 0 && "$PASS" -eq 281 ]]
 exit $?

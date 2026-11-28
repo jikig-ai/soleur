@@ -223,6 +223,22 @@ qb_bounds() {
 }
 qb_clean() { LC_ALL=C tr -c '[:alnum:] ._:/=-' '?'; }
 qb_match() ( LC_ALL=C; [[ "$1" =~ $2 ]] )
+# gh_err_line <rc> <stderr-file> [no-rc] — THE ONE reader of a gh call's stderr file, for every stderr echo in this script. gh's stdout is the answer
+# and stderr only a diagnostic: gh 2.106 prints an 8-line `hint: … gh event listen …` block there on `gh pr view` of an open PR, rc 0. Prints the
+# first line that is non-empty and starts with neither `hint:` nor whitespace (the block's 7 continuation lines are indented), cut to 200
+# characters by substring expansion, never `| head -c` (a head that exits early SIGPIPEs the writer under pipefail: the sdisp comment in the
+# standalone loop); with no such line, or no readable file, `rc=<rc>` (nothing under `no-rc`, for callers that already print rc=). The output is RAW: every caller passes it through qb_clean. The Phase 7
+# fences carry their own copy of the same filter (fence-local `gh_err_line`), and pr-merge-poll.ts `parsePrPollRead` is its portable spec.
+gh_err_line() {
+  local e=""
+  if [[ -n "${2:-}" && -r "$2" ]]; then
+    while IFS= read -r e || [[ -n "$e" ]]; do
+      if [[ -n "$e" && "$e" != hint:* && "$e" != [[:space:]]* ]]; then break; fi
+      e=""
+    done < "$2"
+  fi
+  if [[ -n "$e" ]]; then printf '%s' "${e:0:200}"; elif [[ "${3:-}" != no-rc ]]; then printf 'rc=%s' "$1"; fi
+}
 # qw_base_path <base> — prints the rules-URL path segment for a PR's base branch, exit 1 for an empty or unsupported name. A branch name
 # is untrusted text (the PR author edits it) that reaches an API path and a model-visible line, so only plain components of
 # [A-Za-z0-9._-] joined by single `/` are accepted (no `%`, `?`, `#`, `//`, a leading `.` or `-`, `..`, `.lock`; at most 255 characters)
@@ -295,7 +311,7 @@ query($owner: String!, $name: String!, $number: Int!) {
     if [[ "$rc" -ne 0 ]]; then
       case "$rc" in 124|137|143) QS_CAUSE=timeout ;; *) QS_CAUSE=gh_error ;; esac
       # gh's raw stderr reaches the `kind=gh rc=4` line a Monitor streams to the model: ESC, CR and a forged tag line must not.
-      QS_DETAIL="$(printf '%s' "rc=$rc $(head -c 200 "$errf")" | qb_clean)"
+      QS_DETAIL="$(printf '%s' "rc=$rc $(gh_err_line "$rc" "$errf" no-rc)" | qb_clean)"
     else
       out="${out%%$'\n'*}"
       case "${out%% *}" in
@@ -371,7 +387,7 @@ queue_wait_eval() {  # <state_line: "<STATE> <MERGESTATE>"> <armed|disarmed|-> <
             _ "$owner" "$repo" '[.[] | select(.type == "merge_queue")] | length' "$bp" 2>"$errf")" || rc=$?
     out="${out%%$'\n'*}"
     if [[ "$rc" -eq 0 && "$out" =~ ^[0-9]{1,6}$ ]]; then break; fi
-    detail="rc=$rc answered=${out:0:40} $(head -c 160 "$errf" | tr '\n' ' ')"
+    detail="rc=$rc answered=${out:0:40} $(gh_err_line "$rc" "$errf" no-rc)"
     if [[ "$n" -lt "$QB_ATTEMPTS" ]]; then sleep "$QB_NAP"; fi
   done
   rm -f "$errf"
@@ -420,7 +436,7 @@ qw_unreadable() {  # <detail>
 # <state_line> is GitHub's `<STATE> <MERGESTATE>` (the foreign verdict also fires for UNKNOWN, so the text echoes the real state).
 qw_foreign() {  # <state_line>
   local sl
-  sl="${1%%$'\n'*}"; sl="$(printf '%s' "${sl:0:60}" | qb_clean)"  # the loop passes gh's raw `2>&1` answer: first line only, cut and sanitised
+  sl="${1%%$'\n'*}"; sl="$(printf '%s' "${sl:0:60}" | qb_clean)"
   printf '%s' "NOT A TRANSIENT ERROR - PR #$PR is armed and ${sl#* } on base '${QW_BASE:0:60}', not main, and that base has no merge queue; this script only syncs from origin/main (merging main into that PR would be wrong), so it is not syncing and retrying will not help. Sync by hand against that base (fetch origin <base>, merge origin/<base>, then push)."
 }
 # ... and the unusable-base text (empty, or a name outside qw_base_path's set; QW_DETAIL names the sanitised base).
@@ -457,7 +473,7 @@ qw_snapshot() {
     QW_STATE="$st $ms"; QW_ARMED="$am"; QW_BASEREF="$base"
     return 0
   fi
-  pvd="$(printf '%s' "rc=$rc answered=${out:0:40} $(head -c 160 "$errf")" | qb_clean)"
+  pvd="$(printf '%s' "rc=$rc answered=${out:0:40} $(gh_err_line "$rc" "$errf" no-rc)" | qb_clean)"
   rm -f "$errf"
   tag gh 4 "pr view snapshot read failed ($pvd) — not syncing: whether this PR is armed and BEHIND decides if a resync is allowed, and an unknown answer is not a yes. Retry."
   exit 4
@@ -689,16 +705,31 @@ if [[ "$MODE" == step ]]; then
   exit "$rc"
 fi
 
+# loop_read <gh pr view args…> — one `gh pr view "$PR"` read of the standalone loop (the head read and both state reads). stdout is the
+# answer (LR_OUT) and gh's stderr goes to a per-read file that only gh_err_line reads (LR_ERR, raw: the caller sanitises it), so the hint block
+# gh 2.106 prints on stderr for `gh pr view` of an open PR (rc 0) never reaches the string the loop matches. LR_RC is gh's exit status. qw_snapshot's
+# pattern: the file is removed on every path, and a failed mktemp is kind=gh exit 4 before any read (nothing merged or pushed).
+loop_read() {
+  local errf
+  LR_OUT=""; LR_ERR=""; LR_RC=0
+  errf="$(mktemp)" || { tag gh 4 "gh pr view not attempted (mktemp failed) — not syncing; retry"; exit 4; }  # lint-trap-ownership: ok — removed by rm -f on every path of loop_read; a kill leaves one tiny file
+  LR_OUT="$(gh pr view "$PR" "$@" 2>"$errf")" || LR_RC=$?
+  LR_ERR="$(gh_err_line "$LR_RC" "$errf")"
+  rm -f "$errf"
+}
+
 # Standalone: the PR number must name THIS branch, or the sync lands on the wrong PR.
 # The same read also carries the PR's base branch (baseRefName) for queue_wait_eval, so the loop adds no gh call. The base is resolved ONCE
 # per run: a mid-loop retarget is judged against the old base (bounded by --max-attempts: each further BEHIND iteration can merge again if main
 # moved, so the stale judgement can cost up to that many merges). Any answer
-# that is not exactly `<head> <base>` on one line (a single token, or a multi-line answer because stderr is merged by 2>&1) leaves head_ref
+# that is not exactly `<head> <base>` on one line (a single token, or a multi-line answer) leaves head_ref
 # as the whole answer, as before, and LOOP_BASEREF empty; an empty base is fatal only where queue_wait_eval reaches the rules read.
-rc=0; head_ref="$(gh pr view "$PR" --json headRefName,baseRefName --jq '"\(.headRefName) \(.baseRefName // "")"' 2>&1)" || rc=$?
-if [[ "$rc" -ne 0 ]]; then tag gh "$rc" "gh pr view failed: $(printf '%s' "$head_ref" | head -c 200 | qb_clean)"; exit 4; fi
+loop_read --json headRefName,baseRefName --jq '"\(.headRefName) \(.baseRefName // "")"'
+rc="$LR_RC"; head_ref="$LR_OUT"; head_err="$LR_ERR"
+if [[ "$rc" -ne 0 ]]; then tag gh "$rc" "gh pr view failed: $(printf '%s' "$head_err" | qb_clean)"; exit 4; fi
 if qb_match "$head_ref" '^[^[:space:]]+ [^[:space:]]*$'; then read -r head_ref LOOP_BASEREF <<<"$head_ref"; fi
 if [[ "$head_ref" != "$BRANCH" ]]; then
+  # `| head -c 200` is safe here and at the post-sync echo: stdout only (no hint), inside a tag ARGUMENT, so set -e never sees a SIGPIPE rc (sdisp's is an assignment).
   tag wrong_branch 12 "PR #$PR's head branch is '$(printf '%s' "$head_ref" | head -c 200 | qb_clean)' but this worktree is on '$BRANCH' — cd to that PR's worktree (or pass the right PR number); not syncing."
   exit 12
 fi
@@ -706,13 +737,13 @@ fi
 attempt=0
 while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
   attempt=$((attempt + 1))
-  rc=0; state_line="$(gh pr view "$PR" --json state,mergeStateStatus \
-    --jq '"\(.state) \(.mergeStateStatus)"' 2>&1)" || rc=$?
-  if [[ "$rc" -ne 0 ]]; then tag gh "$rc" "gh pr view failed: $(printf '%s' "$state_line" | head -c 200 | qb_clean)"; exit 4; fi
+  loop_read --json state,mergeStateStatus --jq '"\(.state) \(.mergeStateStatus)"'
+  rc="$LR_RC"; state_line="$LR_OUT"; state_err="$LR_ERR"
+  if [[ "$rc" -ne 0 ]]; then tag gh "$rc" "gh pr view failed: $(printf '%s' "$state_err" | qb_clean)"; exit 4; fi
 
-  # gh's stderr is merged into the answer (2>&1), so even an rc-0 read can carry junk: every echo of it is sanitised (the tests below
-  # still look at the raw $state_line). The cut is a substring, not `| head -c 200`: this is an assignment under pipefail, and a head
-  # that exits early SIGPIPEs the printf on a long answer (rc 141, loop dead with no tag line).
+  # The answer is gh's stdout alone, but it is still untrusted text that reaches a model-visible line: every echo of it is sanitised (the
+  # tests below still look at the raw $state_line). The cut is a substring, not `| head -c 200`: this is an assignment under pipefail, and a
+  # head that exits early SIGPIPEs the printf on a long answer (rc 141, loop dead with no tag line).
   sdisp="$(printf '%s' "${state_line:0:200}" | qb_clean)"
   tag state 0 "PR #$PR state: $sdisp (branch: $BRANCH)"
 
@@ -768,9 +799,10 @@ while [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; do
 
   tag pushed 0 "auto-sync ${attempt} pushed — CI will re-run on new SHA"
 
-  rc=0; state_line="$(gh pr view "$PR" --json state,mergeStateStatus \
-    --jq '"\(.state) \(.mergeStateStatus)"' 2>&1)" || rc=$?
-  if [[ "$rc" -ne 0 ]]; then tag gh "$rc" "post-push gh pr view failed: $(printf '%s' "$state_line" | head -c 200 | qb_clean)"; exit 4; fi
+  loop_read --json state,mergeStateStatus --jq '"\(.state) \(.mergeStateStatus)"'
+  rc="$LR_RC"; state_line="$LR_OUT"; state_err="$LR_ERR"
+  if [[ "$rc" -ne 0 ]]; then tag gh "$rc" "post-push gh pr view failed: $(printf '%s' "$state_err" | qb_clean)"; exit 4; fi
+  # stdout only, a tag argument: `| head -c` is safe here (the wrong_branch comment).
   tag state 0 "post-sync state: $(printf '%s' "$state_line" | head -c 200 | qb_clean)"
 
   if [[ "$state_line" != *BEHIND* ]]; then

@@ -310,7 +310,7 @@ parked_removes_label() {
 parked_num() { local v="$1"; while [[ "$v" == 0?* ]]; do v=${v#0}; done; printf '%s' "$v"; }
 parked_statement() {
   local -a bt=() pt=() rest=() args=() prs=()
-  local nb i gi=-1 t base wl=0 fx=0 k=0 nr c1 c2 repo="" tok skip=0 nonflag=0 n cur rc=0 method="" mu txt hasfield=0 xa=0 isgql=0 disarm=0 help=0
+  local nb i gi=-1 t base wl=0 fx=0 k=0 nr c1 c2 repo="" tok skip=0 nonflag=0 n cur perr nopr=0 rc=0 method="" mu txt hasfield=0 xa=0 isgql=0 disarm=0 help=0
   if [[ "$1" == '!UNB' ]]; then
     # A command substitution inside double quotes that the walker could not balance: fail closed while any PR is parked.
     parked_any_hold "A command substitution the barrier cannot balance"
@@ -432,12 +432,21 @@ parked_statement() {
   if [[ ${#prs[@]} -eq 0 ]]; then
     # No literal number: the current branch's PR is the target of a bare merge; any other word (a variable, a branch name, a
     # token with $ or a backtick) makes the target unknowable, so any parked PR holds it. A current-branch read that fails for any
-    # reason but "no pull requests found" is a failed read: it fails closed.
-    cur=$(parked_gh pr view --json number --jq .number 2>&1) || rc=$?
-    if (( rc == 0 )); then
-      if [[ "$cur" =~ ^[0-9]+$ ]]; then parked_check_pr "$cur" "$repo"; else parked_any_hold "The current branch's PR (unreadable answer)" "$repo"; fi
-    elif ! grep -qi 'no pull requests found' <<<"$cur"; then
-      parked_any_hold "The current branch's PR (the read failed)" "$repo"
+    # reason but "no pull requests found" is a failed read: it fails closed. stdout is the answer: gh 2.106 prints a `hint: …` block
+    # on stderr for `gh pr view` of an open PR (rc 0), so stderr goes to a function-local file that only the "no pull requests found" test
+    # reads. The file is removed before any branch below, because parked_check_pr / parked_any_hold leave through parked_deny's exit.
+    # No trap owns it: the hook's later `trap … EXIT` for PR_BODY_FILE would replace one. No file: today's fail-closed hold.
+    if ! perr=$(mktemp 2>/dev/null); then  # lint-trap-ownership: ok — removed by rm -f right after the read, before every exit path; a kill leaves one tiny file
+      parked_any_hold "The current branch's PR (the read failed: no temp file for gh's stderr)" "$repo"
+    else
+      cur=$(parked_gh pr view --json number --jq .number 2>"$perr") || rc=$?
+      nopr=0; if grep -qi 'no pull requests found' "$perr" 2>/dev/null; then nopr=1; fi
+      rm -f "$perr"
+      if (( rc == 0 )); then
+        if [[ "$cur" =~ ^[0-9]+$ ]]; then parked_check_pr "$cur" "$repo"; else parked_any_hold "The current branch's PR (unreadable answer)" "$repo"; fi
+      elif (( ! nopr )); then
+        parked_any_hold "The current branch's PR (the read failed)" "$repo"
+      fi
     fi
     if (( nonflag )); then parked_any_hold "This merge" "$repo"; fi
   fi
