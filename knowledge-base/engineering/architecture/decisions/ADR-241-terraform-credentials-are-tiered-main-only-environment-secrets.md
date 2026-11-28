@@ -1306,6 +1306,24 @@ CTO rulings: `knowledge-base/project/plans/2026-11-20-feat-deploy-trio-consumer-
   this follow-up must defuse, by de-shape or by a ruled `Re-date:` in a baseline/ADR-only change. The
   anti-vacuity floor ratchets to the realized count (619 assertions). The name census remains a where-the-names-are-written ratchet, not a
   proof that no job can reach the values; that limb still closes with the deletions below.
+- **The wrapper-relay amplification of that residual, disclosed (review round, user-impact seat).**
+  `scripts/lib/doppler-read.sh` invocations are invisible to the census even inside files that DO
+  name the trio: the scanner's glued-suffix rule (`doppler` in `doppler-read.sh` is part of a
+  hyphenated name, never an invocation head) excludes them before classification. During the
+  residual window this is the accepted read limb — the wrapper reads `soleur/prd` and
+  `soleur/prd_terraform`, whose trio copies the operator tail deletes. But the wrapper is also the
+  permanent broker for the two SURVIVING carriers: a future `doppler-read.sh run soleur-deploy-channel prd`
+  or `... soleur-infra-privileged prd` in any file bulk-reads the trio post-deletion with zero
+  census visibility, and the deletion limb closes nothing there. Teaching the census to classify
+  wrapper invocations by their underlying shapes was evaluated in this PR and rejected as
+  mechanically impossible inside it: full visibility flips `web-platform-release.yml` rows
+  tier-b -> tier-a, a regression the ratchet has no lane for, and partial visibility (counting only
+  the two surviving carriers) is inconsistent with the literal-shape counting it mirrors. The ruled
+  disposition: post-deletion the pinned set shrinks to the two surviving carriers and the wrapper
+  gains visibility for exactly those pairs, in the same baseline/ADR-only change the operator tail
+  already requires — a new file bulk-reading a surviving carrier through the wrapper then produces
+  the same tier-a row the literal shape would. Until then the control is review discipline on the
+  wrapper's call sites plus the environment-gating of every job that runs one.
 - **D-2 scanner refinement, recorded.** `test-trio-baseline-census.sh` counts two read shapes inside files
   that already name the trio: (a) `doppler secrets get <LITERAL>` counts only when the literal matches the
   family regex or an ALIAS pattern — a targeted get of a non-trio name is not a read; (b) `doppler run` /
