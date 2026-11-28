@@ -315,11 +315,18 @@ ORJOIN = re.compile(r"\|\|[ \t]*\n[ \t]*")      # a line ending in `||` continue
 # (a) `doppler secrets get` whose every positional name is a bare literal matching NEITHER the family nor an alias stem
 #     (a literal non-trio name read is safe under any project/config);
 # (b) `doppler run` / `doppler secrets download` whose bare literal `-p`/--project AND `-c`/--config values (`=` forms
-#     included) pin a project/config pair OUTSIDE the trio-carrying set TRIO_PAIRS;
+#     included) pin a project/config pair that provably cannot carry the trio. Exact membership in TRIO_PAIRS is not
+#     enough: every `soleur/prd_*` config is a Doppler branch config and inherits `soleur/prd` by construction
+#     (model.c4 documents this for prd_workspaces_luks_marker), so those names are trio-carrying even when absent
+#     from the exact-pair set. Cross-project inheritance is an explicit, repo-reviewed configuration rather than
+#     Doppler's default branch mechanics; the isolated projects used here document no such path.
 # every variable, quoted, split, partial or otherwise unparseable form fails closed — counted. `secrets get` is judged
 # on its name positionals alone; a run/download needs BOTH literals.
 TRIO_PAIRS = {("soleur", "prd_terraform"), ("soleur", "prd"), ("soleur-deploy-channel", "prd"),
               ("soleur-infra-privileged", "prd")}
+
+def _dop_pair_can_carry_trio(proj, conf):
+    return (proj, conf) in TRIO_PAIRS or (proj == "soleur" and conf.startswith("prd_"))
 _DOP_WORD = re.compile(r"(?<![A-Za-z0-9_])doppler\b")
 _DOP_STOP = re.compile(r"[;|&`<>)]")
 _DOP_BADTOK = re.compile(r"""[$'"(){}\[\]#\\`]""")
@@ -442,7 +449,7 @@ def _dop_classify_tokens(token_iter):
                 return True
         return False  # every get name was a literal outside the family: exempt (D-2a)
     if sub in ("run", "download"):
-        return not (proj is not None and conf is not None and (proj, conf) not in TRIO_PAIRS)
+        return not (proj is not None and conf is not None and not _dop_pair_can_carry_trio(proj, conf))
     return False
 
 
@@ -3224,6 +3231,10 @@ printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler --no-cache s
 pcase N29 scripts/n29.sh WEBHOOK_DEPLOY_SECRET sink "a modeled boolean before the subcommand does not taint a non-trio get"
 printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler --silent run -p soleur -c prd_terraform -- x\n' > "$PT/scripts/n30.sh"
 pcase N30 scripts/n30.sh WEBHOOK_DEPLOY_SECRET tier-a "a modeled boolean over a pinned pair still counts"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run -p soleur -c prd_workspaces_luks_marker -- x\n' > "$PT/scripts/n31.sh"
+pcase N31 scripts/n31.sh WEBHOOK_DEPLOY_SECRET tier-a "a soleur/prd_* branch config inherits soleur/prd, so it is trio-carrying even when absent from TRIO_PAIRS"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler secrets download -p soleur -c prd_cla --no-file\n' > "$PT/scripts/n32.sh"
+pcase N32 scripts/n32.sh WEBHOOK_DEPLOY_SECRET tier-a "the same branch-inheritance rule covers secrets download over another soleur/prd_* config"
 # comment lines keep what they expand (N3)
 printf '#!/usr/bin/env bash\ncat <<EOF2\n#$WEBHOOK_DEPLOY_SECRET\nEOF2\n' > "$PT/scripts/k11.sh"
 pcase K11 scripts/k11.sh WEBHOOK_DEPLOY_SECRET sink "a heredoc line #\$NAME (no braces) expands"
@@ -3475,7 +3486,7 @@ if [ "$MUTANTS_RUN" -gt "$MUTANT_FLOOR" ]; then
 fi
 # Assertion FLOOR (exact), equal to the number of assertions this suite makes.
 _ran=$((passes + fails))
-FLOOR=625
+FLOOR=627
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s -- cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
