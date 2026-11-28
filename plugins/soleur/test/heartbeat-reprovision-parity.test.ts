@@ -145,14 +145,19 @@ function hasChoiceOption(workflow: string, choice: string): boolean {
  * Strip a YAML/shell `#` comment from one line, quote-aware (#12879, Guard 3). A `#` opens a comment only
  * outside single and double quotes AND at the line start or after whitespace, so `${#arr[@]}` (a `{`
  * before it) and `"a#b"` are code, while `foo # -replace=...` is a comment. `//` is NOT a comment here:
- * workflow text carries URLs.
+ * workflow text carries URLs. An apostrophe INSIDE a word (a letter or digit on its left, a letter on its
+ * right: `bastion's`, `don't`) is prose in a YAML scalar and never opens single-quote state; a quote after
+ * `=`, `(`, `$` or whitespace still does, and any `'` closes an open single quote.
  */
 function stripShellComment(line: string): string {
   let sq = false;
   let dq = false;
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
-    if (c === "'" && !dq) sq = !sq;
+    if (c === "'" && !dq) {
+      const inWord = !sq && /[A-Za-z0-9]/.test(line[i - 1] ?? "") && /[A-Za-z]/.test(line[i + 1] ?? "");
+      if (!inWord) sq = !sq;
+    }
     else if (c === '"' && !sq && line[i - 1] !== "\\") dq = !dq;
     else if (c === "#" && !sq && !dq && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
   }
@@ -727,6 +732,12 @@ describe("hasReplaceLine reads code, never comments (Guard 3, #12879)", () => {
   });
   test("a # inside single quotes is not a comment", () => {
     expect(hasReplaceLine("          echo 'a #b' -replace='hcloud_server.x'\n", x)).toBe(true);
+  });
+  test("an apostrophe inside a word does not open quote state, so the comment after it is still a comment", () => {
+    expect(hasReplaceLine("      - name: Replace the bastion's host # -replace='hcloud_server.x'\n", x)).toBe(false);
+  });
+  test("control: a quote that opens after = still hides a # (so the apostrophe rule is not a blanket ignore)", () => {
+    expect(hasReplaceLine("          y='it #s' -replace='hcloud_server.x'\n", x)).toBe(true);
   });
   test("an empty workflow text matches nothing", () => {
     expect(hasReplaceLine("", x)).toBe(false);
