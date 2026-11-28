@@ -325,7 +325,17 @@ _DOP_STOP = re.compile(r"[;|&`<>)]")
 _DOP_BADTOK = re.compile(r"""[$'"(){}\[\]#\\`]""")
 _DOP_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _DOP_FLAGVAL = re.compile(r"(-p|--project|-c|--config)=(.+)\Z")
-_DOP_VALFLAG = {"-t", "--token", "--name-transformer", "--format", "--mount", "--mount-format", "--scope"}
+# The value-taking GLOBAL flags of the real CLI (doppler --help, verified 2026-11-27): each swallows
+# the next token, so an unmodeled one reshapes the parse — the exploit the fail-closed inversion below
+# exists for. `--scope`/`-t`/`--token` predate the D-2 refinement; the rest were added with it.
+_DOP_VALFLAG = {"-t", "--token", "--name-transformer", "--format", "--mount", "--mount-format", "--scope",
+                "--timeout", "--api-host", "--attempts", "--config-dir", "--dashboard-host",
+                "--dns-resolver-address", "--dns-resolver-proto", "--dns-resolver-timeout"}
+# The boolean globals of the same CLI grammar: they consume no value, so skipping them cannot reshape
+# the parse. An unlisted flag before the subcommand is NOT tolerated — see the inversion below.
+_DOP_BOOLFLAG = {"--debug", "--enable-dns-resolver", "-h", "--help", "--json", "--no-check-version",
+                 "--no-read-env", "--no-timeout", "--no-verify-tls", "--print-config", "--silent",
+                 "-v", "--version", "--no-cache", "--no-fallback", "--forward-signals"}
 _DOP_RUN_SUBS = ("run",)
 _DOP_SEC_SUBS = ("get", "download")
 _DOP_FDDIGIT = re.compile(r"[0-9]&?(?=[<>|])")
@@ -384,6 +394,17 @@ def _dop_classify(tail):
                     return True  # the value is opaque or could hide a subcommand
                 i += 2
                 continue
+            if t in _DOP_BOOLFLAG:
+                i += 1
+                continue
+            if sub is None:
+                # An UNRECOGNISED flag before the subcommand fails closed: it might be a value-flag
+                # the grammar does not model (a new CLI release, a typo), and treating it as boolean
+                # lets its value surface as a bare word that reads as "prose" — the `--timeout 10s`
+                # hole the test-design reviewer proved. Post-subcommand flags stay boolean-tolerant:
+                # the read shape is already decided by then, stray positionals fail closed on their
+                # own, and cobra intersperses flags freely (`secrets get X --plain`).
+                return True
             i += 1
             continue
         if sub == "get":
@@ -3057,6 +3078,16 @@ printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run -p soleu
 pcase N24 scripts/n24.sh WEBHOOK_DEPLOY_SECRET tier-a "a nested counted invocation is not hidden by an exempt outer one"
 printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run -p "$PROJ" -c prd -- x\n' > "$PT/scripts/n25.sh"
 pcase N25 scripts/n25.sh WEBHOOK_DEPLOY_SECRET tier-a "a variable -p fails closed"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler --timeout 10s run -p soleur -c prd_terraform -- x\n' > "$PT/scripts/n26.sh"
+pcase N26 scripts/n26.sh WEBHOOK_DEPLOY_SECRET tier-a "a modeled value-flag before the subcommand: the pair still classifies (pinned -> counted)"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler --timeout 10s run -p soleur -c dev -- x\n' > "$PT/scripts/n27.sh"
+pcase N27 scripts/n27.sh WEBHOOK_DEPLOY_SECRET sink "twin: the same flag over an unpinned literal pair stays exempt — precision, not blanket-counting"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler --brand-new-flag x run -p soleur -c dev -- x\n' > "$PT/scripts/n28.sh"
+pcase N28 scripts/n28.sh WEBHOOK_DEPLOY_SECRET tier-a "an unmodeled pre-subcommand flag fails closed even over an unpinned pair"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler --no-cache secrets get SENTRY_DSN --plain\n' > "$PT/scripts/n29.sh"
+pcase N29 scripts/n29.sh WEBHOOK_DEPLOY_SECRET sink "a modeled boolean before the subcommand does not taint a non-trio get"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler --silent run -p soleur -c prd_terraform -- x\n' > "$PT/scripts/n30.sh"
+pcase N30 scripts/n30.sh WEBHOOK_DEPLOY_SECRET tier-a "a modeled boolean over a pinned pair still counts"
 # comment lines keep what they expand (N3)
 printf '#!/usr/bin/env bash\ncat <<EOF2\n#$WEBHOOK_DEPLOY_SECRET\nEOF2\n' > "$PT/scripts/k11.sh"
 pcase K11 scripts/k11.sh WEBHOOK_DEPLOY_SECRET sink "a heredoc line #\$NAME (no braces) expands"
@@ -3308,7 +3339,7 @@ if [ "$MUTANTS_RUN" -gt "$MUTANT_FLOOR" ]; then
 fi
 # Assertion FLOOR (exact), equal to the number of assertions this suite makes.
 _ran=$((passes + fails))
-FLOOR=619
+FLOOR=624
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s -- cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

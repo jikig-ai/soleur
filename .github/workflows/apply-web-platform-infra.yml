@@ -993,7 +993,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          export APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
+          export APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
           bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh"
 
       # Bootstrap-cycle guard (#4195): on the FIRST apply that creates
@@ -4884,7 +4884,7 @@ jobs:
             RUNNING_VERSION="$IMAGE_TAG_INPUT"
             echo "pin source: operator-supplied image_tag=${IMAGE_TAG_INPUT} (bypasses the /health read; the semver guard, digest resolve and coherence preflight all still apply)"
           else
-            APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"  # derived from committed variables.tf, never a runtime store (planted-value redirector, #13006)
+            APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"  # derived from committed variables.tf, never a runtime store (planted-value redirector, #13006)
             HEALTH_URL="https://app.${APP_DOMAIN_BASE}/health"
             RUNNING_VERSION=""
             for i in $(seq 1 12); do
@@ -5301,7 +5301,7 @@ jobs:
             RUNNING_VERSION="$IMAGE_TAG_INPUT"
             echo "pin source: operator-supplied image_tag=${IMAGE_TAG_INPUT} (bypasses the /health read; the semver guard, digest resolve and coherence preflight all still apply)"
           else
-            APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"  # derived from committed variables.tf, never a runtime store (planted-value redirector, #13006)
+            APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"  # derived from committed variables.tf, never a runtime store (planted-value redirector, #13006)
             HEALTH_URL="https://app.${APP_DOMAIN_BASE}/health"
             RUNNING_VERSION=""
             for i in $(seq 1 12); do

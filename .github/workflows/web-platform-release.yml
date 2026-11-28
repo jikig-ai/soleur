@@ -1631,7 +1631,7 @@ jobs:
           # single canonical copy, shared with `Verify peer deploy completion`).
         run: |
           PAYLOAD=$(printf '{"command":"deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v%s","peers":"%s"}' "$VERSION" "$WEB_HOST_PRIVATE_IPS")
-          # ADR-280 inline wrapper (this job has no checkout by design): the signature and the
+          # ADR-280 inline wrapper (the checkout exists for the credential loader; the inline wrapper stays because migrating it to the shared library needs its own semantic audit): the signature and the
           # Cloudflare Access pair ride curl's stdin config, never its argument list. A refused value
           # makes zero requests and returns 2, so the assignment below aborts the step red before
           # anything is sent (production stays on the previous build).
@@ -1674,7 +1674,7 @@ jobs:
           # /hooks/deploy-status is GET (read-only, idempotent). adnanh/webhook's
           # payload-hmac-sha256 rule verifies the signature over the request body;
           # for GET the body is empty, so we sign the empty string (#2204).
-          # ADR-280 inline wrapper (this job has no checkout by design): the signature and the
+          # ADR-280 inline wrapper (the checkout exists for the credential loader; the inline wrapper stays because migrating it to the shared library needs its own semantic audit): the signature and the
           # Cloudflare Access pair ride curl's stdin config, never its argument list. A refused value
           # makes zero requests and prints the marker on every attempt; the loop then ends at the
           # poll-budget error below, the same terminal red as any other failed read.
@@ -1900,7 +1900,7 @@ jobs:
             --arg subject "[DEPLOY FAILED] Soleur Web Platform v${VERSION} — prod is still on the previous build" \
             --arg html "$BODY" \
             '{from: $from, to: ["ops@jikigai.com"], subject: $subject, html: $html}')
-          # ADR-280 inline wrapper (this job has no checkout by design): the key rides curl's stdin
+          # ADR-280 inline wrapper (the checkout exists for the credential loader; the inline wrapper stays because migrating it to the shared library needs its own semantic audit): the key rides curl's stdin
           # config, never its argument list. A key outside the token alphabet makes zero requests,
           # prints the marker, and returns 2, which `|| echo "000"` folds into the failure line below.
           # ADR-280 inline-wrapper clause: trims leading and trailing ASCII whitespace of the Resend key (same judgement as bc_ok under LC_ALL=C for trailing; tolerant of the leading blank the old argv form tolerated); interior whitespace and non-ASCII spaces are still refused.
@@ -2008,7 +2008,7 @@ jobs:
           # var.web_hosts (web-hosts-fanout-parity.test.sh binds the env).
           # GET-only signed read, same shape as "Verify deploy script completion"
           # in the deploy job.
-          # ADR-280 inline wrapper (this job has no checkout by design): the signature and the
+          # ADR-280 inline wrapper (the checkout exists for the credential loader; the inline wrapper stays because migrating it to the shared library needs its own semantic audit): the signature and the
           # Cloudflare Access pair ride curl's stdin config, never its argument list. A refused value
           # makes zero requests and prints the marker on every attempt; the loop then ends at the
           # poll-budget error below, the same terminal red as any other failed read.
@@ -3002,7 +3002,7 @@ jobs:
           # --max-time + `|| echo 000`: an unreachable Resend must neither stall
           # the job nor (under set -e semantics) kill the step before the
           # non-delivery is recorded.
-          # ADR-280 inline wrapper (this job has no checkout by design): the key rides curl's stdin
+          # ADR-280 inline wrapper (the checkout exists for the credential loader; the inline wrapper stays because migrating it to the shared library needs its own semantic audit): the key rides curl's stdin
           # config, never its argument list. A key outside the token alphabet makes zero requests,
           # prints the marker, and returns 2, which `|| echo "000"` folds into the failure arm below
           # (delivered=0, so the Sentry mirror step still fires).

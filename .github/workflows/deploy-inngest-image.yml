@@ -63,8 +63,8 @@ jobs:
       - name: Trigger deploy via webhook
         run: |
           set -euo pipefail
-          # ADR-280 inline wrapper (this job has no checkout by design, so the shared library is not
-          # sourced): the signature and the Cloudflare Access pair ride curl's stdin config, never its
+          # ADR-280 inline wrapper (the checkout exists for the credential loader; the wrapper stays inline because
+          # migrating it to the shared library needs its own semantic audit): the signature and the Cloudflare Access pair ride curl's stdin config, never its
           # argument list, and the HMAC key rides a python3 child's environment only. A value outside the
           # token alphabet makes zero requests, prints the marker, and returns 2 (a red step, as any failed call).
           # ADR-280 inline-wrapper clause: trims leading and trailing ASCII whitespace of the Cloudflare Access pair (same judgement as bc_ok under LC_ALL=C for trailing; tolerant of the leading blank the old argv form tolerated); the HMAC key is never trimmed; interior whitespace and non-ASCII spaces are still refused.
@@ -105,8 +105,8 @@ jobs:
       - name: Verify deploy completion
         run: |
           set -euo pipefail
-          # ADR-280 inline wrapper (this job has no checkout by design, so the shared library is not
-          # sourced): the signature and the Cloudflare Access pair ride curl's stdin config, never its
+          # ADR-280 inline wrapper (the checkout exists for the credential loader; the wrapper stays inline because
+          # migrating it to the shared library needs its own semantic audit): the signature and the Cloudflare Access pair ride curl's stdin config, never its
           # argument list, and the HMAC key rides a python3 child's environment only. A value outside the
           # token alphabet makes zero requests, prints the marker, and returns 2 (a red step, as any failed call).
           # ADR-280 inline-wrapper clause: trims leading and trailing ASCII whitespace of the Cloudflare Access pair (same judgement as bc_ok under LC_ALL=C for trailing; tolerant of the leading blank the old argv form tolerated); the HMAC key is never trimmed; interior whitespace and non-ASCII spaces are still refused.

@@ -656,7 +656,7 @@ jobs:
           # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
           # committed file in this checkout, so a derivation failure means the repo is broken and
           # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
-          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
           WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET:-}"
           # Mask before any of these can reach a log line. This repo is PUBLIC and this same
           # workflow already does exactly this ~200 lines below for the same credential class;
@@ -858,7 +858,7 @@ jobs:
           # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
           # committed file in this checkout, so a derivation failure means the repo is broken and
           # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
-          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
@@ -911,7 +911,7 @@ jobs:
           # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
           # committed file in this checkout, so a derivation failure means the repo is broken and
           # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
-          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
           : "${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}" "${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID - see the Load infra credentials step source= line}" "${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET - see the Load infra credentials step source= line}"
           bash scripts/check-deploy-script-parity.sh --status-only
 
@@ -1020,7 +1020,7 @@ jobs:
           # runtime-store read (a planted value would redirect the credentialed webhook
           # traffic the verifier sends; security-sentinel P1, #13006 review). The script
           # itself stays a pure env consumer under its actuation sweep.
-          export APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
+          export APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
           bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"
 
       # --- #7104 PR-B: the bounded re-push -------------------------------------------------
@@ -1260,7 +1260,7 @@ jobs:
           # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
           # committed file in this checkout, so a derivation failure means the repo is broken and
           # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
-          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
           CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID:-}"
           CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET:-}"
           if [[ -z "${CF_ACCESS_ID:-}" || -z "${CF_ACCESS_SECRET:-}" ]]; then
@@ -1343,7 +1343,7 @@ jobs:
           # runtime-store read (a planted value would redirect the credentialed webhook
           # traffic the verifier sends; security-sentinel P1, #13006 review). The script
           # itself stays a pure env consumer under its actuation sweep.
-          export APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
+          export APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
           bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"
 
       # #7104 PR-B review — RECLAIM THE BINARY PLAN ON EVERY PATH, INCLUDING THE SKIPPED ONES.
@@ -2210,7 +2210,7 @@ jobs:
           # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
           # committed file in this checkout, so a derivation failure means the repo is broken and
           # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
-          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
@@ -2516,7 +2516,7 @@ jobs:
           # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
           # committed file in this checkout, so a derivation failure means the repo is broken and
           # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
-          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)

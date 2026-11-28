@@ -1294,7 +1294,8 @@ vt_run() { # <rowname> <script> [env...] -- runs under the stub set; CF token de
   for a in "$@"; do case "$a" in VT_CF_ACCESS_ID=*) acc_id="${a#*=}" ;; VT_CF_ACCESS_SECRET=*) acc_sec="${a#*=}" ;; esac; done
   RUN_EXTRA_PATH="$VT_STUBS"
   run_probe "$name" "$script" "VT_CF_API_TOKEN=$FIXTURE_TOKEN" "SHIM_BODY_FILE=$BODIES/cf_tunnel_cfg.json" SHIM_MODE=noauth "$@" \
-    "WEBHOOK_DEPLOY_SECRET=webhook-secret-0001" "CF_ACCESS_CLIENT_ID=$acc_id" "CF_ACCESS_CLIENT_SECRET=$acc_sec"
+    "WEBHOOK_DEPLOY_SECRET=webhook-secret-0001" "CF_ACCESS_CLIENT_ID=$acc_id" "CF_ACCESS_CLIENT_SECRET=$acc_sec" \
+    "APP_DOMAIN_BASE=example.invalid"
   RUN_EXTRA_PATH=""
 }
 vt_stdin() { cat "$ROWS/$1/shim/calls/$2.stdin" 2>/dev/null; }
@@ -4901,7 +4902,7 @@ S4_CWD=""
 # ---- row 21: infra-config-verify.sh (INLINE + pre-guard): a refused credential must NOT print the "webhook listener being DOWN" sentence ----
 S4_ICV="$REPO_ROOT/apps/web-platform/infra/infra-config-verify.sh"
 S4_FLAGS=(--noprofile --norc); S4_CWD="$REPO_ROOT/apps/web-platform/infra"
-S4_BASE=("${S4_DOP_BASE[@]}" VERIFY_PASS=1 INFRA_CONFIG_STATUS_RESPONSE=@ROW@/rt/status.txt SHIM_STATUS_BODY='{"exit_code":0,"reason":"success","start_ts":1700000123}')
+S4_BASE=("${S4_DOP_BASE[@]}" APP_DOMAIN_BASE=example.invalid VERIFY_PASS=1 INFRA_CONFIG_STATUS_RESPONSE=@ROW@/rt/status.txt SHIM_STATUS_BODY='{"exit_code":0,"reason":"success","start_ts":1700000123}')
 s4_run r21-ok "$S4_ICV" "$S4/real" "${S4_BASE[@]}"
 if [[ "$(s4_ncalls)" -ge 1 && "$(s4_markers)" == 0 ]] && s4_calls_ok 3 && s4_wh_ok "$S4/bodies/empty" 1 && ! s4_said 'webhook listener being DOWN'; then
   row "S4 row 21 infra-config-verify (inline): a well-formed poll sends the digest over the empty body and the pair as three stdin directives, none on argv, and makes no refusal" ok
