@@ -637,6 +637,12 @@ e = json.load(open(path))["mcpServers"]["playwright"]
 ok = e.get("env") == {"PLAYWRIGHT_MCP_PING_TIMEOUT_MS": "0"}
 if kind == "plugin":
     ok = ok and e["args"].count("--chromium-fallback") == 1 and e["args"].index("--chromium-fallback") < e["args"].index("--")
+if kind == "project":
+    # CTO U3 (2026-11-28): the strict repo registration also falls back to the bundled Chromium on a Chrome-less host,
+    # and never carries the plugin-only opt-out (CTO U1).
+    s = e["args"][1] if len(e.get("args", [])) > 1 else ""
+    ok = ok and s.count("--chromium-fallback") == 1 and " -- " in s and s.index("--chromium-fallback") < s.index(" -- ") \
+        and "--allow-proxy-and-node-env" not in s
 sys.exit(0 if ok else 1)
 PY
 }
@@ -1566,13 +1572,15 @@ fi
 # ===========================================================================
 # Guard 3 — the registrations
 # ===========================================================================
-assert_true 'Guard 3: .mcp.json carries "env": {"PLAYWRIGHT_MCP_PING_TIMEOUT_MS": "0"} (a guard for future pin bumps: inert on stdio in 0.0.78/0.0.83)' reg_ok "$PROJECT_MCP" project
+assert_true 'Guard 3: .mcp.json carries "env": {"PLAYWRIGHT_MCP_PING_TIMEOUT_MS": "0"} (a guard for future pin bumps: inert on stdio in 0.0.78/0.0.83), one --chromium-fallback before the -- separator and no --allow-proxy-and-node-env' reg_ok "$PROJECT_MCP" project
 assert_true 'Guard 3: plugins/soleur/.mcp.json carries the same env and a single --chromium-fallback before the -- separator' reg_ok "$PLUGIN_MCP" plugin
 reg_mutant 'Guard 3 mutant 1: the project registration loses its env' "$PROJECT_MCP" project 'e.pop("env", None)'
 reg_mutant 'Guard 3 mutant 2: the project env value drifts from 0' "$PROJECT_MCP" project 'e["env"] = {"PLAYWRIGHT_MCP_PING_TIMEOUT_MS": "30000"}'
 reg_mutant 'Guard 3 mutant 3: the plugin registration loses its env' "$PLUGIN_MCP" plugin 'e.pop("env", None)'
 reg_mutant 'Guard 3 mutant 4: the plugin env key is misspelled' "$PLUGIN_MCP" plugin 'e["env"] = {"PLAYWRIGHT_MCP_PING_TIMEOUT": "0"}'
 reg_mutant 'Guard 3 mutant 5: the plugin registration loses --chromium-fallback' "$PLUGIN_MCP" plugin 'e["args"].remove("--chromium-fallback")'
+reg_mutant 'Guard 3 mutant 6: the project registration loses --chromium-fallback (CTO U3)' "$PROJECT_MCP" project 'e["args"][1] = e["args"][1].replace(" --chromium-fallback -- ", " -- ")'
+reg_mutant 'Guard 3 mutant 7: the project registration gains the plugin-only --allow-proxy-and-node-env (CTO U1)' "$PROJECT_MCP" project 'e["args"][1] = e["args"][1].replace(" --chromium-fallback -- ", " --chromium-fallback --allow-proxy-and-node-env -- ")'
 
 # ---------------------------------------------------------------------------
 # Harness hygiene: every process this suite started is gone after reap_own, and the hygiene predicate can tell
@@ -1605,8 +1613,8 @@ if [[ $((pass + fail)) -ne $cases ]]; then
   printf '[FATAL] vacuity accounting: pass+fail (%d) != cases (%d) — a row did not report\n' "$((pass + fail))" "$cases" >&2
   exit 1
 fi
-EXPECTED_MUTANTS=57   # Guard 1: 22 static + 4 dynamic mutants; Guard 2: mutants 1-5 and 7-27 (6 is a harness row); Guard 3: mutants 1-5
-EXPECTED_RED_ROWS=61   # the 57 mutants, one extra row for Guard 2 mutant 21 (mutant 22 has the one deterministic row), plus the three harness rows (Guard 1, Guard 2 #6, Hygiene)
+EXPECTED_MUTANTS=59   # Guard 1: 22 static + 4 dynamic mutants; Guard 2: mutants 1-5 and 7-27 (6 is a harness row); Guard 3: mutants 1-7
+EXPECTED_RED_ROWS=63   # the 59 mutants, one extra row for Guard 2 mutant 21 (mutant 22 has the one deterministic row), plus the three harness rows (Guard 1, Guard 2 #6, Hygiene)
 if [[ $mutants_declared -ne $EXPECTED_MUTANTS || $red_rows -ne $EXPECTED_RED_ROWS ]]; then
   printf '[FATAL] mutation matrix: %d mutants / %d mutation rows ran, expected %d / %d — a row vanished\n' "$mutants_declared" "$red_rows" "$EXPECTED_MUTANTS" "$EXPECTED_RED_ROWS" >&2
   exit 1

@@ -441,7 +441,8 @@ registers `playwright` with `python3` running
 in front of `npx @playwright/mcp@0.0.78`, so on Claude Code its tools arrive as
 `mcp__plugin_soleur_playwright__*` — already wrapped, no customer
 configuration. The registration passes
-`--user-data-dir-name soleur-playwright-mcp-profile` and `--chromium-fallback`, so the wrapped browser
+`--user-data-dir-name soleur-playwright-mcp-profile`, `--chromium-fallback` and
+`--allow-proxy-and-node-env` (see the startup refusals below), so the wrapped browser
 runs on its own profile under `$XDG_CACHE_HOME` (default `~/.cache`), separate
 from any `playwright` registration the customer configured themselves. On a
 registration routed through the proxy, every `tools/call` result is rewritten
@@ -552,19 +553,25 @@ string: an old-string session holds no `flock`, so also require that `readlink
    `--output-dir`, `--init-script`, `--init-page`, `--cdp-endpoint`,
    `--endpoint`, `--extension`, `--executable-path`, `--daemon`,
    `--allow-unrestricted-file-access`, `--grant-permissions`,
-   `--ignore-https-errors`, `--no-sandbox`, and each setting's
+   `--ignore-https-errors`, `--no-sandbox`, `--proxy-server`, `--proxy-bypass`
+   (a proxy reads plain-http `page.request` traffic, loopback included), and each setting's
    `PLAYWRIGHT_MCP_*` env twin (`PLAYWRIGHT_MCP_SANDBOX` for `--no-sandbox`),
-   plus env-only `PLAYWRIGHT_MCP_USER_DATA_DIR` and
-   `PLAYWRIGHT_MCP_SNAPSHOT_MODE`; a trailing valued flag, which would swallow
+   plus env-only `PLAYWRIGHT_MCP_USER_DATA_DIR`,
+   `PLAYWRIGHT_MCP_SNAPSHOT_MODE`, `NODE_OPTIONS`, `NODE_EXTRA_CA_CERTS`,
+   `NODE_TLS_REJECT_UNAUTHORIZED`, `PLAYWRIGHT_BROWSERS_PATH` and
+   `npm_config_playwright_browsers_path` / `npm_package_config_playwright_browsers_path`
+   (any case; they redirect the browser build); an `.ini` config path, or a JSON config the
+   server would not parse as JSON (`NaN`/`Infinity`); a trailing valued flag, which would swallow
    the appended `--snapshot-mode none` as its value; a config file (from
    `--config` or `PLAYWRIGHT_MCP_CONFIG`) that is missing, is not JSON, or sets
    `saveSession`, `saveTrace`, `saveVideo`, `secrets`, `outputDir`,
    `allowUnrestrictedFileAccess`, `extension`, `server.port` / `server.host`, a
    capability other than `vision`, `browser.cdpEndpoint` /
    `browser.remoteEndpoint`, `browser.initPage` / `browser.initScript`,
-   `browser.contextOptions.storageState` / `.permissions` /
-   `.ignoreHTTPSErrors`, `browser.launchOptions.executablePath` /
-   `.chromiumSandbox: false` / a remote-debugging `args` flag, or a
+   `browser.contextOptions` or `browser.launchOptions` (a persistent profile
+   merges the two) `.storageState` / `.permissions` / `.ignoreHTTPSErrors` /
+   `.proxy` / `.extraHTTPHeaders` / `.recordHar`,
+   `browser.launchOptions.executablePath` / `.chromiumSandbox: false` / a remote-debugging `args` flag, or a
    `browser.userDataDir` conflicting with `--user-data-dir-name`; `--port`,
    `--host`, `PLAYWRIGHT_MCP_PORT` or `PLAYWRIGHT_MCP_HOST`
    (an HTTP transport around the relay); `--caps` or `PLAYWRIGHT_MCP_CAPS` other
@@ -575,7 +582,21 @@ string: an old-string session holds no `flock`, so also require that `readlink
    bare basename (a separator or `..`), is combined with an explicit
    `--user-data-dir` in the server argv, or resolves under a relative
    `XDG_CACHE_HOME` / an unset `HOME`. The reason names the setting, never its
-   value.
+   value, and ends with a `To fix:` remedy (remove the flag or key, or unset
+   the variable in the shell that starts Claude Code). The proxy flag
+   `--allow-proxy-and-node-env` (before `--`) turns off exactly the
+   `--proxy-server` / `--proxy-bypass` rows, their env twins, the three `NODE_*`
+   rows, the two browser-path rows and the config `proxy` key; every other refusal stays. The plugin
+   registration passes it, so a host behind a corporate proxy or an extra CA
+   still browses; the repo `.mcp.json` registration does not, and the
+   Cloudflare re-mint sitting (`cloudflare-old-login-token-remint.md`) runs on
+   that one. The trade is stated: on the plugin server an ambient `NODE_OPTIONS`
+   (`--require`, `--inspect`) reaches every page the server holds, not only
+   `page.request`; the shell that starts Claude Code is trusted there.
+   So the two servers no longer refuse the same settings: a procedure that needs
+   the strict set must call the repo server's `mcp__playwright__*` tools by
+   prefix and never `mcp__plugin_soleur_playwright__*` — checking the repo
+   registration's args is not enough when both servers are loaded.
 
 2. **Per call** — it appends `--snapshot-mode none` to the child so no action
    tool writes a tree to disk, and refuses, before the server sees it, a

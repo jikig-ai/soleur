@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Redacting stdio JSON-RPC proxy in front of the Playwright MCP server (#7980).
 
-    python3 playwright-mcp-redact-proxy.py [--chromium-fallback] [--user-data-dir-name <basename>] -- npx @playwright/mcp@0.0.78 [server args...]
+    python3 playwright-mcp-redact-proxy.py [--chromium-fallback] [--allow-proxy-and-node-env] [--user-data-dir-name <basename>] -- npx @playwright/mcp@0.0.78 [server args...]
 
 `--chromium-fallback` (a boolean, given at most once) appends `--browser chromium --sandbox` to the server
 argv, ahead of the proxy's own appended flags, when ALL of: the server argv carries no `--browser`,
@@ -19,6 +19,15 @@ list) replaces the known-path list, for the suite. `--browser` is not a sink fla
 `chromiumSandbox: false` stay refused (a caller-supplied `--sandbox` stays allowed: it can only turn the
 sandbox on), so no guarantee below moves. Flag absent: the child argv is exactly
 what it was before.
+
+`--allow-proxy-and-node-env` (a boolean, given at most once) turns off exactly these refusals: the
+`--proxy-server`/`--proxy-bypass` SINK_FLAGS rows (argv and env), the NODE_OPTIONS,
+NODE_EXTRA_CA_CERTS, NODE_TLS_REJECT_UNAUTHORIZED, PLAYWRIGHT_BROWSERS_PATH and
+npm_config_/npm_package_config_playwright_browsers_path SINK_ENV_ONLY rows (CTO U4), and the config `proxy` key
+under contextOptions and launchOptions. Every other refusal stays. The plugin registration
+(plugins/soleur/.mcp.json) passes it, so a corporate-proxy or extra-CA host can still browse; the repo
+registration (.mcp.json) does not, and the #12931 Phase 5 re-mint sitting requires that one (CTO U1,
+2026-11-28). Flag absent: every refusal holds.
 
 `--user-data-dir-name` resolves its basename under $XDG_CACHE_HOME (else
 `$HOME/.cache`, both read from os.environ) and injects
@@ -156,16 +165,35 @@ def _flush_notes(pending: List[Tuple[BaseException, str]]) -> None:
         _note(exc, label)
 
 
-def refuse_start(reason: str) -> NoReturn:
-    log(f"refusing to start: {reason}")
+def refuse_start(reason: str, fix: Optional[str] = None) -> NoReturn:
+    log(f"refusing to start: {reason}" + (f". {fix}" if fix else ""))
     os._exit(2)
+
+
+# Remedies on the refusal line (CTO U2, 2026-11-28): the operator who meets a refusal is told what to change.
+RELAX_NOTE = (" before the Cloudflare re-mint sitting; for normal browsing use the plugin `playwright` server,"
+              " which allows it (--allow-proxy-and-node-env)")
+
+
+def fix_remove(what: str) -> str:
+    return f"To fix: remove {what} from the server args or the --config file"
+
+
+def fix_unset(name: str) -> str:
+    return f"To fix: unset {name} in the shell that starts Claude Code"
+
+
+def fix_relaxable(name: str) -> str:
+    if name.startswith("-") or name.startswith("config "):
+        return f"To fix: remove {name.removeprefix('config ')} from the server args or the --config file{RELAX_NOTE}"
+    return f"To fix: unset {name} in the shell that starts Claude Code{RELAX_NOTE}"
 
 
 # ---------------------------------------------------------------------------
 # B1 -- argv
 # ---------------------------------------------------------------------------
 def usage(msg: str) -> NoReturn:
-    refuse_start(f"usage: playwright-mcp-redact-proxy.py [--chromium-fallback] [--user-data-dir-name <basename>] -- <server argv...> ({msg})")
+    refuse_start(f"usage: playwright-mcp-redact-proxy.py [--chromium-fallback] [--allow-proxy-and-node-env] [--user-data-dir-name <basename>] -- <server argv...> ({msg})")
 
 
 def profile_dir_from_args(args: List[str], env: Dict[str, str]) -> Optional[str]:
@@ -214,8 +242,8 @@ def profile_dir_from_args(args: List[str], env: Dict[str, str]) -> Optional[str]
     return os.path.join(os.path.realpath(root), name)
 
 
-def take_chromium_fallback(args: List[str]) -> Tuple[List[str], bool]:
-    """Remove the boolean `--chromium-fallback` from the proxy's own flags; refuse it given twice.
+def take_bool_flag(args: List[str], flag: str) -> Tuple[List[str], bool]:
+    """Remove the boolean `flag` (`--chromium-fallback`, `--allow-proxy-and-node-env`) from the proxy's own flags; refuse it given twice.
 
     The value of `--user-data-dir-name` is never inspected here (it stays for profile_dir_from_args
     to validate, so a basename spelled like a flag still refuses there).
@@ -225,9 +253,9 @@ def take_chromium_fallback(args: List[str]) -> Tuple[List[str], bool]:
     i = 0
     while i < len(args):
         a = args[i]
-        if a == "--chromium-fallback":
+        if a == flag:
             if found:
-                refuse_start("--chromium-fallback given twice")
+                refuse_start(f"{flag} given twice")
             found = True
         else:
             rest.append(a)
@@ -254,15 +282,16 @@ def chromium_fallback_applies(server: List[str], env: Dict[str, str]) -> bool:
     return not any(p and os.path.isfile(p) and os.access(p, os.X_OK) for p in paths)
 
 
-def parse_argv(argv: List[str]) -> Tuple[List[str], Optional[str], bool]:
+def parse_argv(argv: List[str]) -> Tuple[List[str], Optional[str], bool, bool]:
     if "--" not in argv:
         usage("no `--` separator")
     sep = argv.index("--")
     server = argv[sep + 1 :]
     if not server:
         usage("empty server argv")
-    own, chromium_fallback = take_chromium_fallback(argv[:sep])
-    return server, profile_dir_from_args(own, dict(os.environ)), chromium_fallback
+    own, chromium_fallback = take_bool_flag(argv[:sep], "--chromium-fallback")
+    own, allow_proxy_and_node_env = take_bool_flag(own, ALLOW_PROXY_FLAG)
+    return server, profile_dir_from_args(own, dict(os.environ)), chromium_fallback, allow_proxy_and_node_env
 
 
 # ---------------------------------------------------------------------------
@@ -376,13 +405,36 @@ SINK_FLAGS = [
     ("--ignore-https-errors", "PLAYWRIGHT_MCP_IGNORE_HTTPS_ERRORS", "drops TLS validation on page requests"),
     ("--no-sandbox", "PLAYWRIGHT_MCP_SANDBOX", "controls the browser sandbox"),
     ("--daemon", "PLAYWRIGHT_MCP_DAEMON", "serves the tools over a socket, around this stdio relay"),
+    # page.request (the #12931 Phase 5 sink hand-off) sends plain http to 127.0.0.1 through any configured proxy:
+    # playwright-core skips a proxy only for an explicit bypass list, with no loopback default (CTO S1, 2026-11-28).
+    ("--proxy-server", "PLAYWRIGHT_MCP_PROXY_SERVER", "routes page.request traffic, loopback included, through a proxy that reads it"),
+    ("--proxy-bypass", "PLAYWRIGHT_MCP_PROXY_BYPASS", "only has meaning with a proxy, which this relay refuses"),
 ]
 # Env-only refusals: the argv/config form stays allowed because it is explicit
 # and audited in the registration; the ambient env form is not.
 SINK_ENV_ONLY = [
     ("PLAYWRIGHT_MCP_USER_DATA_DIR", "sets a profile outside the audited registration argv"),
     ("PLAYWRIGHT_MCP_SNAPSHOT_MODE", "the proxy owns --snapshot-mode"),
+    # The server child inherits the whole env and holds page.request bodies (a minted token, #12931 Phase 5):
+    # NODE_OPTIONS can --require/--import code, --inspect a debugger or --heapsnapshot-signal a heap dump into it;
+    # the other two let a MITM read its TLS (CTO R1, 2026-11-28).
+    ("NODE_OPTIONS", "injects code, a debugger or a heap dump into the server process"),
+    ("NODE_EXTRA_CA_CERTS", "trusts extra CAs for the server's own TLS (a MITM of page.request)"),
+    ("NODE_TLS_REJECT_UNAUTHORIZED", "can disable TLS validation for the server's own requests"),
+    # `--chromium-fallback` runs Chrome for Testing from Playwright's user-writable download dir; these two names
+    # redirect that dir to another (possibly patched) build, the same substitution PLAYWRIGHT_MCP_EXECUTABLE_PATH is
+    # refused for (CTO U4, 2026-11-28). npm reads NPM_CONFIG_* too, so the npm name matches case-insensitively. A
+    # value in an .npmrc is set inside npx, after this check: the runbook reads it with `npm config get`.
+    ("PLAYWRIGHT_BROWSERS_PATH", "redirects Playwright's browser download dir (a substituted browser binary)"),
+    ("npm_config_playwright_browsers_path", "redirects Playwright's browser download dir (a substituted browser binary)"),
+    ("npm_package_config_playwright_browsers_path", "redirects Playwright's browser download dir (a substituted browser binary)"),
 ]
+# The refusals `--allow-proxy-and-node-env` turns off, and only these (CTO U1, 2026-11-28).
+ALLOW_PROXY_FLAG = "--allow-proxy-and-node-env"
+RELAXABLE_FLAGS = {"--proxy-server", "--proxy-bypass"}
+RELAXABLE_ENV = {"NODE_OPTIONS", "NODE_EXTRA_CA_CERTS", "NODE_TLS_REJECT_UNAUTHORIZED",
+                 "PLAYWRIGHT_BROWSERS_PATH", "npm_config_playwright_browsers_path",
+                 "npm_package_config_playwright_browsers_path"}
 # Valued flags: a bare one as the LAST server arg would bind the appended
 # `--user-data-dir=<dir>` (or `--snapshot-mode`) as its value instead of
 # refusing cleanly. Boolean flags are deliberately absent — a trailing
@@ -400,27 +452,42 @@ VALUE_FLAGS = {
 }
 
 
-def refuse_argv_and_env(server: List[str], profile_dir: Optional[str], env: Dict[str, str]) -> None:
+def env_names_for(envvar: str, env: Dict[str, str]) -> List[str]:
+    """The env names that spell `envvar`: itself, plus, for an npm_* name, every case and -/_ variant npm reads."""
+    if not envvar.startswith("npm_"):
+        return [envvar]
+    want = envvar.lower().replace("-", "_")
+    return [k for k in env if k.lower().replace("-", "_") == want]
+
+
+def refuse_argv_and_env(server: List[str], profile_dir: Optional[str], env: Dict[str, str], allow_proxy_and_node_env: bool = False) -> None:
     if profile_dir is not None and (argv_values(server, "--user-data-dir") or flag_present(server, "--user-data-dir")):
-        refuse_start("--user-data-dir-name cannot be combined with an explicit --user-data-dir in the server argv")
+        refuse_start("--user-data-dir-name cannot be combined with an explicit --user-data-dir in the server argv", fix_remove("--user-data-dir"))
     if server and server[-1] in VALUE_FLAGS:
-        refuse_start(f"{server[-1]} expects a value that would bind an appended flag")
+        refuse_start(f"{server[-1]} expects a value that would bind an appended flag", f"To fix: give {server[-1]} a value, or remove it from the server args")
     for flag, envvar, why in SINK_FLAGS:
+        relaxable = flag in RELAXABLE_FLAGS
+        if relaxable and allow_proxy_and_node_env:
+            continue
         if flag_present(server, flag):
-            refuse_start(f"{flag} {why}")
+            refuse_start(f"{flag} {why}", fix_relaxable(flag) if relaxable else fix_remove(flag))
         if env.get(envvar):
-            refuse_start(f"{envvar} is set ({why})")
+            refuse_start(f"{envvar} is set ({why})", fix_relaxable(envvar) if relaxable else fix_unset(envvar))
     for envvar, why in SINK_ENV_ONLY:
-        if env.get(envvar):
-            refuse_start(f"{envvar} is set ({why})")
+        relaxable = envvar in RELAXABLE_ENV
+        if relaxable and allow_proxy_and_node_env:
+            continue
+        for name in env_names_for(envvar, env):
+            if env.get(name):
+                refuse_start(f"{name} is set ({why})", fix_relaxable(name) if relaxable else fix_unset(name))
     if argv_values(server, "--port") or flag_present(server, "--port") or env.get("PLAYWRIGHT_MCP_PORT"):
-        refuse_start("--port serves the tools over HTTP, around this stdio relay")
+        refuse_start("--port serves the tools over HTTP, around this stdio relay", "To fix: remove --port from the server args, or unset PLAYWRIGHT_MCP_PORT")
     if argv_values(server, "--host") or flag_present(server, "--host") or env.get("PLAYWRIGHT_MCP_HOST"):
-        refuse_start("--host binds an HTTP transport around this stdio relay")
+        refuse_start("--host binds an HTTP transport around this stdio relay", "To fix: remove --host from the server args, or unset PLAYWRIGHT_MCP_HOST")
     if caps_open_sinks(argv_values(server, "--caps")) or caps_open_sinks([env.get("PLAYWRIGHT_MCP_CAPS", "")]):
-        refuse_start("--caps enables a capability other than vision (devtools, pdf and storage write raw page state)")
+        refuse_start("--caps enables a capability other than vision (devtools, pdf and storage write raw page state)", "To fix: keep only vision in --caps or PLAYWRIGHT_MCP_CAPS")
     if any(v != "stdout" for v in argv_values(server, "--output-mode") + [env.get("PLAYWRIGHT_MCP_OUTPUT_MODE", "stdout")]):
-        refuse_start("--output-mode file writes snapshots and logs to disk")
+        refuse_start("--output-mode file writes snapshots and logs to disk", "To fix: remove --output-mode file from the server args, or unset PLAYWRIGHT_MCP_OUTPUT_MODE")
     config_path: Optional[str] = None
     named = argv_values(server, "--config")
     if named:
@@ -429,66 +496,86 @@ def refuse_argv_and_env(server: List[str], profile_dir: Optional[str], env: Dict
         config_path = env["PLAYWRIGHT_MCP_CONFIG"]
     if config_path:
         if not os.path.isfile(config_path):
-            refuse_start("the config file named by --config or PLAYWRIGHT_MCP_CONFIG does not exist")
+            refuse_start("the config file named by --config or PLAYWRIGHT_MCP_CONFIG does not exist", "To fix: point --config or PLAYWRIGHT_MCP_CONFIG at a file that exists, or remove it")
+        # The server reads a `.ini` path with its INI parser WITHOUT trying JSON, and falls back to INI when
+        # its JSON.parse rejects the file (coreBundle.js loadConfig, 0.0.78). So the proxy vets only what the
+        # server reads as JSON: an .ini path is refused, and NaN/Infinity (accepted by Python's json, rejected
+        # by JSON.parse) raise here, so no file reads as one harmless dict to the proxy and as INI to the server.
+        if config_path.lower().endswith(".ini"):
+            refuse_start("the config file is an .ini file, which the server reads with an INI parser this proxy cannot vet", "To fix: rewrite the config as a JSON file (not .ini) and pass that to --config")
+        def _no_constant(name: str) -> Any:
+            raise ValueError(f"non-JSON constant {name}")
         try:
             with open(config_path, "rb") as fh:
-                cfg = json.loads(fh.read().decode("utf-8-sig"))
+                cfg = json.loads(fh.read().decode("utf-8-sig"), parse_constant=_no_constant)
         except (OSError, ValueError, RecursionError):
             # The server falls back to an INI parser, where saveSession is a typed
             # key; a file this proxy cannot read is a file it cannot vet.
-            refuse_start("the config file is not JSON, so its raw-sink settings cannot be checked")
+            refuse_start("the config file is not JSON, so its raw-sink settings cannot be checked", "To fix: rewrite the config as plain JSON (no NaN or Infinity) and pass that to --config")
         if not isinstance(cfg, dict):
-            refuse_start("the config file is not a JSON object, so its raw-sink settings cannot be checked")
+            refuse_start("the config file is not a JSON object, so its raw-sink settings cannot be checked", "To fix: make the --config file a JSON object")
         if cfg.get("saveSession"):
-            refuse_start("config saveSession is set (a raw session.md sink)")
+            refuse_start("config saveSession is set (a raw session.md sink)", fix_remove("saveSession"))
         if cfg.get("saveVideo"):
-            refuse_start("config saveVideo is set (video frames of every page are written to disk)")
+            refuse_start("config saveVideo is set (video frames of every page are written to disk)", fix_remove("saveVideo"))
         if cfg.get("saveTrace"):
-            refuse_start("config saveTrace is set (a raw trace written to disk)")
+            refuse_start("config saveTrace is set (a raw trace written to disk)", fix_remove("saveTrace"))
         if cfg.get("secrets"):
-            refuse_start("config secrets injects credential material into pages")
+            refuse_start("config secrets injects credential material into pages", fix_remove("secrets"))
         if cfg.get("outputDir"):
-            refuse_start("config outputDir names a directory for raw output files")
+            refuse_start("config outputDir names a directory for raw output files", fix_remove("outputDir"))
         if cfg.get("allowUnrestrictedFileAccess"):
-            refuse_start("config allowUnrestrictedFileAccess lets pages reach arbitrary local files")
+            refuse_start("config allowUnrestrictedFileAccess lets pages reach arbitrary local files", fix_remove("allowUnrestrictedFileAccess"))
         if cfg.get("extension"):
-            refuse_start("config extension connects to a running browser this proxy did not launch")
+            refuse_start("config extension connects to a running browser this proxy did not launch", fix_remove("extension"))
         caps = cfg.get("capabilities")
         if caps is not None and (not isinstance(caps, list) or caps_open_sinks([str(c) for c in caps])):
-            refuse_start("config capabilities enables a capability other than vision")
+            refuse_start("config capabilities enables a capability other than vision", fix_remove("every capabilities entry but vision"))
         srv = cfg.get("server")
         if isinstance(srv, dict) and (srv.get("port") is not None or srv.get("host") is not None):
-            refuse_start("config server.port/server.host serves the tools over HTTP, around this stdio relay")
+            refuse_start("config server.port/server.host serves the tools over HTTP, around this stdio relay", fix_remove("server.port and server.host"))
         browser = cfg.get("browser")
         if isinstance(browser, dict):
             if browser.get("cdpEndpoint") or browser.get("remoteEndpoint"):
-                refuse_start("config browser.cdpEndpoint/browser.remoteEndpoint connects to a browser this proxy did not launch")
+                refuse_start("config browser.cdpEndpoint/browser.remoteEndpoint connects to a browser this proxy did not launch", fix_remove("browser.cdpEndpoint and browser.remoteEndpoint"))
             if browser.get("initPage") or browser.get("initScript"):
-                refuse_start("config browser.initPage/browser.initScript injects code into every page")
+                refuse_start("config browser.initPage/browser.initScript injects code into every page", fix_remove("browser.initPage and browser.initScript"))
             if profile_dir is not None and browser.get("userDataDir"):
-                refuse_start("config browser.userDataDir conflicts with --user-data-dir-name")
-            ctx = browser.get("contextOptions")
-            if isinstance(ctx, dict):
-                if ctx.get("storageState"):
-                    refuse_start("config browser.contextOptions.storageState persists cookies and storage state to a file")
-                if ctx.get("permissions"):
-                    refuse_start("config browser.contextOptions.permissions grants page permissions the model did not audit")
-                if ctx.get("ignoreHTTPSErrors"):
-                    refuse_start("config browser.contextOptions.ignoreHTTPSErrors drops TLS validation on page requests")
+                refuse_start("config browser.userDataDir conflicts with --user-data-dir-name", fix_remove("browser.userDataDir"))
+            # Context-level keys are checked under BOTH scopes: a persistent profile (both registrations run
+            # one) launches with {...launchOptions, ...contextOptions} (coreBundle.js createPersistentBrowser,
+            # 0.0.78), so a key placed under launchOptions takes effect exactly as under contextOptions.
+            context_keys = [
+                ("storageState", "persists cookies and storage state to a file"),
+                ("permissions", "grants page permissions the model did not audit"),
+                ("ignoreHTTPSErrors", "drops TLS validation on page requests"),
+                ("proxy", "routes page.request traffic through a proxy that reads it"),
+                ("recordHar", "writes every request and response body to a HAR on disk"),
+                ("extraHTTPHeaders", "adds headers to every page.request call (an Origin makes the hand-off sink refuse, fail-closed)"),
+            ]
+            for scope in ("contextOptions", "launchOptions"):
+                opts = browser.get(scope)
+                if isinstance(opts, dict):
+                    for key, why in context_keys:
+                        if key == "proxy" and allow_proxy_and_node_env:
+                            continue
+                        if opts.get(key):
+                            where = f"browser.{scope}.{key}"
+                            refuse_start(f"config {where} {why}", fix_relaxable(f"config {where}") if key == "proxy" else fix_remove(where))
             lo = browser.get("launchOptions")
             if isinstance(lo, dict):
                 if lo.get("executablePath"):
-                    refuse_start("config browser.launchOptions.executablePath substitutes the browser binary")
+                    refuse_start("config browser.launchOptions.executablePath substitutes the browser binary", fix_remove("browser.launchOptions.executablePath"))
                 if lo.get("chromiumSandbox") is False:
-                    refuse_start("config browser.launchOptions.chromiumSandbox disables the browser sandbox")
+                    refuse_start("config browser.launchOptions.chromiumSandbox disables the browser sandbox", fix_remove("browser.launchOptions.chromiumSandbox"))
                 args = lo.get("args")
                 if isinstance(args, list) and any(str(a).startswith("--remote-debugging") for a in args):
-                    refuse_start("config launchOptions.args opens a remote debugging channel around this relay")
+                    refuse_start("config launchOptions.args opens a remote debugging channel around this relay", fix_remove("every --remote-debugging* entry of browser.launchOptions.args"))
     patterns = env.get("DEBUG", "").replace(",", " ").split()
     if any(debug_pattern_enables_pw(p) for p in patterns if not p.startswith("-")):
-        refuse_start("DEBUG enables a pw:* logger, which prints unredacted results to stderr")
+        refuse_start("DEBUG enables a pw:* logger, which prints unredacted results to stderr", "To fix: drop every pw:* pattern from DEBUG in the shell that starts Claude Code")
     if env.get("DEBUG_FILE"):
-        refuse_start("DEBUG_FILE is set (a raw debug sink on disk)")
+        refuse_start("DEBUG_FILE is set (a raw debug sink on disk)", fix_unset("DEBUG_FILE"))
 
 
 # ---------------------------------------------------------------------------
@@ -953,10 +1040,10 @@ class Proxy:
 
 
 def main(argv: List[str]) -> int:
-    server, profile_dir, chromium_fallback = parse_argv(argv)
+    server, profile_dir, chromium_fallback, allow_proxy_and_node_env = parse_argv(argv)
     redactor = load_redactor()
     self_test(redactor[0], redactor[1], redactor[3])
-    refuse_argv_and_env(server, profile_dir, dict(os.environ))
+    refuse_argv_and_env(server, profile_dir, dict(os.environ), allow_proxy_and_node_env)
     Proxy(server, redactor, profile_dir, chromium_fallback).run()
 
 

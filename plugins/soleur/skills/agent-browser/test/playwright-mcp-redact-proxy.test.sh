@@ -541,8 +541,8 @@ r="$(session savecfg "$PROXY" --send "$INIT" --end eof --expect-death --server p
 assert_refused_start 'FR5: config saveSession (via --config) refuses to start' "$r" 'saveSession'
 r="$(session savecfgenv "$PROXY" --env PLAYWRIGHT_MCP_CONFIG="$WORK/cfg-save.json" --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'FR5: config saveSession (via $PLAYWRIGHT_MCP_CONFIG) refuses to start' "$r" 'saveSession'
-printf 'saveSession = true\n' > "$WORK/cfg-save.ini"
-r="$(session saveini "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-save.ini")"
+printf 'saveSession = true\n' > "$WORK/cfg-save.conf"
+r="$(session saveini "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-save.conf")"
 assert_refused_start 'FR5: a config the proxy cannot parse as JSON (the server reads INI) refuses to start' "$r" 'not JSON'
 r="$(session cfgmissing "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/nope.json")"
 assert_refused_start 'FR5: a --config that does not exist refuses to start with a named reason' "$r" 'does not exist'
@@ -597,7 +597,9 @@ for pair in \
   '--save-video:PLAYWRIGHT_MCP_SAVE_VIDEO' \
   '--ignore-https-errors:PLAYWRIGHT_MCP_IGNORE_HTTPS_ERRORS' \
   '--no-sandbox:PLAYWRIGHT_MCP_SANDBOX' \
-  '--daemon:PLAYWRIGHT_MCP_DAEMON'; do
+  '--daemon:PLAYWRIGHT_MCP_DAEMON' \
+  '--proxy-server:PLAYWRIGHT_MCP_PROXY_SERVER' \
+  '--proxy-bypass:PLAYWRIGHT_MCP_PROXY_BYPASS'; do
   flag="${pair%%:*}"; envvar="${pair##*:}"
   r="$(session "sink-$flag" "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" "$flag=/tmp/x")"
   assert_refused_start "FR5: $flag=<v> in the wrapped argv refuses to start" "$r" "$flag"
@@ -667,6 +669,94 @@ assert_refused_start 'FR5: config browser.contextOptions.permissions refuses to 
 printf '{"browser": {"contextOptions": {"ignoreHTTPSErrors": true}}}\n' > "$WORK/cfg-ctxhttps.json"
 r="$(session cfgctxhttps "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-ctxhttps.json")"
 assert_refused_start 'FR5: config browser.contextOptions.ignoreHTTPSErrors refuses to start' "$r" 'ignoreHTTPSErrors'
+# A proxy would read the plain-http page.request hand-off to 127.0.0.1 (#12931 Phase 5, CTO S1 2026-11-28).
+printf '{"browser": {"contextOptions": {"proxy": {"server": "http://127.0.0.1:3128"}}}}\n' > "$WORK/cfg-ctxproxy.json"
+r="$(session cfgctxproxy "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-ctxproxy.json")"
+assert_refused_start 'FR5: config browser.contextOptions.proxy refuses to start' "$r" 'contextOptions.proxy'
+printf '{"browser": {"launchOptions": {"proxy": {"server": "http://127.0.0.1:3128"}}}}\n' > "$WORK/cfg-loproxy.json"
+r="$(session cfgloproxy "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-loproxy.json")"
+assert_refused_start 'FR5: config browser.launchOptions.proxy refuses to start' "$r" 'launchOptions.proxy'
+printf '{"browser": {"contextOptions": {"recordHar": {"path": "/tmp/x.har"}}}}\n' > "$WORK/cfg-ctxhar.json"
+r="$(session cfgctxhar "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-ctxhar.json")"
+assert_refused_start 'FR5: config browser.contextOptions.recordHar refuses to start' "$r" 'recordHar'
+printf '{"browser": {"contextOptions": {"extraHTTPHeaders": {"origin": "https://dash.cloudflare.com"}}}}\n' > "$WORK/cfg-ctxhdrs.json"
+r="$(session cfgctxhdrs "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-ctxhdrs.json")"
+assert_refused_start 'FR5: config browser.contextOptions.extraHTTPHeaders refuses to start' "$r" 'extraHTTPHeaders'
+# A persistent profile (both registrations) launches with {...launchOptions, ...contextOptions}, so every
+# context-level key placed under launchOptions takes effect too (coreBundle.js createPersistentBrowser, 0.0.78).
+for key_val in 'recordHar:{"path": "/tmp/x.har"}' 'ignoreHTTPSErrors:true' 'extraHTTPHeaders:{"origin": "x"}' \
+  'storageState:"/tmp/s.json"' 'permissions:["clipboard-read"]'; do
+  key="${key_val%%:*}"; val="${key_val#*:}"
+  printf '{"browser": {"launchOptions": {"%s": %s}}}\n' "$key" "$val" > "$WORK/cfg-lo-$key.json"
+  r="$(session "cfglo-$key" "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-lo-$key.json")"
+  assert_refused_start "FR5: config browser.launchOptions.$key (persistent spread) refuses to start" "$r" "launchOptions.$key"
+done
+for envvar in NODE_OPTIONS NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED; do
+  r="$(session "sinkenv-$envvar" "$PROXY" --env "$envvar=0" --send "$INIT" --end eof --expect-death)"
+  assert_refused_start "FR5: $envvar refuses to start (CTO R1)" "$r" "$envvar is set"
+done
+# CTO U4: --chromium-fallback runs Chrome for Testing from Playwright's download dir; these names redirect it.
+for envvar in PLAYWRIGHT_BROWSERS_PATH npm_config_playwright_browsers_path NPM_CONFIG_PLAYWRIGHT_BROWSERS_PATH npm_package_config_playwright_browsers_path NPM_PACKAGE_CONFIG_PLAYWRIGHT_BROWSERS_PATH; do
+  r="$(session "sinkenv-$envvar" "$PROXY" --env "$envvar=/tmp/pw" --send "$INIT" --end eof --expect-death)"
+  assert_refused_start "FR5: $envvar refuses to start (CTO U4; npm names match case-insensitively)" "$r" "$envvar is set"
+done
+# The server reads a .ini path with its INI parser and falls back to INI when JSON.parse rejects the file, so
+# the proxy refuses an .ini path and the NaN/Infinity constants Python's json accepts and JSON.parse does not.
+printf '{"browser": {}}\n' > "$WORK/cfg.ini"
+r="$(session cfgini "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg.ini")"
+assert_refused_start 'FR5: an .ini config path refuses to start' "$r" '.ini file'
+printf '{"browser": {"launchOptions": {"timeout": NaN}}}\n' > "$WORK/cfg-nan.json"
+r="$(session cfgnan "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-nan.json")"
+assert_refused_start 'FR5: a config carrying NaN (not JSON to the server) refuses to start' "$r" 'not JSON'
+# --allow-proxy-and-node-env (CTO U1, 2026-11-28): the plugin registration passes it so a corporate-proxy or extra-CA
+# host can still browse; it turns off exactly the proxy and NODE_* refusals, and every other refusal still fires.
+APNE=(--proxy-arg --allow-proxy-and-node-env)
+for envvar in NODE_OPTIONS NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED PLAYWRIGHT_MCP_PROXY_SERVER PLAYWRIGHT_MCP_PROXY_BYPASS PLAYWRIGHT_BROWSERS_PATH NPM_CONFIG_PLAYWRIGHT_BROWSERS_PATH NPM_PACKAGE_CONFIG_PLAYWRIGHT_BROWSERS_PATH; do
+  r="$(session "apne-$envvar" "$PROXY" "${APNE[@]}" --env "$envvar=0" --send "$INIT" --end eof --timeout 3)"
+  assert_true "U1: --allow-proxy-and-node-env lets $envvar start" started "$r"
+done
+for flag in --proxy-server --proxy-bypass; do
+  r="$(session "apne$flag" "$PROXY" "${APNE[@]}" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" "$flag=http://127.0.0.1:3128")"
+  assert_true "U1: --allow-proxy-and-node-env lets $flag=<v> start" started "$r"
+done
+for scope in ctx lo; do
+  r="$(session "apne-cfg$scope" "$PROXY" "${APNE[@]}" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-${scope}proxy.json")"
+  assert_true "U1: --allow-proxy-and-node-env lets a config $scope proxy start" started "$r"
+done
+r="$(session apne-storage "$PROXY" "${APNE[@]}" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --storage-state=/x)"
+assert_refused_start 'U1: with --allow-proxy-and-node-env, --storage-state still refuses' "$r" '--storage-state'
+r="$(session apne-udd "$PROXY" "${APNE[@]}" --env PLAYWRIGHT_MCP_USER_DATA_DIR=/tmp/p --send "$INIT" --end eof --expect-death)"
+assert_refused_start 'U1: with --allow-proxy-and-node-env, PLAYWRIGHT_MCP_USER_DATA_DIR still refuses' "$r" 'PLAYWRIGHT_MCP_USER_DATA_DIR'
+r="$(session apne-har "$PROXY" "${APNE[@]}" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-lo-recordHar.json")"
+assert_refused_start 'U1: with --allow-proxy-and-node-env, a config launchOptions.recordHar still refuses' "$r" 'launchOptions.recordHar'
+r="$(session apne-debugfile "$PROXY" "${APNE[@]}" --env DEBUG_FILE=/tmp/d --send "$INIT" --end eof --expect-death)"
+assert_refused_start 'U1: with --allow-proxy-and-node-env, DEBUG_FILE still refuses' "$r" 'DEBUG_FILE'
+r="$(session apne-twice "$PROXY" "${APNE[@]}" "${APNE[@]}" --send "$INIT" --end eof --expect-death)"
+assert_refused_start 'U1: --allow-proxy-and-node-env given twice refuses to start' "$r" 'twice'
+# U2 (CTO, 2026-11-28): each refusal names its remedy.
+r="$(session u2-node "$PROXY" --env NODE_EXTRA_CA_CERTS=/tmp/ca.pem --send "$INIT" --end eof --expect-death)"
+assert_refused_start 'U2: a NODE_* refusal says to unset it before the re-mint sitting and names the plugin server' "$r" 'To fix: unset NODE_EXTRA_CA_CERTS in the shell that starts Claude Code before the Cloudflare re-mint sitting; for normal browsing use the plugin `playwright` server, which allows it'
+assert_true 'U2: the NODE_* remedy names the variable, never its value' bash -c '! grep -qF "/tmp/ca.pem" "$1/stderr.txt"' _ "$r"
+r="$(session apne-eq "$PROXY" --proxy-arg --allow-proxy-and-node-env=1 --send "$INIT" --end eof --expect-death)"
+assert_refused_start 'U1: --allow-proxy-and-node-env=1 is not the flag and refuses to start' "$r" 'unrecognised proxy flag'
+r="$(session apne-after-sep "$PROXY" --env NODE_EXTRA_CA_CERTS=/tmp/ca.pem --send "$INIT" --end eof --expect-death --server python3 "$STUB" --allow-proxy-and-node-env)"
+assert_refused_start 'U1: the flag after `--` (a server arg) relaxes nothing' "$r" 'NODE_EXTRA_CA_CERTS is set'
+r="$(session u2-cfgproxy "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-ctxproxy.json")"
+assert_refused_start 'U2: a config proxy refusal names the key and the plugin server' "$r" 'To fix: remove browser.contextOptions.proxy from the server args or the --config file before the Cloudflare re-mint sitting; for normal browsing use the plugin `playwright` server'
+r="$(session u2-storage "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --storage-state=/x)"
+assert_refused_start 'U2: any other argv refusal says to remove the flag' "$r" 'To fix: remove --storage-state from the server args or the --config file'
+assert_true 'U2: a non-relaxable refusal never points at the plugin server' bash -c '! grep -qF "plugin \`playwright\`" "$1/stderr.txt"' _ "$r"
+r="$(session u2-cfgini "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg.ini")"
+assert_refused_start 'U2: the .ini refusal says to rewrite the config as JSON' "$r" 'To fix: rewrite the config as a JSON file'
+# SINK_FLAGS parity: every argv flag the proxy refuses has an FR5 pair in this file.
+sinkflags="$(python3 -I -c 'import ast,sys; t=ast.parse(open(sys.argv[1]).read()); print("\n".join(e.elts[0].value for n in ast.walk(t) if isinstance(n, ast.Assign) and any(getattr(x,"id","")=="SINK_FLAGS" for x in n.targets) for e in n.value.elts))' "$PROXY_SHIPPED")"
+missing=""; nflags=0
+while IFS= read -r fl; do
+  [[ -n "$fl" ]] || continue; nflags=$((nflags + 1))
+  case "$fl" in --save-session|--allow-unrestricted-file-access) continue ;; esac  # covered by their own cases above
+  grep -qF -- "'$fl:PLAYWRIGHT_MCP_" "$0" || missing="$missing $fl"
+done <<< "$sinkflags"
+assert_true "FR5 parity: every SINK_FLAGS flag ($nflags) has an FR5 pair (missing:${missing:- none})" test -z "$missing" -a "$nflags" -ge 19
 printf '{"browser": {"launchOptions": {"chromiumSandbox": false}}}\n' > "$WORK/cfg-sandbox.json"
 r="$(session cfgsandbox "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-sandbox.json")"
 assert_refused_start 'FR5: config browser.launchOptions.chromiumSandbox refuses to start' "$r" 'chromiumSandbox'
@@ -1119,8 +1209,8 @@ mutant 40-debug-wildcard debug_pattern_enables_pw '        if ch == "*":
             return True' '        if False:
             return True'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m40 "$MUTANT_PATH" --env 'DEBUG=*:response' --send "$INIT" --end eof --timeout 3)"; red 'row 40: debug wildcard not modelled → DEBUG=*:response starts' started "$r"; fi
-mutant 41-ini-config-skipped refuse_argv_and_env '            refuse_start("the config file is not JSON, so its raw-sink settings cannot be checked")' '            cfg = {}'
-if [[ -n "$MUTANT_PATH" ]]; then r="$(session m41 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-save.ini")"; red 'row 41: a non-JSON config skipped → an INI saveSession starts' started "$r"; fi
+mutant 41-ini-config-skipped refuse_argv_and_env '            refuse_start("the config file is not JSON, so its raw-sink settings cannot be checked", "To fix: rewrite the config as plain JSON (no NaN or Infinity) and pass that to --config")' '            cfg = {}'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m41 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-save.conf")"; red 'row 41: a non-JSON config skipped → an INI saveSession starts' started "$r"; fi
 mutant 42-port refuse_argv_and_env 'if argv_values(server, "--port") or flag_present(server, "--port") or env.get("PLAYWRIGHT_MCP_PORT"):' 'if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m42 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --port 8931)"; red 'row 42: --port check removed → proxy starts' started "$r"; fi
 mutant 43-caps refuse_argv_and_env 'if caps_open_sinks(argv_values(server, "--caps")) or caps_open_sinks([env.get("PLAYWRIGHT_MCP_CAPS", "")]):' 'if False:'
@@ -1189,9 +1279,7 @@ mutant 74-err-code-any vet_error '        if not isinstance(err.get("code"), int
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m74 "$MUTANT_PATH" --env FAKE_PW_RESULT_FILE="$ODD/error-code-bool.json" --send "$INIT" --send "$SNAP" --end eof)"; red 'row 74: the code-type check dropped → a boolean error code is relayed verbatim' bash -c '[[ "$(fact "$1" 3 found)" == "1" && "$(fact "$1" 3 jsonrpc_error)" == "1" ]]' _ "$r"; fi
 mutant 75-other-unvetted vet_other_result '        if any(self.looks_like_a11y_tree(s) or self.redact_text(s) != s for s in json_strings(msg)):' '        if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m75 "$MUTANT_PATH" --env FAKE_PW_PING_RESULT_FILE="$WORK/ping-tree.json" --send "$INIT" --send "$PING" --end eof)"; red 'row 75: the non-tools/call scan dropped → a ping result carries the tree to the client' leaks "$r" 40; fi
-mutant 76-cfg-ctx-off refuse_argv_and_env '            ctx = browser.get("contextOptions")
-            if isinstance(ctx, dict):' '            ctx = browser.get("contextOptions")
-            if False:'
+mutant 76-cfg-ctx-off refuse_argv_and_env '            for scope in ("contextOptions", "launchOptions"):' '            for scope in ("launchOptions",):'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m76 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-ctxstorage.json")"; red 'row 76: the contextOptions arm dropped → a config storageState starts' started "$r"; fi
 mutant 77-cfg-sandbox-ok refuse_argv_and_env '                if lo.get("chromiumSandbox") is False:' '                if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m77 "$MUTANT_PATH" --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-sandbox.json")"; red 'row 77: the chromiumSandbox check dropped → a config disabling the sandbox starts' started "$r"; fi
@@ -1214,14 +1302,30 @@ if [[ -n "$MUTANT_PATH" ]]; then
   m83_diverges() { python3 "$FBCHK" "$WORK/m83-present" once || python3 "$FBCHK" "$WORK/m83-absent" none; }   # a host with Chrome diverges on the absent row, one without on the present row
   red 'row 83: the path-list seam ignored → the known-path list decides, so one of the two seam rows diverges' m83_diverges
 fi
-mutant 84-fallback-twice-allowed take_chromium_fallback '            if found:' '            if False:'
+mutant 84-fallback-twice-allowed take_bool_flag '            if found:' '            if False:'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m84 "$MUTANT_PATH" --proxy-arg --chromium-fallback --proxy-arg --chromium-fallback --send "$INIT" --end eof --timeout 3)"; red 'row 84: the duplicate-flag check removed → --chromium-fallback twice starts' started "$r"; fi
 mutant 85-ping-env-stripped __init__ 'stderr=None, bufsize=0, start_new_session=True)' 'stderr=None, bufsize=0, start_new_session=True, env={k: v for k, v in os.environ.items() if k != "PLAYWRIGHT_MCP_PING_TIMEOUT_MS"})'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m85 "$MUTANT_PATH" --env PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0 --env FAKE_PW_ENV_ECHO=1 --send "$INIT" --end eof)"; red 'row 85: a child-env allowlist that drops the ping variable → the server starts without it' bash -c 'started "$1" && stderr_has "$1" "PLAYWRIGHT_MCP_PING_TIMEOUT_MS=<unset>"' _ "$r"; fi
 mutant 86-fallback-drops-sandbox __init__ '            argv += ["--browser", "chromium", "--sandbox"]' '            argv += ["--browser", "chromium"]'
 if [[ -n "$MUTANT_PATH" ]]; then session m86 "$MUTANT_PATH" "${CFB[@]}" --env "$NOCHROME" --env FAKE_PW_ARGV_OUT="$WORK/m86-argv" --send "$INIT" --end eof >/dev/null; red 'row 86: --sandbox dropped → the bundled Chromium runs with no sandbox on Linux' python3 "$FBCHK" "$WORK/m86-argv" no-sandbox-flag; fi
-EXPECTED_MUTANTS=86   # rows 1-56 without row 4, with 22a/22b; 57-65 for --user-data-dir-name; 66-77 for the sink/env/config/trailing-flag/realpath/log-scrub/vetting hardening; 78-86 for --chromium-fallback (incl. its --sandbox) and the ping-env passthrough; exactly one mutation row each
-EXPECTED_RED_ROWS=86
+mutant 87-apne-relaxes-all refuse_argv_and_env '        relaxable = flag in RELAXABLE_FLAGS' '        relaxable = True'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m87 "$MUTANT_PATH" --proxy-arg --allow-proxy-and-node-env --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --storage-state=/x)"; red 'row 87: the opt-out relaxes every sink flag → --storage-state starts under it' started "$r"; fi
+mutant 88-apne-ignored parse_argv '    own, allow_proxy_and_node_env = take_bool_flag(own, ALLOW_PROXY_FLAG)' '    own, allow_proxy_and_node_env = take_bool_flag(own, ALLOW_PROXY_FLAG)[0], False'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m88 "$MUTANT_PATH" --proxy-arg --allow-proxy-and-node-env --env NODE_EXTRA_CA_CERTS=/tmp/ca.pem --send "$INIT" --end eof --expect-death)"; red 'row 88: the opt-out parsed but ignored → NODE_EXTRA_CA_CERTS still refuses under it' bash -c '! started "$1"' _ "$r"; fi
+mutant 89-apne-env-relaxes-all refuse_argv_and_env '        relaxable = envvar in RELAXABLE_ENV' '        relaxable = True'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m89 "$MUTANT_PATH" --proxy-arg --allow-proxy-and-node-env --env PLAYWRIGHT_MCP_USER_DATA_DIR=/tmp/p --send "$INIT" --end eof --timeout 3)"; red 'row 89: the opt-out relaxes every env-only row → PLAYWRIGHT_MCP_USER_DATA_DIR starts under it' started "$r"; fi
+mutant 90-apne-cfg-relaxes-all refuse_argv_and_env '                        if key == "proxy" and allow_proxy_and_node_env:' '                        if allow_proxy_and_node_env:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m90 "$MUTANT_PATH" --proxy-arg --allow-proxy-and-node-env --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-lo-recordHar.json")"; red 'row 90: the opt-out relaxes every config context key → launchOptions.recordHar starts under it' started "$r"; fi
+mutant 91-apne-prefix-match take_bool_flag '        if a == flag:' '        if a.startswith(flag):'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m91 "$MUTANT_PATH" --proxy-arg --allow-proxy-and-node-env=1 --send "$INIT" --end eof --timeout 3)"; red 'row 91: a prefix match → --allow-proxy-and-node-env=1 starts' started "$r"; fi
+mutant 92-npm-name-case-sensitive env_names_for '    return [k for k in env if k.lower().replace("-", "_") == want]' '    return [envvar]'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m92 "$MUTANT_PATH" --env NPM_CONFIG_PLAYWRIGHT_BROWSERS_PATH=/tmp/pw --send "$INIT" --end eof --timeout 3)"; red 'row 92: the npm name matched case-sensitively → NPM_CONFIG_PLAYWRIGHT_BROWSERS_PATH starts' started "$r"; fi
+mutant 93-browsers-path-skipped refuse_argv_and_env '            if env.get(name):' '            if env.get(name) and "BROWSERS" not in name.upper():'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m93 "$MUTANT_PATH" --env PLAYWRIGHT_BROWSERS_PATH=/tmp/pw --send "$INIT" --end eof --timeout 3)"; red 'row 93: the browser-path rows skipped → PLAYWRIGHT_BROWSERS_PATH starts' started "$r"; fi
+mutant 94-npm-package-prefix-missed env_names_for '    if not envvar.startswith("npm_"):' '    if not envvar.startswith("npm_config_"):'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m94 "$MUTANT_PATH" --env NPM_PACKAGE_CONFIG_PLAYWRIGHT_BROWSERS_PATH=/tmp/pw --send "$INIT" --end eof --timeout 3)"; red 'row 94: only npm_config_ names case-folded → NPM_PACKAGE_CONFIG_PLAYWRIGHT_BROWSERS_PATH starts' started "$r"; fi
+EXPECTED_MUTANTS=94   # 87-91 for --allow-proxy-and-node-env, 92-94 for the browser-path refusals (CTO U4); rows 1-56 without row 4, with 22a/22b; 57-65 for --user-data-dir-name; 66-77 for the sink/env/config/trailing-flag/realpath/log-scrub/vetting hardening; 78-86 for --chromium-fallback (incl. its --sandbox) and the ping-env passthrough; exactly one mutation row each
+EXPECTED_RED_ROWS=94
 
 # ---------------------------------------------------------------------------
 # Guard 2 — .mcp.json routing, EXECUTABLE (scratch HOME, npx shim on PATH)
@@ -1245,7 +1349,7 @@ chmod +x "$G2/bin/npx"
 run_mcp_args() {
   local cmd="$1" tag="$2"
   : > "$G2/$tag.jsonl"
-  ( cd "$REPO_ROOT" && export SHIM_OUT="$G2/$tag.jsonl" HOME="$G2/home" PATH="$G2/bin:$PATH" && sleep 5 | timeout 20 bash -c "$cmd" >/dev/null 2>"$G2/$tag.err" ) || true
+  ( cd "$REPO_ROOT" && export SHIM_OUT="$G2/$tag.jsonl" HOME="$G2/home" PATH="$G2/bin:$PATH" PLAYWRIGHT_MCP_PROXY_CHROME_PATHS="$G2/no-chrome" && sleep 5 | timeout 20 bash -c "$cmd" >/dev/null 2>"$G2/$tag.err" ) || true
 }
 # g2_prop <jsonl> <property> — exit 0 when the property holds; 3 when the shim never ran
 g2_prop() {
@@ -1263,6 +1367,11 @@ checks = {
     "profile-once": argv.count(f"--user-data-dir={prof}") == 1 and sum(a.startswith("--user-data-dir") for a in argv) == 1,
     "config-once": argv.count("--config=.claude/playwright-mcp.config.json") == 1 and sum(a.startswith("--config") for a in argv) == 1,
     "flag-appended-once": argv[-2:] == ["--snapshot-mode", "none"] and argv.count("--snapshot-mode") == 1,
+    # CTO U3 (2026-11-28): on a host with no Google Chrome the repo registration falls back to the bundled Chromium
+    # with the sandbox ON, once, ahead of the appended --snapshot-mode, and never --no-sandbox.
+    "fallback-once": [argv[i:i + 3] for i in range(len(argv) - 2)].count(["--browser", "chromium", "--sandbox"]) == 1
+        and argv.count("--browser") == 1 and "--no-sandbox" not in argv
+        and argv.index("--browser") < argv.index("--snapshot-mode"),
 }
 sys.exit(0 if checks[prop] else 1)
 PY
@@ -1273,7 +1382,7 @@ MCP_ARG0="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['mcp
 assert_true 'Guard 2: .mcp.json playwright command is bash -c <string>' test "$MCP_ARG0" = "-c"
 assert_true 'Guard 2: the .mcp.json string itself carries no --snapshot-mode (only the proxy may append it)' bash -c '[[ "$1" != *"--snapshot-mode"* ]]' _ "$MCP_ARGS"
 run_mcp_args "$MCP_ARGS" g2
-for prop in one-call parent-is-shipped-proxy pin-once profile-once config-once flag-appended-once; do
+for prop in one-call parent-is-shipped-proxy pin-once profile-once config-once flag-appended-once fallback-once; do
   assert_true "Guard 2: $prop" g2_prop "$G2/g2.jsonl" "$prop"
 done
 # Guard 2 mutants of the args string: each must fail its property while the shim DID run
@@ -1285,7 +1394,7 @@ g2_mut() {  # <label> <mutated-args> <tag> <property>
   local rc=0; g2_prop "$G2/$tag.jsonl" "$prop" || rc=$?
   if [[ $rc == 1 ]]; then ok "$label"; elif [[ $rc == 3 ]]; then bad "$label — the shim never ran"; else bad "$label — mutant survived"; fi
 }
-PROXY_REL='python3 plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py -- '
+PROXY_REL='python3 plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py --chromium-fallback -- '
 g2_mut 'Guard 2 mutant 1: proxy removed → the parent is not the shipped proxy' "${MCP_ARGS/"$PROXY_REL"/}" g2m1 parent-is-shipped-proxy
 M2="$(python3 -c 'import sys; s,p=sys.argv[1],sys.argv[2]; i=s.index(p); s=s[:i]+s[i+len(p):]; print(s.rstrip()+" -- "+p.strip(" -"))' "$MCP_ARGS" "$PROXY_REL")"
 g2_mut 'Guard 2 mutant 2: proxy AFTER the server → the parent is not the shipped proxy' "$M2" g2m2 parent-is-shipped-proxy
@@ -1295,6 +1404,7 @@ g2_mut 'Guard 2 mutant 6: a passthrough saved under the proxy'"'"'s filename →
 g2_mut 'Guard 2 mutant 7: an unwrapped npx run before the wrapped one → two calls' "${MCP_ARGS/exec env/npx @playwright/mcp@$PIN --probe; exec env}" g2m7 one-call
 g2_mut 'Guard 2 mutant 8: a second --config later in the args → config not once' "${MCP_ARGS/--config=.claude\/playwright-mcp.config.json/--config=.claude/playwright-mcp.config.json --config=$G2/second-config.json}" g2m8 config-once
 g2_mut 'Guard 2 mutant 9: a second --user-data-dir → profile not once' "${MCP_ARGS/--user-data-dir=\"\$prof\"/--user-data-dir=\"\$prof\" --user-data-dir=/tmp/other}" g2m9 profile-once
+g2_mut 'Guard 2 mutant 11: --chromium-fallback dropped from the repo registration → a Chrome-less host gets no browser (CTO U3)' "${MCP_ARGS/ --chromium-fallback -- / -- }" g2m11 fallback-once
 g2_mut 'Guard 2 mutant 10: --snapshot-mode full in the args → flag not appended once' "${MCP_ARGS/--user-data-dir=\"\$prof\"/--snapshot-mode full --user-data-dir=\"\$prof\"}" g2m10 flag-appended-once
 assert_true 'Guard 2 mutant 5: renaming the server key fails the lookup loudly' bash -c '! python3 -c "import json,sys; d=json.load(open(sys.argv[1])); d[\"mcpServers\"][\"playwrite\"]=d[\"mcpServers\"].pop(\"playwright\"); print(d[\"mcpServers\"][\"playwright\"][\"args\"][1])" "$1" 2>/dev/null' _ "$REPO_ROOT/.mcp.json"
 # The wrapper no longer reaps: no pattern kill of the proxy, the server or Chrome, and the slot script is sourced
@@ -1319,7 +1429,7 @@ assert_true 'Guard 2: the .mcp.json launch string is exactly the pinned one (slo
 import sys
 s, slot, pin = sys.argv[1:]
 want = (f". {slot} || exit 1; exec env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 GDK_BACKEND=x11 DISPLAY=${{DISPLAY:-:0}} "
-        "python3 plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py -- "
+        "python3 plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py --chromium-fallback -- "
         f'npx @playwright/mcp@{pin} --user-data-dir="$prof" --config=.claude/playwright-mcp.config.json')
 sys.exit(0 if s == want else 1)
 PY
@@ -1341,6 +1451,7 @@ expected = [
     "--user-data-dir-name",
     "soleur-playwright-mcp-profile",
     "--chromium-fallback",
+    "--allow-proxy-and-node-env",
     "--",
     "npx",
     f"@playwright/mcp@{pin}",
@@ -1348,7 +1459,7 @@ expected = [
 sys.exit(0 if e["command"] == "python3" and e["args"] == expected else 1)
 PY
 }
-assert_true 'Guard 3: plugins/soleur/.mcp.json playwright entry is the wrapped registration (python3, ${CLAUDE_PLUGIN_ROOT} proxy, profile flag, --chromium-fallback, pin parity, sole mcpServers key)' g3_shape "$PLUGIN_MCP"
+assert_true 'Guard 3: plugins/soleur/.mcp.json playwright entry is the wrapped registration (python3, ${CLAUDE_PLUGIN_ROOT} proxy, profile flag, --chromium-fallback, --allow-proxy-and-node-env, pin parity, sole mcpServers key)' g3_shape "$PLUGIN_MCP"
 # The rest of the manifest contract — never `bash`, never `--config`, never a
 # literal `--user-data-dir` — is carried by g3_shape's exact argv equality; a
 # separate literal grep cannot fail while it passes, so it is not an assertion.
@@ -1402,6 +1513,7 @@ g3_mut 'Guard 3 mutant 3: the pin drifts from .mcp.json' 'd["mcpServers"]["playw
 g3_mut 'Guard 3 mutant 4: the proxy dropped → an unwrapped npx registration' 'd["mcpServers"]["playwright"]["args"] = ["--", "npx", "@playwright/mcp@0.0.78"]'
 g3_mut 'Guard 3 mutant 6: a second mcpServers key → not the pinned key set' 'd["mcpServers"]["other"] = {"command": "npx", "args": ["x"]}'
 g3_mut 'Guard 3 mutant 7: --chromium-fallback dropped → a Chrome-less host gets no browser' 'd["mcpServers"]["playwright"]["args"].remove("--chromium-fallback")'
+g3_mut 'Guard 3 mutant 8: --allow-proxy-and-node-env dropped → a corporate-proxy host gets no plugin browser (CTO U1)' 'd["mcpServers"]["playwright"]["args"].remove("--allow-proxy-and-node-env")'
 assert_true 'Guard 3 mutant 5: renaming the server key fails the lookup loudly' bash -c '! python3 -c "import json,sys; d=json.load(open(sys.argv[1])); d[\"mcpServers\"][\"playwrite\"]=d[\"mcpServers\"].pop(\"playwright\"); print(d[\"mcpServers\"][\"playwright\"][\"args\"][0])" "$1" 2>/dev/null' _ "$PLUGIN_MCP"
 
 # PR2 (#10331): the swallowed-error note carries a class name and a literal site label only, never raises,

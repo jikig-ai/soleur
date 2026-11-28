@@ -196,9 +196,9 @@ sink hand-off), `p5-revoke.js` (the guarded delete, section 7, and the `retire` 
 
 ```text
 p5-read.js sha256=fbcab106aec79f28883a04d2dbf00dd0d933ff832001b09aecd17b7ed2ded5ad
-p5-mint.js sha256=9c9bf619a9c66cfddff7077b17da94d5d7b93f2deda736931657c1f72fc41d3d
+p5-mint.js sha256=63f678b5ff58246c4422037ee3dfd1d03ef0e13e7c38b756b8ec18c560a513d6
 p5-revoke.js sha256=950193b2afd3af7acf5fbb34792f918df64a086bf9e928dae407eece62eec2c3
-p5-sink.py sha256=86791b8f5f8249997b3893276c4c7d45600a92c551208e6004f7d59549e43c25
+p5-sink.py sha256=67d960eb4bbfe73165019f89fbdf0c4ca39b89dcca7333821954fa28d9cbe94a
 ```
 
 Each JS file is one expression `(args) => async (page) => {...}` that takes a single JSON argument object. The
@@ -227,10 +227,32 @@ checkout root; `.playwright-mcp/` is gitignored. The tool echoes the code it ran
 ids, names, dates and the sink URL, never a secret. Placeholders: `<YYYYMMDD>` is the mint date
 (UTC); `<scratchpad>` is the absolute path of this session's scratchpad directory.
 
-**Before the sitting.** `Agent:` confirm the Playwright MCP server the session uses carries none of `--save-trace`,
-`--save-har`, `--save-session`, `--save-video`: run `claude mcp get playwright` (and `claude mcp get
-plugin:soleur:playwright` for the plugin server) and read its args. During the sitting, call no
-`browser_network_request`, `browser_network_requests`, `browser_console_messages`, snapshot or screenshot.
+**Before the sitting.** `Agent:` use the repo `playwright` MCP server (`.mcp.json`), restarted (a full Claude Code
+restart, not `/mcp` reconnect) from a checkout that carries this runbook's section 5 shas, so the redact proxy that
+launched it refuses, at start, every setting that could proxy, record or MITM the `page.request` hand-off:
+`--proxy-server`, `--proxy-bypass`, `--save-trace`, `--save-session`, `--save-video` (0.0.78 has only
+`--save-session`; the proxy refuses the other names anyway), their `PLAYWRIGHT_MCP_*` env twins, `NODE_OPTIONS`,
+`NODE_EXTRA_CA_CERTS`, `NODE_TLS_REJECT_UNAUTHORIZED`, an `.ini` config, and config `proxy`, `recordHar`,
+`extraHTTPHeaders`, `ignoreHTTPSErrors` under `contextOptions` or `launchOptions` (CTO S1, R1). Then confirm it:
+`claude mcp get playwright` (read the args; they must contain `--chromium-fallback` and must not contain
+`--allow-proxy-and-node-env`, which turns the proxy and `NODE_*` refusals off and belongs to the plugin
+`plugin:soleur:playwright` server only, CTO U1 and U3), `env | grep -iE '^(PLAYWRIGHT_MCP_|PLAYWRIGHT_BROWSERS_PATH|npm_(package_)?config_playwright_browsers_path|NODE_OPTIONS|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED)='`
+(expect only `PLAYWRIGHT_MCP_PING_TIMEOUT_MS`), `npm config get playwright_browsers_path` run from the repo root, which is npx's working directory, so the project
+`.npmrc` is read too (expect `undefined`: the
+proxy cannot see a value set in an `.npmrc`, because npx applies it after the proxy's check, so this read is the only
+check for it, CTO U4) and the `--config` file it names. The restart also gives a fresh
+browser, so no earlier `browser_run_code_unsafe` call left a trace running or `page.request` patched (CTO R2; the
+mint body also stops a trace and refuses `tampered`). A `.mcp.json` change takes effect only after a full Claude Code
+restart, never a `/mcp` reconnect (it reuses the cached command). On a host with no Google Chrome the repo server
+runs Playwright's Chrome for Testing build with its sandbox on (`--chromium-fallback`, CTO U3); if the first browser
+call reports a sandbox failure or "Executable doesn't exist", stop and install Google Chrome, never pass
+`--no-sandbox` and never switch servers. The
+repo server uses its own browser profile, not the plugin server's, so the operator signs in to the Cloudflare
+dashboard again in that browser before the first body runs. Run every body through the repo server's
+`mcp__playwright__browser_run_code_unsafe`, never `mcp__plugin_soleur_playwright__*`: the plugin server passes
+`--allow-proxy-and-node-env`, so it starts under a proxy or `NODE_*` setting the repo server refuses (CTO U1). During
+the sitting, call no `browser_run_code_unsafe` other than the composed run files, and no `browser_network_request`, `browser_network_requests`, `browser_console_messages`,
+snapshot or screenshot.
 
 **Owner and name.** Account-owned on the Soleur account (`"owner":"account"`). Name `<key>-soleur-<YYYYMMDD>`, with `<key>` the lowercase key
 name (for example `cf_api_token_audit-soleur-20261204`). `expires_on` equal to the 0a/0b expiry, read with:
@@ -249,14 +271,18 @@ endpoint). `verdict=no-read`, or no `success=true` line: stop; the read decided 
    `python3 -I "$(dirname <B>)/p5-sink.py" --out "<scratchpad>/<key>.tok"`, and read the `url=` from that task's
    output. The sink lives 15 minutes and takes one request; a sink that timed out or answered once needs a new sink,
    a new URL and a new go. It prints
-   `SOLEUR_P5_SINK url=http://127.0.0.1:<port>/<nonce>`, then exactly one result line: `result=written` (exit 0),
-   `result=refused reason=<r>` (exit 1 or 2) or `result=timeout` (exit 3). It accepts one POST from 127.0.0.1 with
-   no `Origin` header, writes the value to a new mode-0600 file and never prints it.
+   `SOLEUR_P5_SINK url=http://127.0.0.1:<port>/<nonce>#<answer>` (that whole value is the hold's `<sink>`), then
+   exactly one result line: `result=written` (exit 0), `result=refused reason=<r>` (exit 1 or 2) or
+   `result=timeout` (exit 3). It accepts one POST from 127.0.0.1 with no `Origin` header, writes the value to a new
+   mode-0600 file, never prints it, and answers with exactly `<answer>`, a fresh 32-character value the mint body
+   requires (the fragment is never sent), so a process that rebound the port cannot fake the reply (CTO R3).
 2. The mint hold (section 6) runs `p5-mint.js` with the argument object the hold names. The body reads the permission
    groups, refuses an existing token of the same name, POSTs the token with the session `x-atok`, reads the stored
-   policy back, and only then hands the value to the sink by a Node-side `fetch` (never `page.request`, so no trace
-   or HAR records it). Any failure after the POST deletes every token of that name in the same body. It returns only
-   the shapes in the browser returns table below: never the value, the atok or a full id.
+   policy back, and only then hands the value to the sink by a Node-side `page.request.post` (no redirect followed; the
+   `browser_run_code_unsafe` context has no global `fetch`, measured 2026-11-28; the redact proxy refuses every
+   recording or proxy setting at start, CTO N2 and S1). Any failure after the POST deletes every token of
+   that name in the same body. It returns only the shapes in the browser returns table below: never the value, the
+   atok or a full id.
 3. `Agent:` on `success:true` with an `id8`, and the sink's `result=written`, post on #12931 one comment whose first
    line is `P5-MINTED key=<KEY> pin=<the pin> id8=<id8> name=<name> owner=<account|user>` (CTO D9), before the
    `_NEXT` write. The swap go and the revoke
@@ -327,6 +353,7 @@ exist means a live token nothing holds: list it by name and delete it in the sam
 | `{atok:false}` | the session is signed out, or the dashboard set no atok within the body's 15 s wait | sign in (or reload the dashboard tab), then a new sink and a new go |
 | `{refused:"args:<field>"}` | an argument is wrong; no request was sent | fix the argument object, new go |
 | `{refused:"origin"}` | the page is not on dash.cloudflare.com | open the dashboard, new go |
+| `{refused:"tampered"}` | an earlier `browser_run_code_unsafe` call left `page.request` patched or replaced; nothing was sent | restart Claude Code (a fresh Playwright MCP server and browser), then a new sink and a new go |
 | `{refused:"groups",matches:<n>}` | only n of the asked names resolved to exactly one selectable group | re-read the groups (section 4); a group the account list lacks is the user-owned fallback |
 | `{refused:"listing"}` | the token list did not end within 20 pages | stop; post it on #12931 |
 | `{refused:"old-owner-login",matches:<n>}` | a user mint run under the old-account-owner login | sign in as another login |
@@ -338,10 +365,11 @@ exist means a live token nothing holds: list it by name and delete it in the sam
 
 | Return | Meaning | Next |
 |---|---|---|
-| `{status,contentType,success:true,id8}` | minted, read-back passed, the sink answered `ok` | post `P5-MINTED`, then the `_NEXT` write |
+| `{status,contentType,success:true,id8}` | minted, read-back passed, the sink answered its printed `<answer>` | post `P5-MINTED`, then the `_NEXT` write |
 | `{refused:"mint",status:403,contentType:"text/html",success:true,matches:0}` | the dashboard edge refused the write. Up to sha `6a8a8999` the body sent the token POST in-page, and the edge refused that in-page write (measured 2026-11-28, twice); this body sends it Node-side, as the cleanup DELETE always was, so an HTML 403 here means the edge refused that too. The cleanup proved nothing stored | stop the mint: post `status`, `contentType` and the cleanup verdict on #12931; no re-mint in this sitting |
 | `{refused:"mint",status:403,contentType:"application/json",...}` | the API refused the signed-in login (role or permission) | stop the mint; sign in as a login that can create this owner's tokens, under a fresh go |
 | `{refused:"mint"\|"mint-shape"\|"readback"\|"sink",...,success:true,matches:0}` (any other `status`) | the POST failed, gave no id or value, the stored policy differs, or the hand-off failed; the cleanup deleted every token of that name and id | new sink, re-mint |
+| `{refused:"sink",...,success:true}` while the sink printed `result=written` | the sink wrote the file but its answer did not reach the body as the printed `<answer>` (a mismatch or a read error); the cleanup deleted the token, so the `.tok` holds a dead value | never stage it: shred the `.tok` (`shred -u`), then a new sink and a new go |
 | the same with `success:false` | the cleanup could not prove the token gone: a token MAY exist that nothing holds | stop the mint; list it by name and retire it (section 12) before any re-mint |
 | `{error:<name>,...,success:true}` / `success:false` | a throw after the POST, cleanup as above | as the two rows above |
 
@@ -422,13 +450,13 @@ Placeholders, each filled before the go and quoted in it:
   `dd6d1427`, `5993721f`).
 
 Each `_NEXT` write runs only after that key's mint returned `success:true` with an `id8` and its sink printed
-`result=written`, after its `P5-MINTED` record is posted (section 5 step 3), and after a same-sitting inventory printed `SOLEUR_P5_STAGED key=<KEY> next=absent` (so it never
+`result=written` (never on a `refused:"sink"`, even when the sink wrote the file), after its `P5-MINTED` record is posted (section 5 step 3), and after a same-sitting inventory printed `SOLEUR_P5_STAGED key=<KEY> next=absent` (so it never
 overwrites the only copy of an earlier minted token); the `[ -s ... ]` test refuses a missing or empty `.tok`. Each mint go cites the #12931 `P5-SCOPE`
 comment. The swap go quotes, per key, the `new_id=` and `owner=` on the plan's `copy-staged-token` operation line,
 which must equal that key's `P5-MINTED` `id8=` and `owner=` (CTO D5, D9); a key whose plan has no
 `copy-staged-token` line (an interrupted swap that only deletes `_NEXT`) has nothing to quote. In order:
 
-- Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_PAGERULES_READ`: `p5-mint.js` (sha256=9c9bf619a9c66cfddff7077b17da94d5d7b93f2deda736931657c1f72fc41d3d) with `{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_pagerules_read-soleur-<YYYYMMDD>","zone_groups":<zone groups>,"account_groups":[],"expires_on":"<expiry>","sink_url":"<sink>"}`, then `[ -s "<scratchpad>/cf_api_token_pagerules_read.tok" ] && LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_pagerules_read.tok" | doppler secrets set CF_API_TOKEN_PAGERULES_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
+- Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_PAGERULES_READ`: `p5-mint.js` (sha256=63f678b5ff58246c4422037ee3dfd1d03ef0e13e7c38b756b8ec18c560a513d6) with `{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_pagerules_read-soleur-<YYYYMMDD>","zone_groups":<zone groups>,"account_groups":[],"expires_on":"<expiry>","sink_url":"<sink>"}`, then `[ -s "<scratchpad>/cf_api_token_pagerules_read.tok" ] && LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_pagerules_read.tok" | doppler secrets set CF_API_TOKEN_PAGERULES_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
 - Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_AUDIT`: `p5-mint.js` (same sha256) with `{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_audit-soleur-<YYYYMMDD>","zone_groups":<zone groups>,"account_groups":<account groups>,"expires_on":"<expiry>","sink_url":"<sink>"}`, then `[ -s "<scratchpad>/cf_api_token_audit.tok" ] && LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_audit.tok" | doppler secrets set CF_API_TOKEN_AUDIT_NEXT -p soleur -c prd_terraform --silent > /dev/null`
 - Hold: Operator-authorizes: owner mint of `CF_API_TOKEN_ANALYTICS_READ` (account-owned): `p5-mint.js` (same sha256) with `{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_analytics_read-soleur-<YYYYMMDD>","zone_groups":<zone groups>,"account_groups":[],"expires_on":"<expiry>","sink_url":"<sink>"}`, then `[ -s "<scratchpad>/cf_api_token_analytics_read.tok" ] && LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_analytics_read.tok" | doppler secrets set CF_API_TOKEN_ANALYTICS_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
 - Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_AUDIT -p soleur -c dev_personal --yes > /dev/null` (CTO F20), only after a `bash <B> --stage inventory` run in this sitting printed `SOLEUR_P5_HOLDER project=soleur config=dev_personal key=CF_API_TOKEN_AUDIT value=old`. Rollback (that row proved the deleted value is the old token), with `<src>` = `CF_API_TOKEN_AUDIT_PREV` when that inventory printed `SOLEUR_P5_REFERENCE key=CF_API_TOKEN_AUDIT source=PREV`, else `CF_API_TOKEN_AUDIT`: `set -o pipefail; doppler secrets get <src> -p soleur -c prd_terraform --plain | LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' | doppler secrets set CF_API_TOKEN_AUDIT -p soleur -c dev_personal --silent > /dev/null`, then a same-sitting inventory that must print that config's row `value=old`

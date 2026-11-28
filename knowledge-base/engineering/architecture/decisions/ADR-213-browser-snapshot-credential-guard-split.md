@@ -637,3 +637,31 @@ The exclusion is pinned by two Guard-3 rows in the proxy suite.
 ## Addendum — 2026-10-04 (ADR-271): the opt-in `--chromium-fallback` flag and the inert ping-timeout guard
 
 The proxy gains one opt-in boolean flag, `--chromium-fallback` (before `--`), which appends `--browser chromium --sandbox` to the server argv when no `--browser` is given, `PLAYWRIGHT_MCP_BROWSER` is unset and no Google Chrome executable exists at the platform path, so a Chrome-less host gets Playwright's bundled Chromium with the Chromium sandbox kept on instead of a launch failure; where the host cannot run that sandbox the launch fails closed. `plugins/soleur/.mcp.json` sets it; both registrations also gain `"env": {"PLAYWRIGHT_MCP_PING_TIMEOUT_MS": "0"}`, an inert guard on stdio in `@playwright/mcp` 0.0.78 and 0.0.83. No sink, guarantee or refusal in this ADR changes: `--no-sandbox`, `PLAYWRIGHT_MCP_SANDBOX` and config `chromiumSandbox:false` remain refused, so the fallback never selects the one setting class the proxy forbids; `--browser` is not a sink flag, `--executable-path` stays refused, and with the flag absent the child argv is byte-identical to before. The measurements above of a SIGKILLed Claude parent, a SIGKILLed `playwright-mcp` and a stale `SingletonLock` (the 2026-09-18 addendum, "Caveats, stated") are prior evidence that a browser does not outlive its launcher, but the "reaped by the same group teardown" wording attributes Chrome's end to `killpg` by a live proxy, a different mechanism from the proxy-SIGKILL case that ADR-271 re-measured (headless bundled Chromium only); ADR-271 Decision 2 records that Playwright spawns Chrome detached, outside that group. ADR-271 carries the rationale, the sandbox verification and the guard's reasoning.
+
+## Addendum — 2026-11-28 (#12931 Phase 5): the startup refusals cover `page.request` too
+
+A `browser_run_code_unsafe` body (#12931 Phase 5 `p5-mint.js`) now carries a minted Cloudflare token to a
+127.0.0.1 sink through `page.request`. That is plain http on loopback, sent from the server process, so the startup
+check (i) grows to cover what can proxy, record or MITM `page.request`. The new refusals are:
+
+- `--proxy-server`, `--proxy-bypass` and their `PLAYWRIGHT_MCP_*` twins. playwright-core skips a proxy only for
+  an explicit bypass list, and has no loopback default.
+- `NODE_OPTIONS`, `NODE_EXTRA_CA_CERTS` and `NODE_TLS_REJECT_UNAUTHORIZED` in the env.
+- An `.ini` config path, and a JSON config carrying `NaN` or `Infinity`. The server reads both through its INI
+  parser, which this proxy does not vet.
+- `proxy`, `recordHar`, `extraHTTPHeaders`, `ignoreHTTPSErrors`, `storageState` and `permissions` under
+  `browser.contextOptions` **or** `browser.launchOptions`. A persistent profile, which both registrations use,
+  launches with `{...launchOptions, ...contextOptions}` (`createPersistentBrowser`, 0.0.78), so a context key placed
+  under `launchOptions` takes effect.
+
+A proxy flag before `--`, `--allow-proxy-and-node-env`, turns off exactly the proxy argv/env rows, the three `NODE_*`
+rows and the config `proxy` key; every other refusal stays. The plugin registration (`plugins/soleur/.mcp.json`)
+passes it, so a host behind a corporate proxy or an extra CA still browses; the repo `.mcp.json` registration does not,
+and the Phase 5 sitting runs on that one and checks its args. The repo registration also passes `--chromium-fallback`
+(CTO U3), so on a host with no Google Chrome it runs Chrome for Testing with the sandbox on instead of failing to start; because that
+build lives in a user-writable dir, `PLAYWRIGHT_BROWSERS_PATH` and `npm_config_playwright_browsers_path` are refused too (relaxed
+under the opt-out, CTO U4). Each startup refusal on a setting now ends with a
+`To fix:` remedy.
+
+The CTO rulings are S1, R1, U1, U2, U3 and U4 in
+`knowledge-base/project/specs/archive/20261128-193943-feat-one-shot-p5-mint-sink-page-request/decision-challenges.md`.

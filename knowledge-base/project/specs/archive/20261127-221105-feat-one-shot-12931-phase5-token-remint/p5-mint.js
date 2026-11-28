@@ -20,7 +20,9 @@
 //   zone_groups     required: array of 1..20 exact permission-group names (the P5-SCOPE set), each ending " Read"
 //   account_groups  required: array of 0..20 (AUDIT only) exact account-scope group names, each ending " Read"
 //   expires_on      required: "YYYY-MM-DDTHH:MM:SSZ", the 0a/0b expiry, no earlier than now + 30 days
-//   sink_url        required: "http://127.0.0.1:<port>/<nonce>" exactly as p5-sink.py printed it
+//   sink_url        required: "http://127.0.0.1:<port>/<nonce>#<answer>" exactly as p5-sink.py printed it. The
+//                   fragment is never sent (it is stripped before the POST); the hand-off counts only when the
+//                   sink answers exactly <answer> (CTO R3: a process that rebound the port cannot know it)
 //   refuse_ids      owner "user": REQUIRED array of 1..20 8-hex old-token pins; if any token the signed-in login
 //                   lists starts with one, the body refuses (it never mints under the old owner's login).
 //                   owner "account": must be absent.
@@ -34,8 +36,11 @@
 // (page.request.post, the atok read from the page just before it, no redirect followed); in-page GET of
 // the new token and the read-back (every resource key exactly com.cloudflare.api.account.zone.<zone> or, for
 // account groups only, com.cloudflare.api.account.<acct>; value "*"; no "*" in a key; effect allow; group set ==
-// the resolved set; name, expires_on and status active as asked); only then a Node-side `fetch` POST of the
-// value to sink_url with `redirect: "error"` (a redirect never carries the value on).
+// the resolved set; name, expires_on and status active as asked); only then a Node-side `page.request.post` of
+// the value to sink_url with `maxRedirects: 0` (a redirect never carries the value on). The browser_run_code
+// context of @playwright/mcp 0.0.78 has no global `fetch` or `AbortSignal` (measured 2026-11-28: a bare fetch
+// threw ReferenceError, so the hand-off failed and the cleanup deleted a good token), so no Node-side step here
+// may use a bare Node global; page.request reached a 127.0.0.1 listener in the same context.
 // CLEANUP. Once the POST was sent, every path but the handed-off one (an error answer, a non-JSON answer, an id
 // that is not 32-hex, a missing value, a read-back or sink failure, a throw) re-lists the owner's tokens, DELETEs
 // every token carrying exactly `name` or the id the POST answered (Node-side page.request.delete), and re-lists
@@ -102,7 +107,7 @@
   const ARG_KEYS = ['owner', 'account_id', 'zone_id', 'name', 'zone_groups', 'account_groups', 'expires_on',
     'sink_url', 'refuse_ids'];
   const REFUSALS = ['args:object', 'args:unknown', ...ARG_KEYS.map((k) => `args:${k}`), 'origin', 'groups',
-    'listing', 'old-owner-login', 'name-exists', 'mint', 'mint-shape', 'readback', 'sink'];
+    'listing', 'old-owner-login', 'name-exists', 'mint', 'mint-shape', 'readback', 'sink', 'tampered'];
 
   const safe = (r) => {
     if (!r || typeof r !== 'object') return { error: 'ShapeError' };
@@ -149,9 +154,11 @@
     || Number.isNaN(Date.parse(a.expires_on)) || Date.parse(a.expires_on) < Date.now() + 30 * 86400000) {
     return safe({ refused: 'args:expires_on' });
   }
-  if (typeof a.sink_url !== 'string' || !/^http:\/\/127\.0\.0\.1:[0-9]{1,5}\/[A-Za-z0-9_-]{16,128}$/.test(a.sink_url)) {
-    return safe({ refused: 'args:sink_url' });
-  }
+  const sinkM = typeof a.sink_url === 'string'
+    && /^(http:\/\/127\.0\.0\.1:[0-9]{1,5}\/[A-Za-z0-9_-]{16,128})#([A-Za-z0-9_-]{32})$/.exec(a.sink_url);
+  if (!sinkM) return safe({ refused: 'args:sink_url' });
+  const sinkPost = sinkM[1];
+  const sinkAnswer = sinkM[2];
   if (a.owner === 'user') {
     if (!Array.isArray(a.refuse_ids) || a.refuse_ids.length < 1 || a.refuse_ids.length > 20
       || !a.refuse_ids.every((p) => typeof p === 'string' && HEX8.test(p))) {
@@ -246,8 +253,12 @@
         });
         const contentType = ctOf(r.headers()['content-type']);
         let ok = false;
-        if (/json/.test(contentType)) {
-          try { const j = await r.json(); ok = r.status() === 200 && !!j && j.success === true; } catch (e) { ok = false; }
+        try {
+          if (/json/.test(contentType)) {
+            try { const j = await r.json(); ok = r.status() === 200 && !!j && j.success === true; } catch (e) { ok = false; }
+          }
+        } finally {
+          await r.dispose().catch(() => {});
         }
         if (!ok) {
           allDeleted = false;
@@ -303,6 +314,16 @@
     return safe({ refused: reason, ...(id !== null ? { id8: id.slice(0, 8) } : {}), ...postInfo, ...(await cleanup()) });
   };
   try {
+    // 0. the session itself (CTO R2, 2026-11-28): an earlier run_code call shares this `page`. Stop any trace it
+    //    started (a trace records request and response bodies), and refuse, before any request, a page.request
+    //    that is not the context's own or that carries an own post/delete (a monkey-patch). `page.request` is an
+    //    own property by design (playwright-core 0.0.78 sets it in the Page constructor); a patched PROTOTYPE is
+    //    invisible from here, so the runbook restarts the MCP server before the sitting.
+    await page.context().tracing.stop().catch(() => {});
+    const rq = page.request;
+    if (rq !== page.context().request || Object.hasOwn(rq, 'post') || Object.hasOwn(rq, 'delete')) {
+      return safe({ refused: 'tampered' });
+    }
     await page.goto(`${DASH}/profile/api-tokens`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => !!(window.bootstrap && window.bootstrap.atok), null, { timeout: 15000, polling: 100 }).catch(() => {});
 
@@ -360,15 +381,20 @@
     const rb = await call('GET', `${base}/${id}`);
     if (notOk(rb) || !readbackPasses(rb.json.result, zoneIds, acctIds)) return await failAfterPost('readback');
 
-    // 5. the hand-off: Node-side fetch to the one-shot 127.0.0.1 sink, no redirect followed. The value goes
-    //    nowhere else.
+    // 5. the hand-off: Node-side page.request.post to the one-shot 127.0.0.1 sink, no redirect followed. The
+    //    value goes nowhere else. The sink answers its printed `answer=` (no secret), so its answer is read with
+    //    text() and must equal the sink_url fragment exactly (CTO R3: a rebound port cannot know it).
     let sinkOk = false;
     try {
-      const sr = await fetch(a.sink_url, {
-        method: 'POST', headers: { 'content-type': 'text/plain' }, body: secret, redirect: 'error',
-        signal: AbortSignal.timeout(15000),
+      const sr = await page.request.post(sinkPost, {
+        headers: { 'content-type': 'text/plain' }, data: secret, maxRedirects: 0, failOnStatusCode: false,
+        timeout: 15000,
       });
-      sinkOk = sr.status === 200 && (await sr.text()) === 'ok';
+      try {
+        sinkOk = sr.status() === 200 && (await sr.text()) === sinkAnswer;
+      } finally {
+        await sr.dispose().catch(() => {});
+      }
     } catch (e) {
       sinkOk = false;
     }

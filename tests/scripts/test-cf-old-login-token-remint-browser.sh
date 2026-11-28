@@ -30,6 +30,13 @@
 #             The token POST is ONE Node-side page.request.post (JSON body, maxRedirects 0, failOnStatusCode
 #             false, answer never read as text, disposed); the stub answers an in-page POST or DELETE with the
 #             dashboard edge's HTML 403 (measured 2026-11-26 and 2026-11-28), so an in-page write cannot pass.
+#             The sink hand-off is ONE Node-side page.request.post (text/plain, no Origin, maxRedirects 0,
+#             failOnStatusCode false, timeout 15000, answer disposed): the run context of @playwright/mcp
+#             0.0.78 has no global fetch (measured 2026-11-28), and the emulation exposes no host global.
+#   P-noglobal N1: a trap fetch on the run context is never called on the mint, revoke and read happy paths.
+#   P-session T1-T3 (CTO R2): an own page.request.post, or a page.request that is not the context's, refuses
+#             `tampered` before any request; a running trace is stopped before the first request. M9d (CTO R3):
+#             a sink answering "ok" instead of the url fragment's answer is refused and the token deleted.
 #   P-read    p5-read.js: groups (account and user scope), policies (names, counts, key kinds only), every
 #             refusal, GET only.
 #   P-sink    binds 127.0.0.1 only; serves one request then no listener; refuses a 127.0.0.2 peer, a wrong
@@ -48,8 +55,8 @@
 #             `(<body>)(JSON.parse(<json string>))`; a JavaScript-expression argument is DATA: refused at jq
 #             or received as a string, and no side effect runs (CTO D9).
 #
-# ASSEMBLY. A node harness (written to the sandbox) emulates browser_run_code_unsafe exactly as Playwright MCP
-# does: a vm context holding only `page` and its exposed globals (no console), `(" + code + ")` evaluated, then
+# ASSEMBLY. A node harness (written to the sandbox) emulates browser_run_code_unsafe exactly as @playwright/mcp
+# 0.0.78 does: a vm context holding only `page` and `__end__` (no host global), `(" + code + ")` evaluated, then
 # called with page and JSON.stringify'd. The stub page serializes every page.evaluate function by toString()
 # into a separate "page" vm context (window.bootstrap.atok, location.origin, a stub dash fetch), so a body that
 # closes over a Node-side variable inside an in-page function fails here as it would in the browser. In-page
@@ -70,6 +77,11 @@
 #   XM7 mint paging ends on the requested per_page -> M6c                      XM8 30-day expiry floor deleted -> M17
 #   XM9 old-owner-login refusal deleted -> M18b         XM10 owner user posts to the account endpoint -> M18a
 #   XM11 the cleanup ignores the answered id (a drifted stored name survives) -> M7h
+#   XM12-XM16 the token POST (in-page again, redirects followed, read as text, atok guard, disposed early)
+#   XM17 the sink hand-off sent with a bare global fetch -> N1   XM18 the sink answer not disposed -> M1
+#   XM19 the sink hand-off timeout dropped -> M1
+#   XM20 any non-empty sink answer accepted -> M9d  XM21 the tamper check deleted -> T1
+#   XM22 the trace stop deleted -> T3              XM23 the cleanup DELETE answer not disposed -> M8
 #   XS1 sink peer check deleted -> S2b                  XS2 sink keeps a partial file on a failed fsync -> S8
 #   XW1 the read wait deleted -> L1     XW2 the mint wait deleted -> L2     XW3 the revoke wait deleted -> L3
 #   XW4 the read wait's .catch dropped -> D7 ({error:TimeoutError})
@@ -198,10 +210,11 @@ const KEYS = {
   revoke: ['atok', 'matches', 'refused', 'status', 'contentType', 'success', 'error'],
   read: ['atok', 'refused', 'status', 'contentType', 'success', 'error', 'matches', 'groups', 'policies', 'skipped'],
 };
-const EXPOSED = ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'setImmediate', 'clearImmediate',
-  'queueMicrotask', 'URL', 'URLSearchParams', 'TextEncoder', 'TextDecoder', 'AbortController', 'AbortSignal',
-  'fetch', 'Headers', 'Request', 'Response', 'FormData', 'Blob', 'Buffer', 'crypto', 'atob', 'btoa',
-  'structuredClone'];
+// The browser_run_code_unsafe vm context of @playwright/mcp 0.0.78 (playwright-core coreBundle.js runCode, read
+// 2026-11-28) holds `page` and `__end__` only: no fetch, AbortSignal, setTimeout, URL, Buffer, console or other
+// host global, just the ECMAScript built-ins of every vm context. A Node-side call to a host global throws
+// ReferenceError there (the 2026-11-28 sink hand-off did, and the cleanup deleted a good token), so the
+// emulation exposes none. (The server also sets `__fn__`; V8 gives every vm context its own `console`.)
 
 let failures = 0;
 const ok = (row) => { console.log(`ok ${row}`); };
@@ -238,6 +251,7 @@ function makeWorld(over = {}) {
     pageCap: 5, noTotal: false, endless: false, log: [], gotos: [], deletes: [], sinkCalls: [], pageConsole: [],
     mintResp: null, mutateStored: null, sinkMode: 'ok', deleteResp: null, listFail: false, throwOnReadback: false,
     onGetToken: null, onList: null, win: null, lateAtok: false, waits: [], postText: 0, postDisposed: 0,
+    sinkDisposed: 0, fetchTrap: false, bareFetch: 0, delDisposed: 0, traceStops: [], tracing: false, tamper: null,
     ...over,
   };
 }
@@ -301,7 +315,7 @@ function page(world) {
   const win = world.lateAtok ? {} : { bootstrap: world.atok ? { atok: world.atok } : {} };
   world.win = win;
   const pctx = vm.createContext({ window: win, location: { origin: world.origin }, fetch: dashFetch, console: rec, Headers, URL, JSON, Response });
-  return {
+  const pg = {
     async goto(url) { world.gotos.push(url); if (world.lateAtok) delete win.bootstrap; },
     async evaluate(fn, arg) {
       if (typeof fn !== 'function') throw new TypeError('evaluate(fn)');
@@ -330,6 +344,7 @@ function page(world) {
       async post(url, opts = {}) {
         const h = (opts && opts.headers) || {};
         const u = new URL(url);
+        if (u.origin !== DASH) return sinkPost(world, url, opts);
         const data = opts.data === undefined ? undefined : JSON.parse(JSON.stringify(opts.data));
         world.log.push({ method: 'POST', path: u.pathname, xatok: h['x-atok'] === world.atok,
           xcss: h['x-cross-site-security'] === 'dash', ctJson: h['content-type'] === 'application/json',
@@ -356,8 +371,13 @@ function page(world) {
         const u = new URL(url);
         const okHdr = u.origin === DASH && h['x-atok'] === world.atok && h['x-cross-site-security'] === 'dash';
         world.deletes.push({ path: u.pathname, okHdr });
-        const reply = (status, ct, body) => ({ status: () => status, headers: () => ({ 'content-type': ct }),
-          json: async () => JSON.parse(body), text: async () => body });
+        const reply = (status, ct, body) => {
+          let disposed = false;
+          const live = () => { if (disposed) throw new Error('Response has been disposed'); };
+          return { status: () => status, headers: () => ({ 'content-type': ct }),
+            json: async () => { live(); return JSON.parse(body); }, text: async () => { live(); return body; },
+            dispose: async () => { world.delDisposed += 1; disposed = true; } };
+        };
         if (world.deleteResp) return world.deleteResp(reply);
         if (!okHdr) return reply(403, 'application/json', '{"success":false}');
         let m = u.pathname.match(/^\/api\/v4\/user\/tokens\/([0-9a-f]{32})$/);
@@ -370,24 +390,77 @@ function page(world) {
       },
     },
   };
+  // playwright-core 0.0.78: page.request is an OWN property (the Page constructor assigns the context's request)
+  // whose post/delete are PROTOTYPE methods; page.context().request is the same object. tamper (rows T1/T2)
+  // models an earlier run_code call: an own post on it, or a different object put on page.request.
+  const proto = pg.request;
+  pg.request = Object.create(proto);
+  const ctxObj = { request: pg.request, tracing: { async stop() {
+    world.traceStops.push(world.gotos.length + world.log.length + world.deletes.length + world.sinkCalls.length);
+    if (!world.tracing) throw new Error('tracing.stop: Must start tracing before stopping');
+    world.tracing = false;
+  } } };
+  pg.context = () => ctxObj;
+  if (world.tamper === 'own-post') pg.request.post = async () => { throw new Error('patched'); };
+  if (world.tamper === 'swap') pg.request = Object.create(proto);
+  return pg;
 }
 
-function sinkStub(world) {
-  return async (url, opts = {}) => {
-    world.sinkCalls.push({ url, body: opts.body, method: opts.method, redirect: opts.redirect });
-    if (world.sinkMode === 'down') throw new TypeError('fetch failed');
-    if (world.sinkMode === 'refuse') return new Response('refused', { status: 403 });
-    if (world.sinkMode === 'notok') return new Response('nope', { status: 200 });
-    return new Response('ok', { status: 200 });
+// The sink hand-off, a Node-side page.request.post to a non-dashboard URL (2026-11-28: the run context has no
+// fetch). Records the request and answers a Playwright APIResponse whose text() fails once disposed. sinkMode
+// 'real' sends it over the network as playwright-core 0.0.78's fetch does: the string body byte-exact, the given
+// headers and no Origin; maxRedirects 0 becomes -1 there (coreBundle.js), so a 3xx comes back UNFOLLOWED as an
+// ordinary response; with maxRedirects unset it follows a 307/308 (re-sending the body), and returns any other
+// status as is. The stub sink answers the sink_url fragment (SINK_ANS), as p5-sink.py answers its printed one.
+function rawPost(target, headers, data, timeout) {
+  return new Promise((resolve, reject) => {
+    const body = Buffer.from(String(data), 'utf8');
+    const q = http.request(target, { method: 'POST', headers: { ...headers, 'content-length': body.length }, timeout: timeout || 30000 }, (s) => {
+      const chunks = [];
+      s.on('data', (c) => chunks.push(c));
+      s.on('end', () => resolve({ status: s.statusCode, location: s.headers.location, body: Buffer.concat(chunks).toString('utf8') }));
+    });
+    q.on('timeout', () => q.destroy(new Error('Timeout exceeded')));
+    q.on('error', reject);
+    q.end(body);
+  });
+}
+async function sinkPost(world, url, opts = {}) {
+  const h = opts.headers || {};
+  const originKey = Object.keys(h).find((k) => k.toLowerCase() === 'origin');
+  world.sinkCalls.push({ url, body: opts.data, method: 'POST', ct: h['content-type'], origin: originKey && h[originKey],
+    maxRedirects: opts.maxRedirects, failOnStatusCode: opts.failOnStatusCode, timeout: opts.timeout });
+  const api = (status, body) => {
+    let disposed = false;
+    return { status: () => status, headers: () => ({ 'content-type': 'text/plain' }),
+      text: async () => { if (disposed) throw new Error('Response has been disposed'); return body; },
+      dispose: async () => { world.sinkDisposed += 1; disposed = true; } };
   };
+  if (world.sinkMode === 'down') throw new Error('apiRequestContext.post: connect ECONNREFUSED');
+  if (world.sinkMode === 'refuse') return api(403, 'refused');
+  if (world.sinkMode === 'notok') return api(200, 'nope');
+  if (world.sinkMode === 'wrong') return api(200, 'ok');
+  if (world.sinkMode !== 'real') return api(200, SINK_ANS);
+  const max = opts.maxRedirects === undefined ? 20 : opts.maxRedirects;
+  let target = url;
+  for (let hop = 0; ; hop += 1) {
+    const r = await rawPost(target, h, opts.data, opts.timeout);
+    if ([307, 308].includes(r.status) && r.location) {
+      if (max === 0) return api(r.status, r.body);
+      if (hop >= max) throw new Error('apiRequestContext.post: Max redirect count exceeded');
+      target = new URL(r.location, target).href;
+      continue;
+    }
+    return api(r.status, r.body);
+  }
 }
 
-// browser_run_code_unsafe, as Playwright MCP 1.64 implements it (coreBundle.js runCode): a fresh vm context
-// with `page` and the exposed globals only (no console), `(" + code + ")`, called with page, JSON.stringify'd.
-async function runCode(code, world, nodeFetch, ctxOut) {
-  const ctx = { page: page(world) };
-  for (const n of EXPOSED) ctx[n] = globalThis[n];
-  ctx.fetch = nodeFetch;
+// browser_run_code_unsafe, as @playwright/mcp 0.0.78 implements it (coreBundle.js runCode): a fresh vm context
+// with `page` and `__end__` only, `(" + code + ")`, called with page, JSON.stringify'd.
+async function runCode(code, world, ctxOut) {
+  const ctx = { page: page(world), __end__: {} };
+  // fetchTrap (row N1): a fetch that counts each call and throws as the real context's missing global does.
+  if (world.fetchTrap) ctx.fetch = () => { world.bareFetch += 1; throw new ReferenceError('fetch is not defined'); };
   vm.createContext(ctx);
   if (ctxOut) ctxOut.ctx = ctx;
   const fn = vm.runInContext(`(${code})`, ctx);
@@ -434,8 +507,8 @@ function leakOf(out, world) {
 const rows = [];
 const row = (name, fn) => rows.push({ name, fn });
 
-async function exec(body, args, world, { nodeFetch, code, ctxOut } = {}) {
-  const out = await runCode(code || compose(SRC[body], args), world, nodeFetch || sinkStub(world), ctxOut);
+async function exec(body, args, world, { code, ctxOut } = {}) {
+  const out = await runCode(code || compose(SRC[body], args), world, ctxOut);
   const shape = shapeOk(out, KEYS[body]);
   if (shape) throw new Error(`P-shape: ${shape}`);
   const leak = leakOf(out, world);
@@ -466,9 +539,10 @@ const waitedOnce = (w) => {
 };
 
 // ---- p5-mint.js --------------------------------------------------------------------------------------------
+const SINK_ANS = 'AnSwErAnSwErAnSwErAnSwErAnSwEr01';
 const MINT_P = { owner: 'account', account_id: NA, zone_id: NZ, name: 'cf_api_token_pagerules_read-soleur-20261204',
   zone_groups: ['Page Rules Read'], account_groups: [], expires_on: EXP,
-  sink_url: 'http://127.0.0.1:41234/AbCdEfGhIjKlMnOpQrStUv' };
+  sink_url: `http://127.0.0.1:41234/AbCdEfGhIjKlMnOpQrStUv#${SINK_ANS}` };
 const MINT_A = { ...MINT_P, name: 'cf_api_token_audit-soleur-20261204',
   zone_groups: ['Zone Settings Read', 'DNS Read', 'SSL and Certificates Read', 'Firewall Services Read'],
   account_groups: ['Account Settings Read', 'Notifications Read'] };
@@ -500,8 +574,11 @@ row('M1 pagerules mint: one zone policy on the zone key, scope-resolved group (d
   const b = JSON.parse(p[0].body);
   must(eq(b.policies, [{ effect: 'allow', permission_groups: [{ id: G.pagerules }], resources: { [ZK]: '*' } }]), 'policies');
   must(b.expires_on === MINT_P.expires_on && b.name === MINT_P.name, 'name/expiry');
-  must(w.sinkCalls.length === 1 && w.sinkCalls[0].body === VALUE && w.sinkCalls[0].url === MINT_P.sink_url && w.sinkCalls[0].method === 'POST', 'sink hand-off');
-  must(w.sinkCalls[0].redirect === 'error', 'the sink fetch does not refuse redirects');
+  must(w.sinkCalls.length === 1 && w.sinkCalls[0].body === VALUE && w.sinkCalls[0].url === 'http://127.0.0.1:41234/AbCdEfGhIjKlMnOpQrStUv' && w.sinkCalls[0].method === 'POST', 'sink hand-off');
+  must(w.sinkCalls[0].maxRedirects === 0, `the sink hand-off maxRedirects is ${w.sinkCalls[0].maxRedirects}, not 0`);
+  must(w.sinkCalls[0].ct === 'text/plain' && w.sinkCalls[0].origin === undefined && w.sinkCalls[0].failOnStatusCode === false
+    && w.sinkCalls[0].timeout === 15000, 'the sink hand-off content-type, Origin, failOnStatusCode or timeout');
+  must(w.sinkDisposed === 1, 'the sink answer was not disposed');
   must(w.deletes.length === 0, 'a delete on the happy path');
 });
 row('M2 audit mint: zone groups on the zone key, account groups on the account key only', async () => {
@@ -579,23 +656,27 @@ const sinkRow = (tag, why, mode) => row(`M${tag} sink ${why} -> new token delete
   const r = await exec('mint', MINT_P, w);
   want(r, { refused: 'sink', id8: ID8, status: 200, contentType: JS, matches: 0, success: true });
   must(w.deletes.length === 1 && !w.acctTokens.some((t) => t.id === NEW_FULL), 'cleanup DELETE');
+  if (mode !== 'down') must(w.sinkDisposed === 1, 'the sink answer was not disposed');
+  must(w.delDisposed === w.deletes.length, `the cleanup DELETE answers were not disposed (${w.delDisposed}/${w.deletes.length})`);
 });
 sinkRow('8', 'down', 'down');
 sinkRow('9', 'refuses (403)', 'refuse');
-sinkRow('9b', 'answers 200 without the "ok" body', 'notok');
+sinkRow('9b', 'answers 200 without the printed answer', 'notok');
+sinkRow('9d', 'answers 200 "ok", not the printed answer (a process that rebound the port)', 'wrong');
 row('M9c the sink answers 307 to another 127.0.0.1 listener -> {refused:sink}, no second request, token deleted', async () => {
   const hitsB = [];
-  const B = http.createServer((q, s) => { hitsB.push(q.method); q.resume(); s.writeHead(200, { 'content-type': 'text/plain' }); s.end('ok'); });
+  const B = http.createServer((q, s) => { hitsB.push(q.method); q.resume(); s.writeHead(200, { 'content-type': 'text/plain' }); s.end(SINK_ANS); });
   await new Promise((res) => B.listen(0, '127.0.0.1', res));
   const hitsA = [];
-  const A = http.createServer((q, s) => { hitsA.push(q.method); q.resume(); s.writeHead(307, { location: `http://127.0.0.1:${B.address().port}/BbBbBbBbBbBbBbBbBbBbBb` }); s.end(); });
+  const A = http.createServer((q, s) => { hitsA.push(q.method); q.resume(); s.writeHead(307, { location: `http://127.0.0.1:${B.address().port}/BbBbBbBbBbBbBbBbBbBbBb` }); s.end(SINK_ANS); });
   await new Promise((res) => A.listen(0, '127.0.0.1', res));
   try {
-    const w = makeWorld();
-    const r = await exec('mint', { ...MINT_P, sink_url: `http://127.0.0.1:${A.address().port}/AaAaAaAaAaAaAaAaAaAaAa` }, w, { nodeFetch: globalThis.fetch });
+    const w = makeWorld({ sinkMode: 'real' });
+    const r = await exec('mint', { ...MINT_P, sink_url: `http://127.0.0.1:${A.address().port}/AaAaAaAaAaAaAaAaAaAaAa#${SINK_ANS}` }, w);
     want(r, { refused: 'sink', id8: ID8, status: 200, contentType: JS, matches: 0, success: true });
     must(hitsA.length === 1, `first listener hits ${hitsA.length}`);
     must(hitsB.length === 0, 'the redirect carried the value to a second listener');
+    must(w.sinkDisposed === 1, 'the 307 answer was not disposed');
     must(w.deletes.length === 1, 'cleanup DELETE');
   } finally { A.close(); B.close(); }
 });
@@ -640,8 +721,9 @@ row('M13 a page off dash.cloudflare.com -> {refused:origin}', async () => {
 const badArgs = [['account_id', { account_id: 'xyz' }], ['zone_id', { zone_id: 'not-a-zone' }], ['name', { name: 'soleur-pagerules' }],
   ['zone_groups', { zone_groups: ['DNS Write'] }], ['zone_groups', { zone_groups: [] }],
   ['account_groups', { account_groups: ['Account Settings Read', 'Account Settings Read'] }],
-  ['expires_on', { expires_on: '2027-02-20' }], ['sink_url', { sink_url: 'http://10.0.0.1:4000/AbCdEfGhIjKlMnOpQrStUv' }],
-  ['sink_url', { sink_url: 'https://127.0.0.1:4000/AbCdEfGhIjKlMnOpQrStUv' }], ['owner', { owner: undefined }], ['owner', { owner: 'zone' }],
+  ['expires_on', { expires_on: '2027-02-20' }], ['sink_url', { sink_url: `http://10.0.0.1:4000/AbCdEfGhIjKlMnOpQrStUv#${SINK_ANS}` }],
+  ['sink_url', { sink_url: `https://127.0.0.1:4000/AbCdEfGhIjKlMnOpQrStUv#${SINK_ANS}` }],
+  ['sink_url', { sink_url: 'http://127.0.0.1:4000/AbCdEfGhIjKlMnOpQrStUv' }], ['sink_url', { sink_url: 'http://127.0.0.1:4000/AbCdEfGhIjKlMnOpQrStUv#short' }], ['owner', { owner: undefined }], ['owner', { owner: 'zone' }],
   ['refuse_ids', { refuse_ids: ['86aa993e'] }], ['refuse_ids', { owner: 'user' }], ['refuse_ids', { owner: 'user', refuse_ids: [] }],
   ['refuse_ids', { owner: 'user', refuse_ids: ['86AA993E'] }], ['unknown', { refuseids: ['86aa993e'] }]];
 badArgs.forEach(([field, over], i) => {
@@ -724,6 +806,31 @@ row('M18c owner user read-back failure -> the cleanup deletes on /user/tokens', 
 });
 
 // ---- p5-revoke.js ------------------------------------------------------------------------------------------
+row('N1 no body calls a bare global fetch Node-side (the @playwright/mcp 0.0.78 run context has none): a trap fetch on the run context is never called on the mint, revoke and read happy paths', async () => {
+  const wm = makeWorld({ fetchTrap: true }); const rm = await exec('mint', MINT_P, wm);
+  must(wm.bareFetch === 0, `mint called a bare global fetch ${wm.bareFetch} time(s)`);
+  want(rm, { status: 200, contentType: JS, success: true, id8: ID8 });
+  must(wm.sinkCalls.length === 1, 'the mint did not hand the value to the sink');
+  const wr = makeWorld({ fetchTrap: true }); const rr = await exec('revoke', REV, wr);
+  must(wr.bareFetch === 0, `revoke called a bare global fetch ${wr.bareFetch} time(s)`);
+  want(rr, DEL_OK);
+  const wd = makeWorld({ fetchTrap: true }); const rd = await exec('read', { what: 'groups', scope: 'account', acct: NA }, wd);
+  must(wd.bareFetch === 0, `read called a bare global fetch ${wd.bareFetch} time(s)`);
+  must(rd.success === true, `read ${JSON.stringify(rd)}`);
+});
+row('T1 an own page.request.post (an earlier run_code call patched it) -> {refused:tampered} before any request', async () => {
+  const w = makeWorld({ tamper: 'own-post' }); const r = await exec('mint', MINT_P, w);
+  want(r, { refused: 'tampered' }); nothingSent(w);
+});
+row('T2 page.request is not the context request -> {refused:tampered} before any request', async () => {
+  const w = makeWorld({ tamper: 'swap' }); const r = await exec('mint', MINT_P, w);
+  want(r, { refused: 'tampered' }); nothingSent(w);
+});
+row('T3 a trace an earlier call started is stopped before the first request, and the mint still runs', async () => {
+  const w = makeWorld({ tracing: true }); const r = await exec('mint', MINT_P, w);
+  want(r, { status: 200, contentType: JS, success: true, id8: ID8 });
+  must(w.traceStops.length === 1 && w.traceStops[0] === 0 && w.tracing === false, `trace stops ${JSON.stringify(w.traceStops)}`);
+});
 const REV = { pin: PIN_P, old_id: PIN_P, new_id: ID8, new_name: 'cf_api_token_pagerules_read-soleur-20261204', scope: 'user' };
 const REV_A = { pin: 'dd6d1427', old_id: 'dd6d1427', new_id: ID8, new_name: 'cf_api_token_audit-soleur-20270215', scope: 'account', account_id: NA };
 const DEL_OK = { status: 200, contentType: JS, success: true };
@@ -1006,8 +1113,8 @@ if (process.env.P5_INJECT) {
 if (MODE === 'integration') {
   rows.length = 0;
   row('I1 mint -> the real p5-sink.py over 127.0.0.1: file holds the value byte-exact', async () => {
-    const w = makeWorld();
-    const r = await exec('mint', { ...MINT_P, sink_url: process.env.P5_SINK_URL }, w, { nodeFetch: globalThis.fetch });
+    const w = makeWorld({ sinkMode: 'real' });
+    const r = await exec('mint', { ...MINT_P, sink_url: process.env.P5_SINK_URL }, w);
     want(r, { status: 200, contentType: JS, success: true, id8: ID8 });
     must(fs.readFileSync(process.env.P5_OUT, 'utf8') === VALUE, 'file content differs from the minted value');
     must(w.deletes.length === 0, 'cleanup on the happy path');
@@ -1084,12 +1191,13 @@ sink_start() { # <out> [sink path] [timeout] [real sink]; sets SINK_PID SINK_URL
   local out="$1" src="${2:-$SINK}" to="${3:-30}" real="${4:-$SINK}"
   SINK_N=$(( ${SINK_N:-0} + 1 )); SINK_LOG="$SB/sink.${SINK_N}.${BASHPID:-$$}.out"
   P5_REAL_SINK="$real" python3 -I "$src" --out "$out" --timeout "$to" > "$SINK_LOG" 2>&1 &
-  SINK_PID=$!; SINK_URL=""
+  SINK_PID=$!; SINK_URL=""; SINK_FULL=""; SINK_ANSWER=""
   printf '%s\n' "$SINK_PID" >> "$PIDS"
   local i
   for ((i = 0; i < 200; i++)); do
-    SINK_URL="$(sed -n 's/^SOLEUR_P5_SINK url=//p' "$SINK_LOG")"
-    [[ -n "$SINK_URL" ]] && return 0
+    SINK_FULL="$(sed -n 's/^SOLEUR_P5_SINK url=//p' "$SINK_LOG")"
+    SINK_URL="${SINK_FULL%%#*}"; SINK_ANSWER="${SINK_FULL#*#}"
+    [[ -n "$SINK_FULL" ]] && return 0
     kill -0 "$SINK_PID" 2>/dev/null || break
     sleep 0.05
   done
@@ -1106,7 +1214,8 @@ run_sink_rows() { # <sink path>
   OUT="$(client "$SINK_URL" - - POST "$SB/sval" 127.0.0.2)"
   [[ "$OUT" == conn=refused ]]; check "S1a a connect to 127.0.0.2 (not the bound address) is refused" $?
   OUT="$(client "$SINK_URL" - - POST "$SB/sval")"
-  [[ "$OUT" == "status=200 body=ok" ]]; check "S1b the one POST from 127.0.0.1 to /<nonce> answers 200 ok" $?
+  [[ "$SINK_ANSWER" =~ ^[A-Za-z0-9_-]{32}$ && "$SINK_FULL" == "$SINK_URL#$SINK_ANSWER" && "$OUT" == "status=200 body=${SINK_ANSWER:0:20}" ]]   # the client prints 20 body characters; I1 checks the whole answer
+  check "S1b the one POST from 127.0.0.1 to /<nonce> answers 200 with the 32-character answer printed after # on the url line" $?
   sink_wait
   [[ "$SINK_RC" -eq 0 ]] && grep -qx 'SOLEUR_P5_SINK result=written' "$SINK_LOG"; check "S1c the sink exits 0 with result=written" $?
   [[ "$(stat -c %a "$d/s1.tok" 2>/dev/null)" == 600 ]]; check "S1d the written file is mode 0600" $?
@@ -1232,7 +1341,7 @@ run_compose() { # <x> <args-json> -> rc of the line; the run file (if any) at $C
 }
 EXP_SH="$(python3 -I -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=60)).strftime("%Y-%m-%dT00:00:00Z"))')"
 RA='{"pin":"86aa993e","old_id":"86aa993e","new_id":"c0ffee12","new_name":"cf_api_token_pagerules_read-soleur-20261204","scope":"user"}'
-MA='{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_pagerules_read-soleur-20261204","zone_groups":["Page Rules Read"],"account_groups":[],"expires_on":"'"$EXP_SH"'","sink_url":"http://127.0.0.1:41234/AbCdEfGhIjKlMnOpQrStUv"}'
+MA='{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_pagerules_read-soleur-20261204","zone_groups":["Page Rules Read"],"account_groups":[],"expires_on":"'"$EXP_SH"'","sink_url":"http://127.0.0.1:41234/AbCdEfGhIjKlMnOpQrStUv#AnSwErAnSwErAnSwErAnSwErAnSwEr01"}'
 compose_rows() {
   echo "== P-compose: the runbook's composition line =="
   OUT="$(compose_line)"
@@ -1277,7 +1386,7 @@ if [[ "$MODE" == full ]]; then
   echo "== integration: p5-mint.js -> the real p5-sink.py =="
   d="$SB/integ"; mkdir -m 700 "$d"
   if sink_start "$d/cf_api_token_pagerules_read.tok"; then
-    harness "$MINT" "$REVOKE" "$READ" P5_MODE=integration P5_SINK_URL="$SINK_URL" P5_OUT="$d/cf_api_token_pagerules_read.tok"; relay
+    harness "$MINT" "$REVOKE" "$READ" P5_MODE=integration P5_SINK_URL="$SINK_FULL" P5_OUT="$d/cf_api_token_pagerules_read.tok"; relay
     sink_wait
     [[ "$SINK_RC" -eq 0 && "$(stat -c %a "$d/cf_api_token_pagerules_read.tok")" == 600 ]]; check "I1 the sink wrote the minted value at mode 0600 and exited 0" $?
   else
@@ -1341,7 +1450,7 @@ mut XM2 "one-token-per-exact-name deleted" mint "if (same !== 0) return safe({ r
 mut XM3 "cleanup verdict starts true" mint "const out = { success: false };" "const out = { success: true };" M16f '"success":false}'
 mut XM4 "a cleanup DELETE starts as ok" mint "let ok = false;" "let ok = true;" M16a '"del_status":403'
 mut XM5 "no cleanup after a non-JSON POST" mint "if (notOk(mr)) return await failAfterPost('mint');" "if (notOk(mr)) return safe({ refused: 'mint', ...postInfo, success: false });" M16c '"matches":0,"refused":"mint"'
-mut XM6 "sink redirect followed" mint "body: secret, redirect: 'error'," "body: secret," M9c '"refused":"sink"'
+mut XM6 "sink redirect followed" mint "data: secret, maxRedirects: 0," "data: secret," M9c '"refused":"sink"'
 mut XM7 "mint paging ends on the requested per_page" mint "if (lr.json.result.length < per && !more)" "if (lr.json.result.length < PER && !more)" M6c '"refused":"name-exists"'
 mut XM8 "30-day expiry floor deleted" mint "|| Date.parse(a.expires_on) < Date.now() + 30 * 86400000" "" M17 '"refused":"args:expires_on"'
 mut XM9 "old-owner-login refusal deleted" mint "if (old !== 0) return safe({ refused: 'old-owner-login', matches: old });" "" M18b '"refused":"old-owner-login"'
@@ -1356,6 +1465,17 @@ mut XM16 "the token POST answer disposed before it is read" mint "      const co
       let parsed" "      await r.dispose();
       const contentType = r.headers()['content-type'] || '';
       let parsed" M1 'want {"contentType":"application/json","id8":"c0ffee12","status":200,"success":true}'
+# The sink hand-off through page.request (2026-11-28): the run context has no global fetch.
+mut XM17 "the sink hand-off sent with a bare global fetch" mint "const sr = await page.request.post(sinkPost, {" "const sr = await fetch(sinkPost, {" N1 'bare global fetch'
+mut XM18 "the sink answer not disposed" mint "await sr.dispose().catch(() => {});" "" M1 'sink answer was not disposed'
+mut XM19 "the sink hand-off timeout dropped" mint "failOnStatusCode: false,
+        timeout: 15000," "failOnStatusCode: false," M1 'failOnStatusCode or timeout'
+# The sink proves itself (CTO R3) and the session state is checked first (CTO R2).
+mut XM20 "any non-empty sink answer accepted" mint "(await sr.text()) === sinkAnswer;" "(await sr.text()) !== '';" M9d '"refused":"sink"'
+mut XM21 "the tamper check deleted" mint "if (rq !== page.context().request || Object.hasOwn(rq, 'post') || Object.hasOwn(rq, 'delete')) {" "if (false) {" T1 '"refused":"tampered"'
+mut XM22 "the trace stop deleted" mint "await page.context().tracing.stop().catch(() => {});" "" T3 'trace stops'
+mut XM23 "the cleanup DELETE answer not disposed" mint "          await r.dispose().catch(() => {});
+        }" "        }" M8 'DELETE answers were not disposed'
 # Instrument rows: the P-shape/P-leak check and the page-serialization emulation must each catch a real slip.
 mut XL1 "a revoke return bypasses the guard and carries the atok" revoke "return safe({ status: r.status(), contentType, success });" "return { status: r.status(), contentType, success, atok: l.atok };" R1 'P-shape'
 mut XL2 "an in-page function closes over a Node-side variable" revoke "if (t.id.startsWith(prefix)) hits.push" "if (t.id.startsWith(a.pin)) hits.push" R1 'ReferenceError'
@@ -1405,8 +1525,8 @@ sink_mut XS2 "sink keeps a partial file on a failed fsync" 'os.unlink(out)' 'pas
 # --- anti-vacuity floor: EXACT counts (reported directly, never through fail()) -----------------
 TOTAL=$((PASS + FAIL))
 SELFTEST_PASSES=1
-EXPECT_FULL=262
-EXPECT_MUTANTS=104
+EXPECT_FULL=283
+EXPECT_MUTANTS=118
 case "$MODE" in full) want_n="$EXPECT_FULL" ;; *) want_n="$EXPECT_MUTANTS" ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -ne "$want_n" ]]; then
   printf '  [FAIL] anti-vacuity floor: %s assertions ran in %s mode, the exact floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$want_n" >&2

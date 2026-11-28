@@ -6,7 +6,11 @@
 Binds 127.0.0.1 only and serves EXACTLY ONE request, then exits; a second request finds no listener. It
 prints one line on start, then one result line, and never the value:
 
-    SOLEUR_P5_SINK url=http://127.0.0.1:<port>/<nonce>     pass this verbatim as p5-mint.js `sink_url`
+    SOLEUR_P5_SINK url=http://127.0.0.1:<port>/<nonce>#<answer>
+                                                           pass this verbatim as p5-mint.js `sink_url`. The sink
+                                                           answers a written value with exactly <answer> (32
+                                                           characters, fresh per run, never sent: a URL fragment),
+                                                           so a process that rebound the port cannot fake the reply
     SOLEUR_P5_SINK result=written                          exit 0: the value is in --out, mode 0600
     SOLEUR_P5_SINK result=refused reason=<r>               exit 1 (request refused) or 2 (bad --out)
     SOLEUR_P5_SINK result=timeout                          exit 3: no request within --timeout seconds
@@ -74,6 +78,7 @@ def main():
         return 2
     out = os.path.normpath(opt.out)
     nonce = secrets.token_urlsafe(24)
+    answer = secrets.token_urlsafe(24).encode()
     # A connection that never sends a request line ends the sink as `malformed`; a request or the timeout
     # overwrites this.
     outcome = {"line": "result=refused reason=malformed", "code": 1}
@@ -149,10 +154,10 @@ def main():
             outcome["code"] = 0
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
-            self.send_header("Content-Length", "2")
+            self.send_header("Content-Length", str(len(answer)))
             self.send_header("Connection", "close")
             self.end_headers()
-            self.wfile.write(b"ok")
+            self.wfile.write(answer)
             return None
 
         def do_POST(self):
@@ -171,7 +176,7 @@ def main():
     httpd = OneShot(("127.0.0.1", opt.port), Handler)
     httpd.timeout = opt.timeout
     try:
-        say("url=http://127.0.0.1:%d/%s" % (httpd.server_address[1], nonce))
+        say("url=http://127.0.0.1:%d/%s#%s" % (httpd.server_address[1], nonce, answer.decode()))
         httpd.handle_request()  # exactly one request (or the timeout), then close the listener
     finally:
         httpd.server_close()
