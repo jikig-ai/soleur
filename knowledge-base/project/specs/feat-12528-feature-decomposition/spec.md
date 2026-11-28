@@ -257,4 +257,4 @@ Use at least three real internal design documents before considering external ex
 - Whether intentional sibling awareness belongs in the orchestrator, one-shot, or both.
 - Exact treatment of file overlap: automatic dependency edge, validation failure, or operator-editable warning.
 - Minimum accurate parent/child tally rollup without double-counting branch-local ledgers.
-- Whether the first dynamic workflow port ships in the same PR as opt-in or after initial dogfood.
+- Whether the first dynamic workflow port ships in the same PR as opt-in or after initial dogfood. Deferred-port tracker: #13120.
