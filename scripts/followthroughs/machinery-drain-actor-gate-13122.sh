@@ -54,7 +54,7 @@ REPO='jikig-ai/soleur'
 WF='scheduled-machinery-drain.yml'
 CUTOFF='2026-11-28T12:57:15Z'
 PER_PAGE=100
-RUNS_ENDPOINT="repos/${REPO}/actions/workflows/${WF}/runs?actor=soleur-ai%5Bbot%5D&status=completed&created=%3E%3D2026-11-28T12%3A57%3A15Z&per_page=100"
+RUNS_ENDPOINT="repos/${REPO}/actions/workflows/${WF}/runs?actor=soleur-ai%5Bbot%5D&status=completed&event=workflow_dispatch&created=%3E%3D2026-11-28T12%3A57%3A15Z&per_page=100"
 ISSUE=9508
 
 if [[ -z "${GH_TOKEN:-}" ]]; then
@@ -195,7 +195,7 @@ fi
 
 body="$(printf '%s' "$comment_json" | jq -r '.body')" || cannot 'could not read the correlated comment body'
 outcome_block="$(printf '%s\n' "$body" | sed -n '/Machinery drain outcome:/,$p')"
-closed="$(printf '%s\n' "$outcome_block" | sed -n 's/.*closed=\([0-9][0-9]*\).*/\1/p' | sed -n '1p')"
+closed="$(printf '%s\n' "$outcome_block" | sed -n 's/^before=[0-9][0-9]* after=[0-9][0-9]* closed=\([0-9][0-9]*\) floor=[0-9][0-9]*.*/\1/p' | sed -n '1p')"
 [[ "$closed" =~ ^[0-9]+$ ]] || cannot "the correlated #${ISSUE} outcome comment has no parseable closed=N value"
 
 if (( closed > 0 )); then

@@ -57,7 +57,7 @@ if [[ -f "$FX/gh_fail" ]]; then echo 'stub gh: injected failure' >&2; exit 1; fi
 endpoint="${2:-}"
 if [[ "$endpoint" == --allow-escape-sequences ]]; then endpoint="${3:-}"; fi
 case "$endpoint" in
-  'repos/jikig-ai/soleur/actions/workflows/scheduled-machinery-drain.yml/runs?actor=soleur-ai%5Bbot%5D&status=completed&created=%3E%3D2026-11-28T12%3A57%3A15Z&per_page=100')
+  'repos/jikig-ai/soleur/actions/workflows/scheduled-machinery-drain.yml/runs?actor=soleur-ai%5Bbot%5D&status=completed&event=workflow_dispatch&created=%3E%3D2026-11-28T12%3A57%3A15Z&per_page=100')
     cat "$FX/runs.json" ;;
   repos/jikig-ai/soleur/actions/runs/*/jobs?per_page=100)
     id="$endpoint"
@@ -126,7 +126,7 @@ write_world() {
     decoy-comment)
       printf '%s\n' '{"total_count":1,"workflow_runs":[{"id":111,"created_at":"2026-11-30T09:03:54Z","event":"workflow_dispatch","head_branch":"main","conclusion":"failure","triggering_actor":{"login":"soleur-ai[bot]"}}]}' > "$FX/runs.json"
       printf '%s\n' '{"jobs":[{"id":777,"name":"measure-and-drain","steps":[{"name":"Drain the machinery ledger","number":5,"conclusion":"success"},{"name":"Update the standing measurement issue","number":7,"conclusion":"success"}]}]}' > "$FX/jobs_111.json"
-      printf '%s\n' '[{"created_at":"2026-11-30T09:04:32Z","user":{"login":"github-actions[bot]"},"body":"incidental prose closed=99 but no outcome"}]' > "$FX/comments.json" ;;
+      printf '%s\n' '[{"created_at":"2026-11-30T09:04:32Z","user":{"login":"github-actions[bot]"},"body":"Machinery drain outcome:\n\nincidental prose closed=99 but no measurement line"}]' > "$FX/comments.json" ;;
     *)
       printf '%s\n' '{"total_count":1,"workflow_runs":[{"id":111,"created_at":"2026-11-30T09:03:54Z","event":"workflow_dispatch","head_branch":"main","conclusion":"failure","triggering_actor":{"login":"soleur-ai[bot]"}}]}' > "$FX/runs.json"
       printf '%s\n' '{"jobs":[{"id":777,"name":"measure-and-drain","steps":[{"name":"Drain the machinery ledger","number":5,"conclusion":"success"},{"name":"Update the standing measurement issue","number":7,"conclusion":"success"}]}]}' > "$FX/jobs_111.json"
