@@ -11658,9 +11658,9 @@ describe("bastion: one resource list, pinned to the birth job and the exclusions
   });
 });
 
-// #12879 (ADR-327 step 2b), Guard 2: the replace route's wiring. The plan-chain and step-order rows live in
-// tests/scripts/test-bastion-host-replace-gate.sh (beside the gate they feed); these are the parity-shaped
-// rows, read from the PARSED callee so a step's `if:` and `run:` are judged as GitHub reads them.
+// #12879 (ADR-327 step 2b), Guard 2: the replace route's wiring. The step-order, exact-`if:` and executed
+// run-block rows live in tests/scripts/test-bastion-host-replace-workflow.sh (CTO ruling Q-R4); these are the
+// parity-shaped rows, read from the PARSED callee so a step's `if:` and `run:` are judged as GitHub reads them.
 type BrStep = { name?: string; id?: string; if?: string; run?: string; env?: Record<string, string> };
 const BR_STEPS = {
   validate: /^Validate dispatch inputs \(confirm token, server-id pin\)$/,
