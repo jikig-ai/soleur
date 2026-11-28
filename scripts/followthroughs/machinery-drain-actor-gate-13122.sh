@@ -21,9 +21,10 @@
 # is matched only as a timestamped emitted `##[error]` runtime line. Run and job
 # conclusions are never sufficient because the Drain step uses continue-on-error.
 #
-# PASS additionally requires either closed>0, an explicit WAIVED-* token in the
-# outcome block, or a substantive non-actor `##[error]` diagnosis. A bare
-# process-exit error with unexplained closed=0 is CANNOT ESTABLISH.
+# PASS additionally requires ordered post-gate admission evidence plus either
+# closed>0, an explicit WAIVED-EMPTY/WAIVED-SUPPLY verdict in the outcome block,
+# or a substantive non-actor `##[error]` diagnosis. A bare process-exit error
+# with unexplained closed=0 is CANNOT ESTABLISH.
 #
 # Exit semantics (sweep-followthroughs.sh contract):
 #   0 PASS              full evidence bar passes
@@ -116,10 +117,15 @@ if [[ -z "$run_id" ]]; then
   exit 2
 fi
 
-jobs_json="$(ghx "repos/${REPO}/actions/runs/${run_id}/jobs?per_page=100")" \
+jobs_json="$(ghx "repos/${REPO}/actions/runs/${run_id}/jobs?per_page=100&filter=latest")" \
   || cannot "reading jobs for run ${run_id} failed"
-printf '%s' "$jobs_json" | jq -e 'type == "object" and (.jobs | type == "array")' >/dev/null 2>&1 \
+printf '%s' "$jobs_json" | jq -e 'type == "object" and (.total_count | type == "number") and (.jobs | type == "array")' >/dev/null 2>&1 \
   || cannot "the jobs response for run ${run_id} has an unexpected shape"
+jobs_total="$(printf '%s' "$jobs_json" | jq -r '.total_count')" || cannot "could not read jobs total_count for run ${run_id}"
+jobs_len="$(printf '%s' "$jobs_json" | jq '.jobs | length')" || cannot "could not count returned jobs for run ${run_id}"
+if (( jobs_total > jobs_len )); then
+  cannot "run ${run_id} jobs total_count=${jobs_total} exceeds returned jobs=${jobs_len}; refusing to inspect an incomplete latest-attempt page"
+fi
 
 job_count="$(printf '%s' "$jobs_json" | jq '[.jobs[] | select(.name == "measure-and-drain")] | length')" \
   || cannot "could not count measure-and-drain jobs for run ${run_id}"
@@ -137,10 +143,22 @@ step_number() {
   printf '%s\n' "$num"
 }
 
+step_field() {
+  local wanted="$1" field="$2"
+  printf '%s' "$jobs_json" | jq -r --arg wanted "$wanted" --arg field "$field" \
+    '.jobs[] | select(.name == "measure-and-drain") | .steps[]? | select(.name == $wanted) | .[$field] // empty'
+}
+
 drain_step="$(step_number 'Drain the machinery ledger')" \
   || cannot "run ${run_id} does not expose exactly one Drain the machinery ledger step"
 update_step="$(step_number 'Update the standing measurement issue')" \
   || cannot "run ${run_id} does not expose exactly one Update the standing measurement issue step"
+
+drain_status="$(step_field 'Drain the machinery ledger' status)"
+drain_conclusion="$(step_field 'Drain the machinery ledger' conclusion)"
+if [[ "$drain_status" != "completed" || "$drain_conclusion" == "skipped" || "$drain_conclusion" == "cancelled" ]]; then
+  cannot "run ${run_id} Drain step did not execute to completion (status=${drain_status:-missing} conclusion=${drain_conclusion:-missing})"
+fi
 
 TMPD="$(mktemp -d -t machinery-drain-13122.XXXXXXXX)" || cannot 'mktemp -d failed'
 trap 'rm -rf -- "$TMPD"' EXIT
@@ -152,16 +170,39 @@ ghx --allow-escape-sequences "repos/${REPO}/actions/jobs/${job_id}/steps/${drain
 ghx --allow-escape-sequences "repos/${REPO}/actions/jobs/${job_id}/steps/${update_step}/logs" > "$UPDATE_LOG" \
   || cannot "reading Update step ${update_step} of job ${job_id} failed"
 
-# Canonicalise CRLF emitted by hosted runners. This does not strip colour escapes;
-# echoed source therefore still cannot satisfy either emitted-line regex.
+# Canonicalise CRLF emitted by hosted runners and exactly one leading UTF-8 BOM
+# emitted by the step-logs API. This does not strip colour escapes; echoed source
+# therefore still cannot satisfy either emitted-line regex.
 tr -d '\r' < "$DRAIN_LOG" > "$DRAIN_LOG.clean"
 tr -d '\r' < "$UPDATE_LOG" > "$UPDATE_LOG.clean"
+sed -i '1s/^\xef\xbb\xbf//' "$DRAIN_LOG.clean" "$UPDATE_LOG.clean"
+
+[[ -s "$DRAIN_LOG.clean" ]] || cannot "run ${run_id} Drain step ${drain_step} log is empty"
+[[ -s "$UPDATE_LOG.clean" ]] || cannot "run ${run_id} Update step ${update_step} log is empty"
 
 TS_RE='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z'
 REFUSAL_RE="^${TS_RE} ##\\[error\\]Action failed with error: Workflow initiated by non-human actor: soleur-ai \\(type: Bot\\)\\."
 if grep -aEq "$REFUSAL_RE" "$DRAIN_LOG.clean"; then
   echo "FAIL: run ${run_id} job ${job_id} step ${drain_step} emitted the non-human actor refusal; the PR #13096 actor gate did not take effect" >&2
   exit 1
+fi
+
+CONTROL_RE="^${TS_RE}[[:space:]]+allowed_bots: soleur-ai\\[bot\\][[:space:]]*$"
+START_RE="^${TS_RE} ##\\[start-action display=Run Claude Code Action;id=drain\\.run\\]"
+END_RE="^${TS_RE} ##\\[end-action id=drain\\.run;"
+grep -aEq "$CONTROL_RE" "$DRAIN_LOG.clean" \
+  || cannot "run ${run_id} Drain step log lacks the fixed allowed_bots input control"
+grep -aEq "$START_RE" "$DRAIN_LOG.clean" \
+  || cannot "run ${run_id} Drain step log lacks the drain.run start marker"
+grep -aEq "$END_RE" "$DRAIN_LOG.clean" \
+  || cannot "run ${run_id} Drain step log is truncated before the drain.run end marker"
+
+ACTOR_TYPE_RE="^${TS_RE} Actor type: Bot[[:space:]]*$"
+POSTGATE_RE="^${TS_RE} Actor soleur-ai is in allowed_bots list, skipping human actor check[[:space:]]*$"
+actor_ln="$(grep -anE "$ACTOR_TYPE_RE" "$DRAIN_LOG.clean" | sed -n '1s/:.*//p')"
+postgate_ln="$(grep -anE "$POSTGATE_RE" "$DRAIN_LOG.clean" | sed -n '1s/:.*//p')"
+if ! [[ "$actor_ln" =~ ^[0-9]+$ && "$postgate_ln" =~ ^[0-9]+$ ]] || (( postgate_ln <= actor_ln )); then
+  cannot "run ${run_id} Drain step log lacks ordered post-gate evidence that soleur-ai was admitted"
 fi
 
 UPDATE_RE="^${TS_RE} updated standing issue #${ISSUE}[[:space:]]*$"
@@ -171,26 +212,44 @@ fi
 
 start_epoch="$(iso_epoch "$run_created")" || cannot "could not parse run created_at '${run_created}'"
 [[ "$start_epoch" =~ ^[0-9]+$ ]] || cannot "could not parse run created_at '${run_created}'"
-deadline="$(date -u -d "@$((start_epoch + 900))" +%Y-%m-%dT%H:%M:%SZ)" || cannot 'could not compute the comment correlation deadline'
+update_ts="$(grep -aE "$UPDATE_RE" "$UPDATE_LOG.clean" | sed -n '1s/^\([^ ]*\) .*/\1/p')"
+update_epoch="$(iso_epoch "$update_ts")" || cannot "could not parse the emitted update timestamp '${update_ts}'"
+[[ "$update_epoch" =~ ^[0-9]+$ ]] || cannot "could not parse the emitted update timestamp '${update_ts}'"
+deadline="$(date -u -d "@$((update_epoch + 900))" +%Y-%m-%dT%H:%M:%SZ)" || cannot 'could not compute the comment correlation deadline'
 since_enc="${run_created//:/%3A}"
-comments_json="$(ghx "repos/${REPO}/issues/${ISSUE}/comments?since=${since_enc}&per_page=100")" \
-  || cannot "reading comments on #${ISSUE} failed"
-printf '%s' "$comments_json" | jq -e 'type == "array"' >/dev/null 2>&1 \
-  || cannot "the comments response for #${ISSUE} has an unexpected shape"
-comment_count="$(printf '%s' "$comments_json" | jq 'length')" || cannot "could not count comments on #${ISSUE}"
-if (( comment_count >= 100 )); then
-  cannot "#${ISSUE} returned ${comment_count} comments in the correlation window; the page may be incomplete"
+comment_json=''
+comment_scan_incomplete=0
+for page in {1..10}; do
+  page_json="$(ghx "repos/${REPO}/issues/${ISSUE}/comments?since=${since_enc}&per_page=100&page=${page}")" \
+    || cannot "reading comments page ${page} on #${ISSUE} failed"
+  printf '%s' "$page_json" | jq -e 'type == "array"' >/dev/null 2>&1 \
+    || cannot "the comments page ${page} response for #${ISSUE} has an unexpected shape"
+  comment_count="$(printf '%s' "$page_json" | jq 'length')" || cannot "could not count comments page ${page} on #${ISSUE}"
+  (( comment_count > 0 )) || break
+
+  comment_json="$(printf '%s' "$page_json" | jq -c --arg start "$run_created" --arg end "$deadline" '
+    [.[] | select(.created_at >= $start and .created_at <= $end
+      and .user.login == "github-actions[bot]"
+      and (.body | type == "string")
+      and (.body | contains("Machinery drain outcome:")))]
+    | sort_by(.created_at) | .[0] // empty
+  ')" || cannot "could not project comments page ${page} on #${ISSUE}"
+  [[ -n "$comment_json" ]] && break
+
+  if printf '%s' "$page_json" | jq -e --arg end "$deadline" 'any(.[]; (.created_at | type == "string") and .created_at > $end)' >/dev/null 2>&1; then
+    break
+  fi
+  (( comment_count < 100 )) && break
+  if (( page == 10 )); then
+    comment_scan_incomplete=1
+  fi
+done
+if (( comment_scan_incomplete == 1 )); then
+  cannot "#${ISSUE} has more than 1000 post-run comments inside the correlation scan; refusing to infer absence from an incomplete scan"
 fi
 
-comment_json="$(printf '%s' "$comments_json" | jq -c --arg start "$run_created" --arg end "$deadline" '
-  [.[] | select(.created_at >= $start and .created_at <= $end
-    and .user.login == "github-actions[bot]"
-    and (.body | type == "string")
-    and (.body | contains("Machinery drain outcome:")))]
-  | sort_by(.created_at) | .[0] // empty
-')" || cannot "could not project comments on #${ISSUE}"
 if [[ -z "$comment_json" ]]; then
-  cannot "no correlated github-actions[bot] 'Machinery drain outcome:' comment on #${ISSUE} within fifteen minutes of run ${run_id}"
+  cannot "no correlated github-actions[bot] 'Machinery drain outcome:' comment on #${ISSUE} within fifteen minutes of the emitted update for run ${run_id}"
 fi
 
 body="$(printf '%s' "$comment_json" | jq -r '.body')" || cannot 'could not read the correlated comment body'
@@ -203,8 +262,8 @@ if (( closed > 0 )); then
   exit 0
 fi
 
-if printf '%s\n' "$outcome_block" | grep -aEq 'WAIVED-[A-Z0-9][A-Z0-9-]*'; then
-  waiver="$(printf '%s\n' "$outcome_block" | sed -n 's/.*\(WAIVED-[A-Z0-9][A-Z0-9-]*\).*/\1/p' | sed -n '1p')"
+if printf '%s\n' "$outcome_block" | grep -aEq '^WAIVED-(EMPTY|SUPPLY):'; then
+  waiver="$(printf '%s\n' "$outcome_block" | sed -n 's/^\(WAIVED-\(EMPTY\|SUPPLY\)\):.*/\1/p' | sed -n '1p')"
   echo "PASS: run ${run_id} measured without the actor refusal; #${ISSUE} reports closed=0 with explicit ${waiver}"
   exit 0
 fi
@@ -216,7 +275,7 @@ if grep -aEq "$ERROR_RE" "$DRAIN_LOG.clean"; then
     | grep -av 'Workflow initiated by non-human actor' \
     | sed -n '1p')"
   if [[ -n "$substantive" ]]; then
-    echo "PASS: run ${run_id} measured without the actor refusal; #${ISSUE} reports closed=0 with substantive non-actor diagnosis: ${substantive}"
+    echo "PASS: run ${run_id} measured without the actor refusal; #${ISSUE} reports closed=0 with a substantive non-actor diagnosis in job ${job_id} step ${drain_step}"
     exit 0
   fi
 fi

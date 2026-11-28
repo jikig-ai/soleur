@@ -21,8 +21,8 @@ Plan: `knowledge-base/project/plans/2026-11-28-chore-machinery-drain-verificatio
 ## Phase 3 — branch sweeper dry run
 
 - [x] 3.1 Prepare the exact post-merge tracker directive at column 0 with `secrets=GH_TOKEN` and `earliest=2026-11-30T18:00:00Z`.
-- [ ] 3.2 Run the read-only branch sweeper dry run prescribed by the follow-through convention and inspect the run log for this probe's parse/exit line.
-- [ ] 3.3 Confirm there is no missing-secret error and no machinery-drain production trigger is fired.
+- [x] 3.2 Run the read-only branch sweeper dry run prescribed by the follow-through convention and inspect the run log for this probe's parse/exit line.
+- [x] 3.3 Confirm there is no missing-secret error and no machinery-drain production trigger is fired.
 
 ## Phase 4 — post-merge enrollment
 
