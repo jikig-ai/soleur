@@ -124,7 +124,9 @@ for cand in "${TMPDIR:-}" /var/tmp /tmp; do
   if [[ -n "$cand" && -d "$cand" && -w "$cand" ]] && outside_git "$cand"; then SB_BASE="$cand"; break; fi
 done
 [[ -n "$SB_BASE" ]] || { printf 'HARNESS: no writable temp directory outside a git work tree\n' >&2; exit 2; }
-SB="$(mktemp -d "${SB_BASE}/cf-p5-browser.XXXXXXXX")" || { printf 'HARNESS: mktemp failed\n' >&2; exit 2; }
+export TMPDIR="$SB_BASE"
+SB="$(mktemp -d -t cf-p5-browser.XXXXXXXX)" || { printf 'HARNESS: mktemp failed\n' >&2; exit 2; }
+case "$SB" in /?*) ;; *) printf 'HARNESS: sandbox path %s is not absolute\n' "$SB" >&2; exit 2 ;; esac
 PIDS="$SB/sink.pids"; : > "$PIDS"
 reap() {
   local p
