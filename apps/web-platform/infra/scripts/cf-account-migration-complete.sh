@@ -32,8 +32,9 @@
 # Mode web2-replace needs only the tunnel condition: it is the one exception, for
 # `web_host_replace` of web-2 once the tunnel phase has landed (plan Phase 1 item 11).
 #
-# In PR1 the tunnel phase does not exist yet, so this predicate stays "in progress" until PR2 and
-# every gated plan fails closed in between. That is intended (CTO L58).
+# The tunnel phase is the last one, so this predicate stays "in progress" until its apply lands and
+# every gated plan fails closed in between. That is intended (CTO L58). CFAM_TUNNEL_ADDR is a member
+# of that phase's spec (the suite pins it).
 #
 # Prints the verdict and addresses only, never an attribute value or any state content.
 set -uo pipefail

@@ -34,7 +34,8 @@ _cfg_ok() { local LC_ALL=C; case "${1:-}" in ''|*'"'*|*'\'*|*[[:cntrl:]]*) retur
 # Script-owned scratch for the deploy-status body (was the fixed /tmp/deploy-status-verify.json:
 # a fixed name is shared by every concurrent run of this script).
 DEPLOY_STATUS_TMP="$(mktemp)"
-trap 'rm -f "$DEPLOY_STATUS_TMP"' EXIT
+DEPLOY_STATUS_HDR="$(mktemp)"
+trap 'rm -f "$DEPLOY_STATUS_TMP" "$DEPLOY_STATUS_HDR"' EXIT
 
 # Resolve the infra dir from THIS script's own location — absolute and
 # CWD-independent. Do NOT honor a relative $INFRA_DIR override (#6595): the workflow
@@ -48,29 +49,43 @@ cd "$INFRA_DIR"
 
 DOPPLER_ARGS=(--project soleur --config prd_terraform)
 
-# --- Expected origin: canonical source, never a hardcoded 10.0.1.10 -----------------
-WEB1_IP=$(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-  terraform console <<<'var.web_hosts["web-1"].private_ip' 2>/dev/null \
-  | tr -d '"' | tr -d '[:space:]')
+# --- Expected origins: canonical sources, never a hardcoded private IP literal ------
+# ONE console session, two expressions, one answer per line: web-1's private IP (deploy./ssh.)
+# and the zot endpoint (registry., zot-registry.tf local.registry_endpoint).
+CONSOLE_OUT=$(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+  terraform console <<<$'var.web_hosts["web-1"].private_ip\nlocal.registry_endpoint' 2>/dev/null || true)
+WEB1_IP=$(sed -n 1p <<<"$CONSOLE_OUT" | tr -d '"' | tr -d '[:space:]')
+REGISTRY_ENDPOINT=$(sed -n 2p <<<"$CONSOLE_OUT" | tr -d '"' | tr -d '[:space:]')
 if [[ ! "$WEB1_IP" =~ ^10\.0\.1\.[0-9]{1,3}$ ]]; then
   echo "::error::could not resolve var.web_hosts[\"web-1\"].private_ip via terraform console (got '${WEB1_IP}'). Refusing to verify against an unknown origin — a blind check is worse than none."
   exit 1
 fi
-
-CF_API_TOKEN=$(doppler secrets get CF_API_TOKEN "${DOPPLER_ARGS[@]}" --plain 2>/dev/null || true)
-CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID "${DOPPLER_ARGS[@]}" --plain 2>/dev/null || true)
-[[ -n "$CF_API_TOKEN" ]] && echo "::add-mask::$CF_API_TOKEN"
-if [[ -z "$CF_API_TOKEN" || -z "$CF_ACCOUNT_ID" ]]; then
-  # Fail CLOSED. A missing credential means the check did not run; treating that as a
-  # pass is how a gate certifies silence.
-  echo "::error::doppler read failed for CF_API_TOKEN/CF_ACCOUNT_ID — the ingress verification could NOT run. This is a gate failure, not a skip."
+if [[ ! "$REGISTRY_ENDPOINT" =~ ^10\.0\.1\.[0-9]{1,3}:[0-9]{1,5}$ ]]; then
+  echo "::error::could not resolve local.registry_endpoint via terraform console (got '${REGISTRY_ENDPOINT}'). Refusing to verify the registry. route against an unknown origin."
   exit 1
 fi
 
-TUNNEL_ID=$(terraform state show cloudflare_zero_trust_tunnel_cloudflared.web 2>/dev/null \
-  | awk '/^[[:space:]]*id[[:space:]]*=/ { gsub(/"/, "", $3); print $3; exit }')
+CF_API_TOKEN=$(doppler secrets get CF_API_TOKEN "${DOPPLER_ARGS[@]}" --plain 2>/dev/null || true)
+[[ -n "$CF_API_TOKEN" ]] && echo "::add-mask::$CF_API_TOKEN"
+if [[ -z "$CF_API_TOKEN" ]]; then
+  # Fail CLOSED. A missing credential means the check did not run; treating that as a
+  # pass is how a gate certifies silence.
+  echo "::error::doppler read failed for CF_API_TOKEN — the ingress verification could NOT run. This is a gate failure, not a skip."
+  exit 1
+fi
+
+# The tunnel the deploy./ssh./registry. CNAMEs point at, and ITS account (#12937). Both come from the
+# TF outputs (tunnel.tf `cf_tunnel_id` / `cf_tunnel_account_id`, read off the `.web` resource dns.tf's
+# CNAMEs reference), NOT from Doppler `CF_ACCOUNT_ID`: state says which tunnel the records route to, so
+# a Doppler id flipped ahead of ADR-329's tunnel phase cannot point this check at another account.
+TUNNEL_ID=$(terraform output -raw cf_tunnel_id 2>/dev/null || true)
+TUNNEL_ACCOUNT_ID=$(terraform output -raw cf_tunnel_account_id 2>/dev/null || true)
 if [[ ! "$TUNNEL_ID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
-  echo "::error::could not resolve the tunnel id from terraform state (got '${TUNNEL_ID}')."
+  echo "::error::could not resolve the tunnel id from terraform output cf_tunnel_id (got '${TUNNEL_ID}'). This is a gate failure, not a skip."
+  exit 1
+fi
+if [[ ! "$TUNNEL_ACCOUNT_ID" =~ ^[0-9a-f]{32}$ ]]; then
+  echo "::error::could not resolve the tunnel account from terraform output cf_tunnel_account_id (got '${TUNNEL_ACCOUNT_ID}'). This is a gate failure, not a skip."
   exit 1
 fi
 
@@ -84,7 +99,7 @@ if ! _bearer_ok "$CF_API_TOKEN"; then
   exit 1
 fi
 CFG=$(curl --disable --noproxy '*' -sS --max-time 20 --config - \
-  "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/cfd_tunnel/${TUNNEL_ID}/configurations" \
+  "https://api.cloudflare.com/client/v4/accounts/${TUNNEL_ACCOUNT_ID}/cfd_tunnel/${TUNNEL_ID}/configurations" \
   < <(printf 'header = "Authorization: Bearer %s"\n' "$CF_API_TOKEN"))
 
 if [[ "$(jq -r '.success // false' <<<"$CFG")" != "true" ]]; then
@@ -107,8 +122,10 @@ if [[ -n "$BAD" ]]; then
   rc=1
 fi
 
+# Every rule whose hostname starts with the route is checked (joined), not the first match: a second
+# rule after a compliant first makes `got` differ from `want` and reds.
 n_checked=0
-for pair in "deploy|http://${WEB1_IP}:9000" "ssh|ssh://${WEB1_IP}:22"; do
+for pair in "deploy|http://${WEB1_IP}:9000" "ssh|ssh://${WEB1_IP}:22" "registry|tcp://${REGISTRY_ENDPOINT}"; do
   sub="${pair%%|*}"
   want="${pair#*|}"
   got=$(jq -r --arg h "${sub}." '[.result.config.ingress[]?
@@ -125,7 +142,7 @@ for pair in "deploy|http://${WEB1_IP}:9000" "ssh|ssh://${WEB1_IP}:22"; do
     echo "ok: live ${sub}. ingress service == ${want}"
   fi
 done
-[[ "$n_checked" -eq 2 ]] || { echo "::error::internal: checked ${n_checked} routes, expected 2"; rc=1; }
+[[ "$n_checked" -eq 3 ]] || { echo "::error::internal: checked ${n_checked} routes, expected 3"; rc=1; }
 [[ "$rc" -eq 0 ]] || exit 1
 
 # --- (b) Data plane: the pinned origin actually serves -------------------------------
@@ -148,7 +165,7 @@ HTTP_CODE="000"
 for attempt in 1 2 3 4 5; do
   # --disable/--noproxy as above (#7797): this call carries the webhook HMAC and both
   # CF Access client credentials.
-  HTTP_CODE=$(curl --disable --noproxy '*' -s -o "$DEPLOY_STATUS_TMP" -w '%{http_code}' --max-time 15 --config - \
+  HTTP_CODE=$(curl --disable --noproxy '*' -s -o "$DEPLOY_STATUS_TMP" -D "$DEPLOY_STATUS_HDR" -w '%{http_code}' --max-time 15 --config - \
     "https://deploy.${APP_DOMAIN_BASE}/hooks/deploy-status" 2>/dev/null \
     < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' \
           "$HMAC" "$CF_ACCESS_ID" "$CF_ACCESS_SECRET") || echo "000")
@@ -163,13 +180,61 @@ for attempt in 1 2 3 4 5; do
 done
 
 if [[ "$HTTP_CODE" != "200" ]]; then
-  cat >&2 <<EOF
+  # SOLEUR_TUNNEL_VERIFY (Ruled by CTO agent, 2026-11-19): name the MEASURED cause before failing.
+  # The data plane cannot tell "no connector" from "dead origin" (both are an edge 5xx), the control plane
+  # can: read the tunnel's connector census (the same classifier the scheduled census uses). No pass path
+  # is added at zero connectors — a dead connector on a future apply must stay red.
+  # shellcheck source=scripts/tunnel-connector-census.sh
+  source "${INFRA_DIR}/../../../scripts/tunnel-connector-census.sh"
+  CONN_RESP=$(curl --disable --noproxy '*' -sS --max-time 20 -w '\n%{http_code}' --config - \
+    "https://api.cloudflare.com/client/v4/accounts/${TUNNEL_ACCOUNT_ID}/cfd_tunnel/${TUNNEL_ID}/connections" \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$CF_API_TOKEN") 2>/dev/null || printf '\n000')
+  read -r CENSUS CONNS <<<"$(classify_connector_census "$(tail -1 <<<"$CONN_RESP")" "$(sed '$d' <<<"$CONN_RESP")")"
+  case "$CENSUS" in
+    zero_connectors) VERIFY_CAUSE="no-connector" ;;
+    # A connector is up. Access's own refusal carries its stamp (cf-access-aud/-domain) or redirects to its login: the
+    # predicate scripts/check-cloudflare-token-drift.sh uses. An unstamped 403 is web-1's webhook (hooks.json HMAC rule).
+    ok|multi_connector)
+      if grep -qiE '^cf-access-(aud|domain):' "$DEPLOY_STATUS_HDR" 2>/dev/null \
+         || { [[ "$HTTP_CODE" == 30? ]] && grep -qiE '^location:.*(cloudflareaccess\.com|/cdn-cgi/access/)' "$DEPLOY_STATUS_HDR" 2>/dev/null; }; then
+        VERIFY_CAUSE="access-refused"
+      elif [[ "$HTTP_CODE" == "403" ]]; then VERIFY_CAUSE="origin-refused"
+      else VERIFY_CAUSE="origin-not-serving"; fi ;;
+    # census_unavailable, or any verdict this script does not know: nothing was measured.
+    *) VERIFY_CAUSE="connections-unreadable"; CONNS="unknown" ;;
+  esac
+  echo "SOLEUR_TUNNEL_VERIFY cause=${VERIFY_CAUSE} tunnel=${TUNNEL_ID} connections=${CONNS}"
+  [[ -n "${GITHUB_OUTPUT:-}" ]] && echo "cause=${VERIFY_CAUSE}" >> "$GITHUB_OUTPUT"
+  # Each cause gets its own annotation; only origin-not-serving blames the origin and prescribes the pin revert.
+  # The annotations do not repeat the SOLEUR_TUNNEL_VERIFY prefix, so the runbook grep finds exactly one line.
+  case "$VERIFY_CAUSE" in
+    no-connector)
+      echo "::error::Tunnel verify (no-connector): tunnel ${TUNNEL_ID} has 0 connections, so nothing serves deploy./ssh./registry. The Terraform apply itself landed. Remedy: re-bake the connector host: gh workflow run apply-web-platform-infra.yml -f apply_target=web-host-replace -f web_host_key=web-2 -f confirm=REPLACE-web-2"
+      if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+        cat >> "$GITHUB_STEP_SUMMARY" <<SUMMARY
+**Tunnel verify: no connector.** Tunnel \`${TUNNEL_ID}\` has 0 connections, so deploy./ssh./registry. have nothing behind them. This is EXPECTED on the first apply after the tunnel moved account, before the connector host is re-born with its token (\`web-host-replace web-2\`). Any other apply that reports it means the connector is down, which is a real outage.
+SUMMARY
+      fi
+      ;;
+    connections-unreadable)
+      echo "::error::Tunnel verify (connections-unreadable): deploy.${APP_DOMAIN_BASE}/hooks/deploy-status returned HTTP ${HTTP_CODE} and the tunnel's connection count could not be read, so neither the connector nor the origin was measured. Re-read the census: gh workflow run scheduled-inngest-health.yml"
+      ;;
+    access-refused)
+      echo "::error::Tunnel verify (access-refused): deploy-status answered HTTP ${HTTP_CODE} with Cloudflare Access's stamp (a cf-access-* header or a redirect to its login) and ${CONNS} live connector(s); the origin was not reached. Probe each Access pair: doppler run -p soleur -c prd_terraform -- bash scripts/check-cloudflare-token-drift.sh"
+      ;;
+    origin-refused)
+      echo "::error::Tunnel verify (origin-refused): deploy-status answered HTTP 403 with no Cloudflare Access stamp and ${CONNS} live connector(s), so Access admitted the request and web-1's webhook refused its X-Signature-256 (hooks.json answers 403 on an HMAC mismatch). Check WEBHOOK_DEPLOY_SECRET parity: doppler run -p soleur -c prd_terraform -- bash scripts/check-deploy-script-parity.sh --status-only"
+      ;;
+    *)
+      cat >&2 <<EOF
 ::error::deploy.${APP_DOMAIN_BASE}/hooks/deploy-status returned HTTP ${HTTP_CODE} after the ingress pin — the pinned origin ${WEB1_IP}:9000 is NOT serving. The management plane is down.
 CF's edge-generated 502 does not name the origin it failed to reach, so check, in order:
   1. web-1's private NIC is up and holds ${WEB1_IP} (a fresh boot can serve ingress before the NIC converges — ADR-114:210-213; #6557 documents attaches that land while the guest never configures the address).
   2. webhook.service is running and bound to 0.0.0.0:9000.
 Recovery: revert the ingress pin and merge. tunnel.tf applies via the Cloudflare API, NOT through the deploy. tunnel, so the revert lands even with deploy. and ssh. both dead.
 EOF
+      ;;
+  esac
   cat "$DEPLOY_STATUS_TMP" >&2 2>/dev/null || true
   exit 1
 fi

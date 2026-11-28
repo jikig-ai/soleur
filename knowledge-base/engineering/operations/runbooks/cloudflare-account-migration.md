@@ -36,6 +36,8 @@ Incident: `knowledge-base/engineering/operations/post-mortems/soleur-ai-cloudfla
   (`hr-no-ssh-fallback-in-runbooks`).
 - **No secret on screen.** Every Doppler write pipes the value on stdin with `--silent` and stdout to `/dev/null`.
   Verification compares `sha256sum` of source and destination; non-secret ids print at most an 8-character prefix.
+  The exception: the full service-token UUIDs and DNS record ids that the job, the pre-delete and the mint print are
+  not secret, and Phase 3 commits them in full.
 - **The stdin pipe form.** `doppler secrets get … --plain` ends its output with one newline that is not part of the
   value (measured), so every value read in a pipe goes through the one-newline strip
   `LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}'`. A copy is
@@ -66,8 +68,13 @@ Incident: `knowledge-base/engineering/operations/post-mortems/soleur-ai-cloudfla
   in progress, because a queued run still executes later.
 - **Merge freeze** (CTO ruling D5). From the PR1 merge until the Phase 3 step 6 reopen, no change under
   `apps/web-platform/infra/**` merges unless it belongs to #12931. An exception is the operator's priority call,
-  recorded on #12931. Its push apply would fail closed at the predicate anyway, and Phase 3 step 6 would then apply it
-  unreviewed inside the reopen.
+  recorded on #12931. Until the tunnel apply, its push apply fails closed at the predicate, and Phase 3 step 6 would
+  then apply it unreviewed inside the reopen. The predicate turns true when the tunnel apply lands, not at the reopen.
+  So from the tunnel apply until the Phase 3 step 5 release redeploy, nothing that triggers an apply of
+  `apps/web-platform/infra` merges, with no exception: a routine apply would create
+  `cloudflare_ruleset.cache_shared_binaries` while the running containers still fail their purge (CTO ruling D3). If
+  one must, the owner first accepts in writing on #12931 that a revoked share can then be served from the edge for up
+  to the 60 s `s-maxage` cap (`cache.tf`).
 
 Placeholders: `<PR1>` is #12932 (this runbook's PR); `<PR2>` is the #12931 follow-up that re-pins `RULESET_ID` and
 adds the tunnel phase; `<phase>` is one of `redirects-dns`, `zone-rest`, `tunnel` (PR2); `<utc>` is `date -u +%Y%m%dT%H%M%SZ`;
@@ -107,6 +114,26 @@ re-dispatch:
   in the same reviewed PR flip that address's spec class from `create` to `import` in
   `tests/scripts/lib/cf-account-migrate-gate.sh` (every ruleset and list is `create` class, and the phase gate refuses
   an import of a create-class address, so the import block alone is refused one step later).
+- `predelete-refused` (tunnel): the pre-delete refused after every gate passed, so nothing was applied. Its own line
+  `cf-tunnel-host-predelete verdict=refuse reason=<inner>` (or `verdict=partial`) names the cause:
+  - `pins-missing`: the script does not pin six ids. Commit them (Phase 3 step 2) in a reviewed PR.
+  - `record-unreadable`: a read got no verdict, or a 404 without Cloudflare code 81044. Nothing was deleted; re-run.
+  - `record-mismatch`, `still-present` or `foreign-record` (a record on `deploy.`/`ssh.`/`registry.` that is neither
+    pinned nor a proxied CNAME to `*.cfargotunnel.com`): read the named record and stop. Fix it in a reviewed change.
+  - `verdict=partial deleted=<n>`: some records are already deleted. Re-dispatch; the pre-delete counts them gone.
+  - `no-token`: `CF_API_TOKEN` did not reach the script; nothing was read. Check Doppler and re-dispatch.
+- `token-scope-missing`: `CF_API_TOKEN` (or a staged `CF_API_TOKEN_NEXT`, which the probe reads first) lacks a Tunnel,
+  Access, service-token or notification-policy read on the new account; re-mint it with the scope.
+- `deploy-token-refused` (tunnel): the deploy policy's service token failed its live read. The `deploy-token` line's
+  `detail=` names why: `http-404` means the committed id is wrong (re-read the mint's UUID); `name-differs` means it is
+  another token; `expiry-out-of-window` means it has under 8016 h (334 days) left, so re-mint it and commit the new id
+  in a new PR. The tunnel rehearsal and apply must both run within 31 days of the mint.
+- `doppler-write-token-missing` (tunnel): `DOPPLER_TOKEN_WRITE` is not set, so the post-apply CI-SSH sync could not run.
+  It refuses before the pre-delete, so nothing was deleted or applied.
+- `ci-ssh-sync-failed` (tunnel, `applied=true`): the apply and live probes passed but the CI-SSH pair did not reach
+  `prd_terraform` (`cause=output-empty`, `write-refused` or `digest-mismatch`); re-dispatch the same phase.
+
+Every tunnel refusal after the pre-delete carries `predelete=done`: the six A records are gone.
 
 ## Expected reds (do not "fix" these mid-migration)
 
@@ -120,10 +147,15 @@ re-dispatch:
 | `cron-gh-pages-cert-reissue` reports `precondition_blocked` | Old DNS-edit token revoke → Phase 3 step 5 release redeploy | Its frozen container env still holds the revoked token. Fails closed by design. |
 | Token-drift `DEAD credential` issue for a key this runbook just revoked | Revoke → the same act's key delete | A revoked value still sits in a scanned `CF_API_TOKEN*` key. The fix is the revoke recipe's step 4 (delete that key), never a rotation. |
 | `inngest-public-sdk-url-preflight.sh` refuses `[ruleset-id]` (the public `sdk_url` replace dispatch) | Phase 2 flip → PR2 re-pin of `RULESET_ID` | It pins the legacy zone's config entrypoint id; after the flip it reads the new zone, whose entrypoint `redirects-dns` creates with a new id. Fails closed. Do not dispatch that replace in this window. |
-| Connector census in `scheduled-inngest-health.yml` red (no tunnel, then 0 connectors) | Phase 2 flip → web-2 replace | The census looks the tunnel up by name under the new `CF_ACCOUNT_ID`. |
+| Connector census in `scheduled-inngest-health.yml` red (no tunnel, then 0 connectors) | PR2 merge → web-2 replace | The census looks the tunnel up by name on the Soleur account, a literal in `scripts/tunnel-connector-census.sh` (`CF_TUNNEL_ACCOUNT_ID`), not Doppler's `CF_ACCOUNT_ID`. |
+| Inngest liveness reads `probe_unavailable` and never restarts; `restart-inngest-server.yml` fails | Zone move → Phase 3 step 5 proves `deploy.` | Both call `deploy.soleur.ai` (`/hooks/inngest-liveness`, `/hooks/deploy`), which has no working route. An Inngest outage in this window is neither detected nor restarted. The tunnel-avoiding recovery is the operator-authorized Hetzner API act named below this table. |
 | `deploy.`/`ssh.`/`registry.` answer 530/1033 instead of Error 1000 | Tunnel apply → web-2 replace | The new tunnel exists with 0 connectors. Both states are down; nothing regresses. |
-| First CI-SSH token sync warns on an empty secret | First tunnel-phase apply | A freshly synced secret reads empty on the first run; expect one re-dispatch. |
+| The first CI-SSH sync may refuse `ci-ssh-sync-failed applied=true` | First tunnel-phase apply | The sync refuses rather than warns (see its refusal under **The dispatch**). Re-dispatch the phase: every created address plans no-op and the sync runs again. |
 | The predicate prints `unnormalized <addr>` | An apply stopped before reaching `<addr>` → its re-dispatch | That record is in state with no `content`, so the routine apply must not take it over. `unnormalized <addr>`: rehearse, then re-dispatch the phase whose spec lists `<addr>`. `cf-account-migrate.yml` is exempt from the predicate, so the red never blocks this fix. |
+
+<!-- lint-infra-ignore start: deferred orchestrator prose, not a step in this runbook's flow. It names the one recovery that works while `deploy.` has no route, gated on operator authorization (hr-menu-option-ack-not-prod-write-auth); the agent surfaces it, the operator says go. -->
+The recovery that avoids the tunnel while `deploy.` is unrouted is `Operator-authorizes:` a Hetzner API reboot of the Inngest host (`hcloud_server.inngest`, `POST /v1/servers/<id>/actions/reboot`); the `web-host-reboot.yml` workflow is retired.
+<!-- lint-infra-ignore end -->
 
 ## Revoke recipe
 
@@ -629,35 +661,121 @@ on their `_PREV` keys.
 
 ## Phase 3 — PR2: tunnel, Access and deploy hosts
 
-1. **Deploy Access service token.** Mint `CF_API_TOKEN_ACCESS_MINT` (Access: Service Tokens:Edit only, 7-day expiry)
-   with the Phase 0 hand-off. `Operator-authorizes:` run `apps/web-platform/infra/scripts/cf-access-deploy-token-mint.sh`.
-   It writes `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` on stdin to `soleur-infra-privileged/prd` and
-   `soleur/prd_terraform` (and to every other holder the inventory stage lists), and prints only the token UUID. That
-   UUID goes into `local.deploy_service_token_ids` in PR2. Then revoke `CF_API_TOKEN_ACCESS_MINT` with the revoke
-   recipe. For each `CF_ACCOUNT_ID` holder the inventory stage lists outside `prd_terraform`, decide whether it is
-   read for R2 (leave it, or move the reader to `CF_R2_ACCOUNT_ID`) or for zone and Access (write the new id after this
+1. **Deploy Access service token.** Mint `CF_API_TOKEN_ACCESS_MINT` (Access: Service Tokens:Edit only, 7-day expiry;
+   the script also accepts it staged as `CF_API_TOKEN_ACCESS_MINT_NEXT`) with the Phase 0 hand-off. `Agent:` run
+   `apps/web-platform/infra/scripts/cf-access-deploy-token-mint.sh` with no argument: a dry run that proves every
+   read, lists the holders and mints nothing. `Operator-authorizes:` the same line with `--apply`.
+   It writes `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` on stdin to `soleur-infra-privileged/prd`,
+   `soleur/prd_terraform`, every other Doppler config that already holds both names (a config holding only one of them
+   refuses), and the GitHub repository secrets of the same names (through the infra GitHub App), and prints only the
+   token UUID. Doppler copies are checked by digest; GitHub cannot return a secret, so those are checked by their
+   `updated_at` moving. Its last line is `verdict=ok token_id=<uuid> written=<n>`; that UUID goes into
+   `local.deploy_service_token_ids` (step 2). The 31-day clock of `deploy-token-refused` starts now. After
+   `verdict=ok`, revoke `CF_API_TOKEN_ACCESS_MINT` with the revoke recipe. For each `CF_ACCOUNT_ID` holder the
+   inventory stage lists outside `prd_terraform`, decide whether it is read for R2 (leave it, or move the reader to `CF_R2_ACCOUNT_ID`) or for zone and Access (write the new id after this
    step): `apps/web-platform/server/inngest/functions/event-cf-token-expiry-check.ts` reads `prd` `CF_ACCOUNT_ID` to
    watch the `github-actions-deploy` token, which now lives on the new account. Record each decision on #12931.
-2. `Operator-authorizes:` merge PR2, with the kill switch carried and checked exactly as in Phase 1 (a body line of a
-   branch commit, confirmed with the same `gh pr view <PR2> --json commits` count before queueing).
-3. **Tunnel phase.** `Operator-authorizes:` the dispatch with `migrate_phase=tunnel -f confirm=MIGRATE-CF-tunnel`,
-   `rehearsal=true`, then `rehearsal=false`. The apply leg first runs the pinned six-record pre-delete
-   (`cf-tunnel-host-predelete.sh --apply`, never from the agent's machine): it GETs each pinned id and deletes all six
+2. **Commit the ids, then merge PR2.** One branch commit, before the merge, carries three things: the token UUID over
+   the nil placeholder in `local.deploy_service_token_ids` (`tunnel.tf`), the six pre-delete record ids in
+   `PINNED_IDS` of `apps/web-platform/infra/scripts/cf-tunnel-host-predelete.sh` (one bare id per line), and the
+   `[skip-web-platform-apply]` kill switch as a line of its message body. Without the six ids the tunnel rehearsal
+   refuses `pins-missing` and a second PR is needed. `Agent:` read the ids (record ids are not secret; this only reads):
+
+   ```bash
+   for n in ssh.soleur.ai registry.soleur.ai; do
+     doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer %s\n" "$CF_API_TOKEN" \
+       | curl --disable --noproxy "*" -sS --max-time 30 --header @- "https://api.cloudflare.com/client/v4/zones/951ce525552201ec6c696b24251abed7/dns_records?type=A&name=$1"' _ "$n" \
+       | jq -r '.success, (.result[] | "\(.id) \(.name) \(.proxied) \(.content)")'
+   done
+   bash apps/web-platform/infra/scripts/cf-tunnel-host-predelete.sh --check-pins
+   ```
+
+   Expected: `true` and three proxied rows per name, with content in {`104.26.10.163`, `104.26.11.163`,
+   `172.67.73.132`}; any other row count or content is a stop. After the commit, `--check-pins` prints
+   `cf-tunnel-host-predelete verdict=pins-ok count=6`. `Operator-authorizes:` merge PR2, with the kill switch checked
+   exactly as in Phase 1 (the same `gh pr view <PR2> --json commits` count before queueing).
+3. **Tunnel phase.** `Agent:` before the rehearsal, check, read-only:
+
+   ```bash
+   doppler secrets --only-names --json -p soleur -c prd_terraform | jq -r 'has("CF_API_TOKEN_NEXT")'      # false
+   gh secret list --json name --jq '[.[] | select(.name == "DOPPLER_TOKEN_WRITE")] | length'               # 1
+   doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer %s\n" "$CF_API_TOKEN" \
+     | curl --disable --noproxy "*" -sS --max-time 30 --header @- "https://api.cloudflare.com/client/v4/accounts/66d4f93f7397f196544e9fe84c3557c2/cfd_tunnel?name=soleur-web-platform&is_deleted=false"' \
+     | jq -r '.success, (.result | length)'                                                              # true, 0
+   doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer %s\n" "$CF_API_TOKEN" \
+     | curl --disable --noproxy "*" -sS --max-time 30 --header @- "https://api.cloudflare.com/client/v4/zones/951ce525552201ec6c696b24251abed7/access/apps?per_page=100"' \
+     | jq -r '.success, ([.result[] | select(.domain | test("^(deploy|ssh|registry)\\.soleur\\.ai"))] | length)'   # true, 0
+   ```
+
+   - A staged `CF_API_TOKEN_NEXT` is what the scope probe grades, while the plan and apply use `CF_API_TOKEN`: swap
+     or delete it first.
+   - `DOPPLER_TOKEN_WRITE` must be a repository secret: only the apply leg receives it, so the rehearsal cannot prove
+     it, and the apply refuses `doppler-write-token-missing` without it.
+   - A leftover `soleur-web-platform` tunnel or an Access app on the three hosts collides with the creates: stop for
+     an owner decision.
+   - Read the latest `scheduled-terraform-drift.yml` plan for the addresses the `cloudflare_record.app` target pulls
+     in (`doppler_service_token.*`, `hcloud_volume.workspaces`, `hcloud_placement_group.web_spread`,
+     `random_password.zot_pull`, `tls_private_key.ci_ssh`). Drift on any of them refuses the tunnel plan.
+
+   `Agent:` save the pre-write baseline of `cloudflare_record.app` once, before the first `rehearsal=false` dispatch.
+   It is the one record the tunnel phase writes, and the `redirects-dns` baseline does not cover it. The content is
+   web-1's origin IPv4, which the proxied record keeps off public DNS, so post only its digest on #12931:
+
+   ```bash
+   doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer %s\n" "$CF_API_TOKEN" \
+     | curl --disable --noproxy "*" -sS --max-time 30 --header @- https://api.cloudflare.com/client/v4/zones/951ce525552201ec6c696b24251abed7/dns_records/f21d6911cdacb1e109ae31bcfb440e7d' \
+     | jq -c 'select(.success == true) | .result | {id, type, name, content, proxied, ttl, comment, tags}' > <scratchpad>/app-record-baseline.json
+   jq -r '"\(.type) \(.name) proxied=\(.proxied) ttl=\(.ttl)"' <scratchpad>/app-record-baseline.json
+   jq -r '.content' <scratchpad>/app-record-baseline.json | sha256sum
+   ```
+
+   `Operator-authorizes:` the dispatch with `migrate_phase=tunnel -f confirm=MIGRATE-CF-tunnel`,
+   `rehearsal=true`, then `rehearsal=false`. Once every gate has passed (phase gate, deploy-token read, entrypoint gate,
+   `expected_in_state_updates`, the workflow-command token), and just before `applying=true`, the apply leg
+   runs the pinned six-record pre-delete (`cf-tunnel-host-predelete.sh --apply`, never from the agent's machine; CTO
+   ruling 2026-11-25, so a gate refusal deletes nothing): it GETs each pinned id and deletes all six
    only if every one is a proxied `A` record on `ssh.`/`registry.soleur.ai` with content in
    {`104.26.10.163`, `104.26.11.163`, `172.67.73.132`} in the new zone; one mismatch deletes none
-   (`verdict=refuse`). Expected gate line: the tunnel, its config, 3 Access apps, 3 policies, 2 service tokens, the
+   (`verdict=refuse`). Before any delete it also lists every record on `deploy.`, `ssh.` and `registry.soleur.ai`;
+   one that is neither pinned nor a proxied CNAME to `*.cfargotunnel.com` refuses `foreign-record`. The rehearsal
+   grades the pin list (`--check-pins`), then dry-runs the pre-delete against the live zone, deleting nothing. The
+   gate grades the content of the three Access policies and apps it creates, and reads their include blocks in
+   `apps/web-platform/infra/tunnel.tf`, so each block keeps `service_token = <its own token>` as its only statement;
+   each app must also leave `policies`, `options_preflight_bypass`, `self_hosted_domains`, `destinations` and
+   `cors_headers` unset. Expected gate line: the tunnel, its config, 3 Access apps, 3 policies, 2 service tokens, the
    `service_token_expiry` notification policy and the `deploy`/`ssh`/`registry` CNAMEs created; `random_id.tunnel_secret`
-   and `doppler_secret.registry_push_access_token_id`/`_secret` replaced by request; `cloudflare_record.app` an
-   import that plans the admitted `import-normalize` update, as every record import does (ADR-329); exactly one create
-   of the deploy policy, whose service token the gate read live (`200`, name
-   `github-actions-deploy`, about 8760h to expiry, `decision = "non_identity"`, a single include); destroys 0. The
-   post-apply step syncs `CI_SSH_ACCESS_TOKEN_ID/_SECRET` (`apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh`
-   logic); expect one re-dispatch on the first-run empty secret. After the apply, the new tunnel has 0 connectors (an
-   expected red). **PR2 requirement:** the pin, the live read and the post-apply re-read exist only for `redirects-dns`
-   today, and the pin reader skips the `for_each` `app` import block. PR2 must extend all three to the `tunnel` phase
-   for `cloudflare_record.app`, or the gate refuses every tunnel plan.
+   replaced by request; `doppler_secret.registry_push_access_token_id`/`_secret` updated in place (they carry no
+   `ignore_changes`, ADR-331 Decision 3, so no `-replace` is needed); `cloudflare_record.app` an import that plans the
+   admitted `import-normalize` update, as every record import does (ADR-329), pinned, read live after the plan and
+   re-read after the apply exactly as the `redirects-dns` records are; exactly one create of the deploy policy, whose
+   service token the gate read live (`200`, name `github-actions-deploy`, 8016 to 8761 h to expiry,
+   `decision = "non_identity"`, a single include); `destroys=1`, the delete half of the `random_id.tunnel_secret`
+   replace. The post-apply step syncs `CI_SSH_ACCESS_TOKEN_ID/_SECRET` to `prd_terraform` and checks each by digest.
+   After the apply, the new tunnel has 0 connectors (an expected red), and the predicate is now true (Merge freeze).
+
+   **Verify** (job step, then `Agent:` locally). The job runs the gptbot, noindex and app-health probes as for
+   `zone-rest`, and the `cloudflare_record.app` re-read (`import-normalize reread=ok records=1`). Then:
+
+   ```bash
+   for h in deploy ssh registry; do curl -sS -m 10 -o /dev/null -w "$h %{http_code} %header{cf-access-domain}\n" "https://$h.soleur.ai/"; done
+   curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' https://app.soleur.ai/health               # 200
+   ```
+
+   Expected: each host answers `401`, `403` or `302` with its own name as `cf-access-domain` (Access answers in front
+   of a tunnel with 0 connectors), and `/health` answers `200`.
 4. **Replace web-2** (the only path that delivers the new tunnel token: it reaches a host only through create-time
-   user_data, ADR-304). `Operator-authorizes:` the rehearsal, then the same line with `plan_only=false`:
+   user_data, ADR-304). `Agent:` first, read-only (plan Phase 5.0 and 5.1):
+   - Read the load balancers on the new zone (`GET /zones/951ce525552201ec6c696b24251abed7/load_balancers`), each pool
+     they name (`GET /accounts/66d4f93f7397f196544e9fe84c3557c2/load_balancers/pools/<id>`) and the `app.` record. If no
+     pool there holds web-2's address and `app.` points only at web-1, record "web-2 serves no app traffic" on #12931
+     and continue. Otherwise stop: draining a live pool is a production write outside Terraform. Only on an explicit
+     operator go, set web-2's weight to 0 by API, re-read it, and wait until the pool reports it drained.
+   - Check stock: `GET https://api.hetzner.cloud/v1/server_types?name=cpx22` with `HCLOUD_TOKEN_READONLY`, and
+     require `hel1` among `server_types[0].locations[]` with `available` true. A replace destroys before it creates,
+     so no stock means no web-2.
+
+   Skip the `ga-pool-update` drain and serve steps of `web-host-replace.md`: they target the moved zone and drain
+   nothing live. `Operator-authorizes:` the rehearsal, then the same line with `plan_only=false`:
 
    ```bash
    gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=web-host-replace \
@@ -667,16 +785,21 @@ on their `_PREV` keys.
    Expected: the replace gate sees exactly its four allow-listed addresses, web-2 boots, and
    `soleur-wait-ready service cloudflared` passes (a failure emits a fresh-boot Sentry event and a Better Stack boot
    trail, source 2457081). web-1 is never touched; `app.soleur.ai` keeps serving from its A record. If the replace
-   fails, re-run it.
+   fails, re-run the stock check first. With `hel1` stock, re-dispatch. With none, stop for an owner decision on
+   relocating web-2. If step 4 drained a pool, point that origin at the new IPv4 and restore its weight under the same
+   go.
 
    **Then re-mint the Origin CA certificate from the new zone**, before the release redeploy, with
-   `CF_API_TOKEN_ORIGIN_CA` re-scoped to the new zone: `gh workflow run mint-origin-ca-cert.yml --ref main -f mode=plan`,
-   then `Operator-authorizes:` the deliberate-rotation apply in `origin-tls-mint.md` §3.
+   `CF_API_TOKEN_ORIGIN_CA` re-scoped to the new zone. prd still holds a valid pair, so the plan needs
+   `-f replace=true` (without it the plan refuses `already_minted_not_expiring`):
+   `gh workflow run mint-origin-ca-cert.yml --ref main -f mode=plan -f replace=true`, then `Operator-authorizes:` the
+   deliberate-rotation apply in `origin-tls-mint.md` §3.
 5. **Verify:**
    - the next connector census in `scheduled-inngest-health.yml` (verdict token from `scripts/tunnel-connector-census.sh`)
      reports exactly 1 connector on the new tunnel;
-   - `apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh` passes (new `CF_ACCOUNT_ID`, new tunnel id,
-     `deploy-status` 200 through `deploy.` with the new Access pair);
+   - `apps/web-platform/infra/scripts/verify-tunnel-ingress-origin.sh` passes (the tunnel id and its account come from
+     the Terraform outputs `cf_tunnel_id` and `cf_tunnel_account_id`, not Doppler's `CF_ACCOUNT_ID`; `deploy-status`
+     200 through `deploy.` with the new Access pair);
    - a CI SSH bridge round-trip and a `registry.` push canary succeed;
    - `Operator-authorizes:` `gh workflow run web-platform-release.yml --ref main -f bump_type=patch`; the redeploy
      loads the new runtime `CF_ZONE_ID`, `CF_API_TOKEN_PURGE`, `CF_API_TOKEN_DNS_EDIT` and the new certificate;
@@ -702,7 +825,7 @@ on their `_PREV` keys.
    gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun -f reason='#12931 reopen'
    ```
 
-   The predicate is now true. Expected: green end to end, and the plan in its log carries exactly one
+   The predicate has been true since the tunnel apply. Expected: green end to end, and the plan in its log carries exactly one
    `cloudflare_ruleset.cache_shared_binaries` create (the routine apply's existing `-target`, created now that the
    containers purge with the new token, CTO ruling D3). The `scheduled-terraform-drift.yml` red clears on its next
    run.
@@ -776,8 +899,9 @@ still matches, a record the apply never reached plans the admitted `import-norma
 the remainder. An apply that fails after the forget says the same in its refusal line: fix forward and re-dispatch,
 never restore from the backup.
 
-The off-by-default flags `cf_load_balancing_enabled`, `cf_zone_plan_pro`, `cf_zone_dnssec_enabled` and
-`cf_migration_import_app` are locked to `false` by `variables.tf` validations (CTO ruling D9), and `cf_r2_account_id`
+The off-by-default flags `cf_load_balancing_enabled`, `cf_zone_plan_pro` and `cf_zone_dnssec_enabled` are locked to
+`false` by `variables.tf` validations (CTO ruling D9). PR2 deleted the `cf_migration_import_app` validation by that same
+procedure; only the tunnel phase's plan passes `-var=cf_migration_import_app=true`, and `cf_r2_account_id`
 is pinned to the legacy account. Never fix a red by overriding one: turning a flag on is a reviewed PR that deletes its
 validation (Load Balancing #12983, DNSSEC #12982).
 
@@ -832,9 +956,10 @@ validation (Load Balancing #12983, DNSSEC #12982).
   is the apply's one INT at `APPLY_DEADLINE` firing, and takes this same path. One exception comes first: a
   `reread=` value containing `differs=` goes to **A DNS record may hold a wrong value** and restores first, and an
   `unreadable=` value with no `differs=` goes to **No completed re-read**. Otherwise `Agent:` run that phase's local
-  Verify block first; on any failure follow the `verify-failed` steps below (an `apply-failed` refusal of either phase
+  Verify block first; on any failure follow the `verify-failed` steps below (an `apply-failed` refusal of any phase
   also carries its own best-effort `verify=ok`, `verify=skipped` or `failing=` field, and `verify=skipped` means no
-  public probe ran). Then, after a cancelled `redirects-dns` run, follow **No completed re-read**. In every other case,
+  public probe ran). Then, after a cancelled `redirects-dns` or `tunnel` run, follow **No completed re-read**. In every
+  other case,
   fix the cause forward and re-dispatch.
 - **A rehearsal that refused `remote-serial-changed` or `backup-written`**: the one case where a rehearsal may
   have written. `remote-serial-changed`: the remote state's serial moved while the rehearsal ran, so something wrote
@@ -847,7 +972,8 @@ validation (Load Balancing #12983, DNSSEC #12982).
   `rehearsal-refused` whose log holds a `REFUSE <addr> differs from the live record (<tokens>)` line). A `reread=` value
   with only `unreadable=` is **No completed re-read**, and `REFUSE <addr> live record unreadable` with no `differs` line
   is a re-rehearsal with no edit (the Step 2 token table).
-  Treat it as live user impact and restore before any PR, in the order `api`, MX/SPF/DKIM/DMARC, `buttondown_ns1` and
+  Treat it as live user impact and restore before any PR, in the order `app` (the `tunnel` phase's one record; a wrong
+  value takes the product down for every user), `api`, MX/SPF/DKIM/DMARC, `buttondown_ns1` and
   `buttondown_ns2` (a wrong NS value redelegates `mail.soleur.ai`), `supabase_acme_challenge` (a wrong value can break
   `api` certificate validation later, with no immediate symptom), then the rest. The re-read detects a bad write and
   does not undo it: the wrong value stays live until restored and resolver caches expire.
@@ -864,6 +990,13 @@ validation (Load Balancing #12983, DNSSEC #12982).
     `accounts/<CFAM_NEW_ACCOUNT_ID>/pages/projects/soleur-docs` with `CF_API_TOKEN_PAGES`, requiring HTTP 200,
     `success == true`, `result.name == "soleur-docs"` and a subdomain equal to `soleur-docs-40x.pages.dev`. A failed
     read or a mismatch means no edit and a stop for an owner decision.
+  - For `app`, whose block is `hcloud_server.web["web-1"].ipv4_address`, the expected `content` is web-1's IPv4, read
+    from the Hetzner API with `HCLOUD_TOKEN_READONLY` (`GET /v1/servers/<id>`, the id Terraform state holds for
+    `hcloud_server.web["web-1"]`, whose `ipv4_address` state also holds), never over SSH. It must equal the
+    `content` of the baseline file Phase 3 step 3 saved (compare digests); a difference is a stop for an owner
+    decision. The restore block below reads the `redirects-dns` pins, which do not list `app`: for it, its `ID=` line takes
+    `cf_account_migrate_record_pins tunnel`. The recreate block refuses `app` (its `content` is not a literal): a
+    deleted `app` record is a stop for an owner decision.
   - `Operator-authorizes:` one edit of the named field on the NEW zone, only for a record with no stop token. `Agent:`
     runs one block per field from the repository root. `VALUE` is the expected value as JSON (`"text"`, `300`, `true`);
     for `name` it is the full hostname. For a field the record's `dns.tf` block omits, `VALUE` is `null` for `comment`
@@ -969,13 +1102,13 @@ validation (Load Balancing #12983, DNSSEC #12982).
     decision. No `terraform state rm`, `terraform import`, state push or lone literal edit: the path back into state
     needs a reviewed PR and a CTO ruling.
   - `verify=skipped` means no public probe ran, so run the local Verify block. `verify=ok` does not clear this bullet,
-    because those probes read no mail record. Then `Operator-authorizes:` a rehearsal, which reads all 26, and the
-    re-dispatch.
-- **No completed re-read** (`redirects-dns` only, because no other phase reads records: a `reread=` value with
-  `unreadable=` and no `differs=`, or a cancelled run with `mode=apply applying=true` once its Verify block has run):
-  edit no DNS record. A `failing=` item still follows its `verify-failed` step, and a failing `app-health` item follows
-  `verify-failed` step 1 first. On `verify=skipped`, `Agent:` run the local Verify block. Then `Operator-authorizes:` a
-  rehearsal, which reads all 26 even on an all-no-op plan. A `differs from the live record` line goes to the bullet
+    because those probes read no mail record. Then `Operator-authorizes:` a rehearsal of the same phase, which reads
+    every record that phase pins (26 for `redirects-dns`, `app` alone for `tunnel`), and the re-dispatch.
+- **No completed re-read** (`redirects-dns` and `tunnel`, the phases that read records; `zone-rest` reads none: a
+  `reread=` value with `unreadable=` and no `differs=`, or a cancelled run with `mode=apply applying=true` once its
+  Verify block has run): edit no DNS record. A `failing=` item still follows its `verify-failed` step, and a failing
+  `app-health` item follows `verify-failed` step 1 first. On `verify=skipped`, `Agent:` run the local Verify block.
+  Then `Operator-authorizes:` a rehearsal, which reads every pinned record even on an all-no-op plan. A `differs from the live record` line goes to the bullet
   above. `live record unreadable` gets one more rehearsal, and a second consecutive one stops for an owner decision.
   On a rehearsal PASS, `Operator-authorizes:` the re-dispatch.
 - **`reason=apply-budget-exhausted`** (prints `applied=false`, plus `forget=committed` on `redirects-dns`): fewer than
@@ -1005,10 +1138,21 @@ validation (Load Balancing #12983, DNSSEC #12982).
   2. No `mode=apply applying=true`: a stop before `applying=true` (above). Whether the forget is committed is the
      committed test, never this log's `backup=uploaded` alone. A cancelled run showing `backup=uploaded` and no
      `applying=true` wrote no DNS record. Re-rehearse, then re-dispatch the same phase.
-- **`reason=verify-failed applied=true`** (a `redirects-dns` or `zone-rest` apply landed and a post-apply probe
-  failed; the `failing=` list names each item with what came back, `<item>=><code>+<location>`). CTO ruling
+
+  On `tunnel`, the pre-delete runs just before `applying=true`, so a run cancelled under arm 2 may have deleted the
+  six A records (a re-dispatch counts them gone). The tunnel apply has no INT bound, so a cancel or a timeout kill can
+  land a create in Cloudflare that never reached state. Before any `tunnel` re-dispatch after a cancel, `Agent:` read
+  by name on the new account and zone: the `soleur-web-platform` tunnel, the service tokens `github-actions-ci-ssh` and
+  `github-actions-registry-push`, the notification policy `CF Access service token expiring`, and the `deploy.`,
+  `ssh.` and `registry.` CNAMEs. Any of them present while state does not hold it is a stop for an owner decision.
+- **A `tunnel` refusal with `applied=true`** (`verify-failed`, `import-normalize-reread-failed`,
+  `ci-ssh-sync-failed`): the predicate already reads complete, so merge nothing that triggers an apply of
+  `apps/web-platform/infra` until this Halt clears. Then follow that reason's bullet; `ci-ssh-sync-failed` is a
+  re-dispatch of the phase.
+- **`reason=verify-failed applied=true`** (a `redirects-dns`, `zone-rest` or `tunnel` apply landed and a post-apply
+  probe failed; the `failing=` list names each item with what came back, `<item>=><code>+<location>`). CTO ruling
   2026-11-20:
-  1. Act on each failing item by its code, after either phase. If `app-health` is in `failing=` (the product is down
+  1. Act on each failing item by its code, after any phase. If `app-health` is in `failing=` (the product is down
      for every user):
      - `app-health=>525` or `=>526`: `Operator-authorizes:` (owner only, as `origin-tls-strict-flip.md` §Break-glass)
        one dashboard edit on the NEW zone `951ce525…` only: Rules, Configuration Rules (phase `http_config_settings`),

@@ -589,17 +589,18 @@ variable "cf_migration_imports_enabled" {
 }
 
 # The app record's import pulls the tunnel into the plan (its content is web-1's IPv4 and
-# hcloud_server.web renders the tunnel token), so it belongs to the tunnel phase (PR2).
+# hcloud_server.web renders the tunnel token), so it belongs to the tunnel phase. CTO ruling D9
+# locked it off with a validation that PR2 deletes (CTO ruling 2026-11-25 amends D9 for this flag);
+# the default stays false, so only the tunnel plan of scripts/cf-account-migrate-job.sh, which passes
+# -var=cf_migration_import_app=true, adopts it. A Doppler CF_MIGRATION_IMPORT_APP key would reach every
+# routine plan through the tf-var transformer; what stops it importing the record is
+# scripts/cf-account-migration-complete.sh, run by .github/actions/infra-credentials, which halts every
+# routine apply until the app record is in state with non-empty content (after that the import is a
+# no-op). tests/scripts/test-cf-account-migrate-gate.sh row D9a keeps the record import class.
 variable "cf_migration_import_app" {
-  description = "Enable the cloudflare_record.app import (tunnel phase of #12931). False until PR2."
+  description = "Enable the cloudflare_record.app import. Set only by the #12931 tunnel-phase plan."
   type        = bool
   default     = false
-
-  # Locked off (CTO ruling D9): PR2 deletes this validation in the reviewed diff that flips it.
-  validation {
-    condition     = var.cf_migration_import_app == false
-    error_message = "cf_migration_import_app is locked off until the #12931 tunnel phase (PR2). Turning it on is a reviewed PR that deletes this validation; a Doppler TF_VAR cannot."
-  }
 }
 
 variable "webhook_deploy_secret" {
