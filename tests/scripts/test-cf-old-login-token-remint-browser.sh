@@ -76,6 +76,7 @@
 #   XM11 the cleanup ignores the answered id (a drifted stored name survives) -> M7h
 #   XM12-XM16 the token POST (in-page again, redirects followed, read as text, atok guard, disposed early)
 #   XM17 the sink hand-off sent with a bare global fetch -> N1   XM18 the sink answer not disposed -> M1
+#   XM19 the sink hand-off timeout dropped -> M1
 #   XS1 sink peer check deleted -> S2b                  XS2 sink keeps a partial file on a failed fsync -> S8
 #   XW1 the read wait deleted -> L1     XW2 the mint wait deleted -> L2     XW3 the revoke wait deleted -> L3
 #   XW4 the read wait's .catch dropped -> D7 ({error:TimeoutError})
@@ -385,8 +386,8 @@ function page(world) {
 // The sink hand-off, a Node-side page.request.post to a non-dashboard URL (2026-11-28: the run context has no
 // fetch). Records the request and answers a Playwright APIResponse whose text() fails once disposed. sinkMode
 // 'real' sends it over the network as playwright-core 0.0.78's fetch does: the string body byte-exact, the given
-// headers and no Origin; on a 3xx with maxRedirects 0 it throws "Max redirect count exceeded" without following,
-// and with maxRedirects unset it follows up to 20 hops, re-sending the body (307/308).
+// headers and no Origin; maxRedirects 0 becomes -1 there (coreBundle.js), so a 3xx comes back UNFOLLOWED as an
+// ordinary response; with maxRedirects unset it follows up to 20 hops, re-sending the body (307/308), then throws.
 function rawPost(target, headers, data, timeout) {
   return new Promise((resolve, reject) => {
     const body = Buffer.from(String(data), 'utf8');
@@ -419,6 +420,7 @@ async function sinkPost(world, url, opts = {}) {
   for (let hop = 0; ; hop += 1) {
     const r = await rawPost(target, h, opts.data, opts.timeout);
     if ([301, 302, 303, 307, 308].includes(r.status) && r.location) {
+      if (max === 0) return api(r.status, r.body);
       if (hop >= max) throw new Error('apiRequestContext.post: Max redirect count exceeded');
       target = new URL(r.location, target).href;
       continue;
@@ -628,6 +630,7 @@ const sinkRow = (tag, why, mode) => row(`M${tag} sink ${why} -> new token delete
   const r = await exec('mint', MINT_P, w);
   want(r, { refused: 'sink', id8: ID8, status: 200, contentType: JS, matches: 0, success: true });
   must(w.deletes.length === 1 && !w.acctTokens.some((t) => t.id === NEW_FULL), 'cleanup DELETE');
+  if (mode !== 'down') must(w.sinkDisposed === 1, 'the sink answer was not disposed');
 });
 sinkRow('8', 'down', 'down');
 sinkRow('9', 'refuses (403)', 'refuse');
@@ -645,6 +648,7 @@ row('M9c the sink answers 307 to another 127.0.0.1 listener -> {refused:sink}, n
     want(r, { refused: 'sink', id8: ID8, status: 200, contentType: JS, matches: 0, success: true });
     must(hitsA.length === 1, `first listener hits ${hitsA.length}`);
     must(hitsB.length === 0, 'the redirect carried the value to a second listener');
+    must(w.sinkDisposed === 1, 'the 307 answer was not disposed');
     must(w.deletes.length === 1, 'cleanup DELETE');
   } finally { A.close(); B.close(); }
 });
@@ -1420,6 +1424,8 @@ mut XM16 "the token POST answer disposed before it is read" mint "      const co
 # The sink hand-off through page.request (2026-11-28): the run context has no global fetch.
 mut XM17 "the sink hand-off sent with a bare global fetch" mint "const sr = await page.request.post(a.sink_url, {" "const sr = await fetch(a.sink_url, {" N1 'bare global fetch'
 mut XM18 "the sink answer not disposed" mint "await sr.dispose().catch(() => {});" "" M1 'sink answer was not disposed'
+mut XM19 "the sink hand-off timeout dropped" mint "failOnStatusCode: false,
+        timeout: 15000," "failOnStatusCode: false," M1 'failOnStatusCode or timeout'
 # Instrument rows: the P-shape/P-leak check and the page-serialization emulation must each catch a real slip.
 mut XL1 "a revoke return bypasses the guard and carries the atok" revoke "return safe({ status: r.status(), contentType, success });" "return { status: r.status(), contentType, success, atok: l.atok };" R1 'P-shape'
 mut XL2 "an in-page function closes over a Node-side variable" revoke "if (t.id.startsWith(prefix)) hits.push" "if (t.id.startsWith(a.pin)) hits.push" R1 'ReferenceError'
@@ -1469,8 +1475,8 @@ sink_mut XS2 "sink keeps a partial file on a failed fsync" 'os.unlink(out)' 'pas
 # --- anti-vacuity floor: EXACT counts (reported directly, never through fail()) -----------------
 TOTAL=$((PASS + FAIL))
 SELFTEST_PASSES=1
-EXPECT_FULL=267
-EXPECT_MUTANTS=108
+EXPECT_FULL=269
+EXPECT_MUTANTS=110
 case "$MODE" in full) want_n="$EXPECT_FULL" ;; *) want_n="$EXPECT_MUTANTS" ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -ne "$want_n" ]]; then
   printf '  [FAIL] anti-vacuity floor: %s assertions ran in %s mode, the exact floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$want_n" >&2

@@ -376,6 +376,10 @@ SINK_FLAGS = [
     ("--ignore-https-errors", "PLAYWRIGHT_MCP_IGNORE_HTTPS_ERRORS", "drops TLS validation on page requests"),
     ("--no-sandbox", "PLAYWRIGHT_MCP_SANDBOX", "controls the browser sandbox"),
     ("--daemon", "PLAYWRIGHT_MCP_DAEMON", "serves the tools over a socket, around this stdio relay"),
+    # page.request (the #12931 Phase 5 sink hand-off) sends plain http to 127.0.0.1 through any configured proxy:
+    # playwright-core skips a proxy only for an explicit bypass list, with no loopback default (CTO S1, 2026-11-28).
+    ("--proxy-server", "PLAYWRIGHT_MCP_PROXY_SERVER", "routes page.request traffic, loopback included, through a proxy that reads it"),
+    ("--proxy-bypass", "PLAYWRIGHT_MCP_PROXY_BYPASS", "only has meaning with a proxy, which this relay refuses"),
 ]
 # Env-only refusals: the argv/config form stays allowed because it is explicit
 # and audited in the registration; the ambient env form is not.
@@ -475,12 +479,20 @@ def refuse_argv_and_env(server: List[str], profile_dir: Optional[str], env: Dict
                     refuse_start("config browser.contextOptions.permissions grants page permissions the model did not audit")
                 if ctx.get("ignoreHTTPSErrors"):
                     refuse_start("config browser.contextOptions.ignoreHTTPSErrors drops TLS validation on page requests")
+                if ctx.get("proxy"):
+                    refuse_start("config browser.contextOptions.proxy routes page.request traffic through a proxy that reads it")
+                if ctx.get("recordHar"):
+                    refuse_start("config browser.contextOptions.recordHar writes every request and response body to a HAR on disk")
+                if ctx.get("extraHTTPHeaders"):
+                    refuse_start("config browser.contextOptions.extraHTTPHeaders adds headers to every page.request call")
             lo = browser.get("launchOptions")
             if isinstance(lo, dict):
                 if lo.get("executablePath"):
                     refuse_start("config browser.launchOptions.executablePath substitutes the browser binary")
                 if lo.get("chromiumSandbox") is False:
                     refuse_start("config browser.launchOptions.chromiumSandbox disables the browser sandbox")
+                if lo.get("proxy"):
+                    refuse_start("config browser.launchOptions.proxy routes page.request traffic through a proxy that reads it")
                 args = lo.get("args")
                 if isinstance(args, list) and any(str(a).startswith("--remote-debugging") for a in args):
                     refuse_start("config launchOptions.args opens a remote debugging channel around this relay")

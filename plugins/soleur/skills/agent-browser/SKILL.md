@@ -552,7 +552,8 @@ string: an old-string session holds no `flock`, so also require that `readlink
    `--output-dir`, `--init-script`, `--init-page`, `--cdp-endpoint`,
    `--endpoint`, `--extension`, `--executable-path`, `--daemon`,
    `--allow-unrestricted-file-access`, `--grant-permissions`,
-   `--ignore-https-errors`, `--no-sandbox`, and each setting's
+   `--ignore-https-errors`, `--no-sandbox`, `--proxy-server`, `--proxy-bypass`
+   (a proxy reads plain-http `page.request` traffic, loopback included), and each setting's
    `PLAYWRIGHT_MCP_*` env twin (`PLAYWRIGHT_MCP_SANDBOX` for `--no-sandbox`),
    plus env-only `PLAYWRIGHT_MCP_USER_DATA_DIR` and
    `PLAYWRIGHT_MCP_SNAPSHOT_MODE`; a trailing valued flag, which would swallow
@@ -563,8 +564,8 @@ string: an old-string session holds no `flock`, so also require that `readlink
    capability other than `vision`, `browser.cdpEndpoint` /
    `browser.remoteEndpoint`, `browser.initPage` / `browser.initScript`,
    `browser.contextOptions.storageState` / `.permissions` /
-   `.ignoreHTTPSErrors`, `browser.launchOptions.executablePath` /
-   `.chromiumSandbox: false` / a remote-debugging `args` flag, or a
+   `.ignoreHTTPSErrors` / `.proxy` / `.extraHTTPHeaders` / `.recordHar`,
+   `browser.launchOptions.executablePath` / `.proxy` / `.chromiumSandbox: false` / a remote-debugging `args` flag, or a
    `browser.userDataDir` conflicting with `--user-data-dir-name`; `--port`,
    `--host`, `PLAYWRIGHT_MCP_PORT` or `PLAYWRIGHT_MCP_HOST`
    (an HTTP transport around the relay); `--caps` or `PLAYWRIGHT_MCP_CAPS` other

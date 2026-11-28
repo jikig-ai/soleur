@@ -228,7 +228,9 @@ ids, names, dates and the sink URL, never a secret. Placeholders: `<YYYYMMDD>` i
 (UTC); `<scratchpad>` is the absolute path of this session's scratchpad directory.
 
 **Before the sitting.** `Agent:` confirm the Playwright MCP server the session uses carries none of `--save-trace`,
-`--save-har`, `--save-session`, `--save-video`: run `claude mcp get playwright` (and `claude mcp get
+`--save-har`, `--save-session`, `--save-video`, `--proxy-server` (a proxy would read the plain-http sink hand-off;
+`--save-har` is no @playwright/mcp 0.0.78 flag; the redact proxy refuses the others, and config `recordHar`, at
+start, CTO S1): run `claude mcp get playwright` (and `claude mcp get
 plugin:soleur:playwright` for the plugin server) and read its args. During the sitting, call no
 `browser_network_request`, `browser_network_requests`, `browser_console_messages`, snapshot or screenshot.
 

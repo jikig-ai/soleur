@@ -1,0 +1,17 @@
+# Decision challenges: feat-one-shot-p5-mint-sink-page-request
+
+Rulings for the p5-mint.js sink hand-off through `page.request` (Ref #12931). The CTO agent ruled each item. None
+of them went to the operator (`hr-technical-fork-is-not-an-operator-question`). Earlier rulings on the token POST
+are N1-N5 in `knowledge-base/project/specs/archive/20261128-170705-feat-one-shot-p5-mint-node-post/decision-challenges.md`.
+
+**Defect (measured 2026-11-28).** The mint step 5 hand-off called a bare Node-side `fetch`. The
+`browser_run_code_unsafe` vm context of @playwright/mcp 0.0.78 holds only `page` and `__end__` (playwright-core
+coreBundle.js `runCode`), so the call threw `ReferenceError`. The cleanup then deleted a good token, the mint
+returned `{refused:"sink"}`, and p5-sink.py never got a request.
+
+| # | Question | Ruling |
+|---|---|---|
+| S1 | Does `page.request.post` carry the value to the 127.0.0.1 sink? | Ruled by CTO agent, 2026-11-28: yes. Must-haves (all in the body): `maxRedirects: 0`, `failOnStatusCode: false`, `timeout: 15000`; no Origin header; success only on status 200 with `text()` exactly `ok` (the answer carries no secret); `dispose()` in a `finally`; `secret = null` before the check; any throw goes to `failAfterPost('sink')`. New must-have, done in this PR: playwright-mcp-redact-proxy.py refuses every proxy setting at start: `--proxy-server`, `--proxy-bypass`, their `PLAYWRIGHT_MCP_*` env twins, and config `browser.contextOptions.proxy`, `browser.launchOptions.proxy` and `browser.contextOptions.extraHTTPHeaders`, plus config `browser.contextOptions.recordHar`. A HAR would record the hand-off body. It is the HAR sink that 0.0.78 still exposes, since that version has no `--save-har` flag. The hand-off is plain http, and playwright-core skips a proxy only for an explicit bypass list with no loopback default (coreBundle.js `createProxyAgent`/`shouldBypassProxy`), so a proxy would read the value. Rejected: going back to `fetch` (absent from the run context); calling the sink from inside the page (the sink refuses an Origin header). |
+| S1-correction | What does `maxRedirects: 0` do? | Ruled by CTO agent, 2026-11-28: playwright-core turns 0 into -1 (coreBundle.js), so a 3xx comes back unfollowed as an ordinary response and does not throw. The result is still `refused:"sink"`. The harness now emulates this: M9c returns the 307 unfollowed and asserts the dispose. |
+| S2 | Does p5-sink.py need a change? | Ruled by CTO agent, 2026-11-28: no. page.request sets Content-Length from the body bytes and sends user-agent, accept and accept-encoding but no Origin. Retries default to 0, so the one-shot holds, and the URL is used verbatim. The sink does not check content-type. Integration row I1 runs the real p5-sink.py through the emulated page.request and writes the value byte-exact. Rejected: adding content-type or user-agent checks (brittle, no added protection). |
+| S3 | Required tests and mutants | Ruled by CTO agent, 2026-11-28: (a) the harness returns the 3xx unfollowed, and M9c asserts `refused:"sink"`, the dispose and an untouched second listener; (b) the 403 and "nope" sink rows assert the dispose; (c) XM19 (sink `timeout: 15000` dropped) is killed by M1; (d) redact-proxy FR5 cases for each proxy setting above. All four are in this PR, with N1 (a trap `fetch` on the run context is never called), XM17 (sink back on a bare `fetch` -> N1) and XM18 (sink answer not disposed -> M1). |

@@ -597,7 +597,9 @@ for pair in \
   '--save-video:PLAYWRIGHT_MCP_SAVE_VIDEO' \
   '--ignore-https-errors:PLAYWRIGHT_MCP_IGNORE_HTTPS_ERRORS' \
   '--no-sandbox:PLAYWRIGHT_MCP_SANDBOX' \
-  '--daemon:PLAYWRIGHT_MCP_DAEMON'; do
+  '--daemon:PLAYWRIGHT_MCP_DAEMON' \
+  '--proxy-server:PLAYWRIGHT_MCP_PROXY_SERVER' \
+  '--proxy-bypass:PLAYWRIGHT_MCP_PROXY_BYPASS'; do
   flag="${pair%%:*}"; envvar="${pair##*:}"
   r="$(session "sink-$flag" "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" "$flag=/tmp/x")"
   assert_refused_start "FR5: $flag=<v> in the wrapped argv refuses to start" "$r" "$flag"
@@ -667,6 +669,19 @@ assert_refused_start 'FR5: config browser.contextOptions.permissions refuses to 
 printf '{"browser": {"contextOptions": {"ignoreHTTPSErrors": true}}}\n' > "$WORK/cfg-ctxhttps.json"
 r="$(session cfgctxhttps "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-ctxhttps.json")"
 assert_refused_start 'FR5: config browser.contextOptions.ignoreHTTPSErrors refuses to start' "$r" 'ignoreHTTPSErrors'
+# A proxy would read the plain-http page.request hand-off to 127.0.0.1 (#12931 Phase 5, CTO S1 2026-11-28).
+printf '{"browser": {"contextOptions": {"proxy": {"server": "http://127.0.0.1:3128"}}}}\n' > "$WORK/cfg-ctxproxy.json"
+r="$(session cfgctxproxy "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-ctxproxy.json")"
+assert_refused_start 'FR5: config browser.contextOptions.proxy refuses to start' "$r" 'contextOptions.proxy'
+printf '{"browser": {"launchOptions": {"proxy": {"server": "http://127.0.0.1:3128"}}}}\n' > "$WORK/cfg-loproxy.json"
+r="$(session cfgloproxy "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-loproxy.json")"
+assert_refused_start 'FR5: config browser.launchOptions.proxy refuses to start' "$r" 'launchOptions.proxy'
+printf '{"browser": {"contextOptions": {"recordHar": {"path": "/tmp/x.har"}}}}\n' > "$WORK/cfg-ctxhar.json"
+r="$(session cfgctxhar "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-ctxhar.json")"
+assert_refused_start 'FR5: config browser.contextOptions.recordHar refuses to start' "$r" 'recordHar'
+printf '{"browser": {"contextOptions": {"extraHTTPHeaders": {"origin": "https://dash.cloudflare.com"}}}}\n' > "$WORK/cfg-ctxhdrs.json"
+r="$(session cfgctxhdrs "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-ctxhdrs.json")"
+assert_refused_start 'FR5: config browser.contextOptions.extraHTTPHeaders refuses to start' "$r" 'extraHTTPHeaders'
 printf '{"browser": {"launchOptions": {"chromiumSandbox": false}}}\n' > "$WORK/cfg-sandbox.json"
 r="$(session cfgsandbox "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-sandbox.json")"
 assert_refused_start 'FR5: config browser.launchOptions.chromiumSandbox refuses to start' "$r" 'chromiumSandbox'
