@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1539
-# generated-at=2026-11-27T23:12:21Z
+# generated-at=2026-11-28T10:19:26Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -324,6 +324,7 @@ plugins/soleur/test/scheduled-realtime-probe-guard.test.sh	6
 plugins/soleur/test/scripts-shard-manifest.test.sh	11
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	8
 plugins/soleur/test/scripts-shard-totality.test.sh	10
+plugins/soleur/test/seat-liveness.test.sh	12
 plugins/soleur/test/session-state.test.sh	6
 plugins/soleur/test/shell-argv-parity.test.sh	9
 plugins/soleur/test/ship-battery-owed.test.sh	3

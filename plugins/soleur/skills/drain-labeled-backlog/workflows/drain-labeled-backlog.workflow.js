@@ -346,6 +346,67 @@ function isWorkflowSaturationError(err) {
 // <!-- harness-model-map:end -->
 // ---------------------------------------------------------------------------
 
+// Spawned-agent seat liveness & bounded recovery (#12524, ADR-332).
+const escalatedSeats = []
+const recoveredSeats = []
+function safeSeatId(raw) {
+  return String(raw).replace(/[^A-Za-z0-9:._-]/g, '_').slice(0, 128) || 'seat'
+}
+function classifySeatError(err) {
+  if (!err) return 'truncated'
+  return isWorkflowSaturationError(err) ? 'rate_limit' : 'crash'
+}
+async function runReadOnlyBriefSeat(rawSeatId, thunk) {
+  const seatId = safeSeatId(rawSeatId)
+  let res = null
+  let lastErr = null
+  try {
+    res = await thunk()
+  } catch (err) {
+    lastErr = err
+    res = null
+  }
+  if (res) return res
+  const cls1 = classifySeatError(lastErr)
+  if (!budgetOk()) {
+    log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls1} action=escalate attempt=0 fallback_tier=none reviewed_coverage=degraded`)
+    escalatedSeats.push(seatId)
+    return null
+  }
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls1} action=respawn attempt=1 fallback_tier=same reviewed_coverage=full`)
+  lastErr = null
+  try {
+    res = await thunk()
+  } catch (err) {
+    lastErr = err
+    res = null
+  }
+  if (res) {
+    recoveredSeats.push(seatId)
+    return res
+  }
+  const cls2 = classifySeatError(lastErr)
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls2} action=escalate attempt=1 fallback_tier=none reviewed_coverage=degraded`)
+  escalatedSeats.push(seatId)
+  return null
+}
+async function runSideEffectingDrainSeat(rawSeatId, thunk) {
+  const seatId = safeSeatId(rawSeatId)
+  let res = null
+  let lastErr = null
+  try {
+    res = await thunk()
+  } catch (err) {
+    lastErr = err
+    res = null
+  }
+  if (res) return res
+  const cls = classifySeatError(lastErr)
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls} action=escalate attempt=0 fallback_tier=none reviewed_coverage=degraded`)
+  escalatedSeats.push(seatId)
+  return null
+}
+
 phase('Cluster')
 log('tier pins: cluster→standard, report→standard (mechanical steps per ADR-053; brief + one-shot inherit the session model)')
 // Pinned 'standard': issue clustering from a structured list is mechanical (ADR-053).
@@ -409,7 +470,10 @@ let oneShotsDispatched = 0 // #9403: pipeline-tally `counts` surface
 const drainResults = await pipeline(
   picked,
   // Stage 1: scoped brief from issue bodies.
-  (cluster) => agent(briefPrompt(cluster), { label: `brief:${cluster.area}`, phase: 'Drain', schema: BRIEF_SCHEMA }),
+  (cluster) =>
+    runReadOnlyBriefSeat(`brief:${cluster.area}`, () =>
+      agent(briefPrompt(cluster), { label: `brief:${cluster.area}`, phase: 'Drain', schema: BRIEF_SCHEMA }),
+    ),
   // Stage 2: delegate the cluster to a full one-shot (gated on dry-run + budget).
   (brief, cluster) => {
     if (!brief) return { area: cluster.area, status: 'failed', notes: 'brief assembly failed' }
@@ -431,7 +495,9 @@ const drainResults = await pipeline(
       }
     }
     oneShotsDispatched++ // #9403: pipeline-tally counts — the invoking prose posts this via `incr agent_rounds`
-    return agent(oneShotPrompt(brief), { label: `one-shot:${brief.area}`, phase: 'Drain', schema: ONE_SHOT_RESULT_SCHEMA })
+    return runSideEffectingDrainSeat(`one-shot:${brief.area}`, () =>
+      agent(oneShotPrompt(brief), { label: `one-shot:${brief.area}`, phase: 'Drain', schema: ONE_SHOT_RESULT_SCHEMA }),
+    )
   },
 )
 
@@ -467,6 +533,9 @@ const summary = {
     belowFloor: below.map((c) => ({ area: c.area, count: c.count })),
   },
   picked: picked.map((c) => ({ area: c.area, count: c.count, issues: c.issues.map((i) => i.number) })),
+  recoveredSeats,
+  escalatedSeats,
+  reviewedCoverage: escalatedSeats.length ? 'degraded' : 'full',
   budget: { total: budget.total, spent: budget.spent(), oneShotFloor: ONE_SHOT_FLOOR, droppedClusters },
   // #9403: pipeline-tally bridge — the invoking prose posts these via
   // `pipeline-tally.sh incr <dim> <n>`. agent_rounds counts one-shot dispatches
