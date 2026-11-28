@@ -695,6 +695,11 @@ for envvar in NODE_OPTIONS NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED; do
   r="$(session "sinkenv-$envvar" "$PROXY" --env "$envvar=0" --send "$INIT" --end eof --expect-death)"
   assert_refused_start "FR5: $envvar refuses to start (CTO R1)" "$r" "$envvar is set"
 done
+# CTO U4: --chromium-fallback runs Chrome for Testing from Playwright's download dir; these names redirect it.
+for envvar in PLAYWRIGHT_BROWSERS_PATH npm_config_playwright_browsers_path NPM_CONFIG_PLAYWRIGHT_BROWSERS_PATH; do
+  r="$(session "sinkenv-$envvar" "$PROXY" --env "$envvar=/tmp/pw" --send "$INIT" --end eof --expect-death)"
+  assert_refused_start "FR5: $envvar refuses to start (CTO U4; npm names match case-insensitively)" "$r" "$envvar is set"
+done
 # The server reads a .ini path with its INI parser and falls back to INI when JSON.parse rejects the file, so
 # the proxy refuses an .ini path and the NaN/Infinity constants Python's json accepts and JSON.parse does not.
 printf '{"browser": {}}\n' > "$WORK/cfg.ini"
@@ -706,7 +711,7 @@ assert_refused_start 'FR5: a config carrying NaN (not JSON to the server) refuse
 # --allow-proxy-and-node-env (CTO U1, 2026-11-28): the plugin registration passes it so a corporate-proxy or extra-CA
 # host can still browse; it turns off exactly the proxy and NODE_* refusals, and every other refusal still fires.
 APNE=(--proxy-arg --allow-proxy-and-node-env)
-for envvar in NODE_OPTIONS NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED PLAYWRIGHT_MCP_PROXY_SERVER PLAYWRIGHT_MCP_PROXY_BYPASS; do
+for envvar in NODE_OPTIONS NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED PLAYWRIGHT_MCP_PROXY_SERVER PLAYWRIGHT_MCP_PROXY_BYPASS PLAYWRIGHT_BROWSERS_PATH NPM_CONFIG_PLAYWRIGHT_BROWSERS_PATH; do
   r="$(session "apne-$envvar" "$PROXY" "${APNE[@]}" --env "$envvar=0" --send "$INIT" --end eof --timeout 3)"
   assert_true "U1: --allow-proxy-and-node-env lets $envvar start" started "$r"
 done
@@ -1313,8 +1318,12 @@ mutant 90-apne-cfg-relaxes-all refuse_argv_and_env '                        if k
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m90 "$MUTANT_PATH" --proxy-arg --allow-proxy-and-node-env --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-lo-recordHar.json")"; red 'row 90: the opt-out relaxes every config context key → launchOptions.recordHar starts under it' started "$r"; fi
 mutant 91-apne-prefix-match take_bool_flag '        if a == flag:' '        if a.startswith(flag):'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m91 "$MUTANT_PATH" --proxy-arg --allow-proxy-and-node-env=1 --send "$INIT" --end eof --timeout 3)"; red 'row 91: a prefix match → --allow-proxy-and-node-env=1 starts' started "$r"; fi
-EXPECTED_MUTANTS=91   # 87-91 for --allow-proxy-and-node-env; rows 1-56 without row 4, with 22a/22b; 57-65 for --user-data-dir-name; 66-77 for the sink/env/config/trailing-flag/realpath/log-scrub/vetting hardening; 78-86 for --chromium-fallback (incl. its --sandbox) and the ping-env passthrough; exactly one mutation row each
-EXPECTED_RED_ROWS=91
+mutant 92-npm-name-case-sensitive env_names_for '    return [k for k in env if k.lower().replace("-", "_") == want]' '    return [envvar]'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m92 "$MUTANT_PATH" --env NPM_CONFIG_PLAYWRIGHT_BROWSERS_PATH=/tmp/pw --send "$INIT" --end eof --timeout 3)"; red 'row 92: the npm name matched case-sensitively → NPM_CONFIG_PLAYWRIGHT_BROWSERS_PATH starts' started "$r"; fi
+mutant 93-browsers-path-skipped refuse_argv_and_env '            if env.get(name):' '            if env.get(name) and "BROWSERS" not in name.upper():'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m93 "$MUTANT_PATH" --env PLAYWRIGHT_BROWSERS_PATH=/tmp/pw --send "$INIT" --end eof --timeout 3)"; red 'row 93: the browser-path rows skipped → PLAYWRIGHT_BROWSERS_PATH starts' started "$r"; fi
+EXPECTED_MUTANTS=93   # 87-91 for --allow-proxy-and-node-env, 92-93 for the browser-path refusals (CTO U4); rows 1-56 without row 4, with 22a/22b; 57-65 for --user-data-dir-name; 66-77 for the sink/env/config/trailing-flag/realpath/log-scrub/vetting hardening; 78-86 for --chromium-fallback (incl. its --sandbox) and the ping-env passthrough; exactly one mutation row each
+EXPECTED_RED_ROWS=93
 
 # ---------------------------------------------------------------------------
 # Guard 2 — .mcp.json routing, EXECUTABLE (scratch HOME, npx shim on PATH)

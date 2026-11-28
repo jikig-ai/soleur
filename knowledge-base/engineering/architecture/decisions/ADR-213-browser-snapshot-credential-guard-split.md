@@ -658,8 +658,10 @@ A proxy flag before `--`, `--allow-proxy-and-node-env`, turns off exactly the pr
 rows and the config `proxy` key; every other refusal stays. The plugin registration (`plugins/soleur/.mcp.json`)
 passes it, so a host behind a corporate proxy or an extra CA still browses; the repo `.mcp.json` registration does not,
 and the Phase 5 sitting runs on that one and checks its args. The repo registration also passes `--chromium-fallback`
-(CTO U3), so on a host with no Google Chrome it runs the bundled Chromium with the sandbox on instead of failing to start. Each startup refusal on a setting now ends with a
+(CTO U3), so on a host with no Google Chrome it runs Chrome for Testing with the sandbox on instead of failing to start; because that
+build lives in a user-writable dir, `PLAYWRIGHT_BROWSERS_PATH` and `npm_config_playwright_browsers_path` are refused too (relaxed
+under the opt-out, CTO U4). Each startup refusal on a setting now ends with a
 `To fix:` remedy.
 
-The CTO rulings are S1, R1, U1, U2 and U3 in
+The CTO rulings are S1, R1, U1, U2, U3 and U4 in
 `knowledge-base/project/specs/archive/20261128-193943-feat-one-shot-p5-mint-sink-page-request/decision-challenges.md`.

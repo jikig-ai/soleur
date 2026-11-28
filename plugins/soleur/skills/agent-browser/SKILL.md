@@ -557,8 +557,9 @@ string: an old-string session holds no `flock`, so also require that `readlink
    (a proxy reads plain-http `page.request` traffic, loopback included), and each setting's
    `PLAYWRIGHT_MCP_*` env twin (`PLAYWRIGHT_MCP_SANDBOX` for `--no-sandbox`),
    plus env-only `PLAYWRIGHT_MCP_USER_DATA_DIR`,
-   `PLAYWRIGHT_MCP_SNAPSHOT_MODE`, `NODE_OPTIONS`, `NODE_EXTRA_CA_CERTS` and
-   `NODE_TLS_REJECT_UNAUTHORIZED`; an `.ini` config path, or a JSON config the
+   `PLAYWRIGHT_MCP_SNAPSHOT_MODE`, `NODE_OPTIONS`, `NODE_EXTRA_CA_CERTS`,
+   `NODE_TLS_REJECT_UNAUTHORIZED`, `PLAYWRIGHT_BROWSERS_PATH` and
+   `npm_config_playwright_browsers_path` (any case; they redirect the browser build); an `.ini` config path, or a JSON config the
    server would not parse as JSON (`NaN`/`Infinity`); a trailing valued flag, which would swallow
    the appended `--snapshot-mode none` as its value; a config file (from
    `--config` or `PLAYWRIGHT_MCP_CONFIG`) that is missing, is not JSON, or sets
@@ -584,7 +585,7 @@ string: an old-string session holds no `flock`, so also require that `readlink
    the variable in the shell that starts Claude Code). The proxy flag
    `--allow-proxy-and-node-env` (before `--`) turns off exactly the
    `--proxy-server` / `--proxy-bypass` rows, their env twins, the three `NODE_*`
-   rows and the config `proxy` key; every other refusal stays. The plugin
+   rows, the two browser-path rows and the config `proxy` key; every other refusal stays. The plugin
    registration passes it, so a host behind a corporate proxy or an extra CA
    still browses; the repo `.mcp.json` registration does not, and the
    Cloudflare re-mint sitting (`cloudflare-old-login-token-remint.md`) runs on

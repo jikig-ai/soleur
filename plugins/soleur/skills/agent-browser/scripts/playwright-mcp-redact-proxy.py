@@ -22,7 +22,8 @@ what it was before.
 
 `--allow-proxy-and-node-env` (a boolean, given at most once) turns off exactly these refusals: the
 `--proxy-server`/`--proxy-bypass` SINK_FLAGS rows (argv and env), the NODE_OPTIONS,
-NODE_EXTRA_CA_CERTS and NODE_TLS_REJECT_UNAUTHORIZED SINK_ENV_ONLY rows, and the config `proxy` key
+NODE_EXTRA_CA_CERTS, NODE_TLS_REJECT_UNAUTHORIZED, PLAYWRIGHT_BROWSERS_PATH and
+npm_config_playwright_browsers_path SINK_ENV_ONLY rows (CTO U4), and the config `proxy` key
 under contextOptions and launchOptions. Every other refusal stays. The plugin registration
 (plugins/soleur/.mcp.json) passes it, so a corporate-proxy or extra-CA host can still browse; the repo
 registration (.mcp.json) does not, and the #12931 Phase 5 re-mint sitting requires that one (CTO U1,
@@ -420,11 +421,18 @@ SINK_ENV_ONLY = [
     ("NODE_OPTIONS", "injects code, a debugger or a heap dump into the server process"),
     ("NODE_EXTRA_CA_CERTS", "trusts extra CAs for the server's own TLS (a MITM of page.request)"),
     ("NODE_TLS_REJECT_UNAUTHORIZED", "can disable TLS validation for the server's own requests"),
+    # `--chromium-fallback` runs Chrome for Testing from Playwright's user-writable download dir; these two names
+    # redirect that dir to another (possibly patched) build, the same substitution PLAYWRIGHT_MCP_EXECUTABLE_PATH is
+    # refused for (CTO U4, 2026-11-28). npm reads NPM_CONFIG_* too, so the npm name matches case-insensitively. A
+    # value in an .npmrc is set inside npx, after this check: the runbook reads it with `npm config get`.
+    ("PLAYWRIGHT_BROWSERS_PATH", "redirects Playwright's browser download dir (a substituted browser binary)"),
+    ("npm_config_playwright_browsers_path", "redirects Playwright's browser download dir (a substituted browser binary)"),
 ]
 # The refusals `--allow-proxy-and-node-env` turns off, and only these (CTO U1, 2026-11-28).
 ALLOW_PROXY_FLAG = "--allow-proxy-and-node-env"
 RELAXABLE_FLAGS = {"--proxy-server", "--proxy-bypass"}
-RELAXABLE_ENV = {"NODE_OPTIONS", "NODE_EXTRA_CA_CERTS", "NODE_TLS_REJECT_UNAUTHORIZED"}
+RELAXABLE_ENV = {"NODE_OPTIONS", "NODE_EXTRA_CA_CERTS", "NODE_TLS_REJECT_UNAUTHORIZED",
+                 "PLAYWRIGHT_BROWSERS_PATH", "npm_config_playwright_browsers_path"}
 # Valued flags: a bare one as the LAST server arg would bind the appended
 # `--user-data-dir=<dir>` (or `--snapshot-mode`) as its value instead of
 # refusing cleanly. Boolean flags are deliberately absent — a trailing
@@ -440,6 +448,14 @@ VALUE_FLAGS = {
     "--timeout-action", "--timeout-navigation", "--user-agent", "--user-data-dir",
     "--viewport-size",
 }
+
+
+def env_names_for(envvar: str, env: Dict[str, str]) -> List[str]:
+    """The env names that spell `envvar`: itself, plus, for an npm_config_* name, every case and -/_ variant npm reads."""
+    if not envvar.startswith("npm_config_"):
+        return [envvar]
+    want = envvar.lower().replace("-", "_")
+    return [k for k in env if k.lower().replace("-", "_") == want]
 
 
 def refuse_argv_and_env(server: List[str], profile_dir: Optional[str], env: Dict[str, str], allow_proxy_and_node_env: bool = False) -> None:
@@ -459,8 +475,9 @@ def refuse_argv_and_env(server: List[str], profile_dir: Optional[str], env: Dict
         relaxable = envvar in RELAXABLE_ENV
         if relaxable and allow_proxy_and_node_env:
             continue
-        if env.get(envvar):
-            refuse_start(f"{envvar} is set ({why})", fix_relaxable(envvar) if relaxable else fix_unset(envvar))
+        for name in env_names_for(envvar, env):
+            if env.get(name):
+                refuse_start(f"{name} is set ({why})", fix_relaxable(name) if relaxable else fix_unset(name))
     if argv_values(server, "--port") or flag_present(server, "--port") or env.get("PLAYWRIGHT_MCP_PORT"):
         refuse_start("--port serves the tools over HTTP, around this stdio relay", "To fix: remove --port from the server args, or unset PLAYWRIGHT_MCP_PORT")
     if argv_values(server, "--host") or flag_present(server, "--host") or env.get("PLAYWRIGHT_MCP_HOST"):
