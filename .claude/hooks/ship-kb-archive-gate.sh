@@ -93,6 +93,10 @@
 
 set -eo pipefail
 # -u (nounset) omitted: hook failure paths must return JSON, not crash silently.
+# Partial clones lazily fetch missing objects from origin inside cat-file,
+# merge-base and diff, unbounded by the timeouts below; a hang there would
+# end in a harness kill that lets the merge through. Refuse lazy fetches.
+export GIT_NO_LAZY_FETCH=1
 
 # shellcheck source=lib/incidents.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
@@ -796,9 +800,14 @@ if [[ -z "$MERGE_TARGET_WHY" ]]; then
     # and `"declare" -n H=…` all run `declare -n`, and the quoted spellings
     # hid the option from a raw-text match. An option word that is itself an
     # expansion (`declare $o H=…`, `declare $'-n' …`) cannot be proven
-    # nameref-free and denies the same way.
+    # nameref-free and denies the same way. Spellings that split or build the
+    # option word (`declare {-n,} H=…`, `declare\<newline>-n`,
+    # `declare${IFS}-n`, `declare -[n]`) are closed by the second test: on
+    # this path any unquoted declare/local/typeset word denies — no
+    # documented arm block uses one.
     elif tr -d "\"'\\\\" <<<"$CMD" \
-         | grep -qE '(^|[^A-Za-z0-9_])(declare|local|typeset)[[:space:]]+([^;&|]*[[:space:]])?(-[A-Za-z]*n|\$)'; then
+         | grep -qE '(^|[^A-Za-z0-9_])(declare|local|typeset)[[:space:]]+([^;&|]*[[:space:]])?(-[A-Za-z]*n|\$)' \
+         || grep -qE '(^|[^A-Za-z0-9_])(declare|local|typeset)([^A-Za-z0-9_]|$)' <<<"$SCAN_NOCOMMENT"; then
       MERGE_TARGET_WHY="the command declares a nameref (declare/local/typeset -n, or an option word the hook cannot read), which can make the --match-head-commit variable run code"
     else
       TARGET_KIND="pr"; PR_HEAD_NUMBER="$_r1_first"

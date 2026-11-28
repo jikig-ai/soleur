@@ -44,5 +44,5 @@ Rulings: `knowledge-base/project/specs/feat-one-shot-ship-poll-stderr-missing-ch
 
 - [x] 3.1 Run `ship-phase-7-poll-fixtures.test.sh`, `sync-pr-behind.test.sh`, `ship-kb-archive-gate.test.sh`, `ship-operator-step-gate.test.sh`, `arm-check-sites.test.sh`, `bun test plugins/soleur/test/pr-merge-poll.test.ts plugins/soleur/test/harness.test.ts`, `python3 scripts/lint-trap-tempfile-ownership.py`, and `python3 scripts/lint-skill-body-budget.py --base origin/main` (ship at least 50 B under ceiling). CI is the gate.
 - [x] 3.2 Learning: `knowledge-base/project/learnings/workflow-issues/2026-11-28-a-cli-hint-on-stderr-switched-off-every-open-arm-of-the-merge-poll.md` (all three defects, the interlock, the before/after gate table, the incident timeline, `## Session Errors`). Add a dated follow-up line to the 2026-11-25 learning's §3.
-- [ ] 3.3 PR #13112 body: `Closes #12697`, `Closes #12963`, `Ref #13115`, `Ref #13017`, and a `## Changelog` section (semver:patch).
+- [x] 3.3 PR #13112 body: `Closes #12697`, `Closes #12963`, `Ref #13115`, `Ref #13017`, and a `## Changelog` section (semver:patch).
 - [ ] 3.4 Arm this PR with the measured-accepted flag-only locked form after the arm check. Sync BEHIND by hand if the installed poll does not.

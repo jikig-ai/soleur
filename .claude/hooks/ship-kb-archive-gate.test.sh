@@ -1794,7 +1794,8 @@ t94_nameref_spellings() {
   # expansion all deny.
   local d
   for d in "declare '-n' H='x[\$(id)]'" 'declare -\n H=x' '"declare" -n H=x' \
-           "typeset -\\n H=x" 'o=-n; local $o H=x'; do
+           "typeset -\\n H=x" 'o=-n; local $o H=x' 'declare {-n,} H=x' \
+           $'declare \\\n-n H=x' 'declare${IFS}-n H=x' 'declare -[n] H=x'; do
     g1_deny "T94 nameref spelling '$d' denied" "$G1_ARCH" \
       "$d; gh pr merge 5 --squash --auto --match-head-commit \"\$H\"" "nameref"
   done
@@ -2015,13 +2016,13 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # entry), T84 2, T85 14 (7 spans x archived/live), T86 9, T87 14, T88 5,
 # T89 5, T90 4. The suite measured 157 before the #13112 review fixes (the
 # itemisation above under-counts it by two; the measured total is what is
-# pinned). Those fixes add 53: T87 +3 operand rows, T91 18 (10 intruders +
+# pinned). Those fixes add 57: T87 +3 operand rows, T91 18 (10 intruders +
 # tail + third copy + 2 leads + PR 5/6 pair + literal-sha pair), T92 20 (12
 # short spellings + 4 long `=` + 2 --match-head-commit + 2 twins), T93 3,
-# T94 5, T95 4; T96 is a control reported outside the counters. The floor
-# is the exact measured total (210) — a dropped row is a FATAL, not a quiet
+# T94 9, T95 4; T96 is a control reported outside the counters. The floor
+# is the exact measured total (214) — a dropped row is a FATAL, not a quiet
 # shrink.
-MIN_ASSERTIONS=210
+MIN_ASSERTIONS=214
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] vacuity floor: only %d assertions ran (floor %d) — the suite did not execute\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1
