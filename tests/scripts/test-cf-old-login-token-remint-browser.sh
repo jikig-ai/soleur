@@ -27,6 +27,9 @@
 #             and sink failures (down, refused, not "ok", redirected) run the cleanup and never reach the sink;
 #             the cleanup re-lists by name after ANY post-POST failure (error, non-JSON, bad id, throw) and
 #             reports success:true only on a verified-clean re-list; the happy path hands the value off once.
+#             The token POST is ONE Node-side page.request.post (JSON body, maxRedirects 0, failOnStatusCode
+#             false, answer never read as text, disposed); the stub answers an in-page POST or DELETE with the
+#             dashboard edge's HTML 403 (measured 2026-11-26 and 2026-11-28), so an in-page write cannot pass.
 #   P-read    p5-read.js: groups (account and user scope), policies (names, counts, key kinds only), every
 #             refusal, GET only.
 #   P-sink    binds 127.0.0.1 only; serves one request then no listener; refuses a 127.0.0.2 peer, a wrong
@@ -234,7 +237,7 @@ function makeWorld(over = {}) {
     ],
     pageCap: 5, noTotal: false, endless: false, log: [], gotos: [], deletes: [], sinkCalls: [], pageConsole: [],
     mintResp: null, mutateStored: null, sinkMode: 'ok', deleteResp: null, listFail: false, throwOnReadback: false,
-    onGetToken: null, win: null, lateAtok: false, waits: [],
+    onGetToken: null, onList: null, win: null, lateAtok: false, waits: [], postText: 0, postDisposed: 0,
     ...over,
   };
 }
@@ -248,6 +251,7 @@ function page(world) {
     const src = world.endless ? Array.from({ length: per }, (_, i) => ({ id: OTHER[i % OTHER.length], name: `endless-${i}` })) : arr;
     const slice = (world.endless ? src : src.slice((pg - 1) * per, pg * per)).map(({ value, ...t }) => t);
     const info = { page: pg, per_page: per, count: slice.length };
+    if (world.onList) world.onList(world, !world.endless && pg * per >= arr.length);   // (world, last page)
     if (!world.noTotal && !world.endless) info.total_count = arr.length;
     return json(200, { success: true, result: slice, result_info: info });
   };
@@ -268,21 +272,18 @@ function page(world) {
     const u = new URL(path, DASH);
     const method = (opts.method || 'GET').toUpperCase();
     const h = opts.headers || {};
-    world.log.push({ method, path: u.pathname, xatok: h['x-atok'] === world.atok, xcss: h['x-cross-site-security'] === 'dash', body: opts.body });
+    world.log.push({ method, path: u.pathname, xatok: h['x-atok'] === world.atok, xcss: h['x-cross-site-security'] === 'dash', body: opts.body, via: 'page' });
     if (u.origin !== DASH) throw new TypeError('cross-origin');
     if (h['x-atok'] !== world.atok) return json(403, { success: false, errors: [{ code: 10000 }] });
-    if (method === 'DELETE') return html(403);
+    // The dashboard edge answers an in-page write with an HTML 403 (DELETE measured 2026-11-26, the account
+    // token POST 2026-11-28); only the page's request context (page.request) gets through.
+    if (method !== 'GET') return html(403);
     const p = u.pathname;
     if (world.listFail && method === 'GET' && /\/tokens$/.test(p)) return json(403, { success: false, errors: [{ code: 9109 }] });
     if (method === 'GET' && p === `/api/v4/accounts/${NA}/tokens/permission_groups`) return json(200, { success: true, result: world.groups });
     if (method === 'GET' && p === '/api/v4/user/tokens/permission_groups') return json(200, { success: true, result: world.userGroups || world.groups });
     if (method === 'GET' && p === `/api/v4/accounts/${NA}/tokens`) return paged(world.acctTokens, u);
     if (method === 'GET' && p === '/api/v4/user/tokens') return paged(world.userTokens, u);
-    if (method === 'POST' && (p === `/api/v4/accounts/${NA}/tokens` || p === '/api/v4/user/tokens')) {
-      const b = JSON.parse(opts.body);
-      if (world.mintResp) return world.mintResp(() => create(p, b));
-      return create(p, b);
-    }
     const m = p.match(new RegExp(`^/api/v4/(?:accounts/${NA}|user)/tokens/([0-9a-f]{32})$`));
     if (method === 'GET' && m) {
       if (world.onGetToken) world.onGetToken(world);
@@ -324,6 +325,32 @@ function page(world) {
       throw e;
     },
     request: {
+      // The Node-side token POST. Records the request (in world.log, in order with the in-page calls) and answers
+      // a Playwright APIResponse; text() and dispose() are counted so a row can see a body read as text.
+      async post(url, opts = {}) {
+        const h = (opts && opts.headers) || {};
+        const u = new URL(url);
+        const data = opts.data === undefined ? undefined : JSON.parse(JSON.stringify(opts.data));
+        world.log.push({ method: 'POST', path: u.pathname, xatok: h['x-atok'] === world.atok,
+          xcss: h['x-cross-site-security'] === 'dash', ctJson: h['content-type'] === 'application/json',
+          body: JSON.stringify(data), via: 'node', maxRedirects: opts.maxRedirects, failOnStatusCode: opts.failOnStatusCode });
+        // As Playwright does, a disposed response's body can no longer be read.
+        const api = async (resp) => {
+          const body = await resp.text();
+          let disposed = false;
+          const live = () => { if (disposed) throw new Error('Response has been disposed'); };
+          return { status: () => resp.status, headers: () => ({ 'content-type': resp.headers.get('content-type') || '' }),
+            json: async () => { live(); return JSON.parse(body); }, text: async () => { live(); world.postText += 1; return body; },
+            body: async () => { live(); world.postText += 1; return Buffer.from(body); },
+            dispose: async () => { world.postDisposed += 1; disposed = true; } };
+        };
+        if (u.origin !== DASH) throw new TypeError('cross-origin');
+        if (h['x-atok'] !== world.atok) return api(json(403, { success: false, errors: [{ code: 10000 }] }));
+        const p = u.pathname;
+        if (!(p === `/api/v4/accounts/${NA}/tokens` || p === '/api/v4/user/tokens')) return api(json(404, { success: false }));
+        if (world.mintResp) return api(await world.mintResp(() => create(p, data)));
+        return api(create(p, data));
+      },
       async delete(url, opts = {}) {
         const h = (opts && opts.headers) || {};
         const u = new URL(url);
@@ -449,6 +476,17 @@ const MINT_U = { ...MINT_P, owner: 'user', refuse_ids: ['86aa993e', 'dd6d1427', 
 const ID8 = NEW_FULL.slice(0, 8);
 const JS = 'application/json';
 const posts = (w) => w.log.filter((l) => l.method === 'POST');
+// The token POST went through page.request (the edge refuses an in-page write, 2026-11-28), exactly once, with a
+// JSON body, no redirect followed and no throw on a 4xx; its answer was never read as text and was disposed.
+const nodeSidePost = (w) => {
+  must(!w.log.some((l) => l.method === 'POST' && l.via === 'page'), 'an in-page POST');
+  const p = posts(w);
+  must(p.length === 1 && p[0].via === 'node' && p[0].ctJson, 'the token POST is not one Node-side JSON POST');
+  must(p[0].maxRedirects === 0, `the token POST maxRedirects is ${p[0].maxRedirects}, not 0`);
+  must(p[0].failOnStatusCode === false, 'the token POST does not set failOnStatusCode:false');
+  must(w.postText === 0, 'the token POST answer was read as text');
+  must(w.postDisposed === 1, 'the token POST answer was not disposed');
+};
 const userLogin = () => makeWorld({ userTokens: OTHER.slice(0, 7).map((id, i) => ({ id, name: `other-${i}`, status: 'active' })) });
 
 row('M1 pagerules mint: one zone policy on the zone key, scope-resolved group (decoy listed first), value to the sink once', async () => {
@@ -458,6 +496,7 @@ row('M1 pagerules mint: one zone policy on the zone key, scope-resolved group (d
   want(r, { status: 200, contentType: JS, success: true, id8: ID8 });
   must(w.gotos[0] === `${DASH}/profile/api-tokens`, 'no goto to /profile/api-tokens first');
   const p = posts(w); must(p.length === 1 && p[0].xatok && p[0].xcss && p[0].path === `/api/v4/accounts/${NA}/tokens`, 'POST count, path or headers');
+  nodeSidePost(w);
   const b = JSON.parse(p[0].body);
   must(eq(b.policies, [{ effect: 'allow', permission_groups: [{ id: G.pagerules }], resources: { [ZK]: '*' } }]), 'policies');
   must(b.expires_on === MINT_P.expires_on && b.name === MINT_P.name, 'name/expiry');
@@ -567,6 +606,19 @@ row('M10 the POST answers a JSON 403 and stores nothing -> {refused:mint, status
   const i = w.log.findIndex((l) => l.method === 'POST');
   must(w.log.slice(i + 1).some((l) => l.method === 'GET' && l.path === `/api/v4/accounts/${NA}/tokens`), 'no re-list after the POST');
   must(w.deletes.length === 0 && w.sinkCalls.length === 0, 'cleanup DELETE or sink');
+  nodeSidePost(w);
+});
+row('M10b the Node-side POST answers an HTML 403 (the edge refusal, measured in-page 2026-11-28) -> {refused:mint, 403 text/html}, re-list clean', async () => {
+  const w = makeWorld({ mintResp: () => html(403) });
+  const r = await exec('mint', MINT_P, w);
+  want(r, { refused: 'mint', status: 403, contentType: 'text/html', matches: 0, success: true });
+  must(w.deletes.length === 0 && w.sinkCalls.length === 0, 'cleanup DELETE or sink');
+  nodeSidePost(w);
+});
+row('M19 the atok is gone just before the POST -> {atok:false}, no POST sent', async () => {
+  const w = makeWorld({ onList: (x, last) => { if (last) x.win.bootstrap = {}; } });
+  const r = await exec('mint', MINT_P, w);
+  want(r, { atok: false }); must(posts(w).length === 0 && w.deletes.length === 0 && w.sinkCalls.length === 0, 'a POST, DELETE or sink call');
 });
 row('M11 a POST that stores the token but answers no value -> {refused:mint-shape}, deleted by name', async () => {
   const w = makeWorld({ mintResp: (create) => { create(); return json(200, { success: true, result: { id: NEW_FULL, name: MINT_P.name } }); } });
@@ -654,6 +706,7 @@ row('M18a owner user: list, POST, read-back at /user/tokens; account groups keep
   const r = await exec('mint', { ...MINT_A, owner: 'user', refuse_ids: MINT_U.refuse_ids }, w);
   want(r, { status: 200, contentType: JS, success: true, id8: ID8 });
   const p = posts(w); must(p.length === 1 && p[0].path === '/api/v4/user/tokens', 'POST path');
+  nodeSidePost(w);
   must(w.userTokens.some((t) => t.id === NEW_FULL) && !w.acctTokens.some((t) => t.id === NEW_FULL), 'stored under the wrong owner');
   must(w.log.some((l) => l.method === 'GET' && l.path === `/api/v4/user/tokens/${NEW_FULL}`), 'no user read-back');
   must(!w.log.some((l) => l.path === `/api/v4/accounts/${NA}/tokens` || l.path.startsWith(`/api/v4/accounts/${NA}/tokens/${ID8}`)), 'touched the account token endpoints');
@@ -1255,9 +1308,9 @@ killed_row() { # <mint> <revoke> <read> <row> <expected text>: the row is RED an
   fl="$(grep "^FAIL $4 " "$H_OUT" || true)"
   grep -qF -- "$5" <<<"$fl"
 }
-SCORED="R1,R1b,R2,R3,R4,R4c,R7b,R8u,R13c,R13d,M6,M6c,M7a,M7h,M9c,M16a,M16c,M16f,M17,M18a,M18b,D5,L1,L2,L3,D7,M3,R6"
+SCORED="R1,R1b,R2,R3,R4,R4c,R7b,R8u,R13c,R13d,M1,M6,M6c,M7a,M7h,M9c,M16a,M16c,M16f,M17,M18a,M18b,M19,D5,L1,L2,L3,D7,M3,R6"
 harness "$MINT" "$REVOKE" "$READ" P5_ONLY="$SCORED"
-if [[ "$(grep -c '^ok ' "$H_OUT")" -ne 28 ]] || grep -q '^FAIL ' "$H_OUT"; then
+if [[ "$(grep -c '^ok ' "$H_OUT")" -ne 30 ]] || grep -q '^FAIL ' "$H_OUT"; then
   printf 'HARNESS: a scored row is RED on the pristine bodies:\n' >&2; grep -v '^ok ' "$H_OUT" | cut -c1-300 >&2; exit 2
 fi
 SINK_PRISTINE="$SB/sink-pristine.err"
@@ -1294,6 +1347,15 @@ mut XM8 "30-day expiry floor deleted" mint "|| Date.parse(a.expires_on) < Date.n
 mut XM9 "old-owner-login refusal deleted" mint "if (old !== 0) return safe({ refused: 'old-owner-login', matches: old });" "" M18b '"refused":"old-owner-login"'
 mut XM10 "owner user posts to the account endpoint" mint "const base = a.owner === 'account' ?" "const base = a.owner ?" M18a 'want {"contentType":"application/json","id8":"c0ffee12","status":200,"success":true}'
 mut XM11 "cleanup by name only, not the answered id" mint "const ours = (t) => !!t && (t.name === a.name || (id !== null && t.id === id));" "const ours = (t) => !!t && t.name === a.name;" M7h 'cleanup DELETE'
+# The Node-side token POST (2026-11-28): the dashboard edge answers an in-page write with an HTML 403.
+mut XM12 "the token POST sent in-page again" mint "const mr = await postNode(base, {" "const mr = await call('POST', base, {" M1 'want {"contentType":"application/json","id8":"c0ffee12","status":200,"success":true}'
+mut XM13 "the token POST follows redirects" mint "data: body, failOnStatusCode: false, maxRedirects: 0," "data: body, failOnStatusCode: false," M1 'maxRedirects is undefined'
+mut XM14 "the token POST answer read as text" mint "parsed = await r.json();" "parsed = JSON.parse(await r.text());" M1 'read as text'
+mut XM15 "the token POST's own atok guard deleted" mint "if (!pgs.atok) return { atok: false };" "" M19 'want {"atok":false}'
+mut XM16 "the token POST answer disposed before it is read" mint "      const contentType = r.headers()['content-type'] || '';
+      let parsed" "      await r.dispose();
+      const contentType = r.headers()['content-type'] || '';
+      let parsed" M1 'want {"contentType":"application/json","id8":"c0ffee12","status":200,"success":true}'
 # Instrument rows: the P-shape/P-leak check and the page-serialization emulation must each catch a real slip.
 mut XL1 "a revoke return bypasses the guard and carries the atok" revoke "return safe({ status: r.status(), contentType, success });" "return { status: r.status(), contentType, success, atok: l.atok };" R1 'P-shape'
 mut XL2 "an in-page function closes over a Node-side variable" revoke "if (t.id.startsWith(prefix)) hits.push" "if (t.id.startsWith(a.pin)) hits.push" R1 'ReferenceError'
@@ -1343,8 +1405,8 @@ sink_mut XS2 "sink keeps a partial file on a failed fsync" 'os.unlink(out)' 'pas
 # --- anti-vacuity floor: EXACT counts (reported directly, never through fail()) -----------------
 TOTAL=$((PASS + FAIL))
 SELFTEST_PASSES=1
-EXPECT_FULL=250
-EXPECT_MUTANTS=94
+EXPECT_FULL=262
+EXPECT_MUTANTS=104
 case "$MODE" in full) want_n="$EXPECT_FULL" ;; *) want_n="$EXPECT_MUTANTS" ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -ne "$want_n" ]]; then
   printf '  [FAIL] anti-vacuity floor: %s assertions ran in %s mode, the exact floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$want_n" >&2

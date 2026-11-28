@@ -1,0 +1,12 @@
+# Decision challenges: feat-one-shot-p5-mint-node-post
+
+Rulings for the p5-mint.js Node-side token POST (Ref #12931). The CTO agent ruled each item; nothing here was put to
+the operator (`hr-technical-fork-is-not-an-operator-question`).
+
+| # | Question | Ruling |
+|---|---|---|
+| N1 | Where the token POST runs | Ruled by CTO agent, 2026-11-28: Node-side `page.request.post` for both owner `account` and owner `user`, every return shape kept. The only writes seen to succeed are the Node-side DELETEs (2026-11-26); two write paths double the failure modes and test rows. Rejected: keeping the in-page POST for owner `user` (one 2026-11-26 data point, and it keeps the value visible to page scripts). |
+| N2 | The token value now arrives in the Playwright Node process | Ruled by CTO agent, 2026-11-28: acceptable, and narrower than before. The value already reached Node (page.evaluate returned the JSON with `result.value`); page.request never exposes the answer to page scripts that wrap `window.fetch`; trace/HAR/video are off on both MCP servers and the tool echoes only the code. Must-haves, all in the body: `DASH` constant URL, `maxRedirects: 0` and `failOnStatusCode: false` (on the cleanup DELETE too), the atok and origin read from the page just before the POST, `json()` only on a JSON content-type and never `text()`/`body()`, `dispose()` in a `finally`, `errName(e)` only, `secret = null` on every path. |
+| N3 | A non-secret edge discriminator, and the next step on a second HTML 403 | Ruled by CTO agent, 2026-11-28: stop on any 403 after the POST (HTML: post on #12931; JSON: sign in as a login with the role), no re-mint loop and no user-owned fallback (F17/D7 reserve it for a missing permission group). The runbook row is split accordingly. The CTO also ruled a bounded `edge` field (from `cf-mitigated`); **not implemented**: the operator's directive for this PR fixes every return shape unchanged, and `edge` adds a key. Tracked for a later PR if a second HTML 403 needs it. |
+| N4 | Move the in-page GETs Node-side too | Ruled by CTO agent, 2026-11-28: no. They answered JSON in the failing run and carry no value; revisit only if a GET answers HTML 403. |
+| N5 | Mutants the CTO asked for | Ruled by CTO agent, 2026-11-28: in-page POST kept, `maxRedirects` omitted, `text()` on the answer, value not cleared. The first three are XM12-XM14. "Value not cleared" is not observable from outside the body (the value lives in a local that no return carries; P-leak already scans every return and console line), so it has no mutant. |
