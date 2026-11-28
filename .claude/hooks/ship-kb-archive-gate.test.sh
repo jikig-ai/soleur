@@ -183,6 +183,31 @@ assert_pass() {
   TOTAL=$((TOTAL + 1))
 }
 
+# assert_deny_why <name> <incidents_root> <stdout> <exit_code> <substring> —
+# assert_deny plus the reason: a deny row that does not name WHICH arm fired
+# would pass on any deny, including one from an arm the row never targets.
+assert_deny_why() {
+  local name="$1" incidents="$2" out="$3" exit_code="$4" want="$5"
+  local decision reason jsonl count=0 seen_rule="" seen_event=""
+  decision=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // ""' 2>/dev/null || echo "")
+  reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null || echo "")
+  jsonl="$incidents/.claude/.rule-incidents.jsonl"
+  if [[ -f "$jsonl" ]]; then
+    count=$(wc -l < "$jsonl" | tr -d ' ')
+    seen_rule=$(jq -r '.rule_id' < "$jsonl" | head -1)
+    seen_event=$(jq -r '.event_type' < "$jsonl" | head -1)
+  fi
+  if [[ -n "$want" && "$exit_code" -eq 0 && "$decision" == "deny" && "$reason" == *"$want"* && "$count" == "1" \
+        && "$seen_rule" == "wg-kb-artifacts-archived-in-pr" && "$seen_event" == "deny" ]]; then
+    pass "$name"
+  else
+    fail "$name"
+    echo "  exit=$exit_code decision=$decision count=$count want-reason='$want'"
+    echo "  reason=${reason:0:240}"
+  fi
+  TOTAL=$((TOTAL + 1))
+}
+
 # Fixture-nonempty vacuity control: prove the fixture actually carries the
 # artifact the deny is attributed to BEFORE asserting the deny — a fixture
 # that produces nothing cannot silently pass a deny case either, but this
@@ -199,11 +224,11 @@ assert_fixture_has() {
 
 run_hook() {
   local incidents="$1" payload="$2"
-  # CLAUDECODE= (empty) pins headless_or_stderr to its stderr arm — under a
+  # CLAUDECODE='' (empty) pins headless_or_stderr to its stderr arm — under a
   # real session it routes warns to $LOG_DIR/$PPID.log and stderr checks
   # see nothing. SOLEUR_SESSION_STATE_ROOT keeps the session-state lib's
   # mkdir side effects inside the fixture, not the real repo's .git dir.
-  printf '%s' "$payload" | CLAUDECODE= SOLEUR_SESSION_STATE_ROOT="$incidents/state" \
+  printf '%s' "$payload" | CLAUDECODE='' SOLEUR_SESSION_STATE_ROOT="$incidents/state" \
     INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null
 }
 
@@ -647,7 +672,7 @@ t34_skip_env_pass() {
   assert_fixture_dir "$work"
   local out exit_code=0
   out=$(printf '%s' "$(make_payload "$work" "gh pr merge --squash --auto")" \
-        | SOLEUR_SKIP_KB_ARCHIVE_GATE=1 CLAUDECODE= SOLEUR_SESSION_STATE_ROOT="$incidents/state" INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+        | SOLEUR_SKIP_KB_ARCHIVE_GATE=1 CLAUDECODE='' SOLEUR_SESSION_STATE_ROOT="$incidents/state" INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
   assert_pass "T34 SOLEUR_SKIP_KB_ARCHIVE_GATE=1" "$incidents" "$out" "${exit_code:-0}"
   rm -rf "$tmp"
 }
@@ -694,9 +719,9 @@ t36_shallow_warn_pass() {
   git -C "$work" push -q origin orphan-head
   local out err exit_code=0
   err=$(printf '%s' "$(make_payload "$work" "gh pr merge --squash --auto")" \
-        | CLAUDECODE= SOLEUR_SESSION_STATE_ROOT="$incidents/state" INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>&1 >/dev/null) || exit_code=$?
+        | CLAUDECODE='' SOLEUR_SESSION_STATE_ROOT="$incidents/state" INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>&1 >/dev/null) || exit_code=$?
   out=$(printf '%s' "$(make_payload "$work" "gh pr merge --squash --auto")" \
-        | CLAUDECODE= SOLEUR_SESSION_STATE_ROOT="$incidents/state" INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
+        | CLAUDECODE='' SOLEUR_SESSION_STATE_ROOT="$incidents/state" INCIDENTS_REPO_ROOT="$incidents" "$HOOK" 2>/dev/null) || exit_code=$?
   if [[ "$err" == *"ship-kb-archive-gate"* ]] && [[ "$err" == *"merge-base"* ]]; then
     assert_pass "T36 unresolvable merge-base warns + passes" "$incidents" "$out" "${exit_code:-0}"
   else
@@ -1285,6 +1310,566 @@ t82_partial_word_quote_pass() {
   rm -rf "$tmp"
 }
 
+# --- Guard 1: the documented arm form, and nothing wider (T83+) ------------
+# Plan 2026-11-28-fix-ship-poll-stderr-missing-check-kb-gate, `## Guard
+# Contract` → Guard 1. Row names carry the matrix id (G1-r<n>, G1-H-<x>) so
+# every matrix and harness row is findable by name. The arm sites are NEVER
+# restated here: the site list is parsed out of arm-check-sites.test.sh and
+# each span is extracted from the live skill text, so a doc edit that moves an
+# arm re-runs these rows on the new text.
+G1_SITES_SUITE="$REPO_ROOT/plugins/soleur/test/arm-check-sites.test.sh"
+G1_PR=4387   # synthesized fixture PR number; substituted for every placeholder token
+
+# g1_parse_sites <suite-file> — "<kind><TAB><relpath>" per site: `auto` for
+# SITES and CANON (the --auto arms), `admin` for LINK_ONLY (the admin hatch).
+# Any of the three assignments missing or empty → FATAL on stderr, rc 2:
+# a renamed array must never read as a zero-row pass.
+g1_parse_sites() {
+  local f="$1" sites link canon
+  sites=$(awk '/^SITES=\(/{on=1; next} on && /^\)/{exit} on{gsub(/^[ \t]+|[ \t]+$/, ""); if ($0 != "") print}' "$f" 2>/dev/null || true)
+  link=$(sed -nE 's/^LINK_ONLY=\(([^)]*)\)[[:space:]]*(#.*)?$/\1/p' "$f" 2>/dev/null | tr ' ' '\n' | grep -v '^$' || true)
+  canon=$(sed -nE 's/^CANON=([^[:space:]]+)[[:space:]]*$/\1/p' "$f" 2>/dev/null || true)
+  if [[ -z "$sites" || -z "$link" || -z "$canon" ]]; then
+    printf 'FATAL: site list empty in %s (SITES=%s LINK_ONLY=%s CANON=%s)\n' "$f" \
+      "$(grep -c . <<<"$sites" || true)" "$(grep -c . <<<"$link" || true)" "$(grep -c . <<<"$canon" || true)" >&2
+    return 2
+  fi
+  { sed 's/^/auto\t/' <<<"$sites"; printf 'auto\t%s\n' "$canon"; sed 's/^/admin\t/' <<<"$link"; }
+}
+
+# g1_extract <root> <kind> <relpath> <outdir> — writes one file per arm span
+# (placeholders <number>/<N>/<pr-number>/PR_NUMBER → $G1_PR) and prints each
+# path. An arm span is a fenced block one of whose lines INVOKES the merge (it
+# carries `gh pr merge` and `--match-head-commit`, is not a comment, and its
+# `gh pr merge` sits outside double quotes: the Phase 7 fence's echo naming
+# the hatch is a mention), or an inline-code span that starts with
+# `gh pr merge` and gives --match-head-commit an operand (the dequeue site;
+# prose such as `gh pr merge --admin --match-head-commit` is not an arm).
+# For `admin` (LINK_ONLY) sites the span is the fence's invoking statement,
+# not the whole fence: that fence runs inside a Monitor, where no merge gate
+# is bound, and its `echo "… (gh pr merge failed …)"` text reads as a second
+# invocation on the raw side. The Bash-visible merge is the `err=$(…)` line.
+g1_extract() {
+  python3 -I - "$@" "$G1_PR" <<'PY'
+import os, re, sys
+root, kind, rel, outdir, pr = sys.argv[1:6]
+TOK = ("gh pr merge", "--match-head-commit")
+PH = re.compile(r"<number>|<N>|<pr-number>|PR_NUMBER")
+INLINE = re.compile(r"^gh pr merge .*--match-head-commit\s+\S")
+def invokes(line):
+    if not all(t in line for t in TOK) or line.lstrip().startswith("#"):
+        return False
+    return line[:line.index(TOK[0])].count('"') % 2 == 0
+spans = []
+with open(os.path.join(root, rel), encoding="utf-8") as fh:
+    lines = fh.read().split("\n")
+fence, body, ind = None, [], 0
+for line in lines:
+    m = re.match(r"([ \t]*)(`{3,}|~{3,})(.*)$", line)
+    if m and fence is None:
+        fence, body, ind = (m.group(2)[0], len(m.group(2))), [], len(m.group(1))
+        continue
+    if m and fence and m.group(2)[0] == fence[0] and len(m.group(2)) >= fence[1] and not m.group(3).strip():
+        hits = [b for b in body if invokes(b)]
+        if hits:
+            spans.append("\n".join(hits if kind == "admin" else body))
+        fence = None
+        continue
+    if fence:
+        body.append(line[ind:] if line[:ind].strip() == "" else line.lstrip())
+        continue
+    spans += [s for s in re.findall(r"`([^`]+)`", line) if INLINE.match(s)]
+for k, s in enumerate(spans):
+    p = os.path.join(outdir, "%s-%d.txt" % (re.sub(r"[^A-Za-z0-9]+", "_", rel), k))
+    with open(p, "w", encoding="utf-8") as out:
+        out.write(PH.sub(pr, s))
+    print(p)
+PY
+}
+
+# g1_site_spans <root> <kind> <relpath> <outdir> — g1_extract, then the
+# per-site count pin: every listed site carries exactly ONE arm span (one
+# --auto lock block / arm line per site, one admin merge statement). Any other
+# count → FATAL naming the file and the extraction anchor, rc 3.
+g1_site_spans() {
+  local got n
+  got=$(g1_extract "$@") || { printf 'FATAL: %s: span extractor failed (python)\n' "$3" >&2; return 3; }
+  n=$(grep -c . <<<"$got" || true)
+  if [[ "$n" != "1" ]]; then
+    printf 'FATAL: %s: extracted %s spans, want 1 (anchor: a fenced or inline-code span invoking gh pr merge with --match-head-commit)\n' "$3" "$n" >&2
+    return 3
+  fi
+  printf '%s\n' "$got"
+}
+
+# g1_fixture <tmp> archived|live — a feature head published as
+# refs/pull/{4387,5,6}/head, origin parseable as jikig-ai/soleur (insteadOf
+# keeps the fetch local, T13 mechanism). `archived` = the post-archive diff
+# as PRs 4387 and 5, and a DIFFERENT, live head as PR 6 (so a census that
+# reads the wrong PR number cannot pass unnoticed: T91 pins 5-allow /
+# 6-deny); `live` = an unarchived specs/<branch>/tasks.md as all three.
+# Echoes the work dir.
+g1_fixture() {
+  local tmp="$1" variant="$2" work origin incidents n
+  if [[ "$variant" == archived ]]; then
+    read -r work origin incidents < <(make_archived_branch "$tmp" "feat-g1arch")
+  else
+    read -r work origin incidents < <(make_kb_branch "$tmp" "feat-g1live" specdir)
+  fi
+  assert_fixture_dir "$work"
+  git -C "$work" remote set-url origin "git@github.com:jikig-ai/soleur.git"
+  git -C "$work" config url."$origin".insteadOf "git@github.com:jikig-ai/soleur.git"
+  for n in "$G1_PR" 5 6; do git -C "$work" push -q origin "HEAD:refs/pull/$n/head"; done
+  if [[ "$variant" == archived ]]; then
+    git -C "$work" checkout -q -b g1-live6 main
+    mkdir -p "$work/knowledge-base/project/specs/g1-live6"
+    echo "live" > "$work/knowledge-base/project/specs/g1-live6/tasks.md"
+    git -C "$work" add -A
+    git -C "$work" commit -q -m "live spec for PR 6"
+    git -C "$work" push -q -f origin "HEAD:refs/pull/6/head"
+  fi
+  git -C "$work" checkout -q -b reviewer main
+  echo "$work"
+}
+
+# g1_run <work> <cmd> — one hook run with a FRESH incidents root (the deny
+# asserts count exactly one row). Sets G1_OUT, G1_RC, G1_INC.
+g1_run() {
+  G1_INC=$(mktemp -d -p "$SUITE_TMP"); G1_RC=0
+  G1_OUT=$(run_hook "$G1_INC" "$(make_payload "$1" "$2")") || G1_RC=$?
+}
+g1_deny() { g1_run "$2" "$3"; assert_deny_why "$1" "$G1_INC" "$G1_OUT" "$G1_RC" "$4"; }
+g1_pass() { g1_run "$2" "$3"; assert_pass "$1" "$G1_INC" "$G1_OUT" "$G1_RC"; }
+
+# g1_lock_block <arm-a> <arm-b> [<intruder>] — the documented
+# locked/degrade-open if/else shape with each branch's invocation supplied
+# (synthesized mutation inputs; the verbatim doc blocks come from
+# g1_extract). An <intruder> line is placed in the else branch just before
+# <arm-b>, i.e. strictly between the two copies.
+g1_lock_block() {
+  local -a intr=()
+  [[ -n "${3-}" ]] && intr=("  $3")
+  printf '%s\n' 'SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"' \
+    'if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then' \
+    '  bash "$SS_LIB" with_lock merge-main 600 -- \' \
+    "    $1" \
+    '  rc=$?' \
+    'else' \
+    '  echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=running-unlocked"' \
+    ${intr[@]+"${intr[@]}"} \
+    "  $2" \
+    '  rc=$?' \
+    'fi'
+}
+
+G1_ARCH=""; G1_LIVE=""; G1_SPANS=""; G1_SHIP=""; G1_CANON=""; G1_ADMIN=""
+t83_g1_sites_and_spans() {
+  local tmp sites kind rel f
+  tmp=$(mktemp -d -p "$SUITE_TMP")
+  mkdir -p "$tmp/spans"
+  if ! sites=$(g1_parse_sites "$G1_SITES_SUITE"); then
+    fail "T83 site list parsed from arm-check-sites.test.sh"
+    TOTAL=$((TOTAL + 1)); return
+  fi
+  pass "T83 site list parsed from arm-check-sites.test.sh ($(grep -c . <<<"$sites") sites)"
+  TOTAL=$((TOTAL + 1))
+  while IFS=$'\t' read -r kind rel; do
+    if f=$(g1_site_spans "$REPO_ROOT" "$kind" "$rel" "$tmp/spans"); then
+      pass "T83 $rel yields exactly 1 $kind arm span"
+      G1_SPANS+="${kind}"$'\t'"${rel}"$'\t'"${f}"$'\n'
+    else
+      fail "T83 $rel yields exactly 1 $kind arm span"
+    fi
+    TOTAL=$((TOTAL + 1))
+  done <<<"$sites"
+  G1_SHIP=$(awk -F'\t' '$2 == "plugins/soleur/skills/ship/SKILL.md" { print $3 }' <<<"$G1_SPANS")
+  G1_CANON=$(awk -F'\t' -v c="$(sed -nE 's/^CANON=([^[:space:]]+)[[:space:]]*$/\1/p' "$G1_SITES_SUITE")" '$2 == c { print $3 }' <<<"$G1_SPANS")
+  G1_ADMIN=$(awk -F'\t' '$1 == "admin" { print $3 }' <<<"$G1_SPANS" | head -1)
+  G1_ARCH=$(g1_fixture "$(mktemp -d -p "$SUITE_TMP")" archived)
+  G1_LIVE=$(g1_fixture "$(mktemp -d -p "$SUITE_TMP")" live)
+}
+
+t84_g1_red_reasons() {
+  # RED evidence (pre-fix hook, measured 2026-11-28): the verbatim ship block
+  # denied with `more than one gh pr merge invocation` (it tripped the
+  # multi-invocation arm before any other), and the admin hatch's statement
+  # passed every earlier arm and stopped at `names no 40-hex sha`. Both are
+  # now ADMITTED (T85). These rows keep the two reasons reachable from a
+  # one-token near miss of each verbatim span, so a fourth, unexpected
+  # reason cannot hide behind a generic deny: the ship block with its
+  # degrade-open copy naming another PR, and the hatch with a defaulted sha.
+  local ship admin
+  ship=$(awk -v n="$G1_PR" '{ if (index($0, "gh pr merge " n) && ++k == 2) sub("gh pr merge " n, "gh pr merge " n + 1); print }' "$G1_SHIP")
+  admin=$(sed 's/"\$SHA"/"${SHA:-x}"/' "$G1_ADMIN")
+  if [[ "$ship" == "$(cat "$G1_SHIP")" || "$admin" == "$(cat "$G1_ADMIN")" ]]; then
+    fail "T84 near-miss spans are identical to the verbatim spans (the edit did not apply)"
+    TOTAL=$((TOTAL + 1))
+  fi
+  g1_deny "T84 ship block, copies name different PRs: multi-invocation reason" "$G1_ARCH" "$ship" "more than one gh pr merge invocation"
+  g1_deny "T84 admin hatch with a defaulted sha: no-sha reason" "$G1_ARCH" "$admin" "names no 40-hex sha"
+}
+
+t85_g1_sites_allow_and_census() {
+  # G1-r8/r12 (every --auto arm span, SITES + CANON) and G1-r9 (the admin
+  # hatch): allowed on an archived head, denied BY THE CENSUS on a live one
+  # (G1-r5 for the ship block: an accepted shape must reach the census).
+  local kind rel f
+  while IFS=$'\t' read -r kind rel f; do
+    [[ -n "$f" ]] || continue
+    local id="G1-r8/r12"; [[ "$kind" == admin ]] && id="G1-r9"
+    g1_pass "T85 $id $rel span allowed on an archived head" "$G1_ARCH" "$(cat "$f")"
+    [[ "$rel" == */ship/SKILL.md ]] && id="G1-r5"
+    g1_deny "T85 $id $rel span denied by the census on a live head" "$G1_LIVE" "$(cat "$f")" "lands KB artifacts at live paths"
+  done <<<"$G1_SPANS"
+}
+
+t86_g1_multi_invocation_rows() {
+  local a='gh pr merge 5 --squash --auto --match-head-commit "${H:?x}"'
+  local blk
+  blk="$(g1_lock_block "$a" "$a")"$'\n''gh pr merge 6 --squash --auto --match-head-commit "${H:?x}"'
+  g1_deny "T86 G1-r1 a third, different invocation" "$G1_ARCH" "$blk" "more than one gh pr merge invocation"
+  # Same PR number on the third copy, so only the residue comparison (not
+  # the first-token check) can see it differ.
+  blk="$(g1_lock_block "$a" "$a")"$'\n''gh pr merge 5 --squash --auto --delete-branch --match-head-commit "${H:?x}"'
+  g1_deny "T86 G1-r1b a third copy differing only in a flag" "$G1_ARCH" "$blk" "more than one gh pr merge invocation"
+  g1_deny "T86 G1-r2 operands \"\$H\" vs \"\${!H}\"" "$G1_ARCH" \
+    "$(g1_lock_block 'gh pr merge 5 --squash --auto --match-head-commit "$H"' 'gh pr merge 5 --squash --auto --match-head-commit "${!H}"')" "operands differ"
+  g1_deny "T86 G1-r2b quoted flag values differ (--subject \"a\" vs \"b\")" "$G1_ARCH" \
+    "$(g1_lock_block 'gh pr merge 5 --squash --auto --subject "a" --match-head-commit "${H:?x}"' 'gh pr merge 5 --squash --auto --subject "b" --match-head-commit "${H:?x}"')" \
+    "more than one gh pr merge invocation"
+  local s1 s2
+  s1=$(git -C "$G1_ARCH" rev-parse "refs/remotes/origin/feat-g1arch")
+  s2=$(git -C "$G1_ARCH" rev-parse main)
+  g1_deny "T86 G1-r6 two branches, different literal SHAs" "$G1_ARCH" \
+    "$(g1_lock_block "gh pr merge 5 --squash --auto --match-head-commit $s1" "gh pr merge 5 --squash --auto --match-head-commit $s2")" \
+    "more than one gh pr merge invocation"
+  g1_deny "T86 G1-r7 two branches, different PR numbers" "$G1_ARCH" \
+    "$(g1_lock_block 'gh pr merge 5 --squash --auto --match-head-commit "${H:?x}"' 'gh pr merge 6 --squash --auto --match-head-commit "${H:?x}"')" \
+    "more than one gh pr merge invocation"
+  g1_deny "T86 G1-r11 operands \"\${H:?x}\" vs \"\${G:?x}\"" "$G1_ARCH" \
+    "$(g1_lock_block 'gh pr merge 5 --squash --auto --match-head-commit "${H:?x}"' 'gh pr merge 5 --squash --auto --match-head-commit "${G:?x}"')" "operands differ"
+  g1_deny "T86 G1-r14 foreign GH_REPO prefix beside several invocations" "$G1_ARCH" \
+    'GH_REPO=o/r gh pr merge 5 --squash --auto --match-head-commit "$H" || gh pr merge 5 --squash --auto --match-head-commit "$H"' \
+    "beside several gh pr merge invocations"
+}
+
+t87_g1_operand_rows() {
+  local op
+  # The msg class bars `$`, backtick and `\` too: a widened class would admit
+  # a substitution (or an escaped quote) hidden in the `:?` message.
+  for op in '"${H:-x}"' '"$H$G"' '"${!H}"' '"${H[@]}"' '"${H:?$(id)}"' '"${H:?`id`}"' '"${H:?a\"b}"'; do
+    g1_deny "T87 G1-r3 operand $op is not a simple expansion" "$G1_ARCH" "gh pr merge 5 --squash --auto --match-head-commit $op" "simple variable"
+  done
+  local sha digits
+  sha=$(git -C "$G1_ARCH" rev-parse "refs/remotes/origin/feat-g1arch")
+  digits=$(printf '%040d' 7)
+  g1_deny "T87 G1-r4 40-digit first positional beside a literal sha" "$G1_ARCH" \
+    "gh pr merge $digits --squash --auto --match-head-commit $sha" "not a bare PR number"
+  for op in '"$@"' '"$*"' '"${A[@]}"' '"${!N}"'; do
+    g1_deny "T87 G1-r15 multi-word/indirect operand $op" "$G1_ARCH" "gh pr merge 5 --squash --auto --match-head-commit $op" "simple variable"
+  done
+  g1_deny "T87 G1-r15 nameref makes \"\$H\" run code" "$G1_ARCH" \
+    "declare -n H='x[\$(id)]'; gh pr merge 5 --squash --auto --match-head-commit \"\$H\"" "nameref"
+  g1_deny "T87 G1-r16 echo decoy before the real operand" "$G1_ARCH" \
+    'echo --match-head-commit "$H"; gh pr merge 5 --squash --auto --match-head-commit "$@"' "simple variable"
+  g1_deny "T87 G1-r16 comment decoy before the real operand" "$G1_ARCH" \
+    ': # --match-head-commit "$H"'$'\n''gh pr merge 5 --squash --auto --match-head-commit "$@"' "simple variable"
+  g1_deny "T87 G1-r17 a positional after the operand" "$G1_ARCH" \
+    'gh pr merge 5 --squash --auto --match-head-commit "$H" 6' "LAST argument"
+  g1_deny "T87 G1-r10 dequeue arm with a variable PR number stays denied" "$G1_ARCH" \
+    'gh pr merge "$N" --squash --auto --match-head-commit "${H:?run the arm check in this call}"' "differ once quoted text is removed"
+}
+
+t88_g1_composite_and_fail_opens() {
+  # G1-r13: the composite one-call form (the arm check's first statement,
+  # then the lock block) — the same verdict as the lock block alone.
+  local first
+  first=$(grep -v 'gh pr merge' "$G1_CANON" || true)
+  g1_pass "T88 G1-r13 arm check + lock block in one call allowed" "$G1_ARCH" "${first}"$'\n'"$(cat "$G1_SHIP")"
+  # G1-r18 (G2): ls-remote failing under set -eo pipefail must reach the
+  # fail-closed deny, not kill the hook with no JSON.
+  local url
+  assert_fixture_dir "$G1_ARCH"
+  url=$(git -C "$G1_ARCH" config --get remote.origin.url)
+  # The insteadOf rewrite keys on the github URL, so it does not apply here.
+  git -C "$G1_ARCH" remote set-url origin /nonexistent/g1-unreachable.git
+  g1_deny "T88 G1-r18 unreachable origin denies (G2)" "$G1_ARCH" "$(cat "$G1_SHIP")" "ls-remote"
+  git -C "$G1_ARCH" remote set-url origin "$url"
+  # G1-r19 (G1 b/c): text that points gh nowhere must not take the
+  # proven-foreign exit; each reaches the census and denies the live head.
+  local c
+  for c in 'gh pr merge 5 --squash --auto; : GH_HOST=evil.example' \
+           'gh pr merge 5 --squash --auto && echo GH_REPO=o/r' \
+           'gh pr merge 5 --squash --auto --body -Ro/r'; do
+    g1_deny "T88 G1-r19 '$c' reaches the census" "$G1_LIVE" "$c" "lands KB artifacts at live paths"
+  done
+}
+
+t89_g1_harness_rows() {
+  local tmp rc=0 err
+  tmp=$(mktemp -d -p "$SUITE_TMP")
+  # G1-H-a: a renamed SITES array, and a site whose arm span was removed,
+  # each FAIL loudly naming the file — never a 0-row pass.
+  sed 's/^SITES=(/SITES_RENAMED=(/' "$G1_SITES_SUITE" > "$tmp/arm-check-sites.test.sh"
+  err=$(g1_parse_sites "$tmp/arm-check-sites.test.sh" 2>&1 >/dev/null) || rc=$?
+  if [[ "$rc" -ne 0 && "$err" == *"site list empty in $tmp/arm-check-sites.test.sh"* ]]; then
+    pass "T89 G1-H-a renamed SITES fails loudly"
+  else
+    fail "T89 G1-H-a renamed SITES fails loudly (rc=$rc err=$err)"
+  fi
+  TOTAL=$((TOTAL + 1))
+  local rel=plugins/soleur/skills/drain-prs/SKILL.md
+  mkdir -p "$tmp/root/$(dirname "$rel")" "$tmp/spans"
+  grep -v 'gh pr merge' "$REPO_ROOT/$rel" > "$tmp/root/$rel" || true
+  rc=0; err=$(g1_site_spans "$tmp/root" auto "$rel" "$tmp/spans" 2>&1 >/dev/null) || rc=$?
+  if [[ "$rc" -ne 0 && "$err" == *"$rel: extracted 0 spans, want 1"* ]]; then
+    pass "T89 G1-H-a site with its span removed fails loudly"
+  else
+    fail "T89 G1-H-a site with its span removed fails loudly (rc=$rc err=$err)"
+  fi
+  TOTAL=$((TOTAL + 1))
+  # G1-H-b / G1-H-c: non-canonical shapes that must still PASS.
+  g1_pass "T89 G1-H-b braced \"\${SHA}\" operand allowed" "$G1_ARCH" "gh pr merge $G1_PR --squash --auto --match-head-commit \"\${SHA}\""
+  g1_pass "T89 G1-H-c ship block without its else branch allowed" "$G1_ARCH" \
+    "$(awk '/^else$/{skip=1} /^fi$/{skip=0} !skip' "$G1_SHIP")"
+  # G1-H-d: positive control — an inverted assertion and a wrong reason
+  # substring must each move the failure counter.
+  local f0=$FAIL t0=$TOTAL moved=0
+  g1_run "$G1_ARCH" "gh pr merge $G1_PR --squash --auto"
+  assert_deny_why "H-d probe (inverted)" "$G1_INC" "$G1_OUT" "$G1_RC" "x" >/dev/null
+  (( FAIL == f0 + 1 )) && moved=$((moved + 1))
+  g1_run "$G1_LIVE" "gh pr merge $G1_PR --squash --auto"
+  assert_deny_why "H-d probe (wrong reason)" "$G1_INC" "$G1_OUT" "$G1_RC" "no-such-reason-substring" >/dev/null
+  (( FAIL == f0 + 2 )) && moved=$((moved + 1))
+  FAIL=$f0; TOTAL=$t0
+  if [[ "$moved" == "2" ]]; then
+    pass "T89 G1-H-d assert_deny_why positive control moves the failure counter"
+  else
+    fail "T89 G1-H-d assert_deny_why positive control (moved=$moved/2)"
+  fi
+  TOTAL=$((TOTAL + 1))
+}
+
+t90_g1_rule_ii_narrowing() {
+  # Rule (ii) admits several invocations only as NUMBERED identical copies.
+  # (a) A trailing arg-less `gh pr merge` used to vanish from the residue
+  # count (`$(…)` drops trailing newlines), so only PR 5 was censused while
+  # the bare merge took the session branch's PR — here a live one.
+  local tmp work origin incidents
+  tmp=$(mktemp -d -p "$SUITE_TMP")
+  read -r work origin incidents < <(make_kb_branch "$tmp" "feat-g1trail" specdir)
+  assert_fixture_dir "$work"
+  git -C "$work" push -q origin main:refs/pull/5/head
+  g1_deny "T90 trailing arg-less invocation is counted" "$work" "gh pr merge 5 --squash && gh pr merge" "more than one gh pr merge invocation"
+  # (b) identical FLAG-ONLY copies stay denied: the HEAD path can move
+  # between them (a `git checkout` in between), a PR number cannot.
+  g1_deny "T90 identical flag-only copies denied" "$work" \
+    "$(g1_lock_block 'gh pr merge --squash --auto' 'gh pr merge --squash --auto')" "more than one gh pr merge invocation"
+  # (c) identical numbered copies without --match-head-commit: one object.
+  g1_pass "T90 identical numbered copies allowed" "$G1_ARCH" \
+    "$(g1_lock_block 'gh pr merge 5 --squash --auto' 'gh pr merge 5 --squash --auto')"
+  # (d) a copy chained on the same line is not the documented shape.
+  g1_deny "T90 same-line chained copies denied" "$G1_ARCH" \
+    'gh pr merge 5 --squash --auto; gh pr merge 5 --squash --auto' "more than one gh pr merge invocation"
+}
+
+# --- review fixes for PR #13112 (T91+) ---------------------------------------
+
+t91_rule_ii_allowlist() {
+  # Rule (ii): byte-identical copies are one object only when NOTHING but the
+  # documented if/else skeleton sits between them. Each intruder below would
+  # let copy 2 merge in another repository, with another H, or another gh.
+  local a='gh pr merge 5 --squash --auto --match-head-commit "${H:?x}"'
+  local sha6 intr
+  sha6=$(git -C "$G1_ARCH" rev-parse g1-live6)
+  for intr in 'cd /tmp' 'pushd /tmp' 'export GH_REPO=o/r' 'export GIT_DIR=/x' \
+              "H=$sha6" 'git push origin HEAD' 'git remote set-url origin /x' \
+              'gh repo set-default o/r' 'alias gh=true' 'gh() { :; }'; do
+    g1_deny "T91 rule (ii) '$intr' between the copies denied" "$G1_ARCH" \
+      "$(g1_lock_block "$a" "$a" "$intr")" "not the documented locked/degrade-open if/else skeleton"
+  done
+  g1_deny "T91 rule (ii) text after the first copy's operand denied" "$G1_ARCH" \
+    "$(g1_lock_block "$a; cd /tmp" "$a")" "continues past its operand"
+  g1_deny "T91 rule (ii) a third identical copy denied (exactly two)" "$G1_ARCH" \
+    "$(g1_lock_block "$a" "$a")"$'\n'"$a" "more than the two copies"
+  # The first copy's lead is pinned to the whole with_lock prefix: an env
+  # or launcher word after `--` could steer copy 1 alone.
+  g1_deny "T91 rule (ii) first copy prefixed GIT_DIR=/x denied" "$G1_ARCH" \
+    "$(g1_lock_block "GIT_DIR=/x $a" "$a")" "more than one gh pr merge invocation"
+  g1_deny "T91 rule (ii) first copy prefixed env -C /x denied" "$G1_ARCH" \
+    "$(g1_lock_block "env -C /x $a" "$a")" "more than one gh pr merge invocation"
+  # The census reads the PR the command names: PR 5 is archived, PR 6 live.
+  g1_pass "T91 rule (i) PR 5 (archived head) allowed" "$G1_ARCH" "$a"
+  g1_deny "T91 rule (i) PR 6 (live head) denied by the census" "$G1_ARCH" \
+    'gh pr merge 6 --squash --auto --match-head-commit "${H:?x}"' "lands KB artifacts at live paths"
+  # A PR number beside a literal sha: the sha is what is censused.
+  local s_arch s_live
+  s_arch=$(git -C "$G1_ARCH" rev-parse "refs/remotes/origin/feat-g1arch")
+  s_live=$(git -C "$G1_LIVE" rev-parse "refs/remotes/origin/feat-g1live")
+  g1_pass "T91 PR number + literal archived sha allowed" "$G1_ARCH" \
+    "gh pr merge 5 --squash --auto --match-head-commit $s_arch"
+  g1_deny "T91 PR number + literal live sha denied by the census" "$G1_LIVE" \
+    "gh pr merge 5 --squash --auto --match-head-commit $s_live" "lands KB artifacts at live paths"
+}
+
+t92_flag_value_spellings() {
+  # A `-R…` token that gh reads as a value-taking flag's VALUE is not a
+  # pointer, in every pflag spelling; each must reach the census (live head),
+  # never the proven-foreign exit.
+  local f sp l
+  for f in t b F A; do
+    for sp in "-${f}Ro/r" "-s${f} -Ro/r" "-sd${f}Ro/r"; do
+      g1_deny "T92 '$sp' (value of -$f) reaches the census" "$G1_LIVE" \
+        "gh pr merge 5 --squash --auto $sp" "lands KB artifacts at live paths"
+    done
+  done
+  for l in subject body body-file author-email; do
+    g1_deny "T92 '--$l=-Ro/r' reaches the census" "$G1_LIVE" \
+      "gh pr merge 5 --squash --auto --$l=-Ro/r" "lands KB artifacts at live paths"
+  done
+  for sp in '--match-head-commit -Ro/r' '--match-head-commit=-Ro/r'; do
+    g1_deny "T92 '$sp' is a sha operand, not a pointer" "$G1_LIVE" \
+      "gh pr merge 5 --squash --auto $sp" "names no 40-hex sha"
+  done
+  # Twins: a genuine pointer after a value still takes the foreign exit.
+  g1_pass "T92 '--body x -R o/r' still takes the proven-foreign exit" "$G1_LIVE" \
+    'gh pr merge 5 --squash --auto --body x -R o/r'
+  g1_pass "T92 '-sbx -Ro/r' still takes the proven-foreign exit" "$G1_LIVE" \
+    'gh pr merge 5 --squash --auto -sbx -Ro/r'
+}
+
+t93_net_timeouts() {
+  # The census network reads are bounded: a hung origin times out into the
+  # deny instead of holding the hook (a killed hook lets the merge through).
+  # A PATH-shimmed git hangs one call per mode with the real sleep; the
+  # three runs go in parallel so the suite pays one bound-sized window.
+  local tmp real slp mode rc to_lines kill bound
+  # The bound the hook declares, read from BOTH _NET_TO lines (the `if`
+  # timeout line Linux runs, and the `elif` gtimeout line ending `; fi`);
+  # both must parse and carry the same kill/bound, so the rows below test the
+  # value every platform ships. A parse miss is a FAIL row, never an errexit.
+  local raw n_lines
+  raw=$(grep -E '^(if command -v timeout .*_NET_TO=\(timeout -k [0-9]+ [0-9]+\)|elif command -v gtimeout .*_NET_TO=\(gtimeout -k [0-9]+ [0-9]+\); fi)$' "$HOOK") || raw=""
+  n_lines=$(grep -c . <<< "$raw") || n_lines=0
+  to_lines=$(sed -E 's/.*-k ([0-9]+) ([0-9]+)\).*/\1 \2/' <<< "$raw" | sort -u) || to_lines=""
+  if [[ "$n_lines" -ne 2 || $(grep -c . <<< "$to_lines") -ne 1 \
+        || "$(grep -cE '_NET_TO=\(g?timeout' "$HOOK")" -ne 2 ]]; then
+    fail "T93 hook declares one _NET_TO bound on both its timeout and gtimeout lines (lines=$n_lines, got: $(paste -sd, - <<< "${to_lines:-none}"))"
+    TOTAL=$((TOTAL + 1))
+    # The three timing rows cannot run without a bound: count them as failed
+    # so the floor reads 215 on this path too.
+    for mode in lsremote pullfetch mainfetch; do
+      fail "T93 hung $mode not measured: no single parsable _NET_TO bound"
+      TOTAL=$((TOTAL + 1))
+    done
+    return
+  fi
+  read -r kill bound <<< "$to_lines"
+  # Worst case on the PR-number path: two reads succeed just under the bound,
+  # the third is killed (a timed-out read denies at once, so three timeouts
+  # cannot chain): 3 x bound + kill. Budget 60 s, a conservative figure —
+  # settings.json sets no timeout for this hook, and a longer harness default
+  # only adds margin. Both lines at 20 s (62) red this row; one line changed
+  # alone reds the agreement check above.
+  if (( 3 * bound + kill < 60 )); then
+    pass "T93 census worst case 3 x ${bound} + ${kill} s fits a 60 s hook budget"
+  else
+    fail "T93 census worst case 3 x ${bound} + ${kill} = $(( 3 * bound + kill )) s exceeds a 60 s hook budget"
+  fi
+  TOTAL=$((TOTAL + 1))
+  tmp=$(mktemp -d -p "$SUITE_TMP")
+  real=$(command -v git); slp=$(command -v sleep)
+  mkdir -p "$tmp/bin"
+  cat > "$tmp/bin/git" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *" ls-remote "*) [[ "\${KBG_HANG-}" == lsremote ]] && exec "$slp" 300 ;;
+  *" cat-file "*) [[ "\${KBG_HANG-}" == pullfetch ]] && exit 1 ;;
+  *" fetch "*refs/pull/*) [[ "\${KBG_HANG-}" == pullfetch ]] && exec "$slp" 300 ;;
+  *" fetch "*" main "*) [[ "\${KBG_HANG-}" == mainfetch ]] && exec "$slp" 300 ;;
+esac
+exec "$real" "\$@"
+EOF
+  chmod +x "$tmp/bin/git"
+  local payload
+  payload=$(make_payload "$G1_ARCH" "$(cat "$G1_SHIP")")
+  for mode in lsremote pullfetch mainfetch; do
+    mkdir -p "$tmp/$mode/inc"
+    (
+      s=$(date +%s); rc=0
+      printf '%s' "$payload" | PATH="$tmp/bin:$PATH" KBG_HANG="$mode" CLAUDECODE='' \
+        SOLEUR_SESSION_STATE_ROOT="$tmp/$mode/inc/state" INCIDENTS_REPO_ROOT="$tmp/$mode/inc" \
+        timeout -k 5 60 "$HOOK" > "$tmp/$mode/out" 2>/dev/null || rc=$?
+      printf '%s %s\n' "$rc" "$(( $(date +%s) - s ))" > "$tmp/$mode/rc"
+    ) &
+  done
+  wait
+  local want el
+  for mode in lsremote pullfetch mainfetch; do
+    case "$mode" in
+      lsremote) want="ls-remote origin refs/pull/" ;;
+      pullfetch) want="fetch origin refs/pull/" ;;
+      mainfetch) want="fetch origin main" ;;
+    esac
+    read -r rc el < "$tmp/$mode/rc"
+    if [[ "$el" -lt $(( bound + kill + 3 )) ]]; then
+      assert_deny_why "T93 hung $mode times out into a deny (${el}s)" "$tmp/$mode/inc" "$(cat "$tmp/$mode/out")" "$rc" "$want"
+    else
+      fail "T93 hung $mode times out into a deny (took ${el}s, rc=$rc)"
+      TOTAL=$((TOTAL + 1))
+    fi
+  done
+}
+
+t94_nameref_spellings() {
+  # The nameref sighting runs after quote removal: quoted or escaped option
+  # spellings, a quoted builtin name, and an option word that is an
+  # expansion all deny.
+  local d
+  for d in "declare '-n' H='x[\$(id)]'" 'declare -\n H=x' '"declare" -n H=x' \
+           "typeset -\\n H=x" 'o=-n; local $o H=x' 'declare {-n,} H=x' \
+           $'declare \\\n-n H=x' 'declare${IFS}-n H=x' 'declare -[n] H=x'; do
+    g1_deny "T94 nameref spelling '$d' denied" "$G1_ARCH" \
+      "$d; gh pr merge 5 --squash --auto --match-head-commit \"\$H\"" "nameref"
+  done
+}
+
+t95_deny_reason_text() {
+  # Deny reasons name the fix: the operand goes LAST, the variable needs the
+  # space-separated spelling, and the shared tail names the arm form.
+  g1_deny "T95 flags after the operand: operand must be LAST" "$G1_ARCH" \
+    'gh pr merge 5 --match-head-commit "$H" --squash --auto' "LAST argument"
+  g1_deny "T95 --admin after the operand: operand must be LAST" "$G1_ARCH" \
+    'gh pr merge 5 --squash --match-head-commit "$H" --admin' "LAST argument"
+  g1_deny "T95 --match-head-commit=\"\$H\": space-separated spelling" "$G1_ARCH" \
+    'gh pr merge 5 --squash --auto --match-head-commit="$H"' "space-separated spelling"
+  g1_deny "T95 shared deny tail points at the arm check" "$G1_ARCH" \
+    'gh pr merge 5 --squash --auto --match-head-commit="$H"' "review-evidence-comment.md#arm-check"
+}
+
+t96_assert_pass_control() {
+  # Positive control for assert_pass: it must REJECT a deny decision, a
+  # non-zero exit and a deny incident row. Counters are unwound and the
+  # verdict is reported outside the helpers, so a neutered assert_pass
+  # cannot vouch for itself.
+  local f0=$FAIL p0=$PASS t0=$TOTAL moved=0 inc
+  inc=$(mktemp -d -p "$SUITE_TMP")
+  assert_pass "control: deny decision" "$inc" '{"hookSpecificOutput":{"permissionDecision":"deny"}}' 0 >/dev/null
+  (( FAIL == f0 + 1 )) && moved=$((moved + 1))
+  assert_pass "control: non-zero exit" "$inc" '' 1 >/dev/null
+  (( FAIL == f0 + 2 )) && moved=$((moved + 1))
+  mkdir -p "$inc/.claude"
+  printf '%s\n' '{"rule_id":"x","event_type":"deny"}' > "$inc/.claude/.rule-incidents.jsonl"
+  assert_pass "control: deny incident row" "$inc" '' 0 >/dev/null
+  (( FAIL == f0 + 3 )) && moved=$((moved + 1))
+  FAIL=$f0; PASS=$p0; TOTAL=$t0
+  if [[ "$moved" != "3" ]]; then
+    printf '[FATAL] assert_pass positive control: it rejected %d/3 deny probes — every allow row is vacuous\n' "$moved" >&2
+    exit 1
+  fi
+  printf 'CONTROL: assert_pass rejects a deny decision, a non-zero exit and a deny incident row (3/3)\n'
+}
+
 # --- registration + parity (integration) -----------------------------------
 
 t40_settings_registration() {
@@ -1436,6 +2021,20 @@ t79_specflat_deny
 t80_gitkeep_pass
 t81_quoted_string_pass
 t82_partial_word_quote_pass
+t83_g1_sites_and_spans
+t84_g1_red_reasons
+t85_g1_sites_allow_and_census
+t86_g1_multi_invocation_rows
+t87_g1_operand_rows
+t88_g1_composite_and_fail_opens
+t89_g1_harness_rows
+t90_g1_rule_ii_narrowing
+t91_rule_ii_allowlist
+t92_flag_value_spellings
+t93_net_timeouts
+t94_nameref_spellings
+t95_deny_reason_text
+t96_assert_pass_control
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
@@ -1445,8 +2044,19 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # mutant contract). Threshold is hand-maintained with the case list:
 # 94 assertions across 80 case invocations — 80 case verdicts + 5
 # assert_fixture_has preconditions (T01/T02/T04/T20/T79) + 9 second-verdict
-# arms (T01b/T09b/T15b/T18b/T35b/T48b/T77b/T78b/T81b).
-MIN_ASSERTIONS=94
+# arms (T01b/T09b/T15b/T18b/T35b/T48b/T77b/T78b/T81b). Guard 1 (T83-T90)
+# adds 61: T83 1 parse + 7 derived sites (one per SITES/CANON/LINK_ONLY
+# entry), T84 2, T85 14 (7 spans x archived/live), T86 9, T87 14, T88 5,
+# T89 5, T90 4. The suite measured 157 before the #13112 review fixes (the
+# itemisation above under-counts it by two; the measured total is what is
+# pinned). Those fixes add 57: T87 +3 operand rows, T91 18 (10 intruders +
+# tail + third copy + 2 leads + PR 5/6 pair + literal-sha pair), T92 20 (12
+# short spellings + 4 long `=` + 2 --match-head-commit + 2 twins), T93 3,
+# T94 9, T95 4; T96 is a control reported outside the counters. T93 +1
+# budget row (3 x bound + kill < 60 s). The floor
+# is the exact measured total (215) — a dropped row is a FATAL, not a quiet
+# shrink.
+MIN_ASSERTIONS=215
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] vacuity floor: only %d assertions ran (floor %d) — the suite did not execute\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1

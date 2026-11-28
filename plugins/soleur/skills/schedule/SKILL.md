@@ -738,10 +738,14 @@ RUN_ID=$(gh run list --workflow=scheduled-<NAME>.yml --limit=1 --json databaseId
 
 ```bash
 # Monitor command — emits each status transition, exits on a terminal state.
-prev=""; i=0
+# Read stdout only, stderr to a per-poll file (never `2>&1`). Hygiene, not a timeout fix: gh 2.106.0 prints its `hint:`
+# block only for an in-progress PR run, and the line-wise `^completed` grep would match under `2>&1` too; the file keeps
+# gh's stderr out of the Monitor lines. A failed read names its first line that is not the hint, else rc=<rc>.
+prev=""; i=0; e="$(mktemp 2>/dev/null)" || e=""; trap 'rm -f ${e:+"$e"}' EXIT
 while true; do
   i=$((i+1))
-  s=$(gh run view "$RUN_ID" --json status,conclusion --jq '"\(.status) \(.conclusion // "-")"' 2>&1) || s="fetch-error: $s"
+  s=$(gh run view "$RUN_ID" --json status,conclusion --jq '"\(.status) \(.conclusion // "-")"' 2>"${e:-/dev/null}") || {
+    rc=$?; m="$(grep -m1 -vE '^(hint:|[[:space:]]|$)' "$e" 2>/dev/null)" || m=""; m="${m:0:200}"; s="fetch-error: ${m:-rc=$rc}"; }
   if [[ "$s" != "$prev" ]] || (( i % 6 == 1 )); then echo "$(date +%H:%M:%S) [${i}] run $RUN_ID ${s}"; prev="$s"; fi
   echo "$s" | grep -qE "^(completed|fetch-error)" && break
   [ "$i" -ge 40 ] && { echo "Run poll timed out after ~20m. Last: $s"; break; }

@@ -100,10 +100,31 @@ check_work() {
 
 # --- review phase checks ---
 check_review() {
-  # no-open-code-review-issues
-  open_issues="$(gh issue list --label code-review --state open -L 200 2>/dev/null | wc -l)" || open_issues=0
-  if [[ "$open_issues" -gt 0 ]]; then
+  # no-open-code-review-issues — scoped to THIS PR (completion-floors.ts:
+  # "for this PR"): an open code-review issue whose body cites #<PR>. The
+  # unscoped count read every open code-review issue in the repo, so it could
+  # never pass. A cite is `#N` or a `/pull/N` URL, from any repository —
+  # a deliberately wider cite pattern than ship Phase 5.5's
+  # `(Ref|Closes|Fixes) #N`. The issue sets differ too: this reads
+  # code-review-labelled issues; Phase 5.5 reads open issues titled with a
+  # review-origin prefix, case-insensitive (`review:`, `Code review #`,
+  # `Refactor:`, `arch:`, `compound:`, `follow-through:`), any label. Scope-outs
+  # (deferred-scope-out) stay open by design and synthetic-test issues are
+  # fixtures; both are excluded, as ship Phase 5.5's merge gate excludes them.
+  # Fail-closed: an unresolved PR, a failed read, or a full page (the PR's
+  # issue may sit past it) is "missing". stdout only — gh's stderr hint must
+  # not reach a parsed value (#12697).
+  pr="$(gh pr view --json number --jq .number 2>/dev/null)" || pr=""
+  if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
     add_missing "no-open-code-review-issues"
+  else
+    open_issues="$(gh issue list --label code-review --state open -L 1000 --json number,body,labels \
+      --jq "if length >= 1000 then \"page-full\" else [.[]
+        | select(([(.labels // [])[].name] | index(\"deferred-scope-out\") or index(\"synthetic-test\")) | not)
+        | select((.body // \"\") | test(\"(#|/pull/)${pr}([^0-9]|\$)\"))] | length end" 2>/dev/null)" || open_issues=""
+    if [[ ! "$open_issues" =~ ^[0-9]+$ || "$open_issues" -gt 0 ]]; then
+      add_missing "no-open-code-review-issues"
+    fi
   fi
   # attestation-trailers
   last_commit_msg="$(git log -1 --format='%B')"

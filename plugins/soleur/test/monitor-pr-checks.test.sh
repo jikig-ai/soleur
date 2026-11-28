@@ -388,6 +388,45 @@ chmod +x "$STUB/gh"
 out="$(run 7778 --interval 10 --max-polls 1)"
 [[ "$out" == *"FAILED: pr view"* && "$out" != *"new release"* ]] && ok "T19b the probe-FAILED line carries only the FAILED call's stderr (not the successful call's nag)" || no "T19b stderr attribution on the probe-FAILED branch" "out=[$out]"
 
+# ── T19c..T19e: gh 2.106 prints an 8-line `hint: … gh event listen …` block on STDERR, before anything else, for `gh pr view` of an open PR ──
+# A `head -c 160` of the stderr file reported the start of that hint as the cause. The cause is the first line that is neither `hint:` nor
+# indented; a stderr holding only the hint reports `rc=<rc>`. Each probe site (view, checks) has its own row.
+HINT_FX="$DIR/soleur/test/fixtures/gh-pr-view-hint.txt"
+[[ "$(head -1 "$HINT_FX" 2>/dev/null)" == hint:* ]] || { printf 'FATAL: %s is missing or not the hint block\n' "$HINT_FX" >&2; exit 1; }
+cat > "$STUB/gh" <<EOF
+#!/usr/bin/env bash
+case "\$2" in
+  view)   cat '$HINT_FX' >&2; echo "gh: could not resolve host" >&2; exit 1 ;;
+  checks) printf '%s' '[{"name":"a","bucket":"pass"}]' ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"
+[[ "$out" == *"FAILED: pr view — state unknown] (poll 1/1) · view: gh: could not resolve host"* && "$out" != *"hint"* && "$out" != *"event listen"* ]] \
+  && ok "T19c a failed pr view whose stderr opens with gh's hint block names the real error line, not the hint" || no "T19c hint before the view error" "out=[$out]"
+cat > "$STUB/gh" <<EOF
+#!/usr/bin/env bash
+case "\$2" in
+  view)   printf '%s' 'OPEN|CLEAN|true' ;;
+  checks) cat '$HINT_FX' >&2; echo "gh: HTTP 502 from api.github.com" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"
+[[ "$out" == *"check counts UNAVAILABLE"*" · checks: gh: HTTP 502 from api.github.com"* && "$out" != *"hint"* && "$out" != *"event listen"* ]] \
+  && ok "T19d a failed pr checks whose stderr opens with the hint block names the real error line, not the hint" || no "T19d hint before the checks error" "out=[$out]"
+cat > "$STUB/gh" <<EOF
+#!/usr/bin/env bash
+case "\$2" in
+  view)   cat '$HINT_FX' >&2; exit 1 ;;
+  checks) printf '%s' '[{"name":"a","bucket":"pass"}]' ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"
+[[ "$out" == *"FAILED: pr view — state unknown] (poll 1/1) · view: rc=1"* && "$out" != *"hint"* && "$out" != *"event listen"* ]] \
+  && ok "T19e a failed pr view whose stderr is ONLY the hint block reports rc=1, not the hint" || no "T19e hint-only view failure" "out=[$out]"
+
 # ── T22: MERGED while `gh pr checks` fails — the degraded guard on the terminal line ──
 # The realistic co-occurrence: the poll that first observes MERGED is also the one where the head
 # branch was just auto-deleted, so `gh pr checks` returns empty with a non-zero exit. Without the
@@ -1025,9 +1064,9 @@ ok "T8 non-numeric PR, missing PR, and interval<10 all exit 3"
 
 printf '\nmonitor-pr-checks.test.sh: %s passed, %s failed\n' "$pass_n" "$fail_n"
 _ran=$((pass_n + fail_n))
-if [[ "$_ran" -lt 112 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 112.\n' "$_ran" >&2
+if [[ "$_ran" -lt 115 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 115.\n' "$_ran" >&2
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s assertions ran (floor 112)\n' "$_ran"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 115)\n' "$_ran"
 [[ "$fail_n" -eq 0 ]] || exit 1

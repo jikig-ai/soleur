@@ -82,6 +82,13 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SKILL="$REPO_ROOT/plugins/soleur/skills/ship/SKILL.md"
 MIRROR="$REPO_ROOT/plugins/soleur/skills/merge-pr/SKILL.md"
+# The shared gh 2.106.0 hint block (one `hint:` line, 7 indented; synthesized PR 4387). The H rows print it on stderr before
+# stdout for every `pr view` / `run view` call. Read-only here: the sync, operator-gate and TS suites read the same file.
+H_HINT_FILE="$REPO_ROOT/plugins/soleur/test/fixtures/gh-pr-view-hint.txt"
+if [[ "$(grep -c '' "$H_HINT_FILE" 2>/dev/null)" != 8 || "$(head -1 "$H_HINT_FILE")" != "hint: "* \
+      || "$(tail -n +2 "$H_HINT_FILE" | grep -cv '^[[:space:]]')" != 0 ]]; then
+  printf 'FATAL: %s is not the 8-line hint fixture (1 hint: line + 7 indented)\n' "$H_HINT_FILE" >&2; exit 1
+fi
 
 # ONE owning trap for every tempfile and tempdir this suite allocates (ADR-129,
 # enforced by `scripts/lint-trap-tempfile-ownership.py`). Registered at each
@@ -226,7 +233,9 @@ else
                'fetch_failures=' 'PR="4387"' '[[ $PR =~ ^[0-9]+$ ]] ||' \
                'behind_pushes=$((behind_pushes+1))' '(( behind_pushes == 2 ))' \
                '11) behind_syncs=$((behind_syncs-1))' '[ship.phase7.behind_no_sync]' \
-               'trap '"'"'rm -f "$SYNC_SNAP"'"'"' EXIT' 'ADR-179 identity check' \
+               "trap 'rm -f \"\$SYNC_SNAP\" \${GH_ERR:+\"\$GH_ERR\"}' EXIT" '2>"${GH_ERR:-/dev/null}"' \
+               'gh_err_line' '|| s="fetch-error: $(gh_err_line $?)"' 'GH_ERR="$(mktemp 2>/dev/null)" || GH_ERR=""' \
+               "grep -m1 -vE '^(hint:|[[:space:]]|\$)' <(LC_ALL=C tr -cd '[:print:]\\t\\n' 2>/dev/null <\"\$GH_ERR\"))\"" 'echo "${e:0:200}" || echo "rc=$1"' 'ADR-179 identity check' \
                'resolve-regenerable-conflicts.sh" origin/main' \
                'regen resolved — merge committed locally' \
                'pipeline-tally.sh" gate ci_cycles' 'pipeline-tally.sh" incr ci_cycles' \
@@ -261,6 +270,15 @@ else
       if ! grep -qF -- "$token" "$qf"; then
         fail "queue-mode token missing from $([[ "$qf" == "$BLOCK_FILE" ]] && echo ship || echo merge-pr): $token"
       fi
+    done
+  done
+  # The stderr strip and the admin-hatch command must read the same in BOTH fences. The hatch names the PR: the hatch runs from a
+  # detached worktree (settle-then-admin-merge.md), where a number-less `gh pr merge` cannot find the PR.
+  for token in "<(LC_ALL=C tr -cd '[:print:]\\t\\n' 2>/dev/null <\"\$GH_ERR\")" \
+               'then gh pr merge <PR> --squash --admin --match-head-commit <sha>'; do
+    for qf in "$BLOCK_FILE" "$MIRROR_FILE"; do
+      lbl="$([[ "$qf" == "$BLOCK_FILE" ]] && echo ship || echo merge-pr)"
+      if grep -qF -- "$token" "$qf"; then pass "[$lbl] fence carries: $token"; else fail "[$lbl] fence is missing: $token"; fi
     done
   done
   if bash -n "$MIRROR_FILE" 2>"$MIRROR_FILE.err"; then
@@ -391,8 +409,24 @@ run_scenario() {
     declare -F _gh_unexpected >/dev/null && export -f _gh_unexpected
     # shellcheck disable=SC1090
     source "$block"
+    # X_FINAL_S=1 (H4c): the post-sync re-read breaks without printing, so its value is printed here, after the loop.
+    if [[ "${X_FINAL_S:-0}" == 1 ]]; then printf 'FINAL-S: %s\n' "$s"; fi
   ) > "$logfile" 2> "$errfile"
   local rc=$?
+  # X_STATE_SHAPE=1 (the H rows): the state lines are checked on the STDOUT capture, before stderr is appended below. At least
+  # one line must carry the state-line prefix (so "every line matches" cannot pass over zero lines), every such line must name a
+  # state or a fetch-error, and no hint text may reach stdout (today's 2>&1 read prints `PR 4387 hint: …` plus its indented tail).
+  if [[ "${X_STATE_SHAPE:-0}" == 1 ]]; then
+    local sl_n sl_bad
+    sl_n="$(grep -cE '^[0-9:]{8} \[[0-9]+/90\] PR 4387 ' "$logfile" || true)"
+    sl_bad="$(grep -E '^[0-9:]{8} \[[0-9]+/90\] PR 4387 ' "$logfile" | grep -vE '^[0-9:]{8} \[[0-9]+/90\] PR 4387 (OPEN|MERGED|CLOSED|fetch-error:)' | head -1 || true)"
+    if [[ "$sl_n" -ge 1 && -z "$sl_bad" ]]; then pass "[$label] $sl_n state line(s) on stdout, each names a state or a fetch-error"
+    else fail "[$label] state lines on stdout: $sl_n (want >= 1), first malformed: ${sl_bad:0:120}"; fi
+    if grep -qF 'PR 4387 hint:' "$logfile"; then fail "[$label] a state line carries the gh hint: $(grep -m1 -F 'PR 4387 hint:' "$logfile" | cut -c1-120)"
+    else pass "[$label] no state line carries the gh hint"; fi
+    if grep -qFx -f "$H_HINT_FILE" "$logfile"; then fail "[$label] a gh hint line reached stdout: $(grep -m1 -Fx -f "$H_HINT_FILE" "$logfile" | cut -c1-120)"
+    else pass "[$label] no gh hint line on stdout"; fi
+  fi
   assert_no_tag_on_stderr "$label" "$errfile"
   # Any git call no mock arm answered (the child's too — many run under 2>/dev/null,
   # so the record is a FILE, not a line) is a call this row never modelled.
@@ -452,6 +486,8 @@ run_scenario() {
       fail "[$label] $X_NO_FILE has $n line(s) matching: ${X_NO_RE:-.}"
     fi
   fi
+  # X_POST (optional): a row-specific check, called as <fn> <label> <block> while $MOCK_STATE still exists.
+  [[ -z "${X_POST:-}" ]] || "$X_POST" "$label" "$block"
   rm -rf "$MOCK_STATE"
   rm -f "$logfile" "$errfile"
 }
@@ -2614,6 +2650,268 @@ else
 fi
 SCEN_ROOT=""
 
+# ── H rows — gh prints a hint on STDERR for `gh pr view` of an open PR (#12697/#12963) ────────────────────────────────────────────────────
+# gh 2.106.0 (measured 2026-11-25) prints an 8-line `hint: … gh event listen …` block on stderr, rc 0, before stdout, for
+# `gh pr view` of an OPEN PR, `gh run view` of an in-progress PR run, and `gh api repos/O/R/pulls/<N>` (every sub-path). A state
+# read that captures with `2>&1` returns `hint: …\n…\nOPEN BEHIND`, so every OPEN arm (the BEHIND auto-sync, the
+# --queue-state/dequeue read, the #11544 required-set read) is dead and the poll heartbeats to its timeout.
+# H_WRAP layers over QGH (as Q_TAIL): it prints the fixture hint on stderr BEFORE delegating for every `pr view` / `run view` call,
+# the sync child's snapshot read included (gh and its delegates are exported), and never for `pr checks` or `api`. Real gh also
+# hints on `gh api …/pulls/<N>`; the wrapper does not model it because no read on this path parses that endpoint's output from a
+# merged stream (ci-head-verdict.sh's `gh api -i …/pulls/$PR` already sends stderr to its own file).
+# MOCK_PV_FAIL=502|hint|esc makes the fence's own state read (`--json state,mergeStateStatus --jq`, not the child's
+# `state,mergeStateStatus,autoMergeRequest,…` snapshot) exit MOCK_PV_RC (default 1) with the hint plus `gh: HTTP 502`, with
+# the hint alone, or with the hint plus a line carrying ESC/BEL/CR. A `-after-push` suffix fails only the reads made after the
+# sync's push (the post-sync re-read), so the per-tick read on tick 1 still answers OPEN BEHIND.
+# The post-sync re-read never prints its value (it only breaks), so rows that pin it read X_FINAL_S's `FINAL-S:` line.
+H_WRAP='H_HINT_FILE="${H_HINT_FILE:?}"
+eval "$(declare -f gh | sed "1s/^gh/_h_gh/")"
+export -f _h_gh
+gh() {
+  case "$1 $2" in
+    "pr view"|"run view")
+      cat "$H_HINT_FILE" >&2
+      if [[ -n "${MOCK_PV_FAIL:-}" && "$*" == *"state,mergeStateStatus --jq"* ]] \
+         && { [[ "$MOCK_PV_FAIL" != *-after-push ]] || [[ -e "$MOCK_STATE/pushed" ]]; }; then
+        case "$MOCK_PV_FAIL" in
+          502*) echo "gh: HTTP 502" >&2 ;;
+          esc*) printf "gh: \033[31mboom\007\r\n" >&2 ;;
+        esac
+        return "${MOCK_PV_RC:-1}"
+      fi ;;
+  esac
+  _h_gh "$@"
+}'
+RANH=()
+h_both() { RANH+=("$1"); run_scenario_both "$@"; }
+
+# Stub order: the wrapper's hint must come FIRST under a merged stream (a stub that printed it after stdout would leave
+# `$s == OPEN*` true on the broken `2>&1` read and test nothing), stdout alone must be the state, and `pr checks` / the rules
+# `api` read print no hint at all (as measured; real gh does hint on `api …/pulls/<N>`, which this path does not merge-read).
+HSO_STATE="$(mktemp -d)"
+_TMP_OWNED+=("$HSO_STATE")
+assert_fixture_dir "$HSO_STATE"
+HSO_OUT="$(
+  MOCK_STATE="$HSO_STATE"
+  set -a
+  eval "$SYNC_MOCKS"; eval "$GQL_GH"; eval "$QGH"; eval "$H_WRAP"
+  set +a
+  printf 'merged-first=%s\n' "$(gh pr view 4387 --json state,mergeStateStatus --jq '"\(.state) \(.mergeStateStatus)"' 2>&1 | head -1 | cut -c1-6)"
+  printf 'stdout-only=%s\n' "$(gh pr view 4387 --json state,mergeStateStatus --jq '"\(.state) \(.mergeStateStatus)"' 2>/dev/null)"
+  printf 'run-view-first=%s\n' "$(gh run view 1 --json status,conclusion 2>&1 >/dev/null | head -1 | cut -c1-6)"
+  printf 'checks-stderr=[%s]\n' "$(gh pr checks 4387 --json name,bucket --jq '.[] | .name' 2>&1 >/dev/null)"
+  printf 'api-stderr=[%s]\n' "$(gh api 'repos/{owner}/{repo}/rules/branches/main' --jq length 2>&1 >/dev/null)"
+)"
+HSO_WANT=$'merged-first=hint: \nstdout-only=OPEN BEHIND\nrun-view-first=hint: \nchecks-stderr=[]\napi-stderr=[]'
+if [[ "$HSO_OUT" == "$HSO_WANT" ]]; then
+  pass "[H-stub-order] hint first on a merged stream, stdout alone is the state, run view hints, pr checks / api do not"
+else
+  fail "[H-stub-order] hint wrapper is not shaped like gh 2.106.0: got [$(tr '\n' '|' <<<"$HSO_OUT")]"
+fi
+rm -rf "$HSO_STATE"
+
+# Per-block read shape (AC1/AC2), counted inside each EXTRACTED fence, not file-wide: both state reads (per tick and post-sync)
+# send stderr to the per-poll file, no read on the `--jq` continuation line merges it, and exactly one EXIT trap exists and owns
+# both temp files. The redirect sits on the continuation line, so a `gh pr view`-line grep would pass on the broken text.
+H_TRAP="trap 'rm -f \"\$SYNC_SNAP\" \${GH_ERR:+\"\$GH_ERR\"}' EXIT"
+for pair in "ship:$BLOCK_FILE" "merge-pr:$MIRROR_FILE"; do
+  lbl="${pair%%:*}"; f="${pair#*:}"
+  n_redir="$(grep -cF '2>"${GH_ERR:-/dev/null}"' "$f" || true)"
+  n_merged="$(grep -cF "mergeStateStatus)\"' 2>&1)" "$f" || true)"
+  if [[ "$n_redir" -eq 2 && "$n_merged" -eq 0 ]]; then
+    pass "[H-$lbl] both state reads send stderr to \${GH_ERR:-/dev/null} and none merges it (2 / 0)"
+  else
+    fail "[H-$lbl] state reads: $n_redir with 2>\"\${GH_ERR:-/dev/null}\" (want 2), $n_merged merging stderr with 2>&1 (want 0)"
+  fi
+  # The count above sees the good redirect, not the absence of a second one: `2>"${GH_ERR:-/dev/null}" 2>& 1` keeps it and
+  # merges anyway. So each state-read capture, joined across its backslash continuation and cut at its `|| s="fetch-error`,
+  # must carry no `>&`, `|&` or `&>` at all.
+  reads="$(sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' "$f" | grep -F 's=$(gh pr view "$PR" --json state,mergeStateStatus' | sed 's/|| s="fetch-error.*//' || true)"
+  n_reads="$(grep -c 'gh pr view' <<<"$reads" || true)"
+  bad_reads="$(grep -E '>&|\|&|&>' <<<"$reads" || true)"
+  if [[ "$n_reads" -eq 2 && -z "$bad_reads" ]]; then
+    pass "[H-$lbl] neither joined state-read capture merges stderr in any spelling (>&, |&, &>)"
+  else
+    fail "[H-$lbl] joined state-read captures: $n_reads (want 2), merging: [$(tr '\n' '|' <<<"$bad_reads" | cut -c1-200)]"
+  fi
+  traps="$(grep -E '(^|[^A-Za-z_])trap .*EXIT' "$f" || true)"
+  if [[ "$(grep -c '' <<<"$traps")" -eq 1 && "$(sed -E 's/^[[:space:]]+//' <<<"$traps")" == "$H_TRAP" ]]; then
+    pass "[H-$lbl] exactly one EXIT trap, and it is: $H_TRAP"
+  else
+    fail "[H-$lbl] EXIT trap lines (want exactly one, reading $H_TRAP): [$(tr '\n' '|' <<<"$traps")]"
+  fi
+done
+
+# H1 / H1f — OPEN BLOCKED, armed, not queued, a full-decided verdict, with the hint on stderr: the required-set read is reached on
+# tick 14 (RROOT's chosen-body stub, exactly one call) and its absent / failed marker ends the poll. Today the read never runs.
+SCEN_ROOT="$RROOT"; Q_TAIL="$H_WRAP"
+for st in absent failed; do
+  hn=H1; [[ "$st" == failed ]] && hn=H1f
+  r_mocks "$(rsm $st)" MOCK_MERGED_AT=60
+  X_STATE_SHAPE=1 X_RS_CALLS=1 h_both "$hn-hint-on-stderr-required-set-$st-ends-the-poll" "$QF" \
+    "\[14/90\] \[ship\.phase7\.required_set\] state=$st — exiting poll
+^SOLEUR_CI_REQUIRED_SET state=$st pr=4387
+\[scenario exit rc=0\]" \
+    "MERGED CLEAN|Merge poll timed out|polling on|$R_FORBID"
+  rm -f "$QF"
+done
+SCEN_ROOT=""
+
+# H2 — OPEN BEHIND, no queue rule, hint on stderr: the auto-sync runs and pushes on tick 1, and the post-sync re-read ends the poll.
+q_mocks MOCK_RULES=noqueue
+X_STATE_SHAPE=1 h_both "H2-hint-on-stderr-behind-auto-syncs" "$QF" \
+  "\[1/90\] PR 4387 OPEN BEHIND\$
+\[1/90\] BEHIND detected — auto-sync attempt 1/6
+\[1/90\] auto-sync 1(/6)? pushed
+\[scenario exit rc=0\]" \
+  "\[2/90\]|queue_wait|Merge poll timed out|$Q_FORBID"
+rm -f "$QF"
+
+# H3 — Q8's shape with the hint on stderr: the every-5th-OPEN-tick queue read (queued at tick 5, removed at tick 10) stops the poll.
+q_mocks MOCK_RULES=queue MOCK_ARMED=true MOCK_CHECKS=pending MOCK_GQL_SEQ=queued,removed
+X_STATE_SHAPE=1 h_both "H3-hint-on-stderr-dequeue-is-seen" "$QF" \
+  "\[10/90\] \[ship\.phase7\.dequeued\] PR 4387 left the merge queue unmerged
+\[scenario exit rc=0\]" \
+  "\[11/90\]|auto-sync|Merge made by|$Q_FORBID"
+rm -f "$QF"
+
+# H4 / H4b — the state read exits 1. Its error text is the first stderr line that is neither the hint nor its indented tail; with
+# only the hint it is rc=1. The order is measured: `gh pr view <open PR> --jq 'error("boom")'` exits 1 and prints the hint BEFORE
+# `error: boom`. The `gh: HTTP 502` text is synthetic.
+q_mocks MOCK_RULES=noqueue MOCK_PV_FAIL=502
+X_STATE_SHAPE=1 h_both "H4-fetch-error-names-the-gh-error-not-the-hint" "$QF" \
+  "^00:00:00 \[1/90\] PR 4387 fetch-error: gh: HTTP 502\$
+\[scenario exit rc=0\]" \
+  "\[2/90\]|fetch-error: hint|BEHIND detected|$Q_FORBID"
+rm -f "$QF"
+q_mocks MOCK_RULES=noqueue MOCK_PV_FAIL=hint
+X_STATE_SHAPE=1 h_both "H4b-fetch-error-with-only-the-hint-is-rc" "$QF" \
+  "^00:00:00 \[1/90\] PR 4387 fetch-error: rc=1\$
+\[scenario exit rc=0\]" \
+  "\[2/90\]|fetch-error: hint|BEHIND detected|$Q_FORBID"
+rm -f "$QF"
+# H4d — the same hint-only failure with rc 4: the line names gh's own rc, so a `gh_err_line 1` (a literal for `$?`) is red here.
+q_mocks MOCK_RULES=noqueue MOCK_PV_FAIL=hint MOCK_PV_RC=4
+X_STATE_SHAPE=1 h_both "H4d-fetch-error-names-the-real-rc" "$QF" \
+  "^00:00:00 \[1/90\] PR 4387 fetch-error: rc=4\$
+\[scenario exit rc=0\]" \
+  "\[2/90\]|fetch-error: hint|fetch-error: rc=1|BEHIND detected|$Q_FORBID"
+rm -f "$QF"
+# H4e — the error line carries ESC, BEL and CR: they are dropped before the filter (`tr -cd '[:print:]\t\n'`), so the Monitor line
+# is printable ASCII only, the same rule as parsePrPollRead.
+q_mocks MOCK_RULES=noqueue MOCK_PV_FAIL=esc
+X_STATE_SHAPE=1 h_both "H4e-fetch-error-drops-control-characters" "$QF" \
+  "^00:00:00 \[1/90\] PR 4387 fetch-error: gh: \[31mboom\$
+\[scenario exit rc=0\]" \
+  "\[2/90\]|fetch-error: hint|BEHIND detected|$(printf '\033')|$Q_FORBID"
+rm -f "$QF"
+# H4c — OPEN BEHIND on tick 1, the sync pushes, and the POST-SYNC re-read fails with the hint plus a real error: the poll stops on
+# `fetch-error: <that line>` (FINAL-S), never on the empty stdout capture (`fetch-error: $s` would print `fetch-error: `).
+q_mocks MOCK_RULES=noqueue MOCK_PV_FAIL=502-after-push
+X_STATE_SHAPE=1 X_FINAL_S=1 h_both "H4c-post-sync-fetch-error-names-the-gh-error" "$QF" \
+  "\[1/90\] PR 4387 OPEN BEHIND\$
+\[1/90\] auto-sync 1(/6)? pushed
+^FINAL-S: fetch-error: gh: HTTP 502\$
+\[scenario exit rc=0\]" \
+  "\[2/90\]|fetch-error: hint|FINAL-S: fetch-error: \$|$Q_FORBID"
+rm -f "$QF"
+
+# H6 — only the GH_ERR allocation fails (no hint: see below). The mktemp mock counts every call in $MOCK_STATE/mktemp-n (command substitution runs in a
+# subshell, so the count is a file) and fails exactly the call made from the fence's `GH_ERR="$(mktemp` line, identified by its
+# call site (BASH_SOURCE/BASH_LINENO), so SYNC_SNAP's allocation and the sync child's own still succeed and the BEHIND sync stays
+# enabled. Failing every call would disable sync and hide the case; failing "the Nth call" would depend on the fence's order. The
+# rm shim logs its argv: `/dev/null` must never reach rm, and the trap's rm names SYNC_SNAP alone (no empty operand). A fence
+# with no GH_ERR allocation fails the row (nothing was failed).
+H6_TAIL='mktemp() {
+  local n src ln txt
+  n=$(( $(cat "$MOCK_STATE/mktemp-n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$MOCK_STATE/mktemp-n"
+  src="${BASH_SOURCE[1]:-}"; ln="${BASH_LINENO[0]:-0}"; txt=""
+  [[ -f "$src" ]] && txt="$(sed -n "${ln}p" "$src")"
+  printf "%s\t%s\n" "$n" "$txt" >> "$MOCK_STATE/mktemp-calls"
+  if [[ "$txt" =~ ^[[:space:]]*GH_ERR=\"\$\(mktemp ]]; then printf "%s\t%s\n" "$n" "$txt" >> "$MOCK_STATE/mktemp-failed"; return 1; fi
+  command mktemp "$@"
+}
+rm() { { printf "%q " "$@"; echo; } >> "$MOCK_STATE/rm-calls"; command rm "$@"; }'
+h6_post() {  # <label> <block>
+  local label="$1" block="$2" last
+  if [[ -c /dev/null ]]; then pass "[$label] /dev/null is still a character device"; else fail "[$label] /dev/null is no longer a character device"; fi
+  # No N/A arm: a fence that lost its GH_ERR allocation is a regression, and a vacuous pass would hide it.
+  if [[ "$(grep -c '' "$MOCK_STATE/mktemp-failed" 2>/dev/null)" == 1 ]] && grep -qF 'GH_ERR="$(mktemp' "$MOCK_STATE/mktemp-failed"; then
+    pass "[$label] exactly the GH_ERR allocation failed"
+  else
+    fail "[$label] the injected failure did not hit the GH_ERR allocation exactly once: [$(tr '\n' '|' < "$MOCK_STATE/mktemp-failed" 2>/dev/null)]"
+  fi
+  if grep -qF 'SYNC_SNAP="$(mktemp)"' "$MOCK_STATE/mktemp-calls" 2>/dev/null; then
+    pass "[$label] SYNC_SNAP was still allocated"
+  else
+    fail "[$label] no SYNC_SNAP allocation reached mktemp: [$(cut -f2- "$MOCK_STATE/mktemp-calls" 2>/dev/null | cut -c1-60 | tr '\n' '|')]"
+  fi
+  last="$(tail -1 "$MOCK_STATE/rm-calls" 2>/dev/null)"
+  if [[ "$last" =~ ^-f\ [^\ ]+/tmp/tmp\.[^\ ]+\ $ ]]; then
+    pass "[$label] the EXIT trap removed SYNC_SNAP alone (no empty or /dev/null operand)"
+  else
+    fail "[$label] the last rm call is not the trap removing SYNC_SNAP alone: [$last]"
+  fi
+}
+# No hint wrapper here: H6 is about the allocation fallback alone (the H rows above already pin the hint).
+Q_TAIL="$H6_TAIL"
+q_mocks MOCK_RULES=noqueue
+X_STATE_SHAPE=1 X_POST=h6_post X_NO_FILE=rm-calls X_NO_RE='/dev/null' h_both "H6-gh-err-mktemp-fails-sync-stays-on" "$QF" \
+  "\[1/90\] PR 4387 OPEN BEHIND\$
+\[1/90\] auto-sync 1(/6)? pushed
+\[scenario exit rc=0\]" \
+  "precondition|fetch-error|Merge poll timed out|$Q_FORBID"
+rm -f "$QF"
+Q_TAIL=""
+
+WANTH="H1-hint-on-stderr-required-set-absent-ends-the-poll H1f-hint-on-stderr-required-set-failed-ends-the-poll H2-hint-on-stderr-behind-auto-syncs H3-hint-on-stderr-dequeue-is-seen H4-fetch-error-names-the-gh-error-not-the-hint H4b-fetch-error-with-only-the-hint-is-rc H4d-fetch-error-names-the-real-rc H4e-fetch-error-drops-control-characters H4c-post-sync-fetch-error-names-the-gh-error H6-gh-err-mktemp-fails-sync-stays-on"
+if [[ "${RANH[*]}" == "$WANTH" ]]; then
+  pass "[H-rows] stderr-hint row set is exactly: ${#RANH[@]} rows"
+else
+  fail "[H-rows] stderr-hint row set drifted: got '${RANH[*]}'"
+fi
+
+# Run polls (ship Step 3 release-run poll, schedule's run poll): the same stdout-only read, executed. Each is extracted from its
+# SKILL.md (the `prev=""; i=0; e="$(mktemp` line through its `done`), its run id substituted, and sourced with a `gh` that prints
+# the hint plus a 300-character error line (or the hint alone) and fails. The fetch-error must carry the error cut to 200
+# characters (`m="${m:0:200}"`, which monitor-hygiene.md promises), and `rc=<gh's rc>` when stderr is hint-only.
+RP_DIR="$(mktemp -d)"
+_TMP_OWNED+=("$RP_DIR")
+assert_fixture_dir "$RP_DIR"
+RP_LONG="gh: $(printf 'E%.0s' {1..296})"
+for pair in "ship:$SKILL" "schedule:$REPO_ROOT/plugins/soleur/skills/schedule/SKILL.md"; do
+  lbl="${pair%%:*}"; src="${pair#*:}"
+  awk '/prev=""; i=0; e="\$\(mktemp 2>\/dev\/null\)"/ {on=1} on {print} on && /^[[:space:]]*done[[:space:]]*$/ {exit}' "$src" \
+    | sed -e 's/<id>/1/g' > "$RP_DIR/$lbl.sh"
+  if [[ "$(grep -c '' "$RP_DIR/$lbl.sh")" -ge 8 ]] && grep -q 'gh run view' "$RP_DIR/$lbl.sh" && bash -n "$RP_DIR/$lbl.sh" 2>/dev/null; then
+    pass "[RP-$lbl] run poll extracted ($(grep -c '' "$RP_DIR/$lbl.sh") lines) and parses"
+  else
+    fail "[RP-$lbl] could not extract a parseable run poll from $src"; continue
+  fi
+  for mode in long hint; do
+    out="$(
+      cd "$RP_DIR" || exit 97
+      export TMPDIR="$RP_DIR"
+      RUN_ID=1; RP_MODE="$mode"
+      sleep() { return 0; }
+      date() { echo "00:00:00"; }
+      gh() { cat "$H_HINT_FILE" >&2; [[ "$RP_MODE" == long ]] && printf '%s\n' "$RP_LONG" >&2; return 4; }
+      # shellcheck disable=SC1090
+      source "$RP_DIR/$lbl.sh"
+    )"
+    if [[ "$mode" == long ]]; then
+      want="fetch-error: ${RP_LONG:0:200}"
+    else
+      want="fetch-error: rc=4"
+    fi
+    if [[ "$(grep -c 'fetch-error' <<<"$out")" -eq 1 && "$out" == *" $want" ]]; then
+      pass "[RP-$lbl-$mode] the run poll stops on: ${want:0:40}… (${#want} chars)"
+    else
+      fail "[RP-$lbl-$mode] want one line ending '$want' (${#want} chars), got: [$(tr '\n' '|' <<<"$out" | cut -c1-300)]"
+    fi
+  done
+done
+
 # ---------------------------------------------------------------------------
 # Scenario 11 — not inside a worktree (`--is-inside-work-tree` prints
 # `false`, rc 0 — a bare repo): the precondition disables the BEHIND arm and
@@ -2872,7 +3170,7 @@ echo "ship-phase-7 fixture: $PASS pass, $FAIL fail"
 # run_scenario, a deleted call) must not read as green. Reported directly —
 # never through pass/fail, which is the machinery it backstops. Ratchet the
 # literal up when rows are added; never down.
-MIN_VERDICTS=2019
+MIN_VERDICTS=2261
 if (( PASS + FAIL < MIN_VERDICTS )); then
   printf '  FATAL: anti-vacuity: only %s verdicts; the floor is %s (fix the dispatch, do not lower it).\n' "$((PASS + FAIL))" "$MIN_VERDICTS" >&2
   exit 1

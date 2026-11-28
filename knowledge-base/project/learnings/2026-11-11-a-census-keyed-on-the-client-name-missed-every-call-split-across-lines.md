@@ -134,6 +134,13 @@ written; error 19 happened in the ready run of PR #12701, which added them. All 
     refuses the out-of-date head; both fail safe but cost a CI cycle). An earlier session took the other exit, a bare
     `gh pr merge <N>` without the sha pin
     (`2026-10-31-the-rehearsal-flipped-with-its-own-safety-control-off-and-its-success-signal-never-reached-the-sink.md`).
+
+    > **Follow-up 2026-11-28:** PR #13112 fixes #12697. The gate now accepts the numbered form (a bare PR
+    > number beside one `--match-head-commit <40-hex>` or `"${H:?…}"`, and identical locked/degrade-open invocations),
+    > so the unnumbered stopgap above is no longer needed once that fix is installed, and the BEHIND hatch's numbered
+    > `gh pr merge <N> --squash --admin --match-head-commit <sha>` is compliant again. See
+    > [the 2026-11-28 learning](workflow-issues/2026-11-28-a-cli-hint-on-stderr-switched-off-every-open-arm-of-the-merge-poll.md).
+
 18. **`deploy-arm.sh find --wait` ran as a foreground Bash call and was killed at the 600 s Bash timeout** (the harness
     can also move such a call to the background instead). It polls about once a minute for up to 120 polls, so it can
     wait about two hours. Recovery: re-armed it under the Monitor tool, matching `^ARM=`. Prevention:
