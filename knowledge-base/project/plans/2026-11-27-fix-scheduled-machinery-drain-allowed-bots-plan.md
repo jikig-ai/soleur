@@ -121,7 +121,7 @@ code path).
   (the `id-token: write` fix that exposed this second failure mode),
   `#11556` OPEN (epic), `#12885`/`#12905` OPEN (queued pool items).
 - The dispatcher is real and bot-actor by construction:
-  `apps/web-platform/server/inngest/functions/cron-machinery-drain.ts:37-56`
+  `apps/web-platform/server/inngest/functions/cron-machinery-drain.ts:37-63`
   mints a GitHub App installation token and POSTs the `dispatches` endpoint
   with `ref: "main"`, so `triggering_actor` on the run is the App login
   `soleur-ai[bot]`.
@@ -199,7 +199,7 @@ The ask restated as observable properties:
 | Workflow | `uses:` pin | Trigger set | Actor on dispatch | `allowed_bots` needed? |
 |---|---|---|---|---|
 | `scheduled-machinery-drain.yml` | `@3b7e1a45… # v1.0.263` | `workflow_dispatch` only, fired by Inngest via App token | `soleur-ai[bot]` | **yes — this fix** |
-| `claude-code-review.yml` | same pair | `pull_request` | actor-agnostic — whoever initiated the event (opener on `opened`/`ready_for_review`, the pusher on `synchronize`); `soleur-ai[bot]` when the bot itself is the initiator (measured: #13083's check runs), the human when a human pushes to a bot-authored branch | not today — the workflow is disabled (`scripts/pr-fanout-ledger.txt`); re-enabling it must revisit this input |
+| `claude-code-review.yml` | same pair | `pull_request` | actor-agnostic — whoever initiated the event (opener on `opened`, pusher on `synchronize`, whoever reopened or marked the PR ready on `reopened`/`ready_for_review`); `soleur-ai[bot]` when the bot itself is the initiator (measured: #13083's check runs), the human when a human pushes to a bot-authored branch | not today — the workflow is disabled (`scripts/pr-fanout-ledger.txt`); re-enabling it must revisit this input |
 | `fix-constraints-stage-a.yml` | same pair | path-filtered `pull_request` + `workflow_dispatch` | actor-agnostic; the agent-step condition is trigger-agnostic — it fires whenever the constraint gate is red and preflight green, on a filtered PR event or a manual `workflow_dispatch` alike — no observed bot-authored instance | not today — latent; if the refusal ever fires it is the same loud error with this same one-line remedy, and an unexercised input is unverifiable surface. Any future edit must mirror the Stage-A template carrier |
 | `test-pretooluse-hooks.yml` | same pair | `workflow_dispatch` only, manual-only by design ("avoid recurring API costs"); no in-repo automated dispatcher | human | no |
 

@@ -9,6 +9,7 @@ const h = vi.hoisted(() => {
     requestSpy: vi.fn(async (..._args: unknown[]) => ({ status: 204 })),
     reportSilentFallbackSpy: vi.fn((..._args: unknown[]) => {}),
     mintSpy: vi.fn(async (_opts: unknown) => "fake-installation-token"),
+    ctorSpy: vi.fn((..._args: unknown[]) => {}),
   };
 });
 
@@ -17,6 +18,9 @@ const h = vi.hoisted(() => {
 vi.mock("@octokit/core", () => ({
   Octokit: class {
     request = h.requestSpy;
+    constructor(...args: unknown[]) {
+      h.ctorSpy(...args);
+    }
   },
 }));
 
@@ -76,9 +80,10 @@ describe("cronMachineryDrain — narrowed mint + single dispatch (#13096)", () =
     expect(out.value).toEqual({ ok: true });
 
     // The narrowed scope is the load-bearing property — toEqual, not
-    // toMatchObject: an extra permission widens the credential, and exactly
-    // one mint means the token used for the dispatch IS the narrowly minted
-    // one (no second broader mint can hide behind the literal).
+    // toMatchObject: an extra permission widens the credential. Exactly one
+    // mint blocks a second broader mint hiding behind the literal, but the
+    // credential wiring is pinned separately below: the Octokit constructor
+    // must receive exactly the minted token, nothing else.
     expect(h.mintSpy).toHaveBeenCalledTimes(1);
     expect(h.mintSpy.mock.calls[0][0]).toEqual({
       tokenMinLifetimeMs: 5 * 60 * 1000,
@@ -86,30 +91,53 @@ describe("cronMachineryDrain — narrowed mint + single dispatch (#13096)", () =
       repositories: ["soleur"],
     });
 
+    // The client must be constructed exactly once with exactly the minted
+    // token — an ambient or broad credential sourced outside the mint fails here.
+    expect(h.ctorSpy).toHaveBeenCalledTimes(1);
+    expect(h.ctorSpy.mock.calls[0][0]).toEqual({
+      auth: "fake-installation-token",
+    });
+
     expect(h.requestSpy).toHaveBeenCalledTimes(1);
     const [endpoint, params] = h.requestSpy.mock.calls[0];
     expect(endpoint).toBe(
       "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
     );
-    expect(params).toMatchObject({
+    // Exhaustive — this call carries a credential, so owner/repo/workflow/ref
+    // are pinned exactly and any added field (inputs, headers) fails red.
+    expect(params).toEqual({
+      owner: "jikig-ai",
+      repo: "soleur",
       workflow_id: "scheduled-machinery-drain.yml",
       ref: "main",
     });
+    expect(h.reportSilentFallbackSpy).not.toHaveBeenCalled();
   });
 
   it("dispatch failure redacts the minted token before reportSilentFallback and returns ok:false", async () => {
     h.requestSpy.mockImplementationOnce(async () => {
-      throw new Error("HTTP 403 for token fake-installation-token");
+      const boom = new Error("HTTP 403 for token fake-installation-token");
+      boom.name = "DispatchBoom";
+      throw boom;
     });
     const out = await runHandler();
     expect(out.outcome).toBe("returned");
     expect(out.value).toEqual({ ok: false });
 
     expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
-    const [errArg] = h.reportSilentFallbackSpy.mock.calls[0];
+    const [errArg, optsArg] = h.reportSilentFallbackSpy.mock.calls[0];
     // The credential must never reach the observability payload — the
-    // redaction is the security property this test exists to pin.
-    expect(String(errArg.message)).not.toContain("fake-installation-token");
+    // redaction is the security property this test exists to pin. Sweep the
+    // whole reporting boundary (error text, error name, and the serialized
+    // options/extras), not just the message: a future `extra` carrying the
+    // token fails red here.
+    const boundary =
+      String(errArg.message) + String(errArg.name) + JSON.stringify(optsArg);
+    expect(boundary).not.toContain("fake-installation-token");
     expect(String(errArg.message)).toContain("HTTP 403");
+    // Error.name is preserved through the redaction copy (see the SUT
+    // comment) — the distinctive source name must survive, not collapse to
+    // the Error constructor default.
+    expect(errArg.name).toBe("DispatchBoom");
   });
 });

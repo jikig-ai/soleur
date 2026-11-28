@@ -401,8 +401,12 @@ describe("cron-machinery-drain: token mint narrowed to actions:write (dispatch-o
       join(FUNCTIONS_DIR, "cron-machinery-drain.ts"),
       "utf-8",
     );
-    expect(src).toContain('permissions: { actions: "write" }');
-    expect(src).toMatch(/repositories:\s*\[REPO_NAME\]/);
+    // Anchored inside the mintInstallationToken call itself, fail-closed:
+    // either literal satisfied from a comment or unrelated text fails red.
+    const mintCall = src.match(/mintInstallationToken\(\{[\s\S]*?\n\s*\}\)/);
+    expect(mintCall).not.toBeNull();
+    expect(mintCall![0]).toContain('actions: "write"');
+    expect(mintCall![0]).toMatch(/repositories:\s*\[REPO_NAME\]/);
   });
 });
 
