@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Mutation matrix for tests/scripts/lib/bastion-host-replace-gate.sh (Guard 1, #12879; ADR-327 step 2b),
-# plus the plan-chain and order rows of Guard 2 over .github/workflows/bastion-host-replace.yml.
+# Mutation matrix for tests/scripts/lib/bastion-host-replace-gate.sh (Guard 1, #12879; ADR-327 step 2b).
+# The workflow's wiring (step order, if: strings, the plan chain, the -replace branch) is pinned by
+# executing its steps in tests/scripts/test-bastion-host-replace-workflow.sh (Q-R4), not by grep here.
 #
 # PROPERTY. A bastion-host-replace apply runs only on a plan that matches one of two arms:
 #   replace   the plan destroys exactly the one live soleur-bastion whose id the dispatch pin, the
@@ -8,17 +9,23 @@
 #             recreates its NIC at 10.0.1.70 and re-binds its zero-rule firewall attachment by id;
 #   recovery  (pin `none`) the plan creates the server only when neither state nor the API holds any
 #             soleur-bastion.
+# On both arms an attachment update is graded on its BEFORE (Q-R1): it may unbind nothing but the pinned
+# server (replace) or nothing at all (recovery), and no label selector; a partial replace's resume shapes
+# (update from [] or null, or a bare create) pass on the replace arm (Q-R2).
 # In both arms the host key and the firewall are exactly no-op and nothing outside
 # bastion-resources.txt changes.
 #
 # Fixtures are synthesized (ADR-322) with the real types: a STRING before.id in the plan, a NUMERIC id
-# in the Hetzner document, and the attachment's after.server_ids = [null] / after_unknown = [true]
-# (Terraform v1.10.5 jsonplan, a known one-element set with an unknown element). Every RED row names
-# the ABORT substring it expects; the substring is matched against ABORT lines only.
+# in the Hetzner document, and the attachment's after.server_ids in both renderings the gate accepts:
+# [null] with after_unknown [true] (a known one-element set with an unknown element; the canonical
+# fixture) and wholly unknown, after_unknown true (the shape a captured birth plan shows; row 1b). Every
+# RED row names the ABORT substring it expects; the substring is matched against ABORT lines only.
 #
 # ANTI-VACUITY. `cases` moves at every assertion; H1 re-runs every RED row against a gate replaced by
-# `return 0` and requires each to flip; the floors and passes+fails==cases are reported by printf +
-# exit 1, never through fail() (ADR-193).
+# `return 0` and requires each to flip; every helper that owns a verdict (row, irow, nrow, scratch_row,
+# gmrow, gprow, the H1 predicate) is driven once with a must-fail input and must report the failure
+# (CONTROLS, below); the floors and passes+fails==cases are reported by printf + exit 1, never through
+# fail() (ADR-193).
 #
 # Run: bash tests/scripts/test-bastion-host-replace-gate.sh
 set -uo pipefail
@@ -28,8 +35,6 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${DIR}/../.." && pwd)"
 GATE="${ROOT}/tests/scripts/lib/bastion-host-replace-gate.sh"
 COMMON="${ROOT}/tests/scripts/lib/bastion-gate-common.sh"
-# The reusable body of apply-web-platform-infra.yml's bastion_host_replace caller job (size gate, #8361).
-WORKFLOW="${ROOT}/.github/workflows/bastion-host-replace.yml"
 
 cases=0
 passes=0
@@ -258,6 +263,50 @@ row "the attachment's before.server_ids is another server" RED \
   "$(mk "$R" "$SET"' set("hcloud_firewall_attachment.bastion"; .change.before.server_ids = ['"$OTHER"'])')" "$PIN" "$A1" "ATTACHMENT BEFORE PIN"
 row "the attachment's before.server_ids holds the pin AND another server" RED \
   "$(mk "$R" "$SET"' set("hcloud_firewall_attachment.bastion"; .change.before.server_ids = ['"$PIN"', '"$OTHER"'])')" "$PIN" "$A1" "ATTACHMENT BEFORE PIN"
+echo "Q-R1 / Q-R2: the attachment's before, on both arms"
+ATT='"hcloud_firewall_attachment.bastion"'
+row "Q-R2: replace arm, the attachment updates from before.server_ids [] (a partial replace never re-bound it)" PASS \
+  "$(mk "$R" "$SET"' set('"$ATT"'; .change.before.server_ids = [])')" "$PIN" "$A1"
+row "Q-R2: replace arm, the attachment updates from before.server_ids null" PASS \
+  "$(mk "$R" "$SET"' set('"$ATT"'; .change.before.server_ids = null)')" "$PIN" "$A1"
+row "Q-R2: replace arm, the attachment is a bare create (before null)" PASS \
+  "$(mk "$R" "$SET"' set('"$ATT"'; .change.actions = ["create"] | .change.before = null)')" "$PIN" "$A1"
+row "Q-R1: replace arm, before.label_selectors [] passes (empty, like null)" PASS \
+  "$(mk "$R" "$SET"' set('"$ATT"'; .change.before.label_selectors = [])')" "$PIN" "$A1"
+row "Q-R1: recovery arm, the attachment updates from before.server_ids null" PASS \
+  "$(mk "$V" "$SET"' set('"$ATT"'; .change.before.server_ids = null)')" none "$A0"
+ATT_REC_OTHER="$(mk "$V" "$SET"' set('"$ATT"'; .change.before.server_ids = ['"$OTHER"'])')"
+row "Q-R1: recovery arm, an update from another server's id refuses (it would strip that server's deny-all)" RED \
+  "$ATT_REC_OTHER" none "$A0" "ATTACHMENT BEFORE PIN"
+ATT_REC_NONE="$(mk "$V" "$SET"' set('"$ATT"'; .change.before.server_ids = ["none"])')"
+row "Q-R1: recovery arm, before.server_ids [\"none\"] (the pin literal) refuses: only [] or null" RED \
+  "$ATT_REC_NONE" none "$A0" "ATTACHMENT BEFORE PIN"
+ATT_REP_LABELS="$(mk "$R" "$SET"' set('"$ATT"'; .change.before.label_selectors = [{selector: "role=web"}])')"
+row "Q-R1: replace arm, before.label_selectors non-empty refuses" RED "$ATT_REP_LABELS" "$PIN" "$A1" "ATTACHMENT BEFORE LABEL BINDING"
+ATT_REC_LABELS="$(mk "$V" "$SET"' set('"$ATT"'; .change.before.label_selectors = [{selector: "role=web"}])')"
+row "Q-R1: recovery arm, before.label_selectors non-empty refuses" RED "$ATT_REC_LABELS" none "$A0" "ATTACHMENT BEFORE LABEL BINDING"
+ATT_NO_SIDS="$(mk "$R" "$SET"' set('"$ATT"'; .change.before |= del(.server_ids))')"
+row "Q-R1: replace arm, before lacks server_ids (unreadable, never empty)" RED "$ATT_NO_SIDS" "$PIN" "$A1" "ATTACHMENT BEFORE UNREADABLE"
+row "Q-R1: recovery arm, before lacks label_selectors" RED \
+  "$(mk "$V" "$SET"' set('"$ATT"'; .change.before |= del(.label_selectors))')" none "$A0" "ATTACHMENT BEFORE UNREADABLE"
+row "Q-R1: replace arm, an update with no before object" RED \
+  "$(mk "$R" "$SET"' set('"$ATT"'; .change.before = null)')" "$PIN" "$A1" "ATTACHMENT BEFORE UNREADABLE"
+row "Q-R1: recovery arm, an update with no before object" RED \
+  "$(mk "$V" "$SET"' set('"$ATT"'; .change.before = null)')" none "$A0" "ATTACHMENT BEFORE UNREADABLE"
+row "Q-R1: replace arm, before.server_ids a string" RED \
+  "$(mk "$R" "$SET"' set('"$ATT"'; .change.before.server_ids = "'"$PIN"'")')" "$PIN" "$A1" "ATTACHMENT BEFORE UNREADABLE"
+row "Q-R1: recovery arm, before.label_selectors an object" RED \
+  "$(mk "$V" "$SET"' set('"$ATT"'; .change.before.label_selectors = {})')" none "$A0" "ATTACHMENT BEFORE UNREADABLE"
+ATT_CREATE_BEFORE="$(mk "$R" "$SET"' set('"$ATT"'; .change.actions = ["create"])')"
+row "Q-R2: replace arm, an attachment create that carries a before" RED "$ATT_CREATE_BEFORE" "$PIN" "$A1" "ATTACHMENT BEFORE UNREADABLE"
+echo "B5 / B6: arms the first battery did not pin"
+KEY_TWICE="$(mk "$R" "$ADD add({address: \"tls_private_key.bastion_host_ssh\", type: \"tls_private_key\", deposed: \"00000001\", change: {actions: [\"delete\",\"create\"], before: {algorithm: \"ED25519\"}, after: {algorithm: \"ED25519\"}, after_unknown: {}}})")"
+row "B5: a second host-key entry (deposed-shaped delete-and-create) refuses: listed exactly once" RED "$KEY_TWICE" "$PIN" "$A1" "is not in the plan exactly once"
+ATT_KNOWN_OLD="$(mk "$R" "$SET"' set('"$ATT"'; .change.after.server_ids = ['"$PIN"'])')"
+row "B6: after.server_ids [old id] with after_unknown [true] is not re-bound" RED "$ATT_KNOWN_OLD" "$PIN" "$A1" "ATTACHMENT NOT RE-BOUND"
+row "B6: a 13-digit pin is malformed (the id is at most 12 digits)" RED "$R" 1234567890123 "$A1" "pin argument malformed"
+API_ID_STRING="$(mk "$A1" '.servers[0].id = "'"$PIN"'"')"
+row "B6: the API id is a numeric STRING, not a number" RED "$R" "$PIN" "$API_ID_STRING" "API ID NOT NUMERIC"
 row "a listed address absent from the plan (the host key)" RED "$(mk "$R" "$DROP"' drop("tls_private_key.bastion_host_ssh")')" "$PIN" "$A1" "is not in the plan"
 row "the recovery arm with the NIC delete-and-create" RED "$(mk "$V" "$SET"' set("hcloud_server_network.bastion"; .change.actions = ["delete","create"] | .change.before = {server_id: 1, ip: "10.0.1.70"})')" none "$A0" "ACTION NOT ALLOWED: hcloud_server_network.bastion"
 echo "R3b behaviour rows (one per shared check, each RED with the common message)"
@@ -402,14 +451,14 @@ gprow "M01 tostring dropped from the API-id comparison (a number never equals th
   '(.servers[0].id | tostring) == $pin' '.servers[0].id == $pin' "$R" "$PIN" "$A1"
 gmrow "M02 the API count check dropped" 'if [[ "$n" -gt 1 ]]; then' 'if false; then' \
   "$R" "$PIN" "$(mk "$A1" '.servers += [.servers[0] | .id = '"$OTHER"']')" "refusing to guess"
-gmrow "M03 the role check dropped" '.servers[0].labels.role == "bastion"' 'true' \
+gmrow "M03 the role check dropped" '.servers[0].labels.role == $r' 'true' \
   "$R" "$PIN" "$(mk "$A1" '.servers[0].labels.role = "web"')" "API ROLE MISMATCH"
 gmrow "M04 the recovery arm's prior_state check dropped" 'if [[ "$prior_has" -ne 0 ]]; then' 'if false; then' \
   "$RECOVERY_PRIOR" none "$A0" "RECOVERY REFUSED"
 gmrow "M05 the attachment re-binding check dropped" 'if [[ "$att_rebound" -ne 1 ]]; then' 'if false; then' \
   "$(mk "$R" "$SET"' set("hcloud_firewall_attachment.bastion"; .change.after.server_ids = ['"$PIN"'] | .change.after_unknown.server_ids = [false])')" "$PIN" "$A1" "ATTACHMENT NOT RE-BOUND"
-gmrow "M06 the attachment's update-only entry widened to no-op" '"hcloud_firewall_attachment.bastion" then (if $arm == "replace" then [["update"]]' \
-  '"hcloud_firewall_attachment.bastion" then (if $arm == "replace" then [["update"],["no-op"]]' \
+gmrow "M06 the attachment's update/create entry widened to no-op" 'elif $a == $t then [["update"],["create"]]' \
+  'elif $a == $t then [["update"],["create"],["no-op"]]' \
   "$(mk "$R" "$SET"' set("hcloud_firewall_attachment.bastion"; .change.actions = ["no-op"])')" "$PIN" "$A1" "ACTION NOT ALLOWED: hcloud_firewall_attachment.bastion"
 gmrow "M07 the after.server_type check dropped" 'if [[ "$shape_type" -ne 1 ]]; then' 'if false; then' \
   "$(mk "$R" "$SET"' set("hcloud_server.bastion"; .change.after.server_type = "cx33")')" "$PIN" "$A1" "REPLACEMENT SHAPE: after.server_type"
@@ -428,119 +477,26 @@ gmrow "M13 the out-of-scope arm dropped" 'if [[ "$out_of_scope" -ne 0 ]]; then' 
   "$(mk "$R" "$ADD add({address: \"hcloud_server.web[\\\"web-1\\\"]\", type: \"hcloud_server\", change: {actions: [\"delete\",\"create\"], before: {id: \"111\"}, after: {}, after_unknown: {}}})")" "$PIN" "$A1" "out-of-scope"
 gmrow "M14 the pin = before.id leg of the identity dropped" ' and $pin == $b' '' \
   "$(mk "$R" "$SET"' set("hcloud_server.bastion"; .change.before.id = "'"$OTHER"'")')" "$PIN" "$A1" "IDENTITY MISMATCH"
-
-# ── Guard 2: the plan chain and step order of the reusable body ───────────────────────────────
-echo "Guard 2 (workflow plan chain and order)"
-JOB="$WORK/job.yml"
-# Full-line comments are dropped first: a comment naming a call must neither satisfy nor trip a row.
-if [[ -f "$WORKFLOW" ]]; then
-  awk '/^  bastion_host_replace:/{on=1; print; next} on && /^  [a-z0-9_]+:/{on=0} on && !/^[[:space:]]*#/' "$WORKFLOW" > "$JOB"
-else
-  : > "$JOB"
-fi
-cases=$((cases + 1))
-if [[ -s "$JOB" ]]; then pass "the bastion_host_replace job exists in bastion-host-replace.yml"; else fail "the bastion_host_replace job exists in bastion-host-replace.yml"; fi
-# Each marker is the call the step exists for; its first line number orders the chain.
-MARKERS=(
-  "interlock|bastion_birth_readiness bastion-host-replace"
-  "read|_bbv_servers_doc "
-  "plan|terraform plan "
-  "gate|bastion_host_replace_gate "
-  "stock|stock_preflight_gate "
-  "toctou|bastion_replace_identity "
-  "apply|terraform apply "
-)
-mline() { grep -nF -- "$2" "$1" | head -1 | cut -d: -f1; }
-order_ok() { # <job-file>: every marker present once-or-more and in MARKERS order
-  local f="$1" prev=0 m n
-  for m in "${MARKERS[@]}"; do
-    n="$(mline "$f" "${m#*|}")"
-    [[ -n "$n" && "$n" -gt "$prev" ]] || return 1
-    prev="$n"
-  done
-}
-cases=$((cases + 1))
-missing=""
-for m in "${MARKERS[@]}"; do [[ -n "$(mline "$JOB" "${m#*|}")" ]] || missing+=" ${m%%|*}"; done
-if [[ -z "$missing" ]]; then pass "every chain marker is present (interlock, read, plan, gate, stock, toctou, apply)"; else fail "every chain marker is present (missing:${missing})"; fi
-cases=$((cases + 1))
-if order_ok "$JOB"; then pass "the chain runs interlock < read < plan < gate < stock < toctou < apply"; else fail "the chain runs interlock < read < plan < gate < stock < toctou < apply"; fi
-# swap_markers <job> <out> <marker-a> <marker-b>: swaps the first lines carrying each marker.
-swap_markers() {
-  python3 - "$1" "$2" "$3" "$4" <<'PY'
-import sys
-src, dst, a, b = sys.argv[1:]
-L = open(src).read().split("\n")
-ia = next((i for i, l in enumerate(L) if a in l), None)
-ib = next((i for i, l in enumerate(L) if b in l), None)
-if ia is None or ib is None or ia == ib: sys.exit(1)
-L[ia], L[ib] = L[ib], L[ia]
-open(dst, "w").write("\n".join(L))
-PY
-}
-orow() { # <label> <marker-a> <marker-b>: the swapped job must fail order_ok
-  local o="$WORK/order$cases.yml"
-  cases=$((cases + 1))
-  if ! swap_markers "$JOB" "$o" "$2" "$3" || cmp -s "$JOB" "$o"; then fail "order mutation did not land: $1"; return; fi
-  if order_ok "$o"; then fail "order mutation SURVIVED: $1"; else pass "order mutation caught: $1"; fi
-}
-orow "the interlock after the plan" "bastion_birth_readiness bastion-host-replace" "terraform plan "
-orow "the stock preflight before the gate" "stock_preflight_gate " "bastion_host_replace_gate "
-orow "the TOCTOU re-pin before the stock preflight" "bastion_replace_identity " "stock_preflight_gate "
-orow "the TOCTOU re-pin after the apply" "bastion_replace_identity " "terraform apply "
-# Row 1: the apply consumes the gated plan file, and nothing re-plans after the gate.
-gate_line="$(mline "$JOB" "bastion_host_replace_gate ")"
-apply_line="$(grep -nE 'terraform apply .*"\$PLAN_DIR/tfplan"' "$JOB" | head -1 | cut -d: -f1)"
-cases=$((cases + 1))
-if [[ -n "$gate_line" && -n "$apply_line" && "$apply_line" -gt "$gate_line" ]]; then pass "row 1: the apply of \$PLAN_DIR/tfplan follows the gate"; else fail "row 1: the apply of \$PLAN_DIR/tfplan follows the gate (gate=${gate_line:-none} apply=${apply_line:-none})"; fi
-cases=$((cases + 1))
-apply_args="$(grep -E 'terraform apply ' "$JOB" | head -1)"
-if [[ "$apply_args" =~ terraform\ apply\ -no-color\ -input=false\ \"\$PLAN_DIR/tfplan\" ]]; then pass "row 1: the apply's only plan argument is \"\$PLAN_DIR/tfplan\""; else fail "row 1: the apply's only plan argument is \"\$PLAN_DIR/tfplan\" (got: ${apply_args:-none})"; fi
-replans=0
-[[ -n "$gate_line" ]] && replans=$(tail -n +"$gate_line" "$JOB" | grep -cE 'terraform plan( |$)' || true)
-cases=$((cases + 1))
-if [[ -n "$gate_line" && "$replans" -eq 0 ]]; then pass "no terraform plan runs after the gate"; else fail "no terraform plan runs after the gate (re-plans=$replans)"; fi
-cases=$((cases + 1))
-if [[ -n "$apply_line" ]]; then
-  sed "${apply_line}i\\          terraform plan -out=\"\$PLAN_DIR/tfplan\"" "$JOB" > "$WORK/job-replan.yml"
-  m=$(tail -n +"${gate_line:-1}" "$WORK/job-replan.yml" | grep -cE 'terraform plan( |$)' || true)
-  if [[ "$m" -ge 1 ]]; then pass "re-plan mutation: an inserted re-plan is detected"; else fail "re-plan mutation: an inserted re-plan is NOT detected"; fi
-else
-  fail "re-plan mutation: no apply line to mutate"
-fi
-# Wiring: the gate call grades the saved Hetzner document; the -replace array sits only in the != none branch.
-gate_call_ok() { grep -qE 'bastion_host_replace_gate "\$PLAN_DIR/tfplan.json" "\$EXPECTED_ID" "\$PLAN_DIR/hetzner-servers.json"' "$1"; }
-cases=$((cases + 1))
-if gate_call_ok "$JOB"; then pass "the gate call passes the plan, the pin and hetzner-servers.json"; else fail "the gate call passes the plan, the pin and hetzner-servers.json"; fi
-cases=$((cases + 1))
-sed 's|"\$PLAN_DIR/hetzner-servers.json"||' "$JOB" > "$WORK/job-nodoc.yml"
-if ! cmp -s "$JOB" "$WORK/job-nodoc.yml" && ! gate_call_ok "$WORK/job-nodoc.yml"; then pass "mutation caught: the gate call missing hetzner-servers.json"; else fail "mutation SURVIVED or did not land: the gate call missing hetzner-servers.json"; fi
-replace_in_branch() { # the -replace array line sits inside `if [[ "$EXPECTED_ID" != none ]]; then ... fi`
-  awk '
-    /if \[\[ "\$EXPECTED_ID" != none \]\]; then/ { inb = 1; next }
-    inb && /^[[:space:]]*fi[[:space:]]*$/ { inb = 0 }
-    /replace_args=\(-replace=.hcloud_server\.bastion.\)/ { if (inb) good++; else bad++ }
-    END { exit !(good == 1 && bad == 0) }' "$1"
-}
-cases=$((cases + 1))
-if replace_in_branch "$JOB"; then pass "the -replace='hcloud_server.bastion' array line sits only inside the != none branch (F4)"; else fail "the -replace='hcloud_server.bastion' array line sits only inside the != none branch (F4)"; fi
-cases=$((cases + 1))
-python3 - "$JOB" "$WORK/job-outbranch.yml" <<'PY' || true
-import sys, re
-s, d = sys.argv[1:]
-L = open(s).read().split("\n")
-i = next((k for k, l in enumerate(L) if re.search(r"replace_args=\(-replace=.hcloud_server\.bastion.\)", l)), None)
-j = next((k for k, l in enumerate(L) if 'if [[ "$EXPECTED_ID" != none ]]; then' in l), None)
-if i is not None and j is not None:
-    line = L.pop(i)
-    L.insert(j, line)
-open(d, "w").write("\n".join(L))
-PY
-if ! cmp -s "$JOB" "$WORK/job-outbranch.yml" && ! replace_in_branch "$WORK/job-outbranch.yml"; then pass "mutation caught: the replace_args assignment moved outside the != none block"; else fail "mutation SURVIVED or did not land: the replace_args assignment moved outside the != none block"; fi
-cases=$((cases + 1))
-sed -E 's|^([[:space:]]*)(replace_args=\(-replace=.hcloud_server\.bastion.\))|\1# \2|' "$JOB" > "$WORK/job-commented.yml"
-awk '!/^[[:space:]]*#/' "$WORK/job-commented.yml" > "$WORK/job-commented-stripped.yml"
-if ! cmp -s "$JOB" "$WORK/job-commented.yml" && ! replace_in_branch "$WORK/job-commented-stripped.yml"; then pass "mutation caught: the -replace array line commented out"; else fail "mutation SURVIVED or did not land: the -replace array line commented out"; fi
+gmrow "M15 the attachment before re-scoped to the replace arm (Q-R1)" '  if [[ "$att_before_ok" -ne 1 ]]; then' \
+  '  if [[ "$arm" == replace && "$att_before_ok" -ne 1 ]]; then' "$ATT_REC_OTHER" none "$A0" "ATTACHMENT BEFORE PIN"
+gmrow "M16 the before.label_selectors leg dropped (Q-R1)" '              and (.change.before.label_selectors | . == null or . == [])
+' '' "$ATT_REP_LABELS" "$PIN" "$A1" "ATTACHMENT BEFORE LABEL BINDING"
+gmrow "M17 the both-keys-present leg dropped (Q-R1)" '              and (.change.before | has("server_ids") and has("label_selectors"))
+' '' "$ATT_NO_SIDS" "$PIN" "$A1" "ATTACHMENT BEFORE UNREADABLE"
+gmrow "M18 the [pin] leg opened to the recovery arm (Q-R1)" '($arm == "replace" and type == "array"' '(type == "array"' \
+  "$ATT_REC_NONE" none "$A0" "ATTACHMENT BEFORE PIN"
+gmrow "M19 the create's before==null leg dropped (Q-R2)" '(.change.actions == ["create"] and .change.before == null)' '(.change.actions == ["create"])' \
+  "$ATT_CREATE_BEFORE" "$PIN" "$A1" "ATTACHMENT BEFORE UNREADABLE"
+gmrow "M20 the UNREADABLE message folded into PIN" '    if [[ "$att_before_unreadable" -ne 0 ]]; then' '    if false; then' \
+  "$ATT_NO_SIDS" "$PIN" "$A1" "ATTACHMENT BEFORE UNREADABLE"
+gmrow "M21 the LABEL BINDING message folded into PIN" '    elif [[ "$att_before_labels" -ne 0 ]]; then' '    elif false; then' \
+  "$ATT_REP_LABELS" "$PIN" "$A1" "ATTACHMENT BEFORE LABEL BINDING"
+gmrow "M22 'listed exactly once' relaxed to 'listed at least once' (B5)" '| select(.address == $a)] | length) != 1) | $a ]' '| select(.address == $a)] | length) == 0) | $a ]' \
+  "$KEY_TWICE" "$PIN" "$A1" "is not in the plan exactly once"
+gmrow "M23 the [null] leg of the re-bind check dropped (B6)" ' and ((.change.after.server_ids? // null) == [null])' '' \
+  "$ATT_KNOWN_OLD" "$PIN" "$A1" "ATTACHMENT NOT RE-BOUND"
+gmrow "M24 the pin regex unbounded (B6)" '[0-9]{0,11}|none)$ ]]' '[0-9]*|none)$ ]]' "$R" 1234567890123 "$A1" "pin argument malformed"
+gmrow "M25 the API id number-type check dropped (B6)" '(.servers[0].id | type) == "number" and ' '' "$R" "$PIN" "$API_ID_STRING" "API ID NOT NUMERIC"
 
 # ── The key marker: no gate output any row captured carries a private_key_* value ──────────────
 cases=$((cases + 1))
@@ -556,21 +512,55 @@ fi
 # ── H1: the suite goes RED when the gate is replaced by `return 0` ──────────────────────────
 echo "H1 (neutered gate)"
 neutered() { echo "neutered: PASS"; return 0; }
-h1="$(
-  GATE_FN=neutered; passes=0; fails=0
-  for r in "${RED_ROWS[@]}"; do IFS='|' read -r l p pn a m <<<"$r"; row "$l" RED "$p" "$pn" "$a" "$m" >/dev/null; done
-  printf '%s %s' "$passes" "$fails"
-)"
-MIN_RED=58  # measured 2026-11-28: the literal RED-row count (H3), never derived from the table
+# h1_replay <gate-fn>: every recorded RED row re-run against <gate-fn> -> "passes fails"
+h1_replay() {
+  ( GATE_FN="$1"; passes=0; fails=0
+    for r in "${RED_ROWS[@]}"; do IFS='|' read -r l p pn a m <<<"$r"; row "$l" RED "$p" "$pn" "$a" "$m" >/dev/null; done
+    printf '%s %s' "$passes" "$fails" )
+}
+# h1_ok <passes-fails>: the H1 verdict, every RED row failed and the floor is met.
+h1_ok() { [[ "${#RED_ROWS[@]}" -ge "$MIN_RED" && "$1" == "0 ${#RED_ROWS[@]}" ]]; }
+h1="$(h1_replay neutered)"
+MIN_RED=73  # measured 2026-11-28 (review: 58 -> 73, Q-R1/Q-R2/B5/B6): the literal RED-row count (H3), never derived from the table
 cases=$((cases + 1))
-if [[ "${#RED_ROWS[@]}" -ge "$MIN_RED" && "$h1" == "0 ${#RED_ROWS[@]}" ]]; then
+if h1_ok "$h1"; then
   pass "H1: all ${#RED_ROWS[@]} RED rows fail against a neutered gate"
 else
   fail "H1: RED rows=${#RED_ROWS[@]} (floor ${MIN_RED}), neutered-gate passes/fails=${h1}"
 fi
 
+# ── CONTROLS: every helper that owns a verdict must still be able to REJECT ─────────────────────
+# Each is driven once with a must-fail input in a subshell (its counters unwind with it) and must report
+# exactly one fail and no pass. A helper neutered to `pass` (or a message check reduced to rc) fails
+# here. Reported by printf + exit 1, never through pass()/fail() (ADR-193).
+control() { # <label> <helper> <args...>
+  local label="$1" r; shift
+  r="$( passes=0; fails=0; cases=0; "$@" >/dev/null 2>&1; printf '%s %s' "$passes" "$fails" )"
+  if [[ "$r" != "0 1" ]]; then
+    printf 'test-bastion-host-replace-gate: FAIL (CONTROL %s: the helper did not reject a must-fail input; passes/fails=%s)\n' "$label" "$r" >&2
+    exit 1
+  fi
+}
+control "row: an ABORT naming another message is not that row's ABORT" row "ctl" RED "$R" 0 "$A1" "IDENTITY MISMATCH"
+control "row: RED wanted, the gate passed" row "ctl" RED "$R" "$PIN" "$A1"
+control "row: PASS wanted, the gate refused" row "ctl" PASS "$R" 11111111 "$A1"
+control "irow: wrong rc" irow "ctl" 0 "" "$PIN" "$A0" "$PIN"
+control "irow: right rc, wrong message" irow "ctl" 1 "API ROLE MISMATCH" "$PIN" "$A0" "$PIN"
+control "nrow: the wanted substring is absent" nrow "ctl" "expected_bastion_server_id=none" "$PIN" "$A1" 1
+control "nrow: the forbidden substring is present" nrow "ctl" "next dispatch" "$PIN" "$A1" 1 "gh workflow run"
+control "scratch_row: wrong rc" scratch_row "ctl" 1 "PASS" "$WORK/widelist" "$NEW_MEMBER_NOOP" "$PIN" "$A1"
+control "scratch_row: right rc, wrong substring" scratch_row "ctl" 0 "NO-SUCH-SUBSTRING" "$WORK/widelist" "$NEW_MEMBER_NOOP" "$PIN" "$A1"
+control "gmrow: a behaviour-identical mutant SURVIVES" gmrow "ctl" 'if [[ "$n" -gt 1 ]]; then' 'if [[ "$n" -gt 1 ]] ; then' \
+  "$R" "$PIN" "$(mk "$A1" '.servers += [.servers[0] | .id = '"$OTHER"']')" "refusing to guess"
+control "gmrow: a mutation that does not land" gmrow "ctl" 'NO SUCH GATE TEXT' 'x' "$R" "$PIN" "$A1" "IDENTITY MISMATCH"
+control "gprow: a behaviour-identical mutant SURVIVES" gprow "ctl" '(.servers[0].id | tostring) == $pin' '(.servers[0].id | tostring) == ($pin)' "$R" "$PIN" "$A1"
+if h1_ok "$(h1_replay "$GATE_FN")"; then
+  printf 'test-bastion-host-replace-gate: FAIL (CONTROL H1: the predicate accepted a replay against the REAL gate, which keeps every RED row passing)\n' >&2
+  exit 1
+fi
+
 echo
-MIN_CASES=121  # measured 2026-11-28 (H3)
+MIN_CASES=136  # measured 2026-11-28 (H3; review: 121 -> 136, the Guard 2 grep rows moved to the workflow suite, Q-R1/Q-R2/B5/B6 rows and mutations added)
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf 'test-bastion-host-replace-gate: FAIL (only %d assertions ran; floor %d)\n' "$cases" "$MIN_CASES" >&2
   exit 1

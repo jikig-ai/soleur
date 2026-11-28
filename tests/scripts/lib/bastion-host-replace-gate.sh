@@ -11,12 +11,20 @@
 #             same ONE server (exactly one `soleur-bastion`, label role=bastion), compared as strings:
 #             before.id is a string in plan JSON, the API id a number. The plan destroys exactly it
 #             and recreates it; its NIC (before.server_id = pin, before.ip 10.0.1.70) is recreated,
-#             or a bare create after a partial replace; its firewall attachment (before.server_ids =
-#             [pin]) updates to bind the NEW, still-unknown id.
-#   recovery  (pin = none)  no soleur-bastion in the API AND none in prior_state: a bare create.
+#             or a bare create after a partial replace; its firewall attachment updates from
+#             before.server_ids [pin], or from [] / null after a partial replace that never re-bound
+#             it, or is a bare create (before null), and binds the NEW, still-unknown id (Q-R2).
+#   recovery  (pin = none)  no soleur-bastion in the API AND none in prior_state: a bare create. The
+#             attachment is a bare create, or an update from before.server_ids [] / null (Q-R1).
 #             This departs from web-host-replace-gate.sh, which routes a bare create to the birth
 #             route: here only this gate reads the API, so only it can prove zero servers (ADR-327
 #             2026-11-28 addendum).
+#
+# On BOTH arms (Q-R1): an attachment update is graded on its BEFORE as well as its after. Its
+# before.server_ids and before.label_selectors must both be present, each an array or null, and
+# label_selectors empty: an update away from any other binding strips the deny-all firewall from
+# another server; an update from an empty binding removes nothing. A missing before, a missing key or
+# a value that is neither an array nor null is ATTACHMENT BEFORE UNREADABLE, never a pass.
 #
 # On BOTH arms: the host key and the firewall are exactly no-op (a key rotation is #13116), every other
 # bastion-resources.txt member is exactly no-op (so an address step 3 or #13113 adds is never
@@ -31,7 +39,7 @@
 # PER-ADDRESS ACTIONS (the allow-set is bastion-resources.txt beside this file; no override):
 #   hcloud_server.bastion               replace: ["delete","create"]           recovery: ["create"]
 #   hcloud_server_network.bastion       replace: ["delete","create"]|["create"] recovery: ["create"]
-#   hcloud_firewall_attachment.bastion  replace: ["update"]                    recovery: ["update"]|["create"]
+#   hcloud_firewall_attachment.bastion  replace: ["update"]|["create"]         recovery: ["update"]|["create"]
 #   every other listed address          ["no-op"]
 #
 # OUTPUT. Only addresses, actions, ids and attribute names are printed, never a value: on a replace the
@@ -43,6 +51,8 @@
 #         bastion_host_replace_gate <plan-json> <expected-id|none> <hetzner-servers-json-file>  # 0 PASS, 1 ABORT
 #         bastion_replace_identity <pin|none> <hetzner-servers-json-file> <before-id|none>     # the TOCTOU re-check
 #         bastion_replace_next_dispatch <pre-ids|none> <hetzner-servers-json-file|-> <0|1|unread>
+#
+# The literal addresses, IP, name, role and server type are bastion-gate-common.sh's _BGC_* constants.
 
 # shellcheck source=tests/scripts/lib/plan-gate-preamble.sh
 if ! declare -F plan_gate_assert_readable >/dev/null 2>&1; then
@@ -97,12 +107,12 @@ bastion_replace_identity() {
     _bhrg_abort "$g" "IDENTITY MISMATCH: pin=${pin} but the Hetzner project holds no soleur-bastion (api_ids=none, before.id=${before}). If a prior replace destroyed it, re-dispatch with expected_bastion_server_id=none."
     return 1
   fi
-  if ! jq -e '.servers[0].name == "soleur-bastion"' < "$doc" >/dev/null 2>&1; then
-    _bhrg_abort "$g" "API NAME MISMATCH: the server the API returned is named $(jq -c '.servers[0].name | @json' < "$doc" 2>/dev/null), not exactly \"soleur-bastion\" (the ?name= filter is never trusted alone)."
+  if ! jq -e --arg n "$_BGC_NAME" '.servers[0].name == $n' < "$doc" >/dev/null 2>&1; then
+    _bhrg_abort "$g" "API NAME MISMATCH: the server the API returned is named $(jq -c '.servers[0].name | @json' < "$doc" 2>/dev/null), not exactly \"${_BGC_NAME}\" (the ?name= filter is never trusted alone)."
     return 1
   fi
-  if ! jq -e '.servers[0].labels.role == "bastion"' < "$doc" >/dev/null 2>&1; then
-    _bhrg_abort "$g" "API ROLE MISMATCH: soleur-bastion's role label is $(jq -c '.servers[0].labels.role | @json' < "$doc" 2>/dev/null), not \"bastion\"."
+  if ! jq -e --arg r "$_BGC_ROLE" '.servers[0].labels.role == $r' < "$doc" >/dev/null 2>&1; then
+    _bhrg_abort "$g" "API ROLE MISMATCH: soleur-bastion's role label is $(jq -c '.servers[0].labels.role | @json' < "$doc" 2>/dev/null), not \"${_BGC_ROLE}\"."
     return 1
   fi
   if ! jq -e '(.servers[0].id | type) == "number" and (.servers[0].id | tostring | test("^[0-9]+$"))' < "$doc" >/dev/null 2>&1; then
@@ -119,7 +129,8 @@ bastion_replace_identity() {
 bastion_host_replace_gate() {
   local plan_json="${1:-}" pin="${2-}" doc="${3:-}" g="bastion_host_replace_gate"
   local allow_json arm before_id prior_has out_of_scope bad_actions missing nic_before_ok att_before_ok
-  local att_rebound shape_type shape_name shape_role offenders api_ids
+  local att_before_unreadable att_before_labels att_rebound shape_type shape_name shape_role offenders api_ids
+  local srv="$_BGC_WANT_ADDR" key="$_BGC_KEY_ADDR" nic="$_BGC_NIC_ADDR" att="$_BGC_ATT_ADDR" ip="$_BGC_NIC_IP"
   if ! _bhrg_pin_ok "$pin"; then
     _bhrg_abort "$g" "pin argument malformed: it must be a Hetzner server id (^[1-9][0-9]{0,11}\$) or the literal none."
     return 1
@@ -132,49 +143,67 @@ bastion_host_replace_gate() {
   bastion_gate_load_allow "$g" "$_BHRG_LIST" || { _bhrg_abort "$g" "the allow-set list refused (the line above)."; return 1; }
   allow_json="$BASTION_GATE_ALLOW_JSON"
 
-  before_id=$(jq -r '[.resource_changes[] | select(.address == "hcloud_server.bastion") | .change.before | select(type == "object") | .id | select(. != null) | tostring][0] // "none"' < "$plan_json" 2>/dev/null)
+  before_id=$(jq -r --arg s "$srv" '[.resource_changes[] | select(.address == $s) | .change.before | select(type == "object") | .id | select(. != null) | tostring][0] // "none"' < "$plan_json" 2>/dev/null)
   [[ -n "$before_id" ]] || before_id=unread
-  prior_has=$(jq '[(.prior_state // {}) | .. | objects | select(.address? == "hcloud_server.bastion" and has("values"))] | length' < "$plan_json" 2>/dev/null)
+  prior_has=$(jq --arg s "$srv" '[(.prior_state // {}) | .. | objects | select(.address? == $s and has("values"))] | length' < "$plan_json" 2>/dev/null)
   out_of_scope=$(jq --argjson allow "$allow_json" '[.resource_changes[]
     | select(.change.actions | any(. != "no-op" and . != "read"))
     | select(IN(.address; $allow[]) | not)] | length' < "$plan_json" 2>/dev/null)
   # The per-address action table (header). A listed address must appear exactly once, with an allowed set.
-  bad_actions=$(jq -r --arg arm "$arm" --argjson allow "$allow_json" '
+  bad_actions=$(jq -r --arg arm "$arm" --argjson allow "$allow_json" --arg s "$srv" --arg n "$nic" --arg t "$att" '
     def allowed($a):
-      if $a == "hcloud_server.bastion" then (if $arm == "replace" then [["delete","create"]] else [["create"]] end)
-      elif $a == "hcloud_server_network.bastion" then (if $arm == "replace" then [["delete","create"],["create"]] else [["create"]] end)
-      elif $a == "hcloud_firewall_attachment.bastion" then (if $arm == "replace" then [["update"]] else [["update"],["create"]] end)
+      if $a == $s then (if $arm == "replace" then [["delete","create"]] else [["create"]] end)
+      elif $a == $n then (if $arm == "replace" then [["delete","create"],["create"]] else [["create"]] end)
+      elif $a == $t then [["update"],["create"]]
       else [["no-op"]] end;
     . as $p | [ $allow[] as $a | [$p.resource_changes[] | select(.address == $a)] as $e
       | select(($e | length) == 1 and (any(allowed($a)[]; . == $e[0].change.actions) | not))
       | "\($a) planned \($e[0].change.actions | tojson)" ] | join("; ")' < "$plan_json" 2>/dev/null) || bad_actions="<jq failed>"
   missing=$(jq -r --argjson allow "$allow_json" '. as $p | [ $allow[] as $a | select(([$p.resource_changes[] | select(.address == $a)] | length) != 1) | $a ] | join(", ")' < "$plan_json" 2>/dev/null) || missing="<jq failed>"
-  # Replace arm: every record the replace deletes or updates is pinned to the same server.
-  nic_before_ok=$(jq --arg pin "$pin" '[.resource_changes[] | select(.address == "hcloud_server_network.bastion")
+  # Replace arm: the NIC record the replace deletes is pinned to the same server.
+  nic_before_ok=$(jq --arg pin "$pin" --arg n "$nic" --arg ip "$ip" '[.resource_changes[] | select(.address == $n)
     | select((.change.actions != ["delete","create"])
-          or (((.change.before.server_id? // null) | tostring) == $pin and (.change.before.ip? // null) == "10.0.1.70"))] | length' < "$plan_json" 2>/dev/null)
-  att_before_ok=$(jq --arg pin "$pin" '[.resource_changes[] | select(.address == "hcloud_firewall_attachment.bastion")
-    | select(((.change.before.server_ids? // null) | type) == "array" and ((.change.before.server_ids | map(tostring)) == [$pin]))] | length' < "$plan_json" 2>/dev/null)
+          or (((.change.before.server_id? // null) | tostring) == $pin and (.change.before.ip? // null) == $ip))] | length' < "$plan_json" 2>/dev/null)
+  # Both arms (Q-R1, Q-R2): the attachment's BEFORE, ONE counter (att_before_ok, required == 1). A bare
+  # create carries no before; an update's before names both keys, label_selectors [] or null, and
+  # server_ids [] or null or, on the replace arm only, exactly [pin]. The two counters after it only
+  # choose the ABORT message (UNREADABLE, LABEL BINDING, else PIN); they never pass a plan.
+  att_before_ok=$(jq --arg pin "$pin" --arg arm "$arm" --arg t "$att" '[.resource_changes[] | select(.address == $t)
+    | select((.change.actions == ["create"] and .change.before == null)
+          or (.change.actions == ["update"] and (.change.before | type) == "object"
+              and (.change.before | has("server_ids") and has("label_selectors"))
+              and (.change.before.label_selectors | . == null or . == [])
+              and (.change.before.server_ids | . == null or . == []
+                   or ($arm == "replace" and type == "array" and map(tostring) == [$pin]))))] | length' < "$plan_json" 2>/dev/null)
+  att_before_unreadable=$(jq --arg t "$att" '[.resource_changes[] | select(.address == $t)
+    | select((.change.actions == ["create"] and .change.before != null)
+          or (.change.actions == ["update"] and (.change.before
+               | if type != "object" then true
+                 elif (has("server_ids") and has("label_selectors")) | not then true
+                 else ([.server_ids, .label_selectors] | any(type != "array" and type != "null")) end)))] | length' < "$plan_json" 2>/dev/null)
+  att_before_labels=$(jq --arg t "$att" '[.resource_changes[] | select(.address == $t) | select(.change.actions == ["update"])
+    | select(((.change.before | objects | .label_selectors) // null) | (. != null and . != []))] | length' < "$plan_json" 2>/dev/null)
   # The attachment binds the NEW server: its server_ids stay unknown at plan time (a known old id is a no-op re-bind).
-  att_rebound=$(jq '[.resource_changes[] | select(.address == "hcloud_firewall_attachment.bastion")
+  att_rebound=$(jq --arg t "$att" '[.resource_changes[] | select(.address == $t)
     | select(((.change.after_unknown.server_ids? // null) == true)
           or (((.change.after_unknown.server_ids? // null) == [true]) and ((.change.after.server_ids? // null) == [null])))] | length' < "$plan_json" 2>/dev/null)
-  shape_type=$(jq '[.resource_changes[] | select(.address == "hcloud_server.bastion") | select(.change.after.server_type? == "cx23")] | length' < "$plan_json" 2>/dev/null)
-  shape_name=$(jq '[.resource_changes[] | select(.address == "hcloud_server.bastion") | select(.change.after.name? == "soleur-bastion")] | length' < "$plan_json" 2>/dev/null)
-  shape_role=$(jq '[.resource_changes[] | select(.address == "hcloud_server.bastion") | select(.change.after.labels.role? == "bastion")] | length' < "$plan_json" 2>/dev/null)
+  shape_type=$(jq --arg s "$srv" --arg v "$_BGC_TYPE" '[.resource_changes[] | select(.address == $s) | select(.change.after.server_type? == $v)] | length' < "$plan_json" 2>/dev/null)
+  shape_name=$(jq --arg s "$srv" --arg v "$_BGC_NAME" '[.resource_changes[] | select(.address == $s) | select(.change.after.name? == $v)] | length' < "$plan_json" 2>/dev/null)
+  shape_role=$(jq --arg s "$srv" --arg v "$_BGC_ROLE" '[.resource_changes[] | select(.address == $s) | select(.change.after.labels.role? == $v)] | length' < "$plan_json" 2>/dev/null)
   bastion_gate_create_side_measure "$g" "$plan_json" || { _bhrg_abort "$g" "a shared counter did not evaluate (the line above)."; return 1; }
 
   plan_gate_assert_numeric "$g" "prior_has=${prior_has}" "out_of_scope=${out_of_scope}" "nic_before_ok=${nic_before_ok}" \
-    "att_before_ok=${att_before_ok}" "att_rebound=${att_rebound}" "shape_type=${shape_type}" "shape_name=${shape_name}" \
+    "att_before_ok=${att_before_ok}" "att_before_unreadable=${att_before_unreadable}" "att_before_labels=${att_before_labels}" \
+    "att_rebound=${att_rebound}" "shape_type=${shape_type}" "shape_name=${shape_name}" \
     "shape_role=${shape_role}" || { _bhrg_abort "$g" "a counter did not evaluate (the line above)."; return 1; }
 
   api_ids=$(jq -r '[.servers[]? | (.id | tostring) | if test("^[0-9]+$") then . else "<non-numeric>" end] | join(",")' < "$doc" 2>/dev/null) || api_ids=unread
-  echo "${g}: arm=${arm} pin=${pin} api_ids=${api_ids:-none} before.id=${before_id} prior_has=${prior_has} out_of_scope=${out_of_scope} nic_before_ok=${nic_before_ok} att_before_ok=${att_before_ok} att_rebound=${att_rebound} shape=${shape_type}/${shape_name}/${shape_role} nic_ip_ok=${BGC_NIC_IP_OK} fw_rules=${BGC_FW_RULES} fw_unreadable=${BGC_FW_UNREADABLE} fw_apply_to=${BGC_FW_APPLY_TO} att_labels=${BGC_ATT_LABELS} inline_fw=${BGC_INLINE_FW} att_ok=${BGC_ATT_OK}"
+  echo "${g}: arm=${arm} pin=${pin} api_ids=${api_ids:-none} before.id=${before_id} prior_has=${prior_has} out_of_scope=${out_of_scope} nic_before_ok=${nic_before_ok} att_before_ok=${att_before_ok} att_before_unreadable=${att_before_unreadable} att_before_labels=${att_before_labels} att_rebound=${att_rebound} shape=${shape_type}/${shape_name}/${shape_role} nic_ip_ok=${BGC_NIC_IP_OK} fw_rules=${BGC_FW_RULES} fw_unreadable=${BGC_FW_UNREADABLE} fw_apply_to=${BGC_FW_APPLY_TO} att_labels=${BGC_ATT_LABELS} inline_fw=${BGC_INLINE_FW} att_ok=${BGC_ATT_OK}"
 
   bastion_replace_identity "$pin" "$doc" "$before_id" "$g" || return 1
   if [[ "$arm" == recovery ]]; then
     if [[ "$prior_has" -ne 0 ]]; then
-      _bhrg_abort "$g" "RECOVERY REFUSED: pin none but prior_state still holds hcloud_server.bastion. The recovery arm needs no server in state AND none in the API; pin the id the API reports."
+      _bhrg_abort "$g" "RECOVERY REFUSED: pin none but prior_state still holds ${srv}. The recovery arm needs no server in state AND none in the API; pin the id the API reports."
       return 1
     fi
   fi
@@ -189,7 +218,7 @@ bastion_host_replace_gate() {
     return 1
   fi
   if [[ -n "$bad_actions" ]]; then
-    if [[ "$bad_actions" == *"tls_private_key.bastion_host_ssh"* ]]; then
+    if [[ "$bad_actions" == *"$key"* ]]; then
       _bhrg_abort "$g" "ACTION NOT ALLOWED: ${bad_actions}. The host key is exactly no-op on this route (ADR-327, F5); a deliberate rotation is #13116 and a key regenerated after lost state is #13117."
     else
       _bhrg_abort "$g" "ACTION NOT ALLOWED: ${bad_actions} (arm ${arm}; the per-address table is in this gate's header)."
@@ -198,31 +227,40 @@ bastion_host_replace_gate() {
   fi
   if [[ "$arm" == replace ]]; then
     if [[ "$nic_before_ok" -ne 1 ]]; then
-      _bhrg_abort "$g" "NIC BEFORE PIN: hcloud_server_network.bastion's delete is not of the pinned server's NIC (before.server_id must equal ${pin} and before.ip 10.0.1.70). A NIC mapped onto another server would detach that server from the private network."
+      _bhrg_abort "$g" "NIC BEFORE PIN: ${nic}'s delete is not of the pinned server's NIC (before.server_id must equal ${pin} and before.ip ${ip}). A NIC mapped onto another server would detach that server from the private network."
       return 1
     fi
-    if [[ "$att_before_ok" -ne 1 ]]; then
-      _bhrg_abort "$g" "ATTACHMENT BEFORE PIN: hcloud_firewall_attachment.bastion's before.server_ids is not exactly [${pin}]. An attachment mapped onto another server would strip that server's firewall binding."
-      return 1
+  fi
+  # The attachment's before, on BOTH arms (Q-R1). The message: unreadable, then a label binding, then the ids.
+  if [[ "$att_before_ok" -ne 1 ]]; then
+    if [[ "$att_before_unreadable" -ne 0 ]]; then
+      _bhrg_abort "$g" "ATTACHMENT BEFORE UNREADABLE: ${att}'s update carries no before object, lacks before.server_ids or before.label_selectors, or holds a value that is neither an array nor null (or a create carries a before). A before the gate cannot read is not evidence of an empty binding."
+    elif [[ "$att_before_labels" -ne 0 ]]; then
+      _bhrg_abort "$g" "ATTACHMENT BEFORE LABEL BINDING: ${att}'s before.label_selectors is not empty. The update would remove that selector and strip the deny-all firewall from every server carrying the label."
+    elif [[ "$arm" == replace ]]; then
+      _bhrg_abort "$g" "ATTACHMENT BEFORE PIN: ${att}'s before.server_ids is not [${pin}], [] or null. An attachment mapped onto another server would strip that server's firewall binding."
+    else
+      _bhrg_abort "$g" "ATTACHMENT BEFORE PIN: ${att}'s before.server_ids is not [] or null on the recovery arm (no bastion exists, so any id it holds is another server's). The update would strip that server's firewall binding."
     fi
+    return 1
   fi
   # The create-side arms shared with the birth gate (NIC IP pin, inline firewall_ids, firewall content,
   # label bindings, the attachment binding): bastion-gate-common.sh.
   bastion_gate_create_side_judge "$g" "$plan_json" || { _bhrg_abort "$g" "a shared create-side check refused (the line above)."; return 1; }
   if [[ "$att_rebound" -ne 1 ]]; then
-    _bhrg_abort "$g" "ATTACHMENT NOT RE-BOUND: hcloud_firewall_attachment.bastion's after.server_ids is not the new server's still-unknown id ([null] with after_unknown [true], or wholly unknown). A known id is the old server's."
+    _bhrg_abort "$g" "ATTACHMENT NOT RE-BOUND: ${att}'s after.server_ids is not the new server's still-unknown id ([null] with after_unknown [true], or wholly unknown). A known id is the old server's."
     return 1
   fi
   if [[ "$shape_type" -ne 1 ]]; then
-    _bhrg_abort "$g" "REPLACEMENT SHAPE: after.server_type of hcloud_server.bastion is not cx23."
+    _bhrg_abort "$g" "REPLACEMENT SHAPE: after.server_type of ${srv} is not ${_BGC_TYPE}."
     return 1
   fi
   if [[ "$shape_name" -ne 1 ]]; then
-    _bhrg_abort "$g" "REPLACEMENT SHAPE: after.name of hcloud_server.bastion is not soleur-bastion."
+    _bhrg_abort "$g" "REPLACEMENT SHAPE: after.name of ${srv} is not ${_BGC_NAME}."
     return 1
   fi
   if [[ "$shape_role" -ne 1 ]]; then
-    _bhrg_abort "$g" "REPLACEMENT SHAPE: after.labels.role of hcloud_server.bastion is not bastion."
+    _bhrg_abort "$g" "REPLACEMENT SHAPE: after.labels.role of ${srv} is not ${_BGC_ROLE}."
     return 1
   fi
 

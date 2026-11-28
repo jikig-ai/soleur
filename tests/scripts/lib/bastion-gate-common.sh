@@ -22,16 +22,20 @@
 # Functions:
 #   bastion_gate_load_allow <gate> <list-file>     sets BASTION_GATE_ALLOW_JSON; 0, or 1 with an ABORT
 #   bastion_gate_create_side_measure <gate> <plan> sets the BGC_* counters; 0, or 1 (non-numeric)
-#   bastion_gate_create_side_judge <gate> <plan>   the create-side ABORT arms over BGC_*; 0 or 1
+#   bastion_gate_create_side_judge <gate> <plan>   the create-side ABORT arms over BGC_* (call measure first); 0 or 1
 
 # has_unknown: true when any leaf of an after_unknown subtree is `true` (an unknown value).
-_BHBG_JQ_UNKNOWN='def has_unknown: if type == "boolean" then . elif type == "array" or type == "object" then any(.[]; has_unknown) else false end;'
+_BGC_JQ_UNKNOWN='def has_unknown: if type == "boolean" then . elif type == "array" or type == "object" then any(.[]; has_unknown) else false end;'
 _BGC_WANT_ADDR="hcloud_server.bastion"
 _BGC_KEY_ADDR="tls_private_key.bastion_host_ssh"
 _BGC_NIC_ADDR="hcloud_server_network.bastion"
 _BGC_FW_ADDR="hcloud_firewall.bastion"
 _BGC_ATT_ADDR="hcloud_firewall_attachment.bastion"
 _BGC_NIC_IP="10.0.1.70"
+# The successor's shape (bastion.tf): the replace gate reads these, never its own literals.
+_BGC_NAME="soleur-bastion"
+_BGC_ROLE="bastion"
+_BGC_TYPE="cx23"
 
 # bastion_gate_load_allow <gate> <list-file>: the allow-set, and the drift check against the five
 # addresses both gates grade. The list path is the calling gate's own (no override).
@@ -65,15 +69,15 @@ bastion_gate_create_side_measure() {
   local att_addr="$_BGC_ATT_ADDR" nic_ip="$_BGC_NIC_IP"
   BGC_NIC_IP_OK="" BGC_FW_RULES="" BGC_FW_UNREADABLE="" BGC_FW_APPLY_TO="" BGC_ATT_LABELS=""
   BGC_INLINE_FW="" BGC_ATT_OK=""
-  BGC_NIC_IP_OK=$(jq --arg a "$nic_addr" --arg ip "$nic_ip" "$_BHBG_JQ_UNKNOWN"'[.resource_changes[] | select(.address == $a)
+  BGC_NIC_IP_OK=$(jq --arg a "$nic_addr" --arg ip "$nic_ip" "$_BGC_JQ_UNKNOWN"'[.resource_changes[] | select(.address == $a)
     | select(.change.actions | index("create")) | select(.change.after.ip == $ip)
     | select((.change.after_unknown | type) == "object" and (((.change.after_unknown.ip // false) | has_unknown) | not))] | length' < "$plan_json" 2>/dev/null)
   # Label bindings: any non-empty value, an unknown leaf, or no after_unknown object to say it is known.
-  BGC_FW_APPLY_TO=$(jq --arg a "$fw_addr" "$_BHBG_JQ_UNKNOWN"'[.resource_changes[] | select(.address == $a) | select(.change.actions | any(. != "read"))
+  BGC_FW_APPLY_TO=$(jq --arg a "$fw_addr" "$_BGC_JQ_UNKNOWN"'[.resource_changes[] | select(.address == $a) | select(.change.actions | any(. != "read"))
     | select(((.change.after.apply_to? // []) != [])
           or ((.change.after_unknown | type) != "object")
           or ((.change.after_unknown.apply_to // false) | has_unknown))] | length' < "$plan_json" 2>/dev/null)
-  BGC_ATT_LABELS=$(jq --arg a "$att_addr" "$_BHBG_JQ_UNKNOWN"'[.resource_changes[] | select(.address == $a) | select(.change.actions | any(. != "read"))
+  BGC_ATT_LABELS=$(jq --arg a "$att_addr" "$_BGC_JQ_UNKNOWN"'[.resource_changes[] | select(.address == $a) | select(.change.actions | any(. != "read"))
     | select(((.change.after.label_selectors? // []) != [])
           or ((.change.after_unknown | type) != "object")
           or ((.change.after_unknown.label_selectors // false) | has_unknown))] | length' < "$plan_json" 2>/dev/null)
@@ -81,7 +85,7 @@ bastion_gate_create_side_measure() {
     | if ((.change.after.rule // null) | type) == "array" then (.change.after.rule | length) else 0 end] | add // 0' < "$plan_json" 2>/dev/null)
   # Unreadable = the plan does not disclose the rule set: no object after, no `rule` key, no
   # after_unknown object, an unknown leaf anywhere under after_unknown.rule, or a non-array rule.
-  BGC_FW_UNREADABLE=$(jq --arg a "$fw_addr" "$_BHBG_JQ_UNKNOWN"'
+  BGC_FW_UNREADABLE=$(jq --arg a "$fw_addr" "$_BGC_JQ_UNKNOWN"'
     [.resource_changes[] | select(.address == $a) | select(.change.actions | any(. != "read"))
     | select(((.change.after | type) != "object")
           or ((.change.after | has("rule")) | not)
@@ -115,8 +119,8 @@ bastion_gate_create_side_judge() {
   local att_addr="$_BGC_ATT_ADDR" nic_ip="$_BGC_NIC_IP"
   local nic_ip_ok="$BGC_NIC_IP_OK" fw_rules="$BGC_FW_RULES" fw_unreadable="$BGC_FW_UNREADABLE"
   local fw_apply_to="$BGC_FW_APPLY_TO" att_labels="$BGC_ATT_LABELS" inline_fw="$BGC_INLINE_FW" att_ok="$BGC_ATT_OK"
-  plan_gate_assert_numeric "$g" "nic_ip_ok=${nic_ip_ok}" "fw_rules=${fw_rules}" "fw_unreadable=${fw_unreadable}" \
-    "fw_apply_to=${fw_apply_to}" "att_labels=${att_labels}" "inline_fw=${inline_fw}" "att_ok=${att_ok}" || return 1
+  # The counters were proven numeric by bastion_gate_create_side_measure, which both gates call first
+  # and refuse on; this function reads them as that call left them.
   if [[ "$nic_ip_ok" -ne 1 ]]; then
     nic_planned=$(jq -r --arg a "$nic_addr" '[.resource_changes[] | select(.address == $a) | (.change.after.ip // "unknown at plan time") | tostring][0] // "none"' < "$plan_json" 2>/dev/null)
     echo "${g}: ABORT — ${nic_addr} does not pin the private IP ${nic_ip} (planned: ${nic_planned}). bastion.tf fixes local.bastion_private_ip at ${nic_ip}; any other or unknown address means the configuration drifted."
