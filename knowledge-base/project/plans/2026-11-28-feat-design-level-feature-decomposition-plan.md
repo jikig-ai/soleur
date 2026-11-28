@@ -92,7 +92,7 @@ Measured baseline with the enforcing test helpers: **2469/2490 words, 21 words h
 
 ## Proposed Solution
 
-Build `feature-orchestrator` as a new Soleur skill backed by deterministic graph/state helpers. The skill composes `soleur:one-shot`; it does not inline lifecycle phases. A narrow orchestrated-child result contract in `one-shot` provides machine-readable correlation through explicit child arguments and return-contract metadata; environment variables are not used because harnesses do not reliably propagate them into spawned agents. A deterministic controller script is the sole control-plane chokepoint for validation, preview, approval binding, journal mutation, occupancy accounting, readiness decisions, evidence verification, reconciliation, cancellation state, and rollup. It does not invoke `soleur:one-shot` directly: skill invocation is harness-mediated. The orchestrator skill/agent executes controller-emitted dispatch envelopes through the harness and returns outcomes to the controller. A parent run journal is the authoritative orchestration state; GitHub child issues/PRs are externally visible evidence.
+Build `feature-orchestrator` as a new Soleur skill backed by deterministic graph/state helpers. The skill composes `soleur:one-shot`; it does not inline lifecycle phases. A narrow orchestrated-child result contract in `one-shot` provides machine-readable correlation through explicit child arguments and return-contract metadata; environment variables are not used because harnesses do not reliably propagate them into spawned agents. A deterministic controller script is the sole control-plane chokepoint for validation, preview, approval binding, journal mutation, occupancy accounting, readiness decisions, evidence verification, reconciliation, stop-scheduling state, and rollup. It does not invoke `soleur:one-shot` directly: skill invocation is harness-mediated. The orchestrator skill/agent executes controller-emitted dispatch envelopes through the harness and returns outcomes to the controller. A parent run journal is the authoritative orchestration state; GitHub child issues/PRs are externally visible evidence.
 
 ### High-level flow
 
@@ -392,7 +392,7 @@ Queried open `code-review` issues for the final file list on 2026-11-28. No matc
 - [ ] Resume reconciliation does not duplicate existing child branches, worktrees, issues, or PRs, adopts exact-key orchestrated artifacts, stops on foreign collisions, and refuses modified-graph hashes.
 - [ ] Approved graph hash, journal graph hash, and dispatch graph hash match exactly before every dispatch; operator edits require fresh preview and approval.
 - [ ] Child issues are journal-linked as they are created and remain blocked/holding until their node is dispatch-ready.
-- [ ] Parent cancellation stops new dispatch without falsely claiming already-running children stopped, and resume reconciles those children.
+- [ ] Parent stop-scheduling stops new dispatch without falsely claiming already-running children stopped, and resume reconciles those children.
 - [ ] Child receipts survive worktree cleanup in shared session state and are keyed by run, node, branch, PR, and merge SHA.
 - [ ] Parent reservation locking serializes reconcile/reserve/dispatch across concurrent orchestrator instances.
 - [ ] Only permanent failure recursively skips descendants; budget-capped and unaccounted states pause/block pending reconciliation.
@@ -406,7 +406,7 @@ Queried open `code-review` issues for the final file list on 2026-11-28. No matc
 - [ ] Aggregate orchestration state and work counters are visible in a durable run journal.
 - [ ] Budget-cap stops are classified and resumable.
 - [ ] The implementation contains no upstream retrieval or copied/paraphrased upstream expressive material, and the final PR carries a factual provenance statement.
-- [ ] Plugin component, harness-parity, skill-budget, graph/scheduler, cancellation, resume, approval-hash, collision, and evidence-classification tests pass.
+- [ ] Plugin component, harness-parity, skill-budget, graph/scheduler, stop-scheduling, resume, approval-hash, collision, and evidence-classification tests pass.
 
 ## Domain Review
 
