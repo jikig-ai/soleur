@@ -11,6 +11,25 @@ lane: single-domain
 
 # fix(cloudflare): Phase 5 browser bodies wait for window.bootstrap.atok after page load
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-28
+**Sections enhanced:** 4 (Research Insights, Scope Check, Observability, Sharp Edges)
+**Research used:** the installed Playwright type definitions (local `types.d.ts`), the deepen-plan gates 4.6-4.13
+run mechanically, and the earlier CTO and three-reviewer pass. No broad agent fan-out, per the pipeline brief.
+
+### Key Improvements
+1. Verified `waitForFunction(pageFunction, arg, options)` and the `polling` default (`raf`) against the installed
+   docstring. Found that the default `timeout` is `0` (no timeout), so the explicit 15000 ms is what keeps a
+   signed-out run bounded. A Sharp Edge that claimed a 30 s default was corrected.
+2. Rebuilt `## Scope Check` into the required Ask Mapping, Plan-Item Provenance and Split Assessment form, with
+   11 verbatim asks, each mapped.
+3. Added `## Observability`, because the test file under `tests/scripts/` takes this plan out of the pure-docs
+   skip. It uses an allowlisted, sub-15-second probe: `git grep -c waitForFunction` over the spec directory.
+
+### New Considerations Discovered
+- The wait's `timeout` must stay explicit. Removing it would not fail fast; it could hang.
+
 ## Overview
 
 The three committed Phase 5 dashboard bodies (`p5-read.js`, `p5-mint.js`, `p5-revoke.js`) go to
@@ -96,9 +115,33 @@ exact false negative. 15000 ms is about 50x the measured 283 ms.
 - `knowledge-base/project/learnings/workflow-patterns/2026-10-22-byte-pinned-envelope-runbook-lands-with-lint-exemption.md`:
   recompute `sha256sum` after any lint or formatting pass on the bodies, right before the final commit.
 
-**Skipped research.** No external research was needed. Playwright `waitForFunction(fn, arg, { timeout, polling })`
-is a stable API and is cited in the CTO ruling. Community and functional-overlap discovery do not apply because
-there is no new skill, agent or stack. Repo research ran inline, since the file set is four known files.
+**Playwright API, verified (deepen-plan, 2026-11-28).** Source: an installed `playwright-core` 1.57.0
+`types/types.d.ts` (the suite's comment names Playwright MCP 1.64; this signature and these options are unchanged
+across those releases). Signature, line 5783:
+
+```ts
+waitForFunction<R, Arg>(pageFunction: PageFunction<Arg, R>, arg: Arg, options?: PageWaitForFunctionOptions): Promise<SmartHandle<R>>;
+```
+
+`PageWaitForFunctionOptions`, quoted verbatim:
+
+> If `polling` is `'raf'`, then `pageFunction` is constantly executed in `requestAnimationFrame` callback. If
+> `polling` is a number, then it is treated as an interval in milliseconds at which the function would be
+> executed. Defaults to `raf`.
+>
+> `timeout`: Maximum time to wait for in milliseconds. Defaults to `0` - no timeout. The default value can be
+> changed via `actionTimeout` option in the config, or by using the browserContext.setDefaultTimeout(timeout) or
+> page.setDefaultTimeout(timeout) methods.
+
+Two consequences for this plan:
+- `null` in the `arg` slot is required, so `{ timeout, polling }` lands in `options`.
+- The explicit `timeout: 15000` is load-bearing, not cosmetic. Without it the wait inherits whatever default the
+  MCP session set, possibly none, and a signed-out page could hang instead of returning `{atok:false}`.
+
+**Skipped research.** Community and functional-overlap discovery do not apply because there is no new skill, agent
+or stack. Repo research ran inline, since the file set is four known files. Deepen-plan ran without the broad
+agent fan-out, per the pipeline brief for this small fix: three plan reviewers and the CTO had already read the
+plan and the files.
 
 ## Files to Edit
 
@@ -177,20 +220,43 @@ Not edited: `knowledge-base/project/plans/archive/20261127-221105-2026-11-27-cho
 
 ## Scope Check
 
-| Ask item | Plan item | Provenance |
-|---|---|---|
-| Bounded wait after goto in each body | Phase 2 | asked |
-| Keep shape, allowlists; no other behaviour change | Phase 2 (one line + comment), P4 | asked |
-| `p5-browser.sha256` re-pinned | Phase 4 | asked |
-| Runbook section 5 block, section 6 and section 12 sha lines | Phase 4 | asked |
-| Test case pinning the wait before the first atok read, each body | Phase 1 rows L1-L3, Phase 5 XW1-XW3 | asked (in behavioural form, CTO F3) |
-| Check mint second atok read | Reconciliation row; CTO F2 leaves it untouched | asked |
-| Grep shas for other pins | Reconciliation row | asked |
-| `polling: 100` | Phase 2, P5 | inferred: CTO F1, the same false-negative class as the bug |
-| Hold-compare normalization, XH1, one runbook sentence | Phase 3, 4, 5 | inferred: without it, the asked re-pin turns an existing check RED unless the archived plan is edited, which the ask forbids |
-| XW4, D7 in SCORED | Phase 5 | inferred: P2 needs a RED edit on the `.catch` |
+Ask source: the freeform one-shot ARGUMENTS for this branch (Ref #12931).
 
-Split assessment: one PR. Every item lands in the same files and is proven by the same test run.
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "after the goto in each body, wait a bounded time for atok" | Phase 2 | mapped |
+| 2 | "so a really signed-out page still returns {atok:false} after the timeout" | Phase 2 `.catch`; rows M3, R6, D7; XW4 | mapped |
+| 3 | "Keep the one-expression shape and return allowlists unchanged; no other behaviour change" | Phase 2 (one line + comment clause); P4 | mapped |
+| 4 | "Update every sha256 pin: p5-browser.sha256" | Phase 4 | mapped |
+| 5 | "the runbook ... (section 5 code block and every section 6 / section 12 hold line quoting a sha)" | Phase 4 | mapped |
+| 6 | "tests/scripts/test-cf-old-login-token-remint-browser.sh (add a case pinning that the wait exists before the first atok read in each body)" | Phase 1 rows L1-L3; Phase 5 XW1-XW3 | mapped |
+| 7 | "Do not edit the archived plan" | Files to Edit exclusion; AC archived plan byte-unchanged | mapped |
+| 8 | "Do not run any bootstrap write stage, mint, revoke, Doppler write, or use the browser. Never print token values." | Overview out-of-scope line; P-leak AC | mapped |
+| 9 | "PR body uses \"Ref #12931\" (never Closes)" | AC last row | mapped |
+| 10 | "p5-mint.js also has a second atok read around line 208 ... check whether it needs the same wait" | Reconciliation row; CTO F2: untouched | mapped |
+| 11 | "Check whether the bootstrap.sh or tests pin the body sha256 values anywhere else (grep the three current shas" | Reconciliation row; Phase 4 grep AC | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Wait line after each goto | "wait a bounded time for atok" | asked |
+| `polling: 100` in the wait | "e.g." (the snippet is an example) | inferred — justification: CTO F1; default `raf` polling stalls in a background tab and reproduces the same false `{atok:false}` |
+| `waitForFunction` stub, `lateAtok`, rows L1-L3 | "add a case pinning that the wait exists before the first atok read in each body" | asked |
+| Hold-compare `holds_norm`, XH1 | "Do not edit the archived plan" | inferred — justification: the existing test byte-compares the archived plan's holds with the runbook's; the asked re-pin turns it RED unless shas are normalized (CTO F5) |
+| One runbook sentence on the go-time sha source | "every section 6 / section 12 hold line quoting a sha" | inferred — justification: after the re-pin the archived plan quotes superseded shas; the sentence keeps a go-time reader on the runbook's values (Kieran review) |
+| XW4, D7 in `SCORED` | "a really signed-out page still returns {atok:false}" | inferred — justification: without a RED edit on the `.catch`, P2 has no mutation proof |
+| Floor and header updates | "add a case" | inferred — justification: the suite's exact anti-vacuity floors fail on any added row |
+| `decision-challenges.md`, `tasks.md` | "Persist every decision as a row" | asked |
+
+### Split Assessment
+
+- Subsystems touched: 3 — `knowledge-base/project/specs/archive/` (bodies, manifest), `knowledge-base/engineering/operations/runbooks/`, `tests/scripts/`
+- Planned files: 8 (6 edited, 2 created) | Estimated changed lines: about 150
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
 
 ## User-Brand Impact
 
@@ -202,6 +268,38 @@ Split assessment: one PR. Every item lands in the same files and is proven by th
 - **Brand-survival threshold:** `none`
 - **Threshold decision (challengeable):** this is internal operator tooling with no end-user surface. The bodies run
   only on an explicit per-command go, and no path in the diff matches the preflight sensitive-path regex.
+
+## Observability
+
+These bodies run in an operator-attached Playwright MCP session and return a JSON object to the agent. They have no
+server process, so the signals are the return line, the go-time body check, and the CI suite.
+
+```yaml
+liveness_signal:
+  what: "the SOLEUR_P5_BODY verdict line printed by the runbook section 5 check before any body runs, and the body's JSON return"
+  cadence: "per go (each body run)"
+  alert_target: "the agent session running the go; a verdict=stop or an unexpected return halts that step"
+  configured_in: "knowledge-base/engineering/operations/runbooks/cloudflare-old-login-token-remint.md section 5"
+error_reporting:
+  destination: "the body's return object (keys error / refused / atok / status) read by the agent against the runbook browser returns table; CI suite tests/scripts/cf-old-login-token-remint-browser in scripts/test-all.sh"
+  fail_loud: "SOLEUR_P5_BODY verdict=stop, or a return of {atok:false} / {error:<name>} / {refused:<reason>}"
+failure_modes:
+  - mode: "a signed-in page still reports {atok:false} (wait missing, wrong condition, or raf polling stalled)"
+    detection: "rows L1-L3 and mutants XW1-XW3 in the CI suite; at go time the {atok:false} row of the runbook returns table"
+    alert_route: "CI failure on the PR; at go time the agent stops the step"
+  - mode: "a body edited without re-pinning its sha"
+    detection: "suite P-pin checks (sha256sum -c and runbook citations); go-time SOLEUR_P5_BODY verdict=stop"
+    alert_route: "CI failure on the PR; at go time the step does not start"
+  - mode: "the wait throws through (missing .catch) on a signed-out page"
+    detection: "row D7 and mutant XW4 ({error:TimeoutError})"
+    alert_route: "CI failure on the PR"
+logs:
+  where: "the agent session transcript (body return lines) and the CI job log of scripts/test-all.sh"
+  retention: "session transcript for the session; CI logs per GitHub Actions retention (90 days)"
+discoverability_test:
+  command: "git grep -c waitForFunction -- knowledge-base/project/specs/archive/20261127-221105-feat-one-shot-12931-phase5-token-remint/"
+  expected_output: "p5-read.js:1, p5-mint.js:1, p5-revoke.js:1"
+```
 
 ## Guard Contract
 
@@ -324,7 +422,8 @@ Panel: DHH, Kieran and code-simplicity reviewers (2026-11-28). The CTO's design 
 - `perl -0pi` mutants replace the first match only. Confirm each `from` literal appears exactly once in its body.
 - The stub models Playwright's signature `waitForFunction(pageFunction, arg, options)`. It must read the options
   from the THIRD parameter only. A body that writes `waitForFunction(fn, { timeout: 15000 })` would, in real
-  Playwright, pass the options as `arg` and fall back to a 30 s `raf` wait. The stub then records an undefined
+  Playwright, pass the options as `arg` and fall back to the page default timeout (`0`, no timeout, unless a
+  default was set) with `raf` polling: a possible hang in a background tab. The stub then records an undefined
   timeout and the L row goes RED, as it should. Do not make the stub tolerant of the two-argument form.
 - Before cutting any assertion as redundant in review, name the mutation it kills and show that a surviving
   assertion still kills it. The one-off checks in Phase 7 do this for the cut XW5 mutant and the dropped hold
