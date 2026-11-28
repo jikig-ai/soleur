@@ -95,6 +95,8 @@ TPL="$DIR/bastion-cloud-init.yml"
 EGRESS_SH="$DIR/bastion-egress.sh"
 GD_SUITE="$DIR/git-data-runcmd-rehearsal.test.sh"
 CREATE_WF="$ROOT/.github/workflows/bastion-host-create.yml"
+# The birth-readiness interlock both routes call (F1, #12879): its `for lit in` list is the anchor.
+READINESS_LIB="$ROOT/scripts/lib/bastion-birth-readiness.sh"
 TRAIL_READER="$DIR/scripts/fresh-host-boot-trail.sh"
 APT_LIB="$DIR/lib/apt-bounded.sh"
 TAB=$'\t'
@@ -125,8 +127,8 @@ MIN_PKGS=(systemd systemd-sysv dbus cloud-init python3 openssl "${IMAGE_ASSUMED[
 # conffile it touches. Never fetched at run time; a refresh is a reviewed edit of this array.
 CLOUD_IMAGE_PKGS=(apt ca-certificates cloud-init curl iproute2 nftables openssh-server systemd systemd-resolved systemd-timesyncd)
 
-# The expected stage literals. The terminal three are anchored on bastion-host-create.yml's
-# birth-readiness interlock below, so one diff cannot rename a stage in the template and here at once.
+# The expected stage literals. The terminal three are anchored on the birth-readiness interlock
+# (scripts/lib/bastion-birth-readiness.sh, which both bastion routes call) below, so one diff cannot rename a stage in the template and here at once.
 ST_READY=fresh_boot_ready
 ST_FATAL=fresh_boot_not_ready_
 ST_COMPLETE=cloud_init_complete
@@ -217,7 +219,7 @@ for t in docker terraform python3 ssh-keygen openssl dash curl flock ip; do comm
 docker info >/dev/null 2>&1 || absent "docker-daemon"
 DASH="$(command -v dash)"
 python3 -c 'import yaml' 2>/dev/null || absent "python3-yaml"
-for f in "$TPL" "$EGRESS_SH" "$GD_SUITE" "$CREATE_WF" "$TRAIL_READER" "$APT_LIB"; do
+for f in "$TPL" "$EGRESS_SH" "$GD_SUITE" "$CREATE_WF" "$READINESS_LIB" "$TRAIL_READER" "$APT_LIB"; do
   [ -s "$f" ] || { printf 'HARNESS: missing %s\n' "$f" >&2; exit 2; }
 done
 # shellcheck source=lib/apt-bounded.sh
@@ -352,10 +354,13 @@ if _m="$(mutate static "$SELF" "$WORK/self-mut.sh" "$_from" "$_from --network ho
   argv_scan "$WORK/self-mut.sh" >/dev/null; _r=$?
   chk "containment control: a boot docker create given the host network is caught (Guard 1 row 13)" "$([ "$_r" -eq 1 ]; echo $?)" "scan rc=$_r"
 else chk "containment control: a boot docker create given the host network is caught (Guard 1 row 13)" 1 "$_m"; fi
-_lits="$(sed -nE 's/^[[:space:]]*for lit in ([a-z_ ]+); do.*/\1/p' "$CREATE_WF" | head -1)"
+_lits="$(sed -nE 's/^[[:space:]]*for lit in ([a-z_ ]+); do.*/\1/p' "$READINESS_LIB" | head -1)"
 _anchor_rc=1
-if [ "$_lits" = "$ST_READY $ST_FATAL $ST_COMPLETE" ] && grep -qF "\"$ST_READY\"" "$TRAIL_READER"; then _anchor_rc=0; fi
-chk "anchor: the stage literals equal bastion-host-create.yml's interlock list and the strict reader's" "$_anchor_rc" "interlock list='$_lits'"
+# Both workflows must still call the library (a body that stopped calling it would make the anchor moot).
+if [ "$_lits" = "$ST_READY $ST_FATAL $ST_COMPLETE" ] && grep -qF "\"$ST_READY\"" "$TRAIL_READER" \
+  && grep -qE '^[[:space:]]*bastion_birth_readiness bastion-host-create$' "$CREATE_WF" \
+  && grep -qE '^[[:space:]]*bastion_birth_readiness bastion-host-replace$' "$ROOT/.github/workflows/bastion-host-replace.yml"; then _anchor_rc=0; fi
+chk "anchor: the stage literals equal the birth-readiness interlock list (bastion-birth-readiness.sh, called by both routes) and the strict reader's" "$_anchor_rc" "interlock list='$_lits'"
 
 # ── Fixtures (synthesized per run; cq-test-fixtures-synthesized-only) ──────────────────────────
 mkfixtures() {

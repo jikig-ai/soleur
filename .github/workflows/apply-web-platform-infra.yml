@@ -44,61 +44,40 @@ on:
       # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §confirm and the gate model
       # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §plan_only
       plan_only:
-        description: "[web-host-replace, git-data-host-replace, bastion-host-create] Rehearsal: credentials, init, plan and the path's own gate, then STOP before any apply, -replace, SSH or host contact. Operator step O4b."
+        description: "[web-host-replace, git-data-host-replace, bastion-host-create, bastion-host-replace] Rehearsal: credentials, init, plan and the path's own gate, then STOP before any apply, -replace, SSH or host contact. Operator step O4b."
         required: false
         default: false
         type: boolean
       confirm:
-        description: "Typo-guard for destructive/creative targets. NOT the authorization. REVIEWER-gated: web-host-create, web-host-replace, git-data-host-create, bastion-host-create, vector-redeliver (workspaces-luks-recut is RETIRED -- its first step exits 1 on every dispatch). Since #8209 every OTHER target carries environment: infra-privileged -- no reviewer, but main-only, so a branch dispatch is refused; for those the gate chain, destroy-guard and id-pin are the rest of the protection. The exact token is in that target's job header and runbook (inngest-host-replace: REPLACE-INNGEST-HOST; inngest-host takes none). Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
+        description: "Typo-guard for destructive/creative targets. NOT the authorization. REVIEWER-gated: web-host-create, web-host-replace, git-data-host-create, bastion-host-create, bastion-host-replace, vector-redeliver (workspaces-luks-recut is RETIRED -- its first step exits 1 on every dispatch). Since #8209 every OTHER target carries environment: infra-privileged -- no reviewer, but main-only, so a branch dispatch is refused; for those the gate chain, destroy-guard and id-pin are the rest of the protection. The exact token is in that target's job header and runbook (inngest-host-replace: REPLACE-INNGEST-HOST; inngest-host takes none). Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
         required: false
         type: string
       # For apply_target=web-host-create ONLY (#6730). The var.web_hosts key of the host to
-      # birth. Ignored by every other target.
-      #
-      # UNTRUSTED BY POSTURE, not by threat model: only someone who can already dispatch this
-      # workflow can set it, but it is interpolated into `-target=` arguments and a shell
-      # environment, so it is validated against ^web-[0-9]{1,2}$ and routed exclusively through
-      # env: (never `${{ }}` inside a run: body). The regex is the injection guard; the
-      # var.web_hosts membership check downstream is the correctness guard; the sourced birth
-      # gate comparing the PLANNED create address to this key is the guard that actually
-      # protects production. Three layers because a typo here births the wrong host.
+      # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §web_host_key
       web_host_key:
         description: "For apply_target=web-host-create and web-host-replace: the var.web_hosts key to birth/replace (e.g. web-2). Must match ^web-[0-9]{1,2}$ and exist in var.web_hosts. web-host-replace REFUSES web-1."
         required: false
         type: string
       # For apply_target=web-host-create ONLY (#6730). Overrides the pin source when web-1's
-      # /health cannot be read — which is BY CONSTRUCTION the case when the host being
-      # birthed IS web-1. Not a safety weakening: the value still passes the strict-semver
-      # guard, still resolves to an immutable digest, and still faces the coherence
-      # preflight. Same env:-routed, shape-validated handling as web_host_key.
+      # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §image_tag
       image_tag:
         description: "For apply_target=web-host-create and web-host-replace: pin the image to this released tag (e.g. v1.2.3) instead of reading web-1's /health. Required for a fresh birth (the default reads the RUNNING version, which will not carry the baked fresh-boot LUKS provisioner; web-1 itself is refused by web-host-create) and when the fleet is down."
         required: false
         type: string
       # For apply_target=workspaces-luks-recut ONLY. The Hetzner id of the ORPHANED LUKS volume the
-      # operator intends to destroy (read it from the incident / the latest terraform-drift run's
-      # `hcloud_volume.workspaces_luks: Refreshing state... [id=...]` line). The recut gate PINS the
-      # replaced volume's before.id to this value, so a state-corruption that mapped the
-      # workspaces_luks ADDRESS onto the LIVE volume's physical id cannot silently destroy live data
-      # (user-impact-reviewer P2, #6855). Ignored by every other target.
+      # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §expected_luks_volume_id
       expected_luks_volume_id:
         description: "[workspaces-luks-recut -- RETIRED, its job exits 1; ignored] the numeric Hetzner id of the orphaned WORKSPACES LUKS volume to destroy (id-pin — the gate refuses to replace a different physical volume)."
         required: false
         type: string
       # For apply_target=registry-luks-recut ONLY (#6929). The Hetzner id of the CURRENT zot store
-      # volume the operator intends to destroy. Distinctly named from expected_luks_volume_id
-      # (which is the WORKSPACES volume) — sharing one id input across two targets would make the
-      # wrong-volume mis-dispatch a typo rather than an impossibility.
-      #
-      # PROVENANCE — read it from the Hetzner API, NOT from a drift run's log:
-      #   printf 'Authorization: Bearer %s' "$HCLOUD_TOKEN" | curl -s -H @- \
-      #     'https://api.hetzner.cloud/v1/volumes?name=soleur-registry-store' | jq -r '.volumes[0].id'
-      # scheduled-terraform-drift.yml captures its plan into a command substitution, so the
-      # `Refreshing state... [id=...]` line NEVER reaches the step log; `gh run view` shows only
-      # the drift verdict. The API read is one bounded command and is independent of the
-      # terraform state the id-pin exists to guard.
+      # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §expected_registry_store_volume_id
       expected_registry_store_volume_id:
         description: "[registry-luks-recut] the numeric Hetzner id of the zot store volume to destroy (id-pin — the gate refuses to replace a different physical volume). Read it from the Hetzner API, not from a drift run."
+        required: false
+        type: string
+      expected_bastion_server_id:
+        description: "[bastion-host-replace] the live soleur-bastion's Hetzner id (from a plan_only run's summary), or none to recover a lost server."
         required: false
         type: string
       inngest_link_value:
@@ -106,33 +85,14 @@ on:
         required: false
         type: string
       # `manual-rerun` (default) preserves the historical escape-hatch behavior EXACTLY
-      # — the `apply` job's allow-list re-run. Every other value selects a dedicated,
-      # MUTUALLY-EXCLUSIVE dispatch job (see each job's `if:`), so a dispatch runs
-      # exactly one apply path. Post-merge trigger (menu ack, not a prod-write authored
-      # by a non-technical user — `hr-menu-option-ack-not-prod-write-auth`):
-      #   gh workflow run apply-web-platform-infra.yml -f apply_target=<target> -f reason='...'
-      #
-      # The `warm-standby` and `web-2-recreate` targets were REMOVED 2026-07-20 (#6575)
-      # after web-2 was retired 2026-07-17 (#6538). Both hard-`-target`ed addresses that
-      # no longer exist, so neither could run to completion; the runbook surfaces that told
-      # operators to dispatch them were rewritten or superseded in the same change (the
-      # host_creates HALT below, scheduled-inngest-health.yml, the stock-preflight tine, and
-      # knowledge-base/engineering/operations/runbooks/ -- see web-host-birth.md). The web-host
-      # birth path those targets did NOT provide is `web-host-create` below (#6730, ADR-145):
-      # generic over var.web_hosts keys rather than hardcoded to web-2, and a purely additive
-      # +create rather than a -replace of a host that must already exist.
+      # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §manual-rerun
       apply_target:
         # Rendered as the FIELD LABEL above the dropdown — the last thing a non-technical operator
-        # reads before firing a destructive apply. Kept as a short pointer at the runbooks: the
-        # previous form was 1574 characters on ONE physical line, which no one reads and whose
-        # every edit produced an unreviewable whole-line diff. (Evidence that it went unread: its
-        # registry-region-migrate clause carried the "re-fills from GHCR" wording corrected
-        # elsewhere in this very change.) Per-target detail now lives in each job's header
-        # comment and in knowledge-base/engineering/operations/runbooks/.
+        # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §apply_target field label
         description: >-
           Which apply path? manual-rerun (default) | inngest-host | inngest-host-replace |
           registry-host-replace | registry-region-migrate | registry-luks-recut |
-          git-data-host-replace | git-data-host-rotate | git-data-host-create | bastion-host-create | workspaces-luks-cutover |
+          git-data-host-replace | git-data-host-rotate | git-data-host-create | bastion-host-create | bastion-host-replace | workspaces-luks-cutover |
           workspaces-luks-recut (RETIRED: exits 1) | web-host-create | web-host-replace |
           ci-ssh-token-replace | vector-redeliver | entrypoint-audit | inngest-link-flag.
           DESTRUCTIVE targets need `confirm` and an id-pin — see the runbook for the
@@ -153,6 +113,8 @@ on:
           needs `confirm=BIRTH-GIT-DATA`. Gated by three interlocks plus the plaintext-id one (rung-2
           while the evidence hash differs, plaintext-id while git_data_volume_id is non-empty;
           job-rationale.md §git_data_host_create). Read git-data-birth.md first.
+          bastion-host-replace DESTROYS AND RECREATES soleur-bastion (host key kept); needs
+          `confirm=REPLACE-bastion` + `expected_bastion_server_id` (`none` to recover a lost server).
         required: false
         default: manual-rerun
         type: choice
@@ -186,6 +148,7 @@ on:
           # #6977 — git-data BIRTH path, counterpart of git-data-host-replace (full text: the job-rationale runbook, `git_data_host_create` section).
           - git-data-host-create
           - bastion-host-create
+          - bastion-host-replace
           # #6767: read-only retrospective drift audit of every declared ruleset's
           # LIVE phase entrypoint (no terraform apply; own concurrency group;
           # issues:write via the job's github.token; posts findings to #6767). See the
@@ -6127,6 +6090,22 @@ jobs:
       confirm: ${{ inputs.confirm }}
       plan_only: ${{ inputs.plan_only }}
       reason: ${{ inputs.reason }}
+    secrets:
+      DOPPLER_TOKEN_INFRA_PRIVILEGED: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
+
+  bastion_host_replace:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'bastion-host-replace'
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/bastion-host-replace.yml
+    with:
+      confirm: ${{ inputs.confirm }}
+      plan_only: ${{ inputs.plan_only }}
+      reason: ${{ inputs.reason }}
+      expected_bastion_server_id: ${{ inputs.expected_bastion_server_id }}
     secrets:
       DOPPLER_TOKEN_INFRA_PRIVILEGED: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}

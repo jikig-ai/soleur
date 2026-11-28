@@ -414,8 +414,12 @@ done
 # gate, #8361); the caller job in $WF is pinned by terraform-target-parity.test.ts.
 BBV="$DIR/../../../scripts/lib/bastion-boot-verify.sh"
 BWF="$DIR/../../../.github/workflows/bastion-host-create.yml"
-for prov_job in web_host_create web_host_replace bastion_host_create; do
-  JWF="$WF"; [ "$prov_job" = bastion_host_create ] && JWF="$BWF"
+# #12879: the replace route's body, likewise reusable (its caller job sits in $WF).
+BRWF="$DIR/../../../.github/workflows/bastion-host-replace.yml"
+# The birth-readiness interlock both bastion routes call (F1, #12879).
+BBR="$DIR/../../../scripts/lib/bastion-birth-readiness.sh"
+for prov_job in web_host_create web_host_replace bastion_host_create bastion_host_replace; do
+  JWF="$WF"; [ "$prov_job" = bastion_host_create ] && JWF="$BWF"; [ "$prov_job" = bastion_host_replace ] && JWF="$BRWF"
   PROV="$(awk -v want="^  ${prov_job}:" '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ want) } /^  #/ { cap = 0 } cap' "$JWF" || true)"
   if [ -z "$PROV" ]; then
     no "AC8d: no ${prov_job} job in $(basename "$JWF") — a provisioning path that does not exist cannot surface a boot trail"
@@ -458,10 +462,11 @@ for kv in 'APPLY_OUTCOME: ${{ steps.apply.outcome }}' 'BOOT_TRAIL_SINCE: ${{ ste
           'SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}' 'GH_TOKEN: ${{ github.token }}'; do
   if grep -qxF "          ${kv}" <<<"$VSTEP"; then ok "AC8e: verify binds ${kv%%:*}"; else no "AC8e: verify must bind '${kv}'"; fi
 done
-if grep -qxF '          bastion_boot_verify "${BOOT_TRAIL_SINCE:-}" "${APPLY_OUTCOME:-}" bastion-host-create || rc=$?' <<<"$VSTEP"; then
-  ok "AC8e: verify calls bastion_boot_verify with the anchor, the apply outcome and the dispatch label"
+if grep -qxF '          bastion_boot_verify "${BOOT_TRAIL_SINCE:-}" "${APPLY_OUTCOME:-}" bastion-host-create "${PRE_IDS:-}" || rc=$?' <<<"$VSTEP" \
+   && grep -qxF '          PRE_IDS: ${{ steps.preids.outputs.pre_ids }}' <<<"$VSTEP"; then
+  ok "AC8e: verify calls bastion_boot_verify with the anchor, the apply outcome, the dispatch label and the pre-apply id set (#12879)"
 else
-  no "AC8e: verify must call bastion_boot_verify \"\${BOOT_TRAIL_SINCE:-}\" \"\${APPLY_OUTCOME:-}\" bastion-host-create"
+  no "AC8e: verify must call bastion_boot_verify \"\${BOOT_TRAIL_SINCE:-}\" \"\${APPLY_OUTCOME:-}\" bastion-host-create \"\${PRE_IDS:-}\" with PRE_IDS bound from steps.preids"
 fi
 if ac8e_apply_gated "$BJOB" \
    && grep -qxF '        if: inputs.plan_only != true' < <(bstep "$BJOB" "Stamp boot-trail run anchor (bastion create)"); then
@@ -477,9 +482,15 @@ else
 fi
 # The interlock's token-shape predicate is the READER's, byte for byte (LC_ALL=C included), so the
 # interlock never admits a token the reader then refuses (review, simplicity 8 / pattern P3-3).
+# Since #12879 (F1) the interlock body lives in scripts/lib/bastion-birth-readiness.sh, which both routes call.
 want_bo="$(grep -E '^_bearer_ok\(\) \{' "$TRAIL" | head -1)" || want_bo=""
-got_bo="$(grep -E '^[[:space:]]*_bearer_ok\(\) \{' <<<"$BJOB" | sed 's/^[[:space:]]*//' | head -1)" || got_bo=""
+got_bo="$(grep -E '^[[:space:]]*_bearer_ok\(\) \{' "$BBR" | sed 's/^[[:space:]]*//' | head -1)" || got_bo=""
 if [ -n "$want_bo" ] && [ "$got_bo" = "$want_bo" ]; then ok "AC8e: the interlock's _bearer_ok is byte-identical to the reader's"; else no "AC8e: the interlock's _bearer_ok ('${got_bo}') differs from the reader's ('${want_bo}')"; fi
+if grep -qxF '          bastion_birth_readiness bastion-host-create' < <(bstep "$BJOB" "Birth-readiness interlock (emitter present, boot-trail token bound and well-formed)"); then
+  ok "AC8e: the birth's interlock step calls bastion_birth_readiness bastion-host-create"
+else
+  no "AC8e: the birth's interlock step must call bastion_birth_readiness bastion-host-create"
+fi
 TO="$(awk '/^  bastion_host_create:/{c=1;next} c&&/^  [A-Za-z0-9_-]+:/{c=0} c&&/^    timeout-minutes: [0-9]+$/{print $2; exit}' "$BWF")"
 if [[ "$TO" =~ ^[0-9]+$ ]] && [ "$TO" -ge 45 ]; then ok "AC8e: job timeout-minutes ($TO) is read (the budget row lives in kernel-currency.test.sh)"; else no "AC8e: bastion_host_create timeout-minutes unreadable or below 45 ('${TO}')"; fi
 # Mutation rows: the two edits the review drove past five suites must now red THESE predicates.
@@ -521,6 +532,23 @@ M6="$(sed 's/^          exit "\$rc"$/          exit 0/' <<<"$BJOB")"
 if [ "$M6" != "$BJOB" ] && ! ac8e_verify_exit "$M6"; then ok "AC8e (mutation W11): verify's exit \"\$rc\" -> exit 0 is caught"; else no "AC8e (mutation W11): exit \"\$rc\" -> exit 0 was NOT caught (or did not land)"; fi
 M7="$(sed 's/^    timeout-minutes: 60$/    concurrency: { group: bastion-birth, cancel-in-progress: false }\n    timeout-minutes: 60/' <<<"$BJOB")"
 if [ "$M7" != "$BJOB" ] && ! ac8e_no_concurrency "$M7"; then ok "AC8e (mutation W15): a job-level concurrency: on the bastion job is caught"; else no "AC8e (mutation W15): a job-level concurrency: was NOT caught (or did not land)"; fi
+
+# ── AC8f (#12879): the bastion REPLACE body ─────────────────────────────────────────────────────
+# The replace body's step wiring (ids and order, exact if: strings, the gate/stock/TOCTOU refusals, the
+# boot-verify and cancel calls, continue-on-error) is pinned by tests/scripts/test-bastion-host-replace-workflow.sh,
+# which executes the real step bodies (CTO ruling Q-R4 consolidated it there). The rows kept here are
+# the ones that suite does not hold: the interlock's call, no concurrency, and the job timeout.
+rjob_of() { awk '/^  bastion_host_replace:/{c=1;next} c&&/^  [A-Za-z0-9_-]+:/{c=0} c' "$1" | grep -v '^[[:space:]]*#' || true; }
+RJOB="$(rjob_of "$BRWF")"
+[ -n "$RJOB" ] || no "AC8f: no bastion_host_replace job in $(basename "$BRWF")"
+if grep -qxF '          bastion_birth_readiness bastion-host-replace' < <(bstep "$RJOB" "Birth-readiness interlock (emitter present, boot-trail token bound and well-formed)"); then
+  ok "AC8f: the replace interlock step calls bastion_birth_readiness bastion-host-replace"
+else
+  no "AC8f: the replace interlock step must call bastion_birth_readiness bastion-host-replace"
+fi
+if ac8e_no_concurrency "$RJOB" && ! grep -qE '^concurrency:' "$BRWF"; then ok "AC8f: neither bastion-host-replace.yml nor its job declares concurrency"; else no "AC8f: a concurrency: in bastion-host-replace.yml splits the lock or can cancel the caller"; fi
+RTO="$(awk '/^  bastion_host_replace:/{c=1;next} c&&/^  [A-Za-z0-9_-]+:/{c=0} c&&/^    timeout-minutes: [0-9]+$/{print $2; exit}' "$BRWF")"
+if [[ "$RTO" =~ ^[0-9]+$ ]] && [ "$RTO" -ge 45 ]; then ok "AC8f: job timeout-minutes ($RTO) is read (the budget row lives in kernel-currency.test.sh)"; else no "AC8f: bastion_host_replace timeout-minutes unreadable or below 45 ('${RTO}')"; fi
 
 # ── AC13 (#6090 follow-up, retargeted by #7946): the surfacing step binds its token from
 # the WORKFLOW ENV, never from Doppler — and names the unbound case rather than self-skipping.

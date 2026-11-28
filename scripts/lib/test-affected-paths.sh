@@ -1741,14 +1741,56 @@ AFFECTED_TESTS_SCRIPTS_GIT_DATA_BOOT_SIGNAL_POLL_PATHS=(
 
 # tests/scripts/bastion-boot-verify (#12866) — derived edges could not reach its subject (the suite
 # runs the library under `env -i` with a stubbed reader); declared from the repo paths it names, plus
-# the reader the library calls by default and the reusable workflow that sources it.
+# the reader the library calls by default and the reusable workflow that sources it. #12879: the suite
+# also drives the birth-readiness interlock library (scripts/lib/bastion-birth-readiness.sh).
 AFFECTED_TESTS_SCRIPTS_BASTION_BOOT_VERIFY_PATHS=(
   ".github/workflows/bastion-host-create.yml"
   "apps/web-platform/infra/scripts/fresh-host-boot-trail.sh"
+  "scripts/lib/bastion-birth-readiness.sh"
   "scripts/lib/bastion-boot-verify.sh"
   "scripts/lib/bearer-curl.sh"
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-bastion-boot-verify.sh"
+)
+
+# tests/scripts/bastion-host-replace-gate (#12879) — derived edges could not reach the shared create-side
+# checks the gate sources from its own directory, nor the dispatch-line template bastion_replace_next_dispatch
+# sources lazily through a variable (_BHRG_BBV -> scripts/lib/bastion-boot-verify.sh, which sources
+# bearer-curl.sh); declared from the repo paths the suite and the gate name. (The workflow wiring is the
+# bastion-host-replace-workflow suite's; the workflow path stays as harmless over-selection.)
+AFFECTED_TESTS_SCRIPTS_BASTION_HOST_REPLACE_GATE_PATHS=(
+  ".github/workflows/bastion-host-replace.yml"
+  "scripts/lib/bastion-boot-verify.sh"
+  "scripts/lib/bearer-curl.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/lib/bastion-gate-common.sh"
+  "tests/scripts/lib/bastion-host-replace-gate.sh"
+  "tests/scripts/lib/bastion-resources.txt"
+  "tests/scripts/lib/plan-gate-preamble.sh"
+  "tests/scripts/test-bastion-host-replace-gate.sh"
+)
+
+# tests/scripts/bastion-host-birth-gate (#12866; #12879 review) — derivation reaches the birth gate but
+# not the create-side checks it sources from its own directory (bastion-gate-common.sh) nor the address
+# list it reads (bastion-resources.txt).
+AFFECTED_TESTS_SCRIPTS_BASTION_HOST_BIRTH_GATE_PATHS=(
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/lib/bastion-gate-common.sh"
+  "tests/scripts/lib/bastion-resources.txt"
+  "tests/scripts/test-bastion-host-birth-gate.sh"
+)
+
+# tests/scripts/bastion-host-replace-workflow (#12879, CTO ruling Q-R4) — the suite reads and EXECUTES the
+# two reusable bastion workflows' step bodies against the real boot-verify and bearer-curl libraries and
+# reads the credential loader's declared outputs; none of those is an argv literal or a source edge.
+AFFECTED_TESTS_SCRIPTS_BASTION_HOST_REPLACE_WORKFLOW_PATHS=(
+  ".github/actions/infra-credentials/action.yml"
+  ".github/workflows/bastion-host-create.yml"
+  ".github/workflows/bastion-host-replace.yml"
+  "scripts/lib/bastion-boot-verify.sh"
+  "scripts/lib/bearer-curl.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-bastion-host-replace-workflow.sh"
 )
 
 # tests/scripts/git-data-rung2-evidence-capture — derived edges could not reach its subject; declared from the

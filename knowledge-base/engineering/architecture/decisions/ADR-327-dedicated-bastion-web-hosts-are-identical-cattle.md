@@ -130,3 +130,59 @@ containers on the pinned `ubuntu:24.04` image. It runs in the `bastion-boot-rehe
     st=<ExecMainStatus> last=<the unit's last output line>`, at most 180 bytes. Every journal and
     systemctl read in `_egress_why` is bounded by `timeout 10`, so a stalled journald cannot stop the
     fatal. The bastion ships no journal, so this tag is the only remote signal.
+
+## Addendum — 2026-11-28 (#12879, step 2b)
+
+This PR adds the bastion replace route. Until a post-birth `plan_only` run of it passes against the
+real bastion, the PR and its commits say `Ref #12879`, not a closing keyword. The plan is
+`knowledge-base/project/plans/2026-11-28-feat-bastion-host-replace-route-plan.md`; the operator acts are in
+`knowledge-base/engineering/operations/runbooks/bastion-host.md` ("Replacing the bastion").
+
+- **The route.** `bastion-host-replace` is an `apply_target` choice. It takes `confirm=REPLACE-bastion` and
+  `expected_bastion_server_id`, and it pins one server id three ways: the dispatch input, the Hetzner API
+  read, and the plan's `before.id` for `hcloud_server.bastion`. All three must agree, compared as
+  strings, before anything is applied. A TOCTOU step re-reads the API just before the apply and aborts if
+  the server's id, name, role label, status or private network changed since the plan, or if the bastion
+  firewall's live `applied_to` holds a label selector or any server other than the pin (review Q-R3).
+- **The recovery arm (a named departure).** `expected_bastion_server_id=none` admits a bare create of the
+  server, but only when the API lists zero `soleur-bastion` servers, the prior state does NOT hold
+  `hcloud_server.bastion` (`prior_has == 0`), and the plan's server carries no `before` (`before.id` reads
+  `none`). Lost state with a live server is the opposite case and is refused (#13117).
+  `web-host-replace-gate.sh` refuses a bare create and sends it to the birth route. The bastion
+  admits it because the issue requires an in-repo exit for a lost server, and because only this gate
+  checks the API for zero servers first.
+- **The attachment's before is graded on both arms (review Q-R1, Q-R2).** An update of
+  `hcloud_firewall_attachment.bastion` rewrites its `server_ids` and `label_selectors`, so whatever its
+  `before` holds is unbound from the zero-rule firewall. The gate therefore requires `before.server_ids`
+  and `before.label_selectors` to be present, `label_selectors` empty, and `server_ids` empty or (replace
+  arm only) exactly the pin; anything unreadable refuses. The replace arm also admits the two shapes a
+  partial replace leaves behind (the new server created, the attachment never re-bound): an update from
+  an empty `before.server_ids`, and a bare create with no `before`. The next dispatch after such a run is
+  the normal replace pinning the new id.
+- **A separate reusable callee.** This amends 2a's "2b's replace job joins it there". The body lives in
+  `bastion-host-replace.yml`, not inside `bastion-host-create.yml`. The reason is that
+  `calledApplyingSteps` in `stock-preflight-coverage.test.ts` reads exactly one applying job per called
+  file, so a second applying job in the birth file would make both callers read as ungated.
+- **The heartbeat moved to #13113.** This amends 2a's "#12879 (2b) adds the replace route and heartbeat".
+  The bastion has no heartbeat until #13113. Not-ready runs are commented on #9421, not #12879.
+- **Two cases are refused, not handled.** Rotating the host key is refused by both routes (#13116). Lost
+  Terraform state with a live server is refused (#13117), because a replace would destroy a server the
+  state does not hold.
+- **Shared libraries.** The birth-readiness interlock now lives in `scripts/lib/bastion-birth-readiness.sh`,
+  which both routes call (F1). The birth gate's create-side checks live in
+  `tests/scripts/lib/bastion-gate-common.sh`, which both gates source (R3).
+- **The pre-apply id set.** Both routes read every `soleur-bastion` id before the apply and pass that set
+  to boot-verify and to the cancel power-off. Neither powers off a server in that set; the summary names
+  it as `old_untouched`. A missing or malformed set refuses the power-off (`refused_no_preids`). The set is
+  required on every label and by `_bbv_poweroff` itself: there is no no-argument form (review Q-R8).
+- **The reviewer gate is the owner's own approval.** `web-platform-infra-apply` requires one reviewer, user
+  54279, which is the owner and not a second person. The same is true of the birth.
+- **"Its own replace route bounds that risk" holds only once a bastion exists.** The route is built, but
+  until the birth (gated on #12942), there is nothing for it to replace.
+- **Step 3 (#12867) must revisit replace downtime.** The replace destroys before it creates, so the
+  bastion is gone for the length of the run. That is acceptable while nothing dials it. Once step 3 gives it
+  consumers, step 3 must choose either a blue-green design (a second name and IP) or a drain-then-replace
+  with a bounded window.
+- **Step 3 is gated on #13113 (the heartbeat).** Giving the bastion a consumer is blocked until #13113
+  ships its heartbeat. A bastion that something dials but that nothing monitors would fail silently, so the
+  heartbeat comes before the first consumer, not after.

@@ -90,3 +90,16 @@ committed file, so there is no render step to strip at.
 - ADR-152 (strip-at-render; the rejected comment-freeze option), ADR-116 (content anchors), ADR-080
 - `knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md`
 - `knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-red-run.md` (zero-jobs diagnosis)
+
+## Addendum — 2026-11-28 (#12879, Q4b): the split's first slice
+
+- **The bastion routes are #8385-shape callees.** `bastion-host-create` and `bastion-host-replace` each run
+  as a thin caller job in `apply-web-platform-infra.yml` that calls its own reusable file. They are the first
+  slice of the #8385 split.
+- **This PR's relocation is the minimum, not the split.** Six dispatch-input comment blocks moved to the
+  job-rationale runbook in this format: each keeps its first line, its test-anchored lines and the
+  `# Rationale:` pointer. That freed 3,375 bytes, which is what the thin caller needed. The file ends at
+  487,285 bytes, under the 490,000 gate and the 488,000 per-file ceiling pinned in workflow-file-size.test.ts.
+- **The #8385 counter has tripped.** The file measured 489,485 bytes before the relocation, at or above the
+  485,000 trigger.
+- **The next PR that adds caller bytes must take the split.** It gets no further relocation round.

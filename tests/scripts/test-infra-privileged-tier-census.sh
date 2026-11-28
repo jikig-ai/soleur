@@ -1632,7 +1632,9 @@ check("G4e: every step that reads GITHUB_APP_PRIVATE_KEY from Doppler refuses th
 #
 # Three properties, from the ADR's own wording: every MUTATING step carries the guard, no step
 # is ENABLED by it, and the input-validation / interlock / typo-guard steps stay UNCONDITIONAL.
-PLAN_ONLY_JOBS = {"web_host_replace", "git_data_host_replace"}
+# bastion_host_replace (#12879, F5): the bastion replace body (reusable bastion-host-replace.yml); its
+# plan_only notice comes from the unconditional summary step, so no step is ENABLED by the input.
+PLAN_ONLY_JOBS = {"web_host_replace", "git_data_host_replace", "bastion_host_replace"}
 # The apply is wrapped (`doppler run ... -- terraform apply`), so `terraform apply` is NOT at
 # a command boundary and cmd_sites correctly refuses it. Reuse the census's own APPLY matcher
 # -- the same one G1h derives the state-writer set from -- and add host contact on top.

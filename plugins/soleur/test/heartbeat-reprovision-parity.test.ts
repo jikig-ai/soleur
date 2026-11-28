@@ -141,10 +141,38 @@ function hasChoiceOption(workflow: string, choice: string): boolean {
   return new RegExp(`^\\s*-\\s*${choice}\\s*$`, "m").test(workflow);
 }
 
-/** Does the workflow carry a `-replace='<server>'` line? */
+/**
+ * Strip a YAML/shell `#` comment from one line, quote-aware (#12879, Guard 3). A `#` opens a comment only
+ * outside single and double quotes AND at the line start or after whitespace, so `${#arr[@]}` (a `{`
+ * before it) and `"a#b"` are code, while `foo # -replace=...` is a comment. `//` is NOT a comment here:
+ * workflow text carries URLs. An apostrophe INSIDE a word (a letter or digit on its left, a letter on its
+ * right: `bastion's`, `don't`) is prose in a YAML scalar and never opens single-quote state; a quote after
+ * `=`, `(`, `$` or whitespace still does, and any `'` closes an open single quote.
+ */
+function stripShellComment(line: string): string {
+  let sq = false;
+  let dq = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === "'" && !dq) {
+      const inWord = !sq && /[A-Za-z0-9]/.test(line[i - 1] ?? "") && /[A-Za-z]/.test(line[i + 1] ?? "");
+      if (!inWord) sq = !sq;
+    }
+    else if (c === '"' && !sq && line[i - 1] !== "\\") dq = !dq;
+    else if (c === "#" && !sq && !dq && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
+  }
+  return line;
+}
+
+/**
+ * Does the workflow carry a `-replace='<server>'` line? Only CODE counts: comments are stripped first, so
+ * a commented-out literal, or one left in prose, cannot satisfy the parity guard with nothing behind it
+ * (#12879, Guard 3). Pure over its input.
+ */
 function hasReplaceLine(workflow: string, server: string): boolean {
   const esc = server.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`-replace=['"]${esc}['"]`).test(workflow);
+  const code = workflow.split("\n").map(stripShellComment).join("\n");
+  return new RegExp(`-replace=['"]${esc}['"]`).test(code);
 }
 
 /**
@@ -682,6 +710,43 @@ describe("feeder guard is load-bearing (non-vacuity, #6537)", () => {
       feeder: { kind: "cron", evidence: { file: ".github/workflows/scheduled-y.yml", pattern: "bash scripts/y-feeder.sh" } },
     };
     expect(checkFeeders([other], wfExists, () => scheduled("      - run: bash scripts/y-feeder.sh\n"), noFeeder)).toEqual([]);
+  });
+});
+
+describe("hasReplaceLine reads code, never comments (Guard 3, #12879)", () => {
+  const x = "hcloud_server.x";
+  test("row 1: the literal on a real line counts", () => {
+    expect(hasReplaceLine("          replace_args=(-replace='hcloud_server.x')\n", x)).toBe(true);
+  });
+  test("row 2: the literal only in a full-line # comment does not count", () => {
+    expect(hasReplaceLine("          # replace_args=(-replace='hcloud_server.x')\n", x)).toBe(false);
+  });
+  test("a trailing comment carrying the literal does not count", () => {
+    expect(hasReplaceLine("          foo # -replace='hcloud_server.x'\n", x)).toBe(false);
+  });
+  test("row 3: a # inside quotes before the literal is not a comment", () => {
+    expect(hasReplaceLine(`          echo "a#b" -replace='hcloud_server.x'\n`, x)).toBe(true);
+  });
+  test("${# (an array length) is not a comment", () => {
+    expect(hasReplaceLine("          [[ ${#a[@]} -gt 0 ]] && x=(-replace='hcloud_server.x')\n", x)).toBe(true);
+  });
+  test("a # inside single quotes is not a comment", () => {
+    expect(hasReplaceLine("          echo 'a #b' -replace='hcloud_server.x'\n", x)).toBe(true);
+  });
+  test("an apostrophe inside a word does not open quote state, so the comment after it is still a comment", () => {
+    expect(hasReplaceLine("      - name: Replace the bastion's host # -replace='hcloud_server.x'\n", x)).toBe(false);
+  });
+  test("control: a quote that opens after = still hides a # (so the apostrophe rule is not a blanket ignore)", () => {
+    expect(hasReplaceLine("          y='it #s' -replace='hcloud_server.x'\n", x)).toBe(true);
+  });
+  test("an empty workflow text matches nothing", () => {
+    expect(hasReplaceLine("", x)).toBe(false);
+  });
+  test("row 4: the real apply workflow's registry and inngest replace lines still count", () => {
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    const servers = MANIFEST.filter((e) => e.arming === "dedicated-host-boot" && e.replace_target).map((e) => e.replace_target!.server);
+    expect(servers.length).toBeGreaterThan(0);
+    for (const s of servers) expect([s, hasReplaceLine(wf, s)]).toEqual([s, true]);
   });
 });
 
