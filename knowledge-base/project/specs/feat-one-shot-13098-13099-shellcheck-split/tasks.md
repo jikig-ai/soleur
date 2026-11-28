@@ -7,13 +7,13 @@ Ordering note: write failing contracts first. Keep the scan-gate change and the 
 
 ## Phase 1 — failing contracts
 
-- [ ] 1.1 Extend `plugins/soleur/skills/review/test/review-scan-gate.test.sh` with hermetic rows for per-file invocation order, findings aggregation across two files, hanging-stub timeout, oversize prefilter, missing `timeout`/`gtimeout`, `gtimeout` fallback, malformed JSON, leading-dash filename handling, and `ok` only when `unscannable=0`.
+- [ ] 1.1 Extend `plugins/soleur/skills/review/test/review-scan-gate.test.sh` with hermetic rows for per-file invocation order, findings aggregation across two files, hanging-stub timeout, missing `timeout`/`gtimeout`, `gtimeout` fallback, malformed JSON, leading-dash filename handling, and `ok` only when `unscannable=0`.
 - [ ] 1.2 Add the driver-embedded structural preamble in RED form, deriving `git ls-files 'tests/scripts/argv-bearer-sweep/*.sh'` and parsing driver source order; the current monolith must fail because no compliant fragment manifest exists yet.
 - [ ] 1.3 Run both focused suites and record the intended RED failure mode before implementation.
 
 ## Phase 2 — bounded scan gate
 
-- [ ] 2.1 Implement timeout-binary resolution (`timeout` then `gtimeout`), 30s/5s bound, the plan's provisional 524,288-byte prefilter, per-file ShellCheck invocation with `--`, per-file JSON parsing, and `scanned=`/`unscannable=` receipt accounting in `plugins/soleur/skills/review/scripts/review-scan-gate.sh`.
+- [ ] 2.1 Implement timeout-binary resolution (`timeout` then `gtimeout`), 30s/5s bound, no byte-size prefilter, per-file ShellCheck invocation with `--`, per-file JSON parsing, and `scanned=`/`unscannable=` receipt accounting in `plugins/soleur/skills/review/scripts/review-scan-gate.sh`.
 - [ ] 2.2 Keep full default ShellCheck analysis; do not pass `--extended-analysis=false` in this implementation.
 - [ ] 2.3 Repair the adjacent double-`mktemp`/`TMP` reassignment so one tempdir owner is covered by one cleanup trap.
 - [ ] 2.4 Update `plugins/soleur/skills/review/SKILL.md`, `plugins/soleur/agents/engineering/review/semgrep-sast.md`, and `plugins/soleur/agents/engineering/review/security-sentinel.md` with unscannable/refuse semantics and the zero-finding interpretation (`ok` + `findings=0` + `unscannable=0`).

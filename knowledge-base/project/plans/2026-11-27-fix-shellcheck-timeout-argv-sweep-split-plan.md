@@ -28,7 +28,7 @@ lane: cross-domain
 
 ### New Considerations Discovered
 
-- `scripts/test-all.sh` (536,454 bytes) completes ShellCheck in about 10.4 seconds locally even though it exceeds the provisional 512 KiB size prefilter. The size-cap threshold is therefore a genuine technical tradeoff, recorded as pending/assumed in `decision-challenges.md` because this harness cannot spawn the CTO agent.
+- `scripts/test-all.sh` (536,454 bytes) completes ShellCheck in about 10.4 seconds locally even though it exceeds the originally considered 512 KiB size prefilter. The CTO ruling therefore rejects every byte-size prefilter for this PR: the timeout is the semantic bound, and scan coverage fails closed only on actual noncompletion or scanner-execution failure.
 - ShellCheck upstream documents whole-program dataflow analysis as the memory blow-up mechanism. Local measurement confirms `--extended-analysis=false` lets the monolith finish in about 5 seconds, at the cost of checks such as SC2317/SC2319/SC2324.
 - `review-scan-gate.sh` currently creates a first temporary directory and then reassigns `TMP`, orphaning the first directory on normal scans; the implementation phase folds in that one-line cleanup adjacency because the scan loop is already being rewritten.
 
@@ -54,7 +54,7 @@ Reviewed-Coverage: sequential-fallback — this depth-1 Devin harness has no nes
 
 1. The review scan gate must always terminate with its documented receipt contract, even when one shell input is pathological.
 2. Every classified shell input must either be actually scanned or make the receipt fail closed; an `ok` receipt must never silently omit coverage.
-3. A timeout or oversize input must produce operator-visible evidence naming the input and reason, not a silent skip or an unbounded process.
+3. A timeout, malformed scanner result, missing timeout binary, or scanner-execution failure must produce operator-visible evidence naming the input and reason, not a silent skip or an unbounded process.
 4. The argv-bearer suite must be split into ShellCheck-processable fragments without changing row execution order, shared counters, or the exact `EXPECTED_TESTS` floor semantics.
 5. The split must preserve the floor-history convention and the suite's hermetic properties: synthesized fixtures only, no network, no real credential reads.
 6. The combined diff must keep the review scan gate's ADR-324 evidence model honest: scanned means scanned, and unscannable means refusal rather than a clean-scan claim.
@@ -64,7 +64,7 @@ Reviewed-Coverage: sequential-fallback — this depth-1 Devin harness has no nes
 - No new autonomous scheduler, cron, workflow, or service — buys no property in the list; the defect is local scan/test machinery and existing local scripts cover it.
 - No repo-wide ShellCheck adoption expansion — ADR-129 already declined that unrelated adoption; the existing review scan arm is the only scan surface in scope.
 - No rewrite of the argv-bearer assertions — the ask is a structural split preserving behavior, not a redesign of the security battery.
-- No memory-cgroup or containerization mechanism — a memory bound buys protection but adds platform-specific machinery; the requested timeout plus size bound covers the pipeline-wedge property with less mechanism.
+- No memory-cgroup or containerization mechanism — a memory bound buys protection but adds platform-specific machinery; the requested timeout covers the pipeline-wedge property with less mechanism.
 - No independent per-fragment test runner — fragments share counters and helpers by design; a driver preserving the original source order covers the property with less behavior risk.
 
 ### Repository Research Summary
@@ -106,7 +106,7 @@ The file has no single uniform 80-100 KB cut: most natural stages are 15-60 KB, 
 
 `git ls-files '*.sh` currently yields 1,988 shell files. Largest sizes include `apps/web-platform/infra/ci-deploy.test.sh` (907,186 bytes), `tests/scripts/test-argv-bearer-sweep.sh` (729,734), `scripts/test-all.sh` (536,454), `apps/web-platform/infra/ci-deploy.sh` (422,652), and `apps/web-platform/infra/cutover-inngest-workflow.test.sh` (399,438). Counts above candidate caps: 197 files over 64 KiB, 61 over 128 KiB, 12 over 256 KiB, 3 over 512 KiB.
 
-Deepen-pass local probes on 2026-11-28, all with full default ShellCheck analysis and a 15-second `timeout -k 2s` envelope: `apps/web-platform/infra/ci-deploy.sh` completed in 9.09s with rc=1 (findings); `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` completed in 4.32s with rc=1; `scripts/test-all.sh` completed in 10.43s with rc=1 despite exceeding 512 KiB; `apps/web-platform/infra/ci-deploy.test.sh`, `apps/web-platform/infra/cutover-inngest-workflow.test.sh`, and the argv-bearer monolith hit the 15-second bound. This proves size alone is an imperfect predictor: the provisional 512 KiB cap would refuse one actively edited file that can complete. The timeout is therefore the semantic bound; the size prefilter remains a provisional technical tradeoff rather than established fact.
+Deepen-pass local probes on 2026-11-28, all with full default ShellCheck analysis and a 15-second `timeout -k 2s` envelope: `apps/web-platform/infra/ci-deploy.sh` completed in 9.09s with rc=1 (findings); `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` completed in 4.32s with rc=1; `scripts/test-all.sh` completed in 10.43s with rc=1 despite exceeding 512 KiB; `apps/web-platform/infra/ci-deploy.test.sh`, `apps/web-platform/infra/cutover-inngest-workflow.test.sh`, and the argv-bearer monolith hit the 15-second bound. This proves size alone is an imperfect predictor: the originally considered 512 KiB cap would refuse one actively edited file that can complete. The CTO ruling therefore makes timeout the only semantic input bound; no byte-size prefilter is used.
 
 A deepen-pass extraction probe prepended only `# shellcheck shell=bash` to representative planned fragments and ran full ShellCheck analysis: fragment 01 (94,525 bytes) completed in about 2s with 32 findings; fragment 05 (91,388) in about 1s with 68 findings; fragment 06 (84,246) in about 2s with 38 findings; fragment 10 (55,176) in about 1s with 67 findings. This establishes the split feasibility point: fragments are individually parseable and complete quickly, but the plan must disclose pre-existing warning/style noise rather than rewriting assertions to silence it.
 
@@ -135,7 +135,7 @@ The word `timeout` triggered the network-outage checklist, but the measured inci
 3. **L7 TLS/proxy layer** — opted out: no HTTPS endpoint participates in the scan; verification artifact is the local invocation in `review-scan-gate.sh`.
 4. **L7 application/service layer** — verified by shape rather than host logs: the affected service is the scan gate process itself; evidence is the unbounded `shellcheck -f json` call and issue-measured nontermination.
 5. **Primary hypothesis** — one or more very large/complex shell inputs drive superlinear ShellCheck analysis; a single multi-file invocation means one input can starve or wedge the entire receipt.
-6. **Secondary hypothesis** — splitting the monolith reduces input size enough for ShellCheck to complete, while per-file timeout/size classification bounds the residual pathological-input class.
+6. **Secondary hypothesis** — splitting the monolith reduces input size enough for ShellCheck to complete, while per-file timeout classification bounds the residual pathological-input class.
 
 ## Problem Statement
 
@@ -145,7 +145,7 @@ The argv-bearer conversion battery is the known pathological input. It is a 729,
 
 ## Proposed Solution
 
-1. Change the ShellCheck arm of `review-scan-gate.sh` from one unbounded multi-file invocation to a per-file bounded loop. Each shell file is scanned with full default analysis via `timeout -k 5s 30s shellcheck -f json -- <file>` (or `gtimeout` on hosts where that is the coreutils binary). A file larger than 512 KiB is not scanned. A timeout, oversize input, malformed scanner output, missing timeout binary, or unexpected scanner status makes the gate emit `refuse` with trailing `scanned=<n> unscannable=<n>` fields and a `file:0 unscannable-timeout` or `file:0 unscannable-size` evidence row. `files=` remains the classified target count; `scanned=` counts shell files ShellCheck actually completed on. Shell-involving `ok` receipts carry the same two fields so consumers can audit coverage directly; `ok` is possible only when every classified shell file was scanned and `unscannable=0`.
+1. Change the ShellCheck arm of `review-scan-gate.sh` from one unbounded multi-file invocation to a per-file bounded loop. Each shell file is scanned with full default analysis via `timeout -k 5s 30s shellcheck -f json -- <file>` (or `gtimeout` on hosts where that is the coreutils binary). No byte-size prefilter is used. A timeout, malformed scanner output, missing timeout binary, or unexpected scanner status makes the gate emit `refuse` with trailing `scanned=<n> unscannable=<n>` fields and a `file:0 unscannable-timeout`, `file:0 unscannable-malformed-json`, `file:0 unscannable-timeout-binary-missing`, or `file:0 unscannable-scanner-status` evidence row. `files=` remains the classified target count; `scanned=` counts shell files ShellCheck actually completed on. Shell-involving `ok` receipts carry the same two fields so consumers can audit coverage directly; `ok` is possible only when every classified shell file was scanned and `unscannable=0`.
 2. Preserve scan findings as non-blocking `file:line rule-id` rows. Real ShellCheck findings still do not stop review; unscannable inputs do stop review because coverage evidence would otherwise be false.
 3. Rewrite `tests/scripts/test-argv-bearer-sweep.sh` as the stable driver for the same suite registration. The driver keeps the core harness/prelude and final verdict inline, sources ten fragments in exact original order, and preserves the global `pass`/`fail`/`CASES` counters and reporting helpers by sourcing in one shell process.
 4. Embed a small structural preamble in the driver proving that it sources every tracked fragment exactly once, in dependency order, and that no source statement is conditional. Keeping this check inside the already-registered suite avoids editing the oversize `scripts/test-all.sh` runner in the same PR that makes the scan gate refuse oversize shell inputs. The exact row-count floor remains the behavioral anti-truncation guard.
@@ -157,9 +157,9 @@ The argv-bearer conversion battery is the known pathological input. It is a 729,
 
 - Resolve a timeout binary once: `timeout` first, `gtimeout` second; refuse when neither exists.
 - Use 30 seconds as the per-file wall-clock budget and a 5-second kill grace (`timeout -k 5s 30s shellcheck -f json -- "$file"`; `--` is supported by local ShellCheck 0.11.0 and prevents path-shaped option injection). Evidence: the 422,652-byte `ci-deploy.sh` completed in 9.09s, the 261,363-byte `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` in 4.32s, and the 536,454-byte `scripts/test-all.sh` in 10.43s during full-analysis deepen probes; 30s is roughly 3x the slower measured completion while avoiding the issue's example of a two-minute stall per file.
-- Do not pass `--extended-analysis=false` in the default scan. Upstream and local evidence says it avoids the memory blow-up, but it disables control-flow-dependent checks; a degraded-analysis fallback would need an explicit receipt marker and a CTO ruling, and is out of this plan's default.
+- Do not pass `--extended-analysis=false` in the default scan. Upstream and local evidence says it avoids the memory blow-up, but it disables control-flow-dependent checks; the CTO ruling rejects degraded-analysis fallback for this PR because the receipt must not silently mean weaker evidence.
 - Repair the adjacent double-`mktemp` defect while rewriting this block: the current script creates one temporary directory before `--probe` handling and then reassigns `TMP`, orphaning the first directory on every normal scan. Keep one tempdir owner and one cleanup trap.
-- Use 512 KiB (524,288 bytes) as the provisional size bound. Evidence: only three tracked shell files exceed it, including the 729,734-byte pathological monolith and the 907,186-byte `ci-deploy.test.sh`; the 422,652-byte production script completed in 9.09s. Counterevidence: the 536,454-byte `test-all.sh` also exceeds the cap yet completed in 10.43s, so the cap is a conservative complexity/memory prefilter rather than a nontermination predictor. The timeout remains the semantic bound, and the cap choice is recorded as pending/assumed pending CTO availability.
+- Use no byte-size prefilter. The CTO ruling rejected 512 KiB and every other byte threshold because the corpus measurements show size is not a reliable nontermination predictor: `scripts/test-all.sh` exceeds 512 KiB yet completes in 10.43s, while a smaller cutover test hit the probe bound. The timeout is the semantic bound; every classified shell input is attempted and any actual noncompletion or scanner-execution failure refuses closed.
 - Preserve the existing rc=0/rc=1 ShellCheck distinction: both mean the process completed; rc=1 carries findings. Timeout statuses (notably 124 and kill-mediated 137) and all other unexpected statuses fail closed.
 - Aggregate findings across per-file JSON arrays without concatenating raw arrays as one document. Each completed file's JSON is parsed independently and normalized into the existing `file:line rule-id` output.
 - Keep paths as supplied by the caller, but document/verify that the review skill passes repo-worktree paths. Do not reimplement the unrelated relative-path defect tracked in #12779.
@@ -187,19 +187,19 @@ Each fragment begins with `# shellcheck shell=bash` and a comment stating that i
 
 ### Structural verification
 
-Embed the structural preamble in `tests/scripts/test-argv-bearer-sweep.sh` before the first fragment source. It derives the tracked fragment population with `git ls-files 'tests/scripts/argv-bearer-sweep/*.sh'`, parses the driver's unconditional `source` statements, and asserts exact set-and-order equality. Its mutation matrix covers a missing fragment, an extra fragment, a reorder, a conditional source, and a second source of one fragment. It is deliberately not a separate `test-*.sh` suite: registering one would require editing `scripts/test-all.sh`, currently 536,454 bytes and therefore an unscannable input under this PR's own 512 KiB scan-gate prefilter. Running the structural check inside the existing argv-bearer suite preserves coverage without creating that self-refusal.
+Embed the structural preamble in `tests/scripts/test-argv-bearer-sweep.sh` before the first fragment source. It derives the tracked fragment population with `git ls-files 'tests/scripts/argv-bearer-sweep/*.sh'`, parses the driver's unconditional `source` statements, and asserts exact set-and-order equality. Its mutation matrix covers a missing fragment, an extra fragment, a reorder, a conditional source, and a second source of one fragment. It is deliberately not a separate `test-*.sh` suite: registering one would add a second runner surface that could itself be omitted, misregistered, or bypassed when the driver is invoked directly. Running the structural check inside the existing argv-bearer suite keeps exact set/order validation adjacent to the only supported entry point.
 
 ## Implementation Phases
 
 ### Phase 1: Failing contracts first
 
-- Extend `plugins/soleur/skills/review/test/review-scan-gate.test.sh` with hermetic failing rows before editing the gate: per-file invocation order, a hanging ShellCheck stub classified as timeout, an oversize fixture refused without invoking ShellCheck, a missing timeout binary refusal, scanner output aggregation across two files, and proof that an `ok` receipt is impossible when any input is unscannable.
+- Extend `plugins/soleur/skills/review/test/review-scan-gate.test.sh` with hermetic failing rows before editing the gate: per-file invocation order, a hanging ShellCheck stub classified as timeout, a missing timeout binary refusal, scanner output aggregation across two files, and proof that an `ok` receipt is impossible when any input is unscannable.
 - Add the driver-embedded structural contract in RED form before the split: the current monolith fails because the fragment directory is absent and the required source manifest does not yet exist.
 - Success criteria: the new tests fail for the intended reason against the unmodified tree; no production/test script code has yet been changed.
 
 ### Phase 2: Bound the scan gate
 
-- Implement the per-file timeout/size loop in `review-scan-gate.sh`.
+- Implement the per-file timeout loop in `review-scan-gate.sh`.
 - Update `plugins/soleur/skills/review/SKILL.md` and the receipt consumers only as needed to document `scanned=`/`unscannable=` and the fail-closed unscannable semantics.
 - Amend ADR-324's Decision/Consequences in place.
 - Success criteria: the hermetic scan-gate suite is green; a hanging stub never outlives the configured bound; findings from two completed shell files aggregate in input order.
@@ -223,8 +223,7 @@ Embed the structural preamble in `tests/scripts/test-argv-bearer-sweep.sh` befor
 |---|---|---|
 | Keep one ShellCheck invocation and wrap only that invocation in `timeout` | Rejected | One timeout still cannot identify the pathological file cleanly, loses findings for every later file, and does not bound memory before the timeout. |
 | Mark unscannable files as warnings but emit `ok` | Rejected | ADR-324's evidence contract would become false: `ok` would no longer mean every classified shell input was scanned. |
-| Size cap at 128 or 256 KiB | Rejected as overbroad | 61 or 12 tracked shell files would be refused, including measured files that complete; 512 KiB catches the three extreme inputs while timeout covers nonlinear smaller cases. |
-| No size cap, timeout only | Rejected provisionally | It is simpler and avoids false refusals, but a known 730 KB input would still burn up to the full timeout and memory budget on every review that touches it. The cap is cheap disclosure before analysis starts. Deepen evidence shows the cap is a genuine tradeoff (`scripts/test-all.sh` completes despite exceeding 512 KiB), so this row remains tied to the pending CTO-ruling assumption rather than a settled certainty. |
+| Any byte-size prefilter (128, 256, 512 KiB, or another threshold) | Rejected by CTO ruling | Size is neither a necessary nor sufficient predictor in the measured corpus: `scripts/test-all.sh` exceeds 512 KiB yet completes, while a smaller cutover test hit the probe bound. The timeout is the semantic bound; a byte threshold only adds false refusals without measuring memory harm. |
 | Scan with `--extended-analysis=false` | Rejected for this plan | It makes the monolith finish locally in about 5s, but upstream says control-flow-dependent checks such as SC2317/SC2319/SC2324 no longer fire. Silent degradation would make the scan evidence weaker than the receipt implies; any explicit degraded-analysis fallback is a separate CTO-ruled design. |
 | Split into independently runnable suites | Rejected | The issue itself notes shared counters/helpers; duplicating harness setup or inventing per-fragment counter plumbing is higher risk than ordered sourcing in one process. |
 | Keep the monolith and add `# shellcheck disable=all` | Rejected | #13098 measured that this does not help because parse/analysis cost occurs before checks are disabled. |
@@ -280,8 +279,8 @@ failure_modes:
   - mode: ShellCheck hangs on one input
     detection: timeout status produces an unscannable-timeout row and refuse receipt
     alert_route: review phase stops before seats; CI red if exercised in test
-  - mode: oversized shell input enters the diff
-    detection: size prefilter produces an unscannable-size row and refuse receipt
+  - mode: shell input does not complete or scanner execution fails
+    detection: timeout/scanner classification produces an unscannable row and refuse receipt
     alert_route: review phase stops before seats; CI red if exercised in test
   - mode: argv-bearer fragment omitted or source order drift
     detection: driver structural exact set/order assertion plus EXPECTED_TESTS exact floor
@@ -298,7 +297,7 @@ discoverability_test:
 
 ### ADR
 
-Amend `knowledge-base/engineering/architecture/decisions/ADR-324-review-scan-evidence-is-the-orchestrator-read.md` in this PR. The amendment states that ShellCheck evidence is a per-file completion set bounded by timeout/size classification; `ok` requires `scanned` equal to the classified shell count and `unscannable=0`; timeout/oversize inputs are measured refusals, not silent findings-free scans.
+Amend `knowledge-base/engineering/architecture/decisions/ADR-324-review-scan-evidence-is-the-orchestrator-read.md` in this PR. The amendment states that ShellCheck evidence is a per-file completion set bounded by timeout and scanner-execution classification; `ok` requires `scanned` equal to the classified shell count and `unscannable=0`; timeout or scanner-execution failures are measured refusals, not silent findings-free scans.
 
 ### C4 views
 
@@ -312,16 +311,16 @@ The ADR amendment lands in the same commit series as the scan-gate contract chan
 
 ### Guard 1 — bounded ShellCheck scan receipt
 
-**Property.** Every classified shell input either completes ShellCheck within the declared timeout/size envelope and contributes its findings, or the scan gate emits a fail-closed `refuse` receipt naming that input as unscannable.
+**Property.** Every classified shell input either completes ShellCheck within the declared timeout envelope and contributes its findings, or the scan gate emits a fail-closed `refuse` receipt naming that input as unscannable.
 
-**Assembly.** The chokepoint is the single ShellCheck arm in `plugins/soleur/skills/review/scripts/review-scan-gate.sh`, through which every shell path classified from the review range must pass; the contract covers the timeout-binary resolution, size prefilter, per-file invocation loop, per-file JSON parsing, receipt emission, and evidence rows.
+**Assembly.** The chokepoint is the single ShellCheck arm in `plugins/soleur/skills/review/scripts/review-scan-gate.sh`, through which every shell path classified from the review range must pass; the contract covers the timeout-binary resolution, per-file invocation loop, per-file JSON parsing, receipt emission, and evidence rows.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
 | 1 | Remove the timeout wrapper from the per-file invocation while using a hanging ShellCheck stub | RED |
-| 2 | Raise the size comparison so an oversize fixture is scanned rather than classified | RED |
+| 2 | Treat timeout status 124 as a completed scan rather than an unscannable timeout | RED |
 | 3 | Make the loop stop after the first shell input when a compliant first input is followed by a second input | RED |
 | 4 | Emit `ok` when `unscannable > 0` | RED |
 | 5 | Count a classified input in `files` without attempting or accounting for it in `scanned`/`unscannable` | RED |
@@ -334,7 +333,7 @@ The ADR amendment lands in the same commit series as the scan-gate contract chan
 
 **Property.** The stable driver sources exactly the tracked argv-bearer fragment set once each, unconditionally and in dependency order, while preserving one shared counter/verdict process and the exact test-count floor.
 
-**Assembly.** The chokepoints are the driver `tests/scripts/test-argv-bearer-sweep.sh` (the only suite entry point), the structural preamble in that driver, the source manifest in that driver, the tracked fragment glob `tests/scripts/argv-bearer-sweep/*.sh`, and the final `EXPECTED_TESTS` verdict. There is intentionally no second registered suite because the runner itself is oversize under the scan-gate prefilter.
+**Assembly.** The chokepoints are the driver `tests/scripts/test-argv-bearer-sweep.sh` (the only suite entry point), the structural preamble in that driver, the source manifest in that driver, the tracked fragment glob `tests/scripts/argv-bearer-sweep/*.sh`, and the final `EXPECTED_TESTS` verdict. There is intentionally no second registered suite because the driver is already the only supported suite entry point and a second registration surface adds drift without strengthening the invariant.
 
 **Mutation matrix:**
 
@@ -361,7 +360,7 @@ None. The deepen pass re-ran the prescribed two-stage open `code-review` issue q
 | # | User ask (verbatim) | Plan item | Status |
 |---|---------------------|-----------|--------|
 | 1 (#13098) | "Per-file `timeout` (e.g. `timeout 120 shellcheck -f json <file>`) looped over `shells[@]`, aggregating JSON; a timed-out file emits a dedicated `refuse`-adjacent receipt token or a documented `unscannable` row in the findings output rather than hanging the whole gate." | FR-1 / Phase 2 / `review-scan-gate.sh` | mapped |
-| 2 (#13098) | "Optionally a size cap marking files >N bytes `unscannable` with disclosure in the receipt." | FR-2 / Phase 2 / `review-scan-gate.sh` | mapped |
+| 2 (#13098) | "Optionally a size cap marking files >N bytes `unscannable` with disclosure in the receipt." | Evaluated in Alternative Approaches; rejected by CTO ruling in favor of timeout-only coverage accounting | mapped |
 | 3 (#13099) | "Split along the existing stage boundaries (`stage S1` … `stage S9` + the verdict/floor block) into ~8-10 fragments of ~80-100KB" | FR-3 / Phase 3 / ten fragments + driver | mapped |
 | 4 (#13099) | "Constraint: fragments share `pass`/`fail`/`CASES` and the reporting helpers (`row`, `s9_*`, etc.) — they are not independently runnable suites. Use a driver that `source`s fragments, or per-fragment counters plumbed back." | FR-4 / driver architecture / structural preamble | mapped |
 | 5 (#13099) | "Keep `EXPECTED_TESTS` floor semantics and the floor-history comment convention (each PR's delta + measured count)." | FR-5 / verdict retention / AC | mapped |
@@ -373,7 +372,7 @@ None. The deepen pass re-ran the prescribed two-stage open `code-review` issue q
 | Plan item | User words cited (verbatim quote) | Verdict |
 |-----------|-----------------------------------|---------|
 | Per-file timeout loop | "Per-file `timeout` … looped over `shells[@]`, aggregating JSON" | asked |
-| Oversize classification | "Optionally a size cap marking files >N bytes `unscannable` with disclosure in the receipt." | asked |
+| Size-cap evaluation | "Optionally a size cap marking files >N bytes `unscannable` with disclosure in the receipt." | asked — evaluated and rejected by CTO ruling because byte size is not a reliable nontermination predictor |
 | Fail-closed `refuse` on unscannable | "a dedicated `refuse`-adjacent receipt token or a documented `unscannable` row" | inferred — justification: an `ok` receipt would falsely certify unscanned coverage under ADR-324; fail-closed is the strict reading of the cited ask |
 | Ten sourced fragments | "Split along the existing stage boundaries" | asked |
 | Driver preserving shared counters | "Use a driver that `source`s fragments" | asked |
@@ -382,7 +381,7 @@ None. The deepen pass re-ran the prescribed two-stage open `code-review` issue q
 | `scripts/lib/test-affected-paths.sh` update | — | inferred — justification: otherwise edits to new fragments may not select the suite that covers them; the edge uses the directory prefix because the fragment population is derived, not a fixed member list |
 | receipt-consumer agent updates | — | inferred — justification: `semgrep-sast` and `security-sentinel` state the zero-finding evidence contract and must not keep quoting the pre-amendment shape |
 | double-`mktemp` repair | — | inferred — justification: the scan loop rewrite owns the tempdir lifecycle it depends on; leaving a known orphaned directory in the same block would be a false cleanup claim |
-| driver-embedded structural preamble instead of a separately registered suite | — | inferred — justification: embedding avoids a new registration surface and keeps the source-manifest check beside the only supported suite entry point; under the provisional 512 KiB cap it also avoids editing oversize `scripts/test-all.sh` in this PR |
+| driver-embedded structural preamble instead of a separately registered suite | — | inferred — justification: embedding avoids a new registration surface and keeps the source-manifest check beside the only supported suite entry point |
 | baseline updates | — | inferred — justification: keyed baselines must move with the content or their census guards red/stale |
 | single PR despite large diff | "#13098, #13099 in one PR" | asked |
 
@@ -398,7 +397,7 @@ None. The deepen pass re-ran the prescribed two-stage open `code-review` issue q
 ### Functional Requirements
 
 - [ ] FR-1. `review-scan-gate.sh` invokes ShellCheck at most once per shell input, with a 30-second timeout and 5-second kill grace via `timeout` or `gtimeout`; no single input can prevent receipt emission.
-- [ ] FR-2. A shell input over 524,288 bytes is classified `unscannable-size` without invoking ShellCheck on it; a timeout is classified `unscannable-timeout`; either condition yields a `refuse` receipt carrying `scanned=` and `unscannable=` plus an evidence row naming the file.
+- [ ] FR-2. Every classified shell input is attempted under the per-file timeout with no byte-size prefilter; a timeout, malformed scanner output, missing timeout binary, or unexpected scanner status is classified as unscannable and yields a `refuse` receipt carrying `scanned=` and `unscannable=` plus an evidence row naming the file.
 - [ ] FR-3. A shell-involving `ok` receipt carries `scanned=` and `unscannable=`, and is emitted only when every classified shell input completed ShellCheck and `unscannable=0`; completed rc=0/rc=1 results still aggregate findings as `file:line rule-id` rows.
 - [ ] FR-4. `tests/scripts/test-argv-bearer-sweep.sh` remains the registered suite entry point and sources exactly ten fragments in original dependency order; fragments share the same `pass`, `fail`, `CASES`, `row`, scratch, shim, and helper state in one shell process.
 - [ ] FR-5. The split is mechanically faithful: apart from driver source statements and fragment header comments, extracted fragment content matches the pre-split contiguous ranges; no assertion body is rewritten intentionally.
@@ -430,8 +429,7 @@ None. The deepen pass re-ran the prescribed two-stage open `code-review` issue q
 - Given one small shell file and a ShellCheck stub that exits 0, when the gate runs, then the receipt is `ok`, `scanned=1`, `unscannable=0`, and the stub saw exactly one invocation. [unit]
 - Given two shell files where the first is clean and the second emits one finding, when the gate runs, then both are invoked in order and the finding survives aggregation. [unit]
 - Given a ShellCheck stub that never exits, when the gate runs, then the gate terminates before the test timeout and emits `refuse` plus `unscannable-timeout` naming the file. [unit]
-- Given a shell file of 524,289 bytes, when the gate runs, then ShellCheck is not invoked for it and the receipt refuses with `unscannable-size`. [unit]
-- Given a shell file of 524,288 bytes, when the gate runs with a completing stub, then it is scanned rather than size-refused. [unit]
+- Given a shell file larger than 524,288 bytes, when the gate runs with a completing stub, then it is still invoked under the timeout because no byte-size prefilter exists. [unit]
 - Given neither `timeout` nor `gtimeout` on PATH, when a shell input is present, then the gate refuses before scanning rather than invoking ShellCheck unbounded. [unit]
 - Given `timeout` absent but a working `gtimeout` on PATH, when a shell input is present, then the gate uses `gtimeout` and records the same bounded receipt contract. [unit]
 - Given a shell filename beginning with `-`, when the gate invokes ShellCheck, then the `--` separator prevents option injection and the file is still scanned or explicitly refused. [unit]
@@ -483,7 +481,7 @@ No external service verification. Local deterministic commands only:
 | Split updates security baselines incorrectly | Update only keys whose content moved; run the owning census suites. |
 | Foreign full-test battery contention | The foreign processes observed in the first pass have exited; re-check before implementation and rely on focused suites plus CI if new contention appears. |
 | Upstream movement invalidates line-number extraction or secondary-file hunks | Rebase before implementation, re-measure the boundary text, and treat the line ranges as extraction coordinates rather than immutable anchors. |
-| The provisional 512 KiB prefilter refuses a large file that would have completed (`scripts/test-all.sh` measured 10.43s) | Record the tradeoff visibly in the receipt; do not silently lower scan coverage. The threshold remains pending/assumed pending CTO availability, with timeout as the semantic protection. |
+| A large but valid shell file times out on a saturated host | Keep the refusal visible and evidence-bearing; re-measure the timeout budget only if repeatable false timeouts appear on ordinary hosts. No byte-size prefilter is used because the CTO ruling found it a false complexity proxy. |
 
 ## Resource Requirements
 
@@ -517,7 +515,7 @@ No cross-domain user-facing, legal, finance, sales, support, operations, or mark
 
 ## SpecFlow Analysis
 
-Sequential inline fallback of `soleur:product:spec-flow-analyzer`: the critical flows are (a) clean shell input → per-file scan → findings aggregation → `ok`; (b) hanging input → timeout → evidence row → `refuse`; (c) oversize input → no scanner invocation → evidence row → `refuse`; (d) missing timeout binary → immediate `refuse`; (e) tracked fragment added but unsourced → structural RED; (f) all fragments present in order → one shared process → exact floor → green. Edge cases covered in Test Scenarios include malformed JSON, deleted paths, rc=1 findings, mixed source/shell scans, and boundary size equality. No dead-end state may produce `ok` with `unscannable>0`.
+Sequential inline fallback of `soleur:product:spec-flow-analyzer`: the critical flows are (a) clean shell input → per-file scan → findings aggregation → `ok`; (b) hanging input → timeout → evidence row → `refuse`; (c) malformed scanner output or missing timeout binary → evidence row → `refuse`; (d) tracked fragment added but unsourced → structural RED; (e) all fragments present in order → one shared process → exact floor → green. Edge cases covered in Test Scenarios include malformed JSON, deleted paths, rc=1 findings, mixed source/shell scans, and large-file scanning without a byte-size prefilter. No dead-end state may produce `ok` with `unscannable>0`.
 
 ## Scoped Advisor Consult
 
