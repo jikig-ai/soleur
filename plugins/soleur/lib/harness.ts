@@ -20,7 +20,7 @@ import {
   PLUGIN_ROOT,
 } from "./agent-registry";
 import { cursorAgentSlash, cursorSkillSlash } from "../scripts/sync-cursor-name-map";
-import { behindSyncInstructions } from "./pr-merge-poll";
+import { behindSyncInstructions, GH_STDOUT_ONLY_READ } from "./pr-merge-poll";
 import { pipelineInvocationSuffix, workflowFidelityInstructions } from "./workflow-fidelity";
 
 export type Harness = "claude" | "grok" | "codex" | "devin" | "cursor" | "opencode" | "antigravity" | "unknown";
@@ -478,6 +478,7 @@ export function pollInstructions(harness: Harness): string {
         "**Merge/deploy polling (Codex)**",
         "- Use exec_command for bounded status probes; resume yielded shell sessions with write_stdin.",
         "- Poll PR state and mergeStateStatus, resolve BEHIND in the PR worktree before continuing (except when `main` has a merge queue and the PR is armed (the Phase 7 poll prints `[ship.phase7.queue_wait]`): GitHub then enqueues it).",
+        `- ${GH_STDOUT_ONLY_READ}`,
         "- Keep waiting through merge and release completion; load $soleur:postmerge before declaring completion.",
         behind,
       ].join("\n");
@@ -486,6 +487,7 @@ export function pollInstructions(harness: Harness): string {
       return [
         "**Merge/deploy polling (Claude Code)**",
         "- Poll `gh pr view --jq '.state,.mergeStateStatus'` — not checks alone.",
+        `- ${GH_STDOUT_ONLY_READ}`,
         "- Use the **Monitor tool**, and prefer the canonical loop over hand-rolling one:",
         "  `Monitor({command: \"bash plugins/soleur/scripts/monitor-pr-checks.sh <PR>\",",
         "  persistent: true, description: \"PR #<N> checks\"})`.",
@@ -533,6 +535,7 @@ export function pollInstructions(harness: Harness): string {
       return [
         "**Merge/deploy polling (Grok Build)**",
         "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
+        `- ${GH_STDOUT_ONLY_READ}`,
         "- Use **Shell** with adequate `block_until_ms` for short `gh` probes.",
         "- Use **AwaitShell** with `pattern` for long loops — match `MERGED`, `BEHIND detected`, `auto-sync.*pushed`, `BEHIND resolved`, `Merge poll timed out`, `\\[ship\\.phase7\\.`, `\\[pr-behind-sync\\] kind=`, `postmerge verification complete`.",
         "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
@@ -546,6 +549,7 @@ export function pollInstructions(harness: Harness): string {
       return [
         "**Merge/deploy polling (Devin CLI)**",
         "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
+        `- ${GH_STDOUT_ONLY_READ}`,
         "- Use **exec** with adequate timeout for short `gh` probes.",
         // SOLEUR-DEBT: partially live-verified. Measured 2026-09-23 on Devin CLI
         // 3000.11.1 (authenticated, `devin -p` in a scratch repo): `run_subagent` DOES
@@ -587,6 +591,7 @@ export function pollInstructions(harness: Harness): string {
       return [
         "**Merge/deploy polling (Antigravity CLI)**",
         "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
+        `- ${GH_STDOUT_ONLY_READ}`,
         "- Launch background status checks via **run_command** (with `IsDaemon: false` and check progress via **manage_task**) or schedule wakeups using the **schedule** tool (`DurationSeconds` with `TimerCondition: 'never'` or task ID).",
         "- Antigravity provides native reactive wakeup on background task or subagent completion; NEVER run blocking sleep loops in the foreground.",
         "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
@@ -600,6 +605,7 @@ export function pollInstructions(harness: Harness): string {
       return [
         "**Merge/deploy polling (OpenCode)**",
         "- Poll `gh pr view --json state,mergeStateStatus` on every tick — **pending checks alone miss BEHIND**.",
+        `- ${GH_STDOUT_ONLY_READ}`,
         "- Use the **shell** tool with bounded `gh` probes. No wait primitive is measured on this harness (no Monitor, no AwaitShell), so run the canonical sync block itself inside a bounded foreground loop with a deadline exit and a probe-error exit.",
         "- NEVER ask the operator to monitor merge, CI, or deploy — you own the wait.",
         "- After `ship` merges: poll the release workflows, invoke `postmerge`, then emit `<promise>DONE</promise>` (advisory on this harness — ADR-291 D3).",
@@ -612,6 +618,7 @@ export function pollInstructions(harness: Harness): string {
       return [
         "**Merge/deploy polling**",
         "- Poll PR state + mergeStateStatus; resync on BEHIND before watching checks (except when `main` has a merge queue and the PR is armed (the Phase 7 poll prints `[ship.phase7.queue_wait]`): GitHub then enqueues it).",
+        `- ${GH_STDOUT_ONLY_READ}`,
         "- Invoke postmerge verification before declaring done.",
         "",
         behind,

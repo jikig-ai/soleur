@@ -1,17 +1,23 @@
 import { describe, test, expect } from "bun:test";
-import { readFileSync, readdirSync } from "fs";
-import { resolve } from "path";
+import { execFileSync } from "child_process";
+import { readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { dirname, join, resolve } from "path";
 import {
   isBehindPollState,
   isTerminalPollState,
   shouldResyncBeforePoll,
   behindSyncInstructions,
+  parsePrPollRead,
+  GH_ERR_LINE_MAX,
   PR_BEHIND_SYNC_SENTINEL,
   MERGE_STATE_BEHIND,
   MERGE_STATE_DIRTY,
   formatPrPollState,
 } from "../lib/pr-merge-poll";
-import { pollInstructions } from "../lib/harness";
+import { pollInstructions, type Harness } from "../lib/harness";
+import { gitCleanEnv } from "./lib/git-clean-env";
+import { gitFixture } from "./lib/git-fixture-env";
 
 const PLUGIN_ROOT = resolve(import.meta.dir, "..");
 
@@ -315,5 +321,359 @@ describe("pr-merge-poll sentinel markers", () => {
     const ship = readFileSync(resolve(PLUGIN_ROOT, "skills/ship/SKILL.md"), "utf-8");
     expect(ship).toContain("sync-pr-behind.sh");
     expect(ship).toContain("pr-merge-poll.ts");
+  });
+});
+// ── Defect 1 (#12697): stdout is the answer, stderr is the diagnostic ─────────────────────────────────
+// gh 2.106.0 prints an 8-line `hint: … gh event listen …` block on STDERR for every `gh pr view`, rc 0, BEFORE stdout. Under
+// `2>&1` the capture's first line is that hint, so every OPEN branch of the Phase 7 poll misread the state. The fixture is the
+// real block with a synthesized PR number, shared with the fence, sync and operator-gate suites.
+const HINT = readFileSync(resolve(PLUGIN_ROOT, "test/fixtures/gh-pr-view-hint.txt"), "utf-8").replace(/\n$/, "");
+
+describe("parsePrPollRead: stdout is the answer, stderr only names a failure", () => {
+  test("the shared hint fixture has the measured shape (one `hint:` line, then indented lines), so these rows are not vacuous", () => {
+    const lines = HINT.split("\n");
+    expect(lines.length).toBe(8);
+    expect(lines[0].startsWith("hint:")).toBe(true);
+    for (const l of lines.slice(1)) expect(l).toMatch(/^\s+\S/);
+    expect(HINT).toContain("gh event listen");
+  });
+
+  test("rc 0: a hint and a warning on stderr leave the state unchanged (the falsifiable case: a merged-stream reader fails it)", () => {
+    expect(parsePrPollRead({ rc: 0, stdout: "OPEN BEHIND\n", stderr: HINT + "\nwarning\n" })).toBe("OPEN BEHIND");
+    expect(parsePrPollRead({ rc: 0, stdout: "MERGED CLEAN", stderr: HINT })).toBe("MERGED CLEAN");
+    expect(parsePrPollRead({ rc: 0, stdout: "  CLOSED DIRTY  \n", stderr: "" })).toBe("CLOSED DIRTY");
+  });
+
+  test("rc 0: empty or malformed stdout is refused (null), never guessed", () => {
+    expect(parsePrPollRead({ rc: 0, stdout: "", stderr: "" })).toBeNull();
+    expect(parsePrPollRead({ rc: 0, stdout: "\n", stderr: HINT })).toBeNull();
+    // a merged stream (what `2>&1` produces) is refused instead of misread
+    expect(parsePrPollRead({ rc: 0, stdout: HINT + "\nOPEN BEHIND", stderr: "" })).toBeNull();
+    expect(parsePrPollRead({ rc: 0, stdout: "OPEN BEHIND\nOPEN CLEAN", stderr: "" })).toBeNull();
+    expect(parsePrPollRead({ rc: 0, stdout: "OPEN behind", stderr: "" })).toBeNull();
+    expect(parsePrPollRead({ rc: 0, stdout: "DRAFT BEHIND", stderr: "" })).toBeNull();
+    expect(parsePrPollRead({ rc: 0, stdout: "OPEN", stderr: "" })).toBeNull();
+  });
+
+  test("rc != 0: the first non-hint, non-indented stderr line is the error", () => {
+    expect(parsePrPollRead({ rc: 1, stdout: "", stderr: HINT + "\ngh: HTTP 502" })).toBe("fetch-error: gh: HTTP 502");
+    expect(parsePrPollRead({ rc: 1, stdout: "", stderr: "\n\n" + HINT + "\n\ngh: HTTP 502\nsecond line\n" })).toBe("fetch-error: gh: HTTP 502");
+  });
+
+  test("rc != 0 with only hint text (or nothing) on stderr names the rc", () => {
+    expect(parsePrPollRead({ rc: 1, stdout: "", stderr: HINT })).toBe("fetch-error: rc=1");
+    expect(parsePrPollRead({ rc: 4, stdout: "", stderr: "" })).toBe("fetch-error: rc=4");
+    expect(parsePrPollRead({ rc: 1, stdout: "", stderr: "   indented only\n\t tabbed\n" })).toBe("fetch-error: rc=1");
+  });
+
+  test("rc != 0 is always a fetch-error, even when stdout looks like a valid state", () => {
+    expect(parsePrPollRead({ rc: 1, stdout: "OPEN BEHIND\n", stderr: "gh: HTTP 502" })).toBe("fetch-error: gh: HTTP 502");
+    expect(parsePrPollRead({ rc: 1, stdout: "MERGED CLEAN\n", stderr: HINT })).toBe("fetch-error: rc=1");
+  });
+
+  test("the error line drops non-printables and is cut to GH_ERR_LINE_MAX (the fence's `${e:0:200}`)", () => {
+    expect(GH_ERR_LINE_MAX).toBe(200);
+    expect(parsePrPollRead({ rc: 1, stdout: "", stderr: "gh: \x1b[31mboom\x07\r\n" })).toBe("fetch-error: gh: [31mboom");
+    const long = parsePrPollRead({ rc: 1, stdout: "", stderr: "E".repeat(GH_ERR_LINE_MAX + 50) });
+    expect(long).toBe("fetch-error: " + "E".repeat(GH_ERR_LINE_MAX));
+    // a line that is non-printable only is not an error line
+    expect(parsePrPollRead({ rc: 1, stdout: "", stderr: "\x1b\x07\nreal: error" })).toBe("fetch-error: real: error");
+  });
+});
+
+// The stdout-only rule, as instruction text. Pinned as a literal here (not imported) so a mutant that empties the shared constant
+// cannot pass a `toContain("")`.
+const STDOUT_ONLY = /Read `gh` stdout only; send stderr to a file, never `2>&1`/;
+
+/** Every value of the `Harness` union, read from its declaration so a newly added harness cannot skip these rows. */
+function harnessUnion(): Harness[] {
+  const src = readFileSync(resolve(PLUGIN_ROOT, "lib/harness.ts"), "utf-8");
+  const decl = src.match(/^export type Harness\s*=([^;]+);/m);
+  if (!decl) throw new Error("lib/harness.ts: `export type Harness = …;` not found — the union census has nothing to iterate");
+  return [...decl[1].matchAll(/"([a-z]+)"/g)].map((m) => m[1] as Harness);
+}
+
+describe("the stdout-only read rule is stated on every instruction surface", () => {
+  test("the union census reads the real declaration (non-vacuity)", () => {
+    const hs = harnessUnion();
+    expect(hs.length).toBeGreaterThanOrEqual(8);
+    for (const h of ["claude", "grok", "cursor", "unknown"]) expect(hs).toContain(h as Harness);
+  });
+
+  test("behindSyncInstructions(h) carries the sentence for every harness", () => {
+    for (const h of harnessUnion()) expect({ h, md: behindSyncInstructions(h) }).toEqual({ h, md: expect.stringMatching(STDOUT_ONLY) });
+  });
+
+  test("pollInstructions(h) carries its OWN sentence, outside the embedded behind-sync text (cursor returns the stop unchanged)", () => {
+    for (const h of harnessUnion()) {
+      const poll = pollInstructions(h);
+      const behind = behindSyncInstructions(h);
+      if (h === "cursor") {
+        expect(poll).toBe(behind);
+        continue;
+      }
+      expect(poll).toContain(behind); // the removal below must actually remove something
+      const own = poll.replace(behind, "");
+      expect({ h, own }).toEqual({ h, own: expect.stringMatching(STDOUT_ONLY) });
+    }
+  });
+});
+
+// ── Guard 2: no `gh` capture merges stderr into the value it returns ─────────────────────────────────
+// Property: no tracked non-test file under plugins/ or .claude/hooks/ captures a `gh` command (or a `*_gh` wrapper) in a command
+// substitution with a top-level `2>&1` before the substitution's MATCHING `)`, except the sites on EXCLUSIONS below.
+// Planted violations are built by concatenation so this file never carries the shape it bans (it is a *.test.ts and is not scanned).
+const MERGE = "2>" + "&1";
+const REPO_ROOT = resolve(PLUGIN_ROOT, "../..");
+const GUARD2_PATHSPECS = ["plugins", ".claude/hooks"];
+const GUARD2_EXT = /\.(sh|bash|md|ts|js|mjs|cjs)$/;
+
+/** Backslash-newline continuations are removed, as the shell does, so a two-line `gh … \` / `--jq … 2>&1)` read is one line. */
+function joinContinuations(text: string): string {
+  return text.replace(/\\\r?\n/g, "");
+}
+
+/**
+ * Index just past the `)` that closes the substitution whose body starts at `start`, or -1. Tracks single quotes, double quotes
+ * (with nested `$(` inside them) and bare parens, because every real site's jq template carries `)` inside quotes
+ * (`'"\(.state) \(.mergeStateStatus)"'`). An unclosed top-level capture ends at its logical line.
+ */
+function matchingParen(s: string, start: number): number {
+  const stack: ("sub" | "dq")[] = ["sub"];
+  let i = start;
+  while (i < s.length) {
+    const c = s[i];
+    if (stack[stack.length - 1] === "dq") {
+      if (c === "\\") i += 2;
+      else if (c === '"') { stack.pop(); i++; }
+      else if (c === "$" && s[i + 1] === "(") { stack.push("sub"); i += 2; }
+      else i++;
+      continue;
+    }
+    if (c === "\\") { i += 2; continue; }
+    if (c === "'") { const j = s.indexOf("'", i + 1); if (j < 0) return -1; i = j + 1; continue; }
+    if (c === '"') { stack.push("dq"); i++; continue; }
+    if (c === "(") { stack.push("sub"); i++; continue; }
+    if (c === ")") { stack.pop(); i++; if (stack.length === 0) return i; continue; }
+    if (c === "\n" && stack.length === 1) return -1;
+    i++;
+  }
+  return -1;
+}
+
+/** True when `body` holds a stderr merge outside quotes and outside any nested group (a nested `$(x 2>&1)` is not gh's stderr). */
+function topLevelMerge(body: string): boolean {
+  let depth = 0;
+  let dq = false;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (dq) { if (c === "\\") i++; else if (c === '"') dq = false; continue; }
+    if (c === "\\") { i++; continue; }
+    if (c === "'") { const j = body.indexOf("'", i + 1); i = j < 0 ? body.length : j; continue; }
+    if (c === '"') dq = true;
+    else if (c === "(") depth++;
+    else if (c === ")") depth--;
+    else if (depth === 0 && body.startsWith(MERGE, i)) return true;
+  }
+  return false;
+}
+
+// Words that may stand before the command word: whitespace, `VAR=x` assignments, a quoted or braced expansion used as a wrapper
+// (`"${to[@]}"`), `command`/`env`/`builtin`/`nohup`, and `timeout [flags] N`.
+const GH_PREFIX = new RegExp(
+  "^(?:\\s+" +
+    "|[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|\"[^\"]*\"|[^\\s'\"]*)(?=\\s)" +
+    "|\"\\$\\{[^\"}]*\\}\"(?=\\s)|\"\\$[A-Za-z_][A-Za-z0-9_]*\"(?=\\s)|\\$\\{[^}\\s]*\\}(?=\\s)" +
+    "|(?:command|env|builtin|nohup)(?=\\s)" +
+    "|timeout(?:\\s+-[A-Za-z-]+(?:\\s+\\S+)?)*\\s+[0-9.]+[smhd]?(?=\\s))",
+);
+const GH_WORD = /^(?:gh|[A-Za-z0-9_]*_gh)(?=[\s)])/;
+
+/** Every `$( [prefix…] gh|*_gh … 2>&1 … )` capture in `text`, as the substitution's own text. */
+function findMergedGhCaptures(text: string): string[] {
+  const s = joinContinuations(text);
+  const out: string[] = [];
+  for (let k = s.indexOf("$("); k >= 0; k = s.indexOf("$(", k + 2)) {
+    let p = k + 2;
+    for (;;) {
+      const m = s.slice(p).match(GH_PREFIX);
+      if (!m || m[0].length === 0) break;
+      p += m[0].length;
+    }
+    if (!GH_WORD.test(s.slice(p))) continue;
+    const end = matchingParen(s, k + 2);
+    if (end > 0 && topLevelMerge(s.slice(k + 2, end - 1))) out.push(s.slice(k, end));
+  }
+  return out;
+}
+
+/** The ONE file-list chokepoint: tracked files (dot-dirs included, unlike Bun `Glob`), minus tests and archives. */
+function listGuard2Files(root: string, pathspecs: string[] = GUARD2_PATHSPECS, env: NodeJS.ProcessEnv = gitCleanEnv() as NodeJS.ProcessEnv): string[] {
+  return execFileSync("git", ["ls-files", "-z", "--", ...pathspecs], { cwd: root, env, encoding: "utf8" })
+    .split("\0")
+    .filter((f) => f !== "" && GUARD2_EXT.test(f) && !/\.test\.(sh|ts)$/.test(f) && !f.includes("/archive/"));
+}
+
+type Finding = { path: string; text: string };
+function scanGuard2(root: string, files: string[]): Finding[] {
+  const out: Finding[] = [];
+  for (const f of files) {
+    let text: string;
+    try {
+      text = readFileSync(resolve(root, f), "utf-8");
+    } catch {
+      continue; // tracked but deleted in the working tree
+    }
+    for (const t of findMergedGhCaptures(text)) out.push({ path: f, text: t });
+  }
+  return out;
+}
+
+/**
+ * Shrink-only exclusion list: `<path>` + a literal substring of the matched capture + the exact count of captures it covers.
+ * Each is a site that prints no hint today and that this PR does not edit (CTO ruling F1). A stale entry fails, and so does
+ * any count that moved, in either direction: a new capture in an excluded file is not hidden by the existing entry.
+ * Measured 2026-11-28 by running this scan on the tree. The plan's `--log-failed` dumps are NOT here: they are pipes
+ * (`gh run view … --log-failed 2>&1 | tail`), not captures, so the scan never matches them and an entry would be stale.
+ */
+type Exclusion = { path: string; substr: string; count: number };
+const EXCLUSIONS: Exclusion[] = [
+  // ship post-merge release poll: `gh run list` prints no hint
+  { path: "plugins/soleur/skills/ship/SKILL.md", substr: "gh run list --workflow <workflow-filename>", count: 1 },
+  // worktree-manager draft-PR bootstrap: the error text is echoed to the operator, never parsed as a value
+  { path: "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh", substr: 'gh pr list --head "$branch"', count: 1 },
+  { path: "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh", substr: "gh pr create --draft", count: 1 },
+  // community digest's six `gh api` reads (the issues read appears twice)
+  { path: "plugins/soleur/skills/community/scripts/github-community.sh", substr: 'gh api "repos/${repo}/issues?', count: 2 },
+  { path: "plugins/soleur/skills/community/scripts/github-community.sh", substr: 'gh api --paginate "repos/${repo}/pulls?', count: 1 },
+  { path: "plugins/soleur/skills/community/scripts/github-community.sh", substr: 'gh api "repos/${repo}/commits?', count: 1 },
+  { path: "plugins/soleur/skills/community/scripts/github-community.sh", substr: "gh api graphql", count: 1 },
+  { path: "plugins/soleur/skills/community/scripts/github-community.sh", substr: 'gh api "repos/${repo}" ', count: 1 },
+  // the admin hatch greps `err` for 'Base branch was modified'; it never parses a state from it
+  { path: "plugins/soleur/skills/ship/references/settle-then-admin-merge.md", substr: "gh pr merge <N> --squash --admin", count: 1 },
+];
+
+type Guard2Verdict = { unexcluded: Finding[]; stale: Exclusion[]; miscounted: { entry: Exclusion; got: number }[] };
+function judgeGuard2(findings: Finding[], exclusions: Exclusion[]): Guard2Verdict {
+  const got = new Map<Exclusion, number>(exclusions.map((e) => [e, 0]));
+  const unexcluded: Finding[] = [];
+  for (const f of findings) {
+    const e = exclusions.find((x) => x.path === f.path && f.text.includes(x.substr));
+    if (e) got.set(e, (got.get(e) ?? 0) + 1);
+    else unexcluded.push(f);
+  }
+  return {
+    unexcluded,
+    stale: exclusions.filter((e) => got.get(e) === 0),
+    miscounted: exclusions.filter((e) => (got.get(e) ?? 0) > 0 && got.get(e) !== e.count).map((e) => ({ entry: e, got: got.get(e)! })),
+  };
+}
+const GREEN: Guard2Verdict = { unexcluded: [], stale: [], miscounted: [] };
+
+/** Synthesized findings equal to today's excluded set, for the pure mutation rows. */
+function excludedFindings(): Finding[] {
+  return EXCLUSIONS.flatMap((e) => Array.from({ length: e.count }, () => ({ path: e.path, text: `$(${e.substr} … ${MERGE})` })));
+}
+
+describe("Guard 2: no gh capture merges stderr into its value", () => {
+  test("the tree: zero unexcluded captures, zero stale exclusions, every count exact, and the file floor holds", () => {
+    const files = listGuard2Files(REPO_ROOT);
+    // floor (mutation 2): a typo'd pathspec must not pass over an empty list. 56 non-test files contain `gh pr view` (2026-11-28).
+    const withPrView = files.filter((f) => readFileSync(resolve(REPO_ROOT, f), "utf-8").includes("gh pr view"));
+    expect(withPrView.length).toBeGreaterThanOrEqual(10);
+    expect(files.some((f) => f.startsWith(".claude/hooks/"))).toBe(true);
+    const verdict = judgeGuard2(scanGuard2(REPO_ROOT, files), EXCLUSIONS);
+    expect(verdict).toEqual(GREEN);
+  });
+
+  test("mutation 1: the fence's verbatim two-line read with `2>&1` on the --jq continuation is found (joiner + paren-depth)", () => {
+    const fence = `     s=$(gh pr view "$PR" --json state,mergeStateStatus \\\n       --jq '"\\(.state) \\(.mergeStateStatus)"' ${MERGE}) || s="fetch-error: $s"\n`;
+    expect(findMergedGhCaptures(fence)).toHaveLength(1);
+    // the same text without the joiner is a capture whose top level ends at the backslash line: the joiner is load-bearing
+    expect(findMergedGhCaptures(fence.replace("\\\n", "\n"))).toHaveLength(0);
+  });
+
+  test("mutation 2: a file list that resolves empty fails the floor", () => {
+    const files = listGuard2Files(REPO_ROOT, ["plugins-typo"]);
+    expect(files.filter((f) => readFileSync(resolve(REPO_ROOT, f), "utf-8").includes("gh pr view")).length).toBeLessThan(10);
+  });
+
+  test("mutation 4: fixing an excluded site without deleting its entry is a stale exclusion", () => {
+    const fixed = excludedFindings().filter((f) => !f.text.includes('gh pr list --head "$branch"'));
+    const v = judgeGuard2(fixed, EXCLUSIONS);
+    expect(v.stale.map((e) => e.substr)).toEqual(['gh pr list --head "$branch"']);
+    expect(judgeGuard2(excludedFindings(), EXCLUSIONS)).toEqual(GREEN); // control: the synthesized set is exactly covered
+  });
+
+  test("mutation 5: a new `$(gh run list … 2>&1)` in a skill file is not excluded", () => {
+    const md = "```bash\nr=$(gh run list --workflow ci.yml --limit 1 --json status " + MERGE + ")\n```\n";
+    const found = findMergedGhCaptures(md).map((text) => ({ path: "plugins/soleur/skills/new-skill/SKILL.md", text }));
+    expect(found).toHaveLength(1);
+    expect(judgeGuard2([...excludedFindings(), ...found], EXCLUSIONS).unexcluded).toEqual(found);
+  });
+
+  test("mutation 6: a prefix-wrapped command word is still the gh command", () => {
+    for (const cmd of [
+      `x=$("\${to[@]}" gh pr view "$PR" --json state ${MERGE})`,
+      `x=$(timeout 30 gh pr view "$PR" --json state ${MERGE})`,
+      `x=$(timeout -k 5 30s gh pr view "$PR" ${MERGE})`,
+      `x=$(command gh pr view "$PR" ${MERGE})`,
+      `x=$(GH_PAGER= GH_HOST="github.com" gh pr view "$PR" ${MERGE})`,
+      `x=$(env GH_PAGER=cat gh pr view "$PR" ${MERGE})`,
+      `cur=$(parked_gh pr view --json number --jq .number ${MERGE})`,
+      `x="$(gh pr view "$PR" --jq '.a | "\\(.b))"' ${MERGE})"`,
+    ]) expect({ cmd, n: findMergedGhCaptures(cmd).length }).toEqual({ cmd, n: 1 });
+  });
+
+  test("mutation 7: a second capture in an excluded file exceeds that entry's count", () => {
+    const extra = { path: "plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh", text: `$(gh pr list --head "$branch" --json url ${MERGE})` };
+    const v = judgeGuard2([...excludedFindings(), extra], EXCLUSIONS);
+    expect(v.unexcluded).toEqual([]);
+    expect(v.miscounted.map((m) => [m.entry.substr, m.got])).toEqual([['gh pr list --head "$branch"', 2]]);
+  });
+
+  test("not a violation: stderr to a file or /dev/null, a merge inside quotes or a nested group, and non-gh commands", () => {
+    for (const ok of [
+      `s=$(gh pr view "$PR" --json state --jq '"\\(.state) \\(.mergeStateStatus)"' 2>"$errf")`,
+      `s=$(gh pr view "$PR" --json state 2>"\${GH_ERR:-/dev/null}") || s="fetch-error: $(gh_err_line $?)"`,
+      `s=$(gh pr view "$PR" --json state 2>/dev/null)`,
+      `s=$(gh pr view "$PR" --jq '"${MERGE})"')`,
+      `s=$(gh pr view "$PR" --json body --jq "$(printf x ${MERGE})")`,
+      `v=$(git log -1 ${MERGE})`,
+      `v=$(ghost run ${MERGE})`,
+      `v=$(gh_err_line ${MERGE})`,
+      `gh run view 1 --log-failed ${MERGE} | tail -80`,
+    ]) expect({ ok, n: findMergedGhCaptures(ok).length }).toEqual({ ok, n: 0 });
+  });
+
+  test("harness rows H-a / H-b and mutation 3: a real fixture tree through the real file-list chokepoint", () => {
+    const root = mkdtempSync(join(tmpdir(), "guard2-"));
+    try {
+      const git = gitFixture(root);
+      git(["init", "-q", "-b", "main"]);
+      const put = (rel: string, body: string) => {
+        mkdirSync(dirname(join(root, rel)), { recursive: true });
+        writeFileSync(join(root, rel), body);
+      };
+      // compliant first sites (H-b: must-PASS non-canonical forms) …
+      put("plugins/soleur/scripts/a.sh", `s=$(gh pr view "$PR" --json state 2>"$errf")\nt=$(gh pr view "$PR" 2>/dev/null)\n`);
+      put("plugins/soleur/skills/x/SKILL.md", "```bash\ns=$(gh pr view 1 --json state 2>\"$errf\")\n```\n");
+      // … a violation in a SECOND file under the dot-dir (mutation 3), and the same shape in files the scan must skip
+      put(".claude/hooks/b.sh", `cur=$(parked_gh pr view --json number ${MERGE})\n`);
+      put("plugins/soleur/test/b.test.sh", `cur=$(gh pr view ${MERGE})\n`);
+      put("plugins/soleur/test/b.test.ts", `const s = "$(gh pr view ${MERGE})";\n`);
+      put("plugins/soleur/skills/archive/old.md", `cur=$(gh pr view ${MERGE})\n`);
+      put("elsewhere/c.sh", `cur=$(gh pr view ${MERGE})\n`);
+      git(["add", "-A"]);
+      const env = gitCleanEnv({ GIT_CEILING_DIRECTORIES: dirname(root) }) as NodeJS.ProcessEnv;
+      const files = listGuard2Files(root, GUARD2_PATHSPECS, env);
+      expect(files.sort()).toEqual([".claude/hooks/b.sh", "plugins/soleur/scripts/a.sh", "plugins/soleur/skills/x/SKILL.md"]);
+      // H-a: exactly the planted file
+      expect(scanGuard2(root, files).map((f) => f.path)).toEqual([".claude/hooks/b.sh"]);
+      // H-b: the compliant files alone report none
+      expect(scanGuard2(root, files.filter((f) => f !== ".claude/hooks/b.sh"))).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

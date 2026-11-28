@@ -2256,7 +2256,11 @@ fi
 # freezes the script for this poll, as a pasted fence always was.
 # Read once in a `set +u` subshell: a nounset host shell must not die on an unset root.
 SYNC_ROOT="$(set +u; printf '%s' "${CLAUDE_PLUGIN_ROOT}")"
-SYNC_SH="$SYNC_ROOT/scripts/sync-pr-behind.sh"; SYNC_SNAP=""
+SYNC_SH="$SYNC_ROOT/scripts/sync-pr-behind.sh"; SYNC_SNAP=""; GH_ERR=""
+# gh 2.106 prints a hint on stderr: read stdout only, stderr to GH_ERR (never 2>&1). A substring cut: `head -c` SIGPIPEs.
+trap 'rm -f "$SYNC_SNAP" ${GH_ERR:+"$GH_ERR"}' EXIT
+GH_ERR="$(mktemp 2>/dev/null)" || GH_ERR=""
+gh_err_line() { local e; e="$(grep -m1 -vE '^(hint:|[[:space:]]|$)' "$GH_ERR" 2>/dev/null)" || e=""; [[ -n "$e" ]] && echo "${e:0:200}" || echo "rc=$1"; }
 if [[ "$sync_ok" -eq 1 ]]; then
   why=""
   if [[ -z "$SYNC_ROOT" ]]; then why="CLAUDE_PLUGIN_ROOT is unset (Claude Code/Grok: this fence was taken from disk — stop this Monitor, then re-arm with the quoted root from a soleur skill's Base directory line cut at its last /skills/, never a path built from the working directory)"
@@ -2264,7 +2268,7 @@ if [[ "$sync_ok" -eq 1 ]]; then
     why="$SYNC_ROOT/.claude-plugin/plugin.json does not name soleur (ADR-179 identity check)"
   elif [[ ! -r "$SYNC_SH" ]]; then why="the script is missing"
   elif ! bash "$SYNC_SH" --help 2>/dev/null | grep -q -- '--fence'; then why="its --help has no --fence (an older copy)"
-  elif ! { SYNC_SNAP="$(mktemp)" && trap 'rm -f "$SYNC_SNAP"' EXIT && cp "$SYNC_SH" "$SYNC_SNAP"; }; then why="the snapshot copy failed"
+  elif ! { SYNC_SNAP="$(mktemp)" && cp "$SYNC_SH" "$SYNC_SNAP"; }; then why="the snapshot copy failed"
   fi
   if [[ -n "$why" ]]; then
     echo "[ship.phase7.precondition] sync-pr-behind.sh not usable at '$SYNC_SH': $why — BEHIND auto-sync disabled; export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root> (Devin/Codex: see that harness's INSTRUCTIONS.md), or sync by hand."
@@ -2308,8 +2312,8 @@ fi
 while true; do
   i=$((i+1))
   s=$(gh pr view "$PR" --json state,mergeStateStatus \
-      --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
-    || s="fetch-error: $s"
+      --jq '"\(.state) \(.mergeStateStatus)"' 2>"${GH_ERR:-/dev/null}") \
+    || s="fetch-error: $(gh_err_line $?)"
   if [[ "$s" != "$prev" ]] || (( i % 3 == 1 )); then
     echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] PR $PR ${s}"
     prev="$s"
@@ -2486,8 +2490,8 @@ while true; do
          (( behind_pushes == 2 )) && echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.hatch_check] 2 BEHIND syncs pushed — read ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md now; it classifies eligibility (else keep polling)"
          # Re-fetch now: GitHub may already be CLEAN → MERGED after the sync.
          s=$(gh pr view "$PR" --json state,mergeStateStatus \
-             --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
-           || s="fetch-error: $s"
+             --jq '"\(.state) \(.mergeStateStatus)"' 2>"${GH_ERR:-/dev/null}") \
+           || s="fetch-error: $(gh_err_line $?)"
          echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break ;;
       11) behind_syncs=$((behind_syncs-1))  # no-op: GitHub state lag, not a sync — budget and hatch untouched
           echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_noop] no sync needed (state lag or queued) — not counted, polling on" ;;
@@ -2656,11 +2660,11 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    **Step 3:** For each run that is not yet `completed`, use the **Monitor tool** (NEVER Bash `run_in_background` — see Phase 7 HARD GATE; rules: [monitor-hygiene.md](./references/monitor-hygiene.md)) with a state-change + heartbeat loop:
 
    ```bash
-   prev=""; i=0
+   prev=""; i=0; e="$(mktemp 2>/dev/null)" || e=""; trap 'rm -f ${e:+"$e"}' EXIT
    while true; do
      i=$((i+1))
-     r=$(gh run view <id> --json status,conclusion --jq '"\(.status) \(.conclusion // "-")"' 2>&1) \
-       || r="fetch-error: $r"
+     r=$(gh run view <id> --json status,conclusion --jq '"\(.status) \(.conclusion // "-")"' 2>"${e:-/dev/null}") || {
+       rc=$?; m="$(grep -m1 -vE '^(hint:|[[:space:]]|$)' "$e" 2>/dev/null)" || m=""; r="fetch-error: ${m:-rc=$rc}"; }
      if [[ "$r" != "$prev" ]] || (( i % 6 == 1 )); then
        echo "$(date +%H:%M:%S) [${i}/40] run=<id> ${r}"
        prev="$r"
@@ -2671,7 +2675,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    done
    ```
 
-   **Why this pattern:** emit on every state change (so `queued → in_progress → completed` produces three events) plus a heartbeat every 6th poll (~3 min) so the monitor never looks stuck. `.conclusion // "-"` guarantees a non-empty second token even while the run is in progress (null conclusion would otherwise render as a trailing space that looks like silence). `2>&1` on the `gh` call turns transient API errors into visible `fetch-error:` events instead of empty lines. The `grep -qE "^(completed|fetch-error)"` exit clause still breaks on terminal success; chronic `fetch-error` breaks so the caller can surface the API failure rather than polling forever against an outage.
+   **Why this pattern:** [monitor-hygiene.md](./references/monitor-hygiene.md#run-poll-stdout-and-stderr).
 
    Poll until all runs report `completed`. Maximum 40 iterations (20 minutes). If the maximum is reached, report: "Release verification timed out after 20 minutes. N runs still pending: [list workflow names and IDs]." Do NOT silently continue -- investigate the stalled workflows.
 

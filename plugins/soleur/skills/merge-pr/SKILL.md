@@ -400,7 +400,11 @@ fi
 # (see ship/SKILL.md Phase 7 for the rationale; ADR-179).
 # Read once in a `set +u` subshell: a nounset host shell must not die on an unset root.
 SYNC_ROOT="$(set +u; printf '%s' "${CLAUDE_PLUGIN_ROOT}")"
-SYNC_SH="$SYNC_ROOT/scripts/sync-pr-behind.sh"; SYNC_SNAP=""
+SYNC_SH="$SYNC_ROOT/scripts/sync-pr-behind.sh"; SYNC_SNAP=""; GH_ERR=""
+# stdout is the answer; gh's stderr (a `hint:` block on every `gh pr view`) goes to GH_ERR, never `2>&1` (see ship Phase 7). ONE trap.
+trap 'rm -f "$SYNC_SNAP" ${GH_ERR:+"$GH_ERR"}' EXIT
+GH_ERR="$(mktemp 2>/dev/null)" || GH_ERR=""
+gh_err_line() { local e; e="$(grep -m1 -vE '^(hint:|[[:space:]]|$)' "$GH_ERR" 2>/dev/null)" || e=""; [[ -n "$e" ]] && echo "${e:0:200}" || echo "rc=$1"; }
 if [[ "$sync_ok" -eq 1 ]]; then
   why=""
   if [[ -z "$SYNC_ROOT" ]]; then why="CLAUDE_PLUGIN_ROOT is unset (Claude Code/Grok: this fence was taken from disk — stop this Monitor, then re-arm with the quoted root from a soleur skill's Base directory line cut at its last /skills/, never a path built from the working directory)"
@@ -408,7 +412,7 @@ if [[ "$sync_ok" -eq 1 ]]; then
     why="$SYNC_ROOT/.claude-plugin/plugin.json does not name soleur (ADR-179 identity check)"
   elif [[ ! -r "$SYNC_SH" ]]; then why="the script is missing"
   elif ! bash "$SYNC_SH" --help 2>/dev/null | grep -q -- '--fence'; then why="its --help has no --fence (an older copy)"
-  elif ! { SYNC_SNAP="$(mktemp)" && trap 'rm -f "$SYNC_SNAP"' EXIT && cp "$SYNC_SH" "$SYNC_SNAP"; }; then why="the snapshot copy failed"
+  elif ! { SYNC_SNAP="$(mktemp)" && cp "$SYNC_SH" "$SYNC_SNAP"; }; then why="the snapshot copy failed"
   fi
   if [[ -n "$why" ]]; then
     echo "[ship.phase7.precondition] sync-pr-behind.sh not usable at '$SYNC_SH': $why — BEHIND auto-sync disabled; export CLAUDE_PLUGIN_ROOT=<the installed soleur plugin root> (Devin/Codex: see that harness's INSTRUCTIONS.md), or sync by hand."
@@ -441,8 +445,8 @@ fi
 while true; do
   i=$((i+1))
   s=$(gh pr view "$PR" --json state,mergeStateStatus \
-      --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
-    || s="fetch-error: $s"
+      --jq '"\(.state) \(.mergeStateStatus)"' 2>"${GH_ERR:-/dev/null}") \
+    || s="fetch-error: $(gh_err_line $?)"
   if [[ "$s" != "$prev" ]] || (( i % 3 == 1 )); then
     echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] PR $PR ${s}"
     prev="$s"
@@ -591,8 +595,8 @@ while true; do
          bash "$SYNC_ROOT/scripts/pipeline-tally.sh" incr ci_cycles || true
          (( behind_pushes == 2 )) && echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.hatch_check] 2 BEHIND syncs pushed — read ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md now; it classifies eligibility (else keep polling)"
          s=$(gh pr view "$PR" --json state,mergeStateStatus \
-             --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
-           || s="fetch-error: $s"
+             --jq '"\(.state) \(.mergeStateStatus)"' 2>"${GH_ERR:-/dev/null}") \
+           || s="fetch-error: $(gh_err_line $?)"
          echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break ;;
       11) behind_syncs=$((behind_syncs-1))  # no-op: GitHub state lag, not a sync — budget and hatch untouched
           echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.sync_noop] no sync needed (state lag or queued) — not counted, polling on" ;;
