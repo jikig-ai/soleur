@@ -33,9 +33,11 @@
 #             path, an Origin header, a GET, a short Content-Length, a bad body; times out; a failed fsync
 #             unlinks the file and refuses `write`; writes mode 0600; refuses an --out that exists, is
 #             relative, has no parent, or sits in a git work tree (a .git directory or a .git FILE).
-#   P-wait    each body waits once, after its goto, for window.bootstrap.atok (set ~283 ms after
-#             DOMContentLoaded, measured 2026-11-28) with a finite timeout and interval polling, and its own
-#             condition resolves (L1-L3); a signed-out page still returns {atok:false} (M3, R6, D7).
+#   P-wait    each body waits once, after its last goto, for window.bootstrap.atok (set ~283 ms after
+#             DOMContentLoaded, measured 2026-11-28, recorded in
+#             knowledge-base/project/plans/2026-11-28-fix-p5-browser-bodies-wait-for-atok-plan.md) with a
+#             timeout in [1000, 30000] ms, interval polling below it, and a condition that is true only when
+#             the atok is set (L1-L3); a signed-out page still returns {atok:false} (M3, R6, D7).
 #   P-holds   the archived plan's Operator Holds equal the runbook's section 6 holds, modulo an exact
 #             sha256=<64 hex> value (CTO F5; the archived plan is never edited on a re-pin).
 #   P-compose the runbook's section 5 composition line (read from the runbook, placeholders filled) yields a
@@ -68,7 +70,13 @@
 #   XS1 sink peer check deleted -> S2b                  XS2 sink keeps a partial file on a failed fsync -> S8
 #   XW1 the read wait deleted -> L1     XW2 the mint wait deleted -> L2     XW3 the revoke wait deleted -> L3
 #   XW4 the read wait's .catch dropped -> D7 ({error:TimeoutError})
-#   XH1 a runbook hold's wording edited -> the sha-normalized hold compare
+#   XW5 the read wait moved above its goto -> L1   XW6 a second goto after the revoke wait -> L3
+#   XW7 the read wait timeout 15 ms -> L1          XW8 the read wait polls 'raf' -> L1
+#   XW9 the read wait called with two arguments (no options) -> L1
+#   XW10 the read wait condition true before the atok (!!window.bootstrap) -> L1
+#   XW11 the mint wait's .catch dropped -> M3      XW12 the revoke wait's .catch dropped -> R6
+#   XH1 wording after the sha on a sha-bearing runbook hold edited -> the sha-normalized hold compare
+#   XC1 a runbook sha written outside the <body> (sha256=<hex>) form -> the runbook citation check
 #   Instrument: XL1 a revoke return that bypasses the guard and carries the atok -> R1 (P-shape);
 #               XL2 an in-page function closing over a Node-side variable -> R1 (page serialization);
 #               XL3 a read return that bypasses the guard with resource keys -> D5 (P-shape)
@@ -284,14 +292,16 @@ function page(world) {
     }
     return json(404, { success: false });
   };
-  // lateAtok: the page loads with no atok; the dashboard sets it only after DOMContentLoaded (measured
-  // 2026-11-28: ~283 ms later). Only waitForFunction installs it, after its first falsy poll, so a body that
-  // reads the atok without waiting, or waits on a condition true too early, cannot pass by accident.
-  const win = { bootstrap: world.atok && !world.lateAtok ? { atok: world.atok } : {} };
+  // lateAtok: the page loads with no window.bootstrap at all; the dashboard sets it only after
+  // DOMContentLoaded (measured 2026-11-28: ~283 ms later). Only waitForFunction installs it, after its first
+  // falsy poll, and every goto drops it again (a navigation is a new page), so a body that reads the atok
+  // without waiting, waits before its goto, navigates again after the wait, or waits on an unguarded
+  // condition (it throws on the missing key) cannot pass by accident.
+  const win = world.lateAtok ? {} : { bootstrap: world.atok ? { atok: world.atok } : {} };
   world.win = win;
   const pctx = vm.createContext({ window: win, location: { origin: world.origin }, fetch: dashFetch, console: rec, Headers, URL, JSON, Response });
   return {
-    async goto(url) { world.gotos.push(url); },
+    async goto(url) { world.gotos.push(url); if (world.lateAtok) delete win.bootstrap; },
     async evaluate(fn, arg) {
       if (typeof fn !== 'function') throw new TypeError('evaluate(fn)');
       const f = vm.runInContext(`(${fn.toString()})`, pctx);
@@ -303,11 +313,12 @@ function page(world) {
     async waitForFunction(fn, arg, opts) {
       if (typeof fn !== 'function') throw new TypeError('waitForFunction(fn)');
       const f = vm.runInContext(`(${fn.toString()})`, pctx);
-      const rec = { timeout: opts && opts.timeout, polling: opts && opts.polling, resolved: false };
-      world.waits.push(rec);
+      const wrec = { timeout: opts && opts.timeout, polling: opts && opts.polling, resolved: false,
+        gotos: world.gotos.length, src: fn.toString() };
+      world.waits.push(wrec);
       for (let i = 0; i < 3; i += 1) {
-        if (await f(arg === undefined ? undefined : JSON.parse(JSON.stringify(arg)))) { rec.resolved = true; return true; }
-        if (i === 0 && world.lateAtok) win.bootstrap.atok = world.atok;
+        if (await f(arg === undefined ? undefined : JSON.parse(JSON.stringify(arg)))) { wrec.resolved = true; return true; }
+        if (i === 0 && world.lateAtok) win.bootstrap = { atok: world.atok };
       }
       const e = new Error('waitForFunction: timeout'); e.name = 'TimeoutError';
       throw e;
@@ -412,13 +423,19 @@ const must = (cond, why) => { if (!cond) throw new Error(why); };
 const want = (r, w) => must(eq(r, w), `want ${canon(w)} got ${canon(r)}`);
 const nothingSent = (w) => must(w.gotos.length === 0 && w.log.length === 0 && w.deletes.length === 0 && w.sinkCalls.length === 0, 'a request was made before the refusal');
 const listed = (list, name) => list.filter((t) => t.name === name).length;
-// The late-atok rows: one bounded, interval-polled wait whose own condition resolved.
+// The late-atok rows: one wait after the last goto, bounded, interval-polled, on the atok itself.
 const waitedOnce = (w) => {
   must(w.waits.length === 1, `waitForFunction calls: ${w.waits.length}`);
   const x = w.waits[0];
   must(x.resolved === true, 'the wait condition never resolved (resolved:false)');
-  must(Number.isFinite(x.timeout) && x.timeout > 0 && x.timeout <= 30000, `wait timeout ${x.timeout} is not finite in (0, 30000]`);
-  must(typeof x.polling === 'number', `wait polling ${x.polling} is not an interval`);
+  must(x.gotos >= 1 && x.gotos === w.gotos.length, `the wait ran after goto ${x.gotos} of ${w.gotos.length}, not after the last goto`);
+  // Bounded, not pinned: a timeout near the measured ~283 ms delay would bring the false {atok:false} back.
+  must(Number.isFinite(x.timeout) && x.timeout >= 1000 && x.timeout <= 30000, `wait timeout ${x.timeout} is not in [1000, 30000] ms`);
+  must(typeof x.polling === 'number' && x.polling > 0 && x.polling < x.timeout, `wait polling ${x.polling} is not an interval below the timeout`);
+  // The condition itself, on fresh pages: false with no atok (a throw counts as false, as Playwright rejects), true with one.
+  const holds = (win) => { try { return !!vm.runInContext(`(${x.src})`, vm.createContext({ window: win }))(); } catch { return false; } };
+  must(!holds({}) && !holds({ bootstrap: {} }) && !holds({ bootstrap: { atok: '' } }) && holds({ bootstrap: { atok: 'x' } }),
+    'the wait condition is not "window.bootstrap.atok is set"');
 };
 
 // ---- p5-mint.js --------------------------------------------------------------------------------------------
@@ -1105,22 +1122,29 @@ OUT="$(cd "$MDIR" && sha256sum -c p5-browser.sha256 2>&1)"; check "p5-browser.sh
 OUT="$(awk '{print $2}' "$MANIFEST" | sort | tr '\n' ' ')"
 [[ "$OUT" == "p5-mint.js p5-read.js p5-revoke.js p5-sink.py " ]]; check "the manifest lists exactly p5-mint.js, p5-read.js, p5-revoke.js, p5-sink.py" $?
 [[ "$(awk 'NF!=2 || $1 !~ /^[0-9a-f]{64}$/' "$MANIFEST" | wc -l)" -eq 0 ]]; check "every manifest line is <sha256>  <file>" $?
-cites=0; bad_cite=0; OUT="runbook unreadable: $RUNBOOK"
-if [[ -r "$RUNBOOK" ]]; then
-  OUT=""
-  while read -r f h; do
-    cites=$((cites + 1))
-    have="$(sha256sum "$MDIR/$f" 2>/dev/null | awk '{print $1}')"
-    [[ -n "$have" && "$h" == "$have" ]] || { bad_cite=1; OUT="runbook cites $f sha256=$h, the file is $have"; }
-  done < <(perl -ne 'while (/\b(p5-(?:mint\.js|revoke\.js|read\.js|sink\.py))`?\s+\(?sha256=([0-9a-f]{64})\b/g) { print "$1 $2\n" }' "$RUNBOOK")
-  [[ "$cites" -ge 5 ]] || { bad_cite=1; OUT="only ${cites} sha256 citations in the runbook (floor 5)"; }
-else
-  bad_cite=1
-fi
-[[ "$bad_cite" -eq 0 ]]; check "the runbook is readable and its ${cites} sha256 citations (>= 5, both forms) each equal the file's sha256" $?
-# The plan's Operator Holds list is the approved list ship reads; it must be the runbook's section 6 holds verbatim,
-# except for an exact sha256=<64 hex> value (CTO F5): the archived plan is never edited, so a body re-pin leaves it
-# quoting a superseded sha. The sha values themselves are checked against the files by the citation check above.
+cite_check() { # <runbook>: sets cites, bad_cite, OUT
+  local rb="$1" f h have all64
+  cites=0; bad_cite=0; OUT="runbook unreadable: $rb"
+  if [[ -r "$rb" ]]; then
+    OUT=""
+    while read -r f h; do
+      cites=$((cites + 1))
+      have="$(sha256sum "$MDIR/$f" 2>/dev/null | awk '{print $1}')"
+      [[ -n "$have" && "$h" == "$have" ]] || { bad_cite=1; OUT="runbook cites $f sha256=$h, the file is $have"; }
+    done < <(perl -ne 'while (/\b(p5-(?:mint\.js|revoke\.js|read\.js|sink\.py))`?\s+\(?sha256=([0-9a-f]{64})\b/g) { print "$1 $2\n" }' "$rb")
+    # Every 64-hex value in the runbook must be such a citation, so none can sit outside the check.
+    all64="$(grep -aoE '[0-9a-f]{64}' "$rb" | wc -l)"
+    [[ "$cites" -eq "$all64" ]] || { bad_cite=1; OUT="the runbook carries ${all64} 64-hex values, ${cites} of them <body> sha256=<hex> citations"; }
+    [[ "$cites" -ge 5 ]] || { bad_cite=1; OUT="only ${cites} sha256 citations in the runbook (floor 5)"; }
+  else
+    bad_cite=1
+  fi
+}
+cite_check "$RUNBOOK"
+[[ "$bad_cite" -eq 0 ]]; check "the runbook is readable and its ${cites} sha256 citations (>= 5, both forms, every 64-hex value) each equal the file's sha256" $?
+# The archived plan's Operator Holds must keep the runbook's section 6 hold wording verbatim, except for an exact
+# sha256=<64 hex> value (CTO F5): the archived plan is never edited, so a body re-pin leaves it quoting a superseded
+# sha. The runbook's sha values are checked against the files by the citation check above; the plan's are not.
 holds_norm() { grep -a '^- Hold:' "$1" | sed -E 's/sha256=[0-9a-f]{64}/sha256=<pinned>/g'; }
 PLAN_FILE="$(find "${REPO_ROOT}/knowledge-base/project/plans" -name '*2026-11-27-chore-cf-phase5-old-login-token-remint-plan.md' | head -1)"
 OUT="plan unreadable: ${PLAN_FILE:-none}"
@@ -1231,9 +1255,9 @@ killed_row() { # <mint> <revoke> <read> <row> <expected text>: the row is RED an
   fl="$(grep "^FAIL $4 " "$H_OUT" || true)"
   grep -qF -- "$5" <<<"$fl"
 }
-SCORED="R1,R1b,R2,R3,R4,R4c,R7b,R8u,R13c,R13d,M6,M6c,M7a,M7h,M9c,M16a,M16c,M16f,M17,M18a,M18b,D5,L1,L2,L3,D7"
+SCORED="R1,R1b,R2,R3,R4,R4c,R7b,R8u,R13c,R13d,M6,M6c,M7a,M7h,M9c,M16a,M16c,M16f,M17,M18a,M18b,D5,L1,L2,L3,D7,M3,R6"
 harness "$MINT" "$REVOKE" "$READ" P5_ONLY="$SCORED"
-if [[ "$(grep -c '^ok ' "$H_OUT")" -ne 26 ]] || grep -q '^FAIL ' "$H_OUT"; then
+if [[ "$(grep -c '^ok ' "$H_OUT")" -ne 28 ]] || grep -q '^FAIL ' "$H_OUT"; then
   printf 'HARNESS: a scored row is RED on the pristine bodies:\n' >&2; grep -v '^ok ' "$H_OUT" | cut -c1-300 >&2; exit 2
 fi
 SINK_PRISTINE="$SB/sink-pristine.err"
@@ -1281,13 +1305,30 @@ mut XW1 "the read wait deleted" read "$WAIT_LINE" "" L1 '"atok":false'
 mut XW2 "the mint wait deleted" mint "$WAIT_LINE" "" L2 '"atok":false'
 mut XW3 "the revoke wait deleted" revoke "$WAIT_LINE" "" L3 '"atok":false'
 mut XW4 "the read wait's .catch dropped" read "polling: 100 }).catch(() => {});" "polling: 100 });" D7 '"error":"TimeoutError"'
-# Hold-wording parity (CTO F5): the sha-normalized compare still sees a one-word edit to a runbook hold.
+GOTO_LINE="    await page.goto(\`\${DASH}/profile/api-tokens\`, { waitUntil: 'domcontentloaded' });
+"
+mut XW5 "the read wait moved above its goto" read "$GOTO_LINE$WAIT_LINE" "$WAIT_LINE$GOTO_LINE" L1 '"atok":false'
+mut XW6 "a second goto after the revoke wait" revoke "$WAIT_LINE" "$WAIT_LINE$GOTO_LINE" L3 '"atok":false'
+mut XW7 "the read wait timeout 15 ms" read "timeout: 15000, polling: 100" "timeout: 15, polling: 100" L1 'wait timeout 15 '
+mut XW8 "the read wait polls 'raf'" read "timeout: 15000, polling: 100" "timeout: 15000, polling: 'raf'" L1 'wait polling raf'
+mut XW9 "the read wait called with two arguments" read "window.bootstrap.atok), null, { timeout" "window.bootstrap.atok), { timeout" L1 'wait timeout undefined'
+mut XW10 "the read wait condition true before the atok" read "() => !!(window.bootstrap && window.bootstrap.atok), null" "() => !!window.bootstrap, null" L1 'the wait condition is not'
+mut XW11 "the mint wait's .catch dropped" mint "polling: 100 }).catch(() => {});" "polling: 100 });" M3 '"error":"TimeoutError"'
+mut XW12 "the revoke wait's .catch dropped" revoke "polling: 100 }).catch(() => {});" "polling: 100 });" R6 '"error":"TimeoutError"'
+# Hold-wording parity (CTO F5): the sha-normalized compare still sees an edit AFTER the sha on a sha-bearing hold,
+# so a normalization that ate the rest of the line would be RED here.
 cp "$RUNBOOK" "$M/XH1.md"
-FROM='(CTO F20), only after' TO='(CTO F20), after' perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/' "$M/XH1.md"
+FROM=', signed in as the old-account-owner login, only after' TO=', only after' perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/' "$M/XH1.md"
 ! cmp -s "$RUNBOOK" "$M/XH1.md"; check "XH1 lands" $?
 OUT="plan holds vs mutated runbook holds"
 [[ -r "$PLAN_FILE" && "$(holds_norm "$PLAN_FILE")" != "$(holds_norm "$M/XH1.md")" ]]
 check "XH1 (a runbook hold's wording edited) turns the hold compare RED" $?
+# Citation coverage: a sha written outside the <body> (sha256=<hex>) form is not silently uncited.
+cp "$RUNBOOK" "$M/XC1.md"
+FROM='retire the bad token with `p5-revoke.js` (sha256=' TO='retire the bad token with `p5-revoke.js` at sha256=' perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/' "$M/XC1.md"
+! cmp -s "$RUNBOOK" "$M/XC1.md"; check "XC1 lands" $?
+cite_check "$M/XC1.md"
+[[ "$bad_cite" -ne 0 && "$OUT" == *"64-hex values"* ]]; check "XC1 (a runbook sha outside the citation form) turns the citation check RED" $?
 # Sink mutants: scored only when the named row's FAIL line appears.
 sink_mut() { # <id> <label> <from> <to> <row FAIL prefix>
   local err="$M/$1.err"
@@ -1302,8 +1343,8 @@ sink_mut XS2 "sink keeps a partial file on a failed fsync" 'os.unlink(out)' 'pas
 # --- anti-vacuity floor: EXACT counts (reported directly, never through fail()) -----------------
 TOTAL=$((PASS + FAIL))
 SELFTEST_PASSES=1
-EXPECT_FULL=232
-EXPECT_MUTANTS=76
+EXPECT_FULL=250
+EXPECT_MUTANTS=94
 case "$MODE" in full) want_n="$EXPECT_FULL" ;; *) want_n="$EXPECT_MUTANTS" ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -ne "$want_n" ]]; then
   printf '  [FAIL] anti-vacuity floor: %s assertions ran in %s mode, the exact floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$want_n" >&2

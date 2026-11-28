@@ -211,7 +211,9 @@ D="$(dirname <B>)"; ok=1; for f in p5-read.js p5-mint.js p5-revoke.js p5-sink.py
 ```
 
 `<body>` (`p5-<x>.js`, or `p5-sink.py` for the sink) and `<sha256>` are the pair the hold or the section 5 table
-quotes. Take `<sha256>` from this runbook; a sha quoted in an archived plan may be superseded by a later re-pin.
+quotes. That go-quoted `<sha256>` must also equal this runbook's section 5 value for the body; if they differ (for
+example a go copied from an archived plan, whose shas a later re-pin supersedes), stop with `verdict=stop` and take
+a new go quoting the section 6 hold.
 Only `verdict=ok` lets the step
 go on. Then it builds the run file. The argument is passed as a JSON string that the body parses, so it can only ever
 be data (CTO D9):
@@ -322,7 +324,7 @@ exist means a live token nothing holds: list it by name and delete it in the sam
 
 | Return | Meaning | Next |
 |---|---|---|
-| `{atok:false}` | the session is signed out | sign in, then a new sink and a new go |
+| `{atok:false}` | the session is signed out, or the dashboard set no atok within the body's 15 s wait | sign in (or reload the dashboard tab), then a new sink and a new go |
 | `{refused:"args:<field>"}` | an argument is wrong; no request was sent | fix the argument object, new go |
 | `{refused:"origin"}` | the page is not on dash.cloudflare.com | open the dashboard, new go |
 | `{refused:"groups",matches:<n>}` | only n of the asked names resolved to exactly one selectable group | re-read the groups (section 4); a group the account list lacks is the user-owned fallback |

@@ -147,7 +147,10 @@ mutates no zone.
    of `{atok: false}`, `{matches: <n>}`, `{status, contentType, success}` or `{error: e.name}`. Never return the
    `x-atok`, the full id or `e.message`: a thrown request error may carry the request it was sending.
    1. `page.goto('https://dash.cloudflare.com/profile/api-tokens')` first. A page not reloaded since sign-in can show
-      a stale token list (observed 2026-11-26: it listed 0 tokens).
+      a stale token list (observed 2026-11-26: it listed 0 tokens). Then
+      `await page.waitForFunction(() => !!(window.bootstrap && window.bootstrap.atok), null, { timeout: 15000, polling: 100 }).catch(() => {})`:
+      the dashboard sets the atok after DOMContentLoaded (measured 2026-11-28, about 283 ms), so a read straight
+      after the goto returns `{atok: false}` on a signed-in page.
    2. One `page.evaluate` reads `window.bootstrap.atok` and `GET /api/v4/user/tokens`, and keeps the atok and the id
       whose prefix equals step 2's in Node-local variables. No atok: return `{atok: false}` (the page is signed out).
       Zero matches: return `{matches: 0}`; this login does not own it, and the agent asks the operator to sign in as

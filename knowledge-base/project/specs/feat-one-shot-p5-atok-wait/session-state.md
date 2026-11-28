@@ -32,3 +32,9 @@ run_health_dir: .soleur/runs/feat-one-shot-p5-atok-wait-20261128T100145Z
 - Status: complete (commit f7a3aa624f + this checklist commit)
 - Browser suite: full 232/0 (233 incl. self-test), --mutants 76/0; one-off checks (polling dropped, early condition, deleted hold, 63-hex hold sha) all RED.
 - Affected gate (149 of 774): rc=1. plugins/soleur failed on pencil-adapter-stub-repl.test.ts timeouts only (a different test timed out in an isolated re-run, 161/1); diff does not touch it. test-all-infra-coverage-notice was KILLED (SIGTERM, unresolved); operator ruled CI gates it.
+
+## Review Phase
+- Panel at 09d9b59726: security, test-design, code-quality, pattern, architecture, git-history, simplicity, semgrep-sast (8/8 returned).
+- Fixed inline: wait position unpinned (stub goto now drops page state; waitedOnce asserts after the last goto) (P1); go-quoted sha must equal the runbook value, else stop (P2); account-migration revoke recipe gets the same wait (P2); XH1 now edits a sha-bearing hold (P2); waitedOnce clauses mutation-backed, timeout bound [1000, 30000] (P2); mint/revoke .catch drops scored via M3/R6 (P3); every runbook 64-hex value must be a citation, XC1 (P3); comment and naming fixes (P3).
+- Wontfix: FLOW-comment wording in the bodies (a re-pin for wording only); stub typeof guard and 3-poll loop (harmless).
+- Suite after fixes: full 250 (+1 selftest), --mutants 94 (+1), 0 failed; SCORED 28.

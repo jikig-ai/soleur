@@ -207,6 +207,10 @@ Not edited: `knowledge-base/project/plans/archive/20261127-221105-2026-11-27-cho
    - XH1 mutates the wording of one runbook `- Hold:` line in a copy (for example `in the same sitting` changed to
      `in a sitting`). `holds_norm` of the copy must then differ from the archived plan's.
    - Add L1, L2, L3 and D7 to `SCORED`. The pristine-count check moves from 22 to 26.
+   - Review amendment (PR #13110): XH1 edits text after the sha on the sha-bearing `86aa993e` revoke hold, so it
+     also proves `holds_norm` does not eat the rest of the line. XW5-XW12 pin the wait's position (after the last
+     goto), timeout bound [1000, 30000] ms, interval polling, condition and the mint/revoke `.catch`; XC1 pins that
+     every 64-hex value in the runbook is a citation. `SCORED` adds M3 and R6 (28); floors move to 250 and 94.
 6. **Floors.**
    - Grep every write site of 219, 66 and 22.
    - Set `EXPECT_FULL` and `EXPECT_MUTANTS` from the counts of a real run (CTO F3).
