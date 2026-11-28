@@ -121,7 +121,7 @@ outside_git() { # <dir>
 }
 SB_BASE=""
 for cand in "${TMPDIR:-}" /var/tmp /tmp; do
-  if [[ -n "$cand" && -d "$cand" && -w "$cand" ]] && outside_git "$cand"; then SB_BASE="$cand"; break; fi
+  if [[ "$cand" == /?* && -d "$cand" && -w "$cand" ]] && outside_git "$cand"; then SB_BASE="$cand"; break; fi
 done
 [[ -n "$SB_BASE" ]] || { printf 'HARNESS: no writable temp directory outside a git work tree\n' >&2; exit 2; }
 export TMPDIR="$SB_BASE"
