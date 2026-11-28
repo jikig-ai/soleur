@@ -32,7 +32,9 @@
 #   CF_API_TOKEN_RULESETS, which returned 403 on /pagerules, and no fallback to any other token)
 #   change-history -> CF_API_TOKEN_AUDIT plus CF_ACCOUNT_ID       the others also need CF_ZONE_ID
 #   analytics-health, analytics-edge-errors, analytics-health-colo -> CF_API_TOKEN_ANALYTICS_READ (Analytics:Read on the zone soleur.ai only; read-only;
-#   expires 2027-02-07, after which a 401 records `token-invalid`; no fallback to any other token). Nothing else reads it.
+#   expires on the date its verify answer reports as `expires_on` (`/accounts/<id>/tokens/verify` for an account-owned token;
+#   `/user/tokens/verify` answers only for a user token), after which a 401 records `token-invalid`; no fallback to
+#   any other token). Nothing else reads it.
 # CF_API_TOKEN_ZONE_SETTINGS and CF_API_TOKEN_RULESETS are Terraform-scoped and write-capable (no read-only equivalent exists
 # yet); that exception is removable when read-only equivalents are minted, which is a credential change and the owner's.
 # CF_API_TOKEN_PAGERULES_READ is the read-only token minted for check C (#10479), so C is no longer part of that exception.
@@ -161,7 +163,7 @@
 #     `no-zone-access`                                -> check the zone id and the token's zone
 #     `token-lacks-scope` (403)                       -> the token lacks the zone scope: the owner's credential change; record `other: token-lacks-scope`
 #     `not-found` (404) or plain `bad-response`       -> re-run once; if it repeats record `other: not-found` / `other: bad-response`; not a fix PR
-#     `token-invalid`                                 -> the token (expires 2027-02-07) was rotated or expired: the owner's credential change
+#     `token-invalid`                                 -> the token was rotated or passed its `expires_on`: the owner's credential change
 #     `no-credential (<name>)`                        -> the Doppler config lacks that variable
 #     `no-tool (jq or date)`                          -> record `no-tool`; the host lacks the tool
 # Reasons to Records vocabulary: exit 10 -> no-credential; `no-tool (...)` -> `no-tool`; every other exit 11 and 14 reason -> `other: <the

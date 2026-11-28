@@ -1,9 +1,9 @@
 # suite-shard-legs.tsv — duration-aware shard assignment (ADR-240)
 # n=12
-# generated-from-run=46053704017
-# generated-from-runs=46053704017,45978011373,45964231859,45868797899,45843152864
+# generated-from-run=incremental
+# generated-from-runs=incremental
 # default-weight-ms=1539
-# generated-at=2026-11-27T20:07:29Z
+# generated-at=2026-11-27T23:12:21Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -692,6 +692,8 @@ tests/scripts/cf-account-migration-bootstrap	2
 tests/scripts/cf-account-migration-runbook	3
 tests/scripts/cf-account-migration-scope	8
 tests/scripts/cf-lb-overlay-gate	11
+tests/scripts/cf-old-login-token-remint-bootstrap	11
+tests/scripts/cf-old-login-token-remint-browser	10
 tests/scripts/cleanup-merged-space	10
 tests/scripts/deploy-access-token-forget	10
 tests/scripts/destroy-guard-counter-github	11
