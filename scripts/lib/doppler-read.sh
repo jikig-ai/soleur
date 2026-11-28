@@ -21,6 +21,10 @@
 #                                  --preserve-env); cds to the web-platform
 #                                  root first, so the lever is spelled
 #                                  root-relative like the other modes.
+#   tfapply <terraform args...>      the canonical OPERATOR state-writing lever:
+#                                  exports the Tier-B AWS state pair, nests the
+#                                  infra-privileged loader outside prd_terraform,
+#                                  then runs terraform from the web-platform root.
 #   bs   <command> [args...]         run <command> with BETTERSTACK_QUERY_{HOST,
 #                                  USERNAME,PASSWORD} injected from soleur/
 #                                  prd_terraform via targeted gets for the names
@@ -37,8 +41,8 @@ case "$_mode" in
   hash|get)
     [ "$#" -eq 4 ] || { printf 'doppler-read.sh: %s wants <project> <config> <name>\n' "$_mode" >&2; exit 2; }
     ;;
-  tf)
-    [ "$#" -ge 2 ] || { printf 'doppler-read.sh: tf wants <terraform args...>\n' >&2; exit 2; }
+  tf|tfapply)
+    [ "$#" -ge 2 ] || { printf 'doppler-read.sh: %s wants <terraform args...>\n' "$_mode" >&2; exit 2; }
     ;;
   bs)
     [ "$#" -ge 2 ] || { printf 'doppler-read.sh: bs wants <command> [args...]\n' >&2; exit 2; }
@@ -62,13 +66,18 @@ case "$_mode" in
     ;;
   get)
     shift
-    exec doppler secrets get "$3" --plain -p "$1" -c "$2"
+    _v="$(doppler secrets get "$3" --plain -p "$1" -c "$2" 2>/dev/null)" || {
+      printf 'doppler-read.sh: get read failed (project %s config %s)\n' "$1" "$2" >&2; exit 1; }
+    [ -n "$_v" ] || {
+      printf 'doppler-read.sh: get read empty (project %s config %s)\n' "$1" "$2" >&2; exit 1; }
+    printf '%s\n' "$_v"
     ;;
   tf)
     shift
     # Resolve the lib dir ABSOLUTE before the cd — $0 is relative to the caller's cwd.
     _libd="$(cd "$(dirname "$0")" && pwd)"
-    cd "$_libd/../../apps/web-platform/infra"
+    cd "$_libd/../../apps/web-platform/infra" || {
+      printf 'doppler-read.sh: web-platform infra root is missing\n' >&2; exit 1; }
     # Pin the canonical app-domain base BEFORE the bulk injection: prd_terraform is a
     # branch-writable config, and under --name-transformer tf-var a planted APP_DOMAIN_BASE
     # there would arrive as TF_VAR_app_domain_base and redirect the credentialed webhook
@@ -80,6 +89,26 @@ case "$_mode" in
       printf 'doppler-read.sh: app-domain-base derivation failed\n' >&2; exit 1; }
     export TF_VAR_app_domain_base
     exec doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform "$@"
+    ;;
+  tfapply)
+    shift
+    # Same cwd/domain pin as tf, then the two pieces the prose form repeatedly
+    # dropped: the bare AWS state backend pair and the outer infra-privileged
+    # loader. Targeted gets put the AWS values in the process environment only;
+    # neither value is ever an argv member.
+    _libd="$(cd "$(dirname "$0")" && pwd)"
+    cd "$_libd/../../apps/web-platform/infra" || {
+      printf 'doppler-read.sh: web-platform infra root is missing\n' >&2; exit 1; }
+    TF_VAR_app_domain_base="$(bash "$_libd/../derive-app-domain-base.sh")" || {
+      printf 'doppler-read.sh: app-domain-base derivation failed\n' >&2; exit 1; }
+    export TF_VAR_app_domain_base
+    _aws_id="$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain 2>/dev/null)" || {
+      printf 'doppler-read.sh: AWS state key read failed\n' >&2; exit 1; }
+    _aws_secret="$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain 2>/dev/null)" || {
+      printf 'doppler-read.sh: AWS state secret read failed\n' >&2; exit 1; }
+    [ -n "$_aws_id" ] && [ -n "$_aws_secret" ] || {
+      printf 'doppler-read.sh: AWS state pair read empty\n' >&2; exit 1; }
+    AWS_ACCESS_KEY_ID="$_aws_id" AWS_SECRET_ACCESS_KEY="$_aws_secret"       exec doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var --         doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform "$@"
     ;;
   bs)
     shift
