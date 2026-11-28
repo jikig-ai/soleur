@@ -1744,20 +1744,33 @@ t93_net_timeouts() {
   # A PATH-shimmed git hangs one call per mode with the real sleep; the
   # three runs go in parallel so the suite pays one bound-sized window.
   local tmp real slp mode rc to_lines kill bound
-  # The bound the hook declares, read from its own two _NET_TO lines (they
-  # must agree), so the timing rows below test the value the hook ships.
-  to_lines=$(grep -E '^(if|elif) command -v g?timeout .*_NET_TO=\(g?timeout -k [0-9]+ [0-9]+\);( fi)?$' "$HOOK" \
-    | sed -E 's/.*-k ([0-9]+) ([0-9]+)\).*/\1 \2/' | sort -u)
-  if [[ $(grep -c . <<< "$to_lines") -ne 1 || "$(grep -cE '_NET_TO=\(g?timeout -k' "$HOOK")" -ne 2 ]]; then
-    fail "T93 hook declares one _NET_TO bound on both its timeout and gtimeout lines (got: ${to_lines:-none})"
-    TOTAL=$((TOTAL + 1)); return
+  # The bound the hook declares, read from BOTH _NET_TO lines (the `if`
+  # timeout line Linux runs, and the `elif` gtimeout line ending `; fi`);
+  # both must parse and carry the same kill/bound, so the rows below test the
+  # value every platform ships. A parse miss is a FAIL row, never an errexit.
+  local raw n_lines
+  raw=$(grep -E '^(if|elif) command -v g?timeout .*_NET_TO=\(g?timeout -k [0-9]+ [0-9]+\)(; fi)?$' "$HOOK") || raw=""
+  n_lines=$(grep -c . <<< "$raw") || n_lines=0
+  to_lines=$(sed -E 's/.*-k ([0-9]+) ([0-9]+)\).*/\1 \2/' <<< "$raw" | sort -u) || to_lines=""
+  if [[ "$n_lines" -ne 2 || $(grep -c . <<< "$to_lines") -ne 1 \
+        || "$(grep -cE '_NET_TO=\(g?timeout' "$HOOK")" -ne 2 ]]; then
+    fail "T93 hook declares one _NET_TO bound on both its timeout and gtimeout lines (lines=$n_lines, got: ${to_lines:-none})"
+    TOTAL=$((TOTAL + 1))
+    # The three timing rows cannot run without a bound: count them as failed
+    # so the floor reads 215 on this path too.
+    for mode in lsremote pullfetch mainfetch; do
+      fail "T93 hung $mode not measured: no single parsable _NET_TO bound"
+      TOTAL=$((TOTAL + 1))
+    done
+    return
   fi
   read -r kill bound <<< "$to_lines"
   # Worst case on the PR-number path: two reads succeed just under the bound,
   # the third is killed (a timed-out read denies at once, so three timeouts
   # cannot chain): 3 x bound + kill. Budget 60 s, a conservative figure —
   # settings.json sets no timeout for this hook, and a longer harness default
-  # only adds margin. 20 s (62) or more reds here.
+  # only adds margin. 20 s (62) on either line, or any kill/bound pair over
+  # budget, reds here.
   if (( 3 * bound + kill < 60 )); then
     pass "T93 census worst case 3 x ${bound} + ${kill} s fits a 60 s hook budget"
   else
