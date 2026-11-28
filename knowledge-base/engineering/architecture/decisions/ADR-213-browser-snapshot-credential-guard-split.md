@@ -657,8 +657,9 @@ check (i) grows to cover what can proxy, record or MITM `page.request`. The new 
 A proxy flag before `--`, `--allow-proxy-and-node-env`, turns off exactly the proxy argv/env rows, the three `NODE_*`
 rows and the config `proxy` key; every other refusal stays. The plugin registration (`plugins/soleur/.mcp.json`)
 passes it, so a host behind a corporate proxy or an extra CA still browses; the repo `.mcp.json` registration does not,
-and the Phase 5 sitting runs on that one and checks its args. Each startup refusal on a setting now ends with a
+and the Phase 5 sitting runs on that one and checks its args. The repo registration also passes `--chromium-fallback`
+(CTO U3), so on a host with no Google Chrome it runs the bundled Chromium with the sandbox on instead of failing to start. Each startup refusal on a setting now ends with a
 `To fix:` remedy.
 
-The CTO rulings are S1, R1, U1 and U2 in
+The CTO rulings are S1, R1, U1, U2 and U3 in
 `knowledge-base/project/specs/archive/20261128-193943-feat-one-shot-p5-mint-sink-page-request/decision-challenges.md`.

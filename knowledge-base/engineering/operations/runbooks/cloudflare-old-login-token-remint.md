@@ -234,11 +234,17 @@ launched it refuses, at start, every setting that could proxy, record or MITM th
 `--save-session`; the proxy refuses the other names anyway), their `PLAYWRIGHT_MCP_*` env twins, `NODE_OPTIONS`,
 `NODE_EXTRA_CA_CERTS`, `NODE_TLS_REJECT_UNAUTHORIZED`, an `.ini` config, and config `proxy`, `recordHar`,
 `extraHTTPHeaders`, `ignoreHTTPSErrors` under `contextOptions` or `launchOptions` (CTO S1, R1). Then confirm it:
-`claude mcp get playwright` (read the args; they must not contain `--allow-proxy-and-node-env`, which turns the
-proxy and `NODE_*` refusals off and belongs to the plugin `plugin:soleur:playwright` server only, CTO U1), `env | grep -E '^(PLAYWRIGHT_MCP_|NODE_OPTIONS|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED)='`
+`claude mcp get playwright` (read the args; they must contain `--chromium-fallback` and must not contain
+`--allow-proxy-and-node-env`, which turns the proxy and `NODE_*` refusals off and belongs to the plugin
+`plugin:soleur:playwright` server only, CTO U1 and U3), `env | grep -E '^(PLAYWRIGHT_MCP_|NODE_OPTIONS|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED)='`
 (expect only `PLAYWRIGHT_MCP_PING_TIMEOUT_MS`) and the `--config` file it names. The restart also gives a fresh
 browser, so no earlier `browser_run_code_unsafe` call left a trace running or `page.request` patched (CTO R2; the
-mint body also stops a trace and refuses `tampered`). Run every body through the repo server's
+mint body also stops a trace and refuses `tampered`). A `.mcp.json` change takes effect only after a full Claude Code
+restart, never a `/mcp` reconnect (it reuses the cached command). On a host with no Google Chrome the repo server
+runs Playwright's bundled Chromium with its sandbox on (`--chromium-fallback`, CTO U3); if the first browser call
+reports a sandbox failure, stop and install Google Chrome, never pass `--no-sandbox` and never switch servers. The
+repo server uses its own browser profile, not the plugin server's, so the operator signs in to the Cloudflare
+dashboard again in that browser before the first body runs. Run every body through the repo server's
 `mcp__playwright__browser_run_code_unsafe`, never `mcp__plugin_soleur_playwright__*`: the plugin server passes
 `--allow-proxy-and-node-env`, so it starts under a proxy or `NODE_*` setting the repo server refuses (CTO U1). During
 the sitting, call no `browser_run_code_unsafe` other than the composed run files, and no `browser_network_request`, `browser_network_requests`, `browser_console_messages`,

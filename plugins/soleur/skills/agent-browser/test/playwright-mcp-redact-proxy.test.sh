@@ -1338,7 +1338,7 @@ chmod +x "$G2/bin/npx"
 run_mcp_args() {
   local cmd="$1" tag="$2"
   : > "$G2/$tag.jsonl"
-  ( cd "$REPO_ROOT" && export SHIM_OUT="$G2/$tag.jsonl" HOME="$G2/home" PATH="$G2/bin:$PATH" && sleep 5 | timeout 20 bash -c "$cmd" >/dev/null 2>"$G2/$tag.err" ) || true
+  ( cd "$REPO_ROOT" && export SHIM_OUT="$G2/$tag.jsonl" HOME="$G2/home" PATH="$G2/bin:$PATH" PLAYWRIGHT_MCP_PROXY_CHROME_PATHS="$G2/no-chrome" && sleep 5 | timeout 20 bash -c "$cmd" >/dev/null 2>"$G2/$tag.err" ) || true
 }
 # g2_prop <jsonl> <property> — exit 0 when the property holds; 3 when the shim never ran
 g2_prop() {
@@ -1356,6 +1356,11 @@ checks = {
     "profile-once": argv.count(f"--user-data-dir={prof}") == 1 and sum(a.startswith("--user-data-dir") for a in argv) == 1,
     "config-once": argv.count("--config=.claude/playwright-mcp.config.json") == 1 and sum(a.startswith("--config") for a in argv) == 1,
     "flag-appended-once": argv[-2:] == ["--snapshot-mode", "none"] and argv.count("--snapshot-mode") == 1,
+    # CTO U3 (2026-11-28): on a host with no Google Chrome the repo registration falls back to the bundled Chromium
+    # with the sandbox ON, once, ahead of the appended --snapshot-mode, and never --no-sandbox.
+    "fallback-once": [argv[i:i + 3] for i in range(len(argv) - 2)].count(["--browser", "chromium", "--sandbox"]) == 1
+        and argv.count("--browser") == 1 and "--no-sandbox" not in argv
+        and argv.index("--browser") < argv.index("--snapshot-mode"),
 }
 sys.exit(0 if checks[prop] else 1)
 PY
@@ -1366,7 +1371,7 @@ MCP_ARG0="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['mcp
 assert_true 'Guard 2: .mcp.json playwright command is bash -c <string>' test "$MCP_ARG0" = "-c"
 assert_true 'Guard 2: the .mcp.json string itself carries no --snapshot-mode (only the proxy may append it)' bash -c '[[ "$1" != *"--snapshot-mode"* ]]' _ "$MCP_ARGS"
 run_mcp_args "$MCP_ARGS" g2
-for prop in one-call parent-is-shipped-proxy pin-once profile-once config-once flag-appended-once; do
+for prop in one-call parent-is-shipped-proxy pin-once profile-once config-once flag-appended-once fallback-once; do
   assert_true "Guard 2: $prop" g2_prop "$G2/g2.jsonl" "$prop"
 done
 # Guard 2 mutants of the args string: each must fail its property while the shim DID run
@@ -1378,7 +1383,7 @@ g2_mut() {  # <label> <mutated-args> <tag> <property>
   local rc=0; g2_prop "$G2/$tag.jsonl" "$prop" || rc=$?
   if [[ $rc == 1 ]]; then ok "$label"; elif [[ $rc == 3 ]]; then bad "$label — the shim never ran"; else bad "$label — mutant survived"; fi
 }
-PROXY_REL='python3 plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py -- '
+PROXY_REL='python3 plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py --chromium-fallback -- '
 g2_mut 'Guard 2 mutant 1: proxy removed → the parent is not the shipped proxy' "${MCP_ARGS/"$PROXY_REL"/}" g2m1 parent-is-shipped-proxy
 M2="$(python3 -c 'import sys; s,p=sys.argv[1],sys.argv[2]; i=s.index(p); s=s[:i]+s[i+len(p):]; print(s.rstrip()+" -- "+p.strip(" -"))' "$MCP_ARGS" "$PROXY_REL")"
 g2_mut 'Guard 2 mutant 2: proxy AFTER the server → the parent is not the shipped proxy' "$M2" g2m2 parent-is-shipped-proxy
@@ -1388,6 +1393,7 @@ g2_mut 'Guard 2 mutant 6: a passthrough saved under the proxy'"'"'s filename →
 g2_mut 'Guard 2 mutant 7: an unwrapped npx run before the wrapped one → two calls' "${MCP_ARGS/exec env/npx @playwright/mcp@$PIN --probe; exec env}" g2m7 one-call
 g2_mut 'Guard 2 mutant 8: a second --config later in the args → config not once' "${MCP_ARGS/--config=.claude\/playwright-mcp.config.json/--config=.claude/playwright-mcp.config.json --config=$G2/second-config.json}" g2m8 config-once
 g2_mut 'Guard 2 mutant 9: a second --user-data-dir → profile not once' "${MCP_ARGS/--user-data-dir=\"\$prof\"/--user-data-dir=\"\$prof\" --user-data-dir=/tmp/other}" g2m9 profile-once
+g2_mut 'Guard 2 mutant 11: --chromium-fallback dropped from the repo registration → a Chrome-less host gets no browser (CTO U3)' "${MCP_ARGS/ --chromium-fallback -- / -- }" g2m11 fallback-once
 g2_mut 'Guard 2 mutant 10: --snapshot-mode full in the args → flag not appended once' "${MCP_ARGS/--user-data-dir=\"\$prof\"/--snapshot-mode full --user-data-dir=\"\$prof\"}" g2m10 flag-appended-once
 assert_true 'Guard 2 mutant 5: renaming the server key fails the lookup loudly' bash -c '! python3 -c "import json,sys; d=json.load(open(sys.argv[1])); d[\"mcpServers\"][\"playwrite\"]=d[\"mcpServers\"].pop(\"playwright\"); print(d[\"mcpServers\"][\"playwright\"][\"args\"][1])" "$1" 2>/dev/null' _ "$REPO_ROOT/.mcp.json"
 # The wrapper no longer reaps: no pattern kill of the proxy, the server or Chrome, and the slot script is sourced
@@ -1412,7 +1418,7 @@ assert_true 'Guard 2: the .mcp.json launch string is exactly the pinned one (slo
 import sys
 s, slot, pin = sys.argv[1:]
 want = (f". {slot} || exit 1; exec env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 GDK_BACKEND=x11 DISPLAY=${{DISPLAY:-:0}} "
-        "python3 plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py -- "
+        "python3 plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py --chromium-fallback -- "
         f'npx @playwright/mcp@{pin} --user-data-dir="$prof" --config=.claude/playwright-mcp.config.json')
 sys.exit(0 if s == want else 1)
 PY
