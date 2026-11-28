@@ -35,7 +35,7 @@
 #             relative, has no parent, or sits in a git work tree (a .git directory or a .git FILE).
 #   P-wait    each body waits once, after its last goto, for window.bootstrap.atok (set ~283 ms after
 #             DOMContentLoaded, measured 2026-11-28, recorded in
-#             knowledge-base/project/plans/2026-11-28-fix-p5-browser-bodies-wait-for-atok-plan.md) with a
+#             knowledge-base/project/plans/archive/20261128-131628-2026-11-28-fix-p5-browser-bodies-wait-for-atok-plan.md) with a
 #             timeout in [1000, 30000] ms, interval polling below it, and a condition that is true only when
 #             the atok is set (L1-L3); a signed-out page still returns {atok:false} (M3, R6, D7).
 #   P-holds   the archived plan's Operator Holds equal the runbook's section 6 holds, modulo an exact
