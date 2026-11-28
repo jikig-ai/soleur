@@ -4,8 +4,9 @@
 # PROPERTY. The bastion birth is ready ONLY when the strict reader prints exactly one
 # `verdict=ready` and exits 0. Every other outcome (not_ready, skipped, no verdict, two verdicts, a
 # ready line beside a non-zero exit, an unreadable reader) powers soleur-bastion off through the
-# Hetzner API, prints the recovery step, comments the run on #12879, and returns 1, so a wrong host
-# never sits running on the private network while it waits for the replace route.
+# Hetzner API, prints the recovery step, comments the run on #9421 (the open epic, R4), and returns 1, so
+# a wrong host never sits running on the private network. A server that existed BEFORE the apply (the
+# pre-apply id set, the 4th argument) is never read or powered off, on either route.
 #
 # INSTRUMENT. The reader is a stub that prints a scripted body and exit code; curl and gh are PATH
 # stubs that log their argv (and the curl config on stdin) and refuse anything they were not taught.
@@ -66,10 +67,10 @@ printf '%s\n' "$cfg" >> "$BBV_LOG/curl.cfg"
 emit() { if [ -n "$out" ]; then printf '%s' "$1" > "$out"; printf '%s' "$2"; else printf '%s\n%s' "$1" "$2"; fi; }
 case "$method $url" in
   "GET https://api.hetzner.cloud/v1/servers?name=soleur-bastion")
-    [ "${BBV_LOOKUP_CODE:-200}" = 200 ] || { emit '{}' "$BBV_LOOKUP_CODE"; exit 0; }
+    [ "${BBV_LOOKUP_CODE:-200}" = 200 ] || { emit "${BBV_LOOKUP_ERRBODY:-{\}}" "$BBV_LOOKUP_CODE"; exit 0; }
     if [ -n "${BBV_LOOKUP_BODY:-}" ]; then emit "$BBV_LOOKUP_BODY" 200
     else emit '{"servers":[{"id":4242,"name":"soleur-bastion"}]}' 200; fi ;;
-  "POST https://api.hetzner.cloud/v1/servers/4242/actions/poweroff")
+  "POST https://api.hetzner.cloud/v1/servers/"*"/actions/poweroff")
     emit '{"action":{"id":1,"status":"running"}}' "${BBV_POWEROFF_CODE:-201}" ;;
   "GET https://api.hetzner.cloud/v1/actions/1")
     emit "{\"action\":{\"id\":1,\"status\":\"${BBV_ACTION_STATUS:-success}\"}}" 200 ;;
@@ -79,13 +80,14 @@ STUB
 cat > "$BIN/gh" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$*" >> "$BBV_LOG/gh.log"
-[ "$1 $2 $3" = "issue comment 12879" ] || exit 9
-exit 0
+[ "$1 $2 $3" = "issue comment 9421" ] || exit 9
+exit "${BBV_GH_RC:-0}"
 STUB
 chmod +x "$WORK/reader.sh" "$BIN/curl" "$BIN/gh"
 
 LIB_UNDER_TEST="$LIB"
 LABEL_ARG=""   # set for one row to pass bastion_boot_verify's optional 3rd argument
+PRE_ARG="__unset__"  # bastion_boot_verify's 4th argument (the pre-apply id set); __unset__ omits it
 # run <case> <reader-out> <reader-rc> <apply-outcome> [VAR=value...] -> RC, OUT, PO (poweroff_result),
 # SUM (step summary), logs in $WORK/<case>/
 run() {
@@ -95,13 +97,13 @@ run() {
   OUT="$(env -i PATH="$BIN:/usr/bin:/bin" HOME="$WORK" TMPDIR="$TMPDIR" BBV_LOG="$log" BBV_READER_OUT="$rout" BBV_READER_RC="$rrc" \
     BASTION_BOOT_TRAIL="$WORK/reader.sh" HCLOUD_TOKEN=hcloudtok123 GH_TOKEN=ghtok RUN_URL="https://github.com/o/r/actions/runs/1" \
     GITHUB_OUTPUT="$log/out" GITHUB_STEP_SUMMARY="$log/sum" \
-    "$@" bash -c 'source "$1" || exit 98; bastion_boot_verify 1790000000 "$2" ${3:+"$3"}' _ "$LIB_UNDER_TEST" "$apply" "$LABEL_ARG" 2>&1)" || RC=$?
+    "$@" bash -c 'source "$1" || exit 98; if [[ "$4" == __unset__ ]]; then bastion_boot_verify 1790000000 "$2" ${3:+"$3"}; else bastion_boot_verify 1790000000 "$2" "${3:-bastion-host-create}" "$4"; fi' _ "$LIB_UNDER_TEST" "$apply" "$LABEL_ARG" "$PRE_ARG" 2>&1)" || RC=$?
   CURL="$(cat "$log/curl.log")"; GH="$(cat "$log/gh.log")"; CFG="$(cat "$log/curl.cfg")"; RENV="$(cat "$log/reader.env" 2>/dev/null)"
-  PO="$(sed -n 's/^poweroff_result=//p' "$log/out")"; SUM="$(cat "$log/sum")"
+  PO="$(sed -n 's/^poweroff_result=//p' "$log/out")"; SUM="$(cat "$log/sum")"; CR="$(sed -n 's/^comment_result=//p' "$log/out")"
 }
 POWEROFF="POST https://api.hetzner.cloud/v1/servers/4242/actions/poweroff"
 t() { cases=$((cases + 1)); if [[ "$2" -eq 0 ]]; then pass "$1"; else fail "$1" "rc=$RC out=$OUT curl=$CURL gh=$GH"; fi; }
-not_ready_shape() { [[ "$RC" -eq 1 && "$CURL" == *"$POWEROFF"* && "$GH" == *"issue comment 12879"* && "$OUT" == *"bastion-host-replace"* ]]; }
+not_ready_shape() { [[ "$RC" -eq 1 && "$CURL" == *"$POWEROFF"* && "$GH" == *"issue comment 9421"* && "$OUT" == *"bastion-host-replace"* ]]; }
 
 RC=0 CURL="" GH=""
 t "the library exists at scripts/lib/bastion-boot-verify.sh" "$([[ -s "$LIB" ]]; echo $?)"
@@ -114,10 +116,13 @@ t "ready: nothing is powered off and no comment is posted" "$([[ "$CURL" != *POS
 t "ready: the reader ran strict for soleur-bastion, bound to the created server's id, with the anchor and job=success" "$(ready_bound_shape; echo $?)"
 t "ready: poweroff_result=not_needed and the summary says READY" "$([[ "$PO" == not_needed && "$SUM" == *"**READY**"* ]]; echo $?)"
 run notready 'verdict=not_ready\n' 1 success
-t "not_ready: powers off, comments on #12879, names the recovery, returns 1" "$(not_ready_shape; echo $?)"
+t "not_ready: powers off, comments on #9421, names the recovery, returns 1" "$(not_ready_shape; echo $?)"
 t "not_ready: poweroff_result=powered_off and the summary says it was powered off" "$([[ "$PO" == powered_off && "$SUM" == *"was powered off"* ]]; echo $?)"
 t "the reader's trail is printed exactly once (streamed, not re-printed)" "$([[ "$(grep -c '^verdict=not_ready$' <<<"$OUT")" -eq 1 ]]; echo $?)"
-t "the recovery names bastion-host-replace as not yet available" "$([[ "$OUT" == *"bastion-host-replace (#12879, not yet available — escalate to the owner)"* ]]; echo $?)"
+t "the recovery names the live replace route, never 'not yet available'" "$([[ "$OUT" == *"-f apply_target=bastion-host-replace -f confirm=REPLACE-bastion -f expected_bastion_server_id=4242"* && "$OUT" != *"not yet available"* ]]; echo $?)"
+t "the recovery line says a replace destroys the kept disk" "$([[ "$OUT" == *"fix bastion-cloud-init.yml if it is a template fault, then replace (this destroys the kept disk)"* ]]; echo $?)"
+t "the create label keeps its own advice (the birth gate refuses a second create)" "$([[ "$OUT" == *"Do not re-run bastion-host-create"* ]]; echo $?)"
+t "a posted comment records comment_result=posted" "$([[ "$CR" == posted ]]; echo $?)"
 run skipped 'verdict=skipped\n' 2 success
 t "skipped (an unread boot) is not ready: powers off and returns 1" "$(not_ready_shape; echo $?)"
 run noverdict 'boot-trail: something\n' 0 success
@@ -201,11 +206,11 @@ srow "the trail teed by reopening /dev/fd/N" '      | { while IFS= read -r line 
 
 echo "power-off arm"
 run noserver 'verdict=not_ready\n' 1 failure BBV_LOOKUP_BODY='{"servers":[]}'
-t "no soleur-bastion server: nothing to power off, still returns 1 and comments" "$([[ "$RC" -eq 1 && "$CURL" != *POST* && "$GH" == *"12879"* && "$OUT" == *"no soleur-bastion server"* && "$PO" == absent ]]; echo $?)"
+t "no soleur-bastion server: nothing to power off, still returns 1 and comments" "$([[ "$RC" -eq 1 && "$CURL" != *POST* && "$GH" == *"9421"* && "$OUT" == *"no soleur-bastion server"* && "$PO" == absent ]]; echo $?)"
 run twoservers 'verdict=not_ready\n' 1 success BBV_LOOKUP_BODY='{"servers":[{"id":4242,"name":"soleur-bastion"},{"id":4343,"name":"soleur-bastion"}]}'
-two_servers_shape() { [[ "$RC" -eq 1 && "$CURL" != *POST* && "$OUT" == *"2 servers"* && "$PO" == failed && "$GH" == *"issue comment 12879"*"power-off FAILED"* ]]; }
+two_servers_shape() { [[ "$RC" -eq 1 && "$CURL" != *POST* && "$OUT" == *"2 servers"* && "$PO" == failed && "$GH" == *"issue comment 9421"*"power-off FAILED"* ]]; }
 t "two servers named soleur-bastion: refuses to guess, powers off nothing, returns 1, still comments the failure" "$(two_servers_shape; echo $?)"
-lookup_failed_shape() { [[ "$RC" -eq 1 && "$CURL" != *POST* && "$GH" == *"12879"* && "$OUT" == *"server lookup failed"* && "$OUT" != *"nothing to power off"* && "$PO" == failed ]]; }
+lookup_failed_shape() { [[ "$RC" -eq 1 && "$CURL" != *POST* && "$GH" == *"9421"* && "$OUT" == *"server lookup failed"* && "$OUT" != *"nothing to power off"* && "$PO" == failed ]]; }
 run lookup500 'verdict=not_ready\n' 1 failure BBV_LOOKUP_CODE=500
 t "an unreadable server lookup is named as failed (never 'nothing to power off'), still returns 1 and comments" "$(lookup_failed_shape; echo $?)"
 t "a failed lookup's summary says the power-off FAILED, never that the host was powered off" "$([[ "$SUM" == *"power-off FAILED"* && "$SUM" != *"was powered off"* ]]; echo $?)"
@@ -213,12 +218,12 @@ run lookupnoarray 'verdict=not_ready\n' 1 failure BBV_LOOKUP_BODY='{}'
 t "a 200 lookup without a servers array is a failed lookup, not an absent server" "$(lookup_failed_shape; echo $?)"
 run poweroff500 'verdict=not_ready\n' 1 success BBV_POWEROFF_CODE=500
 t "a failed poweroff call is an error naming the manual step, returns 1" "$([[ "$RC" -eq 1 && "$OUT" == *"::error::"*"poweroff"* && "$PO" == failed ]]; echo $?)"
-poweroff_failed_comment_shape() { [[ "$GH" == *"issue comment 12879"*"the power-off FAILED, soleur-bastion may still be running"* && "$GH" != *"powered off, disk kept"* && "$SUM" == *"power-off FAILED"* ]]; }
-t "a failed poweroff: the #12879 comment and the summary say the power-off FAILED" "$(poweroff_failed_comment_shape; echo $?)"
+poweroff_failed_comment_shape() { [[ "$GH" == *"issue comment 9421"*"the power-off FAILED, soleur-bastion may still be running"* && "$GH" != *"powered off, disk kept"* && "$SUM" == *"power-off FAILED"* ]]; }
+t "a failed poweroff: the #9421 comment and the summary say the power-off FAILED" "$(poweroff_failed_comment_shape; echo $?)"
 run actionerror 'verdict=not_ready\n' 1 success BBV_ACTION_STATUS=error
 t "an accepted poweroff whose action ends in error is a failed power-off, never 'powered off'" "$([[ "$RC" -eq 1 && "$PO" == failed && "$OUT" == *"ended in error"* && "$SUM" == *"power-off FAILED"* ]]; echo $?)"
 run notoken 'verdict=not_ready\n' 1 success HCLOUD_TOKEN=
-t "no HCLOUD_TOKEN: no API call, an error, returns 1, still comments" "$([[ "$RC" -eq 1 && -z "$CURL" && "$OUT" == *"HCLOUD_TOKEN"* && "$PO" == failed && "$GH" == *"issue comment 12879"* ]]; echo $?)"
+t "no HCLOUD_TOKEN: no API call, an error, returns 1, still comments" "$([[ "$RC" -eq 1 && -z "$CURL" && "$OUT" == *"HCLOUD_TOKEN"* && "$PO" == failed && "$GH" == *"issue comment 9421"* ]]; echo $?)"
 run notready 'verdict=not_ready\n' 1 success
 t "the Hetzner token rides the stdin config, never curl's argv" "$([[ "$CFG" == *"hcloudtok123"* ]] && ! grep -q hcloudtok123 "$WORK/notready/curl.log"; echo $?)"
 t "the comment carries the run URL" "$([[ "$GH" == *"https://github.com/o/r/actions/runs/1"* ]]; echo $?)"
@@ -250,12 +255,138 @@ mrow "the poweroff call removed" '"https://api.hetzner.cloud/v1/servers/${_BBV_S
 mrow "a failed lookup treated as an absent server" '  if [[ "$lrc" -eq 3 ]]; then
     echo "bastion-boot-verify: no soleur-bastion server exists (the apply' '  if [[ "$lrc" -ne 0 ]]; then
     echo "bastion-boot-verify: no soleur-bastion server exists (the apply' lookup_failed_shape lookup500 'verdict=not_ready\n' 1 failure BBV_LOOKUP_CODE=500
-mrow "the GH_TOKEN-unset warning deleted" '    echo "::warning::bastion-boot-verify: GH_TOKEN is not set; the run URL was not commented on #12879."' '    :' nogh_shape nogh 'verdict=not_ready\n' 1 success GH_TOKEN=
+mrow "the GH_TOKEN-unset warning deleted" '    echo "::warning::bastion-boot-verify: GH_TOKEN is not set; the run URL was not commented on #9421."' '    :' nogh_shape nogh 'verdict=not_ready\n' 1 success GH_TOKEN=
 mrow "a lookup without a servers array read as empty" "'.servers | arrays | length'" "'.servers | length'" lookup_failed_shape lookupnoarray 'verdict=not_ready\n' 1 failure 'BBV_LOOKUP_BODY={}'
 mrow "the read not bound to the created server" 'BOOT_TRAIL_HOST_ID="$host_id"' 'BOOT_TRAIL_HOST_ID=""' ready_bound_shape ready 'verdict=ready\n' 0 success
 mrow "the comment claims a power-off that failed" '    *) poweroff_note="the power-off FAILED, soleur-bastion may still be running"' '    *) poweroff_note="soleur-bastion powered off, disk kept"' poweroff_failed_comment_shape poweroff500 'verdict=not_ready\n' 1 success BBV_POWEROFF_CODE=500
 mrow "the comment only on a successful power-off" 'if [[ -n "${GH_TOKEN:-}" ]]; then' 'if [[ -n "${GH_TOKEN:-}" && "$_BBV_POWEROFF" == powered_off ]]; then' two_servers_shape twoservers 'verdict=not_ready\n' 1 success 'BBV_LOOKUP_BODY={"servers":[{"id":4242,"name":"soleur-bastion"},{"id":4343,"name":"soleur-bastion"}]}'
 mrow "the lookup takes the first of two servers" '  if [[ "$n" -ne 1 ]]; then' '  if [[ "$n" -lt 1 ]]; then' two_servers_shape twoservers 'verdict=not_ready\n' 1 success 'BBV_LOOKUP_BODY={"servers":[{"id":4242,"name":"soleur-bastion"},{"id":4343,"name":"soleur-bastion"}]}'
+
+echo "the replace label (#12879)"
+LABEL_ARG=bastion-host-replace PRE_ARG=4343
+run replacenr 'verdict=not_ready\n' 1 success
+LABEL_ARG="" PRE_ARG="__unset__"
+t "replace label, not ready: powers off the new server and prints the ready-to-run replace dispatch for it" \
+  "$([[ "$RC" -eq 1 && "$CURL" == *"$POWEROFF"* && "$OUT" == *"gh workflow run apply-web-platform-infra.yml -f apply_target=bastion-host-replace -f confirm=REPLACE-bastion -f expected_bastion_server_id=4242"* ]]; echo $?)"
+t "replace label: never 'not yet available', never 'Do not re-run bastion-host-create'" \
+  "$([[ "$OUT" != *"not yet available"* && "$OUT" != *"Do not re-run bastion-host-create"* ]]; echo $?)"
+t "replace label: the comment targets #9421 and names the label" "$([[ "$GH" == "issue comment 9421 "*"bastion-host-replace did not reach ready"* ]]; echo $?)"
+
+echo "the pre-apply id set (4th argument; _bbv_poweroff [pre-ids])"
+# The API holds only the pre-apply server: an apply that failed before the destroy. It is never touched.
+old_untouched_shape() { [[ "$RC" -eq 1 && "$CURL" != *POST* && "$PO" == old_untouched && "$SUM" == *"pre-apply"* && "$SUM" == *"untouched"* && "$GH" == *"untouched"* ]]; }
+LABEL_ARG=bastion-host-replace PRE_ARG=4242
+run preapplyfail 'verdict=not_ready\n' 1 failure
+LABEL_ARG="" PRE_ARG="__unset__"
+t "failed-apply path: a pre-apply id is never powered off (poweroff_result=old_untouched, its own summary and comment)" "$(old_untouched_shape; echo $?)"
+t "failed-apply path: the old_untouched recovery keeps the same pin" "$([[ "$OUT" == *"expected_bastion_server_id=4242"* ]]; echo $?)"
+LABEL_ARG=bastion-host-replace PRE_ARG=4242
+run preapplyok 'verdict=ready\n' 0 success
+LABEL_ARG="" PRE_ARG="__unset__"
+t "a successful apply whose API still shows only the pre-apply id is not ready, and nothing is powered off" \
+  "$([[ "$RC" -eq 1 && "$CURL" != *POST* && -z "$RENV" && "$PO" == old_untouched ]]; echo $?)"
+# Positive control: a DIFFERENT id that is not ready IS powered off (the curl fake logs the id in the URL).
+LABEL_ARG=bastion-host-replace PRE_ARG=4343
+run precontrol 'verdict=not_ready\n' 1 failure
+LABEL_ARG="" PRE_ARG="__unset__"
+t "positive control: a server outside the pre-apply set (4242, set 4343) IS powered off" "$([[ "$RC" -eq 1 && "$CURL" == *"POST https://api.hetzner.cloud/v1/servers/4242/actions/poweroff"* && "$PO" == powered_off ]]; echo $?)"
+# Both the old (pre-apply) and the new server exist: only the new one is read and powered off.
+BOTH='{"servers":[{"id":4242,"name":"soleur-bastion"},{"id":5555,"name":"soleur-bastion"}]}'
+LABEL_ARG=bastion-host-replace PRE_ARG=4242
+run preboth 'verdict=not_ready\n' 1 success "BBV_LOOKUP_BODY=$BOTH"
+LABEL_ARG="" PRE_ARG="__unset__"
+t "old and new both present: the new one (5555) is powered off, the pre-apply one (4242) never" \
+  "$([[ "$CURL" == *"POST https://api.hetzner.cloud/v1/servers/5555/actions/poweroff"* && "$CURL" != *"servers/4242/actions"* && "$RENV" == *"HID=5555"* ]]; echo $?)"
+LABEL_ARG=bastion-host-replace PRE_ARG=none
+run prenone 'verdict=not_ready\n' 1 success
+LABEL_ARG="" PRE_ARG="__unset__"
+t "an empty set (none, the recovery arm) behaves exactly as today" "$([[ "$RC" -eq 1 && "$CURL" == *"$POWEROFF"* && "$PO" == powered_off ]]; echo $?)"
+LABEL_ARG=bastion-host-replace PRE_ARG=""
+run premissing 'verdict=not_ready\n' 1 success
+LABEL_ARG="" PRE_ARG="__unset__"
+refused_shape() { [[ "$RC" -eq 1 && "$CURL" != *POST* && "$PO" == refused_no_preids && "$OUT" == *"pre-apply id set"* ]]; }
+t "a missing set on the replace label fails closed (refused_no_preids, nothing powered off)" "$(refused_shape; echo $?)"
+LABEL_ARG=bastion-host-replace PRE_ARG="4242;rm"
+run premalformed 'verdict=not_ready\n' 1 success
+LABEL_ARG="" PRE_ARG="__unset__"
+t "a malformed set fails closed (refused_no_preids)" "$(refused_shape; echo $?)"
+LABEL_ARG=bastion-host-create PRE_ARG=4242
+run precreate 'verdict=not_ready\n' 1 failure
+LABEL_ARG="" PRE_ARG="__unset__"
+t "the birth route passes the set too: a live bastion that predates a failed birth is never powered off" "$([[ "$CURL" != *POST* && "$PO" == old_untouched ]]; echo $?)"
+# The cancel path calls _bbv_poweroff directly.
+run_po() { # <case> <args...>: sources the library, calls _bbv_poweroff with the args -> RC OUT CURL POR
+  local name="$1"; shift
+  local log="$WORK/$name"; rm -rf "$log"; mkdir -p "$log"; : > "$log/curl.log"; : > "$log/curl.cfg"; : > "$log/gh.log"
+  RC=0
+  OUT="$(env -i PATH="$BIN:/usr/bin:/bin" HOME="$WORK" TMPDIR="$TMPDIR" BBV_LOG="$log" HCLOUD_TOKEN=hcloudtok123 \
+    bash -c 'source "$1" || exit 98; shift; _bbv_poweroff "$@"; r=$?; echo "POWEROFF=${_BBV_POWEROFF}"; exit "$r"' _ "$LIB_UNDER_TEST" "$@" 2>&1)" || RC=$?
+  CURL="$(cat "$log/curl.log")"; GH=""; POR="$(sed -n 's/^POWEROFF=//p' <<<"$OUT")"
+}
+run_po cancelpre 4242
+t "cancel path: _bbv_poweroff with the pre-apply id never powers it off (old_untouched)" "$([[ "$RC" -eq 0 && "$CURL" != *POST* && "$POR" == old_untouched ]]; echo $?)"
+run_po cancelcontrol 4343
+t "cancel path control: an id outside the set is powered off" "$([[ "$RC" -eq 0 && "$CURL" == *"$POWEROFF"* && "$POR" == powered_off ]]; echo $?)"
+run_po cancelempty ""
+t "cancel path: an explicitly empty set refuses (refused_no_preids)" "$([[ "$RC" -ne 0 && "$CURL" != *POST* && "$POR" == refused_no_preids ]]; echo $?)"
+run_po cancellegacy
+t "cancel path: no argument at all keeps the 2a behaviour (powers off the one soleur-bastion)" "$([[ "$RC" -eq 0 && "$CURL" == *"$POWEROFF"* && "$POR" == powered_off ]]; echo $?)"
+
+echo "comment_result"
+run cmtfailed 'verdict=not_ready\n' 1 success BBV_GH_RC=1
+t "a failed comment on the create label: comment_result=failed and a ::warning::" "$([[ "$CR" == failed && "$OUT" == *"::warning::bastion-boot-verify: the comment on #9421 FAILED"* ]]; echo $?)"
+LABEL_ARG=bastion-host-replace PRE_ARG=4343
+run cmtfailedr 'verdict=not_ready\n' 1 success BBV_GH_RC=1
+LABEL_ARG="" PRE_ARG="__unset__"
+t "a failed comment on the replace label: comment_result=failed and an ::error::" "$([[ "$CR" == failed && "$OUT" == *"::error::bastion-boot-verify: the comment on #9421 FAILED"* ]]; echo $?)"
+t "a failed comment: the summary never claims the comment posted" "$([[ "$SUM" != *"commented on #9421"* && "$SUM" == *"did NOT post"* ]]; echo $?)"
+run cmtnotoken 'verdict=not_ready\n' 1 success GH_TOKEN=
+t "no GH_TOKEN: comment_result=no_token" "$([[ "$CR" == no_token ]]; echo $?)"
+
+echo "_bbv_servers_doc <out-file> (the one Hetzner reader of the replace route)"
+run_doc() { # <case> [VAR=value...] -> RC OUT DOC
+  local name="$1"; shift
+  local log="$WORK/$name"; rm -rf "$log"; mkdir -p "$log"; : > "$log/curl.log"; : > "$log/curl.cfg"
+  RC=0
+  OUT="$(env -i PATH="$BIN:/usr/bin:/bin" HOME="$WORK" TMPDIR="$TMPDIR" BBV_LOG="$log" HCLOUD_TOKEN=hcloudtok123 "$@" \
+    bash -c 'source "$1" || exit 98; _bbv_servers_doc "$2"' _ "$LIB_UNDER_TEST" "$log/doc.json" 2>&1)" || RC=$?
+  DOC="$(cat "$log/doc.json" 2>/dev/null)"; CURL="$(cat "$log/curl.log")"; CFG="$(cat "$log/curl.cfg")"
+}
+run_doc docok
+t "HTTP 200 with a servers array: rc 0 and the document is saved" "$([[ "$RC" -eq 0 && "$DOC" == *'"servers"'* ]]; echo $?)"
+t "the token rides bc_curl's stdin config, never argv" "$([[ "$CFG" == *hcloudtok123* && "$CURL" != *hcloudtok123* ]]; echo $?)"
+run_doc doc403 BBV_LOOKUP_CODE=403 'BBV_LOOKUP_ERRBODY={"error":{"code":"forbidden","message":"SECRET-BODY-TEXT"}}'
+t "HTTP 403: non-zero, names http=403 and .error.code, never the body's message" "$([[ "$RC" -ne 0 && "$OUT" == *"http=403"* && "$OUT" == *"forbidden"* && "$OUT" != *"SECRET-BODY-TEXT"* ]]; echo $?)"
+run_doc docnoarray 'BBV_LOOKUP_BODY={"servers":{}}'
+t "HTTP 200 with a non-array servers: non-zero (unreadable is not zero)" "$([[ "$RC" -ne 0 && "$OUT" == *"http=200"* ]]; echo $?)"
+run_doc docnotoken HCLOUD_TOKEN=
+t "no HCLOUD_TOKEN: non-zero and no API call" "$([[ "$RC" -ne 0 && -z "$CURL" ]]; echo $?)"
+
+echo "bastion_birth_readiness <label> (F1)"
+RLIB="${ROOT}/scripts/lib/bastion-birth-readiness.sh"
+t "the readiness library exists at scripts/lib/bastion-birth-readiness.sh" "$([[ -s "$RLIB" ]]; echo $?)"
+GOOD_CI="$WORK/ci-good.yml"; printf 'runcmd:\n  - echo fresh_boot_ready\n  - echo fresh_boot_not_ready_x\n  - echo cloud_init_complete\n' > "$GOOD_CI"
+COMMENT_CI="$WORK/ci-comment.yml"; printf 'runcmd:\n  - echo fresh_boot_ready\n  # fresh_boot_not_ready_x only in a comment\n  - echo cloud_init_complete\n' > "$COMMENT_CI"
+run_rd() { # <label> <cloud-init> [VAR=value...] -> RC OUT
+  local label="$1" ci="$2"; shift 2
+  RC=0
+  OUT="$(env -i PATH="/usr/bin:/bin" HOME="$WORK" BASTION_CLOUD_INIT="$ci" SENTRY_ACTIONS_RO_TOKEN=sntryu_abc123 "$@" \
+    bash -c 'source "$1" || exit 98; bastion_birth_readiness "$2"' _ "$RLIB" "$label" 2>&1)" || RC=$?
+}
+run_rd bastion-host-replace "$GOOD_CI"
+t "readiness passes on a good emitter and a well-formed token" "$([[ "$RC" -eq 0 && "$OUT" == *"PASSED"* ]]; echo $?)"
+run_rd bastion-host-replace "$COMMENT_CI"
+t "a literal only in a comment is missing: the replace label is HELD" "$([[ "$RC" -ne 0 && "$OUT" == *"bastion-host-replace is HELD"*"fresh_boot_not_ready_"* ]]; echo $?)"
+run_rd bastion-host-create "$COMMENT_CI"
+t "the create label says bastion-host-create is HELD" "$([[ "$RC" -ne 0 && "$OUT" == *"bastion-host-create is HELD"* && "$OUT" != *"bastion-host-replace"* ]]; echo $?)"
+run_rd bastion-host-replace "$GOOD_CI" SENTRY_ACTIONS_RO_TOKEN=
+t "an unbound boot-trail token is HELD" "$([[ "$RC" -ne 0 && "$OUT" == *"bastion-host-replace is HELD: SENTRY_ACTIONS_RO_TOKEN is not bound"* ]]; echo $?)"
+run_rd bastion-host-replace "$GOOD_CI" 'SENTRY_ACTIONS_RO_TOKEN=bad token!'
+t "a malformed boot-trail token is HELD" "$([[ "$RC" -ne 0 && "$OUT" == *"token-shape check"* ]]; echo $?)"
+run_rd bastion-host-replace "$WORK/no-such-ci.yml"
+t "an unreadable cloud-init is HELD, never a pass" "$([[ "$RC" -ne 0 && "$OUT" == *"is HELD"* ]]; echo $?)"
+run_rd 'x;y' "$GOOD_CI"
+t "a malformed label is refused" "$([[ "$RC" -ne 0 ]]; echo $?)"
 
 echo
 MIN_CASES=47

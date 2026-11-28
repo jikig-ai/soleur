@@ -127,7 +127,11 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 376 -> 397 (FIX B handed to the vendor, 2026-11-16, +21): main declared 395 against this floor of 376 (19 rows of slack,
 // absorbed here so it is exact again) and the one-row FIX B describe becomes the three-row forget pin (a/b/c).
 // Exact: grep -cE '^\s*test\(' = 397.
-const TEST_FLOOR = 397;
+// 397 -> 414 (#12879 bastion-host-replace, 2026-11-28, +6): main declared 408 against this floor of 397 (11 rows of slack,
+// absorbed here so it is exact again); the bastion block's three per-route tests now loop over both routes (same three
+// declarations) and the Guard 2 wiring describe adds six declarations (live, caller if, tokens, the mutant loop, must-PASS,
+// renamed step). Exact: grep -cE '^\s*test\(' = 414.
+const TEST_FLOOR = 414;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -1289,12 +1293,13 @@ function stripDispatchJobs(workflowText: string): string {
   // bastion_host_create (#12866, ADR-327 step 2a): the dispatch-only bastion BIRTH path. Every one
   // of its -targets is an OPERATOR_APPLIED_EXCLUSION, so folding them in would assert per-merge
   // coverage for a host the per-merge apply must never touch (the bastion describe block pins it).
+  // bastion_host_replace (#12879, ADR-327 step 2b): its sibling REPLACE path, the same five -targets.
   //
   // NOTE for whoever edits this function next: the guard above extracts EVERY
   // "[a-z0-9_]+" string literal in this body and requires each to name a real top-level
   // job. Adding any other lowercase quoted literal here — even in a helper call — makes
   // that guard treat it as a job name and go red. Comments are fine; literals are not.
-  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create"), "inngest_link_flag"), "bastion_host_create");
+  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create"), "inngest_link_flag"), "bastion_host_create"), "bastion_host_replace");
 }
 
 /** Inverse of stripJob: return ONLY the named job's block (header → next job/EOF). */
@@ -3376,6 +3381,8 @@ const MAIN_ROOT_TF_WORKFLOWS = [
   "infra-validation.yml",
   // #12866: the reusable body of apply-web-platform-infra's bastion_host_create caller job.
   "bastion-host-create.yml",
+  // #12879: the reusable body of its bastion_host_replace caller job.
+  "bastion-host-replace.yml",
 ];
 
 describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)", () => {
@@ -11547,66 +11554,84 @@ describe("this suite itself cannot be silently narrowed", () => {
 // #12866 (ADR-327 step 2a): tests/scripts/lib/bastion-resources.txt is the ONE bastion address list.
 // The birth gate reads it as its allow-set; this block pins the other two consumers to it, so 2b and
 // steps 3-4 widen one file instead of three hand-synced ones (git-data carries three).
+// #12879 (step 2b): the same block runs over BOTH routes. Each is a thin caller job in wf plus a reusable
+// body (one terraform-applying job per called file: calledApplyingSteps in stock-preflight-coverage).
+const BASTION_ROUTES = [
+  { job: "bastion_host_create", file: "bastion-host-create.yml", target: "bastion-host-create", inputs: ["confirm", "plan_only", "reason"] },
+  { job: "bastion_host_replace", file: "bastion-host-replace.yml", target: "bastion-host-replace", inputs: ["confirm", "plan_only", "reason", "expected_bastion_server_id"] },
+] as const;
+
 describe("bastion: one resource list, pinned to the birth job and the exclusions (#12866)", () => {
   const list = readFileSync(resolve(REPO_ROOT, "tests/scripts/lib/bastion-resources.txt"), "utf8")
     .split("\n")
     .map((l) => l.replace(/#.*/, "").trim())
     .filter(Boolean);
   const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
-  // The job body lives in the reusable bastion-host-create.yml (the caller stays in wf: size gate, #8361).
-  const bwfText = readFileSync(resolve(REPO_ROOT, ".github/workflows/bastion-host-create.yml"), "utf8");
-  const job = extractJobBlock(bwfText, "bastion_host_create");
-  const caller = extractJobBlock(wf, "bastion_host_create");
 
-  test("the caller job dispatches the reusable body with the birth inputs and every declared secret, the environment-only one included", () => {
-    const c = stripComments(caller);
-    expect(c).toMatch(/^\s*if: github\.event_name == 'workflow_dispatch' && inputs\.apply_target == 'bastion-host-create'\s*$/m);
-    expect(c).toMatch(/^\s*uses: \.\/\.github\/workflows\/bastion-host-create\.yml\s*$/m);
-    for (const k of ["confirm", "plan_only", "reason"]) expect(c).toMatch(new RegExp(`^\\s*${k}: \\$\\{\\{ inputs\\.${k} \\}\\}\\s*$`, "m"));
-    // Secrets by name, never `secrets: inherit` (the git-data root-token census allows inherit only on
-    // the release callers): every secret the callee declares, the environment-only one included.
-    expect(c).not.toMatch(/^\s*secrets: inherit\s*$/m);
-    // Three sets: the secrets the caller passes, the ones the callee declares, and the
-    // ones its body reads. YAML comments are `#` only (a `//` in a URL is not one), and a bracket
-    // read is refused outright because the name scan cannot see it.
-    const passedMap = (parseYaml(wf) as { jobs: Record<string, { secrets?: unknown }> }).jobs.bastion_host_create.secrets;
-    expect(typeof passedMap).toBe("object");
-    for (const [k, v] of Object.entries(passedMap as Record<string, string>)) expect([k, v]).toEqual([k, `\${{ secrets.${k} }}`]);
-    const passed = Object.keys(passedMap as Record<string, string>).sort();
-    const declared = Object.keys(
-      ((parseYaml(bwfText) as { on: { workflow_call: { secrets?: Record<string, unknown> } } }).on.workflow_call.secrets) ?? {},
-    ).sort();
-    const body = bwfText.split("\n").map((l) => l.replace(/(^|\s)#.*$/, "")).join("\n");
-    expect(body).not.toMatch(/secrets\s*\[/i);
-    const read = [...new Set([...body.matchAll(/secrets\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))].sort();
-    expect(read).toEqual(["DOPPLER_TOKEN", "DOPPLER_TOKEN_INFRA_PRIVILEGED", "SENTRY_ACTIONS_RO_TOKEN"]);
-    expect(declared).toEqual(read);
-    // The caller passes EVERY declared secret, the environment secret included. GitHub resolves an
-    // environment secret the caller does not pass to "" in the called workflow, with no error; the
-    // callee's `environment:` supplies the value only for a secret the caller passes by name (GitHub
-    // docs, "Reuse workflows"). #12873 shipped the omission, so the route read an empty token and
-    // HELD. The Tier-B census (G1b) covers this caller through the callee's Tier-B `environment:`.
-    expect(passed).toEqual(declared);
-    // ...and the callee requires it, so a caller that drops it fails at call time instead of
-    // resolving it to "" (required: true checks that it is passed, not that it has a value).
-    const decl = (parseYaml(bwfText) as { on: { workflow_call: { secrets: Record<string, { required?: boolean }> } } }).on.workflow_call.secrets;
-    expect(decl.DOPPLER_TOKEN_INFRA_PRIVILEGED?.required).toBe(true);
-    expect(c).toMatch(/^\s*issues: write\s*$/m);
-    // The body runs inside the caller's run, which holds the workflow-level lock: a second group
-    // of the same name in the callee would only risk cancelling the caller.
-    expect((parseYaml(bwfText) as { concurrency?: unknown }).concurrency).toBeUndefined();
-    // W15 (caller side): a job-level group on the caller would split it from the per-merge apply
-    // (the R2 backend has no state lock).
-    expect(c).not.toMatch(/^\s*concurrency:/m);
-    expect((parseYaml(wf) as { concurrency?: { group?: string } }).concurrency?.group).toBe("terraform-apply-web-platform-host");
-    expect(stripComments(job)).toMatch(/^\s*environment: web-platform-infra-apply\s*$/m);
-  });
+  for (const route of BASTION_ROUTES) {
+    // The job body lives in the reusable file (the caller stays in wf: size gate, #8361).
+    const bwfPath = resolve(REPO_ROOT, ".github/workflows", route.file);
+    const bwfText = existsSync(bwfPath) ? readFileSync(bwfPath, "utf8") : "";
+    const job = extractJobBlock(bwfText, route.job);
+    const caller = extractJobBlock(wf, route.job);
 
-  test("the reusable body redeclares the caller's Terraform env (workflow env is not propagated)", () => {
-    const callee = (parseYaml(bwfText) as { env: Record<string, string> }).env;
-    const callerEnv = (parseYaml(wf) as { env: Record<string, string> }).env;
-    for (const k of ["TERRAFORM_VERSION", "TF_VAR_terraform_version", "INFRA_DIR"]) expect([k, callee[k]]).toEqual([k, callerEnv[k]]);
-  });
+    test(`${route.job}: the caller job dispatches the reusable body with its inputs and every declared secret, the environment-only one included`, () => {
+      expect(caller.length).toBeGreaterThan(0);
+      expect(bwfText.length).toBeGreaterThan(0);
+      const c = stripComments(caller);
+      expect(c).toMatch(new RegExp(`^\\s*if: github\\.event_name == 'workflow_dispatch' && inputs\\.apply_target == '${route.target}'\\s*$`, "m"));
+      expect(c).toMatch(new RegExp(`^\\s*uses: \\./\\.github/workflows/${route.file.replace(/\./g, "\\.")}\\s*$`, "m"));
+      for (const k of route.inputs) expect(c).toMatch(new RegExp(`^\\s*${k}: \\$\\{\\{ inputs\\.${k} \\}\\}\\s*$`, "m"));
+      // Secrets by name, never `secrets: inherit` (the git-data root-token census allows inherit only on
+      // the release callers): every secret the callee declares, the environment-only one included.
+      expect(c).not.toMatch(/^\s*secrets: inherit\s*$/m);
+      // Three sets: the secrets the caller passes, the ones the callee declares, and the
+      // ones its body reads. YAML comments are `#` only (a `//` in a URL is not one), and a bracket
+      // read is refused outright because the name scan cannot see it.
+      const passedMap = (parseYaml(wf) as { jobs: Record<string, { secrets?: unknown }> }).jobs[route.job].secrets;
+      expect(typeof passedMap).toBe("object");
+      for (const [k, v] of Object.entries(passedMap as Record<string, string>)) expect([k, v]).toEqual([k, `\${{ secrets.${k} }}`]);
+      const passed = Object.keys(passedMap as Record<string, string>).sort();
+      const declared = Object.keys(
+        ((parseYaml(bwfText) as { on: { workflow_call: { secrets?: Record<string, unknown> } } }).on.workflow_call.secrets) ?? {},
+      ).sort();
+      const body = bwfText.split("\n").map((l) => l.replace(/(^|\s)#.*$/, "")).join("\n");
+      expect(body).not.toMatch(/secrets\s*\[/i);
+      const read = [...new Set([...body.matchAll(/secrets\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))].sort();
+      expect(read).toEqual(["DOPPLER_TOKEN", "DOPPLER_TOKEN_INFRA_PRIVILEGED", "SENTRY_ACTIONS_RO_TOKEN"]);
+      expect(declared).toEqual(read);
+      // The caller passes EVERY declared secret, the environment secret included. GitHub resolves an
+      // environment secret the caller does not pass to "" in the called workflow, with no error; the
+      // callee's `environment:` supplies the value only for a secret the caller passes by name (GitHub
+      // docs, "Reuse workflows"). #12873 shipped the omission, so the route read an empty token and
+      // HELD. The Tier-B census (G1b) covers this caller through the callee's Tier-B `environment:`.
+      expect(passed).toEqual(declared);
+      // ...and the callee requires it, so a caller that drops it fails at call time instead of
+      // resolving it to "" (required: true checks that it is passed, not that it has a value).
+      const decl = (parseYaml(bwfText) as { on: { workflow_call: { secrets: Record<string, { required?: boolean }> } } }).on.workflow_call.secrets;
+      expect(decl.DOPPLER_TOKEN_INFRA_PRIVILEGED?.required).toBe(true);
+      expect(c).toMatch(/^\s*issues: write\s*$/m);
+      // The body runs inside the caller's run, which holds the workflow-level lock: a second group
+      // of the same name in the callee would only risk cancelling the caller.
+      expect((parseYaml(bwfText) as { concurrency?: unknown }).concurrency).toBeUndefined();
+      // W15 (caller side): a job-level group on the caller would split it from the per-merge apply
+      // (the R2 backend has no state lock).
+      expect(c).not.toMatch(/^\s*concurrency:/m);
+      expect((parseYaml(wf) as { concurrency?: { group?: string } }).concurrency?.group).toBe("terraform-apply-web-platform-host");
+      expect(stripComments(job)).toMatch(/^\s*environment: web-platform-infra-apply\s*$/m);
+    });
+
+    test(`${route.job}: the reusable body redeclares the caller's Terraform env (workflow env is not propagated)`, () => {
+      const callee = (parseYaml(bwfText) as { env: Record<string, string> }).env;
+      const callerEnv = (parseYaml(wf) as { env: Record<string, string> }).env;
+      for (const k of ["TERRAFORM_VERSION", "TF_VAR_terraform_version", "INFRA_DIR"]) expect([k, callee[k]]).toEqual([k, callerEnv[k]]);
+    });
+
+    test(`the ${route.job} job's -target lines equal the list (as a multiset)`, () => {
+      expect(job.length).toBeGreaterThan(0);
+      expect([...extractTargetsWithKeys(job)].sort()).toEqual([...list].sort());
+    });
+  }
 
   test("the list parses, holds the server, and has no duplicates (non-vacuity)", () => {
     expect(list.length).toBeGreaterThanOrEqual(5);
@@ -11621,11 +11646,6 @@ describe("bastion: one resource list, pinned to the birth job and the exclusions
     expect([...declared].sort()).toEqual([...list].sort());
   });
 
-  test("the bastion_host_create job's -target lines equal the list (as a multiset)", () => {
-    expect(job.length).toBeGreaterThan(0);
-    expect([...extractTargetsWithKeys(job)].sort()).toEqual([...list].sort());
-  });
-
   test("every list entry is an OPERATOR_APPLIED_EXCLUSION", () => {
     expect(list.filter((a) => !OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
   });
@@ -11635,5 +11655,174 @@ describe("bastion: one resource list, pinned to the birth job and the exclusions
       const t = extractAllTargets(stripDispatchJobs(readFileSync(resolve(REPO_ROOT, ".github/workflows", f), "utf8")));
       expect([f, list.filter((a) => t.has(a))]).toEqual([f, []]);
     }
+  });
+});
+
+// #12879 (ADR-327 step 2b), Guard 2: the replace route's wiring. The plan-chain and step-order rows live in
+// tests/scripts/test-bastion-host-replace-gate.sh (beside the gate they feed); these are the parity-shaped
+// rows, read from the PARSED callee so a step's `if:` and `run:` are judged as GitHub reads them.
+type BrStep = { name?: string; id?: string; if?: string; run?: string; env?: Record<string, string> };
+const BR_STEPS = {
+  validate: /^Validate dispatch inputs \(confirm token, server-id pin\)$/,
+  interlock: /^Birth-readiness interlock/,
+  read: /^Read the live bastion from Hetzner/,
+  plan: /^Terraform plan \(scoped bastion replace\)/,
+  summary: /^Plan summary/,
+  toctou: /^TOCTOU re-pin/,
+  anchor: /^Stamp boot-trail run anchor/,
+  apply: /^Terraform apply \(bastion replace\)/,
+  verify: /^Verify the bastion boot/,
+  cancel: /^Power off on cancel/,
+  pin: /^Record the bastion pin/,
+  dispatch: /^Dispatch summary$/,
+  cleanup: /^Delete the plan directory/,
+} as const;
+/** Every Guard 2 property the replace callee must hold; [] = holds. Pure over the workflow text. */
+function bastionReplaceWiringViolations(text: string): string[] {
+  const v: string[] = [];
+  let doc: { on?: unknown; concurrency?: unknown; jobs?: Record<string, { environment?: unknown; if?: unknown; concurrency?: unknown; steps?: BrStep[] }> };
+  try {
+    doc = parseYaml(text);
+  } catch {
+    return ["unparseable"];
+  }
+  const onKeys = doc?.on && typeof doc.on === "object" && !Array.isArray(doc.on) ? Object.keys(doc.on as object) : [String(doc?.on)];
+  if (JSON.stringify(onKeys) !== JSON.stringify(["workflow_call"])) v.push(`on keys are ${JSON.stringify(onKeys)}, not ["workflow_call"]`);
+  if (doc?.concurrency !== undefined) v.push("the callee declares a workflow-level concurrency");
+  const job = doc?.jobs?.bastion_host_replace;
+  if (!job) return [...v, "no bastion_host_replace job"];
+  if (job.environment !== "web-platform-infra-apply") v.push(`environment is ${JSON.stringify(job.environment)}`);
+  if (job.if !== "github.ref == 'refs/heads/main'") v.push(`job if is ${JSON.stringify(job.if)}, not the main-only guard`);
+  if (job.concurrency !== undefined) v.push("the job declares concurrency");
+  const steps = job.steps ?? [];
+  const find = (re: RegExp) => steps.filter((s) => typeof s.name === "string" && re.test(s.name));
+  const s: Record<string, BrStep> = {};
+  for (const [k, re] of Object.entries(BR_STEPS)) {
+    const hits = find(re);
+    if (hits.length !== 1) v.push(`step ${k} found ${hits.length} times`);
+    else s[k] = hits[0];
+  }
+  if (Object.keys(s).length !== Object.keys(BR_STEPS).length) return v;
+  const code = (st: BrStep) => (st.run ?? "").split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+  // Row 9: the confirm literal, distinct from the birth's.
+  if (!/\[\[ "\$CONFIRM_RAW" != "REPLACE-bastion" \]\]/.test(code(s.validate))) v.push("the confirm literal is not REPLACE-bastion");
+  if (/BIRTH-bastion/.test(code(s.validate))) v.push("the validate step names the birth token");
+  if (!/\^\(\[1-9\]\[0-9\]\{0,11\}\|none\)\$/.test(code(s.validate))) v.push("the pin is not validated against ^([1-9][0-9]{0,11}|none)$");
+  // Rows 5 and 6: every step that mutates, powers off or re-reads for the apply carries the plan_only guard.
+  for (const k of ["toctou", "anchor", "apply", "verify", "cancel"] as const) {
+    if (!String(s[k].if ?? "").includes("inputs.plan_only != true")) v.push(`step ${k} lacks inputs.plan_only != true`);
+  }
+  // Row 7: the summary always runs, so a refused rehearsal still shows why.
+  if (!/always\(\)/.test(String(s.summary.if ?? ""))) v.push("the plan summary lacks always()");
+  if (!/always\(\)/.test(String(s.cleanup.if ?? ""))) v.push("the plan-directory delete lacks always()");
+  // Row 4 (F4): the -replace array line is real code, inside the replace-arm branch only.
+  const planLines = code(s.plan).split("\n");
+  const rl = planLines.map((l, i) => [l, i] as const).filter(([l]) => /^\s*replace_args=\(-replace='hcloud_server\.bastion'\)\s*$/.test(l));
+  if (rl.length !== 1) v.push(`the -replace array line appears ${rl.length} times`);
+  else {
+    const open = planLines.findIndex((l) => /^\s*if \[\[ "\$EXPECTED_ID" != none \]\]; then\s*$/.test(l));
+    const close = open < 0 ? -1 : planLines.findIndex((l, i) => i > open && /^\s*fi\s*$/.test(l));
+    if (!(open >= 0 && rl[0][1] > open && rl[0][1] < close)) v.push("the -replace array line is outside the != none branch");
+  }
+  if (!/"\$\{replace_args\[@\]\}"/.test(code(s.plan))) v.push("the plan does not pass replace_args");
+  // Row 1: the apply consumes the gated plan file.
+  if (!/terraform apply -no-color -input=false "\$PLAN_DIR\/tfplan"/.test(code(s.apply))) v.push("the apply does not consume $PLAN_DIR/tfplan");
+  // Row 10: boot-verify and the cancel power-off pass the pre-apply id set.
+  if (!/bastion_boot_verify "\$\{BOOT_TRAIL_SINCE:-\}" "\$\{APPLY_OUTCOME:-\}" bastion-host-replace "\$\{PRE_IDS:-\}"/.test(code(s.verify))) v.push("boot-verify does not pass the pre-apply id set");
+  if (!/_bbv_poweroff "\$\{PRE_IDS:-\}"/.test(code(s.cancel))) v.push("the cancel power-off does not pass the pre-apply id set");
+  // The private key never leaves the runner: the plan files sit in a umask-077 RUNNER_TEMP dir and every
+  // private_key_* string is masked before any step can print it.
+  if (!/umask 077/.test(code(s.plan)) && !/umask 077/.test(code(s.read))) v.push("no umask 077 for the plan directory");
+  if (!/startswith\("private_key_"\)/.test(code(s.plan)) || !/::add-mask::/.test(code(s.plan))) v.push("the plan step does not mask every private_key_* field");
+  return v;
+}
+
+describe("bastion-host-replace wiring (Guard 2, #12879)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const brPath = resolve(REPO_ROOT, ".github/workflows/bastion-host-replace.yml");
+  const br = existsSync(brPath) ? readFileSync(brPath, "utf8") : "";
+
+  test("the live callee holds every Guard 2 property", () => {
+    expect(br.length).toBeGreaterThan(0);
+    expect(bastionReplaceWiringViolations(br)).toEqual([]);
+  });
+
+  test("the caller's if: carries both clauses (workflow_dispatch AND the apply_target match)", () => {
+    const callerIf = (parseYaml(wf) as { jobs: Record<string, { if?: string }> }).jobs.bastion_host_replace?.if;
+    expect(callerIf).toBe("github.event_name == 'workflow_dispatch' && inputs.apply_target == 'bastion-host-replace'");
+  });
+
+  test("the birth and replace confirm tokens stay distinct", () => {
+    const birth = readFileSync(resolve(REPO_ROOT, ".github/workflows/bastion-host-create.yml"), "utf8");
+    expect(birth).toMatch(/"BIRTH-bastion"/);
+    expect(br).toMatch(/"REPLACE-bastion"/);
+  });
+
+  // The mutation matrix: each one-edit mutant of the live callee must produce a violation naming it.
+  const mutants: Array<[string, string, string | RegExp, string]> = [
+    ["row 1: the apply consumes another plan file", 'terraform apply -no-color -input=false "$PLAN_DIR/tfplan"', 'terraform apply -no-color -input=false "$PLAN_DIR/tfplan.other"', "does not consume"],
+    ["row 4: the -replace line commented out", "replace_args=(-replace='hcloud_server.bastion')", "# replace_args=(-replace='hcloud_server.bastion')", "-replace array line appears 0"],
+    ["row 5: the TOCTOU step loses its plan_only guard", "TOCTOU_IF_MARKER", "", "toctou lacks"],
+    ["row 5: the boot-verify step loses its plan_only guard", "VERIFY_IF_MARKER", "", "verify lacks"],
+    ["row 5: the cancel power-off loses its plan_only guard", "CANCEL_IF_MARKER", "", "cancel lacks"],
+    ["row 6: the apply loses its plan_only guard", "APPLY_IF_MARKER", "", "apply lacks"],
+    ["row 7: the summary loses always()", "SUMMARY_IF_MARKER", "", "summary lacks always"],
+    ["row 8: an inline push trigger", "on:\n  workflow_call:", "on:\n  push:\n    branches: [main]\n  workflow_call:", "on keys"],
+    ["row 9: the confirm literal becomes BIRTH-bastion", '[[ "$CONFIRM_RAW" != "REPLACE-bastion" ]]', '[[ "$CONFIRM_RAW" != "BIRTH-bastion" ]]', "confirm literal"],
+    ["row 10: boot-verify drops the pre-apply id set", ' bastion-host-replace "${PRE_IDS:-}"', " bastion-host-replace", "pre-apply id set"],
+    ["the cancel power-off drops the pre-apply id set", '_bbv_poweroff "${PRE_IDS:-}"', "_bbv_poweroff", "cancel power-off does not pass"],
+    ["the job-level main-only guard removed", "    if: github.ref == 'refs/heads/main'\n", "", "main-only guard"],
+    ["the environment changed", "    environment: web-platform-infra-apply\n", "    environment: infra-privileged\n", "environment is"],
+    ["a callee concurrency group", "jobs:\n  bastion_host_replace:", "concurrency:\n  group: terraform-apply-web-platform-host\n\njobs:\n  bastion_host_replace:", "concurrency"],
+    ["the private_key_* masking dropped", 'startswith("private_key_")', 'startswith("public_key_")', "mask every private_key_"],
+  ];
+  // Step-level `if:` edits are applied to the parsed document (a duplicated YAML key is not a mutant).
+  const stepIfEdit: Record<string, RegExp> = {
+    TOCTOU_IF_MARKER: BR_STEPS.toctou,
+    VERIFY_IF_MARKER: BR_STEPS.verify,
+    CANCEL_IF_MARKER: BR_STEPS.cancel,
+    APPLY_IF_MARKER: BR_STEPS.apply,
+    SUMMARY_IF_MARKER: BR_STEPS.summary,
+  };
+  for (const [label, from, to, want] of mutants) {
+    test(`mutation caught: ${label}`, () => {
+      expect(br.length).toBeGreaterThan(0);
+      let mutated: string;
+      if (from in stepIfEdit) {
+        const re = stepIfEdit[from];
+        const lines = br.split("\n");
+        const at = lines.findIndex((l) => /^ {6}- name:/.test(l) && re.test(l.replace(/^ {6}- name:\s*/, "")));
+        expect(at).toBeGreaterThan(-1);
+        let ifAt = -1;
+        for (let i = at + 1; i < lines.length && !/^ {6}- name:/.test(lines[i]); i++) if (/^ {8}if:/.test(lines[i])) { ifAt = i; break; }
+        expect(ifAt).toBeGreaterThan(-1);
+        // The guard removed; for the summary, always() removed (the remaining expression keeps the step valid).
+        lines[ifAt] = from === "SUMMARY_IF_MARKER" ? "        if: success()" : "        if: ${{ !cancelled() }}";
+        mutated = lines.join("\n");
+      } else {
+        expect(br.split(from as string).length - 1).toBe(1);
+        mutated = br.replace(from as string, to as string);
+      }
+      expect(mutated).not.toBe(br);
+      const v = bastionReplaceWiringViolations(mutated);
+      expect(v.some((x) => x.includes(want as string))).toBe(true);
+    });
+  }
+
+  test("must-PASS: reordering two independent steps (the ephemeral key and the required secrets) stays green", () => {
+    const doc = parseYaml(br) as { jobs: { bastion_host_replace: { steps: BrStep[] } } };
+    const steps = doc.jobs.bastion_host_replace.steps;
+    const a = steps.findIndex((x) => /^Generate ephemeral SSH public key/.test(x.name ?? ""));
+    const b = steps.findIndex((x) => /^Verify required secrets present/.test(x.name ?? ""));
+    expect(a).toBeGreaterThan(-1);
+    expect(b).toBeGreaterThan(-1);
+    [steps[a], steps[b]] = [steps[b], steps[a]];
+    const { stringify } = require("yaml") as typeof import("yaml");
+    expect(bastionReplaceWiringViolations(stringify(doc))).toEqual([]);
+  });
+
+  test("a renamed or missing step reds (never a vacuous pass)", () => {
+    const v = bastionReplaceWiringViolations(br.replace("name: TOCTOU re-pin", "name: Re-pin"));
+    expect(v.some((x) => x.includes("step toctou found 0"))).toBe(true);
   });
 });
