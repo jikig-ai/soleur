@@ -37,7 +37,15 @@ export async function cronMachineryDrainHandler({
   const installationToken = await step.run(
     "mint-installation-token",
     async () =>
-      mintInstallationToken({ tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS }),
+      mintInstallationToken({
+        tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+        // Least-privilege: the only call is the workflow_dispatch POST, which
+        // needs actions:write and nothing else (hr-github-app-auth-not-pat +
+        // the #5046 narrowed-token precedent). repositories pins the token to
+        // this repo so a leaked token cannot be replayed elsewhere.
+        permissions: { actions: "write" },
+        repositories: [REPO_NAME],
+      }),
   );
 
   try {
