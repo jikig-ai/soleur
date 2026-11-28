@@ -169,7 +169,7 @@ write_world pass; write_logs substantive 0; sed -i 's/before=363 after=360 close
 write_world pass; write_logs generic 0; sed -i 's/before=363 after=360 closed=3 floor=20/before=363 after=363 closed=0 floor=20/' "$FX/comments.json"; expect 'unexplained closed=0 with generic process error -> 3' 3 "$(run_probe)"
 
 write_world stale-comment; expect 'stale standing-issue comment is not evidence -> 3' 3 "$(run_probe)"
-write_world decoy-comment; expect 'decoy closed token outside outcome block is not evidence -> 3' 3 "$(run_probe)"
+write_world decoy-comment; expect 'decoy closed token inside outcome block is not evidence -> 3' 3 "$(run_probe)"
 write_world overflow; expect 'incomplete newest page -> 3' 3 "$(run_probe)"
 write_world wrong-actor; expect 'non-soleur actor row is not a measurement -> 2' 2 "$(run_probe)"
 write_world cancelled-first; expect 'cancelled rows skip to first non-cancelled measurement' 0 "$(run_probe)"

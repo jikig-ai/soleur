@@ -34,3 +34,9 @@
 - Static gates green: `lint-followthrough-varq-ban.sh`, `followthrough-exec-bit.test.sh`, `followthrough-predicate-parity.test.sh`, both fixture-dir ratchets, capture-exit lint, and shell-trace credential lint.
 - Exact post-merge tracker directive is stored in `tracker-directive.txt` in this directory; it must be pasted unfenced at column 0 into the new tracker body.
 - Remaining before review/ship: targeted affected-gate evidence, branch sweeper dry run, then post-merge enrollment.
+
+### Work review hardening checkpoint
+
+- Added the missing `event=workflow_dispatch` query filter after re-reading the plan against the implementation; fixture suite remains 23/0.
+- Tightened `closed=N` extraction to the measurement-shaped `before=<n> after=<n> closed=<n> floor=<n>` line inside the outcome block; a decoy `closed=99` elsewhere in the outcome block now fails closed.
+- Live pre-fix control: a temporary cutoff-adjusted copy of the probe exits 1 on real run 45143702615 job 137587683013 step 5, proving the real emitted-refusal reading path. The committed probe itself exits 2 today because no post-cutoff measurement exists.
