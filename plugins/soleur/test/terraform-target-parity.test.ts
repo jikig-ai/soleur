@@ -11695,7 +11695,9 @@ function bastionReplaceWiringViolations(text: string): string[] {
   // Q-R6: no job-level if: (a skipped job reads green); the FIRST step refuses any ref but main.
   if (job.if !== undefined) v.push(`job declares if: ${JSON.stringify(job.if)} (main-only guard must be the first step)`);
   const first = (job.steps ?? [])[0];
-  if (first?.name !== "Require main" || !/\[\[ "\$GITHUB_REF" == refs\/heads\/main \]\] \|\| \{[^}]*exit 1; \}/.test(first?.run ?? ""))
+  // Comment-stripped and anchored to a line start: a commented-out copy of the guard is not the guard.
+  const firstCode = (first?.run ?? "").split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+  if (first?.name !== "Require main" || !/^\s*\[\[ "\$GITHUB_REF" == refs\/heads\/main \]\] \|\| \{[^}]*exit 1; \}/m.test(firstCode))
     v.push("the first step is not the Require main refusal (main-only guard)");
   if (job.concurrency !== undefined) v.push("the job declares concurrency");
   const steps = job.steps ?? [];
@@ -11776,6 +11778,7 @@ describe("bastion-host-replace wiring (Guard 2, #12879)", () => {
     ["row 10: boot-verify drops the pre-apply id set", ' bastion-host-replace "${PRE_IDS:-}"', " bastion-host-replace", "pre-apply id set"],
     ["the cancel power-off drops the pre-apply id set", '_bbv_poweroff "${PRE_IDS:-}"', "_bbv_poweroff", "cancel power-off does not pass"],
     ["the Require main refusal neutered", '[[ "$GITHUB_REF" == refs/heads/main ]] || {', '[[ "$GITHUB_REF" == refs/heads/main ]] || true || {', "main-only guard"],
+    ["the Require main refusal commented out", '          [[ "$GITHUB_REF" == refs/heads/main ]] || {', '          # [[ "$GITHUB_REF" == refs/heads/main ]] || {', "main-only guard"],
     ["a job-level if: re-added", "    environment: web-platform-infra-apply\n", "    environment: web-platform-infra-apply\n    if: github.ref == 'refs/heads/main'\n", "main-only guard"],
     ["the environment changed", "    environment: web-platform-infra-apply\n", "    environment: infra-privileged\n", "environment is"],
     ["a callee concurrency group", "jobs:\n  bastion_host_replace:", "concurrency:\n  group: terraform-apply-web-platform-host\n\njobs:\n  bastion_host_replace:", "concurrency"],
