@@ -78,7 +78,7 @@ The recovery arm (`expected_bastion_server_id=none`) is for the opposite case: s
 
 ## Replacing the bastion
 
-This section applies once the bastion has been born (the birth is gated on #12942). Until then there is nothing to replace: the first bastion comes from the birth route, not from this route's recovery arm.
+This section applies once the bastion has been born (the birth is gated on #12942). By convention the first bastion comes from the birth route; this route does not enforce that. After a PARTIAL birth (the host key, the firewall and the attachment landed, the server did not), the API shows zero `soleur-bastion` servers and state holds no `hcloud_server.bastion`. That is exactly the recovery arm's shape: a dispatch with `expected_bastion_server_id=none` plans the key and the firewall as no-ops, the NIC as a create and the attachment as an update from empty (or a create), so its gate passes and it creates the server, which boot-verify then grades like any replacement. Recover a failed birth through the birth route; keep the recovery arm for a replace whose destroy landed.
 
 The replace destroys `soleur-bastion` and creates it again from the same template. The host key and the private IP (10.0.1.70) are kept. The agent runs both dispatches. Each needs the owner's typed go naming the exact command. The same "dispatch only when the owner can approve at once" rule as the birth applies.
 
@@ -101,10 +101,13 @@ Nothing is destroyed by any refusal before the apply, but the closing words diff
 | Refusal | How the line ends |
 | --- | --- |
 | Not on `main`, the Tier-B credential check, `confirm`, the pin's shape, an empty `SENTRY_DSN`, the plan-time Hetzner read | `Nothing was planned or destroyed.` |
+| `SENTRY_DSN` could not be READ from Doppler (`could not READ SENTRY_DSN from Doppler prd_terraform (rc=<n>) — fail-closed.`) | `doppler stderr: <the last 300 bytes of doppler's stderr>` |
+| `terraform init` failed | No `::error::` line of the route's own: the step fails on terraform's `Error:` output. It stops before any read or plan. |
 | The birth-readiness interlock (`bastion-host-replace is HELD: ...`) | `Nothing was planned or created.` |
 | The plan itself failed, or its JSON could not be read for masking | `Nothing was destroyed.` / `Fail-closed: nothing was destroyed.` |
 | The replace gate | The gate's ABORT line ends `NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Next: dispatch with plan_only=true and read the summary's live-id and next-dispatch lines.`; the step's own line ends `NOTHING HAS BEEN DESTROYED.` |
 | The stock preflight | `Nothing was destroyed. Read the ::error:: lines above before any re-dispatch.` |
+| The stock preflight could not read `HCLOUD_TOKEN` (`stock-preflight ABORT: cannot read HCLOUD_TOKEN — cannot PROVE stock.`) | `Fail-closed: an unreadable token is not evidence of availability.` |
 | The TOCTOU re-pin (the server or the firewall changed, or the re-read failed) | `Nothing applied.` |
 
 A missing Doppler or R2 credential ends with no such clause; it also stops before any plan.

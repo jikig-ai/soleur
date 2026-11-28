@@ -19,9 +19,10 @@
 # immediately before the apply. Lost state while a server is live is refused (#13117); a deliberate
 # host-key rotation is #13116. The wiring is pinned by tests/scripts/test-bastion-host-replace-workflow.sh.
 #
-# THE PLAN JSON HOLDS SECRETS. tfplan.json holds the whole prd_terraform secret set in clear. The controls
-# are umask 077, never printed or uploaded, and deleted on always(). The masks are a backstop for the three
-# private_key_* fields only. (The plan files live in a mktemp directory under $RUNNER_TEMP.)
+# THE PLAN JSON HOLDS SECRETS. tfplan.json holds the values of every declared root variable, sensitive ones
+# included, in clear. The controls are umask 077, never printed or uploaded, and deleted on always(). The
+# masks are a backstop for the three private_key_* fields only. (The plan files live in a mktemp directory
+# under $RUNNER_TEMP.)
 #
 # Runbook: knowledge-base/engineering/operations/runbooks/bastion-host.md ("Replacing the bastion").
 # The -target lines below equal tests/scripts/lib/bastion-resources.txt (terraform-target-parity.test.ts).
