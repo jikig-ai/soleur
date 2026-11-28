@@ -6440,6 +6440,11 @@ if want_scripts; then
   # (marker text echoed inside a step's run: source) and the per-step exercised proof are driven
   # through a stub gh that exits 64 on any request it does not expect.
   run_suite "scripts/bearer-curl-s4-first-runs-9905" bash scripts/followthroughs/bearer-curl-s4-first-runs-9905.test.sh
+  # #13122: actor-gate verification probe for the post-fix weekly machinery drain. Registered
+  # explicitly (orphan-suite class above). Its load-bearing arm is evidence shape: the Drain
+  # step is continue-on-error, so run/job conclusions are meaningless; the suite drives exact
+  # per-step logs through a strict gh stub and pins the emitted-vs-echoed actor-refusal line.
+  run_suite "scripts/machinery-drain-actor-gate-13122" bash scripts/followthroughs/machinery-drain-actor-gate-13122.test.sh
   # #9995: the mu1 in-leg mint canary. Guard-1 matrix rows drive the real script against a
   # PATH-shim curl that records calls (argv NUL-delimited + the credential library's stdin
   # config) and answers from env — a 401/000/garbage-PEM arm must exit 1 with zero or named
