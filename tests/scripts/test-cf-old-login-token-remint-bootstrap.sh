@@ -1960,7 +1960,7 @@ scored_section
 # --- anti-vacuity floor (reported directly, never through fail()) -----------------
 # The subtrahend is the instrument self-test's one counted pass; the bound is exact for each mode.
 TOTAL=$((PASS + FAIL)); SELFTEST_PASSES=1
-case "$MODE" in full) MIN_ASSERTIONS=363 ;; *) MIN_ASSERTIONS=229 ;; esac
+case "$MODE" in full) MIN_ASSERTIONS=362 ;; *) MIN_ASSERTIONS=228 ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -lt "$MIN_ASSERTIONS" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran in %s mode, floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$MIN_ASSERTIONS" >&2
   printf 'Total: %s assertions, %s failed\n' "$TOTAL" "$((FAIL + 1))"

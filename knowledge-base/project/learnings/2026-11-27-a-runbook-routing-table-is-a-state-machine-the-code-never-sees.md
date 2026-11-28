@@ -107,6 +107,11 @@ cycle captures every later one.
     and mutant; a plan edge and two baseline rows; the pipe captured; two exempt rows. — Prevention: before calling
     a ready PR green, list every non-pass check by name (`gh pr checks | awk '$2!="pass"'`), never a summary count;
     and a script that refuses environment variables is run once under `scripts/test-all.sh`'s own environment.
+22. **A commit staged with `git add -u` carried a root `.gitignore` cut from 188 lines to `.env*`** (written by
+    something during a parallel run of four local suites; the same four, alone and in parallel, did not reproduce
+    it, so the writer is unidentified) — Recovery: the security seat saw it in the diff; restored from the previous
+    commit. — Prevention: stage explicit paths, and read `git diff --cached --stat` before every commit; a file
+    outside the change set in that stat is a stop.
 
 ## Tags
 
