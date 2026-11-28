@@ -343,23 +343,43 @@ R_SECRETS = re.compile(r"secrets\s*(?:\.\s*|\[\s*['\"])(" + FAM_CORE + ")", re.I
 R_INDIRECT = re.compile(r"\$\{!([A-Za-z_][A-Za-z0-9_]*)\}")
 R_TFOUT = re.compile(r"terraform\b[^\n]*?\boutput\b[^\n]*?-raw\s+[\"']?(?<![A-Za-z0-9_])access_service_token_client_(id|secret)(?![A-Za-z0-9_])", re.I)
 
-def _dop_classify(tail):
-    """True when the `doppler` invocation in `tail` is a counted read shape under the D-2 refinement; False when it is
-    not a read shape at all or provably cannot read the trio. Fail closed: any token the parser cannot place counts."""
-    toks = tail.split()
-    if not toks:
+class _LazyTokens:
+    """Indexable one-pass view over a token iterable. The D-2 parser reads monotonically and needs at most one
+    lookahead; materializing every suffix for every `doppler` occurrence is the quadratic this class avoids."""
+    def __init__(self, iterable):
+        self._it = iter(iterable)
+        self._buf = []
+        self._done = False
+
+    def get(self, idx):
+        while len(self._buf) <= idx and not self._done:
+            try:
+                self._buf.append(next(self._it))
+            except StopIteration:
+                self._done = True
+        return self._buf[idx] if idx < len(self._buf) else None
+
+
+def _dop_classify_tokens(token_iter):
+    """True when the `doppler` invocation whose tail tokens are in `token_iter` is a counted read shape under the
+    D-2 refinement; False when it is not a read shape at all or provably cannot read the trio. Fail closed: any token
+    the parser cannot place counts."""
+    toks = _LazyTokens(token_iter)
+    if toks.get(0) is None:
         return False
     proj = conf = sub = None
     names = []
     i = 0
-    while i < len(toks):
-        t = toks[i]
+    while True:
+        t = toks.get(i)
+        if t is None:
+            break
         if _DOP_BADTOK.search(t):
             return True
         if t == "--":
             break
         if sub is None and t == "secrets":
-            nxt = toks[i + 1] if i + 1 < len(toks) else None
+            nxt = toks.get(i + 1)
             if nxt not in _DOP_SEC_SUBS:
                 return False  # `secrets set|list|...` is not a read shape
             sub = nxt
@@ -379,7 +399,7 @@ def _dop_classify(tail):
             continue
         if t.startswith("-") and t != "-":
             if t in ("-p", "--project", "-c", "--config"):
-                v = toks[i + 1] if i + 1 < len(toks) else None
+                v = toks.get(i + 1)
                 if v is None or _DOP_BADTOK.search(v) or v.startswith("-"):
                     return True
                 if t in ("-p", "--project"):
@@ -389,7 +409,7 @@ def _dop_classify(tail):
                 i += 2
                 continue
             if t in _DOP_VALFLAG and "=" not in t:
-                v = toks[i + 1] if i + 1 < len(toks) else None
+                v = toks.get(i + 1)
                 if v is None or _DOP_BADTOK.search(v) or v in ("secrets", "run", "get", "download"):
                     return True  # the value is opaque or could hide a subcommand
                 i += 2
@@ -425,6 +445,79 @@ def _dop_classify(tail):
         return not (proj is not None and conf is not None and (proj, conf) not in TRIO_PAIRS)
     return False
 
+
+def _dop_classify(tail):
+    return _dop_classify_tokens(tail.split())
+
+
+_DOP_STOP_CHARS = set(";|&`<>)]")
+
+
+def _dop_line_tokens(ln):
+    """Tokenize one line once for `_dop_read_counted`: whitespace separates tokens, and the same stop characters
+    that ended a suffix in the old per-occurrence implementation end a command segment here. Returns
+    `(tokens, stop_positions)`, where a token is `(start, end, text, segment_index)` in `ln` coordinates."""
+    tokens = []
+    stops = []
+    seg = 0
+    i = 0
+    n = len(ln)
+    while i < n:
+        ch = ln[i]
+        if ch.isspace():
+            i += 1
+            continue
+        if ch in _DOP_STOP_CHARS:
+            stops.append(i)
+            seg += 1
+            i += 1
+            continue
+        start = i
+        tok_seg = seg
+        while i < n and not ln[i].isspace() and ln[i] not in _DOP_STOP_CHARS:
+            i += 1
+        tokens.append((start, i, ln[start:i], tok_seg))
+    return tokens, stops
+
+
+def _bisect_right(values, needle):
+    lo = 0
+    hi = len(values)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if needle < values[mid]:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+
+
+def _bisect_left(values, needle):
+    lo = 0
+    hi = len(values)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if values[mid] < needle:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+
+def _dop_tail_tokens(tokens, ends, seg, pos, first):
+    """Yield the exact whitespace-split tokens the old `_DOP_STOP.split(ln[pos:], 1)[0].split()` produced,
+    without copying the suffix string. `first` is the first token whose end is strictly after `pos`."""
+    ti = first
+    if ti < len(tokens):
+        start, end, text, tok_seg = tokens[ti]
+        if tok_seg == seg and start < pos < end:
+            yield text[pos - start:]
+            ti += 1
+    while ti < len(tokens) and tokens[ti][3] == seg:
+        yield tokens[ti][2]
+        ti += 1
+
+
 def _dop_read_counted(txt):
     for ln in txt.split("\n"):
         # A `doppler` glued to a hyphen/dot suffix (`soleur-doppler-token.conf`, `doppler.tar.gz`,
@@ -434,13 +527,19 @@ def _dop_read_counted(txt):
         # stays counted: `["doppler", "run", ...]` argv lists are real invocations. `2>`/`2>&1`
         # redirects would otherwise leak their fd digit into the tail as a bogus final token.
         ln2 = _DOP_FDDIGIT.sub("", ln)
+        tokens, stops = _dop_line_tokens(ln2)
+        ends = [tok[1] for tok in tokens]
         for m in _DOP_WORD.finditer(ln2):
             nxt = ln2[m.end()] if m.end() < len(ln2) else ""
             prv = ln2[m.start() - 1] if m.start() > 0 else ""
             if nxt in "-." or (prv in "/.-" and nxt and not nxt.isspace()):
                 continue
-            tail = _DOP_STOP.split(ln2[m.end():], 1)[0]
-            if _dop_classify(tail):
+            pos = m.end()
+            if pos < len(ln2) and ln2[pos] in _DOP_STOP_CHARS:
+                continue  # the tail begins at the segment terminator, so it is empty
+            seg = _bisect_left(stops, pos)
+            first = _bisect_right(ends, pos)
+            if _dop_classify_tokens(_dop_tail_tokens(tokens, ends, seg, pos, first)):
                 return True
     return False
 
@@ -1599,6 +1698,43 @@ _c="$(cons_diff "$FX" "$T/ctl.tsv.scan" | head -c 300)"
 _u="$(dirs_unscanned "$FX" "$T/ctl.tsv.scan" "")"
 if [ -z "$_c" ] && [ -z "$_u" ]; then pass "B3: on the fixture the scanner population equals the independent enumeration and every second-level directory has a scanned file"
 else fail "B3: on the fixture the scanner population equals the independent enumeration" "diff: $_c unscanned: $_u"; fi
+
+# PERF1 (#9294 PR-B, performance-oracle P2): the D-2 read-shape scan must not pay a suffix copy/rescan for
+# every `doppler` occurrence on one long logical line. The probe is adversarial but input-shaped like the
+# measured regression: many occurrence heads, each followed by a long suffix. CPU time is asserted as well
+# as wall time so a loaded host does not make the linear implementation look quadratic.
+PERF="$T/perf-repo"
+mkdir -p "$PERF/scripts" || { printf 'FAIL SETUP: mkdir perf fixture\n' >&2; exit 1; }
+GITQ_ISO=1 GITQ init -q -b main "$PERF" || { printf 'FAIL SETUP: perf fixture git init\n' >&2; exit 1; }
+py3 - "$PERF/scripts/perf.sh" <<'PYPERFGEN'
+import sys
+occ = 6000
+line = ("doppler --silent " * occ) + ("x" * 120) + " WEBHOOK_DEPLOY_SECRET"
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    fh.write("#!/usr/bin/env bash\n" + line + "\n")
+PYPERFGEN
+cat > "$T/perf-probe.py" <<'PYPERFPROBE'
+import resource
+import subprocess
+import sys
+import time
+
+scanner, repo, baseline = sys.argv[1:4]
+ru0 = resource.getrusage(resource.RUSAGE_CHILDREN)
+t0 = time.monotonic()
+r = subprocess.run(
+    [sys.executable, scanner, "--repo", repo, "--baseline", baseline, "--today", "2026-10-15",
+     "--mode", "emit", "--envs", "infra-privileged,deploy-channel", "--git-iso"],
+    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+wall = time.monotonic() - t0
+ru1 = resource.getrusage(resource.RUSAGE_CHILDREN)
+cpu = (ru1.ru_utime + ru1.ru_stime) - (ru0.ru_utime + ru0.ru_stime)
+print("%.3f %.3f %d" % (wall, cpu, r.returncode))
+PYPERFPROBE
+read -r _perf_wall _perf_cpu _perf_rc < <(py3 "$T/perf-probe.py" "$T/trio.py" "$PERF" "$T/empty.tsv")
+if [ "$_perf_rc" = "0" ] && awk -v c="$_perf_cpu" -v w="$_perf_wall" 'BEGIN { exit !((c + 0) < 1.25 && (w + 0) < 2.00) }'; then
+  pass "PERF1: a 102KB single-line adversarial doppler occurrence scan stays linear (wall < 2.00s, CPU < 1.25s; the suffix-copy implementation measured > 3s CPU here)"
+else fail "PERF1: a 102KB single-line adversarial doppler occurrence scan stays linear" "wall=${_perf_wall}s cpu=${_perf_cpu}s rc=${_perf_rc}"; fi
 
 # Mutation machinery ----------------------------------------------------------------------------
 # prep <id>  — fresh git-init'd copy of the PRISTINE fixture at $D/fx; sets D (PREP_BASE overrides the parent directory)
@@ -3339,7 +3475,7 @@ if [ "$MUTANTS_RUN" -gt "$MUTANT_FLOOR" ]; then
 fi
 # Assertion FLOOR (exact), equal to the number of assertions this suite makes.
 _ran=$((passes + fails))
-FLOOR=624
+FLOOR=625
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s -- cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
