@@ -152,7 +152,7 @@ mutates no zone.
       the dashboard sets the atok after DOMContentLoaded (measured 2026-11-28, about 283 ms), so a read straight
       after the goto returns `{atok: false}` on a signed-in page.
    2. One `page.evaluate` reads `window.bootstrap.atok` and `GET /api/v4/user/tokens`, and keeps the atok and the id
-      whose prefix equals step 2's in Node-local variables. No atok: return `{atok: false}` (the page is signed out).
+      whose prefix equals step 2's in Node-local variables. No atok: return `{atok: false}` (the page is signed out, or set no atok within the 15 s wait; reload the tab).
       Zero matches: return `{matches: 0}`; this login does not own it, and the agent asks the operator to sign in as
       the owner, never switching logins itself. Several matches: return `{matches: <n>}` and stop.
    3. `page.request.delete('https://dash.cloudflare.com/api/v4/user/tokens/<id>')`. The 2026-11-26 deletes that

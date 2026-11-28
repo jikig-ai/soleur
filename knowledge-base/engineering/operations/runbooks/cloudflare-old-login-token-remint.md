@@ -207,13 +207,13 @@ committed blob and the hold's quoted value (`p5-browser.sha256` sits in the same
 own):
 
 ```bash
-D="$(dirname <B>)"; ok=1; for f in p5-read.js p5-mint.js p5-revoke.js p5-sink.py; do h="$(git -C "$D" hash-object --no-filters -- "$f")" && r="$(git -C "$D" rev-parse "HEAD:./$f")" && [ -n "$h" ] && [ "$h" = "$r" ] || { echo "SOLEUR_P5_BODY verdict=stop file=$f reason=not-committed"; ok=0; }; done; [ "$ok" = 1 ] && printf '%s  %s\n' '<sha256>' '<body>' | (cd "$D" && sha256sum -c --quiet -) && echo "SOLEUR_P5_BODY verdict=ok file=<body>" || echo "SOLEUR_P5_BODY verdict=stop file=<body>"
+D="$(dirname <B>)"; ok=1; [ '<sha256>' = '<section 5 sha256>' ] || { echo "SOLEUR_P5_BODY verdict=stop file=<body> reason=not-section5"; ok=0; }; for f in p5-read.js p5-mint.js p5-revoke.js p5-sink.py; do h="$(git -C "$D" hash-object --no-filters -- "$f")" && r="$(git -C "$D" rev-parse "HEAD:./$f")" && [ -n "$h" ] && [ "$h" = "$r" ] || { echo "SOLEUR_P5_BODY verdict=stop file=$f reason=not-committed"; ok=0; }; done; [ "$ok" = 1 ] && printf '%s  %s\n' '<sha256>' '<body>' | (cd "$D" && sha256sum -c --quiet -) && echo "SOLEUR_P5_BODY verdict=ok file=<body>" || echo "SOLEUR_P5_BODY verdict=stop file=<body>"
 ```
 
 `<body>` (`p5-<x>.js`, or `p5-sink.py` for the sink) and `<sha256>` are the pair the hold or the section 5 table
-quotes. That go-quoted `<sha256>` must also equal this runbook's section 5 value for the body; if they differ (for
-example a go copied from an archived plan, whose shas a later re-pin supersedes), stop with `verdict=stop` and take
-a new go quoting the section 6 hold.
+quotes, and `<section 5 sha256>` is that body's value in the section 5 block above. The command stops
+(`reason=not-section5`) when the two differ, for example on a go copied from an archived plan, whose shas a later
+re-pin supersedes; take a new go quoting the section 6 hold.
 Only `verdict=ok` lets the step
 go on. Then it builds the run file. The argument is passed as a JSON string that the body parses, so it can only ever
 be data (CTO D9):

@@ -314,7 +314,7 @@ function page(world) {
       if (typeof fn !== 'function') throw new TypeError('waitForFunction(fn)');
       const f = vm.runInContext(`(${fn.toString()})`, pctx);
       const wrec = { timeout: opts && opts.timeout, polling: opts && opts.polling, resolved: false,
-        gotos: world.gotos.length, src: fn.toString() };
+        src: fn.toString(), arg };
       world.waits.push(wrec);
       for (let i = 0; i < 3; i += 1) {
         if (await f(arg === undefined ? undefined : JSON.parse(JSON.stringify(arg)))) { wrec.resolved = true; return true; }
@@ -423,17 +423,17 @@ const must = (cond, why) => { if (!cond) throw new Error(why); };
 const want = (r, w) => must(eq(r, w), `want ${canon(w)} got ${canon(r)}`);
 const nothingSent = (w) => must(w.gotos.length === 0 && w.log.length === 0 && w.deletes.length === 0 && w.sinkCalls.length === 0, 'a request was made before the refusal');
 const listed = (list, name) => list.filter((t) => t.name === name).length;
-// The late-atok rows: one wait after the last goto, bounded, interval-polled, on the atok itself.
+// The late-atok rows: one bounded, interval-polled wait on the atok itself. Its position after the last goto is
+// pinned by the stub (a goto drops the atok) and mutants XW5/XW6, not by an assertion here.
 const waitedOnce = (w) => {
   must(w.waits.length === 1, `waitForFunction calls: ${w.waits.length}`);
   const x = w.waits[0];
   must(x.resolved === true, 'the wait condition never resolved (resolved:false)');
-  must(x.gotos >= 1 && x.gotos === w.gotos.length, `the wait ran after goto ${x.gotos} of ${w.gotos.length}, not after the last goto`);
   // Bounded, not pinned: a timeout near the measured ~283 ms delay would bring the false {atok:false} back.
   must(Number.isFinite(x.timeout) && x.timeout >= 1000 && x.timeout <= 30000, `wait timeout ${x.timeout} is not in [1000, 30000] ms`);
   must(typeof x.polling === 'number' && x.polling > 0 && x.polling < x.timeout, `wait polling ${x.polling} is not an interval below the timeout`);
   // The condition itself, on fresh pages: false with no atok (a throw counts as false, as Playwright rejects), true with one.
-  const holds = (win) => { try { return !!vm.runInContext(`(${x.src})`, vm.createContext({ window: win }))(); } catch { return false; } };
+  const holds = (win) => { try { return !!vm.runInContext(`(${x.src})`, vm.createContext({ window: win }))(x.arg === undefined ? undefined : JSON.parse(JSON.stringify(x.arg))); } catch { return false; } };
   must(!holds({}) && !holds({ bootstrap: {} }) && !holds({ bootstrap: { atok: '' } }) && holds({ bootstrap: { atok: 'x' } }),
     'the wait condition is not "window.bootstrap.atok is set"');
 };
