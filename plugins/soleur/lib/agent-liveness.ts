@@ -107,7 +107,7 @@ const LINE_BREAK_PATTERN = /[\r\n\u2028\u2029]/;
 const MAX_METADATA_STRING_LEN = 512;
 
 const SECRET_VALUE_PATTERN =
-  /BEGIN [A-Z ]*PRIVATE KEY|sk-ant-[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|dp\.(?:pt|st|sa|ct)\.[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}/;
+  /BEGIN [A-Z ]*PRIVATE KEY|sk-ant-[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9._~+/=-]{16,}|github_pat_[A-Za-z0-9._~+/=-]{16,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|dp\.(?:pt|st|sa|ct)\.[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}/;
 
 const EXTRA_SATURATION_STRING_PATTERN = /\b(?:429|529|503)\b|usage[-_ ]?limit/i;
 

@@ -154,8 +154,8 @@ ttl_ms = int(ttl_s)
 SEAT_ID_RE = re.compile(r"^[A-Za-z0-9:._-]{1,128}$")
 LINE_BREAK_RE = re.compile(r"[\r\n\u2028\u2029]")
 SECRET_RE = re.compile(
-    r"BEGIN [A-Z ]*PRIVATE KEY|sk-ant-[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9_]{16,}|"
-    r"github_pat_[A-Za-z0-9_]{16,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|"
+    r"BEGIN [A-Z ]*PRIVATE KEY|sk-ant-[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9._~+/=-]{16,}|"
+    r"github_pat_[A-Za-z0-9._~+/=-]{16,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|"
     r"dp\.(?:pt|st|sa|ct)\.[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}"
 )
 SATURATION_RE = re.compile(
