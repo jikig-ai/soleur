@@ -417,8 +417,17 @@ PY4
   RLIB_UNDER_TEST="$WORK/mut$MUT.sh" run_rd "$@"; "$pred" && after=0
   RLIB_UNDER_TEST="$RLIB"
   cases=$((cases + 1))
+  if [[ "$RC" -eq 98 ]]; then fail "mutant did not load (exit 98): $label"; return; fi
   if [[ "$before" -eq 0 && "$after" -ne 0 ]]; then pass "mutation caught: $label"; else fail "mutation SURVIVED: $label (predicate before=$before after=$after)"; fi
 }
+# RD_LOADED (harness): a byte-different but behaviour-identical staged copy of the readiness library loads
+# and passes, as rdrow stages its mutants; else every rdrow would be "caught" by a library that never ran.
+{ cat "$RLIB"; printf '\n# RD_LOADED staged copy\n'; } > "$WORK/rd-loaded.sh"
+RLIB_UNDER_TEST="$WORK/rd-loaded.sh" run_rd bastion-host-replace "$GOOD_CI"; RLIB_UNDER_TEST="$RLIB"
+if [[ "$RC" -ne 0 || "$OUT" != *"PASSED"* ]]; then
+  printf 'test-bastion-boot-verify: FAIL (RD_LOADED: a staged readiness-library copy does not load or pass, rc=%s; every rdrow would be vacuous)\n' "$RC" >&2
+  exit 1
+fi
 run_rd bastion-host-replace "$GOOD_CI"
 t "readiness passes on a good emitter and a well-formed token" "$([[ "$RC" -eq 0 && "$OUT" == *"PASSED"* ]]; echo $?)"
 run_rd bastion-host-replace "$COMMENT_CI"
