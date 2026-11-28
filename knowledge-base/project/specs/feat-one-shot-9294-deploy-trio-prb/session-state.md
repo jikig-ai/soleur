@@ -107,3 +107,46 @@ census 619/0 WITH restored header. argv-bearer + infra-tier NOT rerun since lib/
 ### infra-tier census, key/cutover workflow tests) bounded; (9) commit+push; (10) ADR-267 fix-round review over fix range
 ### 329d32ddc7..HEAD; (11) soleur:qa; (12) soleur:ship → merge #13006. Operator tail post-merge is RESERVED (seed
 ### doppler trio copies, delete Tier-A copies after green canaries, rotate) — never perform it.
+
+## Fix-round progress checkpoint 2 (commits d3165228dd, 04d40b270b)
+
+FIXED + VALIDATED since the first checkpoint:
+- #14 APP_DOMAIN_BASE P1 CLOSED (d3165228dd): 8 direct-read sites now derive from committed variables.tf
+  (2 more sites found in apply-web-platform-infra.yml :4886/:5303 the seat missed — also converted);
+  infra-config-verify.sh + verify-tunnel-ingress-origin.sh are pure env consumers with :? guards;
+  doppler-read.sh tf pins canonical TF_VAR_app_domain_base before bulk injection (tf-var vector closed);
+  ship/SKILL.md snippet converted. infra-config-verify.test.sh 55/0 GREEN (I6c/I6d/T6 rewritten to the
+  stronger zero-doppler contract); argv-bearer harness updated (vt_run + S4 r21 sentinel env + S7X derive stub).
+- #4 --timeout hole CLOSED (04d40b270b): full global value-flag grammar modeled, modeled booleans skip,
+  unknown pre-subcommand flags fail closed. Probes N26-N30 green. Trio census floor 619->624 exact. Suite green.
+- #5 G1l expression bypass CLOSED (04d40b270b): literalness enforced on raw env value (`${{` forbidden);
+  TRIO_REF now case-insensitive (secrets context resolves case-insensitively). Mutation rows g1l-6/7/8 green.
+  MUTANT_FLOOR 201->204 exact. ipt suite 507/0 GREEN. FLOOR 474->507 (tdr P2 closed) — uncommitted at this checkpoint.
+- #9 github-app-key-status.sh converted (04d40b270b). #10 no-checkout comments corrected ×7. capital-D fixed.
+- G2b spelling fix: plain ${GITHUB_WORKSPACE} in derive invocations.
+
+STILL OPEN (in priority order):
+- #6 Guard-2 sweeper partition tests — IN PROGRESS NOW. Plan :483-499 mutation matrix (4 rows).
+  Harness: scripts/sweep-followthroughs.test.sh (2371 lines, MIN_ASSERTIONS=334), stubbed-gh pattern,
+  pass/fail ledger with conservation identity. ALSO user-impact FINDING 3: @stems family variants
+  (_NEXT/TF_VAR_/lowercase) not in the sweeper's runtime set — rotation-time trackers escape both arms;
+  decide: extend runtime set or document. AND enum-seat sweeper holes (whitespace/repeated/fenced directives,
+  FT_ARM empty→sweep collapse) — triage as pre-existing parser fragility vs in-scope.
+- #13/#F1 wrapper-relay census visibility (user-impact P1, arch P2-2): doppler-read.sh invocations are
+  glued-suffix-excluded from _DOP_WORD so produce no read shapes. DESIGN TENSION: full visibility flips
+  web-platform-release.yml tier-b→tier-a which HAS NO ratchet lane. Disposition options: (a) count wrapper
+  invocations only for the two POST-deletion carriers (deploy-channel/infra-privileged pairs) — but inconsistent
+  with literal-shape counting; (b) document as accepted residual + follow-up issue; (c) full visibility +
+  ADR-ruled reclass. NOT YET DECIDED — needs empirical check of which files naming the trio invoke the wrapper.
+- #8 quadratic classifier (perf P2) — segment-once tokenization, not yet done.
+- P3 batch remaining: fetch-depth:0 in sweep-deploy-channel (perf), infra-config-verify.sh:497 half-prose (cqa),
+  TIER_B_NAMES[-3:] positional fragility (tdr), jq reparse (perf, low), checkout persist-credentials inconsistency
+  (cqa, pre-existing), embedded-python duplication (cqa — disposition: deliberate, document), phantom _NOT_SET
+  baseline keys (user-impact F4), data-integrity P2 tail-gate wording (operator-tail guidance — PR BODY update,
+  not code), seeding-order P3 wording contradiction (ADR/PR body — verify whether seed already done).
+- enum-seat G1l residuals beyond the fixed items: secrets:inherit/composite-internals/noncanonical copies/
+  dynamic access — mostly documented blind spots or sibling-row coverage; triage in synthesis.
+
+VERIFICATION QUEUE before fix-round review: argv-bearer rerun2 result (was running), then commit floors,
+then implement Guard-2, then full three-suite validation + commit + push, then ADR-267 fix-round review
+over 329d32ddc7..HEAD, then qa, then ship → merge #13006.

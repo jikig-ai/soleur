@@ -5776,7 +5776,12 @@ _ran=$((passes + fails))
 # 425 -> 437 (#12742 round 2): g2-2c..g2-2g (5 landings + 5 verdicts), g2-2h (1 landing + 1 must-stay-green). Measured: 437 ran.
 # 460 + 14 -> 474 (main merge into #12876): this PR's 15 rows above were measured on a base that already ran
 #   G1k (its 425, one over the 424 floor), and main counts G1k in its 459 -> 460 step. Measured: 474 ran.
-FLOOR=474
+# 474 -> 507 (#9294 PR-B review round): G1l (1 live census assertion) + g1l-1..8 mutation rows (8 landings +
+#   8 verdicts; the 3 pre-existing rows count too) + the D-8/third-env-arm rows already in this diff. The floor
+#   had sat at 474 while the suite measured 501+ — exactly the drift the test-design reviewer flagged: the
+#   floor is a minimum-only backstop, so it must be raised in the same diff as the rows it counts.
+#   Measured: 507 ran.
+FLOOR=507
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
