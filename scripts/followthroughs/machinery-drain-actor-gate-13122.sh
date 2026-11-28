@@ -13,7 +13,7 @@
 #   * read the exact per-step log of `Update the standing measurement issue`
 #     and find the emitted `updated standing issue #9508` line;
 #   * find a correlated github-actions[bot] comment on #9508 within fifteen
-#     minutes of the run start whose body has `Machinery drain outcome:` and a
+#     minutes of the emitted update timestamp whose body has `Machinery drain outcome:` and a
 #     parseable `closed=N` in that outcome block.
 #
 # Echoed workflow source is not evidence either way: GitHub echoes the workflow
@@ -55,6 +55,7 @@ REPO='jikig-ai/soleur'
 WF='scheduled-machinery-drain.yml'
 CUTOFF='2026-11-28T12:57:15Z'
 PER_PAGE=100
+MAX_COMMENT_PAGES=10
 CUTOFF_ENC="${CUTOFF//:/%3A}"
 RUNS_ENDPOINT="repos/${REPO}/actions/workflows/${WF}/runs?actor=soleur-ai%5Bbot%5D&status=completed&event=workflow_dispatch&created=%3E%3D${CUTOFF_ENC}&per_page=${PER_PAGE}"
 ISSUE=9508
@@ -220,7 +221,7 @@ deadline="$(date -u -d "@$((update_epoch + 900))" +%Y-%m-%dT%H:%M:%SZ)" || canno
 since_enc="${run_created//:/%3A}"
 comment_json=''
 comment_scan_incomplete=0
-for page in {1..10}; do
+for page in $(seq 1 "$MAX_COMMENT_PAGES"); do
   page_json="$(ghx "repos/${REPO}/issues/${ISSUE}/comments?since=${since_enc}&per_page=${PER_PAGE}&page=${page}")" \
     || cannot "reading comments page ${page} on #${ISSUE} failed"
   printf '%s' "$page_json" | jq -e 'type == "array"' >/dev/null 2>&1 \
@@ -240,13 +241,13 @@ for page in {1..10}; do
   if printf '%s' "$page_json" | jq -e --arg end "$deadline" 'any(.[]; (.created_at | type == "string") and .created_at > $end)' >/dev/null 2>&1; then
     break
   fi
-  (( comment_count < 100 )) && break
-  if (( page == 10 )); then
+  (( comment_count < PER_PAGE )) && break
+  if (( page == MAX_COMMENT_PAGES )); then
     comment_scan_incomplete=1
   fi
 done
 if (( comment_scan_incomplete == 1 )); then
-  cannot "#${ISSUE} has more than 1000 post-run comments inside the correlation scan; refusing to infer absence from an incomplete scan"
+  cannot "#${ISSUE} has more than $((PER_PAGE * MAX_COMMENT_PAGES)) post-run comments inside the correlation scan; refusing to infer absence from an incomplete scan"
 fi
 
 if [[ -z "$comment_json" ]]; then

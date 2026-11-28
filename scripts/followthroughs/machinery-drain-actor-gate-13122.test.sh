@@ -66,21 +66,25 @@ fi
 case "$endpoint" in
   'repos/jikig-ai/soleur/actions/workflows/scheduled-machinery-drain.yml/runs?actor=soleur-ai%5Bbot%5D&status=completed&event=workflow_dispatch&created=%3E%3D2026-11-28T12%3A57%3A15Z&per_page=100')
     cat "$FX/runs.json" ;;
-  repos/jikig-ai/soleur/actions/runs/*/jobs?per_page=100\&filter=latest)
+  repos/jikig-ai/soleur/actions/runs/*/jobs\?per_page=100\&filter=latest)
     id="$endpoint"
     id="${id#repos/jikig-ai/soleur/actions/runs/}"
     id="${id%%/jobs?per_page=100&filter=latest}"
+    [[ "$id" =~ ^[0-9]+$ ]] || unexpected "$@"
     [[ -f "$FX/jobs_$id.json" ]] && cat "$FX/jobs_$id.json" || unexpected "$@" ;;
   repos/jikig-ai/soleur/actions/jobs/*/steps/*/logs)
     rest="${endpoint#repos/jikig-ai/soleur/actions/jobs/}"
     job="${rest%%/steps/*}"
     step="${rest##*/steps/}"
     step="${step%%/logs}"
+    [[ "$job" =~ ^[0-9]+$ && "$step" =~ ^[0-9]+$ ]] || unexpected "$@"
     if [[ ! -f "$FX/log_${job}_${step}.txt" ]]; then unexpected "$@"; fi
     if [[ "$allow_escape" -ne 1 ]] && grep -q $'\033' "$FX/log_${job}_${step}.txt"; then unexpected "$@"; fi
     cat "$FX/log_${job}_${step}.txt" ;;
-  repos/jikig-ai/soleur/issues/9508/comments?since=*\&per_page=100\&page=*)
+  repos/jikig-ai/soleur/issues/9508/comments\?since=*\&per_page=100\&page=*)
     page="${endpoint##*&page=}"
+    since="${endpoint#*?since=}"; since="${since%%&per_page=*}"
+    [[ "$since" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}%3A[0-9]{2}%3A[0-9]{2}Z$ && "$page" =~ ^[0-9]+$ ]] || unexpected "$@"
     if [[ -f "$FX/comments_p$page.json" ]]; then cat "$FX/comments_p$page.json"; else cat "$FX/comments.json"; fi ;;
   *) unexpected "$@" ;;
 esac
@@ -116,11 +120,11 @@ write_logs() {
     printf '%s ##[end-action id=drain.run;outcome=success;conclusion=success;duration_ms=100]\n' "$TS"
     printf '%s drain complete: closed=%s\n' "$TS" "$closed"
   } > "$FX/log_777_5.txt"
-  if [[ -n "$crlf" ]]; then sed -i 's/$/\r/' "$FX/log_777_5.txt" "$FX/log_777_7.txt"; fi
   {
     printf "%s \033[36;1mecho \"updated standing issue #\$existing\"\033[0m\n" '2026-11-30T09:04:32.1000000Z'
     printf '%s updated standing issue #9508\n' '2026-11-30T09:04:32.5899400Z'
   } > "$FX/log_777_7.txt"
+  if [[ -n "$crlf" ]]; then sed -i 's/$/\r/' "$FX/log_777_5.txt" "$FX/log_777_7.txt"; fi
 }
 
 write_jobs() {
@@ -191,6 +195,7 @@ write_world pass; write_logs refusal 0; expect 'emitted actor refusal -> 1' 1 "$
 write_world pass; write_logs echo-only 3; expect 'colourised echoed source actor text is not a refusal' 0 "$(run_probe)"
 
 write_world pass; write_logs clean 0; sed -i 's/before=363 after=360 closed=3 floor=20/before=363 after=363 closed=0 floor=20\\nWAIVED-EMPTY: pool is 0 -- nothing to drain/' "$FX/comments.json"; expect 'explicit WAIVED closed=0 -> 0' 0 "$(run_probe)"
+write_world pass; write_logs clean 0; sed -i 's/before=363 after=360 closed=3 floor=20/before=363 after=363 closed=0 floor=20\\nWAIVED-SUPPLY: closed=0 of 10 candidates; pool below floor/' "$FX/comments.json"; expect 'explicit WAIVED-SUPPLY closed=0 -> 0' 0 "$(run_probe)"
 
 write_world pass; write_logs substantive 0; sed -i 's/before=363 after=360 closed=3 floor=20/before=363 after=363 closed=0 floor=20/' "$FX/comments.json"; expect 'substantive non-actor error diagnoses closed=0 -> 0' 0 "$(run_probe)"
 
@@ -213,7 +218,7 @@ write_world pass; sed -i '/allowed_bots: soleur-ai\[bot\]/d' "$FX/log_777_5.txt"
 write_world pass; write_logs pregate-error 0; sed -i 's/before=363 after=360 closed=3 floor=20/before=363 after=363 closed=0 floor=20/' "$FX/comments.json"; expect 'pre-gate OIDC failure is not actor-gate evidence -> 3' 3 "$(run_probe)"
 write_world pass; sed -i '/Actor soleur-ai\[bot\] is in allowed_bots list/d' "$FX/log_777_5.txt"; expect 'missing post-gate admission evidence -> 3' 3 "$(run_probe)"
 write_world pass; sed -i '/end-action id=drain\.run/d' "$FX/log_777_5.txt"; expect 'truncated Drain step log -> 3' 3 "$(run_probe)"
-write_world pass; write_jobs 111 skipped skipped; expect 'skipped Drain step execution state -> 3' 3 "$(run_probe)"
+write_world pass; write_jobs 111 completed skipped; expect 'skipped Drain step execution state -> 3' 3 "$(run_probe)"
 write_world pass; printf '\357\273\277' | cat - "$FX/log_777_5.txt" > "$FX/bom.tmp" && mv "$FX/bom.tmp" "$FX/log_777_5.txt"; expect 'BOM-prefixed step log -> 0' 0 "$(run_probe)"
 write_world pass
 cp "$FX/comments.json" "$FX/comments_p2.json"
@@ -301,7 +306,7 @@ write_world pass
 printf '%s
 ' '{"total_count":2,"workflow_runs":[{"id":111,"created_at":"2026-11-30T09:03:54Z","event":"workflow_dispatch","head_branch":"main","conclusion":"failure","triggering_actor":{"login":"soleur-ai[bot]"}},{"id":112,"created_at":"2026-11-30T09:05:54Z","event":"workflow_dispatch","head_branch":"main","conclusion":"failure","triggering_actor":{"login":"soleur-ai[bot]"}}]}' > "$FX/runs.json"
 printf '%s
-' '{"jobs":[{"id":888,"name":"measure-and-drain","steps":[{"name":"Drain the machinery ledger","number":5,"status":"completed","conclusion":"success"},{"name":"Update the standing measurement issue","number":7,"status":"completed","conclusion":"success"}]}]}' > "$FX/jobs_112.json"
+' '{"total_count":1,"jobs":[{"id":888,"name":"measure-and-drain","steps":[{"name":"Drain the machinery ledger","number":5,"status":"completed","conclusion":"success"},{"name":"Update the standing measurement issue","number":7,"status":"completed","conclusion":"success"}]}]}' > "$FX/jobs_112.json"
 cp "$FX/log_777_7.txt" "$FX/log_888_7.txt"
 write_logs refusal 0; mv "$FX/log_777_5.txt" "$FX/log_888_5.txt"; write_logs clean 3
 printf '%s
