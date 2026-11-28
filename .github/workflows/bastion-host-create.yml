@@ -109,7 +109,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$CONFIRM_RAW" != "BIRTH-bastion" ]]; then
-            echo "::error::confirm must be exactly 'BIRTH-bastion' (got '${CONFIRM_RAW}'). Typo-guard only: the authorization is the web-platform-infra-apply environment approval. Nothing was planned or created."
+            echo "::error::confirm must be exactly 'BIRTH-bastion' (the value given is not echoed: dispatch text never reaches a workflow command). Typo-guard only: the authorization is the web-platform-infra-apply environment approval. Nothing was planned or created."
             exit 1
           fi
           echo "dispatch validated: birthing hcloud_server.bastion"
@@ -335,10 +335,11 @@ jobs:
             echo "::error::could not load scripts/lib/bastion-boot-verify.sh — soleur-bastion was NOT powered off. Power it off in the Hetzner console now."
             exit 1
           }
+          # The library's own verdict on both arms (Q-R7): a refusal (refused_no_preids) is not a failure.
           if _bbv_poweroff "${PRE_IDS:-}"; then
-            echo "result=powered_off_or_absent" >> "$GITHUB_OUTPUT"
+            echo "result=${_BBV_POWEROFF}" >> "$GITHUB_OUTPUT"
           else
-            echo "result=failed" >> "$GITHUB_OUTPUT"
+            echo "result=${_BBV_POWEROFF:-failed}" >> "$GITHUB_OUTPUT"
             exit 1
           fi
 
@@ -365,6 +366,7 @@ jobs:
           echo "::notice title=bastion-pin::server ${SERVER_ID}, fingerprint ${fp}, private IP ${ip}"
 
       - name: Dispatch summary
+        id: summary
         if: always()
         env:
           REASON: ${{ inputs.reason }}
@@ -387,8 +389,14 @@ jobs:
             not_needed) po="Ready: no power-off was needed." ;;
             *) po="Power-off: no verdict recorded (boot-verify did not run to completion)." ;;
           esac
-          [[ "${CANCEL_POWEROFF}" == failed ]] && po="**power-off FAILED after a cancel — the bastion may be running.** Power it off in the Hetzner console now."
-          [[ "${CANCEL_POWEROFF}" == powered_off_or_absent ]] && po="Cancelled: soleur-bastion was powered off, was never created, or was a pre-apply server left untouched."
+          # The cancel step's own verdict, one line each (a REFUSED power-off is not a FAILED one).
+          case "${CANCEL_POWEROFF}" in
+            powered_off) po="Cancelled: soleur-bastion was powered off (disk kept)." ;;
+            absent) po="Cancelled: no soleur-bastion server exists (the apply did not create one), so there was nothing to power off." ;;
+            old_untouched) po="Cancelled: the only soleur-bastion is a server that existed before this apply; it was left untouched. Read bastion-host.md (\"Lost state\") before any re-dispatch." ;;
+            refused_no_preids) po="**power-off after a cancel REFUSED: the pre-apply id set was missing or malformed, so nothing was powered off.** Check the Hetzner project for which soleur-bastion is this run's." ;;
+            failed) po="**power-off FAILED after a cancel — the bastion may be running.** Power it off in the Hetzner console now." ;;
+          esac
           case "${COMMENT_RESULT}" in
             posted) cm="The run was commented on #9421." ;;
             failed) cm="**The #9421 comment did NOT post**; post the run URL there by hand." ;;
