@@ -99,7 +99,7 @@ committed file, so there is no render step to strip at.
 - **This PR's relocation is the minimum, not the split.** Six dispatch-input comment blocks moved to the
   job-rationale runbook in this format: each keeps its first line, its test-anchored lines and the
   `# Rationale:` pointer. That freed 3,375 bytes, which is what the thin caller needed. The file ends at
-  487,285 bytes, under its 488,000 gate.
+  487,285 bytes, under the 490,000 gate and the 488,000 per-file ceiling pinned in workflow-file-size.test.ts.
 - **The #8385 counter has tripped.** The file measured 489,485 bytes before the relocation, at or above the
   485,000 trigger.
 - **The next PR that adds caller bytes must take the split.** It gets no further relocation round.

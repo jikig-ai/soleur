@@ -49,6 +49,20 @@ const LIVE_SENTINEL = "apply-web-platform-infra.yml";
 // 200,000 stays decoy-proof and survives the planned per-target split (ADR-231 §3) taking the
 // file well below its current size; retune if the split ever halves it again.
 const LIVE_SENTINEL_MIN_BYTES = 200_000;
+// The sentinel's own ceiling, below the shared gate (#12879 Q-R5; ADR-231 2026-11-28 addendum). The
+// #8385 counter has tripped, so the next PR that adds caller bytes to this file takes the split rather
+// than another relocation round or a raised ceiling.
+const APPLY_WEB_PLATFORM_INFRA_CEILING_BYTES = 488_000;
+
+/** The sentinel's per-file ceiling verdict: [] under it, else one operator-readable line. */
+function ceilingOverage(size: number): string[] {
+  if (size <= APPLY_WEB_PLATFORM_INFRA_CEILING_BYTES) return [];
+  return [
+    `${LIVE_SENTINEL} is ${size} bytes, ${size - APPLY_WEB_PLATFORM_INFRA_CEILING_BYTES} bytes over its ` +
+      `${APPLY_WEB_PLATFORM_INFRA_CEILING_BYTES}-byte per-file ceiling. The #8385 counter has tripped: ` +
+      `the next caller-byte PR takes the split (#8385, ADR-231 2026-11-28 addendum), not a relocation round or a raised ceiling.`,
+  ];
+}
 
 type Overage = { file: string; size: number; over: number };
 
@@ -120,6 +134,17 @@ describe("oversizedWorkflows (fixtures — one temp dir per row)", () => {
     );
   });
 
+  test("row 6: the sentinel's per-file ceiling is inclusive, sits under the gate, and names #8385 and the split", () => {
+    const C = APPLY_WEB_PLATFORM_INFRA_CEILING_BYTES;
+    expect(C).toBeLessThan(WORKFLOW_FILE_GATE_BYTES);
+    expect(ceilingOverage(C)).toEqual([]);
+    const over = ceilingOverage(C + 1);
+    expect(over).toHaveLength(1);
+    expect(over[0]).toMatch(
+      /^apply-web-platform-infra\.yml is 488001 bytes, 1 bytes over its 488000-byte per-file ceiling\. .*the next caller-byte PR takes the split \(#8385, /,
+    );
+  });
+
   test("row 5 (must-PASS): boundary inclusive; non-YAML, directories and symlinks are neither flagged nor counted", () => {
     const dir = fixture({ "edge.yml": G, "tiny.yaml": 1, "README.md": 600_000, "old.yaml.bak": 600_000 });
     // A directory named like a workflow must not contribute its inode size; a symlink is not a
@@ -170,6 +195,10 @@ describe("live .github/workflows", () => {
       .sort();
     expect(pointers.length).toBeGreaterThanOrEqual(10);
     expect(pointers).toEqual(headings);
+  });
+
+  test("apply-web-platform-infra.yml stays under its 488,000-byte per-file ceiling (#8385)", () => {
+    expect(ceilingOverage(statSync(join(WORKFLOWS_DIR, LIVE_SENTINEL)).size)).toEqual([]);
   });
 
   test("no workflow file exceeds the gate", () => {
