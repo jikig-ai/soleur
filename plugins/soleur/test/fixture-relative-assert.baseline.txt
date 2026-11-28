@@ -615,6 +615,7 @@
 1	tests/scripts/test-cf-account-migration-bootstrap.sh
 1	tests/scripts/test-cf-account-migration-runbook.sh
 26	tests/scripts/test-cf-account-migration-scope.sh
+1	tests/scripts/test-cf-old-login-token-remint-browser.sh
 2	tests/scripts/test-git-data-birth-readiness-gate.sh
 1	tests/scripts/test-inngest-host-dark-gate.sh
 20	tests/scripts/test-lint-supabase-deprecated-endpoints.sh

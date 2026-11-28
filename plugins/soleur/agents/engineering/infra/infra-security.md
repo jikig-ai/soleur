@@ -42,17 +42,17 @@ When auditing a domain's security posture, check these areas and report findings
 
 **API token checks** (require `CF_API_TOKEN_AUDIT` in Doppler `dev` config):
 
-When MCP OAuth is unavailable (CI, headless mode, or auth errors), use the dedicated read-only audit token. Retrieve it via `doppler secrets get CF_API_TOKEN_AUDIT -p soleur -c dev --plain`.
+When MCP OAuth is unavailable (CI, headless mode, or auth errors), use the dedicated read-only audit token. Retrieve it via `doppler secrets get CF_API_TOKEN_AUDIT -p soleur -c dev --plain`. Until the re-mint in `knowledge-base/engineering/operations/runbooks/cloudflare-old-login-token-remint.md` has run, `dev` still holds the old-login token, which answers `token-lacks-scope` on the new account; a 403 there is that state, not a fault in this check.
 
-Zone and account IDs (canonical source: `apps/web-platform/infra/main.tf`):
+Zone and account IDs (canonical source: the `### Ids (not secrets)` table in `knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md`). Since the 2026-11-18 registration move the zone lives on the Soleur account, on the Free plan; the old zone is `status=moved` and is never queried here.
 
-Zone ID: `5af02a2f394e9ba6e0ea23c381a26b67` (soleur.ai) | Account ID: `4d5ba6f096b2686fbdd404167dd4e125`
+Zone ID: `951ce525552201ec6c696b24251abed7` (soleur.ai) | Account ID: `66d4f93f7397f196544e9fe84c3557c2`
 
 ```bash
 BASE="https://api.cloudflare.com/client/v4"
 TOKEN=$(doppler secrets get CF_API_TOKEN_AUDIT -p soleur -c dev --plain)
-ZONE_ID="5af02a2f394e9ba6e0ea23c381a26b67"
-ACCT_ID="4d5ba6f096b2686fbdd404167dd4e125"
+ZONE_ID="951ce525552201ec6c696b24251abed7"
+ACCT_ID="66d4f93f7397f196544e9fe84c3557c2"
 
 # argv shows in /proc/<pid>/cmdline, so the token rides curl's stdin config on every call below.
 # Bash only; `bash -x` would print the token.
@@ -80,8 +80,9 @@ cf "$BASE/accounts/$ACCT_ID/audit_logs?per_page=5" | jq '.result[] | {action, wh
 # Notification Policies
 cf "$BASE/accounts/$ACCT_ID/alerting/v3/policies" | jq '.result[] | {name, enabled, alert_type}'
 
-# Token health check
-cf "$BASE/user/tokens/verify" | jq '.result.status'
+# Token health check: an account-owned token answers only the account endpoint, a user-owned one only the user endpoint
+cf "$BASE/accounts/$ACCT_ID/tokens/verify" | jq -e 'select(.success) | .result.status' \
+  || cf "$BASE/user/tokens/verify" | jq '.result.status'
 ```
 
 **PII redaction:** Actor emails in the audit log jq filter are redacted by default (`***@domain.com`) to avoid displaying PII in conversation output. Full emails are available in the raw API response when needed for incident investigation.

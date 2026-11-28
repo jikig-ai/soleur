@@ -5280,6 +5280,27 @@ AFFECTED_TESTS_SCRIPTS_CF_ACCOUNT_MIGRATION_BOOTSTRAP_PATHS=(
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-cf-account-migration-bootstrap.sh"
 )
+# tests/scripts/cf-old-login-token-remint-bootstrap — the #12931 Phase 5 token-slice bootstrap suite, which finds
+# bootstrap.sh by glob (CTO ruling F11); the glob also matches the spec directory after archive-kb moves it.
+AFFECTED_TESTS_SCRIPTS_CF_OLD_LOGIN_TOKEN_REMINT_BOOTSTRAP_PATHS=(
+  "glob:knowledge-base/project/specs/*feat-one-shot-12931-phase5-token-remint/bootstrap.sh"  # real read: the script under test
+  "plugins/soleur/scripts/lib/operator-script.sh"
+  "plugins/soleur/hooks/operator-stage-approval.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "plugins/soleur/scripts/cloudflare-readonly.sh"  # real read: its first-line message format and subcommand names
+  "apps/web-platform/infra/doppler-config-inventory.txt"  # real read: the D2 census floor (B load_targets; S INV_CFGS)
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-cf-old-login-token-remint-bootstrap.sh"
+)
+# tests/scripts/cf-old-login-token-remint-browser — the #12931 Phase 5 dashboard browser bodies and sink beside
+# that bootstrap (CTO ruling D1), found by glob; the glob also matches the spec directory after archive-kb.
+AFFECTED_TESTS_SCRIPTS_CF_OLD_LOGIN_TOKEN_REMINT_BROWSER_PATHS=(
+  "glob:knowledge-base/project/specs/*feat-one-shot-12931-phase5-token-remint/p5-*"  # real read: the bodies, the sink, the sha256 manifest
+  "knowledge-base/engineering/operations/runbooks/cloudflare-old-login-token-remint.md"  # real read: its `<file> sha256=` citations
+  "glob:knowledge-base/project/plans/*2026-11-27-chore-cf-phase5-old-login-token-remint-plan.md"  # real read: its ## Operator Holds (parity with runbook section 6)
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/test-cf-old-login-token-remint-browser.sh"
+)
 # tests/scripts/cf-account-migration-runbook — runbook-content assertions for #12931 (CTO rulings D4, D5).
 AFFECTED_TESTS_SCRIPTS_CF_ACCOUNT_MIGRATION_RUNBOOK_PATHS=(
   "knowledge-base/engineering/operations/runbooks/cloudflare-account-migration.md"  # real read: the runbook text
