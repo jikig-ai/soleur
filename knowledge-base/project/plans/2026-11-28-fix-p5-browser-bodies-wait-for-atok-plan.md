@@ -353,22 +353,22 @@ covers the line count).
 
 ## Acceptance Criteria
 
-- [ ] Each of the three bodies contains exactly one `page.waitForFunction(` call, directly after its `page.goto`,
+- [x] Each of the three bodies contains exactly one `page.waitForFunction(` call, directly after its `page.goto`,
       with `timeout: 15000`, `polling: 100` and `.catch(() => {})`. `git diff` of each body shows only that line and
       its FLOW comment clause.
-- [ ] `p5-mint.js` `cleanup()` is byte-unchanged.
-- [ ] `(cd <spec dir> && sha256sum -c p5-browser.sha256)` passes, and the `p5-sink.py` line is unchanged.
-- [ ] `git grep -l` of each of the three old shas lists only the archived plan file.
-- [ ] Runbook: the section 5 block lines and the sha-bearing hold and section 12 lines carry the new shas. The
+- [x] `p5-mint.js` `cleanup()` is byte-unchanged.
+- [x] `(cd <spec dir> && sha256sum -c p5-browser.sha256)` passes, and the `p5-sink.py` line is unchanged.
+- [x] `git grep -l` of each of the three old shas lists only the archived plan file.
+- [x] Runbook: the section 5 block lines and the sha-bearing hold and section 12 lines carry the new shas. The
       suite's citation check passes with at least 5 citations.
-- [ ] Rows L1-L3 exist. They were RED before Phase 2 and are GREEN after, and each asserts `resolved === true`.
+- [x] Rows L1-L3 exist. They were RED before Phase 2 and are GREEN after, and each asserts `resolved === true`.
       M3, R6 and D7 are GREEN.
-- [ ] Mutants XW1-XW4 and XH1 each land and turn their row RED with the named text.
-- [ ] `bash tests/scripts/test-cf-old-login-token-remint-browser.sh` exits 0, and the same command with `--mutants`
+- [x] Mutants XW1-XW4 and XH1 each land and turn their row RED with the named text.
+- [x] `bash tests/scripts/test-cf-old-login-token-remint-browser.sh` exits 0, and the same command with `--mutants`
       exits 0, with the updated exact floors and the pristine count of 26.
-- [ ] The archived plan is byte-unchanged:
+- [x] The archived plan is byte-unchanged:
       `git diff --quiet origin/main -- knowledge-base/project/plans/archive/`.
-- [ ] No captured output carries the atok or any token value (the P-leak check is green).
+- [x] No captured output carries the atok or any token value (the P-leak check is green).
 - [ ] The PR body says `Ref #12931`, never `Closes`.
 
 ## Domain Review
