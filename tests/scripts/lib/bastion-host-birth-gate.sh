@@ -50,37 +50,24 @@ if ! declare -F plan_gate_assert_readable >/dev/null 2>&1; then
   # shellcheck source=/dev/null
   source "${_BHBG_DIR}/plan-gate-preamble.sh"
 fi
+# The create-side checks shared with bastion-host-replace-gate.sh (R3, #12879): sourced UNCONDITIONALLY
+# from this file's own directory (see that file's header); a failed source makes the calls return 127.
+# shellcheck source=tests/scripts/lib/bastion-gate-common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bastion-gate-common.sh"
 _BHBG_LIST="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bastion-resources.txt"
-# has_unknown: true when any leaf of an after_unknown subtree is `true` (an unknown value).
-_BHBG_JQ_UNKNOWN='def has_unknown: if type == "boolean" then . elif type == "array" or type == "object" then any(.[]; has_unknown) else false end;'
 
 bastion_host_birth_gate() {
   local plan_json="${1:-}" g="bastion_host_birth_gate"
   local list="$_BHBG_LIST" allow_json
   local want_addr="hcloud_server.bastion" key_addr="tls_private_key.bastion_host_ssh"
-  local nic_addr="hcloud_server_network.bastion" fw_addr="hcloud_firewall.bastion"
-  local att_addr="hcloud_firewall_attachment.bastion" nic_ip="10.0.1.70"
-  local creates destroys created_addr out_of_scope key_touched nic_creates nic_ip_ok fw_rules fw_unreadable
-  local fw_apply_to att_labels inline_fw att_ok offenders a present nic_planned
+  local nic_addr="hcloud_server_network.bastion" att_addr="hcloud_firewall_attachment.bastion" nic_ip="10.0.1.70"
+  local creates destroys created_addr out_of_scope key_touched nic_creates offenders a present
 
   plan_gate_assert_readable     "$g" "$plan_json" || return 1
   plan_gate_assert_classifiable "$g" "$plan_json" || return 1
 
-  if [[ ! -s "$list" ]]; then
-    echo "${g}: ABORT — the allow-set list ${list} (bastion-resources) is missing or empty. Fail-closed: without it the gate cannot say what this birth may change."
-    return 1
-  fi
-  allow_json=$(grep -vE '^[[:space:]]*(#|$)' "$list" | jq -R . | jq -sc .) || allow_json=""
-  if [[ -z "$allow_json" || "$allow_json" == "[]" ]]; then
-    echo "${g}: ABORT — the allow-set list ${list} (bastion-resources) names no address. Fail-closed."
-    return 1
-  fi
-  for a in "$want_addr" "$key_addr" "$nic_addr" "$fw_addr" "$att_addr"; do
-    if ! jq -e --arg a "$a" 'index($a) != null' <<<"$allow_json" >/dev/null 2>&1; then
-      echo "${g}: ABORT — ${list} (bastion-resources) does not list ${a}, which this gate grades. The list and the gate's arms have drifted; fix the list, never this check."
-      return 1
-    fi
-  done
+  bastion_gate_load_allow "$g" "$list" || return 1
+  allow_json="$BASTION_GATE_ALLOW_JSON"
 
   creates=$(jq '[.resource_changes[] | select(.type == "hcloud_server") | select(.change.actions | index("create"))] | length' < "$plan_json" 2>/dev/null)
   destroys=$(jq '[.resource_changes[] | select(.change.actions | index("delete") or index("forget"))] | length' < "$plan_json" 2>/dev/null)
@@ -90,49 +77,12 @@ bastion_host_birth_gate() {
   key_touched=$(jq --arg a "$key_addr" '[.resource_changes[] | select(.address == $a)
     | select(.change.actions | any(. == "update" or . == "delete" or . == "forget"))] | length' < "$plan_json" 2>/dev/null)
   nic_creates=$(jq --arg a "$nic_addr" '[.resource_changes[] | select(.address == $a) | select(.change.actions == ["create"])] | length' < "$plan_json" 2>/dev/null)
-  nic_ip_ok=$(jq --arg a "$nic_addr" --arg ip "$nic_ip" "$_BHBG_JQ_UNKNOWN"'[.resource_changes[] | select(.address == $a)
-    | select(.change.actions == ["create"]) | select(.change.after.ip == $ip)
-    | select((.change.after_unknown | type) == "object" and (((.change.after_unknown.ip // false) | has_unknown) | not))] | length' < "$plan_json" 2>/dev/null)
-  # Label bindings: any non-empty value, an unknown leaf, or no after_unknown object to say it is known.
-  fw_apply_to=$(jq --arg a "$fw_addr" "$_BHBG_JQ_UNKNOWN"'[.resource_changes[] | select(.address == $a) | select(.change.actions | any(. != "read"))
-    | select(((.change.after.apply_to? // []) != [])
-          or ((.change.after_unknown | type) != "object")
-          or ((.change.after_unknown.apply_to // false) | has_unknown))] | length' < "$plan_json" 2>/dev/null)
-  att_labels=$(jq --arg a "$att_addr" "$_BHBG_JQ_UNKNOWN"'[.resource_changes[] | select(.address == $a) | select(.change.actions | any(. != "read"))
-    | select(((.change.after.label_selectors? // []) != [])
-          or ((.change.after_unknown | type) != "object")
-          or ((.change.after_unknown.label_selectors // false) | has_unknown))] | length' < "$plan_json" 2>/dev/null)
-  fw_rules=$(jq --arg a "$fw_addr" '[.resource_changes[] | select(.address == $a) | select(.change.actions | any(. != "read"))
-    | if ((.change.after.rule // null) | type) == "array" then (.change.after.rule | length) else 0 end] | add // 0' < "$plan_json" 2>/dev/null)
-  # Unreadable = the plan does not disclose the rule set: no object after, no `rule` key, no
-  # after_unknown object, an unknown leaf anywhere under after_unknown.rule, or a non-array rule.
-  fw_unreadable=$(jq --arg a "$fw_addr" "$_BHBG_JQ_UNKNOWN"'
-    [.resource_changes[] | select(.address == $a) | select(.change.actions | any(. != "read"))
-    | select(((.change.after | type) != "object")
-          or ((.change.after | has("rule")) | not)
-          or ((.change.after_unknown | type) != "object")
-          or ((.change.after_unknown.rule // false) | has_unknown)
-          or ((.change.after.rule | type) != "array"))] | length' < "$plan_json" 2>/dev/null)
-  inline_fw=$(jq --arg a "$want_addr" '
-    ([.configuration.root_module.resources[]? | select(.address == $a) | ((.expressions // {}) | has("firewall_ids"))] | any) as $cfg
-    | [.resource_changes[] | select(.address == $a)
-    | select((((.change.after.firewall_ids // []) | length) > 0) or $cfg)] | length' < "$plan_json" 2>/dev/null)
-  att_ok=$(jq --arg a "$att_addr" '
-    ([.configuration.root_module.resources[]? | select(.address == $a) | .expressions // {}] | first // {}) as $e
-    | (($e.server_ids.references // []) | sort) as $srv
-    | (($e.firewall_id.references // []) | sort) as $fw
-    | [.resource_changes[] | select(.address == $a)
-    | select(.change.actions | all(. == "create" or . == "update" or . == "no-op"))
-    | select($srv == ["hcloud_server.bastion", "hcloud_server.bastion.id"])
-    | select($fw == ["hcloud_firewall.bastion", "hcloud_firewall.bastion.id"])
-    | select((((.change.after.server_ids // []) | length) == 1) or ((.change.after_unknown.server_ids // false) == true))] | length' < "$plan_json" 2>/dev/null)
+  bastion_gate_create_side_measure "$g" "$plan_json" || return 1
 
   plan_gate_assert_numeric "$g" "creates=${creates}" "destroys=${destroys}" "out_of_scope=${out_of_scope}" \
-    "key_touched=${key_touched}" "nic_creates=${nic_creates}" "nic_ip_ok=${nic_ip_ok}" "fw_rules=${fw_rules}" \
-    "fw_unreadable=${fw_unreadable}" "fw_apply_to=${fw_apply_to}" "att_labels=${att_labels}" \
-    "inline_fw=${inline_fw}" "att_ok=${att_ok}" || return 1
+    "key_touched=${key_touched}" "nic_creates=${nic_creates}" || return 1
 
-  echo "${g}: host_creates=${creates} destroys=${destroys} out_of_scope=${out_of_scope} key_touched=${key_touched} nic_creates=${nic_creates} nic_ip_ok=${nic_ip_ok} fw_rules=${fw_rules} fw_unreadable=${fw_unreadable} fw_apply_to=${fw_apply_to} att_labels=${att_labels} inline_fw=${inline_fw} att_ok=${att_ok}"
+  echo "${g}: host_creates=${creates} destroys=${destroys} out_of_scope=${out_of_scope} key_touched=${key_touched} nic_creates=${nic_creates} nic_ip_ok=${BGC_NIC_IP_OK} fw_rules=${BGC_FW_RULES} fw_unreadable=${BGC_FW_UNREADABLE} fw_apply_to=${BGC_FW_APPLY_TO} att_labels=${BGC_ATT_LABELS} inline_fw=${BGC_INLINE_FW} att_ok=${BGC_ATT_OK}"
 
   # Destroys first: a server replace (delete+create) is one create to a counter.
   if [[ "$destroys" -ne 0 ]]; then
@@ -167,35 +117,9 @@ bastion_host_birth_gate() {
     echo "${g}: ABORT — the plan births ${want_addr} but does not create ${nic_addr} (${nic_creates} creates). A new server entails a new NIC attachment; without it the bastion has no private IP. The -target set is mis-scoped."
     return 1
   fi
-  if [[ "$nic_ip_ok" -ne 1 ]]; then
-    nic_planned=$(jq -r --arg a "$nic_addr" '[.resource_changes[] | select(.address == $a) | (.change.after.ip // "unknown at plan time") | tostring][0] // "none"' < "$plan_json" 2>/dev/null)
-    echo "${g}: ABORT — ${nic_addr} does not pin the private IP ${nic_ip} (planned: ${nic_planned}). bastion.tf fixes local.bastion_private_ip at ${nic_ip}; any other or unknown address means the configuration drifted."
-    return 1
-  fi
-  if [[ "$inline_fw" -ne 0 ]]; then
-    echo "${g}: ABORT — the plan sets firewall_ids inline on ${want_addr}. The bastion's firewall is bound by ${att_addr}, whose binding this gate reads; an inline list bypasses it."
-    return 1
-  fi
-  if [[ "$fw_unreadable" -ne 0 ]]; then
-    echo "${g}: ABORT — FIREWALL CONTENT UNREADABLE: the plan does not disclose ${fw_addr}'s rule set (no rule key, an unknown rule leaf, or a non-array rule). A rule set the gate cannot read is not evidence of zero rules."
-    return 1
-  fi
-  if [[ "$fw_rules" -ne 0 ]]; then
-    echo "${g}: ABORT — FIREWALL CONTENT: ${fw_addr} carries ${fw_rules} inbound rule(s); it must stay a zero-rule deny-all (F8). Nothing connects to the bastion in step 2."
-    return 1
-  fi
-  if [[ "$fw_apply_to" -ne 0 ]]; then
-    echo "${g}: ABORT — LABEL BINDING: ${fw_addr} sets apply_to (or the plan leaves it unknown). A firewall-side binding reaches servers by label or id outside ${att_addr}; the bastion's firewall is bound only there."
-    return 1
-  fi
-  if [[ "$att_labels" -ne 0 ]]; then
-    echo "${g}: ABORT — LABEL BINDING: ${att_addr} sets label_selectors (or the plan leaves them unknown). A label selector binds the deny-all firewall to every server carrying that label, which the server-id check cannot see."
-    return 1
-  fi
-  if [[ "$att_ok" -ne 1 ]]; then
-    echo "${g}: ABORT — ${att_addr} does not end this plan binding ${fw_addr} to exactly ${want_addr} (read from the plan's configuration references; a missing configuration block cannot be read and refuses). Without that binding the bastion boots with its public IPv4 behind no Hetzner firewall."
-    return 1
-  fi
+  # The create-side arms (NIC IP pin, inline firewall_ids, firewall content, label bindings, the
+  # attachment binding), shared with the replace gate: bastion-gate-common.sh.
+  bastion_gate_create_side_judge "$g" "$plan_json" || return 1
   while IFS= read -r a; do
     [[ -z "$a" ]] && continue
     # create or no-op; update only for the attachment (the re-birth shape its arm above explains).

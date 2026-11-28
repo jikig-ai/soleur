@@ -21,6 +21,8 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${DIR}/../.." && pwd)"
 GATE="${ROOT}/tests/scripts/lib/bastion-host-birth-gate.sh"
+# The create-side checks the gate sources from its own directory (R3, #12879).
+COMMON="${ROOT}/tests/scripts/lib/bastion-gate-common.sh"
 # The reusable body of apply-web-platform-infra.yml's bastion_host_create caller job (size gate, #8361).
 WORKFLOW="${ROOT}/.github/workflows/bastion-host-create.yml"
 
@@ -198,10 +200,12 @@ row "H2: reordered entries plus data-source reads and unrelated no-ops pass" PAS
 
 # The allow-set file the gate reads (one list, shared with the -target parity test). The gate takes no
 # override, so a bad list is tested through a copy of the gate sourced from a scratch directory.
-# scratch_gate <dir> [gate-file]: copies the gate (or a mutant of it) and its preamble into <dir>.
+# scratch_gate <dir> [gate-file] [common-file]: copies the gate (or a mutant of it), the shared
+# create-side checks it sources from its own directory (or a mutant of them), and its preamble into <dir>.
 scratch_gate() {
   mkdir -p "$1"
   cp "${2:-$GATE}" "$1/bastion-host-birth-gate.sh"
+  cp "${3:-$COMMON}" "$1/bastion-gate-common.sh"
   cp "$ROOT/tests/scripts/lib/plan-gate-preamble.sh" "$1/"
 }
 # scratch_run <dir> <plan>: sources <dir>'s gate in a subshell and runs it -> out, rc
@@ -231,24 +235,47 @@ else
 fi
 
 # ── Gate mutations: each arm's row, re-driven through row() against a one-edit mutant ──────────
-# gmrow <label> <from> <to> <plan> <msg>: the mutant (one exact replacement in the gate, sourced from a
-# scratch copy) must make that RED row FAIL through row() itself, while the mutant still passes the
-# compliant baseline (so the edit weakened one arm rather than breaking the gate wholesale).
-GMUT=0
-gmut_fn() { (source "$GMUT_DIR/bastion-host-birth-gate.sh" && bastion_host_birth_gate "$1"); }
-gmrow() {
-  local label="$1" from="$2" to="$3" plan="$4" msg="$5" d r
-  GMUT=$((GMUT + 1)); d="$WORK/gmut$GMUT"
-  cases=$((cases + 1))
-  if [[ "$GATE_PRESENT" != 1 ]] || ! python3 - "$GATE" "$WORK/gmut$GMUT.sh" "$from" "$to" <<'PY'
+# gmrow <label> <from> <to> <plan> <msg>: the mutant (one exact replacement in the gate, or in the
+# create-side checks it sources, sourced from a scratch copy) must make that RED row FAIL through row()
+# itself, while the mutant still passes the compliant baseline (so the edit weakened one arm rather
+# than breaking the gate wholesale).
+# gmut_target <from>: the ONE file (the gate or bastion-gate-common.sh) holding <from> exactly once,
+# the other holding it zero times; anything else prints nothing, and the row reports "did not land".
+gmut_target() {
+  python3 - "$GATE" "$COMMON" "$1" <<'PY'
+import sys
+g, c, a = sys.argv[1:]
+n = [open(f).read().count(a) for f in (g, c)]
+if n == [1, 0]: print(g)
+elif n == [0, 1]: print(c)
+PY
+}
+# gmut_apply <target-file> <out-file> <from> <to>: writes the one-replacement mutant of <target-file>.
+gmut_apply() {
+  python3 - "$1" "$2" "$3" "$4" <<'PY'
 import sys
 s, d, a, b = sys.argv[1:]
 t = open(s).read()
 if t.count(a) != 1: sys.exit(1)
 open(d, "w").write(t.replace(a, b))
 PY
-  then fail "gate mutation did not land: $label"; return; fi
-  scratch_gate "$d" "$WORK/gmut$GMUT.sh"
+}
+GMUT=0
+gmut_fn() { (source "$GMUT_DIR/bastion-host-birth-gate.sh" && bastion_host_birth_gate "$1"); }
+gmrow() {
+  local label="$1" from="$2" to="$3" plan="$4" msg="$5" d r target
+  GMUT=$((GMUT + 1)); d="$WORK/gmut$GMUT"
+  cases=$((cases + 1))
+  target=""
+  [[ "$GATE_PRESENT" == 1 ]] && target="$(gmut_target "$from")"
+  if [[ -z "$target" ]] || ! gmut_apply "$target" "$WORK/gmut$GMUT.sh" "$from" "$to"; then
+    fail "gate mutation did not land: $label"; return
+  fi
+  if [[ "$target" == "$GATE" ]]; then
+    scratch_gate "$d" "$WORK/gmut$GMUT.sh"
+  else
+    scratch_gate "$d" "$GATE" "$WORK/gmut$GMUT.sh"
+  fi
   cp "$ROOT/tests/scripts/lib/bastion-resources.txt" "$d/"
   r="$(GATE_FN=gmut_fn; GMUT_DIR="$d"; passes=0; fails=0; row "$label" RED "$plan" "$msg" >/dev/null; printf '%s %s' "$passes" "$fails")"
   scratch_run "$d" "$WORK/base.json"
