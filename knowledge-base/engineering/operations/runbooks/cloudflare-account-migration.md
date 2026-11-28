@@ -159,7 +159,9 @@ mutates no zone.
       returned `200` (#12931 comment 7203873359) sent the headers `x-atok` and `x-cross-site-security: dash`; the
       second is recorded from that session's browser code, not the comment, and whether it is required was not
       tested. The DELETE is Node-side because an in-page `fetch` DELETE got an HTML
-      `403` from the dashboard edge (measured 2026-11-26), while the in-page mint POST did not.
+      `403` from the dashboard edge (measured 2026-11-26), while the in-page mint POST to `/user/tokens` did not.
+      On 2026-11-28 an in-page `fetch` POST to `/accounts/<acct>/tokens` got the same HTML `403`, twice, so the
+      Phase 5 mint body (`p5-mint.js`) sends its token POST Node-side too (`page.request.post`).
 
    Only `200` with `success: true` is a revoke. A JSON `403` or `404` is an ownership or session refusal: stop and
    report. Anything else (a non-JSON reply, `success: false`, a thrown error, another status): stop, post what the
