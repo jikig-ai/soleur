@@ -105,14 +105,15 @@ const READ_ONLY_PROBES = [
 // safe-commit invariant does not apply and it needs no MIGRATED/EXEMPT entry
 // (covered by invariant 1's directory walk).
 //
-// `cron-machinery-drain` (ADR-216) is the same dispatch-hybrid class: it mints a
-// short-lived installation token and POSTs a `workflow_dispatch` to
-// scheduled-machinery-drain.yml, so the weekly issue-flow measurement and the
-// drain itself run in the ephemeral GHA executor while the Node dispatcher holds
-// no git and opens no PR. The safe-commit invariant does not apply, it needs no
-// MIGRATED/EXEMPT entry, and it is covered by invariant 1's directory walk.
-// Acknowledged here so the cron-tier2-parity sibling-set sweep sees this
-// dependent when EXPECTED_CRON_FUNCTIONS grows.
+// `cron-machinery-drain` (ADR-216) is the same dispatch-hybrid class: it mints
+// a short-lived installation token (narrowed to actions:write +
+// repositories:[soleur] — the production-proven sibling shape, #13096) and
+// POSTs a `workflow_dispatch` to scheduled-machinery-drain.yml, so the weekly
+// issue-flow measurement and the drain itself run in the ephemeral GHA executor
+// while the Node dispatcher holds no git and opens no PR. The safe-commit
+// invariant does not apply, it needs no MIGRATED/EXEMPT entry, and it is covered
+// by invariant 1's directory walk. Acknowledged here so the cron-tier2-parity
+// sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS grows.
 //
 // `cron-supabase-watchdog-dispatch` (#9168) is the same dispatch-hybrid class:
 // it mints a short-lived installation token (narrowed to actions:write +
@@ -386,6 +387,22 @@ describe("#5199 — restored cron-bug-fixer: parity (allowlisted AND not deferre
       offending,
       "cron-bug-fixer: arbitrary-method 'gh api' defeats the exfil defense (F4a)",
     ).toEqual([]);
+  });
+});
+
+// #13096 — cron-machinery-drain joins the narrowed dispatch-hybrid shape its
+// siblings already prove in production: the only call is the workflow_dispatch
+// POST, which needs actions:write and nothing else. toContain on the exact
+// object literal, not a looser match — a widened permission set is the defect
+// this pins against.
+describe("cron-machinery-drain: token mint narrowed to actions:write (dispatch-only)", () => {
+  it("cron-machinery-drain.ts mints actions:write scoped to [REPO_NAME]", () => {
+    const src = readFileSync(
+      join(FUNCTIONS_DIR, "cron-machinery-drain.ts"),
+      "utf-8",
+    );
+    expect(src).toContain('permissions: { actions: "write" }');
+    expect(src).toMatch(/repositories:\s*\[REPO_NAME\]/);
   });
 });
 

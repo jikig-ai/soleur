@@ -519,6 +519,19 @@ frontmatter; the actual fan-out was scoped by the semantic sweep.
 | remove `continue-on-error` so the step goes red | descoped | the floor verdict → #9508 channel is the designed reporter; masking semantics are a separate design question |
 | run the drain inside the Inngest function | rejected | agent pipelines cannot run in the Inngest runtime — that is why the dispatcher exists (`cron-machinery-drain.ts` header) |
 
+## Review-added scope (round 1)
+
+`cron-machinery-drain.ts` now mints its installation token narrowed to
+`permissions: { actions: "write" }` + `repositories: [REPO_NAME]`, mirroring
+the production-proven sibling dispatchers (`cron-actions-queue-health-dispatch`,
+`cron-supabase-watchdog-dispatch`, `cron-merge-queue-stall-dispatch`). Origin:
+security-sentinel's pre-existing hardening note → CONCUR gate DISSENT with
+evidence (sibling precedent + separable failure surfaces) → cost-of-filing
+auto-flip to fix-inline. The failure surfaces are separable: a bad narrowed
+token fails in Inngest before any workflow run exists; an allowlist failure
+occurs inside the dispatched step — the post-merge verification in §Post-Merge
+Verification is unconfounded.
+
 ## Context
 
 - Pool trajectory (issue): 16 → **363** open `meta/machinery` issues since

@@ -12,6 +12,11 @@ Derived from `knowledge-base/project/plans/2026-11-27-fix-scheduled-machinery-dr
       (AC2: `uses:` pin, `prompt`, `claude_args`, `continue-on-error`,
       permissions and all other steps byte-identical).
 
+- [x] 1.2 Review-round addition (CONCUR dissent): narrow the
+      `cron-machinery-drain.ts` installation-token mint to
+      `permissions: { actions: "write" }` + `repositories: [REPO_NAME]`,
+      sibling-proven shape; pin added in `cron-safe-commit-parity.test.ts`.
+
 ## Phase 2: Local verification
 
 - [x] 2.1 YAML parses and the input is present (selects the step by name,
