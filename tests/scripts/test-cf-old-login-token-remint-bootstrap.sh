@@ -1071,17 +1071,27 @@ row_e1_env_scrubbed() { # <src> <count|parameters> — injected git config is un
   local k
   world "e1-scrub-$2" "$1"; seed_swapped
   at verdict
-  # core.bare=true, if git honoured it, makes the .env ignore probe and tracked_file fail: verify ok proves it was unset.
+  # core.bigFileThreshold=bogus makes git hash-object (tracked_file) exit 128 if honoured, and leaves rev-parse and
+  # check-ignore alone: verify ok proves the variable was unset before the first trusted-file read.
   if [[ "$2" == count ]]; then
-    run_with GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.bare GIT_CONFIG_VALUE_0=true -- --stage verify
+    run_with GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.bigFileThreshold GIT_CONFIG_VALUE_0=bogus -- --stage verify
     has_line "SOLEUR_P5_ENV_SCRUBBED name=GIT_CONFIG_COUNT" && has_line "SOLEUR_P5_ENV_SCRUBBED name=GIT_CONFIG_KEY_0" \
       && has_line "SOLEUR_P5_ENV_SCRUBBED name=GIT_CONFIG_VALUE_0" || return 1
   else
-    run_with "GIT_CONFIG_PARAMETERS='core.bare'='true'" -- --stage verify
+    run_with "GIT_CONFIG_PARAMETERS='core.bigfilethreshold'='bogus'" -- --stage verify
     has_line "SOLEUR_P5_ENV_SCRUBBED name=GIT_CONFIG_PARAMETERS" || return 1
   fi
   [[ "$RC" -eq 0 ]] && ! grep -q '^SOLEUR_P5_ENV_REFUSED ' <<<"$OUT" || return 1
   for k in "${KEYS[@]}"; do ready "$k" || return 1; done
+}
+row_e1_env_reprobe() { # <src> — injected core.excludesFile hides an un-ignored .env from the first probe; the re-probe refuses
+  world e1-reprobe "$1"; seed_swapped
+  printf 'bootstrap-runs.jsonl\n' > "$W/repo/.gitignore"; printf '*\n' > "$W/all-ignored"
+  at reprobe
+  # ENV_FILE inside the fixture repo (the harness default sits outside any work tree, where the probe never refuses).
+  : > "$STUB_LOG"; run_with "ENV_FILE=$W/repo/.env" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.excludesFile "GIT_CONFIG_VALUE_0=$W/all-ignored" -- --stage verify
+  [[ "$RC" -eq 64 && ! -s "$STUB_LOG" ]] && has_line "SOLEUR_P5_ENV_SCRUBBED name=GIT_CONFIG_COUNT" \
+    && grep -q '^SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED path=' <<<"$OUT"
 }
 row_e1_env_inert() { # <src> — the five GIT_* variables git never consults for these reads do not refuse (harnesses set GIT_EDITOR)
   local k
@@ -1385,8 +1395,9 @@ CONTRACT
   for _m in "${E1_FUNCS[@]}"; do
     row_e1_env_refused "$SCRIPT_SRC" function "$_m"; check "E1 ${_m} an exported shell function: ENV_REFUSED name=function:${_m}, exit 64 before any call" $?
   done
-  row_e1_env_scrubbed "$SCRIPT_SRC" count; check "E1 GIT_CONFIG_COUNT/KEY_0/VALUE_0 (core.bare=true) is unset, not refused: ENV_SCRUBBED lines, verify ok" $?
-  row_e1_env_scrubbed "$SCRIPT_SRC" parameters; check "E1 GIT_CONFIG_PARAMETERS (core.bare=true) is unset, not refused: ENV_SCRUBBED line, verify ok" $?
+  row_e1_env_scrubbed "$SCRIPT_SRC" count; check "E1 GIT_CONFIG_COUNT/KEY_0/VALUE_0 (core.bigFileThreshold=bogus) is unset, not refused: ENV_SCRUBBED lines, verify ok" $?
+  row_e1_env_scrubbed "$SCRIPT_SRC" parameters; check "E1 GIT_CONFIG_PARAMETERS (core.bigFileThreshold=bogus) is unset, not refused: ENV_SCRUBBED line, verify ok" $?
+  row_e1_env_reprobe "$SCRIPT_SRC"; check "E1 injected core.excludesFile hides an un-ignored .env from the first probe: the post-scrub probe refuses ENV_NOT_IGNORED, exit 64, no doppler call" $?
   row_e1_env_inert "$SCRIPT_SRC"; check "E1 GIT_EDITOR, GIT_SEQUENCE_EDITOR, GIT_PAGER, GIT_TERMINAL_PROMPT and GIT_CEILING_DIRECTORIES are not refused: verify ok" $?
   row_t1_dirty_file "$SCRIPT_SRC" tool; check "T1 an uncommitted edit to cloudflare-readonly.sh: UNTRUSTED_FILE, the wrapper never runs, no REVOKE_READY" $?
   row_t1_dirty_file "$SCRIPT_SRC" filter; check "T1 an edit a clean filter hides from a filtered hash: UNTRUSTED_FILE (hash-object --no-filters), no REVOKE_READY" $?
@@ -1773,6 +1784,11 @@ s{for v in \$\(compgen -e\); do\n  case "\$v" in\n    GIT_CONFIG_COUNT[^\n]*\n[^
 PERL
   for _m in count parameters; do mkill "SCRUBM (the injected-config scrub deleted: the full battery's GIT_CONFIG_COUNT refuses every run)" row_e1_env_scrubbed "$SB/scrubm.sh" verdict 'rc=64' "$_m"; done
 fi
+if mutate REPROBEM "$SB/reprobem.sh" <<'PERL'; then
+s{(done < <\(declare -Fx\)\n)(?:#[^\n]*\n)*for probe in [^\n]*\n.*?\ndone\nunset probe\n}{$1}s
+PERL
+  mkill "REPROBEM (the post-scrub .env probe deleted: injected excludesFile lets an un-ignored .env through)" row_e1_env_reprobe "$SB/reprobem.sh" reprobe 'rc=[01] '
+fi
 if mutate EXM "$SB/exm.sh" <<'PERL'; then
 s{    GIT_EDITOR\|GIT_SEQUENCE_EDITOR\|GIT_PAGER\|GIT_TERMINAL_PROMPT\|GIT_CEILING_DIRECTORIES\) ;;\n}{}
 PERL
@@ -1944,7 +1960,7 @@ scored_section
 # --- anti-vacuity floor (reported directly, never through fail()) -----------------
 # The subtrahend is the instrument self-test's one counted pass; the bound is exact for each mode.
 TOTAL=$((PASS + FAIL)); SELFTEST_PASSES=1
-case "$MODE" in full) MIN_ASSERTIONS=360 ;; *) MIN_ASSERTIONS=227 ;; esac
+case "$MODE" in full) MIN_ASSERTIONS=363 ;; *) MIN_ASSERTIONS=229 ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -lt "$MIN_ASSERTIONS" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran in %s mode, floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$MIN_ASSERTIONS" >&2
   printf 'Total: %s assertions, %s failed\n' "$TOTAL" "$((FAIL + 1))"

@@ -330,6 +330,7 @@ trap on_exit EXIT
 #     GIT_CONFIG_PARAMETERS), which is UNSET here instead of refused (SOLEUR_P5_ENV_SCRUBBED): git then reads none
 #     of it, which is what the refusal bought, and the repo's own full battery exports GIT_CONFIG_COUNT=1 to arm
 #     its ref guard, so refusing it would make the script unrunnable under that battery (operator-agent-runnable);
+#     the .env ignore probe then runs again under the scrubbed environment;
 #   - BASH_ENV and ENV (a file every bash or sh child sources first, the consumer wrapper included);
 #   - DOPPLER_API_HOST, DOPPLER_CONFIG_DIR, the proxy variables (HTTPS_PROXY, HTTP_PROXY, ALL_PROXY, either case) and
 #     SSL_CERT_FILE / SSL_CERT_DIR (each re-points or intercepts every Doppler read and write);
@@ -358,6 +359,17 @@ done
 while read -r _ _ v; do
   env_refused "function:${v}" "This script will not run while ${v} is an exported shell function: it would replace the command of that name."
 done < <(declare -Fx)
+# The .env ignore probe above ran under the inherited environment, so injected config (core.excludesFile) could
+# have made it read "ignored". Before the scrub the refusal stopped that run; now the run goes on, so the probe
+# runs again under the scrubbed environment before any credential is read or written.
+for probe in "$ENV_FILE_RESOLVED" "${ENV_FILE_RESOLVED}.tmp.XXXXXX"; do
+  if env_not_ignored "$probe"; then
+    printf 'SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED path=%s\n' "$probe"
+    printf 'The credentials file would be committed. Add it to .gitignore first (a pattern such as .env* covers both the file and its temp sibling).\n'
+    exit 64
+  fi
+done
+unset probe
 unset v
 
 # --- the MANIFEST (everything a rotation changes in this file, CTO F18) ---------------------------------
