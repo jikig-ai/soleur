@@ -99,8 +99,12 @@ comment matching the file's comment conventions. The sibling
 `claude-code-action` consumers (`fix-constraints-stage-a.yml`,
 `claude-code-review.yml`, `test-pretooluse-hooks.yml`) need no change today —
 but not because their triggers are human-only: `pull_request` is
-actor-agnostic (a bot-authored PR runs as `soleur-ai[bot]`, e.g. #13083's
-checks). The accurate per-consumer rationale is in the audit table below. Verification is post-merge only: the action
+actor-agnostic — the actor is whoever initiated the event, never
+author-determined. Bot-authored PRs produce `soleur-ai[bot]` runs when the
+bot itself synchronizes (measured: #13083's check runs), while a human push
+to a bot-authored branch runs as the human (counterexample: dependabot's
+#13103 ran as `deruelle`). The accurate per-consumer rationale is in the
+audit table below. Verification is post-merge only: the action
 validates the dispatched workflow file against default-branch content, so a
 branch dispatch can never exercise the agent; the bot-actor path is exercised
 by the weekly Inngest dispatch (or the allowlisted
@@ -195,8 +199,8 @@ The ask restated as observable properties:
 | Workflow | `uses:` pin | Trigger set | Actor on dispatch | `allowed_bots` needed? |
 |---|---|---|---|---|
 | `scheduled-machinery-drain.yml` | `@3b7e1a45… # v1.0.263` | `workflow_dispatch` only, fired by Inngest via App token | `soleur-ai[bot]` | **yes — this fix** |
-| `claude-code-review.yml` | same pair | `pull_request` | actor-agnostic — the PR author's actor, `soleur-ai[bot]` on bot-authored PRs (measured: #13083's check runs) | not today — the workflow is disabled (`scripts/pr-fanout-ledger.txt`); re-enabling it must revisit this input |
-| `fix-constraints-stage-a.yml` | same pair | path-filtered `pull_request` + `workflow_dispatch` | actor-agnostic; the agent step fires only when the constraint gate is red on a filtered PR — no observed bot-authored instance | not today — latent; if the refusal ever fires it is the same loud error with this same one-line remedy, and an unexercised input is unverifiable surface. Any future edit must mirror the Stage-A template carrier |
+| `claude-code-review.yml` | same pair | `pull_request` | actor-agnostic — whoever initiated the event (opener on `opened`/`ready_for_review`, the pusher on `synchronize`); `soleur-ai[bot]` when the bot itself is the initiator (measured: #13083's check runs), the human when a human pushes to a bot-authored branch | not today — the workflow is disabled (`scripts/pr-fanout-ledger.txt`); re-enabling it must revisit this input |
+| `fix-constraints-stage-a.yml` | same pair | path-filtered `pull_request` + `workflow_dispatch` | actor-agnostic; the agent-step condition is trigger-agnostic — it fires whenever the constraint gate is red and preflight green, on a filtered PR event or a manual `workflow_dispatch` alike — no observed bot-authored instance | not today — latent; if the refusal ever fires it is the same loud error with this same one-line remedy, and an unexercised input is unverifiable surface. Any future edit must mirror the Stage-A template carrier |
 | `test-pretooluse-hooks.yml` | same pair | `workflow_dispatch` only, manual-only by design ("avoid recurring API costs"); no in-repo automated dispatcher | human | no |
 
 The four consumers are pinned in lockstep by
@@ -294,9 +298,9 @@ discoverability_test:
           # recurrence after the id-token fix #9537). The explicit login,
           # never '*': the repo is public and the action's own allowed_bots
           # doc warns that '*' lets any external App invoke it with prompts
-          # it controls. isAllowedBot strips a trailing
-          # '[bot]' on both sides, so either spelling matches; the [bot]
-          # form is the login GitHub reports.
+          # it controls. isAllowedBot strips a trailing '[bot]' on both
+          # sides, so either spelling matches; the [bot] form is the login
+          # GitHub reports.
           allowed_bots: "soleur-ai[bot]"
           # `--headless` is load-bearing, not decoration: ...
           prompt: '/soleur:drain-labeled-backlog --label meta/machinery --headless'
