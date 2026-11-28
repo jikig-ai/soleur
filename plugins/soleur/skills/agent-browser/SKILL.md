@@ -591,6 +591,10 @@ string: an old-string session holds no `flock`, so also require that `readlink
    that one. The trade is stated: on the plugin server an ambient `NODE_OPTIONS`
    (`--require`, `--inspect`) reaches every page the server holds, not only
    `page.request`; the shell that starts Claude Code is trusted there.
+   So the two servers no longer refuse the same settings: a procedure that needs
+   the strict set must call the repo server's `mcp__playwright__*` tools by
+   prefix and never `mcp__plugin_soleur_playwright__*` — checking the repo
+   registration's args is not enough when both servers are loaded.
 
 2. **Per call** — it appends `--snapshot-mode none` to the child so no action
    tool writes a tree to disk, and refuses, before the server sees it, a
