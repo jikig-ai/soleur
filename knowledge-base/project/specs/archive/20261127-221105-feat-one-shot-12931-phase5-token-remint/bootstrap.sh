@@ -326,6 +326,10 @@ trap on_exit EXIT
 #     and GIT_SEQUENCE_EDITOR (harnesses set GIT_EDITOR; only commit and rebase run an editor), GIT_PAGER (no
 #     read here pages), GIT_TERMINAL_PROMPT (credential prompts only) and GIT_CEILING_DIRECTORIES (it can only
 #     stop discovery, and tracked_file then refuses);
+#   - except the environment-injected config family (GIT_CONFIG_COUNT, GIT_CONFIG_KEY_<n>, GIT_CONFIG_VALUE_<n>,
+#     GIT_CONFIG_PARAMETERS), which is UNSET here instead of refused (SOLEUR_P5_ENV_SCRUBBED): git then reads none
+#     of it, which is what the refusal bought, and the repo's own full battery exports GIT_CONFIG_COUNT=1 to arm
+#     its ref guard, so refusing it would make the script unrunnable under that battery (operator-agent-runnable);
 #   - BASH_ENV and ENV (a file every bash or sh child sources first, the consumer wrapper included);
 #   - DOPPLER_API_HOST, DOPPLER_CONFIG_DIR, the proxy variables (HTTPS_PROXY, HTTP_PROXY, ALL_PROXY, either case) and
 #     SSL_CERT_FILE / SSL_CERT_DIR (each re-points or intercepts every Doppler read and write);
@@ -336,6 +340,12 @@ env_refused() { # <name> <sentence>
   printf '%s Remove it from the environment and run again; nothing was changed.\n' "$2"
   exit 64
 }
+for v in $(compgen -e); do
+  case "$v" in
+    GIT_CONFIG_COUNT|GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*|GIT_CONFIG_PARAMETERS)
+      unset "$v"; printf 'SOLEUR_P5_ENV_SCRUBBED name=%s\n' "$v" ;;
+  esac
+done
 for v in $(compgen -e); do
   case "$v" in
     GIT_EDITOR|GIT_SEQUENCE_EDITOR|GIT_PAGER|GIT_TERMINAL_PROMPT|GIT_CEILING_DIRECTORIES) ;;
@@ -403,7 +413,7 @@ unset v
 #     status active, the key's own consumer read, the floor, no unreadable read, exactly one old copy
 #     (at prd_terraform <KEY>_PREV) and every other manifest holder reading value=new;
 #   - a tool run or a file read under credentials is byte-identical to its committed HEAD blob
-#     (tracked_file, filters off); an exported GIT_* variable (bar five inert ones), BASH_ENV, ENV,
+#     (tracked_file, filters off); an exported GIT_* variable (bar five inert ones; the injected-config family is unset), BASH_ENV, ENV,
 #     DOPPLER_API_HOST or any exported function refuses the run; the wrapper gets only the names it
 #     reads (`doppler run --no-fallback --only-secrets ...`);
 #   - the old token's state is its verify answer at prd_terraform <KEY>_PREV (SOLEUR_P5_PREV, CTO D6): after

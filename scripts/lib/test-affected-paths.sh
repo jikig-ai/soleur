@@ -5271,6 +5271,7 @@ AFFECTED_TESTS_SCRIPTS_CF_OLD_LOGIN_TOKEN_REMINT_BOOTSTRAP_PATHS=(
 AFFECTED_TESTS_SCRIPTS_CF_OLD_LOGIN_TOKEN_REMINT_BROWSER_PATHS=(
   "glob:knowledge-base/project/specs/*feat-one-shot-12931-phase5-token-remint/p5-*"  # real read: the bodies, the sink, the sha256 manifest
   "knowledge-base/engineering/operations/runbooks/cloudflare-old-login-token-remint.md"  # real read: its `<file> sha256=` citations
+  "glob:knowledge-base/project/plans/*2026-11-27-chore-cf-phase5-old-login-token-remint-plan.md"  # real read: its ## Operator Holds (parity with runbook section 6)
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-cf-old-login-token-remint-browser.sh"
 )

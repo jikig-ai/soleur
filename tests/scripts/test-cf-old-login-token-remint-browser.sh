@@ -1169,7 +1169,10 @@ mutate() { # <src> <dst> <perl literal from> <perl literal to>: proven to land
 }
 killed_row() { # <mint> <revoke> <read> <row> <expected text>: the row is RED and its FAIL text names <expected text>
   harness "$1" "$2" "$3" P5_ONLY="$4"
-  ! grep -q "^ok $4 " "$H_OUT" && grep "^FAIL $4 " "$H_OUT" | grep -qF -- "$5"
+  local fl
+  ! grep -q "^ok $4 " "$H_OUT" || return 1
+  fl="$(grep "^FAIL $4 " "$H_OUT" || true)"
+  grep -qF -- "$5" <<<"$fl"
 }
 SCORED="R1,R1b,R2,R3,R4,R4c,R7b,R8u,R13c,R13d,M6,M6c,M7a,M7h,M9c,M16a,M16c,M16f,M17,M18a,M18b,D5"
 harness "$MINT" "$REVOKE" "$READ" P5_ONLY="$SCORED"

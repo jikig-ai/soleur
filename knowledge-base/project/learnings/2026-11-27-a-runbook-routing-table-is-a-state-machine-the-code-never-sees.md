@@ -100,6 +100,13 @@ cycle captures every later one.
 20. **The rollback-resume route added in round 3 could not pass its own step 2 gate after step 3** — Recovery: CTO
     ruling B confined the rollback to one sitting. — Prevention: a resume route is walked from each intermediate
     step, not only from step 1.
+21. **Three ready-run test-scripts shards were red and I read the PR as green** (the bootstrap refused the full
+    battery's own `GIT_CONFIG_COUNT=1`, so `operator-agent-runnable` saw exit 64 at every stage; the archived spec
+    and plan reads had no edge or baseline row; one `grep | grep -q` under pipefail and two PRODUCER_JOIN rows were
+    missing) — Recovery: the bootstrap unsets the injected-config family instead of refusing it, plus a scrub row
+    and mutant; a plan edge and two baseline rows; the pipe captured; two exempt rows. — Prevention: before calling
+    a ready PR green, list every non-pass check by name (`gh pr checks | awk '$2!="pass"'`), never a summary count;
+    and a script that refuses environment variables is run once under `scripts/test-all.sh`'s own environment.
 
 ## Tags
 

@@ -1041,7 +1041,7 @@ row_s3c_403_html() { # <src> — a 403 with an HTML body is no verdict (only a J
 # the row isolates the class refusal. E1_FUNCS are exported shell functions that delegate to the real command, so
 # a run that ignores them would otherwise succeed.
 E1_VARS=(GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_NAMESPACE
-         GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
+         GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG
          GIT_EXEC_PATH GIT_SYNTH_UNLISTED BASH_ENV ENV DOPPLER_API_HOST
          DOPPLER_CONFIG_DIR HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY all_proxy SSL_CERT_FILE SSL_CERT_DIR)
 E1_NET=(DOPPLER_CONFIG_DIR HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY all_proxy SSL_CERT_FILE SSL_CERT_DIR)
@@ -1066,6 +1066,22 @@ row_e1_env_refused() { # <src> <var|function> <name> — an inherited variable o
   at refuse
   : > "$STUB_LOG"; run_with "$ex" -- --stage verify
   [[ "$RC" -eq 64 && ! -s "$STUB_LOG" ]] && has_line "SOLEUR_P5_ENV_REFUSED name=${want}"
+}
+row_e1_env_scrubbed() { # <src> <count|parameters> — injected git config is unset, not refused (the full battery exports GIT_CONFIG_COUNT)
+  local k
+  world "e1-scrub-$2" "$1"; seed_swapped
+  at verdict
+  # core.bare=true, if git honoured it, makes the .env ignore probe and tracked_file fail: verify ok proves it was unset.
+  if [[ "$2" == count ]]; then
+    run_with GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.bare GIT_CONFIG_VALUE_0=true -- --stage verify
+    has_line "SOLEUR_P5_ENV_SCRUBBED name=GIT_CONFIG_COUNT" && has_line "SOLEUR_P5_ENV_SCRUBBED name=GIT_CONFIG_KEY_0" \
+      && has_line "SOLEUR_P5_ENV_SCRUBBED name=GIT_CONFIG_VALUE_0" || return 1
+  else
+    run_with "GIT_CONFIG_PARAMETERS='core.bare'='true'" -- --stage verify
+    has_line "SOLEUR_P5_ENV_SCRUBBED name=GIT_CONFIG_PARAMETERS" || return 1
+  fi
+  [[ "$RC" -eq 0 ]] && ! grep -q '^SOLEUR_P5_ENV_REFUSED ' <<<"$OUT" || return 1
+  for k in "${KEYS[@]}"; do ready "$k" || return 1; done
 }
 row_e1_env_inert() { # <src> — the five GIT_* variables git never consults for these reads do not refuse (harnesses set GIT_EDITOR)
   local k
@@ -1369,6 +1385,8 @@ CONTRACT
   for _m in "${E1_FUNCS[@]}"; do
     row_e1_env_refused "$SCRIPT_SRC" function "$_m"; check "E1 ${_m} an exported shell function: ENV_REFUSED name=function:${_m}, exit 64 before any call" $?
   done
+  row_e1_env_scrubbed "$SCRIPT_SRC" count; check "E1 GIT_CONFIG_COUNT/KEY_0/VALUE_0 (core.bare=true) is unset, not refused: ENV_SCRUBBED lines, verify ok" $?
+  row_e1_env_scrubbed "$SCRIPT_SRC" parameters; check "E1 GIT_CONFIG_PARAMETERS (core.bare=true) is unset, not refused: ENV_SCRUBBED line, verify ok" $?
   row_e1_env_inert "$SCRIPT_SRC"; check "E1 GIT_EDITOR, GIT_SEQUENCE_EDITOR, GIT_PAGER, GIT_TERMINAL_PROMPT and GIT_CEILING_DIRECTORIES are not refused: verify ok" $?
   row_t1_dirty_file "$SCRIPT_SRC" tool; check "T1 an uncommitted edit to cloudflare-readonly.sh: UNTRUSTED_FILE, the wrapper never runs, no REVOKE_READY" $?
   row_t1_dirty_file "$SCRIPT_SRC" filter; check "T1 an edit a clean filter hides from a filtered hash: UNTRUSTED_FILE (hash-object --no-filters), no REVOKE_READY" $?
@@ -1722,7 +1740,7 @@ PERL
 fi
 
 if mutate ENV1M "$SB/env1m.sh" <<'PERL'; then
-s{for v in \$\(compgen -e\); do\n.*?\ndone\n}{}s
+s{for v in \$\(compgen -e\); do\n  case "\$v" in\n    GIT_EDITOR\|.*?\ndone\n}{}s
 PERL
   # Without the refusal the run goes on to a verdict (rc 0 or 1) instead of exiting 64.
   for _m in "${E1_VARS[@]}"; do mkill "ENV1M (the variable class refusal deleted)" row_e1_env_refused "$SB/env1m.sh" refuse 'rc=[01] ' var "$_m"; done
@@ -1736,7 +1754,7 @@ if mutate ENV3M "$SB/env3m.sh" <<'PERL'; then
 s{    GIT_\*\|BASH_ENV\|ENV\|DOPPLER_API_HOST\)\n}{    GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_COMMON_DIR|GIT_NAMESPACE|GIT_ALTERNATE_OBJECT_DIRECTORIES|DOPPLER_API_HOST)\n}
 PERL
   # The old NAMED list: every member outside it must now die.
-  for _m in GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_EXEC_PATH GIT_SYNTH_UNLISTED BASH_ENV ENV; do
+  for _m in GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG GIT_EXEC_PATH GIT_SYNTH_UNLISTED BASH_ENV ENV; do
     mkill "ENV3M (the GIT_* class narrowed back to a name list)" row_e1_env_refused "$SB/env3m.sh" refuse 'rc=[01] ' var "$_m"
   done
 fi
@@ -1749,6 +1767,11 @@ if mutate ENV5M "$SB/env5m.sh" <<'PERL'; then
 s{    DOPPLER_CONFIG_DIR\|HTTPS_PROXY[^\n]*\)\n[^\n]*\n}{}
 PERL
   for _m in "${E1_NET[@]}"; do mkill "ENV5M (the Doppler re-point and proxy refusal deleted)" row_e1_env_refused "$SB/env5m.sh" refuse 'rc=[01] ' var "$_m"; done
+fi
+if mutate SCRUBM "$SB/scrubm.sh" <<'PERL'; then
+s{for v in \$\(compgen -e\); do\n  case "\$v" in\n    GIT_CONFIG_COUNT[^\n]*\n[^\n]*\n  esac\ndone\n}{}
+PERL
+  for _m in count parameters; do mkill "SCRUBM (the injected-config scrub deleted: the full battery's GIT_CONFIG_COUNT refuses every run)" row_e1_env_scrubbed "$SB/scrubm.sh" verdict 'rc=64' "$_m"; done
 fi
 if mutate EXM "$SB/exm.sh" <<'PERL'; then
 s{    GIT_EDITOR\|GIT_SEQUENCE_EDITOR\|GIT_PAGER\|GIT_TERMINAL_PROMPT\|GIT_CEILING_DIRECTORIES\) ;;\n}{}
@@ -1921,7 +1944,7 @@ scored_section
 # --- anti-vacuity floor (reported directly, never through fail()) -----------------
 # The subtrahend is the instrument self-test's one counted pass; the bound is exact for each mode.
 TOTAL=$((PASS + FAIL)); SELFTEST_PASSES=1
-case "$MODE" in full) MIN_ASSERTIONS=357 ;; *) MIN_ASSERTIONS=225 ;; esac
+case "$MODE" in full) MIN_ASSERTIONS=360 ;; *) MIN_ASSERTIONS=227 ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -lt "$MIN_ASSERTIONS" ]]; then
   printf '  [FAIL] anti-vacuity floor: only %s assertions ran in %s mode, floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$MIN_ASSERTIONS" >&2
   printf 'Total: %s assertions, %s failed\n' "$TOTAL" "$((FAIL + 1))"
