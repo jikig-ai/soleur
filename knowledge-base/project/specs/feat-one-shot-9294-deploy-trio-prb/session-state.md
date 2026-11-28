@@ -260,3 +260,55 @@ REMAINING (in order):
 CAUTIONS: machine load is high from sibling playwright/chromium processes — run suites niced with
 timeouts; never unbounded shellcheck on test-argv-bearer-sweep.sh (#13098/#13099); data-integrity
 warned another process may edit this worktree — always git status first.
+
+## Fix-round checkpoint 5 — P3 implementation in flight (uncommitted)
+
+State before compaction:
+- argv-bearer validation confirmed GREEN exactly `825 passed, 0 failed`; no rerun needed.
+- Follow-up issue filed: #13118 for post-deletion pinned-set shrink + wrapper visibility.
+- P2 quadratic scanner FIXED and COMMITTED as `2ecdb12b86` (`test(census): #9294 PR-B tokenize doppler tails once`). Validation: differential random mismatches 0, representative behavior matched, PERF1 post-fix wall ~0.2-0.3s, full trio census GREEN `625 passed, 0 failed`, floor exact.
+- P3 edits currently UNCOMMITTED in this worktree:
+  1. `.github/workflows/scheduled-followthrough-sweeper.yml`: removed `fetch-depth: 0` from `sweep-deploy-channel` only; comment now says partition can never serve the ccla pickaxe probe there.
+  2. `tests/scripts/test-infra-privileged-tier-census.sh`: introduced `DEPLOY_CHANNEL_TRIO_NAMES`; `TIER_B_NAMES` appends it, `TRIO_NAMES = DEPLOY_CHANNEL_TRIO_NAMES` (no positional `[-3:]`).
+  3. `scripts/check-deploy-script-parity.sh`: `.ci_deploy_sha256` and `.host_id` are parsed in one jq `@tsv` read.
+  4. `apps/web-platform/infra/infra-config-verify.sh`: restored the recovery as exact copy-pasteable multi-line commands. IMPORTANT: it deliberately uses `DOPPLER_CLI=doppler` and `${DOPPLER_CLI}` in the echoed recipe so the structural zero-command-position-doppler test stays green while output still prints `doppler` correctly.
+- Phantom `_NOT_SET` verification result: yes, `tests/scripts/trio-baseline.tsv` rows 159/161/163 carry `*_NOT_SET`; these are normalized diagnostic strings from lower-case `reason=..._not_set` text in `scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh`, not live secret keys. Disposition: accepted inventory artifact/overcount, not a credential alias; document in ledger, no deletion without changing scanner semantics.
+- Validation already complete: `scripts/check-deploy-script-parity.test.sh` GREEN `21 passed, 0 failed`. First `infra-config-verify.test.sh` run was 54/1 only because the literal pasted commands tripped the zero-doppler structural row; reworked as above and rerun is in `/tmp/infcfg-p3-rerun.log` (shell `p3-infcfg2`). Other validation shells: `p3-tier` -> `/tmp/tier-census-p3.log`, `p3-sweep` -> `/tmp/sweep-p3.log`.
+- Still pending: collect those suites; write synthesis/disposition ledger (use “2026-11-27 ~23:30 — PANEL SYNTHESIS INPUT” inventory); ADR-267 fix-round review over `329d32ddc7..HEAD`; `soleur:qa`; `soleur:ship`; merge PR #13006; postmerge verification/final resume. Operator live-state tail remains explicitly out of scope.
+
+## Panel synthesis / disposition ledger (fix-round closeout input)
+
+Deduped panel findings, with the disposition the fix-round review must verify:
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | census-invisible `doppler-read.sh` broker / wrapper relay | **Accepted residual, ADR-documented**: ADR-241 amendment at `f7ddb249df` rules that full wrapper visibility is not implemented in this PR because it would flip `web-platform-release.yml` tier-b→tier-a with no ratchet lane. Post-deletion shrink + surviving-carrier visibility tracked in **#13118**. |
+| 2 | D-2 exemption not inheritance-aware | **Open verification item for fix-round review**: scanner currently uses literal pinned project/config pairs. The panel's inheritance claim must be re-tested in the fix-round review; if confirmed it is a blocker, not a documentation item. |
+| 3 | live-verify broken cwd-relative path | **Fixed in PR** (`e47111d4bf`): `$GITHUB_WORKSPACE`-absolute invocation. |
+| 4 | `ship`/operator recovery text prescribed wrong `run` mode and incomplete Terraform recovery | **Fixed in PR** for the direct operator texts (`04d40b270b`); infra-config recovery now carries the exact nested-loader command chain in the current uncommitted P3 batch. |
+| 5 | sweeper partition had zero tests; missing-script ordering hole | **Fixed in PR** (`e1b43b7f06`): T18-T33, partition classification and harness baseline propagation; suite green 377/0. |
+| 6 | rebase stale against main | **Fixed in PR** before the panel/fix round (`d1d41f413e` and subsequent commits); current branch must be rebased again only if main moved before merge. |
+| 7 | loader observability, unbounded network legs, CLI tarball caching | **Deferred operational hardening**, not a certified-end-state falsification. No silent behavior change is claimed by this PR; retain as review-verified residual unless the fix-round panel demonstrates a new regression. |
+| 8 | watchdog probe-unavailable path unreachable | **Deferred/tracked externally**: #12921 is the live probe-unavailable tracker. This PR does not make the path worse. |
+| 9 | `GITHUB_ENV` lifetime widening / TF_VAR duplication / backup double carrier | **Accepted residual where pre-existing or mechanism-required**; fix-round review must distinguish new exposure introduced here from pre-existing loader behavior. |
+| 10 | broker contract defects | **Fixed in PR** (`e47111d4bf`): arity validation, fail-closed reads, empty-value refusal, pipefail/hash failure behavior; `--preserve-env` semantics already corrected before the panel. Batched `bs` read deliberately not adopted because the multi-name output shape is unverified on an ops-critical path. |
+| 11 | stale bulk `doppler run -p soleur -c prd_terraform` BetterStack prescriptions | **Partially fixed / review-verify**: sanctioned call sites use `doppler-read.sh bs`; any remaining prose prescription must be corrected or explicitly justified as non-credential example text. |
+| 12 | half-prose recovery / missing cwd preconditions / dispatch notes | **Fixed in PR/P3 batch**: infra-config recovery is now exact copy-pasteable multi-line nested-loader guidance; sibling wording was corrected in `04d40b270b` where enumerated. |
+| 13 | ADR-168 missing cross-project / `run` measurement | **Open verification item for fix-round review** together with #2: if Doppler service-token precedence invalidates the negative exemption, the scanner exemption must be narrowed before merge. |
+| 14 | plan still certifies zero tier-a | **Fixed/ADR-documented**: ADR and baseline disclose the exact 3-row argv-bearer residual and scope it to #13102 with the 2026-11-30 fuse. |
+| 15 | narrow loader `no_credential_source` only grep-pinned | **Accepted test-fidelity residual**: grep pin is intentional for this PR; execution-render harness expansion is non-blocking unless fix-round review shows behavior drift. |
+| 16 | seed-before-merge process-only | **PR-body/operator-tail control**, not code: merge body must state seeding is the immediate post-merge/operator precondition and that live-state seeding/deletion/rotation are outside this PR. |
+| 17 | checkout `persist-credentials` divergence | **Verified non-issue / documented**: the sweeper and deploy-channel arms use `persist-credentials: false`; other divergence is workflow-specific and was not a new trio exposure. |
+| P2-floor | infra-tier assertion floor stale | **Fixed in PR** (`483f77347d`): floor exact at 507. |
+| P2-perf | quadratic doppler scanner | **Fixed in PR** (`2ecdb12b86`): segment-once tokenization; differential oracle 0 mismatches; full trio census green 625/0 with PERF1. |
+| P2-key-status | github-app-key-status stale operator text | **Fixed in PR** (`04d40b270b`). |
+| P2-no-checkout | stale no-checkout comments | **Fixed in PR** (`04d40b270b`). |
+| P3-capital-D | `Doppler login` wrong executable spelling | **Fixed in PR** (`04d40b270b`). |
+| P3-fetch-depth | full-history checkout copied into deploy-channel sweeper | **Fixed in P3 batch**: removed from `sweep-deploy-channel`; the ccla pickaxe probe cannot be served on that arm by partition construction. |
+| P3-positional | `TIER_B_NAMES[-3:]` positional trio pin | **Fixed in P3 batch**: `DEPLOY_CHANNEL_TRIO_NAMES` is the single name-keyed source. |
+| P3-jq | whole-payload jq reparse | **Fixed in P3 batch** for the changed parity reader: one jq `@tsv` parse yields both fields. |
+| P3-NOT_SET | phantom `_NOT_SET` baseline keys | **Verified non-secret artifact**: rows 159/161/163 come from normalized lower-case `reason=..._not_set` diagnostic text, not live key names. They remain inventory overcount, not acquisition evidence; no baseline deletion without a separate scanner-semantics change. |
+| P3-embedded-python | duplicated embedded Python scanner machinery | **Accepted deliberate defense-in-depth**, as pre-triaged in the inventory. |
+| positive | N3b zero-count de-carry, @allow spend shape, brace folding, D-2 mutant pinning, no user-product surface change | **Positive confirmations** retained; do not re-litigate without new contradicting evidence. |
+
+Two items intentionally remain **open verification items** rather than falsely closed: the Doppler inheritance/precedence question (#2/#13). The ADR-267 fix-round review must rule them explicitly. If either confirms a live false-negative, merge is blocked until the scanner is narrowed and the census suites are rerun.

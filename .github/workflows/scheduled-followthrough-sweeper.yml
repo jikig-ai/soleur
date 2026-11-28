@@ -198,9 +198,11 @@ jobs:
   # set runs HERE — the only arm whose job env can carry them, bound to the
   # main-only `deploy-channel` environment and fed by the narrow loader (never
   # a `secrets.<trio>` bind). A `secrets=` mixing trio and non-trio names is
-  # skipped by BOTH arms and reds this job via the coverage assertion. Same
-  # checkout shape as `sweep` (fetch-depth: 0 for the ccla probe's pickaxe,
-  # persist-credentials: false so no ambient credential survives `env -i`).
+  # skipped by BOTH arms and reds this job via the coverage assertion. This arm
+  # deliberately does NOT carry `fetch-depth: 0`: the ccla pickaxe probe that
+  # needs full history names a non-trio secret, so the partition can never serve
+  # it here. `persist-credentials: false` matches `sweep`: no ambient credential
+  # survives `env -i`.
   sweep-deploy-channel:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -208,7 +210,6 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          fetch-depth: 0
           persist-credentials: false
       - name: Load deploy-channel credentials
         uses: ./.github/actions/infra-credentials

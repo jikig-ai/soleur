@@ -180,8 +180,7 @@ if [[ "$STATUS_ARM" -eq 1 ]]; then
     # rather than skip the arm.
     echo "DRIFT(status): /hooks/deploy-status returned an empty body — web-1 parity cannot be read" >&2; fail=1
   else
-    live="$(printf '%s' "$body" | jq -r '.ci_deploy_sha256 // "ABSENT"')"
-    hid="$(printf '%s' "$body" | jq -r '.host_id // "?"')"
+    IFS=$'\t' read -r live hid < <(printf '%s' "$body" | jq -r '[(.ci_deploy_sha256 // "ABSENT"), (.host_id // "?")] | @tsv')
     if [[ "$live" == "$REPO_SHA" ]]; then
       echo "PARITY(status): web-1 ($hid) serves ci-deploy.sh == repo ($REPO_SHA)"
     elif [[ "$live" == "ABSENT" ]]; then

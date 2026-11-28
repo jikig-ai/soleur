@@ -199,17 +199,19 @@ ENV_SECRETS = ["DOPPLER_TOKEN_INFRA_PRIVILEGED", "DOPPLER_TOKEN_WRITE", "DOPPLER
                # `inngest-cutover` (main-only + required-reviewer), so any job naming it is Tier-B
                # classified and must declare a Tier-B `environment:` (the G1b/G1c rows).
                "DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE", "DOPPLER_TOKEN_DEPLOY_CHANNEL"]
+# #9294 PR-B — the deploy-channel family. Tier-B membership is what makes G1g's
+# no-non-loader-read row apply to the trio: a `doppler secrets get <trio>` with
+# `-c prd_terraform` (or a prd_terraform DOPPLER_CONFIG env) outside the loader
+# is RED. The job-level environment boundary is G1l. Split literals: this file's
+# own embedded scanner machinery already carries counted invocation shapes, so a
+# contiguous literal trio stem would key census rows here. Name-keyed rather than
+# positional: appending another Tier-B name must never change which names G1l owns.
+DEPLOY_CHANNEL_TRIO_NAMES = ["WEBHOOK_" + "DEPLOY_SECRET", "CF_ACCESS_" + "CLIENT_ID", "CF_ACCESS_" + "CLIENT_SECRET"]
 TIER_B_NAMES = ["DOPPLER_TOKEN_TF", "HCLOUD_TOKEN", "CF_API_TOKEN_R2",
                 "GITHUB_INFRA_APP_ID", "GITHUB_INFRA_APP_INSTALLATION_ID", "GITHUB_INFRA_APP_PRIVATE_KEY",
                 "TF_STATE_AWS_ACCESS_KEY_ID", "TF_STATE_AWS_SECRET_ACCESS_KEY",
                 "GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID", "GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY",
-                # #9294 PR-B — the deploy-channel family. Tier-B membership is what makes G1g's
-                # no-non-loader-read row apply to the trio: a `doppler secrets get <trio>` with
-                # `-c prd_terraform` (or a prd_terraform DOPPLER_CONFIG env) outside the loader
-                # is RED. The job-level environment boundary is G1l. Split literals: this file's
-                # own embedded scanner machinery already carries counted invocation shapes, so a
-                # contiguous literal trio stem would key census rows here.
-                "WEBHOOK_" + "DEPLOY_SECRET", "CF_ACCESS_" + "CLIENT_ID", "CF_ACCESS_" + "CLIENT_SECRET"]
+                *DEPLOY_CHANNEL_TRIO_NAMES]
 TIER_B_ENVIRONMENTS = {"infra-privileged", "web-platform-infra-apply", "inngest-cutover", "workspaces-luks-cutover", "deploy-channel"}
 PRIV_STATE_BUCKET = "soleur-terraform-state"
 LOADER_REL = os.path.join("actions", "infra-credentials", "action.yml")
@@ -908,7 +910,7 @@ check("G1k: DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE appears only in cutover-inngest.
 # so expression-env jobs must not name the family at all (cutover-inngest drops it entirely).
 # The lookarounds keep `WEBHOOK_DEPLOY_SECRET_NEXT` (the rotation machinery, excluded) and the
 # `_NOT_SET` placeholder names from matching.
-TRIO_NAMES = TIER_B_NAMES[-3:]
+TRIO_NAMES = DEPLOY_CHANNEL_TRIO_NAMES
 # Case-insensitive: the secrets context resolves case-insensitively, so a lowercase
 # `secrets.webhook_deploy_secret` bind is the same acquisition (structural-enumeration seat,
 # #13006 review). Overcounting lowercase inert text is the safe direction for a boundary guard.
