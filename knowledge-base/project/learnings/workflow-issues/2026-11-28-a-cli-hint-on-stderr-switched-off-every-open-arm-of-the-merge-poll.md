@@ -136,6 +136,38 @@ healthy and the documented recovery was refused.
 - **The lead bulk-toggled `tasks.md` checkboxes**, marking the PR-body and arm tasks done before
   they ran. Recovery: unmarked them immediately. Prevention: tick each box only when its own command
   has run.
+- **The review completion floor could never pass.** `completion-floor.sh --phase review` counted every
+  open `code-review` issue in the repo (96), although its own definition says "for this PR".
+  Recovery: scoped it to issues citing `#<PR>`, fail-closed (447928cb20). Prevention: a gate whose
+  description names a scope must be tested with an out-of-scope fixture that has to pass.
+- **The first scoped floor still counted deferred scope-outs**, which stay open by design and cite
+  `PR #N review`. A one-commit review seat caught it. Recovery: excluded `deferred-scope-out` and
+  `synthetic-test` as ship Phase 5.5 does, and read `-L 1000` and fail closed on a full page (be5547f361).
+  Prevention: before writing a gate's filter, read the sibling gate that answers the same question.
+- **AC6b drifted during review.** Fix commits grew ship/SKILL.md until only 4 B were left under its
+  ceiling, against the AC's 50 B. The budget lint stayed green because it checks the ceiling, not
+  the AC's margin. Recovery: shortened a fence comment to a pointer at monitor-hygiene.md (66 B).
+  Prevention: re-run every AC command after the LAST fix round, never carry an AC verdict from work.
+- **My AC block extraction re-opened at a prose mention** of the marker 400 lines later, and it
+  reported two `trap … EXIT` lines in a block that has one. Recovery: extract with the exact
+  `<!-- phase-7-poll-block:start -->` marker the suite uses. Prevention: reuse the suite's extractor.
+- **A fix-round fix closed spellings, not the class.** The nameref check matched after quote
+  removal; `declare {-n,}`, `declare\<newline>-n`, `declare${IFS}-n` and `declare -[n]` still ran a
+  nameref, while the comment claimed the backslash forms were covered. Recovery: any
+  declare/local/typeset word denies on that path (c01694bb75). Prevention: covered by review's
+  "a fix commit is the least-audited surface" rule; it fired as designed.
+- **A commit message understated its own mutation result** ("reddens two rows"; replay showed three).
+  The stub ignored every flag but `--jq`, so the count was taken from a weaker instrument. Recovery:
+  the stub now answers only the required call shape. Prevention: quote mutation counts from the
+  final instrument, re-run after it changes.
+- **Cleanup of an orphan sandbox was refused twice**: `rm -rf` by the protected-path hook (it
+  resolved the path to empty) and `soleur-sandbox.sh rm` for a missing marker. It was left in place,
+  correctly, as not ours. Prevention: none needed; both refusals are the guards working.
+- **Forwarded from pre-compaction:** the issue-filing gate refused a filing that named no
+  user-visible consequence (re-filed with `meta/machinery`, #13123); a suite path was guessed wrong
+  (`context-sanitize.test.sh` lives in `.claude/hooks/lib/`); a combined `git add && git commit` was
+  hook-blocked. Prevention: `git ls-files | grep <name>` before invoking a suite by path; stage and
+  commit in separate calls (already hook-enforced).
 
 ## Tags
 
