@@ -255,6 +255,8 @@ bastion_boot_verify() {
   if [[ "$verdicts" == "verdict=ready" && "$rc" -eq 0 ]]; then
     echo "bastion-boot-verify: READY — soleur-bastion reported fresh_boot_ready after the run anchor (apply ${apply_outcome})."
     _bbv_record not_needed "- boot-verify: **READY** — soleur-bastion (server ${host_id:-id unread}) reported fresh_boot_ready; nothing was powered off."
+    # The ready server's id, for the pin read-back step (the next replace dispatch pins it).
+    [[ -z "${GITHUB_OUTPUT:-}" ]] || printf 'server_id=%s\n' "${host_id:-unread}" >> "$GITHUB_OUTPUT"
     return 0
   fi
   echo "::error::bastion-boot-verify: soleur-bastion is NOT ready (reader exit ${rc}; verdict lines: '${verdicts//$'\n'/ | }'; apply ${apply_outcome}). Powering it off."

@@ -71,7 +71,7 @@ jobs:
     environment: web-platform-infra-apply
     permissions:
       contents: read
-      issues: write  # bastion-boot-verify comments a not-ready run on #12879
+      issues: write  # bastion-boot-verify comments a not-ready run on #9421
     # Budget: the kernel-currency suite's bastion row (pre-poll + strict reader worst case + power-off).
     timeout-minutes: 60
     steps:
@@ -121,27 +121,10 @@ jobs:
           SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
         run: |
           set -euo pipefail
-          ci="${GITHUB_WORKSPACE}/apps/web-platform/infra/bastion-cloud-init.yml"
-          # Comment lines stripped first: a literal that survives only in a comment emits nothing.
-          body="$(grep -vE '^[[:space:]]*#' "$ci")"
-          for lit in fresh_boot_ready fresh_boot_not_ready_ cloud_init_complete; do
-            if ! grep -qF "$lit" <<<"$body"; then
-              echo "::error::bastion-host-create is HELD: bastion-cloud-init.yml does not emit '${lit}', so the boot could not be verified. Nothing was planned or created."
-              exit 1
-            fi
-          done
-          if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
-            echo "::error::bastion-host-create is HELD: SENTRY_ACTIONS_RO_TOKEN is not bound, so the boot trail could not be read and a born bastion would be powered off as unverified. Nothing was planned or created."
-            exit 1
-          fi
-          # Byte-identical to the reader's _bearer_ok (fresh-host-boot-trail.sh), LC_ALL=C included,
-          # so this interlock never admits a token the reader then refuses.
-          _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
-          if ! _bearer_ok "$SENTRY_ACTIONS_RO_TOKEN"; then
-            echo "::error::bastion-host-create is HELD: SENTRY_ACTIONS_RO_TOKEN failed the boot-trail reader's token-shape check. Nothing was planned or created."
-            exit 1
-          fi
-          echo "birth-readiness interlock PASSED (emitter literals present; boot-trail token bound and well-formed)."
+          # The body lives in scripts/lib/bastion-birth-readiness.sh, shared with bastion-host-replace (F1, #12879).
+          # shellcheck source=scripts/lib/bastion-birth-readiness.sh
+          source "${GITHUB_WORKSPACE}/scripts/lib/bastion-birth-readiness.sh"
+          bastion_birth_readiness bastion-host-create
 
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         run: |
@@ -259,6 +242,32 @@ jobs:
         run: |
           echo "::notice title=bastion-host-create::plan_only: the plan and both gates PASSED; stopping before any apply. The run summary lists the commit and the planned addresses for the owner's review."
 
+      # The pre-apply id set (#12879): every soleur-bastion that exists BEFORE the apply. Boot-verify and the
+      # cancel power-off never touch these, so a birth dispatched into a lost-state project (its create fails
+      # on the duplicate name) cannot power off the healthy live bastion.
+      - name: Record the pre-apply soleur-bastion ids
+        if: inputs.plan_only != true
+        id: preids
+        run: |
+          set -euo pipefail
+          umask 077
+          # shellcheck source=scripts/lib/bastion-boot-verify.sh
+          source "${GITHUB_WORKSPACE}/scripts/lib/bastion-boot-verify.sh"
+          doc="$(mktemp "${RUNNER_TEMP:?}/bastion-preids.XXXXXXXX")"
+          rc=0; why="$(_bbv_servers_doc "$doc")" || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::bastion-host-create: Hetzner server read FAILED ${why#*FAILED }. Nothing was created."
+            exit 1
+          fi
+          pre="$(jq -r '[.servers[].id | tostring] | if length == 0 then "none" else join(" ") end' "$doc")"
+          rm -f -- "$doc"
+          if ! (LC_ALL=C; [[ "$pre" =~ ^(none|[1-9][0-9]{0,11}( [1-9][0-9]{0,11})*)$ ]]); then
+            echo "::error::the pre-apply id set did not read as numeric ids. Nothing was created."
+            exit 1
+          fi
+          printf 'pre_ids=%s\n' "$pre" >> "$GITHUB_OUTPUT"
+          echo "pre-apply soleur-bastion ids: ${pre}"
+
       - name: Stamp boot-trail run anchor (bastion create)
         if: inputs.plan_only != true
         id: boot_anchor
@@ -294,6 +303,7 @@ jobs:
         env:
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
           BOOT_TRAIL_SINCE: ${{ steps.boot_anchor.outputs.epoch }}
+          PRE_IDS: ${{ steps.preids.outputs.pre_ids }}
           SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -305,15 +315,18 @@ jobs:
             exit 1
           }
           rc=0
-          # Arg 3 is the dispatch label; the library writes poweroff_result to $GITHUB_OUTPUT.
-          bastion_boot_verify "${BOOT_TRAIL_SINCE:-}" "${APPLY_OUTCOME:-}" bastion-host-create || rc=$?
+          # Arg 3 is the dispatch label, arg 4 the pre-apply id set; the library writes poweroff_result,
+          # comment_result and (when ready) server_id to $GITHUB_OUTPUT.
+          bastion_boot_verify "${BOOT_TRAIL_SINCE:-}" "${APPLY_OUTCOME:-}" bastion-host-create "${PRE_IDS:-}" || rc=$?
           exit "$rc"
 
       # A cancel (operator, or the job timeout) skips the verify step's power-off. A server that
-      # landed and was not proven ready must not sit running with no heartbeat (#12879).
+      # landed and was not proven ready must not sit running with no heartbeat (#13113).
       - name: Power off on cancel (unverified bastion)
         id: cancel_poweroff
         if: ${{ cancelled() && steps.apply.outcome != 'skipped' && steps.verify.outcome != 'success' && inputs.plan_only != true }}
+        env:
+          PRE_IDS: ${{ steps.preids.outputs.pre_ids }}
         run: |
           set -uo pipefail
           # shellcheck source=scripts/lib/bastion-boot-verify.sh
@@ -322,18 +335,19 @@ jobs:
             echo "::error::could not load scripts/lib/bastion-boot-verify.sh — soleur-bastion was NOT powered off. Power it off in the Hetzner console now."
             exit 1
           }
-          if _bbv_poweroff; then
+          if _bbv_poweroff "${PRE_IDS:-}"; then
             echo "result=powered_off_or_absent" >> "$GITHUB_OUTPUT"
           else
             echo "result=failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
 
-      - name: Record the bastion pin (host key fingerprint, private IP)
+      - name: Record the bastion pin (server id, host key fingerprint, private IP)
         if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          SERVER_ID: ${{ steps.verify.outputs.server_id }}
         run: |
           set -euo pipefail
           fp=$(doppler run --preserve-env -p soleur -c prd_terraform -- terraform output -raw bastion_ssh_host_key_fingerprint 2>/dev/null) || fp=""
@@ -342,11 +356,13 @@ jobs:
             echo "::error::the bastion is READY but its pin did not read back (fingerprint='${fp}', private_ip='${ip}'). Read both with terraform output before #12880 pins them."
             exit 1
           fi
+          [[ "$SERVER_ID" =~ ^[0-9]+$ ]] || SERVER_ID="unread"
           {
+            echo "- bastion server id: \`${SERVER_ID}\` (bastion-host-replace pins it as expected_bastion_server_id)"
             echo "- bastion host key fingerprint: \`${fp}\`"
             echo "- bastion private IP: \`${ip}\`"
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "::notice title=bastion-pin::fingerprint ${fp}, private IP ${ip}"
+          echo "::notice title=bastion-pin::server ${SERVER_ID}, fingerprint ${fp}, private IP ${ip}"
 
       - name: Dispatch summary
         if: always()
@@ -357,27 +373,37 @@ jobs:
           APPLY_OUTCOME: ${{ steps.apply.outcome }}
           VERIFY_OUTCOME: ${{ steps.verify.outcome }}
           POWEROFF_RESULT: ${{ steps.verify.outputs.poweroff_result }}
+          COMMENT_RESULT: ${{ steps.verify.outputs.comment_result }}
           CANCEL_POWEROFF: ${{ steps.cancel_poweroff.outputs.result }}
         run: |
           # The power-off line states what the library REPORTED, never what it was meant to do:
-          # a failed power-off leaves an unverified bastion running with no heartbeat (#12879).
+          # a failed power-off leaves an unverified bastion running with no heartbeat (#13113).
           case "${POWEROFF_RESULT}" in
-            powered_off) po="Not ready: soleur-bastion was powered off (disk kept) and the run was commented on #12879." ;;
+            powered_off) po="Not ready: soleur-bastion was powered off (disk kept)." ;;
             absent) po="Not ready: no soleur-bastion server exists, so there was nothing to power off." ;;
+            old_untouched) po="Not ready: the only soleur-bastion is a server that existed before this apply; it was left untouched. Read bastion-host.md (\"Lost state\") before any re-dispatch." ;;
+            refused_no_preids) po="**power-off REFUSED: the pre-apply id set was missing or malformed.** Check the Hetzner project for which soleur-bastion is this run's." ;;
             failed) po="**power-off FAILED — the bastion may be running.** Power it off in the Hetzner console now (Servers > soleur-bastion > Power > Power off)." ;;
             not_needed) po="Ready: no power-off was needed." ;;
             *) po="Power-off: no verdict recorded (boot-verify did not run to completion)." ;;
           esac
           [[ "${CANCEL_POWEROFF}" == failed ]] && po="**power-off FAILED after a cancel — the bastion may be running.** Power it off in the Hetzner console now."
-          [[ "${CANCEL_POWEROFF}" == powered_off_or_absent ]] && po="Cancelled: soleur-bastion was powered off, or was never created."
+          [[ "${CANCEL_POWEROFF}" == powered_off_or_absent ]] && po="Cancelled: soleur-bastion was powered off, was never created, or was a pre-apply server left untouched."
+          case "${COMMENT_RESULT}" in
+            posted) cm="The run was commented on #9421." ;;
+            failed) cm="**The #9421 comment did NOT post**; post the run URL there by hand." ;;
+            no_token) cm="No comment was posted to #9421 (GH_TOKEN unset)." ;;
+            *) cm="" ;;
+          esac
           {
             echo "## bastion-host-create"
             echo ""
             echo "- outcome: ${JOB_STATUS} (plan_only: ${PLAN_ONLY}; apply outcome: ${APPLY_OUTCOME:-none}; boot-verify outcome: ${VERIFY_OUTCOME:-none})"
             echo "- reason: ${REASON:-n/a}"
             echo ""
-            echo "A green run means: the gated plan applied AND soleur-bastion reported fresh_boot_ready after this run's anchor. It does NOT mean monitoring: the bastion has no heartbeat until #12879, and nothing dials it until #12880."
+            echo "A green run means: the gated plan applied AND soleur-bastion reported fresh_boot_ready after this run's anchor. It does NOT mean monitoring: the bastion has no heartbeat until #13113, and nothing dials it until #12880."
             [[ "${PLAN_ONLY}" == true ]] || echo "${po}"
+            [[ -z "${cm}" ]] || echo "${cm}"
             echo ""
             echo "Next: knowledge-base/engineering/operations/runbooks/bastion-host.md"
           } >> "$GITHUB_STEP_SUMMARY"

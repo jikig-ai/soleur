@@ -115,6 +115,7 @@ t "ready: exactly one verdict=ready and exit 0 returns 0" "$([[ "$RC" -eq 0 ]]; 
 t "ready: nothing is powered off and no comment is posted" "$([[ "$CURL" != *POST* && -z "$GH" ]]; echo $?)"
 t "ready: the reader ran strict for soleur-bastion, bound to the created server's id, with the anchor and job=success" "$(ready_bound_shape; echo $?)"
 t "ready: poweroff_result=not_needed and the summary says READY" "$([[ "$PO" == not_needed && "$SUM" == *"**READY**"* ]]; echo $?)"
+t "ready: the ready server's id is written as server_id for the pin read-back" "$(grep -qx 'server_id=4242' "$WORK/ready/out"; echo $?)"
 run notready 'verdict=not_ready\n' 1 success
 t "not_ready: powers off, comments on #9421, names the recovery, returns 1" "$(not_ready_shape; echo $?)"
 t "not_ready: poweroff_result=powered_off and the summary says it was powered off" "$([[ "$PO" == powered_off && "$SUM" == *"was powered off"* ]]; echo $?)"
@@ -403,7 +404,7 @@ mrow "a failed comment recorded as posted" '      _bbv_record_comment failed "- 
 LABEL_ARG="" PRE_ARG="__unset__"
 
 echo
-MIN_CASES=87  # measured 2026-11-28 (#12879: 47 -> 87, the replace label, pre-apply set, comment_result, _bbv_servers_doc and readiness rows)
+MIN_CASES=88  # measured 2026-11-28 (#12879: 47 -> 88, the replace label, pre-apply set, comment_result, _bbv_servers_doc and readiness rows)
 if [[ "$cases" -lt "$MIN_CASES" ]]; then printf 'test-bastion-boot-verify: FAIL (only %d assertions ran; floor %d)\n' "$cases" "$MIN_CASES" >&2; exit 1; fi
 if [[ $((passes + fails)) -ne "$cases" ]]; then printf 'test-bastion-boot-verify: FAIL (accounting: passes+fails=%d != cases=%d)\n' "$((passes + fails))" "$cases" >&2; exit 1; fi
 if [[ "$fails" -gt 0 ]]; then printf 'test-bastion-boot-verify: FAIL (%d of %d assertions failed)\n' "$fails" "$cases" >&2; exit 1; fi

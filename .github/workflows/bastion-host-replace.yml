@@ -1,0 +1,521 @@
+# bastion-host-replace — destroy and recreate the dedicated bastion (#12879, ADR-327 step 2b).
+#
+# A REUSABLE workflow, called ONLY by the `bastion_host_replace` job of apply-web-platform-infra.yml:
+#   gh workflow run apply-web-platform-infra.yml -f apply_target=bastion-host-replace \
+#     -f confirm=REPLACE-bastion -f expected_bastion_server_id=<id|none> -f plan_only=true -f reason='...'
+# Its own file, not a second job in bastion-host-create.yml: stock-preflight-coverage.test.ts reads ONE
+# terraform-applying job per called file (calledApplyingSteps), and the apply file sits at its byte gate
+# (#8361). The caller-side properties are those bastion-host-create.yml's header records: this job runs
+# INSIDE the caller's run, which holds the workflow-level `terraform-apply-web-platform-host` group (no
+# concurrency here); `environment: web-platform-infra-apply` (one required reviewer, the owner) and its
+# main-only branch policy gate it, and the job-level `if:` below repeats the main-only rule; secrets are
+# passed BY NAME, DOPPLER_TOKEN_INFRA_PRIVILEGED `required: true`; workflow env is redeclared.
+#
+# THE ID PIN (Q3). The dispatch input, the live Hetzner API (exactly one `soleur-bastion`, role=bastion)
+# and the plan's hcloud_server.bastion before.id must name the same server; `none` is the recovery arm
+# (zero servers in the API and none in state). The gate is tests/scripts/lib/bastion-host-replace-gate.sh;
+# the TOCTOU step re-checks the same identity on a fresh read immediately before the apply. Lost state
+# while a server is live is refused (#13117); a deliberate host-key rotation is #13116.
+#
+# THE PLAN JSON HOLDS THE HOST PRIVATE KEY. The key is a no-op here, so prior_state and its change carry
+# every private_key_* field in clear text. The plan files live in a umask-077 mktemp directory under
+# $RUNNER_TEMP, every line of every private_key_* string is masked before any later step can print it,
+# no step prints a value, nothing is uploaded, and the last step deletes the directory on always().
+#
+# Runbook: knowledge-base/engineering/operations/runbooks/bastion-host.md ("Replacing the bastion").
+# The -target lines below equal tests/scripts/lib/bastion-resources.txt (terraform-target-parity.test.ts).
+name: bastion-host-replace (called)
+
+on:
+  workflow_call:
+    inputs:
+      confirm:
+        description: "Typo-guard token; must be exactly REPLACE-bastion. NOT the authorization."
+        required: false
+        type: string
+        default: ""
+      plan_only:
+        description: "Rehearsal: read, plan and both gates, then stop before any re-read, apply or host contact."
+        required: false
+        type: boolean
+        default: false
+      reason:
+        description: "Free text for the run summary."
+        required: false
+        type: string
+        default: ""
+      expected_bastion_server_id:
+        description: "The Hetzner id of the soleur-bastion to destroy, or none to recover a lost server."
+        required: false
+        type: string
+        default: ""
+    # Exactly the secrets this body reads, passed by name (never `secrets: inherit`).
+    secrets:
+      DOPPLER_TOKEN_INFRA_PRIVILEGED:
+        required: true
+      DOPPLER_TOKEN:
+        required: false
+      SENTRY_ACTIONS_RO_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+  TF_VAR_terraform_version: "1.10.5"
+  INFRA_DIR: apps/web-platform/infra
+
+jobs:
+  bastion_host_replace:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: web-platform-infra-apply
+    permissions:
+      contents: read
+      issues: write  # bastion-boot-verify comments a not-ready run on #9421
+    # Budget: the birth's 60 plus one minute for the destroy (kernel-currency suite's bastion rows).
+    timeout-minutes: 61
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Load infra credentials (tiered)
+        id: creds
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      # The API reads, the TOCTOU re-read and the power-offs use the loader-exported $HCLOUD_TOKEN. The
+      # legacy arm exports only HCLOUD_TOKEN_READONLY (with which a power-off returns 403). Refuse first.
+      - name: Require the Tier-B credential source (the power-off needs a read/write token)
+        env:
+          CRED_SOURCE: ${{ steps.creds.outputs.source }}
+        run: |
+          if [[ "$CRED_SOURCE" != "tier_b" ]]; then
+            echo "::error::bastion-host-replace is HELD: the credential loader took the '${CRED_SOURCE:-unknown}' arm, which exports a READ-ONLY Hetzner token, so a not-ready bastion could not be powered off. Bind DOPPLER_TOKEN_INFRA_PRIVILEGED on web-platform-infra-apply. Nothing was planned or destroyed."
+            exit 1
+          fi
+          echo "credential source: tier_b (read/write Hetzner token)"
+
+      - name: Validate dispatch inputs (confirm token, server-id pin)
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+          EXPECTED_ID_RAW: ${{ inputs.expected_bastion_server_id }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_RAW" != "REPLACE-bastion" ]]; then
+            echo "::error::confirm must be exactly 'REPLACE-bastion' (got '${CONFIRM_RAW}'). Typo-guard only: the authorization is the web-platform-infra-apply environment approval. Nothing was planned or destroyed."
+            exit 1
+          fi
+          if ! (LC_ALL=C; [[ "$EXPECTED_ID_RAW" =~ ^([1-9][0-9]{0,11}|none)$ ]]); then
+            echo "::error::expected_bastion_server_id must be the numeric Hetzner id of the live soleur-bastion, or none to recover a lost server. Read it from a plan_only run's summary. Nothing was planned or destroyed."
+            exit 1
+          fi
+          echo "dispatch validated: replacing hcloud_server.bastion (pin ${EXPECTED_ID_RAW})"
+
+      # Fail closed BEFORE any plan: a replacement whose boot cannot be read would be powered off as
+      # unverified, and the old server would already be gone.
+      - name: Birth-readiness interlock (emitter present, boot-trail token bound and well-formed)
+        env:
+          SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=scripts/lib/bastion-birth-readiness.sh
+          source "${GITHUB_WORKSPACE}/scripts/lib/bastion-birth-readiness.sh"
+          bastion_birth_readiness bastion-host-replace
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
+            echo "::error::DOPPLER_TOKEN secret is not configured."
+            exit 1
+          fi
+
+      - name: Extract R2 backend credentials + assert SENTRY_DSN present
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain)}" || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain)}" || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+          # The DSN is the replacement's only way to report its boot (bastion.tf accepts an empty one).
+          dsn_rc=0
+          DSN=$(doppler secrets get SENTRY_DSN --plain 2>/tmp/doppler-dsn.err) || dsn_rc=$?
+          if [[ "$dsn_rc" -ne 0 ]]; then
+            echo "::error::could not READ SENTRY_DSN from Doppler prd_terraform (rc=${dsn_rc}) — fail-closed. doppler stderr: $(tr '\n' ' ' </tmp/doppler-dsn.err | tail -c 300)"
+            exit 1
+          fi
+          if [[ -z "$DSN" ]]; then
+            echo "::error::SENTRY_DSN is empty in Doppler prd_terraform. bastion-cloud-init.yml sends its fresh_boot_ready / fresh_boot_not_ready_* events with it, and boot-verify powers off a host it cannot hear. Nothing was planned or destroyed."
+            exit 1
+          fi
+          echo "SENTRY_DSN present and non-empty (value not printed)."
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      # Server ids are not secret: a plan_only run prints the live id, which the real dispatch pins.
+      - name: Read the live bastion from Hetzner (fail closed before any plan)
+        id: read
+        run: |
+          set -euo pipefail
+          umask 077
+          PLAN_DIR="$(mktemp -d "${RUNNER_TEMP:?}/bastion-replace.XXXXXXXX")"
+          printf 'PLAN_DIR=%s\n' "$PLAN_DIR" >> "$GITHUB_ENV"
+          # shellcheck source=scripts/lib/bastion-boot-verify.sh
+          source "${GITHUB_WORKSPACE}/scripts/lib/bastion-boot-verify.sh"
+          rc=0; why="$(_bbv_servers_doc "$PLAN_DIR/hetzner-servers.json")" || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::bastion-host-replace: Hetzner server read FAILED ${why#*FAILED }. Nothing was planned or destroyed."
+            exit 1
+          fi
+          {
+            echo "## bastion-host-replace — live soleur-bastion servers (Hetzner API, before the plan)"
+            echo ""
+            jq -r '.servers[] | "- id `\(.id | tostring | if test("^[0-9]+$") then . else "<non-numeric>" end)` name \(.name | @json) role \(.labels.role | @json) status \(.status | @json)"' "$PLAN_DIR/hetzner-servers.json"
+            if jq -e '.servers | length == 0' "$PLAN_DIR/hetzner-servers.json" >/dev/null; then echo "- none (the recovery arm: expected_bastion_server_id=none)"; fi
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Terraform plan (scoped bastion replace) + replace gate + stock preflight
+        id: plan
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          EXPECTED_ID: ${{ inputs.expected_bastion_server_id }}
+        run: |
+          set +e
+          set -uo pipefail
+          umask 077
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          # F4: -replace only on the replace arm; the recovery arm plans a bare create.
+          replace_args=()
+          if [[ "$EXPECTED_ID" != none ]]; then
+            replace_args=(-replace='hcloud_server.bastion')
+          fi
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out="$PLAN_DIR/tfplan" "${replace_args[@]}" \
+              -target='tls_private_key.bastion_host_ssh' \
+              -target='hcloud_firewall.bastion' \
+              -target='hcloud_server.bastion' \
+              -target='hcloud_server_network.bastion' \
+              -target='hcloud_firewall_attachment.bastion' \
+              -var="ssh_key_path=${CI_SSH_PUB}" 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::the scoped plan (bastion-host-replace) failed (exit ${rc}). Nothing was destroyed."
+            exit "$rc"
+          fi
+          set -e
+          terraform show -no-color "$PLAN_DIR/tfplan" > "$PLAN_DIR/tfplan.txt"
+          terraform show -json "$PLAN_DIR/tfplan" > "$PLAN_DIR/tfplan.json"
+          # Mask every line of every private_key_* string (openssh, pem, pem_pkcs8) before anything prints.
+          rc=0; keys="$(jq -r '.. | objects | to_entries[] | select(.key | startswith("private_key_")) | .value | strings' "$PLAN_DIR/tfplan.json")" || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::could not read the plan JSON to mask the host key (jq exit ${rc}). Fail-closed: nothing was destroyed."
+            exit 1
+          fi
+          while IFS= read -r line; do if [[ -n "$line" ]]; then printf '::add-mask::%s\n' "$line"; fi; done <<<"$keys"
+          unset keys
+          # shellcheck source=tests/scripts/lib/bastion-host-replace-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/bastion-host-replace-gate.sh"
+          if ! bastion_host_replace_gate "$PLAN_DIR/tfplan.json" "$EXPECTED_ID" "$PLAN_DIR/hetzner-servers.json"; then
+            echo "::error::bastion-host-replace gate ABORTED: the plan is not the pinned scoped replace (or recovery) of hcloud_server.bastion. The gate's ABORT line above names which arm refused. NOTHING HAS BEEN DESTROYED."
+            grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' "$PLAN_DIR/tfplan.txt" | head -30 >&2
+            exit 1
+          fi
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"  # loader-exported (#8209)
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          if [[ -z "$HCLOUD_TOKEN" ]]; then
+            echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN — cannot PROVE stock. Fail-closed: an unreadable token is not evidence of availability."
+            exit 1
+          fi
+          export HCLOUD_TOKEN
+          # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          # From the plan directory, so the call reads `stock_preflight_gate tfplan.json` as every route's does.
+          cd "$PLAN_DIR"
+          if ! stock_preflight_gate tfplan.json; then
+            stock_abort_closing bastion-host-replace "Nothing was destroyed. Read the ::error:: lines above before any re-dispatch."
+            exit 1
+          fi
+          echo "replace gate + stock preflight PASSED."
+          grep -E '^Plan:' tfplan.txt || true
+
+      # Always: a refused rehearsal still shows the reader the pin, the live ids and why.
+      - name: Plan summary (commit, pin, live ids, planned changes, plan_only notice)
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          EXPECTED_ID: ${{ inputs.expected_bastion_server_id }}
+          PLAN_ONLY: ${{ inputs.plan_only }}
+          PLAN_OUTCOME: ${{ steps.plan.outcome }}
+        run: |
+          {
+            echo "## bastion-host-replace — gated plan"
+            echo ""
+            echo "**Commit:** \`${COMMIT_SHA}\` (dispatch the plan_only run and the real run at the same commit)"
+            echo "- pin (expected_bastion_server_id): \`$(LC_ALL=C; [[ "${EXPECTED_ID}" =~ ^([1-9][0-9]{0,11}|none)$ ]] && echo "${EXPECTED_ID}" || echo "<malformed>")\`"
+            echo "- gate and stock preflight: ${PLAN_OUTCOME:-not run}"
+            if [[ "${PLAN_OUTCOME}" == success && -f "${PLAN_DIR:-/nonexistent}/tfplan.json" ]]; then
+              echo ""
+              echo "Planned changes (action, address), as the replace gate accepted them:"
+              echo ""
+              jq -r '.resource_changes[] | select((.change.actions | index("no-op")) == null and (.change.actions | index("read")) == null) | "- `\(.change.actions | join(","))` `\(.address)`"' "$PLAN_DIR/tfplan.json"
+            fi
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "${PLAN_ONLY}" == true ]]; then
+            if [[ "${PLAN_OUTCOME}" == success ]]; then
+              echo "::notice title=bastion-host-replace::plan_only: the read, the plan, the replace gate and the stock preflight PASSED; stopping before any re-read, apply or host contact. The summary lists the commit, the pin, the live ids and the planned addresses."
+            else
+              echo "::notice title=bastion-host-replace::plan_only: the rehearsal did NOT pass (plan step ${PLAN_OUTCOME:-not run}); read the ABORT line in the plan step."
+            fi
+          fi
+
+      # Immediately before the apply: the live server must still be the one the plan was graded against.
+      - name: TOCTOU re-pin (re-read the live bastion; abort if it changed since the plan)
+        if: inputs.plan_only != true
+        id: toctou
+        env:
+          EXPECTED_ID: ${{ inputs.expected_bastion_server_id }}
+        run: |
+          set -euo pipefail
+          umask 077
+          # shellcheck source=scripts/lib/bastion-boot-verify.sh
+          source "${GITHUB_WORKSPACE}/scripts/lib/bastion-boot-verify.sh"
+          # shellcheck source=tests/scripts/lib/bastion-host-replace-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/bastion-host-replace-gate.sh"
+          fresh="$PLAN_DIR/hetzner-servers-toctou.json"
+          rc=0; why="$(_bbv_servers_doc "$fresh")" || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::bastion-host-replace: TOCTOU re-read FAILED ${why#*FAILED }; nothing applied"
+            exit 1
+          fi
+          before_id="$(jq -r '[.resource_changes[] | select(.address == "hcloud_server.bastion") | .change.before | select(type == "object") | .id | select(. != null) | tostring][0] // "none"' "$PLAN_DIR/tfplan.json")"
+          if ! bastion_replace_identity "$EXPECTED_ID" "$fresh" "$before_id" "bastion-host-replace TOCTOU"; then
+            echo "::error::the live bastion changed since the plan: re-run plan_only and read the id from its summary. Nothing applied."
+            exit 1
+          fi
+          same="$(jq -n --slurpfile a "$PLAN_DIR/hetzner-servers.json" --slurpfile b "$fresh" '[$a[0].servers[] | {id: (.id | tostring), role: .labels.role, status}] == [$b[0].servers[] | {id: (.id | tostring), role: .labels.role, status}]')"
+          if [[ "$same" != true ]]; then
+            echo "::error::the live bastion changed since the plan (id, role or status): re-run plan_only and read the id from its summary. Nothing applied."
+            exit 1
+          fi
+          # The pre-apply id set: boot-verify and the cancel power-off never touch these servers.
+          pre="$(jq -r '[.servers[].id | tostring] | if length == 0 then "none" else join(" ") end' "$fresh")"
+          if ! (LC_ALL=C; [[ "$pre" =~ ^(none|[1-9][0-9]{0,11}( [1-9][0-9]{0,11})*)$ ]]); then
+            echo "::error::the pre-apply id set did not read as numeric ids. Nothing applied."
+            exit 1
+          fi
+          printf 'pre_ids=%s\n' "$pre" >> "$GITHUB_OUTPUT"
+          echo "TOCTOU re-pin PASSED: the live bastion is unchanged since the plan (pre-apply ids: ${pre})."
+
+      - name: Stamp boot-trail run anchor (bastion replace)
+        if: inputs.plan_only != true
+        id: boot_anchor
+        run: |
+          set -euo pipefail
+          epoch=$(date -u +%s)
+          printf 'epoch=%s\n' "$epoch" >> "$GITHUB_OUTPUT"
+          printf 'boot-trail anchor: %s (%s)\n' "$epoch" "$(date -u -d "@$epoch" +'%Y-%m-%d %H:%M:%S UTC')"
+
+      - name: Terraform apply (bastion replace)
+        if: inputs.plan_only != true
+        id: apply
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false "$PLAN_DIR/tfplan" 2>&1 | tf_redact_random_ids; then
+            # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+            source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+            stock_recovery_report bastion-host-replace "$PLAN_DIR/tfplan.json" --probe-state
+            echo "::error::the bastion-host-replace apply failed. The boot-verify step below never touches a server that existed before the apply; the dispatch summary prints the next ready-to-run dispatch from a fresh read."
+            exit 1
+          fi
+          echo "replace applied. A green apply is NOT a green boot — the boot-verify step below decides whether the bastion came up."
+
+      - name: Verify the bastion boot (power off on anything but ready; never a pre-apply server)
+        id: verify
+        if: ${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') && inputs.plan_only != true }}
+        env:
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          BOOT_TRAIL_SINCE: ${{ steps.boot_anchor.outputs.epoch }}
+          PRE_IDS: ${{ steps.toctou.outputs.pre_ids }}
+          SENTRY_ACTIONS_RO_TOKEN: ${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          # shellcheck source=scripts/lib/bastion-boot-verify.sh
+          source "${GITHUB_WORKSPACE}/scripts/lib/bastion-boot-verify.sh" || {
+            echo "::error::could not load scripts/lib/bastion-boot-verify.sh — the boot was not read and the replacement was NOT powered off (apply outcome ${APPLY_OUTCOME:-unknown}). Power it off in the Hetzner console now."
+            exit 1
+          }
+          rc=0
+          # Arg 3 is the dispatch label, arg 4 the pre-apply id set (servers it must never touch).
+          bastion_boot_verify "${BOOT_TRAIL_SINCE:-}" "${APPLY_OUTCOME:-}" bastion-host-replace "${PRE_IDS:-}" || rc=$?
+          exit "$rc"
+
+      # A cancel (operator, or the job timeout) skips the verify step's power-off. A replacement that
+      # landed and was not proven ready must not sit running with no heartbeat (#13113).
+      - name: Power off on cancel (unverified replacement; never a pre-apply server)
+        id: cancel_poweroff
+        if: ${{ cancelled() && steps.apply.outcome != 'skipped' && steps.verify.outcome != 'success' && inputs.plan_only != true }}
+        env:
+          PRE_IDS: ${{ steps.toctou.outputs.pre_ids }}
+        run: |
+          set -uo pipefail
+          # shellcheck source=scripts/lib/bastion-boot-verify.sh
+          source "${GITHUB_WORKSPACE}/scripts/lib/bastion-boot-verify.sh" || {
+            echo "result=failed" >> "$GITHUB_OUTPUT"
+            echo "::error::could not load scripts/lib/bastion-boot-verify.sh — the replacement was NOT powered off. Power it off in the Hetzner console now."
+            exit 1
+          }
+          if _bbv_poweroff "${PRE_IDS:-}"; then
+            echo "result=${_BBV_POWEROFF}" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Record the bastion pin (server id, host key fingerprint, private IP)
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          SERVER_ID: ${{ steps.verify.outputs.server_id }}
+        run: |
+          set -euo pipefail
+          fp=$(doppler run --preserve-env -p soleur -c prd_terraform -- terraform output -raw bastion_ssh_host_key_fingerprint 2>/dev/null) || fp=""
+          ip=$(doppler run --preserve-env -p soleur -c prd_terraform -- terraform output -raw bastion_private_ip 2>/dev/null) || ip=""
+          if [[ ! "$fp" =~ ^SHA256:[A-Za-z0-9+/]{43}$ || ! "$ip" =~ ^10\.0\.1\.[0-9]{1,3}$ ]]; then
+            echo "::error::the replacement is READY but its pin did not read back (fingerprint='${fp}', private_ip='${ip}'). Read both with terraform output before #12880 pins them."
+            exit 1
+          fi
+          [[ "$SERVER_ID" =~ ^[0-9]+$ ]] || SERVER_ID="unread"
+          {
+            echo "- bastion server id: \`${SERVER_ID}\` (the next bastion-host-replace pins it)"
+            echo "- bastion host key fingerprint: \`${fp}\` (unchanged by a replace: the key is a gated no-op)"
+            echo "- bastion private IP: \`${ip}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=bastion-pin::server ${SERVER_ID}, fingerprint ${fp}, private IP ${ip}"
+
+      - name: Dispatch summary
+        if: always()
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          REASON: ${{ inputs.reason }}
+          RUN_STATUS: ${{ job.status }}
+          PLAN_ONLY: ${{ inputs.plan_only }}
+          EXPECTED_ID: ${{ inputs.expected_bastion_server_id }}
+          PRE_IDS: ${{ steps.toctou.outputs.pre_ids }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          POWEROFF_RESULT: ${{ steps.verify.outputs.poweroff_result }}
+          COMMENT_RESULT: ${{ steps.verify.outputs.comment_result }}
+          CANCEL_POWEROFF: ${{ steps.cancel_poweroff.outputs.result }}
+        run: |
+          # The power-off line states what the library REPORTED, never what it was meant to do.
+          case "${POWEROFF_RESULT}" in
+            powered_off) po="Not ready: the replacement was powered off (disk kept)." ;;
+            absent) po="Not ready: no soleur-bastion server exists, so there was nothing to power off." ;;
+            old_untouched) po="Not ready: the only soleur-bastion is the pre-apply server; it was left untouched (the apply did not replace it)." ;;
+            refused_no_preids) po="**power-off REFUSED: the pre-apply id set was missing or malformed.** Check the Hetzner project for which soleur-bastion is this run's." ;;
+            failed) po="**power-off FAILED — the replacement may be running.** Power it off in the Hetzner console now (Servers > soleur-bastion > Power > Power off)." ;;
+            not_needed) po="Ready: no power-off was needed." ;;
+            *) po="Power-off: no verdict recorded (boot-verify did not run to completion)." ;;
+          esac
+          case "${COMMENT_RESULT}" in
+            posted) cm="The run was commented on #9421." ;;
+            failed) cm="**The #9421 comment did NOT post**; post the run URL there by hand." ;;
+            no_token) cm="No comment was posted to #9421 (GH_TOKEN unset)." ;;
+            *) cm="" ;;
+          esac
+          [[ "${CANCEL_POWEROFF}" == failed ]] && po="**power-off FAILED after a cancel — the replacement may be running.** Power it off in the Hetzner console now."
+          [[ "${CANCEL_POWEROFF}" == powered_off || "${CANCEL_POWEROFF}" == absent ]] && po="Cancelled: the replacement was powered off, or was never created."
+          [[ "${CANCEL_POWEROFF}" == old_untouched ]] && po="Cancelled: only the pre-apply soleur-bastion exists; it was left untouched."
+          # The next dispatch, from a FRESH read (never a guess): the API and `terraform state list`.
+          next="next dispatch: unread (API read failed); no line to copy"
+          if source "${GITHUB_WORKSPACE}/scripts/lib/bastion-boot-verify.sh" 2>/dev/null \
+            && source "${GITHUB_WORKSPACE}/tests/scripts/lib/bastion-host-replace-gate.sh" 2>/dev/null; then
+            doc="${PLAN_DIR:-${RUNNER_TEMP}}/hetzner-servers-after.json"
+            _bbv_servers_doc "$doc" >/dev/null 2>&1 || doc=-
+            st=unread
+            if sl="$(doppler run --preserve-env -p soleur -c prd_terraform -- terraform state list 2>/dev/null)"; then
+              st=0
+              if grep -qx 'hcloud_server.bastion' <<<"$sl"; then st=1; fi
+            fi
+            pre="${PRE_IDS:-}"; [[ -n "$pre" ]] || pre="${EXPECTED_ID:-none}"
+            next="$(bastion_replace_next_dispatch "$pre" "$doc" "$st")"
+          fi
+          {
+            echo "## bastion-host-replace"
+            echo ""
+            echo "- outcome: ${RUN_STATUS} (plan_only: ${PLAN_ONLY}; apply outcome: ${APPLY_OUTCOME:-none}; boot-verify outcome: ${VERIFY_OUTCOME:-none})"
+            echo "- reason: ${REASON:-n/a}"
+            echo ""
+            echo "A green run means: the pinned plan applied AND the replacement reported fresh_boot_ready after this run's anchor. It does NOT mean monitoring: the bastion has no heartbeat until #13113, and nothing dials it until #12880."
+            [[ "${PLAN_ONLY}" == true ]] || echo "${po}"
+            [[ -z "${cm}" ]] || echo "${cm}"
+            echo ""
+            echo "- ${next//::error::/}"
+            echo ""
+            echo "Next: knowledge-base/engineering/operations/runbooks/bastion-host.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [[ "${next}" == "::error::"* ]] && echo "${next}"
+          [[ "${PLAN_ONLY}" == true ]] && exit 0
+          if [[ -z "${APPLY_OUTCOME}" || -z "${VERIFY_OUTCOME}" ]]; then
+            echo "::error::a step outcome is EMPTY (apply '${APPLY_OUTCOME}', verify '${VERIFY_OUTCOME}'): a step id was renamed and boot-verify cannot run. Treat any soleur-bastion as UNVERIFIED."
+            exit 1
+          fi
+          case "${APPLY_OUTCOME}/${VERIFY_OUTCOME}" in
+            success/success) ;;
+            */failure) ;;
+            skipped/skipped) echo "::notice::no apply ran (an earlier step failed or the run was cancelled); this is not a verdict on the host. ${next}" ;;
+            success/*) echo "::error::apply succeeded but boot-verify did not reach a verdict (outcome '${VERIFY_OUTCOME}') — the replacement is UNVERIFIED and may be running; power it off in the Hetzner console and read the runbook"; exit 1 ;;
+            cancelled/*) echo "::warning::apply was cancelled mid-flight — inspect Terraform state and the Hetzner project before any re-dispatch. ${po} ${next}" ;;
+            *) echo "::error::unrecognised outcome pair '${APPLY_OUTCOME}/${VERIFY_OUTCOME}' — do not treat this run as verified"; exit 1 ;;
+          esac
+
+      - name: Delete the plan directory (it holds the host private key)
+        if: always()
+        run: |
+          if [[ -n "${PLAN_DIR:-}" && "${PLAN_DIR}" == "${RUNNER_TEMP}"/bastion-replace.* ]]; then
+            rm -rf -- "${PLAN_DIR}"
+            echo "deleted the plan directory."
+          else
+            echo "no plan directory to delete."
+          fi
