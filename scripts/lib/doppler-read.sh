@@ -66,7 +66,19 @@ case "$_mode" in
     ;;
   tf)
     shift
-    cd "$(dirname "$0")/../../apps/web-platform/infra"
+    # Resolve the lib dir ABSOLUTE before the cd — $0 is relative to the caller's cwd.
+    _libd="$(cd "$(dirname "$0")" && pwd)"
+    cd "$_libd/../../apps/web-platform/infra"
+    # Pin the canonical app-domain base BEFORE the bulk injection: prd_terraform is a
+    # branch-writable config, and under --name-transformer tf-var a planted APP_DOMAIN_BASE
+    # there would arrive as TF_VAR_app_domain_base and redirect the credentialed webhook
+    # traffic terraform's push-infra-config hook sends. --preserve-env means this exported
+    # outer value wins over any injected one; the value itself comes from committed
+    # variables.tf via the fail-closed derivation, never from a runtime store
+    # (security-sentinel P1, #13006 review). An unused-by-this-root TF_VAR is inert.
+    TF_VAR_app_domain_base="$(bash "$_libd/../derive-app-domain-base.sh")" || {
+      printf 'doppler-read.sh: app-domain-base derivation failed\n' >&2; exit 1; }
+    export TF_VAR_app_domain_base
     exec doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform "$@"
     ;;
   bs)

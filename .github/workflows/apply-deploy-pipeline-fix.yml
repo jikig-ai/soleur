@@ -650,7 +650,13 @@ jobs:
           PRE_STATUS="error"
           PRE_TS=""
 
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          # APP_DOMAIN_BASE is DERIVED from committed variables.tf, never read from a runtime
+          # store: a branch actor with write access to a Doppler config could otherwise plant it
+          # and redirect the credentialed deploy-webhook traffic below (HMAC + CF Access pair) to
+          # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
+          # committed file in this checkout, so a derivation failure means the repo is broken and
+          # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
           WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET:-}"
           # Mask before any of these can reach a log line. This repo is PUBLIC and this same
           # workflow already does exactly this ~200 lines below for the same credential class;
@@ -846,7 +852,13 @@ jobs:
           # argument list (ADR-280). A refusal prints the marker and reads as HTTP 000 below (the
           # same red as any failed read, after 3 attempts), never a green.
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          # APP_DOMAIN_BASE is DERIVED from committed variables.tf, never read from a runtime
+          # store: a branch actor with write access to a Doppler config could otherwise plant it
+          # and redirect the credentialed deploy-webhook traffic below (HMAC + CF Access pair) to
+          # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
+          # committed file in this checkout, so a derivation failure means the repo is broken and
+          # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
@@ -893,7 +905,13 @@ jobs:
         run: |
           set -euo pipefail
           export APP_DOMAIN_BASE
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          # APP_DOMAIN_BASE is DERIVED from committed variables.tf, never read from a runtime
+          # store: a branch actor with write access to a Doppler config could otherwise plant it
+          # and redirect the credentialed deploy-webhook traffic below (HMAC + CF Access pair) to
+          # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
+          # committed file in this checkout, so a derivation failure means the repo is broken and
+          # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
           : "${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}" "${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID - see the Load infra credentials step source= line}" "${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET - see the Load infra credentials step source= line}"
           bash scripts/check-deploy-script-parity.sh --status-only
 
@@ -997,7 +1015,13 @@ jobs:
           # manual workflow_dispatch ONLY for a documented first bootstrap.
           ALLOW_MISSING_STATUS: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_missing_status_endpoint }}
           VERIFY_PASS: "1"
-        run: bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"
+        run: |
+          # APP_DOMAIN_BASE rides the env derived from committed variables.tf — never a
+          # runtime-store read (a planted value would redirect the credentialed webhook
+          # traffic the verifier sends; security-sentinel P1, #13006 review). The script
+          # itself stays a pure env consumer under its actuation sweep.
+          export APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
+          bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"
 
       # --- #7104 PR-B: the bounded re-push -------------------------------------------------
       #
@@ -1230,7 +1254,13 @@ jobs:
           # allow-list what counts as alive. Both non-up states still red the job -- after writing
           # production, an unverifiable channel is not an all-clear -- but they are now
           # DISTINGUISHABLE, and the consumers can stop asserting a cause nobody measured.
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          # APP_DOMAIN_BASE is DERIVED from committed variables.tf, never read from a runtime
+          # store: a branch actor with write access to a Doppler config could otherwise plant it
+          # and redirect the credentialed deploy-webhook traffic below (HMAC + CF Access pair) to
+          # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
+          # committed file in this checkout, so a derivation failure means the repo is broken and
+          # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
           CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID:-}"
           CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET:-}"
           if [[ -z "${CF_ACCESS_ID:-}" || -z "${CF_ACCESS_SECRET:-}" ]]; then
@@ -1308,7 +1338,13 @@ jobs:
           # "DPF_REPLACED is '', not true/false". That mistake was made and caught here
           # while writing this step; it is the exact class Guard 1 pins, because actionlint
           # reports nothing for it.
-        run: bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"
+        run: |
+          # APP_DOMAIN_BASE rides the env derived from committed variables.tf — never a
+          # runtime-store read (a planted value would redirect the credentialed webhook
+          # traffic the verifier sends; security-sentinel P1, #13006 review). The script
+          # itself stays a pure env consumer under its actuation sweep.
+          export APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
+          bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"
 
       # #7104 PR-B review — RECLAIM THE BINARY PLAN ON EVERY PATH, INCLUDING THE SKIPPED ONES.
       #
@@ -2168,7 +2204,13 @@ jobs:
           # argument list (ADR-280). A refusal prints the marker and reads as HTTP 000, which the
           # existing red arms below already treat as a failed read or a rejected webhook.
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          # APP_DOMAIN_BASE is DERIVED from committed variables.tf, never read from a runtime
+          # store: a branch actor with write access to a Doppler config could otherwise plant it
+          # and redirect the credentialed deploy-webhook traffic below (HMAC + CF Access pair) to
+          # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
+          # committed file in this checkout, so a derivation failure means the repo is broken and
+          # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
@@ -2468,7 +2510,13 @@ jobs:
           # argument list (ADR-280). A refusal prints the marker on each attempt and ends in the
           # same terminal red as any other failed read.
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          # APP_DOMAIN_BASE is DERIVED from committed variables.tf, never read from a runtime
+          # store: a branch actor with write access to a Doppler config could otherwise plant it
+          # and redirect the credentialed deploy-webhook traffic below (HMAC + CF Access pair) to
+          # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
+          # committed file in this checkout, so a derivation failure means the repo is broken and
+          # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE:?}/scripts/derive-app-domain-base.sh")"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)

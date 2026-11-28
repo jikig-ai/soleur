@@ -123,7 +123,7 @@ fi
 # A tested script no step runs is the vacuity the F1 pin exists to prevent, one
 # indirection deeper. The mirror clause lives in infra-config-gate.test.sh.
 if [[ -r "$APPLY_WF" ]]; then
-  if grep -qE '^[[:space:]]*run:[[:space:]]+bash[[:space:]]+.*infra-config-verify\.sh' "$APPLY_WF"; then
+  if grep -qE '^[[:space:]]*(run:[[:space:]]+)?bash[[:space:]]+.*infra-config-verify\.sh' "$APPLY_WF"; then
     pass "apply-deploy-pipeline-fix.yml invokes infra-config-verify.sh"
   else
     fail "no step in apply-deploy-pipeline-fix.yml invokes infra-config-verify.sh — the extracted gate is dead in production"
@@ -398,19 +398,18 @@ PYEOF
   fi
 fi
 
-# --- T6: every doppler call is READ-only ------------------------------------------------------
-# `doppler secrets get` reads. `doppler secrets set|delete|upload`, `doppler run`,
-# and `doppler configure` mutate or execute. The gate may read a secret; it may not
-# write one.
+# --- T6: the gate reads NO secret store at all ------------------------------------------------
+# Since the APP_DOMAIN_BASE conversion (#13006 review, security-sentinel P1) the gate's only
+# credential inputs are the caller-exported env: the trio from the Tier-B loader, the domain base
+# from the committed variables.tf derivation. ANY command-position doppler call is a regression —
+# a runtime store must have no path to the credentialed webhook URL, because a branch actor with
+# write access to a Doppler config could plant the value it reads.
 if [[ -f "$VERIFY_SH" ]]; then
   dtotal=$(cmd_position_count "$VERIFY_SH" doppler)
-  dread=$(grep -cE '(^|[;&|]|\$\()[[:space:]]*dop''pler[[:space:]]+secrets[[:space:]]+get[[:space:]]' "$VERIFY_SH" || true)
   if [[ "$dtotal" -eq 0 ]]; then
-    fail "no command-position Doppler call found — the fixture for T6 has drifted, so this assert is vacuous"
-  elif [[ "$dtotal" -eq "$dread" ]]; then
-    pass "all $dtotal command-position Doppler call(s) are read-only \`secrets get\`"
+    pass "zero command-position Doppler calls — the gate reads no secret store; every credential input is the caller-exported env"
   else
-    fail "$((dtotal - dread)) of $dtotal command-position Doppler call(s) are not \`secrets get\` — the gate mutates secret state"
+    fail "$dtotal command-position Doppler call(s) found — the gate must read NOTHING from a runtime store (the domain base is the committed variables.tf derivation, exported by the calling step)"
   fi
 fi
 
@@ -665,6 +664,9 @@ drive_pass2() { # $1 frame, $2 GITHUB_OUTPUT, $3 baseline, $4 apply_start_epoch,
 
 # The Tier-B loader step's job: the trio arrives as env. A case makes one unusable by overriding it.
 export WEBHOOK_DEPLOY_SECRET="stub-webhook-key" CF_ACCESS_CLIENT_ID="stub-cf-id-value" CF_ACCESS_CLIENT_SECRET="stub-cf-secret-value"
+# The domain base is the workflow-exported derivation now (#13006 review): the drive env carries a
+# sentinel so the URL-host assertions prove env-consumption rather than a hardcoded or store-read host.
+export APP_DOMAIN_BASE="example.test"
 
 mkstubs
 STALE="$I_TMP/stale.json"; MOVED="$I_TMP/moved.json"
@@ -839,22 +841,25 @@ if mkframe 1000 "$STALE" && mkframe 3000 "$MOVED"; then
   else
     fail "#7104 I6b: $n_sleep sleep(s) on a first-attempt success (expected exactly 1): $(tr '\n' ' ' < "$SL")"
   fi
-  # The trio is the loader's env, never a doppler read (#9294): the only secret the body may request
-  # from doppler is APP_DOMAIN_BASE (and it must, or the host would be hardcoded), and the request is
-  # signed with WEBHOOK_DEPLOY_SECRET itself and carries the Access pair id-as-id / secret-as-secret, not another trio member (a wrong-but-real key 401s in
+  # The trio is the loader's env, never a doppler read (#9294), and since the security-sentinel
+  # conversion (#13006 review) the domain base is DERIVED from committed variables.tf — so the body
+  # may ask doppler for NOTHING at all (a planted runtime-store value must have no path to the
+  # credentialed webhook URL). The request is signed with WEBHOOK_DEPLOY_SECRET itself and carries
+  # the Access pair id-as-id / secret-as-secret, not another trio member (a wrong-but-real key 401s in
   # production while every presence-only check stays green).
-  if [[ -s "$DL" ]] && ! grep -qvx 'APP_DOMAIN_BASE' "$DL" && [[ -s "$SIGL" ]] && ! grep -qvx 'sig=match' "$SIGL" \
+  if [[ ! -s "$DL" ]] && [[ -s "$SIGL" ]] && ! grep -qvx 'sig=match' "$SIGL" \
      && [[ -s "$CFL" ]] && ! grep -qvx 'cfid=stub-cf-id-value cfsec=stub-cf-secret-value' "$CFL"; then
-    pass "#7104 I6c: doppler is asked only for APP_DOMAIN_BASE and the request is signed with WEBHOOK_DEPLOY_SECRET (the signing key is pinned by value, not just 'some secret')"
+    pass "#7104 I6c: doppler is never asked for any name (the domain is derived, the trio is env) and the request is signed with WEBHOOK_DEPLOY_SECRET (the signing key is pinned by value, not just 'some secret')"
   else
-    fail "#7104 I6c: doppler read: $(tr '\n' ' ' < "$DL"); signature checks: $(tr '\n' ' ' < "$SIGL"). The trio must come from the Tier-B loader's env and the HMAC must use WEBHOOK_DEPLOY_SECRET."
+    fail "#7104 I6c: doppler read: $(tr '\n' ' ' < "$DL" 2>/dev/null); signature checks: $(tr '\n' ' ' < "$SIGL"). The trio must come from the Tier-B loader's env, the domain must be derived, and the HMAC must use WEBHOOK_DEPLOY_SECRET."
   fi
-  # The HOST. The stub's URL check enforces the deploy.<domain> shape; this pins that the
-  # domain came from APP_DOMAIN_BASE rather than being hardcoded to something else.
+  # The HOST. The stub's URL check enforces the deploy.<domain> shape; this pins that the domain
+  # comes from the APP_DOMAIN_BASE ENV (the workflow-exported derivation in production, the sentinel
+  # here) rather than being hardcoded or read from a runtime store.
   if grep -q '^https://deploy\.example\.test/hooks/infra-config-status$' "$CL"; then
-    pass "#7104 I6d: the status URL is built from APP_DOMAIN_BASE (https://deploy.example.test/...), so the host is pinned and not hardcoded"
+    pass "#7104 I6d: the status URL is built from the APP_DOMAIN_BASE env (https://deploy.example.test/...), so the host follows the exported derivation and is not hardcoded"
   else
-    fail "#7104 I6d: the polled URL(s) were '$(tr '\n' ' ' < "$CL")', expected https://deploy.example.test/hooks/infra-config-status built from the stubbed APP_DOMAIN_BASE"
+    fail "#7104 I6d: the polled URL(s) were '$(tr '\n' ' ' < "$CL")', expected https://deploy.example.test/hooks/infra-config-status built from the sentinel APP_DOMAIN_BASE env"
   fi
 
   # --- I8: THE `unadjudicated` ARM, WHICH HAD ZERO COVERAGE (#7104 PR-B review) -------------

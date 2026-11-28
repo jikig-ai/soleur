@@ -45,7 +45,13 @@ fi
 # the safe value explicit rather than incidental: 404-tolerance is opt-in.
 ALLOW_MISSING_STATUS="${ALLOW_MISSING_STATUS:-false}"
 
-APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+# APP_DOMAIN_BASE arrives in the env, exported by the calling workflow step from the committed
+# variables.tf derivation (scripts/derive-app-domain-base.sh) — never a runtime-store read: a
+# branch actor able to write a Doppler config could otherwise plant it and redirect the
+# credentialed webhook traffic below to an attacker host (security-sentinel P1, #13006 review).
+# The script stays a pure env consumer here because its actuation sweep forbids path-bearing
+# command lines; a direct invocation must export the derivation itself.
+APP_DOMAIN_BASE="${APP_DOMAIN_BASE:?APP_DOMAIN_BASE unset - export it from scripts/derive-app-domain-base.sh (committed variables.tf is the only sanctioned source)}"
 # The webhook trio comes from the caller's env (the Tier-B loader step exports and masks it, #9294); there is
 # no prd_terraform read and no CI_SSH_ACCESS_TOKEN_* fallback, so a job without the Tier-B seam fails here (UNSET aborts;
 # an empty or hostile value flows to the header-value guard below, which refuses it with its own named message).

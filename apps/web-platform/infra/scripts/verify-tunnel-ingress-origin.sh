@@ -133,7 +133,10 @@ done
 # --- (b) Data plane: the pinned origin actually serves -------------------------------
 # A clean config read-back does NOT prove the origin answers — this is the check that
 # catches a correct-looking pin at a dead address.
-APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd_terraform --plain 2>/dev/null || echo "soleur.ai")
+# APP_DOMAIN_BASE arrives in the env, exported by the calling workflow step from the committed
+# variables.tf derivation (scripts/derive-app-domain-base.sh) — never a runtime-store read: a
+# planted value would redirect the credentialed probe traffic below (security-sentinel P1, #13006).
+APP_DOMAIN_BASE="${APP_DOMAIN_BASE:?APP_DOMAIN_BASE unset - export it from scripts/derive-app-domain-base.sh (committed variables.tf is the only sanctioned source)}"
 # The trio comes from the caller's env (the Tier-B loader step, #9294), never from prd_terraform.
 WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}"
 CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID - see the Load infra credentials step source= line}"

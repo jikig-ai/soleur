@@ -1078,7 +1078,7 @@ CF_ACCESS_ID=$(bash scripts/lib/doppler-read.sh get soleur-deploy-channel prd CF
 CF_ACCESS_SECRET=$(bash scripts/lib/doppler-read.sh get soleur-deploy-channel prd CF_ACCESS_CLIENT_SECRET)
 HMAC=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
 # headers ride curl's stdin config, not argv
-APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE -p soleur -c prd_terraform --plain)
+APP_DOMAIN_BASE="$(bash scripts/derive-app-domain-base.sh)"  # committed variables.tf derivation — never a runtime store, a planted value would redirect the signed request below
 (LC_ALL=C; for n in HMAC CF_ACCESS_ID CF_ACCESS_SECRET APP_DOMAIN_BASE; do case "${!n}" in ''|*[!A-Za-z0-9._~+/=-]*) echo "$n unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1;; esac; done) || exit 1
 curl --disable --proto '=https' -m 30 -fsS --config - \
   "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-status" \

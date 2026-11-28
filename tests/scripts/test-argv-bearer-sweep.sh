@@ -7219,7 +7219,15 @@ nm="${4:-}"
 [[ -n "${S7X_BADNAME:-}" && "$nm" == "$S7X_BADNAME" ]] && { printf 'bad val'; exit 0; }
 printf '%s-%s' "${S7X_TOKEN:-}" "$nm"
 S7X_STUB
-chmod +x "$S7_X/bin/curl" "$S7_X/bin/doppler" "$S7_X/bin/jq" "$S7_X/scripts/lib/doppler-read.sh"
+# The domain base comes from the committed-source derivation now (#13006): the block calls
+# scripts/derive-app-domain-base.sh, so the stub answers for it — badly when APP_DOMAIN_BASE is
+# the case's bad name, exactly like the secret stubs above.
+cat > "$S7_X/scripts/derive-app-domain-base.sh" <<'S7X_STUB'
+#!/usr/bin/env bash
+[[ -n "${S7X_BADNAME:-}" && "$S7X_BADNAME" == APP_DOMAIN_BASE ]] && { printf 'bad val'; exit 0; }
+printf 'example.invalid'
+S7X_STUB
+chmod +x "$S7_X/bin/curl" "$S7_X/bin/doppler" "$S7_X/bin/jq" "$S7_X/scripts/lib/doppler-read.sh" "$S7_X/scripts/derive-app-domain-base.sh"
 S7X_GOOD="synthtok0123.ab_c~d+e/f=g-h"; S7X_BAD="bad val"
 S7X_PYDIR="$(dirname "$(type -P python3)")"
 # s7x_block <file> <marker>... -> the ONE fenced block of that file holding `--config -` and every marker (a count other than 1 is a failure, never a pass)
