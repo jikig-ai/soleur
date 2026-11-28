@@ -58,10 +58,12 @@
 # #12963). Rule (i) admits one bare PR number beside one
 # `--match-head-commit` whose operand is a literal 40-hex (censused as that
 # sha) or one double-quoted simple expansion — "$H", "${H}", "${H:?msg}" —
-# (the PR head censused by number). Rule (ii) admits several invocations
-# only as byte-identical numbered copies (raw residues, stripped residues and
-# raw operands) whose lead is empty or `bash "$SS_LIB" with_lock merge-main
-# <N> --`: the locked/degrade-open if/else every skill documents. Residuals:
+# as the invocation's last argument (the PR head censused by number). Rule
+# (ii) admits several invocations only as EXACTLY two byte-identical
+# numbered copies (raw residues, stripped residues and raw operands) whose
+# lead is empty or `bash "$SS_LIB" with_lock merge-main <N> --`, with
+# nothing between them but the if/else skeleton (an allowlist): the
+# locked/degrade-open if/else every skill documents. Residuals:
 #   - restrict-only argument: `--match-head-commit` can only RESTRICT a
 #     merge, so every merge the new form admits is one the already-admitted
 #     `gh pr merge <N> --squash --auto` admits too — the census reads the PR
@@ -71,11 +73,15 @@
 #     blanks double-quoted spans while `_cmd_args` keeps them, so the raw
 #     and stripped invocation sets disagree and the token comparison denies;
 #   - census-vs-H window (stated, not fixed): with a variable sha the
-#     census reads the PR head by number at hook time and the arm check
-#     reads `H` moments later in the same call; a push in between lands a
-#     head the census did not read. It is the window `gh pr merge <N>
-#     --squash --auto` already has, narrowed to the head the evidence check
-#     read. It is not reachable from the command text, so no row pins it;
+#     census reads the PR head by number at hook time, BEFORE the command
+#     runs, and `H` is read later by the command itself. Anything that moves
+#     the PR head in between lands a head the census did not read — another
+#     session's push, or the command text itself: `git push -f origin
+#     <sha>:<pr-branch> && H=<sha> && gh pr merge 7 --squash
+#     --match-head-commit "$H"` is admitted while it merges a head the census
+#     never saw. It is the window `gh pr merge <N> --squash --auto` already
+#     has (and --auto merges a later head anyway); postmerge Phase 5.8 is the
+#     backstop that catches the landed result. No deny is added for it;
 #   - admin hatch: settle-then-admin-merge.md's `gh pr merge <N> --squash
 #     --admin --match-head-commit "$SHA"` is admitted by rule (i). Its
 #     `--admin` reach is gated by admin-merge-ready.sh exiting 0 immediately
@@ -437,9 +443,17 @@ SCAN_NOCOMMENT=$(sed 's/#.*//' <<<"$SCAN")
 #       An `export GH_REPO=…;` earlier in the command is no longer a pointer
 #       either: the merge is then censused as this checkout's, which can
 #       only deny (gh acting on another repository is not this gate's object).
-#   (c) a `-R…` token that is the VALUE of a message/author flag
-#       (-t/-b/-F/-A/--subject/--body/--body-file/--author-email) is text:
-#       `--body -Ro/r` read as a foreign pointer and exited 0.
+#   (c) a `-R…` token that is the VALUE of a value-taking flag is text:
+#       `--body -Ro/r` read as a foreign pointer and exited 0. gh (pflag)
+#       hands a value-taking flag its value in four spellings, and each is
+#       dropped here: spaced (`-b V`, `--body V`), attached (`-bV`), a short
+#       bundle that ENDS in the flag (`-sb V`, `-db V`) or carries the value
+#       attached after it (`-sbV`), and `--body=V`. The value-taking flags
+#       are every one `gh pr merge --help` lists: -t/--subject, -b/--body,
+#       -F/--body-file, -A/--author-email, --match-head-commit. A bundle is
+#       walked left to right over the boolean shorthands (-d/-m/-r/-s/-h);
+#       it stops, keeping the token as a pointer, at `R`, and keeps it
+#       untouched at `=` or any other character.
 # _drop_flag_values strips those values from a residue copy used ONLY for
 # sighting and gathering; the residues themselves are untouched.
 _drop_flag_values() {
@@ -447,8 +461,19 @@ _drop_flag_values() {
     out = ""
     for (i = 1; i <= NF; i++) {
       t = $i
-      if (t == "-t" || t == "-b" || t == "-F" || t == "-A" || t == "--subject" \
-          || t == "--body" || t == "--body-file" || t == "--author-email") { i++; continue }
+      if (t == "--subject" || t == "--body" || t == "--body-file" \
+          || t == "--author-email" || t == "--match-head-commit") { i++; continue }
+      if (t ~ /^--(subject|body|body-file|author-email|match-head-commit)=/) continue
+      if (t ~ /^-[^-]/) {
+        drop = 0
+        for (j = 2; j <= length(t); j++) {
+          c = substr(t, j, 1)
+          if (index("tbFA", c)) { drop = (j < length(t)) ? 1 : 2; break }
+          if (!index("dmrsh", c) || substr(t, j + 1, 1) == "=") break
+        }
+        if (drop == 2) i++
+        if (drop) continue
+      }
       out = out (out == "" ? "" : " ") t
     }
     print out
@@ -545,10 +570,17 @@ _n_cmd=$(_merge_args "$CMD" | wc -l | tr -d ' ')
 # locating the invocations. `$_inv_j` is $CMD with every backslash-newline
 # replaced by two spaces (byte offsets kept), so an invocation continued
 # from `with_lock … -- \` shows its real prefix. One record per invocation,
-# two lines each:
+# four lines each:
 #   lead     — the text on its (joined) line before `gh`
 #   operand  — `"<rest of the line>` when the residue ends at a
 #              `--match-head-commit "` followed by `$`, else `-`
+#   tail     — the rest of its (joined) line after the residue
+#   gap      — `ok`, or `!<first offending line>`: the RAW lines strictly
+#              between the previous invocation's line and this one's, judged
+#              against rule (ii)'s skeleton allowlist (`-` for the first).
+#              Read from the raw $CMD at the same offsets (the join keeps
+#              them), so a comment ending in a backslash cannot swallow the
+#              line after it.
 # LC_ALL=C: grep -b counts bytes, so the awk must too.
 _inv_j=${CMD//$'\\\n'/  }
 _inv_hits=$(grep -boE "${_MERGE_BOUNDARY}[[:space:]]*${_MERGE_PREFIX}gh${_GH_GFLAGS}[[:space:]]+pr[[:space:]]+merge([[:space:]][^;&|$\`()]*)?" <<<"$_inv_j" || true)
@@ -557,10 +589,27 @@ while IFS= read -r _h; do
   [[ -n "$_h" ]] || continue
   _inv_spec+="${_h%%:*}:$(printf '%s' "${_h#*:}" | LC_ALL=C wc -c | tr -d ' ') "
 done <<<"$_inv_hits"
-_inv_reads=$(printf '%s' "$_inv_j" | LC_ALL=C awk -v hits="$_inv_spec" '
+# Rule (ii)'s skeleton allowlist — the only lines the documented
+# locked/degrade-open if/else (ship, merge-pr, product-roadmap) carries
+# between its two copies: blank, a `#` comment, `rc=$?`, `else`, `then`,
+# `fi`, and the degrade-open echo. The `if … flock …; then` opener sits
+# BEFORE the first copy in every documented block, so it is not admitted
+# here. Anything else — `cd`, `pushd`, `export GH_REPO=…`, `H=<sha>`,
+# `git push`, an alias or function — could steer the second copy.
+_inv_reads=$(printf '%s' "$_inv_j" | _INV_RAW="$CMD" LC_ALL=C awk -v hits="$_inv_spec" '
+  function gap(a, b,    g, L, q, x, v) {
+    if (b <= a) return "ok"
+    g = substr(ENVIRON["_INV_RAW"], a, b - a); v = "ok"
+    q = split(g, L, "\n")
+    for (x = 1; x <= q; x++) {
+      if (L[x] ~ /^[ \t]*(#.*|rc=\$\?|else|then|fi|echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=\$SS_LIB reason=running-unlocked")?[ \t]*$/) continue
+      v = "!" substr(L[x], 1, 80); break
+    }
+    return v
+  }
   { s = s $0 "\n" }
   END {
-    n = split(hits, H, " ")
+    n = split(hits, H, " "); pe = 0
     for (k = 1; k <= n; k++) {
       split(H[k], P, ":"); o = P[1] + 0; l = P[2] + 0
       ls = o; while (ls > 0 && substr(s, ls, 1) != "\n") ls--
@@ -570,6 +619,9 @@ _inv_reads=$(printf '%s' "$_inv_j" | LC_ALL=C awk -v hits="$_inv_spec" '
       r = substr(s, o + l + 1); e = index(r, "\n"); if (e) r = substr(r, 1, e - 1)
       print substr(s, ls + 1, o - ls) head
       print (m ~ /[[:space:]]--match-head-commit[[:space:]]+"$/ ? "\"" r : "-")
+      print r
+      print (k == 1 ? "-" : gap(pe + 1, ls))
+      pe = o + l + (e ? e : length(r) + 1)
     }
   }' || true)
 # The operand shapes rule (i) admits, anchored at both ends: exactly one
@@ -582,21 +634,27 @@ _inv_reads=$(printf '%s' "$_inv_j" | LC_ALL=C awk -v hits="$_inv_spec" '
 _MHC_VAR_RE='^("\$[A-Za-z_][A-Za-z0-9_]*"|"\$\{[A-Za-z_][A-Za-z0-9_]*\}"|"\$\{[A-Za-z_][A-Za-z0-9_]*:\?[^$`()\\"}]*\}")([[:space:];&|)]|$)'
 _inv_leads=""
 _inv_ops=""
+_inv_tails=""   # per record: the line's text after the operand (or residue)
+_inv_gaps=""    # per record: the gap verdict (see the reader above)
 _inv_n=0
-while IFS= read -r _lead && IFS= read -r _op; do
+while IFS= read -r _lead && IFS= read -r _op && IFS= read -r _tail && IFS= read -r _gap; do
   _inv_n=$((_inv_n + 1))
   _inv_leads+="${_lead}"$'\n'
+  _inv_gaps+="${_gap}"$'\n'
   if [[ "$_op" == "-" ]]; then
     _inv_ops+="-"$'\n'
+    _inv_tails+="${_tail}"$'\n'
   elif [[ "$_op" =~ $_MHC_VAR_RE ]]; then
     _inv_ops+="${BASH_REMATCH[1]}"$'\n'
+    _inv_tails+="${_op:${#BASH_REMATCH[1]}}"$'\n'
   else
     _inv_ops+="!${_op}"$'\n'   # a `$`-operand outside the admitted shapes
+    _inv_tails+="!"$'\n'
   fi
 done <<<"$_inv_reads"
 # The reader must see exactly the invocations the residues see; a mismatch
 # (a continuation that joins or hides one) leaves every record unproven.
-[[ "$_inv_n" == "$_n_cmd" ]] || { _inv_ops="!"$'\n'; _inv_leads="!"$'\n'; }
+[[ "$_inv_n" == "$_n_cmd" ]] || { _inv_ops="!"$'\n'; _inv_leads="!"$'\n'; _inv_tails="!"$'\n'; _inv_gaps="!"$'\n'; }
 
 # Rule (ii) — several invocations, in place of the old blanket
 # multi-invocation deny (one census object per command). More than one
@@ -615,9 +673,16 @@ done <<<"$_inv_reads"
 #     an env-assignment or launcher prefix (`GH_REPO=o/r`, `GIT_DIR=`,
 #     `env -C`) is invisible to the residues and could steer one copy;
 #   - every raw --match-head-commit operand is byte-identical (the residues
-#     are cut at `$` and cannot see it).
+#     are cut at `$` and cannot see it);
+#   - there are EXACTLY two invocations (the if/else has two arms), the
+#     first copy's line ends at its operand (or residue), and every raw line
+#     strictly between the two copies is on the skeleton allowlist (see the
+#     reader above). Byte-identical copies are not one object on their own:
+#     `cd /other-repo`, `export GH_REPO=…` or `H=<other-sha>` between them
+#     makes copy 2 merge something else.
 # Anything else keeps the deny (counts: see _n_scan above).
 _LOCK_LEAD_RE='^[[:space:]]*bash[[:space:]]+"\$SS_LIB"[[:space:]]+with_lock[[:space:]]+merge-main[[:space:]]+[0-9]+[[:space:]]+--[[:space:]]+$'
+_MULTI_WHY="more than one gh pr merge invocation in one command; merge one PR per call"
 # Triggered on the SCAN side, as the arm it replaces was: a raw-only extra
 # invocation (a merge inside quoted text) falls to the token deny below.
 if [[ -z "$MERGE_TARGET_WHY" ]] && [[ "$_n_scan" -gt 1 ]]; then
@@ -628,19 +693,28 @@ if [[ -z "$MERGE_TARGET_WHY" ]] && [[ "$_n_scan" -gt 1 ]]; then
   [[ "$_n_cmd" == "$(wc -l <<<"$_cmd_args" | tr -d ' ')" ]] || _counts_ok=0
   if [[ "$_REPO_PTR" == "1" && "$_REPO_SAME" != "1" ]]; then
     _several_why="a repository pointer (-R/--repo, GH_REPO or GH_HOST) beside several gh pr merge invocations; merge one PR per call"
+  elif [[ "$_n_scan" -gt 2 || "$_n_cmd" -gt 2 ]]; then
+    _several_why="more than one gh pr merge invocation in one command, and more than the two copies the locked/degrade-open if/else carries; merge one PR per call"
   elif [[ "$_counts_ok" != "1" ]] \
        || [[ "$(sort -u <<<"$_cmd_args" | wc -l)" -ne 1 ]] \
        || [[ "$(sort -u <<<"$_scan_args" | wc -l)" -ne 1 ]] \
        || [[ ! "$(awk '{ print $1 }' <<<"$_scan_args" | sort -u)" =~ ^[0-9]{1,9}$ ]]; then
-    _several_why="more than one gh pr merge invocation in one command; merge one PR per call"
+    _several_why="$_MULTI_WHY"
   else
     while IFS= read -r _lead; do
       [[ "$_lead" =~ ^[[:space:]]*$ || "$_lead" =~ $_LOCK_LEAD_RE ]] && continue
-      _several_why="more than one gh pr merge invocation in one command; merge one PR per call"
+      _several_why="$_MULTI_WHY"
       break
     done < <(printf '%s' "$_inv_leads")
     if [[ -z "$_several_why" && "$(printf '%s' "$_inv_ops" | sort -u | wc -l)" -ne 1 ]]; then
       _several_why="more than one gh pr merge invocation in one command and their --match-head-commit operands differ; merge one PR per call"
+    fi
+    _first_tail=$(head -n 1 <<<"$_inv_tails")
+    _last_gap=$(sed -n '2p' <<<"$_inv_gaps")
+    if [[ -z "$_several_why" && ! "$_first_tail" =~ ^[[:space:]]*$ ]]; then
+      _several_why="more than one gh pr merge invocation in one command, and the first copy's line continues past its operand ('${_first_tail:0:60}'); end that line at the operand, as the documented if/else does"
+    elif [[ -z "$_several_why" && "$_last_gap" != "ok" ]]; then
+      _several_why="more than one gh pr merge invocation in one command, and the text between the two copies is not the documented locked/degrade-open if/else skeleton (only blank, '#' comment, 'rc=\$?', 'then', 'else', 'fi' and the SOLEUR_SESSION_STATE_UNAVAILABLE echo may sit between them; found '${_last_gap#!}'); merge one PR per call"
     fi
   fi
   [[ -z "$_several_why" ]] || MERGE_TARGET_WHY="$_several_why"
@@ -703,19 +777,29 @@ if [[ -z "$MERGE_TARGET_WHY" ]]; then
     fi
   elif grep -q -- '--match-head-commit' <<<"$_scan_args"; then
     _r1_op=$(head -n 1 <<<"$_inv_ops")
-    if [[ "$_r1_op" == "-" || "$_r1_op" == '!'* ]]; then
+    if [[ "$_r1_op" == "-" ]] && grep -qE -- '--match-head-commit=([[:space:]]|$)' <<<"$_scan_args"; then
+      MERGE_TARGET_WHY="a --match-head-commit=<variable> spelling names no 40-hex sha; a variable operand needs the space-separated spelling (--match-head-commit \"\$H\")"
+    elif [[ "$_r1_op" == "-" || "$_r1_op" == '!'* ]]; then
       MERGE_TARGET_WHY="a --match-head-commit flag names no 40-hex sha and no single double-quoted simple variable (\"\$NAME\", \"\${NAME}\" or \"\${NAME:?msg}\")"
     elif [[ ! "$_r1_first" =~ ^[0-9]{1,9}$ ]]; then
       MERGE_TARGET_WHY="a --match-head-commit variable needs one bare PR number right after 'gh pr merge'"
     elif [[ "$(grep -c -- '^--match-head-commit$' <<<"$_r1_rest" || true)" != "1" ]]; then
       MERGE_TARGET_WHY="more than one --match-head-commit flag; merge one PR per command"
-    elif [[ "$(tail -n 1 <<<"$_r1_rest")" != "--match-head-commit" ]] \
-         || grep -qv -- '^-' <<<"$_r1_rest"; then
-      MERGE_TARGET_WHY="a second positional beside the --match-head-commit operand; name one bare PR number right after 'gh pr merge'"
+    elif [[ "$(tail -n 1 <<<"$_r1_rest")" != "--match-head-commit" ]]; then
+      MERGE_TARGET_WHY="the --match-head-commit variable operand must be the invocation's LAST argument (nothing may follow it); move every flag before --match-head-commit"
+    elif grep -qv -- '^-' <<<"$_r1_rest"; then
+      MERGE_TARGET_WHY="a second positional beside the bare PR number; name one bare PR number right after 'gh pr merge'"
     elif [[ "$(sed -E 's/(^|[[:space:]])#.*//' <<<"$CMD" | grep -o -- '--match-head-commit' | wc -l | tr -d ' ')" != "$_n_cmd" ]]; then
       MERGE_TARGET_WHY="the command names --match-head-commit more times than it invokes gh pr merge"
-    elif grep -qE '(^|[^A-Za-z0-9_])(declare|local|typeset)[[:space:]]+([^;&|]*[[:space:]])?-[A-Za-z]*n' <<<"$CMD"; then
-      MERGE_TARGET_WHY="the command declares a nameref (declare/local/typeset -n), which can make the --match-head-commit variable run code"
+    # Nameref sighting on the command after QUOTE REMOVAL (quote and
+    # backslash characters deleted): `declare '-n' H=…`, `declare -\n H=…`
+    # and `"declare" -n H=…` all run `declare -n`, and the quoted spellings
+    # hid the option from a raw-text match. An option word that is itself an
+    # expansion (`declare $o H=…`, `declare $'-n' …`) cannot be proven
+    # nameref-free and denies the same way.
+    elif tr -d "\"'\\\\" <<<"$CMD" \
+         | grep -qE '(^|[^A-Za-z0-9_])(declare|local|typeset)[[:space:]]+([^;&|]*[[:space:]])?(-[A-Za-z]*n|\$)'; then
+      MERGE_TARGET_WHY="the command declares a nameref (declare/local/typeset -n, or an option word the hook cannot read), which can make the --match-head-commit variable run code"
     else
       TARGET_KIND="pr"; PR_HEAD_NUMBER="$_r1_first"
     fi
@@ -818,7 +902,7 @@ if [[ -z "$MERGE_TARGET_WHY" ]]; then
 fi
 
 if [[ -n "$MERGE_TARGET_WHY" ]]; then
-  _deny "BLOCKED: cannot prove which head this merge lands (${MERGE_TARGET_WHY}). This gate censuses the exact head's diff for unarchived KB artifacts; a HEAD fallback would measure the wrong object. Re-issue with one bare PR number ('gh pr merge <N>') or a clean '--match-head-commit <40-hex>'. Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
+  _deny "BLOCKED: cannot prove which head this merge lands (${MERGE_TARGET_WHY}). This gate censuses the exact head's diff for unarchived KB artifacts; a HEAD fallback would measure the wrong object. Re-issue with one bare PR number ('gh pr merge <N>'), a clean '--match-head-commit <40-hex>', or the documented arm 'gh pr merge <N> … --match-head-commit \"\$H\"' (the quoted variable operand LAST; see plugins/soleur/skills/review/references/review-evidence-comment.md#arm-check). Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
 fi
 
 # Toplevel-normalize: the census pathspecs are relative to git's cwd —
@@ -831,6 +915,17 @@ _wt_top=$(git -C "$WORK_DIR" rev-parse --show-toplevel 2>/dev/null || true)
 [[ -n "$_wt_top" ]] && WORK_DIR="$_wt_top"
 
 # --- resolve the head object ---------------------------------------------
+
+# Network bound for the PR-number census reads (ls-remote, the
+# refs/pull/<N>/head fetch, the origin/main fetch): the documented arm
+# reaches them on every merge, and a hung origin would otherwise hold the
+# hook until the harness kills it — a non-blocking exit that lets the merge
+# through. Each consumer treats a timeout as a failure, which denies.
+# timeout, else gtimeout (stock macOS), else unbounded (pre-change posture)
+# — sibling pattern, pre-merge-rebase.sh.
+_NET_TO=()
+if command -v timeout >/dev/null 2>&1; then _NET_TO=(timeout -k 2 20)
+elif command -v gtimeout >/dev/null 2>&1; then _NET_TO=(gtimeout -k 2 20); fi
 
 CURRENT_BRANCH=$(git -C "$WORK_DIR" symbolic-ref --short -q HEAD 2>/dev/null || echo "")
 
@@ -879,14 +974,15 @@ elif [[ "$TARGET_KIND" == "pr" ]]; then
   # `|| HEAD_OID=""` (CTO ruling G2): under `set -eo pipefail` a failing
   # ls-remote (unreachable origin) killed the hook silently — no JSON, a
   # non-blocking exit, and the merge proceeded. Now it reaches the deny.
-  HEAD_OID=$(git -C "$WORK_DIR" ls-remote origin "refs/pull/${PR_HEAD_NUMBER}/head" 2>/dev/null | awk '{print $1; exit}') || HEAD_OID=""
+  # `${_NET_TO[@]}`: a hung origin times out into that same deny.
+  HEAD_OID=$("${_NET_TO[@]}" git -C "$WORK_DIR" ls-remote origin "refs/pull/${PR_HEAD_NUMBER}/head" 2>/dev/null | awk '{print $1; exit}') || HEAD_OID=""
   if [[ ! "$HEAD_OID" =~ ^[0-9a-f]{40}$ ]]; then
-    _deny "BLOCKED: \`git ls-remote origin refs/pull/${PR_HEAD_NUMBER}/head\` returned no commit; cannot verify the merge head for live-path KB artifacts against an unfetched object. Check the PR number and network/origin, then re-issue. Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
+    _deny "BLOCKED: \`git ls-remote origin refs/pull/${PR_HEAD_NUMBER}/head\` returned no commit (or timed out); cannot verify the merge head for live-path KB artifacts against an unfetched object. Check the PR number and network/origin, then re-issue. Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
   fi
   if ! git -C "$WORK_DIR" cat-file -e "${HEAD_OID}^{commit}" 2>/dev/null; then
-    if ! git -C "$WORK_DIR" fetch --no-tags --quiet origin "refs/pull/${PR_HEAD_NUMBER}/head" >/dev/null 2>&1 \
+    if ! "${_NET_TO[@]}" git -C "$WORK_DIR" fetch --no-tags --quiet origin "refs/pull/${PR_HEAD_NUMBER}/head" >/dev/null 2>&1 \
        || ! git -C "$WORK_DIR" cat-file -e "${HEAD_OID}^{commit}" 2>/dev/null; then
-      _deny "BLOCKED: \`git fetch origin refs/pull/${PR_HEAD_NUMBER}/head\` failed; cannot verify the merge head for live-path KB artifacts against an unfetched object. Retry the fetch manually (check network/origin), then re-issue. Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
+      _deny "BLOCKED: \`git fetch origin refs/pull/${PR_HEAD_NUMBER}/head\` failed (or timed out); cannot verify the merge head for live-path KB artifacts against an unfetched object. Retry the fetch manually (check network/origin), then re-issue. Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
     fi
   fi
 else
@@ -904,8 +1000,9 @@ fi
 # progress to stderr; mixing with hook JSON corrupts the harness-side jq
 # parse). Fail-CLOSED: a fetch failure means the merge-base cannot be
 # trusted, and silent-miss is the exact class this gate exists to prevent.
-if ! git -C "$WORK_DIR" fetch --no-tags origin main >/dev/null 2>&1; then
-  _deny "BLOCKED: \`git fetch origin main\` failed; cannot census the merge head's KB artifacts against a stale origin/main. Run \`git fetch origin main\` manually, then re-issue. Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
+# A timeout is a failure here too.
+if ! "${_NET_TO[@]}" git -C "$WORK_DIR" fetch --no-tags origin main >/dev/null 2>&1; then
+  _deny "BLOCKED: \`git fetch origin main\` failed (or timed out); cannot census the merge head's KB artifacts against a stale origin/main. Run \`git fetch origin main\` manually, then re-issue. Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
 fi
 
 BASE=$(git -C "$WORK_DIR" merge-base origin/main "$HEAD_OID" 2>/dev/null || true)
