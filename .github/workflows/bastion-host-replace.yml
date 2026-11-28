@@ -360,6 +360,17 @@ jobs:
           fi
           # The pre-apply id set, from the FRESH read: boot-verify and the cancel power-off never touch these.
           pre="$(jq -r '[.servers[].id | tostring] | if length == 0 then "none" else join(" ") end' "$fresh")"
+          # Every pre-apply id must be a canonical integer before it is written: boot-verify and the cancel
+          # power-off compare ids as text, so a non-canonical number (111.0) would match no server.
+          if [[ "$pre" != none || "$(jq '.servers | length' "$fresh")" != 0 ]]; then
+            read -ra pre_list <<<"$pre"
+            for id in "${pre_list[@]}"; do
+              if ! (LC_ALL=C; [[ "$id" =~ ^[1-9][0-9]{0,11}$ ]]); then
+                echo "::error::bastion-host-replace: a pre-apply server id from the TOCTOU re-read did not read as an integer, so boot-verify could not tell the old server from the new one. Nothing applied."
+                exit 1
+              fi
+            done
+          fi
           printf 'pre_ids=%s\n' "$pre" >> "$GITHUB_OUTPUT"
           echo "TOCTOU re-pin PASSED: the live bastion and its firewall binding are unchanged since the plan (pre-apply ids: ${pre})."
 
@@ -502,6 +513,8 @@ jobs:
             old_untouched) po="Cancelled: only the pre-apply soleur-bastion exists; it was left untouched." ;;
             refused_no_preids) po="**power-off after a cancel REFUSED: the pre-apply id set was missing or malformed, so nothing was powered off.** Check the Hetzner project for which soleur-bastion is this run's." ;;
             failed) po="**power-off FAILED after a cancel — the replacement may be running.** Power it off in the Hetzner console now." ;;
+            "") ;;
+            *) po="**power-off after a cancel: UNKNOWN verdict (the cancel step recorded a result this summary does not map) — the replacement may be running.** Power it off in the Hetzner console now." ;;
           esac
           # The next dispatch (Q-R7). Nothing is read when the run stopped before the plan, and a READY
           # replacement needs none; otherwise it comes from a FRESH read (the API and `terraform state list`).

@@ -396,6 +396,8 @@ jobs:
             old_untouched) po="Cancelled: the only soleur-bastion is a server that existed before this apply; it was left untouched. Read bastion-host.md (\"Lost state\") before any re-dispatch." ;;
             refused_no_preids) po="**power-off after a cancel REFUSED: the pre-apply id set was missing or malformed, so nothing was powered off.** Check the Hetzner project for which soleur-bastion is this run's." ;;
             failed) po="**power-off FAILED after a cancel — the bastion may be running.** Power it off in the Hetzner console now." ;;
+            "") ;;
+            *) po="**power-off after a cancel: UNKNOWN verdict (the cancel step recorded a result this summary does not map) — the bastion may be running.** Power it off in the Hetzner console now." ;;
           esac
           case "${COMMENT_RESULT}" in
             posted) cm="The run was commented on #9421." ;;
