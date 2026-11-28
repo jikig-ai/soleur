@@ -32,3 +32,9 @@
 - constraint: use Ref, never Closes, for 12008 and 9421
 - constraint: no production dispatch without the owners typed go naming the exact command
 - constraint: end with Needs-you and a resume prompt
+
+## Work Phase
+
+- Status: complete (implementation by one delegated agent, lead verified)
+- Affected gate: rc=1 under contention (load 27). Own defect fixed: missing weight row for the new suite. Isolated re-runs green: tmp-purge, check-deps-adapter-drift, ci-head-verdict, lint-orphan-test-suites rows 19-40, decide-boundary, c4-render-argv-fixture, sandbox-wrapped-command-runtime, compound-promote-create-persist. redirect-tombstones and roster-entry-gate were red because the shared repo had been made shallow (tracked class 8607); unshallowed, both green. pencil-adapter-stub-repl two-sessions hang is tracked in 12853. approval-guard1-mutation timed out at 580s under load (UNRESOLVED, contention); CI required test context is the merge gate.
+- Apply workflow bytes after rebase: 487285
