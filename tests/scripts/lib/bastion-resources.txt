@@ -1,7 +1,11 @@
 # The bastion's Terraform addresses, ONE list (#12866). Read by:
-#   tests/scripts/lib/bastion-host-birth-gate.sh      as its allow-set
-#   plugins/soleur/test/terraform-target-parity.test.ts  which asserts the bastion_host_create job's
-#     -target lines equal this list and that every entry is in OPERATOR_APPLIED_EXCLUSIONS
+#   tests/scripts/lib/bastion-host-birth-gate.sh      as its allow-set (bastion-host-create)
+#   tests/scripts/lib/bastion-host-replace-gate.sh    as its allow-set (bastion-host-replace, #12879);
+#     every member not graded by an arm is exactly no-op on that route
+#   tests/scripts/lib/bastion-gate-common.sh          which refuses a list missing any address both gates grade
+#   plugins/soleur/test/terraform-target-parity.test.ts  which asserts the bastion_host_create and
+#     bastion_host_replace jobs' -target lines equal this list and that every entry is in
+#     OPERATOR_APPLIED_EXCLUSIONS
 # One address per line; '#' comments and blank lines are ignored. #12879 and steps 3-4 add to it.
 tls_private_key.bastion_host_ssh
 hcloud_firewall.bastion

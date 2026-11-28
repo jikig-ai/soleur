@@ -66,7 +66,7 @@ If boot-verify could not power the server off (its `::error::` line says so), th
 
 ## Late ready
 
-A host can report `fresh_boot_ready` after boot-verify's window closed. That changes nothing: the power-off stands, the create gate refuses a second birth, and the host leaves through the replace route (`bastion-host-replace`). The run log's trail is the record. A fresh strict re-read needs `SENTRY_ACTIONS_RO_TOKEN`, which is a repository secret by design and is not mirrored to Doppler (ADR-031, #7946), so it runs only inside a workflow; the replace job reads the trail by construction, since its verify step runs the same strict reader. The reader queries `statsPeriod=1h`, so an hour after the boot even a workflow re-read finds nothing.
+A host can report `fresh_boot_ready` after boot-verify's window closed. That changes nothing: the power-off stands, the create gate refuses a second birth, and the host leaves through the replace route (`bastion-host-replace`). The run log's trail is the record. A fresh strict re-read needs `SENTRY_ACTIONS_RO_TOKEN`, which is a repository secret by design and is not mirrored to Doppler (ADR-031, #7946), so it runs only inside a workflow. The replace job does NOT re-read the powered-off host's trail: its verify step runs the same strict reader, but bound to the server that replace creates, after its own run anchor, so the trail it reads is the new host's. The powered-off host's late ready stays visible only in the original run's log and in Sentry. The reader queries `statsPeriod=1h`, so an hour after the boot even a workflow re-read finds nothing.
 
 ## Lost state while Hetzner shows `soleur-bastion`
 
@@ -77,6 +77,8 @@ The replace route **refuses** this case too. Its gate aborts with `LOST STATE: p
 The recovery arm (`expected_bastion_server_id=none`) is for the opposite case: state and Hetzner both hold no bastion.
 
 ## Replacing the bastion
+
+This section applies once the bastion has been born (the birth is gated on #12942). Until then there is nothing to replace: the first bastion comes from the birth route, not from this route's recovery arm.
 
 The replace destroys `soleur-bastion` and creates it again from the same template. The host key and the private IP (10.0.1.70) are kept. The agent runs both dispatches. Each needs the owner's typed go naming the exact command. The same "dispatch only when the owner can approve at once" rule as the birth applies.
 
@@ -91,17 +93,29 @@ The replace destroys `soleur-bastion` and creates it again from the same templat
    `gh run list --workflow apply-web-platform-infra.yml --event workflow_dispatch -L1 --json databaseId,url`, then `gh run watch <id>`. Arm the watch (hr-dispatch-async-must-arm-watch). A status of "waiting" means the run is waiting for the `web-platform-infra-apply` environment reviewer, not that it is stuck.
 3. **Real replace.**
    After the owner has read the rehearsal's list, run the same command with `-f plan_only=false`, quoting the rehearsal run ID in `reason`.
-   - The TOCTOU step re-reads the API just before the apply. If the server's id, role label or status changed since the plan, it aborts and nothing is applied.
+   - The TOCTOU step re-reads the API and the bastion firewall just before the apply. If the server's id, name, role label, status or private network changed since the plan, or the firewall's live `applied_to` holds a label selector or a server other than the pin, it aborts and nothing is applied.
    - A green run means the gated plan applied and the new server reported `fresh_boot_ready` after the run's anchor. The summary prints the new server id, the host key fingerprint and the private IP.
 
-Every refusal before the apply ends `NOTHING HAS BEEN DESTROYED — this gate runs before the apply.` followed by the next action.
+Nothing is destroyed by any refusal before the apply, but the closing words differ by step. Read the `::error::` line, not a fixed phrase:
+
+| Refusal | How the line ends |
+| --- | --- |
+| Not on `main`, the Tier-B credential check, `confirm`, the pin's shape, an empty `SENTRY_DSN`, the plan-time Hetzner read | `Nothing was planned or destroyed.` |
+| The birth-readiness interlock (`bastion-host-replace is HELD: ...`) | `Nothing was planned or created.` |
+| The plan itself failed, or its JSON could not be read for masking | `Nothing was destroyed.` / `Fail-closed: nothing was destroyed.` |
+| The replace gate | The gate's ABORT line ends `NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Next: dispatch with plan_only=true and read the summary's live-id and next-dispatch lines.`; the step's own line ends `NOTHING HAS BEEN DESTROYED.` |
+| The stock preflight | `Nothing was destroyed. Read the ::error:: lines above before any re-dispatch.` |
+| The TOCTOU re-pin (the server or the firewall changed, or the re-read failed) | `Nothing applied.` |
+
+A missing Doppler or R2 credential ends with no such clause; it also stops before any plan.
 
 ## Recovering a failed replace
 
-After a failure, the run summary prints a `next dispatch` line. It is computed from a fresh API read and `terraform state list`, never guessed. Copy it when it carries a command; it is always a `plan_only=true` rehearsal first.
+After a failure, the run summary prints a `next dispatch` line. It is computed from a fresh API read and `terraform state list`, never guessed. Copy it when it carries a command; it is always a `plan_only=true` rehearsal first. A green run prints `next dispatch: none needed` with the ready server's id and no command (the next replace pins that id). A run that stopped before the plan (a `confirm` typo, for example) reads nothing and says so.
 
 - **The apply failed before the destroy.** The pre-apply server is still the live one. The next dispatch is the same pin. Boot-verify leaves that server untouched (`old_untouched`).
 - **The destroy landed, the create did not.** The API shows no `soleur-bastion`. The next dispatch is the recovery arm, `expected_bastion_server_id=none`. Its gate admits a bare create only when the API lists zero servers and the state no longer holds the server.
+- **The new server landed, but the attachment was not re-bound.** The apply was cut off after the create and before the attachment update (a cancel, or an apply error). The API shows only the new server, and its plan shows the attachment as an update from empty `before.server_ids`, or as a bare create. The replace gate admits both shapes on the replace arm. The next dispatch is the normal replace, pinning the id the summary prints. If boot-verify powered the new server off, the same replace also destroys its kept disk.
 - **The new server landed but was not ready.** Boot-verify powered it off (disk kept) and commented on #9421. Read the trail. If the stage points at `bastion-cloud-init.yml`, ship the template fix in a PR first. Then the next dispatch pins the new server's id. That replace destroys the kept disk.
 - **State holds the server but the API shows none.** The summary says `none applies` and prints no command. Stop and take it to the owner.
 - **Two or more `soleur-bastion` servers exist.** Every route refuses to guess. Stop and inspect the Hetzner project with the owner.
