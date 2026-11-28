@@ -127,7 +127,7 @@ document is refused by the KB-archive merge gate. This plan fixes all three and 
   operands") is off: the PR number beside `--match-head-commit` is what draws that deny. The documented
   block also fails twice more, on the variable SHA and on the second invocation in its lock/degrade-open
   `if/else`. Every other merge hook run at plan time (pre-merge-rebase, operator-step, unpushed-commits,
-  auto-close-scan, cla, net-issue-flow, soak, cmo, runbook-ssh) accepts the block.
+  auto-close-scan, cla, net-issue-flow, the followthrough-enrollment gate, cmo, runbook-ssh) accepts the block.
   `post-dispatch-watch-gate.sh` (it matches `gh pr merge[^|;&]*--auto`), `guardrails.sh` and
   `background-poll-prefer-monitor.sh` were run at deepen time on the documented if/else block (PR 4387):
   all three exit 0 with no deny (`background-poll-prefer-monitor.sh` returns an explicit `allow`). pre-merge-rebase's deny on this WIP
@@ -906,7 +906,7 @@ UI-surface file appears in Files to Edit/Create.
   | Site | Allocation | On mktemp failure | Cleanup |
   |---|---|---|---|
   | `sync-pr-behind.sh` `qw_snapshot` | `errf="$(mktemp)"` per call | exit 4, "not syncing; retry" | `rm -f` on every return path, `# lint-trap-ownership: ok` |
-  | `monitor-pr-checks.sh` | `ERRTMP="$(mktemp 2>/dev/null)" \|\| ERRTMP=""`, once | **refuses to start**: an empty `2>"$ERRTMP"` fails the redirect, so gh never runs and every poll reads as an outage (measured there) | process exit |
+  | `monitor-pr-checks.sh` | `ERRTMP="$(mktemp 2>/dev/null)" \|\| ERRTMP=""`, once | **refuses to start**: an empty `2>"$ERRTMP"` fails the redirect, so gh never runs and every poll reports a GitHub fetch failure (measured there) | process exit |
   | this plan's fence | `GH_ERR="$(mktemp 2>/dev/null)" \|\| GH_ERR=""`, once per poll | degrades: `2>"${GH_ERR:-/dev/null}"` keeps gh running, only the error text is lost (`rc=<rc>`) | the one combined EXIT trap |
 
   The fence copies `monitor-pr-checks.sh`'s allocation line but not its refusal: the poll's answer is
