@@ -731,6 +731,11 @@ assert_refused_start 'U1: --allow-proxy-and-node-env given twice refuses to star
 # U2 (CTO, 2026-11-28): each refusal names its remedy.
 r="$(session u2-node "$PROXY" --env NODE_EXTRA_CA_CERTS=/tmp/ca.pem --send "$INIT" --end eof --expect-death)"
 assert_refused_start 'U2: a NODE_* refusal says to unset it before the re-mint sitting and names the plugin server' "$r" 'To fix: unset NODE_EXTRA_CA_CERTS in the shell that starts Claude Code before the Cloudflare re-mint sitting; for normal browsing use the plugin `playwright` server, which allows it'
+assert_true 'U2: the NODE_* remedy names the variable, never its value' bash -c '! grep -qF "/tmp/ca.pem" "$1/stderr.txt"' _ "$r"
+r="$(session apne-eq "$PROXY" --proxy-arg --allow-proxy-and-node-env=1 --send "$INIT" --end eof --expect-death)"
+assert_refused_start 'U1: --allow-proxy-and-node-env=1 is not the flag and refuses to start' "$r" 'unrecognised proxy flag'
+r="$(session apne-after-sep "$PROXY" --env NODE_EXTRA_CA_CERTS=/tmp/ca.pem --send "$INIT" --end eof --expect-death --server python3 "$STUB" --allow-proxy-and-node-env)"
+assert_refused_start 'U1: the flag after `--` (a server arg) relaxes nothing' "$r" 'NODE_EXTRA_CA_CERTS is set'
 r="$(session u2-cfgproxy "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-ctxproxy.json")"
 assert_refused_start 'U2: a config proxy refusal names the key and the plugin server' "$r" 'To fix: remove browser.contextOptions.proxy from the server args or the --config file before the Cloudflare re-mint sitting; for normal browsing use the plugin `playwright` server'
 r="$(session u2-storage "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --storage-state=/x)"
@@ -1304,8 +1309,12 @@ mutant 88-apne-ignored parse_argv '    own, allow_proxy_and_node_env = take_bool
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m88 "$MUTANT_PATH" --proxy-arg --allow-proxy-and-node-env --env NODE_EXTRA_CA_CERTS=/tmp/ca.pem --send "$INIT" --end eof --expect-death)"; red 'row 88: the opt-out parsed but ignored → NODE_EXTRA_CA_CERTS still refuses under it' bash -c '! started "$1"' _ "$r"; fi
 mutant 89-apne-env-relaxes-all refuse_argv_and_env '        relaxable = envvar in RELAXABLE_ENV' '        relaxable = True'
 if [[ -n "$MUTANT_PATH" ]]; then r="$(session m89 "$MUTANT_PATH" --proxy-arg --allow-proxy-and-node-env --env PLAYWRIGHT_MCP_USER_DATA_DIR=/tmp/p --send "$INIT" --end eof --timeout 3)"; red 'row 89: the opt-out relaxes every env-only row → PLAYWRIGHT_MCP_USER_DATA_DIR starts under it' started "$r"; fi
-EXPECTED_MUTANTS=89   # 87-89 for --allow-proxy-and-node-env; rows 1-56 without row 4, with 22a/22b; 57-65 for --user-data-dir-name; 66-77 for the sink/env/config/trailing-flag/realpath/log-scrub/vetting hardening; 78-86 for --chromium-fallback (incl. its --sandbox) and the ping-env passthrough; exactly one mutation row each
-EXPECTED_RED_ROWS=89
+mutant 90-apne-cfg-relaxes-all refuse_argv_and_env '                        if key == "proxy" and allow_proxy_and_node_env:' '                        if allow_proxy_and_node_env:'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m90 "$MUTANT_PATH" --proxy-arg --allow-proxy-and-node-env --send "$INIT" --end eof --timeout 3 --server python3 "$STUB" --config="$WORK/cfg-lo-recordHar.json")"; red 'row 90: the opt-out relaxes every config context key → launchOptions.recordHar starts under it' started "$r"; fi
+mutant 91-apne-prefix-match take_bool_flag '        if a == flag:' '        if a.startswith(flag):'
+if [[ -n "$MUTANT_PATH" ]]; then r="$(session m91 "$MUTANT_PATH" --proxy-arg --allow-proxy-and-node-env=1 --send "$INIT" --end eof --timeout 3)"; red 'row 91: a prefix match → --allow-proxy-and-node-env=1 starts' started "$r"; fi
+EXPECTED_MUTANTS=91   # 87-91 for --allow-proxy-and-node-env; rows 1-56 without row 4, with 22a/22b; 57-65 for --user-data-dir-name; 66-77 for the sink/env/config/trailing-flag/realpath/log-scrub/vetting hardening; 78-86 for --chromium-fallback (incl. its --sandbox) and the ping-env passthrough; exactly one mutation row each
+EXPECTED_RED_ROWS=91
 
 # ---------------------------------------------------------------------------
 # Guard 2 — .mcp.json routing, EXECUTABLE (scratch HOME, npx shim on PATH)

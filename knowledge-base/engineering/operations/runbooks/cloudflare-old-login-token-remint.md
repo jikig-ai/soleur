@@ -238,8 +238,10 @@ launched it refuses, at start, every setting that could proxy, record or MITM th
 proxy and `NODE_*` refusals off and belongs to the plugin `plugin:soleur:playwright` server only, CTO U1), `env | grep -E '^(PLAYWRIGHT_MCP_|NODE_OPTIONS|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED)='`
 (expect only `PLAYWRIGHT_MCP_PING_TIMEOUT_MS`) and the `--config` file it names. The restart also gives a fresh
 browser, so no earlier `browser_run_code_unsafe` call left a trace running or `page.request` patched (CTO R2; the
-mint body also stops a trace and refuses `tampered`). During the sitting, call no `browser_run_code_unsafe` other than
-the composed run files, and no `browser_network_request`, `browser_network_requests`, `browser_console_messages`,
+mint body also stops a trace and refuses `tampered`). Run every body through the repo server's
+`mcp__playwright__browser_run_code_unsafe`, never `mcp__plugin_soleur_playwright__*`: the plugin server passes
+`--allow-proxy-and-node-env`, so it starts under a proxy or `NODE_*` setting the repo server refuses (CTO U1). During
+the sitting, call no `browser_run_code_unsafe` other than the composed run files, and no `browser_network_request`, `browser_network_requests`, `browser_console_messages`,
 snapshot or screenshot.
 
 **Owner and name.** Account-owned on the Soleur account (`"owner":"account"`). Name `<key>-soleur-<YYYYMMDD>`, with `<key>` the lowercase key

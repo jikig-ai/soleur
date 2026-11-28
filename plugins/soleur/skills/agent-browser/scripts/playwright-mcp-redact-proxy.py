@@ -462,13 +462,13 @@ def refuse_argv_and_env(server: List[str], profile_dir: Optional[str], env: Dict
         if env.get(envvar):
             refuse_start(f"{envvar} is set ({why})", fix_relaxable(envvar) if relaxable else fix_unset(envvar))
     if argv_values(server, "--port") or flag_present(server, "--port") or env.get("PLAYWRIGHT_MCP_PORT"):
-        refuse_start("--port serves the tools over HTTP, around this stdio relay", fix_remove("--port (or unset PLAYWRIGHT_MCP_PORT)"))
+        refuse_start("--port serves the tools over HTTP, around this stdio relay", "To fix: remove --port from the server args, or unset PLAYWRIGHT_MCP_PORT")
     if argv_values(server, "--host") or flag_present(server, "--host") or env.get("PLAYWRIGHT_MCP_HOST"):
-        refuse_start("--host binds an HTTP transport around this stdio relay", fix_remove("--host (or unset PLAYWRIGHT_MCP_HOST)"))
+        refuse_start("--host binds an HTTP transport around this stdio relay", "To fix: remove --host from the server args, or unset PLAYWRIGHT_MCP_HOST")
     if caps_open_sinks(argv_values(server, "--caps")) or caps_open_sinks([env.get("PLAYWRIGHT_MCP_CAPS", "")]):
-        refuse_start("--caps enables a capability other than vision (devtools, pdf and storage write raw page state)", fix_remove("every --caps value but vision (or unset PLAYWRIGHT_MCP_CAPS)"))
+        refuse_start("--caps enables a capability other than vision (devtools, pdf and storage write raw page state)", "To fix: keep only vision in --caps or PLAYWRIGHT_MCP_CAPS")
     if any(v != "stdout" for v in argv_values(server, "--output-mode") + [env.get("PLAYWRIGHT_MCP_OUTPUT_MODE", "stdout")]):
-        refuse_start("--output-mode file writes snapshots and logs to disk", fix_remove("--output-mode file (or unset PLAYWRIGHT_MCP_OUTPUT_MODE)"))
+        refuse_start("--output-mode file writes snapshots and logs to disk", "To fix: remove --output-mode file from the server args, or unset PLAYWRIGHT_MCP_OUTPUT_MODE")
     config_path: Optional[str] = None
     named = argv_values(server, "--config")
     if named:
@@ -477,7 +477,7 @@ def refuse_argv_and_env(server: List[str], profile_dir: Optional[str], env: Dict
         config_path = env["PLAYWRIGHT_MCP_CONFIG"]
     if config_path:
         if not os.path.isfile(config_path):
-            refuse_start("the config file named by --config or PLAYWRIGHT_MCP_CONFIG does not exist", fix_remove("--config (or unset PLAYWRIGHT_MCP_CONFIG), or create the file"))
+            refuse_start("the config file named by --config or PLAYWRIGHT_MCP_CONFIG does not exist", "To fix: point --config or PLAYWRIGHT_MCP_CONFIG at a file that exists, or remove it")
         # The server reads a `.ini` path with its INI parser WITHOUT trying JSON, and falls back to INI when
         # its JSON.parse rejects the file (coreBundle.js loadConfig, 0.0.78). So the proxy vets only what the
         # server reads as JSON: an .ini path is refused, and NaN/Infinity (accepted by Python's json, rejected

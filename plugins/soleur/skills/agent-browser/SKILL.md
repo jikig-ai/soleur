@@ -588,7 +588,9 @@ string: an old-string session holds no `flock`, so also require that `readlink
    registration passes it, so a host behind a corporate proxy or an extra CA
    still browses; the repo `.mcp.json` registration does not, and the
    Cloudflare re-mint sitting (`cloudflare-old-login-token-remint.md`) runs on
-   that one.
+   that one. The trade is stated: on the plugin server an ambient `NODE_OPTIONS`
+   (`--require`, `--inspect`) reaches every page the server holds, not only
+   `page.request`; the shell that starts Claude Code is trusted there.
 
 2. **Per call** — it appends `--snapshot-mode none` to the child so no action
    tool writes a tree to disk, and refuses, before the server sees it, a
