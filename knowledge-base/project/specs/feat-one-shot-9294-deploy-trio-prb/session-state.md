@@ -312,3 +312,7 @@ Deduped panel findings, with the disposition the fix-round review must verify:
 | positive | N3b zero-count de-carry, @allow spend shape, brace folding, D-2 mutant pinning, no user-product surface change | **Positive confirmations** retained; do not re-litigate without new contradicting evidence. |
 
 Two items intentionally remain **open verification items** rather than falsely closed: the Doppler inheritance/precedence question (#2/#13). The ADR-267 fix-round review must rule them explicitly. If either confirms a live false-negative, merge is blocked until the scanner is narrowed and the census suites are rerun.
+
+### Checkpoint 5a — review entry state
+
+P3 batch + ledger committed and pushed as `c526f30650`. Validation green: tier census 507/0, sweep 377/0, infra-config-verify 55/0, parity 21/0. ADR-267 fix-round preparation: range `329d32ddc7..HEAD` has 23 files; seat map output seats: security-sentinel, code-quality-analyst, git-history-analyzer, performance-oracle, data-integrity-guardian, agent-native-reviewer, user-impact-reviewer, test-design-reviewer, structural-enumeration, semgrep-sast, shellcheck. Scan gate was started in shell `8f0eb5`; machine is heavily loaded and even `ps` backgrounded as `cdb9d9`. Do not spawn seats until scan gate emits an `ok`/`skip` receipt. The ledger intentionally leaves the Doppler inheritance/precedence question (#2/#13) open for this review; it must be ruled explicitly.
