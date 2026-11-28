@@ -681,7 +681,8 @@ tests/scripts/audit-bot-codeql-coverage	816	measured
 tests/scripts/audit-ruleset-bypass	4049	measured
 tests/scripts/bastion-boot-verify	1530	measured
 tests/scripts/bastion-host-birth-gate	5196	measured
-tests/scripts/bastion-host-replace-gate	1539	floor
+tests/scripts/bastion-host-replace-gate	16200	measured
+tests/scripts/bastion-host-replace-workflow	17400	measured
 tests/scripts/betterstack-absence-classifier	54	measured
 tests/scripts/betterstack-ingest-probe	89	measured
 tests/scripts/betterstack-query-archive	135	measured

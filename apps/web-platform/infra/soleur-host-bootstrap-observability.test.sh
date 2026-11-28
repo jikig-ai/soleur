@@ -533,68 +533,22 @@ if [ "$M6" != "$BJOB" ] && ! ac8e_verify_exit "$M6"; then ok "AC8e (mutation W11
 M7="$(sed 's/^    timeout-minutes: 60$/    concurrency: { group: bastion-birth, cancel-in-progress: false }\n    timeout-minutes: 60/' <<<"$BJOB")"
 if [ "$M7" != "$BJOB" ] && ! ac8e_no_concurrency "$M7"; then ok "AC8e (mutation W15): a job-level concurrency: on the bastion job is caught"; else no "AC8e (mutation W15): a job-level concurrency: was NOT caught (or did not land)"; fi
 
-# ── AC8f (#12879): the bastion REPLACE body's step wiring, AC8e's shape ───────────────────────────
-# Same properties as the birth: verify runs on a successful OR failed apply (and never on plan_only), the
-# apply and every re-read are plan_only-gated, a cancel powers off an unverified replacement, the call
-# passes the label AND the pre-apply id set, a refused gate exits 1, verify exits with boot-verify's own
-# code, and nothing declares concurrency or continue-on-error.
+# ── AC8f (#12879): the bastion REPLACE body ─────────────────────────────────────────────────────
+# The replace body's step wiring (ids and order, exact if: strings, the gate/stock/TOCTOU refusals, the
+# boot-verify and cancel calls, continue-on-error) is pinned by tests/scripts/test-bastion-host-replace-workflow.sh,
+# which executes the real step bodies (CTO ruling Q-R4 consolidated it there). The rows kept here are
+# the ones that suite does not hold: the interlock's call, no concurrency, and the job timeout.
 rjob_of() { awk '/^  bastion_host_replace:/{c=1;next} c&&/^  [A-Za-z0-9_-]+:/{c=0} c' "$1" | grep -v '^[[:space:]]*#' || true; }
 RJOB="$(rjob_of "$BRWF")"
 [ -n "$RJOB" ] || no "AC8f: no bastion_host_replace job in $(basename "$BRWF")"
-R_VERIFY="Verify the bastion boot (power off on anything but ready; never a pre-apply server)"
-R_APPLY="Terraform apply (bastion replace)"
-R_CANCEL="Power off on cancel (unverified replacement; never a pre-apply server)"
-R_PLAN="Terraform plan (scoped bastion replace) + replace gate + stock preflight"
-ac8f_verify_if() { grep -qxF "        if: \${{ !cancelled() && (steps.apply.outcome == 'success' || steps.apply.outcome == 'failure') && inputs.plan_only != true }}" < <(bstep "$1" "$R_VERIFY"); }
-ac8f_apply_gated() { grep -qxF '        if: inputs.plan_only != true' < <(bstep "$1" "$R_APPLY"); }
-ac8f_gate_closed() { # <job>: the replace gate is the bare `if !` condition, with an `exit 1` before its `fi`
-  bstep "$1" "$R_PLAN" | awk -v want='          if ! bastion_host_replace_gate "$PLAN_DIR/tfplan.json" "$EXPECTED_ID" "$PLAN_DIR/hetzner-servers.json"; then' '
-    $0 == want { inb = 1; seen++; next }
-    inb && $0 == "            exit 1" { ex = 1 }
-    inb && $0 == "          fi" { inb = 0 }
-    END { exit !(seen == 1 && ex) }'
-}
-for id in read plan toctou apply verify boot_anchor cancel_poweroff; do
-  if [ "$(grep -cxE "        id: ${id}" <<<"$RJOB")" -eq 1 ]; then ok "AC8f: exactly one step carries id ${id}"; else no "AC8f: step id ${id} is missing or duplicated"; fi
-done
-if ac8f_verify_if "$RJOB"; then ok "AC8f: verify runs on a SUCCESSFUL or a FAILED apply, never on plan_only"; else no "AC8f: the verify step's if: must be !cancelled() && (apply success || failure) && not plan_only"; fi
-RVSTEP="$(bstep "$RJOB" "$R_VERIFY")"
-if grep -qxF '          bastion_boot_verify "${BOOT_TRAIL_SINCE:-}" "${APPLY_OUTCOME:-}" bastion-host-replace "${PRE_IDS:-}" || rc=$?' <<<"$RVSTEP" \
-   && grep -qxF '          PRE_IDS: ${{ steps.toctou.outputs.pre_ids }}' <<<"$RVSTEP"; then
-  ok "AC8f: verify calls bastion_boot_verify with the label and the pre-apply id set read immediately before the apply"
-else
-  no "AC8f: verify must call bastion_boot_verify ... bastion-host-replace \"\${PRE_IDS:-}\" with PRE_IDS from steps.toctou"
-fi
-if ac8f_apply_gated "$RJOB" && grep -qxF '        if: inputs.plan_only != true' < <(bstep "$RJOB" "Stamp boot-trail run anchor (bastion replace)") \
-   && grep -qxF '        if: inputs.plan_only != true' < <(bstep "$RJOB" "TOCTOU re-pin (re-read the live bastion; abort if it changed since the plan)"); then
-  ok "AC8f: plan_only stops the TOCTOU re-read, the anchor and the apply"
-else
-  no "AC8f: the TOCTOU, anchor and apply steps must each carry if: inputs.plan_only != true"
-fi
-if grep -qxF "        if: \${{ cancelled() && steps.apply.outcome != 'skipped' && steps.verify.outcome != 'success' && inputs.plan_only != true }}" < <(bstep "$RJOB" "$R_CANCEL") \
-   && grep -qxF '          if _bbv_poweroff "${PRE_IDS:-}"; then' < <(bstep "$RJOB" "$R_CANCEL"); then
-  ok "AC8f: a cancelled run that reached the apply powers off an unverified replacement, never a pre-apply server"
-else
-  no "AC8f: the cancel step's if: must match the birth's and it must call _bbv_poweroff \"\${PRE_IDS:-}\""
-fi
 if grep -qxF '          bastion_birth_readiness bastion-host-replace' < <(bstep "$RJOB" "Birth-readiness interlock (emitter present, boot-trail token bound and well-formed)"); then
   ok "AC8f: the replace interlock step calls bastion_birth_readiness bastion-host-replace"
 else
   no "AC8f: the replace interlock step must call bastion_birth_readiness bastion-host-replace"
 fi
-if ac8f_gate_closed "$RJOB"; then ok "AC8f: a bastion_host_replace_gate refusal exits 1 (the bare call is the if! condition)"; else no "AC8f: the plan step must read 'if ! bastion_host_replace_gate ...; then' with an 'exit 1' before its 'fi'"; fi
-if ac8e_no_coe "$RJOB"; then ok "AC8f: no step of the replace job carries continue-on-error"; else no "AC8f: a continue-on-error in the replace job lets a refused gate fall through to the apply"; fi
-if grep -qxF '          exit "$rc"' < <(bstep "$RJOB" "$R_VERIFY"); then ok "AC8f: verify exits with boot-verify's own return code"; else no "AC8f: the replace verify step must end 'exit \"\$rc\"'"; fi
 if ac8e_no_concurrency "$RJOB" && ! grep -qE '^concurrency:' "$BRWF"; then ok "AC8f: neither bastion-host-replace.yml nor its job declares concurrency"; else no "AC8f: a concurrency: in bastion-host-replace.yml splits the lock or can cancel the caller"; fi
 RTO="$(awk '/^  bastion_host_replace:/{c=1;next} c&&/^  [A-Za-z0-9_-]+:/{c=0} c&&/^    timeout-minutes: [0-9]+$/{print $2; exit}' "$BRWF")"
 if [[ "$RTO" =~ ^[0-9]+$ ]] && [ "$RTO" -ge 45 ]; then ok "AC8f: job timeout-minutes ($RTO) is read (the budget row lives in kernel-currency.test.sh)"; else no "AC8f: bastion_host_replace timeout-minutes unreadable or below 45 ('${RTO}')"; fi
-# Mutation rows over the replace job.
-RM1="$(sed "s/ || steps.apply.outcome == 'failure') \&\& inputs.plan_only != true }}/) \&\& inputs.plan_only != true }}/" <<<"$RJOB")"
-if [ "$RM1" != "$RJOB" ] && ! ac8f_verify_if "$RM1"; then ok "AC8f (mutation): dropping the failed-apply arm from the replace verify's if: is caught"; else no "AC8f (mutation): dropping the failed-apply arm was NOT caught (or did not land)"; fi
-RM2="$(awk -v n="      - name: $R_APPLY" '$0 == n {a=1} a&&/^        if: inputs.plan_only != true$/{a=0; next} {print}' <<<"$RJOB")"
-if [ "$RM2" != "$RJOB" ] && ! ac8f_apply_gated "$RM2"; then ok "AC8f (mutation): removing plan_only from the replace apply is caught"; else no "AC8f (mutation): removing plan_only from the replace apply was NOT caught (or did not land)"; fi
-RM3="$(sed 's|^          if ! bastion_host_replace_gate "\$PLAN_DIR/tfplan.json" "\$EXPECTED_ID" "\$PLAN_DIR/hetzner-servers.json"; then$|          if ! { bastion_host_replace_gate "$PLAN_DIR/tfplan.json" "$EXPECTED_ID" "$PLAN_DIR/hetzner-servers.json" \|\| true; }; then|' <<<"$RJOB")"
-if [ "$RM3" != "$RJOB" ] && ! ac8f_gate_closed "$RM3"; then ok "AC8f (mutation W01): a replace gate neutered with '|| true' is caught"; else no "AC8f (mutation W01): '|| true' around the replace gate was NOT caught (or did not land)"; fi
 
 # ── AC13 (#6090 follow-up, retargeted by #7946): the surfacing step binds its token from
 # the WORKFLOW ENV, never from Doppler — and names the unbound case rather than self-skipping.

@@ -2,8 +2,8 @@
 # n=12
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1539
-# generated-at=2026-11-28T13:20:23Z
+# default-weight-ms=1547
+# generated-at=2026-11-28T16:30:04Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -684,6 +684,7 @@ tests/scripts/audit-ruleset-bypass	10
 tests/scripts/bastion-boot-verify	3
 tests/scripts/bastion-host-birth-gate	7
 tests/scripts/bastion-host-replace-gate	9
+tests/scripts/bastion-host-replace-workflow	11
 tests/scripts/betterstack-absence-classifier	8
 tests/scripts/betterstack-ingest-probe	12
 tests/scripts/betterstack-query-archive	2
