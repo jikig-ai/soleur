@@ -1231,6 +1231,32 @@ MUTEOF
   rm -rf "$root"
 }
 
+t34_missing_trio_script_reds_even_when_another_probe_runs() {
+  # Review fix-round regression: one valid trio tracker runs (TRIO_RAN > 0) while a
+  # second declared trio tracker points at a missing script. The coverage red that
+  # fires only at zero probes must not hide the unrunnable tracker.
+  local root; root=$(setup_e2e_tmpdir)
+  local page
+  page=$(python3 - <<'PYEOF'
+import json
+rows=[]
+for n, script in ((47, "scripts/followthroughs/g2-probe.sh"), (48, "scripts/followthroughs/missing-probe.sh")):
+    body=f"Body.\n\n<!-- soleur:followthrough script={script} earliest=2020-01-01T00:00:00Z secrets=WEBHOOK_DEPLOY_SECRET -->"
+    rows.append({"number": n, "body": body})
+print(json.dumps(rows))
+PYEOF
+)
+  install_e2e_gh "$root" "$page"
+  local out rc
+  out=$(cd "$root" && PATH="$root/bin:$PATH" GH_REPO=test/test DRY_RUN=1 FT_ARM=deploy-channel TRIO_BASELINE_TSV=trio.tsv WEBHOOK_DEPLOY_SECRET=x bash "$SUT" 2>&1) && rc=0 || rc=$?
+  assert_eq "G2-T34 a missing trio script reds even when another probe runs" "1" "$rc"
+  assert_contains "G2-T34 the valid probe did run" "G2-PROBE-RAN" "$out"
+  assert_contains "G2-T34 the missing script is named" "missing-probe.sh' missing in repo HEAD" "$out"
+  assert_contains "G2-T34 the run verdict names unrunnable tracker rot" "an unrunnable tracker is silent follow-through rot" "$out"
+  assert_contains "G2-T34 the partition accounting proves this was not the zero-ran arm" "served=1 declared=2" "$out"
+  rm -rf "$root"
+}
+
 t18_sweep_arm_partition_skips_trio_tracker
 t19_sweep_arm_serves_non_trio_tracker
 t20_dc_arm_serves_pure_trio_tracker
@@ -1247,6 +1273,7 @@ t30_mixed_clause_reds_the_run_at_run_level
 t31_served_trio_tracker_greens_the_run
 t32_sweep_arm_e2e_skips_trio_tracker_green
 t33_overlap_mutation_cannot_go_silent
+t34_missing_trio_script_reds_even_when_another_probe_runs
 t1_realpath_rejects_traversal
 t2_first_directive_wins
 t3_anchored_awk_skips_mid_prose
@@ -2759,7 +2786,7 @@ if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
 fi
 # Absolute floor at the MEASURED green count -- a lower bound, so adding rows never trips it;
 # re-measure and raise it in the same commit that adds a row.
-MIN_ASSERTIONS=377
+MIN_ASSERTIONS=382
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1

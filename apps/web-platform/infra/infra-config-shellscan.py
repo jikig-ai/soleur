@@ -158,6 +158,13 @@ CMD_INDIRECT = re.compile(_CMD_PREFIX + r'(\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)(?=\s|
 # battery samples twelve wrappers that all work and omits exactly these two.
 CMD_WRAPPED = re.compile(r'\b(?:time|coproc)\s+'
                          r'((?:[A-Za-z_][A-Za-z0-9_.-]*|[./][A-Za-z0-9_./-]+))(?=\s|$|;)', re.M)
+# KEYWORD CONDITIONS (#13006 fix round). `if doppler ...` was missed even though `if` appears
+# in _CMD_PREFIX: the same pass first captures `if` itself as the command token, and finditer's
+# non-overlapping matches consume the whitespace the alternative needed. The keyword's condition
+# is nevertheless command position, so scan it in a second pass (likewise the body positions
+# after then/else/do and the loop conditions after while/until).
+CMD_AFTER_KEYWORD = re.compile(r'\b(?:if|elif|then|else|do|while|until)\s+(?:!\s*)?'
+                               r'((?:[A-Za-z_][A-Za-z0-9_.-]*|[./][A-Za-z0-9_./-]+))(?=\s|$|;)', re.M)
 
 
 def _line_of(text, pos):
@@ -175,6 +182,10 @@ def raw_command_tokens(clean, *, include_indirect=True):
         for m in CMD_INDIRECT.finditer(clean):
             found.append((m.start(1), _line_of(clean, m.start(1)), '$INDIRECT', m.group(1)))
     for m in CMD_WRAPPED.finditer(clean):
+        raw = m.group(1)
+        norm = raw.rsplit('/', 1)[-1] if '/' in raw else raw
+        found.append((m.start(1), _line_of(clean, m.start(1)), norm, raw))
+    for m in CMD_AFTER_KEYWORD.finditer(clean):
         raw = m.group(1)
         norm = raw.rsplit('/', 1)[-1] if '/' in raw else raw
         found.append((m.start(1), _line_of(clean, m.start(1)), norm, raw))

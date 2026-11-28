@@ -133,6 +133,7 @@ PARTITION_SKIPPED=0
 PARTITION_HOMELESS=0
 TRIO_DECLARED=0
 TRIO_RAN=0
+SCRIPT_REFUSAL=0
 
 log()  { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 fail() { printf '[%s] ERROR: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
@@ -603,6 +604,7 @@ This body's code fences are also **unbalanced** — an earlier fence is never cl
   # have its existence/executability checks pass against the symlink. The
   # cheapest defense is to refuse symlinks under the allowlist root.
   if [[ -L "$script" ]]; then
+    SCRIPT_REFUSAL=1
     fail "issue #$issue_num: script path '$script' is a symlink — refusing to run"
     return 2
   fi
@@ -613,25 +615,18 @@ This body's code fences are also **unbalanced** — an earlier fence is never cl
   # would still accept the canonical-form's first line. Defense-in-depth
   # on top of the case-glob.
   if [[ "$canon" == *$'\n'* ]]; then
+    SCRIPT_REFUSAL=1
     fail "issue #$issue_num: script path '$script' contains embedded newline — refusing to run"
     return 2
   fi
   case "$canon" in
     "$SCRIPTS_ROOT"/*) script="$canon" ;;
     *)
+      SCRIPT_REFUSAL=1
       fail "issue #$issue_num: script path '$script' escapes $SCRIPTS_ROOT/ — refusing to run"
       return 2
       ;;
   esac
-
-  if [[ ! -f "$script" ]]; then
-    fail "issue #$issue_num: script '$script' missing in repo HEAD — leaving issue open"
-    return 0
-  fi
-  if [[ ! -x "$script" ]]; then
-    fail "issue #$issue_num: script '$script' not executable — leaving issue open"
-    return 0
-  fi
 
   # Earliest gate — applies to BOTH sets.
   #
@@ -709,6 +704,20 @@ This body's code fences are also **unbalanced** — an earlier fence is never cl
     if [[ "$mode" == "open" ]]; then
       TRIO_DECLARED=$((TRIO_DECLARED + 1))
     fi
+  fi
+
+  # Only after the partition decision: filesystem existence/executability. A missing
+  # trio tracker must count as DECLARED before this return, and SCRIPT_REFUSAL reds
+  # the run even when another tracker runs — otherwise a typoed path is invisible.
+  if [[ ! -f "$script" ]]; then
+    SCRIPT_REFUSAL=1
+    fail "issue #$issue_num: script '$script' missing in repo HEAD — leaving issue open"
+    return 0
+  fi
+  if [[ ! -x "$script" ]]; then
+    SCRIPT_REFUSAL=1
+    fail "issue #$issue_num: script '$script' not executable — leaving issue open"
+    return 0
   fi
 
   # Build the env allowlist. Default = nothing. Only vars named in
@@ -1249,6 +1258,10 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   if [[ "$TRUNCATED_SWEEP" == "1" ]]; then
     printf '::error::sweep-followthroughs: FAILING THE RUN because the open follow-through page was full; some trackers were not swept at all.\n' >&2
     run_verdict=1  # truncation-verdict
+  fi
+  if [[ "$SCRIPT_REFUSAL" == "1" ]]; then
+    printf '::error::sweep-followthroughs: FAILING THE RUN because at least one enrolled followthrough script was missing, non-executable, or outside the committed allowlist root — an unrunnable tracker is silent follow-through rot.\n' >&2
+    run_verdict=1
   fi
   if [[ "$MISSING_SECRET" == "1" ]]; then
     printf '::error::sweep-followthroughs: FAILING THE RUN because at least one tracker directive names a secret the workflow env does not carry (see the comment posted on that tracker).\n' >&2

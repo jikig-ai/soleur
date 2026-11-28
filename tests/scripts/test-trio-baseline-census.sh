@@ -326,7 +326,7 @@ TRIO_PAIRS = {("soleur", "prd_terraform"), ("soleur", "prd"), ("soleur-deploy-ch
               ("soleur-infra-privileged", "prd")}
 
 def _dop_pair_can_carry_trio(proj, conf):
-    return (proj, conf) in TRIO_PAIRS or (proj == "soleur" and conf.startswith("prd_"))
+    return (proj, conf) in TRIO_PAIRS or (conf.startswith("prd_") and (proj, "prd") in TRIO_PAIRS)
 _DOP_WORD = re.compile(r"(?<![A-Za-z0-9_])doppler\b")
 _DOP_STOP = re.compile(r"[;|&`<>)]")
 _DOP_BADTOK = re.compile(r"""[$'"(){}\[\]#\\`]""")
@@ -3235,6 +3235,10 @@ printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run -p soleu
 pcase N31 scripts/n31.sh WEBHOOK_DEPLOY_SECRET tier-a "a soleur/prd_* branch config inherits soleur/prd, so it is trio-carrying even when absent from TRIO_PAIRS"
 printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler secrets download -p soleur -c prd_cla --no-file\n' > "$PT/scripts/n32.sh"
 pcase N32 scripts/n32.sh WEBHOOK_DEPLOY_SECRET tier-a "the same branch-inheritance rule covers secrets download over another soleur/prd_* config"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run -p soleur-deploy-channel -c prd_some_branch -- x\n' > "$PT/scripts/n33.sh"
+pcase N33 scripts/n33.sh WEBHOOK_DEPLOY_SECRET tier-a "a deploy-channel prd_* branch config inherits its trio-carrying prd root"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run -p soleur-infra-privileged -c prd_some_branch -- x\n' > "$PT/scripts/n34.sh"
+pcase N34 scripts/n34.sh WEBHOOK_DEPLOY_SECRET tier-a "an infra-privileged prd_* branch config inherits its trio-carrying prd root"
 # comment lines keep what they expand (N3)
 printf '#!/usr/bin/env bash\ncat <<EOF2\n#$WEBHOOK_DEPLOY_SECRET\nEOF2\n' > "$PT/scripts/k11.sh"
 pcase K11 scripts/k11.sh WEBHOOK_DEPLOY_SECRET sink "a heredoc line #\$NAME (no braces) expands"
@@ -3486,7 +3490,7 @@ if [ "$MUTANTS_RUN" -gt "$MUTANT_FLOOR" ]; then
 fi
 # Assertion FLOOR (exact), equal to the number of assertions this suite makes.
 _ran=$((passes + fails))
-FLOOR=627
+FLOOR=629
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s -- cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

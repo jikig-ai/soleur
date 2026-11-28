@@ -139,9 +139,8 @@ fi
 # SEPARATE workflow steps. A `terraform` here would collapse the boundary the whole
 # ruling restored.
 #
-# curl and `doppler secrets get` are deliberately NOT in this set: polling the status
-# endpoint and reading a secret are what a verification gate does. T6 pins the doppler
-# half to read-only subcommands.
+# curl is deliberately NOT in this set: polling the status endpoint is what a
+# verification gate does. Doppler is not exempted at all: T6 pins zero runtime-store reads.
 # AN ALLOW-LIST, NOT A DENY-LIST (#7104 PR-B review, D3).
 #
 # This was `for c in terraform ssh systemctl` — three names, matched by a grep. D3 ran the
@@ -203,7 +202,7 @@ BUILTINS = {'echo','printf','local','declare','typeset','readonly','export','uns
 # transforms text, and prints. Every one is inert with respect to infrastructure. `terraform`,
 # `ssh`, `systemctl` and `gh` are absent by omission rather than by enumeration, which is the
 # point of the inversion.
-ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date','dop' 'pler',
+ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date',
            'sleep','source'}
 
 # The gate library's function names, DERIVED from the library rather than listed here, so a
@@ -282,7 +281,7 @@ import importlib.util, sys
 _spec = importlib.util.spec_from_file_location('shellscan', sys.argv[2])
 _m = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_m)
-ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date','dop' 'pler',
+ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date',
            'sleep','source','echo','printf','exit','local','set','if','then','fi','f'}
 SHAPES = {
     'bare-binary':   'f() {\n  terraform apply -auto-approve\n}\n',
@@ -405,11 +404,39 @@ fi
 # a runtime store must have no path to the credentialed webhook URL, because a branch actor with
 # write access to a Doppler config could plant the value it reads.
 if [[ -f "$VERIFY_SH" ]]; then
-  dtotal=$(cmd_position_count "$VERIFY_SH" doppler)
+  # Structural, not a line-start grep: `if doppler ...`, `while doppler ...` and the
+  # other shell keyword positions must fail the same way. The shared scanner is the
+  # same one the actuation sweep uses, so this sentinel cannot be evaded by shell syntax
+  # the grep never modeled. Indirect command names are a separate known scanner gap;
+  # the literal runtime-store binary is the regression pinned here.
+  dtotal=$(python3 - "$VERIFY_SH" "${SCRIPT_DIR}/infra-config-shellscan.py" <<'PYEOF'
+import importlib.util, sys
+path, scanner = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("infra_config_shellscan", scanner)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+src = open(path, encoding="utf-8").read()
+print(sum(1 for _line, tok, _raw in mod.raw_command_tokens(mod.strip_noise(src), include_indirect=False) if tok == "dop" + "pler"))
+PYEOF
+)
   if [[ "$dtotal" -eq 0 ]]; then
-    pass "zero command-position Doppler calls — the gate reads no secret store; every credential input is the caller-exported env"
+    pass "zero structural command-position Doppler calls — the gate reads no secret store; every credential input is the caller-exported env"
   else
-    fail "$dtotal command-position Doppler call(s) found — the gate must read NOTHING from a runtime store (the domain base is the committed variables.tf derivation, exported by the calling step)"
+    fail "$dtotal structural command-position Doppler call(s) found — the gate must read NOTHING from a runtime store (the domain base is the committed variables.tf derivation, exported by the calling step)"
+  fi
+  keyword_shape=$(python3 - "${SCRIPT_DIR}/infra-config-shellscan.py" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("infra_config_shellscan", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+src = "if dop" + "pler secrets get X --plain; then echo bad; fi\n"
+print(sum(1 for _line, tok, _raw in mod.raw_command_tokens(mod.strip_noise(src), include_indirect=False) if tok == "dop" + "pler"))
+PYEOF
+)
+  if [[ "$keyword_shape" -eq 1 ]]; then
+    pass "the zero-Doppler sentinel is structural: it sees a keyword-position invocation"
+  else
+    fail "the zero-Doppler sentinel missed a keyword-position invocation (saw $keyword_shape) — the regression guard is vacuous"
   fi
 fi
 
@@ -419,9 +446,8 @@ fi
 # the workflow that consumes this script uses `curl -X POST "$DEPLOY_URL"` against
 # /hooks/deploy to SWAP THE RUNNING PRODUCTION CONTAINER -- its own comment says "to
 # /hooks/deploy -> swaps web-1". So the actuation sweep pins WHICH BINARIES may run and, for
-# curl alone among them, says nothing about what they may DO. `doppler` is pinned to
-# `secrets get` twenty lines above; curl had no equivalent, so a POST to the deploy hook added
-# to this script would pass the actuation sweep entirely.
+# curl alone among them, says nothing about what they may DO. A POST to the deploy hook added
+# to this script would otherwise pass the actuation sweep entirely.
 #
 # Pinned on the METHOD rather than the URL: an allow-list over hostnames would have to permit
 # the one host the gate legitimately polls, which is the same host that carries the deploy hook.
@@ -493,20 +519,10 @@ mkstubs() {
   # reads and `exit 64`s on anything else, and it records each name so a case can assert on them.
   cat > "$I_TMP/bin/doppler" <<'EOS'
 #!/usr/bin/env bash
-# The body only ever calls `secrets get <NAME> --plain`.
-if [[ "${1:-}" != "secrets" || "${2:-}" != "get" ]]; then
-  echo "doppler-stub: unexpected subcommand '${1:-} ${2:-}' (the gate may only READ secrets)" >&2
-  exit 64
-fi
-name="${3:-}"
-printf '%s\n' "$name" >> "${STUB_DOPPLER_LOG:-/dev/null}"
-# #9294: the webhook trio is the Tier-B loader's env export, never a doppler read, so the ONLY name the
-# body may still ask doppler for is APP_DOMAIN_BASE (a trio name here is exit 64, which reds the case).
-case "$name" in
-  APP_DOMAIN_BASE) ;;
-  *) echo "doppler-stub: unexpected secret name '$name'" >&2; exit 64 ;;
-esac
-echo "example.test"
+# #9294: the gate must make ZERO runtime-store reads. Any doppler invocation is unexpected;
+# this stub exists only to turn an accidental call into a loud test failure.
+echo "doppler-stub: unexpected invocation '$*' (the gate reads no secret store)" >&2
+exit 64
 EOS
   # SLEEP IS RECORDED, NOT JUST SUPPRESSED (#7104 PR-B review).
   #

@@ -1063,8 +1063,9 @@ The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` by desi
 if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]] && ssh-add -l >/dev/null 2>&1; then
   # Bridge target only (NOT deploy_pipeline_fix): this fallback lands a handler/helper/
   # sudoers change now; the webhook push is covered by the CI auto-apply. Never widen it.
-  bash scripts/lib/doppler-read.sh run soleur prd_terraform \
-    terraform -chdir=apps/web-platform/infra apply -target=terraform_data.infra_config_handler_bootstrap -input=true
+  export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+  export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
+  bash scripts/lib/doppler-read.sh tf apply -target=terraform_data.infra_config_handler_bootstrap -input=true
   # The Terraform "yes" prompt is the load-bearing authorization
   # (hr-menu-option-ack-not-prod-write-auth). Do NOT pass -auto-approve.
 fi
@@ -1097,8 +1098,9 @@ This PR edits `terraform_data.deploy_pipeline_fix` trigger files. Drift will be
 detected on the next 12h cron tick. To prevent the drift-issue cycle, run the
 apply as part of the merge ritual:
 
-  bash scripts/lib/doppler-read.sh run soleur prd_terraform \
-    terraform -chdir=apps/web-platform/infra apply -target=terraform_data.deploy_pipeline_fix -input=true
+  export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+  export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
+  bash scripts/lib/doppler-read.sh tf apply -target=terraform_data.deploy_pipeline_fix -input=true
 
 You will be prompted for "yes" by Terraform — that prompt is the load-bearing
 authorization per `hr-menu-option-ack-not-prod-write-auth`. Do NOT pass
