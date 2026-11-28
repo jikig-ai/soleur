@@ -50,6 +50,10 @@ export interface SeatMetadata {
   status: SeatStatus;
   classification: SeatClassification;
   artifact_path?: string;
+  recovery_action?: RecoveryAction;
+  fallback_tier?: SemanticTier | "same" | "none" | null;
+  reviewed_coverage?: "full" | "degraded" | "sequential-fallback";
+  updated_at?: number;
 }
 
 export interface SeatSignals {
@@ -104,6 +108,20 @@ const MAX_METADATA_STRING_LEN = 512;
 
 const SECRET_VALUE_PATTERN =
   /BEGIN [A-Z ]*PRIVATE KEY|sk-ant-[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|dp\.(?:pt|st|sa|ct)\.[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}/;
+
+const EXTRA_SATURATION_STRING_PATTERN = /\b(?:429|529|503)\b|usage[-_ ]?limit/i;
+
+function isSeatSaturationError(err: unknown): boolean {
+  if (!err) return false;
+  if (isSaturationError(err)) return true;
+  const msg =
+    typeof err === "string"
+      ? err
+      : (err as { message?: unknown })?.message
+        ? String((err as { message?: unknown }).message)
+        : String(err);
+  return EXTRA_SATURATION_STRING_PATTERN.test(msg);
+}
 
 /**
  * Sanitize a seat identifier before embedding in log markers (CWE-117).
@@ -171,8 +189,13 @@ export function validateSeatMetadata(
     );
   }
 
-  if (typeof raw.artifact_path === "string" && /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(raw.artifact_path)) {
-    throw new Error("invalid seat metadata: artifact_path must not contain '..' traversal");
+  if (
+    typeof raw.artifact_path === "string" &&
+    /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(raw.artifact_path)
+  ) {
+    throw new Error(
+      "invalid seat metadata: artifact_path must not contain '..' traversal",
+    );
   }
 
   return raw as unknown as SeatMetadata;
@@ -195,7 +218,7 @@ export function recordSeatHeartbeat(
 }
 
 /**
- * Deterministically classify a spawned seat's health/silence state (FR3).
+ * Deterministically classify a spawned seat's health/silence state (FR3, TR2).
  */
 export function classifySeatSilence(
   seat: SeatMetadata,
@@ -207,15 +230,20 @@ export function classifySeatSilence(
     return "hook_deferred";
   }
 
-  if (signals.error !== undefined && isSaturationError(signals.error)) {
+  if (signals.error !== undefined && isSeatSaturationError(signals.error)) {
     return "rate_limit";
   }
+
+  const artifactOk = Boolean(seat.artifact_path)
+    ? signals.artifactPresent === true
+    : signals.artifactPresent !== false;
+  const floorOk = signals.floorPassed !== false;
 
   const cleanCompleted =
     signals.exited === true &&
     (signals.exitCode === undefined || signals.exitCode === 0) &&
-    signals.artifactPresent !== false &&
-    signals.floorPassed !== false;
+    artifactOk &&
+    floorOk;
 
   // Absolute turn cap is never reset by progress heartbeats.
   if (now >= seat.deadline_at && !cleanCompleted) {
@@ -226,18 +254,15 @@ export function classifySeatSilence(
     if (signals.exitCode !== undefined && signals.exitCode !== 0) {
       return "crash";
     }
-    if (
-      signals.floorPassed === false ||
-      signals.artifactPresent === false ||
-      (Boolean(seat.artifact_path) && signals.artifactPresent !== true)
-    ) {
+    if (!floorOk || !artifactOk) {
       return "truncated";
     }
     return "alive";
   }
 
+  const caps = getLivenessCapabilities(seat.harness);
   const idleElapsed = now - seat.last_progress_at;
-  if (idleElapsed > seat.idle_timeout_ms) {
+  if (caps.childDiskHeartbeat && idleElapsed > seat.idle_timeout_ms) {
     return "crash";
   }
 
@@ -258,8 +283,7 @@ function formatLivenessMarker(
   reviewedCoverage: "full" | "degraded" | "sequential-fallback",
 ): string {
   const safeId = sanitizeSeatIdForMarker(seatId);
-  const fb =
-    action === "respawn" ? (fallbackTier ?? "same") : "none";
+  const fb = action === "respawn" ? (fallbackTier ?? "same") : "none";
   return `SOLEUR_SEAT_LIVENESS seat=${safeId} status=${classification} action=${action} attempt=${attempt} fallback_tier=${fb} reviewed_coverage=${reviewedCoverage}`;
 }
 
@@ -327,7 +351,8 @@ export function decideSeatRecovery(
           null,
           "degraded",
         ),
-        reason: "writable seat left dirty diff; verify git diff before deciding recovery",
+        reason:
+          "writable seat left dirty diff; verify git diff before deciding recovery",
       };
     }
     return {
@@ -343,7 +368,8 @@ export function decideSeatRecovery(
         null,
         "degraded",
       ),
-      reason: "writable seat left unverified dirty diff; refusing blind respawn over uncommitted changes",
+      reason:
+        "writable seat left unverified dirty diff; refusing blind respawn over uncommitted changes",
     };
   }
 
@@ -400,7 +426,8 @@ export function decideSeatRecovery(
         null,
         "degraded",
       ),
-      reason: "recovery cap reached (max 1 attempt); escalating with degraded coverage",
+      reason:
+        "recovery cap reached (max 1 attempt); escalating with degraded coverage",
     };
   }
 

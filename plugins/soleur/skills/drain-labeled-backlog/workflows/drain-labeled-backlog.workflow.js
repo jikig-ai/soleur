@@ -348,39 +348,61 @@ function isWorkflowSaturationError(err) {
 
 // Spawned-agent seat liveness & bounded recovery (#12524, ADR-332).
 const escalatedSeats = []
+const recoveredSeats = []
 function safeSeatId(raw) {
   return String(raw).replace(/[^A-Za-z0-9:._-]/g, '_').slice(0, 128) || 'seat'
+}
+function classifySeatError(err) {
+  if (!err) return 'truncated'
+  return isWorkflowSaturationError(err) ? 'rate_limit' : 'crash'
 }
 async function runReadOnlyBriefSeat(rawSeatId, thunk) {
   const seatId = safeSeatId(rawSeatId)
   let res = null
+  let lastErr = null
   try {
     res = await thunk()
-  } catch (_err) {
+  } catch (err) {
+    lastErr = err
     res = null
   }
   if (res) return res
-  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=crash action=respawn attempt=1`)
+  const cls1 = classifySeatError(lastErr)
+  if (!budgetOk()) {
+    log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls1} action=escalate attempt=0 fallback_tier=none reviewed_coverage=degraded`)
+    escalatedSeats.push(seatId)
+    return null
+  }
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls1} action=respawn attempt=1 fallback_tier=same reviewed_coverage=full`)
+  lastErr = null
   try {
     res = await thunk()
-  } catch (_err) {
+  } catch (err) {
+    lastErr = err
     res = null
   }
-  if (res) return res
-  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=crash action=escalate attempt=1 reviewed_coverage=degraded`)
+  if (res) {
+    recoveredSeats.push(seatId)
+    return res
+  }
+  const cls2 = classifySeatError(lastErr)
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls2} action=escalate attempt=1 fallback_tier=none reviewed_coverage=degraded`)
   escalatedSeats.push(seatId)
   return null
 }
 async function runSideEffectingDrainSeat(rawSeatId, thunk) {
   const seatId = safeSeatId(rawSeatId)
   let res = null
+  let lastErr = null
   try {
     res = await thunk()
-  } catch (_err) {
+  } catch (err) {
+    lastErr = err
     res = null
   }
   if (res) return res
-  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=crash action=escalate attempt=0 reviewed_coverage=degraded`)
+  const cls = classifySeatError(lastErr)
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls} action=escalate attempt=0 fallback_tier=none reviewed_coverage=degraded`)
   escalatedSeats.push(seatId)
   return null
 }
@@ -511,6 +533,7 @@ const summary = {
     belowFloor: below.map((c) => ({ area: c.area, count: c.count })),
   },
   picked: picked.map((c) => ({ area: c.area, count: c.count, issues: c.issues.map((i) => i.number) })),
+  recoveredSeats,
   escalatedSeats,
   reviewedCoverage: escalatedSeats.length ? 'degraded' : 'full',
   budget: { total: budget.total, spent: budget.spent(), oneShotFloor: ONE_SHOT_FLOOR, droppedClusters },

@@ -36,9 +36,20 @@ if [[ -z "$SUBCMD" ]]; then
 fi
 shift
 
+detect_active_harness() {
+  if [[ -n "${SOLEUR_HARNESS:-}" ]]; then printf '%s' "$SOLEUR_HARNESS"; return; fi
+  if [[ -n "${CLAUDECODE:-}" ]]; then printf 'claude'; return; fi
+  if [[ -n "${OPENCODE:-}" ]]; then printf 'opencode'; return; fi
+  if [[ -n "${ANTIGRAVITY_CLI:-}${AGY_VERSION:-}${GEMINI_CLI:-}" ]]; then printf 'antigravity'; return; fi
+  if [[ -n "${GROK_HOME:-}${GROK_AGENT:-}${GROK_DEFAULT_MODEL:-}${GROK_SUBAGENTS:-}" ]]; then printf 'grok'; return; fi
+  if [[ -n "${CODEX_THREAD_ID:-}" ]]; then printf 'codex'; return; fi
+  if [[ -n "${DEVIN:-}${DEVIN_HOME:-}" ]]; then printf 'devin'; return; fi
+  printf 'claude'
+}
+
 RUN_DIR=""
 SEAT_ID=""
-HARNESS="${SOLEUR_HARNESS:-claude}"
+HARNESS="$(detect_active_harness)"
 ROLE="subagent"
 TIER="inherit"
 WRITABLE="false"
@@ -93,10 +104,6 @@ if [[ -z "$RUN_DIR" ]]; then
   exit 2
 fi
 
-if [[ -z "$NOW_MS" ]]; then
-  NOW_MS="$(python3 -c 'import time; print(int(time.time() * 1000))')"
-fi
-
 SEATS_DIR="$RUN_DIR/seats"
 mkdir -p "$SEATS_DIR"
 
@@ -116,6 +123,7 @@ import json
 import os
 import re
 import sys
+import time
 
 (
     subcmd,
@@ -141,7 +149,7 @@ import sys
     ttl_s,
 ) = sys.argv[1:22]
 
-now_ms = int(now_s)
+now_ms = int(now_s) if now_s else int(time.time() * 1000)
 ttl_ms = int(ttl_s)
 SEAT_ID_RE = re.compile(r"^[A-Za-z0-9:._-]{1,128}$")
 LINE_BREAK_RE = re.compile(r"[\r\n\u2028\u2029]")
@@ -151,12 +159,13 @@ SECRET_RE = re.compile(
     r"dp\.(?:pt|st|sa|ct)\.[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}"
 )
 SATURATION_RE = re.compile(
-    r"\b(?:429|529|503)\b|rate[-_ ]?limit|resource[-_ ]?exhausted|overloaded|quota[-_ ]?exceeded|capacity|too many requests|usage limit",
+    r"\b(?:429|529|503)\b|rate[-_ ]?limit|resource[-_ ]?exhausted|overloaded|quota[-_ ]?exceeded|capacity|too many requests|usage[-_ ]?limit",
     re.IGNORECASE,
 )
 VALID_HARNESSES = {"claude", "grok", "codex", "devin", "cursor", "opencode", "antigravity", "unknown"}
 VALID_TIERS = {"cheap", "standard", "strong", "advisor", "inherit"}
 IN_BAND_NUDGE_HARNESSES = {"claude", "codex", "antigravity"}
+CHILD_DISK_HEARTBEAT_HARNESSES = {"claude", "codex", "antigravity", "grok", "opencode"}
 FALLBACK_GRAPH = {
     "cheap": None,
     "standard": "cheap",
@@ -217,7 +226,11 @@ def write_seat(path: str, data: dict) -> None:
 
 def read_seat(path: str) -> dict:
     if os.path.islink(path):
-        raise ValueError("refusing symlinked seat file")
+        sys.stderr.write("seat-liveness: refusing symlinked seat file\n")
+        sys.exit(2)
+    if not os.path.exists(path):
+        sys.stderr.write(f"seat-liveness: seat file not found: {path}\n")
+        sys.exit(2)
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, dict):
@@ -250,7 +263,7 @@ def sweep_ttl(now_val: int, ttl_val: int) -> tuple[int, int]:
                 last_ts = int(os.path.getmtime(p) * 1000)
             except OSError:
                 last_ts = 0
-        if now_val - last_ts > ttl_ms:
+        if now_val - last_ts > ttl_val:
             try:
                 os.remove(p)
                 removed += 1
@@ -310,7 +323,13 @@ elif subcmd == "heartbeat":
     print(f"SOLEUR_SEAT_LIVENESS seat={seat_id} status={rec.get('classification', 'alive')} action=heartbeat")
 
 elif subcmd == "sweep":
-    paths = [safe_seat_file(seat_id)] if seat_id else sorted(glob.glob(os.path.join(seats_dir, "*.json")))
+    if seat_id:
+        paths = [safe_seat_file(seat_id)]
+        if not os.path.exists(paths[0]) or os.path.islink(paths[0]):
+            sys.stderr.write(f"seat-liveness sweep: seat file not found for '{seat_id}'\n")
+            sys.exit(2)
+    else:
+        paths = sorted(glob.glob(os.path.join(seats_dir, "*.json")))
     exited = exited_s.lower() == "true"
     exit_code = int(exit_code_s)
     hook_deferred = hook_deferred_s.lower() == "true"
@@ -350,7 +369,8 @@ elif subcmd == "sweep":
             idle_elapsed = now_ms - int(rec["last_progress_at"])
             total_elapsed = now_ms - int(rec["started_at"])
             idle_limit = int(rec["idle_timeout_ms"])
-            if idle_elapsed > idle_limit:
+            seat_harness = rec.get("harness", "unknown")
+            if seat_harness in CHILD_DISK_HEARTBEAT_HARNESSES and idle_elapsed > idle_limit:
                 cls = "crash"
             elif total_elapsed > idle_limit:
                 cls = "legit_long_turn"
@@ -410,7 +430,10 @@ elif subcmd == "decide":
         rec["status"] = "escalated"
         rcov = "degraded"
     else:
-        duration_budget = max(int(rec.get("deadline_at", now_ms)) - int(rec.get("started_at", now_ms)), int(rec.get("idle_timeout_ms", 120000)))
+        duration_budget = max(
+            int(rec.get("deadline_at", now_ms)) - int(rec.get("started_at", now_ms)),
+            int(rec.get("idle_timeout_ms", 120000)),
+        )
         if h in IN_BAND_NUDGE_HARNESSES and cls in ("hook_deferred", "truncated"):
             action = "nudge"
             attempt += 1

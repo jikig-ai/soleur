@@ -568,26 +568,41 @@ const recoveredSeats = []
 function safeSeatId(raw) {
   return String(raw).replace(/[^A-Za-z0-9:._-]/g, '_').slice(0, 128) || 'seat'
 }
+function classifySeatError(err) {
+  if (!err) return 'truncated'
+  return isWorkflowSaturationError(err) ? 'rate_limit' : 'crash'
+}
 async function runReviewSeat(dim, thunk) {
   const seatId = safeSeatId(`review:${dim}`)
   let res = null
+  let lastErr = null
   try {
     res = await thunk()
-  } catch (_err) {
+  } catch (err) {
+    lastErr = err
     res = null
   }
   if (res && Array.isArray(res.findings)) return res
-  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=crash action=respawn attempt=1`)
+  const cls1 = classifySeatError(lastErr)
+  if (!budgetOk()) {
+    log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls1} action=escalate attempt=0 fallback_tier=none reviewed_coverage=degraded`)
+    escalatedSeats.push(seatId)
+    return { findings: [] }
+  }
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls1} action=respawn attempt=1 fallback_tier=same reviewed_coverage=full`)
+  lastErr = null
   try {
     res = await thunk()
-  } catch (_err) {
+  } catch (err) {
+    lastErr = err
     res = null
   }
   if (res && Array.isArray(res.findings)) {
     recoveredSeats.push(seatId)
     return res
   }
-  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=crash action=escalate attempt=1 reviewed_coverage=degraded`)
+  const cls2 = classifySeatError(lastErr)
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls2} action=escalate attempt=1 fallback_tier=none reviewed_coverage=degraded`)
   escalatedSeats.push(seatId)
   return { findings: [] }
 }
@@ -715,16 +730,16 @@ const report = {
   riskTier,
   tierSource,
   tierMismatch,
-  seatsSpawned: dims.length,
+  seatsSpawned: dims.length + recoveredSeats.length + escalatedSeats.length,
   recoveredSeats,
   escalatedSeats,
   reviewedCoverage: escalatedSeats.length ? 'degraded' : 'full',
   dimensionsRun: { alwaysOn, conditional },
   // #9403: pipeline-tally bridge — invoking prose posts `counts.seats` via
   // `pipeline-tally.sh incr seats <n>`. seats = dimension agents spawned
-  // (alwaysOn + conditional); skeptic verifiers are per-finding sub-checks,
-  // not seats.
-  counts: { seats: alwaysOn.length + conditional.length },
+  // (alwaysOn + conditional + 1x recovery attempts); skeptic verifiers are
+  // per-finding sub-checks, not seats.
+  counts: { seats: alwaysOn.length + conditional.length + recoveredSeats.length + escalatedSeats.length },
   skepticsPerFinding: SKEPTICS,
   budget: { total: budget.total, spent: budget.spent(), droppedVerification },
   totals: {

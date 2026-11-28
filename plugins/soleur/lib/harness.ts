@@ -69,7 +69,7 @@ export interface LivenessCapabilities {
   harness: Harness;
   /** Whether the parent can nudge or resume an in-flight subagent in-band without a full respawn. */
   inBandNudge: boolean;
-  /** Whether the harness exposes an async/background wait primitive for subagent turns. */
+  /** Whether the harness exposes an async/background completion notification or wait primitive for subagent turns. */
   asyncWait: boolean;
   /** Whether spawned subagents can reliably write on-disk progress heartbeats by default. */
   childDiskHeartbeat: boolean;

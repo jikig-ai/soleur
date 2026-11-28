@@ -289,10 +289,18 @@ describe("classifySeatSilence (FR3)", () => {
     ).toBe("hook_deferred");
   });
 
-  test("dead/zombie control: silent past idle_timeout_ms or non-zero exit classifies as crash", () => {
+  test("dead/zombie control: silent past idle_timeout_ms on childDiskHeartbeat=true harness classifies as crash, while childDiskHeartbeat=false harness degrades to legit_long_turn until deadline_at (TR2)", () => {
     const seat = baseSeat();
-    // Silent for 180s (> 120s idle_timeout_ms)
+    // Silent for 180s (> 120s idle_timeout_ms) on claude (childDiskHeartbeat: true)
     expect(classifySeatSilence(seat, { now: 1_180_000 })).toBe("crash");
+
+    // Silent for 180s on devin (childDiskHeartbeat: false) degrades to parent-side deadline_at
+    const devinSeat = baseSeat({ harness: "devin" });
+    expect(classifySeatSilence(devinSeat, { now: 1_180_000 })).toBe(
+      "legit_long_turn",
+    );
+    expect(classifySeatSilence(devinSeat, { now: 1_600_001 })).toBe("crash");
+
     // Exited non-zero without saturation error
     expect(
       classifySeatSilence(seat, {
@@ -498,7 +506,7 @@ describe("fan-out workflow integration (FR6)", () => {
       expect(
         codeOnly,
         `${s}.workflow.js must call log(\`SOLEUR_SEAT_LIVENESS seat=\${seatId} ...\`)`,
-      ).toMatch(/log\(`SOLEUR_SEAT_LIVENESS seat=\$\{seatId\} status=crash action=/);
+      ).toMatch(/log\(`SOLEUR_SEAT_LIVENESS seat=\$\{seatId\} status=\$\{cls[12]?\} action=/);
       expect(
         codeOnly,
         `${s}.workflow.js must wrap agent(...) in a run*Seat liveness helper`,

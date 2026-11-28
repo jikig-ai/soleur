@@ -293,10 +293,7 @@ if os.path.isdir(seats_dir) and not os.path.islink(seats_dir):
             total += 1
             st = srec.get("status", "running")
             if st == "running":
-                if srec.get("recovery_action") in ("nudge", "respawn"):
-                    recovered += 1
-                else:
-                    active += 1
+                active += 1
             elif st == "completed":
                 completed += 1
             elif st == "recovered":

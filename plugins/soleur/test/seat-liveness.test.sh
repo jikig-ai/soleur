@@ -115,13 +115,20 @@ out="$(bash "$SEAT_CLI" decide --run-dir "$RUN_DIR" --seat "seat-trunc" 2>&1)" |
 assert_eq "0" "$rc" "decide truncated seat on claude exits 0"
 assert_contains "$out" "SOLEUR_SEAT_LIVENESS seat=seat-trunc status=truncated action=nudge attempt=1" "claude truncated seat nudges in-band once"
 
-# Non-nudge harness (opencode) must respawn instead of nudging on truncated seat
-bash "$SEAT_CLI" init --run-dir "$RUN_DIR" --seat "seat-trunc-oc" --harness opencode --role "soleur:engineering:review:code-quality-analyst" --artifact-path "$RUN_DIR/missing-output.json" --now-ms 1000000 >/dev/null
+# Non-nudge harness (opencode, auto-detected from OPENCODE=1 when --harness is omitted) must respawn instead of nudging on truncated seat
+OPENCODE=1 CLAUDECODE="" SOLEUR_HARNESS="" bash "$SEAT_CLI" init --run-dir "$RUN_DIR" --seat "seat-trunc-oc" --role "soleur:engineering:review:code-quality-analyst" --artifact-path "$RUN_DIR/missing-output.json" --now-ms 1000000 >/dev/null
 bash "$SEAT_CLI" sweep --run-dir "$RUN_DIR" --seat "seat-trunc-oc" --now-ms 1040000 --exited true --exit-code 0 >/dev/null
 rc=0
 out="$(bash "$SEAT_CLI" decide --run-dir "$RUN_DIR" --seat "seat-trunc-oc" 2>&1)" || rc=$?
 assert_eq "0" "$rc" "decide truncated seat on opencode exits 0"
 assert_contains "$out" "SOLEUR_SEAT_LIVENESS seat=seat-trunc-oc status=truncated action=respawn attempt=1" "opencode truncated seat respawns instead of nudging"
+
+# childDiskHeartbeat=false harness (devin) degrades to parent-side deadline_at (legit_long_turn at 180s, crash at deadline_at)
+DEVIN=1 OPENCODE="" CLAUDECODE="" SOLEUR_HARNESS="" bash "$SEAT_CLI" init --run-dir "$RUN_DIR" --seat "seat-devin-long" --role "soleur:engineering:research:repo-research-analyst" --idle-timeout-ms 120000 --deadline-ms 600000 --now-ms 1000000 >/dev/null
+rc=0
+out="$(bash "$SEAT_CLI" sweep --run-dir "$RUN_DIR" --seat "seat-devin-long" --now-ms 1180000 2>&1)" || rc=$?
+assert_eq "0" "$rc" "sweep in-flight devin seat past idle_timeout_ms exits 0"
+assert_contains "$out" "SOLEUR_SEAT_LIVENESS seat=seat-devin-long status=legit_long_turn action=sweep" "childDiskHeartbeat=false harness degrades to legit_long_turn before deadline_at"
 
 echo "=== T6: dead/zombie control & dirty-diff / side-effecting guards ==="
 RUN_DIR=$(make_run_dir)
@@ -188,4 +195,4 @@ assert_file_exists "$RUN_DIR/run_health.json" "run_health.json emitted"
 summary="$(python3 -c "import json; d=json.load(open('$RUN_DIR/run_health.json')); s=d.get('seats_summary',{}); print(f'total={s.get(\"total\")} completed={s.get(\"completed\")} recovered={s.get(\"recovered\")} escalated={s.get(\"escalated\")} rcov={d.get(\"reviewed_coverage\")}')" 2>/dev/null)"
 assert_contains "$summary" "total=3 completed=1 recovered=1 escalated=1 rcov=degraded" "run_health.json records seats_summary and clamps reviewed_coverage to degraded"
 
-print_results 46
+print_results 48

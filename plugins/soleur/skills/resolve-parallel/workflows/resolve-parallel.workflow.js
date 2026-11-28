@@ -333,16 +333,23 @@ const escalatedSeats = []
 function safeSeatId(raw) {
   return String(raw).replace(/[^A-Za-z0-9:._-]/g, '_').slice(0, 128) || 'seat'
 }
+function classifySeatError(err) {
+  if (!err) return 'truncated'
+  return isWorkflowSaturationError(err) ? 'rate_limit' : 'crash'
+}
 async function runWritableResolverSeat(rawSeatId, thunk) {
   const seatId = safeSeatId(rawSeatId)
   let res = null
+  let lastErr = null
   try {
     res = await thunk()
-  } catch (_err) {
+  } catch (err) {
+    lastErr = err
     res = null
   }
   if (res) return res
-  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=crash action=verify_disk attempt=0 reviewed_coverage=degraded`)
+  const cls = classifySeatError(lastErr)
+  log(`SOLEUR_SEAT_LIVENESS seat=${seatId} status=${cls} action=verify_disk attempt=0 fallback_tier=none reviewed_coverage=degraded`)
   escalatedSeats.push(seatId)
   return null
 }
