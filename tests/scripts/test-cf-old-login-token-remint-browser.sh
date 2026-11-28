@@ -237,7 +237,7 @@ function makeWorld(over = {}) {
     ],
     pageCap: 5, noTotal: false, endless: false, log: [], gotos: [], deletes: [], sinkCalls: [], pageConsole: [],
     mintResp: null, mutateStored: null, sinkMode: 'ok', deleteResp: null, listFail: false, throwOnReadback: false,
-    onGetToken: null, win: null, lateAtok: false, waits: [], postText: 0, postDisposed: 0,
+    onGetToken: null, onList: null, win: null, lateAtok: false, waits: [], postText: 0, postDisposed: 0,
     ...over,
   };
 }
@@ -251,6 +251,7 @@ function page(world) {
     const src = world.endless ? Array.from({ length: per }, (_, i) => ({ id: OTHER[i % OTHER.length], name: `endless-${i}` })) : arr;
     const slice = (world.endless ? src : src.slice((pg - 1) * per, pg * per)).map(({ value, ...t }) => t);
     const info = { page: pg, per_page: per, count: slice.length };
+    if (world.onList) world.onList(world, !world.endless && pg * per >= arr.length);   // (world, last page)
     if (!world.noTotal && !world.endless) info.total_count = arr.length;
     return json(200, { success: true, result: slice, result_info: info });
   };
@@ -276,7 +277,7 @@ function page(world) {
     if (h['x-atok'] !== world.atok) return json(403, { success: false, errors: [{ code: 10000 }] });
     // The dashboard edge answers an in-page write with an HTML 403 (DELETE measured 2026-11-26, the account
     // token POST 2026-11-28); only the page's request context (page.request) gets through.
-    if (method === 'DELETE' || method === 'POST') return html(403);
+    if (method !== 'GET') return html(403);
     const p = u.pathname;
     if (world.listFail && method === 'GET' && /\/tokens$/.test(p)) return json(403, { success: false, errors: [{ code: 9109 }] });
     if (method === 'GET' && p === `/api/v4/accounts/${NA}/tokens/permission_groups`) return json(200, { success: true, result: world.groups });
@@ -333,12 +334,15 @@ function page(world) {
         world.log.push({ method: 'POST', path: u.pathname, xatok: h['x-atok'] === world.atok,
           xcss: h['x-cross-site-security'] === 'dash', ctJson: h['content-type'] === 'application/json',
           body: JSON.stringify(data), via: 'node', maxRedirects: opts.maxRedirects, failOnStatusCode: opts.failOnStatusCode });
+        // As Playwright does, a disposed response's body can no longer be read.
         const api = async (resp) => {
           const body = await resp.text();
+          let disposed = false;
+          const live = () => { if (disposed) throw new Error('Response has been disposed'); };
           return { status: () => resp.status, headers: () => ({ 'content-type': resp.headers.get('content-type') || '' }),
-            json: async () => JSON.parse(body), text: async () => { world.postText += 1; return body; },
-            body: async () => { world.postText += 1; return Buffer.from(body); },
-            dispose: async () => { world.postDisposed += 1; } };
+            json: async () => { live(); return JSON.parse(body); }, text: async () => { live(); world.postText += 1; return body; },
+            body: async () => { live(); world.postText += 1; return Buffer.from(body); },
+            dispose: async () => { world.postDisposed += 1; disposed = true; } };
         };
         if (u.origin !== DASH) throw new TypeError('cross-origin');
         if (h['x-atok'] !== world.atok) return api(json(403, { success: false, errors: [{ code: 10000 }] }));
@@ -610,6 +614,11 @@ row('M10b the Node-side POST answers an HTML 403 (the edge refusal, measured in-
   want(r, { refused: 'mint', status: 403, contentType: 'text/html', matches: 0, success: true });
   must(w.deletes.length === 0 && w.sinkCalls.length === 0, 'cleanup DELETE or sink');
   nodeSidePost(w);
+});
+row('M19 the atok is gone just before the POST -> {atok:false}, no POST sent', async () => {
+  const w = makeWorld({ onList: (x, last) => { if (last) x.win.bootstrap = {}; } });
+  const r = await exec('mint', MINT_P, w);
+  want(r, { atok: false }); must(posts(w).length === 0 && w.deletes.length === 0 && w.sinkCalls.length === 0, 'a POST, DELETE or sink call');
 });
 row('M11 a POST that stores the token but answers no value -> {refused:mint-shape}, deleted by name', async () => {
   const w = makeWorld({ mintResp: (create) => { create(); return json(200, { success: true, result: { id: NEW_FULL, name: MINT_P.name } }); } });
@@ -1299,9 +1308,9 @@ killed_row() { # <mint> <revoke> <read> <row> <expected text>: the row is RED an
   fl="$(grep "^FAIL $4 " "$H_OUT" || true)"
   grep -qF -- "$5" <<<"$fl"
 }
-SCORED="R1,R1b,R2,R3,R4,R4c,R7b,R8u,R13c,R13d,M1,M6,M6c,M7a,M7h,M9c,M16a,M16c,M16f,M17,M18a,M18b,D5,L1,L2,L3,D7,M3,R6"
+SCORED="R1,R1b,R2,R3,R4,R4c,R7b,R8u,R13c,R13d,M1,M6,M6c,M7a,M7h,M9c,M16a,M16c,M16f,M17,M18a,M18b,M19,D5,L1,L2,L3,D7,M3,R6"
 harness "$MINT" "$REVOKE" "$READ" P5_ONLY="$SCORED"
-if [[ "$(grep -c '^ok ' "$H_OUT")" -ne 29 ]] || grep -q '^FAIL ' "$H_OUT"; then
+if [[ "$(grep -c '^ok ' "$H_OUT")" -ne 30 ]] || grep -q '^FAIL ' "$H_OUT"; then
   printf 'HARNESS: a scored row is RED on the pristine bodies:\n' >&2; grep -v '^ok ' "$H_OUT" | cut -c1-300 >&2; exit 2
 fi
 SINK_PRISTINE="$SB/sink-pristine.err"
@@ -1342,6 +1351,11 @@ mut XM11 "cleanup by name only, not the answered id" mint "const ours = (t) => !
 mut XM12 "the token POST sent in-page again" mint "const mr = await postNode(base, {" "const mr = await call('POST', base, {" M1 'want {"contentType":"application/json","id8":"c0ffee12","status":200,"success":true}'
 mut XM13 "the token POST follows redirects" mint "data: body, failOnStatusCode: false, maxRedirects: 0," "data: body, failOnStatusCode: false," M1 'maxRedirects is undefined'
 mut XM14 "the token POST answer read as text" mint "parsed = await r.json();" "parsed = JSON.parse(await r.text());" M1 'read as text'
+mut XM15 "the token POST's own atok guard deleted" mint "if (!pgs.atok) return { atok: false };" "" M19 'want {"atok":false}'
+mut XM16 "the token POST answer disposed before it is read" mint "      const contentType = r.headers()['content-type'] || '';
+      let parsed" "      await r.dispose();
+      const contentType = r.headers()['content-type'] || '';
+      let parsed" M1 'want {"contentType":"application/json","id8":"c0ffee12","status":200,"success":true}'
 # Instrument rows: the P-shape/P-leak check and the page-serialization emulation must each catch a real slip.
 mut XL1 "a revoke return bypasses the guard and carries the atok" revoke "return safe({ status: r.status(), contentType, success });" "return { status: r.status(), contentType, success, atok: l.atok };" R1 'P-shape'
 mut XL2 "an in-page function closes over a Node-side variable" revoke "if (t.id.startsWith(prefix)) hits.push" "if (t.id.startsWith(a.pin)) hits.push" R1 'ReferenceError'
@@ -1391,8 +1405,8 @@ sink_mut XS2 "sink keeps a partial file on a failed fsync" 'os.unlink(out)' 'pas
 # --- anti-vacuity floor: EXACT counts (reported directly, never through fail()) -----------------
 TOTAL=$((PASS + FAIL))
 SELFTEST_PASSES=1
-EXPECT_FULL=257
-EXPECT_MUTANTS=100
+EXPECT_FULL=262
+EXPECT_MUTANTS=104
 case "$MODE" in full) want_n="$EXPECT_FULL" ;; *) want_n="$EXPECT_MUTANTS" ;; esac
 if [[ $((TOTAL - SELFTEST_PASSES)) -ne "$want_n" ]]; then
   printf '  [FAIL] anti-vacuity floor: %s assertions ran in %s mode, the exact floor is %s\n' "$((TOTAL - SELFTEST_PASSES))" "$MODE" "$want_n" >&2

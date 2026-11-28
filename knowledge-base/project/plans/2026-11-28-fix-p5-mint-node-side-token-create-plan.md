@@ -124,7 +124,7 @@ The stub page answers an in-page POST or DELETE with `html(403)`, the edge's mea
 `dispose()`. `nodeSidePost(w)` asserts all of them in M1, M10, M10b (new: a Node-side HTML 403 returns
 `{refused:"mint",status:403,contentType:"text/html",matches:0,success:true}`) and M18a. M1 joins the scored rows.
 Mutants XM12 (POST in-page again), XM13 (`maxRedirects` dropped), XM14 (answer read as text) each turn M1 RED.
-Floors: full 250 -> 257, mutants 94 -> 100. Only this suite runs locally; CI runs the rest.
+Review round: M19 (the atok gone just before the POST -> `{atok:false}`, no POST; XM15 deletes postNode's atok guard) and a stub that refuses a body read after `dispose()` (XM16). Floors: full 250 -> 262, mutants 94 -> 104. Only this suite runs locally; CI runs the rest.
 
 ## Acceptance Criteria
 
