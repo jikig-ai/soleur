@@ -195,9 +195,9 @@ sink hand-off), `p5-revoke.js` (the guarded delete, section 7, and the `retire` 
 (the 127.0.0.1 receiver), pinned by `p5-browser.sha256` and by these values, which each hold quotes:
 
 ```text
-p5-read.js sha256=d7e184049ca98346a772b0f8f696c74a22e24f223c2cd79287b581194daa9973
-p5-mint.js sha256=ca7847bb90fffbe7fb5a7ca24e029bc2e4188c8dc14ad1406e7d359cd03617e2
-p5-revoke.js sha256=5a980691360666193bf4bbca8fda6e24fa781bb96a5ea06ad88f8cf52b2681da
+p5-read.js sha256=fbcab106aec79f28883a04d2dbf00dd0d933ff832001b09aecd17b7ed2ded5ad
+p5-mint.js sha256=6a8a8999d69158a5924408c87f1db0c300165b774312c58df6aeb4bb90a51898
+p5-revoke.js sha256=950193b2afd3af7acf5fbb34792f918df64a086bf9e928dae407eece62eec2c3
 p5-sink.py sha256=86791b8f5f8249997b3893276c4c7d45600a92c551208e6004f7d59549e43c25
 ```
 
@@ -207,11 +207,14 @@ committed blob and the hold's quoted value (`p5-browser.sha256` sits in the same
 own):
 
 ```bash
-D="$(dirname <B>)"; ok=1; for f in p5-read.js p5-mint.js p5-revoke.js p5-sink.py; do h="$(git -C "$D" hash-object --no-filters -- "$f")" && r="$(git -C "$D" rev-parse "HEAD:./$f")" && [ -n "$h" ] && [ "$h" = "$r" ] || { echo "SOLEUR_P5_BODY verdict=stop file=$f reason=not-committed"; ok=0; }; done; [ "$ok" = 1 ] && printf '%s  %s\n' '<sha256>' '<body>' | (cd "$D" && sha256sum -c --quiet -) && echo "SOLEUR_P5_BODY verdict=ok file=<body>" || echo "SOLEUR_P5_BODY verdict=stop file=<body>"
+D="$(dirname <B>)"; ok=1; [ '<sha256>' = '<section 5 sha256>' ] || { echo "SOLEUR_P5_BODY verdict=stop file=<body> reason=not-section5"; ok=0; }; for f in p5-read.js p5-mint.js p5-revoke.js p5-sink.py; do h="$(git -C "$D" hash-object --no-filters -- "$f")" && r="$(git -C "$D" rev-parse "HEAD:./$f")" && [ -n "$h" ] && [ "$h" = "$r" ] || { echo "SOLEUR_P5_BODY verdict=stop file=$f reason=not-committed"; ok=0; }; done; [ "$ok" = 1 ] && printf '%s  %s\n' '<sha256>' '<body>' | (cd "$D" && sha256sum -c --quiet -) && echo "SOLEUR_P5_BODY verdict=ok file=<body>" || echo "SOLEUR_P5_BODY verdict=stop file=<body>"
 ```
 
 `<body>` (`p5-<x>.js`, or `p5-sink.py` for the sink) and `<sha256>` are the pair the hold or the section 5 table
-quotes. Only `verdict=ok` lets the step
+quotes, and `<section 5 sha256>` is that body's value in the section 5 block above. The command stops
+(`reason=not-section5`) when the two differ, for example on a go copied from an archived plan, whose shas a later
+re-pin supersedes; take a new go quoting the section 6 hold.
+Only `verdict=ok` lets the step
 go on. Then it builds the run file. The argument is passed as a JSON string that the body parses, so it can only ever
 be data (CTO D9):
 
@@ -321,7 +324,7 @@ exist means a live token nothing holds: list it by name and delete it in the sam
 
 | Return | Meaning | Next |
 |---|---|---|
-| `{atok:false}` | the session is signed out | sign in, then a new sink and a new go |
+| `{atok:false}` | the session is signed out, or the dashboard set no atok within the body's 15 s wait | sign in (or reload the dashboard tab), then a new sink and a new go |
 | `{refused:"args:<field>"}` | an argument is wrong; no request was sent | fix the argument object, new go |
 | `{refused:"origin"}` | the page is not on dash.cloudflare.com | open the dashboard, new go |
 | `{refused:"groups",matches:<n>}` | only n of the asked names resolved to exactly one selectable group | re-read the groups (section 4); a group the account list lacks is the user-owned fallback |
@@ -423,14 +426,14 @@ comment. The swap go quotes, per key, the `new_id=` and `owner=` on the plan's `
 which must equal that key's `P5-MINTED` `id8=` and `owner=` (CTO D5, D9); a key whose plan has no
 `copy-staged-token` line (an interrupted swap that only deletes `_NEXT`) has nothing to quote. In order:
 
-- Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_PAGERULES_READ`: `p5-mint.js` (sha256=ca7847bb90fffbe7fb5a7ca24e029bc2e4188c8dc14ad1406e7d359cd03617e2) with `{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_pagerules_read-soleur-<YYYYMMDD>","zone_groups":<zone groups>,"account_groups":[],"expires_on":"<expiry>","sink_url":"<sink>"}`, then `[ -s "<scratchpad>/cf_api_token_pagerules_read.tok" ] && LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_pagerules_read.tok" | doppler secrets set CF_API_TOKEN_PAGERULES_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
+- Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_PAGERULES_READ`: `p5-mint.js` (sha256=6a8a8999d69158a5924408c87f1db0c300165b774312c58df6aeb4bb90a51898) with `{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_pagerules_read-soleur-<YYYYMMDD>","zone_groups":<zone groups>,"account_groups":[],"expires_on":"<expiry>","sink_url":"<sink>"}`, then `[ -s "<scratchpad>/cf_api_token_pagerules_read.tok" ] && LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_pagerules_read.tok" | doppler secrets set CF_API_TOKEN_PAGERULES_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
 - Hold: Operator-authorizes: account-owned mint of `CF_API_TOKEN_AUDIT`: `p5-mint.js` (same sha256) with `{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_audit-soleur-<YYYYMMDD>","zone_groups":<zone groups>,"account_groups":<account groups>,"expires_on":"<expiry>","sink_url":"<sink>"}`, then `[ -s "<scratchpad>/cf_api_token_audit.tok" ] && LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_audit.tok" | doppler secrets set CF_API_TOKEN_AUDIT_NEXT -p soleur -c prd_terraform --silent > /dev/null`
 - Hold: Operator-authorizes: owner mint of `CF_API_TOKEN_ANALYTICS_READ` (account-owned): `p5-mint.js` (same sha256) with `{"owner":"account","account_id":"66d4f93f7397f196544e9fe84c3557c2","zone_id":"951ce525552201ec6c696b24251abed7","name":"cf_api_token_analytics_read-soleur-<YYYYMMDD>","zone_groups":<zone groups>,"account_groups":[],"expires_on":"<expiry>","sink_url":"<sink>"}`, then `[ -s "<scratchpad>/cf_api_token_analytics_read.tok" ] && LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' < "<scratchpad>/cf_api_token_analytics_read.tok" | doppler secrets set CF_API_TOKEN_ANALYTICS_READ_NEXT -p soleur -c prd_terraform --silent > /dev/null`
 - Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_AUDIT -p soleur -c dev_personal --yes > /dev/null` (CTO F20), only after a `bash <B> --stage inventory` run in this sitting printed `SOLEUR_P5_HOLDER project=soleur config=dev_personal key=CF_API_TOKEN_AUDIT value=old`. Rollback (that row proved the deleted value is the old token), with `<src>` = `CF_API_TOKEN_AUDIT_PREV` when that inventory printed `SOLEUR_P5_REFERENCE key=CF_API_TOKEN_AUDIT source=PREV`, else `CF_API_TOKEN_AUDIT`: `set -o pipefail; doppler secrets get <src> -p soleur -c prd_terraform --plain | LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' | doppler secrets set CF_API_TOKEN_AUDIT -p soleur -c dev_personal --silent > /dev/null`, then a same-sitting inventory that must print that config's row `value=old`
 - Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_AUDIT -p soleur -c dev_scheduled --yes > /dev/null`, only after a same-sitting row `SOLEUR_P5_HOLDER project=soleur config=dev_scheduled key=CF_API_TOKEN_AUDIT value=old`; rollback as above with `-c dev_scheduled`
 - Hold: Operator-authorizes: `bash <B> --stage swap --apply --plan-digest <D>` (the printed apply command)
 - Hold: Operator-authorizes: `bash <B> --stage holder-copies --apply --plan-digest <D>` (the printed apply command)
-- Hold: Operator-authorizes: revoke `CF_API_TOKEN_PAGERULES_READ` old id `86aa993e`: `p5-revoke.js` (sha256=5a980691360666193bf4bbca8fda6e24fa781bb96a5ea06ad88f8cf52b2681da) with `{"pin":"86aa993e","old_id":"<old_id>","new_id":"<new_id>","new_name":"<new_name>","scope":"<old_owner>"}`, signed in as the old-account-owner login, only after `bash <B> --stage verify` printed `SOLEUR_P5_REVOKE_READY key=CF_API_TOKEN_PAGERULES_READ old_id=86aa993e` in the same sitting
+- Hold: Operator-authorizes: revoke `CF_API_TOKEN_PAGERULES_READ` old id `86aa993e`: `p5-revoke.js` (sha256=950193b2afd3af7acf5fbb34792f918df64a086bf9e928dae407eece62eec2c3) with `{"pin":"86aa993e","old_id":"<old_id>","new_id":"<new_id>","new_name":"<new_name>","scope":"<old_owner>"}`, signed in as the old-account-owner login, only after `bash <B> --stage verify` printed `SOLEUR_P5_REVOKE_READY key=CF_API_TOKEN_PAGERULES_READ old_id=86aa993e` in the same sitting
 - Hold: Operator-authorizes: revoke `CF_API_TOKEN_AUDIT` old id `dd6d1427`: `p5-revoke.js` (same sha256) with `{"pin":"dd6d1427","old_id":"<old_id>","new_id":"<new_id>","new_name":"<new_name>","scope":"<old_owner>"}`, only after a same-sitting `SOLEUR_P5_REVOKE_READY key=CF_API_TOKEN_AUDIT old_id=dd6d1427`
 - Hold: Operator-authorizes: revoke `CF_API_TOKEN_ANALYTICS_READ` old id `5993721f`: `p5-revoke.js` (same sha256) with `{"pin":"5993721f","old_id":"<old_id>","new_id":"<new_id>","new_name":"<new_name>","scope":"<old_owner>"}`, only after a same-sitting `SOLEUR_P5_REVOKE_READY key=CF_API_TOKEN_ANALYTICS_READ old_id=5993721f`
 - Hold: Operator-authorizes: `doppler secrets delete CF_API_TOKEN_PAGERULES_READ_PREV -p soleur -c prd_terraform --yes > /dev/null`, only after a same-sitting inventory printed `SOLEUR_P5_PREV key=CF_API_TOKEN_PAGERULES_READ state=denied` and that key's `P5-REVOKED` record is posted (section 7)
@@ -565,7 +568,7 @@ minted user-owned under the F17 fallback keeps the user forms.
   3. Operator-authorizes: `set -o pipefail; doppler secrets get <KEY>_PREV -p soleur -c prd_terraform --plain | LC_ALL=C awk 'NR>1{printf "\n"} {printf "%s",$0}' | doppler secrets set <KEY> -p soleur -c prd_terraform --silent > /dev/null`,
      then `Agent:` the section 5 digest compare with `<KEY>` and `<KEY>_PREV` as the two reads; it must print
      `digest=equal`.
-  4. Operator-authorizes: retire the bad token with `p5-revoke.js` (sha256=5a980691360666193bf4bbca8fda6e24fa781bb96a5ea06ad88f8cf52b2681da) and
+  4. Operator-authorizes: retire the bad token with `p5-revoke.js` (sha256=950193b2afd3af7acf5fbb34792f918df64a086bf9e928dae407eece62eec2c3) and
      `{"mode":"retire","pin":"<bad_id8>","retire_name":"<bad_name>","scope":"<owner>"}` from the START record (plus
      `"account_id"` for `account`). It deletes only the one token with that id prefix and that exact name, and
      refuses any of the old pins. The value also stays in Doppler version history, which is why the token itself

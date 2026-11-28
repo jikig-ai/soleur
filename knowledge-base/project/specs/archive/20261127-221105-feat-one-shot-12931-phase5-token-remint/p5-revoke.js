@@ -40,7 +40,8 @@
 // unless the target's name equals retire_name exactly, and any target whose id starts with an old pin.
 //
 // FLOW. goto https://dash.cloudflare.com/profile/api-tokens first (a page not reloaded since sign-in listed 0
-// tokens on 2026-11-26); in-page list of every page (a page shorter than per_page ends it unless
+// tokens on 2026-11-26), then wait up to 15 s for window.bootstrap.atok, which the dashboard sets after
+// DOMContentLoaded (measured 2026-11-28); in-page list of every page (a page shorter than per_page ends it unless
 // result_info.total_count says more; 20 pages without an end refuses `listing`), with window.bootstrap.atok as
 // `x-atok` plus `x-cross-site-security: dash`, the headers of the 2026-11-26 deletes that returned 200 (#12931
 // comment 7203873359); Node-side page.request.delete (an in-page fetch DELETE got an HTML 403 from the
@@ -171,6 +172,7 @@
 
   try {
     await page.goto(`${DASH}/profile/api-tokens`, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => !!(window.bootstrap && window.bootstrap.atok), null, { timeout: 15000, polling: 100 }).catch(() => {});
     const l = await page.evaluate(listInPage, {
       base, prefix: a.pin, newPrefix: retire ? null : a.new_id, per: 50, pages: 20,
     });

@@ -87,6 +87,17 @@ jobs:
         uses: anthropics/claude-code-action@3b7e1a45ca6f231c62605aabcf79e6a41b08c7da # v1.0.263
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The weekly dispatch comes from Inngest (cron-machinery-drain.ts)
+          # through a GitHub App installation token, so the run's github.actor
+          # -- what the action's actor gate reads -- is soleur-ai[bot], and
+          # the gate refused it on every weekly run since 2026-10-12 (#13095,
+          # recurrence after the id-token fix #9537). The explicit login,
+          # never '*': the repo is public and the action's own allowed_bots
+          # doc warns that '*' lets any external App invoke it with prompts
+          # it controls. isAllowedBot strips a trailing '[bot]' on both
+          # sides, so either spelling matches; the [bot] form is the login
+          # GitHub reports.
+          allowed_bots: "soleur-ai[bot]"
           # `--headless` is load-bearing, not decoration: without it the skill
           # takes its interactive branch and waits to confirm a cluster with a
           # human who is not there (drain-labeled-backlog/SKILL.md step 4).
