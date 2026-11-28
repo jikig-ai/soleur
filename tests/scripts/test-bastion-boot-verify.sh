@@ -144,9 +144,9 @@ run goneafterapply 'verdict=ready\n' 0 success BBV_LOOKUP_BODY='{"servers":[]}'
 t "a successful apply with no soleur-bastion server is not ready, and the trail is not read" "$([[ "$RC" -eq 1 && -z "$RENV" && "$PO" == absent && "$OUT" == *"no soleur-bastion server exists; the boot trail was not read"* ]]; echo $?)"
 run lookupblip 'verdict=ready\n' 0 success BBV_LOOKUP_CODE=503
 t "a failed pre-read lookup is named and the read proceeds bound by host_name only" "$([[ "$RC" -eq 0 && "$RENV" == *"HID= "* && "$OUT" == *"bound by host_name only"* ]]; echo $?)"
-LABEL_ARG=bastion-host-replace
+LABEL_ARG=bastion-host-replace PRE_ARG=4343   # the replace label requires the pre-apply id set (#12879)
 run replacelabel 'verdict=not_ready\n' 1 success
-LABEL_ARG=""
+LABEL_ARG="" PRE_ARG="__unset__"
 t "a dispatch label reaches the reader and the comment, and the create-only advice is dropped" \
   "$([[ "$RENV" == *"LABEL=bastion-host-replace"* && "$GH" == *"bastion-host-replace did not reach ready"* && "$OUT" != *"Do not re-run bastion-host-create"* ]]; echo $?)"
 # The library's DEFAULT reader path (no override) reaches the real strict reader: an unbound Sentry
@@ -388,8 +388,22 @@ t "an unreadable cloud-init is HELD, never a pass" "$([[ "$RC" -ne 0 && "$OUT" =
 run_rd 'x;y' "$GOOD_CI"
 t "a malformed label is refused" "$([[ "$RC" -ne 0 ]]; echo $?)"
 
+echo "mutation rows (#12879: the pre-apply id set and comment_result)"
+LABEL_ARG=bastion-host-replace PRE_ARG=4242
+mrow "the pre-apply exclusion dropped from the lookup" '  if [[ -n "$pre" ]]; then
+    _BBV_PRE_PRESENT=' '  if false; then
+    _BBV_PRE_PRESENT=' old_untouched_shape preapplyfail 'verdict=not_ready\n' 1 failure
+LABEL_ARG=bastion-host-replace PRE_ARG=""
+mrow "the pre-id check dropped from _bbv_poweroff (the lowest level)" '    if ! _bbv_preids_ok "${1:-}"; then' '    if false; then' refused_shape premissing 'verdict=not_ready\n' 1 success
+LABEL_ARG=bastion-host-replace PRE_ARG="__unset__"
+mrow "the replace label's required set dropped" '  [[ "$label" == bastion-host-replace && "$pre_given" -eq 0 ]] && pre_given=1' '  :' refused_shape repnoset 'verdict=not_ready\n' 1 success
+LABEL_ARG=bastion-host-replace PRE_ARG=4343
+cmt_failed_shape() { [[ "$CR" == failed && "$SUM" == *"did NOT post"* ]]; }
+mrow "a failed comment recorded as posted" '      _bbv_record_comment failed "- boot-verify: the #9421 comment did NOT post; post the run URL there by hand."' '      _bbv_record_comment posted "- boot-verify: the run URL was commented on #9421."' cmt_failed_shape cmtfailedr 'verdict=not_ready\n' 1 success BBV_GH_RC=1
+LABEL_ARG="" PRE_ARG="__unset__"
+
 echo
-MIN_CASES=47
+MIN_CASES=87  # measured 2026-11-28 (#12879: 47 -> 87, the replace label, pre-apply set, comment_result, _bbv_servers_doc and readiness rows)
 if [[ "$cases" -lt "$MIN_CASES" ]]; then printf 'test-bastion-boot-verify: FAIL (only %d assertions ran; floor %d)\n' "$cases" "$MIN_CASES" >&2; exit 1; fi
 if [[ $((passes + fails)) -ne "$cases" ]]; then printf 'test-bastion-boot-verify: FAIL (accounting: passes+fails=%d != cases=%d)\n' "$((passes + fails))" "$cases" >&2; exit 1; fi
 if [[ "$fails" -gt 0 ]]; then printf 'test-bastion-boot-verify: FAIL (%d of %d assertions failed)\n' "$fails" "$cases" >&2; exit 1; fi

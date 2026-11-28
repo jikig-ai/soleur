@@ -144,11 +144,13 @@ else
   fail "fixture types: string before.id and prior_state id, numeric API id, [<number>] before.server_ids, [null]/[true] after"
 fi
 
-N=0
+# mk runs inside $(...), so a shell counter would never persist: every fixture gets its own mktemp name,
+# or a stored path (a row reused by a mutation row below) would be overwritten by the next mk.
 mk() { # <base-file> <jq-edit> -> path of the mutated document
-  N=$((N + 1))
-  jq "$2" "$1" > "$WORK/f$N.json" || harness "fixture edit failed: $2"
-  printf '%s' "$WORK/f$N.json"
+  local f
+  f="$(mktemp "$WORK/f.XXXXXXXX")" || harness "mktemp failed"
+  jq "$2" "$1" > "$f" || harness "fixture edit failed: $2"
+  printf '%s' "$f"
 }
 R="$WORK/replace.json"; V="$WORK/recovery.json"; A1="$WORK/api1.json"; A0="$WORK/api0.json"
 SET='def set($a; f): .resource_changes |= map(if .address == $a then f else . end);'
