@@ -48,3 +48,36 @@
 - constraint: #12937 zot-mirror CF-tunnel outage is pinning all releases at 43234154a2.
 
 no ci-is-the-gate token written (silent brief — no reliance instruction)
+
+## 2026-11-27 late — post-rebase CI repaired, panel spawning
+
+HEAD d1d41f413e (Jean-authored; CLA green). Fixes pushed: N3b de-carry (skill points at runbook 6894 §5c, zero-count pin, mutation rows repurposed as insertion tests — 286/0 green), ADR census end-state corrected (3 tier-a residual rows on argv-bearer fixture monolith acknowledged, #13102, fuse 2026-11-30), model.c4 brace-folded + re-rendered (census 619/0, c4 freshness green).
+
+**Review state**: tier `aggregate pattern`. PANEL_SHA=329d32ddc7 (design pass ran there; panel spawns at d1d41f413e, fix-round coverage for the delta). Design pass DONE: simplicity + strategist verdicts mechanism-justified; open items for synthesis: P1-2 doppler-read.sh census-invisible bulk-read broker (no project allowlist; `run soleur prd` into env-less jobs), P1-3 Doppler control-plane availability correlation incl. watchdog. P1-1 FIXED in diff. Scan receipt (fresh at d1d41f413e): `SOLEUR_REVIEW_SCAN_GATE ok engine=mixed files=32 rules=219 findings=1252`, argv-bearer excluded (#13098/#13099).
+
+**Resume if interrupted**: 11 panel seats spawned in background (git-history, pattern-recognition, security-sentinel, performance-oracle, data-integrity, agent-native, code-quality, user-impact, structural-enumeration, test-design, semgrep-sast). Collect reports → synthesize with dedup ledger → fix dispositions → emit trailer via emit-review-trailer.sh (`Reviewed-Risk-Tier: aggregate pattern`) → CTO domain-ruling (workflows+infra touched) → Review-Evidence comment (domain-ruling=CTO, scan receipt quoted, exclusion disclosed) → merge per evidence gate. shellcheck seat = lead quotes receipt in synthesis (no agent file). SKEPTICS=3 for the workflow. Also pending: verify full CI green on d1d41f413e.
+
+## Review round (2026-11-27, panel SHA 329d32ddc7 / HEAD d1d41f413e)
+
+Scan gate: ok (mixed, 31 files; test-argv-bearer-sweep.sh EXCLUDED per operator — shellcheck runaway, tech-debt issue filed). Design pass: both seats conditionally justified all 3 mechanisms. Main panel: 9 seats.
+
+### Findings inventory (status: FIXED / PENDING / TRIAGE)
+1. P1 live-verify cd-path (git-history): `.github/workflows/web-platform-release.yml` :2375 invoked repo-root-relative `scripts/lib/doppler-read.sh` after `cd apps/web-platform` → BLOCK on every release. FIXED: `$GITHUB_WORKSPACE`-absolute.
+2. P2 trio-baseline.tsv lost 76-line hand-kept prose header (arch/git-history). FIXED: header restored w/ D-2-updated class semantics + D-1 @stems-consumer mitigation; census re-verified 619/0.
+3. P1 doppler-read.sh fail-open (cqa): no argc guards, hash pipefail-less, bs `|| true` empty-cred success. FIXED: arity validation all modes, fail-closed reads, empty-value refusal; 8/8 behavioral probes green; bs batching (perf P3) deliberately NOT done — multi-name --json shape unverified, ops-critical; sequential --plain kept. Disposition note for synthesis.
+4. P1 classifier `--timeout` hole (tdr): value-taking global flags before subcommand parse as boolean → fail-open. PENDING FIX: invert unknown pre-subcommand flags to fail-closed + add --timeout to _DOP_VALFLAG + probes/mutations.
+5. P1 G1l expression bypass (tdr): `environment: ${{ inputs.e || 'deploy-channel' }}` passes as literal. NOTE tension: D-6 settled shape `(rollback||resume||backup) && 'inngest-cutover' || 'deploy-channel'` is itself an expression — rule must be "every possible resolution is a Tier-B literal", not "no expressions". PENDING FIX.
+6. P1 sweeper partition missing Guard-2 tests (cqa): sweep-followthroughs.test.sh unchanged, zero FT_ARM coverage; plan :483-499 prescribes 4-row mutation matrix. PENDING FIX — biggest work item.
+7. P2 infra-tier assertion FLOOR stale: 474 vs measured 501, and lower-bound-only despite "exact" comments (tdr). PENDING: bump to 501 exactness decision.
+8. P2 quadratic classifier worst-case (perf): per-occurrence suffix rescan O(k·len); measured 0.865s @40KB single line. PENDING: segment-once tokenization.
+9. P2 github-app-key-status.sh stale prd_terraform operator text (cqa, also arch P3). PENDING.
+10. P2 stale "no checkout" comments (cqa): deploy-inngest-image.yml:66, web-platform-release.yml:1465,1634,1677,1903,2011. PENDING.
+11. P3s: ensure-doppler.sh capital-D `Doppler login` (csr/git-history); fetch-depth:0 in sweep-deploy-channel unneeded (perf); jq whole-payload reparse (perf, pre-existing pattern); TIER_B_NAMES[-3:] positional fragility (tdr); infra-config-verify.sh:497 half-prose recovery string (cqa); checkout persist-credentials inconsistency (cqa); embedded-python duplication (cqa, disposition: deliberate defense-in-depth, document).
+12. RETIRED: csr's "zero tier-a ADR contradiction" — architecture correct, ADR:1286-1289 accurately discloses 3-row residual scoped to #13102. Seats also confirmed branch==origin at d1d41f413e; b69cc3d76e is a dangling pre-rebase SHA, not divergence.
+13. Wrapper-relay census invisibility (arch P2-2): doppler-read.sh call sites produce no rows. TRIAGE at synthesis — sanction-by-design vs classifier extension; likely CTO-dissent or follow-up since lib is the D-2-sanctioned indirection.
+
+### Seats still out at checkpoint
+c7dca599 (pattern-recognition?), security-sentinel 1beb43ba, data-integrity fdbdf0f8, enum-retry 1c26580f, user-impact f1a36a24.
+
+### Verification state
+census 619/0 WITH restored header. argv-bearer + infra-tier NOT rerun since lib/path fixes (needed in fix-round). Fix-round review per ADR-267 required over fix range before qa/ship.

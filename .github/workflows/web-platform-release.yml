@@ -2372,7 +2372,7 @@ jobs:
           # which could embed a captured secret — verbatim into the Actions run
           # log (visible to any Actions-read principal). redact-stdin.ts is
           # idempotent on run.ts's own already-redacted RESULT line.
-          bash scripts/lib/doppler-read.sh run soleur prd bun run scripts/live-verify/run.ts 2>&1 \
+          bash "$GITHUB_WORKSPACE/scripts/lib/doppler-read.sh" run soleur prd bun run scripts/live-verify/run.ts 2>&1 \
             | bun run scripts/live-verify/redact-stdin.ts \
             | tee /tmp/live-verify.out
           rc=${PIPESTATUS[0]}   # bun's exit code (first pipe stage), NOT redact/tee

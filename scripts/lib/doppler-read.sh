@@ -8,6 +8,10 @@
 # construction — keep it that way: do not name WEBHOOK_DEPLOY_SECRET or
 # CF_ACCESS_CLIENT_* here.
 #
+# Every mode fails CLOSED: a missing argument, a failed Doppler read, or an empty
+# fetched value is a non-zero exit BEFORE the target command runs — a degraded
+# read never executes as success (review: code-quality-analyst P1).
+#
 # Modes (DOPPLER_TOKEN comes from the caller's env, as before):
 #   hash <project> <config> <name>   sha256 of the value on stdout; the key
 #                                  exists only on the pipe into sha256sum.
@@ -19,18 +23,42 @@
 #                                  root-relative like the other modes.
 #   bs   <command> [args...]         run <command> with BETTERSTACK_QUERY_{HOST,
 #                                  USERNAME,PASSWORD} injected from soleur/
-#                                  prd_terraform via three targeted gets — the
+#                                  prd_terraform via targeted gets for the names
+#                                  the caller's env does not already carry (the
 #                                  exact set scripts/betterstack-query.sh and
-#                                  its callers need.
+#                                  its callers need).
 #   run  <project> <config> <command> [args...]
 #                                  run <command> with the full <project>/<config>
 #                                  secret set in env — the generic bulk-read
 #                                  form, for steps whose target needs prd env.
-set -u
-case "${1:-}" in
+set -u -o pipefail
+_mode="${1:-}"
+case "$_mode" in
+  hash|get)
+    [ "$#" -eq 4 ] || { printf 'doppler-read.sh: %s wants <project> <config> <name>\n' "$_mode" >&2; exit 2; }
+    ;;
+  tf)
+    [ "$#" -ge 2 ] || { printf 'doppler-read.sh: tf wants <terraform args...>\n' >&2; exit 2; }
+    ;;
+  bs)
+    [ "$#" -ge 2 ] || { printf 'doppler-read.sh: bs wants <command> [args...]\n' >&2; exit 2; }
+    ;;
+  run)
+    [ "$#" -ge 4 ] || { printf 'doppler-read.sh: run wants <project> <config> <command> [args...]\n' >&2; exit 2; }
+    ;;
+  *)
+    printf 'doppler-read.sh: unknown mode %s\n' "${_mode:-<none>}" >&2
+    exit 2
+    ;;
+esac
+case "$_mode" in
   hash)
     shift
-    doppler secrets get "$3" --plain -p "$1" -c "$2" 2>/dev/null | sha256sum | cut -c1-64
+    _v="$(doppler secrets get "$3" --plain -p "$1" -c "$2" 2>/dev/null)" || {
+      printf 'doppler-read.sh: hash read failed (project %s config %s)\n' "$1" "$2" >&2; exit 1; }
+    [ -n "$_v" ] || {
+      printf 'doppler-read.sh: hash read empty (project %s config %s)\n' "$1" "$2" >&2; exit 1; }
+    printf '%s' "$_v" | sha256sum | cut -c1-64
     ;;
   get)
     shift
@@ -43,8 +71,22 @@ case "${1:-}" in
     ;;
   bs)
     shift
+    _missing=""
     for _n in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD; do
-      [ -n "${!_n:+x}" ] || export "$_n=$(doppler secrets get "$_n" -p soleur -c prd_terraform --plain 2>/dev/null || true)"
+      [ -n "${!_n:+x}" ] || _missing="$_missing $_n"
+    done
+    for _n in $_missing; do
+      # Targeted single-name --plain gets (the shape the replaced call sites
+      # used). A failed read or an empty value is a hard non-zero BEFORE the
+      # command runs — never an empty-credential success. Batching the missing
+      # names into one multi-name --json get (review: performance-oracle) is
+      # deliberately not done here: the multi-name output shape is unverified
+      # against a live server and this path is ops-critical cutover machinery.
+      _v="$(doppler secrets get "$_n" -p soleur -c prd_terraform --plain 2>/dev/null)" || {
+        printf 'doppler-read.sh: bs read failed (soleur/prd_terraform)\n' >&2; exit 1; }
+      [ -n "$_v" ] || {
+        printf 'doppler-read.sh: bs read empty for a required name\n' >&2; exit 1; }
+      export "$_n=$_v"
     done
     exec "$@"
     ;;
@@ -52,9 +94,5 @@ case "${1:-}" in
     shift
     _p="$1"; _c="$2"; shift 2
     exec doppler run --preserve-env -p "$_p" -c "$_c" -- "$@"
-    ;;
-  *)
-    printf 'doppler-read.sh: unknown mode %s\n' "${1:-<none>}" >&2
-    exit 2
     ;;
 esac
