@@ -950,7 +950,7 @@ if [[ "$TARGET_KIND" == "head" ]]; then
   # stale refs/remotes/origin/<branch> behind — the census must read the
   # object the remote actually serves. A branch with no upstream has no
   # mergeable head — gh fails before this gate's subject exists.
-  if ! git -C "$WORK_DIR" fetch --no-tags --quiet origin "+refs/heads/${CURRENT_BRANCH}:refs/remotes/origin/${CURRENT_BRANCH}" >/dev/null 2>&1; then
+  if ! "${_NET_TO[@]}" git -C "$WORK_DIR" fetch --no-tags --quiet origin "+refs/heads/${CURRENT_BRANCH}:refs/remotes/origin/${CURRENT_BRANCH}" >/dev/null 2>&1; then
     if git -C "$WORK_DIR" rev-parse --verify -q "refs/remotes/origin/${CURRENT_BRANCH}" >/dev/null 2>&1; then
       _deny "BLOCKED: \`git fetch origin ${CURRENT_BRANCH}\` failed; cannot verify the pushed head for live-path KB artifacts. Run the fetch manually, then re-issue. Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
     fi
@@ -989,7 +989,7 @@ else
   # --match-head-commit: the exact object GitHub will merge (the admin
   # hatch's pinned sha). Present locally, or fetch it; unreachable → deny.
   if ! git -C "$WORK_DIR" cat-file -e "${HEAD_OID}^{commit}" 2>/dev/null; then
-    if ! git -C "$WORK_DIR" fetch --no-tags --quiet origin "$HEAD_OID" >/dev/null 2>&1 \
+    if ! "${_NET_TO[@]}" git -C "$WORK_DIR" fetch --no-tags --quiet origin "$HEAD_OID" >/dev/null 2>&1 \
        || ! git -C "$WORK_DIR" cat-file -e "${HEAD_OID}^{commit}" 2>/dev/null; then
       _deny "BLOCKED: --match-head-commit ${HEAD_OID:0:12} is not fetchable from origin; cannot verify the merge head for live-path KB artifacts. Hatch: SOLEUR_SKIP_KB_ARCHIVE_GATE=1 bypasses."
     fi

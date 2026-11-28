@@ -433,7 +433,7 @@ parked_statement() {
     # No literal number: the current branch's PR is the target of a bare merge; any other word (a variable, a branch name, a
     # token with $ or a backtick) makes the target unknowable, so any parked PR holds it. A current-branch read that fails for any
     # reason but "no pull requests found" is a failed read: it fails closed. stdout is the answer: gh 2.106 prints a `hint: …` block
-    # on stderr for every `gh pr view` (rc 0), so stderr goes to a function-local file that only the "no pull requests found" test
+    # on stderr for `gh pr view` of an open PR (rc 0), so stderr goes to a function-local file that only the "no pull requests found" test
     # reads. The file is removed before any branch below, because parked_check_pr / parked_any_hold leave through parked_deny's exit.
     # No trap owns it: the hook's later `trap … EXIT` for PR_BODY_FILE would replace one. No file: today's fail-closed hold.
     if ! perr=$(mktemp 2>/dev/null); then  # lint-trap-ownership: ok — removed by rm -f right after the read, before every exit path; a kill leaves one tiny file
