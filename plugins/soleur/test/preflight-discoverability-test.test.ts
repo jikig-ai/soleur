@@ -3155,7 +3155,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // (`bash scripts/serve-soak-evidence-last.sh`, expecting `SOLEUR_SOAK_EVIDENCE`) reads cf-lb-overlay.yml run logs through
   // `gh run list` / `gh run view --log` with the operator's GitHub repository read (gh auth). NO SUBSTITUTE: Actions run logs
   // are served only to an authenticated reader; there is no unauthenticated endpoint for them. Genuine.
-  const BASELINE_DECLARED_PROBES = 101;
+  // 101 -> 102 on 2026-11-28 (#13122, PR #13124 machinery-drain actor-gate verification): the new entry is
+  // `2026-11-28-chore-machinery-drain-verification-plan.md`. PLACEMENT: a correctly-indented child of its
+  // `discoverability_test:` sub-block, value on one line. TRUTH: the probe
+  // (`bash scripts/followthroughs/machinery-drain-actor-gate-13122.sh`) reads GitHub Actions per-step logs through
+  // `gh api` with GH_TOKEN actions:read. NO SUBSTITUTE: the step-log endpoint returned HTTP 403 unauthenticated in
+  // live validation, so no unauthenticated probe verifies the same property. Genuine.
+  const BASELINE_DECLARED_PROBES = 102;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
