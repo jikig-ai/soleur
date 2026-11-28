@@ -661,4 +661,4 @@ and the Phase 5 sitting runs on that one and checks its args. Each startup refus
 `To fix:` remedy.
 
 The CTO rulings are S1, R1, U1 and U2 in
-`knowledge-base/project/specs/feat-one-shot-p5-mint-sink-page-request/decision-challenges.md`.
+`knowledge-base/project/specs/archive/20261128-193943-feat-one-shot-p5-mint-sink-page-request/decision-challenges.md`.
