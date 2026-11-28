@@ -237,7 +237,7 @@ case "$*" in
     v=$(cat "$GH_STUB_CURPR")
     if [[ "$v" == FAIL ]]; then echo "gh: HTTP 502" >&2; exit 1; fi
     if [[ "$v" == NONE ]]; then echo 'no pull requests found for branch "x"' >&2; exit 1; fi
-    # gh 2.106.0 prints its 8-line `hint: … gh event listen …` block on STDERR for every `gh pr view`, BEFORE stdout.
+    # gh 2.106.0 prints its 8-line `hint: … gh event listen …` block on STDERR for `gh pr view` of an open PR, BEFORE stdout.
     if [[ "$v" == HINTNONE ]]; then cat "$GH_STUB_HINT" >&2; echo 'no pull requests found for branch "x"' >&2; exit 1; fi
     if [[ "$v" == HINT:* ]]; then cat "$GH_STUB_HINT" >&2; v=${v#HINT:}; fi
     printf '%s' "$v" ;;
@@ -487,7 +487,7 @@ CURPR=FAIL; PARKED_COUNT=1; h "REAL hook: parked: a bare merge whose current-bra
 CURPR=FAIL; PARKED_COUNT=0; h "REAL hook: a bare merge whose current-branch read FAILS is allowed when no PR is parked (control: the list was read)" allow "$CLEAN" 'gh pr merge --squash' "pr view --json number --jq .number" "pr list --label parked --state open --json number --jq length"
 CURPR=NONE; PARKED_COUNT=1; FORBID="pr list --label parked --state open --json number --jq length"
 h "REAL hook: a bare merge on a branch with NO pull request is not held by the list ('no pull requests found' is an answer, not a failed read)" allow "$CLEAN" 'gh pr merge --squash' "pr view --json number --jq .number"
-# gh 2.106 prints a hint block on stderr for every `gh pr view` (rc 0). The current-branch read is stdout only, so the hint is not part of the
+# gh 2.106 prints a hint block on stderr for `gh pr view` of an open PR (rc 0). The current-branch read is stdout only, so the hint is not part of the
 # number (before the fix: "(unreadable answer)" → the parked-list hold), and the "no pull requests found" test reads gh's stderr file, not stdout.
 CURPR=HINT:99; PARKED_COUNT=1; FORBID="pr list --label parked --state open --json number --jq length"
 h "REAL hook: a bare merge whose current-branch read prints gh's hint on stderr (rc 0) reads the number from stdout and is allowed while another PR is parked" allow "$CLEAN" 'gh pr merge --squash' "pr view --json number --jq .number" "pr view 99 --json labels --jq .labels[].name"

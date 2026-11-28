@@ -224,7 +224,7 @@ qb_bounds() {
 qb_clean() { LC_ALL=C tr -c '[:alnum:] ._:/=-' '?'; }
 qb_match() ( LC_ALL=C; [[ "$1" =~ $2 ]] )
 # gh_err_line <rc> <stderr-file> [no-rc] — THE ONE reader of a gh call's stderr file, for every stderr echo in this script. gh's stdout is the answer
-# and stderr only a diagnostic: gh 2.106 prints an 8-line `hint: … gh event listen …` block there on every `gh pr view`, rc 0. Prints the
+# and stderr only a diagnostic: gh 2.106 prints an 8-line `hint: … gh event listen …` block there on `gh pr view` of an open PR, rc 0. Prints the
 # first line that is non-empty and starts with neither `hint:` nor whitespace (the block's 7 continuation lines are indented), cut to 200
 # characters by substring expansion, never `| head -c` (a head that exits early SIGPIPEs the writer under pipefail: the sdisp comment in the
 # standalone loop); with no such line, or no readable file, `rc=<rc>` (nothing under `no-rc`, for callers that already print rc=). The output is RAW: every caller passes it through qb_clean. The Phase 7
@@ -707,7 +707,7 @@ fi
 
 # loop_read <gh pr view args…> — one `gh pr view "$PR"` read of the standalone loop (the head read and both state reads). stdout is the
 # answer (LR_OUT) and gh's stderr goes to a per-read file that only gh_err_line reads (LR_ERR, raw: the caller sanitises it), so the hint block
-# gh 2.106 prints on stderr for every `gh pr view` (rc 0) never reaches the string the loop matches. LR_RC is gh's exit status. qw_snapshot's
+# gh 2.106 prints on stderr for `gh pr view` of an open PR (rc 0) never reaches the string the loop matches. LR_RC is gh's exit status. qw_snapshot's
 # pattern: the file is removed on every path, and a failed mktemp is kind=gh exit 4 before any read (nothing merged or pushed).
 loop_read() {
   local errf

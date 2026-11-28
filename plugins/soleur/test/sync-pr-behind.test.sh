@@ -44,7 +44,7 @@ set +e -uo pipefail
 export PR_QUEUE_RETRY_SLEEP=0
 # The queue rows use a PR number other than 1 so a hardcoded `-F number=1` cannot pass.
 QUEUE_PR=4242
-# gh 2.106.0 prints this 8-line block on STDERR for every `gh pr view`, rc 0, before stdout (the shared fixture; synthesized PR number).
+# gh 2.106.0 prints this 8-line block on STDERR for `gh pr view` of an open PR, rc 0, before stdout (the shared fixture; synthesized PR number).
 HINT_FIXTURE="$REPO_ROOT/plugins/soleur/test/fixtures/gh-pr-view-hint.txt"
 [[ "$(head -1 "$HINT_FIXTURE" 2>/dev/null)" == hint:* && "$(grep -c . "$HINT_FIXTURE")" -eq 8 ]] || { echo "FATAL: $HINT_FIXTURE is missing or not the 8-line hint block" >&2; exit 2; }
 
@@ -264,7 +264,7 @@ EOF
 # hintfail-head / hintfail-state / hintfail-post = that ONE read of the loop (the head read, the first state read, the post-push state read) prints
 # gh 2.106's `hint:` block (HINT_FIXTURE) and then a real error on stderr, exit 1; every other call answers as in ok mode.
 # QHINT (env knob, the gh 2.106 rows): `all` prints HINT_FIXTURE on stderr BEFORE stdout, rc 0, on the head read and on every state read
-# (as the real gh does for every `gh pr view`); `state` prints it on the state reads only. Each print appends a line to hint-count.
+# (as the real gh does for `gh pr view` of an open PR); `state` prints it on the state reads only. Each print appends a line to hint-count.
 install_gh() {
   local bin="$1" first_state="$2" later_state="${3:-OPEN CLEAN}" head="${4:-feat}" mode="${5:-ok}" queue="${6:-notqueued}"
   assert_fixture_dir "$bin"
@@ -2478,7 +2478,7 @@ qw_mutant_multi "G7-2 the foreign predicate treats a main* glob as main (D2)" n1
 qw_mutant_multi "G8-1 the snapshot's jq drops the empty default for a null base" n14s '\(.baseRefName // "")"'"'"' "$repo_arg"' '\(.baseRefName)"'"'"' "$repo_arg"'
 qw_mutant_multi "G8-2 the head read's jq drops the empty default for a null base" n14l '\(.headRefName) \(.baseRefName // "")' '\(.headRefName) \(.baseRefName)'
 
-# --- gh 2.106 hint rows (H-S1..H-S3): gh prints an 8-line `hint: … gh event listen …` block on STDERR for every `gh pr view`, rc 0, before
+# --- gh 2.106 hint rows (H-S1..H-S3): gh prints an 8-line `hint: … gh event listen …` block on STDERR for `gh pr view` of an open PR, rc 0, before
 # stdout. The standalone loop reads stdout only (stderr goes to a per-read file), so the hint can neither turn the head read into a multi-line
 # answer (kind=wrong_branch, exit 12) nor hide a MERGED state line, and a failed read names gh's first real stderr line, never `hint:`. Each row
 # ends on a positive tag, and hint-count proves the stub printed the block on every read it was meant to.

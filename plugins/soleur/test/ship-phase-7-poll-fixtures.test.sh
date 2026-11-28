@@ -2650,7 +2650,7 @@ else
 fi
 SCEN_ROOT=""
 
-# ── H rows — gh prints a hint on STDERR for every `gh pr view` (#12697/#12963) ────────────────────────────────────────────────────
+# ── H rows — gh prints a hint on STDERR for `gh pr view` of an open PR (#12697/#12963) ────────────────────────────────────────────────────
 # gh 2.106.0 (measured 2026-11-25) prints an 8-line `hint: … gh event listen …` block on stderr, rc 0, before stdout, for
 # `gh pr view` of an OPEN PR, `gh run view` of an in-progress PR run, and `gh api repos/O/R/pulls/<N>` (every sub-path). A state
 # read that captures with `2>&1` returns `hint: …\n…\nOPEN BEHIND`, so every OPEN arm (the BEHIND auto-sync, the

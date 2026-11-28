@@ -388,7 +388,7 @@ chmod +x "$STUB/gh"
 out="$(run 7778 --interval 10 --max-polls 1)"
 [[ "$out" == *"FAILED: pr view"* && "$out" != *"new release"* ]] && ok "T19b the probe-FAILED line carries only the FAILED call's stderr (not the successful call's nag)" || no "T19b stderr attribution on the probe-FAILED branch" "out=[$out]"
 
-# ── T19c..T19e: gh 2.106 prints an 8-line `hint: … gh event listen …` block on STDERR, before anything else, for every `gh pr view` ──
+# ── T19c..T19e: gh 2.106 prints an 8-line `hint: … gh event listen …` block on STDERR, before anything else, for `gh pr view` of an open PR ──
 # A `head -c 160` of the stderr file reported the start of that hint as the cause. The cause is the first line that is neither `hint:` nor
 # indented; a stderr holding only the hint reports `rc=<rc>`. Each probe site (view, checks) has its own row.
 HINT_FX="$DIR/soleur/test/fixtures/gh-pr-view-hint.txt"

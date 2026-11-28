@@ -294,7 +294,7 @@ _ctx_lib="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)/lib/c
 declare -F soleur_ctx_sanitize_nl >/dev/null 2>&1 \
   || soleur_ctx_sanitize_nl() { LC_ALL=C tr -d '\000-\011\013-\037\177'; }
 # gh_err_line <rc> — the cause a gh probe reports, read from $ERRTMP: the first line that is non-empty and starts with neither `hint:` nor
-# whitespace (gh 2.106 prints an 8-line `hint: … gh event listen …` block on stderr for every `gh pr view`, rc 0, and its 7 continuation lines
+# whitespace (gh 2.106 prints an 8-line `hint: … gh event listen …` block on stderr for `gh pr view` of an open PR, rc 0, and its 7 continuation lines
 # are indented, so a `head -c 160` of the file reported the hint, not the error), cut to 160 characters by substring (never `| head -c`, which
 # SIGPIPEs the writer under pipefail); with no such line, `rc=<rc>`. The same filter as sync-pr-behind.sh gh_err_line. RAW: callers sanitise.
 gh_err_line() {
