@@ -213,6 +213,15 @@ hook asks about `--apply` only, and the approval prompt is the one place a perso
 `begin` and a `settle` line. Hand off by **running the stages yourself** per §Running a generated
 script, not by giving the person a script path to run.
 
+When a runbook routes on the script's marker lines, walk that routing table as a state machine, because no suite
+runs it. Write it as an ordered first-match list that ends in a catch-all stop, and define the marker rows it reads
+before its first row. List every reachable state (each partial failure, each post-rollback state), the row it
+matches first, and why no earlier row matches; a state whose first match is the wrong step, or a broad early row
+that hides a later one, is a defect. A procedure that cannot prove its closing state from vendor evidence runs in
+one sitting; a later session that finds it half-done stops rather than resumes. Post the state-to-row table in the
+PR body, citing the commit it walked, and re-walk it after each fix round that adds a state.
+See `knowledge-base/project/learnings/2026-11-27-a-runbook-routing-table-is-a-state-machine-the-code-never-sees.md`.
+
 ## Running a generated script
 
 This is the AGENT PROTOCOL. A person with no terminal can complete a bootstrap with it, because the
