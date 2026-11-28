@@ -119,12 +119,34 @@ t_missing_pinned_aborts() {
   fi
 }
 
+# T7 (#12937 recovery): the temporary v0.415.0 compatibility shim is wired end-to-end.
+# The digest/hash pair is the measured production image already present in zot; the
+# workflow must evaluate the same image-dependent boot hash that Terraform applies.
+t_recovery_shim_wired() {
+  local server_tf="$REPO_ROOT/apps/web-platform/infra/server.tf"
+  local workflow="$REPO_ROOT/.github/workflows/apply-web-platform-infra.yml"
+  local image='ghcr.io/jikig-ai/soleur-web-platform@sha256:bc3e411c3c3a857a2db107f6e588ac5fd5ee5108aaced73fe24f948f642ccb4b'
+  local hash='8b7b79ba551310b835469e73d1d24945f360ceff35d8d749498a5245dda521a8'
+  local console_count
+  console_count=$(grep -F "terraform console -input=false -var \"image_name=\${PINNED}\"" "$workflow" | grep -c 'local.host_scripts_boot_hash' || true)
+  if grep -Fq "$image" "$server_tf" \
+    && grep -Fq "$hash" "$server_tf" \
+    && grep -Fq 'host_scripts_content_hash = local.host_scripts_boot_hash' "$server_tf" \
+    && grep -Fq 'var.image_name == local.zot_bridge_recovery_v0415_image' "$server_tf" \
+    && [[ "$console_count" -eq 2 ]]; then
+    _report "T7 v0.415.0 recovery shim is pinned in Terraform and evaluated in both preflights" ok
+  else
+    _report "T7 v0.415.0 recovery shim is pinned in Terraform and evaluated in both preflights" fail "console_count=$console_count"
+  fi
+}
+
 t_coherent_passes
 t_mismatch_aborts
 t_bare_tag_aborts
 t_bad_digest_hex_aborts
 t_bad_want_aborts
 t_missing_pinned_aborts
+t_recovery_shim_wired
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

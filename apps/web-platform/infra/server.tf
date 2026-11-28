@@ -333,6 +333,23 @@ locals {
   host_scripts_content_hash = sha256(join("", sort([
     for f in local.host_script_files : filesha256("${path.module}/${f}")
   ])))
+
+  # TEMPORARY #12937 zot-bridge recovery shim — remove it after the restored tunnel
+  # has mirrored a current release image into zot and web-2 no longer needs the
+  # production v0.415.0 image to boot. The circular dependency is exact: v0.415.0 is
+  # the newest image already in zot, its baked host-scripts hash is the pinned value
+  # below, and the current tree hash differs because releases could not mirror while
+  # the bridge was down. The shim activates only for the complete immutable production
+  # image ref; every other image keeps the normal tree hash. It does not weaken the
+  # coherence check — it makes the boot contract truthful for the one reviewed image
+  # that can break the deadlock.
+  zot_bridge_recovery_v0415_image            = "ghcr.io/jikig-ai/soleur-web-platform@sha256:bc3e411c3c3a857a2db107f6e588ac5fd5ee5108aaced73fe24f948f642ccb4b"
+  zot_bridge_recovery_v0415_hostscripts_hash = "8b7b79ba551310b835469e73d1d24945f360ceff35d8d749498a5245dda521a8"
+  host_scripts_boot_hash = (
+    var.image_name == local.zot_bridge_recovery_v0415_image
+    ? local.zot_bridge_recovery_v0415_hostscripts_hash
+    : local.host_scripts_content_hash
+  )
 }
 
 resource "hcloud_ssh_key" "default" {
@@ -420,7 +437,7 @@ resource "hcloud_server" "web" {
     # journald's was removed (dropping it while cloud-init.yml still interpolated the var would
     # fail templatefile()).
     fail2ban_sshd_local_b64   = base64encode(file("${path.module}/fail2ban-sshd.local"))
-    host_scripts_content_hash = local.host_scripts_content_hash
+    host_scripts_content_hash = local.host_scripts_boot_hash
     tunnel_token              = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
     # #6425 — gates `cloudflared service install` (the tunnel REGISTRATION, not the apt
     # install) to the designated ingress host. ADR-114 I1/I2: Cloudflare binds ingress to a
