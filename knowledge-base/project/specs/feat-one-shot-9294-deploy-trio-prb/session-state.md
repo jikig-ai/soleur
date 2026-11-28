@@ -150,3 +150,42 @@ STILL OPEN (in priority order):
 VERIFICATION QUEUE before fix-round review: argv-bearer rerun2 result (was running), then commit floors,
 then implement Guard-2, then full three-suite validation + commit + push, then ADR-267 fix-round review
 over 329d32ddc7..HEAD, then qa, then ship → merge #13006.
+
+## 2026-11-27 ~23:30 — PANEL SYNTHESIS INPUT (9/11 seats in; structural-enumeration a0617cf8 + semgrep-sast 3100e412 rate-limited, resume when limit clears)
+
+**PANEL VERDICT: BLOCKER-MERGE convergent across 7 of 9 reporting seats. NO merge, NO trailer yet. Fix round required.**
+
+### BLOCKER findings (dedup ledger)
+
+1. **[CONVERGENT ×4 — sentinel/pattern/data-integrity/design-P1-2] census-invisible broker.** `doppler-read.sh run <proj> <cfg>` accepts arbitrary pairs, bulk-injects trio-carrying `(soleur,prd)` into env-less web-platform-release.yml jobs (migrate/verify/live-verify at :1086,1141,1281,2337,2375) on Tier-A tokens, while those files were reclassified tier-b/sink — false end-state. Fix direction: teach census the broker call shapes + mutation rows, OR forbid trio-carrying pairs/dynamic names in broker (allowlist per mode like infra-credentials' two-literal), or split `run` into purpose-specific injectors.
+2. **[pattern] D-2 exemption NOT inheritance-aware.** `doppler run -p soleur -c prd_workspaces_luks_marker` inherits prd (documented in model.c4 itself!) yet exempts. False-negative hole in census ratchet. Fix: treat inheriting soleur production configs as carrying, or drop negative exemption unless inheritance proven absent.
+3. **[agent-native] live-verify BROKEN PATH.** web-platform-release.yml:2368-2442 does `cd apps/web-platform` then `bash scripts/lib/doppler-read.sh` — doesn't exist (needs `../../scripts/`). Every live-verify job fails closed as `no-result-line`. Must fix.
+4. **[CONVERGENT ×3 — pattern/agent-native/code-quality] ship SKILL.md wrong mode.** :1066-1067,1100-1101 prescribe `doppler-read.sh run soleur prd_terraform terraform …` — `run` injects raw uppercase WITHOUT `--name-transformer tf-var`; only `tf` mode produces TF_VAR_*. Production recovery instructions broken as written. Also apply-deploy-pipeline-fix.yml:1446,1917,1971,1974 remedies don't end-to-end (missing AWS backend pair precondition per infra-credential-tiers-8209.md:954-966).
+5. **[test-design + data-integrity CONVERGENT] sweep-followthroughs FT_ARM partition ZERO test coverage** — no test matches FT_ARM/TRIO_DECLARED/TRIO_RAN/load_trio_set anywhere. PLUS [data-integrity NEW] ordering hole: missing-script return at :627-634 runs BEFORE partition classification — tracker with missing script is neither declared nor run, zero-probes red can't fire (false-green). Fix: classify/count partition before existence returns + full mutation-pinned fixture battery.
+6. **[git-history] REBASE STALE AGAIN.** main moved post-rebase: suite-shard-legs.tsv/suite-durations.tsv now n=12 (branch n=8), cf-old-login-token-remint suites added, inngest-soak-6178 still on main but branch removes it. Must rebase onto current main preserving CF suites, regenerate TSVs. NOTE: floor arithmetic actually MUTANT_FLOOR=208/FLOOR=619 on both trees — my rebase-resolution history comment (196+5=201) was wrong-shape; realized state may still be correct, verify don't cite.
+
+### HIGH/MEDIUM non-blocking (fix-round or tightly-scoped follow-ups)
+
+7. [user-impact+perf CONVERGENT] loader observability: `doppler secrets download` stderr to file never printed; outage reads as token-misconfig. Classify rc, name vendor-outage possibility. Bound network legs: curl --connect-timeout/--max-time, `timeout` on doppler download, timeout-minutes on loader steps (perf MEDIUM). CLI tarball caching — non-secret sha256-pinned, ~500MB/day watchdog traffic (perf MEDIUM).
+8. [user-impact] watchdog probe-unavailable path unreachable: loader failure aborts job before probe; pages shape-identical to real inngest-down, no tracking issue. Fix: probe runs despite loader failure so `secret_unset`/`[ci/inngest-probe-unavailable]` path fires.
+9. [sentinel+design] GITHUB_ENV lifetime widening step→job (GH_TOKEN-carrying steps incl.) — acceptable only as explicitly owned residual in ADR or per-step scoping. TF_VAR duplication on non-TF consumers (hygiene). op=backup double-carrier precedence (pin or skip narrow loader).
+10. [code-quality ×several] broker contract defects: run --preserve-env precedence inversion on prod migrate path (stray DATABASE_URL steers prod!); hash no pipefail (doppler failure hashes empty, rc=0); cd unchecked + competing cwd authorities with KR_INFRA_DIR; tf hardcodes -p/-c leaving dead DOPPLER_PROJECT/CONFIG env in workflow; no arity validation; bs mode silent-empty (×3 seats — suppresses real Doppler error, misclassifies as missing creds).
+11. [pattern/code-quality] betterstack-query.sh:30-32,95-100 + one-shot SKILL:297 + reproduce-bug SKILL:51 still prescribe bulk `doppler run -p soleur -c prd_terraform` — consolidate to bs mode.
+12. [agent-native] infra-config-verify.sh:497 prose replaced copy-pasteable recovery command — restore full command. cutover-inngest.sh remedies need cwd precondition. restart/canary headers need dispatch-main-only + local fallback note.
+13. [data-integrity] ADR-168 measured wrong-config but NOT cross-project or `run` verb — vendor docs say service-token project/config precedence may invalidate D-2 exemption: measure pinned-CLI matrix.
+14. [git-history] plan never amended: AC3/P4 still certify zero tier-a — amend plan or record post-plan variance (ADR already corrected).
+15. [test-design] narrow loader no_credential_source only grep-pinned; file has R22 render-harness standard — execution-test it.
+16. [user-impact] seed-before-merge is process-only: if merged before operator seeds deploy-channel token, 15-min probe error-pages constantly. PR body must record seed verification as merge precondition.
+17. [pattern MINOR] checkout persist-credentials:false divergence restart/health vs deploy-image/canary.
+
+### Positive confirmations (defended items)
+- N3b zero-count de-carry did NOT weaken protection (sentinel INFO + test-design verified anchor cardinality, insertion coverage equal-or-stronger).
+- @allow spend shape correct (git-history PASS); ADR correction accurate; brace-folding effective; D-2 pcase/mutant pinning well-designed (test-design); no user-observable product surface change (user-impact); no material parser quadratic (perf INFO).
+
+### RESUME INSTRUCTIONS
+1. Resume seats a0617cf8 (structural-enumeration) + 3100e412 (semgrep-sast) when rate limit clears (~15min windows) — `run_subagent resume`.
+2. Run fix round addressing BLOCKERS 1-6 first (they interact: broker/census fixes overlap). This is hours of work — consider which are in-PR vs follow-up, but note seats rated them BLOCKER because they falsify the certified end-state or break production paths NOW.
+3. Rebase onto current main (BLOCKER 6) before any merge.
+4. Then: `--fix-round` review per risk-tier-and-fix-rounds.md on the fix range (seats re-review delta), fresh scan receipt, then synthesis → trailer (Reviewed-Risk-Tier: aggregate pattern) → CTO domain-ruling → evidence comment → merge.
+5. Census/correctness verification commands: `bash tests/scripts/test-trio-baseline-census.sh` (619/0 green at d1d41f413e), `bash plugins/soleur/test/sole-copy-drift-check.test.sh` (286/0), `bash plugins/soleur/test/c4-model-freshness.test.sh`.
+6. EXPIRY FUSE: tier-a rows expire 2026-11-30 — 3 days. If merge slips past, need ruled Re-date in separate baseline/ADR-only PR (#13102 tracks).
