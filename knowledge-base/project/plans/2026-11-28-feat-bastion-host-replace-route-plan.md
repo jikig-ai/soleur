@@ -1317,17 +1317,17 @@ processing is added.
 
 - [ ] AC1. After the final rebase on `origin/main`, `wc -c .github/workflows/apply-web-platform-infra.yml`
   is at most 488,000, and `bun test plugins/soleur/test/workflow-file-size.test.ts` passes.
-- [ ] AC2. The relocation is its own commit, and the parsed YAML on both sides of it is exactly equal:
+- [x] AC2. The relocation is its own commit, and the parsed YAML on both sides of it is exactly equal:
   `python3 -c 'import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))==yaml.safe_load(open(sys.argv[2])))' <before> <after>`
   prints `True` for the file at that commit and at its parent. Every relocated block appears word for
   word in the job-rationale runbook.
-- [ ] AC3. The R3 extraction is its own commit. At that commit `bash tests/scripts/test-bastion-host-birth-gate.sh`
+- [x] AC3. The R3 extraction is its own commit. At that commit `bash tests/scripts/test-bastion-host-birth-gate.sh`
   passes, and `git diff <parent> -- tests/scripts/test-bastion-host-birth-gate.sh` changes no
   assertion line.
-- [ ] AC4. `bash tests/scripts/test-bastion-host-replace-gate.sh` passes. Its case count equals its row
+- [x] AC4. `bash tests/scripts/test-bastion-host-replace-gate.sh` passes. Its case count equals its row
   table, and the H1 and H2 flips are reported.
-- [ ] AC5. `bash scripts/test-all.sh --enumerate scripts | grep -c bastion-host-replace-gate` prints `1`.
-- [ ] AC6. These all pass:
+- [x] AC5. `bash scripts/test-all.sh --enumerate scripts | grep -c bastion-host-replace-gate` prints `1`.
+- [x] AC6. These all pass:
   - `terraform-target-parity`
   - `stock-preflight-coverage`
   - `heartbeat-reprovision-parity`
@@ -1338,19 +1338,19 @@ processing is added.
     dedicated job
   - `test-argv-bearer-sweep.sh`
   - `test-bastion-boot-verify.sh`, including its readiness and old-id rows
-- [ ] AC7. `git grep -n "not yet available" scripts/lib/bastion-boot-verify.sh` returns nothing.
+- [x] AC7. `git grep -n "not yet available" scripts/lib/bastion-boot-verify.sh` returns nothing.
   `grep -c -e 'gh issue comment 9421' scripts/lib/bastion-boot-verify.sh` prints `1`.
-- [ ] AC8. `actionlint` is clean on `bastion-host-replace.yml` and `bastion-host-create.yml`, and
+- [x] AC8. `actionlint` is clean on `bastion-host-replace.yml` and `bastion-host-create.yml`, and
   `shellcheck` is clean on the new libraries and the gate.
-- [ ] AC9. `python3 scripts/lint-infra-no-human-steps.py --changed` exits 0.
-- [ ] AC10. The callee's parsed `on` keys are exactly `["workflow_call"]` (Guard 2 row 8), and
+- [x] AC9. `python3 scripts/lint-infra-no-human-steps.py --changed` exits 0.
+- [x] AC10. The callee's parsed `on` keys are exactly `["workflow_call"]` (Guard 2 row 8), and
   `grep -c "uses: ./.github/workflows/bastion-host-replace.yml" .github/workflows/apply-web-platform-infra.yml`
   prints `1`.
-- [ ] AC11. The ADR-327 addendum, `bastion-host.md` and `model.c4` no longer describe the replace route
+- [x] AC11. The ADR-327 addendum, `bastion-host.md` and `model.c4` no longer describe the replace route
   as pending. `bastion-host.md` names #13116 and #13117 for the two refused cases, and the C4 suites
   pass.
-- [ ] AC11b. The ADR-231 addendum (Q4b) exists and states the four points.
-- [ ] AC11c. `test-bastion-host-replace-gate.sh` runs a fixture whose key fields hold
+- [x] AC11b. The ADR-231 addendum (Q4b) exists and states the four points.
+- [x] AC11c. `test-bastion-host-replace-gate.sh` runs a fixture whose key fields hold
   `SYNTHETIC-KEY-MARKER`, and that string appears in none of the gate output it captures.
   `test-bastion-boot-verify.sh` shows that a pre-apply id is never powered off, on the cancel path
   and on the failed-apply path.
