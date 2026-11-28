@@ -81,3 +81,29 @@ c7dca599 (pattern-recognition?), security-sentinel 1beb43ba, data-integrity fdbd
 
 ### Verification state
 census 619/0 WITH restored header. argv-bearer + infra-tier NOT rerun since lib/path fixes (needed in fix-round). Fix-round review per ADR-267 required over fix range before qa/ship.
+
+### Security-sentinel findings (late arrival, post-checkpoint)
+14. P1 APP_DOMAIN_BASE branch-plantable redirector — CONFIRMED REAL, task 4.4 was checked but the reads remain:
+    `infra-config-verify.sh:48`, `verify-tunnel-ingress-origin.sh:136`, `apply-deploy-pipeline-fix.yml` (:2171 + repetitions
+    :653/:702, :849/:863, :1233/:1260, :2471/:2486) all still `doppler secrets get APP_DOMAIN_BASE ... || echo soleur.ai` —
+    the fallback fires only on read FAILURE, a planted value wins. Threat: branch actor plants APP_DOMAIN_BASE in
+    prd_terraform (DOPPLER_TOKEN_WRITE is repo-secret-writable per loader action.yml:30-34) → next main apply sends
+    CF Access pair + valid body-only HMAC (replayable, no nonce/timestamp) to attacker domain. ALSO the tf-var vector:
+    doppler-read.sh tf uses --preserve-env + --name-transformer tf-var and nothing exports canonical TF_VAR_app_domain_base,
+    so a planted APP_DOMAIN_BASE injects as TF_VAR_app_domain_base and redirects even the terraform-driven push-infra-config.sh path.
+    FIX per plan :207-216 (prescribed, task 4.4): use committed scripts/derive-app-domain-base.sh derivation at every site;
+    pin/export canonical TF_VAR_app_domain_base for tf invocations; regression-test the planted-value case.
+    Sites enumerated in the security seat report. THIS IS THE TOP REMAINING FIX.
+15. Security seat verified clean: no pull_request trigger paths to the trio, workflow_run trust gate intact,
+    checkouts persist-credentials:false, loader fails closed, no residual secrets.WEBHOOK_DEPLOY_SECRET/CF_ACCESS_* binds,
+    host fetch helper restrictive perms, hash callers guard empty. Its live-verify P2 duplicates already-fixed finding 1.
+
+### Remaining seats at this point: c7dca599, fdbdf0f8 (data-integrity), 1c26580f (enum), f1a36a24 (user-impact).
+### NEXT ACTIONS in order: (1) collect remaining 4 seats; (2) fix APP_DOMAIN_BASE P1 (#14) — biggest;
+### (3) classifier --timeout inversion + probes/mutations (#4); (4) G1l literal-resolution rule + mutations (#5);
+### (5) Guard-2 sweeper tests (#6); (6) P2 batch: floor 474→measured exactness, quadratic segment-once, github-app-key-status,
+### stale no-checkout comments, derive/fix smalls; (7) triage wrapper-relay census invisibility (#13) — disposition
+### (sanctioned-indirection vs classifier extension, possibly follow-up issue); (8) rerun affected suites (trio census,
+### infra-tier census, key/cutover workflow tests) bounded; (9) commit+push; (10) ADR-267 fix-round review over fix range
+### 329d32ddc7..HEAD; (11) soleur:qa; (12) soleur:ship → merge #13006. Operator tail post-merge is RESERVED (seed
+### doppler trio copies, delete Tier-A copies after green canaries, rotate) — never perform it.
