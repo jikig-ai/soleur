@@ -107,8 +107,8 @@ check_review() {
   # a deliberately wider cite pattern than ship Phase 5.5's
   # `(Ref|Closes|Fixes) #N`. The issue sets differ too: this reads
   # code-review-labelled issues; Phase 5.5 reads open issues titled with a
-  # review-origin prefix (`review:`, `Code review #`, `Refactor:`, `arch:`,
-  # `compound:`, `follow-through:`), any label. Scope-outs
+  # review-origin prefix, case-insensitive (`review:`, `Code review #`,
+  # `Refactor:`, `arch:`, `compound:`, `follow-through:`), any label. Scope-outs
   # (deferred-scope-out) stay open by design and synthetic-test issues are
   # fixtures; both are excluded, as ship Phase 5.5's merge gate excludes them.
   # Fail-closed: an unresolved PR, a failed read, or a full page (the PR's

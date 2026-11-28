@@ -63,13 +63,15 @@ assert_review() { # <label> <want: pass|missing> ; env carries the case
 # unwind. A helper that can no longer conclude either way is a FATAL by
 # printf + exit, never through the helpers under test.
 _st_p=$pass; _st_f=$fail; _st_t=$total
-assert_exit 0 true >/dev/null; assert_exit 0 false >/dev/null
+# assert_exit is probed above and below its expectation (0 vs 1, 2 vs 0), so
+# a weakened comparison (-le, -ge) cannot pass the self-test.
+assert_exit 0 true >/dev/null; assert_exit 0 false >/dev/null; assert_exit 2 true >/dev/null
 _st_real="$(declare -f floor_review)"
 floor_review() { printf 'SOLEUR_FLOOR_GATE phase=review status=fail missing=no-open-code-review-issues\n'; }
 assert_review "self-test hit" missing >/dev/null; assert_review "self-test miss" pass >/dev/null
 eval "$_st_real"
-if [[ "$pass" -ne $((_st_p + 2)) || "$fail" -ne $((_st_f + 2)) ]]; then
-  printf '[FATAL] helper self-test: verdict helpers cannot conclude (pass +%d, fail +%d; want +2/+2)\n' "$((pass - _st_p))" "$((fail - _st_f))" >&2
+if [[ "$pass" -ne $((_st_p + 2)) || "$fail" -ne $((_st_f + 3)) ]]; then
+  printf '[FATAL] helper self-test: verdict helpers cannot conclude (pass +%d, fail +%d; want +2/+3)\n' "$((pass - _st_p))" "$((fail - _st_f))" >&2
   exit 1
 fi
 pass=$_st_p; fail=$_st_f; total=$_st_t
