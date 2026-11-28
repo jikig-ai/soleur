@@ -12,7 +12,7 @@ Refs: #12530. Plan: `knowledge-base/project/plans/2026-11-10-feat-orchestrator-s
 
 ## Status
 
-Accepted 2026-11-10. In force when the review skill runs `plugins/soleur/skills/review/scripts/review-scan-gate.sh` before any review seat and continues only on that script's own `ok` or `skip` receipt.
+Accepted 2026-11-10. Amended 2026-11-28 (#13098): ShellCheck evidence is a per-file completion set bounded by timeout, replacing the single multi-file argv invocation. In force when the review skill runs `plugins/soleur/skills/review/scripts/review-scan-gate.sh` before any review seat and continues only on that script's own `ok` or `skip` receipt.
 
 ## Context
 
@@ -22,7 +22,7 @@ Accepted 2026-11-10. In force when the review skill runs `plugins/soleur/skills/
 
 The review orchestrator's stdout receipt is the only evidence the review SAST scan ran. The script prints one status line, `SOLEUR_REVIEW_SCAN_GATE`, and the phase continues only when that line's status token is `ok` or `skip`. `probe` exits 0 and is not a scan. `refuse`, any other token, a non-zero exit, or a missing line stops the phase before any seat, including the design-validity pass and a fix-round.
 
-A zero-finding SAST claim requires `ok` with `findings=0` and `files` equal to the classified source-and-shell target count. For semgrep or mixed, the rule count must be greater than zero, taken from semgrep's own `Ran N rules on M files` summary, singular or plural, and `paths.scanned` must map back to every source target. Shellcheck `ok` requires the binary to have run with every shell target on its argv. `skip` (`engine=none`) does not authorize a SAST-clean claim. Findings stay on stdout as `file:line rule-id` and do not stop the phase.
+A zero-finding SAST claim requires `ok` with `findings=0` and `files` equal to the classified source-and-shell target count. For semgrep or mixed, the rule count must be greater than zero, taken from semgrep's own `Ran N rules on M files` summary, singular or plural, and `paths.scanned` must map back to every source target. ShellCheck evidence is a per-file completion set: each shell input is scanned in its own invocation bounded by `timeout -k 5s 30s` (or `gtimeout`) with full default analysis, and a shell-involving receipt carries `scanned=` and `unscannable=` so coverage is auditable directly. `ok` requires `scanned` equal to the classified shell count and `unscannable=0`. A timeout, malformed scanner output, missing timeout binary, or unexpected scanner status is a measured refusal — a `refuse` receipt with a `file:0 unscannable-<reason>` evidence row per failed input — never a silent findings-free scan. `skip` (`engine=none`) does not authorize a SAST-clean claim. Findings stay on stdout as `file:line rule-id` and do not stop the phase.
 
 `plugins/soleur/skills/ship/scripts/prepush-secret-scan.sh` remains a separate deterministic scan. It is not this receipt, and this decision does not change its exit codes.
 
@@ -32,6 +32,7 @@ A non-zero rule count can still miss the language under scan. That residual is a
 
 - Review seats, including `semgrep-sast` and the shellcheck seat, quote the receipt. They do not invoke semgrep or shellcheck.
 - An inline review that spawns no seat still runs the script before a zero-finding SAST claim. The claim needs `files` equal to the classified source-and-shell count of the path list for the range under review.
-- A clean security verdict without an `ok` receipt with `findings=0` is not evidence.
+- A clean security verdict without an `ok` receipt with `findings=0` is not evidence; when shell inputs are involved it also needs `unscannable=0`, because an input ShellCheck never completed is unscanned coverage, not a clean scan.
+- One pathological shell input degrades to a bounded `refuse` naming that input instead of wedging the review phase before any seat.
 - The secret-scan pre-push gate stays on its own contract. A review that skips because nothing is scannable still runs the sentinel.
 - The opt-in review workflow prototype is not this gate. The skill is the authority.
