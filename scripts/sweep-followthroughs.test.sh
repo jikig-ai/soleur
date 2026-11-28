@@ -854,6 +854,399 @@ EOF
   rm -rf "$root"
 }
 
+
+# --- Guard 2 (#9294 PR-B, D-1): the FT_ARM deploy-channel partition ----------
+# Assembly under test: the FT_ARM parse, the TRIO_SET membership decision in
+# run_one, both partition-skip directions, the homeless construction, the
+# load_trio_set fail-closed probes, and the two run-level coverage verdicts
+# (homeless red; declared-but-unserved red). The runtime set is seeded
+# directly per the SUT's own sourcing contract; the e2e rows execute the
+# script so the FT_ARM validation and load_trio_set run for real.
+
+# Partition-aware variant of invoke_run_one: seeds TRIO_SET with the real trio
+# family and exports FT_ARM before sourcing. $4 = arm (default sweep).
+invoke_run_one_arm() {
+  local tmpdir="$1" body="$2" issue_num="${3:-9999}" arm="${4:-sweep}"
+  local rc_file="$tmpdir/run-one-rc-$arm"
+  local stdout_file="$tmpdir/run-one-stdout-$arm"
+  local stderr_file="$tmpdir/run-one-stderr-$arm"
+  (
+    cd "$tmpdir"
+    export PATH="$tmpdir/bin:$PATH"
+    export GH_REPO="test/test"
+    export DRY_RUN=1
+    export FT_ARM="$arm"
+    # shellcheck disable=SC1090
+    source "$SUT"
+    TRIO_SET[WEBHOOK_DEPLOY_SECRET]=1
+    TRIO_SET[CF_ACCESS_CLIENT_ID]=1
+    TRIO_SET[CF_ACCESS_CLIENT_SECRET]=1
+    PARTITION_SKIPPED=0; PARTITION_HOMELESS=0; TRIO_DECLARED=0; TRIO_RAN=0
+    set +e
+    run_one "$issue_num" "$body" > "$stdout_file" 2> "$stderr_file"
+    echo "$?" > "$rc_file"
+    printf 'SKIPPED=%s HOMELESS=%s DECLARED=%s RAN=%s\n' \
+      "$PARTITION_SKIPPED" "$PARTITION_HOMELESS" "$TRIO_DECLARED" "$TRIO_RAN" > "$tmpdir/counters-$arm"
+  )
+  local combined
+  combined=$(cat "$stdout_file" "$stderr_file" "$tmpdir/counters-$arm")
+  printf '%s\n__RC__=%s\n' "$combined" "$(cat "$rc_file")"
+}
+
+g2_probe_fixture() {
+  # A passing probe at the canonical path, echoing a marker line so "the
+  # probe ran" is distinguishable from any skip.
+  local root="$1"
+  cat > "$root/scripts/followthroughs/g2-probe.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "G2-PROBE-RAN"
+exit 0
+EOF
+  chmod +x "$root/scripts/followthroughs/g2-probe.sh"
+}
+
+g2_trio_body() { cat <<'EOF'
+Body text.
+
+<!-- soleur:followthrough script=scripts/followthroughs/g2-probe.sh earliest=2020-01-01T00:00:00Z secrets=WEBHOOK_DEPLOY_SECRET -->
+EOF
+}
+
+t18_sweep_arm_partition_skips_trio_tracker() {
+  local root; root=$(setup_tmpdir)
+  g2_probe_fixture "$root"
+  local combined; combined=$(invoke_run_one_arm "$root" "$(g2_trio_body)" 9999 sweep)
+  assert_contains "G2-T18 sweep arm partition-skips a trio tracker" \
+                  "partition-skip — secrets= names a deploy-channel credential" "$combined"
+  assert_not_contains "G2-T18 the probe never runs on the sweep arm" \
+                      "G2-PROBE-RAN" "$combined"
+  assert_contains "G2-T18 the skip is counted" "SKIPPED=1" "$combined"
+  rm -rf "$root"
+}
+
+t19_sweep_arm_serves_non_trio_tracker() {
+  local root; root=$(setup_tmpdir)
+  g2_probe_fixture "$root"
+  export G2_OTHER_SECRET=irrelevant
+  local body; body=$(cat <<'EOF'
+Body text.
+
+<!-- soleur:followthrough script=scripts/followthroughs/g2-probe.sh earliest=2020-01-01T00:00:00Z secrets=G2_OTHER_SECRET -->
+EOF
+)
+  local combined; combined=$(invoke_run_one_arm "$root" "$body" 9999 sweep)
+  assert_not_contains "G2-T19 sweep arm does not partition-skip a non-trio tracker" \
+                      "partition-skip" "$combined"
+  assert_contains "G2-T19 the probe runs on the sweep arm" "G2-PROBE-RAN" "$combined"
+  unset G2_OTHER_SECRET
+  rm -rf "$root"
+}
+
+t20_dc_arm_serves_pure_trio_tracker() {
+  local root; root=$(setup_tmpdir)
+  g2_probe_fixture "$root"
+  export WEBHOOK_DEPLOY_SECRET="g2-fixture-secret"
+  local combined; combined=$(invoke_run_one_arm "$root" "$(g2_trio_body)" 9999 deploy-channel)
+  assert_not_contains "G2-T20 deploy-channel arm does not skip a pure trio tracker" \
+                      "partition-skip" "$combined"
+  assert_contains "G2-T20 the probe runs on the deploy-channel arm" "G2-PROBE-RAN" "$combined"
+  assert_contains "G2-T20 the serve is counted" "RAN=1" "$combined"
+  unset WEBHOOK_DEPLOY_SECRET
+  rm -rf "$root"
+}
+
+t21_dc_arm_skips_non_trio_tracker() {
+  local root; root=$(setup_tmpdir)
+  g2_probe_fixture "$root"
+  export G2_OTHER_SECRET=irrelevant
+  local body; body=$(cat <<'EOF'
+Body text.
+
+<!-- soleur:followthrough script=scripts/followthroughs/g2-probe.sh earliest=2020-01-01T00:00:00Z secrets=G2_OTHER_SECRET -->
+EOF
+)
+  local combined; combined=$(invoke_run_one_arm "$root" "$body" 9999 deploy-channel)
+  assert_contains "G2-T21 deploy-channel arm partition-skips a non-trio tracker" \
+                  "partition-skip — secrets= names no deploy-channel credential" "$combined"
+  assert_not_contains "G2-T21 the probe never runs" "G2-PROBE-RAN" "$combined"
+  unset G2_OTHER_SECRET
+  rm -rf "$root"
+}
+
+t22_mixed_clause_is_homeless_on_dc_arm() {
+  local root; root=$(setup_tmpdir)
+  g2_probe_fixture "$root"
+  local body; body=$(cat <<'EOF'
+Body text.
+
+<!-- soleur:followthrough script=scripts/followthroughs/g2-probe.sh earliest=2020-01-01T00:00:00Z secrets=WEBHOOK_DEPLOY_SECRET,G2_OTHER_SECRET -->
+EOF
+)
+  local combined; combined=$(invoke_run_one_arm "$root" "$body" 9999 deploy-channel)
+  assert_contains "G2-T22 a mixed secrets= clause is homeless on the deploy-channel arm" \
+                  "mixes deploy-channel and other names: HOMELESS" "$combined"
+  assert_contains "G2-T22 the operator-facing error names the issue" \
+                  "no arm can serve a mixed clause; split the directive" "$combined"
+  assert_not_contains "G2-T22 the probe never runs" "G2-PROBE-RAN" "$combined"
+  assert_contains "G2-T22 the homeless counter moves" "HOMELESS=1" "$combined"
+  rm -rf "$root"
+}
+
+t23_mixed_clause_skipped_on_sweep_arm_too() {
+  local root; root=$(setup_tmpdir)
+  g2_probe_fixture "$root"
+  local body; body=$(cat <<'EOF'
+Body text.
+
+<!-- soleur:followthrough script=scripts/followthroughs/g2-probe.sh earliest=2020-01-01T00:00:00Z secrets=WEBHOOK_DEPLOY_SECRET,G2_OTHER_SECRET -->
+EOF
+)
+  local combined; combined=$(invoke_run_one_arm "$root" "$body" 9999 sweep)
+  assert_contains "G2-T23 the sweep arm also skips a mixed clause (homeless by construction)" \
+                  "partition-skip" "$combined"
+  assert_not_contains "G2-T23 the probe never runs on the sweep arm either" "G2-PROBE-RAN" "$combined"
+  rm -rf "$root"
+}
+
+t24_no_secrets_tracker_is_non_trio_on_dc_arm() {
+  local root; root=$(setup_tmpdir)
+  g2_probe_fixture "$root"
+  local body; body=$(cat <<'EOF'
+Body text.
+
+<!-- soleur:followthrough script=scripts/followthroughs/g2-probe.sh earliest=2020-01-01T00:00:00Z -->
+EOF
+)
+  local combined; combined=$(invoke_run_one_arm "$root" "$body" 9999 deploy-channel)
+  assert_contains "G2-T24 a secrets=-less tracker is skipped on the deploy-channel arm" \
+                  "partition-skip" "$combined"
+  rm -rf "$root"
+}
+
+t25_whitespace_only_secret_token_is_non_trio() {
+  local root; root=$(setup_tmpdir)
+  g2_probe_fixture "$root"
+  local body; body=$(cat <<'EOF'
+Body text.
+
+<!-- soleur:followthrough script=scripts/followthroughs/g2-probe.sh earliest=2020-01-01T00:00:00Z secrets= , -->
+EOF
+)
+  local combined; combined=$(invoke_run_one_arm "$root" "$body" 9999 deploy-channel)
+  assert_contains "G2-T25 whitespace-only secrets= tokens never hit the trio set" \
+                  "partition-skip" "$combined"
+  assert_not_contains "G2-T25 no homeless miscount from empty tokens" "HOMELESS=1" "$combined"
+  rm -rf "$root"
+}
+
+t26_lowercase_trio_name_is_not_a_member_fails_closed() {
+  # The runtime set is exact-case. A tracker naming `webhook_deploy_secret`
+  # lowercase is NOT a trio tracker: the sweep arm attempts it and Guard 3
+  # reds the run because the env cannot carry the lowercase name — rotation
+  # variants fail LOUD, never silently unserved (user-impact review, #9294).
+  local root; root=$(setup_tmpdir)
+  g2_probe_fixture "$root"
+  export WEBHOOK_DEPLOY_SECRET="g2-fixture-secret"
+  local body; body=$(cat <<'EOF'
+Body text.
+
+<!-- soleur:followthrough script=scripts/followthroughs/g2-probe.sh earliest=2020-01-01T00:00:00Z secrets=webhook_deploy_secret -->
+EOF
+)
+  local combined; combined=$(invoke_run_one_arm "$root" "$body" 9999 sweep)
+  assert_not_contains "G2-T26 a lowercase trio name is not partition-skipped as trio" \
+                      "partition-skip — secrets= names a deploy-channel credential" "$combined"
+  assert_contains "G2-T26 Guard 3 reds the missing lowercase secret instead" \
+                  "required secret missing" "$combined"
+  unset WEBHOOK_DEPLOY_SECRET
+  rm -rf "$root"
+}
+
+t27_invalid_ft_arm_refuses_to_open() {
+  local root; root=$(setup_tmpdir)
+  local out rc
+  out=$(cd "$root" && GH_REPO=test/test FT_ARM=bogus bash "$SUT" 2>&1) && rc=0 || rc=$?
+  assert_eq "G2-T27 an unrecognized FT_ARM exits 2" "2" "$rc"
+  assert_contains "G2-T27 the refusal names the fault" \
+                  'FT_ARM must be "sweep" or "deploy-channel"' "$out"
+  rm -rf "$root"
+}
+
+t28_load_trio_set_fail_closed_probes() {
+  local root; root=$(setup_tmpdir)
+  # Exactly-one-record / well-formed-names / no-duplicates contract, each
+  # probed through the executed path with a fixture TSV (load_trio_set runs
+  # before main, so a refusal exits before any gh call).
+  local probe_out rc
+  printf 'path\tkey\tclass\texpiry\n' > "$root/no-stems.tsv"
+  probe_out=$(cd "$root" && GH_REPO=test/test TRIO_BASELINE_TSV=no-stems.tsv bash "$SUT" 2>&1) && rc=0 || rc=$?
+  assert_eq "G2-T28a a TSV with no @stems record exits 2" "2" "$rc"
+  assert_contains "G2-T28a the refusal says exactly-one" "exactly one @stems record" "$probe_out"
+  printf '@stems\tWEBHOOK_DEPLOY_SECRET,CF_ACCESS_CLIENT_ID,WEBHOOK_DEPLOY_SECRET\n' > "$root/dup.tsv"
+  probe_out=$(cd "$root" && GH_REPO=test/test TRIO_BASELINE_TSV=dup.tsv bash "$SUT" 2>&1) && rc=0 || rc=$?
+  assert_eq "G2-T28b a duplicated @stems name exits 2" "2" "$rc"
+  assert_contains "G2-T28b the refusal says duplicated" "is duplicated" "$probe_out"
+  printf '@stems\twebhook_deploy_secret\n' > "$root/bad.tsv"
+  probe_out=$(cd "$root" && GH_REPO=test/test TRIO_BASELINE_TSV=bad.tsv bash "$SUT" 2>&1) && rc=0 || rc=$?
+  assert_eq "G2-T28c a malformed @stems name exits 2" "2" "$rc"
+  assert_contains "G2-T28c the refusal says malformed" "is malformed" "$probe_out"
+  printf '@stems\tWEBHOOK_DEPLOY_SECRET\n@stems\tCF_ACCESS_CLIENT_ID\n' > "$root/two.tsv"
+  probe_out=$(cd "$root" && GH_REPO=test/test TRIO_BASELINE_TSV=two.tsv bash "$SUT" 2>&1) && rc=0 || rc=$?
+  assert_eq "G2-T28d two @stems records exit 2" "2" "$rc"
+  rm -rf "$root"
+}
+
+# --- E2E rows: the run-level coverage verdicts (plan Guard-2 mutation matrix).
+# gh fixture: `issue list` returns the fixture page; every other read returns
+# an empty payload so the closed sweep is a no-op; DRY_RUN suppresses writes.
+setup_e2e_tmpdir() {
+  local root; root=$(setup_tmpdir)
+  mkdir -p "$root/scripts/followthroughs"
+  cat > "$root/scripts/followthroughs/g2-probe.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "G2-PROBE-RAN"
+exit 0
+EOF
+  chmod +x "$root/scripts/followthroughs/g2-probe.sh"
+  printf '@stems\tWEBHOOK_DEPLOY_SECRET,CF_ACCESS_CLIENT_ID,CF_ACCESS_CLIENT_SECRET\n' > "$root/trio.tsv"
+  echo "$root"
+}
+
+install_e2e_gh() {
+  # $1 = root, $2 = the JSON page `gh issue list` returns.
+  local root="$1" page="$2"
+  cat > "$root/bin/gh" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in
+    list)
+cat <<'PAGE'
+$page
+PAGE
+      exit 0 ;;
+  esac
+done
+case " \$* " in *" --body-file - "*) [ -t 0 ] || timeout 2 cat >/dev/null ;; esac
+printf '[]\n'
+exit 0
+EOF
+  chmod +x "$root/bin/gh"
+}
+
+t29_declared_but_unserved_trio_tracker_reds_the_run() {
+  # Plan matrix row 1: an open tracker declaring a trio secret while the job
+  # env cannot serve it (the secret is NOT exported — the loader binding is
+  # absent). Guard 3 refuses the forward, the probe never runs, and the
+  # coverage verdict reds the run — the run-level proof that a mis-bound
+  # deploy-channel arm cannot go green over silent credential rot.
+  local root; root=$(setup_e2e_tmpdir)
+  local page
+  page=$(python3 -c 'import json; body="Body.\n\n<!-- soleur:followthrough script=scripts/followthroughs/g2-probe.sh earliest=2020-01-01T00:00:00Z secrets=WEBHOOK_DEPLOY_SECRET -->"; print(json.dumps([{"number": 42, "body": body}]))')
+  install_e2e_gh "$root" "$page"
+  # WEBHOOK_DEPLOY_SECRET deliberately NOT exported — the unserved binding.
+  local out rc
+  out=$(cd "$root" && PATH="$root/bin:$PATH" GH_REPO=test/test DRY_RUN=1 FT_ARM=deploy-channel TRIO_BASELINE_TSV=trio.tsv bash "$SUT" 2>&1) && rc=0 || rc=$?
+  assert_eq "G2-T29 the run reds when a declared trio tracker goes unserved" "1" "$rc"
+  assert_contains "G2-T29 the verdict names silent credential rot" \
+                  "ran zero of them — a declared-but-unserved trio tracker is silent credential rot" "$out"
+  assert_contains "G2-T29 the partition summary prints" "partition summary (arm=deploy-channel)" "$out"
+  rm -rf "$root"
+}
+
+t30_mixed_clause_reds_the_run_at_run_level() {
+  # Plan matrix row 3: a tracker whose secrets= mixes trio and non-trio names
+  # is skipped by both arms; the run-level homeless verdict reds the run.
+  local root; root=$(setup_e2e_tmpdir)
+  local page
+  page=$(python3 -c 'import json; body="Body.\n\n<!-- soleur:followthrough script=scripts/followthroughs/g2-probe.sh earliest=2020-01-01T00:00:00Z secrets=WEBHOOK_DEPLOY_SECRET,G2_OTHER -->"; print(json.dumps([{"number": 43, "body": body}]))')
+  install_e2e_gh "$root" "$page"
+  local out rc
+  out=$(cd "$root" && PATH="$root/bin:$PATH" GH_REPO=test/test DRY_RUN=1 FT_ARM=deploy-channel TRIO_BASELINE_TSV=trio.tsv WEBHOOK_DEPLOY_SECRET=x bash "$SUT" 2>&1) && rc=0 || rc=$?
+  assert_eq "G2-T30 the run reds on a homeless mixed clause" "1" "$rc"
+  assert_contains "G2-T30 the verdict names the homeless construction" \
+                  "no arm can serve (mixed clauses are homeless by construction)" "$out"
+  rm -rf "$root"
+}
+
+t31_served_trio_tracker_greens_the_run() {
+  # Positive control for T29/T30: the same tracker shape served (secret
+  # exported, probe passes) exits green. Without this row T29 cannot
+  # distinguish "the coverage verdict fired" from "the e2e harness is broken".
+  local root; root=$(setup_e2e_tmpdir)
+  local page
+  page=$(python3 -c 'import json; body="Body.\n\n<!-- soleur:followthrough script=scripts/followthroughs/g2-probe.sh earliest=2020-01-01T00:00:00Z secrets=WEBHOOK_DEPLOY_SECRET -->"; print(json.dumps([{"number": 44, "body": body}]))')
+  install_e2e_gh "$root" "$page"
+  local out rc
+  out=$(cd "$root" && PATH="$root/bin:$PATH" GH_REPO=test/test DRY_RUN=1 FT_ARM=deploy-channel TRIO_BASELINE_TSV=trio.tsv WEBHOOK_DEPLOY_SECRET=x bash "$SUT" 2>&1) && rc=0 || rc=$?
+  assert_eq "G2-T31 a served trio tracker leaves the run green" "0" "$rc"
+  assert_contains "G2-T31 the probe actually ran" "G2-PROBE-RAN" "$out"
+  assert_contains "G2-T31 the run summary counts the serve" "served=1" "$out"
+  rm -rf "$root"
+}
+
+t32_sweep_arm_e2e_skips_trio_tracker_green() {
+  # Plan matrix row 2 (positive half): on the sweep arm the same open trio
+  # tracker is partition-skipped — never served, never red. The run stays
+  # green because the deploy-channel arm owns the tracker.
+  local root; root=$(setup_e2e_tmpdir)
+  local page
+  page=$(python3 -c 'import json; body="Body.\n\n<!-- soleur:followthrough script=scripts/followthroughs/g2-probe.sh earliest=2020-01-01T00:00:00Z secrets=WEBHOOK_DEPLOY_SECRET -->"; print(json.dumps([{"number": 45, "body": body}]))')
+  install_e2e_gh "$root" "$page"
+  local out rc
+  out=$(cd "$root" && PATH="$root/bin:$PATH" GH_REPO=test/test DRY_RUN=1 FT_ARM=sweep TRIO_BASELINE_TSV=trio.tsv bash "$SUT" 2>&1) && rc=0 || rc=$?
+  assert_eq "G2-T32 the sweep arm stays green over a partition-skipped trio tracker" "0" "$rc"
+  assert_contains "G2-T32 the skip decision is visible in the log" \
+                  "partition-skip — secrets= names a deploy-channel credential" "$out"
+  assert_not_contains "G2-T32 the probe never runs on the sweep arm" "G2-PROBE-RAN" "$out"
+  rm -rf "$root"
+}
+
+t33_overlap_mutation_cannot_go_silent() {
+  # Plan matrix row 2 (mutation half): with the sweep arm's exclusion deleted
+  # (the partition-skip `return 0` neutralized in a COPY of the SUT), the same
+  # open trio tracker is attempted on an arm whose env carries no trio secret,
+  # and Guard 3 plus the missing-secret run verdict red the run. Overlap is
+  # loud by construction — there is no silent double-serve path.
+  local root; root=$(setup_e2e_tmpdir)
+  local mutant="$root/sweep-mutant.sh"
+  python3 - "$SUT" "$mutant" <<'MUTEOF'
+import sys
+src = open(sys.argv[1]).read()
+needle = '      log "issue #$issue_num: partition-skip '
+needle += chr(8212) + ' secrets= names a deploy-channel credential; the sweep-deploy-channel arm serves it"\n'
+needle += '      PARTITION_SKIPPED=$((PARTITION_SKIPPED + 1))\n      return 0'
+assert needle in src, "mutation target not found — the skip shape drifted"
+repl = '      log "issue #$issue_num: MUTANT exclusion deleted"'
+open(sys.argv[2], "w").write(src.replace(needle, repl, 1))
+MUTEOF
+  local page
+  page=$(python3 -c 'import json; body="Body.\n\n<!-- soleur:followthrough script=scripts/followthroughs/g2-probe.sh earliest=2020-01-01T00:00:00Z secrets=WEBHOOK_DEPLOY_SECRET -->"; print(json.dumps([{"number": 46, "body": body}]))')
+  install_e2e_gh "$root" "$page"
+  # The mutant runs on the sweep arm WITHOUT the secret exported — the overlap.
+  local out rc
+  out=$(cd "$root" && PATH="$root/bin:$PATH" GH_REPO=test/test DRY_RUN=1 FT_ARM=sweep TRIO_BASELINE_TSV=trio.tsv bash "$mutant" 2>&1) && rc=0 || rc=$?
+  assert_eq "G2-T33 deleting the sweep exclusion cannot produce a silent green overlap" "1" "$rc"
+  assert_contains "G2-T33 the run reds through the missing-secret verdict" \
+                  "names a secret the workflow env does not carry" "$out"
+  rm -rf "$root"
+}
+
+t18_sweep_arm_partition_skips_trio_tracker
+t19_sweep_arm_serves_non_trio_tracker
+t20_dc_arm_serves_pure_trio_tracker
+t21_dc_arm_skips_non_trio_tracker
+t22_mixed_clause_is_homeless_on_dc_arm
+t23_mixed_clause_skipped_on_sweep_arm_too
+t24_no_secrets_tracker_is_non_trio_on_dc_arm
+t25_whitespace_only_secret_token_is_non_trio
+t26_lowercase_trio_name_is_not_a_member_fails_closed
+t27_invalid_ft_arm_refuses_to_open
+t28_load_trio_set_fail_closed_probes
+t29_declared_but_unserved_trio_tracker_reds_the_run
+t30_mixed_clause_reds_the_run_at_run_level
+t31_served_trio_tracker_greens_the_run
+t32_sweep_arm_e2e_skips_trio_tracker_green
+t33_overlap_mutation_cannot_go_silent
 t1_realpath_rejects_traversal
 t2_first_directive_wins
 t3_anchored_awk_skips_mid_prose
@@ -913,7 +1306,11 @@ g3_run() {
   (
     cd "$root" || exit 97
     local rc=0
-    env -i PATH="$root/bin:$PATH" HOME="$HOME" GH_REPO="test/test" DRY_RUN="${G3_DRY_RUN:-0}" "$@" \
+    # TRIO_BASELINE_TSV points at the real committed baseline: since the #9294 partition the
+    # executed path derives the trio set before main, and an unpointed tmpdir lookup exits 2
+    # before any sweeping — the regression that left this suite red when the partition landed.
+    env -i PATH="$root/bin:$PATH" HOME="$HOME" GH_REPO="test/test" DRY_RUN="${G3_DRY_RUN:-0}" \
+      TRIO_BASELINE_TSV="${G3_TRIO_TSV:-$SCRIPT_DIR/../tests/scripts/trio-baseline.tsv}" "$@" \
       bash "$sut" > "$root/out" 2> "$root/err" || rc=$?
     echo "$rc" > "$root/rc"
   )
@@ -2113,6 +2510,7 @@ t_g4_18_step_summary_separation() {
     cd "$root" || exit 97
     local rc=0
     env -i PATH="$root/bin:$PATH" HOME="$HOME" GH_REPO="test/test" DRY_RUN=0 \
+      TRIO_BASELINE_TSV="$SCRIPT_DIR/../tests/scripts/trio-baseline.tsv" \
       GITHUB_STEP_SUMMARY="$root/summary.md" bash "$SUT" > "$root/out" 2> "$root/err" || rc=$?
     echo "$rc" > "$root/rc"
   )
@@ -2361,7 +2759,7 @@ if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
 fi
 # Absolute floor at the MEASURED green count -- a lower bound, so adding rows never trips it;
 # re-measure and raise it in the same commit that adds a row.
-MIN_ASSERTIONS=334
+MIN_ASSERTIONS=377
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1
