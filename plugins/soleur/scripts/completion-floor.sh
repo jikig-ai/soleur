@@ -103,10 +103,13 @@ check_review() {
   # no-open-code-review-issues — scoped to THIS PR (completion-floors.ts:
   # "for this PR"): an open code-review issue whose body cites #<PR>. The
   # unscoped count read every open code-review issue in the repo, so it could
-  # never pass. A cite is `#N` or a `/pull/N` URL. Scope-outs (deferred-scope-out) stay open by design and
-  # synthetic-test issues are fixtures; both are excluded, as ship Phase 5.5's
-  # merge gate excludes them. Fail-closed: an unresolved PR, a failed read, or
-  # a full page (the PR's issue may sit past it) is "missing". stdout only —
+  # never pass. A cite is `#N` or a `/pull/N` URL, from any repository —
+  # deliberately wider than ship Phase 5.5's `(Ref|Closes|Fixes) #N`, so this
+  # floor can only block more. Scope-outs (deferred-scope-out) stay open by
+  # design and synthetic-test issues are fixtures; both are excluded, as ship
+  # Phase 5.5's merge gate excludes them. Fail-closed: an unresolved PR, a
+  # failed read, or a full page (the PR's issue may sit past it) is
+  # "missing". stdout only —
   # gh's stderr hint must not reach a parsed value (#12697).
   pr="$(gh pr view --json number --jq .number 2>/dev/null)" || pr=""
   if [[ ! "$pr" =~ ^[0-9]+$ ]]; then

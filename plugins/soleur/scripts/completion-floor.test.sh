@@ -62,6 +62,8 @@ FLOOR_PR=13112 FLOOR_ISSUES='[{"number":4,"body":"Ref #13112"}]' assert_review "
 FLOOR_PR=13112 FLOOR_ISSUES='[{"number":5,"body":"from PR #13112."}]' assert_review "a cite followed by punctuation blocks" missing
 FLOOR_PR=13112 FLOOR_ISSUES='[{"number":9,"body":"See https://github.com/o/r/pull/13112 review"}]' assert_review "a /pull/N URL cite blocks" missing
 FLOOR_PR=13112 FLOOR_ISSUES='[{"number":10,"body":"https://github.com/o/r/pull/131120"}]' assert_review "a longer /pull/ number does not block" pass
+FLOOR_PR=13112 FLOOR_ISSUES='[{"number":11,"body":"Ref #113112 and https://github.com/o/r/pull/113112"}]' assert_review "a number ending in the PR number does not block" pass
+FLOOR_PR=13112 FLOOR_ISSUES='[{"number":12,"body":"PR #999 bumps build 13112; see https://example.com/v/13112"}]' assert_review "a bare PR number not after # or /pull/ does not block" pass
 FLOOR_PR='' FLOOR_ISSUES='[]' assert_review "an unresolvable PR fails closed" missing
 FLOOR_PR=13112 FLOOR_LIST_FAIL=1 assert_review "a failed issue read fails closed" missing
 FLOOR_PR=13112 FLOOR_ISSUES='[{"number":6,"body":"**Source:** PR #13112 review","labels":[{"name":"code-review"},{"name":"deferred-scope-out"}]},{"number":7,"body":"Ref #13112","labels":[{"name":"synthetic-test"}]}]' \
@@ -70,9 +72,9 @@ FLOOR_PR=13112 FLOOR_ISSUES='[{"number":8,"body":"Ref #13112","labels":[{"name":
   assert_review "a labelled (non-scope-out) issue citing this PR blocks" missing
 FLOOR_PR=13112 FLOOR_ISSUES="$(jq -cn '[range(1000) | {number: ., body: "x"}]')" \
   assert_review "a full 1000-issue page fails closed" missing
-# Anti-vacuity: the ten-assertion floor is reported by printf, not through the
-# assertion helpers it backstops.
-if [[ $((pass + fail)) -lt 10 ]]; then printf '[FATAL] only %d assertions ran (floor 10)\n' "$((pass + fail))"; exit 1; fi
+# Anti-vacuity: the exact measured total (14), reported by printf, not through
+# the assertion helpers it backstops — a dropped row is a FATAL.
+if [[ $((pass + fail)) -lt 14 ]]; then printf '[FATAL] only %d assertions ran (floor 14)\n' "$((pass + fail))"; exit 1; fi
 
 echo "PASS=$pass FAIL=$fail"
 [[ "$fail" -eq 0 ]]

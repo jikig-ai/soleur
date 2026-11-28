@@ -1742,8 +1742,28 @@ t93_net_timeouts() {
   # The census network reads are bounded: a hung origin times out into the
   # deny instead of holding the hook (a killed hook lets the merge through).
   # A PATH-shimmed git hangs one call per mode with the real sleep; the
-  # three runs go in parallel so the suite pays one 20 s window.
-  local tmp real slp mode rc
+  # three runs go in parallel so the suite pays one bound-sized window.
+  local tmp real slp mode rc to_lines kill bound
+  # The bound the hook declares, read from its own two _NET_TO lines (they
+  # must agree), so the timing rows below test the value the hook ships.
+  to_lines=$(grep -E '^(if|elif) command -v g?timeout .*_NET_TO=\(g?timeout -k [0-9]+ [0-9]+\);( fi)?$' "$HOOK" \
+    | sed -E 's/.*-k ([0-9]+) ([0-9]+)\).*/\1 \2/' | sort -u)
+  if [[ $(grep -c . <<< "$to_lines") -ne 1 || "$(grep -cE '_NET_TO=\(g?timeout -k' "$HOOK")" -ne 2 ]]; then
+    fail "T93 hook declares one _NET_TO bound on both its timeout and gtimeout lines (got: ${to_lines:-none})"
+    TOTAL=$((TOTAL + 1)); return
+  fi
+  read -r kill bound <<< "$to_lines"
+  # Worst case on the PR-number path: two reads succeed just under the bound,
+  # the third is killed (a timed-out read denies at once, so three timeouts
+  # cannot chain): 3 x bound + kill. Budget 60 s, a conservative figure —
+  # settings.json sets no timeout for this hook, and a longer harness default
+  # only adds margin. 20 s (62) or more reds here.
+  if (( 3 * bound + kill < 60 )); then
+    pass "T93 census worst case 3 x ${bound} + ${kill} s fits a 60 s hook budget"
+  else
+    fail "T93 census worst case 3 x ${bound} + ${kill} = $(( 3 * bound + kill )) s exceeds a 60 s hook budget"
+  fi
+  TOTAL=$((TOTAL + 1))
   tmp=$(mktemp -d -p "$SUITE_TMP")
   real=$(command -v git); slp=$(command -v sleep)
   mkdir -p "$tmp/bin"
@@ -1779,7 +1799,7 @@ EOF
       mainfetch) want="fetch origin main" ;;
     esac
     read -r rc el < "$tmp/$mode/rc"
-    if [[ "$el" -lt 40 ]]; then
+    if [[ "$el" -lt $(( bound + kill + 3 )) ]]; then
       assert_deny_why "T93 hung $mode times out into a deny (${el}s)" "$tmp/$mode/inc" "$(cat "$tmp/$mode/out")" "$rc" "$want"
     else
       fail "T93 hung $mode times out into a deny (took ${el}s, rc=$rc)"
@@ -2019,10 +2039,11 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # pinned). Those fixes add 57: T87 +3 operand rows, T91 18 (10 intruders +
 # tail + third copy + 2 leads + PR 5/6 pair + literal-sha pair), T92 20 (12
 # short spellings + 4 long `=` + 2 --match-head-commit + 2 twins), T93 3,
-# T94 9, T95 4; T96 is a control reported outside the counters. The floor
-# is the exact measured total (214) — a dropped row is a FATAL, not a quiet
+# T94 9, T95 4; T96 is a control reported outside the counters. T93 +1
+# budget row (3 x bound + kill < 60 s). The floor
+# is the exact measured total (215) — a dropped row is a FATAL, not a quiet
 # shrink.
-MIN_ASSERTIONS=214
+MIN_ASSERTIONS=215
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] vacuity floor: only %d assertions ran (floor %d) — the suite did not execute\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1

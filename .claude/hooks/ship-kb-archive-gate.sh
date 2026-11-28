@@ -932,8 +932,10 @@ _wt_top=$(git -C "$WORK_DIR" rev-parse --show-toplevel 2>/dev/null || true)
 # through. Each consumer treats a timeout as a failure, which denies.
 # timeout, else gtimeout (stock macOS), else unbounded (pre-change posture)
 # — sibling pattern, pre-merge-rebase.sh. 15 s, not the sibling's 20 s: the
-# PR-number path chains up to three of these reads, and 3 x (15 + 2) = 51 s
-# stays under a 60 s hook timeout where 3 x 22 = 66 s would not.
+# PR-number path chains up to three reads, and a timed-out one denies at once,
+# so the worst case is two slow successes plus one kill: 3 x 15 + 2 = 47 s,
+# inside a conservative 60 s budget where 20 s (62 s) is not. settings.json
+# sets no timeout for this hook; T93 pins the budget against this line.
 _NET_TO=()
 if command -v timeout >/dev/null 2>&1; then _NET_TO=(timeout -k 2 15)
 elif command -v gtimeout >/dev/null 2>&1; then _NET_TO=(gtimeout -k 2 15); fi
