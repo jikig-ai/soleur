@@ -180,8 +180,7 @@ if [[ "$STATUS_ARM" -eq 1 ]]; then
     # rather than skip the arm.
     echo "DRIFT(status): /hooks/deploy-status returned an empty body — web-1 parity cannot be read" >&2; fail=1
   else
-    live="$(printf '%s' "$body" | jq -r '.ci_deploy_sha256 // "ABSENT"')"
-    hid="$(printf '%s' "$body" | jq -r '.host_id // "?"')"
+    IFS=$'\t' read -r live hid < <(printf '%s' "$body" | jq -r '[(.ci_deploy_sha256 // "ABSENT"), (.host_id // "?")] | @tsv')
     if [[ "$live" == "$REPO_SHA" ]]; then
       echo "PARITY(status): web-1 ($hid) serves ci-deploy.sh == repo ($REPO_SHA)"
     elif [[ "$live" == "ABSENT" ]]; then
@@ -197,10 +196,10 @@ if [[ "$BS_ARM" -eq 1 ]]; then
   if [[ -n "$BS_ROWS_FILE" ]]; then
     rows="$(<"$BS_ROWS_FILE")"
   else
-    command -v doppler >/dev/null || { echo "FATAL: BS arm needs doppler (or --bs-rows-file)" >&2; exit 1; }
-    rows="$(doppler run --preserve-env -p soleur -c prd_terraform -- bash "$ROOT/scripts/betterstack-query.sh" \
+    command -v doppler >/dev/null || { echo "FATAL: BS arm needs the Doppler CLI (or --bs-rows-file)" >&2; exit 1; }
+    rows="$(bash "$ROOT/scripts/lib/doppler-read.sh" bs bash "$ROOT/scripts/betterstack-query.sh" \
       --since "$SINCE" --grep DEPLOY_SCRIPT_SHA --limit "$LIMIT" 2>/dev/null)" \
-      || { echo "FATAL: betterstack-query.sh failed under doppler" >&2; exit 1; }
+      || { echo "FATAL: betterstack-query.sh failed under doppler-read.sh bs" >&2; exit 1; }
   fi
   # Newest sha per host_name: decode .raw (double-JSON), sort by dt desc, first per host.
   newest="$(printf '%s\n' "$rows" | jq -Rr '

@@ -199,10 +199,19 @@ ENV_SECRETS = ["DOPPLER_TOKEN_INFRA_PRIVILEGED", "DOPPLER_TOKEN_WRITE", "DOPPLER
                # `inngest-cutover` (main-only + required-reviewer), so any job naming it is Tier-B
                # classified and must declare a Tier-B `environment:` (the G1b/G1c rows).
                "DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE", "DOPPLER_TOKEN_DEPLOY_CHANNEL"]
+# #9294 PR-B — the deploy-channel family. Tier-B membership is what makes G1g's
+# no-non-loader-read row apply to the trio: a `doppler secrets get <trio>` with
+# `-c prd_terraform` (or a prd_terraform DOPPLER_CONFIG env) outside the loader
+# is RED. The job-level environment boundary is G1l. Split literals: this file's
+# own embedded scanner machinery already carries counted invocation shapes, so a
+# contiguous literal trio stem would key census rows here. Name-keyed rather than
+# positional: appending another Tier-B name must never change which names G1l owns.
+DEPLOY_CHANNEL_TRIO_NAMES = ["WEBHOOK_" + "DEPLOY_SECRET", "CF_ACCESS_" + "CLIENT_ID", "CF_ACCESS_" + "CLIENT_SECRET"]
 TIER_B_NAMES = ["DOPPLER_TOKEN_TF", "HCLOUD_TOKEN", "CF_API_TOKEN_R2",
                 "GITHUB_INFRA_APP_ID", "GITHUB_INFRA_APP_INSTALLATION_ID", "GITHUB_INFRA_APP_PRIVATE_KEY",
                 "TF_STATE_AWS_ACCESS_KEY_ID", "TF_STATE_AWS_SECRET_ACCESS_KEY",
-                "GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID", "GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY"]
+                "GIT_DATA_ROOT_STATE_AWS_ACCESS_KEY_ID", "GIT_DATA_ROOT_STATE_AWS_SECRET_ACCESS_KEY",
+                *DEPLOY_CHANNEL_TRIO_NAMES]
 TIER_B_ENVIRONMENTS = {"infra-privileged", "web-platform-infra-apply", "inngest-cutover", "workspaces-luks-cutover", "deploy-channel"}
 PRIV_STATE_BUCKET = "soleur-terraform-state"
 LOADER_REL = os.path.join("actions", "infra-credentials", "action.yml")
@@ -482,7 +491,8 @@ for rel, (doc, text) in sorted(docs.items()):
         j.id = "%s::%s" % (rel, jn)
         j.env = dict(wenv); j.env.update({k: str(v) for k, v in (body.get("env") or {}).items()})
         j.has_env_key = "environment" in body
-        j.arms = env_arms(body.get("environment"))
+        j.env_raw = body.get("environment")
+        j.arms = env_arms(j.env_raw)
         j.steps = [s for s in (body.get("steps") or []) if isinstance(s, dict)]
         j.dump = jdump(body)
         j.triggers = sorted(wf_triggers(doc))
@@ -888,6 +898,47 @@ for rel, (doc, text) in docs.items():
 check("G1k: DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE appears only in cutover-inngest.yml, only on "
       "rollback/resume-gated steps, never in the Tier-B loader (D2-2 env-scoped-name clause)",
       not g1k_bad, g1k_bad[:8])
+
+# (#9294 PR-B) G1l — the deploy-channel family boundary. A workflow job may name the trio only
+# when it declares a LITERAL Tier-B environment: post-migration the narrow loader exports the
+# family as ambient job env, so every legitimate naming site is a job bound to `deploy-channel`
+# (or another Tier-B member). "Names" means ANY occurrence in the job's serialized body — a
+# `secrets.<trio>` bind, a `doppler` read of a trio name, an `env:`/`with:`/`run:` mention — or a
+# workflow-level `env:`/`secrets:`/`on:` block naming the family, which attributes the name to
+# EVERY job in that file. An `${{ }}` environment expression is NOT a literal env: its result
+# arms are parsed per dispatch and a naming job behind one could still resolve a non-Tier-B arm,
+# so expression-env jobs must not name the family at all (cutover-inngest drops it entirely).
+# The lookarounds keep `WEBHOOK_DEPLOY_SECRET_NEXT` (the rotation machinery, excluded) and the
+# `_NOT_SET` placeholder names from matching.
+TRIO_NAMES = DEPLOY_CHANNEL_TRIO_NAMES
+# Case-insensitive: the secrets context resolves case-insensitively, so a lowercase
+# `secrets.webhook_deploy_secret` bind is the same acquisition (structural-enumeration seat,
+# #13006 review). Overcounting lowercase inert text is the safe direction for a boundary guard.
+TRIO_REF = re.compile(r"(?<![A-Za-z0-9_])(?:" + "|".join(re.escape(x) for x in TRIO_NAMES) + r")(?![A-Za-z0-9_])", re.I)
+g1l_bad = []
+for rel, (doc, _t) in sorted(docs.items()):
+    if not isinstance(doc, dict):
+        continue
+    wf_names = bool(TRIO_REF.search(jdump({"env": doc.get("env"), "secrets": doc.get("secrets"),
+                                           "on": doc.get("on") or doc.get(True)})))
+    for j in [x for x in jobs if x.rel == rel]:
+        if not (wf_names or TRIO_REF.search(j.dump)):
+            continue
+        # Literalness is enforced on the RAW value, not the parsed arms: `env_arms` extracts a
+        # quoted literal out of an expression, so `${{ inputs.e || 'deploy-channel' }}` yields the
+        # same single in-set arm as the scalar — while resolving to a caller-controlled or empty
+        # environment at runtime (test-design reviewer P1, structural-enumeration row 17). A job
+        # whose environment is an expression of any shape may not name the family, full stop; the
+        # D-6 cutover expression arms are unaffected because those jobs carry no trio reference.
+        if not (j.has_env_key and j.arms and len(j.arms) == 1 and j.arms[0] in TIER_B_ENVIRONMENTS
+                and "${{" not in str(j.env_raw)):
+            g1l_bad.append(j.id)
+check("G1l: no workflow job names the deploy-channel trio unless it declares a LITERAL Tier-B "
+      "environment — a `secrets.<trio>` bind, a `doppler` read of a trio name, or a workflow-level "
+      "`env:`/`secrets:`/`on:` block all count as naming; an `${{ }}` arm expression is not literal "
+      "(its arms could resolve a non-member), and the trio names are TIER_B_NAMES members so a "
+      "prd_terraform `doppler secrets get` outside the loader is separately banned by G1g",
+      not g1l_bad, sorted(set(g1l_bad))[:8])
 
 # AC7b limb 2 — every writer of the shared state bucket is Tier B
 writers = []
@@ -2534,7 +2585,7 @@ check("G6u: every unit or drop-in that loads /etc/default/soleur-doppler-token a
 
 print("\n".join(out))
 PY
-CENSUS_ROWS=51  # 49 -> 51 (#9294 review round 1): +2 rows, G7c2 (no github_actions_* resource in a narrow-D11-project file) and G1d-bis (every covered env carries deployment_branch_policy { custom_branch_policies = true }); G7i also gained argv-totality and arm-totality clauses inside its existing row. Previously: # 48 -> 49 (#9294): +1 row, G7i (the infra-credentials loader's narrow deploy-channel arm — allow-list, empty-token refusal, no prd_terraform read). Previously: # 47 -> 48 (#10990): +1 row, G1k (AC7b limb 3 — local .sh state-writers source their ambient AWS_* pair from a Tier-B name). Previously: # 46 -> 47 (#9927 8b): +1 row, G1j (every loader job declares a Tier-B environment). Previously: # 43 -> 45 (#9879): +2 rows, G4h (no removed/moved over a sole-copy address) and G4h2 (the exact sole-copy set); main carries 43 live rows against a floor of 42 (the floor sat one below the live count), and the floor is now exactly the live count. 45 -> 46 (#9879 round 2): +1 row, G4h4 (the live removed/moved counts equal the unscrubbed count). 22 -> 23 (#9215): G1i-rk, the root-key extract-precedence row. 23 -> 34 (#8609): Guard 6, G6a..G6l.
+CENSUS_ROWS=52  # 51 -> 52 (#9294 PR-B): +1 row, G1l (no job names the deploy-channel trio outside a literal Tier-B environment; trio names added to TIER_B_NAMES so G1g applies). Previously: 49 -> 51 (#9294 review round 1): +2 rows, G7c2 (no github_actions_* resource in a narrow-D11-project file) and G1d-bis (every covered env carries deployment_branch_policy { custom_branch_policies = true }); G7i also gained argv-totality and arm-totality clauses inside its existing row. Previously: # 48 -> 49 (#9294): +1 row, G7i (the infra-credentials loader's narrow deploy-channel arm — allow-list, empty-token refusal, no prd_terraform read). Previously: # 47 -> 48 (#10990): +1 row, G1k (AC7b limb 3 — local .sh state-writers source their ambient AWS_* pair from a Tier-B name). Previously: # 46 -> 47 (#9927 8b): +1 row, G1j (every loader job declares a Tier-B environment). Previously: # 43 -> 45 (#9879): +2 rows, G4h (no removed/moved over a sole-copy address) and G4h2 (the exact sole-copy set); main carries 43 live rows against a floor of 42 (the floor sat one below the live count), and the floor is now exactly the live count. 45 -> 46 (#9879 round 2): +1 row, G4h4 (the live removed/moved counts equal the unscrubbed count). 22 -> 23 (#9215): G1i-rk, the root-key extract-precedence row. 23 -> 34 (#8609): Guard 6, G6a..G6l.
 # 41 -> 42 (#9321 PR-2, 2026-10-03): G7f, the App-token composite and callers source-shape row.
 # 34 -> 38 (#8609 review): G6o (plan-context invariance), G6q (exact opt-in set), G6s (cosign
 # caller-ref pin), G6u (UnsetEnvironment sweep).
@@ -3668,6 +3719,90 @@ MUTDIR="$(fixcopy g1-2k)"; assert_fixture_dir "$MUTDIR"
 if mutate g1-2k-empty-arm-inngest-flip-read-token "$MUTDIR/tree/.github/workflows/tierb-conditional.yml" 4 '/- run: echo done/a\      - name: Privileged noop\n        env:\n          X: ${{ secrets.DOPPLER_TOKEN_INNGEST_FLIP_READ }}\n        run: echo x'; then
   fixcensus "$MUTDIR" "$T/mut/g1-2k.tsv" ""
   mutant_red g1-2k-empty-arm-inngest-flip-read-token wf_row "$T/mut/g1-2k.tsv" "G1j:"
+fi
+# ── Guard 1l mutation rows (#9294 PR-B — the trio boundary) ──────────────────────────────
+# Row g1l-1 — a bare `secrets.WEBHOOK_DEPLOY_SECRET` bind in a job with no `environment:`.
+MUTDIR="$(fixcopy g1l-1)"; assert_fixture_dir "$MUTDIR"
+printf 'name: zz\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.WEBHOOK_DEPLOY_''SECRET }}\n' > "$MUTDIR/tree/.github/workflows/zz-trio-noenv.yml"
+if fixture_written g1l-1-bare-trio-bind-no-environment "$MUTDIR/tree/.github/workflows/zz-trio-noenv.yml"; then
+  fixcensus "$MUTDIR" "$T/mut/g1l-1.tsv" ""
+  mutant_red g1l-1-bare-trio-bind-no-environment wf_row "$T/mut/g1l-1.tsv" "G1l:"
+fi
+# Row g1l-2 — the `deploy_channel_main` policy resource deleted while `deploy-channel` stays in
+# TIER_B_ENVIRONMENTS: the census proves the main-only env from the `.tf`, not from its own list.
+MUTDIR="$(fixcopy g1l-2)"; assert_fixture_dir "$MUTDIR"
+if mutate g1l-2-deploy-channel-policy-removed "$MUTDIR/tree/apps/web-platform/infra/environments.tf" 5 '/^resource "github_repository_environment_deployment_policy" "deploy_channel_main"/,/^\}/d'; then
+  fixcensus "$MUTDIR" "$T/mut/g1l-2.tsv" ""
+  mutant_red g1l-2-deploy-channel-policy-removed wf_row "$T/mut/g1l-2.tsv" "G1d:"
+fi
+# Row g1l-3 — a compliant `deploy-channel` trio job beside a bare one: the guard must not stop at
+# the compliant member.
+MUTDIR="$(fixcopy g1l-3)"; assert_fixture_dir "$MUTDIR"
+# The fixture's trio literals are assembled, not contiguous: this file's embedded scanner text
+# already carries counted invocation shapes, so a contiguous stem would key census rows here.
+_TRIO_F1='WEBHOOK_DEPLOY_''SECRET' _TRIO_F2='CF_ACCESS_''CLIENT_ID'
+cat > "$MUTDIR/tree/.github/workflows/zz-trio-mixed.yml" <<EOF
+name: zz mixed trio
+on: workflow_dispatch
+jobs:
+  bare:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo x
+        env:
+          T: \${{ secrets.${_TRIO_F1} }}
+  bound:
+    runs-on: ubuntu-24.04
+    environment: deploy-channel
+    steps:
+      - run: echo x
+        env:
+          T: \${{ secrets.${_TRIO_F2} }}
+EOF
+if fixture_written g1l-3-compliant-member-does-not-excuse "$MUTDIR/tree/.github/workflows/zz-trio-mixed.yml"; then
+  fixcensus "$MUTDIR" "$T/mut/g1l-3.tsv" ""
+  mutant_red g1l-3-compliant-member-does-not-excuse wf_row "$T/mut/g1l-3.tsv" "G1l:"
+fi
+# Row g1l-4 — every trio name trips the row (CF_ACCESS_CLIENT_ID, not only the HMAC key), and a
+# non-member environment is not a literal Tier-B env.
+MUTDIR="$(fixcopy g1l-4)"; assert_fixture_dir "$MUTDIR"
+printf 'name: zz\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    environment: some-unlisted-env\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.CF_ACCESS_''CLIENT_ID }}\n' > "$MUTDIR/tree/.github/workflows/zz-trio-badenv.yml"
+if fixture_written g1l-4-non-tier-b-env-trio-bind "$MUTDIR/tree/.github/workflows/zz-trio-badenv.yml"; then
+  fixcensus "$MUTDIR" "$T/mut/g1l-4.tsv" ""
+  mutant_red g1l-4-non-tier-b-env-trio-bind wf_row "$T/mut/g1l-4.tsv" "G1l:"
+fi
+# Row g1l-5 — a `doppler secrets get WEBHOOK_DEPLOY_SECRET -c prd_terraform` outside the loader:
+# the trio names are TIER_B_NAMES members now, so G1g's no-non-loader-read row owns the red even
+# on a job bound to a literal Tier-B env (G1l stays green for it — the two rows split the proof).
+MUTDIR="$(fixcopy g1l-5)"; assert_fixture_dir "$MUTDIR"
+printf 'name: zz\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    environment: deploy-channel\n    steps:\n      - run: doppler secrets get WEBHOOK_DEPLOY_''SECRET -p soleur -c prd_terraform --plain\n' > "$MUTDIR/tree/.github/workflows/zz-trio-doppler.yml"
+if fixture_written g1l-5-trio-doppler-prd-terraform-read "$MUTDIR/tree/.github/workflows/zz-trio-doppler.yml"; then
+  fixcensus "$MUTDIR" "$T/mut/g1l-5.tsv" ""
+  mutant_red g1l-5-trio-doppler-prd-terraform-read wf_row "$T/mut/g1l-5.tsv" "G1g:"
+fi
+# Row g1l-6 — the single-literal expression bypass: `${{ inputs.e || 'deploy-channel' }}` parses to
+# the same one in-set arm as the scalar but resolves to a caller-controlled environment.
+MUTDIR="$(fixcopy g1l-6)"; assert_fixture_dir "$MUTDIR"
+printf 'name: zz\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    environment: ${{ inputs.e || '"'"'deploy-channel'"'"' }}\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.WEBHOOK_DEPLOY_''SECRET }}\n' > "$MUTDIR/tree/.github/workflows/zz-trio-exprenv.yml"
+if fixture_written g1l-6-single-literal-expression-env "$MUTDIR/tree/.github/workflows/zz-trio-exprenv.yml"; then
+  fixcensus "$MUTDIR" "$T/mut/g1l-6.tsv" ""
+  mutant_red g1l-6-single-literal-expression-env wf_row "$T/mut/g1l-6.tsv" "G1l:"
+fi
+# Row g1l-7 — `cond && 'deploy-channel'` with no false arm: one in-set literal, yet a falsy
+# condition resolves to NO environment.
+MUTDIR="$(fixcopy g1l-7)"; assert_fixture_dir "$MUTDIR"
+printf 'name: zz\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    environment: ${{ github.ref == '"'"'refs/heads/main'"'"' && '"'"'deploy-channel'"'"' }}\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.CF_ACCESS_''CLIENT_ID }}\n' > "$MUTDIR/tree/.github/workflows/zz-trio-condenv.yml"
+if fixture_written g1l-7-conditional-no-false-arm "$MUTDIR/tree/.github/workflows/zz-trio-condenv.yml"; then
+  fixcensus "$MUTDIR" "$T/mut/g1l-7.tsv" ""
+  mutant_red g1l-7-conditional-no-false-arm wf_row "$T/mut/g1l-7.tsv" "G1l:"
+fi
+# Row g1l-8 — the lowercase bind: the secrets context resolves case-insensitively, so
+# `secrets.webhook_deploy_secret` is the same acquisition and must red identically.
+MUTDIR="$(fixcopy g1l-8)"; assert_fixture_dir "$MUTDIR"
+printf 'name: zz\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.webhook_deploy_''secret }}\n' > "$MUTDIR/tree/.github/workflows/zz-trio-lower.yml"
+if fixture_written g1l-8-lowercase-trio-bind "$MUTDIR/tree/.github/workflows/zz-trio-lower.yml"; then
+  fixcensus "$MUTDIR" "$T/mut/g1l-8.tsv" ""
+  mutant_red g1l-8-lowercase-trio-bind wf_row "$T/mut/g1l-8.tsv" "G1l:"
 fi
 # Row 3 — delete the `workspaces_luks_cutover_main` policy while the environment stays in the set.
 MUTDIR="$(fixcopy g1-3)"; assert_fixture_dir "$MUTDIR"
@@ -5560,7 +5695,7 @@ fi
 # 165 -> 171 (#12742 round 2, G2a fails closed on the prefix): g2-2c..g2-2g (timeout -k / --preserve-status / 1m30s,
 #   env -u, a quoted `$(timeout -k ...)`) and the g2-2h quoted-prose control; 1 landing each. Measured: 171 ran.
 # 181 + 7 -> 188 (main merge into #12876): main's #9294 rows and this PR's g2-2b..g2-2h rows are disjoint. Measured: 188 ran.
-MUTANT_FLOOR=196  # 188 -> 196 (#12873 follow-up): g1-8b..g1-8i (the reusable-caller cover on G1b).
+MUTANT_FLOOR=204  # union: 196 (188 + main's #12873 g1-8b..g1-8i) + 5 (#9294 PR-B G1l boundary rows)
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -5643,7 +5778,12 @@ _ran=$((passes + fails))
 # 425 -> 437 (#12742 round 2): g2-2c..g2-2g (5 landings + 5 verdicts), g2-2h (1 landing + 1 must-stay-green). Measured: 437 ran.
 # 460 + 14 -> 474 (main merge into #12876): this PR's 15 rows above were measured on a base that already ran
 #   G1k (its 425, one over the 424 floor), and main counts G1k in its 459 -> 460 step. Measured: 474 ran.
-FLOOR=474
+# 474 -> 507 (#9294 PR-B review round): G1l (1 live census assertion) + g1l-1..8 mutation rows (8 landings +
+#   8 verdicts; the 3 pre-existing rows count too) + the D-8/third-env-arm rows already in this diff. The floor
+#   had sat at 474 while the suite measured 501+ — exactly the drift the test-design reviewer flagged: the
+#   floor is a minimum-only backstop, so it must be raised in the same diff as the rows it counts.
+#   Measured: 507 ran.
+FLOOR=507
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

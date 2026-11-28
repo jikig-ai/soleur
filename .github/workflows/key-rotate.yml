@@ -238,6 +238,10 @@ jobs:
       actions: read
     outputs:
       verdict: ${{ steps.final.outputs.verdict }}
+    # #9294 PR-B: the trio rides the main-only deploy-channel environment; the
+    # narrow loader exports WEBHOOK_DEPLOY_SECRET / CF_ACCESS_CLIENT_{ID,SECRET}
+    # to job env below — no `secrets.<trio>` bind remains.
+    environment: deploy-channel
     env:
       # The fan-out roster for the redeploy (track.sh `peers`). Pinned to var.web_hosts by
       # apps/web-platform/infra/web-hosts-fanout-parity.test.sh; an empty value would redeploy web-1 alone.
@@ -247,6 +251,12 @@ jobs:
         timeout-minutes: 2
         with:
           persist-credentials: false
+
+      - name: Load deploy-channel credentials
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-project: soleur-deploy-channel
+          doppler-token-deploy-channel: ${{ secrets.DOPPLER_TOKEN_DEPLOY_CHANNEL }}
 
       # Step 1: the facts that age (an approval or a queue can take hours): attempt, related runs, an earlier run of this workflow, the
       # kb_drift walker. After a landed write this step never refuses on staleness, the kb window or quiet_window: it polls the
@@ -260,15 +270,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/key-rotate.sh redeploy recheck
 
-      # Step 2: the ONLY step that names the deploy trio, and it holds no GH_TOKEN and no Doppler token. KR_REDEPLOY_STEP_S / 60.
+      # Step 2: the ONLY step that consumes the deploy trio (ambient from the
+      # deploy-channel loader), and it holds no GH_TOKEN and no Doppler token.
+      # KR_REDEPLOY_STEP_S / 60.
       - name: Fleet redeploy (canary then prod)
         id: track
         if: ${{ steps.recheck.outcome == 'success' }}
         timeout-minutes: 85
-        env:
-          WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: bash scripts/key-rotate.sh redeploy track
 
       # Step 3 (egress only, #11920): the vector restart fan-out. Runs AFTER the fleet redeploy — Vector restarted first
@@ -282,9 +290,6 @@ jobs:
         env:
           EFF_MODE: ${{ needs.guard.outputs.mode }}
           EFF_KEY: ${{ needs.guard.outputs.key }}
-          WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: bash scripts/key-rotate.sh redeploy vector
 
       # Step 4: exports a verdict on EVERY path (rotate_ok, vector_restarted, rotated_redeploy_failed, owner_step_pending).

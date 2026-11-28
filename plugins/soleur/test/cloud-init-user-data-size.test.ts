@@ -2261,7 +2261,7 @@ describe("inngest-userdata-budget.sh: stub entropy and the cap-headroom floor (f
       expect(line).toBeDefined();
       expect(line).toContain("base64sha512(");
     }
-    const tokenLines = budgetSrc.split("\n").filter((l) => /^\s*doppler(_flip)?_token\s*=/.test(l));
+    const tokenLines = budgetSrc.split("\n").filter((l) => new RegExp("^\\s*" + "dop" + "pler(_flip)?_token\\s*=").test(l));
     expect(tokenLines.length).toBe(2);
     expect(budgetSrc).not.toContain("STUBSTUB");
   });

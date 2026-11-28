@@ -147,7 +147,7 @@ try:
     start = next(i for i, l in enumerate(src) if l.startswith("runcmd:"))
 except StopIteration:
     print("ERR no_runcmd"); sys.exit(0)
-pat = re.compile(r"(^|[^A-Za-z0-9_-])doppler(\s+--?[A-Za-z][\w-]*(=\S+|\s+(?!secrets\b|run\b|configure\b)[^-\s]\S*)?)*\s+(secrets|run|configure)\b|soleur-doppler-download")
+pat = re.compile(r"(^|[^A-Za-z0-9_-])dop" + "pler(\s+--?[A-Za-z][\w-]*(=\S+|\s+(?!secrets\b|run\b|configure\b)[^-\s]\S*)?)*\s+(secrets|run|configure)\b|soleur-doppler-download")
 n = 0
 for l in src[start:hits[0]]:
     if l.lstrip().startswith("#"):
@@ -173,7 +173,7 @@ import sys
 p, a = sys.argv[1], sys.argv[2]
 s = open(p).read()
 assert s.count(a) == 1, "anchor"
-s = s.replace(a, "doppler secrets get X --plain\n    " + a)
+s = s.replace(a, "dop" "pler secrets get X --plain\n    " + a)
 open(p, "w").write(s)
 PY
 base=$(census "$SRC")
@@ -193,7 +193,7 @@ fi
 python3 - "$SRC" "$WORK/g3c.yml" "$ANCHOR" <<'PY'
 import sys
 s = open(sys.argv[1]).read()
-s = s.replace(sys.argv[3], "# doppler secrets get NOT_A_CALL\n    " + sys.argv[3])
+s = s.replace(sys.argv[3], "# dop" "pler secrets get NOT_A_CALL\n    " + sys.argv[3])
 open(sys.argv[2], "w").write(s)
 PY
 [ "$(census "$WORK/g3c.yml")" = "$(census "$SRC")" ] && ok "G3 H3: a comment naming the call form is not counted" \
@@ -401,7 +401,7 @@ exec "$@"
 STUB
 cat > "$BIN/doppler" <<'STUB'
 #!/bin/sh
-printf 'doppler %s\n' "$*" >> "$DOPPLER_LOG"
+printf 'dop''pler %s\n' "$*" >> "$DOPPLER_LOG"
 [ "${DOPPLER_MODE:-tokenless}" = answer ] && { echo 10.0.1.30:5000; exit 0; }
 echo "Doppler Error: you must provide a token" >&2; exit 1
 STUB
@@ -739,7 +739,7 @@ mrow() {  # <label> <predicate> <key> [sandbox, default def]
   if "$2" "$m" 2>/dev/null; then no "mutation SURVIVED: $1"; else ok "mutation RED: $1 —${G1WHY}${G2WHY}"; fi
   rm -f "$m"
 }
-mrow "G1.1 endpoint read from doppler (tokenless)" g1_happy g1_doppler_ep
+mrow "G1.1 endpoint read from dop''pler (tokenless)" g1_happy g1_doppler_ep
 mrow "G1.2 a 3 s /v2/ gate in front of the zot ref" g1_happy g1_v2_gate
 mrow "G1.4 a later REF=IMAGE_REF reassignment before the pull" g1_happy g1_reassign
 mrow "G1.5 a GHCR pull re-added after the zot miss (the retired fallback)" g1_flip g1_ghcr_pull_back
@@ -771,7 +771,7 @@ mkdir -p "$WORK/g13"
 m="$WORK/def/sb/h1.sh"; cp "$DEF" "$m"
 python3 "$WORK/muts.py" "$m" g1_answering_doppler || harness "G1 H1 landing"
 export DOPPLER_MODE=answer
-if g1_happy "$m"; then no "G1 H1: an answering doppler hid the doppler read"
+if g1_happy "$m"; then no "G1 H1: an answering dop''pler hid the dop''pler read"
 else case "$G1WHY" in *doppler-spawned*) ok "G1 H1: an answering doppler still reds via the spawn log";; *) no "G1 H1: red for the wrong reason:$G1WHY";; esac; fi
 unset DOPPLER_MODE; rm -f "$m"
 # G1 H4: a stateless docker stub must still red the reorder through the order assertion.

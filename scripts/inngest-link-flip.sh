@@ -303,7 +303,7 @@ flip_verify() {
 flip_resolved_query() {
   local since
   since="$(date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ)"
-  printf '%s' "doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since ${since} --grep 'class=resolved' | jq -R -r 'fromjson? | .raw? | fromjson? | select(.SYSLOG_IDENTIFIER == \"ci-deploy\") | \"\\(.host_name) \\(.host) \\(.message)\"'"
+  printf '%s' "bash scripts/lib/doppler-read.sh bs bash scripts/betterstack-query.sh --since ${since} --grep 'class=resolved' | jq -R -r 'fromjson? | .raw? | fromjson? | select(.SYSLOG_IDENTIFIER == \"ci-deploy\") | \"\\(.host_name) \\(.host) \\(.message)\"'"
 }
 
 # flip_read_line <state=... scheme=...>: the sentence that reads the resolved row of every host. A resolved row says which scheme a host's

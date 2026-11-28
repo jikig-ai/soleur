@@ -697,7 +697,7 @@ kk_copy_state() {
   if [[ "$rc" != 0 ]]; then if [[ "$rc" == 124 || "$rc" == 137 ]]; then printf 'unknown:listing_timeout'; else printf 'unknown:listing_failed'; fi; return 0; fi
   [[ -n "$names" ]] || { printf 'unknown:listing_empty'; return 0; }
   if ! grep -Eq "(^|[^A-Za-z0-9_])${3}([^A-Za-z0-9_]|\$)" <<<"$names"; then printf 'absent'; return 0; fi
-  h="$(DOPPLER_TOKEN="${DOPPLER_TOKEN_TF:-}" timeout "$KK_DOPPLER_READ_S" doppler secrets get "$3" --plain -p "$1" -c "$2" 2>/dev/null | sha256sum | cut -c1-64)" || rc=$?
+  h="$(DOPPLER_TOKEN="${DOPPLER_TOKEN_TF:-}" timeout "$KK_DOPPLER_READ_S" bash "$KK_ROOT/scripts/lib/doppler-read.sh" hash "$1" "$2" "$3" 2>/dev/null)" || rc=$?
   if [[ "$rc" != 0 ]]; then if [[ "$rc" == 124 || "$rc" == 137 ]]; then printf 'unknown:read_timeout'; else printf 'unknown:read_failed'; fi; return 0; fi
   [[ "$h" =~ ^[0-9a-f]{64}$ && "$h" != "$KR_EMPTY_SHA" ]] || { printf 'unknown:read_empty'; return 0; }
   printf 'present %s' "$h"

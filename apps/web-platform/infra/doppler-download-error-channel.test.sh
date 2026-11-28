@@ -125,8 +125,8 @@ fi
 # Join backslash-continuations first: the doppler call wraps, so `> "$OUT"` sits on the second
 # physical line and a per-line match would compare against a fragment.
 helper_joined="$(printf '%s\n' "$helper_code" | sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta')"
-if printf '%s\n' "$helper_joined" | grep -E '>>?[[:space:]]*"\$OUT"' | grep -c 'doppler secrets download' >/dev/null; then
-  ok "AC-H2b: the sole \$OUT writer is the doppler invocation"
+if printf '%s\n' "$helper_joined" | grep -E '>>?[[:space:]]*"\$OUT"' | grep -c 'soleur-doppler-fetch' >/dev/null; then
+  ok "AC-H2b: the sole \$OUT writer is the fetch invocation (soleur-doppler-fetch carries the doppler call, #9294 PR-B)"
 else
   no "AC-H2b: the line writing \$OUT is not the doppler invocation"
 fi
@@ -223,10 +223,10 @@ fi
 # Bounded call: the failing download was the ONLY unbounded Doppler invocation in the file
 # (11 bounded siblings). An unbounded hang emits NOTHING, so the channel would be structurally
 # blind to the leading hypothesis' most common shape.
-if printf '%s\n' "$helper_code" | grep -cE 'timeout -k [0-9]+ "\$TMO" doppler' >/dev/null; then
+if printf '%s\n' "$helper_code" | grep -cE 'timeout -k [0-9]+ "\$TMO" soleur-doppler-fetch' >/dev/null; then
   ok "AC-E4: the doppler invocation is timeout-bounded WITH -k (a TERM-ignoring hang is still bounded)"
 else
-  no "AC-E4: the helper's doppler invocation must be wrapped in 'timeout' (R19)"
+  no "AC-E4: the helper's soleur-doppler-fetch invocation must be wrapped in 'timeout' (R19)"
 fi
 if printf '%s\n' "$helper_code" | grep -cF 'NO_COLOR=1' >/dev/null; then
   ok "AC-A5: helper invokes the CLI with NO_COLOR=1 (deterministic payload)"
@@ -268,6 +268,9 @@ mk_sandbox() { # mk_sandbox <sandbox-dir> <doppler-script-body>
     no "MK: residual @@ sentinel after the SHIPPED splice — a typo'd sentinel darkens the channel"
   fi
   printf '%s\n' "$HELPER" > "$sb/bin/soleur-doppler-download"
+  # The REAL fetch helper sits beside the helper under test so the full chain
+  # helper -> soleur-doppler-fetch -> doppler-stub is exercised (#9294 PR-B).
+  cp "$(dirname "$BOOT")/soleur-doppler-fetch.sh" "$sb/bin/soleur-doppler-fetch"
   # curl stub: record the -d body (the emitted event) one per line, always succeed.
   cat > "$sb/bin/curl" <<CURLSTUB
 #!/bin/sh

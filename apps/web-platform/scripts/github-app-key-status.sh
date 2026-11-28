@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Which GitHub App key source did web-1's last deploy run on? (#8609 discoverability test)
-#   doppler run -p soleur -c prd_terraform -- bash apps/web-platform/scripts/github-app-key-status.sh
+#   run it with the trio injected from the narrow carrier:
+#   bash scripts/lib/doppler-read.sh run soleur-deploy-channel prd bash apps/web-platform/scripts/github-app-key-status.sh
 # Signs the empty-body GET to /hooks/deploy-status exactly as web-platform-release.yml's deploy-status
 # reader does (HMAC over "" with WEBHOOK_DEPLOY_SECRET, plus the CF Access pair) and prints, one
 # `name=value` per line:
@@ -22,9 +23,11 @@ case "$-" in
     fi
     ;;
 esac
-for v in WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
-  [[ -n "${!v:-}" ]] || { printf 'missing %s — run under doppler run -p soleur -c prd_terraform\n' "$v" >&2; exit 3; }
-done
+# Explicit named checks (no indirect expansion): the trio is the narrow deploy-channel carrier's
+# injection now — soleur-deploy-channel/prd, never the retired prd_terraform copy.
+[ -n "${WEBHOOK_DEPLOY_SECRET:-}" ] || { printf 'missing WEBHOOK_DEPLOY_SECRET — inject the trio from soleur-deploy-channel/prd (see the header recipe)\n' >&2; exit 3; }
+[ -n "${CF_ACCESS_CLIENT_ID:-}" ] || { printf 'missing CF_ACCESS_CLIENT_ID — inject the trio from soleur-deploy-channel/prd\n' >&2; exit 3; }
+[ -n "${CF_ACCESS_CLIENT_SECRET:-}" ] || { printf 'missing CF_ACCESS_CLIENT_SECRET — inject the trio from soleur-deploy-channel/prd\n' >&2; exit 3; }
 # The credentials reach curl on its stdin config channel and the HMAC key reaches a python3 child in its
 # environment, never an argument list (tracker #9597, ADR-280). The library is found from THIS file's own
 # location: this diagnostic is run from anywhere. A refusal (an unusable value, or python3 missing) makes

@@ -397,6 +397,7 @@ COPY --from=builder \
   /app/infra/journald-soleur.conf \
   /app/infra/soleur-host-bootstrap.sh \
   /app/infra/cosign-trusted-root.json \
+  /app/infra/soleur-doppler-fetch.sh \
   /app/infra/vector.toml \
   /app/infra/seccomp-bwrap.json \
   /app/infra/apparmor-soleur-bwrap.profile \

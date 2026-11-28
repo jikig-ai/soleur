@@ -18,7 +18,7 @@
 # transient failure or for ad-hoc applies.
 #
 # Doppler `prd_terraform` config provides:
-#   - HCLOUD_TOKEN          (via doppler run --name-transformer tf-var)
+#   - HCLOUD_TOKEN          (via the tf-var Doppler injection)
 #   - AWS_ACCESS_KEY_ID     (R2 backend)
 #   - AWS_SECRET_ACCESS_KEY (R2 backend)
 #
@@ -443,8 +443,7 @@ jobs:
           set -euo pipefail
           # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
-          doppler run --preserve-env --name-transformer tf-var -- \
-            terraform plan -target=terraform_data.deploy_pipeline_fix \
+          bash "${GITHUB_WORKSPACE}/scripts/lib/doppler-read.sh" tf plan -target=terraform_data.deploy_pipeline_fix \
             -target=terraform_data.infra_config_handler_bootstrap \
             -target=terraform_data.docker_seccomp_config \
             -target=terraform_data.apparmor_bwrap_profile \
@@ -651,7 +650,13 @@ jobs:
           PRE_STATUS="error"
           PRE_TS=""
 
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          # APP_DOMAIN_BASE is DERIVED from committed variables.tf, never read from a runtime
+          # store: a branch actor with write access to a Doppler config could otherwise plant it
+          # and redirect the credentialed deploy-webhook traffic below (HMAC + CF Access pair) to
+          # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
+          # committed file in this checkout, so a derivation failure means the repo is broken and
+          # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
           WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET:-}"
           # Mask before any of these can reach a log line. This repo is PUBLIC and this same
           # workflow already does exactly this ~200 lines below for the same credential class;
@@ -786,8 +791,7 @@ jobs:
           # Free safety improvement worth naming: with `use_lockfile = false`, a break-glass
           # apply run outside CI now fails closed with a stale-plan error instead of silently
           # last-writer-wins.
-          doppler run --preserve-env --name-transformer tf-var -- \
-            terraform apply -auto-approve -input=false tfplan 2>&1 | tf_redact_random_ids
+          bash "${GITHUB_WORKSPACE}/scripts/lib/doppler-read.sh" tf apply -auto-approve -input=false tfplan 2>&1 | tf_redact_random_ids
 
       - name: Tear down cloudflared SSH bridge
         if: always()
@@ -848,7 +852,13 @@ jobs:
           # argument list (ADR-280). A refusal prints the marker and reads as HTTP 000 below (the
           # same red as any failed read, after 3 attempts), never a green.
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          # APP_DOMAIN_BASE is DERIVED from committed variables.tf, never read from a runtime
+          # store: a branch actor with write access to a Doppler config could otherwise plant it
+          # and redirect the credentialed deploy-webhook traffic below (HMAC + CF Access pair) to
+          # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
+          # committed file in this checkout, so a derivation failure means the repo is broken and
+          # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
@@ -895,7 +905,13 @@ jobs:
         run: |
           set -euo pipefail
           export APP_DOMAIN_BASE
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          # APP_DOMAIN_BASE is DERIVED from committed variables.tf, never read from a runtime
+          # store: a branch actor with write access to a Doppler config could otherwise plant it
+          # and redirect the credentialed deploy-webhook traffic below (HMAC + CF Access pair) to
+          # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
+          # committed file in this checkout, so a derivation failure means the repo is broken and
+          # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
           : "${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}" "${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID - see the Load infra credentials step source= line}" "${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET - see the Load infra credentials step source= line}"
           bash scripts/check-deploy-script-parity.sh --status-only
 
@@ -953,8 +969,7 @@ jobs:
           # So guard on CONTENT: require the decode to succeed AND to yield the template's
           # own marker line. sha256sum is reached only through that gate.
           b64=""; console_rc=0
-          b64="$(doppler run --preserve-env --name-transformer tf-var -- \
-            terraform console -var="ssh_key_path=${CI_SSH_PUB}" \
+          b64="$(bash "${GITHUB_WORKSPACE}/scripts/lib/doppler-read.sh" tf console -var="ssh_key_path=${CI_SSH_PUB}" \
             <<<'nonsensitive(base64encode(local.webhook_doppler_token_env))' 2>/dev/null)" || console_rc=$?
           b64="${b64//\"/}"
           # #7103 R4 — MASK IT. This repository is PUBLIC (verified: `gh repo view --json
@@ -1000,7 +1015,13 @@ jobs:
           # manual workflow_dispatch ONLY for a documented first bootstrap.
           ALLOW_MISSING_STATUS: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_missing_status_endpoint }}
           VERIFY_PASS: "1"
-        run: bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"
+        run: |
+          # APP_DOMAIN_BASE rides the env derived from committed variables.tf — never a
+          # runtime-store read (a planted value would redirect the credentialed webhook
+          # traffic the verifier sends; security-sentinel P1, #13006 review). The script
+          # itself stays a pure env consumer under its actuation sweep.
+          export APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
+          bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"
 
       # --- #7104 PR-B: the bounded re-push -------------------------------------------------
       #
@@ -1044,8 +1065,7 @@ jobs:
           # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           rc=0
-          doppler run --preserve-env --name-transformer tf-var -- \
-            terraform plan \
+          bash "${GITHUB_WORKSPACE}/scripts/lib/doppler-read.sh" tf plan \
               -replace=terraform_data.deploy_pipeline_fix \
               -target=terraform_data.deploy_pipeline_fix \
               -var="ssh_key_path=${CI_SSH_PUB}" \
@@ -1215,7 +1235,7 @@ jobs:
           # Two defects were measured here, and both fired the highest-severity remedy in the
           # whole feature on a HEALTHY host.
           #
-          #   (a) `X=$(doppler ... || doppler ...)` under `set -euo pipefail` ABORTS AT THE
+          #   (a) `X=$(doppler_cmd || doppler_cmd)` under `set -euo pipefail` ABORTS AT THE
           #       ASSIGNMENT when both reads fail. The step then dies with NO ::error:: at all --
           #       measured, it printed nothing and exited 1 -- and three consumers key on the raw
           #       step outcome. A Doppler blip therefore files a P1 issue stating that the sole
@@ -1234,7 +1254,13 @@ jobs:
           # allow-list what counts as alive. Both non-up states still red the job -- after writing
           # production, an unverifiable channel is not an all-clear -- but they are now
           # DISTINGUISHABLE, and the consumers can stop asserting a cause nobody measured.
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          # APP_DOMAIN_BASE is DERIVED from committed variables.tf, never read from a runtime
+          # store: a branch actor with write access to a Doppler config could otherwise plant it
+          # and redirect the credentialed deploy-webhook traffic below (HMAC + CF Access pair) to
+          # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
+          # committed file in this checkout, so a derivation failure means the repo is broken and
+          # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
           CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID:-}"
           CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET:-}"
           if [[ -z "${CF_ACCESS_ID:-}" || -z "${CF_ACCESS_SECRET:-}" ]]; then
@@ -1312,7 +1338,13 @@ jobs:
           # "DPF_REPLACED is '', not true/false". That mistake was made and caught here
           # while writing this step; it is the exact class Guard 1 pins, because actionlint
           # reports nothing for it.
-        run: bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"
+        run: |
+          # APP_DOMAIN_BASE rides the env derived from committed variables.tf — never a
+          # runtime-store read (a planted value would redirect the credentialed webhook
+          # traffic the verifier sends; security-sentinel P1, #13006 review). The script
+          # itself stays a pure env consumer under its actuation sweep.
+          export APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
+          bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"
 
       # #7104 PR-B review — RECLAIM THE BINARY PLAN ON EVERY PATH, INCLUDING THE SKIPPED ONES.
       #
@@ -1447,7 +1479,7 @@ jobs:
             exit 1
           fi
           if [[ "${WEBHOOK_LIVENESS_OUTCOME:-}" == "failure" ]]; then
-            echo "::error::NO TERMINAL VERDICT, and the config channel is DOWN. The bounded re-push applied and the post-re-push liveness probe then found the webhook listener not responding, which SKIPS pass 2 (it is skipped, not failed). Nothing was mis-keyed. This run wrote production and no verdict exists for it. Route back: (run from apps/web-platform/infra) doppler run --name-transformer tf-var -- terraform apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s . Do NOT run terraform apply -replace=hcloud_server.web -- that host cannot be re-provisioned (cx33, 0/6 stock)."
+            echo "::error::NO TERMINAL VERDICT, and the config channel is DOWN. The bounded re-push applied and the post-re-push liveness probe then found the webhook listener not responding, which SKIPS pass 2 (it is skipped, not failed). Nothing was mis-keyed. This run wrote production and no verdict exists for it. Route back: (run from the repo root) bash scripts/lib/doppler-read.sh tfapply apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s . Do NOT run terraform apply -replace=hcloud_server.web -- that host cannot be re-provisioned (cx33, 0/6 stock)."
             exit 1
           fi
           if [[ "${REPUSH_APPLY_OUTCOME:-}" == "failure" || "${REPUSH_PLAN_OUTCOME:-}" == "failure" ]]; then
@@ -1918,7 +1950,7 @@ jobs:
             exit 0
           fi
           if [[ "${WEBHOOK_LIVENESS_OUTCOME:-}" == "failure" ]]; then
-            infra_config_red_alert "The bounded re-push applied, and the post-re-push liveness probe then found the webhook listener DOWN. The recovery destroyed the sole no-SSH remediation channel on a host that cannot be re-provisioned (cx33, 0/6 stock). Pass 2 did not run — it is skipped, not failed — so no delivery verdict exists for this run and none should be inferred. The route back does not depend on the webhook being alive: (run from apps/web-platform/infra) doppler run --name-transformer tf-var -- terraform apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s , which reprovisions the handler over root SSH on the CF Tunnel. Do NOT run terraform apply -replace=hcloud_server.web ." "unreachable" || true
+            infra_config_red_alert "The bounded re-push applied, and the post-re-push liveness probe then found the webhook listener DOWN. The recovery destroyed the sole no-SSH remediation channel on a host that cannot be re-provisioned (cx33, 0/6 stock). Pass 2 did not run — it is skipped, not failed — so no delivery verdict exists for this run and none should be inferred. The route back does not depend on the webhook being alive: (run from the repo root) bash scripts/lib/doppler-read.sh tfapply apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s , which reprovisions the handler over root SSH on the CF Tunnel. Do NOT run terraform apply -replace=hcloud_server.web ." "unreachable" || true
             exit 0
           fi
 
@@ -1972,10 +2004,10 @@ jobs:
               LEVER="Nothing was written. Re-run the workflow; if it fails here again, the re-push plan's shape has drifted from the 2026-08-13 measurement and the recovery is correctly refusing to write."
             elif [[ "${REPUSH_APPLY_OUTCOME:-}" == "failure" ]]; then
               PHASE="applying the re-push (a production write was ATTEMPTED and did not complete)"
-              LEVER="Terraform state may hold a tainted terraform_data.deploy_pipeline_fix. There is no backend lock to clear. Run a plan first to see the current state, then the documented lever is: (run from apps/web-platform/infra) doppler run --name-transformer tf-var -- terraform apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s . Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock)."
+              LEVER="Terraform state may hold a tainted terraform_data.deploy_pipeline_fix. There is no backend lock to clear. Run a plan first to see the current state, then the documented lever is: (run from the repo root) bash scripts/lib/doppler-read.sh tfapply apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s . Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock)."
             else
               PHASE="re-verifying after the re-push (the write completed; the host still did not publish a new frame)"
-              LEVER="The bounded recovery is spent — it is one attempt by construction, so re-running will not retry it. The documented lever is: (run from apps/web-platform/infra) doppler run --name-transformer tf-var -- terraform apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s . Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock)."
+              LEVER="The bounded recovery is spent — it is one attempt by construction, so re-running will not retry it. The documented lever is: (run from the repo root) bash scripts/lib/doppler-read.sh tfapply apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s . Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock)."
             fi
             # `repush_failed`, not `reachable` (#7104 PR-B review). The reachable body opens "the
             # files themselves reached the server", which is FALSE on the plan-failure path where
@@ -2116,7 +2148,7 @@ jobs:
           # false and the issue written from it pointed at destroying an unreplaceable host. It
           # names the forbidden TARGET, not just the command: `-replace` on the handler bootstrap
           # is legitimate and is prescribed elsewhere in this very workflow.
-          infra_config_red_alert "${WHERE} What is still true: the files that landed are on the host, and app health is unaffected — this is an ACTIVATION failure, not a delivery one. Next: from the repo root, run: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_INFRA_CONFIG_FATAL. Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock). Replacing terraform_data.infra_config_handler_bootstrap is a different and safe operation, but it is only the right lever when the status endpoint returns 000/502/503." "reachable" || true
+          infra_config_red_alert "${WHERE} What is still true: the files that landed are on the host, and app health is unaffected — this is an ACTIVATION failure, not a delivery one. Next: from the repo root, run: bash scripts/lib/doppler-read.sh bs bash scripts/betterstack-query.sh --since 1h --grep SOLEUR_INFRA_CONFIG_FATAL. Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock). Replacing terraform_data.infra_config_handler_bootstrap is a different and safe operation, but it is only the right lever when the status endpoint returns 000/502/503." "reachable" || true
 
       # GATED ON THE VERDICT, NOT ON success() (#7104 PR-B review).
       #
@@ -2172,7 +2204,13 @@ jobs:
           # argument list (ADR-280). A refusal prints the marker and reads as HTTP 000, which the
           # existing red arms below already treat as a failed read or a rejected webhook.
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          # APP_DOMAIN_BASE is DERIVED from committed variables.tf, never read from a runtime
+          # store: a branch actor with write access to a Doppler config could otherwise plant it
+          # and redirect the credentialed deploy-webhook traffic below (HMAC + CF Access pair) to
+          # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
+          # committed file in this checkout, so a derivation failure means the repo is broken and
+          # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
@@ -2472,7 +2510,13 @@ jobs:
           # argument list (ADR-280). A refusal prints the marker on each attempt and ends in the
           # same terminal red as any other failed read.
           source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          # APP_DOMAIN_BASE is DERIVED from committed variables.tf, never read from a runtime
+          # store: a branch actor with write access to a Doppler config could otherwise plant it
+          # and redirect the credentialed deploy-webhook traffic below (HMAC + CF Access pair) to
+          # an attacker host (#13006 review, security-sentinel P1). No fallback: the source is a
+          # committed file in this checkout, so a derivation failure means the repo is broken and
+          # the step must red, not guess. Under `set -e` the failing substitution aborts the step.
+          APP_DOMAIN_BASE="$(bash "${GITHUB_WORKSPACE}/scripts/derive-app-domain-base.sh")"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
           WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}"
           # shellcheck disable=SC2034  # read by NAME inside bc_curl / bc_hmac_sha256_hex (indirect expansion)
@@ -2585,8 +2629,7 @@ jobs:
           # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           set +e
-          PLAN_OUTPUT=$(doppler run --preserve-env --name-transformer tf-var -- \
-            terraform plan -detailed-exitcode -no-color -input=false \
+          PLAN_OUTPUT=$(bash "${GITHUB_WORKSPACE}/scripts/lib/doppler-read.sh" tf plan -detailed-exitcode -no-color -input=false \
             -out=drift.tfplan \
             -var="ssh_key_path=${CI_SSH_PUB}" 2>&1)
           EXIT_CODE=$?

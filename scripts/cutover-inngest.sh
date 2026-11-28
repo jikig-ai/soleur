@@ -3,7 +3,7 @@
 #
 # WORKFLOW-INVOKED. This file IS the body of the single `run:` step in
 # .github/workflows/cutover-inngest.yml, moved out of the YAML verbatim. It reads only
-# process environment supplied by that step's `env:` map (OP, WEBHOOK_SECRET, the two
+# process environment supplied by that step's `env:` map (OP, WEBHOOK_DEPLOY_SECRET, the two
 # CF_ACCESS_* values, DOPPLER_TOKEN, DOPPLER_TOKEN_INNGEST_CUTOVER_WRITE (the rollback/resume
 # write credential since #9927 step D2-2; the arm token DOPPLER_TOKEN_INNGEST_ARM is still
 # exported by the workflow until the #12158 step-4 revoke change but is no longer read here),
@@ -35,7 +35,7 @@
 # the body had no test AND could not be linted before; `shellcheck scripts/cutover-inngest.sh`
 # now covers it. See ADR-150.
 set -euo pipefail
-# xtrace refusal (#7797): this script binds live credentials (WEBHOOK_SECRET, CF Access, the
+# xtrace refusal (#7797): this script binds live credentials (WEBHOOK_DEPLOY_SECRET, CF Access, the
 # Better Stack API token, Doppler service tokens); `-x` would print them into the run log.
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
@@ -170,7 +170,7 @@ fi
 # execute gate fail closed. No-SSH by construction — betterstack-query.sh is the only transport.
 _bs_query_rows() {
   local since="$1" term="$2" limit="$3" errfile="${4:-/dev/null}" rows rc=0
-  rows=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "$since" --grep "$term" --limit "$limit" 2>"$errfile") || rc=$?
+  rows=$(bash scripts/lib/doppler-read.sh bs bash scripts/betterstack-query.sh --since "$since" --grep "$term" --limit "$limit" 2>"$errfile") || rc=$?
   printf '%s\n' "$rows"
   return "$rc"
 }
@@ -193,7 +193,7 @@ _bs_read_remedy() {
   err1="$(head -1 "$errfile" 2>/dev/null | tr -d '\r\n' | sed -E "s/'[^']*'/'<redacted>'/g; s/[A-Za-z0-9.-]*betterstackdata\.com/<host>/g" | cut -c1-200 || true)"
   case "$rc" in
     3)  echo "::error::$step $label read: betterstack-query.sh rc=3 — BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} not injected. Check: doppler secrets get BETTERSTACK_QUERY_HOST -p soleur -c prd_terraform --plain | wc -c (value-silent) must be non-zero. stderr: ${err1:-<none>}" ;;
-    1)  echo "::error::$step $label read: doppler run or the reader exited 1 — read stderr: if it begins 'Doppler Error' check the DOPPLER_TOKEN repo secret; otherwise file an issue with this run URL. stderr: ${err1:-<none>}" ;;
+    1)  echo "::error::$step $label read: the Doppler injection or the reader exited 1 — read stderr: if it begins 'Doppler Error' check the DOPPLER_TOKEN repo secret; otherwise file an issue with this run URL. stderr: ${err1:-<none>}" ;;
     22) body_len="$(wc -c < "$rowsfile" 2>/dev/null | tr -d '[:space:]' || true)"
         # (#8178) The partition moved to scripts/lib/betterstack-read-classify.sh so the
         # git-data boot poll classifies a failed read identically instead of re-deriving
@@ -320,7 +320,7 @@ _flip_transition_dt() {
   # earliest(A) — so a SUPERSET is always the safe direction. The abort reasons are kept
   # for that reason even though they fire on flips where `start_server` never ran.
   # A cross-file parity test pins this set against the emitter.
-  rows=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+  rows=$(bash scripts/lib/doppler-read.sh bs bash scripts/betterstack-query.sh \
     --since "$FSM_ANCHOR_SINCE" \
     --grep '"reason":"flip-complete"' \
     --grep '"reason":"flushed-resume-no-reflush"' \
@@ -1017,7 +1017,7 @@ case "$OP" in
   enumerate)
     # GET hook → records JSON in the response body. HMAC over empty body
     # (mirrors the deploy-status GET signature).
-    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
+    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/enum-body
     CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/enum-body -w '%{http_code}' \
       -X GET \
@@ -1060,7 +1060,7 @@ case "$OP" in
     # Region start is BEFORE `SIG=` deliberately: the render driver sources this region
     # under `set -u`, and a region starting after `BODY=$(cat …)` would die on an unbound
     # `CODE`. Everything the gate branch reads is bound inside the region.
-    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
+    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/registry-probe-body
     CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/registry-probe-body -w '%{http_code}' \
       -X GET \
@@ -1095,7 +1095,7 @@ case "$OP" in
       # discrimination 2.0 makes, with a different sibling op named, because naming
       # op=registry-probe here would be self-referential.
       if [[ "$CODE" != "500" || "$BODY" != *"__FETCH_FAILED__"* ]]; then
-        echo "::error::registry-probe REFUSED (webhook_path): the webhook returned HTTP $CODE without the dedicated host's fetch-failure signature (inngest-registry-probe: FATAL … __FETCH_FAILED__), so the host's reachability was NOT measured. If the body line below begins 'inngest-registry-probe: FATAL' the hook RAN and the dedicated host ANSWERED /v0/gql with an error — the path is healthy; read the host's own state: doppler run -p soleur -c prd_terraform -- bash scripts/inngest-host-state.sh. Otherwise this is a WEBHOOK-PATH fault: isolate it with a sibling GET through the SAME path: gh workflow run cutover-inngest.yml -f op=inventory. If op=inventory returns 200 the path is healthy and the fault is in the inngest-registry-probe hook itself; if it also fails, the path is at fault (CF Access / WAF / webhook.service on the web host). Do NOT SSH the host."
+        echo "::error::registry-probe REFUSED (webhook_path): the webhook returned HTTP $CODE without the dedicated host's fetch-failure signature (inngest-registry-probe: FATAL … __FETCH_FAILED__), so the host's reachability was NOT measured. If the body line below begins 'inngest-registry-probe: FATAL' the hook RAN and the dedicated host ANSWERED /v0/gql with an error — the path is healthy; read the host's own state: bash scripts/lib/doppler-read.sh bs bash scripts/inngest-host-state.sh. Otherwise this is a WEBHOOK-PATH fault: isolate it with a sibling GET through the SAME path: gh workflow run cutover-inngest.yml -f op=inventory. If op=inventory returns 200 the path is healthy and the fault is in the inngest-registry-probe hook itself; if it also fails, the path is at fault (CF Access / WAF / webhook.service on the web host). Do NOT SSH the host."
         echo "registry-probe webhook body (HTTP $CODE): ${CAUSE:-<empty body>}"
         exit 1
       fi
@@ -1144,7 +1144,7 @@ case "$OP" in
               echo "::error::registry-probe REFUSED (flag_armed/done): the dedicated host is NOT ANSWERING and its cutover flag reads 'done'. Since cutover step 2.4 this host owns production cron scheduling, so scheduling may be DOWN — the numbered registry-probe: next steps are in this step's log."
               echo "registry-probe: this reading is the HOURLY probe row, ${RPG_ROW_AGE}s old — it can lag reality by up to 90 minutes (the gate admits rows up to 5400s old), so a rollback you performed minutes ago would not appear here yet."
               echo "registry-probe: 1. read the latest watchdog verdict first — gh run list --workflow scheduled-inngest-health.yml --limit 1, then gh run view <id> --log | grep '#7674 dedicated host'."
-              echo "registry-probe: 2. read the host's own current state — doppler run -p soleur -c prd_terraform -- bash scripts/inngest-host-state.sh (needs BETTERSTACK_QUERY_* from prd_terraform; it is a local read, not dispatchable)."
+              echo "registry-probe: 2. read the host's own current state — bash scripts/lib/doppler-read.sh bs bash scripts/inngest-host-state.sh (needs BETTERSTACK_QUERY_* from prd_terraform; it is a local read, not dispatchable)."
               echo "registry-probe: 3. if the watchdog also reports the host down, recovery is a host replace — see the dedicated-host cutover runbook (knowledge-base/engineering/operations/runbooks/inngest-server.md) for the dispatch and its preconditions."
               echo "registry-probe: Do NOT SSH the host."
               exit 1
@@ -1154,14 +1154,14 @@ case "$OP" in
           if [[ "$RPG_HB_FLAG" == "done" ]]; then
             echo "::error::registry-probe REFUSED (flag_armed/done): the dedicated host is NOT ANSWERING and the flip FSM's newest same-boot heartbeat (${RPG_HB_AGE}s old — a live sample, not the hourly row) reads INNGEST_CUTOVER_FLIP='$RPG_HB_FLAG'. Since cutover step 2.4 this host owns production cron scheduling, so scheduling may be DOWN — the numbered registry-probe: next steps are in this step's log."
             echo "registry-probe: 1. read the latest watchdog verdict first — gh run list --workflow scheduled-inngest-health.yml --limit 1, then gh run view <id> --log | grep '#7674 dedicated host'."
-            echo "registry-probe: 2. read the host's own current state — doppler run -p soleur -c prd_terraform -- bash scripts/inngest-host-state.sh (needs BETTERSTACK_QUERY_* from prd_terraform; it is a local read, not dispatchable)."
+            echo "registry-probe: 2. read the host's own current state — bash scripts/lib/doppler-read.sh bs bash scripts/inngest-host-state.sh (needs BETTERSTACK_QUERY_* from prd_terraform; it is a local read, not dispatchable)."
             echo "registry-probe: 3. if the watchdog also reports the host down, recovery is a host replace — see the dedicated-host cutover runbook (knowledge-base/engineering/operations/runbooks/inngest-server.md) for the dispatch and its preconditions."
             echo "registry-probe: Do NOT SSH the host."
             exit 1
           fi
           echo "::error::registry-probe REFUSED (flag_armed): the flip FSM's newest same-boot heartbeat (${RPG_HB_AGE}s old) reads INNGEST_CUTOVER_FLIP='$RPG_HB_FLAG' — a cutover sequence is in flight right now. Read that run: gh run list --workflow cutover-inngest.yml --limit 5. Dispatch nothing from here. Do NOT SSH the host."; exit 1 ;;
         host_serving)
-          echo "::error::registry-probe REFUSED (host_serving): the dedicated host's own newest probe row (${RPG_ROW_AGE}s old — hourly, so it can lag reality by up to 90 minutes) says it WAS serving (loopback 200 or unit active), while the web host's hook just failed to reach 10.0.1.40:8288 — the row and the webhook disagree. The webhook PATH is not in question here (the hook ran; that is how this branch was reached). The likeliest reading is a host that died AFTER its last row; the least likely is a transient private-network fault. Read the host's own current state FIRST: doppler run -p soleur -c prd_terraform -- bash scripts/inngest-host-state.sh, then the latest watchdog verdict: gh run list --workflow scheduled-inngest-health.yml --limit 1. Note op=inventory reads the WEB host's loopback, not 10.0.1.40, so its 200 cannot locate this fault. Do NOT SSH the host."; exit 1 ;;
+          echo "::error::registry-probe REFUSED (host_serving): the dedicated host's own newest probe row (${RPG_ROW_AGE}s old — hourly, so it can lag reality by up to 90 minutes) says it WAS serving (loopback 200 or unit active), while the web host's hook just failed to reach 10.0.1.40:8288 — the row and the webhook disagree. The webhook PATH is not in question here (the hook ran; that is how this branch was reached). The likeliest reading is a host that died AFTER its last row; the least likely is a transient private-network fault. Read the host's own current state FIRST: bash scripts/lib/doppler-read.sh bs bash scripts/inngest-host-state.sh, then the latest watchdog verdict: gh run list --workflow scheduled-inngest-health.yml --limit 1. Note op=inventory reads the WEB host's loopback, not 10.0.1.40, so its 200 cannot locate this fault. Do NOT SSH the host."; exit 1 ;;
         silent)
           echo "::error::registry-probe REFUSED (silent): the read path answered but the dedicated host emitted NO probe row in the window — silence is not darkness, and it is not a host verdict. BEFORE treating it as a dead host, confirm INGEST health/quota: on 2026-08-14 the Better Stack Logs quota exhausted and ingest returned 402 for ~49h while the READ path answered 200, which presents as exactly this verdict with no host fault at all. Then read the latest watchdog verdict: gh run list --workflow scheduled-inngest-health.yml --limit 1, then gh run view <id> --log | grep '#7674 dedicated host'. Two consecutive probe-unavailable readings there, with ingest healthy, make it a host replace — see the dedicated-host cutover runbook (knowledge-base/engineering/operations/runbooks/inngest-server.md). Do NOT SSH the host."; exit 1 ;;
         unreadable)
@@ -1181,7 +1181,7 @@ case "$OP" in
         fsm_silent)
           echo "::error::registry-probe REFUSED (fsm_silent): the heartbeat read answered but no same-boot heartbeat from the flip FSM lies within the gate's 15-minute bound — none in the 30-minute window, the newest older than 15 minutes, or the host rebooted after its probe row (a new boot_id) — so the host's flag could not be corroborated against a live sample and darkness cannot be established. Re-dispatch this op after >= 15 min; if it persists, confirm INGEST health/quota (a 402 presents as silence with no host fault), then read the latest watchdog verdict: gh run list --workflow scheduled-inngest-health.yml --limit 1. Do NOT SSH the host."; exit 1 ;;
         wrong_host)
-          echo "::error::registry-probe REFUSED (wrong_host): probe rows are present in the 24h window but none carries the dedicated host's identity (host=$INNGEST_HOST AND host_name=$INNGEST_HOST_NAME AND host_role=dedicated). Two causes with opposite remedies: an identity mislabel (#6616 class — web-1 emits this same marker with host_name=soleur-inngest-prd, so a read not pinned on BOTH conjuncts reads the wrong machine while looking correct), OR the dedicated host has emitted NOTHING for over 24 hours while the web hosts kept emitting — a dead host, not a mislabel. Discriminate by reading the host's own state: doppler run -p soleur -c prd_terraform -- bash scripts/inngest-host-state.sh; if it also finds no dedicated-host row, treat this as silent (see that remedy: ingest-quota check, then the watchdog read). Otherwise file an issue with this run URL. Do NOT SSH the host."; exit 1 ;;
+          echo "::error::registry-probe REFUSED (wrong_host): probe rows are present in the 24h window but none carries the dedicated host's identity (host=$INNGEST_HOST AND host_name=$INNGEST_HOST_NAME AND host_role=dedicated). Two causes with opposite remedies: an identity mislabel (#6616 class — web-1 emits this same marker with host_name=soleur-inngest-prd, so a read not pinned on BOTH conjuncts reads the wrong machine while looking correct), OR the dedicated host has emitted NOTHING for over 24 hours while the web hosts kept emitting — a dead host, not a mislabel. Discriminate by reading the host's own state: bash scripts/lib/doppler-read.sh bs bash scripts/inngest-host-state.sh; if it also finds no dedicated-host row, treat this as silent (see that remedy: ingest-quota check, then the watchdog read). Otherwise file an issue with this run URL. Do NOT SSH the host."; exit 1 ;;
         stale_row)
           echo "::error::registry-probe REFUSED (stale_row): the dedicated host's newest probe row is older than the gate's 90-minute bound (or future-dated), or an FSM transition (a rollback or flip) landed AFTER it, so it cannot support a verdict about the host NOW. Wait for the next hourly probe and re-dispatch this op; if it stays stale, treat it as silent (see that remedy, including the ingest-quota check). There is no no-SSH way to fire the probe early. Do NOT SSH the host."; exit 1 ;;
         stale_schema)
@@ -1233,7 +1233,7 @@ case "$OP" in
       echo "::error::doublefire-probe CRON_PERIOD invalid ('$CRON_PERIOD') — set CUTOVER_CRON_PERIOD_SECONDS to a positive integer ≤ the SHORTEST registered cron period (hour-aligned)."; exit 1
     fi
     echo "::warning::doublefire-probe CRON_PERIOD=${CRON_PERIOD}s is applied to ALL functions (P2-c). The verdict is SOUND ONLY IF every registered cron period ≥ ${CRON_PERIOD}s AND hour-aligned. If any cron fires faster, re-dispatch with CUTOVER_CRON_PERIOD_SECONDS set to the SHORTEST registered period before trusting the result."
-    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
+    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     # Forward the window lower bound + optional functionIDs scope as URL query params
     # (HMAC is over the empty GET body, so params don't affect the sig).
     # #6178 — PER-ARM fallback. This is the PRE-cutover dark-host detector: it runs
@@ -1364,7 +1364,7 @@ case "$OP" in
     # (app-repoint → functions re-synced onto 10.0.1.40) has not landed and a
     # re-arm would target a backend with no registered functions. GET the web-host
     # registry probe (HMAC over empty body); require function_count > 0.
-    RSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || RSIG=""
+    RSIG=$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || RSIG=""
     rm -f /tmp/rearm-probe
     RCODE=$(_sig_curl RSIG -s --max-time 30 -o /tmp/rearm-probe -w '%{http_code}' \
       -X GET \
@@ -1407,7 +1407,7 @@ case "$OP" in
     fi
 
     PAYLOAD='{"mode":"rearm-from-capture"}'
-    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
+    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/rearm-body
     CODE=$(_sig_curl SIG -s --max-time 120 -o /tmp/rearm-body -w '%{http_code}' \
       -X POST \
@@ -1443,7 +1443,7 @@ case "$OP" in
       exit 1
     fi
     if (( 10#$REARMED + 10#$RFAILED + 10#$RHELD != 10#$RTOTAL )); then
-      echo "::error::re-arm reconciliation FAILED (P2-b): re-armed=$REARMED + failed=$RFAILED + held_back=$RHELD != total=$RTOTAL — the host's counts do not account for every captured record, so neither success nor the partial-retry path can be trusted. Do NOT proceed to op=verify; pull the inngest-rearm-reminders lines from Better Stack (doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep inngest-rearm-reminders) and file an issue with this run URL."
+      echo "::error::re-arm reconciliation FAILED (P2-b): re-armed=$REARMED + failed=$RFAILED + held_back=$RHELD != total=$RTOTAL — the host's counts do not account for every captured record, so neither success nor the partial-retry path can be trusted. Do NOT proceed to op=verify; pull the inngest-rearm-reminders lines from Better Stack (bash scripts/lib/doppler-read.sh bs bash scripts/betterstack-query.sh --since 1h --grep inngest-rearm-reminders) and file an issue with this run URL."
       exit 1
     fi
     if [[ "$RFAILED" -ne 0 ]]; then
@@ -1467,7 +1467,7 @@ case "$OP" in
     # backend and would lose every reminder (#5542). Records stay on-host
     # (P2-sec-a) — only counts + reminder_ids surface here.
     PAYLOAD='{"mode":"capture"}'
-    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
+    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/capture-body
     CODE=$(_sig_curl SIG -s --max-time 60 -o /tmp/capture-body -w '%{http_code}' \
       -X POST \
@@ -1498,7 +1498,7 @@ case "$OP" in
     # for a fresh terminal exit_code. The stop+wipe+restart+settle exceeds
     # the CF 120s edge timeout, so it MUST be async + poll (not synchronous).
     PAYLOAD='{}'
-    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
+    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     CODE=$(_sig_curl SIG -s --max-time 30 -o /dev/null -w '%{http_code}' \
       -X POST \
       -H "Content-Type: application/json" \
@@ -1511,7 +1511,7 @@ case "$OP" in
     # terminal state written at/after this trigger (minus clock skew).
     TRIGGER_TS=$(date +%s)
     FRESH_FLOOR=$((TRIGGER_TS - 60))
-    GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG=""
+    GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG=""
     # Availability note (same at the quiesce-web and rollback poll loops): an empty GSIG is refused by the signing wrapper on EVERY poll (fail-closed, one marker each), so the loop runs to its timeout (about 120 polls) instead of aborting.
     MAX_POLLS=120
     POLL_INTERVAL=10
@@ -1612,7 +1612,7 @@ case "$OP" in
     # {functions, event_names, armed_reminders} in the response body. Run
     # ONCE before the cutover and ONCE after; diff the payload-free
     # projections (the runbook documents the expected diff).
-    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
+    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     # #6258 bounded TRANSPORT retry (Deepen Finding 11): the in-script scan is now
     # abandon-safe (the deadline halts the loop that drives the PG load → releases the
     # pool), so a transient two-writer 500 / a 000 stall clears on attempt-2. This wraps
@@ -1749,7 +1749,7 @@ case "$OP" in
     # dedicated host GQL over the private net. registry_empty MUST be true — a
     # non-empty dark registry means a second scheduler would register + double-fire
     # against prod Postgres, the exact failure this cutover exists to prevent.
-    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
+    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/exec-probe
     CODE=$(_sig_curl SIG -s --max-time 30 -o /tmp/exec-probe -w '%{http_code}' \
       -X GET \
@@ -1940,7 +1940,7 @@ case "$OP" in
     # A serving host whose enumeration fails still fails here (never a stale-file fallback).
     # SOURCE is kept for 2.2: its UNKNOWN remedy branches on it.
     PAYLOAD='{"mode":"capture"}'
-    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
+    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/exec-capture
     CODE=$(_sig_curl SIG -s --max-time 60 -o /tmp/exec-capture -w '%{http_code}' \
       -X POST -H "Content-Type: application/json" \
@@ -2003,7 +2003,7 @@ case "$OP" in
     # second prod scheduler on a dedicated-host restart — but it does NOT stop a surviving
     # WEB-host scheduler, so this gate + the no-SSH op=quiesce-web stop+disable are what
     # cover the web host.
-    GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG=""
+    GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG=""
     QUIESCE_PROBES="${CUTOVER_QUIESCE_PROBES:-3}"
     # #6940 item 2 — now a mapped repo var (was deferred). A malformed count must not reach
     # `seq`: an empty loop would read as "UNREADABLE" — a real fail-closed outcome but a
@@ -2079,7 +2079,7 @@ case "$OP" in
     elif [[ "$answered_n" -ge 1 ]]; then
       UNKNOWN_COUNT=1
       if [[ "$forbidden_seen" == true ]]; then
-        GATE_REMEDY="the inventory hook answered HTTP 403 — CF-Access or the webhook HMAC was rejected, so the answer says nothing about the unit. Check this workflow's CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET and WEBHOOK_SECRET against the deploy service token + hook secret, then re-dispatch op=execute"
+        GATE_REMEDY="the inventory hook answered HTTP 403 — CF-Access or the webhook HMAC was rejected, so the answer says nothing about the unit. Check this workflow's CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET and WEBHOOK_DEPLOY_SECRET against the deploy service token + hook secret, then re-dispatch op=execute"
       elif [[ "$notfound_seen" == true ]]; then
         GATE_REMEDY="the inventory hook answered HTTP 404 — the inngest-inventory hook is not deployed in the host's hooks.json. Confirm the apply-deploy-pipeline-fix.yml run for the merge registered it (read /hooks/infra-config-status for /etc/webhook/hooks.json), then re-dispatch op=execute"
       elif [[ -n "$gateway_code" ]]; then
@@ -2154,7 +2154,7 @@ case "$OP" in
     # infra-config-verify.sh adjudicates) and require each script to equal this checkout's bytes.
     # Unreadable, missing or different → refuse, nothing stopped. Same signed-GET shape as the
     # deploy-status polls below (HMAC over the empty body + CF-Access).
-    PF_SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || PF_SIG=""
+    PF_SIG=$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || PF_SIG=""
     rm -f /tmp/quiesce-preflight
     PF_CODE=$(_sig_curl PF_SIG -s --max-time 30 -o /tmp/quiesce-preflight -w '%{http_code}' \
       -X GET \
@@ -2189,7 +2189,7 @@ case "$OP" in
     echo "::warning::quiesce-web: this STOPS production scheduling (every user's crons and reminders) on host-set [$CUTOVER_HOSTS] — the maintenance window opens NOW. The quiesce handler captures the still-armed reminders BEFORE it stops the unit (a failed or timed-out capture stops nothing and reports quiesce_capture_failed), so a second op=execute resumes 2.1 from the persisted capture taken at the quiesce boundary. scheduled-inngest-health.yml reads the stopped+disabled unit as QUIESCED and leaves a quiesced unit alone — nothing restarts it until op=rollback. If you did not mean to open the window, dispatch op=rollback."
     echo "::notice::quiesce-web: stop+disabling inngest across host-set [$CUTOVER_HOSTS] (${#HOSTS[@]} host(s)) — no-SSH remediation for the 2.2 gate"
     PAYLOAD=$(printf '{"command":"quiesce inngest _ _","peers":"%s"}' "$CUTOVER_HOSTS")
-    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
+    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/quiesce-body
     CODE=$(_sig_curl SIG -s --max-time 60 -o /tmp/quiesce-body -w '%{http_code}' \
       -X POST -H "Content-Type: application/json" \
@@ -2209,7 +2209,7 @@ case "$OP" in
     # green isn't read (deploy-state is a single slot).
     TRIGGER_TS=$(date +%s)
     FRESH_FLOOR=$((TRIGGER_TS - 60))
-    GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG=""
+    GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG=""
     # Poll window ≥ the host worst case (capture bound + kill-after + stop + verify + peer fan-out)
     # — drift-guarded by ci-deploy.test.sh (#6178), which computes the total from the live
     # literals, so no total is restated here. The terms: the 120 s quiesce capture bound and its
@@ -2249,13 +2249,13 @@ case "$OP" in
           # finishes. Keep polling; the timeout message names this reason if it never clears.
           echo "Attempt $i/$QMAX_POLLS: reason=lock_contention — another ci-deploy invocation lost the flock and overwrote the status slot; the in-flight quiesce's verdict will replace it — polling" ;;
         quiesce_capture_failed)
-          echo "::error::quiesce-web FAILED (reason=quiesce_capture_failed): the host's pre-stop capture of the still-armed reminders failed or timed out, so NOTHING was stopped or disabled — production scheduling is still running and no quiesce marker was written. Read the capture's scrubbed stderr tail: doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_CAPTURE_FAILED. If the unit is active but its GraphQL is dead (connection refused / timeout), dispatch 'gh workflow run restart-inngest-server.yml', wait for it to go green, then re-dispatch op=quiesce-web. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
+          echo "::error::quiesce-web FAILED (reason=quiesce_capture_failed): the host's pre-stop capture of the still-armed reminders failed or timed out, so NOTHING was stopped or disabled — production scheduling is still running and no quiesce marker was written. Read the capture's scrubbed stderr tail: bash scripts/lib/doppler-read.sh bs bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_CAPTURE_FAILED. If the unit is active but its GraphQL is dead (connection refused / timeout), dispatch 'gh workflow run restart-inngest-server.yml', wait for it to go green, then re-dispatch op=quiesce-web. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
         quiesce_capture_unavailable)
-          echo "::error::quiesce-web FAILED (reason=quiesce_capture_unavailable): the unit is neither active (so a capture cannot run) nor already quiesced — NOTHING was captured, disabled or stopped. Read its shape: doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_CAPTURE_UNAVAILABLE (logs unit= enabled= state=). If state=disabled_unattributed, dispatch 'gh workflow run cutover-inngest.yml --field op=rollback' (re-enables + retires the stale capture); otherwise (failed / activating / inactive but enabled) dispatch 'gh workflow run restart-inngest-server.yml'. Once the unit is active, re-dispatch op=quiesce-web. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
+          echo "::error::quiesce-web FAILED (reason=quiesce_capture_unavailable): the unit is neither active (so a capture cannot run) nor already quiesced — NOTHING was captured, disabled or stopped. Read its shape: bash scripts/lib/doppler-read.sh bs bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_CAPTURE_UNAVAILABLE (logs unit= enabled= state=). If state=disabled_unattributed, dispatch 'gh workflow run cutover-inngest.yml --field op=rollback' (re-enables + retires the stale capture); otherwise (failed / activating / inactive but enabled) dispatch 'gh workflow run restart-inngest-server.yml'. Once the unit is active, re-dispatch op=quiesce-web. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
         quiesce_marker_write_failed)
-          echo "::error::quiesce-web FAILED (reason=quiesce_marker_write_failed): the capture succeeded but the quiesce marker could not be written atomically under /var/lib/inngest — NOTHING was disabled or stopped, and 2.2 could not certify a quiesce without it. Check /var/lib/inngest is writable (root disk full or remounted read-only): doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_MARKER_WRITE_FAILED, clear the cause, then re-dispatch op=quiesce-web. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
+          echo "::error::quiesce-web FAILED (reason=quiesce_marker_write_failed): the capture succeeded but the quiesce marker could not be written atomically under /var/lib/inngest — NOTHING was disabled or stopped, and 2.2 could not certify a quiesce without it. Check /var/lib/inngest is writable (root disk full or remounted read-only): bash scripts/lib/doppler-read.sh bs bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_MARKER_WRITE_FAILED, clear the cause, then re-dispatch op=quiesce-web. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
         quiesced_shape_unrecognized)
-          echo "::error::quiesce-web FAILED (reason=quiesced_shape_unrecognized): the unit was stopped and verified not-serving, so production scheduling IS stopped — but its final shape did not read as quiesced (not inactive|failed + disabled with a valid marker), so op=execute 2.2 will not certify it. Read the shape: doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep 'final shape not recognised'. Then dispatch 'gh workflow run cutover-inngest.yml --field op=rollback' (re-opens scheduling and retires the capture + marker), and re-dispatch op=quiesce-web for a fresh capture and marker. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
+          echo "::error::quiesce-web FAILED (reason=quiesced_shape_unrecognized): the unit was stopped and verified not-serving, so production scheduling IS stopped — but its final shape did not read as quiesced (not inactive|failed + disabled with a valid marker), so op=execute 2.2 will not certify it. Read the shape: bash scripts/lib/doppler-read.sh bs bash scripts/betterstack-query.sh --since 1h --grep 'final shape not recognised'. Then dispatch 'gh workflow run cutover-inngest.yml --field op=rollback' (re-opens scheduling and retires the capture + marker), and re-dispatch op=quiesce-web for a fresh capture and marker. Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
         inngest_still_serving|inngest_still_enabled)
           echo "::error::2.2 quiesce FAILED (reason=$REASON): a persistent still-serving/still-enabled means the unit is being RESURRECTED — pull reason= from /hooks/deploy-status + Better Stack (logger -t ci-deploy) and investigate what restarts/re-enables it (e.g. a stray deploy re-enabling the unit). Do NOT SSH the host."; echo "$BODY" | jq .; exit 1 ;;
         quiesced_peer_fanout_unaccepted)
@@ -2279,7 +2279,7 @@ case "$OP" in
     # SECONDARY confirm (web-1, DI-C3): an inventory read mirrors the 2.2 gate's classification.
     # The deploy-status `quiesced` reason above is the PRIMARY gate (host-side synchronous
     # verify, stronger than the inventory read).
-    GSIG2=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG2=""
+    GSIG2=$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG2=""
     rm -f /tmp/quiesce-inv
     ICODE=$(_sig_curl GSIG2 -s --max-time 30 -o /tmp/quiesce-inv -w '%{http_code}' \
       -X GET \
@@ -2310,7 +2310,7 @@ case "$OP" in
     # app-repoint must have re-synced functions onto 10.0.1.40; a still-empty
     # registry means 2.4 did not land and there is nothing to verify. This is the
     # post-2.4 NON-empty mirror of the 2.0 gate. GET the web-host registry probe.
-    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
+    SIG=$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     # #6258 bounded TRANSPORT retry (Finding 11): wraps ONLY the registry-probe transport
     # request (000/5xx) — NOT the registry_empty precondition VERDICT below (a still-empty
     # dark registry is a legitimate verdict, not a transient, and must NOT be retried).
@@ -2732,7 +2732,7 @@ case "$OP" in
     # web scheduler survives a reboot — no operator systemctl step. The peers fan-out
     # forwards it to every host over the private net.
     PAYLOAD=$(printf '{"command":"enable inngest _ _","peers":"%s"}' "$CUTOVER_HOSTS")
-    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
+    SIG=$(printf '%s' "$PAYLOAD" | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || SIG=""
     rm -f /tmp/rollback-body
     CODE=$(_sig_curl SIG -s --max-time 60 -o /tmp/rollback-body -w '%{http_code}' \
       -X POST -H "Content-Type: application/json" \
@@ -2749,7 +2749,7 @@ case "$OP" in
     # verdict is reachable from the run (not a fire-and-forget 202). FRESH_FLOOR-anchored.
     TRIGGER_TS=$(date +%s)
     FRESH_FLOOR=$((TRIGGER_TS - 60))
-    GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG=""
+    GSIG=$(printf '' | HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())') || GSIG=""
     RMAX_POLLS=120
     RPOLL_INTERVAL=5
     ENABLED=0
@@ -2910,7 +2910,7 @@ case "$OP" in
     # while stdout is captured whole and the one verdict= line extracted from it. RS_G4_RC is
     # the PROBE's rc (doppler run propagates it); the verdict extraction cannot mask it.
     RS_G4_RAW=""; RS_G4_RC=0
-    RS_G4_RAW="$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/followthroughs/inngest-provision-unit-8562.sh)" || RS_G4_RC=$?
+    RS_G4_RAW="$(bash scripts/lib/doppler-read.sh bs bash scripts/followthroughs/inngest-provision-unit-8562.sh)" || RS_G4_RC=$?
     RS_G4_OUT="$(printf '%s\n' "$RS_G4_RAW" | grep -E '^verdict=' | tail -n 1 || true)"
     case "$(resume_bootstrap_decide "$RS_G4_RC" "$RS_G4_OUT")" in
       proceed)

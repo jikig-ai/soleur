@@ -1261,6 +1261,96 @@ No status change (D1 `adopting`, D2 `proposed`). Ruled by CTO agent, 2026-10-23.
 - **Two Doppler CLIs in one job.** The pre-loader reads use the unpinned `DopplerHQ/cli-action`; the loader installs the pinned 3.75.3 and prepends it to `PATH`, so the flag write, the Better Stack readback and the finalizer run the pinned one.
 - **The deploy Access token leaves Terraform state, forward-fix only.** `cloudflare_zero_trust_access_service_token.deploy` becomes `removed { destroy = false }`; the policy admits the committed constant `local.deploy_service_token_ids` (a `locals` value, not a variable, because a root variable is overridable through `TF_VAR_*` and the web-platform plan runs under `--name-transformer tf-var` against `prd_terraform`). The web-platform apply gains a deploy-policy gate OUTSIDE the `[ack-destroy]` sum (`tests/scripts/lib/deploy-policy-gate.sh`: an unsafe policy or a stray Access-token forget is refused, an in-place include change needs an own-line `[ack-deploy-policy]`). A targeted apply does not prune the two deleted root outputs, so their stored values may remain in state until an untargeted apply: the apply job warns when they do, and the old token is then treated as exposed and rotated first. Runbook: `cloudflare-service-token-rotation.md`.
 
+### 2026-11-27 (#9294 PR-B): the deploy-channel consumers migrate to the narrow carrier
+
+No status change (D1 stays `adopting`, D2 stays `proposed`). This is the consumer half of the 2026-10-15
+narrow-carrier decision; PR-A (#12810, squash `9cfcc7f47`) carried the carrier itself — the `deploy-channel`
+GitHub environment with its main-only deployment policy, the `soleur-deploy-channel/prd` Doppler project, the
+loader's two-name `doppler-project` allowlist arm and census rows G7c2/G7i. Single-sourced rationale and the
+CTO rulings: `knowledge-base/project/plans/2026-11-20-feat-deploy-trio-consumer-migration-prb-plan.md` and
+`knowledge-base/project/specs/feat-one-shot-9294-deploy-trio-prb/decision-challenges.md` (D-1 through D-8).
+
+- **Consumers migrated (measured on the PR head).** No workflow or composite action binds
+  `secrets.WEBHOOK_DEPLOY_SECRET`, `secrets.CF_ACCESS_CLIENT_ID` or `secrets.CF_ACCESS_CLIENT_SECRET` anywhere —
+  the Phase-9 sweep counts zero `secrets.<trio>` binds under `.github/`, and census row G1l pins that no job
+  names the trio without declaring a literal Tier-B `environment:`. The non-Terraform consumers — the release
+  chain (`web-platform-release.yml`, `canary-status.yml`), the inngest set (`deploy-inngest-image.yml`,
+  `restart-inngest-server.yml`, `scheduled-inngest-health.yml`), `cutover-inngest.yml` (every `op` arm now
+  binds a Tier-B environment: `inngest-cutover` for the reviewer-gated write ops, `deploy-channel` for the
+  rest), and the two key-rotation workflows — call `.github/actions/infra-credentials` with
+  `doppler-project: soleur-deploy-channel` behind `environment: deploy-channel` and read the three names as
+  ordinary environment variables (`WEBHOOK_DEPLOY_SECRET` for the HMAC key — the CI spelling, with
+  `WEBHOOK_SECRET` retained only by the host-side scripts `infra-config-verify.sh` and
+  `verify-tunnel-ingress-origin.sh`; `CF_ACCESS_CLIENT_{ID,SECRET}` for the Access pair). The narrow arm
+  fails closed on an empty token (`no_credential_source` before any Doppler call), never falls back to
+  `prd_terraform`, and the loader's case dispatch refuses any third project name.
+- **The Terraform-fed group reads the trio through `soleur-infra-privileged`**, per the 2026-10-15 decision
+  (the privileged project is the source of truth; `soleur-deploy-channel` is a one-way copy seeded by the
+  operator). `apply-deploy-pipeline-fix.yml` stays on `infra-privileged` and reads the trio as Terraform
+  variables through `scripts/lib/doppler-read.sh`, a generic Doppler helper that names no trio member.
+  `git-data-cutover.yml::cutover` keeps its `infra-privileged` loader call: the narrow mode now exists, but
+  moving a roughly 1,700-line reviewer-gated job on the certified flip path to a second carrier mid-arc was
+  out of this PR's scope, so the 2026-10-23 accepted residual (the whole-project export into that job's env)
+  stands and its "move the job to the narrow carrier" follow-up remains open.
+- **Census end-state.** `tests/scripts/trio-baseline.tsv` re-derives clean: 18 `tier-b` rows (the migrated
+  workflow consumers), 52 `sink` rows, and a **residual of 3 `tier-a` rows, all on
+  `tests/scripts/test-argv-bearer-sweep.sh`** (expiry 2026-11-30), with zero new `Allow:`/`Reclass:`/`Re-date:`
+  requirements — no trio name-reference moved to Tier A. The residual is structural, not a migration
+  remainder: that suite is the anti-bearer fixture monolith whose purpose is holding trio names and
+  `doppler` command shapes as byte-exact test fixtures (~170 sites), and the scanner is syntactic — it
+  cannot prove a fixture never executes against a real store. De-shaping it (split literals at every
+  fixture site, the technique the census suite uses on itself) was scoped out of this PR: each fixture is
+  byte-load-bearing to the mutation harness, the file is the one shellcheck cannot parse (#13098/#13099),
+  and the change belongs in a focused PR with its own review, tracked in #13102. Past the
+  2026-11-30 expiry the rows red hard on any diff touching the file, the baseline or this ADR — the fuse
+  this follow-up must defuse, by de-shape or by a ruled `Re-date:` in a baseline/ADR-only change. The
+  anti-vacuity floor ratchets to the realized count (619 assertions). The name census remains a where-the-names-are-written ratchet, not a
+  proof that no job can reach the values; that limb still closes with the deletions below.
+- **The wrapper-relay amplification of that residual, disclosed (review round, user-impact seat).**
+  `scripts/lib/doppler-read.sh` invocations are invisible to the census even inside files that DO
+  name the trio: the scanner's glued-suffix rule (`doppler` in `doppler-read.sh` is part of a
+  hyphenated name, never an invocation head) excludes them before classification. During the
+  residual window this is the accepted read limb — the wrapper reads `soleur/prd` and
+  `soleur/prd_terraform`, whose trio copies the operator tail deletes. But the wrapper is also the
+  permanent broker for the two SURVIVING carriers: a future `doppler-read.sh run soleur-deploy-channel prd`
+  or `... soleur-infra-privileged prd` in any file bulk-reads the trio post-deletion with zero
+  census visibility, and the deletion limb closes nothing there. Teaching the census to classify
+  wrapper invocations by their underlying shapes was evaluated in this PR and rejected as
+  mechanically impossible inside it: full visibility flips `web-platform-release.yml` rows
+  tier-b -> tier-a, a regression the ratchet has no lane for, and partial visibility (counting only
+  the two surviving carriers) is inconsistent with the literal-shape counting it mirrors. The ruled
+  disposition: post-deletion the pinned set shrinks to the two surviving carriers and the wrapper
+  gains visibility for exactly those pairs, in the same baseline/ADR-only change the operator tail
+  already requires — a new file bulk-reading a surviving carrier through the wrapper then produces
+  the same tier-a row the literal shape would. Until then the control is review discipline on the
+  wrapper's call sites plus the environment-gating of every job that runs one.
+- **D-2 scanner refinement, recorded.** `test-trio-baseline-census.sh` counts two read shapes inside files
+  that already name the trio: (a) `doppler secrets get <LITERAL>` counts only when the literal matches the
+  family regex or an ALIAS pattern — a targeted get of a non-trio name is not a read; (b) `doppler run` /
+  `doppler secrets download` counts as a bulk read UNLESS it carries literal `-p` AND `-c` naming a pair
+  outside the pinned trio-carrying set `{(soleur,prd_terraform), (soleur,prd), (soleur-deploy-channel,prd),
+  (soleur-infra-privileged,prd)}` — every other form (variable flags, a pinned-set pair, `doppler run` with
+  no config) stays counted. The default is fail-closed (mutation rows m54e/m54f re-pinned). Residual
+  `prd_terraform` bulk reads resolved per file — targeted gets where few names are needed
+  (`betterstack-query.sh` via `doppler-read.sh bs`), per-file splits for generic helpers — never by
+  exempting `prd_terraform` wholesale.
+- **The `inngest-soak-6178` followthrough probes are retired** (3 files deleted; `test-all.sh` and
+  `grep-q-pipe-guard.test.sh` updated): their soak window closed with the cutover, and their trio reads
+  would have needed re-homing for no remaining purpose.
+- **Operator-reserved, post-merge** (the PR body carries the named tail slot): seeding `soleur-deploy-channel/prd`
+  with the trio on both environments and the `DOPPLER_TOKEN_DEPLOY_CHANNEL` environment secret; deleting the
+  Tier-A copies in `prd_terraform` and the repo-level secrets once canaries run green on
+  `source=tier_b_deploy_channel`; the trio rotation itself; rotation machinery and the stale-state
+  reconciliation (`terraform_data.deploy_pipeline_fix*` re-push after the copies go) remain owner steps —
+  nothing in this PR touches live state, because the carrier file declares containers only.
+- **G1b is untouched.** The `DEPLOY_SSH_PRIVATE_KEY` / `CI_SSH_ACCESS_TOKEN_*` chain tracked as G1b stays a
+  separate window (the SSH bridge is the recovery path if a webhook rotation strands web-1) and still blocks
+  #8609.
+- **Status.** D1 stays `adopting`: the name limb of AC12 is unchanged (the trio is still present in
+  `prd_terraform` — the deletions are the operator tail), and AC16's invalidation probes belong to the
+  rotation, not this migration. G1 closes with the rotation; D2 and D10 still flip together with residual
+  R1.
+
 - Issues: #8209, #6167, #8189, #8211, #8385, #8093
 - Cutover joins the Tier-B loader; deploy token leaves state (2026-10-23): #9294, #10300, #8211
 - D10 (2026-09-30): #8609, #9277, #9278, #6730, #6129, #7095, #9294 (G1), #9295 (G2), #8780
@@ -1274,3 +1364,4 @@ No status change (D1 `adopting`, D2 `proposed`). Ruled by CTO agent, 2026-10-23.
 - `git-data-cutover.yml::wipe` loader consumer (2026-10-14): #10138, #6897, #10300, #8044; ADR-239 (DL-2), ADR-280
 - G1 deploy-channel trio inventory, narrow carrier and census gap (2026-10-15): #9294, #8609, #10300, #9295; D11 (the narrow-project precedent)
 - Separated wipe inherits R1 (2026-10-15): #10138, #8609, #6897; ADR-239 Amendment 2026-10-15
+- Deploy-channel consumers migrate to the narrow carrier (2026-11-27): #9294 PR-B, #12810 (PR-A); D11 precedent

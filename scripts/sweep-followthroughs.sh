@@ -79,6 +79,62 @@ REOPEN_MAX="${REOPEN_MAX:-3}"
 
 now_epoch=$(date -u +%s)
 
+# --- Deploy-channel partition (#9294 PR-B, CTO ruling D-1) -----------------
+# FT_ARM selects which side of the partition this invocation serves:
+#   sweep           (default) skips every tracker whose `secrets=` names a trio
+#                   member — the legacy arm no longer carries the trio.
+#   deploy-channel  serves ONLY trackers whose `secrets=` is a non-empty subset
+#                   of the trio set — the only arm bound to the main-only
+#                   deploy-channel environment whose loader exports them.
+# The trio set itself is derived HERE from the `@stems` record of
+# tests/scripts/trio-baseline.tsv — single-sourced, so neither this script nor
+# the workflow file re-names the family. The parse is fail-closed on BOTH
+# arms: exactly one `^@stems` record, comma-separated names each matching
+# `^[A-Z][A-Z0-9_]*$`, no duplicates — anything else exits non-zero.
+FT_ARM="${FT_ARM:-sweep}"
+
+TRIO_BASELINE_TSV="${TRIO_BASELINE_TSV:-tests/scripts/trio-baseline.tsv}"
+declare -A TRIO_SET=()
+load_trio_set() {
+  local LC_ALL=C
+  local _stems_count
+  _stems_count=$(awk '$1 == "@stems" { n++ } END { print n + 0 }' "$TRIO_BASELINE_TSV" 2>/dev/null || echo 0)
+  if [[ "$_stems_count" != "1" ]]; then
+    printf '::error::sweep-followthroughs: %s must carry exactly one @stems record (found %s) — the deploy-channel partition refuses to open\n' "$TRIO_BASELINE_TSV" "$_stems_count" >&2
+    exit 2
+  fi
+  local _stems_csv _stem_count=0 _stem
+  _stems_csv=$(awk '$1 == "@stems" { print $2; exit }' "$TRIO_BASELINE_TSV")
+  local -a _stems_names=()
+  IFS=',' read -r -a _stems_names <<<"$_stems_csv"
+  for _stem in "${_stems_names[@]}"; do
+    _stem="${_stem//[[:space:]]/}"
+    if ! [[ "$_stem" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
+      printf '::error::sweep-followthroughs: @stems name %q in %s is malformed (want ^[A-Z][A-Z0-9_]*$) — refusing to partition open\n' "$_stem" "$TRIO_BASELINE_TSV" >&2
+      exit 2
+    fi
+    if [[ -n "${TRIO_SET[$_stem]+x}" ]]; then
+      printf '::error::sweep-followthroughs: @stems name %q is duplicated in %s — refusing to partition open\n' "$_stem" "$TRIO_BASELINE_TSV" >&2
+      exit 2
+    fi
+    TRIO_SET["$_stem"]=1
+    _stem_count=$((_stem_count + 1))
+  done
+  if (( _stem_count < 1 )); then
+    printf '::error::sweep-followthroughs: the @stems record in %s names no credentials — refusing to partition open\n' "$TRIO_BASELINE_TSV" >&2
+    exit 2
+  fi
+}
+# Partition counters, read by the run-level verdict tail. SKIPPED counts
+# partition-skips on either arm; HOMELESS counts trackers whose secrets= mixes
+# trio and non-trio names (skipped by BOTH arms); DECLARED/RAN are the
+# deploy-channel coverage accounting (open-mode claims vs probes executed).
+PARTITION_SKIPPED=0
+PARTITION_HOMELESS=0
+TRIO_DECLARED=0
+TRIO_RAN=0
+SCRIPT_REFUSAL=0
+
 log()  { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 fail() { printf '[%s] ERROR: %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 
@@ -548,6 +604,7 @@ This body's code fences are also **unbalanced** — an earlier fence is never cl
   # have its existence/executability checks pass against the symlink. The
   # cheapest defense is to refuse symlinks under the allowlist root.
   if [[ -L "$script" ]]; then
+    SCRIPT_REFUSAL=1
     fail "issue #$issue_num: script path '$script' is a symlink — refusing to run"
     return 2
   fi
@@ -558,25 +615,18 @@ This body's code fences are also **unbalanced** — an earlier fence is never cl
   # would still accept the canonical-form's first line. Defense-in-depth
   # on top of the case-glob.
   if [[ "$canon" == *$'\n'* ]]; then
+    SCRIPT_REFUSAL=1
     fail "issue #$issue_num: script path '$script' contains embedded newline — refusing to run"
     return 2
   fi
   case "$canon" in
     "$SCRIPTS_ROOT"/*) script="$canon" ;;
     *)
+      SCRIPT_REFUSAL=1
       fail "issue #$issue_num: script path '$script' escapes $SCRIPTS_ROOT/ — refusing to run"
       return 2
       ;;
   esac
-
-  if [[ ! -f "$script" ]]; then
-    fail "issue #$issue_num: script '$script' missing in repo HEAD — leaving issue open"
-    return 0
-  fi
-  if [[ ! -x "$script" ]]; then
-    fail "issue #$issue_num: script '$script' not executable — leaving issue open"
-    return 0
-  fi
 
   # Earliest gate — applies to BOTH sets.
   #
@@ -611,6 +661,63 @@ This body's code fences are also **unbalanced** — an earlier fence is never cl
     if ! closed_precheck "$issue_num"; then
       return 0
     fi
+  fi
+
+  # Deploy-channel partition (#9294 PR-B, D-1). Placed after the earliest gate
+  # and the closed precheck so a not-yet-due or not-a-candidate tracker is not
+  # counted as served-or-homeless either way. A tracker with no `secrets=` is
+  # non-trio by definition. `sweep` skips any tracker naming a trio member —
+  # its job env no longer carries them, and a Guard-3 REQUIRED-SECRET-MISSING
+  # red on every one is exactly the noise this flag exists to eliminate.
+  # `deploy-channel` runs a tracker iff `secrets=` is a NON-EMPTY SUBSET of the
+  # trio set; a `secrets=` mixing trio and non-trio names is skipped by BOTH
+  # arms — homeless — and counted for the run-level coverage red.
+  local _trio_hit=0 _trio_mixed=0
+  if [[ -n "${secrets:-}" ]]; then
+    local -a _p_names=()
+    IFS=',' read -r -a _p_names <<<"$secrets"
+    local _pn
+    for _pn in "${_p_names[@]}"; do
+      _pn="${_pn//[[:space:]]/}"
+      [[ -z "$_pn" ]] && continue
+      if [[ -n "${TRIO_SET[$_pn]+x}" ]]; then _trio_hit=1; else _trio_mixed=1; fi
+    done
+  fi
+  if [[ "$FT_ARM" == "sweep" ]]; then
+    if [[ "$_trio_hit" == "1" ]]; then
+      log "issue #$issue_num: partition-skip — secrets= names a deploy-channel credential; the sweep-deploy-channel arm serves it"
+      PARTITION_SKIPPED=$((PARTITION_SKIPPED + 1))
+      return 0
+    fi
+  else
+    if [[ "$_trio_hit" != "1" ]]; then
+      log "issue #$issue_num: partition-skip — secrets= names no deploy-channel credential; the sweep arm serves it"
+      PARTITION_SKIPPED=$((PARTITION_SKIPPED + 1))
+      return 0
+    fi
+    if [[ "$_trio_mixed" == "1" ]]; then
+      log "issue #$issue_num: partition-skip — secrets= mixes deploy-channel and other names: HOMELESS, no arm can serve it"
+      printf '::error::sweep-followthroughs: issue #%s: its secrets= clause mixes deploy-channel and non-deploy-channel names — no arm can serve a mixed clause; split the directive\n' "$issue_num" >&2
+      PARTITION_HOMELESS=$((PARTITION_HOMELESS + 1))
+      return 0
+    fi
+    if [[ "$mode" == "open" ]]; then
+      TRIO_DECLARED=$((TRIO_DECLARED + 1))
+    fi
+  fi
+
+  # Only after the partition decision: filesystem existence/executability. A missing
+  # trio tracker must count as DECLARED before this return, and SCRIPT_REFUSAL reds
+  # the run even when another tracker runs — otherwise a typoed path is invisible.
+  if [[ ! -f "$script" ]]; then
+    SCRIPT_REFUSAL=1
+    fail "issue #$issue_num: script '$script' missing in repo HEAD — leaving issue open"
+    return 0
+  fi
+  if [[ ! -x "$script" ]]; then
+    SCRIPT_REFUSAL=1
+    fail "issue #$issue_num: script '$script' not executable — leaving issue open"
+    return 0
   fi
 
   # Build the env allowlist. Default = nothing. Only vars named in
@@ -723,6 +830,9 @@ Fix: add the name to the \`env:\` block of \`.github/workflows/scheduled-followt
   ) || rc=$?
   probe_elapsed=$(( SECONDS - probe_t0 ))
   log "issue #$issue_num: $script exit=$rc"
+  if [[ "$FT_ARM" == "deploy-channel" ]]; then
+    TRIO_RAN=$((TRIO_RAN + 1))
+  fi
   # 124 = timeout expired; 137 = it had to escalate to SIGKILL (a probe ignoring TERM). Both are only a
   # timeout when the wall clock agrees: a probe that wraps its own `timeout` and exits 124/137 early, or
   # is OOM-killed (137), is a different verdict and must not be relabelled as the sweeper's cap.
@@ -1104,6 +1214,17 @@ main() {
 
 # Allow tests to source this script without running main().
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  # Executed path only: the arm selector and the @stems derivation are
+  # fail-closed exits, which a sourcing test shell must never take. Tests load
+  # the set explicitly via load_trio_set or seed TRIO_SET directly.
+  case "$FT_ARM" in
+    sweep|deploy-channel) ;;
+    *)
+      printf '::error::sweep-followthroughs: FT_ARM must be "sweep" or "deploy-channel" (got %q) — refusing to partition open\n' "$FT_ARM" >&2
+      exit 2
+      ;;
+  esac
+  load_trio_set
   main "$@"
   # RUN-LEVEL VERDICTS. Raised here so the sweep completes first: every tracker the page DID
   # reach is still swept, and only then does the run go red. A green run carrying an annotation
@@ -1115,9 +1236,32 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   # the others reappeared the next day looking new. An early exit in the first arm is exactly
   # the mutation row 19 of the Guard 2 matrix restores.
   run_verdict=0
+  # Partition summary on BOTH arms (D-1: skip decisions must be visible), then
+  # the coverage assertions: a mixed secrets= is homeless by construction, and
+  # a deploy-channel arm that ran zero of the trio trackers it declared is a
+  # silent gap made red.
+  if [[ "$FT_ARM" == "deploy-channel" ]]; then
+    printf '[%s] partition summary (arm=deploy-channel): served=%s declared=%s homeless=%s partition_skipped=%s\n' \
+      "$(date -u +%H:%M:%S)" "$TRIO_RAN" "$TRIO_DECLARED" "$PARTITION_HOMELESS" "$PARTITION_SKIPPED"
+  else
+    printf '[%s] partition summary (arm=sweep): partition_skipped=%s\n' \
+      "$(date -u +%H:%M:%S)" "$PARTITION_SKIPPED"
+  fi
+  if [[ "$PARTITION_HOMELESS" -gt 0 ]]; then
+    printf '::error::sweep-followthroughs: FAILING THE RUN because %s tracker(s) declare deploy-channel credentials in a secrets= clause no arm can serve (mixed clauses are homeless by construction).\n' "$PARTITION_HOMELESS" >&2
+    run_verdict=1
+  fi
+  if [[ "$FT_ARM" == "deploy-channel" && "$TRIO_DECLARED" -gt 0 && "$TRIO_RAN" -eq 0 ]]; then
+    printf '::error::sweep-followthroughs: FAILING THE RUN because %s open tracker(s) declare deploy-channel credentials but this arm ran zero of them — a declared-but-unserved trio tracker is silent credential rot.\n' "$TRIO_DECLARED" >&2
+    run_verdict=1
+  fi
   if [[ "$TRUNCATED_SWEEP" == "1" ]]; then
     printf '::error::sweep-followthroughs: FAILING THE RUN because the open follow-through page was full; some trackers were not swept at all.\n' >&2
     run_verdict=1  # truncation-verdict
+  fi
+  if [[ "$SCRIPT_REFUSAL" == "1" ]]; then
+    printf '::error::sweep-followthroughs: FAILING THE RUN because at least one enrolled followthrough script was missing, non-executable, or outside the committed allowlist root — an unrunnable tracker is silent follow-through rot.\n' >&2
+    run_verdict=1
   fi
   if [[ "$MISSING_SECRET" == "1" ]]; then
     printf '::error::sweep-followthroughs: FAILING THE RUN because at least one tracker directive names a secret the workflow env does not carry (see the comment posted on that tracker).\n' >&2

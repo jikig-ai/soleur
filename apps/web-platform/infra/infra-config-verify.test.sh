@@ -123,7 +123,7 @@ fi
 # A tested script no step runs is the vacuity the F1 pin exists to prevent, one
 # indirection deeper. The mirror clause lives in infra-config-gate.test.sh.
 if [[ -r "$APPLY_WF" ]]; then
-  if grep -qE '^[[:space:]]*run:[[:space:]]+bash[[:space:]]+.*infra-config-verify\.sh' "$APPLY_WF"; then
+  if grep -qE '^[[:space:]]*(run:[[:space:]]+)?bash[[:space:]]+.*infra-config-verify\.sh' "$APPLY_WF"; then
     pass "apply-deploy-pipeline-fix.yml invokes infra-config-verify.sh"
   else
     fail "no step in apply-deploy-pipeline-fix.yml invokes infra-config-verify.sh — the extracted gate is dead in production"
@@ -139,9 +139,8 @@ fi
 # SEPARATE workflow steps. A `terraform` here would collapse the boundary the whole
 # ruling restored.
 #
-# curl and `doppler secrets get` are deliberately NOT in this set: polling the status
-# endpoint and reading a secret are what a verification gate does. T6 pins the doppler
-# half to read-only subcommands.
+# curl is deliberately NOT in this set: polling the status endpoint is what a
+# verification gate does. Doppler is not exempted at all: T6 pins zero runtime-store reads.
 # AN ALLOW-LIST, NOT A DENY-LIST (#7104 PR-B review, D3).
 #
 # This was `for c in terraform ssh systemctl` — three names, matched by a grep. D3 ran the
@@ -203,7 +202,7 @@ BUILTINS = {'echo','printf','local','declare','typeset','readonly','export','uns
 # transforms text, and prints. Every one is inert with respect to infrastructure. `terraform`,
 # `ssh`, `systemctl` and `gh` are absent by omission rather than by enumeration, which is the
 # point of the inversion.
-ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date','doppler',
+ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date',
            'sleep','source'}
 
 # The gate library's function names, DERIVED from the library rather than listed here, so a
@@ -282,7 +281,7 @@ import importlib.util, sys
 _spec = importlib.util.spec_from_file_location('shellscan', sys.argv[2])
 _m = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_m)
-ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date','doppler',
+ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date',
            'sleep','source','echo','printf','exit','local','set','if','then','fi','f'}
 SHAPES = {
     'bare-binary':   'f() {\n  terraform apply -auto-approve\n}\n',
@@ -398,19 +397,46 @@ PYEOF
   fi
 fi
 
-# --- T6: every doppler call is READ-only ------------------------------------------------------
-# `doppler secrets get` reads. `doppler secrets set|delete|upload`, `doppler run`,
-# and `doppler configure` mutate or execute. The gate may read a secret; it may not
-# write one.
+# --- T6: the gate reads NO secret store at all ------------------------------------------------
+# Since the APP_DOMAIN_BASE conversion (#13006 review, security-sentinel P1) the gate's only
+# credential inputs are the caller-exported env: the trio from the Tier-B loader, the domain base
+# from the committed variables.tf derivation. ANY command-position doppler call is a regression —
+# a runtime store must have no path to the credentialed webhook URL, because a branch actor with
+# write access to a Doppler config could plant the value it reads.
 if [[ -f "$VERIFY_SH" ]]; then
-  dtotal=$(cmd_position_count "$VERIFY_SH" doppler)
-  dread=$(grep -cE '(^|[;&|]|\$\()[[:space:]]*doppler[[:space:]]+secrets[[:space:]]+get[[:space:]]' "$VERIFY_SH" || true)
+  # Structural, not a line-start grep: `if doppler ...`, `while doppler ...` and the
+  # other shell keyword positions must fail the same way. The shared scanner is the
+  # same one the actuation sweep uses, so this sentinel cannot be evaded by shell syntax
+  # the grep never modeled. Indirect command names are a separate known scanner gap;
+  # the literal runtime-store binary is the regression pinned here.
+  dtotal=$(python3 - "$VERIFY_SH" "${SCRIPT_DIR}/infra-config-shellscan.py" <<'PYEOF'
+import importlib.util, sys
+path, scanner = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("infra_config_shellscan", scanner)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+src = open(path, encoding="utf-8").read()
+print(sum(1 for _line, tok, _raw in mod.raw_command_tokens(mod.strip_noise(src), include_indirect=False) if tok == "dop" + "pler"))
+PYEOF
+)
   if [[ "$dtotal" -eq 0 ]]; then
-    fail "no command-position doppler call found — the fixture for T6 has drifted, so this assert is vacuous"
-  elif [[ "$dtotal" -eq "$dread" ]]; then
-    pass "all $dtotal command-position doppler call(s) are read-only \`secrets get\`"
+    pass "zero structural command-position Doppler calls — the gate reads no secret store; every credential input is the caller-exported env"
   else
-    fail "$((dtotal - dread)) of $dtotal command-position doppler call(s) are not \`secrets get\` — the gate mutates secret state"
+    fail "$dtotal structural command-position Doppler call(s) found — the gate must read NOTHING from a runtime store (the domain base is the committed variables.tf derivation, exported by the calling step)"
+  fi
+  keyword_shape=$(python3 - "${SCRIPT_DIR}/infra-config-shellscan.py" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("infra_config_shellscan", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+src = "if dop" + "pler secrets get X --plain; then echo bad; fi\n"
+print(sum(1 for _line, tok, _raw in mod.raw_command_tokens(mod.strip_noise(src), include_indirect=False) if tok == "dop" + "pler"))
+PYEOF
+)
+  if [[ "$keyword_shape" -eq 1 ]]; then
+    pass "the zero-Doppler sentinel is structural: it sees a keyword-position invocation"
+  else
+    fail "the zero-Doppler sentinel missed a keyword-position invocation (saw $keyword_shape) — the regression guard is vacuous"
   fi
 fi
 
@@ -420,9 +446,8 @@ fi
 # the workflow that consumes this script uses `curl -X POST "$DEPLOY_URL"` against
 # /hooks/deploy to SWAP THE RUNNING PRODUCTION CONTAINER -- its own comment says "to
 # /hooks/deploy -> swaps web-1". So the actuation sweep pins WHICH BINARIES may run and, for
-# curl alone among them, says nothing about what they may DO. `doppler` is pinned to
-# `secrets get` twenty lines above; curl had no equivalent, so a POST to the deploy hook added
-# to this script would pass the actuation sweep entirely.
+# curl alone among them, says nothing about what they may DO. A POST to the deploy hook added
+# to this script would otherwise pass the actuation sweep entirely.
 #
 # Pinned on the METHOD rather than the URL: an allow-list over hostnames would have to permit
 # the one host the gate legitimately polls, which is the same host that carries the deploy hook.
@@ -494,20 +519,10 @@ mkstubs() {
   # reads and `exit 64`s on anything else, and it records each name so a case can assert on them.
   cat > "$I_TMP/bin/doppler" <<'EOS'
 #!/usr/bin/env bash
-# The body only ever calls `secrets get <NAME> --plain`.
-if [[ "${1:-}" != "secrets" || "${2:-}" != "get" ]]; then
-  echo "doppler-stub: unexpected subcommand '${1:-} ${2:-}' (the gate may only READ secrets)" >&2
-  exit 64
-fi
-name="${3:-}"
-printf '%s\n' "$name" >> "${STUB_DOPPLER_LOG:-/dev/null}"
-# #9294: the webhook trio is the Tier-B loader's env export, never a doppler read, so the ONLY name the
-# body may still ask doppler for is APP_DOMAIN_BASE (a trio name here is exit 64, which reds the case).
-case "$name" in
-  APP_DOMAIN_BASE) ;;
-  *) echo "doppler-stub: unexpected secret name '$name'" >&2; exit 64 ;;
-esac
-echo "example.test"
+# #9294: the gate must make ZERO runtime-store reads. Any doppler invocation is unexpected;
+# this stub exists only to turn an accidental call into a loud test failure.
+echo "doppler-stub: unexpected invocation '$*' (the gate reads no secret store)" >&2
+exit 64
 EOS
   # SLEEP IS RECORDED, NOT JUST SUPPRESSED (#7104 PR-B review).
   #
@@ -665,6 +680,9 @@ drive_pass2() { # $1 frame, $2 GITHUB_OUTPUT, $3 baseline, $4 apply_start_epoch,
 
 # The Tier-B loader step's job: the trio arrives as env. A case makes one unusable by overriding it.
 export WEBHOOK_DEPLOY_SECRET="stub-webhook-key" CF_ACCESS_CLIENT_ID="stub-cf-id-value" CF_ACCESS_CLIENT_SECRET="stub-cf-secret-value"
+# The domain base is the workflow-exported derivation now (#13006 review): the drive env carries a
+# sentinel so the URL-host assertions prove env-consumption rather than a hardcoded or store-read host.
+export APP_DOMAIN_BASE="example.test"
 
 mkstubs
 STALE="$I_TMP/stale.json"; MOVED="$I_TMP/moved.json"
@@ -839,22 +857,25 @@ if mkframe 1000 "$STALE" && mkframe 3000 "$MOVED"; then
   else
     fail "#7104 I6b: $n_sleep sleep(s) on a first-attempt success (expected exactly 1): $(tr '\n' ' ' < "$SL")"
   fi
-  # The trio is the loader's env, never a doppler read (#9294): the only secret the body may request
-  # from doppler is APP_DOMAIN_BASE (and it must, or the host would be hardcoded), and the request is
-  # signed with WEBHOOK_DEPLOY_SECRET itself and carries the Access pair id-as-id / secret-as-secret, not another trio member (a wrong-but-real key 401s in
+  # The trio is the loader's env, never a doppler read (#9294), and since the security-sentinel
+  # conversion (#13006 review) the domain base is DERIVED from committed variables.tf — so the body
+  # may ask doppler for NOTHING at all (a planted runtime-store value must have no path to the
+  # credentialed webhook URL). The request is signed with WEBHOOK_DEPLOY_SECRET itself and carries
+  # the Access pair id-as-id / secret-as-secret, not another trio member (a wrong-but-real key 401s in
   # production while every presence-only check stays green).
-  if [[ -s "$DL" ]] && ! grep -qvx 'APP_DOMAIN_BASE' "$DL" && [[ -s "$SIGL" ]] && ! grep -qvx 'sig=match' "$SIGL" \
+  if [[ ! -s "$DL" ]] && [[ -s "$SIGL" ]] && ! grep -qvx 'sig=match' "$SIGL" \
      && [[ -s "$CFL" ]] && ! grep -qvx 'cfid=stub-cf-id-value cfsec=stub-cf-secret-value' "$CFL"; then
-    pass "#7104 I6c: doppler is asked only for APP_DOMAIN_BASE and the request is signed with WEBHOOK_DEPLOY_SECRET (the signing key is pinned by value, not just 'some secret')"
+    pass "#7104 I6c: doppler is never asked for any name (the domain is derived, the trio is env) and the request is signed with WEBHOOK_DEPLOY_SECRET (the signing key is pinned by value, not just 'some secret')"
   else
-    fail "#7104 I6c: doppler read: $(tr '\n' ' ' < "$DL"); signature checks: $(tr '\n' ' ' < "$SIGL"). The trio must come from the Tier-B loader's env and the HMAC must use WEBHOOK_DEPLOY_SECRET."
+    fail "#7104 I6c: doppler read: $(tr '\n' ' ' < "$DL" 2>/dev/null); signature checks: $(tr '\n' ' ' < "$SIGL"). The trio must come from the Tier-B loader's env, the domain must be derived, and the HMAC must use WEBHOOK_DEPLOY_SECRET."
   fi
-  # The HOST. The stub's URL check enforces the deploy.<domain> shape; this pins that the
-  # domain came from APP_DOMAIN_BASE rather than being hardcoded to something else.
+  # The HOST. The stub's URL check enforces the deploy.<domain> shape; this pins that the domain
+  # comes from the APP_DOMAIN_BASE ENV (the workflow-exported derivation in production, the sentinel
+  # here) rather than being hardcoded or read from a runtime store.
   if grep -q '^https://deploy\.example\.test/hooks/infra-config-status$' "$CL"; then
-    pass "#7104 I6d: the status URL is built from APP_DOMAIN_BASE (https://deploy.example.test/...), so the host is pinned and not hardcoded"
+    pass "#7104 I6d: the status URL is built from the APP_DOMAIN_BASE env (https://deploy.example.test/...), so the host follows the exported derivation and is not hardcoded"
   else
-    fail "#7104 I6d: the polled URL(s) were '$(tr '\n' ' ' < "$CL")', expected https://deploy.example.test/hooks/infra-config-status built from the stubbed APP_DOMAIN_BASE"
+    fail "#7104 I6d: the polled URL(s) were '$(tr '\n' ' ' < "$CL")', expected https://deploy.example.test/hooks/infra-config-status built from the sentinel APP_DOMAIN_BASE env"
   fi
 
   # --- I8: THE `unadjudicated` ARM, WHICH HAD ZERO COVERAGE (#7104 PR-B review) -------------

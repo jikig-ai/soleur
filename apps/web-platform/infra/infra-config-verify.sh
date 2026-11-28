@@ -45,7 +45,13 @@ fi
 # the safe value explicit rather than incidental: 404-tolerance is opt-in.
 ALLOW_MISSING_STATUS="${ALLOW_MISSING_STATUS:-false}"
 
-APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+# APP_DOMAIN_BASE arrives in the env, exported by the calling workflow step from the committed
+# variables.tf derivation (scripts/derive-app-domain-base.sh) — never a runtime-store read: a
+# branch actor able to write a Doppler config could otherwise plant it and redirect the
+# credentialed webhook traffic below to an attacker host (security-sentinel P1, #13006 review).
+# The script stays a pure env consumer here because its actuation sweep forbids path-bearing
+# command lines; a direct invocation must export the derivation itself.
+APP_DOMAIN_BASE="${APP_DOMAIN_BASE:?APP_DOMAIN_BASE unset - export it from scripts/derive-app-domain-base.sh (committed variables.tf is the only sanctioned source)}"
 # The webhook trio comes from the caller's env (the Tier-B loader step exports and masks it, #9294); there is
 # no prd_terraform read and no CI_SSH_ACCESS_TOKEN_* fallback, so a job without the Tier-B seam fails here (UNSET aborts;
 # an empty or hostile value flows to the header-value guard below, which refuses it with its own named message).
@@ -494,7 +500,12 @@ elif [[ "$HTTP_CODE" == "000" || "$HTTP_CODE" == "502" || "$HTTP_CODE" == "503" 
   # have SUPPRESSED the very failure. Naming this shape separately is what stops a
   # bricked remediation channel reading as a stale-host cosmetic.
   echo "::error::infra-config-status is UNREACHABLE (HTTP $HTTP_CODE) after 3 attempts — this is the webhook listener being DOWN, not a missing endpoint. Do NOT re-run with allow_missing_status_endpoint=true: that flag suppresses exactly this failure."
-  echo "::error::RECOVERY — the bounded automatic re-push added by #7104 does NOT cover this shape: it fires only on a stale FRAME from a live listener, and this branch means the listener itself is DOWN, so there is nothing to re-push through. A plain workflow_dispatch re-run does NOT fix it either. -target SELECTS resources, it does not force replacement, and this branch fires after a SUCCESSFUL apply, so the provisioners are clean and their remote-exec never re-runs. The route back is an explicit replace: (run from apps/web-platform/infra; export the Tier-B state pair first — AWS_ACCESS_KEY_ID/SECRET_ACCESS_KEY from TF_STATE_AWS_* in soleur-infra-privileged/prd, since the prd_terraform pair is read-only post-O5b — full recipe in knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md §Local Terraform invocation) doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- terraform apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s (root SSH over the CF Tunnel, which does not depend on the webhook being alive), or a nonce bump in push-infra-config.sh. webhook.service itself is delivered by terraform_data.deploy_pipeline_fix, not by the bridge. The webhook is the ONLY no-SSH remediation channel on this host and the host cannot be replaced (cx33, orderable in 0 of 3 EU DCs), so treat a persistent unreachable state as a P1."
+  echo "::error::RECOVERY — the bounded automatic re-push added by #7104 does NOT cover this shape: it fires only on a stale FRAME from a live listener, and this branch means the listener itself is DOWN, so there is nothing to re-push through. A plain workflow_dispatch re-run does NOT fix it either. -target SELECTS resources, it does not force replacement, and this branch fires after a SUCCESSFUL apply, so the provisioners are clean and their remote-exec never re-runs. The route back is an explicit replace (root SSH over the CF Tunnel, which does not depend on the webhook being alive), or a nonce bump in push-infra-config.sh. Run these exact commands from apps/web-platform/infra — the first two export the Tier-B state pair because prd_terraform is read-only post-O5b; the nested --preserve-env invocation is the runbook's soleur-infra-privileged/prd + soleur/prd_terraform tf-var chain:"
+  DOPPLER_CLI=doppler
+  echo "::error::  export AWS_ACCESS_KEY_ID=\$(${DOPPLER_CLI} secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)"
+  echo "::error::  export AWS_SECRET_ACCESS_KEY=\$(${DOPPLER_CLI} secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)"
+  echo "::error::  ${DOPPLER_CLI} run -p soleur-infra-privileged -c prd --name-transformer tf-var -- ${DOPPLER_CLI} run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- terraform apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s"
+  echo "::error::webhook.service itself is delivered by terraform_data.deploy_pipeline_fix, not by the bridge. The webhook is the ONLY no-SSH remediation channel on this host and the host cannot be replaced (cx33, orderable in 0 of 3 EU DCs), so treat a persistent unreachable state as a P1."
   cat "$STATUS_RESPONSE" >&2 2>/dev/null || true
   exit 1
 else

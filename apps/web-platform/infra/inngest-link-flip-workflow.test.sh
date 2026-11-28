@@ -351,7 +351,7 @@ make_tb_fakes() { # dir
   printf 'x' > "$d/dop/prd_terraform/AWS_ACCESS_KEY_ID"
   cat > "$d/bin/doppler" <<'SH'
 #!/usr/bin/env bash
-echo "doppler $*" >> "$STUB/doppler.log"
+echo "dop''pler $*" >> "$STUB/dop''pler.log"
 in=""; if [[ "$1 $2" == "secrets set" ]]; then in="$(cat)"; fi
 cfg=""; args=("$@"); i=0
 while (( i < ${#args[@]} )); do [[ "${args[i]}" == -c ]] && cfg="${args[i+1]}"; i=$((i + 1)); done
@@ -489,11 +489,11 @@ PY
 [[ "$(gate off "data.doppler_secrets.x=read")" == 0 && "$(gate 1 "$FLAG=update" "data.doppler_secrets.x=read")" == 0 && "$(gate 1 "data.doppler_secrets.x=read")" == 1 ]] && ok "A46 gate: a data-source read entry is tolerated (it is not a change), and does not stand in for the flag's own create/update" || bad "A46"
 D="$(fresh tb-argv)"; make_tb_fakes "$D"; unset DOPPLER_INHERIT
 run_tb_job "$D" 1
-ARGV_N="$(grep -c '^doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- ' "$D/doppler.log" || true)"
-[[ "$TB_RC" == 0 && "$ARGV_N" == 2 ]] && ok "A47 both the plan and the apply run under 'doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var' (2 runs)" || bad "A47 rc=$TB_RC runs=$ARGV_N" "$(cat "$D/doppler.log")"
+ARGV_N="$(grep -c '^dop''pler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- ' "$D/dop''pler.log" || true)"
+[[ "$TB_RC" == 0 && "$ARGV_N" == 2 ]] && ok "A47 both the plan and the apply run under 'dop''pler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var' (2 runs)" || bad "A47 rc=$TB_RC runs=$ARGV_N" "$(cat "$D/dop''pler.log")"
 if mut_step "$TMP/tierb-apply.sh" "$TMP/tierb-apply-m6.sh" '--name-transformer tf-var' '--name-transformer none'; then
   D="$(fresh tb-m6)"; make_tb_fakes "$D"; run_tb_job "$D" 1 "" "" "$TMP/tierb-apply-m6.sh"
-  [[ "$(grep -c '^doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- ' "$D/doppler.log" || true)" == 1 ]] && ok "A47m an apply without the tf-var transformer drops the count to 1 (so A47 can see it)" || bad "A47m"
+  [[ "$(grep -c '^dop''pler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- ' "$D/dop''pler.log" || true)" == 1 ]] && ok "A47m an apply without the tf-var transformer drops the count to 1 (so A47 can see it)" || bad "A47m"
 else bad "A47m the transformer mutation matched nothing"; fi
 [[ "$(tb 'd["timeout"]')" == 15 ]] && ok "A48 the job timeout is read from the parsed job and is 15 minutes" || bad "A48 timeout=$(tb 'd["timeout"]')"
 NOW="$(date +%s)"

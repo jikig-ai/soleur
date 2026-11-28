@@ -65,18 +65,23 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     timeout-minutes: 8
+    # #9294 PR-B: the trio rides the main-only deploy-channel environment; the
+    # narrow loader exports WEBHOOK_DEPLOY_SECRET / CF_ACCESS_CLIENT_{ID,SECRET}
+    # to job env below — no `secrets.<trio>` bind remains.
+    environment: deploy-channel
     steps:
       # #6374: check out so the probe + age-gate steps can source the extracted,
       # unit-tested classifier/age-gate helpers (scripts/inngest-liveness-classify.sh,
       # scripts/inngest-restart-age-gate.sh) — the decision logic is out of the inline
       # workflow bash and under scripts/*.test.sh coverage.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Load deploy-channel credentials
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-project: soleur-deploy-channel
+          doppler-token-deploy-channel: ${{ secrets.DOPPLER_TOKEN_DEPLOY_CHANNEL }}
       - id: probe
         name: Probe inngest health
-        env:
-          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           set -uo pipefail
           # shellcheck disable=SC2020  # tr char-set strip is intentional (verbatim from scheduled-realtime-probe.yml)
@@ -89,7 +94,7 @@ jobs:
           fail_mode=""; fail_detail=""; dstate=""; web_quiesced_since=""
           record_failure() { if [[ -z "$fail_mode" ]]; then fail_mode="$1"; fail_detail="$2"; fi; }
 
-          if [[ -z "${WEBHOOK_SECRET:-}" || -z "${CF_ACCESS_CLIENT_ID:-}" || -z "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then
+          if [[ -z "${WEBHOOK_DEPLOY_SECRET:-}" || -z "${CF_ACCESS_CLIENT_ID:-}" || -z "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then
             record_failure "secret_unset" "WEBHOOK_DEPLOY_SECRET / CF_ACCESS_* not set — cannot probe the inngest health hook."
           fi
 
@@ -116,7 +121,7 @@ jobs:
             source "${GITHUB_WORKSPACE:?}/scripts/lib/bearer-curl.sh" || { echo "::error::scripts/lib/bearer-curl.sh could not be loaded from the job checkout."; exit 1; }
             # `|| SIG=""` sends an empty key or a missing python3 to the pre-guard below, not to a mute abort.
             # shellcheck disable=SC2034  # read by NAME inside bc_ok_var and bc_curl
-            SIG="$(printf '' | bc_hmac_sha256_hex WEBHOOK_SECRET)" || SIG=""
+            SIG="$(printf '' | bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET)" || SIG=""
             # PRE-GUARD (ADR-280 decision 3). A refused credential makes NO request and is the watchdog's own
             # unusable-secret fault: it is recorded as `secret_unset` (the liveness-probe issue class: NO
             # restart, but the Sentry heartbeat is `error` and pages, unlike probe_unavailable; never seeds

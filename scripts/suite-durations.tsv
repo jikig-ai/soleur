@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=46053704017,45978011373,45964231859,45868797899,45843152864
 # default-weight-ms=1539
-# generated-at=2026-11-28T10:19:26Z
+# generated-at=2026-11-28T15:41:31Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=d8179c4f4c389f9b127336b4cfec95e3c6ae7c68bd15595190cb508650edfd52
 .claude/hooks/agent-token-tee.test.sh	6648	measured
@@ -484,7 +484,6 @@ scripts/inngest-probe-heartbeat-feeder	15464	measured
 scripts/inngest-provision-unit-8562	847	measured
 scripts/inngest-restart-age-gate	57	measured
 scripts/inngest-restart-poll-classify	95	measured
-scripts/inngest-soak-6178	22267	measured
 scripts/inngest-tls-soak-10136	8189	measured
 scripts/inngest-write-token-revisit-12738	801	measured
 scripts/inngest-zot-boot-7462	327	measured

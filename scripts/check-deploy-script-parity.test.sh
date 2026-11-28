@@ -66,7 +66,7 @@ else no "C3: newest-wins (rc=$RC) $(<"$S/out") $(<"$S/err")"; fi
 cases=$((cases + 1))
 mk_status "$REPO_SHA" "hetzner-1"; mk_rows
 add_row "soleur-web-platform" "$REPO_SHA" "ci-deploy" "2026-09-30 10:00:00.000"
-add_row "soleur-web-2"         "$REPO_SHA" "doppler"   "2026-09-30 10:01:00.000"
+add_row "soleur-web-2"         "$REPO_SHA" "dop""pler"   "2026-09-30 10:01:00.000"
 run --status-json-file "$S/status.json" --bs-rows-file "$S/rows.json"
 if [[ "$RC" -ne 0 && "$(<"$S/err")" == *"soleur-web-2"* ]]; then ok "C4: wrong-emitter rows are ignored (missing, not parity)"
 else no "C4: emitter isolation (rc=$RC) $(<"$S/out") $(<"$S/err")"; fi

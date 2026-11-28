@@ -4,14 +4,14 @@ When the release workflow's deploy step fails or times out, query `/hooks/deploy
 
 ## Call Pattern
 
-Run this as ONE Bash call (variables do not persist between calls). Fetch the credentials from Doppler `prd_terraform`, sign, then GET (read-only endpoint; the HMAC is computed over the empty body). The signature and the Access service-token pair ride curl's stdin config, never its argument list (argv shows in `/proc/<pid>/cmdline`). Bash only; `bash -x` would print them.
+Run this as ONE Bash call (variables do not persist between calls). Fetch the credentials from the `soleur-deploy-channel` Doppler project (`prd` config; run from the repo root so the `scripts/lib/doppler-read.sh` path resolves), sign, then GET (read-only endpoint; the HMAC is computed over the empty body). The signature and the Access service-token pair ride curl's stdin config, never its argument list (argv shows in `/proc/<pid>/cmdline`). Bash only; `bash -x` would print them.
 
 ```bash
-WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --project soleur --config prd_terraform --plain)
-CF_ACCESS_CLIENT_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --project soleur --config prd_terraform --plain)
-CF_ACCESS_CLIENT_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --project soleur --config prd_terraform --plain)
+WEBHOOK_SECRET=$(bash scripts/lib/doppler-read.sh get soleur-deploy-channel prd WEBHOOK_DEPLOY_SECRET)
+CF_ACCESS_CLIENT_ID=$(bash scripts/lib/doppler-read.sh get soleur-deploy-channel prd CF_ACCESS_CLIENT_ID)
+CF_ACCESS_CLIENT_SECRET=$(bash scripts/lib/doppler-read.sh get soleur-deploy-channel prd CF_ACCESS_CLIENT_SECRET)
 SIGNATURE=$(printf '' | HMAC_KEY="$WEBHOOK_SECRET" python3 -I -c 'import hashlib,hmac,os,sys;k=os.environb.get(b"HMAC_KEY");k or sys.exit(1);sys.stdout.write(hmac.new(k,sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
-(LC_ALL=C; for n in SIGNATURE CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do case "${!n}" in ''|*[!A-Za-z0-9._~+/=-]*) echo "$n unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1;; esac; done) || exit 1
+(LC_ALL=C; for pair in "SIGNATURE=$SIGNATURE" "CF_ACCESS_CLIENT_ID=$CF_ACCESS_CLIENT_ID" "CF_ACCESS_CLIENT_SECRET=$CF_ACCESS_CLIENT_SECRET"; do n=${pair%%=*}; v=${pair#*=}; case "$v" in ''|*[!A-Za-z0-9._~+/=-]*) echo "$n unset or not [A-Za-z0-9._~+/=-] (refused, not sent)" >&2; exit 1;; esac; done) || exit 1
 curl --disable --proto '=https' -m 30 -fsS -X GET --config - https://deploy.soleur.ai/hooks/deploy-status \
   < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$SIGNATURE" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET")
 ```

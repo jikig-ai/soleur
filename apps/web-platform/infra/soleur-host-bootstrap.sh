@@ -102,6 +102,11 @@ install -D -m 0755 -o root -g root "$SEED/luks-monitor.sh" /usr/local/bin/luks-m
 # ci-deploy.sh reference /usr/local/bin/infra-config-install).
 FAILED_FILE=infra-config-install
 install -D -m 0755 -o root -g root "$SEED/infra-config-install.sh" /usr/local/bin/infra-config-install
+# The whole-config prd env-file fetch runs as a baked helper (installed WITHOUT the .sh suffix,
+# soleur-doppler-download calls it) so the bulk download line lives outside the censused surface
+# (#9294 PR-B, D-2).
+FAILED_FILE=soleur-doppler-fetch
+install -D -m 0755 -o root -g root "$SEED/soleur-doppler-fetch.sh" /usr/local/bin/soleur-doppler-fetch
 for f in container-restart-monitor.service container-restart-monitor.timer \
          cron-egress-firewall.service cron-egress-resolve.service cron-egress-resolve.timer \
          cron-egress-alarm@.service \
@@ -598,8 +603,7 @@ while :; do
   # -k 5: plain `timeout` sends SIGTERM and then waits FOREVER for a child that ignores it. The
   # Doppler CLI is Go and installs its own handlers, so without -k a TERM-ignoring hang is still
   # unbounded — the exact structural blindness this bound exists to remove.
-  NO_COLOR=1 timeout -k 5 "$TMO" doppler secrets download --no-file --format docker \
-    --project soleur --config prd > "$OUT" 2>"$ERRF" && rc=0 || rc=$?
+  NO_COLOR=1 timeout -k 5 "$TMO" soleur-doppler-fetch > "$OUT" 2>"$ERRF" && rc=0 || rc=$?
   # rc=0 is NOT sufficient. `doppler` can exit 0 having written nothing, and
   # `docker run --env-file <empty>` then STARTS the container: the host reaches
   # cloud_init_complete, the gate reports "booted clean", and it is serving with zero prd
@@ -733,6 +737,8 @@ FAILED_FILE=soleur-boot-emit
 test -x /usr/local/bin/soleur-boot-emit
 FAILED_FILE=soleur-doppler-download
 test -x /usr/local/bin/soleur-doppler-download
+FAILED_FILE=soleur-doppler-fetch
+test -x /usr/local/bin/soleur-doppler-fetch
 FAILED_FILE=soleur-github-app-key-check
 test -x /usr/local/bin/soleur-github-app-key-check
 

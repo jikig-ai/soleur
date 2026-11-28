@@ -72,10 +72,20 @@ jobs:
     # FLIP_JOB_BUDGET_S / 60 rounded up (BUDGET TABLE): the flip step's budget, then the revert step's own budget, plus
     # 15 minutes of slack so this ceiling never fires before the step timeouts do.
     timeout-minutes: 283
+    # #9294 PR-B: the trio rides the main-only deploy-channel environment; the
+    # narrow loader exports WEBHOOK_DEPLOY_SECRET / CF_ACCESS_CLIENT_{ID,SECRET}
+    # to job env below — no `secrets.<trio>` bind remains.
+    environment: deploy-channel
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+
+      - name: Load deploy-channel credentials
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-project: soleur-deploy-channel
+          doppler-token-deploy-channel: ${{ secrets.DOPPLER_TOKEN_DEPLOY_CHANNEL }}
 
       - name: Typo-guard
         env:
@@ -100,9 +110,6 @@ jobs:
           # Compared as data inside scripts/inngest-link-flip.sh (flip_guard_after_rotation); never interpolated into the run: body.
           CONFIRM_OFF_AFTER_ROTATION: ${{ inputs.confirm_off_after_rotation }}
           GH_TOKEN: ${{ github.token }}
-          WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: bash scripts/inngest-link-flip.sh "$ACTION"
 
       # Best effort, and only after a failed or cancelled FLIP that got as far as its first flag write (the script
@@ -114,7 +121,4 @@ jobs:
         timeout-minutes: 115
         env:
           GH_TOKEN: ${{ github.token }}
-          WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: bash scripts/inngest-link-flip.sh revert

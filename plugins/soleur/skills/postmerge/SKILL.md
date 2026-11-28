@@ -417,14 +417,14 @@ anon-key, `PRODUCTION_URL`). It is service-role-free (AC2b) and message-minimal
 
 ```bash
 cd apps/web-platform && \
-  doppler run -p soleur -c prd -- bun run scripts/live-verify/run.ts \
+  bash ../../scripts/lib/doppler-read.sh run soleur prd bun run scripts/live-verify/run.ts \
   2>&1 | grep -E '^RESULT: '
 ```
 
 **Runner browser (#5485).** If this host's OS does not support the bundled
 `@playwright/test` chromium (`chromium.launch()` → `CANT-RUN:browser-launch:…`),
 prepend a system-browser override — `LIVE_VERIFY_BROWSER_CHANNEL=chrome` (or
-`LIVE_VERIFY_BROWSER_PATH=/path/to/chrome`) — to the `doppler run` line. Unset on
+`LIVE_VERIFY_BROWSER_PATH=/path/to/chrome`) — to the `doppler-read.sh run` line. Unset on
 ubuntu-latest (bundled chromium works); see ADR-064 §"Runner browser + cookie
 shape". The blocking substrate is the GitHub Actions job (#5463 item 3), not this
 override.
@@ -500,11 +500,9 @@ merge proves nothing about it. Otherwise record `Sole-copy read-back: SKIPPED (n
    `failure` or no run within the bound mean **not delivered or superseded**: read back anyway (a merge-SHA run can be
    `cancelled` by the shared concurrency group and still have delivered); the read-back is the arbiter.
 3. **Run the read-back** from runbook `knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md` §5c
-   (read-only, token on stdin, one word). Run exactly:
-
-```bash
-doppler run -p soleur -c prd_terraform --only-secrets HCLOUD_TOKEN_READONLY --no-exit-on-missing-only-secrets -- sh -c '[ -n "$HCLOUD_TOKEN_READONLY" ] || { echo missing-token; exit 3; }; r=$(printf "header = \"Authorization: Bearer %s\"\n" "$HCLOUD_TOKEN_READONLY" | curl --disable --noproxy "*" -sS --config - --max-time 30 -w "\n%{http_code}" https://api.hetzner.cloud/v1/volumes/106903269) || { echo read-failed; exit 2; }; case "$(printf %s "$r" | tail -n 1)" in 200) w=$(printf %s "$r" | sed "\$d" | jq -r "if .volume.protection.delete == true then \"protected\" elif .volume.protection.delete == false then \"not-protected\" else \"read-failed\" end" 2>/dev/null);; 404) w=volume-gone;; *) w=read-failed;; esac; case "$w" in protected) echo protected;; not-protected) echo not-protected; exit 1;; volume-gone) echo volume-gone; exit 4;; *) echo read-failed; exit 2;; esac'
-```
+   (read-only, token on stdin, one word). Run exactly the pinned command block of that section (the volume-106903269
+   read-back), copied from the runbook itself — it is the single source of truth for the byte-pinned line
+   (sole-copy-drift-check N3b), never re-typed or re-wrapped here.
 
 4. **Route on the word, compared with the expected one.** `protected` / `not-protected` equal to the expected word passes;
    a mismatch is red. `volume-gone` (HTTP 404) is not a read problem, nor proof of a loss: a token from
@@ -643,7 +641,7 @@ per-prerequisite behaviour (skip / warn / poll).
 
 ## Production Debugging
 
-- **A deploy-arm database step failing on an auth/connect timeout is a production database signal, not an isolated flake: read readiness before rerunning.** `/health` returns HTTP 200 `status: ok` whatever the database state (only `.supabase` flips to `error`), the Management API project `status` can read `ACTIVE_HEALTHY` while Postgres is down, and a rerun's `migrate` can go green through the pooler. Read `curl -sS <prod>/health | jq -r .supabase` and `GET /v1/projects/<ref>/health?services=db&services=auth&services=rest&services=pooler` first — the latter carries the account-level admin PAT, so call it the way [supabase-logs-query.sh](../../../../scripts/supabase-logs-query.sh) does (header on stdin via `--header @-`, `--disable --noproxy '*'`, under `doppler run`), never with the token in argv. **Why:** 2026-09-15 — prd Postgres was unreachable 89 min; a rerun looped on health verification and `/health` was read directly only ~16 min later (post-mortem `prd-supabase-database-unreachable-2026-09-15-postmortem.md`).
-- For production debugging use Sentry API (`SENTRY_ISSUE_RO_TOKEN` in Doppler `prd`), Better Stack, or `/health` — never SSH for logs. SSH is for infra provisioning only. (ex-`cq-for-production-debugging-use`) To read a Sentry issue/event by id inline, use `doppler run -p soleur -c prd -- scripts/sentry-issue.sh <id>` (runbook `knowledge-base/engineering/operations/runbooks/sentry-issue-read.md`); for host/app logs use [betterstack-query.sh](../../../../scripts/betterstack-query.sh) (runbook `betterstack-log-query.md`).
-- For deploy webhook debugging, fetch `WEBHOOK_DEPLOY_SECRET`/`CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` from Doppler `prd_terraform` (not `prd`). GET `https://deploy.soleur.ai/hooks/deploy-status` with CF Access headers + HMAC-sha256 over empty body, all on curl's stdin config. Full runbook: [deploy-status-debugging.md](./references/deploy-status-debugging.md). (ex-`cq-deploy-webhook-observability-debug`)
+- **A deploy-arm database step failing on an auth/connect timeout is a production database signal, not an isolated flake: read readiness before rerunning.** `/health` returns HTTP 200 `status: ok` whatever the database state (only `.supabase` flips to `error`), the Management API project `status` can read `ACTIVE_HEALTHY` while Postgres is down, and a rerun's `migrate` can go green through the pooler. Read `curl -sS <prod>/health | jq -r .supabase` and `GET /v1/projects/<ref>/health?services=db&services=auth&services=rest&services=pooler` first — the latter carries the account-level admin PAT, so call it the way [supabase-logs-query.sh](../../../../scripts/supabase-logs-query.sh) does (header on stdin via `--header @-`, `--disable --noproxy '*'`, under a Doppler env wrapper), never with the token in argv. **Why:** 2026-09-15 — prd Postgres was unreachable 89 min; a rerun looped on health verification and `/health` was read directly only ~16 min later (post-mortem `prd-supabase-database-unreachable-2026-09-15-postmortem.md`).
+- For production debugging use Sentry API (`SENTRY_ISSUE_RO_TOKEN` in Doppler `prd`), Better Stack, or `/health` — never SSH for logs. SSH is for infra provisioning only. (ex-`cq-for-production-debugging-use`) To read a Sentry issue/event by id inline, use `bash scripts/lib/doppler-read.sh run soleur prd scripts/sentry-issue.sh <id>` (runbook `knowledge-base/engineering/operations/runbooks/sentry-issue-read.md`); for host/app logs use [betterstack-query.sh](../../../../scripts/betterstack-query.sh) (runbook `betterstack-log-query.md`).
+- For deploy webhook debugging, fetch `WEBHOOK_DEPLOY_SECRET`/`CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` from the `soleur-deploy-channel` Doppler project (`prd` config — the deploy-channel carrier, not `soleur/prd`). GET `https://deploy.soleur.ai/hooks/deploy-status` with CF Access headers + HMAC-sha256 over empty body, all on curl's stdin config. Full runbook: [deploy-status-debugging.md](./references/deploy-status-debugging.md). (ex-`cq-deploy-webhook-observability-debug`)
 - Doppler env values on prd are baked into the container at start via `--env-file` (cloud-init.yml). Flipping a flag in Doppler does NOT affect the running container — POST-X gates that depend on a freshly-flipped flag must redeploy the current image tag (POST to `/hooks/deploy`) between the flip and the verification smoke. Full context: [2026-05-19-doppler-env-hot-reload-limitation.md](../../../../knowledge-base/project/learnings/2026-05-19-doppler-env-hot-reload-limitation.md).

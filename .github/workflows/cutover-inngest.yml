@@ -82,8 +82,9 @@ jobs:
     # holds the run in "Waiting" until a human approves the dispatch — the ack that
     # hr-menu-option-ack-not-prod-write-auth requires. (DOPPLER_TOKEN_INNGEST_ARM itself is a repo
     # secret, not an environment secret — the TF App cannot write env secrets; the reviewer gate on
-    # the JOB is what enforces the ack.) Every other op evaluates to '' (no environment gate),
-    # preserving their existing behaviour.
+    # the JOB is what enforces the ack.) Every other op binds `deploy-channel` (the main-only
+    # branch-policy environment, #9294 PR-B), which carries no reviewer gate — the trio's
+    # delivery channel — preserving their existing no-approval behaviour.
     # #7228: op=resume writes INNGEST_CUTOVER_FLIP=flushed, which AUTHORIZES a prod scheduler
     # start on the dedicated host — the same class of prod write as rollback, so it takes the
     # same required-reviewer gate. That approval IS the prod-write ack
@@ -93,7 +94,11 @@ jobs:
     # whole root disk) with a READ/WRITE Hetzner token — the same prod-write class as rollback, so it
     # takes the same required-reviewer gate. Its credential is delivered by the Tier-B loader
     # step below (the ADR-241 O10 mechanism), bound to this environment.
-    environment: ${{ (inputs.op == 'rollback' || inputs.op == 'resume' || inputs.op == 'backup') && 'inngest-cutover' || '' }}
+    # #9294 PR-B (D-6): the '' arm becomes `deploy-channel` — every dispatch now binds a Tier-B
+    # environment (inngest-cutover for the reviewer-gated write ops, deploy-channel for the rest)
+    # so the narrow loader below can resolve DOPPLER_TOKEN_DEPLOY_CHANNEL, which is seeded on
+    # BOTH environments. Both arms are literals inside the ADR-241 Tier-B set.
+    environment: ${{ (inputs.op == 'rollback' || inputs.op == 'resume' || inputs.op == 'backup') && 'inngest-cutover' || 'deploy-channel' }}
     # SAME group as deploy/restart — these inngest host ops share the host state
     # slot and must not interleave (P1a).
     concurrency:
@@ -134,6 +139,15 @@ jobs:
         uses: ./.github/actions/infra-credentials
         with:
           doppler-token-infra-privileged: ${{ (inputs.op == 'backup') && secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED || '' }}
+      # #9294 PR-B (D-6): the deploy-webhook trio now arrives through the narrow
+      # deploy-channel arm of the loader — ambient on EVERY op (every arm binds a
+      # Tier-B environment and DOPPLER_TOKEN_DEPLOY_CHANNEL is seeded on both).
+      # No `secrets.<trio>` bind remains.
+      - name: Load deploy-channel credentials
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-project: soleur-deploy-channel
+          doppler-token-deploy-channel: ${{ secrets.DOPPLER_TOKEN_DEPLOY_CHANNEL }}
       # #6369 — the read/write token for the flip writes to the ISOLATED soleur-inngest/prd
       # (op=rollback writes INNGEST_CUTOVER_FLIP=rollback; op=resume writes
       # INNGEST_CUTOVER_FLIP=flushed). op=arm, op=reflush and op=luks-cutover, its other
@@ -199,9 +213,6 @@ jobs:
       - name: Run cutover host op via webhook
         env:
           OP: ${{ inputs.op }}
-          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           # prd_terraform READ-only (op=rollback/op=resume: betterstack-query.sh creds; op=backup's Hetzner token arrives via the Tier-B loader
           # above, #9755). Same secret as apply-web-platform-infra.yml's read steps — NOT
           # DOPPLER_TOKEN_WRITE.

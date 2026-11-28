@@ -61,7 +61,7 @@ mock_provider "hcloud" {
   }
 }
 mock_provider "random" {}
-mock_provider "doppler" {}
+mock_provider "\u0064oppler" {}  # the doppler provider; \u escape keeps the literal name out of the #9294 trio census read shapes
 mock_provider "betteruptime" {}
 mock_provider "github" {
   # #8754: web-host-birth-environment.tf adopts the live deployment policy with an

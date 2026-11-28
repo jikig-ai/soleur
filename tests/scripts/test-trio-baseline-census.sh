@@ -307,19 +307,248 @@ CONT = re.compile(r"\\[ \t]*\n[ \t]*")          # backslash continuation, joined
 CONT_STRICT = re.compile(r"\\\r?\n")            # backslash continuation exactly as bash removes it (split names)
 ORJOIN = re.compile(r"\|\|[ \t]*\n[ \t]*")      # a line ending in `||` continues on the next line
 
-# direct-store read shapes (F-A2 / F-C). `doppler run` and `doppler secrets get|download` are read shapes REGARDLESS of
-# arguments, flags, pipes, variable names or split literals once the file names the family.
-# COMMAND SYNTAX only: between `doppler` and the subcommand may sit option flags (`-p soleur`, `--silent`, `-c "prd"`), never a
-# plain word, so prose ("injected by doppler at plan time, the apply run reads it") is not an invocation. The separator also
-# admits quotes and commas (a python argv list, a split literal).
-_SEP = r"""[ \t"',]+"""
-_TOK = r"""[^\s;|&)"',]"""
-_FLAGS = r"""(?:""" + _SEP + r"""-""" + _TOK + r"""+(?:""" + _SEP + r"""(?!-)""" + _TOK + r"""+)?)*"""
-R_DOP_RUN = re.compile(r"(?<![A-Za-z0-9_])doppler" + _FLAGS + _SEP + r"run(?![A-Za-z0-9_-])", re.I)
-R_DOP_SEC = re.compile(r"(?<![A-Za-z0-9_])doppler" + _FLAGS + _SEP + r"secrets" + _SEP + r"(?:get|download)(?![A-Za-z0-9_-])", re.I)
+# direct-store read shapes (F-A2 / F-C). COMMAND SYNTAX only: between `doppler` and the subcommand may sit option flags
+# (`-p soleur`, `--silent`, `-c "prd"`), never a plain word, so prose ("injected by doppler at plan time, the apply run
+# reads it") is not an invocation. The separator also admits quotes and commas (a python argv list, a split literal).
+#
+# D-2 refinement (#9294 PR-B, ADR-241 amendment): the invocation is not counted when it provably cannot read the trio —
+# (a) `doppler secrets get` whose every positional name is a bare literal matching NEITHER the family nor an alias stem
+#     (a literal non-trio name read is safe under any project/config);
+# (b) `doppler run` / `doppler secrets download` whose bare literal `-p`/--project AND `-c`/--config values (`=` forms
+#     included) pin a project/config pair that provably cannot carry the trio. Exact membership in TRIO_PAIRS is not
+#     enough: every `soleur/prd_*` config is a Doppler branch config and inherits `soleur/prd` by construction
+#     (model.c4 documents this for prd_workspaces_luks_marker), so those names are trio-carrying even when absent
+#     from the exact-pair set. Cross-project inheritance is an explicit, repo-reviewed configuration rather than
+#     Doppler's default branch mechanics; the isolated projects used here document no such path.
+# every variable, quoted, split, partial or otherwise unparseable form fails closed — counted. `secrets get` is judged
+# on its name positionals alone; a run/download needs BOTH literals.
+TRIO_PAIRS = {("soleur", "prd_terraform"), ("soleur", "prd"), ("soleur-deploy-channel", "prd"),
+              ("soleur-infra-privileged", "prd")}
+
+def _dop_pair_can_carry_trio(proj, conf):
+    return (proj, conf) in TRIO_PAIRS or (conf.startswith("prd_") and (proj, "prd") in TRIO_PAIRS)
+_DOP_WORD = re.compile(r"(?<![A-Za-z0-9_])doppler\b")
+_DOP_STOP = re.compile(r"[;|&`<>)]")
+_DOP_BADTOK = re.compile(r"""[$'"(){}\[\]#\\`]""")
+_DOP_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_DOP_FLAGVAL = re.compile(r"(-p|--project|-c|--config)=(.+)\Z")
+# The value-taking GLOBAL flags of the real CLI (doppler --help, verified 2026-11-27): each swallows
+# the next token, so an unmodeled one reshapes the parse — the exploit the fail-closed inversion below
+# exists for. `--scope`/`-t`/`--token` predate the D-2 refinement; the rest were added with it.
+_DOP_VALFLAG = {"-t", "--token", "--name-transformer", "--format", "--mount", "--mount-format", "--scope",
+                "--timeout", "--api-host", "--attempts", "--config-dir", "--dashboard-host",
+                "--dns-resolver-address", "--dns-resolver-proto", "--dns-resolver-timeout"}
+# The boolean globals of the same CLI grammar: they consume no value, so skipping them cannot reshape
+# the parse. An unlisted flag before the subcommand is NOT tolerated — see the inversion below.
+_DOP_BOOLFLAG = {"--debug", "--enable-dns-resolver", "-h", "--help", "--json", "--no-check-version",
+                 "--no-read-env", "--no-timeout", "--no-verify-tls", "--print-config", "--silent",
+                 "-v", "--version", "--no-cache", "--no-fallback", "--forward-signals"}
+_DOP_RUN_SUBS = ("run",)
+_DOP_SEC_SUBS = ("get", "download")
+_DOP_FDDIGIT = re.compile(r"[0-9]&?(?=[<>|])")
 R_SECRETS = re.compile(r"secrets\s*(?:\.\s*|\[\s*['\"])(" + FAM_CORE + ")", re.I)
 R_INDIRECT = re.compile(r"\$\{!([A-Za-z_][A-Za-z0-9_]*)\}")
 R_TFOUT = re.compile(r"terraform\b[^\n]*?\boutput\b[^\n]*?-raw\s+[\"']?(?<![A-Za-z0-9_])access_service_token_client_(id|secret)(?![A-Za-z0-9_])", re.I)
+
+class _LazyTokens:
+    """Indexable one-pass view over a token iterable. The D-2 parser reads monotonically and needs at most one
+    lookahead; materializing every suffix for every `doppler` occurrence is the quadratic this class avoids."""
+    def __init__(self, iterable):
+        self._it = iter(iterable)
+        self._buf = []
+        self._done = False
+
+    def get(self, idx):
+        while len(self._buf) <= idx and not self._done:
+            try:
+                self._buf.append(next(self._it))
+            except StopIteration:
+                self._done = True
+        return self._buf[idx] if idx < len(self._buf) else None
+
+
+def _dop_classify_tokens(token_iter):
+    """True when the `doppler` invocation whose tail tokens are in `token_iter` is a counted read shape under the
+    D-2 refinement; False when it is not a read shape at all or provably cannot read the trio. Fail closed: any token
+    the parser cannot place counts."""
+    toks = _LazyTokens(token_iter)
+    if toks.get(0) is None:
+        return False
+    proj = conf = sub = None
+    names = []
+    i = 0
+    while True:
+        t = toks.get(i)
+        if t is None:
+            break
+        if _DOP_BADTOK.search(t):
+            return True
+        if t == "--":
+            break
+        if sub is None and t == "secrets":
+            nxt = toks.get(i + 1)
+            if nxt not in _DOP_SEC_SUBS:
+                return False  # `secrets set|list|...` is not a read shape
+            sub = nxt
+            i += 2
+            continue
+        if sub is None and t in _DOP_RUN_SUBS:
+            sub = "run"
+            i += 1
+            continue
+        m = _DOP_FLAGVAL.match(t)
+        if m:
+            if m.group(1) in ("-p", "--project"):
+                proj = m.group(2)
+            else:
+                conf = m.group(2)
+            i += 1
+            continue
+        if t.startswith("-") and t != "-":
+            if t in ("-p", "--project", "-c", "--config"):
+                v = toks.get(i + 1)
+                if v is None or _DOP_BADTOK.search(v) or v.startswith("-"):
+                    return True
+                if t in ("-p", "--project"):
+                    proj = v
+                else:
+                    conf = v
+                i += 2
+                continue
+            if t in _DOP_VALFLAG and "=" not in t:
+                v = toks.get(i + 1)
+                if v is None or _DOP_BADTOK.search(v) or v in ("secrets", "run", "get", "download"):
+                    return True  # the value is opaque or could hide a subcommand
+                i += 2
+                continue
+            if t in _DOP_BOOLFLAG:
+                i += 1
+                continue
+            if sub is None:
+                # An UNRECOGNISED flag before the subcommand fails closed: it might be a value-flag
+                # the grammar does not model (a new CLI release, a typo), and treating it as boolean
+                # lets its value surface as a bare word that reads as "prose" — the `--timeout 10s`
+                # hole the test-design reviewer proved. Post-subcommand flags stay boolean-tolerant:
+                # the read shape is already decided by then, stray positionals fail closed on their
+                # own, and cobra intersperses flags freely (`secrets get X --plain`).
+                return True
+            i += 1
+            continue
+        if sub == "get":
+            names.append(t)
+            i += 1
+            continue
+        if sub in ("run", "download"):
+            return True  # doppler takes no positional before `--`: unparseable
+        return False  # a bare word before any subcommand: prose, not an invocation
+    if sub == "get":
+        if not names:
+            return True
+        for n in names:
+            if not _DOP_IDENT.fullmatch(n) or FAM_FULL.fullmatch(n) or ALIAS_A.fullmatch(n) or ALIAS_B.fullmatch(n):
+                return True
+        return False  # every get name was a literal outside the family: exempt (D-2a)
+    if sub in ("run", "download"):
+        return not (proj is not None and conf is not None and not _dop_pair_can_carry_trio(proj, conf))
+    return False
+
+
+def _dop_classify(tail):
+    return _dop_classify_tokens(tail.split())
+
+
+_DOP_STOP_CHARS = set(";|&`<>)]")
+
+
+def _dop_line_tokens(ln):
+    """Tokenize one line once for `_dop_read_counted`: whitespace separates tokens, and the same stop characters
+    that ended a suffix in the old per-occurrence implementation end a command segment here. Returns
+    `(tokens, stop_positions)`, where a token is `(start, end, text, segment_index)` in `ln` coordinates."""
+    tokens = []
+    stops = []
+    seg = 0
+    i = 0
+    n = len(ln)
+    while i < n:
+        ch = ln[i]
+        if ch.isspace():
+            i += 1
+            continue
+        if ch in _DOP_STOP_CHARS:
+            stops.append(i)
+            seg += 1
+            i += 1
+            continue
+        start = i
+        tok_seg = seg
+        while i < n and not ln[i].isspace() and ln[i] not in _DOP_STOP_CHARS:
+            i += 1
+        tokens.append((start, i, ln[start:i], tok_seg))
+    return tokens, stops
+
+
+def _bisect_right(values, needle):
+    lo = 0
+    hi = len(values)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if needle < values[mid]:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+
+
+def _bisect_left(values, needle):
+    lo = 0
+    hi = len(values)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if values[mid] < needle:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+
+def _dop_tail_tokens(tokens, ends, seg, pos, first):
+    """Yield the exact whitespace-split tokens the old `_DOP_STOP.split(ln[pos:], 1)[0].split()` produced,
+    without copying the suffix string. `first` is the first token whose end is strictly after `pos`."""
+    ti = first
+    if ti < len(tokens):
+        start, end, text, tok_seg = tokens[ti]
+        if tok_seg == seg and start < pos < end:
+            yield text[pos - start:]
+            ti += 1
+    while ti < len(tokens) and tokens[ti][3] == seg:
+        yield tokens[ti][2]
+        ti += 1
+
+
+def _dop_read_counted(txt):
+    for ln in txt.split("\n"):
+        # A `doppler` glued to a hyphen/dot suffix (`soleur-doppler-token.conf`, `doppler.tar.gz`,
+        # `soleur-doppler-fetch`) is part of a hyphenated NAME, never an invocation head — a real
+        # invocation is `doppler <ws> <subcommand>`. The same holds for a path/name segment glued on
+        # BOTH sides (`/tmp/.doppler\n`, `cmd-doppler"x"`). A glued `"`/`'`/`,` after a bare `doppler`
+        # stays counted: `["doppler", "run", ...]` argv lists are real invocations. `2>`/`2>&1`
+        # redirects would otherwise leak their fd digit into the tail as a bogus final token.
+        ln2 = _DOP_FDDIGIT.sub("", ln)
+        tokens, stops = _dop_line_tokens(ln2)
+        ends = [tok[1] for tok in tokens]
+        for m in _DOP_WORD.finditer(ln2):
+            nxt = ln2[m.end()] if m.end() < len(ln2) else ""
+            prv = ln2[m.start() - 1] if m.start() > 0 else ""
+            if nxt in "-." or (prv in "/.-" and nxt and not nxt.isspace()):
+                continue
+            pos = m.end()
+            if pos < len(ln2) and ln2[pos] in _DOP_STOP_CHARS:
+                continue  # the tail begins at the segment terminator, so it is empty
+            seg = _bisect_left(stops, pos)
+            first = _bisect_right(ends, pos)
+            if _dop_classify_tokens(_dop_tail_tokens(tokens, ends, seg, pos, first)):
+                return True
+    return False
 
 JS_EXT = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
 # What a shell, a template engine or a workflow expands inside a comment-looking line: ${{ }}, ${ }, $( ), $NAME. An unclosed
@@ -398,7 +627,7 @@ def analyze1(rel, text):
     for m in R_SECRETS.finditer(joined):
         an["reads"].add(row_name(m.group(1)))
     named = bool(an["names"] or an["aliases"])
-    an["gen_read"] = named and bool(R_DOP_RUN.search(joined) or R_DOP_SEC.search(joined) or R_DOP_RUN.search(code) or R_DOP_SEC.search(code))
+    an["gen_read"] = named and _dop_read_counted(joined)
     if named:
         # `${!X}` is a read shape when X is itself a family name, or is given a family name on the same logical line
         # (`n=NAME; echo "${!n}"`, `for n in NAME; do ... ${!n}`). A flow-insensitive cross-line match is a blind spot.
@@ -1477,6 +1706,43 @@ _u="$(dirs_unscanned "$FX" "$T/ctl.tsv.scan" "")"
 if [ -z "$_c" ] && [ -z "$_u" ]; then pass "B3: on the fixture the scanner population equals the independent enumeration and every second-level directory has a scanned file"
 else fail "B3: on the fixture the scanner population equals the independent enumeration" "diff: $_c unscanned: $_u"; fi
 
+# PERF1 (#9294 PR-B, performance-oracle P2): the D-2 read-shape scan must not pay a suffix copy/rescan for
+# every `doppler` occurrence on one long logical line. The probe is adversarial but input-shaped like the
+# measured regression: many occurrence heads, each followed by a long suffix. CPU time is asserted as well
+# as wall time so a loaded host does not make the linear implementation look quadratic.
+PERF="$T/perf-repo"
+mkdir -p "$PERF/scripts" || { printf 'FAIL SETUP: mkdir perf fixture\n' >&2; exit 1; }
+GITQ_ISO=1 GITQ init -q -b main "$PERF" || { printf 'FAIL SETUP: perf fixture git init\n' >&2; exit 1; }
+py3 - "$PERF/scripts/perf.sh" <<'PYPERFGEN'
+import sys
+occ = 6000
+line = ("doppler --silent " * occ) + ("x" * 120) + " WEBHOOK_DEPLOY_SECRET"
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    fh.write("#!/usr/bin/env bash\n" + line + "\n")
+PYPERFGEN
+cat > "$T/perf-probe.py" <<'PYPERFPROBE'
+import resource
+import subprocess
+import sys
+import time
+
+scanner, repo, baseline = sys.argv[1:4]
+ru0 = resource.getrusage(resource.RUSAGE_CHILDREN)
+t0 = time.monotonic()
+r = subprocess.run(
+    [sys.executable, scanner, "--repo", repo, "--baseline", baseline, "--today", "2026-10-15",
+     "--mode", "emit", "--envs", "infra-privileged,deploy-channel", "--git-iso"],
+    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+wall = time.monotonic() - t0
+ru1 = resource.getrusage(resource.RUSAGE_CHILDREN)
+cpu = (ru1.ru_utime + ru1.ru_stime) - (ru0.ru_utime + ru0.ru_stime)
+print("%.3f %.3f %d" % (wall, cpu, r.returncode))
+PYPERFPROBE
+read -r _perf_wall _perf_cpu _perf_rc < <(py3 "$T/perf-probe.py" "$T/trio.py" "$PERF" "$T/empty.tsv")
+if [ "$_perf_rc" = "0" ] && awk -v c="$_perf_cpu" -v w="$_perf_wall" 'BEGIN { exit !((c + 0) < 1.25 && (w + 0) < 2.00) }'; then
+  pass "PERF1: a 102KB single-line adversarial doppler occurrence scan stays linear (wall < 2.00s, CPU < 1.25s; the suffix-copy implementation measured > 3s CPU here)"
+else fail "PERF1: a 102KB single-line adversarial doppler occurrence scan stays linear" "wall=${_perf_wall}s cpu=${_perf_cpu}s rc=${_perf_rc}"; fi
+
 # Mutation machinery ----------------------------------------------------------------------------
 # prep <id>  — fresh git-init'd copy of the PRISTINE fixture at $D/fx; sets D (PREP_BASE overrides the parent directory)
 PREP_BASE="$T/mut"
@@ -1905,44 +2171,44 @@ prep m28b
 printf 'doppler run -p soleur -c prd_terraform -- true\n' >> "$D/fx/scripts/host-user.sh"
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 3 tier-a
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 4 2026-11-30
-commit_all; landed_dir; mutant m28b T4 "N1: class sink -> tier-a (an unrelated doppler call appended to a sink file) with no Reclass line is RED, and the message names the lane" "needs an ADR-241 line 'Reclass:"
+commit_all; landed_dir; mutant m28b T4 "N1: class sink -> tier-a (a trio-config doppler call appended to a sink file) with no Reclass line is RED, and the message names the lane" "needs an ADR-241 line 'Reclass:"
 prep c28g
-printf 'doppler run -p other -c prd -- true\n' >> "$D/fx/scripts/host-user.sh"
+printf 'doppler run -p soleur -c prd_terraform -- true\n' >> "$D/fx/scripts/host-user.sh"
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 3 tier-a
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 4 2026-11-30
-adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET an unrelated doppler call joined a sink file. Ruled by CTO'
+adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET a trio-config doppler call joined a sink file. Ruled by CTO'
 commit_all; landed_dir; green c28g "N1: the same sink -> tier-a move with its ADR-241 Reclass line, in a diff of the baseline, the ADR and the moved key's own file, is green"
 prep c28h
-printf 'doppler run -p other -c prd -- true\n' >> "$D/fx/scripts/host-user.sh"
-printf 'doppler secrets get OTHER --plain\n' >> "$D/fx/apps/web-platform/infra/variables.tf"
+printf 'doppler run -p soleur -c prd_terraform -- true\n' >> "$D/fx/scripts/host-user.sh"
+printf 'doppler secrets get WEBHOOK_DEPLOY_SECRET --plain\n' >> "$D/fx/apps/web-platform/infra/variables.tf"
 for _rk in scripts/host-user.sh apps/web-platform/infra/variables.tf; do bl_set "$_rk" WEBHOOK_DEPLOY_SECRET 3 tier-a; bl_set "$_rk" WEBHOOK_DEPLOY_SECRET 4 2026-11-30; done
-adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET an unrelated doppler call joined a sink file. Ruled by CTO'
-adr_add 'Reclass: apps/web-platform/infra/variables.tf WEBHOOK_DEPLOY_SECRET a doppler call joined a sink file. Ruled by CTO'
+adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET a trio-config doppler call joined a sink file. Ruled by CTO'
+adr_add 'Reclass: apps/web-platform/infra/variables.tf WEBHOOK_DEPLOY_SECRET a trio-config doppler call joined a sink file. Ruled by CTO'
 commit_all; landed_dir; green c28h "N1: two moved keys, each ruled in the ADR, are green"
 prep m28g
-printf 'doppler run -p other -c prd -- true\n' >> "$D/fx/scripts/host-user.sh"
+printf 'doppler run -p soleur -c prd_terraform -- true\n' >> "$D/fx/scripts/host-user.sh"
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 3 tier-a
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 4 2026-11-30
-adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET an unrelated doppler call joined a sink file. Ruled by CTO'
+adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET a trio-config doppler call joined a sink file. Ruled by CTO'
 printf 'unrelated\n' > "$D/fx/README.md"
 commit_all; landed_dir; mutant m28g T4 "N1: the Reclass line in a diff that also touches an unrelated file is RED (the lane is the baseline, the ADR and the moved key's own file)" "needs an ADR-241 line 'Reclass:"
 prep m28h
-printf 'doppler run -p other -c prd -- true\n' >> "$D/fx/scripts/host-user.sh"
+printf 'doppler run -p soleur -c prd_terraform -- true\n' >> "$D/fx/scripts/host-user.sh"
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 3 tier-a
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 4 2026-11-30
 adr_add 'Reclass: scripts/other.sh WEBHOOK_DEPLOY_SECRET a different file joined the lane. Ruled by CTO'
 commit_all; landed_dir; mutant m28h T4 "N1: a Reclass line for a DIFFERENT (file, name) does not authorize the move" "needs an ADR-241 line 'Reclass:"
 prep m28i
-printf 'doppler run -p other -c prd -- true\n' >> "$D/fx/scripts/host-user.sh"
+printf 'doppler run -p soleur -c prd_terraform -- true\n' >> "$D/fx/scripts/host-user.sh"
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 3 tier-a
 bl_set scripts/host-user.sh WEBHOOK_DEPLOY_SECRET 4 2026-11-30
-adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET an unrelated doppler call joined a sink file, no owner named.'
+adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET a trio-config doppler call joined a sink file, no owner named.'
 commit_all; landed_dir; mutant m28i T4 "N1: a Reclass line without 'Ruled by <owner>' is not a ruling" "needs an ADR-241 line 'Reclass:"
 prep m28j
-printf 'doppler run -p other -c prd -- true\n' >> "$D/fx/scripts/host-user.sh"
-printf 'doppler secrets get OTHER --plain\n' >> "$D/fx/apps/web-platform/infra/variables.tf"
+printf 'doppler run -p soleur -c prd_terraform -- true\n' >> "$D/fx/scripts/host-user.sh"
+printf 'doppler secrets get WEBHOOK_DEPLOY_SECRET --plain\n' >> "$D/fx/apps/web-platform/infra/variables.tf"
 for _rk in scripts/host-user.sh apps/web-platform/infra/variables.tf; do bl_set "$_rk" WEBHOOK_DEPLOY_SECRET 3 tier-a; bl_set "$_rk" WEBHOOK_DEPLOY_SECRET 4 2026-11-30; done
-adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET an unrelated doppler call joined a sink file. Ruled by CTO'
+adr_add 'Reclass: scripts/host-user.sh WEBHOOK_DEPLOY_SECRET a trio-config doppler call joined a sink file. Ruled by CTO'
 commit_all; landed_dir; mutant m28j T4 "N1: two moved keys with only one ruled (every moved key needs its own ruling)" "needs an ADR-241 line 'Reclass:"
 prep m28k
 bl_set .github/workflows/deploy-chan.yml WEBHOOK_DEPLOY_SECRET 3 tier-a
@@ -2125,12 +2391,12 @@ bl_add apps/web-platform/infra/cloud-init.yml WEBHOOK_DEPLOY_SECRET_NEXT sink - 
 bl_allow_del apps/web-platform/infra/cloud-init.yml WEBHOOK_DEPLOY_SECRET_NEXT
 commit_all; landed_dir; green c36c "D2: the cloud-init.yml @allow member spends the same way"
 prep c36d
-printf '#!/usr/bin/env bash\necho "${WEBHOOK_DEPLOY_SECRET_NEXT:-}"\ndoppler secrets get SENTRY_DSN --plain\n' > "$D/fx/apps/web-platform/infra/soleur-host-bootstrap.sh"
+printf '#!/usr/bin/env bash\necho "${WEBHOOK_DEPLOY_SECRET_NEXT:-}"\ndoppler run -- true\n' > "$D/fx/apps/web-platform/infra/soleur-host-bootstrap.sh"
 bl_add apps/web-platform/infra/soleur-host-bootstrap.sh WEBHOOK_DEPLOY_SECRET_NEXT tier-a 2026-11-30 '#9294:PR-2'
 bl_allow_del apps/web-platform/infra/soleur-host-bootstrap.sh WEBHOOK_DEPLOY_SECRET_NEXT
-commit_all; landed_dir; green c36d "D2/E7: the soleur-host-bootstrap.sh @allow member (tier-a through an unrelated doppler call, as on the live tree) spends into a tier-a row at its max-expiry 2026-11-30"
+commit_all; landed_dir; green c36d "D2/E7: the soleur-host-bootstrap.sh @allow member (tier-a through a bare doppler run) spends into a tier-a row at its max-expiry 2026-11-30"
 prep m36e
-printf '#!/usr/bin/env bash\necho "${WEBHOOK_DEPLOY_SECRET_NEXT:-}"\ndoppler secrets get SENTRY_DSN --plain\n' > "$D/fx/apps/web-platform/infra/soleur-host-bootstrap.sh"
+printf '#!/usr/bin/env bash\necho "${WEBHOOK_DEPLOY_SECRET_NEXT:-}"\ndoppler run -- true\n' > "$D/fx/apps/web-platform/infra/soleur-host-bootstrap.sh"
 bl_add apps/web-platform/infra/soleur-host-bootstrap.sh WEBHOOK_DEPLOY_SECRET_NEXT tier-a 2026-12-15 '#9294:PR-2'
 bl_allow_del apps/web-platform/infra/soleur-host-bootstrap.sh WEBHOOK_DEPLOY_SECRET_NEXT
 commit_all; landed_dir; mutant m36e T4 "D2/E7: the same spend with an expiry later than the allow's max-expiry 2026-11-30" "exceeds its @allow max-expiry"
@@ -2453,8 +2719,12 @@ prep m54e
 edit "$D/fx/.github/workflows/deploy-chan.yml" 'curl -H "X-Sig: $WEBHOOK_DEPLOY_SECRET" https://example.invalid' 'doppler secrets get WEBHOOK_DEPLOY_SECRET -c prd_terraform --plain'
 landed_dir; mutant m54e T5c "R18: a doppler secrets get on prd_terraform inside a Tier-B-environment job is tier-a whatever the environment" "deploy-chan.yml WEBHOOK_DEPLOY_SECRET (baseline tier-b, computed tier-a)"
 prep m54f
-edit "$D/fx/.github/workflows/deploy-chan.yml" 'curl -H "X-Sig: $WEBHOOK_DEPLOY_SECRET" https://example.invalid' 'doppler run -- ./deploy.sh "$WEBHOOK_DEPLOY_SECRET"'
-landed_dir; mutant m54f T5c "B3: a doppler run of any config inside a Tier-B-environment job is tier-a" "deploy-chan.yml WEBHOOK_DEPLOY_SECRET (baseline tier-b, computed tier-a)"
+edit "$D/fx/.github/workflows/deploy-chan.yml" 'curl -H "X-Sig: $WEBHOOK_DEPLOY_SECRET" https://example.invalid' 'doppler run -p soleur -c prd_terraform -- ./deploy.sh "$WEBHOOK_DEPLOY_SECRET"'
+landed_dir; mutant m54f T5c "B3: a doppler run of a trio-carrying config inside a Tier-B-environment job is tier-a" "deploy-chan.yml WEBHOOK_DEPLOY_SECRET (baseline tier-b, computed tier-a)"
+prep c54b
+edit "$D/fx/.github/workflows/deploy-chan.yml" 'curl -H "X-Sig: $WEBHOOK_DEPLOY_SECRET" https://example.invalid' 'doppler secrets get SENTRY_DSN -p soleur -c prd_terraform --plain
+          curl -H "X-Sig: $WEBHOOK_DEPLOY_SECRET" https://example.invalid'
+landed_dir; green c54b "R18/D-2a: a literal non-trio secrets get inside a Tier-B-environment job is exempt — the file stays tier-b"
 prep c54
 knobs RF_ENVS= RF_SIB="$ROOT/$SIBLING_REL"
 printf 'landed' > "$D/landed"
@@ -2779,7 +3049,7 @@ pcase RT5 tests/scripts/lib/t5.sh WEBHOOK_DEPLOY_SECRET ABSENT "exempt twin: a d
 # non-exempt classification (B3)
 pr_mk scripts/n1.sh
 printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler secrets get SENTRY_DSN --plain\n' > "$PT/scripts/n1.sh"
-pcase N1 scripts/n1.sh WEBHOOK_DEPLOY_SECRET tier-a "any doppler secrets get in a file naming the family"
+pcase N1 scripts/n1.sh WEBHOOK_DEPLOY_SECRET sink "a literal non-trio secrets get is exempt (D-2a)"
 printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\n' > "$PT/scripts/n2.sh"
 pcase N2 scripts/n2.sh WEBHOOK_DEPLOY_SECRET sink "no read shape: sink"
 printf '#!/usr/bin/env bash\nfor v in WEBHOOK_DEPLOY_SECRET; do :; done\nfor w in INTERVAL; do echo "${!w}"; done\n' > "$PT/scripts/n3.sh"
@@ -2790,8 +3060,8 @@ printf '#!/usr/bin/env bash\ndoppler run -- app\necho "$WEBHOOK_DEPLOY_SECRET"\n
 pcase N5 scripts/n5.sh WEBHOOK_DEPLOY_SECRET tier-a "any doppler run in a file naming the family"
 printf '#!/usr/bin/env bash\ndoppler secrets download --no-file\necho "$WEBHOOK_DEPLOY_SECRET"\n' > "$PT/scripts/n6.sh"
 pcase N6 scripts/n6.sh WEBHOOK_DEPLOY_SECRET tier-a "any doppler secrets download in a file naming the family"
-printf '#!/usr/bin/env bash\ndoppler --silent -p soleur secrets get X\necho "$WEBHOOK_DEPLOY_SECRET"\n' > "$PT/scripts/n7.sh"
-pcase N7 scripts/n7.sh WEBHOOK_DEPLOY_SECRET tier-a "doppler flags before the subcommand"
+printf '#!/usr/bin/env bash\ndoppler --silent -p soleur secrets get WEBHOOK_DEPLOY_SECRET\necho "$WEBHOOK_DEPLOY_SECRET"\n' > "$PT/scripts/n7.sh"
+pcase N7 scripts/n7.sh WEBHOOK_DEPLOY_SECRET tier-a "doppler flags before the subcommand still reach the trio get"
 printf '#!/usr/bin/env bash\necho doppler is great\necho "$WEBHOOK_DEPLOY_SECRET"\n' > "$PT/scripts/n8.sh"
 pcase N8 scripts/n8.sh WEBHOOK_DEPLOY_SECRET sink "the word doppler alone is not an invocation"
 # comments (B4)
@@ -2918,6 +3188,57 @@ printf '#!/usr/bin/env bash\ndoppler -p soleur -c prd secrets download --no-file
 pcase N9 scripts/n9.sh WEBHOOK_DEPLOY_SECRET tier-a "flags with values before secrets download"
 printf 'import subprocess\nsubprocess.run(["doppler", "-p", "soleur", "run", "--", "x"])\nN = "WEBHOOK_DEPLOY_SECRET"\n' > "$PT/scripts/n10.py"
 pcase N10 scripts/n10.py WEBHOOK_DEPLOY_SECRET tier-a "a python argv list with flags before the subcommand"
+# D-2 (#9294 PR-B): the counted/exempt line runs through the per-invocation parse — a `run`/`download` is exempt only
+# when bare literal -p AND -c (or --project/--config, =-forms) pin a pair OUTSIDE TRIO_PAIRS; `secrets get` is exempt
+# only when EVERY positional name is a bare literal outside the family and alias stems. Anything else fails closed.
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run -p soleur-github-app -c prd -- true\n' > "$PT/scripts/n11.sh"
+pcase N11 scripts/n11.sh WEBHOOK_DEPLOY_SECRET sink "D-2b exempt: run pinned to a pair outside the trio set"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler secrets download --project soleur-github-app --config prd --no-file\n' > "$PT/scripts/n12.sh"
+pcase N12 scripts/n12.sh WEBHOOK_DEPLOY_SECRET sink "D-2b exempt: download pinned to a pair outside the trio set"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run --project=soleur-github-app --config=prd -- true\n' > "$PT/scripts/n13.sh"
+pcase N13 scripts/n13.sh WEBHOOK_DEPLOY_SECRET sink "D-2b exempt: --project=/--config= forms parse identically"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run -p soleur -c prd_terraform -- true\n' > "$PT/scripts/n14.sh"
+pcase N14 scripts/n14.sh WEBHOOK_DEPLOY_SECRET tier-a "D-2b counted: run of the prd_terraform pair"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run -p soleur-deploy-channel -c prd -- x\n' > "$PT/scripts/n15.sh"
+pcase N15 scripts/n15.sh WEBHOOK_DEPLOY_SECRET tier-a "D-2b counted: run of the deploy-channel pair (the new carrier is trio-carrying)"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run -p soleur-infra-privileged -c prd -- x\n' > "$PT/scripts/n16.sh"
+pcase N16 scripts/n16.sh WEBHOOK_DEPLOY_SECRET tier-a "D-2b counted: run of the infra-privileged pair"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run -p soleur -c dev -- x\n' > "$PT/scripts/n17.sh"
+pcase N17 scripts/n17.sh WEBHOOK_DEPLOY_SECRET sink "D-2b exempt: soleur/dev is outside the trio set"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler secrets download -p soleur -c prd_terraform --no-file\n' > "$PT/scripts/n18.sh"
+pcase N18 scripts/n18.sh WEBHOOK_DEPLOY_SECRET tier-a "D-2b counted: download of a trio-carrying pair"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler secrets get SENTRY_DSN WEBHOOK_DEPLOY_SECRET --plain\n' > "$PT/scripts/n19.sh"
+pcase N19 scripts/n19.sh WEBHOOK_DEPLOY_SECRET tier-a "a trio name among the secrets-get positionals is counted"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler secrets get access_service_token_client_id --plain\n' > "$PT/scripts/n20.sh"
+pcase N20 scripts/n20.sh WEBHOOK_DEPLOY_SECRET tier-a "an alias-stem secrets get is counted"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler secrets get --plain\n' > "$PT/scripts/n21.sh"
+pcase N21 scripts/n21.sh WEBHOOK_DEPLOY_SECRET tier-a "secrets get with no literal name fails closed"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler secrets get SENTRY_DSN -p soleur -c prd_terraform --plain\n' > "$PT/scripts/n22.sh"
+pcase N22 scripts/n22.sh WEBHOOK_DEPLOY_SECRET sink "D-2a exempt: a non-trio get is safe under any pair"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run --preserve-env --name-transformer tf-var -- terraform plan\n' > "$PT/scripts/n23.sh"
+pcase N23 scripts/n23.sh WEBHOOK_DEPLOY_SECRET tier-a "a run with no literal pair is unparseable and counted"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run -p soleur-github-app -c prd -- doppler run -p soleur -c prd_terraform -- x\n' > "$PT/scripts/n24.sh"
+pcase N24 scripts/n24.sh WEBHOOK_DEPLOY_SECRET tier-a "a nested counted invocation is not hidden by an exempt outer one"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run -p "$PROJ" -c prd -- x\n' > "$PT/scripts/n25.sh"
+pcase N25 scripts/n25.sh WEBHOOK_DEPLOY_SECRET tier-a "a variable -p fails closed"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler --timeout 10s run -p soleur -c prd_terraform -- x\n' > "$PT/scripts/n26.sh"
+pcase N26 scripts/n26.sh WEBHOOK_DEPLOY_SECRET tier-a "a modeled value-flag before the subcommand: the pair still classifies (pinned -> counted)"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler --timeout 10s run -p soleur -c dev -- x\n' > "$PT/scripts/n27.sh"
+pcase N27 scripts/n27.sh WEBHOOK_DEPLOY_SECRET sink "twin: the same flag over an unpinned literal pair stays exempt — precision, not blanket-counting"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler --brand-new-flag x run -p soleur -c dev -- x\n' > "$PT/scripts/n28.sh"
+pcase N28 scripts/n28.sh WEBHOOK_DEPLOY_SECRET tier-a "an unmodeled pre-subcommand flag fails closed even over an unpinned pair"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler --no-cache secrets get SENTRY_DSN --plain\n' > "$PT/scripts/n29.sh"
+pcase N29 scripts/n29.sh WEBHOOK_DEPLOY_SECRET sink "a modeled boolean before the subcommand does not taint a non-trio get"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler --silent run -p soleur -c prd_terraform -- x\n' > "$PT/scripts/n30.sh"
+pcase N30 scripts/n30.sh WEBHOOK_DEPLOY_SECRET tier-a "a modeled boolean over a pinned pair still counts"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run -p soleur -c prd_workspaces_luks_marker -- x\n' > "$PT/scripts/n31.sh"
+pcase N31 scripts/n31.sh WEBHOOK_DEPLOY_SECRET tier-a "a soleur/prd_* branch config inherits soleur/prd, so it is trio-carrying even when absent from TRIO_PAIRS"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler secrets download -p soleur -c prd_cla --no-file\n' > "$PT/scripts/n32.sh"
+pcase N32 scripts/n32.sh WEBHOOK_DEPLOY_SECRET tier-a "the same branch-inheritance rule covers secrets download over another soleur/prd_* config"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run -p soleur-deploy-channel -c prd_some_branch -- x\n' > "$PT/scripts/n33.sh"
+pcase N33 scripts/n33.sh WEBHOOK_DEPLOY_SECRET tier-a "a deploy-channel prd_* branch config inherits its trio-carrying prd root"
+printf '#!/usr/bin/env bash\necho "$WEBHOOK_DEPLOY_SECRET"\ndoppler run -p soleur-infra-privileged -c prd_some_branch -- x\n' > "$PT/scripts/n34.sh"
+pcase N34 scripts/n34.sh WEBHOOK_DEPLOY_SECRET tier-a "an infra-privileged prd_* branch config inherits its trio-carrying prd root"
 # comment lines keep what they expand (N3)
 printf '#!/usr/bin/env bash\ncat <<EOF2\n#$WEBHOOK_DEPLOY_SECRET\nEOF2\n' > "$PT/scripts/k11.sh"
 pcase K11 scripts/k11.sh WEBHOOK_DEPLOY_SECRET sink "a heredoc line #\$NAME (no braces) expands"
@@ -2961,8 +3282,8 @@ cmut cm1 "the NUL branch: a NUL-bearing file is skipped as binary" '    if b"\0"
         continue
 ' scripts/nul1.sh WEBHOOK_DEPLOY_SECRET tier-a ABSENT
 cmut cm2 "the code-extension carve-out under knowledge-base/ and docs/: everything there is skipped" 'if rel in (SUITE_REL, BASELINE_REL) or kb_prose(rel, full):' 'if rel in (SUITE_REL, BASELINE_REL) or rel.startswith(EXCLUDED_PREFIXES):' docs/a.sh WEBHOOK_DEPLOY_SECRET tier-a ABSENT
-cmut cm3 "the doppler secrets get|download read shape is dropped" 'bool(R_DOP_RUN.search(joined) or R_DOP_SEC.search(joined) or R_DOP_RUN.search(code) or R_DOP_SEC.search(code))' 'bool(R_DOP_RUN.search(joined) or R_DOP_RUN.search(code))' scripts/n1.sh WEBHOOK_DEPLOY_SECRET tier-a sink
-cmut cm4 "the doppler run read shape is dropped" 'bool(R_DOP_RUN.search(joined) or R_DOP_SEC.search(joined) or R_DOP_RUN.search(code) or R_DOP_SEC.search(code))' 'bool(R_DOP_SEC.search(joined) or R_DOP_SEC.search(code))' scripts/n5.sh WEBHOOK_DEPLOY_SECRET tier-a sink
+cmut cm3 "the doppler secrets get|download read shape is dropped" '_DOP_SEC_SUBS = ("get", "download")' '_DOP_SEC_SUBS = ()' scripts/n6.sh WEBHOOK_DEPLOY_SECRET tier-a sink
+cmut cm4 "the doppler run read shape is dropped" '_DOP_RUN_SUBS = ("run",)' '_DOP_RUN_SUBS = ()' scripts/n5.sh WEBHOOK_DEPLOY_SECRET tier-a sink
 cmut cm5 "the \${!var} indirection read shape is dropped" 'return bool(an["reads"] or an["gen_read"] or an["alias_reads"] or an["indirect"])' 'return bool(an["reads"] or an["gen_read"] or an["alias_reads"])' scripts/n4.sh CF_ACCESS_CLIENT_ID tier-a sink
 cmut cm6 "the terraform output -raw read shape is dropped" 'return bool(an["reads"] or an["gen_read"] or an["alias_reads"] or an["indirect"])' 'return bool(an["reads"] or an["gen_read"] or an["indirect"])' tests/scripts/lib/r5.sh ALIAS:ACCESS_SERVICE_TOKEN_CLIENT_SECRET tier-a ABSENT
 cmut cm7 "the secrets.NAME / secrets['NAME'] read shape is dropped" 'for m in R_SECRETS.finditer(joined):' 'for m in []:' tests/scripts/lib/r7.sh WEBHOOK_DEPLOY_SECRET tier-a ABSENT
@@ -2992,12 +3313,12 @@ cmut cm19 "composite actions fall through to sink" '    if ACTION.fullmatch(rel)
 ' '' .github/actions/c1/action.yml CF_ACCESS_CLIENT_ID tier-a sink
 cmut cm20 "the Tier-B set membership test is dropped" '        if e is None or e not in ENVS:' '        if e is None:' .github/workflows/w12.yml CF_ACCESS_CLIENT_ID tier-a tier-b
 cmut cm21 "an exempt read-shape file earns rows only for the Access-token alias, not for its names" '        return {(rel, n) for n in an["names"]} | {(rel, n) for n in an["alias_reads"]}' '        return {(rel, n) for n in an["alias_reads"]}' tests/scripts/lib/r1.sh WEBHOOK_DEPLOY_SECRET tier-a ABSENT
-cmut cm22 "the doppler command-syntax rule is replaced by the old 'up to six words between doppler and the subcommand' rule" '_FLAGS = r"""(?:""" + _SEP + r"""-""" + _TOK + r"""+(?:""" + _SEP + r"""(?!-)""" + _TOK + r"""+)?)*"""' '_FLAGS = r"""(?:""" + _SEP + _TOK + r"""+){0,6}?"""' scripts/pro1.sh WEBHOOK_DEPLOY_SECRET sink tier-a
+cmut cm22 "a bare word between doppler and the subcommand is no longer prose" '        return False  # a bare word before any subcommand: prose, not an invocation' '        return True  # a bare word before any subcommand: prose, not an invocation' scripts/pro1.sh WEBHOOK_DEPLOY_SECRET sink tier-a
 cmut cm23 "the unbraced \$NAME expansion is dropped from the comment rule" '|\$\([^\n]*|\$[A-Za-z_][A-Za-z0-9_]*")' '|\$\([^\n]*")' scripts/k11.sh WEBHOOK_DEPLOY_SECRET sink ABSENT
 cmut cm24 "the shebang sniff under the doc prefixes is dropped" '            return fh.read(2) != b"#!"' '            return True' docs/pull WEBHOOK_DEPLOY_SECRET tier-a ABSENT
 cmut cm25 "the Makefile basename is dropped from the code names under the doc prefixes" 'KB_CODE_NAMES = {"Makefile"}' 'KB_CODE_NAMES = set()' "$KBN/x/Makefile" WEBHOOK_DEPLOY_SECRET sink ABSENT
 cmut cm26 "a comment line holding an expansion is kept WHOLE (its inert text counts as code again)" 'keep.append(" ".join(frags))' 'keep.append(ln)' scripts/k16.sh WEBHOOK_DEPLOY_SECRET sink tier-a
-cmut cm27 "the option flags before the doppler subcommand are no longer recognised" '_FLAGS = r"""(?:""" + _SEP + r"""-""" + _TOK + r"""+(?:""" + _SEP + r"""(?!-)""" + _TOK + r"""+)?)*"""' '_FLAGS = r""""""' scripts/n9.sh WEBHOOK_DEPLOY_SECRET tier-a sink
+cmut cm27 "the option flags before the doppler subcommand are no longer recognised" '        if t.startswith("-") and t != "-":' '        if False and t.startswith("-") and t != "-":' scripts/n9.sh WEBHOOK_DEPLOY_SECRET tier-a sink
 flush_pending
 eval_live
 
@@ -3169,7 +3490,7 @@ if [ "$MUTANTS_RUN" -gt "$MUTANT_FLOOR" ]; then
 fi
 # Assertion FLOOR (exact), equal to the number of assertions this suite makes.
 _ran=$((passes + fails))
-FLOOR=603
+FLOOR=629
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s -- cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1
