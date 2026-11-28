@@ -222,6 +222,8 @@ GH_STUB_BODY="$STUB_DIR/body.md"
 GH_STUB_LABELS="$STUB_DIR/labels.txt"
 GH_STUB_CURPR="$STUB_DIR/curpr.txt"        # the current branch's PR number (`gh pr view --json number`)
 GH_STUB_PARKED="$STUB_DIR/parked-count.txt" # how many open PRs carry `parked` (`gh pr list --label parked`)
+GH_STUB_HINT="$SCRIPT_DIR/../../plugins/soleur/test/fixtures/gh-pr-view-hint.txt" # the shared gh 2.106 hint block (read-only)
+[[ "$(head -1 "$GH_STUB_HINT" 2>/dev/null)" == hint:* ]] || { echo "FATAL: $GH_STUB_HINT is missing or not the hint block" >&2; exit 1; }
 cat > "$STUB_DIR/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GH_STUB_LOG"
@@ -235,6 +237,9 @@ case "$*" in
     v=$(cat "$GH_STUB_CURPR")
     if [[ "$v" == FAIL ]]; then echo "gh: HTTP 502" >&2; exit 1; fi
     if [[ "$v" == NONE ]]; then echo 'no pull requests found for branch "x"' >&2; exit 1; fi
+    # gh 2.106.0 prints its 8-line `hint: … gh event listen …` block on STDERR for every `gh pr view`, BEFORE stdout.
+    if [[ "$v" == HINTNONE ]]; then cat "$GH_STUB_HINT" >&2; echo 'no pull requests found for branch "x"' >&2; exit 1; fi
+    if [[ "$v" == HINT:* ]]; then cat "$GH_STUB_HINT" >&2; v=${v#HINT:}; fi
     printf '%s' "$v" ;;
   "pr list --label parked --state open --json number --jq length"|"pr list --label parked --state open --repo o/r --json number --jq length")
     v=$(cat "$GH_STUB_PARKED")
@@ -282,7 +287,7 @@ h() {
   # shellcheck disable=SC2086 # HOOK_ENV is zero or one NAME=value word, deliberately unquoted
   out=$(env -u SOLEUR_SKIP_OPERATOR_STEP_GATE $HOOK_ENV PATH="$STUB_DIR:$PATH" \
     GH_STUB_LOG="$GH_STUB_LOG" GH_STUB_BAD="$GH_STUB_BAD" GH_STUB_BODY="$GH_STUB_BODY" GH_STUB_LABELS="$GH_STUB_LABELS" \
-    GH_STUB_CURPR="$GH_STUB_CURPR" GH_STUB_PARKED="$GH_STUB_PARKED" \
+    GH_STUB_CURPR="$GH_STUB_CURPR" GH_STUB_PARKED="$GH_STUB_PARKED" GH_STUB_HINT="$GH_STUB_HINT" \
     bash "$HOOK" <<<"$json" 2>/dev/null || true)
   [[ "$(jq -r '.decision // empty' <<<"$out" 2>/dev/null || true)" == "deny" ]] && got="deny"
   if [[ "${required[0]}" == "--none" ]]; then
@@ -482,6 +487,12 @@ CURPR=FAIL; PARKED_COUNT=1; h "REAL hook: parked: a bare merge whose current-bra
 CURPR=FAIL; PARKED_COUNT=0; h "REAL hook: a bare merge whose current-branch read FAILS is allowed when no PR is parked (control: the list was read)" allow "$CLEAN" 'gh pr merge --squash' "pr view --json number --jq .number" "pr list --label parked --state open --json number --jq length"
 CURPR=NONE; PARKED_COUNT=1; FORBID="pr list --label parked --state open --json number --jq length"
 h "REAL hook: a bare merge on a branch with NO pull request is not held by the list ('no pull requests found' is an answer, not a failed read)" allow "$CLEAN" 'gh pr merge --squash' "pr view --json number --jq .number"
+# gh 2.106 prints a hint block on stderr for every `gh pr view` (rc 0). The current-branch read is stdout only, so the hint is not part of the
+# number (before the fix: "(unreadable answer)" → the parked-list hold), and the "no pull requests found" test reads gh's stderr file, not stdout.
+CURPR=HINT:99; PARKED_COUNT=1; FORBID="pr list --label parked --state open --json number --jq length"
+h "REAL hook: a bare merge whose current-branch read prints gh's hint on stderr (rc 0) reads the number from stdout and is allowed while another PR is parked" allow "$CLEAN" 'gh pr merge --squash' "pr view --json number --jq .number" "pr view 99 --json labels --jq .labels[].name"
+CURPR=HINTNONE; PARKED_COUNT=1; FORBID="pr list --label parked --state open --json number --jq length"
+h "REAL hook: a branch with NO pull request whose stderr carries the hint and then 'no pull requests found' is allowed while another PR is parked (the test reads stderr)" allow "$CLEAN" 'gh pr merge --squash' "pr view --json number --jq .number"
 # gh api: label writes, issue writes and GraphQL, one probe per name
 LABELS=$PL; h "REAL hook: parked: 'gh api --method DELETE .../issues/7/labels/parked' is denied, stub never called" deny "$CLEAN" 'gh api --method DELETE repos/o/r/issues/7/labels/parked' --none
 LABELS=$PL; h "REAL hook: parked: 'gh api -X PATCH .../issues/7/labels' (replaces the label set) is denied" deny "$CLEAN" "gh api -X PATCH repos/o/r/issues/7/labels -f 'labels[]=bug'" "$LABELS_CALL"
@@ -579,8 +590,8 @@ echo "=== $PASS/$TOTAL pass ($FAIL fail) ==="
 
 # Anti-vacuity floor: a suite that silently stops running rows (a sourced helper that
 # exits early, a deleted block) must not read as green. Raise this whenever rows are
-# added, derived from a green run's TOTAL (41 at the second-round review edit, 59 after the first parked barrier, 102 after review round 1, 157 after the fix round, 197 after the final bounded patch).
-ROW_FLOOR=197
+# added, derived from a green run's TOTAL (41 at the second-round review edit, 59 after the first parked barrier, 102 after review round 1, 157 after the fix round, 197 after the final bounded patch, 199 after the gh 2.106 hint rows).
+ROW_FLOOR=199
 if (( TOTAL < ROW_FLOOR )); then
   echo "FAIL: only $TOTAL rows ran; the floor is $ROW_FLOOR (rows were dropped or never ran)"
   exit 1
