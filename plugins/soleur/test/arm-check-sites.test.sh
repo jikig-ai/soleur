@@ -481,7 +481,7 @@ DRAIN_ARM='gh pr merge <N> --squash --auto --match-head-commit "${H:?run the arm
 OTHER_PIN_ARM='gh pr merge <N> --squash --auto --match-head-commit "${HEAD_X:?some other variable}"'
 RM_ARM='bash "$SS_LIB" with_lock merge-main 600 -- \'
 SS_LINE='SS_LIB="${CLAUDE_PLUGIN_ROOT}/scripts/lib/session-state.sh"'
-DQ_ARM='gh pr merge "$N" --squash --auto --match-head-commit "${H:?run the arm check in this call}"'
+DQ_ARM='gh pr merge <pr-number> --squash --auto --match-head-commit "${H:?run the arm check in this call}"'
 SHIP_ANCHOR='## Headless Mode Detection'
 SETTLE_ANCHOR='## Operator-authorized variant'
 SYNC_REARM='(3) re-arm once, only when autoMergeRequest is null, through the arm check ('
