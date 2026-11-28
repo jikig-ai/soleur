@@ -106,7 +106,7 @@ SOLEUR_SKILL_NAME=one-shot SOLEUR_EXPECTED_DURATION_MIN=240 \
 
 If the script exits non-zero and its output contains `NO_GIT_REPOSITORY`, the workspace lost its git checkout between the Step 0 (pre) gate and now (e.g. a reclaim). STOP — do NOT spawn the planning subagent. Reply with the same honest, no-wait message from Step 0 (pre). Do not retry or improvise alternative worktree paths.
 
-**Stale orphan branch from a prior aborted run: do NOT hand-clean, do NOT strand.** `create` auto-heals a stale EMPTY remote branch (`origin/feat-one-shot-<same-name>` with 0 commits ahead of main and no live PR) that a prior aborted attempt left behind — it deletes it and proceeds, logging `auto-healed stale empty remote branch`. So a re-run of the same issue is expected to just work; never conclude the run is blocked and ask the operator to `git push origin --delete` by hand (the 2026-07-05 stranding). A branch with real commits or a live PR is NOT auto-deleted — that surfaces as a genuine collision (see Step 0a.5), which is a signal to verify, not a cleanup to force.
+**Stale orphan branch from a prior aborted run: do NOT hand-clean, do NOT strand.** `create` auto-heals a stale EMPTY remote branch (`origin/feat-one-shot-<same-name>` with 0 commits ahead of main and no live PR), logging `auto-healed stale empty remote branch`; never ask the operator to `git push origin --delete` by hand. A branch with real commits or a live PR is NOT auto-deleted (see Step 0a.5).
 
 Then `cd` into the worktree path printed by the script. Parallel agents on the same repo cause silent merge conflicts when both work on main.
 
@@ -129,9 +129,9 @@ fi
 cd <worktree-path> && bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" draft-pr
 ```
 
-If this fails (no network, or "No commits between main and <branch>"), print a warning but continue. The branch exists locally and the `soleur:ship` phase will create the PR after implementation commits exist.
+If this fails (no network, or "No commits between main and <branch>"), warn and continue; `soleur:ship` creates the PR once implementation commits exist.
 
-**This push pins the branch's base.** `soleur:work` Phase 0.5 may rebase onto a fresher `origin/main` before the first real commit, after which the first `git push` is rejected non-fast-forward. That is expected, not a collision: confirm the remote holds ONLY this init commit (`git log --oneline origin/main..origin/<branch>` prints one line) and push with `--force-with-lease=<branch>:<init-sha>`. **Why:** #8050 — the rebased branch's push was refused and needed exactly this check.
+**This push pins the branch's base.** `soleur:work` Phase 0.5 may rebase onto a fresher `origin/main` before the first real commit, so the first `git push` is rejected non-fast-forward. Confirm the remote holds ONLY this init commit (`git log --oneline origin/main..origin/<branch>` prints one line) and push with `--force-with-lease=<branch>:<init-sha>` (#8050).
 
 **Step 0d: Initialize the tally.** In the worktree: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` (each parsed `--max-*`), `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate agent_rounds`, `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr agent_rounds` — `STOP` on the gate → budget-capped exit.
 
@@ -287,7 +287,7 @@ terminal and files the issue instead. A re-invocation is a step *within* an arm,
 
    The `--search` flag scopes results to issues from this review session (the review skill's issue template includes `PR #<number>` in the body). If zero issues match, proceed immediately to Step 5.5.
 
-   For each matching issue (regardless of priority), spawn a parallel `soleur:engineering:workflow:pr-comment-resolver` agent — N issues = N agents, so `gate agent_rounds <N>` first and `incr agent_rounds <N>` after. Pass the issue body's `## Problem`, `## Proposed Fix`, and `Location:` fields as the agent's input. After all agents return, commit fixes and close each resolved issue:
+   For each matching issue (regardless of priority), spawn a parallel `soleur:engineering:workflow:pr-comment-resolver` agent — N issues = N agents, so `gate agent_rounds <N>` first and `incr agent_rounds <N>` after. Register each spawned seat via `bash "${CLAUDE_PLUGIN_ROOT}/scripts/seat-liveness.sh" init --run-dir ".soleur/runs/${RUN_ID:-default}" --seat "resolver-<num>" --writable true` and sweep/decide on completion (`seat-liveness.sh sweep` / `decide`, inspecting `git status --porcelain` before any 1x recovery; never blindly respawn over a dirty diff, ADR-332). Pass the issue body's `## Problem`, `## Proposed Fix`, and `Location:` fields as the agent's input. After all agents return, commit fixes and close each resolved issue:
 
    ```bash
    gh issue close <number> --comment "Fixed in <commit-sha>"
