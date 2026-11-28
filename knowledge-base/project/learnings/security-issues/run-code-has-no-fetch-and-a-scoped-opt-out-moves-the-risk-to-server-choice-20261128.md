@@ -1,7 +1,7 @@
 ---
 title: 'browser_run_code_unsafe has no fetch; a scoped opt-out moves the risk to which server you call'
 date: 2026-11-28
-category: engineering
+category: security-issues
 tags: [playwright-mcp, run-code, page-request, redact-proxy, opt-out, cloudflare-remint]
 symptoms: [Phase 5 mint returned refused:"sink" and deleted a good token, ReferenceError fetch is not defined inside browser_run_code_unsafe]
 module: agent-browser
