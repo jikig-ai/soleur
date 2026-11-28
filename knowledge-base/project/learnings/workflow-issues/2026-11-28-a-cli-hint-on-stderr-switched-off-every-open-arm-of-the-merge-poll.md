@@ -168,6 +168,19 @@ healthy and the documented recovery was refused.
   (`context-sanitize.test.sh` lives in `.claude/hooks/lib/`); a combined `git add && git commit` was
   hook-blocked. Prevention: `git ls-files | grep <name>` before invoking a suite by path; stage and
   commit in separate calls (already hook-enforced).
+- **The advisor-gap fix stated a budget nobody had measured.** The `_NET_TO` 20 → 15 s comment
+  justified itself against a "60 s hook timeout"; settings.json sets no timeout for this hook, and
+  the worst case was 47 s, not 51 s (a timed-out read denies at once). No row pinned the bound, so
+  20 and 36 s both passed 214/214. Recovery: T93 now parses the bound and asserts the budget.
+  Prevention: a constant chosen against a budget gets a row that ties the two together.
+- **The pin I added read one of the two lines it pinned.** T93's parse required `; fi`, which only
+  the gtimeout line carries, so the `timeout` line Linux runs was never checked, and a parse miss
+  ended the suite under errexit with no FAIL row. The verification seat found both. Recovery:
+  e406bdc8c9 parses both lines and fails as rows. Prevention: when a guard reads N sibling lines,
+  assert it parsed N, and mutate each line alone.
+- **Two plan sentences tripped ship's incident and enrollment scanners** ("outage", "soak") and
+  the CMO filing hit the issue-filing gate three times before it carried `Mandated-By:`. Recovery:
+  reworded (5360b5d73e) and re-filed (#13130). Prevention: none needed; the gates worked.
 
 ## Tags
 
