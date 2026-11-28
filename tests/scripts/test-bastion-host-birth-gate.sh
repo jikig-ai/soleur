@@ -91,11 +91,14 @@ cat > "$WORK/base.json" <<'JSON'
 JSON
 jq -e '.resource_changes | length == 5' "$WORK/base.json" >/dev/null || harness "base fixture is not valid JSON"
 
-N=0
+# mk runs inside $(...), so a shell counter would never persist: every fixture gets its own mktemp name,
+# or a stored path (ROW4_DELETE, INLINE_CFG, ATT_KNOWN_OTHER, ATT_TWO_IDS, reused by the gate-mutation
+# rows below) would be overwritten by the next mk and those rows would grade the wrong plan.
 mk() { # <jq-edit> -> path of the mutated plan
-  N=$((N + 1))
-  jq "$1" "$WORK/base.json" > "$WORK/p$N.json" || harness "fixture edit failed: $1"
-  printf '%s' "$WORK/p$N.json"
+  local f
+  f="$(mktemp "$WORK/p.XXXXXXXX")" || harness "mktemp failed"
+  jq "$1" "$WORK/base.json" > "$f" || harness "fixture edit failed: $1"
+  printf '%s' "$f"
 }
 SET='def set($a; f): .resource_changes |= map(if .address == $a then f else . end);'
 DROP='def drop($a): .resource_changes |= map(select(.address != $a));'
