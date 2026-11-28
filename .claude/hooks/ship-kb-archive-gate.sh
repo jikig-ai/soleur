@@ -931,10 +931,12 @@ _wt_top=$(git -C "$WORK_DIR" rev-parse --show-toplevel 2>/dev/null || true)
 # hook until the harness kills it — a non-blocking exit that lets the merge
 # through. Each consumer treats a timeout as a failure, which denies.
 # timeout, else gtimeout (stock macOS), else unbounded (pre-change posture)
-# — sibling pattern, pre-merge-rebase.sh.
+# — sibling pattern, pre-merge-rebase.sh. 15 s, not the sibling's 20 s: the
+# PR-number path chains up to three of these reads, and 3 x (15 + 2) = 51 s
+# stays under a 60 s hook timeout where 3 x 22 = 66 s would not.
 _NET_TO=()
-if command -v timeout >/dev/null 2>&1; then _NET_TO=(timeout -k 2 20)
-elif command -v gtimeout >/dev/null 2>&1; then _NET_TO=(gtimeout -k 2 20); fi
+if command -v timeout >/dev/null 2>&1; then _NET_TO=(timeout -k 2 15)
+elif command -v gtimeout >/dev/null 2>&1; then _NET_TO=(gtimeout -k 2 15); fi
 
 CURRENT_BRANCH=$(git -C "$WORK_DIR" symbolic-ref --short -q HEAD 2>/dev/null || echo "")
 

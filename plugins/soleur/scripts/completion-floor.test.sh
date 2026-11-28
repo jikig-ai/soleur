@@ -60,6 +60,8 @@ UNREL='[{"number":1,"body":"Ref #131120"},{"number":2,"body":"PR #999"},{"number
 FLOOR_PR=13112 FLOOR_ISSUES="$UNREL" assert_review "unrelated open code-review issues do not block" pass
 FLOOR_PR=13112 FLOOR_ISSUES='[{"number":4,"body":"Ref #13112"}]' assert_review "an issue citing this PR blocks" missing
 FLOOR_PR=13112 FLOOR_ISSUES='[{"number":5,"body":"from PR #13112."}]' assert_review "a cite followed by punctuation blocks" missing
+FLOOR_PR=13112 FLOOR_ISSUES='[{"number":9,"body":"See https://github.com/o/r/pull/13112 review"}]' assert_review "a /pull/N URL cite blocks" missing
+FLOOR_PR=13112 FLOOR_ISSUES='[{"number":10,"body":"https://github.com/o/r/pull/131120"}]' assert_review "a longer /pull/ number does not block" pass
 FLOOR_PR='' FLOOR_ISSUES='[]' assert_review "an unresolvable PR fails closed" missing
 FLOOR_PR=13112 FLOOR_LIST_FAIL=1 assert_review "a failed issue read fails closed" missing
 FLOOR_PR=13112 FLOOR_ISSUES='[{"number":6,"body":"**Source:** PR #13112 review","labels":[{"name":"code-review"},{"name":"deferred-scope-out"}]},{"number":7,"body":"Ref #13112","labels":[{"name":"synthetic-test"}]}]' \
