@@ -23,7 +23,7 @@ what it was before.
 `--allow-proxy-and-node-env` (a boolean, given at most once) turns off exactly these refusals: the
 `--proxy-server`/`--proxy-bypass` SINK_FLAGS rows (argv and env), the NODE_OPTIONS,
 NODE_EXTRA_CA_CERTS, NODE_TLS_REJECT_UNAUTHORIZED, PLAYWRIGHT_BROWSERS_PATH and
-npm_config_playwright_browsers_path SINK_ENV_ONLY rows (CTO U4), and the config `proxy` key
+npm_config_/npm_package_config_playwright_browsers_path SINK_ENV_ONLY rows (CTO U4), and the config `proxy` key
 under contextOptions and launchOptions. Every other refusal stays. The plugin registration
 (plugins/soleur/.mcp.json) passes it, so a corporate-proxy or extra-CA host can still browse; the repo
 registration (.mcp.json) does not, and the #12931 Phase 5 re-mint sitting requires that one (CTO U1,
@@ -427,12 +427,14 @@ SINK_ENV_ONLY = [
     # value in an .npmrc is set inside npx, after this check: the runbook reads it with `npm config get`.
     ("PLAYWRIGHT_BROWSERS_PATH", "redirects Playwright's browser download dir (a substituted browser binary)"),
     ("npm_config_playwright_browsers_path", "redirects Playwright's browser download dir (a substituted browser binary)"),
+    ("npm_package_config_playwright_browsers_path", "redirects Playwright's browser download dir (a substituted browser binary)"),
 ]
 # The refusals `--allow-proxy-and-node-env` turns off, and only these (CTO U1, 2026-11-28).
 ALLOW_PROXY_FLAG = "--allow-proxy-and-node-env"
 RELAXABLE_FLAGS = {"--proxy-server", "--proxy-bypass"}
 RELAXABLE_ENV = {"NODE_OPTIONS", "NODE_EXTRA_CA_CERTS", "NODE_TLS_REJECT_UNAUTHORIZED",
-                 "PLAYWRIGHT_BROWSERS_PATH", "npm_config_playwright_browsers_path"}
+                 "PLAYWRIGHT_BROWSERS_PATH", "npm_config_playwright_browsers_path",
+                 "npm_package_config_playwright_browsers_path"}
 # Valued flags: a bare one as the LAST server arg would bind the appended
 # `--user-data-dir=<dir>` (or `--snapshot-mode`) as its value instead of
 # refusing cleanly. Boolean flags are deliberately absent — a trailing
@@ -451,8 +453,8 @@ VALUE_FLAGS = {
 
 
 def env_names_for(envvar: str, env: Dict[str, str]) -> List[str]:
-    """The env names that spell `envvar`: itself, plus, for an npm_config_* name, every case and -/_ variant npm reads."""
-    if not envvar.startswith("npm_config_"):
+    """The env names that spell `envvar`: itself, plus, for an npm_* name, every case and -/_ variant npm reads."""
+    if not envvar.startswith("npm_"):
         return [envvar]
     want = envvar.lower().replace("-", "_")
     return [k for k in env if k.lower().replace("-", "_") == want]

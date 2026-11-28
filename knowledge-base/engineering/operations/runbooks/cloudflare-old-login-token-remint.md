@@ -236,8 +236,9 @@ launched it refuses, at start, every setting that could proxy, record or MITM th
 `extraHTTPHeaders`, `ignoreHTTPSErrors` under `contextOptions` or `launchOptions` (CTO S1, R1). Then confirm it:
 `claude mcp get playwright` (read the args; they must contain `--chromium-fallback` and must not contain
 `--allow-proxy-and-node-env`, which turns the proxy and `NODE_*` refusals off and belongs to the plugin
-`plugin:soleur:playwright` server only, CTO U1 and U3), `env | grep -iE '^(PLAYWRIGHT_MCP_|PLAYWRIGHT_BROWSERS_PATH|npm_config_playwright_browsers_path|NODE_OPTIONS|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED)='`
-(expect only `PLAYWRIGHT_MCP_PING_TIMEOUT_MS`), `npm config get playwright_browsers_path` (expect `undefined`: the
+`plugin:soleur:playwright` server only, CTO U1 and U3), `env | grep -iE '^(PLAYWRIGHT_MCP_|PLAYWRIGHT_BROWSERS_PATH|npm_(package_)?config_playwright_browsers_path|NODE_OPTIONS|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED)='`
+(expect only `PLAYWRIGHT_MCP_PING_TIMEOUT_MS`), `npm config get playwright_browsers_path` run from the repo root, which is npx's working directory, so the project
+`.npmrc` is read too (expect `undefined`: the
 proxy cannot see a value set in an `.npmrc`, because npx applies it after the proxy's check, so this read is the only
 check for it, CTO U4) and the `--config` file it names. The restart also gives a fresh
 browser, so no earlier `browser_run_code_unsafe` call left a trace running or `page.request` patched (CTO R2; the

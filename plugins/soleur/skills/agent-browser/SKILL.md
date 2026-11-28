@@ -559,7 +559,8 @@ string: an old-string session holds no `flock`, so also require that `readlink
    plus env-only `PLAYWRIGHT_MCP_USER_DATA_DIR`,
    `PLAYWRIGHT_MCP_SNAPSHOT_MODE`, `NODE_OPTIONS`, `NODE_EXTRA_CA_CERTS`,
    `NODE_TLS_REJECT_UNAUTHORIZED`, `PLAYWRIGHT_BROWSERS_PATH` and
-   `npm_config_playwright_browsers_path` (any case; they redirect the browser build); an `.ini` config path, or a JSON config the
+   `npm_config_playwright_browsers_path` / `npm_package_config_playwright_browsers_path`
+   (any case; they redirect the browser build); an `.ini` config path, or a JSON config the
    server would not parse as JSON (`NaN`/`Infinity`); a trailing valued flag, which would swallow
    the appended `--snapshot-mode none` as its value; a config file (from
    `--config` or `PLAYWRIGHT_MCP_CONFIG`) that is missing, is not JSON, or sets
