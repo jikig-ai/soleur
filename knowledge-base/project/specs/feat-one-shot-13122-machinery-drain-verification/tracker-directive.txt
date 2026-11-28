@@ -1,0 +1,5 @@
+<!-- soleur:followthrough
+  script=scripts/followthroughs/machinery-drain-actor-gate-13122.sh
+  earliest=2026-11-30T18:00:00Z
+  secrets=GH_TOKEN
+-->

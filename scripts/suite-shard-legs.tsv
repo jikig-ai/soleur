@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1539
-# generated-at=2026-11-28T10:19:26Z
+# generated-at=2026-11-28T16:33:17Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -582,6 +582,7 @@ scripts/lint-workflow-local-action-checkout-live	7
 scripts/lint-workflow-run-body-syntax	7
 scripts/lint-workflow-step-env-refs	7
 scripts/lint-workflow-step-env-refs-live	6
+scripts/machinery-drain-actor-gate-13122	9
 scripts/marketplace-drift-check	12
 scripts/marketplace-manifest-validate	6
 scripts/md-to-mrkdwn	3

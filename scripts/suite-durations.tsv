@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=46053704017,45978011373,45964231859,45868797899,45843152864
 # default-weight-ms=1539
-# generated-at=2026-11-28T10:19:26Z
+# generated-at=2026-11-28T16:33:17Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=d8179c4f4c389f9b127336b4cfec95e3c6ae7c68bd15595190cb508650edfd52
 .claude/hooks/agent-token-tee.test.sh	6648	measured
@@ -580,6 +580,7 @@ scripts/lint-workflow-local-action-checkout-live	4273	measured
 scripts/lint-workflow-run-body-syntax	4560	measured
 scripts/lint-workflow-step-env-refs	3858	measured
 scripts/lint-workflow-step-env-refs-live	2975	measured
+scripts/machinery-drain-actor-gate-13122	1539	floor
 scripts/marketplace-drift-check	1672	measured
 scripts/marketplace-manifest-validate	825	measured
 scripts/md-to-mrkdwn	142	measured

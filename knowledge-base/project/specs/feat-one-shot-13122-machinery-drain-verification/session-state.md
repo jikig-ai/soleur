@@ -25,3 +25,12 @@
 ## Operator Constraints
 
 - constraint: Do NOT fire cron/machinery-drain.manual-trigger without explicit operator authorization.
+
+## Work Phase Checkpoint — probe implementation
+
+- Status: probe and fixture harness implemented; registration and regeneration complete.
+- RED evidence: before the probe existed the harness exited 2 with `the probe is missing`; after implementation the suite is green at 23 passes / 0 fails.
+- Live read-only probe validation: with a locally derived `GH_TOKEN`, the probe exits 2 (`NOT YET`) because no qualifying completed post-cutoff weekly measurement exists yet. No workflow dispatch was fired.
+- Static gates green: `lint-followthrough-varq-ban.sh`, `followthrough-exec-bit.test.sh`, `followthrough-predicate-parity.test.sh`, both fixture-dir ratchets, capture-exit lint, and shell-trace credential lint.
+- Exact post-merge tracker directive is stored in `tracker-directive.txt` in this directory; it must be pasted unfenced at column 0 into the new tracker body.
+- Remaining before review/ship: targeted affected-gate evidence, branch sweeper dry run, then post-merge enrollment.
