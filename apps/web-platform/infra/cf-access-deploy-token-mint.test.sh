@@ -43,6 +43,8 @@ cat >"$SBX/bin/doppler" <<'STUB'
 #!/usr/bin/env bash
 set -uo pipefail
 D="${STUB_DIR:?}"
+v=""
+if [[ " $* " == *" secrets set "* ]]; then v="$(cat)"; fi
 no() { printf 'doppler %s\n' "$*" >>"$D/refused.log"; exit 64; }
 printf 'doppler %s\n' "$*" >>"$D/argv.log"
 key() { printf '%s/store/%s__%s__%s' "$D" "$1" "$2" "$3"; }
@@ -64,7 +66,6 @@ if [[ $# -eq 8 && "$1 $2 $4 $6 $8" == "secrets get -p -c --plain" ]]; then
 fi
 if [[ $# -eq 9 && "$1 $2 $4 $5 $6 $8" == "secrets set --silent --no-interactive -p -c" ]]; then
   case "$3" in CF_ACCESS_CLIENT_ID|CF_ACCESS_CLIENT_SECRET) ;; *) no "$@" ;; esac
-  v="$(cat)"
   [[ ! -f "$D/setfail.$7.$9.$3" ]] || exit 1
   if [[ -f "$D/corrupt.$7.$9.$3" ]]; then v="corrupted-value"; fi
   printf '%s' "$v" >"$(key "$7" "$9" "$3")"
@@ -77,6 +78,8 @@ cat >"$SBX/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 set -uo pipefail
 D="${STUB_DIR:?}"
+v=""
+if [[ " $* " == *" secret set "* ]]; then v="$(cat)"; fi
 no() { printf 'gh %s\n' "$*" >>"$D/refused.log"; exit 64; }
 printf 'gh %s\n' "$*" >>"$D/argv.log"
 [[ "${GH_TOKEN:-}" == "$S_INST" ]] || no "(not the installation token)" "$@"
@@ -88,7 +91,6 @@ if [[ $# -eq 8 && "$1 $2 $3 $4 $5 $6 $7 $8" == "secret list --repo $R --app acti
 fi
 if [[ $# -eq 7 && "$1 $2 $4 $5 $6 $7" == "secret set --repo $R --app actions" ]]; then
   case "$3" in CF_ACCESS_CLIENT_ID|CF_ACCESS_CLIENT_SECRET) ;; *) no "$@" ;; esac
-  v="$(cat)"
   [[ ! -f "$D/ghsetfail.$3" ]] || exit 1
   printf '%s' "$v" >"$D/ghval.$3"
   [[ -f "$D/ghstale.$3" ]] || printf '2026-11-23T12:00:00Z' >"$D/ghsec/$3"
@@ -296,5 +298,8 @@ check "$r" "no stub refused an unmodeled call in any run${bad:+ (in:${bad##*/})}
 
 printf '\ncf-access-deploy-token-mint: %d passed, %d failed\n' "$PASS" "$FAIL"
 MIN_CASES=41
-if [[ "$((PASS + FAIL))" -lt "$MIN_CASES" ]]; then printf '[VACUITY] only %d cases ran, floor %d\n' "$((PASS + FAIL))" "$MIN_CASES" >&2; exit 1; fi
+if [[ "$((PASS + FAIL))" -lt "$MIN_CASES" ]]; then
+  printf '[VACUITY] only %d cases ran, floor %d\n' "$((PASS + FAIL))" "$MIN_CASES" >&2
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]] || exit 1

@@ -553,13 +553,13 @@ tun_plan() { # <out>
                    {hostname: null, service: "http_status:404"}]}]}), after_unknown: {tunnel_id: true, id: true}}
       else {actions: ["create"], before: null, after: ids($t)} end;
     {format_version: "1.2",
-     configuration: {root_module: {resources: [polv | to_entries[] | {address: .key, expressions: {
+     configuration: {root_module: {resources: ([polv | to_entries[] | {address: .key, expressions: {
        application_id: {references: [(.value.app + ".id"), .value.app]},
        decision: {constant_value: "non_identity"},
        include: [{service_token: {references: .value.tok}}]}}] + [("deploy", "ssh", "registry") | {address: ("cloudflare_record." + .), expressions: {content: {references:
        ["cloudflare_zero_trust_tunnel_cloudflared.web.id", "cloudflare_zero_trust_tunnel_cloudflared.web"]}}}] + [{"doppler_secret.registry_push_access_token_id": "client_id", "doppler_secret.registry_push_access_token_secret": "client_secret"}
        | to_entries[] | {address: .key, expressions: {value: {references:
-           [("cloudflare_zero_trust_access_service_token.registry_push." + .value), "cloudflare_zero_trust_access_service_token.registry_push"]}}}]}},
+           [("cloudflare_zero_trust_access_service_token.registry_push." + .value), "cloudflare_zero_trust_access_service_token.registry_push"]}}}])}},
      resource_changes: [$spec | to_entries[] | .key as $a | .value as $c | ($a | split(".")[0]) as $t
        | {address: $a, mode: "managed", type: $t, change: (
            if $c == "create" then created($a; $t)

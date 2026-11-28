@@ -80,7 +80,7 @@ p_precondition()  { local b; b="$(block_of "$1" cloudflare_zero_trust_access_pol
 p_no_outputs()    { ! grep -qE '^output[[:space:]]+"access_service_token_client_(id|secret)"' <<<"$(eff "$1")"; }
 p_no_client_ref() { ! grep -qE 'access_service_token\.deploy\.client_' <<<"$(eff "$1")"; }
 # A non-nil UUID: the nil placeholder (FILL-AT-PHASE-3.1) is UUID-shaped and must not pass.
-p_locals_uuid()   { grep -oE "$UUID_RE" <<<"$(eff "$1" | tr -d '\n' | grep -oE 'locals[[:space:]]*\{[[:space:]]*deploy_service_token_ids[[:space:]]*=[[:space:]]*\[[^]]*\]')" | grep -qvxF '"00000000-0000-0000-0000-000000000000"'; }
+p_locals_uuid()   { local u; u="$(grep -oE "$UUID_RE" <<<"$(eff "$1" | tr -d '\n' | grep -oE 'locals[[:space:]]*\{[[:space:]]*deploy_service_token_ids[[:space:]]*=[[:space:]]*\[[^]]*\]')")"; [[ -n "$u" ]] && grep -qvxF '"00000000-0000-0000-0000-000000000000"' <<<"$u"; }
 p_locals_once()   { [[ "$(eff "$1" | grep -cE '^[[:space:]]*deploy_service_token_ids[[:space:]]*=')" == "1" ]]; }
 # no `variable "deploy_service_token_ids"` in ANY .tf of the root dir (arg 1), and no override/JSON config that could re-add one
 p_no_variable()   { local f; for f in "$1"/*.tf; do if grep -qE '^variable[[:space:]]+"deploy_service_token_ids"' <<<"$(eff "$f")"; then return 1; fi; done; [[ "$(p_b4_no_override_files "$1")" == "1" ]]; }

@@ -176,7 +176,7 @@
 4	apps/web-platform/infra/arm-heartbeats.sh
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
-127	apps/web-platform/infra/cf-account-migrate-job.test.sh
+130	apps/web-platform/infra/cf-account-migrate-job.test.sh
 17	apps/web-platform/infra/cf-account-migration-complete.test.sh
 11	apps/web-platform/infra/cf-account-state-migrate.test.sh
 21	apps/web-platform/infra/ci-deploy.sh

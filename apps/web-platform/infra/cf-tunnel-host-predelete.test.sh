@@ -296,5 +296,8 @@ mutant "M-foreign" 's/^  \[\[ "\$foreign" -eq 0 \]\] || refuse_foreign$/  :/' se
 
 printf '\ncf-tunnel-host-predelete: %d passed, %d failed\n' "$PASS" "$FAIL"
 MIN_CASES=52
-if [[ "$((PASS + FAIL))" -lt "$MIN_CASES" ]]; then printf '[VACUITY] only %d cases ran, floor %d\n' "$((PASS + FAIL))" "$MIN_CASES" >&2; exit 1; fi
+if [[ "$((PASS + FAIL))" -lt "$MIN_CASES" ]]; then
+  printf '[VACUITY] only %d cases ran, floor %d\n' "$((PASS + FAIL))" "$MIN_CASES" >&2
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]] || exit 1

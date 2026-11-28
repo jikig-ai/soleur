@@ -2,7 +2,7 @@
 # group=infra
 # generated-from-runs=durations:suite-durations.tsv
 # default-weight-ms=4000
-# generated-at=2026-11-25T22:05:51Z
+# generated-at=2026-11-28T09:55:36Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=a9e728441a89f73acb96597548e71659f68fa791c144a812f3902f15fc40a68e
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	15000	measured
@@ -17,9 +17,11 @@ apps/web-platform/infra/canary-bundle-claim-check.test.sh	6000	measured
 apps/web-platform/infra/cat-deploy-state.test.sh	20500	measured
 apps/web-platform/infra/cat-infra-config-state.test.sh	0	measured
 apps/web-platform/infra/cat-inngest-verify-state.test.sh	0	measured
+apps/web-platform/infra/cf-access-deploy-token-mint.test.sh	4000	floor
 apps/web-platform/infra/cf-account-migrate-job.test.sh	525000	measured
 apps/web-platform/infra/cf-account-migration-complete.test.sh	4000	floor
 apps/web-platform/infra/cf-account-state-migrate.test.sh	4000	floor
+apps/web-platform/infra/cf-tunnel-host-predelete.test.sh	4000	floor
 apps/web-platform/infra/ci-deploy-wrapper.test.sh	1000	measured
 apps/web-platform/infra/ci-deploy.test.sh	878000	measured
 apps/web-platform/infra/cloud-init-ghcr-seed-login.test.sh	32000	measured

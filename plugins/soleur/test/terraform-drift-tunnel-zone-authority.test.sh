@@ -103,6 +103,7 @@ mk doppler '[[ -n "${DOPPLER_TOKEN:-}" && "${DOPPLER_PROJECT:-}" == soleur && "$
 # before writing to it.
 cat > "$STUB/curl" <<'CURL_STUB'
 #!/usr/bin/env bash
+case " $* " in *" --config - "*) cat >> "$MOCK_LOG.stdin" ;; esac
 assert_fixture_dir() {
   case "${1-}" in
     "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
@@ -118,7 +119,6 @@ out=""; url=""; args=("$@")
 for ((i=0; i<${#args[@]}; i++)); do
   case "${args[$i]}" in -o) out="${args[$((i+1))]}" ;; https://*) url="${args[$i]}" ;; esac
 done
-if [[ " $* " == *" --config - "* ]]; then cat >> "$MOCK_LOG.stdin"; fi
 case "$url" in
   https://api.cloudflare.com/*)
     [[ "${MOCK_ZONE_RC:-0}" == 0 ]] || exit "$MOCK_ZONE_RC"
