@@ -225,3 +225,38 @@ KEY FACTS for continuation:
 - enum seat's fenced-block/whitespace claims partially WRONG: fenced directives ARE skipped by the
   parser (comment at sweep-followthroughs.sh:197); whitespace-only tokens handled (proven T25).
 - Do not re-litigate D-1..D-8. The 3-row argv-bearer tier-a residual is deliberately scoped to #13102.
+
+## Fix-round checkpoint 4 — SESSION HANDOFF (commit f7ddb249df)
+
+STATE: all committed work pushed through f7ddb249df. Suite status:
+- trio-baseline-census: GREEN 624/0 (floor exact, includes ADR amendment validation)
+- infra-privileged-tier-census: GREEN 507/0 (floor exact)
+- sweep-followthroughs: GREEN 377/0 (floor exact — was silently red at 78 failures since the
+  partition landed; regression fixed in e1b43b7f06)
+- argv-bearer-sweep: VALIDATION IN FLIGHT in /tmp/argv-rerun3.log at session end — zero failures
+  at the halfway mark. The harness env propagation fix (vt_run + S4 r21 APP_DOMAIN_BASE sentinel)
+  is committed in d3165228dd-era work. FIRST CONTINUATION TASK: check that log for
+  "825 passed, 0 failed" — if green, nothing more to do; if red, triage the specific rows.
+
+CLOSED FINDINGS this round: #14 APP_DOMAIN_BASE P1, #4 --timeout classifier P1, #5 G1l bypass P1,
+#6 Guard-2 sweeper tests P1 (+ the harness regression it exposed), #9 github-app-key-status P2,
+#10 no-checkout comments P2, wrapper-relay P1 → ruled ADR residual + follow-up disposition,
+tdr floor-drift P2, plus P3s (capital-D, derive-path spelling).
+
+REMAINING (in order):
+1. Confirm argv green (see above).
+2. File the follow-up issue for the post-deletion pinned-set shrink + wrapper visibility
+   (the ADR amendment at f7ddb249df names it; the issue is its tracker).
+3. P2 quadratic scanner fix (perf): segment-once tokenization in _dop_read_counted.
+4. P3 batch: fetch-depth:0 in sweep-deploy-channel; infra-config-verify.sh:497 half-prose;
+   TIER_B_NAMES[-3:] positional pin (tdr); phantom _NOT_SET keys verification (user-impact F4);
+   data-integrity tail-gate wording → PR body operator-tail slot; seeding-order wording verify.
+5. Write the synthesis/disposition ledger for ALL deduped findings (session-state has the
+   per-seat inventories; ADR-267 fix-round review needs the disposition table).
+6. ADR-267 fix-round review over 329d32ddc7..HEAD (the whole fix round).
+7. soleur:qa, then soleur:ship → merge #13006. Post-merge tail is operator live-state work
+   (seeding, deletion after green canaries, rotation) — NOT in this PR.
+
+CAUTIONS: machine load is high from sibling playwright/chromium processes — run suites niced with
+timeouts; never unbounded shellcheck on test-argv-bearer-sweep.sh (#13098/#13099); data-integrity
+warned another process may edit this worktree — always git status first.
