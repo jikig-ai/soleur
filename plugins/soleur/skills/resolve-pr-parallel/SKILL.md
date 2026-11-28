@@ -59,6 +59,8 @@ So if there are 3 comments, spawn 3 soleur:engineering:workflow:pr-comment-resol
 
 Always run all in parallel subagents/Tasks for each Todo item.
 
+**Seat liveness & dirty-diff guard (#12524, ADR-332):** Register each spawned resolver seat with `bash "${CLAUDE_PLUGIN_ROOT}/scripts/seat-liveness.sh" init --run-dir ".soleur/runs/${RUN_ID:-default}" --seat "pr-resolve-<thread>" --writable true`. On completion, run `seat-liveness.sh sweep` + `decide`: inspect `git status --porcelain` / `git diff` first (`--dirty-diff true`) before any 1x recovery, never blindly respawn over uncommitted diffs, and escalate (`Reviewed-Coverage: degraded`) after 1 attempt.
+
 ### 4. Commit & Resolve
 
 - Commit changes

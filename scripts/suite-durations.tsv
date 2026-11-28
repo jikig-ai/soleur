@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=46053704017,45978011373,45964231859,45868797899,45843152864
 # default-weight-ms=1539
-# generated-at=2026-11-27T23:12:21Z
+# generated-at=2026-11-28T10:19:26Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=d8179c4f4c389f9b127336b4cfec95e3c6ae7c68bd15595190cb508650edfd52
 .claude/hooks/agent-token-tee.test.sh	6648	measured
@@ -322,6 +322,7 @@ plugins/soleur/test/scheduled-realtime-probe-guard.test.sh	576	measured
 plugins/soleur/test/scripts-shard-manifest.test.sh	676	measured
 plugins/soleur/test/scripts-shard-runtime-coverage.test.sh	3623	measured
 plugins/soleur/test/scripts-shard-totality.test.sh	16980	measured
+plugins/soleur/test/seat-liveness.test.sh	1539	floor
 plugins/soleur/test/session-state.test.sh	40179	measured
 plugins/soleur/test/shell-argv-parity.test.sh	1106	measured
 plugins/soleur/test/ship-battery-owed.test.sh	34783	measured

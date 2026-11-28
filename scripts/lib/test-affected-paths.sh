@@ -5309,3 +5309,15 @@ AFFECTED_TESTS_SCRIPTS_CF_ACCOUNT_MIGRATION_RUNBOOK_PATHS=(
   "scripts/lib/test-affected-paths.sh"
   "tests/scripts/test-cf-account-migration-runbook.sh"
 )
+
+# plugins/soleur/test/seat-liveness.test.sh (#12524) — carries "liveness" in its label, so the
+# live-scanner census requires an explicit declared edge set covering its SUTs and helpers.
+AFFECTED_PLUGINS_SOLEUR_TEST_SEAT_LIVENESS_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/seat-liveness.sh"
+  "plugins/soleur/scripts/run-health-emit.sh"
+  "plugins/soleur/test/seat-liveness.test.sh"
+  "plugins/soleur/test/test-helpers.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/scratch-root.sh"
+  "scripts/lib/test-affected-paths.sh"
+)

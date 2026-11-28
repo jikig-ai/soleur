@@ -60,8 +60,6 @@ done
 
 if [[ "$DISCOVER" == "1" ]]; then
   d="$(mktemp -d -t runhealth-discover.XXXXXXXX)" || { echo "run-health-emit: mktemp failed" >&2; exit 0; }
-  # One owning trap. The rm below covers the success path. This covers a
-  # death between the allocation and that rm. Fail-open stays exit 0.
   trap 'rm -rf -- "${d:-/nonexistent}"' EXIT
   printf 'discover\n' > "$d/prompt.md"
   bash "$0" --run-dir "$d/run" --phase 0 --status started --prompt-file "$d/prompt.md" >/dev/null
@@ -115,7 +113,6 @@ fi
 
 TALLY_SHOW=""
 if [[ "$IMPORT_TALLY" == "1" ]]; then
-  # A stub earlier on PATH still wins. The sibling script is the fallback.
   _tally_dir="$(cd "$(dirname "$0")" && pwd)"
   if ! TALLY_SHOW="$(PATH="${PATH}:${_tally_dir}" pipeline-tally.sh show 2>/dev/null)"; then
     echo "run-health-emit: tally show failed" >&2
@@ -136,7 +133,7 @@ NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # Resolve run metadata: prefer existing file, then args, then defaults.
 if [[ -z "$RUN_ID" ]]; then
   if [[ -f "$HEALTH" ]]; then
-    RUN_ID="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('run_id',''))" "$HEALTH" 2>/dev/null)" || RUN_ID=""
+    RUN_ID="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("run_id",""))' "$HEALTH" 2>/dev/null)" || RUN_ID=""
   fi
   [[ -z "$RUN_ID" ]] && RUN_ID="$(basename "$RUN_DIR")"
 fi
@@ -148,7 +145,7 @@ SOLEUR_RUN_HEALTH_SESSION_STATE="$SESSION_STATE" \
 SOLEUR_RUN_HEALTH_IMPORT_TALLY="$IMPORT_TALLY" \
 SOLEUR_RUN_HEALTH_TALLY_SHOW="$TALLY_SHOW" \
 python3 - "$HEALTH" "$RUN_ID" "$ISSUE" "$BRANCH" "$HARNESS" "$PHASE" "$STATUS" "$NOW" "$ERROR_MSG" "$REVIEWED_COVERAGE" "$PROMPT_FILE" "$RUN_DIR" <<'PY' 2>/dev/null || echo "run-health-emit: python write failed (non-fatal)" >&2
-import json, os, sys
+import json, os, re, sys
 
 (health, run_id, issue, branch, harness, phase, status, now, err, rcov, prompt_file, run_dir) = sys.argv[1:13]
 seal = os.environ.get("SOLEUR_RUN_HEALTH_SEAL", "") == "1"
@@ -170,13 +167,22 @@ def goto_count(path):
         return 0
     return n
 
+SECRET_RE = re.compile(
+    r"BEGIN [A-Z ]*PRIVATE KEY|sk-ant-[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9._~+/=-]{16,}|"
+    r"github_pat_[A-Za-z0-9._~+/=-]{16,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|"
+    r"dp\.(?:pt|st|sa|ct)\.[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}"
+)
+
 data = {}
 if os.path.islink(health):
     sys.exit(2)
 if os.path.exists(health):
     try:
         with open(health) as f:
-            data = json.load(f)
+            loaded = json.load(f)
+            if not isinstance(loaded, dict):
+                sys.exit(2)
+            data = loaded
     except Exception:
         sys.exit(2)
 if not isinstance(data, dict):
@@ -215,8 +221,10 @@ if phase:
         if "started_at" not in entry:
             entry["started_at"] = now
     if err:
-        entry.setdefault("errors", []).append({"at": now, "msg": err})
-        data["errors"].append({"phase": phase, "at": now, "msg": err})
+        clean_err = SECRET_RE.sub("[REDACTED]", err)
+        clean_err = re.sub(r"[\x00-\x1f\x7f\u2028\u2029]", " ", clean_err)[:512]
+        entry.setdefault("errors", []).append({"at": now, "msg": clean_err})
+        data["errors"].append({"phase": phase, "at": now, "msg": clean_err})
     if prompt_file and os.path.isfile(prompt_file) and not os.path.islink(prompt_file):
         pp_dir = os.path.join(run_dir, "phase_prompts")
         os.makedirs(pp_dir, exist_ok=True)
@@ -262,15 +270,64 @@ if was_sealed:
     if saved_status is not None:
         data["status"] = saved_status
 
-tmp = health + ".tmp"
+# Summarize per-seat liveness records when <run_dir>/seats/*.json exist (#12524).
+seats_dir = os.path.join(run_dir, "seats")
+if os.path.isdir(seats_dir) and not os.path.islink(seats_dir):
+    total = 0
+    active = 0
+    completed = 0
+    recovered = 0
+    escalated = 0
+    degraded = 0
+    for name in sorted(os.listdir(seats_dir)):
+        if not name.endswith(".json"):
+            continue
+        sp = os.path.join(seats_dir, name)
+        if os.path.islink(sp):
+            continue
+        try:
+            with open(sp) as sf:
+                srec = json.load(sf)
+            if not isinstance(srec, dict):
+                continue
+            total += 1
+            st = srec.get("status", "running")
+            if st == "running":
+                active += 1
+            elif st == "completed":
+                completed += 1
+            elif st == "recovered":
+                recovered += 1
+            elif st == "escalated":
+                escalated += 1
+            if srec.get("reviewed_coverage") == "degraded":
+                degraded += 1
+        except Exception:
+            continue
+    data["seats_summary"] = {
+        "total": total,
+        "active": active,
+        "completed": completed,
+        "recovered": recovered,
+        "escalated": escalated,
+    }
+    if (escalated > 0 or degraded > 0) and not rcov and data.get("reviewed_coverage") in (None, "", "full"):
+        data["reviewed_coverage"] = "degraded"
+
+tmp = f"{health}.{os.getpid()}.tmp"
 try:
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        json.dump(data, handle, indent=2)
+        handle.write("\n")
+    os.replace(tmp, health)
 except OSError:
+    if os.path.exists(tmp):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
     sys.exit(2)
-with os.fdopen(fd, "w") as handle:
-    json.dump(data, handle, indent=2)
-    handle.write("\n")
-os.replace(tmp, health)
 PY
 
 exit 0
