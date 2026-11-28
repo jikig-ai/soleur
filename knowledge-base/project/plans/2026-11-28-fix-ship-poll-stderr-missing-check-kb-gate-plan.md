@@ -816,44 +816,44 @@ test the fix, and the wrong one to discover its signal (deepen-plan Phase 4.7).
 
 <!-- founder-stated check: see plan-founder-check.md -->
 
-- [ ] AC1 — Fence and mirror: in each block extracted between the `phase-7-poll-block` markers (not
+- [x] AC1 — Fence and mirror: in each block extracted between the `phase-7-poll-block` markers (not
   file-wide), `grep -c '2>"${GH_ERR:-/dev/null}"'` returns 2 and `grep -cF "mergeStateStatus)\"' 2>&1)"`
   returns 0 (the redirect sits on the `--jq` continuation line, so a `gh pr view`-line grep would pass on
   today's code). The Guard 2 scan is green.
-- [ ] AC2 — Each extracted fence has exactly one `trap … EXIT` line, and it reads
+- [x] AC2 — Each extracted fence has exactly one `trap … EXIT` line, and it reads
   `trap 'rm -f "$SYNC_SNAP" ${GH_ERR:+"$GH_ERR"}' EXIT`. Every fixture row still asserts that no temp
   file outlived the block. H6 also asserts `[[ -c /dev/null ]]`.
-- [ ] AC3 — `bash plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh` passes with rows H1, H1f, H2,
+- [x] AC3 — `bash plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh` passes with rows H1, H1f, H2,
   H3, H4, H4b and H6 on both `:ship` and `:merge-pr`, and the `WANTH` pin equals the rows run. In the
   RED commit (tests only, fence untouched) H1, H1f, H2, H3, H4 and H4b fail and H6 passes. The suite
   also asserts the per-block redirect count (requirement 2) and the stub-order row (requirement 3).
-- [ ] AC4 — H1 output contains `[ship.phase7.required_set] state=absent — exiting poll` and H1f
+- [x] AC4 — H1 output contains `[ship.phase7.required_set] state=absent — exiting poll` and H1f
   `state=failed`. The arm's predicates are byte-unchanged in the diff: `git diff origin/main...HEAD --
   plugins/soleur/skills/ship/SKILL.md` touches no line containing `RS_AFTER=`, `RS_MAX=`, `rs_hold` or
   `full-decided`.
-- [ ] AC5 — `bun test plugins/soleur/test/pr-merge-poll.test.ts` passes. `parsePrPollRead("OPEN BEHIND\n")`
+- [x] AC5 — `bun test plugins/soleur/test/pr-merge-poll.test.ts` passes. `parsePrPollRead("OPEN BEHIND\n")`
   returns `"OPEN BEHIND"`, and the fixture hint followed by `OPEN BEHIND` returns `null`.
-- [ ] AC6 — For every value of the `Harness` union, `behindSyncInstructions(h)` contains the
+- [x] AC6 — For every value of the `Harness` union, `behindSyncInstructions(h)` contains the
   stdout-only sentence, and, for every harness except `cursor` (whose `pollInstructions` returns the
   behind-sync stop unchanged, `harness.ts` `pollInstructions`'s early return), so does
   `pollInstructions(h)` **with the `behindSyncInstructions(h)` text removed from it** (it embeds that text, so a whole-string assert could not see a missing `harness.ts`
   sentence). The test iterates the union; it does not use a hand list. A mutant that deletes only the
   `harness.ts` sentence reds it.
-- [ ] AC6b — `python3 scripts/lint-skill-body-budget.py --base origin/main` passes and ship/SKILL.md ends
+- [x] AC6b — `python3 scripts/lint-skill-body-budget.py --base origin/main` passes and ship/SKILL.md ends
   at least 50 B under its ceiling (`jq .ceilings.ship plugins/soleur/test/skill-body-budget.json` minus
   `wc -c < plugins/soleur/skills/ship/SKILL.md` ≥ 50).
-- [ ] AC7 — `bash plugins/soleur/test/sync-pr-behind.test.sh` passes, including the standalone hint row: right branch, hint on stderr → no `kind=wrong_branch`.
-- [ ] AC8 — `bash .claude/hooks/ship-operator-step-gate.test.sh` passes, including the hint row.
-- [ ] AC9 — `bash .claude/hooks/ship-kb-archive-gate.test.sh` passes, with every Guard 1 matrix row and
+- [x] AC7 — `bash plugins/soleur/test/sync-pr-behind.test.sh` passes, including the standalone hint row: right branch, hint on stderr → no `kind=wrong_branch`.
+- [x] AC8 — `bash .claude/hooks/ship-operator-step-gate.test.sh` passes, including the hint row.
+- [x] AC9 — `bash .claude/hooks/ship-kb-archive-gate.test.sh` passes, with every Guard 1 matrix row and
   harness row present by name and T1–T82 unchanged. Every `--auto` arm span extracted from the
   `arm-check-sites.test.sh` SITES plus CANON, and the admin-hatch span, is **allowed** on an archived
   KB and **denied by the census** on an unarchived one (row 5). `bash plugins/soleur/test/arm-check-sites.test.sh`
   still passes after the dequeue doc edit.
-- [ ] AC10 — Guard 2 scan: zero unexcluded violations on the tree, zero stale exclusions, and the
+- [x] AC10 — Guard 2 scan: zero unexcluded violations on the tree, zero stale exclusions, and the
   floor of at least 10 scanned files holds. Harness rows H-a/H-b and mutation rows 1–5 behave as stated.
-- [ ] AC11 — `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-11-28-fix-ship-poll-stderr-missing-check-kb-gate-plan.md` exits 0 and reports 2 entries.
-- [ ] AC12 — The learning file exists at the path in Files to Create, with sections for all three defects, the interlock, the before/after gate table and `## Session Errors`. The 2026-11-25 learning carries the dated follow-up line.
-- [ ] AC13 — The PR body carries `Closes #12697` and `Closes #12963` (body, not title) and `Ref #13115`. The diff contains no path under `docs/`, no legal document, no workflow file and no approval-queue flag change: `git diff --name-only origin/main...HEAD | grep -E '^docs/|^\.github/workflows/|legal'` prints nothing.
+- [x] AC11 — `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-11-28-fix-ship-poll-stderr-missing-check-kb-gate-plan.md` exits 0 and reports 2 entries.
+- [x] AC12 — The learning file exists at the path in Files to Create, with sections for all three defects, the interlock, the before/after gate table and `## Session Errors`. The 2026-11-25 learning carries the dated follow-up line.
+- [x] AC13 — The PR body carries `Closes #12697` and `Closes #12963` (body, not title) and `Ref #13115`. The diff contains no path under `docs/`, no legal document, no workflow file and no approval-queue flag change: `git diff --name-only origin/main...HEAD | grep -E '^docs/|^\.github/workflows/|legal'` prints nothing.
 
 ## Domain Review
 
