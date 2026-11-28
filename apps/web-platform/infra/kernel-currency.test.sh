@@ -27,6 +27,8 @@ TRAIL="$DIR/scripts/fresh-host-boot-trail.sh"
 WF="$DIR/../../../.github/workflows/apply-web-platform-infra.yml"
 # #12866: the bastion birth's body (reusable; its caller job sits in $WF).
 BWF="$DIR/../../../.github/workflows/bastion-host-create.yml"
+# #12879: the bastion replace's body (reusable; its caller job sits in $WF).
+BRWF="$DIR/../../../.github/workflows/bastion-host-replace.yml"
 
 cases=0
 passes=0
@@ -91,8 +93,9 @@ TC=$(job_timeout web_host_create); TR=$(job_timeout web_host_replace)
 # has no SOLEUR_FRESH_BOOT_WINDOW_SECONDS; a slow-mirror apt retry boot needs more than 1200 s).
 # Fail closed when it is absent: a budget over a guessed deadline proves nothing.
 TB=$(job_timeout bastion_host_create "$BWF")
+TBR=$(job_timeout bastion_host_replace "$BRWF")
 DS=$(sed -n 's/^BOOT_TRAIL_STRICT_DEADLINE_S=\([0-9][0-9]*\)$/\1/p' "$TRAIL" | head -1)
-for v in W D G SL CM RQ TC TR TB DS; do [[ "${!v}" =~ ^[0-9]+$ ]] || harness "budget operand $v unreadable ('${!v}')"; done
+for v in W D G SL CM RQ TC TR TB TBR DS; do [[ "${!v}" =~ ^[0-9]+$ ]] || harness "budget operand $v unreadable ('${!v}')"; done
 eq "budget: trail deadline = host boot window + 60 s (moved together)" "$D" "$((W + 60))"
 ok "budget: the boot window covers the settle reboot (>= 1140 s)" "$([[ "$W" -ge 1140 ]]; echo $?)"
 grep -qF 'DEADLINE=$(( SECONDS + BOOT_TRAIL_DEADLINE_S ))' "$TRAIL"; ok "budget: the poll deadline is computed from BOOT_TRAIL_DEADLINE_S" $?
@@ -111,6 +114,9 @@ ok "budget: replace worst case ($((PRE_POLL_S + 60 + WORST)) s) fits timeout-min
 WORST_B=$((DS + G + 2 * (SL + CM) + 3 * RQ))
 ok "budget: bastion strict deadline ($DS s) is at least the web deadline ($D s)" "$([[ "$DS" -ge "$D" ]]; echo $?)"
 ok "budget: bastion birth worst case ($((PRE_POLL_S + 60 + WORST_B)) s) fits timeout-minutes $TB" "$([[ $((PRE_POLL_S + 60 + WORST_B)) -le $((TB * 60)) ]]; echo $?)"
+# Bastion replace (#12879): the birth's budget plus 60 s for the destroy that precedes the create.
+ok "budget: bastion replace worst case ($((PRE_POLL_S + 60 + 60 + WORST_B)) s) fits timeout-minutes $TBR" "$(if [[ $((PRE_POLL_S + 60 + 60 + WORST_B)) -le $((TBR * 60)) ]]; then echo 0; else echo 1; fi)"
+ok "budget: the replace job's timeout is the birth's plus one destroy minute ($TB + 1 = $TBR)" "$(if [[ "$TBR" -eq $((TB + 1)) ]]; then echo 0; else echo 1; fi)"
 
 # ── Raw-template structural rows ───────────────────────────────────────────────────────────────
 SEM_PATH=/var/lib/cloud/instance/sem/config_scripts_user

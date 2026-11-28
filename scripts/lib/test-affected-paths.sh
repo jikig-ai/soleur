@@ -1751,6 +1751,18 @@ AFFECTED_TESTS_SCRIPTS_BASTION_BOOT_VERIFY_PATHS=(
   "tests/scripts/test-bastion-boot-verify.sh"
 )
 
+# tests/scripts/bastion-host-replace-gate (#12879) — derived edges could not reach the workflow whose
+# step order the suite reads (Guard 2) nor the shared create-side checks the gate sources from its own
+# directory; declared from the repo paths the suite names.
+AFFECTED_TESTS_SCRIPTS_BASTION_HOST_REPLACE_GATE_PATHS=(
+  ".github/workflows/bastion-host-replace.yml"
+  "scripts/lib/test-affected-paths.sh"
+  "tests/scripts/lib/bastion-gate-common.sh"
+  "tests/scripts/lib/bastion-host-replace-gate.sh"
+  "tests/scripts/lib/plan-gate-preamble.sh"
+  "tests/scripts/test-bastion-host-replace-gate.sh"
+)
+
 # tests/scripts/git-data-rung2-evidence-capture — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_GIT_DATA_RUNG2_EVIDENCE_CAPTURE_PATHS=(

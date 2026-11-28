@@ -6760,6 +6760,8 @@ if want_scripts; then
   # registration reason as the three above (tests/scripts/ is outside both auto-globs).
   run_suite "tests/scripts/bastion-host-birth-gate" bash tests/scripts/test-bastion-host-birth-gate.sh
   run_suite "tests/scripts/bastion-boot-verify" bash tests/scripts/test-bastion-boot-verify.sh
+  # #12879 (ADR-327 step 2b): the bastion replace gate, its TOCTOU identity check and the workflow order.
+  run_suite "tests/scripts/bastion-host-replace-gate" bash tests/scripts/test-bastion-host-replace-gate.sh
   # #9340 / ADR-262 (2026-11-12 addendum): --pr-gated — closed
   # GIT_DATA_BIRTH_READINESS_GATE_PATHS edge set; counted [skip] on the else arm.
   if _diff_touches --pr-gated "${GIT_DATA_BIRTH_READINESS_GATE_PATHS[@]}"; then
