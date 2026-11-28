@@ -126,6 +126,9 @@ describe("cronMachineryDrain — narrowed mint + single dispatch (#13096)", () =
 
     expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
     const [errArg, optsArg] = h.reportSilentFallbackSpy.mock.calls[0];
+    if (!(errArg instanceof Error)) {
+      throw new TypeError("reportSilentFallback did not receive an Error");
+    }
     // The credential must never reach the observability payload — the
     // redaction is the security property this test exists to pin. Sweep the
     // whole reporting boundary (error text, error name, and the serialized
