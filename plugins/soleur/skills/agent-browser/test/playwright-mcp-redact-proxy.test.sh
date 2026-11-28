@@ -682,6 +682,36 @@ assert_refused_start 'FR5: config browser.contextOptions.recordHar refuses to st
 printf '{"browser": {"contextOptions": {"extraHTTPHeaders": {"origin": "https://dash.cloudflare.com"}}}}\n' > "$WORK/cfg-ctxhdrs.json"
 r="$(session cfgctxhdrs "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-ctxhdrs.json")"
 assert_refused_start 'FR5: config browser.contextOptions.extraHTTPHeaders refuses to start' "$r" 'extraHTTPHeaders'
+# A persistent profile (both registrations) launches with {...launchOptions, ...contextOptions}, so every
+# context-level key placed under launchOptions takes effect too (coreBundle.js createPersistentBrowser, 0.0.78).
+for key_val in 'recordHar:{"path": "/tmp/x.har"}' 'ignoreHTTPSErrors:true' 'extraHTTPHeaders:{"origin": "x"}' \
+  'storageState:"/tmp/s.json"' 'permissions:["clipboard-read"]'; do
+  key="${key_val%%:*}"; val="${key_val#*:}"
+  printf '{"browser": {"launchOptions": {"%s": %s}}}\n' "$key" "$val" > "$WORK/cfg-lo-$key.json"
+  r="$(session "cfglo-$key" "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-lo-$key.json")"
+  assert_refused_start "FR5: config browser.launchOptions.$key (persistent spread) refuses to start" "$r" "launchOptions.$key"
+done
+for envvar in NODE_OPTIONS NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED; do
+  r="$(session "sinkenv-$envvar" "$PROXY" --env "$envvar=0" --send "$INIT" --end eof --expect-death)"
+  assert_refused_start "FR5: $envvar refuses to start (CTO R1)" "$r" "$envvar is set"
+done
+# The server reads a .ini path with its INI parser and falls back to INI when JSON.parse rejects the file, so
+# the proxy refuses an .ini path and the NaN/Infinity constants Python's json accepts and JSON.parse does not.
+printf '{"browser": {}}\n' > "$WORK/cfg.ini"
+r="$(session cfgini "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg.ini")"
+assert_refused_start 'FR5: an .ini config path refuses to start' "$r" '.ini file'
+printf '{"browser": {"launchOptions": {"timeout": NaN}}}\n' > "$WORK/cfg-nan.json"
+r="$(session cfgnan "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-nan.json")"
+assert_refused_start 'FR5: a config carrying NaN (not JSON to the server) refuses to start' "$r" 'not JSON'
+# SINK_FLAGS parity: every argv flag the proxy refuses has an FR5 pair in this file.
+sinkflags="$(python3 -I -c 'import ast,sys; t=ast.parse(open(sys.argv[1]).read()); print("\n".join(e.elts[0].value for n in ast.walk(t) if isinstance(n, ast.Assign) and any(getattr(x,"id","")=="SINK_FLAGS" for x in n.targets) for e in n.value.elts))' "$PROXY_SHIPPED")"
+missing=""; nflags=0
+while IFS= read -r fl; do
+  [[ -n "$fl" ]] || continue; nflags=$((nflags + 1))
+  case "$fl" in --save-session|--allow-unrestricted-file-access) continue ;; esac  # covered by their own cases above
+  grep -qF -- "'$fl:PLAYWRIGHT_MCP_" "$0" || missing="$missing $fl"
+done <<< "$sinkflags"
+assert_true "FR5 parity: every SINK_FLAGS flag ($nflags) has an FR5 pair (missing:${missing:- none})" test -z "$missing" -a "$nflags" -ge 19
 printf '{"browser": {"launchOptions": {"chromiumSandbox": false}}}\n' > "$WORK/cfg-sandbox.json"
 r="$(session cfgsandbox "$PROXY" --send "$INIT" --end eof --expect-death --server python3 "$STUB" --config="$WORK/cfg-sandbox.json")"
 assert_refused_start 'FR5: config browser.launchOptions.chromiumSandbox refuses to start' "$r" 'chromiumSandbox'

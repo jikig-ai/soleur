@@ -555,17 +555,20 @@ string: an old-string session holds no `flock`, so also require that `readlink
    `--ignore-https-errors`, `--no-sandbox`, `--proxy-server`, `--proxy-bypass`
    (a proxy reads plain-http `page.request` traffic, loopback included), and each setting's
    `PLAYWRIGHT_MCP_*` env twin (`PLAYWRIGHT_MCP_SANDBOX` for `--no-sandbox`),
-   plus env-only `PLAYWRIGHT_MCP_USER_DATA_DIR` and
-   `PLAYWRIGHT_MCP_SNAPSHOT_MODE`; a trailing valued flag, which would swallow
+   plus env-only `PLAYWRIGHT_MCP_USER_DATA_DIR`,
+   `PLAYWRIGHT_MCP_SNAPSHOT_MODE`, `NODE_OPTIONS`, `NODE_EXTRA_CA_CERTS` and
+   `NODE_TLS_REJECT_UNAUTHORIZED`; an `.ini` config path, or a JSON config the
+   server would not parse as JSON (`NaN`/`Infinity`); a trailing valued flag, which would swallow
    the appended `--snapshot-mode none` as its value; a config file (from
    `--config` or `PLAYWRIGHT_MCP_CONFIG`) that is missing, is not JSON, or sets
    `saveSession`, `saveTrace`, `saveVideo`, `secrets`, `outputDir`,
    `allowUnrestrictedFileAccess`, `extension`, `server.port` / `server.host`, a
    capability other than `vision`, `browser.cdpEndpoint` /
    `browser.remoteEndpoint`, `browser.initPage` / `browser.initScript`,
-   `browser.contextOptions.storageState` / `.permissions` /
-   `.ignoreHTTPSErrors` / `.proxy` / `.extraHTTPHeaders` / `.recordHar`,
-   `browser.launchOptions.executablePath` / `.proxy` / `.chromiumSandbox: false` / a remote-debugging `args` flag, or a
+   `browser.contextOptions` or `browser.launchOptions` (a persistent profile
+   merges the two) `.storageState` / `.permissions` / `.ignoreHTTPSErrors` /
+   `.proxy` / `.extraHTTPHeaders` / `.recordHar`,
+   `browser.launchOptions.executablePath` / `.chromiumSandbox: false` / a remote-debugging `args` flag, or a
    `browser.userDataDir` conflicting with `--user-data-dir-name`; `--port`,
    `--host`, `PLAYWRIGHT_MCP_PORT` or `PLAYWRIGHT_MCP_HOST`
    (an HTTP transport around the relay); `--caps` or `PLAYWRIGHT_MCP_CAPS` other

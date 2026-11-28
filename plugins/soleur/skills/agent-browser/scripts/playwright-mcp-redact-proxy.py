@@ -386,6 +386,12 @@ SINK_FLAGS = [
 SINK_ENV_ONLY = [
     ("PLAYWRIGHT_MCP_USER_DATA_DIR", "sets a profile outside the audited registration argv"),
     ("PLAYWRIGHT_MCP_SNAPSHOT_MODE", "the proxy owns --snapshot-mode"),
+    # The server child inherits the whole env and holds page.request bodies (a minted token, #12931 Phase 5):
+    # NODE_OPTIONS can --require/--import code, --inspect a debugger or --heapsnapshot-signal a heap dump into it;
+    # the other two let a MITM read its TLS (CTO R1, 2026-11-28).
+    ("NODE_OPTIONS", "injects code, a debugger or a heap dump into the server process"),
+    ("NODE_EXTRA_CA_CERTS", "trusts extra CAs for the server's own TLS (a MITM of page.request)"),
+    ("NODE_TLS_REJECT_UNAUTHORIZED", "can disable TLS validation for the server's own requests"),
 ]
 # Valued flags: a bare one as the LAST server arg would bind the appended
 # `--user-data-dir=<dir>` (or `--snapshot-mode`) as its value instead of
@@ -434,9 +440,17 @@ def refuse_argv_and_env(server: List[str], profile_dir: Optional[str], env: Dict
     if config_path:
         if not os.path.isfile(config_path):
             refuse_start("the config file named by --config or PLAYWRIGHT_MCP_CONFIG does not exist")
+        # The server reads a `.ini` path with its INI parser WITHOUT trying JSON, and falls back to INI when
+        # its JSON.parse rejects the file (coreBundle.js loadConfig, 0.0.78). So the proxy vets only what the
+        # server reads as JSON: an .ini path is refused, and NaN/Infinity (accepted by Python's json, rejected
+        # by JSON.parse) raise here, so no file reads as one harmless dict to the proxy and as INI to the server.
+        if config_path.lower().endswith(".ini"):
+            refuse_start("the config file is an .ini file, which the server reads with an INI parser this proxy cannot vet")
+        def _no_constant(name: str) -> Any:
+            raise ValueError(f"non-JSON constant {name}")
         try:
             with open(config_path, "rb") as fh:
-                cfg = json.loads(fh.read().decode("utf-8-sig"))
+                cfg = json.loads(fh.read().decode("utf-8-sig"), parse_constant=_no_constant)
         except (OSError, ValueError, RecursionError):
             # The server falls back to an INI parser, where saveSession is a typed
             # key; a file this proxy cannot read is a file it cannot vet.
@@ -471,28 +485,29 @@ def refuse_argv_and_env(server: List[str], profile_dir: Optional[str], env: Dict
                 refuse_start("config browser.initPage/browser.initScript injects code into every page")
             if profile_dir is not None and browser.get("userDataDir"):
                 refuse_start("config browser.userDataDir conflicts with --user-data-dir-name")
-            ctx = browser.get("contextOptions")
-            if isinstance(ctx, dict):
-                if ctx.get("storageState"):
-                    refuse_start("config browser.contextOptions.storageState persists cookies and storage state to a file")
-                if ctx.get("permissions"):
-                    refuse_start("config browser.contextOptions.permissions grants page permissions the model did not audit")
-                if ctx.get("ignoreHTTPSErrors"):
-                    refuse_start("config browser.contextOptions.ignoreHTTPSErrors drops TLS validation on page requests")
-                if ctx.get("proxy"):
-                    refuse_start("config browser.contextOptions.proxy routes page.request traffic through a proxy that reads it")
-                if ctx.get("recordHar"):
-                    refuse_start("config browser.contextOptions.recordHar writes every request and response body to a HAR on disk")
-                if ctx.get("extraHTTPHeaders"):
-                    refuse_start("config browser.contextOptions.extraHTTPHeaders adds headers to every page.request call")
+            # Context-level keys are checked under BOTH scopes: a persistent profile (both registrations run
+            # one) launches with {...launchOptions, ...contextOptions} (coreBundle.js createPersistentBrowser,
+            # 0.0.78), so a key placed under launchOptions takes effect exactly as under contextOptions.
+            context_keys = [
+                ("storageState", "persists cookies and storage state to a file"),
+                ("permissions", "grants page permissions the model did not audit"),
+                ("ignoreHTTPSErrors", "drops TLS validation on page requests"),
+                ("proxy", "routes page.request traffic through a proxy that reads it"),
+                ("recordHar", "writes every request and response body to a HAR on disk"),
+                ("extraHTTPHeaders", "adds headers to every page.request call (an Origin makes the hand-off sink refuse, fail-closed)"),
+            ]
+            for scope in ("contextOptions", "launchOptions"):
+                opts = browser.get(scope)
+                if isinstance(opts, dict):
+                    for key, why in context_keys:
+                        if opts.get(key):
+                            refuse_start(f"config browser.{scope}.{key} {why}")
             lo = browser.get("launchOptions")
             if isinstance(lo, dict):
                 if lo.get("executablePath"):
                     refuse_start("config browser.launchOptions.executablePath substitutes the browser binary")
                 if lo.get("chromiumSandbox") is False:
                     refuse_start("config browser.launchOptions.chromiumSandbox disables the browser sandbox")
-                if lo.get("proxy"):
-                    refuse_start("config browser.launchOptions.proxy routes page.request traffic through a proxy that reads it")
                 args = lo.get("args")
                 if isinstance(args, list) and any(str(a).startswith("--remote-debugging") for a in args):
                     refuse_start("config launchOptions.args opens a remote debugging channel around this relay")
