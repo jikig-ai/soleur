@@ -5,7 +5,7 @@
 - Plan file: knowledge-base/project/plans/2026-11-28-feat-bastion-host-replace-route-plan.md
 - Status: complete
 - run_health_dir: .soleur/runs/feat-one-shot-12879-bastion-host-replace-route-20261128T101017Z
-- cto_spawns=1
+- cto_spawns=2 (2nd: review-phase rulings Q-R1..Q-R10)
 
 ### Errors
 

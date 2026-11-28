@@ -49,7 +49,7 @@
 #
 # Usage:  source tests/scripts/lib/bastion-host-replace-gate.sh
 #         bastion_host_replace_gate <plan-json> <expected-id|none> <hetzner-servers-json-file>  # 0 PASS, 1 ABORT
-#         bastion_replace_identity <pin|none> <hetzner-servers-json-file> <before-id|none>     # the TOCTOU re-check
+#         bastion_replace_identity <pin|none> <hetzner-servers-json-file> <before-id|none>     # the gate's identity check
 #         bastion_replace_next_dispatch <pre-ids|none> <hetzner-servers-json-file|-> <0|1|unread>
 #
 # The literal addresses, IP, name, role and server type are bastion-gate-common.sh's _BGC_* constants.
